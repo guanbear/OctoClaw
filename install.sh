@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
-OCTOPUS_RULES_VERSION="v1.1.0"
+OCTOPUS_RULES_VERSION="v1.2.0"
 
 # ── 加载功能开关配置 ──────────────────────────────────────────────────────────
 OCTOPUS_CONFIG="$SCRIPT_DIR/lib/config.sh"
@@ -359,7 +359,7 @@ esac
 # 正常安装流程（无参数）
 # ─────────────────────────────────────────────
 echo ""
-echo "🐙 八爪鱼多 Agent 调度器 v1.0.11"
+echo "🐙 八爪鱼多 Agent 调度器 v1.1.3"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "功能特性："
 echo "  💪 鲸力手  - 重型任务、大规模批量处理"
@@ -976,7 +976,7 @@ print('✅ 无版本号旧规则已清除')
     # 注入新版规则（在文件末尾追加）
     cat >> "$AGENTS_FILE" << 'OCTOPUS_RULES'
 
-<!-- octopus:core-rules v1.1.0 -->
+<!-- octopus:core-rules v1.2.0 -->
 ## 🐙 八爪鱼核心原则（始终生效）
 
 ### 🚨 零工具调用铁律（零例外）
@@ -992,6 +992,10 @@ print('✅ 无版本号旧规则已清除')
 **判断 spawn**：30 秒内纯文字高质量能答 → 直答；需工具/多步骤 → spawn 子 Agent。
 
 **同文件串行**：多任务写同一文件时，等第一个完成 → 把改动摘要传给第二个 → 再 spawn。
+
+**派遣后策略**（每次 spawn 后立即决定）：
+- **策略A · 无依赖**：还有其他独立任务 → 立即继续执行，不等待子 Agent
+- **策略B · 强依赖**：必须拿到结果才能继续 → 告知用户「已派遣给XX，等待结果中」→ 结束本轮次 → 子 Agent announce 回来时自动唤醒
 
 ### 派遣面板格式
 
@@ -1013,6 +1017,7 @@ print('✅ 无版本号旧规则已清除')
 - 并发上限：balanced/private ≤5，quality/cost ≤3；**Sonnet 同时运行 ≤3 个**
 - task 末尾必须附加：`【文件读取】cat→head -n 100，grep→| head -20，日志→tail -n 50。禁读完整大文件！`
 - task 末尾必须附加 RESULT 模板和状态写入要求（完整模板见 `/workspace/openclaw/skills/octopus/lib/spawn-template.md`）
+- **大输出（>500字）写共享文件区** `/workspace/tmp/octopus/shared/{task_id}.md`，RESULT 的 `report` 字段填路径，summary 只写结论
 
 ### 触手名字
 

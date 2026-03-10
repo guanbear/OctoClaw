@@ -69,6 +69,26 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
 2. summary/摘要：≤5句，每句≤30字，禁止使用列表、表格、代码块
 3. 详细内容写文件（`/workspace/tmp/octopus/results/{task-id}.md`），RESULT 只填路径
 
+## 📂 大输出写共享文件区
+
+**输出 > 500 字时，禁止直接塞进 RESULT summary**，必须写入共享文件区：
+
+```bash
+mkdir -p /workspace/tmp/octopus/shared
+cat > /workspace/tmp/octopus/shared/{TASK_ID}.md << 'EOF'
+...详细内容...
+EOF
+```
+
+RESULT 的 `report` 字段填路径，`summary` 只写 2-5 句结论：
+
+```
+---RESULT---
+{"status":"success","summary":"分析完成，发现3个关键问题，已写入报告","files":[],"report":"/workspace/tmp/octopus/shared/{TASK_ID}.md"}
+```
+
+**为什么**：A2A announce 有 30 秒硬超时，超时后消息丢失；共享文件持久可靠，主 Agent 或用户按需读取。
+
 ## 📦 task-state.json 完整字段说明
 
 写入路径：`/workspace/tmp/octopus/task-state.json`
