@@ -58,7 +58,7 @@ def load_json(path):
 
 # 当前时间（东八区）
 now = datetime.now(timezone(timedelta(hours=8)))
-one_hour_ago = now - timedelta(minutes=30)
+recent_window = now - timedelta(minutes=30)
 
 # ── 模式配置 ──────────────────────────────────────────────────
 mode_data = load_json(MODE_FILE) or {}
@@ -137,14 +137,14 @@ for t in tasks:
         if ct:
             if ct.tzinfo:
                 ct = ct.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
-            if ct >= one_hour_ago.replace(tzinfo=None):
+            if ct >= recent_window.replace(tzinfo=None):
                 recent_done.append(t)
     elif t.get("status") == "failed":
         ct = parse_time(t.get("completed_at"))
         if ct:
             if ct.tzinfo:
                 ct = ct.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
-            if ct >= one_hour_ago.replace(tzinfo=None):
+            if ct >= recent_window.replace(tzinfo=None):
                 recent_failed.append(t)
 
 # 无活跃任务提示
