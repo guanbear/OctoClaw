@@ -33,6 +33,29 @@ find / -name "*.log"               # 禁止全盘扫描
 
 每次 exec 加 timeout=30（秒）。每 turn ≤500 字，内容写文件不要攒在最后。
 
+## ⚡ Fail Fast 原则（节省 token 的关键）
+
+遇到以下情况，**立即停止，写 failed 状态，不要继续消耗 token 硬撑**：
+
+- 找不到目标文件/接口，且无法合理推断位置
+- 权限不足，操作被拒
+- 发现任务描述有歧义，无法确定正确方向
+- 前置条件不满足（依赖的上游结果不存在）
+
+```bash
+python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
+  failed --id {TASK_ID} --summary "阻塞原因（1句）：xxx，建议：xxx"
+```
+
+然后输出：
+```
+---RESULT---
+{"status":"failure","summary":"遇到阻塞：xxx。建议主 Agent 补充 xxx 后重派。","files":[],"report":null}
+```
+
+**为什么**：被动等 patrol 超时重派会浪费整个超时窗口（normal 任务最多 8 分钟）的 token；
+主动 fail fast 让主 Agent 立刻拿到原因，重派时能补充正确上下文，一次成功。
+
 ## ✅ 完成时：状态更新
 
 ```bash
