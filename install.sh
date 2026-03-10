@@ -14,6 +14,8 @@ if [ -f "$OCTOPUS_CONFIG" ]; then
 fi
 # 默认值（config.sh 不存在时的兜底）
 FEATURE_MODEL_PROBE="${FEATURE_MODEL_PROBE:-false}"
+PATROL_MODE="${PATROL_MODE:-loop}"
+PATROL_INTERVAL="${PATROL_INTERVAL:-60}"
 
 # ─────────────────────────────────────────────
 # 公共辅助：删除 / 禁用 / 启用 cron
@@ -156,6 +158,61 @@ for j in jobs:
 }
 
 # ─────────────────────────────────────────────
+# patrol-loop 进程管理（loop 模式使用）
+# ─────────────────────────────────────────────
+_PATROL_LOOP_PID_FILE="/workspace/tmp/octopus/patrol-loop.pid"
+_PATROL_LOOP_LOG="/workspace/tmp/octopus/patrol.log"
+
+_start_patrol_loop() {
+    local loop_script="$SCRIPT_DIR/lib/patrol-loop.sh"
+    mkdir -p /workspace/tmp/octopus
+
+    # 检查是否已在运行
+    if [ -f "$_PATROL_LOOP_PID_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$_PATROL_LOOP_PID_FILE")
+        if kill -0 "$old_pid" 2>/dev/null; then
+            echo "ℹ️  patrol-loop 已在运行 (PID=$old_pid)，跳过"
+            return 0
+        fi
+        rm -f "$_PATROL_LOOP_PID_FILE"
+    fi
+
+    if [ ! -f "$loop_script" ]; then
+        echo "⚠️  未找到 $loop_script，跳过 patrol-loop 启动"
+        return 1
+    fi
+
+    PATROL_INTERVAL="$PATROL_INTERVAL" setsid bash "$loop_script" >> "$_PATROL_LOOP_LOG" 2>&1 &
+    sleep 0.8
+
+    if [ -f "$_PATROL_LOOP_PID_FILE" ]; then
+        local new_pid
+        new_pid=$(cat "$_PATROL_LOOP_PID_FILE")
+        echo "✅ patrol-loop 已启动 (PID=$new_pid)，间隔 ${PATROL_INTERVAL}s，零 token"
+    else
+        echo "⚠️  patrol-loop 启动失败，请查看日志：$_PATROL_LOOP_LOG"
+        return 1
+    fi
+}
+
+_stop_patrol_loop() {
+    if [ -f "$_PATROL_LOOP_PID_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$_PATROL_LOOP_PID_FILE")
+        if kill -0 "$old_pid" 2>/dev/null; then
+            kill "$old_pid" 2>/dev/null
+            echo "✅ patrol-loop 已停止 (PID=$old_pid)"
+        else
+            echo "ℹ️  patrol-loop 进程已不存在"
+        fi
+        rm -f "$_PATROL_LOOP_PID_FILE"
+    else
+        echo "ℹ️  patrol-loop 未在运行（PID 文件不存在）"
+    fi
+}
+
+# ─────────────────────────────────────────────
 # 卸载
 # ─────────────────────────────────────────────
 do_uninstall() {
@@ -163,8 +220,9 @@ do_uninstall() {
     echo "🗑️  卸载八爪鱼..."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    # 1. 删除 cron
-    echo "📡 删除 cron 任务..."
+    # 1. 停止巡逻（loop 模式停进程，cron 模式删 cron）
+    echo "📡 停止巡逻任务..."
+    _stop_patrol_loop
     _delete_cron_by_name "octopus-patrol"
     _delete_cron_by_name "octopus-probe"
     _delete_cron_by_name "octopus-update-check"
@@ -224,14 +282,18 @@ do_disable() {
     touch "$WORKSPACE/tmp/octopus/.disabled"
     echo "✅ 已创建禁用标记文件"
 
-    # 禁用 cron
-    echo "📡 禁用 cron 任务..."
-    _disable_cron_by_name "octopus-patrol"
+    # 停止巡逻
+    echo "📡 停止巡逻任务..."
+    if [ "${PATROL_MODE:-loop}" = "loop" ]; then
+        _stop_patrol_loop
+    else
+        _disable_cron_by_name "octopus-patrol"
+    fi
     _disable_cron_by_name "octopus-probe"
     _disable_cron_by_name "octopus-update-check"
 
     echo ""
-    echo "✅ 八爪鱼已暂停（cron 已禁用，文件保留）"
+    echo "✅ 八爪鱼已暂停（巡逻已停止，文件保留）"
     echo "   AGENTS.md 中的规则已保留（但八爪鱼不会主动巡逻）"
     echo "   重新启用：bash $SCRIPT_DIR/install.sh enable"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -254,15 +316,23 @@ do_enable() {
         echo "ℹ️  八爪鱼未处于禁用状态"
     fi
 
-    # 重新启用 cron
-    echo "📡 启用 cron 任务..."
-    _enable_cron_by_name "octopus-patrol"
+    # 重新启动巡逻
+    echo "📡 启动巡逻任务..."
+    if [ "${PATROL_MODE:-loop}" = "loop" ]; then
+        _start_patrol_loop
+    else
+        _enable_cron_by_name "octopus-patrol"
+    fi
     _enable_cron_by_name "octopus-probe"
     _enable_cron_by_name "octopus-update-check"
 
     echo ""
     echo "✅ 八爪鱼已重新启用"
-    echo "   cron 巡逻和探测任务已恢复"
+    if [ "${PATROL_MODE:-loop}" = "loop" ]; then
+        echo "   patrol-loop 巡逻进程已启动（零 token，间隔 ${PATROL_INTERVAL}s）"
+    else
+        echo "   cron 巡逻和探测任务已恢复"
+    fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 }
@@ -620,18 +690,43 @@ else
     echo "⚠️  未找到 python3，feishu-card.py 将无法使用"
 fi
 
-# 4. 注册八爪鱼巡逻 cron
+# 4. 启动巡逻（loop 模式：零 token 进程；cron 模式：openclaw cron）
 install_patrol_cron() {
-    echo "📡 注册八爪鱼巡逻 cron（task-state.json 巡逻，每3分钟）..."
 
-    # 检查 openclaw CLI 是否可用
-    if ! command -v openclaw &>/dev/null; then
-        echo "⚠️  openclaw CLI 未找到，跳过 cron 注册（可手动注册）"
-        return 0
-    fi
+    # ── loop 模式（默认）：零 token，直接启动常驻进程 ──────────────────────────
+    if [ "${PATROL_MODE:-loop}" = "loop" ]; then
+        echo "🔄 巡逻模式：loop（零 token），间隔 ${PATROL_INTERVAL}s"
 
-    # 读取用户飞书 open_id（用于 patrol cron delivery，确保面板私信给用户而非告警群）
-    USER_OPEN_ID=$(python3 -c "
+        # 迁移：若旧版已注册 octopus-patrol cron，删除它（避免重复运行浪费 token）
+        if command -v openclaw &>/dev/null && openclaw cron list 2>/dev/null | grep -q "octopus-patrol"; then
+            echo "ℹ️  检测到旧版 octopus-patrol cron，迁移删除中..."
+            _delete_cron_by_name "octopus-patrol"
+        fi
+
+        _start_patrol_loop
+
+        # 注册每日版本检查 cron（仅版本检查，每天一次，token 消耗可忽略）
+        if ! command -v openclaw &>/dev/null; then
+            echo "⚠️  openclaw CLI 未找到，跳过版本检查 cron 注册"
+            return 0
+        fi
+        echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
+        if openclaw cron list 2>/dev/null | grep -q "octopus-update-check"; then
+            echo "ℹ️  octopus-update-check cron 已存在，跳过"
+            return 0
+        fi
+    else
+        # ── cron 模式：通过 openclaw cron，每次触发消耗 ~500-1000 token ──────────
+        echo "🔄 巡逻模式：cron（每1分钟，消耗 token）"
+
+        # 检查 openclaw CLI 是否可用
+        if ! command -v openclaw &>/dev/null; then
+            echo "⚠️  openclaw CLI 未找到，跳过 cron 注册（可手动注册）"
+            return 0
+        fi
+
+        # 读取用户飞书 open_id
+        USER_OPEN_ID=$(python3 -c "
 import json, sys
 try:
     with open('$HOME/.openclaw/sessions.json') as f:
@@ -642,20 +737,19 @@ except Exception:
     print('')
 " 2>/dev/null)
 
-    # 注册 octopus-patrol cron
-    if openclaw cron list 2>/dev/null | grep -q "octopus-patrol"; then
-        echo "ℹ️  octopus-patrol cron 已存在，跳过"
-    else
-        # 根据是否获取到 open_id 决定 delivery 配置
-        if [[ -n "$USER_OPEN_ID" ]]; then
-            DELIVERY_OPTS="--announce --channel feishu --to user:${USER_OPEN_ID}"
-            echo "ℹ️  patrol delivery → 飞书私信 user:${USER_OPEN_ID}"
+        # 注册 octopus-patrol cron
+        if openclaw cron list 2>/dev/null | grep -q "octopus-patrol"; then
+            echo "ℹ️  octopus-patrol cron 已存在，跳过"
         else
-            DELIVERY_OPTS="--announce --channel feishu"
-            echo "⚠️  未获取到 open_id，patrol delivery fallback → feishu announce"
-        fi
+            if [[ -n "$USER_OPEN_ID" ]]; then
+                DELIVERY_OPTS="--announce --channel feishu --to user:${USER_OPEN_ID}"
+                echo "ℹ️  patrol delivery → 飞书私信 user:${USER_OPEN_ID}"
+            else
+                DELIVERY_OPTS="--announce --channel feishu"
+                echo "⚠️  未获取到 open_id，patrol delivery fallback → feishu announce"
+            fi
 
-        PATROL_MSG='运行八爪鱼巡逻脚本，检查任务状态，有异常则发飞书卡片。
+            PATROL_MSG='运行八爪鱼巡逻脚本，检查任务状态，有异常则发飞书卡片。
 
 执行以下命令：
 ```bash
@@ -664,28 +758,29 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
 
 执行完成后直接结束，无需回复或发送任何其他通知。'
 
-        if openclaw cron add \
-            --name octopus-patrol \
-            --every 1m \
-            --session isolated \
-            --timeout-seconds 60 \
-            $DELIVERY_OPTS \
-            --message "$PATROL_MSG" 2>/dev/null; then
-            echo "✅ octopus-patrol cron 注册成功（每1分钟巡逻一次，检测卡死/排队/待确认）"
-        else
-            echo "⚠️  cron 注册失败，可手动在 OpenClaw 中添加"
+            if openclaw cron add \
+                --name octopus-patrol \
+                --every 1m \
+                --session isolated \
+                --timeout-seconds 60 \
+                $DELIVERY_OPTS \
+                --message "$PATROL_MSG" 2>/dev/null; then
+                echo "✅ octopus-patrol cron 注册成功（每1分钟，cron 模式）"
+            else
+                echo "⚠️  cron 注册失败，可手动在 OpenClaw 中添加"
+            fi
+        fi
+
+        echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
+        if openclaw cron list 2>/dev/null | grep -q "octopus-update-check"; then
+            echo "ℹ️  octopus-update-check cron 已存在，跳过"
+            return 0
         fi
     fi
+    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
+    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
 
-    # 注册每日版本检查 cron
-    echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
-    if openclaw cron list 2>/dev/null | grep -q "octopus-update-check"; then
-        echo "ℹ️  octopus-update-check cron 已存在，跳过"
-    else
-        GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
-        GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
-
-        UPDATE_CHECK_PAYLOAD='{
+    UPDATE_CHECK_PAYLOAD='{
   "name": "octopus-update-check",
   "schedule": {"kind": "cron", "expression": "0 9 * * *", "timezone": "Asia/Shanghai"},
   "payload": {
@@ -698,18 +793,17 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
   "enabled": true
 }'
 
-        HTTP_CODE=$(curl -s -o /tmp/octopus-update-cron-result.json -w "%{http_code}" \
-            -X POST "$GATEWAY_URL/api/cron/jobs" \
-            -H "Content-Type: application/json" \
-            ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-            -d "$UPDATE_CHECK_PAYLOAD")
+    HTTP_CODE=$(curl -s -o /tmp/octopus-update-cron-result.json -w "%{http_code}" \
+        -X POST "$GATEWAY_URL/api/cron/jobs" \
+        -H "Content-Type: application/json" \
+        ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
+        -d "$UPDATE_CHECK_PAYLOAD")
 
-        if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
-            echo "✅ octopus-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
-        else
-            echo "⚠️  版本检查 cron 注册失败（HTTP $HTTP_CODE），可手动在 OpenClaw 中添加"
-            cat /tmp/octopus-update-cron-result.json 2>/dev/null
-        fi
+    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+        echo "✅ octopus-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
+    else
+        echo "⚠️  版本检查 cron 注册失败（HTTP $HTTP_CODE），可手动在 OpenClaw 中添加"
+        cat /tmp/octopus-update-cron-result.json 2>/dev/null
     fi
 }
 
@@ -989,6 +1083,11 @@ echo "🎉 八爪鱼安装完成！"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ 工作目录已创建"
 echo "✅ 飞书卡片脚本已就绪"
+if [ "${PATROL_MODE:-loop}" = "loop" ]; then
+    echo "✅ 巡逻模式：零 token loop（间隔 ${PATROL_INTERVAL}s）"
+else
+    echo "✅ 巡逻模式：cron（每分钟触发，消耗 token）"
+fi
 echo "✅ 调度规则已注入 AGENTS.md"
 echo "✅ 调度模式：$MODE_LABEL"
 

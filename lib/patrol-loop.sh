@@ -3,13 +3,14 @@
 # 替代 openclaw cron 的 AI session 模式，直接执行 Python 脚本
 # 正常状态: 0 token | 异常状态: patrol.py 直接调飞书 API
 #
-# 启动: setsid bash patrol-loop.sh &
+# 启动: PATROL_INTERVAL=60 setsid bash patrol-loop.sh &
 # 停止: kill $(cat /workspace/tmp/octopus/patrol-loop.pid)
+# 间隔: 通过 PATROL_INTERVAL 环境变量控制（默认 60 秒）
 
 PATROL_SCRIPT="/workspace/openclaw/skills/octopus/lib/patrol.py"
 LOG_FILE="/workspace/tmp/octopus/patrol.log"
 PID_FILE="/workspace/tmp/octopus/patrol-loop.pid"
-INTERVAL=300  # 5分钟
+INTERVAL=${PATROL_INTERVAL:-60}  # 默认 60 秒，由 config.sh 的 PATROL_INTERVAL 控制
 
 mkdir -p /workspace/tmp/octopus
 
