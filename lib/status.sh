@@ -8,6 +8,8 @@ import os
 from datetime import datetime, timedelta, timezone
 
 TASK_FILE = "/workspace/tmp/octopus/task-state.json"
+MODE_FILE = "/workspace/tmp/octopus-mode.json"
+ALIASES_FILE = "/workspace/tmp/octopus-model-aliases.json"
 
 # Emoji 映射
 LABEL_EMOJI = {
@@ -47,11 +49,71 @@ def format_duration(started_at, now):
     secs = secs % 60
     return f"{mins}m{secs}s"
 
+def load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
 # 当前时间（东八区）
 now = datetime.now(timezone(timedelta(hours=8)))
 one_hour_ago = now - timedelta(minutes=30)
 
-# 读取任务
+# ── 模式配置 ──────────────────────────────────────────────────
+mode_data = load_json(MODE_FILE) or {}
+aliases = load_json(ALIASES_FILE) or {}
+
+mode = mode_data.get("mode", "balanced")
+MODE_LABELS = {
+    "balanced": "平衡模式", "quality": "效果优先",
+    "cost": "成本优先", "speed": "速度优先",
+    "private": "保密模式", "custom": "自定义模式",
+}
+mode_label = MODE_LABELS.get(mode, mode)
+
+# 提取各 tier 的模型简称
+def short_model(path):
+    if not path:
+        return "?"
+    p = path.lower()
+    if "opus" in p: return "Opus"
+    if "sonnet" in p: return "Sonnet"
+    if "haiku" in p: return "Haiku"
+    if "glm" in p: return "GLM"
+    if "kimi" in p: return "Kimi"
+    return path.split("/")[-1][:12]
+
+rules = mode_data.get("modes", {}).get(mode, {})
+
+def tier_model(tier):
+    # 先从 rules 查短名，再从 aliases 查完整路径
+    short = rules.get(tier)
+    if short and isinstance(short, str) and "/" in short:
+        return short_model(short)
+    if short:
+        MODEL_SHORT = {"glm": "GLM", "kimi": "Kimi", "sonnet": "Sonnet",
+                       "claudeopus": "Opus", "dynamic_fastest": "最快可用"}
+        return MODEL_SHORT.get(short, short)
+    full = aliases.get(tier, "")
+    if full:
+        return short_model(full)
+    return "?"
+
+t_trivial = tier_model("trivial")
+t_normal  = tier_model("normal")
+t_deep    = tier_model("deep")
+
+# 输出 header
+ts = now.strftime("%Y-%m-%d %H:%M")
+print(f"🐙 八爪鱼状态 [{ts}]")
+print("━━━━━━━━━━━━━━━━━━━━")
+print(f"⚙️  模式：{mode_label}")
+print(f"📊 模型配置：")
+print(f"   trivial/simple → {t_trivial}  |  normal/hard → {t_normal}  |  deep → {t_deep}")
+print("━━━━━━━━━━━━━━━━━━━━")
+
+# ── 读取任务 ──────────────────────────────────────────────────
 if not os.path.exists(TASK_FILE):
     tasks = []
 else:
@@ -85,50 +147,51 @@ for t in tasks:
             if ct >= one_hour_ago.replace(tzinfo=None):
                 recent_failed.append(t)
 
-# 输出
-ts = now.strftime("%Y-%m-%d %H:%M")
-print(f"🐙 八爪鱼状态 [{ts}]")
-print("━━━━━━━━━━━━━━━━━━━━")
+# 无活跃任务提示
+if not running and not queued and not deferred:
+    print("✅ 无活跃任务")
+else:
+    # 运行中
+    if running:
+        print(f"🔵 运行中（{len(running)}个）")
+        for t in running:
+            emoji = get_emoji(t.get("label"))
+            tid = t.get("id", "?")
+            tier = t.get("tier", "?")
+            dur = format_duration(t.get("started_at") or t.get("spawned_at"), now)
+            summary = t.get("summary", "")
+            display = summary[:30] if summary else tid.split("-", 3)[-1] if "-" in tid else tid
+            print(f"  {emoji} {display} · {tier} · {dur}")
 
-# 运行中
-print(f"🔵 运行中（{len(running)}个）")
-for t in running:
-    emoji = get_emoji(t.get("label"))
-    tid = t.get("id", "?")
-    tier = t.get("tier", "?")
-    dur = format_duration(t.get("started_at") or t.get("spawned_at"), now)
-    summary = t.get("summary", "")
-    # summary 为空时用 id 末段作为任务描述
-    display = summary[:30] if summary else tid.split("-", 3)[-1] if "-" in tid else tid
-    print(f"  {emoji} {display} · {tier} · {dur}")
+    # 排队中
+    if queued:
+        print(f"⏸️  排队中（{len(queued)}个）")
+        for t in queued:
+            emoji = get_emoji(t.get("label"))
+            tid = t.get("id", "?")
+            deps = t.get("deps", [])
+            waiting = deps[0] if deps else "?"
+            print(f"  {emoji} {tid} · 等待 {waiting}")
 
-# 排队中
-print(f"⏸️ 排队中（{len(queued)}个）")
-for t in queued:
-    emoji = get_emoji(t.get("label"))
-    tid = t.get("id", "?")
-    deps = t.get("deps", [])
-    waiting = deps[0] if deps else "?"
-    print(f"  {emoji} {tid} · 等待 {waiting}")
+    # 待定
+    if deferred:
+        print(f"⏳ 待定（{len(deferred)}个）")
+        for t in deferred:
+            emoji = get_emoji(t.get("label"))
+            tid = t.get("id", "?")
+            summary = t.get("summary", "")[:40] if t.get("summary") else ""
+            print(f"  {emoji} {tid} · {summary}")
 
-# 待定
-print(f"⏳ 待定（{len(deferred)}个）")
-for t in deferred:
-    emoji = get_emoji(t.get("label"))
-    tid = t.get("id", "?")
-    summary = t.get("summary", "")[:40] if t.get("summary") else ""
-    print(f"  {emoji} {tid} · {summary}")
+# 近30min完成/失败（不管有没有活跃任务都显示）
+if recent_done:
+    print(f"✅ 近30min完成（{len(recent_done)}个）")
+    for t in recent_done[:10]:
+        tid = t.get("id", "?")
+        summary = t.get("summary", "")[:30] if t.get("summary") else ""
+        print(f"  {tid} | {summary}")
 
-# 近30min完成
-print(f"✅ 近30min完成（{len(recent_done)}个）")
-for t in recent_done[:10]:
-    tid = t.get("id", "?")
-    summary = t.get("summary", "")[:30] if t.get("summary") else ""
-    print(f"  {tid} | {summary}")
-
-# 近1h失败
-print(f"❌ 近30min失败（{len(recent_failed)}个）")
 if recent_failed:
+    print(f"❌ 近30min失败（{len(recent_failed)}个）")
     for t in recent_failed[:10]:
         tid = t.get("id", "?")
         summary = t.get("summary", "")[:30] if t.get("summary") else ""
