@@ -3177,7 +3177,7 @@ def main():
     # 快照字段：running_ids + queued_count + failed_count + stuck_count
     # 有变化（新完成/新失败/新超时/新排队/running数量变化）→ 发飞书面板
     # 无变化 → 静默退出，不发任何通知
-    _PATROL_STATE_FILE = "/tmp/octopus-patrol-last-state.json"
+    _PATROL_STATE_FILE = "/workspace/tmp/octopus/patrol-last-state.json"
     import time as _time_mod
 
     current_running_ids = sorted([t.get("id", "") for t in running])

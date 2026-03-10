@@ -12,7 +12,7 @@ python3 << 'PYEOF'
 import json, time, os
 
 LATENCY_FILE = "/tmp/ironclaw-model-latency.json"
-ALIAS_FILE   = "/tmp/octopus-model-aliases.json"
+ALIAS_FILE   = "/workspace/tmp/octopus-model-aliases.json"
 
 DEFAULTS = {
     "trivial": "lixiang-glm-5/kivy-glm-5",            # 用户偏好：trivial 用 GLM，不用 Kimi
@@ -664,7 +664,7 @@ trivial_model = trivial_model or DEFAULTS["trivial"]
 # 读取当前已写入的别名文件里的 trivial 模型，判断是否发生了跨厂商切换
 _trivial_current = None
 try:
-    ALIAS_FILE = "/tmp/octopus-model-aliases.json"
+    ALIAS_FILE = "/workspace/tmp/octopus-model-aliases.json"
     if os.path.exists(ALIAS_FILE):
         with open(ALIAS_FILE) as _f:
             _existing = json.load(_f)

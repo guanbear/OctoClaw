@@ -77,7 +77,7 @@ def get_target_open_id():
 
 TARGET_OPEN_ID = get_target_open_id()
 
-STATE_FILE = "/tmp/octopus-card-state.json"
+STATE_FILE = "/workspace/tmp/octopus/feishu-card-state.json"
 
 FEISHU_ALMIGHTY_DIR = "/workspace/openclaw/skills/feishu-almighty"
 

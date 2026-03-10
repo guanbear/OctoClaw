@@ -2,7 +2,7 @@
 name: octopus
 metadata:
   author: openclaw-community
-  version: "1.1.3"
+  version: "1.1.4"
   timestamp: "2026-03-10"
   stable: false
 tags:
