@@ -1,93 +1,187 @@
-# openclaw-octopus
+# 🐙 八爪鱼 Octopus v1.0.25
 
+![八爪鱼 Octopus](./banner.png)
 
+> 多 Agent 智能调度器 — 省钱、极速、自愈。1 个大脑 + 最多 8 只触手并行。
 
-## Getting started
+---
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 💰 成本优化（核心价值）
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+**实测：65%+ 的任务可用低成本模型完成，效果无差别。**
 
-## Add your files
+| 任务等级 | 典型任务 | 平衡模式用模型 | 费用 |
+|---------|---------|--------------|------|
+| trivial | 改配置、加文字 | GLM | 💰 |
+| simple | 写脚本、改单文件 | GLM | 💰 |
+| normal | 写代码、调 API | GLM | 💰 |
+| hard | 复杂逻辑、多文件 | Sonnet | 💰💰 |
+| deep | 复杂架构、深度分析 | Sonnet | 💰💰 |
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+GLM 费用约为 Sonnet 的 **1/10**。日常使用中 trivial/simple/normal 占大多数，整体成本大幅降低。
+
+### 5 种调度模式
+
+| 模式 | 适用场景 | trivial~normal | hard~deep |
+|------|---------|---------------|-----------|
+| ⚖️ **balanced**（默认） | 日常使用 | GLM | Sonnet |
+| 🎯 **quality** | 重要任务 | Sonnet | Opus |
+| 💰 **cost** | 批量任务 | GLM | Sonnet |
+| 🔒 **private** | 敏感数据 | GLM | GLM |
+
+切换方式：告诉 Agent "切换到成本优先模式" 或 `/mode cost`。
+
+---
+
+## ⚡ 执行效率
+
+**主 Agent 零等待**：收到消息立即输出文字回复，任务异步派发给触手。用户不需要等任何工具调用完成。
+
+**最多 8 触手并行**：独立任务同时执行，没有串行等待。
+
+**patrol 自愈**：每 5 分钟巡逻。空闲时仅 ~100 tokens；超时任务自动 kill + 重派；queued 依赖完成后自动解锁。
+
+---
+
+## 🏗️ 架构原理
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.chehejia.com/sre/openclaw-octopus.git
-git branch -M master
-git push -uf origin master
+用户消息
+   │
+   ▼
+🧠 主 Agent（调度大脑）
+   │  ① 立即输出文字回复（零阻塞）
+   │  ② sessions_spawn × N（非阻塞）
+   │
+   ├──► 💪 鲸力手 ──► task-state.json ──► ✅ done
+   ├──► 🔍 梭鱼眼 ──► task-state.json ──► ✅ done
+   └──► ✍️ 墨鱼手 ──► task-state.json ──► ✅ done
+                             │
+                             ▼
+                  🦅 patrol cron（每5分钟）
+                     ├── 超时 → kill + 重派
+                     ├── queued deps 全 done → 自动 spawn
+                     └── 空闲 → PATROL_SKIP（~100 tokens）
 ```
 
-## Integrate with your tools
+### 四大组件
 
-- [ ] [Set up project integrations](https://gitlab.chehejia.com/sre/openclaw-octopus/-/settings/integrations)
+| 组件 | 职责 |
+|------|------|
+| **主 Agent（大脑）** | 秒级回复 + spawn，永不阻塞用户 |
+| **子 Agent（触手）** | 独立执行任务，写入 task-state.json，发完成通知 |
+| **task-state.json** | 所有任务状态的单一真相来源，文件锁原子写入 |
+| **patrol cron** | 每5分钟巡逻，超时处理 + queued 解锁 + 两阶段优化 |
 
-## Collaborate with your team
+---
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## 🦑 8 只触手
 
-## Test and Deploy
+| 触手 | label | 适合任务 |
+|------|-------|---------|
+| 💪 **鲸力手** | octopus-power | 复杂开发、架构重构、大型代码变更 |
+| 🔍 **梭鱼眼** | octopus-scout | 调研、对比分析、查资料、排查根因 |
+| ✍️ **墨鱼手** | octopus-writer | 写文档、报告、总结、翻译 |
+| 🔧 **螃蟹手** | octopus-fix | Bug 修复、精细调整、code review |
+| 🧪 **海胆手** | octopus-test | 测试、质量检查、边界条件验证 |
+| 📊 **章鱼脑** | octopus-analyze | 数据分析、日志分析、决策支持 |
+| 🏃 **飞鱼腿** | octopus-runner | 脚本运行、API 调用、查状态 |
+| 🐦 **鸽手** | octopus-feishu | 飞书消息、文档、卡片、API 操作 |
 
-Use the built-in continuous integration in GitLab.
+---
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+## 🚀 快速开始
 
-***
+### 安装
 
-# Editing this README
+技能加载后自动执行，或手动运行：
+```bash
+bash /workspace/openclaw/skills/octopus/install.sh
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+### 使用示例
 
-## Suggestions for a good README
+直接说出任务，八爪鱼自动派触手：
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+```
+"帮我重构用户认证模块，同时调研 JWT 最佳实践"
+→ 鲸力手 重构代码（Sonnet）
+→ 梭鱼眼 调研 JWT（GLM）
+两个触手并行，同时开始
 
-## Name
-Choose a self-explaining name for your project.
+"查一下 Redis 配置"
+→ 主 Agent 直接答（无需 spawn）
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+"八爪鱼状态"
+→ 显示当前任务面板
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+---
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+## ⚙️ 模式切换
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```
+切换到成本优先模式    →  全 GLM，仅复杂推理用 Sonnet
+切换到效果优先模式    →  优先 Sonnet/Opus，追求最佳结果
+切换到保密模式        →  全部使用私有部署 GLM，数据不出内网
+切换到平衡模式        →  默认，成本与质量均衡
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+---
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## 🛠️ 管理命令
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+```bash
+# 禁用（保留配置，停止 cron）
+touch /workspace/tmp/octopus-disabled
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+# 重新启用
+rm -f /workspace/tmp/octopus-disabled
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+# 强制刷新任务面板
+python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+# 卸载
+bash /workspace/openclaw/skills/octopus/install.sh uninstall
+```
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+---
 
-## License
-For open source projects, say how it is licensed.
+## 📂 文件结构
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```
+/workspace/openclaw/skills/octopus/
+├── SKILL.md                   # 技能规则（加载到 Agent 上下文）
+├── README.md                  # 本文档
+├── install.sh                 # 安装/卸载脚本
+└── lib/
+    ├── patrol.py              # 巡逻（两阶段，空闲~100 tokens）
+    ├── task-state-update.py   # 任务状态原子写入（文件锁）
+    ├── resolve-model.py       # 模型路径解析（含30分钟缓存）
+    ├── feishu-card.py         # 飞书卡片发送/更新
+    └── status.sh              # 轻量状态查询
+
+/workspace/tmp/octopus/
+├── task-state.json            # 全局任务状态（运行时）
+└── octopus-mode.json          # 当前调度模式
+
+/tmp/
+├── octopus-model-cache.json   # 模型缓存（30分钟有效）
+└── ironclaw-model-latency.json # 铁甲虾延迟数据（软依赖）
+```
+
+---
+
+## ❓ 常见问题
+
+**Q：任务卡死了怎么办？**
+patrol 每5分钟自动检查并 kill + 重派。也可手动运行 `patrol.py --force` 立即触发。
+
+**Q：怎么省钱？**
+切换到 cost 或 private 模式："切换到成本优先模式"。
+
+**Q：八爪鱼和铁甲虾能同时用吗？**
+可以，且推荐。铁甲虾提供实时模型延迟数据，让八爪鱼选模型更准确，并在模型故障时自动降级。
+
+**Q：怎么知道当前有哪些任务？**
+问 Agent "八爪鱼状态" 或运行 `patrol.py --force`。

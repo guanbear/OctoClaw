@@ -1,0 +1,1018 @@
+#!/usr/bin/env bash
+# 八爪鱼 (Octopus) 安装脚本
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE="${WORKSPACE:-/workspace}"
+OCTOPUS_RULES_VERSION="v1.1.0"
+
+# ── 加载功能开关配置 ──────────────────────────────────────────────────────────
+OCTOPUS_CONFIG="$SCRIPT_DIR/lib/config.sh"
+if [ -f "$OCTOPUS_CONFIG" ]; then
+    # shellcheck source=/dev/null
+    source "$OCTOPUS_CONFIG"
+fi
+# 默认值（config.sh 不存在时的兜底）
+FEATURE_MODEL_PROBE="${FEATURE_MODEL_PROBE:-false}"
+
+# ─────────────────────────────────────────────
+# 公共辅助：删除 / 禁用 / 启用 cron
+# ─────────────────────────────────────────────
+_get_gateway_url() {
+    python3 -c "
+import json
+try:
+    with open('$HOME/.openclaw/openclaw.json') as f:
+        d = json.load(f)
+    print('http://localhost:' + str(d.get('port', 3000)))
+except Exception:
+    print('http://localhost:3000')
+" 2>/dev/null
+}
+
+_get_gateway_token() {
+    python3 -c "
+import json
+try:
+    with open('$HOME/.openclaw/openclaw.json') as f:
+        d = json.load(f)
+    print(d.get('token', '') or '')
+except Exception:
+    print('')
+" 2>/dev/null
+}
+
+_delete_cron_by_name() {
+    local cron_name="$1"
+    local gw_url gw_token job_id http_code
+    gw_url=$(_get_gateway_url)
+    gw_token=$(_get_gateway_token)
+
+    # 列出所有 cron，找到 id
+    job_id=$(curl -s \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        "$gw_url/api/cron/jobs" 2>/dev/null | \
+        python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+jobs = data if isinstance(data, list) else data.get('jobs', [])
+for j in jobs:
+    if j.get('name') == '$cron_name':
+        print(j.get('id',''))
+        break
+" 2>/dev/null)
+
+    if [ -z "$job_id" ]; then
+        echo "ℹ️  未找到 $cron_name cron，跳过"
+        return 0
+    fi
+
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X DELETE \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        "$gw_url/api/cron/jobs/$job_id")
+
+    if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]] || [[ "$http_code" == "404" ]]; then
+        echo "✅ 已删除 cron: $cron_name"
+    else
+        echo "⚠️  删除 $cron_name 失败（HTTP $http_code）"
+    fi
+}
+
+_disable_cron_by_name() {
+    local cron_name="$1"
+    local gw_url gw_token job_id http_code
+    gw_url=$(_get_gateway_url)
+    gw_token=$(_get_gateway_token)
+
+    job_id=$(curl -s \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        "$gw_url/api/cron/jobs" 2>/dev/null | \
+        python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+jobs = data if isinstance(data, list) else data.get('jobs', [])
+for j in jobs:
+    if j.get('name') == '$cron_name':
+        print(j.get('id',''))
+        break
+" 2>/dev/null)
+
+    if [ -z "$job_id" ]; then
+        echo "ℹ️  未找到 $cron_name cron，跳过"
+        return 0
+    fi
+
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PATCH \
+        -H "Content-Type: application/json" \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        -d '{"enabled": false}' \
+        "$gw_url/api/cron/jobs/$job_id")
+
+    if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
+        echo "✅ 已禁用 cron: $cron_name"
+    else
+        echo "⚠️  禁用 $cron_name 失败（HTTP $http_code），可能需要手动禁用"
+    fi
+}
+
+_enable_cron_by_name() {
+    local cron_name="$1"
+    local gw_url gw_token job_id http_code
+    gw_url=$(_get_gateway_url)
+    gw_token=$(_get_gateway_token)
+
+    job_id=$(curl -s \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        "$gw_url/api/cron/jobs" 2>/dev/null | \
+        python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+jobs = data if isinstance(data, list) else data.get('jobs', [])
+for j in jobs:
+    if j.get('name') == '$cron_name':
+        print(j.get('id',''))
+        break
+" 2>/dev/null)
+
+    if [ -z "$job_id" ]; then
+        echo "ℹ️  未找到 $cron_name cron，跳过（可运行 install.sh 重新安装）"
+        return 0
+    fi
+
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PATCH \
+        -H "Content-Type: application/json" \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        -d '{"enabled": true}' \
+        "$gw_url/api/cron/jobs/$job_id")
+
+    if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
+        echo "✅ 已启用 cron: $cron_name"
+    else
+        echo "⚠️  启用 $cron_name 失败（HTTP $http_code）"
+    fi
+}
+
+# ─────────────────────────────────────────────
+# 卸载
+# ─────────────────────────────────────────────
+do_uninstall() {
+    echo ""
+    echo "🗑️  卸载八爪鱼..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # 1. 删除 cron
+    echo "📡 删除 cron 任务..."
+    _delete_cron_by_name "octopus-patrol"
+    _delete_cron_by_name "octopus-probe"
+    _delete_cron_by_name "octopus-update-check"
+
+    # 2. 从 AGENTS.md 删除规则注入
+    AGENTS_FILE="$WORKSPACE/AGENTS.md"
+    if [ -f "$AGENTS_FILE" ]; then
+        # 先备份
+        local UNINSTALL_TS
+        UNINSTALL_TS="$(date +%s)"
+        cp "$AGENTS_FILE" "${AGENTS_FILE}.bak.${UNINSTALL_TS}"
+        echo "✅ 已备份 AGENTS.md → $(basename "${AGENTS_FILE}.bak.${UNINSTALL_TS}")"
+        python3 -c "
+import re
+with open('$AGENTS_FILE', 'r') as f:
+    content = f.read()
+# 使用 [^>]* 匹配版本号，兼容 v1.0.3 等带版本的块标记
+cleaned = re.sub(
+    r'\n<!-- octopus:core-rules[^>]*>.*?<!-- /octopus:core-rules -->\n?',
+    '\n',
+    content,
+    flags=re.DOTALL
+)
+with open('$AGENTS_FILE', 'w') as f:
+    f.write(cleaned)
+print('✅ 已从 AGENTS.md 移除规则注入')
+" 2>/dev/null || echo "⚠️  AGENTS.md 规则移除失败，请手动删除 octopus:core-rules 块"
+    else
+        echo "ℹ️  未找到 AGENTS.md，跳过规则清理"
+    fi
+
+    # 3. 删除 tmp 目录
+    if [ -d "$WORKSPACE/tmp/octopus" ]; then
+        rm -rf "$WORKSPACE/tmp/octopus"
+        echo "✅ 已删除工作目录 $WORKSPACE/tmp/octopus"
+    else
+        echo "ℹ️  工作目录不存在，跳过"
+    fi
+
+    echo ""
+    echo "🎉 八爪鱼已卸载完成"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  请执行 /compact 让规则移除生效"
+    echo ""
+}
+
+# ─────────────────────────────────────────────
+# 关闭（暂停）
+# ─────────────────────────────────────────────
+do_disable() {
+    echo ""
+    echo "⏸️  暂停八爪鱼..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # 创建标记文件
+    mkdir -p "$WORKSPACE/tmp/octopus"
+    touch "$WORKSPACE/tmp/octopus/.disabled"
+    echo "✅ 已创建禁用标记文件"
+
+    # 禁用 cron
+    echo "📡 禁用 cron 任务..."
+    _disable_cron_by_name "octopus-patrol"
+    _disable_cron_by_name "octopus-probe"
+    _disable_cron_by_name "octopus-update-check"
+
+    echo ""
+    echo "✅ 八爪鱼已暂停（cron 已禁用，文件保留）"
+    echo "   AGENTS.md 中的规则已保留（但八爪鱼不会主动巡逻）"
+    echo "   重新启用：bash $SCRIPT_DIR/install.sh enable"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+}
+
+# ─────────────────────────────────────────────
+# 启用
+# ─────────────────────────────────────────────
+do_enable() {
+    echo ""
+    echo "▶️  启用八爪鱼..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # 移除标记文件
+    if [ -f "$WORKSPACE/tmp/octopus/.disabled" ]; then
+        rm -f "$WORKSPACE/tmp/octopus/.disabled"
+        echo "✅ 已移除禁用标记文件"
+    else
+        echo "ℹ️  八爪鱼未处于禁用状态"
+    fi
+
+    # 重新启用 cron
+    echo "📡 启用 cron 任务..."
+    _enable_cron_by_name "octopus-patrol"
+    _enable_cron_by_name "octopus-probe"
+    _enable_cron_by_name "octopus-update-check"
+
+    echo ""
+    echo "✅ 八爪鱼已重新启用"
+    echo "   cron 巡逻和探测任务已恢复"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+}
+
+# ─────────────────────────────────────────────
+# 参数路由
+# ─────────────────────────────────────────────
+case "${1:-}" in
+    uninstall|--uninstall|-u)
+        do_uninstall
+        exit 0
+        ;;
+    disable|--disable)
+        do_disable
+        exit 0
+        ;;
+    enable|--enable)
+        do_enable
+        exit 0
+        ;;
+esac
+
+# ─────────────────────────────────────────────
+# 正常安装流程（无参数）
+# ─────────────────────────────────────────────
+echo ""
+echo "🐙 八爪鱼多 Agent 调度器 v1.0.11"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "功能特性："
+echo "  💪 鲸力手  - 重型任务、大规模批量处理"
+echo "  🔍 梭鱼眼  - 搜索调研、信息收集分析"
+echo "  ✍️  墨鱼手  - 写作文档、内容创作"
+echo "  🔧 螃蟹手  - 代码修改、文件编辑"
+echo "  🧪 海胆手  - 测试验证、质量把关"
+echo "  📊 章鱼脑  - 数据分析、日志分析"
+echo "  🏃 飞鱼腿  - 命令执行、脚本运行（最快！）"
+echo "  🐦 鸽  手  - 飞书操作、消息传递"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "🐙 安装八爪鱼 (Octopus) skill..."
+
+# 1. 创建工作目录
+mkdir -p "$WORKSPACE/tmp/octopus"
+
+# 2. 模式选择引导
+echo ""
+echo "⚖️  选择调度模式（可随时通过对话切换）："
+echo ""
+echo "  1) ⚖️  平衡模式（默认）- trivial/simple→GLM，normal→Sonnet，deep→Sonnet"
+echo "  2) ⚡ 速度优先          - 所有任务选延迟最低的可用模型"
+echo "  3) 🎯 效果优先          - 所有任务使用 Opus"
+echo "  4) 💰 成本优先          - 尽量使用 GLM，降低费用"
+echo "  5) 🔒 保密模式          - 只用私有模型（GLM）"
+echo "  6) 🔧 自定义模式        - 手动为每个触手指定模型（高级用户）"
+echo ""
+read -p "请输入选择 [1-6，直接回车选平衡模式]: " mode_choice
+
+# 自定义模式用关联数组存储用户为每个触手指定的模型
+declare -A CUSTOM_MODELS
+MAIN_MODEL=""
+
+case "$mode_choice" in
+    2) MODE="speed" ;;
+    3) MODE="quality" ;;
+    4) MODE="cost" ;;
+    5) MODE="private" ;;
+    6)
+        MODE="custom"
+        MODE_LABEL="🔧 自定义模式"
+        echo ""
+        echo "🔧 自定义模式：为每个触手指定模型（直接回车跳过使用平衡模式默认值）"
+        echo "可用模型示例：vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
+        echo "             lixiang-kimi-2-5/kivy-kimi-k2_5"
+        echo ""
+        for LABEL in octopus-power octopus-scout octopus-writer octopus-fix octopus-test octopus-analyze octopus-runner octopus-feishu; do
+            case $LABEL in
+                octopus-power)   NAME="💪 鲸力手" ;;
+                octopus-scout)   NAME="🔍 梭鱼眼" ;;
+                octopus-writer)  NAME="✍️  墨鱼手" ;;
+                octopus-fix)     NAME="🔧 螃蟹手" ;;
+                octopus-test)    NAME="🧪 海胆手" ;;
+                octopus-analyze) NAME="📊 章鱼脑" ;;
+                octopus-runner)  NAME="🏃 飞鱼腿" ;;
+                octopus-feishu)  NAME="🐦 鸽  手" ;;
+            esac
+            read -p "  $NAME ($LABEL): " CUSTOM_MODEL
+            if [ -n "$CUSTOM_MODEL" ]; then
+                CUSTOM_MODELS[$LABEL]="$CUSTOM_MODEL"
+            fi
+        done
+        read -p "  🤖 主 Agent (main): " MAIN_MODEL
+        ;;
+    *) MODE="balanced" ;;
+esac
+
+# 写入模式文件（包含完整模式定义）
+MODE_FILE="$WORKSPACE/tmp/octopus-mode.json"
+mkdir -p "$WORKSPACE/tmp"
+
+if [ "$MODE" = "custom" ]; then
+    # 使用 python3 安全生成 JSON（避免 bash 字符串拼接导致 JSON 格式错误）
+    CUSTOM_PAIRS=""
+    for KEY in "${!CUSTOM_MODELS[@]}"; do
+        CUSTOM_PAIRS+="${KEY}=${CUSTOM_MODELS[$KEY]}"$'\n'
+    done
+    if [ -n "$MAIN_MODEL" ]; then
+        CUSTOM_PAIRS+="main=${MAIN_MODEL}"$'\n'
+    fi
+
+    OCTOPUS_MODE_JSON=$(CUSTOM_PAIRS="$CUSTOM_PAIRS" python3 -c "
+import json, sys, os
+from datetime import datetime, timezone
+
+pairs_raw = os.environ.get('CUSTOM_PAIRS', '')
+custom_models = {}
+for line in pairs_raw.strip().split('\n'):
+    if '=' in line:
+        k, v = line.split('=', 1)
+        custom_models[k.strip()] = v.strip()
+
+mode = {
+    'mode': 'custom',
+    'customModels': custom_models,
+    'updated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'description': '自定义模式：每个触手使用指定模型，未指定的 fallback 平衡模式',
+    'modes': {
+        'speed': {'trivial': 'dynamic_fastest', 'simple': 'dynamic_fastest', 'normal': 'dynamic_fastest', 'deep': 'dynamic_fastest', 'concurrency': 5},
+        'quality': {'trivial': 'claudeopus', 'simple': 'claudeopus', 'normal': 'claudeopus', 'deep': 'claudeopus', 'concurrency': 3},
+        'cost': {'trivial': 'kimi', 'simple': 'sonnet', 'normal': 'sonnet', 'deep': 'sonnet', 'concurrency': 3},
+        'balanced': {'trivial': 'kimi', 'simple': 'sonnet', 'normal': 'sonnet', 'deep': 'claudeopus', 'concurrency': 5},
+        'private': {'trivial': 'kimi', 'simple': 'kimi', 'normal': 'kimi', 'deep': 'claudeopus', 'concurrency': 5, 'autoPrivate': True}
+    }
+}
+print(json.dumps(mode, ensure_ascii=False, indent=2))
+" 2>/dev/null)
+    echo "$OCTOPUS_MODE_JSON" > "$MODE_FILE"
+else
+    MODE_DESC=$(case $MODE in
+        balanced) echo '平衡模式：trivial/simple→GLM, normal→Sonnet, deep→Sonnet' ;;
+        speed)    echo '速度优先：所有任务选延迟最低的可用模型' ;;
+        quality)  echo '效果优先：所有任务使用 Opus' ;;
+        cost)     echo '成本优先：尽量使用 GLM，降低费用' ;;
+        private)  echo '保密模式：只用私有模型（GLM）' ;;
+        *)        echo "$MODE" ;;
+    esac)
+    cat > "$MODE_FILE" << EOF
+{
+  "mode": "$MODE",
+  "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "description": "$MODE_DESC",
+  "modes": {
+    "speed": {"trivial": "dynamic_fastest", "simple": "dynamic_fastest", "normal": "dynamic_fastest", "deep": "dynamic_fastest", "concurrency": 5},
+    "quality": {"trivial": "claudeopus", "simple": "claudeopus", "normal": "claudeopus", "deep": "claudeopus", "concurrency": 3},
+    "cost": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "sonnet", "concurrency": 3},
+    "balanced": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "claudeopus", "concurrency": 5},
+    "private": {"trivial": "glm", "simple": "kimi", "normal": "kimi", "deep": "claudeopus", "concurrency": 5, "autoPrivate": true}
+  }
+}
+EOF
+fi
+
+MODE_LABEL=$(case $MODE in
+    balanced) echo '⚖️  平衡模式' ;;
+    speed)    echo '⚡ 速度优先' ;;
+    quality)  echo '🎯 效果优先' ;;
+    cost)     echo '💰 成本优先' ;;
+    private)  echo '🔒 保密模式' ;;
+    custom)   echo '🔧 自定义模式' ;;
+esac)
+echo "✅ 已设置为 $MODE_LABEL"
+
+# 自动切换主 Agent 模型
+switch_main_agent_model() {
+    local mode="$1"
+    local explicit_model="${2:-}"  # 可选：自定义模式时直接传入目标模型
+
+    # 检查铁甲虾是否正在守护降级状态，避免冲突
+    if [ -f "/tmp/ironclaw-model-guard-override.json" ]; then
+        GUARDED=$(python3 -c "import json; d=json.load(open('/tmp/ironclaw-model-guard-override.json')); print(d.get('guarded','false'))" 2>/dev/null)
+        if [ "$GUARDED" = "True" ] || [ "$GUARDED" = "true" ]; then
+            echo "⚠️  铁甲虾正在守护模型降级状态，跳过主 Agent 模型切换（避免冲突）"
+            echo "   当前降级模型将继续使用，铁甲虾恢复后可重新切换模式"
+            return 0
+        fi
+    fi
+
+    # 读取当前 defaultModel
+    local default_model=""
+    default_model=$(python3 -c "
+import json, sys
+try:
+    with open('$HOME/.openclaw/openclaw.json') as f:
+        data = json.load(f)
+    print(data.get('defaultModel', ''))
+except Exception:
+    print('')
+" 2>/dev/null)
+
+    # 判断供应商
+    local vendor="unknown"
+    if echo "$default_model" | grep -qi "aws"; then
+        vendor="aws"
+    elif echo "$default_model" | grep -qi "google"; then
+        vendor="google"
+    fi
+
+    # 根据模式和供应商决定目标模型
+    local target_model=""
+    case "$mode" in
+        balanced)
+            if [[ "$vendor" == "aws" ]]; then
+                target_model="vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
+            elif [[ "$vendor" == "google" ]]; then
+                target_model="vendor-claude-google/google-claude-sonnet-4-6"
+            fi
+            ;;
+        quality)
+            if [[ "$vendor" == "aws" ]]; then
+                # Opus on AWS may not be available, fallback to google
+                target_model="vendor-claude-opus-4-6/aws-claude-opus-4-6"
+            elif [[ "$vendor" == "google" ]]; then
+                target_model="vendor-claude-google/google-claude-opus-4-6"
+            fi
+            ;;
+        speed)
+            # 读取延迟最低的可用模型
+            local fastest_model=""
+            fastest_model=$(python3 -c "
+import json, sys
+try:
+    with open('/tmp/ironclaw-model-latency.json') as f:
+        data = json.load(f)
+    # 铁甲虾格式: {\"models\": {\"full_model_id\": {\"latency_ms\": N, \"available\": true, ...}}}
+    models_dict = data.get('models', {})
+    if isinstance(models_dict, dict):
+        available = [
+            (fid, info)
+            for fid, info in models_dict.items()
+            if info.get('available', True)
+        ]
+        if available:
+            best = min(available, key=lambda x: x[1].get('latency_ms', 999999))
+            print(best[0])  # 输出 full_id
+except Exception:
+    print('')
+" 2>/dev/null)
+            if [[ -n "$fastest_model" ]]; then
+                target_model="$fastest_model"
+            else
+                # fallback to balanced model
+                if [[ "$vendor" == "aws" ]]; then
+                    target_model="vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
+                elif [[ "$vendor" == "google" ]]; then
+                    target_model="vendor-claude-google/google-claude-sonnet-4-6"
+                fi
+            fi
+            ;;
+        cost|private)
+            target_model="lixiang-kimi-2-5/kivy-kimi-k2_5"
+            ;;
+        custom_explicit)
+            # 自定义模式：用户已明确指定目标模型
+            target_model="$explicit_model"
+            ;;
+        custom)
+            # 自定义模式但未指定主 Agent 模型，fallback balanced
+            if [[ "$vendor" == "aws" ]]; then
+                target_model="vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
+            elif [[ "$vendor" == "google" ]]; then
+                target_model="vendor-claude-google/google-claude-sonnet-4-6"
+            fi
+            ;;
+    esac
+
+    # 如果供应商未知且非 cost/private，保持原模型不切换
+    if [[ -z "$target_model" ]]; then
+        echo "ℹ️  供应商未知（defaultModel: ${default_model:-未设置}），跳过主 Agent 模型切换"
+        return 0
+    fi
+
+    # 获取主 session key
+    local main_session_suffix=""
+    main_session_suffix=$(python3 -c "
+import json, sys
+try:
+    with open('$HOME/.openclaw/sessions.json') as f:
+        data = json.load(f)
+    keys = [k for k in data.keys() if 'feishu:dm:ou_' in k]
+    print(keys[0].split('feishu:dm:')[1] if keys else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+
+    if [[ -z "$main_session_suffix" ]]; then
+        echo "⚠️  无法获取主 session key，跳过模型切换"
+        return 0
+    fi
+
+    local main_session="feishu:dm:$main_session_suffix"
+
+    # 获取 Gateway 端口
+    local gateway_port="3000"
+    gateway_port=$(python3 -c "
+import json, sys
+try:
+    with open('$HOME/.openclaw/openclaw.json') as f:
+        data = json.load(f)
+    print(data.get('port', 3000))
+except Exception:
+    print(3000)
+" 2>/dev/null)
+
+    # 调用 Gateway API 设置 modelOverride
+    local http_code=""
+    http_code=$(curl -s -o /tmp/octopus-model-switch-result.json -w "%{http_code}" \
+        -X PATCH "http://localhost:$gateway_port/api/sessions/agent:main:$main_session" \
+        -H "Content-Type: application/json" \
+        -d "{\"modelOverride\": \"$target_model\"}" 2>/dev/null)
+
+    if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
+        echo "🤖 主 Agent 模型已切换为：$target_model"
+        # 保存目标模型到模式文件，供后续展示用
+        python3 -c "
+import json
+try:
+    with open('$MODE_FILE') as f:
+        data = json.load(f)
+    data['mainAgentModel'] = '$target_model'
+    with open('$MODE_FILE', 'w') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+except Exception:
+    pass
+" 2>/dev/null
+    else
+        echo "⚠️  主 Agent 模型切换失败（HTTP ${http_code:-连接失败}），将在下次会话时生效"
+    fi
+}
+
+# 自定义模式：如果用户指定了主 Agent 模型，直接传入；否则 fallback balanced
+if [ "$MODE" = "custom" ] && [ -n "$MAIN_MODEL" ]; then
+    switch_main_agent_model "custom_explicit" "$MAIN_MODEL"
+else
+    switch_main_agent_model "$MODE"
+fi
+
+# 3. 检查 python3 和 requests 库（feishu-card.py 依赖）
+if command -v python3 &>/dev/null; then
+    if python3 -c "import requests" 2>/dev/null; then
+        echo "✅ Python3 + requests 已就绪"
+    else
+        echo "⚠️  缺少 requests 库，尝试安装..."
+        pip3 install requests --quiet && echo "✅ requests 安装成功" || echo "❌ requests 安装失败，feishu-card.py 可能无法使用"
+    fi
+else
+    echo "⚠️  未找到 python3，feishu-card.py 将无法使用"
+fi
+
+# 4. 注册八爪鱼巡逻 cron
+install_patrol_cron() {
+    echo "📡 注册八爪鱼巡逻 cron（task-state.json 巡逻，每3分钟）..."
+
+    # 检查 openclaw CLI 是否可用
+    if ! command -v openclaw &>/dev/null; then
+        echo "⚠️  openclaw CLI 未找到，跳过 cron 注册（可手动注册）"
+        return 0
+    fi
+
+    # 读取用户飞书 open_id（用于 patrol cron delivery，确保面板私信给用户而非告警群）
+    USER_OPEN_ID=$(python3 -c "
+import json, sys
+try:
+    with open('$HOME/.openclaw/sessions.json') as f:
+        data = json.load(f)
+    keys = [k for k in data.keys() if 'feishu:dm:ou_' in k]
+    print(keys[0].split('feishu:dm:')[1] if keys else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+
+    # 注册 octopus-patrol cron
+    if openclaw cron list 2>/dev/null | grep -q "octopus-patrol"; then
+        echo "ℹ️  octopus-patrol cron 已存在，跳过"
+    else
+        # 根据是否获取到 open_id 决定 delivery 配置
+        if [[ -n "$USER_OPEN_ID" ]]; then
+            DELIVERY_OPTS="--announce --channel feishu --to user:${USER_OPEN_ID}"
+            echo "ℹ️  patrol delivery → 飞书私信 user:${USER_OPEN_ID}"
+        else
+            DELIVERY_OPTS="--announce --channel feishu"
+            echo "⚠️  未获取到 open_id，patrol delivery fallback → feishu announce"
+        fi
+
+        PATROL_MSG='运行八爪鱼巡逻脚本，检查任务状态，有异常则发飞书卡片。
+
+执行以下命令：
+```bash
+python3 /workspace/openclaw/skills/octopus/lib/patrol.py
+```
+
+执行完成后直接结束，无需回复或发送任何其他通知。'
+
+        if openclaw cron add \
+            --name octopus-patrol \
+            --every 1m \
+            --session isolated \
+            --timeout-seconds 60 \
+            $DELIVERY_OPTS \
+            --message "$PATROL_MSG" 2>/dev/null; then
+            echo "✅ octopus-patrol cron 注册成功（每1分钟巡逻一次，检测卡死/排队/待确认）"
+        else
+            echo "⚠️  cron 注册失败，可手动在 OpenClaw 中添加"
+        fi
+    fi
+
+    # 注册每日版本检查 cron
+    echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
+    if openclaw cron list 2>/dev/null | grep -q "octopus-update-check"; then
+        echo "ℹ️  octopus-update-check cron 已存在，跳过"
+    else
+        GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
+        GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+
+        UPDATE_CHECK_PAYLOAD='{
+  "name": "octopus-update-check",
+  "schedule": {"kind": "cron", "expression": "0 9 * * *", "timezone": "Asia/Shanghai"},
+  "payload": {
+    "kind": "agentTurn",
+    "message": "执行八爪鱼版本检查：bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1",
+    "timeoutSeconds": 120
+  },
+  "delivery": {"mode": "none"},
+  "sessionTarget": "isolated",
+  "enabled": true
+}'
+
+        HTTP_CODE=$(curl -s -o /tmp/octopus-update-cron-result.json -w "%{http_code}" \
+            -X POST "$GATEWAY_URL/api/cron/jobs" \
+            -H "Content-Type: application/json" \
+            ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
+            -d "$UPDATE_CHECK_PAYLOAD")
+
+        if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+            echo "✅ octopus-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
+        else
+            echo "⚠️  版本检查 cron 注册失败（HTTP $HTTP_CODE），可手动在 OpenClaw 中添加"
+            cat /tmp/octopus-update-cron-result.json 2>/dev/null
+        fi
+    fi
+}
+
+install_patrol_cron
+
+# 注册模型延迟探测 cron（每15分钟，错峰 anchorMs=450000，仅在铁甲虾没有探测 cron 时才注册）
+install_probe_cron() {
+    local IRONCLAW_BIN="$WORKSPACE/openclaw/skills/ironclaw/bin/ironclaw"
+
+    # ── FEATURE_MODEL_PROBE 开关（默认 false）────────────────────────────────
+    if [ "${FEATURE_MODEL_PROBE:-false}" != "true" ]; then
+        echo "ℹ️  FEATURE_MODEL_PROBE=false，跳过 octopus-probe cron 注册（默认关闭）"
+        echo "    若需启用，请将 lib/config.sh 中 FEATURE_MODEL_PROBE 改为 true 后重新运行 install.sh"
+        return 0
+    fi
+
+    # 检查 openclaw CLI 是否可用
+    if ! command -v openclaw &>/dev/null; then
+        echo "⚠️  openclaw CLI 未找到，跳过 cron 注册（可手动注册）"
+        return 0
+    fi
+
+    # 检查铁甲虾是否已有探测 cron（以铁甲虾为准，避免重复写文件）
+    if openclaw cron list 2>/dev/null | grep -q "ironclaw-probe\|latency-probe"; then
+        echo "ℹ️  铁甲虾已有模型探测 cron，跳过重复注册"
+        return 0
+    fi
+
+    # 检查铁甲虾二进制是否存在（说明铁甲虾已安装，其 guardian 会做探测）
+    if [ -f "$IRONCLAW_BIN" ]; then
+        echo "ℹ️  检测到铁甲虾已安装，跳过模型探测 cron（使用铁甲虾的探测数据）"
+        return 0
+    fi
+
+    echo "📡 注册模型延迟探测 cron（每15分钟，时间戳复用策略）..."
+
+    # 检查是否已存在
+    if openclaw cron list 2>/dev/null | grep -q "octopus-probe"; then
+        echo "ℹ️  octopus-probe cron 已存在，跳过"
+        return 0
+    fi
+
+    # 通过 Gateway REST API 注册
+    # anchorMs=0（标准对齐），everyMs=900000（每15分钟）
+    # 无需错峰：probe-models.sh 自带时间戳检查，若文件在 20 分钟内已更新则跳过，重复触发安全无害
+    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
+    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+
+    PROBE_PAYLOAD='{
+  "name": "octopus-probe",
+  "schedule": {"kind": "every", "everyMs": 900000, "anchorMs": 0},
+  "payload": {
+    "kind": "agentTurn",
+    "message": "运行模型延迟探测脚本，更新延迟数据供八爪鱼调度使用。\n\n执行以下命令：\n```bash\nbash /workspace/openclaw/skills/octopus/lib/probe-models.sh\n```\n\n执行完成后直接结束，无需回复或发送任何通知。",
+    "timeoutSeconds": 120
+  },
+  "delivery": {"mode": "none"},
+  "sessionTarget": "isolated",
+  "enabled": true
+}'
+
+    HTTP_CODE=$(curl -s -o /tmp/octopus-probe-cron-result.json -w "%{http_code}" \
+        -X POST "$GATEWAY_URL/api/cron/jobs" \
+        -H "Content-Type: application/json" \
+        ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
+        -d "$PROBE_PAYLOAD")
+
+    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+        echo "✅ octopus-probe cron 注册成功（每15分钟，时间戳复用策略）"
+    else
+        echo "⚠️  cron 注册失败（HTTP $HTTP_CODE），可手动在 OpenClaw 中添加（每15分钟运行 probe-models.sh）"
+        cat /tmp/octopus-probe-cron-result.json 2>/dev/null
+    fi
+}
+
+install_probe_cron
+
+# 5. 首次模型延迟探测
+if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
+    echo ""
+    echo "🔍 正在探测模型延迟（首次安装）..."
+    if [ -f "/workspace/openclaw/skills/ironclaw/bin/ironclaw" ]; then
+        /workspace/openclaw/skills/ironclaw/bin/ironclaw model probe 2>/dev/null && echo "✅ 模型延迟探测完成" || echo "⚠️  探测跳过（铁甲虾未安装）"
+    else
+        if [ -f "$WORKSPACE/openclaw/skills/octopus/lib/probe-models.sh" ]; then
+            bash "$WORKSPACE/openclaw/skills/octopus/lib/probe-models.sh" 2>/dev/null && echo "✅ 模型延迟探测完成（八爪鱼自探测）" || echo "⚠️  探测脚本执行失败，延迟数据将由 octopus-probe cron 定期更新"
+        else
+            echo "⚠️  未检测到铁甲虾，跳过模型延迟探测（将由 octopus-probe cron 每15分钟自动探测）"
+        fi
+    fi
+fi
+
+# 按角色分类写入别名文件
+echo ""
+echo "📝 正在写入模型别名文件..."
+GLM_MODEL=$(openclaw models list 2>/dev/null | grep -iE "glm|kivy-glm|lixiang-glm" | head -1 | awk '{print $1}')
+SONNET_MODEL=$(openclaw models list 2>/dev/null | grep -i "sonnet" | grep -vi "opus" | head -1 | awk '{print $1}')
+OPUS_MODEL=$(openclaw models list 2>/dev/null | grep -i "opus" | head -1 | awk '{print $1}')
+
+# 写入别名文件（只写能找到的）
+python3 -c "
+import json, os, datetime
+f = '/workspace/tmp/octopus-model-aliases.json'
+d = json.load(open(f)) if os.path.exists(f) else {}
+glm = '${GLM_MODEL}' or ''
+sonnet = '${SONNET_MODEL}' or ''
+opus = '${OPUS_MODEL}' or ''
+if glm: d.update({'trivial': glm, 'simple': glm, 'normal': glm})
+if sonnet: d.update({'hard': sonnet, 'normal_fallback': sonnet, 'deep': sonnet})
+if opus: d['deep_quality'] = opus
+d['updated_at'] = datetime.datetime.now(datetime.UTC).isoformat().replace('+00:00', 'Z')
+os.makedirs(os.path.dirname(f), exist_ok=True)
+json.dump(d, open(f,'w'), indent=2)
+print(f'✅ 别名文件已更新: GLM={glm or \"未找到\"}, Sonnet={sonnet or \"未找到\"}, Opus={opus or \"未找到\"}')
+"
+
+# ─────────────────────────────────────────────
+# 自动注入 octopus:core-rules 到 AGENTS.md
+# ─────────────────────────────────────────────
+inject_agents_md() {
+    local AGENTS_FILE="$WORKSPACE/AGENTS.md"
+
+    if [ ! -f "$AGENTS_FILE" ]; then
+        echo "⚠️  未找到 AGENTS.md，跳过规则注入"
+        return 0
+    fi
+
+    # 备份（无论新装还是升级都备份）
+    local BACKUP="$AGENTS_FILE.bak.$(date +%s)"
+    cp "$AGENTS_FILE" "$BACKUP"
+
+    # 检测已安装版本
+    CURRENT_VER=$(grep -o 'octopus:core-rules v[0-9.]*' "$AGENTS_FILE" 2>/dev/null | head -1 | grep -o 'v[0-9.]*' || echo "")
+    INSTALL_VER="$OCTOPUS_RULES_VERSION"
+
+    if [ "$CURRENT_VER" = "$INSTALL_VER" ]; then
+        echo "ℹ️  octopus:core-rules 已是最新版 $INSTALL_VER，跳过注入"
+        return 0
+    elif [ -n "$CURRENT_VER" ]; then
+        echo "🔄 检测到旧版规则 $CURRENT_VER，升级到 $INSTALL_VER..."
+        # 备份 + 删除旧块 + 注入新块
+        python3 -c "
+import re, sys
+with open('$AGENTS_FILE', 'r') as f:
+    content = f.read()
+# 删除旧的 octopus:core-rules 块（含版本号或不含版本号）
+cleaned = re.sub(r'\n<!-- octopus:core-rules[^>]*>.*?<!-- /octopus:core-rules -->\n?', '\n', content, flags=re.DOTALL)
+with open('$AGENTS_FILE', 'w') as f:
+    f.write(cleaned)
+print('✅ 旧版规则已清除')
+"
+        echo "✅ 已备份并清除旧版 AGENTS.md → $(basename $BACKUP)"
+    elif grep -q "<!-- octopus:core-rules -->" "$AGENTS_FILE" 2>/dev/null; then
+        echo "🔄 检测到无版本号的旧版规则，升级到 $INSTALL_VER..."
+        # 备份 + 删除旧块 + 注入新块
+        python3 -c "
+import re, sys
+with open('$AGENTS_FILE', 'r') as f:
+    content = f.read()
+cleaned = re.sub(r'\n<!-- octopus:core-rules -->.*?<!-- /octopus:core-rules -->\n?', '\n', content, flags=re.DOTALL)
+with open('$AGENTS_FILE', 'w') as f:
+    f.write(cleaned)
+print('✅ 无版本号旧规则已清除')
+"
+        echo "✅ 已备份并清除旧版 AGENTS.md → $(basename $BACKUP)"
+    else
+        echo "✅ 首次安装 octopus:core-rules $INSTALL_VER，已备份 AGENTS.md → $(basename $BACKUP)"
+    fi
+
+    # 注入新版规则（在文件末尾追加）
+    cat >> "$AGENTS_FILE" << 'OCTOPUS_RULES'
+
+<!-- octopus:core-rules v1.1.0 -->
+## 🐙 八爪鱼核心原则（始终生效）
+
+### 🚨 零工具调用铁律（零例外）
+
+**收到用户消息，第一个输出必须是文字，绝对禁止先做工具调用。**
+
+- 需要 spawn → 先输出"收到！xxx 处理中..." → 再调 sessions_spawn
+- 🚫 禁用：exec/read/write/edit/memory_search（回复前后均禁止）
+- ✅ 唯一例外：sessions_spawn + cron.run（非阻塞）
+- 📊 面板：`cron.run("octopus-patrol")`，禁止直接 exec python3 patrol.py
+- **所有 spawn 完成后，turn 末尾调一次 `cron.run("octopus-patrol")`**（每 turn 只调一次）
+
+**判断 spawn**：30 秒内纯文字高质量能答 → 直答；需工具/多步骤 → spawn 子 Agent。
+
+**同文件串行**：多任务写同一文件时，等第一个完成 → 把改动摘要传给第二个 → 再 spawn。
+
+### 派遣面板格式
+
+```
+🐙 任务派遣
+🔧 螃蟹手 · 任务描述 · Sonnet · 💰💰 · 🟡 已派遣
+⏱️ 预计 N 分钟
+```
+单任务简写：`交给🔧螃蟹手了！用 Sonnet`
+
+成本：💰 GLM | 💰💰 Sonnet | 💰💰💰 Opus
+状态：⏸️排队 | 🟡派遣 | 🔵运行 | ✅完成 | ❌失败
+预计：trivial <1min | simple 1-3min | normal 3-5min | hard 5-10min | deep 10-15min
+
+### spawn 规范
+
+- label：`octopus-power/scout/writer/fix/test/analyze/runner/feishu`
+- task 描述：【上下文】【目标】【要求】总计 ≤800 字（超限致 Sonnet API 等待 300s+）
+- 并发上限：balanced/private ≤5，quality/cost ≤3；**Sonnet 同时运行 ≤3 个**
+- task 末尾必须附加：`【文件读取】cat→head -n 100，grep→| head -20，日志→tail -n 50。禁读完整大文件！`
+- task 末尾必须附加 RESULT 模板和状态写入要求（完整模板见 `/workspace/openclaw/skills/octopus/lib/spawn-template.md`）
+
+### 触手名字
+
+💪鲸力手·power | 🔍梭鱼眼·scout | ✍️墨鱼手·writer | 🔧螃蟹手·fix | 🧪海胆手·test | 📊章鱼脑·analyze | 🏃飞鱼腿·runner | 🐦鸽手·feishu（飞书专属）
+
+### 任务分级与模型选择
+
+**级别**：trivial（改配置）/ simple（改单文件）/ normal（写代码/调API）/ hard（复杂逻辑/多文件）/ deep（架构/深度分析）
+
+| 模式 | trivial/simple | normal/hard | deep | 并发 |
+|------|--------------|-------------|------|------|
+| balanced（默认）| GLM 💰 | Sonnet 💰💰 | Sonnet 💰💰 | 5 |
+| quality | Sonnet 💰💰 | Sonnet 💰💰 | Opus 💰💰💰 | 3 |
+| cost | GLM 💰 | GLM 💰 | Sonnet 💰💰 | 3 |
+| private | GLM 💰 | GLM 💰 | GLM 💰 | 5 |
+
+spawn 前读 `/workspace/tmp/octopus-mode.json` 和 `/workspace/tmp/octopus-model-aliases.json` 获取实际模型路径。
+
+意图覆盖（临时）：「用最强/不惜成本/用 Opus」→ 全触手 Opus；「保密/私有」→ 全触手 GLM。
+
+### 模型降级（铁甲虾协作）
+
+spawn 前检查 `/tmp/ironclaw-model-guard-override.json`：`guarded=true` 且选出模型 == original_model → 改用 current_model，task 中注明「⚠️ 模型 X 故障，降级使用 Y」。
+
+### 任务状态（task-state.json）
+
+**文件**：`/workspace/tmp/octopus/task-state.json`，读写由子 Agent 负责，主 Agent 零工具调用。
+
+每个 spawn task 末尾必须附加状态写入指令（完整模板见 `/workspace/openclaw/skills/octopus/lib/spawn-template.md`）。
+
+简版：开始前写 `status=running + started_at`，完成后写 `status=done/failed + summary(2句) + files_changed + completed_at`。
+
+### RESULT 格式规范（子 Agent 必须遵守，否则视为未完成被重派）
+
+最终输出必须以 `---RESULT---` 开头：
+
+```
+---RESULT---
+{"status":"success","summary":"≤5句结论，禁列表/表格/代码块","files":[],"report":"路径或null"}
+```
+
+兼容旧格式：`状态: 成功/失败
+摘要: ...` 也被识别为完成。
+
+### 监督与重派
+
+- 收到 announce → 检查是否异常 → 触发重派；升级链：**GLM 失败 → Sonnet → Opus → 通知用户**
+- 重派时注明：「⚠️ 上次用 XX 模型失败，原因 XXX，请避免」
+
+### 💬 私聊零 NO_REPLY | 🔄 防重复
+
+私聊/DM 每条必须有回复。同一 announce（sessionKey+runId）上下文已有回复 → 直接 NO_REPLY。
+
+### 🔴 错误记录
+
+子 Agent 失败/卡死时追加 `~/self-improving/domains/octopus-errors.md`（格式：`[日期] 类型: 描述 → 修复`）。重现 3 次以上必须晋升为 AGENTS.md 防御规则。
+<!-- /octopus:core-rules -->
+OCTOPUS_RULES
+
+    echo "✅ octopus:core-rules 已注入（最新版）"
+}
+
+# 自动注入 octopus:core-rules 到 AGENTS.md（在展示安装完成之前，确保规则已就绪）
+inject_agents_md
+
+echo ""
+echo "🎉 八爪鱼安装完成！"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "✅ 工作目录已创建"
+echo "✅ 飞书卡片脚本已就绪"
+echo "✅ 调度规则已注入 AGENTS.md"
+echo "✅ 调度模式：$MODE_LABEL"
+
+# 读取并展示主 Agent 模型
+MAIN_MODEL_DISPLAY=$(python3 -c "
+import json
+try:
+    with open('$MODE_FILE') as f:
+        data = json.load(f)
+    m = data.get('mainAgentModel', '')
+    print(m if m else '（保持原模型）')
+except Exception:
+    print('（未知）')
+" 2>/dev/null)
+echo "🤖 主 Agent 模型：$MAIN_MODEL_DISPLAY"
+echo ""
+echo "💬 快速上手："
+echo "  • 直接说任务，八爪鱼自动调度触手并行处理"
+echo "  • 说「八爪鱼状态」查看当前任务进度面板"
+echo "  • 说「切换到效果优先模式」调整模型策略"
+echo "  • 给触手起昵称：「把螃蟹手改名叫修复手」"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔄 最后一步：发送 /compact 让调度规则立即生效"
+echo "   （不执行也可以，下次新对话自动生效）"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
