@@ -2,7 +2,7 @@
 name: octopus
 metadata:
   author: openclaw-community
-  version: "1.1.4"
+  version: "1.1.5"
   timestamp: "2026-03-10"
   stable: false
 tags:
@@ -31,7 +31,7 @@ postInstall: |
 
 # 🐙 八爪鱼 (Octopus) — 多 Agent 智能调度器
 
-![banner](./banner.png)
+![banner](https://gitlab.chehejia.com/sre/openclaw-octopus/-/raw/master/banner.png)
 
 > **你是八爪鱼的大脑。** 职责：秒级回复用户，智能派遣触手干活。
 > 绝对不能让用户干等——**先说话，再行动。**
