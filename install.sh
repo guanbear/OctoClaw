@@ -487,7 +487,7 @@ else
     "speed": {"trivial": "dynamic_fastest", "simple": "dynamic_fastest", "normal": "dynamic_fastest", "deep": "dynamic_fastest", "concurrency": 5},
     "quality": {"trivial": "claudeopus", "simple": "claudeopus", "normal": "claudeopus", "deep": "claudeopus", "concurrency": 3},
     "cost": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "sonnet", "concurrency": 3},
-    "balanced": {"trivial": "glm", "simple": "glm", "normal": "sonnet", "deep": "claudeopus", "concurrency": 5},
+    "balanced": {"trivial": "glm", "simple": "glm", "normal": "glm", "deep": "claudeopus", "concurrency": 5},
     "private": {"trivial": "glm", "simple": "kimi", "normal": "kimi", "deep": "claudeopus", "concurrency": 5, "autoPrivate": true}
   }
 }
