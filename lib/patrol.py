@@ -513,7 +513,7 @@ def check_orphan_tasks(tasks: list, active_sessions: list) -> list:
 
 
 LAST_DONE_IDS_FILE = "/workspace/tmp/octopus/.patrol-last-done-ids"
-RECENT_DONE_MINUTES = 30
+RECENT_DONE_MINUTES = 60
 MAX_RECENT_DONE = 10
 
 # 临时存储本次 get_recent_done_tasks() 筛出的新 id → completed_at（供 main() 写入）
@@ -1437,39 +1437,87 @@ def build_idle_card() -> dict:
 
 
 PATROL_CARD_STATE_FILE = "/workspace/tmp/octopus/patrol-card-state.json"
-PATROL_CARD_EXPIRE_SECONDS = 30 * 60  # 30分钟
-PATROL_CARD_MAX_AGE_SECONDS = 27 * 24 * 60 * 60  # 27天（飞书卡片有效期约30天）
+PATROL_CARD_EXPIRE_SECONDS = 24 * 60 * 60  # 24小时：超过24小时的旧卡片直接发新卡
+PATROL_CARD_MAX_AGE_SECONDS = 25 * 24 * 60 * 60  # 25天：超25天自动撤回旧卡 + 发新卡（飞书卡片有效期约30天）
 
 
 def load_patrol_card_state() -> dict | None:
     """读取 patrol 卡片状态（message_id + 发送时间），过期或不存在返回 None
     
     两级过期检查：
-    1. 30分钟无更新 → 视为过期（正常更新机制）
-    2. 27天卡片寿命 → 强制发新卡（飞书卡片约30天有效期）
+    1. 24小时 → 超过24小时的旧卡片直接发新卡（不尝试 update）
+    2. 25天卡片寿命 → 撤回旧卡 + 强制发新卡（飞书卡片有效期约30天，提前5天刷新）
+    
+    sent_at 记录卡片首次发送时间戳，update 成功不会刷新 sent_at，
+    确保卡片满24小时后自动发新卡。
     """
     try:
         with open(PATROL_CARD_STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
         sent_at = state.get("sent_at", 0)
-        # 27天寿命检查（优先，确保卡片不会因飞书过期而失效）
+        # 25天寿命检查（优先，自动撤回旧卡 + 发新卡 + 提示用户重新置顶）
         if time.time() - sent_at > PATROL_CARD_MAX_AGE_SECONDS:
-            print(f"📅 卡片已超过27天，强制发新卡")
+            print(f"📅 卡片已超过25天，将撤回旧卡 + 发新卡 + 提示重新置顶")
             return None
-        # 30分钟更新检查
+        # 24小时过期检查：超过24小时的旧卡片直接发新卡
         if time.time() - sent_at > PATROL_CARD_EXPIRE_SECONDS:
+            print(f"📅 卡片已超过24小时，直接发新卡（不尝试 update）")
             return None
         return state
     except Exception:
         return None
 
 
-def save_patrol_card_state(message_id: str):
-    """保存 patrol 卡片 message_id 和发送时间（保留首次发送时间，不刷新）"""
-    existing = load_patrol_card_state()
-    # 保留首次发送时间，避免 sent_at 每次刷新导致27天过期检查失效
-    first_sent = existing.get("sent_at", int(time.time())) if existing else int(time.time())
-    state = {"message_id": message_id, "sent_at": first_sent}
+def save_patrol_card_state(message_id: str, force_new: bool = False):
+    """保存 patrol 卡片 message_id 和发送时间（保留首次发送时间，不刷新）
+    
+    sent_at 始终保存首次发送时间戳，update 成功时不刷新。
+    这样卡片满 24 小时后自动发新卡（load_patrol_card_state 返回 None）。
+    update 失败时调用方负责 clear_patrol_card_state() + 发新卡，新卡会写入新的 sent_at。
+    
+    force_new=True：忽略旧 sent_at，强制写入新的（用于撤回旧卡 + 发新卡的场景）
+    
+    state 格式：
+    {
+        "message_id": "om_xxx",
+        "sent_at": 1234567890,        # Unix 时间戳（首次发送，不刷新）
+        "sent_at_iso": "2026-03-11T21:35:00+08:00",  # ISO 格式（便于人读）
+        "chat_id": "<TARGET_OPEN_ID>" # 发送目标（便于跨环境调试）
+    }
+    """
+    # 直接从文件读取原始 state（绕过 load_patrol_card_state 的过期检查，确保首次发送时间不丢失）
+    existing_raw = None
+    try:
+        with open(PATROL_CARD_STATE_FILE, "r", encoding="utf-8") as _f:
+            existing_raw = json.load(_f)
+    except Exception:
+        pass
+    # 保留首次发送时间，避免 sent_at 每次刷新导致24小时/25天过期检查失效
+    now_ts = int(time.time())
+    if force_new or existing_raw is None:
+        first_sent = now_ts
+    else:
+        first_sent = existing_raw.get("sent_at", now_ts)
+    
+    # 从 feishu-card.py 读取 TARGET_OPEN_ID
+    chat_id = ""
+    try:
+        import importlib.util as _ilu_s
+        _spec_s = _ilu_s.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
+        if _spec_s and _spec_s.loader:
+            _fc_s = _ilu_s.module_from_spec(_spec_s)
+            _spec_s.loader.exec_module(_fc_s)
+            chat_id = _fc_s.TARGET_OPEN_ID
+    except Exception:
+        pass
+    
+    sent_at_iso = datetime.fromtimestamp(first_sent).astimezone().isoformat()
+    state = {
+        "message_id": message_id,
+        "sent_at": first_sent,
+        "sent_at_iso": sent_at_iso,
+        "chat_id": chat_id,
+    }
     try:
         with open(PATROL_CARD_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False)
@@ -1661,9 +1709,35 @@ STUCK_TASKS: {stuck_json}
         return None
 
 
+def recall_card_a(message_id: str) -> bool:
+    """
+    撤回置顶常驻卡 A（调用 feishu-card.py 的 recall_message）。
+    撤回失败时静默降级（返回 False），不中断流程。
+    25天后调用，撤回后会发新卡 + 提示用户重新置顶。
+    """
+    if not os.path.exists(FEISHU_CARD_SCRIPT):
+        return False
+    try:
+        import importlib.util as _ilu_r
+        _spec_r = _ilu_r.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
+        if _spec_r is None or _spec_r.loader is None:
+            return False
+        _fc_r = _ilu_r.module_from_spec(_spec_r)
+        _spec_r.loader.exec_module(_fc_r)
+        ok = _fc_r.recall_message(message_id)
+        if ok:
+            print(f"🗑️  旧置顶卡 A 已撤回: {message_id}")
+        else:
+            print(f"⚠️  旧置顶卡 A 撤回失败（可能超过飞书限制）: {message_id}", file=sys.stderr)
+        return ok
+    except Exception as e:
+        print(f"⚠️  recall_card_a 异常: {e}", file=sys.stderr)
+        return False
+
+
 def send_expire_dm_alert() -> str | None:
     """
-    发送卡片过期提醒 DM，提示用户重新置顶新卡片。
+    发送卡片过期提醒 DM，提示用户重新置顶新卡片（25天自动撤回刷新场景）。
     """
     if not os.path.exists(FEISHU_CARD_SCRIPT):
         print("⚠️  feishu-card.py 不存在，跳过期 DM 提示", file=sys.stderr)
@@ -1680,7 +1754,7 @@ def send_expire_dm_alert() -> str | None:
         token = fc.get_tenant_access_token()
         import requests as _requests
         
-        content = "🔄 状态面板已刷新（原卡片已过期），请重新置顶最新卡片"
+        content = "📌 状态面板已自动刷新（原置顶卡已满25天），请重新置顶最新卡片"
         
         payload = {
             "receive_id": fc.TARGET_OPEN_ID,
@@ -1706,6 +1780,126 @@ def send_expire_dm_alert() -> str | None:
         return data["data"]["message_id"]
     except Exception as e:
         print(f"⚠️  过期 DM 提示发送异常: {e}", file=sys.stderr)
+        return None
+
+
+def build_event_card_b(event_type: str, task: dict) -> dict:
+    """
+    构建事件通知卡片 B（精简版，仅显示变化的那一条）。
+    
+    event_type: "done" | "failed" | "stuck"
+    task: 触发事件的任务 dict
+    
+    返回飞书卡片 JSON。
+    """
+    label = task.get("label", task.get("id", "未知"))
+    display_name = get_label_name(label)
+    summary = (task.get("summary") or task.get("id", ""))[:50]
+    model_short = get_model_short(task.get("model", ""))
+    
+    if event_type == "done":
+        header_color = "green"
+        icon = "✅"
+        title_text = f"触手完成：{display_name}"
+    elif event_type == "failed":
+        header_color = "red"
+        icon = "❌"
+        title_text = f"触手失败：{display_name}"
+    elif event_type == "stuck":
+        header_color = "orange"
+        icon = "⚠️"
+        title_text = f"触手超时：{display_name}"
+    else:
+        header_color = "blue"
+        icon = "ℹ️"
+        title_text = f"触手通知：{display_name}"
+    
+    # 耗时
+    elapsed_str = ""
+    completed_at = parse_iso(task.get("completed_at", ""))
+    start_str = task.get("started_at") or task.get("spawned_at", "")
+    start_at = parse_iso(start_str)
+    if completed_at and start_at:
+        elapsed_str = f" · 耗时 {format_age((completed_at - start_at).total_seconds() / 60)}"
+    
+    now_str = datetime.now().astimezone().strftime("%H:%M")
+    
+    stuck_reason = task.get("_stuck_reason", "")
+    detail_line = summary
+    if event_type == "stuck" and stuck_reason:
+        detail_line = f"{stuck_reason}\n  └ {summary}"
+    
+    card = {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": title_text},
+            "template": header_color
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"{icon} **{display_name}** · {model_short}{elapsed_str}\n└ {detail_line}"
+                }
+            },
+            {"tag": "hr"},
+            {
+                "tag": "note",
+                "elements": [
+                    {"tag": "plain_text", "content": f"🕐 {now_str}  ·  此卡片为事件通知，不置顶"}
+                ]
+            }
+        ]
+    }
+    return card
+
+
+def send_event_card_b(event_type: str, task: dict) -> str | None:
+    """
+    发送事件通知卡片 B（精简卡片，不 update，不保存 state）。
+    
+    event_type: "done" | "failed" | "stuck"
+    task: 触发事件的任务 dict
+    
+    Returns: message_id 或 None（发送失败）
+    """
+    if not os.path.exists(FEISHU_CARD_SCRIPT):
+        return None
+    try:
+        card = build_event_card_b(event_type, task)
+        import importlib.util as _ilu_b
+        _spec_b = _ilu_b.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
+        if _spec_b is None or _spec_b.loader is None:
+            return None
+        _fc_b = _ilu_b.module_from_spec(_spec_b)
+        _spec_b.loader.exec_module(_fc_b)
+        token = _fc_b.get_tenant_access_token()
+        import requests as _requests_b
+        payload = {
+            "receive_id": _fc_b.TARGET_OPEN_ID,
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False)
+        }
+        resp = _requests_b.post(
+            f"{_fc_b.FEISHU_API_BASE}/im/v1/messages?receive_id_type=open_id",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8"
+            },
+            json=payload,
+            timeout=15
+        )
+        data = resp.json()
+        if data.get("code") == 0:
+            mid = data["data"]["message_id"]
+            print(f"📨 事件卡片 B 已发送（{event_type}）: {mid}")
+            return mid
+        else:
+            print(f"⚠️  事件卡片 B 发送失败: {data.get('msg')}", file=sys.stderr)
+            return None
+    except Exception as e:
+        print(f"⚠️  send_event_card_b 异常: {e}", file=sys.stderr)
         return None
 
 
@@ -3264,16 +3458,15 @@ def main():
     _sent_at_for_card = _pre_existing_state.get("sent_at", 0) if _pre_existing_state else 0
     card = build_panel_card(running, queued, pending_confirm, deferred, stuck, recent_done, force_mode=force_mode, sent_at=_sent_at_for_card)
 
-    # ── 「发一次，持续更新」模式 ──
-    # --force 模式 → 先尝试 update 已有卡片，失败再发新卡片
-    # 有新卡死告警（stuck 数量增加）→ 清除旧 state，强制发新卡片
-    # 有 existing card 且未过期 → 原地 update，不发新卡片
-    # 无 existing card / 已过期 → 发新卡片，保存 messageId
+    # ── 「发一次，持续更新」双卡片模式 ──
+    # 卡片 A（置顶常驻卡）：始终只有一张，原地 update；超25天自动 recall 旧卡 + 发新卡
+    # 卡片 B（事件通知卡）：任务完成/失败/卡死时额外 send 一张精简卡，不 update，不保存 state
+    # --force 模式：update 卡 A + 额外 send 一条卡 A 内容到最新位置（不更新 state 中 message_id）
     all_done = not running and not queued and not pending_confirm and not deferred and not stuck
     _stuck_increased = current_stuck_count > _prev_stuck_count
 
-    # 检查是否因27天过期而返回 None（需要发 DM 提示）
-    _card_expired_27d = False
+    # 检查是否因25天过期而返回 None（需要撤回旧卡 + 发 DM 提示）
+    _card_expired_25d = False
     if _stuck_increased:
         clear_patrol_card_state()
         existing_state = None
@@ -3281,76 +3474,98 @@ def main():
     else:
         existing_state = load_patrol_card_state()
         # 判断是否刚过期（之前有 state 但现在返回 None）
+        # 可能原因：24小时过期（正常轮换）或 25天飞书卡片寿命到期（自动撤回刷新）
         if existing_state is None and _pre_existing_state is not None:
-            _card_expired_27d = True
-            print(f"  📅 检测到卡片已过期（27天），将发新卡并提示用户")
+            sent_at_age_h = (time.time() - _pre_existing_state.get("sent_at", 0)) / 3600
+            if sent_at_age_h > 25 * 24:
+                _card_expired_25d = True
+                print(f"  📅 检测到卡片已超过25天（{sent_at_age_h:.1f}h），将撤回旧卡 + 发新卡 + 提示重新置顶")
+            else:
+                print(f"  📅 检测到卡片已超过24小时（{sent_at_age_h:.1f}h），将发新卡")
+
+    # 25天过期：撤回旧卡 A
+    if _card_expired_25d and _pre_existing_state:
+        old_mid = _pre_existing_state.get("message_id", "")
+        if old_mid:
+            recall_card_a(old_mid)  # 撤回失败静默降级，不中断流程
 
     # 标记是否因过期发新卡（用于后续发 DM 提示）
     _sent_new_card_for_expire = False
 
     try:
         if force_mode:
-            # force 模式：先尝试 update 已有卡片，失败再发新卡
-            existing_state_for_force = _pre_existing_state  # force 清除前先拿到旧 state
+            # ── force 模式（八爪鱼面板）──
+            # 1. update 卡 A（置顶卡原地刷新）
+            # 2. 额外 send 一条卡 A 内容的新消息到最新位置（让用户在消息流里看到）
+            #    注意：这条额外发送的不是置顶卡，不更新 state 里的 message_id
+            existing_state_for_force = _pre_existing_state
             if existing_state_for_force and existing_state_for_force.get("message_id"):
                 existing_mid = existing_state_for_force["message_id"]
                 ok = update_panel_card(existing_mid, card)
                 if ok:
                     message_id = existing_mid
-                    print(f"✅ 任务面板已更新（force模式复用卡片）: {message_id}")
-                    save_patrol_card_state(message_id)  # 更新时间戳
+                    print(f"✅ 卡片 A 已更新（force模式）: {message_id}")
+                    save_patrol_card_state(message_id)  # 保留 sent_at 不变
                 else:
-                    # update 失败，发新卡片
+                    # update 失败，发新卡 A（顶替旧卡）
                     message_id = send_panel_card(card)
-                    print(f"✅ 任务面板已发送（force模式，旧卡失效）: {message_id}")
+                    print(f"✅ 卡片 A 已发新（force模式，旧卡失效）: {message_id}")
                     save_patrol_card_state(message_id)
             else:
-                # 无旧卡片，直接发新
+                # 无旧卡 A，直接发新
                 message_id = send_panel_card(card)
-                print(f"✅ 任务面板已发送（force模式，无旧卡）: {message_id}")
+                print(f"✅ 卡片 A 已发新（force模式，无旧卡）: {message_id}")
                 save_patrol_card_state(message_id)
-            # force 模式发完面板后，发一条引用提示
-            send_state_change_dm("📊 状态面板已刷新，置顶可随时查看", reply_to_message_id=message_id)
+            # 额外发一条卡 A 内容到最新位置（消息流可见，不更新 state 的 message_id）
+            try:
+                _extra_mid = send_panel_card(card)
+                print(f"📢 卡片 A 内容已额外推送到消息流（force模式）: {_extra_mid}")
+            except Exception as _extra_e:
+                print(f"⚠️  额外推送失败（不影响卡 A）: {_extra_e}", file=sys.stderr)
         elif existing_state:
-            # 尝试 update 已有卡片
+            # 有 existing card A → 原地 update
             existing_mid = existing_state["message_id"]
             ok = update_panel_card(existing_mid, card)
             if ok:
-                print(f"✅ 任务面板已原地更新: {existing_mid}")
+                print(f"✅ 卡片 A 已原地更新: {existing_mid}")
                 message_id = existing_mid
-                # 任务全部完成 → 清除 state，下次重新 send
+                # 任务全部完成 → 把卡片更新为空闲状态（固定面板）
                 if all_done:
-                    # 不清除 state，把卡片更新为空闲状态（固定面板）
                     idle_card = build_idle_card()
                     update_ok = update_panel_card(existing_mid, idle_card)
                     if update_ok:
-                        print(f"  🏁 所有任务完成，卡片已更新为空闲状态（固定面板）")
+                        print(f"  🏁 所有任务完成，卡片 A 已更新为空闲状态")
                     else:
                         clear_patrol_card_state()
                         print(f"  🏁 更新空闲卡片失败，清除 state")
             else:
-                # update 失败，降级为 send 新卡片
-                print(f"⚠️  更新卡片失败，降级为发送新卡片", file=sys.stderr)
+                # update 失败，降级为 send 新卡 A
+                print(f"⚠️  更新卡片 A 失败，降级为发新卡", file=sys.stderr)
                 clear_patrol_card_state()
                 message_id = send_panel_card(card)
-                print(f"✅ 任务面板已发送（降级）: {message_id}")
+                print(f"✅ 卡片 A 已发新（降级）: {message_id}")
                 if not all_done:
                     save_patrol_card_state(message_id)
         else:
-            # 无 existing state → 发新卡片
+            # 无 existing state → 发新卡 A
             message_id = send_panel_card(card)
-            if _card_expired_27d:
-                print(f"✅ 任务面板已发送（卡片过期发新）: {message_id}")
+            if _card_expired_25d:
+                print(f"✅ 卡片 A 已发新（25天过期刷新）: {message_id}")
                 _sent_new_card_for_expire = True
             else:
-                print(f"✅ 任务面板已发送: {message_id}")
-            save_patrol_card_state(message_id)  # 始终保存，固定面板
+                print(f"✅ 卡片 A 已发新: {message_id}")
+            save_patrol_card_state(message_id, force_new=_card_expired_25d)
 
-        # ── DM 告警：有卡死任务时额外发送文本消息 ──
-        # 排除已自动重派成功的任务（成功重派静默，不发告警）
+        # ── 卡片 B（事件通知卡）──
+        # 仅在任务完成/失败/卡死时发送精简通知卡，不 update，不保存 state
+        # 排除已自动重派成功的任务（成功重派静默）
+        # ── 卡片 B · 卡死事件 ──
         stuck_need_alert = [t for t in stuck if t.get("id", "") not in _auto_redispatched_ids]
         if stuck_need_alert:
             send_dm_alert(stuck_need_alert)
+            # 为每个卡死任务发精简事件卡 B
+            for _stuck_task in stuck_need_alert[:3]:  # 最多3张，避免刷屏
+                send_event_card_b("stuck", _stuck_task)
         
         # ── 过期发新卡 DM 提示 ──
         if _sent_new_card_for_expire:
@@ -3380,8 +3595,14 @@ def main():
                     changes.append(f"🟡 {label_name} 开始：{summary}")
                 elif new_status == "done" and old_status in ("running", "dispatched"):
                     changes.append(f"✅ {label_name} 完成：{summary}")
+                    # ── 卡片 B：任务完成事件通知 ──
+                    send_event_card_b("done", task)
                 elif new_status == "failed" and old_status in ("running", "dispatched"):
-                    changes.append(f"❌ {label_name} 失败：{summary}")
+                    # notified_failed=True 表示已通过独立失败通知发送过，跳过重发（无论是否 force 模式）
+                    if not task.get("notified_failed"):
+                        changes.append(f"❌ {label_name} 失败：{summary}")
+                        # ── 卡片 B：任务失败事件通知 ──
+                        send_event_card_b("failed", task)
             if changes:
                 msg = "\n".join(changes)
                 # 引用面板卡片消息
