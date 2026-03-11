@@ -1406,10 +1406,21 @@ def build_panel_card(running: list, queued: list, pending_confirm: list, deferre
     return card
 
 
-def build_idle_card() -> dict:
+def build_idle_card(recent_done: list = None) -> dict:
     """构建空闲状态卡片（无任务时的固定面板）"""
     import time
     now_str = time.strftime("%H:%M", time.localtime())
+    recent_done = recent_done or []
+
+    if recent_done:
+        recent_lines = "\n".join(
+            f"✅ {t.get('label','')[:6]} · {(t.get('summary') or t.get('id',''))[:30]}"
+            for t in recent_done[:5]
+        )
+        recent_text = f"**📋 近期完成（最近{RECENT_DONE_MINUTES}分钟）：**\n{recent_lines}"
+    else:
+        recent_text = f"📭 最近 {RECENT_DONE_MINUTES} 分钟内无完成任务"
+
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -1421,7 +1432,15 @@ def build_idle_card() -> dict:
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "✅ 当前无任务运行，所有触手空闲\n\n💡 发送任务即可开始调度"
+                    "content": f"⚙️ 模式：平衡模式　　🏃 进行中：无　　⏳ 排队中：无"
+                }
+            },
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": recent_text
                 }
             },
             {"tag": "hr"},
@@ -3531,7 +3550,7 @@ def main():
                 message_id = existing_mid
                 # 任务全部完成 → 把卡片更新为空闲状态（固定面板）
                 if all_done:
-                    idle_card = build_idle_card()
+                    idle_card = build_idle_card(recent_done=get_recent_done_tasks(all_tasks))
                     update_ok = update_panel_card(existing_mid, idle_card)
                     if update_ok:
                         print(f"  🏁 所有任务完成，卡片 A 已更新为空闲状态")
