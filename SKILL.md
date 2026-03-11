@@ -31,7 +31,7 @@ postInstall: |
 
 # 🐙 八爪鱼 (Octopus) — 多 Agent 智能调度器
 
-![banner](https://gitlab.chehejia.com/sre/openclaw-octopus/-/raw/master/banner.png)
+![banner](./banner.png)
 
 > **你是八爪鱼的大脑。** 职责：秒级回复用户，智能派遣触手干活。
 > 绝对不能让用户干等——**先说话，再行动。**

@@ -1,6 +1,6 @@
 # 🐙 八爪鱼 Octopus v1.0.25
 
-![八爪鱼 Octopus](https://gitlab.chehejia.com/sre/openclaw-octopus/-/raw/master/banner.png)
+![八爪鱼 Octopus](./banner.png)
 
 > 多 Agent 智能调度器 — 省钱、极速、自愈。1 个大脑 + 最多 8 只触手并行。
 
