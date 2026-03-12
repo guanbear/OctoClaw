@@ -1237,6 +1237,73 @@ def mark_compact_reported(compact_time: str):
         pass
 
 
+# ── 执行成本统计（借鉴 agent-swarm statistics-template）──
+_EXEC_STATS_PRICING: dict = {
+    "glm":     (0.10,  0.30),
+    "kimi":    (0.15,  0.45),
+    "sonnet":  (3.00, 15.00),
+    "opus":    (15.0, 75.00),
+    "haiku":   (0.25,  1.25),
+    "default": (3.00, 15.00),
+}
+_EXEC_STATS_TIER_TOKENS: dict = {
+    "trivial": 800, "simple": 2000, "normal": 5000, "hard": 10000, "deep": 20000,
+}
+
+
+def _calc_task_cost(model: str, tier: str) -> float:
+    """快速估算单个任务成本（USD），不依赖 budget.py"""
+    m = model.lower()
+    key = "default"
+    for k in ("opus", "sonnet", "haiku", "glm", "kimi"):
+        if k in m:
+            key = k
+            break
+    p_in, p_out = _EXEC_STATS_PRICING[key]
+    tokens = _EXEC_STATS_TIER_TOKENS.get(tier, 5000)
+    return round((tokens * 0.75 * p_in + tokens * 0.25 * p_out) / 1_000_000, 5)
+
+
+def build_exec_stats_text(recent_done: list):
+    """
+    构建执行成本统计文本（借鉴 agent-swarm statistics-template）。
+    仅统计 _finish_type=done 的成功任务。
+    返回格式化多行字符串，或 None（无可统计数据时）。
+    """
+    try:
+        rows = []
+        total_actual = 0.0
+        total_baseline = 0.0
+        for t in recent_done:
+            if t.get("_finish_type") != "done":
+                continue
+            model = t.get("model", "")
+            tier = t.get("tier", "normal")
+            label = t.get("label", "")
+            actual = _calc_task_cost(model, tier)
+            baseline = _calc_task_cost("sonnet", tier)
+            total_actual += actual
+            total_baseline += baseline
+            label_name = get_label_name(label)
+            model_short = get_model_short(model)
+            completed_at = parse_iso(t.get("completed_at", ""))
+            start_str = t.get("started_at") or t.get("spawned_at", "")
+            start_at = parse_iso(start_str)
+            if completed_at and start_at:
+                elapsed_str = format_age((completed_at - start_at).total_seconds() / 60)
+            else:
+                elapsed_str = "-"
+            rows.append(f"  {label_name} · {model_short} · {tier} · {elapsed_str} · ${actual:.4f}")
+        if not rows:
+            return None
+        saved = total_baseline - total_actual
+        saved_pct = (saved / total_baseline * 100) if total_baseline > 0 else 0.0
+        summary_line = f"  合计：实际 ${total_actual:.4f} | Sonnet基线 ${total_baseline:.4f} | 节省 ${saved:.4f} ({saved_pct:.0f}%)"
+        return "\n".join(rows) + "\n" + summary_line
+    except Exception:
+        return None
+
+
 def build_panel_card(running: list, queued: list, pending_confirm: list, deferred: list, stuck: list, recent_done: list, force_mode: bool = False, sent_at: int = 0) -> dict:
     """构建任务状态面板飞书卡片 JSON
     
@@ -1351,6 +1418,18 @@ def build_panel_card(running: list, queued: list, pending_confirm: list, deferre
                 "content": f"{title}\n{text_md}"
             }
         })
+
+    # ── 💰 执行成本统计（近期成功任务）──
+    if recent_done:
+        _stats_text = build_exec_stats_text(recent_done)
+        if _stats_text:
+            elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"**💰 执行成本估算**\n{_stats_text}"
+                }
+            })
 
     # 分隔线
     elements.append({"tag": "hr"})

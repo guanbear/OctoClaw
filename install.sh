@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
-OCTOPUS_RULES_VERSION="v1.2.0"
+OCTOPUS_RULES_VERSION="v1.3.0"
 
 # ── 加载功能开关配置 ──────────────────────────────────────────────────────────
 OCTOPUS_CONFIG="$SCRIPT_DIR/lib/config.sh"
@@ -359,7 +359,7 @@ esac
 # 正常安装流程（无参数）
 # ─────────────────────────────────────────────
 echo ""
-echo "🐙 八爪鱼多 Agent 调度器 v1.1.5"
+echo "🐙 八爪鱼多 Agent 调度器 v1.1.6"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "功能特性："
 echo "  💪 鲸力手  - 重型任务、大规模批量处理"
@@ -487,7 +487,7 @@ else
     "speed": {"trivial": "dynamic_fastest", "simple": "dynamic_fastest", "normal": "dynamic_fastest", "deep": "dynamic_fastest", "concurrency": 5},
     "quality": {"trivial": "claudeopus", "simple": "claudeopus", "normal": "claudeopus", "deep": "claudeopus", "concurrency": 3},
     "cost": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "sonnet", "concurrency": 3},
-    "balanced": {"trivial": "glm", "simple": "glm", "normal": "glm", "deep": "sonnet", "concurrency": 5},
+    "balanced": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "claudeopus", "concurrency": 5},
     "private": {"trivial": "glm", "simple": "kimi", "normal": "kimi", "deep": "claudeopus", "concurrency": 5, "autoPrivate": true}
   }
 }
@@ -976,7 +976,7 @@ print('✅ 无版本号旧规则已清除')
     # 注入新版规则（在文件末尾追加）
     cat >> "$AGENTS_FILE" << 'OCTOPUS_RULES'
 
-<!-- octopus:core-rules v1.2.0 -->
+<!-- octopus:core-rules v1.3.0 -->
 ## 🐙 八爪鱼核心原则（始终生效）
 
 ### 🚨 零工具调用铁律（零例外）
@@ -1018,6 +1018,7 @@ print('✅ 无版本号旧规则已清除')
 - task 末尾必须附加：`【文件读取】cat→head -n 100，grep→| head -20，日志→tail -n 50。禁读完整大文件！`
 - task 末尾必须附加 RESULT 模板和状态写入要求（完整模板见 `/workspace/openclaw/skills/octopus/lib/spawn-template.md`）
 - **大输出（>500字）写共享文件区** `/workspace/tmp/octopus/shared/{task_id}.md`，RESULT 的 `report` 字段填路径，summary 只写结论
+- spawn 前可读 `/workspace/tmp/octopus/agent-notes/{label}.md` 末5行，注入到 task 描述开头（格式：`[历史经验] 经验1 / 经验2`）
 
 ### 触手名字
 

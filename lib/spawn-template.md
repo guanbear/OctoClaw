@@ -56,6 +56,20 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
 **为什么**：被动等 patrol 超时重派会浪费整个超时窗口（normal 任务最多 8 分钟）的 token；
 主动 fail fast 让主 Agent 立刻拿到原因，重派时能补充正确上下文，一次成功。
 
+## 📝 经验沉淀（可选）
+
+任务完成后，若发现可复用的经验（技巧/踩坑/最佳实践），追加到对应触手的笔记文件：
+
+```bash
+mkdir -p /workspace/tmp/octopus/agent-notes
+echo "- $(date +%Y-%m-%d): 经验一句话（≤50字）" >> /workspace/tmp/octopus/agent-notes/{LABEL}.md
+# 例：echo "- 2026-03-12: grep搜索前先确认路径，避免全盘扫描" >> /workspace/tmp/octopus/agent-notes/octopus-fix.md
+```
+
+格式：`- YYYY-MM-DD: 一句话经验（≤50字）`
+
+**只在发现真正有价值的新经验时才写，不强制每次都写。**
+
 ## ✅ 完成时：状态更新
 
 ```bash
@@ -145,3 +159,12 @@ RESULT 的 `report` 字段填路径，`summary` 只写 2-5 句结论：
 ## 🔗 子 Agent 嵌套 spawn
 
 若需要再 spawn 子任务，**必须先调用 task-state-update.py upsert 注册任务**（否则面板无法显示）。
+
+## 🧠 thinking 参数（可选）
+
+| tier | thinking | 适用场景 |
+|------|----------|---------|
+| trivial / simple | `off` | 配置修改、单行改动 |
+| normal | `minimal` | 写代码、调 API |
+| hard | `low` | 复杂逻辑、多文件 |
+| deep | `medium` | 架构分析、深度调研 |

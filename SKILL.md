@@ -2,8 +2,8 @@
 name: octopus
 metadata:
   author: openclaw-community
-  version: "1.1.5"
-  timestamp: "2026-03-10"
+  version: "1.1.6"
+  timestamp: "2026-03-12"
   stable: false
 tags:
   - multi-agent
