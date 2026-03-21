@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-03-21T07:53:41.159374+08:00",
+  "task_file": "/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/eval/tasks-minimal.json",
+  "workspace": "/var/folders/tf/h59gk6wj4bzf9cdvbvyqmht80000gn/T/octoclaw-eval-ve7irbe2",
+  "summary": {
+    "total": 6,
+    "route_matches": 6,
+    "runner_tasks": 2,
+    "spawn_tasks": 4,
+    "total_estimated_cost_usd": 0.0
+  },
+  "results": [
+    {
+      "id": "runner-log-status",
+      "task": "查一下 redis 日志和端口状态",
+      "route": "runner",
+      "expect_route": "runner",
+      "route_match": true,
+      "elapsed_ms": 615,
+      "model": "lixiang-glm-5/kivy-glm-5",
+      "tier": "trivial",
+      "estimated_cost_usd": 0.0
+    },
+    {
+      "id": "runner-api-health",
+      "task": "检查接口健康状态和响应头",
+      "route": "runner",
+      "expect_route": "runner",
+      "route_match": true,
+      "elapsed_ms": 585,
+      "model": "lixiang-glm-5/kivy-glm-5",
+      "tier": "trivial",
+      "estimated_cost_usd": 0.0
+    },
+    {
+      "id": "spawn-fix-auth",
+      "task": "帮我修复登录模块的 bug 并补一条测试",
+      "route": "spawn",
+      "expect_route": "spawn",
+      "route_match": true,
+      "elapsed_ms": 74,
+      "model": "lixiang-glm-5/kivy-glm-5",
+      "tier": "normal",
+      "estimated_cost_usd": 0.0
+    },
+    {
+      "id": "spawn-refactor-auth",
+      "task": "帮我重构用户认证模块并补充测试",
+      "route": "spawn",
+      "expect_route": "spawn",
+      "route_match": true,
+      "elapsed_ms": 71,
+      "model": "vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6",
+      "tier": "hard",
+      "estimated_cost_usd": 0.0
+    },
+    {
+      "id": "spawn-research-jwt",
+      "task": "调研 JWT 最佳实践并总结迁移建议",
+      "route": "spawn",
+      "expect_route": "spawn",
+      "route_match": true,
+      "elapsed_ms": 71,
+      "model": "lixiang-glm-5/kivy-glm-5",
+      "tier": "normal",
+      "estimated_cost_usd": 0.0
+    },
+    {
+      "id": "spawn-analyze-rootcause",
+      "task": "分析最近一次 Redis 连接抖动的根因并给出修复建议",
+      "route": "spawn",
+      "expect_route": "spawn",
+      "route_match": true,
+      "elapsed_ms": 72,
+      "model": "vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6",
+      "tier": "hard",
+      "estimated_cost_usd": 0.0
+    }
+  ]
+}

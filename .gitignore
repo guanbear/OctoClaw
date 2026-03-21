@@ -1,0 +1,14 @@
+# Runtime state
+/tmp/
+*.log
+*.pid
+
+# Python
+__pycache__/
+*.pyc
+
+# Local editor / OS files
+.DS_Store
+
+# Generated runtime docs or snapshots
+runner-results/

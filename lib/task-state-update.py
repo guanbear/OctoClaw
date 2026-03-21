@@ -11,7 +11,8 @@ import os
 import sys
 from datetime import datetime, timezone, timedelta
 
-STATE_FILE = "/workspace/tmp/octopus/task-state.json"
+WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
+STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
 
 
 def now_iso() -> str:
@@ -117,6 +118,18 @@ def cmd_upsert(args):
                 existing["task_description"] = args.task_description
             if args.source:
                 existing["source"] = args.source
+            if args.session_id:
+                existing["session_id"] = args.session_id
+            if args.run_id:
+                existing["run_id"] = args.run_id
+            if args.session_status:
+                existing["session_status"] = args.session_status
+            if args.last_observed_at:
+                existing["last_observed_at"] = resolve_expected_done(args.last_observed_at)
+            if args.recovery_action:
+                existing["recovery_action"] = args.recovery_action
+            if args.retry_count is not None:
+                existing["retry_count"] = args.retry_count
             existing["updated_at"] = now_iso()
         else:
             record = {
@@ -142,6 +155,18 @@ def cmd_upsert(args):
                 record["task_description"] = args.task_description
             # 默认 source 为 octopus（八爪鱼任务）
             record["source"] = args.source if args.source else "octopus"
+            if args.session_id:
+                record["session_id"] = args.session_id
+            if args.run_id:
+                record["run_id"] = args.run_id
+            if args.session_status:
+                record["session_status"] = args.session_status
+            if args.last_observed_at:
+                record["last_observed_at"] = resolve_expected_done(args.last_observed_at)
+            if args.recovery_action:
+                record["recovery_action"] = args.recovery_action
+            if args.retry_count is not None:
+                record["retry_count"] = args.retry_count
             tasks.append(record)
 
         state["tasks"] = tasks
@@ -238,6 +263,12 @@ def main():
     p_upsert.add_argument("--tier")
     p_upsert.add_argument("--task-description", dest="task_description")
     p_upsert.add_argument("--source")
+    p_upsert.add_argument("--session-id", dest="session_id")
+    p_upsert.add_argument("--run-id", dest="run_id")
+    p_upsert.add_argument("--session-status", dest="session_status")
+    p_upsert.add_argument("--last-observed-at", dest="last_observed_at")
+    p_upsert.add_argument("--recovery-action", dest="recovery_action")
+    p_upsert.add_argument("--retry-count", dest="retry_count", type=int)
 
     # done
     p_done = sub.add_parser("done")

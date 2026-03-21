@@ -23,22 +23,12 @@ import os
 import sys
 from datetime import datetime, timezone
 
+from model_pricing import estimate_task_cost_usd
+
 # ── 路径常量 ────────────────────────────────────────────────────────────────
 TASK_STATE_FILE = "/workspace/tmp/octopus/task-state.json"
 BUDGET_LOG_FILE = "/workspace/tmp/octopus-budget.json"
 BUDGET_CONFIG_FILE = "/workspace/tmp/octopus-budget-config.json"
-
-# ── 模型定价（每百万 token，美元）──────────────────────────────────────────
-# 格式: {短名关键字: (input_per_1m, output_per_1m)}
-_MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "glm":     (0.10,  0.30),   # GLM-5 估算
-    "kimi":    (0.15,  0.45),   # Kimi K2 估算
-    "sonnet":  (3.00, 15.00),   # Claude Sonnet 3.5/4.6
-    "opus":    (15.0, 75.00),   # Claude Opus 4.x
-    "haiku":   (0.25,  1.25),   # Claude Haiku 3.5
-    "gpt4o":   (5.00, 15.00),   # GPT-4o
-    "default": (3.00, 15.00),   # 未知模型 fallback → 按 Sonnet 计
-}
 
 # ── 每个 tier 的 token 估算（input + output，单位 tokens）──────────────────
 _TIER_TOKENS: dict[str, int] = {
@@ -106,16 +96,26 @@ def estimate_cost(model: str, tier: str, tokens: int | None = None) -> float:
     如果提供了 tokens，使用实际 tokens；否则按 tier 估算。
     假设 input:output = 3:1。
     """
-    short = _get_model_short_name(model)
-    price_in, price_out = _MODEL_PRICING.get(short, _MODEL_PRICING["default"])
-
     total_tokens = tokens if tokens and tokens > 0 else _TIER_TOKENS.get(tier, 5000)
-    # 估算 input 占 75%，output 占 25%
+    normalized_cost = estimate_task_cost_usd(model, total_tokens)
+    if normalized_cost is not None:
+        return round(normalized_cost, 6)
+
+    # fallback：老逻辑兜底
+    short = _get_model_short_name(model)
+    fallback_pricing: dict[str, tuple[float, float]] = {
+        "glm":     (0.10,  0.30),
+        "kimi":    (0.15,  0.45),
+        "sonnet":  (3.00, 15.00),
+        "opus":    (15.0, 75.00),
+        "haiku":   (0.25,  1.25),
+        "gpt4o":   (5.00, 15.00),
+        "default": (3.00, 15.00),
+    }
+    price_in, price_out = fallback_pricing.get(short, fallback_pricing["default"])
     input_tokens = total_tokens * 0.75
     output_tokens = total_tokens * 0.25
-
-    cost = (input_tokens * price_in + output_tokens * price_out) / 1_000_000
-    return round(cost, 6)
+    return round((input_tokens * price_in + output_tokens * price_out) / 1_000_000, 6)
 
 
 def _load_budget_log() -> dict:

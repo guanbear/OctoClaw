@@ -428,6 +428,27 @@ patrol 触发
 # 查看状态
 bash /workspace/openclaw/skills/octopus/lib/status.sh
 
+# 表格视图
+bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
+
+# 泳道视图
+bash /workspace/openclaw/skills/octopus/lib/status.sh --format lanes
+
+# 常驻飞鱼腿（最小版）
+bash /workspace/openclaw/skills/octopus/lib/runner_loop.sh
+
+# 轻任务入队
+python3 /workspace/openclaw/skills/octopus/lib/runner_queue.py enqueue --id runner-demo --command 'pwd' --summary '检查当前目录'
+
+# 更推荐的派发入口（会同步写 task-state）
+python3 /workspace/openclaw/skills/octopus/lib/runner_dispatch.py --command 'pwd' --summary '检查当前目录'
+
+# 统一派发入口（会自动判断 runner 或常规 spawn）
+python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task '查一下 redis 日志和端口状态' --command 'ss -lntp | grep 6379'
+
+# 最小 replay/eval
+python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
+
 # 强制刷新任务面板
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 

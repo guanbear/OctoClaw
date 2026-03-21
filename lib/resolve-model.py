@@ -22,6 +22,8 @@ import re
 import sys
 import time
 
+from octopus_config import MODEL_POLICY_FILE, load_json as load_shared_json
+
 GLOBAL_DEG_FILE = "/tmp/ironclaw-global-degradation.json"
 MODE_FILE = "/workspace/tmp/octopus-mode.json"
 ALIASES_FILE = "/workspace/tmp/octopus-model-aliases.json"
@@ -34,6 +36,9 @@ BUILTIN_MAP = {
     "glm": "lixiang-glm-5/kivy-glm-5",
     "sonnet": "vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6",
     "claudeopus": "vendor-claude-opus-4-6/aws-claude-opus-4-6",
+    "gpt54": "openai/gpt-5.4",
+    "glm5": "lixiang-glm-5/kivy-glm-5",
+    "minimax": "minimax/minimax-m2.7",
 }
 
 VALID_TIERS = ["trivial", "simple", "normal", "hard", "deep"]
@@ -118,11 +123,7 @@ def score_description_complexity(description: str) -> str | None:
 
 def load_json(path):
     """安全读取 JSON 文件，不存在或解析失败返回 None。"""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
+    return load_shared_json(path)
 
 
 def _get_ironclaw_guarded() -> bool:
@@ -203,7 +204,28 @@ def build_short_name_map(aliases: dict) -> dict:
             mapping.setdefault("sonnet", full_path)
         elif "opus" in lower:
             mapping.setdefault("claudeopus", full_path)
+        elif "gpt-5.4" in lower:
+            mapping.setdefault("gpt54", full_path)
+        elif "minimax" in lower or "m2.7" in lower:
+            mapping.setdefault("minimax", full_path)
     return mapping
+
+
+def resolve_auto_policy_model(tier: str, label: str) -> str | None:
+    policy = load_json(MODEL_POLICY_FILE)
+    if not isinstance(policy, dict):
+        return None
+    labels = policy.get("labels", {})
+    tiers = policy.get("tiers", {})
+    if label and isinstance(labels, dict):
+        label_model = labels.get(label)
+        if isinstance(label_model, str) and label_model:
+            return label_model
+    if isinstance(tiers, dict):
+        tier_model = tiers.get(tier)
+        if isinstance(tier_model, str) and tier_model:
+            return tier_model
+    return None
 
 
 def resolve_short_name(short_name: str, aliases_data: dict | None) -> str:
@@ -271,13 +293,16 @@ def main():
     mode = override_mode if override_mode else mode_data.get("mode", "balanced")
     rules = mode_data.get("modes", {})
 
+    auto_policy_model = resolve_auto_policy_model(tier, args.label) if mode == "auto" else None
+    if auto_policy_model:
+        short_name = auto_policy_model
     # custom 模式：直接读 modes.custom[tier]
-    if mode == "custom":
+    elif mode == "custom":
         tier_list = rules.get("custom", {}).get(tier, [])
+        short_name = tier_list[0] if tier_list else None
     else:
         tier_list = rules.get(mode, {}).get(tier, [])
-
-    short_name = tier_list[0] if tier_list else None
+        short_name = tier_list[0] if tier_list else None
 
     # ── Step 3: 短名 → 完整路径（从别名文件推断）───────────────────────────
     aliases_data = load_json(ALIASES_FILE)
@@ -304,11 +329,14 @@ def main():
                 file=sys.stderr,
             )
             tier = suggested_tier
-            if mode == "custom":
+            if mode == "auto":
+                upgraded_short = resolve_auto_policy_model(tier, args.label)
+            elif mode == "custom":
                 upgraded_list = rules.get("custom", {}).get(tier, [])
+                upgraded_short = upgraded_list[0] if upgraded_list else None
             else:
                 upgraded_list = rules.get(mode, {}).get(tier, [])
-            upgraded_short = upgraded_list[0] if upgraded_list else None
+                upgraded_short = upgraded_list[0] if upgraded_list else None
             if not upgraded_short:
                 if aliases_data and tier in aliases_data:
                     up_full = aliases_data[tier]
@@ -349,11 +377,14 @@ def main():
             all_tiers_models[t] = full_path
         else:
             # 复用当前已解析的 mode/rules/aliases 快速计算其他 tier
-            if mode == "custom":
+            if mode == "auto":
+                t_short = resolve_auto_policy_model(t, args.label)
+            elif mode == "custom":
                 t_list = rules.get("custom", {}).get(t, [])
+                t_short = t_list[0] if t_list else None
             else:
                 t_list = rules.get(mode, {}).get(t, [])
-            t_short = t_list[0] if t_list else None
+                t_short = t_list[0] if t_list else None
             if not t_short:
                 if aliases_data and t in aliases_data:
                     t_full = aliases_data[t]

@@ -41,8 +41,19 @@ import fcntl
 import subprocess
 import time
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import deque
+
+from notifier import backend_supports_cards, send_text
+from octopus_config import (
+    MAIN_AGENT_SESSIONS_FILE,
+    RUNNER_HEALTH_FILE,
+    get_notification_backend,
+    load_json,
+    notification_enabled,
+    resolve_main_session_key,
+)
+from session_ops import send_agent_message
 
 # ⚠️ 注意：巡逻任务本身通过 cron 运行，不写入 task-state.json
 # 因此不会在巡逻报告中出现自己。
@@ -78,6 +89,18 @@ MODEL_SHORT = {
     # Kimi 系列
     "lixiang-kimi-2-5/kivy-kimi-k2_5": "Kimi",
 }
+
+
+def _cards_enabled() -> bool:
+    return backend_supports_cards() and notification_enabled("panel")
+
+
+def _event_cards_enabled() -> bool:
+    return backend_supports_cards() and notification_enabled("event")
+
+
+def _text_notify_enabled() -> bool:
+    return notification_enabled("text")
 
 # 序号字符（同 label 多于1个时使用）
 ORDINAL_CHARS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
@@ -123,9 +146,16 @@ def assign_ordinals(task_list: list) -> dict:
 
 TASK_STATE_FILE = "/workspace/tmp/octopus/task-state.json"
 FEISHU_CARD_SCRIPT = os.path.join(os.path.dirname(__file__), "feishu-card.py")
+SESSION_HISTORY_TAIL_LINES = 30
+STEER_MIN_AGE_MINUTES = 2
+STEER_COOLDOWN_SECONDS = 300
 
 # 卡死阈值：超过15分钟未更新视为可能卡死
 STUCK_THRESHOLD_MINUTES = 15
+RUNNER_STALE_SECONDS = 120
+RUNNER_RESTART_COOLDOWN_SECONDS = 600
+RUNNER_DAEMON_PID_FILE = "/workspace/tmp/octopus/runner-daemon.pid"
+RUNNER_RESTART_COOLDOWN_FILE = "/workspace/tmp/octopus/runner-restart-cooldown.json"
 
 # ── 超时阈值（分钟）：软超时基准（只告警不 kill）──
 # 硬超时 = 软超时 × 2（才自动 kill）
@@ -218,6 +248,63 @@ def parse_iso(ts: str):
         return None
 
 
+def check_runner_health() -> dict:
+    """读取 runner 心跳并判断是否 stale。"""
+    health = load_json(RUNNER_HEALTH_FILE)
+    if not isinstance(health, dict) or not health.get("worker_id"):
+        return {"present": False, "healthy": False, "reason": "missing"}
+
+    last = parse_iso(str(health.get("last_heartbeat_at", "")))
+    if not last:
+        return {"present": True, "healthy": False, "reason": "invalid_heartbeat", "health": health}
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    age_seconds = max(0, int((datetime.now(timezone.utc) - last.astimezone(timezone.utc)).total_seconds()))
+    healthy = age_seconds <= RUNNER_STALE_SECONDS
+    return {
+        "present": True,
+        "healthy": healthy,
+        "reason": "ok" if healthy else "stale",
+        "age_seconds": age_seconds,
+        "health": health,
+    }
+
+
+def maybe_restart_runner() -> bool:
+    daemon_script = os.path.join(os.path.dirname(__file__), "runner-daemon.sh")
+    if not os.path.exists(daemon_script):
+        return False
+    now = int(time.time())
+    cooldown = load_json(RUNNER_RESTART_COOLDOWN_FILE)
+    if isinstance(cooldown, dict):
+        last_ts = int(cooldown.get("ts", 0) or 0)
+        if now - last_ts < RUNNER_RESTART_COOLDOWN_SECONDS:
+            return False
+    try:
+        if os.path.exists(RUNNER_DAEMON_PID_FILE):
+            with open(RUNNER_DAEMON_PID_FILE, "r", encoding="utf-8") as f:
+                old_pid = int((f.read() or "0").strip() or "0")
+            if old_pid > 0:
+                try:
+                    os.kill(old_pid, 15)
+                except OSError:
+                    pass
+        subprocess.Popen(
+            ["bash", daemon_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            env=dict(os.environ),
+        )
+        os.makedirs(os.path.dirname(RUNNER_RESTART_COOLDOWN_FILE), exist_ok=True)
+        with open(RUNNER_RESTART_COOLDOWN_FILE, "w", encoding="utf-8") as f:
+            json.dump({"ts": now}, f, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"  ⚠️  runner 自动重启失败: {e}", file=sys.stderr)
+        return False
+
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -304,12 +391,18 @@ def classify_tasks(tasks: list) -> tuple:
             # 仅对运行超过2分钟的任务检查（避免刚启动的任务被误判）
             if age_minutes >= 2:
                 task_label = t.get("label", "")
-                if task_label and is_session_ended(task_label):
+                session_status = t.get("session_status", "")
+                ended = session_status in ("completed", "stale", "missing") or (task_label and is_session_ended(task_label))
+                if ended:
                     task_id = t.get("id", "")
+                    session_event = t.get("session_last_event", "")
                     print(f"🔴 检测到 session 已结束但 task 仍为 running: {task_id}，自动标 failed")
                     mark_task_failed(task_id)
                     t["status"] = "failed"  # 同步更新内存中的状态
-                    t["_stuck_reason"] = "session 已结束（无活跃 runId 或 updatedAt 超30分钟）"
+                    if session_event:
+                        t["_stuck_reason"] = f"session 已结束（最后事件: {session_event}）"
+                    else:
+                        t["_stuck_reason"] = "session 已结束（无活跃 runId 或 updatedAt 超30分钟）"
                     # 注意：failed 状态的任务不加入 stuck 列表，由近期失败区块显示
                     continue
 
@@ -456,6 +549,312 @@ def get_active_subagent_sessions() -> list:
                     'updatedAt': updated_at
                 })
     return result
+
+
+def load_main_agent_sessions() -> dict:
+    """读取 main agent sessions.json，失败返回空 dict。"""
+    sessions_file = MAIN_AGENT_SESSIONS_FILE
+    if not os.path.exists(sessions_file):
+        return {}
+    try:
+        with open(sessions_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def session_updated_at_iso(session: dict) -> str:
+    updated_at = session.get("updatedAt")
+    if isinstance(updated_at, str):
+        return updated_at
+    if isinstance(updated_at, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(updated_at) / 1000.0, timezone.utc).isoformat()
+        except Exception:
+            return ""
+    return ""
+
+
+def session_updated_at_dt(session: dict):
+    return parse_iso(session_updated_at_iso(session))
+
+
+def build_session_candidates(task: dict, sessions_data: dict) -> list[dict]:
+    """按 task label 选出可能匹配的 session，并按更新时间倒序排序。"""
+    label = task.get("label", "")
+    if not label:
+        return []
+
+    task_spawned = parse_iso(task.get("spawned_at") or task.get("started_at") or task.get("updated_at") or "")
+    candidates = []
+    for key, value in sessions_data.items():
+        if not isinstance(value, dict):
+            continue
+        if value.get("label") != label:
+            continue
+        session = dict(value)
+        session["_session_key"] = key
+        updated_dt = session_updated_at_dt(session)
+        if task_spawned and updated_dt:
+            # 太早结束的历史 session 不参与当前任务匹配。
+            if updated_dt < task_spawned - timedelta(minutes=10):
+                continue
+        candidates.append(session)
+
+    candidates.sort(key=lambda item: session_updated_at_iso(item) or "", reverse=True)
+    return candidates
+
+
+def summarize_session_history(session_id: str, tail_lines: int = SESSION_HISTORY_TAIL_LINES) -> dict:
+    """
+    读取 session transcript 尾部，给出轻量摘要：
+    - last_event: success / error / length / tool / assistant / unknown
+    - last_text: 最后一句可读文本
+    """
+    result = {"last_event": "unknown", "last_text": "", "has_result": False, "has_success": False}
+    if not session_id:
+        return result
+    transcript_path = os.path.expanduser(f"~/.openclaw/agents/main/sessions/{session_id}.jsonl")
+    if not os.path.exists(transcript_path):
+        return result
+
+    try:
+        with open(transcript_path, "rb") as f:
+            lines = list(deque(f, tail_lines))
+    except Exception:
+        return result
+
+    joined = b"".join(lines).decode("utf-8", errors="ignore")
+    joined_lower = joined.lower()
+    result["has_result"] = "---result---" in joined_lower
+    result["has_success"] = (
+        "状态: 成功" in joined
+        or '"status":"success"' in joined_lower
+        or '"status": "success"' in joined_lower
+        or "status: success" in joined_lower
+    )
+
+    for raw in reversed(lines):
+        try:
+            obj = json.loads(raw.decode("utf-8", errors="ignore"))
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("error") or obj.get("errorMessage") or obj.get("error_message"):
+            result["last_event"] = "error"
+            result["last_text"] = str(obj.get("error") or obj.get("errorMessage") or obj.get("error_message"))[:160]
+            return result
+        stop_reason = str(obj.get("stopReason") or obj.get("stop_reason") or "")
+        if stop_reason == "length":
+            result["last_event"] = "length"
+            result["last_text"] = "stopReason=length"
+            return result
+        if result["has_result"] and result["has_success"]:
+            result["last_event"] = "success"
+        role = str(obj.get("role") or "")
+        if role == "assistant":
+            text = ""
+            content = obj.get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                pieces = []
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        pieces.append(item["text"])
+                text = " ".join(pieces)
+            if text.strip():
+                if result["last_event"] == "unknown":
+                    result["last_event"] = "assistant"
+                result["last_text"] = text.strip().replace("\n", " ")[:160]
+                return result
+        tool_calls = obj.get("toolCalls") or obj.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            result["last_event"] = "tool"
+            result["last_text"] = "toolCalls"
+            return result
+    return result
+
+
+def annotate_tasks_with_session_state(tasks: list) -> list:
+    """
+    为 running/dispatched/queued 任务补充 session 观测字段，并回写 task-state.json。
+    这一步让 patrol 不再只靠文件状态猜任务状态。
+    """
+    sessions_data = load_main_agent_sessions()
+    if not sessions_data or not tasks:
+        return tasks
+
+    state = load_task_state(TASK_STATE_FILE)
+    state_tasks = state.get("tasks", [])
+    state_by_id = {t.get("id"): t for t in state_tasks if isinstance(t, dict) and t.get("id")}
+    changed = False
+    observed_at = datetime.now(timezone.utc).isoformat()
+
+    for task in tasks:
+        status = task.get("status", "")
+        if status not in ("running", "dispatched", "queued"):
+            continue
+        task_id = task.get("id", "")
+        if not task_id:
+            continue
+        candidates = build_session_candidates(task, sessions_data)
+        state_task = state_by_id.get(task_id)
+        if not state_task:
+            continue
+
+        if not candidates:
+            if state_task.get("session_status") != "missing":
+                state_task["session_status"] = "missing"
+                state_task["last_observed_at"] = observed_at
+                changed = True
+            task["session_status"] = state_task.get("session_status", "missing")
+            task["last_observed_at"] = state_task.get("last_observed_at", observed_at)
+            continue
+
+        session = candidates[0]
+        session_id = session.get("sessionId") or session.get("id") or ""
+        run_id = session.get("runId") or session.get("activeRunId") or session_id
+        history = summarize_session_history(session_id)
+        updated_iso = session_updated_at_iso(session)
+        session_status = "active"
+        last_dt = session_updated_at_dt(session)
+        if last_dt:
+            age_minutes = (now_utc() - last_dt).total_seconds() / 60.0
+            if age_minutes > 30:
+                session_status = "stale"
+        if history.get("last_event") == "success":
+            session_status = "completed"
+        elif history.get("last_event") in ("error", "length"):
+            session_status = f"history_{history.get('last_event')}"
+
+        updates = {
+            "session_key": session.get("_session_key", ""),
+            "session_id": session_id,
+            "run_id": run_id,
+            "session_status": session_status,
+            "last_observed_at": observed_at,
+            "session_updated_at": updated_iso,
+            "session_last_event": history.get("last_event", "unknown"),
+            "session_last_text": history.get("last_text", ""),
+            "session_has_result": bool(history.get("has_result")),
+        }
+        for key, value in updates.items():
+            if state_task.get(key) != value:
+                state_task[key] = value
+                changed = True
+            task[key] = value
+
+    if changed:
+        save_task_state(TASK_STATE_FILE, state)
+    return tasks
+
+
+def build_steer_message(task: dict) -> str:
+    """
+    为活跃但异常迹象明显的任务生成一条简短纠偏消息。
+    目标不是重新描述整个任务，而是尽量少 token 地把任务拉回正轨。
+    """
+    base = [
+        "继续当前任务，但请立刻收束。",
+        "不要重新读太多文件，不要重复前面的步骤。",
+    ]
+    last_event = str(task.get("session_last_event", "") or "")
+    last_text = str(task.get("session_last_text", "") or "")
+
+    if last_event == "length":
+        base.extend(
+            [
+                "你刚才很可能输出过长被截断了。",
+                "详细内容写到 /workspace/tmp/octopus/shared/{TASK_ID}.md，再输出 ---RESULT---。",
+                "summary 保持 2-5 句短句。",
+            ]
+        )
+    elif last_event == "error":
+        base.extend(
+            [
+                "如果已被阻塞，请立刻执行 failed 状态写入，然后输出 failure RESULT。",
+                "不要继续硬撑，也不要无限重试同一步。",
+            ]
+        )
+    else:
+        base.extend(
+            [
+                "如果已完成，请立即输出 ---RESULT---。",
+                "如果未完成，请只做最后必要的一步并收尾。",
+            ]
+        )
+
+    if last_text:
+        base.append(f"最近迹象：{last_text[:120]}")
+    return "\n".join(base)
+
+
+def should_steer_task(task: dict) -> bool:
+    status = task.get("status", "")
+    if status not in ("running", "dispatched"):
+        return False
+    age_minutes = float(task.get("_age_minutes", 0) or 0)
+    if age_minutes < STEER_MIN_AGE_MINUTES:
+        return False
+    session_key = task.get("session_key", "")
+    if not session_key:
+        return False
+    session_status = task.get("session_status", "")
+    if session_status in ("missing", "stale", "completed"):
+        return False
+    last_steered_at = parse_iso(task.get("last_steered_at", "") or "")
+    if last_steered_at:
+        elapsed = (now_utc() - last_steered_at).total_seconds()
+        if elapsed < STEER_COOLDOWN_SECONDS:
+            return False
+    # transcript 有 length/error/无 RESULT 等迹象时才 steer
+    last_event = task.get("session_last_event", "")
+    return last_event in ("length", "error", "assistant", "tool", "unknown")
+
+
+def attempt_task_steers(tasks: list) -> int:
+    """
+    对仍然活着、但已有异常迹象的任务先发一条纠偏消息。
+    失败时不报错中断，后续逻辑仍可继续重试或重派。
+    """
+    steer_count = 0
+    state = load_task_state(TASK_STATE_FILE)
+    state_tasks = state.get("tasks", [])
+    changed = False
+
+    for task in tasks:
+        if not should_steer_task(task):
+            continue
+        task_id = task.get("id", "")
+        session_key = task.get("session_key", "")
+        message = build_steer_message(task).replace("{TASK_ID}", task_id)
+        result = send_agent_message(session_key, message, timeout_seconds=0)
+        ok = isinstance(result, dict) and (result.get("runId") or result.get("status") in ("accepted", "running", "ok"))
+
+        for state_task in state_tasks:
+            if state_task.get("id") != task_id:
+                continue
+            state_task["recovery_action"] = "steered" if ok else "needs_steer"
+            state_task["last_steered_at"] = datetime.now(timezone.utc).isoformat()
+            state_task["steer_message"] = message[:240]
+            state_task["steer_count"] = int(state_task.get("steer_count", 0) or 0) + 1
+            if ok and state_task.get("status") == "dispatched":
+                state_task["status"] = "running"
+            changed = True
+            break
+
+        task["recovery_action"] = "steered" if ok else "needs_steer"
+        task["last_steered_at"] = datetime.now(timezone.utc).isoformat()
+        task["steer_count"] = int(task.get("steer_count", 0) or 0) + 1
+        if ok:
+            steer_count += 1
+
+    if changed:
+        save_task_state(TASK_STATE_FILE, state)
+    return steer_count
 
 
 def check_orphan_tasks(tasks: list, active_sessions: list) -> list:
@@ -1637,6 +2036,8 @@ def update_panel_card(message_id: str, card: dict) -> bool:
     通过飞书 API 原地更新已有面板卡片。
     返回 True 表示成功，False 表示失败（调用方应降级为 send）。
     """
+    if not _cards_enabled():
+        return False
     if not os.path.exists(FEISHU_CARD_SCRIPT):
         return False
 
@@ -1681,6 +2082,9 @@ def send_panel_card(card: dict) -> str:
     直接 import 并调用，避免 subprocess 序列化问题。
     返回 message_id。
     """
+    if not _cards_enabled():
+        print("ℹ️  当前通知后端不支持卡片，跳过面板发送")
+        return ""
     if not os.path.exists(FEISHU_CARD_SCRIPT):
         raise FileNotFoundError(f"feishu-card.py 不存在: {FEISHU_CARD_SCRIPT}")
 
@@ -1729,6 +2133,8 @@ def send_dm_alert(stuck_tasks: list) -> str | None:
         message_id 或 None（发送失败时）
     """
     if not stuck_tasks:
+        return None
+    if not _text_notify_enabled():
         return None
     
     if not os.path.exists(FEISHU_CARD_SCRIPT):
@@ -1813,6 +2219,8 @@ def recall_card_a(message_id: str) -> bool:
     撤回失败时静默降级（返回 False），不中断流程。
     25天后调用，撤回后会发新卡 + 提示用户重新置顶。
     """
+    if not _cards_enabled():
+        return False
     if not os.path.exists(FEISHU_CARD_SCRIPT):
         return False
     try:
@@ -1837,6 +2245,8 @@ def send_expire_dm_alert() -> str | None:
     """
     发送卡片过期提醒 DM，提示用户重新置顶新卡片（25天自动撤回刷新场景）。
     """
+    if not _text_notify_enabled():
+        return None
     if not os.path.exists(FEISHU_CARD_SCRIPT):
         print("⚠️  feishu-card.py 不存在，跳过期 DM 提示", file=sys.stderr)
         return None
@@ -1962,6 +2372,8 @@ def send_event_card_b(event_type: str, task: dict) -> str | None:
     
     Returns: message_id 或 None（发送失败）
     """
+    if not _event_cards_enabled():
+        return None
     if not os.path.exists(FEISHU_CARD_SCRIPT):
         return None
     try:
@@ -2029,59 +2441,10 @@ def send_state_change_dm(msg: str, reply_to_message_id: str | None = None) -> st
     发送状态变化通知 DM（复用飞书发送逻辑）。
     可选 reply_to_message_id 用于引用面板卡片消息。
     """
-    if not os.path.exists(FEISHU_CARD_SCRIPT):
-        return None
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
-        if spec is None or spec.loader is None:
-            return None
-        fc = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fc)
-        
-        token = fc.get_tenant_access_token()
-        import requests as _requests
-        
-        if reply_to_message_id:
-            # 用 reply API 实现引用效果
-            payload = {
-                "msg_type": "text",
-                "content": json.dumps({"text": msg}, ensure_ascii=False)
-            }
-            resp = _requests.post(
-                f"{fc.FEISHU_API_BASE}/im/v1/messages/{reply_to_message_id}/reply",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json; charset=utf-8"
-                },
-                json=payload,
-                timeout=15
-            )
-        else:
-            payload = {
-                "receive_id": fc.TARGET_OPEN_ID,
-                "msg_type": "text",
-                "content": json.dumps({"text": msg}, ensure_ascii=False)
-            }
-            resp = _requests.post(
-                f"{fc.FEISHU_API_BASE}/im/v1/messages?receive_id_type=open_id",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json; charset=utf-8"
-                },
-                json=payload,
-                timeout=15
-            )
-        data = resp.json()
-        if data.get("code") == 0:
-            print(f"📨 状态变化 DM 已发送: {msg[:30]}...")
-            return data["data"]["message_id"]
-        else:
-            print(f"⚠️  状态变化 DM 失败: {data.get('msg')}", file=sys.stderr)
-            return None
-    except Exception as e:
-        print(f"⚠️  状态变化 DM 异常: {e}", file=sys.stderr)
-        return None
+    mid = send_text(msg, reply_to=reply_to_message_id)
+    if mid:
+        print(f"📨 状态变化 DM 已发送: {msg[:30]}...")
+    return mid
 
 
 def _increment_panel_shown_count(pending_list: list):
@@ -2492,39 +2855,9 @@ def send_timeout_alert(task: dict, elapsed_minutes: float, run_id: str | None, k
         f"如需处理：告诉 Agent「终止任务 {task.get('id', '未知')}」或「重派任务」"
     )
 
-    try:
-        if not os.path.exists(FEISHU_CARD_SCRIPT):
-            print(f"⚠️  feishu-card.py 不存在，跳过告警: {FEISHU_CARD_SCRIPT}", file=sys.stderr)
-            return
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
-        if spec is None or spec.loader is None:
-            return
-        fc = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fc)
-        token = fc.get_tenant_access_token()
-        import requests as _requests
-        payload = {
-            "receive_id": fc.TARGET_OPEN_ID,
-            "msg_type": "text",
-            "content": json.dumps({"text": msg}, ensure_ascii=False)
-        }
-        resp = _requests.post(
-            f"{fc.FEISHU_API_BASE}/im/v1/messages?receive_id_type=open_id",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json; charset=utf-8"
-            },
-            json=payload,
-            timeout=15
-        )
-        data = resp.json()
-        if data.get("code") == 0:
-            print(f"✅ 超时告警已发送: {task.get('id')}")
-        else:
-            print(f"⚠️  超时告警发送失败: {data.get('msg')}", file=sys.stderr)
-    except Exception as e:
-        print(f"⚠️  send_timeout_alert 失败: {e}", file=sys.stderr)
+    mid = send_text(msg)
+    if mid:
+        print(f"✅ 超时告警已发送: {task.get('id')}")
 
 
 def check_and_handle_timeout(tasks: list) -> list:
@@ -2750,37 +3083,11 @@ def check_model_aliases():
             print(f"❌ check_model_aliases: 写入别名文件失败: {e}")
             return
 
-        # 飞书通知
-        try:
-            change_lines = "\n".join(
-                f"  {k}: {old} → {new}" for k, (old, new) in changed.items()
-            )
-            msg = f"🔄 模型别名自动更新\n{change_lines}"
-            if os.path.exists(FEISHU_CARD_SCRIPT):
-                import importlib.util as _ilu
-                _spec = _ilu.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
-                if _spec and _spec.loader:
-                    _fc = _ilu.module_from_spec(_spec)
-                    _spec.loader.exec_module(_fc)
-                    _token = _fc.get_tenant_access_token()
-                    import requests as _requests
-                    _payload = {
-                        "receive_id": _fc.TARGET_OPEN_ID,
-                        "msg_type": "text",
-                        "content": json.dumps({"text": msg}, ensure_ascii=False)
-                    }
-                    _resp = _requests.post(
-                        f"{_fc.FEISHU_API_BASE}/im/v1/messages?receive_id_type=open_id",
-                        headers={"Authorization": f"Bearer {_token}", "Content-Type": "application/json; charset=utf-8"},
-                        json=_payload, timeout=15
-                    )
-                    _data = _resp.json()
-                    if _data.get("code") == 0:
-                        print("✅ check_model_aliases: 飞书通知已发送")
-                    else:
-                        print(f"⚠️  check_model_aliases: 飞书通知失败: {_data.get('msg')}")
-        except Exception as e:
-            print(f"⚠️  check_model_aliases: 飞书通知失败: {e}")
+        change_lines = "\n".join(
+            f"  {k}: {old} → {new}" for k, (old, new) in changed.items()
+        )
+        if send_text(f"🔄 模型别名自动更新\n{change_lines}"):
+            print("✅ check_model_aliases: 文本通知已发送")
     else:
         print(f"✅ check_model_aliases: 所有别名模型均可用（共检查 {len(glm_keys + sonnet_keys)} 项）")
 
@@ -3137,10 +3444,8 @@ def check_main_model_drift():
 
     DRIFT_COOLDOWN_FILE = "/tmp/octopus-drift-recovered.json"
     MODE_FILE = "/workspace/tmp/octopus-mode.json"
-    SESSIONS_FILE = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
-
-    # 只在 cost/quality/private 模式下检测
-    MODES_NEED_CHECK = {"cost", "quality", "private"}
+    POLICY_FILE = "/workspace/tmp/octopus/model-policy.json"
+    MODES_NEED_CHECK = {"cost", "quality", "private", "auto"}
 
     try:
         mode_data = json.load(open(MODE_FILE))
@@ -3151,12 +3456,19 @@ def check_main_model_drift():
     if current_mode not in MODES_NEED_CHECK:
         return
 
-    # 读当前 feishu:dm session 的 modelOverride
+    main_session = resolve_main_session_key()
+    if not main_session:
+        return
+
+    # 读当前主 session 的 modelOverride
     try:
-        sessions = json.load(open(SESSIONS_FILE))
+        sessions = json.load(open(os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")))
         current_override = None
         for key, val in sessions.items():
-            if "feishu:dm:" in key:
+            channel_session_key = key
+            if isinstance(val, dict) and val.get("channelSessionKey"):
+                channel_session_key = val.get("channelSessionKey")
+            if channel_session_key == main_session:
                 current_override = val.get("modelOverride")
                 break
     except:
@@ -3165,8 +3477,15 @@ def check_main_model_drift():
     # 期望的模型
     if current_mode in ("cost", "private"):
         expected_model = "lixiang-glm-5/kivy-glm-5"
+    elif current_mode == "auto":
+        try:
+            expected_model = json.load(open(POLICY_FILE)).get("main_model", "")
+        except Exception:
+            expected_model = ""
+        if not expected_model:
+            return
     else:  # quality
-        expected_model = None  # 动态，不检测（质量模式可能随铁甲虾变化）
+        expected_model = None
         return
 
     if current_override == expected_model:
@@ -3194,39 +3513,14 @@ def check_main_model_drift():
     with open(DRIFT_COOLDOWN_FILE, "w") as f:
         json.dump({"ts": now, "mode": current_mode, "recovered_model": expected_model}, f)
 
-    # 飞书通知
     model_name = "GLM" if "glm" in expected_model else expected_model
-    try:
-        msg = (
-            f"🔄 八爪鱼：主模型已自动恢复\n"
-            f"当前模式：{current_mode}\n"
-            f"已重新设置主模型为 {model_name}（因重启后 modelOverride 丢失）"
-        )
-        if os.path.exists(FEISHU_CARD_SCRIPT):
-            import importlib.util as _ilu_d
-            _spec_d = _ilu_d.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
-            if _spec_d and _spec_d.loader:
-                _fc_d = _ilu_d.module_from_spec(_spec_d)
-                _spec_d.loader.exec_module(_fc_d)
-                _token_d = _fc_d.get_tenant_access_token()
-                import requests as _requests_d
-                _payload_d = {
-                    "receive_id": _fc_d.TARGET_OPEN_ID,
-                    "msg_type": "text",
-                    "content": json.dumps({"text": msg}, ensure_ascii=False)
-                }
-                _resp_d = _requests_d.post(
-                    f"{_fc_d.FEISHU_API_BASE}/im/v1/messages?receive_id_type=open_id",
-                    headers={"Authorization": f"Bearer {_token_d}", "Content-Type": "application/json; charset=utf-8"},
-                    json=_payload_d, timeout=15
-                )
-                _data_d = _resp_d.json()
-                if _data_d.get("code") == 0:
-                    print("✅ check_main_model_drift: 飞书通知已发送")
-                else:
-                    print(f"⚠️  check_main_model_drift: 飞书通知失败: {_data_d.get('msg')}")
-    except Exception as e:
-        print(f"⚠️  check_main_model_drift: 飞书通知失败: {e}")
+    msg = (
+        f"🔄 八爪鱼：主模型已自动恢复\n"
+        f"当前模式：{current_mode}\n"
+        f"已重新设置主模型为 {model_name}（因重启后 modelOverride 丢失）"
+    )
+    if send_text(msg):
+        print("✅ check_main_model_drift: 文本通知已发送")
 
     print(f"[drift-check] 主模型漂移已自动恢复：{current_override} → {expected_model}")
 
@@ -3243,11 +3537,46 @@ def main():
         print("🐙 八爪鱼巡逻开始（强制模式）...")
     else:
         print("🐙 八爪鱼巡逻开始...")
+    runner_health = check_runner_health()
+    if runner_health.get("present"):
+        if runner_health.get("healthy"):
+            print(
+                f"  🏃 Runner 心跳正常：{runner_health.get('health', {}).get('worker_id', '')} "
+                f"({runner_health.get('age_seconds', 0)}s)"
+            )
+        else:
+            age_seconds = runner_health.get("age_seconds", "?")
+            print(f"  ⚠️  Runner 心跳异常：{runner_health.get('reason')} age={age_seconds}s")
+            restarted = maybe_restart_runner()
+            if restarted:
+                print("  🔄 已触发 runner-daemon 自动重启")
+            if _text_notify_enabled():
+                health = runner_health.get("health", {})
+                worker_id = health.get("worker_id", "unknown-runner")
+                job_id = health.get("job_id", "")
+                msg = f"⚠️ 八爪鱼 Runner 心跳异常\nworker={worker_id}\nage={age_seconds}s"
+                if restarted:
+                    msg += "\n已尝试自动重启 runner-daemon"
+                if job_id:
+                    msg += f"\njob={job_id}"
+                send_text(msg)
+    else:
+        print("  ℹ️  Runner 未启动或无心跳文件")
     tasks = load_tasks()
 
     if not tasks:
         print("✅ task-state.json 为空或不存在，无需巡逻")
         return
+
+    # ── v1.3: 先补充 session 观测字段，让后续判断不只依赖 task-state 本身 ──
+    tasks = annotate_tasks_with_session_state(tasks)
+
+    # ── v1.4: 对仍然活着但有异常迹象的任务，先尝试 steer，再决定是否重派 ──
+    steered = attempt_task_steers(tasks)
+    if steered > 0:
+        print(f"  🧭 本轮已 steer 任务 {steered} 个")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
 
     # ── 超时检测：先于分类，自动终止超时任务 ──
     killed_tasks = check_and_kill_timed_out_tasks(tasks)
@@ -3425,40 +3754,20 @@ def main():
             summary = t.get("summary", "无摘要")[:80]
             msg = f"❌ 任务 {task_id} 失败：{summary}\n如需重派请回复'重派 {task_id}'"
             try:
-                if os.path.exists(FEISHU_CARD_SCRIPT):
-                    import importlib.util as _ilu
-                    _spec = _ilu.spec_from_file_location("feishu_card", FEISHU_CARD_SCRIPT)
-                    if _spec and _spec.loader:
-                        _fc = _ilu.module_from_spec(_spec)
-                        _spec.loader.exec_module(_fc)
-                        _token = _fc.get_tenant_access_token()
-                        import requests as _requests
-                        _payload = {
-                            "receive_id": _fc.TARGET_OPEN_ID,
-                            "msg_type": "text",
-                            "content": json.dumps({"text": msg}, ensure_ascii=False)
-                        }
-                        _resp = _requests.post(
-                            f"{_fc.FEISHU_API_BASE}/im/v1/messages?receive_id_type=open_id",
-                            headers={"Authorization": f"Bearer {_token}", "Content-Type": "application/json; charset=utf-8"},
-                            json=_payload, timeout=15
-                        )
-                        _data = _resp.json()
-                        if _data.get("code") == 0:
-                            print(f"  ✅ 已发送失败通知: {task_id}")
-                            # 标记该任务已通知（写入 task-state.json）
-                            try:
-                                state_data = load_task_state(TASK_STATE_FILE)
-                                for task_item in state_data.get("tasks", []):
-                                    if task_item.get("id") == task_id:
-                                        task_item["notified_failed"] = True
-                                        task_item["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                                        break
-                                save_task_state(TASK_STATE_FILE, state_data)
-                            except Exception as mark_err:
-                                print(f"  ⚠️ 标记 notified_failed 失败: {mark_err}", file=sys.stderr)
-                        else:
-                            print(f"  ⚠️ 发送失败通知失败: {_data.get('msg')}", file=sys.stderr)
+                if send_text(msg):
+                    print(f"  ✅ 已发送失败通知: {task_id}")
+                    try:
+                        state_data = load_task_state(TASK_STATE_FILE)
+                        for task_item in state_data.get("tasks", []):
+                            if task_item.get("id") == task_id:
+                                task_item["notified_failed"] = True
+                                task_item["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                                break
+                        save_task_state(TASK_STATE_FILE, state_data)
+                    except Exception as mark_err:
+                        print(f"  ⚠️ 标记 notified_failed 失败: {mark_err}", file=sys.stderr)
+                else:
+                    print(f"  ⚠️ 发送失败通知失败: {task_id}", file=sys.stderr)
             except Exception as e:
                 print(f"  ⚠️ 发送失败通知异常: {e}", file=sys.stderr)
 

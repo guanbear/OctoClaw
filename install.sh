@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
-OCTOPUS_RULES_VERSION="v1.3.0"
+OCTOPUS_RULES_VERSION="v1.5.0"
 
 # ── 加载功能开关配置 ──────────────────────────────────────────────────────────
 OCTOPUS_CONFIG="$SCRIPT_DIR/lib/config.sh"
@@ -16,6 +16,21 @@ fi
 FEATURE_MODEL_PROBE="${FEATURE_MODEL_PROBE:-false}"
 PATROL_MODE="${PATROL_MODE:-loop}"
 PATROL_INTERVAL="${PATROL_INTERVAL:-60}"
+NOTIFICATION_BACKEND="${NOTIFICATION_BACKEND:-auto}"
+NOTIFICATION_PANEL_ENABLED="${NOTIFICATION_PANEL_ENABLED:-true}"
+NOTIFICATION_EVENT_ENABLED="${NOTIFICATION_EVENT_ENABLED:-true}"
+NOTIFICATION_TEXT_ENABLED="${NOTIFICATION_TEXT_ENABLED:-true}"
+MAIN_SESSION_CHANNEL="${MAIN_SESSION_CHANNEL:-auto}"
+MAIN_SESSION_TARGET="${MAIN_SESSION_TARGET:-}"
+MODEL_AUTO_ENABLED="${MODEL_AUTO_ENABLED:-true}"
+MODEL_AUTO_PREFER_PRIVATE="${MODEL_AUTO_PREFER_PRIVATE:-false}"
+MODEL_AUTO_PREFER_LOW_COST="${MODEL_AUTO_PREFER_LOW_COST:-false}"
+RUNNER_ENABLED="${RUNNER_ENABLED:-true}"
+RUNNER_POLL_INTERVAL_SECONDS="${RUNNER_POLL_INTERVAL_SECONDS:-3}"
+RUNNER_HEARTBEAT_INTERVAL_SECONDS="${RUNNER_HEARTBEAT_INTERVAL_SECONDS:-10}"
+RUNNER_DEFAULT_TIMEOUT_SECONDS="${RUNNER_DEFAULT_TIMEOUT_SECONDS:-120}"
+RUNNER_MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
+RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-50}"
 
 # ─────────────────────────────────────────────
 # 公共辅助：删除 / 禁用 / 启用 cron
@@ -162,6 +177,8 @@ for j in jobs:
 # ─────────────────────────────────────────────
 _PATROL_LOOP_PID_FILE="/workspace/tmp/octopus/patrol-loop.pid"
 _PATROL_LOOP_LOG="/workspace/tmp/octopus/patrol.log"
+_RUNNER_DAEMON_PID_FILE="/workspace/tmp/octopus/runner-daemon.pid"
+_RUNNER_DAEMON_LOG="/workspace/tmp/octopus/runner.log"
 
 _start_patrol_loop() {
     local loop_script="$SCRIPT_DIR/lib/patrol-loop.sh"
@@ -212,6 +229,65 @@ _stop_patrol_loop() {
     fi
 }
 
+_start_runner_daemon() {
+    local daemon_script="$SCRIPT_DIR/lib/runner-daemon.sh"
+    mkdir -p /workspace/tmp/octopus
+
+    if [ "${RUNNER_ENABLED:-true}" != "true" ]; then
+        echo "ℹ️  RUNNER_ENABLED=false，跳过 runner-daemon 启动"
+        return 0
+    fi
+
+    if [ -f "$_RUNNER_DAEMON_PID_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$_RUNNER_DAEMON_PID_FILE")
+        if kill -0 "$old_pid" 2>/dev/null; then
+            echo "ℹ️  runner-daemon 已在运行 (PID=$old_pid)，跳过"
+            return 0
+        fi
+        rm -f "$_RUNNER_DAEMON_PID_FILE"
+    fi
+
+    if [ ! -f "$daemon_script" ]; then
+        echo "⚠️  未找到 $daemon_script，跳过 runner-daemon 启动"
+        return 1
+    fi
+
+    WORKSPACE="$WORKSPACE" \
+    RUNNER_POLL_INTERVAL_SECONDS="$RUNNER_POLL_INTERVAL_SECONDS" \
+    RUNNER_HEARTBEAT_INTERVAL_SECONDS="$RUNNER_HEARTBEAT_INTERVAL_SECONDS" \
+    RUNNER_DEFAULT_TIMEOUT_SECONDS="$RUNNER_DEFAULT_TIMEOUT_SECONDS" \
+    RUNNER_MAX_AGE_MINUTES="$RUNNER_MAX_AGE_MINUTES" \
+    RUNNER_MAX_JOBS_PER_WORKER="$RUNNER_MAX_JOBS_PER_WORKER" \
+    setsid bash "$daemon_script" >> "$_RUNNER_DAEMON_LOG" 2>&1 &
+    sleep 0.8
+
+    if [ -f "$_RUNNER_DAEMON_PID_FILE" ]; then
+        local new_pid
+        new_pid=$(cat "$_RUNNER_DAEMON_PID_FILE")
+        echo "✅ runner-daemon 已启动 (PID=$new_pid)"
+    else
+        echo "⚠️  runner-daemon 启动失败，请查看日志：$_RUNNER_DAEMON_LOG"
+        return 1
+    fi
+}
+
+_stop_runner_daemon() {
+    if [ -f "$_RUNNER_DAEMON_PID_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$_RUNNER_DAEMON_PID_FILE")
+        if kill -0 "$old_pid" 2>/dev/null; then
+            kill "$old_pid" 2>/dev/null
+            echo "✅ runner-daemon 已停止 (PID=$old_pid)"
+        else
+            echo "ℹ️  runner-daemon 进程已不存在"
+        fi
+        rm -f "$_RUNNER_DAEMON_PID_FILE"
+    else
+        echo "ℹ️  runner-daemon 未在运行（PID 文件不存在）"
+    fi
+}
+
 # ─────────────────────────────────────────────
 # 卸载
 # ─────────────────────────────────────────────
@@ -223,6 +299,7 @@ do_uninstall() {
     # 1. 停止巡逻（loop 模式停进程，cron 模式删 cron）
     echo "📡 停止巡逻任务..."
     _stop_patrol_loop
+    _stop_runner_daemon
     _delete_cron_by_name "octopus-patrol"
     _delete_cron_by_name "octopus-probe"
     _delete_cron_by_name "octopus-update-check"
@@ -359,7 +436,7 @@ esac
 # 正常安装流程（无参数）
 # ─────────────────────────────────────────────
 echo ""
-echo "🐙 八爪鱼多 Agent 调度器 v1.1.6"
+echo "🐙 八爪鱼多 Agent 调度器 v1.2.0"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "功能特性："
 echo "  💪 鲸力手  - 重型任务、大规模批量处理"
@@ -386,9 +463,10 @@ echo "  2) ⚡ 速度优先          - 所有任务选延迟最低的可用模�
 echo "  3) 🎯 效果优先          - 所有任务使用 Opus"
 echo "  4) 💰 成本优先          - 尽量使用 GLM，降低费用"
 echo "  5) 🔒 保密模式          - 只用私有模型（GLM）"
-echo "  6) 🔧 自定义模式        - 手动为每个触手指定模型（高级用户）"
+echo "  6) 🧠 自动选模          - 根据本地模型、速度、价格与能力自动分配"
+echo "  7) 🔧 自定义模式        - 手动为每个触手指定模型（高级用户）"
 echo ""
-read -p "请输入选择 [1-6，直接回车选平衡模式]: " mode_choice
+read -p "请输入选择 [1-7，直接回车选平衡模式]: " mode_choice
 
 # 自定义模式用关联数组存储用户为每个触手指定的模型
 declare -A CUSTOM_MODELS
@@ -399,7 +477,8 @@ case "$mode_choice" in
     3) MODE="quality" ;;
     4) MODE="cost" ;;
     5) MODE="private" ;;
-    6)
+    6) MODE="auto" ;;
+    7)
         MODE="custom"
         MODE_LABEL="🔧 自定义模式"
         echo ""
@@ -463,21 +542,23 @@ mode = {
         'quality': {'trivial': 'claudeopus', 'simple': 'claudeopus', 'normal': 'claudeopus', 'deep': 'claudeopus', 'concurrency': 3},
         'cost': {'trivial': 'kimi', 'simple': 'sonnet', 'normal': 'sonnet', 'deep': 'sonnet', 'concurrency': 3},
         'balanced': {'trivial': 'kimi', 'simple': 'sonnet', 'normal': 'sonnet', 'deep': 'claudeopus', 'concurrency': 5},
-        'private': {'trivial': 'kimi', 'simple': 'kimi', 'normal': 'kimi', 'deep': 'claudeopus', 'concurrency': 5, 'autoPrivate': True}
+        'private': {'trivial': 'kimi', 'simple': 'kimi', 'normal': 'kimi', 'deep': 'claudeopus', 'concurrency': 5, 'autoPrivate': True},
+        'auto': {'trivial': 'auto', 'simple': 'auto', 'normal': 'auto', 'deep': 'auto', 'concurrency': 5}
     }
 }
 print(json.dumps(mode, ensure_ascii=False, indent=2))
 " 2>/dev/null)
     echo "$OCTOPUS_MODE_JSON" > "$MODE_FILE"
 else
-    MODE_DESC=$(case $MODE in
-        balanced) echo '平衡模式：trivial/simple→GLM, normal→Sonnet, deep→Sonnet' ;;
-        speed)    echo '速度优先：所有任务选延迟最低的可用模型' ;;
-        quality)  echo '效果优先：所有任务使用 Opus' ;;
-        cost)     echo '成本优先：尽量使用 GLM，降低费用' ;;
-        private)  echo '保密模式：只用私有模型（GLM）' ;;
-        *)        echo "$MODE" ;;
-    esac)
+    case "$MODE" in
+        balanced) MODE_DESC='平衡模式：轻任务用低成本模型，复杂任务用高质量模型' ;;
+        speed)    MODE_DESC='速度优先：所有任务选延迟最低的可用模型' ;;
+        quality)  MODE_DESC='效果优先：所有任务使用 Opus' ;;
+        cost)     MODE_DESC='成本优先：尽量使用 GLM，降低费用' ;;
+        private)  MODE_DESC='保密模式：只用私有模型（GLM）' ;;
+        auto)     MODE_DESC='自动选模：根据本地模型、速度、价格和能力动态分配' ;;
+        *)        MODE_DESC="$MODE" ;;
+    esac
     cat > "$MODE_FILE" << EOF
 {
   "mode": "$MODE",
@@ -488,21 +569,62 @@ else
     "quality": {"trivial": "claudeopus", "simple": "claudeopus", "normal": "claudeopus", "deep": "claudeopus", "concurrency": 3},
     "cost": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "sonnet", "concurrency": 3},
     "balanced": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "claudeopus", "concurrency": 5},
-    "private": {"trivial": "glm", "simple": "kimi", "normal": "kimi", "deep": "claudeopus", "concurrency": 5, "autoPrivate": true}
+    "private": {"trivial": "glm", "simple": "kimi", "normal": "kimi", "deep": "claudeopus", "concurrency": 5, "autoPrivate": true},
+    "auto": {"trivial": "auto", "simple": "auto", "normal": "auto", "deep": "auto", "concurrency": 5}
   }
 }
 EOF
 fi
 
-MODE_LABEL=$(case $MODE in
-    balanced) echo '⚖️  平衡模式' ;;
-    speed)    echo '⚡ 速度优先' ;;
-    quality)  echo '🎯 效果优先' ;;
-    cost)     echo '💰 成本优先' ;;
-    private)  echo '🔒 保密模式' ;;
-    custom)   echo '🔧 自定义模式' ;;
-esac)
+case "$MODE" in
+    balanced) MODE_LABEL='⚖️  平衡模式' ;;
+    speed)    MODE_LABEL='⚡ 速度优先' ;;
+    quality)  MODE_LABEL='🎯 效果优先' ;;
+    cost)     MODE_LABEL='💰 成本优先' ;;
+    private)  MODE_LABEL='🔒 保密模式' ;;
+    auto)     MODE_LABEL='🧠 自动选模' ;;
+    custom)   MODE_LABEL='🔧 自定义模式' ;;
+esac
 echo "✅ 已设置为 $MODE_LABEL"
+
+OCTOPUS_CONFIG_FILE="$WORKSPACE/tmp/octopus-config.json"
+python3 - << EOF
+import json
+from datetime import datetime, timezone
+
+cfg = {
+  "version": "v1.2.0",
+  "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+  "notification": {
+    "backend": "${NOTIFICATION_BACKEND}",
+    "panel_enabled": "${NOTIFICATION_PANEL_ENABLED}".lower() == "true",
+    "event_enabled": "${NOTIFICATION_EVENT_ENABLED}".lower() == "true",
+    "text_enabled": "${NOTIFICATION_TEXT_ENABLED}".lower() == "true",
+  },
+  "main_session": {
+    "channel": "${MAIN_SESSION_CHANNEL}",
+    "target": "${MAIN_SESSION_TARGET}",
+    "session_key": "",
+  },
+  "model_auto": {
+    "enabled": "${MODEL_AUTO_ENABLED}".lower() == "true",
+    "prefer_private": "${MODEL_AUTO_PREFER_PRIVATE}".lower() == "true",
+    "prefer_low_cost": "${MODEL_AUTO_PREFER_LOW_COST}".lower() == "true",
+  }
+}
+with open("${OCTOPUS_CONFIG_FILE}", "w", encoding="utf-8") as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+print("✅ 已写入统一配置 octopus-config.json")
+EOF
+
+echo "💰 正在初始化统一价格源..."
+python3 - << EOF
+import sys
+sys.path.insert(0, "${SCRIPT_DIR}/lib")
+from model_pricing import ensure_pricing_file, MODEL_PRICING_FILE
+ensure_pricing_file()
+print(f"✅ 已初始化价格文件: {MODEL_PRICING_FILE}")
+EOF
 
 # 自动切换主 Agent 模型
 switch_main_agent_model() {
@@ -519,155 +641,15 @@ switch_main_agent_model() {
         fi
     fi
 
-    # 读取当前 defaultModel
-    local default_model=""
-    default_model=$(python3 -c "
-import json, sys
-try:
-    with open('$HOME/.openclaw/openclaw.json') as f:
-        data = json.load(f)
-    print(data.get('defaultModel', ''))
-except Exception:
-    print('')
-" 2>/dev/null)
-
-    # 判断供应商
-    local vendor="unknown"
-    if echo "$default_model" | grep -qi "aws"; then
-        vendor="aws"
-    elif echo "$default_model" | grep -qi "google"; then
-        vendor="google"
+    local script="$SCRIPT_DIR/lib/set-main-model.py"
+    local cmd=(python3 "$script" --mode "$mode")
+    if [[ -n "$explicit_model" ]]; then
+        cmd+=(--explicit-model "$explicit_model")
     fi
-
-    # 根据模式和供应商决定目标模型
-    local target_model=""
-    case "$mode" in
-        balanced)
-            if [[ "$vendor" == "aws" ]]; then
-                target_model="vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
-            elif [[ "$vendor" == "google" ]]; then
-                target_model="vendor-claude-google/google-claude-sonnet-4-6"
-            fi
-            ;;
-        quality)
-            if [[ "$vendor" == "aws" ]]; then
-                # Opus on AWS may not be available, fallback to google
-                target_model="vendor-claude-opus-4-6/aws-claude-opus-4-6"
-            elif [[ "$vendor" == "google" ]]; then
-                target_model="vendor-claude-google/google-claude-opus-4-6"
-            fi
-            ;;
-        speed)
-            # 读取延迟最低的可用模型
-            local fastest_model=""
-            fastest_model=$(python3 -c "
-import json, sys
-try:
-    with open('/tmp/ironclaw-model-latency.json') as f:
-        data = json.load(f)
-    # 铁甲虾格式: {\"models\": {\"full_model_id\": {\"latency_ms\": N, \"available\": true, ...}}}
-    models_dict = data.get('models', {})
-    if isinstance(models_dict, dict):
-        available = [
-            (fid, info)
-            for fid, info in models_dict.items()
-            if info.get('available', True)
-        ]
-        if available:
-            best = min(available, key=lambda x: x[1].get('latency_ms', 999999))
-            print(best[0])  # 输出 full_id
-except Exception:
-    print('')
-" 2>/dev/null)
-            if [[ -n "$fastest_model" ]]; then
-                target_model="$fastest_model"
-            else
-                # fallback to balanced model
-                if [[ "$vendor" == "aws" ]]; then
-                    target_model="vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
-                elif [[ "$vendor" == "google" ]]; then
-                    target_model="vendor-claude-google/google-claude-sonnet-4-6"
-                fi
-            fi
-            ;;
-        cost|private)
-            target_model="lixiang-kimi-2-5/kivy-kimi-k2_5"
-            ;;
-        custom_explicit)
-            # 自定义模式：用户已明确指定目标模型
-            target_model="$explicit_model"
-            ;;
-        custom)
-            # 自定义模式但未指定主 Agent 模型，fallback balanced
-            if [[ "$vendor" == "aws" ]]; then
-                target_model="vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
-            elif [[ "$vendor" == "google" ]]; then
-                target_model="vendor-claude-google/google-claude-sonnet-4-6"
-            fi
-            ;;
-    esac
-
-    # 如果供应商未知且非 cost/private，保持原模型不切换
-    if [[ -z "$target_model" ]]; then
-        echo "ℹ️  供应商未知（defaultModel: ${default_model:-未设置}），跳过主 Agent 模型切换"
-        return 0
-    fi
-
-    # 获取主 session key
-    local main_session_suffix=""
-    main_session_suffix=$(python3 -c "
-import json, sys
-try:
-    with open('$HOME/.openclaw/sessions.json') as f:
-        data = json.load(f)
-    keys = [k for k in data.keys() if 'feishu:dm:ou_' in k]
-    print(keys[0].split('feishu:dm:')[1] if keys else '')
-except Exception:
-    print('')
-" 2>/dev/null)
-
-    if [[ -z "$main_session_suffix" ]]; then
-        echo "⚠️  无法获取主 session key，跳过模型切换"
-        return 0
-    fi
-
-    local main_session="feishu:dm:$main_session_suffix"
-
-    # 获取 Gateway 端口
-    local gateway_port="3000"
-    gateway_port=$(python3 -c "
-import json, sys
-try:
-    with open('$HOME/.openclaw/openclaw.json') as f:
-        data = json.load(f)
-    print(data.get('port', 3000))
-except Exception:
-    print(3000)
-" 2>/dev/null)
-
-    # 调用 Gateway API 设置 modelOverride
-    local http_code=""
-    http_code=$(curl -s -o /tmp/octopus-model-switch-result.json -w "%{http_code}" \
-        -X PATCH "http://localhost:$gateway_port/api/sessions/agent:main:$main_session" \
-        -H "Content-Type: application/json" \
-        -d "{\"modelOverride\": \"$target_model\"}" 2>/dev/null)
-
-    if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
-        echo "🤖 主 Agent 模型已切换为：$target_model"
-        # 保存目标模型到模式文件，供后续展示用
-        python3 -c "
-import json
-try:
-    with open('$MODE_FILE') as f:
-        data = json.load(f)
-    data['mainAgentModel'] = '$target_model'
-    with open('$MODE_FILE', 'w') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-except Exception:
-    pass
-" 2>/dev/null
+    if "${cmd[@]}"; then
+        echo "✅ 主 Agent 模型切换脚本执行完成"
     else
-        echo "⚠️  主 Agent 模型切换失败（HTTP ${http_code:-连接失败}），将在下次会话时生效"
+        echo "⚠️  主 Agent 模型切换失败，将在下次会话或下轮 patrol 再尝试"
     fi
 }
 
@@ -678,16 +660,27 @@ else
     switch_main_agent_model "$MODE"
 fi
 
-# 3. 检查 python3 和 requests 库（feishu-card.py 依赖）
-if command -v python3 &>/dev/null; then
-    if python3 -c "import requests" 2>/dev/null; then
-        echo "✅ Python3 + requests 已就绪"
+# 3. 检查 python3 和 requests 库（仅 Feishu 通知后端依赖）
+ACTIVE_NOTIFICATION_BACKEND=$(python3 - << EOF
+import sys
+sys.path.insert(0, "${SCRIPT_DIR}/lib")
+from octopus_config import get_notification_backend
+print(get_notification_backend())
+EOF
+)
+if [ "$ACTIVE_NOTIFICATION_BACKEND" = "feishu" ]; then
+    if command -v python3 &>/dev/null; then
+        if python3 -c "import requests" 2>/dev/null; then
+            echo "✅ Python3 + requests 已就绪"
+        else
+            echo "⚠️  缺少 requests 库，尝试安装..."
+            pip3 install requests --quiet && echo "✅ requests 安装成功" || echo "❌ requests 安装失败，飞书通知可能无法使用"
+        fi
     else
-        echo "⚠️  缺少 requests 库，尝试安装..."
-        pip3 install requests --quiet && echo "✅ requests 安装成功" || echo "❌ requests 安装失败，feishu-card.py 可能无法使用"
+        echo "⚠️  未找到 python3，飞书通知将无法使用"
     fi
 else
-    echo "⚠️  未找到 python3，feishu-card.py 将无法使用"
+    echo "ℹ️  当前通知后端为 $ACTIVE_NOTIFICATION_BACKEND，跳过飞书依赖检查"
 fi
 
 # 4. 启动巡逻（loop 模式：零 token 进程；cron 模式：openclaw cron）
@@ -704,6 +697,7 @@ install_patrol_cron() {
         fi
 
         _start_patrol_loop
+        _start_runner_daemon
 
         # 注册每日版本检查 cron（仅版本检查，每天一次，token 消耗可忽略）
         if ! command -v openclaw &>/dev/null; then
@@ -899,26 +893,73 @@ fi
 # 按角色分类写入别名文件
 echo ""
 echo "📝 正在写入模型别名文件..."
-GLM_MODEL=$(openclaw models list 2>/dev/null | grep -iE "glm|kivy-glm|lixiang-glm" | head -1 | awk '{print $1}')
-SONNET_MODEL=$(openclaw models list 2>/dev/null | grep -i "sonnet" | grep -vi "opus" | head -1 | awk '{print $1}')
-OPUS_MODEL=$(openclaw models list 2>/dev/null | grep -i "opus" | head -1 | awk '{print $1}')
+python3 - << 'EOF'
+import datetime
+import json
+import os
+import subprocess
 
-# 写入别名文件（只写能找到的）
-python3 -c "
-import json, os, datetime
-f = '/workspace/tmp/octopus-model-aliases.json'
-d = json.load(open(f)) if os.path.exists(f) else {}
-glm = '${GLM_MODEL}' or ''
-sonnet = '${SONNET_MODEL}' or ''
-opus = '${OPUS_MODEL}' or ''
-if glm: d.update({'trivial': glm, 'simple': glm, 'normal': glm})
-if sonnet: d.update({'hard': sonnet, 'normal_fallback': sonnet, 'deep': sonnet})
-if opus: d['deep_quality'] = opus
-d['updated_at'] = datetime.datetime.now(datetime.UTC).isoformat().replace('+00:00', 'Z')
-os.makedirs(os.path.dirname(f), exist_ok=True)
-json.dump(d, open(f,'w'), indent=2)
-print(f'✅ 别名文件已更新: GLM={glm or \"未找到\"}, Sonnet={sonnet or \"未找到\"}, Opus={opus or \"未找到\"}')
-"
+alias_file = "/workspace/tmp/octopus-model-aliases.json"
+
+try:
+    result = subprocess.run(
+        ["openclaw", "models", "list", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    raw = json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else []
+except Exception:
+    raw = []
+
+ids = []
+if isinstance(raw, list):
+    ids = [m for m in raw if isinstance(m, str)]
+elif isinstance(raw, dict):
+    if isinstance(raw.get("models"), list):
+        ids = [m.get("key", "") for m in raw["models"] if isinstance(m, dict)]
+    else:
+        ids = list(raw.keys())
+
+def pick(patterns):
+    for model_id in ids:
+        lower = model_id.lower()
+        if any(p in lower for p in patterns):
+            return model_id
+    return ""
+
+glm = pick(["glm-4.7", "glm4.7", "kivy-glm-4.7", "glm-5", "kivy-glm-5", "glm"])
+cheap = pick(["minimax", "m2.7", "kimi", "glm-4.7", "glm"])
+coding = pick(["gpt-5.4", "glm-5", "sonnet", "glm-4.7", "minimax"])
+deep = pick(["gpt-5.4", "glm-5", "opus", "sonnet", "minimax"])
+
+data = json.load(open(alias_file)) if os.path.exists(alias_file) else {}
+if cheap:
+    data.update({"trivial": cheap, "simple": cheap})
+if glm:
+    data["normal"] = glm
+if coding:
+    data.update({"hard": coding, "normal_fallback": coding})
+if deep:
+    data.update({"deep": deep, "deep_quality": deep})
+data["updated_at"] = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+os.makedirs(os.path.dirname(alias_file), exist_ok=True)
+with open(alias_file, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+print(f"✅ 别名文件已更新: cheap={cheap or '未找到'}, normal={glm or '未找到'}, hard={coding or '未找到'}, deep={deep or '未找到'}")
+EOF
+
+echo "🧠 正在生成自动选模情报..."
+if python3 "$SCRIPT_DIR/lib/sync-speed-metrics.py" sync >/tmp/octopus-speed-sync.json 2>/tmp/octopus-speed-sync.err; then
+    cat /tmp/octopus-speed-sync.json
+else
+    echo "⚠️  speed metrics 同步失败：$(cat /tmp/octopus-speed-sync.err 2>/dev/null)"
+fi
+if python3 "$SCRIPT_DIR/lib/model-intel.py" refresh --mode "$MODE" >/tmp/octopus-model-intel.json 2>/tmp/octopus-model-intel.err; then
+    cat /tmp/octopus-model-intel.json
+else
+    echo "⚠️  model-intel 生成失败：$(cat /tmp/octopus-model-intel.err 2>/dev/null)"
+fi
 
 # ─────────────────────────────────────────────
 # 自动注入 octopus:core-rules 到 AGENTS.md
@@ -976,105 +1017,52 @@ print('✅ 无版本号旧规则已清除')
     # 注入新版规则（在文件末尾追加）
     cat >> "$AGENTS_FILE" << 'OCTOPUS_RULES'
 
-<!-- octopus:core-rules v1.3.0 -->
+<!-- octopus:core-rules v1.5.0 -->
 ## 🐙 八爪鱼核心原则（始终生效）
 
-### 🚨 零工具调用铁律（零例外）
+### 🚨 核心铁律
 
-**收到用户消息，第一个输出必须是文字，绝对禁止先做工具调用。**
-
-- 需要 spawn → 先输出"收到！xxx 处理中..." → 再调 sessions_spawn
-- 🚫 禁用：exec/read/write/edit/memory_search（回复前后均禁止）
-- ✅ 唯一例外：sessions_spawn + cron.run（非阻塞）
-- 📊 面板：`cron.run("octopus-patrol")`，禁止直接 exec python3 patrol.py
-- **所有 spawn 完成后，turn 末尾调一次 `cron.run("octopus-patrol")`**（每 turn 只调一次）
-
-**判断 spawn**：30 秒内纯文字高质量能答 → 直答；需工具/多步骤 → spawn 子 Agent。
-
-**同文件串行**：多任务写同一文件时，等第一个完成 → 把改动摘要传给第二个 → 再 spawn。
-
-**派遣后策略**（每次 spawn 后立即决定）：
-- **策略A · 无依赖**：还有其他独立任务 → 立即继续执行，不等待子 Agent
-- **策略B · 强依赖**：必须拿到结果才能继续 → 告知用户「已派遣给XX，等待结果中」→ 结束本轮次 → 子 Agent announce 回来时自动唤醒
-
-### 派遣面板格式
-
-```
-🐙 任务派遣
-🔧 螃蟹手 · 任务描述 · Sonnet · 💰💰 · 🟡 已派遣
-⏱️ 预计 N 分钟
-```
-单任务简写：`交给🔧螃蟹手了！用 Sonnet`
-
-成本：💰 GLM | 💰💰 Sonnet | 💰💰💰 Opus
-状态：⏸️排队 | 🟡派遣 | 🔵运行 | ✅完成 | ❌失败
-预计：trivial <1min | simple 1-3min | normal 3-5min | hard 5-10min | deep 10-15min
+- 收到用户消息，第一个输出必须是文字，禁止先做工具调用
+- 唯一允许的首轮工具例外：`sessions_spawn` 与 `cron.run("octopus-patrol")`
+- 30 秒内纯文字能高质量完成 → 直答；否则 spawn 子 Agent
+- 同文件写操作必须串行；强依赖任务必须等待上游结果
+- 所有 spawn 完成后，turn 末尾统一调用一次 `cron.run("octopus-patrol")`
 
 ### spawn 规范
 
 - label：`octopus-power/scout/writer/fix/test/analyze/runner/feishu`
-- task 描述：【上下文】【目标】【要求】总计 ≤800 字（超限致 Sonnet API 等待 300s+）
-- 并发上限：balanced/private ≤5，quality/cost ≤3；**Sonnet 同时运行 ≤3 个**
-- task 末尾必须附加：`【文件读取】cat→head -n 100，grep→| head -20，日志→tail -n 50。禁读完整大文件！`
-- task 末尾必须附加 RESULT 模板和状态写入要求（完整模板见 `/workspace/openclaw/skills/octopus/lib/spawn-template.md`）
-- **大输出（>500字）写共享文件区** `/workspace/tmp/octopus/shared/{task_id}.md`，RESULT 的 `report` 字段填路径，summary 只写结论
-- spawn 前可读 `/workspace/tmp/octopus/agent-notes/{label}.md` 末5行，注入到 task 描述开头（格式：`[历史经验] 经验1 / 经验2`）
+- 主调度优先走统一入口：`python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task "..."`
+- 查询状态、轻 shell、日志检查、curl/grep/head/tail 这类快任务，命中后优先走 runner，不再直接 spawn 子 Agent
+- task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `/workspace/tmp/octopus/shared/{task_id}.md`
+- 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
+- 详细状态写入和 RESULT 模板以 `/workspace/openclaw/skills/octopus/lib/spawn-template.md` 为准
+- 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
 
 ### 触手名字
 
-💪鲸力手·power | 🔍梭鱼眼·scout | ✍️墨鱼手·writer | 🔧螃蟹手·fix | 🧪海胆手·test | 📊章鱼脑·analyze | 🏃飞鱼腿·runner | 🐦鸽手·feishu（飞书专属）
+💪鲸力手·power | 🔍梭鱼眼·scout | ✍️墨鱼手·writer | 🔧螃蟹手·fix | 🧪海胆手·test | 📊章鱼脑·analyze | 🏃飞鱼腿·runner | 🐦鸽手·feishu
 
 ### 任务分级与模型选择
 
-**级别**：trivial（改配置）/ simple（改单文件）/ normal（写代码/调API）/ hard（复杂逻辑/多文件）/ deep（架构/深度分析）
-
-| 模式 | trivial/simple | normal/hard | deep | 并发 |
-|------|--------------|-------------|------|------|
-| balanced（默认）| GLM 💰 | Sonnet 💰💰 | Sonnet 💰💰 | 5 |
-| quality | Sonnet 💰💰 | Sonnet 💰💰 | Opus 💰💰💰 | 3 |
-| cost | GLM 💰 | GLM 💰 | Sonnet 💰💰 | 3 |
-| private | GLM 💰 | GLM 💰 | GLM 💰 | 5 |
-
-spawn 前读 `/workspace/tmp/octopus-mode.json` 和 `/workspace/tmp/octopus-model-aliases.json` 获取实际模型路径。
-
-意图覆盖（临时）：「用最强/不惜成本/用 Opus」→ 全触手 Opus；「保密/私有」→ 全触手 GLM。
+- 级别：`trivial/simple/normal/hard/deep`
+- 选模优先读 `/workspace/tmp/octopus/model-policy.json`（auto 模式），否则读 `octopus-mode.json` + `octopus-model-aliases.json`
+- `runner` 优先低首 token 延迟；`fix/test` 优先 coding；`analyze/power` 优先深度能力
+- 用户临时要求“最强/不惜成本”可升高模型；“保密/私有”优先私有模型
 
 ### 模型降级（铁甲虾协作）
 
-spawn 前检查 `/tmp/ironclaw-model-guard-override.json`：`guarded=true` 且选出模型 == original_model → 改用 current_model，task 中注明「⚠️ 模型 X 故障，降级使用 Y」。
+- spawn 前检查 `/tmp/ironclaw-model-guard-override.json`，必要时改用降级模型
 
 ### 任务状态（task-state.json）
 
-**文件**：`/workspace/tmp/octopus/task-state.json`，读写由子 Agent 负责，主 Agent 零工具调用。
-
-每个 spawn task 末尾必须附加状态写入指令（完整模板见 `/workspace/openclaw/skills/octopus/lib/spawn-template.md`）。
-
-简版：开始前写 `status=running + started_at`，完成后写 `status=done/failed + summary(2句) + files_changed + completed_at`。
-
-### RESULT 格式规范（子 Agent 必须遵守，否则视为未完成被重派）
-
-最终输出必须以 `---RESULT---` 开头：
-
-```
----RESULT---
-{"status":"success","summary":"≤5句结论，禁列表/表格/代码块","files":[],"report":"路径或null"}
-```
-
-兼容旧格式：`状态: 成功/失败
-摘要: ...` 也被识别为完成。
+- 文件：`/workspace/tmp/octopus/task-state.json`
+- 子 Agent 负责开始时写 `running`，结束时写 `done/failed`
+- 最终输出必须以 `---RESULT---` 开头，否则视为未完成
 
 ### 监督与重派
 
-- 收到 announce → 检查是否异常 → 触发重派；升级链：**GLM 失败 → Sonnet → Opus → 通知用户**
-- 重派时注明：「⚠️ 上次用 XX 模型失败，原因 XXX，请避免」
-
-### 💬 私聊零 NO_REPLY | 🔄 防重复
-
-私聊/DM 每条必须有回复。同一 announce（sessionKey+runId）上下文已有回复 → 直接 NO_REPLY。
-
-### 🔴 错误记录
-
-子 Agent 失败/卡死时追加 `~/self-improving/domains/octopus-errors.md`（格式：`[日期] 类型: 描述 → 修复`）。重现 3 次以上必须晋升为 AGENTS.md 防御规则。
+- 收到 announce 后检查是否异常；升级链：低成本模型失败 → 中档 → 高档 → 通知用户
+- 避免重复回复同一 announce；错误经验沉淀写回 Octopus 相关记录
 <!-- /octopus:core-rules -->
 OCTOPUS_RULES
 
@@ -1088,9 +1076,14 @@ echo ""
 echo "🎉 八爪鱼安装完成！"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ 工作目录已创建"
-echo "✅ 飞书卡片脚本已就绪"
+echo "✅ 通知后端：$ACTIVE_NOTIFICATION_BACKEND"
 if [ "${PATROL_MODE:-loop}" = "loop" ]; then
     echo "✅ 巡逻模式：零 token loop（间隔 ${PATROL_INTERVAL}s）"
+    if [ "${RUNNER_ENABLED:-true}" = "true" ]; then
+        echo "✅ 飞鱼腿模式：常驻 runner-daemon"
+    else
+        echo "ℹ️  飞鱼腿模式：已禁用"
+    fi
 else
     echo "✅ 巡逻模式：cron（每分钟触发，消耗 token）"
 fi
@@ -1101,10 +1094,14 @@ echo "✅ 调度模式：$MODE_LABEL"
 MAIN_MODEL_DISPLAY=$(python3 -c "
 import json
 try:
-    with open('$MODE_FILE') as f:
-        data = json.load(f)
-    m = data.get('mainAgentModel', '')
-    print(m if m else '（保持原模型）')
+    if '$MODE' == 'auto':
+        with open('$WORKSPACE/tmp/octopus/model-policy.json') as f:
+            data = json.load(f)
+        print(data.get('main_model', '（未生成）'))
+    elif '$MODE' == 'custom' and '$MAIN_MODEL':
+        print('$MAIN_MODEL')
+    else:
+        print('（按当前默认 / override）')
 except Exception:
     print('（未知）')
 " 2>/dev/null)
