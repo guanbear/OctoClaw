@@ -1045,6 +1045,23 @@ created: 2026-03-19
 
 ### 补充：模型可用性与健康探测
 
+### 补充：评测源收敛
+
+当前更建议的外部评测源是：
+
+- `PinchBench`
+- `Artificial Analysis`
+- `OpenClaw live compatibility`
+
+像 `Aider Polyglot` 这类时效性更弱、和 OpenClaw 场景距离更远的来源，不建议继续作为核心权重。当前更合适的组合是：
+
+- `PinchBench`
+- `Artificial Analysis`
+- `Claw-Eval`
+- `OpenClaw live compatibility`
+
+其中 `OpenRouter rankings` 可以补充为低权重生态信号，用来辅助判断 provider/生态可获得性，但不应作为核心能力榜。
+
 后面八爪鱼很值得再加一层：
 
 > **Model Availability & Health Probing**

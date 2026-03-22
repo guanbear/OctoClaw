@@ -5,15 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
 
-from octopus_config import MODEL_CATALOG_FILE, MODEL_POLICY_FILE, MODEL_SPEED_FILE, load_json, save_json
+from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SPEED_FILE, load_json, save_json
+from model_plan_state import compute_plan_value_score, ensure_plan_state_file, get_plan_state_entry, preferred_fallback_model, should_fallback_due_to_plan
 from model_pricing import ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens
 
 LATENCY_FILE = "/tmp/ironclaw-model-latency.json"
-BENCHMARK_SNAPSHOT_FILE = "/workspace/tmp/octopus/model-benchmarks.json"
 RETIRED_MODEL_PATTERNS = [r"glm-5-turbo", r"glm5-turbo"]
 
 MODEL_PRIORS = [
@@ -164,8 +165,28 @@ def load_speed_data() -> dict:
 
 
 def load_benchmark_overrides() -> dict:
-    data = load_json(BENCHMARK_SNAPSHOT_FILE)
-    return data if isinstance(data, dict) else {}
+    data = load_json(MODEL_BENCHMARKS_FILE)
+    if isinstance(data, dict):
+        models = data.get("models")
+        if isinstance(models, dict):
+            return models
+    return {}
+
+
+def ensure_benchmark_snapshot_file() -> dict:
+    data = load_json(MODEL_BENCHMARKS_FILE)
+    if isinstance(data, dict) and isinstance(data.get("models"), dict):
+        return data
+
+    seed_file = os.path.join(os.path.dirname(__file__), "model-benchmarks.json")
+    seed = load_json(seed_file)
+    if isinstance(seed, dict):
+        save_json(MODEL_BENCHMARKS_FILE, seed)
+        return seed
+
+    payload = {"updated_at": now_iso(), "sources": [], "models": {}}
+    save_json(MODEL_BENCHMARKS_FILE, payload)
+    return payload
 
 
 def normalize(values: list[float], value: float, reverse: bool = False) -> float:
@@ -182,6 +203,8 @@ def normalize(values: list[float], value: float, reverse: bool = False) -> float
 
 def build_catalog() -> dict:
     ensure_pricing_file()
+    ensure_plan_state_file()
+    ensure_benchmark_snapshot_file()
     model_ids = load_models_from_openclaw()
     latency_data = load_latency_data()
     speed_data = load_speed_data()
@@ -192,12 +215,14 @@ def build_catalog() -> dict:
         prior = match_prior(model_id)
         latency = latency_data.get(model_id, {})
         override = benchmark_overrides.get(model_id, {})
+        benchmark_scores = dict(override.get("benchmark_scores", {}))
 
         pricing = dict(prior["pricing"])
         pricing.update(override.get("pricing", {}))
         pricing_entry = get_pricing_entry(model_id)
         if pricing_entry:
             pricing["pricing_mode"] = pricing_entry.get("pricing_mode")
+            pricing["billing_cycle"] = pricing_entry.get("billing_cycle")
             pricing["cost_score"] = pricing_entry.get("cost_score")
             pricing["effective_monthly_price_cny"] = pricing_entry.get("effective_monthly_price_cny")
             pricing["effective_cny_per_1m_tokens"] = infer_effective_cny_per_1m_tokens(model_id)
@@ -220,6 +245,8 @@ def build_catalog() -> dict:
         if isinstance(error_rate, (int, float)):
             scores["reliability"] = max(0.0, min(1.0, 1.0 - float(error_rate)))
 
+        plan_state = get_plan_state_entry(model_id) or {}
+
         records.append(
             {
                 "id": model_id,
@@ -227,11 +254,13 @@ def build_catalog() -> dict:
                 "available": bool(local_speed.get("available", latency.get("available", True))) if isinstance(local_speed, dict) else bool(latency.get("available", True)),
                 "pricing": pricing,
                 "scores": scores,
+                "benchmark_scores": benchmark_scores,
                 "speed": speed,
                 "provider": model_id.split("/")[0] if "/" in model_id else "unknown",
                 "private": any(token in model_id.lower() for token in ("lixiang-", "kivy-", "bailian", "private")),
                 "source_refs": sorted(set(prior.get("source_refs", []) + override.get("source_refs", []))),
                 "pricing_entry": pricing_entry or {},
+                "plan_state": plan_state,
             }
         )
 
@@ -276,21 +305,42 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         reasoning = float(scores.get("reasoning", 0.65))
         openclaw = float(scores.get("openclaw", 0.65))
         writing = float(scores.get("writing", 0.65))
+        benchmark_scores = model.get("benchmark_scores", {})
+        pinchbench = float(benchmark_scores.get("pinchbench", openclaw))
+        aa_coding = float(benchmark_scores.get("artificial_analysis_coding", coding))
+        claw_eval = float(benchmark_scores.get("claw_eval", benchmark_scores.get("openclaw_live_compat", openclaw)))
+        openrouter_rankings = float(benchmark_scores.get("openrouter_rankings", 0.5))
+        openclaw_live_compat = float(benchmark_scores.get("openclaw_live_compat", claw_eval))
+        benchmark_support = 0.35 * pinchbench + 0.30 * aa_coding + 0.25 * claw_eval + 0.10 * openrouter_rankings
+        plan_value_score = compute_plan_value_score(model["id"])
+        availability_score = 0.0 if should_fallback_due_to_plan(model["id"]) else 1.0
+        if should_fallback_due_to_plan(model["id"]):
+            reliability = max(0.0, reliability - 0.20)
 
         role_scores = {
-            "runner": 0.50 * ttft_score + 0.20 * reliability + 0.15 * price_score + 0.15 * throughput_score,
-            "fix": 0.35 * coding + 0.25 * openclaw + 0.20 * reliability + 0.10 * price_score + 0.10 * ttft_score,
-            "test": 0.33 * coding + 0.27 * openclaw + 0.20 * reliability + 0.10 * price_score + 0.10 * ttft_score,
-            "scout": 0.30 * openclaw + 0.25 * reasoning + 0.20 * writing + 0.15 * price_score + 0.10 * reliability,
-            "writer": 0.35 * writing + 0.25 * reasoning + 0.15 * price_score + 0.15 * throughput_score + 0.10 * reliability,
-            "analyze": 0.35 * reasoning + 0.25 * coding + 0.20 * openclaw + 0.10 * reliability + 0.10 * price_score,
-            "power": 0.30 * reasoning + 0.25 * coding + 0.20 * openclaw + 0.15 * reliability + 0.10 * price_score,
-            "main": 0.35 * coding + 0.25 * openclaw + 0.20 * reasoning + 0.10 * reliability + 0.10 * ttft_score,
+            "runner": 0.45 * ttft_score + 0.15 * reliability + 0.10 * throughput_score + 0.15 * plan_value_score + 0.10 * price_score + 0.03 * claw_eval + 0.02 * openrouter_rankings,
+            "fix": 0.26 * coding + 0.16 * openclaw + 0.16 * reliability + 0.14 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score,
+            "test": 0.24 * coding + 0.18 * openclaw + 0.16 * reliability + 0.14 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score,
+            "scout": 0.20 * openclaw + 0.18 * reasoning + 0.18 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.05 * plan_value_score,
+            "writer": 0.28 * writing + 0.18 * reasoning + 0.14 * throughput_score + 0.10 * pinchbench + 0.08 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.07 * plan_value_score,
+            "analyze": 0.22 * reasoning + 0.16 * coding + 0.16 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * price_score,
+            "power": 0.20 * reasoning + 0.16 * coding + 0.16 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.09 * reliability + 0.05 * price_score,
+            "main": 0.20 * coding + 0.16 * openclaw + 0.15 * reasoning + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * ttft_score + 0.03 * availability_score,
         }
         enriched.append((model, role_scores))
 
     def pick(role: str) -> str:
-        return max(enriched, key=lambda item: item[1][role])[0]["id"]
+        ordered = sorted(enriched, key=lambda item: item[1][role], reverse=True)
+        for model, _ in ordered:
+            if should_fallback_due_to_plan(model["id"]):
+                fallback = preferred_fallback_model(model["id"])
+                if fallback:
+                    for candidate, _ in ordered:
+                        if candidate["id"] == fallback:
+                            return candidate["id"]
+                    continue
+            return model["id"]
+        return ordered[0][0]["id"]
 
     labels = {
         "octopus-runner": pick("runner"),

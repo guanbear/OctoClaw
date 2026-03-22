@@ -108,6 +108,56 @@ python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 ```
 
+## 自动选模输入层
+
+现在 `auto` 模式会同时考虑 4 层输入：
+
+- 本地测速：`/workspace/tmp/octopus/model-speed.json`
+- 第三方 benchmark 快照：`/workspace/tmp/octopus/model-benchmarks.json`
+- 套餐状态：`/workspace/tmp/octopus/model-plan-state.json`
+- 价格模型：`/workspace/tmp/octopus/model-pricing.json`
+
+当前更推荐的 benchmark 来源是：
+
+- `PinchBench`：更贴 OpenClaw agent 场景
+- `Artificial Analysis`：更适合 coding / reasoning 能力对比
+- `Claw-Eval`：更适合补真实 agent workflow 表现
+- `OpenClaw live compatibility`：更适合作为你自己的本地验证层
+- `OpenRouter rankings`：更适合作低权重生态/可用性信号
+
+推荐的使用方式是：
+
+- `PinchBench`、`Artificial Analysis`、`Claw-Eval` 作为主 benchmark 输入
+- `OpenClaw live compatibility` 作为本地反馈层
+- `OpenRouter rankings` 只做低权重辅助，不作为核心能力榜
+
+能自动推断或自动同步的：
+
+- `openclaw models list --json` 里的可用模型
+- 本地 TTFT / TPS / error-rate（前提是本地 latency 文件存在）
+- 已知模型模式对应的计费类型，例如：
+  - `subscription_request_plan`
+  - `subscription_prompt_plan`
+  - `subscription_seat_plan`
+  - `token_pack`
+- 已知模型模式对应的计费周期，例如：
+  - `monthly`
+  - `yearly`
+  - `one_time`
+
+通常仍需要你维护或后续接 provider API 的：
+
+- 包月 / 包年的续费时间
+- 当前剩余额度比例
+- 是否希望“临近到期优先消耗”
+- 额度过低时 fallback 到哪个模型
+
+也就是说：
+
+- **套餐类型** 可以一次建模后长期复用
+- **包月/包年周期** 通常也可以一次建模后长期复用
+- **实时剩余额度** 通常不能稳定自动获取，后面更适合接 provider API；在那之前先维护 `model-plan-state.json`
+
 ## 开源发布材料
 
 - [CHANGELOG.md](./CHANGELOG.md)

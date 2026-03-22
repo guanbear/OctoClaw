@@ -135,6 +135,23 @@ created: 2026-03-20
 
 这层先把 `octoclaw_route / octoclaw_dispatch / octoclaw_status` 暴露成 OpenClaw 可直接调用的工具入口，减少“只靠 AGENTS.md 提示主 agent 自由判断”的不稳定性。
 
+## 4.0.1 benchmark 输入收敛
+
+自动选模后续应优先维护这三类外部信号：
+
+- `PinchBench`
+- `Artificial Analysis`
+- `OpenClaw live compatibility`
+
+这比继续依赖时效性更弱、与 OpenClaw 场景更远的来源更稳。当前建议的 benchmark 结构是：
+
+- `PinchBench`
+- `Artificial Analysis`
+- `Claw-Eval`
+- `OpenClaw live compatibility`
+
+另外可以补一个低权重的 `OpenRouter rankings` 生态信号，用来帮助 provider/路由可获得性判断，但不要把它当主能力榜。
+
 ## 4.1 官方通用 session / subagent 能力接入
 
 ### 目标

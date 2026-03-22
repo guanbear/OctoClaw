@@ -1,0 +1,103 @@
+{
+  "updated_at": "2026-03-22T00:00:00Z",
+  "sources": [
+    "pinchbench",
+    "artificial_analysis",
+    "claw_eval",
+    "openrouter_rankings",
+    "openclaw_live_compat"
+  ],
+  "models": {
+    "omniroute/cx/gpt-5.4": {
+      "scores": {
+        "coding": 0.97,
+        "reasoning": 0.96,
+        "openclaw": 0.93,
+        "writing": 0.9,
+        "reliability": 0.92
+      },
+      "benchmark_scores": {
+        "pinchbench": 0.86,
+        "artificial_analysis_coding": 0.96,
+        "claw_eval": 0.91,
+        "openrouter_rankings": 0.89,
+        "openclaw_live_compat": 0.95
+      },
+      "source_refs": [
+        "pinchbench_2026-03-18",
+        "artificial_analysis_coding_2026-03",
+        "claw_eval_2026-03-22",
+        "openrouter_rankings_2026-03-22",
+        "openclaw_live_testing_2026-03"
+      ]
+    },
+    "openai-codex/gpt-5.4": {
+      "scores": {
+        "coding": 0.97,
+        "reasoning": 0.96,
+        "openclaw": 0.93,
+        "writing": 0.9,
+        "reliability": 0.92
+      },
+      "benchmark_scores": {
+        "pinchbench": 0.86,
+        "artificial_analysis_coding": 0.96,
+        "claw_eval": 0.91,
+        "openrouter_rankings": 0.89,
+        "openclaw_live_compat": 0.95
+      },
+      "source_refs": [
+        "pinchbench_2026-03-18",
+        "artificial_analysis_coding_2026-03",
+        "claw_eval_2026-03-22",
+        "openrouter_rankings_2026-03-22",
+        "openclaw_live_testing_2026-03"
+      ]
+    },
+    "zhipu/GLM-4.7": {
+      "scores": {
+        "coding": 0.83,
+        "reasoning": 0.82,
+        "openclaw": 0.81,
+        "writing": 0.78,
+        "reliability": 0.83
+      },
+      "benchmark_scores": {
+        "pinchbench": 0.74,
+        "artificial_analysis_coding": 0.82,
+        "claw_eval": 0.84,
+        "openrouter_rankings": 0.78,
+        "openclaw_live_compat": 0.85
+      },
+      "source_refs": [
+        "claw_eval_2026-03-22",
+        "artificial_analysis_glm47_2026-03",
+        "openrouter_rankings_2026-03-22",
+        "openclaw_live_testing_2026-03"
+      ]
+    },
+    "minimax-portal/MiniMax-M2.7": {
+      "scores": {
+        "coding": 0.8,
+        "reasoning": 0.81,
+        "openclaw": 0.79,
+        "writing": 0.88,
+        "reliability": 0.82
+      },
+      "benchmark_scores": {
+        "pinchbench": 0.81,
+        "artificial_analysis_coding": 0.79,
+        "claw_eval": 0.83,
+        "openrouter_rankings": 0.81,
+        "openclaw_live_compat": 0.82
+      },
+      "source_refs": [
+        "claw_eval_2026-03-22",
+        "pinchbench_minimax_family_2026-03",
+        "artificial_analysis_minimax_family_2026-03",
+        "openrouter_rankings_2026-03-22",
+        "openclaw_live_testing_2026-03"
+      ]
+    }
+  }
+}

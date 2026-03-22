@@ -99,6 +99,48 @@ python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 ```
 
+## Model Inputs
+
+Auto mode now considers four input layers:
+
+- Local speed metrics: `/workspace/tmp/octopus/model-speed.json`
+- Benchmark snapshot: `/workspace/tmp/octopus/model-benchmarks.json`
+- Plan state: `/workspace/tmp/octopus/model-plan-state.json`
+- Pricing model: `/workspace/tmp/octopus/model-pricing.json`
+
+Recommended benchmark sources:
+
+- PinchBench for OpenClaw agent suitability
+- Artificial Analysis for coding / reasoning capability
+- Claw-Eval for real-world agent workflow performance
+- OpenClaw live compatibility as your local validation layer
+- OpenRouter rankings as a low-weight ecosystem / availability signal
+
+How we use them:
+
+- PinchBench, Artificial Analysis, and Claw-Eval are primary benchmark inputs
+- OpenClaw live compatibility is a local feedback layer
+- OpenRouter rankings are secondary only; they help with ecosystem / routing confidence, not core capability ranking
+
+What can be inferred automatically:
+
+- available models from `openclaw models list --json`
+- local TTFT / TPS / error-rate if your local latency source exists
+- pricing mode and default billing cycle once you map a model pattern
+
+What still needs user-maintained or provider-synced data:
+
+- monthly / yearly plan renewal date
+- remaining request / prompt ratio
+- whether a plan should be used before expiry
+- fallback model when quota gets low
+
+In practice:
+
+- package type (`subscription_request_plan`, `subscription_prompt_plan`, `subscription_seat_plan`, `token_pack`) can be seeded once and then reused
+- billing cycle (`monthly`, `yearly`, `one_time`) can usually be seeded once and reused
+- live remaining quota usually cannot be inferred reliably without provider-specific APIs, so keep it in `model-plan-state.json` or add a provider sync later
+
 ## Project Layout
 
 ```text
