@@ -1054,7 +1054,7 @@ print('✅ 无版本号旧规则已清除')
     # 注入新版规则（在文件末尾追加）
     cat >> "$AGENTS_FILE" <<OCTOPUS_RULES
 
-<!-- octopus:core-rules v1.5.0 -->
+<!-- octopus:core-rules v1.6.0 -->
 ## 🐙 八爪鱼核心原则（始终生效）
 
 ### 🚨 核心铁律
@@ -1065,11 +1065,20 @@ print('✅ 无版本号旧规则已清除')
 - 同文件写操作必须串行；强依赖任务必须等待上游结果
 - 所有 spawn 完成后，turn 末尾统一调用一次 `cron.run("octopus-patrol")`
 
+### route / dispatch 规范
+
+- 非纯简单问答，先做 route 判断，不要主 Agent 自己临场拍板
+- 若 `octoclaw_route` / `octoclaw_dispatch` / `octoclaw_status` 工具可用，优先调用工具
+- 若工具不可用，回退到脚本：
+  - route：`python3 ${SKILL_ROOT}/lib/octoclaw_route.py --task "..."`
+  - dispatch：`python3 ${SKILL_ROOT}/lib/dispatch_task.py --task "..."`
+  - status：`bash ${SKILL_ROOT}/lib/status.sh --format table`
+- shell / log / status / curl / grep / head / tail / 端口 / 进程 / 环境检查 这类快任务，优先 route 到 runner
+- 多步调研、编码、改文件、长执行、高风险分析，优先 route 到 `spawn_single` 或 `spawn_multi`
+
 ### spawn 规范
 
-- 模糊任务先问路由器：`python3 ${SKILL_ROOT}/lib/octoclaw_route.py --task "..."`
 - label：`octopus-power/scout/writer/fix/test/analyze/runner/feishu`
-- 主调度优先走统一入口：`python3 ${SKILL_ROOT}/lib/dispatch_task.py --task "..."`
 - 查询状态、轻 shell、日志检查、curl/grep/head/tail 这类快任务，命中后优先走 runner，不再直接 spawn 子 Agent
 - task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `${STATE_DIR}/shared/{task_id}.md`
 - 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
@@ -1107,8 +1116,27 @@ OCTOPUS_RULES
     echo "✅ octopus:core-rules 已注入（最新版）→ $AGENTS_FILE"
 }
 
+install_runtime_extension() {
+    local extensions_dir="${HOME}/.openclaw/extensions"
+    local source_dir="${SKILL_ROOT}/extensions/octoclaw-runtime"
+    local target_dir="${extensions_dir}/octoclaw-runtime"
+
+    if [ ! -d "$source_dir" ]; then
+        echo "⚠️ 未找到 runtime extension 目录，跳过工具化接管安装"
+        return
+    fi
+
+    mkdir -p "$extensions_dir"
+    if [ -L "$target_dir" ] || [ -d "$target_dir" ]; then
+        rm -rf "$target_dir"
+    fi
+    ln -s "$source_dir" "$target_dir"
+    echo "✅ 已安装 runtime extension → $target_dir"
+}
+
 # 自动注入 octopus:core-rules 到 AGENTS.md（在展示安装完成之前，确保规则已就绪）
 inject_agents_md
+install_runtime_extension
 
 echo ""
 echo "🎉 八爪鱼安装完成！"

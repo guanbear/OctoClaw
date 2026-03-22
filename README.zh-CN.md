@@ -50,6 +50,10 @@ OctoClaw 不是单纯的模型路由器，也不是单纯的 agent 模板。
 
 - 路由决策入口：[octoclaw_route.py](./lib/octoclaw_route.py)
 - 统一派发入口：[dispatch_task.py](./lib/dispatch_task.py)
+- Runtime extension 工具：
+  - `octoclaw_route`
+  - `octoclaw_dispatch`
+  - `octoclaw_status`
 - 常驻飞鱼腿：
   - [runner-daemon.sh](./lib/runner-daemon.sh)
   - [runner_dispatch.py](./lib/runner_dispatch.py)
@@ -69,13 +73,22 @@ bash /workspace/openclaw/skills/octopus/install.sh
 1. 安装 skill
 2. 通知后端使用 `auto` 或 `none`
 3. 让 `runner-daemon` 常驻
-4. 模糊任务先用 `octoclaw_route.py` 做 direct / runner / spawn 决策
-5. 用 `status.sh --format table` 看状态
-6. 用 `eval_suite.py` 跑一次最小基线
+4. 启用 `extensions/octoclaw-runtime` 里的 runtime extension
+5. 模糊任务先用 `octoclaw_route`，再按需 `octoclaw_dispatch`
+6. 用 `status.sh --format table` 看状态
+7. 用 `eval_suite.py` 跑一次最小基线
 
 ## 常用命令
 
 ```bash
+# Runtime extension 安装目标
+ls ~/.openclaw/extensions/octoclaw-runtime
+
+# 在 OpenClaw 里优先使用工具：
+# octoclaw_route
+# octoclaw_dispatch
+# octoclaw_status
+
 # 先做路由决策
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task '帮我分析这个报错并给修复建议'
 

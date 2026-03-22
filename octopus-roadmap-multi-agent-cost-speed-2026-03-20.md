@@ -128,6 +128,13 @@ created: 2026-03-20
 - 打分
 - 反馈学习
 
+当前仓库已经有最小 runtime extension 骨架：
+
+- `extensions/octoclaw-runtime/package.json`
+- `extensions/octoclaw-runtime/index.js`
+
+这层先把 `octoclaw_route / octoclaw_dispatch / octoclaw_status` 暴露成 OpenClaw 可直接调用的工具入口，减少“只靠 AGENTS.md 提示主 agent 自由判断”的不稳定性。
+
 ## 4.1 官方通用 session / subagent 能力接入
 
 ### 目标

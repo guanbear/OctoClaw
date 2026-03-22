@@ -1036,6 +1036,13 @@ created: 2026-03-19
 
 都更稳定、更可解释。
 
+当前仓库已经补了一个最小 runtime extension 骨架：
+
+- `extensions/octoclaw-runtime/package.json`
+- `extensions/octoclaw-runtime/index.js`
+
+它的价值不是替代 skill，而是给 OpenClaw 主 agent 一个更硬的工具入口，让它可以先调用 `octoclaw_route / octoclaw_dispatch / octoclaw_status`，而不是只读 `AGENTS.md` 后自己拍板。
+
 ### 补充：模型可用性与健康探测
 
 后面八爪鱼很值得再加一层：

@@ -30,6 +30,10 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 
 - Route decision entry: [`octoclaw_route.py`](./lib/octoclaw_route.py)
 - Unified dispatch entry: [`dispatch_task.py`](./lib/dispatch_task.py)
+- Runtime extension tools:
+  - `octoclaw_route`
+  - `octoclaw_dispatch`
+  - `octoclaw_status`
 - Persistent runner:
   - [`runner-daemon.sh`](./lib/runner-daemon.sh)
   - [`runner_dispatch.py`](./lib/runner_dispatch.py)
@@ -59,13 +63,22 @@ Recommended minimal open-source path:
 1. Install the skill
 2. Keep notifications on `auto` or `none`
 3. Let `runner-daemon` run in the background
-4. Route ambiguous work through `octoclaw_route.py`
-5. Use `status.sh --format table` to inspect state
-6. Run `eval_suite.py` once to establish a baseline
+4. Enable the bundled runtime extension from `extensions/octoclaw-runtime`
+5. Route ambiguous work through `octoclaw_route`, then `octoclaw_dispatch`
+6. Use `status.sh --format table` to inspect state
+7. Run `eval_suite.py` once to establish a baseline
 
 ## Common Commands
 
 ```bash
+# Runtime extension install target
+ls ~/.openclaw/extensions/octoclaw-runtime
+
+# In OpenClaw, prefer these tools when available:
+# octoclaw_route
+# octoclaw_dispatch
+# octoclaw_status
+
 # Route first
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze this error and give me a fix plan'
 
@@ -96,6 +109,8 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 ├── install.sh
 ├── CHANGELOG.md
 ├── RELEASE_NOTES_v0.1.0.md
+├── extensions/
+│   └── octoclaw-runtime/
 ├── eval/
 └── lib/
     ├── dispatch_task.py
