@@ -152,6 +152,27 @@ created: 2026-03-20
 
 另外可以补一个低权重的 `OpenRouter rankings` 生态信号，用来帮助 provider/路由可获得性判断，但不要把它当主能力榜。
 
+同一层里还应补齐“预算型套餐”支持：
+
+- token 计费模型支持 `monthly_budget_cny`
+- 支持 `current_month_spent_cny`
+- 支持 `soft_limit_ratio` / `hard_limit_ratio`
+- 在接近预算上限时自动降权或 fallback
+
+`NadirClaw` 最值得借的部分主要是预算防护：
+
+- 预算紧张时优先降级便宜模型
+- 对 agentic / tool-heavy 任务保留更强模型
+- 用策略 profile，而不是单一 hardcode
+
+但 OctoClaw 不应该照搬成 proxy router；更合理的是把预算防护接进：
+
+- `model-plan-state.json`
+- `model-intel.py`
+- `octoclaw_route`
+
+这样预算影响的不只是“换模型”，还会影响 `direct / runner / spawn` 的结构化分流。
+
 ## 4.1 官方通用 session / subagent 能力接入
 
 ### 目标

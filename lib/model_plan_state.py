@@ -19,12 +19,14 @@ DEFAULT_MODEL_PLAN_STATE: dict[str, Any] = {
             "plan_type": "subscription_seat_plan",
             "billing_cycle": "monthly",
             "renewal_at": "",
-            "remaining_ratio_estimate": 0.55,
+            "remaining_ratio_estimate": 0.65,
             "availability_bias": 0.0,
             "sunk_cost_bias": 0.08,
             "fallback_model": "",
+            "sync_source": "omniroute",
+            "can_auto_sync_remaining_ratio": True,
             "notes": [
-                "Plus seat 不是典型 hard quota，更适合保守估算 remaining_ratio。",
+                "Codex/Plus 包月 seat，remaining_ratio 更适合从 Omniroute 同步。",
                 "更适合作 main/deep，不建议靠它吃快任务流量。"
             ]
         },
@@ -33,15 +35,15 @@ DEFAULT_MODEL_PLAN_STATE: dict[str, Any] = {
             "model_key": "glm-4.7-coding-lite",
             "plan_type": "subscription_prompt_plan",
             "billing_cycle": "yearly",
-            "renewal_at": "",
-            "remaining_ratio_estimate": 0.95,
+            "renewal_at": "2026-12-28T00:00:00+08:00",
+            "remaining_ratio_estimate": 0.85,
             "availability_bias": -0.03,
-            "peak_hour_throttle_penalty": 0.06,
+            "peak_hour_throttle_penalty": 0.08,
             "sunk_cost_bias": 0.04,
             "fallback_model": "",
             "notes": [
                 "包年老套餐，边际成本极低。",
-                "高峰期有轻微限速，runner 选模应考虑这点。"
+                "高峰期有一点限速，runner 选模应考虑这点。"
             ]
         },
         {
@@ -49,16 +51,19 @@ DEFAULT_MODEL_PLAN_STATE: dict[str, Any] = {
             "model_key": "minimax-m2.7-plus-highspeed",
             "plan_type": "subscription_request_plan",
             "billing_cycle": "monthly",
-            "renewal_at": "",
-            "remaining_ratio_estimate": 0.75,
+            "renewal_at": "2026-04-17T00:00:00+08:00",
+            "remaining_ratio_estimate": 0.80,
             "availability_bias": 0.02,
             "sunk_cost_bias": 0.18,
             "use_before_expiry": True,
+            "request_limit_per_5h": 1500,
+            "expected_output_tps": 100,
             "fallback_when_remaining_ratio_below": 0.10,
             "fallback_model": "zhipu/GLM-4.7",
             "notes": [
-                "包月高速度套餐，不用会浪费，应适度优先消耗。",
-                "额度接近用尽时回退到 GLM-4.7。"
+                "Plus-极速版月度套餐，1500次调用/5小时。",
+                "支持 MiniMax-M2.7-highspeed，约 100 TPS，适合优先承担 runner/快任务。",
+                "包月额度不用会浪费，应适度优先消耗；额度接近用尽时回退到 GLM-4.7。"
             ]
         }
     ]
@@ -111,6 +116,17 @@ def compute_plan_value_score(model_id: str) -> float:
     if isinstance(floor_ratio, (int, float)) and remaining_ratio < float(floor_ratio):
         score -= 0.35
 
+    monthly_budget_cny = entry.get("monthly_budget_cny")
+    current_month_spent_cny = entry.get("current_month_spent_cny")
+    soft_limit_ratio = entry.get("soft_limit_ratio")
+    hard_limit_ratio = entry.get("hard_limit_ratio")
+    if isinstance(monthly_budget_cny, (int, float)) and float(monthly_budget_cny) > 0 and isinstance(current_month_spent_cny, (int, float)):
+        spend_ratio = float(current_month_spent_cny) / float(monthly_budget_cny)
+        if isinstance(soft_limit_ratio, (int, float)) and spend_ratio >= float(soft_limit_ratio):
+            score -= 0.15
+        if isinstance(hard_limit_ratio, (int, float)) and spend_ratio >= float(hard_limit_ratio):
+            score -= 0.45
+
     return max(0.0, min(1.0, score))
 
 
@@ -121,7 +137,14 @@ def should_fallback_due_to_plan(model_id: str) -> bool:
     floor_ratio = entry.get("fallback_when_remaining_ratio_below")
     remaining_ratio = entry.get("remaining_ratio_estimate")
     if isinstance(floor_ratio, (int, float)) and isinstance(remaining_ratio, (int, float)):
-        return float(remaining_ratio) < float(floor_ratio)
+        if float(remaining_ratio) < float(floor_ratio):
+            return True
+    monthly_budget_cny = entry.get("monthly_budget_cny")
+    current_month_spent_cny = entry.get("current_month_spent_cny")
+    hard_limit_ratio = entry.get("hard_limit_ratio")
+    if isinstance(monthly_budget_cny, (int, float)) and float(monthly_budget_cny) > 0 and isinstance(current_month_spent_cny, (int, float)) and isinstance(hard_limit_ratio, (int, float)):
+        if float(current_month_spent_cny) / float(monthly_budget_cny) >= float(hard_limit_ratio):
+            return True
     return False
 
 
@@ -129,4 +152,3 @@ def preferred_fallback_model(model_id: str) -> str:
     entry = get_plan_state_entry(model_id) or {}
     fallback = entry.get("fallback_model")
     return str(fallback or "")
-

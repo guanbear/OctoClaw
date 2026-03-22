@@ -134,12 +134,15 @@ What still needs user-maintained or provider-synced data:
 - remaining request / prompt ratio
 - whether a plan should be used before expiry
 - fallback model when quota gets low
+- optional monthly budget for token-priced models
+- current-month spend if you want budget-aware fallback
 
 In practice:
 
 - package type (`subscription_request_plan`, `subscription_prompt_plan`, `subscription_seat_plan`, `token_pack`) can be seeded once and then reused
 - billing cycle (`monthly`, `yearly`, `one_time`) can usually be seeded once and reused
 - live remaining quota usually cannot be inferred reliably without provider-specific APIs, so keep it in `model-plan-state.json` or add a provider sync later
+- token-priced models can also be budget-governed with `monthly_budget_cny`, `current_month_spent_cny`, `soft_limit_ratio`, and `hard_limit_ratio`
 
 ## Project Layout
 

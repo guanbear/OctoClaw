@@ -909,6 +909,24 @@ created: 2026-03-19
 - 上面对 `ClawRouter` / `NadirClaw` 的“中文复杂度分类、主模型智商变换、缓存命中被稀释”等判断，属于**基于其公开架构描述与典型 router 工作方式的工程推断**，不是这些项目官方明说的自述。
 - 对“固定子 agent vs 临时子 agent”的结论，属于**结合 OpenClaw 当前通道能力边界与你现有八爪鱼实现的架构判断**。
 
+`NadirClaw` 里最值得借的，不是“把所有请求交给代理层分类”，而是**预算防护模式**：
+
+- 用 profile/模式表达预算倾向
+- 检测 agentic / tool-heavy 任务，避免错误地下放到便宜模型
+- 在预算紧张时自动降级、fallback、保护高价值任务
+
+OctoClaw 更合理的借法是：
+
+- 把预算防护接进 `model-plan-state.json`
+- 把 `eco / balanced / premium / reasoning` 的思路接进 `octoclaw_route`
+- 不只切模型，也切 route：
+  - `direct`
+  - `runner`
+  - `spawn_single`
+  - `spawn_multi`
+
+也就是说，OctoClaw 借的是 `NadirClaw` 的预算防护思想，而不是退化成 proxy router。
+
 ---
 
 ## 补充一：模型分流方向校准
@@ -1061,6 +1079,8 @@ created: 2026-03-19
 - `OpenClaw live compatibility`
 
 其中 `OpenRouter rankings` 可以补充为低权重生态信号，用来辅助判断 provider/生态可获得性，但不应作为核心能力榜。
+
+套餐经济学后面也不应只服务于“包月/包年模型”。对于 token 计费模型，更合理的做法是引入月预算与软/硬限额，让 OctoClaw 在接近预算上限时自动降权或 fallback。
 
 后面八爪鱼很值得再加一层：
 

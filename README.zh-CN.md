@@ -151,12 +151,15 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 - 当前剩余额度比例
 - 是否希望“临近到期优先消耗”
 - 额度过低时 fallback 到哪个模型
+- token 计费模型的月预算
+- 当前月已花费金额（如果你希望按预算自动降权）
 
 也就是说：
 
 - **套餐类型** 可以一次建模后长期复用
 - **包月/包年周期** 通常也可以一次建模后长期复用
 - **实时剩余额度** 通常不能稳定自动获取，后面更适合接 provider API；在那之前先维护 `model-plan-state.json`
+- **token 计费模型** 也可以通过 `monthly_budget_cny`、`current_month_spent_cny`、`soft_limit_ratio`、`hard_limit_ratio` 做预算型 fallback
 
 ## 开源发布材料
 
