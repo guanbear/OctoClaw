@@ -81,24 +81,6 @@ DEFAULT_MODEL_PRICING: dict[str, Any] = {
                 "minimax_token_plan_2026-03",
             ],
         },
-        {
-            "match_patterns": ["glm-5-turbo", "glm5-turbo"],
-            "model_key": "glm-5-turbo-token-pack",
-            "pricing_mode": "token_pack",
-            "pack_price_cny": 39.0,
-            "included_tokens": 35000000,
-            "remaining_tokens": 0,
-            "effective_cny_per_1m_tokens": 1.114286,
-            "cost_score": 2,
-            "notes": [
-                "按 39 元 / 3500 万 tokens 折算",
-                "当前你这包已用完，自动选模可视为 unavailable",
-            ],
-            "source_refs": [
-                "user_report_2026-03-18",
-                "bigmodel_glm5_turbo_2026-03",
-            ],
-        },
     ],
 }
 

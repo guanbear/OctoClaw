@@ -2972,6 +2972,25 @@ _ALIAS_CHECK_LAST_TS: float = 0.0  # 上次检查时间戳（秒）
 _ALIAS_CHECK_INTERVAL = 900  # 15 分钟缓存
 
 
+def parse_openclaw_json_output(raw: str):
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError("empty output")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    for idx, ch in enumerate(raw):
+        if ch not in "[{":
+            continue
+        try:
+            return json.loads(raw[idx:])
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("no JSON payload found in output")
+
+
 def check_model_aliases():
     """
     检查别名文件里的模型是否可用，失败时自动重新匹配并更新。
@@ -3010,7 +3029,7 @@ def check_model_aliases():
         if result.returncode != 0:
             print(f"⚠️  check_model_aliases: openclaw models list 失败: {result.stderr[:200]}")
             return
-        models_data = json.loads(result.stdout)
+        models_data = parse_openclaw_json_output(result.stdout)
         # 支持列表或字典格式（新格式: {"count": N, "models": [{"key": "...", ...}]}）
         if isinstance(models_data, list):
             # 旧格式：直接是模型 ID 列表

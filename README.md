@@ -28,6 +28,7 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 
 ## Core Features
 
+- Route decision entry: [`octoclaw_route.py`](./lib/octoclaw_route.py)
 - Unified dispatch entry: [`dispatch_task.py`](./lib/dispatch_task.py)
 - Persistent runner:
   - [`runner-daemon.sh`](./lib/runner-daemon.sh)
@@ -39,12 +40,12 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 
 ## Routing Modes
 
-| Mode | Use case | trivial~normal | hard~deep |
+| Mode | Use case | lower tiers | higher tiers |
 | --- | --- | --- | --- |
-| `balanced` | default daily mode | GLM | Sonnet |
-| `quality` | quality-first work | Sonnet | Opus |
-| `cost` | batch / cheap mode | GLM | Sonnet |
-| `private` | privacy-sensitive mode | GLM | GLM |
+| `balanced` | default daily mode | lower-cost general models | stronger reasoning / coding models |
+| `quality` | quality-first work | strong models by default | top-end models when needed |
+| `cost` | batch / cheap mode | cheaper models whenever possible | only escalate when necessary |
+| `private` | privacy-sensitive mode | private / self-hosted models | private / self-hosted models |
 | `auto` | dynamic selection | local speed / price / capability driven | local speed / price / capability driven |
 
 ## Quick Start
@@ -58,12 +59,16 @@ Recommended minimal open-source path:
 1. Install the skill
 2. Keep notifications on `auto` or `none`
 3. Let `runner-daemon` run in the background
-4. Use `status.sh --format table` to inspect state
-5. Run `eval_suite.py` once to establish a baseline
+4. Route ambiguous work through `octoclaw_route.py`
+5. Use `status.sh --format table` to inspect state
+6. Run `eval_suite.py` once to establish a baseline
 
 ## Common Commands
 
 ```bash
+# Route first
+python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze this error and give me a fix plan'
+
 # Unified dispatch entry
 python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task 'check redis logs and port status' --command 'ss -lntp | grep 6379'
 

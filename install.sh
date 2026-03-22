@@ -5,6 +5,42 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
 OCTOPUS_RULES_VERSION="v1.5.0"
+SKILL_ROOT="${SKILL_ROOT:-$SCRIPT_DIR}"
+
+detect_openclaw_workdir() {
+    local service_file
+    service_file="$(systemctl cat openclaw.service 2>/dev/null || true)"
+    if [ -n "$service_file" ]; then
+        printf '%s\n' "$service_file" | sed -n 's/^WorkingDirectory=//p' | head -n 1
+        return 0
+    fi
+    return 1
+}
+
+detect_agents_workspace() {
+    if [ -n "${AGENTS_WORKSPACE:-}" ]; then
+        printf '%s\n' "$AGENTS_WORKSPACE"
+        return 0
+    fi
+
+    if [ -d "$HOME/.openclaw/workspace" ]; then
+        printf '%s\n' "$HOME/.openclaw/workspace"
+        return 0
+    fi
+
+    local detected
+    detected="$(detect_openclaw_workdir || true)"
+    if [ -n "$detected" ]; then
+        printf '%s\n' "$detected"
+        return 0
+    fi
+
+    printf '%s\n' "$WORKSPACE"
+}
+
+AGENTS_WORKSPACE="${AGENTS_WORKSPACE:-$(detect_agents_workspace)}"
+AGENTS_FILE="${AGENTS_WORKSPACE}/AGENTS.md"
+STATE_DIR="${WORKSPACE}/tmp/octopus"
 
 # ── 加载功能开关配置 ──────────────────────────────────────────────────────────
 OCTOPUS_CONFIG="$SCRIPT_DIR/lib/config.sh"
@@ -305,7 +341,6 @@ do_uninstall() {
     _delete_cron_by_name "octopus-update-check"
 
     # 2. 从 AGENTS.md 删除规则注入
-    AGENTS_FILE="$WORKSPACE/AGENTS.md"
     if [ -f "$AGENTS_FILE" ]; then
         # 先备份
         local UNINSTALL_TS
@@ -328,7 +363,7 @@ with open('$AGENTS_FILE', 'w') as f:
 print('✅ 已从 AGENTS.md 移除规则注入')
 " 2>/dev/null || echo "⚠️  AGENTS.md 规则移除失败，请手动删除 octopus:core-rules 块"
     else
-        echo "ℹ️  未找到 AGENTS.md，跳过规则清理"
+        echo "ℹ️  未找到 $AGENTS_FILE，跳过规则清理"
     fi
 
     # 3. 删除 tmp 目录
@@ -965,11 +1000,13 @@ fi
 # 自动注入 octopus:core-rules 到 AGENTS.md
 # ─────────────────────────────────────────────
 inject_agents_md() {
-    local AGENTS_FILE="$WORKSPACE/AGENTS.md"
-
     if [ ! -f "$AGENTS_FILE" ]; then
-        echo "⚠️  未找到 AGENTS.md，跳过规则注入"
-        return 0
+        mkdir -p "$AGENTS_WORKSPACE"
+        cat > "$AGENTS_FILE" <<'EOF'
+# Workspace instructions
+
+EOF
+        echo "✅ 已创建 AGENTS.md: $AGENTS_FILE"
     fi
 
     # 备份（无论新装还是升级都备份）
@@ -1015,7 +1052,7 @@ print('✅ 无版本号旧规则已清除')
     fi
 
     # 注入新版规则（在文件末尾追加）
-    cat >> "$AGENTS_FILE" << 'OCTOPUS_RULES'
+    cat >> "$AGENTS_FILE" <<OCTOPUS_RULES
 
 <!-- octopus:core-rules v1.5.0 -->
 ## 🐙 八爪鱼核心原则（始终生效）
@@ -1030,12 +1067,13 @@ print('✅ 无版本号旧规则已清除')
 
 ### spawn 规范
 
+- 模糊任务先问路由器：`python3 ${SKILL_ROOT}/lib/octoclaw_route.py --task "..."`
 - label：`octopus-power/scout/writer/fix/test/analyze/runner/feishu`
-- 主调度优先走统一入口：`python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task "..."`
+- 主调度优先走统一入口：`python3 ${SKILL_ROOT}/lib/dispatch_task.py --task "..."`
 - 查询状态、轻 shell、日志检查、curl/grep/head/tail 这类快任务，命中后优先走 runner，不再直接 spawn 子 Agent
-- task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `/workspace/tmp/octopus/shared/{task_id}.md`
+- task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `${STATE_DIR}/shared/{task_id}.md`
 - 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
-- 详细状态写入和 RESULT 模板以 `/workspace/openclaw/skills/octopus/lib/spawn-template.md` 为准
+- 详细状态写入和 RESULT 模板以 `${SKILL_ROOT}/lib/spawn-template.md` 为准
 - 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
 
 ### 触手名字
@@ -1045,7 +1083,7 @@ print('✅ 无版本号旧规则已清除')
 ### 任务分级与模型选择
 
 - 级别：`trivial/simple/normal/hard/deep`
-- 选模优先读 `/workspace/tmp/octopus/model-policy.json`（auto 模式），否则读 `octopus-mode.json` + `octopus-model-aliases.json`
+- 选模优先读 `${STATE_DIR}/model-policy.json`（auto 模式），否则读 `octopus-mode.json` + `octopus-model-aliases.json`
 - `runner` 优先低首 token 延迟；`fix/test` 优先 coding；`analyze/power` 优先深度能力
 - 用户临时要求“最强/不惜成本”可升高模型；“保密/私有”优先私有模型
 
@@ -1055,7 +1093,7 @@ print('✅ 无版本号旧规则已清除')
 
 ### 任务状态（task-state.json）
 
-- 文件：`/workspace/tmp/octopus/task-state.json`
+- 文件：`${STATE_DIR}/task-state.json`
 - 子 Agent 负责开始时写 `running`，结束时写 `done/failed`
 - 最终输出必须以 `---RESULT---` 开头，否则视为未完成
 
@@ -1066,7 +1104,7 @@ print('✅ 无版本号旧规则已清除')
 <!-- /octopus:core-rules -->
 OCTOPUS_RULES
 
-    echo "✅ octopus:core-rules 已注入（最新版）"
+    echo "✅ octopus:core-rules 已注入（最新版）→ $AGENTS_FILE"
 }
 
 # 自动注入 octopus:core-rules 到 AGENTS.md（在展示安装完成之前，确保规则已就绪）
@@ -1087,7 +1125,7 @@ if [ "${PATROL_MODE:-loop}" = "loop" ]; then
 else
     echo "✅ 巡逻模式：cron（每分钟触发，消耗 token）"
 fi
-echo "✅ 调度规则已注入 AGENTS.md"
+echo "✅ 调度规则已注入：$AGENTS_FILE"
 echo "✅ 调度模式：$MODE_LABEL"
 
 # 读取并展示主 Agent 模型

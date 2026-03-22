@@ -14,6 +14,7 @@ from model_pricing import ensure_pricing_file, get_pricing_entry, infer_effectiv
 
 LATENCY_FILE = "/tmp/ironclaw-model-latency.json"
 BENCHMARK_SNAPSHOT_FILE = "/workspace/tmp/octopus/model-benchmarks.json"
+RETIRED_MODEL_PATTERNS = [r"glm-5-turbo", r"glm5-turbo"]
 
 MODEL_PRIORS = [
     {
@@ -79,6 +80,25 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def parse_openclaw_json_output(raw: str):
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError("empty output")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    for idx, ch in enumerate(raw):
+        if ch not in "[{":
+            continue
+        try:
+            return json.loads(raw[idx:])
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("no JSON payload found in output")
+
+
 def match_prior(model_id: str) -> dict:
     model_lower = model_id.lower()
     for item in MODEL_PRIORS:
@@ -93,6 +113,11 @@ def match_prior(model_id: str) -> dict:
     }
 
 
+def is_retired_model(model_id: str) -> bool:
+    model_lower = model_id.lower()
+    return any(re.search(pattern, model_lower) for pattern in RETIRED_MODEL_PATTERNS)
+
+
 def load_models_from_openclaw() -> list[str]:
     try:
         result = subprocess.run(
@@ -103,7 +128,7 @@ def load_models_from_openclaw() -> list[str]:
         )
         if result.returncode != 0:
             return []
-        data = json.loads(result.stdout)
+        data = parse_openclaw_json_output(result.stdout)
     except Exception:
         return []
 
@@ -117,7 +142,7 @@ def load_models_from_openclaw() -> list[str]:
                     ids.append(str(item["key"]))
         else:
             ids = [str(key) for key in data.keys()]
-    return ids
+    return [model_id for model_id in ids if not is_retired_model(model_id)]
 
 
 def load_latency_data() -> dict:

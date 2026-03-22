@@ -145,7 +145,12 @@ def _get_current_mode() -> str:
     return "balanced"
 
 
-def read_cache(tier: str) -> str | None:
+def cache_key(tier: str, label: str = "") -> str:
+    label = (label or "").strip()
+    return f"{label}::{tier}" if label else tier
+
+
+def read_cache(tier: str, label: str = "") -> str | None:
     """
     尝试读取模型缓存。命中返回模型路径，未命中返回 None。
     命中条件：
@@ -166,7 +171,7 @@ def read_cache(tier: str) -> str | None:
     if cache.get("ironclaw_guarded") != _get_ironclaw_guarded():
         return None
     models = cache.get("models", {})
-    return models.get(tier)
+    return models.get(cache_key(tier, label)) or models.get(tier)
 
 
 def write_cache(mode: str, ironclaw_guarded: bool, models: dict) -> None:
@@ -261,7 +266,7 @@ def main():
     # ── Step 0: 检查模型缓存 ─────────────────────────────────────────────
     # 注意：description 评分结果不进缓存（缓存仅按 mode/guard 状态）
     # 缓存命中后若有 description 仍需做升级检测
-    cached_model = read_cache(tier)
+    cached_model = read_cache(tier, args.label)
     if cached_model:
         # 即使命中缓存，也检查 description 是否建议升级 tier
         if args.description:
@@ -272,7 +277,7 @@ def main():
                     file=sys.stderr,
                 )
                 tier = suggested_tier
-                cached_model = read_cache(tier)
+                cached_model = read_cache(tier, args.label)
         if cached_model:
             print(f"INFO: 命中模型缓存 tier={tier} model={cached_model}", file=sys.stderr)
             print(cached_model)
@@ -374,7 +379,9 @@ def main():
     all_tiers_models: dict = {}
     for t in VALID_TIERS:
         if t == tier:
-            all_tiers_models[t] = full_path
+            all_tiers_models[cache_key(t, args.label if mode == "auto" else "")] = full_path
+            if mode != "auto" or not args.label:
+                all_tiers_models[t] = full_path
         else:
             # 复用当前已解析的 mode/rules/aliases 快速计算其他 tier
             if mode == "auto":
@@ -403,7 +410,9 @@ def main():
                     curr = guard_data.get("current_model", "")
                     if orig and curr and t_full_path == orig:
                         t_full_path = curr
-            all_tiers_models[t] = t_full_path
+            all_tiers_models[cache_key(t, args.label if mode == "auto" else "")] = t_full_path
+            if mode != "auto" or not args.label:
+                all_tiers_models[t] = t_full_path
     write_cache(mode, ironclaw_guarded, all_tiers_models)
     print(full_path)
 

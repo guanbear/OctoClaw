@@ -28,26 +28,27 @@ OctoClaw 不是单纯的模型路由器，也不是单纯的 agent 模板。
 
 ## 成本优化
 
-| 任务等级 | 典型任务 | 平衡模式用模型 | 费用 |
+| 任务等级 | 典型任务 | 推荐能力档位 | 费用 |
 |---------|---------|--------------|------|
-| trivial | 改配置、加文字 | GLM | 低 |
-| simple | 写脚本、改单文件 | GLM | 低 |
-| normal | 写代码、调 API | GLM | 低 |
-| hard | 复杂逻辑、多文件 | Sonnet | 中 |
-| deep | 复杂架构、深度分析 | Sonnet | 中 |
+| trivial | 改配置、加文字 | 低成本快模型 | 低 |
+| simple | 写脚本、改单文件 | 低成本通用模型 | 低 |
+| normal | 写代码、调 API | 中档执行模型 | 低到中 |
+| hard | 复杂逻辑、多文件 | 强推理/强编码模型 | 中 |
+| deep | 复杂架构、深度分析 | 顶级推理/审阅模型 | 中到高 |
 
 ### 调度模式
 
-| 模式 | 适用场景 | trivial~normal | hard~deep |
+| 模式 | 适用场景 | 低阶任务 | 高阶任务 |
 |------|---------|---------------|-----------|
-| `balanced` | 日常使用 | GLM | Sonnet |
-| `quality` | 重要任务 | Sonnet | Opus |
-| `cost` | 批量任务 | GLM | Sonnet |
-| `private` | 敏感数据 | GLM | GLM |
+| `balanced` | 日常使用 | 低成本通用模型 | 更强的推理/编码模型 |
+| `quality` | 重要任务 | 强模型优先 | 顶级模型按需升级 |
+| `cost` | 批量任务 | 尽量便宜 | 必要时才升级 |
+| `private` | 敏感数据 | 私有/自部署模型 | 私有/自部署模型 |
 | `auto` | 自动分配 | 按本地模型、速度与能力动态选择 | 按本地模型、速度与能力动态选择 |
 
 ## 关键能力
 
+- 路由决策入口：[octoclaw_route.py](./lib/octoclaw_route.py)
 - 统一派发入口：[dispatch_task.py](./lib/dispatch_task.py)
 - 常驻飞鱼腿：
   - [runner-daemon.sh](./lib/runner-daemon.sh)
@@ -68,12 +69,16 @@ bash /workspace/openclaw/skills/octopus/install.sh
 1. 安装 skill
 2. 通知后端使用 `auto` 或 `none`
 3. 让 `runner-daemon` 常驻
-4. 用 `status.sh --format table` 看状态
-5. 用 `eval_suite.py` 跑一次最小基线
+4. 模糊任务先用 `octoclaw_route.py` 做 direct / runner / spawn 决策
+5. 用 `status.sh --format table` 看状态
+6. 用 `eval_suite.py` 跑一次最小基线
 
 ## 常用命令
 
 ```bash
+# 先做路由决策
+python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task '帮我分析这个报错并给修复建议'
+
 # 统一派发入口
 python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task '查一下 redis 日志和端口状态' --command 'ss -lntp | grep 6379'
 

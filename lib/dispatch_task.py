@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Unified Octopus task dispatcher.
 
+- Ask octoclaw_route first
 - Fast lightweight tasks -> persistent runner
-- Other tasks -> return spawn recommendation (label/tier/model)
+- Other tasks -> return structured spawn recommendation
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from runner_routing import route_task
+from octoclaw_route import infer_route
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +45,8 @@ def infer_label(task: str) -> str:
 
 def infer_tier(task: str, label: str) -> str:
     text = (task or "").lower()
+    if any(token in text for token in ["并行", "同时", "分别", "一边", "parallel"]):
+        return "hard"
     if any(token in text for token in ["架构", "重构", "多文件", "根因", "系统设计", "microservice", "refactor"]):
         return "hard"
     if label in ("octopus-power", "octopus-analyze"):
@@ -101,13 +104,47 @@ def recommend_spawn(args, task: str) -> dict:
     tier = args.tier or infer_tier(task, label)
     model = resolve_model(tier, label, task)
     return {
-        "route": "spawn",
+        "route": "spawn_single",
         "executed": False,
         "label": label,
         "tier": tier,
         "model": model,
         "reason": "needs_subagent",
         "task": task,
+    }
+
+
+def recommend_multi_spawn(args, task: str) -> dict:
+    primary_label = args.label or infer_label(task)
+    primary_tier = args.tier or infer_tier(task, primary_label)
+    primary_model = resolve_model(primary_tier, primary_label, task)
+    plan = {
+        "planner": {
+            "label": "octopus-analyze",
+            "tier": "hard",
+            "model": resolve_model("hard", "octopus-analyze", task),
+        },
+        "worker": {
+            "label": primary_label,
+            "tier": primary_tier,
+            "model": primary_model,
+        },
+    }
+    if primary_label in ("octopus-fix", "octopus-power", "octopus-test"):
+        plan["review"] = {
+            "label": "octopus-test",
+            "tier": "normal",
+            "model": resolve_model("normal", "octopus-test", task),
+        }
+    return {
+        "route": "spawn_multi",
+        "executed": False,
+        "label": primary_label,
+        "tier": primary_tier,
+        "model": primary_model,
+        "reason": "parallel_or_staged_workflow",
+        "task": task,
+        "plan": plan,
     }
 
 
@@ -121,16 +158,32 @@ def main():
     parser.add_argument("--id", default="")
     parser.add_argument("--label", default="")
     parser.add_argument("--tier", default="")
-    parser.add_argument("--force-route", choices=["auto", "runner", "spawn"], default="auto")
+    parser.add_argument("--force-route", choices=["auto", "direct", "runner", "spawn_single", "spawn_multi"], default="auto")
     args = parser.parse_args()
 
     task = args.task.strip()
-    route = route_task(task)
+    route = infer_route(task, args.command)
     final_route = route["route"]
     if args.force_route != "auto":
         final_route = args.force_route
     if args.label == "octopus-runner":
         final_route = "runner"
+
+    if final_route == "direct":
+        print(
+            json.dumps(
+                {
+                    "route": "direct",
+                    "executed": False,
+                    "reason": route["reason"],
+                    "reasons": route.get("reasons", []),
+                    "scores": route.get("scores", {}),
+                    "task": task,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
 
     if final_route == "runner":
         if not args.command:
@@ -141,15 +194,26 @@ def main():
                         "executed": False,
                         "reason": "runner_command_required",
                         "task": task,
+                        "reasons": route.get("reasons", []),
+                        "scores": route.get("scores", {}),
                     },
                     ensure_ascii=False,
                 )
             )
             return
-        print(json.dumps(dispatch_runner(args), ensure_ascii=False))
+        payload = dispatch_runner(args)
+        payload["reasons"] = route.get("reasons", [])
+        payload["scores"] = route.get("scores", {})
+        print(json.dumps(payload, ensure_ascii=False))
         return
 
-    print(json.dumps(recommend_spawn(args, task), ensure_ascii=False))
+    if final_route == "spawn_multi":
+        payload = recommend_multi_spawn(args, task)
+    else:
+        payload = recommend_spawn(args, task)
+    payload["reasons"] = route.get("reasons", [])
+    payload["scores"] = route.get("scores", {})
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":
