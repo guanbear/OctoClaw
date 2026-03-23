@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
-OCTOPUS_RULES_VERSION="v1.5.0"
+OCTOPUS_RULES_VERSION="v1.6.1"
 SKILL_ROOT="${SKILL_ROOT:-$SCRIPT_DIR}"
 
 detect_openclaw_workdir() {
@@ -50,6 +50,8 @@ if [ -f "$OCTOPUS_CONFIG" ]; then
 fi
 # 默认值（config.sh 不存在时的兜底）
 FEATURE_MODEL_PROBE="${FEATURE_MODEL_PROBE:-false}"
+FEATURE_OMNIROUTE_PLAN_SYNC="${FEATURE_OMNIROUTE_PLAN_SYNC:-true}"
+OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES="${OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES:-15}"
 PATROL_MODE="${PATROL_MODE:-loop}"
 PATROL_INTERVAL="${PATROL_INTERVAL:-60}"
 NOTIFICATION_BACKEND="${NOTIFICATION_BACKEND:-auto}"
@@ -338,6 +340,7 @@ do_uninstall() {
     _stop_runner_daemon
     _delete_cron_by_name "octopus-patrol"
     _delete_cron_by_name "octopus-probe"
+    _delete_cron_by_name "octopus-plan-sync"
     _delete_cron_by_name "octopus-update-check"
 
     # 2. 从 AGENTS.md 删除规则注入
@@ -402,6 +405,7 @@ do_disable() {
         _disable_cron_by_name "octopus-patrol"
     fi
     _disable_cron_by_name "octopus-probe"
+    _disable_cron_by_name "octopus-plan-sync"
     _disable_cron_by_name "octopus-update-check"
 
     echo ""
@@ -436,6 +440,7 @@ do_enable() {
         _enable_cron_by_name "octopus-patrol"
     fi
     _enable_cron_by_name "octopus-probe"
+    _enable_cron_by_name "octopus-plan-sync"
     _enable_cron_by_name "octopus-update-check"
 
     echo ""
@@ -910,6 +915,68 @@ install_probe_cron() {
 
 install_probe_cron
 
+install_plan_sync_cron() {
+    if [ "${FEATURE_OMNIROUTE_PLAN_SYNC:-true}" != "true" ]; then
+        echo "ℹ️  FEATURE_OMNIROUTE_PLAN_SYNC=false，跳过 octopus-plan-sync cron 注册"
+        return 0
+    fi
+
+    if ! command -v openclaw &>/dev/null; then
+        echo "⚠️  openclaw CLI 未找到，跳过 octopus-plan-sync cron 注册"
+        return 0
+    fi
+
+    if ! command -v omniroute &>/dev/null; then
+        echo "ℹ️  未检测到 omniroute，跳过 octopus-plan-sync cron 注册"
+        return 0
+    fi
+
+    local interval_minutes every_ms
+    interval_minutes="${OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES:-15}"
+    every_ms=$(( interval_minutes * 60 * 1000 ))
+
+    echo "📡 注册 Omniroute 套餐状态同步 cron（每${interval_minutes}分钟）..."
+
+    if openclaw cron list 2>/dev/null | grep -q "octopus-plan-sync"; then
+        echo "ℹ️  octopus-plan-sync cron 已存在，跳过"
+        return 0
+    fi
+
+    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
+    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+
+    PLAN_SYNC_PAYLOAD="$(cat <<JSON
+{
+  "name": "octopus-plan-sync",
+  "schedule": {"kind": "every", "everyMs": ${every_ms}, "anchorMs": 0},
+  "payload": {
+    "kind": "agentTurn",
+    "message": "同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略。\\n\\n执行以下命令：\\n```bash\\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync && WORKSPACE=/workspace python3 ./lib/model-intel.py refresh --mode auto\\n```\\n\\n执行完成后直接结束，无需回复或发送任何通知。",
+    "timeoutSeconds": 120
+  },
+  "delivery": {"mode": "none"},
+  "sessionTarget": "isolated",
+  "enabled": true
+}
+JSON
+)"
+
+    HTTP_CODE=$(curl -s -o /tmp/octopus-plan-sync-cron-result.json -w "%{http_code}" \
+        -X POST "$GATEWAY_URL/api/cron/jobs" \
+        -H "Content-Type: application/json" \
+        ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
+        -d "$PLAN_SYNC_PAYLOAD")
+
+    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+        echo "✅ octopus-plan-sync cron 注册成功（每${interval_minutes}分钟）"
+    else
+        echo "⚠️  octopus-plan-sync cron 注册失败（HTTP $HTTP_CODE）"
+        cat /tmp/octopus-plan-sync-cron-result.json 2>/dev/null
+    fi
+}
+
+install_plan_sync_cron
+
 # 5. 首次模型延迟探测
 if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
     echo ""
@@ -1052,37 +1119,44 @@ print('✅ 无版本号旧规则已清除')
     fi
 
     # 注入新版规则（在文件末尾追加）
-    cat >> "$AGENTS_FILE" <<OCTOPUS_RULES
+    local RULES_TMP
+    RULES_TMP="$(mktemp)"
+    cat > "$RULES_TMP" <<'OCTOPUS_RULES'
 
-<!-- octopus:core-rules v1.6.0 -->
+<!-- octopus:core-rules __RULES_VERSION__ -->
 ## 🐙 八爪鱼核心原则（始终生效）
 
 ### 🚨 核心铁律
 
 - 收到用户消息，第一个输出必须是文字，禁止先做工具调用
 - 唯一允许的首轮工具例外：`sessions_spawn` 与 `cron.run("octopus-patrol")`
-- 30 秒内纯文字能高质量完成 → 直答；否则 spawn 子 Agent
+- 30 秒内纯文字能高质量完成 → 直答；否则先 route
 - 同文件写操作必须串行；强依赖任务必须等待上游结果
 - 所有 spawn 完成后，turn 末尾统一调用一次 `cron.run("octopus-patrol")`
 
 ### route / dispatch 规范
 
-- 非纯简单问答，先做 route 判断，不要主 Agent 自己临场拍板
+- `direct` 不是默认值，而是白名单：只有低风险、低上下文、无需工具、单轮可高质量完成的任务才允许主 Agent 直接处理
+- 其余任务先做 route 判断，不要主 Agent 自己临场拍板
 - 若 `octoclaw_route` / `octoclaw_dispatch` / `octoclaw_status` 工具可用，优先调用工具
+- 若查询「八爪鱼状态」或调用 `octoclaw_status` / `/octostatus`，必须原样返回完整状态面板，不要再摘要、改写或自行压缩
+- 默认状态视图必须使用 `compact`；只有用户明确要求“表格 / table / lanes / 泳道”时，才允许改用 `table` 或 `lanes`
 - 若工具不可用，回退到脚本：
-  - route：`python3 ${SKILL_ROOT}/lib/octoclaw_route.py --task "..."`
-  - dispatch：`python3 ${SKILL_ROOT}/lib/dispatch_task.py --task "..."`
-  - status：`bash ${SKILL_ROOT}/lib/status.sh --format table`
-- shell / log / status / curl / grep / head / tail / 端口 / 进程 / 环境检查 这类快任务，优先 route 到 runner
+  - route：`python3 __SKILL_ROOT__/lib/octoclaw_route.py --task "..."`
+  - dispatch：`python3 __SKILL_ROOT__/lib/dispatch_task.py --task "..."`
+  - status：`bash __SKILL_ROOT__/lib/status.sh --format compact`
+- 任何会使用本机工具、读取日志/状态、检查端口/服务/进程/磁盘/内存/版本、或会显著拉长主上下文的任务，都应先走 `octoclaw_dispatch`，不要主 Agent 直接执行
+- `octoclaw_dispatch` 可以直接接自然语言本机检查任务；若命中 runner playbook，会自动下沉到常驻 runner
 - 多步调研、编码、改文件、长执行、高风险分析，优先 route 到 `spawn_single` 或 `spawn_multi`
+- 若 route 返回 `runner` / `spawn_single` / `spawn_multi`，主 Agent 不要绕开结果自己改用原生工具
 
 ### spawn 规范
 
 - label：`octopus-power/scout/writer/fix/test/analyze/runner/feishu`
 - 查询状态、轻 shell、日志检查、curl/grep/head/tail 这类快任务，命中后优先走 runner，不再直接 spawn 子 Agent
-- task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `${STATE_DIR}/shared/{task_id}.md`
+- task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `__STATE_DIR__/shared/{task_id}.md`
 - 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
-- 详细状态写入和 RESULT 模板以 `${SKILL_ROOT}/lib/spawn-template.md` 为准
+- 详细状态写入和 RESULT 模板以 `__SKILL_ROOT__/lib/spawn-template.md` 为准
 - 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
 
 ### 触手名字
@@ -1092,7 +1166,7 @@ print('✅ 无版本号旧规则已清除')
 ### 任务分级与模型选择
 
 - 级别：`trivial/simple/normal/hard/deep`
-- 选模优先读 `${STATE_DIR}/model-policy.json`（auto 模式），否则读 `octopus-mode.json` + `octopus-model-aliases.json`
+- 选模优先读 `__STATE_DIR__/model-policy.json`（auto 模式），否则读 `octopus-mode.json` + `octopus-model-aliases.json`
 - `runner` 优先低首 token 延迟；`fix/test` 优先 coding；`analyze/power` 优先深度能力
 - 用户临时要求“最强/不惜成本”可升高模型；“保密/私有”优先私有模型
 
@@ -1102,7 +1176,7 @@ print('✅ 无版本号旧规则已清除')
 
 ### 任务状态（task-state.json）
 
-- 文件：`${STATE_DIR}/task-state.json`
+- 文件：`__STATE_DIR__/task-state.json`
 - 子 Agent 负责开始时写 `running`，结束时写 `done/failed`
 - 最终输出必须以 `---RESULT---` 开头，否则视为未完成
 
@@ -1112,6 +1186,21 @@ print('✅ 无版本号旧规则已清除')
 - 避免重复回复同一 announce；错误经验沉淀写回 Octopus 相关记录
 <!-- /octopus:core-rules -->
 OCTOPUS_RULES
+    python3 - "$RULES_TMP" "$SKILL_ROOT" "$STATE_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+skill_root = sys.argv[2]
+state_dir = sys.argv[3]
+text = path.read_text(encoding="utf-8")
+text = text.replace("__SKILL_ROOT__", skill_root)
+text = text.replace("__STATE_DIR__", state_dir)
+text = text.replace("__RULES_VERSION__", "v1.6.1")
+path.write_text(text, encoding="utf-8")
+PY
+    cat "$RULES_TMP" >> "$AGENTS_FILE"
+    rm -f "$RULES_TMP"
 
     echo "✅ octopus:core-rules 已注入（最新版）→ $AGENTS_FILE"
 }

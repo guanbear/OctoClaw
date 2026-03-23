@@ -30,6 +30,7 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 
 - Route decision entry: [`octoclaw_route.py`](./lib/octoclaw_route.py)
 - Unified dispatch entry: [`dispatch_task.py`](./lib/dispatch_task.py)
+- Generic runner playbooks: [`runner_playbooks.py`](./lib/runner_playbooks.py)
 - Runtime extension tools:
   - `octoclaw_route`
   - `octoclaw_dispatch`
@@ -64,7 +65,7 @@ Recommended minimal open-source path:
 2. Keep notifications on `auto` or `none`
 3. Let `runner-daemon` run in the background
 4. Enable the bundled runtime extension from `extensions/octoclaw-runtime`
-5. Route ambiguous work through `octoclaw_route`, then `octoclaw_dispatch`
+5. Treat `direct` as a whitelist: route ambiguous work through `octoclaw_route`, then `octoclaw_dispatch`
 6. Use `status.sh --format table` to inspect state
 7. Run `eval_suite.py` once to establish a baseline
 
@@ -85,6 +86,9 @@ python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze
 # Unified dispatch entry
 python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task 'check redis logs and port status' --command 'ss -lntp | grep 6379'
 
+# Natural-language local inspection can be dispatched directly
+python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task 'check the machine python version, disk usage, and memory status, then summarize it'
+
 # Dispatch a lightweight job directly to runner
 python3 /workspace/openclaw/skills/octopus/lib/runner_dispatch.py --command 'pwd' --summary 'check current directory'
 
@@ -97,6 +101,10 @@ python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 
 # Force a patrol cycle
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
+
+# Sync OmniRoute/Codex plan state now
+cd /workspace/openclaw/skills/octopus
+WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync
 ```
 
 ## Model Inputs
@@ -143,6 +151,7 @@ In practice:
 - billing cycle (`monthly`, `yearly`, `one_time`) can usually be seeded once and reused
 - live remaining quota usually cannot be inferred reliably without provider-specific APIs, so keep it in `model-plan-state.json` or add a provider sync later
 - token-priced models can also be budget-governed with `monthly_budget_cny`, `current_month_spent_cny`, `soft_limit_ratio`, and `hard_limit_ratio`
+- if `FEATURE_OMNIROUTE_PLAN_SYNC=true` and `omniroute` exists locally, OctoClaw can periodically sync Codex/GPT-5.4 remaining ratio from OmniRoute SQLite and then refresh auto policy
 
 ## Project Layout
 
@@ -159,6 +168,7 @@ In practice:
 ├── eval/
 └── lib/
     ├── dispatch_task.py
+    ├── runner_playbooks.py
     ├── runner_routing.py
     ├── runner_dispatch.py
     ├── runner_queue.py

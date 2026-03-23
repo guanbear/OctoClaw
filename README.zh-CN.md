@@ -50,6 +50,7 @@ OctoClaw 不是单纯的模型路由器，也不是单纯的 agent 模板。
 
 - 路由决策入口：[octoclaw_route.py](./lib/octoclaw_route.py)
 - 统一派发入口：[dispatch_task.py](./lib/dispatch_task.py)
+- 通用 runner playbook：[runner_playbooks.py](./lib/runner_playbooks.py)
 - Runtime extension 工具：
   - `octoclaw_route`
   - `octoclaw_dispatch`
@@ -74,7 +75,7 @@ bash /workspace/openclaw/skills/octopus/install.sh
 2. 通知后端使用 `auto` 或 `none`
 3. 让 `runner-daemon` 常驻
 4. 启用 `extensions/octoclaw-runtime` 里的 runtime extension
-5. 模糊任务先用 `octoclaw_route`，再按需 `octoclaw_dispatch`
+5. 把 `direct` 当成白名单：模糊任务先用 `octoclaw_route`，再按需 `octoclaw_dispatch`
 6. 用 `status.sh --format table` 看状态
 7. 用 `eval_suite.py` 跑一次最小基线
 
@@ -95,6 +96,9 @@ python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task '帮我�
 # 统一派发入口
 python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task '查一下 redis 日志和端口状态' --command 'ss -lntp | grep 6379'
 
+# 自然语言本机检查也可以直接派发
+python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task '检查当前机器 python 版本、磁盘使用率和内存情况，最后给我三行总结'
+
 # 轻任务直接派发给 runner
 python3 /workspace/openclaw/skills/octopus/lib/runner_dispatch.py --command 'pwd' --summary '检查当前目录'
 
@@ -106,6 +110,10 @@ python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 
 # 强制巡逻
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
+
+# 立即同步 OmniRoute/Codex 套餐状态
+cd /workspace/openclaw/skills/octopus
+WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync
 ```
 
 ## 自动选模输入层
@@ -160,6 +168,7 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 - **包月/包年周期** 通常也可以一次建模后长期复用
 - **实时剩余额度** 通常不能稳定自动获取，后面更适合接 provider API；在那之前先维护 `model-plan-state.json`
 - **token 计费模型** 也可以通过 `monthly_budget_cny`、`current_month_spent_cny`、`soft_limit_ratio`、`hard_limit_ratio` 做预算型 fallback
+- 如果 `FEATURE_OMNIROUTE_PLAN_SYNC=true` 且本机有 `omniroute`，OctoClaw 还可以定时从 OmniRoute SQLite 同步 Codex/GPT-5.4 的估算剩余额度，再刷新自动选模策略
 
 ## 开源发布材料
 

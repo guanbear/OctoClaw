@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +18,14 @@ RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
 
 
 def now_compact() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+
+
+def expected_done_offset(timeout_seconds: int) -> str:
+    # Runner jobs are lightweight; default ETA is a conservative fraction of timeout.
+    eta_seconds = max(10, min(max(30, int(timeout_seconds * 0.25)), timeout_seconds))
+    dt = datetime.now(timezone.utc).astimezone() + timedelta(seconds=eta_seconds)
+    return dt.isoformat()
 
 
 def run_json(cmd: list[str]) -> dict:
@@ -72,6 +79,8 @@ def main():
             args.summary or job_id,
             "--tier",
             args.tier,
+            "--expected-done",
+            expected_done_offset(args.timeout_seconds),
             "--task-description",
             args.task_description or args.command,
         ],

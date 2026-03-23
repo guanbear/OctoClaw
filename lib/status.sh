@@ -49,6 +49,7 @@ from status_render import (
 
 TASK_FILE = "/workspace/tmp/octopus/task-state.json"
 ALIASES_FILE = "/workspace/tmp/octopus-model-aliases.json"
+RUNNER_QUEUE_FILE = "/workspace/tmp/octopus/runner-queue.json"
 
 now = datetime.now(timezone(timedelta(hours=8)))
 
@@ -103,7 +104,31 @@ def load_tasks():
         with open(TASK_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         tasks = data.get("tasks", [])
-        return [task for task in tasks if task.get("source") == "octopus"]
+        tasks = [task for task in tasks if task.get("source") == "octopus"]
+        queue_raw = load_json(RUNNER_QUEUE_FILE) or {}
+        jobs = queue_raw.get("jobs", []) if isinstance(queue_raw, dict) else []
+        queue_by_id = {
+            str(job.get("id")): job
+            for job in jobs
+            if isinstance(job, dict) and str(job.get("id", "")).startswith("runner-")
+        }
+        for task in tasks:
+            job = queue_by_id.get(str(task.get("id", "")))
+            if not job:
+                continue
+            job_status = str(job.get("status", "") or "")
+            if job_status in ("done", "failed"):
+                task["status"] = "done" if job_status == "done" else "failed"
+                task["summary"] = str(job.get("summary") or task.get("summary") or "")
+                if job.get("started_at"):
+                    task["started_at"] = job.get("started_at")
+                if job.get("finished_at"):
+                    task["completed_at"] = job.get("finished_at")
+                if job.get("model"):
+                    task["model"] = job.get("model")
+                if job.get("task_description"):
+                    task["task_description"] = job.get("task_description")
+        return tasks
     except Exception:
         return []
 
@@ -116,7 +141,20 @@ backend = config_data.get("notification", {}).get("backend", "auto")
 print(f"🔔 通知：{backend}")
 if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     runner_job = runner_health.get("job_id", "")
-    runner_note = f" · 当前任务 {runner_job}" if runner_job else ""
+    runner_note = ""
+    heartbeat = runner_health.get("last_heartbeat_at", "")
+    heartbeat_dt = None
+    try:
+        if heartbeat:
+            if heartbeat.endswith("Z"):
+                heartbeat = heartbeat[:-1] + "+00:00"
+            heartbeat_dt = datetime.fromisoformat(heartbeat)
+            if heartbeat_dt.tzinfo:
+                heartbeat_dt = heartbeat_dt.astimezone(now.tzinfo)
+    except Exception:
+        heartbeat_dt = None
+    if runner_job and heartbeat_dt and (now - heartbeat_dt).total_seconds() <= 30:
+        runner_note = f" · 当前任务 {runner_job}"
     print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}")
 print("📊 模型配置：")
 print(

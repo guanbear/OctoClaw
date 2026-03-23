@@ -102,12 +102,20 @@ created: 2026-03-20
 `octoclaw_route(task, metadata) ->`
 
 - `route`
+- `task_class`
+- `role_hint`
+- `tier_hint`
 - `reason`
+- `reason_codes`
 - `confidence`
 - `scores`
-- `label`
-- `tier`
-- `model`
+- `expected_latency_ms`
+- `expected_cost_band`
+- `context_growth_band`
+- `execution_owner`
+- `dispatch_required`
+- `should_wait`
+- `wait_timeout_seconds`
 
 ### 推荐 route
 
@@ -128,12 +136,142 @@ created: 2026-03-20
 - 打分
 - 反馈学习
 
+更准确地说，`octoclaw_route` 不该只是“关键词分类器”，而应该是一个**调度决策器**。它要先回答：
+
+1. 这次主 agent 自己做，还是切走？
+2. 如果切走，是给常驻 `runner`，还是给临时子 agent？
+3. 如果给子 agent，是一个还是多个？
+
+这里的总原则应该固定下来：
+
+- `direct` 是白名单，不是默认值
+- 任何需要本机工具、会显著拉长主上下文、或更适合隔离执行的任务，都应先 route / dispatch
+
+推荐的决策顺序：
+
+1. **硬门禁**
+   - 明显 `direct / runner / spawn` 的请求先直接切掉
+2. **灰区打分**
+   - 只对边界任务计算 `direct_score / runner_score / spawn_single_score / spawn_multi_score`
+3. **保守回退**
+   - `direct` 和 `spawn_single` 接近时，优先 `spawn_single`
+   - `runner` 和 `direct` 接近但明显要本机状态时，优先 `runner`
+4. **反馈学习**
+   - 用 replay/eval 和线上执行结果调权重
+
+推荐输入特征不要只看文本关键词，而要同时看：
+
+- `tool_need`
+- `task_shape`
+- `context_growth`
+- `risk`
+- `latency_sensitivity`
+- `parallel_gain`
+- `budget_pressure`
+- `runtime_health`
+
+这样 OctoClaw 优化的就不是“单次请求选哪个模型”，而是“整条任务链该怎么走”。
+
+### 4.0.1 runner playbook 层
+
+为了避免“route 判成 runner，但主 agent 还得自己拼 shell 命令”，需要一层通用 playbook：
+
+- `system_summary`
+- `service_health`
+- `local_file_probe`
+
+这样像“检查 python 版本、磁盘、内存”“检查 redis/openclaw 的端口、状态、日志”这类自然语言本机任务，也可以直接下沉到常驻 runner。
+
+### 4.0.2 借鉴 `ClawRouter` 的方式
+
+OctoClaw 值得借 `ClawRouter` 的部分主要是：
+
+- 本地低延迟决策
+- profile 化
+- tier 作为中间层
+- 插件化入口
+
+但不应该照搬成：
+
+- 纯 proxy router
+- 纯单请求模型路由
+
+更合理的吸收方式是：
+
+- `task -> route -> role/tier -> model`
+- `route` 由本地脚本决策器负责
+- `model` 再由 `model-intel.py` 和套餐经济学决定
+
+也就是说，借的是“本地加权决策器 + profile + plugin 化”，不是“把 OctoClaw 降成模型代理”。
+
+### 4.0.3 `octoclaw_dispatch` 返回必须 user-safe
+
+交互式 tool 返回不能只返回机器细节。否则主 agent 很容易：
+
+- 只看见 “executed/done”
+- 没拿到可直接收口的正文
+- 自己在聊天里重新推理
+- 甚至把内部犹豫文本暴露给用户
+
+后续统一成：
+
+- `handoff.summary`
+- `handoff.reply_text`
+- `handoff.report_path`
+- `handoff.user_safe`
+
+规则：
+
+- 短结果：直接放 `reply_text`
+- 长结果：写共享文件，只把 `report_path` 和短摘要带回
+- `handoff.user_safe=true` 时，主 agent 应优先直接收口，而不是重新发挥
+
 当前仓库已经有最小 runtime extension 骨架：
 
 - `extensions/octoclaw-runtime/package.json`
 - `extensions/octoclaw-runtime/index.js`
 
 这层先把 `octoclaw_route / octoclaw_dispatch / octoclaw_status` 暴露成 OpenClaw 可直接调用的工具入口，减少“只靠 AGENTS.md 提示主 agent 自由判断”的不稳定性。
+
+## 4.0.0 飞书 3.22 能力接入
+
+OpenClaw 3.22 在飞书侧新增的能力里，OctoClaw 最值得吸收的是：
+
+- `structured interactive approval / quick-action launcher cards`
+- `current-conversation ACP + subagent session binding`
+- `callback user / conversation context preservation`
+
+但要分清两层：
+
+### 当前可以直接利用的
+
+- 统一卡片头尾
+  - `八爪鱼（OctoClaw）`
+- 面板卡 / 任务卡里增加结构化快捷动作提示
+- 保持状态面板、事件卡、文本通知的双语一致性
+
+### 需要后续重构才能真正吃满的
+
+- 当前会话 ACP
+- 子 agent session 绑定到原飞书 DM / topic 会话
+- 复杂任务完成结果自动回投到原会话
+- 真正的 callback action 路由
+
+原因是：
+
+- OctoClaw 当前飞书发送仍主要走 `feishu-card.py` + 直接 Feishu API
+- 它已经能发卡、更新卡、发 DM
+- 但还没有完整接到 OpenClaw 3.22 的 shared outbound identity / ACP 回路
+
+所以飞书 3.22 的正确接法应该是：
+
+1. 保留当前卡片面板能力
+2. 逐步把飞书发送与动作入口迁到 OpenClaw shared outbound / ACP
+3. 让 `spawn_single / spawn_multi` 的结果自然回到原飞书会话
+
+一句话：
+
+> 飞书 3.22 对 OctoClaw 的价值，不只是“更好看地发卡”，而是让飞书从通知后端逐步升级成真正的会话绑定执行入口。
 
 ## 4.0.1 benchmark 输入收敛
 
@@ -151,6 +289,42 @@ created: 2026-03-20
 - `OpenClaw live compatibility`
 
 另外可以补一个低权重的 `OpenRouter rankings` 生态信号，用来帮助 provider/路由可获得性判断，但不要把它当主能力榜。
+
+后面应该把来源职责显式固化为：
+
+- `OpenRouter`
+  - 模型目录
+  - 价格
+  - provider / 参数 / context
+  - 榜单只做低权重生态信号
+- `Artificial Analysis`
+  - 通用 coding / reasoning / latency 主榜
+- `PinchBench`
+  - OpenClaw / agent 实战主榜
+- `Claw-Eval`
+  - agent workflow 辅助榜
+- `本地实测`
+  - `model-speed.json`
+  - `openclaw_live_compat`
+  - `model-plan-state.json`
+
+不要再把多个榜单“混进去一起打”，而应该额外维护：
+
+- `model-sources.json`
+
+这个文件应该明确：
+
+- 哪个字段来自哪个来源
+- 每个来源的默认 `confidence`
+- 每个来源的 `decay_days`
+- 每个来源的 `min_factor`
+- 哪些来源允许 family 推断
+
+也就是说，后续不是只有 benchmark 分数，还要有：
+
+- `freshness_factor`
+- `confidence_factor`
+- `family_penalty`
 
 同一层里还应补齐“预算型套餐”支持：
 
@@ -516,6 +690,42 @@ created: 2026-03-20
 也就是：
 
 > **常驻子 agent 是“短生命周期可复用”，不是“永不重建”。**
+
+### 4.3.1 交互式 runner 体验要求
+
+快任务的核心目标不是“让用户看到调度过程”，而是**尽快拿到结果**。因此后续交互规范应明确：
+
+- 命中 `runner` 的任务，优先短等待结果，不先输出长前奏
+- 若 2-3 秒内能拿到结果，直接返回结果
+- 若短时间内拿不到结果，再补一句极短状态说明
+- 若等待超时，也必须回复后台提示，不能沉默
+
+推荐交互节奏：
+
+- `0-2s`：静默等待
+- `2-8s`：若仍无结果，回一句“正在检查本机状态…”
+- `>8s`：回“已转后台执行，可用 /octostatus 查看”
+
+### 4.3.2 Route 归因必须基于 runtime 证据
+
+后续不要让主 agent 自己口头判断“这是主 agent 查的”还是“子 agent 查的”。  
+归因必须基于运行时事实：
+
+- 若写入 `task-state.json` 且 `label=octopus-runner`
+- 或写入 `runner-queue.json`
+- 或存在 `runner-results/<job_id>.json`
+
+则该任务应视为：
+
+- 执行动作：`runner`
+- 回复组织：`main agent`
+
+也就是说，最终文案应更接近：
+
+- “已通过常驻 runner 检查本机状态。”
+- “这次由当前会话直接处理。”
+
+而不要靠主 agent 自己猜“是不是我亲自查的”。
 
 #### D. runner 选模
 
@@ -1391,6 +1601,37 @@ Recovery
 - 连续恢复失败：短时熔断
 
 这会让八爪鱼更像“调度器自己的模型健康层”，而不是单纯模仿 OmniRoute 一类代理。
+
+### 同家族分层降本
+
+OctoClaw 后面应该支持“同一家族 API 内先降本、再跨家族 fallback”：
+
+- `family`
+  - `gpt-5.4`
+  - `glm`
+  - `minimax`
+- `size_class`
+  - `nano`
+  - `mini`
+  - `base`
+  - `strong`
+- `preferred_use`
+  - `nano / mini` 更适合 direct、轻问答、低风险写作
+  - `base` 更适合 runner、fix/test、普通调研
+  - `strong` 更适合 main、analyze、power
+- `upgrade_path`
+  - 同家族内升级链，例如 `nano -> mini -> full`
+- `fallback_path`
+  - 同家族内降级链，例如 `full -> mini -> nano`
+
+这层价值不是“多几个模型名”，而是：
+
+- 同 API 兼容性更好
+- prompt / tool 行为更接近
+- 比跨厂商乱跳更稳
+- 更利于缓存命中和上下文手感一致性
+
+实现上，前提仍然是这些模型已经在 OpenClaw 的可用模型列表里；OctoClaw 再基于 family 图谱做选模和 fallback。
 
 ### 是否要上本地小模型 judge
 

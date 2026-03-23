@@ -36,6 +36,11 @@ MODEL_AUTO_PREFER_LOW_COST="${MODEL_AUTO_PREFER_LOW_COST:-false}"
 # 若未安装铁甲虾且希望八爪鱼自动探测模型延迟，可将此开关改为 true 后重新运行 install.sh
 FEATURE_MODEL_PROBE=false
 
+# ── Omniroute 套餐状态同步 ───────────────────────────────────────────────────
+# 若本机存在 omniroute SQLite，则每隔一段时间同步 Codex/GPT-5.4 的估算剩余额度。
+FEATURE_OMNIROUTE_PLAN_SYNC="${FEATURE_OMNIROUTE_PLAN_SYNC:-true}"
+OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES="${OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES:-15}"
+
 # ── 常驻 Runner（飞鱼腿）──────────────────────────────────────────────────────
 RUNNER_ENABLED="${RUNNER_ENABLED:-true}"
 RUNNER_POLL_INTERVAL_SECONDS="${RUNNER_POLL_INTERVAL_SECONDS:-3}"

@@ -10,7 +10,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
-from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SPEED_FILE, load_json, save_json
+from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, save_json
 from model_plan_state import compute_plan_value_score, ensure_plan_state_file, get_plan_state_entry, preferred_fallback_model, should_fallback_due_to_plan
 from model_pricing import ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens
 
@@ -76,9 +76,44 @@ MODEL_PRIORS = [
     },
 ]
 
+SIZE_CLASS_ORDER = {
+    "nano": 0,
+    "mini": 1,
+    "base": 2,
+    "strong": 3,
+}
+
+ROLE_SIZE_PREFERENCE = {
+    "runner": {"nano": 1.00, "mini": 0.98, "base": 0.92, "strong": 0.72},
+    "fix": {"nano": 0.45, "mini": 0.70, "base": 0.95, "strong": 1.00},
+    "test": {"nano": 0.55, "mini": 0.78, "base": 0.96, "strong": 1.00},
+    "scout": {"nano": 0.65, "mini": 0.86, "base": 0.98, "strong": 0.92},
+    "writer": {"nano": 0.72, "mini": 0.90, "base": 1.00, "strong": 0.90},
+    "analyze": {"nano": 0.30, "mini": 0.56, "base": 0.88, "strong": 1.00},
+    "power": {"nano": 0.20, "mini": 0.45, "base": 0.82, "strong": 1.00},
+    "main": {"nano": 0.18, "mini": 0.40, "base": 0.78, "strong": 1.00},
+}
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def parse_openclaw_json_output(raw: str):
@@ -117,6 +152,66 @@ def match_prior(model_id: str) -> dict:
 def is_retired_model(model_id: str) -> bool:
     model_lower = model_id.lower()
     return any(re.search(pattern, model_lower) for pattern in RETIRED_MODEL_PATTERNS)
+
+
+def infer_family_metadata(model_id: str, override: dict) -> dict:
+    lower = model_id.lower()
+
+    family = override.get("family")
+    if not family:
+        if "gpt-5.4" in lower or "gpt_5_4" in lower:
+            family = "gpt-5.4"
+        elif "glm-5" in lower or "kivy-glm-5" in lower:
+            family = "glm"
+        elif "glm-4.7" in lower or "glm4.7" in lower or "glm-4-7" in lower:
+            family = "glm"
+        elif "minimax" in lower or "m2.7" in lower:
+            family = "minimax"
+        elif "sonnet" in lower or "opus" in lower:
+            family = "claude"
+        elif "kimi" in lower:
+            family = "kimi"
+        elif "gemini" in lower:
+            family = "gemini"
+        else:
+            family = "unknown"
+
+    size_class = override.get("size_class")
+    if not size_class:
+        if "nano" in lower:
+            size_class = "nano"
+        elif "mini" in lower or "flash-lite" in lower or "lite" in lower:
+            size_class = "mini"
+        elif "strong" in lower or "opus" in lower or "sonnet" in lower or "gpt-5.4" in lower or "glm-5" in lower:
+            size_class = "strong"
+        else:
+            size_class = "base"
+
+    preferred_use = override.get("preferred_use")
+    if not isinstance(preferred_use, list):
+        if size_class == "nano":
+            preferred_use = ["direct", "trivial", "simple"]
+        elif size_class == "mini":
+            preferred_use = ["direct", "runner", "writer", "simple"]
+        elif size_class == "base":
+            preferred_use = ["runner", "fix", "test", "scout", "writer", "normal"]
+        else:
+            preferred_use = ["main", "analyze", "power", "hard", "deep"]
+
+    upgrade_path = override.get("upgrade_path")
+    if not isinstance(upgrade_path, list):
+        upgrade_path = []
+    fallback_path = override.get("fallback_path")
+    if not isinstance(fallback_path, list):
+        fallback_path = []
+
+    return {
+        "family": family,
+        "size_class": size_class,
+        "preferred_use": preferred_use,
+        "upgrade_path": upgrade_path,
+        "fallback_path": fallback_path,
+    }
 
 
 def load_models_from_openclaw() -> list[str]:
@@ -173,6 +268,31 @@ def load_benchmark_overrides() -> dict:
     return {}
 
 
+def load_source_registry() -> dict:
+    data = load_json(MODEL_SOURCES_FILE)
+    if isinstance(data, dict):
+        sources = data.get("sources")
+        if isinstance(sources, dict):
+            return sources
+    return {}
+
+
+def ensure_source_registry_file() -> dict:
+    data = load_json(MODEL_SOURCES_FILE)
+    if isinstance(data, dict) and isinstance(data.get("sources"), dict):
+        return data
+
+    seed_file = os.path.join(os.path.dirname(__file__), "model-sources.json")
+    seed = load_json(seed_file)
+    if isinstance(seed, dict):
+        save_json(MODEL_SOURCES_FILE, seed)
+        return seed
+
+    payload = {"updated_at": now_iso(), "sources": {}}
+    save_json(MODEL_SOURCES_FILE, payload)
+    return payload
+
+
 def ensure_benchmark_snapshot_file() -> dict:
     data = load_json(MODEL_BENCHMARKS_FILE)
     if isinstance(data, dict) and isinstance(data.get("models"), dict):
@@ -201,14 +321,41 @@ def normalize(values: list[float], value: float, reverse: bool = False) -> float
     return 1 - ratio if reverse else ratio
 
 
+def compute_source_factor(source_name: str, source_registry: dict, benchmark_meta: dict) -> float:
+    policy = source_registry.get(source_name, {}) if isinstance(source_registry, dict) else {}
+    meta = benchmark_meta.get(source_name, {}) if isinstance(benchmark_meta, dict) else {}
+
+    default_confidence = float(policy.get("default_confidence", 0.8))
+    meta_confidence = float(meta.get("confidence", default_confidence))
+    confidence_factor = max(0.35, min(1.0, default_confidence * meta_confidence))
+
+    updated_at = parse_iso_datetime(meta.get("updated_at") or "")
+    if updated_at is None:
+        updated_at = parse_iso_datetime(policy.get("updated_at") or "")
+    age_days = 0.0
+    if updated_at is not None:
+        age_days = max(0.0, (datetime.now(timezone.utc) - updated_at).total_seconds() / 86400.0)
+
+    decay_days = float(policy.get("decay_days", 60))
+    min_factor = float(policy.get("min_factor", 0.55))
+    freshness_factor = 1.0
+    if decay_days > 0:
+        freshness_factor = max(min_factor, 1.0 - age_days / decay_days)
+
+    family_penalty = 0.82 if bool(meta.get("family_inferred")) else 1.0
+    return max(0.2, min(1.0, confidence_factor * freshness_factor * family_penalty))
+
+
 def build_catalog() -> dict:
     ensure_pricing_file()
     ensure_plan_state_file()
     ensure_benchmark_snapshot_file()
+    ensure_source_registry_file()
     model_ids = load_models_from_openclaw()
     latency_data = load_latency_data()
     speed_data = load_speed_data()
     benchmark_overrides = load_benchmark_overrides()
+    source_registry = load_source_registry()
 
     records = []
     for model_id in model_ids:
@@ -216,6 +363,8 @@ def build_catalog() -> dict:
         latency = latency_data.get(model_id, {})
         override = benchmark_overrides.get(model_id, {})
         benchmark_scores = dict(override.get("benchmark_scores", {}))
+        benchmark_meta = dict(override.get("benchmark_meta", {}))
+        family_meta = infer_family_metadata(model_id, override)
 
         pricing = dict(prior["pricing"])
         pricing.update(override.get("pricing", {}))
@@ -251,10 +400,20 @@ def build_catalog() -> dict:
             {
                 "id": model_id,
                 "short_name": override.get("short_name", prior["short_name"]),
+                "family": family_meta["family"],
+                "size_class": family_meta["size_class"],
+                "preferred_use": family_meta["preferred_use"],
+                "upgrade_path": family_meta["upgrade_path"],
+                "fallback_path": family_meta["fallback_path"],
                 "available": bool(local_speed.get("available", latency.get("available", True))) if isinstance(local_speed, dict) else bool(latency.get("available", True)),
                 "pricing": pricing,
                 "scores": scores,
                 "benchmark_scores": benchmark_scores,
+                "benchmark_meta": benchmark_meta,
+                "source_factors": {
+                    source_name: compute_source_factor(source_name, source_registry, benchmark_meta)
+                    for source_name in benchmark_scores.keys()
+                },
                 "speed": speed,
                 "provider": model_id.split("/")[0] if "/" in model_id else "unknown",
                 "private": any(token in model_id.lower() for token in ("lixiang-", "kivy-", "bailian", "private")),
@@ -306,26 +465,29 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         openclaw = float(scores.get("openclaw", 0.65))
         writing = float(scores.get("writing", 0.65))
         benchmark_scores = model.get("benchmark_scores", {})
-        pinchbench = float(benchmark_scores.get("pinchbench", openclaw))
-        aa_coding = float(benchmark_scores.get("artificial_analysis_coding", coding))
-        claw_eval = float(benchmark_scores.get("claw_eval", benchmark_scores.get("openclaw_live_compat", openclaw)))
-        openrouter_rankings = float(benchmark_scores.get("openrouter_rankings", 0.5))
-        openclaw_live_compat = float(benchmark_scores.get("openclaw_live_compat", claw_eval))
+        source_factors = model.get("source_factors", {})
+        pinchbench = float(benchmark_scores.get("pinchbench", openclaw)) * float(source_factors.get("pinchbench", 1.0))
+        aa_coding = float(benchmark_scores.get("artificial_analysis_coding", coding)) * float(source_factors.get("artificial_analysis_coding", 1.0))
+        claw_eval = float(benchmark_scores.get("claw_eval", benchmark_scores.get("openclaw_live_compat", openclaw))) * float(source_factors.get("claw_eval", 1.0))
+        openrouter_rankings = float(benchmark_scores.get("openrouter_rankings", 0.5)) * float(source_factors.get("openrouter_rankings", 1.0))
+        openclaw_live_compat = float(benchmark_scores.get("openclaw_live_compat", claw_eval)) * float(source_factors.get("openclaw_live_compat", 1.0))
         benchmark_support = 0.35 * pinchbench + 0.30 * aa_coding + 0.25 * claw_eval + 0.10 * openrouter_rankings
         plan_value_score = compute_plan_value_score(model["id"])
         availability_score = 0.0 if should_fallback_due_to_plan(model["id"]) else 1.0
+        size_class = str(model.get("size_class", "base") or "base")
+        size_preference = ROLE_SIZE_PREFERENCE
         if should_fallback_due_to_plan(model["id"]):
             reliability = max(0.0, reliability - 0.20)
 
         role_scores = {
-            "runner": 0.45 * ttft_score + 0.15 * reliability + 0.10 * throughput_score + 0.15 * plan_value_score + 0.10 * price_score + 0.03 * claw_eval + 0.02 * openrouter_rankings,
-            "fix": 0.26 * coding + 0.16 * openclaw + 0.16 * reliability + 0.14 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score,
-            "test": 0.24 * coding + 0.18 * openclaw + 0.16 * reliability + 0.14 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score,
-            "scout": 0.20 * openclaw + 0.18 * reasoning + 0.18 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.05 * plan_value_score,
-            "writer": 0.28 * writing + 0.18 * reasoning + 0.14 * throughput_score + 0.10 * pinchbench + 0.08 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.07 * plan_value_score,
-            "analyze": 0.22 * reasoning + 0.16 * coding + 0.16 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * price_score,
-            "power": 0.20 * reasoning + 0.16 * coding + 0.16 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.09 * reliability + 0.05 * price_score,
-            "main": 0.20 * coding + 0.16 * openclaw + 0.15 * reasoning + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * ttft_score + 0.03 * availability_score,
+            "runner": 0.42 * ttft_score + 0.14 * reliability + 0.10 * throughput_score + 0.14 * plan_value_score + 0.09 * price_score + 0.03 * claw_eval + 0.02 * openrouter_rankings + 0.06 * size_preference["runner"].get(size_class, 0.80),
+            "fix": 0.24 * coding + 0.16 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["fix"].get(size_class, 0.80),
+            "test": 0.22 * coding + 0.18 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["test"].get(size_class, 0.80),
+            "scout": 0.19 * openclaw + 0.17 * reasoning + 0.17 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["scout"].get(size_class, 0.80),
+            "writer": 0.26 * writing + 0.18 * reasoning + 0.13 * throughput_score + 0.10 * pinchbench + 0.08 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.06 * plan_value_score + 0.04 * size_preference["writer"].get(size_class, 0.80),
+            "analyze": 0.21 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.04 * price_score + 0.03 * size_preference["analyze"].get(size_class, 0.80),
+            "power": 0.19 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.08 * reliability + 0.04 * price_score + 0.04 * size_preference["power"].get(size_class, 0.80),
+            "main": 0.19 * coding + 0.16 * openclaw + 0.15 * reasoning + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * ttft_score + 0.02 * availability_score + 0.02 * size_preference["main"].get(size_class, 0.80),
         }
         enriched.append((model, role_scores))
 
@@ -366,7 +528,18 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         "main_model": pick("main"),
         "tiers": tiers,
         "labels": labels,
+        "family_routing": {
+            model["id"]: {
+                "family": model.get("family"),
+                "size_class": model.get("size_class"),
+                "preferred_use": model.get("preferred_use", []),
+                "upgrade_path": model.get("upgrade_path", []),
+                "fallback_path": model.get("fallback_path", []),
+            }
+            for model in models
+        },
         "sources": sources,
+        "source_policy": load_source_registry(),
     }
     save_json(MODEL_POLICY_FILE, policy)
     return policy

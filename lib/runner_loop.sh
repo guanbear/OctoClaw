@@ -67,11 +67,14 @@ while true; do
   fi
 
   job_dump="$(python3 - "$job_json" <<'PY'
-import json, sys
+import base64
+import json
+import sys
+
 job = json.loads(sys.argv[1])
 for key in ("id", "command", "cwd", "timeout_seconds", "summary", "model", "task_description"):
-    value = job.get(key, "")
-    print(str(value))
+    value = str(job.get(key, ""))
+    print(base64.b64encode(value.encode("utf-8")).decode("ascii"))
 PY
 )"
 
@@ -81,13 +84,26 @@ PY
   done <<EOF
 $job_dump
 EOF
-  job_id="${job_fields[0]:-}"
-  command="${job_fields[1]:-}"
-  cwd="${job_fields[2]:-/workspace}"
-  timeout_seconds="${job_fields[3]:-$DEFAULT_TIMEOUT}"
-  summary="${job_fields[4]:-}"
-  model="${job_fields[5]:-}"
-  task_description="${job_fields[6]:-}"
+  decode_field() {
+    python3 - "$1" <<'PY'
+import base64
+import sys
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+if not raw:
+    print("")
+else:
+    print(base64.b64decode(raw.encode("ascii")).decode("utf-8"))
+PY
+  }
+  job_id="$(decode_field "${job_fields[0]:-}")"
+  command="$(decode_field "${job_fields[1]:-}")"
+  cwd="$(decode_field "${job_fields[2]:-}")"
+  timeout_seconds="$(decode_field "${job_fields[3]:-}")"
+  summary="$(decode_field "${job_fields[4]:-}")"
+  model="$(decode_field "${job_fields[5]:-}")"
+  task_description="$(decode_field "${job_fields[6]:-}")"
+  cwd="${cwd:-/workspace}"
+  timeout_seconds="${timeout_seconds:-$DEFAULT_TIMEOUT}"
 
   results_dir="${WORKSPACE}/tmp/octopus/runner-results"
   mkdir -p "$results_dir"

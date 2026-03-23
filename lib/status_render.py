@@ -16,9 +16,24 @@ LABEL_EMOJI = {
     "octopus-feishu": "🐦",
 }
 
+LABEL_NAME = {
+    "octopus-power": "鲸力手",
+    "octopus-scout": "梭鱼眼",
+    "octopus-writer": "墨鱼手",
+    "octopus-fix": "螃蟹手",
+    "octopus-test": "海胆手",
+    "octopus-analyze": "章鱼脑",
+    "octopus-runner": "飞鱼腿",
+    "octopus-feishu": "鸽手",
+}
+
 
 def get_emoji(label: str) -> str:
     return LABEL_EMOJI.get(label, "🤖")
+
+
+def get_label_name(label: str) -> str:
+    return LABEL_NAME.get(label, label.replace("octopus-", "") if label else "任务")
 
 
 def parse_time(value: str):
@@ -53,6 +68,36 @@ def short_model(path: str) -> str:
     return path.split("/")[-1][:12]
 
 
+def model_cost_badge(path: str) -> str:
+    lower = (path or "").lower()
+    if "gpt-5.4" in lower or "gpt_5_4" in lower or "opus" in lower:
+        return "¥¥¥"
+    if "sonnet" in lower:
+        return "¥¥"
+    if "glm" in lower or "minimax" in lower or "m2_5" in lower or "m2.5" in lower or "kimi" in lower:
+        return "¥"
+    return "?"
+
+
+GENERIC_SUMMARY_PREFIXES = (
+    "runner完成",
+    "runner失败",
+    "已通过常驻 runner 完成检查",
+    "当前任务适合主 agent 直接处理",
+)
+
+
+def preferred_task_title(task: dict, limit: int = 48) -> str:
+    summary = str(task.get("summary") or "").strip()
+    task_desc = str(task.get("task_description") or "").strip()
+    task_id = str(task.get("id") or "?").strip()
+    if task_desc and (not summary or summary.startswith(GENERIC_SUMMARY_PREFIXES)):
+        return task_desc[:limit]
+    if summary:
+        return summary[:limit]
+    return task_id[:limit]
+
+
 def format_duration(started_at: str, now: datetime) -> str:
     started = parse_time(started_at)
     if not started:
@@ -67,6 +112,36 @@ def format_duration(started_at: str, now: datetime) -> str:
         return f"{minutes}m{seconds}s"
     hours, minutes = divmod(minutes, 60)
     return f"{hours}h{minutes}m"
+
+
+def format_duration_between(started_at: str, completed_at: str, now: datetime) -> str:
+    started = parse_time(started_at)
+    completed = parse_time(completed_at)
+    if not completed:
+        return format_duration(started_at, now)
+    if not started:
+        return "?"
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if completed.tzinfo is None:
+        completed = completed.replace(tzinfo=timezone.utc)
+    seconds = max(0, int((completed - started).total_seconds()))
+    if seconds < 60:
+        return "<1m"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes}m"
+
+
+def format_clock(value: str, now: datetime) -> str:
+    dt = parse_time(value)
+    if not dt:
+        return "?"
+    if dt.tzinfo:
+        dt = dt.astimezone(now.tzinfo)
+    return dt.strftime("%H:%M")
 
 
 def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent_minutes: int = 30) -> dict:
@@ -108,17 +183,23 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
 
 def _compact_task_line(task: dict, now: datetime) -> str:
     emoji = get_emoji(task.get("label", ""))
-    name = task.get("summary") or task.get("id", "?")
-    name = str(name)[:24]
+    role = get_label_name(task.get("label", ""))
+    name = preferred_task_title(task, limit=52)
     model = short_model(task.get("model", ""))
+    cost = model_cost_badge(task.get("model", ""))
+    tier = str(task.get("tier", "?"))[:8]
     duration = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
-    return f"- {emoji} {name:<24} {model:<8} {duration}"
+    eta = task.get("expected_done_at")
+    eta_text = f" · 预计 {format_clock(eta, now)}" if eta else ""
+    return f"  {emoji} {role} · {model} · {cost} · {tier} · ⏱️ {duration}{eta_text}\n    └ {name}"
 
 
 def render_status_text_compact(snapshot: dict) -> str:
     now = snapshot["now"]
+    recent_done_count = len(snapshot["done_recent"])
+    recent_failed_count = len(snapshot["failed_recent"])
     lines = [
-        "🐙 Octopus",
+        "🐙 八爪鱼（OctoClaw）任务面板",
         (
             f"运行中 {len(snapshot['running'])} | 排队 {len(snapshot['queued'])} | "
             f"待确认 {len(snapshot['pending'])} | 异常 {len(snapshot['failed_recent']) + len(snapshot['steer_needed'])}"
@@ -126,30 +207,60 @@ def render_status_text_compact(snapshot: dict) -> str:
         "",
     ]
     if snapshot["running"]:
-        lines.append("RUNNING")
+        lines.append(f"🔵 运行中（{len(snapshot['running'])}个）")
         lines.extend(_compact_task_line(task, now) for task in snapshot["running"][:8])
         lines.append("")
     if snapshot["queued"]:
-        lines.append("QUEUED")
+        lines.append(f"⏸️ 排队中（{len(snapshot['queued'])}个）")
         for task in snapshot["queued"][:6]:
             deps = ",".join(task.get("deps", [])[:2]) or "?"
-            lines.append(f"- {get_emoji(task.get('label', ''))} {task.get('id', '?')[:24]:<24} wait {deps}")
+            lines.append(
+                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {short_model(task.get('model', ''))} · "
+                f"{model_cost_badge(task.get('model', ''))} · {str(task.get('tier', '?'))[:8]} · wait {deps}"
+            )
+            lines.append(f"    └ {preferred_task_title(task, limit=52)}")
         lines.append("")
     if snapshot["steer_needed"]:
-        lines.append("RECOVERY")
+        lines.append(f"🩹 恢复中（{len(snapshot['steer_needed'])}个）")
         for task in snapshot["steer_needed"][:6]:
             reason = task.get("session_status") or task.get("recovery_action") or "needs attention"
-            lines.append(f"- {get_emoji(task.get('label', ''))} {task.get('id', '?')[:24]:<24} {reason}")
+            lines.append(
+                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {short_model(task.get('model', ''))} · "
+                f"{str(task.get('tier', '?'))[:8]} · {str(reason)[:24]}"
+            )
+            lines.append(f"    └ {preferred_task_title(task, limit=52)}")
         lines.append("")
+    if recent_done_count or recent_failed_count:
+        lines.append(f"📋 近期结束（最近30分钟）：✅完成{recent_done_count} ❌失败{recent_failed_count}")
     if snapshot["done_recent"]:
-        lines.append(f"DONE <30m ({len(snapshot['done_recent'])})")
         for task in snapshot["done_recent"][:5]:
-            lines.append(f"- {task.get('id', '?')[:26]} {str(task.get('summary', ''))[:48]}")
-        lines.append("")
+            duration = format_duration_between(
+                task.get("started_at") or task.get("spawned_at") or "",
+                task.get("completed_at") or "",
+                now,
+            )
+            completed = format_clock(task.get("completed_at") or "", now)
+            lines.append(
+                f"  ✅ {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · "
+                f"{short_model(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
+                f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
+            )
+            lines.append(f"    └ {preferred_task_title(task, limit=60)}")
     if snapshot["failed_recent"]:
-        lines.append(f"FAILED <30m ({len(snapshot['failed_recent'])})")
         for task in snapshot["failed_recent"][:5]:
-            lines.append(f"- {task.get('id', '?')[:26]} {str(task.get('summary', ''))[:48]}")
+            duration = format_duration_between(
+                task.get("started_at") or task.get("spawned_at") or "",
+                task.get("completed_at") or "",
+                now,
+            )
+            completed = format_clock(task.get("completed_at") or "", now)
+            lines.append(
+                f"  ❌ {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · "
+                f"{short_model(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
+                f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
+            )
+            lines.append(f"    └ {preferred_task_title(task, limit=60)}")
+    if recent_done_count or recent_failed_count:
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -181,8 +292,8 @@ def render_status_table(snapshot: dict) -> str:
                 note = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
             rows.append(
                 [
-                    str(task.get("id", "?"))[:22],
-                    str(task.get("label", ""))[:8].replace("octopus-", ""),
+                    preferred_task_title(task, limit=22),
+                    get_label_name(task.get("label", ""))[:8],
                     short_model(task.get("model", ""))[:8],
                     status_text,
                     note,
@@ -192,7 +303,7 @@ def render_status_table(snapshot: dict) -> str:
     widths = [22, 8, 8, 8, 18]
     border = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
     lines = [
-        "🐙 Octopus Status",
+        "🐙 八爪鱼（OctoClaw）状态",
         border,
         _table_row(["Task", "Role", "Model", "Status", "Note"], widths),
         border,
@@ -230,7 +341,7 @@ def render_status_lanes(snapshot: dict) -> str:
     ]
 
     def lane_line(task: dict) -> str:
-        name = str(task.get("summary") or task.get("id", "?"))[:26]
+        name = preferred_task_title(task, limit=26)
         status = task.get("status", "?")
         if task in snapshot["steer_needed"]:
             status = "needs-steer"
@@ -241,7 +352,7 @@ def render_status_lanes(snapshot: dict) -> str:
         return f"  └─ {name:<26} [{status:<11}] {note}"
 
     lines = [
-        "🐙 OCTOPUS",
+        "🐙 八爪鱼（OctoClaw）",
         "",
         "Main",
         "  └─ orchestration active",

@@ -391,6 +391,12 @@ def classify_tasks(tasks: list) -> tuple:
             # 仅对运行超过2分钟的任务检查（避免刚启动的任务被误判）
             if age_minutes >= 2:
                 task_label = t.get("label", "")
+                if task_label == "octopus-runner":
+                    task_label = ""
+                if t.get("label", "") == "octopus-runner":
+                    # Persistent runner jobs are file/queue-driven and have no child session lifecycle.
+                    # Let runner_queue/result files be the source of truth instead of session-ended heuristics.
+                    task_label = ""
                 session_status = t.get("session_status", "")
                 ended = session_status in ("completed", "stale", "missing") or (task_label and is_session_ended(task_label))
                 if ended:
@@ -441,6 +447,8 @@ def classify_tasks(tasks: list) -> tuple:
                 # ── 改进：区分"卡死/真实失败"和"完成但无RESULT" ──
                 task_id = t.get("id", "")
                 task_label = t.get("label", "")
+                if task_label == "octopus-runner":
+                    task_label = ""
                 # 检查 session 是否已结束 + 是否幽灵完成
                 if is_session_ended(task_label) and check_ghost_completion(task_id, task_label):
                     # 完成但无RESULT，不重派
@@ -1849,9 +1857,9 @@ def build_panel_card(running: list, queued: list, pending_confirm: list, deferre
     from datetime import timedelta
     if sent_at and sent_at > 0:
         expire_date = (datetime.fromtimestamp(sent_at) + timedelta(days=30)).strftime("%m月%d日")
-        footer_text = f"💡 发送「八爪鱼状态」可随时查看最新面板 | 🕐 最后更新：{now_str} · 📅 有效至 {expire_date}"
+        footer_text = f"💡 发送「八爪鱼状态」可随时查看最新面板 | ⚡ 快捷动作：在当前会话继续下发任务即可复用调度上下文 | 🕐 最后更新：{now_str} · 📅 有效至 {expire_date}"
     else:
-        footer_text = f"💡 发送「八爪鱼状态」可随时查看最新面板 | 🕐 最后更新：{now_str}"
+        footer_text = f"💡 发送「八爪鱼状态」可随时查看最新面板 | ⚡ 快捷动作：在当前会话继续下发任务即可复用调度上下文 | 🕐 最后更新：{now_str}"
     elements.append({
         "tag": "note",
         "elements": [
@@ -1875,7 +1883,7 @@ def build_panel_card(running: list, queued: list, pending_confirm: list, deferre
         "header": {
             "title": {
                 "tag": "plain_text",
-                "content": "🐙 八爪鱼任务面板"
+                "content": "🐙 八爪鱼（OctoClaw）任务面板"
             },
             "template": header_color
         },
@@ -1902,7 +1910,7 @@ def build_idle_card(recent_done: list = None) -> dict:
     return {
         "config": {"wide_screen_mode": True},
         "header": {
-            "title": {"tag": "plain_text", "content": "🐙 八爪鱼 · 空闲中"},
+            "title": {"tag": "plain_text", "content": "🐙 八爪鱼（OctoClaw）· 空闲中"},
             "template": "green"
         },
         "elements": [

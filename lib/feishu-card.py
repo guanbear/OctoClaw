@@ -245,7 +245,7 @@ def build_card(tasks: list, sent_at: str = None) -> dict:
         "header": {
             "title": {
                 "tag": "plain_text",
-                "content": "🐙 八爪鱼任务派遣"
+                "content": "🐙 八爪鱼（OctoClaw）任务派遣"
             },
             "template": "blue"
         },
@@ -272,7 +272,7 @@ def build_card(tasks: list, sent_at: str = None) -> dict:
                 "elements": [
                     {
                         "tag": "plain_text",
-                        "content": f"⏱️ 派遣于 {sent_at}  ·  共 {total} 个触手"
+                        "content": f"⏱️ 派遣于 {sent_at}  ·  共 {total} 个触手  ·  快捷动作：发送「八爪鱼状态」查看完整面板"
                     }
                 ]
             }

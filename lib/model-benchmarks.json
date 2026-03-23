@@ -9,6 +9,11 @@
   ],
   "models": {
     "omniroute/cx/gpt-5.4": {
+      "family": "gpt-5.4",
+      "size_class": "strong",
+      "preferred_use": ["main", "analyze", "power", "hard", "deep"],
+      "upgrade_path": [],
+      "fallback_path": ["openai-codex/gpt-5.4"],
       "scores": {
         "coding": 0.97,
         "reasoning": 0.96,
@@ -22,6 +27,13 @@
         "claw_eval": 0.91,
         "openrouter_rankings": 0.89,
         "openclaw_live_compat": 0.95
+      },
+      "benchmark_meta": {
+        "pinchbench": {"updated_at": "2026-03-18T00:00:00Z", "confidence": 0.92, "family_inferred": false},
+        "artificial_analysis_coding": {"updated_at": "2026-03-05T00:00:00Z", "confidence": 0.9, "family_inferred": false},
+        "claw_eval": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.9, "family_inferred": false},
+        "openrouter_rankings": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.62, "family_inferred": false},
+        "openclaw_live_compat": {"updated_at": "2026-03-23T00:00:00Z", "confidence": 0.97, "family_inferred": false}
       },
       "source_refs": [
         "pinchbench_2026-03-18",
@@ -32,6 +44,11 @@
       ]
     },
     "openai-codex/gpt-5.4": {
+      "family": "gpt-5.4",
+      "size_class": "strong",
+      "preferred_use": ["main", "analyze", "power", "hard", "deep"],
+      "upgrade_path": [],
+      "fallback_path": ["omniroute/cx/gpt-5.4"],
       "scores": {
         "coding": 0.97,
         "reasoning": 0.96,
@@ -46,6 +63,13 @@
         "openrouter_rankings": 0.89,
         "openclaw_live_compat": 0.95
       },
+      "benchmark_meta": {
+        "pinchbench": {"updated_at": "2026-03-18T00:00:00Z", "confidence": 0.92, "family_inferred": false},
+        "artificial_analysis_coding": {"updated_at": "2026-03-05T00:00:00Z", "confidence": 0.9, "family_inferred": false},
+        "claw_eval": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.9, "family_inferred": false},
+        "openrouter_rankings": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.62, "family_inferred": false},
+        "openclaw_live_compat": {"updated_at": "2026-03-23T00:00:00Z", "confidence": 0.97, "family_inferred": false}
+      },
       "source_refs": [
         "pinchbench_2026-03-18",
         "artificial_analysis_coding_2026-03",
@@ -55,6 +79,11 @@
       ]
     },
     "zhipu/GLM-4.7": {
+      "family": "glm",
+      "size_class": "base",
+      "preferred_use": ["runner", "fix", "test", "writer", "simple", "normal"],
+      "upgrade_path": ["lixiang-glm-5/kivy-glm-5"],
+      "fallback_path": [],
       "scores": {
         "coding": 0.83,
         "reasoning": 0.82,
@@ -69,6 +98,13 @@
         "openrouter_rankings": 0.78,
         "openclaw_live_compat": 0.85
       },
+      "benchmark_meta": {
+        "pinchbench": {"updated_at": "2026-03-18T00:00:00Z", "confidence": 0.72, "family_inferred": true},
+        "artificial_analysis_coding": {"updated_at": "2026-03-10T00:00:00Z", "confidence": 0.82, "family_inferred": false},
+        "claw_eval": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.84, "family_inferred": false},
+        "openrouter_rankings": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.58, "family_inferred": false},
+        "openclaw_live_compat": {"updated_at": "2026-03-23T00:00:00Z", "confidence": 0.9, "family_inferred": false}
+      },
       "source_refs": [
         "claw_eval_2026-03-22",
         "artificial_analysis_glm47_2026-03",
@@ -77,6 +113,11 @@
       ]
     },
     "minimax-portal/MiniMax-M2.7": {
+      "family": "minimax",
+      "size_class": "base",
+      "preferred_use": ["runner", "scout", "writer", "trivial", "simple"],
+      "upgrade_path": [],
+      "fallback_path": ["zhipu/GLM-4.7"],
       "scores": {
         "coding": 0.8,
         "reasoning": 0.81,
@@ -90,6 +131,13 @@
         "claw_eval": 0.83,
         "openrouter_rankings": 0.81,
         "openclaw_live_compat": 0.82
+      },
+      "benchmark_meta": {
+        "pinchbench": {"updated_at": "2026-03-18T00:00:00Z", "confidence": 0.78, "family_inferred": true},
+        "artificial_analysis_coding": {"updated_at": "2026-03-10T00:00:00Z", "confidence": 0.74, "family_inferred": true},
+        "claw_eval": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.83, "family_inferred": false},
+        "openrouter_rankings": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.6, "family_inferred": false},
+        "openclaw_live_compat": {"updated_at": "2026-03-23T00:00:00Z", "confidence": 0.86, "family_inferred": false}
       },
       "source_refs": [
         "claw_eval_2026-03-22",

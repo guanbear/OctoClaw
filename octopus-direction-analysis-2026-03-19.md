@@ -550,6 +550,39 @@ created: 2026-03-19
 
 如果飞书通知仍然要重度自动化，可以把“通知执行面”视作半常驻，但不一定要作为智能子 agent 独立存在。
 
+### 4.3.1 固定 runner 的交互体验要求
+
+常驻 `runner` 本身没有问题，问题通常出在“主 agent 到 runner 的交接体验”。
+
+这块需要明确区分：
+
+- **真实执行层**
+  - 由常驻 `runner` 执行 shell/log/status/curl/grep 这类快任务
+- **聊天呈现层**
+  - 由主 agent 负责一句话收束和回复用户
+
+如果只把任务异步丢给 `runner`，但不稳定把结果送回当前会话，用户会误以为“子 agent 让整体变慢了”。
+
+所以固定 `runner` 要满足 3 条：
+
+1. **快任务默认短等待**
+   - 命中 `runner` 后，优先在当前回合等待一个很短的窗口拿结果
+   - 能直接回结果就不要先发长前奏
+
+2. **超时必须兜底回复**
+   - 如果短等待拿不到结果，也必须明确告诉用户：
+     - 已转后台执行
+     - 可以用 `/octostatus` 查看
+
+3. **归因必须基于 runtime 证据**
+   - 不要让主 agent 自己猜“这次是不是主 agent 做的”
+   - 应以 task-state / runner-queue / result 文件为准
+
+也就是说：
+
+- 固定 `runner` 是正确方向
+- 但必须补齐“等待结果 + 超时兜底 + 正确归因”这层体验
+
 #### 临时
 
 这些全部建议保持临时 spawn：
@@ -1037,6 +1070,18 @@ OctoClaw 更合理的借法是：
 
 它负责先做路由决策，再交给 `dispatch_task.py` 真正执行。
 
+这里再补一个很关键的工程经验：
+
+- `octoclaw_route` 只决定 **谁来执行**
+- `dispatch_task.py` 负责把这个决定真正落地
+- 对 `runner` 路径，不能继续要求主 agent 先自己拼 shell 命令
+- 更稳的做法是加一层 **runner playbook**
+  - `system_summary`
+  - `service_health`
+  - `local_file_probe`
+
+这样自然语言的“本机检查”也能直接下沉到常驻 runner，而不是被迫回退成主 agent 亲自执行。
+
 推荐实现不是训练一个黑盒模型，而是：
 
 1. **Hard gates**
@@ -1053,6 +1098,181 @@ OctoClaw 更合理的借法是：
 - 纯本地小模型分类
 
 都更稳定、更可解释。
+
+更准确地说，`octoclaw_route` 应该是一个**调度决策器**，不是“关键词命中器”。它至少要同时回答：
+
+1. 主 agent 自己做，还是切走？
+2. 如果切走，是给常驻 `runner`，还是给临时子 agent？
+3. 如果给子 agent，是一个还是多个？
+
+总原则也应该明确：
+
+- `direct` 是**白名单**
+- 不是默认值
+- 任何需要本机工具、会显著拉长主上下文、或更适合隔离执行的任务，都应该先经过 `octoclaw_route -> dispatch`
+
+推荐输入特征不要只盯语义关键词，而要同时看：
+
+- `tool_need`
+- `task_shape`
+- `context_growth`
+- `risk`
+- `latency_sensitivity`
+- `parallel_gain`
+- `budget_pressure`
+- `runtime_health`
+
+比较稳的工程顺序是：
+
+1. **硬门禁**
+   - 明显 `direct / runner / spawn` 的情况直接切掉
+2. **灰区打分**
+   - 只对边界任务算 `direct_score / runner_score / spawn_single_score / spawn_multi_score`
+3. **保守回退**
+   - `direct` 和 `spawn_single` 接近时优先 `spawn_single`
+   - `runner` 和 `direct` 接近但明显要本机状态时优先 `runner`
+4. **反馈学习**
+   - 用 replay/eval 和线上结果持续调权重
+
+这样就不会退化成：
+
+- 纯 `AGENTS.md`
+- 纯关键词 router
+- 纯本地小模型裁判
+
+而是一个“执行形态、上下文成本、套餐经济学、运行时健康”一起参与的路由系统。
+
+### 补充：如何借鉴 `ClawRouter`
+
+`ClawRouter` 值得借鉴的不是“把 OctoClaw 做成另一个单请求代理”，而是下面 4 点：
+
+1. **本地低延迟决策**
+   - route 层尽量纯脚本、纯本地，不为路由本身再调用大模型
+2. **profile 化**
+   - `auto / eco / premium / private` 这类 profile 值得借
+   - 但应同时影响 `route + role + model`
+3. **中间层 tier**
+   - 不直接从“任务文本 -> 模型”
+   - 而是：
+     - `task -> route -> role/tier -> model`
+4. **插件化接入**
+   - 把 `octoclaw_route / octoclaw_dispatch / octoclaw_status` 做成更原生的 OpenClaw tool/extension
+
+不建议照搬的部分：
+
+- 不要退化成纯 proxy router
+- 不要只优化“单次请求选哪个模型”
+- 不要把支付/钱包式结算模型直接搬过来
+
+OctoClaw 要解决的是整条任务链：
+
+- `direct / runner / spawn_single / spawn_multi`
+- 主脑和子脑分工
+- 上下文隔离
+- 恢复与巡逻
+
+所以 `ClawRouter` 对 OctoClaw 最大的启发，是“本地加权决策器 + profile + 插件化”，不是“让 OctoClaw 只做模型代理”。
+
+### 补充：数据源治理不能只靠“多榜单混合”
+
+OctoClaw 现在已经接入：
+
+- `PinchBench`
+- `Artificial Analysis`
+- `Claw-Eval`
+- `OpenRouter rankings`
+- `openclaw_live_compat`
+
+方向是对的，但后面不能停留在“把几个分数直接混合”。
+
+更稳的做法是额外维护：
+
+- `model-sources.json`
+
+让来源职责显式分层：
+
+- `OpenRouter`
+  - 模型目录 / 价格 / provider / 参数 / context
+  - 榜单只做低权重生态信号
+- `Artificial Analysis`
+  - 通用 coding / reasoning / latency
+- `PinchBench`
+  - OpenClaw / agent / coding 实战主榜
+- `Claw-Eval`
+  - agent workflow 辅助榜
+- `本地实测`
+  - 真正裁判
+
+这会直接带来 3 个改进：
+
+1. `freshness`
+   - 旧榜单自动衰减
+2. `confidence`
+   - 不同来源置信度不同
+3. `family inferred discount`
+   - 家族推断值不能被当成具体型号的精确真相
+
+一句话：
+
+> 外部榜单负责“提供参考”，本地实测和套餐状态负责“最后拍板”。
+
+### 补充：飞书 3.22 对 OctoClaw 的真实价值
+
+OpenClaw 3.22 在飞书侧最值得 OctoClaw 吸收的是：
+
+- `structured interactive approval / quick-action launcher cards`
+- `current-conversation ACP + subagent session binding`
+- `callback user / conversation context preservation`
+
+但当前 OctoClaw 要分两层看：
+
+#### 已经可以直接吃到的
+
+- 双语结构化卡片头尾
+- 更统一的状态面板 / 任务卡风格
+- 快捷动作提示
+
+#### 还需要后续重构的
+
+- 当前会话 ACP
+- 子 agent session 绑定到原飞书对话
+- completion 自动回投到原飞书会话
+- 真正的 callback action 路由
+
+原因是：
+
+- 当前飞书仍主要走 `feishu-card.py` + 直接 Feishu API
+- 它已经能发卡、更新卡、发 DM
+- 但还没完整接进 OpenClaw 3.22 的 shared outbound identity / ACP 体系
+
+所以飞书 3.22 的正确借法不是“继续手写更多卡片”，而是：
+
+1. 先把当前卡片层做统一
+2. 再逐步把飞书入口迁到 shared outbound / ACP
+3. 最终让飞书变成真正的会话绑定执行入口
+
+### 补充：`octoclaw_dispatch` 的返回必须 user-safe
+
+交互式体验里，`octoclaw_dispatch` 不能只返回：
+
+- `route`
+- `executed`
+- `details`
+
+否则主 agent 很容易在拿到一个“执行中间态”后，自己开始补脑，甚至把内部犹豫文本暴露给用户。
+
+更稳的做法是：
+
+- 对 `runner completed`
+  - 返回一个**可直接用于收口**的 user-safe handoff
+- 对 `runner timeout`
+  - 返回一个**后台提示**：
+    - 已转后台执行
+    - 可用 `/octostatus` 查看
+- 对 `spawn planned`
+  - 返回简洁的计划型 handoff，不要求主 agent 自己重新推理一遍
+
+也就是说，tool 返回不仅要“给机器看”，还要“足够适合主 agent 直接组织成用户回复”。
 
 当前仓库已经补了一个最小 runtime extension 骨架：
 

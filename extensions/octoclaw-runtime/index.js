@@ -66,6 +66,35 @@ function toolResponse(summary, details = {}) {
   };
 }
 
+function statusToolResponse(rawOutput, format) {
+  const text = [
+    "OctoClaw raw status panel below. Return it verbatim to the user without summarizing or rewriting.",
+    "```text",
+    rawOutput,
+    "```",
+  ].join("\n");
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      format,
+      source: "status.sh",
+      raw_output: rawOutput,
+      return_verbatim: true,
+    },
+  };
+}
+
+function handoffText(payload, fallback) {
+  const handoff = payload?.handoff;
+  if (handoff?.user_safe && handoff?.reply_text) {
+    return handoff.reply_text;
+  }
+  if (handoff?.summary) {
+    return handoff.summary;
+  }
+  return fallback;
+}
+
 export default function (pi) {
   pi.registerTool(
     {
@@ -116,8 +145,12 @@ export default function (pi) {
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
+        args.push("--wait", "--wait-timeout-seconds", "12");
         const payload = await runJsonScript("dispatch_task.py", args, ctx.cwd || process.cwd());
-        return toolResponse(`OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`, payload);
+        return toolResponse(
+          handoffText(payload, `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`),
+          payload,
+        );
       },
     },
     { source: "octoclaw-runtime" },
@@ -127,7 +160,7 @@ export default function (pi) {
     {
       name: "octoclaw_status",
       label: "OctoClaw Status",
-      description: "Show current OctoClaw runner and task state in text, table, or lane format.",
+      description: "Show current OctoClaw runner and task state. Default to compact dashboard; use table/lanes only when the user explicitly asks for those views.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -136,18 +169,18 @@ export default function (pi) {
         }
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const format = params.format || "table";
+        const format = params.format || "compact";
         const output = await runStatus(format, ctx.cwd || process.cwd());
-        return toolResponse(output, { format, source: "status.sh" });
+        return statusToolResponse(output, format);
       },
     },
     { source: "octoclaw-runtime" },
   );
 
   pi.registerCommand("octostatus", {
-    description: "Show OctoClaw status in compact, table, or lanes format",
+    description: "Show OctoClaw status; default compact dashboard, table/lanes only when explicitly requested",
     handler: async (args, ctx) => {
-      const format = (args || "").trim() || "table";
+      const format = (args || "").trim() || "compact";
       const output = await runStatus(format, ctx.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.notify(`OctoClaw status (${format})`);
