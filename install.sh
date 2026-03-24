@@ -54,6 +54,7 @@ FEATURE_OMNIROUTE_PLAN_SYNC="${FEATURE_OMNIROUTE_PLAN_SYNC:-true}"
 OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES="${OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES:-15}"
 PATROL_MODE="${PATROL_MODE:-loop}"
 PATROL_INTERVAL="${PATROL_INTERVAL:-60}"
+SUPERVISOR_MODE="${SUPERVISOR_MODE:-auto}"
 NOTIFICATION_BACKEND="${NOTIFICATION_BACKEND:-auto}"
 NOTIFICATION_PANEL_ENABLED="${NOTIFICATION_PANEL_ENABLED:-true}"
 NOTIFICATION_EVENT_ENABLED="${NOTIFICATION_EVENT_ENABLED:-true}"
@@ -213,14 +214,156 @@ for j in jobs:
 # ─────────────────────────────────────────────
 # patrol-loop 进程管理（loop 模式使用）
 # ─────────────────────────────────────────────
-_PATROL_LOOP_PID_FILE="/workspace/tmp/octopus/patrol-loop.pid"
-_PATROL_LOOP_LOG="/workspace/tmp/octopus/patrol.log"
-_RUNNER_DAEMON_PID_FILE="/workspace/tmp/octopus/runner-daemon.pid"
-_RUNNER_DAEMON_LOG="/workspace/tmp/octopus/runner.log"
+_PATROL_LOOP_PID_FILE="$WORKSPACE/tmp/octopus/patrol-loop.pid"
+_PATROL_LOOP_LOG="$WORKSPACE/tmp/octopus/patrol.log"
+_RUNNER_DAEMON_PID_FILE="$WORKSPACE/tmp/octopus/runner-daemon.pid"
+_RUNNER_DAEMON_LOG="$WORKSPACE/tmp/octopus/runner.log"
+_RUNNER_HEALTH_FILE="$WORKSPACE/tmp/octopus/runner-health.json"
+_SYSTEMD_RUNNER_SERVICE="octoclaw-runner.service"
+_SYSTEMD_PATROL_SERVICE="octoclaw-patrol.service"
+_SYSTEMD_UNIT_DIR="/etc/systemd/system"
+
+_clear_stale_runtime_state() {
+    local pid_file="$1"
+    local health_file="${2:-}"
+    if [ -f "$pid_file" ]; then
+        local old_pid
+        old_pid=$(cat "$pid_file" 2>/dev/null || echo "")
+        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$pid_file"
+        if [ -n "$health_file" ]; then
+            rm -f "$health_file"
+        fi
+    fi
+}
+
+_systemd_available() {
+    command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
+_resolve_supervisor_mode() {
+    if [ "${SUPERVISOR_MODE:-auto}" = "systemd" ]; then
+        printf '%s\n' "systemd"
+        return 0
+    fi
+    if [ "${SUPERVISOR_MODE:-auto}" = "shell" ]; then
+        printf '%s\n' "shell"
+        return 0
+    fi
+    if [ "${PATROL_MODE:-loop}" = "loop" ] && _systemd_available; then
+        printf '%s\n' "systemd"
+        return 0
+    fi
+    printf '%s\n' "shell"
+}
+
+_render_systemd_unit() {
+    local template_file="$1"
+    local output_file="$2"
+    python3 - "$template_file" "$output_file" "$WORKSPACE" "$SKILL_ROOT" "${SUDO_USER:-${USER:-root}}" <<'PY'
+from pathlib import Path
+import sys
+
+template_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+workspace = sys.argv[3]
+skill_root = sys.argv[4]
+run_user = sys.argv[5]
+
+text = template_path.read_text(encoding="utf-8")
+text = text.replace("__WORKSPACE__", workspace)
+text = text.replace("__SKILL_ROOT__", skill_root)
+text = text.replace("__RUN_USER__", run_user)
+output_path.write_text(text, encoding="utf-8")
+PY
+}
+
+_install_systemd_units() {
+    if ! _systemd_available; then
+        echo "ℹ️  当前环境未检测到 systemd，跳过 systemd 守护安装"
+        return 1
+    fi
+
+    local template_dir="$SCRIPT_DIR/lib/systemd"
+    local runner_template="$template_dir/octoclaw-runner.service"
+    local patrol_template="$template_dir/octoclaw-patrol.service"
+    local runner_target="$_SYSTEMD_UNIT_DIR/$_SYSTEMD_RUNNER_SERVICE"
+    local patrol_target="$_SYSTEMD_UNIT_DIR/$_SYSTEMD_PATROL_SERVICE"
+
+    if [ ! -f "$runner_template" ] || [ ! -f "$patrol_template" ]; then
+        echo "⚠️  未找到 systemd unit 模板，跳过"
+        return 1
+    fi
+
+    _render_systemd_unit "$runner_template" "$runner_target"
+    _render_systemd_unit "$patrol_template" "$patrol_target"
+    systemctl daemon-reload
+    systemctl enable "$_SYSTEMD_RUNNER_SERVICE" "$_SYSTEMD_PATROL_SERVICE" >/dev/null 2>&1 || true
+    echo "✅ 已安装 systemd 守护：$_SYSTEMD_RUNNER_SERVICE / $_SYSTEMD_PATROL_SERVICE"
+}
+
+_remove_systemd_units() {
+    if ! _systemd_available; then
+        return 0
+    fi
+    systemctl disable --now "$_SYSTEMD_RUNNER_SERVICE" "$_SYSTEMD_PATROL_SERVICE" >/dev/null 2>&1 || true
+    rm -f "$_SYSTEMD_UNIT_DIR/$_SYSTEMD_RUNNER_SERVICE" "$_SYSTEMD_UNIT_DIR/$_SYSTEMD_PATROL_SERVICE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+_start_runner_service() {
+    local mode
+    mode="$(_resolve_supervisor_mode)"
+    if [ "$mode" = "systemd" ]; then
+        _install_systemd_units || return 1
+        systemctl restart "$_SYSTEMD_RUNNER_SERVICE"
+        echo "✅ runner 已由 systemd 托管：$_SYSTEMD_RUNNER_SERVICE"
+        return 0
+    fi
+    _start_runner_daemon
+}
+
+_stop_runner_service() {
+    local mode
+    mode="$(_resolve_supervisor_mode)"
+    if [ "$mode" = "systemd" ] && _systemd_available; then
+        systemctl stop "$_SYSTEMD_RUNNER_SERVICE" >/dev/null 2>&1 || true
+        rm -f "$_RUNNER_HEALTH_FILE" "$_RUNNER_DAEMON_PID_FILE"
+        echo "✅ runner systemd 服务已停止"
+        return 0
+    fi
+    _stop_runner_daemon
+}
+
+_start_patrol_service() {
+    local mode
+    mode="$(_resolve_supervisor_mode)"
+    if [ "$mode" = "systemd" ]; then
+        _install_systemd_units || return 1
+        systemctl restart "$_SYSTEMD_PATROL_SERVICE"
+        echo "✅ patrol 已由 systemd 托管：$_SYSTEMD_PATROL_SERVICE"
+        return 0
+    fi
+    _start_patrol_loop
+}
+
+_stop_patrol_service() {
+    local mode
+    mode="$(_resolve_supervisor_mode)"
+    if [ "$mode" = "systemd" ] && _systemd_available; then
+        systemctl stop "$_SYSTEMD_PATROL_SERVICE" >/dev/null 2>&1 || true
+        rm -f "$_PATROL_LOOP_PID_FILE"
+        echo "✅ patrol systemd 服务已停止"
+        return 0
+    fi
+    _stop_patrol_loop
+}
 
 _start_patrol_loop() {
     local loop_script="$SCRIPT_DIR/lib/patrol-loop.sh"
-    mkdir -p /workspace/tmp/octopus
+    mkdir -p "$WORKSPACE/tmp/octopus"
 
     # 检查是否已在运行
     if [ -f "$_PATROL_LOOP_PID_FILE" ]; then
@@ -269,12 +412,14 @@ _stop_patrol_loop() {
 
 _start_runner_daemon() {
     local daemon_script="$SCRIPT_DIR/lib/runner-daemon.sh"
-    mkdir -p /workspace/tmp/octopus
+    mkdir -p "$WORKSPACE/tmp/octopus"
 
     if [ "${RUNNER_ENABLED:-true}" != "true" ]; then
         echo "ℹ️  RUNNER_ENABLED=false，跳过 runner-daemon 启动"
         return 0
     fi
+
+    _clear_stale_runtime_state "$_RUNNER_DAEMON_PID_FILE" "$_RUNNER_HEALTH_FILE"
 
     if [ -f "$_RUNNER_DAEMON_PID_FILE" ]; then
         local old_pid
@@ -283,7 +428,6 @@ _start_runner_daemon() {
             echo "ℹ️  runner-daemon 已在运行 (PID=$old_pid)，跳过"
             return 0
         fi
-        rm -f "$_RUNNER_DAEMON_PID_FILE"
     fi
 
     if [ ! -f "$daemon_script" ]; then
@@ -321,6 +465,7 @@ _stop_runner_daemon() {
             echo "ℹ️  runner-daemon 进程已不存在"
         fi
         rm -f "$_RUNNER_DAEMON_PID_FILE"
+        rm -f "$_RUNNER_HEALTH_FILE"
     else
         echo "ℹ️  runner-daemon 未在运行（PID 文件不存在）"
     fi
@@ -336,8 +481,9 @@ do_uninstall() {
 
     # 1. 停止巡逻（loop 模式停进程，cron 模式删 cron）
     echo "📡 停止巡逻任务..."
-    _stop_patrol_loop
-    _stop_runner_daemon
+    _stop_patrol_service
+    _stop_runner_service
+    _remove_systemd_units
     _delete_cron_by_name "octopus-patrol"
     _delete_cron_by_name "octopus-probe"
     _delete_cron_by_name "octopus-plan-sync"
@@ -400,11 +546,11 @@ do_disable() {
     # 停止巡逻
     echo "📡 停止巡逻任务..."
     if [ "${PATROL_MODE:-loop}" = "loop" ]; then
-        _stop_patrol_loop
+        _stop_patrol_service
     else
         _disable_cron_by_name "octopus-patrol"
     fi
-    _stop_runner_daemon
+    _stop_runner_service
     _disable_cron_by_name "octopus-probe"
     _disable_cron_by_name "octopus-plan-sync"
     _disable_cron_by_name "octopus-update-check"
@@ -436,11 +582,11 @@ do_enable() {
     # 重新启动巡逻
     echo "📡 启动巡逻任务..."
     if [ "${PATROL_MODE:-loop}" = "loop" ]; then
-        _start_patrol_loop
+        _start_patrol_service
     else
         _enable_cron_by_name "octopus-patrol"
     fi
-    _start_runner_daemon
+    _start_runner_service
     _enable_cron_by_name "octopus-probe"
     _enable_cron_by_name "octopus-plan-sync"
     _enable_cron_by_name "octopus-update-check"
@@ -448,7 +594,7 @@ do_enable() {
     echo ""
     echo "✅ 八爪鱼已重新启用"
     if [ "${PATROL_MODE:-loop}" = "loop" ]; then
-        echo "   patrol-loop 巡逻进程已启动（零 token，间隔 ${PATROL_INTERVAL}s）"
+        echo "   巡逻守护已恢复（$(_resolve_supervisor_mode)，间隔 ${PATROL_INTERVAL}s）"
     else
         echo "   cron 巡逻和探测任务已恢复"
     fi
@@ -738,8 +884,8 @@ install_patrol_cron() {
             _delete_cron_by_name "octopus-patrol"
         fi
 
-        _start_patrol_loop
-        _start_runner_daemon
+        _start_patrol_service
+        _start_runner_service
 
         # 注册每日版本检查 cron（仅版本检查，每天一次，token 消耗可忽略）
         if ! command -v openclaw &>/dev/null; then
@@ -1241,9 +1387,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "✅ 工作目录已创建"
 echo "✅ 通知后端：$ACTIVE_NOTIFICATION_BACKEND"
 if [ "${PATROL_MODE:-loop}" = "loop" ]; then
-    echo "✅ 巡逻模式：零 token loop（间隔 ${PATROL_INTERVAL}s）"
+    echo "✅ 巡逻模式：零 token loop（$(_resolve_supervisor_mode)，间隔 ${PATROL_INTERVAL}s）"
     if [ "${RUNNER_ENABLED:-true}" = "true" ]; then
-        echo "✅ 飞鱼腿模式：常驻 runner-daemon"
+        echo "✅ 飞鱼腿模式：常驻 runner（$(_resolve_supervisor_mode) 托管）"
     else
         echo "ℹ️  飞鱼腿模式：已禁用"
     fi

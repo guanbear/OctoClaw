@@ -146,6 +146,41 @@
         "openrouter_rankings_2026-03-22",
         "openclaw_live_testing_2026-03"
       ]
+    },
+    "minimax-portal/MiniMax-M2.7-highspeed": {
+      "family": "minimax",
+      "size_class": "base",
+      "preferred_use": ["runner", "router", "scout", "writer", "trivial", "simple"],
+      "upgrade_path": [],
+      "fallback_path": ["minimax-portal/MiniMax-M2.7", "zhipu/GLM-4.7"],
+      "scores": {
+        "coding": 0.8,
+        "reasoning": 0.82,
+        "openclaw": 0.8,
+        "writing": 0.88,
+        "reliability": 0.84
+      },
+      "benchmark_scores": {
+        "pinchbench": 0.82,
+        "artificial_analysis_coding": 0.8,
+        "claw_eval": 0.84,
+        "openrouter_rankings": 0.81,
+        "openclaw_live_compat": 0.84
+      },
+      "benchmark_meta": {
+        "pinchbench": {"updated_at": "2026-03-18T00:00:00Z", "confidence": 0.78, "family_inferred": true},
+        "artificial_analysis_coding": {"updated_at": "2026-03-10T00:00:00Z", "confidence": 0.74, "family_inferred": true},
+        "claw_eval": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.84, "family_inferred": false},
+        "openrouter_rankings": {"updated_at": "2026-03-22T00:00:00Z", "confidence": 0.6, "family_inferred": false},
+        "openclaw_live_compat": {"updated_at": "2026-03-23T00:00:00Z", "confidence": 0.88, "family_inferred": false}
+      },
+      "source_refs": [
+        "claw_eval_2026-03-22",
+        "pinchbench_minimax_family_2026-03",
+        "artificial_analysis_minimax_family_2026-03",
+        "openrouter_rankings_2026-03-22",
+        "openclaw_live_testing_2026-03"
+      ]
     }
   }
 }

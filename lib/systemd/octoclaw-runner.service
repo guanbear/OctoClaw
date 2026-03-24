@@ -1,0 +1,24 @@
+[Unit]
+Description=OctoClaw Runner Daemon
+After=network-online.target openclaw.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+WorkingDirectory=__SKILL_ROOT__
+Environment=WORKSPACE=__WORKSPACE__
+Environment=RUNNER_POLL_INTERVAL_SECONDS=3
+Environment=RUNNER_HEARTBEAT_INTERVAL_SECONDS=10
+Environment=RUNNER_DEFAULT_TIMEOUT_SECONDS=120
+Environment=RUNNER_MAX_AGE_MINUTES=120
+Environment=RUNNER_MAX_JOBS_PER_WORKER=50
+ExecStartPre=/bin/rm -f __WORKSPACE__/tmp/octopus/runner-daemon.pid __WORKSPACE__/tmp/octopus/runner-health.json
+ExecStart=/bin/bash __SKILL_ROOT__/lib/runner-daemon.sh
+ExecStopPost=/bin/rm -f __WORKSPACE__/tmp/octopus/runner-daemon.pid __WORKSPACE__/tmp/octopus/runner-health.json
+Restart=always
+RestartSec=3
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

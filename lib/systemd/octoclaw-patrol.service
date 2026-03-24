@@ -1,0 +1,20 @@
+[Unit]
+Description=OctoClaw Patrol Loop
+After=network-online.target openclaw.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+WorkingDirectory=__SKILL_ROOT__
+Environment=WORKSPACE=__WORKSPACE__
+Environment=PATROL_INTERVAL=60
+ExecStartPre=/bin/rm -f __WORKSPACE__/tmp/octopus/patrol-loop.pid
+ExecStart=/bin/bash __SKILL_ROOT__/lib/patrol-loop.sh
+ExecStopPost=/bin/rm -f __WORKSPACE__/tmp/octopus/patrol-loop.pid
+Restart=always
+RestartSec=10
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

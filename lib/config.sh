@@ -11,6 +11,12 @@ PATROL_MODE="${PATROL_MODE:-loop}"
 # 巡逻间隔（秒），仅 loop 模式生效；cron 模式间隔在注册时固定为 1min
 PATROL_INTERVAL="${PATROL_INTERVAL:-60}"
 
+# ── 守护方式 ──────────────────────────────────────────────────────────────────
+# auto: Linux + systemd 环境优先用 systemd 守护；否则退回 shell loop
+# systemd: 强制用 systemd 守护 octoclaw-runner / octoclaw-patrol
+# shell: 使用 setsid 后台循环（兼容模式）
+SUPERVISOR_MODE="${SUPERVISOR_MODE:-auto}"
+
 # ── 通知后端 ──────────────────────────────────────────────────────────────────
 # auto: 自动探测（当前优先 Feishu DM，有则启用；否则 none）
 # feishu: 使用飞书卡片/文本通知

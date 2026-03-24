@@ -7,12 +7,20 @@
 # 停止: kill $(cat /workspace/tmp/octopus/patrol-loop.pid)
 # 间隔: 通过 PATROL_INTERVAL 环境变量控制（默认 60 秒）
 
-PATROL_SCRIPT="/workspace/openclaw/skills/octopus/lib/patrol.py"
-LOG_FILE="/workspace/tmp/octopus/patrol.log"
-PID_FILE="/workspace/tmp/octopus/patrol-loop.pid"
+WORKSPACE="${WORKSPACE:-/workspace}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATROL_SCRIPT="$SCRIPT_DIR/patrol.py"
+LOG_FILE="$WORKSPACE/tmp/octopus/patrol.log"
+PID_FILE="$WORKSPACE/tmp/octopus/patrol-loop.pid"
 INTERVAL=${PATROL_INTERVAL:-60}  # 默认 60 秒，由 config.sh 的 PATROL_INTERVAL 控制
 
-mkdir -p /workspace/tmp/octopus
+mkdir -p "$WORKSPACE/tmp/octopus"
+
+cleanup() {
+    rm -f "$PID_FILE"
+}
+
+trap cleanup EXIT INT TERM
 
 # 防止重复启动
 if [ -f "$PID_FILE" ]; then
@@ -21,6 +29,7 @@ if [ -f "$PID_FILE" ]; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] patrol-loop 已在运行 (PID=$OLD_PID)，退出" >> "$LOG_FILE"
         exit 0
     fi
+    rm -f "$PID_FILE"
 fi
 
 echo $$ > "$PID_FILE"

@@ -43,6 +43,14 @@ MODEL_PRIORS = [
         "source_refs": ["glm47_release_2025-12", "artificial_analysis_glm47_2026-03"],
     },
     {
+        "patterns": [r"minimax.*m2\.7.*highspeed", r"m2\.7.*highspeed", r"minimax-m2\.7-highspeed"],
+        "short_name": "minimax-m2.7-highspeed",
+        "pricing": {"input": 0.55, "output": 1.6},
+        "scores": {"coding": 0.81, "reasoning": 0.82, "openclaw": 0.81, "writing": 0.88, "reliability": 0.84},
+        "speed": {"ttft_ms": 1200, "output_tps": 100},
+        "source_refs": ["minimax_m2_highspeed_2026-03", "local_plan_plus_highspeed_2026-03"],
+    },
+    {
         "patterns": [r"minimax.*m2\.7", r"m2\.7", r"minimax-m2\.7"],
         "short_name": "minimax-m2.7",
         "pricing": {"input": 0.55, "output": 1.6},
@@ -85,6 +93,7 @@ SIZE_CLASS_ORDER = {
 
 ROLE_SIZE_PREFERENCE = {
     "runner": {"nano": 1.00, "mini": 0.98, "base": 0.92, "strong": 0.72},
+    "router": {"nano": 0.82, "mini": 1.00, "base": 0.95, "strong": 0.68},
     "fix": {"nano": 0.45, "mini": 0.70, "base": 0.95, "strong": 1.00},
     "test": {"nano": 0.55, "mini": 0.78, "base": 0.96, "strong": 1.00},
     "scout": {"nano": 0.65, "mini": 0.86, "base": 0.98, "strong": 0.92},
@@ -476,11 +485,43 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         availability_score = 0.0 if should_fallback_due_to_plan(model["id"]) else 1.0
         size_class = str(model.get("size_class", "base") or "base")
         size_preference = ROLE_SIZE_PREFERENCE
+        local_speed_present = isinstance(speed.get("ttft_ms"), (int, float)) and isinstance(speed.get("output_tps"), (int, float))
+        local_speed_boost = 1.0 if local_speed_present else 0.88
+        fast_lane_bonus = 0.0
+        if speed.get("ttft_ms", 99999) <= 1800:
+            fast_lane_bonus += 0.08
+        if speed.get("output_tps", 0) >= 80:
+            fast_lane_bonus += 0.05
         if should_fallback_due_to_plan(model["id"]):
             reliability = max(0.0, reliability - 0.20)
 
         role_scores = {
-            "runner": 0.42 * ttft_score + 0.14 * reliability + 0.10 * throughput_score + 0.14 * plan_value_score + 0.09 * price_score + 0.03 * claw_eval + 0.02 * openrouter_rankings + 0.06 * size_preference["runner"].get(size_class, 0.80),
+            "runner": (
+                (
+                    0.64 * ttft_score
+                    + 0.20 * throughput_score
+                    + 0.05 * reliability
+                    + 0.05 * plan_value_score
+                    + 0.02 * price_score
+                    + 0.01 * claw_eval
+                    + 0.01 * size_preference["runner"].get(size_class, 0.80)
+                ) * local_speed_boost
+                + fast_lane_bonus
+            ),
+            "router": (
+                (
+                    0.52 * ttft_score
+                    + 0.18 * throughput_score
+                    + 0.08 * reliability
+                    + 0.10 * reasoning
+                    + 0.04 * openclaw
+                    + 0.04 * plan_value_score
+                    + 0.01 * price_score
+                    + 0.01 * size_preference["router"].get(size_class, 0.80)
+                    + 0.02 * availability_score
+                ) * local_speed_boost
+                + fast_lane_bonus
+            ),
             "fix": 0.24 * coding + 0.16 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["fix"].get(size_class, 0.80),
             "test": 0.22 * coding + 0.18 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["test"].get(size_class, 0.80),
             "scout": 0.19 * openclaw + 0.17 * reasoning + 0.17 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["scout"].get(size_class, 0.80),
@@ -506,6 +547,7 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
 
     labels = {
         "octopus-runner": pick("runner"),
+        "octopus-router": pick("router"),
         "octopus-fix": pick("fix"),
         "octopus-test": pick("test"),
         "octopus-scout": pick("scout"),

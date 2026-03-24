@@ -90,9 +90,22 @@ IMPLEMENT_PATTERNS = [
     r"\b(implement|integrate|fix|patch|write code|script)\b",
 ]
 
+MUTATION_PATTERNS = [
+    r"(修改|改成|改为|更新|删除|新增|创建|写入|替换|迁移|重启|部署|安装|卸载|启用|禁用|调整)",
+    r"(改cron|改配置|改任务|改脚本|改服务|更新配置|修改配置|修改任务|修改服务)",
+    r"(后台执行|本地后台|只负责|避免.*中断|回读日志|触发并回读|更稳的方案)",
+    r"\b(modify|change|update|delete|add|create|write|replace|migrate|restart|deploy|install|uninstall|enable|disable|tune)\b",
+    r"\b(update cron|change cron|modify cron|update config|modify config|change config|update service|modify service)\b",
+]
+
 COST_SENSITIVE_PATTERNS = [
     r"(省钱|低成本|便宜点|别太贵)",
     r"\b(cost|cheap|budget|save money)\b",
+]
+
+SEMANTIC_AMBIGUITY_PATTERNS = [
+    r"(顺手|顺便|一起|同时帮我|看看要不要|必要时|如果需要|最好|更稳的方案)",
+    r"\b(if needed|if necessary|also help|at the same time|better approach|safer approach)\b",
 ]
 
 
@@ -117,7 +130,9 @@ def extract_features(task: str, command: str = "") -> dict:
     local_state_hits = count_matches(text, LOCAL_STATE_PATTERNS)
     verify_hits = count_matches(text, VERIFY_PATTERNS)
     implement_hits = count_matches(text, IMPLEMENT_PATTERNS)
+    mutation_hits = count_matches(text, MUTATION_PATTERNS)
     cost_sensitive_hits = count_matches(text, COST_SENSITIVE_PATTERNS)
+    semantic_ambiguity_hits = count_matches(text, SEMANTIC_AMBIGUITY_PATTERNS)
 
     estimated_steps = 1
     if multi_step_hits > 0:
@@ -132,6 +147,8 @@ def extract_features(task: str, command: str = "") -> dict:
         estimated_steps += 1
     if verify_hits > 0:
         estimated_steps += 1
+    if mutation_hits > 0:
+        estimated_steps += 1
     if len(raw_task) > 140:
         estimated_steps += 1
 
@@ -142,9 +159,9 @@ def extract_features(task: str, command: str = "") -> dict:
         task_shape = "multi_step"
 
     context_growth = "low"
-    if code_hits > 0 or local_state_hits > 0 or verify_hits > 0:
+    if code_hits > 0 or local_state_hits > 0 or verify_hits > 0 or mutation_hits > 0:
         context_growth = "medium"
-    if estimated_steps >= 4 or (research_hits > 0 and (code_hits > 0 or write_hits > 0)):
+    if estimated_steps >= 4 or mutation_hits > 0 or (research_hits > 0 and (code_hits > 0 or write_hits > 0)):
         context_growth = "high"
 
     latency_sensitivity = "normal"
@@ -168,10 +185,13 @@ def extract_features(task: str, command: str = "") -> dict:
         "local_state_hits": local_state_hits,
         "verify_hits": verify_hits,
         "implement_hits": implement_hits,
+        "mutation_hits": mutation_hits,
         "cost_sensitive_hits": cost_sensitive_hits,
+        "semantic_ambiguity_hits": semantic_ambiguity_hits,
         "requires_tools": bool(command) or runner_hits > 0 or local_state_hits > 0,
         "requires_code_work": code_hits > 0,
         "requires_research": research_hits > 0,
+        "requires_mutation": mutation_hits > 0 or (implement_hits > 0 and (code_hits > 0 or local_state_hits > 0)),
         "external_lookup_only": external_lookup_hits > 0 and research_hits == 0 and code_hits == 0 and write_hits == 0,
         "requires_writing": write_hits > 0,
         "estimated_steps": estimated_steps,
@@ -182,6 +202,14 @@ def extract_features(task: str, command: str = "") -> dict:
             or (research_hits > 0 and write_hits > 0 and multi_step_hits > 0)
             or (verify_hits > 0 and (code_hits > 0 or implement_hits > 0))
         ),
+        "local_observation_only": (
+            (bool(command) or runner_hits > 0 or local_state_hits > 0)
+            and mutation_hits == 0
+            and implement_hits == 0
+            and code_hits == 0
+            and research_hits == 0
+            and write_hits == 0
+        ),
         "high_risk": high_risk_hits > 0,
         "context_growth": context_growth,
         "latency_sensitivity": latency_sensitivity,
@@ -191,8 +219,10 @@ def extract_features(task: str, command: str = "") -> dict:
 
 
 def infer_role_hint(features: dict) -> str:
-    if features["requires_tools"] and not features["requires_code_work"] and not features["requires_research"] and not features["requires_writing"]:
+    if features["local_observation_only"]:
         return "octopus-runner"
+    if features["requires_mutation"] and not features["requires_research"]:
+        return "octopus-fix"
     if features["requires_code_work"]:
         return "octopus-fix"
     if features["requires_writing"] and not features["requires_research"]:
@@ -239,6 +269,8 @@ def expected_cost_band(route: str, features: dict) -> str:
 def infer_task_class(features: dict, route: str) -> str:
     if route == "runner":
         return "fast_local_check"
+    if features["requires_mutation"] and route.startswith("spawn"):
+        return "focused_local_change"
     if route == "direct" and features["external_lookup_only"]:
         return "simple_lookup"
     if route == "direct":
@@ -260,6 +292,48 @@ def infer_execution_owner(route: str) -> str:
     return "subagent"
 
 
+def choose_semantic_model_hint() -> str:
+    try:
+        from octopus_config import MODEL_POLICY_FILE, load_json  # lazy import to keep route script cheap
+
+        policy = load_json(MODEL_POLICY_FILE)
+        if isinstance(policy, dict):
+            labels = policy.get("labels", {})
+            if isinstance(labels, dict):
+                model_id = str(labels.get("octopus-router", "") or labels.get("octopus-runner", "") or "")
+                if model_id:
+                    return model_id
+    except Exception:
+        pass
+    return "minimax-portal/MiniMax-M2.7-highspeed"
+
+
+def should_request_semantic_review(features: dict, scores: dict, route: str) -> tuple[bool, float, str]:
+    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    if len(ordered) < 2:
+        return False, 1.0, ""
+    top_route, top_score = ordered[0]
+    second_route, second_score = ordered[1]
+    margin = round(float(top_score) - float(second_score), 3)
+
+    if route == "direct":
+        return False, margin, ""
+
+    if features["requires_mutation"] and route == "runner":
+        return True, margin, "mutation_vs_runner"
+
+    if features["semantic_ambiguity_hits"] > 0 and margin < 0.55:
+        return True, margin, "ambiguous_task_shape"
+
+    if features["requires_research"] and features["requires_tools"] and margin < 0.6:
+        return True, margin, "research_with_tools"
+
+    if features["estimated_steps"] >= 3 and top_route != second_route and margin < 0.45:
+        return True, margin, "close_score_multi_step"
+
+    return False, margin, ""
+
+
 def hard_gate_route(features: dict) -> tuple[str | None, list[str]]:
     reasons: list[str] = []
 
@@ -269,16 +343,22 @@ def hard_gate_route(features: dict) -> tuple[str | None, list[str]]:
     if (
         features["external_lookup_only"]
         and not features["requires_tools"]
+        and not features["requires_mutation"]
         and not features["high_risk"]
         and features["estimated_steps"] <= 2
     ):
         return "direct", ["single_round_external_lookup"]
 
+    if features["requires_mutation"]:
+        reasons = ["mutation_requires_isolation"]
+        if features["local_state_hits"] > 0:
+            reasons.append("local_change_task")
+        if features["high_risk"]:
+            reasons.append("high_risk_mutation")
+        return "spawn_single", reasons
+
     if (
-        features["requires_tools"]
-        and not features["requires_code_work"]
-        and not features["requires_research"]
-        and not features["requires_writing"]
+        features["local_observation_only"]
         and features["estimated_steps"] <= 2
     ):
         return "runner", ["fast_local_tool_task"]
@@ -342,6 +422,12 @@ def infer_route(task: str, command: str = "") -> dict:
             spawn_single_score += 0.15
             reason_codes.append("tool_needed")
 
+        if features["requires_mutation"]:
+            runner_score -= 0.8
+            spawn_single_score += 1.15
+            spawn_multi_score += 0.1
+            reason_codes.append("mutation_work")
+
         if features["local_state_hits"] > 0:
             runner_score += 0.8
             reason_codes.append("local_state_inspection")
@@ -384,6 +470,11 @@ def infer_route(task: str, command: str = "") -> dict:
             spawn_single_score += 0.4
             reason_codes.append("tool_plus_reasoning")
 
+        if features["local_state_hits"] > 0 and features["requires_mutation"]:
+            runner_score -= 0.6
+            spawn_single_score += 0.45
+            reason_codes.append("local_change_not_runner")
+
         if features["cost_sensitive_hits"] > 0 and features["requires_tools"] and not features["requires_code_work"]:
             runner_score += 0.1
             reason_codes.append("cost_sensitive_fast_path")
@@ -406,6 +497,9 @@ def infer_route(task: str, command: str = "") -> dict:
             reason_codes.append("prefer_research_isolation_over_runner")
     if hard_route:
         confidence = 0.92 if route in ("runner", "direct") else 0.88
+
+    needs_semantic_review, score_margin, semantic_reason = should_request_semantic_review(features, scores, route)
+    semantic_model_hint = choose_semantic_model_hint() if needs_semantic_review else ""
 
     role_hint = infer_role_hint(features)
     if route == "direct":
@@ -440,6 +534,10 @@ def infer_route(task: str, command: str = "") -> dict:
         "main_agent_can_execute_directly": route == "direct",
         "should_wait": should_wait,
         "wait_timeout_seconds": wait_timeout_seconds,
+        "needs_semantic_review": needs_semantic_review,
+        "semantic_review_reason": semantic_reason,
+        "score_margin": score_margin,
+        "semantic_model_hint": semantic_model_hint,
         "source": (task or "").strip(),
     }
 
