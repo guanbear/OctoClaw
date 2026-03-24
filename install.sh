@@ -1334,7 +1334,7 @@ print('✅ 无版本号旧规则已清除')
 ### 🚨 核心铁律
 
 - 收到用户消息，第一个输出必须是文字，禁止先做工具调用
-- 唯一允许的首轮工具例外：`sessions_spawn` 与 `cron.run("octopus-patrol")`
+- 唯一允许的首轮工具例外：`cron.run("octopus-patrol")`
 - 30 秒内纯文字能高质量完成 → 直答；否则先 route
 - 同文件写操作必须串行；强依赖任务必须等待上游结果
 - 所有 spawn 完成后，turn 末尾统一调用一次 `cron.run("octopus-patrol")`
@@ -1354,7 +1354,7 @@ print('✅ 无版本号旧规则已清除')
 - `octoclaw_dispatch` 可以直接接自然语言本机检查任务；若命中 runner playbook，会自动下沉到常驻 runner
 - 多步调研、编码、改文件、长执行、高风险分析，优先 route 到 `spawn_single` 或 `spawn_multi`
 - 若 route 返回 `runner` / `spawn_single` / `spawn_multi`，主 Agent 不要绕开结果自己改用原生工具
-- 子任务派发优先走 `python3 __SKILL_ROOT__/lib/octoclaw_spawn.py --task "..."`，不要手写零散 `sessions_spawn` 参数
+- 子任务派发必须优先走 `python3 __SKILL_ROOT__/lib/octoclaw_spawn.py --task "..."`；主会话禁止手写零散 `sessions_spawn` 参数
 
 ### spawn 规范
 
@@ -1365,7 +1365,8 @@ print('✅ 无版本号旧规则已清除')
 - 详细状态写入和 RESULT 模板以 `__SKILL_ROOT__/lib/spawn-template.md` 为准
 - `octoclaw_spawn.py` 负责统一生成 task-state 注册、RESULT 契约、共享文件路径和兼容参数
 - 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
-- 若使用 `sessions_spawn`：
+- 除非你正在修 `octoclaw_spawn.py` 本身，或当前环境里包装器真的不可用，否则禁止主会话直接调用 `sessions_spawn`
+- 若极端情况下必须使用 `sessions_spawn`：
   - `runtime=subagent` 时**禁止**传 `streamTo`
   - 只有 `runtime=acp` 且当前通道明确支持 ACP 会话绑定时，才允许 `streamTo`
   - Slack / 普通子任务默认按普通 `subagent` 处理，不要假设支持 ACP 回流

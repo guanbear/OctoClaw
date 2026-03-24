@@ -124,12 +124,14 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
   - 附加 `RESULT` / 共享文件 / fail-fast 约束
   - 只注入少量相关历史摘要，避免把长上下文直接塞给子任务
   - 为长背景生成 `context pack` 共享文件，子任务按需读取
-- 只有在当前环境里确实无法使用包装器时，才手动调用 `sessions_spawn`
+- 主会话默认禁止手动调用 `sessions_spawn`
+- 只有在你正在修 `octoclaw_spawn.py` 本身，或当前环境里包装器确实不可用时，才允许手动调用 `sessions_spawn`
 - 若 spawn 失败，只回一条简短状态，不要连续播报“我再试一下/参数终于对了”这类内部重试独白
 - 禁止把内部犹豫文本、调试思路或英文自言自语发给用户
 
 ### sessions_spawn 兼容约束
 
+- 非包装器路径一律视为异常回退，不允许当成常规做法
 - `runtime=subagent` 时不要传 `streamTo`
 - `streamTo` 只适用于 `runtime=acp`
 - 只有当前通道明确支持 ACP 会话绑定时，才考虑 `runtime=acp + streamTo`
