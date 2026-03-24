@@ -298,7 +298,7 @@ def recommend_spawn(args, task: str) -> dict:
         label=label,
         tier=tier,
         parent_id=args.id or "",
-        register=False,
+        register=True,
     )
     return {
         "route": "spawn_single",
@@ -325,7 +325,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         label=primary_label,
         tier=primary_tier,
         parent_id=args.id or "",
-        register=False,
+        register=True,
     )
     plan = {
         "planner": {

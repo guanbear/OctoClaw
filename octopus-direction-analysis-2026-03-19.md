@@ -1629,3 +1629,36 @@ OpenClaw 3.22 在飞书侧最值得 OctoClaw 吸收的是：
 一句话说：
 
 > 老版本的强项是“契约”，新版的强项是“分层运行时”。最好的结合方式，是让契约负责约束结果格式，让运行时负责约束上下文预算。
+
+### 11.5 错误学习层也要直接兼容 `self-improving-agent`
+
+老版本这块其实走的是一条很对的路：
+
+- 先把错误记到 `.learnings/ERRORS.md`
+- 巡逻与慢日志再持续补充
+- 重复出现的问题再晋升成防御规则
+
+这里最值得保留的不是某个具体路径，而是“**先记录、再复盘、最后晋升**”的链路。
+
+更合理的新版实现应该是：
+
+- **主接口**：`~/.openclaw/workspace/.learnings/ERRORS.md`
+- **兼容接口**：`/workspace/.learnings/ERRORS.md`
+- **镜像摘要**：`~/self-improving/domains/octopus-errors.md`
+
+这样 OctoClaw 可以直接兼容 `self-improving-agent`，而不是自己发明一套互不相通的错误系统。
+
+真正需要写进 `SKILL.md` 或默认代码行为的，不是所有错误，而是：
+
+- 高频
+- 通用
+- 会坑到其他用户
+- 已经验证能通过规则或脚本稳定避免
+
+例如：
+
+- `runtime=subagent` 不能带 `streamTo`
+- spawn 任务必须先登记 `task-state`
+- 长输出必须默认写共享文件
+
+而像“某次 VM 上旧进程混跑”这类单次 incident，更适合留在错误日志或事故文档，不必直接污染 skill 规则。

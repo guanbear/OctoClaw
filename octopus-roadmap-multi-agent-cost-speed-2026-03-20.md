@@ -1888,3 +1888,54 @@ OctoClaw 后面应该支持“同一家族 API 内先降本、再跨家族 fallb
 - `octoclaw_spawn.py` 应该成为统一 spawn 入口
 
 后面需要继续把 VM 和聊天入口逐步切到这条入口上。
+
+## 十六、错误学习与 nightly review
+
+### 目标
+
+不要把“错误复盘”做成一堆散落备注，而是做成和 `self-improving-agent` 兼容的一层：
+
+- 运行时自动记错误
+- nightly review 聚合同类问题
+- 高频通用问题再晋升到 `SKILL.md` / 代码默认行为 / 安装逻辑
+
+### 建议链路
+
+1. **运行时记录**
+- spawn 参数不兼容
+- runner/patrol 关键失败
+- 长任务 completed_no_result / ghost_completion
+
+先写到：
+- `~/.openclaw/workspace/.learnings/ERRORS.md`
+
+兼容保留：
+- `/workspace/.learnings/ERRORS.md`
+- `~/self-improving/domains/octopus-errors.md`
+
+2. **nightly review**
+- 合并重复错误
+- 更新重现次数
+- 标记值得晋升的规则
+
+3. **晋升**
+- 高频且通用的问题，写回：
+  - `SKILL.md`
+  - `install.sh`
+  - runtime 校验
+  - GitHub 文档
+
+### 典型适合晋升的错误
+
+- `runtime=subagent` 错带 `streamTo`
+- spawn 计划没先写 `task-state`
+- 长内容回上下文导致 tool/会话抖动
+- runner 假在线/stale heartbeat
+
+### 不宜直接晋升到 skill 的错误
+
+- 单次网络抖动
+- 一次性运维事故
+- 某台机器的临时配置问题
+
+这些更适合保留在错误日志和 incident report，不必把 skill 写得越来越臃肿。

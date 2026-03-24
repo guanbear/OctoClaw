@@ -431,14 +431,43 @@ patrol 触发
 
 ## 十二、🛡️ 错误防御与 Self-improving
 
-**错误记录路径**：`~/self-improving/domains/octopus-errors.md`（格式：`- [YYYY-MM-DD] {类型}: {描述} → {修复}`）
+**主错误记录接口**：优先兼容 `self-improving-agent` 的 `.learnings` 约定，而不是另起一套私有协议。
 
-旧路径 `/workspace/.learnings/ERRORS.md` 保留读取（向后兼容）。
+优先级：
+1. `~/.openclaw/workspace/.learnings/ERRORS.md`
+2. `/workspace/.learnings/ERRORS.md`（旧路径，向后兼容）
+3. `~/self-improving/domains/octopus-errors.md`（镜像摘要，可选）
 
 **spawn 前防御检查**：
 - 读取 ERRORS.md 中 status=open 记录
 - medium+ 且重现 ≥2 次 → 先执行 `resolve-model.py` 防御
 - "ghost_completion" + GLM → 强制升级到 Sonnet
+
+### 12.1 错误经验晋升规则
+
+不是所有错误都直接写进 `SKILL.md`。按这条晋升链处理：
+
+1. **现场错误** → 先写 `.learnings/ERRORS.md`
+2. **nightly review** → 聚合同类错误、增加重现次数、补建议修复
+3. **重复且通用** → 升级到代码默认行为 / runtime 校验
+4. **高频且会坑其他用户** → 再写进 `SKILL.md` / `install.sh` / README
+
+可直接晋升到 `SKILL.md` 的典型例子：
+- `runtime=subagent` 禁止带 `streamTo`
+- 长内容默认写共享文件，不要直接塞上下文
+- spawn 任务先注册 `task-state`，失败也要可见
+
+更适合只留在 `.learnings/ERRORS.md` 或 incident 文档的例子：
+- 某天某次 VM 的旧进程混跑
+- 某次临时插件冲突
+- 单次外部网络抖动
+
+### 12.2 nightly review 目标
+
+nightly review 不负责“自动写一堆废话”，只负责三件事：
+- 合并重复错误，更新重现次数
+- 找出需要升格为防御规则的高频问题
+- 把通用经验同步回代码、`SKILL.md` 和仓库文档
 
 ---
 

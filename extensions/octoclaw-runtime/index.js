@@ -158,6 +158,45 @@ export default function (pi) {
 
   pi.registerTool(
     {
+      name: "octoclaw_spawn",
+      label: "OctoClaw Spawn",
+      description: "Generate and register a validated OctoClaw spawn task. Use this instead of hand-writing sessions_spawn arguments.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          task: { type: "string", description: "The task to run in a subagent." },
+          route: { type: "string", enum: ["spawn_single", "spawn_multi"] },
+          label: { type: "string", description: "Optional OctoClaw role label override." },
+          tier: { type: "string", description: "Optional tier override." },
+          model: { type: "string", description: "Optional model override." },
+          runtime: { type: "string", enum: ["subagent", "acp"] },
+          streamTo: { type: "string", description: "Only valid when runtime=acp." },
+          parentId: { type: "string", description: "Optional parent task id." }
+        },
+        required: ["task"]
+      },
+      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+        const args = ["--task", params.task, "--register"];
+        if (params.route) args.push("--route", params.route);
+        if (params.label) args.push("--label", params.label);
+        if (params.tier) args.push("--tier", params.tier);
+        if (params.model) args.push("--model", params.model);
+        if (params.runtime) args.push("--runtime", params.runtime);
+        if (params.streamTo) args.push("--stream-to", params.streamTo);
+        if (params.parentId) args.push("--parent-id", params.parentId);
+        const payload = await runJsonScript("octoclaw_spawn.py", args, ctx.cwd || process.cwd());
+        return toolResponse(
+          handoffText(payload, `OctoClaw spawn registered: ${payload.label} / ${payload.model}`),
+          payload,
+        );
+      },
+    },
+    { source: "octoclaw-runtime" },
+  );
+
+  pi.registerTool(
+    {
       name: "octoclaw_status",
       label: "OctoClaw Status",
       description: "Show current OctoClaw runner and task state. Default to compact dashboard; use table/lanes only when the user explicitly asks for those views.",
@@ -201,6 +240,22 @@ export default function (pi) {
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(`OctoClaw route: ${payload.route}`);
+      }
+    },
+  });
+
+  pi.registerCommand("octospawn", {
+    description: "Register a validated OctoClaw spawn task",
+    handler: async (args, ctx) => {
+      const task = (args || "").trim();
+      if (!task) {
+        if (ctx.hasUI) ctx.ui.notify("Usage: /octospawn <task>", "error");
+        return;
+      }
+      const payload = await runJsonScript("octoclaw_spawn.py", ["--task", task, "--register"], ctx.cwd || process.cwd());
+      if (ctx.hasUI) {
+        ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
+        ctx.ui.notify(`OctoClaw spawn registered: ${payload.task_id}`);
       }
     },
   });

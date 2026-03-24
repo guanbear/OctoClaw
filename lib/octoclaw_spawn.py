@@ -18,6 +18,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+from learning_log import append_error_entry
 from octoclaw_route import infer_route
 from octopus_config import CONTEXT_DIR, SHARED_DIR, TASK_STATE_FILE, load_json
 
@@ -234,6 +235,22 @@ def validate_runtime(runtime: str, stream_to: str, supports_acp: bool) -> list[s
     return problems
 
 
+def log_spawn_error(task: str, error_text: str, *, runtime: str, stream_to: str, parent_id: str) -> None:
+    append_error_entry(
+        skill_or_command="octoclaw_spawn",
+        summary="OctoClaw spawn 参数不兼容，子任务未真正派发。",
+        error_text=error_text,
+        context_lines=[
+            f"task={compact_text(task, 160)}",
+            f"runtime={runtime or '(empty)'}",
+            f"stream_to={stream_to or '(empty)'}",
+            f"parent_id={parent_id or '(empty)'}",
+        ],
+        suggested_fix="不要手写 sessions_spawn 参数；统一通过 octoclaw_spawn.py 生成 payload，runtime=subagent 时禁止 streamTo。",
+        related_files=[TASK_STATE_PY],
+    )
+
+
 def build_task_prompt(
     *,
     task_id: str,
@@ -379,7 +396,9 @@ def build_spawn_spec(
 
     problems = validate_runtime(runtime, stream_to, supports_acp)
     if problems:
-        raise ValueError("；".join(problems))
+        error_text = "；".join(problems)
+        log_spawn_error(task, error_text, runtime=runtime, stream_to=stream_to, parent_id=parent_id)
+        raise ValueError(error_text)
 
     task_id = f"{final_label}-{now_compact()}"
     expected_done = expected_done_offset(final_tier)
