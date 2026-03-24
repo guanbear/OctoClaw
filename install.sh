@@ -1312,6 +1312,10 @@ print('✅ 无版本号旧规则已清除')
   - `runtime=subagent` 时**禁止**传 `streamTo`
   - 只有 `runtime=acp` 且当前通道明确支持 ACP 会话绑定时，才允许 `streamTo`
   - Slack / 普通子任务默认按普通 `subagent` 处理，不要假设支持 ACP 回流
+- 若 spawn / route / dispatch 失败：
+  - 只给用户回一条简短状态，不要连续播报内部重试过程
+  - 不要输出内部犹豫文本、调试思路或英语自言自语
+  - 先把错误写入 `.learnings/ERRORS.md` / task-state，再决定是否回退到主会话直接执行
 
 ### 触手名字
 
