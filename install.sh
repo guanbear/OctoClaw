@@ -404,12 +404,13 @@ do_disable() {
     else
         _disable_cron_by_name "octopus-patrol"
     fi
+    _stop_runner_daemon
     _disable_cron_by_name "octopus-probe"
     _disable_cron_by_name "octopus-plan-sync"
     _disable_cron_by_name "octopus-update-check"
 
     echo ""
-    echo "✅ 八爪鱼已暂停（巡逻已停止，文件保留）"
+    echo "✅ 八爪鱼已暂停（巡逻与 runner 已停止，文件保留）"
     echo "   AGENTS.md 中的规则已保留（但八爪鱼不会主动巡逻）"
     echo "   重新启用：bash $SCRIPT_DIR/install.sh enable"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -439,6 +440,7 @@ do_enable() {
     else
         _enable_cron_by_name "octopus-patrol"
     fi
+    _start_runner_daemon
     _enable_cron_by_name "octopus-probe"
     _enable_cron_by_name "octopus-plan-sync"
     _enable_cron_by_name "octopus-update-check"

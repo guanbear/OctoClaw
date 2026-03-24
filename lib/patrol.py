@@ -122,6 +122,11 @@ def get_model_short(model: str) -> str:
     return short[:15] if len(short) > 15 else short
 
 
+def is_runner_task(task: dict) -> bool:
+    """Persistent runner jobs are queue/file-driven, not child-session-driven."""
+    return str(task.get("label", "") or "") == "octopus-runner"
+
+
 def assign_ordinals(task_list: list) -> dict:
     """
     统计 task_list 中每个 label 出现次数。
@@ -374,6 +379,7 @@ def classify_tasks(tasks: list) -> tuple:
             continue
 
         if status in ("running", "dispatched"):
+            runner_task = is_runner_task(t)
             # running 任务用 started_at 计算年龄（更准确）；dispatched 用 spawned_at
             if status == "running":
                 ref_ts_str = t.get("started_at") or t.get("spawned_at") or t.get("updated_at") or ""
@@ -389,14 +395,8 @@ def classify_tasks(tasks: list) -> tuple:
 
             # ── 新增：session 已结束但 task 仍为 running → 自动标 failed ──
             # 仅对运行超过2分钟的任务检查（避免刚启动的任务被误判）
-            if age_minutes >= 2:
+            if age_minutes >= 2 and not runner_task:
                 task_label = t.get("label", "")
-                if task_label == "octopus-runner":
-                    task_label = ""
-                if t.get("label", "") == "octopus-runner":
-                    # Persistent runner jobs are file/queue-driven and have no child session lifecycle.
-                    # Let runner_queue/result files be the source of truth instead of session-ended heuristics.
-                    task_label = ""
                 session_status = t.get("session_status", "")
                 ended = session_status in ("completed", "stale", "missing") or (task_label and is_session_ended(task_label))
                 if ended:
@@ -447,7 +447,7 @@ def classify_tasks(tasks: list) -> tuple:
                 # ── 改进：区分"卡死/真实失败"和"完成但无RESULT" ──
                 task_id = t.get("id", "")
                 task_label = t.get("label", "")
-                if task_label == "octopus-runner":
+                if runner_task:
                     task_label = ""
                 # 检查 session 是否已结束 + 是否幽灵完成
                 if is_session_ended(task_label) and check_ghost_completion(task_id, task_label):
@@ -692,7 +692,7 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
     这一步让 patrol 不再只靠文件状态猜任务状态。
     """
     sessions_data = load_main_agent_sessions()
-    if not sessions_data or not tasks:
+    if not tasks:
         return tasks
 
     state = load_task_state(TASK_STATE_FILE)
@@ -708,11 +708,29 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
         task_id = task.get("id", "")
         if not task_id:
             continue
-        candidates = build_session_candidates(task, sessions_data)
         state_task = state_by_id.get(task_id)
         if not state_task:
             continue
 
+        if is_runner_task(task):
+            updates = {
+                "session_status": "runner_local",
+                "last_observed_at": observed_at,
+                "session_key": "",
+                "session_id": "",
+                "run_id": "",
+            }
+            for key, value in updates.items():
+                if state_task.get(key) != value:
+                    state_task[key] = value
+                    changed = True
+                task[key] = value
+            continue
+
+        if not sessions_data:
+            continue
+
+        candidates = build_session_candidates(task, sessions_data)
         if not candidates:
             if state_task.get("session_status") != "missing":
                 state_task["session_status"] = "missing"
@@ -882,6 +900,8 @@ def check_orphan_tasks(tasks: list, active_sessions: list) -> list:
 
     for task in tasks:
         if task.get('status') not in ('running', 'dispatched'):
+            continue
+        if is_runner_task(task):
             continue
         spawned_at_str = task.get('spawned_at') or task.get('started_at')
         if not spawned_at_str:
@@ -3384,6 +3404,9 @@ def check_queued_tasks(tasks: list) -> int:
     spawned_count = 0
     for task in queued:
         task_id = task.get("id", "")
+        if is_runner_task(task):
+            print(f"  ℹ️  跳过 runner 队列任务 {task_id}：由 runner_queue 处理，不走 openclaw spawn")
+            continue
         deps = task.get("deps", [])
         task_desc = task.get("task_description", "").strip()
         label = task.get("label", "octopus-fix")
