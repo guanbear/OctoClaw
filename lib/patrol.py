@@ -398,7 +398,10 @@ def classify_tasks(tasks: list) -> tuple:
             if age_minutes >= 2 and not runner_task:
                 task_label = t.get("label", "")
                 session_status = t.get("session_status", "")
-                ended = session_status in ("completed", "stale", "missing") or (task_label and is_session_ended(task_label))
+                # "missing" 更像观测缺失，不应直接等同于 session 已结束。
+                # 老版本对缺失 session 走保守路径，这里也保持同样策略，
+                # 让 orphan/timeout 逻辑继续兜底，避免误把活任务判死。
+                ended = session_status in ("completed", "stale") or (task_label and is_session_ended(task_label))
                 if ended:
                     task_id = t.get("id", "")
                     session_event = t.get("session_last_event", "")
