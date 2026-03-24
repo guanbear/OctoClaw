@@ -366,6 +366,43 @@ def register_dispatched_task(
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def register_failed_spawn_task(
+    *,
+    task_id: str,
+    label: str,
+    model: str,
+    tier: str,
+    task: str,
+    route: str,
+    runtime: str,
+    parent_id: str,
+    report_path: str,
+    context_path: str,
+    context_summary: str,
+    summary: str,
+) -> None:
+    register_dispatched_task(
+        task_id=task_id,
+        label=label,
+        model=model,
+        tier=tier,
+        task=task,
+        expected_done="",
+        route=route,
+        runtime=runtime,
+        report_path=report_path,
+        parent_id=parent_id,
+        context_path=context_path,
+        context_summary=context_summary,
+    )
+    subprocess.run(
+        ["python3", TASK_STATE_PY, "failed", "--id", task_id, "--summary", summary[:180]],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def build_spawn_spec(
     task: str,
     *,
@@ -394,16 +431,30 @@ def build_spawn_spec(
     if not final_model:
         raise ValueError("无法解析 spawn 模型")
 
+    task_id = f"{final_label}-{now_compact()}"
+    report_path = os.path.join(SHARED_DIR, f"{task_id}.md")
+    context_bundle = build_context_bundle(task, parent_id, task_id)
+
     problems = validate_runtime(runtime, stream_to, supports_acp)
     if problems:
         error_text = "；".join(problems)
         log_spawn_error(task, error_text, runtime=runtime, stream_to=stream_to, parent_id=parent_id)
+        register_failed_spawn_task(
+            task_id=task_id,
+            label=final_label,
+            model=final_model,
+            tier=final_tier,
+            task=task,
+            route=final_route,
+            runtime=runtime,
+            parent_id=parent_id,
+            report_path=report_path,
+            context_path=str(context_bundle.get("context_path", "") or ""),
+            context_summary=str(context_bundle.get("summary", "") or ""),
+            summary=f"spawn派发失败：{compact_text(error_text, 120)}",
+        )
         raise ValueError(error_text)
-
-    task_id = f"{final_label}-{now_compact()}"
     expected_done = expected_done_offset(final_tier)
-    report_path = os.path.join(SHARED_DIR, f"{task_id}.md")
-    context_bundle = build_context_bundle(task, parent_id, task_id)
     prompt = build_task_prompt(
         task_id=task_id,
         label=final_label,

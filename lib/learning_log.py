@@ -40,6 +40,15 @@ def error_targets() -> list[str]:
     )
 
 
+def learning_targets() -> list[str]:
+    return _dedupe_keep_order(
+        [
+            os.path.join(OPENCLAW_WORKSPACE, ".learnings", "LEARNINGS.md"),
+            os.path.join(WORKSPACE, ".learnings", "LEARNINGS.md"),
+        ]
+    )
+
+
 def legacy_octopus_error_mirror() -> str:
     return os.path.join(os.path.expanduser("~"), "self-improving", "domains", "octopus-errors.md")
 
@@ -132,3 +141,51 @@ def append_error_entry(
         pass
 
     return err_id
+
+
+def append_learning_entry(
+    *,
+    category: str,
+    summary: str,
+    details: str,
+    suggested_action: str,
+    priority: str = "medium",
+    area: str = "infra",
+    tags: list[str] | None = None,
+) -> str:
+    now = datetime.now(timezone.utc).astimezone()
+    entry_id = f"LRN-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
+    entry = "\n".join(
+        [
+            f"## [{entry_id}] {category}",
+            "",
+            f"**Logged**: {now.isoformat()}",
+            f"**Priority**: {priority}",
+            "**Status**: pending",
+            f"**Area**: {area}",
+            "",
+            "### Summary",
+            summary.strip(),
+            "",
+            "### Details",
+            details.strip(),
+            "",
+            "### Suggested Action",
+            suggested_action.strip(),
+            "",
+            "### Metadata",
+            f"- Source: nightly_error_review",
+            f"- Tags: {', '.join(tags or []) or '(none)'}",
+            "",
+            "---",
+            "",
+        ]
+    )
+    for path in learning_targets():
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(entry)
+        except OSError:
+            pass
+    return entry_id

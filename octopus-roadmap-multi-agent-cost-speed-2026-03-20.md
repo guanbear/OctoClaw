@@ -1925,6 +1925,20 @@ OctoClaw 后面应该支持“同一家族 API 内先降本、再跨家族 fallb
   - runtime 校验
   - GitHub 文档
 
+### 具体落地
+
+- `octoclaw_spawn.py`
+  - 参数不兼容时，先把任务登记为 `failed`
+  - 错误同步写入 `.learnings/ERRORS.md`
+- `nightly_error_review.py`
+  - 纯脚本夜间复盘
+  - 聚合同类错误
+  - 生成共享报告
+  - 对高频问题写入 `LEARNINGS.md`
+- 安装时注册 `octopus-error-review`
+  - 优先 `crontab`（零 token）
+  - 无 `crontab` 时再回退到 `openclaw cron`
+
 ### 典型适合晋升的错误
 
 - `runtime=subagent` 错带 `streamTo`

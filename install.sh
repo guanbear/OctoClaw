@@ -1125,6 +1125,63 @@ JSON
 
 install_plan_sync_cron
 
+install_error_review_schedule() {
+    local cron_tag cron_line existing
+    cron_tag="# octopus-error-review"
+    cron_line="30 2 * * * cd ${WORKSPACE}/openclaw/skills/octopus && WORKSPACE=${WORKSPACE} PYTHONPATH=${WORKSPACE}/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py >> ${WORKSPACE}/tmp/octopus/error-review.log 2>&1 ${cron_tag}"
+
+    if command -v crontab >/dev/null 2>&1; then
+        echo "📡 注册 OctoClaw 夜间错误复盘计划（每天 02:30，零 token 纯脚本）..."
+        existing="$(crontab -l 2>/dev/null || true)"
+        existing="$(printf '%s\n' "$existing" | grep -v 'octopus-error-review' || true)"
+        { printf '%s\n' "$existing"; printf '%s\n' "$cron_line"; } | crontab -
+        echo "✅ octopus-error-review 已写入 crontab"
+        return 0
+    fi
+
+    if command -v openclaw >/dev/null 2>&1; then
+        echo "⚠️  未检测到 crontab，回退使用 openclaw cron 注册 nightly review（会消耗少量 token）..."
+        if openclaw cron list 2>/dev/null | grep -q "octopus-error-review"; then
+            echo "ℹ️  octopus-error-review cron 已存在，跳过"
+            return 0
+        fi
+
+        GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
+        GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+        REVIEW_PAYLOAD="$(cat <<JSON
+{
+  "name": "octopus-error-review",
+  "schedule": {"kind": "cron", "expression": "30 2 * * *", "timezone": "Asia/Shanghai"},
+  "payload": {
+    "kind": "agentTurn",
+    "message": "执行 OctoClaw 夜间错误复盘。\\n\\n执行以下命令：\\n```bash\\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py\\n```\\n\\n执行完成后直接结束，无需额外回复。",
+    "timeoutSeconds": 120
+  },
+  "delivery": {"mode": "none"},
+  "sessionTarget": "isolated",
+  "enabled": true
+}
+JSON
+)"
+        HTTP_CODE=$(curl -s -o /tmp/octopus-error-review-cron-result.json -w "%{http_code}" \
+            -X POST "$GATEWAY_URL/api/cron/jobs" \
+            -H "Content-Type: application/json" \
+            ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
+            -d "$REVIEW_PAYLOAD")
+        if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+            echo "✅ octopus-error-review cron 注册成功（每天02:30）"
+        else
+            echo "⚠️  octopus-error-review cron 注册失败（HTTP $HTTP_CODE）"
+            cat /tmp/octopus-error-review-cron-result.json 2>/dev/null
+        fi
+        return 0
+    fi
+
+    echo "⚠️  未检测到 crontab / openclaw，跳过 nightly error review 安装"
+}
+
+install_error_review_schedule
+
 # 5. 首次模型延迟探测
 if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
     echo ""
