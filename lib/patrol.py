@@ -363,6 +363,16 @@ def classify_tasks(tasks: list) -> tuple:
     stuck = []
 
     now = now_utc()
+    fresh_status_by_id = {}
+    try:
+        fresh_data = load_task_state(TASK_STATE_FILE)
+        fresh_status_by_id = {
+            ft.get("id"): ft.get("status")
+            for ft in fresh_data.get("tasks", [])
+            if isinstance(ft, dict) and ft.get("id")
+        }
+    except Exception:
+        fresh_status_by_id = {}
 
     for t in tasks:
         status = t.get("status", "")
@@ -425,17 +435,8 @@ def classify_tasks(tasks: list) -> tuple:
                     continue
 
             # ── 修复：超时判断前重新读取最新状态，避免误判已完成的任务 ──
-            # 子 Agent 可能刚写入 status=done，但内存中还是旧状态
             task_id = t.get("id", "")
-            fresh_status = None
-            try:
-                fresh_data = load_task_state(TASK_STATE_FILE)
-                for ft in fresh_data.get("tasks", []):
-                    if ft.get("id") == task_id:
-                        fresh_status = ft.get("status")
-                        break
-            except Exception:
-                pass  # 读取失败则继续使用内存状态
+            fresh_status = fresh_status_by_id.get(task_id)
 
             # 如果最新状态已完成，跳过超时检查
             if fresh_status in ("done", "failed", "expired", "completed_no_result"):
@@ -3412,6 +3413,7 @@ def check_queued_tasks(tasks: list) -> int:
 
     # 建立全量 id→status 索引
     id_to_status = {t["id"]: t["status"] for t in tasks if "id" in t}
+    resolved_model_cache: dict[tuple[str, str], str | None] = {}
 
     spawned_count = 0
     for task in queued:
@@ -3447,23 +3449,33 @@ def check_queued_tasks(tasks: list) -> int:
         tier = task.get("tier", "")
         if not tier:
             tier = LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
-        # 调用 resolve-model.py 获取最新 model（感知全局降级和模型守卫）
-        try:
-            resolve_result = subprocess.run(
-                ["python3", "/workspace/openclaw/skills/octopus/lib/resolve-model.py", "--tier", tier, "--label", label],
-                capture_output=True, text=True, timeout=5
-            )
-            if resolve_result.returncode == 0:
-                resolved_model = resolve_result.stdout.strip()
-                if resolved_model:
-                    model = resolved_model
-                    print(f"  🔄 resolved model: {model} (tier={tier})")
+        cache_key = (tier, label)
+        cached_model = resolved_model_cache.get(cache_key, "__missing__")
+        if cached_model == "__missing__":
+            # 调用 resolve-model.py 获取最新 model（感知全局降级和模型守卫）
+            try:
+                resolve_result = subprocess.run(
+                    ["python3", "/workspace/openclaw/skills/octopus/lib/resolve-model.py", "--tier", tier, "--label", label],
+                    capture_output=True, text=True, timeout=5
+                )
+                if resolve_result.returncode == 0:
+                    resolved_model = resolve_result.stdout.strip()
+                    if resolved_model:
+                        resolved_model_cache[cache_key] = resolved_model
+                        model = resolved_model
+                        print(f"  🔄 resolved model: {model} (tier={tier})")
+                    else:
+                        resolved_model_cache[cache_key] = None
+                        print(f"  ⚠️  resolve-model.py 返回空，使用原 model: {model}")
                 else:
-                    print(f"  ⚠️  resolve-model.py 返回空，使用原 model: {model}")
-            else:
-                print(f"  ⚠️  resolve-model.py 失败，使用原 model: {model}")
-        except Exception as e:
-            print(f"  ⚠️  resolve-model.py 异常: {e}，使用原 model: {model}")
+                    resolved_model_cache[cache_key] = None
+                    print(f"  ⚠️  resolve-model.py 失败，使用原 model: {model}")
+            except Exception as e:
+                resolved_model_cache[cache_key] = None
+                print(f"  ⚠️  resolve-model.py 异常: {e}，使用原 model: {model}")
+        elif cached_model:
+            model = cached_model
+            print(f"  ♻️  复用 resolved model: {model} (tier={tier})")
 
         print(f"  🚀 queued 任务 {task_id} 依赖全部完成，正在 spawn...")
         try:
