@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from octoclaw_route import infer_route
 from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json
+from octoclaw_spawn import build_spawn_spec
 from runner_playbooks import infer_runner_playbook
 
 
@@ -291,16 +292,24 @@ def recommend_spawn(args, task: str) -> dict:
     if label == "main":
         label = infer_label(task)
     tier = args.tier or route_meta.get("tier_hint") or infer_tier(task, label)
-    model = resolve_model(tier, label, task)
+    spawn_spec = build_spawn_spec(
+        task,
+        route="spawn_single",
+        label=label,
+        tier=tier,
+        parent_id=args.id or "",
+        register=False,
+    )
     return {
         "route": "spawn_single",
         "executed": False,
-        "label": label,
-        "tier": tier,
-        "model": model,
+        "label": spawn_spec["label"],
+        "tier": spawn_spec["tier"],
+        "model": spawn_spec["model"],
         "reason": "needs_subagent",
         "task": task,
-        "handoff": build_spawn_handoff("spawn_single", label, task),
+        "handoff": spawn_spec["handoff"],
+        "spawn_spec": spawn_spec,
     }
 
 
@@ -310,7 +319,14 @@ def recommend_multi_spawn(args, task: str) -> dict:
     if primary_label == "main":
         primary_label = infer_label(task)
     primary_tier = args.tier or route_meta.get("tier_hint") or infer_tier(task, primary_label)
-    primary_model = resolve_model(primary_tier, primary_label, task)
+    primary_spawn = build_spawn_spec(
+        task,
+        route="spawn_multi",
+        label=primary_label,
+        tier=primary_tier,
+        parent_id=args.id or "",
+        register=False,
+    )
     plan = {
         "planner": {
             "label": "octopus-analyze",
@@ -318,9 +334,9 @@ def recommend_multi_spawn(args, task: str) -> dict:
             "model": resolve_model("hard", "octopus-analyze", task),
         },
         "worker": {
-            "label": primary_label,
-            "tier": primary_tier,
-            "model": primary_model,
+            "label": primary_spawn["label"],
+            "tier": primary_spawn["tier"],
+            "model": primary_spawn["model"],
         },
     }
     if primary_label in ("octopus-fix", "octopus-power", "octopus-test"):
@@ -332,13 +348,14 @@ def recommend_multi_spawn(args, task: str) -> dict:
     return {
         "route": "spawn_multi",
         "executed": False,
-        "label": primary_label,
-        "tier": primary_tier,
-        "model": primary_model,
+        "label": primary_spawn["label"],
+        "tier": primary_spawn["tier"],
+        "model": primary_spawn["model"],
         "reason": "parallel_or_staged_workflow",
         "task": task,
         "plan": plan,
-        "handoff": build_spawn_handoff("spawn_multi", primary_label, task),
+        "handoff": primary_spawn["handoff"],
+        "spawn_spec": primary_spawn,
     }
 
 

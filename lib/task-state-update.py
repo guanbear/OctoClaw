@@ -140,6 +140,14 @@ def cmd_upsert(args):
                 existing["retry_count"] = args.retry_count
             if args.executor or not existing.get("executor"):
                 existing["executor"] = infer_executor(existing.get("label", ""), args.executor or "")
+            if args.route:
+                existing["route"] = args.route
+            if args.runtime:
+                existing["runtime"] = args.runtime
+            if args.parent_id:
+                existing["parent_id"] = args.parent_id
+            if args.report_path:
+                existing["report_path"] = args.report_path
             existing["updated_at"] = now_iso()
         else:
             record = {
@@ -178,6 +186,14 @@ def cmd_upsert(args):
             if args.retry_count is not None:
                 record["retry_count"] = args.retry_count
             record["executor"] = infer_executor(record.get("label", ""), args.executor or "")
+            if args.route:
+                record["route"] = args.route
+            if args.runtime:
+                record["runtime"] = args.runtime
+            if args.parent_id:
+                record["parent_id"] = args.parent_id
+            if args.report_path:
+                record["report_path"] = args.report_path
             tasks.append(record)
 
         state["tasks"] = tasks
@@ -281,6 +297,10 @@ def main():
     p_upsert.add_argument("--recovery-action", dest="recovery_action")
     p_upsert.add_argument("--retry-count", dest="retry_count", type=int)
     p_upsert.add_argument("--executor", choices=["subagent", "runner"])
+    p_upsert.add_argument("--route")
+    p_upsert.add_argument("--runtime")
+    p_upsert.add_argument("--parent-id", dest="parent_id")
+    p_upsert.add_argument("--report-path", dest="report_path")
 
     # done
     p_done = sub.add_parser("done")

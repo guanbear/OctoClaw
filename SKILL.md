@@ -112,7 +112,17 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
 
 ### 3.1 零工具调用原则
 
-**每个 turn 只做两件事：① 输出文字回复 ② 调用 sessions_spawn**
+**每个 turn 只做两件事：① 输出文字回复 ② 调用统一 spawn 入口**
+
+### 统一 spawn 入口
+
+- 优先使用：`python3 /workspace/openclaw/skills/octopus/lib/octoclaw_spawn.py --task "..."`
+- `octoclaw_spawn.py` 负责：
+  - 校验 `runtime/subagent/acp/streamTo` 兼容性
+  - 先注册 `task-state`
+  - 生成统一 task prompt
+  - 附加 `RESULT` / 共享文件 / fail-fast 约束
+- 只有在当前环境里确实无法使用包装器时，才手动调用 `sessions_spawn`
 
 ### sessions_spawn 兼容约束
 
@@ -222,6 +232,7 @@ MODEL=$(python3 /workspace/openclaw/skills/octopus/lib/resolve-model.py --tier n
 1. **检查防御规则**：读 `/workspace/.learnings/ERRORS.md` 中 status=open；有 medium+ 且重现 ≥2次 → 先执行 `resolve-model.py` 防御
 2. **获取模型**：优先读缓存，缓存无效才调 `resolve-model.py`
 3. **检查铁甲虾降级**：读 `/tmp/ironclaw-model-guard-override.json`，guarded=true → 改用 current_model
+4. **优先走 `octoclaw_spawn.py`**：不要手写零散 spawn 参数，避免 `runtime=subagent + streamTo` 这类兼容错误
 
 ### 6.2 并行 vs 串行
 
@@ -293,7 +304,7 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert \
 
 ### 7.3 子 Agent 嵌套 spawn
 
-子 Agent 若自己 spawn 子任务，**必须**先调用 `task-state-update.py upsert` 注册任务，否则面板无法显示任务标题。
+子 Agent 若自己 spawn 子任务，**必须**先调用 `octoclaw_spawn.py` 或至少先执行 `task-state-update.py upsert` 注册任务，否则面板无法显示任务标题。
 
 ---
 

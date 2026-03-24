@@ -1460,3 +1460,59 @@ OpenClaw 3.22 在飞书侧最值得 OctoClaw 吸收的是：
 - 持久 worker 轮换机制
 
 那八爪鱼会比单纯 router 更“深”，也比纯模板更“硬”。
+
+## 补充四：老版本还有哪些值得借鉴
+
+从 `v1.0.33` 往回看，老八爪鱼最有价值的不是“规则很多”，而是它对子任务约束形成了一整套闭环：
+
+- 主 Agent 基本只做两件事：文字回复 + `sessions_spawn`
+- 子任务开始前必须先写 `task-state`
+- 子任务结束时必须输出统一 `---RESULT---`
+- 大段内容默认写共享文件，不走上下文
+- patrol 会用 transcript + RESULT + task-state 三方交叉校验
+- queued/deps 会在 patrol 中自动解锁继续派发
+
+这套设计的优点是：
+
+- 结果可恢复
+- 输出可审计
+- 主会话不容易被大段日志和长文污染
+- 子任务做没做完，不靠主 Agent 猜
+
+真正需要借回来的不是“更长的 AGENTS 铁律”，而是这几个机制本身。
+
+## 补充五：新版已经更先进的地方
+
+和老版本比，当前新版真正更先进的地方主要在运行时：
+
+- `octoclaw_route`
+  - 不再只是“需要工具就 spawn”，而是先做 `direct / runner / spawn_single / spawn_multi` 的执行形态判断
+- `dispatch_task`
+  - 有统一的 route/dispatch/handoff 返回，而不是只靠自然语言约定
+- 常驻 `runner`
+  - 快任务不再每次都冷启动一个子会话
+- plan-aware / benchmark-aware model scoring
+  - 已经综合本地测速、榜单、套餐状态、健康状态
+- runtime extension
+  - 已经有 `octoclaw_route / octoclaw_dispatch / octoclaw_status` 工具入口
+- 状态面板
+  - 已经恢复到接近老版本的 recent/模型/成本/tier/时长视图
+
+所以现在最优路线不是回退到“全靠旧铁律”，而是：
+
+- 保留新版 route/runtime/runner/状态面板
+- 把老版本的 RESULT / task-state / 共享文件 / patrol 兜底经验再收紧
+
+## 补充六：系统性改进方向
+
+这一轮最值得做的系统性改进是：
+
+- 新增统一 `octoclaw_spawn.py`
+  - 让子任务派发不再散落在文档、提示词和临时手写参数里
+- `dispatch_task` 对 `spawn_single / spawn_multi` 直接产出标准 spawn spec
+- `task-state` 增加 `route / runtime / parent_id / report_path`
+- 主 Agent 不再手写零散 `sessions_spawn` 参数
+
+一句话说：
+
+> 老版本最强的是“子任务契约”，新版最强的是“运行时分层”。OctoClaw 最好的方向，是把这两者合并。

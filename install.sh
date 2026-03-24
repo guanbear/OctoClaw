@@ -1151,6 +1151,7 @@ print('✅ 无版本号旧规则已清除')
 - `octoclaw_dispatch` 可以直接接自然语言本机检查任务；若命中 runner playbook，会自动下沉到常驻 runner
 - 多步调研、编码、改文件、长执行、高风险分析，优先 route 到 `spawn_single` 或 `spawn_multi`
 - 若 route 返回 `runner` / `spawn_single` / `spawn_multi`，主 Agent 不要绕开结果自己改用原生工具
+- 子任务派发优先走 `python3 __SKILL_ROOT__/lib/octoclaw_spawn.py --task "..."`，不要手写零散 `sessions_spawn` 参数
 
 ### spawn 规范
 
@@ -1159,6 +1160,7 @@ print('✅ 无版本号旧规则已清除')
 - task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `__STATE_DIR__/shared/{task_id}.md`
 - 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
 - 详细状态写入和 RESULT 模板以 `__SKILL_ROOT__/lib/spawn-template.md` 为准
+- `octoclaw_spawn.py` 负责统一生成 task-state 注册、RESULT 契约、共享文件路径和兼容参数
 - 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
 - 若使用 `sessions_spawn`：
   - `runtime=subagent` 时**禁止**传 `streamTo`

@@ -1731,3 +1731,57 @@ OctoClaw 后面应该支持“同一家族 API 内先降本、再跨家族 fallb
 2. `runner` 成为默认快任务执行面
 3. `session-aware + steer before redispatch`
 4. 长期 worker 的轮换和保活
+
+## 十五、统一 spawn 包装器
+
+### 为什么现在需要它
+
+老版本八爪鱼对子任务执行有很强的约束，但主要散落在：
+
+- `AGENTS.md`
+- `SKILL.md`
+- `spawn-template.md`
+- `task-state-update.py`
+- `patrol.py`
+
+这套设计有效，但主 Agent 仍可能：
+
+- 手写 `sessions_spawn` 参数
+- 忘记先注册 `task-state`
+- 忘记长输出走共享文件
+- 把 `runtime=subagent` 和 `streamTo` 这种不兼容参数混在一起
+
+所以后面必须有一个统一的 spawn 包装器。
+
+### 包装器目标
+
+建议统一收敛到：
+
+- `octoclaw_spawn.py`
+
+职责：
+
+- 校验 `runtime / streamTo / ACP` 兼容关系
+- 先注册 `task-state`
+- 自动生成统一 task prompt
+- 自动附加 `RESULT` 规范
+- 自动给出共享文件 `report_path`
+- 让 `dispatch_task` 的 spawn 推荐直接变成可执行规范
+
+### 这样做的收益
+
+- 把老版本最值钱的“契约”沉到脚本层
+- 减少主 Agent 手写 spawn 参数导致的漂移
+- 让 `spawn_single / spawn_multi` 也像 `runner` 一样更工程化
+- 让 patrol / 状态面板 / shared file / RESULT 形成统一闭环
+
+### 当前状态
+
+当前代码已经开始往这条路走：
+
+- `octoclaw_route.py` 负责 route
+- `dispatch_task.py` 负责 runner/direct/spawn 推荐
+- `spawn-template.md` 保留 RESULT/共享文件/fail-fast 规范
+- `octoclaw_spawn.py` 应该成为统一 spawn 入口
+
+后面需要继续把 VM 和聊天入口逐步切到这条入口上。
