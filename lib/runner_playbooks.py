@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from typing import Iterable
 
 
@@ -43,11 +44,92 @@ SERVICE_PORTS = {
 }
 
 PATH_PATTERN = re.compile(r"(/[A-Za-z0-9._/\-]+)")
+REMOTE_HINT_PATTERNS = [
+    "远程",
+    "remote",
+    "另一台",
+    "另一台机器",
+    "另一台主机",
+    "macmini",
+    "mac mini",
+]
+VERSION_QUERY_TOKENS = ["版本", "version", "--version", "ver"]
+
+VERSION_COMMANDS = {
+    "openclaw": "if command -v openclaw >/dev/null 2>&1; then openclaw --version || openclaw version; "
+                "elif [ -x /opt/homebrew/bin/openclaw ]; then /opt/homebrew/bin/openclaw --version || /opt/homebrew/bin/openclaw version; "
+                "elif [ -x /usr/local/bin/openclaw ]; then /usr/local/bin/openclaw --version || /usr/local/bin/openclaw version; "
+                "elif [ -x /usr/bin/openclaw ]; then /usr/bin/openclaw --version || /usr/bin/openclaw version; "
+                "else echo 'openclaw not found'; fi",
+    "python": "python3 --version || python --version",
+    "node": "node --version",
+    "npm": "npm --version",
+}
 
 
 def contains_any(text: str, patterns: Iterable[str]) -> bool:
     lowered = text.lower()
     return any(pattern.lower() in lowered for pattern in patterns)
+
+
+def load_ssh_aliases() -> list[str]:
+    aliases: list[str] = []
+    config_path = os.path.expanduser("~/.ssh/config")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if not line.lower().startswith("host "):
+                    continue
+                for token in line.split()[1:]:
+                    if "*" in token or "?" in token:
+                        continue
+                    aliases.append(token)
+    except OSError:
+        return []
+    deduped: list[str] = []
+    seen = set()
+    for alias in aliases:
+        lowered = alias.lower()
+        if lowered and lowered not in seen:
+            seen.add(lowered)
+            deduped.append(alias)
+    return deduped
+
+
+def extract_remote_target(task: str) -> str | None:
+    lowered = task.lower()
+    aliases = load_ssh_aliases()
+    for alias in aliases:
+        if alias.lower() in lowered:
+            return alias
+    if "macmini" in lowered or "mac mini" in lowered:
+        return "macmini"
+    if not contains_any(lowered, REMOTE_HINT_PATTERNS):
+        return None
+    host_like = re.findall(r"[a-z][a-z0-9._-]{2,}", lowered)
+    reserved = {
+        "openclaw", "python", "redis", "nginx", "docker", "memory", "disk", "version",
+        "status", "health", "service", "remote", "host", "server", "machine",
+    }
+    for token in host_like:
+        if token in reserved:
+            continue
+        if token.startswith("octopus") or token.startswith("runner"):
+            continue
+        return token
+    return None
+
+
+def wrap_remote_command(target: str, command: str) -> str:
+    remote_script = "\n".join([
+        "export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH",
+        command.strip(),
+    ])
+    remote_cmd = f"/bin/sh -lc {shlex.quote(remote_script)}"
+    return f"ssh {shlex.quote(target)} {shlex.quote(remote_cmd)}"
 
 
 def build_system_summary_plan(task: str) -> dict | None:
@@ -77,6 +159,48 @@ def build_system_summary_plan(task: str) -> dict | None:
         "command": "\n".join(commands),
         "reason_codes": ["runner_playbook_system_summary"],
         "confidence": 0.88,
+    }
+
+
+def build_version_probe_plan(task: str) -> dict | None:
+    lowered = task.lower()
+    if not contains_any(lowered, VERSION_QUERY_TOKENS):
+        return None
+
+    target_tool = ""
+    for tool, aliases in {
+        "openclaw": ["openclaw"],
+        "python": ["python", "python3"],
+        "node": ["node"],
+        "npm": ["npm"],
+    }.items():
+        if contains_any(lowered, aliases):
+            target_tool = tool
+            break
+
+    if not target_tool:
+        return None
+
+    base_command = VERSION_COMMANDS.get(target_tool, "")
+    if not base_command:
+        return None
+
+    remote_target = extract_remote_target(task)
+    if remote_target:
+        return {
+            "kind": "remote_version_probe",
+            "summary": f"检查 {remote_target} 的 {target_tool} 版本",
+            "command": wrap_remote_command(remote_target, base_command),
+            "reason_codes": ["runner_playbook_version_probe", f"remote_target:{remote_target}", f"tool:{target_tool}"],
+            "confidence": 0.9,
+        }
+
+    return {
+        "kind": "version_probe",
+        "summary": f"检查当前机器的 {target_tool} 版本",
+        "command": base_command,
+        "reason_codes": ["runner_playbook_version_probe", f"tool:{target_tool}"],
+        "confidence": 0.86,
     }
 
 
@@ -121,13 +245,21 @@ def build_service_health_plan(task: str) -> dict | None:
         unit_args = " ".join([f"-u {alias}" for alias in aliases[:2]])
         commands.append(f"journalctl {unit_args} -n 40 --no-pager || true")
 
-    return {
+    plan = {
         "kind": "service_health",
         "summary": f"检查 {service} 的端口、状态与日志",
         "command": "\n".join(commands),
         "reason_codes": ["runner_playbook_service_health", f"service:{service}"],
         "confidence": 0.9,
     }
+    remote_target = extract_remote_target(task)
+    if remote_target:
+        plan["kind"] = "remote_service_health"
+        plan["summary"] = f"检查 {remote_target} 上 {service} 的端口、状态与日志"
+        plan["command"] = wrap_remote_command(remote_target, plan["command"])
+        plan["reason_codes"] = [*plan["reason_codes"], f"remote_target:{remote_target}"]
+        plan["confidence"] = 0.92
+    return plan
 
 
 def build_local_file_probe_plan(task: str) -> dict | None:
@@ -154,9 +286,8 @@ def build_local_file_probe_plan(task: str) -> dict | None:
 
 
 def infer_runner_playbook(task: str) -> dict | None:
-    for builder in (build_system_summary_plan, build_service_health_plan, build_local_file_probe_plan):
+    for builder in (build_version_probe_plan, build_system_summary_plan, build_service_health_plan, build_local_file_probe_plan):
         plan = builder(task)
         if plan:
             return plan
     return None
-

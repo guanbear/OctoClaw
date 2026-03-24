@@ -55,6 +55,11 @@ WRITE_PATTERNS = [
     r"\b(doc|docs|summary|report|draft|write|translate)\b",
 ]
 
+SUMMARY_OUTPUT_PATTERNS = [
+    r"(一句总结|三行总结|简短总结|简单总结|给我一句|给我三行|最后总结|最后给一句总结)",
+    r"\b(one-line summary|three-line summary|brief summary|short summary)\b",
+]
+
 MULTI_STEP_PATTERNS = [
     r"(先.*再|然后|最后|并给出|顺便|同时需要|分别|先查.*再)",
     r"\b(first.*then|then|finally|also|and give|meanwhile|in parallel)\b",
@@ -108,6 +113,12 @@ SEMANTIC_AMBIGUITY_PATTERNS = [
     r"\b(if needed|if necessary|also help|at the same time|better approach|safer approach)\b",
 ]
 
+REMOTE_TARGET_PATTERNS = [
+    r"(远程|另一台机器|另一台主机|另一台机子|目标机器|目标主机|远端)",
+    r"\b(remote|another host|another machine|target host|remote host)\b",
+    r"(macmini|mac mini)",
+]
+
 
 def count_matches(text: str, patterns: Iterable[str]) -> int:
     return sum(1 for pattern in patterns if re.search(pattern, text, re.IGNORECASE))
@@ -123,6 +134,7 @@ def extract_features(task: str, command: str = "") -> dict:
     research_hits = count_matches(text, RESEARCH_PATTERNS)
     external_lookup_hits = count_matches(text, EXTERNAL_LOOKUP_PATTERNS)
     write_hits = count_matches(text, WRITE_PATTERNS)
+    summary_output_hits = count_matches(text, SUMMARY_OUTPUT_PATTERNS)
     multi_step_hits = count_matches(text, MULTI_STEP_PATTERNS)
     parallel_hits = count_matches(text, PARALLEL_PATTERNS)
     high_risk_hits = count_matches(text, HIGH_RISK_PATTERNS)
@@ -133,6 +145,10 @@ def extract_features(task: str, command: str = "") -> dict:
     mutation_hits = count_matches(text, MUTATION_PATTERNS)
     cost_sensitive_hits = count_matches(text, COST_SENSITIVE_PATTERNS)
     semantic_ambiguity_hits = count_matches(text, SEMANTIC_AMBIGUITY_PATTERNS)
+    remote_target_hits = count_matches(text, REMOTE_TARGET_PATTERNS)
+    effective_write_hits = write_hits
+    if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
+        effective_write_hits = 0
 
     estimated_steps = 1
     if multi_step_hits > 0:
@@ -178,6 +194,7 @@ def extract_features(task: str, command: str = "") -> dict:
         "research_hits": research_hits,
         "external_lookup_hits": external_lookup_hits,
         "write_hits": write_hits,
+        "summary_output_hits": summary_output_hits,
         "multi_step_hits": multi_step_hits,
         "parallel_hits": parallel_hits,
         "high_risk_hits": high_risk_hits,
@@ -188,12 +205,13 @@ def extract_features(task: str, command: str = "") -> dict:
         "mutation_hits": mutation_hits,
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
-        "requires_tools": bool(command) or runner_hits > 0 or local_state_hits > 0,
+        "remote_target_hits": remote_target_hits,
+        "requires_tools": bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0,
         "requires_code_work": code_hits > 0,
         "requires_research": research_hits > 0,
         "requires_mutation": mutation_hits > 0 or (implement_hits > 0 and (code_hits > 0 or local_state_hits > 0)),
         "external_lookup_only": external_lookup_hits > 0 and research_hits == 0 and code_hits == 0 and write_hits == 0,
-        "requires_writing": write_hits > 0,
+        "requires_writing": effective_write_hits > 0,
         "estimated_steps": estimated_steps,
         "task_shape": task_shape,
         "multi_step": estimated_steps >= 2,
@@ -202,14 +220,15 @@ def extract_features(task: str, command: str = "") -> dict:
             or (research_hits > 0 and write_hits > 0 and multi_step_hits > 0)
             or (verify_hits > 0 and (code_hits > 0 or implement_hits > 0))
         ),
-        "local_observation_only": (
-            (bool(command) or runner_hits > 0 or local_state_hits > 0)
+        "tool_observation_only": (
+            (bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0)
             and mutation_hits == 0
             and implement_hits == 0
             and code_hits == 0
             and research_hits == 0
-            and write_hits == 0
+            and effective_write_hits == 0
         ),
+        "target_scope": "remote" if remote_target_hits > 0 else ("local" if local_state_hits > 0 else "generic"),
         "high_risk": high_risk_hits > 0,
         "context_growth": context_growth,
         "latency_sensitivity": latency_sensitivity,
@@ -219,7 +238,7 @@ def extract_features(task: str, command: str = "") -> dict:
 
 
 def infer_role_hint(features: dict) -> str:
-    if features["local_observation_only"]:
+    if features["tool_observation_only"]:
         return "octopus-runner"
     if features["requires_mutation"] and not features["requires_research"]:
         return "octopus-fix"
@@ -268,7 +287,11 @@ def expected_cost_band(route: str, features: dict) -> str:
 
 def infer_task_class(features: dict, route: str) -> str:
     if route == "runner":
-        return "fast_local_check"
+        if features.get("target_scope") == "remote":
+            return "fast_remote_check"
+        if features.get("target_scope") == "local":
+            return "fast_local_check"
+        return "fast_tool_check"
     if features["requires_mutation"] and route.startswith("spawn"):
         return "focused_local_change"
     if route == "direct" and features["external_lookup_only"]:
@@ -358,10 +381,11 @@ def hard_gate_route(features: dict) -> tuple[str | None, list[str]]:
         return "spawn_single", reasons
 
     if (
-        features["local_observation_only"]
+        features["tool_observation_only"]
         and features["estimated_steps"] <= 2
     ):
-        return "runner", ["fast_local_tool_task"]
+        reason = "fast_remote_tool_task" if features.get("target_scope") == "remote" else "fast_tool_task"
+        return "runner", [reason]
 
     if (
         not features["requires_tools"]
