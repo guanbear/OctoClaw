@@ -16,10 +16,12 @@ MODEL_SPEED_FILE = f"{WORKSPACE}/tmp/octopus/model-speed.json"
 MODEL_PLAN_STATE_FILE = f"{WORKSPACE}/tmp/octopus/model-plan-state.json"
 MODEL_BENCHMARKS_FILE = f"{WORKSPACE}/tmp/octopus/model-benchmarks.json"
 MODEL_SOURCES_FILE = f"{WORKSPACE}/tmp/octopus/model-sources.json"
+TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
 RUNNER_QUEUE_FILE = f"{WORKSPACE}/tmp/octopus/runner-queue.json"
 RUNNER_HEALTH_FILE = f"{WORKSPACE}/tmp/octopus/runner-health.json"
 RUNNER_RESULTS_DIR = f"{WORKSPACE}/tmp/octopus/runner-results"
 SHARED_DIR = f"{WORKSPACE}/tmp/octopus/shared"
+CONTEXT_DIR = f"{WORKSPACE}/tmp/octopus/context"
 
 SESSIONS_FILE = os.path.expanduser("~/.openclaw/sessions.json")
 MAIN_AGENT_SESSIONS_FILE = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")

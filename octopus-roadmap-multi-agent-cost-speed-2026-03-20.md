@@ -233,6 +233,36 @@ OctoClaw 值得借 `ClawRouter` 的部分主要是：
 
 这层先把 `octoclaw_route / octoclaw_dispatch / octoclaw_status` 暴露成 OpenClaw 可直接调用的工具入口，减少“只靠 AGENTS.md 提示主 agent 自由判断”的不稳定性。
 
+### 4.0.4 `octoclaw_spawn` 的上下文预算器
+
+老版本最值得继承的经验之一，不是“把更多规则塞进提示词”，而是：
+
+- 子任务默认吃最少上下文
+- 长内容默认走共享文件
+- 主 Agent 只传摘要和路径
+
+所以新版 `octoclaw_spawn.py` 应该承担一层明确的 **context budgeting**：
+
+- 只注入最多 2-3 条最相关历史摘要
+- 详细历史写 `context pack` 文件
+- 长日志 / 长调研 / 长 diff 一律写 `report_path`
+- 子任务若需要细节，先 `head -n 80` 共享文件，而不是把大段内容重新塞回上下文
+
+推荐的 spawn 输出字段：
+
+- `context_summary`
+- `context_refs`
+- `context_path`
+- `report_path`
+- `context_budget`
+
+这样做的价值：
+
+- 降低 token 消耗
+- 提高 prompt/cache 复用概率
+- 让 patrol / status / shared file 形成真正闭环
+- 避免“主会话和子会话来回拷贝大段上下文”
+
 ## 4.0.0 飞书 3.22 能力接入
 
 OpenClaw 3.22 在飞书侧新增的能力里，OctoClaw 最值得吸收的是：

@@ -148,6 +148,10 @@ def cmd_upsert(args):
                 existing["parent_id"] = args.parent_id
             if args.report_path:
                 existing["report_path"] = args.report_path
+            if args.context_path:
+                existing["context_path"] = args.context_path
+            if args.context_summary:
+                existing["context_summary"] = args.context_summary
             existing["updated_at"] = now_iso()
         else:
             record = {
@@ -194,6 +198,10 @@ def cmd_upsert(args):
                 record["parent_id"] = args.parent_id
             if args.report_path:
                 record["report_path"] = args.report_path
+            if args.context_path:
+                record["context_path"] = args.context_path
+            if args.context_summary:
+                record["context_summary"] = args.context_summary
             tasks.append(record)
 
         state["tasks"] = tasks
@@ -301,6 +309,8 @@ def main():
     p_upsert.add_argument("--runtime")
     p_upsert.add_argument("--parent-id", dest="parent_id")
     p_upsert.add_argument("--report-path", dest="report_path")
+    p_upsert.add_argument("--context-path", dest="context_path")
+    p_upsert.add_argument("--context-summary", dest="context_summary")
 
     # done
     p_done = sub.add_parser("done")

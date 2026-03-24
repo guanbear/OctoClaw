@@ -19,7 +19,7 @@ import sys
 from datetime import datetime, timezone
 
 from octoclaw_route import infer_route
-from octopus_config import SHARED_DIR
+from octopus_config import CONTEXT_DIR, SHARED_DIR, TASK_STATE_FILE, load_json
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +33,12 @@ DEFAULT_TIER_MINUTES = {
     "normal": 8,
     "hard": 15,
     "deep": 20,
+}
+
+STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "then", "into", "will",
+    "帮我", "一下", "然后", "最后", "当前", "机器", "本机", "进行", "处理", "检查", "分析",
+    "给我", "一个", "并且", "需要", "继续", "相关", "可以", "如果", "不要", "还是", "那个",
 }
 
 
@@ -101,6 +107,124 @@ def task_title(task: str, limit: int = 72) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def compact_text(text: str, limit: int = 160) -> str:
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def tokenize(text: str) -> set[str]:
+    lowered = (text or "").lower()
+    chinese = re.findall(r"[\u4e00-\u9fff]{2,}", lowered)
+    english = re.findall(r"[a-z0-9][a-z0-9_.:-]{1,}", lowered)
+    return {
+        token for token in chinese + english
+        if token not in STOPWORDS and len(token) >= 2
+    }
+
+
+def score_related_task(task_tokens: set[str], candidate: dict, parent_id: str) -> float:
+    if not isinstance(candidate, dict):
+        return 0.0
+    candidate_id = str(candidate.get("id", "") or "")
+    if parent_id and candidate_id == parent_id:
+        return 100.0
+    haystack = " ".join(
+        str(candidate.get(field, "") or "")
+        for field in ("task_description", "summary", "label", "route")
+    )
+    candidate_tokens = tokenize(haystack)
+    overlap = len(task_tokens & candidate_tokens)
+    score = float(overlap)
+    if candidate.get("status") == "done":
+        score += 0.5
+    if candidate.get("report_path"):
+        score += 0.5
+    return score
+
+
+def load_recent_related_tasks(task: str, parent_id: str, limit: int = 3) -> list[dict]:
+    state = load_json(TASK_STATE_FILE)
+    if not isinstance(state, dict):
+        return []
+    tasks = state.get("tasks", [])
+    if not isinstance(tasks, list):
+        return []
+    task_tokens = tokenize(task)
+    scored: list[tuple[float, dict]] = []
+    for candidate in tasks:
+        score = score_related_task(task_tokens, candidate, parent_id)
+        if score <= 0:
+            continue
+        scored.append((score, candidate))
+    scored.sort(
+        key=lambda item: (
+            item[0],
+            str(item[1].get("updated_at", "") or item[1].get("completed_at", "") or item[1].get("spawned_at", "")),
+        ),
+        reverse=True,
+    )
+    return [item[1] for item in scored[:limit]]
+
+
+def build_context_bundle(task: str, parent_id: str, task_id: str) -> dict:
+    related_tasks = load_recent_related_tasks(task, parent_id)
+    summary_lines: list[str] = []
+    refs: list[dict] = []
+
+    for candidate in related_tasks:
+        candidate_id = str(candidate.get("id", "") or "")
+        summary = compact_text(str(candidate.get("summary", "") or candidate.get("task_description", "") or ""))
+        if not summary:
+            continue
+        report_path = str(candidate.get("report_path", "") or "")
+        line = f"- {candidate_id}: {summary}"
+        if report_path:
+            line += f" | report={report_path}"
+        summary_lines.append(line)
+        refs.append({
+            "task_id": candidate_id,
+            "status": str(candidate.get("status", "") or ""),
+            "summary": summary,
+            "report_path": report_path,
+            "route": str(candidate.get("route", "") or ""),
+            "label": str(candidate.get("label", "") or ""),
+        })
+
+    context_summary = "\n".join(summary_lines).strip()
+    context_path = ""
+    if context_summary:
+        os.makedirs(CONTEXT_DIR, exist_ok=True)
+        context_path = os.path.join(CONTEXT_DIR, f"{task_id}.md")
+        content = "\n".join([
+            f"# OctoClaw Context Pack: {task_id}",
+            "",
+            "## Requested Task",
+            task.strip(),
+            "",
+            "## Related Recent Tasks",
+            context_summary,
+            "",
+            "## Usage",
+            "- 优先使用短摘要判断，不要把长历史直接塞进子任务上下文。",
+            "- 若需要详细背景，先 head -n 80 对应 report_path 或共享文件。",
+        ]).rstrip() + "\n"
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    return {
+        "summary": context_summary,
+        "refs": refs,
+        "context_path": context_path,
+        "budget": {
+            "inline_history_max_items": 3,
+            "inline_history_max_chars": 480,
+            "share_large_context": True,
+        },
+    }
+
+
 def validate_runtime(runtime: str, stream_to: str, supports_acp: bool) -> list[str]:
     problems: list[str] = []
     if runtime == "subagent" and stream_to:
@@ -119,13 +243,35 @@ def build_task_prompt(
     task: str,
     expected_done: str,
     report_path: str,
+    route: str,
+    context_summary: str = "",
+    context_path: str = "",
 ) -> str:
     lines = [
         "【状态写入】开始前先执行：",
-        f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert --id {task_id} --label {label} --model '{model}' --status running --tier {tier} --expected-done '{expected_done}' --route spawn_single --runtime subagent --executor subagent --report-path '{report_path}'",
+        f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert --id {task_id} --label {label} --model '{model}' --status running --tier {tier} --expected-done '{expected_done}' --route {route} --runtime subagent --executor subagent --report-path '{report_path}'",
         "",
         "【目标】",
         task.strip(),
+        "",
+        "【上下文预算】",
+        "- 默认只消费当前任务描述 + 最多 3 条相关历史摘要",
+        "- 长日志、长调研、长 diff 一律写共享文件，不要直接塞回上下文",
+        "- 如需详细历史，优先读取 context pack / report_path 的前 80 行",
+    ]
+    if context_summary:
+        lines.extend([
+            "",
+            "【相关历史摘要】",
+            context_summary,
+        ])
+    if context_path:
+        lines.extend([
+            "",
+            "【上下文文件】",
+            f"- 如需更多背景，先读取：{context_path}",
+        ])
+    lines.extend([
         "",
         "【执行约束】",
         "- 每 turn ≤500字；分段读文件，避免一次性灌长上下文",
@@ -144,7 +290,7 @@ def build_task_prompt(
         "",
         "【Fail Fast】",
         f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py failed --id {task_id} --summary \"阻塞原因（1句）：xxx，建议：xxx\"",
-    ]
+    ])
     return "\n".join(lines).strip()
 
 
@@ -160,6 +306,8 @@ def register_dispatched_task(
     runtime: str,
     report_path: str,
     parent_id: str,
+    context_path: str,
+    context_summary: str,
 ) -> None:
     cmd = [
         "python3",
@@ -192,6 +340,10 @@ def register_dispatched_task(
         "--summary",
         task_title(task, 60),
     ]
+    if context_path:
+        cmd.extend(["--context-path", context_path])
+    if context_summary:
+        cmd.extend(["--context-summary", compact_text(context_summary, 240)])
     if parent_id:
         cmd.extend(["--parent-id", parent_id])
     subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -232,6 +384,7 @@ def build_spawn_spec(
     task_id = f"{final_label}-{now_compact()}"
     expected_done = expected_done_offset(final_tier)
     report_path = os.path.join(SHARED_DIR, f"{task_id}.md")
+    context_bundle = build_context_bundle(task, parent_id, task_id)
     prompt = build_task_prompt(
         task_id=task_id,
         label=final_label,
@@ -240,6 +393,9 @@ def build_spawn_spec(
         task=task,
         expected_done=expected_done,
         report_path=report_path,
+        route=final_route,
+        context_summary=str(context_bundle.get("summary", "") or ""),
+        context_path=str(context_bundle.get("context_path", "") or ""),
     )
 
     if register:
@@ -254,6 +410,8 @@ def build_spawn_spec(
             runtime=runtime,
             report_path=report_path,
             parent_id=parent_id,
+            context_path=str(context_bundle.get("context_path", "") or ""),
+            context_summary=str(context_bundle.get("summary", "") or ""),
         )
 
     payload = {
@@ -278,6 +436,10 @@ def build_spawn_spec(
         "runtime": runtime,
         "stream_to": stream_to or "",
         "report_path": report_path,
+        "context_summary": context_bundle.get("summary", ""),
+        "context_path": context_bundle.get("context_path", ""),
+        "context_refs": context_bundle.get("refs", []),
+        "context_budget": context_bundle.get("budget", {}),
         "expected_done": expected_done,
         "task_prompt": prompt,
         "task_prompt_preview": prompt[:320] + ("…" if len(prompt) > 320 else ""),

@@ -122,6 +122,8 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
   - 先注册 `task-state`
   - 生成统一 task prompt
   - 附加 `RESULT` / 共享文件 / fail-fast 约束
+  - 只注入少量相关历史摘要，避免把长上下文直接塞给子任务
+  - 为长背景生成 `context pack` 共享文件，子任务按需读取
 - 只有在当前环境里确实无法使用包装器时，才手动调用 `sessions_spawn`
 
 ### sessions_spawn 兼容约束
