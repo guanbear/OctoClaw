@@ -170,6 +170,7 @@ RUNNER_STALE_SECONDS = 120
 RUNNER_RESTART_COOLDOWN_SECONDS = 600
 RUNNER_DAEMON_PID_FILE = "/workspace/tmp/octopus/runner-daemon.pid"
 RUNNER_RESTART_COOLDOWN_FILE = "/workspace/tmp/octopus/runner-restart-cooldown.json"
+FAILED_NOTIFY_RETRY_SECONDS = 900
 
 # ── 超时阈值（分钟）：软超时基准（只告警不 kill）──
 # 硬超时 = 软超时 × 2（才自动 kill）
@@ -970,6 +971,35 @@ def format_age(age_minutes: float) -> str:
         h = int(age_minutes // 60)
         m = int(age_minutes % 60)
         return f"{h}h{m}m"
+
+
+def should_retry_failed_notification(task: dict, now: datetime) -> bool:
+    if task.get("notified_failed"):
+        return False
+    last_attempt = parse_iso(str(task.get("failed_notify_last_attempt_at", "") or ""))
+    if not last_attempt:
+        return True
+    if last_attempt.tzinfo is None:
+        last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+    return (now - last_attempt.astimezone(timezone.utc)).total_seconds() >= FAILED_NOTIFY_RETRY_SECONDS
+
+
+def record_failed_notification_attempt(task_id: str, success: bool) -> None:
+    try:
+        state_data = load_task_state(TASK_STATE_FILE)
+        now_iso_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for task_item in state_data.get("tasks", []):
+            if task_item.get("id") != task_id:
+                continue
+            task_item["failed_notify_last_attempt_at"] = now_iso_str
+            task_item["failed_notify_attempts"] = int(task_item.get("failed_notify_attempts", 0) or 0) + 1
+            if success:
+                task_item["notified_failed"] = True
+            task_item["updated_at"] = now_iso_str
+            break
+        save_task_state(TASK_STATE_FILE, state_data)
+    except Exception as mark_err:
+        print(f"  ⚠️ 更新失败通知状态失败: {mark_err}", file=sys.stderr)
 
 
 def format_running_table(task_list: list, ordinals: dict) -> str:
@@ -3820,7 +3850,8 @@ def main():
     # ── 新失败任务检测：对 failed 任务发飞书通知 ──
     # 使用 task-state.json 中的 notified_failed 字段，而非外部文件
     failed_tasks = [t for t in tasks if t.get("status") == "failed"]
-    new_failed = [t for t in failed_tasks if not t.get("notified_failed")]
+    notify_now = now_utc()
+    new_failed = [t for t in failed_tasks if should_retry_failed_notification(t, notify_now)]
     if new_failed:
         print(f"❌ 检测到 {len(new_failed)} 个新失败任务，发送通知")
         for t in new_failed:
@@ -3830,20 +3861,13 @@ def main():
             try:
                 if send_text(msg):
                     print(f"  ✅ 已发送失败通知: {task_id}")
-                    try:
-                        state_data = load_task_state(TASK_STATE_FILE)
-                        for task_item in state_data.get("tasks", []):
-                            if task_item.get("id") == task_id:
-                                task_item["notified_failed"] = True
-                                task_item["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                                break
-                        save_task_state(TASK_STATE_FILE, state_data)
-                    except Exception as mark_err:
-                        print(f"  ⚠️ 标记 notified_failed 失败: {mark_err}", file=sys.stderr)
+                    record_failed_notification_attempt(task_id, success=True)
                 else:
                     print(f"  ⚠️ 发送失败通知失败: {task_id}", file=sys.stderr)
+                    record_failed_notification_attempt(task_id, success=False)
             except Exception as e:
                 print(f"  ⚠️ 发送失败通知异常: {e}", file=sys.stderr)
+                record_failed_notification_attempt(task_id, success=False)
 
     total_active = len(running) + len(queued) + len(pending_confirm) + len(deferred) + len(stuck)
     print(f"  📋 扫描 {len(tasks)} 条任务：运行中={len(running)} 排队={len(queued)} 待确认={len(pending_confirm)} 待定={len(deferred)} 卡死={len(stuck)} 近期完成={len(recent_done)}")
