@@ -1251,6 +1251,30 @@ OpenClaw 3.22 在飞书侧最值得 OctoClaw 吸收的是：
 2. 再逐步把飞书入口迁到 shared outbound / ACP
 3. 最终让飞书变成真正的会话绑定执行入口
 
+### 补充：`sessions_spawn` 的 runtime 兼容边界
+
+实际日志已经验证过一个明确边界：
+
+- `streamTo is only supported for runtime=acp; got runtime=subagent`
+
+这说明：
+
+- 这不是单纯的 Slack 权限不足
+- 而是 `sessions_spawn` 参数和 runtime 组合不兼容
+
+因此 OctoClaw 后面必须固定规则：
+
+- `runtime=subagent`
+  - 禁止传 `streamTo`
+- `runtime=acp`
+  - 只有当前通道明确支持 ACP 会话绑定时，才允许 `streamTo`
+
+也就是说：
+
+- Slack 里的普通子任务默认应按 `subagent` 处理
+- 飞书 3.22 的 ACP 会话绑定可以作为后续增强方向
+- 但不能把 ACP 专属参数下放到普通 `subagent` runtime
+
 ### 补充：`octoclaw_dispatch` 的返回必须 user-safe
 
 交互式体验里，`octoclaw_dispatch` 不能只返回：

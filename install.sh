@@ -1160,6 +1160,10 @@ print('✅ 无版本号旧规则已清除')
 - 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
 - 详细状态写入和 RESULT 模板以 `__SKILL_ROOT__/lib/spawn-template.md` 为准
 - 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
+- 若使用 `sessions_spawn`：
+  - `runtime=subagent` 时**禁止**传 `streamTo`
+  - 只有 `runtime=acp` 且当前通道明确支持 ACP 会话绑定时，才允许 `streamTo`
+  - Slack / 普通子任务默认按普通 `subagent` 处理，不要假设支持 ACP 回流
 
 ### 触手名字
 

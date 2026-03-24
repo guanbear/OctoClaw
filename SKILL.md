@@ -114,6 +114,13 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
 
 **每个 turn 只做两件事：① 输出文字回复 ② 调用 sessions_spawn**
 
+### sessions_spawn 兼容约束
+
+- `runtime=subagent` 时不要传 `streamTo`
+- `streamTo` 只适用于 `runtime=acp`
+- 只有当前通道明确支持 ACP 会话绑定时，才考虑 `runtime=acp + streamTo`
+- Slack / 普通自然语言子任务，默认按 `subagent` 处理，不要假设有 ACP 回流
+
 - 收到消息 → 立即输出文字（"收到！正在处理..."）→ spawn
 - 禁止：exec / read / write / browser 等任何工具调用
 - 原因：工具调用阻塞 turn，用户看不到文字直到所有工具完成

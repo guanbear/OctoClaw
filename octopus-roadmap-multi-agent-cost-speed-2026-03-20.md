@@ -349,6 +349,29 @@ OpenClaw 3.22 在飞书侧新增的能力里，OctoClaw 最值得吸收的是：
 
 ## 4.1 官方通用 session / subagent 能力接入
 
+### 4.1.0 `sessions_spawn` 兼容边界
+
+已经验证过的一个硬边界是：
+
+- `streamTo is only supported for runtime=acp; got runtime=subagent`
+
+所以 OctoClaw 后面必须把 spawn 兼容规则写死：
+
+- `runtime=subagent`
+  - 禁止传 `streamTo`
+- `runtime=acp`
+  - 只有当前通道明确支持 ACP 会话绑定时，才允许 `streamTo`
+
+这也意味着：
+
+- Slack 里的普通子任务，不要假设支持 ACP 回流
+- 飞书 3.22 的 `current-conversation ACP + subagent session binding` 是后续增强方向
+- 但在没有明确 ACP 绑定能力前，OctoClaw 默认应按普通 `subagent` 处理
+
+一句话：
+
+> 这不是 Slack 权限本身的问题，而是 `sessions_spawn` 的 runtime 参数兼容边界。
+
 ### 目标
 
 在不切换主通道、不依赖 Discord thread binding 的前提下，先把 OpenClaw 官方已有的通用能力接进八爪鱼。
