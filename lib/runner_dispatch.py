@@ -83,6 +83,8 @@ def main():
             expected_done_offset(args.timeout_seconds),
             "--task-description",
             args.task_description or args.command,
+            "--executor",
+            "runner",
         ],
         stdout=subprocess.DEVNULL,
         check=True,

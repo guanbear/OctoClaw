@@ -83,6 +83,14 @@ def resolve_expected_done(value: str) -> str:
     return value
 
 
+def infer_executor(label: str, explicit: str = "") -> str:
+    if explicit:
+        return explicit
+    if label == "octopus-runner":
+        return "runner"
+    return "subagent"
+
+
 def cmd_upsert(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "a+") as fp:
@@ -130,6 +138,8 @@ def cmd_upsert(args):
                 existing["recovery_action"] = args.recovery_action
             if args.retry_count is not None:
                 existing["retry_count"] = args.retry_count
+            if args.executor or not existing.get("executor"):
+                existing["executor"] = infer_executor(existing.get("label", ""), args.executor or "")
             existing["updated_at"] = now_iso()
         else:
             record = {
@@ -167,6 +177,7 @@ def cmd_upsert(args):
                 record["recovery_action"] = args.recovery_action
             if args.retry_count is not None:
                 record["retry_count"] = args.retry_count
+            record["executor"] = infer_executor(record.get("label", ""), args.executor or "")
             tasks.append(record)
 
         state["tasks"] = tasks
@@ -269,6 +280,7 @@ def main():
     p_upsert.add_argument("--last-observed-at", dest="last_observed_at")
     p_upsert.add_argument("--recovery-action", dest="recovery_action")
     p_upsert.add_argument("--retry-count", dest="retry_count", type=int)
+    p_upsert.add_argument("--executor", choices=["subagent", "runner"])
 
     # done
     p_done = sub.add_parser("done")

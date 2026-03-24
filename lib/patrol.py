@@ -122,9 +122,18 @@ def get_model_short(model: str) -> str:
     return short[:15] if len(short) > 15 else short
 
 
+def task_executor(task: dict) -> str:
+    explicit = str(task.get("executor", "") or "").strip().lower()
+    if explicit in ("runner", "subagent"):
+        return explicit
+    if str(task.get("label", "") or "") == "octopus-runner":
+        return "runner"
+    return "subagent"
+
+
 def is_runner_task(task: dict) -> bool:
     """Persistent runner jobs are queue/file-driven, not child-session-driven."""
-    return str(task.get("label", "") or "") == "octopus-runner"
+    return task_executor(task) == "runner"
 
 
 def assign_ordinals(task_list: list) -> dict:

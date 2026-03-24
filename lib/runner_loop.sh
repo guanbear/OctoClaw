@@ -43,7 +43,8 @@ update_task_running() {
     --status running \
     --summary "$summary" \
     --tier trivial \
-    --task-description "$task_description" >/dev/null
+    --task-description "$task_description" \
+    --executor runner >/dev/null
 }
 
 finish_task() {

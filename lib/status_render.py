@@ -28,6 +28,15 @@ LABEL_NAME = {
 }
 
 
+def task_executor(task: dict) -> str:
+    explicit = str(task.get("executor", "") or "").strip().lower()
+    if explicit in ("runner", "subagent"):
+        return explicit
+    if task.get("label") == "octopus-runner":
+        return "runner"
+    return "subagent"
+
+
 def get_emoji(label: str) -> str:
     return LABEL_EMOJI.get(label, "🤖")
 
@@ -320,13 +329,13 @@ def render_status_lanes(snapshot: dict) -> str:
     now = snapshot["now"]
     lane_map = [
         ("Main", []),
-        ("Runner lane", [t for t in snapshot["running"] if t.get("label") == "octopus-runner"]),
+        ("Runner lane", [t for t in snapshot["running"] + snapshot["queued"] if task_executor(t) == "runner"]),
         (
             "Build lane",
             [
                 t
                 for t in snapshot["running"] + snapshot["queued"]
-                if t.get("label") in ("octopus-fix", "octopus-test", "octopus-power")
+                if task_executor(t) != "runner" and t.get("label") in ("octopus-fix", "octopus-test", "octopus-power")
             ],
         ),
         (
@@ -334,7 +343,7 @@ def render_status_lanes(snapshot: dict) -> str:
             [
                 t
                 for t in snapshot["running"] + snapshot["queued"]
-                if t.get("label") in ("octopus-scout", "octopus-writer", "octopus-analyze")
+                if task_executor(t) != "runner" and t.get("label") in ("octopus-scout", "octopus-writer", "octopus-analyze")
             ],
         ),
         ("Recovery", snapshot["steer_needed"]),
