@@ -58,6 +58,7 @@ aliases = load_json(ALIASES_FILE) or {}
 policy_data = load_json(MODEL_POLICY_FILE) or {}
 config_data = load_json(CONFIG_FILE) or {}
 runner_health = load_json(RUNNER_HEALTH_FILE) or {}
+RUNNER_STALE_SECONDS = 120
 
 mode = mode_data.get("mode", "balanced")
 MODE_LABELS = {
@@ -139,6 +140,8 @@ print("━━━━━━━━━━━━━━━━━━━━")
 print(f"⚙️  模式：{mode_label}")
 backend = config_data.get("notification", {}).get("backend", "auto")
 print(f"🔔 通知：{backend}")
+runner_health_ok = False
+runner_health_age = None
 if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     runner_job = runner_health.get("job_id", "")
     runner_note = ""
@@ -153,9 +156,15 @@ if isinstance(runner_health, dict) and runner_health.get("worker_id"):
                 heartbeat_dt = heartbeat_dt.astimezone(now.tzinfo)
     except Exception:
         heartbeat_dt = None
-    if runner_job and heartbeat_dt and (now - heartbeat_dt).total_seconds() <= 30:
+    if heartbeat_dt:
+        runner_health_age = int(max(0, (now - heartbeat_dt).total_seconds()))
+        runner_health_ok = runner_health_age <= RUNNER_STALE_SECONDS
+    if runner_job and heartbeat_dt and runner_health_ok and (now - heartbeat_dt).total_seconds() <= 30:
         runner_note = f" · 当前任务 {runner_job}"
-    print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}")
+    stale_note = ""
+    if runner_health_age is not None and not runner_health_ok:
+        stale_note = f" · stale {runner_health_age}s"
+    print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
 print("📊 模型配置：")
 print(
     "   trivial/simple → "
@@ -168,6 +177,11 @@ print(f"🖥️  视图：{fmt}")
 print("━━━━━━━━━━━━━━━━━━━━")
 
 tasks = load_tasks()
+if not runner_health_ok and isinstance(runner_health, dict) and runner_health.get("worker_id"):
+    for task in tasks:
+        if str(task.get("executor", "") or "") == "runner" and str(task.get("status", "") or "") in ("running", "dispatched"):
+            task["status"] = "queued"
+            task["summary"] = str(task.get("summary") or "runner 心跳过期，等待恢复")
 snapshot = build_status_snapshot(tasks, now=now)
 
 if fmt == "table":
