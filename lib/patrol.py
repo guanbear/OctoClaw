@@ -172,8 +172,8 @@ RUNNER_DAEMON_PID_FILE = "/workspace/tmp/octopus/runner-daemon.pid"
 RUNNER_RESTART_COOLDOWN_FILE = "/workspace/tmp/octopus/runner-restart-cooldown.json"
 FAILED_NOTIFY_RETRY_SECONDS = 900
 
-# ── 超时阈值（分钟）：软超时基准（只告警不 kill）──
-# 硬超时 = 软超时 × 2（才自动 kill）
+# ── 超时阈值（分钟）：软超时先告警，硬超时自动收口 ──
+# 硬超时 = 软超时 × 2
 # tier 字段未定义时默认 normal（15分钟软超时）
 TIER_TIMEOUT_MINUTES = {
     "trivial": 3,
@@ -2608,6 +2608,11 @@ def calculate_timeout(task: dict) -> float:
     return max(dynamic, tier_min)
 
 
+def calculate_hard_timeout(task: dict) -> float:
+    """硬超时阈值：软超时的 2 倍。"""
+    return calculate_timeout(task) * 2.0
+
+
 def get_subagent_run_id(label: str) -> str | None:
     """
     从 sessions.json 中找到 label 匹配的最新 session 的 sessionId。
@@ -2868,8 +2873,9 @@ def mark_task_timed_out(task_id: str, elapsed_minutes: float, summary_prefix: st
                 t["status"] = "failed"
                 t["summary"] = f"{summary_prefix}（运行 {m}m {s}s）"
                 t["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                t["timed_out_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 changed = True
-                print(f"🔴 任务 {task_id} 已标记为 failed：运行 {m}m {s}s，超时终止")
+                print(f"🔴 任务 {task_id} 已标记为 failed：运行 {m}m {s}s，超时收口")
                 break
         if changed:
             data["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2933,13 +2939,9 @@ def send_timeout_alert(task: dict, elapsed_minutes: float, run_id: str | None, k
 
 def check_and_handle_timeout(tasks: list) -> list:
     """
-    检查所有 status=running/dispatched 的任务，使用动态超时公式。
-    超时后：
-      1. 分析 transcript 判断原因（纯 Python，不依赖 AI）
-      2. 写入 task-state.json 的 timeout_reason 字段
-      3. 发送飞书告警（含任务名、运行时长、超时原因、建议操作）
-      4. 不自动 kill，由用户/主 Agent 决策
-    返回超时任务列表（供日志记录）。
+    检查所有 status=running/dispatched 的子任务。
+    软超时：记录原因并告警一次。
+    硬超时：尝试终止 session，随后将任务自动收口为 failed。
     """
     now = now_utc()
     timed_out_tasks = []
@@ -2949,8 +2951,8 @@ def check_and_handle_timeout(tasks: list) -> list:
         if status not in ("running", "dispatched"):
             continue
 
-        # 跳过系统任务
-        if task.get("label", "") in SYSTEM_LABELS:
+        # 跳过系统任务和 runner 任务
+        if task.get("label", "") in SYSTEM_LABELS or is_runner_task(task):
             continue
 
         # 计算运行时长
@@ -2970,15 +2972,13 @@ def check_and_handle_timeout(tasks: list) -> list:
 
         # ── 动态超时公式 ──
         timeout_minutes = calculate_timeout(task)
+        hard_timeout_minutes = calculate_hard_timeout(task)
 
         if elapsed_minutes < timeout_minutes:
             continue
 
         task_id = task.get("id", "")
         label = task.get("label", "")
-        label_default = LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
-        tier = task.get("tier", label_default)
-
         # ── 发告警前再次从文件确认状态，防止已完成时误告警 ──
         try:
             _fresh_data = load_task_state(TASK_STATE_FILE)
@@ -3029,7 +3029,23 @@ def check_and_handle_timeout(tasks: list) -> list:
         else:
             print(f"⏭️  超时告警已发过，跳过重复告警: {task_id}")
 
-        timed_out_tasks.append(task)
+        hard_timeout_hit = elapsed_minutes >= hard_timeout_minutes
+        session_status = str(task.get("session_status", "") or "")
+        run_id = str(task.get("run_id", "") or task.get("session_id", "") or "")
+        if hard_timeout_hit:
+            killed = False
+            if status == "running" and run_id and session_status not in ("missing", "stale", "completed"):
+                killed = kill_subagent(run_id)
+            summary_prefix = (
+                f"超时自动终止，原因={timeout_reason}"
+                if killed else
+                f"超时自动收口，原因={timeout_reason}"
+            )
+            mark_task_timed_out(task_id, elapsed_minutes, summary_prefix=summary_prefix)
+            timed_out_tasks.append({**task, "_timeout_action": "failed"})
+            continue
+
+        timed_out_tasks.append({**task, "_timeout_action": "alerted"})
 
     return timed_out_tasks
 
@@ -3685,8 +3701,8 @@ def main():
     # ── 超时检测：先于分类，自动终止超时任务 ──
     killed_tasks = check_and_kill_timed_out_tasks(tasks)
     if killed_tasks:
-        print(f"⏱️  本轮终止超时任务 {len(killed_tasks)} 个：{[t.get('id') for t in killed_tasks]}")
-        # 重新加载任务（kill+标记 failed 后状态已更新）
+        print(f"⏱️  本轮处理超时任务 {len(killed_tasks)} 个：{[t.get('id') for t in killed_tasks]}")
+        # 重新加载任务（告警/收口后状态可能已更新）
         tasks = load_tasks()
 
     # ── 排队任务检测：依赖全部 done → 自动 spawn ──

@@ -18,8 +18,8 @@ import time
 from datetime import datetime, timezone
 
 from octoclaw_route import infer_route
-from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json
 from octoclaw_spawn import build_spawn_spec
+from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json
 from runner_playbooks import infer_runner_playbook
 
 
@@ -298,7 +298,7 @@ def recommend_spawn(args, task: str) -> dict:
         label=label,
         tier=tier,
         parent_id=args.id or "",
-        register=True,
+        register=False,
     )
     return {
         "route": "spawn_single",
@@ -325,7 +325,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         label=primary_label,
         tier=primary_tier,
         parent_id=args.id or "",
-        register=True,
+        register=False,
     )
     plan = {
         "planner": {
