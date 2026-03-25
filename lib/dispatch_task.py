@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 from octoclaw_route import infer_route
 from octoclaw_spawn import build_spawn_spec
-from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json
+from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config
 from runner_playbooks import infer_runner_playbook
 
 
@@ -194,6 +194,96 @@ def build_spawn_handoff(route: str, label: str, task: str) -> dict:
     }
 
 
+def build_multi_step_task(base_task: str, step_name: str) -> str:
+    if step_name == "planner":
+        return (
+            "你是多子任务流程里的规划/分析负责人。\n"
+            "先拆解原始任务，明确关键检查点、依赖和交付结构；必要时先做快速调研，再给后续执行者一个清晰方案。\n\n"
+            f"原始任务：\n{base_task}"
+        )
+    if step_name == "review":
+        return (
+            "你是多子任务流程里的审查/验证负责人。\n"
+            "请站在 reviewer 视角检查主执行结果是否有遗漏、风险、回归点或表达不清的地方，并给出最终把关意见。\n\n"
+            f"原始任务：\n{base_task}"
+        )
+    return (
+        "你是多子任务流程里的主执行者。\n"
+        "请基于原始任务完成主体分析/实现/整理工作，并把长结果写入共享报告。\n\n"
+        f"原始任务：\n{base_task}"
+    )
+
+
+def execute_multi_spawn_plan(args, task: str, plan: dict) -> dict:
+    spawn_cfg = load_octopus_config().get("spawn_execution", {})
+    if not isinstance(spawn_cfg, dict) or not spawn_cfg.get("enabled", False) or str(spawn_cfg.get("backend", "plan") or "plan").strip().lower() != "clawteam":
+        return {"executed": False, "steps": [], "handoff": build_spawn_handoff("spawn_multi", "", task)}
+
+    ordered_steps = [name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict)]
+    if not ordered_steps:
+        return {"executed": False, "steps": [], "handoff": build_spawn_handoff("spawn_multi", "", task)}
+
+    parent_id = args.id or f"octopus-team-{now_compact()}"
+    previous_task_id = ""
+    steps: list[dict] = []
+
+    for step_name in ordered_steps:
+        step = plan.get(step_name, {}) or {}
+        step_task = build_multi_step_task(task, step_name)
+        spec = build_spawn_spec(
+            step_task,
+            route="spawn_single",
+            label=str(step.get("label", "") or ""),
+            tier=str(step.get("tier", "") or ""),
+            model=str(step.get("model", "") or ""),
+            parent_id=parent_id,
+            register=True,
+            execute=True,
+            deps=[previous_task_id] if previous_task_id else None,
+        )
+        steps.append(
+            {
+                "step": step_name,
+                "label": spec.get("label", ""),
+                "tier": spec.get("tier", ""),
+                "model": spec.get("model", ""),
+                "task_id": spec.get("task_id", ""),
+                "executed": bool(spec.get("executed", False)),
+                "execution_error": spec.get("execution_error", ""),
+                "report_path": spec.get("report_path", ""),
+                "spawn_execution": spec.get("spawn_execution", {}),
+            }
+        )
+        if not spec.get("executed", False):
+            return {
+                "executed": False,
+                "steps": steps,
+                "handoff": {
+                    "kind": "plan",
+                    "status": "failed",
+                    "summary": f"多子任务流程在 {step_name} 阶段启动失败。",
+                    "reply_text": "我开始拆多子任务了，但其中一个工位启动失败，已保留已创建的状态信息。",
+                    "report_path": "",
+                    "user_safe": True,
+                },
+            }
+        previous_task_id = str(spec.get("task_id", "") or previous_task_id)
+
+    step_names = " / ".join(ordered_steps)
+    return {
+        "executed": True,
+        "steps": steps,
+        "handoff": {
+            "kind": "background",
+            "status": "pending",
+            "summary": f"多子任务流程已通过 ClawTeam/tmux 启动：{step_names}。",
+            "reply_text": f"我已经把这个任务拆成 {step_names} 几个工位挂到 ClawTeam/tmux 里继续处理，稍后回来汇总结论。",
+            "report_path": "",
+            "user_safe": True,
+        },
+    }
+
+
 def wait_for_runner_result(job_id: str, timeout_seconds: int) -> dict:
     deadline = time.time() + max(0, timeout_seconds)
     meta_path = os.path.join(RUNNER_RESULTS_DIR, f"{job_id}.json")
@@ -298,15 +388,17 @@ def recommend_spawn(args, task: str) -> dict:
         label=label,
         tier=tier,
         parent_id=args.id or "",
-        register=False,
+        register=True,
+        execute=None,
     )
     return {
         "route": "spawn_single",
-        "executed": False,
+        "executed": bool(spawn_spec.get("executed", False)),
         "label": spawn_spec["label"],
         "tier": spawn_spec["tier"],
         "model": spawn_spec["model"],
-        "reason": "needs_subagent",
+        "profile": spawn_spec.get("profile", ""),
+        "reason": "needs_subagent" if not spawn_spec.get("execution_error") else "subagent_spawn_failed",
         "task": task,
         "handoff": spawn_spec["handoff"],
         "spawn_spec": spawn_spec,
@@ -315,6 +407,8 @@ def recommend_spawn(args, task: str) -> dict:
 
 def recommend_multi_spawn(args, task: str) -> dict:
     route_meta = getattr(args, "_route_meta", {}) or {}
+    spawn_cfg = load_octopus_config().get("spawn_execution", {})
+    multi_exec_enabled = isinstance(spawn_cfg, dict) and bool(spawn_cfg.get("enabled", False)) and str(spawn_cfg.get("backend", "plan") or "plan").strip().lower() == "clawteam"
     primary_label = args.label or route_meta.get("role_hint") or infer_label(task)
     if primary_label == "main":
         primary_label = infer_label(task)
@@ -325,7 +419,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         label=primary_label,
         tier=primary_tier,
         parent_id=args.id or "",
-        register=False,
+        register=not multi_exec_enabled,
     )
     plan = {
         "planner": {
@@ -345,16 +439,18 @@ def recommend_multi_spawn(args, task: str) -> dict:
             "tier": "normal",
             "model": resolve_model("normal", "octopus-test", task),
         }
+    execution = execute_multi_spawn_plan(args, task, plan)
     return {
         "route": "spawn_multi",
-        "executed": False,
+        "executed": bool(execution.get("executed", False)),
         "label": primary_spawn["label"],
         "tier": primary_spawn["tier"],
         "model": primary_spawn["model"],
         "reason": "parallel_or_staged_workflow",
         "task": task,
         "plan": plan,
-        "handoff": primary_spawn["handoff"],
+        "handoff": execution.get("handoff", primary_spawn["handoff"]),
+        "steps": execution.get("steps", []),
         "spawn_spec": primary_spawn,
     }
 

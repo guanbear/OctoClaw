@@ -59,6 +59,22 @@ async function runStatus(format, cwd) {
   return result.stdout;
 }
 
+async function readReportExcerpt(reportPath, cwd) {
+  const result = await runCommand(
+    "python3",
+    [resolveScript("report_excerpt.py"), "--path", reportPath, "--max-lines", "20", "--max-chars", "1800"],
+    { cwd },
+  );
+  if (result.code !== 0) {
+    throw new Error(result.stderr || "report_excerpt.py failed");
+  }
+  try {
+    return JSON.parse(result.stdout || "{}");
+  } catch {
+    throw new Error(`report_excerpt.py returned invalid JSON: ${result.stdout}`);
+  }
+}
+
 function toolResponse(summary, details = {}) {
   return {
     content: [{ type: "text", text: summary }],
@@ -93,6 +109,24 @@ function handoffText(payload, fallback) {
     return handoff.summary;
   }
   return fallback;
+}
+
+async function userFacingHandoff(payload, fallback, cwd) {
+  const base = handoffText(payload, fallback);
+  const handoff = payload?.handoff || {};
+  const reportPath = handoff?.report_path || payload?.report_path || "";
+  if (!reportPath) {
+    return base;
+  }
+  try {
+    const preview = await readReportExcerpt(reportPath, cwd);
+    if (preview?.exists && preview?.excerpt) {
+      return `${base}\n\n报告摘录：\n${preview.excerpt}\n\n完整报告：${reportPath}`;
+    }
+  } catch {
+    // Fall back to the base handoff text when report preview fails.
+  }
+  return `${base}\n\n完整报告：${reportPath}`;
 }
 
 export default function (pi) {
@@ -147,8 +181,13 @@ export default function (pi) {
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
         args.push("--wait", "--wait-timeout-seconds", "12");
         const payload = await runJsonScript("dispatch_task.py", args, ctx.cwd || process.cwd());
+        const summary = await userFacingHandoff(
+          payload,
+          `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`,
+          ctx.cwd || process.cwd(),
+        );
         return toolResponse(
-          handoffText(payload, `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`),
+          summary,
           payload,
         );
       },
@@ -172,7 +211,8 @@ export default function (pi) {
           model: { type: "string", description: "Optional model override." },
           runtime: { type: "string", enum: ["subagent", "acp"] },
           streamTo: { type: "string", description: "Only valid when runtime=acp." },
-          parentId: { type: "string", description: "Optional parent task id." }
+          parentId: { type: "string", description: "Optional parent task id." },
+          execute: { type: "boolean", description: "Whether to immediately execute spawn via ClawTeam when enabled." }
         },
         required: ["task"]
       },
@@ -185,9 +225,15 @@ export default function (pi) {
         if (params.runtime) args.push("--runtime", params.runtime);
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
+        if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
         const payload = await runJsonScript("octoclaw_spawn.py", args, ctx.cwd || process.cwd());
+        const summary = await userFacingHandoff(
+          payload,
+          `OctoClaw spawn registered: ${payload.label} / ${payload.model}`,
+          ctx.cwd || process.cwd(),
+        );
         return toolResponse(
-          handoffText(payload, `OctoClaw spawn registered: ${payload.label} / ${payload.model}`),
+          summary,
           payload,
         );
       },

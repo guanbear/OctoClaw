@@ -12,6 +12,13 @@ OctoClaw is built for three things:
 - faster response through a persistent runner and async workers
 - better reliability through patrol, session awareness, and self-healing
 
+Recommended operator setup for the unified runtime direction:
+
+- `SUPERVISOR_MODE=tmux`
+- one fixed `tmux` slot for `runner-daemon`
+- one fixed `tmux` slot for `patrol-loop`
+- later attach ClawTeam task/inbox/board on top of the same workbench
+
 ---
 
 ## Why OctoClaw
@@ -39,6 +46,7 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
   - [`runner-daemon.sh`](./lib/runner-daemon.sh)
   - [`runner_dispatch.py`](./lib/runner_dispatch.py)
   - [`runner_queue.py`](./lib/runner_queue.py)
+  - per-job fresh shell execution with worker recycling by jobs / age / idle
 - Session-aware patrol: [`patrol.py`](./lib/patrol.py)
 - Text status views: [`status.sh`](./lib/status.sh)
 - Minimal replay/eval harness: [`eval_suite.py`](./lib/eval_suite.py)
@@ -63,7 +71,7 @@ Recommended minimal open-source path:
 
 1. Install the skill
 2. Keep notifications on `auto` or `none`
-3. Let `runner-daemon` run in the background
+3. Prefer `SUPERVISOR_MODE=tmux` and let `runner-daemon` / `patrol-loop` run in tmux
 4. Enable the bundled runtime extension from `extensions/octoclaw-runtime`
 5. Treat `direct` as a whitelist: route ambiguous work through `octoclaw_route`, then `octoclaw_dispatch`
 6. Use `status.sh --format table` to inspect state
@@ -74,6 +82,12 @@ Recommended minimal open-source path:
 ```bash
 # Runtime extension install target
 ls ~/.openclaw/extensions/octoclaw-runtime
+
+# Recommended no-systemd supervisor mode
+SUPERVISOR_MODE=tmux PATROL_MODE=loop bash /workspace/openclaw/skills/octopus/install.sh
+
+# Attach to the OctoClaw tmux workbench
+tmux attach -t octoclaw-runtime
 
 # In OpenClaw, prefer these tools when available:
 # octoclaw_route
@@ -106,6 +120,73 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 cd /workspace/openclaw/skills/octopus
 WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync
 ```
+
+## ClawTeam Bridge Validation
+
+OctoClaw now includes an optional bridge layer with three modes:
+
+- `mirror`: local ClawTeam-style mirror only
+- `hybrid`: local mirror + optional CLI hooks
+- `cli`: prefer CLI hooks while retaining mirror artifacts for observability
+
+The bridge can mirror task updates into a minimal ClawTeam-style layout:
+
+- tasks: `/workspace/tmp/octopus/clawteam-bridge/tasks`
+- inbox: `/workspace/tmp/octopus/clawteam-bridge/inbox`
+- events: `/workspace/tmp/octopus/clawteam-bridge/events`
+
+Enable it in `tmp/octopus-config.json`:
+
+```json
+{
+  "clawteam_bridge": {
+    "enabled": true,
+    "backend": "hybrid",
+    "team_name": "octopus-validation",
+    "inbox_owner": "main",
+    "emit_result_mail": true,
+    "clawteam_bin": "clawteam",
+    "clawteam_data_dir": "",
+    "auto_create_team": true
+  },
+  "spawn_execution": {
+    "enabled": true,
+    "backend": "clawteam",
+    "backend_name": "tmux",
+    "workspace": false,
+    "default_profile": "",
+    "profile_by_label": {
+      "octopus-fix": "coding",
+      "octopus-scout": "research"
+    }
+  }
+}
+```
+
+If `backend` is `hybrid` or `cli`, the bridge can also run configurable `clawteam` command templates for:
+
+- team init
+- task sync
+- inbox send
+
+Current default behavior:
+
+- native CLI sync now uses `team spawn-team`, `task create/update`, and `inbox send`
+- OctoClaw stores its own task mirror while also keeping a `task-map.json` for ClawTeam task IDs
+- `clawteam_data_dir` defaults to `<bridge root>/clawteam-data`, so it does not pollute your global `~/.clawteam`
+
+This mode still does not replace OctoClaw routing or patrol. It only adds ClawTeam-style collaboration plumbing with low integration risk.
+
+`spawn_execution` lets OctoClaw directly execute `spawn_single` through `clawteam spawn tmux ...`.
+OctoClaw still computes `label / tier / model / thinking`, then maps them to an OpenClaw `--profile` when a profile mapping is configured.
+Because current OpenClaw TUI exposes `--profile` rather than a direct `--model` flag, the recommended integration is:
+
+- OctoClaw owns runtime model policy
+- OctoClaw maps `label / tier / model` to a profile when needed
+- ClawTeam receives the final OpenClaw command and runs it in tmux
+
+See [clawteam-integration-analysis-2026-03-25.md](./clawteam-integration-analysis-2026-03-25.md) for the architecture notes and tradeoffs.
+See [octoclaw-clawteam-unified-runtime-v1-2026-03-25.md](./octoclaw-clawteam-unified-runtime-v1-2026-03-25.md) for the target unified runtime design.
 
 ## Model Inputs
 

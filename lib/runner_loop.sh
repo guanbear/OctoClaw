@@ -9,16 +9,20 @@ TASK_STATE_PY="$SCRIPT_DIR/task-state-update.py"
 POLL_INTERVAL="${RUNNER_POLL_INTERVAL_SECONDS:-3}"
 HEARTBEAT_INTERVAL="${RUNNER_HEARTBEAT_INTERVAL_SECONDS:-10}"
 DEFAULT_TIMEOUT="${RUNNER_DEFAULT_TIMEOUT_SECONDS:-120}"
-MAX_JOBS="${RUNNER_MAX_JOBS_PER_WORKER:-50}"
+MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
+MAX_IDLE_SECONDS="${RUNNER_MAX_IDLE_SECONDS:-900}"
+MAX_JOBS="${RUNNER_MAX_JOBS_PER_WORKER:-30}"
 WORKER_ID="${RUNNER_WORKER_ID:-runner-$(hostname)-$$}"
 STARTED_AT="$(python3 - <<'PY'
 from datetime import datetime, timezone
 print(datetime.now(timezone.utc).astimezone().isoformat())
 PY
 )"
+START_EPOCH="$(date +%s)"
 
 jobs_completed=0
 last_heartbeat=0
+last_job_epoch="$START_EPOCH"
 
 python3 "$QUEUE_PY" ensure >/dev/null
 
@@ -54,8 +58,17 @@ finish_task() {
   python3 "$TASK_STATE_PY" "$outcome" --id "$job_id" --summary "$summary" >/dev/null
 }
 
+recycle_runner() {
+  local reason="$1"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] runner_loop recycle: ${reason} jobs_completed=${jobs_completed}"
+  exit 0
+}
+
 while true; do
   now_epoch="$(date +%s)"
+  if (( MAX_AGE_MINUTES > 0 )) && (( now_epoch - START_EPOCH >= MAX_AGE_MINUTES * 60 )); then
+    recycle_runner "max_age_minutes_reached"
+  fi
   if (( now_epoch - last_heartbeat >= HEARTBEAT_INTERVAL )); then
     heartbeat ""
     last_heartbeat="$now_epoch"
@@ -63,6 +76,9 @@ while true; do
 
   job_json="$(python3 "$QUEUE_PY" claim --worker-id "$WORKER_ID")"
   if [[ "$job_json" == "{}" ]]; then
+    if (( jobs_completed > 0 )) && (( MAX_IDLE_SECONDS > 0 )) && (( now_epoch - last_job_epoch >= MAX_IDLE_SECONDS )); then
+      recycle_runner "max_idle_seconds_reached"
+    fi
     sleep "$POLL_INTERVAL"
     continue
   fi
@@ -176,9 +192,13 @@ PY
   finish_task "$job_id" "$result_status" "$result_summary"
 
   jobs_completed=$((jobs_completed + 1))
+  last_job_epoch="$(date +%s)"
   heartbeat ""
 
   if (( jobs_completed >= MAX_JOBS )); then
-    exit 0
+    recycle_runner "max_jobs_reached"
+  fi
+  if (( MAX_AGE_MINUTES > 0 )) && (( last_job_epoch - START_EPOCH >= MAX_AGE_MINUTES * 60 )); then
+    recycle_runner "max_age_minutes_reached_post_job"
   fi
 done

@@ -55,6 +55,9 @@ OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES="${OMNIROUTE_PLAN_SYNC_INTERVAL_MINUTES:-15
 PATROL_MODE="${PATROL_MODE:-loop}"
 PATROL_INTERVAL="${PATROL_INTERVAL:-60}"
 SUPERVISOR_MODE="${SUPERVISOR_MODE:-auto}"
+TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-octoclaw-runtime}"
+TMUX_RUNNER_WINDOW_NAME="${TMUX_RUNNER_WINDOW_NAME:-runner}"
+TMUX_PATROL_WINDOW_NAME="${TMUX_PATROL_WINDOW_NAME:-patrol}"
 NOTIFICATION_BACKEND="${NOTIFICATION_BACKEND:-auto}"
 NOTIFICATION_PANEL_ENABLED="${NOTIFICATION_PANEL_ENABLED:-true}"
 NOTIFICATION_EVENT_ENABLED="${NOTIFICATION_EVENT_ENABLED:-true}"
@@ -69,7 +72,8 @@ RUNNER_POLL_INTERVAL_SECONDS="${RUNNER_POLL_INTERVAL_SECONDS:-3}"
 RUNNER_HEARTBEAT_INTERVAL_SECONDS="${RUNNER_HEARTBEAT_INTERVAL_SECONDS:-10}"
 RUNNER_DEFAULT_TIMEOUT_SECONDS="${RUNNER_DEFAULT_TIMEOUT_SECONDS:-120}"
 RUNNER_MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
-RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-50}"
+RUNNER_MAX_IDLE_SECONDS="${RUNNER_MAX_IDLE_SECONDS:-900}"
+RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-30}"
 
 # ─────────────────────────────────────────────
 # 公共辅助：删除 / 禁用 / 启用 cron
@@ -243,9 +247,97 @@ _systemd_available() {
     command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
 }
 
+_tmux_available() {
+    command -v tmux >/dev/null 2>&1
+}
+
+_tmux_session_exists() {
+    tmux has-session -t "$TMUX_SESSION_NAME" 2>/dev/null
+}
+
+_tmux_window_exists() {
+    local window_name="$1"
+    _tmux_session_exists && tmux list-windows -t "$TMUX_SESSION_NAME" -F '#W' 2>/dev/null | grep -Fxq "$window_name"
+}
+
+_disable_systemd_unit_if_present() {
+    local service_name="$1"
+    if _systemd_available; then
+        systemctl disable --now "$service_name" >/dev/null 2>&1 || true
+    fi
+}
+
+_tmux_shell_quote() {
+    printf "%q" "$1"
+}
+
+_build_tmux_command_runner() {
+    local daemon_script="$SCRIPT_DIR/lib/runner-daemon.sh"
+    printf 'cd %s && export WORKSPACE=%s RUNNER_POLL_INTERVAL_SECONDS=%s RUNNER_HEARTBEAT_INTERVAL_SECONDS=%s RUNNER_DEFAULT_TIMEOUT_SECONDS=%s RUNNER_MAX_AGE_MINUTES=%s RUNNER_MAX_IDLE_SECONDS=%s RUNNER_MAX_JOBS_PER_WORKER=%s && exec bash %s' \
+        "$(_tmux_shell_quote "$SKILL_ROOT")" \
+        "$(_tmux_shell_quote "$WORKSPACE")" \
+        "$(_tmux_shell_quote "$RUNNER_POLL_INTERVAL_SECONDS")" \
+        "$(_tmux_shell_quote "$RUNNER_HEARTBEAT_INTERVAL_SECONDS")" \
+        "$(_tmux_shell_quote "$RUNNER_DEFAULT_TIMEOUT_SECONDS")" \
+        "$(_tmux_shell_quote "$RUNNER_MAX_AGE_MINUTES")" \
+        "$(_tmux_shell_quote "$RUNNER_MAX_IDLE_SECONDS")" \
+        "$(_tmux_shell_quote "$RUNNER_MAX_JOBS_PER_WORKER")" \
+        "$(_tmux_shell_quote "$daemon_script")"
+}
+
+_build_tmux_command_patrol() {
+    local loop_script="$SCRIPT_DIR/lib/patrol-loop.sh"
+    printf 'cd %s && export WORKSPACE=%s PATROL_INTERVAL=%s && exec bash %s' \
+        "$(_tmux_shell_quote "$SKILL_ROOT")" \
+        "$(_tmux_shell_quote "$WORKSPACE")" \
+        "$(_tmux_shell_quote "$PATROL_INTERVAL")" \
+        "$(_tmux_shell_quote "$loop_script")"
+}
+
+_tmux_start_window() {
+    local window_name="$1"
+    local command="$2"
+    if ! _tmux_available; then
+        echo "⚠️  SUPERVISOR_MODE=tmux 但当前环境未安装 tmux"
+        return 1
+    fi
+    if _tmux_session_exists; then
+        if _tmux_window_exists "$window_name"; then
+            tmux respawn-window -k -t "${TMUX_SESSION_NAME}:${window_name}" "$command"
+        else
+            tmux new-window -d -t "$TMUX_SESSION_NAME" -n "$window_name" "$command"
+        fi
+    else
+        if ! tmux new-session -d -s "$TMUX_SESSION_NAME" -n "$window_name" "$command" 2>/dev/null; then
+            if _tmux_session_exists; then
+                if _tmux_window_exists "$window_name"; then
+                    tmux respawn-window -k -t "${TMUX_SESSION_NAME}:${window_name}" "$command"
+                else
+                    tmux new-window -d -t "$TMUX_SESSION_NAME" -n "$window_name" "$command"
+                fi
+            else
+                echo "⚠️  无法创建 tmux session: $TMUX_SESSION_NAME"
+                return 1
+            fi
+        fi
+    fi
+    return 0
+}
+
+_tmux_stop_window() {
+    local window_name="$1"
+    if _tmux_window_exists "$window_name"; then
+        tmux kill-window -t "${TMUX_SESSION_NAME}:${window_name}" >/dev/null 2>&1 || true
+    fi
+}
+
 _resolve_supervisor_mode() {
     if [ "${SUPERVISOR_MODE:-auto}" = "systemd" ]; then
         printf '%s\n' "systemd"
+        return 0
+    fi
+    if [ "${SUPERVISOR_MODE:-auto}" = "tmux" ]; then
+        printf '%s\n' "tmux"
         return 0
     fi
     if [ "${SUPERVISOR_MODE:-auto}" = "shell" ]; then
@@ -322,6 +414,21 @@ _start_runner_service() {
         echo "✅ runner 已由 systemd 托管：$_SYSTEMD_RUNNER_SERVICE"
         return 0
     fi
+    _disable_systemd_unit_if_present "$_SYSTEMD_RUNNER_SERVICE"
+    if [ "$mode" = "tmux" ]; then
+        _stop_runner_daemon >/dev/null 2>&1 || true
+        _clear_stale_runtime_state "$_RUNNER_DAEMON_PID_FILE" "$_RUNNER_HEALTH_FILE"
+        _tmux_start_window "$TMUX_RUNNER_WINDOW_NAME" "$(_build_tmux_command_runner)" || return 1
+        sleep 0.8
+        if [ -f "$_RUNNER_DAEMON_PID_FILE" ]; then
+            local new_pid
+            new_pid=$(cat "$_RUNNER_DAEMON_PID_FILE")
+            echo "✅ runner-daemon 已由 tmux 托管：session=$TMUX_SESSION_NAME window=$TMUX_RUNNER_WINDOW_NAME pid=$new_pid"
+        else
+            echo "⚠️  tmux 已启动 runner 窗口，但 runner-daemon 尚未写入 PID，请查看 tmux：tmux attach -t $TMUX_SESSION_NAME"
+        fi
+        return 0
+    fi
     _start_runner_daemon
 }
 
@@ -332,6 +439,12 @@ _stop_runner_service() {
         systemctl stop "$_SYSTEMD_RUNNER_SERVICE" >/dev/null 2>&1 || true
         rm -f "$_RUNNER_HEALTH_FILE" "$_RUNNER_DAEMON_PID_FILE"
         echo "✅ runner systemd 服务已停止"
+        return 0
+    fi
+    if [ "$mode" = "tmux" ]; then
+        _tmux_stop_window "$TMUX_RUNNER_WINDOW_NAME"
+        rm -f "$_RUNNER_HEALTH_FILE" "$_RUNNER_DAEMON_PID_FILE"
+        echo "✅ runner tmux 窗口已停止（session=$TMUX_SESSION_NAME window=$TMUX_RUNNER_WINDOW_NAME）"
         return 0
     fi
     _stop_runner_daemon
@@ -346,6 +459,21 @@ _start_patrol_service() {
         echo "✅ patrol 已由 systemd 托管：$_SYSTEMD_PATROL_SERVICE"
         return 0
     fi
+    _disable_systemd_unit_if_present "$_SYSTEMD_PATROL_SERVICE"
+    if [ "$mode" = "tmux" ]; then
+        _stop_patrol_loop >/dev/null 2>&1 || true
+        rm -f "$_PATROL_LOOP_PID_FILE"
+        _tmux_start_window "$TMUX_PATROL_WINDOW_NAME" "$(_build_tmux_command_patrol)" || return 1
+        sleep 0.8
+        if [ -f "$_PATROL_LOOP_PID_FILE" ]; then
+            local new_pid
+            new_pid=$(cat "$_PATROL_LOOP_PID_FILE")
+            echo "✅ patrol-loop 已由 tmux 托管：session=$TMUX_SESSION_NAME window=$TMUX_PATROL_WINDOW_NAME pid=$new_pid"
+        else
+            echo "⚠️  tmux 已启动 patrol 窗口，但 patrol-loop 尚未写入 PID，请查看 tmux：tmux attach -t $TMUX_SESSION_NAME"
+        fi
+        return 0
+    fi
     _start_patrol_loop
 }
 
@@ -356,6 +484,12 @@ _stop_patrol_service() {
         systemctl stop "$_SYSTEMD_PATROL_SERVICE" >/dev/null 2>&1 || true
         rm -f "$_PATROL_LOOP_PID_FILE"
         echo "✅ patrol systemd 服务已停止"
+        return 0
+    fi
+    if [ "$mode" = "tmux" ]; then
+        _tmux_stop_window "$TMUX_PATROL_WINDOW_NAME"
+        rm -f "$_PATROL_LOOP_PID_FILE"
+        echo "✅ patrol tmux 窗口已停止（session=$TMUX_SESSION_NAME window=$TMUX_PATROL_WINDOW_NAME）"
         return 0
     fi
     _stop_patrol_loop
@@ -440,6 +574,7 @@ _start_runner_daemon() {
     RUNNER_HEARTBEAT_INTERVAL_SECONDS="$RUNNER_HEARTBEAT_INTERVAL_SECONDS" \
     RUNNER_DEFAULT_TIMEOUT_SECONDS="$RUNNER_DEFAULT_TIMEOUT_SECONDS" \
     RUNNER_MAX_AGE_MINUTES="$RUNNER_MAX_AGE_MINUTES" \
+    RUNNER_MAX_IDLE_SECONDS="$RUNNER_MAX_IDLE_SECONDS" \
     RUNNER_MAX_JOBS_PER_WORKER="$RUNNER_MAX_JOBS_PER_WORKER" \
     setsid bash "$daemon_script" >> "$_RUNNER_DAEMON_LOG" 2>&1 &
     sleep 0.8
@@ -595,6 +730,9 @@ do_enable() {
     echo "✅ 八爪鱼已重新启用"
     if [ "${PATROL_MODE:-loop}" = "loop" ]; then
         echo "   巡逻守护已恢复（$(_resolve_supervisor_mode)，间隔 ${PATROL_INTERVAL}s）"
+        if [ "$(_resolve_supervisor_mode)" = "tmux" ]; then
+            echo "   tmux 工作台：tmux attach -t ${TMUX_SESSION_NAME}"
+        fi
     else
         echo "   cron 巡逻和探测任务已恢复"
     fi
@@ -1454,6 +1592,9 @@ if [ "${PATROL_MODE:-loop}" = "loop" ]; then
         echo "✅ 飞鱼腿模式：常驻 runner（$(_resolve_supervisor_mode) 托管）"
     else
         echo "ℹ️  飞鱼腿模式：已禁用"
+    fi
+    if [ "$(_resolve_supervisor_mode)" = "tmux" ]; then
+        echo "✅ tmux 工作台：tmux attach -t ${TMUX_SESSION_NAME}"
     fi
 else
     echo "✅ 巡逻模式：cron（每分钟触发，消耗 token）"

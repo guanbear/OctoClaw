@@ -39,6 +39,7 @@ script_dir = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
 sys.path.insert(0, script_dir)
 
 from octopus_config import CONFIG_FILE, MODE_FILE, MODEL_POLICY_FILE, RUNNER_HEALTH_FILE, load_json
+from clawteam_bridge import load_bridge_summary
 from status_render import (
     build_status_snapshot,
     render_status_lanes,
@@ -140,6 +141,18 @@ print("━━━━━━━━━━━━━━━━━━━━")
 print(f"⚙️  模式：{mode_label}")
 backend = config_data.get("notification", {}).get("backend", "auto")
 print(f"🔔 通知：{backend}")
+bridge_summary = load_bridge_summary()
+if bridge_summary.get("enabled"):
+    counts = bridge_summary.get("counts", {}) or {}
+    bridge_tasks = sum(int(v or 0) for v in counts.values())
+    backend = bridge_summary.get("backend", "mirror")
+    cli_note = ""
+    if backend in ("hybrid", "cli"):
+        cli_note = " · cli-ready" if bridge_summary.get("cli_available") else " · cli-missing"
+    print(
+        f"🤝 Bridge：{bridge_summary.get('team', 'octopus-validation')} · "
+        f"{backend}{cli_note} · tasks {bridge_tasks} · inbox {bridge_summary.get('inbox_count', 0)}"
+    )
 runner_health_ok = False
 runner_health_age = None
 if isinstance(runner_health, dict) and runner_health.get("worker_id"):

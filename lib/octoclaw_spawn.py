@@ -14,13 +14,14 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 
 from learning_log import append_error_entry
 from octoclaw_route import infer_route
-from octopus_config import CONTEXT_DIR, SHARED_DIR, TASK_STATE_FILE, load_json
+from octopus_config import CONTEXT_DIR, SHARED_DIR, TASK_STATE_FILE, load_json, load_octopus_config
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -113,6 +114,16 @@ def compact_text(text: str, limit: int = 160) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def prefers_longform_result(label: str, route: str) -> bool:
+    return label in ("octopus-scout", "octopus-analyze", "octopus-writer") or route == "spawn_multi"
+
+
+def result_summary_contract(label: str, route: str) -> str:
+    if prefers_longform_result(label, route):
+        return "4-8句可直接转述给用户的中文结论；前2句先给总判断，后续补关键差异/建议；允许轻量编号；禁表格/代码块"
+    return "2-5句结论，每句≤30字，禁列表/表格/代码块"
 
 
 def tokenize(text: str) -> set[str]:
@@ -251,6 +262,185 @@ def log_spawn_error(task: str, error_text: str, *, runtime: str, stream_to: str,
     )
 
 
+def spawn_execution_config() -> dict:
+    cfg = load_octopus_config()
+    section = cfg.get("spawn_execution", {})
+    return section if isinstance(section, dict) else {}
+
+
+def clawteam_runtime_config() -> dict:
+    cfg = load_octopus_config()
+    section = cfg.get("clawteam_bridge", {})
+    return section if isinstance(section, dict) else {}
+
+
+def should_execute_spawn(route: str, runtime: str, explicit: bool | None = None) -> bool:
+    if explicit is not None:
+        return explicit
+    if route != "spawn_single" or runtime != "subagent":
+        return False
+    cfg = spawn_execution_config()
+    return bool(cfg.get("enabled", False)) and str(cfg.get("backend", "plan") or "plan").strip().lower() == "clawteam"
+
+
+def resolve_spawn_team_name() -> str:
+    spawn_cfg = spawn_execution_config()
+    bridge_cfg = clawteam_runtime_config()
+    for value in (
+        spawn_cfg.get("team_name"),
+        bridge_cfg.get("team_name"),
+        "octopus-validation",
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "octopus-validation"
+
+
+def clawteam_data_dir() -> str:
+    bridge_cfg = clawteam_runtime_config()
+    configured = str(bridge_cfg.get("clawteam_data_dir", "") or "").strip()
+    if configured:
+        return configured
+    root_dir = str(bridge_cfg.get("root_dir", "") or "").strip()
+    if root_dir:
+        return os.path.join(root_dir, "clawteam-data")
+    workspace = os.environ.get("WORKSPACE", "/workspace")
+    return os.path.join(workspace, "tmp", "octopus", "clawteam-bridge", "clawteam-data")
+
+
+def resolve_profile(label: str, model: str, tier: str) -> str:
+    cfg = spawn_execution_config()
+    label_map = cfg.get("profile_by_label", {})
+    if isinstance(label_map, dict):
+        value = str(label_map.get(label, "") or "").strip()
+        if value:
+            return value
+
+    model_map = cfg.get("profile_by_model_prefix", {})
+    if isinstance(model_map, dict):
+        matches = sorted(
+            (
+                (prefix, str(profile or "").strip())
+                for prefix, profile in model_map.items()
+                if str(prefix).strip() and model.startswith(str(prefix).strip()) and str(profile or "").strip()
+            ),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+        if matches:
+            return matches[0][1]
+
+    tier_map = cfg.get("profile_by_tier", {})
+    if isinstance(tier_map, dict):
+        value = str(tier_map.get(tier, "") or "").strip()
+        if value:
+            return value
+
+    return str(cfg.get("default_profile", "") or "").strip()
+
+
+def resolve_agent_name(task_id: str) -> str:
+    cfg = spawn_execution_config()
+    prefix = re.sub(r"[^a-z0-9_-]+", "-", str(cfg.get("agent_name_prefix", "octo") or "octo").lower()).strip("-")
+    base = re.sub(r"[^a-z0-9_-]+", "-", task_id.lower()).strip("-")
+    name = f"{prefix}-{base}" if prefix else base
+    return name[:48].rstrip("-") or f"octo-{now_compact()}"
+
+
+def build_clawteam_spawn_command(
+    *,
+    team_name: str,
+    agent_name: str,
+    prompt: str,
+    profile: str,
+    thinking: str,
+) -> list[str]:
+    bridge_cfg = clawteam_runtime_config()
+    spawn_cfg = spawn_execution_config()
+    clawteam_bin = str(bridge_cfg.get("clawteam_bin", "clawteam") or "clawteam").strip() or "clawteam"
+    openclaw_bin = str(spawn_cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
+    backend_name = str(spawn_cfg.get("backend_name", "tmux") or "tmux").strip() or "tmux"
+    workspace_enabled = bool(spawn_cfg.get("workspace", False))
+
+    command = [
+        clawteam_bin,
+        "--json",
+        "--data-dir",
+        clawteam_data_dir(),
+        "spawn",
+        backend_name,
+        openclaw_bin,
+    ]
+    if profile:
+        command.extend(["--profile", profile])
+    command.append("tui")
+    if thinking:
+        command.extend(["--thinking", thinking])
+    command.extend([
+        "-t",
+        team_name,
+        "-n",
+        agent_name,
+        "--task",
+        prompt,
+    ])
+    if not workspace_enabled:
+        command.append("--no-workspace")
+    return command
+
+
+def execute_clawteam_spawn(
+    *,
+    task_id: str,
+    label: str,
+    model: str,
+    tier: str,
+    prompt: str,
+    thinking: str,
+) -> dict:
+    if shutil.which(str(clawteam_runtime_config().get("clawteam_bin", "clawteam") or "clawteam")) is None:
+        raise RuntimeError("未找到 clawteam 命令，无法执行 ClawTeam spawn")
+    if shutil.which(str(spawn_execution_config().get("openclaw_bin", "openclaw") or "openclaw")) is None:
+        raise RuntimeError("未找到 openclaw 命令，无法执行 ClawTeam spawn")
+
+    team_name = resolve_spawn_team_name()
+    profile = resolve_profile(label, model, tier)
+    agent_name = resolve_agent_name(task_id)
+    command = build_clawteam_spawn_command(
+        team_name=team_name,
+        agent_name=agent_name,
+        prompt=prompt,
+        profile=profile,
+        thinking=thinking,
+    )
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    payload: dict[str, object] = {}
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = {}
+    if result.returncode != 0:
+        detail = stderr or stdout or "clawteam spawn failed"
+        raise RuntimeError(detail)
+    return {
+        "backend": "clawteam",
+        "team_name": team_name,
+        "agent_name": agent_name,
+        "profile": profile,
+        "thinking": thinking,
+        "command": command,
+        "stdout": stdout,
+        "stderr": stderr,
+        "payload": payload,
+    }
+
+
 def build_task_prompt(
     *,
     task_id: str,
@@ -295,6 +485,7 @@ def build_task_prompt(
         "- 大段内容写共享文件，不要直接塞进上下文或 RESULT",
         "- 如果遇到阻塞，立刻执行 failed 状态写入，然后输出 failure RESULT",
         f"- 详细报告默认写到：{report_path}",
+        "- 若填写 report，summary 仍需自包含，不能只写“已写入报告”",
         "",
         "【文件读取强制要求】",
         "- cat -> head -n 60",
@@ -303,7 +494,7 @@ def build_task_prompt(
         "",
         "【RESULT 规范】",
         "---RESULT---",
-        '{"status":"success","summary":"2-5句结论，每句≤30字，禁列表/表格/代码块","files":[],"report":"共享文件路径或null"}',
+        f'{{"status":"success","summary":"{result_summary_contract(label, route)}","files":[],"report":"共享文件路径或null"}}',
         "",
         "【Fail Fast】",
         f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py failed --id {task_id} --summary \"阻塞原因（1句）：xxx，建议：xxx\"",
@@ -325,6 +516,8 @@ def register_dispatched_task(
     parent_id: str,
     context_path: str,
     context_summary: str,
+    owner: str = "",
+    deps: list[str] | None = None,
 ) -> None:
     cmd = [
         "python3",
@@ -357,6 +550,12 @@ def register_dispatched_task(
         "--summary",
         task_title(task, 60),
     ]
+    if owner:
+        cmd.extend(["--owner", owner])
+    if deps:
+        joined = ",".join(str(dep).strip() for dep in deps if str(dep).strip())
+        if joined:
+            cmd.extend(["--deps", joined])
     if context_path:
         cmd.extend(["--context-path", context_path])
     if context_summary:
@@ -415,6 +614,8 @@ def build_spawn_spec(
     supports_acp: bool = False,
     parent_id: str = "",
     register: bool = False,
+    execute: bool | None = None,
+    deps: list[str] | None = None,
 ) -> dict:
     route_meta = infer_route(task)
     final_route = route or route_meta.get("route", "spawn_single")
@@ -482,7 +683,39 @@ def build_spawn_spec(
             parent_id=parent_id,
             context_path=str(context_bundle.get("context_path", "") or ""),
             context_summary=str(context_bundle.get("summary", "") or ""),
+            deps=deps,
         )
+
+    spawn_execution: dict[str, object] | None = None
+    execution_error = ""
+    executed = False
+    if should_execute_spawn(final_route, runtime, explicit=execute):
+        try:
+            spawn_execution = execute_clawteam_spawn(
+                task_id=task_id,
+                label=final_label,
+                model=final_model,
+                tier=final_tier,
+                prompt=prompt,
+                thinking=thinking,
+            )
+            agent_owner = str((spawn_execution or {}).get("agent_name", "") or "")
+            if agent_owner:
+                subprocess.run(
+                    ["python3", TASK_STATE_PY, "upsert", "--id", task_id, "--owner", agent_owner],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            executed = True
+        except Exception as exc:
+            execution_error = compact_text(str(exc), 220)
+            subprocess.run(
+                ["python3", TASK_STATE_PY, "failed", "--id", task_id, "--summary", f"spawn启动失败：{execution_error}"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
 
     payload = {
         "label": final_label,
@@ -514,14 +747,22 @@ def build_spawn_spec(
         "task_prompt": prompt,
         "task_prompt_preview": prompt[:320] + ("…" if len(prompt) > 320 else ""),
         "handoff": {
-            "kind": "plan",
-            "status": "planned",
-            "summary": "已生成统一子任务派发规范。",
-            "reply_text": "我会按 OctoClaw 统一 spawn 规范派给子任务处理。",
+            "kind": "background" if executed else "plan",
+            "status": "pending" if executed else ("failed" if execution_error else "planned"),
+            "summary": "子任务已通过 ClawTeam/tmux 启动。" if executed else ("子任务启动失败。" if execution_error else "已生成统一子任务派发规范。"),
+            "reply_text": (
+                "我已经把这个子任务挂到 ClawTeam/tmux 工位里继续处理，稍后回来汇总结论。"
+                if executed
+                else ("子任务启动失败，我已记录失败状态。" if execution_error else "我会按 OctoClaw 统一 spawn 规范派给子任务处理。")
+            ),
             "report_path": report_path,
             "user_safe": True,
         },
         "sessions_spawn_payload": payload,
+        "executed": executed,
+        "execution_error": execution_error,
+        "spawn_execution": spawn_execution or {},
+        "profile": (spawn_execution or {}).get("profile", "") if isinstance(spawn_execution, dict) else "",
         "registered": register,
     }
 
@@ -538,6 +779,9 @@ def main() -> None:
     parser.add_argument("--supports-acp", action="store_true")
     parser.add_argument("--parent-id", dest="parent_id", default="")
     parser.add_argument("--register", action="store_true")
+    parser.add_argument("--execute", dest="execute", action="store_true")
+    parser.add_argument("--no-execute", dest="execute", action="store_false")
+    parser.set_defaults(execute=None)
     args = parser.parse_args()
 
     spec = build_spawn_spec(
@@ -551,6 +795,7 @@ def main() -> None:
         supports_acp=args.supports_acp,
         parent_id=args.parent_id,
         register=args.register,
+        execute=args.execute,
     )
     print(json.dumps(spec, ensure_ascii=False))
 

@@ -128,6 +128,10 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
 - 只有在你正在修 `octoclaw_spawn.py` 本身，或当前环境里包装器确实不可用时，才允许手动调用 `sessions_spawn`
 - 若 spawn 失败，只回一条简短状态，不要连续播报“我再试一下/参数终于对了”这类内部重试独白
 - 禁止把内部犹豫文本、调试思路或英文自言自语发给用户
+- 若子任务返回了 `report_path`，且任务属于调研 / 分析 / 写作 / 多项目对比：
+  - 主 Agent 必须先读取 `head -n 80 {report_path}`
+  - 再用自己的话给用户正式收口
+  - 禁止把子任务 `---RESULT---` 或 JSON 原样当最终答案转发给用户
 
 ### sessions_spawn 兼容约束
 

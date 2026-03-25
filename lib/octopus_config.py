@@ -17,6 +17,7 @@ MODEL_PLAN_STATE_FILE = f"{WORKSPACE}/tmp/octopus/model-plan-state.json"
 MODEL_BENCHMARKS_FILE = f"{WORKSPACE}/tmp/octopus/model-benchmarks.json"
 MODEL_SOURCES_FILE = f"{WORKSPACE}/tmp/octopus/model-sources.json"
 TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
+CLAWTEAM_BRIDGE_DIR = f"{WORKSPACE}/tmp/octopus/clawteam-bridge"
 RUNNER_QUEUE_FILE = f"{WORKSPACE}/tmp/octopus/runner-queue.json"
 RUNNER_HEALTH_FILE = f"{WORKSPACE}/tmp/octopus/runner-health.json"
 RUNNER_RESULTS_DIR = f"{WORKSPACE}/tmp/octopus/runner-results"
@@ -44,13 +45,44 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "prefer_private": False,
         "prefer_low_cost": False,
     },
+    "clawteam_bridge": {
+        "enabled": False,
+        "backend": "mirror",
+        "team_name": "octopus-validation",
+        "inbox_owner": "main",
+        "emit_result_mail": True,
+        "clawteam_bin": "clawteam",
+        "clawteam_data_dir": "",
+        "auto_create_team": True,
+        "team_description": "OctoClaw validation bridge team",
+        "leader_name": "main",
+        "commands": {
+            "create_team": "{clawteam_bin_q} team spawn-team {team_q} -d {team_description_q} -n {leader_q}",
+            "task_sync": "",
+            "inbox_send": "{clawteam_bin_q} inbox send {team_q} {recipient_q} {message_q}",
+        },
+    },
+    "spawn_execution": {
+        "enabled": False,
+        "backend": "plan",
+        "backend_name": "tmux",
+        "team_name": "",
+        "workspace": False,
+        "agent_name_prefix": "octo",
+        "openclaw_bin": "openclaw",
+        "default_profile": "",
+        "profile_by_label": {},
+        "profile_by_tier": {},
+        "profile_by_model_prefix": {},
+    },
     "runner": {
         "enabled": True,
         "poll_interval_seconds": 3,
         "heartbeat_interval_seconds": 10,
         "default_timeout_seconds": 120,
         "max_age_minutes": 120,
-        "max_jobs_per_worker": 50,
+        "max_idle_seconds": 900,
+        "max_jobs_per_worker": 30,
     },
 }
 

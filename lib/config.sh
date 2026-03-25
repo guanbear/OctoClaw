@@ -14,8 +14,12 @@ PATROL_INTERVAL="${PATROL_INTERVAL:-60}"
 # ── 守护方式 ──────────────────────────────────────────────────────────────────
 # auto: Linux + systemd 环境优先用 systemd 守护；否则退回 shell loop
 # systemd: 强制用 systemd 守护 octoclaw-runner / octoclaw-patrol
+# tmux: 使用固定 tmux session/window 托管 runner-daemon / patrol-loop（推荐后续与 ClawTeam workbench 对齐）
 # shell: 使用 setsid 后台循环（兼容模式）
 SUPERVISOR_MODE="${SUPERVISOR_MODE:-auto}"
+TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-octoclaw-runtime}"
+TMUX_RUNNER_WINDOW_NAME="${TMUX_RUNNER_WINDOW_NAME:-runner}"
+TMUX_PATROL_WINDOW_NAME="${TMUX_PATROL_WINDOW_NAME:-patrol}"
 
 # ── 通知后端 ──────────────────────────────────────────────────────────────────
 # auto: 自动探测（当前优先 Feishu DM，有则启用；否则 none）
@@ -53,4 +57,5 @@ RUNNER_POLL_INTERVAL_SECONDS="${RUNNER_POLL_INTERVAL_SECONDS:-3}"
 RUNNER_HEARTBEAT_INTERVAL_SECONDS="${RUNNER_HEARTBEAT_INTERVAL_SECONDS:-10}"
 RUNNER_DEFAULT_TIMEOUT_SECONDS="${RUNNER_DEFAULT_TIMEOUT_SECONDS:-120}"
 RUNNER_MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
-RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-50}"
+RUNNER_MAX_IDLE_SECONDS="${RUNNER_MAX_IDLE_SECONDS:-900}"
+RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-30}"

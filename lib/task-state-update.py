@@ -11,6 +11,12 @@ import os
 import sys
 from datetime import datetime, timezone, timedelta
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from clawteam_bridge import sync_task
+
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
 
@@ -97,11 +103,14 @@ def cmd_upsert(args):
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
         tasks = state["tasks"]
+        previous_status = ""
+        current_record = None
 
         # Find existing task by id
         existing = next((t for t in tasks if t.get("id") == args.id), None)
 
         if existing:
+            previous_status = str(existing.get("status", "") or "")
             # Update fields if provided
             if args.label:
                 existing["label"] = args.label
@@ -140,6 +149,8 @@ def cmd_upsert(args):
                 existing["retry_count"] = args.retry_count
             if args.executor or not existing.get("executor"):
                 existing["executor"] = infer_executor(existing.get("label", ""), args.executor or "")
+            if args.owner:
+                existing["owner"] = args.owner
             if args.route:
                 existing["route"] = args.route
             if args.runtime:
@@ -153,6 +164,7 @@ def cmd_upsert(args):
             if args.context_summary:
                 existing["context_summary"] = args.context_summary
             existing["updated_at"] = now_iso()
+            current_record = dict(existing)
         else:
             record = {
                 "id": args.id,
@@ -190,6 +202,8 @@ def cmd_upsert(args):
             if args.retry_count is not None:
                 record["retry_count"] = args.retry_count
             record["executor"] = infer_executor(record.get("label", ""), args.executor or "")
+            if args.owner:
+                record["owner"] = args.owner
             if args.route:
                 record["route"] = args.route
             if args.runtime:
@@ -203,9 +217,12 @@ def cmd_upsert(args):
             if args.context_summary:
                 record["context_summary"] = args.context_summary
             tasks.append(record)
+            current_record = dict(record)
 
         state["tasks"] = tasks
         save_state(fp, state)
+    if current_record:
+        sync_task(current_record, event_type="upsert", previous_status=previous_status)
     print(f"[ok] upsert id={args.id} status={args.status or 'dispatched'}")
 
 
@@ -223,27 +240,35 @@ def _finish(task_id: str, status: str, summary: str):
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
         tasks = state["tasks"]
+        previous_status = ""
+        current_record = None
 
         existing = next((t for t in tasks if t.get("id") == task_id), None)
         if existing:
+            previous_status = str(existing.get("status", "") or "")
             existing["status"] = status
             existing["completed_at"] = now_iso()
             existing["updated_at"] = now_iso()
             if summary:
                 existing["summary"] = summary
+            current_record = dict(existing)
         else:
-            tasks.append({
+            record = {
                 "id": task_id,
                 "status": status,
                 "summary": summary or "",
                 "completed_at": now_iso(),
                 "spawned_at": now_iso(),
                 "updated_at": now_iso(),
-            })
+            }
+            tasks.append(record)
+            current_record = dict(record)
 
         # Clean up old done/failed records
         state["tasks"] = cleanup_old(tasks)
         save_state(fp, state)
+    if current_record:
+        sync_task(current_record, event_type=status, previous_status=previous_status)
     print(f"[ok] {status} id={task_id}")
 
 
@@ -305,6 +330,7 @@ def main():
     p_upsert.add_argument("--recovery-action", dest="recovery_action")
     p_upsert.add_argument("--retry-count", dest="retry_count", type=int)
     p_upsert.add_argument("--executor", choices=["subagent", "runner"])
+    p_upsert.add_argument("--owner")
     p_upsert.add_argument("--route")
     p_upsert.add_argument("--runtime")
     p_upsert.add_argument("--parent-id", dest="parent_id")
