@@ -38,7 +38,15 @@ fmt = sys.argv[1] if len(sys.argv) > 1 else "compact"
 script_dir = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
 sys.path.insert(0, script_dir)
 
-from octopus_config import CONFIG_FILE, MODE_FILE, MODEL_POLICY_FILE, RUNNER_HEALTH_FILE, load_json
+from octopus_config import (
+    CONFIG_FILE,
+    MODE_FILE,
+    MODEL_POLICY_FILE,
+    RUNNER_HEALTH_FILE,
+    MAIN_AGENT_SESSIONS_FILE,
+    resolve_main_session_key,
+    load_json,
+)
 from clawteam_bridge import load_bridge_summary
 from status_render import (
     build_status_snapshot,
@@ -97,6 +105,100 @@ def tier_model(tier):
     if full:
         return short_model(full)
     return "?"
+
+
+def tier_model_full(tier):
+    if mode == "auto":
+        auto_tier = str(policy_data.get("tiers", {}).get(tier, "") or "").strip()
+        if auto_tier:
+            return auto_tier
+    short = rules.get(tier)
+    alias_full = str(aliases.get(tier, "") or "").strip()
+    symbolic_map = {
+        "glm": "zhipu/GLM-4.7",
+        "kimi": "moonshot/Kimi",
+        "sonnet": "vendor-claude-sonnet/aws-claude-sonnet",
+        "claudeopus": "vendor-claude-opus/aws-claude-opus",
+        "dynamic_fastest": "dynamic_fastest",
+    }
+    if isinstance(short, str) and short:
+        if "/" in short:
+            return short
+        return symbolic_map.get(short, short)
+    if alias_full:
+        return alias_full
+    return "?"
+
+
+def _extract_session_model_from_file(session_file):
+    if not session_file or not os.path.exists(session_file):
+        return ("", "")
+    try:
+        with open(session_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return ("", "")
+
+    def is_real_inference_model(provider, model_id):
+        provider = str(provider or "").strip().lower()
+        model_id = str(model_id or "").strip().lower()
+        full = f"{provider}/{model_id}" if provider else model_id
+        if not model_id:
+            return False
+        ignored_prefixes = (
+            "openclaw/",
+            "system/",
+        )
+        ignored_models = {
+            "delivery-mirror",
+            "tool-result",
+        }
+        if full.startswith(ignored_prefixes):
+            return False
+        if model_id in ignored_models:
+            return False
+        return True
+
+    for raw in reversed(lines[-400:]):
+        try:
+            event = json.loads(raw)
+        except Exception:
+            continue
+        if event.get("type") == "custom" and event.get("customType") == "model-snapshot":
+            data = event.get("data") or {}
+            provider = str(data.get("provider") or "").strip()
+            model_id = str(data.get("modelId") or "").strip()
+            if is_real_inference_model(provider, model_id):
+                return (f"{provider}/{model_id}" if provider else model_id, "model-snapshot")
+        if event.get("type") == "model_change":
+            provider = str(event.get("provider") or "").strip()
+            model_id = str(event.get("modelId") or "").strip()
+            if is_real_inference_model(provider, model_id):
+                return (f"{provider}/{model_id}" if provider else model_id, "model_change")
+        if event.get("type") == "message":
+            msg = event.get("message") or {}
+            if msg.get("role") == "assistant":
+                provider = str(msg.get("provider") or "").strip()
+                model_id = str(msg.get("model") or "").strip()
+                if is_real_inference_model(provider, model_id):
+                    return (f"{provider}/{model_id}" if provider else model_id, "assistant-message")
+    return ("", "")
+
+
+def load_main_session_actual_model():
+    session_key = resolve_main_session_key(config_data) or "agent:main:main"
+    session_index = load_json(MAIN_AGENT_SESSIONS_FILE) or {}
+    session_entry = session_index.get(session_key) or {}
+    if not session_entry and session_key != "agent:main:main":
+        session_entry = session_index.get("agent:main:main") or {}
+    session_file = str(session_entry.get("sessionFile") or "").strip()
+    model_path, source = _extract_session_model_from_file(session_file)
+    return {
+        "session_key": session_key,
+        "session_file": session_file,
+        "model_path": model_path,
+        "source": source,
+    }
 
 
 def load_tasks():
@@ -178,14 +280,17 @@ if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     if runner_health_age is not None and not runner_health_ok:
         stale_note = f" · stale {runner_health_age}s"
     print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
-print("📊 模型配置：")
+main_session_model = load_main_session_actual_model()
+actual_model = main_session_model.get("model_path", "")
+print("A) 🤖 主会话实际模型：" + (actual_model or "?"))
+print(f"B) 🧭 OctoClaw 调度策略：{mode_label}")
 print(
     "   trivial/simple → "
-    f"{tier_model('trivial')}  |  normal/hard → {tier_model('normal')}  |  deep → {tier_model('deep')}"
+    f"{tier_model_full('trivial')}  |  normal/hard → {tier_model_full('normal')}  |  deep → {tier_model_full('deep')}"
 )
-main_model = policy_data.get("main_model", "")
+main_model = str(policy_data.get("main_model", "") or "").strip()
 if mode == "auto" and main_model:
-    print(f"🤖 主模型：{short_model(main_model)}")
+    print(f"   策略主链 → {main_model}")
 print(f"🖥️  视图：{fmt}")
 print("━━━━━━━━━━━━━━━━━━━━")
 
