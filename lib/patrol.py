@@ -45,6 +45,7 @@ from datetime import datetime, timezone, timedelta
 from collections import deque
 
 from notifier import backend_supports_cards, send_text
+from octoclaw_spawn import build_spawn_spec
 from octopus_config import (
     MAIN_AGENT_SESSIONS_FILE,
     RUNNER_HEALTH_FILE,
@@ -171,6 +172,12 @@ RUNNER_RESTART_COOLDOWN_SECONDS = 600
 RUNNER_DAEMON_PID_FILE = "/workspace/tmp/octopus/runner-daemon.pid"
 RUNNER_RESTART_COOLDOWN_FILE = "/workspace/tmp/octopus/runner-restart-cooldown.json"
 FAILED_NOTIFY_RETRY_SECONDS = 900
+AUTO_REDISPATCH_RETRY_LIMITS = {
+    "token_overflow": 1,
+    "stuck": 1,
+    "tool_error": 1,
+}
+TIER_SEQUENCE = ["trivial", "simple", "normal", "hard", "deep"]
 
 # ── 超时阈值（分钟）：软超时先告警，硬超时自动收口 ──
 # 硬超时 = 软超时 × 2
@@ -2613,6 +2620,202 @@ def calculate_hard_timeout(task: dict) -> float:
     return calculate_timeout(task) * 2.0
 
 
+def tier_rank(tier: str) -> int:
+    try:
+        return TIER_SEQUENCE.index((tier or DEFAULT_TIER).lower())
+    except ValueError:
+        return TIER_SEQUENCE.index(DEFAULT_TIER)
+
+
+def elevate_tier(base_tier: str, *, floor: str = "", steps: int = 0) -> str:
+    rank = tier_rank(base_tier)
+    if floor:
+        rank = max(rank, tier_rank(floor))
+    rank = min(len(TIER_SEQUENCE) - 1, rank + max(0, steps))
+    return TIER_SEQUENCE[rank]
+
+
+def apply_task_updates(task_id: str, updates: dict, *, allowed_statuses: tuple[str, ...] | None = None) -> bool:
+    try:
+        data = load_task_state(TASK_STATE_FILE)
+        changed = False
+        for task in data.get("tasks", []):
+            if task.get("id") != task_id:
+                continue
+            if allowed_statuses and task.get("status") not in allowed_statuses:
+                return False
+            for key, value in updates.items():
+                if value is None:
+                    if key in task:
+                        task.pop(key, None)
+                        changed = True
+                elif task.get(key) != value:
+                    task[key] = value
+                    changed = True
+            if changed:
+                data["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                save_task_state(TASK_STATE_FILE, data)
+            return changed
+    except Exception as e:
+        print(f"⚠️  apply_task_updates({task_id}) 失败: {e}", file=sys.stderr)
+    return False
+
+
+def mark_task_failed(task_id: str, summary: str, *, extra_updates: dict | None = None) -> bool:
+    updates = {
+        "status": "failed",
+        "summary": summary,
+        "completed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if extra_updates:
+        updates.update(extra_updates)
+    return apply_task_updates(task_id, updates, allowed_statuses=("running", "dispatched", "queued", "failed"))
+
+
+def choose_retry_tier(task: dict, reason: str) -> str:
+    label = task.get("label", "")
+    base_tier = str(task.get("tier", LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)) or DEFAULT_TIER).lower()
+    current_model = str(task.get("model", "") or "").lower()
+    if reason == "token_overflow":
+        return elevate_tier(base_tier, floor="hard")
+    if reason == "stuck":
+        steps = 1 if any(x in current_model for x in ("glm", "minimax")) else 0
+        return elevate_tier(base_tier, floor="normal", steps=steps)
+    if reason == "tool_error":
+        return elevate_tier(base_tier, floor="normal")
+    return base_tier
+
+
+def build_retry_task_text(task: dict, reason: str) -> str:
+    original = str(task.get("task_description", "") or task.get("summary", "") or "").strip()
+    task_id = str(task.get("id", "") or "")
+    reason_prefix = {
+        "token_overflow": "上一次子任务因输出超限/上下文截断未正常收尾。本次必须分段读取、长输出写共享文件，并尽早输出 RESULT。",
+        "stuck": "上一次子任务长时间无进展被判定卡死。本次只做最小必要步骤，避免重复大范围扫描，完成后立即收尾。",
+        "tool_error": "上一次子任务因工具/环境调用失败。本次先快速验证必要工具与权限，若仍阻塞请立即 failed，不要无限重试。",
+    }.get(reason, "请重试上一次未完成的子任务。")
+    return "\n".join([
+        f"重试上一个失败的 OctoClaw 子任务（原任务ID: {task_id}）。",
+        reason_prefix,
+        "",
+        "原始目标：",
+        original or f"请重新执行与 {task_id} 对应的任务，并给出明确结果。",
+    ]).strip()
+
+
+def should_auto_redispatch(task: dict, reason: str) -> bool:
+    limit = AUTO_REDISPATCH_RETRY_LIMITS.get(reason, 0)
+    if limit <= 0:
+        return False
+    retry_count = int(task.get("retry_count", 0) or 0)
+    if retry_count >= limit:
+        return False
+    if not str(task.get("task_description", "") or task.get("summary", "") or "").strip():
+        return False
+    return True
+
+
+def mark_spawn_task_failed(task_id: str, summary: str) -> None:
+    apply_task_updates(
+        task_id,
+        {
+            "status": "failed",
+            "summary": summary[:180],
+            "completed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "recovery_action": "auto_redispatch_spawn_failed",
+        },
+    )
+
+
+def auto_redispatch_task(task: dict, reason: str, *, source: str) -> str | None:
+    if not should_auto_redispatch(task, reason):
+        return None
+
+    task_id = str(task.get("id", "") or "")
+    label = str(task.get("label", "octopus-fix") or "octopus-fix")
+    retry_tier = choose_retry_tier(task, reason)
+    retry_text = build_retry_task_text(task, reason)
+
+    try:
+        spawn_spec = build_spawn_spec(
+            retry_text,
+            route="spawn_single",
+            label=label,
+            tier=retry_tier,
+            parent_id=task_id,
+            register=True,
+        )
+    except Exception as e:
+        print(f"  ⚠️  自动补发构建失败 {task_id} ({reason}): {e}", file=sys.stderr)
+        apply_task_updates(task_id, {"recovery_action": f"auto_redispatch_build_failed:{reason}"})
+        return None
+
+    new_task_id = str(spawn_spec.get("task_id", "") or spawn_spec.get("duplicate_of", "") or "")
+    if not new_task_id:
+        return None
+
+    if spawn_spec.get("deduped"):
+        apply_task_updates(
+            task_id,
+            {
+                "recovery_action": f"auto_redispatch_deduped:{reason}",
+                "auto_redispatched_to": new_task_id,
+                "auto_redispatch_reason": reason,
+            },
+        )
+        return new_task_id
+
+    next_retry_count = int(task.get("retry_count", 0) or 0) + 1
+    apply_task_updates(
+        new_task_id,
+        {
+            "retry_count": next_retry_count,
+            "recovery_action": f"auto_redispatched_from:{task_id}:{reason}",
+            "parent_id": task_id,
+        },
+    )
+
+    payload = spawn_spec.get("sessions_spawn_payload", {}) or {}
+    model = str(spawn_spec.get("model", "") or payload.get("model", "") or "")
+    message = str(payload.get("message", "") or "")
+    cron_name = f"retry-{reason}-{task_id}"[:64]
+
+    try:
+        result = subprocess.run(
+            [
+                "openclaw", "cron", "add",
+                "--name", cron_name,
+                "--session", "isolated",
+                "--at", "1m",
+                "--model", model,
+                "--announce",
+                "--channel", "last",
+                "--delete-after-run",
+                "--message", message,
+            ],
+            capture_output=True, text=True, timeout=20
+        )
+        if result.returncode == 0:
+            apply_task_updates(
+                task_id,
+                {
+                    "recovery_action": f"auto_redispatched:{reason}",
+                    "auto_redispatched_to": new_task_id,
+                    "auto_redispatch_reason": reason,
+                },
+            )
+            print(f"  ✅ 自动补发成功: {task_id} -> {new_task_id} ({reason}, source={source}, model={model})")
+            return new_task_id
+        mark_spawn_task_failed(new_task_id, f"自动补发 spawn 失败：{result.stderr[:120] or result.stdout[:120]}")
+        apply_task_updates(task_id, {"recovery_action": f"auto_redispatch_spawn_failed:{reason}"})
+        print(f"  ⚠️  自动补发 spawn 失败: {task_id} ({reason})", file=sys.stderr)
+    except Exception as e:
+        mark_spawn_task_failed(new_task_id, f"自动补发异常：{str(e)[:120]}")
+        apply_task_updates(task_id, {"recovery_action": f"auto_redispatch_exception:{reason}"})
+        print(f"  ⚠️  自动补发异常: {task_id} ({reason}) {e}", file=sys.stderr)
+    return None
+
+
 def get_subagent_run_id(label: str) -> str | None:
     """
     从 sessions.json 中找到 label 匹配的最新 session 的 sessionId。
@@ -3042,6 +3245,17 @@ def check_and_handle_timeout(tasks: list) -> list:
                 f"超时自动收口，原因={timeout_reason}"
             )
             mark_task_timed_out(task_id, elapsed_minutes, summary_prefix=summary_prefix)
+            if should_auto_redispatch(task, timeout_reason):
+                new_task_id = auto_redispatch_task(task, timeout_reason, source="timeout")
+                if new_task_id:
+                    apply_task_updates(
+                        task_id,
+                        {
+                            "summary": f"{summary_prefix}（运行 {int(elapsed_minutes * 60)//60}m {int(elapsed_minutes * 60)%60}s），已自动补发为 {new_task_id}",
+                            "auto_redispatched_to": new_task_id,
+                            "auto_redispatch_reason": timeout_reason,
+                        },
+                    )
             timed_out_tasks.append({**task, "_timeout_action": "failed"})
             continue
 
@@ -3759,57 +3973,45 @@ def main():
                 task["_orphan"] = True
                 stuck.append(task)
 
-    # ── GLM 孤儿任务自动升级 Sonnet 重派 ──
-    # 若孤儿任务原模型含 "glm"，且未曾升级过（无 _glm_upgraded 标记），自动升级到 Sonnet
-    # 记录自动重派成功的任务 ID，后续 send_dm_alert 时排除（成功重派静默）
+    # ── 孤儿任务按原因自动补发（最多一次）──
+    # 记录自动重派成功的原任务 ID，后续 send_dm_alert 时排除（成功重派静默）
     _auto_redispatched_ids = set()
     # 过滤掉已被 check_result_success 自动标为 done 的任务，避免双重派遣
     already_done_ids = {o.get("task", {}).get("id") for o in orphans if o.get("task", {}).get("_auto_done")}
-    glm_orphans_to_upgrade = []
+    orphan_retry_candidates = []
     for o in orphans:
         task = o.get("task", {})
-        task_model = task.get("model", "")
         task_id = task.get("id", "")
-        task_desc = task.get("task_description", "").strip()
-        already_upgraded = task.get("_glm_upgraded", False)
         if task_id in already_done_ids:
-            continue  # 已自动标done，跳过GLM升级
-        if "glm" in task_model.lower() and not already_upgraded and task_id:
-            glm_orphans_to_upgrade.append(task)
-    if glm_orphans_to_upgrade:
-        print(f"🔼 检测到 {len(glm_orphans_to_upgrade)} 个 GLM 孤儿任务，自动升级 Sonnet 重派：")
-        # 解析 Sonnet 模型路径
-        try:
-            _resolve_result = subprocess.run(
-                ["python3", "/workspace/openclaw/skills/octopus/lib/resolve-model.py", "--tier", "hard"],
-                capture_output=True, text=True, timeout=5
-            )
-            _sonnet_model = _resolve_result.stdout.strip() if _resolve_result.returncode == 0 and _resolve_result.stdout.strip() else "vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
-        except Exception:
-            _sonnet_model = "vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
-        print(f"  🤖 升级目标模型: {_sonnet_model}")
-        for task in glm_orphans_to_upgrade:
+            continue
+        if not task_id:
+            continue
+        last_event = str(task.get("session_last_event", "") or "")
+        task_model = str(task.get("model", "") or "").lower()
+        if last_event == "length" or "glm" in task_model:
+            orphan_reason = "token_overflow"
+        elif last_event == "error":
+            orphan_reason = "tool_error"
+        else:
+            orphan_reason = "stuck"
+        if should_auto_redispatch(task, orphan_reason):
+            orphan_retry_candidates.append((task, orphan_reason))
+    if orphan_retry_candidates:
+        print(f"🔼 检测到 {len(orphan_retry_candidates)} 个孤儿任务可自动补发：")
+        for task, orphan_reason in orphan_retry_candidates:
             task_id = task.get("id", "")
             task_desc = task.get("task_description", "").strip()
-            label = task.get("label", "octopus-fix")
             if not task_desc:
                 summary = task.get("summary", "").strip()
-                task_desc = f"[GLM升级重派兜底] {summary}" if summary else ""
+                task_desc = f"[孤儿任务自动补发兜底] {summary}" if summary else ""
             if not task_desc:
-                # 无 task_description 的孤儿任务：静默标记 failed + 写 ERRORS.md，不发飞书通知
-                # 常见原因：task 描述太长导致 session 启动即失败，或 session 未正确写入描述
-                print(f"  ⚠️  GLM孤儿任务 {task_id} 无 task_description，静默标记 failed（不通知用户）")
+                print(f"  ⚠️  孤儿任务 {task_id} 无 task_description，静默标记 failed（不通知用户）")
                 try:
-                    _state_data = load_task_state(TASK_STATE_FILE)
-                    for _t in _state_data.get("tasks", []):
-                        if _t.get("id") == task_id:
-                            _t["status"] = "failed"
-                            _t["summary"] = "孤儿任务：无task_description，可能因task描述过长导致session启动即失败，静默标记"
-                            _t["notified_failed"] = True  # 标记已处理，不再告警
-                            _t["completed_at"] = datetime.now(timezone.utc).isoformat()
-                            break
-                    save_task_state(TASK_STATE_FILE, _state_data)
-                    # 写 ERRORS.md 静默记录
+                    mark_task_failed(
+                        task_id,
+                        "孤儿任务：无task_description，可能因task描述过长导致session启动即失败，静默标记",
+                        extra_updates={"notified_failed": True},
+                    )
                     _errors_md = "/workspace/.learnings/ERRORS.md"
                     _err_line = f"\n| ERR-{datetime.now().strftime('%Y%m%d')}-ORPHAN | low | open | 重现1次 | 孤儿任务{task_id}无task_description，session启动即失败，可能task描述过长 |"
                     try:
@@ -3820,48 +4022,27 @@ def main():
                 except Exception as _e:
                     print(f"  ⚠️  标记failed异常: {_e}", file=sys.stderr)
                 continue
-            # 在 task 描述开头加升级说明
-            upgrade_prefix = "上次 GLM 因 token 超限截断，本次升级 Sonnet，必须分段读文件每步立即写结果\n\n"
-            new_task_desc = upgrade_prefix + task_desc
-            # 更新 task-state.json：状态改为 dispatched，标记已升级
-            try:
-                _state_data = load_task_state(TASK_STATE_FILE)
-                for _t in _state_data.get("tasks", []):
-                    if _t.get("id") == task_id:
-                        _t["status"] = "dispatched"
-                        _t["model"] = _sonnet_model
-                        _t["_glm_upgraded"] = True
-                        _t["_upgrade_from"] = task.get("model", "")
-                        _t["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                        _t["task_description"] = new_task_desc
-                        break
-                save_task_state(TASK_STATE_FILE, _state_data)
-            except Exception as _e:
-                print(f"  ⚠️  更新升级状态异常: {_e}", file=sys.stderr)
-            # 重派
-            try:
-                cron_name = f"glm-upgrade-{task_id}"[:64]
-                _spawn_result = subprocess.run(
-                    [
-                        "openclaw", "cron", "add",
-                        "--name", cron_name,
-                        "--session", "isolated",
-                        "--at", "1m",
-                        "--model", _sonnet_model,
-                        "--announce",
-                        "--channel", "last",
-                        "--delete-after-run",
-                        "--message", new_task_desc,
-                    ],
-                    capture_output=True, text=True, timeout=20
+            summary = f"孤儿任务自动收口，原因={orphan_reason}"
+            mark_task_failed(
+                task_id,
+                summary,
+                extra_updates={
+                    "notified_failed": True,
+                    "recovery_action": f"orphan_closed:{orphan_reason}",
+                },
+            )
+            new_task_id = auto_redispatch_task(task, orphan_reason, source="orphan")
+            if new_task_id:
+                apply_task_updates(
+                    task_id,
+                    {
+                        "summary": f"{summary}，已自动补发为 {new_task_id}",
+                        "auto_redispatched_to": new_task_id,
+                        "auto_redispatch_reason": orphan_reason,
+                    },
                 )
-                if _spawn_result.returncode == 0:
-                    print(f"  ✅ GLM孤儿任务 {task_id} 已升级 Sonnet 重派（model={_sonnet_model}），静默不告警")
-                    _auto_redispatched_ids.add(task_id)
-                else:
-                    print(f"  ⚠️  GLM孤儿任务 {task_id} 重派失败: {_spawn_result.stderr[:100]}", file=sys.stderr)
-            except Exception as _e:
-                print(f"  ⚠️  GLM孤儿任务 {task_id} 重派异常: {_e}", file=sys.stderr)
+                print(f"  ✅ 孤儿任务 {task_id} 已按 {orphan_reason} 自动补发 -> {new_task_id}")
+                _auto_redispatched_ids.add(task_id)
 
     # ── 新失败任务检测：对 failed 任务发飞书通知 ──
     # 使用 task-state.json 中的 notified_failed 字段，而非外部文件
