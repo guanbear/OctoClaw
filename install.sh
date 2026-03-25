@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${WORKSPACE:-/workspace}"
-OCTOPUS_RULES_VERSION="v1.6.1"
+OCTOPUS_RULES_VERSION="v1.7.0"
 SKILL_ROOT="${SKILL_ROOT:-$SCRIPT_DIR}"
 
 detect_openclaw_workdir() {
@@ -1472,10 +1472,10 @@ print('✅ 无版本号旧规则已清除')
 ### 🚨 核心铁律
 
 - 收到用户消息，第一个输出必须是文字，禁止先做工具调用
-- 唯一允许的首轮工具例外：`cron.run("octopus-patrol")`
 - 30 秒内纯文字能高质量完成 → 直答；否则先 route
 - 同文件写操作必须串行；强依赖任务必须等待上游结果
-- 所有 spawn 完成后，turn 末尾统一调用一次 `cron.run("octopus-patrol")`
+- 若环境暴露 `octoclaw_route` / `octoclaw_dispatch` / `octoclaw_spawn` / `octoclaw_status`，优先使用这些工具，不要绕开八爪鱼主航道
+- 若任务属于调研 / 分析 / 写作 / 多项目对比，且子任务返回了 `report_path`，主 Agent 必须先读取 `head -n 80 {report_path}`，再用自己的话正式收口；禁止把子任务 `---RESULT---` 或 JSON 原样转发给用户
 
 ### route / dispatch 规范
 
@@ -1493,6 +1493,8 @@ print('✅ 无版本号旧规则已清除')
 - 多步调研、编码、改文件、长执行、高风险分析，优先 route 到 `spawn_single` 或 `spawn_multi`
 - 若 route 返回 `runner` / `spawn_single` / `spawn_multi`，主 Agent 不要绕开结果自己改用原生工具
 - 子任务派发必须优先走 `python3 __SKILL_ROOT__/lib/octoclaw_spawn.py --task "..."`；主会话禁止手写零散 `sessions_spawn` 参数
+- 若 `spawn_execution.enabled=true`，`spawn_single` / `spawn_multi` 默认由 ClawTeam/tmux 执行，不要把它们再降级回主会话手工编排
+- 查询状态时，优先 `octoclaw_status` 或 `bash __SKILL_ROOT__/lib/status.sh --format compact`；ClawTeam 任务面和八爪鱼状态面应一起作为事实来源
 
 ### spawn 规范
 
@@ -1502,6 +1504,8 @@ print('✅ 无版本号旧规则已清除')
 - 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
 - 详细状态写入和 RESULT 模板以 `__SKILL_ROOT__/lib/spawn-template.md` 为准
 - `octoclaw_spawn.py` 负责统一生成 task-state 注册、RESULT 契约、共享文件路径和兼容参数
+- `spawn_single` 进入统一运行面时，默认使用 `clawteam spawn tmux ...`
+- `spawn_multi` 进入统一运行面时，优先使用 ClawTeam team/task/inbox/board/tmux，最小链路可拆为 planner / worker / review
 - 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
 - 除非你正在修 `octoclaw_spawn.py` 本身，或当前环境里包装器真的不可用，否则禁止主会话直接调用 `sessions_spawn`
 - 若极端情况下必须使用 `sessions_spawn`：
@@ -1533,6 +1537,7 @@ print('✅ 无版本号旧规则已清除')
 - 文件：`__STATE_DIR__/task-state.json`
 - 子 Agent 负责开始时写 `running`，结束时写 `done/failed`
 - 最终输出必须以 `---RESULT---` 开头，否则视为未完成
+- 若已启用 ClawTeam bridge，则 `task/inbox/board` 与 `task-state.json` 一起构成运行时事实来源；不要只盯某一边
 
 ### 监督与重派
 
@@ -1550,7 +1555,7 @@ state_dir = sys.argv[3]
 text = path.read_text(encoding="utf-8")
 text = text.replace("__SKILL_ROOT__", skill_root)
 text = text.replace("__STATE_DIR__", state_dir)
-text = text.replace("__RULES_VERSION__", "v1.6.1")
+text = text.replace("__RULES_VERSION__", "v1.7.0")
 path.write_text(text, encoding="utf-8")
 PY
     cat "$RULES_TMP" >> "$AGENTS_FILE"

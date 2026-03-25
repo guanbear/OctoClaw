@@ -83,7 +83,7 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
    ▼
 🧠 主 Agent（调度大脑）
    │  ① 立即输出文字回复（零工具调用，零阻塞）
-   │  ② 解析任务 → 选触手 → sessions_spawn × N
+   │  ② 解析任务 → route / dispatch → runner 或 ClawTeam/tmux 子工位
    │
    ├──► 💪 鲸力手 ──► task-state.json ──► ✅ done
    ├──► 🔍 梭鱼眼 ──► task-state.json ──► ✅ done
