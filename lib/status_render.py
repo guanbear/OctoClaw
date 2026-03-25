@@ -56,25 +56,38 @@ def parse_time(value: str):
         return None
 
 
-def short_model(path: str) -> str:
+def short_model(path: str, limit: int = 42) -> str:
+    path = str(path or "").strip()
     if not path:
         return "?"
-    lower = path.lower()
-    if "opus" in lower:
-        return "Opus"
-    if "sonnet" in lower:
-        return "Sonnet"
-    if "gpt-5.4" in lower or "gpt_5_4" in lower:
-        return "GPT-5.4"
-    if "glm" in lower:
-        return "GLM"
-    if "kimi" in lower:
-        return "Kimi"
-    if "gemini" in lower:
-        return "Gemini"
-    if "minimax" in lower or "m2_5" in lower or "m2.5" in lower:
-        return "MiniMax"
-    return path.split("/")[-1][:12]
+    if limit <= 0 or len(path) <= limit:
+        return path
+    if "/" not in path:
+        return path[: max(1, limit - 1)] + "…"
+
+    left, right = path.split("/", 1)
+    if len(right) + 2 >= limit:
+        tail = max(8, limit - 3)
+        return "…/" + right[-tail:]
+
+    head_budget = max(6, limit - len(right) - 2)
+    if len(left) <= head_budget:
+        return f"{left}/{right}"
+    return f"{left[: max(1, head_budget - 1)]}…/{right}"
+
+
+
+def compact_model(path: str) -> str:
+    return short_model(path, limit=52)
+
+
+
+def table_model(path: str) -> str:
+    return short_model(path, limit=8)
+
+
+def task_model_display(path: str, limit: int = 52) -> str:
+    return short_model(path, limit=limit)
 
 
 def model_cost_badge(path: str) -> str:
@@ -194,7 +207,7 @@ def _compact_task_line(task: dict, now: datetime) -> str:
     emoji = get_emoji(task.get("label", ""))
     role = get_label_name(task.get("label", ""))
     name = preferred_task_title(task, limit=52)
-    model = short_model(task.get("model", ""))
+    model = task_model_display(task.get("model", ""))
     cost = model_cost_badge(task.get("model", ""))
     tier = str(task.get("tier", "?"))[:8]
     duration = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
@@ -224,7 +237,7 @@ def render_status_text_compact(snapshot: dict) -> str:
         for task in snapshot["queued"][:6]:
             deps = ",".join(task.get("deps", [])[:2]) or "?"
             lines.append(
-                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {short_model(task.get('model', ''))} · "
+                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {task_model_display(task.get('model', ''))} · "
                 f"{model_cost_badge(task.get('model', ''))} · {str(task.get('tier', '?'))[:8]} · wait {deps}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=52)}")
@@ -234,7 +247,7 @@ def render_status_text_compact(snapshot: dict) -> str:
         for task in snapshot["steer_needed"][:6]:
             reason = task.get("session_status") or task.get("recovery_action") or "needs attention"
             lines.append(
-                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {short_model(task.get('model', ''))} · "
+                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {task_model_display(task.get('model', ''))} · "
                 f"{str(task.get('tier', '?'))[:8]} · {str(reason)[:24]}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=52)}")
@@ -251,7 +264,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             completed = format_clock(task.get("completed_at") or "", now)
             lines.append(
                 f"  ✅ {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · "
-                f"{short_model(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
+                f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
                 f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=60)}")
@@ -265,7 +278,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             completed = format_clock(task.get("completed_at") or "", now)
             lines.append(
                 f"  ❌ {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · "
-                f"{short_model(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
+                f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
                 f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=60)}")
@@ -303,7 +316,7 @@ def render_status_table(snapshot: dict) -> str:
                 [
                     preferred_task_title(task, limit=22),
                     get_label_name(task.get("label", ""))[:8],
-                    short_model(task.get("model", ""))[:8],
+                    task_model_display(task.get("model", ""), limit=24),
                     status_text,
                     note,
                 ]

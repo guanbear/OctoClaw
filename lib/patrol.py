@@ -46,6 +46,7 @@ from collections import deque
 
 from notifier import backend_supports_cards, send_text
 from octoclaw_spawn import build_spawn_spec
+from clawteam_bridge import sync_task
 from octopus_config import (
     MAIN_AGENT_SESSIONS_FILE,
     RUNNER_HEALTH_FILE,
@@ -172,6 +173,8 @@ RUNNER_RESTART_COOLDOWN_SECONDS = 600
 RUNNER_DAEMON_PID_FILE = "/workspace/tmp/octopus/runner-daemon.pid"
 RUNNER_RESTART_COOLDOWN_FILE = "/workspace/tmp/octopus/runner-restart-cooldown.json"
 FAILED_NOTIFY_RETRY_SECONDS = 900
+# session 刚结束到 task-state/bridge 落盘之间，给一个短暂收尾宽限，避免 patrol 误判 orphan/stuck。
+FINISH_GRACE_SECONDS = 180
 AUTO_REDISPATCH_RETRY_LIMITS = {
     "token_overflow": 1,
     "stuck": 1,
@@ -350,6 +353,35 @@ def is_old_enough(task: dict, threshold_seconds: int = 60) -> bool:
         return True
 
 
+def _latest_task_activity_dt(task: dict):
+    """任务最近一次活跃时间：优先 session 观测，其次 task-state 更新时间。"""
+    for field in ("last_observed_at", "session_updated_at", "updated_at", "started_at", "spawned_at"):
+        value = parse_iso(task.get(field, "") or "")
+        if value:
+            return value
+    return None
+
+
+def should_wait_for_finish_sync(task: dict, now: datetime | None = None, grace_seconds: int = FINISH_GRACE_SECONDS) -> bool:
+    """
+    session 看起来刚结束，但 task-state/bridge 可能还没来得及写 done 时，先给短暂宽限。
+    满足以下任一条件则继续等待：
+    1. 最近观测/会话更新时间仍在宽限窗内
+    2. transcript 已经出现 RESULT 或 success 迹象
+    """
+    if is_runner_task(task):
+        return False
+    if now is None:
+        now = now_utc()
+    last_dt = _latest_task_activity_dt(task)
+    if last_dt and (now - last_dt).total_seconds() <= max(0, grace_seconds):
+        return True
+    last_event = str(task.get("session_last_event", "") or "")
+    if last_event == "success":
+        return True
+    return bool(task.get("session_has_result"))
+
+
 # 新任务显示阈值：running/dispatched 不足此秒数则忽略（过滤刚派遣的任务）
 RUNNING_MIN_AGE_SECONDS = 60
 
@@ -432,13 +464,20 @@ def classify_tasks(tasks: list) -> tuple:
                 if ended:
                     task_id = t.get("id", "")
                     session_event = t.get("session_last_event", "")
-                    print(f"🔴 检测到 session 已结束但 task 仍为 running: {task_id}，自动标 failed")
-                    mark_task_failed(task_id)
-                    t["status"] = "failed"  # 同步更新内存中的状态
+                    if should_wait_for_finish_sync(t, now=now):
+                        t["_stuck_reason"] = "session 刚结束，等待 task-state/bridge 收尾同步"
+                        running.append(t)
+                        continue
+                    failure_summary = "session 已结束但任务状态未收尾"
                     if session_event:
-                        t["_stuck_reason"] = f"session 已结束（最后事件: {session_event}）"
+                        failure_summary = f"session 已结束（最后事件: {session_event}）"
                     else:
-                        t["_stuck_reason"] = "session 已结束（无活跃 runId 或 updatedAt 超30分钟）"
+                        failure_summary = "session 已结束（无活跃 runId 或 updatedAt 超30分钟）"
+                    print(f"🔴 检测到 session 已结束且超过收尾宽限: {task_id}，自动标 failed")
+                    mark_task_failed(task_id, failure_summary)
+                    t["status"] = "failed"  # 同步更新内存中的状态
+                    t["summary"] = failure_summary
+                    t["_stuck_reason"] = failure_summary
                     # 注意：failed 状态的任务不加入 stuck 列表，由近期失败区块显示
                     continue
 
@@ -476,26 +515,19 @@ def classify_tasks(tasks: list) -> tuple:
                     t["status"] = "completed_no_result"
                     t["summary"] = "任务已完成但未输出RESULT格式，可能是GLM格式问题或上下文截断"
                     t["_stuck_reason"] = "幽灵完成：session已退出但无RESULT标记"
-                    # 写入 task-state.json
+                    # 写入 task-state.json，并尽量复用统一更新入口
                     try:
-                        ts_file = "/workspace/tmp/octopus/task-state.json"
-                        if os.path.exists(ts_file):
-                            with open(ts_file, 'r', encoding='utf-8') as f:
-                                ts_data = json.load(f)
-                            updated = False
-                            for task_obj in ts_data.get("tasks", []):
-                                if task_obj.get("id") == task_id:
-                                    task_obj["status"] = "completed_no_result"
-                                    task_obj["summary"] = t["summary"]
-                                    task_obj["completed_at"] = now.isoformat()
-                                    updated = True
-                                    break
-                            if updated:
-                                tmp_file = ts_file + ".tmp"
-                                with open(tmp_file, 'w', encoding='utf-8') as f:
-                                    json.dump(ts_data, f, ensure_ascii=False, indent=2)
-                                os.replace(tmp_file, ts_file)
-                                print(f"🟡 幽灵完成标记: {task_id}")
+                        updated = apply_task_updates(
+                            task_id,
+                            {
+                                "status": "completed_no_result",
+                                "summary": t["summary"],
+                                "completed_at": now.isoformat(),
+                            },
+                            allowed_statuses=("running", "dispatched", "queued", "completed_no_result"),
+                        )
+                        if updated:
+                            print(f"🟡 幽灵完成标记: {task_id}")
                     except Exception as e:
                         print(f"⚠️  标记 completed_no_result 失败: {e}", file=sys.stderr)
                     # 不加入 stuck 列表，不重派
@@ -907,11 +939,8 @@ def attempt_task_steers(tasks: list) -> int:
 def check_orphan_tasks(tasks: list, active_sessions: list) -> list:
     """
     检测孤儿任务：status=running/dispatched 但无活跃子 Agent，且超过 3 分钟。
-    这是 B 类错误（GLM ghost_completion）的典型特征：
-    - 子 Agent 只跑 ~34 秒就"正常结束"（无 error）
-    - 但没有输出 RESULT，task-state.json 状态停在 running
-    - 没有活跃子 Agent 进程
-    - patrol 当前要等 18 分钟才超时发现（太慢）
+    额外复用收尾宽限逻辑：如果 session 刚结束、最近仍有活动，或 transcript 已出现 RESULT/成功迹象，
+    暂不认定为 orphan，避免 patrol 在 task-state/bridge 落盘前过早补发。
 
     返回孤儿任务列表，每个元素含 task 和 elapsed_min。
     """
@@ -952,6 +981,8 @@ def check_orphan_tasks(tasks: list, active_sessions: list) -> list:
         )
 
         if not has_active:
+            if should_wait_for_finish_sync(task, now=now):
+                continue
             orphans.append({
                 'task': task,
                 'elapsed_min': round(elapsed_min, 1)
@@ -2639,11 +2670,14 @@ def apply_task_updates(task_id: str, updates: dict, *, allowed_statuses: tuple[s
     try:
         data = load_task_state(TASK_STATE_FILE)
         changed = False
+        previous_status = ""
+        current_record = None
         for task in data.get("tasks", []):
             if task.get("id") != task_id:
                 continue
             if allowed_statuses and task.get("status") not in allowed_statuses:
                 return False
+            previous_status = str(task.get("status", "") or "")
             for key, value in updates.items():
                 if value is None:
                     if key in task:
@@ -2655,7 +2689,11 @@ def apply_task_updates(task_id: str, updates: dict, *, allowed_statuses: tuple[s
             if changed:
                 data["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 save_task_state(TASK_STATE_FILE, data)
-            return changed
+                current_record = dict(task)
+            break
+        if changed and current_record:
+            sync_task(current_record, event_type="patrol_update", previous_status=previous_status)
+        return changed
     except Exception as e:
         print(f"⚠️  apply_task_updates({task_id}) 失败: {e}", file=sys.stderr)
     return False
@@ -3957,15 +3995,17 @@ def main():
                     print(f"  ✅ 孤儿任务 {task_id} transcript 含成功RESULT，自动标记 done（不报警）")
                     task["_auto_done"] = True  # 标记已自动完成，防止GLM升级循环重复处理
                     try:
-                        _state_data = load_task_state(TASK_STATE_FILE)
-                        for _t in _state_data.get("tasks", []):
-                            if _t.get("id") == task_id:
-                                _t["status"] = "done"
-                                _t["completed_at"] = datetime.now(timezone.utc).isoformat()
-                                if not _t.get("summary"):
-                                    _t["summary"] = "孤儿任务自动标记：transcript含成功RESULT"
-                                break
-                        save_task_state(TASK_STATE_FILE, _state_data)
+                        updated = apply_task_updates(
+                            task_id,
+                            {
+                                "status": "done",
+                                "completed_at": datetime.now(timezone.utc).isoformat(),
+                                "summary": task.get("summary") or "孤儿任务自动标记：transcript含成功RESULT",
+                            },
+                            allowed_statuses=("running", "dispatched", "queued", "done"),
+                        )
+                        if not updated:
+                            print(f"  ⚠️  自动标done跳过: {task_id}", file=sys.stderr)
                     except Exception as _e:
                         print(f"  ⚠️  自动标done异常: {_e}", file=sys.stderr)
                     continue  # 不加入 stuck
