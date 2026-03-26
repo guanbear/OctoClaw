@@ -406,14 +406,121 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - runtime health
 - replay/eval feedback
 
+#### 7.1.1 选模内核应保持可插拔
+
+短期不必单独开源，但必须按“未来可拆出去单独开源”的方式设计。
+
+核心原则：
+
+- 选模内核本身不感知 OpenClaw / ClawTeam
+- 输出结构化 decision object，而不是只输出一个 model id
+- runtime bridge 才负责把 decision 翻译给 OpenClaw / ClawTeam
+
+推荐结构：
+
+- `catalog adapters`
+- `benchmark adapters`
+- `economics adapters`
+- `policy engine`
+- `runtime bridges`
+
+#### 7.1.2 选模内核的输入输出
+
+输入应该包括：
+
+- task shape / work type / phase
+- risk
+- latency target
+- context budget
+- available model set
+- benchmark snapshot
+- quota health
+- internal effective cost
+- market price baseline
+
+输出不应只是：
+
+- `model=xxx`
+
+而应是：
+
+```json
+{
+  "decision": {
+    "selected_model": "provider/model",
+    "profile": "writer-fast",
+    "reasoning_effort": "medium",
+    "route_class": "spawn_single",
+    "protocol": "normal",
+    "review_required": false,
+    "fallbacks": ["provider/model-b"],
+    "scores": {
+      "capability": 0.81,
+      "latency": 0.77,
+      "market_price": 0.18,
+      "internal_cost": 0.44,
+      "quota_health": 0.82
+    },
+    "explanation": [
+      "doc_task",
+      "latency_sensitive",
+      "quota_healthy"
+    ]
+  }
+}
+```
+
+#### 7.1.3 OpenRouter 和 OmniRoute 的正确角色
+
+OctoClaw 设计里应明确：
+
+- **OpenRouter rankings**
+  - 只作为 `ecosystem signal`
+  - 不作为能力榜真相
+
+- **OpenRouter models API / 公开价格**
+  - 只作为 `market price baseline`
+  - 不等于你的真实内部成本
+
+- **OmniRoute**
+  - 不再作为核心依赖
+  - 只能作为某种可选 `economics adapter`
+  - 后面就算没有 OmniRoute，选模内核也必须能工作
+
+也就是说：
+
+- `rankings` 权重应低
+- `market_price` 和 `internal_cost` 必须分离
+- 任何账号池、订阅池、seat、quota 都只是内部经济适配器的一种实现
+
+#### 7.1.4 选模内核的产品边界
+
+OctoClaw 要做的不是“又一个 router”，而是：
+
+> **一个可插拔的、agent-aware 的 model policy engine。**
+
+这意味着它既服务：
+
+- route
+- role / phase
+- model/profile
+- review gate
+- protocol choice
+
+也意味着它后续可以独立出来服务别的多 Agent 产品，但现在先不以开源为目标牵着当前实现走。
+
 ### 7.2 IM-native 展示层
 
-OctoClaw 应支持：
+OctoClaw 当前应优先支持：
 
 - Feishu
 - Slack
 - Discord
 - Telegram
+- 微信（优先评估 ClawBot 插件接入）
+
+暂不作为当前阶段目标：
+
 - 企业微信
 - 钉钉
 
@@ -470,14 +577,14 @@ OctoClaw 应支持：
 
 **要改。**
 
-现有这套类型：
+旧版花名式类型大致是：
 
-- `octopus-power`
-- `octopus-scout`
-- `octopus-writer`
-- `octopus-fix`
-- `octopus-test`
-- `octopus-analyze`
+- `power`
+- `scout`
+- `writer`
+- `fix`
+- `test`
+- `analyze`
 
 有两个明显问题：
 
@@ -557,39 +664,84 @@ OctoClaw 应支持：
 
 我建议最终收敛成 4 个主 worker pool + 1 个特殊 executor：
 
-#### `octopus-runner`
+#### `octoclaw-runner`
 
 - 特殊 executor
 - 负责轻工具、状态、shell、API、日志
 
-#### `octopus-research`
+#### `octoclaw-research`
 
 - 负责调研、检索、对比、资料归纳、写 summary
 
-#### `octopus-code`
+#### `octoclaw-code`
 
 - 负责实现、修复、脚本、改配置、补测试
 
-#### `octopus-review`
+#### `octoclaw-review`
 
 - 负责验证、风控、merge、质量把关
 
-#### `octopus-main`
+#### `octoclaw-main`
 
 - 不是 worker pool，而是主链路协调者
 
-### 8.5 旧类型如何映射
+### 8.5 `writer` 是否需要保留为角色
+
+我的建议是：
+
+- 对外可以保留 `writer` 这个用户可理解的 preset / profile
+- 对内不要把 `writer` 做成基础 worker pool
+
+原因：
+
+- 很多任务确实“不写代码，只写文档”
+- 但这类任务本质上通常还是 `research + report` 或 `code + report`
+- `writer` 更像面向产物和协作体验的 profile，而不是调度层的基本工作类型
+
+建议落法：
+
+- 文档/知识类任务：`work_type=research, phase=report, profile=writer`
+- 代码说明/变更总结类任务：`work_type=code, phase=report, profile=writer`
+- 真正调度时仍然主要看 `executor_type + work_type + phase`
+
+### 8.6 角色 / profile 是否要绑默认 skill
+
+需要，但建议用“默认 skill bundle + 动态补充”的混合模式。
+
+不建议：
+
+- 完全手写死每个角色只能用哪些 skill
+- 完全放任模型自己临场找 skill
+
+建议：
+
+- runtime policy 按 `work_type` / `profile` 注入默认 skill bundle
+- agent 仍可在执行时自动发现额外 skill
+
+例如：
+
+- `profile=writer` 默认给文档/飞书/Office/交付格式相关 skill
+- `work_type=code` 默认给 repo/test/review 相关 skill
+- `work_type=review` 默认给验证、风险、回归检查相关 skill
+
+这样能兼顾：
+
+- 首次命中率
+- 可解释性
+- 灵活性
+
+### 8.7 旧类型如何映射
 
 兼容期建议这样映射：
 
-- `octopus-scout` -> `work_type=research, phase=collect`
-- `octopus-analyze` -> `work_type=research|review, phase=inspect`
-- `octopus-writer` -> `work_type=research|code, phase=report`
-- `octopus-fix` -> `work_type=code, phase=implement`
-- `octopus-test` -> `work_type=review, phase=verify`
-- `octopus-power` -> `tier=heavy`，不再作为长期角色名保留
+- `scout` -> `work_type=research, phase=collect`
+- `analyze` -> `work_type=research|review, phase=inspect`
+- `writer` -> `work_type=research|code, phase=report, profile=writer`
+- `fix` -> `work_type=code, phase=implement`
+- `test` -> `work_type=review, phase=verify`
+- `power` -> `tier=heavy`，不再作为长期角色名保留
 
-### 8.6 最终建议
+### 8.8 最终建议
 
 > **长期应从“花名式角色标签”迁到“执行器 + 工作类型 + 阶段 + tier/protocol”模型。**
 
@@ -705,11 +857,18 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - schema v2
 - backward-compatible mapper
 
+并行要求：
+
+- 选模 decision schema 同步定稿
+- 明确 `market_price` / `internal_cost` / `quota_health` 字段
+- 把 OmniRoute 从核心数据模型里降级为可选 adapter
+
 ### Phase 1：把委派变成 runtime policy
 
 目标：
 
 - 不再主要靠 `AGENTS.md` / `skills` 决定委派
+- 让委派、review、skill bundle 进入 runtime policy
 
 要做：
 
@@ -717,12 +876,20 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - delegate/review hard gate
 - route decision object
 - direct / runner / single / multi 的强制入口
+- 按 `work_type` / `profile` 选择默认 skill bundle
+- 保留精简版 `AGENTS.md` 注入，只承载静态规则和协作约定
 
 输出：
 
 - runtime policy entry
 - route decision schema
 - explainable route reasons
+
+并行要求：
+
+- `AGENTS.md` 只保留静态规则
+- `skills` 只保留能力和模板
+- skill bundle 进入 runtime policy
 
 ### Phase 2：把 ClawTeam 运行面彻底打通
 
@@ -750,10 +917,10 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 要做：
 
 - 新增：
-  - `octopus-research`
-  - `octopus-code`
-  - `octopus-review`
-  - `octopus-runner`
+  - `octoclaw-research`
+  - `octoclaw-code`
+  - `octoclaw-review`
+  - `octoclaw-runner`
 - 旧 label 继续兼容一段时间
 - route 和 model policy 改读新字段
 - status / patrol / UI 改渲染新字段
@@ -833,6 +1000,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - route diff
 - policy diff
 - 成本/时延/成功率回写
+- rankings / market price / local telemetry 定期刷新
 
 输出：
 
@@ -890,3 +1058,5 @@ OctoClaw 未来最应该长成的，不是“更多 agent”，而是：
 - [MetaGPT](https://github.com/FoundationAgents/MetaGPT)
 - [HiClaw](https://github.com/alibaba/hiclaw)
 - [LangGraph Supervisor](https://github.com/langchain-ai/langgraph-supervisor-py)
+- [OpenRouter Models](https://openrouter.ai/models)
+- [OpenRouter Rankings](https://openrouter.ai/rankings)

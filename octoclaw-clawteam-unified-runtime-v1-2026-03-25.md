@@ -242,13 +242,11 @@ Suggested executor types:
 
 Suggested worker classes:
 
-- `octopus-runner`
-- `octopus-fix`
-- `octopus-scout`
-- `octopus-writer`
-- `octopus-analyze`
-- `octopus-power`
-- `octopus-test`
+- `octoclaw-runner`
+- `octoclaw-code`
+- `octoclaw-research`
+- `octoclaw-review`
+- `octoclaw-main`
 
 ## 7. Model Selection Ownership
 

@@ -183,10 +183,14 @@ OctoClaw 不应该只停留在“飞书能发卡片”。
 - Slack
 - Discord
 - Telegram
-- 企业微信
-- 钉钉
+- 微信（优先评估 ClawBot 插件）
 
 统一 capability matrix + renderer。
+
+当前先不做：
+
+- 企业微信
+- 钉钉
 
 目标不是“每个平台都能发消息”，而是：
 
@@ -429,6 +433,7 @@ flowchart TB
 负责：
 
 - 静态铁律
+- repo / 团队长期协作约定
 - 主 agent 必须优先用 OctoClaw runtime
 
 #### `skills`
@@ -438,6 +443,7 @@ flowchart TB
 - 工具说明
 - 能力包
 - 流程建议
+- 按 profile/work_type 提供可复用 skill bundle
 
 #### 插件 / middleware / runtime policy
 
@@ -447,7 +453,14 @@ flowchart TB
 - 委派给谁
 - 是否 review
 - 选模型 / 选 profile
+- 选默认 skill bundle
 - 阻止主 agent 直接做不该自己做的重任务
+
+结论：
+
+- runtime policy 负责“哪些行为必须发生”
+- `AGENTS.md` 仍然需要注入，但只保留静态规则，不再承担强制委派
+- `skills` 负责能力包，默认 bundle 由 runtime policy 决定，执行时仍允许自动补充发现
 
 ---
 
