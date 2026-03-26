@@ -45,6 +45,51 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "prefer_private": False,
         "prefer_low_cost": False,
     },
+    "runtime_policy": {
+        "enabled": True,
+        "default_reasoning_effort_by_legacy_tier": {
+            "trivial": "low",
+            "simple": "low",
+            "normal": "medium",
+            "hard": "high",
+            "deep": "high",
+        },
+        "hooks": {
+            "before_model_resolve": True,
+            "before_prompt_build": True,
+            "before_tool_call": True,
+            "agent_end": True,
+        },
+        "skill_bundles": {
+            "ops": ["shell", "logs", "status"],
+            "research": ["web", "docs", "report"],
+            "code": ["repo", "test", "review"],
+            "review": ["review", "risk", "regression"],
+            "writer": ["writer", "feishu", "office", "delivery"],
+        },
+        "profiles": {
+            "ops-fast": {
+                "skill_bundle_keys": ["ops"],
+                "reasoning_effort": "low",
+            },
+            "research": {
+                "skill_bundle_keys": ["research"],
+                "reasoning_effort": "medium",
+            },
+            "code": {
+                "skill_bundle_keys": ["code"],
+                "reasoning_effort": "medium",
+            },
+            "review": {
+                "skill_bundle_keys": ["review"],
+                "reasoning_effort": "high",
+            },
+            "writer": {
+                "skill_bundle_keys": ["research", "writer"],
+                "reasoning_effort": "medium",
+            },
+        },
+    },
     "clawteam_bridge": {
         "enabled": False,
         "backend": "mirror",

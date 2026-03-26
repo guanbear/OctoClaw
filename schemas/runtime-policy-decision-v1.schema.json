@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/runtime-policy-decision-v1.schema.json",
+  "title": "OctoClaw Runtime Policy Decision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "summary",
+    "request",
+    "route_decision",
+    "model_policy",
+    "skill_policy",
+    "review_policy",
+    "prompt_contract",
+    "tool_policy",
+    "compat",
+    "hook_interface"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.runtime_policy.decision/v1"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["task", "command", "channel", "session_key", "metadata"],
+      "properties": {
+        "task": { "type": "string" },
+        "command": { "type": "string" },
+        "channel": { "type": "string" },
+        "session_key": { "type": "string" },
+        "metadata": { "type": "object" }
+      }
+    },
+    "route_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route",
+        "dispatch_required",
+        "confidence",
+        "reason",
+        "reason_codes",
+        "scores",
+        "task_class",
+        "executor_type",
+        "worker_pool",
+        "work_type",
+        "phase",
+        "protocol",
+        "should_wait",
+        "wait_timeout_seconds",
+        "expected_latency_ms",
+        "expected_cost_band",
+        "context_growth_band"
+      ],
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": ["direct", "runner", "spawn_single", "spawn_multi"]
+        },
+        "dispatch_required": { "type": "boolean" },
+        "confidence": { "type": "number" },
+        "reason": { "type": "string" },
+        "reason_codes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "scores": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "task_class": { "type": "string" },
+        "executor_type": {
+          "type": "string",
+          "enum": ["main", "runner", "subagent", "team"]
+        },
+        "worker_pool": { "type": "string" },
+        "work_type": {
+          "type": "string",
+          "enum": ["ops", "research", "code", "review"]
+        },
+        "phase": { "type": "string" },
+        "protocol": {
+          "type": "string",
+          "enum": ["normal", "heavy"]
+        },
+        "should_wait": { "type": "boolean" },
+        "wait_timeout_seconds": { "type": "integer" },
+        "expected_latency_ms": { "type": "integer" },
+        "expected_cost_band": { "type": "string" },
+        "context_growth_band": { "type": "string" }
+      }
+    },
+    "model_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legacy_label",
+        "legacy_tier",
+        "tier",
+        "selected_model",
+        "profile",
+        "reasoning_effort",
+        "fallbacks"
+      ],
+      "properties": {
+        "legacy_label": { "type": "string" },
+        "legacy_tier": { "type": "string" },
+        "tier": { "type": "string" },
+        "selected_model": { "type": "string" },
+        "profile": { "type": "string" },
+        "reasoning_effort": { "type": "string" },
+        "fallbacks": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "skill_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_skill_bundle", "dynamic_discovery_allowed"],
+      "properties": {
+        "default_skill_bundle": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "dynamic_discovery_allowed": { "type": "boolean" }
+      }
+    },
+    "review_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "review_worker_pool", "review_trigger"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "review_worker_pool": { "type": "string" },
+        "review_trigger": { "type": "string" }
+      }
+    },
+    "prompt_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "brief_required",
+        "artifact_first",
+        "transcript_to_main",
+        "summary_required",
+        "checkpoint_summary_required"
+      ],
+      "properties": {
+        "brief_required": { "type": "boolean" },
+        "artifact_first": { "type": "boolean" },
+        "transcript_to_main": { "type": "boolean" },
+        "summary_required": { "type": "boolean" },
+        "checkpoint_summary_required": { "type": "boolean" }
+      }
+    },
+    "tool_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow_direct_tools", "must_delegate_via", "block_tool_patterns"],
+      "properties": {
+        "allow_direct_tools": { "type": "boolean" },
+        "must_delegate_via": { "type": "string" },
+        "block_tool_patterns": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "compat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["legacy_role_hint", "legacy_tier_hint"],
+      "properties": {
+        "legacy_role_hint": { "type": "string" },
+        "legacy_tier_hint": { "type": "string" }
+      }
+    },
+    "hook_interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_model_resolve",
+        "before_prompt_build",
+        "before_tool_call",
+        "agent_end"
+      ],
+      "properties": {
+        "before_model_resolve": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "action",
+            "selected_model",
+            "profile",
+            "reasoning_effort",
+            "dispatch_required"
+          ],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "action": { "type": "string" },
+            "selected_model": { "type": "string" },
+            "profile": { "type": "string" },
+            "reasoning_effort": { "type": "string" },
+            "dispatch_required": { "type": "boolean" }
+          }
+        },
+        "before_prompt_build": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "action",
+            "policy_context",
+            "skill_bundle",
+            "prompt_contract"
+          ],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "action": { "type": "string" },
+            "policy_context": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "route",
+                "worker_pool",
+                "work_type",
+                "phase",
+                "protocol",
+                "review_required"
+              ],
+              "properties": {
+                "route": { "type": "string" },
+                "worker_pool": { "type": "string" },
+                "work_type": { "type": "string" },
+                "phase": { "type": "string" },
+                "protocol": { "type": "string" },
+                "review_required": { "type": "boolean" }
+              }
+            },
+            "skill_bundle": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "prompt_contract": {
+              "$ref": "#/properties/prompt_contract"
+            }
+          }
+        },
+        "before_tool_call": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "action", "tool_policy"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "action": { "type": "string" },
+            "tool_policy": {
+              "$ref": "#/properties/tool_policy"
+            }
+          }
+        },
+        "agent_end": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "action",
+            "artifact_first",
+            "review_required",
+            "final_compose_required"
+          ],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "action": { "type": "string" },
+            "artifact_first": { "type": "boolean" },
+            "review_required": { "type": "boolean" },
+            "final_compose_required": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

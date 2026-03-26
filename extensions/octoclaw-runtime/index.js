@@ -82,6 +82,20 @@ function toolResponse(summary, details = {}) {
   };
 }
 
+function policySummaryText(payload) {
+  if (payload?.summary) {
+    return payload.summary;
+  }
+  const route = payload?.route_decision?.route || "direct";
+  const workerPool = payload?.route_decision?.worker_pool || "octoclaw-main";
+  const profile = payload?.model_policy?.profile || "";
+  const model = payload?.model_policy?.selected_model || "";
+  const protocol = payload?.route_decision?.protocol || "normal";
+  const review = payload?.review_policy?.required ? " / review" : "";
+  const suffix = model ? ` / ${model}` : "";
+  return `policy=${route} -> ${workerPool} / profile=${profile} / protocol=${protocol}${review}${suffix}`;
+}
+
 function statusToolResponse(rawOutput, format) {
   const text = [
     "OctoClaw raw status panel below. Return it verbatim to the user without summarizing or rewriting.",
@@ -130,6 +144,38 @@ async function userFacingHandoff(payload, fallback, cwd) {
 }
 
 export default function (pi) {
+  pi.registerTool(
+    {
+      name: "octoclaw_policy_decide",
+      label: "OctoClaw Policy Decide",
+      description: "Return the structured OctoClaw runtime policy decision object, including route, model/profile, skill bundle, review policy, and hook interface hints.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          task: { type: "string", description: "The user task to classify and route." },
+          command: { type: "string", description: "Optional shell command if one already exists." },
+          channel: { type: "string", description: "Optional channel hint such as feishu, slack, discord, telegram, or wechat." },
+          sessionKey: { type: "string", description: "Optional main session key." },
+          forceRoute: { type: "string", enum: ["direct", "runner", "spawn_single", "spawn_multi"] },
+          metadataJson: { type: "string", description: "Optional JSON object with extra routing metadata." }
+        },
+        required: ["task"]
+      },
+      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+        const args = ["--task", params.task];
+        if (params.command) args.push("--command", params.command);
+        if (params.channel) args.push("--channel", params.channel);
+        if (params.sessionKey) args.push("--session-key", params.sessionKey);
+        if (params.forceRoute) args.push("--force-route", params.forceRoute);
+        if (params.metadataJson) args.push("--metadata-json", params.metadataJson);
+        const payload = await runJsonScript("octoclaw_policy.py", args, ctx.cwd || process.cwd());
+        return toolResponse(policySummaryText(payload), payload);
+      },
+    },
+    { source: "octoclaw-runtime" },
+  );
+
   pi.registerTool(
     {
       name: "octoclaw_route",
@@ -286,6 +332,22 @@ export default function (pi) {
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(`OctoClaw route: ${payload.route}`);
+      }
+    },
+  });
+
+  pi.registerCommand("octopolicy", {
+    description: "Show the structured OctoClaw runtime policy decision for a task",
+    handler: async (args, ctx) => {
+      const task = (args || "").trim();
+      if (!task) {
+        if (ctx.hasUI) ctx.ui.notify("Usage: /octopolicy <task>", "error");
+        return;
+      }
+      const payload = await runJsonScript("octoclaw_policy.py", ["--task", task], ctx.cwd || process.cwd());
+      if (ctx.hasUI) {
+        ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
+        ctx.ui.notify(policySummaryText(payload));
       }
     },
   });

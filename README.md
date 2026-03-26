@@ -35,10 +35,12 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 
 ## Core Features
 
+- Runtime policy decision entry: [`octoclaw_policy.py`](./lib/octoclaw_policy.py)
 - Route decision entry: [`octoclaw_route.py`](./lib/octoclaw_route.py)
 - Unified dispatch entry: [`dispatch_task.py`](./lib/dispatch_task.py)
 - Generic runner playbooks: [`runner_playbooks.py`](./lib/runner_playbooks.py)
 - Runtime extension tools:
+  - `octoclaw_policy_decide`
   - `octoclaw_route`
   - `octoclaw_dispatch`
   - `octoclaw_status`
@@ -90,9 +92,13 @@ SUPERVISOR_MODE=tmux PATROL_MODE=loop bash /workspace/openclaw/skills/octopus/in
 tmux attach -t octoclaw-runtime
 
 # In OpenClaw, prefer these tools when available:
+# octoclaw_policy_decide
 # octoclaw_route
 # octoclaw_dispatch
 # octoclaw_status
+
+# Runtime policy decision object
+python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'compare these two services and decide whether to delegate'
 
 # Route first
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze this error and give me a fix plan'
@@ -188,6 +194,39 @@ Because current OpenClaw TUI exposes `--profile` rather than a direct `--model` 
 See [clawteam-integration-analysis-2026-03-25.md](./clawteam-integration-analysis-2026-03-25.md) for the architecture notes and tradeoffs.
 See [octoclaw-clawteam-unified-runtime-v1-2026-03-25.md](./octoclaw-clawteam-unified-runtime-v1-2026-03-25.md) for the target unified runtime design.
 
+## Runtime Policy Decision
+
+OctoClaw now exposes a structured runtime policy entry:
+
+- script: [`lib/octoclaw_policy.py`](./lib/octoclaw_policy.py)
+- schema: [`schemas/runtime-policy-decision-v1.schema.json`](./schemas/runtime-policy-decision-v1.schema.json)
+- runtime tool: `octoclaw_policy_decide`
+- command: `/octopolicy`
+
+The decision object is the stable contract between:
+
+- OpenClaw plugin / hook wiring
+- OctoClaw route and model policy
+- ClawTeam task metadata
+- UI / replay / eval surfaces
+
+It includes:
+
+- route decision
+- model/profile decision
+- default skill bundle
+- review policy
+- prompt contract
+- tool policy
+- hook interface hints for:
+  - `before_model_resolve`
+  - `before_prompt_build`
+  - `before_tool_call`
+  - `agent_end`
+
+Current runtime extension support is exposed as tool/command entrypoints first.
+The `hook_interface` payload is emitted now so future plugin hook binding can consume the same contract without changing the schema.
+
 ## Model Inputs
 
 Auto mode now considers four input layers:
@@ -244,10 +283,12 @@ In practice:
 ├── install.sh
 ├── CHANGELOG.md
 ├── RELEASE_NOTES_v0.1.0.md
+├── schemas/
 ├── extensions/
 │   └── octoclaw-runtime/
 ├── eval/
 └── lib/
+    ├── octoclaw_policy.py
     ├── dispatch_task.py
     ├── runner_playbooks.py
     ├── runner_routing.py

@@ -885,6 +885,49 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - route decision schema
 - explainable route reasons
 
+建议第一版直接产出一个稳定 decision object，例如：
+
+```json
+{
+  "schema_version": "octoclaw.runtime_policy.decision/v1",
+  "summary": "policy=spawn_single -> octoclaw-code / code:implement / strong / profile=code / model=...",
+  "route_decision": {
+    "route": "spawn_single",
+    "executor_type": "subagent",
+    "worker_pool": "octoclaw-code",
+    "work_type": "code",
+    "phase": "implement",
+    "protocol": "normal"
+  },
+  "model_policy": {
+    "tier": "strong",
+    "selected_model": "...",
+    "profile": "code",
+    "reasoning_effort": "high"
+  },
+  "skill_policy": {
+    "default_skill_bundle": ["repo", "test", "review"],
+    "dynamic_discovery_allowed": true
+  },
+  "review_policy": {
+    "required": true,
+    "review_worker_pool": "octoclaw-review"
+  },
+  "hook_interface": {
+    "before_model_resolve": { "enabled": true, "action": "override_model_selection" },
+    "before_prompt_build": { "enabled": true, "action": "inject_policy_context" },
+    "before_tool_call": { "enabled": true, "action": "enforce_delegation_policy" },
+    "agent_end": { "enabled": true, "action": "collect_summary_and_artifacts" }
+  }
+}
+```
+
+第一阶段重点不是把所有 hook 都真正接进上游，而是：
+
+- 先固定 schema
+- 先固定 tool / command entry
+- 先让 `dispatch` / `spawn` / `UI` / `ClawTeam metadata` 都能消费同一个 decision object
+
 并行要求：
 
 - `AGENTS.md` 只保留静态规则
