@@ -11,7 +11,7 @@
 
 一句话版：
 
-> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做工位和任务面，DeerFlow 做重任务模式，LangGraph 做 graph 思想参考。**
+> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做工位和任务面，DeerFlow 提供重任务执行思想，LangGraph 做 graph 思想参考。**
 
 ---
 
@@ -115,7 +115,7 @@ OctoClaw 可以显式收敛成：
 - `L1 runner`
 - `L2 single`
 - `L3 multi`
-- `L4 heavy`
+- `L4 heavy profile`
 
 #### 2. Isolated sub-agent context
 
@@ -137,13 +137,13 @@ OctoClaw 可以显式收敛成：
 - artifacts
 - next step
 
-#### 4. Heavy runtime 是特殊模式
+#### 4. Heavy profile 是特殊模式
 
-只有研究型、长流程、sandbox-heavy、多步探索任务才进 DeerFlow-like mode。
+只有研究型、长流程、sandbox-heavy、多步探索任务才启用 DeerFlow-like heavy protocol。
 
 ### 3.4 对 OctoClaw 的建议
 
-> **DeerFlow 借执行协议和 heavy-mode 思想，不借主控制 loop。**
+> **DeerFlow 借执行协议和 heavy-profile 思想，不借主控制 loop。**
 
 ---
 
@@ -168,7 +168,7 @@ OctoClaw 可以显式收敛成：
 - 上下文隔离
 - 中间结果压缩
 - 重任务长流程执行
-- sandbox / filesystem / heavy runtime
+- sandbox / filesystem / heavy protocol
 
 所以不是二选一，而是：
 
@@ -501,7 +501,7 @@ OctoClaw 现有状态面板值得保留，但还要继续强化：
 - worktree
 - launch templates
 
-#### 4. DeerFlow-like heavy mode
+#### 4. Heavy profile on top of ClawTeam runtime
 
 - long research
 - sandbox-heavy tasks
@@ -510,7 +510,7 @@ OctoClaw 现有状态面板值得保留，但还要继续强化：
 
 ### 9.2 一句话版
 
-> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做运行面，DeerFlow 做重模式。**
+> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做运行面，DeerFlow 提供重任务执行思想。**
 
 ---
 
@@ -535,12 +535,13 @@ OctoClaw 现有状态面板值得保留，但还要继续强化：
 - summary / artifacts / next_step / status
 - 文件系统下沉中间结果
 
-### Phase 4：最后再加 heavy mode
+### Phase 4：最后把 heavy profile 叠到 ClawTeam runtime 上
 
 - 长任务
 - 复杂研究
 - sandbox-heavy 执行
 - 递归探索
+- 但不引入单独 DeerFlow 主 runtime
 
 这样风险最小、收益最大。
 
@@ -563,7 +564,7 @@ OctoClaw 现有状态面板值得保留，但还要继续强化：
 - execution mode
 - isolated context
 - summarization
-- heavy runtime
+- heavy protocol / heavy profile
 
 不是借它的主调度 loop。
 

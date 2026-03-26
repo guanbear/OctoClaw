@@ -2,7 +2,7 @@
 
 ## 1. 一句话定位
 
-> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做运行面，DeerFlow 做重任务模式。**
+> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做运行面，DeerFlow 提供重任务执行思想。**
 
 如果再压缩一点：
 
@@ -40,7 +40,7 @@
 - isolated sub-agent context
 - brief / summary / artifact 协议
 - aggressive summarization
-- heavy runtime 只在复杂任务触发
+- heavy protocol / heavy profile 只在复杂任务触发
 
 不建议直接复用：
 
@@ -171,7 +171,7 @@ OctoClaw 不应该靠“又多接了几个框架”立足，而要靠自己的�
   - 用不用 agent
   - 用几个 agent
   - 要不要 review
-  - 要不要 heavy mode
+  - 要不要启用 heavy profile
 
 ### 4.2 IM-native 的多 Agent 交互体验
 
@@ -264,12 +264,13 @@ OctoClaw 应该反过来做成：
 - worktree
 - worker observability
 
-#### 4. DeerFlow-like heavy mode
+#### 4. Heavy profile on ClawTeam runtime
 
 - 长任务
 - 多步研究
 - sandbox-heavy
 - recursive exploration
+- 更强的 brief / summary / artifact 约束
 
 ### 5.2 route 收敛
 
@@ -279,12 +280,110 @@ OctoClaw 应该反过来做成：
 - `runner`
 - `spawn_single`
 - `spawn_multi`
-- `heavy`
 
 其中：
 
-- `heavy` 不是默认模式
-- 只有复杂研究、长流程、sandbox-heavy 才进
+- `heavy profile` 不是独立 route
+- 它是 `spawn_single / spawn_multi` 上的执行协议增强
+- 只有复杂研究、长流程、sandbox-heavy 才启用
+
+### 5.3 最终架构图
+
+```mermaid
+flowchart TB
+    subgraph CH["入口与展示层"]
+        U["User / IM Channels"]
+        IM["IM Adapters"]
+        UI["Web UI / Dashboard"]
+        TM["tmux Workbench / status.sh"]
+    end
+
+    subgraph OC["OpenClaw 外壳层"]
+        GW["Gateway / Session / Authoritative Loop"]
+        MA["Main Agent"]
+    end
+
+    subgraph OP["OctoClaw 策略脑"]
+        RT["Runtime Policy Router"]
+        MP["Model Policy Engine"]
+        RV["Review Gate"]
+        PT["Patrol / Retry / Escalation"]
+        EV["Replay / Eval / Policy Tuning"]
+    end
+
+    subgraph CT["ClawTeam 统一运行面"]
+        TQ["Task / DAG / Dependency"]
+        MB["Inbox / Result Collection"]
+        BD["Board / Event Log"]
+        WS["tmux / Worktree / Workspace"]
+    end
+
+    subgraph EX["执行层"]
+        DR["direct"]
+        RN["runner"]
+        SG["spawn_single"]
+        MG["spawn_multi"]
+        HP["heavy profile\n(ClawTeam 上的执行协议)"]
+        RW["review worker"]
+    end
+
+    subgraph IO["上下文与产物层"]
+        BR["Task Brief / Constraints / Expected Output"]
+        AR["Artifacts / Reports / Shared Files"]
+        SM["Summary / Final Compose"]
+    end
+
+    U --> IM
+    U --> UI
+    IM --> GW
+    UI --> GW
+    GW --> RT
+    GW --> MA
+
+    RT --> MP
+    RT --> RV
+    RT --> DR
+    RT --> TQ
+
+    TQ --> MB
+    TQ --> BD
+    TQ --> WS
+    TQ --> RN
+    TQ --> SG
+    TQ --> MG
+
+    SG --> HP
+    MG --> HP
+
+    RN --> BR
+    SG --> BR
+    MG --> BR
+    HP --> BR
+
+    RN --> AR
+    SG --> AR
+    MG --> AR
+    HP --> AR
+    RV --> RW
+    RW --> AR
+
+    MB --> SM
+    AR --> SM
+    SM --> MA
+    MA --> GW
+
+    PT --> TQ
+    PT --> RN
+    PT --> SG
+    PT --> MG
+    EV --> RT
+    EV --> MP
+    EV --> RV
+
+    BD --> UI
+    BD --> TM
+    WS --> TM
+```
 
 ---
 
@@ -415,12 +514,13 @@ OctoClaw 必须自己保留：
 - artifact first
 - 文件系统下沉中间结果
 
-### Phase 4：最后再加 heavy mode
+### Phase 4：把 heavy profile 叠到 ClawTeam runtime 上
 
-- 长任务
-- 复杂研究
-- sandbox-heavy
-- recursive exploration
+- 只在 `spawn_single / spawn_multi` 上启用
+- 更强的 brief schema
+- 更强的 summary / artifact 规范
+- 更长超时与更强 review gate
+- 必要时独立 workspace / sandbox
 
 ### Phase 5：把展示做成产品级
 

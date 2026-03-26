@@ -1,4 +1,4 @@
-# OctoClaw + ClawTeam Unified Runtime v1.1 (2026-03-25)
+# OctoClaw + ClawTeam Unified Runtime v1.2 (2026-03-25)
 
 ## 1. Core Direction
 
@@ -17,6 +17,7 @@ That means:
 - `runner` enters the shared collaboration runtime as a special executor
 - `spawn_single` enters the shared collaboration runtime as a single worker task
 - `spawn_multi` enters the shared collaboration runtime as a task graph / team flow
+- heavy execution semantics are applied as a **profile/protocol** on top of `spawn_single` or `spawn_multi`, not as a separate runtime
 
 Operationally, all non-direct work should also be visible in a tmux-backed workbench:
 
@@ -134,6 +135,28 @@ This avoids the current split where only multi-step work gets rich collaboration
 - board / tmux / worktree where relevant
 
 This is where ClawTeam already fits naturally.
+
+### 3.5 Heavy profile, not heavy runtime
+
+The current preferred direction is:
+
+- do **not** introduce a separate DeerFlow-like runtime yet
+- instead define a **heavy profile** on top of the ClawTeam runtime
+
+This heavy profile should add:
+
+- stricter brief / constraints / expected-output schema
+- stronger summary / artifact requirements
+- longer timeout and background expectations
+- optional dedicated workspace / sandbox
+- stronger review and merge gate
+
+So in practice:
+
+- simple / medium work uses normal `spawn_single` / `spawn_multi`
+- long research / sandbox-heavy / recursive tasks use `spawn_single` or `spawn_multi` **with heavy protocol enabled**
+
+This keeps one runtime surface while still borrowing DeerFlow's execution philosophy.
 
 ## 4. Why tmux still matters
 
@@ -348,7 +371,21 @@ Output:
 
 - richer orchestration and supervision
 
-### Phase 5: tmux-centered operations mode
+### Phase 5: Heavy protocol on unified runtime
+
+Goal:
+
+- support long-running research / sandbox-heavy / recursive tasks without introducing a separate runtime
+- keep the same task/inbox/board/tmux surface
+- only upgrade execution semantics when needed
+
+Output:
+
+- heavy profile for selected `spawn_single` / `spawn_multi` jobs
+- stronger artifact-first flows
+- clearer review / merge rules
+
+### Phase 6: tmux-centered operations mode
 
 Goal:
 
