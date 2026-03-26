@@ -1,0 +1,892 @@
+# OctoClaw 产品设计与重构方案 v2 (2026-03-27)
+
+## 1. 文档目的
+
+这份文档不是“借鉴分析”，而是 **OctoClaw 自己的产品设计文档**。
+
+目标是把下面几件事一次写清楚：
+
+- OctoClaw 到底是什么产品
+- 它和 OpenClaw、ClawTeam 的边界怎么分
+- 为什么要重构，以及重构后长什么样
+- 现有 agent 类型要不要改，怎么改
+- 接下来按什么步骤实现，风险最小、收益最大
+
+这份文档应作为后续实现的 **canonical design**。
+
+---
+
+## 2. 产品定义
+
+### 2.1 一句话定义
+
+> **OctoClaw 是 OpenClaw 的多 Agent 调度脑、成本脑和展示脑。**
+
+它不应该变成：
+
+- 又一个通用 agent framework
+- 又一个模型网关
+- 又一个纯任务看板
+
+它应该专注做三件事：
+
+1. **按需分配执行面**
+2. **按需分配模型和成本**
+3. **把多 Agent 执行过程展示清楚**
+
+### 2.2 产品定位
+
+OctoClaw 的目标不是“会开很多 agent”，而是：
+
+- 主 agent 更快响应
+- 子任务更稳定地下沉
+- 多 Agent 协作更可控、更可解释
+- 复杂任务在不炸上下文和不炸成本的前提下被拆开处理
+
+换句话说：
+
+> **OctoClaw 不是 worker 本身，而是 worker 的调度系统。**
+
+---
+
+## 3. 产品目标
+
+### 3.1 主要目标
+
+#### 1. 快响应
+
+- 主 agent 不被慢工具、长检索、长命令阻塞
+- 用户尽快收到首响
+- 长任务自动转后台继续执行
+
+#### 2. 低成本
+
+- 简单任务不浪费强模型
+- 轻工具任务优先 runner
+- 子 agent 只拿最小 brief
+- 长结果优先 artifact 化
+
+#### 3. 稳定委派
+
+- 委派是系统行为，不是 prompt 习惯
+- 子任务状态和交付物是一等公民
+- 主 agent 不再靠“想起来”才派单
+
+#### 4. 多 Agent 协作可观察
+
+- 能看到谁在做什么
+- 能看到为什么这么路由
+- 能看到结果、风险、重试和升级链
+
+#### 5. 多 IM / UI 适配
+
+- 不只在终端里能看
+- 不只在飞书里能看
+- 同一个任务在不同 IM 里能用最合适的交互方式呈现
+
+### 3.2 非目标
+
+当前阶段不追求：
+
+- 自己造一套全新的大模型网关
+- 自己造一套通用多 Agent 框架
+- 让 LLM 完全自由决定是否委派
+- 为所有复杂任务单独造一套独立 heavy runtime
+
+---
+
+## 4. 设计原则
+
+### 4.1 系统控制边界，模型做局部优化
+
+模型可以辅助判断，但不能独自决定：
+
+- 是否委派
+- 委派给谁
+- 是否 review
+- 是否升级成本
+
+### 4.2 统一运行面，分离执行语义
+
+所有非 `direct` 工作都收敛到统一运行面；
+不同的是执行协议，而不是再造多套 runtime。
+
+### 4.3 brief 输入，summary 输出
+
+子任务默认只吃最小任务包：
+
+- goal
+- constraints
+- expected output
+- 必要 artifact refs
+
+主链路默认只回收：
+
+- summary
+- status
+- artifacts
+- next step
+
+### 4.4 artifact first
+
+长结果、日志、草稿、diff、研究材料优先落文件；
+主链路不默认吞下完整 transcript。
+
+### 4.5 可解释优先
+
+每一次关键决策都应该能回答：
+
+- 为什么不是 direct
+- 为什么不是 runner
+- 为什么用了这个模型
+- 为什么开了 review
+- 为什么升级/重试
+
+---
+
+## 5. 最终产品形态
+
+### 5.1 四层结构
+
+#### 1. OpenClaw 外壳层
+
+负责：
+
+- session
+- authoritative loop
+- workspace
+- channel / user interaction shell
+
+#### 2. OctoClaw 策略层
+
+负责：
+
+- route
+- model / profile resolution
+- cost / budget / quota policy
+- review gate
+- patrol / retry / escalation
+- final compose policy
+
+#### 3. ClawTeam 运行面
+
+负责：
+
+- task
+- inbox
+- board
+- tmux
+- worktree / workspace isolation
+- worker observability
+
+#### 4. 执行层
+
+负责真正执行：
+
+- `direct`
+- `runner`
+- `spawn_single`
+- `spawn_multi`
+
+其中复杂任务不是进入独立的新 runtime，而是：
+
+> **在 ClawTeam 运行面上启用更重的 heavy profile / protocol。**
+
+### 5.2 总体架构图
+
+```mermaid
+flowchart TB
+    subgraph CH["入口与展示层"]
+        U["User / IM Channels"]
+        IM["IM Adapters"]
+        UI["Web UI / Dashboard"]
+        TM["tmux Workbench / status.sh"]
+    end
+
+    subgraph OC["OpenClaw 外壳层"]
+        GW["Gateway / Session / Authoritative Loop"]
+        MA["Main Agent"]
+    end
+
+    subgraph OP["OctoClaw 策略层"]
+        RT["Runtime Policy Router"]
+        MP["Model Policy Engine"]
+        RV["Review Gate"]
+        PT["Patrol / Retry / Escalation"]
+        EV["Replay / Eval / Policy Tuning"]
+    end
+
+    subgraph CT["ClawTeam 运行面"]
+        TQ["Task / DAG / Dependency"]
+        MB["Inbox / Result Collection"]
+        BD["Board / Event Log"]
+        WS["tmux / Worktree / Workspace"]
+    end
+
+    subgraph EX["执行层"]
+        DR["direct"]
+        RN["runner"]
+        SG["spawn_single"]
+        MG["spawn_multi"]
+        HP["heavy profile\n(on ClawTeam runtime)"]
+        RW["review worker"]
+    end
+
+    subgraph IO["任务协议层"]
+        BR["Task Brief / Constraints / Expected Output"]
+        AR["Artifacts / Reports / Shared Files"]
+        SM["Summary / Final Compose"]
+    end
+
+    U --> IM
+    U --> UI
+    IM --> GW
+    UI --> GW
+    GW --> RT
+    GW --> MA
+
+    RT --> MP
+    RT --> RV
+    RT --> DR
+    RT --> TQ
+
+    TQ --> MB
+    TQ --> BD
+    TQ --> WS
+    TQ --> RN
+    TQ --> SG
+    TQ --> MG
+
+    SG --> HP
+    MG --> HP
+
+    RN --> BR
+    SG --> BR
+    MG --> BR
+    HP --> BR
+
+    RN --> AR
+    SG --> AR
+    MG --> AR
+    HP --> AR
+    RV --> RW
+    RW --> AR
+
+    MB --> SM
+    AR --> SM
+    SM --> MA
+    MA --> GW
+
+    PT --> TQ
+    PT --> RN
+    PT --> SG
+    PT --> MG
+    EV --> RT
+    EV --> MP
+    EV --> RV
+
+    BD --> UI
+    BD --> TM
+    WS --> TM
+```
+
+---
+
+## 6. 关键运行机制
+
+### 6.1 route 收敛
+
+最终 route 只保留 4 类：
+
+- `direct`
+- `runner`
+- `spawn_single`
+- `spawn_multi`
+
+说明：
+
+- `heavy` 不再是独立 route
+- 它是 `spawn_single / spawn_multi` 上的一种执行协议增强
+
+### 6.2 runner 的定位
+
+`runner` 不是普通 subagent，而是 **特殊 executor**。
+
+它的特点：
+
+- 常驻 daemon
+- 每个 job 独立 fresh shell
+- 任务快、便宜、稳定
+- tmux 里占一个固定服务工位
+
+它解决的是：
+
+- 轻工具任务不要过度 agent 化
+- 避免每次都 spawn 一个真正 agent session
+
+### 6.3 spawn_single 的定位
+
+用于：
+
+- 中等复杂度任务
+- 单个 worker 足够完成
+- 需要隔离上下文
+- 但不需要团队 DAG
+
+默认特征：
+
+- 一个 task
+- 一个 worker
+- 一个 tmux 工位
+- 一个 summary / artifact 回传
+
+### 6.4 spawn_multi 的定位
+
+用于：
+
+- 多步骤
+- 可并行
+- 有依赖
+- 需要 planner / worker / reviewer 协作
+
+默认特征：
+
+- task graph
+- DAG / dependency
+- 多个 worker
+- board / inbox / tmux 可观察
+
+### 6.5 heavy profile 的定位
+
+heavy profile 不是新 runtime，而是：
+
+- 更强的 brief schema
+- 更长超时
+- 更严格的 summary / artifact-first 约束
+- 更强的 review / merge gate
+- 可选独立 workspace / sandbox
+
+只对这类任务启用：
+
+- 长任务
+- 多步研究
+- sandbox-heavy
+- intermediate artifacts 很多
+- recursive exploration 倾向明显
+
+---
+
+## 7. OctoClaw 的核心护城河
+
+OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来了”。
+
+我建议把护城河明确成 5 件事。
+
+### 7.1 自动选模型 + 自动选执行面
+
+这是最该做成名片的能力。
+
+不是简单选模型，而是联合决定：
+
+- route
+- role / phase
+- model / profile
+- 是否 review
+- 是否启用 heavy profile
+
+决策输入至少包括：
+
+- task shape
+- latency sensitivity
+- risk
+- context growth
+- parallel gain
+- budget pressure
+- quota state
+- runtime health
+- replay/eval feedback
+
+### 7.2 IM-native 展示层
+
+OctoClaw 应支持：
+
+- Feishu
+- Slack
+- Discord
+- Telegram
+- 企业微信
+- 钉钉
+
+但不是只“能发消息”，而是做统一 capability matrix：
+
+- thread
+- card
+- button
+- approval action
+- file upload
+- mention
+- stream update
+- fallback text
+
+然后为每个 IM 做最适合它的 renderer。
+
+### 7.3 终端 + UI 双栈观测
+
+保留：
+
+- `status.sh`
+- tmux board / workbench
+
+再补：
+
+- Web UI
+- task graph
+- artifact explorer
+- replay / route diff / policy diff
+
+### 7.4 可解释的自动化
+
+每次关键动作都可解释：
+
+- route reason
+- model reason
+- review trigger
+- retry / escalation reason
+- cost / latency explanation
+
+### 7.5 上下文预算管理
+
+这块也应该成为 OctoClaw 的特色：
+
+- brief 输入
+- summary 输出
+- transcript 默认不上主链路
+- 超长结果自动 artifact 化
+- 每类 route 维护 context budget
+
+---
+
+## 8. agent 类型是否要改
+
+**要改。**
+
+现有这套类型：
+
+- `octopus-power`
+- `octopus-scout`
+- `octopus-writer`
+- `octopus-fix`
+- `octopus-test`
+- `octopus-analyze`
+
+有两个明显问题：
+
+### 8.1 问题一：语义重叠
+
+例如：
+
+- `scout` 和 `analyze` 很接近
+- `writer` 常常只是 research 或 code 的收口阶段
+- `test` 更像 review/verify 的一部分
+- `power` 其实不是角色，而像“更强一点”
+
+### 8.2 问题二：把“角色、能力、强度”混在一个 label 里
+
+例如：
+
+- `power` 混了“强度”
+- `fix` 混了“任务类型”
+- `writer` 混了“产物形式”
+
+这样会导致：
+
+- route 不好解释
+- model policy 不好统一
+- UI 不好展示
+- DAG 不好抽象
+
+### 8.3 建议的新结构：从“单标签”改成“三段式”
+
+建议每个非 direct task 至少有这 3 个字段：
+
+- `executor_type`
+- `work_type`
+- `phase`
+
+再辅以：
+
+- `tier`
+- `profile`
+- `protocol`
+
+#### 1. executor_type
+
+- `runner`
+- `subagent`
+- `team`
+
+#### 2. work_type
+
+- `ops`
+- `research`
+- `code`
+- `review`
+
+#### 3. phase
+
+- `inspect`
+- `collect`
+- `implement`
+- `verify`
+- `merge`
+- `report`
+
+#### 4. tier
+
+- `fast`
+- `normal`
+- `strong`
+- `heavy`
+
+#### 5. protocol
+
+- `normal`
+- `heavy`
+
+### 8.4 推荐的固定 worker pool
+
+我建议最终收敛成 4 个主 worker pool + 1 个特殊 executor：
+
+#### `octopus-runner`
+
+- 特殊 executor
+- 负责轻工具、状态、shell、API、日志
+
+#### `octopus-research`
+
+- 负责调研、检索、对比、资料归纳、写 summary
+
+#### `octopus-code`
+
+- 负责实现、修复、脚本、改配置、补测试
+
+#### `octopus-review`
+
+- 负责验证、风控、merge、质量把关
+
+#### `octopus-main`
+
+- 不是 worker pool，而是主链路协调者
+
+### 8.5 旧类型如何映射
+
+兼容期建议这样映射：
+
+- `octopus-scout` -> `work_type=research, phase=collect`
+- `octopus-analyze` -> `work_type=research|review, phase=inspect`
+- `octopus-writer` -> `work_type=research|code, phase=report`
+- `octopus-fix` -> `work_type=code, phase=implement`
+- `octopus-test` -> `work_type=review, phase=verify`
+- `octopus-power` -> `tier=heavy`，不再作为长期角色名保留
+
+### 8.6 最终建议
+
+> **长期应从“花名式角色标签”迁到“执行器 + 工作类型 + 阶段 + tier/protocol”模型。**
+
+这样更适合：
+
+- runtime policy
+- model selection
+- review gate
+- ClawTeam task schema
+- UI 和 IM 展示
+
+---
+
+## 9. 任务协议设计
+
+### 9.1 brief 输入协议
+
+建议统一为：
+
+```json
+{
+  "task_id": "T123",
+  "goal": "修复登录接口 401 问题",
+  "constraints": [
+    "优先最小改动",
+    "不要改数据库 schema"
+  ],
+  "context_summary": "最近改动涉及 auth middleware，用户反馈部署后持续 401",
+  "expected_output": {
+    "summary": "string",
+    "status": "done|blocked|failed",
+    "artifacts": ["path-or-id"],
+    "next_step": "string"
+  }
+}
+```
+
+### 9.2 worker 输出协议
+
+建议统一为：
+
+```json
+{
+  "task_id": "T123",
+  "status": "done",
+  "summary": "定位到 token 解析顺序错误",
+  "artifacts": ["patch.diff"],
+  "risks": ["需要验证旧 token 兼容性"],
+  "next_step": "建议交给 review worker 检查 auth 边界"
+}
+```
+
+### 9.3 heavy profile 的协议增强
+
+heavy profile 额外要求：
+
+- 更完整的 constraints
+- 更明确的 deliverables
+- 中间结果优先 artifact 化
+- 必须有 checkpoint summary
+- 默认走 review gate
+
+---
+
+## 10. ClawTeam 依赖边界
+
+ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 runtime。
+
+### 10.1 ClawTeam 负责什么
+
+- task
+- inbox
+- board
+- tmux
+- worktree
+- worker visibility
+
+### 10.2 ClawTeam 不负责什么
+
+- route
+- model policy
+- review policy
+- budget/quota policy
+- patrol / escalation policy
+
+### 10.3 结论
+
+> **ClawTeam 是运行面，不是策略脑。**
+
+---
+
+## 11. 实现步骤方案
+
+### Phase 0：统一数据模型
+
+目标：
+
+- 先把文档里的 schema 变成代码里的真实 schema
+
+要做：
+
+- 给 task 增加统一字段：
+  - `executor_type`
+  - `work_type`
+  - `phase`
+  - `tier`
+  - `protocol`
+- 保留旧 `label` 作为兼容字段
+- 增加旧类型到新结构的映射层
+
+输出：
+
+- schema v2
+- backward-compatible mapper
+
+### Phase 1：把委派变成 runtime policy
+
+目标：
+
+- 不再主要靠 `AGENTS.md` / `skills` 决定委派
+
+要做：
+
+- 前置 router
+- delegate/review hard gate
+- route decision object
+- direct / runner / single / multi 的强制入口
+
+输出：
+
+- runtime policy entry
+- route decision schema
+- explainable route reasons
+
+### Phase 2：把 ClawTeam 运行面彻底打通
+
+目标：
+
+- 所有非 direct 任务都进入统一 task/inbox/board/tmux
+
+要做：
+
+- runner 进入共享 task shell
+- spawn_single 进入共享 worker shell
+- spawn_multi 进入 DAG runtime
+- task / inbox / artifact / board 字段对齐
+
+输出：
+
+- 一个统一的协作控制面
+
+### Phase 3：重构 worker 类型
+
+目标：
+
+- 从旧花名式 label 迁到新 worker pool 模型
+
+要做：
+
+- 新增：
+  - `octopus-research`
+  - `octopus-code`
+  - `octopus-review`
+  - `octopus-runner`
+- 旧 label 继续兼容一段时间
+- route 和 model policy 改读新字段
+- status / patrol / UI 改渲染新字段
+
+输出：
+
+- 新 worker taxonomy 生效
+
+### Phase 4：把 brief / summary / artifact 协议做实
+
+目标：
+
+- 降上下文成本
+- 稳定交付物格式
+
+要做：
+
+- 统一 brief input schema
+- 统一 worker result schema
+- artifact first
+- report / summary / next_step 固定结构
+
+输出：
+
+- DeerFlow-like execution protocol on ClawTeam
+
+### Phase 5：叠加 heavy profile
+
+目标：
+
+- 不新增 runtime 的前提下支持重任务
+
+要做：
+
+- 给 `spawn_single / spawn_multi` 增加 `protocol=heavy`
+- 更长 timeout
+- 更严格 artifact/checkpoint
+- review gate 默认开启
+- 可选更强 workspace / sandbox
+
+输出：
+
+- heavy profile on unified runtime
+
+### Phase 6：做展示层产品化
+
+目标：
+
+- 让 OctoClaw 有真正可见的产品价值
+
+要做：
+
+- `status.sh` 收敛为 operator view
+- tmux board/workbench 收敛为 live ops view
+- Web UI 做：
+  - task graph
+  - task detail
+  - artifact explorer
+  - route/model/review explanation
+  - patrol event timeline
+- IM renderer 做 capability matrix
+
+输出：
+
+- CLI + tmux + Web + IM 四层展示面
+
+### Phase 7：做策略闭环
+
+目标：
+
+- 让 OctoClaw 越跑越准
+
+要做：
+
+- replay
+- eval
+- route diff
+- policy diff
+- 成本/时延/成功率回写
+
+输出：
+
+- self-tuning policy loop
+
+---
+
+## 12. 推荐的开发优先级
+
+如果只能按收益排序，我建议是：
+
+1. **Phase 1：runtime policy**
+2. **Phase 2：ClawTeam 统一运行面**
+3. **Phase 3：worker 类型重构**
+4. **Phase 4：brief/summary/artifact 协议**
+5. **Phase 6：展示层**
+6. **Phase 5：heavy profile**
+7. **Phase 7：策略闭环**
+
+说明：
+
+- `heavy profile` 不是最早该做的
+- 先把普通多 Agent 做稳，比先做重模式更值
+
+---
+
+## 13. 最终结论
+
+OctoClaw 未来最应该长成的，不是“更多 agent”，而是：
+
+> **一个能够稳定分派、稳定降本、稳定展示、稳定解释的 OpenClaw 多 Agent 调度系统。**
+
+它的核心竞争力应该来自：
+
+- 自动选模型 + 自动选执行面
+- runtime policy 而不是 prompt 习惯
+- ClawTeam 统一运行面
+- brief / summary / artifact 协议
+- IM-native + UI + tmux 三位一体展示
+
+这才是最值得投入重构的方向。
+
+---
+
+## 14. 参考
+
+核心依赖方向：
+
+- [ClawTeam](https://github.com/HKUDS/ClawTeam)
+
+思想参考：
+
+- [DeerFlow](https://github.com/bytedance/deer-flow)
+- [OpenHands Delegation](https://docs.openhands.dev/sdk/guides/agent-delegation)
+- [MetaGPT](https://github.com/FoundationAgents/MetaGPT)
+- [HiClaw](https://github.com/alibaba/hiclaw)
+- [LangGraph Supervisor](https://github.com/langchain-ai/langgraph-supervisor-py)
