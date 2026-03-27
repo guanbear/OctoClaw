@@ -530,13 +530,14 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 
 #### 7.1.3 灰区路由单独设计
 
-`direct / runner / spawn_single / spawn_multi` 的分诊不应只靠关键词，也不应默认依赖远程小模型。
+`direct / runner / spawn_single / spawn_multi` 的分诊不应只靠关键词，也不应默认依赖前置远程 router LLM。
 
 当前建议是：
 
-- 先用硬门禁切掉明显任务
-- 对剩余灰区引入 **超轻量双语文本分类器**
-- 只有低置信度或高风险灰区才进入受限 planner
+- 代码只保留 **`hard_runner_only`**
+- 其余请求交给稳定主脑输出结构化 `route_hint`
+- runtime policy 和 hook 负责最终执行约束
+- classifier 保留为后续可插拔增强，不作为第一版前置依赖
 
 灰区路由的详细设计见：
 
@@ -939,7 +940,8 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 要做：
 
-- 前置 router
+- `hard_runner_only`
+- 主脑 `route_hint`
 - delegate/review hard gate
 - route decision object
 - direct / runner / single / multi 的强制入口
@@ -994,6 +996,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - 先固定 schema
 - 先固定 tool / command entry
 - 先让 `dispatch` / `spawn` / `UI` / `ClawTeam metadata` 都能消费同一个 decision object
+- 先让“主脑给建议、系统做执行裁决”这套边界稳定下来
 
 并行要求：
 
@@ -1111,6 +1114,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - policy diff
 - 成本/时延/成功率回写
 - rankings / market price / local telemetry 定期刷新
+- 基于 replay 再评估是否引入 classifier，把稳定灰区模式逐步收回系统侧
 
 输出：
 

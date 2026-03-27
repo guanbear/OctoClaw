@@ -177,6 +177,13 @@ OctoClaw 不应该靠“又多接了几个框架”立足，而要靠自己的�
 
 - [octoclaw-grayzone-routing-design-v1-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-grayzone-routing-design-v1-2026-03-27.md)
 
+当前第一版路由口径已经收敛为：
+
+- `hard_runner_only`
+- 其余请求由稳定主脑输出 `route_hint`
+- runtime policy / hook 掌握最终执行权
+- classifier 留作后续增强，而不是当前主链路前置依赖
+
 ### 4.2 IM-native 的多 Agent 交互体验
 
 OctoClaw 不应该只停留在“飞书能发卡片”。

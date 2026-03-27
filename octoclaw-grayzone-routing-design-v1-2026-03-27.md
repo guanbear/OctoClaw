@@ -4,13 +4,13 @@
 
 这份文档专门回答一个问题：
 
-> **在不拖慢主链路、不频繁切主模型、不引入重型本地模型的前提下，OctoClaw 怎么做“灰区任务”分诊？**
+> **在没有“首 token 足够快”的独立 router 模型时，OctoClaw 怎么做稳定、低成本、不拖慢主链路的路由？**
 
-这里的“灰区任务”指：
+当前结论与主产品文档保持一致，并明确收敛为：
 
-- 仅靠硬规则不够稳
-- 但又不值得直接让主模型或 planner 深度思考
-- 需要在 `direct / runner / spawn_single / spawn_multi` 之间做快速分流
+- **代码只做极窄的 `hard_runner_only`**
+- **其余请求交给稳定主脑输出 `route_hint`**
+- **最终执行权仍由 runtime policy 和 hook 掌握**
 
 本设计是主产品文档的补充，默认与
 [octoclaw-product-design-v2-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-product-design-v2-2026-03-27.md)
@@ -20,337 +20,276 @@
 
 ## 2. 先给结论
 
-OctoClaw 的灰区路由不应一开始就依赖：
+OctoClaw 第一版不应默认依赖：
 
-- 远程便宜模型
-- 本地 embedding 大模型
-- 本地小 LLM judge
+- 前置远程 cheap router LLM
+- 前置本地 embedding 分类器
+- 前置本地小 LLM judge
 
-第一版最稳的路线是：
+原因很简单：
 
-1. **硬门禁规则**
-2. **超轻量双语文本分类器**
-3. **低置信度再进入受限 planner**
+- 远程 router LLM 会拖慢主链路
+- 本地分类器虽然可行，但第一版不是必需项
+- 纯代码规则无法可靠理解所有 `direct` 语义
+
+所以第一版最稳的路线是：
+
+1. **`hard_runner_only`**
+2. **主脑输出结构化 `route_hint`**
+3. **runtime policy / hook 执行强约束**
+4. **灰区分类器保留为后续可插拔增强**
 
 也就是说：
 
-> **主链路前置分诊必须极快；真正更智能的拆分只在确定 delegate 之后发生。**
+> **第一版先解决“稳定委派”，不是先解决“完美自动分流”。**
 
 ---
 
-## 3. 为什么不能把灰区都交给 LLM
+## 3. 为什么不前置独立 router LLM
 
-### 3.1 远程小模型不适合主链路前置
+### 3.1 如果远程模型不够快，主链路会被拖慢
 
-即使模型便宜，只要它在网络另一端，主链路就会遇到：
+前置 router LLM 意味着每条请求都会多一次模型往返：
 
-- 首 token 延迟
-- provider 抖动
-- 套餐/账号波动
-- prompt 漂移
+- 先等 router 模型
+- 再等主脑
+- 再等 worker
 
-这会直接伤害 OctoClaw 最核心的目标：
+如果 router 模型首 token 需要秒级：
 
-- 快响应
-- 主 agent 不阻塞
+- 首响体验会明显变差
+- `runner` 的快路径价值会被吃掉
+- 系统复杂度会上升，但未必带来等价收益
 
-### 3.2 本地小 LLM 也不是第一优先级
+### 3.2 “都交给主脑”也不是完全坏事
 
-本地小 LLM judge 的问题是：
+如果没有足够快的独立 router 模型，那么：
 
-- 资源占用仍明显高于传统分类器
-- 结构化输出稳定性仍需额外约束
-- 对“有限标签分类”来说，常常是过度设计
+- 不要再额外加一层慢 router
+- 让主脑在同一轮里做 `direct` 或 `delegate` 判断
 
-所以第一版灰区路由不该直接走“小 LLM 判断一切”。
+这是比“前面再排队一次远程路由器”更现实的方案。
 
----
+### 3.3 但也不能让主脑统治一切
 
-## 4. 灰区任务到底是什么
+即使灰区交给主脑，系统仍然必须保留：
 
-以下不是灰区：
+- 高风险禁令
+- review gate
+- 最大 fan-out
+- 非 direct 时的工具约束
+- `octoclaw_dispatch` 强制入口
 
-- 明显闲聊、解释、翻译、短问答
-- 明显 shell/status/logs/file-read
-- 明显多文件重构、长调研、复杂写作
+所以当前最佳平衡是：
 
-以下才算灰区：
-
-- 像是分析，但不确定该直接答还是先查状态
-- 像是代码问题，但不确定该先 runner 还是直接 subagent
-- 像是研究/写作，但复杂度还没高到一定要 `spawn_multi`
-- 输入混合了中文需求、英文报错、shell、路径、repo 名称
-
-OctoClaw 的灰区层只负责：
-
-- 给出 `route_hint`
-- 给出 `work_type`
-- 给出 `review_required`
-- 给出 `confidence`
-
-灰区层**不负责**真正执行任务。
+> **主脑负责灰区理解，系统负责执行约束。**
 
 ---
 
-## 5. 总体架构
+## 4. 当前推荐架构
 
 ```mermaid
 flowchart LR
-    A["用户请求"] --> B["硬门禁规则"]
-    B -->|"明显任务"| C["直接产出 route"]
-    B -->|"灰区任务"| D["超轻量双语文本分类器"]
-    D --> E["route_hint / work_type / confidence"]
-    E --> F["OctoClaw runtime policy 合并决策"]
-    F -->|"低置信度或高风险"| G["受限 planner"]
-    F -->|"足够确定"| H["direct / runner / spawn_single / spawn_multi"]
-    G --> H
+    A["用户请求"] --> B["hard_runner_only"]
+    B -->|"命中只读运维/检查型请求"| C["runner"]
+    B -->|"其余请求"| D["主脑输出 route_hint"]
+    D --> E["runtime policy 合并决策"]
+    E -->|"direct"| F["主脑直接回答"]
+    E -->|"spawn_single / spawn_multi"| G["octoclaw_dispatch"]
+    E -->|"高风险/失败/复杂协议"| H["review / heavy profile / extra guardrails"]
 ```
 
 原则：
 
-- **硬门禁先切掉明显任务**
-- **分类器只处理剩余灰区**
-- **planner 只处理低置信度或高风险灰区**
+- **代码只切超明显 `runner`**
+- **`direct` 不做纯代码硬判**
+- **主脑可以建议 route，但系统掌握最终执行权**
 
 ---
 
-## 6. 第一版推荐实现
+## 5. `hard_runner_only` 的边界
 
-### 6.1 推荐：超轻量双语文本分类器
+### 5.1 为什么只保留 `hard_runner_only`
 
-第一版优先使用：
+之前讨论过“同时做 `hard_direct` 和 `hard_runner`”，但最后收敛后发现：
 
-- `char n-gram`
-- `word n-gram`
-- `LogisticRegression` / `LinearSVC` / `SGDClassifier`
+- `runner` 对应的任务边界更机械、更可模式化
+- `direct` 的语义范围太宽，强行用规则切会很快退化成关键词工程
 
-这是一个非常传统但非常实用的方案：
+所以当前建议是：
 
-- CPU 即可
-- 不需要 GPU
-- 模型体积小
-- 推理毫秒级
-- 对中英混输、命令、路径、错误日志都比较友好
+- **保留 `hard_runner_only`**
+- **不做 `hard_direct`**
 
-这里的“双语”不是说模型天然理解世界，而是：
+### 5.2 什么任务才能命中 `hard_runner_only`
 
-- 中文、英文、代码、命令都以统一文本特征进入分类器
-- `char n-gram` 对中文尤其有效
-- 不依赖复杂分词
+只允许这类请求直接走 runner：
 
-### 6.2 为什么不是 embedding 起步
+- 明显是只读状态检查
+- 明显是日志/端口/进程/文件读取
+- 明显是工具边界清楚的小任务
+- 明显不是改代码、写方案、调研、长文档
 
-embedding 路线以后可以上，但第一版不是最优：
+例如：
 
-- 资源更高
-- 部署更重
-- 前置收益未必大于复杂度
+- “看下 8080 端口开了没”
+- “查最近 100 行 nginx 错误日志”
+- “搜一下这个目录里有没有 apiKey”
+- “curl 一下 health endpoint”
 
-OctoClaw 第一版更适合先验证：
+### 5.3 这层仍然是规则，但范围极窄
 
-- 灰区样本能不能被传统分类稳定吃掉
-- 低资源路线能不能把主链路分诊做好
+这层不追求“理解任务”，只追求：
 
----
-
-## 7. 标签与输出
-
-### 7.1 最小标签集
-
-第一版建议只预测这些字段：
-
-- `route_hint`
-  - `direct`
-  - `runner`
-  - `spawn_single`
-  - `spawn_multi`
-- `work_type`
-  - `ops`
-  - `research`
-  - `code`
-  - `review`
-- `review_required`
-  - `true / false`
-
-### 7.2 输出 schema
-
-```json
-{
-  "route_hint": "spawn_single",
-  "work_type": "code",
-  "review_required": true,
-  "confidence": 0.82,
-  "margin": 0.17,
-  "classifier_name": "grayzone_ngram_lr_v1"
-}
-```
-
-这里：
-
-- `confidence` 表示最高类别概率
-- `margin` 表示第一名和第二名之间的差距
-
----
-
-## 8. 什么叫“低置信度”
-
-第一版建议定义：
-
-- `confidence < 0.80`
-或
-- `margin < 0.15`
-
-就认为是灰区未定案。
-
-这时不直接信分类器，而进入：
-
-- 更保守的 delegate 策略
-或
-- 受限 planner
+- 高精度
+- 低误判
+- 少覆盖
 
 也就是说：
 
-> **分类器不是总指挥，只是灰区建议器。**
+> **宁可很多请求进灰区，也不要把复杂任务误判成 runner。**
 
 ---
 
-## 9. 硬门禁与分类器怎么配合
+## 6. 主脑在灰区里到底做什么
 
-### 9.1 硬门禁负责什么
+主脑不是先直接执行任务，而是先输出结构化建议，例如：
 
-硬门禁负责切掉最明显的任务，例如：
+```json
+{
+  "route_hint": "direct",
+  "work_type": "research",
+  "phase": "inspect",
+  "review_required": false,
+  "confidence": 0.72,
+  "reason": "question_is_explanatory_but_not_runner_safe"
+}
+```
 
-- 明显 shell/status/logs/file-read -> `runner`
-- 明显短答/聊天/解释 -> `direct`
-- 明显多文件/长研究/复杂重构 -> 非 `direct`
-- 明显高风险 -> `review_required = true`
+这里主脑负责：
 
-### 9.2 分类器负责什么
+- 判断更像 `direct` 还是 `delegate`
+- 判断更像 `code / research / writer / review`
+- 判断是否应该默认附带 review
 
-分类器只负责硬门禁不确定的那些请求。
+这里主脑**不负责**：
 
-这样做的好处：
-
-- 大部分请求零额外模型负担
-- 只有少数灰区走分类器
-- 分类器压力和常驻资源都更小
-
----
-
-## 10. 为什么主模型不要频繁切
-
-主模型/leader model 应该尽量稳定。
-
-原因：
-
-- prompt cache 更稳
-- 会话风格不漂
-- 主脑智商不抖
-- 首响行为更稳定
-
-所以：
-
-- **主模型稳定**
-- **灰区分类器独立**
-- **worker 模型按需切**
-
-这意味着灰区层不应建立在“先叫远程模型想一轮”上。
+- 直接无限派 agent
+- 绕开 `octoclaw_dispatch`
+- 绕开工具约束
+- 自己决定最终最大 fan-out
 
 ---
 
-## 11. 未来升级路线
+## 7. 系统强约束怎么落
+
+即使主脑输出了 `route_hint`，真正执行时仍然由系统掌控：
+
+### 7.1 `direct`
+
+- 允许主脑直接回答
+- 允许正常工具使用
+
+### 7.2 `spawn_single` / `spawn_multi`
+
+- 必须通过 `octoclaw_dispatch`
+- 非 direct 场景禁止主脑直接乱用非控制型工具
+- 默认 skill bundle 由 runtime policy 注入
+- 高风险默认打开 review gate
+
+### 7.3 `runner`
+
+- 只有 `hard_runner_only` 才能在前置阶段直接 runner
+- 其他“看起来像 runner 但其实也可能要分析”的任务，不在这里自动切
+
+所以最终原则是：
+
+> **主脑给建议，系统做执行裁决。**
+
+---
+
+## 8. 为什么第一版不急着上 classifier
+
+### 8.1 当前首要问题不是“没有分类器”
+
+当前最核心的问题是：
+
+- 委派是否稳定
+- 主脑会不会绕开 dispatch
+- direct / delegate 边界能不能被 runtime enforcement 固定下来
+
+这些问题没立住前，先上分类器的收益有限。
+
+### 8.2 classifier 是后续增强，不是当前阻塞项
+
+后续当然可以加：
+
+- 超轻量文本分类器
+- embedding + classifier
+- 本地小 LLM judge
+
+但这些应该放在：
+
+- 主链路和 hook 稳定之后
+- replay/eval 积累起来之后
+- 真正发现灰区判断成为瓶颈之后
+
+---
+
+## 9. 后续 classifier 的正确位置
+
+classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 adapter。
+
+未来更合理的演进是：
+
+1. `hard_runner_only`
+2. 主脑 `route_hint`
+3. 记录 replay / 误判 / route reason
+4. 在此基础上训练或引入 classifier
+5. 先只让 classifier 辅助主脑，而不是取代主脑
+
+也就是说：
+
+> **第一版让主脑承担灰区判断，第二版再考虑把一部分灰区收回给 classifier。**
+
+---
+
+## 10. 当前推荐的实现顺序
 
 ### Phase A
 
-先上：
-
-- 硬门禁规则
-- n-gram + 线性分类器
+- 落实 `hard_runner_only`
+- 其余请求交主脑做 `route_hint`
+- runtime policy hook 强制：
+  - 非 direct 必须走 `octoclaw_dispatch`
+  - 高风险自动 review
+  - 非 direct 限制工具
 
 ### Phase B
 
-如果发现传统分类器对灰区上限不够，再升级到：
-
-- `fastText`
-- `SetFit`
-- embedding classifier
+- 记录 replay
+- 记录主脑 `route_hint`
+- 记录最终 route 和人工回看结果
 
 ### Phase C
 
-如果还不够，再考虑：
-
-- 本地小 LLM judge
-
-但这一步默认不应在第一版完成前出现。
+- 分析哪些灰区模式其实稳定可收回
+- 再决定是否引入 classifier
 
 ---
 
-## 12. 与 runtime policy 的关系
+## 11. 不建议的方向
 
-灰区分类器不是单独系统，而应作为 `runtime policy` 的一个可插拔 adapter：
+当前不建议：
 
-- 硬门禁先跑
-- 进入灰区时调用 classifier
-- classifier 输出结构化建议
-- runtime policy 再结合：
-  - risk
-  - context growth
-  - budget
-  - review gate
-  - current runtime health
-
-做最终决策
-
-最终拍板仍是 OctoClaw policy，而不是分类器。
+- 为了“更智能”在主链路前再加一个慢 router LLM
+- 为了“避免主脑判断”而强行做 `hard_direct`
+- 把主脑 route_hint 直接当最终执行命令
+- 让 classifier 一上来就决定一切
 
 ---
 
-## 13. 当前不采用的方向
+## 12. 一句话结论
 
-当前不采用：
+> **OctoClaw 当前最现实的灰区路由方案，不是“硬门禁 + classifier 优先”，而是“`hard_runner_only` + 主脑 `route_hint` + 系统强约束”，classifier 留作下一阶段增强。**
 
-- 远程便宜模型前置分诊
-- 一上来就上本地 embedding 大模型
-- 一上来就上本地小 LLM judge
-- 让主模型自己自由决定灰区去向
-
-原因很简单：
-
-- 不够快
-- 不够稳
-- 不够省资源
-
----
-
-## 14. 推荐顺序
-
-最推荐的实现顺序：
-
-1. 把灰区路由写入主产品设计和 runtime policy 边界
-2. 先实现硬门禁特征表
-3. 再实现超轻量分类器 MVP
-4. 再定义低置信度进入 planner 的规则
-5. 最后再评估是否值得升级到 embedding / SetFit / 本地小 LLM
-
----
-
-## 15. 一句话总结
-
-> **OctoClaw 的灰区路由第一版，最适合走“硬门禁 + 超轻量双语文本分类器 + 低置信度再进入受限 planner”这条路。**
-
-这条路最符合 OctoClaw 的原始诉求：
-
-- 快响应
-- 降本
-- 主 agent 不阻塞
-- 多 Agent 按需分配
-
----
-
-## 16. 参考
-
-- [fastText 官网](https://fasttext.cc/)
-- [fastText 文本分类教程](https://fasttext.cc/docs/en/supervised-tutorial.html)
-- [SetFit 文档](https://huggingface.co/docs/setfit/en/index)
-- [NadirClaw 官网](https://getnadir.com/)
-- [How I Cut My LLM Costs 60% With a Local Router](https://dev.to/dor_amir_dbb52baafff7ca5b/how-i-cut-my-llm-costs-60-with-a-local-router-open-source-56k0)
