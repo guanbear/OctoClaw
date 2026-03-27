@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -17,7 +18,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from octoclaw_route import infer_route
+from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
 from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config
 from runner_playbooks import infer_runner_playbook
@@ -26,6 +27,75 @@ from runner_playbooks import infer_runner_playbook
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNNER_DISPATCH_PY = os.path.join(SCRIPT_DIR, "runner_dispatch.py")
 RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
+
+
+def decision_route(decision: dict) -> dict:
+    value = decision.get("route_decision", {})
+    return value if isinstance(value, dict) else {}
+
+
+def decision_model(decision: dict) -> dict:
+    value = decision.get("model_policy", {})
+    return value if isinstance(value, dict) else {}
+
+
+def decision_skill(decision: dict) -> dict:
+    value = decision.get("skill_policy", {})
+    return value if isinstance(value, dict) else {}
+
+
+def decision_review(decision: dict) -> dict:
+    value = decision.get("review_policy", {})
+    return value if isinstance(value, dict) else {}
+
+
+def apply_policy_fields(payload: dict, decision: dict) -> dict:
+    route_meta = decision_route(decision)
+    model_meta = decision_model(decision)
+    skill_meta = decision_skill(decision)
+    review_meta = decision_review(decision)
+    compat = decision.get("compat", {}) if isinstance(decision.get("compat", {}), dict) else {}
+
+    payload["policy_summary"] = decision.get("summary", "")
+    payload["policy_decision"] = decision
+    payload["reason"] = route_meta.get("reason", payload.get("reason", ""))
+    payload["reasons"] = route_meta.get("reason_codes", [])
+    payload["reason_codes"] = route_meta.get("reason_codes", [])
+    payload["scores"] = route_meta.get("scores", {})
+    payload["task_class"] = route_meta.get("task_class")
+    payload["role_hint"] = compat.get("legacy_role_hint")
+    payload["tier_hint"] = model_meta.get("legacy_tier")
+    payload["expected_latency_ms"] = route_meta.get("expected_latency_ms")
+    payload["expected_cost_band"] = route_meta.get("expected_cost_band")
+    payload["context_growth_band"] = route_meta.get("context_growth_band")
+    payload["execution_owner"] = route_meta.get("executor_type")
+    payload["dispatch_required"] = route_meta.get("dispatch_required")
+    payload["worker_pool"] = route_meta.get("worker_pool")
+    payload["work_type"] = route_meta.get("work_type")
+    payload["phase"] = route_meta.get("phase")
+    payload["protocol"] = route_meta.get("protocol")
+    payload["profile"] = payload.get("profile") or model_meta.get("profile", "")
+    payload["skill_bundle"] = skill_meta.get("default_skill_bundle", [])
+    payload["review_required"] = review_meta.get("required", False)
+    return payload
+
+
+def clone_worker_step_decision(decision: dict) -> dict:
+    cloned = copy.deepcopy(decision)
+    route_meta = decision_route(cloned)
+    route_meta["route"] = "spawn_single"
+    route_meta["executor_type"] = "subagent"
+    route_meta["dispatch_required"] = True
+    route_meta["should_wait"] = False
+    route_meta["wait_timeout_seconds"] = 0
+    reason_codes = list(route_meta.get("reason_codes", []) or [])
+    if "multi_worker_from_primary_decision" not in reason_codes:
+        reason_codes.insert(0, "multi_worker_from_primary_decision")
+    route_meta["reason_codes"] = reason_codes
+    route_meta["reason"] = reason_codes[0] if reason_codes else "multi_worker_from_primary_decision"
+    route_meta["worker_pool"] = route_meta.get("worker_pool", "octoclaw-research")
+    cloned["summary"] = f"policy=spawn_single -> {route_meta.get('worker_pool', 'octoclaw-research')} / profile={decision_model(cloned).get('profile', '')}"
+    return cloned
 
 
 def now_compact() -> str:
@@ -240,6 +310,7 @@ def execute_multi_spawn_plan(args, task: str, plan: dict) -> dict:
             register=True,
             execute=True,
             deps=[previous_task_id] if previous_task_id else None,
+            policy_decision=step.get("policy_decision") if isinstance(step.get("policy_decision"), dict) else None,
         )
         steps.append(
             {
@@ -377,21 +448,18 @@ def dispatch_runner(args) -> dict:
 
 
 def recommend_spawn(args, task: str) -> dict:
-    route_meta = getattr(args, "_route_meta", {}) or {}
-    label = args.label or route_meta.get("role_hint") or infer_label(task)
-    if label == "main":
-        label = infer_label(task)
-    tier = args.tier or route_meta.get("tier_hint") or infer_tier(task, label)
+    decision = getattr(args, "_policy_decision", {}) or {}
     spawn_spec = build_spawn_spec(
         task,
         route="spawn_single",
-        label=label,
-        tier=tier,
+        label=args.label,
+        tier=args.tier,
         parent_id=args.id or "",
         register=True,
         execute=None,
+        policy_decision=decision,
     )
-    return {
+    return apply_policy_fields({
         "route": "spawn_single",
         "executed": bool(spawn_spec.get("executed", False)),
         "label": spawn_spec["label"],
@@ -402,57 +470,63 @@ def recommend_spawn(args, task: str) -> dict:
         "task": task,
         "handoff": spawn_spec["handoff"],
         "spawn_spec": spawn_spec,
-    }
+    }, decision)
 
 
 def recommend_multi_spawn(args, task: str) -> dict:
-    route_meta = getattr(args, "_route_meta", {}) or {}
+    decision = getattr(args, "_policy_decision", {}) or {}
     spawn_cfg = load_octopus_config().get("spawn_execution", {})
     multi_exec_enabled = isinstance(spawn_cfg, dict) and bool(spawn_cfg.get("enabled", False)) and str(spawn_cfg.get("backend", "plan") or "plan").strip().lower() == "clawteam"
-    primary_label = args.label or route_meta.get("role_hint") or infer_label(task)
-    if primary_label == "main":
-        primary_label = infer_label(task)
-    primary_tier = args.tier or route_meta.get("tier_hint") or infer_tier(task, primary_label)
     primary_spawn = build_spawn_spec(
         task,
         route="spawn_multi",
-        label=primary_label,
-        tier=primary_tier,
+        label=args.label,
+        tier=args.tier,
         parent_id=args.id or "",
         register=not multi_exec_enabled,
+        policy_decision=decision,
     )
+    planner_task = build_multi_step_task(task, "planner")
+    planner_decision = build_decision(planner_task, force_route="spawn_single")
+    worker_decision = clone_worker_step_decision(decision)
     plan = {
         "planner": {
-            "label": "octopus-analyze",
-            "tier": "hard",
-            "model": resolve_model("hard", "octopus-analyze", task),
+            "label": decision_model(planner_decision).get("legacy_label", ""),
+            "tier": decision_model(planner_decision).get("legacy_tier", ""),
+            "model": decision_model(planner_decision).get("selected_model", ""),
+            "policy_decision": planner_decision,
         },
         "worker": {
-            "label": primary_spawn["label"],
-            "tier": primary_spawn["tier"],
-            "model": primary_spawn["model"],
+            "label": decision_model(worker_decision).get("legacy_label", primary_spawn["label"]),
+            "tier": decision_model(worker_decision).get("legacy_tier", primary_spawn["tier"]),
+            "model": decision_model(worker_decision).get("selected_model", primary_spawn["model"]),
+            "policy_decision": worker_decision,
         },
     }
-    if primary_label in ("octopus-fix", "octopus-power", "octopus-test"):
+    if decision_review(decision).get("required", False):
+        review_task = build_multi_step_task(task, "review")
+        review_decision = build_decision(review_task, force_route="spawn_single")
         plan["review"] = {
-            "label": "octopus-test",
-            "tier": "normal",
-            "model": resolve_model("normal", "octopus-test", task),
+            "label": decision_model(review_decision).get("legacy_label", ""),
+            "tier": decision_model(review_decision).get("legacy_tier", ""),
+            "model": decision_model(review_decision).get("selected_model", ""),
+            "policy_decision": review_decision,
         }
     execution = execute_multi_spawn_plan(args, task, plan)
-    return {
+    return apply_policy_fields({
         "route": "spawn_multi",
         "executed": bool(execution.get("executed", False)),
         "label": primary_spawn["label"],
         "tier": primary_spawn["tier"],
         "model": primary_spawn["model"],
+        "profile": primary_spawn.get("profile", ""),
         "reason": "parallel_or_staged_workflow",
         "task": task,
         "plan": plan,
         "handoff": execution.get("handoff", primary_spawn["handoff"]),
         "steps": execution.get("steps", []),
         "spawn_spec": primary_spawn,
-    }
+    }, decision)
 
 
 def main():
@@ -471,100 +545,69 @@ def main():
     args = parser.parse_args()
 
     task = args.task.strip()
-    route = infer_route(task, args.command)
-    args._route_meta = route
-    final_route = route["route"]
+    forced_route = ""
     if args.force_route != "auto":
-        final_route = args.force_route
-    if args.label == "octopus-runner":
-        final_route = "runner"
+        forced_route = args.force_route
+    elif args.label in ("octopus-runner", "octoclaw-runner"):
+        forced_route = "runner"
+    decision = build_decision(task, args.command, force_route=forced_route)
+    args._policy_decision = decision
+    route = decision_route(decision)
+    model_meta = decision_model(decision)
+    final_route = str(route.get("route", "direct") or "direct")
 
     if final_route == "direct":
-        print(
-            json.dumps(
-                {
-                    "route": "direct",
-                    "executed": False,
-                    "reason": route["reason"],
-                    "reasons": route.get("reasons", []),
-                    "reason_codes": route.get("reason_codes", []),
-                    "scores": route.get("scores", {}),
-                    "task_class": route.get("task_class"),
-                    "role_hint": route.get("role_hint"),
-                    "tier_hint": route.get("tier_hint"),
-                    "expected_latency_ms": route.get("expected_latency_ms"),
-                    "expected_cost_band": route.get("expected_cost_band"),
-                    "context_growth_band": route.get("context_growth_band"),
-                    "execution_owner": route.get("execution_owner"),
-                    "dispatch_required": route.get("dispatch_required"),
-                    "handoff": {
-                        "kind": "final",
-                        "status": "success",
-                        "summary": "当前任务适合主 agent 直接处理。",
-                        "reply_text": "",
-                        "report_path": "",
-                        "user_safe": False,
-                    },
-                    "task": task,
+        payload = apply_policy_fields(
+            {
+                "route": "direct",
+                "executed": False,
+                "handoff": {
+                    "kind": "final",
+                    "status": "success",
+                    "summary": "当前任务适合主 agent 直接处理。",
+                    "reply_text": "",
+                    "report_path": "",
+                    "user_safe": False,
                 },
-                ensure_ascii=False,
-            )
+                "task": task,
+            },
+            decision,
         )
+        print(json.dumps(payload, ensure_ascii=False))
         return
 
     if final_route == "runner":
         playbook = infer_runner_playbook(task) if not args.command else None
         if not args.command and not playbook:
-            print(
-                json.dumps(
-                    {
-                        "route": "runner",
-                        "executed": False,
-                        "reason": "runner_command_required",
-                        "task": task,
-                        "reasons": route.get("reasons", []),
-                        "reason_codes": route.get("reason_codes", []),
-                        "scores": route.get("scores", {}),
-                        "task_class": route.get("task_class"),
-                        "role_hint": route.get("role_hint"),
-                        "tier_hint": route.get("tier_hint"),
-                        "expected_latency_ms": route.get("expected_latency_ms"),
-                        "expected_cost_band": route.get("expected_cost_band"),
-                        "context_growth_band": route.get("context_growth_band"),
-                        "execution_owner": route.get("execution_owner"),
-                        "dispatch_required": route.get("dispatch_required"),
-                        "should_wait": route.get("should_wait", False),
-                        "wait_timeout_seconds": route.get("wait_timeout_seconds", 0),
-                        "handoff": {
-                            "kind": "plan",
-                            "status": "planned",
-                            "summary": "当前任务更适合 runner，但缺少可执行命令。",
-                            "reply_text": "当前任务适合交给常驻 runner，但还缺少具体命令或工具步骤。",
-                            "report_path": "",
-                            "user_safe": True,
-                        },
+            payload = apply_policy_fields(
+                {
+                    "route": "runner",
+                    "executed": False,
+                    "task": task,
+                    "should_wait": route.get("should_wait", False),
+                    "wait_timeout_seconds": route.get("wait_timeout_seconds", 0),
+                    "handoff": {
+                        "kind": "plan",
+                        "status": "planned",
+                        "summary": "当前任务更适合 runner，但缺少可执行命令。",
+                        "reply_text": "当前任务适合交给常驻 runner，但还缺少具体命令或工具步骤。",
+                        "report_path": "",
+                        "user_safe": True,
                     },
-                    ensure_ascii=False,
-                )
+                },
+                decision,
             )
+            print(json.dumps(payload, ensure_ascii=False))
             return
         if playbook and not args.summary:
             args.summary = playbook.get("summary", "")
         if not args.wait and route.get("should_wait"):
             args.wait = True
             args.wait_timeout_seconds = route.get("wait_timeout_seconds", args.wait_timeout_seconds)
+        if not args.tier:
+            args.tier = str(model_meta.get("legacy_tier", "") or args.tier or "trivial")
         payload = dispatch_runner(args)
-        payload["reasons"] = route.get("reasons", [])
-        payload["reason_codes"] = route.get("reason_codes", [])
-        payload["scores"] = route.get("scores", {})
-        payload["task_class"] = route.get("task_class")
-        payload["role_hint"] = route.get("role_hint")
-        payload["tier_hint"] = route.get("tier_hint")
-        payload["expected_latency_ms"] = route.get("expected_latency_ms")
-        payload["expected_cost_band"] = route.get("expected_cost_band")
-        payload["context_growth_band"] = route.get("context_growth_band")
-        payload["execution_owner"] = route.get("execution_owner")
-        payload["dispatch_required"] = route.get("dispatch_required")
+        payload = apply_policy_fields(payload, decision)
         print(json.dumps(payload, ensure_ascii=False))
         return
 
@@ -572,17 +615,6 @@ def main():
         payload = recommend_multi_spawn(args, task)
     else:
         payload = recommend_spawn(args, task)
-    payload["reasons"] = route.get("reasons", [])
-    payload["reason_codes"] = route.get("reason_codes", [])
-    payload["scores"] = route.get("scores", {})
-    payload["task_class"] = route.get("task_class")
-    payload["role_hint"] = route.get("role_hint")
-    payload["tier_hint"] = route.get("tier_hint")
-    payload["expected_latency_ms"] = route.get("expected_latency_ms")
-    payload["expected_cost_band"] = route.get("expected_cost_band")
-    payload["context_growth_band"] = route.get("context_growth_band")
-    payload["execution_owner"] = route.get("execution_owner")
-    payload["dispatch_required"] = route.get("dispatch_required")
     print(json.dumps(payload, ensure_ascii=False))
 
 

@@ -398,6 +398,7 @@ def execute_clawteam_spawn(
     tier: str,
     prompt: str,
     thinking: str,
+    profile_override: str = "",
 ) -> dict:
     if shutil.which(str(clawteam_runtime_config().get("clawteam_bin", "clawteam") or "clawteam")) is None:
         raise RuntimeError("未找到 clawteam 命令，无法执行 ClawTeam spawn")
@@ -405,7 +406,7 @@ def execute_clawteam_spawn(
         raise RuntimeError("未找到 openclaw 命令，无法执行 ClawTeam spawn")
 
     team_name = resolve_spawn_team_name()
-    profile = resolve_profile(label, model, tier)
+    profile = profile_override or resolve_profile(label, model, tier)
     agent_name = resolve_agent_name(task_id)
     command = build_clawteam_spawn_command(
         team_name=team_name,
@@ -453,6 +454,12 @@ def build_task_prompt(
     route: str,
     context_summary: str = "",
     context_path: str = "",
+    profile: str = "",
+    skill_bundle: list[str] | None = None,
+    work_type: str = "",
+    phase: str = "",
+    protocol: str = "",
+    review_required: bool = False,
 ) -> str:
     lines = [
         "【状态写入】开始前先执行：",
@@ -460,12 +467,30 @@ def build_task_prompt(
         "",
         "【目标】",
         task.strip(),
+    ]
+    if any([profile, work_type, phase, protocol, review_required]):
+        lines.extend([
+            "",
+            "【执行画像】",
+            f"- profile={profile or 'default'}",
+            f"- work_type={work_type or 'unknown'}",
+            f"- phase={phase or 'unknown'}",
+            f"- protocol={protocol or 'normal'}",
+            f"- review_required={'true' if review_required else 'false'}",
+        ])
+    if skill_bundle:
+        lines.extend([
+            "",
+            "【默认技能包】",
+            "- " + ", ".join(str(item) for item in skill_bundle if str(item).strip()),
+        ])
+    lines.extend([
         "",
         "【上下文预算】",
         "- 默认只消费当前任务描述 + 最多 3 条相关历史摘要",
         "- 长日志、长调研、长 diff 一律写共享文件，不要直接塞回上下文",
         "- 如需详细历史，优先读取 context pack / report_path 的前 80 行",
-    ]
+    ])
     if context_summary:
         lines.extend([
             "",
@@ -616,21 +641,40 @@ def build_spawn_spec(
     register: bool = False,
     execute: bool | None = None,
     deps: list[str] | None = None,
+    policy_decision: dict | None = None,
 ) -> dict:
+    policy = policy_decision if isinstance(policy_decision, dict) else {}
+    route_decision = policy.get("route_decision", {}) if isinstance(policy.get("route_decision", {}), dict) else {}
+    model_policy = policy.get("model_policy", {}) if isinstance(policy.get("model_policy", {}), dict) else {}
+    skill_policy = policy.get("skill_policy", {}) if isinstance(policy.get("skill_policy", {}), dict) else {}
+    review_policy = policy.get("review_policy", {}) if isinstance(policy.get("review_policy", {}), dict) else {}
+    prompt_policy = policy.get("prompt_contract", {}) if isinstance(policy.get("prompt_contract", {}), dict) else {}
+
     route_meta = infer_route(task)
-    final_route = route or route_meta.get("route", "spawn_single")
+    final_route = route or str(route_decision.get("route", "") or "") or route_meta.get("route", "spawn_single")
     if final_route not in ("spawn_single", "spawn_multi"):
         raise ValueError(f"octoclaw_spawn 只处理 spawn 路径，当前 route={final_route}")
 
-    final_label = label or route_meta.get("role_hint") or infer_label(task)
-    if final_label in ("main", "octopus-runner"):
+    final_label = label or str(model_policy.get("legacy_label", "") or "") or route_meta.get("role_hint") or infer_label(task)
+    if final_label in ("main", "octopus-runner", "octoclaw-main", "octoclaw-runner"):
         final_label = infer_label(task)
-    final_tier = tier or route_meta.get("tier_hint") or infer_tier(task, final_label)
-    final_model, thinking = resolve_model_and_thinking(final_tier, final_label, task)
-    if model:
-        final_model = model
+    final_tier = tier or str(model_policy.get("legacy_tier", "") or "") or route_meta.get("tier_hint") or infer_tier(task, final_label)
+    final_model = model or str(model_policy.get("selected_model", "") or "")
+    thinking = str(model_policy.get("reasoning_effort", "") or "")
+    if not final_model:
+        final_model, resolved_thinking = resolve_model_and_thinking(final_tier, final_label, task)
+        if not thinking:
+            thinking = resolved_thinking
     if not final_model:
         raise ValueError("无法解析 spawn 模型")
+    profile = str(model_policy.get("profile", "") or "") or resolve_profile(final_label, final_model, final_tier)
+    work_type = str(route_decision.get("work_type", "") or "")
+    phase = str(route_decision.get("phase", "") or "")
+    protocol = str(route_decision.get("protocol", "") or "")
+    skill_bundle = skill_policy.get("default_skill_bundle", [])
+    if not isinstance(skill_bundle, list):
+        skill_bundle = []
+    review_required = bool(review_policy.get("required", False))
 
     task_id = f"{final_label}-{now_compact()}"
     report_path = os.path.join(SHARED_DIR, f"{task_id}.md")
@@ -667,6 +711,12 @@ def build_spawn_spec(
         route=final_route,
         context_summary=str(context_bundle.get("summary", "") or ""),
         context_path=str(context_bundle.get("context_path", "") or ""),
+        profile=profile,
+        skill_bundle=skill_bundle,
+        work_type=work_type,
+        phase=phase,
+        protocol=protocol,
+        review_required=review_required,
     )
 
     if register:
@@ -698,6 +748,7 @@ def build_spawn_spec(
                 tier=final_tier,
                 prompt=prompt,
                 thinking=thinking,
+                profile_override=profile,
             )
             agent_owner = str((spawn_execution or {}).get("agent_name", "") or "")
             if agent_owner:
@@ -736,9 +787,16 @@ def build_spawn_spec(
         "tier": final_tier,
         "model": final_model,
         "thinking": thinking,
+        "profile": profile,
         "runtime": runtime,
         "stream_to": stream_to or "",
         "report_path": report_path,
+        "work_type": work_type,
+        "phase": phase,
+        "protocol": protocol,
+        "skill_bundle": skill_bundle,
+        "review_required": review_required,
+        "prompt_contract": prompt_policy,
         "context_summary": context_bundle.get("summary", ""),
         "context_path": context_bundle.get("context_path", ""),
         "context_refs": context_bundle.get("refs", []),
@@ -762,7 +820,7 @@ def build_spawn_spec(
         "executed": executed,
         "execution_error": execution_error,
         "spawn_execution": spawn_execution or {},
-        "profile": (spawn_execution or {}).get("profile", "") if isinstance(spawn_execution, dict) else "",
+        "policy_decision": policy,
         "registered": register,
     }
 
@@ -778,11 +836,21 @@ def main() -> None:
     parser.add_argument("--stream-to", dest="stream_to", default="")
     parser.add_argument("--supports-acp", action="store_true")
     parser.add_argument("--parent-id", dest="parent_id", default="")
+    parser.add_argument("--policy-json", default="")
     parser.add_argument("--register", action="store_true")
     parser.add_argument("--execute", dest="execute", action="store_true")
     parser.add_argument("--no-execute", dest="execute", action="store_false")
     parser.set_defaults(execute=None)
     args = parser.parse_args()
+
+    policy_decision = None
+    if args.policy_json:
+        try:
+            parsed = json.loads(args.policy_json)
+            if isinstance(parsed, dict):
+                policy_decision = parsed
+        except json.JSONDecodeError:
+            policy_decision = None
 
     spec = build_spawn_spec(
         args.task,
@@ -796,6 +864,7 @@ def main() -> None:
         parent_id=args.parent_id,
         register=args.register,
         execute=args.execute,
+        policy_decision=policy_decision,
     )
     print(json.dumps(spec, ensure_ascii=False))
 
