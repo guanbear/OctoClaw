@@ -528,6 +528,20 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 }
 ```
 
+#### 7.1.3 灰区路由单独设计
+
+`direct / runner / spawn_single / spawn_multi` 的分诊不应只靠关键词，也不应默认依赖远程小模型。
+
+当前建议是：
+
+- 先用硬门禁切掉明显任务
+- 对剩余灰区引入 **超轻量双语文本分类器**
+- 只有低置信度或高风险灰区才进入受限 planner
+
+灰区路由的详细设计见：
+
+- [octoclaw-grayzone-routing-design-v1-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-grayzone-routing-design-v1-2026-03-27.md)
+
 #### 7.1.3 OpenRouter 的正确角色
 
 OctoClaw 设计里应明确：

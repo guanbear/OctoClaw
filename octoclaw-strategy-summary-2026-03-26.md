@@ -173,6 +173,10 @@ OctoClaw 不应该靠“又多接了几个框架”立足，而要靠自己的�
   - 要不要 review
   - 要不要启用 heavy profile
 
+灰区路由的具体设计见：
+
+- [octoclaw-grayzone-routing-design-v1-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-grayzone-routing-design-v1-2026-03-27.md)
+
 ### 4.2 IM-native 的多 Agent 交互体验
 
 OctoClaw 不应该只停留在“飞书能发卡片”。
