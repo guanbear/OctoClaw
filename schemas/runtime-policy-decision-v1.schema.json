@@ -156,23 +156,38 @@
         "artifact_first",
         "transcript_to_main",
         "summary_required",
-        "checkpoint_summary_required"
+        "checkpoint_summary_required",
+        "direct_reply_allowed",
+        "final_answer_from_handoff"
       ],
       "properties": {
         "brief_required": { "type": "boolean" },
         "artifact_first": { "type": "boolean" },
         "transcript_to_main": { "type": "boolean" },
         "summary_required": { "type": "boolean" },
-        "checkpoint_summary_required": { "type": "boolean" }
+        "checkpoint_summary_required": { "type": "boolean" },
+        "direct_reply_allowed": { "type": "boolean" },
+        "final_answer_from_handoff": { "type": "boolean" }
       }
     },
     "tool_policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["allow_direct_tools", "must_delegate_via", "block_tool_patterns"],
+      "required": [
+        "allow_direct_tools",
+        "must_delegate_via",
+        "allowed_control_tools",
+        "delegate_first",
+        "block_tool_patterns"
+      ],
       "properties": {
         "allow_direct_tools": { "type": "boolean" },
         "must_delegate_via": { "type": "string" },
+        "allowed_control_tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "delegate_first": { "type": "boolean" },
         "block_tool_patterns": {
           "type": "array",
           "items": { "type": "string" }

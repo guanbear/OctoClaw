@@ -35,6 +35,35 @@ RUNNER_PATTERNS = [
     r"(日志|端口|版本|环境变量|连通性|健康检查|进程|服务状态|端口监听|磁盘|内存|cpu|负载)",
 ]
 
+RUNNER_READ_ONLY_INTENT_PATTERNS = [
+    r"(看下|看一下|看看|查下|查一下|查看|搜一下|搜下|搜索|列出|显示|读取|有没有|确认一下|检查一下)",
+    r"\b(check|inspect|show|list|display|read|search|find|look at|verify|confirm)\b",
+]
+
+RUNNER_TARGET_PATTERNS = [
+    r"(日志|端口|进程|状态|文件|目录|环境变量|监听|路径|配置|版本|health|输出)",
+    r"\b(log|logs|port|ports|process|pid|status|file|files|directory|directories|env|environment|path|config|version|health|output)\b",
+]
+
+RUNNER_NEGATIVE_PATTERNS = [
+    r"(修复|修改|改代码|改一下|重构|实现|开发|分析|对比|研究|方案|根因|原因|解释|总结|写文档|写一版|报告|周报|部署|重启|安装|卸载|删除|新增|创建|迁移|权限|密钥|数据库)",
+    r"\b(fix|modify|change|patch|refactor|implement|develop|analy(?:ze|sis)|compare|research|proposal|root cause|cause|reason|explain|summary|summarize|write|report|deploy|restart|install|uninstall|delete|create|add|migrate|permission|secret|database)\b",
+]
+
+READ_ONLY_COMMAND_PATTERNS = [
+    r"^\s*(grep|rg|tail|head|pwd|ls|find|cat|jq|awk|ss|ps|top|netstat|lsof)\b",
+    r"^\s*sed\b(?!.*\s-i\b)",
+    r"^\s*curl\b(?!.*(?:\s-X\s*(POST|PUT|PATCH|DELETE)\b|--request\s+(POST|PUT|PATCH|DELETE)\b|--data\b|--data-raw\b|--form\b))",
+]
+
+WRITE_COMMAND_PATTERNS = [
+    r"\b(rm|mv|cp|tee|truncate|touch|mkdir|rmdir|chmod|chown)\b",
+    r"\bsed\s+-i\b",
+    r"\b(systemctl|service)\s+(restart|start|stop|reload)\b",
+    r"\b(kubectl|docker)\s+(apply|delete|restart|rm|run|exec)\b",
+    r"\b(apt|yum|dnf|brew|pip|npm|pnpm|yarn)\s+(install|remove|uninstall|upgrade|update)\b",
+]
+
 CODE_PATTERNS = [
     r"(写代码|改代码|修改代码|修复|bug|重构|实现|开发|review|评审|测试|回归)",
     r"\b(code|coding|fix|bug|refactor|implement|patch|review|test|pytest|regression)\b",
@@ -124,6 +153,15 @@ def count_matches(text: str, patterns: Iterable[str]) -> int:
     return sum(1 for pattern in patterns if re.search(pattern, text, re.IGNORECASE))
 
 
+def command_looks_read_only(command: str) -> bool:
+    cmd = (command or "").strip()
+    if not cmd:
+        return False
+    if any(re.search(pattern, cmd, re.IGNORECASE) for pattern in WRITE_COMMAND_PATTERNS):
+        return False
+    return any(re.search(pattern, cmd, re.IGNORECASE) for pattern in READ_ONLY_COMMAND_PATTERNS)
+
+
 def extract_features(task: str, command: str = "") -> dict:
     raw_task = (task or "").strip()
     text = raw_task.lower()
@@ -146,6 +184,10 @@ def extract_features(task: str, command: str = "") -> dict:
     cost_sensitive_hits = count_matches(text, COST_SENSITIVE_PATTERNS)
     semantic_ambiguity_hits = count_matches(text, SEMANTIC_AMBIGUITY_PATTERNS)
     remote_target_hits = count_matches(text, REMOTE_TARGET_PATTERNS)
+    runner_read_only_intent_hits = count_matches(text, RUNNER_READ_ONLY_INTENT_PATTERNS)
+    runner_target_hits = count_matches(text, RUNNER_TARGET_PATTERNS)
+    runner_negative_hits = count_matches(text, RUNNER_NEGATIVE_PATTERNS)
+    command_read_only = command_looks_read_only(command)
     effective_write_hits = write_hits
     if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
         effective_write_hits = 0
@@ -189,7 +231,11 @@ def extract_features(task: str, command: str = "") -> dict:
     features = {
         "task_length": len(raw_task),
         "has_command": bool(command),
+        "command_read_only": command_read_only,
         "runner_hits": runner_hits,
+        "runner_read_only_intent_hits": runner_read_only_intent_hits,
+        "runner_target_hits": runner_target_hits,
+        "runner_negative_hits": runner_negative_hits,
         "code_hits": code_hits,
         "research_hits": research_hits,
         "external_lookup_hits": external_lookup_hits,
@@ -234,6 +280,30 @@ def extract_features(task: str, command: str = "") -> dict:
         "latency_sensitivity": latency_sensitivity,
         "simple_direct_candidate": simple_hits > 0 and runner_hits == 0 and code_hits == 0 and research_hits == 0 and local_state_hits == 0,
     }
+    features["hard_runner_candidate"] = bool(
+        runner_negative_hits == 0
+        and not features["high_risk"]
+        and not features["parallelizable"]
+        and features["simple_hits"] == 0
+        and features["summary_output_hits"] == 0
+        and not features["requires_mutation"]
+        and not features["requires_code_work"]
+        and not features["requires_research"]
+        and not features["requires_writing"]
+        and features["estimated_steps"] <= 2
+        and (
+            command_read_only
+            or (
+                runner_read_only_intent_hits > 0
+                and (runner_target_hits > 0 or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0)
+            )
+            or (
+                features["tool_observation_only"]
+                and runner_target_hits > 0
+                and (runner_read_only_intent_hits > 0 or runner_hits > 0 or local_state_hits > 0)
+            )
+        )
+    )
     return features
 
 
@@ -360,55 +430,19 @@ def should_request_semantic_review(features: dict, scores: dict, route: str) -> 
 def hard_gate_route(features: dict) -> tuple[str | None, list[str]]:
     reasons: list[str] = []
 
-    if features["has_command"]:
-        return "runner", ["explicit_command"]
-
-    if (
-        features["external_lookup_only"]
-        and not features["requires_tools"]
-        and not features["requires_mutation"]
-        and not features["high_risk"]
-        and features["estimated_steps"] <= 2
-    ):
-        return "direct", ["single_round_external_lookup"]
-
-    if features["requires_mutation"]:
-        reasons = ["mutation_requires_isolation"]
-        if features["local_state_hits"] > 0:
-            reasons.append("local_change_task")
-        if features["high_risk"]:
-            reasons.append("high_risk_mutation")
-        return "spawn_single", reasons
-
-    if (
-        features["tool_observation_only"]
-        and features["estimated_steps"] <= 2
-    ):
-        reason = "fast_remote_tool_task" if features.get("target_scope") == "remote" else "fast_tool_task"
-        return "runner", [reason]
-
-    if (
-        not features["requires_tools"]
-        and not features["requires_code_work"]
-        and not features["requires_research"]
-        and not features["requires_writing"]
-        and not features["high_risk"]
-        and features["estimated_steps"] <= 2
-        and features["task_length"] <= 140
-    ):
-        return "direct", ["short_low_context_direct"]
-
-    if features["parallelizable"] and (features["estimated_steps"] >= 3 or (features["requires_research"] and (features["requires_code_work"] or features["requires_writing"]))):
-        return "spawn_multi", ["staged_parallel_work"]
-
-    if features["requires_code_work"] and not features["parallelizable"]:
-        reasons.append("code_work_isolate_context")
-        if features["high_risk"]:
-            reasons.append("high_risk_code_work")
-        return "spawn_single", reasons
-
-    if features["requires_research"] and not features["external_lookup_only"]:
-        return "spawn_single", ["structured_research_task"]
+    if features.get("hard_runner_candidate"):
+        reasons.append("hard_runner_only")
+        if features.get("command_read_only"):
+            reasons.append("read_only_command")
+        if features.get("runner_read_only_intent_hits", 0) > 0:
+            reasons.append("read_only_runner_intent")
+        if features.get("runner_target_hits", 0) > 0:
+            reasons.append("runner_target_detected")
+        if features.get("target_scope") == "remote":
+            reasons.append("remote_read_only_probe")
+        elif features.get("target_scope") == "local":
+            reasons.append("local_read_only_probe")
+        return "runner", reasons
 
     return None, reasons
 
@@ -445,6 +479,16 @@ def infer_route(task: str, command: str = "") -> dict:
             runner_score += 0.7
             spawn_single_score += 0.15
             reason_codes.append("tool_needed")
+
+        if features["requires_tools"] and (
+            features["runner_negative_hits"] > 0
+            or features["simple_hits"] > 0
+            or features["summary_output_hits"] > 0
+            or features["requires_writing"]
+        ):
+            runner_score -= 0.55
+            spawn_single_score += 0.45
+            reason_codes.append("tool_plus_reasoning_or_writing")
 
         if features["requires_mutation"]:
             runner_score -= 0.8

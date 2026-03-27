@@ -237,6 +237,8 @@ def prompt_contract(protocol: str, route: str) -> dict[str, Any]:
         "transcript_to_main": False,
         "summary_required": route != "runner",
         "checkpoint_summary_required": protocol == "heavy",
+        "direct_reply_allowed": route == "direct",
+        "final_answer_from_handoff": route != "direct",
     }
 
 
@@ -247,14 +249,21 @@ def tool_policy(route: str, dispatch_required: bool) -> dict[str, Any]:
     if route == "runner":
         block_patterns.extend(["manual_long_shell_loop"])
     return {
-        "allow_direct_tools": route in ("direct", "runner"),
+        "allow_direct_tools": route == "direct",
         "must_delegate_via": "octoclaw_dispatch" if dispatch_required else "",
+        "allowed_control_tools": [
+            "octoclaw_policy_decide",
+            "octoclaw_dispatch",
+            "octoclaw_status",
+        ],
+        "delegate_first": dispatch_required,
         "block_tool_patterns": block_patterns,
     }
 
 
 def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
     hooks_cfg = policy_cfg.get("hooks", {})
+    policy_enabled = bool(policy_cfg.get("enabled", True))
     route_decision = decision["route_decision"]
     model_policy = decision["model_policy"]
     skill_policy = decision["skill_policy"]
@@ -262,7 +271,7 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
 
     return {
         "before_model_resolve": {
-            "enabled": bool(hooks_cfg.get("before_model_resolve", True)),
+            "enabled": policy_enabled and bool(hooks_cfg.get("before_model_resolve", True)),
             "action": "override_model_selection",
             "selected_model": model_policy["selected_model"],
             "profile": model_policy["profile"],
@@ -270,7 +279,7 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
             "dispatch_required": route_decision["dispatch_required"],
         },
         "before_prompt_build": {
-            "enabled": bool(hooks_cfg.get("before_prompt_build", True)),
+            "enabled": policy_enabled and bool(hooks_cfg.get("before_prompt_build", True)),
             "action": "inject_policy_context",
             "policy_context": {
                 "route": route_decision["route"],
@@ -284,12 +293,12 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
             "prompt_contract": decision["prompt_contract"],
         },
         "before_tool_call": {
-            "enabled": bool(hooks_cfg.get("before_tool_call", True)),
+            "enabled": policy_enabled and bool(hooks_cfg.get("before_tool_call", True)),
             "action": "enforce_delegation_policy",
             "tool_policy": decision["tool_policy"],
         },
         "agent_end": {
-            "enabled": bool(hooks_cfg.get("agent_end", True)),
+            "enabled": policy_enabled and bool(hooks_cfg.get("agent_end", True)),
             "action": "collect_summary_and_artifacts",
             "artifact_first": decision["prompt_contract"]["artifact_first"],
             "review_required": review_policy["required"],

@@ -82,6 +82,157 @@ function toolResponse(summary, details = {}) {
   };
 }
 
+const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
+const policyStateBySession = new Map();
+const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
+const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
+  "OctoClaw runtime policy is authoritative for this run.",
+  "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
+  "Do not hand-write session or subagent spawning commands.",
+].join("\n");
+
+function prunePolicyState() {
+  const now = Date.now();
+  for (const [key, value] of policyStateBySession.entries()) {
+    if (!value || now - Number(value.updatedAt || value.createdAt || 0) > POLICY_STATE_TTL_MS) {
+      policyStateBySession.delete(key);
+    }
+  }
+}
+
+function resolvePolicyStateKey(ctx = {}) {
+  const value = String(ctx.sessionId || ctx.sessionKey || "").trim();
+  return value;
+}
+
+function isManagedAgentContext(ctx = {}) {
+  const trigger = String(ctx.trigger || "").trim().toLowerCase();
+  if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) {
+    return false;
+  }
+  const sessionKey = String(ctx.sessionKey || "");
+  const agentId = String(ctx.agentId || "");
+  if (/subagent/i.test(sessionKey) || /subagent/i.test(agentId)) {
+    return false;
+  }
+  return true;
+}
+
+function buildPolicyMetadata(ctx = {}) {
+  const metadata = {};
+  if (ctx.channelId) metadata.channel = ctx.channelId;
+  if (ctx.sessionKey) metadata.session_key = ctx.sessionKey;
+  if (ctx.trigger) metadata.trigger = ctx.trigger;
+  if (ctx.agentId) metadata.agent_id = ctx.agentId;
+  if (ctx.sessionId) metadata.session_id = ctx.sessionId;
+  if (ctx.messageProvider) metadata.message_provider = ctx.messageProvider;
+  return metadata;
+}
+
+async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options = {}) {
+  if (!prompt || !isManagedAgentContext(ctx)) {
+    return null;
+  }
+  prunePolicyState();
+  const stateKey = resolvePolicyStateKey(ctx);
+  const existing = stateKey ? policyStateBySession.get(stateKey) : null;
+  if (!options.force && existing?.prompt === prompt && existing?.decision) {
+    existing.updatedAt = Date.now();
+    if (stateKey) {
+      policyStateBySession.set(stateKey, existing);
+    }
+    return { stateKey, state: existing, decision: existing.decision };
+  }
+  const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
+  const args = ["--task", prompt];
+  if (metadata.channel) args.push("--channel", String(metadata.channel));
+  if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
+  if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
+  try {
+    const decision = await runJsonScript("octoclaw_policy.py", args, cwd);
+    const nextState = {
+      prompt,
+      decision,
+      createdAt: existing?.createdAt || Date.now(),
+      updatedAt: Date.now(),
+      delegated: Boolean(existing?.delegated),
+      delegationTool: existing?.delegationTool || "",
+      blockedTools: Array.isArray(existing?.blockedTools) ? existing.blockedTools : [],
+    };
+    if (stateKey) {
+      policyStateBySession.set(stateKey, nextState);
+    }
+    return { stateKey, state: nextState, decision };
+  } catch (err) {
+    logger?.warn?.(`octoclaw runtime policy resolve failed: ${String(err)}`);
+    return null;
+  }
+}
+
+function updatePolicyState(stateKey, mutator) {
+  if (!stateKey) return null;
+  const current = policyStateBySession.get(stateKey);
+  if (!current) return null;
+  const next = typeof mutator === "function" ? mutator(current) : { ...current, ...mutator };
+  next.updatedAt = Date.now();
+  policyStateBySession.set(stateKey, next);
+  return next;
+}
+
+function compactPolicyPrompt(decision) {
+  const route = decision?.route_decision?.route || "direct";
+  const routeSummary = [
+    `route=${route}`,
+    `worker_pool=${decision?.route_decision?.worker_pool || "octoclaw-main"}`,
+    `work_type=${decision?.route_decision?.work_type || ""}`,
+    `phase=${decision?.route_decision?.phase || ""}`,
+    `protocol=${decision?.route_decision?.protocol || "normal"}`,
+    `review_required=${decision?.review_policy?.required ? "true" : "false"}`,
+  ].join(" ; ");
+  const lines = [`[OctoClaw runtime policy] ${routeSummary}`];
+  const skillBundle = Array.isArray(decision?.skill_policy?.default_skill_bundle)
+    ? decision.skill_policy.default_skill_bundle
+    : [];
+  const toolPolicy = decision?.tool_policy || {};
+  if (DELEGATED_ROUTE_NAMES.has(route)) {
+    const controlTools = Array.isArray(toolPolicy.allowed_control_tools) ? toolPolicy.allowed_control_tools : [];
+    lines.push("Delegated run: do not solve the task directly and do not use non-OctoClaw tools.");
+    if (toolPolicy.must_delegate_via) {
+      lines.push(`Call ${toolPolicy.must_delegate_via} first with the user's task, then answer from its handoff/report.`);
+    }
+    if (controlTools.length > 0) {
+      lines.push(`Allowed control tools: ${controlTools.join(", ")}`);
+    }
+    if (decision?.prompt_contract?.artifact_first) {
+      lines.push("Prefer report/artifact summaries over redoing the work in the main context.");
+    }
+  }
+  if (skillBundle.length > 0) {
+    lines.push(`Preferred skill bundle: ${skillBundle.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+function stringifyParamsForPolicy(value) {
+  try {
+    return JSON.stringify(value || {});
+  } catch {
+    return String(value || "");
+  }
+}
+
+function matchesBlockedPattern(text, patterns = []) {
+  const haystack = String(text || "").toLowerCase();
+  return patterns.some((pattern) => {
+    const needle = String(pattern || "").trim().toLowerCase();
+    return needle && haystack.includes(needle);
+  });
+}
+
+function isDelegatedRoute(decision) {
+  return DELEGATED_ROUTE_NAMES.has(String(decision?.route_decision?.route || ""));
+}
+
 function policySummaryText(payload) {
   if (payload?.summary) {
     return payload.summary;
@@ -144,6 +295,107 @@ async function userFacingHandoff(payload, fallback, cwd) {
 }
 
 export default function (pi) {
+  const registerLifecycleHook = (hookName, handler, priority = 180) => {
+    if (typeof pi.on === "function") {
+      pi.on(hookName, handler, { priority });
+      return true;
+    }
+    if (typeof pi.registerHook === "function") {
+      pi.registerHook(hookName, handler, { priority });
+      return true;
+    }
+    return false;
+  };
+
+  registerLifecycleHook("before_model_resolve", async (event, ctx) => {
+    if (!isManagedAgentContext(ctx)) return;
+    const resolved = await resolvePolicyDecisionForContext(
+      event?.prompt || "",
+      ctx,
+      process.cwd(),
+      pi.logger,
+    );
+    const decision = resolved?.decision;
+    const hookConfig = decision?.hook_interface?.before_model_resolve;
+    if (!hookConfig?.enabled) return;
+    if (String(decision?.route_decision?.route || "direct") !== "direct") return;
+    const modelOverride = String(hookConfig.selected_model || "").trim();
+    if (!modelOverride) return;
+    pi.logger?.debug?.(`octoclaw before_model_resolve modelOverride=${modelOverride}`);
+    return { modelOverride };
+  });
+
+  registerLifecycleHook("before_prompt_build", async (event, ctx) => {
+    if (!isManagedAgentContext(ctx)) return;
+    const resolved = await resolvePolicyDecisionForContext(
+      event?.prompt || "",
+      ctx,
+      process.cwd(),
+      pi.logger,
+    );
+    const decision = resolved?.decision;
+    const hookConfig = decision?.hook_interface?.before_prompt_build;
+    if (!hookConfig?.enabled || !isDelegatedRoute(decision)) return;
+    return {
+      prependSystemContext: OCTOCLAW_DELEGATION_SYSTEM_CONTEXT,
+      prependContext: compactPolicyPrompt(decision),
+    };
+  });
+
+  registerLifecycleHook("before_tool_call", async (event, ctx) => {
+    if (!isManagedAgentContext(ctx)) return;
+    const stateKey = resolvePolicyStateKey(ctx);
+    const state = stateKey ? policyStateBySession.get(stateKey) : null;
+    const decision = state?.decision;
+    const hookConfig = decision?.hook_interface?.before_tool_call;
+    if (!hookConfig?.enabled) return;
+
+    const toolName = String(event?.toolName || ctx?.toolName || "").trim();
+    const toolPolicy = decision?.tool_policy || {};
+    const blockedPatterns = Array.isArray(toolPolicy.block_tool_patterns) ? toolPolicy.block_tool_patterns : [];
+    if (matchesBlockedPattern(stringifyParamsForPolicy(event?.params), blockedPatterns)) {
+      return {
+        block: true,
+        blockReason: `OctoClaw runtime policy blocked a manual delegation pattern. Use ${toolPolicy.must_delegate_via || "octoclaw_dispatch"} instead.`,
+      };
+    }
+
+    if (!isDelegatedRoute(decision)) {
+      return;
+    }
+
+    const allowedControlTools = new Set(
+      Array.isArray(toolPolicy.allowed_control_tools) ? toolPolicy.allowed_control_tools : [],
+    );
+    if (toolName === String(toolPolicy.must_delegate_via || "").trim()) {
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        delegated: true,
+        delegationTool: toolName,
+      }));
+      return;
+    }
+
+    if (allowedControlTools.has(toolName)) {
+      return;
+    }
+
+    updatePolicyState(stateKey, (current) => ({
+      ...current,
+      blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+    }));
+    return {
+      block: true,
+      blockReason: `OctoClaw runtime policy route=${decision?.route_decision?.route || "direct"} requires delegation. Use ${toolPolicy.must_delegate_via || "octoclaw_dispatch"} first. Allowed control tools: ${[...allowedControlTools].join(", ") || "octoclaw_dispatch"}.`,
+    };
+  });
+
+  registerLifecycleHook("agent_end", async (_event, ctx) => {
+    const stateKey = resolvePolicyStateKey(ctx);
+    if (!stateKey) return;
+    policyStateBySession.delete(stateKey);
+  }, 50);
+
   pi.registerTool(
     {
       name: "octoclaw_policy_decide",
