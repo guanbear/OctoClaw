@@ -47,6 +47,46 @@ OctoClaw 的目标不是“会开很多 agent”，而是：
 
 > **OctoClaw 不是 worker 本身，而是 worker 的调度系统。**
 
+### 2.3 产品方法论：轻量 harness，重型协议按需开启
+
+OctoClaw 可以借鉴 harness engineering，但不能把自己做成一个默认很重的 runtime。
+
+正确方向是：
+
+- 默认全局启用 **lightweight harness**
+- 只在复杂任务上叠加 **heavy profile / heavy protocol**
+
+这里的 lightweight harness 指的是：
+
+- runtime policy
+- route / dispatch
+- brief / summary / artifact
+- review gate
+- task / inbox / board
+- explainable decision
+
+它的目的不是增加层数，而是：
+
+- 减少主上下文膨胀
+- 避免 prompt 自觉式委派
+- 让决策和收作业更稳定
+
+heavy 部分只在复杂任务上启用，例如：
+
+- checkpoint summary
+- 更强的 artifact-first 约束
+- 更长超时
+- 更严格的 review / merge gate
+- 更强的多 worker 协作协议
+
+所以 OctoClaw 的方法论不是：
+
+- “所有请求都上重型 harness”
+
+而是：
+
+> **用轻量 harness 提升效率和降本，再按需叠加重型执行协议。**
+
 ---
 
 ## 3. 产品目标
@@ -110,6 +150,24 @@ OctoClaw 的目标不是“会开很多 agent”，而是：
 
 所有非 `direct` 工作都收敛到统一运行面；
 不同的是执行协议，而不是再造多套 runtime。
+
+### 4.2.1 轻量 harness 默认开启
+
+默认应全局开启的能力：
+
+- runtime policy decision
+- task / inbox / board 基础协作面
+- brief / summary / artifact 协议
+- default skill bundle
+- explainable route / review reasons
+
+这些能力应该服务于：
+
+- 更快首响
+- 更低 token 消耗
+- 更稳定委派
+
+而不是把所有任务都升级成复杂长流程。
 
 ### 4.3 brief 输入，summary 输出
 
@@ -470,7 +528,7 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 }
 ```
 
-#### 7.1.3 OpenRouter 和 OmniRoute 的正确角色
+#### 7.1.3 OpenRouter 的正确角色
 
 OctoClaw 设计里应明确：
 
@@ -481,11 +539,6 @@ OctoClaw 设计里应明确：
 - **OpenRouter models API / 公开价格**
   - 只作为 `market price baseline`
   - 不等于你的真实内部成本
-
-- **OmniRoute**
-  - 不再作为核心依赖
-  - 只能作为某种可选 `economics adapter`
-  - 后面就算没有 OmniRoute，选模内核也必须能工作
 
 也就是说：
 
@@ -861,7 +914,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 - 选模 decision schema 同步定稿
 - 明确 `market_price` / `internal_cost` / `quota_health` 字段
-- 把 OmniRoute 从核心数据模型里降级为可选 adapter
+- 不把任何外部网关或账号池机制写死进核心数据模型
 
 ### Phase 1：把委派变成 runtime policy
 

@@ -122,9 +122,6 @@ python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 # Force a patrol cycle
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 
-# Sync OmniRoute/Codex plan state now
-cd /workspace/openclaw/skills/octopus
-WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync
 ```
 
 ## ClawTeam Bridge Validation
@@ -227,7 +224,7 @@ It includes:
 Current runtime extension support is exposed as tool/command entrypoints first.
 The `hook_interface` payload is emitted now so future plugin hook binding can consume the same contract without changing the schema.
 
-## Model Inputs
+## Model Policy Inputs
 
 Auto mode now considers four input layers:
 
@@ -271,7 +268,19 @@ In practice:
 - billing cycle (`monthly`, `yearly`, `one_time`) can usually be seeded once and reused
 - live remaining quota usually cannot be inferred reliably without provider-specific APIs, so keep it in `model-plan-state.json` or add a provider sync later
 - token-priced models can also be budget-governed with `monthly_budget_cny`, `current_month_spent_cny`, `soft_limit_ratio`, and `hard_limit_ratio`
-- if `FEATURE_OMNIROUTE_PLAN_SYNC=true` and `omniroute` exists locally, OctoClaw can periodically sync Codex/GPT-5.4 remaining ratio from OmniRoute SQLite and then refresh auto policy
+
+## Harness Direction
+
+OctoClaw follows a lightweight harness direction by default:
+
+- runtime policy decides route / review / skill bundle
+- workers receive brief-first task packets
+- long outputs become artifacts instead of bloating the main context
+- task / inbox / board make delegation observable
+
+This is meant to improve efficiency and reduce token waste, not to make every request heavier.
+
+Heavier protocol rules are only turned on for complex `spawn_single` / `spawn_multi` work.
 
 ## Project Layout
 
