@@ -122,6 +122,52 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("review", lanes_rendered)
         self.assertIn("tmux octoclaw-run", lanes_rendered)
 
+    def test_worker_pool_only_tasks_render_without_legacy_labels(self) -> None:
+        tasks = [
+            {
+                "id": "runner-pool",
+                "status": "queued",
+                "summary": "check nginx port",
+                "task_description": "Check nginx port",
+                "route": "runner",
+                "runtime": "runner",
+                "executor": "runner",
+                "worker_pool": "octoclaw-runner",
+            },
+            {
+                "id": "code-pool",
+                "status": "running",
+                "summary": "patch the flaky release step",
+                "task_description": "Patch the flaky release step",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "executor": "subagent",
+                "worker_pool": "octoclaw-code",
+                "started_at": "2026-03-28T11:55:00+00:00",
+            },
+            {
+                "id": "research-pool",
+                "status": "queued",
+                "summary": "compare rollback options",
+                "task_description": "Compare rollback options",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "executor": "subagent",
+                "worker_pool": "octoclaw-research",
+            },
+        ]
+
+        snapshot = build_status_snapshot(tasks, now=self.now)
+        table_rendered = render_status_table(snapshot)
+        lanes_rendered = render_status_lanes(snapshot)
+
+        self.assertIn("飞鱼腿", table_rendered)
+        self.assertIn("螃蟹手", table_rendered)
+        self.assertIn("梭鱼眼", table_rendered)
+        self.assertIn("check nginx port", lanes_rendered)
+        self.assertIn("patch the flaky release", lanes_rendered)
+        self.assertIn("compare rollback options", lanes_rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

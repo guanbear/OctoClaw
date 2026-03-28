@@ -57,23 +57,16 @@ from octopus_config import (
 )
 from session_ops import send_agent_message
 
+try:
+    from worker_taxonomy import is_runner_task as taxonomy_is_runner_task, resolve_executor, resolve_worker_pool, role_display
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.worker_taxonomy import is_runner_task as taxonomy_is_runner_task, resolve_executor, resolve_worker_pool, role_display
+
 # ⚠️ 注意：巡逻任务本身通过 cron 运行，不写入 task-state.json
 # 因此不会在巡逻报告中出现自己。
 SYSTEM_LABELS = {'octopus-patrol', 'octopus-probe', 'ironclaw-heartbeat', 'ironclaw-probe'}
 # 内部查询任务 ID 前缀，过滤出面板和通知
 INTERNAL_ID_PREFIXES = ('status-query-',)
-
-# label → 触手显示名称
-LABEL_NAMES = {
-    "octopus-power": "💪 鲸力手",
-    "octopus-scout": "🔍 梭鱼眼",
-    "octopus-writer": "✍️ 墨鱼手",
-    "octopus-fix": "🔧 螃蟹手",
-    "octopus-test": "🧪 海胆手",
-    "octopus-analyze": "📊 章鱼脑",
-    "octopus-runner": "🏃 飞鱼腿",
-    "octopus-feishu": "🐦 鸽手",
-}
 
 # 模型名简化映射（完整路径 → 短名）
 MODEL_SHORT = {
@@ -109,8 +102,12 @@ ORDINAL_CHARS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", 
 
 
 def get_label_name(label: str) -> str:
-    """返回触手显示名称，未知 label 直接返回原值"""
-    return LABEL_NAMES.get(label, label)
+    """兼容旧调用：仅 label 输入时返回显示名。"""
+    return role_display({"label": label})["name"]
+
+
+def get_task_display_name(task: dict, ordinal: str = "") -> str:
+    return role_display(task)["name"] + ordinal
 
 
 def get_model_short(model: str) -> str:
@@ -125,17 +122,13 @@ def get_model_short(model: str) -> str:
 
 
 def task_executor(task: dict) -> str:
-    explicit = str(task.get("executor", "") or "").strip().lower()
-    if explicit in ("runner", "subagent"):
-        return explicit
-    if str(task.get("label", "") or "") == "octopus-runner":
-        return "runner"
-    return "subagent"
+    resolved = resolve_executor(task)
+    return resolved if resolved in ("runner", "subagent", "team") else "subagent"
 
 
 def is_runner_task(task: dict) -> bool:
     """Persistent runner jobs are queue/file-driven, not child-session-driven."""
-    return task_executor(task) == "runner"
+    return taxonomy_is_runner_task(task)
 
 
 def assign_ordinals(task_list: list) -> dict:
@@ -144,12 +137,19 @@ def assign_ordinals(task_list: list) -> dict:
     多于1个时，返回 {task_id: "①"/"②"/...} 映射；只有1个则不加序号。
     """
     from collections import Counter
-    label_counts = Counter(t.get("label", "") for t in task_list)
-    label_index = {}  # label → 当前序号下标
+
+    def ordinal_group(task: dict) -> str:
+        worker_pool = resolve_worker_pool(task)
+        if worker_pool:
+            return worker_pool
+        return str(task.get("label", "") or "")
+
+    label_counts = Counter(ordinal_group(t) for t in task_list)
+    label_index = {}  # group key → 当前序号下标
     ordinal_map = {}  # task id → 序号字符（单个 label 则为 ""）
 
     for t in task_list:
-        label = t.get("label", "")
+        label = ordinal_group(t)
         tid = t.get("id", id(t))
         if label_counts[label] > 1:
             idx = label_index.get(label, 0)
@@ -199,6 +199,21 @@ LABEL_DEFAULT_TIER = {
     "octopus-analyze": "deep",   # 章鱼脑默认 deep（20min 阈值）
     "octopus-power": "deep",     # 鲸力手默认 deep
 }
+
+WORKER_POOL_DEFAULT_TIER = {
+    "octoclaw-runner": "trivial",
+    "octoclaw-code": "normal",
+    "octoclaw-review": "normal",
+    "octoclaw-research": "normal",
+}
+
+
+def tier_default_for_task(task: dict) -> str:
+    worker_pool = resolve_worker_pool(task)
+    if worker_pool in WORKER_POOL_DEFAULT_TIER:
+        return WORKER_POOL_DEFAULT_TIER[worker_pool]
+    label = str(task.get("label", "") or "")
+    return LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
 
 
 def load_task_state(path: str) -> dict:
@@ -1044,9 +1059,8 @@ def format_running_table(task_list: list, ordinals: dict) -> str:
     """格式化运行中任务为结构化文本（飞书 lark_md 不支持 markdown 表格语法）"""
     rows = []
     for t in task_list:
-        label = t.get("label", t.get("id", "未知"))
         ordinal = ordinals.get(t.get("id", id(t)), "")
-        display_name = get_label_name(label) + ordinal
+        display_name = get_task_display_name(t, ordinal)
         # 优先显示summary，为空则显示id前30字
         summary = t.get("summary", "")
         if not summary:
@@ -1078,9 +1092,8 @@ def format_queued_table(task_list: list, ordinals: dict) -> str:
     """格式化排队中任务为结构化文本（飞书 lark_md 不支持 markdown 表格语法）"""
     rows = []
     for t in task_list:
-        label = t.get("label", t.get("id", "未知"))
         ordinal = ordinals.get(t.get("id", id(t)), "")
-        display_name = get_label_name(label) + ordinal
+        display_name = get_task_display_name(t, ordinal)
         # 优先显示summary，为空则显示id前30字
         summary = t.get("summary", "")
         if not summary:
@@ -1108,9 +1121,8 @@ def format_stuck_table(task_list: list, ordinals: dict) -> str:
     """格式化可能卡死任务为结构化文本（飞书 lark_md 不支持 markdown 表格语法）"""
     rows = []
     for t in task_list:
-        label = t.get("label", t.get("id", "未知"))
         ordinal = ordinals.get(t.get("id", id(t)), "")
-        display_name = get_label_name(label) + ordinal
+        display_name = get_task_display_name(t, ordinal)
         # 优先显示summary，为空则显示id前30字
         summary = t.get("summary", "")
         if not summary:
@@ -1201,8 +1213,7 @@ def format_recent_done_table(task_list: list) -> str:
     """
     rows = []
     for t in task_list:
-        label = t.get("label", t.get("id", "未知"))
-        display_name = get_label_name(label)
+        display_name = get_task_display_name(t)
         # 优先显示summary，为空则显示id前30字
         summary = t.get("summary", "")
         if not summary:
@@ -1787,12 +1798,11 @@ def build_exec_stats_text(recent_done: list):
                 continue
             model = t.get("model", "")
             tier = t.get("tier", "normal")
-            label = t.get("label", "")
             actual = _calc_task_cost(model, tier)
             baseline = _calc_task_cost("sonnet", tier)
             total_actual += actual
             total_baseline += baseline
-            label_name = get_label_name(label)
+            label_name = get_task_display_name(t)
             model_short = get_model_short(model)
             completed_at = parse_iso(t.get("completed_at", ""))
             start_str = t.get("started_at") or t.get("spawned_at", "")
@@ -2409,8 +2419,7 @@ def build_event_card_b(event_type: str, task: dict) -> dict:
     
     返回飞书卡片 JSON。
     """
-    label = task.get("label", task.get("id", "未知"))
-    display_name = get_label_name(label)
+    display_name = get_task_display_name(task)
     summary = (task.get("summary") or task.get("id", ""))[:50]
     model_short = get_model_short(task.get("model", ""))
     
@@ -2611,8 +2620,7 @@ def _update_deferred_report_count(deferred_list: list):
 
 def get_timeout_minutes(task: dict) -> int:
     """兼容旧调用：返回 tier 最低保障（分钟），等同于 TIER_MIN[tier]。"""
-    label = task.get("label", "")
-    label_default = LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
+    label_default = tier_default_for_task(task)
     tier = task.get("tier", label_default).lower()
     return TIER_TIMEOUT_MINUTES.get(tier, TIER_TIMEOUT_MINUTES[DEFAULT_TIER])
 
@@ -2623,8 +2631,7 @@ def calculate_timeout(task: dict) -> float:
     expected_duration = expected_done_at - spawned_at（分钟）
     若 expected_done_at 为空，fallback 到 TIER_MIN[tier] × 2
     """
-    label = task.get("label", "")
-    label_default = LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
+    label_default = tier_default_for_task(task)
     tier = task.get("tier", label_default).lower()
     tier_min = float(TIER_TIMEOUT_MINUTES.get(tier, TIER_TIMEOUT_MINUTES[DEFAULT_TIER]))
 
@@ -2711,8 +2718,7 @@ def mark_task_failed(task_id: str, summary: str, *, extra_updates: dict | None =
 
 
 def choose_retry_tier(task: dict, reason: str) -> str:
-    label = task.get("label", "")
-    base_tier = str(task.get("tier", LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)) or DEFAULT_TIER).lower()
+    base_tier = str(task.get("tier", tier_default_for_task(task)) or DEFAULT_TIER).lower()
     current_model = str(task.get("model", "") or "").lower()
     if reason == "token_overflow":
         return elevate_tier(base_tier, floor="hard")
@@ -3134,7 +3140,7 @@ def send_timeout_alert(task: dict, elapsed_minutes: float, run_id: str | None, k
     timeout_reason: analyze_timeout_reason() 返回的分析结果
     """
     label = task.get("label", task.get("id", "未知"))
-    display_name = get_label_name(label)
+    display_name = get_task_display_name(task)
     tier = task.get("tier", DEFAULT_TIER)
     timeout_minutes = calculate_timeout(task)
     total_seconds = int(elapsed_minutes * 60)
@@ -4329,7 +4335,7 @@ def main():
                 task = next((t for t in tasks if t.get("id") == tid), {})
                 if task.get("label", "") in SYSTEM_LABELS:
                     continue
-                label_name = get_label_name(task.get("label", ""))
+                label_name = get_task_display_name(task)
                 summary = (task.get("summary") or tid)[:40]
                 # 状态变化规则
                 if new_status in ("running", "dispatched") and old_status not in ("running", "dispatched"):

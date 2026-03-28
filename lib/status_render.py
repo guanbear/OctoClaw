@@ -6,51 +6,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-LABEL_EMOJI = {
-    "octopus-power": "💪",
-    "octopus-scout": "🔍",
-    "octopus-writer": "✍️",
-    "octopus-fix": "🔧",
-    "octopus-test": "🧪",
-    "octopus-analyze": "📊",
-    "octopus-runner": "🏃",
-    "octopus-feishu": "🐦",
-}
-
-LABEL_NAME = {
-    "octopus-power": "鲸力手",
-    "octopus-scout": "梭鱼眼",
-    "octopus-writer": "墨鱼手",
-    "octopus-fix": "螃蟹手",
-    "octopus-test": "海胆手",
-    "octopus-analyze": "章鱼脑",
-    "octopus-runner": "飞鱼腿",
-    "octopus-feishu": "鸽手",
-}
+try:
+    from worker_taxonomy import is_runner_task, resolve_executor, resolve_worker_pool, role_display
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.worker_taxonomy import is_runner_task, resolve_executor, resolve_worker_pool, role_display
 
 FINAL_STATUSES = {"done", "failed", "deferred", "completed"}
 SUCCESS_STATUSES = {"done", "completed"}
 
 
 def task_executor(task: dict) -> str:
-    explicit = str(task.get("executor", "") or "").strip().lower()
-    if explicit in ("runner", "subagent", "team"):
-        return explicit
-    if str(task.get("task_kind", "") or "").strip() == "team_parent":
-        return "team"
-    if str(task.get("route", "") or "").strip() == "spawn_multi":
-        return "team"
-    if task.get("label") == "octopus-runner":
-        return "runner"
-    return "subagent"
-
-
-def get_emoji(label: str) -> str:
-    return LABEL_EMOJI.get(label, "🤖")
-
-
-def get_label_name(label: str) -> str:
-    return LABEL_NAME.get(label, label.replace("octopus-", "") if label else "任务")
+    return resolve_executor(task)
 
 
 def is_team_parent(task: dict) -> bool:
@@ -64,13 +30,13 @@ def is_team_step(task: dict) -> bool:
 def task_role_emoji(task: dict) -> str:
     if is_team_parent(task):
         return "🕸️"
-    return get_emoji(str(task.get("label", "") or ""))
+    return role_display(task)["emoji"]
 
 
 def task_role_name(task: dict) -> str:
     if is_team_parent(task):
         return "协作流"
-    return get_label_name(str(task.get("label", "") or ""))
+    return role_display(task)["name"]
 
 
 def parse_time(value: str):
@@ -634,14 +600,14 @@ def render_status_lanes(snapshot: dict) -> str:
     lane_map = [
         (
             "Runner lane",
-            [task for task in snapshot["running"] + snapshot["queued"] if task_executor(task) == "runner"],
+            [task for task in snapshot["running"] + snapshot["queued"] if is_runner_task(task)],
         ),
         (
             "Build lane",
             [
                 task
                 for task in snapshot["running"] + snapshot["queued"]
-                if task_executor(task) != "runner" and task.get("label") in ("octopus-fix", "octopus-test", "octopus-power")
+                if not is_runner_task(task) and resolve_worker_pool(task) in ("octoclaw-code", "octoclaw-review")
             ],
         ),
         (
@@ -649,7 +615,7 @@ def render_status_lanes(snapshot: dict) -> str:
             [
                 task
                 for task in snapshot["running"] + snapshot["queued"]
-                if task_executor(task) != "runner" and task.get("label") in ("octopus-scout", "octopus-writer", "octopus-analyze")
+                if not is_runner_task(task) and resolve_worker_pool(task) == "octoclaw-research"
             ],
         ),
         ("Recovery", snapshot["steer_needed"]),
