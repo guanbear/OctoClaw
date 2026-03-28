@@ -29,6 +29,7 @@ from octopus_config import (
     load_octopus_config,
     spawn_operator_surface,
 )
+from runtime_protocol import build_result_contract, build_task_brief
 from worker_taxonomy import (
     infer_worker_pool as taxonomy_infer_worker_pool,
     legacy_label_for_worker_pool,
@@ -493,7 +494,28 @@ def build_task_prompt(
     phase: str = "",
     protocol: str = "",
     review_required: bool = False,
+    brief: dict | None = None,
+    result_contract: dict | None = None,
 ) -> str:
+    summary_hint = result_summary_contract(label, route)
+    brief_payload = brief if isinstance(brief, dict) else build_task_brief(
+        task_id=task_id,
+        goal=task.strip(),
+        route=route,
+        worker_pool=worker_pool or "octoclaw-research",
+        work_type=work_type or "research",
+        phase=phase or "collect",
+        profile=profile or "default",
+        protocol=protocol or "normal",
+        review_required=review_required,
+        report_path=report_path,
+        context_summary=context_summary,
+        context_path=context_path,
+        skill_bundle=skill_bundle,
+        expected_done=expected_done,
+        summary_hint=summary_hint,
+    )
+    result_payload = result_contract if isinstance(result_contract, dict) else build_result_contract(summary_hint, artifact_first=True)
     lines = [
         "【状态写入】开始前先执行：",
         (
@@ -506,45 +528,10 @@ def build_task_prompt(
             f"--review-required {'true' if review_required else 'false'}"
         ),
         "",
-        "【目标】",
-        task.strip(),
-    ]
-    if any([profile, work_type, phase, protocol, review_required]):
-        lines.extend([
-            "",
-            "【执行画像】",
-            f"- profile={profile or 'default'}",
-            f"- work_type={work_type or 'unknown'}",
-            f"- phase={phase or 'unknown'}",
-            f"- protocol={protocol or 'normal'}",
-            f"- review_required={'true' if review_required else 'false'}",
-        ])
-    if skill_bundle:
-        lines.extend([
-            "",
-            "【默认技能包】",
-            "- " + ", ".join(str(item) for item in skill_bundle if str(item).strip()),
-        ])
-    lines.extend([
-        "",
-        "【上下文预算】",
-        "- 默认只消费当前任务描述 + 最多 3 条相关历史摘要",
-        "- 长日志、长调研、长 diff 一律写共享文件，不要直接塞回上下文",
-        "- 如需详细历史，优先读取 context pack / report_path 的前 80 行",
-    ])
-    if context_summary:
-        lines.extend([
-            "",
-            "【相关历史摘要】",
-            context_summary,
-        ])
-    if context_path:
-        lines.extend([
-            "",
-            "【上下文文件】",
-            f"- 如需更多背景，先读取：{context_path}",
-        ])
-    lines.extend([
+        "【TASK BRIEF / 必读输入】",
+        "```json",
+        json.dumps(brief_payload, ensure_ascii=False, indent=2),
+        "```",
         "",
         "【执行约束】",
         "- 每 turn ≤500字；分段读文件，避免一次性灌长上下文",
@@ -560,11 +547,11 @@ def build_task_prompt(
         "",
         "【RESULT 规范】",
         "---RESULT---",
-        f'{{"status":"success","summary":"{result_summary_contract(label, route)}","files":[],"report":"共享文件路径或null"}}',
+        json.dumps(result_payload, ensure_ascii=False),
         "",
         "【Fail Fast】",
         f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py failed --id {task_id} --summary \"阻塞原因（1句）：xxx，建议：xxx\"",
-    ])
+    ]
     return "\n".join(lines).strip()
 
 
@@ -851,6 +838,31 @@ def build_spawn_spec(
         )
         raise ValueError(error_text)
     expected_done = expected_done_offset(final_tier)
+    summary_hint = result_summary_contract(final_label, final_route)
+    brief = build_task_brief(
+        task_id=task_id,
+        goal=task,
+        route=final_route,
+        worker_pool=worker_pool,
+        work_type=work_type,
+        phase=phase,
+        profile=profile or preliminary_profile or "default",
+        protocol=protocol or "normal",
+        review_required=review_required,
+        report_path=report_path,
+        context_summary=str(context_bundle.get("summary", "") or ""),
+        context_path=str(context_bundle.get("context_path", "") or ""),
+        skill_bundle=skill_bundle,
+        expected_done=expected_done,
+        summary_hint=summary_hint,
+    )
+    result_contract = build_result_contract(summary_hint, artifact_first=True)
+    base_artifacts.update(
+        {
+            "brief": brief,
+            "expected_output": brief.get("expected_output", {}),
+        }
+    )
     prompt = build_task_prompt(
         task_id=task_id,
         label=final_label,
@@ -869,6 +881,8 @@ def build_spawn_spec(
         phase=phase,
         protocol=protocol,
         review_required=review_required,
+        brief=brief,
+        result_contract=result_contract,
     )
 
     if register:
@@ -995,6 +1009,8 @@ def build_spawn_spec(
         "context_path": context_bundle.get("context_path", ""),
         "context_refs": context_bundle.get("refs", []),
         "context_budget": context_bundle.get("budget", {}),
+        "brief": brief,
+        "result_contract": result_contract,
         "expected_done": expected_done,
         "task_prompt": prompt,
         "task_prompt_preview": prompt[:320] + ("…" if len(prompt) > 320 else ""),

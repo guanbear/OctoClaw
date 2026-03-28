@@ -25,6 +25,7 @@ from typing import Any
 from octoclaw_route import infer_route
 from octoclaw_spawn import resolve_model_and_thinking, resolve_profile
 from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config
+from runtime_protocol import BRIEF_SCHEMA_VERSION, WORKER_RESULT_SCHEMA_VERSION
 from worker_taxonomy import (
     infer_worker_pool as taxonomy_infer_worker_pool,
     legacy_label_for_worker_pool,
@@ -478,9 +479,12 @@ def resolve_skill_bundle(policy_cfg: dict[str, Any], work_type: str, profile: st
 def prompt_contract(protocol: str, route: str) -> dict[str, Any]:
     return {
         "brief_required": route != "direct",
+        "brief_schema_version": BRIEF_SCHEMA_VERSION,
         "artifact_first": route != "direct",
         "transcript_to_main": False,
         "summary_required": route != "runner",
+        "result_schema_version": WORKER_RESULT_SCHEMA_VERSION,
+        "required_result_fields": ["status", "summary", "artifacts", "report", "risks", "next_step"],
         "checkpoint_summary_required": protocol == "heavy",
         "direct_reply_allowed": route == "direct",
         "final_answer_from_handoff": route != "direct",

@@ -706,9 +706,13 @@ def summarize_session_history(session_id: str, tail_lines: int = SESSION_HISTORY
     result["has_result"] = "---result---" in joined_lower
     result["has_success"] = (
         "状态: 成功" in joined
+        or "状态: 完成" in joined
         or '"status":"success"' in joined_lower
         or '"status": "success"' in joined_lower
+        or '"status":"done"' in joined_lower
+        or '"status": "done"' in joined_lower
         or "status: success" in joined_lower
+        or "status: done" in joined_lower
     )
 
     for raw in reversed(lines):
@@ -1641,9 +1645,13 @@ def check_result_success(task_id: str, label: str, spawned_at: str = None) -> bo
     content_lower = content.lower()
     has_success = (
         '状态: 成功' in content
+        or '状态: 完成' in content
         or 'status: success' in content_lower
+        or 'status: done' in content_lower
         or '"status":"success"' in content_lower
         or '"status": "success"' in content_lower
+        or '"status":"done"' in content_lower
+        or '"status": "done"' in content_lower
     )
     if not has_success:
         return False

@@ -50,7 +50,7 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
 然后输出：
 ```
 ---RESULT---
-{"status":"failure","summary":"遇到阻塞：xxx。建议主 Agent 补充 xxx 后重派。","files":[],"report":null}
+{"schema_version":"octoclaw.worker_result/v1","status":"failed","summary":"遇到阻塞：xxx。建议主 Agent 补充 xxx 后重派。","artifacts":[],"files":[],"report":"","risks":[],"next_step":"补充 xxx 后重派"}
 ```
 
 **为什么**：被动等 patrol 超时重派会浪费整个超时窗口（normal 任务最多 8 分钟）的 token；
@@ -90,7 +90,7 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
 **优选 JSON 格式（推荐）：**
 ```
 ---RESULT---
-{"status":"success","summary":"默认 2-5句结论；调研/分析/写作任务可放宽到 4-8句可直接转述给用户的中文结论；禁表格/代码块","files":["改动文件路径"],"report":"详情报告路径或null"}
+{"schema_version":"octoclaw.worker_result/v1","status":"done","summary":"默认 2-5句结论；调研/分析/写作任务可放宽到 4-8句可直接转述给用户的中文结论；禁表格/代码块","artifacts":["path-or-id"],"files":["改动文件路径"],"report":"详情报告路径或空字符串","risks":[],"next_step":"若无需后续动作写 none"}
 ```
 
 **兼容文本格式（也被识别）：**
@@ -102,9 +102,11 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
 ```
 
 规则：
-1. status 只能是 `success` 或 `failure`（JSON）/ `成功` 或 `失败`（文本）
+1. status 建议使用 `done` / `blocked` / `failed`；兼容老格式 `success` / `failure`
 2. summary/摘要：默认 ≤5句；调研/分析/写作任务可放宽到 4-8句，但仍需简洁、可直接转述给用户，禁止表格、代码块
-3. 详细内容写文件（`/workspace/tmp/octopus/results/{task-id}.md`），RESULT 只填路径
+3. `artifacts` 填路径或 artifact id；长报告同时写入 `report`
+4. `next_step` 必填；若无后续动作写 `none`
+5. 详细内容写文件（`/workspace/tmp/octopus/results/{task-id}.md`），RESULT 只填路径
 
 ## 📂 大输出写共享文件区
 
@@ -121,7 +123,7 @@ RESULT 的 `report` 字段填路径，`summary` 仍要写可直接转述的结�
 
 ```
 ---RESULT---
-{"status":"success","summary":"分析完成，发现3个关键问题，已写入报告","files":[],"report":"/workspace/tmp/octopus/shared/{TASK_ID}.md"}
+{"schema_version":"octoclaw.worker_result/v1","status":"done","summary":"分析完成，发现3个关键问题，已写入报告","artifacts":["/workspace/tmp/octopus/shared/{TASK_ID}.md"],"files":[],"report":"/workspace/tmp/octopus/shared/{TASK_ID}.md","risks":[],"next_step":"none"}
 ```
 
 **为什么**：A2A announce 有 30 秒硬超时，超时后消息丢失；共享文件持久可靠，主 Agent 或用户按需读取。

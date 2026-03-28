@@ -450,7 +450,8 @@ In practice:
 OctoClaw follows a lightweight harness direction by default:
 
 - runtime policy decides route / review / skill bundle
-- workers receive brief-first task packets
+- workers receive brief-first task packets (`octoclaw.brief/v1`)
+- workers are asked to return a structured result contract (`octoclaw.worker_result/v1`)
 - long outputs become artifacts instead of bloating the main context
 - task / inbox / board make delegation observable
 

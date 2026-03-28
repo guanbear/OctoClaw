@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OctoClaw Runtime Brief v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_id",
+    "goal",
+    "constraints",
+    "expected_output"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "octoclaw.brief/v1"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "goal": {
+      "type": "string"
+    },
+    "route": {
+      "type": "string"
+    },
+    "worker_pool": {
+      "type": "string"
+    },
+    "work_type": {
+      "type": "string"
+    },
+    "phase": {
+      "type": "string"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "protocol": {
+      "type": "string"
+    },
+    "review_required": {
+      "type": "boolean"
+    },
+    "expected_done": {
+      "type": "string"
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "context_summary": {
+      "type": "string"
+    },
+    "context_path": {
+      "type": "string"
+    },
+    "skill_bundle": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "expected_output": {
+      "$ref": "./worker-result-v1.schema.json"
+    }
+  },
+  "additionalProperties": true
+}

@@ -53,6 +53,11 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["phase"], "report")
         self.assertEqual(spec["profile"], "writer")
         self.assertEqual(spec["label"], "octopus-writer")
+        self.assertEqual(spec["brief"]["schema_version"], "octoclaw.brief/v1")
+        self.assertEqual(spec["brief"]["expected_output"]["schema_version"], "octoclaw.worker_result/v1")
+        self.assertEqual(spec["result_contract"]["status"], "done")
+        self.assertIn("\"next_step\":", spec["task_prompt"])
+        self.assertIn("\"risks\": []", spec["task_prompt"])
 
 
 if __name__ == "__main__":

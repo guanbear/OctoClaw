@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OctoClaw Worker Result v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "status",
+    "summary",
+    "artifacts",
+    "files",
+    "report",
+    "risks",
+    "next_step"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "octoclaw.worker_result/v1"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "blocked",
+        "failed"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "report": {
+      "type": "string"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_step": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}
