@@ -33,21 +33,41 @@ RUNNER_PATTERNS = [
     r"\b(curl|grep|rg|tail|head|pwd|ls|find|cat|jq|sed|awk|ss|ps|top|netstat)\b",
     r"\b(log|logs|health|status|version|port|env|headers?|pid|process|uptime)\b",
     r"(日志|端口|版本|环境变量|连通性|健康检查|进程|服务状态|端口监听|磁盘|内存|cpu|负载)",
+    r"(ログ|ポート|バージョン|環境変数|ヘルスチェック|プロセス|サービス状態|ディスク|メモリ|負荷)",
+    r"(로그|포트|버전|환경 변수|헬스 체크|프로세스|서비스 상태|디스크|메모리|부하)",
+    r"(registros?|logs?|puerto|versión|variables? de entorno|salud|proceso|estado del servicio|disco|memoria|carga)",
+    r"(logs?|porta|versão|variáveis? de ambiente|saúde|processo|estado do serviço|disco|memória|carga)",
+    r"(логи?|порт|версия|переменные окружения|здоровье|процесс|состояние сервиса|диск|память|нагрузка)",
 ]
 
 RUNNER_READ_ONLY_INTENT_PATTERNS = [
     r"(看下|看一下|看看|查下|查一下|查看|搜一下|搜下|搜索|列出|显示|读取|有没有|确认一下|检查一下)",
     r"\b(check|inspect|show|list|display|read|search|find|look at|verify|confirm)\b",
+    r"(見て|見せて|確認して|調べて|検索して|一覧|表示して|読んで|あるか)",
+    r"(확인해|확인해줘|봐줘|보여줘|찾아줘|검색해|읽어줘|있는지)",
+    r"(verifica|comprueba|muestra|lista|lee|busca|encuentra|revisa)",
+    r"(verifique|confira|mostre|liste|leia|busque|encontre|revise)",
+    r"(проверь|посмотри|покажи|список|прочитай|найди|поищи|убедись)",
 ]
 
 RUNNER_TARGET_PATTERNS = [
     r"(日志|端口|进程|状态|文件|目录|环境变量|监听|路径|配置|版本|health|输出)",
     r"\b(log|logs|port|ports|process|pid|status|file|files|directory|directories|env|environment|path|config|version|health|output)\b",
+    r"(ログ|ポート|プロセス|状態|ファイル|ディレクトリ|環境変数|パス|設定|バージョン|出力)",
+    r"(로그|포트|프로세스|상태|파일|디렉터리|환경 변수|경로|설정|버전|출력)",
+    r"(log|logs|puerto|proceso|estado|archivo|archivos|directorio|directorios|entorno|ruta|configuración|versión|salida)",
+    r"(log|logs|porta|processo|estado|arquivo|arquivos|diretório|diretórios|ambiente|caminho|configuração|versão|saída)",
+    r"(лог|логи|порт|процесс|состояние|файл|файлы|каталог|каталоги|окружение|путь|конфиг|версия|вывод)",
 ]
 
 RUNNER_NEGATIVE_PATTERNS = [
     r"(修复|修改|改代码|改一下|重构|实现|开发|分析|对比|研究|方案|根因|原因|解释|总结|写文档|写一版|报告|周报|部署|重启|安装|卸载|删除|新增|创建|迁移|权限|密钥|数据库)",
     r"\b(fix|modify|change|patch|refactor|implement|develop|analy(?:ze|sis)|compare|research|proposal|root cause|cause|reason|explain|summary|summarize|write|report|deploy|restart|install|uninstall|delete|create|add|migrate|permission|secret|database)\b",
+    r"(修正|変更|コードを変更|リファクタ|実装|開発|分析|比較|調査|提案|根本原因|説明|要約|文書|レポート|デプロイ|再起動|インストール|アンインストール|削除|追加|作成|移行|権限|シークレット|データベース)",
+    r"(수정|변경|코드 수정|리팩터|구현|개발|분석|비교|조사|제안|근본 원인|설명|요약|문서|보고서|배포|재시작|설치|삭제|추가|생성|마이그레이션|권한|시크릿|데이터베이스)",
+    r"(arregla|corrige|modifica|cambia|refactoriza|implementa|desarrolla|analiza|compara|investiga|propuesta|causa raíz|explica|resume|documenta|informe|despliega|reinicia|instala|desinstala|elimina|agrega|crea|migra|permisos|secreto|base de datos)",
+    r"(corrija|conserte|modifique|mude|refatore|implemente|desenvolva|analise|compare|pesquise|proposta|causa raiz|explique|resuma|documente|relatório|implante|reinicie|instale|desinstale|exclua|adicione|crie|migre|permissão|segredo|banco de dados)",
+    r"(исправь|почини|измени|модифицируй|рефактор|реализуй|разработай|проанализируй|сравни|исследуй|предложение|первопричина|объясни|суммируй|документ|отч[её]т|задеплой|перезапусти|установи|удали|добавь|создай|миграц|разрешени|секрет|база данных)",
 ]
 
 READ_ONLY_COMMAND_PATTERNS = [
@@ -67,11 +87,21 @@ WRITE_COMMAND_PATTERNS = [
 CODE_PATTERNS = [
     r"(写代码|改代码|修改代码|修复|bug|重构|实现|开发|review|评审|测试|回归)",
     r"\b(code|coding|fix|bug|refactor|implement|patch|review|test|pytest|regression)\b",
+    r"(コード|バグ|リファクタ|実装|レビュー|テスト|回帰)",
+    r"(코드|버그|리팩터|구현|리뷰|테스트|회귀)",
+    r"(código|bug|error|refactoriza|implementa|revisión|prueba|regresión)",
+    r"(código|bug|erro|refatore|implemente|revisão|teste|regressão)",
+    r"(код|баг|ошибк|рефактор|реализуй|ревью|тест|регресс)",
 ]
 
 RESEARCH_PATTERNS = [
     r"(调研|对比|分析|研究|根因|方案|api|数据源|可行性)",
     r"\b(research|compare|analy|investigate|root cause|api|datasource|feasibility)\b",
+    r"(調査|比較|分析|研究|根本原因|提案|実現可能性)",
+    r"(조사|비교|분석|연구|근본 원인|제안|타당성)",
+    r"(investiga|compara|analiza|investigación|causa raíz|factibilidad)",
+    r"(pesquise|compare|analise|pesquisa|causa raiz|viabilidade)",
+    r"(исследуй|сравни|проанализируй|анализ|первопричина|осуществимость)",
 ]
 
 EXTERNAL_LOOKUP_PATTERNS = [
@@ -82,6 +112,11 @@ EXTERNAL_LOOKUP_PATTERNS = [
 WRITE_PATTERNS = [
     r"(文档|总结|报告|草稿|说明|翻译|写一篇)",
     r"\b(doc|docs|summary|report|draft|write|translate)\b",
+    r"(ドキュメント|要約|レポート|下書き|説明|翻訳|書いて)",
+    r"(문서|요약|보고서|초안|설명|번역|작성해)",
+    r"(documento|resumen|informe|borrador|explicación|traducción|escribe)",
+    r"(documento|resumo|relatório|rascunho|explicação|tradução|escreva)",
+    r"(документ|сводк|отч[её]т|черновик|описание|перевод|напиши)",
 ]
 
 SUMMARY_OUTPUT_PATTERNS = [
@@ -100,28 +135,55 @@ PARALLEL_PATTERNS = [
 ]
 
 HIGH_RISK_PATTERNS = [
-    r"(支付|认证|鉴权|登录|生产|数据库|迁移|权限|安全|发布)",
-    r"\b(payment|auth|authentication|login|prod|production|database|migration|permission|security|release)\b",
+    r"(支付|认证|鉴权|登录|数据库|迁移|权限|安全)",
+    r"((生产环境|线上环境|正式环境).*(发布|上线|变更)|(发布|上线).*(生产环境|线上环境|正式环境))",
+    r"\b(payment|auth|authentication|login|database|migration|permission|security)\b",
+    r"\b((prod|production)\s+(deploy|release|rollout|change)|release\s+to\s+(prod|production)|deploy\s+to\s+(prod|production)|production\s+release)\b",
+    r"(本番環境|本番リリース|本番デプロイ|認証|権限|データベース|マイグレーション|セキュリティ|ログイン)",
+    r"(운영 환경|프로덕션 릴리스|프로덕션 배포|인증|권한|데이터베이스|마이그레이션|보안|로그인)",
+    r"(autenticación|permisos|base de datos|migración|seguridad|inicio de sesión|despliegue a producción|release a producción)",
+    r"(autenticação|permissão|banco de dados|migração|segurança|login|deploy em produção|release em produção)",
+    r"(продакшн|релиз в прод|деплой в прод|аутентификац|разрешени|база данных|миграц|безопасност|логин)",
 ]
 
 SIMPLE_DIRECT_PATTERNS = [
     r"(是什么|什么意思|解释一下|简单说说|怎么理解)",
     r"\b(what is|explain|summarize|meaning)\b",
+    r"(とは|意味|説明して|簡単に教えて)",
+    r"(무엇|무슨 뜻|설명해줘|간단히 설명)",
+    r"(qué es|qué significa|explica|resume)",
+    r"(o que é|o que significa|explique|resuma)",
+    r"(что такое|что значит|объясни|кратко опиши)",
 ]
 
 LOCAL_STATE_PATTERNS = [
     r"(这台机器|本机|服务器|机器上|当前机器|当前环境|本地环境|系统状态)",
     r"\b(this machine|host|server|local env|current machine|system status)\b",
+    r"(このマシン|このサーバー|ローカル環境|現在のマシン|システム状態)",
+    r"(이 머신|이 서버|로컬 환경|현재 머신|시스템 상태)",
+    r"(esta máquina|este servidor|entorno local|máquina actual|estado del sistema)",
+    r"(esta máquina|este servidor|ambiente local|máquina atual|estado do sistema)",
+    r"(эта машина|этот сервер|локальное окружение|текущая машина|состояние системы)",
 ]
 
 VERIFY_PATTERNS = [
     r"(验证|确认|检查结果|回归|复现|复查|再看一下)",
     r"\b(verify|validation|regression|confirm|reproduce|double check)\b",
+    r"(検証|確認|再確認|回帰|再現|もう一度見て)",
+    r"(검증|확인|재확인|회귀|재현|다시 봐줘)",
+    r"(verifica|validación|regresión|confirma|reproduce|revisa de nuevo)",
+    r"(verifique|validação|regressão|confirme|reproduza|revise novamente)",
+    r"(проверь|валидац|регресс|подтверди|воспроизведи|посмотри ещё раз)",
 ]
 
 IMPLEMENT_PATTERNS = [
     r"(实现|落地|接入|修复|改一下|补上|生成代码|写脚本)",
     r"\b(implement|integrate|fix|patch|write code|script)\b",
+    r"(実装|導入|統合|修正|補って|コードを書いて|スクリプトを書いて)",
+    r"(구현|도입|통합|수정|보완|코드 작성|스크립트 작성)",
+    r"(implementa|integra|corrige|parchea|escribe código|script)",
+    r"(implemente|integre|corrija|patch|escreva código|script)",
+    r"(реализуй|интегрируй|исправь|патч|напиши код|скрипт)",
 ]
 
 MUTATION_PATTERNS = [
@@ -130,6 +192,11 @@ MUTATION_PATTERNS = [
     r"(触发并回读|更新并验证|改后验证|修后验证|重启并验证)",
     r"\b(modify|change|update|delete|add|create|replace|migrate|restart|deploy|install|uninstall|enable|disable|tune)\b",
     r"\b(update cron|change cron|modify cron|update config|modify config|change config|update service|modify service)\b",
+    r"(変更|更新|削除|追加|作成|書き込み|置換|移行|再起動|デプロイ|インストール|有効化|無効化|調整)",
+    r"(변경|업데이트|삭제|추가|생성|교체|마이그레이션|재시작|배포|설치|활성화|비활성화|조정)",
+    r"(modifica|cambia|actualiza|elimina|agrega|crea|reemplaza|migra|reinicia|despliega|instala|desinstala|habilita|deshabilita|ajusta)",
+    r"(modifique|mude|atualize|exclua|adicione|crie|substitua|migre|reinicie|implante|instale|desinstale|habilite|desabilite|ajuste)",
+    r"(измени|обнови|удали|добавь|создай|замени|мигрируй|перезапусти|задеплой|установи|включи|выключи|настрой)",
 ]
 
 COST_SENSITIVE_PATTERNS = [
@@ -145,12 +212,22 @@ SEMANTIC_AMBIGUITY_PATTERNS = [
 CONTINUATION_PATTERNS = [
     r"(继续|接着|下一步|再查一下|再看一下|再确认一下|顺手补|顺手加|补一下|补个测试|继续处理|继续推进)",
     r"\b(continue|follow[- ]?up|next step|check again|look again|verify again|add tests|follow through)\b",
+    r"(続けて|次のステップ|もう一度見て|もう一度確認|テストを追加|続けて進めて)",
+    r"(계속|다음 단계|다시 확인|다시 봐줘|테스트 추가|계속 진행)",
+    r"(continúa|siguiente paso|revisa de nuevo|verifica de nuevo|agrega pruebas|sigue)",
+    r"(continue|próximo passo|verifique novamente|revise novamente|adicione testes|siga)",
+    r"(продолжай|следующий шаг|проверь ещё раз|посмотри ещё раз|добавь тесты|продолжи)",
 ]
 
 REMOTE_TARGET_PATTERNS = [
     r"(远程|另一台机器|另一台主机|另一台机子|目标机器|目标主机|远端)",
     r"\b(remote|another host|another machine|target host|remote host)\b",
     r"(macmini|mac mini)",
+    r"(リモート|別のマシン|別のホスト|対象ホスト)",
+    r"(원격|다른 머신|다른 호스트|대상 호스트)",
+    r"(remoto|otra máquina|otro host|host de destino)",
+    r"(remoto|outra máquina|outro host|host de destino)",
+    r"(удал[её]нн|другая машина|другой хост|целевой хост)",
 ]
 
 

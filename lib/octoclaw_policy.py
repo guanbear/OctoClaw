@@ -206,9 +206,14 @@ def apply_sticky_route(
     sticky_route = str(sticky.get("route", "") or "").strip()
     if sticky_route not in ("spawn_single", "spawn_multi"):
         return base_route, {}, []
+    sticky_state = {
+        "route": sticky_route,
+        "applied": True,
+    }
+    sticky_reason = [f"route_sticky_lane:{sticky_route}"]
     if base_route == sticky_route:
-        return base_route, sticky, []
-    return sticky_route, sticky, [f"route_sticky_lane:{sticky_route}"]
+        return base_route, sticky_state, sticky_reason
+    return sticky_route, sticky_state, sticky_reason
 
 
 def direct_allowed_from_hint(features: dict[str, Any]) -> bool:
@@ -307,7 +312,7 @@ def build_route_hint_policy(
         source = "main_agent"
     elif forced_route:
         source = "forced_route"
-    elif sticky_state:
+    elif bool((sticky_state or {}).get("applied")):
         source = "sticky_lane"
     return {
         "required": required,
@@ -325,7 +330,7 @@ def build_route_hint_policy(
         "hint_confidence": float(route_hint.get("confidence", 0.0) or 0.0),
         "hint_reason": str(route_hint.get("reason", "") or ""),
         "merge_notes": [],
-        "sticky_applied": bool(sticky_state),
+        "sticky_applied": bool((sticky_state or {}).get("applied")),
         "sticky_route": str((sticky_state or {}).get("route", "") or ""),
         "sticky_work_type": str((sticky_state or {}).get("work_type", "") or ""),
     }
@@ -620,8 +625,6 @@ def build_decision(
 
     base_work_type = infer_work_type(task, features, route, metadata)
     work_type = merge_work_type(route, base_work_type, route_hint)
-    if not route_hint.get("work_type") and sticky_state and str(sticky_state.get("work_type", "") or "").strip():
-        work_type = str(sticky_state.get("work_type", "") or "").strip()
     base_phase = infer_phase(task, features, work_type, route, metadata)
     phase = merge_phase(route, base_phase, route_hint)
     executor_type = infer_executor_type(route)
