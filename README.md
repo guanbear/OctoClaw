@@ -223,6 +223,20 @@ python3 /workspace/openclaw/skills/octopus/lib/replay_review.py --focus blocked
 # Curate replay sessions into portable eval/review cases
 python3 /workspace/openclaw/skills/octopus/lib/replay_curate.py --focus all --dedupe-by prompt --output /tmp/octoclaw-curated-cases.json
 
+# Enable nightly replay automation (default is off)
+bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh enable --schedule-hour-local 2
+
+# Enable the optional LLM review layer for nightly replay analysis
+bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh enable --llm-review-enabled true --llm-review-max-cases 24
+
+# Run replay automation once manually
+bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh run --format text
+
+# Render a cron command for nightly execution
+bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh render-cron
+
+# Recommended: enable this only after conservative observation has started producing useful replay
+
 # Replay event schema and sample fixtures
 cat /workspace/openclaw/skills/octopus/schemas/runtime-policy-replay-event-v1.schema.json
 cat /workspace/openclaw/skills/octopus/tests/fixtures/runtime-policy-replay-events-v1.json

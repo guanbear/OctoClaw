@@ -107,6 +107,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
             },
         },
     },
+    "replay_automation": {
+        "enabled": False,
+        "schedule_hour_local": 2,
+        "summary_enabled": True,
+        "review_enabled": True,
+        "curate_enabled": True,
+        "llm_review_enabled": False,
+        "llm_review_max_cases": 24,
+        "output_dir": f"{WORKSPACE}/tmp/octopus/replay-nightly",
+    },
     "clawteam_bridge": {
         "enabled": False,
         "backend": "mirror",
