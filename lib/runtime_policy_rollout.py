@@ -71,6 +71,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         },
     },
 }
+PLUGIN_ID = "octoclaw-runtime"
 
 
 def parse_bool(value: str | None) -> bool | None:
@@ -82,6 +83,13 @@ def parse_bool(value: str | None) -> bool | None:
     if text in {"false", "0", "no", "off"}:
         return False
     raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
+
+
+def parse_csv_list(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    parts = [item.strip() for item in str(value).split(",")]
+    return [item for item in parts if item]
 
 
 def add_bool_overrides(parser: argparse.ArgumentParser) -> None:
@@ -98,6 +106,7 @@ def add_bool_overrides(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hook-agent-end", dest="hook_agent_end", type=parse_bool)
     parser.add_argument("--sticky-ttl-minutes", dest="sticky_ttl_minutes", type=int)
     parser.add_argument("--apply-on-followup-only", dest="apply_on_followup_only", type=parse_bool)
+    parser.add_argument("--route-language-packs", dest="route_language_packs", type=parse_csv_list)
 
 
 def build_runtime_policy(args: argparse.Namespace) -> dict[str, Any]:
@@ -111,6 +120,7 @@ def build_runtime_policy(args: argparse.Namespace) -> dict[str, Any]:
     switches = base.setdefault("switches", {})
     hooks = base.setdefault("hooks", {})
     route_stickiness = base.setdefault("route_stickiness", {})
+    route_language_packs = base.setdefault("route_language_packs", {})
 
     for field in (
         "hard_runner_only",
@@ -140,6 +150,8 @@ def build_runtime_policy(args: argparse.Namespace) -> dict[str, Any]:
         route_stickiness["ttl_minutes"] = args.sticky_ttl_minutes
     if args.apply_on_followup_only is not None:
         route_stickiness["apply_on_followup_only"] = args.apply_on_followup_only
+    if args.route_language_packs is not None:
+        route_language_packs["enabled"] = args.route_language_packs
 
     return base
 
@@ -162,6 +174,74 @@ def cleanup_config(config_path: Path) -> dict[str, Any]:
         data.pop("runtime_policy", None)
         if not save_json(str(config_path), data):
             raise SystemExit(f"failed to write config: {config_path}")
+    return data
+
+
+def merge_openclaw_plugin_config(config_path: Path, octoclaw_root: str | None = None) -> dict[str, Any]:
+    data = load_json(str(config_path))
+    if not isinstance(data, dict):
+        data = {}
+
+    plugins = data.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+
+    plugins["enabled"] = True
+
+    allow = plugins.get("allow")
+    allow_list = [str(item) for item in allow] if isinstance(allow, list) else []
+    if PLUGIN_ID not in allow_list:
+        allow_list.append(PLUGIN_ID)
+    plugins["allow"] = allow_list
+
+    entries = plugins.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+    entry = entries.get(PLUGIN_ID)
+    if not isinstance(entry, dict):
+        entry = {}
+    entry["enabled"] = True
+    entry_config = entry.get("config")
+    if not isinstance(entry_config, dict):
+        entry_config = {}
+    if octoclaw_root:
+        entry_config["octoclawRoot"] = octoclaw_root
+    entry["config"] = entry_config
+    hooks = entry.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    hooks["allowPromptInjection"] = True
+    entry["hooks"] = hooks
+    entries[PLUGIN_ID] = entry
+    plugins["entries"] = entries
+
+    data["plugins"] = plugins
+    if not save_json(str(config_path), data):
+        raise SystemExit(f"failed to write config: {config_path}")
+    return data
+
+
+def cleanup_openclaw_plugin_config(config_path: Path) -> dict[str, Any]:
+    data = load_json(str(config_path))
+    if not isinstance(data, dict):
+        return {}
+
+    plugins = data.get("plugins")
+    if not isinstance(plugins, dict):
+        return data
+
+    allow = plugins.get("allow")
+    if isinstance(allow, list):
+        plugins["allow"] = [item for item in allow if str(item) != PLUGIN_ID]
+
+    entries = plugins.get("entries")
+    if isinstance(entries, dict):
+        entries.pop(PLUGIN_ID, None)
+        plugins["entries"] = entries
+
+    data["plugins"] = plugins
+    if not save_json(str(config_path), data):
+        raise SystemExit(f"failed to write config: {config_path}")
     return data
 
 
@@ -193,6 +273,13 @@ def build_parser() -> argparse.ArgumentParser:
     show_parser = subparsers.add_parser("show-config")
     show_parser.add_argument("--config", required=True)
 
+    merge_plugin_parser = subparsers.add_parser("merge-openclaw-plugin")
+    merge_plugin_parser.add_argument("--config", required=True)
+    merge_plugin_parser.add_argument("--octoclaw-root")
+
+    cleanup_plugin_parser = subparsers.add_parser("cleanup-openclaw-plugin")
+    cleanup_plugin_parser.add_argument("--config", required=True)
+
     return parser
 
 
@@ -214,6 +301,14 @@ def main() -> int:
         return 0
     if args.command == "show-config":
         print(json.dumps(show_runtime_policy(Path(args.config)), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "merge-openclaw-plugin":
+        merged = merge_openclaw_plugin_config(Path(args.config), args.octoclaw_root)
+        print(json.dumps(merged.get("plugins", {}), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "cleanup-openclaw-plugin":
+        cleaned = cleanup_openclaw_plugin_config(Path(args.config))
+        print(json.dumps(cleaned.get("plugins", {}), ensure_ascii=False, indent=2))
         return 0
     parser.error(f"unknown command: {args.command}")
     return 2

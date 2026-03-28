@@ -5,9 +5,10 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+let OCTOCLAW_ROOT_OVERRIDE = "";
 
 function resolveOctoClawRoot() {
-  return process.env.OCTOCLAW_ROOT || path.resolve(__dirname, "..", "..");
+  return OCTOCLAW_ROOT_OVERRIDE || process.env.OCTOCLAW_ROOT || path.resolve(__dirname, "..", "..");
 }
 
 function resolveScript(...parts) {
@@ -145,9 +146,83 @@ function prunePolicyState() {
   }
 }
 
+function resolvePolicyStateKeys(ctx = {}) {
+  const keys = [];
+  for (const raw of [ctx.sessionId, ctx.sessionKey]) {
+    const value = String(raw || "").trim();
+    if (value && !keys.includes(value)) {
+      keys.push(value);
+    }
+  }
+  return keys;
+}
+
 function resolvePolicyStateKey(ctx = {}) {
-  const value = String(ctx.sessionId || ctx.sessionKey || "").trim();
-  return value;
+  return resolvePolicyStateKeys(ctx)[0] || "";
+}
+
+function getPolicyStateForContext(ctx = {}) {
+  for (const key of resolvePolicyStateKeys(ctx)) {
+    const state = policyStateBySession.get(key);
+    if (state) {
+      return { key, state };
+    }
+  }
+  return { key: "", state: null };
+}
+
+function setPolicyStateForContext(ctx = {}, payload) {
+  for (const key of resolvePolicyStateKeys(ctx)) {
+    policyStateBySession.set(key, payload);
+  }
+}
+
+function clearPolicyStateForContext(ctx = {}) {
+  for (const key of resolvePolicyStateKeys(ctx)) {
+    policyStateBySession.delete(key);
+  }
+}
+
+function extractMessageText(content) {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && typeof part.text === "string") {
+          return String(part.text);
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (content && typeof content === "object" && typeof content.text === "string") {
+    return String(content.text).trim();
+  }
+  return "";
+}
+
+function extractPromptText(event = {}) {
+  const prompt = String(event?.prompt || "").trim();
+  if (prompt) {
+    return prompt;
+  }
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (String(message?.role || "").trim().toLowerCase() !== "user") {
+      continue;
+    }
+    const text = extractMessageText(message?.content);
+    if (text) {
+      return text;
+    }
+  }
+  return "";
 }
 
 function delegatedStickyRoute(decision) {
@@ -210,6 +285,7 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
   }
   try {
     await appendJsonl(resolveReplayLogPath(), {
+      schema_version: "octoclaw.runtime_policy.replay_event/v1",
       event: eventType,
       at: new Date().toISOString(),
       ...payload,
@@ -250,12 +326,10 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   }
   prunePolicyState();
   const stateKey = resolvePolicyStateKey(ctx);
-  const existing = stateKey ? policyStateBySession.get(stateKey) : null;
+  const existing = getPolicyStateForContext(ctx).state;
   if (!options.force && existing?.prompt === prompt && existing?.decision) {
     existing.updatedAt = Date.now();
-    if (stateKey) {
-      policyStateBySession.set(stateKey, existing);
-    }
+    setPolicyStateForContext(ctx, existing);
     return { stateKey, state: existing, decision: existing.decision };
   }
   const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
@@ -276,9 +350,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       routeHintPayload: existing?.routeHintPayload || null,
       blockedTools: Array.isArray(existing?.blockedTools) ? existing.blockedTools : [],
     };
-    if (stateKey) {
-      policyStateBySession.set(stateKey, nextState);
-    }
+    setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
       "policy_resolved",
       {
@@ -442,7 +514,12 @@ async function userFacingHandoff(payload, fallback, cwd) {
   return `${base}\n\n完整报告：${reportPath}`;
 }
 
-export default function (pi) {
+const plugin = {
+  id: "octoclaw-runtime",
+  name: "OctoClaw Runtime",
+  description: "Runtime policy hooks, dispatch tools, and replay logging for OctoClaw",
+  register(pi) {
+  OCTOCLAW_ROOT_OVERRIDE = String(pi?.pluginConfig?.octoclawRoot || "").trim();
   const registerLifecycleHook = (hookName, handler, priority = 180) => {
     if (typeof pi.on === "function") {
       pi.on(hookName, handler, { priority });
@@ -457,13 +534,13 @@ export default function (pi) {
 
   registerLifecycleHook("before_model_resolve", async (event, ctx) => {
     if (!isManagedAgentContext(ctx)) return;
+    const prompt = extractPromptText(event);
     const resolved = await resolvePolicyDecisionForContext(
-      event?.prompt || "",
+      prompt,
       ctx,
       process.cwd(),
       pi.logger,
-      decision,
-      );
+    );
     const decision = resolved?.decision;
     const hookConfig = decision?.hook_interface?.before_model_resolve;
     if (!hookConfig?.enabled) return;
@@ -476,8 +553,9 @@ export default function (pi) {
 
   registerLifecycleHook("before_prompt_build", async (event, ctx) => {
     if (!isManagedAgentContext(ctx)) return;
+    const prompt = extractPromptText(event);
     const resolved = await resolvePolicyDecisionForContext(
-      event?.prompt || "",
+      prompt,
       ctx,
       process.cwd(),
       pi.logger,
@@ -501,8 +579,7 @@ export default function (pi) {
 
   registerLifecycleHook("before_tool_call", async (event, ctx) => {
     if (!isManagedAgentContext(ctx)) return;
-    const stateKey = resolvePolicyStateKey(ctx);
-    const state = stateKey ? policyStateBySession.get(stateKey) : null;
+    const { key: stateKey, state } = getPolicyStateForContext(ctx);
     const decision = state?.decision;
     const hookConfig = decision?.hook_interface?.before_tool_call;
     if (!hookConfig?.enabled) return;
@@ -596,9 +673,8 @@ export default function (pi) {
   });
 
   registerLifecycleHook("agent_end", async (_event, ctx) => {
-    const stateKey = resolvePolicyStateKey(ctx);
+    const { key: stateKey, state } = getPolicyStateForContext(ctx);
     if (!stateKey) return;
-    const state = policyStateBySession.get(stateKey);
     await recordPolicyReplay(
       "agent_end",
       {
@@ -616,7 +692,7 @@ export default function (pi) {
       pi.logger,
       state?.decision || null,
     );
-    policyStateBySession.delete(stateKey);
+    clearPolicyStateForContext(ctx);
   }, 50);
 
   pi.registerTool(
@@ -641,7 +717,7 @@ export default function (pi) {
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const stateKey = resolvePolicyStateKey(ctx);
-        const existing = stateKey ? policyStateBySession.get(stateKey) : null;
+        const existing = getPolicyStateForContext(ctx).state;
         const task = String(params.task || existing?.prompt || "").trim();
         if (!task) {
           throw new Error("octoclaw_route_hint requires task context");
@@ -662,20 +738,18 @@ export default function (pi) {
         args.push("--route-hint-json", JSON.stringify(routeHintPayload));
         const payload = await runJsonScript("octoclaw_policy.py", args, ctx.cwd || process.cwd());
         const stickyPersisted = await persistStickyLane(stateKey, payload, pi.logger, { source: "route_hint" });
-        if (stateKey) {
-          policyStateBySession.set(stateKey, {
-            ...(existing || {}),
-            prompt: task,
-            decision: payload,
-            createdAt: existing?.createdAt || Date.now(),
-            updatedAt: Date.now(),
-            delegated: Boolean(existing?.delegated),
-            delegationTool: existing?.delegationTool || "",
-            blockedTools: Array.isArray(existing?.blockedTools) ? existing.blockedTools : [],
-            routeHintSubmitted: true,
-            routeHintPayload,
-          });
-        }
+        setPolicyStateForContext(ctx, {
+          ...(existing || {}),
+          prompt: task,
+          decision: payload,
+          createdAt: existing?.createdAt || Date.now(),
+          updatedAt: Date.now(),
+          delegated: Boolean(existing?.delegated),
+          delegationTool: existing?.delegationTool || "",
+          blockedTools: Array.isArray(existing?.blockedTools) ? existing.blockedTools : [],
+          routeHintSubmitted: true,
+          routeHintPayload,
+        });
         await recordPolicyReplay(
           "route_hint_submitted",
           {
@@ -790,8 +864,7 @@ export default function (pi) {
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
-        const stateKey = resolvePolicyStateKey(ctx);
-        const state = stateKey ? policyStateBySession.get(stateKey) : null;
+        const { key: stateKey, state } = getPolicyStateForContext(ctx);
         const policyDecisionJson = params.policyJson || (state?.decision ? JSON.stringify(state.decision) : "");
         const cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
@@ -905,10 +978,12 @@ export default function (pi) {
     { source: "octoclaw-runtime" },
   );
 
-  pi.registerCommand("octostatus", {
+  pi.registerCommand({
+    name: "octostatus",
     description: "Show OctoClaw status; default compact dashboard, table/lanes only when explicitly requested",
-    handler: async (args, ctx) => {
-      const format = (args || "").trim() || "compact";
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const format = String(ctx.args || "").trim() || "compact";
       const output = await runStatus(format, ctx.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.notify(`OctoClaw status (${format})`);
@@ -917,10 +992,12 @@ export default function (pi) {
     },
   });
 
-  pi.registerCommand("octoroute", {
+  pi.registerCommand({
+    name: "octoroute",
     description: "Run OctoClaw route decision for a task",
-    handler: async (args, ctx) => {
-      const task = (args || "").trim();
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const task = String(ctx.args || "").trim();
       if (!task) {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octoroute <task>", "error");
         return;
@@ -933,10 +1010,12 @@ export default function (pi) {
     },
   });
 
-  pi.registerCommand("octopolicy", {
+  pi.registerCommand({
+    name: "octopolicy",
     description: "Show the structured OctoClaw runtime policy decision for a task",
-    handler: async (args, ctx) => {
-      const task = (args || "").trim();
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const task = String(ctx.args || "").trim();
       if (!task) {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octopolicy <task>", "error");
         return;
@@ -949,10 +1028,12 @@ export default function (pi) {
     },
   });
 
-  pi.registerCommand("octospawn", {
+  pi.registerCommand({
+    name: "octospawn",
     description: "Register a validated OctoClaw spawn task",
-    handler: async (args, ctx) => {
-      const task = (args || "").trim();
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const task = String(ctx.args || "").trim();
       if (!task) {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octospawn <task>", "error");
         return;
@@ -964,4 +1045,7 @@ export default function (pi) {
       }
     },
   });
-}
+  },
+};
+
+export default plugin;

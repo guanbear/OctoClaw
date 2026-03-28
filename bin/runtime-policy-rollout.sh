@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 WORKSPACE="${WORKSPACE:-/workspace}"
 OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
+OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-${OPENCLAW_HOME}/openclaw.json}"
 CONFIG_FILE="${OCTOCLAW_CONFIG_FILE:-${WORKSPACE}/tmp/octopus-config.json}"
 PRESET="${RUNTIME_POLICY_PRESET:-conservative}"
 EXT_SOURCE="${REPO_ROOT}/extensions/octoclaw-runtime"
@@ -28,6 +29,7 @@ Options:
   --preset conservative|guided|enforced
   --workspace PATH
   --openclaw-home PATH
+  --openclaw-config PATH
   --config PATH
   --dry-run
   --no-link-extension
@@ -44,6 +46,7 @@ Options:
   --hook-agent-end BOOL
   --sticky-ttl-minutes N
   --apply-on-followup-only BOOL
+  --route-language-packs zh,en[,ja,...]
 EOF
 }
 
@@ -63,7 +66,14 @@ run_cmd() {
 
 backup_existing_target() {
     local target="$1"
-    local backup="${target}.bak.${BACKUP_SUFFIX}"
+    local backup
+    if [ "$(dirname "$target")" = "${OPENCLAW_HOME}/extensions" ]; then
+        local backup_dir="${OPENCLAW_HOME}/extensions-backups"
+        run_cmd mkdir -p "$backup_dir"
+        backup="${backup_dir}/$(basename "$target").bak.${BACKUP_SUFFIX}"
+    else
+        backup="${target}.bak.${BACKUP_SUFFIX}"
+    fi
     if [ -L "$target" ] || [ -f "$target" ]; then
         run_cmd mv "$target" "$backup"
         log "✅ 已备份现有扩展 → $backup"
@@ -73,7 +83,7 @@ backup_existing_target() {
     fi
 }
 
-link_extension() {
+install_extension() {
     [ "$LINK_EXTENSION" = true ] || return 0
     if [ ! -d "$EXT_SOURCE" ]; then
         log "⚠️ 未找到 runtime extension 源目录：$EXT_SOURCE"
@@ -83,8 +93,8 @@ link_extension() {
     if [ -e "$EXT_TARGET" ] || [ -L "$EXT_TARGET" ]; then
         backup_existing_target "$EXT_TARGET"
     fi
-    run_cmd ln -s "$EXT_SOURCE" "$EXT_TARGET"
-    log "✅ 已安装 runtime extension → $EXT_TARGET"
+    run_cmd cp -R "$EXT_SOURCE" "$EXT_TARGET"
+    log "✅ 已安装 runtime extension 目录 → $EXT_TARGET"
 }
 
 remove_extension() {
@@ -115,6 +125,14 @@ merge_config() {
     run_cmd "${cmd[@]}"
 }
 
+merge_openclaw_plugin_config() {
+    run_cmd mkdir -p "$(dirname "$OPENCLAW_CONFIG")"
+    if [ ! -f "$OPENCLAW_CONFIG" ]; then
+        run_cmd printf '%s\n' '{}' > "$OPENCLAW_CONFIG"
+    fi
+    run_cmd "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" merge-openclaw-plugin --config "$OPENCLAW_CONFIG" --octoclaw-root "$REPO_ROOT"
+}
+
 show_config() {
     run_cmd "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" show-config --config "$CONFIG_FILE"
 }
@@ -128,6 +146,17 @@ cleanup_config() {
     run_cmd cp "$CONFIG_FILE" "$backup"
     log "✅ 已备份配置 → $backup"
     run_cmd "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" cleanup-config --config "$CONFIG_FILE"
+}
+
+cleanup_openclaw_plugin_config() {
+    if [ ! -f "$OPENCLAW_CONFIG" ]; then
+        log "ℹ️  未找到 OpenClaw 配置文件，跳过插件配置清理"
+        return 0
+    fi
+    local backup="${OPENCLAW_CONFIG}.bak.${BACKUP_SUFFIX}"
+    run_cmd cp "$OPENCLAW_CONFIG" "$backup"
+    log "✅ 已备份 OpenClaw 配置 → $backup"
+    run_cmd "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" cleanup-openclaw-plugin --config "$OPENCLAW_CONFIG"
 }
 
 COMMAND="${1:-}"
@@ -157,6 +186,10 @@ while [ $# -gt 0 ]; do
             CONFIG_FILE="$2"
             shift 2
             ;;
+        --openclaw-config)
+            OPENCLAW_CONFIG="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -165,7 +198,7 @@ while [ $# -gt 0 ]; do
             LINK_EXTENSION=false
             shift
             ;;
-        --enabled|--hard-runner-only|--route-hint-required|--replay-logging|--direct-model-override|--delegation-enforcement|--sticky-lane|--hook-before-model-resolve|--hook-before-prompt-build|--hook-before-tool-call|--hook-agent-end|--sticky-ttl-minutes|--apply-on-followup-only)
+        --enabled|--hard-runner-only|--route-hint-required|--replay-logging|--direct-model-override|--delegation-enforcement|--sticky-lane|--hook-before-model-resolve|--hook-before-prompt-build|--hook-before-tool-call|--hook-agent-end|--sticky-ttl-minutes|--apply-on-followup-only|--route-language-packs)
             EXTRA_ARGS+=("$1" "$2")
             shift 2
             ;;
@@ -183,10 +216,12 @@ done
 
 case "$COMMAND" in
     install)
-        link_extension
+        install_extension
+        merge_openclaw_plugin_config
         merge_config true
         ;;
     enable)
+        merge_openclaw_plugin_config
         merge_config true
         ;;
     disable)
@@ -195,6 +230,7 @@ case "$COMMAND" in
         ;;
     uninstall)
         remove_extension
+        cleanup_openclaw_plugin_config
         cleanup_config
         ;;
     show)

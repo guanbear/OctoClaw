@@ -1,0 +1,8 @@
+{
+  "id": "octoclaw-runtime",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

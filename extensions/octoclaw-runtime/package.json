@@ -5,9 +5,10 @@
   "type": "module",
   "main": "index.js",
   "files": [
-    "index.js"
+    "index.js",
+    "openclaw.plugin.json"
   ],
-  "pi": {
+  "openclaw": {
     "extensions": [
       "./index.js"
     ]
