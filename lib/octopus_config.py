@@ -48,6 +48,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "runtime_policy": {
         "enabled": True,
+        "switches": {
+            "hard_runner_only": True,
+            "route_hint_required": True,
+            "replay_logging": True,
+            "direct_model_override": True,
+            "delegation_enforcement": True,
+        },
         "route_stickiness": {
             "enabled": True,
             "ttl_minutes": 180,

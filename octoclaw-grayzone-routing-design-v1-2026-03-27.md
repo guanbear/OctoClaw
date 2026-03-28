@@ -324,6 +324,17 @@ classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 a
   - 高风险自动 review
   - 非 direct 限制工具
 
+推荐同时保留以下灰度开关：
+
+- `runtime_policy.enabled`
+- `runtime_policy.switches.hard_runner_only`
+- `runtime_policy.switches.route_hint_required`
+- `runtime_policy.switches.replay_logging`
+- `runtime_policy.switches.direct_model_override`
+- `runtime_policy.switches.delegation_enforcement`
+- `runtime_policy.route_stickiness.enabled`
+- `runtime_policy.hooks.*`
+
 ### Phase B
 
 - 记录 replay

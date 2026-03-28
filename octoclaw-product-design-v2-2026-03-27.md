@@ -541,6 +541,17 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - runtime policy 和 hook 负责最终执行约束
 - classifier 保留为后续可插拔增强，不作为第一版前置依赖
 
+同时要求实现侧必须提供显式 rollout switches，至少包括：
+
+- `runtime_policy.enabled`
+- `runtime_policy.switches.hard_runner_only`
+- `runtime_policy.switches.route_hint_required`
+- `runtime_policy.switches.replay_logging`
+- `runtime_policy.switches.direct_model_override`
+- `runtime_policy.switches.delegation_enforcement`
+- `runtime_policy.route_stickiness.enabled`
+- `runtime_policy.hooks.*`
+
 灰区路由的详细设计见：
 
 - [octoclaw-grayzone-routing-design-v1-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-grayzone-routing-design-v1-2026-03-27.md)

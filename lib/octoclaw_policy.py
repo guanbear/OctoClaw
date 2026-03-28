@@ -145,7 +145,10 @@ def normalize_route_hint(raw: Any) -> dict[str, Any]:
     }
 
 
-def route_hint_required(route_meta: dict[str, Any], forced_route: str = "") -> bool:
+def route_hint_required(route_meta: dict[str, Any], forced_route: str = "", policy_cfg: dict[str, Any] | None = None) -> bool:
+    switches = (policy_cfg or {}).get("switches", {}) if isinstance(policy_cfg, dict) else {}
+    if not bool(switches.get("route_hint_required", True)):
+        return False
     if forced_route:
         return False
     reason_codes = list(route_meta.get("reason_codes", []) or [])
@@ -293,11 +296,12 @@ def build_route_hint_policy(
     base_reason_codes: list[str],
     route_hint: dict[str, Any],
     forced_route: str,
+    policy_cfg: dict[str, Any] | None = None,
     sticky_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     hard_gate_applied = "hard_runner_only" in base_reason_codes
     submitted = bool(route_hint.get("route_hint"))
-    required = route_hint_required({"reason_codes": base_reason_codes}, forced_route)
+    required = route_hint_required({"reason_codes": base_reason_codes}, forced_route, policy_cfg)
     source = "system_preferred"
     if submitted:
         source = "main_agent"
@@ -324,6 +328,20 @@ def build_route_hint_policy(
         "sticky_applied": bool(sticky_state),
         "sticky_route": str((sticky_state or {}).get("route", "") or ""),
         "sticky_work_type": str((sticky_state or {}).get("work_type", "") or ""),
+    }
+
+
+def runtime_switches_summary(policy_cfg: dict[str, Any]) -> dict[str, Any]:
+    switches = policy_cfg.get("switches", {}) if isinstance(policy_cfg, dict) else {}
+    route_stickiness = policy_cfg.get("route_stickiness", {}) if isinstance(policy_cfg, dict) else {}
+    return {
+        "policy_enabled": bool(policy_cfg.get("enabled", True)) if isinstance(policy_cfg, dict) else True,
+        "hard_runner_only_enabled": bool(switches.get("hard_runner_only", True)),
+        "route_hint_required_enabled": bool(switches.get("route_hint_required", True)),
+        "replay_logging_enabled": bool(switches.get("replay_logging", True)),
+        "direct_model_override_enabled": bool(switches.get("direct_model_override", True)),
+        "delegation_enforcement_enabled": bool(switches.get("delegation_enforcement", True)),
+        "sticky_lane_enabled": bool(route_stickiness.get("enabled", True)) if isinstance(route_stickiness, dict) else True,
     }
 
 
@@ -488,6 +506,7 @@ def tool_policy(route: str, dispatch_required: bool) -> dict[str, Any]:
 def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
     hooks_cfg = policy_cfg.get("hooks", {})
     policy_enabled = bool(policy_cfg.get("enabled", True))
+    switch_cfg = policy_cfg.get("switches", {}) if isinstance(policy_cfg, dict) else {}
     route_decision = decision["route_decision"]
     model_policy = decision["model_policy"]
     skill_policy = decision["skill_policy"]
@@ -496,7 +515,11 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
 
     return {
         "before_model_resolve": {
-            "enabled": policy_enabled and bool(hooks_cfg.get("before_model_resolve", True)),
+            "enabled": (
+                policy_enabled
+                and bool(hooks_cfg.get("before_model_resolve", True))
+                and bool(switch_cfg.get("direct_model_override", True))
+            ),
             "action": "override_model_selection",
             "selected_model": model_policy["selected_model"],
             "profile": model_policy["profile"],
@@ -520,7 +543,11 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
             "prompt_contract": decision["prompt_contract"],
         },
         "before_tool_call": {
-            "enabled": policy_enabled and bool(hooks_cfg.get("before_tool_call", True)),
+            "enabled": (
+                policy_enabled
+                and bool(hooks_cfg.get("before_tool_call", True))
+                and bool(switch_cfg.get("delegation_enforcement", True))
+            ),
             "action": "enforce_delegation_policy",
             "tool_policy": decision["tool_policy"],
             "route_hint_required": route_hint_policy["required"],
@@ -577,7 +604,7 @@ def build_decision(
     sticky_state: dict[str, Any] = {}
     merge_reason_codes: list[str] = []
     route = base_route
-    if route_hint_required(route_meta, force_route):
+    if route_hint_required(route_meta, force_route, runtime_cfg):
         route, sticky_state, sticky_reasons = apply_sticky_route(
             base_route,
             features,
@@ -618,7 +645,7 @@ def build_decision(
     default_skill_bundle = resolve_skill_bundle(runtime_cfg, work_type, profile)
     base_reason_codes = list(route_meta.get("reason_codes", []) or [])
     merged_reason_codes = [*merge_reason_codes, *base_reason_codes]
-    route_hint_policy = build_route_hint_policy(base_route, route, base_reason_codes, route_hint, force_route, sticky_state)
+    route_hint_policy = build_route_hint_policy(base_route, route, base_reason_codes, route_hint, force_route, runtime_cfg, sticky_state)
     route_hint_policy["merge_notes"] = merge_reason_codes
     dispatch_required = route != "direct"
     should_wait = route == "runner"
@@ -675,6 +702,7 @@ def build_decision(
         "prompt_contract": prompt_contract(protocol, route),
         "tool_policy": tool_policy(route, dispatch_required),
         "route_hint_policy": route_hint_policy,
+        "runtime_switches": runtime_switches_summary(runtime_cfg),
         "compat": {
             "legacy_role_hint": str(route_meta.get("role_hint", "") or ""),
             "legacy_tier_hint": legacy_tier,

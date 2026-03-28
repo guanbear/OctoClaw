@@ -82,6 +82,34 @@ Recommended minimal open-source path:
 8. Use `status.sh --format table` to inspect state
 9. Run `eval_suite.py` once to establish a baseline
 
+Recommended gradual rollout switches in `tmp/octopus-config.json`:
+
+```json
+{
+  "runtime_policy": {
+    "enabled": true,
+    "switches": {
+      "hard_runner_only": true,
+      "route_hint_required": true,
+      "replay_logging": true,
+      "direct_model_override": true,
+      "delegation_enforcement": true
+    },
+    "route_stickiness": {
+      "enabled": true,
+      "ttl_minutes": 180,
+      "apply_on_followup_only": true
+    },
+    "hooks": {
+      "before_model_resolve": true,
+      "before_prompt_build": true,
+      "before_tool_call": true,
+      "agent_end": true
+    }
+  }
+}
+```
+
 ## Common Commands
 
 ```bash

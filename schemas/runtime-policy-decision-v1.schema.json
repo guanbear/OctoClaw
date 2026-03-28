@@ -16,6 +16,7 @@
     "prompt_contract",
     "tool_policy",
     "route_hint_policy",
+    "runtime_switches",
     "compat",
     "hook_interface"
   ],
@@ -248,6 +249,28 @@
         "sticky_applied": { "type": "boolean" },
         "sticky_route": { "type": "string" },
         "sticky_work_type": { "type": "string" }
+      }
+    },
+    "runtime_switches": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_enabled",
+        "hard_runner_only_enabled",
+        "route_hint_required_enabled",
+        "replay_logging_enabled",
+        "direct_model_override_enabled",
+        "delegation_enforcement_enabled",
+        "sticky_lane_enabled"
+      ],
+      "properties": {
+        "policy_enabled": { "type": "boolean" },
+        "hard_runner_only_enabled": { "type": "boolean" },
+        "route_hint_required_enabled": { "type": "boolean" },
+        "replay_logging_enabled": { "type": "boolean" },
+        "direct_model_override_enabled": { "type": "boolean" },
+        "delegation_enforcement_enabled": { "type": "boolean" },
+        "sticky_lane_enabled": { "type": "boolean" }
       }
     },
     "compat": {

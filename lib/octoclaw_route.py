@@ -26,6 +26,8 @@ import json
 import re
 from typing import Iterable
 
+from octopus_config import load_octopus_config
+
 
 RUNNER_PATTERNS = [
     r"\b(curl|grep|rg|tail|head|pwd|ls|find|cat|jq|sed|awk|ss|ps|top|netstat)\b",
@@ -435,6 +437,10 @@ def should_request_semantic_review(features: dict, scores: dict, route: str) -> 
 
 def hard_gate_route(features: dict) -> tuple[str | None, list[str]]:
     reasons: list[str] = []
+    runtime_cfg = load_octopus_config().get("runtime_policy", {})
+    switches = runtime_cfg.get("switches", {}) if isinstance(runtime_cfg, dict) else {}
+    if not bool(switches.get("hard_runner_only", True)):
+        return None, reasons
 
     if features.get("hard_runner_candidate"):
         reasons.append("hard_runner_only")

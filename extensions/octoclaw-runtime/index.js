@@ -168,7 +168,14 @@ function parsePolicyDecisionJson(raw) {
   }
 }
 
+function runtimeSwitches(decision) {
+  return decision?.runtime_switches || {};
+}
+
 async function persistStickyLane(sessionKey, decision, logger, options = {}) {
+  if (!runtimeSwitches(decision).sticky_lane_enabled) {
+    return false;
+  }
   const stickyRoute = delegatedStickyRoute(decision);
   if (!sessionKey || !stickyRoute) {
     return false;
@@ -197,7 +204,10 @@ async function persistStickyLane(sessionKey, decision, logger, options = {}) {
   }
 }
 
-async function recordPolicyReplay(eventType, payload = {}, logger) {
+async function recordPolicyReplay(eventType, payload = {}, logger, decision = null) {
+  if (decision && !runtimeSwitches(decision).replay_logging_enabled) {
+    return;
+  }
   try {
     await appendJsonl(resolveReplayLogPath(), {
       event: eventType,
@@ -284,6 +294,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         prompt: truncateText(prompt),
       },
       logger,
+      decision,
     );
     return { stateKey, state: nextState, decision };
   } catch (err) {
@@ -451,7 +462,8 @@ export default function (pi) {
       ctx,
       process.cwd(),
       pi.logger,
-    );
+      decision,
+      );
     const decision = resolved?.decision;
     const hookConfig = decision?.hook_interface?.before_model_resolve;
     if (!hookConfig?.enabled) return;
@@ -515,6 +527,7 @@ export default function (pi) {
           requiredTool: routeHintTool,
         },
         pi.logger,
+        decision,
       );
       return {
         block: true,
@@ -533,6 +546,7 @@ export default function (pi) {
           toolName,
         },
         pi.logger,
+        decision,
       );
       return {
         block: true,
@@ -573,6 +587,7 @@ export default function (pi) {
         toolName,
       },
       pi.logger,
+      state?.decision || null,
     );
     return {
       block: true,
@@ -599,6 +614,7 @@ export default function (pi) {
         blockedTools: Array.isArray(state?.blockedTools) ? state.blockedTools : [],
       },
       pi.logger,
+      state?.decision || null,
     );
     policyStateBySession.delete(stateKey);
   }, 50);
@@ -678,6 +694,7 @@ export default function (pi) {
             stickyPersisted,
           },
           pi.logger,
+          payload,
         );
         const nextSummary = payload?.route_decision?.route === "direct"
           ? `route_hint merged: final route is direct. You may answer directly.`
@@ -810,6 +827,7 @@ export default function (pi) {
             stickyPersisted,
           },
           pi.logger,
+          cachedDecision,
         );
         return toolResponse(
           summary,
