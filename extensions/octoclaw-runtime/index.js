@@ -742,7 +742,7 @@ const plugin = {
         if (params.command) args.push("--command", params.command);
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         args.push("--route-hint-json", JSON.stringify(routeHintPayload));
-        const payload = await runJsonScript("octoclaw_policy.py", args, ctx.cwd || process.cwd());
+        const payload = await runJsonScript("octoclaw_policy.py", args, ctx?.cwd || process.cwd());
         const stickyPersisted = await persistStickyLane(stateKey, payload, pi.logger, { source: "route_hint" });
         setPolicyStateForContext(ctx, {
           ...(existing || {}),
@@ -813,7 +813,7 @@ const plugin = {
         if (params.sessionKey) args.push("--session-key", params.sessionKey);
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
         if (params.metadataJson) args.push("--metadata-json", params.metadataJson);
-        const payload = await runJsonScript("octoclaw_policy.py", args, ctx.cwd || process.cwd());
+        const payload = await runJsonScript("octoclaw_policy.py", args, ctx?.cwd || process.cwd());
         return toolResponse(policySummaryText(payload), payload);
       },
     },
@@ -838,7 +838,7 @@ const plugin = {
         const payload = await runJsonScript(
           "octoclaw_route.py",
           ["--task", params.task, ...(params.command ? ["--command", params.command] : [])],
-          ctx.cwd || process.cwd(),
+          ctx?.cwd || process.cwd(),
         );
         return toolResponse(
           `OctoClaw system preferred route: ${payload.system_preferred_route || payload.route} (confidence ${payload.confidence ?? "n/a"})`,
@@ -878,7 +878,7 @@ const plugin = {
         const cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
         args.push("--wait", "--wait-timeout-seconds", "12");
-        const payload = await runJsonScript("dispatch_task.py", args, ctx.cwd || process.cwd());
+        const payload = await runJsonScript("dispatch_task.py", args, ctx?.cwd || process.cwd());
         const stickyDecision = delegatedStickyRoute(cachedDecision)
           ? cachedDecision
           : {
@@ -895,7 +895,7 @@ const plugin = {
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`,
-          ctx.cwd || process.cwd(),
+          ctx?.cwd || process.cwd(),
         );
         await recordPolicyReplay(
           "dispatch_called",
@@ -951,11 +951,11 @@ const plugin = {
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
         if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
-        const payload = await runJsonScript("octoclaw_spawn.py", args, ctx.cwd || process.cwd());
+        const payload = await runJsonScript("octoclaw_spawn.py", args, ctx?.cwd || process.cwd());
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw spawn registered: ${payload.label} / ${payload.model}`,
-          ctx.cwd || process.cwd(),
+          ctx?.cwd || process.cwd(),
         );
         return toolResponse(
           summary,
@@ -980,7 +980,7 @@ const plugin = {
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const format = params.format || "compact";
-        const output = await runStatus(format, ctx.cwd || process.cwd());
+        const output = await runStatus(format, ctx?.cwd || process.cwd());
         return statusToolResponse(output, format);
       },
     },
@@ -993,7 +993,7 @@ const plugin = {
     acceptsArgs: true,
     handler: async (ctx) => {
       const format = String(ctx.args || "").trim() || "compact";
-      const output = await runStatus(format, ctx.cwd || process.cwd());
+      const output = await runStatus(format, ctx?.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.notify(`OctoClaw status (${format})`);
         ctx.ui.setEditorText(output);
@@ -1011,7 +1011,7 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octoroute <task>", "error");
         return;
       }
-      const payload = await runJsonScript("octoclaw_route.py", ["--task", task], ctx.cwd || process.cwd());
+      const payload = await runJsonScript("octoclaw_route.py", ["--task", task], ctx?.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(`OctoClaw system preferred route: ${payload.system_preferred_route || payload.route}`);
@@ -1029,7 +1029,7 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octopolicy <task>", "error");
         return;
       }
-      const payload = await runJsonScript("octoclaw_policy.py", ["--task", task], ctx.cwd || process.cwd());
+      const payload = await runJsonScript("octoclaw_policy.py", ["--task", task], ctx?.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(policySummaryText(payload));
@@ -1047,7 +1047,7 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octospawn <task>", "error");
         return;
       }
-      const payload = await runJsonScript("octoclaw_spawn.py", ["--task", task, "--register"], ctx.cwd || process.cwd());
+      const payload = await runJsonScript("octoclaw_spawn.py", ["--task", task, "--register"], ctx?.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(`OctoClaw spawn registered: ${payload.task_id}`);
