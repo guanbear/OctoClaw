@@ -217,6 +217,12 @@ python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase conserv
 # Summarize replay signals before promoting guided -> enforced
 python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase guided
 
+# Review replay sessions before labeling or tuning routing rules
+python3 /workspace/openclaw/skills/octopus/lib/replay_review.py --focus blocked
+
+# Curate replay sessions into portable eval/review cases
+python3 /workspace/openclaw/skills/octopus/lib/replay_curate.py --focus all --dedupe-by prompt --output /tmp/octoclaw-curated-cases.json
+
 # Replay event schema and sample fixtures
 cat /workspace/openclaw/skills/octopus/schemas/runtime-policy-replay-event-v1.schema.json
 cat /workspace/openclaw/skills/octopus/tests/fixtures/runtime-policy-replay-events-v1.json
