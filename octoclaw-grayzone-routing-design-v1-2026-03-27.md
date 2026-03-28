@@ -346,6 +346,8 @@ classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 a
 部署建议：
 
 - 用独立 rollout 脚本安装 / 卸载 / 启停 runtime policy
+- rollout 应支持显式覆盖 `route_language_packs.enabled`
+  - 例如：`--route-language-packs zh,en,ja,es`
 - 默认先走 `conservative`
 - 等 replay 稳定后再升到 `guided` 或 `enforced`
 
@@ -354,6 +356,10 @@ classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 a
 - 记录 replay
 - 记录主脑 `route_hint`
 - 记录最终 route 和人工回看结果
+- 固定 replay event schema：
+  - [`schemas/runtime-policy-replay-event-v1.schema.json`](./schemas/runtime-policy-replay-event-v1.schema.json)
+- 固定 replay fixtures：
+  - [`tests/fixtures/runtime-policy-replay-events-v1.json`](./tests/fixtures/runtime-policy-replay-events-v1.json)
 
 ### Phase C
 

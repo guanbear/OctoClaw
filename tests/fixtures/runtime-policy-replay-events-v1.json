@@ -1,0 +1,81 @@
+[
+  {
+    "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+    "event": "policy_resolved",
+    "at": "2026-03-28T08:30:00.000Z",
+    "sessionKey": "session-main-1",
+    "sessionId": "session-main-1",
+    "trigger": "message",
+    "route": "spawn_single",
+    "systemPreferredRoute": "spawn_single",
+    "workerPool": "octoclaw-code",
+    "routeHintRequired": false,
+    "routeHintSubmitted": false,
+    "stickyApplied": false,
+    "prompt": "看一下这个错误并给修复建议"
+  },
+  {
+    "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+    "event": "route_hint_submitted",
+    "at": "2026-03-28T08:30:05.000Z",
+    "sessionKey": "session-main-1",
+    "sessionId": "session-main-1",
+    "routeHint": "spawn_single",
+    "workType": "code",
+    "phase": "inspect",
+    "reviewRequired": false,
+    "confidence": 0.82,
+    "reason": "needs log reading plus code inspection",
+    "systemPreferredRoute": "spawn_single",
+    "finalRoute": "spawn_single",
+    "workerPool": "octoclaw-code",
+    "stickyApplied": false,
+    "stickyPersisted": true
+  },
+  {
+    "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+    "event": "tool_blocked_before_route_hint",
+    "at": "2026-03-28T08:30:06.000Z",
+    "sessionKey": "session-main-2",
+    "sessionId": "session-main-2",
+    "route": "spawn_single",
+    "toolName": "exec",
+    "requiredTool": "octoclaw_route_hint"
+  },
+  {
+    "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+    "event": "tool_blocked_delegation_policy",
+    "at": "2026-03-28T08:30:07.000Z",
+    "sessionKey": "session-main-3",
+    "sessionId": "session-main-3",
+    "route": "spawn_multi",
+    "toolName": "browser"
+  },
+  {
+    "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+    "event": "dispatch_called",
+    "at": "2026-03-28T08:30:12.000Z",
+    "sessionKey": "session-main-1",
+    "sessionId": "session-main-1",
+    "route": "runner",
+    "systemPreferredRoute": "runner",
+    "executed": true,
+    "usedCachedPolicy": true,
+    "stickyPersisted": false
+  },
+  {
+    "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+    "event": "agent_end",
+    "at": "2026-03-28T08:30:20.000Z",
+    "sessionKey": "session-main-1",
+    "sessionId": "session-main-1",
+    "route": "spawn_single",
+    "systemPreferredRoute": "spawn_single",
+    "workerPool": "octoclaw-code",
+    "routeHintRequired": false,
+    "routeHintSubmitted": true,
+    "delegated": true,
+    "delegationTool": "octoclaw_dispatch",
+    "blockedTools": ["exec"]
+  }
+]

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/runtime-policy-replay-event-v1.schema.json",
+  "title": "OctoClaw Runtime Policy Replay Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event",
+    "at",
+    "sessionKey",
+    "sessionId"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.runtime_policy.replay_event/v1"
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "policy_resolved",
+        "route_hint_submitted",
+        "tool_blocked_before_route_hint",
+        "tool_blocked_manual_delegation",
+        "tool_blocked_delegation_policy",
+        "dispatch_called",
+        "agent_end"
+      ]
+    },
+    "at": { "type": "string" },
+    "sessionKey": { "type": "string" },
+    "sessionId": { "type": "string" },
+    "trigger": { "type": "string" },
+    "route": { "type": "string" },
+    "systemPreferredRoute": { "type": "string" },
+    "workerPool": { "type": "string" },
+    "routeHintRequired": { "type": "boolean" },
+    "routeHintSubmitted": { "type": "boolean" },
+    "stickyApplied": { "type": "boolean" },
+    "stickyPersisted": { "type": "boolean" },
+    "prompt": { "type": "string" },
+    "toolName": { "type": "string" },
+    "requiredTool": { "type": "string" },
+    "routeHint": { "type": "string" },
+    "workType": { "type": "string" },
+    "phase": { "type": "string" },
+    "reviewRequired": { "type": "boolean" },
+    "confidence": { "type": "number" },
+    "reason": { "type": "string" },
+    "finalRoute": { "type": "string" },
+    "executed": { "type": "boolean" },
+    "usedCachedPolicy": { "type": "boolean" },
+    "delegated": { "type": "boolean" },
+    "delegationTool": { "type": "string" },
+    "blockedTools": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "routeLanguagePacks": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

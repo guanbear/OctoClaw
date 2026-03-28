@@ -133,10 +133,16 @@ Example: turn on Japanese and Spanish only when you actually need them
 }
 ```
 
+Or apply the same override directly during rollout:
+
+```bash
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset conservative --route-language-packs zh,en,ja,es
+```
+
 Suggested rollout presets for `bin/runtime-policy-rollout.sh`:
 
 - `RUNTIME_POLICY_PRESET=conservative`
-  - installs the extension
+  - installs a real extension directory into `~/.openclaw/extensions/octoclaw-runtime`
   - keeps replay on
   - disables route-hint enforcement and delegation hard blocks
 - `RUNTIME_POLICY_PRESET=guided`
@@ -196,11 +202,24 @@ python3 /workspace/openclaw/skills/octopus/lib/runner_dispatch.py --command 'pwd
 bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
 bash /workspace/openclaw/skills/octopus/lib/status.sh --format lanes
 
+# Status view now includes replay-based promotion hints when runtime-policy replay is enabled
+bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
+
 # Replay / eval
 python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 
 # Runtime policy replay log
 tail -n 30 /workspace/tmp/octopus/runtime-policy-replay.jsonl
+
+# Summarize replay signals before promoting conservative -> guided
+python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase conservative
+
+# Summarize replay signals before promoting guided -> enforced
+python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase guided
+
+# Replay event schema and sample fixtures
+cat /workspace/openclaw/skills/octopus/schemas/runtime-policy-replay-event-v1.schema.json
+cat /workspace/openclaw/skills/octopus/tests/fixtures/runtime-policy-replay-events-v1.json
 
 # Sticky lane state for follow-up routing
 cat /workspace/tmp/octopus/route-stickiness.json
@@ -217,7 +236,7 @@ bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh enable --p
 # Show the current runtime-policy config fragment
 bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh show
 
-# Uninstall runtime-policy rollout state and extension link
+# Uninstall runtime-policy rollout state and extension directory
 bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh uninstall
 
 ```
@@ -295,6 +314,8 @@ OctoClaw now exposes a structured runtime policy entry:
 
 - script: [`lib/octoclaw_policy.py`](./lib/octoclaw_policy.py)
 - schema: [`schemas/runtime-policy-decision-v1.schema.json`](./schemas/runtime-policy-decision-v1.schema.json)
+- replay schema: [`schemas/runtime-policy-replay-event-v1.schema.json`](./schemas/runtime-policy-replay-event-v1.schema.json)
+- replay fixtures: [`tests/fixtures/runtime-policy-replay-events-v1.json`](./tests/fixtures/runtime-policy-replay-events-v1.json)
 - runtime tool: `octoclaw_policy_decide`
 - command: `/octopolicy`
 

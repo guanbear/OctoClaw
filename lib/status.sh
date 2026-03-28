@@ -48,6 +48,18 @@ from octopus_config import (
     load_json,
 )
 from clawteam_bridge import load_bridge_summary
+from replay_summary import (
+    DEFAULT_MAX_BLOCKED_SESSION_RATE,
+    DEFAULT_MIN_DELEGATED_EVENTS,
+    DEFAULT_MIN_POLICY_EVENTS,
+    DEFAULT_MIN_ROUTE_HINT_SUBMISSION_RATE,
+    DEFAULT_MIN_RUNNER_EVENTS,
+    DEFAULT_REPLAY_LOG,
+    compact_ratio,
+    infer_runtime_policy_phase,
+    load_events,
+    summarize_events,
+)
 from status_render import (
     build_status_snapshot,
     render_status_lanes,
@@ -82,6 +94,42 @@ MODE_LABELS = {
 mode_label = MODE_LABELS.get(mode, mode)
 
 rules = mode_data.get("modes", {}).get(mode, {})
+
+
+def summarize_replay_status(config: dict) -> dict | None:
+    runtime_policy = config.get("runtime_policy") if isinstance(config, dict) else {}
+    if not isinstance(runtime_policy, dict):
+        return None
+    switches = runtime_policy.get("switches")
+    if not isinstance(switches, dict) or not switches.get("replay_logging", False):
+        return None
+
+    phase = infer_runtime_policy_phase(runtime_policy)
+    replay_path = DEFAULT_REPLAY_LOG
+    if not replay_path.exists():
+        return {
+            "phase": phase,
+            "missing": True,
+            "path": str(replay_path),
+        }
+
+    summary_phase = "guided" if phase == "enforced" else phase
+    events, source_format, invalid_lines = load_events(replay_path)
+    summary = summarize_events(
+        events,
+        source_path=str(replay_path),
+        source_format=source_format,
+        invalid_lines=invalid_lines,
+        phase=summary_phase,
+        min_policy_events=DEFAULT_MIN_POLICY_EVENTS,
+        min_runner_events=DEFAULT_MIN_RUNNER_EVENTS,
+        min_delegated_events=DEFAULT_MIN_DELEGATED_EVENTS,
+        max_blocked_session_rate=DEFAULT_MAX_BLOCKED_SESSION_RATE,
+        min_route_hint_submission_rate=DEFAULT_MIN_ROUTE_HINT_SUBMISSION_RATE,
+    )
+    summary["effective_phase"] = phase
+    summary["missing"] = False
+    return summary
 
 
 def tier_model(tier):
@@ -255,6 +303,35 @@ if bridge_summary.get("enabled"):
         f"🤝 Bridge：{bridge_summary.get('team', 'octopus-validation')} · "
         f"{backend}{cli_note} · tasks {bridge_tasks} · inbox {bridge_summary.get('inbox_count', 0)}"
     )
+replay_status = summarize_replay_status(config_data)
+if replay_status:
+    if replay_status.get("missing"):
+        print(f"🧪 RuntimePolicy：{replay_status.get('phase', 'conservative')} · replay missing")
+    else:
+        promotion = replay_status.get("promotion", {}) or {}
+        effective_phase = str(replay_status.get("effective_phase") or promotion.get("phase") or "conservative")
+        target = str(promotion.get("target") or effective_phase)
+        ready = bool(promotion.get("ready"))
+        next_label = f"建议升 {target}" if ready and effective_phase != "enforced" else f"继续 {effective_phase}"
+        if effective_phase == "enforced":
+            next_label = "已在 enforced"
+        task_metrics = replay_status.get("task_metrics", {}) or {}
+        route_hint_metrics = replay_status.get("route_hint_metrics", {}) or {}
+        tool_metrics = replay_status.get("tool_metrics", {}) or {}
+        observed_packs = replay_status.get("observed_language_packs", {}) or {}
+        packs_text = ", ".join(observed_packs.keys()) if observed_packs else "n/a"
+        print(
+            f"🧪 RuntimePolicy：{effective_phase} · {next_label} · "
+            f"tasks {task_metrics.get('task_event_count', 0)} · "
+            f"runner {task_metrics.get('runner_task_count', 0)} · "
+            f"delegated {task_metrics.get('delegated_task_count', 0)}"
+        )
+        print(
+            "   replay: "
+            f"hint {compact_ratio(route_hint_metrics.get('submission_rate'))} · "
+            f"blocked {compact_ratio(tool_metrics.get('blocked_session_rate'))} · "
+            f"packs {packs_text}"
+        )
 runner_health_ok = False
 runner_health_age = None
 if isinstance(runner_health, dict) and runner_health.get("worker_id"):

@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""Summarize OctoClaw runtime-policy replay logs."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
+DEFAULT_REPLAY_LOG = Path(DEFAULT_WORKSPACE) / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
+DEFAULT_MIN_POLICY_EVENTS = 30
+DEFAULT_MIN_RUNNER_EVENTS = 3
+DEFAULT_MIN_DELEGATED_EVENTS = 10
+DEFAULT_MAX_BLOCKED_SESSION_RATE = 0.15
+DEFAULT_MIN_ROUTE_HINT_SUBMISSION_RATE = 0.85
+TOOL_BLOCK_EVENTS = {
+    "tool_blocked_before_route_hint",
+    "tool_blocked_manual_delegation",
+    "tool_blocked_delegation_policy",
+}
+
+
+def parse_timestamp(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def event_session_key(event: dict[str, Any]) -> str:
+    return str(event.get("sessionKey") or event.get("sessionId") or "").strip()
+
+
+def load_events(path: Path) -> tuple[list[dict[str, Any]], str, int]:
+    if not path.exists():
+        raise FileNotFoundError(f"replay log not found: {path}")
+
+    raw = path.read_text(encoding="utf-8")
+    stripped = raw.lstrip()
+    if not stripped:
+        return [], "empty", 0
+
+    if stripped.startswith("["):
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError("JSON replay input must be an array of event objects")
+        events = [item for item in data if isinstance(item, dict)]
+        invalid = len(data) - len(events)
+        return events, "json_array", invalid
+
+    events: list[dict[str, Any]] = []
+    invalid = 0
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            invalid += 1
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+        else:
+            invalid += 1
+    return events, "jsonl", invalid
+
+
+def count_boolean(items: list[dict[str, Any]], key: str) -> int:
+    return sum(1 for item in items if bool(item.get(key)))
+
+
+def collect_session_ids(items: list[dict[str, Any]]) -> set[str]:
+    return {key for key in (event_session_key(item) for item in items) if key}
+
+
+def ratio(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
+
+
+def compact_ratio(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.1%}"
+
+
+def infer_runtime_policy_phase(runtime_policy: dict[str, Any] | None) -> str:
+    if not isinstance(runtime_policy, dict):
+        return "conservative"
+    switches = runtime_policy.get("switches")
+    hooks = runtime_policy.get("hooks")
+    route_stickiness = runtime_policy.get("route_stickiness")
+    if not isinstance(switches, dict):
+        switches = {}
+    if not isinstance(hooks, dict):
+        hooks = {}
+    if not isinstance(route_stickiness, dict):
+        route_stickiness = {}
+
+    if (
+        bool(switches.get("delegation_enforcement"))
+        or bool(switches.get("direct_model_override"))
+        or bool(hooks.get("before_model_resolve"))
+    ):
+        return "enforced"
+    if (
+        bool(switches.get("route_hint_required"))
+        or bool(hooks.get("before_tool_call"))
+        or bool(route_stickiness.get("enabled"))
+    ):
+        return "guided"
+    return "conservative"
+
+
+def count_routes(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts = Counter(str(item.get(key, "") or "").strip() for item in items if str(item.get(key, "") or "").strip())
+    return dict(sorted(counts.items()))
+
+
+def collect_language_pack_usage(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for event in events:
+        packs = event.get("routeLanguagePacks", event.get("route_language_packs"))
+        if not isinstance(packs, list):
+            continue
+        normalized = [str(item or "").strip() for item in packs if str(item or "").strip()]
+        if normalized:
+            counts["+".join(normalized)] += 1
+    return dict(sorted(counts.items()))
+
+
+def build_promotion_checks(
+    summary: dict[str, Any],
+    *,
+    phase: str,
+    min_policy_events: int,
+    min_runner_events: int,
+    min_delegated_events: int,
+    max_blocked_session_rate: float,
+    min_route_hint_submission_rate: float,
+) -> dict[str, Any]:
+    task_metrics = summary["task_metrics"]
+    route_hint_metrics = summary["route_hint_metrics"]
+    tool_metrics = summary["tool_metrics"]
+
+    checks: list[dict[str, Any]] = []
+
+    policy_events = int(task_metrics["task_event_count"])
+    runner_events = int(task_metrics["runner_task_count"])
+    delegated_events = int(task_metrics["delegated_task_count"])
+    blocked_session_rate = tool_metrics["blocked_session_rate"]
+    route_hint_submission_rate = route_hint_metrics["submission_rate"]
+    route_hint_required_count = int(route_hint_metrics["required_count"])
+
+    checks.append(
+        {
+            "name": "sample_size",
+            "ok": policy_events >= min_policy_events,
+            "detail": f"{policy_events}/{min_policy_events} policy tasks observed",
+        }
+    )
+    checks.append(
+        {
+            "name": "runner_traffic",
+            "ok": runner_events >= min_runner_events,
+            "detail": f"{runner_events}/{min_runner_events} runner tasks observed",
+        }
+    )
+    checks.append(
+        {
+            "name": "delegated_traffic",
+            "ok": delegated_events >= min_delegated_events,
+            "detail": f"{delegated_events}/{min_delegated_events} delegated tasks observed",
+        }
+    )
+    checks.append(
+        {
+            "name": "tool_block_pressure",
+            "ok": blocked_session_rate is None or blocked_session_rate <= max_blocked_session_rate,
+            "detail": f"blocked session rate {compact_ratio(blocked_session_rate)} (max {max_blocked_session_rate:.1%})",
+        }
+    )
+
+    if phase == "guided":
+        checks.append(
+            {
+                "name": "route_hint_coverage",
+                "ok": (
+                    route_hint_required_count > 0
+                    and route_hint_submission_rate is not None
+                    and route_hint_submission_rate >= min_route_hint_submission_rate
+                ),
+                "detail": (
+                    f"route hint submission {compact_ratio(route_hint_submission_rate)} "
+                    f"(required tasks: {route_hint_required_count}, min {min_route_hint_submission_rate:.1%})"
+                ),
+            }
+        )
+
+    ready = all(check["ok"] for check in checks)
+    target = "guided" if phase == "conservative" else "enforced"
+    return {
+        "phase": phase,
+        "target": target,
+        "ready": ready,
+        "checks": checks,
+    }
+
+
+def summarize_events(
+    events: list[dict[str, Any]],
+    *,
+    source_path: str,
+    source_format: str,
+    invalid_lines: int,
+    phase: str,
+    min_policy_events: int,
+    min_runner_events: int,
+    min_delegated_events: int,
+    max_blocked_session_rate: float,
+    min_route_hint_submission_rate: float,
+) -> dict[str, Any]:
+    event_counts = Counter(str(event.get("event", "") or "").strip() for event in events if str(event.get("event", "") or "").strip())
+    policy_events = [event for event in events if event.get("event") == "policy_resolved"]
+    agent_end_events = [event for event in events if event.get("event") == "agent_end"]
+    route_hint_events = [event for event in events if event.get("event") == "route_hint_submitted"]
+    dispatch_events = [event for event in events if event.get("event") == "dispatch_called"]
+    blocked_events = [event for event in events if event.get("event") in TOOL_BLOCK_EVENTS]
+
+    task_basis = "policy_resolved" if policy_events else "agent_end"
+    task_events = policy_events or agent_end_events
+
+    timestamps = [ts for ts in (parse_timestamp(str(event.get("at", "") or "")) for event in events) if ts is not None]
+    session_ids = collect_session_ids(events)
+    blocked_sessions = collect_session_ids(blocked_events)
+    delegated_task_events = [event for event in task_events if str(event.get("route", "") or "") != "direct"]
+    runner_task_events = [event for event in task_events if str(event.get("route", "") or "") == "runner"]
+    sticky_task_events = [event for event in task_events if "stickyApplied" in event]
+    sticky_persist_events = [event for event in [*route_hint_events, *dispatch_events] if "stickyPersisted" in event]
+
+    route_hint_required_count = count_boolean(task_events, "routeHintRequired")
+    route_hint_submitted_count = len(route_hint_events)
+    route_change_count = sum(
+        1
+        for event in route_hint_events
+        if str(event.get("finalRoute", "") or "").strip()
+        and str(event.get("systemPreferredRoute", "") or "").strip()
+        and str(event.get("finalRoute", "") or "").strip() != str(event.get("systemPreferredRoute", "") or "").strip()
+    )
+
+    summary = {
+        "source": {
+            "path": source_path,
+            "format": source_format,
+            "invalid_lines": invalid_lines,
+        },
+        "window": {
+            "first_event_at": min(timestamps).isoformat() if timestamps else "",
+            "last_event_at": max(timestamps).isoformat() if timestamps else "",
+        },
+        "events": {
+            "total": len(events),
+            "sessions": len(session_ids),
+            "by_type": dict(sorted(event_counts.items())),
+        },
+        "task_metrics": {
+            "task_basis": task_basis,
+            "task_event_count": len(task_events),
+            "route_counts": count_routes(task_events, "route"),
+            "system_preferred_route_counts": count_routes(task_events, "systemPreferredRoute"),
+            "delegated_task_count": len(delegated_task_events),
+            "runner_task_count": len(runner_task_events),
+            "sticky_applied_count": count_boolean(sticky_task_events, "stickyApplied"),
+            "sticky_applied_rate": ratio(count_boolean(sticky_task_events, "stickyApplied"), len(task_events)),
+            "sticky_persisted_count": count_boolean(sticky_persist_events, "stickyPersisted"),
+        },
+        "route_hint_metrics": {
+            "required_count": route_hint_required_count,
+            "submitted_count": route_hint_submitted_count,
+            "submission_rate": ratio(route_hint_submitted_count, route_hint_required_count),
+            "route_change_count": route_change_count,
+            "route_change_rate": ratio(route_change_count, route_hint_submitted_count),
+        },
+        "dispatch_metrics": {
+            "dispatch_called_count": len(dispatch_events),
+            "dispatch_called_session_count": len(collect_session_ids(dispatch_events)),
+            "delegated_session_count": len(collect_session_ids(delegated_task_events)),
+            "dispatch_session_coverage_rate": ratio(
+                len(collect_session_ids(dispatch_events)),
+                len(collect_session_ids(delegated_task_events)),
+            ),
+        },
+        "tool_metrics": {
+            "blocked_event_count": len(blocked_events),
+            "blocked_event_types": dict(sorted(Counter(str(event.get("event", "") or "") for event in blocked_events).items())),
+            "blocked_session_count": len(blocked_sessions),
+            "blocked_session_rate": ratio(len(blocked_sessions), len(session_ids)),
+        },
+        "observed_language_packs": collect_language_pack_usage(events),
+    }
+    summary["promotion"] = build_promotion_checks(
+        summary,
+        phase=phase,
+        min_policy_events=min_policy_events,
+        min_runner_events=min_runner_events,
+        min_delegated_events=min_delegated_events,
+        max_blocked_session_rate=max_blocked_session_rate,
+        min_route_hint_submission_rate=min_route_hint_submission_rate,
+    )
+    return summary
+
+
+def render_text(summary: dict[str, Any]) -> str:
+    source = summary["source"]
+    events = summary["events"]
+    task_metrics = summary["task_metrics"]
+    route_hint_metrics = summary["route_hint_metrics"]
+    dispatch_metrics = summary["dispatch_metrics"]
+    tool_metrics = summary["tool_metrics"]
+    promotion = summary["promotion"]
+
+    lines = [
+        "OctoClaw Replay Summary",
+        "",
+        f"- Source: `{source['path']}` ({source['format']})",
+        f"- Events: `{events['total']}`",
+        f"- Sessions: `{events['sessions']}`",
+        f"- Task basis: `{task_metrics['task_basis']}`",
+    ]
+    if source["invalid_lines"]:
+        lines.append(f"- Invalid lines skipped: `{source['invalid_lines']}`")
+    if summary["window"]["first_event_at"] and summary["window"]["last_event_at"]:
+        lines.append(f"- Window: `{summary['window']['first_event_at']}` -> `{summary['window']['last_event_at']}`")
+
+    lines.extend(
+        [
+            "",
+            "Task Metrics",
+            f"- Task events: `{task_metrics['task_event_count']}`",
+            f"- Route counts: `{json.dumps(task_metrics['route_counts'], ensure_ascii=False)}`",
+            f"- System preferred counts: `{json.dumps(task_metrics['system_preferred_route_counts'], ensure_ascii=False)}`",
+            f"- Delegated tasks: `{task_metrics['delegated_task_count']}`",
+            f"- Runner tasks: `{task_metrics['runner_task_count']}`",
+            f"- Sticky applied: `{task_metrics['sticky_applied_count']}` ({compact_ratio(task_metrics['sticky_applied_rate'])})",
+            "",
+            "Route Hint Metrics",
+            f"- Required: `{route_hint_metrics['required_count']}`",
+            f"- Submitted: `{route_hint_metrics['submitted_count']}` ({compact_ratio(route_hint_metrics['submission_rate'])})",
+            f"- Final route changed from system preferred: `{route_hint_metrics['route_change_count']}` ({compact_ratio(route_hint_metrics['route_change_rate'])})",
+            "",
+            "Dispatch / Blocks",
+            f"- Dispatch called: `{dispatch_metrics['dispatch_called_count']}` ({compact_ratio(dispatch_metrics['dispatch_session_coverage_rate'])} session coverage)",
+            f"- Blocked sessions: `{tool_metrics['blocked_session_count']}` ({compact_ratio(tool_metrics['blocked_session_rate'])})",
+            f"- Blocked event types: `{json.dumps(tool_metrics['blocked_event_types'], ensure_ascii=False)}`",
+            "",
+            f"Promotion Heuristic: `{promotion['phase']}` -> `{promotion['target']}`",
+        ]
+    )
+    for check in promotion["checks"]:
+        status = "PASS" if check["ok"] else "HOLD"
+        lines.append(f"- [{status}] {check['name']}: {check['detail']}")
+    lines.append("")
+    lines.append(f"Suggested next preset: `{promotion['target'] if promotion['ready'] else promotion['phase']}`")
+    return "\n".join(lines)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Summarize OctoClaw runtime-policy replay events")
+    parser.add_argument("--events", default=str(DEFAULT_REPLAY_LOG), help="Replay log path (JSONL or JSON array)")
+    parser.add_argument("--phase", choices=("conservative", "guided"), default="conservative")
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--output", default="", help="Optional file to write the summary to")
+    parser.add_argument("--min-policy-events", type=int, default=DEFAULT_MIN_POLICY_EVENTS)
+    parser.add_argument("--min-runner-events", type=int, default=DEFAULT_MIN_RUNNER_EVENTS)
+    parser.add_argument("--min-delegated-events", type=int, default=DEFAULT_MIN_DELEGATED_EVENTS)
+    parser.add_argument("--max-blocked-session-rate", type=float, default=DEFAULT_MAX_BLOCKED_SESSION_RATE)
+    parser.add_argument("--min-route-hint-submission-rate", type=float, default=DEFAULT_MIN_ROUTE_HINT_SUBMISSION_RATE)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    path = Path(args.events).expanduser().resolve()
+    events, source_format, invalid_lines = load_events(path)
+    summary = summarize_events(
+        events,
+        source_path=str(path),
+        source_format=source_format,
+        invalid_lines=invalid_lines,
+        phase=args.phase,
+        min_policy_events=args.min_policy_events,
+        min_runner_events=args.min_runner_events,
+        min_delegated_events=args.min_delegated_events,
+        max_blocked_session_rate=args.max_blocked_session_rate,
+        min_route_hint_submission_rate=args.min_route_hint_submission_rate,
+    )
+
+    if args.format == "json":
+        output = json.dumps(summary, ensure_ascii=False, indent=2)
+    else:
+        output = render_text(summary)
+
+    if args.output:
+        Path(args.output).expanduser().resolve().write_text(output + "\n", encoding="utf-8")
+    print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
