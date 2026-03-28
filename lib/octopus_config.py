@@ -60,6 +60,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "ttl_minutes": 180,
             "apply_on_followup_only": True,
         },
+        "route_language_packs": {
+            "enabled": ["zh", "en"],
+            "available": ["zh", "en", "ja", "ko", "es", "pt", "ru"],
+        },
         "default_reasoning_effort_by_legacy_tier": {
             "trivial": "low",
             "simple": "low",

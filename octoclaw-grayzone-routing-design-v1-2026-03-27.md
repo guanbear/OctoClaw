@@ -333,7 +333,15 @@ classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 a
 - `runtime_policy.switches.direct_model_override`
 - `runtime_policy.switches.delegation_enforcement`
 - `runtime_policy.route_stickiness.enabled`
+- `runtime_policy.route_language_packs.enabled`
 - `runtime_policy.hooks.*`
+
+多语言策略建议保持保守：
+
+- 默认只开 `zh + en`
+- 额外语言包按需启用：`ja / ko / es / pt / ru`
+- command / shell 这类通用模式常驻即可
+- 后续安装引导可以把语言包做成勾选项，但不要把所有自然语言词表默认全开
 
 部署建议：
 

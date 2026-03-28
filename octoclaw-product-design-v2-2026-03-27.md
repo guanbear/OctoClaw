@@ -550,7 +550,15 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - `runtime_policy.switches.direct_model_override`
 - `runtime_policy.switches.delegation_enforcement`
 - `runtime_policy.route_stickiness.enabled`
+- `runtime_policy.route_language_packs.enabled`
 - `runtime_policy.hooks.*`
+
+多语言不建议默认全开。更稳的做法是：
+
+- 默认启用 `zh + en`
+- 按需启用 `ja / ko / es / pt / ru`
+- 保留少量语言无关的 command/common patterns 常驻
+- 后续通过安装引导选择语言包，而不是把所有词表一次性塞进默认路由器
 
 部署侧还应提供：
 

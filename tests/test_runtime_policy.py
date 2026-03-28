@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,9 +15,32 @@ ROUTE_SCRIPT = REPO_ROOT / "lib" / "octoclaw_route.py"
 
 
 class RuntimePolicyTests(unittest.TestCase):
-    def run_policy(self, task: str, *, session_key: str = "", sticky_route: str = "", sticky_work_type: str = "") -> dict:
+    def write_runtime_config(self, workspace: str, *, route_language_packs: Optional[list[str]] = None) -> None:
+        config: dict[str, object] = {}
+        if route_language_packs is not None:
+            config = {
+                "runtime_policy": {
+                    "route_language_packs": {
+                        "enabled": route_language_packs,
+                    }
+                }
+            }
+        if config:
+            with open(Path(workspace) / "tmp" / "octopus-config.json", "w", encoding="utf-8") as fh:
+                json.dump(config, fh)
+
+    def run_policy(
+        self,
+        task: str,
+        *,
+        session_key: str = "",
+        sticky_route: str = "",
+        sticky_work_type: str = "",
+        route_language_packs: Optional[list[str]] = None,
+    ) -> dict:
         with tempfile.TemporaryDirectory(prefix="octoclaw-policy-test-") as workspace:
             os.makedirs(Path(workspace) / "tmp" / "octopus", exist_ok=True)
+            self.write_runtime_config(workspace, route_language_packs=route_language_packs)
             if sticky_route:
                 payload = {
                     session_key: {
@@ -34,14 +58,19 @@ class RuntimePolicyTests(unittest.TestCase):
             result = subprocess.run(cmd, capture_output=True, text=True, env=env, check=True)
             return json.loads(result.stdout)
 
-    def run_route(self, task: str) -> dict:
-        result = subprocess.run(
-            ["python3", str(ROUTE_SCRIPT), "--task", task],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return json.loads(result.stdout)
+    def run_route(self, task: str, *, route_language_packs: Optional[list[str]] = None) -> dict:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-route-test-") as workspace:
+            os.makedirs(Path(workspace) / "tmp" / "octopus", exist_ok=True)
+            self.write_runtime_config(workspace, route_language_packs=route_language_packs)
+            env = {**os.environ, "WORKSPACE": workspace}
+            result = subprocess.run(
+                ["python3", str(ROUTE_SCRIPT), "--task", task],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+            return json.loads(result.stdout)
 
     def test_sticky_same_lane_marks_sticky_but_keeps_current_semantics(self) -> None:
         payload = self.run_policy(
@@ -84,13 +113,24 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(prod_payload["features"]["high_risk"])
         self.assertIn("high_risk", prod_payload["reason_codes"])
 
-    def test_japanese_read_only_probe_routes_to_runner(self) -> None:
+    def test_default_language_packs_are_zh_and_en_only(self) -> None:
         payload = self.run_route("8080番ポートが開いているか確認して")
+        self.assertEqual(payload["route_language_packs"], ["zh", "en"])
+        self.assertFalse(payload["features"]["hard_runner_candidate"])
+        self.assertNotEqual(payload["system_preferred_route"], "runner")
+
+    def test_japanese_read_only_probe_routes_to_runner_when_ja_pack_enabled(self) -> None:
+        payload = self.run_route("8080番ポートが開いているか確認して", route_language_packs=["zh", "en", "ja"])
+        self.assertEqual(payload["route_language_packs"], ["zh", "en", "ja"])
         self.assertEqual(payload["system_preferred_route"], "runner")
         self.assertTrue(payload["features"]["hard_runner_candidate"])
 
     def test_spanish_research_and_writing_routes_to_spawn_single(self) -> None:
-        payload = self.run_route("Investiga tres gateways compatibles con OpenAI y escribe una recomendación breve")
+        payload = self.run_route(
+            "Investiga tres gateways compatibles con OpenAI y escribe una recomendación breve",
+            route_language_packs=["zh", "en", "es"],
+        )
+        self.assertEqual(payload["route_language_packs"], ["zh", "en", "es"])
         self.assertEqual(payload["system_preferred_route"], "spawn_single")
         self.assertTrue(payload["features"]["requires_research"])
         self.assertTrue(payload["features"]["requires_writing"])

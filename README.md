@@ -100,11 +100,34 @@ Recommended gradual rollout switches in `tmp/octopus-config.json`:
       "ttl_minutes": 180,
       "apply_on_followup_only": true
     },
+    "route_language_packs": {
+      "enabled": ["zh", "en"],
+      "available": ["zh", "en", "ja", "ko", "es", "pt", "ru"]
+    },
     "hooks": {
       "before_model_resolve": true,
       "before_prompt_build": true,
       "before_tool_call": true,
       "agent_end": true
+    }
+  }
+}
+```
+
+Route-language packs are intentionally conservative:
+
+- default is `zh + en`
+- optional packs are `ja / ko / es / pt / ru`
+- command-style common patterns still stay loaded for everyone
+- install/setup flows can enable extra packs later without making the default router noisier
+
+Example: turn on Japanese and Spanish only when you actually need them
+
+```json
+{
+  "runtime_policy": {
+    "route_language_packs": {
+      "enabled": ["zh", "en", "ja", "es"]
     }
   }
 }
