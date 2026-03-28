@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 task-state-update.py — atomic task-state.json writer with file lock.
 Prevents concurrent sub-agent corruption of task-state.json.
@@ -16,6 +18,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from clawteam_bridge import sync_task
+from runtime_task_record import normalize_task_record, normalize_task_records
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
@@ -44,6 +47,7 @@ def load_state(fp) -> dict:
 
 def save_state(fp, state: dict):
     """Truncate and rewrite the state file."""
+    state["tasks"] = normalize_task_records(state.get("tasks", []))
     state["updated_at"] = now_iso()
     fp.seek(0)
     fp.truncate()
@@ -97,8 +101,331 @@ def infer_executor(label: str, explicit: str = "") -> str:
     return "subagent"
 
 
+def parse_bool_arg(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
+
+
+def parse_json_arg(value: str) -> dict:
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON value: {exc}") from exc
+    if isinstance(parsed, dict):
+        return parsed
+    raise argparse.ArgumentTypeError("JSON value must be an object")
+
+
+FINAL_STATUSES = {"done", "failed", "deferred", "completed"}
+SUCCESS_STATUSES = {"done", "completed"}
+ACTIVE_STATUSES = {"running", "in_progress"}
+PENDING_STATUSES = {"queued", "dispatched", "pending", "pending_confirm", "blocked"}
+
+
+def compact_text(text: str, limit: int = 120) -> str:
+    collapsed = " ".join(str(text or "").strip().split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+
+def _task_id_map(tasks: list) -> dict:
+    return {str(task.get("id", "") or ""): task for task in tasks if isinstance(task, dict) and str(task.get("id", "") or "").strip()}
+
+
+def _resolve_child_records(tasks: list, parent: dict) -> tuple[list, list[str]]:
+    tasks_by_id = _task_id_map(tasks)
+    explicit_child_ids = [str(item).strip() for item in (parent.get("child_ids", []) or []) if str(item).strip()]
+    children = []
+    seen = set()
+
+    for child_id in explicit_child_ids:
+        child = tasks_by_id.get(child_id)
+        if child is None:
+            continue
+        children.append(child)
+        seen.add(child_id)
+
+    parent_id = str(parent.get("id", "") or "").strip()
+    if parent_id:
+        for task in tasks:
+            child_parent_id = str(task.get("parent_id", "") or "").strip()
+            child_id = str(task.get("id", "") or "").strip()
+            if child_parent_id != parent_id or not child_id or child_id in seen:
+                continue
+            children.append(task)
+            seen.add(child_id)
+
+    child_ids = explicit_child_ids or [str(child.get("id", "") or "") for child in children if str(child.get("id", "") or "")]
+    return children, child_ids
+
+
+def _step_task_ids(parent: dict, child_ids: list[str]) -> dict:
+    artifacts = parent.get("artifacts", {}) if isinstance(parent.get("artifacts", {}), dict) else {}
+    explicit = artifacts.get("step_task_ids", {})
+    if isinstance(explicit, dict):
+        mapped = {str(step).strip(): str(task_id).strip() for step, task_id in explicit.items() if str(step).strip() and str(task_id).strip()}
+        if mapped:
+            return mapped
+    order = artifacts.get("step_order", [])
+    if isinstance(order, list):
+        mapped = {}
+        for idx, step_name in enumerate(order):
+            name = str(step_name).strip()
+            if not name or idx >= len(child_ids):
+                continue
+            task_id = str(child_ids[idx]).strip()
+            if task_id:
+                mapped[name] = task_id
+        return mapped
+    return {}
+
+
+def _status_label(status: str) -> str:
+    value = str(status or "").strip().lower()
+    mapping = {
+        "done": "done",
+        "completed": "done",
+        "failed": "failed",
+        "running": "running",
+        "in_progress": "running",
+        "queued": "queued",
+        "dispatched": "queued",
+        "pending": "queued",
+        "pending_confirm": "blocked",
+        "blocked": "blocked",
+        "deferred": "deferred",
+    }
+    return mapping.get(value, value or "unknown")
+
+
+def _aggregate_parent_status(children: list[dict]) -> str:
+    if not children:
+        return ""
+    statuses = [str(child.get("status", "") or "").strip().lower() for child in children]
+    failed_count = sum(1 for status in statuses if status == "failed")
+    done_count = sum(1 for status in statuses if status in SUCCESS_STATUSES)
+    deferred_count = sum(1 for status in statuses if status == "deferred")
+    running_count = sum(1 for status in statuses if status in ACTIVE_STATUSES)
+    open_count = sum(1 for status in statuses if status not in FINAL_STATUSES)
+    child_count = len(statuses)
+
+    if failed_count > 0:
+        return "failed"
+    if child_count > 0 and done_count == child_count:
+        return "done"
+    if open_count == 0 and deferred_count > 0:
+        return "deferred"
+    if running_count > 0 or (done_count > 0 and open_count > 0):
+        return "running"
+    if open_count > 0:
+        return "dispatched"
+    return ""
+
+
+def _aggregate_parent_summary(parent: dict, children: list[dict], child_ids: list[str], step_task_ids: dict) -> str:
+    status = str(parent.get("status", "") or "").strip().lower()
+    step_tokens = []
+    tasks_by_id = _task_id_map(children)
+    for step_name in (parent.get("artifacts", {}) or {}).get("step_order", []) if isinstance(parent.get("artifacts", {}), dict) else []:
+        name = str(step_name).strip()
+        task_id = str(step_task_ids.get(name, "") or "").strip()
+        child = tasks_by_id.get(task_id)
+        if not name or child is None:
+            continue
+        step_tokens.append(f"{name} {_status_label(child.get('status', ''))}")
+    if step_tokens:
+        prefix = {
+            "done": "spawn_multi complete",
+            "failed": "spawn_multi failed",
+            "deferred": "spawn_multi deferred",
+            "running": "spawn_multi running",
+            "dispatched": "spawn_multi planned",
+        }.get(status, "spawn_multi update")
+        return f"{prefix}: {' · '.join(step_tokens)}"
+
+    status_counts = {}
+    for child in children:
+        child_status = _status_label(child.get("status", ""))
+        status_counts[child_status] = status_counts.get(child_status, 0) + 1
+
+    child_count = len(child_ids)
+    done_count = sum(1 for child in children if str(child.get("status", "") or "").strip().lower() in SUCCESS_STATUSES)
+    open_count = sum(1 for child in children if str(child.get("status", "") or "").strip().lower() not in FINAL_STATUSES)
+
+    if status == "done":
+        return f"spawn_multi complete: {done_count}/{child_count} steps done"
+    if status == "failed":
+        parts = [f"{count} {name}" for name, count in status_counts.items() if count]
+        return f"spawn_multi failed: {' / '.join(parts)}"
+    if status == "deferred":
+        return f"spawn_multi deferred: {done_count}/{child_count} done / deferred"
+    if open_count > 0:
+        parts = [f"{done_count}/{child_count} done"]
+        for name in ("running", "queued", "blocked"):
+            count = status_counts.get(name, 0)
+            if count:
+                parts.append(f"{count} {name}")
+        return f"spawn_multi running: {' · '.join(parts)}"
+    return f"spawn_multi planned: {child_count} steps"
+
+
+def _task_signature(task: dict) -> str:
+    normalized = normalize_task_record(dict(task))
+    payload = dict(normalized)
+    payload.pop("updated_at", None)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
+    task_kind = str(parent.get("task_kind", "") or "").strip()
+    has_children = bool(parent.get("child_ids"))
+    if task_kind != "team_parent" and not has_children:
+        return None
+
+    children, child_ids = _resolve_child_records(tasks, parent)
+    if not child_ids:
+        return None
+
+    before = normalize_task_record(dict(parent))
+    candidate = dict(before)
+    artifacts = dict(before.get("artifacts", {}) or {})
+    tasks_by_id = _task_id_map(children)
+    step_task_ids = _step_task_ids(before, child_ids)
+    step_statuses = {}
+    step_summaries = {}
+    step_reports = dict(artifacts.get("step_reports", {}) or {})
+
+    child_statuses = {}
+    child_reports = {}
+    child_summaries = {}
+    completed_child_ids = []
+    failed_child_ids = []
+    open_child_ids = []
+
+    for child_id in child_ids:
+        child = tasks_by_id.get(child_id)
+        if child is None:
+            continue
+        status = str(child.get("status", "") or "").strip()
+        summary = compact_text(child.get("summary", ""), 200)
+        report_path = str(child.get("report_path", "") or "").strip()
+        child_statuses[child_id] = status
+        child_reports[child_id] = report_path
+        child_summaries[child_id] = summary
+        lowered = status.lower()
+        if lowered in SUCCESS_STATUSES:
+            completed_child_ids.append(child_id)
+        elif lowered == "failed":
+            failed_child_ids.append(child_id)
+        elif lowered not in {"deferred", "completed"}:
+            open_child_ids.append(child_id)
+
+    for step_name, child_id in step_task_ids.items():
+        child = tasks_by_id.get(child_id)
+        if child is None:
+            continue
+        step_statuses[step_name] = str(child.get("status", "") or "")
+        step_summaries[step_name] = compact_text(child.get("summary", ""), 160)
+        report_path = str(child.get("report_path", "") or "").strip()
+        if report_path:
+            step_reports[step_name] = report_path
+
+    derived_status = _aggregate_parent_status([tasks_by_id[child_id] for child_id in child_ids if child_id in tasks_by_id]) or str(before.get("status", "") or "dispatched")
+    candidate["status"] = derived_status
+    candidate["summary"] = _aggregate_parent_summary(candidate, [tasks_by_id[child_id] for child_id in child_ids if child_id in tasks_by_id], child_ids, step_task_ids)
+    candidate["child_ids"] = child_ids
+
+    artifacts.update(
+        {
+            "child_task_ids": child_ids,
+            "child_count": len(child_ids),
+            "child_statuses": child_statuses,
+            "child_reports": child_reports,
+            "child_summaries": child_summaries,
+            "completed_child_ids": completed_child_ids,
+            "failed_child_ids": failed_child_ids,
+            "open_child_ids": open_child_ids,
+            "completed_child_count": len(completed_child_ids),
+            "failed_child_count": len(failed_child_ids),
+            "open_child_count": len(open_child_ids),
+            "step_task_ids": step_task_ids,
+            "step_statuses": step_statuses,
+            "step_summaries": step_summaries,
+            "step_reports": step_reports,
+        }
+    )
+    candidate["artifacts"] = artifacts
+
+    if derived_status in {"done", "failed", "deferred"}:
+        candidate["completed_at"] = str(before.get("completed_at", "") or now_iso())
+    else:
+        candidate["completed_at"] = ""
+    if derived_status == "running" and not str(before.get("started_at", "") or "").strip():
+        candidate["started_at"] = now_iso()
+
+    normalized_candidate = normalize_task_record(candidate)
+    if _task_signature(before) == _task_signature(normalized_candidate):
+        return None
+    normalized_candidate["updated_at"] = now_iso()
+    return normalized_candidate
+
+
+def _lineage_sync_records(tasks: list, current_record: dict) -> tuple[dict, list[tuple[dict, str]]]:
+    tasks_by_id = _task_id_map(tasks)
+    current_id = str(current_record.get("id", "") or "").strip()
+    updated_current = dict(current_record)
+    sync_records: list[tuple[dict, str]] = []
+    visited = set()
+    target_ids = []
+
+    if str(current_record.get("task_kind", "") or "").strip() == "team_parent" or current_record.get("child_ids"):
+        target_ids.append(current_id)
+
+    parent_id = str(current_record.get("parent_id", "") or "").strip()
+    while parent_id and parent_id not in visited:
+        visited.add(parent_id)
+        target_ids.append(parent_id)
+        parent = tasks_by_id.get(parent_id)
+        if not isinstance(parent, dict):
+            break
+        parent_id = str(parent.get("parent_id", "") or "").strip()
+
+    for target_id in target_ids:
+        target = tasks_by_id.get(target_id)
+        if not isinstance(target, dict):
+            continue
+        previous_status = str(target.get("status", "") or "")
+        aggregated = _aggregate_parent_record(tasks, target)
+        if not isinstance(aggregated, dict):
+            continue
+        target.clear()
+        target.update(aggregated)
+        if target_id == current_id:
+            updated_current = dict(target)
+        sync_records.append((dict(target), previous_status))
+
+    extra_syncs = [(record, previous_status) for record, previous_status in sync_records if str(record.get("id", "") or "") != current_id]
+    return updated_current, extra_syncs
+
+
+def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert") -> str:
+    status = str(record.get("status", "") or "").strip().lower()
+    if status in {"done", "failed", "deferred"} and status != str(previous_status or "").strip().lower():
+        return status
+    return fallback
+
+
 def cmd_upsert(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    lineage_syncs = []
     with open(STATE_FILE, "a+") as fp:
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
@@ -157,13 +484,40 @@ def cmd_upsert(args):
                 existing["runtime"] = args.runtime
             if args.parent_id:
                 existing["parent_id"] = args.parent_id
+            if args.child_ids:
+                existing["child_ids"] = [item.strip() for item in args.child_ids.split(",") if item.strip()]
             if args.report_path:
                 existing["report_path"] = args.report_path
             if args.context_path:
                 existing["context_path"] = args.context_path
             if args.context_summary:
                 existing["context_summary"] = args.context_summary
+            if args.task_kind:
+                existing["task_kind"] = args.task_kind
+            if args.title:
+                existing["title"] = args.title
+            if args.worker_pool:
+                existing["worker_pool"] = args.worker_pool
+            if args.work_type:
+                existing["work_type"] = args.work_type
+            if args.phase:
+                existing["phase"] = args.phase
+            if args.protocol:
+                existing["protocol"] = args.protocol
+            if args.profile:
+                existing["profile"] = args.profile
+            if args.review_required is not None:
+                existing["review_required"] = args.review_required
+            if args.artifacts_json:
+                artifacts = existing.get("artifacts", {})
+                if not isinstance(artifacts, dict):
+                    artifacts = {}
+                artifacts.update(args.artifacts_json)
+                existing["artifacts"] = artifacts
             existing["updated_at"] = now_iso()
+            normalized = normalize_task_record(existing)
+            existing.clear()
+            existing.update(normalized)
             current_record = dict(existing)
         else:
             record = {
@@ -210,32 +564,69 @@ def cmd_upsert(args):
                 record["runtime"] = args.runtime
             if args.parent_id:
                 record["parent_id"] = args.parent_id
+            if args.child_ids:
+                record["child_ids"] = [item.strip() for item in args.child_ids.split(",") if item.strip()]
             if args.report_path:
                 record["report_path"] = args.report_path
             if args.context_path:
                 record["context_path"] = args.context_path
             if args.context_summary:
                 record["context_summary"] = args.context_summary
+            if args.task_kind:
+                record["task_kind"] = args.task_kind
+            if args.title:
+                record["title"] = args.title
+            if args.worker_pool:
+                record["worker_pool"] = args.worker_pool
+            if args.work_type:
+                record["work_type"] = args.work_type
+            if args.phase:
+                record["phase"] = args.phase
+            if args.protocol:
+                record["protocol"] = args.protocol
+            if args.profile:
+                record["profile"] = args.profile
+            if args.review_required is not None:
+                record["review_required"] = args.review_required
+            if args.artifacts_json:
+                record["artifacts"] = dict(args.artifacts_json)
             tasks.append(record)
-            current_record = dict(record)
+            current_record = normalize_task_record(record)
+            tasks[-1] = dict(current_record)
 
+        current_record, lineage_syncs = _lineage_sync_records(tasks, current_record or {})
         state["tasks"] = tasks
         save_state(fp, state)
     if current_record:
         sync_task(current_record, event_type="upsert", previous_status=previous_status)
+    for record, record_previous_status in lineage_syncs:
+        sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
     print(f"[ok] upsert id={args.id} status={args.status or 'dispatched'}")
 
 
 def cmd_done(args):
-    _finish(args.id, "done", args.summary)
+    _finish(
+        args.id,
+        "done",
+        args.summary,
+        report_path=args.report_path,
+        artifacts_json=args.artifacts_json,
+    )
 
 
 def cmd_failed(args):
-    _finish(args.id, "failed", args.summary)
+    _finish(
+        args.id,
+        "failed",
+        args.summary,
+        report_path=args.report_path,
+        artifacts_json=args.artifacts_json,
+    )
 
 
-def _finish(task_id: str, status: str, summary: str):
+def _finish(task_id: str, status: str, summary: str, *, report_path: str = "", artifacts_json: dict | None = None):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    lineage_syncs = []
     with open(STATE_FILE, "a+") as fp:
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
@@ -251,6 +642,17 @@ def _finish(task_id: str, status: str, summary: str):
             existing["updated_at"] = now_iso()
             if summary:
                 existing["summary"] = summary
+            if report_path:
+                existing["report_path"] = report_path
+            if artifacts_json:
+                artifacts = existing.get("artifacts", {})
+                if not isinstance(artifacts, dict):
+                    artifacts = {}
+                artifacts.update(artifacts_json)
+                existing["artifacts"] = artifacts
+            normalized = normalize_task_record(existing)
+            existing.clear()
+            existing.update(normalized)
             current_record = dict(existing)
         else:
             record = {
@@ -261,14 +663,22 @@ def _finish(task_id: str, status: str, summary: str):
                 "spawned_at": now_iso(),
                 "updated_at": now_iso(),
             }
+            if report_path:
+                record["report_path"] = report_path
+            if artifacts_json:
+                record["artifacts"] = dict(artifacts_json)
             tasks.append(record)
-            current_record = dict(record)
+            current_record = normalize_task_record(record)
+            tasks[-1] = dict(current_record)
 
+        current_record, lineage_syncs = _lineage_sync_records(tasks, current_record or {})
         # Clean up old done/failed records
         state["tasks"] = cleanup_old(tasks)
         save_state(fp, state)
     if current_record:
         sync_task(current_record, event_type=status, previous_status=previous_status)
+    for record, record_previous_status in lineage_syncs:
+        sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
     print(f"[ok] {status} id={task_id}")
 
 
@@ -329,24 +739,38 @@ def main():
     p_upsert.add_argument("--last-observed-at", dest="last_observed_at")
     p_upsert.add_argument("--recovery-action", dest="recovery_action")
     p_upsert.add_argument("--retry-count", dest="retry_count", type=int)
-    p_upsert.add_argument("--executor", choices=["subagent", "runner"])
+    p_upsert.add_argument("--executor", choices=["subagent", "runner", "team"])
     p_upsert.add_argument("--owner")
     p_upsert.add_argument("--route")
     p_upsert.add_argument("--runtime")
     p_upsert.add_argument("--parent-id", dest="parent_id")
+    p_upsert.add_argument("--child-ids", dest="child_ids")
     p_upsert.add_argument("--report-path", dest="report_path")
     p_upsert.add_argument("--context-path", dest="context_path")
     p_upsert.add_argument("--context-summary", dest="context_summary")
+    p_upsert.add_argument("--task-kind", dest="task_kind")
+    p_upsert.add_argument("--title")
+    p_upsert.add_argument("--worker-pool", dest="worker_pool")
+    p_upsert.add_argument("--work-type", dest="work_type")
+    p_upsert.add_argument("--phase")
+    p_upsert.add_argument("--protocol")
+    p_upsert.add_argument("--profile")
+    p_upsert.add_argument("--review-required", dest="review_required", type=parse_bool_arg)
+    p_upsert.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
     # done
     p_done = sub.add_parser("done")
     p_done.add_argument("--id", required=True)
     p_done.add_argument("--summary", default="")
+    p_done.add_argument("--report-path", dest="report_path", default="")
+    p_done.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
     # failed
     p_failed = sub.add_parser("failed")
     p_failed.add_argument("--id", required=True)
     p_failed.add_argument("--summary", default="")
+    p_failed.add_argument("--report-path", dest="report_path", default="")
+    p_failed.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
     # list
     sub.add_parser("list")

@@ -21,7 +21,14 @@ from datetime import datetime, timezone
 
 from learning_log import append_error_entry
 from octoclaw_route import infer_route
-from octopus_config import CONTEXT_DIR, SHARED_DIR, TASK_STATE_FILE, load_json, load_octopus_config
+from octopus_config import (
+    CONTEXT_DIR,
+    SHARED_DIR,
+    TASK_STATE_FILE,
+    load_json,
+    load_octopus_config,
+    spawn_operator_surface,
+)
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -456,6 +463,7 @@ def build_task_prompt(
     context_path: str = "",
     profile: str = "",
     skill_bundle: list[str] | None = None,
+    worker_pool: str = "",
     work_type: str = "",
     phase: str = "",
     protocol: str = "",
@@ -463,7 +471,15 @@ def build_task_prompt(
 ) -> str:
     lines = [
         "【状态写入】开始前先执行：",
-        f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert --id {task_id} --label {label} --model '{model}' --status running --tier {tier} --expected-done '{expected_done}' --route {route} --runtime subagent --executor subagent --report-path '{report_path}'",
+        (
+            f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert "
+            f"--id {task_id} --label {label} --model '{model}' --status running --tier {tier} "
+            f"--expected-done '{expected_done}' --route {route} --runtime subagent --executor subagent "
+            f"--report-path '{report_path}' --worker-pool {worker_pool or 'octoclaw-research'} "
+            f"--work-type {work_type or 'research'} --phase {phase or 'collect'} "
+            f"--protocol {protocol or 'normal'} --profile {profile or 'default'} "
+            f"--review-required {'true' if review_required else 'false'}"
+        ),
         "",
         "【目标】",
         task.strip(),
@@ -541,8 +557,16 @@ def register_dispatched_task(
     parent_id: str,
     context_path: str,
     context_summary: str,
+    task_kind: str = "",
+    worker_pool: str = "",
+    work_type: str = "",
+    phase: str = "",
+    protocol: str = "",
+    profile: str = "",
+    review_required: bool = False,
     owner: str = "",
     deps: list[str] | None = None,
+    artifacts_json: dict | None = None,
 ) -> None:
     cmd = [
         "python3",
@@ -574,6 +598,22 @@ def register_dispatched_task(
         report_path,
         "--summary",
         task_title(task, 60),
+        "--title",
+        task_title(task),
+        "--task-kind",
+        task_kind,
+        "--worker-pool",
+        worker_pool,
+        "--work-type",
+        work_type,
+        "--phase",
+        phase,
+        "--protocol",
+        protocol,
+        "--profile",
+        profile,
+        "--review-required",
+        "true" if review_required else "false",
     ]
     if owner:
         cmd.extend(["--owner", owner])
@@ -587,6 +627,8 @@ def register_dispatched_task(
         cmd.extend(["--context-summary", compact_text(context_summary, 240)])
     if parent_id:
         cmd.extend(["--parent-id", parent_id])
+    if artifacts_json:
+        cmd.extend(["--artifacts-json", json.dumps(artifacts_json, ensure_ascii=False)])
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
@@ -603,7 +645,15 @@ def register_failed_spawn_task(
     report_path: str,
     context_path: str,
     context_summary: str,
+    worker_pool: str,
+    work_type: str,
+    phase: str,
+    protocol: str,
+    profile: str,
+    review_required: bool,
+    task_kind: str,
     summary: str,
+    artifacts_json: dict | None = None,
 ) -> None:
     register_dispatched_task(
         task_id=task_id,
@@ -618,6 +668,14 @@ def register_failed_spawn_task(
         parent_id=parent_id,
         context_path=context_path,
         context_summary=context_summary,
+        task_kind=task_kind,
+        worker_pool=worker_pool,
+        work_type=work_type,
+        phase=phase,
+        protocol=protocol,
+        profile=profile,
+        review_required=review_required,
+        artifacts_json=artifacts_json,
     )
     subprocess.run(
         ["python3", TASK_STATE_PY, "failed", "--id", task_id, "--summary", summary[:180]],
@@ -625,6 +683,18 @@ def register_failed_spawn_task(
         capture_output=True,
         text=True,
     )
+
+
+def initial_spawn_artifacts(*, route: str, runtime: str, team_name: str) -> dict:
+    execution_backend = "spawn_plan"
+    if should_execute_spawn(route, runtime, explicit=None):
+        execution_backend = "clawteam"
+    surface = spawn_operator_surface(team_name=team_name)
+    return {
+        "execution_backend": execution_backend,
+        "operator_surface": surface,
+        "operator_hint": str(surface.get("operator_hint", "") or ""),
+    }
 
 
 def build_spawn_spec(
@@ -638,6 +708,7 @@ def build_spawn_spec(
     stream_to: str = "",
     supports_acp: bool = False,
     parent_id: str = "",
+    task_kind: str = "",
     register: bool = False,
     execute: bool | None = None,
     deps: list[str] | None = None,
@@ -675,6 +746,10 @@ def build_spawn_spec(
     if not isinstance(skill_bundle, list):
         skill_bundle = []
     review_required = bool(review_policy.get("required", False))
+    worker_pool = str(route_decision.get("worker_pool", "") or "")
+    final_task_kind = str(task_kind or "").strip() or ("team_parent" if final_route == "spawn_multi" else "subtask")
+    spawn_team_name = resolve_spawn_team_name()
+    base_artifacts = initial_spawn_artifacts(route=final_route, runtime=runtime, team_name=spawn_team_name)
 
     task_id = f"{final_label}-{now_compact()}"
     report_path = os.path.join(SHARED_DIR, f"{task_id}.md")
@@ -696,6 +771,14 @@ def build_spawn_spec(
             report_path=report_path,
             context_path=str(context_bundle.get("context_path", "") or ""),
             context_summary=str(context_bundle.get("summary", "") or ""),
+            task_kind=final_task_kind,
+            worker_pool=worker_pool,
+            work_type=work_type,
+            phase=phase,
+            protocol=protocol,
+            profile=profile,
+            review_required=review_required,
+            artifacts_json=base_artifacts,
             summary=f"spawn派发失败：{compact_text(error_text, 120)}",
         )
         raise ValueError(error_text)
@@ -713,6 +796,7 @@ def build_spawn_spec(
         context_path=str(context_bundle.get("context_path", "") or ""),
         profile=profile,
         skill_bundle=skill_bundle,
+        worker_pool=worker_pool,
         work_type=work_type,
         phase=phase,
         protocol=protocol,
@@ -733,7 +817,15 @@ def build_spawn_spec(
             parent_id=parent_id,
             context_path=str(context_bundle.get("context_path", "") or ""),
             context_summary=str(context_bundle.get("summary", "") or ""),
+            task_kind=final_task_kind,
+            worker_pool=worker_pool,
+            work_type=work_type,
+            phase=phase,
+            protocol=protocol,
+            profile=profile,
+            review_required=review_required,
             deps=deps,
+            artifacts_json=base_artifacts,
         )
 
     spawn_execution: dict[str, object] | None = None
@@ -751,13 +843,43 @@ def build_spawn_spec(
                 profile_override=profile,
             )
             agent_owner = str((spawn_execution or {}).get("agent_name", "") or "")
+            base_artifacts.update(
+                {
+                    "execution_backend": f"{str((spawn_execution or {}).get('backend', 'clawteam') or 'clawteam')}_"
+                    f"{str(spawn_execution_config().get('backend_name', 'tmux') or 'tmux')}",
+                    "operator_surface": spawn_operator_surface(
+                        agent_name=agent_owner,
+                        team_name=spawn_team_name,
+                    ),
+                    "spawn_execution": {
+                        "backend": str((spawn_execution or {}).get("backend", "") or ""),
+                        "team_name": str((spawn_execution or {}).get("team_name", "") or ""),
+                        "agent_name": agent_owner,
+                        "profile": str((spawn_execution or {}).get("profile", "") or ""),
+                    },
+                }
+            )
+            base_artifacts["operator_hint"] = str(
+                ((base_artifacts.get("operator_surface") or {}) if isinstance(base_artifacts.get("operator_surface"), dict) else {}).get("operator_hint", "")
+                or ""
+            )
+            cmd = [
+                "python3",
+                TASK_STATE_PY,
+                "upsert",
+                "--id",
+                task_id,
+                "--artifacts-json",
+                json.dumps(base_artifacts, ensure_ascii=False),
+            ]
             if agent_owner:
-                subprocess.run(
-                    ["python3", TASK_STATE_PY, "upsert", "--id", task_id, "--owner", agent_owner],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
+                cmd.extend(["--owner", agent_owner])
+            subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
             executed = True
         except Exception as exc:
             execution_error = compact_text(str(exc), 220)
@@ -791,6 +913,9 @@ def build_spawn_spec(
         "runtime": runtime,
         "stream_to": stream_to or "",
         "report_path": report_path,
+        "task_kind": final_task_kind,
+        "parent_id": parent_id,
+        "deps": [str(dep).strip() for dep in (deps or []) if str(dep).strip()],
         "work_type": work_type,
         "phase": phase,
         "protocol": protocol,
@@ -820,6 +945,7 @@ def build_spawn_spec(
         "executed": executed,
         "execution_error": execution_error,
         "spawn_execution": spawn_execution or {},
+        "operator_surface": base_artifacts.get("operator_surface", {}),
         "policy_decision": policy,
         "registered": register,
     }

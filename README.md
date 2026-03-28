@@ -280,6 +280,24 @@ The bridge can mirror task updates into a minimal ClawTeam-style layout:
 - tasks: `/workspace/tmp/octopus/clawteam-bridge/tasks`
 - inbox: `/workspace/tmp/octopus/clawteam-bridge/inbox`
 - events: `/workspace/tmp/octopus/clawteam-bridge/events`
+- board: `/workspace/tmp/octopus/clawteam-bridge/board.json`
+
+Unified runtime task records now carry enough lineage metadata for Phase 2 runtime convergence:
+
+- `task_kind`: `subtask`, `team_parent`, `team_step`
+- `parent_id` / `child_ids`
+- normalized `route / runtime / executor_type / worker_pool / work_type / phase / protocol / artifacts`
+
+Runner jobs now use the same record envelope as the rest of the unified runtime:
+
+- `runner_dispatch.py` registers a normalized runtime task up front
+- `runner_loop.sh` writes a shared markdown report plus structured runner result metadata
+- `task-state.json`, bridge mirror, and handoff payloads all reuse the same `report_path / artifacts / summary`
+- `artifacts.operator_surface` now carries operator-facing workbench hints, so `runner` / `spawn_single` / `spawn_multi` can expose the same tmux or ClawTeam runtime surface
+
+When `spawn_multi` is used, the bridge board also emits `lineages` so operators can inspect the parent task and its DAG children from one place.
+When child steps move through `running / done / failed`, the `team_parent` record now auto-rolls up child status, step summaries, and step reports, then emits a parent-level result mail when the DAG finishes or fails.
+`status.sh` now renders these parent/child relationships directly in `compact / table / lanes`, and also prints the current workbench mode / tmux session so you can inspect the unified runtime surface without manually opening `board.json`.
 
 Enable it in `tmp/octopus-config.json`:
 
@@ -333,6 +351,16 @@ Because current OpenClaw TUI exposes `--profile` rather than a direct `--model` 
 
 See [clawteam-integration-analysis-2026-03-25.md](./clawteam-integration-analysis-2026-03-25.md) for the architecture notes and tradeoffs.
 See [octoclaw-clawteam-unified-runtime-v1-2026-03-25.md](./octoclaw-clawteam-unified-runtime-v1-2026-03-25.md) for the target unified runtime design.
+
+Useful inspection commands:
+
+```bash
+# Unified runtime task records
+cat /workspace/tmp/octopus/task-state.json
+
+# ClawTeam-style board, including parent/child lineages for spawn_multi
+cat /workspace/tmp/octopus/clawteam-bridge/board.json
+```
 
 ## Runtime Policy Decision
 

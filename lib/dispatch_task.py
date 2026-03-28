@@ -20,13 +20,14 @@ from datetime import datetime, timezone
 
 from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
-from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config
+from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config, spawn_operator_surface
 from runner_playbooks import infer_runner_playbook
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNNER_DISPATCH_PY = os.path.join(SCRIPT_DIR, "runner_dispatch.py")
 RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
+TASK_STATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
 
 
 def decision_route(decision: dict) -> dict:
@@ -101,6 +102,125 @@ def clone_worker_step_decision(decision: dict) -> dict:
 
 def now_compact() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+
+
+def task_title(task: str, limit: int = 72) -> str:
+    text = re.sub(r"\s+", " ", (task or "").strip())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def compact_text(text: str, limit: int = 120) -> str:
+    value = re.sub(r"\s+", " ", str(text or "").strip())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def upsert_runtime_task(**fields) -> None:
+    cmd = ["python3", TASK_STATE_PY, "upsert"]
+    for key, value in fields.items():
+        text = str(value or "").strip()
+        if not text:
+            continue
+        cmd.extend([f"--{key.replace('_', '-')}", text])
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) -> dict:
+    ordered_steps = [name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict)]
+    child_task_ids = [str(step.get("task_id", "") or "").strip() for step in steps if str(step.get("task_id", "") or "").strip()]
+    operator_surface = spawn_operator_surface()
+    operator_surface["backend"] = backend
+    backend_name = str(operator_surface.get("backend_name", "tmux") or "tmux")
+    if backend == "clawteam":
+        team_name = str(operator_surface.get("team_name", "") or "").strip()
+        operator_surface["operator_hint"] = f"clawteam/{backend_name}" + (f" {team_name}" if team_name else "")
+    else:
+        operator_surface["operator_hint"] = backend or str(operator_surface.get("operator_hint", "") or "")
+    return {
+        "step_order": ordered_steps,
+        "child_task_ids": child_task_ids,
+        "step_task_ids": {
+            str(step.get("step", "") or ""): str(step.get("task_id", "") or "")
+            for step in steps
+            if str(step.get("step", "") or "").strip() and str(step.get("task_id", "") or "").strip()
+        },
+        "step_task_kinds": {
+            str(step.get("step", "") or ""): str(step.get("task_kind", "") or "")
+            for step in steps
+            if str(step.get("step", "") or "").strip()
+        },
+        "step_models": {
+            name: {
+                "label": str((plan.get(name) or {}).get("label", "") or ""),
+                "tier": str((plan.get(name) or {}).get("tier", "") or ""),
+                "model": str((plan.get(name) or {}).get("model", "") or ""),
+            }
+            for name in ordered_steps
+        },
+        "step_reports": {
+            str(step.get("step", "") or ""): str(step.get("report_path", "") or "")
+            for step in steps
+            if str(step.get("step", "") or "").strip()
+        },
+        "execution_backend": backend,
+        "child_count": len(child_task_ids),
+        "operator_surface": operator_surface,
+        "operator_hint": str(operator_surface.get("operator_hint", "") or ""),
+    }
+
+
+def register_multi_parent_task(
+    *,
+    task: str,
+    parent_spec: dict,
+    decision: dict,
+    plan: dict,
+    execution: dict,
+    backend: str,
+    parent_parent_id: str = "",
+) -> None:
+    route_meta = decision_route(decision)
+    model_meta = decision_model(decision)
+    child_ids = [str(step.get("task_id", "") or "").strip() for step in execution.get("steps", []) if str(step.get("task_id", "") or "").strip()]
+    step_names = " / ".join(name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict))
+    executed = bool(execution.get("executed", False))
+    handoff = execution.get("handoff", {}) if isinstance(execution.get("handoff", {}), dict) else {}
+    status = "running" if executed else ("failed" if handoff.get("status") == "failed" else "dispatched")
+    summary = (
+        f"spawn_multi active: {step_names}" if executed
+        else (f"spawn_multi failed: {step_names}" if status == "failed" else f"spawn_multi planned: {step_names}")
+    )
+    upsert_runtime_task(
+        id=str(parent_spec.get("task_id", "") or ""),
+        label=str(parent_spec.get("label", "") or ""),
+        model=str(parent_spec.get("model", "") or ""),
+        status=status,
+        summary=summary,
+        title=task_title(task),
+        tier=str(parent_spec.get("tier", "") or ""),
+        task_description=task,
+        expected_done=str(parent_spec.get("expected_done", "") or ""),
+        source="octopus",
+        executor="team",
+        route="spawn_multi",
+        runtime=backend,
+        parent_id=parent_parent_id,
+        child_ids=",".join(child_ids),
+        report_path=str(parent_spec.get("report_path", "") or ""),
+        context_path=str(parent_spec.get("context_path", "") or ""),
+        context_summary=str(parent_spec.get("context_summary", "") or ""),
+        task_kind="team_parent",
+        worker_pool=str(route_meta.get("worker_pool", "") or ""),
+        work_type=str(route_meta.get("work_type", "") or ""),
+        phase=str(route_meta.get("phase", "") or ""),
+        protocol=str(route_meta.get("protocol", "") or "normal"),
+        profile=str(model_meta.get("profile", "") or parent_spec.get("profile", "")),
+        review_required="true" if bool(decision_review(decision).get("required", False)) else "false",
+        artifacts_json=json.dumps(build_multi_parent_artifacts(plan, execution.get("steps", []), backend), ensure_ascii=False),
+    )
 
 
 def infer_label(task: str) -> str:
@@ -201,27 +321,59 @@ def _write_shared_report(job_id: str, content: str) -> str:
     return path
 
 
+def _runner_result_payload(
+    *,
+    status: str,
+    meta: dict | None,
+    result_path: str,
+    fallback_exit_code: int = 0,
+    fallback_finished_at: str = "",
+    fallback_summary: str = "",
+) -> dict:
+    meta = meta if isinstance(meta, dict) else {}
+    stdout_file = str(meta.get("stdout_file", "") or "")
+    stderr_file = str(meta.get("stderr_file", "") or "")
+    stdout_excerpt = str(meta.get("stdout_excerpt", "") or "").strip() or _tail_text(stdout_file)
+    stderr_excerpt = str(meta.get("stderr_excerpt", "") or "").strip() or _tail_text(stderr_file)
+    return {
+        "completed": True,
+        "status": str(meta.get("status", "") or status or "done"),
+        "exit_code": int(meta.get("exit_code", fallback_exit_code) or fallback_exit_code or 0),
+        "result_path": result_path,
+        "report_path": str(meta.get("report_path", "") or ""),
+        "summary": str(meta.get("summary", "") or fallback_summary or ""),
+        "stdout_file": stdout_file,
+        "stderr_file": stderr_file,
+        "stdout_excerpt": stdout_excerpt,
+        "stderr_excerpt": stderr_excerpt,
+        "execution_backend": str(meta.get("execution_backend", "") or "runner_queue"),
+        "command": str(meta.get("command", "") or ""),
+        "cwd": str(meta.get("cwd", "") or ""),
+        "timeout_seconds": int(meta.get("timeout_seconds", 0) or 0),
+        "worker_id": str(meta.get("worker_id", "") or ""),
+        "finished_at": str(meta.get("finished_at", "") or fallback_finished_at or ""),
+    }
+
+
 def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
     job = payload.get("job", {}) if isinstance(payload, dict) else {}
     job_id = str(job.get("id", "") or "")
     wait = wait or {}
     if wait.get("completed"):
         status = str(wait.get("status", "done") or "done")
+        runner_summary = compact_text(str(wait.get("summary", "") or ""), 180)
+        report_path = str(wait.get("report_path", "") or "")
         stdout_text = _read_text(str(wait.get("stdout_file", "") or "")) or str(wait.get("stdout_excerpt", "") or "")
         stderr_text = _read_text(str(wait.get("stderr_file", "") or "")) or str(wait.get("stderr_excerpt", "") or "")
         merged = stdout_text.strip()
         if stderr_text.strip():
             merged = f"{merged}\n\n[stderr]\n{stderr_text.strip()}".strip()
         reply_text = _summarize_output(stdout_text or merged)
-        report_path = ""
-        if len(merged) > 500 or len(_clean_output_lines(merged)) > 6:
+        if not report_path and (len(merged) > 500 or len(_clean_output_lines(merged)) > 6):
             report_path = _write_shared_report(job_id or f"runner-{now_compact()}", merged)
         if not reply_text:
-            reply_text = "已通过常驻 runner 完成检查。"
-        if report_path:
-            summary = "已通过常驻 runner 完成检查，详细输出已写入共享文件。"
-        else:
-            summary = "已通过常驻 runner 完成检查。"
+            reply_text = runner_summary or "已通过常驻 runner 完成检查。"
+        summary = runner_summary or ("已通过常驻 runner 完成检查，详细输出已写入共享文件。" if report_path else "已通过常驻 runner 完成检查。")
         return {
             "kind": "final",
             "status": "success" if status == "done" else status,
@@ -229,6 +381,7 @@ def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
             "reply_text": reply_text,
             "report_path": report_path,
             "job_id": job_id,
+            "execution_backend": str(wait.get("execution_backend", "") or "runner_queue"),
             "user_safe": True,
         }
     timeout_seconds = int(wait.get("timeout_seconds", 0) or 0)
@@ -285,7 +438,7 @@ def build_multi_step_task(base_task: str, step_name: str) -> str:
     )
 
 
-def execute_multi_spawn_plan(args, task: str, plan: dict) -> dict:
+def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str) -> dict:
     spawn_cfg = load_octopus_config().get("spawn_execution", {})
     if not isinstance(spawn_cfg, dict) or not spawn_cfg.get("enabled", False) or str(spawn_cfg.get("backend", "plan") or "plan").strip().lower() != "clawteam":
         return {"executed": False, "steps": [], "handoff": build_spawn_handoff("spawn_multi", "", task)}
@@ -294,7 +447,7 @@ def execute_multi_spawn_plan(args, task: str, plan: dict) -> dict:
     if not ordered_steps:
         return {"executed": False, "steps": [], "handoff": build_spawn_handoff("spawn_multi", "", task)}
 
-    parent_id = args.id or f"octopus-team-{now_compact()}"
+    parent_id = parent_task_id
     previous_task_id = ""
     steps: list[dict] = []
 
@@ -308,6 +461,7 @@ def execute_multi_spawn_plan(args, task: str, plan: dict) -> dict:
             tier=str(step.get("tier", "") or ""),
             model=str(step.get("model", "") or ""),
             parent_id=parent_id,
+            task_kind="team_step",
             register=True,
             execute=True,
             deps=[previous_task_id] if previous_task_id else None,
@@ -323,6 +477,7 @@ def execute_multi_spawn_plan(args, task: str, plan: dict) -> dict:
                 "executed": bool(spec.get("executed", False)),
                 "execution_error": spec.get("execution_error", ""),
                 "report_path": spec.get("report_path", ""),
+                "task_kind": spec.get("task_kind", ""),
                 "spawn_execution": spec.get("spawn_execution", {}),
             }
         )
@@ -363,19 +518,7 @@ def wait_for_runner_result(job_id: str, timeout_seconds: int) -> dict:
         if os.path.exists(meta_path):
             meta = load_json(meta_path)
             if isinstance(meta, dict):
-                stdout_file = str(meta.get("stdout_file", "") or "")
-                stderr_file = str(meta.get("stderr_file", "") or "")
-                return {
-                    "completed": True,
-                    "status": meta.get("status", "done"),
-                    "exit_code": int(meta.get("exit_code", 0) or 0),
-                    "result_path": meta_path,
-                    "stdout_file": stdout_file,
-                    "stderr_file": stderr_file,
-                    "stdout_excerpt": _tail_text(stdout_file),
-                    "stderr_excerpt": _tail_text(stderr_file),
-                    "finished_at": meta.get("finished_at", ""),
-                }
+                return _runner_result_payload(status="done", meta=meta, result_path=meta_path)
         queue = load_json(RUNNER_QUEUE_FILE)
         if isinstance(queue, dict):
             jobs = queue.get("jobs", [])
@@ -384,19 +527,14 @@ def wait_for_runner_result(job_id: str, timeout_seconds: int) -> dict:
                 if isinstance(job, dict) and job.get("status") == "failed":
                     result_path = str(job.get("result_path", "") or "")
                     meta = load_json(result_path) if result_path else None
-                    stdout_file = str((meta or {}).get("stdout_file", "") or "")
-                    stderr_file = str((meta or {}).get("stderr_file", "") or "")
-                    return {
-                        "completed": True,
-                        "status": "failed",
-                        "exit_code": int(job.get("exit_code", 1) or 1),
-                        "result_path": result_path,
-                        "stdout_file": stdout_file,
-                        "stderr_file": stderr_file,
-                        "stdout_excerpt": _tail_text(stdout_file),
-                        "stderr_excerpt": _tail_text(stderr_file),
-                        "finished_at": str(job.get("finished_at", "") or ""),
-                    }
+                    return _runner_result_payload(
+                        status="failed",
+                        meta=meta,
+                        result_path=result_path,
+                        fallback_exit_code=int(job.get("exit_code", 1) or 1),
+                        fallback_finished_at=str(job.get("finished_at", "") or ""),
+                        fallback_summary=str(job.get("summary", "") or ""),
+                    )
         time.sleep(0.5)
     return {"completed": False, "timeout_seconds": timeout_seconds}
 
@@ -484,7 +622,8 @@ def recommend_multi_spawn(args, task: str) -> dict:
         label=args.label,
         tier=args.tier,
         parent_id=args.id or "",
-        register=not multi_exec_enabled,
+        task_kind="team_parent",
+        register=False,
         policy_decision=decision,
     )
     planner_task = build_multi_step_task(task, "planner")
@@ -513,16 +652,37 @@ def recommend_multi_spawn(args, task: str) -> dict:
             "model": decision_model(review_decision).get("selected_model", ""),
             "policy_decision": review_decision,
         }
-    execution = execute_multi_spawn_plan(args, task, plan)
+    execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octopus-team-{now_compact()}"))
+    parent_runtime = "clawteam" if multi_exec_enabled else "plan"
+    primary_spawn["runtime"] = parent_runtime
+    primary_spawn["task_kind"] = "team_parent"
+    primary_spawn["child_ids"] = [
+        str(step.get("task_id", "") or "").strip()
+        for step in execution.get("steps", [])
+        if str(step.get("task_id", "") or "").strip()
+    ]
+    register_multi_parent_task(
+        task=task,
+        parent_spec=primary_spawn,
+        decision=decision,
+        plan=plan,
+        execution=execution,
+        backend=parent_runtime,
+        parent_parent_id=args.id or "",
+    )
     return apply_policy_fields({
         "route": "spawn_multi",
+        "task_id": primary_spawn.get("task_id", ""),
         "executed": bool(execution.get("executed", False)),
         "label": primary_spawn["label"],
         "tier": primary_spawn["tier"],
         "model": primary_spawn["model"],
         "profile": primary_spawn.get("profile", ""),
+        "runtime": parent_runtime,
+        "task_kind": "team_parent",
         "reason": "parallel_or_staged_workflow",
         "task": task,
+        "report_path": primary_spawn.get("report_path", ""),
         "plan": plan,
         "handoff": execution.get("handoff", primary_spawn["handoff"]),
         "steps": execution.get("steps", []),

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 LABEL_EMOJI = {
     "octopus-power": "💪",
@@ -27,11 +28,18 @@ LABEL_NAME = {
     "octopus-feishu": "鸽手",
 }
 
+FINAL_STATUSES = {"done", "failed", "deferred", "completed"}
+SUCCESS_STATUSES = {"done", "completed"}
+
 
 def task_executor(task: dict) -> str:
     explicit = str(task.get("executor", "") or "").strip().lower()
-    if explicit in ("runner", "subagent"):
+    if explicit in ("runner", "subagent", "team"):
         return explicit
+    if str(task.get("task_kind", "") or "").strip() == "team_parent":
+        return "team"
+    if str(task.get("route", "") or "").strip() == "spawn_multi":
+        return "team"
     if task.get("label") == "octopus-runner":
         return "runner"
     return "subagent"
@@ -43,6 +51,26 @@ def get_emoji(label: str) -> str:
 
 def get_label_name(label: str) -> str:
     return LABEL_NAME.get(label, label.replace("octopus-", "") if label else "任务")
+
+
+def is_team_parent(task: dict) -> bool:
+    return str(task.get("task_kind", "") or "").strip() == "team_parent"
+
+
+def is_team_step(task: dict) -> bool:
+    return str(task.get("task_kind", "") or "").strip() == "team_step"
+
+
+def task_role_emoji(task: dict) -> str:
+    if is_team_parent(task):
+        return "🕸️"
+    return get_emoji(str(task.get("label", "") or ""))
+
+
+def task_role_name(task: dict) -> str:
+    if is_team_parent(task):
+        return "协作流"
+    return get_label_name(str(task.get("label", "") or ""))
 
 
 def parse_time(value: str):
@@ -76,10 +104,8 @@ def short_model(path: str, limit: int = 42) -> str:
     return f"{left[: max(1, head_budget - 1)]}…/{right}"
 
 
-
 def compact_model(path: str) -> str:
     return short_model(path, limit=52)
-
 
 
 def table_model(path: str) -> str:
@@ -101,6 +127,17 @@ def model_cost_badge(path: str) -> str:
     return "?"
 
 
+def operator_hint(task: dict[str, Any], limit: int = 28) -> str:
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    surface = artifacts.get("operator_surface", {}) if isinstance(artifacts.get("operator_surface", {}), dict) else {}
+    value = str(artifacts.get("operator_hint", "") or surface.get("operator_hint", "") or "").strip()
+    if not value:
+        return ""
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
 GENERIC_SUMMARY_PREFIXES = (
     "runner完成",
     "runner失败",
@@ -113,6 +150,8 @@ def preferred_task_title(task: dict, limit: int = 48) -> str:
     summary = str(task.get("summary") or "").strip()
     task_desc = str(task.get("task_description") or "").strip()
     task_id = str(task.get("id") or "?").strip()
+    if is_team_parent(task) and task_desc:
+        return task_desc[:limit]
     if task_desc and (not summary or summary.startswith(GENERIC_SUMMARY_PREFIXES)):
         return task_desc[:limit]
     if summary:
@@ -166,30 +205,193 @@ def format_clock(value: str, now: datetime) -> str:
     return dt.strftime("%H:%M")
 
 
+def _task_id(task: dict[str, Any]) -> str:
+    return str(task.get("id", "") or "").strip()
+
+
+def _task_sort_value(task: dict[str, Any]) -> float:
+    for field in ("updated_at", "completed_at", "started_at", "spawned_at"):
+        dt = parse_time(str(task.get(field, "") or ""))
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    return 0.0
+
+
+def _resolved_child_ids(parent: dict[str, Any], children: list[dict[str, Any]]) -> list[str]:
+    explicit_child_ids = [str(item).strip() for item in (parent.get("child_ids", []) or []) if str(item).strip()]
+    inferred_ids = [_task_id(child) for child in children if _task_id(child)]
+    resolved = list(explicit_child_ids)
+    for child_id in inferred_ids:
+        if child_id not in resolved:
+            resolved.append(child_id)
+    return resolved
+
+
+def _build_lineage_step_rows(parent: dict[str, Any], children: list[dict[str, Any]], child_ids: list[str]) -> list[dict[str, Any]]:
+    artifacts = parent.get("artifacts", {}) if isinstance(parent.get("artifacts", {}), dict) else {}
+    step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
+    step_order = artifacts.get("step_order", []) if isinstance(artifacts.get("step_order", []), list) else []
+    children_by_id = {_task_id(child): child for child in children if _task_id(child)}
+    rows: list[dict[str, Any]] = []
+    used_child_ids: set[str] = set()
+
+    for step_name in step_order:
+        name = str(step_name).strip()
+        if not name:
+            continue
+        child_id = str(step_task_ids.get(name, "") or "").strip()
+        if not child_id and child_ids:
+            index = len(rows)
+            if index < len(child_ids):
+                child_id = str(child_ids[index] or "").strip()
+        child = children_by_id.get(child_id)
+        if child is None:
+            continue
+        rows.append({"step": name, "task": child})
+        used_child_ids.add(child_id)
+
+    for child_id in child_ids:
+        child = children_by_id.get(child_id)
+        if child is None or child_id in used_child_ids:
+            continue
+        rows.append({"step": "", "task": child})
+        used_child_ids.add(child_id)
+
+    for child in children:
+        child_id = _task_id(child)
+        if not child_id or child_id in used_child_ids:
+            continue
+        rows.append({"step": "", "task": child})
+        used_child_ids.add(child_id)
+
+    return rows
+
+
+def _build_status_lineages(tasks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], set[str], set[str]]:
+    tasks_by_id = {_task_id(task): task for task in tasks if _task_id(task)}
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for task in tasks:
+        parent_id = str(task.get("parent_id", "") or "").strip()
+        if parent_id:
+            children_by_parent.setdefault(parent_id, []).append(task)
+
+    parent_ids: list[str] = []
+    seen_parent_ids: set[str] = set()
+    for task in tasks:
+        task_id = _task_id(task)
+        if not task_id or task_id in seen_parent_ids:
+            continue
+        if is_team_parent(task) or task.get("child_ids") or task_id in children_by_parent:
+            seen_parent_ids.add(task_id)
+            parent_ids.append(task_id)
+
+    parent_ids.sort(key=lambda task_id: _task_sort_value(tasks_by_id.get(task_id, {})), reverse=True)
+
+    lineages: list[dict[str, Any]] = []
+    child_ids_all: set[str] = set()
+
+    for parent_id in parent_ids:
+        parent = tasks_by_id.get(parent_id)
+        if not isinstance(parent, dict):
+            continue
+        children = []
+        seen_child_ids: set[str] = set()
+        explicit_child_ids = [str(item).strip() for item in (parent.get("child_ids", []) or []) if str(item).strip()]
+        for child_id in explicit_child_ids:
+            child = tasks_by_id.get(child_id)
+            if child is None:
+                continue
+            children.append(child)
+            seen_child_ids.add(child_id)
+        inferred_children = sorted(children_by_parent.get(parent_id, []), key=_task_sort_value)
+        for child in inferred_children:
+            child_id = _task_id(child)
+            if child_id and child_id not in seen_child_ids:
+                children.append(child)
+                seen_child_ids.add(child_id)
+
+        if not children and not explicit_child_ids:
+            continue
+
+        child_ids = _resolved_child_ids(parent, children)
+        status_counts: dict[str, int] = {}
+        open_task_count = 0
+        done_child_count = 0
+        failed_child_count = 0
+        for child in children:
+            status = str(child.get("status", "") or "").strip().lower()
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status in SUCCESS_STATUSES:
+                done_child_count += 1
+            if status == "failed":
+                failed_child_count += 1
+            if status not in FINAL_STATUSES:
+                open_task_count += 1
+
+        step_rows = _build_lineage_step_rows(parent, children, child_ids)
+        lineages.append(
+            {
+                "parent": parent,
+                "children": children,
+                "child_ids": child_ids,
+                "child_count": len(child_ids),
+                "open_task_count": open_task_count,
+                "done_child_count": done_child_count,
+                "failed_child_count": failed_child_count,
+                "status_counts": status_counts,
+                "step_rows": step_rows,
+            }
+        )
+        child_ids_all.update(_task_id(child) for child in children if _task_id(child))
+
+    return lineages, set(parent_ids), child_ids_all
+
+
+def _should_count_recent(task: dict[str, Any], recent_window: datetime, lineage_child_ids: set[str], now: datetime) -> bool:
+    task_id = _task_id(task)
+    if task_id in lineage_child_ids:
+        return False
+    completed = parse_time(str(task.get("completed_at", "") or ""))
+    if completed is None:
+        return False
+    if completed.tzinfo:
+        completed = completed.astimezone(now.tzinfo).replace(tzinfo=None)
+    return completed >= recent_window.replace(tzinfo=None)
+
+
 def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent_minutes: int = 30) -> dict:
     now = now or datetime.now(timezone(timedelta(hours=8)))
     recent_window = now - timedelta(minutes=recent_minutes)
-    running = [t for t in tasks if t.get("status") in ("running", "dispatched")]
-    queued = [t for t in tasks if t.get("status") == "queued"]
-    deferred = [t for t in tasks if t.get("status") == "deferred"]
-    pending = [t for t in tasks if t.get("status") == "pending_confirm"]
+    lineages, lineage_parent_ids, lineage_child_ids = _build_status_lineages(tasks)
+    lineage_task_ids = lineage_parent_ids | lineage_child_ids
+    generic_tasks = [task for task in tasks if _task_id(task) not in lineage_task_ids]
+
+    running = [task for task in generic_tasks if task.get("status") in ("running", "dispatched")]
+    queued = [task for task in generic_tasks if task.get("status") == "queued"]
+    deferred = [task for task in generic_tasks if task.get("status") == "deferred"]
+    pending = [task for task in generic_tasks if task.get("status") == "pending_confirm"]
     failed_recent = []
     done_recent = []
     steer_needed = []
+    active_lineages = [
+        lineage
+        for lineage in lineages
+        if str(lineage.get("parent", {}).get("status", "") or "").strip().lower() not in {"done", "failed", "deferred"}
+        or int(lineage.get("open_task_count", 0) or 0) > 0
+    ]
 
     for task in tasks:
         if task.get("recovery_action") in ("needs_steer", "steered"):
             steer_needed.append(task)
-        completed = parse_time(task.get("completed_at", ""))
-        if not completed:
+        if not _should_count_recent(task, recent_window, lineage_child_ids, now):
             continue
-        if completed.tzinfo:
-            completed = completed.astimezone(now.tzinfo).replace(tzinfo=None)
-        if completed >= recent_window.replace(tzinfo=None):
-            if task.get("status") == "done":
-                done_recent.append(task)
-            elif task.get("status") == "failed":
-                failed_recent.append(task)
+        if task.get("status") == "done":
+            done_recent.append(task)
+        elif task.get("status") == "failed":
+            failed_recent.append(task)
 
     return {
         "now": now,
@@ -200,12 +402,45 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
         "done_recent": done_recent,
         "failed_recent": failed_recent,
         "steer_needed": steer_needed,
+        "lineages": lineages,
+        "active_lineages": active_lineages,
+        "lineage_parent_ids": lineage_parent_ids,
+        "lineage_child_ids": lineage_child_ids,
     }
 
 
+def _task_status_label(task: dict[str, Any]) -> str:
+    value = str(task.get("status", "") or "").strip().lower()
+    mapping = {
+        "done": "done",
+        "completed": "done",
+        "failed": "failed",
+        "running": "running",
+        "dispatched": "queued",
+        "queued": "queued",
+        "pending_confirm": "blocked",
+        "blocked": "blocked",
+        "deferred": "deferred",
+    }
+    return mapping.get(value, value or "?")
+
+
+def _lineage_progress_text(lineage: dict[str, Any]) -> str:
+    child_count = int(lineage.get("child_count", 0) or 0)
+    done_child_count = int(lineage.get("done_child_count", 0) or 0)
+    failed_child_count = int(lineage.get("failed_child_count", 0) or 0)
+    open_task_count = int(lineage.get("open_task_count", 0) or 0)
+    parts = [f"{done_child_count}/{child_count} done"] if child_count else ["0 steps"]
+    if failed_child_count:
+        parts.append(f"{failed_child_count} failed")
+    if open_task_count:
+        parts.append(f"{open_task_count} open")
+    return " · ".join(parts)
+
+
 def _compact_task_line(task: dict, now: datetime) -> str:
-    emoji = get_emoji(task.get("label", ""))
-    role = get_label_name(task.get("label", ""))
+    emoji = task_role_emoji(task)
+    role = task_role_name(task)
     name = preferred_task_title(task, limit=52)
     model = task_model_display(task.get("model", ""))
     cost = model_cost_badge(task.get("model", ""))
@@ -213,7 +448,32 @@ def _compact_task_line(task: dict, now: datetime) -> str:
     duration = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
     eta = task.get("expected_done_at")
     eta_text = f" · 预计 {format_clock(eta, now)}" if eta else ""
-    return f"  {emoji} {role} · {model} · {cost} · {tier} · ⏱️ {duration}{eta_text}\n    └ {name}"
+    op_hint = operator_hint(task)
+    op_text = f" · {op_hint}" if op_hint else ""
+    return f"  {emoji} {role} · {model} · {cost} · {tier} · ⏱️ {duration}{eta_text}{op_text}\n    └ {name}"
+
+
+def _compact_lineage_lines(lineage: dict[str, Any], now: datetime) -> list[str]:
+    parent = lineage["parent"]
+    parent_name = preferred_task_title(parent, limit=54)
+    parent_status = _task_status_label(parent)
+    duration = format_duration(parent.get("started_at") or parent.get("spawned_at") or parent.get("updated_at") or "", now)
+    parent_hint = operator_hint(parent)
+    parent_hint_text = f" · {parent_hint}" if parent_hint else ""
+    lines = [
+        f"  🕸️ {parent_name} · {parent_status} · {_lineage_progress_text(lineage)} · ⏱️ {duration}{parent_hint_text}"
+    ]
+    step_rows = lineage.get("step_rows", [])
+    for idx, step_row in enumerate(step_rows[:4]):
+        child = step_row["task"]
+        branch = "└" if idx == min(len(step_rows), 4) - 1 else "├"
+        step_name = str(step_row.get("step", "") or child.get("phase", "") or _task_id(child) or "step").strip()
+        child_status = _task_status_label(child)
+        child_title = preferred_task_title(child, limit=56)
+        lines.append(f"    {branch} {step_name:<10} [{child_status:<7}] {child_title}")
+    if len(step_rows) > 4:
+        lines.append(f"    └ … 其余 {len(step_rows) - 4} 个子步骤")
+    return lines
 
 
 def render_status_text_compact(snapshot: dict) -> str:
@@ -223,11 +483,17 @@ def render_status_text_compact(snapshot: dict) -> str:
     lines = [
         "🐙 八爪鱼（OctoClaw）任务面板",
         (
-            f"运行中 {len(snapshot['running'])} | 排队 {len(snapshot['queued'])} | "
-            f"待确认 {len(snapshot['pending'])} | 异常 {len(snapshot['failed_recent']) + len(snapshot['steer_needed'])}"
+            f"流程 {len(snapshot['active_lineages'])} | 运行中 {len(snapshot['running'])} | "
+            f"排队 {len(snapshot['queued'])} | 待确认 {len(snapshot['pending'])} | "
+            f"异常 {len(snapshot['failed_recent']) + len(snapshot['steer_needed'])}"
         ),
         "",
     ]
+    if snapshot["active_lineages"]:
+        lines.append(f"🕸️ 多子任务流程（{len(snapshot['active_lineages'])}个）")
+        for lineage in snapshot["active_lineages"][:4]:
+            lines.extend(_compact_lineage_lines(lineage, now))
+        lines.append("")
     if snapshot["running"]:
         lines.append(f"🔵 运行中（{len(snapshot['running'])}个）")
         lines.extend(_compact_task_line(task, now) for task in snapshot["running"][:8])
@@ -237,8 +503,9 @@ def render_status_text_compact(snapshot: dict) -> str:
         for task in snapshot["queued"][:6]:
             deps = ",".join(task.get("deps", [])[:2]) or "?"
             lines.append(
-                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {task_model_display(task.get('model', ''))} · "
+                f"  {task_role_emoji(task)} {task_role_name(task)} · {task_model_display(task.get('model', ''))} · "
                 f"{model_cost_badge(task.get('model', ''))} · {str(task.get('tier', '?'))[:8]} · wait {deps}"
+                f"{(' · ' + operator_hint(task)) if operator_hint(task) else ''}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=52)}")
         lines.append("")
@@ -247,7 +514,7 @@ def render_status_text_compact(snapshot: dict) -> str:
         for task in snapshot["steer_needed"][:6]:
             reason = task.get("session_status") or task.get("recovery_action") or "needs attention"
             lines.append(
-                f"  {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · {task_model_display(task.get('model', ''))} · "
+                f"  {task_role_emoji(task)} {task_role_name(task)} · {task_model_display(task.get('model', ''))} · "
                 f"{str(task.get('tier', '?'))[:8]} · {str(reason)[:24]}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=52)}")
@@ -263,7 +530,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             )
             completed = format_clock(task.get("completed_at") or "", now)
             lines.append(
-                f"  ✅ {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · "
+                f"  ✅ {task_role_emoji(task)} {task_role_name(task)} · "
                 f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
                 f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
             )
@@ -277,7 +544,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             )
             completed = format_clock(task.get("completed_at") or "", now)
             lines.append(
-                f"  ❌ {get_emoji(task.get('label', ''))} {get_label_name(task.get('label', ''))} · "
+                f"  ❌ {task_role_emoji(task)} {task_role_name(task)} · "
                 f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
                 f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
             )
@@ -298,6 +565,31 @@ def _table_row(columns: list[str], widths: list[int]) -> str:
 def render_status_table(snapshot: dict) -> str:
     now = snapshot["now"]
     rows = []
+
+    for lineage in snapshot["active_lineages"][:8]:
+        parent = lineage["parent"]
+        rows.append(
+            [
+                ("team: " + preferred_task_title(parent, limit=16))[:22],
+                "协作流",
+                table_model(parent.get("model", "")),
+                _task_status_label(parent)[:8],
+                (_lineage_progress_text(lineage) + (f" · {operator_hint(parent, 12)}" if operator_hint(parent, 12) else ""))[:18],
+            ]
+        )
+        for step_row in lineage.get("step_rows", [])[:3]:
+            child = step_row["task"]
+            step_name = str(step_row.get("step", "") or child.get("phase", "") or _task_id(child) or "step").strip()
+            rows.append(
+                [
+                    ("↳ " + step_name)[:22],
+                    task_role_name(child)[:8],
+                    table_model(child.get("model", "")),
+                    _task_status_label(child)[:8],
+                    preferred_task_title(child, limit=18),
+                ]
+            )
+
     for group_name, tasks, status_text in (
         ("run", snapshot["running"], "run"),
         ("queued", snapshot["queued"], "queued"),
@@ -305,7 +597,6 @@ def render_status_table(snapshot: dict) -> str:
         ("recover", snapshot["steer_needed"], "steer"),
     ):
         for task in tasks[:16]:
-            note = ""
             if group_name == "queued":
                 note = "deps:" + ",".join(task.get("deps", [])[:2])
             elif group_name == "recover":
@@ -315,10 +606,10 @@ def render_status_table(snapshot: dict) -> str:
             rows.append(
                 [
                     preferred_task_title(task, limit=22),
-                    get_label_name(task.get("label", ""))[:8],
-                    task_model_display(task.get("model", ""), limit=24),
+                    task_role_name(task)[:8],
+                    table_model(task.get("model", "")),
                     status_text,
-                    note,
+                    (note + (f" · {operator_hint(task, 10)}" if operator_hint(task, 10) else ""))[:18],
                 ]
             )
 
@@ -341,22 +632,24 @@ def render_status_table(snapshot: dict) -> str:
 def render_status_lanes(snapshot: dict) -> str:
     now = snapshot["now"]
     lane_map = [
-        ("Main", []),
-        ("Runner lane", [t for t in snapshot["running"] + snapshot["queued"] if task_executor(t) == "runner"]),
+        (
+            "Runner lane",
+            [task for task in snapshot["running"] + snapshot["queued"] if task_executor(task) == "runner"],
+        ),
         (
             "Build lane",
             [
-                t
-                for t in snapshot["running"] + snapshot["queued"]
-                if task_executor(t) != "runner" and t.get("label") in ("octopus-fix", "octopus-test", "octopus-power")
+                task
+                for task in snapshot["running"] + snapshot["queued"]
+                if task_executor(task) != "runner" and task.get("label") in ("octopus-fix", "octopus-test", "octopus-power")
             ],
         ),
         (
             "Research lane",
             [
-                t
-                for t in snapshot["running"] + snapshot["queued"]
-                if task_executor(t) != "runner" and t.get("label") in ("octopus-scout", "octopus-writer", "octopus-analyze")
+                task
+                for task in snapshot["running"] + snapshot["queued"]
+                if task_executor(task) != "runner" and task.get("label") in ("octopus-scout", "octopus-writer", "octopus-analyze")
             ],
         ),
         ("Recovery", snapshot["steer_needed"]),
@@ -371,15 +664,40 @@ def render_status_lanes(snapshot: dict) -> str:
             note = "deps"
         else:
             note = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
-        return f"  └─ {name:<26} [{status:<11}] {note}"
+        op_hint = operator_hint(task, 18)
+        suffix = f" · {op_hint}" if op_hint else ""
+        return f"  └─ {name:<26} [{status:<11}] {note}{suffix}"
 
     lines = [
         "🐙 八爪鱼（OctoClaw）",
         "",
         "Main",
         "  └─ orchestration active",
+        "",
+        "Team lane",
     ]
-    for title, tasks in lane_map[1:]:
+    if snapshot["active_lineages"]:
+        for lineage in snapshot["active_lineages"][:4]:
+            parent = lineage["parent"]
+            parent_name = preferred_task_title(parent, limit=24)
+            parent_hint = operator_hint(parent, 18)
+            suffix = f" · {parent_hint}" if parent_hint else ""
+            lines.append(f"  └─ {parent_name:<24} [{_task_status_label(parent):<11}] {_lineage_progress_text(lineage)}{suffix}")
+            step_rows = lineage.get("step_rows", [])
+            for idx, step_row in enumerate(step_rows[:3]):
+                child = step_row["task"]
+                step_name = str(step_row.get("step", "") or child.get("phase", "") or _task_id(child) or "step").strip()
+                branch = "└" if idx == min(len(step_rows), 3) - 1 else "├"
+                lines.append(
+                    f"      {branch} {step_name:<18} [{_task_status_label(child):<11}] "
+                    f"{preferred_task_title(child, limit=24)}"
+                )
+            if len(step_rows) > 3:
+                lines.append(f"      └ … 其余 {len(step_rows) - 3} 个子步骤")
+    else:
+        lines.append("  └─ idle")
+
+    for title, tasks in lane_map:
         lines.extend(["", title])
         if tasks:
             lines.extend(lane_line(task) for task in tasks[:6])

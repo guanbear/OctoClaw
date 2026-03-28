@@ -936,6 +936,12 @@ cfg = {
     "enabled": "${MODEL_AUTO_ENABLED}".lower() == "true",
     "prefer_private": "${MODEL_AUTO_PREFER_PRIVATE}".lower() == "true",
     "prefer_low_cost": "${MODEL_AUTO_PREFER_LOW_COST}".lower() == "true",
+  },
+  "workbench": {
+    "supervisor_mode": "${SUPERVISOR_MODE}",
+    "tmux_session_name": "${TMUX_SESSION_NAME}",
+    "tmux_runner_window_name": "${TMUX_RUNNER_WINDOW_NAME}",
+    "tmux_patrol_window_name": "${TMUX_PATROL_WINDOW_NAME}",
   }
 }
 with open("${OCTOPUS_CONFIG_FILE}", "w", encoding="utf-8") as f:

@@ -148,6 +148,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "profile_by_tier": {},
         "profile_by_model_prefix": {},
     },
+    "workbench": {
+        "supervisor_mode": "auto",
+        "tmux_session_name": "octoclaw-runtime",
+        "tmux_runner_window_name": "runner",
+        "tmux_patrol_window_name": "patrol",
+    },
     "runner": {
         "enabled": True,
         "poll_interval_seconds": 3,
@@ -195,6 +201,79 @@ def load_octopus_config() -> dict[str, Any]:
     if isinstance(data, dict):
         return deep_merge(DEFAULT_CONFIG, data)
     return json.loads(json.dumps(DEFAULT_CONFIG))
+
+
+def workbench_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or load_octopus_config()
+    section = cfg.get("workbench", {})
+    return section if isinstance(section, dict) else {}
+
+
+def tmux_attach_hint(session_name: str) -> str:
+    session = str(session_name or "").strip()
+    if not session:
+        return ""
+    return f"tmux attach -t {session}"
+
+
+def runner_operator_surface(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or load_octopus_config()
+    workbench = workbench_config(cfg)
+    mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
+    session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+    window_name = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
+    surface = {
+        "kind": "runner",
+        "supervisor_mode": mode,
+        "tmux_session_name": session_name,
+        "tmux_window_name": window_name,
+    }
+    if mode == "tmux" and session_name:
+        surface["attach_hint"] = tmux_attach_hint(session_name)
+        surface["operator_hint"] = f"tmux {session_name}:{window_name}"
+    else:
+        surface["attach_hint"] = ""
+        surface["operator_hint"] = f"{mode} runner-daemon"
+    return surface
+
+
+def spawn_operator_surface(
+    *,
+    agent_name: str = "",
+    team_name: str = "",
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    cfg = config or load_octopus_config()
+    spawn_cfg = cfg.get("spawn_execution", {})
+    if not isinstance(spawn_cfg, dict):
+        spawn_cfg = {}
+    bridge_cfg = cfg.get("clawteam_bridge", {})
+    if not isinstance(bridge_cfg, dict):
+        bridge_cfg = {}
+    workbench = workbench_config(cfg)
+    backend = str(spawn_cfg.get("backend", "plan") or "plan").strip() or "plan"
+    backend_name = str(spawn_cfg.get("backend_name", "tmux") or "tmux").strip() or "tmux"
+    session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+    team_value = str(team_name or spawn_cfg.get("team_name", "") or bridge_cfg.get("team_name", "") or "").strip()
+    surface = {
+        "kind": "spawn",
+        "backend": backend,
+        "backend_name": backend_name,
+        "team_name": team_value,
+        "agent_name": str(agent_name or "").strip(),
+        "tmux_session_name": session_name,
+    }
+    if backend == "clawteam":
+        hint = f"clawteam/{backend_name}"
+        if team_value:
+            hint += f" {team_value}"
+        if agent_name:
+            hint += f"/{agent_name}"
+        surface["operator_hint"] = hint
+    else:
+        surface["operator_hint"] = backend or "plan"
+    surface["attach_hint"] = tmux_attach_hint(session_name) if backend_name == "tmux" and session_name else ""
+    return surface
 
 
 def get_notification_backend(config: dict[str, Any] | None = None) -> str:

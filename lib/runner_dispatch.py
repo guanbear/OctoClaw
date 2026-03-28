@@ -10,7 +10,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-from octopus_config import RUNNER_QUEUE_FILE, load_json
+from octopus_config import RUNNER_QUEUE_FILE, load_json, runner_operator_surface
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 QUEUE_PY = os.path.join(SCRIPT_DIR, "runner_queue.py")
@@ -107,6 +107,15 @@ def resolve_runner_model() -> str:
     return ""
 
 
+def runner_artifacts() -> dict:
+    surface = runner_operator_surface()
+    return {
+        "execution_backend": "runner_queue",
+        "operator_surface": surface,
+        "operator_hint": str(surface.get("operator_hint", "") or ""),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Dispatch a lightweight job to the persistent Octopus runner")
     parser.add_argument("--id", default="")
@@ -146,8 +155,28 @@ def main():
             expected_done_offset(args.timeout_seconds),
             "--task-description",
             args.task_description or args.command,
+            "--title",
+            args.summary or args.task_description or args.command,
             "--executor",
             "runner",
+            "--route",
+            "runner",
+            "--runtime",
+            "runner",
+            "--worker-pool",
+            "octoclaw-runner",
+            "--work-type",
+            "ops",
+            "--phase",
+            "inspect",
+            "--protocol",
+            "normal",
+            "--profile",
+            "ops-fast",
+            "--review-required",
+            "false",
+            "--artifacts-json",
+            json.dumps(runner_artifacts(), ensure_ascii=False),
         ],
         stdout=subprocess.DEVNULL,
         check=True,

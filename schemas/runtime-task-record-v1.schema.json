@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/runtime-task-record-v1.schema.json",
+  "title": "OctoClaw Runtime Task Record v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "status",
+    "source",
+    "route",
+    "runtime",
+    "executor",
+    "executor_type",
+    "worker_pool",
+    "work_type",
+    "phase",
+    "protocol",
+    "review_required",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.runtime_task.record/v1"
+    },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "status": { "type": "string" },
+    "source": { "type": "string" },
+    "route": { "type": "string" },
+    "runtime": { "type": "string" },
+    "executor": { "type": "string" },
+    "executor_type": { "type": "string" },
+    "worker_pool": { "type": "string" },
+    "work_type": { "type": "string" },
+    "phase": { "type": "string" },
+    "protocol": { "type": "string" },
+    "profile": { "type": "string" },
+    "review_required": { "type": "boolean" },
+    "label": { "type": "string" },
+    "task_kind": { "type": "string" },
+    "owner": { "type": "string" },
+    "tier": { "type": "string" },
+    "model": { "type": "string" },
+    "summary": { "type": "string" },
+    "task_description": { "type": "string" },
+    "parent_id": { "type": "string" },
+    "deps": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "child_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "report_path": { "type": "string" },
+    "context_path": { "type": "string" },
+    "context_summary": { "type": "string" },
+    "files_changed": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "spawned_at": { "type": "string" },
+    "started_at": { "type": "string" },
+    "completed_at": { "type": "string" },
+    "updated_at": { "type": "string" },
+    "session_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "session_status": { "type": "string" },
+    "last_observed_at": { "type": "string" },
+    "recovery_action": { "type": "string" },
+    "retry_count": { "type": "integer" },
+    "expected_done_at": { "type": "string" },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

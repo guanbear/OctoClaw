@@ -46,6 +46,8 @@ from octopus_config import (
     MAIN_AGENT_SESSIONS_FILE,
     resolve_main_session_key,
     load_json,
+    load_octopus_config,
+    workbench_config,
 )
 from clawteam_bridge import load_bridge_summary
 from replay_summary import (
@@ -77,9 +79,10 @@ now = datetime.now(timezone(timedelta(hours=8)))
 mode_data = load_json(MODE_FILE) or {}
 aliases = load_json(ALIASES_FILE) or {}
 policy_data = load_json(MODEL_POLICY_FILE) or {}
-config_data = load_json(CONFIG_FILE) or {}
+config_data = load_octopus_config()
 runner_health = load_json(RUNNER_HEALTH_FILE) or {}
 RUNNER_STALE_SECONDS = 120
+workbench = workbench_config(config_data)
 
 mode = mode_data.get("mode", "balanced")
 MODE_LABELS = {
@@ -301,7 +304,8 @@ if bridge_summary.get("enabled"):
         cli_note = " · cli-ready" if bridge_summary.get("cli_available") else " · cli-missing"
     print(
         f"🤝 Bridge：{bridge_summary.get('team', 'octopus-validation')} · "
-        f"{backend}{cli_note} · tasks {bridge_tasks} · inbox {bridge_summary.get('inbox_count', 0)}"
+        f"{backend}{cli_note} · tasks {bridge_tasks} · "
+        f"lineages {bridge_summary.get('lineage_count', 0)} · inbox {bridge_summary.get('inbox_count', 0)}"
     )
 replay_status = summarize_replay_status(config_data)
 if replay_status:
@@ -369,6 +373,14 @@ main_model = str(policy_data.get("main_model", "") or "").strip()
 if mode == "auto" and main_model:
     print(f"   策略主链 → {main_model}")
 print(f"🖥️  视图：{fmt}")
+workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
+tmux_session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+if workbench_mode == "tmux" and tmux_session_name:
+    runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
+    patrol_window = str(workbench.get("tmux_patrol_window_name", "patrol") or "patrol").strip() or "patrol"
+    print(f"🧰 Workbench：tmux {tmux_session_name} · runner={runner_window} · patrol={patrol_window}")
+else:
+    print(f"🧰 Workbench：{workbench_mode}")
 print("━━━━━━━━━━━━━━━━━━━━")
 
 tasks = load_tasks()

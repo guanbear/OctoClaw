@@ -11,7 +11,8 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-from octopus_config import CLAWTEAM_BRIDGE_DIR, load_octopus_config, save_json
+from octopus_config import CLAWTEAM_BRIDGE_DIR, load_octopus_config, save_json, workbench_config
+from runtime_task_record import normalize_task_record
 
 
 def now_iso() -> str:
@@ -125,29 +126,13 @@ def _mirror_capable() -> bool:
 
 
 def _task_record(task: dict[str, Any]) -> dict[str, Any]:
+    base = normalize_task_record(task)
     return {
-        "id": str(task.get("id", "") or ""),
+        **base,
         "team": _team_name(),
-        "title": _preferred_title(task),
-        "status": str(task.get("status", "") or ""),
-        "owner": _owner(task),
-        "label": str(task.get("label", "") or ""),
-        "executor": str(task.get("executor", "") or ""),
-        "route": str(task.get("route", "") or ""),
-        "tier": str(task.get("tier", "") or ""),
-        "model": str(task.get("model", "") or ""),
-        "summary": str(task.get("summary", "") or ""),
-        "task_description": str(task.get("task_description", "") or ""),
-        "parent_id": str(task.get("parent_id", "") or ""),
-        "deps": list(task.get("deps", []) or []),
-        "report_path": str(task.get("report_path", "") or ""),
-        "context_path": str(task.get("context_path", "") or ""),
-        "context_summary": str(task.get("context_summary", "") or ""),
-        "files_changed": list(task.get("files_changed", []) or []),
-        "spawned_at": str(task.get("spawned_at", "") or ""),
-        "started_at": str(task.get("started_at", "") or ""),
-        "completed_at": str(task.get("completed_at", "") or ""),
-        "updated_at": str(task.get("updated_at", "") or now_iso()),
+        "title": _preferred_title(base),
+        "owner": _owner(base),
+        "updated_at": str(base.get("updated_at", "") or now_iso()),
     }
 
 
@@ -420,9 +405,122 @@ def _append_jsonl(path: str, payload: dict[str, Any]) -> None:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def _task_brief(record: dict[str, Any]) -> dict[str, Any]:
+    artifacts = record.get("artifacts", {}) if isinstance(record.get("artifacts", {}), dict) else {}
+    operator_surface = artifacts.get("operator_surface", {}) if isinstance(artifacts.get("operator_surface", {}), dict) else {}
+    return {
+        "id": str(record.get("id", "") or ""),
+        "title": str(record.get("title", "") or ""),
+        "status": str(record.get("status", "") or ""),
+        "route": str(record.get("route", "") or ""),
+        "runtime": str(record.get("runtime", "") or ""),
+        "executor_type": str(record.get("executor_type", "") or ""),
+        "task_kind": str(record.get("task_kind", "") or ""),
+        "worker_pool": str(record.get("worker_pool", "") or ""),
+        "phase": str(record.get("phase", "") or ""),
+        "owner": str(record.get("owner", "") or ""),
+        "parent_id": str(record.get("parent_id", "") or ""),
+        "report_path": str(record.get("report_path", "") or ""),
+        "operator_hint": str(artifacts.get("operator_hint", "") or operator_surface.get("operator_hint", "") or ""),
+        "updated_at": str(record.get("updated_at", "") or ""),
+    }
+
+
+def _workbench_summary() -> dict[str, Any]:
+    cfg = load_octopus_config()
+    workbench = workbench_config(cfg)
+    mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
+    session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+    runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
+    patrol_window = str(workbench.get("tmux_patrol_window_name", "patrol") or "patrol").strip() or "patrol"
+    payload = {
+        "supervisor_mode": mode,
+        "tmux_session_name": session_name,
+        "runner_window_name": runner_window,
+        "patrol_window_name": patrol_window,
+    }
+    payload["attach_hint"] = f"tmux attach -t {session_name}" if mode == "tmux" and session_name else ""
+    return payload
+
+
+def _build_lineages(tasks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    tasks_by_id: dict[str, dict[str, Any]] = {}
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+
+    for task in tasks:
+        task_id = str(task.get("id", "") or "").strip()
+        if task_id:
+            tasks_by_id[task_id] = task
+        parent_id = str(task.get("parent_id", "") or "").strip()
+        if parent_id:
+            children_by_parent.setdefault(parent_id, []).append(task)
+
+    lineages: list[dict[str, Any]] = []
+    for task in tasks:
+        task_id = str(task.get("id", "") or "").strip()
+        if not task_id:
+            continue
+        explicit_child_ids = [str(item).strip() for item in (task.get("child_ids", []) or []) if str(item).strip()]
+        children: list[dict[str, Any]] = []
+        seen_child_ids: set[str] = set()
+
+        for child_id in explicit_child_ids:
+            child = tasks_by_id.get(child_id)
+            if child is None:
+                continue
+            children.append(child)
+            seen_child_ids.add(child_id)
+
+        for child in children_by_parent.get(task_id, []):
+            child_id = str(child.get("id", "") or "").strip()
+            if child_id and child_id not in seen_child_ids:
+                children.append(child)
+                seen_child_ids.add(child_id)
+
+        task_kind = str(task.get("task_kind", "") or "")
+        if not children and task_kind != "team_parent" and not explicit_child_ids:
+            continue
+
+        status_counts: dict[str, int] = {}
+        open_task_count = 0
+        for child in children:
+            status = str(child.get("status", "") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status not in {"done", "failed", "deferred", "completed"}:
+                open_task_count += 1
+
+        lineages.append(
+            {
+                "parent": _task_brief(task),
+                "child_ids": explicit_child_ids or [str(child.get("id", "") or "") for child in children if str(child.get("id", "") or "")],
+                "child_count": len(children),
+                "open_task_count": open_task_count,
+                "status_counts": status_counts,
+                "children": [_task_brief(child) for child in children],
+            }
+        )
+
+    orphan_children: list[dict[str, Any]] = []
+    for parent_id, children in children_by_parent.items():
+        if parent_id in tasks_by_id:
+            continue
+        orphan_children.extend(_task_brief(child) for child in children)
+
+    lineages.sort(
+        key=lambda item: str(
+            item.get("parent", {}).get("updated_at", "")
+            or tasks_by_id.get(str(item.get("parent", {}).get("id", "") or ""), {}).get("updated_at", "")
+            or tasks_by_id.get(str(item.get("parent", {}).get("id", "") or ""), {}).get("spawned_at", "")
+        ),
+        reverse=True,
+    )
+    return lineages, orphan_children
+
+
 def _refresh_board(tasks_dir: str, board_path: str) -> None:
     tasks: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+    task_kind_counts: dict[str, int] = {}
     try:
         for name in sorted(os.listdir(tasks_dir)):
             if not name.endswith(".json"):
@@ -434,13 +532,20 @@ def _refresh_board(tasks_dir: str, board_path: str) -> None:
                 tasks.append(item)
                 status = str(item.get("status", "") or "unknown")
                 counts[status] = counts.get(status, 0) + 1
+                task_kind = str(item.get("task_kind", "") or "unspecified")
+                task_kind_counts[task_kind] = task_kind_counts.get(task_kind, 0) + 1
     except OSError:
         return
 
+    lineages, orphan_children = _build_lineages(tasks)
     board = {
         "team": _team_name(),
         "updated_at": now_iso(),
         "counts": counts,
+        "task_kind_counts": task_kind_counts,
+        "workbench": _workbench_summary(),
+        "lineages": lineages[:20],
+        "orphan_children": orphan_children[:20],
         "tasks": tasks[-40:],
     }
     save_json(board_path, board)
@@ -493,7 +598,12 @@ def sync_task(task: dict[str, Any], *, event_type: str, previous_status: str = "
             "status": status,
             "title": record.get("title", ""),
             "summary": record.get("summary", ""),
+            "worker_pool": record.get("worker_pool", ""),
+            "work_type": record.get("work_type", ""),
+            "phase": record.get("phase", ""),
+            "protocol": record.get("protocol", ""),
             "report_path": record.get("report_path", ""),
+            "artifacts": record.get("artifacts", {}),
             "files_changed": record.get("files_changed", []),
             "created_at": now_iso(),
         }
@@ -531,6 +641,9 @@ def load_bridge_summary() -> dict[str, Any]:
         inbox_count = 0
 
     counts = board.get("counts", {}) if isinstance(board, dict) else {}
+    lineages = board.get("lineages", []) if isinstance(board, dict) else []
+    task_kind_counts = board.get("task_kind_counts", {}) if isinstance(board, dict) else {}
+    workbench = board.get("workbench", {}) if isinstance(board, dict) else {}
     cli_state = _load_cli_state(paths)
     last_cli_sync = {}
     try:
@@ -544,7 +657,15 @@ def load_bridge_summary() -> dict[str, Any]:
         "team": _team_name(),
         "root": paths["root"],
         "counts": counts if isinstance(counts, dict) else {},
+        "task_kind_counts": task_kind_counts if isinstance(task_kind_counts, dict) else {},
+        "workbench": workbench if isinstance(workbench, dict) else {},
         "inbox_count": inbox_count,
+        "lineage_count": len(lineages) if isinstance(lineages, list) else 0,
+        "active_lineage_count": (
+            sum(1 for lineage in lineages if isinstance(lineage, dict) and int(lineage.get("open_task_count", 0) or 0) > 0)
+            if isinstance(lineages, list)
+            else 0
+        ),
         "updated_at": str(board.get("updated_at", "") or ""),
         "cli_available": _clawteam_available(),
         "team_initialized": bool(cli_state.get("team_initialized", False)),

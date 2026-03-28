@@ -48,14 +48,32 @@ update_task_running() {
     --summary "$summary" \
     --tier trivial \
     --task-description "$task_description" \
-    --executor runner >/dev/null
+    --title "$summary" \
+    --executor runner \
+    --route runner \
+    --runtime runner \
+    --worker-pool octoclaw-runner \
+    --work-type ops \
+    --phase inspect \
+    --protocol normal \
+    --profile ops-fast \
+    --review-required false >/dev/null
 }
 
 finish_task() {
   local job_id="$1"
   local outcome="$2"
   local summary="$3"
-  python3 "$TASK_STATE_PY" "$outcome" --id "$job_id" --summary "$summary" >/dev/null
+  local report_path="${4:-}"
+  local artifacts_json="${5:-}"
+  local cmd=(python3 "$TASK_STATE_PY" "$outcome" --id "$job_id" --summary "$summary")
+  if [[ -n "$report_path" ]]; then
+    cmd+=(--report-path "$report_path")
+  fi
+  if [[ -n "$artifacts_json" ]]; then
+    cmd+=(--artifacts-json "$artifacts_json")
+  fi
+  "${cmd[@]}" >/dev/null
 }
 
 recycle_runner() {
@@ -158,29 +176,150 @@ PY
   set -e
 
   result_status="done"
-  result_summary="runner完成"
   if [[ $exit_code -ne 0 ]]; then
     result_status="failed"
-    result_summary="runner失败 exit=${exit_code}"
   fi
 
-  python3 - "$meta_file" "$job_id" "$command" "$cwd" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" <<'PY'
-import json, sys
+  report_file="${WORKSPACE}/tmp/octopus/shared/${job_id}.md"
+  report_dump="$(python3 - "$meta_file" "$job_id" "$command" "$cwd" "$timeout_seconds" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" "$report_file" "$WORKER_ID" <<'PY'
+import base64
+import json
+import os
+import sys
 from datetime import datetime, timezone
-path, job_id, command, cwd, exit_code, stdout_file, stderr_file, status = sys.argv[1:]
+
+(
+    meta_file,
+    job_id,
+    command,
+    cwd,
+    timeout_seconds,
+    exit_code,
+    stdout_file,
+    stderr_file,
+    status,
+    report_path,
+    worker_id,
+) = sys.argv[1:]
+
+def read_text(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+def excerpt(text: str, limit_lines: int = 40, limit_chars: int = 1600) -> str:
+    lines = [line.rstrip() for line in text.splitlines()]
+    if limit_lines > 0:
+        lines = lines[:limit_lines]
+    payload = "\n".join(lines).strip()
+    if len(payload) <= limit_chars:
+        return payload
+    return payload[: limit_chars - 1].rstrip() + "…"
+
+def first_line(*texts: str) -> str:
+    for text in texts:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line:
+                return line
+    return ""
+
+def compact_text(text: str, limit: int = 120) -> str:
+    collapsed = " ".join((text or "").strip().split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+stdout_text = read_text(stdout_file)
+stderr_text = read_text(stderr_file)
+stdout_excerpt = excerpt(stdout_text)
+stderr_excerpt = excerpt(stderr_text)
+first = compact_text(first_line(stderr_text, stdout_text) if status == "failed" else first_line(stdout_text, stderr_text), 110)
+
+if status == "done":
+    summary = f"runner完成: {first}" if first else "runner完成"
+else:
+    summary = f"runner失败 exit={exit_code}: {first}" if first else f"runner失败 exit={exit_code}"
+
+report_lines = [
+    f"# Runner Result: {job_id}",
+    "",
+    f"- status: {status}",
+    f"- exit_code: {exit_code}",
+    f"- cwd: `{cwd}`",
+    f"- timeout_seconds: {timeout_seconds}",
+    f"- worker_id: {worker_id}",
+    "",
+    "## Command",
+    "```bash",
+    command,
+    "```",
+    "",
+    f"- stdout_file: `{stdout_file}`",
+    f"- stderr_file: `{stderr_file}`",
+]
+
+if stdout_excerpt:
+    report_lines.extend(["", "## Stdout Excerpt", "```text", stdout_excerpt, "```"])
+if stderr_excerpt:
+    report_lines.extend(["", "## Stderr Excerpt", "```text", stderr_excerpt, "```"])
+
+os.makedirs(os.path.dirname(report_path), exist_ok=True)
+with open(report_path, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(report_lines).rstrip() + "\n")
+
+artifacts = {
+    "execution_backend": "runner_queue",
+    "command": command,
+    "cwd": cwd,
+    "timeout_seconds": int(timeout_seconds or 0),
+    "exit_code": int(exit_code),
+    "stdout_file": stdout_file,
+    "stderr_file": stderr_file,
+    "stdout_excerpt": stdout_excerpt,
+    "stderr_excerpt": stderr_excerpt,
+    "result_path": meta_file,
+    "report_path": report_path,
+    "worker_id": worker_id,
+}
+
 payload = {
     "id": job_id,
     "command": command,
     "cwd": cwd,
+    "timeout_seconds": int(timeout_seconds or 0),
     "exit_code": int(exit_code),
     "stdout_file": stdout_file,
     "stderr_file": stderr_file,
+    "stdout_excerpt": stdout_excerpt,
+    "stderr_excerpt": stderr_excerpt,
     "status": status,
+    "summary": summary,
+    "report_path": report_path,
+    "result_path": meta_file,
+    "worker_id": worker_id,
+    "execution_backend": "runner_queue",
     "finished_at": datetime.now(timezone.utc).astimezone().isoformat(),
 }
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False, indent=2)
+with open(meta_file, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+for value in (summary, report_path, json.dumps(artifacts, ensure_ascii=False)):
+    print(base64.b64encode(value.encode("utf-8")).decode("ascii"))
 PY
+)"
+
+  report_fields=()
+  while IFS= read -r line; do
+    report_fields+=("$line")
+  done <<EOF
+$report_dump
+EOF
+  result_summary="$(decode_field "${report_fields[0]:-}")"
+  report_path="$(decode_field "${report_fields[1]:-}")"
+  artifacts_json="$(decode_field "${report_fields[2]:-}")"
 
   python3 "$QUEUE_PY" complete \
     --id "$job_id" \
@@ -189,7 +328,7 @@ PY
     --exit-code "$exit_code" \
     --result-path "$meta_file" >/dev/null
 
-  finish_task "$job_id" "$result_status" "$result_summary"
+  finish_task "$job_id" "$result_status" "$result_summary" "$report_path" "$artifacts_json"
 
   jobs_completed=$((jobs_completed + 1))
   last_job_epoch="$(date +%s)"
