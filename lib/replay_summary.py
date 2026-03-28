@@ -128,6 +128,15 @@ def count_routes(items: list[dict[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def count_worker_pools(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter(
+        str(item.get("workerPool", item.get("worker_pool", "")) or "").strip()
+        for item in items
+        if str(item.get("workerPool", item.get("worker_pool", "")) or "").strip()
+    )
+    return dict(sorted(counts.items()))
+
+
 def collect_language_pack_usage(events: list[dict[str, Any]]) -> dict[str, int]:
     counts: Counter[str] = Counter()
     for event in events:
@@ -279,6 +288,7 @@ def summarize_events(
             "task_event_count": len(task_events),
             "route_counts": count_routes(task_events, "route"),
             "system_preferred_route_counts": count_routes(task_events, "systemPreferredRoute"),
+            "worker_pool_counts": count_worker_pools(task_events),
             "delegated_task_count": len(delegated_task_events),
             "runner_task_count": len(runner_task_events),
             "sticky_applied_count": count_boolean(sticky_task_events, "stickyApplied"),
@@ -350,6 +360,7 @@ def render_text(summary: dict[str, Any]) -> str:
             f"- Task events: `{task_metrics['task_event_count']}`",
             f"- Route counts: `{json.dumps(task_metrics['route_counts'], ensure_ascii=False)}`",
             f"- System preferred counts: `{json.dumps(task_metrics['system_preferred_route_counts'], ensure_ascii=False)}`",
+            f"- Worker pool counts: `{json.dumps(task_metrics['worker_pool_counts'], ensure_ascii=False)}`",
             f"- Delegated tasks: `{task_metrics['delegated_task_count']}`",
             f"- Runner tasks: `{task_metrics['runner_task_count']}`",
             f"- Sticky applied: `{task_metrics['sticky_applied_count']}` ({compact_ratio(task_metrics['sticky_applied_rate'])})",

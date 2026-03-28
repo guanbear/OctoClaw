@@ -217,6 +217,8 @@ python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase conserv
 # Summarize replay signals before promoting guided -> enforced
 python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase guided
 
+# Replay summaries also include worker_pool counts for taxonomy rollouts
+
 # Review replay sessions before labeling or tuning routing rules
 python3 /workspace/openclaw/skills/octopus/lib/replay_review.py --focus blocked
 
@@ -296,6 +298,7 @@ Runner jobs now use the same record envelope as the rest of the unified runtime:
 - `artifacts.operator_surface` now carries operator-facing workbench hints, so `runner` / `spawn_single` / `spawn_multi` can expose the same tmux or ClawTeam runtime surface
 
 When `spawn_multi` is used, the bridge board also emits `lineages` so operators can inspect the parent task and its DAG children from one place.
+Those board briefs prefer `worker_pool` for display ownership, then fallback to legacy labels when a worker pool is unavailable.
 When child steps move through `running / done / failed`, the `team_parent` record now auto-rolls up child status, step summaries, and step reports, then emits a parent-level result mail when the DAG finishes or fails.
 `status.sh` now renders these parent/child relationships directly in `compact / table / lanes`, and also prints the current workbench mode / tmux session so you can inspect the unified runtime surface without manually opening `board.json`.
 

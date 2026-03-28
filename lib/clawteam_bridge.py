@@ -13,6 +13,10 @@ from typing import Any
 
 from octopus_config import CLAWTEAM_BRIDGE_DIR, load_octopus_config, save_json, workbench_config
 from runtime_task_record import normalize_task_record
+try:
+    from worker_taxonomy import role_display
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.worker_taxonomy import role_display
 
 
 def now_iso() -> str:
@@ -408,6 +412,15 @@ def _append_jsonl(path: str, payload: dict[str, Any]) -> None:
 def _task_brief(record: dict[str, Any]) -> dict[str, Any]:
     artifacts = record.get("artifacts", {}) if isinstance(record.get("artifacts", {}), dict) else {}
     operator_surface = artifacts.get("operator_surface", {}) if isinstance(artifacts.get("operator_surface", {}), dict) else {}
+    display = role_display(record)
+    explicit_owner = str(record.get("owner", "") or "").strip()
+    label = str(record.get("label", "") or "").strip()
+    executor = str(record.get("executor", "") or "").strip()
+    display_owner = str(display.get("name", "") or "").strip()
+    if explicit_owner and explicit_owner not in {label, executor}:
+        brief_owner = explicit_owner
+    else:
+        brief_owner = display_owner or explicit_owner or label or executor or "unknown"
     return {
         "id": str(record.get("id", "") or ""),
         "title": str(record.get("title", "") or ""),
@@ -418,7 +431,8 @@ def _task_brief(record: dict[str, Any]) -> dict[str, Any]:
         "task_kind": str(record.get("task_kind", "") or ""),
         "worker_pool": str(record.get("worker_pool", "") or ""),
         "phase": str(record.get("phase", "") or ""),
-        "owner": str(record.get("owner", "") or ""),
+        "owner": brief_owner,
+        "worker_pool_display": str(display.get("name", "") or ""),
         "parent_id": str(record.get("parent_id", "") or ""),
         "report_path": str(record.get("report_path", "") or ""),
         "operator_hint": str(artifacts.get("operator_hint", "") or operator_surface.get("operator_hint", "") or ""),

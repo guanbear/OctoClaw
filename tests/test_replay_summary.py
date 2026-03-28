@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.replay_summary import infer_runtime_policy_phase
+from lib.replay_summary import infer_runtime_policy_phase, render_text
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -41,8 +41,11 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(payload["events"]["total"], 6)
         self.assertEqual(payload["events"]["by_type"]["policy_resolved"], 1)
         self.assertEqual(payload["task_metrics"]["route_counts"], {"spawn_single": 1})
+        self.assertEqual(payload["task_metrics"]["worker_pool_counts"], {"octoclaw-code": 1})
         self.assertEqual(payload["tool_metrics"]["blocked_event_count"], 2)
         self.assertTrue(payload["promotion"]["ready"])
+        rendered = render_text(payload)
+        self.assertIn("Worker pool counts", rendered)
 
     def test_guided_phase_requires_route_hint_coverage(self) -> None:
         events = [
