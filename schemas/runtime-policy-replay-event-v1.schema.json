@@ -39,6 +39,8 @@
     "routeHintSubmitted": { "type": "boolean" },
     "stickyApplied": { "type": "boolean" },
     "stickyPersisted": { "type": "boolean" },
+    "ackFollowupCandidate": { "type": "boolean" },
+    "ackFollowupApplied": { "type": "boolean" },
     "prompt": { "type": "string" },
     "toolName": { "type": "string" },
     "requiredTool": { "type": "string" },

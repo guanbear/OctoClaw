@@ -104,6 +104,40 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_hint_policy"]["source"], "sticky_lane")
         self.assertEqual(payload["route_hint_policy"]["sticky_route"], "spawn_multi")
 
+    def test_ack_followup_short_confirmation_inherits_spawn_single_lane(self) -> None:
+        payload = self.run_policy(
+            "好",
+            session_key="demo",
+            sticky_route="spawn_single",
+            sticky_work_type="code",
+        )
+        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:spawn_single")
+        self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
+        self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
+        self.assertTrue(payload["route_hint_policy"]["ack_followup_applied"])
+        self.assertEqual(payload["route_hint_policy"]["source"], "sticky_lane")
+
+    def test_ack_followup_english_confirmation_inherits_spawn_multi_lane(self) -> None:
+        payload = self.run_policy(
+            "go ahead",
+            session_key="demo",
+            sticky_route="spawn_multi",
+            sticky_work_type="research",
+        )
+        self.assertEqual(payload["route_decision"]["route"], "spawn_multi")
+        self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:spawn_multi")
+        self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
+        self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
+        self.assertTrue(payload["route_hint_policy"]["ack_followup_applied"])
+
+    def test_ack_followup_without_sticky_lane_stays_non_runner_and_unapplied(self) -> None:
+        payload = self.run_policy("好")
+        self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
+        self.assertFalse(payload["route_hint_policy"]["sticky_applied"])
+        self.assertFalse(payload["route_hint_policy"]["ack_followup_applied"])
+        self.assertNotEqual(payload["route_decision"]["route"], "runner")
+
     def test_release_notes_are_not_high_risk_but_production_release_is(self) -> None:
         notes_payload = self.run_route("继续，顺手写一版发布说明")
         self.assertFalse(notes_payload["features"]["high_risk"])

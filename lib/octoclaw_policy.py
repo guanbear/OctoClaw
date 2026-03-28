@@ -198,7 +198,10 @@ def apply_sticky_route(
 
     section = policy_cfg.get("route_stickiness", {})
     apply_on_followup_only = bool(section.get("apply_on_followup_only", True)) if isinstance(section, dict) else True
-    if apply_on_followup_only and not features.get("followup_candidate"):
+    ack_followup_enabled = bool(section.get("ack_followup_enabled", True)) if isinstance(section, dict) else True
+    ack_followup_candidate = bool(features.get("ack_followup_candidate")) and ack_followup_enabled
+    followup_candidate = bool(features.get("followup_candidate")) or ack_followup_candidate
+    if apply_on_followup_only and not followup_candidate:
         return base_route, {}, []
     if base_route == "runner":
         return base_route, {}, []
@@ -209,8 +212,10 @@ def apply_sticky_route(
     sticky_state = {
         "route": sticky_route,
         "applied": True,
+        "ack_followup_candidate": ack_followup_candidate,
+        "ack_followup_applied": ack_followup_candidate,
     }
-    sticky_reason = [f"route_sticky_lane:{sticky_route}"]
+    sticky_reason = [f"route_ack_followup_inherit:{sticky_route}" if ack_followup_candidate else f"route_sticky_lane:{sticky_route}"]
     if base_route == sticky_route:
         return base_route, sticky_state, sticky_reason
     return sticky_route, sticky_state, sticky_reason
@@ -333,6 +338,8 @@ def build_route_hint_policy(
         "sticky_applied": bool((sticky_state or {}).get("applied")),
         "sticky_route": str((sticky_state or {}).get("route", "") or ""),
         "sticky_work_type": str((sticky_state or {}).get("work_type", "") or ""),
+        "ack_followup_candidate": bool((sticky_state or {}).get("ack_followup_candidate")),
+        "ack_followup_applied": bool((sticky_state or {}).get("ack_followup_applied")),
     }
 
 
@@ -347,6 +354,7 @@ def runtime_switches_summary(policy_cfg: dict[str, Any]) -> dict[str, Any]:
         "direct_model_override_enabled": bool(switches.get("direct_model_override", True)),
         "delegation_enforcement_enabled": bool(switches.get("delegation_enforcement", True)),
         "sticky_lane_enabled": bool(route_stickiness.get("enabled", True)) if isinstance(route_stickiness, dict) else True,
+        "ack_followup_enabled": bool(route_stickiness.get("ack_followup_enabled", True)) if isinstance(route_stickiness, dict) else True,
     }
 
 
@@ -649,6 +657,7 @@ def build_decision(
     base_reason_codes = list(route_meta.get("reason_codes", []) or [])
     merged_reason_codes = [*merge_reason_codes, *base_reason_codes]
     route_hint_policy = build_route_hint_policy(base_route, route, base_reason_codes, route_hint, force_route, runtime_cfg, sticky_state)
+    route_hint_policy["ack_followup_candidate"] = bool(features.get("ack_followup_candidate")) or bool(route_hint_policy.get("ack_followup_candidate"))
     route_hint_policy["merge_notes"] = merge_reason_codes
     dispatch_required = route != "direct"
     should_wait = route == "runner"
@@ -657,6 +666,7 @@ def build_decision(
     decision = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": utc_now(),
+        "route_language_packs": list(route_meta.get("route_language_packs", []) or []),
         "request": {
             "task": task,
             "command": command,

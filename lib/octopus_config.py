@@ -59,6 +59,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": True,
             "ttl_minutes": 180,
             "apply_on_followup_only": True,
+            "ack_followup_enabled": True,
         },
         "route_language_packs": {
             "enabled": ["zh", "en"],

@@ -446,6 +446,30 @@ CONTINUATION_PATTERNS = {
     ),
 }
 
+ACK_FOLLOWUP_PATTERNS = {
+    "zh": (
+        r"^(好|好的|好啊|好呀|行|行吧|可以|可以的|继续|继续吧|开始吧|就这样|照这个来|按这个来|没问题)[!！。.，,\s]*$",
+    ),
+    "en": (
+        r"^(ok|okay|sounds good|go ahead|do it|please continue|continue|works for me|sgtm|looks good)[!.,\s]*$",
+    ),
+    "ja": (
+        r"^(はい|了解|お願いします|続けて|そのままで|これでいきましょう)[!！。\s]*$",
+    ),
+    "ko": (
+        r"^(좋아|좋아요|좋습니다|계속해|진행해|그대로 해줘|이대로 가자)[!！。\s]*$",
+    ),
+    "es": (
+        r"^(vale|ok|de acuerdo|adelante|continúa|sigue así)[!.,\s]*$",
+    ),
+    "pt": (
+        r"^(ok|certo|beleza|pode seguir|continue|vai em frente)[!.,\s]*$",
+    ),
+    "ru": (
+        r"^(ок|хорошо|ладно|давай|продолжай|можно продолжать)[!.,\s]*$",
+    ),
+}
+
 REMOTE_TARGET_PATTERNS = {
     "zh": (
         r"(远程|另一台机器|另一台主机|另一台机子|目标机器|目标主机|远端)",
@@ -492,6 +516,7 @@ ROUTE_PATTERN_LIBRARY = {
     "COST_SENSITIVE_PATTERNS": COST_SENSITIVE_PATTERNS,
     "SEMANTIC_AMBIGUITY_PATTERNS": SEMANTIC_AMBIGUITY_PATTERNS,
     "CONTINUATION_PATTERNS": CONTINUATION_PATTERNS,
+    "ACK_FOLLOWUP_PATTERNS": ACK_FOLLOWUP_PATTERNS,
     "REMOTE_TARGET_PATTERNS": REMOTE_TARGET_PATTERNS,
 }
 
@@ -559,6 +584,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     cost_sensitive_hits = count_matches(text, resolve_language_patterns("COST_SENSITIVE_PATTERNS", enabled_packs))
     semantic_ambiguity_hits = count_matches(text, resolve_language_patterns("SEMANTIC_AMBIGUITY_PATTERNS", enabled_packs))
     continuation_hits = count_matches(text, resolve_language_patterns("CONTINUATION_PATTERNS", enabled_packs))
+    ack_followup_hits = count_matches(text, resolve_language_patterns("ACK_FOLLOWUP_PATTERNS", enabled_packs))
     remote_target_hits = count_matches(text, resolve_language_patterns("REMOTE_TARGET_PATTERNS", enabled_packs))
     runner_read_only_intent_hits = count_matches(text, resolve_language_patterns("RUNNER_READ_ONLY_INTENT_PATTERNS", enabled_packs))
     runner_target_hits = count_matches(text, resolve_language_patterns("RUNNER_TARGET_PATTERNS", enabled_packs))
@@ -567,6 +593,28 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     effective_write_hits = write_hits
     if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
         effective_write_hits = 0
+
+    short_ack_candidate = (
+        ack_followup_hits > 0
+        and len(raw_task) <= 48
+        and not command
+        and runner_hits == 0
+        and runner_read_only_intent_hits == 0
+        and runner_target_hits == 0
+        and runner_negative_hits == 0
+        and code_hits == 0
+        and research_hits == 0
+        and effective_write_hits == 0
+        and summary_output_hits == 0
+        and multi_step_hits == 0
+        and parallel_hits == 0
+        and high_risk_hits == 0
+        and local_state_hits == 0
+        and remote_target_hits == 0
+        and verify_hits == 0
+        and implement_hits == 0
+        and mutation_hits == 0
+    )
 
     estimated_steps = 1
     if multi_step_hits > 0:
@@ -629,6 +677,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
         "continuation_hits": continuation_hits,
+        "ack_followup_hits": ack_followup_hits,
         "remote_target_hits": remote_target_hits,
         "requires_tools": bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0,
         "requires_code_work": code_hits > 0,
@@ -654,7 +703,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         ),
         "target_scope": "remote" if remote_target_hits > 0 else ("local" if local_state_hits > 0 else "generic"),
         "high_risk": high_risk_hits > 0,
-        "followup_candidate": continuation_hits > 0,
+        "ack_followup_candidate": short_ack_candidate,
+        "followup_candidate": continuation_hits > 0 or short_ack_candidate,
         "context_growth": context_growth,
         "latency_sensitivity": latency_sensitivity,
         "simple_direct_candidate": simple_hits > 0 and runner_hits == 0 and code_hits == 0 and research_hits == 0 and local_state_hits == 0,
