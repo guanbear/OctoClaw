@@ -10,6 +10,8 @@
 
 - **代码只做极窄的 `hard_runner_only`**
 - **其余请求交给稳定主脑输出 `route_hint`**
+- **系统先产出 `system_preferred_route`，但这不是最终 route**
+- **follow-up 请求允许复用 sticky lane**
 - **最终执行权仍由 runtime policy 和 hook 掌握**
 
 本设计是主产品文档的补充，默认与
@@ -93,11 +95,14 @@ OctoClaw 第一版不应默认依赖：
 flowchart LR
     A["用户请求"] --> B["hard_runner_only"]
     B -->|"命中只读运维/检查型请求"| C["runner"]
-    B -->|"其余请求"| D["主脑输出 route_hint"]
-    D --> E["runtime policy 合并决策"]
-    E -->|"direct"| F["主脑直接回答"]
-    E -->|"spawn_single / spawn_multi"| G["octoclaw_dispatch"]
-    E -->|"高风险/失败/复杂协议"| H["review / heavy profile / extra guardrails"]
+    B -->|"其余请求"| D["system_preferred_route"]
+    D --> E["主脑输出 route_hint"]
+    E --> F["runtime policy 合并决策"]
+    F -->|"follow-up 且已有 lane"| G["sticky lane 复用"]
+    F -->|"direct"| H["主脑直接回答"]
+    F -->|"spawn_single / spawn_multi"| I["octoclaw_dispatch"]
+    G --> I["octoclaw_dispatch"]
+    F -->|"高风险/失败/复杂协议"| J["review / heavy profile / extra guardrails"]
 ```
 
 原则：
@@ -105,6 +110,31 @@ flowchart LR
 - **代码只切超明显 `runner`**
 - **`direct` 不做纯代码硬判**
 - **主脑可以建议 route，但系统掌握最终执行权**
+- **`system_preferred_route` 只是系统偏好，不是最终裁决**
+
+---
+
+## 4.1 `system_preferred_route` 和最终 route 的区别
+
+当前实现里，系统仍会先根据规则和任务特征给出一个 `system_preferred_route`。
+
+它的职责是：
+
+- 给主脑一个起始偏好
+- 给 replay / eval 一个稳定参考值
+- 给 runtime policy 一个 merge 起点
+
+它不等于最终 route。最终 route 的形成顺序是：
+
+1. `hard_runner_only`
+2. `system_preferred_route`
+3. `route_hint`
+4. `sticky lane`
+5. runtime policy 的 veto / downgrade / upgrade
+
+所以更准确的说法是：
+
+> **OctoClaw 先算系统偏好，再做 route merge，而不是先算死最终路由。**
 
 ---
 
@@ -210,6 +240,32 @@ flowchart LR
 
 ---
 
+## 7.1 `route stickiness`
+
+为了减少 lane 抖动，OctoClaw 需要保留一个保守的 sticky lane 机制：
+
+- 同一个 session 一旦进入 `spawn_single` 或 `spawn_multi`
+- 后续带有明显 follow-up 语气的请求，例如：
+  - `继续`
+  - `下一步`
+  - `再查一下`
+  - `add tests`
+  - `follow up`
+- 可以优先沿用上一次 delegated lane，而不是每句都重新猜路由拓扑
+
+这层 sticky lane 的边界是：
+
+- 不适用于 `runner`
+- 不替代 `route_hint`
+- 不绕过 review gate
+- 默认只对 follow-up 请求生效
+
+所以它本质上是：
+
+> **一个保守的 lane 复用机制，而不是新的路由器。**
+
+---
+
 ## 8. 为什么第一版不急着上 classifier
 
 ### 8.1 当前首要问题不是“没有分类器”
@@ -261,6 +317,7 @@ classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 a
 ### Phase A
 
 - 落实 `hard_runner_only`
+- 落实 `system_preferred_route + route_hint + sticky lane` 的 merge 语义
 - 其余请求交主脑做 `route_hint`
 - runtime policy hook 强制：
   - 非 direct 必须走 `octoclaw_dispatch`

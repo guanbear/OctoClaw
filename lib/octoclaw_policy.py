@@ -19,12 +19,12 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from octoclaw_route import infer_route
 from octoclaw_spawn import resolve_model_and_thinking, resolve_profile
-from octopus_config import load_octopus_config
+from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config
 
 
 SCHEMA_VERSION = "octoclaw.runtime_policy.decision/v1"
@@ -50,6 +50,16 @@ def normalize_metadata(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
     return {}
+
+
+def parse_utc_timestamp(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def looks_like_writer_task(task: str, metadata: dict[str, Any] | None = None) -> bool:
@@ -144,6 +154,60 @@ def route_hint_required(route_meta: dict[str, Any], forced_route: str = "") -> b
     return True
 
 
+def load_route_stickiness(policy_cfg: dict[str, Any], session_key: str) -> dict[str, Any]:
+    if not session_key:
+        return {}
+    section = policy_cfg.get("route_stickiness", {})
+    if not isinstance(section, dict) or not section.get("enabled", True):
+        return {}
+    raw = load_json(ROUTE_STICKINESS_FILE)
+    if not isinstance(raw, dict):
+        return {}
+    entry = raw.get(session_key)
+    if not isinstance(entry, dict):
+        return {}
+    ttl_minutes = int(section.get("ttl_minutes", 180) or 180)
+    updated_at = parse_utc_timestamp(str(entry.get("updated_at", "") or ""))
+    if updated_at is None:
+        return {}
+    if datetime.now(timezone.utc) - updated_at > timedelta(minutes=ttl_minutes):
+        return {}
+    route = str(entry.get("route", "") or "").strip()
+    if route not in ("spawn_single", "spawn_multi"):
+        return {}
+    return entry
+
+
+def apply_sticky_route(
+    base_route: str,
+    features: dict[str, Any],
+    route_hint: dict[str, Any],
+    metadata: dict[str, Any],
+    policy_cfg: dict[str, Any],
+    forced_route: str,
+) -> tuple[str, dict[str, Any], list[str]]:
+    if forced_route or route_hint.get("route_hint"):
+        return base_route, {}, []
+    session_key = str(metadata.get("session_key", "") or "").strip()
+    sticky = load_route_stickiness(policy_cfg, session_key)
+    if not sticky:
+        return base_route, {}, []
+
+    section = policy_cfg.get("route_stickiness", {})
+    apply_on_followup_only = bool(section.get("apply_on_followup_only", True)) if isinstance(section, dict) else True
+    if apply_on_followup_only and not features.get("followup_candidate"):
+        return base_route, {}, []
+    if base_route == "runner":
+        return base_route, {}, []
+
+    sticky_route = str(sticky.get("route", "") or "").strip()
+    if sticky_route not in ("spawn_single", "spawn_multi"):
+        return base_route, {}, []
+    if base_route == sticky_route:
+        return base_route, sticky, []
+    return sticky_route, sticky, [f"route_sticky_lane:{sticky_route}"]
+
+
 def direct_allowed_from_hint(features: dict[str, Any]) -> bool:
     if features.get("high_risk"):
         return False
@@ -229,16 +293,24 @@ def build_route_hint_policy(
     base_reason_codes: list[str],
     route_hint: dict[str, Any],
     forced_route: str,
+    sticky_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     hard_gate_applied = "hard_runner_only" in base_reason_codes
     submitted = bool(route_hint.get("route_hint"))
     required = route_hint_required({"reason_codes": base_reason_codes}, forced_route)
+    source = "system_preferred"
+    if submitted:
+        source = "main_agent"
+    elif forced_route:
+        source = "forced_route"
+    elif sticky_state:
+        source = "sticky_lane"
     return {
         "required": required,
         "hard_gate_applied": hard_gate_applied,
         "hard_gate_reason": "hard_runner_only" if hard_gate_applied else "",
         "submitted": submitted,
-        "source": "main_agent" if submitted else ("forced_route" if forced_route else "system_preferred"),
+        "source": source,
         "accepted_routes": ["direct", "spawn_single", "spawn_multi"],
         "system_preferred_route": base_route,
         "final_route": final_route,
@@ -249,6 +321,9 @@ def build_route_hint_policy(
         "hint_confidence": float(route_hint.get("confidence", 0.0) or 0.0),
         "hint_reason": str(route_hint.get("reason", "") or ""),
         "merge_notes": [],
+        "sticky_applied": bool(sticky_state),
+        "sticky_route": str((sticky_state or {}).get("route", "") or ""),
+        "sticky_work_type": str((sticky_state or {}).get("work_type", "") or ""),
     }
 
 
@@ -497,14 +572,29 @@ def build_decision(
     route_hint = normalize_route_hint(route_hint)
     route_meta = apply_forced_route(infer_route(task, command), force_route)
     features = route_meta.get("features", {})
-    base_route = str(route_meta.get("route", "direct") or "direct")
+    runtime_cfg = load_octopus_config().get("runtime_policy", {})
+    base_route = str(route_meta.get("system_preferred_route", route_meta.get("route", "direct")) or "direct")
+    sticky_state: dict[str, Any] = {}
     merge_reason_codes: list[str] = []
     route = base_route
     if route_hint_required(route_meta, force_route):
-        route, merge_reason_codes = merge_route_from_hint(base_route, features, route_hint)
+        route, sticky_state, sticky_reasons = apply_sticky_route(
+            base_route,
+            features,
+            route_hint,
+            metadata,
+            runtime_cfg,
+            force_route,
+        )
+        merge_reason_codes.extend(sticky_reasons)
+        if route_hint.get("route_hint"):
+            route, hint_reasons = merge_route_from_hint(route, features, route_hint)
+            merge_reason_codes.extend(hint_reasons)
 
     base_work_type = infer_work_type(task, features, route, metadata)
     work_type = merge_work_type(route, base_work_type, route_hint)
+    if not route_hint.get("work_type") and sticky_state and str(sticky_state.get("work_type", "") or "").strip():
+        work_type = str(sticky_state.get("work_type", "") or "").strip()
     base_phase = infer_phase(task, features, work_type, route, metadata)
     phase = merge_phase(route, base_phase, route_hint)
     executor_type = infer_executor_type(route)
@@ -518,7 +608,6 @@ def build_decision(
         selected_model, model_thinking = resolve_model_and_thinking(legacy_tier, legacy_label, task)
 
     spawn_profile = resolve_profile(legacy_label, selected_model, legacy_tier) if selected_model else ""
-    runtime_cfg = load_octopus_config().get("runtime_policy", {})
     profile = spawn_profile or user_profile
     reasoning_effort = reasoning_effort_from_config(runtime_cfg, legacy_tier, profile, model_thinking)
     new_tier = infer_new_tier(legacy_tier, protocol, route, bool(features.get("high_risk")))
@@ -529,7 +618,7 @@ def build_decision(
     default_skill_bundle = resolve_skill_bundle(runtime_cfg, work_type, profile)
     base_reason_codes = list(route_meta.get("reason_codes", []) or [])
     merged_reason_codes = [*merge_reason_codes, *base_reason_codes]
-    route_hint_policy = build_route_hint_policy(base_route, route, base_reason_codes, route_hint, force_route)
+    route_hint_policy = build_route_hint_policy(base_route, route, base_reason_codes, route_hint, force_route, sticky_state)
     route_hint_policy["merge_notes"] = merge_reason_codes
     dispatch_required = route != "direct"
     should_wait = route == "runner"
@@ -546,6 +635,7 @@ def build_decision(
             "metadata": metadata,
         },
         "route_decision": {
+            "system_preferred_route": base_route,
             "route": route,
             "dispatch_required": dispatch_required,
             "confidence": route_meta.get("confidence", 0.0),

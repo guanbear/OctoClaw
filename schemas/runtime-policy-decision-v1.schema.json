@@ -47,6 +47,7 @@
       "additionalProperties": false,
       "required": [
         "route",
+        "system_preferred_route",
         "dispatch_required",
         "confidence",
         "reason",
@@ -66,6 +67,10 @@
       ],
       "properties": {
         "route": {
+          "type": "string",
+          "enum": ["direct", "runner", "spawn_single", "spawn_multi"]
+        },
+        "system_preferred_route": {
           "type": "string",
           "enum": ["direct", "runner", "spawn_single", "spawn_multi"]
         },
@@ -213,7 +218,10 @@
         "hint_review_required",
         "hint_confidence",
         "hint_reason",
-        "merge_notes"
+        "merge_notes",
+        "sticky_applied",
+        "sticky_route",
+        "sticky_work_type"
       ],
       "properties": {
         "required": { "type": "boolean" },
@@ -236,7 +244,10 @@
         "merge_notes": {
           "type": "array",
           "items": { "type": "string" }
-        }
+        },
+        "sticky_applied": { "type": "boolean" },
+        "sticky_route": { "type": "string" },
+        "sticky_work_type": { "type": "string" }
       }
     },
     "compat": {

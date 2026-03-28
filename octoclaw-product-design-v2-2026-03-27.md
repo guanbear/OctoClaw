@@ -535,7 +535,9 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 当前建议是：
 
 - 代码只保留 **`hard_runner_only`**
+- 系统先给出 **`system_preferred_route`**，但不把它当最终 route
 - 其余请求交给稳定主脑输出结构化 `route_hint`
+- delegated lane 允许通过 **sticky lane** 复用到 follow-up 请求
 - runtime policy 和 hook 负责最终执行约束
 - classifier 保留为后续可插拔增强，不作为第一版前置依赖
 

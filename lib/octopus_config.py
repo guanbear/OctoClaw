@@ -23,6 +23,7 @@ RUNNER_HEALTH_FILE = f"{WORKSPACE}/tmp/octopus/runner-health.json"
 RUNNER_RESULTS_DIR = f"{WORKSPACE}/tmp/octopus/runner-results"
 SHARED_DIR = f"{WORKSPACE}/tmp/octopus/shared"
 CONTEXT_DIR = f"{WORKSPACE}/tmp/octopus/context"
+ROUTE_STICKINESS_FILE = f"{WORKSPACE}/tmp/octopus/route-stickiness.json"
 
 SESSIONS_FILE = os.path.expanduser("~/.openclaw/sessions.json")
 MAIN_AGENT_SESSIONS_FILE = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
@@ -47,6 +48,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "runtime_policy": {
         "enabled": True,
+        "route_stickiness": {
+            "enabled": True,
+            "ttl_minutes": 180,
+            "apply_on_followup_only": True,
+        },
         "default_reasoning_effort_by_legacy_tier": {
             "trivial": "low",
             "simple": "low",

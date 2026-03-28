@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Deterministic task router for OctoClaw.
+"""System-preferred task router for OctoClaw.
 
 This module is not a keyword toy router. It is a lightweight orchestration
-decision layer that tries to answer three questions, in order:
+preference layer that tries to answer three questions, in order:
 
 1. Should the main agent handle this directly?
 2. If not, should a persistent runner handle it?
@@ -14,11 +14,9 @@ Design goals:
 - explainable in production
 - easy to improve with replay/eval feedback later
 
-Output routes:
-- direct: main agent should answer directly
-- runner: lightweight local shell/status/log task
-- spawn_single: one focused subagent
-- spawn_multi: multiple subagents or staged planner/builder/review flow
+Output:
+- system_preferred_route: initial route bias before main-brain hint merge
+- route: compatibility alias for the same preferred route
 """
 
 from __future__ import annotations
@@ -127,8 +125,8 @@ IMPLEMENT_PATTERNS = [
 MUTATION_PATTERNS = [
     r"(修改|改成|改为|更新|删除|新增|创建|写入|替换|迁移|重启|部署|安装|卸载|启用|禁用|调整)",
     r"(改cron|改配置|改任务|改脚本|改服务|更新配置|修改配置|修改任务|修改服务)",
-    r"(后台执行|本地后台|只负责|避免.*中断|回读日志|触发并回读|更稳的方案)",
-    r"\b(modify|change|update|delete|add|create|write|replace|migrate|restart|deploy|install|uninstall|enable|disable|tune)\b",
+    r"(触发并回读|更新并验证|改后验证|修后验证|重启并验证)",
+    r"\b(modify|change|update|delete|add|create|replace|migrate|restart|deploy|install|uninstall|enable|disable|tune)\b",
     r"\b(update cron|change cron|modify cron|update config|modify config|change config|update service|modify service)\b",
 ]
 
@@ -140,6 +138,11 @@ COST_SENSITIVE_PATTERNS = [
 SEMANTIC_AMBIGUITY_PATTERNS = [
     r"(顺手|顺便|一起|同时帮我|看看要不要|必要时|如果需要|最好|更稳的方案)",
     r"\b(if needed|if necessary|also help|at the same time|better approach|safer approach)\b",
+]
+
+CONTINUATION_PATTERNS = [
+    r"(继续|接着|下一步|再查一下|再看一下|再确认一下|顺手补|顺手加|补一下|补个测试|继续处理|继续推进)",
+    r"\b(continue|follow[- ]?up|next step|check again|look again|verify again|add tests|follow through)\b",
 ]
 
 REMOTE_TARGET_PATTERNS = [
@@ -183,6 +186,7 @@ def extract_features(task: str, command: str = "") -> dict:
     mutation_hits = count_matches(text, MUTATION_PATTERNS)
     cost_sensitive_hits = count_matches(text, COST_SENSITIVE_PATTERNS)
     semantic_ambiguity_hits = count_matches(text, SEMANTIC_AMBIGUITY_PATTERNS)
+    continuation_hits = count_matches(text, CONTINUATION_PATTERNS)
     remote_target_hits = count_matches(text, REMOTE_TARGET_PATTERNS)
     runner_read_only_intent_hits = count_matches(text, RUNNER_READ_ONLY_INTENT_PATTERNS)
     runner_target_hits = count_matches(text, RUNNER_TARGET_PATTERNS)
@@ -251,6 +255,7 @@ def extract_features(task: str, command: str = "") -> dict:
         "mutation_hits": mutation_hits,
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
+        "continuation_hits": continuation_hits,
         "remote_target_hits": remote_target_hits,
         "requires_tools": bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0,
         "requires_code_work": code_hits > 0,
@@ -276,6 +281,7 @@ def extract_features(task: str, command: str = "") -> dict:
         ),
         "target_scope": "remote" if remote_target_hits > 0 else ("local" if local_state_hits > 0 else "generic"),
         "high_risk": high_risk_hits > 0,
+        "followup_candidate": continuation_hits > 0,
         "context_growth": context_growth,
         "latency_sensitivity": latency_sensitivity,
         "simple_direct_candidate": simple_hits > 0 and runner_hits == 0 and code_hits == 0 and research_hits == 0 and local_state_hits == 0,
@@ -584,6 +590,7 @@ def infer_route(task: str, command: str = "") -> dict:
         wait_timeout_seconds = 8 if features["estimated_steps"] <= 2 else 12
 
     return {
+        "system_preferred_route": route,
         "route": route,
         "confidence": confidence,
         "reason": reason_codes[0] if reason_codes else "default_route",

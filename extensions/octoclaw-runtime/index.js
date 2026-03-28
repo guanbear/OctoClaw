@@ -22,6 +22,10 @@ function resolveReplayLogPath() {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-replay.jsonl");
 }
 
+function resolveRouteStickinessPath() {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "route-stickiness.json");
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -96,6 +100,22 @@ async function appendJsonl(pathname, payload) {
   await fs.appendFile(pathname, `${JSON.stringify(payload)}\n`, "utf8");
 }
 
+async function readJsonFile(pathname, fallback = {}) {
+  try {
+    const raw = await fs.readFile(pathname, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeJsonFile(pathname, payload) {
+  await fs.mkdir(path.dirname(pathname), { recursive: true });
+  const tempPath = `${pathname}.tmp`;
+  await fs.writeFile(tempPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(tempPath, pathname);
+}
+
 function truncateText(value, limit = 320) {
   const text = String(value || "").trim();
   if (text.length <= limit) return text;
@@ -130,6 +150,53 @@ function resolvePolicyStateKey(ctx = {}) {
   return value;
 }
 
+function delegatedStickyRoute(decision) {
+  const route = String(decision?.route_decision?.route || "").trim();
+  if (route === "spawn_single" || route === "spawn_multi") {
+    return route;
+  }
+  return "";
+}
+
+function parsePolicyDecisionJson(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function persistStickyLane(sessionKey, decision, logger, options = {}) {
+  const stickyRoute = delegatedStickyRoute(decision);
+  if (!sessionKey || !stickyRoute) {
+    return false;
+  }
+  try {
+    const pathname = resolveRouteStickinessPath();
+    const current = await readJsonFile(pathname, {});
+    const next = current && typeof current === "object" ? { ...current } : {};
+    next[sessionKey] = {
+      route: stickyRoute,
+      work_type: String(decision?.route_decision?.work_type || "").trim(),
+      phase: String(decision?.route_decision?.phase || "").trim(),
+      protocol: String(decision?.route_decision?.protocol || "").trim(),
+      system_preferred_route: String(decision?.route_decision?.system_preferred_route || "").trim(),
+      updated_at: new Date().toISOString(),
+      source: String(options.source || "runtime_policy").trim() || "runtime_policy",
+      reason_codes: Array.isArray(decision?.route_decision?.reason_codes)
+        ? decision.route_decision.reason_codes.slice(0, 8)
+        : [],
+    };
+    await writeJsonFile(pathname, next);
+    return true;
+  } catch (err) {
+    logger?.warn?.(`octoclaw sticky lane persist failed: ${String(err)}`);
+    return false;
+  }
+}
+
 async function recordPolicyReplay(eventType, payload = {}, logger) {
   try {
     await appendJsonl(resolveReplayLogPath(), {
@@ -157,8 +224,9 @@ function isManagedAgentContext(ctx = {}) {
 
 function buildPolicyMetadata(ctx = {}) {
   const metadata = {};
+  const stableSessionKey = resolvePolicyStateKey(ctx);
   if (ctx.channelId) metadata.channel = ctx.channelId;
-  if (ctx.sessionKey) metadata.session_key = ctx.sessionKey;
+  if (stableSessionKey) metadata.session_key = stableSessionKey;
   if (ctx.trigger) metadata.trigger = ctx.trigger;
   if (ctx.agentId) metadata.agent_id = ctx.agentId;
   if (ctx.sessionId) metadata.session_id = ctx.sessionId;
@@ -208,9 +276,11 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         sessionId: String(ctx?.sessionId || ""),
         trigger: String(ctx?.trigger || ""),
         route: String(decision?.route_decision?.route || ""),
+        systemPreferredRoute: String(decision?.route_decision?.system_preferred_route || ""),
         workerPool: String(decision?.route_decision?.worker_pool || ""),
         routeHintRequired: Boolean(decision?.route_hint_policy?.required),
         routeHintSubmitted: Boolean(nextState.routeHintSubmitted),
+        stickyApplied: Boolean(decision?.route_hint_policy?.sticky_applied),
         prompt: truncateText(prompt),
       },
       logger,
@@ -234,9 +304,11 @@ function updatePolicyState(stateKey, mutator) {
 
 function compactPolicyPrompt(decision) {
   const route = decision?.route_decision?.route || "direct";
+  const systemPreferredRoute = decision?.route_decision?.system_preferred_route || route;
   const routeHintPolicy = decision?.route_hint_policy || {};
   const routeSummary = [
     `route=${route}`,
+    `system_preferred_route=${systemPreferredRoute}`,
     `worker_pool=${decision?.route_decision?.worker_pool || "octoclaw-main"}`,
     `work_type=${decision?.route_decision?.work_type || ""}`,
     `phase=${decision?.route_decision?.phase || ""}`,
@@ -264,6 +336,9 @@ function compactPolicyPrompt(decision) {
   if (routeHintPolicy?.required) {
     lines.push("Before answering or dispatching, call octoclaw_route_hint with your structured route suggestion.");
     lines.push(`System preferred route right now: ${routeHintPolicy.system_preferred_route || route}`);
+  }
+  if (routeHintPolicy?.sticky_applied && routeHintPolicy?.sticky_route) {
+    lines.push(`Sticky lane is active for this session follow-up: ${routeHintPolicy.sticky_route}`);
   }
   if (skillBundle.length > 0) {
     lines.push(`Preferred skill bundle: ${skillBundle.join(", ")}`);
@@ -515,6 +590,7 @@ export default function (pi) {
         sessionKey: stateKey,
         sessionId: String(ctx?.sessionId || ""),
         route: String(state?.decision?.route_decision?.route || ""),
+        systemPreferredRoute: String(state?.decision?.route_decision?.system_preferred_route || ""),
         workerPool: String(state?.decision?.route_decision?.worker_pool || ""),
         routeHintRequired: Boolean(state?.decision?.route_hint_policy?.required),
         routeHintSubmitted: Boolean(state?.routeHintSubmitted),
@@ -569,6 +645,7 @@ export default function (pi) {
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         args.push("--route-hint-json", JSON.stringify(routeHintPayload));
         const payload = await runJsonScript("octoclaw_policy.py", args, ctx.cwd || process.cwd());
+        const stickyPersisted = await persistStickyLane(stateKey, payload, pi.logger, { source: "route_hint" });
         if (stateKey) {
           policyStateBySession.set(stateKey, {
             ...(existing || {}),
@@ -594,8 +671,11 @@ export default function (pi) {
             reviewRequired: Boolean(params.reviewRequired),
             confidence: typeof params.confidence === "number" ? params.confidence : 0.0,
             reason: truncateText(params.reason || "", 180),
+            systemPreferredRoute: String(payload?.route_decision?.system_preferred_route || ""),
             finalRoute: String(payload?.route_decision?.route || ""),
             workerPool: String(payload?.route_decision?.worker_pool || ""),
+            stickyApplied: Boolean(payload?.route_hint_policy?.sticky_applied),
+            stickyPersisted,
           },
           pi.logger,
         );
@@ -660,7 +740,10 @@ export default function (pi) {
           ["--task", params.task, ...(params.command ? ["--command", params.command] : [])],
           ctx.cwd || process.cwd(),
         );
-        return toolResponse(`OctoClaw route: ${payload.route} (confidence ${payload.confidence ?? "n/a"})`, payload);
+        return toolResponse(
+          `OctoClaw system preferred route: ${payload.system_preferred_route || payload.route} (confidence ${payload.confidence ?? "n/a"})`,
+          payload,
+        );
       },
     },
     { source: "octoclaw-runtime" },
@@ -693,9 +776,23 @@ export default function (pi) {
         const stateKey = resolvePolicyStateKey(ctx);
         const state = stateKey ? policyStateBySession.get(stateKey) : null;
         const policyDecisionJson = params.policyJson || (state?.decision ? JSON.stringify(state.decision) : "");
+        const cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
         args.push("--wait", "--wait-timeout-seconds", "12");
         const payload = await runJsonScript("dispatch_task.py", args, ctx.cwd || process.cwd());
+        const stickyDecision = delegatedStickyRoute(cachedDecision)
+          ? cachedDecision
+          : {
+              route_decision: {
+                route: String(payload?.route || ""),
+                system_preferred_route: String(payload?.system_preferred_route || payload?.route || ""),
+                work_type: String(payload?.work_type || ""),
+                phase: String(payload?.phase || ""),
+                protocol: String(payload?.protocol || ""),
+                reason_codes: Array.isArray(payload?.reason_codes) ? payload.reason_codes : [],
+              },
+            };
+        const stickyPersisted = await persistStickyLane(stateKey, stickyDecision, pi.logger, { source: "dispatch" });
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`,
@@ -707,8 +804,10 @@ export default function (pi) {
             sessionKey: stateKey || "",
             sessionId: String(ctx?.sessionId || ""),
             route: String(payload?.route || ""),
+            systemPreferredRoute: String(cachedDecision?.route_decision?.system_preferred_route || payload?.system_preferred_route || ""),
             executed: Boolean(payload?.executed),
             usedCachedPolicy: Boolean(!params.policyJson && state?.decision),
+            stickyPersisted,
           },
           pi.logger,
         );
@@ -811,7 +910,7 @@ export default function (pi) {
       const payload = await runJsonScript("octoclaw_route.py", ["--task", task], ctx.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
-        ctx.ui.notify(`OctoClaw route: ${payload.route}`);
+        ctx.ui.notify(`OctoClaw system preferred route: ${payload.system_preferred_route || payload.route}`);
       }
     },
   });

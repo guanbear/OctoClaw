@@ -62,6 +62,7 @@ def apply_policy_fields(payload: dict, decision: dict) -> dict:
     payload["reasons"] = route_meta.get("reason_codes", [])
     payload["reason_codes"] = route_meta.get("reason_codes", [])
     payload["scores"] = route_meta.get("scores", {})
+    payload["system_preferred_route"] = route_meta.get("system_preferred_route", route_meta.get("route"))
     payload["task_class"] = route_meta.get("task_class")
     payload["role_hint"] = compat.get("legacy_role_hint")
     payload["tier_hint"] = model_meta.get("legacy_tier")

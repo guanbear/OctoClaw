@@ -77,8 +77,10 @@ Recommended minimal open-source path:
 3. Prefer `SUPERVISOR_MODE=tmux` and let `runner-daemon` / `patrol-loop` run in tmux
 4. Enable the bundled runtime extension from `extensions/octoclaw-runtime`
 5. Treat `direct` as a whitelist: only `hard_runner_only` is pre-cut by code; all other ambiguous work should submit `octoclaw_route_hint`, then let runtime policy merge and enforce dispatch
-6. Use `status.sh --format table` to inspect state
-7. Run `eval_suite.py` once to establish a baseline
+6. Treat `system_preferred_route` as a starting bias, not the final answer; the final route may change after main-brain hint merge or sticky lane reuse on follow-up work
+7. Use sticky lane conservatively: once a session enters `spawn_single` or `spawn_multi`, follow-up prompts like “继续 / next step / 再查一下 / add tests” can stay on the same lane without re-discovering the whole topology
+8. Use `status.sh --format table` to inspect state
+9. Run `eval_suite.py` once to establish a baseline
 
 ## Common Commands
 
@@ -105,7 +107,7 @@ python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'compar
 # Main-brain route hint merge
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'look at the nginx error log and summarize the likely cause' --route-hint-json '{"route_hint":"spawn_single","work_type":"research","phase":"inspect","review_required":false,"confidence":0.78,"reason":"needs log reading plus reasoning","source":"main_agent"}'
 
-# Route first
+# Inspect the system preferred route first
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze this error and give me a fix plan'
 
 # Unified dispatch entry
@@ -126,6 +128,9 @@ python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 
 # Runtime policy replay log
 tail -n 30 /workspace/tmp/octopus/runtime-policy-replay.jsonl
+
+# Sticky lane state for follow-up routing
+cat /workspace/tmp/octopus/route-stickiness.json
 
 # Force a patrol cycle
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
