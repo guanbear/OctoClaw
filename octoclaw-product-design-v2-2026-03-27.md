@@ -1054,6 +1054,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 目标：
 
 - 从旧花名式 label 迁到新 worker pool 模型
+- 先让展示/巡逻/分类层 worker_pool-first，再切 runtime truth path
 
 要做：
 
@@ -1063,12 +1064,21 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
   - `octoclaw-review`
   - `octoclaw-runner`
 - 旧 label 继续兼容一段时间
+- 第一拍只迁：
+  - status / patrol / lineage / board render
+  - replay / summary 的 worker taxonomy 展示
+- dispatch / spawn / task-state 主写入路径后迁
 - route 和 model policy 改读新字段
 - status / patrol / UI 改渲染新字段
 
 输出：
 
 - 新 worker taxonomy 生效
+- mixed fleet 期间新旧字段共存且展示稳定
+
+更细的映射和迁移顺序见：
+
+- [octoclaw-worker-taxonomy-migration-v1-2026-03-28.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-worker-taxonomy-migration-v1-2026-03-28.md)
 
 ### Phase 4：把 brief / summary / artifact 协议做实
 
