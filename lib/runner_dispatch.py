@@ -97,7 +97,22 @@ def find_reusable_job(command: str, task_description: str) -> dict | None:
 
 def resolve_runner_model() -> str:
     result = subprocess.run(
-        ["python3", RESOLVE_MODEL_PY, "--tier", "trivial", "--label", "octopus-runner"],
+        [
+            "python3",
+            RESOLVE_MODEL_PY,
+            "--tier",
+            "trivial",
+            "--label",
+            "octopus-runner",
+            "--worker-pool",
+            "octoclaw-runner",
+            "--phase",
+            "inspect",
+            "--route",
+            "runner",
+            "--profile",
+            "ops-fast",
+        ],
         capture_output=True,
         text=True,
         check=False,

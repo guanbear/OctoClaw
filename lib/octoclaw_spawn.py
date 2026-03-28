@@ -29,7 +29,13 @@ from octopus_config import (
     load_octopus_config,
     spawn_operator_surface,
 )
-from worker_taxonomy import worker_pool_from_legacy_label
+from worker_taxonomy import (
+    infer_worker_pool as taxonomy_infer_worker_pool,
+    legacy_label_for_worker_pool,
+    resolve_phase as taxonomy_resolve_phase,
+    resolve_work_type as taxonomy_resolve_work_type,
+    worker_pool_from_legacy_label,
+)
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -745,15 +751,48 @@ def build_spawn_spec(
     if final_route not in ("spawn_single", "spawn_multi"):
         raise ValueError(f"octoclaw_spawn 只处理 spawn 路径，当前 route={final_route}")
 
-    final_label = label or str(model_policy.get("legacy_label", "") or "") or route_meta.get("role_hint") or infer_label(task)
+    preliminary_profile = str(model_policy.get("profile", "") or "")
+    hinted_worker_pool = str(route_decision.get("worker_pool", "") or "")
+    hinted_work_type = str(route_decision.get("work_type", "") or "")
+    hinted_phase = str(route_decision.get("phase", "") or "")
+    derived_label = legacy_label_for_worker_pool(
+        hinted_worker_pool,
+        phase=hinted_phase,
+        route=final_route,
+        profile=preliminary_profile,
+        role_hint=str(route_meta.get("role_hint", "") or ""),
+    ) if hinted_worker_pool else ""
+    final_label = label or str(model_policy.get("legacy_label", "") or "") or derived_label or route_meta.get("role_hint") or infer_label(task)
     if final_label in ("main", "octopus-runner", "octoclaw-main", "octoclaw-runner"):
         final_label = infer_label(task)
     final_tier = tier or str(model_policy.get("legacy_tier", "") or "") or route_meta.get("tier_hint") or infer_tier(task, final_label)
-    work_type = str(route_decision.get("work_type", "") or "")
-    phase = str(route_decision.get("phase", "") or "")
+    worker_pool = hinted_worker_pool or worker_pool_from_legacy_label(final_label) or taxonomy_infer_worker_pool(final_route, hinted_work_type)
+    work_type = hinted_work_type or str(
+        taxonomy_resolve_work_type(
+            {
+                "worker_pool": worker_pool,
+                "label": final_label,
+                "route": final_route,
+                "profile": preliminary_profile,
+            }
+        )
+        or ""
+    )
+    if not worker_pool:
+        worker_pool = taxonomy_infer_worker_pool(final_route, work_type)
+    phase = hinted_phase or str(
+        taxonomy_resolve_phase(
+            {
+                "worker_pool": worker_pool,
+                "work_type": work_type,
+                "label": final_label,
+                "route": final_route,
+                "profile": preliminary_profile,
+            }
+        )
+        or ""
+    )
     protocol = str(route_decision.get("protocol", "") or "")
-    preliminary_profile = str(model_policy.get("profile", "") or "")
-    worker_pool = str(route_decision.get("worker_pool", "") or "")
     final_model = model or str(model_policy.get("selected_model", "") or "")
     thinking = str(model_policy.get("reasoning_effort", "") or "")
     if not final_model:
@@ -945,6 +984,7 @@ def build_spawn_spec(
         "task_kind": final_task_kind,
         "parent_id": parent_id,
         "deps": [str(dep).strip() for dep in (deps or []) if str(dep).strip()],
+        "worker_pool": worker_pool,
         "work_type": work_type,
         "phase": phase,
         "protocol": protocol,

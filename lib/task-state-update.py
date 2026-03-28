@@ -19,6 +19,7 @@ if SCRIPT_DIR not in sys.path:
 
 from clawteam_bridge import sync_task
 from runtime_task_record import normalize_task_record, normalize_task_records
+from worker_taxonomy import resolve_executor as taxonomy_resolve_executor
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
@@ -93,12 +94,11 @@ def resolve_expected_done(value: str) -> str:
     return value
 
 
-def infer_executor(label: str, explicit: str = "") -> str:
+def infer_executor(task: dict, explicit: str = "") -> str:
     if explicit:
         return explicit
-    if label == "octopus-runner":
-        return "runner"
-    return "subagent"
+    resolved = str(taxonomy_resolve_executor(task) or "").strip().lower()
+    return resolved if resolved in {"subagent", "runner", "team", "main"} else "subagent"
 
 
 def parse_bool_arg(value: str) -> bool:
@@ -474,8 +474,6 @@ def cmd_upsert(args):
                 existing["recovery_action"] = args.recovery_action
             if args.retry_count is not None:
                 existing["retry_count"] = args.retry_count
-            if args.executor or not existing.get("executor"):
-                existing["executor"] = infer_executor(existing.get("label", ""), args.executor or "")
             if args.owner:
                 existing["owner"] = args.owner
             if args.route:
@@ -514,6 +512,8 @@ def cmd_upsert(args):
                     artifacts = {}
                 artifacts.update(args.artifacts_json)
                 existing["artifacts"] = artifacts
+            if args.executor or not existing.get("executor") or args.route or args.runtime or args.worker_pool or args.task_kind:
+                existing["executor"] = infer_executor(existing, args.executor or "")
             existing["updated_at"] = now_iso()
             normalized = normalize_task_record(existing)
             existing.clear()
@@ -555,7 +555,6 @@ def cmd_upsert(args):
                 record["recovery_action"] = args.recovery_action
             if args.retry_count is not None:
                 record["retry_count"] = args.retry_count
-            record["executor"] = infer_executor(record.get("label", ""), args.executor or "")
             if args.owner:
                 record["owner"] = args.owner
             if args.route:
@@ -590,6 +589,7 @@ def cmd_upsert(args):
                 record["review_required"] = args.review_required
             if args.artifacts_json:
                 record["artifacts"] = dict(args.artifacts_json)
+            record["executor"] = infer_executor(record, args.executor or "")
             tasks.append(record)
             current_record = normalize_task_record(record)
             tasks[-1] = dict(current_record)
@@ -739,7 +739,7 @@ def main():
     p_upsert.add_argument("--last-observed-at", dest="last_observed_at")
     p_upsert.add_argument("--recovery-action", dest="recovery_action")
     p_upsert.add_argument("--retry-count", dest="retry_count", type=int)
-    p_upsert.add_argument("--executor", choices=["subagent", "runner", "team"])
+    p_upsert.add_argument("--executor", choices=["subagent", "runner", "team", "main"])
     p_upsert.add_argument("--owner")
     p_upsert.add_argument("--route")
     p_upsert.add_argument("--runtime")

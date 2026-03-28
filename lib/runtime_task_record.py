@@ -5,35 +5,13 @@ from __future__ import annotations
 
 from typing import Any
 
+try:
+    from worker_taxonomy import resolve_executor, resolve_phase, resolve_work_type, resolve_worker_pool
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.worker_taxonomy import resolve_executor, resolve_phase, resolve_work_type, resolve_worker_pool
+
 
 TASK_RECORD_SCHEMA_VERSION = "octoclaw.runtime_task.record/v1"
-
-LABEL_TO_WORK_TYPE = {
-    "octopus-runner": "ops",
-    "octoclaw-runner": "ops",
-    "octopus-fix": "code",
-    "octopus-test": "review",
-    "octopus-scout": "research",
-    "octopus-analyze": "research",
-    "octopus-writer": "research",
-}
-
-LABEL_TO_PHASE = {
-    "octopus-runner": "inspect",
-    "octoclaw-runner": "inspect",
-    "octopus-fix": "implement",
-    "octopus-test": "verify",
-    "octopus-scout": "collect",
-    "octopus-analyze": "inspect",
-    "octopus-writer": "report",
-}
-
-WORK_TYPE_TO_POOL = {
-    "ops": "octoclaw-runner",
-    "research": "octoclaw-research",
-    "code": "octoclaw-code",
-    "review": "octoclaw-review",
-}
 
 
 def compact_text(text: str, limit: int = 120) -> str:
@@ -63,19 +41,8 @@ def _normalized_bool(value: Any) -> bool:
 
 
 def infer_executor(task: dict[str, Any]) -> str:
-    explicit = _normalized_str(task.get("executor"))
-    if explicit:
-        return explicit
-    route = _normalized_str(task.get("route"))
-    runtime = _normalized_str(task.get("runtime"))
-    label = _normalized_str(task.get("label"))
-    if route == "spawn_multi":
-        return "team"
-    if route == "runner" or runtime == "runner" or label in {"octopus-runner", "octoclaw-runner"}:
-        return "runner"
-    if route in {"spawn_single", "spawn_multi"} or runtime in {"subagent", "acp"}:
-        return "subagent"
-    return ""
+    resolved = str(resolve_executor(task) or "").strip()
+    return resolved
 
 
 def infer_executor_type(task: dict[str, Any]) -> str:
@@ -96,38 +63,21 @@ def infer_executor_type(task: dict[str, Any]) -> str:
 
 
 def infer_work_type(task: dict[str, Any]) -> str:
-    explicit = _normalized_str(task.get("work_type"))
-    if explicit:
-        return explicit
-    route = _normalized_str(task.get("route"))
-    label = _normalized_str(task.get("label"))
-    if route == "runner":
-        return "ops"
-    return LABEL_TO_WORK_TYPE.get(label, "")
+    return _normalized_str(resolve_work_type(task))
 
 
 def infer_phase(task: dict[str, Any], work_type: str) -> str:
-    explicit = _normalized_str(task.get("phase"))
-    if explicit:
-        return explicit
-    route = _normalized_str(task.get("route"))
-    label = _normalized_str(task.get("label"))
-    if route == "runner":
-        return "inspect"
-    if work_type == "review":
-        return "verify"
-    return LABEL_TO_PHASE.get(label, "")
+    candidate = dict(task)
+    if work_type and not _normalized_str(candidate.get("work_type")):
+        candidate["work_type"] = work_type
+    return _normalized_str(resolve_phase(candidate))
 
 
 def infer_worker_pool(task: dict[str, Any], work_type: str) -> str:
-    explicit = _normalized_str(task.get("worker_pool"))
-    if explicit:
-        return explicit
-    route = _normalized_str(task.get("route"))
-    executor = infer_executor(task)
-    if route == "runner" or executor == "runner":
-        return "octoclaw-runner"
-    return WORK_TYPE_TO_POOL.get(work_type, "")
+    candidate = dict(task)
+    if work_type and not _normalized_str(candidate.get("work_type")):
+        candidate["work_type"] = work_type
+    return _normalized_str(resolve_worker_pool(candidate))
 
 
 def infer_runtime(task: dict[str, Any]) -> str:

@@ -22,6 +22,7 @@ from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
 from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config, spawn_operator_surface
 from runner_playbooks import infer_runner_playbook
+from worker_taxonomy import resolve_phase as taxonomy_resolve_phase, resolve_work_type as taxonomy_resolve_work_type, worker_pool_from_legacy_label
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -139,6 +140,33 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
         operator_surface["operator_hint"] = f"clawteam/{backend_name}" + (f" {team_name}" if team_name else "")
     else:
         operator_surface["operator_hint"] = backend or str(operator_surface.get("operator_hint", "") or "")
+    def step_taxonomy(entry: dict) -> dict[str, str]:
+        if not isinstance(entry, dict):
+            return {"worker_pool": "", "work_type": "", "phase": "", "profile": ""}
+        label = str(entry.get("label", "") or "")
+        worker_pool = str(entry.get("worker_pool", "") or "") or worker_pool_from_legacy_label(label)
+        profile = str(entry.get("profile", "") or "")
+        work_type = str(entry.get("work_type", "") or "") or str(
+            taxonomy_resolve_work_type({"worker_pool": worker_pool, "label": label, "profile": profile}) or ""
+        )
+        phase = str(entry.get("phase", "") or "") or str(
+            taxonomy_resolve_phase(
+                {
+                    "worker_pool": worker_pool,
+                    "work_type": work_type,
+                    "label": label,
+                    "profile": profile,
+                }
+            )
+            or ""
+        )
+        return {
+            "worker_pool": worker_pool,
+            "work_type": work_type,
+            "phase": phase,
+            "profile": profile,
+        }
+
     return {
         "step_order": ordered_steps,
         "child_task_ids": child_task_ids,
@@ -155,6 +183,10 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
         "step_models": {
             name: {
                 "label": str((plan.get(name) or {}).get("label", "") or ""),
+                "worker_pool": step_taxonomy(plan.get(name) or {}).get("worker_pool", ""),
+                "work_type": step_taxonomy(plan.get(name) or {}).get("work_type", ""),
+                "phase": step_taxonomy(plan.get(name) or {}).get("phase", ""),
+                "profile": step_taxonomy(plan.get(name) or {}).get("profile", ""),
                 "tier": str((plan.get(name) or {}).get("tier", "") or ""),
                 "model": str((plan.get(name) or {}).get("model", "") or ""),
             }
@@ -632,14 +664,22 @@ def recommend_multi_spawn(args, task: str) -> dict:
     plan = {
         "planner": {
             "label": decision_model(planner_decision).get("legacy_label", ""),
+            "worker_pool": decision_route(planner_decision).get("worker_pool", ""),
+            "work_type": decision_route(planner_decision).get("work_type", ""),
+            "phase": decision_route(planner_decision).get("phase", ""),
             "tier": decision_model(planner_decision).get("legacy_tier", ""),
             "model": decision_model(planner_decision).get("selected_model", ""),
+            "profile": decision_model(planner_decision).get("profile", ""),
             "policy_decision": planner_decision,
         },
         "worker": {
             "label": decision_model(worker_decision).get("legacy_label", primary_spawn["label"]),
+            "worker_pool": decision_route(worker_decision).get("worker_pool", primary_spawn.get("worker_pool", "")),
+            "work_type": decision_route(worker_decision).get("work_type", primary_spawn.get("work_type", "")),
+            "phase": decision_route(worker_decision).get("phase", primary_spawn.get("phase", "")),
             "tier": decision_model(worker_decision).get("legacy_tier", primary_spawn["tier"]),
             "model": decision_model(worker_decision).get("selected_model", primary_spawn["model"]),
+            "profile": decision_model(worker_decision).get("profile", primary_spawn.get("profile", "")),
             "policy_decision": worker_decision,
         },
     }
@@ -648,8 +688,12 @@ def recommend_multi_spawn(args, task: str) -> dict:
         review_decision = build_decision(review_task, force_route="spawn_single")
         plan["review"] = {
             "label": decision_model(review_decision).get("legacy_label", ""),
+            "worker_pool": decision_route(review_decision).get("worker_pool", ""),
+            "work_type": decision_route(review_decision).get("work_type", ""),
+            "phase": decision_route(review_decision).get("phase", ""),
             "tier": decision_model(review_decision).get("legacy_tier", ""),
             "model": decision_model(review_decision).get("selected_model", ""),
+            "profile": decision_model(review_decision).get("profile", ""),
             "policy_decision": review_decision,
         }
     execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octopus-team-{now_compact()}"))

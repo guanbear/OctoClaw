@@ -110,6 +110,9 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
         self.assertEqual(task["artifacts"]["step_order"], ["planner", "worker", "review"])
         self.assertEqual(task["artifacts"]["step_task_ids"]["planner"], "team-step-1")
         self.assertEqual(task["artifacts"]["step_task_kinds"]["planner"], "team_step")
+        self.assertEqual(task["artifacts"]["step_models"]["planner"]["worker_pool"], "octoclaw-research")
+        self.assertEqual(task["artifacts"]["step_models"]["worker"]["work_type"], "code")
+        self.assertEqual(task["artifacts"]["step_models"]["review"]["phase"], "verify")
 
     def test_bridge_board_includes_parent_child_lineage(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-lineage-board-") as workspace:

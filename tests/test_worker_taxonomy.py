@@ -7,6 +7,8 @@ from lib.worker_taxonomy import (
     legacy_label_for_worker_pool,
     model_role_for_worker_pool,
     resolve_executor,
+    resolve_phase,
+    resolve_work_type,
     resolve_worker_pool,
     role_display,
     worker_pool_from_legacy_label,
@@ -54,6 +56,11 @@ class WorkerTaxonomyTests(unittest.TestCase):
         self.assertEqual(resolve_worker_pool({"worker_pool": "octoclaw-review", "label": "octopus-fix"}), "octoclaw-review")
         self.assertEqual(resolve_worker_pool({"label": "octopus-fix"}), "octoclaw-code")
         self.assertEqual(resolve_worker_pool({"route": "runner", "work_type": "ops"}), "octoclaw-runner")
+
+    def test_work_type_and_phase_can_be_derived_from_worker_pool_first(self) -> None:
+        self.assertEqual(resolve_work_type({"worker_pool": "octoclaw-code"}), "code")
+        self.assertEqual(resolve_phase({"worker_pool": "octoclaw-review"}), "verify")
+        self.assertEqual(resolve_phase({"worker_pool": "octoclaw-research", "profile": "writer"}), "report")
 
     def test_role_display_prefers_worker_pool_but_falls_back_to_legacy_label(self) -> None:
         self.assertEqual(role_display({"worker_pool": "octoclaw-code"})["name"], "螃蟹手")

@@ -39,6 +39,41 @@ MODEL_ROLE_TO_LEGACY_LABEL = {
     "main": "main",
 }
 
+WORKER_POOL_TO_WORK_TYPE = {
+    "octoclaw-main": "",
+    "octoclaw-runner": "ops",
+    "octoclaw-research": "research",
+    "octoclaw-code": "code",
+    "octoclaw-review": "review",
+}
+
+LEGACY_LABEL_TO_WORK_TYPE = {
+    "octopus-runner": "ops",
+    "octoclaw-runner": "ops",
+    "octopus-fix": "code",
+    "octopus-test": "review",
+    "octopus-scout": "research",
+    "octopus-analyze": "research",
+    "octopus-writer": "research",
+}
+
+LEGACY_LABEL_TO_PHASE = {
+    "octopus-runner": "inspect",
+    "octoclaw-runner": "inspect",
+    "octopus-fix": "implement",
+    "octopus-test": "verify",
+    "octopus-scout": "collect",
+    "octopus-analyze": "inspect",
+    "octopus-writer": "report",
+}
+
+DEFAULT_PHASE_BY_WORK_TYPE = {
+    "ops": "inspect",
+    "research": "collect",
+    "code": "implement",
+    "review": "verify",
+}
+
 WORKER_POOL_DISPLAY = {
     "octoclaw-main": {"emoji": "🤖", "name": "主脑"},
     "octoclaw-runner": {"emoji": "🏃", "name": "飞鱼腿"},
@@ -168,6 +203,62 @@ def resolve_worker_pool(task: dict[str, Any] | str, default: str = "") -> str:
     return default
 
 
+def resolve_work_type(task: dict[str, Any] | str, default: str = "") -> str:
+    if isinstance(task, str):
+        worker_pool = resolve_worker_pool(task, default="")
+        if worker_pool:
+            return WORKER_POOL_TO_WORK_TYPE.get(worker_pool, default)
+        return LEGACY_LABEL_TO_WORK_TYPE.get(str(task).strip(), default)
+    if not isinstance(task, dict):
+        return default
+
+    explicit = str(task.get("work_type", "") or "").strip().lower()
+    if explicit:
+        return explicit
+
+    route = str(task.get("route", "") or "").strip().lower()
+    if route == "runner":
+        return "ops"
+
+    worker_pool = resolve_worker_pool(task, default="")
+    if worker_pool:
+        work_type = WORKER_POOL_TO_WORK_TYPE.get(worker_pool, "")
+        if work_type:
+            return work_type
+
+    label = str(task.get("label", "") or "").strip()
+    return LEGACY_LABEL_TO_WORK_TYPE.get(label, default)
+
+
+def resolve_phase(task: dict[str, Any] | str, default: str = "") -> str:
+    if isinstance(task, str):
+        label = str(task).strip()
+        return LEGACY_LABEL_TO_PHASE.get(label, default)
+    if not isinstance(task, dict):
+        return default
+
+    explicit = str(task.get("phase", "") or "").strip().lower()
+    if explicit:
+        return explicit
+
+    route = str(task.get("route", "") or "").strip().lower()
+    if route == "runner":
+        return "inspect"
+
+    profile = str(task.get("profile", "") or "").strip().lower()
+    work_type = resolve_work_type(task, default="")
+    if profile == "writer":
+        return "report"
+    if work_type:
+        phase = DEFAULT_PHASE_BY_WORK_TYPE.get(work_type, "")
+        if phase:
+            label = str(task.get("label", "") or "").strip()
+            return LEGACY_LABEL_TO_PHASE.get(label, phase)
+
+    label = str(task.get("label", "") or "").strip()
+    return LEGACY_LABEL_TO_PHASE.get(label, default)
+
+
 def resolve_executor(task: dict[str, Any] | str, default: str = "subagent") -> str:
     if isinstance(task, dict):
         explicit = str(task.get("executor", "") or task.get("executor_type", "") or "").strip().lower()
@@ -221,4 +312,3 @@ def role_display(task: dict[str, Any] | str) -> dict[str, str]:
     if worker_pool:
         return {"emoji": "🤖", "name": worker_pool.replace("octoclaw-", "")}
     return {"emoji": "🤖", "name": label.replace("octopus-", "") if label else "任务"}
-

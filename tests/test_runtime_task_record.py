@@ -60,6 +60,23 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["artifacts"]["context_path"], "/tmp/context.md")
         self.assertEqual(payload["artifacts"]["files_changed"], ["lib/auth.py"])
 
+    def test_normalize_can_infer_from_worker_pool_without_legacy_label(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "report-1",
+                "worker_pool": "octoclaw-research",
+                "profile": "writer",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "status": "dispatched",
+                "summary": "draft the release summary",
+            }
+        )
+        self.assertEqual(payload["executor"], "subagent")
+        self.assertEqual(payload["worker_pool"], "octoclaw-research")
+        self.assertEqual(payload["work_type"], "research")
+        self.assertEqual(payload["phase"], "report")
+
     def test_task_state_update_writes_unified_runtime_fields(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-task-record-") as workspace:
             env = {**os.environ, "WORKSPACE": workspace}
@@ -116,6 +133,43 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(task["profile"], "research")
         self.assertTrue(task["review_required"])
         self.assertEqual(task["artifacts"]["report_path"], "/tmp/gateway-report.md")
+
+    def test_task_state_update_infers_executor_from_worker_pool_first(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-task-record-runner-") as workspace:
+            env = {**os.environ, "WORKSPACE": workspace}
+            subprocess.run(
+                [
+                    "python3",
+                    str(TASK_STATE_UPDATE),
+                    "upsert",
+                    "--id",
+                    "runner-pool-only",
+                    "--status",
+                    "queued",
+                    "--summary",
+                    "check queue depth",
+                    "--route",
+                    "runner",
+                    "--runtime",
+                    "runner",
+                    "--worker-pool",
+                    "octoclaw-runner",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+
+            state_path = Path(workspace) / "tmp" / "octopus" / "task-state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            task = state["tasks"][0]
+
+        self.assertEqual(task["executor"], "runner")
+        self.assertEqual(task["executor_type"], "runner")
+        self.assertEqual(task["worker_pool"], "octoclaw-runner")
+        self.assertEqual(task["work_type"], "ops")
+        self.assertEqual(task["phase"], "inspect")
 
     def test_schema_required_fields_match_normalized_output(self) -> None:
         schema = json.loads(TASK_RECORD_SCHEMA.read_text(encoding="utf-8"))
