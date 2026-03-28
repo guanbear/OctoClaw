@@ -24,6 +24,8 @@ Usage:
   bin/runtime-policy-rollout.sh disable [options]
   bin/runtime-policy-rollout.sh uninstall [options]
   bin/runtime-policy-rollout.sh show [options]
+  bin/runtime-policy-rollout.sh check [options]
+  bin/runtime-policy-rollout.sh recommend [options]
 
 Options:
   --preset conservative|guided|enforced
@@ -31,6 +33,9 @@ Options:
   --openclaw-home PATH
   --openclaw-config PATH
   --config PATH
+  --events PATH
+  --format text|json
+  --phase conservative|guided
   --dry-run
   --no-link-extension
   --enabled BOOL
@@ -137,6 +142,28 @@ show_config() {
     run_cmd "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" show-config --config "$CONFIG_FILE"
 }
 
+check_replay() {
+    local cmd=(
+        "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" check
+        --config "$CONFIG_FILE"
+    )
+    if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
+        cmd+=("${EXTRA_ARGS[@]}")
+    fi
+    run_cmd "${cmd[@]}"
+}
+
+recommend_preset() {
+    local cmd=(
+        "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" recommend
+        --config "$CONFIG_FILE"
+    )
+    if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
+        cmd+=("${EXTRA_ARGS[@]}")
+    fi
+    run_cmd "${cmd[@]}"
+}
+
 cleanup_config() {
     if [ ! -f "$CONFIG_FILE" ]; then
         log "ℹ️  未找到配置文件，跳过"
@@ -184,6 +211,10 @@ while [ $# -gt 0 ]; do
             ;;
         --config)
             CONFIG_FILE="$2"
+            shift 2
+            ;;
+        --events|--format|--phase)
+            EXTRA_ARGS+=("$1" "$2")
             shift 2
             ;;
         --openclaw-config)
@@ -235,6 +266,12 @@ case "$COMMAND" in
         ;;
     show)
         show_config
+        ;;
+    check)
+        check_replay
+        ;;
+    recommend)
+        recommend_preset
         ;;
     *)
         log "Unknown command: $COMMAND"

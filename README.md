@@ -236,6 +236,12 @@ bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh enable --p
 # Show the current runtime-policy config fragment
 bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh show
 
+# Check replay-based readiness using the current rollout phase
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh check --format text
+
+# Print a compact next-preset recommendation
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh recommend --format text
+
 # Uninstall runtime-policy rollout state and extension directory
 bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh uninstall
 

@@ -10,6 +10,18 @@ from pathlib import Path
 from typing import Any
 
 from octopus_config import DEFAULT_CONFIG, deep_merge, load_json, save_json
+from replay_summary import (
+    DEFAULT_MAX_BLOCKED_SESSION_RATE,
+    DEFAULT_MIN_DELEGATED_EVENTS,
+    DEFAULT_MIN_POLICY_EVENTS,
+    DEFAULT_MIN_ROUTE_HINT_SUBMISSION_RATE,
+    DEFAULT_MIN_RUNNER_EVENTS,
+    DEFAULT_REPLAY_LOG,
+    infer_runtime_policy_phase,
+    load_events,
+    render_text,
+    summarize_events,
+)
 
 
 PRESETS: dict[str, dict[str, Any]] = {
@@ -254,6 +266,62 @@ def show_runtime_policy(config_path: Path) -> dict[str, Any]:
     return {}
 
 
+def resolve_observation_phase(config_path: Path, explicit_phase: str | None) -> tuple[str, str]:
+    current_phase = infer_runtime_policy_phase(show_runtime_policy(config_path))
+    requested_phase = str(explicit_phase or "").strip().lower()
+    if requested_phase in {"conservative", "guided"}:
+        return current_phase, requested_phase
+    if current_phase == "enforced":
+        return current_phase, "guided"
+    return current_phase, current_phase
+
+
+def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]:
+    config_path = Path(args.config).expanduser().resolve()
+    current_phase, summary_phase = resolve_observation_phase(config_path, getattr(args, "phase", None))
+    events_path = Path(args.events).expanduser().resolve()
+    events, source_format, invalid_lines = load_events(events_path)
+    summary = summarize_events(
+        events,
+        source_path=str(events_path),
+        source_format=source_format,
+        invalid_lines=invalid_lines,
+        phase=summary_phase,
+        min_policy_events=args.min_policy_events,
+        min_runner_events=args.min_runner_events,
+        min_delegated_events=args.min_delegated_events,
+        max_blocked_session_rate=args.max_blocked_session_rate,
+        min_route_hint_submission_rate=args.min_route_hint_submission_rate,
+    )
+    promotion = summary.get("promotion", {}) or {}
+    summary["observation"] = {
+        "current_phase": current_phase,
+        "summary_phase": summary_phase,
+        "suggested_preset": promotion.get("target") if promotion.get("ready") else current_phase,
+    }
+    return summary
+
+
+def render_recommendation(summary: dict[str, Any]) -> dict[str, Any]:
+    promotion = summary.get("promotion", {}) or {}
+    observation = summary.get("observation", {}) or {}
+    return {
+        "current_phase": observation.get("current_phase"),
+        "summary_phase": observation.get("summary_phase"),
+        "suggested_preset": observation.get("suggested_preset"),
+        "ready": bool(promotion.get("ready")),
+        "target": promotion.get("target"),
+        "checks": promotion.get("checks", []),
+        "task_event_count": summary.get("task_metrics", {}).get("task_event_count", 0),
+        "runner_task_count": summary.get("task_metrics", {}).get("runner_task_count", 0),
+        "delegated_task_count": summary.get("task_metrics", {}).get("delegated_task_count", 0),
+        "route_hint_submission_rate": summary.get("route_hint_metrics", {}).get("submission_rate"),
+        "blocked_session_rate": summary.get("tool_metrics", {}).get("blocked_session_rate"),
+        "observed_language_packs": summary.get("observed_language_packs", {}),
+        "source": summary.get("source", {}),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage OctoClaw runtime-policy rollout config.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -279,6 +347,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     cleanup_plugin_parser = subparsers.add_parser("cleanup-openclaw-plugin")
     cleanup_plugin_parser.add_argument("--config", required=True)
+
+    check_parser = subparsers.add_parser("check")
+    check_parser.add_argument("--config", required=True)
+    check_parser.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
+    check_parser.add_argument("--phase", choices=("conservative", "guided"))
+    check_parser.add_argument("--format", choices=("text", "json"), default="text")
+    check_parser.add_argument("--min-policy-events", type=int, default=DEFAULT_MIN_POLICY_EVENTS)
+    check_parser.add_argument("--min-runner-events", type=int, default=DEFAULT_MIN_RUNNER_EVENTS)
+    check_parser.add_argument("--min-delegated-events", type=int, default=DEFAULT_MIN_DELEGATED_EVENTS)
+    check_parser.add_argument("--max-blocked-session-rate", type=float, default=DEFAULT_MAX_BLOCKED_SESSION_RATE)
+    check_parser.add_argument(
+        "--min-route-hint-submission-rate",
+        type=float,
+        default=DEFAULT_MIN_ROUTE_HINT_SUBMISSION_RATE,
+    )
+
+    recommend_parser = subparsers.add_parser("recommend")
+    recommend_parser.add_argument("--config", required=True)
+    recommend_parser.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
+    recommend_parser.add_argument("--phase", choices=("conservative", "guided"))
+    recommend_parser.add_argument("--format", choices=("text", "json"), default="text")
+    recommend_parser.add_argument("--min-policy-events", type=int, default=DEFAULT_MIN_POLICY_EVENTS)
+    recommend_parser.add_argument("--min-runner-events", type=int, default=DEFAULT_MIN_RUNNER_EVENTS)
+    recommend_parser.add_argument("--min-delegated-events", type=int, default=DEFAULT_MIN_DELEGATED_EVENTS)
+    recommend_parser.add_argument("--max-blocked-session-rate", type=float, default=DEFAULT_MAX_BLOCKED_SESSION_RATE)
+    recommend_parser.add_argument(
+        "--min-route-hint-submission-rate",
+        type=float,
+        default=DEFAULT_MIN_ROUTE_HINT_SUBMISSION_RATE,
+    )
 
     return parser
 
@@ -309,6 +407,25 @@ def main() -> int:
     if args.command == "cleanup-openclaw-plugin":
         cleaned = cleanup_openclaw_plugin_config(Path(args.config))
         print(json.dumps(cleaned.get("plugins", {}), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "check":
+        summary = build_replay_observation_summary(args)
+        if args.format == "json":
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        else:
+            print(render_text(summary))
+        return 0
+    if args.command == "recommend":
+        recommendation = render_recommendation(build_replay_observation_summary(args))
+        if args.format == "json":
+            print(json.dumps(recommendation, ensure_ascii=False, indent=2))
+        else:
+            ready = "yes" if recommendation["ready"] else "no"
+            print(f"current_phase={recommendation['current_phase']}")
+            print(f"summary_phase={recommendation['summary_phase']}")
+            print(f"suggested_preset={recommendation['suggested_preset']}")
+            print(f"ready={ready}")
+            print(f"target={recommendation['target']}")
         return 0
     parser.error(f"unknown command: {args.command}")
     return 2

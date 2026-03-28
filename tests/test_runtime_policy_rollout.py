@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROLLOUT_SCRIPT = REPO_ROOT / "lib" / "runtime_policy_rollout.py"
+FIXTURES_PATH = REPO_ROOT / "tests" / "fixtures" / "runtime-policy-replay-events-v1.json"
 
 
 class RuntimePolicyRolloutTests(unittest.TestCase):
@@ -141,6 +142,120 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
             cleaned = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertNotIn("octoclaw-runtime", cleaned["plugins"]["allow"])
             self.assertNotIn("octoclaw-runtime", cleaned["plugins"]["entries"])
+
+    def test_check_uses_replay_fixture_and_infers_conservative_phase(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-check-") as tmpdir:
+            config_path = Path(tmpdir) / "octopus-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "runtime_policy": {
+                            "enabled": True,
+                            "switches": {
+                                "hard_runner_only": True,
+                                "route_hint_required": False,
+                                "replay_logging": True,
+                                "direct_model_override": False,
+                                "delegation_enforcement": False,
+                            },
+                            "hooks": {
+                                "before_model_resolve": False,
+                                "before_prompt_build": True,
+                                "before_tool_call": False,
+                                "agent_end": True,
+                            },
+                            "route_stickiness": {"enabled": False},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(ROLLOUT_SCRIPT),
+                    "check",
+                    "--config",
+                    str(config_path),
+                    "--events",
+                    str(FIXTURES_PATH),
+                    "--format",
+                    "json",
+                    "--min-policy-events",
+                    "1",
+                    "--min-runner-events",
+                    "0",
+                    "--min-delegated-events",
+                    "1",
+                    "--max-blocked-session-rate",
+                    "1.0",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["observation"]["current_phase"], "conservative")
+        self.assertEqual(payload["observation"]["summary_phase"], "conservative")
+        self.assertEqual(payload["observation"]["suggested_preset"], "guided")
+        self.assertTrue(payload["promotion"]["ready"])
+
+    def test_recommend_outputs_guided_summary_for_enforced_runtime(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-recommend-") as tmpdir:
+            config_path = Path(tmpdir) / "octopus-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "runtime_policy": {
+                            "enabled": True,
+                            "switches": {
+                                "hard_runner_only": True,
+                                "route_hint_required": True,
+                                "replay_logging": True,
+                                "direct_model_override": True,
+                                "delegation_enforcement": True,
+                            },
+                            "hooks": {
+                                "before_model_resolve": True,
+                                "before_prompt_build": True,
+                                "before_tool_call": True,
+                                "agent_end": True,
+                            },
+                            "route_stickiness": {"enabled": True},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(ROLLOUT_SCRIPT),
+                    "recommend",
+                    "--config",
+                    str(config_path),
+                    "--events",
+                    str(FIXTURES_PATH),
+                    "--format",
+                    "json",
+                    "--min-policy-events",
+                    "1",
+                    "--min-runner-events",
+                    "0",
+                    "--min-delegated-events",
+                    "1",
+                    "--max-blocked-session-rate",
+                    "1.0",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["current_phase"], "enforced")
+        self.assertEqual(payload["summary_phase"], "guided")
+        self.assertEqual(payload["suggested_preset"], "enforced")
+        self.assertFalse(payload["ready"])
 
 
 if __name__ == "__main__":
