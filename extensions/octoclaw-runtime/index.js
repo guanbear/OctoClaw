@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +12,14 @@ function resolveOctoClawRoot() {
 
 function resolveScript(...parts) {
   return path.join(resolveOctoClawRoot(), "lib", ...parts);
+}
+
+function resolveWorkspaceRoot() {
+  return process.env.WORKSPACE || "/workspace";
+}
+
+function resolveReplayLogPath() {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-replay.jsonl");
 }
 
 function runCommand(command, args, options = {}) {
@@ -82,6 +91,17 @@ function toolResponse(summary, details = {}) {
   };
 }
 
+async function appendJsonl(pathname, payload) {
+  await fs.mkdir(path.dirname(pathname), { recursive: true });
+  await fs.appendFile(pathname, `${JSON.stringify(payload)}\n`, "utf8");
+}
+
+function truncateText(value, limit = 320) {
+  const text = String(value || "").trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit - 1).trimEnd()}…`;
+}
+
 const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
 const policyStateBySession = new Map();
 const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
@@ -89,6 +109,11 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
   "Do not hand-write session or subagent spawning commands.",
+].join("\n");
+const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
+  "For non-hard-runner requests, submit a structured route hint before answering or dispatching.",
+  "Use octoclaw_route_hint to state whether this should be direct, spawn_single, or spawn_multi.",
+  "After route_hint merge: direct may answer directly; delegated routes must go through octoclaw_dispatch.",
 ].join("\n");
 
 function prunePolicyState() {
@@ -103,6 +128,18 @@ function prunePolicyState() {
 function resolvePolicyStateKey(ctx = {}) {
   const value = String(ctx.sessionId || ctx.sessionKey || "").trim();
   return value;
+}
+
+async function recordPolicyReplay(eventType, payload = {}, logger) {
+  try {
+    await appendJsonl(resolveReplayLogPath(), {
+      event: eventType,
+      at: new Date().toISOString(),
+      ...payload,
+    });
+  } catch (err) {
+    logger?.warn?.(`octoclaw runtime replay log failed: ${String(err)}`);
+  }
 }
 
 function isManagedAgentContext(ctx = {}) {
@@ -157,11 +194,27 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       updatedAt: Date.now(),
       delegated: Boolean(existing?.delegated),
       delegationTool: existing?.delegationTool || "",
+      routeHintSubmitted: Boolean(existing?.routeHintSubmitted),
+      routeHintPayload: existing?.routeHintPayload || null,
       blockedTools: Array.isArray(existing?.blockedTools) ? existing.blockedTools : [],
     };
     if (stateKey) {
       policyStateBySession.set(stateKey, nextState);
     }
+    await recordPolicyReplay(
+      "policy_resolved",
+      {
+        sessionKey: stateKey || "",
+        sessionId: String(ctx?.sessionId || ""),
+        trigger: String(ctx?.trigger || ""),
+        route: String(decision?.route_decision?.route || ""),
+        workerPool: String(decision?.route_decision?.worker_pool || ""),
+        routeHintRequired: Boolean(decision?.route_hint_policy?.required),
+        routeHintSubmitted: Boolean(nextState.routeHintSubmitted),
+        prompt: truncateText(prompt),
+      },
+      logger,
+    );
     return { stateKey, state: nextState, decision };
   } catch (err) {
     logger?.warn?.(`octoclaw runtime policy resolve failed: ${String(err)}`);
@@ -181,6 +234,7 @@ function updatePolicyState(stateKey, mutator) {
 
 function compactPolicyPrompt(decision) {
   const route = decision?.route_decision?.route || "direct";
+  const routeHintPolicy = decision?.route_hint_policy || {};
   const routeSummary = [
     `route=${route}`,
     `worker_pool=${decision?.route_decision?.worker_pool || "octoclaw-main"}`,
@@ -207,6 +261,10 @@ function compactPolicyPrompt(decision) {
       lines.push("Prefer report/artifact summaries over redoing the work in the main context.");
     }
   }
+  if (routeHintPolicy?.required) {
+    lines.push("Before answering or dispatching, call octoclaw_route_hint with your structured route suggestion.");
+    lines.push(`System preferred route right now: ${routeHintPolicy.system_preferred_route || route}`);
+  }
   if (skillBundle.length > 0) {
     lines.push(`Preferred skill bundle: ${skillBundle.join(", ")}`);
   }
@@ -231,6 +289,10 @@ function matchesBlockedPattern(text, patterns = []) {
 
 function isDelegatedRoute(decision) {
   return DELEGATED_ROUTE_NAMES.has(String(decision?.route_decision?.route || ""));
+}
+
+function routeHintRequired(decision) {
+  return Boolean(decision?.route_hint_policy?.required);
 }
 
 function policySummaryText(payload) {
@@ -335,9 +397,17 @@ export default function (pi) {
     );
     const decision = resolved?.decision;
     const hookConfig = decision?.hook_interface?.before_prompt_build;
-    if (!hookConfig?.enabled || !isDelegatedRoute(decision)) return;
+    if (!hookConfig?.enabled) return;
+    const prependSystem = [];
+    if (routeHintRequired(decision)) {
+      prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
+    }
+    if (isDelegatedRoute(decision)) {
+      prependSystem.push(OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
+    }
+    if (prependSystem.length === 0) return;
     return {
-      prependSystemContext: OCTOCLAW_DELEGATION_SYSTEM_CONTEXT,
+      prependSystemContext: prependSystem.join("\n\n"),
       prependContext: compactPolicyPrompt(decision),
     };
   });
@@ -351,9 +421,44 @@ export default function (pi) {
     if (!hookConfig?.enabled) return;
 
     const toolName = String(event?.toolName || ctx?.toolName || "").trim();
+    const routeHintTool = String(hookConfig?.route_hint_tool || "octoclaw_route_hint").trim();
+    const routeHintIsRequired = Boolean(hookConfig?.route_hint_required);
+    const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted);
+    const allowedPreHintTools = new Set([routeHintTool, "octoclaw_policy_decide", "octoclaw_status"]);
+    if (routeHintIsRequired && !routeHintAlreadySubmitted && !allowedPreHintTools.has(toolName)) {
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+      }));
+      await recordPolicyReplay(
+        "tool_blocked_before_route_hint",
+        {
+          sessionKey: stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          toolName,
+          requiredTool: routeHintTool,
+        },
+        pi.logger,
+      );
+      return {
+        block: true,
+        blockReason: `OctoClaw runtime policy requires ${routeHintTool} before using other tools.`,
+      };
+    }
     const toolPolicy = decision?.tool_policy || {};
     const blockedPatterns = Array.isArray(toolPolicy.block_tool_patterns) ? toolPolicy.block_tool_patterns : [];
     if (matchesBlockedPattern(stringifyParamsForPolicy(event?.params), blockedPatterns)) {
+      await recordPolicyReplay(
+        "tool_blocked_manual_delegation",
+        {
+          sessionKey: stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          toolName,
+        },
+        pi.logger,
+      );
       return {
         block: true,
         blockReason: `OctoClaw runtime policy blocked a manual delegation pattern. Use ${toolPolicy.must_delegate_via || "octoclaw_dispatch"} instead.`,
@@ -384,6 +489,16 @@ export default function (pi) {
       ...current,
       blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
     }));
+    await recordPolicyReplay(
+      "tool_blocked_delegation_policy",
+      {
+        sessionKey: stateKey || "",
+        sessionId: String(ctx?.sessionId || ""),
+        route: String(decision?.route_decision?.route || ""),
+        toolName,
+      },
+      pi.logger,
+    );
     return {
       block: true,
       blockReason: `OctoClaw runtime policy route=${decision?.route_decision?.route || "direct"} requires delegation. Use ${toolPolicy.must_delegate_via || "octoclaw_dispatch"} first. Allowed control tools: ${[...allowedControlTools].join(", ") || "octoclaw_dispatch"}.`,
@@ -393,8 +508,105 @@ export default function (pi) {
   registerLifecycleHook("agent_end", async (_event, ctx) => {
     const stateKey = resolvePolicyStateKey(ctx);
     if (!stateKey) return;
+    const state = policyStateBySession.get(stateKey);
+    await recordPolicyReplay(
+      "agent_end",
+      {
+        sessionKey: stateKey,
+        sessionId: String(ctx?.sessionId || ""),
+        route: String(state?.decision?.route_decision?.route || ""),
+        workerPool: String(state?.decision?.route_decision?.worker_pool || ""),
+        routeHintRequired: Boolean(state?.decision?.route_hint_policy?.required),
+        routeHintSubmitted: Boolean(state?.routeHintSubmitted),
+        delegated: Boolean(state?.delegated),
+        delegationTool: String(state?.delegationTool || ""),
+        blockedTools: Array.isArray(state?.blockedTools) ? state.blockedTools : [],
+      },
+      pi.logger,
+    );
     policyStateBySession.delete(stateKey);
   }, 50);
+
+  pi.registerTool(
+    {
+      name: "octoclaw_route_hint",
+      label: "OctoClaw Route Hint",
+      description: "Submit a structured main-brain route hint so OctoClaw can merge it with system policy and return the final decision.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          task: { type: "string", description: "Optional task override. Defaults to the current prompt for this session." },
+          command: { type: "string", description: "Optional shell command context." },
+          routeHint: { type: "string", enum: ["direct", "spawn_single", "spawn_multi"] },
+          workType: { type: "string", enum: ["ops", "research", "code", "review"] },
+          phase: { type: "string", description: "Optional phase hint such as inspect, implement, collect, report, verify." },
+          reviewRequired: { type: "boolean", description: "Whether review should be required after merge." },
+          confidence: { type: "number", description: "Confidence from 0 to 1." },
+          reason: { type: "string", description: "Short explanation for the route hint." }
+        },
+        required: ["routeHint"]
+      },
+      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+        const stateKey = resolvePolicyStateKey(ctx);
+        const existing = stateKey ? policyStateBySession.get(stateKey) : null;
+        const task = String(params.task || existing?.prompt || "").trim();
+        if (!task) {
+          throw new Error("octoclaw_route_hint requires task context");
+        }
+        const metadata = buildPolicyMetadata(ctx);
+        const routeHintPayload = {
+          route_hint: params.routeHint,
+          work_type: params.workType || "",
+          phase: params.phase || "",
+          review_required: Boolean(params.reviewRequired),
+          confidence: typeof params.confidence === "number" ? params.confidence : 0.0,
+          reason: params.reason || "",
+          source: "main_agent",
+        };
+        const args = ["--task", task];
+        if (params.command) args.push("--command", params.command);
+        if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
+        args.push("--route-hint-json", JSON.stringify(routeHintPayload));
+        const payload = await runJsonScript("octoclaw_policy.py", args, ctx.cwd || process.cwd());
+        if (stateKey) {
+          policyStateBySession.set(stateKey, {
+            ...(existing || {}),
+            prompt: task,
+            decision: payload,
+            createdAt: existing?.createdAt || Date.now(),
+            updatedAt: Date.now(),
+            delegated: Boolean(existing?.delegated),
+            delegationTool: existing?.delegationTool || "",
+            blockedTools: Array.isArray(existing?.blockedTools) ? existing.blockedTools : [],
+            routeHintSubmitted: true,
+            routeHintPayload,
+          });
+        }
+        await recordPolicyReplay(
+          "route_hint_submitted",
+          {
+            sessionKey: stateKey || "",
+            sessionId: String(ctx?.sessionId || ""),
+            routeHint: params.routeHint,
+            workType: params.workType || "",
+            phase: params.phase || "",
+            reviewRequired: Boolean(params.reviewRequired),
+            confidence: typeof params.confidence === "number" ? params.confidence : 0.0,
+            reason: truncateText(params.reason || "", 180),
+            finalRoute: String(payload?.route_decision?.route || ""),
+            workerPool: String(payload?.route_decision?.worker_pool || ""),
+          },
+          pi.logger,
+        );
+        const nextSummary = payload?.route_decision?.route === "direct"
+          ? `route_hint merged: final route is direct. You may answer directly.`
+          : `route_hint merged: final route is ${payload?.route_decision?.route || "spawn_single"}. Next call octoclaw_dispatch.`;
+        return toolResponse(nextSummary, payload);
+      },
+    },
+    { source: "octoclaw-runtime" },
+  );
 
   pi.registerTool(
     {
@@ -467,7 +679,8 @@ export default function (pi) {
           command: { type: "string", description: "Optional shell command for runner tasks." },
           cwd: { type: "string", description: "Optional working directory override." },
           forceRoute: { type: "string", enum: ["auto", "direct", "runner", "spawn_single", "spawn_multi"] },
-          timeoutSeconds: { type: "number", description: "Runner timeout in seconds." }
+          timeoutSeconds: { type: "number", description: "Runner timeout in seconds." },
+          policyJson: { type: "string", description: "Optional precomputed runtime policy decision JSON." }
         },
         required: ["task"]
       },
@@ -477,12 +690,27 @@ export default function (pi) {
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
+        const stateKey = resolvePolicyStateKey(ctx);
+        const state = stateKey ? policyStateBySession.get(stateKey) : null;
+        const policyDecisionJson = params.policyJson || (state?.decision ? JSON.stringify(state.decision) : "");
+        if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
         args.push("--wait", "--wait-timeout-seconds", "12");
         const payload = await runJsonScript("dispatch_task.py", args, ctx.cwd || process.cwd());
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`,
           ctx.cwd || process.cwd(),
+        );
+        await recordPolicyReplay(
+          "dispatch_called",
+          {
+            sessionKey: stateKey || "",
+            sessionId: String(ctx?.sessionId || ""),
+            route: String(payload?.route || ""),
+            executed: Boolean(payload?.executed),
+            usedCachedPolicy: Boolean(!params.policyJson && state?.decision),
+          },
+          pi.logger,
         );
         return toolResponse(
           summary,

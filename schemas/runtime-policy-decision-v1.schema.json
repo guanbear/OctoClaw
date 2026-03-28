@@ -15,6 +15,7 @@
     "review_policy",
     "prompt_contract",
     "tool_policy",
+    "route_hint_policy",
     "compat",
     "hook_interface"
   ],
@@ -194,6 +195,50 @@
         }
       }
     },
+    "route_hint_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "hard_gate_applied",
+        "hard_gate_reason",
+        "submitted",
+        "source",
+        "accepted_routes",
+        "system_preferred_route",
+        "final_route",
+        "hint_route",
+        "hint_work_type",
+        "hint_phase",
+        "hint_review_required",
+        "hint_confidence",
+        "hint_reason",
+        "merge_notes"
+      ],
+      "properties": {
+        "required": { "type": "boolean" },
+        "hard_gate_applied": { "type": "boolean" },
+        "hard_gate_reason": { "type": "string" },
+        "submitted": { "type": "boolean" },
+        "source": { "type": "string" },
+        "accepted_routes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "system_preferred_route": { "type": "string" },
+        "final_route": { "type": "string" },
+        "hint_route": { "type": "string" },
+        "hint_work_type": { "type": "string" },
+        "hint_phase": { "type": "string" },
+        "hint_review_required": { "type": "boolean" },
+        "hint_confidence": { "type": "number" },
+        "hint_reason": { "type": "string" },
+        "merge_notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
     "compat": {
       "type": "object",
       "additionalProperties": false,
@@ -258,14 +303,16 @@
                 "review_required"
               ],
               "properties": {
-                "route": { "type": "string" },
-                "worker_pool": { "type": "string" },
-                "work_type": { "type": "string" },
-                "phase": { "type": "string" },
-                "protocol": { "type": "string" },
-                "review_required": { "type": "boolean" }
-              }
-            },
+              "route": { "type": "string" },
+              "worker_pool": { "type": "string" },
+              "work_type": { "type": "string" },
+              "phase": { "type": "string" },
+              "protocol": { "type": "string" },
+              "review_required": { "type": "boolean" },
+              "route_hint_required": { "type": "boolean" },
+              "route_hint_submitted": { "type": "boolean" }
+            }
+          },
             "skill_bundle": {
               "type": "array",
               "items": { "type": "string" }
@@ -278,13 +325,16 @@
         "before_tool_call": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled", "action", "tool_policy"],
+          "required": ["enabled", "action", "tool_policy", "route_hint_required", "route_hint_submitted", "route_hint_tool"],
           "properties": {
             "enabled": { "type": "boolean" },
             "action": { "type": "string" },
             "tool_policy": {
               "$ref": "#/properties/tool_policy"
-            }
+            },
+            "route_hint_required": { "type": "boolean" },
+            "route_hint_submitted": { "type": "boolean" },
+            "route_hint_tool": { "type": "string" }
           }
         },
         "agent_end": {
@@ -295,14 +345,18 @@
             "action",
             "artifact_first",
             "review_required",
-            "final_compose_required"
+            "final_compose_required",
+            "route_hint_required",
+            "route_hint_submitted"
           ],
           "properties": {
             "enabled": { "type": "boolean" },
             "action": { "type": "string" },
             "artifact_first": { "type": "boolean" },
             "review_required": { "type": "boolean" },
-            "final_compose_required": { "type": "boolean" }
+            "final_compose_required": { "type": "boolean" },
+            "route_hint_required": { "type": "boolean" },
+            "route_hint_submitted": { "type": "boolean" }
           }
         }
       }

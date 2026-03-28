@@ -29,6 +29,8 @@ from octopus_config import load_octopus_config
 
 SCHEMA_VERSION = "octoclaw.runtime_policy.decision/v1"
 VALID_FORCE_ROUTES = {"", "direct", "runner", "spawn_single", "spawn_multi"}
+VALID_ROUTE_HINT_ROUTES = {"", "direct", "spawn_single", "spawn_multi"}
+VALID_ROUTE_HINT_WORK_TYPES = {"", "ops", "research", "code", "review"}
 
 WRITER_PATTERNS = [
     r"\b(write|draft|doc|docs|readme|summary|report|memo|proposal|translate|translation)\b",
@@ -102,6 +104,152 @@ def infer_executor_type(route: str) -> str:
     if route == "spawn_multi":
         return "team"
     return "subagent"
+
+
+def normalize_route_hint(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    route_hint = str(raw.get("route_hint", raw.get("route", "")) or "").strip()
+    if route_hint not in VALID_ROUTE_HINT_ROUTES:
+        route_hint = ""
+    work_type = str(raw.get("work_type", "") or "").strip()
+    if work_type not in VALID_ROUTE_HINT_WORK_TYPES:
+        work_type = ""
+    phase = str(raw.get("phase", "") or "").strip()
+    reason = str(raw.get("reason", "") or "").strip()
+    source = str(raw.get("source", "main_agent") or "main_agent").strip()
+    confidence = 0.0
+    try:
+        confidence = float(raw.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(confidence, 1.0))
+    return {
+        "route_hint": route_hint,
+        "work_type": work_type,
+        "phase": phase,
+        "review_required": bool(raw.get("review_required", False)),
+        "confidence": round(confidence, 3),
+        "reason": reason,
+        "source": source,
+    }
+
+
+def route_hint_required(route_meta: dict[str, Any], forced_route: str = "") -> bool:
+    if forced_route:
+        return False
+    reason_codes = list(route_meta.get("reason_codes", []) or [])
+    if "hard_runner_only" in reason_codes:
+        return False
+    return True
+
+
+def direct_allowed_from_hint(features: dict[str, Any]) -> bool:
+    if features.get("high_risk"):
+        return False
+    if features.get("requires_tools"):
+        return False
+    if features.get("requires_mutation"):
+        return False
+    if features.get("requires_code_work"):
+        return False
+    if features.get("parallelizable"):
+        return False
+    if int(features.get("estimated_steps", 0) or 0) >= 3:
+        return False
+    if features.get("requires_research") and (
+        features.get("external_lookup_hits", 0) > 0 or features.get("requires_writing")
+    ):
+        return False
+    return True
+
+
+def merge_route_from_hint(base_route: str, features: dict[str, Any], route_hint: dict[str, Any]) -> tuple[str, list[str]]:
+    hint_route = str(route_hint.get("route_hint", "") or "").strip()
+    if not hint_route:
+        return base_route, []
+
+    reason_codes = [f"main_agent_route_hint:{hint_route}"]
+    if hint_route == "direct":
+        if direct_allowed_from_hint(features):
+            return "direct", reason_codes
+        fallback = "spawn_multi" if features.get("parallelizable") else "spawn_single"
+        reason_codes.append(f"route_hint_veto:direct_to_{fallback}")
+        return fallback, reason_codes
+
+    if hint_route == "spawn_multi":
+        if (
+            features.get("parallelizable")
+            or int(features.get("estimated_steps", 0) or 0) >= 4
+            or features.get("high_risk")
+            or (features.get("requires_research") and (features.get("requires_writing") or features.get("requires_code_work")))
+        ):
+            return "spawn_multi", reason_codes
+        reason_codes.append("route_hint_downgrade:spawn_multi_to_spawn_single")
+        return "spawn_single", reason_codes
+
+    if hint_route == "spawn_single":
+        if features.get("parallelizable") and (features.get("high_risk") or int(features.get("estimated_steps", 0) or 0) >= 5):
+            reason_codes.append("route_hint_upgrade:spawn_single_to_spawn_multi")
+            return "spawn_multi", reason_codes
+        return "spawn_single", reason_codes
+
+    return base_route, reason_codes
+
+
+def merge_work_type(
+    route: str,
+    base_work_type: str,
+    route_hint: dict[str, Any],
+) -> str:
+    if route == "runner":
+        return "ops"
+    hint_work_type = str(route_hint.get("work_type", "") or "").strip()
+    if hint_work_type in VALID_ROUTE_HINT_WORK_TYPES and hint_work_type and hint_work_type != "ops":
+        return hint_work_type
+    return base_work_type
+
+
+def merge_phase(
+    route: str,
+    base_phase: str,
+    route_hint: dict[str, Any],
+) -> str:
+    if route == "runner":
+        return "inspect"
+    hint_phase = str(route_hint.get("phase", "") or "").strip()
+    if hint_phase:
+        return hint_phase
+    return base_phase
+
+
+def build_route_hint_policy(
+    base_route: str,
+    final_route: str,
+    base_reason_codes: list[str],
+    route_hint: dict[str, Any],
+    forced_route: str,
+) -> dict[str, Any]:
+    hard_gate_applied = "hard_runner_only" in base_reason_codes
+    submitted = bool(route_hint.get("route_hint"))
+    required = route_hint_required({"reason_codes": base_reason_codes}, forced_route)
+    return {
+        "required": required,
+        "hard_gate_applied": hard_gate_applied,
+        "hard_gate_reason": "hard_runner_only" if hard_gate_applied else "",
+        "submitted": submitted,
+        "source": "main_agent" if submitted else ("forced_route" if forced_route else "system_preferred"),
+        "accepted_routes": ["direct", "spawn_single", "spawn_multi"],
+        "system_preferred_route": base_route,
+        "final_route": final_route,
+        "hint_route": str(route_hint.get("route_hint", "") or ""),
+        "hint_work_type": str(route_hint.get("work_type", "") or ""),
+        "hint_phase": str(route_hint.get("phase", "") or ""),
+        "hint_review_required": bool(route_hint.get("review_required", False)),
+        "hint_confidence": float(route_hint.get("confidence", 0.0) or 0.0),
+        "hint_reason": str(route_hint.get("reason", "") or ""),
+        "merge_notes": [],
+    }
 
 
 def infer_protocol(features: dict[str, Any], route: str, work_type: str) -> str:
@@ -253,6 +401,7 @@ def tool_policy(route: str, dispatch_required: bool) -> dict[str, Any]:
         "must_delegate_via": "octoclaw_dispatch" if dispatch_required else "",
         "allowed_control_tools": [
             "octoclaw_policy_decide",
+            "octoclaw_route_hint",
             "octoclaw_dispatch",
             "octoclaw_status",
         ],
@@ -268,6 +417,7 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
     model_policy = decision["model_policy"]
     skill_policy = decision["skill_policy"]
     review_policy = decision["review_policy"]
+    route_hint_policy = decision["route_hint_policy"]
 
     return {
         "before_model_resolve": {
@@ -288,6 +438,8 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
                 "phase": route_decision["phase"],
                 "protocol": route_decision["protocol"],
                 "review_required": review_policy["required"],
+                "route_hint_required": route_hint_policy["required"],
+                "route_hint_submitted": route_hint_policy["submitted"],
             },
             "skill_bundle": skill_policy["default_skill_bundle"],
             "prompt_contract": decision["prompt_contract"],
@@ -296,6 +448,9 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
             "enabled": policy_enabled and bool(hooks_cfg.get("before_tool_call", True)),
             "action": "enforce_delegation_policy",
             "tool_policy": decision["tool_policy"],
+            "route_hint_required": route_hint_policy["required"],
+            "route_hint_submitted": route_hint_policy["submitted"],
+            "route_hint_tool": "octoclaw_route_hint",
         },
         "agent_end": {
             "enabled": policy_enabled and bool(hooks_cfg.get("agent_end", True)),
@@ -303,6 +458,8 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
             "artifact_first": decision["prompt_contract"]["artifact_first"],
             "review_required": review_policy["required"],
             "final_compose_required": True,
+            "route_hint_required": route_hint_policy["required"],
+            "route_hint_submitted": route_hint_policy["submitted"],
         },
     }
 
@@ -329,13 +486,27 @@ def apply_forced_route(route_meta: dict[str, Any], forced_route: str) -> dict[st
     return payload
 
 
-def build_decision(task: str, command: str = "", metadata: dict[str, Any] | None = None, force_route: str = "") -> dict[str, Any]:
+def build_decision(
+    task: str,
+    command: str = "",
+    metadata: dict[str, Any] | None = None,
+    force_route: str = "",
+    route_hint: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     metadata = normalize_metadata(metadata)
+    route_hint = normalize_route_hint(route_hint)
     route_meta = apply_forced_route(infer_route(task, command), force_route)
     features = route_meta.get("features", {})
-    route = str(route_meta.get("route", "direct") or "direct")
-    work_type = infer_work_type(task, features, route, metadata)
-    phase = infer_phase(task, features, work_type, route, metadata)
+    base_route = str(route_meta.get("route", "direct") or "direct")
+    merge_reason_codes: list[str] = []
+    route = base_route
+    if route_hint_required(route_meta, force_route):
+        route, merge_reason_codes = merge_route_from_hint(base_route, features, route_hint)
+
+    base_work_type = infer_work_type(task, features, route, metadata)
+    work_type = merge_work_type(route, base_work_type, route_hint)
+    base_phase = infer_phase(task, features, work_type, route, metadata)
+    phase = merge_phase(route, base_phase, route_hint)
     executor_type = infer_executor_type(route)
     protocol = infer_protocol(features, route, work_type)
     legacy_tier = str(route_meta.get("tier_hint", "simple") or "simple")
@@ -353,7 +524,16 @@ def build_decision(task: str, command: str = "", metadata: dict[str, Any] | None
     new_tier = infer_new_tier(legacy_tier, protocol, route, bool(features.get("high_risk")))
     worker_pool = infer_worker_pool(route, work_type)
     needs_review = review_required(features, route, work_type, protocol)
+    if route_hint.get("review_required"):
+        needs_review = True
     default_skill_bundle = resolve_skill_bundle(runtime_cfg, work_type, profile)
+    base_reason_codes = list(route_meta.get("reason_codes", []) or [])
+    merged_reason_codes = [*merge_reason_codes, *base_reason_codes]
+    route_hint_policy = build_route_hint_policy(base_route, route, base_reason_codes, route_hint, force_route)
+    route_hint_policy["merge_notes"] = merge_reason_codes
+    dispatch_required = route != "direct"
+    should_wait = route == "runner"
+    wait_timeout_seconds = int(route_meta.get("wait_timeout_seconds", 0) or 0) if should_wait else 0
 
     decision = {
         "schema_version": SCHEMA_VERSION,
@@ -367,10 +547,10 @@ def build_decision(task: str, command: str = "", metadata: dict[str, Any] | None
         },
         "route_decision": {
             "route": route,
-            "dispatch_required": bool(route_meta.get("dispatch_required", route != "direct")),
+            "dispatch_required": dispatch_required,
             "confidence": route_meta.get("confidence", 0.0),
-            "reason": route_meta.get("reason", ""),
-            "reason_codes": list(route_meta.get("reason_codes", []) or []),
+            "reason": merged_reason_codes[0] if merged_reason_codes else route_meta.get("reason", ""),
+            "reason_codes": merged_reason_codes,
             "scores": route_meta.get("scores", {}),
             "task_class": route_meta.get("task_class", ""),
             "executor_type": executor_type,
@@ -378,8 +558,8 @@ def build_decision(task: str, command: str = "", metadata: dict[str, Any] | None
             "work_type": work_type,
             "phase": phase,
             "protocol": protocol,
-            "should_wait": bool(route_meta.get("should_wait", False)),
-            "wait_timeout_seconds": int(route_meta.get("wait_timeout_seconds", 0) or 0),
+            "should_wait": should_wait,
+            "wait_timeout_seconds": wait_timeout_seconds,
             "expected_latency_ms": int(route_meta.get("expected_latency_ms", 0) or 0),
             "expected_cost_band": str(route_meta.get("expected_cost_band", "") or ""),
             "context_growth_band": str(route_meta.get("context_growth_band", "") or ""),
@@ -403,7 +583,8 @@ def build_decision(task: str, command: str = "", metadata: dict[str, Any] | None
             "review_trigger": "policy_required" if needs_review else "",
         },
         "prompt_contract": prompt_contract(protocol, route),
-        "tool_policy": tool_policy(route, route != "direct"),
+        "tool_policy": tool_policy(route, dispatch_required),
+        "route_hint_policy": route_hint_policy,
         "compat": {
             "legacy_role_hint": str(route_meta.get("role_hint", "") or ""),
             "legacy_tier_hint": legacy_tier,
@@ -437,6 +618,7 @@ def main() -> None:
     parser.add_argument("--session-key", default="")
     parser.add_argument("--metadata-json", default="")
     parser.add_argument("--force-route", choices=sorted(VALID_FORCE_ROUTES - {""}), default="")
+    parser.add_argument("--route-hint-json", default="")
     parser.add_argument("--summary", action="store_true", help="Print a one-line summary instead of JSON")
     args = parser.parse_args()
 
@@ -453,7 +635,16 @@ def main() -> None:
     if args.session_key:
         metadata["session_key"] = args.session_key
 
-    decision = build_decision(args.task, args.command, metadata, args.force_route)
+    route_hint: dict[str, Any] = {}
+    if args.route_hint_json:
+        try:
+            parsed = json.loads(args.route_hint_json)
+            if isinstance(parsed, dict):
+                route_hint = parsed
+        except json.JSONDecodeError:
+            pass
+
+    decision = build_decision(args.task, args.command, metadata, args.force_route, route_hint)
     if args.summary:
         print(summarize_decision(decision))
         return

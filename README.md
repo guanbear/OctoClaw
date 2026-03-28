@@ -42,6 +42,7 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 - Runtime extension tools:
   - `octoclaw_policy_decide`
   - `octoclaw_route`
+  - `octoclaw_route_hint`
   - `octoclaw_dispatch`
   - `octoclaw_status`
 - Persistent runner:
@@ -75,7 +76,7 @@ Recommended minimal open-source path:
 2. Keep notifications on `auto` or `none`
 3. Prefer `SUPERVISOR_MODE=tmux` and let `runner-daemon` / `patrol-loop` run in tmux
 4. Enable the bundled runtime extension from `extensions/octoclaw-runtime`
-5. Treat `direct` as a whitelist: route ambiguous work through `octoclaw_route`, then `octoclaw_dispatch`
+5. Treat `direct` as a whitelist: only `hard_runner_only` is pre-cut by code; all other ambiguous work should submit `octoclaw_route_hint`, then let runtime policy merge and enforce dispatch
 6. Use `status.sh --format table` to inspect state
 7. Run `eval_suite.py` once to establish a baseline
 
@@ -94,11 +95,15 @@ tmux attach -t octoclaw-runtime
 # In OpenClaw, prefer these tools when available:
 # octoclaw_policy_decide
 # octoclaw_route
+# octoclaw_route_hint
 # octoclaw_dispatch
 # octoclaw_status
 
 # Runtime policy decision object
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'compare these two services and decide whether to delegate'
+
+# Main-brain route hint merge
+python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'look at the nginx error log and summarize the likely cause' --route-hint-json '{"route_hint":"spawn_single","work_type":"research","phase":"inspect","review_required":false,"confidence":0.78,"reason":"needs log reading plus reasoning","source":"main_agent"}'
 
 # Route first
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze this error and give me a fix plan'
@@ -118,6 +123,9 @@ bash /workspace/openclaw/skills/octopus/lib/status.sh --format lanes
 
 # Replay / eval
 python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
+
+# Runtime policy replay log
+tail -n 30 /workspace/tmp/octopus/runtime-policy-replay.jsonl
 
 # Force a patrol cycle
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force

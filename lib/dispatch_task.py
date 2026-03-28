@@ -540,17 +540,27 @@ def main():
     parser.add_argument("--label", default="")
     parser.add_argument("--tier", default="")
     parser.add_argument("--force-route", choices=["auto", "direct", "runner", "spawn_single", "spawn_multi"], default="auto")
+    parser.add_argument("--policy-json", default="")
     parser.add_argument("--wait", action="store_true")
     parser.add_argument("--wait-timeout-seconds", dest="wait_timeout_seconds", type=int, default=12)
     args = parser.parse_args()
 
     task = args.task.strip()
-    forced_route = ""
-    if args.force_route != "auto":
-        forced_route = args.force_route
-    elif args.label in ("octopus-runner", "octoclaw-runner"):
-        forced_route = "runner"
-    decision = build_decision(task, args.command, force_route=forced_route)
+    decision = None
+    if args.policy_json:
+        try:
+            parsed = json.loads(args.policy_json)
+            if isinstance(parsed, dict):
+                decision = parsed
+        except json.JSONDecodeError:
+            decision = None
+    if not isinstance(decision, dict):
+        forced_route = ""
+        if args.force_route != "auto":
+            forced_route = args.force_route
+        elif args.label in ("octopus-runner", "octoclaw-runner"):
+            forced_route = "runner"
+        decision = build_decision(task, args.command, force_route=forced_route)
     args._policy_decision = decision
     route = decision_route(decision)
     model_meta = decision_model(decision)

@@ -37,7 +37,8 @@ OctoClaw 第一版不应默认依赖：
 1. **`hard_runner_only`**
 2. **主脑输出结构化 `route_hint`**
 3. **runtime policy / hook 执行强约束**
-4. **灰区分类器保留为后续可插拔增强**
+4. **记录 replay / route_hint / block event**
+5. **灰区分类器保留为后续可插拔增强**
 
 也就是说：
 
@@ -196,6 +197,7 @@ flowchart LR
 - 非 direct 场景禁止主脑直接乱用非控制型工具
 - 默认 skill bundle 由 runtime policy 注入
 - 高风险默认打开 review gate
+- `route_hint`、merge 结果、tool block、agent_end 进入 replay log
 
 ### 7.3 `runner`
 
@@ -292,4 +294,3 @@ classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 a
 ## 12. 一句话结论
 
 > **OctoClaw 当前最现实的灰区路由方案，不是“硬门禁 + classifier 优先”，而是“`hard_runner_only` + 主脑 `route_hint` + 系统强约束”，classifier 留作下一阶段增强。**
-
