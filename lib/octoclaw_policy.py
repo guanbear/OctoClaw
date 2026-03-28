@@ -25,6 +25,11 @@ from typing import Any
 from octoclaw_route import infer_route
 from octoclaw_spawn import resolve_model_and_thinking, resolve_profile
 from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config
+from worker_taxonomy import (
+    infer_worker_pool as taxonomy_infer_worker_pool,
+    legacy_label_for_worker_pool,
+    model_role_for_worker_pool,
+)
 
 
 SCHEMA_VERSION = "octoclaw.runtime_policy.decision/v1"
@@ -385,32 +390,18 @@ def infer_user_facing_profile(work_type: str, phase: str, route: str) -> str:
 
 
 def infer_worker_pool(route: str, work_type: str) -> str:
-    if route == "direct":
-        return "octoclaw-main"
-    if route == "runner":
-        return "octoclaw-runner"
-    if work_type == "review":
-        return "octoclaw-review"
-    if work_type == "code":
-        return "octoclaw-code"
-    return "octoclaw-research"
+    return taxonomy_infer_worker_pool(route, work_type)
 
 
-def infer_legacy_label(route_meta: dict[str, Any], work_type: str, phase: str, route: str) -> str:
+def infer_legacy_label(route_meta: dict[str, Any], work_type: str, phase: str, route: str, profile: str = "") -> str:
     role_hint = str(route_meta.get("role_hint", "") or "").strip()
-    if role_hint and role_hint != "main":
-        return role_hint
-    if route == "runner":
-        return "octopus-runner"
-    if work_type == "review":
-        return "octopus-test"
-    if work_type == "code":
-        return "octopus-fix"
-    if phase == "report":
-        return "octopus-writer"
-    if route == "spawn_multi":
-        return "octopus-power"
-    return "octopus-scout"
+    return legacy_label_for_worker_pool(
+        infer_worker_pool(route, work_type),
+        phase=phase,
+        route=route,
+        profile=profile,
+        role_hint=role_hint,
+    )
 
 
 def infer_new_tier(legacy_tier: str, protocol: str, route: str, high_risk: bool) -> str:
@@ -637,19 +628,33 @@ def build_decision(
     phase = merge_phase(route, base_phase, route_hint)
     executor_type = infer_executor_type(route)
     protocol = infer_protocol(features, route, work_type)
+    worker_pool = infer_worker_pool(route, work_type)
     legacy_tier = str(route_meta.get("tier_hint", "simple") or "simple")
-    legacy_label = infer_legacy_label(route_meta, work_type, phase, route)
     user_profile = infer_user_facing_profile(work_type, phase, route)
+    legacy_label = infer_legacy_label(route_meta, work_type, phase, route, user_profile)
+    model_selector_role = model_role_for_worker_pool(
+        worker_pool,
+        phase=phase,
+        route=route,
+        profile=user_profile,
+    )
     selected_model = ""
     model_thinking = ""
     if route != "runner":
-        selected_model, model_thinking = resolve_model_and_thinking(legacy_tier, legacy_label, task)
+        selected_model, model_thinking = resolve_model_and_thinking(
+            legacy_tier,
+            legacy_label,
+            task,
+            worker_pool=worker_pool,
+            phase=phase,
+            route=route,
+            profile=user_profile,
+        )
 
     spawn_profile = resolve_profile(legacy_label, selected_model, legacy_tier) if selected_model else ""
     profile = spawn_profile or user_profile
     reasoning_effort = reasoning_effort_from_config(runtime_cfg, legacy_tier, profile, model_thinking)
     new_tier = infer_new_tier(legacy_tier, protocol, route, bool(features.get("high_risk")))
-    worker_pool = infer_worker_pool(route, work_type)
     needs_review = review_required(features, route, work_type, protocol)
     if route_hint.get("review_required"):
         needs_review = True
@@ -697,6 +702,8 @@ def build_decision(
         "model_policy": {
             "legacy_label": legacy_label,
             "legacy_tier": legacy_tier,
+            "worker_pool": worker_pool,
+            "model_selector_role": model_selector_role,
             "tier": new_tier,
             "selected_model": selected_model,
             "profile": profile,

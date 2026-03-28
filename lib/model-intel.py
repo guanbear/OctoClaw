@@ -563,6 +563,40 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         "hard": labels["octopus-analyze"],
         "deep": labels["octopus-power"],
     }
+    profiles = {
+        "ops-fast": pick("runner"),
+        "research": pick("scout"),
+        "writer": pick("writer"),
+        "code": pick("fix"),
+        "review": pick("test"),
+    }
+    worker_pools = {
+        "octoclaw-runner": profiles["ops-fast"],
+        "octoclaw-research": profiles["research"],
+        "octoclaw-code": profiles["code"],
+        "octoclaw-review": profiles["review"],
+        "octoclaw-main": pick("main"),
+    }
+    worker_pool_phases = {
+        "octoclaw-runner": {
+            "inspect": pick("runner"),
+        },
+        "octoclaw-research": {
+            "collect": pick("scout"),
+            "inspect": pick("analyze"),
+            "report": pick("writer"),
+        },
+        "octoclaw-code": {
+            "implement": pick("fix"),
+            "verify": pick("test"),
+        },
+        "octoclaw-review": {
+            "verify": pick("test"),
+        },
+        "octoclaw-main": {
+            "orchestrate": pick("main"),
+        },
+    }
     sources = sorted({ref for model in models for ref in model.get("source_refs", [])})
     policy = {
         "generated_at": now_iso(),
@@ -570,6 +604,9 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         "main_model": pick("main"),
         "tiers": tiers,
         "labels": labels,
+        "profiles": profiles,
+        "worker_pools": worker_pools,
+        "worker_pool_phases": worker_pool_phases,
         "family_routing": {
             model["id"]: {
                 "family": model.get("family"),

@@ -169,6 +169,13 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["requires_research"])
         self.assertTrue(payload["features"]["requires_writing"])
 
+    def test_model_policy_tracks_worker_pool_first_with_legacy_label_as_compat(self) -> None:
+        payload = self.run_policy("调研三个兼容方案并写一版简短建议")
+        self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-research")
+        self.assertEqual(payload["model_policy"]["worker_pool"], "octoclaw-research")
+        self.assertEqual(payload["model_policy"]["model_selector_role"], "writer")
+        self.assertEqual(payload["model_policy"]["legacy_label"], "octopus-writer")
+
 
 if __name__ == "__main__":
     unittest.main()

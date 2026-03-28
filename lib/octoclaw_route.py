@@ -820,6 +820,11 @@ def choose_semantic_model_hint() -> str:
 
         policy = load_json(MODEL_POLICY_FILE)
         if isinstance(policy, dict):
+            worker_pools = policy.get("worker_pools", {})
+            if isinstance(worker_pools, dict):
+                model_id = str(worker_pools.get("octoclaw-runner", "") or "")
+                if model_id:
+                    return model_id
             labels = policy.get("labels", {})
             if isinstance(labels, dict):
                 model_id = str(labels.get("octopus-router", "") or labels.get("octopus-runner", "") or "")

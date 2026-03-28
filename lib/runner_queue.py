@@ -127,6 +127,9 @@ def prune_jobs(jobs: list[Any]) -> list[Any]:
 def runner_model() -> str:
     policy = load_json(MODEL_POLICY_FILE) or {}
     if isinstance(policy, dict):
+        worker_pool_model = policy.get("worker_pools", {}).get("octoclaw-runner")
+        if isinstance(worker_pool_model, str) and worker_pool_model:
+            return worker_pool_model
         label_model = policy.get("labels", {}).get("octopus-runner")
         if isinstance(label_model, str) and label_model:
             return label_model

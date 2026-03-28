@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 resolve-model.py — 八爪鱼统一模型选择入口
-用法: python3 resolve-model.py --tier hard [--label octopus-fix] [--description "任务描述"]
+用法:
+  python3 resolve-model.py --tier hard [--worker-pool octoclaw-code] [--profile code]
+  python3 resolve-model.py --tier hard [--label octopus-fix] [--description "任务描述"]
 输出: 完整模型路径，如 vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6
 
 选模型优先级:
@@ -145,12 +147,53 @@ def _get_current_mode() -> str:
     return "balanced"
 
 
-def cache_key(tier: str, label: str = "") -> str:
-    label = (label or "").strip()
-    return f"{label}::{tier}" if label else tier
+def selector_key(
+    label: str = "",
+    worker_pool: str = "",
+    phase: str = "",
+    profile: str = "",
+    route: str = "",
+) -> str:
+    parts = []
+    if profile:
+        parts.append(f"profile={str(profile).strip()}")
+    if worker_pool:
+        parts.append(f"worker_pool={str(worker_pool).strip()}")
+    if phase:
+        parts.append(f"phase={str(phase).strip()}")
+    if route:
+        parts.append(f"route={str(route).strip()}")
+    if label:
+        parts.append(f"label={str(label).strip()}")
+    return "|".join(part for part in parts if part)
 
 
-def read_cache(tier: str, label: str = "") -> str | None:
+def cache_key(
+    tier: str,
+    label: str = "",
+    worker_pool: str = "",
+    phase: str = "",
+    profile: str = "",
+    route: str = "",
+) -> str:
+    selector = selector_key(
+        label=label,
+        worker_pool=worker_pool,
+        phase=phase,
+        profile=profile,
+        route=route,
+    )
+    return f"{selector}::{tier}" if selector else tier
+
+
+def read_cache(
+    tier: str,
+    label: str = "",
+    worker_pool: str = "",
+    phase: str = "",
+    profile: str = "",
+    route: str = "",
+) -> str | None:
     """
     尝试读取模型缓存。命中返回模型路径，未命中返回 None。
     命中条件：
@@ -171,7 +214,16 @@ def read_cache(tier: str, label: str = "") -> str | None:
     if cache.get("ironclaw_guarded") != _get_ironclaw_guarded():
         return None
     models = cache.get("models", {})
-    return models.get(cache_key(tier, label)) or models.get(tier)
+    selected_key = cache_key(
+        tier,
+        label=label,
+        worker_pool=worker_pool,
+        phase=phase,
+        profile=profile,
+        route=route,
+    )
+    legacy_key = f"{str(label or '').strip()}::{tier}" if str(label or "").strip() else tier
+    return models.get(selected_key) or models.get(legacy_key) or models.get(tier)
 
 
 def write_cache(mode: str, ironclaw_guarded: bool, models: dict) -> None:
@@ -216,12 +268,37 @@ def build_short_name_map(aliases: dict) -> dict:
     return mapping
 
 
-def resolve_auto_policy_model(tier: str, label: str) -> str | None:
+def resolve_auto_policy_model(
+    tier: str,
+    label: str,
+    *,
+    worker_pool: str = "",
+    phase: str = "",
+    route: str = "",
+    profile: str = "",
+) -> str | None:
     policy = load_json(MODEL_POLICY_FILE)
     if not isinstance(policy, dict):
         return None
+    profiles = policy.get("profiles", {})
+    worker_pool_phases = policy.get("worker_pool_phases", {})
+    worker_pools = policy.get("worker_pools", {})
     labels = policy.get("labels", {})
     tiers = policy.get("tiers", {})
+    if profile and isinstance(profiles, dict):
+        profile_model = profiles.get(profile)
+        if isinstance(profile_model, str) and profile_model:
+            return profile_model
+    if worker_pool and phase and isinstance(worker_pool_phases, dict):
+        pool_entry = worker_pool_phases.get(worker_pool)
+        if isinstance(pool_entry, dict):
+            phase_model = pool_entry.get(phase)
+            if isinstance(phase_model, str) and phase_model:
+                return phase_model
+    if worker_pool and isinstance(worker_pools, dict):
+        pool_model = worker_pools.get(worker_pool)
+        if isinstance(pool_model, str) and pool_model:
+            return pool_model
     if label and isinstance(labels, dict):
         label_model = labels.get(label)
         if isinstance(label_model, str) and label_model:
@@ -231,6 +308,33 @@ def resolve_auto_policy_model(tier: str, label: str) -> str | None:
         if isinstance(tier_model, str) and tier_model:
             return tier_model
     return None
+
+
+def resolve_mode_short_name(
+    mode: str,
+    rules: dict,
+    tier: str,
+    *,
+    label: str = "",
+    worker_pool: str = "",
+    phase: str = "",
+    route: str = "",
+    profile: str = "",
+) -> str | None:
+    if mode == "auto":
+        return resolve_auto_policy_model(
+            tier,
+            label,
+            worker_pool=worker_pool,
+            phase=phase,
+            route=route,
+            profile=profile,
+        )
+    if mode == "custom":
+        tier_list = rules.get("custom", {}).get(tier, [])
+        return tier_list[0] if tier_list else None
+    tier_list = rules.get(mode, {}).get(tier, [])
+    return tier_list[0] if tier_list else None
 
 
 def resolve_short_name(short_name: str, aliases_data: dict | None) -> str:
@@ -258,6 +362,10 @@ def main():
     parser = argparse.ArgumentParser(description="八爪鱼统一模型选择入口")
     parser.add_argument("--tier", required=True, choices=VALID_TIERS, help="任务级别")
     parser.add_argument("--label", default="", help="任务标签（仅用于日志，不影响选模型）")
+    parser.add_argument("--worker-pool", dest="worker_pool", default="", help="优先 worker pool（Phase 3 source of truth）")
+    parser.add_argument("--phase", default="", help="工作阶段，如 collect/inspect/report/implement/verify")
+    parser.add_argument("--route", default="", help="当前 route，用于 team/runner 特殊优先级")
+    parser.add_argument("--profile", default="", help="用户侧 profile，如 code/research/review/writer")
     parser.add_argument("--description", default="", help="任务描述（用于多维度复杂度评分，可升级tier）")
     args = parser.parse_args()
 
@@ -266,7 +374,14 @@ def main():
     # ── Step 0: 检查模型缓存 ─────────────────────────────────────────────
     # 注意：description 评分结果不进缓存（缓存仅按 mode/guard 状态）
     # 缓存命中后若有 description 仍需做升级检测
-    cached_model = read_cache(tier, args.label)
+    cached_model = read_cache(
+        tier,
+        args.label,
+        worker_pool=args.worker_pool,
+        phase=args.phase,
+        profile=args.profile,
+        route=args.route,
+    )
     if cached_model:
         # 即使命中缓存，也检查 description 是否建议升级 tier
         if args.description:
@@ -277,7 +392,14 @@ def main():
                     file=sys.stderr,
                 )
                 tier = suggested_tier
-                cached_model = read_cache(tier, args.label)
+                cached_model = read_cache(
+                    tier,
+                    args.label,
+                    worker_pool=args.worker_pool,
+                    phase=args.phase,
+                    profile=args.profile,
+                    route=args.route,
+                )
         if cached_model:
             print(f"INFO: 命中模型缓存 tier={tier} model={cached_model}", file=sys.stderr)
             print(cached_model)
@@ -298,16 +420,16 @@ def main():
     mode = override_mode if override_mode else mode_data.get("mode", "balanced")
     rules = mode_data.get("modes", {})
 
-    auto_policy_model = resolve_auto_policy_model(tier, args.label) if mode == "auto" else None
-    if auto_policy_model:
-        short_name = auto_policy_model
-    # custom 模式：直接读 modes.custom[tier]
-    elif mode == "custom":
-        tier_list = rules.get("custom", {}).get(tier, [])
-        short_name = tier_list[0] if tier_list else None
-    else:
-        tier_list = rules.get(mode, {}).get(tier, [])
-        short_name = tier_list[0] if tier_list else None
+    short_name = resolve_mode_short_name(
+        mode,
+        rules,
+        tier,
+        label=args.label,
+        worker_pool=args.worker_pool,
+        phase=args.phase,
+        route=args.route,
+        profile=args.profile,
+    )
 
     # ── Step 3: 短名 → 完整路径（从别名文件推断）───────────────────────────
     aliases_data = load_json(ALIASES_FILE)
@@ -334,14 +456,16 @@ def main():
                 file=sys.stderr,
             )
             tier = suggested_tier
-            if mode == "auto":
-                upgraded_short = resolve_auto_policy_model(tier, args.label)
-            elif mode == "custom":
-                upgraded_list = rules.get("custom", {}).get(tier, [])
-                upgraded_short = upgraded_list[0] if upgraded_list else None
-            else:
-                upgraded_list = rules.get(mode, {}).get(tier, [])
-                upgraded_short = upgraded_list[0] if upgraded_list else None
+            upgraded_short = resolve_mode_short_name(
+                mode,
+                rules,
+                tier,
+                label=args.label,
+                worker_pool=args.worker_pool,
+                phase=args.phase,
+                route=args.route,
+                profile=args.profile,
+            )
             if not upgraded_short:
                 if aliases_data and tier in aliases_data:
                     up_full = aliases_data[tier]
@@ -379,19 +503,30 @@ def main():
     all_tiers_models: dict = {}
     for t in VALID_TIERS:
         if t == tier:
-            all_tiers_models[cache_key(t, args.label if mode == "auto" else "")] = full_path
-            if mode != "auto" or not args.label:
+            all_tiers_models[
+                cache_key(
+                    t,
+                    args.label if mode == "auto" else "",
+                    worker_pool=args.worker_pool if mode == "auto" else "",
+                    phase=args.phase if mode == "auto" else "",
+                    profile=args.profile if mode == "auto" else "",
+                    route=args.route if mode == "auto" else "",
+                )
+            ] = full_path
+            if mode != "auto" or not any([args.label, args.worker_pool, args.phase, args.profile, args.route]):
                 all_tiers_models[t] = full_path
         else:
             # 复用当前已解析的 mode/rules/aliases 快速计算其他 tier
-            if mode == "auto":
-                t_short = resolve_auto_policy_model(t, args.label)
-            elif mode == "custom":
-                t_list = rules.get("custom", {}).get(t, [])
-                t_short = t_list[0] if t_list else None
-            else:
-                t_list = rules.get(mode, {}).get(t, [])
-                t_short = t_list[0] if t_list else None
+            t_short = resolve_mode_short_name(
+                mode,
+                rules,
+                t,
+                label=args.label,
+                worker_pool=args.worker_pool,
+                phase=args.phase,
+                route=args.route,
+                profile=args.profile,
+            )
             if not t_short:
                 if aliases_data and t in aliases_data:
                     t_full = aliases_data[t]
@@ -410,8 +545,17 @@ def main():
                     curr = guard_data.get("current_model", "")
                     if orig and curr and t_full_path == orig:
                         t_full_path = curr
-            all_tiers_models[cache_key(t, args.label if mode == "auto" else "")] = t_full_path
-            if mode != "auto" or not args.label:
+            all_tiers_models[
+                cache_key(
+                    t,
+                    args.label if mode == "auto" else "",
+                    worker_pool=args.worker_pool if mode == "auto" else "",
+                    phase=args.phase if mode == "auto" else "",
+                    profile=args.profile if mode == "auto" else "",
+                    route=args.route if mode == "auto" else "",
+                )
+            ] = t_full_path
+            if mode != "auto" or not any([args.label, args.worker_pool, args.phase, args.profile, args.route]):
                 all_tiers_models[t] = t_full_path
     write_cache(mode, ironclaw_guarded, all_tiers_models)
     print(full_path)

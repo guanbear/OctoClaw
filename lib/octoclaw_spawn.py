@@ -29,6 +29,7 @@ from octopus_config import (
     load_octopus_config,
     spawn_operator_surface,
 )
+from worker_taxonomy import worker_pool_from_legacy_label
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -88,9 +89,27 @@ def expected_done_offset(tier: str) -> str:
     return f"+{minutes}min"
 
 
-def resolve_model_and_thinking(tier: str, label: str, description: str) -> tuple[str, str]:
+def resolve_model_and_thinking(
+    tier: str,
+    label: str,
+    description: str,
+    *,
+    worker_pool: str = "",
+    phase: str = "",
+    route: str = "",
+    profile: str = "",
+) -> tuple[str, str]:
+    cmd = ["python3", RESOLVE_MODEL_PY, "--tier", tier, "--label", label, "--description", description]
+    if worker_pool:
+        cmd.extend(["--worker-pool", worker_pool])
+    if phase:
+        cmd.extend(["--phase", phase])
+    if route:
+        cmd.extend(["--route", route])
+    if profile:
+        cmd.extend(["--profile", profile])
     result = subprocess.run(
-        ["python3", RESOLVE_MODEL_PY, "--tier", tier, "--label", label, "--description", description],
+        cmd,
         capture_output=True,
         text=True,
         check=False,
@@ -730,23 +749,33 @@ def build_spawn_spec(
     if final_label in ("main", "octopus-runner", "octoclaw-main", "octoclaw-runner"):
         final_label = infer_label(task)
     final_tier = tier or str(model_policy.get("legacy_tier", "") or "") or route_meta.get("tier_hint") or infer_tier(task, final_label)
+    work_type = str(route_decision.get("work_type", "") or "")
+    phase = str(route_decision.get("phase", "") or "")
+    protocol = str(route_decision.get("protocol", "") or "")
+    preliminary_profile = str(model_policy.get("profile", "") or "")
+    worker_pool = str(route_decision.get("worker_pool", "") or "")
     final_model = model or str(model_policy.get("selected_model", "") or "")
     thinking = str(model_policy.get("reasoning_effort", "") or "")
     if not final_model:
-        final_model, resolved_thinking = resolve_model_and_thinking(final_tier, final_label, task)
+        fallback_worker_pool = worker_pool or worker_pool_from_legacy_label(final_label)
+        final_model, resolved_thinking = resolve_model_and_thinking(
+            final_tier,
+            final_label,
+            task,
+            worker_pool=fallback_worker_pool,
+            phase=phase,
+            route=final_route,
+            profile=preliminary_profile,
+        )
         if not thinking:
             thinking = resolved_thinking
     if not final_model:
         raise ValueError("无法解析 spawn 模型")
-    profile = str(model_policy.get("profile", "") or "") or resolve_profile(final_label, final_model, final_tier)
-    work_type = str(route_decision.get("work_type", "") or "")
-    phase = str(route_decision.get("phase", "") or "")
-    protocol = str(route_decision.get("protocol", "") or "")
+    profile = preliminary_profile or resolve_profile(final_label, final_model, final_tier)
     skill_bundle = skill_policy.get("default_skill_bundle", [])
     if not isinstance(skill_bundle, list):
         skill_bundle = []
     review_required = bool(review_policy.get("required", False))
-    worker_pool = str(route_decision.get("worker_pool", "") or "")
     final_task_kind = str(task_kind or "").strip() or ("team_parent" if final_route == "spawn_multi" else "subtask")
     spawn_team_name = resolve_spawn_team_name()
     base_artifacts = initial_spawn_artifacts(route=final_route, runtime=runtime, team_name=spawn_team_name)
