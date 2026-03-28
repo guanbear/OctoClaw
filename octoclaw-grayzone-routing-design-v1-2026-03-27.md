@@ -335,6 +335,12 @@ classifier 不是独立总调度器，而应作为 runtime policy 的可插拔 a
 - `runtime_policy.route_stickiness.enabled`
 - `runtime_policy.hooks.*`
 
+部署建议：
+
+- 用独立 rollout 脚本安装 / 卸载 / 启停 runtime policy
+- 默认先走 `conservative`
+- 等 replay 稳定后再升到 `guided` 或 `enforced`
+
 ### Phase B
 
 - 记录 replay

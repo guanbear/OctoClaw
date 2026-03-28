@@ -552,6 +552,13 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - `runtime_policy.route_stickiness.enabled`
 - `runtime_policy.hooks.*`
 
+部署侧还应提供：
+
+- 可重复执行的安装脚本
+- 干净回退的卸载脚本
+- `conservative / guided / enforced` 这类可运维的 rollout preset
+- 推荐使用独立 rollout 入口，而不是把这类逻辑继续堆进主 `install.sh`
+
 灰区路由的详细设计见：
 
 - [octoclaw-grayzone-routing-design-v1-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-grayzone-routing-design-v1-2026-03-27.md)

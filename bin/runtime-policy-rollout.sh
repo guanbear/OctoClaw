@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+WORKSPACE="${WORKSPACE:-/workspace}"
+OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
+CONFIG_FILE="${OCTOCLAW_CONFIG_FILE:-${WORKSPACE}/tmp/octopus-config.json}"
+PRESET="${RUNTIME_POLICY_PRESET:-conservative}"
+EXT_SOURCE="${REPO_ROOT}/extensions/octoclaw-runtime"
+EXT_TARGET="${OPENCLAW_HOME}/extensions/octoclaw-runtime"
+DRY_RUN=false
+LINK_EXTENSION=true
+BACKUP_SUFFIX="$(date +%Y%m%d-%H%M%S)"
+EXTRA_ARGS=()
+
+usage() {
+    cat <<'EOF'
+Usage:
+  bin/runtime-policy-rollout.sh install [options]
+  bin/runtime-policy-rollout.sh enable [options]
+  bin/runtime-policy-rollout.sh disable [options]
+  bin/runtime-policy-rollout.sh uninstall [options]
+  bin/runtime-policy-rollout.sh show [options]
+
+Options:
+  --preset conservative|guided|enforced
+  --workspace PATH
+  --openclaw-home PATH
+  --config PATH
+  --dry-run
+  --no-link-extension
+  --enabled BOOL
+  --hard-runner-only BOOL
+  --route-hint-required BOOL
+  --replay-logging BOOL
+  --direct-model-override BOOL
+  --delegation-enforcement BOOL
+  --sticky-lane BOOL
+  --hook-before-model-resolve BOOL
+  --hook-before-prompt-build BOOL
+  --hook-before-tool-call BOOL
+  --hook-agent-end BOOL
+  --sticky-ttl-minutes N
+  --apply-on-followup-only BOOL
+EOF
+}
+
+log() {
+    printf '%s\n' "$*"
+}
+
+run_cmd() {
+    if [ "$DRY_RUN" = true ]; then
+        printf 'DRY-RUN:'
+        printf ' %q' "$@"
+        printf '\n'
+        return 0
+    fi
+    "$@"
+}
+
+backup_existing_target() {
+    local target="$1"
+    local backup="${target}.bak.${BACKUP_SUFFIX}"
+    if [ -L "$target" ] || [ -f "$target" ]; then
+        run_cmd mv "$target" "$backup"
+        log "✅ 已备份现有扩展 → $backup"
+    elif [ -d "$target" ]; then
+        run_cmd mv "$target" "$backup"
+        log "✅ 已备份现有扩展目录 → $backup"
+    fi
+}
+
+link_extension() {
+    [ "$LINK_EXTENSION" = true ] || return 0
+    if [ ! -d "$EXT_SOURCE" ]; then
+        log "⚠️ 未找到 runtime extension 源目录：$EXT_SOURCE"
+        return 1
+    fi
+    run_cmd mkdir -p "${OPENCLAW_HOME}/extensions"
+    if [ -e "$EXT_TARGET" ] || [ -L "$EXT_TARGET" ]; then
+        backup_existing_target "$EXT_TARGET"
+    fi
+    run_cmd ln -s "$EXT_SOURCE" "$EXT_TARGET"
+    log "✅ 已安装 runtime extension → $EXT_TARGET"
+}
+
+remove_extension() {
+    if [ -L "$EXT_TARGET" ] || [ -d "$EXT_TARGET" ] || [ -f "$EXT_TARGET" ]; then
+        backup_existing_target "$EXT_TARGET"
+    else
+        log "ℹ️  runtime extension 未安装，跳过"
+    fi
+}
+
+merge_config() {
+    local enabled_arg=()
+    if [ "$1" != "__keep__" ]; then
+        enabled_arg=(--enabled "$1")
+    fi
+    local cmd=(
+        "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" merge-config
+        --config "$CONFIG_FILE"
+        --preset "$PRESET"
+    )
+    if [ ${#enabled_arg[@]} -gt 0 ]; then
+        cmd+=("${enabled_arg[@]}")
+    fi
+    if [ ${#EXTRA_ARGS[@]} -gt 0 ]; then
+        cmd+=("${EXTRA_ARGS[@]}")
+    fi
+    run_cmd mkdir -p "$(dirname "$CONFIG_FILE")"
+    run_cmd "${cmd[@]}"
+}
+
+show_config() {
+    run_cmd "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" show-config --config "$CONFIG_FILE"
+}
+
+cleanup_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        log "ℹ️  未找到配置文件，跳过"
+        return 0
+    fi
+    local backup="${CONFIG_FILE}.bak.${BACKUP_SUFFIX}"
+    run_cmd cp "$CONFIG_FILE" "$backup"
+    log "✅ 已备份配置 → $backup"
+    run_cmd "$PYTHON_BIN" "${REPO_ROOT}/lib/runtime_policy_rollout.py" cleanup-config --config "$CONFIG_FILE"
+}
+
+COMMAND="${1:-}"
+if [ -z "$COMMAND" ]; then
+    usage
+    exit 1
+fi
+shift
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --preset)
+            PRESET="$2"
+            shift 2
+            ;;
+        --workspace)
+            WORKSPACE="$2"
+            CONFIG_FILE="${WORKSPACE}/tmp/octopus-config.json"
+            shift 2
+            ;;
+        --openclaw-home)
+            OPENCLAW_HOME="$2"
+            EXT_TARGET="${OPENCLAW_HOME}/extensions/octoclaw-runtime"
+            shift 2
+            ;;
+        --config)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --no-link-extension)
+            LINK_EXTENSION=false
+            shift
+            ;;
+        --enabled|--hard-runner-only|--route-hint-required|--replay-logging|--direct-model-override|--delegation-enforcement|--sticky-lane|--hook-before-model-resolve|--hook-before-prompt-build|--hook-before-tool-call|--hook-agent-end|--sticky-ttl-minutes|--apply-on-followup-only)
+            EXTRA_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            log "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+case "$COMMAND" in
+    install)
+        link_extension
+        merge_config true
+        ;;
+    enable)
+        merge_config true
+        ;;
+    disable)
+        EXTRA_ARGS+=(--route-hint-required false --direct-model-override false --delegation-enforcement false --hook-before-model-resolve false --hook-before-tool-call false)
+        merge_config false
+        ;;
+    uninstall)
+        remove_extension
+        cleanup_config
+        ;;
+    show)
+        show_config
+        ;;
+    *)
+        log "Unknown command: $COMMAND"
+        usage
+        exit 1
+        ;;
+esac

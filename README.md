@@ -110,6 +110,19 @@ Recommended gradual rollout switches in `tmp/octopus-config.json`:
 }
 ```
 
+Suggested rollout presets for `bin/runtime-policy-rollout.sh`:
+
+- `RUNTIME_POLICY_PRESET=conservative`
+  - installs the extension
+  - keeps replay on
+  - disables route-hint enforcement and delegation hard blocks
+- `RUNTIME_POLICY_PRESET=guided`
+  - enables route-hint collection and prompt guidance
+  - keeps direct model override and hard delegation enforcement off
+- `RUNTIME_POLICY_PRESET=enforced`
+  - enables the full runtime-policy path, including delegation enforcement
+  - best used only after replay validation
+
 ## Common Commands
 
 ```bash
@@ -118,6 +131,15 @@ ls ~/.openclaw/extensions/octoclaw-runtime
 
 # Recommended no-systemd supervisor mode
 SUPERVISOR_MODE=tmux PATROL_MODE=loop bash /workspace/openclaw/skills/octopus/install.sh
+
+# Conservative runtime-policy rollout
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset conservative
+
+# Guided runtime-policy rollout
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset guided
+
+# Fully enforced runtime-policy rollout
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset enforced
 
 # Attach to the OctoClaw tmux workbench
 tmux attach -t octoclaw-runtime
@@ -162,6 +184,18 @@ cat /workspace/tmp/octopus/route-stickiness.json
 
 # Force a patrol cycle
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
+
+# Disable runtime policy without uninstalling the extension
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh disable
+
+# Re-enable runtime policy after a paused rollout
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh enable --preset guided
+
+# Show the current runtime-policy config fragment
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh show
+
+# Uninstall runtime-policy rollout state and extension link
+bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh uninstall
 
 ```
 
