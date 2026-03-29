@@ -825,11 +825,9 @@ def choose_semantic_model_hint() -> str:
                 model_id = str(worker_pools.get("octoclaw-runner", "") or "")
                 if model_id:
                     return model_id
-            labels = policy.get("labels", {})
-            if isinstance(labels, dict):
-                model_id = str(labels.get("octopus-router", "") or labels.get("octopus-runner", "") or "")
-                if model_id:
-                    return model_id
+            main_model = str(policy.get("main_model", "") or "")
+            if main_model:
+                return main_model
     except Exception:
         pass
     return "minimax-portal/MiniMax-M2.7-highspeed"

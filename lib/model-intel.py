@@ -545,24 +545,6 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
             return model["id"]
         return ordered[0][0]["id"]
 
-    labels = {
-        "octopus-runner": pick("runner"),
-        "octopus-router": pick("router"),
-        "octopus-fix": pick("fix"),
-        "octopus-test": pick("test"),
-        "octopus-scout": pick("scout"),
-        "octopus-writer": pick("writer"),
-        "octopus-analyze": pick("analyze"),
-        "octopus-power": pick("power"),
-        "octopus-feishu": pick("runner"),
-    }
-    tiers = {
-        "trivial": labels["octopus-runner"],
-        "simple": labels["octopus-runner"],
-        "normal": labels["octopus-fix"],
-        "hard": labels["octopus-analyze"],
-        "deep": labels["octopus-power"],
-    }
     profiles = {
         "ops-fast": pick("runner"),
         "research": pick("scout"),
@@ -602,8 +584,6 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         "generated_at": now_iso(),
         "mode": mode,
         "main_model": pick("main"),
-        "tiers": tiers,
-        "labels": labels,
         "profiles": profiles,
         "worker_pools": worker_pools,
         "worker_pool_phases": worker_pool_phases,

@@ -830,7 +830,7 @@ case "$mode_choice" in
         done
         read -p "  🤖 主 Agent (main): " MAIN_MODEL
         ;;
-    *) MODE="balanced" ;;
+    *) MODE="auto" ;;
 esac
 
 # 写入模式文件（包含完整模式定义）
@@ -862,7 +862,7 @@ mode = {
     'mode': 'custom',
     'customModels': custom_models,
     'updated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-    'description': '自定义模式：每个触手使用指定模型，未指定的 fallback 平衡模式',
+    'description': '自定义模式：每个触手使用指定模型，未指定的 fallback 自动选模策略',
     'modes': {
         'speed': {'trivial': 'dynamic_fastest', 'simple': 'dynamic_fastest', 'normal': 'dynamic_fastest', 'deep': 'dynamic_fastest', 'concurrency': 5},
         'quality': {'trivial': 'claudeopus', 'simple': 'claudeopus', 'normal': 'claudeopus', 'deep': 'claudeopus', 'concurrency': 3},
@@ -985,7 +985,7 @@ switch_main_agent_model() {
     fi
 }
 
-# 自定义模式：如果用户指定了主 Agent 模型，直接传入；否则 fallback balanced
+# 自定义模式：如果用户指定了主 Agent 模型，直接传入；否则 fallback auto policy
 if [ "$MODE" = "custom" ] && [ -n "$MAIN_MODEL" ]; then
     switch_main_agent_model "custom_explicit" "$MAIN_MODEL"
 else

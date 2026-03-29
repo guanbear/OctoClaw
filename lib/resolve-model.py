@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
 """
-resolve-model.py — 八爪鱼统一模型选择入口
-用法:
-  python3 resolve-model.py --tier hard [--worker-pool octoclaw-code] [--profile code]
-  python3 resolve-model.py --tier hard [--label octopus-fix] [--description "任务描述"]
-输出: 完整模型路径，如 vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6
+resolve-model.py — OctoClaw model selection entry.
 
-选模型优先级:
-1. 读 /tmp/ironclaw-global-degradation.json: active=true → override_mode 覆盖当前模式
-2. 读 /workspace/tmp/octopus-mode.json: rules[mode][tier][0] 取短名
-3. 短名映射 → 完整路径（从 octopus-model-aliases.json 推断，或内置映射）
-4. 读 /tmp/ironclaw-model-guard-override.json: guarded=true 且选出模型==original_model → 改用 current_model
-5. 多维度描述分析（ClawRouter启发）：--description 若建议更高tier则自动升级
-6. 输出最终路径
+Primary path:
+1. Prefer worker_pool/profile/phase driven auto policy from model-policy.json
+2. Fall back to legacy mode/tier rules only when auto policy is unavailable
+3. Apply guard overrides and complexity-based upgrades
 """
 
 from __future__ import annotations
@@ -24,7 +17,7 @@ import re
 import sys
 import time
 
-from octopus_config import MODEL_POLICY_FILE, load_json as load_shared_json
+from octopus_config import CONFIG_FILE, MODEL_POLICY_FILE, load_json as load_shared_json
 
 GLOBAL_DEG_FILE = "/tmp/ironclaw-global-degradation.json"
 MODE_FILE = "/workspace/tmp/octopus-mode.json"
@@ -147,6 +140,46 @@ def _get_current_mode() -> str:
     return "balanced"
 
 
+def load_runtime_config() -> dict:
+    data = load_json(CONFIG_FILE)
+    return data if isinstance(data, dict) else {}
+
+
+def model_auto_enabled(config: dict | None = None) -> bool:
+    cfg = config if isinstance(config, dict) else load_runtime_config()
+    section = cfg.get("model_auto", {}) if isinstance(cfg, dict) else {}
+    return not isinstance(section, dict) or bool(section.get("enabled", True))
+
+
+def selector_context_present(
+    *,
+    label: str = "",
+    worker_pool: str = "",
+    phase: str = "",
+    profile: str = "",
+    route: str = "",
+) -> bool:
+    return any(str(value or "").strip() for value in (label, worker_pool, phase, profile, route))
+
+
+def has_auto_policy(policy: dict | None) -> bool:
+    if not isinstance(policy, dict):
+        return False
+    for key in ("profiles", "worker_pools", "worker_pool_phases", "main_model"):
+        value = policy.get(key)
+        if isinstance(value, dict) and value:
+            return True
+        if key == "main_model" and str(value or "").strip():
+            return True
+    return False
+
+
+def policy_generation_marker(policy: dict | None) -> str:
+    if not isinstance(policy, dict):
+        return ""
+    return str(policy.get("generated_at", "") or "").strip()
+
+
 def selector_key(
     label: str = "",
     worker_pool: str = "",
@@ -193,6 +226,10 @@ def read_cache(
     phase: str = "",
     profile: str = "",
     route: str = "",
+    *,
+    allow_generic_tier_fallback: bool = True,
+    policy_marker: str = "",
+    expected_mode: str = "",
 ) -> str | None:
     """
     尝试读取模型缓存。命中返回模型路径，未命中返回 None。
@@ -209,9 +246,12 @@ def read_cache(
     ttl = cache.get("ttl", CACHE_TTL)
     if now - generated_at > ttl:
         return None
-    if cache.get("mode") != _get_current_mode():
+    if cache.get("mode") != (expected_mode or _get_current_mode()):
         return None
     if cache.get("ironclaw_guarded") != _get_ironclaw_guarded():
+        return None
+    cached_policy_marker = str(cache.get("policy_marker", "") or "").strip()
+    if str(policy_marker or "").strip() != cached_policy_marker:
         return None
     models = cache.get("models", {})
     selected_key = cache_key(
@@ -222,17 +262,24 @@ def read_cache(
         profile=profile,
         route=route,
     )
-    legacy_key = f"{str(label or '').strip()}::{tier}" if str(label or "").strip() else tier
-    return models.get(selected_key) or models.get(legacy_key) or models.get(tier)
+    if selected_key in models:
+        return models.get(selected_key)
+    legacy_key = f"{str(label or '').strip()}::{tier}" if str(label or "").strip() else ""
+    if legacy_key and legacy_key in models:
+        return models.get(legacy_key)
+    if allow_generic_tier_fallback:
+        return models.get(tier)
+    return None
 
 
-def write_cache(mode: str, ironclaw_guarded: bool, models: dict) -> None:
+def write_cache(mode: str, ironclaw_guarded: bool, models: dict, *, policy_marker: str = "") -> None:
     """将所有 tier 的模型结果写入缓存文件。"""
     cache = {
         "generated_at": int(time.time()),
         "ttl": CACHE_TTL,
         "mode": mode,
         "ironclaw_guarded": ironclaw_guarded,
+        "policy_marker": str(policy_marker or "").strip(),
         "models": models,
     }
     try:
@@ -276,15 +323,14 @@ def resolve_auto_policy_model(
     phase: str = "",
     route: str = "",
     profile: str = "",
+    policy: dict | None = None,
 ) -> str | None:
-    policy = load_json(MODEL_POLICY_FILE)
+    policy = policy if isinstance(policy, dict) else load_json(MODEL_POLICY_FILE)
     if not isinstance(policy, dict):
         return None
     profiles = policy.get("profiles", {})
     worker_pool_phases = policy.get("worker_pool_phases", {})
     worker_pools = policy.get("worker_pools", {})
-    labels = policy.get("labels", {})
-    tiers = policy.get("tiers", {})
     if profile and isinstance(profiles, dict):
         profile_model = profiles.get(profile)
         if isinstance(profile_model, str) and profile_model:
@@ -299,14 +345,13 @@ def resolve_auto_policy_model(
         pool_model = worker_pools.get(worker_pool)
         if isinstance(pool_model, str) and pool_model:
             return pool_model
-    if label and isinstance(labels, dict):
-        label_model = labels.get(label)
-        if isinstance(label_model, str) and label_model:
-            return label_model
-    if isinstance(tiers, dict):
-        tier_model = tiers.get(tier)
-        if isinstance(tier_model, str) and tier_model:
-            return tier_model
+    main_model = str(policy.get("main_model", "") or "").strip()
+    if route == "direct" and main_model:
+        return main_model
+    if worker_pool == "octoclaw-main" and main_model:
+        return main_model
+    if main_model:
+        return main_model
     return None
 
 
@@ -370,6 +415,18 @@ def main():
     args = parser.parse_args()
 
     tier = args.tier
+    runtime_config = load_runtime_config()
+    policy_data = load_json(MODEL_POLICY_FILE)
+    selector_aware_request = selector_context_present(
+        label=args.label,
+        worker_pool=args.worker_pool,
+        phase=args.phase,
+        profile=args.profile,
+        route=args.route,
+    )
+    auto_policy_active = model_auto_enabled(runtime_config) and has_auto_policy(policy_data)
+    policy_marker = policy_generation_marker(policy_data) if auto_policy_active else ""
+    expected_cache_mode = "auto_policy" if auto_policy_active else _get_current_mode()
 
     # ── Step 0: 检查模型缓存 ─────────────────────────────────────────────
     # 注意：description 评分结果不进缓存（缓存仅按 mode/guard 状态）
@@ -381,6 +438,9 @@ def main():
         phase=args.phase,
         profile=args.profile,
         route=args.route,
+        allow_generic_tier_fallback=not (auto_policy_active and selector_aware_request),
+        policy_marker=policy_marker,
+        expected_mode=expected_cache_mode,
     )
     if cached_model:
         # 即使命中缓存，也检查 description 是否建议升级 tier
@@ -399,6 +459,9 @@ def main():
                     phase=args.phase,
                     profile=args.profile,
                     route=args.route,
+                    allow_generic_tier_fallback=not (auto_policy_active and selector_aware_request),
+                    policy_marker=policy_marker,
+                    expected_mode=expected_cache_mode,
                 )
         if cached_model:
             print(f"INFO: 命中模型缓存 tier={tier} model={cached_model}", file=sys.stderr)
@@ -420,7 +483,19 @@ def main():
     mode = override_mode if override_mode else mode_data.get("mode", "balanced")
     rules = mode_data.get("modes", {})
 
-    short_name = resolve_mode_short_name(
+    auto_selected_model = None
+    if auto_policy_active:
+        auto_selected_model = resolve_auto_policy_model(
+            tier,
+            args.label,
+            worker_pool=args.worker_pool,
+            phase=args.phase,
+            route=args.route,
+            profile=args.profile,
+            policy=policy_data,
+        )
+
+    short_name = None if auto_selected_model else resolve_mode_short_name(
         mode,
         rules,
         tier,
@@ -435,16 +510,23 @@ def main():
     aliases_data = load_json(ALIASES_FILE)
 
     # 如果 rules 里没找到，用别名文件作 fallback
-    if not short_name:
-        if aliases_data and tier in aliases_data:
-            full_path = aliases_data[tier]
-            if isinstance(full_path, str) and "/" in full_path:
-                short_name = full_path  # 别名文件已经是完整路径
+    if auto_selected_model:
+        full_path = auto_selected_model
+    else:
         if not short_name:
-            # 最终 fallback：balanced 模式逻辑
-            short_name = "glm" if tier in ("trivial", "simple", "normal") else "sonnet"
-
-    full_path = resolve_short_name(short_name, aliases_data)
+            if aliases_data and tier in aliases_data:
+                full_path = aliases_data[tier]
+                if not (isinstance(full_path, str) and "/" in full_path):
+                    full_path = ""
+            else:
+                full_path = ""
+            if not full_path:
+                # 最终 fallback：legacy balanced 逻辑
+                short_name = "glm" if tier in ("trivial", "simple", "normal") else "sonnet"
+        else:
+            full_path = ""
+        if not full_path:
+            full_path = resolve_short_name(short_name, aliases_data)
 
     # ── Step 3.5: 多维度描述升级检测 ─────────────────────────────────────
     # 若 description 建议更高 tier → 重新按更高 tier 选模型（仅升级，不降级）
@@ -456,24 +538,37 @@ def main():
                 file=sys.stderr,
             )
             tier = suggested_tier
-            upgraded_short = resolve_mode_short_name(
-                mode,
-                rules,
-                tier,
-                label=args.label,
-                worker_pool=args.worker_pool,
-                phase=args.phase,
-                route=args.route,
-                profile=args.profile,
-            )
-            if not upgraded_short:
-                if aliases_data and tier in aliases_data:
-                    up_full = aliases_data[tier]
-                    if isinstance(up_full, str) and "/" in up_full:
-                        upgraded_short = up_full
+            if auto_policy_active:
+                upgraded_model = resolve_auto_policy_model(
+                    tier,
+                    args.label,
+                    worker_pool=args.worker_pool,
+                    phase=args.phase,
+                    route=args.route,
+                    profile=args.profile,
+                    policy=policy_data,
+                )
+                if upgraded_model:
+                    full_path = upgraded_model
+            else:
+                upgraded_short = resolve_mode_short_name(
+                    mode,
+                    rules,
+                    tier,
+                    label=args.label,
+                    worker_pool=args.worker_pool,
+                    phase=args.phase,
+                    route=args.route,
+                    profile=args.profile,
+                )
                 if not upgraded_short:
-                    upgraded_short = "glm" if tier in ("trivial", "simple", "normal") else "sonnet"
-            full_path = resolve_short_name(upgraded_short, aliases_data)
+                    if aliases_data and tier in aliases_data:
+                        up_full = aliases_data[tier]
+                        if isinstance(up_full, str) and "/" in up_full:
+                            upgraded_short = up_full
+                    if not upgraded_short:
+                        upgraded_short = "glm" if tier in ("trivial", "simple", "normal") else "sonnet"
+                full_path = resolve_short_name(upgraded_short, aliases_data)
 
     # ── Step 4: 模型守卫降级检测 ─────────────────────────────────────────
     guard_data = load_json(GUARD_FILE)
@@ -501,63 +596,84 @@ def main():
     # 计算所有 tier 的模型，写入缓存（避免每个 tier 都重新计算）
     ironclaw_guarded = _get_ironclaw_guarded()
     all_tiers_models: dict = {}
-    for t in VALID_TIERS:
-        if t == tier:
-            all_tiers_models[
-                cache_key(
-                    t,
-                    args.label if mode == "auto" else "",
-                    worker_pool=args.worker_pool if mode == "auto" else "",
-                    phase=args.phase if mode == "auto" else "",
-                    profile=args.profile if mode == "auto" else "",
-                    route=args.route if mode == "auto" else "",
-                )
-            ] = full_path
-            if mode != "auto" or not any([args.label, args.worker_pool, args.phase, args.profile, args.route]):
-                all_tiers_models[t] = full_path
-        else:
-            # 复用当前已解析的 mode/rules/aliases 快速计算其他 tier
-            t_short = resolve_mode_short_name(
-                mode,
-                rules,
-                t,
+    if auto_policy_active and selector_aware_request:
+        all_tiers_models[
+            cache_key(
+                tier,
                 label=args.label,
                 worker_pool=args.worker_pool,
                 phase=args.phase,
-                route=args.route,
                 profile=args.profile,
+                route=args.route,
             )
-            if not t_short:
-                if aliases_data and t in aliases_data:
-                    t_full = aliases_data[t]
-                    if isinstance(t_full, str) and "/" in t_full:
-                        t_short = t_full
-                if not t_short:
-                    t_short = "glm" if t in ("trivial", "simple", "normal") else "sonnet"
-            t_full_path = resolve_short_name(t_short, aliases_data)
-            # 同样检查 guard
-            if guard_data and guard_data.get("guarded") is True:
-                g_status = guard_data.get("status", "")
-                if g_status == "ratelimit":
-                    t_full_path = BUILTIN_MAP.get("glm", "lixiang-glm-5/kivy-glm-5")
-                elif g_status != "all_fail":
-                    orig = guard_data.get("original_model", "")
-                    curr = guard_data.get("current_model", "")
-                    if orig and curr and t_full_path == orig:
-                        t_full_path = curr
-            all_tiers_models[
-                cache_key(
-                    t,
-                    args.label if mode == "auto" else "",
-                    worker_pool=args.worker_pool if mode == "auto" else "",
-                    phase=args.phase if mode == "auto" else "",
-                    profile=args.profile if mode == "auto" else "",
-                    route=args.route if mode == "auto" else "",
-                )
-            ] = t_full_path
-            if mode != "auto" or not any([args.label, args.worker_pool, args.phase, args.profile, args.route]):
-                all_tiers_models[t] = t_full_path
-    write_cache(mode, ironclaw_guarded, all_tiers_models)
+        ] = full_path
+    else:
+        for t in VALID_TIERS:
+            if t == tier:
+                all_tiers_models[
+                    cache_key(
+                        t,
+                        args.label if auto_policy_active else "",
+                        worker_pool=args.worker_pool if auto_policy_active else "",
+                        phase=args.phase if auto_policy_active else "",
+                        profile=args.profile if auto_policy_active else "",
+                        route=args.route if auto_policy_active else "",
+                    )
+                ] = full_path
+                if not (auto_policy_active and selector_aware_request):
+                    all_tiers_models[t] = full_path
+            else:
+                if auto_policy_active:
+                    t_full_path = resolve_auto_policy_model(
+                        t,
+                        args.label,
+                        worker_pool=args.worker_pool,
+                        phase=args.phase,
+                        route=args.route,
+                        profile=args.profile,
+                        policy=policy_data,
+                    ) or full_path
+                else:
+                    t_short = resolve_mode_short_name(
+                        mode,
+                        rules,
+                        t,
+                        label=args.label,
+                        worker_pool=args.worker_pool,
+                        phase=args.phase,
+                        route=args.route,
+                        profile=args.profile,
+                    )
+                    if not t_short:
+                        if aliases_data and t in aliases_data:
+                            t_full = aliases_data[t]
+                            if isinstance(t_full, str) and "/" in t_full:
+                                t_short = t_full
+                        if not t_short:
+                            t_short = "glm" if t in ("trivial", "simple", "normal") else "sonnet"
+                    t_full_path = resolve_short_name(t_short, aliases_data)
+                if guard_data and guard_data.get("guarded") is True:
+                    g_status = guard_data.get("status", "")
+                    if g_status == "ratelimit":
+                        t_full_path = BUILTIN_MAP.get("glm", "lixiang-glm-5/kivy-glm-5")
+                    elif g_status != "all_fail":
+                        orig = guard_data.get("original_model", "")
+                        curr = guard_data.get("current_model", "")
+                        if orig and curr and t_full_path == orig:
+                            t_full_path = curr
+                all_tiers_models[
+                    cache_key(
+                        t,
+                        args.label if auto_policy_active else "",
+                        worker_pool=args.worker_pool if auto_policy_active else "",
+                        phase=args.phase if auto_policy_active else "",
+                        profile=args.profile if auto_policy_active else "",
+                        route=args.route if auto_policy_active else "",
+                    )
+                ] = t_full_path
+                if not (auto_policy_active and selector_aware_request):
+                    all_tiers_models[t] = t_full_path
+    write_cache(expected_cache_mode, ironclaw_guarded, all_tiers_models, policy_marker=policy_marker)
     print(full_path)
 
 

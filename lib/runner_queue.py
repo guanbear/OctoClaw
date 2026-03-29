@@ -130,9 +130,9 @@ def runner_model() -> str:
         worker_pool_model = policy.get("worker_pools", {}).get("octoclaw-runner")
         if isinstance(worker_pool_model, str) and worker_pool_model:
             return worker_pool_model
-        label_model = policy.get("labels", {}).get("octopus-runner")
-        if isinstance(label_model, str) and label_model:
-            return label_model
+        main_model = str(policy.get("main_model", "") or "").strip()
+        if main_model:
+            return main_model
     return ""
 
 

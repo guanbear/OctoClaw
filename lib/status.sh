@@ -83,6 +83,11 @@ config_data = load_octopus_config()
 runner_health = load_json(RUNNER_HEALTH_FILE) or {}
 RUNNER_STALE_SECONDS = 120
 workbench = workbench_config(config_data)
+model_auto_cfg = config_data.get("model_auto", {}) if isinstance(config_data, dict) else {}
+auto_policy_ready = bool(model_auto_cfg.get("enabled", True)) and any(
+    isinstance(policy_data.get(key), dict) and policy_data.get(key)
+    for key in ("profiles", "worker_pools", "worker_pool_phases")
+)
 
 mode = mode_data.get("mode", "balanced")
 MODE_LABELS = {
@@ -95,6 +100,8 @@ MODE_LABELS = {
     "auto": "自动选模",
 }
 mode_label = MODE_LABELS.get(mode, mode)
+if auto_policy_ready:
+    mode_label = "自动选模（policy-first）"
 
 rules = mode_data.get("modes", {}).get(mode, {})
 
@@ -179,6 +186,10 @@ def tier_model_full(tier):
     if alias_full:
         return alias_full
     return "?"
+
+
+def worker_pool_model_full(worker_pool):
+    return str(policy_data.get("worker_pools", {}).get(worker_pool, "") or "").strip() or "?"
 
 
 def _extract_session_model_from_file(session_file):
@@ -365,12 +376,19 @@ main_session_model = load_main_session_actual_model()
 actual_model = main_session_model.get("model_path", "")
 print("A) 🤖 主会话实际模型：" + (actual_model or "?"))
 print(f"B) 🧭 OctoClaw 调度策略：{mode_label}")
-print(
-    "   trivial/simple → "
-    f"{tier_model_full('trivial')}  |  normal/hard → {tier_model_full('normal')}  |  deep → {tier_model_full('deep')}"
-)
+if auto_policy_ready:
+    print(
+        "   runner → "
+        f"{worker_pool_model_full('octoclaw-runner')}  |  research → {worker_pool_model_full('octoclaw-research')}  |  "
+        f"code → {worker_pool_model_full('octoclaw-code')}  |  review → {worker_pool_model_full('octoclaw-review')}"
+    )
+else:
+    print(
+        "   trivial/simple → "
+        f"{tier_model_full('trivial')}  |  normal/hard → {tier_model_full('normal')}  |  deep → {tier_model_full('deep')}"
+    )
 main_model = str(policy_data.get("main_model", "") or "").strip()
-if mode == "auto" and main_model:
+if (mode == "auto" or auto_policy_ready) and main_model:
     print(f"   策略主链 → {main_model}")
 print(f"🖥️  视图：{fmt}")
 workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
