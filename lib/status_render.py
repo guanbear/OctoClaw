@@ -552,81 +552,76 @@ def _compact_lineage_lines(lineage: dict[str, Any], now: datetime) -> list[str]:
     return lines
 
 
+def _anchor_text(task: dict[str, Any], now: datetime) -> str:
+    anchor = build_task_anchor(task, now=now)
+    actions = build_task_actions(task)
+    return render_task_anchor_text(anchor, actions)
+
+
+def _lineage_step_summary(lineage: dict[str, Any]) -> str:
+    step_rows = lineage.get("step_rows", []) if isinstance(lineage.get("step_rows", []), list) else []
+    if not step_rows:
+        return ""
+    parts: list[str] = []
+    for step_row in step_rows[:4]:
+        if not isinstance(step_row, dict):
+            continue
+        child = step_row.get("task", {}) if isinstance(step_row.get("task", {}), dict) else {}
+        step_name = str(step_row.get("step", "") or child.get("phase", "") or child.get("id", "") or "step").strip()
+        status = _task_status_label(child)
+        parts.append(f"{step_name}({status})")
+    if len(step_rows) > 4:
+        parts.append(f"+{len(step_rows) - 4}")
+    return "子步骤：" + " · ".join(parts) if parts else ""
+
+
+def _append_anchor_section(lines: list[str], title: str, tasks: list[dict], now: datetime, *, limit: int) -> None:
+    lines.append(title)
+    if not tasks:
+        lines.append("(none)")
+        lines.append("")
+        return
+    for task in tasks[:limit]:
+        lines.append(_anchor_text(task, now))
+        lines.append("")
+
+
 def render_status_text_compact(snapshot: dict) -> str:
     now = snapshot["now"]
     recent_done_count = len(snapshot["done_recent"])
     recent_failed_count = len(snapshot["failed_recent"])
+    problem_tasks = list(snapshot["steer_needed"]) + list(snapshot["failed_recent"])
     lines = [
-        "🐙 八爪鱼（OctoClaw）任务面板",
+        "🐙 八爪鱼（OctoClaw）任务收件箱",
         (
             f"流程 {len(snapshot['active_lineages'])} | 运行中 {len(snapshot['running'])} | "
             f"排队 {len(snapshot['queued'])} | 待确认 {len(snapshot['pending'])} | "
-            f"异常 {len(snapshot['failed_recent']) + len(snapshot['steer_needed'])}"
+            f"异常 {len(problem_tasks)} | 近期完成 {recent_done_count}"
         ),
         "",
     ]
+
     if snapshot["active_lineages"]:
-        lines.append(f"🕸️ 多子任务流程（{len(snapshot['active_lineages'])}个）")
+        lines.append(f"🕸️ 协作流程（{len(snapshot['active_lineages'])}个）")
         for lineage in snapshot["active_lineages"][:4]:
-            lines.extend(_compact_lineage_lines(lineage, now))
-        lines.append("")
-    if snapshot["running"]:
-        lines.append(f"🔵 运行中（{len(snapshot['running'])}个）")
-        lines.extend(_compact_task_line(task, now) for task in snapshot["running"][:8])
-        lines.append("")
-    if snapshot["queued"]:
-        lines.append(f"⏸️ 排队中（{len(snapshot['queued'])}个）")
-        for task in snapshot["queued"][:6]:
-            deps = ",".join(task.get("deps", [])[:2]) or "?"
-            lines.append(
-                f"  {task_role_emoji(task)} {task_role_name(task)} · {task_model_display(task.get('model', ''))} · "
-                f"{model_cost_badge(task.get('model', ''))} · {task_model_band(task)[:8]} · wait {deps}"
-                f"{(' · ' + operator_hint(task)) if operator_hint(task) else ''}"
-            )
-            lines.append(f"    └ {preferred_task_title(task, limit=52)}")
-        lines.append("")
-    if snapshot["steer_needed"]:
-        lines.append(f"🩹 恢复中（{len(snapshot['steer_needed'])}个）")
-        for task in snapshot["steer_needed"][:6]:
-            reason = task.get("session_status") or task.get("recovery_action") or "needs attention"
-            lines.append(
-                f"  {task_role_emoji(task)} {task_role_name(task)} · {task_model_display(task.get('model', ''))} · "
-                f"{task_model_band(task)[:8]} · {str(reason)[:24]}"
-            )
-            lines.append(f"    └ {preferred_task_title(task, limit=52)}")
-        lines.append("")
-    if recent_done_count or recent_failed_count:
-        lines.append(f"📋 近期结束（最近30分钟）：✅完成{recent_done_count} ❌失败{recent_failed_count}")
-    if snapshot["done_recent"]:
-        for task in snapshot["done_recent"][:5]:
-            duration = format_duration_between(
-                task.get("started_at") or task.get("spawned_at") or "",
-                task.get("completed_at") or "",
-                now,
-            )
-            completed = format_clock(task.get("completed_at") or "", now)
-            lines.append(
-                f"  ✅ {task_role_emoji(task)} {task_role_name(task)} · "
-                f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
-                f"{task_model_band(task)[:8]} · {duration} · {completed}"
-            )
-            lines.append(f"    └ {preferred_task_title(task, limit=60)}")
-    if snapshot["failed_recent"]:
-        for task in snapshot["failed_recent"][:5]:
-            duration = format_duration_between(
-                task.get("started_at") or task.get("spawned_at") or "",
-                task.get("completed_at") or "",
-                now,
-            )
-            completed = format_clock(task.get("completed_at") or "", now)
-            lines.append(
-                f"  ❌ {task_role_emoji(task)} {task_role_name(task)} · "
-                f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
-                f"{task_model_band(task)[:8]} · {duration} · {completed}"
-            )
-            lines.append(f"    └ {preferred_task_title(task, limit=60)}")
-    if recent_done_count or recent_failed_count:
-        lines.append("")
+            parent = lineage.get("parent", {}) if isinstance(lineage.get("parent", {}), dict) else {}
+            if not parent:
+                continue
+            lines.append(_anchor_text(parent, now))
+            step_summary = _lineage_step_summary(lineage)
+            if step_summary:
+                lines.append(step_summary)
+            lines.append("")
+
+    _append_anchor_section(lines, f"🔵 运行中（{len(snapshot['running'])}个）", snapshot["running"], now, limit=6)
+    _append_anchor_section(lines, f"⏸️ 排队中（{len(snapshot['queued'])}个）", snapshot["queued"], now, limit=6)
+    _append_anchor_section(lines, f"❓ 待确认（{len(snapshot['pending'])}个）", snapshot["pending"], now, limit=4)
+    _append_anchor_section(lines, f"⚠️ 异常与恢复（{len(problem_tasks)}个）", problem_tasks, now, limit=6)
+    _append_anchor_section(lines, f"✅ 最近完成（{recent_done_count}个）", snapshot["done_recent"], now, limit=4)
+
+    if recent_failed_count:
+        lines.append(f"📉 最近失败：{recent_failed_count}")
+
     return "\n".join(lines).rstrip()
 
 

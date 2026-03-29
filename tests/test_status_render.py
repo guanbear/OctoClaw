@@ -105,14 +105,15 @@ class StatusRenderTests(unittest.TestCase):
         snapshot = build_status_snapshot(self.tasks, now=self.now)
         rendered = render_status_text_compact(snapshot)
 
-        self.assertIn("🕸️ 多子任务流程（1个）", rendered)
+        self.assertIn("🐙 八爪鱼（OctoClaw）任务收件箱", rendered)
+        self.assertIn("🕸️ 协作流程（1个）", rendered)
         self.assertIn("Fix and verify the release pipeline", rendered)
-        self.assertIn("planner", rendered)
-        self.assertIn("[done", rendered)
-        self.assertIn("review", rendered)
-        self.assertIn("[queued", rendered)
-        self.assertIn("clawteam/tmux", rendered)
-        self.assertIn("tmux octoclaw-runtime:runner", rendered)
+        self.assertIn("子步骤：planner(done) · review(queued)", rendered)
+        self.assertIn("🔵 运行中（1个）", rendered)
+        self.assertIn("⏸️ 排队中（1个）", rendered)
+        self.assertIn("Reply with:", rendered)
+        self.assertIn("details team-parent", rendered)
+        self.assertIn("stop single-research", rendered)
 
     def test_table_and_lanes_render_include_team_lane(self) -> None:
         snapshot = build_status_snapshot(self.tasks, now=self.now)
@@ -213,6 +214,17 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("Reply with:", rendered)
         self.assertIn("details", rendered)
         self.assertIn("queue", rendered)
+
+    def test_compact_render_shows_empty_sections_when_idle(self) -> None:
+        snapshot = build_status_snapshot([], now=self.now)
+        rendered = render_status_text_compact(snapshot)
+
+        self.assertIn("🔵 运行中（0个）", rendered)
+        self.assertIn("⏸️ 排队中（0个）", rendered)
+        self.assertIn("❓ 待确认（0个）", rendered)
+        self.assertIn("⚠️ 异常与恢复（0个）", rendered)
+        self.assertIn("✅ 最近完成（0个）", rendered)
+        self.assertIn("(none)", rendered)
 
     def test_main_model_drift_summary_renders_aligned_and_drifted_states(self) -> None:
         aligned = render_main_model_drift_summary(

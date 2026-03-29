@@ -254,51 +254,6 @@ def load_tasks():
 ts = now.strftime("%Y-%m-%d %H:%M")
 print(f"🐙 八爪鱼状态 [{ts}]")
 print("━━━━━━━━━━━━━━━━━━━━")
-print(f"⚙️  模式：{mode_label}")
-backend = config_data.get("notification", {}).get("backend", "auto")
-print(f"🔔 通知：{backend}")
-bridge_summary = load_bridge_summary()
-if bridge_summary.get("enabled"):
-    counts = bridge_summary.get("counts", {}) or {}
-    bridge_tasks = sum(int(v or 0) for v in counts.values())
-    backend = bridge_summary.get("backend", "mirror")
-    cli_note = ""
-    if backend in ("hybrid", "cli"):
-        cli_note = " · cli-ready" if bridge_summary.get("cli_available") else " · cli-missing"
-    print(
-        f"🤝 Bridge：{bridge_summary.get('team', 'octoclaw-validation')} · "
-        f"{backend}{cli_note} · tasks {bridge_tasks} · "
-        f"lineages {bridge_summary.get('lineage_count', 0)} · inbox {bridge_summary.get('inbox_count', 0)}"
-    )
-replay_status = summarize_replay_status(config_data)
-if replay_status:
-    if replay_status.get("missing"):
-        print(f"🧪 RuntimePolicy：{replay_status.get('phase', 'conservative')} · replay missing")
-    else:
-        promotion = replay_status.get("promotion", {}) or {}
-        effective_phase = str(replay_status.get("effective_phase") or promotion.get("phase") or "conservative")
-        target = str(promotion.get("target") or effective_phase)
-        ready = bool(promotion.get("ready"))
-        next_label = f"建议升 {target}" if ready and effective_phase != "enforced" else f"继续 {effective_phase}"
-        if effective_phase == "enforced":
-            next_label = "已在 enforced"
-        task_metrics = replay_status.get("task_metrics", {}) or {}
-        route_hint_metrics = replay_status.get("route_hint_metrics", {}) or {}
-        tool_metrics = replay_status.get("tool_metrics", {}) or {}
-        observed_packs = replay_status.get("observed_language_packs", {}) or {}
-        packs_text = ", ".join(observed_packs.keys()) if observed_packs else "n/a"
-        print(
-            f"🧪 RuntimePolicy：{effective_phase} · {next_label} · "
-            f"tasks {task_metrics.get('task_event_count', 0)} · "
-            f"runner {task_metrics.get('runner_task_count', 0)} · "
-            f"delegated {task_metrics.get('delegated_task_count', 0)}"
-        )
-        print(
-            "   replay: "
-            f"hint {compact_ratio(route_hint_metrics.get('submission_rate'))} · "
-            f"blocked {compact_ratio(tool_metrics.get('blocked_session_rate'))} · "
-            f"packs {packs_text}"
-        )
 runner_health_ok = False
 runner_health_age = None
 if isinstance(runner_health, dict) and runner_health.get("worker_id"):
@@ -323,36 +278,6 @@ if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     stale_note = ""
     if runner_health_age is not None and not runner_health_ok:
         stale_note = f" · stale {runner_health_age}s"
-    print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
-main_session_model = load_main_session_actual_model()
-actual_model = main_session_model.get("model_path", "")
-model_health_summary = summarize_model_health(model_health_state)
-for line in render_model_health_summary(model_health_summary):
-    print(line)
-print("A) 🤖 主会话实际模型：" + (actual_model or "?"))
-print(f"B) 🧭 OctoClaw 调度策略：{mode_label}")
-print(
-    "   runner → "
-    f"{worker_pool_model_full('octoclaw-runner')}  |  research → {worker_pool_model_full('octoclaw-research')}  |  "
-    f"code → {worker_pool_model_full('octoclaw-code')}  |  review → {worker_pool_model_full('octoclaw-review')}"
-)
-main_model = str(policy_data.get("main_model", "") or "").strip()
-if main_model:
-    print(f"   策略主链 → {main_model}")
-main_drift = assess_main_model_drift(config=config_data)
-for line in render_main_model_drift_summary(main_drift):
-    print(line)
-print(f"🖥️  视图：{fmt}")
-workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
-tmux_session_name = str(workbench.get("tmux_session_name", "") or "").strip()
-if workbench_mode == "tmux" and tmux_session_name:
-    runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
-    patrol_window = str(workbench.get("tmux_patrol_window_name", "patrol") or "patrol").strip() or "patrol"
-    print(f"🧰 Workbench：tmux {tmux_session_name} · runner={runner_window} · patrol={patrol_window}")
-else:
-    print(f"🧰 Workbench：{workbench_mode}")
-print("━━━━━━━━━━━━━━━━━━━━")
-
 tasks = load_tasks()
 if not runner_health_ok and isinstance(runner_health, dict) and runner_health.get("worker_id"):
     for task in tasks:
@@ -360,6 +285,104 @@ if not runner_health_ok and isinstance(runner_health, dict) and runner_health.ge
             task["status"] = "queued"
             task["summary"] = str(task.get("summary") or "runner 心跳过期，等待恢复")
 snapshot = build_status_snapshot(tasks, now=now)
+
+backend = config_data.get("notification", {}).get("backend", "auto")
+bridge_summary = load_bridge_summary()
+replay_status = summarize_replay_status(config_data)
+main_session_model = load_main_session_actual_model()
+actual_model = main_session_model.get("model_path", "")
+model_health_summary = summarize_model_health(model_health_state)
+main_model = str(policy_data.get("main_model", "") or "").strip()
+main_drift = assess_main_model_drift(config=config_data)
+workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
+tmux_session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+
+task_first_view = fmt in ("compact", "anchors")
+if task_first_view:
+    print(
+        f"任务 {len(snapshot['running']) + len(snapshot['queued']) + len(snapshot['pending']) + len(snapshot['active_lineages'])} · "
+        f"运行中 {len(snapshot['running'])} · 排队 {len(snapshot['queued'])} · "
+        f"待确认 {len(snapshot['pending'])} · 协作流 {len(snapshot['active_lineages'])}"
+    )
+    if replay_status:
+        if replay_status.get("missing"):
+            print(f"RuntimePolicy：{replay_status.get('phase', 'conservative')} · replay missing")
+        else:
+            promotion = replay_status.get("promotion", {}) or {}
+            effective_phase = str(replay_status.get("effective_phase") or promotion.get("phase") or "conservative")
+            target = str(promotion.get("target") or effective_phase)
+            ready = bool(promotion.get("ready"))
+            next_label = f"建议升 {target}" if ready and effective_phase != "enforced" else f"继续 {effective_phase}"
+            if effective_phase == "enforced":
+                next_label = "已在 enforced"
+            print(f"RuntimePolicy：{effective_phase} · {next_label}")
+    print("━━━━━━━━━━━━━━━━━━━━")
+else:
+    print(f"⚙️  模式：{mode_label}")
+    print(f"🔔 通知：{backend}")
+    if bridge_summary.get("enabled"):
+        counts = bridge_summary.get("counts", {}) or {}
+        bridge_tasks = sum(int(v or 0) for v in counts.values())
+        backend = bridge_summary.get("backend", "mirror")
+        cli_note = ""
+        if backend in ("hybrid", "cli"):
+            cli_note = " · cli-ready" if bridge_summary.get("cli_available") else " · cli-missing"
+        print(
+            f"🤝 Bridge：{bridge_summary.get('team', 'octoclaw-validation')} · "
+            f"{backend}{cli_note} · tasks {bridge_tasks} · "
+            f"lineages {bridge_summary.get('lineage_count', 0)} · inbox {bridge_summary.get('inbox_count', 0)}"
+        )
+    if replay_status:
+        if replay_status.get("missing"):
+            print(f"🧪 RuntimePolicy：{replay_status.get('phase', 'conservative')} · replay missing")
+        else:
+            promotion = replay_status.get("promotion", {}) or {}
+            effective_phase = str(replay_status.get("effective_phase") or promotion.get("phase") or "conservative")
+            target = str(promotion.get("target") or effective_phase)
+            ready = bool(promotion.get("ready"))
+            next_label = f"建议升 {target}" if ready and effective_phase != "enforced" else f"继续 {effective_phase}"
+            if effective_phase == "enforced":
+                next_label = "已在 enforced"
+            task_metrics = replay_status.get("task_metrics", {}) or {}
+            route_hint_metrics = replay_status.get("route_hint_metrics", {}) or {}
+            tool_metrics = replay_status.get("tool_metrics", {}) or {}
+            observed_packs = replay_status.get("observed_language_packs", {}) or {}
+            packs_text = ", ".join(observed_packs.keys()) if observed_packs else "n/a"
+            print(
+                f"🧪 RuntimePolicy：{effective_phase} · {next_label} · "
+                f"tasks {task_metrics.get('task_event_count', 0)} · "
+                f"runner {task_metrics.get('runner_task_count', 0)} · "
+                f"delegated {task_metrics.get('delegated_task_count', 0)}"
+            )
+            print(
+                "   replay: "
+                f"hint {compact_ratio(route_hint_metrics.get('submission_rate'))} · "
+                f"blocked {compact_ratio(tool_metrics.get('blocked_session_rate'))} · "
+                f"packs {packs_text}"
+            )
+    if isinstance(runner_health, dict) and runner_health.get("worker_id"):
+        print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
+    for line in render_model_health_summary(model_health_summary):
+        print(line)
+    print("A) 🤖 主会话实际模型：" + (actual_model or "?"))
+    print(f"B) 🧭 OctoClaw 调度策略：{mode_label}")
+    print(
+        "   runner → "
+        f"{worker_pool_model_full('octoclaw-runner')}  |  research → {worker_pool_model_full('octoclaw-research')}  |  "
+        f"code → {worker_pool_model_full('octoclaw-code')}  |  review → {worker_pool_model_full('octoclaw-review')}"
+    )
+    if main_model:
+        print(f"   策略主链 → {main_model}")
+    for line in render_main_model_drift_summary(main_drift):
+        print(line)
+    print(f"🖥️  视图：{fmt}")
+    if workbench_mode == "tmux" and tmux_session_name:
+        runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
+        patrol_window = str(workbench.get("tmux_patrol_window_name", "patrol") or "patrol").strip() or "patrol"
+        print(f"🧰 Workbench：tmux {tmux_session_name} · runner={runner_window} · patrol={patrol_window}")
+    else:
+        print(f"🧰 Workbench：{workbench_mode}")
+    print("━━━━━━━━━━━━━━━━━━━━")
 
 if fmt == "table":
     print(render_status_table(snapshot))
@@ -369,6 +392,26 @@ elif fmt == "anchors":
     print(render_status_task_anchors(snapshot))
 else:
     print(render_status_text_compact(snapshot))
+
+if task_first_view:
+    diagnostics = []
+    if isinstance(runner_health, dict) and runner_health.get("worker_id"):
+        diagnostics.append(f"Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
+    model_health_lines = render_model_health_summary(model_health_summary)
+    if model_health_lines and model_health_lines != ["🩺 模型健康：no health signals yet"]:
+        diagnostics.extend(model_health_lines)
+    drift_lines = render_main_model_drift_summary(main_drift)
+    if drift_lines and drift_lines != [f"🧭 主链漂移：aligned · {main_model}"] and drift_lines != ["🧭 主链漂移：disabled"]:
+        diagnostics.extend(drift_lines)
+    if actual_model:
+        diagnostics.append(f"主会话模型：{actual_model}")
+    if main_model:
+        diagnostics.append(f"策略主链：{main_model}")
+    if diagnostics:
+        print("━━━━━━━━━━━━━━━━━━━━")
+        print("诊断")
+        for line in diagnostics:
+            print(line)
 
 print("━━━━━━━━━━━━━━━━━━━━")
 PYEOF

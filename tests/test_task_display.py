@@ -177,7 +177,7 @@ class TaskDisplayTests(unittest.TestCase):
             [
                 {"id": "a", "worker_pool": "octoclaw-runner", "status": "running", "summary": "check port", "route": "runner"},
                 {"id": "b", "worker_pool": "octoclaw-code", "status": "queued", "summary": "patch code", "route": "spawn_single"},
-                {"id": "c", "worker_pool": "octoclaw-review", "status": "blocked", "summary": "waiting approval", "route": "spawn_single"},
+                {"id": "c", "worker_pool": "octoclaw-review", "status": "needs_approval", "summary": "waiting approval", "route": "spawn_single"},
                 {"id": "d", "worker_pool": "octoclaw-research", "status": "done", "summary": "finished report", "route": "spawn_single"},
             ],
             now=self.now,
@@ -187,6 +187,53 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual([item["task_id"] for item in queue["queued"]], ["b"])
         self.assertEqual([item["task_id"] for item in queue["blocked"]], ["c"])
         self.assertEqual([item["task_id"] for item in queue["recently_completed"]], ["d"])
+
+    def test_final_blocked_task_surfaces_as_recent_completion(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "research-blocked-1",
+                "worker_pool": "octoclaw-research",
+                "status": "blocked",
+                "summary": "source access blocked",
+                "route": "spawn_single",
+                "completed_at": "2026-03-29T07:58:00+00:00",
+                "artifacts": {
+                    "worker_result": {
+                        "status": "blocked",
+                        "summary": "Could not access the article body, but a safe blocked explanation is ready.",
+                        "report": "/tmp/research-blocked-1.md",
+                    }
+                },
+            },
+            now=self.now,
+        )
+        queue = build_task_queue_view(
+            [
+                {
+                    "id": "research-blocked-1",
+                    "worker_pool": "octoclaw-research",
+                    "status": "blocked",
+                    "summary": "source access blocked",
+                    "route": "spawn_single",
+                    "completed_at": "2026-03-29T07:58:00+00:00",
+                    "artifacts": {
+                        "worker_result": {
+                            "status": "blocked",
+                            "summary": "Could not access the article body, but a safe blocked explanation is ready.",
+                            "report": "/tmp/research-blocked-1.md",
+                        }
+                    },
+                }
+            ],
+            now=self.now,
+        )
+
+        self.assertEqual(anchor["queue_bucket"], "recently_completed")
+        self.assertEqual(anchor["state"], "blocked")
+        self.assertEqual(anchor["handoff_state"], "user_safe_ready")
+        self.assertIn("handoff ready", anchor["state_label"])
+        self.assertEqual(queue["blocked"], [])
+        self.assertEqual([item["task_id"] for item in queue["recently_completed"]], ["research-blocked-1"])
 
 
 if __name__ == "__main__":
