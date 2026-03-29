@@ -464,6 +464,33 @@ output_path.write_text(text, encoding="utf-8")
 PY
 }
 
+_systemd_restart_unit_safely() {
+    local service_name="$1"
+    local active_state="" sub_state="" waited=0
+
+    systemctl stop "$service_name" >/dev/null 2>&1 || true
+
+    while [ "$waited" -lt 5 ]; do
+        active_state="$(systemctl show -p ActiveState --value "$service_name" 2>/dev/null || true)"
+        sub_state="$(systemctl show -p SubState --value "$service_name" 2>/dev/null || true)"
+        if [ "$active_state" != "deactivating" ] && [ "$sub_state" != "stop-sigterm" ] && [ "$sub_state" != "stop-post" ]; then
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    active_state="$(systemctl show -p ActiveState --value "$service_name" 2>/dev/null || true)"
+    sub_state="$(systemctl show -p SubState --value "$service_name" 2>/dev/null || true)"
+    if [ "$active_state" = "deactivating" ] || [ "$sub_state" = "stop-sigterm" ] || [ "$sub_state" = "stop-post" ]; then
+        systemctl kill --signal=SIGKILL --kill-who=all "$service_name" >/dev/null 2>&1 || true
+        systemctl reset-failed "$service_name" >/dev/null 2>&1 || true
+        sleep 1
+    fi
+
+    systemctl start "$service_name"
+}
+
 _install_systemd_units() {
     if ! _systemd_available; then
         echo "ℹ️  当前环境未检测到 systemd，跳过 systemd 守护安装"
@@ -502,7 +529,7 @@ _start_runner_service() {
     mode="$(_resolve_supervisor_mode)"
     if [ "$mode" = "systemd" ]; then
         _install_systemd_units || return 1
-        systemctl restart "$_SYSTEMD_RUNNER_SERVICE"
+        _systemd_restart_unit_safely "$_SYSTEMD_RUNNER_SERVICE"
         echo "✅ runner 已由 systemd 托管：$_SYSTEMD_RUNNER_SERVICE"
         return 0
     fi
@@ -547,7 +574,7 @@ _start_patrol_service() {
     mode="$(_resolve_supervisor_mode)"
     if [ "$mode" = "systemd" ]; then
         _install_systemd_units || return 1
-        systemctl restart "$_SYSTEMD_PATROL_SERVICE"
+        _systemd_restart_unit_safely "$_SYSTEMD_PATROL_SERVICE"
         echo "✅ patrol 已由 systemd 托管：$_SYSTEMD_PATROL_SERVICE"
         return 0
     fi
@@ -983,6 +1010,29 @@ python3 - << EOF
 import json
 from datetime import datetime, timezone
 
+def load_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def deep_merge(base, override):
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+existing = {}
+legacy_cfg = load_json("${WORKSPACE}/tmp/octopus-config.json")
+current_cfg = load_json("${OCTOPUS_CONFIG_FILE}")
+existing = deep_merge(existing, legacy_cfg)
+existing = deep_merge(existing, current_cfg)
+
 main_origin = "${MAIN_SESSION_CHANNEL}"
 if main_origin == "auto":
     main_origin = ""
@@ -1015,6 +1065,47 @@ cfg = {
     "tmux_patrol_window_name": "${TMUX_PATROL_WINDOW_NAME}",
   }
 }
+
+preserve_keys = [
+    "runtime_policy",
+    "model_health",
+    "replay_automation",
+    "clawteam_bridge",
+    "spawn_execution",
+    "runner",
+]
+for key in preserve_keys:
+    value = existing.get(key)
+    if isinstance(value, dict):
+        cfg[key] = value
+
+existing_main = existing.get("main_session")
+if isinstance(existing_main, dict):
+    session_key = str(existing_main.get("session_key", "") or "").strip()
+    if session_key:
+        cfg["main_session"]["session_key"] = session_key
+
+if not isinstance(cfg.get("runtime_policy"), dict):
+    cfg["runtime_policy"] = {
+        "enabled": True,
+        "switches": {
+            "hard_runner_only": True,
+            "route_hint_required": False,
+            "replay_logging": True,
+            "direct_model_override": False,
+            "delegation_enforcement": False,
+        },
+        "route_stickiness": {
+            "enabled": False,
+        },
+        "hooks": {
+            "before_model_resolve": False,
+            "before_prompt_build": True,
+            "before_tool_call": False,
+            "agent_end": True,
+        },
+    }
+
 with open("${OCTOPUS_CONFIG_FILE}", "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 print("✅ 已写入统一配置 octoclaw-config.json")
@@ -1196,7 +1287,7 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
         -X POST "$GATEWAY_URL/api/cron/jobs" \
         -H "Content-Type: application/json" \
         ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-        -d "$UPDATE_CHECK_PAYLOAD")
+        -d "$UPDATE_CHECK_PAYLOAD" || printf "000")
 
     if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
         echo "✅ octopus-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
@@ -1272,7 +1363,7 @@ install_probe_cron() {
         -X POST "$GATEWAY_URL/api/cron/jobs" \
         -H "Content-Type: application/json" \
         ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-        -d "$PROBE_PAYLOAD")
+        -d "$PROBE_PAYLOAD" || printf "000")
 
     if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
         echo "✅ octopus-probe cron 注册成功（每15分钟，时间戳复用策略）"
@@ -1338,7 +1429,7 @@ JSON
         -X POST "$GATEWAY_URL/api/cron/jobs" \
         -H "Content-Type: application/json" \
         ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-        -d "$PLAN_SYNC_PAYLOAD")
+        -d "$PLAN_SYNC_PAYLOAD" || printf "000")
 
     if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
         echo "✅ octopus-plan-sync cron 注册成功（每${interval_minutes}分钟）"
@@ -1396,7 +1487,7 @@ JSON
             -X POST "$GATEWAY_URL/api/cron/jobs" \
             -H "Content-Type: application/json" \
             ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-            -d "$REVIEW_PAYLOAD")
+            -d "$REVIEW_PAYLOAD" || printf "000")
         if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
             echo "✅ octopus-error-review cron 注册成功（每天02:30）"
         else

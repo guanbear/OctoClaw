@@ -107,13 +107,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "switches": {
             "hard_runner_only": True,
-            "route_hint_required": True,
+            "route_hint_required": False,
             "replay_logging": True,
-            "direct_model_override": True,
-            "delegation_enforcement": True,
+            "direct_model_override": False,
+            "delegation_enforcement": False,
         },
         "route_stickiness": {
-            "enabled": True,
+            "enabled": False,
             "ttl_minutes": 180,
             "apply_on_followup_only": True,
             "ack_followup_enabled": True,
@@ -129,9 +129,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "heavy": "high",
         },
         "hooks": {
-            "before_model_resolve": True,
+            "before_model_resolve": False,
             "before_prompt_build": True,
-            "before_tool_call": True,
+            "before_tool_call": False,
             "agent_end": True,
         },
         "skill_bundles": {

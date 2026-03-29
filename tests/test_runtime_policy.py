@@ -15,16 +15,27 @@ ROUTE_SCRIPT = REPO_ROOT / "lib" / "octoclaw_route.py"
 
 
 class RuntimePolicyTests(unittest.TestCase):
-    def write_runtime_config(self, workspace: str, *, route_language_packs: Optional[list[str]] = None) -> None:
-        config: dict[str, object] = {}
+    def write_runtime_config(
+        self,
+        workspace: str,
+        *,
+        route_language_packs: Optional[list[str]] = None,
+        sticky_lane_enabled: Optional[bool] = None,
+    ) -> None:
+        runtime_policy: dict[str, object] = {}
         if route_language_packs is not None:
-            config = {
-                "runtime_policy": {
-                    "route_language_packs": {
-                        "enabled": route_language_packs,
-                    }
-                }
+            runtime_policy["route_language_packs"] = {
+                "enabled": route_language_packs,
             }
+        if sticky_lane_enabled is not None:
+            runtime_policy["route_stickiness"] = {
+                "enabled": sticky_lane_enabled,
+                "ack_followup_enabled": True,
+            }
+            runtime_policy["switches"] = {
+                "route_hint_required": True,
+            }
+        config: dict[str, object] = {"runtime_policy": runtime_policy} if runtime_policy else {}
         if config:
             with open(Path(workspace) / "tmp" / "octopus-config.json", "w", encoding="utf-8") as fh:
                 json.dump(config, fh)
@@ -47,7 +58,11 @@ class RuntimePolicyTests(unittest.TestCase):
     ) -> dict:
         with tempfile.TemporaryDirectory(prefix="octoclaw-policy-test-") as workspace:
             os.makedirs(Path(workspace) / "tmp" / "octopus", exist_ok=True)
-            self.write_runtime_config(workspace, route_language_packs=route_language_packs)
+            self.write_runtime_config(
+                workspace,
+                route_language_packs=route_language_packs,
+                sticky_lane_enabled=True if sticky_route else None,
+            )
             if model_policy is not None:
                 self.write_model_policy(workspace, model_policy)
             if sticky_route:
