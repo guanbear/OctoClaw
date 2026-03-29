@@ -155,6 +155,19 @@ def merge_artifacts(task: dict[str, Any]) -> dict[str, Any]:
         artifacts["context_summary"] = context_summary
     if files_changed:
         artifacts["files_changed"] = files_changed
+
+    operator_surface = artifacts.get("operator_surface")
+    if isinstance(operator_surface, dict):
+        try:
+            from task_display import build_operator_task_surface
+        except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+            from lib.task_display import build_operator_task_surface
+
+        merged_surface = dict(operator_surface)
+        display_surface = build_operator_task_surface(task)
+        merged_surface.update(display_surface)
+        artifacts["operator_surface"] = merged_surface
+        artifacts["display_text"] = str(display_surface.get("text_fallback", "") or "")
     return artifacts
 
 

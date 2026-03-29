@@ -7,11 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
-    from runtime_task_record import normalize_task_record
-except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.runtime_task_record import normalize_task_record
-
-try:
     from worker_taxonomy import role_display
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import role_display
@@ -34,6 +29,18 @@ def _text_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
     return []
+
+
+def _normalize_task(task: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(task, dict):
+        return {}
+    if _text(task.get("schema_version")).startswith("octoclaw.runtime_task.record/"):
+        return dict(task)
+    try:
+        from runtime_task_record import normalize_task_record
+    except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+        from lib.runtime_task_record import normalize_task_record
+    return normalize_task_record(task)
 
 
 def _compact(text: str, limit: int = 96) -> str:
@@ -163,7 +170,7 @@ def _collect_artifacts(task: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
-    normalized = normalize_task_record(task)
+    normalized = _normalize_task(task)
     state = _text(normalized.get("status")).lower()
     actions: list[dict[str, Any]] = [
         {
@@ -254,7 +261,7 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
-    normalized = normalize_task_record(task)
+    normalized = _normalize_task(task)
     state = _text(normalized.get("status")).lower()
     display = role_display(normalized)
     summary = _compact(_text(normalized.get("summary") or normalized.get("task_description")), limit=120)
@@ -291,9 +298,9 @@ def build_task_detail(
     all_tasks: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    normalized = normalize_task_record(task)
+    normalized = _normalize_task(task)
     anchor = build_task_anchor(normalized, now=now)
-    all_normalized = [normalize_task_record(item) for item in (all_tasks or []) if isinstance(item, dict)]
+    all_normalized = [_normalize_task(item) for item in (all_tasks or []) if isinstance(item, dict)]
     task_id = _text(normalized.get("id"))
     child_ids = _text_list(normalized.get("child_ids"))
     if not child_ids:
@@ -361,6 +368,18 @@ def build_task_queue_view(tasks: list[dict[str, Any]], *, now: datetime | None =
         "queued": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in QUEUE_STATES],
         "blocked": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in BLOCKED_STATES],
         "recently_completed": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in {"done", "completed"}],
+    }
+
+
+def build_operator_task_surface(task: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    normalized = _normalize_task(task)
+    anchor = build_task_anchor(normalized, now=now)
+    actions = build_task_actions(normalized)
+    return {
+        "schema_version": "octoclaw.task_display/v1",
+        "task_anchor": anchor,
+        "task_actions": actions,
+        "text_fallback": render_task_anchor_text(anchor, actions),
     }
 
 
