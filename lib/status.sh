@@ -4,6 +4,7 @@
 #   bash /workspace/openclaw/skills/octopus/lib/status.sh
 #   bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
 #   bash /workspace/openclaw/skills/octopus/lib/status.sh --format lanes
+#   bash /workspace/openclaw/skills/octopus/lib/status.sh --format anchors
 
 FORMAT="compact"
 while [[ $# -gt 0 ]]; do
@@ -69,6 +70,7 @@ from status_render import (
     render_main_model_drift_summary,
     render_model_health_summary,
     render_status_lanes,
+    render_status_task_anchors,
     render_status_table,
     render_status_text_compact,
     short_model,
@@ -363,6 +365,8 @@ if fmt == "table":
     print(render_status_table(snapshot))
 elif fmt == "lanes":
     print(render_status_lanes(snapshot))
+elif fmt == "anchors":
+    print(render_status_task_anchors(snapshot))
 else:
     print(render_status_text_compact(snapshot))
 

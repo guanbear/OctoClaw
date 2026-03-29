@@ -11,6 +11,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import is_runner_task, resolve_executor, resolve_model_band, resolve_worker_pool, role_display
 
+try:
+    from task_display import build_task_actions, build_task_anchor, render_task_anchor_text
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.task_display import build_task_actions, build_task_anchor, render_task_anchor_text
+
 FINAL_STATUSES = {"done", "failed", "deferred", "completed"}
 SUCCESS_STATUSES = {"done", "completed"}
 
@@ -775,3 +780,49 @@ def render_status_lanes(snapshot: dict) -> str:
         else:
             lines.append("  └─ idle")
     return "\n".join(lines)
+
+
+def render_status_task_anchors(snapshot: dict) -> str:
+    now = snapshot["now"]
+    lines = ["🐙 八爪鱼（OctoClaw）任务锚点", ""]
+
+    anchors: list[str] = []
+
+    for lineage in snapshot.get("active_lineages", [])[:6]:
+        parent = lineage.get("parent", {})
+        if not isinstance(parent, dict):
+            continue
+        anchor = build_task_anchor(parent, now=now)
+        actions = build_task_actions(parent)
+        anchors.append(render_task_anchor_text(anchor, actions))
+
+    for group_name in ("running", "queued", "pending", "steer_needed"):
+        for task in snapshot.get(group_name, [])[:8]:
+            if not isinstance(task, dict):
+                continue
+            anchor = build_task_anchor(task, now=now)
+            actions = build_task_actions(task)
+            anchors.append(render_task_anchor_text(anchor, actions))
+
+    done_recent = snapshot.get("done_recent", []) if isinstance(snapshot.get("done_recent", []), list) else []
+    for task in done_recent[:4]:
+        if not isinstance(task, dict):
+            continue
+        anchor = build_task_anchor(task, now=now)
+        actions = build_task_actions(task)
+        anchors.append(render_task_anchor_text(anchor, actions))
+
+    failed_recent = snapshot.get("failed_recent", []) if isinstance(snapshot.get("failed_recent", []), list) else []
+    for task in failed_recent[:4]:
+        if not isinstance(task, dict):
+            continue
+        anchor = build_task_anchor(task, now=now)
+        actions = build_task_actions(task)
+        anchors.append(render_task_anchor_text(anchor, actions))
+
+    if not anchors:
+        lines.append("(no visible task anchors)")
+        return "\n".join(lines)
+
+    lines.append("\n\n".join(anchors))
+    return "\n".join(lines).rstrip()

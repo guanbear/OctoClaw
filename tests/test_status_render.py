@@ -6,6 +6,7 @@ from lib.status_render import (
     build_status_snapshot,
     render_main_model_drift_summary,
     render_model_health_summary,
+    render_status_task_anchors,
     render_status_lanes,
     render_status_table,
     render_status_text_compact,
@@ -201,6 +202,17 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("cooldown 1", rendered)
         self.assertIn("quota high/critical 1/1", rendered)
         self.assertIn("zhipu/GLM-5.1 cooldown quota:high", rendered)
+
+    def test_task_anchor_render_outputs_text_fallback_anchors(self) -> None:
+        snapshot = build_status_snapshot(self.tasks, now=self.now)
+        rendered = render_status_task_anchors(snapshot)
+
+        self.assertIn("八爪鱼（OctoClaw）任务锚点", rendered)
+        self.assertIn("OctoClaw task", rendered)
+        self.assertIn("Fix and verify the release pipeline", rendered)
+        self.assertIn("Reply with:", rendered)
+        self.assertIn("details", rendered)
+        self.assertIn("queue", rendered)
 
     def test_main_model_drift_summary_renders_aligned_and_drifted_states(self) -> None:
         aligned = render_main_model_drift_summary(
