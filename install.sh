@@ -1125,6 +1125,10 @@ esac
 echo "✅ 已设置为 ${MODE_LABEL}"
 
 OCTOPUS_CONFIG_FILE="$WORKSPACE/tmp/octoclaw-config.json"
+CLAWTEAM_AVAILABLE="false"
+if command -v clawteam >/dev/null 2>&1; then
+    CLAWTEAM_AVAILABLE="true"
+fi
 python3 - << EOF
 import json
 from datetime import datetime, timezone
@@ -1182,6 +1186,29 @@ cfg = {
     "tmux_session_name": "${TMUX_SESSION_NAME}",
     "tmux_runner_window_name": "${TMUX_RUNNER_WINDOW_NAME}",
     "tmux_patrol_window_name": "${TMUX_PATROL_WINDOW_NAME}",
+  },
+  "clawteam_bridge": {
+    "enabled": "${CLAWTEAM_AVAILABLE}".lower() == "true",
+    "backend": "hybrid",
+    "team_name": "octoclaw-validation",
+    "inbox_owner": "main",
+    "emit_result_mail": True,
+    "clawteam_bin": "clawteam",
+    "clawteam_data_dir": "",
+    "auto_create_team": True,
+    "team_description": "OctoClaw validation bridge team",
+    "leader_name": "main",
+  },
+  "spawn_execution": {
+    "enabled": "${CLAWTEAM_AVAILABLE}".lower() == "true",
+    "backend": "clawteam",
+    "backend_name": "tmux",
+    "team_name": "octoclaw-validation",
+    "workspace": False,
+    "agent_name_prefix": "octo",
+    "openclaw_bin": "openclaw",
+    "default_profile": "",
+    "profile_by_model_prefix": {},
   }
 }
 
@@ -1196,7 +1223,7 @@ preserve_keys = [
 for key in preserve_keys:
     value = existing.get(key)
     if isinstance(value, dict):
-        cfg[key] = value
+        cfg[key] = deep_merge(cfg.get(key, {}), value)
 
 existing_main = existing.get("main_session")
 if isinstance(existing_main, dict):
