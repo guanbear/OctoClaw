@@ -38,11 +38,21 @@ def load_custom_main_model() -> str:
     return str(custom_models.get("main", "") or "").strip()
 
 
+def resolve_session_api_key(main_session: str) -> str:
+    text = str(main_session or "").strip()
+    if not text:
+        return ""
+    if text.startswith("agent:main:"):
+        return text
+    return f"agent:main:{text}"
+
+
 def set_session_model(model_path: str | None) -> bool:
     main_session = resolve_main_session_key()
     if not main_session:
         print("Error: main session not found", file=sys.stderr)
         return False
+    session_key = resolve_session_api_key(main_session)
     try:
         gateway_port = 3000
         config_path = os.path.expanduser("~/.openclaw/openclaw.json")
@@ -51,7 +61,7 @@ def set_session_model(model_path: str | None) -> bool:
                 config = json.load(f)
             gateway_port = config.get("port", 3000)
 
-        url = f"http://localhost:{gateway_port}/api/sessions/agent:main:{main_session}"
+        url = f"http://localhost:{gateway_port}/api/sessions/{session_key}"
         payload = {"modelOverride": model_path}
         result = subprocess.run(
             [
