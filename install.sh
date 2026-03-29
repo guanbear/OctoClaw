@@ -200,6 +200,34 @@ except Exception:
 " 2>/dev/null
 }
 
+_openclaw_cron_list() {
+    local attempt output
+    for attempt in 1 2 3; do
+        if output="$(openclaw cron list 2>/tmp/octoclaw-cron-cli.err)"; then
+            printf '%s\n' "$output"
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
+_openclaw_cron_exists() {
+    local cron_name="$1"
+    _openclaw_cron_list 2>/dev/null | grep -q "$cron_name"
+}
+
+_openclaw_cron_add() {
+    local attempt
+    for attempt in 1 2 3; do
+        if openclaw cron add "$@"; then
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
+
 _delete_cron_by_name() {
     local cron_name="$1"
     local gw_url gw_token job_id http_code
@@ -1197,7 +1225,7 @@ install_patrol_cron() {
         echo "🔄 巡逻模式：loop（零 token），间隔 ${PATROL_INTERVAL}s"
 
         # 迁移：若旧版已注册 octopus-patrol cron，删除它（避免重复运行浪费 token）
-        if command -v openclaw &>/dev/null && openclaw cron list 2>/dev/null | grep -q "octopus-patrol"; then
+        if command -v openclaw &>/dev/null && _openclaw_cron_exists "octopus-patrol"; then
             echo "ℹ️  检测到旧版 octopus-patrol cron，迁移删除中..."
             _delete_cron_by_name "octopus-patrol"
         fi
@@ -1211,7 +1239,7 @@ install_patrol_cron() {
             return 0
         fi
         echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
-        if openclaw cron list 2>/dev/null | grep -q "octopus-update-check"; then
+        if _openclaw_cron_exists "octopus-update-check"; then
             echo "ℹ️  octopus-update-check cron 已存在，跳过"
             return 0
         fi
@@ -1238,7 +1266,7 @@ except Exception:
 " 2>/dev/null)
 
         # 注册 octopus-patrol cron
-        if openclaw cron list 2>/dev/null | grep -q "octopus-patrol"; then
+        if _openclaw_cron_exists "octopus-patrol"; then
             echo "ℹ️  octopus-patrol cron 已存在，跳过"
         else
             if [[ -n "$USER_OPEN_ID" ]]; then
@@ -1258,7 +1286,7 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
 
 执行完成后直接结束，无需回复或发送任何其他通知。'
 
-            if openclaw cron add \
+            if _openclaw_cron_add \
                 --name octopus-patrol \
                 --every 1m \
                 --session isolated \
@@ -1272,38 +1300,24 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
         fi
 
         echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
-        if openclaw cron list 2>/dev/null | grep -q "octopus-update-check"; then
+        if _openclaw_cron_exists "octopus-update-check"; then
             echo "ℹ️  octopus-update-check cron 已存在，跳过"
             return 0
         fi
     fi
-    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
-    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
 
-    UPDATE_CHECK_PAYLOAD='{
-  "name": "octopus-update-check",
-  "schedule": {"kind": "cron", "expression": "0 9 * * *", "timezone": "Asia/Shanghai"},
-  "payload": {
-    "kind": "agentTurn",
-    "message": "执行八爪鱼版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1",
-    "timeoutSeconds": 120
-  },
-  "delivery": {"mode": "none"},
-  "sessionTarget": "isolated",
-  "enabled": true
-}'
-
-    HTTP_CODE=$(curl -s -o /tmp/octopus-update-cron-result.json -w "%{http_code}" \
-        -X POST "$GATEWAY_URL/api/cron/jobs" \
-        -H "Content-Type: application/json" \
-        ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-        -d "$UPDATE_CHECK_PAYLOAD" || printf "000")
-
-    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+    if _openclaw_cron_add \
+        --name octopus-update-check \
+        --cron "0 9 * * *" \
+        --tz Asia/Shanghai \
+        --session isolated \
+        --timeout-seconds 120 \
+        --no-deliver \
+        --message "执行八爪鱼版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1"; then
         echo "✅ octopus-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
     else
-        echo "⚠️  版本检查 cron 注册失败（HTTP $HTTP_CODE），可手动在 OpenClaw 中添加"
-        cat /tmp/octopus-update-cron-result.json 2>/dev/null
+        echo "⚠️  版本检查 cron 注册失败，可手动在 OpenClaw 中添加"
+        cat /tmp/octoclaw-cron-cli.err 2>/dev/null
     fi
 }
 
@@ -1331,7 +1345,7 @@ install_probe_cron() {
     fi
 
     # 检查铁甲虾是否已有探测 cron（以铁甲虾为准，避免重复写文件）
-    if openclaw cron list 2>/dev/null | grep -q "ironclaw-probe\|latency-probe"; then
+    if _openclaw_cron_exists "ironclaw-probe\|latency-probe"; then
         echo "ℹ️  铁甲虾已有模型探测 cron，跳过重复注册"
         return 0
     fi
@@ -1345,41 +1359,22 @@ install_probe_cron() {
     echo "📡 注册模型延迟探测 cron（每15分钟，时间戳复用策略）..."
 
     # 检查是否已存在
-    if openclaw cron list 2>/dev/null | grep -q "octopus-probe"; then
+    if _openclaw_cron_exists "octopus-probe"; then
         echo "ℹ️  octopus-probe cron 已存在，跳过"
         return 0
     fi
 
-    # 通过 Gateway REST API 注册
-    # anchorMs=0（标准对齐），everyMs=900000（每15分钟）
-    # 无需错峰：probe-models.sh 自带时间戳检查，若文件在 20 分钟内已更新则跳过，重复触发安全无害
-    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
-    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
-
-    PROBE_PAYLOAD='{
-  "name": "octopus-probe",
-  "schedule": {"kind": "every", "everyMs": 900000, "anchorMs": 0},
-  "payload": {
-    "kind": "agentTurn",
-    "message": "运行模型延迟探测脚本，更新延迟数据供八爪鱼调度使用。\n\n执行以下命令：\n```bash\nbash /workspace/openclaw/skills/octopus/lib/probe-models.sh\n```\n\n执行完成后直接结束，无需回复或发送任何通知。",
-    "timeoutSeconds": 120
-  },
-  "delivery": {"mode": "none"},
-  "sessionTarget": "isolated",
-  "enabled": true
-}'
-
-    HTTP_CODE=$(curl -s -o /tmp/octopus-probe-cron-result.json -w "%{http_code}" \
-        -X POST "$GATEWAY_URL/api/cron/jobs" \
-        -H "Content-Type: application/json" \
-        ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-        -d "$PROBE_PAYLOAD" || printf "000")
-
-    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+    if _openclaw_cron_add \
+        --name octopus-probe \
+        --every 15m \
+        --session isolated \
+        --timeout-seconds 120 \
+        --no-deliver \
+        --message "运行模型延迟探测脚本，更新延迟数据供八爪鱼调度使用。\n\n执行以下命令：\n```bash\nbash /workspace/openclaw/skills/octopus/lib/probe-models.sh\n```\n\n执行完成后直接结束，无需回复或发送任何通知。"; then
         echo "✅ octopus-probe cron 注册成功（每15分钟，时间戳复用策略）"
     else
-        echo "⚠️  cron 注册失败（HTTP $HTTP_CODE），可手动在 OpenClaw 中添加（每15分钟运行 probe-models.sh）"
-        cat /tmp/octopus-probe-cron-result.json 2>/dev/null
+        echo "⚠️  cron 注册失败，可手动在 OpenClaw 中添加（每15分钟运行 probe-models.sh）"
+        cat /tmp/octoclaw-cron-cli.err 2>/dev/null
     fi
 }
 
@@ -1411,41 +1406,22 @@ install_plan_sync_cron() {
 
     echo "📡 注册 Omniroute 套餐状态同步 cron（每${interval_minutes}分钟）..."
 
-    if openclaw cron list 2>/dev/null | grep -q "octopus-plan-sync"; then
+    if _openclaw_cron_exists "octopus-plan-sync"; then
         echo "ℹ️  octopus-plan-sync cron 已存在，跳过"
         return 0
     fi
 
-    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
-    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
-
-    PLAN_SYNC_PAYLOAD="$(cat <<JSON
-{
-  "name": "octopus-plan-sync",
-  "schedule": {"kind": "every", "everyMs": ${every_ms}, "anchorMs": 0},
-  "payload": {
-    "kind": "agentTurn",
-    "message": "同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略。\\n\\n执行以下命令：\\n```bash\\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync && WORKSPACE=/workspace python3 ./lib/model-intel.py refresh --mode auto\\n```\\n\\n执行完成后直接结束，无需回复或发送任何通知。",
-    "timeoutSeconds": 120
-  },
-  "delivery": {"mode": "none"},
-  "sessionTarget": "isolated",
-  "enabled": true
-}
-JSON
-)"
-
-    HTTP_CODE=$(curl -s -o /tmp/octopus-plan-sync-cron-result.json -w "%{http_code}" \
-        -X POST "$GATEWAY_URL/api/cron/jobs" \
-        -H "Content-Type: application/json" \
-        ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-        -d "$PLAN_SYNC_PAYLOAD" || printf "000")
-
-    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+    if _openclaw_cron_add \
+        --name octopus-plan-sync \
+        --every "${interval_minutes}m" \
+        --session isolated \
+        --timeout-seconds 120 \
+        --no-deliver \
+        --message "同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略。\n\n执行以下命令：\n```bash\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync && WORKSPACE=/workspace python3 ./lib/model-intel.py refresh --mode auto\n```\n\n执行完成后直接结束，无需回复或发送任何通知。"; then
         echo "✅ octopus-plan-sync cron 注册成功（每${interval_minutes}分钟）"
     else
-        echo "⚠️  octopus-plan-sync cron 注册失败（HTTP $HTTP_CODE）"
-        cat /tmp/octopus-plan-sync-cron-result.json 2>/dev/null
+        echo "⚠️  octopus-plan-sync cron 注册失败"
+        cat /tmp/octoclaw-cron-cli.err 2>/dev/null
     fi
 }
 
@@ -1471,38 +1447,22 @@ install_error_review_schedule() {
 
     if command -v openclaw >/dev/null 2>&1; then
         echo "⚠️  未检测到 crontab，回退使用 openclaw cron 注册 nightly review（会消耗少量 token）..."
-        if openclaw cron list 2>/dev/null | grep -q "octopus-error-review"; then
+        if _openclaw_cron_exists "octopus-error-review"; then
             echo "ℹ️  octopus-error-review cron 已存在，跳过"
             return 0
         fi
-
-        GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
-        GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
-        REVIEW_PAYLOAD="$(cat <<JSON
-{
-  "name": "octopus-error-review",
-  "schedule": {"kind": "cron", "expression": "30 2 * * *", "timezone": "Asia/Shanghai"},
-  "payload": {
-    "kind": "agentTurn",
-    "message": "执行 OctoClaw 夜间错误复盘。\\n\\n执行以下命令：\\n```bash\\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py\\n```\\n\\n执行完成后直接结束，无需额外回复。",
-    "timeoutSeconds": 120
-  },
-  "delivery": {"mode": "none"},
-  "sessionTarget": "isolated",
-  "enabled": true
-}
-JSON
-)"
-        HTTP_CODE=$(curl -s -o /tmp/octopus-error-review-cron-result.json -w "%{http_code}" \
-            -X POST "$GATEWAY_URL/api/cron/jobs" \
-            -H "Content-Type: application/json" \
-            ${GATEWAY_TOKEN:+-H "Authorization: Bearer $GATEWAY_TOKEN"} \
-            -d "$REVIEW_PAYLOAD" || printf "000")
-        if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+        if _openclaw_cron_add \
+            --name octopus-error-review \
+            --cron "30 2 * * *" \
+            --tz Asia/Shanghai \
+            --session isolated \
+            --timeout-seconds 120 \
+            --no-deliver \
+            --message "执行 OctoClaw 夜间错误复盘。\n\n执行以下命令：\n```bash\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py\n```\n\n执行完成后直接结束，无需额外回复。"; then
             echo "✅ octopus-error-review cron 注册成功（每天02:30）"
         else
-            echo "⚠️  octopus-error-review cron 注册失败（HTTP $HTTP_CODE）"
-            cat /tmp/octopus-error-review-cron-result.json 2>/dev/null
+            echo "⚠️  octopus-error-review cron 注册失败"
+            cat /tmp/octoclaw-cron-cli.err 2>/dev/null
         fi
         return 0
     fi
