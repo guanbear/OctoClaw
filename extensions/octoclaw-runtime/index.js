@@ -136,6 +136,10 @@ const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "Use octoclaw_route_hint to state whether this should be direct, spawn_single, or spawn_multi.",
   "After route_hint merge: direct may answer directly; delegated routes must go through octoclaw_dispatch.",
 ].join("\n");
+const OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT = [
+  "When the user asks for task progress or acts on an OctoClaw task anchor, prefer the octoclaw_task_action tool.",
+  "Use it for commands like: details <task_id>, queue, artifacts <task_id>, stop <task_id>, retry <task_id>, approve <task_id>, reject <task_id>.",
+].join("\n");
 
 function prunePolicyState() {
   const now = Date.now();
@@ -578,6 +582,7 @@ const plugin = {
     if (isDelegatedRoute(decision)) {
       prependSystem.push(OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
     }
+    prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
     if (prependSystem.length === 0) return;
     return {
       prependSystemContext: prependSystem.join("\n\n"),
@@ -997,6 +1002,52 @@ const plugin = {
 
   pi.registerTool(
     {
+      name: "octoclaw_task_action",
+      label: "OctoClaw Task Action",
+      description: "Handle task anchor fallback commands like details, queue, artifacts, stop, retry, approve, and reject.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text: { type: "string", description: "Fallback command text such as 'details task-123' or 'queue'." },
+          action: { type: "string", enum: ["details", "queue", "artifacts", "stop", "retry", "approve", "reject", "view", "detail"] },
+          taskId: { type: "string", description: "Task id for task-scoped actions." },
+          format: { type: "string", enum: ["text", "json"] },
+        },
+      },
+      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+        const action = String(params.action || "").trim();
+        const taskId = String(params.taskId || "").trim();
+        const rawText = String(params.text || "").trim() || [action, taskId].filter(Boolean).join(" ").trim();
+        if (!rawText) {
+          throw new Error("octoclaw_task_action requires either text or action/taskId");
+        }
+        const format = String(params.format || "json").trim() || "json";
+        const result = await runCommand(
+          "python3",
+          [resolveScript("task_anchor_commands.py"), "--format", format, ...rawText.split(/\s+/)],
+          { cwd: ctx?.cwd || process.cwd() },
+        );
+        if (result.code !== 0 && !result.stdout) {
+          throw new Error(result.stderr || "task_anchor_commands.py failed");
+        }
+        let payload = null;
+        if (format === "json") {
+          try {
+            payload = JSON.parse(result.stdout || "{}");
+          } catch {
+            throw new Error(`task_anchor_commands.py returned invalid JSON: ${result.stdout}`);
+          }
+        }
+        const summary = payload?.text || result.stdout || rawText;
+        return toolResponse(String(summary || "").trim(), payload || { raw_output: result.stdout, stderr: result.stderr, action_text: rawText });
+      },
+    },
+    { source: "octoclaw-runtime" },
+  );
+
+  pi.registerTool(
+    {
       name: "octoclaw_status",
       label: "OctoClaw Status",
       description: "Show current OctoClaw runner and task state. Default to compact dashboard; use table/lanes only when the user explicitly asks for those views.",
@@ -1015,6 +1066,29 @@ const plugin = {
     },
     { source: "octoclaw-runtime" },
   );
+
+  pi.registerCommand({
+    name: "octotask",
+    description: "Run an OctoClaw task anchor fallback command such as details <task_id> or queue",
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const commandText = String(ctx.args || "").trim();
+      if (!commandText) {
+        if (ctx.hasUI) ctx.ui.notify("Usage: /octotask <details|queue|artifacts|stop|retry|approve|reject> [task_id]", "error");
+        return;
+      }
+      const result = await runCommand(
+        "python3",
+        [resolveScript("task_anchor_commands.py"), "--format", "text", ...commandText.split(/\s+/)],
+        { cwd: ctx?.cwd || process.cwd() },
+      );
+      const output = String(result.stdout || result.stderr || "").trim();
+      if (ctx.hasUI) {
+        ctx.ui.setEditorText(output);
+        ctx.ui.notify(result.code === 0 ? "OctoClaw task action completed" : "OctoClaw task action failed", result.code === 0 ? "info" : "error");
+      }
+    },
+  });
 
   pi.registerCommand({
     name: "octostatus",
