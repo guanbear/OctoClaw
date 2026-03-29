@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+"""Shared task display adapter and renderers for Phase 5A."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+try:
+    from runtime_task_record import normalize_task_record
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_task_record import normalize_task_record
+
+try:
+    from worker_taxonomy import role_display
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.worker_taxonomy import role_display
+
+
+ACTIVE_STATES = {"queued", "running", "blocked", "needs_approval"}
+QUEUE_STATES = {"queued"}
+RUNNING_STATES = {"running"}
+BLOCKED_STATES = {"blocked", "needs_approval"}
+FINAL_STATES = {"done", "completed", "failed", "deferred", "cancelled"}
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+def _compact(text: str, limit: int = 96) -> str:
+    collapsed = " ".join(str(text or "").strip().split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+
+def _parse_time(value: str) -> datetime | None:
+    raw = _text(value)
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return None
+
+
+def _iso_now(now: datetime | None = None) -> datetime:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current
+
+
+def _duration_label(started_at: str, now: datetime | None = None) -> str | None:
+    started = _parse_time(started_at)
+    if not started:
+        return None
+    current = _iso_now(now)
+    seconds = max(0, int((current - started).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m" if sec < 30 else f"{minutes + 1}m"
+    hours, minute = divmod(minutes, 60)
+    if minute == 0:
+        return f"{hours}h"
+    return f"{hours}h{minute}m"
+
+
+def _state_label(state: str) -> str:
+    current = _text(state).lower()
+    mapping = {
+        "queued": "queued",
+        "running": "running",
+        "blocked": "blocked",
+        "needs_approval": "needs approval",
+        "done": "completed",
+        "completed": "completed",
+        "failed": "failed",
+        "deferred": "deferred",
+        "cancelled": "cancelled",
+    }
+    return mapping.get(current, current or "unknown")
+
+
+def _collect_active_models(task: dict[str, Any]) -> list[str]:
+    models: list[str] = []
+    primary = _text(task.get("model"))
+    if primary:
+        models.append(primary)
+
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    step_models = artifacts.get("step_models", {}) if isinstance(artifacts.get("step_models", {}), dict) else {}
+    for raw in step_models.values():
+        if not isinstance(raw, dict):
+            continue
+        model = _text(raw.get("model"))
+        if model and model not in models:
+            models.append(model)
+
+    worker_result = artifacts.get("worker_result") if isinstance(artifacts.get("worker_result"), dict) else {}
+    result_model = _text(worker_result.get("model"))
+    if result_model and result_model not in models:
+        models.append(result_model)
+    return models
+
+
+def _collect_artifacts(task: dict[str, Any]) -> list[dict[str, Any]]:
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    rows: list[dict[str, Any]] = []
+    report_path = _text(artifacts.get("report_path") or task.get("report_path"))
+    if report_path:
+        rows.append(
+            {
+                "artifact_id": "report",
+                "kind": "report",
+                "title": "Report",
+                "path": report_path,
+                "preview": "",
+                "ready": True,
+            }
+        )
+    context_path = _text(artifacts.get("context_path") or task.get("context_path"))
+    if context_path:
+        rows.append(
+            {
+                "artifact_id": "context",
+                "kind": "summary",
+                "title": "Context summary",
+                "path": context_path,
+                "preview": _compact(_text(artifacts.get("context_summary") or task.get("context_summary")), limit=72),
+                "ready": True,
+            }
+        )
+    files_changed = _text_list(artifacts.get("files_changed") or task.get("files_changed"))
+    if files_changed:
+        rows.append(
+            {
+                "artifact_id": "files",
+                "kind": "patch",
+                "title": f"Files changed ({len(files_changed)})",
+                "path": "",
+                "preview": ", ".join(files_changed[:3]) + ("…" if len(files_changed) > 3 else ""),
+                "ready": True,
+            }
+        )
+    return rows
+
+
+def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized = normalize_task_record(task)
+    state = _text(normalized.get("status")).lower()
+    actions: list[dict[str, Any]] = [
+        {
+            "id": "view",
+            "kind": "view",
+            "label": "View",
+            "enabled": True,
+            "danger": False,
+            "requires_confirmation": False,
+            "fallback_command": "details",
+        },
+        {
+            "id": "show_queue",
+            "kind": "show_queue",
+            "label": "Queue",
+            "enabled": True,
+            "danger": False,
+            "requires_confirmation": False,
+            "fallback_command": "queue",
+        },
+    ]
+
+    if state in ACTIVE_STATES:
+        actions.append(
+            {
+                "id": "stop",
+                "kind": "stop",
+                "label": "Stop",
+                "enabled": True,
+                "danger": True,
+                "requires_confirmation": True,
+                "fallback_command": "stop",
+            }
+        )
+
+    artifacts = _collect_artifacts(normalized)
+    if artifacts:
+        actions.append(
+            {
+                "id": "open_artifacts",
+                "kind": "open_artifacts",
+                "label": "Artifacts",
+                "enabled": True,
+                "danger": False,
+                "requires_confirmation": False,
+                "fallback_command": "artifacts",
+            }
+        )
+
+    if state == "needs_approval":
+        actions.extend(
+            [
+                {
+                    "id": "approve",
+                    "kind": "approve",
+                    "label": "Approve",
+                    "enabled": True,
+                    "danger": False,
+                    "requires_confirmation": False,
+                    "fallback_command": "approve",
+                },
+                {
+                    "id": "reject",
+                    "kind": "reject",
+                    "label": "Reject",
+                    "enabled": True,
+                    "danger": True,
+                    "requires_confirmation": True,
+                    "fallback_command": "reject",
+                },
+            ]
+        )
+
+    if state in {"failed", "deferred"}:
+        actions.append(
+            {
+                "id": "retry",
+                "kind": "retry",
+                "label": "Retry",
+                "enabled": True,
+                "danger": False,
+                "requires_confirmation": False,
+                "fallback_command": "retry",
+            }
+        )
+
+    return actions
+
+
+def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    normalized = normalize_task_record(task)
+    state = _text(normalized.get("status")).lower()
+    display = role_display(normalized)
+    summary = _compact(_text(normalized.get("summary") or normalized.get("task_description")), limit=120)
+    models = _collect_active_models(normalized)
+
+    anchor = {
+        "task_id": _text(normalized.get("id")),
+        "title": _text(normalized.get("title")),
+        "state": state,
+        "state_label": _state_label(state),
+        "route": _text(normalized.get("route")),
+        "worker_pool": _text(normalized.get("worker_pool")),
+        "worker_pool_display": _text(display.get("name")),
+        "worker_pool_emoji": _text(display.get("emoji")),
+        "progress": None,
+        "summary": summary,
+        "phase": _text(normalized.get("phase")),
+        "profile": _text(normalized.get("profile")),
+        "eta": _text(normalized.get("expected_done_at")),
+        "queue_position": normalized.get("queue_position") if isinstance(normalized.get("queue_position"), int) else None,
+        "cost_estimate": _text(normalized.get("cost_estimate")),
+        "active_models": models,
+        "model_summary": ", ".join(models[:2]) + ("…" if len(models) > 2 else "") if models else "",
+        "started_at": _text(normalized.get("started_at")),
+        "updated_at": _text(normalized.get("updated_at")),
+        "duration": _duration_label(_text(normalized.get("started_at")), now=now),
+    }
+    return anchor
+
+
+def build_task_detail(
+    task: dict[str, Any],
+    *,
+    all_tasks: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_task_record(task)
+    anchor = build_task_anchor(normalized, now=now)
+    all_normalized = [normalize_task_record(item) for item in (all_tasks or []) if isinstance(item, dict)]
+    task_id = _text(normalized.get("id"))
+    child_ids = _text_list(normalized.get("child_ids"))
+    if not child_ids:
+        artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts", {}), dict) else {}
+        child_ids = _text_list(artifacts.get("child_task_ids"))
+        if not child_ids:
+            step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
+            child_ids = [str(value).strip() for value in step_task_ids.values() if str(value).strip()]
+
+    children = [item for item in all_normalized if _text(item.get("parent_id")) == task_id or _text(item.get("id")) in child_ids]
+    artifacts = _collect_artifacts(normalized)
+    events: list[dict[str, Any]] = []
+    events.append(
+        {
+            "time": _text(normalized.get("updated_at") or normalized.get("completed_at") or normalized.get("started_at")),
+            "kind": "route_selected",
+            "message": f"{anchor['route']} via {anchor['worker_pool']}",
+            "importance": "normal",
+        }
+    )
+    if normalized.get("review_required"):
+        events.append(
+            {
+                "time": _text(normalized.get("updated_at")),
+                "kind": "review_requested",
+                "message": "Review required",
+                "importance": "high",
+            }
+        )
+    if artifacts:
+        events.append(
+            {
+                "time": _text(normalized.get("updated_at") or normalized.get("completed_at")),
+                "kind": "artifact_ready",
+                "message": f"{len(artifacts)} artifact(s) available",
+                "importance": "normal",
+            }
+        )
+
+    return {
+        "task_id": anchor["task_id"],
+        "summary": anchor["summary"],
+        "state": anchor["state"],
+        "lineage": {
+            "parent_task_id": _text(normalized.get("parent_id")),
+            "child_task_ids": [_text(item.get("id")) for item in children],
+            "active_child_count": sum(1 for item in children if _text(item.get("status")).lower() in ACTIVE_STATES),
+            "completed_child_count": sum(1 for item in children if _text(item.get("status")).lower() in {"done", "completed"}),
+        },
+        "models": {
+            "main_model": anchor["active_models"][0] if anchor["active_models"] else "",
+            "active_models": anchor["active_models"],
+            "model_health_summary": _text(normalized.get("model_health_summary")),
+        },
+        "artifacts": artifacts,
+        "events": events,
+        "anchor": anchor,
+    }
+
+
+def build_task_queue_view(tasks: list[dict[str, Any]], *, now: datetime | None = None) -> dict[str, Any]:
+    anchors = [build_task_anchor(task, now=now) for task in tasks if isinstance(task, dict)]
+    return {
+        "running": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in RUNNING_STATES],
+        "queued": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in QUEUE_STATES],
+        "blocked": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in BLOCKED_STATES],
+        "recently_completed": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in {"done", "completed"}],
+    }
+
+
+def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]] | None = None) -> str:
+    title = _text(anchor.get("title")) or _text(anchor.get("task_id"))
+    emoji = _text(anchor.get("worker_pool_emoji")) or "🤖"
+    worker_name = _text(anchor.get("worker_pool_display")) or _text(anchor.get("worker_pool")) or "task"
+    state = _text(anchor.get("state_label")) or _state_label(_text(anchor.get("state")))
+    route = _text(anchor.get("route"))
+    summary = _text(anchor.get("summary"))
+    model_summary = _text(anchor.get("model_summary"))
+    duration = _text(anchor.get("duration"))
+    queue_position = anchor.get("queue_position")
+
+    lines = [
+        f"{emoji} OctoClaw task: {title}",
+        f"State: {state} | Route: {route or '?'} | Pool: {worker_name}",
+    ]
+    if model_summary or duration:
+        meta_bits = []
+        if model_summary:
+            meta_bits.append(f"Model: {model_summary}")
+        if duration:
+            meta_bits.append(f"Elapsed: {duration}")
+        if meta_bits:
+            lines.append(" | ".join(meta_bits))
+    if queue_position is not None:
+        lines.append(f"Queue position: {queue_position}")
+    if summary:
+        lines.append(summary)
+
+    enabled_actions = [item for item in (actions or []) if isinstance(item, dict) and bool(item.get("enabled", False))]
+    fallback_commands = [str(item.get("fallback_command", "") or "").strip() for item in enabled_actions if str(item.get("fallback_command", "") or "").strip()]
+    if fallback_commands:
+        lines.append("Reply with: " + " / ".join(fallback_commands))
+    return "\n".join(lines)
+
+
+def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    title = _text(anchor.get("title")) or _text(anchor.get("task_id"))
+    emoji = _text(anchor.get("worker_pool_emoji")) or ":robot_face:"
+    state = _text(anchor.get("state_label")) or _state_label(_text(anchor.get("state")))
+    route = _text(anchor.get("route"))
+    pool = _text(anchor.get("worker_pool_display")) or _text(anchor.get("worker_pool"))
+    summary = _text(anchor.get("summary"))
+    model_summary = _text(anchor.get("model_summary"))
+
+    fields = [
+        {"type": "mrkdwn", "text": f"*State*\n{state}"},
+        {"type": "mrkdwn", "text": f"*Route*\n{route or '?'}"},
+        {"type": "mrkdwn", "text": f"*Pool*\n{pool or '?'}"},
+    ]
+    if model_summary:
+        fields.append({"type": "mrkdwn", "text": f"*Model*\n{model_summary}"})
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"{emoji} *OctoClaw task*: {title}"},
+        },
+        {
+            "type": "section",
+            "fields": fields[:10],
+        },
+    ]
+    if summary:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": summary},
+            }
+        )
+
+    enabled_actions = [item for item in (actions or []) if isinstance(item, dict) and bool(item.get("enabled", False))]
+    if enabled_actions:
+        elements: list[dict[str, Any]] = []
+        for item in enabled_actions[:5]:
+            label = _text(item.get("label")) or _text(item.get("kind")) or "Action"
+            command = _text(item.get("fallback_command")) or _text(item.get("kind"))
+            style = "danger" if bool(item.get("danger", False)) else "primary" if command in {"view", "details"} else None
+            button: dict[str, Any] = {
+                "type": "button",
+                "text": {"type": "plain_text", "text": label[:75]},
+                "value": command[:200],
+                "action_id": _text(item.get("id"))[:255] or command[:255] or "action",
+            }
+            if style:
+                button["style"] = style
+            elements.append(button)
+        if elements:
+            blocks.append({"type": "actions", "elements": elements})
+
+    fallback = render_task_anchor_text(anchor, actions)
+    return {
+        "text": fallback,
+        "blocks": blocks,
+    }
