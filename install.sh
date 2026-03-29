@@ -468,11 +468,14 @@ _systemd_restart_unit_safely() {
     local service_name="$1"
     local active_state="" sub_state="" waited=0
 
-    systemctl stop "$service_name" >/dev/null 2>&1 || true
+    systemctl stop --no-block "$service_name" >/dev/null 2>&1 || true
 
     while [ "$waited" -lt 5 ]; do
         active_state="$(systemctl show -p ActiveState --value "$service_name" 2>/dev/null || true)"
         sub_state="$(systemctl show -p SubState --value "$service_name" 2>/dev/null || true)"
+        if [ "$active_state" = "inactive" ] || [ "$active_state" = "failed" ] || [ "$active_state" = "dead" ]; then
+            break
+        fi
         if [ "$active_state" != "deactivating" ] && [ "$sub_state" != "stop-sigterm" ] && [ "$sub_state" != "stop-post" ]; then
             break
         fi
@@ -488,6 +491,7 @@ _systemd_restart_unit_safely() {
         sleep 1
     fi
 
+    systemctl reset-failed "$service_name" >/dev/null 2>&1 || true
     systemctl start "$service_name"
 }
 

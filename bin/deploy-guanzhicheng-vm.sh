@@ -20,15 +20,20 @@ set -euo pipefail
 stamp="$(date +%Y%m%d-%H%M%S)"
 stop_service() {
   service_name="$1"
-  systemctl stop "$service_name" || true
+  systemctl stop --no-block "$service_name" || true
   for _ in $(seq 1 20); do
     state="$(systemctl is-active "$service_name" 2>/dev/null || true)"
+    sub_state="$(systemctl show -p SubState --value "$service_name" 2>/dev/null || true)"
     if [ "$state" = "inactive" ] || [ "$state" = "failed" ]; then
+      return 0
+    fi
+    if [ "$state" != "deactivating" ] && [ "$sub_state" != "stop-sigterm" ] && [ "$sub_state" != "stop-post" ]; then
       return 0
     fi
     sleep 1
   done
-  systemctl kill --kill-who=all "$service_name" || true
+  systemctl kill --signal=SIGKILL --kill-who=all "$service_name" || true
+  systemctl reset-failed "$service_name" || true
   for _ in $(seq 1 10); do
     state="$(systemctl is-active "$service_name" 2>/dev/null || true)"
     if [ "$state" = "inactive" ] || [ "$state" = "failed" ]; then
