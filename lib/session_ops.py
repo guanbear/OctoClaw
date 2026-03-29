@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import uuid
+from typing import Any
 
 
 def has_openclaw_cli() -> bool:
@@ -80,3 +81,65 @@ def send_agent_message(session_key: str, message: str, timeout_seconds: int = 0)
         return {"ok": False, "status": "error", "runId": run_id, "error": "invalid agent.wait response"}
     wait_res.setdefault("runId", run_id)
     return wait_res
+
+
+def send_channel_message(
+    channel: str,
+    target: str,
+    message: str,
+    *,
+    reply_to: str = "",
+    thread_id: str = "",
+    components: dict[str, Any] | None = None,
+    timeout_seconds: int = 20,
+) -> dict:
+    """
+    Send an outbound channel message through OpenClaw's native message CLI.
+    This keeps OctoClaw transport-thin and lets upstream own provider details.
+    """
+    if not has_openclaw_cli():
+        return {"ok": False, "status": "error", "error": "openclaw cli unavailable"}
+    channel_value = str(channel or "").strip()
+    target_value = str(target or "").strip()
+    if not channel_value or not target_value:
+        return {"ok": False, "status": "error", "error": "missing channel or target"}
+
+    cmd = [
+        "openclaw",
+        "message",
+        "send",
+        "--channel",
+        channel_value,
+        "--target",
+        target_value,
+        "--json",
+    ]
+    if message.strip():
+        cmd.extend(["--message", message])
+    if reply_to.strip():
+        cmd.extend(["--reply-to", reply_to.strip()])
+    if thread_id.strip():
+        cmd.extend(["--thread-id", thread_id.strip()])
+    if components:
+        cmd.extend(["--components", json.dumps(components, ensure_ascii=False)])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=max(5, int(timeout_seconds)),
+        )
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "status": "error",
+                "error": (result.stderr or result.stdout or "").strip(),
+            }
+        payload = json.loads(result.stdout or "{}")
+        if isinstance(payload, dict):
+            payload.setdefault("ok", True)
+            return payload
+    except Exception as exc:
+        return {"ok": False, "status": "error", "error": str(exc)}
+    return {"ok": False, "status": "error", "error": "invalid message send response"}
