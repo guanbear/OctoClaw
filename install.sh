@@ -176,9 +176,14 @@ import json
 try:
     with open('$HOME/.openclaw/openclaw.json') as f:
         d = json.load(f)
-    print('http://localhost:' + str(d.get('port', 3000)))
+    remote = d.get('gateway', {}).get('remote', {}) if isinstance(d.get('gateway'), dict) else {}
+    url = remote.get('url') if isinstance(remote, dict) else ''
+    if url:
+        print(url)
+    else:
+        print('http://127.0.0.1:' + str(d.get('port', 3000)))
 except Exception:
-    print('http://localhost:3000')
+    print('http://127.0.0.1:3000')
 " 2>/dev/null
 }
 
@@ -188,7 +193,8 @@ import json
 try:
     with open('$HOME/.openclaw/openclaw.json') as f:
         d = json.load(f)
-    print(d.get('token', '') or '')
+    auth = d.get('auth', {}) if isinstance(d.get('auth'), dict) else {}
+    print(auth.get('token', '') or d.get('token', '') or '')
 except Exception:
     print('')
 " 2>/dev/null
@@ -1271,8 +1277,8 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
             return 0
         fi
     fi
-    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
-    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
+    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
 
     UPDATE_CHECK_PAYLOAD='{
   "name": "octopus-update-check",
@@ -1347,8 +1353,8 @@ install_probe_cron() {
     # 通过 Gateway REST API 注册
     # anchorMs=0（标准对齐），everyMs=900000（每15分钟）
     # 无需错峰：probe-models.sh 自带时间戳检查，若文件在 20 分钟内已更新则跳过，重复触发安全无害
-    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
-    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
+    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
 
     PROBE_PAYLOAD='{
   "name": "octopus-probe",
@@ -1410,8 +1416,8 @@ install_plan_sync_cron() {
         return 0
     fi
 
-    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
-    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+    GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
+    GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
 
     PLAN_SYNC_PAYLOAD="$(cat <<JSON
 {
@@ -1470,8 +1476,8 @@ install_error_review_schedule() {
             return 0
         fi
 
-        GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://localhost:3000}"
-        GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+        GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-$(_get_gateway_url)}"
+        GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-$(_get_gateway_token)}"
         REVIEW_PAYLOAD="$(cat <<JSON
 {
   "name": "octopus-error-review",
