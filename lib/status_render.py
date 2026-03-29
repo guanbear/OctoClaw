@@ -212,7 +212,7 @@ def render_main_model_drift_summary(drift: dict[str, Any]) -> list[str]:
     expected = short_model(str(drift.get("expected_model", "") or ""), limit=32)
     current = short_model(str(drift.get("current_override", "") or drift.get("actual_model", "") or ""), limit=32)
     if bool(drift.get("drift", False)):
-        return [f"🧭 主链漂移：detected · expected {expected} · actual {current or '?'}"]
+        return [f"🧭 主链漂移：detected · expected {expected} · actual {current or 'unknown'}"]
     return [f"🧭 主链漂移：aligned · {expected}"]
 
 
