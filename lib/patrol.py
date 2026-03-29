@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 八爪鱼巡逻脚本 patrol.py
 每5分钟由 octopus-patrol cron 触发，检查任务状态，有异常则发飞书告警。
@@ -218,8 +220,104 @@ def task_model_band(task: dict) -> str:
     return str(resolve_model_band(task, default=DEFAULT_MODEL_BAND) or DEFAULT_MODEL_BAND).lower()
 
 
+def _bool_like(value, default: bool = False) -> bool:
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def task_session_identity(task: dict) -> str:
-    return str(task.get("owner", "") or task.get("label", "") or task.get("session_id", "") or "").strip()
+    return str(
+        task.get("session_key", "")
+        or task.get("agent_id", "")
+        or task.get("owner", "")
+        or task.get("session_id", "")
+        or task.get("label", "")
+        or ""
+    ).strip()
+
+
+def task_session_selectors(task: dict) -> dict[str, object]:
+    if not isinstance(task, dict):
+        return {}
+    return {
+        "session_key": str(task.get("session_key", "") or "").strip(),
+        "session_id": str(task.get("session_id", "") or "").strip(),
+        "run_id": str(task.get("run_id", "") or "").strip(),
+        "agent_id": str(task.get("agent_id", "") or "").strip(),
+        "owner": str(task.get("owner", "") or "").strip(),
+        "label": str(task.get("label", "") or "").strip(),
+        "agent_namespace": str(task.get("agent_namespace", "") or "").strip(),
+        "managed_by_octoclaw": _bool_like(task.get("managed_by_octoclaw"), default=bool(task.get("worker_pool"))),
+    }
+
+
+def _legacy_label_candidates(label: str, sessions_data: dict) -> list[dict]:
+    matched = []
+    normalized = str(label or "").strip()
+    if not normalized:
+        return matched
+    for key, value in sessions_data.items():
+        if not isinstance(value, dict):
+            continue
+        if str(value.get("label", "") or "").strip() != normalized:
+            continue
+        session = dict(value)
+        session["_session_key"] = key
+        session["_match_score"] = 40
+        matched.append(session)
+    matched.sort(key=lambda item: (int(item.get("_match_score", 0) or 0), session_updated_at_iso(item) or ""), reverse=True)
+    return matched
+
+
+def _session_match_score(task: dict, key: str, value: dict, selectors: dict[str, object]) -> int:
+    score = 0
+    session_key = str(selectors.get("session_key", "") or "").strip()
+    session_id = str(selectors.get("session_id", "") or "").strip()
+    run_id = str(selectors.get("run_id", "") or "").strip()
+    agent_id = str(selectors.get("agent_id", "") or "").strip()
+    owner = str(selectors.get("owner", "") or "").strip()
+    label = str(selectors.get("label", "") or "").strip()
+    managed = bool(selectors.get("managed_by_octoclaw"))
+
+    channel_session_key = str(value.get("channelSessionKey", "") or "").strip()
+    session_ids = {
+        str(value.get("sessionId", "") or "").strip(),
+        str(value.get("id", "") or "").strip(),
+        str(value.get("runId", "") or "").strip(),
+        str(value.get("activeRunId", "") or "").strip(),
+    }
+    session_ids.discard("")
+    agent_identity_candidates = {
+        str(value.get("agentId", "") or "").strip(),
+        str(value.get("agentName", "") or "").strip(),
+    }
+    agent_identity_candidates.discard("")
+    label_value = str(value.get("label", "") or "").strip()
+
+    if session_key and (key == session_key or channel_session_key == session_key):
+        score = max(score, 220)
+    if session_id and session_id in session_ids:
+        score = max(score, 210)
+    if run_id and run_id in session_ids:
+        score = max(score, 205)
+    if agent_id:
+        if agent_id in agent_identity_candidates:
+            score = max(score, 180)
+        elif key.endswith(f":{agent_id}") or f":{agent_id}:" in key:
+            score = max(score, 170)
+        elif agent_id == label_value:
+            score = max(score, 130)
+    if owner:
+        if owner in agent_identity_candidates:
+            score = max(score, 150)
+        elif key.endswith(f":{owner}") or f":{owner}:" in key:
+            score = max(score, 140)
+        elif owner == label_value:
+            score = max(score, 110)
+    if label and str(value.get("label", "") or "").strip() == label:
+        score = max(score, 80 if managed else 120)
+    return score
 
 
 def default_model_band_for_task(task: dict) -> str:
@@ -282,8 +380,7 @@ def load_tasks() -> list:
         if not isinstance(tasks, list):
             print(f"⚠️  task-state.json 中 tasks 字段不是列表（类型: {type(tasks).__name__}），返回空列表", file=sys.stderr)
             return []
-        # 只处理八爪鱼任务（严格匹配 source=octopus）
-        tasks = [t for t in tasks if t.get("source") == "octopus"]
+        tasks = [t for t in tasks if t.get("source") in {"octoclaw", "octopus"}]
         return tasks
     except Exception as e:
         print(f"⚠️  读取 task-state.json 失败: {e}", file=sys.stderr)
@@ -488,7 +585,7 @@ def classify_tasks(tasks: list) -> tuple:
                 # "missing" 更像观测缺失，不应直接等同于 session 已结束。
                 # 老版本对缺失 session 走保守路径，这里也保持同样策略，
                 # 让 orphan/timeout 逻辑继续兜底，避免误把活任务判死。
-                ended = session_status in ("completed", "stale") or (task_label and is_session_ended(task_label))
+                ended = session_status in ("completed", "stale") or is_session_ended(t)
                 if ended:
                     task_id = t.get("id", "")
                     session_event = t.get("session_last_event", "")
@@ -538,7 +635,7 @@ def classify_tasks(tasks: list) -> tuple:
                 if runner_task:
                     task_label = ""
                 # 检查 session 是否已结束 + 是否幽灵完成
-                if is_session_ended(task_label) and check_ghost_completion(task_id, task_label):
+                if is_session_ended(t) and check_ghost_completion(task_id, t):
                     # 完成但无RESULT，不重派
                     t["status"] = "completed_no_result"
                     t["summary"] = "任务已完成但未输出RESULT格式，可能是GLM格式问题或上下文截断"
@@ -669,10 +766,15 @@ def session_updated_at_dt(session: dict):
     return parse_iso(session_updated_at_iso(session))
 
 
-def build_session_candidates(task: dict, sessions_data: dict) -> list[dict]:
-    """按 task label 选出可能匹配的 session，并按更新时间倒序排序。"""
-    label = task_session_identity(task)
-    if not label:
+def build_session_candidates(task: dict | str, sessions_data: dict) -> list[dict]:
+    """优先按 session_key/session_id/agent_id 匹配 task 对应 session，label 仅兜底。"""
+    if not isinstance(sessions_data, dict):
+        return []
+    if not isinstance(task, dict):
+        return _legacy_label_candidates(str(task or "").strip(), sessions_data)
+
+    selectors = task_session_selectors(task)
+    if not any(str(selectors.get(field, "") or "").strip() for field in ("session_key", "session_id", "run_id", "agent_id", "owner", "label")):
         return []
 
     task_spawned = parse_iso(task.get("spawned_at") or task.get("started_at") or task.get("updated_at") or "")
@@ -680,10 +782,12 @@ def build_session_candidates(task: dict, sessions_data: dict) -> list[dict]:
     for key, value in sessions_data.items():
         if not isinstance(value, dict):
             continue
-        if value.get("label") != label:
+        score = _session_match_score(task, str(key), value, selectors)
+        if score <= 0:
             continue
         session = dict(value)
         session["_session_key"] = key
+        session["_match_score"] = score
         updated_dt = session_updated_at_dt(session)
         if task_spawned and updated_dt:
             # 太早结束的历史 session 不参与当前任务匹配。
@@ -691,8 +795,17 @@ def build_session_candidates(task: dict, sessions_data: dict) -> list[dict]:
                 continue
         candidates.append(session)
 
-    candidates.sort(key=lambda item: session_updated_at_iso(item) or "", reverse=True)
+    if not candidates and str(selectors.get("label", "") or "").strip():
+        return _legacy_label_candidates(str(selectors.get("label", "") or "").strip(), sessions_data)
+
+    candidates.sort(key=lambda item: (int(item.get("_match_score", 0) or 0), session_updated_at_iso(item) or ""), reverse=True)
     return candidates
+
+
+def resolve_task_session(task: dict | str, sessions_data: dict | None = None) -> dict | None:
+    pool = sessions_data if isinstance(sessions_data, dict) else load_main_agent_sessions()
+    candidates = build_session_candidates(task, pool)
+    return candidates[0] if candidates else None
 
 
 def summarize_session_history(session_id: str, tail_lines: int = SESSION_HISTORY_TAIL_LINES) -> dict:
@@ -1350,7 +1463,7 @@ def mark_task_failed(task_id: str):
         print(f"⚠️  mark_task_failed({task_id}) 失败: {e}", file=sys.stderr)
 
 
-def is_session_ended(label: str) -> bool:
+def is_session_ended(task_or_identity: dict | str) -> bool:
     """
     检查 label 对应的最新 session 是否已结束。
     判断条件：
@@ -1373,18 +1486,10 @@ def is_session_ended(label: str) -> bool:
     if not isinstance(sessions_data, dict):
         return False
 
-    # sessions_data 是 {sessionKey: {label, updatedAt, ...}}
-    matched = [
-        v for k, v in sessions_data.items()
-        if isinstance(v, dict) and v.get("label") == label
-    ]
-    if not matched:
+    session = resolve_task_session(task_or_identity, sessions_data)
+    if not isinstance(session, dict):
         # sessions.json 里没有该 label 的记录 → 无法判断，保守处理
         return False
-
-    # 取 updatedAt 最新的 session
-    matched.sort(key=lambda s: s.get("updatedAt") or "", reverse=True)
-    session = matched[0]
 
     # 检查 updatedAt 是否超过30分钟（毫秒级时间戳）
     updated_at_ms = session.get("updatedAt")
@@ -1421,12 +1526,6 @@ def check_task_transcript_errors(task: dict) -> str | None:
     
     返回：错误描述字符串，或 None（无异常）
     """
-    label = task_session_identity(task)
-    if not label:
-        return None
-
-    # 从 sessions.json 中查找 label 匹配的 sessionId
-    # sessions.json 是 dict，key 为 session key，value 含 label/updatedAt/sessionId
     sessions_file = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
     if not os.path.exists(sessions_file):
         return None
@@ -1440,17 +1539,9 @@ def check_task_transcript_errors(task: dict) -> str | None:
     if not isinstance(sessions_data, dict):
         return None
 
-    # 找到 label 匹配的所有 session（dict 格式）
-    matched = [
-        v for k, v in sessions_data.items()
-        if isinstance(v, dict) and v.get("label") == label
-    ]
-    if not matched:
+    session = resolve_task_session(task, sessions_data)
+    if not isinstance(session, dict):
         return None
-
-    # 取 updatedAt 最新的 session
-    matched.sort(key=lambda s: s.get("updatedAt") or "", reverse=True)
-    session = matched[0]
     session_id = session.get("sessionId") or session.get("id")
     if not session_id:
         return None
@@ -1501,7 +1592,7 @@ def check_task_transcript_errors(task: dict) -> str | None:
     return None
 
 
-def check_ghost_completion(task_id: str, label: str) -> bool:
+def check_ghost_completion(task_id: str, task_or_identity: dict | str) -> bool:
     """
     查 transcript 最后若干条消息，判断任务是否"幽灵完成"：
     任务实际做完了但没写 ---RESULT--- 标记。
@@ -1515,9 +1606,6 @@ def check_ghost_completion(task_id: str, label: str) -> bool:
 
     返回：True=幽灵完成（实际做完了），False=真正卡死 / 无法判断
     """
-    if not label:
-        return False
-
     sessions_file = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
     if not os.path.exists(sessions_file):
         return False
@@ -1531,15 +1619,9 @@ def check_ghost_completion(task_id: str, label: str) -> bool:
     if not isinstance(sessions_data, dict):
         return False
 
-    matched = [
-        v for k, v in sessions_data.items()
-        if isinstance(v, dict) and v.get("label") == label
-    ]
-    if not matched:
+    session = resolve_task_session(task_or_identity, sessions_data)
+    if not isinstance(session, dict):
         return False
-
-    matched.sort(key=lambda s: s.get("updatedAt") or "", reverse=True)
-    session = matched[0]
     session_id = session.get("sessionId") or session.get("id")
     if not session_id:
         return False
@@ -1611,13 +1693,11 @@ def check_ghost_completion(task_id: str, label: str) -> bool:
     return False
 
 
-def check_result_success(task_id: str, label: str, spawned_at: str = None) -> bool:
+def check_result_success(task_id: str, task_or_identity: dict | str, spawned_at: str = None) -> bool:
     """
     检查 transcript 是否包含成功的 RESULT 标记。
     用于孤儿任务判断：有 RESULT+成功 则自动标 done，不报警。
     """
-    if not label:
-        return False
     sessions_file = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
     if not os.path.exists(sessions_file):
         return False
@@ -1628,12 +1708,9 @@ def check_result_success(task_id: str, label: str, spawned_at: str = None) -> bo
         return False
     if not isinstance(sessions_data, dict):
         return False
-    matched = [v for k, v in sessions_data.items()
-               if isinstance(v, dict) and v.get("label") == label]
-    if not matched:
+    session = resolve_task_session(task_or_identity, sessions_data)
+    if not isinstance(session, dict):
         return False
-    matched.sort(key=lambda s: s.get("updatedAt") or "", reverse=True)
-    session = matched[0]
     session_id = session.get("sessionId") or session.get("id")
     if not session_id:
         return False
@@ -2880,7 +2957,7 @@ def auto_redispatch_task(task: dict, reason: str, *, source: str) -> str | None:
     return None
 
 
-def get_subagent_run_id(label: str) -> str | None:
+def get_subagent_run_id(task_or_identity: dict | str) -> str | None:
     """
     从 sessions.json 中找到 label 匹配的最新 session 的 sessionId。
     sessions.json 是 dict，key 为 session key（如 agent:main:subagent:xxx），
@@ -2896,26 +2973,16 @@ def get_subagent_run_id(label: str) -> str | None:
         if not isinstance(sessions_data, dict):
             return None
 
-        # sessions_data 是 {sessionKey: {label, updatedAt, sessionId, ...}}
-        matched = [
-            (k, v) for k, v in sessions_data.items()
-            if isinstance(v, dict) and v.get("label") == label
-        ]
-        if not matched:
+        session = resolve_task_session(task_or_identity, sessions_data)
+        if not isinstance(session, dict):
             return None
-        # 取 updatedAt 最新的
-        matched.sort(
-            key=lambda kv: kv[1].get("updatedAt") or "",
-            reverse=True
-        )
-        _key, session = matched[0]
         return session.get("sessionId") or session.get("runId") or session.get("activeRunId")
     except Exception as e:
-        print(f"⚠️  get_subagent_run_id({label}) 失败: {e}", file=sys.stderr)
+        print(f"⚠️  get_subagent_run_id({task_or_identity}) 失败: {e}", file=sys.stderr)
         return None
 
 
-def get_session_last_activity(label: str) -> float | None:
+def get_session_last_activity(task_or_identity: dict | str) -> float | None:
     """
     从 sessions.json 中找到 label 匹配的最新 session 的 updatedAt，
     返回距今多少分钟（float）。找不到则返回 None。
@@ -2928,22 +2995,23 @@ def get_session_last_activity(label: str) -> float | None:
             data = json.load(f)
         if not isinstance(data, dict):
             return None
-        # sessions.json is a dict keyed by session key, values have label + updatedAt
+        session = resolve_task_session(task_or_identity, data)
+        if not isinstance(session, dict):
+            return None
         now_ms = time.time() * 1000
-        best_updated = None
-        for key, val in data.items():
-            if not isinstance(val, dict):
-                continue
-            if val.get("label") == label:
-                updated = val.get("updatedAt")
-                if updated and (best_updated is None or updated > best_updated):
-                    best_updated = updated
+        best_updated = session.get("updatedAt")
         if best_updated is None:
             return None
-        age_minutes = (now_ms - best_updated) / 60000.0
+        if isinstance(best_updated, str):
+            updated_dt = parse_iso(best_updated)
+            if not updated_dt:
+                return None
+            age_minutes = (datetime.now(timezone.utc) - updated_dt).total_seconds() / 60.0
+            return age_minutes
+        age_minutes = (now_ms - float(best_updated)) / 60000.0
         return age_minutes
     except Exception as e:
-        print(f"⚠️  get_session_last_activity({label}) 失败: {e}", file=sys.stderr)
+        print(f"⚠️  get_session_last_activity({task_or_identity}) 失败: {e}", file=sys.stderr)
         return None
 
 
@@ -2952,10 +3020,6 @@ def analyze_timeout_reason(task: dict) -> str:
 
     返回值：ghost_completion / token_overflow / tool_error / stuck / unknown
     """
-    label = task_session_identity(task)
-    if not label:
-        return "unknown"
-
     sessions_file = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
     if not os.path.exists(sessions_file):
         return "unknown"
@@ -2969,15 +3033,9 @@ def analyze_timeout_reason(task: dict) -> str:
     if not isinstance(sessions_data, dict):
         return "unknown"
 
-    matched = [
-        v for v in sessions_data.values()
-        if isinstance(v, dict) and v.get("label") == label
-    ]
-    if not matched:
+    session = resolve_task_session(task, sessions_data)
+    if not isinstance(session, dict):
         return "unknown"
-
-    matched.sort(key=lambda s: s.get("updatedAt") or "", reverse=True)
-    session = matched[0]
     session_id = session.get("sessionId") or session.get("id")
     if not session_id:
         return "unknown"
@@ -4011,7 +4069,7 @@ def main():
             task_label = task_session_identity(task)
             if task_id not in {s.get("id") for s in stuck}:
                 # 先检查 transcript 是否有成功 RESULT → 自动标 done，不报警
-                if check_result_success(task_id, task_label, task.get("spawned_at") or task.get("started_at")):
+                if check_result_success(task_id, task, task.get("spawned_at") or task.get("started_at")):
                     print(f"  ✅ 孤儿任务 {task_id} transcript 含成功RESULT，自动标记 done（不报警）")
                     task["_auto_done"] = True  # 标记已自动完成，防止GLM升级循环重复处理
                     try:

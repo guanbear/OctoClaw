@@ -595,10 +595,18 @@ def cmd_upsert(args):
                 existing["source"] = args.source
             if args.session_id:
                 existing["session_id"] = args.session_id
+            if args.session_key:
+                existing["session_key"] = args.session_key
             if args.run_id:
                 existing["run_id"] = args.run_id
             if args.session_status:
                 existing["session_status"] = args.session_status
+            if args.agent_id:
+                existing["agent_id"] = args.agent_id
+            if args.agent_namespace:
+                existing["agent_namespace"] = args.agent_namespace
+            if args.managed_by_octoclaw is not None:
+                existing["managed_by_octoclaw"] = args.managed_by_octoclaw
             if args.last_observed_at:
                 existing["last_observed_at"] = resolve_expected_done(args.last_observed_at)
             if args.recovery_action:
@@ -671,14 +679,21 @@ def cmd_upsert(args):
                 record["model_band"] = model_band_arg
             if args.task_description:
                 record["task_description"] = args.task_description
-            # 默认 source 为 octopus（八爪鱼任务）
-            record["source"] = args.source if args.source else "octopus"
+            record["source"] = args.source if args.source else "octoclaw"
             if args.session_id:
                 record["session_id"] = args.session_id
+            if args.session_key:
+                record["session_key"] = args.session_key
             if args.run_id:
                 record["run_id"] = args.run_id
             if args.session_status:
                 record["session_status"] = args.session_status
+            if args.agent_id:
+                record["agent_id"] = args.agent_id
+            if args.agent_namespace:
+                record["agent_namespace"] = args.agent_namespace
+            if args.managed_by_octoclaw is not None:
+                record["managed_by_octoclaw"] = args.managed_by_octoclaw
             if args.last_observed_at:
                 record["last_observed_at"] = resolve_expected_done(args.last_observed_at)
             if args.recovery_action:
@@ -863,8 +878,12 @@ def main():
     p_upsert.add_argument("--task-description", dest="task_description")
     p_upsert.add_argument("--source")
     p_upsert.add_argument("--session-id", dest="session_id")
+    p_upsert.add_argument("--session-key", dest="session_key")
     p_upsert.add_argument("--run-id", dest="run_id")
     p_upsert.add_argument("--session-status", dest="session_status")
+    p_upsert.add_argument("--agent-id", dest="agent_id")
+    p_upsert.add_argument("--agent-namespace", dest="agent_namespace")
+    p_upsert.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", type=parse_bool_arg)
     p_upsert.add_argument("--last-observed-at", dest="last_observed_at")
     p_upsert.add_argument("--recovery-action", dest="recovery_action")
     p_upsert.add_argument("--retry-count", dest="retry_count", type=int)

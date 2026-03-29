@@ -60,7 +60,7 @@ OctoClaw now treats `auto` as the default, policy-first mode:
 
 - primary selectors are `worker_pool / phase / profile / route`
 - `model-policy.json` is the source of truth when available
-- `octopus-mode.json` only keeps `auto` and `custom`
+- `octoclaw-mode.json` only keeps `auto` and `custom`
 
 ## Quick Start
 
@@ -80,7 +80,7 @@ Recommended minimal open-source path:
 8. Use `status.sh --format table` to inspect state
 9. Run `eval_suite.py` once to establish a baseline
 
-Recommended gradual rollout switches in `tmp/octopus-config.json`:
+Recommended gradual rollout switches in `tmp/octoclaw-config.json`:
 
 ```json
 {
@@ -300,14 +300,14 @@ Those board briefs prefer `worker_pool` for display ownership, then fallback to 
 When child steps move through `running / done / failed`, the `team_parent` record now auto-rolls up child status, step summaries, and step reports, then emits a parent-level result mail when the DAG finishes or fails.
 `status.sh` now renders these parent/child relationships directly in `compact / table / lanes`, and also prints the current workbench mode / tmux session so you can inspect the unified runtime surface without manually opening `board.json`.
 
-Enable it in `tmp/octopus-config.json`:
+Enable it in `tmp/octoclaw-config.json`:
 
 ```json
 {
   "clawteam_bridge": {
     "enabled": true,
     "backend": "hybrid",
-    "team_name": "octopus-validation",
+    "team_name": "octoclaw-validation",
     "inbox_owner": "main",
     "emit_result_mail": true,
     "clawteam_bin": "clawteam",

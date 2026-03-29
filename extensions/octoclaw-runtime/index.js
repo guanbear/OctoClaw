@@ -305,6 +305,9 @@ function isManagedAgentContext(ctx = {}) {
   if (/subagent/i.test(sessionKey) || /subagent/i.test(agentId)) {
     return false;
   }
+  if (/^agent:main:(?!main$)/i.test(sessionKey) || /^agent:main:(?!main$)/i.test(agentId)) {
+    return false;
+  }
   return true;
 }
 
@@ -317,6 +320,8 @@ function buildPolicyMetadata(ctx = {}) {
   if (ctx.agentId) metadata.agent_id = ctx.agentId;
   if (ctx.sessionId) metadata.session_id = ctx.sessionId;
   if (ctx.messageProvider) metadata.message_provider = ctx.messageProvider;
+  metadata.agent_namespace = "octoclaw";
+  metadata.managed_by_octoclaw = true;
   return metadata;
 }
 
@@ -799,7 +804,7 @@ const plugin = {
         properties: {
           task: { type: "string", description: "The user task to classify and route." },
           command: { type: "string", description: "Optional shell command if one already exists." },
-          channel: { type: "string", description: "Optional channel hint such as feishu, slack, discord, telegram, or wechat." },
+          channel: { type: "string", description: "Optional transport/origin hint such as slack, wechat, webchat, or any other IM identifier." },
           sessionKey: { type: "string", description: "Optional main session key." },
           forceRoute: { type: "string", enum: ["direct", "runner", "spawn_single", "spawn_multi"] },
           metadataJson: { type: "string", description: "Optional JSON object with extra routing metadata." }
@@ -863,6 +868,8 @@ const plugin = {
           cwd: { type: "string", description: "Optional working directory override." },
           forceRoute: { type: "string", enum: ["auto", "direct", "runner", "spawn_single", "spawn_multi"] },
           timeoutSeconds: { type: "number", description: "Runner timeout in seconds." },
+          sessionKey: { type: "string", description: "Optional session key override." },
+          metadataJson: { type: "string", description: "Optional JSON object with extra session metadata." },
           policyJson: { type: "string", description: "Optional precomputed runtime policy decision JSON." }
         },
         required: ["task"]
@@ -873,6 +880,18 @@ const plugin = {
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
+        const metadata = { ...buildPolicyMetadata(ctx) };
+        if (params.sessionKey) metadata.session_key = params.sessionKey;
+        if (params.metadataJson) {
+          try {
+            const parsed = JSON.parse(params.metadataJson);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              Object.assign(metadata, parsed);
+            }
+          } catch {}
+        }
+        if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
+        if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         const { key: stateKey, state } = getPolicyStateForContext(ctx);
         const policyDecisionJson = params.policyJson || (state?.decision ? JSON.stringify(state.decision) : "");
         const cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
@@ -931,12 +950,12 @@ const plugin = {
         properties: {
           task: { type: "string", description: "The task to run in a subagent." },
           route: { type: "string", enum: ["spawn_single", "spawn_multi"] },
-          label: { type: "string", description: "Optional OctoClaw role label override." },
-          tier: { type: "string", description: "Optional tier override." },
           model: { type: "string", description: "Optional model override." },
           runtime: { type: "string", enum: ["subagent", "acp"] },
           streamTo: { type: "string", description: "Only valid when runtime=acp." },
           parentId: { type: "string", description: "Optional parent task id." },
+          sessionKey: { type: "string", description: "Optional parent session key." },
+          metadataJson: { type: "string", description: "Optional JSON object with extra session metadata." },
           execute: { type: "boolean", description: "Whether to immediately execute spawn via ClawTeam when enabled." }
         },
         required: ["task"]
@@ -944,17 +963,27 @@ const plugin = {
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const args = ["--task", params.task, "--register"];
         if (params.route) args.push("--route", params.route);
-        if (params.label) args.push("--label", params.label);
-        if (params.tier) args.push("--tier", params.tier);
         if (params.model) args.push("--model", params.model);
         if (params.runtime) args.push("--runtime", params.runtime);
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
+        const metadata = { ...buildPolicyMetadata(ctx) };
+        if (params.sessionKey) metadata.session_key = params.sessionKey;
+        if (params.metadataJson) {
+          try {
+            const parsed = JSON.parse(params.metadataJson);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              Object.assign(metadata, parsed);
+            }
+          } catch {}
+        }
+        if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
+        if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
         const payload = await runJsonScript("octoclaw_spawn.py", args, ctx?.cwd || process.cwd());
         const summary = await userFacingHandoff(
           payload,
-          `OctoClaw spawn registered: ${payload.label} / ${payload.model}`,
+          `OctoClaw spawn registered: ${payload.worker_pool || payload.route} / ${payload.model}`,
           ctx?.cwd || process.cwd(),
         );
         return toolResponse(

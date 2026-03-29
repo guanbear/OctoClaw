@@ -822,7 +822,7 @@ case "$mode_choice" in
 esac
 
 # 写入模式文件（包含完整模式定义）
-MODE_FILE="$WORKSPACE/tmp/octopus-mode.json"
+MODE_FILE="$WORKSPACE/tmp/octoclaw-mode.json"
 mkdir -p "$WORKSPACE/tmp"
 
 if [ "$MODE" = "custom" ]; then
@@ -871,10 +871,15 @@ case "$MODE" in
 esac
 echo "✅ 已设置为 $MODE_LABEL"
 
-OCTOPUS_CONFIG_FILE="$WORKSPACE/tmp/octopus-config.json"
+OCTOPUS_CONFIG_FILE="$WORKSPACE/tmp/octoclaw-config.json"
 python3 - << EOF
 import json
 from datetime import datetime, timezone
+
+main_origin = "${MAIN_SESSION_CHANNEL}"
+if main_origin == "auto":
+    main_origin = ""
+main_strategy = "origin_match" if main_origin else "latest_user_session"
 
 cfg = {
   "version": "v1.2.0",
@@ -886,7 +891,8 @@ cfg = {
     "text_enabled": "${NOTIFICATION_TEXT_ENABLED}".lower() == "true",
   },
   "main_session": {
-    "channel": "${MAIN_SESSION_CHANNEL}",
+    "strategy": main_strategy,
+    "origin": main_origin,
     "target": "${MAIN_SESSION_TARGET}",
     "session_key": "",
   },
@@ -904,7 +910,7 @@ cfg = {
 }
 with open("${OCTOPUS_CONFIG_FILE}", "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
-print("✅ 已写入统一配置 octopus-config.json")
+print("✅ 已写入统一配置 octoclaw-config.json")
 EOF
 
 echo "💰 正在初始化统一价格源..."
@@ -1492,7 +1498,7 @@ print('✅ 无版本号旧规则已清除')
 ### 任务分级与模型选择
 
 - 强度带：`quick / standard / strong / heavy`
-- 选模优先读 `__STATE_DIR__/model-policy.json`；`octopus-mode.json` 只保留 `auto/custom`
+- 选模优先读 `__STATE_DIR__/model-policy.json`；`octoclaw-mode.json` 只保留 `auto/custom`
 - `runner` 优先低首 token 延迟；`research/report` 优先写作与总结；`code/review` 优先实现与验证
 - 用户临时要求“最强/不惜成本”可升高 band；“保密/私有”偏好由 policy 负责，不再靠旧 mode 切换
 

@@ -9,16 +9,12 @@ import os
 import subprocess
 import sys
 
-from octopus_config import MODE_FILE, MODEL_POLICY_FILE, resolve_main_session_key
+from octopus_config import MODE_FILE, MODEL_POLICY_FILE, load_json, resolve_main_session_key
 
 
 def load_mode_data() -> dict:
-    try:
-        with open(MODE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    data = load_json(MODE_FILE)
+    return data if isinstance(data, dict) else {}
 
 
 def load_policy_main_model() -> str:

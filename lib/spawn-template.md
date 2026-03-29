@@ -136,7 +136,7 @@ RESULT 的 `report` 字段填路径，`summary` 仍要写可直接转述的结�
 ```json
 {
   "id": "code-20260309-001",
-  "source": "octopus",
+  "source": "octoclaw",
   "worker_pool": "octoclaw-code",
   "work_type": "code",
   "phase": "implement",

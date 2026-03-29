@@ -34,6 +34,9 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["phase"], "inspect")
         self.assertEqual(payload["protocol"], "normal")
         self.assertEqual(payload["artifacts"], {})
+        self.assertEqual(payload["source"], "octoclaw")
+        self.assertTrue(payload["managed_by_octoclaw"])
+        self.assertEqual(payload["agent_namespace"], "octoclaw")
 
     def test_normalize_preserves_custom_artifacts_and_code_metadata(self) -> None:
         payload = normalize_task_record(
@@ -97,6 +100,27 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["artifacts"]["worker_result"]["report"], "/tmp/review-report.md")
         self.assertEqual(payload["artifacts"]["worker_result"]["files"], ["README.md"])
         self.assertEqual(payload["artifacts"]["worker_result"]["next_step"], "none")
+
+    def test_normalize_records_session_identity_fields(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "session-1",
+                "status": "running",
+                "summary": "investigate webhook failure",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-code",
+                "session_key": "wechat:dm:abc",
+                "session_id": "sess-123",
+                "agent_id": "octo-worker-1",
+            }
+        )
+        self.assertEqual(payload["session_key"], "wechat:dm:abc")
+        self.assertEqual(payload["session_origin"], "wechat")
+        self.assertEqual(payload["session_id"], "sess-123")
+        self.assertEqual(payload["agent_id"], "octo-worker-1")
+        self.assertEqual(payload["agent_namespace"], "octoclaw")
+        self.assertTrue(payload["managed_by_octoclaw"])
 
     def test_task_state_update_writes_unified_runtime_fields(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-task-record-") as workspace:

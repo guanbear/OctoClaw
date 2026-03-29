@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+import importlib
+import sys
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LIB_DIR = REPO_ROOT / "lib"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+patrol = importlib.import_module("patrol")
+
+
+class PatrolSessionMatchingTests(unittest.TestCase):
+    def test_build_session_candidates_prefers_session_key_over_label(self) -> None:
+        task = {
+            "id": "task-1",
+            "worker_pool": "octoclaw-code",
+            "managed_by_octoclaw": True,
+            "session_key": "wechat:dm:target",
+            "label": "stale-label",
+            "spawned_at": "2026-03-29T10:00:00+00:00",
+        }
+        sessions = {
+            "wechat:dm:target": {
+                "label": "different-label",
+                "sessionId": "sess-target",
+                "updatedAt": "2026-03-29T10:05:00+00:00",
+            },
+            "slack:dm:other": {
+                "label": "stale-label",
+                "sessionId": "sess-old",
+                "updatedAt": "2026-03-29T10:06:00+00:00",
+            },
+        }
+
+        candidates = patrol.build_session_candidates(task, sessions)
+
+        self.assertEqual(candidates[0]["_session_key"], "wechat:dm:target")
+        self.assertGreater(candidates[0]["_match_score"], candidates[-1]["_match_score"])
+
+    def test_build_session_candidates_uses_agent_identity_for_custom_agent_safe_matching(self) -> None:
+        task = {
+            "id": "task-2",
+            "worker_pool": "octoclaw-research",
+            "managed_by_octoclaw": True,
+            "agent_id": "octo-worker-2",
+            "owner": "octo-worker-2",
+        }
+        sessions = {
+            "agent:main:custom-reviewer": {
+                "label": "octo-worker-2",
+                "agentId": "custom-reviewer",
+                "sessionId": "sess-wrong",
+                "updatedAt": "2026-03-29T10:06:00+00:00",
+            },
+            "agent:main:octo-worker-2": {
+                "label": "unrelated-label",
+                "agentId": "octo-worker-2",
+                "sessionId": "sess-right",
+                "updatedAt": "2026-03-29T10:05:00+00:00",
+            },
+        }
+
+        candidates = patrol.build_session_candidates(task, sessions)
+
+        self.assertEqual(candidates[0]["sessionId"], "sess-right")
+        self.assertEqual(candidates[0]["_session_key"], "agent:main:octo-worker-2")
+
+
+if __name__ == "__main__":
+    unittest.main()

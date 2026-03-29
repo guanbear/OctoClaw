@@ -169,7 +169,7 @@ def cmd_enqueue(args):
             "timeout_seconds": args.timeout_seconds,
             "status": "queued",
             "model_band": args.model_band or "fast",
-            "source": "octopus",
+            "source": "octoclaw",
             "enqueued_at": now_iso(),
             "model": args.model or runner_model(),
             "task_description": args.task_description or args.shell_command,

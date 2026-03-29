@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Octopus config helpers."""
+"""Shared OctoClaw config helpers."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ import os
 from typing import Any
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
-CONFIG_FILE = f"{WORKSPACE}/tmp/octopus-config.json"
-MODE_FILE = f"{WORKSPACE}/tmp/octopus-mode.json"
+CONFIG_FILE = f"{WORKSPACE}/tmp/octoclaw-config.json"
+LEGACY_CONFIG_FILE = f"{WORKSPACE}/tmp/octopus-config.json"
+MODE_FILE = f"{WORKSPACE}/tmp/octoclaw-mode.json"
+LEGACY_MODE_FILE = f"{WORKSPACE}/tmp/octopus-mode.json"
 MODEL_CATALOG_FILE = f"{WORKSPACE}/tmp/octopus/model-catalog.json"
 MODEL_POLICY_FILE = f"{WORKSPACE}/tmp/octopus/model-policy.json"
 MODEL_HEALTH_FILE = f"{WORKSPACE}/tmp/octopus/model-health.json"
@@ -39,7 +41,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "text_enabled": True,
     },
     "main_session": {
-        "channel": "auto",
+        "strategy": "latest_user_session",
+        "origin": "",
         "target": "",
         "session_key": "",
     },
@@ -174,7 +177,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "clawteam_bridge": {
         "enabled": False,
         "backend": "mirror",
-        "team_name": "octopus-validation",
+        "team_name": "octoclaw-validation",
         "inbox_owner": "main",
         "emit_result_mail": True,
         "clawteam_bin": "clawteam",
@@ -217,12 +220,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
-def load_json(path: str) -> dict[str, Any] | list[Any] | None:
+def _load_json_file(path: str) -> dict[str, Any] | list[Any] | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
+
+
+def _legacy_alias_path(path: str) -> str:
+    aliases = {
+        CONFIG_FILE: LEGACY_CONFIG_FILE,
+        MODE_FILE: LEGACY_MODE_FILE,
+    }
+    return aliases.get(path, "")
+
+
+def load_json(path: str) -> dict[str, Any] | list[Any] | None:
+    data = _load_json_file(path)
+    if data is not None:
+        return data
+    alias = _legacy_alias_path(path)
+    if alias:
+        return _load_json_file(alias)
+    return None
 
 
 def save_json(path: str, data: dict[str, Any] | list[Any]) -> bool:
@@ -250,6 +271,8 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def load_octopus_config() -> dict[str, Any]:
     data = load_json(CONFIG_FILE)
     if isinstance(data, dict):
+        if not os.path.exists(CONFIG_FILE):
+            save_json(CONFIG_FILE, data)
         return deep_merge(DEFAULT_CONFIG, data)
     return json.loads(json.dumps(DEFAULT_CONFIG))
 
@@ -338,8 +361,7 @@ def get_notification_backend(config: dict[str, Any] | None = None) -> str:
     backend = str(cfg.get("notification", {}).get("backend", "auto") or "auto").lower()
     if backend != "auto":
         return backend
-    session_keys = load_session_keys()
-    if any(key.startswith("feishu:dm:") for key in session_keys):
+    if any(str(item.get("origin", "") or "") == "feishu" for item in load_session_descriptors()):
         return "feishu"
     return "none"
 
@@ -358,16 +380,98 @@ def notification_enabled(kind: str, config: dict[str, Any] | None = None) -> boo
 
 
 def load_session_keys() -> list[str]:
-    keys: list[str] = []
+    return [key for key in (session_control_key(item) for item in load_session_descriptors()) if key]
+
+
+def infer_session_origin(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text.startswith("agent:"):
+        return ""
+    for separator in (":", "/", "|"):
+        if separator in text:
+            return text.split(separator, 1)[0].strip()
+    return text
+
+
+def _session_updated_sort_value(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 0.0
+        if text.isdigit():
+            return float(text)
+        try:
+            from datetime import datetime
+
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _merge_session_descriptor(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(current)
+    for key, value in incoming.items():
+        if value in (None, "", []):
+            continue
+        existing = merged.get(key)
+        if existing in (None, "", []):
+            merged[key] = value
+            continue
+        if key == "updated_sort":
+            merged[key] = max(float(existing or 0.0), float(value or 0.0))
+    return merged
+
+
+def load_session_descriptors() -> list[dict[str, Any]]:
+    descriptors: dict[str, dict[str, Any]] = {}
+
+    def register(session_key: str, value: dict[str, Any]) -> None:
+        key = str(session_key or "").strip()
+        if not key or not isinstance(value, dict):
+            return
+        channel_session_key = str(value.get("channelSessionKey", "") or "").strip()
+        control_key = channel_session_key or key
+        origin = (
+            infer_session_origin(channel_session_key)
+            or infer_session_origin(value.get("messageProvider"))
+            or infer_session_origin(value.get("channelId"))
+            or infer_session_origin(control_key)
+        )
+        entry = {
+            "session_key": key,
+            "control_key": control_key,
+            "channel_session_key": channel_session_key,
+            "origin": origin,
+            "label": str(value.get("label", "") or "").strip(),
+            "session_id": str(value.get("sessionId", "") or value.get("id", "") or "").strip(),
+            "run_id": str(value.get("runId", "") or value.get("activeRunId", "") or "").strip(),
+            "agent_id": str(value.get("agentId", "") or value.get("agentName", "") or "").strip(),
+            "updated_at": value.get("updatedAt"),
+            "updated_sort": _session_updated_sort_value(value.get("updatedAt")),
+            "is_subagent": "subagent" in key.lower() or "subagent" in str(value.get("agentId", "") or "").lower(),
+            "is_user_facing": not control_key.startswith("agent:"),
+            "is_main_agent": key == "agent:main:main",
+        }
+        descriptors[key] = _merge_session_descriptor(descriptors.get(key, {}), entry)
+
     raw = load_json(SESSIONS_FILE)
     if isinstance(raw, dict):
-        keys.extend([str(k) for k in raw.keys()])
+        for key, value in raw.items():
+            register(str(key), value if isinstance(value, dict) else {})
+
+    keys: list[str] = []
     main_raw = load_json(MAIN_AGENT_SESSIONS_FILE)
     if isinstance(main_raw, dict):
         for key, value in main_raw.items():
-            if isinstance(key, str) and not key.startswith("agent:main:subagent:"):
+            if isinstance(key, str):
                 keys.append(key)
-            elif isinstance(value, dict):
+            if isinstance(value, dict):
+                register(str(key), value)
                 channel = value.get("channelSessionKey")
                 if isinstance(channel, str) and channel:
                     keys.append(channel)
@@ -377,7 +481,43 @@ def load_session_keys() -> list[str]:
         if key and key not in seen:
             seen.add(key)
             deduped.append(key)
-    return deduped
+    for key in deduped:
+        if key not in descriptors:
+            register(key, {"channelSessionKey": key})
+    items = list(descriptors.values())
+    items.sort(key=lambda item: (float(item.get("updated_sort", 0.0) or 0.0), str(item.get("control_key", "") or "")), reverse=True)
+    return items
+
+
+def session_control_key(descriptor: dict[str, Any]) -> str:
+    return str(descriptor.get("control_key", "") or descriptor.get("channel_session_key", "") or descriptor.get("session_key", "") or "").strip()
+
+
+def _session_match_texts(descriptor: dict[str, Any]) -> list[str]:
+    return [
+        str(descriptor.get("session_key", "") or "").lower(),
+        str(descriptor.get("control_key", "") or "").lower(),
+        str(descriptor.get("channel_session_key", "") or "").lower(),
+        str(descriptor.get("label", "") or "").lower(),
+        str(descriptor.get("agent_id", "") or "").lower(),
+        str(descriptor.get("origin", "") or "").lower(),
+    ]
+
+
+def _pick_preferred_session(candidates: list[dict[str, Any]]) -> str:
+    if not candidates:
+        return ""
+    preferred = sorted(
+        candidates,
+        key=lambda item: (
+            bool(item.get("is_user_facing")),
+            not bool(item.get("is_subagent")),
+            float(item.get("updated_sort", 0.0) or 0.0),
+            str(item.get("control_key", "") or ""),
+        ),
+        reverse=True,
+    )
+    return session_control_key(preferred[0])
 
 
 def resolve_main_session_key(config: dict[str, Any] | None = None) -> str:
@@ -387,28 +527,45 @@ def resolve_main_session_key(config: dict[str, Any] | None = None) -> str:
     if explicit:
         return explicit
 
-    channel = str(main_cfg.get("channel", "auto") or "auto").lower()
-    target = str(main_cfg.get("target", "") or "").strip()
-    session_keys = load_session_keys()
-    if not session_keys:
+    descriptors = load_session_descriptors()
+    if not descriptors:
         return ""
 
+    target = str(main_cfg.get("target", "") or "").strip().lower()
+    origin = str(main_cfg.get("origin", "") or main_cfg.get("channel", "") or "").strip().lower()
+    strategy = str(main_cfg.get("strategy", "") or "").strip().lower()
+    if not strategy:
+        strategy = "origin_match" if origin else "latest_user_session"
+
     if target:
-        for key in session_keys:
-            if target in key:
-                return key
+        matched = [item for item in descriptors if any(target in text for text in _session_match_texts(item))]
+        resolved = _pick_preferred_session(matched)
+        if resolved:
+            return resolved
 
-    channel_prefixes = {
-        "feishu": ["feishu:dm:"],
-        "discord": ["discord:"],
-        "telegram": ["telegram:"],
-        "slack": ["slack:"],
-        "auto": ["feishu:dm:", "discord:", "telegram:", "slack:"],
-    }
-    prefixes = channel_prefixes.get(channel, [f"{channel}:"])
-    for prefix in prefixes:
-        for key in session_keys:
-            if key.startswith(prefix):
-                return key
+    if strategy == "disabled":
+        return ""
+    if strategy in {"origin_match", "auto"} and origin:
+        matched = [item for item in descriptors if str(item.get("origin", "") or "").lower() == origin]
+        resolved = _pick_preferred_session(matched)
+        if resolved:
+            return resolved
+    if strategy == "main_agent":
+        matched = [item for item in descriptors if item.get("is_main_agent")]
+        resolved = _pick_preferred_session(matched)
+        if resolved:
+            return resolved
+    if strategy == "latest_any_session":
+        resolved = _pick_preferred_session(descriptors)
+        if resolved:
+            return resolved
 
-    return session_keys[0]
+    user_facing = [item for item in descriptors if item.get("is_user_facing") and not item.get("is_subagent")]
+    resolved = _pick_preferred_session(user_facing)
+    if resolved:
+        return resolved
+    non_subagent = [item for item in descriptors if not item.get("is_subagent")]
+    resolved = _pick_preferred_session(non_subagent)
+    if resolved:
+        return resolved
+    return _pick_preferred_session(descriptors)

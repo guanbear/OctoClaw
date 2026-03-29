@@ -155,6 +155,17 @@ def resolve_model_and_thinking(
     return model, thinking
 
 
+def policy_request(policy: dict) -> dict:
+    value = policy.get("request", {})
+    return value if isinstance(value, dict) else {}
+
+
+def policy_metadata(policy: dict) -> dict:
+    request = policy_request(policy)
+    value = request.get("metadata", {})
+    return value if isinstance(value, dict) else {}
+
+
 def task_title(task: str, limit: int = 72) -> str:
     text = re.sub(r"\s+", " ", (task or "").strip())
     if len(text) <= limit:
@@ -344,12 +355,12 @@ def resolve_spawn_team_name() -> str:
     for value in (
         spawn_cfg.get("team_name"),
         bridge_cfg.get("team_name"),
-        "octopus-validation",
+        "octoclaw-validation",
     ):
         text = str(value or "").strip()
         if text:
             return text
-    return "octopus-validation"
+    return "octoclaw-validation"
 
 
 def clawteam_data_dir() -> str:
@@ -597,6 +608,11 @@ def register_dispatched_task(
     profile: str = "",
     review_required: bool = False,
     owner: str = "",
+    session_key: str = "",
+    session_id: str = "",
+    agent_id: str = "",
+    agent_namespace: str = "octoclaw",
+    managed_by_octoclaw: bool = True,
     deps: list[str] | None = None,
     artifacts_json: dict | None = None,
 ) -> None:
@@ -617,7 +633,7 @@ def register_dispatched_task(
         "--expected-done",
         expected_done,
         "--source",
-        "octopus",
+        "octoclaw",
         "--executor",
         "subagent",
         "--route",
@@ -647,6 +663,15 @@ def register_dispatched_task(
     ]
     if owner:
         cmd.extend(["--owner", owner])
+    if session_key:
+        cmd.extend(["--session-key", session_key])
+    if session_id:
+        cmd.extend(["--session-id", session_id])
+    if agent_id:
+        cmd.extend(["--agent-id", agent_id])
+    if agent_namespace:
+        cmd.extend(["--agent-namespace", agent_namespace])
+    cmd.extend(["--managed-by-octoclaw", "true" if managed_by_octoclaw else "false"])
     if deps:
         joined = ",".join(str(dep).strip() for dep in deps if str(dep).strip())
         if joined:
@@ -682,6 +707,11 @@ def register_failed_spawn_task(
     review_required: bool,
     task_kind: str,
     summary: str,
+    session_key: str = "",
+    session_id: str = "",
+    agent_id: str = "",
+    agent_namespace: str = "octoclaw",
+    managed_by_octoclaw: bool = True,
     artifacts_json: dict | None = None,
 ) -> None:
     register_dispatched_task(
@@ -703,6 +733,11 @@ def register_failed_spawn_task(
         protocol=protocol,
         profile=profile,
         review_required=review_required,
+        session_key=session_key,
+        session_id=session_id,
+        agent_id=agent_id,
+        agent_namespace=agent_namespace,
+        managed_by_octoclaw=managed_by_octoclaw,
         artifacts_json=artifacts_json,
     )
     subprocess.run(
@@ -745,8 +780,14 @@ def build_spawn_spec(
     execute: bool | None = None,
     deps: list[str] | None = None,
     policy_decision: dict | None = None,
+    session_key: str = "",
+    metadata: dict | None = None,
 ) -> dict:
     policy = policy_decision if isinstance(policy_decision, dict) else {}
+    request = policy_request(policy)
+    request_metadata = dict(policy_metadata(policy))
+    if isinstance(metadata, dict):
+        request_metadata.update(metadata)
     route_decision = policy.get("route_decision", {}) if isinstance(policy.get("route_decision", {}), dict) else {}
     model_policy = policy.get("model_policy", {}) if isinstance(policy.get("model_policy", {}), dict) else {}
     skill_policy = policy.get("skill_policy", {}) if isinstance(policy.get("skill_policy", {}), dict) else {}
@@ -831,6 +872,12 @@ def build_spawn_spec(
     if not isinstance(skill_bundle, list):
         skill_bundle = []
     review_required = bool(review_policy.get("required", False))
+    resolved_session_key = str(session_key or request.get("session_key", "") or request_metadata.get("session_key", "") or "").strip()
+    resolved_session_id = str(request_metadata.get("session_id", "") or "").strip()
+    resolved_agent_id = str(request_metadata.get("agent_id", "") or "").strip()
+    resolved_agent_namespace = str(request_metadata.get("agent_namespace", "") or "octoclaw").strip() or "octoclaw"
+    managed_value = request_metadata.get("managed_by_octoclaw")
+    managed_by_octoclaw = True if managed_value is None or str(managed_value).strip() == "" else str(managed_value).strip().lower() in {"1", "true", "yes", "on"}
     final_task_kind = str(task_kind or "").strip() or ("team_parent" if final_route == "spawn_multi" else "subtask")
     spawn_team_name = resolve_spawn_team_name()
     base_artifacts = initial_spawn_artifacts(route=final_route, runtime=runtime, team_name=spawn_team_name)
@@ -861,6 +908,11 @@ def build_spawn_spec(
             protocol=protocol,
             profile=profile,
             review_required=review_required,
+            session_key=resolved_session_key,
+            session_id=resolved_session_id,
+            agent_id=resolved_agent_id,
+            agent_namespace=resolved_agent_namespace,
+            managed_by_octoclaw=managed_by_octoclaw,
             artifacts_json=base_artifacts,
             summary=f"spawn派发失败：{compact_text(error_text, 120)}",
         )
@@ -933,6 +985,11 @@ def build_spawn_spec(
             profile=profile,
             review_required=review_required,
             deps=deps,
+            session_key=resolved_session_key,
+            session_id=resolved_session_id,
+            agent_id=resolved_agent_id,
+            agent_namespace=resolved_agent_namespace,
+            managed_by_octoclaw=managed_by_octoclaw,
             artifacts_json=base_artifacts,
         )
 
@@ -1072,6 +1129,8 @@ def main() -> None:
     parser.add_argument("--stream-to", dest="stream_to", default="")
     parser.add_argument("--supports-acp", action="store_true")
     parser.add_argument("--parent-id", dest="parent_id", default="")
+    parser.add_argument("--session-key", dest="session_key", default="")
+    parser.add_argument("--metadata-json", dest="metadata_json", default="")
     parser.add_argument("--policy-json", default="")
     parser.add_argument("--register", action="store_true")
     parser.add_argument("--execute", dest="execute", action="store_true")
@@ -1087,6 +1146,14 @@ def main() -> None:
                 policy_decision = parsed
         except json.JSONDecodeError:
             policy_decision = None
+    metadata = None
+    if args.metadata_json:
+        try:
+            parsed = json.loads(args.metadata_json)
+            if isinstance(parsed, dict):
+                metadata = parsed
+        except json.JSONDecodeError:
+            metadata = None
 
     spec = build_spawn_spec(
         args.task,
@@ -1101,6 +1168,8 @@ def main() -> None:
         register=args.register,
         execute=args.execute,
         policy_decision=policy_decision,
+        session_key=args.session_key,
+        metadata=metadata,
     )
     print(json.dumps(spec, ensure_ascii=False))
 

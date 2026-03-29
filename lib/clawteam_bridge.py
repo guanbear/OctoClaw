@@ -78,7 +78,7 @@ def _owner(task: dict[str, Any]) -> str:
 
 
 def _team_name() -> str:
-    return str(bridge_config().get("team_name", "octopus-validation") or "octopus-validation")
+    return str(bridge_config().get("team_name", "octoclaw-validation") or "octoclaw-validation")
 
 
 def _inbox_owner() -> str:
@@ -390,7 +390,7 @@ def _send_cli_inbox(paths: dict[str, str], record: dict[str, Any], content: str)
         _inbox_owner(),
         content,
         "--from",
-        str(record.get("owner", "") or "octopus"),
+        str(record.get("owner", "") or "octoclaw"),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return {

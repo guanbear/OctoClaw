@@ -6,6 +6,11 @@ from __future__ import annotations
 from typing import Any
 
 try:
+    from octopus_config import infer_session_origin
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.octopus_config import infer_session_origin
+
+try:
     from worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
@@ -43,6 +48,27 @@ def _normalized_bool(value: Any) -> bool:
         return value
     text = str(value or "").strip().lower()
     return text in {"1", "true", "yes", "on"}
+
+
+def infer_managed_by_octoclaw(task: dict[str, Any]) -> bool:
+    explicit = task.get("managed_by_octoclaw")
+    if explicit is not None and str(explicit).strip() != "":
+        return _normalized_bool(explicit)
+    source = _normalized_str(task.get("source")).lower()
+    worker_pool = _normalized_str(task.get("worker_pool")).lower()
+    route = _normalized_str(task.get("route")).lower()
+    return source in {"octoclaw", "octopus"} or worker_pool.startswith("octoclaw-") or route in {"runner", "spawn_single", "spawn_multi", "direct"}
+
+
+def infer_agent_namespace(task: dict[str, Any], managed: bool) -> str:
+    explicit = _normalized_str(task.get("agent_namespace"))
+    if explicit:
+        return explicit
+    return "octoclaw" if managed else ""
+
+
+def infer_agent_id(task: dict[str, Any]) -> str:
+    return _normalized_str(task.get("agent_id")) or _normalized_str(task.get("owner"))
 
 
 def infer_executor(task: dict[str, Any]) -> str:
@@ -162,7 +188,7 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["schema_version"] = TASK_RECORD_SCHEMA_VERSION
     normalized["title"] = infer_title(normalized)
     normalized["status"] = _normalized_str(normalized.get("status"))
-    normalized["source"] = _normalized_str(normalized.get("source")) or "octopus"
+    normalized["source"] = _normalized_str(normalized.get("source")) or "octoclaw"
     normalized["route"] = _normalized_str(normalized.get("route"))
     normalized["runtime"] = infer_runtime(normalized)
     normalized["executor"] = infer_executor(normalized)
@@ -178,6 +204,12 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized.pop("label", None)
     normalized.pop("legacy_label", None)
     normalized["owner"] = _normalized_str(normalized.get("owner"))
+    normalized["session_key"] = _normalized_str(normalized.get("session_key"))
+    normalized["session_origin"] = _normalized_str(normalized.get("session_origin")) or infer_session_origin(normalized.get("session_key"))
+    normalized["agent_id"] = infer_agent_id(normalized)
+    managed_by_octoclaw = infer_managed_by_octoclaw(normalized)
+    normalized["managed_by_octoclaw"] = managed_by_octoclaw
+    normalized["agent_namespace"] = infer_agent_namespace(normalized, managed_by_octoclaw)
     normalized["model_band"] = infer_model_band(normalized, work_type)
     normalized.pop("tier", None)
     normalized["model"] = _normalized_str(normalized.get("model"))

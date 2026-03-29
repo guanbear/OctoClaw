@@ -7,7 +7,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 WORKSPACE="${WORKSPACE:-/workspace}"
 OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
 OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-${OPENCLAW_HOME}/openclaw.json}"
-CONFIG_FILE="${OCTOCLAW_CONFIG_FILE:-${WORKSPACE}/tmp/octopus-config.json}"
+CONFIG_FILE="${OCTOCLAW_CONFIG_FILE:-${WORKSPACE}/tmp/octoclaw-config.json}"
 PRESET="${RUNTIME_POLICY_PRESET:-conservative}"
 EXT_SOURCE="${REPO_ROOT}/extensions/octoclaw-runtime"
 EXT_TARGET="${OPENCLAW_HOME}/extensions/octoclaw-runtime"
@@ -201,7 +201,7 @@ while [ $# -gt 0 ]; do
             ;;
         --workspace)
             WORKSPACE="$2"
-            CONFIG_FILE="${WORKSPACE}/tmp/octopus-config.json"
+            CONFIG_FILE="${WORKSPACE}/tmp/octoclaw-config.json"
             shift 2
             ;;
         --openclaw-home)

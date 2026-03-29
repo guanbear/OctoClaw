@@ -196,6 +196,11 @@ def load_main_session_actual_model():
     session_key = resolve_main_session_key(config_data) or "agent:main:main"
     session_index = load_json(MAIN_AGENT_SESSIONS_FILE) or {}
     session_entry = session_index.get(session_key) or {}
+    if not session_entry and session_key:
+        for value in session_index.values():
+            if isinstance(value, dict) and str(value.get("channelSessionKey", "") or "").strip() == session_key:
+                session_entry = value
+                break
     if not session_entry and session_key != "agent:main:main":
         session_entry = session_index.get("agent:main:main") or {}
     session_file = str(session_entry.get("sessionFile") or "").strip()
@@ -215,7 +220,7 @@ def load_tasks():
         with open(TASK_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         tasks = data.get("tasks", [])
-        tasks = [task for task in tasks if task.get("source") == "octopus"]
+        tasks = [task for task in tasks if task.get("source") in {"octoclaw", "octopus"}]
         queue_raw = load_json(RUNNER_QUEUE_FILE) or {}
         jobs = queue_raw.get("jobs", []) if isinstance(queue_raw, dict) else []
         queue_by_id = {
@@ -259,7 +264,7 @@ if bridge_summary.get("enabled"):
     if backend in ("hybrid", "cli"):
         cli_note = " · cli-ready" if bridge_summary.get("cli_available") else " · cli-missing"
     print(
-        f"🤝 Bridge：{bridge_summary.get('team', 'octopus-validation')} · "
+        f"🤝 Bridge：{bridge_summary.get('team', 'octoclaw-validation')} · "
         f"{backend}{cli_note} · tasks {bridge_tasks} · "
         f"lineages {bridge_summary.get('lineage_count', 0)} · inbox {bridge_summary.get('inbox_count', 0)}"
     )

@@ -56,6 +56,33 @@ def decision_review(decision: dict) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def decision_request(decision: dict) -> dict:
+    value = decision.get("request", {})
+    return value if isinstance(value, dict) else {}
+
+
+def decision_metadata(decision: dict) -> dict:
+    request = decision_request(decision)
+    value = request.get("metadata", {})
+    return value if isinstance(value, dict) else {}
+
+
+def octoclaw_identity_fields(decision: dict) -> dict:
+    request = decision_request(decision)
+    metadata = decision_metadata(decision)
+    managed = metadata.get("managed_by_octoclaw")
+    if managed is None or str(managed).strip() == "":
+        managed = True
+    return {
+        "source": "octoclaw",
+        "session_key": str(request.get("session_key", "") or metadata.get("session_key", "") or ""),
+        "session_id": str(metadata.get("session_id", "") or ""),
+        "agent_id": str(metadata.get("agent_id", "") or ""),
+        "agent_namespace": str(metadata.get("agent_namespace", "") or "octoclaw"),
+        "managed_by_octoclaw": "true" if str(managed).strip().lower() not in {"0", "false", "no", "off"} else "false",
+    }
+
+
 def apply_policy_fields(payload: dict, decision: dict) -> dict:
     route_meta = decision_route(decision)
     model_meta = decision_model(decision)
@@ -264,7 +291,6 @@ def register_multi_parent_task(
         model_band=str(parent_spec.get("model_band", "") or ""),
         task_description=task,
         expected_done=str(parent_spec.get("expected_done", "") or ""),
-        source="octopus",
         executor="team",
         route="spawn_multi",
         runtime=backend,
@@ -281,6 +307,7 @@ def register_multi_parent_task(
         profile=str(model_meta.get("profile", "") or parent_spec.get("profile", "")),
         review_required="true" if bool(decision_review(decision).get("required", False)) else "false",
         artifacts_json=json.dumps(build_multi_parent_artifacts(plan, execution.get("steps", []), backend), ensure_ascii=False),
+        **octoclaw_identity_fields(decision),
     )
 
 
@@ -682,7 +709,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         policy_decision=decision,
     )
     planner_task = build_multi_step_task(task, "planner")
-    planner_decision = build_decision(planner_task, force_route="spawn_single")
+    planner_decision = build_decision(planner_task, metadata=decision_metadata(decision), force_route="spawn_single")
     worker_decision = clone_worker_step_decision(decision)
     plan = {
         "planner": compat_spawn_step_from_decision(planner_decision),
@@ -690,7 +717,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
     }
     if decision_review(decision).get("required", False):
         review_task = build_multi_step_task(task, "review")
-        review_decision = build_decision(review_task, force_route="spawn_single")
+        review_decision = build_decision(review_task, metadata=decision_metadata(decision), force_route="spawn_single")
         plan["review"] = compat_spawn_step_from_decision(review_decision)
     execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octoclaw-team-{now_compact()}"))
     parent_runtime = "clawteam" if multi_exec_enabled else "plan"
@@ -740,6 +767,8 @@ def main():
     parser.add_argument("--id", default="")
     parser.add_argument("--model-band", dest="model_band", default="")
     parser.add_argument("--force-route", choices=["auto", "direct", "runner", "spawn_single", "spawn_multi"], default="auto")
+    parser.add_argument("--session-key", dest="session_key", default="")
+    parser.add_argument("--metadata-json", dest="metadata_json", default="")
     parser.add_argument("--policy-json", default="")
     parser.add_argument("--wait", action="store_true")
     parser.add_argument("--wait-timeout-seconds", dest="wait_timeout_seconds", type=int, default=12)
@@ -758,7 +787,17 @@ def main():
         forced_route = ""
         if args.force_route != "auto":
             forced_route = args.force_route
-        decision = build_decision(task, args.command, force_route=forced_route)
+        metadata: dict[str, object] = {}
+        if args.metadata_json:
+            try:
+                parsed = json.loads(args.metadata_json)
+                if isinstance(parsed, dict):
+                    metadata.update(parsed)
+            except json.JSONDecodeError:
+                metadata = metadata
+        if args.session_key:
+            metadata["session_key"] = args.session_key
+        decision = build_decision(task, args.command, metadata, force_route=forced_route)
     args._policy_decision = decision
     route = decision_route(decision)
     model_meta = decision_model(decision)
