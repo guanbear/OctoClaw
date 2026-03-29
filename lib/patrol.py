@@ -45,7 +45,7 @@ import argparse
 from datetime import datetime, timezone, timedelta
 from collections import deque
 
-from notifier import backend_supports_cards, send_text
+from notifier import backend_supports_cards, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec
 from clawteam_bridge import sync_task
 from octopus_config import (
@@ -2666,6 +2666,46 @@ def send_state_change_dm(msg: str, reply_to_message_id: str | None = None) -> st
     return mid
 
 
+def send_state_change_task_anchor(task: dict) -> bool:
+    """
+    尝试向任务所属会话发送一条 task anchor。
+    失败时静默返回 False，避免影响现有巡逻通知链。
+    """
+    if not isinstance(task, dict):
+        return False
+    task_id = str(task.get("id", "") or "").strip()
+    session_key = str(task.get("session_key", "") or "").strip()
+    if not task_id or not session_key:
+        return False
+    try:
+        result = send_task_notification(task)
+    except Exception as exc:
+        print(f"⚠️  发送 task anchor 失败 [{task_id}]: {exc}", file=sys.stderr)
+        return False
+    if result.get("ok"):
+        print(f"📌 task anchor 已发送 [{task_id}] -> {result.get('backend', '')}")
+        return True
+    error = str(result.get("error", "") or "").strip()
+    if error:
+        print(f"⚠️  task anchor 未发送 [{task_id}]: {error}", file=sys.stderr)
+    return False
+
+
+def send_state_change_task_anchors(tasks: list[dict]) -> int:
+    sent = 0
+    seen = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = str(task.get("id", "") or "").strip()
+        if not task_id or task_id in seen:
+            continue
+        seen.add(task_id)
+        if send_state_change_task_anchor(task):
+            sent += 1
+    return sent
+
+
 def _increment_panel_shown_count(pending_list: list):
     """
     对本次展示在面板上的 pending_confirm 任务，在 task-state.json 中将
@@ -4397,6 +4437,7 @@ def main():
             old_states = notify_state.get("task_ids", {})
             new_states = {t.get("id", ""): t.get("status", "") for t in tasks if t.get("id")}
             changes = []
+            changed_tasks_for_anchor = []
             for tid, new_status in new_states.items():
                 old_status = old_states.get(tid)
                 if old_status == new_status:
@@ -4413,14 +4454,17 @@ def main():
                 if new_status in ("running", "dispatched") and old_status not in ("running", "dispatched"):
                     # 包含首次 spawn（old_status is None）和状态从非运行变为运行
                     changes.append(f"🟡 {label_name} 开始：{summary}")
+                    changed_tasks_for_anchor.append(task)
                 elif new_status == "done" and old_status in ("running", "dispatched"):
                     changes.append(f"✅ {label_name} 完成：{summary}")
+                    changed_tasks_for_anchor.append(task)
                     # ── 卡片 B：任务完成事件通知 ──
                     send_event_card_b("done", task)
                 elif new_status == "failed" and old_status in ("running", "dispatched"):
                     # notified_failed=True 表示已通过独立失败通知发送过，跳过重发（无论是否 force 模式）
                     if not task.get("notified_failed"):
                         changes.append(f"❌ {label_name} 失败：{summary}")
+                        changed_tasks_for_anchor.append(task)
                         # ── 卡片 B：任务失败事件通知 ──
                         send_event_card_b("failed", task)
             if changes:
@@ -4429,6 +4473,7 @@ def main():
                 card_state = load_patrol_card_state()
                 panel_msg_id = card_state.get("message_id") if card_state else None
                 send_state_change_dm(msg, reply_to_message_id=panel_msg_id)
+                send_state_change_task_anchors(changed_tasks_for_anchor[:5])
             save_notify_state({"task_ids": new_states, "updated_at": datetime.now().isoformat()})
         except Exception as e:
             print(f"⚠️  状态变化通知异常: {e}", file=sys.stderr)
