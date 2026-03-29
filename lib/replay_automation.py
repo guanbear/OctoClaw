@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from model_health_backfill import run_backfill as run_model_health_backfill
+from model_health_quota_backfill import run_quota_backfill as run_model_health_quota_backfill
 from octopus_config import CONFIG_FILE, DEFAULT_CONFIG, deep_merge, load_json, load_octopus_config, save_json
 from replay_curate import curate_cases
 from replay_review import build_review_payload
@@ -211,6 +212,7 @@ def run_replay_automation(
     events_path: Path,
     output_dir: Path,
     openclaw_log: Path | None = None,
+    usage_summary_file: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     replay_cfg = config.get("replay_automation", {}) if isinstance(config, dict) else {}
@@ -252,6 +254,16 @@ def run_replay_automation(
     backfill_json = dated_dir / "model-health-backfill.json"
     _write_json(backfill_json, backfill_result)
     generated["model_health_backfill_json"] = str(backfill_json)
+
+    quota_backfill_result = run_model_health_quota_backfill(
+        usage_summary_file=str(usage_summary_file) if usage_summary_file else "",
+        health_file="",
+        catalog_file="",
+        config=config,
+    )
+    quota_backfill_json = dated_dir / "model-health-quota-backfill.json"
+    _write_json(quota_backfill_json, quota_backfill_result)
+    generated["model_health_quota_backfill_json"] = str(quota_backfill_json)
 
     summary_payload = None
     if bool(replay_cfg.get("summary_enabled", True)):
@@ -390,6 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--config", default="")
     run.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
     run.add_argument("--openclaw-log", default="")
+    run.add_argument("--usage-summary-file", default="")
     run.add_argument("--output-dir", default="")
     run.add_argument("--format", choices=("text", "json"), default="text")
     run.add_argument("--force", action="store_true")
@@ -398,6 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     cron.add_argument("--config", default="")
     cron.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
     cron.add_argument("--openclaw-log", default="")
+    cron.add_argument("--usage-summary-file", default="")
     return parser
 
 
@@ -429,6 +443,8 @@ def main() -> int:
         command = render_cron_command(config_path=config_path, events_path=Path(args.events).expanduser().resolve())
         if args.openclaw_log:
             command += f' --openclaw-log "{Path(args.openclaw_log).expanduser().resolve()}"'
+        if args.usage_summary_file:
+            command += f' --usage-summary-file "{Path(args.usage_summary_file).expanduser().resolve()}"'
         print(command)
         return 0
 
@@ -445,6 +461,7 @@ def main() -> int:
             events_path=Path(args.events).expanduser().resolve(),
             output_dir=output_dir,
             openclaw_log=Path(args.openclaw_log).expanduser().resolve() if args.openclaw_log else None,
+            usage_summary_file=Path(args.usage_summary_file).expanduser().resolve() if args.usage_summary_file else None,
             force=args.force,
         )
         if args.format == "json":

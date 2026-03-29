@@ -230,3 +230,27 @@ v1 不做：
 
 - provider usage / quota snapshot -> `quota_pressure`
 - main session drift 检测与自动纠正
+
+## 12. Quota Pressure 回灌
+
+第二优先级是把 OpenClaw 的 provider usage / quota snapshot 转成 OctoClaw 的
+`quota_pressure`。
+
+第一版只做：
+
+1. 读取标准 `UsageSummary` JSON，或 `status --json --usage` 中的 `usage` 块
+2. 以 provider 的最高 `usedPercent` 窗口判定：
+   - `>= 85%` -> `high`
+   - `>= 95%` -> `critical`
+3. 基于 policy/catalog 里的 provider 元信息，把压力映射到对应模型
+
+这样能解决：
+
+- 某 provider 当前额度很紧时，不必等到真实 429 才避让
+- 交互型主链路能更早避开高压 provider
+
+但它仍然是保守的：
+
+- 只做跨请求 penalty
+- 不替代 OpenClaw 单次请求内的 failover
+- 不直接自动改主 session

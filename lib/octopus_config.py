@@ -70,6 +70,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "high": 0.10,
             "critical": 0.22,
         },
+        "quota_pressure_high_used_percent": 85.0,
+        "quota_pressure_critical_used_percent": 95.0,
         "degraded_penalty_by_role": {
             "runner": 0.22,
             "router": 0.20,
