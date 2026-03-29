@@ -18,6 +18,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from clawteam_bridge import sync_task
+from notifier import send_task_notification
 from runtime_task_record import normalize_task_record, normalize_task_records
 from runtime_protocol import normalize_worker_result
 from worker_taxonomy import (
@@ -27,6 +28,7 @@ from worker_taxonomy import (
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
+PATROL_NOTIFY_STATE_FILE = f"{WORKSPACE}/tmp/octopus/patrol-notify-state.json"
 
 
 def now_iso() -> str:
@@ -78,6 +80,29 @@ def cleanup_old(tasks: list) -> list:
                     pass
         result.append(t)
     return result
+
+
+def load_notify_state() -> dict:
+    try:
+        with open(PATROL_NOTIFY_STATE_FILE, "r", encoding="utf-8") as fh:
+            loaded = json.load(fh)
+            if not isinstance(loaded, dict):
+                return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
+            loaded.setdefault("task_ids", {})
+            loaded.setdefault("task_anchor_messages", {})
+            loaded.setdefault("updated_at", "")
+            return loaded
+    except Exception:
+        return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
+
+
+def save_notify_state(state: dict):
+    try:
+        os.makedirs(os.path.dirname(PATROL_NOTIFY_STATE_FILE), exist_ok=True)
+        with open(PATROL_NOTIFY_STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False)
+    except Exception:
+        return
 
 
 def resolve_expected_done(value: str) -> str:
@@ -552,6 +577,58 @@ def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert
     return fallback
 
 
+def _should_seed_task_anchor(record: dict, previous_status: str, anchor_messages: dict) -> bool:
+    task_id = str(record.get("id", "") or "").strip()
+    session_key = str(record.get("session_key", "") or "").strip()
+    status = str(record.get("status", "") or "").strip().lower()
+    route = str(record.get("route", "") or "").strip().lower()
+    if not task_id or not session_key:
+        return False
+    if route == "direct":
+        return False
+    if status not in {"queued", "dispatched", "running", "blocked", "needs_approval"}:
+        return False
+    if str(previous_status or "").strip():
+        return False
+    if isinstance(anchor_messages.get(task_id), dict) and str(anchor_messages[task_id].get("message_id", "") or "").strip():
+        return False
+    return True
+
+
+def _seed_task_anchor(record: dict, previous_status: str) -> dict:
+    notify_state = load_notify_state()
+    anchor_messages = notify_state.get("task_anchor_messages", {})
+    if not isinstance(anchor_messages, dict):
+        anchor_messages = {}
+    if not _should_seed_task_anchor(record, previous_status, anchor_messages):
+        return {"ok": False, "skipped": True}
+
+    try:
+        result = send_task_notification(record)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if not result.get("ok"):
+        return result
+
+    task_id = str(record.get("id", "") or "").strip()
+    message_id = str(result.get("message_id", "") or result.get("messageId", "") or "").strip()
+    anchor_messages[task_id] = {
+        "backend": str(result.get("backend", "") or ""),
+        "message_id": message_id,
+        "updated_at": now_iso(),
+    }
+    notify_state["task_anchor_messages"] = anchor_messages
+    notify_state["updated_at"] = now_iso()
+    save_notify_state(notify_state)
+    return {
+        "ok": True,
+        "backend": str(result.get("backend", "") or ""),
+        "message_id": message_id,
+        "action": str(result.get("action", "send") or "send"),
+    }
+
+
 def cmd_upsert(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     lineage_syncs = []
@@ -744,6 +821,7 @@ def cmd_upsert(args):
         save_state(fp, state)
     if current_record:
         sync_task(current_record, event_type="upsert", previous_status=previous_status)
+        _seed_task_anchor(current_record, previous_status)
     for record, record_previous_status in lineage_syncs:
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
     print(f"[ok] upsert id={args.id} status={args.status or 'dispatched'}")
