@@ -72,6 +72,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "quota_pressure_high_used_percent": 85.0,
         "quota_pressure_critical_used_percent": 95.0,
+        "main_session_drift": {
+            "enabled": True,
+            "auto_recover": False,
+            "notify_cooldown_seconds": 3600,
+        },
         "degraded_penalty_by_role": {
             "runner": 0.22,
             "router": 0.20,

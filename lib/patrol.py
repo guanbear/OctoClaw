@@ -3854,91 +3854,67 @@ def check_queued_tasks(tasks: list) -> int:
 
 
 def check_main_model_drift():
-    """检测主 Agent 模型是否因重启而漂移（modelOverride 丢失），自动恢复"""
+    """检测主 Agent 模型漂移；默认只提醒，不自动恢复。"""
     import subprocess as sp_inner
 
-    DRIFT_COOLDOWN_FILE = "/tmp/octopus-drift-recovered.json"
-    MODE_FILE = "/workspace/tmp/octopus-mode.json"
-    POLICY_FILE = "/workspace/tmp/octopus/model-policy.json"
+    from main_model_drift import assess_main_model_drift, main_session_drift_config
 
-    try:
-        mode_data = json.load(open(MODE_FILE))
-        current_mode = mode_data.get("mode", "auto")
-    except:
+    DRIFT_NOTICE_FILE = "/tmp/octopus-drift-notified.json"
+    drift_cfg = main_session_drift_config(load_octopus_config())
+    assessment = assess_main_model_drift()
+    if not assessment.get("enabled"):
+        return
+    if not assessment.get("drift"):
+        if os.path.exists(DRIFT_NOTICE_FILE):
+            os.remove(DRIFT_NOTICE_FILE)
         return
 
-    if current_mode not in {"auto", "custom"}:
-        return
+    current_mode = str(assessment.get("current_mode", "") or "").strip()
+    current_override = str(assessment.get("current_override", "") or "").strip()
+    expected_model = str(assessment.get("expected_model", "") or "").strip()
+    auto_recover = bool(assessment.get("auto_recover", False))
 
-    main_session = resolve_main_session_key()
-    if not main_session:
-        return
-
-    # 读当前主 session 的 modelOverride
-    try:
-        sessions = json.load(open(os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")))
-        current_override = None
-        for key, val in sessions.items():
-            channel_session_key = key
-            if isinstance(val, dict) and val.get("channelSessionKey"):
-                channel_session_key = val.get("channelSessionKey")
-            if channel_session_key == main_session:
-                current_override = val.get("modelOverride")
-                break
-    except:
-        return
-
-    # 期望的模型
-    if current_mode == "auto":
-        try:
-            expected_model = json.load(open(POLICY_FILE)).get("main_model", "")
-        except Exception:
-            expected_model = ""
-        if not expected_model:
-            return
-    else:
-        try:
-            custom_models = mode_data.get("customModels", {})
-            expected_model = str(custom_models.get("main", "") or "").strip() if isinstance(custom_models, dict) else ""
-        except Exception:
-            expected_model = ""
-        if not expected_model:
-            return
-
-    if current_override == expected_model:
-        # 一致，清除 drift 标记
-        if os.path.exists(DRIFT_COOLDOWN_FILE):
-            os.remove(DRIFT_COOLDOWN_FILE)
-        return
-
-    # 不一致，检查冷却
     now = time.time()
-    if os.path.exists(DRIFT_COOLDOWN_FILE):
+    cooldown_seconds = int(drift_cfg.get("notify_cooldown_seconds", 3600) or 3600)
+    if os.path.exists(DRIFT_NOTICE_FILE):
         try:
-            d = json.load(open(DRIFT_COOLDOWN_FILE))
-            if now - d.get("ts", 0) < 3600 and d.get("mode") == current_mode:
-                return  # 1小时内已恢复过，不重复
-        except:
+            d = json.load(open(DRIFT_NOTICE_FILE))
+            if (
+                now - d.get("ts", 0) < cooldown_seconds
+                and d.get("mode") == current_mode
+                and d.get("expected_model") == expected_model
+            ):
+                return
+        except Exception:
             pass
 
-    # 自动恢复
-    script = os.path.join(os.path.dirname(__file__), "set-main-model.py")
-    result = sp_inner.run(["python3", script, "--mode", current_mode],
-                          capture_output=True, text=True, timeout=15)
+    if auto_recover:
+        script = os.path.join(os.path.dirname(__file__), "set-main-model.py")
+        sp_inner.run(["python3", script, "--mode", current_mode], capture_output=True, text=True, timeout=15)
+        with open(DRIFT_NOTICE_FILE, "w") as f:
+            json.dump({"ts": now, "mode": current_mode, "expected_model": expected_model, "action": "auto_recover"}, f)
+        msg = (
+            f"🔄 八爪鱼：主模型已自动恢复\n"
+            f"当前模式：{current_mode}\n"
+            f"已重新设置主模型为 {expected_model}（检测到 session 漂移）"
+        )
+        if send_text(msg):
+            print("✅ check_main_model_drift: 文本通知已发送")
+        print(f"[drift-check] 主模型漂移已自动恢复：{current_override} → {expected_model}")
+        return
 
-    # 记录冷却
-    with open(DRIFT_COOLDOWN_FILE, "w") as f:
-        json.dump({"ts": now, "mode": current_mode, "recovered_model": expected_model}, f)
-
+    with open(DRIFT_NOTICE_FILE, "w") as f:
+        json.dump({"ts": now, "mode": current_mode, "expected_model": expected_model, "action": "notify_only"}, f)
     msg = (
-        f"🔄 八爪鱼：主模型已自动恢复\n"
+        f"⚠️ 八爪鱼：检测到主模型漂移\n"
         f"当前模式：{current_mode}\n"
-        f"已重新设置主模型为 {expected_model}（因重启后 modelOverride 丢失）"
+        f"当前主会话模型：{current_override or '未设置'}\n"
+        f"策略期望主模型：{expected_model}\n"
+        f"当前仅提醒，不自动改主会话。"
     )
     if send_text(msg):
         print("✅ check_main_model_drift: 文本通知已发送")
-
-    print(f"[drift-check] 主模型漂移已自动恢复：{current_override} → {expected_model}")
+    print(f"[drift-check] 检测到主模型漂移：{current_override or 'unset'} -> {expected_model}（notify-only）")
 
 
 def main():

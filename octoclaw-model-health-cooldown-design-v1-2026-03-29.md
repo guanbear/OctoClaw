@@ -254,3 +254,22 @@ v1 不做：
 - 只做跨请求 penalty
 - 不替代 OpenClaw 单次请求内的 failover
 - 不直接自动改主 session
+
+## 13. Main Session Drift
+
+第三优先级是主 session 漂移检测。
+
+第一版建议：
+
+1. 检测 `policy.main_model` / `customModels.main` 与当前主 session `modelOverride` 是否一致
+2. 默认只提醒，不自动纠正
+3. 通过 patrol 做带冷却时间的通知，避免反复刷屏
+
+默认策略：
+
+- `enabled = true`
+- `auto_recover = false`
+- `notify_cooldown_seconds = 3600`
+
+这样能先把“策略主链”和“实际主会话”分叉这件事显式暴露出来，
+但不会在还没完全验证前，自动改动线上主会话模型。
