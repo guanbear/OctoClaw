@@ -55,14 +55,25 @@ def set_session_model(model_path: str | None) -> bool:
     session_key = resolve_session_api_key(main_session)
     try:
         gateway_port = 3000
+        gateway_token = ""
         config_path = os.path.expanduser("~/.openclaw/openclaw.json")
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
-            gateway_port = config.get("port", 3000)
+            gateway_cfg = config.get("gateway", {}) if isinstance(config, dict) else {}
+            if isinstance(gateway_cfg, dict):
+                gateway_port = int(gateway_cfg.get("port", config.get("port", 3000)) or 3000)
+                auth_cfg = gateway_cfg.get("auth", {})
+                if isinstance(auth_cfg, dict):
+                    gateway_token = str(auth_cfg.get("token", "") or "").strip()
+            else:
+                gateway_port = int(config.get("port", 3000) or 3000)
 
         url = f"http://localhost:{gateway_port}/api/sessions/{session_key}"
         payload = {"modelOverride": model_path}
+        headers = ["-H", "Content-Type: application/json"]
+        if gateway_token:
+            headers.extend(["-H", f"Authorization: Bearer {gateway_token}"])
         result = subprocess.run(
             [
                 "curl",
@@ -74,8 +85,7 @@ def set_session_model(model_path: str | None) -> bool:
                 "-X",
                 "PATCH",
                 url,
-                "-H",
-                "Content-Type: application/json",
+                *headers,
                 "-d",
                 json.dumps(payload, ensure_ascii=False),
             ],
