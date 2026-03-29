@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 八爪鱼 (Octopus) 安装脚本
+# 八爪鱼 (OctoClaw) 安装脚本
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,6 +41,8 @@ detect_agents_workspace() {
 AGENTS_WORKSPACE="${AGENTS_WORKSPACE:-$(detect_agents_workspace)}"
 AGENTS_FILE="${AGENTS_WORKSPACE}/AGENTS.md"
 STATE_DIR="${WORKSPACE}/tmp/octopus"
+OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
+OPENCLAW_CRON_JOBS_FILE="${OPENCLAW_CRON_JOBS_FILE:-$OPENCLAW_HOME/cron/jobs.json}"
 
 # ── 加载功能开关配置 ──────────────────────────────────────────────────────────
 OCTOPUS_CONFIG="$SCRIPT_DIR/lib/config.sh"
@@ -203,7 +205,7 @@ except Exception:
 _openclaw_cron_list() {
     local attempt output
     for attempt in 1 2 3; do
-        if output="$(openclaw cron list 2>/tmp/octoclaw-cron-cli.err)"; then
+        if output="$(timeout 20 openclaw cron list 2>/tmp/octoclaw-cron-cli.err)"; then
             printf '%s\n' "$output"
             return 0
         fi
@@ -212,15 +214,71 @@ _openclaw_cron_list() {
     return 1
 }
 
+_openclaw_cron_store_id_by_name() {
+    local cron_name="$1"
+    python3 - "$OPENCLAW_CRON_JOBS_FILE" "$cron_name" <<'PY' 2>/dev/null
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+name = sys.argv[2]
+if not path.exists():
+    raise SystemExit(1)
+
+with path.open() as f:
+    data = json.load(f)
+
+jobs = data.get("jobs", []) if isinstance(data, dict) else []
+for job in jobs:
+    if job.get("name") == name:
+        print(job.get("id", ""))
+        break
+PY
+}
+
+_openclaw_cron_store_remove_by_name() {
+    local cron_name="$1"
+    python3 - "$OPENCLAW_CRON_JOBS_FILE" "$cron_name" <<'PY' 2>/dev/null
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+name = sys.argv[2]
+if not path.exists():
+    raise SystemExit(1)
+
+with path.open() as f:
+    data = json.load(f)
+
+if not isinstance(data, dict):
+    raise SystemExit(1)
+
+jobs = data.get("jobs", [])
+filtered = [job for job in jobs if job.get("name") != name]
+if len(filtered) == len(jobs):
+    raise SystemExit(1)
+
+data["jobs"] = filtered
+with path.open("w") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PY
+}
+
 _openclaw_cron_exists() {
     local cron_name="$1"
+    if _openclaw_cron_store_id_by_name "$cron_name" >/dev/null 2>&1; then
+        return 0
+    fi
     _openclaw_cron_list 2>/dev/null | grep -q "$cron_name"
 }
 
 _openclaw_cron_add() {
     local attempt
     for attempt in 1 2 3; do
-        if openclaw cron add "$@"; then
+        if timeout 30 openclaw cron add "$@"; then
             return 0
         fi
         sleep 2
@@ -230,6 +288,12 @@ _openclaw_cron_add() {
 
 _openclaw_cron_id_by_name() {
     local cron_name="$1"
+    local cron_id=""
+    cron_id="$(_openclaw_cron_store_id_by_name "$cron_name" || true)"
+    if [ -n "$cron_id" ]; then
+        printf '%s\n' "$cron_id"
+        return 0
+    fi
     _openclaw_cron_list 2>/dev/null | awk -v name="$cron_name" '$2 == name {print $1; exit}'
 }
 
@@ -239,7 +303,10 @@ _openclaw_cron_remove_by_name() {
     if [ -z "$cron_id" ]; then
         return 0
     fi
-    openclaw cron rm "$cron_id" >/dev/null 2>&1 || true
+    if timeout 20 openclaw cron rm "$cron_id" >/dev/null 2>&1; then
+        return 0
+    fi
+    _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
 }
 
 _delete_cron_by_name() {
@@ -947,7 +1014,7 @@ echo "  🏃 飞鱼腿  - 命令执行、脚本运行（最快！）"
 echo "  🐦 鸽  手  - 飞书操作、消息传递"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "🐙 安装八爪鱼 (Octopus) skill..."
+echo "🐙 安装八爪鱼 (OctoClaw) skill..."
 
 # 1. 创建工作目录
 mkdir -p "$WORKSPACE/tmp/octopus"
