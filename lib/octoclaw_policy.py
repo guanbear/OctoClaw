@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from octoclaw_route import infer_route
-from octoclaw_spawn import resolve_model_and_thinking, resolve_profile
+from octoclaw_spawn import resolve_model_and_thinking
 from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config
 from runtime_protocol import BRIEF_SCHEMA_VERSION, WORKER_RESULT_SCHEMA_VERSION
 from worker_taxonomy import (
@@ -394,25 +394,95 @@ def infer_worker_pool(route: str, work_type: str) -> str:
     return taxonomy_infer_worker_pool(route, work_type)
 
 
-def infer_legacy_label(route_meta: dict[str, Any], work_type: str, phase: str, route: str, profile: str = "") -> str:
-    role_hint = str(route_meta.get("role_hint", "") or "").strip()
+def infer_legacy_label(work_type: str, phase: str, route: str, profile: str = "") -> str:
     return legacy_label_for_worker_pool(
         infer_worker_pool(route, work_type),
         phase=phase,
         route=route,
         profile=profile,
-        role_hint=role_hint,
     )
 
 
-def infer_new_tier(legacy_tier: str, protocol: str, route: str, high_risk: bool) -> str:
+def infer_model_band(features: dict[str, Any], route: str, work_type: str, protocol: str) -> str:
     if protocol == "heavy":
         return "heavy"
-    if route == "runner" or legacy_tier in ("trivial", "simple"):
+    if route == "runner":
         return "fast"
-    if route == "spawn_multi" or high_risk or legacy_tier in ("hard", "deep"):
+    if route == "spawn_multi" or bool(features.get("high_risk")):
         return "strong"
+    if work_type == "review":
+        return "strong"
+    if work_type == "code" and (bool(features.get("requires_mutation")) or int(features.get("verify_hits", 0) or 0) > 0):
+        return "strong"
+    if (
+        bool(features.get("requires_code_work"))
+        or bool(features.get("requires_research"))
+        or bool(features.get("requires_writing"))
+        or int(features.get("estimated_steps", 0) or 0) >= 3
+    ):
+        return "normal"
+    if route == "direct":
+        return "fast"
     return "normal"
+
+
+def selector_tier_for_model_band(model_band: str, route: str) -> str:
+    if route == "runner":
+        return "trivial"
+    return {
+        "fast": "simple",
+        "normal": "normal",
+        "strong": "hard",
+        "heavy": "deep",
+    }.get(model_band, "normal")
+
+
+def resolve_policy_profile(runtime_cfg: dict[str, Any], user_profile: str, selected_model: str) -> str:
+    profiles = runtime_cfg.get("profiles", {})
+    if isinstance(profiles, dict) and user_profile and user_profile in profiles:
+        return user_profile
+    if user_profile:
+        return user_profile
+    if selected_model:
+        lowered = selected_model.lower()
+        if any(token in lowered for token in ("gpt-5.4", "sonnet", "opus")):
+            return "code"
+        if any(token in lowered for token in ("glm", "minimax", "kimi")):
+            return "research"
+    return "research"
+
+
+def reasoning_effort_from_config(cfg: dict[str, Any], model_band: str, derived_profile: str, model_thinking: str) -> str:
+    if model_thinking:
+        return model_thinking
+    profiles = cfg.get("profiles", {})
+    if isinstance(profiles, dict):
+        entry = profiles.get(derived_profile)
+        if isinstance(entry, dict):
+            value = str(entry.get("reasoning_effort", "") or "").strip()
+            if value:
+                return value
+    by_tier = cfg.get("default_reasoning_effort_by_tier", {})
+    if isinstance(by_tier, dict):
+        value = str(by_tier.get(model_band, "") or "").strip()
+        if value:
+            return value
+    legacy_fallbacks = {
+        "fast": "simple",
+        "normal": "normal",
+        "strong": "hard",
+        "heavy": "deep",
+    }
+    by_legacy_tier = cfg.get("default_reasoning_effort_by_legacy_tier", {})
+    if isinstance(by_legacy_tier, dict):
+        value = str(by_legacy_tier.get(legacy_fallbacks.get(model_band, "normal"), "") or "").strip()
+        if value:
+            return value
+    if model_band == "fast":
+        return "low"
+    if model_band in {"strong", "heavy"}:
+        return "high"
+    return "medium"
 
 
 def review_required(features: dict[str, Any], route: str, work_type: str, protocol: str) -> bool:
@@ -427,24 +497,6 @@ def review_required(features: dict[str, Any], route: str, work_type: str, protoc
     if work_type == "code" and features.get("requires_mutation"):
         return True
     return False
-
-
-def reasoning_effort_from_config(cfg: dict[str, Any], legacy_tier: str, derived_profile: str, model_thinking: str) -> str:
-    if model_thinking:
-        return model_thinking
-    profiles = cfg.get("profiles", {})
-    if isinstance(profiles, dict):
-        entry = profiles.get(derived_profile)
-        if isinstance(entry, dict):
-            value = str(entry.get("reasoning_effort", "") or "").strip()
-            if value:
-                return value
-    by_tier = cfg.get("default_reasoning_effort_by_legacy_tier", {})
-    if isinstance(by_tier, dict):
-        value = str(by_tier.get(legacy_tier, "") or "").strip()
-        if value:
-            return value
-    return "medium"
 
 
 def resolve_skill_bundle(policy_cfg: dict[str, Any], work_type: str, profile: str) -> list[str]:
@@ -633,32 +685,29 @@ def build_decision(
     executor_type = infer_executor_type(route)
     protocol = infer_protocol(features, route, work_type)
     worker_pool = infer_worker_pool(route, work_type)
-    legacy_tier = str(route_meta.get("tier_hint", "simple") or "simple")
     user_profile = infer_user_facing_profile(work_type, phase, route)
-    legacy_label = infer_legacy_label(route_meta, work_type, phase, route, user_profile)
+    model_band = infer_model_band(features, route, work_type, protocol)
+    selector_tier = selector_tier_for_model_band(model_band, route)
+    legacy_tier = selector_tier
+    legacy_label = infer_legacy_label(work_type, phase, route, user_profile)
     model_selector_role = model_role_for_worker_pool(
         worker_pool,
         phase=phase,
         route=route,
         profile=user_profile,
     )
-    selected_model = ""
-    model_thinking = ""
-    if route != "runner":
-        selected_model, model_thinking = resolve_model_and_thinking(
-            legacy_tier,
-            legacy_label,
-            task,
-            worker_pool=worker_pool,
-            phase=phase,
-            route=route,
-            profile=user_profile,
-        )
+    selected_model, model_thinking = resolve_model_and_thinking(
+        selector_tier,
+        "",
+        task,
+        worker_pool=worker_pool,
+        phase=phase,
+        route=route,
+        profile=user_profile,
+    )
 
-    spawn_profile = resolve_profile(legacy_label, selected_model, legacy_tier) if selected_model else ""
-    profile = spawn_profile or user_profile
-    reasoning_effort = reasoning_effort_from_config(runtime_cfg, legacy_tier, profile, model_thinking)
-    new_tier = infer_new_tier(legacy_tier, protocol, route, bool(features.get("high_risk")))
+    profile = resolve_policy_profile(runtime_cfg, user_profile, selected_model)
+    reasoning_effort = reasoning_effort_from_config(runtime_cfg, model_band, profile, model_thinking)
     needs_review = review_required(features, route, work_type, protocol)
     if route_hint.get("review_required"):
         needs_review = True
@@ -708,7 +757,8 @@ def build_decision(
             "legacy_tier": legacy_tier,
             "worker_pool": worker_pool,
             "model_selector_role": model_selector_role,
-            "tier": new_tier,
+            "selector_tier": selector_tier,
+            "tier": model_band,
             "selected_model": selected_model,
             "profile": profile,
             "reasoning_effort": reasoning_effort,

@@ -28,6 +28,7 @@ from functools import lru_cache
 from typing import Iterable
 
 from octopus_config import load_octopus_config
+from worker_taxonomy import infer_worker_pool as taxonomy_infer_worker_pool
 
 
 DEFAULT_ROUTE_LANGUAGE_PACKS = ("zh", "en")
@@ -206,7 +207,7 @@ EXTERNAL_LOOKUP_PATTERNS = {
 
 WRITE_PATTERNS = {
     "zh": (
-        r"(文档|总结|报告|草稿|说明|翻译|写一篇)",
+        r"(文档|总结|报告|草稿|说明|翻译|写一篇|写一版|建议书|建议稿|写.*建议)",
     ),
     "en": (
         r"\b(doc|docs|summary|report|draft|write|translate)\b",
@@ -743,7 +744,7 @@ def infer_role_hint(features: dict) -> str:
         return "octopus-fix"
     if features["requires_code_work"]:
         return "octopus-fix"
-    if features["requires_writing"] and not features["requires_research"]:
+    if features["requires_writing"] and not features["requires_code_work"]:
         return "octopus-writer"
     if features["requires_research"] and not features["requires_code_work"]:
         return "octopus-scout"
@@ -762,6 +763,48 @@ def infer_tier_hint(features: dict, route: str) -> str:
     if features["requires_code_work"] or features["requires_research"] or features["estimated_steps"] >= 3:
         return "normal"
     return "simple"
+
+
+def infer_work_type_hint(features: dict, route: str) -> str:
+    if route == "runner":
+        return "ops"
+    if features["verify_hits"] > 0 and not features["requires_mutation"]:
+        return "review"
+    if features["requires_mutation"] or features["requires_code_work"]:
+        return "code"
+    return "research"
+
+
+def infer_phase_hint(features: dict, route: str, work_type: str) -> str:
+    if route == "runner":
+        return "inspect"
+    if work_type == "review":
+        return "verify"
+    if work_type == "code":
+        return "implement"
+    if features["requires_writing"] or features["summary_output_hits"] > 0:
+        return "report"
+    if features["high_risk"]:
+        return "inspect"
+    return "collect"
+
+
+def infer_model_band_hint(features: dict, route: str, work_type: str) -> str:
+    if route == "runner":
+        return "fast"
+    if route == "spawn_multi":
+        return "strong"
+    if features["high_risk"]:
+        return "strong"
+    if features["estimated_steps"] >= 5 or (features["parallelizable"] and features["estimated_steps"] >= 3):
+        return "heavy"
+    if work_type == "review":
+        return "strong"
+    if work_type == "code" and (features["requires_mutation"] or features["verify_hits"] > 0):
+        return "strong"
+    if features["requires_code_work"] or features["requires_research"] or features["requires_writing"] or features["summary_output_hits"] > 0:
+        return "normal"
+    return "fast" if route == "direct" else "normal"
 
 
 def expected_latency_ms(route: str, features: dict) -> int:
@@ -1006,6 +1049,10 @@ def infer_route(task: str, command: str = "") -> dict:
     needs_semantic_review, score_margin, semantic_reason = should_request_semantic_review(features, scores, route)
     semantic_model_hint = choose_semantic_model_hint() if needs_semantic_review else ""
 
+    work_type_hint = infer_work_type_hint(features, route)
+    phase_hint = infer_phase_hint(features, route, work_type_hint)
+    worker_pool_hint = taxonomy_infer_worker_pool(route, work_type_hint)
+    model_band_hint = infer_model_band_hint(features, route, work_type_hint)
     role_hint = infer_role_hint(features)
     if route == "direct":
         role_hint = "main"
@@ -1031,6 +1078,10 @@ def infer_route(task: str, command: str = "") -> dict:
         "scores": scores,
         "features": features,
         "task_class": infer_task_class(features, route),
+        "worker_pool_hint": worker_pool_hint,
+        "work_type_hint": work_type_hint,
+        "phase_hint": phase_hint,
+        "model_band_hint": model_band_hint,
         "role_hint": role_hint,
         "tier_hint": tier_hint,
         "expected_latency_ms": expected_latency_ms(route, features),

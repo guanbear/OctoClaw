@@ -112,8 +112,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "legacy_label",
-        "legacy_tier",
+        "worker_pool",
+        "model_selector_role",
+        "selector_tier",
         "tier",
         "selected_model",
         "profile",
@@ -121,6 +122,9 @@
         "fallbacks"
       ],
       "properties": {
+        "worker_pool": { "type": "string" },
+        "model_selector_role": { "type": "string" },
+        "selector_tier": { "type": "string" },
         "legacy_label": { "type": "string" },
         "legacy_tier": { "type": "string" },
         "tier": { "type": "string" },

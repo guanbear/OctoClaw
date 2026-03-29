@@ -18,6 +18,10 @@ SPEC.loader.exec_module(resolve_model)
 
 
 class ResolveModelTests(unittest.TestCase):
+    def test_current_mode_defaults_to_auto_when_mode_file_missing(self) -> None:
+        with patch.object(resolve_model, "load_json", return_value=None):
+            self.assertEqual(resolve_model._get_current_mode(), "auto")
+
     def test_auto_policy_prefers_profile_then_worker_pool_phase(self) -> None:
         policy = {
             "profiles": {

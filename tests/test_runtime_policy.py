@@ -29,6 +29,12 @@ class RuntimePolicyTests(unittest.TestCase):
             with open(Path(workspace) / "tmp" / "octopus-config.json", "w", encoding="utf-8") as fh:
                 json.dump(config, fh)
 
+    def write_model_policy(self, workspace: str, payload: dict[str, object]) -> None:
+        policy_path = Path(workspace) / "tmp" / "octopus" / "model-policy.json"
+        policy_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(policy_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+
     def run_policy(
         self,
         task: str,
@@ -37,10 +43,13 @@ class RuntimePolicyTests(unittest.TestCase):
         sticky_route: str = "",
         sticky_work_type: str = "",
         route_language_packs: Optional[list[str]] = None,
+        model_policy: Optional[dict[str, object]] = None,
     ) -> dict:
         with tempfile.TemporaryDirectory(prefix="octoclaw-policy-test-") as workspace:
             os.makedirs(Path(workspace) / "tmp" / "octopus", exist_ok=True)
             self.write_runtime_config(workspace, route_language_packs=route_language_packs)
+            if model_policy is not None:
+                self.write_model_policy(workspace, model_policy)
             if sticky_route:
                 payload = {
                     session_key: {
@@ -169,11 +178,50 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["requires_research"])
         self.assertTrue(payload["features"]["requires_writing"])
 
+    def test_route_outputs_new_taxonomy_hints(self) -> None:
+        payload = self.run_route("调研三个兼容方案并写一版简短建议")
+        self.assertEqual(payload["worker_pool_hint"], "octoclaw-research")
+        self.assertEqual(payload["work_type_hint"], "research")
+        self.assertEqual(payload["phase_hint"], "report")
+        self.assertEqual(payload["model_band_hint"], "normal")
+        self.assertEqual(payload["role_hint"], "octopus-writer")
+        self.assertEqual(payload["tier_hint"], "normal")
+
+    def test_runner_policy_uses_workspace_local_model_policy(self) -> None:
+        payload = self.run_policy(
+            "看下 8080 端口开了没",
+            model_policy={
+                "generated_at": "2026-03-29T00:00:00Z",
+                "main_model": "model/main",
+                "profiles": {"ops-fast": "model/profile-ops"},
+                "worker_pools": {"octoclaw-runner": "model/runner"},
+                "worker_pool_phases": {"octoclaw-runner": {"inspect": "model/runner-inspect"}},
+            },
+        )
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
+        self.assertEqual(payload["model_policy"]["selected_model"], "model/profile-ops")
+        self.assertEqual(payload["model_policy"]["profile"], "ops-fast")
+        self.assertEqual(payload["model_policy"]["tier"], "fast")
+        self.assertEqual(payload["model_policy"]["selector_tier"], "trivial")
+
     def test_model_policy_tracks_worker_pool_first_with_legacy_label_as_compat(self) -> None:
-        payload = self.run_policy("调研三个兼容方案并写一版简短建议")
+        payload = self.run_policy(
+            "调研三个兼容方案并写一版简短建议",
+            model_policy={
+                "generated_at": "2026-03-29T00:00:00Z",
+                "main_model": "model/main",
+                "profiles": {"writer": "model/profile-writer"},
+                "worker_pools": {"octoclaw-research": "model/research"},
+                "worker_pool_phases": {"octoclaw-research": {"report": "model/research-report"}},
+            },
+        )
         self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-research")
         self.assertEqual(payload["model_policy"]["worker_pool"], "octoclaw-research")
         self.assertEqual(payload["model_policy"]["model_selector_role"], "writer")
+        self.assertEqual(payload["model_policy"]["selector_tier"], "deep")
+        self.assertEqual(payload["model_policy"]["tier"], "heavy")
+        self.assertEqual(payload["model_policy"]["selected_model"], "model/profile-writer")
         self.assertEqual(payload["model_policy"]["legacy_label"], "octopus-writer")
 
 

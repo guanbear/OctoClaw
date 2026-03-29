@@ -54,15 +54,13 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 - Text status views: [`status.sh`](./lib/status.sh)
 - Minimal replay/eval harness: [`eval_suite.py`](./lib/eval_suite.py)
 
-## Routing Modes
+## Model Selection
 
-| Mode | Use case | lower tiers | higher tiers |
-| --- | --- | --- | --- |
-| `balanced` | default daily mode | lower-cost general models | stronger reasoning / coding models |
-| `quality` | quality-first work | strong models by default | top-end models when needed |
-| `cost` | batch / cheap mode | cheaper models whenever possible | only escalate when necessary |
-| `private` | privacy-sensitive mode | private / self-hosted models | private / self-hosted models |
-| `auto` | dynamic selection | local speed / price / capability driven | local speed / price / capability driven |
+OctoClaw now treats `auto` as the default, policy-first mode:
+
+- primary selectors are `worker_pool / phase / profile / route`
+- `model-policy.json` is the source of truth when available
+- older mode tables such as `balanced / quality / cost / private` only remain as last-resort compatibility fallback
 
 ## Quick Start
 
@@ -322,9 +320,9 @@ Enable it in `tmp/octopus-config.json`:
     "backend_name": "tmux",
     "workspace": false,
     "default_profile": "",
-    "profile_by_label": {
-      "octopus-fix": "coding",
-      "octopus-scout": "research"
+    "profile_by_model_prefix": {
+      "omniroute/cx/": "coding",
+      "zhipu/": "research"
     }
   }
 }
@@ -345,11 +343,11 @@ Current default behavior:
 This mode still does not replace OctoClaw routing or patrol. It only adds ClawTeam-style collaboration plumbing with low integration risk.
 
 `spawn_execution` lets OctoClaw directly execute `spawn_single` through `clawteam spawn tmux ...`.
-OctoClaw still computes `label / tier / model / thinking`, then maps them to an OpenClaw `--profile` when a profile mapping is configured.
+OctoClaw now computes `worker_pool / phase / profile / model / thinking` first, then optionally maps the final model to an OpenClaw `--profile` for the execution layer.
 Because current OpenClaw TUI exposes `--profile` rather than a direct `--model` flag, the recommended integration is:
 
 - OctoClaw owns runtime model policy
-- OctoClaw maps `label / tier / model` to a profile when needed
+- OctoClaw maps the final selected model to a profile only when needed by the execution backend
 - ClawTeam receives the final OpenClaw command and runs it in tmux
 
 See [clawteam-integration-analysis-2026-03-25.md](./clawteam-integration-analysis-2026-03-25.md) for the architecture notes and tradeoffs.

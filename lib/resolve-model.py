@@ -17,11 +17,9 @@ import re
 import sys
 import time
 
-from octopus_config import CONFIG_FILE, MODEL_POLICY_FILE, load_json as load_shared_json
+from octopus_config import CONFIG_FILE, MODE_FILE, MODEL_ALIASES_FILE, MODEL_POLICY_FILE, load_json as load_shared_json
 
 GLOBAL_DEG_FILE = "/tmp/ironclaw-global-degradation.json"
-MODE_FILE = "/workspace/tmp/octopus-mode.json"
-ALIASES_FILE = "/workspace/tmp/octopus-model-aliases.json"
 GUARD_FILE = "/tmp/ironclaw-model-guard-override.json"
 CACHE_FILE = "/tmp/octopus-model-cache.json"
 CACHE_TTL = 1800  # 30 分钟
@@ -136,8 +134,8 @@ def _get_current_mode() -> str:
             return override
     mode_data = load_json(MODE_FILE)
     if mode_data:
-        return mode_data.get("mode", "balanced")
-    return "balanced"
+        return mode_data.get("mode", "auto")
+    return "auto"
 
 
 def load_runtime_config() -> dict:
@@ -477,10 +475,10 @@ def main():
     # ── Step 2: 读 octopus-mode.json，确定最终 mode ───────────────────────
     mode_data = load_json(MODE_FILE)
     if not mode_data:
-        # 文件不存在时 fallback 到 balanced
-        mode_data = {"mode": "balanced", "modes": {}}
+        # 文件不存在时默认走 policy-first auto
+        mode_data = {"mode": "auto", "modes": {}}
 
-    mode = override_mode if override_mode else mode_data.get("mode", "balanced")
+    mode = override_mode if override_mode else mode_data.get("mode", "auto")
     rules = mode_data.get("modes", {})
 
     auto_selected_model = None
@@ -507,7 +505,7 @@ def main():
     )
 
     # ── Step 3: 短名 → 完整路径（从别名文件推断）───────────────────────────
-    aliases_data = load_json(ALIASES_FILE)
+    aliases_data = load_json(MODEL_ALIASES_FILE)
 
     # 如果 rules 里没找到，用别名文件作 fallback
     if auto_selected_model:
@@ -521,7 +519,7 @@ def main():
             else:
                 full_path = ""
             if not full_path:
-                # 最终 fallback：legacy balanced 逻辑
+                # 最终 fallback：compat tier alias 逻辑
                 short_name = "glm" if tier in ("trivial", "simple", "normal") else "sonnet"
         else:
             full_path = ""

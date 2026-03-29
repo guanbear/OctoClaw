@@ -16,6 +16,7 @@ MODEL_SPEED_FILE = f"{WORKSPACE}/tmp/octopus/model-speed.json"
 MODEL_PLAN_STATE_FILE = f"{WORKSPACE}/tmp/octopus/model-plan-state.json"
 MODEL_BENCHMARKS_FILE = f"{WORKSPACE}/tmp/octopus/model-benchmarks.json"
 MODEL_SOURCES_FILE = f"{WORKSPACE}/tmp/octopus/model-sources.json"
+MODEL_ALIASES_FILE = f"{WORKSPACE}/tmp/octopus-model-aliases.json"
 TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
 CLAWTEAM_BRIDGE_DIR = f"{WORKSPACE}/tmp/octopus/clawteam-bridge"
 RUNNER_QUEUE_FILE = f"{WORKSPACE}/tmp/octopus/runner-queue.json"
@@ -65,12 +66,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": ["zh", "en"],
             "available": ["zh", "en", "ja", "ko", "es", "pt", "ru"],
         },
-        "default_reasoning_effort_by_legacy_tier": {
-            "trivial": "low",
-            "simple": "low",
+        "default_reasoning_effort_by_tier": {
+            "fast": "low",
             "normal": "medium",
-            "hard": "high",
-            "deep": "high",
+            "strong": "high",
+            "heavy": "high",
         },
         "hooks": {
             "before_model_resolve": True,
@@ -144,8 +144,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "agent_name_prefix": "octo",
         "openclaw_bin": "openclaw",
         "default_profile": "",
-        "profile_by_label": {},
-        "profile_by_tier": {},
         "profile_by_model_prefix": {},
     },
     "workbench": {
