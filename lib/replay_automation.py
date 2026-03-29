@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from model_health_backfill import run_backfill as run_model_health_backfill
 from octopus_config import CONFIG_FILE, DEFAULT_CONFIG, deep_merge, load_json, load_octopus_config, save_json
 from replay_curate import curate_cases
 from replay_review import build_review_payload
@@ -209,6 +210,7 @@ def run_replay_automation(
     config: dict[str, Any],
     events_path: Path,
     output_dir: Path,
+    openclaw_log: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     replay_cfg = config.get("replay_automation", {}) if isinstance(config, dict) else {}
@@ -241,6 +243,15 @@ def run_replay_automation(
     dated_dir.mkdir(parents=True, exist_ok=True)
 
     generated: dict[str, str] = {}
+
+    backfill_result = run_model_health_backfill(
+        log_file=str(openclaw_log) if openclaw_log else "",
+        log_dir="",
+        health_file="",
+    )
+    backfill_json = dated_dir / "model-health-backfill.json"
+    _write_json(backfill_json, backfill_result)
+    generated["model_health_backfill_json"] = str(backfill_json)
 
     summary_payload = None
     if bool(replay_cfg.get("summary_enabled", True)):
@@ -378,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run")
     run.add_argument("--config", default="")
     run.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
+    run.add_argument("--openclaw-log", default="")
     run.add_argument("--output-dir", default="")
     run.add_argument("--format", choices=("text", "json"), default="text")
     run.add_argument("--force", action="store_true")
@@ -385,6 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
     cron = subparsers.add_parser("render-cron")
     cron.add_argument("--config", default="")
     cron.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
+    cron.add_argument("--openclaw-log", default="")
     return parser
 
 
@@ -413,7 +426,10 @@ def main() -> int:
 
     if args.command == "render-cron":
         config_path = Path(args.config).expanduser().resolve() if args.config else Path(CONFIG_FILE).expanduser().resolve()
-        print(render_cron_command(config_path=config_path, events_path=Path(args.events).expanduser().resolve()))
+        command = render_cron_command(config_path=config_path, events_path=Path(args.events).expanduser().resolve())
+        if args.openclaw_log:
+            command += f' --openclaw-log "{Path(args.openclaw_log).expanduser().resolve()}"'
+        print(command)
         return 0
 
     if args.command == "run":
@@ -428,6 +444,7 @@ def main() -> int:
             config=config,
             events_path=Path(args.events).expanduser().resolve(),
             output_dir=output_dir,
+            openclaw_log=Path(args.openclaw_log).expanduser().resolve() if args.openclaw_log else None,
             force=args.force,
         )
         if args.format == "json":

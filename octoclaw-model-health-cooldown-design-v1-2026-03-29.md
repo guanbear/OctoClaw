@@ -207,7 +207,26 @@ v1 不做：
 ## 10. 后续增强
 
 - nightly replay / provider logs -> health state 更新
+- `model_fallback_decision` 日志回灌 `model-health.json`
 - route-aware latency windows
 - 低峰/高峰时间段偏好
 - session drift 检测与提醒
 - 与 patrol 联动做模型漂移/异常告警
+
+## 11. 日志回灌优先级
+
+最值得先做的是：
+
+1. 读取 OpenClaw 结构化 `model_fallback_decision` 日志
+2. 回灌最近窗口内的 `recent_429_count / recent_timeout_count / recent_failover_count / recent_success_count`
+3. 让 OctoClaw 下一次选模时避开近期明显不健康的模型
+
+这样不会和 OpenClaw 上游冲突，因为：
+
+- OpenClaw 负责“本次请求别死”
+- OctoClaw 负责“下次别再优先选它”
+
+后续两个增强项的优先级略低于日志回灌：
+
+- provider usage / quota snapshot -> `quota_pressure`
+- main session drift 检测与自动纠正

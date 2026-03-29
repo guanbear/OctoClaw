@@ -147,6 +147,61 @@ class ReplayAutomationTests(unittest.TestCase):
             self.assertEqual(packet["schema_version"], "octoclaw.replay_automation.llm_review_packet/v1")
             self.assertLessEqual(len(packet["cases"]), 3)
 
+    def test_run_writes_model_health_backfill_result(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-automation-") as tmpdir:
+            config_path = Path(tmpdir) / "octopus-config.json"
+            out_dir = Path(tmpdir) / "nightly"
+            log_path = Path(tmpdir) / "openclaw.log"
+            log_path.write_text(
+                json.dumps(
+                    {
+                        "_meta": {"date": "2026-03-29T10:00:00Z"},
+                        "1": {
+                            "event": "model_fallback_decision",
+                            "decision": "candidate_failed",
+                            "candidateProvider": "zhipu",
+                            "candidateModel": "GLM-5.1",
+                            "reason": "rate_limit",
+                            "status": 429,
+                        },
+                        "2": "model fallback decision",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "replay_automation": {
+                            "enabled": True,
+                            "output_dir": str(out_dir),
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            output = self.run_script(
+                "run",
+                "--config",
+                str(config_path),
+                "--events",
+                str(FIXTURES),
+                "--openclaw-log",
+                str(log_path),
+                "--format",
+                "json",
+            )
+            payload = json.loads(output)
+            manifest_path = Path(payload["manifest_path"])
+            backfill = json.loads((manifest_path.parent / "model-health-backfill.json").read_text(encoding="utf-8"))
+            self.assertFalse(backfill["skipped"])
+            self.assertEqual(backfill["event_count"], 1)
+            self.assertIn("zhipu/GLM-5.1", backfill["by_model"])
+
     def test_render_cron_prints_run_command(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-replay-automation-") as tmpdir:
             config_path = Path(tmpdir) / "octopus-config.json"
