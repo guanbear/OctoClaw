@@ -11,11 +11,11 @@ from typing import Any
 try:
     from octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
     from task_display import build_operator_task_surface, render_task_anchor_slack
-    from session_ops import resolve_message_target_from_session_key, send_channel_message
+    from session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
     from lib.task_display import build_operator_task_surface, render_task_anchor_slack
-    from lib.session_ops import resolve_message_target_from_session_key, send_channel_message
+    from lib.session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 
 FEISHU_CARD_SCRIPT = os.path.join(os.path.dirname(__file__), "feishu-card.py")
 
@@ -129,6 +129,7 @@ def send_task_notification(
     backend: str = "auto",
     config: dict[str, Any] | None = None,
     reply_to: str | None = None,
+    existing_message_id: str | None = None,
 ) -> dict[str, Any]:
     cfg = config or load_octopus_config()
     payload = build_task_notification_payload(task, backend=backend, config=cfg)
@@ -142,6 +143,7 @@ def send_task_notification(
             "ok": bool(message_id),
             "backend": resolved_backend,
             "message_id": message_id,
+            "action": "send",
             "payload": payload,
         }
 
@@ -159,6 +161,23 @@ def send_task_notification(
     if resolved_backend == "slack":
         message = str(transport.get("text", "") or text)
 
+    editable_backends = {"slack", "discord", "telegram"}
+    message_id_value = str(existing_message_id or "").strip()
+    if message_id_value and resolved_backend in editable_backends:
+        result = edit_channel_message(
+            resolved_backend,
+            str(route.get("target", "") or ""),
+            message_id_value,
+            message,
+        )
+        result.setdefault("backend", resolved_backend)
+        result.setdefault("payload", payload)
+        result.setdefault("resolved_target", route)
+        result.setdefault("action", "edit")
+        result.setdefault("message_id", message_id_value)
+        if result.get("ok"):
+            return result
+
     result = send_channel_message(
         resolved_backend,
         str(route.get("target", "") or ""),
@@ -169,6 +188,7 @@ def send_task_notification(
     result.setdefault("backend", resolved_backend)
     result.setdefault("payload", payload)
     result.setdefault("resolved_target", route)
+    result.setdefault("action", "send")
     return result
 
 

@@ -72,6 +72,35 @@ class SessionOpsMessageSendTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("boom", result["error"])
 
+    @patch("lib.session_ops.has_openclaw_cli", return_value=True)
+    @patch("lib.session_ops.subprocess.run")
+    def test_edit_channel_message_builds_expected_cli_args(self, mock_run, _mock_cli) -> None:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json.dumps({"ok": True})
+        mock_run.return_value.stderr = ""
+
+        result = session_ops.edit_channel_message("slack", "channel:C123", "1712345.000100", "updated")
+
+        self.assertTrue(result["ok"])
+        args = mock_run.call_args[0][0]
+        self.assertEqual(
+            args[:11],
+            [
+                "openclaw",
+                "message",
+                "edit",
+                "--channel",
+                "slack",
+                "--target",
+                "channel:C123",
+                "--message-id",
+                "1712345.000100",
+                "--message",
+                "updated",
+            ],
+        )
+        self.assertIn("--json", args)
+
 
 if __name__ == "__main__":
     unittest.main()

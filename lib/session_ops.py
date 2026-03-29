@@ -228,3 +228,59 @@ def send_channel_message(
     except Exception as exc:
         return {"ok": False, "status": "error", "error": str(exc)}
     return {"ok": False, "status": "error", "error": "invalid message send response"}
+
+
+def edit_channel_message(
+    channel: str,
+    target: str,
+    message_id: str,
+    message: str,
+    *,
+    timeout_seconds: int = 20,
+) -> dict:
+    """
+    Edit an outbound channel message through OpenClaw's native message CLI.
+    """
+    if not has_openclaw_cli():
+        return {"ok": False, "status": "error", "error": "openclaw cli unavailable"}
+    channel_value = str(channel or "").strip()
+    target_value = str(target or "").strip()
+    message_id_value = str(message_id or "").strip()
+    if not channel_value or not target_value or not message_id_value:
+        return {"ok": False, "status": "error", "error": "missing channel, target, or message_id"}
+
+    cmd = [
+        "openclaw",
+        "message",
+        "edit",
+        "--channel",
+        channel_value,
+        "--target",
+        target_value,
+        "--message-id",
+        message_id_value,
+        "--message",
+        message,
+        "--json",
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=max(5, int(timeout_seconds)),
+        )
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "status": "error",
+                "error": (result.stderr or result.stdout or "").strip(),
+            }
+        payload = json.loads(result.stdout or "{}")
+        if isinstance(payload, dict):
+            payload.setdefault("ok", True)
+            return payload
+    except Exception as exc:
+        return {"ok": False, "status": "error", "error": str(exc)}
+    return {"ok": False, "status": "error", "error": "invalid message edit response"}

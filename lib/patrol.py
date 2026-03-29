@@ -2640,9 +2640,15 @@ def load_notify_state() -> dict:
     """读取上次通知状态快照"""
     try:
         with open(PATROL_NOTIFY_STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
+            loaded.setdefault("task_ids", {})
+            loaded.setdefault("task_anchor_messages", {})
+            loaded.setdefault("updated_at", "")
+            return loaded
     except Exception:
-        return {"task_ids": {}, "updated_at": ""}
+        return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
 
 
 def save_notify_state(state: dict):
@@ -2666,33 +2672,51 @@ def send_state_change_dm(msg: str, reply_to_message_id: str | None = None) -> st
     return mid
 
 
-def send_state_change_task_anchor(task: dict) -> bool:
+def send_state_change_task_anchor(task: dict, *, anchor_state: dict | None = None) -> dict:
     """
     尝试向任务所属会话发送一条 task anchor。
-    失败时静默返回 False，避免影响现有巡逻通知链。
+    失败时静默返回失败结果，避免影响现有巡逻通知链。
     """
     if not isinstance(task, dict):
-        return False
+        return {"ok": False, "error": "invalid task"}
     task_id = str(task.get("id", "") or "").strip()
     session_key = str(task.get("session_key", "") or "").strip()
     if not task_id or not session_key:
-        return False
+        return {"ok": False, "error": "missing task_id or session_key"}
+    previous = anchor_state if isinstance(anchor_state, dict) else {}
+    existing_message_id = str(previous.get("message_id", "") or "").strip()
     try:
-        result = send_task_notification(task)
+        result = send_task_notification(task, existing_message_id=existing_message_id)
     except Exception as exc:
         print(f"⚠️  发送 task anchor 失败 [{task_id}]: {exc}", file=sys.stderr)
-        return False
+        return {"ok": False, "error": str(exc)}
     if result.get("ok"):
-        print(f"📌 task anchor 已发送 [{task_id}] -> {result.get('backend', '')}")
-        return True
+        action = str(result.get("action", "send") or "send")
+        message_id = str(result.get("message_id", "") or result.get("messageId", "") or existing_message_id).strip()
+        print(f"📌 task anchor 已{('更新' if action == 'edit' else '发送')} [{task_id}] -> {result.get('backend', '')}")
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "backend": str(result.get("backend", "") or ""),
+            "message_id": message_id,
+            "action": action,
+        }
     error = str(result.get("error", "") or "").strip()
     if error:
         print(f"⚠️  task anchor 未发送 [{task_id}]: {error}", file=sys.stderr)
-    return False
+    return {
+        "ok": False,
+        "task_id": task_id,
+        "backend": str(result.get("backend", "") or ""),
+        "message_id": existing_message_id,
+        "action": "none",
+        "error": error,
+    }
 
 
-def send_state_change_task_anchors(tasks: list[dict]) -> int:
+def send_state_change_task_anchors(tasks: list[dict], *, anchor_messages: dict | None = None) -> dict:
     sent = 0
+    updated_messages = dict(anchor_messages or {})
     seen = set()
     for task in tasks:
         if not isinstance(task, dict):
@@ -2701,9 +2725,15 @@ def send_state_change_task_anchors(tasks: list[dict]) -> int:
         if not task_id or task_id in seen:
             continue
         seen.add(task_id)
-        if send_state_change_task_anchor(task):
+        result = send_state_change_task_anchor(task, anchor_state=updated_messages.get(task_id, {}))
+        if result.get("ok"):
             sent += 1
-    return sent
+            updated_messages[task_id] = {
+                "backend": str(result.get("backend", "") or ""),
+                "message_id": str(result.get("message_id", "") or ""),
+                "updated_at": datetime.now().isoformat(),
+            }
+    return {"sent": sent, "task_anchor_messages": updated_messages}
 
 
 def _increment_panel_shown_count(pending_list: list):
@@ -4435,6 +4465,7 @@ def main():
         try:
             notify_state = load_notify_state()
             old_states = notify_state.get("task_ids", {})
+            anchor_messages = notify_state.get("task_anchor_messages", {})
             new_states = {t.get("id", ""): t.get("status", "") for t in tasks if t.get("id")}
             changes = []
             changed_tasks_for_anchor = []
@@ -4473,8 +4504,18 @@ def main():
                 card_state = load_patrol_card_state()
                 panel_msg_id = card_state.get("message_id") if card_state else None
                 send_state_change_dm(msg, reply_to_message_id=panel_msg_id)
-                send_state_change_task_anchors(changed_tasks_for_anchor[:5])
-            save_notify_state({"task_ids": new_states, "updated_at": datetime.now().isoformat()})
+                anchor_result = send_state_change_task_anchors(
+                    changed_tasks_for_anchor[:5],
+                    anchor_messages=anchor_messages,
+                )
+                anchor_messages = anchor_result.get("task_anchor_messages", anchor_messages)
+            save_notify_state(
+                {
+                    "task_ids": new_states,
+                    "task_anchor_messages": anchor_messages,
+                    "updated_at": datetime.now().isoformat(),
+                }
+            )
         except Exception as e:
             print(f"⚠️  状态变化通知异常: {e}", file=sys.stderr)
 

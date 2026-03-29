@@ -81,6 +81,22 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertIn("fix login 401", args[2])
         self.assertEqual(mock_send.call_args[1]["thread_id"], "1712345.000100")
 
+    @patch("lib.notifier.edit_channel_message")
+    def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit) -> None:
+        mock_edit.return_value = {"ok": True}
+
+        result = send_task_notification(
+            {**self.task, "session_key": "agent:main:slack:channel:C123:thread:1712345.000100"},
+            existing_message_id="1712345.000200",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "edit")
+        args = mock_edit.call_args[0]
+        self.assertEqual(args[0], "slack")
+        self.assertEqual(args[1], "channel:C123")
+        self.assertEqual(args[2], "1712345.000200")
+
     @patch("lib.notifier.send_text")
     def test_send_task_notification_uses_feishu_direct_api(self, mock_send_text) -> None:
         mock_send_text.return_value = "msg-feishu-1"

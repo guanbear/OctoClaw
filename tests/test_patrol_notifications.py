@@ -25,12 +25,12 @@ class PatrolNotificationTests(unittest.TestCase):
             }
         )
 
-        self.assertFalse(sent)
+        self.assertFalse(sent["ok"])
         mock_send.assert_not_called()
 
     @patch("patrol.send_task_notification")
     def test_send_state_change_task_anchor_sends_for_session_bound_task(self, mock_send) -> None:
-        mock_send.return_value = {"ok": True, "backend": "slack", "messageId": "m-1"}
+        mock_send.return_value = {"ok": True, "backend": "slack", "messageId": "m-1", "action": "send"}
 
         sent = patrol.send_state_change_task_anchor(
             {
@@ -43,23 +43,50 @@ class PatrolNotificationTests(unittest.TestCase):
             }
         )
 
-        self.assertTrue(sent)
+        self.assertTrue(sent["ok"])
+        self.assertEqual(sent["message_id"], "m-1")
         mock_send.assert_called_once()
 
     @patch("patrol.send_task_notification")
-    def test_send_state_change_task_anchors_dedupes_task_ids(self, mock_send) -> None:
-        mock_send.return_value = {"ok": True}
+    def test_send_state_change_task_anchors_dedupes_task_ids_and_persists_ids(self, mock_send) -> None:
+        mock_send.side_effect = [
+            {"ok": True, "backend": "slack", "messageId": "m-1", "action": "send"},
+            {"ok": True, "backend": "slack", "messageId": "m-2", "action": "send"},
+        ]
 
         sent = patrol.send_state_change_task_anchors(
             [
                 {"id": "task-1", "session_key": "slack:channel:C123", "status": "running"},
                 {"id": "task-1", "session_key": "slack:channel:C123", "status": "running"},
                 {"id": "task-2", "session_key": "slack:channel:C123:thread:1", "status": "done"},
-            ]
+            ],
+            anchor_messages={"existing": {"message_id": "old"}},
         )
 
-        self.assertEqual(sent, 2)
+        self.assertEqual(sent["sent"], 2)
+        self.assertEqual(sent["task_anchor_messages"]["task-1"]["message_id"], "m-1")
+        self.assertEqual(sent["task_anchor_messages"]["task-2"]["message_id"], "m-2")
         self.assertEqual(mock_send.call_count, 2)
+
+    @patch("patrol.send_task_notification")
+    def test_send_state_change_task_anchor_passes_existing_anchor_message_id(self, mock_send) -> None:
+        mock_send.return_value = {"ok": True, "backend": "slack", "messageId": "m-1", "action": "edit"}
+
+        sent = patrol.send_state_change_task_anchor(
+            {
+                "id": "task-1",
+                "session_key": "agent:main:slack:channel:C123:thread:1712345.000100",
+                "worker_pool": "octoclaw-code",
+                "status": "running",
+                "summary": "fix login issue",
+                "route": "spawn_single",
+            },
+            anchor_state={"message_id": "1712345.000200"},
+        )
+
+        self.assertTrue(sent["ok"])
+        self.assertEqual(sent["action"], "edit")
+        self.assertEqual(mock_send.call_args[1]["existing_message_id"], "1712345.000200")
 
 
 if __name__ == "__main__":
