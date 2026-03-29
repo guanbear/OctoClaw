@@ -59,6 +59,58 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("\"next_step\":", spec["task_prompt"])
         self.assertIn("\"risks\": []", spec["task_prompt"])
 
+    def test_build_spawn_spec_does_not_need_legacy_inputs_when_taxonomy_exists(self) -> None:
+        policy = {
+            "route_decision": {
+                "route": "spawn_single",
+                "worker_pool": "octoclaw-code",
+                "work_type": "code",
+                "phase": "implement",
+                "protocol": "normal",
+            },
+            "model_policy": {
+                "profile": "code",
+            },
+            "skill_policy": {
+                "default_skill_bundle": [],
+            },
+            "review_policy": {
+                "required": False,
+            },
+        }
+
+        with (
+            patch.object(octoclaw_spawn, "infer_label", side_effect=AssertionError("legacy infer_label should not drive spawn")),
+            patch.object(octoclaw_spawn, "infer_tier", side_effect=AssertionError("legacy infer_tier should not drive spawn")),
+            patch.object(octoclaw_spawn, "resolve_model_and_thinking", return_value=("model/code", "medium")) as resolve_mock,
+            patch.object(octoclaw_spawn, "should_execute_spawn", return_value=False),
+        ):
+            spec = octoclaw_spawn.build_spawn_spec(
+                "Fix the login API bug and add a regression test",
+                route="spawn_single",
+                register=False,
+                execute=False,
+                policy_decision=policy,
+            )
+
+        self.assertEqual(spec["worker_pool"], "octoclaw-code")
+        self.assertEqual(spec["work_type"], "code")
+        self.assertEqual(spec["phase"], "implement")
+        self.assertEqual(spec["profile"], "code")
+        self.assertEqual(spec["label"], "octopus-fix")
+        self.assertEqual(spec["legacy_label"], "octopus-fix")
+        self.assertEqual(spec["tier"], "normal")
+        self.assertEqual(spec["model"], "model/code")
+        self.assertEqual(
+            resolve_mock.call_args.kwargs,
+            {
+                "worker_pool": "octoclaw-code",
+                "phase": "implement",
+                "route": "spawn_single",
+                "profile": "code",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

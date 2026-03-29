@@ -23,7 +23,12 @@ from octoclaw_spawn import build_spawn_spec
 from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config, spawn_operator_surface
 from runtime_protocol import normalize_worker_result
 from runner_playbooks import infer_runner_playbook
-from worker_taxonomy import resolve_phase as taxonomy_resolve_phase, resolve_work_type as taxonomy_resolve_work_type, worker_pool_from_legacy_label
+from worker_taxonomy import (
+    legacy_label_for_worker_pool,
+    resolve_phase as taxonomy_resolve_phase,
+    resolve_work_type as taxonomy_resolve_work_type,
+    worker_pool_from_legacy_label,
+)
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -100,6 +105,40 @@ def clone_worker_step_decision(decision: dict) -> dict:
     route_meta["worker_pool"] = route_meta.get("worker_pool", "octoclaw-research")
     cloned["summary"] = f"policy=spawn_single -> {route_meta.get('worker_pool', 'octoclaw-research')} / profile={decision_model(cloned).get('profile', '')}"
     return cloned
+
+
+def compat_spawn_step_from_decision(decision: dict, fallback: dict | None = None) -> dict[str, str | dict]:
+    fallback = fallback if isinstance(fallback, dict) else {}
+    route_meta = decision_route(decision)
+    model_meta = decision_model(decision)
+    compat = decision.get("compat", {}) if isinstance(decision.get("compat", {}), dict) else {}
+
+    route = str(route_meta.get("route", fallback.get("route", "spawn_single")) or "spawn_single")
+    worker_pool = str(route_meta.get("worker_pool", fallback.get("worker_pool", "")) or "")
+    work_type = str(route_meta.get("work_type", fallback.get("work_type", "")) or "")
+    phase = str(route_meta.get("phase", fallback.get("phase", "")) or "")
+    profile = str(model_meta.get("profile", fallback.get("profile", "")) or "")
+    legacy_label = str(model_meta.get("legacy_label", "") or fallback.get("legacy_label", "") or fallback.get("label", "") or "")
+    if not legacy_label and worker_pool:
+        legacy_label = legacy_label_for_worker_pool(
+            worker_pool,
+            phase=phase,
+            route=route,
+            profile=profile,
+            role_hint=str(compat.get("legacy_role_hint", "") or ""),
+        )
+    legacy_tier = str(model_meta.get("legacy_tier", "") or fallback.get("legacy_tier", "") or fallback.get("tier", "") or "")
+    return {
+        "worker_pool": worker_pool,
+        "work_type": work_type,
+        "phase": phase,
+        "profile": profile,
+        "label": legacy_label,
+        "legacy_label": legacy_label,
+        "tier": legacy_tier,
+        "model": str(model_meta.get("selected_model", "") or fallback.get("model", "") or ""),
+        "policy_decision": decision,
+    }
 
 
 def now_compact() -> str:
@@ -255,46 +294,6 @@ def register_multi_parent_task(
         review_required="true" if bool(decision_review(decision).get("required", False)) else "false",
         artifacts_json=json.dumps(build_multi_parent_artifacts(plan, execution.get("steps", []), backend), ensure_ascii=False),
     )
-
-
-def infer_label(task: str) -> str:
-    text = (task or "").lower()
-    rules = [
-        ("octopus-test", [r"\b(test|pytest|unit test|regression|验证|测试)\b"]),
-        ("octopus-writer", [r"\b(write|draft|doc|readme|总结|文档|说明|报告|翻译)\b"]),
-        ("octopus-scout", [r"\b(research|compare|investigate|调研|对比|查资料)\b"]),
-        ("octopus-analyze", [r"\b(analy|root cause|日志分析|根因|分析)\b"]),
-        ("octopus-fix", [r"\b(fix|bug|修复|排障|hotfix)\b"]),
-    ]
-    for label, patterns in rules:
-        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
-            return label
-    return "octopus-power"
-
-
-def infer_tier(task: str, label: str) -> str:
-    text = (task or "").lower()
-    if any(token in text for token in ["并行", "同时", "分别", "一边", "parallel"]):
-        return "hard"
-    if any(token in text for token in ["架构", "重构", "多文件", "根因", "系统设计", "microservice", "refactor"]):
-        return "hard"
-    if label in ("octopus-power", "octopus-analyze"):
-        return "hard"
-    if label in ("octopus-fix", "octopus-test", "octopus-scout", "octopus-writer"):
-        return "normal"
-    return "normal"
-
-
-def resolve_model(tier: str, label: str, description: str) -> str:
-    result = subprocess.run(
-        ["python3", RESOLVE_MODEL_PY, "--tier", tier, "--label", label, "--description", description],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        return result.stdout.strip()
-    return ""
 
 
 def _tail_text(path: str, limit: int = 1600) -> str:
@@ -507,8 +506,14 @@ def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str
             step_task,
             route="spawn_single",
             label=str(step.get("label", "") or ""),
+            legacy_label=str(step.get("legacy_label", "") or step.get("label", "") or ""),
             tier=str(step.get("tier", "") or ""),
+            legacy_tier=str(step.get("legacy_tier", "") or step.get("tier", "") or ""),
             model=str(step.get("model", "") or ""),
+            worker_pool=str(step.get("worker_pool", "") or ""),
+            work_type=str(step.get("work_type", "") or ""),
+            phase=str(step.get("phase", "") or ""),
+            profile=str(step.get("profile", "") or ""),
             parent_id=parent_id,
             task_kind="team_step",
             register=True,
@@ -637,11 +642,19 @@ def dispatch_runner(args) -> dict:
 
 def recommend_spawn(args, task: str) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
+    route_meta = decision_route(decision)
+    model_meta = decision_model(decision)
     spawn_spec = build_spawn_spec(
         task,
         route="spawn_single",
         label=args.label,
+        legacy_label=str(model_meta.get("legacy_label", "") or args.label or ""),
         tier=args.tier,
+        legacy_tier=str(model_meta.get("legacy_tier", "") or args.tier or ""),
+        worker_pool=str(route_meta.get("worker_pool", "") or ""),
+        work_type=str(route_meta.get("work_type", "") or ""),
+        phase=str(route_meta.get("phase", "") or ""),
+        profile=str(model_meta.get("profile", "") or ""),
         parent_id=args.id or "",
         register=True,
         execute=None,
@@ -669,7 +682,13 @@ def recommend_multi_spawn(args, task: str) -> dict:
         task,
         route="spawn_multi",
         label=args.label,
+        legacy_label=str(decision_model(decision).get("legacy_label", "") or args.label or ""),
         tier=args.tier,
+        legacy_tier=str(decision_model(decision).get("legacy_tier", "") or args.tier or ""),
+        worker_pool=str(decision_route(decision).get("worker_pool", "") or ""),
+        work_type=str(decision_route(decision).get("work_type", "") or ""),
+        phase=str(decision_route(decision).get("phase", "") or ""),
+        profile=str(decision_model(decision).get("profile", "") or ""),
         parent_id=args.id or "",
         task_kind="team_parent",
         register=False,
@@ -679,43 +698,13 @@ def recommend_multi_spawn(args, task: str) -> dict:
     planner_decision = build_decision(planner_task, force_route="spawn_single")
     worker_decision = clone_worker_step_decision(decision)
     plan = {
-        "planner": {
-            "label": decision_model(planner_decision).get("legacy_label", ""),
-            "legacy_label": decision_model(planner_decision).get("legacy_label", ""),
-            "worker_pool": decision_route(planner_decision).get("worker_pool", ""),
-            "work_type": decision_route(planner_decision).get("work_type", ""),
-            "phase": decision_route(planner_decision).get("phase", ""),
-            "tier": decision_model(planner_decision).get("legacy_tier", ""),
-            "model": decision_model(planner_decision).get("selected_model", ""),
-            "profile": decision_model(planner_decision).get("profile", ""),
-            "policy_decision": planner_decision,
-        },
-        "worker": {
-            "label": decision_model(worker_decision).get("legacy_label", primary_spawn["label"]),
-            "legacy_label": decision_model(worker_decision).get("legacy_label", primary_spawn["label"]),
-            "worker_pool": decision_route(worker_decision).get("worker_pool", primary_spawn.get("worker_pool", "")),
-            "work_type": decision_route(worker_decision).get("work_type", primary_spawn.get("work_type", "")),
-            "phase": decision_route(worker_decision).get("phase", primary_spawn.get("phase", "")),
-            "tier": decision_model(worker_decision).get("legacy_tier", primary_spawn["tier"]),
-            "model": decision_model(worker_decision).get("selected_model", primary_spawn["model"]),
-            "profile": decision_model(worker_decision).get("profile", primary_spawn.get("profile", "")),
-            "policy_decision": worker_decision,
-        },
+        "planner": compat_spawn_step_from_decision(planner_decision),
+        "worker": compat_spawn_step_from_decision(worker_decision, fallback=primary_spawn),
     }
     if decision_review(decision).get("required", False):
         review_task = build_multi_step_task(task, "review")
         review_decision = build_decision(review_task, force_route="spawn_single")
-        plan["review"] = {
-            "label": decision_model(review_decision).get("legacy_label", ""),
-            "legacy_label": decision_model(review_decision).get("legacy_label", ""),
-            "worker_pool": decision_route(review_decision).get("worker_pool", ""),
-            "work_type": decision_route(review_decision).get("work_type", ""),
-            "phase": decision_route(review_decision).get("phase", ""),
-            "tier": decision_model(review_decision).get("legacy_tier", ""),
-            "model": decision_model(review_decision).get("selected_model", ""),
-            "profile": decision_model(review_decision).get("profile", ""),
-            "policy_decision": review_decision,
-        }
+        plan["review"] = compat_spawn_step_from_decision(review_decision)
     execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octopus-team-{now_compact()}"))
     parent_runtime = "clawteam" if multi_exec_enabled else "plan"
     primary_spawn["runtime"] = parent_runtime

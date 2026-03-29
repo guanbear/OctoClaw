@@ -52,6 +52,14 @@ DEFAULT_TIER_MINUTES = {
     "deep": 20,
 }
 
+DEFAULT_TIER_BY_WORKER_POOL = {
+    "octoclaw-runner": "trivial",
+    "octoclaw-research": "normal",
+    "octoclaw-code": "normal",
+    "octoclaw-review": "normal",
+    "octoclaw-main": "simple",
+}
+
 STOPWORDS = {
     "the", "and", "for", "with", "from", "that", "this", "then", "into", "will",
     "帮我", "一下", "然后", "最后", "当前", "机器", "本机", "进行", "处理", "检查", "分析",
@@ -89,6 +97,66 @@ def infer_tier(task: str, label: str) -> str:
     if label in ("octopus-fix", "octopus-test", "octopus-scout", "octopus-writer"):
         return "normal"
     return "normal"
+
+
+def infer_tier_from_taxonomy(
+    *,
+    route: str,
+    worker_pool: str,
+    work_type: str,
+    phase: str,
+    protocol: str,
+) -> str:
+    current_route = str(route or "").strip()
+    current_worker_pool = str(worker_pool or "").strip()
+    current_work_type = str(work_type or "").strip()
+    current_phase = str(phase or "").strip()
+    current_protocol = str(protocol or "").strip()
+
+    if current_route == "runner" or current_worker_pool == "octoclaw-runner":
+        return "trivial"
+    if current_route == "spawn_multi":
+        return "hard"
+    if current_protocol == "heavy":
+        return "hard"
+    if current_worker_pool in DEFAULT_TIER_BY_WORKER_POOL:
+        return DEFAULT_TIER_BY_WORKER_POOL[current_worker_pool]
+    if current_work_type == "review" or current_phase == "verify":
+        return "normal"
+    return "normal"
+
+
+def compat_label_for_taxonomy(
+    *,
+    explicit_label: str,
+    legacy_label: str,
+    worker_pool: str,
+    phase: str,
+    route: str,
+    profile: str,
+    role_hint: str,
+) -> str:
+    current_worker_pool = str(worker_pool or "").strip()
+    explicit = str(explicit_label or "").strip()
+    explicit_legacy = str(legacy_label or "").strip()
+
+    for candidate in (explicit_legacy, explicit):
+        if candidate and worker_pool_from_legacy_label(candidate) == current_worker_pool:
+            return candidate
+
+    if current_worker_pool:
+        return legacy_label_for_worker_pool(
+            current_worker_pool,
+            phase=phase,
+            route=route,
+            profile=profile,
+            role_hint=role_hint,
+        )
+
+    for candidate in (explicit_legacy, explicit, str(role_hint or "").strip()):
+        if candidate:
+            return candidate
+    return "octopus-power"
 
 
 def expected_done_offset(tier: str) -> str:
@@ -718,8 +786,14 @@ def build_spawn_spec(
     *,
     route: str = "",
     label: str = "",
+    legacy_label: str = "",
     tier: str = "",
+    legacy_tier: str = "",
     model: str = "",
+    worker_pool: str = "",
+    work_type: str = "",
+    phase: str = "",
+    profile: str = "",
     runtime: str = DEFAULT_RUNTIME,
     stream_to: str = "",
     supports_acp: bool = False,
@@ -742,58 +816,80 @@ def build_spawn_spec(
     if final_route not in ("spawn_single", "spawn_multi"):
         raise ValueError(f"octoclaw_spawn 只处理 spawn 路径，当前 route={final_route}")
 
-    preliminary_profile = str(model_policy.get("profile", "") or "")
-    hinted_worker_pool = str(route_decision.get("worker_pool", "") or "")
-    hinted_work_type = str(route_decision.get("work_type", "") or "")
-    hinted_phase = str(route_decision.get("phase", "") or "")
-    derived_label = legacy_label_for_worker_pool(
-        hinted_worker_pool,
-        phase=hinted_phase,
+    preliminary_profile = str(profile or model_policy.get("profile", "") or "")
+    hinted_worker_pool = str(worker_pool or route_decision.get("worker_pool", "") or "")
+    hinted_work_type = str(work_type or route_decision.get("work_type", "") or "")
+    hinted_phase = str(phase or route_decision.get("phase", "") or "")
+    hinted_legacy_label = str(legacy_label or label or model_policy.get("legacy_label", "") or "")
+
+    resolved_worker_pool = (
+        hinted_worker_pool
+        or worker_pool_from_legacy_label(hinted_legacy_label)
+        or taxonomy_infer_worker_pool(final_route, hinted_work_type)
+    )
+    if not resolved_worker_pool:
+        resolved_worker_pool = taxonomy_infer_worker_pool(final_route, hinted_work_type)
+
+    resolved_work_type = hinted_work_type or str(
+        taxonomy_resolve_work_type(
+            {
+                "worker_pool": resolved_worker_pool,
+                "label": hinted_legacy_label,
+                "route": final_route,
+                "profile": preliminary_profile,
+            }
+        )
+        or ""
+    )
+    if not resolved_work_type and resolved_worker_pool == "octoclaw-runner":
+        resolved_work_type = "ops"
+    elif not resolved_work_type:
+        resolved_work_type = "research"
+
+    resolved_phase = hinted_phase or str(
+        taxonomy_resolve_phase(
+            {
+                "worker_pool": resolved_worker_pool,
+                "work_type": resolved_work_type,
+                "label": hinted_legacy_label,
+                "route": final_route,
+                "profile": preliminary_profile,
+            }
+        )
+        or ""
+    )
+    if not resolved_phase:
+        resolved_phase = "inspect" if resolved_worker_pool == "octoclaw-runner" else "collect"
+
+    protocol = str(route_decision.get("protocol", "") or "")
+    final_label = compat_label_for_taxonomy(
+        explicit_label=label,
+        legacy_label=str(legacy_label or model_policy.get("legacy_label", "") or ""),
+        worker_pool=resolved_worker_pool,
+        phase=resolved_phase,
         route=final_route,
         profile=preliminary_profile,
         role_hint=str(route_meta.get("role_hint", "") or ""),
-    ) if hinted_worker_pool else ""
-    final_label = label or str(model_policy.get("legacy_label", "") or "") or derived_label or route_meta.get("role_hint") or infer_label(task)
-    if final_label in ("main", "octopus-runner", "octoclaw-main", "octoclaw-runner"):
-        final_label = infer_label(task)
-    final_tier = tier or str(model_policy.get("legacy_tier", "") or "") or route_meta.get("tier_hint") or infer_tier(task, final_label)
-    worker_pool = hinted_worker_pool or worker_pool_from_legacy_label(final_label) or taxonomy_infer_worker_pool(final_route, hinted_work_type)
-    work_type = hinted_work_type or str(
-        taxonomy_resolve_work_type(
-            {
-                "worker_pool": worker_pool,
-                "label": final_label,
-                "route": final_route,
-                "profile": preliminary_profile,
-            }
-        )
-        or ""
     )
-    if not worker_pool:
-        worker_pool = taxonomy_infer_worker_pool(final_route, work_type)
-    phase = hinted_phase or str(
-        taxonomy_resolve_phase(
-            {
-                "worker_pool": worker_pool,
-                "work_type": work_type,
-                "label": final_label,
-                "route": final_route,
-                "profile": preliminary_profile,
-            }
+    final_tier = (
+        str(legacy_tier or tier or model_policy.get("legacy_tier", "") or "").strip()
+        or infer_tier_from_taxonomy(
+            route=final_route,
+            worker_pool=resolved_worker_pool,
+            work_type=resolved_work_type,
+            phase=resolved_phase,
+            protocol=protocol,
         )
-        or ""
     )
-    protocol = str(route_decision.get("protocol", "") or "")
     final_model = model or str(model_policy.get("selected_model", "") or "")
     thinking = str(model_policy.get("reasoning_effort", "") or "")
     if not final_model:
-        fallback_worker_pool = worker_pool or worker_pool_from_legacy_label(final_label)
         final_model, resolved_thinking = resolve_model_and_thinking(
             final_tier,
             final_label,
             task,
-            worker_pool=fallback_worker_pool,
-            phase=phase,
+            worker_pool=resolved_worker_pool,
+            phase=resolved_phase,
             route=final_route,
             profile=preliminary_profile,
         )
@@ -831,9 +927,9 @@ def build_spawn_spec(
             context_path=str(context_bundle.get("context_path", "") or ""),
             context_summary=str(context_bundle.get("summary", "") or ""),
             task_kind=final_task_kind,
-            worker_pool=worker_pool,
-            work_type=work_type,
-            phase=phase,
+            worker_pool=resolved_worker_pool,
+            work_type=resolved_work_type,
+            phase=resolved_phase,
             protocol=protocol,
             profile=profile,
             review_required=review_required,
@@ -847,9 +943,9 @@ def build_spawn_spec(
         task_id=task_id,
         goal=task,
         route=final_route,
-        worker_pool=worker_pool,
-        work_type=work_type,
-        phase=phase,
+        worker_pool=resolved_worker_pool,
+        work_type=resolved_work_type,
+        phase=resolved_phase,
         profile=profile or preliminary_profile or "default",
         protocol=protocol or "normal",
         review_required=review_required,
@@ -880,9 +976,9 @@ def build_spawn_spec(
         context_path=str(context_bundle.get("context_path", "") or ""),
         profile=profile,
         skill_bundle=skill_bundle,
-        worker_pool=worker_pool,
-        work_type=work_type,
-        phase=phase,
+        worker_pool=resolved_worker_pool,
+        work_type=resolved_work_type,
+        phase=resolved_phase,
         protocol=protocol,
         review_required=review_required,
         brief=brief,
@@ -905,9 +1001,9 @@ def build_spawn_spec(
             context_path=str(context_bundle.get("context_path", "") or ""),
             context_summary=str(context_bundle.get("summary", "") or ""),
             task_kind=final_task_kind,
-            worker_pool=worker_pool,
-            work_type=work_type,
-            phase=phase,
+            worker_pool=resolved_worker_pool,
+            work_type=resolved_work_type,
+            phase=resolved_phase,
             protocol=protocol,
             profile=profile,
             review_required=review_required,
@@ -1004,9 +1100,9 @@ def build_spawn_spec(
         "task_kind": final_task_kind,
         "parent_id": parent_id,
         "deps": [str(dep).strip() for dep in (deps or []) if str(dep).strip()],
-        "worker_pool": worker_pool,
-        "work_type": work_type,
-        "phase": phase,
+        "worker_pool": resolved_worker_pool,
+        "work_type": resolved_work_type,
+        "phase": resolved_phase,
         "protocol": protocol,
         "skill_bundle": skill_bundle,
         "review_required": review_required,
