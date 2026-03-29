@@ -482,6 +482,14 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - `policy engine`
 - `runtime bridges`
 
+#### 7.1.3 旧选模与旧角色推断的拆除路线
+
+当前外层 runtime 与 route/policy 已经进入新架构，但选模、legacy label、task truth model 仍带有明显旧内核。
+
+单独拆除路线见：
+
+- [octoclaw-legacy-core-removal-roadmap-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-legacy-core-removal-roadmap-v1-2026-03-29.md)
+
 #### 7.1.2 选模内核的输入输出
 
 输入应该包括：
