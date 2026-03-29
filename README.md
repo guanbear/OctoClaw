@@ -68,6 +68,14 @@ OctoClaw now treats `auto` as the default, policy-first mode:
 bash /workspace/openclaw/skills/octopus/install.sh
 ```
 
+For source-managed installs and upgrades, prefer the new manager entry:
+
+```bash
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh install
+```
+
+That flow keeps a tracked source checkout under `/workspace/openclaw/repos/octoclaw`, syncs the runtime skill directory, then runs `install.sh reconcile`.
+
 Recommended minimal open-source path:
 
 1. Install the skill
@@ -153,6 +161,17 @@ Suggested rollout presets for `bin/runtime-policy-rollout.sh`:
 ## Common Commands
 
 ```bash
+# Source-managed install / update
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh install
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh update
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh status
+
+# Reconcile a local checked-out tree without prompts
+bash /workspace/openclaw/skills/octopus/install.sh reconcile --non-interactive --extension-install-mode rsync
+
+# Sync guanzhicheng.com from the tracked VM clone into the runtime directories
+bash /workspace/openclaw/skills/octopus/bin/deploy-guanzhicheng-vm.sh
+
 # Runtime extension install target
 ls ~/.openclaw/extensions/octoclaw-runtime
 

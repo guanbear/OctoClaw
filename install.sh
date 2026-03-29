@@ -74,6 +74,98 @@ RUNNER_DEFAULT_TIMEOUT_SECONDS="${RUNNER_DEFAULT_TIMEOUT_SECONDS:-120}"
 RUNNER_MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
 RUNNER_MAX_IDLE_SECONDS="${RUNNER_MAX_IDLE_SECONDS:-900}"
 RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-30}"
+EXTENSION_INSTALL_MODE="${EXTENSION_INSTALL_MODE:-rsync}"
+INSTALL_ACTION="install"
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+SKIP_INSTALL_BODY="false"
+SKIP_CRON="${SKIP_CRON:-false}"
+SKIP_MAIN_MODEL_SWITCH="${SKIP_MAIN_MODEL_SWITCH:-false}"
+MODE_PRESET="${MODE_PRESET:-}"
+MAIN_MODEL_OVERRIDE="${MAIN_MODEL_OVERRIDE:-}"
+CUSTOM_MODEL_OVERRIDES=()
+
+print_usage() {
+    cat <<'EOF'
+Usage:
+  bash install.sh [install|reconcile|inject-only|extension-only] [options]
+
+Actions:
+  install             Interactive install (default)
+  reconcile           Non-interactive local reconcile/install
+  inject-only         Only inject AGENTS.md rules
+  extension-only      Only install/update the runtime extension
+
+Options:
+  --non-interactive           Skip prompts and use defaults / provided overrides
+  --mode auto|custom          Set model mode for reconcile/install
+  --main-model MODEL          Override the main model in custom mode
+  --custom-model KEY=MODEL    Repeatable worker/profile model override
+  --extension-install-mode MODE
+                              Extension install mode: rsync|copy|symlink
+  --skip-cron                 Skip patrol/update cron reconciliation
+  --skip-main-model-switch    Skip main-session model switching
+  -h, --help                  Show this help
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        install|reconcile|inject-only|inject-agents|extension-only|install-extension)
+            INSTALL_ACTION="$1"
+            shift
+            ;;
+        --non-interactive|--yes)
+            NON_INTERACTIVE="true"
+            shift
+            ;;
+        --mode)
+            MODE_PRESET="${2:-}"
+            shift 2
+            ;;
+        --main-model)
+            MAIN_MODEL_OVERRIDE="${2:-}"
+            shift 2
+            ;;
+        --custom-model)
+            CUSTOM_MODEL_OVERRIDES+=("${2:-}")
+            shift 2
+            ;;
+        --extension-install-mode)
+            EXTENSION_INSTALL_MODE="${2:-rsync}"
+            shift 2
+            ;;
+        --skip-cron)
+            SKIP_CRON="true"
+            shift
+            ;;
+        --skip-main-model-switch)
+            SKIP_MAIN_MODEL_SWITCH="true"
+            shift
+            ;;
+        -h|--help|help)
+            print_usage
+            exit 0
+            ;;
+        *)
+            echo "❌ 未知参数: $1" >&2
+            print_usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+case "$INSTALL_ACTION" in
+    reconcile)
+        NON_INTERACTIVE="true"
+        if [ -z "$MODE_PRESET" ]; then
+            MODE_PRESET="auto"
+        fi
+        ;;
+    inject-only|inject-agents|extension-only|install-extension)
+        NON_INTERACTIVE="true"
+        SKIP_INSTALL_BODY="true"
+        ;;
+esac
 
 # ─────────────────────────────────────────────
 # 公共辅助：删除 / 禁用 / 启用 cron
@@ -761,6 +853,7 @@ esac
 # ─────────────────────────────────────────────
 # 正常安装流程（无参数）
 # ─────────────────────────────────────────────
+if [ "$SKIP_INSTALL_BODY" != "true" ]; then
 echo ""
 echo "🐙 八爪鱼多 Agent 调度器 v1.2.0"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -787,39 +880,53 @@ echo ""
 echo "  1) 🧠 自动选模（默认）- 按 worker_pool / phase / profile 走 policy-first"
 echo "  2) 🔧 自定义映射      - 手动指定 worker_pool/profile 模型（高级用户）"
 echo ""
-read -p "请输入选择 [1-2，直接回车选自动选模]: " mode_choice
 
-# 自定义模式用关联数组存储用户为每个 worker pool/profile 指定的模型
-declare -A CUSTOM_MODELS
-MAIN_MODEL=""
+# 自定义模式用 key=value 列表存储用户为每个 worker pool/profile 指定的模型
+CUSTOM_MODEL_PAIRS=()
+MAIN_MODEL="$MAIN_MODEL_OVERRIDE"
+for override in "${CUSTOM_MODEL_OVERRIDES[@]-}"; do
+    key="${override%%=*}"
+    value="${override#*=}"
+    if [ -n "$key" ] && [ "$key" != "$value" ] && [ -n "$value" ]; then
+        CUSTOM_MODEL_PAIRS+=("$key=$value")
+    fi
+done
 
-case "$mode_choice" in
-    2)
-        MODE="custom"
-        MODE_LABEL="🔧 自定义模式"
-        echo ""
-        echo "🔧 自定义模式：为核心 worker_pool/profile 指定模型（直接回车跳过）"
-        echo "可用模型示例：vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
-        echo "             lixiang-kimi-2-5/kivy-kimi-k2_5"
-        echo ""
-        for LABEL in octoclaw-main octoclaw-runner octoclaw-research octoclaw-code octoclaw-review profile:writer; do
-            case $LABEL in
-                octoclaw-main)      NAME="🤖 主脑" ;;
-                octoclaw-runner)    NAME="🏃 Runner" ;;
-                octoclaw-research)  NAME="🔍 Research" ;;
-                octoclaw-code)      NAME="🔧 Code" ;;
-                octoclaw-review)    NAME="🧪 Review" ;;
-                profile:writer)     NAME="✍️  Writer" ;;
-            esac
-            read -p "  $NAME ($LABEL): " CUSTOM_MODEL
-            if [ -n "$CUSTOM_MODEL" ]; then
-                CUSTOM_MODELS[$LABEL]="$CUSTOM_MODEL"
-            fi
-        done
-        read -p "  🤖 主 Agent (main): " MAIN_MODEL
-        ;;
-    *) MODE="auto" ;;
-esac
+if [ -n "$MODE_PRESET" ]; then
+    MODE="$MODE_PRESET"
+elif [ "$NON_INTERACTIVE" = "true" ]; then
+    MODE="auto"
+else
+    read -p "请输入选择 [1-2，直接回车选自动选模]: " mode_choice
+    case "$mode_choice" in
+        2) MODE="custom" ;;
+        *) MODE="auto" ;;
+    esac
+fi
+
+if [ "$MODE" = "custom" ] && [ "$NON_INTERACTIVE" != "true" ]; then
+    MODE_LABEL="🔧 自定义模式"
+    echo ""
+    echo "🔧 自定义模式：为核心 worker_pool/profile 指定模型（直接回车跳过）"
+    echo "可用模型示例：vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
+    echo "             lixiang-kimi-2-5/kivy-kimi-k2_5"
+    echo ""
+    for LABEL in octoclaw-main octoclaw-runner octoclaw-research octoclaw-code octoclaw-review profile:writer; do
+        case $LABEL in
+            octoclaw-main)      NAME="🤖 主脑" ;;
+            octoclaw-runner)    NAME="🏃 Runner" ;;
+            octoclaw-research)  NAME="🔍 Research" ;;
+            octoclaw-code)      NAME="🔧 Code" ;;
+            octoclaw-review)    NAME="🧪 Review" ;;
+            profile:writer)     NAME="✍️  Writer" ;;
+        esac
+        read -p "  $NAME ($LABEL): " CUSTOM_MODEL
+        if [ -n "$CUSTOM_MODEL" ]; then
+            CUSTOM_MODEL_PAIRS+=("$LABEL=$CUSTOM_MODEL")
+        fi
+    done
+    read -p "  🤖 主 Agent (main): " MAIN_MODEL
+fi
 
 # 写入模式文件（包含完整模式定义）
 MODE_FILE="$WORKSPACE/tmp/octoclaw-mode.json"
@@ -827,8 +934,8 @@ mkdir -p "$WORKSPACE/tmp"
 
 if [ "$MODE" = "custom" ]; then
     CUSTOM_PAIRS=""
-    for KEY in "${!CUSTOM_MODELS[@]}"; do
-        CUSTOM_PAIRS+="${KEY}=${CUSTOM_MODELS[$KEY]}"$'\n'
+    for PAIR in "${CUSTOM_MODEL_PAIRS[@]-}"; do
+        CUSTOM_PAIRS+="${PAIR}"$'\n'
     done
     if [ -n "$MAIN_MODEL" ]; then
         CUSTOM_PAIRS+="main=${MAIN_MODEL}"$'\n'
@@ -869,7 +976,7 @@ case "$MODE" in
     auto)     MODE_LABEL='🧠 自动选模' ;;
     custom)   MODE_LABEL='🔧 自定义模式' ;;
 esac
-echo "✅ 已设置为 $MODE_LABEL"
+echo "✅ 已设置为 ${MODE_LABEL}"
 
 OCTOPUS_CONFIG_FILE="$WORKSPACE/tmp/octoclaw-config.json"
 python3 - << EOF
@@ -950,7 +1057,9 @@ switch_main_agent_model() {
 }
 
 # 自定义模式：如果用户指定了主 Agent 模型，直接传入；否则 fallback auto policy
-if [ "$MODE" = "custom" ] && [ -n "$MAIN_MODEL" ]; then
+if [ "${SKIP_MAIN_MODEL_SWITCH:-false}" = "true" ]; then
+    echo "ℹ️  已跳过主 Agent 模型切换"
+elif [ "$MODE" = "custom" ] && [ -n "$MAIN_MODEL" ]; then
     switch_main_agent_model "custom_explicit" "$MAIN_MODEL"
 else
     switch_main_agent_model "$MODE"
@@ -976,7 +1085,7 @@ if [ "$ACTIVE_NOTIFICATION_BACKEND" = "feishu" ]; then
         echo "⚠️  未找到 python3，飞书通知将无法使用"
     fi
 else
-    echo "ℹ️  当前通知后端为 $ACTIVE_NOTIFICATION_BACKEND，跳过飞书依赖检查"
+    echo "ℹ️  当前通知后端为 ${ACTIVE_NOTIFICATION_BACKEND}，跳过飞书依赖检查"
 fi
 
 # 4. 启动巡逻（loop 模式：零 token 进程；cron 模式：openclaw cron）
@@ -1075,7 +1184,7 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
   "schedule": {"kind": "cron", "expression": "0 9 * * *", "timezone": "Asia/Shanghai"},
   "payload": {
     "kind": "agentTurn",
-    "message": "执行八爪鱼版本检查：bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1",
+    "message": "执行八爪鱼版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1",
     "timeoutSeconds": 120
   },
   "delivery": {"mode": "none"},
@@ -1097,7 +1206,11 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
     fi
 }
 
-install_patrol_cron
+if [ "${SKIP_CRON:-false}" = "true" ]; then
+    echo "ℹ️  已跳过巡逻 / 更新 cron 配置"
+else
+    install_patrol_cron
+fi
 
 # 注册模型延迟探测 cron（每15分钟，错峰 anchorMs=450000，仅在铁甲虾没有探测 cron 时才注册）
 install_probe_cron() {
@@ -1169,7 +1282,11 @@ install_probe_cron() {
     fi
 }
 
-install_probe_cron
+if [ "${SKIP_CRON:-false}" = "true" ]; then
+    echo "ℹ️  已跳过模型探测 cron 配置"
+else
+    install_probe_cron
+fi
 
 install_plan_sync_cron() {
     if [ "${FEATURE_OMNIROUTE_PLAN_SYNC:-true}" != "true" ]; then
@@ -1231,7 +1348,11 @@ JSON
     fi
 }
 
-install_plan_sync_cron
+if [ "${SKIP_CRON:-false}" = "true" ]; then
+    echo "ℹ️  已跳过计划同步 cron 配置"
+else
+    install_plan_sync_cron
+fi
 
 install_error_review_schedule() {
     local cron_tag cron_line existing
@@ -1288,7 +1409,11 @@ JSON
     echo "⚠️  未检测到 crontab / openclaw，跳过 nightly error review 安装"
 }
 
-install_error_review_schedule
+if [ "${SKIP_CRON:-false}" = "true" ]; then
+    echo "ℹ️  已跳过夜间错误复盘计划配置"
+else
+    install_error_review_schedule
+fi
 
 # 5. 首次模型延迟探测
 if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
@@ -1314,7 +1439,7 @@ import json
 import os
 import subprocess
 
-alias_file = "/workspace/tmp/octopus-model-aliases.json"
+alias_file = os.path.join("${WORKSPACE}", "tmp", "octopus-model-aliases.json")
 
 try:
     result = subprocess.run(
@@ -1357,7 +1482,7 @@ if strong:
     data["strong"] = strong
 if heavy:
     data["heavy"] = heavy
-data["updated_at"] = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 os.makedirs(os.path.dirname(alias_file), exist_ok=True)
 with open(alias_file, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1375,11 +1500,13 @@ if python3 "$SCRIPT_DIR/lib/model-intel.py" refresh --mode "$MODE" >/tmp/octopus
 else
     echo "⚠️  model-intel 生成失败：$(cat /tmp/octopus-model-intel.err 2>/dev/null)"
 fi
+fi
 
 # ─────────────────────────────────────────────
 # 自动注入 octopus:core-rules 到 AGENTS.md
 # ─────────────────────────────────────────────
 inject_agents_md() {
+    local CURRENT_VER INSTALL_VER
     if [ ! -f "$AGENTS_FILE" ]; then
         mkdir -p "$AGENTS_WORKSPACE"
         cat > "$AGENTS_FILE" <<'EOF'
@@ -1398,10 +1525,10 @@ EOF
     INSTALL_VER="$OCTOPUS_RULES_VERSION"
 
     if [ "$CURRENT_VER" = "$INSTALL_VER" ]; then
-        echo "ℹ️  octopus:core-rules 已是最新版 $INSTALL_VER，跳过注入"
+        echo "ℹ️  octopus:core-rules 已是最新版 ${INSTALL_VER}，跳过注入"
         return 0
     elif [ -n "$CURRENT_VER" ]; then
-        echo "🔄 检测到旧版规则 $CURRENT_VER，升级到 $INSTALL_VER..."
+        echo "🔄 检测到旧版规则 ${CURRENT_VER}，升级到 ${INSTALL_VER}..."
         # 备份 + 删除旧块 + 注入新块
         python3 -c "
 import re, sys
@@ -1413,9 +1540,9 @@ with open('$AGENTS_FILE', 'w') as f:
     f.write(cleaned)
 print('✅ 旧版规则已清除')
 "
-        echo "✅ 已备份并清除旧版 AGENTS.md → $(basename $BACKUP)"
+        echo "✅ 已备份并清除旧版 AGENTS.md → $(basename "${BACKUP}")"
     elif grep -q "<!-- octopus:core-rules -->" "$AGENTS_FILE" 2>/dev/null; then
-        echo "🔄 检测到无版本号的旧版规则，升级到 $INSTALL_VER..."
+        echo "🔄 检测到无版本号的旧版规则，升级到 ${INSTALL_VER}..."
         # 备份 + 删除旧块 + 注入新块
         python3 -c "
 import re, sys
@@ -1426,9 +1553,9 @@ with open('$AGENTS_FILE', 'w') as f:
     f.write(cleaned)
 print('✅ 无版本号旧规则已清除')
 "
-        echo "✅ 已备份并清除旧版 AGENTS.md → $(basename $BACKUP)"
+        echo "✅ 已备份并清除旧版 AGENTS.md → $(basename "${BACKUP}")"
     else
-        echo "✅ 首次安装 octopus:core-rules $INSTALL_VER，已备份 AGENTS.md → $(basename $BACKUP)"
+        echo "✅ 首次安装 octopus:core-rules ${INSTALL_VER}，已备份 AGENTS.md → $(basename "${BACKUP}")"
     fi
 
     # 注入新版规则（在文件末尾追加）
@@ -1542,6 +1669,7 @@ install_runtime_extension() {
     local extensions_dir="${HOME}/.openclaw/extensions"
     local source_dir="${SKILL_ROOT}/extensions/octoclaw-runtime"
     local target_dir="${extensions_dir}/octoclaw-runtime"
+    local mode="${EXTENSION_INSTALL_MODE:-rsync}"
 
     if [ ! -d "$source_dir" ]; then
         echo "⚠️ 未找到 runtime extension 目录，跳过工具化接管安装"
@@ -1552,11 +1680,43 @@ install_runtime_extension() {
     if [ -L "$target_dir" ] || [ -d "$target_dir" ]; then
         rm -rf "$target_dir"
     fi
-    ln -s "$source_dir" "$target_dir"
-    echo "✅ 已安装 runtime extension → $target_dir"
+    case "$mode" in
+        symlink)
+            ln -s "$source_dir" "$target_dir"
+            ;;
+        copy)
+            cp -R "$source_dir" "$target_dir"
+            ;;
+        rsync)
+            mkdir -p "$target_dir"
+            if command -v rsync >/dev/null 2>&1; then
+                rsync -a --delete "$source_dir"/ "$target_dir"/
+            else
+                cp -R "$source_dir"/. "$target_dir"/
+            fi
+            ;;
+        *)
+            echo "❌ 未知 extension 安装模式: $mode（支持 rsync|copy|symlink）" >&2
+            return 1
+            ;;
+    esac
+    echo "✅ 已安装 runtime extension (${mode}) → $target_dir"
 }
 
 # 自动注入 octopus:core-rules 到 AGENTS.md（在展示安装完成之前，确保规则已就绪）
+case "$INSTALL_ACTION" in
+    inject-only|inject-agents)
+        inject_agents_md
+        echo "✅ 仅执行 AGENTS 注入完成"
+        exit 0
+        ;;
+    extension-only|install-extension)
+        install_runtime_extension
+        echo "✅ 仅执行 runtime extension 安装完成"
+        exit 0
+        ;;
+esac
+
 inject_agents_md
 install_runtime_extension
 
@@ -1564,7 +1724,7 @@ echo ""
 echo "🎉 八爪鱼安装完成！"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ 工作目录已创建"
-echo "✅ 通知后端：$ACTIVE_NOTIFICATION_BACKEND"
+echo "✅ 通知后端：${ACTIVE_NOTIFICATION_BACKEND}"
 if [ "${PATROL_MODE:-loop}" = "loop" ]; then
     echo "✅ 巡逻模式：零 token loop（$(_resolve_supervisor_mode)，间隔 ${PATROL_INTERVAL}s）"
     if [ "${RUNNER_ENABLED:-true}" = "true" ]; then
@@ -1579,7 +1739,7 @@ else
     echo "✅ 巡逻模式：cron（每分钟触发，消耗 token）"
 fi
 echo "✅ 调度规则已注入：$AGENTS_FILE"
-echo "✅ 调度模式：$MODE_LABEL"
+echo "✅ 调度模式：${MODE_LABEL}"
 
 # 读取并展示主 Agent 模型
 MAIN_MODEL_DISPLAY=$(python3 -c "
@@ -1596,7 +1756,7 @@ try:
 except Exception:
     print('（未知）')
 " 2>/dev/null)
-echo "🤖 主 Agent 模型：$MAIN_MODEL_DISPLAY"
+echo "🤖 主 Agent 模型：${MAIN_MODEL_DISPLAY}"
 echo ""
 echo "💬 快速上手："
 echo "  • 直接说任务，八爪鱼自动调度触手并行处理"
