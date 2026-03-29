@@ -477,12 +477,7 @@ def cmd_upsert(args):
             # Update fields if provided
             if args.label:
                 existing["label"] = args.label
-                if not args.legacy_label:
-                    existing["legacy_label"] = args.label
-            if args.legacy_label:
-                existing["legacy_label"] = args.legacy_label
-                if not args.label and not existing.get("label"):
-                    existing["label"] = args.legacy_label
+            existing.pop("legacy_label", None)
             if args.model:
                 existing["model"] = args.model
             if args.status:
@@ -564,8 +559,7 @@ def cmd_upsert(args):
         else:
             record = {
                 "id": args.id,
-                "label": args.label or args.legacy_label or "",
-                "legacy_label": args.legacy_label or args.label or "",
+                "label": args.label or "",
                 "model": args.model or "",
                 "status": args.status or "dispatched",
                 "summary": args.summary or "",

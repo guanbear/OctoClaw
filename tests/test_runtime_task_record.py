@@ -77,7 +77,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["work_type"], "research")
         self.assertEqual(payload["phase"], "report")
 
-    def test_normalize_preserves_explicit_legacy_label_and_final_worker_result(self) -> None:
+    def test_normalize_drops_legacy_label_but_keeps_final_worker_result(self) -> None:
         payload = normalize_task_record(
             {
                 "id": "done-1",
@@ -91,8 +91,8 @@ class RuntimeTaskRecordTests(unittest.TestCase):
                 "files_changed": ["README.md"],
             }
         )
-        self.assertEqual(payload["legacy_label"], "octopus-test")
-        self.assertEqual(payload["label"], "octopus-test")
+        self.assertNotIn("legacy_label", payload)
+        self.assertEqual(payload["label"], "")
         self.assertEqual(payload["artifacts"]["worker_result"]["schema_version"], "octoclaw.worker_result/v1")
         self.assertEqual(payload["artifacts"]["worker_result"]["status"], "done")
         self.assertEqual(payload["artifacts"]["worker_result"]["report"], "/tmp/review-report.md")
@@ -154,7 +154,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(task["phase"], "collect")
         self.assertEqual(task["profile"], "research")
         self.assertTrue(task["review_required"])
-        self.assertEqual(task["legacy_label"], "octopus-scout")
+        self.assertEqual(task["label"], "octopus-scout")
         self.assertEqual(task["artifacts"]["report_path"], "/tmp/gateway-report.md")
 
     def test_task_state_update_infers_executor_from_worker_pool_first(self) -> None:

@@ -168,8 +168,8 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["protocol"] = _normalized_str(normalized.get("protocol")) or "normal"
     normalized["profile"] = _normalized_str(normalized.get("profile"))
     normalized["review_required"] = _normalized_bool(normalized.get("review_required"))
-    normalized["legacy_label"] = _normalized_str(normalized.get("legacy_label")) or _normalized_str(normalized.get("label"))
-    normalized["label"] = _normalized_str(normalized.get("label")) or normalized["legacy_label"]
+    normalized["label"] = _normalized_str(normalized.get("label"))
+    normalized.pop("legacy_label", None)
     normalized["owner"] = _normalized_str(normalized.get("owner"))
     normalized["tier"] = _normalized_str(normalized.get("tier"))
     normalized["model"] = _normalized_str(normalized.get("model"))
