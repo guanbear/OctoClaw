@@ -250,6 +250,30 @@ def load_models_from_openclaw() -> list[str]:
     return [model_id for model_id in ids if not is_retired_model(model_id)]
 
 
+def collect_candidate_model_ids(primary_ids: list[str], *sources: dict) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def remember(model_id: str) -> None:
+        normalized = str(model_id or "").strip()
+        if not normalized or normalized in seen or is_retired_model(normalized):
+            return
+        seen.add(normalized)
+        ordered.append(normalized)
+
+    for model_id in primary_ids:
+        remember(model_id)
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for model_id in source.keys():
+            if "/" in str(model_id or ""):
+                remember(str(model_id))
+
+    return ordered
+
+
 def load_latency_data() -> dict:
     data = load_json(LATENCY_FILE)
     if isinstance(data, dict):
@@ -360,11 +384,16 @@ def build_catalog() -> dict:
     ensure_plan_state_file()
     ensure_benchmark_snapshot_file()
     ensure_source_registry_file()
-    model_ids = load_models_from_openclaw()
     latency_data = load_latency_data()
     speed_data = load_speed_data()
     benchmark_overrides = load_benchmark_overrides()
     source_registry = load_source_registry()
+    model_ids = collect_candidate_model_ids(
+        load_models_from_openclaw(),
+        latency_data,
+        speed_data,
+        benchmark_overrides,
+    )
 
     records = []
     for model_id in model_ids:
@@ -440,7 +469,15 @@ def build_catalog() -> dict:
 def compute_policy(catalog: dict, mode: str = "auto") -> dict:
     models = [m for m in catalog.get("models", []) if m.get("available", True)]
     if not models:
-        policy = {"generated_at": now_iso(), "mode": mode, "main_model": "", "tiers": {}, "labels": {}, "sources": []}
+        policy = {
+            "generated_at": now_iso(),
+            "mode": mode,
+            "main_model": "",
+            "profiles": {},
+            "worker_pools": {},
+            "worker_pool_phases": {},
+            "sources": [],
+        }
         save_json(MODEL_POLICY_FILE, policy)
         return policy
 
