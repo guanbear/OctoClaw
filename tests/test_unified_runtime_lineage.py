@@ -305,6 +305,13 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.assertEqual(parent["artifacts"]["worker_result"]["schema_version"], "octoclaw.worker_result/v1")
             self.assertEqual(parent["artifacts"]["worker_result"]["status"], "done")
             self.assertEqual(parent["artifacts"]["step_worker_results"]["review"]["status"], "done")
+            self.assertTrue(parent["report_path"])
+            parent_report = Path(parent["report_path"])
+            self.assertTrue(parent_report.exists())
+            report_text = parent_report.read_text(encoding="utf-8")
+            self.assertIn("planner completed the root-cause analysis", report_text)
+            self.assertIn("review confirmed the final result", report_text)
+            self.assertEqual(parent["artifacts"]["worker_result"]["report"], parent["report_path"])
 
     def test_parent_failure_emits_parent_result_mail(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-parent-failed-") as workspace:
@@ -381,6 +388,12 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.assertEqual(parent["artifacts"]["step_statuses"]["worker"], "failed")
             self.assertEqual(parent["artifacts"]["worker_result"]["status"], "failed")
             self.assertEqual(parent["artifacts"]["step_worker_results"]["worker"]["status"], "failed")
+            self.assertTrue(parent["report_path"])
+            parent_report = Path(parent["report_path"])
+            self.assertTrue(parent_report.exists())
+            report_text = parent_report.read_text(encoding="utf-8")
+            self.assertIn("worker hit a migration conflict", report_text)
+            self.assertEqual(parent["artifacts"]["worker_result"]["report"], parent["report_path"])
 
             inbox_path = Path(workspace) / "tmp" / "octopus" / "clawteam-bridge" / "inbox" / "main.jsonl"
             inbox_entries = [

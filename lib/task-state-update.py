@@ -20,7 +20,11 @@ if SCRIPT_DIR not in sys.path:
 from clawteam_bridge import sync_task
 from runtime_task_record import normalize_task_record, normalize_task_records
 from runtime_protocol import normalize_worker_result
-from worker_taxonomy import resolve_executor as taxonomy_resolve_executor
+from worker_taxonomy import (
+    model_band_from_legacy_tier,
+    normalize_model_band,
+    resolve_executor as taxonomy_resolve_executor,
+)
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
@@ -285,6 +289,85 @@ def _task_signature(task: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
+def _default_parent_report_path(task_id: str) -> str:
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return ""
+    return os.path.join(WORKSPACE, "tmp", "octopus", "shared", f"{task_id}.md")
+
+
+def _report_excerpt(path: str, *, max_lines: int = 20, max_chars: int = 1600) -> str:
+    target = str(path or "").strip()
+    if not target or not os.path.exists(target):
+        return ""
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    excerpt = "\n".join(lines[:max_lines]).strip()
+    if len(excerpt) > max_chars:
+        excerpt = excerpt[: max_chars - 1].rstrip() + "…"
+    return excerpt
+
+
+def _materialize_parent_report(
+    before: dict,
+    *,
+    status: str,
+    summary: str,
+    child_ids: list[str],
+    child_summaries: dict[str, str],
+    child_reports: dict[str, str],
+    step_task_ids: dict[str, str],
+) -> str:
+    parent_id = str(before.get("id", "") or "").strip()
+    report_path = str(before.get("report_path", "") or "").strip() or _default_parent_report_path(parent_id)
+    if not parent_id or not report_path:
+        return ""
+
+    step_by_child = {task_id: step_name for step_name, task_id in step_task_ids.items() if step_name and task_id}
+    title = str(before.get("title", "") or before.get("task_description", "") or parent_id).strip()
+    lines = [
+        f"# OctoClaw Team Result: {title}",
+        "",
+        f"- Task ID: {parent_id}",
+        f"- Status: {status}",
+        f"- Summary: {summary or ''}",
+        "",
+        "## Child Results",
+        "",
+    ]
+
+    for child_id in child_ids:
+        step_name = str(step_by_child.get(child_id, "") or "").strip()
+        heading = f"### {step_name}" if step_name else f"### {child_id}"
+        child_summary = str(child_summaries.get(child_id, "") or "").strip()
+        child_report = str(child_reports.get(child_id, "") or "").strip()
+        lines.append(heading)
+        if child_summary:
+            lines.append("")
+            lines.append(child_summary)
+        if child_report:
+            lines.append("")
+            lines.append(f"Report: {child_report}")
+            excerpt = _report_excerpt(child_report)
+            if excerpt:
+                lines.append("")
+                lines.append("```md")
+                lines.append(excerpt)
+                lines.append("```")
+        lines.append("")
+
+    try:
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        with open(report_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines).rstrip() + "\n")
+    except OSError:
+        return ""
+    return report_path
+
+
 def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
     task_kind = str(parent.get("task_kind", "") or "").strip()
     has_children = bool(parent.get("child_ids"))
@@ -379,6 +462,17 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
         }
     )
     if derived_status in {"done", "failed"}:
+        parent_report_path = _materialize_parent_report(
+            before,
+            status=derived_status,
+            summary=str(candidate.get("summary", "") or ""),
+            child_ids=child_ids,
+            child_summaries=child_summaries,
+            child_reports=child_reports,
+            step_task_ids=step_task_ids,
+        )
+        if parent_report_path:
+            candidate["report_path"] = parent_report_path
         child_report_paths = [
             path
             for path in [str(child_reports.get(child_id, "") or "").strip() for child_id in child_ids]
@@ -389,13 +483,13 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
                 "task_id": str(before.get("id", "") or ""),
                 "status": derived_status,
                 "summary": candidate.get("summary", ""),
-                "report": str(before.get("report_path", "") or ""),
+                "report": str(candidate.get("report_path", "") or before.get("report_path", "") or ""),
                 "artifacts": child_report_paths,
                 "risks": [f"failed child: {child_id}" for child_id in failed_child_ids],
                 "next_step": "none" if derived_status == "done" else "inspect child reports and retry or replan",
             },
             task_id=str(before.get("id", "") or ""),
-            default_report=str(before.get("report_path", "") or ""),
+            default_report=str(candidate.get("report_path", "") or before.get("report_path", "") or ""),
         )
         artifacts["worker_result"] = parent_result
     candidate["artifacts"] = artifacts
@@ -462,6 +556,10 @@ def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert
 def cmd_upsert(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     lineage_syncs = []
+    model_band_arg = normalize_model_band(getattr(args, "model_band", "") or "", default="") or model_band_from_legacy_tier(
+        getattr(args, "tier", "") or "",
+        default="",
+    )
     with open(STATE_FILE, "a+") as fp:
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
@@ -493,8 +591,9 @@ def cmd_upsert(args):
                 existing["deps"] = [d.strip() for d in args.deps.split(",") if d.strip()]
             if args.expected_done:
                 existing["expected_done_at"] = resolve_expected_done(args.expected_done)
-            if args.tier:
-                existing["tier"] = args.tier
+            if model_band_arg:
+                existing["model_band"] = model_band_arg
+            existing.pop("tier", None)
             if args.task_description:
                 existing["task_description"] = args.task_description
             if args.source:
@@ -574,8 +673,8 @@ def cmd_upsert(args):
                 record["deps"] = [d.strip() for d in args.deps.split(",") if d.strip()]
             if args.expected_done:
                 record["expected_done_at"] = resolve_expected_done(args.expected_done)
-            if args.tier:
-                record["tier"] = args.tier
+            if model_band_arg:
+                record["model_band"] = model_band_arg
             if args.task_description:
                 record["task_description"] = args.task_description
             # 默认 source 为 octopus（八爪鱼任务）
@@ -768,6 +867,7 @@ def main():
     p_upsert.add_argument("--files")
     p_upsert.add_argument("--deps")
     p_upsert.add_argument("--expected-done", dest="expected_done")
+    p_upsert.add_argument("--model-band", dest="model_band")
     p_upsert.add_argument("--tier")
     p_upsert.add_argument("--task-description", dest="task_description")
     p_upsert.add_argument("--source")
