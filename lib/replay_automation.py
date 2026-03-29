@@ -225,6 +225,16 @@ def run_replay_automation(
             "output_dir": str(output_dir),
         }
 
+    if not events_path.exists():
+        return {
+            "enabled": enabled,
+            "forced": bool(force),
+            "skipped": True,
+            "reason": "replay_log_missing",
+            "events_path": str(events_path),
+            "output_dir": str(output_dir),
+        }
+
     events, source_format, invalid_lines = load_events(events_path)
     phase = infer_runtime_policy_phase(runtime_policy if isinstance(runtime_policy, dict) else {})
     dated_dir = _date_dir(output_dir)

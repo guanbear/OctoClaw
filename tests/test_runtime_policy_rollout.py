@@ -257,6 +257,56 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
         self.assertEqual(payload["suggested_preset"], "enforced")
         self.assertFalse(payload["ready"])
 
+    def test_check_handles_missing_replay_log_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-missing-replay-") as tmpdir:
+            config_path = Path(tmpdir) / "octopus-config.json"
+            missing_events = Path(tmpdir) / "missing.jsonl"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "runtime_policy": {
+                            "enabled": True,
+                            "switches": {
+                                "hard_runner_only": True,
+                                "route_hint_required": False,
+                                "replay_logging": True,
+                                "direct_model_override": False,
+                                "delegation_enforcement": False,
+                            },
+                            "hooks": {
+                                "before_model_resolve": False,
+                                "before_prompt_build": True,
+                                "before_tool_call": False,
+                                "agent_end": True,
+                            },
+                            "route_stickiness": {"enabled": False},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(ROLLOUT_SCRIPT),
+                    "check",
+                    "--config",
+                    str(config_path),
+                    "--events",
+                    str(missing_events),
+                    "--format",
+                    "json",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["source"]["missing"])
+        self.assertEqual(payload["source"]["format"], "missing")
+        self.assertFalse(payload["promotion"]["ready"])
+        self.assertEqual(payload["observation"]["suggested_preset"], "conservative")
+
 
 if __name__ == "__main__":
     unittest.main()

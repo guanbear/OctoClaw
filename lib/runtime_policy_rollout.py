@@ -280,6 +280,27 @@ def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]
     config_path = Path(args.config).expanduser().resolve()
     current_phase, summary_phase = resolve_observation_phase(config_path, getattr(args, "phase", None))
     events_path = Path(args.events).expanduser().resolve()
+    if not events_path.exists():
+        summary = summarize_events(
+            [],
+            source_path=str(events_path),
+            source_format="missing",
+            invalid_lines=0,
+            phase=summary_phase,
+            min_policy_events=args.min_policy_events,
+            min_runner_events=args.min_runner_events,
+            min_delegated_events=args.min_delegated_events,
+            max_blocked_session_rate=args.max_blocked_session_rate,
+            min_route_hint_submission_rate=args.min_route_hint_submission_rate,
+        )
+        summary["source"]["missing"] = True
+        summary["observation"] = {
+            "current_phase": current_phase,
+            "summary_phase": summary_phase,
+            "suggested_preset": current_phase,
+        }
+        return summary
+
     events, source_format, invalid_lines = load_events(events_path)
     summary = summarize_events(
         events,

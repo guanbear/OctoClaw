@@ -81,6 +81,30 @@ class ReplayAutomationTests(unittest.TestCase):
             self.assertTrue((manifest_path.parent / "review-blocked.json").exists())
             self.assertTrue((manifest_path.parent / "curated-blocked.json").exists())
 
+    def test_run_skips_cleanly_when_enabled_but_replay_log_missing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-automation-") as tmpdir:
+            config_path = Path(tmpdir) / "octopus-config.json"
+            out_dir = Path(tmpdir) / "nightly"
+            missing_events = Path(tmpdir) / "missing.jsonl"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "replay_automation": {
+                            "enabled": True,
+                            "output_dir": str(out_dir),
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            output = self.run_script("run", "--config", str(config_path), "--events", str(missing_events), "--format", "json")
+            payload = json.loads(output)
+            self.assertTrue(payload["skipped"])
+            self.assertEqual(payload["reason"], "replay_log_missing")
+            self.assertEqual(payload["events_path"], str(missing_events.resolve()))
+
     def test_run_with_llm_review_outputs_packet_prompt_and_report(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-replay-automation-") as tmpdir:
             config_path = Path(tmpdir) / "octopus-config.json"
