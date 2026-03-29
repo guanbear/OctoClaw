@@ -56,7 +56,7 @@ def send_agent_message(session_key: str, message: str, timeout_seconds: int = 0)
     if not session_key or not message.strip():
         return {"ok": False, "status": "error", "error": "missing session_key or message"}
 
-    idem = f"octopus-steer-{uuid.uuid4()}"
+    idem = f"octoclaw-steer-{uuid.uuid4()}"
     params = {
         "sessionKey": session_key,
         "message": message,
@@ -81,6 +81,91 @@ def send_agent_message(session_key: str, message: str, timeout_seconds: int = 0)
         return {"ok": False, "status": "error", "runId": run_id, "error": "invalid agent.wait response"}
     wait_res.setdefault("runId", run_id)
     return wait_res
+
+
+def _strip_agent_prefix(session_key: str) -> str:
+    raw = str(session_key or "").strip()
+    if not raw:
+        return ""
+    parts = raw.split(":")
+    if len(parts) >= 3 and parts[0] == "agent":
+        return ":".join(parts[2:])
+    return raw
+
+
+def resolve_message_target_from_session_key(session_key: str) -> dict:
+    """
+    Best-effort conversion from OpenClaw session keys to `openclaw message send`
+    channel/target/thread parameters.
+    """
+    stripped = _strip_agent_prefix(session_key)
+    parts = [part for part in stripped.split(":") if part != ""]
+    if not parts:
+        return {"ok": False, "error": "missing session key"}
+
+    origin = parts[0].lower()
+    thread_id = ""
+    target = ""
+
+    if origin == "slack":
+        if len(parts) >= 3 and parts[1] in {"dm", "direct", "user"}:
+            target = f"user:{parts[2]}"
+            if len(parts) >= 5 and parts[3] == "thread":
+                thread_id = parts[4]
+        elif len(parts) >= 3 and parts[1] == "channel":
+            target = f"channel:{parts[2]}"
+            if len(parts) >= 5 and parts[3] == "thread":
+                thread_id = parts[4]
+    elif origin == "discord":
+        if len(parts) >= 3 and parts[1] == "channel":
+            target = f"channel:{parts[2]}"
+            if len(parts) >= 5 and parts[3] == "thread":
+                target = f"channel:{parts[4]}"
+        elif len(parts) >= 3 and parts[1] in {"dm", "direct", "user"}:
+            target = f"user:{parts[2]}"
+    elif origin == "telegram":
+        if len(parts) >= 3 and parts[1] == "group":
+            target = parts[2]
+            if len(parts) >= 5 and parts[3] in {"topic", "thread"}:
+                thread_id = parts[4]
+        elif len(parts) >= 2:
+            target = parts[1]
+            if len(parts) >= 4 and parts[2] == "thread":
+                thread_id = parts[3]
+    elif origin == "whatsapp":
+        if len(parts) >= 3 and parts[1] == "group":
+            target = f"group:{parts[2]}"
+        elif len(parts) >= 2:
+            target = parts[1]
+    elif origin == "signal":
+        if len(parts) >= 3 and parts[1] == "group":
+            target = f"group:{parts[2]}"
+        elif len(parts) >= 2:
+            target = parts[1]
+    elif origin == "msteams":
+        if len(parts) >= 3 and parts[1] == "conversation":
+            target = f"conversation:{parts[2]}"
+        elif len(parts) >= 3 and parts[1] == "user":
+            target = f"user:{parts[2]}"
+    elif origin == "googlechat":
+        if len(parts) >= 3:
+            target = f"{parts[1]}:{parts[2]}" if parts[1] in {"spaces", "users"} else ":".join(parts[1:])
+
+    if not target:
+        return {
+            "ok": False,
+            "origin": origin,
+            "session_key": session_key,
+            "error": "unsupported or unresolvable session target",
+        }
+
+    return {
+        "ok": True,
+        "origin": origin,
+        "session_key": session_key,
+        "target": target,
+        "thread_id": thread_id,
+    }
 
 
 def send_channel_message(

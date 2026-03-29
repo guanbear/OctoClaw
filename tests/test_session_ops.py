@@ -7,6 +7,27 @@ from lib import session_ops
 
 
 class SessionOpsMessageSendTests(unittest.TestCase):
+    def test_resolve_message_target_from_slack_thread_session(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("agent:main:slack:channel:C123:thread:1712345.000100")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "slack")
+        self.assertEqual(result["target"], "channel:C123")
+        self.assertEqual(result["thread_id"], "1712345.000100")
+
+    def test_resolve_message_target_from_discord_thread_session(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("agent:main:discord:channel:123:thread:456")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "discord")
+        self.assertEqual(result["target"], "channel:456")
+        self.assertEqual(result["thread_id"], "")
+
+    def test_resolve_message_target_from_telegram_topic_session(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("agent:main:telegram:group:-1001234567890:topic:42")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "telegram")
+        self.assertEqual(result["target"], "-1001234567890")
+        self.assertEqual(result["thread_id"], "42")
+
     @patch("lib.session_ops.has_openclaw_cli", return_value=False)
     def test_send_channel_message_fails_without_cli(self, _mock_cli) -> None:
         result = session_ops.send_channel_message("slack", "channel:C123", "hello")
