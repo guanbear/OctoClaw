@@ -245,9 +245,9 @@ stderr_excerpt = excerpt(stderr_text)
 first = compact_text(first_line(stderr_text, stdout_text) if status == "failed" else first_line(stdout_text, stderr_text), 110)
 
 if status == "done":
-    summary = f"runner完成: {first}" if first else "runner完成"
+    summary = f"Runner completed · {first}" if first and not first.startswith(('{', '[')) else "Runner completed"
 else:
-    summary = f"runner失败 exit={exit_code}: {first}" if first else f"runner失败 exit={exit_code}"
+    summary = f"Runner failed exit={exit_code} · {first}" if first and not first.startswith(('{', '[')) else f"Runner failed exit={exit_code}"
 
 report_lines = [
     f"# Runner Result: {job_id}",

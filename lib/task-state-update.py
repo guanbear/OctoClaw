@@ -26,6 +26,7 @@ from runtime_task_record import (
     task_notification_state,
     task_state_model,
 )
+from task_events import append_task_event
 from runtime_protocol import normalize_worker_result
 from worker_taxonomy import (
     normalize_model_band,
@@ -156,6 +157,53 @@ def parse_json_arg(value: str) -> dict:
     if isinstance(parsed, dict):
         return parsed
     raise argparse.ArgumentTypeError("JSON value must be an object")
+
+
+def _log_task_transition(record: dict, previous_status: str, *, anchor_result: dict | None = None) -> None:
+    if not isinstance(record, dict):
+        return
+    current = task_notification_state(record)
+    previous = str(previous_status or "").strip().lower()
+    state_model = task_state_model(record)
+    route = str(record.get("route", "") or "").strip()
+    worker_pool = str(record.get("worker_pool", "") or "").strip()
+    base_message = f"{route or 'task'} via {worker_pool or '?'}".strip()
+    try:
+        if not previous:
+            append_task_event(record, "route_selected", message=base_message)
+        if current == "dispatched" and previous not in {"dispatched", "running"}:
+            append_task_event(record, "dispatch_started", message=base_message)
+        if current == "running" and previous != "running":
+            append_task_event(record, "worker_started", message=str(record.get("summary", "") or base_message))
+        if current == "done" and previous != "done":
+            append_task_event(record, "result_ready", message=str(record.get("summary", "") or "task completed"))
+        elif current == "blocked_final" and previous != "blocked_final":
+            append_task_event(record, "source_blocked", message=str(record.get("blocked_reason", "") or record.get("summary", "") or "task blocked"))
+            append_task_event(record, "result_ready", message=str(record.get("summary", "") or "blocked result ready"))
+        elif current == "partial_final" and previous != "partial_final":
+            append_task_event(record, "result_ready", message=str(record.get("summary", "") or "partial result ready"))
+        elif current == "failed" and previous != "failed":
+            append_task_event(record, "failed", message=str(record.get("summary", "") or "task failed"))
+        if state_model["handoff_state"] in {"user_safe_ready", "delivered"}:
+            append_task_event(record, "handoff_ready", message=str(record.get("user_safe_summary", "") or record.get("summary", "") or "handoff ready"))
+        if str(state_model.get("observability_health", "") or "") not in {"", "healthy"}:
+            append_task_event(
+                record,
+                "observability_degraded",
+                message=str(state_model.get("observability_health", "") or "observability degraded"),
+            )
+        if isinstance(anchor_result, dict) and anchor_result.get("ok"):
+            append_task_event(
+                record,
+                "user_notified",
+                message=f"anchor {str(anchor_result.get('action', 'send') or 'send')}",
+                extra={
+                    "backend": str(anchor_result.get("backend", "") or ""),
+                    "message_id": str(anchor_result.get("message_id", "") or ""),
+                },
+            )
+    except Exception:
+        return
 
 
 FINAL_STATUSES = {"done", "failed", "deferred", "completed", "blocked"}
@@ -914,9 +962,11 @@ def cmd_upsert(args):
         save_state(fp, state)
     if current_record:
         sync_task(current_record, event_type="upsert", previous_status=previous_status)
-        _sync_task_anchor(current_record, previous_status)
+        anchor_result = _sync_task_anchor(current_record, previous_status)
+        _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
     for record, record_previous_status in lineage_syncs:
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
+        _log_task_transition(record, record_previous_status)
     print(f"[ok] upsert id={args.id} status={args.status or 'dispatched'}")
 
 
@@ -1090,9 +1140,11 @@ def _finish(
         save_state(fp, state)
     if current_record:
         sync_task(current_record, event_type=status, previous_status=previous_status)
-        _sync_task_anchor(current_record, previous_status)
+        anchor_result = _sync_task_anchor(current_record, previous_status)
+        _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
     for record, record_previous_status in lineage_syncs:
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
+        _log_task_transition(record, record_previous_status)
     print(f"[ok] {status} id={task_id}")
 
 
@@ -1209,7 +1261,8 @@ def cmd_archive_stale_dispatched(args):
 
     for record, previous_status in touched:
         sync_task(record, event_type="deferred", previous_status=previous_status)
-        _sync_task_anchor(record, previous_status)
+        anchor_result = _sync_task_anchor(record, previous_status)
+        _log_task_transition(record, previous_status, anchor_result=anchor_result)
     print(f"[ok] archived_stale_dispatched count={len(touched)}")
 
 

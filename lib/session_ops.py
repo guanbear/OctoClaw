@@ -9,6 +9,11 @@ import subprocess
 import uuid
 from typing import Any
 
+try:
+    from task_events import register_session_binding
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.task_events import register_session_binding
+
 
 def has_openclaw_cli() -> bool:
     return shutil.which("openclaw") is not None
@@ -150,6 +155,19 @@ def resolve_message_target_from_session_key(session_key: str) -> dict:
     elif origin == "googlechat":
         if len(parts) >= 3:
             target = f"{parts[1]}:{parts[2]}" if parts[1] in {"spaces", "users"} else ":".join(parts[1:])
+    if not target:
+        if len(parts) >= 3 and parts[1] in {"dm", "direct", "user"}:
+            target = f"user:{parts[2]}"
+            if len(parts) >= 5 and parts[3] in {"thread", "topic"}:
+                thread_id = parts[4]
+        elif len(parts) >= 3 and parts[1] in {"channel", "group", "room", "conversation", "space", "chat"}:
+            target = f"{parts[1]}:{parts[2]}"
+            if len(parts) >= 5 and parts[3] in {"thread", "topic"}:
+                thread_id = parts[4]
+        elif len(parts) >= 3 and parts[1] in {"thread", "topic"}:
+            target = f"{parts[1]}:{parts[2]}"
+        elif len(parts) >= 2:
+            target = ":".join(parts[1: min(3, len(parts))])
 
     if not target:
         return {
@@ -159,13 +177,18 @@ def resolve_message_target_from_session_key(session_key: str) -> dict:
             "error": "unsupported or unresolvable session target",
         }
 
-    return {
+    payload = {
         "ok": True,
         "origin": origin,
         "session_key": session_key,
         "target": target,
         "thread_id": thread_id,
     }
+    try:
+        register_session_binding(session_key, payload, source="session_resolve")
+    except Exception:
+        pass
+    return payload
 
 
 def send_channel_message(

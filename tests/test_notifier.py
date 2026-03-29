@@ -68,8 +68,10 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "slack")
         self.assertEqual(payload["transport"]["kind"], "slack")
 
+    @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.send_channel_message")
-    def test_send_task_notification_routes_slack_session_to_channel_send(self, mock_send) -> None:
+    def test_send_task_notification_routes_slack_session_to_channel_send(self, mock_send, mock_register, mock_event) -> None:
         mock_send.return_value = {"ok": True, "messageId": "m-1"}
 
         result = send_task_notification(
@@ -84,9 +86,13 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(mock_send.call_args[1]["thread_id"], "1712345.000100")
         self.assertIn("interactive", mock_send.call_args[1])
         self.assertEqual(mock_send.call_args[1]["interactive"]["blocks"][-1]["type"], "buttons")
+        mock_register.assert_called_once()
+        self.assertTrue(any(call.args[1] == "anchor_sent" for call in mock_event.call_args_list))
 
+    @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.edit_channel_message")
-    def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit) -> None:
+    def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit, mock_register, mock_event) -> None:
         mock_edit.return_value = {"ok": True}
 
         result = send_task_notification(
@@ -100,6 +106,8 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(args[0], "slack")
         self.assertEqual(args[1], "channel:C123")
         self.assertEqual(args[2], "1712345.000200")
+        mock_register.assert_called_once()
+        self.assertTrue(any(call.args[1] == "anchor_edited" for call in mock_event.call_args_list))
 
     @patch("lib.notifier.send_text")
     def test_send_task_notification_uses_feishu_direct_api(self, mock_send_text) -> None:

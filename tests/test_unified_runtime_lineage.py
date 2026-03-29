@@ -202,10 +202,10 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
         self.assertEqual(lineage["open_task_count"], 2)
         self.assertEqual(lineage["status_counts"]["running"], 1)
         self.assertEqual(lineage["status_counts"]["queued"], 1)
-        self.assertEqual(lineage["parent"]["owner"], "梭鱼眼")
-        self.assertEqual(lineage["parent"]["worker_pool_display"], "梭鱼眼")
-        self.assertEqual(lineage["children"][0]["worker_pool_display"], "梭鱼眼")
-        self.assertEqual(lineage["children"][1]["worker_pool_display"], "海胆手")
+        self.assertEqual(lineage["parent"]["owner"], "Research")
+        self.assertEqual(lineage["parent"]["worker_pool_display"], "Research")
+        self.assertEqual(lineage["children"][0]["worker_pool_display"], "Research")
+        self.assertEqual(lineage["children"][1]["worker_pool_display"], "Review")
         self.assertEqual({child["task_kind"] for child in lineage["children"]}, {"team_step"})
 
     def test_parent_auto_aggregates_child_progress_and_completion(self) -> None:

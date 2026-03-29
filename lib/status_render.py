@@ -18,6 +18,19 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
 
 FINAL_STATUSES = {"done", "failed", "deferred", "completed"}
 SUCCESS_STATUSES = {"done", "completed"}
+SYSTEM_TASK_PATTERNS = (
+    "omniroute",
+    "自动选模策略",
+    "套餐状态",
+    "provider usage",
+    "quota snapshot",
+    "model health",
+    "replay automation",
+    "nightly review",
+    "patrol",
+    "bridge sync",
+    "refresh octoclaw",
+)
 
 
 def task_executor(task: dict) -> str:
@@ -197,7 +210,7 @@ def render_main_model_drift_summary(drift: dict[str, Any]) -> list[str]:
         return [f"🧭 主链漂移：{reason}{suffix}"]
 
     expected = short_model(str(drift.get("expected_model", "") or ""), limit=32)
-    current = short_model(str(drift.get("current_override", "") or ""), limit=32)
+    current = short_model(str(drift.get("current_override", "") or drift.get("actual_model", "") or ""), limit=32)
     if bool(drift.get("drift", False)):
         return [f"🧭 主链漂移：detected · expected {expected} · actual {current or '?'}"]
     return [f"🧭 主链漂移：aligned · {expected}"]
@@ -233,6 +246,28 @@ def preferred_task_title(task: dict, limit: int = 48) -> str:
     if summary:
         return summary[:limit]
     return task_id[:limit]
+
+
+def _task_text_blob(task: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(task.get("title", "") or ""),
+            str(task.get("summary", "") or ""),
+            str(task.get("task_description", "") or ""),
+            str(task.get("user_safe_summary", "") or ""),
+        ]
+    ).strip().lower()
+
+
+def is_system_maintenance_task(task: dict[str, Any]) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if str(task.get("session_key", "") or "").strip() or str(task.get("session_origin", "") or "").strip():
+        return False
+    text_blob = _task_text_blob(task)
+    if any(pattern in text_blob for pattern in SYSTEM_TASK_PATTERNS):
+        return True
+    return False
 
 
 def format_duration(started_at: str, now: datetime) -> str:
@@ -444,30 +479,47 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
     lineages, lineage_parent_ids, lineage_child_ids = _build_status_lineages(tasks)
     lineage_task_ids = lineage_parent_ids | lineage_child_ids
     generic_tasks = [task for task in tasks if _task_id(task) not in lineage_task_ids]
-
-    running = [task for task in generic_tasks if task.get("status") in ("running", "dispatched")]
-    queued = [task for task in generic_tasks if task.get("status") == "queued"]
-    deferred = [task for task in generic_tasks if task.get("status") == "deferred"]
-    pending = [task for task in generic_tasks if task.get("status") == "pending_confirm"]
-    failed_recent = []
-    done_recent = []
-    steer_needed = []
+    user_tasks = [task for task in generic_tasks if not is_system_maintenance_task(task)]
+    system_tasks = [task for task in generic_tasks if is_system_maintenance_task(task)]
     active_lineages = [
         lineage
         for lineage in lineages
         if str(lineage.get("parent", {}).get("status", "") or "").strip().lower() not in {"done", "failed", "deferred"}
         or int(lineage.get("open_task_count", 0) or 0) > 0
     ]
+    user_lineages = [lineage for lineage in active_lineages if not is_system_maintenance_task(lineage.get("parent", {}))]
+    system_lineages = [lineage for lineage in active_lineages if is_system_maintenance_task(lineage.get("parent", {}))]
+
+    running = [task for task in user_tasks if task.get("status") in ("running", "dispatched")]
+    queued = [task for task in user_tasks if task.get("status") == "queued"]
+    deferred = [task for task in user_tasks if task.get("status") == "deferred"]
+    pending = [task for task in user_tasks if task.get("status") == "pending_confirm"]
+    system_running = [task for task in system_tasks if task.get("status") in ("running", "dispatched")]
+    system_queued = [task for task in system_tasks if task.get("status") == "queued"]
+    system_deferred = [task for task in system_tasks if task.get("status") == "deferred"]
+    system_pending = [task for task in system_tasks if task.get("status") == "pending_confirm"]
+    failed_recent = []
+    done_recent = []
+    system_failed_recent = []
+    system_done_recent = []
+    steer_needed = []
 
     for task in tasks:
         if task.get("recovery_action") in ("needs_steer", "steered"):
-            steer_needed.append(task)
+            if not is_system_maintenance_task(task):
+                steer_needed.append(task)
         if not _should_count_recent(task, recent_window, lineage_child_ids, now):
             continue
         if task.get("status") == "done":
-            done_recent.append(task)
+            if is_system_maintenance_task(task):
+                system_done_recent.append(task)
+            else:
+                done_recent.append(task)
         elif task.get("status") == "failed":
-            failed_recent.append(task)
+            if is_system_maintenance_task(task):
+                system_failed_recent.append(task)
+            else:
+                failed_recent.append(task)
 
     return {
         "now": now,
@@ -475,11 +527,18 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
         "queued": queued,
         "deferred": deferred,
         "pending": pending,
+        "system_running": system_running,
+        "system_queued": system_queued,
+        "system_deferred": system_deferred,
+        "system_pending": system_pending,
         "done_recent": done_recent,
         "failed_recent": failed_recent,
+        "system_done_recent": system_done_recent,
+        "system_failed_recent": system_failed_recent,
         "steer_needed": steer_needed,
         "lineages": lineages,
-        "active_lineages": active_lineages,
+        "active_lineages": user_lineages,
+        "system_active_lineages": system_lineages,
         "lineage_parent_ids": lineage_parent_ids,
         "lineage_child_ids": lineage_child_ids,
     }
@@ -591,6 +650,7 @@ def render_status_text_compact(snapshot: dict) -> str:
     recent_done_count = len(snapshot["done_recent"])
     recent_failed_count = len(snapshot["failed_recent"])
     problem_tasks = list(snapshot["steer_needed"]) + list(snapshot["failed_recent"])
+    system_maintenance = list(snapshot.get("system_active_lineages", [])) + list(snapshot.get("system_running", [])) + list(snapshot.get("system_queued", [])) + list(snapshot.get("system_done_recent", []))
     lines = [
         "🐙 八爪鱼（OctoClaw）任务收件箱",
         (
@@ -618,6 +678,16 @@ def render_status_text_compact(snapshot: dict) -> str:
     _append_anchor_section(lines, f"❓ 待确认（{len(snapshot['pending'])}个）", snapshot["pending"], now, limit=4)
     _append_anchor_section(lines, f"⚠️ 异常与恢复（{len(problem_tasks)}个）", problem_tasks, now, limit=6)
     _append_anchor_section(lines, f"✅ 最近完成（{recent_done_count}个）", snapshot["done_recent"], now, limit=4)
+    if system_maintenance:
+        system_rows: list[dict[str, Any]] = []
+        for lineage in snapshot.get("system_active_lineages", [])[:2]:
+            parent = lineage.get("parent", {})
+            if isinstance(parent, dict):
+                system_rows.append(parent)
+        system_rows.extend(snapshot.get("system_running", [])[:2])
+        system_rows.extend(snapshot.get("system_queued", [])[:2])
+        system_rows.extend(snapshot.get("system_done_recent", [])[:3])
+        _append_anchor_section(lines, f"⚙️ 系统维护（{len(system_maintenance)}个）", system_rows, now, limit=3)
 
     if recent_failed_count:
         lines.append(f"📉 最近失败：{recent_failed_count}")
@@ -809,6 +879,14 @@ def render_status_task_anchors(snapshot: dict) -> str:
 
     failed_recent = snapshot.get("failed_recent", []) if isinstance(snapshot.get("failed_recent", []), list) else []
     for task in failed_recent[:4]:
+        if not isinstance(task, dict):
+            continue
+        anchor = build_task_anchor(task, now=now)
+        actions = build_task_actions(task)
+        anchors.append(render_task_anchor_text(anchor, actions))
+
+    system_done_recent = snapshot.get("system_done_recent", []) if isinstance(snapshot.get("system_done_recent", []), list) else []
+    for task in system_done_recent[:2]:
         if not isinstance(task, dict):
             continue
         anchor = build_task_anchor(task, now=now)

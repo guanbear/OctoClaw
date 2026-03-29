@@ -65,6 +65,7 @@ from replay_summary import (
     load_events,
     summarize_events,
 )
+from task_events import load_session_thread_map, load_task_events, summarize_task_events
 from status_render import (
     build_status_snapshot,
     render_main_model_drift_summary,
@@ -292,8 +293,14 @@ replay_status = summarize_replay_status(config_data)
 main_session_model = load_main_session_actual_model()
 actual_model = main_session_model.get("model_path", "")
 model_health_summary = summarize_model_health(model_health_state)
+task_event_summary = summarize_task_events(load_task_events(limit=400))
+session_thread_map = load_session_thread_map()
+session_binding_count = len(session_thread_map.get("bindings", {}) or {})
+session_thread_count = len(session_thread_map.get("threads", {}) or {})
 main_model = str(policy_data.get("main_model", "") or "").strip()
 main_drift = assess_main_model_drift(config=config_data)
+if actual_model and not str(main_drift.get("actual_model", "") or "").strip():
+    main_drift["actual_model"] = actual_model
 workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
 tmux_session_name = str(workbench.get("tmux_session_name", "") or "").strip()
 
@@ -331,6 +338,12 @@ else:
             f"🤝 Bridge：{bridge_summary.get('team', 'octoclaw-validation')} · "
             f"{backend}{cli_note} · tasks {bridge_tasks} · "
             f"lineages {bridge_summary.get('lineage_count', 0)} · inbox {bridge_summary.get('inbox_count', 0)}"
+        )
+    if task_event_summary.get("task_event_count", 0) or session_binding_count or session_thread_count:
+        print(
+            f"🧵 TaskEvents：events {task_event_summary.get('task_event_count', 0)} · "
+            f"sessions {session_binding_count} · threads {session_thread_count} · "
+            f"degraded {task_event_summary.get('degraded_event_count', 0)}"
         )
     if replay_status:
         if replay_status.get("missing"):

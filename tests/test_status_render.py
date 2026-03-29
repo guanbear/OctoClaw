@@ -125,7 +125,7 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("Team lane", lanes_rendered)
         self.assertIn("planner", lanes_rendered)
         self.assertIn("review", lanes_rendered)
-        self.assertIn("tmux octoclaw-run", lanes_rendered)
+        self.assertIn("clawteam/tmux", lanes_rendered)
 
     def test_worker_pool_only_tasks_render_without_legacy_labels(self) -> None:
         tasks = [
@@ -166,12 +166,47 @@ class StatusRenderTests(unittest.TestCase):
         table_rendered = render_status_table(snapshot)
         lanes_rendered = render_status_lanes(snapshot)
 
-        self.assertIn("飞鱼腿", table_rendered)
-        self.assertIn("螃蟹手", table_rendered)
-        self.assertIn("梭鱼眼", table_rendered)
+        self.assertIn("Runner", table_rendered)
+        self.assertIn("Code", table_rendered)
+        self.assertIn("Research", table_rendered)
         self.assertIn("check nginx port", lanes_rendered)
         self.assertIn("patch the flaky release", lanes_rendered)
         self.assertIn("compare rollback options", lanes_rendered)
+
+    def test_compact_render_deprioritizes_system_maintenance_tasks(self) -> None:
+        tasks = [
+            {
+                "id": "user-task",
+                "worker_pool": "octoclaw-research",
+                "status": "done",
+                "summary": "整理 OpenClaw 最近更新并写简报",
+                "task_description": "整理 OpenClaw 最近更新并写简报",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "executor": "subagent",
+                "session_key": "agent:main:slack:channel:C1:thread:1",
+                "completed_at": "2026-03-28T11:58:00+00:00",
+            },
+            {
+                "id": "system-task",
+                "worker_pool": "octoclaw-runner",
+                "status": "done",
+                "summary": "同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略",
+                "task_description": "同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略",
+                "route": "runner",
+                "runtime": "runner",
+                "executor": "runner",
+                "completed_at": "2026-03-28T11:59:00+00:00",
+            },
+        ]
+
+        snapshot = build_status_snapshot(tasks, now=self.now)
+        rendered = render_status_text_compact(snapshot)
+
+        self.assertIn("✅ 最近完成（1个）", rendered)
+        self.assertIn("整理 OpenClaw 最近更新并写简报", rendered)
+        self.assertIn("⚙️ 系统维护（1个）", rendered)
+        self.assertIn("同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略", rendered)
 
     def test_model_health_summary_renders_cooldown_and_quota_highlights(self) -> None:
         summary = summarize_model_health(
@@ -244,10 +279,23 @@ class StatusRenderTests(unittest.TestCase):
                 "current_override": "zhipu/GLM-5.1",
             }
         )
+        drifted_actual = render_main_model_drift_summary(
+            {
+                "enabled": True,
+                "drift": True,
+                "reason": "drift_detected",
+                "expected_model": "omniroute/cx/gpt-5.4",
+                "actual_model": "zhipu/GLM-5.1",
+            }
+        )
 
         self.assertEqual(aligned, ["🧭 主链漂移：aligned · omniroute/cx/gpt-5.4"])
         self.assertEqual(
             drifted,
+            ["🧭 主链漂移：detected · expected omniroute/cx/gpt-5.4 · actual zhipu/GLM-5.1"],
+        )
+        self.assertEqual(
+            drifted_actual,
             ["🧭 主链漂移：detected · expected omniroute/cx/gpt-5.4 · actual zhipu/GLM-5.1"],
         )
 

@@ -43,9 +43,9 @@ class WorkerTaxonomyTests(unittest.TestCase):
         self.assertEqual(resolve_phase({"worker_pool": "octoclaw-research", "profile": "writer"}), "report")
 
     def test_role_display_uses_worker_pool_without_legacy_labels(self) -> None:
-        self.assertEqual(role_display({"worker_pool": "octoclaw-code"})["name"], "螃蟹手")
+        self.assertEqual(role_display({"worker_pool": "octoclaw-code"})["name"], "Code")
         self.assertEqual(role_display({"worker_pool": "octoclaw-research"})["emoji"], "🔍")
-        self.assertEqual(role_display("octoclaw-runner")["name"], "飞鱼腿")
+        self.assertEqual(role_display("octoclaw-runner")["name"], "Runner")
 
     def test_model_band_resolution_ignores_removed_tier_fields(self) -> None:
         self.assertEqual(resolve_model_band({"worker_pool": "octoclaw-code"}), "strong")

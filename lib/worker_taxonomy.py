@@ -59,11 +59,11 @@ DEFAULT_MODEL_BAND_BY_WORKER_POOL = {
 }
 
 WORKER_POOL_DISPLAY = {
-    "octoclaw-main": {"emoji": "🤖", "name": "主脑"},
-    "octoclaw-runner": {"emoji": "🏃", "name": "飞鱼腿"},
-    "octoclaw-research": {"emoji": "🔍", "name": "梭鱼眼"},
-    "octoclaw-code": {"emoji": "🔧", "name": "螃蟹手"},
-    "octoclaw-review": {"emoji": "🧪", "name": "海胆手"},
+    "octoclaw-main": {"emoji": "🤖", "name": "Main"},
+    "octoclaw-runner": {"emoji": "🏃", "name": "Runner"},
+    "octoclaw-research": {"emoji": "🔍", "name": "Research"},
+    "octoclaw-code": {"emoji": "🔧", "name": "Code"},
+    "octoclaw-review": {"emoji": "🧪", "name": "Review"},
 }
 
 

@@ -33,7 +33,7 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual(anchor["task_id"], "runner-1")
         self.assertEqual(anchor["worker_pool"], "octoclaw-runner")
-        self.assertEqual(anchor["worker_pool_display"], "飞鱼腿")
+        self.assertEqual(anchor["worker_pool_display"], "Runner")
         self.assertEqual(anchor["state"], "running")
         self.assertEqual(anchor["route"], "runner")
         self.assertEqual(anchor["active_models"], ["minimax-portal/MiniMax-M2.7"])

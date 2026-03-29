@@ -121,6 +121,8 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         )
         self.assertEqual(payload["session_key"], "wechat:dm:abc")
         self.assertEqual(payload["session_origin"], "wechat")
+        self.assertEqual(payload["session_target"], "user:abc")
+        self.assertEqual(payload["session_thread_key"], "wechat:user:abc:root")
         self.assertEqual(payload["session_id"], "sess-123")
         self.assertEqual(payload["agent_id"], "octo-worker-1")
         self.assertEqual(payload["agent_namespace"], "octoclaw")

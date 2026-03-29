@@ -19,6 +19,14 @@ QUEUE_STATES = {"queued"}
 RUNNING_STATES = {"running"}
 BLOCKED_STATES = {"blocked"}
 FINAL_STATES = {"done", "completed", "failed", "deferred", "cancelled", "blocked", "partial"}
+GENERIC_SUMMARY_PREFIXES = (
+    "runner完成",
+    "runner失败",
+    "runner completed",
+    "runner failed",
+    "spawn_single running:",
+    "spawn_multi running:",
+)
 
 
 def _text(value: Any) -> str:
@@ -56,6 +64,47 @@ def _compact(text: str, limit: int = 96) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[: limit - 1].rstrip() + "…"
+
+
+def _is_jsonish_fragment(text: str) -> bool:
+    value = _text(text)
+    return value.startswith("{") or value.startswith("[") or value.startswith("```")
+
+
+def _summary_is_generic(text: str) -> bool:
+    value = _text(text).lower()
+    return any(value.startswith(prefix.lower()) for prefix in GENERIC_SUMMARY_PREFIXES)
+
+
+def _clean_task_summary(task: dict[str, Any], *, limit: int = 120) -> str:
+    summary = _text(task.get("user_safe_summary") or task.get("summary"))
+    task_description = _text(task.get("task_description"))
+    if not summary:
+        return _compact(task_description, limit=limit)
+    if _summary_is_generic(summary):
+        tail = summary.split(":", 1)[1].strip() if ":" in summary else ""
+        if tail and not _is_jsonish_fragment(tail):
+            return _compact(tail, limit=limit)
+        if task_description:
+            return _compact(task_description, limit=limit)
+    if _is_jsonish_fragment(summary) and task_description:
+        return _compact(task_description, limit=limit)
+    return _compact(summary, limit=limit)
+
+
+def _task_title(task: dict[str, Any], *, limit: int = 96) -> str:
+    explicit = _text(task.get("title"))
+    if explicit:
+        return _compact(explicit, limit=limit)
+    task_description = _text(task.get("task_description"))
+    summary = _text(task.get("user_safe_summary") or task.get("summary"))
+    if task_description and (not summary or _summary_is_generic(summary) or _is_jsonish_fragment(summary)):
+        return _compact(task_description, limit=limit)
+    if summary:
+        cleaned = _clean_task_summary(task, limit=limit)
+        if cleaned:
+            return cleaned
+    return _compact(_text(task.get("id")), limit=limit)
 
 
 def _parse_time(value: str) -> datetime | None:
@@ -341,15 +390,12 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
     else:
         state = queue_bucket
     display = role_display(normalized)
-    summary = _compact(
-        _text(normalized.get("user_safe_summary") or normalized.get("summary") or normalized.get("task_description")),
-        limit=120,
-    )
+    summary = _clean_task_summary(normalized, limit=120)
     models = _collect_active_models(normalized)
 
     anchor = {
         "task_id": _text(normalized.get("id")),
-        "title": _text(normalized.get("title")),
+        "title": _task_title(normalized, limit=120),
         "state": state,
         "state_label": _state_label(state, lifecycle_state, outcome_state, handoff_state),
         "route": _text(normalized.get("route")),

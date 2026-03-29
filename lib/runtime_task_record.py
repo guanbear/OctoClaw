@@ -11,6 +11,11 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import infer_session_origin
 
 try:
+    from task_events import session_binding_from_route
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.task_events import session_binding_from_route
+
+try:
     from worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
@@ -513,6 +518,10 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["owner"] = _normalized_str(normalized.get("owner"))
     normalized["session_key"] = _normalized_str(normalized.get("session_key"))
     normalized["session_origin"] = _normalized_str(normalized.get("session_origin")) or infer_session_origin(normalized.get("session_key"))
+    session_binding = session_binding_from_route(normalized["session_key"], normalized.get("resolved_target") if isinstance(normalized.get("resolved_target"), dict) else None)
+    normalized["session_target"] = _normalized_str(normalized.get("session_target")) or _normalized_str(session_binding.get("target"))
+    normalized["session_thread_id"] = _normalized_str(normalized.get("session_thread_id")) or _normalized_str(session_binding.get("thread_id"))
+    normalized["session_thread_key"] = _normalized_str(normalized.get("session_thread_key")) or _normalized_str(session_binding.get("thread_key"))
     normalized["agent_id"] = infer_agent_id(normalized)
     managed_by_octoclaw = infer_managed_by_octoclaw(normalized)
     normalized["managed_by_octoclaw"] = managed_by_octoclaw

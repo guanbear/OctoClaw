@@ -28,6 +28,19 @@ class SessionOpsMessageSendTests(unittest.TestCase):
         self.assertEqual(result["target"], "-1001234567890")
         self.assertEqual(result["thread_id"], "42")
 
+    def test_resolve_message_target_uses_generic_im_fallback_for_wechat(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("wechat:dm:ou_123")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "wechat")
+        self.assertEqual(result["target"], "user:ou_123")
+        self.assertEqual(result["thread_id"], "")
+
+    def test_resolve_message_target_uses_generic_thread_fallback_for_webchat(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("webchat:thread:alpha")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "webchat")
+        self.assertEqual(result["target"], "thread:alpha")
+
     @patch("lib.session_ops.has_openclaw_cli", return_value=False)
     def test_send_channel_message_fails_without_cli(self, _mock_cli) -> None:
         result = session_ops.send_channel_message("slack", "channel:C123", "hello")
