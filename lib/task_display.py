@@ -31,6 +31,12 @@ def _text_list(value: Any) -> list[str]:
     return []
 
 
+def action_command_value(task_id: str, fallback_command: str) -> str:
+    command = _text(fallback_command)
+    task_ref = _text(task_id)
+    return f"{command} {task_ref}".strip() if command else ""
+
+
 def _normalize_task(task: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(task, dict):
         return {}
@@ -290,7 +296,7 @@ def build_task_interactive_payload(
         command = _text(item.get("fallback_command")) or _text(item.get("kind"))
         if not command:
             continue
-        value = f"{command} {task_id}".strip()
+        value = action_command_value(task_id, command)
         style = "danger" if bool(item.get("danger", False)) else "primary" if command in {"view", "details"} else "secondary"
         buttons.append(
             {
@@ -457,7 +463,11 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
         lines.append(summary)
 
     enabled_actions = [item for item in (actions or []) if isinstance(item, dict) and bool(item.get("enabled", False))]
-    fallback_commands = [str(item.get("fallback_command", "") or "").strip() for item in enabled_actions if str(item.get("fallback_command", "") or "").strip()]
+    fallback_commands = [
+        action_command_value(_text(anchor.get("task_id")), str(item.get("fallback_command", "") or ""))
+        for item in enabled_actions
+        if str(item.get("fallback_command", "") or "").strip()
+    ]
     if fallback_commands:
         lines.append("Reply with: " + " / ".join(fallback_commands))
     return "\n".join(lines)
