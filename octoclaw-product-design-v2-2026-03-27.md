@@ -650,6 +650,7 @@ OctoClaw 当前应优先支持：
 展示层产品化和 IM 能力矩阵的详细规划见：
 
 - [octoclaw-display-layer-productization-plan-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-display-layer-productization-plan-v1-2026-03-29.md)
+- [octoclaw-task-display-schema-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-task-display-schema-v1-2026-03-29.md)
 
 ### 7.3 终端 + UI 双栈观测
 
@@ -1159,6 +1160,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 详细规划见：
 
 - [octoclaw-display-layer-productization-plan-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-display-layer-productization-plan-v1-2026-03-29.md)
+- [octoclaw-task-display-schema-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-task-display-schema-v1-2026-03-29.md)
 
 ### Phase 7：做策略闭环
 

@@ -466,6 +466,10 @@ That schema should define:
 - renderer contract
 - text fallback rules
 
+That schema is now available here:
+
+- [octoclaw-task-display-schema-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-task-display-schema-v1-2026-03-29.md)
+
 ## References
 
 - [OpenClaw Channels](https://docs.openclaw.ai/channels)
