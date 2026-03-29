@@ -23,7 +23,9 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "slack")
         self.assertEqual(payload["transport"]["kind"], "slack")
         self.assertTrue(payload["transport"]["supports_rich"])
+        self.assertTrue(payload["transport"]["supports_buttons"])
         self.assertIn("slack", payload)
+        self.assertIn("interactive", payload)
         self.assertIn("blocks", payload["slack"])
         self.assertIn("fix login 401", payload["text"])
 
@@ -80,6 +82,8 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(args[1], "channel:C123")
         self.assertIn("fix login 401", args[2])
         self.assertEqual(mock_send.call_args[1]["thread_id"], "1712345.000100")
+        self.assertIn("interactive", mock_send.call_args[1])
+        self.assertEqual(mock_send.call_args[1]["interactive"]["blocks"][-1]["type"], "buttons")
 
     @patch("lib.notifier.edit_channel_message")
     def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit) -> None:

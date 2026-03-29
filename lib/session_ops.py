@@ -175,6 +175,7 @@ def send_channel_message(
     *,
     reply_to: str = "",
     thread_id: str = "",
+    interactive: dict[str, Any] | None = None,
     components: dict[str, Any] | None = None,
     timeout_seconds: int = 20,
 ) -> dict:
@@ -205,6 +206,8 @@ def send_channel_message(
         cmd.extend(["--reply-to", reply_to.strip()])
     if thread_id.strip():
         cmd.extend(["--thread-id", thread_id.strip()])
+    if interactive:
+        cmd.extend(["--interactive", json.dumps(interactive, ensure_ascii=False)])
     if components:
         cmd.extend(["--components", json.dumps(components, ensure_ascii=False)])
 

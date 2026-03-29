@@ -260,6 +260,50 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
     return actions
 
 
+def build_task_interactive_payload(
+    task: dict[str, Any],
+    *,
+    anchor: dict[str, Any] | None = None,
+    actions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_task(task)
+    task_anchor = anchor if isinstance(anchor, dict) else build_task_anchor(normalized)
+    task_actions = actions if isinstance(actions, list) else build_task_actions(normalized)
+    task_id = _text(task_anchor.get("task_id"))
+    title = _text(task_anchor.get("title")) or task_id or "OctoClaw task"
+    summary = _text(task_anchor.get("summary"))
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": f"OctoClaw task: {title}",
+        }
+    ]
+    if summary:
+        blocks.append({"type": "text", "text": summary})
+
+    buttons: list[dict[str, Any]] = []
+    for item in task_actions[:5]:
+        if not isinstance(item, dict) or not bool(item.get("enabled", False)):
+            continue
+        label = _text(item.get("label")) or _text(item.get("kind")) or "Action"
+        command = _text(item.get("fallback_command")) or _text(item.get("kind"))
+        if not command:
+            continue
+        value = f"{command} {task_id}".strip()
+        style = "danger" if bool(item.get("danger", False)) else "primary" if command in {"view", "details"} else "secondary"
+        buttons.append(
+            {
+                "label": label[:75],
+                "value": value[:200],
+                "style": style,
+            }
+        )
+    if buttons:
+        blocks.append({"type": "buttons", "buttons": buttons})
+    return {"blocks": blocks}
+
+
 def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     normalized = _normalize_task(task)
     state = _text(normalized.get("status")).lower()
@@ -379,6 +423,7 @@ def build_operator_task_surface(task: dict[str, Any], *, now: datetime | None = 
         "schema_version": "octoclaw.task_display/v1",
         "task_anchor": anchor,
         "task_actions": actions,
+        "interactive": build_task_interactive_payload(normalized, anchor=anchor, actions=actions),
         "text_fallback": render_task_anchor_text(anchor, actions),
     }
 

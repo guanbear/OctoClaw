@@ -64,6 +64,7 @@ def build_task_notification_payload(
     surface = build_operator_task_surface(task)
     anchor = surface.get("task_anchor", {}) if isinstance(surface.get("task_anchor"), dict) else {}
     actions = surface.get("task_actions", []) if isinstance(surface.get("task_actions"), list) else []
+    interactive = surface.get("interactive", {}) if isinstance(surface.get("interactive"), dict) else {}
     text_fallback = str(surface.get("text_fallback", "") or "").strip()
 
     payload: dict[str, Any] = {
@@ -73,6 +74,7 @@ def build_task_notification_payload(
         "task_anchor": anchor,
         "task_actions": actions,
         "operator_surface": surface,
+        "interactive": interactive,
         "transport": {
             "kind": "none",
             "supports_rich": False,
@@ -102,7 +104,7 @@ def build_task_notification_payload(
         payload["transport"] = {
             "kind": resolved_backend,
             "supports_rich": False,
-            "supports_buttons": False,
+            "supports_buttons": resolved_backend in {"telegram", "discord", "msteams"},
             "fallback_kind": "text",
         }
     elif resolved_backend == "none":
@@ -135,6 +137,7 @@ def send_task_notification(
     payload = build_task_notification_payload(task, backend=backend, config=cfg)
     resolved_backend = str(payload.get("backend", "") or "")
     text = str(payload.get("text", "") or "").strip()
+    interactive = payload.get("interactive", {}) if isinstance(payload.get("interactive"), dict) else {}
     session_key = str(task.get("session_key", "") or "").strip()
 
     if resolved_backend == "feishu":
@@ -178,12 +181,14 @@ def send_task_notification(
         if result.get("ok"):
             return result
 
+    interactive_payload = interactive if resolved_backend in {"slack", "telegram", "discord", "msteams"} else None
     result = send_channel_message(
         resolved_backend,
         str(route.get("target", "") or ""),
         message,
         reply_to=str(reply_to or "").strip(),
         thread_id=str(route.get("thread_id", "") or "").strip(),
+        interactive=interactive_payload,
     )
     result.setdefault("backend", resolved_backend)
     result.setdefault("payload", payload)

@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timezone
 
 from lib.task_display import (
+    build_operator_task_surface,
     build_task_actions,
     build_task_anchor,
     build_task_detail,
@@ -154,6 +155,22 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("blocks", payload)
         self.assertTrue(any(block.get("type") == "actions" for block in payload["blocks"]))
         self.assertIn("fix login 401", payload["text"])
+
+    def test_build_operator_task_surface_contains_interactive_payload(self) -> None:
+        surface = build_operator_task_surface(
+            {
+                "id": "code-1",
+                "worker_pool": "octoclaw-code",
+                "status": "running",
+                "summary": "fix login 401 and add tests",
+                "route": "spawn_single",
+                "model": "omniroute/cx/gpt-5.4",
+            }
+        )
+
+        self.assertEqual(surface["interactive"]["blocks"][0]["type"], "text")
+        self.assertEqual(surface["interactive"]["blocks"][-1]["type"], "buttons")
+        self.assertIn("details code-1", [btn["value"] for btn in surface["interactive"]["blocks"][-1]["buttons"]])
 
     def test_build_task_queue_view_groups_states(self) -> None:
         queue = build_task_queue_view(

@@ -47,6 +47,7 @@ class SessionOpsMessageSendTests(unittest.TestCase):
             "hello",
             reply_to="1712345.000200",
             thread_id="1712345.000100",
+            interactive={"blocks": [{"type": "buttons", "buttons": [{"label": "View", "value": "details code-1"}]}]},
             components={"blocks": [{"type": "actions"}]},
         )
 
@@ -56,6 +57,7 @@ class SessionOpsMessageSendTests(unittest.TestCase):
         self.assertIn("--message", args)
         self.assertIn("--reply-to", args)
         self.assertIn("--thread-id", args)
+        self.assertIn("--interactive", args)
         self.assertIn("--components", args)
         self.assertIn("--json", args)
 
