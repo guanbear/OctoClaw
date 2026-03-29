@@ -77,6 +77,28 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["work_type"], "research")
         self.assertEqual(payload["phase"], "report")
 
+    def test_normalize_preserves_explicit_legacy_label_and_final_worker_result(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "done-1",
+                "legacy_label": "octopus-test",
+                "status": "done",
+                "summary": "verified the release notes output",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-review",
+                "report_path": "/tmp/review-report.md",
+                "files_changed": ["README.md"],
+            }
+        )
+        self.assertEqual(payload["legacy_label"], "octopus-test")
+        self.assertEqual(payload["label"], "octopus-test")
+        self.assertEqual(payload["artifacts"]["worker_result"]["schema_version"], "octoclaw.worker_result/v1")
+        self.assertEqual(payload["artifacts"]["worker_result"]["status"], "done")
+        self.assertEqual(payload["artifacts"]["worker_result"]["report"], "/tmp/review-report.md")
+        self.assertEqual(payload["artifacts"]["worker_result"]["files"], ["README.md"])
+        self.assertEqual(payload["artifacts"]["worker_result"]["next_step"], "none")
+
     def test_task_state_update_writes_unified_runtime_fields(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-task-record-") as workspace:
             env = {**os.environ, "WORKSPACE": workspace}
@@ -132,6 +154,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(task["phase"], "collect")
         self.assertEqual(task["profile"], "research")
         self.assertTrue(task["review_required"])
+        self.assertEqual(task["legacy_label"], "octopus-scout")
         self.assertEqual(task["artifacts"]["report_path"], "/tmp/gateway-report.md")
 
     def test_task_state_update_infers_executor_from_worker_pool_first(self) -> None:

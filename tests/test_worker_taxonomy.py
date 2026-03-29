@@ -55,6 +55,7 @@ class WorkerTaxonomyTests(unittest.TestCase):
     def test_resolve_worker_pool_prefers_explicit_pool_then_legacy_label(self) -> None:
         self.assertEqual(resolve_worker_pool({"worker_pool": "octoclaw-review", "label": "octopus-fix"}), "octoclaw-review")
         self.assertEqual(resolve_worker_pool({"label": "octopus-fix"}), "octoclaw-code")
+        self.assertEqual(resolve_worker_pool({"legacy_label": "octopus-test", "label": "octopus-fix"}), "octoclaw-review")
         self.assertEqual(resolve_worker_pool({"route": "runner", "work_type": "ops"}), "octoclaw-runner")
 
     def test_work_type_and_phase_can_be_derived_from_worker_pool_first(self) -> None:

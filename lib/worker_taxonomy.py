@@ -97,6 +97,17 @@ LEGACY_LABEL_DISPLAY = {
 }
 
 
+def legacy_label_value(task: dict[str, Any] | str, default: str = "") -> str:
+    if isinstance(task, str):
+        return str(task or "").strip() or default
+    if not isinstance(task, dict):
+        return default
+    explicit = str(task.get("legacy_label", "") or "").strip()
+    if explicit:
+        return explicit
+    return str(task.get("label", "") or "").strip() or default
+
+
 def normalize_worker_pool(value: str, default: str = "") -> str:
     text = str(value or "").strip()
     if text in VALID_WORKER_POOLS:
@@ -179,7 +190,7 @@ def resolve_worker_pool(task: dict[str, Any] | str, default: str = "") -> str:
     if explicit:
         return explicit
 
-    label = worker_pool_from_legacy_label(str(task.get("label", "") or "").strip(), default="")
+    label = worker_pool_from_legacy_label(legacy_label_value(task), default="")
     if label:
         return label
 
@@ -226,7 +237,7 @@ def resolve_work_type(task: dict[str, Any] | str, default: str = "") -> str:
         if work_type:
             return work_type
 
-    label = str(task.get("label", "") or "").strip()
+    label = legacy_label_value(task)
     return LEGACY_LABEL_TO_WORK_TYPE.get(label, default)
 
 
@@ -252,10 +263,10 @@ def resolve_phase(task: dict[str, Any] | str, default: str = "") -> str:
     if work_type:
         phase = DEFAULT_PHASE_BY_WORK_TYPE.get(work_type, "")
         if phase:
-            label = str(task.get("label", "") or "").strip()
+            label = legacy_label_value(task)
             return LEGACY_LABEL_TO_PHASE.get(label, phase)
 
-    label = str(task.get("label", "") or "").strip()
+    label = legacy_label_value(task)
     return LEGACY_LABEL_TO_PHASE.get(label, default)
 
 
@@ -302,7 +313,7 @@ def role_display(task: dict[str, Any] | str) -> dict[str, str]:
     if explicit_worker_pool and explicit_worker_pool in WORKER_POOL_DISPLAY:
         return dict(WORKER_POOL_DISPLAY[explicit_worker_pool])
 
-    label = str(task.get("label", "") or "").strip()
+    label = legacy_label_value(task)
     if label in LEGACY_LABEL_DISPLAY:
         return dict(LEGACY_LABEL_DISPLAY[label])
 

@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
 from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config, spawn_operator_surface
+from runtime_protocol import normalize_worker_result
 from runner_playbooks import infer_runner_playbook
 from worker_taxonomy import resolve_phase as taxonomy_resolve_phase, resolve_work_type as taxonomy_resolve_work_type, worker_pool_from_legacy_label
 
@@ -143,7 +144,7 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
     def step_taxonomy(entry: dict) -> dict[str, str]:
         if not isinstance(entry, dict):
             return {"worker_pool": "", "work_type": "", "phase": "", "profile": ""}
-        label = str(entry.get("label", "") or "")
+        label = str(entry.get("legacy_label", "") or entry.get("label", "") or "")
         worker_pool = str(entry.get("worker_pool", "") or "") or worker_pool_from_legacy_label(label)
         profile = str(entry.get("profile", "") or "")
         work_type = str(entry.get("work_type", "") or "") or str(
@@ -228,6 +229,7 @@ def register_multi_parent_task(
     upsert_runtime_task(
         id=str(parent_spec.get("task_id", "") or ""),
         label=str(parent_spec.get("label", "") or ""),
+        legacy_label=str(parent_spec.get("legacy_label", "") or parent_spec.get("label", "") or ""),
         model=str(parent_spec.get("model", "") or ""),
         status=status,
         summary=summary,
@@ -367,13 +369,23 @@ def _runner_result_payload(
     stderr_file = str(meta.get("stderr_file", "") or "")
     stdout_excerpt = str(meta.get("stdout_excerpt", "") or "").strip() or _tail_text(stdout_file)
     stderr_excerpt = str(meta.get("stderr_excerpt", "") or "").strip() or _tail_text(stderr_file)
+    worker_result = normalize_worker_result(
+        meta.get("worker_result") if isinstance(meta.get("worker_result"), dict) else {
+            "status": str(meta.get("status", "") or status or "done"),
+            "summary": str(meta.get("summary", "") or fallback_summary or ""),
+            "report": str(meta.get("report_path", "") or ""),
+            "next_step": "none" if str(meta.get("status", "") or status or "done").strip().lower() in {"done", "completed"} else "inspect report and retry or replan",
+        },
+        task_id=str(meta.get("id", "") or ""),
+        default_report=str(meta.get("report_path", "") or ""),
+    )
     return {
         "completed": True,
         "status": str(meta.get("status", "") or status or "done"),
         "exit_code": int(meta.get("exit_code", fallback_exit_code) or fallback_exit_code or 0),
         "result_path": result_path,
-        "report_path": str(meta.get("report_path", "") or ""),
-        "summary": str(meta.get("summary", "") or fallback_summary or ""),
+        "report_path": str(meta.get("report_path", "") or worker_result.get("report", "") or ""),
+        "summary": str(meta.get("summary", "") or worker_result.get("summary", "") or fallback_summary or ""),
         "stdout_file": stdout_file,
         "stderr_file": stderr_file,
         "stdout_excerpt": stdout_excerpt,
@@ -384,6 +396,7 @@ def _runner_result_payload(
         "timeout_seconds": int(meta.get("timeout_seconds", 0) or 0),
         "worker_id": str(meta.get("worker_id", "") or ""),
         "finished_at": str(meta.get("finished_at", "") or fallback_finished_at or ""),
+        "worker_result": worker_result,
     }
 
 
@@ -393,8 +406,9 @@ def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
     wait = wait or {}
     if wait.get("completed"):
         status = str(wait.get("status", "done") or "done")
-        runner_summary = compact_text(str(wait.get("summary", "") or ""), 180)
-        report_path = str(wait.get("report_path", "") or "")
+        worker_result = wait.get("worker_result") if isinstance(wait.get("worker_result"), dict) else {}
+        runner_summary = compact_text(str(wait.get("summary", "") or worker_result.get("summary", "") or ""), 180)
+        report_path = str(wait.get("report_path", "") or worker_result.get("report", "") or "")
         stdout_text = _read_text(str(wait.get("stdout_file", "") or "")) or str(wait.get("stdout_excerpt", "") or "")
         stderr_text = _read_text(str(wait.get("stderr_file", "") or "")) or str(wait.get("stderr_excerpt", "") or "")
         merged = stdout_text.strip()
@@ -404,8 +418,10 @@ def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
         if not report_path and (len(merged) > 500 or len(_clean_output_lines(merged)) > 6):
             report_path = _write_shared_report(job_id or f"runner-{now_compact()}", merged)
         if not reply_text:
-            reply_text = runner_summary or "已通过常驻 runner 完成检查。"
-        summary = runner_summary or ("已通过常驻 runner 完成检查，详细输出已写入共享文件。" if report_path else "已通过常驻 runner 完成检查。")
+            reply_text = compact_text(str(worker_result.get("summary", "") or ""), 220) or runner_summary or "已通过常驻 runner 完成检查。"
+        summary = runner_summary or compact_text(str(worker_result.get("summary", "") or ""), 180) or (
+            "已通过常驻 runner 完成检查，详细输出已写入共享文件。" if report_path else "已通过常驻 runner 完成检查。"
+        )
         return {
             "kind": "final",
             "status": "success" if status == "done" else status,
@@ -414,6 +430,7 @@ def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
             "report_path": report_path,
             "job_id": job_id,
             "execution_backend": str(wait.get("execution_backend", "") or "runner_queue"),
+            "worker_result": worker_result,
             "user_safe": True,
         }
     timeout_seconds = int(wait.get("timeout_seconds", 0) or 0)
@@ -664,6 +681,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
     plan = {
         "planner": {
             "label": decision_model(planner_decision).get("legacy_label", ""),
+            "legacy_label": decision_model(planner_decision).get("legacy_label", ""),
             "worker_pool": decision_route(planner_decision).get("worker_pool", ""),
             "work_type": decision_route(planner_decision).get("work_type", ""),
             "phase": decision_route(planner_decision).get("phase", ""),
@@ -674,6 +692,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         },
         "worker": {
             "label": decision_model(worker_decision).get("legacy_label", primary_spawn["label"]),
+            "legacy_label": decision_model(worker_decision).get("legacy_label", primary_spawn["label"]),
             "worker_pool": decision_route(worker_decision).get("worker_pool", primary_spawn.get("worker_pool", "")),
             "work_type": decision_route(worker_decision).get("work_type", primary_spawn.get("work_type", "")),
             "phase": decision_route(worker_decision).get("phase", primary_spawn.get("phase", "")),
@@ -688,6 +707,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         review_decision = build_decision(review_task, force_route="spawn_single")
         plan["review"] = {
             "label": decision_model(review_decision).get("legacy_label", ""),
+            "legacy_label": decision_model(review_decision).get("legacy_label", ""),
             "worker_pool": decision_route(review_decision).get("worker_pool", ""),
             "work_type": decision_route(review_decision).get("work_type", ""),
             "phase": decision_route(review_decision).get("phase", ""),

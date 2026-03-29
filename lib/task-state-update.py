@@ -19,6 +19,7 @@ if SCRIPT_DIR not in sys.path:
 
 from clawteam_bridge import sync_task
 from runtime_task_record import normalize_task_record, normalize_task_records
+from runtime_protocol import normalize_worker_result
 from worker_taxonomy import resolve_executor as taxonomy_resolve_executor
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
@@ -306,6 +307,7 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
     child_statuses = {}
     child_reports = {}
     child_summaries = {}
+    child_worker_results = {}
     completed_child_ids = []
     failed_child_ids = []
     open_child_ids = []
@@ -317,9 +319,13 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
         status = str(child.get("status", "") or "").strip()
         summary = compact_text(child.get("summary", ""), 200)
         report_path = str(child.get("report_path", "") or "").strip()
+        child_artifacts = child.get("artifacts", {}) if isinstance(child.get("artifacts", {}), dict) else {}
+        worker_result = child_artifacts.get("worker_result") if isinstance(child_artifacts.get("worker_result"), dict) else None
         child_statuses[child_id] = status
         child_reports[child_id] = report_path
         child_summaries[child_id] = summary
+        if worker_result:
+            child_worker_results[child_id] = worker_result
         lowered = status.lower()
         if lowered in SUCCESS_STATUSES:
             completed_child_ids.append(child_id)
@@ -332,11 +338,15 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
         child = tasks_by_id.get(child_id)
         if child is None:
             continue
+        child_artifacts = child.get("artifacts", {}) if isinstance(child.get("artifacts", {}), dict) else {}
+        worker_result = child_artifacts.get("worker_result") if isinstance(child_artifacts.get("worker_result"), dict) else None
         step_statuses[step_name] = str(child.get("status", "") or "")
         step_summaries[step_name] = compact_text(child.get("summary", ""), 160)
         report_path = str(child.get("report_path", "") or "").strip()
         if report_path:
             step_reports[step_name] = report_path
+        if worker_result:
+            step_reports.setdefault(step_name, str(worker_result.get("report", "") or report_path))
 
     derived_status = _aggregate_parent_status([tasks_by_id[child_id] for child_id in child_ids if child_id in tasks_by_id]) or str(before.get("status", "") or "dispatched")
     candidate["status"] = derived_status
@@ -350,6 +360,7 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
             "child_statuses": child_statuses,
             "child_reports": child_reports,
             "child_summaries": child_summaries,
+            "child_worker_results": child_worker_results,
             "completed_child_ids": completed_child_ids,
             "failed_child_ids": failed_child_ids,
             "open_child_ids": open_child_ids,
@@ -360,8 +371,33 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
             "step_statuses": step_statuses,
             "step_summaries": step_summaries,
             "step_reports": step_reports,
+            "step_worker_results": {
+                step_name: child_worker_results[child_id]
+                for step_name, child_id in step_task_ids.items()
+                if child_id in child_worker_results
+            },
         }
     )
+    if derived_status in {"done", "failed"}:
+        child_report_paths = [
+            path
+            for path in [str(child_reports.get(child_id, "") or "").strip() for child_id in child_ids]
+            if path
+        ]
+        parent_result = normalize_worker_result(
+            {
+                "task_id": str(before.get("id", "") or ""),
+                "status": derived_status,
+                "summary": candidate.get("summary", ""),
+                "report": str(before.get("report_path", "") or ""),
+                "artifacts": child_report_paths,
+                "risks": [f"failed child: {child_id}" for child_id in failed_child_ids],
+                "next_step": "none" if derived_status == "done" else "inspect child reports and retry or replan",
+            },
+            task_id=str(before.get("id", "") or ""),
+            default_report=str(before.get("report_path", "") or ""),
+        )
+        artifacts["worker_result"] = parent_result
     candidate["artifacts"] = artifacts
 
     if derived_status in {"done", "failed", "deferred"}:
@@ -441,6 +477,12 @@ def cmd_upsert(args):
             # Update fields if provided
             if args.label:
                 existing["label"] = args.label
+                if not args.legacy_label:
+                    existing["legacy_label"] = args.label
+            if args.legacy_label:
+                existing["legacy_label"] = args.legacy_label
+                if not args.label and not existing.get("label"):
+                    existing["label"] = args.legacy_label
             if args.model:
                 existing["model"] = args.model
             if args.status:
@@ -522,7 +564,8 @@ def cmd_upsert(args):
         else:
             record = {
                 "id": args.id,
-                "label": args.label or "",
+                "label": args.label or args.legacy_label or "",
+                "legacy_label": args.legacy_label or args.label or "",
                 "model": args.model or "",
                 "status": args.status or "dispatched",
                 "summary": args.summary or "",
@@ -724,6 +767,7 @@ def main():
     p_upsert = sub.add_parser("upsert")
     p_upsert.add_argument("--id", required=True)
     p_upsert.add_argument("--label")
+    p_upsert.add_argument("--legacy-label", dest="legacy_label")
     p_upsert.add_argument("--model")
     p_upsert.add_argument("--status")
     p_upsert.add_argument("--summary")

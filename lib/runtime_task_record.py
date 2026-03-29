@@ -10,6 +10,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import resolve_executor, resolve_phase, resolve_work_type, resolve_worker_pool
 
+try:
+    from runtime_protocol import normalize_worker_result
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_protocol import normalize_worker_result
+
 
 TASK_RECORD_SCHEMA_VERSION = "octoclaw.runtime_task.record/v1"
 
@@ -120,6 +125,27 @@ def merge_artifacts(task: dict[str, Any]) -> dict[str, Any]:
     return artifacts
 
 
+def _final_worker_result(task: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, Any] | None:
+    status = _normalized_str(task.get("status")).lower()
+    existing = artifacts.get("worker_result") if isinstance(artifacts.get("worker_result"), dict) else {}
+    if status not in {"done", "failed", "completed"} and not existing:
+        return None
+
+    payload = dict(existing)
+    payload.setdefault("task_id", _normalized_str(task.get("id")))
+    payload.setdefault("status", status or "failed")
+    payload.setdefault("summary", _normalized_str(task.get("summary")))
+    payload.setdefault("report", _normalized_str(task.get("report_path")))
+    payload.setdefault("files", _normalized_list(task.get("files_changed")))
+    if "next_step" not in payload:
+        payload["next_step"] = "none" if status in {"done", "completed"} else "inspect report and decide next step"
+    return normalize_worker_result(
+        payload,
+        task_id=_normalized_str(task.get("id")),
+        default_report=_normalized_str(task.get("report_path")),
+    )
+
+
 def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(task, dict):
         return {}
@@ -142,7 +168,8 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["protocol"] = _normalized_str(normalized.get("protocol")) or "normal"
     normalized["profile"] = _normalized_str(normalized.get("profile"))
     normalized["review_required"] = _normalized_bool(normalized.get("review_required"))
-    normalized["label"] = _normalized_str(normalized.get("label"))
+    normalized["legacy_label"] = _normalized_str(normalized.get("legacy_label")) or _normalized_str(normalized.get("label"))
+    normalized["label"] = _normalized_str(normalized.get("label")) or normalized["legacy_label"]
     normalized["owner"] = _normalized_str(normalized.get("owner"))
     normalized["tier"] = _normalized_str(normalized.get("tier"))
     normalized["model"] = _normalized_str(normalized.get("model"))
@@ -167,7 +194,11 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     retry_count = normalized.get("retry_count")
     normalized["retry_count"] = int(retry_count or 0) if str(retry_count or "").strip() else 0
     normalized["expected_done_at"] = _normalized_str(normalized.get("expected_done_at"))
-    normalized["artifacts"] = merge_artifacts(normalized)
+    artifacts = merge_artifacts(normalized)
+    worker_result = _final_worker_result(normalized, artifacts)
+    if worker_result:
+        artifacts["worker_result"] = worker_result
+    normalized["artifacts"] = artifacts
     return normalized
 
 

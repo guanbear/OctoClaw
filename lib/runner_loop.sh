@@ -181,14 +181,21 @@ PY
   fi
 
   report_file="${WORKSPACE}/tmp/octopus/shared/${job_id}.md"
-  report_dump="$(python3 - "$meta_file" "$job_id" "$command" "$cwd" "$timeout_seconds" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" "$report_file" "$WORKER_ID" <<'PY'
+  report_dump="$(python3 - "$SCRIPT_DIR" "$meta_file" "$job_id" "$command" "$cwd" "$timeout_seconds" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" "$report_file" "$WORKER_ID" <<'PY'
 import base64
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
+script_dir = sys.argv[1]
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+from runtime_protocol import normalize_worker_result
+
 (
+    _script_dir,
     meta_file,
     job_id,
     command,
@@ -284,6 +291,21 @@ artifacts = {
     "report_path": report_path,
     "worker_id": worker_id,
 }
+worker_result = normalize_worker_result(
+    {
+        "task_id": job_id,
+        "status": status,
+        "summary": summary,
+        "report": report_path,
+        "artifacts": [report_path],
+        "files": [],
+        "risks": [],
+        "next_step": "none" if status == "done" else "inspect report and retry or replan",
+    },
+    task_id=job_id,
+    default_report=report_path,
+)
+artifacts["worker_result"] = worker_result
 
 payload = {
     "id": job_id,
@@ -302,6 +324,7 @@ payload = {
     "worker_id": worker_id,
     "execution_backend": "runner_queue",
     "finished_at": datetime.now(timezone.utc).astimezone().isoformat(),
+    "worker_result": worker_result,
 }
 with open(meta_file, "w", encoding="utf-8") as fh:
     json.dump(payload, fh, ensure_ascii=False, indent=2)

@@ -290,6 +290,8 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.assertEqual(parent["artifacts"]["step_summaries"]["planner"], "planner completed the root-cause analysis")
             self.assertEqual(parent["artifacts"]["completed_child_ids"], ["step-plan"])
             self.assertEqual(parent["artifacts"]["open_child_ids"], ["step-review"])
+            self.assertEqual(parent["artifacts"]["child_worker_results"]["step-plan"]["status"], "done")
+            self.assertEqual(parent["artifacts"]["step_worker_results"]["planner"]["summary"], "planner completed the root-cause analysis")
 
             self.finish(env, "done", "step-review", "review confirmed the final result")
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -300,6 +302,9 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.assertEqual(parent["artifacts"]["completed_child_count"], 2)
             self.assertEqual(parent["artifacts"]["open_child_count"], 0)
             self.assertEqual(parent["artifacts"]["step_statuses"]["review"], "done")
+            self.assertEqual(parent["artifacts"]["worker_result"]["schema_version"], "octoclaw.worker_result/v1")
+            self.assertEqual(parent["artifacts"]["worker_result"]["status"], "done")
+            self.assertEqual(parent["artifacts"]["step_worker_results"]["review"]["status"], "done")
 
     def test_parent_failure_emits_parent_result_mail(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-parent-failed-") as workspace:
@@ -374,6 +379,8 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.assertIn("worker failed", parent["summary"])
             self.assertEqual(parent["artifacts"]["failed_child_ids"], ["step-worker"])
             self.assertEqual(parent["artifacts"]["step_statuses"]["worker"], "failed")
+            self.assertEqual(parent["artifacts"]["worker_result"]["status"], "failed")
+            self.assertEqual(parent["artifacts"]["step_worker_results"]["worker"]["status"], "failed")
 
             inbox_path = Path(workspace) / "tmp" / "octopus" / "clawteam-bridge" / "inbox" / "main.jsonl"
             inbox_entries = [
@@ -384,6 +391,7 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             parent_entry = next(entry for entry in inbox_entries if entry["task_id"] == "team-root" and entry["status"] == "failed")
             self.assertEqual(parent_entry["artifacts"]["failed_child_count"], 1)
             self.assertEqual(parent_entry["artifacts"]["step_statuses"]["worker"], "failed")
+            self.assertEqual(parent_entry["artifacts"]["worker_result"]["status"], "failed")
 
 
 if __name__ == "__main__":
