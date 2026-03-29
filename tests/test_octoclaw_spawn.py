@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,6 +16,56 @@ octoclaw_spawn = importlib.import_module("octoclaw_spawn")
 
 
 class OctoClawSpawnTests(unittest.TestCase):
+    def test_build_clawteam_spawn_command_omits_unsupported_spawn_options(self) -> None:
+        with patch.object(octoclaw_spawn, "clawteam_spawn_supports_option", return_value=False):
+            command = octoclaw_spawn.build_clawteam_spawn_command(
+                team_name="octoclaw-validation",
+                agent_name="octo-research-1",
+                prompt="do the work",
+                profile="writer",
+                thinking="medium",
+            )
+
+        self.assertNotIn("--profile", command)
+        self.assertNotIn("--thinking", command)
+        self.assertIn("--task", command)
+        task_prompt = command[command.index("--task") + 1]
+        self.assertIn("preferred_profile: writer", task_prompt)
+        self.assertIn("reasoning_effort: medium", task_prompt)
+
+    def test_register_failed_spawn_task_writes_failure_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = str(Path(tmpdir) / "spawn-failure.md")
+            with (
+                patch.object(octoclaw_spawn, "register_dispatched_task"),
+                patch.object(octoclaw_spawn.subprocess, "run"),
+            ):
+                octoclaw_spawn.register_failed_spawn_task(
+                    task_id="research-123",
+                    model="zhipu/GLM-4.7",
+                    model_band="heavy",
+                    task="Summarize the delegated research results",
+                    route="spawn_single",
+                    runtime="subagent",
+                    parent_id="",
+                    report_path=report_path,
+                    context_path="",
+                    context_summary="",
+                    worker_pool="octoclaw-research",
+                    work_type="research",
+                    phase="report",
+                    protocol="heavy",
+                    profile="writer",
+                    review_required=True,
+                    task_kind="subtask",
+                    summary="spawn启动失败：No such option: --profile",
+                )
+
+            content = Path(report_path).read_text(encoding="utf-8")
+            self.assertIn("# OctoClaw Spawn Failure", content)
+            self.assertIn("research-123", content)
+            self.assertIn("No such option: --profile", content)
+
     def test_build_spawn_spec_keeps_worker_pool_first_metadata(self) -> None:
         policy = {
             "route_decision": {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validated subagent spawn wrapper for OctoClaw.
 
-This module captures the strongest parts of the older Octopus workflow:
+This module captures the strongest parts of the older OctoClaw workflow:
 - register task-state before spawn
 - keep long output in shared files
 - enforce RESULT contract
@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from learning_log import append_error_entry
 from octoclaw_route import infer_route
@@ -117,6 +118,21 @@ def expected_done_offset(model_band: str) -> str:
     return f"+{minutes}min"
 
 
+@lru_cache(maxsize=8)
+def clawteam_spawn_help_text(clawteam_bin: str) -> str:
+    result = subprocess.run(
+        [clawteam_bin, "spawn", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return "\n".join(part for part in (result.stdout, result.stderr) if part)
+
+
+def clawteam_spawn_supports_option(option: str, *, clawteam_bin: str) -> bool:
+    return option in clawteam_spawn_help_text(clawteam_bin)
+
+
 def resolve_model_and_thinking(
     selector_band: str,
     description: str,
@@ -178,6 +194,18 @@ def compact_text(text: str, limit: int = 160) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def inject_spawn_runtime_hints(prompt: str, *, profile: str, thinking: str, supports_profile: bool, supports_thinking: bool) -> str:
+    hints: list[str] = []
+    if profile and not supports_profile:
+        hints.append(f"- preferred_profile: {profile}")
+    if thinking and not supports_thinking:
+        hints.append(f"- reasoning_effort: {thinking}")
+    if not hints:
+        return prompt
+    block = ["【RUNTIME HINT】", *hints, ""]
+    return "\n".join(block) + prompt
 
 
 def prefers_longform_result(worker_pool: str, phase: str, route: str) -> bool:
@@ -428,6 +456,15 @@ def build_clawteam_spawn_command(
     openclaw_bin = str(spawn_cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
     backend_name = str(spawn_cfg.get("backend_name", "tmux") or "tmux").strip() or "tmux"
     workspace_enabled = bool(spawn_cfg.get("workspace", False))
+    supports_profile = clawteam_spawn_supports_option("--profile", clawteam_bin=clawteam_bin)
+    supports_thinking = clawteam_spawn_supports_option("--thinking", clawteam_bin=clawteam_bin)
+    final_prompt = inject_spawn_runtime_hints(
+        prompt,
+        profile=profile,
+        thinking=thinking,
+        supports_profile=supports_profile,
+        supports_thinking=supports_thinking,
+    )
 
     command = [
         clawteam_bin,
@@ -438,10 +475,10 @@ def build_clawteam_spawn_command(
         backend_name,
         openclaw_bin,
     ]
-    if profile:
+    if profile and supports_profile:
         command.extend(["--profile", profile])
     command.append("tui")
-    if thinking:
+    if thinking and supports_thinking:
         command.extend(["--thinking", thinking])
     command.extend([
         "-t",
@@ -449,7 +486,7 @@ def build_clawteam_spawn_command(
         "-n",
         agent_name,
         "--task",
-        prompt,
+        final_prompt,
     ])
     if not workspace_enabled:
         command.append("--no-workspace")
@@ -714,6 +751,29 @@ def register_failed_spawn_task(
     managed_by_octoclaw: bool = True,
     artifacts_json: dict | None = None,
 ) -> None:
+    if report_path:
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+        failure_lines = [
+            "# OctoClaw Spawn Failure",
+            "",
+            f"- task_id: {task_id}",
+            f"- route: {route}",
+            f"- runtime: {runtime}",
+            f"- worker_pool: {worker_pool}",
+            f"- phase: {phase}",
+            "",
+            "## Task",
+            task.strip(),
+            "",
+            "## Error",
+            summary.strip(),
+            "",
+            "## Suggested Next Step",
+            "Inspect the spawn command/runtime compatibility, then retry or fall back to direct handling.",
+            "",
+        ]
+        with open(report_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(failure_lines))
     register_dispatched_task(
         task_id=task_id,
         model=model,
