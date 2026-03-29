@@ -97,6 +97,107 @@ def model_cost_badge(path: str) -> str:
     return "?"
 
 
+def summarize_model_health(state: dict[str, Any] | None, *, top_n: int = 3) -> dict[str, Any]:
+    payload = state if isinstance(state, dict) else {}
+    models = payload.get("models", {}) if isinstance(payload.get("models", {}), dict) else {}
+    rows: list[dict[str, Any]] = []
+    cooldown = 0
+    degraded = 0
+    quota_high = 0
+    quota_critical = 0
+
+    for model_id, raw in models.items():
+        if not isinstance(raw, dict):
+            continue
+        state_name = str(raw.get("state", "") or "").strip().lower()
+        quota_pressure = str(raw.get("quota_pressure", "") or "").strip().lower()
+        row = {
+            "model": str(model_id or "").strip(),
+            "state": state_name or "healthy",
+            "quota_pressure": quota_pressure,
+            "last_degraded_at": str(raw.get("last_degraded_at", "") or "").strip(),
+            "recent_failures": int(raw.get("recent_429_count", 0) or 0)
+            + int(raw.get("recent_timeout_count", 0) or 0)
+            + int(raw.get("recent_failover_count", 0) or 0),
+        }
+        rows.append(row)
+        if state_name == "cooldown":
+            cooldown += 1
+        elif state_name == "degraded":
+            degraded += 1
+        if quota_pressure == "high":
+            quota_high += 1
+        elif quota_pressure == "critical":
+            quota_critical += 1
+
+    def _priority(row: dict[str, Any]) -> tuple[int, int, str, str]:
+        state_rank = {"cooldown": 0, "degraded": 1, "healthy": 2}.get(str(row.get("state", "")), 3)
+        quota_rank = {"critical": 0, "high": 1}.get(str(row.get("quota_pressure", "")), 2)
+        last = str(row.get("last_degraded_at", "") or "")
+        return (state_rank, quota_rank, f"~{last}" if last else "~", str(row.get("model", "")))
+
+    rows.sort(key=_priority)
+    return {
+        "tracked_models": len(rows),
+        "cooldown_count": cooldown,
+        "degraded_count": degraded,
+        "quota_high_count": quota_high,
+        "quota_critical_count": quota_critical,
+        "top_models": rows[: max(0, top_n)],
+    }
+
+
+def render_model_health_summary(summary: dict[str, Any]) -> list[str]:
+    tracked = int(summary.get("tracked_models", 0) or 0)
+    if tracked <= 0:
+        return ["🩺 模型健康：no health signals yet"]
+
+    cooldown = int(summary.get("cooldown_count", 0) or 0)
+    degraded = int(summary.get("degraded_count", 0) or 0)
+    quota_high = int(summary.get("quota_high_count", 0) or 0)
+    quota_critical = int(summary.get("quota_critical_count", 0) or 0)
+    lines = [
+        f"🩺 模型健康：tracked {tracked} · cooldown {cooldown} · degraded {degraded} · quota high/critical {quota_high}/{quota_critical}"
+    ]
+    top_models = summary.get("top_models", []) if isinstance(summary.get("top_models", []), list) else []
+    if top_models:
+        highlights: list[str] = []
+        for row in top_models:
+            if not isinstance(row, dict):
+                continue
+            model = short_model(str(row.get("model", "") or ""), limit=28)
+            state_name = str(row.get("state", "healthy") or "healthy").strip().lower()
+            quota = str(row.get("quota_pressure", "") or "").strip().lower()
+            bits = [model]
+            if state_name in {"cooldown", "degraded"}:
+                bits.append(state_name)
+            if quota in {"high", "critical"}:
+                bits.append(f"quota:{quota}")
+            highlights.append(" ".join(bits))
+        if highlights:
+            lines.append("   top: " + " | ".join(highlights))
+    return lines
+
+
+def render_main_model_drift_summary(drift: dict[str, Any]) -> list[str]:
+    if not isinstance(drift, dict) or not drift:
+        return []
+    if not bool(drift.get("enabled", False)):
+        return ["🧭 主链漂移：disabled"]
+
+    reason = str(drift.get("reason", "") or "").strip()
+    if reason in {"main_session_missing", "mode_not_managed", "expected_model_missing"}:
+        mode_text = str(drift.get("current_mode", "") or "").strip()
+        suffix = f" · {mode_text}" if mode_text else ""
+        return [f"🧭 主链漂移：{reason}{suffix}"]
+
+    expected = short_model(str(drift.get("expected_model", "") or ""), limit=32)
+    current = short_model(str(drift.get("current_override", "") or ""), limit=32)
+    if bool(drift.get("drift", False)):
+        return [f"🧭 主链漂移：detected · expected {expected} · actual {current or '?'}"]
+    return [f"🧭 主链漂移：aligned · {expected}"]
+
+
 def operator_hint(task: dict[str, Any], limit: int = 28) -> str:
     artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
     surface = artifacts.get("operator_surface", {}) if isinstance(artifacts.get("operator_surface", {}), dict) else {}

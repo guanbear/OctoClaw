@@ -4,9 +4,12 @@ from datetime import datetime, timezone
 
 from lib.status_render import (
     build_status_snapshot,
+    render_main_model_drift_summary,
+    render_model_health_summary,
     render_status_lanes,
     render_status_table,
     render_status_text_compact,
+    summarize_model_health,
 )
 
 
@@ -167,6 +170,62 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("check nginx port", lanes_rendered)
         self.assertIn("patch the flaky release", lanes_rendered)
         self.assertIn("compare rollback options", lanes_rendered)
+
+    def test_model_health_summary_renders_cooldown_and_quota_highlights(self) -> None:
+        summary = summarize_model_health(
+            {
+                "models": {
+                    "omniroute/cx/gpt-5.4": {
+                        "state": "healthy",
+                        "quota_pressure": "critical",
+                    },
+                    "zhipu/GLM-5.1": {
+                        "state": "cooldown",
+                        "quota_pressure": "high",
+                        "last_degraded_at": "2026-03-28T10:00:00Z",
+                        "recent_429_count": 2,
+                    },
+                    "minimax-portal/MiniMax-M2.7": {
+                        "state": "degraded",
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(summary["cooldown_count"], 1)
+        self.assertEqual(summary["degraded_count"], 1)
+        self.assertEqual(summary["quota_high_count"], 1)
+        self.assertEqual(summary["quota_critical_count"], 1)
+
+        rendered = "\n".join(render_model_health_summary(summary))
+        self.assertIn("cooldown 1", rendered)
+        self.assertIn("quota high/critical 1/1", rendered)
+        self.assertIn("zhipu/GLM-5.1 cooldown quota:high", rendered)
+
+    def test_main_model_drift_summary_renders_aligned_and_drifted_states(self) -> None:
+        aligned = render_main_model_drift_summary(
+            {
+                "enabled": True,
+                "drift": False,
+                "reason": "aligned",
+                "expected_model": "omniroute/cx/gpt-5.4",
+            }
+        )
+        drifted = render_main_model_drift_summary(
+            {
+                "enabled": True,
+                "drift": True,
+                "reason": "drift_detected",
+                "expected_model": "omniroute/cx/gpt-5.4",
+                "current_override": "zhipu/GLM-5.1",
+            }
+        )
+
+        self.assertEqual(aligned, ["🧭 主链漂移：aligned · omniroute/cx/gpt-5.4"])
+        self.assertEqual(
+            drifted,
+            ["🧭 主链漂移：detected · expected omniroute/cx/gpt-5.4 · actual zhipu/GLM-5.1"],
+        )
 
 
 if __name__ == "__main__":

@@ -50,6 +50,8 @@ from octopus_config import (
     workbench_config,
 )
 from clawteam_bridge import load_bridge_summary
+from model_health import load_model_health_state
+from main_model_drift import assess_main_model_drift
 from replay_summary import (
     DEFAULT_MAX_BLOCKED_SESSION_RATE,
     DEFAULT_MIN_DELEGATED_EVENTS,
@@ -64,10 +66,13 @@ from replay_summary import (
 )
 from status_render import (
     build_status_snapshot,
+    render_main_model_drift_summary,
+    render_model_health_summary,
     render_status_lanes,
     render_status_table,
     render_status_text_compact,
     short_model,
+    summarize_model_health,
 )
 
 TASK_FILE = "/workspace/tmp/octopus/task-state.json"
@@ -79,6 +84,7 @@ mode_data = load_json(MODE_FILE) or {}
 policy_data = load_json(MODEL_POLICY_FILE) or {}
 config_data = load_octopus_config()
 runner_health = load_json(RUNNER_HEALTH_FILE) or {}
+model_health_state = load_model_health_state()
 RUNNER_STALE_SECONDS = 120
 workbench = workbench_config(config_data)
 model_auto_cfg = config_data.get("model_auto", {}) if isinstance(config_data, dict) else {}
@@ -313,6 +319,9 @@ if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
 main_session_model = load_main_session_actual_model()
 actual_model = main_session_model.get("model_path", "")
+model_health_summary = summarize_model_health(model_health_state)
+for line in render_model_health_summary(model_health_summary):
+    print(line)
 print("A) 🤖 主会话实际模型：" + (actual_model or "?"))
 print(f"B) 🧭 OctoClaw 调度策略：{mode_label}")
 print(
@@ -323,6 +332,9 @@ print(
 main_model = str(policy_data.get("main_model", "") or "").strip()
 if main_model:
     print(f"   策略主链 → {main_model}")
+main_drift = assess_main_model_drift(config=config_data)
+for line in render_main_model_drift_summary(main_drift):
+    print(line)
 print(f"🖥️  视图：{fmt}")
 workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
 tmux_session_name = str(workbench.get("tmux_session_name", "") or "").strip()
