@@ -6,7 +6,7 @@ convention instead of inventing a separate error store. We therefore write to:
 
 1. OpenClaw workspace learnings: ~/.openclaw/workspace/.learnings/ERRORS.md
 2. Legacy workspace path:       /workspace/.learnings/ERRORS.md
-3. Legacy mirror path:          ~/self-improving/domains/octopus-errors.md
+3. Mirror path:                 ~/self-improving/domains/octoclaw-errors.md
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def learning_targets() -> list[str]:
 
 
 def legacy_octopus_error_mirror() -> str:
-    return os.path.join(os.path.expanduser("~"), "self-improving", "domains", "octopus-errors.md")
+    return os.path.join(os.path.expanduser("~"), "self-improving", "domains", "octoclaw-errors.md")
 
 
 def _next_error_id(existing: str) -> str:

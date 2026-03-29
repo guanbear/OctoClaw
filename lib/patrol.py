@@ -3,7 +3,7 @@ from __future__ import annotations
 
 """
 八爪鱼巡逻脚本 patrol.py
-每5分钟由 octopus-patrol cron 触发，检查任务状态，有异常则发飞书告警。
+每5分钟由 octoclaw-patrol cron 触发，检查任务状态，有异常则发飞书告警。
 
 ⚠️ 巡逻铁律：只读不写（task-state.json 超时标记除外）
   - 禁止修改任何代码文件（patrol.py、AGENTS.md 等）
@@ -20,7 +20,7 @@ from __future__ import annotations
 触发逻辑：
   - 有状态变化（running变化/新排队/新完成/新失败/新卡死）→ 发飞书面板
   - 无状态变化 → 静默，不发通知
-  - 每次运行后保存快照到 /tmp/octopus-patrol-last-state.json
+  - 每次运行后保存快照到 /tmp/octoclaw-patrol-last-state.json
 
 卡片格式：
   🔵 运行中（N个）  — 正常状态
@@ -79,7 +79,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
 
 # ⚠️ 注意：巡逻任务本身通过 cron 运行，不写入 task-state.json
 # 因此不会在巡逻报告中出现自己。
-SYSTEM_LABELS = {'octopus-patrol', 'octopus-probe', 'ironclaw-heartbeat', 'ironclaw-probe'}
+SYSTEM_LABELS = {'octoclaw-patrol', 'octoclaw-probe', 'ironclaw-heartbeat', 'ironclaw-probe'}
 # 内部查询任务 ID 前缀，过滤出面板和通知
 INTERNAL_ID_PREFIXES = ('status-query-',)
 
@@ -2919,7 +2919,7 @@ def auto_redispatch_task(task: dict, reason: str, *, source: str) -> str | None:
     payload = spawn_spec.get("sessions_spawn_payload", {}) or {}
     model = str(spawn_spec.get("model", "") or payload.get("model", "") or "")
     message = str(payload.get("message", "") or "")
-    cron_name = f"retry-{reason}-{task_id}"[:64]
+    cron_name = f"octoclaw-retry-{reason}-{int(time.time())}"[:64]
 
     try:
         result = subprocess.run(
@@ -3612,8 +3612,8 @@ def check_model_violations():
         print(f"  ✅ 模型名检查：无违规（检查 {len(done_failed)} 条 done/failed 任务）")
         return
     
-    # 写入 ~/self-improving/domains/octopus-errors.md，目录不存在则自动创建
-    SELF_IMPROVING_ERRORS = os.path.join(os.path.expanduser("~"), "self-improving/domains/octopus-errors.md")
+    # 写入 ~/self-improving/domains/octoclaw-errors.md，目录不存在则自动创建
+    SELF_IMPROVING_ERRORS = os.path.join(os.path.expanduser("~"), "self-improving/domains/octoclaw-errors.md")
     today_str = datetime.now().strftime("%Y-%m-%d")
     os.makedirs(os.path.dirname(SELF_IMPROVING_ERRORS), exist_ok=True)
 
@@ -3624,9 +3624,9 @@ def check_model_violations():
     try:
         with open(SELF_IMPROVING_ERRORS, "a", encoding="utf-8") as f:
             f.writelines(new_entries)
-        print(f"  🔍 模型名检查：发现 {len(violations)} 条疑似违规，已写入 octopus-errors.md")
+        print(f"  🔍 模型名检查：发现 {len(violations)} 条疑似违规，已写入 octoclaw-errors.md")
     except Exception as e:
-        print(f"⚠️ 写入 octopus-errors.md 失败: {e}", file=sys.stderr)
+        print(f"⚠️ 写入 octoclaw-errors.md 失败: {e}", file=sys.stderr)
 
 
 def check_model_violation(tasks: list):
@@ -3760,8 +3760,8 @@ def check_model_violation(tasks: list):
         except Exception:
             existing_lines = []
     
-    # 写入 ~/self-improving/domains/octopus-errors.md，目录不存在则自动创建
-    SELF_IMPROVING_ERRORS = os.path.join(os.path.expanduser("~"), "self-improving/domains/octopus-errors.md")
+    # 写入 ~/self-improving/domains/octoclaw-errors.md，目录不存在则自动创建
+    SELF_IMPROVING_ERRORS = os.path.join(os.path.expanduser("~"), "self-improving/domains/octoclaw-errors.md")
     today_date = now.strftime("%Y-%m-%d")
     os.makedirs(os.path.dirname(SELF_IMPROVING_ERRORS), exist_ok=True)
 
@@ -3782,9 +3782,9 @@ def check_model_violation(tasks: list):
     try:
         with open(SELF_IMPROVING_ERRORS, "a", encoding="utf-8") as f:
             f.writelines(new_entries)
-        print(f"  🔍 模型违规检测：发现 {len(violations)} 条违规（新增 {added_count} 条，重现 {updated_count} 条），已写入 octopus-errors.md")
+        print(f"  🔍 模型违规检测：发现 {len(violations)} 条违规（新增 {added_count} 条，重现 {updated_count} 条），已写入 octoclaw-errors.md")
     except Exception as e:
-        print(f"⚠️  写入 octopus-errors.md 失败: {e}", file=sys.stderr)
+        print(f"⚠️  写入 octoclaw-errors.md 失败: {e}", file=sys.stderr)
 
 
 def check_queued_tasks(tasks: list) -> int:

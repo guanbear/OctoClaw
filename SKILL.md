@@ -10,7 +10,7 @@ tags:
   - scheduler
   - productivity
 description: >
-  八爪鱼 (Octopus) — 多 Agent 智能调度器。通过任务分级、模型延迟感知、智能路由，
+  八爪鱼 (OctoClaw) — 多 Agent 智能调度器。通过任务分级、模型延迟感知、智能路由，
   实现"先回复再派遣"的极速响应体验。1 个调度头脑 + 最多 8 个子 Agent 触手并行工作。
   当用户发来复杂任务、需要多步操作、代码开发、深度调研、批量处理时使用此 skill。
 postInstall: |
@@ -29,7 +29,7 @@ postInstall: |
   • 「/mode private」— 保密模式：全部使用私有部署模型（GLM），数据不出内网
 ---
 
-# 🐙 八爪鱼 (Octopus) — 多 Agent 智能调度器
+# 🐙 八爪鱼 (OctoClaw) — 多 Agent 智能调度器
 
 ![banner](./banner.png)
 
@@ -444,7 +444,7 @@ patrol 触发
 优先级：
 1. `~/.openclaw/workspace/.learnings/ERRORS.md`
 2. `/workspace/.learnings/ERRORS.md`（旧路径，向后兼容）
-3. `~/self-improving/domains/octopus-errors.md`（镜像摘要，可选）
+3. `~/self-improving/domains/octoclaw-errors.md`（镜像摘要，可选）
 
 **spawn 前防御检查**：
 - 读取 ERRORS.md 中 status=open 记录

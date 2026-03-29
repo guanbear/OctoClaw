@@ -875,7 +875,7 @@ with open('$AGENTS_FILE', 'r') as f:
     content = f.read()
 # 使用 [^>]* 匹配版本号，兼容 v1.0.3 等带版本的块标记
 cleaned = re.sub(
-    r'\n<!-- octopus:core-rules[^>]*>.*?<!-- /octopus:core-rules -->\n?',
+    r'\n<!-- octo(?:claw|pus):core-rules[^>]*>.*?<!-- /octo(?:claw|pus):core-rules -->\n?',
     '\n',
     content,
     flags=re.DOTALL
@@ -883,7 +883,7 @@ cleaned = re.sub(
 with open('$AGENTS_FILE', 'w') as f:
     f.write(cleaned)
 print('✅ 已从 AGENTS.md 移除规则注入')
-" 2>/dev/null || echo "⚠️  AGENTS.md 规则移除失败，请手动删除 octopus:core-rules 块"
+" 2>/dev/null || echo "⚠️  AGENTS.md 规则移除失败，请手动删除 octoclaw:core-rules 块"
     else
         echo "ℹ️  未找到 $AGENTS_FILE，跳过规则清理"
     fi
@@ -1628,9 +1628,9 @@ if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
         /workspace/openclaw/skills/ironclaw/bin/ironclaw model probe 2>/dev/null && echo "✅ 模型延迟探测完成" || echo "⚠️  探测跳过（铁甲虾未安装）"
     else
         if [ -f "$WORKSPACE/openclaw/skills/octopus/lib/probe-models.sh" ]; then
-            bash "$WORKSPACE/openclaw/skills/octopus/lib/probe-models.sh" 2>/dev/null && echo "✅ 模型延迟探测完成（八爪鱼自探测）" || echo "⚠️  探测脚本执行失败，延迟数据将由 octopus-probe cron 定期更新"
+            bash "$WORKSPACE/openclaw/skills/octopus/lib/probe-models.sh" 2>/dev/null && echo "✅ 模型延迟探测完成（OctoClaw 自探测）" || echo "⚠️  探测脚本执行失败，延迟数据将由 octoclaw-probe cron 定期更新"
         else
-            echo "⚠️  未检测到铁甲虾，跳过模型延迟探测（将由 octopus-probe cron 每15分钟自动探测）"
+            echo "⚠️  未检测到铁甲虾，跳过模型延迟探测（将由 octoclaw-probe cron 每15分钟自动探测）"
         fi
     fi
 fi
@@ -1708,7 +1708,7 @@ fi
 fi
 
 # ─────────────────────────────────────────────
-# 自动注入 octopus:core-rules 到 AGENTS.md
+# 自动注入 octoclaw:core-rules 到 AGENTS.md
 # ─────────────────────────────────────────────
 inject_agents_md() {
     local CURRENT_VER INSTALL_VER
@@ -1726,11 +1726,11 @@ EOF
     cp "$AGENTS_FILE" "$BACKUP"
 
     # 检测已安装版本
-    CURRENT_VER=$(grep -o 'octopus:core-rules v[0-9.]*' "$AGENTS_FILE" 2>/dev/null | head -1 | grep -o 'v[0-9.]*' || echo "")
+    CURRENT_VER=$(grep -E -o 'octo(claw|pus):core-rules v[0-9.]*' "$AGENTS_FILE" 2>/dev/null | head -1 | grep -o 'v[0-9.]*' || echo "")
     INSTALL_VER="$OCTOPUS_RULES_VERSION"
 
     if [ "$CURRENT_VER" = "$INSTALL_VER" ]; then
-        echo "ℹ️  octopus:core-rules 已是最新版 ${INSTALL_VER}，跳过注入"
+        echo "ℹ️  octoclaw:core-rules 已是最新版 ${INSTALL_VER}，跳过注入"
         return 0
     elif [ -n "$CURRENT_VER" ]; then
         echo "🔄 检测到旧版规则 ${CURRENT_VER}，升级到 ${INSTALL_VER}..."
@@ -1739,36 +1739,36 @@ EOF
 import re, sys
 with open('$AGENTS_FILE', 'r') as f:
     content = f.read()
-# 删除旧的 octopus:core-rules 块（含版本号或不含版本号）
-cleaned = re.sub(r'\n<!-- octopus:core-rules[^>]*>.*?<!-- /octopus:core-rules -->\n?', '\n', content, flags=re.DOTALL)
+# 删除旧的 octo*:core-rules 块（含版本号或不含版本号）
+cleaned = re.sub(r'\n<!-- octo(?:claw|pus):core-rules[^>]*>.*?<!-- /octo(?:claw|pus):core-rules -->\n?', '\n', content, flags=re.DOTALL)
 with open('$AGENTS_FILE', 'w') as f:
     f.write(cleaned)
 print('✅ 旧版规则已清除')
 "
         echo "✅ 已备份并清除旧版 AGENTS.md → $(basename "${BACKUP}")"
-    elif grep -q "<!-- octopus:core-rules -->" "$AGENTS_FILE" 2>/dev/null; then
+    elif grep -E -q "<!-- octo(claw|pus):core-rules -->" "$AGENTS_FILE" 2>/dev/null; then
         echo "🔄 检测到无版本号的旧版规则，升级到 ${INSTALL_VER}..."
         # 备份 + 删除旧块 + 注入新块
         python3 -c "
 import re, sys
 with open('$AGENTS_FILE', 'r') as f:
     content = f.read()
-cleaned = re.sub(r'\n<!-- octopus:core-rules -->.*?<!-- /octopus:core-rules -->\n?', '\n', content, flags=re.DOTALL)
+cleaned = re.sub(r'\n<!-- octo(?:claw|pus):core-rules -->.*?<!-- /octo(?:claw|pus):core-rules -->\n?', '\n', content, flags=re.DOTALL)
 with open('$AGENTS_FILE', 'w') as f:
     f.write(cleaned)
 print('✅ 无版本号旧规则已清除')
 "
         echo "✅ 已备份并清除旧版 AGENTS.md → $(basename "${BACKUP}")"
     else
-        echo "✅ 首次安装 octopus:core-rules ${INSTALL_VER}，已备份 AGENTS.md → $(basename "${BACKUP}")"
+        echo "✅ 首次安装 octoclaw:core-rules ${INSTALL_VER}，已备份 AGENTS.md → $(basename "${BACKUP}")"
     fi
 
     # 注入新版规则（在文件末尾追加）
     local RULES_TMP
     RULES_TMP="$(mktemp)"
-    cat > "$RULES_TMP" <<'OCTOPUS_RULES'
+    cat > "$RULES_TMP" <<'OCTOCLAW_RULES'
 
-<!-- octopus:core-rules __RULES_VERSION__ -->
+<!-- octoclaw:core-rules __RULES_VERSION__ -->
 ## 🐙 八爪鱼核心原则（始终生效）
 
 ### 🚨 核心铁律
@@ -1848,9 +1848,9 @@ print('✅ 无版本号旧规则已清除')
 ### 监督与重派
 
 - 收到 announce 后检查是否异常；升级链：低成本模型失败 → 中档 → 高档 → 通知用户
-- 避免重复回复同一 announce；错误经验沉淀写回 Octopus 相关记录
-<!-- /octopus:core-rules -->
-OCTOPUS_RULES
+- 避免重复回复同一 announce；错误经验沉淀写回 OctoClaw 相关记录
+<!-- /octoclaw:core-rules -->
+OCTOCLAW_RULES
     python3 - "$RULES_TMP" "$SKILL_ROOT" "$STATE_DIR" <<'PY'
 import sys
 from pathlib import Path
@@ -1867,7 +1867,7 @@ PY
     cat "$RULES_TMP" >> "$AGENTS_FILE"
     rm -f "$RULES_TMP"
 
-    echo "✅ octopus:core-rules 已注入（最新版）→ $AGENTS_FILE"
+    echo "✅ octoclaw:core-rules 已注入（最新版）→ $AGENTS_FILE"
 }
 
 install_runtime_extension() {
@@ -1908,7 +1908,7 @@ install_runtime_extension() {
     echo "✅ 已安装 runtime extension (${mode}) → $target_dir"
 }
 
-# 自动注入 octopus:core-rules 到 AGENTS.md（在展示安装完成之前，确保规则已就绪）
+# 自动注入 octoclaw:core-rules 到 AGENTS.md（在展示安装完成之前，确保规则已就绪）
 case "$INSTALL_ACTION" in
     inject-only|inject-agents)
         inject_agents_md
