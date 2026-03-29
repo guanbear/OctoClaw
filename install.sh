@@ -1364,13 +1364,26 @@ install_probe_cron() {
         return 0
     fi
 
+    local PROBE_MSG
+    PROBE_MSG="$(cat <<'EOF'
+运行模型延迟探测脚本，更新延迟数据供八爪鱼调度使用。
+
+执行以下命令：
+```bash
+bash /workspace/openclaw/skills/octopus/lib/probe-models.sh
+```
+
+执行完成后直接结束，无需回复或发送任何通知。
+EOF
+)"
+
     if _openclaw_cron_add \
         --name octopus-probe \
         --every 15m \
         --session isolated \
         --timeout-seconds 120 \
         --no-deliver \
-        --message "运行模型延迟探测脚本，更新延迟数据供八爪鱼调度使用。\n\n执行以下命令：\n```bash\nbash /workspace/openclaw/skills/octopus/lib/probe-models.sh\n```\n\n执行完成后直接结束，无需回复或发送任何通知。"; then
+        --message "$PROBE_MSG"; then
         echo "✅ octopus-probe cron 注册成功（每15分钟，时间戳复用策略）"
     else
         echo "⚠️  cron 注册失败，可手动在 OpenClaw 中添加（每15分钟运行 probe-models.sh）"
@@ -1411,13 +1424,26 @@ install_plan_sync_cron() {
         return 0
     fi
 
+    local PLAN_SYNC_MSG
+    PLAN_SYNC_MSG="$(cat <<'EOF'
+同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略。
+
+执行以下命令：
+```bash
+cd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync && WORKSPACE=/workspace python3 ./lib/model-intel.py refresh --mode auto
+```
+
+执行完成后直接结束，无需回复或发送任何通知。
+EOF
+)"
+
     if _openclaw_cron_add \
         --name octopus-plan-sync \
         --every "${interval_minutes}m" \
         --session isolated \
         --timeout-seconds 120 \
         --no-deliver \
-        --message "同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略。\n\n执行以下命令：\n```bash\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync && WORKSPACE=/workspace python3 ./lib/model-intel.py refresh --mode auto\n```\n\n执行完成后直接结束，无需回复或发送任何通知。"; then
+        --message "$PLAN_SYNC_MSG"; then
         echo "✅ octopus-plan-sync cron 注册成功（每${interval_minutes}分钟）"
     else
         echo "⚠️  octopus-plan-sync cron 注册失败"
@@ -1451,6 +1477,19 @@ install_error_review_schedule() {
             echo "ℹ️  octopus-error-review cron 已存在，跳过"
             return 0
         fi
+        local ERROR_REVIEW_MSG
+        ERROR_REVIEW_MSG="$(cat <<'EOF'
+执行 OctoClaw 夜间错误复盘。
+
+执行以下命令：
+```bash
+cd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py
+```
+
+执行完成后直接结束，无需额外回复。
+EOF
+)"
+
         if _openclaw_cron_add \
             --name octopus-error-review \
             --cron "30 2 * * *" \
@@ -1458,7 +1497,7 @@ install_error_review_schedule() {
             --session isolated \
             --timeout-seconds 120 \
             --no-deliver \
-            --message "执行 OctoClaw 夜间错误复盘。\n\n执行以下命令：\n```bash\ncd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py\n```\n\n执行完成后直接结束，无需额外回复。"; then
+            --message "$ERROR_REVIEW_MSG"; then
             echo "✅ octopus-error-review cron 注册成功（每天02:30）"
         else
             echo "⚠️  octopus-error-review cron 注册失败"
