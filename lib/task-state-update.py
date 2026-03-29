@@ -19,7 +19,13 @@ if SCRIPT_DIR not in sys.path:
 
 from clawteam_bridge import sync_task
 from notifier import send_task_notification
-from runtime_task_record import normalize_task_record, normalize_task_records
+from runtime_task_record import (
+    normalize_task_record,
+    normalize_task_records,
+    task_is_final,
+    task_notification_state,
+    task_state_model,
+)
 from runtime_protocol import normalize_worker_result
 from worker_taxonomy import (
     normalize_model_band,
@@ -152,10 +158,10 @@ def parse_json_arg(value: str) -> dict:
     raise argparse.ArgumentTypeError("JSON value must be an object")
 
 
-FINAL_STATUSES = {"done", "failed", "deferred", "completed"}
+FINAL_STATUSES = {"done", "failed", "deferred", "completed", "blocked"}
 SUCCESS_STATUSES = {"done", "completed"}
 ACTIVE_STATUSES = {"running", "in_progress"}
-PENDING_STATUSES = {"queued", "dispatched", "pending", "pending_confirm", "blocked"}
+PENDING_STATUSES = {"queued", "dispatched", "pending", "pending_confirm"}
 
 
 def compact_text(text: str, limit: int = 120) -> str:
@@ -253,22 +259,31 @@ def _status_label(status: str) -> str:
 def _aggregate_parent_status(children: list[dict]) -> str:
     if not children:
         return ""
-    statuses = [str(child.get("status", "") or "").strip().lower() for child in children]
-    failed_count = sum(1 for status in statuses if status == "failed")
-    done_count = sum(1 for status in statuses if status in SUCCESS_STATUSES)
-    deferred_count = sum(1 for status in statuses if status == "deferred")
-    running_count = sum(1 for status in statuses if status in ACTIVE_STATUSES)
-    open_count = sum(1 for status in statuses if status not in FINAL_STATUSES)
-    child_count = len(statuses)
+    states = [task_state_model(child) for child in children]
+    child_count = len(states)
+    failed_count = sum(1 for state in states if state["outcome_state"] == "failed")
+    done_count = sum(1 for state in states if state["lifecycle_state"] in {"finished", "cancelled"} and state["outcome_state"] == "done")
+    blocked_final_count = sum(1 for state in states if state["lifecycle_state"] in {"finished", "cancelled"} and state["outcome_state"] == "blocked")
+    partial_final_count = sum(1 for state in states if state["lifecycle_state"] in {"finished", "cancelled"} and state["outcome_state"] == "partial")
+    deferred_count = sum(1 for child in children if str(child.get("status", "") or "").strip().lower() == "deferred")
+    running_count = sum(1 for state in states if state["lifecycle_state"] in {"running", "finalizing"})
+    open_count = sum(1 for state in states if state["lifecycle_state"] not in {"finished", "cancelled"})
+    blocked_open_count = sum(1 for state in states if state["lifecycle_state"] not in {"finished", "cancelled"} and state["outcome_state"] == "blocked")
 
     if failed_count > 0:
         return "failed"
+    if open_count == 0 and blocked_final_count > 0:
+        return "blocked"
     if child_count > 0 and done_count == child_count:
+        return "done"
+    if open_count == 0 and partial_final_count > 0:
         return "done"
     if open_count == 0 and deferred_count > 0:
         return "deferred"
     if running_count > 0 or (done_count > 0 and open_count > 0):
         return "running"
+    if blocked_open_count > 0:
+        return "blocked"
     if open_count > 0:
         return "dispatched"
     return ""
@@ -284,10 +299,11 @@ def _aggregate_parent_summary(parent: dict, children: list[dict], child_ids: lis
         child = tasks_by_id.get(task_id)
         if not name or child is None:
             continue
-        step_tokens.append(f"{name} {_status_label(child.get('status', ''))}")
+        step_tokens.append(f"{name} {_status_label(task_notification_state(child))}")
     if step_tokens:
         prefix = {
             "done": "spawn_multi complete",
+            "blocked": "spawn_multi blocked",
             "failed": "spawn_multi failed",
             "deferred": "spawn_multi deferred",
             "running": "spawn_multi running",
@@ -297,15 +313,25 @@ def _aggregate_parent_summary(parent: dict, children: list[dict], child_ids: lis
 
     status_counts = {}
     for child in children:
-        child_status = _status_label(child.get("status", ""))
+        child_status = _status_label(task_notification_state(child).replace("_final", ""))
         status_counts[child_status] = status_counts.get(child_status, 0) + 1
 
     child_count = len(child_ids)
-    done_count = sum(1 for child in children if str(child.get("status", "") or "").strip().lower() in SUCCESS_STATUSES)
-    open_count = sum(1 for child in children if str(child.get("status", "") or "").strip().lower() not in FINAL_STATUSES)
+    done_count = sum(
+        1
+        for child in children
+        if task_state_model(child)["lifecycle_state"] in {"finished", "cancelled"} and task_state_model(child)["outcome_state"] == "done"
+    )
+    open_count = sum(1 for child in children if not task_is_final(child))
 
     if status == "done":
         return f"spawn_multi complete: {done_count}/{child_count} steps done"
+    if status == "blocked":
+        parts = [f"{done_count}/{child_count} done"]
+        blocked_count = status_counts.get("blocked", 0)
+        if blocked_count:
+            parts.append(f"{blocked_count} blocked")
+        return f"spawn_multi blocked: {' · '.join(parts)}"
     if status == "failed":
         parts = [f"{count} {name}" for name, count in status_counts.items() if count]
         return f"spawn_multi failed: {' / '.join(parts)}"
@@ -448,12 +474,13 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
         child_summaries[child_id] = summary
         if worker_result:
             child_worker_results[child_id] = worker_result
+        state_model = task_state_model(child)
         lowered = status.lower()
-        if lowered in SUCCESS_STATUSES:
+        if state_model["lifecycle_state"] in {"finished", "cancelled"} and state_model["outcome_state"] == "done":
             completed_child_ids.append(child_id)
-        elif lowered == "failed":
+        elif state_model["outcome_state"] == "failed":
             failed_child_ids.append(child_id)
-        elif lowered not in {"deferred", "completed"}:
+        elif not task_is_final(child):
             open_child_ids.append(child_id)
 
     for step_name, child_id in step_task_ids.items():
@@ -500,7 +527,7 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
             },
         }
     )
-    if derived_status in {"done", "failed"}:
+    if derived_status in {"done", "failed", "blocked"}:
         parent_report_path = _materialize_parent_report(
             before,
             status=derived_status,
@@ -525,7 +552,11 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
                 "report": str(candidate.get("report_path", "") or before.get("report_path", "") or ""),
                 "artifacts": child_report_paths,
                 "risks": [f"failed child: {child_id}" for child_id in failed_child_ids],
-                "next_step": "none" if derived_status == "done" else "inspect child reports and retry or replan",
+                "next_step": "none"
+                if derived_status == "done"
+                else "relay blocked explanation or gather the missing dependency"
+                if derived_status == "blocked"
+                else "inspect child reports and retry or replan",
             },
             task_id=str(before.get("id", "") or ""),
             default_report=str(candidate.get("report_path", "") or before.get("report_path", "") or ""),
@@ -533,7 +564,7 @@ def _aggregate_parent_record(tasks: list, parent: dict) -> dict | None:
         artifacts["worker_result"] = parent_result
     candidate["artifacts"] = artifacts
 
-    if derived_status in {"done", "failed", "deferred"}:
+    if derived_status in {"done", "failed", "deferred", "blocked"}:
         candidate["completed_at"] = str(before.get("completed_at", "") or now_iso())
     else:
         candidate["completed_at"] = ""
@@ -586,6 +617,9 @@ def _lineage_sync_records(tasks: list, current_record: dict) -> tuple[dict, list
 
 
 def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert") -> str:
+    notification_state = task_notification_state(record)
+    if notification_state == "blocked_final" and str(previous_status or "").strip().lower() != "blocked":
+        return "blocked"
     status = str(record.get("status", "") or "").strip().lower()
     if status in {"done", "failed", "deferred"} and status != str(previous_status or "").strip().lower():
         return status
@@ -741,6 +775,26 @@ def cmd_upsert(args):
                 existing["profile"] = args.profile
             if args.review_required is not None:
                 existing["review_required"] = args.review_required
+            if args.lifecycle_state:
+                existing["lifecycle_state"] = args.lifecycle_state
+            if args.outcome_state:
+                existing["outcome_state"] = args.outcome_state
+            if args.handoff_state:
+                existing["handoff_state"] = args.handoff_state
+            if args.blocked_on:
+                existing["blocked_on"] = args.blocked_on
+            if args.blocked_reason:
+                existing["blocked_reason"] = args.blocked_reason
+            if args.deliverable_kind:
+                existing["deliverable_kind"] = args.deliverable_kind
+            if args.user_safe_summary:
+                existing["user_safe_summary"] = args.user_safe_summary
+            if args.result_ready_at:
+                existing["result_ready_at"] = resolve_expected_done(args.result_ready_at)
+            if args.handoff_ready_at:
+                existing["handoff_ready_at"] = resolve_expected_done(args.handoff_ready_at)
+            if args.observability_health:
+                existing["observability_health"] = args.observability_health
             if args.artifacts_json:
                 artifacts = existing.get("artifacts", {})
                 if not isinstance(artifacts, dict):
@@ -828,6 +882,26 @@ def cmd_upsert(args):
                 record["profile"] = args.profile
             if args.review_required is not None:
                 record["review_required"] = args.review_required
+            if args.lifecycle_state:
+                record["lifecycle_state"] = args.lifecycle_state
+            if args.outcome_state:
+                record["outcome_state"] = args.outcome_state
+            if args.handoff_state:
+                record["handoff_state"] = args.handoff_state
+            if args.blocked_on:
+                record["blocked_on"] = args.blocked_on
+            if args.blocked_reason:
+                record["blocked_reason"] = args.blocked_reason
+            if args.deliverable_kind:
+                record["deliverable_kind"] = args.deliverable_kind
+            if args.user_safe_summary:
+                record["user_safe_summary"] = args.user_safe_summary
+            if args.result_ready_at:
+                record["result_ready_at"] = resolve_expected_done(args.result_ready_at)
+            if args.handoff_ready_at:
+                record["handoff_ready_at"] = resolve_expected_done(args.handoff_ready_at)
+            if args.observability_health:
+                record["observability_health"] = args.observability_health
             if args.artifacts_json:
                 record["artifacts"] = dict(args.artifacts_json)
             record["executor"] = infer_executor(record, args.executor or "")
@@ -853,6 +927,16 @@ def cmd_done(args):
         args.summary,
         report_path=args.report_path,
         artifacts_json=args.artifacts_json,
+        lifecycle_state=args.lifecycle_state,
+        outcome_state=args.outcome_state,
+        handoff_state=args.handoff_state,
+        blocked_on=args.blocked_on,
+        blocked_reason=args.blocked_reason,
+        deliverable_kind=args.deliverable_kind,
+        user_safe_summary=args.user_safe_summary,
+        result_ready_at=args.result_ready_at,
+        handoff_ready_at=args.handoff_ready_at,
+        observability_health=args.observability_health,
     )
 
 
@@ -863,10 +947,57 @@ def cmd_failed(args):
         args.summary,
         report_path=args.report_path,
         artifacts_json=args.artifacts_json,
+        lifecycle_state=args.lifecycle_state,
+        outcome_state=args.outcome_state,
+        handoff_state=args.handoff_state,
+        blocked_on=args.blocked_on,
+        blocked_reason=args.blocked_reason,
+        deliverable_kind=args.deliverable_kind,
+        user_safe_summary=args.user_safe_summary,
+        result_ready_at=args.result_ready_at,
+        handoff_ready_at=args.handoff_ready_at,
+        observability_health=args.observability_health,
     )
 
 
-def _finish(task_id: str, status: str, summary: str, *, report_path: str = "", artifacts_json: dict | None = None):
+def cmd_blocked(args):
+    _finish(
+        args.id,
+        "blocked",
+        args.summary,
+        report_path=args.report_path,
+        artifacts_json=args.artifacts_json,
+        lifecycle_state=args.lifecycle_state or "finished",
+        outcome_state=args.outcome_state or "blocked",
+        handoff_state=args.handoff_state or ("user_safe_ready" if args.user_safe_summary or args.summary else "internal_only"),
+        blocked_on=args.blocked_on,
+        blocked_reason=args.blocked_reason,
+        deliverable_kind=args.deliverable_kind or "blocked_explanation",
+        user_safe_summary=args.user_safe_summary,
+        result_ready_at=args.result_ready_at,
+        handoff_ready_at=args.handoff_ready_at,
+        observability_health=args.observability_health,
+    )
+
+
+def _finish(
+    task_id: str,
+    status: str,
+    summary: str,
+    *,
+    report_path: str = "",
+    artifacts_json: dict | None = None,
+    lifecycle_state: str = "",
+    outcome_state: str = "",
+    handoff_state: str = "",
+    blocked_on: str = "",
+    blocked_reason: str = "",
+    deliverable_kind: str = "",
+    user_safe_summary: str = "",
+    result_ready_at: str = "",
+    handoff_ready_at: str = "",
+    observability_health: str = "",
+):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     lineage_syncs = []
     with open(STATE_FILE, "a+") as fp:
@@ -892,6 +1023,26 @@ def _finish(task_id: str, status: str, summary: str, *, report_path: str = "", a
                     artifacts = {}
                 artifacts.update(artifacts_json)
                 existing["artifacts"] = artifacts
+            if lifecycle_state:
+                existing["lifecycle_state"] = lifecycle_state
+            if outcome_state:
+                existing["outcome_state"] = outcome_state
+            if handoff_state:
+                existing["handoff_state"] = handoff_state
+            if blocked_on:
+                existing["blocked_on"] = blocked_on
+            if blocked_reason:
+                existing["blocked_reason"] = blocked_reason
+            if deliverable_kind:
+                existing["deliverable_kind"] = deliverable_kind
+            if user_safe_summary:
+                existing["user_safe_summary"] = user_safe_summary
+            if result_ready_at:
+                existing["result_ready_at"] = resolve_expected_done(result_ready_at)
+            if handoff_ready_at:
+                existing["handoff_ready_at"] = resolve_expected_done(handoff_ready_at)
+            if observability_health:
+                existing["observability_health"] = observability_health
             normalized = normalize_task_record(existing)
             existing.clear()
             existing.update(normalized)
@@ -909,6 +1060,26 @@ def _finish(task_id: str, status: str, summary: str, *, report_path: str = "", a
                 record["report_path"] = report_path
             if artifacts_json:
                 record["artifacts"] = dict(artifacts_json)
+            if lifecycle_state:
+                record["lifecycle_state"] = lifecycle_state
+            if outcome_state:
+                record["outcome_state"] = outcome_state
+            if handoff_state:
+                record["handoff_state"] = handoff_state
+            if blocked_on:
+                record["blocked_on"] = blocked_on
+            if blocked_reason:
+                record["blocked_reason"] = blocked_reason
+            if deliverable_kind:
+                record["deliverable_kind"] = deliverable_kind
+            if user_safe_summary:
+                record["user_safe_summary"] = user_safe_summary
+            if result_ready_at:
+                record["result_ready_at"] = resolve_expected_done(result_ready_at)
+            if handoff_ready_at:
+                record["handoff_ready_at"] = resolve_expected_done(handoff_ready_at)
+            if observability_health:
+                record["observability_health"] = observability_health
             tasks.append(record)
             current_record = normalize_task_record(record)
             tasks[-1] = dict(current_record)
@@ -942,6 +1113,7 @@ def cmd_list(args):
         "dispatched": "🟡",
         "running":    "🔵",
         "done":       "✅",
+        "blocked":    "🟠",
         "failed":     "❌",
         "queued":     "⏸️",
         "pending_confirm": "❓",
@@ -1084,6 +1256,16 @@ def main():
     p_upsert.add_argument("--protocol")
     p_upsert.add_argument("--profile")
     p_upsert.add_argument("--review-required", dest="review_required", type=parse_bool_arg)
+    p_upsert.add_argument("--lifecycle-state", dest="lifecycle_state")
+    p_upsert.add_argument("--outcome-state", dest="outcome_state")
+    p_upsert.add_argument("--handoff-state", dest="handoff_state")
+    p_upsert.add_argument("--blocked-on", dest="blocked_on")
+    p_upsert.add_argument("--blocked-reason", dest="blocked_reason")
+    p_upsert.add_argument("--deliverable-kind", dest="deliverable_kind")
+    p_upsert.add_argument("--user-safe-summary", dest="user_safe_summary")
+    p_upsert.add_argument("--result-ready-at", dest="result_ready_at")
+    p_upsert.add_argument("--handoff-ready-at", dest="handoff_ready_at")
+    p_upsert.add_argument("--observability-health", dest="observability_health")
     p_upsert.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
     # done
@@ -1091,6 +1273,16 @@ def main():
     p_done.add_argument("--id", required=True)
     p_done.add_argument("--summary", default="")
     p_done.add_argument("--report-path", dest="report_path", default="")
+    p_done.add_argument("--lifecycle-state", dest="lifecycle_state", default="finished")
+    p_done.add_argument("--outcome-state", dest="outcome_state", default="done")
+    p_done.add_argument("--handoff-state", dest="handoff_state", default="")
+    p_done.add_argument("--blocked-on", dest="blocked_on", default="")
+    p_done.add_argument("--blocked-reason", dest="blocked_reason", default="")
+    p_done.add_argument("--deliverable-kind", dest="deliverable_kind", default="final_answer")
+    p_done.add_argument("--user-safe-summary", dest="user_safe_summary", default="")
+    p_done.add_argument("--result-ready-at", dest="result_ready_at", default="")
+    p_done.add_argument("--handoff-ready-at", dest="handoff_ready_at", default="")
+    p_done.add_argument("--observability-health", dest="observability_health", default="")
     p_done.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
     # failed
@@ -1098,7 +1290,33 @@ def main():
     p_failed.add_argument("--id", required=True)
     p_failed.add_argument("--summary", default="")
     p_failed.add_argument("--report-path", dest="report_path", default="")
+    p_failed.add_argument("--lifecycle-state", dest="lifecycle_state", default="finished")
+    p_failed.add_argument("--outcome-state", dest="outcome_state", default="failed")
+    p_failed.add_argument("--handoff-state", dest="handoff_state", default="")
+    p_failed.add_argument("--blocked-on", dest="blocked_on", default="")
+    p_failed.add_argument("--blocked-reason", dest="blocked_reason", default="")
+    p_failed.add_argument("--deliverable-kind", dest="deliverable_kind", default="failure_report")
+    p_failed.add_argument("--user-safe-summary", dest="user_safe_summary", default="")
+    p_failed.add_argument("--result-ready-at", dest="result_ready_at", default="")
+    p_failed.add_argument("--handoff-ready-at", dest="handoff_ready_at", default="")
+    p_failed.add_argument("--observability-health", dest="observability_health", default="")
     p_failed.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
+
+    p_blocked = sub.add_parser("blocked")
+    p_blocked.add_argument("--id", required=True)
+    p_blocked.add_argument("--summary", default="")
+    p_blocked.add_argument("--report-path", dest="report_path", default="")
+    p_blocked.add_argument("--lifecycle-state", dest="lifecycle_state", default="finished")
+    p_blocked.add_argument("--outcome-state", dest="outcome_state", default="blocked")
+    p_blocked.add_argument("--handoff-state", dest="handoff_state", default="")
+    p_blocked.add_argument("--blocked-on", dest="blocked_on", default="")
+    p_blocked.add_argument("--blocked-reason", dest="blocked_reason", default="")
+    p_blocked.add_argument("--deliverable-kind", dest="deliverable_kind", default="blocked_explanation")
+    p_blocked.add_argument("--user-safe-summary", dest="user_safe_summary", default="")
+    p_blocked.add_argument("--result-ready-at", dest="result_ready_at", default="")
+    p_blocked.add_argument("--handoff-ready-at", dest="handoff_ready_at", default="")
+    p_blocked.add_argument("--observability-health", dest="observability_health", default="")
+    p_blocked.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
     # list
     sub.add_parser("list")
@@ -1116,6 +1334,8 @@ def main():
         cmd_done(args)
     elif args.command == "failed":
         cmd_failed(args)
+    elif args.command == "blocked":
+        cmd_blocked(args)
     elif args.command == "list":
         cmd_list(args)
     elif args.command == "archive-stale-dispatched":

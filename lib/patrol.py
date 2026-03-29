@@ -48,6 +48,7 @@ from collections import deque
 from notifier import backend_supports_cards, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec
 from clawteam_bridge import sync_task
+from runtime_task_record import task_is_recent_final, task_notification_state, task_state_model
 from octopus_config import (
     MAIN_AGENT_SESSIONS_FILE,
     RUNNER_HEALTH_FILE,
@@ -1286,8 +1287,8 @@ def get_recent_done_tasks(tasks: list, force: bool = False) -> list:
     recent = []
     new_done_entries = {}  # 本次新完成的任务 id → completed_at（用于状态变化通知去重）
     for t in tasks:
-        status = t.get("status", "")
-        if status not in ("done", "failed"):
+        notification_state = task_notification_state(t)
+        if notification_state not in {"done", "failed", "blocked_final", "partial_final"}:
             continue
         if t.get("label", "") in SYSTEM_LABELS:
             continue
@@ -1311,10 +1312,14 @@ def get_recent_done_tasks(tasks: list, force: bool = False) -> list:
         if 0 <= age_seconds <= cutoff_seconds:
             t["_completed_age_seconds"] = age_seconds
             # 标记任务类型：done/failed/timeout
-            if status == "failed" and t.get("timeout_reason"):
+            if notification_state == "failed" and t.get("timeout_reason"):
                 t["_finish_type"] = "timeout"
-            elif status == "failed":
+            elif notification_state == "failed":
                 t["_finish_type"] = "failed"
+            elif notification_state == "blocked_final":
+                t["_finish_type"] = "blocked"
+            elif notification_state == "partial_final":
+                t["_finish_type"] = "partial"
             else:
                 t["_finish_type"] = "done"
             recent.append(t)
@@ -4466,7 +4471,7 @@ def main():
             notify_state = load_notify_state()
             old_states = notify_state.get("task_ids", {})
             anchor_messages = notify_state.get("task_anchor_messages", {})
-            new_states = {t.get("id", ""): t.get("status", "") for t in tasks if t.get("id")}
+            new_states = {t.get("id", ""): task_notification_state(t) for t in tasks if t.get("id")}
             changes = []
             changed_tasks_for_anchor = []
             for tid, new_status in new_states.items():
@@ -4480,7 +4485,8 @@ def main():
                 if task.get("label", "") in SYSTEM_LABELS:
                     continue
                 label_name = get_task_display_name(task)
-                summary = (task.get("summary") or tid)[:40]
+                state_model = task_state_model(task)
+                summary = (task.get("user_safe_summary") or task.get("summary") or tid)[:60]
                 # 状态变化规则
                 if new_status in ("running", "dispatched") and old_status not in ("running", "dispatched"):
                     # 包含首次 spawn（old_status is None）和状态从非运行变为运行
@@ -4491,6 +4497,17 @@ def main():
                     changed_tasks_for_anchor.append(task)
                     # ── 卡片 B：任务完成事件通知 ──
                     send_event_card_b("done", task)
+                elif new_status in ("blocked_final", "partial_final") and old_status in ("running", "dispatched", "blocked", "pending_confirm", None):
+                    if new_status == "blocked_final":
+                        blocked_reason = str(task.get("blocked_reason", "") or task.get("summary", "") or "").strip()
+                        handoff_hint = "可直接转述" if state_model["handoff_state"] in {"user_safe_ready", "delivered"} else "需人工判断"
+                        suffix = f"（{handoff_hint}）"
+                        changes.append(f"🟠 {label_name} 受阻完成：{summary}{suffix}")
+                        if blocked_reason and blocked_reason != summary:
+                            changes.append(f"   └ 受阻原因：{blocked_reason[:80]}")
+                    else:
+                        changes.append(f"🟣 {label_name} 部分完成：{summary}")
+                    changed_tasks_for_anchor.append(task)
                 elif new_status == "failed" and old_status in ("running", "dispatched"):
                     # notified_failed=True 表示已通过独立失败通知发送过，跳过重发（无论是否 force 模式）
                     if not task.get("notified_failed"):

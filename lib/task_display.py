@@ -7,16 +7,18 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
+    from runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
     from worker_taxonomy import role_display
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
     from lib.worker_taxonomy import role_display
 
 
-ACTIVE_STATES = {"queued", "running", "blocked", "needs_approval"}
+ACTIVE_STATES = {"queued", "running", "blocked"}
 QUEUE_STATES = {"queued"}
 RUNNING_STATES = {"running"}
-BLOCKED_STATES = {"blocked", "needs_approval"}
-FINAL_STATES = {"done", "completed", "failed", "deferred", "cancelled"}
+BLOCKED_STATES = {"blocked"}
+FINAL_STATES = {"done", "completed", "failed", "deferred", "cancelled", "blocked", "partial"}
 
 
 def _text(value: Any) -> str:
@@ -95,8 +97,15 @@ def _duration_label(started_at: str, now: datetime | None = None) -> str | None:
     return f"{hours}h{minute}m"
 
 
-def _state_label(state: str) -> str:
+def _state_label(state: str, lifecycle_state: str = "", outcome_state: str = "", handoff_state: str = "") -> str:
     current = _text(state).lower()
+    lifecycle = _text(lifecycle_state).lower()
+    outcome = _text(outcome_state).lower()
+    handoff = _text(handoff_state).lower()
+    if lifecycle in {"finished", "cancelled"} and outcome == "blocked":
+        return "blocked (handoff ready)" if handoff in {"user_safe_ready", "delivered"} else "blocked"
+    if lifecycle in {"finished", "cancelled"} and outcome == "partial":
+        return "partial answer"
     mapping = {
         "queued": "queued",
         "running": "running",
@@ -177,7 +186,10 @@ def _collect_artifacts(task: dict[str, Any]) -> list[dict[str, Any]]:
 
 def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
     normalized = _normalize_task(task)
+    state_model = task_state_model(normalized)
     state = _text(normalized.get("status")).lower()
+    queue_bucket = task_queue_bucket(normalized)
+    is_terminal = _text(state_model.get("lifecycle_state")).lower() in {"finished", "cancelled"}
     actions: list[dict[str, Any]] = [
         {
             "id": "view",
@@ -199,7 +211,7 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
         },
     ]
 
-    if state in ACTIVE_STATES:
+    if queue_bucket in ACTIVE_STATES and not is_terminal:
         actions.append(
             {
                 "id": "stop",
@@ -250,7 +262,9 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
             ]
         )
 
-    if state in {"failed", "deferred"}:
+    if state in {"failed", "deferred"} or (
+        is_terminal and _text(state_model.get("outcome_state")).lower() in {"blocked", "partial"}
+    ):
         actions.append(
             {
                 "id": "retry",
@@ -312,22 +326,45 @@ def build_task_interactive_payload(
 
 def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     normalized = _normalize_task(task)
-    state = _text(normalized.get("status")).lower()
+    state_model = task_state_model(normalized)
+    lifecycle_state = _text(state_model.get("lifecycle_state"))
+    outcome_state = _text(state_model.get("outcome_state"))
+    handoff_state = _text(state_model.get("handoff_state"))
+    queue_bucket = task_queue_bucket(normalized)
+    if _text(lifecycle_state).lower() in {"finished", "cancelled"}:
+        if _text(outcome_state).lower() == "partial":
+            state = "partial"
+        elif _text(outcome_state).lower() in {"done", "blocked", "failed", "cancelled"}:
+            state = _text(outcome_state).lower()
+        else:
+            state = _text(normalized.get("status")).lower()
+    else:
+        state = queue_bucket
     display = role_display(normalized)
-    summary = _compact(_text(normalized.get("summary") or normalized.get("task_description")), limit=120)
+    summary = _compact(
+        _text(normalized.get("user_safe_summary") or normalized.get("summary") or normalized.get("task_description")),
+        limit=120,
+    )
     models = _collect_active_models(normalized)
 
     anchor = {
         "task_id": _text(normalized.get("id")),
         "title": _text(normalized.get("title")),
         "state": state,
-        "state_label": _state_label(state),
+        "state_label": _state_label(state, lifecycle_state, outcome_state, handoff_state),
         "route": _text(normalized.get("route")),
         "worker_pool": _text(normalized.get("worker_pool")),
         "worker_pool_display": _text(display.get("name")),
         "worker_pool_emoji": _text(display.get("emoji")),
         "progress": None,
         "summary": summary,
+        "queue_bucket": queue_bucket,
+        "lifecycle_state": lifecycle_state,
+        "outcome_state": outcome_state,
+        "handoff_state": handoff_state,
+        "terminal": _text(lifecycle_state).lower() in {"finished", "cancelled"},
+        "deliverable_kind": _text(normalized.get("deliverable_kind")),
+        "observability_health": _text(normalized.get("observability_health")),
         "phase": _text(normalized.get("phase")),
         "profile": _text(normalized.get("profile")),
         "eta": _text(normalized.get("expected_done_at")),
@@ -350,6 +387,7 @@ def build_task_detail(
 ) -> dict[str, Any]:
     normalized = _normalize_task(task)
     anchor = build_task_anchor(normalized, now=now)
+    state_model = task_state_model(normalized)
     all_normalized = [_normalize_task(item) for item in (all_tasks or []) if isinstance(item, dict)]
     task_id = _text(normalized.get("id"))
     child_ids = _text_list(normalized.get("child_ids"))
@@ -371,6 +409,24 @@ def build_task_detail(
             "importance": "normal",
         }
     )
+    if _text(state_model.get("handoff_state")).lower() in {"user_safe_ready", "delivered"}:
+        events.append(
+            {
+                "time": _text(normalized.get("handoff_ready_at") or normalized.get("completed_at") or normalized.get("updated_at")),
+                "kind": "handoff_ready",
+                "message": _text(normalized.get("user_safe_summary") or normalized.get("summary")),
+                "importance": "high",
+            }
+        )
+    elif _text(state_model.get("outcome_state")).lower() == "blocked":
+        events.append(
+            {
+                "time": _text(normalized.get("result_ready_at") or normalized.get("completed_at") or normalized.get("updated_at")),
+                "kind": "result_blocked",
+                "message": _text(normalized.get("blocked_reason") or normalized.get("summary")),
+                "importance": "high",
+            }
+        )
     if normalized.get("review_required"):
         events.append(
             {
@@ -397,8 +453,8 @@ def build_task_detail(
         "lineage": {
             "parent_task_id": _text(normalized.get("parent_id")),
             "child_task_ids": [_text(item.get("id")) for item in children],
-            "active_child_count": sum(1 for item in children if _text(item.get("status")).lower() in ACTIVE_STATES),
-            "completed_child_count": sum(1 for item in children if _text(item.get("status")).lower() in {"done", "completed"}),
+            "active_child_count": sum(1 for item in children if task_queue_bucket(item) in ACTIVE_STATES),
+            "completed_child_count": sum(1 for item in children if task_is_recent_final(item)),
         },
         "models": {
             "main_model": anchor["active_models"][0] if anchor["active_models"] else "",
@@ -414,10 +470,10 @@ def build_task_detail(
 def build_task_queue_view(tasks: list[dict[str, Any]], *, now: datetime | None = None) -> dict[str, Any]:
     anchors = [build_task_anchor(task, now=now) for task in tasks if isinstance(task, dict)]
     return {
-        "running": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in RUNNING_STATES],
-        "queued": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in QUEUE_STATES],
-        "blocked": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in BLOCKED_STATES],
-        "recently_completed": [anchor for anchor in anchors if _text(anchor.get("state")).lower() in {"done", "completed"}],
+        "running": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in RUNNING_STATES],
+        "queued": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in QUEUE_STATES],
+        "blocked": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in BLOCKED_STATES],
+        "recently_completed": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() == "recently_completed"],
     }
 
 

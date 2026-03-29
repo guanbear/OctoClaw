@@ -54,6 +54,11 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 - Text status views: [`status.sh`](./lib/status.sh)
 - Minimal replay/eval harness: [`eval_suite.py`](./lib/eval_suite.py)
 
+Recent design notes worth reading before deeper runtime changes:
+
+- [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
+- [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+
 ## Model Selection
 
 OctoClaw now treats `auto` as the default, policy-first mode:

@@ -126,6 +126,36 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["agent_namespace"], "octoclaw")
         self.assertTrue(payload["managed_by_octoclaw"])
 
+    def test_normalize_final_blocked_result_tracks_handoff_readiness(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "blocked-1",
+                "status": "blocked",
+                "summary": "source access blocked",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "completed_at": "2026-03-29T09:12:38+00:00",
+                "report_path": "/tmp/blocked-report.md",
+                "artifacts": {
+                    "worker_result": {
+                        "status": "blocked",
+                        "summary": "Could not access the article body, but a safe boundary summary is ready.",
+                        "report": "/tmp/blocked-report.md",
+                        "next_step": "ask for an accessible source mirror",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(payload["lifecycle_state"], "finished")
+        self.assertEqual(payload["outcome_state"], "blocked")
+        self.assertEqual(payload["handoff_state"], "user_safe_ready")
+        self.assertEqual(payload["deliverable_kind"], "blocked_explanation")
+        self.assertIn("safe boundary summary", payload["user_safe_summary"])
+        self.assertEqual(payload["result_ready_at"], "2026-03-29T09:12:38+00:00")
+        self.assertEqual(payload["handoff_ready_at"], "2026-03-29T09:12:38+00:00")
+
     def test_task_state_update_writes_unified_runtime_fields(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-task-record-") as workspace:
             env = {**os.environ, "WORKSPACE": workspace}

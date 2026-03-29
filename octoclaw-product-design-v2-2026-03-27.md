@@ -1161,6 +1161,8 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 - [octoclaw-display-layer-productization-plan-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-display-layer-productization-plan-v1-2026-03-29.md)
 - [octoclaw-task-display-schema-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-task-display-schema-v1-2026-03-29.md)
+- [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
+- [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
 
 ### Phase 7：做策略闭环
 
@@ -1181,6 +1183,14 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 输出：
 
 - self-tuning policy loop
+
+补充设计说明：
+
+- [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
+  - 解释为什么 OctoClaw 需要把 `lifecycle_state / outcome_state / handoff_state` 分开
+  - 目标不是只修 Slack，而是系统修正所有 IM / WebChat / operator 面的“任务已结束但表达失真”问题
+- [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+  - 基于实际源码记录 ClawTeam / DeerFlow 对 OctoClaw 的可借鉴点
 
 ---
 

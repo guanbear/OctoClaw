@@ -88,6 +88,31 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertEqual(sent["action"], "edit")
         self.assertEqual(mock_send.call_args[1]["existing_message_id"], "1712345.000200")
 
+    def test_get_recent_done_tasks_includes_final_blocked_handoffs(self) -> None:
+        now = patrol.now_utc()
+        completed_at = (now - patrol.timedelta(minutes=5)).isoformat()
+        tasks = [
+            {
+                "id": "research-blocked-1",
+                "status": "blocked",
+                "summary": "source boundary ready",
+                "completed_at": completed_at,
+                "route": "spawn_single",
+                "worker_pool": "octoclaw-research",
+                "artifacts": {
+                    "worker_result": {
+                        "status": "blocked",
+                        "summary": "The source is inaccessible, but the blocked explanation is ready.",
+                    }
+                },
+            }
+        ]
+
+        recent = patrol.get_recent_done_tasks(tasks)
+
+        self.assertEqual([item["id"] for item in recent], ["research-blocked-1"])
+        self.assertEqual(recent[0]["_finish_type"], "blocked")
+
 
 if __name__ == "__main__":
     unittest.main()

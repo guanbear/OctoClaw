@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from octopus_config import CLAWTEAM_BRIDGE_DIR, load_octopus_config, save_json, workbench_config
-from runtime_task_record import normalize_task_record
+from runtime_task_record import normalize_task_record, task_state_model
 try:
     from worker_taxonomy import role_display
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
@@ -602,7 +602,9 @@ def sync_task(task: dict[str, Any], *, event_type: str, previous_status: str = "
             cli_sync["task_sync"] = {"create": {"ran": False, "ok": False, "reason": "team-init-failed"}, "update": {"ran": False, "ok": False, "reason": "team-init-failed"}}
 
     status = str(record.get("status", "") or "")
-    if _emit_result_mail() and status in ("done", "failed"):
+    state_model = task_state_model(record)
+    should_emit_result_mail = state_model["lifecycle_state"] in {"finished", "cancelled"} and state_model["outcome_state"] in {"done", "blocked", "failed", "partial"}
+    if _emit_result_mail() and should_emit_result_mail:
         inbox_message = {
             "id": event["id"],
             "team": _team_name(),
@@ -610,8 +612,12 @@ def sync_task(task: dict[str, Any], *, event_type: str, previous_status: str = "
             "kind": "task_result",
             "task_id": task_id,
             "status": status,
+            "lifecycle_state": state_model["lifecycle_state"],
+            "outcome_state": state_model["outcome_state"],
+            "handoff_state": state_model["handoff_state"],
             "title": record.get("title", ""),
             "summary": record.get("summary", ""),
+            "user_safe_summary": record.get("user_safe_summary", ""),
             "worker_pool": record.get("worker_pool", ""),
             "work_type": record.get("work_type", ""),
             "phase": record.get("phase", ""),

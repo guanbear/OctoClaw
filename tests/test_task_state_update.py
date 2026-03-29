@@ -62,6 +62,45 @@ class TaskStateUpdateArchiveTests(unittest.TestCase):
             self.assertTrue(report_path.exists())
             self.assertIn("OctoClaw Archived Stale Dispatch", report_path.read_text(encoding="utf-8"))
 
+    def test_blocked_command_writes_final_blocked_handoff_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "blocked",
+                    "--id",
+                    "research-blocked-1",
+                    "--summary",
+                    "Evidence boundary summary ready",
+                    "--user-safe-summary",
+                    "The source could not be fetched reliably, but a safe blocked explanation is ready.",
+                    "--blocked-on",
+                    "source_access",
+                    "--blocked-reason",
+                    "Target article returned inaccessible content",
+                    "--report-path",
+                    str(workspace / "tmp" / "octopus" / "shared" / "research-blocked-1.md"),
+                ],
+                check=True,
+                env={**os.environ, "WORKSPACE": str(workspace)},
+                capture_output=True,
+                text=True,
+            )
+
+            state = json.loads((workspace / "tmp" / "octopus" / "task-state.json").read_text(encoding="utf-8"))
+            task = state["tasks"][0]
+
+            self.assertEqual(task["status"], "blocked")
+            self.assertEqual(task["lifecycle_state"], "finished")
+            self.assertEqual(task["outcome_state"], "blocked")
+            self.assertEqual(task["handoff_state"], "user_safe_ready")
+            self.assertEqual(task["blocked_on"], "source_access")
+            self.assertEqual(task["deliverable_kind"], "blocked_explanation")
+            self.assertIn("safe blocked explanation", task["user_safe_summary"])
+            self.assertTrue(task["completed_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

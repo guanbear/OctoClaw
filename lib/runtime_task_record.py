@@ -16,12 +16,17 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
 
 try:
-    from runtime_protocol import normalize_worker_result
+    from runtime_protocol import normalize_result_status, normalize_worker_result
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.runtime_protocol import normalize_worker_result
+    from lib.runtime_protocol import normalize_result_status, normalize_worker_result
 
 
 TASK_RECORD_SCHEMA_VERSION = "octoclaw.runtime_task.record/v1"
+LIFECYCLE_STATES = {"planned", "queued", "running", "finalizing", "finished", "cancelled"}
+OUTCOME_STATES = {"pending", "done", "blocked", "failed", "partial", "cancelled"}
+HANDOFF_STATES = {"none", "internal_only", "user_safe_ready", "delivered"}
+FINAL_LIFECYCLE_STATES = {"finished", "cancelled"}
+READY_OUTCOME_STATES = {"done", "blocked", "partial"}
 
 
 def compact_text(text: str, limit: int = 120) -> str:
@@ -48,6 +53,11 @@ def _normalized_bool(value: Any) -> bool:
         return value
     text = str(value or "").strip().lower()
     return text in {"1", "true", "yes", "on"}
+
+
+def _normalized_choice(value: Any, allowed: set[str]) -> str:
+    text = _normalized_str(value).lower()
+    return text if text in allowed else ""
 
 
 def infer_managed_by_octoclaw(task: dict[str, Any]) -> bool:
@@ -192,6 +202,290 @@ def _final_worker_result(task: dict[str, Any], artifacts: dict[str, Any]) -> dic
     )
 
 
+def _existing_worker_result(task: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, Any] | None:
+    existing = artifacts.get("worker_result") if isinstance(artifacts.get("worker_result"), dict) else {}
+    if existing:
+        return normalize_worker_result(
+            existing,
+            task_id=_normalized_str(task.get("id")),
+            default_report=_normalized_str(task.get("report_path")),
+        )
+    return None
+
+
+def infer_outcome_state(task: dict[str, Any], worker_result: dict[str, Any] | None = None) -> str:
+    if worker_result:
+        result_status = normalize_result_status(str(worker_result.get("status", "") or ""), default="")
+        if result_status == "done":
+            derived = "done"
+            explicit = _normalized_choice(task.get("outcome_state"), OUTCOME_STATES)
+            if explicit and explicit != "pending":
+                return explicit
+            return derived
+        if result_status == "blocked":
+            derived = "blocked"
+            explicit = _normalized_choice(task.get("outcome_state"), OUTCOME_STATES)
+            if explicit and explicit not in {"pending", "done"}:
+                return explicit
+            return derived
+        if result_status == "failed":
+            derived = "failed"
+            explicit = _normalized_choice(task.get("outcome_state"), OUTCOME_STATES)
+            if explicit and explicit not in {"pending", "done", "blocked"}:
+                return explicit
+            return derived
+    status = _normalized_str(task.get("status")).lower()
+    mapping = {
+        "done": "done",
+        "completed": "done",
+        "failed": "failed",
+        "blocked": "blocked",
+        "needs_approval": "blocked",
+        "pending_confirm": "blocked",
+        "deferred": "blocked",
+        "cancelled": "cancelled",
+    }
+    derived = mapping.get(status, "pending")
+    explicit = _normalized_choice(task.get("outcome_state"), OUTCOME_STATES)
+    if explicit:
+        if derived in {"done", "blocked", "failed", "cancelled", "partial"} and explicit == "pending":
+            return derived
+        return explicit
+    return derived
+
+
+def infer_lifecycle_state(task: dict[str, Any], outcome_state: str, worker_result: dict[str, Any] | None = None) -> str:
+    status = _normalized_str(task.get("status")).lower()
+    if status == "cancelled" or outcome_state == "cancelled":
+        derived = "cancelled"
+    elif status in {"done", "completed", "failed", "deferred"}:
+        derived = "finished"
+    elif status == "blocked":
+        if (
+            _normalized_str(task.get("completed_at"))
+            or worker_result
+            or _normalized_str(task.get("result_ready_at"))
+            or _normalized_str(task.get("handoff_ready_at"))
+        ):
+            derived = "finished"
+        else:
+            derived = "finalizing"
+    elif status in {"needs_approval", "pending_confirm"}:
+        derived = "finalizing"
+    elif status in {"running", "in_progress"}:
+        derived = "running"
+    elif status in {"queued", "pending", "dispatched"}:
+        derived = "queued"
+    else:
+        derived = "planned"
+    explicit = _normalized_choice(task.get("lifecycle_state"), LIFECYCLE_STATES)
+    if explicit:
+        if derived in FINAL_LIFECYCLE_STATES and explicit not in FINAL_LIFECYCLE_STATES:
+            return derived
+        return explicit
+    return derived
+
+
+def infer_handoff_state(
+    task: dict[str, Any],
+    lifecycle_state: str,
+    outcome_state: str,
+    worker_result: dict[str, Any] | None = None,
+) -> str:
+    if _normalized_str(task.get("delivered_at")):
+        derived = "delivered"
+        explicit = _normalized_choice(task.get("handoff_state"), HANDOFF_STATES)
+        if explicit:
+            return explicit
+        return derived
+    explicit_safe_summary = _normalized_str(task.get("user_safe_summary"))
+    summary = explicit_safe_summary or _normalized_str(task.get("summary")) or _normalized_str((worker_result or {}).get("summary"))
+    has_summary = bool(summary or _normalized_str(task.get("report_path")))
+    if lifecycle_state in FINAL_LIFECYCLE_STATES:
+        if outcome_state in READY_OUTCOME_STATES and (explicit_safe_summary or (has_summary and not _normalized_bool(task.get("review_required")))):
+            derived = "user_safe_ready"
+        elif outcome_state in READY_OUTCOME_STATES | {"failed"} and has_summary:
+            derived = "internal_only"
+        else:
+            derived = "none"
+    elif lifecycle_state in {"running", "finalizing"} and has_summary:
+        derived = "internal_only"
+    else:
+        derived = "none"
+    explicit = _normalized_choice(task.get("handoff_state"), HANDOFF_STATES)
+    if explicit:
+        if derived in {"internal_only", "user_safe_ready", "delivered"} and explicit == "none":
+            return derived
+        return explicit
+    return derived
+
+
+def infer_blocked_on(task: dict[str, Any], outcome_state: str, artifacts: dict[str, Any]) -> str:
+    explicit = _normalized_str(task.get("blocked_on"))
+    if explicit:
+        return explicit
+    candidate = _normalized_str(artifacts.get("blocked_on"))
+    if candidate:
+        return candidate
+    if outcome_state != "blocked":
+        return ""
+    recovery_action = _normalized_str(task.get("recovery_action")).lower()
+    if "quota" in recovery_action:
+        return "quota"
+    return ""
+
+
+def infer_blocked_reason(task: dict[str, Any], outcome_state: str, artifacts: dict[str, Any], worker_result: dict[str, Any] | None = None) -> str:
+    explicit = _normalized_str(task.get("blocked_reason"))
+    if explicit:
+        return explicit
+    candidate = _normalized_str(artifacts.get("blocked_reason"))
+    if candidate:
+        return candidate
+    if outcome_state != "blocked":
+        return ""
+    risks = worker_result.get("risks") if isinstance(worker_result, dict) else []
+    if isinstance(risks, list):
+        for item in risks:
+            text = _normalized_str(item)
+            if text:
+                return text
+    return ""
+
+
+def infer_deliverable_kind(task: dict[str, Any], lifecycle_state: str, outcome_state: str, handoff_state: str) -> str:
+    explicit = _normalized_str(task.get("deliverable_kind"))
+    if explicit:
+        return explicit
+    if lifecycle_state not in FINAL_LIFECYCLE_STATES:
+        return "internal_progress"
+    if outcome_state == "blocked":
+        return "blocked_explanation" if handoff_state in {"user_safe_ready", "delivered"} else "internal_progress"
+    if outcome_state == "partial":
+        return "partial_answer"
+    if outcome_state == "failed":
+        return "failure_report"
+    if outcome_state == "done":
+        return "final_answer"
+    return ""
+
+
+def infer_user_safe_summary(task: dict[str, Any], handoff_state: str, worker_result: dict[str, Any] | None = None) -> str:
+    explicit = _normalized_str(task.get("user_safe_summary"))
+    if explicit:
+        return explicit
+    if handoff_state not in {"user_safe_ready", "delivered"}:
+        return ""
+    return _normalized_str((worker_result or {}).get("summary")) or _normalized_str(task.get("summary"))
+
+
+def infer_result_ready_at(task: dict[str, Any], lifecycle_state: str, outcome_state: str, worker_result: dict[str, Any] | None = None) -> str:
+    explicit = _normalized_str(task.get("result_ready_at"))
+    if explicit:
+        return explicit
+    if lifecycle_state not in FINAL_LIFECYCLE_STATES or outcome_state == "pending":
+        return ""
+    if worker_result or _normalized_str(task.get("report_path")) or _normalized_str(task.get("summary")):
+        return _normalized_str(task.get("completed_at")) or _normalized_str(task.get("updated_at"))
+    return ""
+
+
+def infer_handoff_ready_at(task: dict[str, Any], handoff_state: str, result_ready_at: str) -> str:
+    explicit = _normalized_str(task.get("handoff_ready_at"))
+    if explicit:
+        return explicit
+    if handoff_state not in {"user_safe_ready", "delivered"}:
+        return ""
+    return result_ready_at or _normalized_str(task.get("completed_at")) or _normalized_str(task.get("updated_at"))
+
+
+def infer_observability_health(task: dict[str, Any], lifecycle_state: str, handoff_state: str) -> str:
+    explicit = _normalized_str(task.get("observability_health"))
+    if explicit:
+        return explicit
+    route = _normalized_str(task.get("route")).lower()
+    runtime = _normalized_str(task.get("runtime")).lower()
+    session_key = _normalized_str(task.get("session_key"))
+    run_id = _normalized_str(task.get("run_id"))
+    managed = infer_managed_by_octoclaw(task)
+    if managed and route in {"runner", "spawn_single", "spawn_multi"} and not session_key:
+        return "degraded_missing_session_key"
+    if managed and runtime == "subagent" and lifecycle_state in {"running", "finished"} and not run_id:
+        return "degraded_missing_run_id"
+    if handoff_state in {"user_safe_ready", "delivered"} and route != "direct" and not session_key:
+        return "degraded_missing_anchor"
+    return "healthy"
+
+
+def task_state_model(task: dict[str, Any]) -> dict[str, Any]:
+    candidate = dict(task) if isinstance(task, dict) else {}
+    artifacts = candidate.get("artifacts", {}) if isinstance(candidate.get("artifacts", {}), dict) else {}
+    worker_result = _existing_worker_result(candidate, artifacts)
+    if worker_result is None:
+        worker_result = _final_worker_result(candidate, artifacts)
+    outcome_state = infer_outcome_state(candidate, worker_result)
+    lifecycle_state = infer_lifecycle_state(candidate, outcome_state, worker_result)
+    handoff_state = infer_handoff_state(candidate, lifecycle_state, outcome_state, worker_result)
+    result_ready_at = infer_result_ready_at(candidate, lifecycle_state, outcome_state, worker_result)
+    return {
+        "lifecycle_state": lifecycle_state,
+        "outcome_state": outcome_state,
+        "handoff_state": handoff_state,
+        "blocked_on": infer_blocked_on(candidate, outcome_state, artifacts),
+        "blocked_reason": infer_blocked_reason(candidate, outcome_state, artifacts, worker_result),
+        "deliverable_kind": infer_deliverable_kind(candidate, lifecycle_state, outcome_state, handoff_state),
+        "user_safe_summary": infer_user_safe_summary(candidate, handoff_state, worker_result),
+        "result_ready_at": result_ready_at,
+        "handoff_ready_at": infer_handoff_ready_at(candidate, handoff_state, result_ready_at),
+        "observability_health": infer_observability_health(candidate, lifecycle_state, handoff_state),
+    }
+
+
+def task_is_final(task: dict[str, Any]) -> bool:
+    return _normalized_choice(task.get("lifecycle_state"), LIFECYCLE_STATES) in FINAL_LIFECYCLE_STATES or task_state_model(task)["lifecycle_state"] in FINAL_LIFECYCLE_STATES
+
+
+def task_is_recent_final(task: dict[str, Any]) -> bool:
+    state = task_state_model(task)
+    return state["lifecycle_state"] in FINAL_LIFECYCLE_STATES and state["outcome_state"] in READY_OUTCOME_STATES
+
+
+def task_notification_state(task: dict[str, Any]) -> str:
+    state = task_state_model(task)
+    if state["lifecycle_state"] in FINAL_LIFECYCLE_STATES:
+        if state["outcome_state"] == "done":
+            return "done"
+        if state["outcome_state"] == "blocked":
+            return "blocked_final"
+        if state["outcome_state"] == "partial":
+            return "partial_final"
+        if state["outcome_state"] == "failed":
+            return "failed"
+        if state["outcome_state"] == "cancelled":
+            return "cancelled"
+    status = _normalized_str(task.get("status")).lower()
+    if status in {"running", "in_progress"}:
+        return "running"
+    if status in {"queued", "pending", "dispatched"}:
+        return "dispatched"
+    if status in {"blocked", "needs_approval", "pending_confirm"}:
+        return "blocked"
+    return status or "planned"
+
+
+def task_queue_bucket(task: dict[str, Any]) -> str:
+    state = task_state_model(task)
+    if state["lifecycle_state"] in FINAL_LIFECYCLE_STATES:
+        if state["outcome_state"] in READY_OUTCOME_STATES:
+            return "recently_completed"
+        return "final"
+    if state["outcome_state"] == "blocked":
+        return "blocked"
+    if state["lifecycle_state"] in {"running", "finalizing"}:
+        return "running"
+    return "queued"
+
+
 def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(task, dict):
         return {}
@@ -248,9 +542,12 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["retry_count"] = int(retry_count or 0) if str(retry_count or "").strip() else 0
     normalized["expected_done_at"] = _normalized_str(normalized.get("expected_done_at"))
     artifacts = merge_artifacts(normalized)
-    worker_result = _final_worker_result(normalized, artifacts)
+    worker_result = _existing_worker_result(normalized, artifacts)
+    if worker_result is None:
+        worker_result = _final_worker_result(normalized, artifacts)
     if worker_result:
         artifacts["worker_result"] = worker_result
+    normalized.update(task_state_model({**normalized, "artifacts": artifacts}))
     normalized["artifacts"] = artifacts
     return normalized
 
