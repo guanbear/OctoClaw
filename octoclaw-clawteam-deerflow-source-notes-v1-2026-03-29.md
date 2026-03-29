@@ -379,17 +379,141 @@ What neither gives us directly:
 
 That still has to be designed in OctoClaw itself.
 
-## 6. Recommended next step
+## 6. Recommended next steps
 
-The most justified next design/code move is:
+The most justified direction remains:
 
 1. keep ClawTeam as execution runtime
 2. keep DeerFlow as reference for event/state/artifact design
-3. implement in OctoClaw:
-   - `lifecycle_state`
-   - `outcome_state`
-   - `handoff_state`
-   - delegated event log
-   - IM-originated `session_key` hard requirement
+3. continue translating those ideas into OctoClaw-native runtime truth
 
-That is the shortest path from source-backed insight to product improvement.
+The first source-backed slice is already in progress or landed:
+
+- `lifecycle_state`
+- `outcome_state`
+- `handoff_state`
+- delegated event log
+- IM-originated `session_key` hard requirement
+- persistent `session_target / session_thread_key`
+
+## 7. Highest-value borrowings still worth implementing
+
+### 7.1 Explicit task event stream as a first-class product surface
+
+DeerFlow does not rely only on final state snapshots. It emits explicit runtime progression:
+
+- task started
+- task running / incremental progress
+- task completed
+- task failed
+- task timed out
+
+For OctoClaw, this means the next useful expansion is not just "more logging", but a stable event taxonomy for:
+
+- `agent_message`
+- `progress_note`
+- `timeout`
+- `retry`
+- `operator_ack`
+- `anchor_sent / anchor_edited / anchor_failed`
+
+This is the cleanest path to making Slack/WebChat/operator surfaces explain *what happened* instead of only *what the final status field says*.
+
+### 7.2 IM thread mapping should become a hard routing primitive
+
+DeerFlow's channel store treats conversation/topic identity as durable state, not an afterthought.
+
+OctoClaw should continue this direction by making:
+
+- thread reuse
+- thread close/archive
+- follow-up-to-original-thread
+- stale binding cleanup
+
+explicit runtime operations rather than implicit heuristics.
+
+This is not Slack-specific. It applies equally to any IM channel with the concept of:
+
+- chat
+- room
+- thread
+- topic
+
+### 7.3 Artifact-first retrieval should become a real access layer
+
+DeerFlow shows that artifact-first is more than "write a markdown report".
+The important missing piece is stable retrieval.
+
+OctoClaw should add a proper artifact index over:
+
+- `report`
+- `context`
+- `files_changed`
+- `worker_result`
+- future screenshots / bundles / summaries
+
+with stable metadata such as:
+
+- artifact kind
+- title
+- preview
+- readiness
+- retrieval path / link
+
+### 7.4 Ownership lock and dead-agent recovery
+
+ClawTeam's task store and spawn registry are strong references for execution safety:
+
+- ownership lock is explicit
+- liveness is checked against real process/tmux state
+- dead workers cause task recovery, not silent drift
+
+OctoClaw should borrow this directly for delegated work so that:
+
+- a task cannot be "running forever" without an owner
+- abandoned tasks can move back to a recoverable queue state
+- patrol can explain *who owns the task* and *whether that worker is alive*
+
+### 7.5 Session resume store for delegated workers
+
+ClawTeam persists agent session identity separately from task truth.
+That is valuable for OctoClaw because runtime task records alone are not enough for reliable resume.
+
+Useful fields to add:
+
+- `agent_id`
+- `session_id`
+- `last_task_id`
+- `resume_state`
+- `saved_at`
+
+This would make tmux-backed and long-running delegated work much more restart-tolerant.
+
+### 7.6 Todo/checklist memory across context loss
+
+DeerFlow's todo middleware solves a subtle but important failure mode:
+
+- the state still knows the checklist
+- but the active context window forgets it
+
+OctoClaw can borrow this pattern for:
+
+- parent-task step checklist
+- worker progress checklist
+- post-summary checklist reminder
+- operator-visible "what remains" surface
+
+This is especially valuable for long research, multi-step repair, and heavy-profile work.
+
+## 8. Recommended implementation order
+
+If we continue from highest value and lowest architectural regret, the order should be:
+
+1. expand delegated event stream
+2. harden IM session/thread mapping
+3. add artifact index and retrieval surface
+4. add ownership lock and dead-agent recovery
+5. add worker session resume store
+6. add todo/checklist persistence
+
+This keeps ClawTeam responsible for execution, DeerFlow as the reference for explicit state/event/artifact patterns, and OctoClaw responsible for the productized runtime truth above them.

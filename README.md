@@ -59,6 +59,27 @@ Recent design notes worth reading before deeper runtime changes:
 - [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
 - [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
 
+Recent runtime slices now also land two DeerFlow/ClawTeam-inspired observability primitives:
+
+- delegated task event log: `/workspace/tmp/octopus/task-events.jsonl`
+- persistent IM thread map: `/workspace/tmp/octopus/session-thread-map.json`
+
+OctoClaw uses them to keep `task-state`, task anchors, patrol notifications, and IM follow-ups aligned around:
+
+- `lifecycle_state`
+- `outcome_state`
+- `handoff_state`
+- `session_key` / `session_target` / `session_thread_key`
+
+The next source-backed borrowings from ClawTeam and DeerFlow are:
+
+1. richer delegated task events
+2. harder IM thread/topic binding
+3. artifact index and retrieval
+4. ownership lock plus dead-agent recovery
+5. delegated worker session resume
+6. todo/checklist persistence across context loss
+
 ## Model Selection
 
 OctoClaw now treats `auto` as the default, policy-first mode:

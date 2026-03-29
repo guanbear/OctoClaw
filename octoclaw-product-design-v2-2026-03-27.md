@@ -1191,6 +1191,17 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
   - 目标不是只修 Slack，而是系统修正所有 IM / WebChat / operator 面的“任务已结束但表达失真”问题
 - [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
   - 基于实际源码记录 ClawTeam / DeerFlow 对 OctoClaw 的可借鉴点
+  - 本轮已落地的第一批借鉴包括：
+    - `task-events.jsonl` delegated event log
+    - `session-thread-map.json` IM thread binding map
+    - `session_target / session_thread_key` 进入 runtime task truth
+  - 下一批按收益排序最值得继续借的包括：
+    - 更细粒度的 delegated event stream
+    - 更硬的 IM thread/topic binding
+    - artifact index + retrieval surface
+    - ownership lock + dead-agent recovery
+    - worker session resume store
+    - todo/checklist persistence across context loss
 
 ---
 
