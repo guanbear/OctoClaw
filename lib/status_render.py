@@ -209,8 +209,10 @@ def render_main_model_drift_summary(drift: dict[str, Any]) -> list[str]:
         suffix = f" · {mode_text}" if mode_text else ""
         return [f"🧭 主链漂移：{reason}{suffix}"]
 
-    expected = short_model(str(drift.get("expected_model", "") or ""), limit=32)
-    current = short_model(str(drift.get("current_override", "") or drift.get("actual_model", "") or ""), limit=32)
+    expected_raw = str(drift.get("expected_model", "") or "").strip()
+    current_raw = str(drift.get("current_override", "") or drift.get("actual_model", "") or "").strip()
+    expected = short_model(expected_raw, limit=32)
+    current = short_model(current_raw, limit=32) if current_raw else ""
     if bool(drift.get("drift", False)):
         return [f"🧭 主链漂移：detected · expected {expected} · actual {current or 'unknown'}"]
     return [f"🧭 主链漂移：aligned · {expected}"]
