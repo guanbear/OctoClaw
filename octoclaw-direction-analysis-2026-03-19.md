@@ -1,7 +1,7 @@
 ---
-title: 八爪鱼方向分析（2026-03-19）
+title: OctoClaw 方向分析（2026-03-19）
 tags:
-  - octopus
+  - octoclaw
   - openclaw
   - multi-agent
   - model-routing
@@ -10,7 +10,9 @@ tags:
 created: 2026-03-19
 ---
 
-# 八爪鱼方向分析
+# OctoClaw 方向分析
+
+> 历史设计归档：文件名与标题已迁移到 `OctoClaw`，正文保留了当时的部分术语与判断背景。
 
 ## 结论先说
 

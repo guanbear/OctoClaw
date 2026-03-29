@@ -1,5 +1,5 @@
 ---
-name: octopus
+name: octoclaw
 metadata:
   author: openclaw-community
   version: "1.1.6"
@@ -18,15 +18,14 @@ postInstall: |
   🐙 八爪鱼已就位！8只触手随时待命。
 
   🚀 快速开始：
-  • 说任何复杂任务，八爪鱼自动派触手并行处理
+  • 说任何复杂任务，OctoClaw 会自动分配 runner / research / code / review 执行面
   • 「八爪鱼状态」— 查看实时任务面板
-  • 「octopus off」— 暂停八爪鱼，恢复单线程模式
+  • 「OctoClaw 观察模式」— 先跑 conservative / guided，再逐步加严
 
-  ⚖️ 模式切换：
-  • 「/mode balanced」— 平衡模式（默认）：简单任务用 GLM，复杂任务用 Sonnet
-  • 「/mode cost」— 成本优先：尽量全 GLM，仅复杂推理用 Sonnet
-  • 「/mode quality」— 效果优先：优先使用 Claude 系列模型
-  • 「/mode private」— 保密模式：全部使用私有部署模型（GLM），数据不出内网
+  ⚖️ 运行口径：
+  • 默认使用 `auto` 的 policy-first 自动选模
+  • 任务分诊优先看 `worker_pool / phase / profile / route`
+  • 多语言路由默认启用 `zh + en`，其他语言按需打开
 ---
 
 # 🐙 八爪鱼 (OctoClaw) — 多 Agent 智能调度器
@@ -61,17 +60,14 @@ postInstall: |
 
 ## 一、💰 成本优化（核心价值）
 
-**实测：65%+ 任务可用低成本 GLM 完成，效果无差别。**
+OctoClaw 现在的成本控制不再依赖旧的 `balanced / cost / quality / private` 档位。
 
-| 任务等级 | 典型任务 | 平衡模式 | 费用 |
-|---------|---------|---------|------|
-| trivial | 改配置、加文字 | GLM | 💰 |
-| simple | 写脚本、改单文件 | GLM | 💰 |
-| normal | 写代码、调 API | GLM | 💰 |
-| hard | 复杂逻辑、多文件 | Sonnet | 💰💰 |
-| deep | 复杂架构、深度分析 | Sonnet | 💰💰 |
+当前口径是：
 
-GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整体成本大幅降低。
+- 统一默认 `auto`
+- 按 `worker_pool / phase / profile / route` 选择模型
+- 让 `runner` 吃掉轻量 shell / API / 状态检查任务
+- 让 `research / code / review` 走各自更合适的模型与执行面
 
 ---
 
@@ -85,9 +81,9 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
    │  ① 立即输出文字回复（零工具调用，零阻塞）
    │  ② 解析任务 → route / dispatch → runner 或 ClawTeam/tmux 子工位
    │
-   ├──► 💪 鲸力手 ──► task-state.json ──► ✅ done
-   ├──► 🔍 梭鱼眼 ──► task-state.json ──► ✅ done
-   └──► ✍️ 墨鱼手 ──► task-state.json ──► ✅ done
+   ├──► octoclaw-code ─────► task-state.json ──► ✅ done
+   ├──► octoclaw-research ─► task-state.json ──► ✅ done
+   └──► octoclaw-review ───► task-state.json ──► ✅ done
                              │
                              ▼
                   🦅 patrol cron（每5分钟）
@@ -179,51 +175,37 @@ GLM ≈ Sonnet 的 1/10 费用。日常 trivial/simple/normal 占大多数，整
 
 ---
 
-## 四、🦑 8 只触手
+## 四、🦑 统一 Worker Pools
 
-| 触手 | label | 适合任务 |
-|------|-------|---------|
-| 💪 鲸力手 | octopus-power | 复杂开发、架构重构、大型代码变更 |
-| 🔍 梭鱼眼 | octopus-scout | 调研、对比分析、查资料、排查根因 |
-| ✍️ 墨鱼手 | octopus-writer | 写文档、报告、总结、翻译 |
-| 🔧 螃蟹手 | octopus-fix | Bug 修复、精细调整、code review |
-| 🧪 海胆手 | octopus-test | 测试、质量检查、边界条件验证 |
-| 📊 章鱼脑 | octopus-analyze | 数据分析、日志分析、决策支持 |
-| 🏃 飞鱼腿 | octopus-runner | 脚本运行、API 调用、查状态 |
-| 🐦 鸽手 | octopus-feishu | 飞书消息、文档、卡片、API 操作 |
+| Worker Pool | 适合任务 |
+|-------------|---------|
+| `octoclaw-runner` | 脚本运行、API 调用、只读检查、状态采集 |
+| `octoclaw-research` | 调研、收集、分析、写建议、写报告 |
+| `octoclaw-code` | Bug 修复、实现、补脚本、代码改动 |
+| `octoclaw-review` | 测试、验证、回归、质量把关 |
 
 ---
 
-## 五、⚙️ 调度模式与模型选择
+## 五、⚙️ 自动选模与运行策略
 
-### 5.1 调度模式
+### 5.1 默认策略
 
-读取 `/workspace/tmp/octopus-mode.json`（默认 balanced）：
+默认使用 `auto`，并以 `policy-first` 方式决定模型与执行面：
 
-| 模式 | trivial/simple/normal | hard/deep | 并发上限 |
-|------|----------------------|-----------|---------|
-| ⚖️ **balanced（默认）** | GLM | Sonnet | 5 |
-| 🎯 **quality** | Sonnet | Opus | 3 |
-| 💰 **cost** | GLM | Sonnet | 3 |
-| 🔒 **private** | GLM | GLM | 5 |
+- 先做 `route`
+- 再由 runtime policy 合并 `worker_pool / phase / profile / route`
+- 非 `runner` 场景再交给 `resolve-model.py`
 
-**用户意图覆盖**（当次有效）：
-- "用最强模型"/"不惜成本" → 全触手 Opus
-- "保密"/"私有模型" → 全触手 GLM
+### 5.2 真实输入层
 
-### 5.2 模型缓存（30分钟）
+当前自动选模更关注这些输入：
 
-**缓存文件**：`/tmp/octopus-model-cache.json`（ttl=1800秒）
-
-**spawn 前优先缓存**：
-1. 缓存存在且未过期 + mode/ironclaw_guarded 未变化 → 直接读 `models[tier]`
-2. 缓存无效 → 执行 `resolve-model.py --tier {tier}` 并写入缓存
-3. 收到铁甲虾降级告警 → 强制 `rm -f /tmp/octopus-model-cache.json`
-
-```bash
-# 获取模型（缓存优先）
-MODEL=$(python3 /workspace/openclaw/skills/octopus/lib/resolve-model.py --tier normal)
-```
+- `worker_pool`
+- `work_type`
+- `phase`
+- `profile`
+- `route`
+- 本地模型测速、价格、套餐、健康状态
 
 ### 5.3 铁甲虾协作（软依赖）
 
@@ -325,8 +307,8 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert \
 ```bash
 # 开始执行（子 Agent 第一步，必须执行）
 python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
-  upsert --id task-001 --label octopus-fix --model sonnet \
-  --status running --expected-done "+5min"
+  upsert --id task-001 --worker-pool octoclaw-code --work-type code --phase implement \
+  --model sonnet --status running --expected-done "+5min"
 
 # 标记完成
 python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
@@ -517,7 +499,7 @@ python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
 # 强制刷新任务面板
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
 
-# 紧急关闭（禁用，保留配置）
+# 紧急关闭（禁用，保留配置；当前兼容路径仍在 /tmp/octopus-*）
 touch /workspace/tmp/octopus-disabled
 
 # 重新启用

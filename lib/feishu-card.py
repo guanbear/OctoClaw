@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 飞书任务面板卡片工具
-用于八爪鱼（Octopus）多 Agent 调度器，在飞书 DM 中展示和更新任务状态卡片
+用于八爪鱼（OctoClaw）多 Agent 调度器，在飞书 DM 中展示和更新任务状态卡片
 
 用法:
   python3 lib/feishu-card.py send '<tasks_json>'

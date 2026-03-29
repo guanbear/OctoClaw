@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared pricing helpers for Octopus."""
+"""Shared pricing helpers for OctoClaw."""
 
 from __future__ import annotations
 

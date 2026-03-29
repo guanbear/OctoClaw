@@ -1,7 +1,7 @@
 ---
-title: 八爪鱼多 Agent 降本提效落地路线图（2026-03-20）
+title: OctoClaw 多 Agent 降本提效落地路线图（2026-03-20）
 tags:
-  - octopus
+  - octoclaw
   - roadmap
   - multi-agent
   - cost-optimization
@@ -10,7 +10,9 @@ tags:
 created: 2026-03-20
 ---
 
-# 八爪鱼多 Agent 降本提效落地路线图
+# OctoClaw 多 Agent 降本提效落地路线图
+
+> 历史路线图归档：文件名与标题已迁移到 `OctoClaw`，正文保留了当时的部分术语与阶段表述。
 
 ## 一、目标重述
 
@@ -1006,7 +1008,7 @@ runner 的模型策略与其他角色完全不同：
 示例：
 
 ```text
-🐙 Octopus
+🐙 OctoClaw
 运行中 3 | 排队 1 | 待确认 1 | 异常 1
 
 RUNNING

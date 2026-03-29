@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified Octopus task dispatcher.
+"""Unified OctoClaw task dispatcher.
 
 - Ask octoclaw_route first
 - Fast lightweight tasks -> persistent runner
@@ -758,7 +758,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Unified Octopus dispatcher")
+    parser = argparse.ArgumentParser(description="Unified OctoClaw dispatcher")
     parser.add_argument("--task", required=True)
     parser.add_argument("--command", default="")
     parser.add_argument("--cwd", default="/workspace")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Octopus model catalog and auto-routing policy."""
+"""Build OctoClaw model catalog and auto-routing policy."""
 
 from __future__ import annotations
 
@@ -678,7 +678,7 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build Octopus model intelligence files")
+    parser = argparse.ArgumentParser(description="Build OctoClaw model intelligence files")
     parser.add_argument("command", choices=["refresh"])
     parser.add_argument("--mode", default="auto")
     args = parser.parse_args()

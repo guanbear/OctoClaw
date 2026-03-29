@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""High-level dispatcher for Octopus runner jobs."""
+"""High-level dispatcher for OctoClaw runner jobs."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ def runner_artifacts() -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dispatch a lightweight job to the persistent Octopus runner")
+    parser = argparse.ArgumentParser(description="Dispatch a lightweight job to the persistent OctoClaw runner")
     parser.add_argument("--id", default="")
     parser.add_argument("--command", required=True)
     parser.add_argument("--summary", default="")

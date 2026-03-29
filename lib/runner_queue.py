@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Octopus runner queue helpers."""
+"""OctoClaw runner queue helpers."""
 
 from __future__ import annotations
 
@@ -247,7 +247,7 @@ def cmd_status(_args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Octopus runner queue")
+    parser = argparse.ArgumentParser(description="OctoClaw runner queue")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("ensure")

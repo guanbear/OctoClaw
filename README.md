@@ -511,8 +511,8 @@ Heavier protocol rules are only turned on for complex `spawn_single` / `spawn_mu
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
 - [LICENSE](./LICENSE)
 
-## Design Notes
+## Archived Design Notes
 
 - [SKILL.md](./SKILL.md)
-- [octopus-direction-analysis-2026-03-19.md](./octopus-direction-analysis-2026-03-19.md)
-- [octopus-roadmap-multi-agent-cost-speed-2026-03-20.md](./octopus-roadmap-multi-agent-cost-speed-2026-03-20.md)
+- [octoclaw-direction-analysis-2026-03-19.md](./octoclaw-direction-analysis-2026-03-19.md)
+- [octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md](./octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md)

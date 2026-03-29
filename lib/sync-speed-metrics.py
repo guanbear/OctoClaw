@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize local speed metrics for Octopus auto routing."""
+"""Normalize local speed metrics for OctoClaw auto routing."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def set_override(model_id: str, ttft_ms: float | None, output_tps: float | None,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sync Octopus local speed metrics")
+    parser = argparse.ArgumentParser(description="Sync OctoClaw local speed metrics")
     parser.add_argument("command", choices=["sync", "set"])
     parser.add_argument("--model")
     parser.add_argument("--ttft-ms", type=float)

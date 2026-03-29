@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generic Octopus status renderers for text-only environments."""
+"""Generic OctoClaw status renderers for text-only environments."""
 
 from __future__ import annotations
 

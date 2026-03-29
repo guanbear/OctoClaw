@@ -165,6 +165,21 @@ def compact_text(text: str, limit: int = 120) -> str:
     return collapsed[: limit - 1].rstrip() + "…"
 
 
+def parse_iso(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except ValueError:
+        return None
+
+
 def _task_id_map(tasks: list) -> dict:
     return {str(task.get("id", "") or ""): task for task in tasks if isinstance(task, dict) and str(task.get("id", "") or "").strip()}
 
@@ -944,6 +959,88 @@ def cmd_list(args):
         print(f"{sid:<35} {status:<14} {model:<20} {summary}")
 
 
+def cmd_archive_stale_dispatched(args):
+    threshold = max(1, int(args.minutes))
+    cutoff = datetime.now(timezone.utc).astimezone() - timedelta(minutes=threshold)
+    touched: list[tuple[dict, str]] = []
+
+    if not os.path.exists(STATE_FILE):
+        print("[ok] archived_stale_dispatched count=0")
+        return
+
+    with open(STATE_FILE, "a+") as fp:
+        fcntl.flock(fp, fcntl.LOCK_EX)
+        state = load_state(fp)
+        tasks = state.get("tasks", [])
+        if not isinstance(tasks, list):
+            tasks = []
+
+        archived = 0
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            if str(task.get("status", "") or "").strip().lower() != "dispatched":
+                continue
+            if args.require_empty_owner and str(task.get("owner", "") or "").strip():
+                continue
+
+            observed_at = (
+                parse_iso(str(task.get("updated_at", "") or ""))
+                or parse_iso(str(task.get("last_observed_at", "") or ""))
+                or parse_iso(str(task.get("spawned_at", "") or ""))
+            )
+            if observed_at is None or observed_at > cutoff:
+                continue
+
+            previous_status = str(task.get("status", "") or "")
+            original_summary = compact_text(str(task.get("summary", "") or task.get("task_description", "") or task.get("id", "")), 160)
+            task["status"] = "deferred"
+            task["updated_at"] = now_iso()
+            task["completed_at"] = now_iso()
+            task["recovery_action"] = "maintenance_archived_stale_dispatched"
+            task["summary"] = f"archived stale dispatched during maintenance: {original_summary}"
+
+            artifacts = task.get("artifacts", {})
+            if not isinstance(artifacts, dict):
+                artifacts = {}
+            artifacts["maintenance_archive"] = {
+                "reason": str(args.reason or "").strip() or "stale dispatched cleanup",
+                "archived_at": task["completed_at"],
+                "threshold_minutes": threshold,
+            }
+            task["artifacts"] = artifacts
+
+            report_path = str(task.get("report_path", "") or "").strip()
+            if report_path and not os.path.exists(report_path):
+                os.makedirs(os.path.dirname(report_path), exist_ok=True)
+                with open(report_path, "w", encoding="utf-8") as fh:
+                    fh.write(
+                        "# OctoClaw Archived Stale Dispatch\n\n"
+                        f"- task_id: {task.get('id', '')}\n"
+                        f"- archived_at: {task['completed_at']}\n"
+                        f"- reason: {artifacts['maintenance_archive']['reason']}\n"
+                        f"- previous_status: {previous_status}\n\n"
+                        "## Summary\n"
+                        f"{task['summary']}\n"
+                    )
+
+            normalized = normalize_task_record(task)
+            task.clear()
+            task.update(normalized)
+            touched.append((dict(task), previous_status))
+            archived += 1
+            if args.limit and archived >= args.limit:
+                break
+
+        state["tasks"] = cleanup_old(tasks)
+        save_state(fp, state)
+
+    for record, previous_status in touched:
+        sync_task(record, event_type="deferred", previous_status=previous_status)
+        _sync_task_anchor(record, previous_status)
+    print(f"[ok] archived_stale_dispatched count={len(touched)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Atomic task-state.json updater")
     sub = parser.add_subparsers(dest="command")
@@ -1006,6 +1103,12 @@ def main():
     # list
     sub.add_parser("list")
 
+    p_archive = sub.add_parser("archive-stale-dispatched")
+    p_archive.add_argument("--minutes", type=int, default=20)
+    p_archive.add_argument("--limit", type=int, default=0)
+    p_archive.add_argument("--reason", default="stale dispatched cleanup")
+    p_archive.add_argument("--require-empty-owner", dest="require_empty_owner", type=parse_bool_arg, default=True)
+
     args = parser.parse_args()
     if args.command == "upsert":
         cmd_upsert(args)
@@ -1015,6 +1118,8 @@ def main():
         cmd_failed(args)
     elif args.command == "list":
         cmd_list(args)
+    elif args.command == "archive-stale-dispatched":
+        cmd_archive_stale_dispatched(args)
     else:
         parser.print_help()
         sys.exit(1)

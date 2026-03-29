@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-![八爪鱼 Octopus](./banner.png)
+![OctoClaw 横幅](./banner.png)
 
 > 面向 OpenClaw 的成本敏感多 Agent 调度层。
 
@@ -26,25 +26,14 @@ OctoClaw 不是单纯的模型路由器，也不是单纯的 agent 模板。
 - 基于 patrol 的恢复与重派
 - 面向纯文本环境的状态渲染
 
-## 成本优化
+## 自动选模
 
-| 任务等级 | 典型任务 | 推荐能力档位 | 费用 |
-|---------|---------|--------------|------|
-| trivial | 改配置、加文字 | 低成本快模型 | 低 |
-| simple | 写脚本、改单文件 | 低成本通用模型 | 低 |
-| normal | 写代码、调 API | 中档执行模型 | 低到中 |
-| hard | 复杂逻辑、多文件 | 强推理/强编码模型 | 中 |
-| deep | 复杂架构、深度分析 | 顶级推理/审阅模型 | 中到高 |
+OctoClaw 现在默认采用 `auto` 的 `policy-first` 选模方式：
 
-### 调度模式
-
-| 模式 | 适用场景 | 低阶任务 | 高阶任务 |
-|------|---------|---------------|-----------|
-| `balanced` | 日常使用 | 低成本通用模型 | 更强的推理/编码模型 |
-| `quality` | 重要任务 | 强模型优先 | 顶级模型按需升级 |
-| `cost` | 批量任务 | 尽量便宜 | 必要时才升级 |
-| `private` | 敏感数据 | 私有/自部署模型 | 私有/自部署模型 |
-| `auto` | 自动分配 | 按本地模型、速度与能力动态选择 | 按本地模型、速度与能力动态选择 |
+- 主输入维度是 `worker_pool / phase / profile / route`
+- `model-policy.json` 可用时就是运行时真相源
+- `octoclaw-mode.json` 只保留 `auto` 和 `custom`
+- 不再把 `balanced / quality / cost / private` 视为新的默认运行模式
 
 ## 关键能力
 
@@ -176,8 +165,8 @@ WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 .
 - [RELEASE_NOTES_v0.1.0.md](./RELEASE_NOTES_v0.1.0.md)
 - [LICENSE](./LICENSE)
 
-## 相关文档
+## 历史设计归档
 
 - [SKILL.md](./SKILL.md)
-- [octopus-direction-analysis-2026-03-19.md](./octopus-direction-analysis-2026-03-19.md)
-- [octopus-roadmap-multi-agent-cost-speed-2026-03-20.md](./octopus-roadmap-multi-agent-cost-speed-2026-03-20.md)
+- [octoclaw-direction-analysis-2026-03-19.md](./octoclaw-direction-analysis-2026-03-19.md)
+- [octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md](./octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md)

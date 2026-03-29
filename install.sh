@@ -203,14 +203,23 @@ except Exception:
 }
 
 _openclaw_cron_list() {
-    local attempt output
-    for attempt in 1 2 3; do
-        if output="$(timeout 20 openclaw cron list 2>/tmp/octoclaw-cron-cli.err)"; then
+    local output=""
+    if output="$(_openclaw_cron_store_list 2>/dev/null)"; then
+        if [ -n "$output" ]; then
             printf '%s\n' "$output"
             return 0
         fi
-        sleep 2
-    done
+    fi
+    if output="$(_openclaw_cron_api_list 2>/dev/null)"; then
+        if [ -n "$output" ]; then
+            printf '%s\n' "$output"
+            return 0
+        fi
+    fi
+    if output="$(timeout 8 openclaw cron list 2>/tmp/octoclaw-cron-cli.err)"; then
+        printf '%s\n' "$output"
+        return 0
+    fi
     return 1
 }
 
@@ -234,6 +243,55 @@ for job in jobs:
     if job.get("name") == name:
         print(job.get("id", ""))
         break
+PY
+}
+
+_openclaw_cron_store_list() {
+    python3 - "$OPENCLAW_CRON_JOBS_FILE" <<'PY' 2>/dev/null
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(1)
+
+with path.open() as f:
+    data = json.load(f)
+
+jobs = data.get("jobs", []) if isinstance(data, dict) else []
+for job in jobs:
+    job_id = str(job.get("id", "") or "").strip()
+    name = str(job.get("name", "") or "").strip()
+    if not name:
+        continue
+    print(f"{job_id} {name}".strip())
+PY
+}
+
+_openclaw_cron_api_list() {
+    local gw_url gw_token
+    gw_url=$(_get_gateway_url)
+    gw_token=$(_get_gateway_token)
+    curl -s --max-time 8 \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        "$gw_url/api/cron/jobs" 2>/dev/null | \
+        python3 - <<'PY' 2>/dev/null
+import json
+import sys
+
+raw = sys.stdin.read().strip()
+if not raw:
+    raise SystemExit(1)
+
+data = json.loads(raw)
+jobs = data if isinstance(data, list) else data.get("jobs", [])
+for job in jobs:
+    job_id = str(job.get("id", "") or "").strip()
+    name = str(job.get("name", "") or "").strip()
+    if not name:
+        continue
+    print(f"{job_id} {name}".strip())
 PY
 }
 
@@ -272,16 +330,16 @@ _openclaw_cron_exists() {
     if _openclaw_cron_store_id_by_name "$cron_name" >/dev/null 2>&1; then
         return 0
     fi
-    _openclaw_cron_list 2>/dev/null | grep -q "$cron_name"
+    _openclaw_cron_list 2>/dev/null | awk -v name="$cron_name" '$2 == name {found=1} END {exit found ? 0 : 1}'
 }
 
 _openclaw_cron_add() {
     local attempt
-    for attempt in 1 2 3; do
-        if timeout 30 openclaw cron add "$@"; then
+    for attempt in 1 2; do
+        if timeout 12 openclaw cron add "$@"; then
             return 0
         fi
-        sleep 2
+        sleep 1
     done
     return 1
 }
@@ -294,16 +352,33 @@ _openclaw_cron_id_by_name() {
         printf '%s\n' "$cron_id"
         return 0
     fi
+    cron_id="$(_openclaw_cron_api_list 2>/dev/null | awk -v name="$cron_name" '$2 == name {print $1; exit}' || true)"
+    if [ -n "$cron_id" ]; then
+        printf '%s\n' "$cron_id"
+        return 0
+    fi
     _openclaw_cron_list 2>/dev/null | awk -v name="$cron_name" '$2 == name {print $1; exit}'
 }
 
 _openclaw_cron_remove_by_name() {
-    local cron_name="$1" cron_id
+    local cron_name="$1" cron_id gw_url gw_token http_code
     cron_id="$(_openclaw_cron_id_by_name "$cron_name")"
     if [ -z "$cron_id" ]; then
+        _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
         return 0
     fi
-    if timeout 20 openclaw cron rm "$cron_id" >/dev/null 2>&1; then
+    gw_url=$(_get_gateway_url)
+    gw_token=$(_get_gateway_token)
+    http_code="$(curl -s --max-time 8 -o /dev/null -w '%{http_code}' \
+        -X DELETE \
+        ${gw_token:+-H "Authorization: Bearer $gw_token"} \
+        "$gw_url/api/cron/jobs/$cron_id" 2>/dev/null || true)"
+    if [ "$http_code" = "200" ] || [ "$http_code" = "204" ] || [ "$http_code" = "404" ]; then
+        _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
+        return 0
+    fi
+    if timeout 8 openclaw cron rm "$cron_id" >/dev/null 2>&1; then
+        _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
         return 0
     fi
     _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
@@ -1346,7 +1421,7 @@ install_patrol_cron() {
             echo "⚠️  openclaw CLI 未找到，跳过版本检查 cron 注册"
             return 0
         fi
-        echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
+        echo "📡 注册 OctoClaw 版本检查 cron（每天09:00 Asia/Shanghai）..."
         if _openclaw_cron_exists "octopus-update-check"; then
             echo "ℹ️  检测到旧版 octopus-update-check cron，迁移删除中..."
             _openclaw_cron_remove_by_name "octopus-update-check"
@@ -1393,7 +1468,7 @@ except Exception:
                 echo "⚠️  未获取到 open_id，patrol delivery fallback → feishu announce"
             fi
 
-            PATROL_MSG='运行八爪鱼巡逻脚本，检查任务状态，有异常则发飞书卡片。
+            PATROL_MSG='运行 OctoClaw 巡逻脚本，检查任务状态，有异常则发飞书卡片。
 
 执行以下命令：
 ```bash
@@ -1415,7 +1490,7 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
             fi
         fi
 
-        echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
+        echo "📡 注册 OctoClaw 版本检查 cron（每天09:00 Asia/Shanghai）..."
         if _openclaw_cron_exists "octopus-update-check"; then
             echo "ℹ️  检测到旧版 octopus-update-check cron，迁移删除中..."
             _openclaw_cron_remove_by_name "octopus-update-check"
@@ -1433,7 +1508,7 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
         --session isolated \
         --timeout-seconds 120 \
         --no-deliver \
-        --message "执行八爪鱼版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1"; then
+        --message "执行 OctoClaw 版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1"; then
         echo "✅ octoclaw-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
     else
         echo "⚠️  版本检查 cron 注册失败，可手动在 OpenClaw 中添加"
