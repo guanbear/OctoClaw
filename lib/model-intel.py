@@ -11,7 +11,7 @@ import subprocess
 from datetime import datetime, timezone
 
 from model_health import resolve_model_health, selection_penalty_for_role
-from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, save_json
+from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, load_octopus_config, save_json
 from model_plan_state import compute_plan_value_score, ensure_plan_state_file, get_plan_state_entry, preferred_fallback_model, should_fallback_due_to_plan
 from model_pricing import ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens
 
@@ -102,6 +102,18 @@ ROLE_SIZE_PREFERENCE = {
     "analyze": {"nano": 0.30, "mini": 0.56, "base": 0.88, "strong": 1.00},
     "power": {"nano": 0.20, "mini": 0.45, "base": 0.82, "strong": 1.00},
     "main": {"nano": 0.18, "mini": 0.40, "base": 0.78, "strong": 1.00},
+}
+
+DEFAULT_MAIN_SELECTION = {
+    "min_reasoning": 0.82,
+    "min_coding": 0.82,
+    "min_openclaw": 0.80,
+    "min_reliability": 0.82,
+    "min_benchmark_support": 0.78,
+    "min_capability_score": 0.86,
+    "min_size_class": "base",
+    "relax_step": 0.03,
+    "max_relax_rounds": 2,
 }
 
 
@@ -380,6 +392,112 @@ def compute_source_factor(source_name: str, source_registry: dict, benchmark_met
     return max(0.2, min(1.0, confidence_factor * freshness_factor * family_penalty))
 
 
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def resolve_main_selection_config(config: dict | None = None) -> dict:
+    cfg = config if isinstance(config, dict) else load_octopus_config()
+    section = cfg.get("model_auto", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(section, dict):
+        section = {}
+    override = section.get("main_selection", {})
+    if not isinstance(override, dict):
+        override = {}
+    merged = dict(DEFAULT_MAIN_SELECTION)
+    merged.update(override)
+    merged["min_size_class"] = str(merged.get("min_size_class", "base") or "base").strip() or "base"
+    merged["relax_step"] = max(0.0, float(merged.get("relax_step", DEFAULT_MAIN_SELECTION["relax_step"]) or 0.0))
+    merged["max_relax_rounds"] = max(0, int(merged.get("max_relax_rounds", DEFAULT_MAIN_SELECTION["max_relax_rounds"]) or 0))
+    for key in (
+        "min_reasoning",
+        "min_coding",
+        "min_openclaw",
+        "min_reliability",
+        "min_benchmark_support",
+        "min_capability_score",
+    ):
+        merged[key] = clamp01(merged.get(key, DEFAULT_MAIN_SELECTION[key]))
+    return merged
+
+
+def compute_main_capability_score(
+    *,
+    reasoning: float,
+    coding: float,
+    openclaw: float,
+    reliability: float,
+    benchmark_support: float,
+) -> float:
+    return clamp01(
+        0.28 * reasoning
+        + 0.24 * coding
+        + 0.20 * openclaw
+        + 0.14 * reliability
+        + 0.14 * benchmark_support
+    )
+
+
+def evaluate_main_candidate(
+    *,
+    model_id: str,
+    size_class: str,
+    reasoning: float,
+    coding: float,
+    openclaw: float,
+    reliability: float,
+    benchmark_support: float,
+    capability_score: float,
+    config: dict,
+    relax_round: int = 0,
+) -> dict:
+    relax_step = float(config.get("relax_step", 0.0) or 0.0)
+    relax_offset = relax_step * max(0, relax_round)
+    min_size_class = str(config.get("min_size_class", "base") or "base").strip() or "base"
+    min_size_rank = SIZE_CLASS_ORDER.get(min_size_class, SIZE_CLASS_ORDER["base"])
+    actual_size_rank = SIZE_CLASS_ORDER.get(size_class, SIZE_CLASS_ORDER["base"])
+    thresholds = {
+        "reasoning": max(0.0, float(config.get("min_reasoning", 0.0) or 0.0) - relax_offset),
+        "coding": max(0.0, float(config.get("min_coding", 0.0) or 0.0) - relax_offset),
+        "openclaw": max(0.0, float(config.get("min_openclaw", 0.0) or 0.0) - relax_offset),
+        "reliability": max(0.0, float(config.get("min_reliability", 0.0) or 0.0) - relax_offset),
+        "benchmark_support": max(0.0, float(config.get("min_benchmark_support", 0.0) or 0.0) - relax_offset),
+        "capability_score": max(0.0, float(config.get("min_capability_score", 0.0) or 0.0) - relax_offset),
+        "size_class": min_size_class,
+    }
+    failed_checks: list[str] = []
+    if actual_size_rank < min_size_rank:
+        failed_checks.append(f"size_class<{min_size_class}")
+    if reasoning < thresholds["reasoning"]:
+        failed_checks.append("reasoning")
+    if coding < thresholds["coding"]:
+        failed_checks.append("coding")
+    if openclaw < thresholds["openclaw"]:
+        failed_checks.append("openclaw")
+    if reliability < thresholds["reliability"]:
+        failed_checks.append("reliability")
+    if benchmark_support < thresholds["benchmark_support"]:
+        failed_checks.append("benchmark_support")
+    if capability_score < thresholds["capability_score"]:
+        failed_checks.append("capability_score")
+    return {
+        "model": model_id,
+        "eligible": not failed_checks,
+        "relax_round": max(0, relax_round),
+        "failed_checks": failed_checks,
+        "thresholds": thresholds,
+        "metrics": {
+            "reasoning": round(reasoning, 6),
+            "coding": round(coding, 6),
+            "openclaw": round(openclaw, 6),
+            "reliability": round(reliability, 6),
+            "benchmark_support": round(benchmark_support, 6),
+            "capability_score": round(capability_score, 6),
+            "size_class": size_class,
+        },
+    }
+
+
 def build_catalog() -> dict:
     ensure_pricing_file()
     ensure_plan_state_file()
@@ -467,7 +585,9 @@ def build_catalog() -> dict:
     return catalog
 
 
-def compute_policy(catalog: dict, mode: str = "auto") -> dict:
+def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None) -> dict:
+    runtime_config = config if isinstance(config, dict) else load_octopus_config()
+    main_selection_cfg = resolve_main_selection_config(runtime_config)
     models = [m for m in catalog.get("models", []) if m.get("available", True)]
     if not models:
         policy = {
@@ -477,6 +597,12 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
             "profiles": {},
             "worker_pools": {},
             "worker_pool_phases": {},
+            "main_selection": {
+                "selected_model": "",
+                "relax_round": 0,
+                "thresholds": dict(main_selection_cfg),
+                "candidates": [],
+            },
             "health": {
                 "generated_at": now_iso(),
                 "source_file": MODEL_HEALTH_FILE,
@@ -504,6 +630,7 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
     health_state = load_json(MODEL_HEALTH_FILE)
     health_models: dict[str, dict] = {}
     health_penalties: dict[str, dict] = {}
+    main_candidate_evaluations: dict[str, dict] = {}
     enriched = []
     for model in models:
         pricing = model.get("pricing", {})
@@ -532,6 +659,13 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         availability_score = 0.0 if should_fallback_due_to_plan(model["id"]) else 1.0
         size_class = str(model.get("size_class", "base") or "base")
         size_preference = ROLE_SIZE_PREFERENCE
+        main_capability_score = compute_main_capability_score(
+            reasoning=reasoning,
+            coding=coding,
+            openclaw=openclaw,
+            reliability=reliability,
+            benchmark_support=benchmark_support,
+        )
         local_speed_present = isinstance(speed.get("ttft_ms"), (int, float)) and isinstance(speed.get("output_tps"), (int, float))
         local_speed_boost = 1.0 if local_speed_present else 0.88
         fast_lane_bonus = 0.0
@@ -554,6 +688,18 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         }
         health_models[model["id"]] = health_entry
         health_penalties[model["id"]] = role_health_penalties
+        main_candidate_evaluations[model["id"]] = evaluate_main_candidate(
+            model_id=model["id"],
+            size_class=size_class,
+            reasoning=reasoning,
+            coding=coding,
+            openclaw=openclaw,
+            reliability=reliability,
+            benchmark_support=benchmark_support,
+            capability_score=main_capability_score,
+            config=main_selection_cfg,
+            relax_round=0,
+        )
 
         role_scores = {
             "runner": (
@@ -592,8 +738,50 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         }
         enriched.append((model, role_scores))
 
+    main_selection_meta = {
+        "selected_model": "",
+        "relax_round": 0,
+        "thresholds": dict(main_selection_cfg),
+        "candidates": [],
+        "selection_path": "ranked",
+    }
+
     def pick(role: str) -> str:
         ordered = sorted(enriched, key=lambda item: item[1][role], reverse=True)
+        full_ordered = list(ordered)
+        if role == "main":
+            selected_round = 0
+            eligible_ordered: list[tuple[dict, dict]] = []
+            candidate_rows: list[dict] = []
+            for relax_round in range(int(main_selection_cfg.get("max_relax_rounds", 0) or 0) + 1):
+                candidate_rows = []
+                eligible_ordered = []
+                for model, scores in ordered:
+                    evaluation = evaluate_main_candidate(
+                        model_id=model["id"],
+                        size_class=str(model.get("size_class", "base") or "base"),
+                        reasoning=float(model.get("scores", {}).get("reasoning", 0.65)),
+                        coding=float(model.get("scores", {}).get("coding", 0.65)),
+                        openclaw=float(model.get("scores", {}).get("openclaw", 0.65)),
+                        reliability=float(model.get("scores", {}).get("reliability", 0.70)),
+                        benchmark_support=main_candidate_evaluations.get(model["id"], {}).get("metrics", {}).get("benchmark_support", 0.0),
+                        capability_score=main_candidate_evaluations.get(model["id"], {}).get("metrics", {}).get("capability_score", 0.0),
+                        config=main_selection_cfg,
+                        relax_round=relax_round,
+                    )
+                    row = dict(evaluation)
+                    row["score"] = round(float(scores["main"]), 6)
+                    candidate_rows.append(row)
+                    if evaluation["eligible"]:
+                        eligible_ordered.append((model, scores))
+                if eligible_ordered:
+                    selected_round = relax_round
+                    break
+            if eligible_ordered:
+                ordered = eligible_ordered
+            main_selection_meta["relax_round"] = selected_round
+            main_selection_meta["candidates"] = candidate_rows
+            main_selection_meta["selection_path"] = "capability_gate"
         cooldown_candidates: list[str] = []
         for model, _ in ordered:
             health_entry = health_models.get(model["id"], {})
@@ -605,12 +793,42 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
                 if fallback:
                     for candidate, _ in ordered:
                         if candidate["id"] == fallback:
+                            if role == "main":
+                                main_selection_meta["selected_model"] = candidate["id"]
                             return candidate["id"]
                     continue
+            if role == "main":
+                main_selection_meta["selected_model"] = model["id"]
             return model["id"]
+        if role == "main":
+            for model, _ in full_ordered:
+                if model["id"] in cooldown_candidates:
+                    continue
+                health_entry = health_models.get(model["id"], {})
+                if str(health_entry.get("state", "healthy") or "healthy").strip().lower() == "cooldown":
+                    continue
+                if should_fallback_due_to_plan(model["id"]):
+                    fallback = preferred_fallback_model(model["id"])
+                    if fallback:
+                        for candidate, _ in full_ordered:
+                            if candidate["id"] == fallback:
+                                main_selection_meta["selected_model"] = candidate["id"]
+                                main_selection_meta["selection_path"] = "health_fallback"
+                                return candidate["id"]
+                        continue
+                main_selection_meta["selected_model"] = model["id"]
+                main_selection_meta["selection_path"] = "health_fallback"
+                return model["id"]
         if cooldown_candidates:
+            if role == "main":
+                main_selection_meta["selected_model"] = cooldown_candidates[0]
+                main_selection_meta["selection_path"] = "cooldown_only"
             return cooldown_candidates[0]
-        return ordered[0][0]["id"]
+        if ordered:
+            if role == "main":
+                main_selection_meta["selected_model"] = ordered[0][0]["id"]
+            return ordered[0][0]["id"]
+        return ""
 
     profiles = {
         "ops-fast": pick("runner"),
@@ -619,12 +837,14 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         "code": pick("fix"),
         "review": pick("test"),
     }
+    main_model = pick("main")
+    main_selection_meta["selected_model"] = main_model
     worker_pools = {
         "octoclaw-runner": profiles["ops-fast"],
         "octoclaw-research": profiles["research"],
         "octoclaw-code": profiles["code"],
         "octoclaw-review": profiles["review"],
-        "octoclaw-main": pick("main"),
+        "octoclaw-main": main_model,
     }
     worker_pool_phases = {
         "octoclaw-runner": {
@@ -643,17 +863,18 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
             "verify": pick("test"),
         },
         "octoclaw-main": {
-            "orchestrate": pick("main"),
+            "orchestrate": main_model,
         },
     }
     sources = sorted({ref for model in models for ref in model.get("source_refs", [])})
     policy = {
         "generated_at": now_iso(),
         "mode": mode,
-        "main_model": pick("main"),
+        "main_model": main_model,
         "profiles": profiles,
         "worker_pools": worker_pools,
         "worker_pool_phases": worker_pool_phases,
+        "main_selection": main_selection_meta,
         "family_routing": {
             model["id"]: {
                 "family": model.get("family"),
@@ -684,7 +905,7 @@ def main():
     args = parser.parse_args()
 
     catalog = build_catalog()
-    policy = compute_policy(catalog, mode=args.mode)
+    policy = compute_policy(catalog, mode=args.mode, config=load_octopus_config())
     print(json.dumps({"catalog": MODEL_CATALOG_FILE, "policy": MODEL_POLICY_FILE, "main_model": policy.get("main_model", "")}, ensure_ascii=False))
 
 

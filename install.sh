@@ -1255,6 +1255,17 @@ cfg = {
     "enabled": "${MODEL_AUTO_ENABLED}".lower() == "true",
     "prefer_private": "${MODEL_AUTO_PREFER_PRIVATE}".lower() == "true",
     "prefer_low_cost": "${MODEL_AUTO_PREFER_LOW_COST}".lower() == "true",
+    "main_selection": {
+      "min_reasoning": 0.82,
+      "min_coding": 0.82,
+      "min_openclaw": 0.80,
+      "min_reliability": 0.82,
+      "min_benchmark_support": 0.78,
+      "min_capability_score": 0.86,
+      "min_size_class": "base",
+      "relax_step": 0.03,
+      "max_relax_rounds": 2,
+    },
   },
   "workbench": {
     "supervisor_mode": "${SUPERVISOR_MODE}",

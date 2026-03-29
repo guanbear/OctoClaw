@@ -204,18 +204,32 @@ def render_main_model_drift_summary(drift: dict[str, Any]) -> list[str]:
         return ["🧭 主链漂移：disabled"]
 
     reason = str(drift.get("reason", "") or "").strip()
-    if reason in {"main_session_missing", "mode_not_managed", "expected_model_missing"}:
+    if reason in {"main_session_missing", "mode_not_managed", "expected_model_missing", "current_model_missing"}:
         mode_text = str(drift.get("current_mode", "") or "").strip()
         suffix = f" · {mode_text}" if mode_text else ""
         return [f"🧭 主链漂移：{reason}{suffix}"]
 
     expected_raw = str(drift.get("expected_model", "") or "").strip()
-    current_raw = str(drift.get("current_override", "") or drift.get("actual_model", "") or "").strip()
+    actual_raw = str(drift.get("actual_model", "") or "").strip()
+    override_raw = str(drift.get("current_override", "") or "").strip()
+    current_raw = str(drift.get("compared_model", "") or actual_raw or override_raw or "").strip()
     expected = short_model(expected_raw, limit=32)
     current = short_model(current_raw, limit=32) if current_raw else ""
+    lines: list[str] = []
     if bool(drift.get("drift", False)):
-        return [f"🧭 主链漂移：detected · expected {expected} · actual {current or 'unknown'}"]
-    return [f"🧭 主链漂移：aligned · {expected}"]
+        lines.append(f"🧭 主链漂移：detected · expected {expected} · actual {current or 'unknown'}")
+    else:
+        lines.append(f"🧭 主链漂移：aligned · {expected}")
+
+    if override_raw:
+        override = short_model(override_raw, limit=32)
+        if bool(drift.get("override_drift", False)) and not bool(drift.get("drift", False)) and actual_raw:
+            lines.append(f"   session override：{override}（stale, actual aligned）")
+        elif actual_raw and override_raw != actual_raw:
+            lines.append(f"   session override：{override}")
+    elif actual_raw:
+        lines.append("   session override：none")
+    return lines
 
 
 def operator_hint(task: dict[str, Any], limit: int = 28) -> str:

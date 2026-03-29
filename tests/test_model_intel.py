@@ -26,13 +26,16 @@ class ModelIntelTests(unittest.TestCase):
         self.assertEqual(model_ids, ["vendor/model-a", "vendor/model-b"])
 
     def test_compute_policy_empty_catalog_uses_new_fields_only(self) -> None:
-        with patch.object(model_intel, "save_json", return_value=True):
+        with patch.object(model_intel, "save_json", return_value=True), patch.object(
+            model_intel, "load_octopus_config", return_value={}
+        ):
             policy = model_intel.compute_policy({"models": []}, mode="auto")
         self.assertEqual(policy["mode"], "auto")
         self.assertEqual(policy["main_model"], "")
         self.assertEqual(policy["profiles"], {})
         self.assertEqual(policy["worker_pools"], {})
         self.assertEqual(policy["worker_pool_phases"], {})
+        self.assertIn("main_selection", policy)
         self.assertNotIn("labels", policy)
         self.assertNotIn("tiers", policy)
 
@@ -81,11 +84,62 @@ class ModelIntelTests(unittest.TestCase):
         }
         with patch.object(model_intel, "load_json", return_value=health_payload), patch.object(
             model_intel, "save_json", return_value=True
-        ):
+        ), patch.object(model_intel, "load_octopus_config", return_value={}):
             policy = model_intel.compute_policy(catalog, mode="auto")
         self.assertEqual(policy["main_model"], "model/fallback")
         self.assertEqual(policy["health"]["models"]["model/primary"]["state"], "cooldown")
         self.assertGreater(policy["health"]["selection_penalties"]["model/primary"]["main"], 0.5)
+
+    def test_compute_policy_applies_main_capability_floor(self) -> None:
+        catalog = {
+            "models": [
+                {
+                    "id": "model/mid-balanced",
+                    "available": True,
+                    "pricing": {"input": 0.3, "output": 0.9},
+                    "scores": {"coding": 0.83, "reasoning": 0.82, "openclaw": 0.81, "writing": 0.80, "reliability": 0.83},
+                    "benchmark_scores": {},
+                    "source_factors": {},
+                    "speed": {"ttft_ms": 1200, "output_tps": 90},
+                    "size_class": "base",
+                    "family": "test",
+                    "preferred_use": [],
+                    "upgrade_path": [],
+                    "fallback_path": [],
+                    "source_refs": [],
+                },
+                {
+                    "id": "model/strong-main",
+                    "available": True,
+                    "pricing": {"input": 4.0, "output": 16.0},
+                    "scores": {"coding": 0.95, "reasoning": 0.95, "openclaw": 0.92, "writing": 0.87, "reliability": 0.91},
+                    "benchmark_scores": {},
+                    "source_factors": {},
+                    "speed": {"ttft_ms": 5200, "output_tps": 52},
+                    "size_class": "strong",
+                    "family": "test",
+                    "preferred_use": [],
+                    "upgrade_path": [],
+                    "fallback_path": [],
+                    "source_refs": [],
+                },
+            ]
+        }
+        with patch.object(model_intel, "load_json", return_value={}), patch.object(
+            model_intel, "save_json", return_value=True
+        ), patch.object(
+            model_intel,
+            "load_octopus_config",
+            return_value={"model_auto": {"main_selection": {"max_relax_rounds": 0}}},
+        ):
+            policy = model_intel.compute_policy(catalog, mode="auto")
+
+        self.assertEqual(policy["main_model"], "model/strong-main")
+        self.assertEqual(policy["worker_pools"]["octoclaw-main"], "model/strong-main")
+        self.assertEqual(policy["main_selection"]["selected_model"], "model/strong-main")
+        mid = {row["model"]: row for row in policy["main_selection"]["candidates"]}["model/mid-balanced"]
+        self.assertFalse(mid["eligible"])
+        self.assertIn("capability_score", mid["failed_checks"])
 
 
 if __name__ == "__main__":

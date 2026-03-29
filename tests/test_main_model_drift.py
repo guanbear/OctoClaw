@@ -64,6 +64,7 @@ class MainModelDriftTests(unittest.TestCase):
             self.assertTrue(result["drift"])
             self.assertEqual(result["expected_model"], "omniroute/cx/gpt-5.4")
             self.assertEqual(result["current_override"], "zhipu/GLM-5.1")
+            self.assertEqual(result["comparison_source"], "current_override")
 
     def test_assess_reads_custom_main_model(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-main-drift-") as tmpdir:
@@ -85,6 +86,51 @@ class MainModelDriftTests(unittest.TestCase):
             )
             self.assertTrue(result["drift"])
             self.assertEqual(result["expected_model"], "custom/model")
+
+    def test_assess_prefers_actual_model_when_override_missing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-main-drift-") as tmpdir:
+            mode_path = Path(tmpdir) / "mode.json"
+            policy_path = Path(tmpdir) / "policy.json"
+            sessions_path = Path(tmpdir) / "sessions.json"
+            session_file = Path(tmpdir) / "session.jsonl"
+            mode_path.write_text(json.dumps({"mode": "auto"}), encoding="utf-8")
+            policy_path.write_text(json.dumps({"main_model": "omniroute/cx/gpt-5.4"}), encoding="utf-8")
+            session_file.write_text(
+                json.dumps(
+                    {
+                        "type": "message",
+                        "message": {
+                            "role": "assistant",
+                            "provider": "omniroute",
+                            "model": "cx/gpt-5.4",
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            sessions_path.write_text(
+                json.dumps(
+                    {
+                        "agent:main:main": {
+                            "channelSessionKey": "slack:dm:test",
+                            "modelOverride": "",
+                            "sessionFile": str(session_file),
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = main_model_drift.assess_main_model_drift(
+                config={"model_health": {"main_session_drift": {"enabled": True, "auto_recover": False}}},
+                main_session="slack:dm:test",
+                sessions_file=str(sessions_path),
+                mode_file=str(mode_path),
+                policy_file=str(policy_path),
+            )
+            self.assertFalse(result["drift"])
+            self.assertEqual(result["actual_model"], "omniroute/cx/gpt-5.4")
+            self.assertEqual(result["comparison_source"], "actual_model")
 
 
 if __name__ == "__main__":

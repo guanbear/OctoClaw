@@ -296,7 +296,31 @@ class StatusRenderTests(unittest.TestCase):
         )
         self.assertEqual(
             drifted_actual,
-            ["🧭 主链漂移：detected · expected omniroute/cx/gpt-5.4 · actual zhipu/GLM-5.1"],
+            [
+                "🧭 主链漂移：detected · expected omniroute/cx/gpt-5.4 · actual zhipu/GLM-5.1",
+                "   session override：none",
+            ],
+        )
+
+    def test_main_model_drift_summary_marks_stale_override_when_actual_aligned(self) -> None:
+        rendered = render_main_model_drift_summary(
+            {
+                "enabled": True,
+                "drift": False,
+                "reason": "aligned",
+                "expected_model": "omniroute/cx/gpt-5.4",
+                "actual_model": "omniroute/cx/gpt-5.4",
+                "current_override": "zhipu/GLM-5.1",
+                "override_drift": True,
+            }
+        )
+
+        self.assertEqual(
+            rendered,
+            [
+                "🧭 主链漂移：aligned · omniroute/cx/gpt-5.4",
+                "   session override：zhipu/GLM-5.1（stale, actual aligned）",
+            ],
         )
 
 

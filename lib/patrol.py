@@ -4004,6 +4004,8 @@ def check_main_model_drift():
 
     current_mode = str(assessment.get("current_mode", "") or "").strip()
     current_override = str(assessment.get("current_override", "") or "").strip()
+    actual_model = str(assessment.get("actual_model", "") or "").strip()
+    compared_model = str(assessment.get("compared_model", "") or actual_model or current_override or "").strip()
     expected_model = str(assessment.get("expected_model", "") or "").strip()
     auto_recover = bool(assessment.get("auto_recover", False))
 
@@ -4033,7 +4035,7 @@ def check_main_model_drift():
         )
         if send_text(msg):
             print("✅ check_main_model_drift: 文本通知已发送")
-        print(f"[drift-check] 主模型漂移已自动恢复：{current_override} → {expected_model}")
+        print(f"[drift-check] 主模型漂移已自动恢复：{compared_model or 'unset'} → {expected_model}")
         return
 
     with open(DRIFT_NOTICE_FILE, "w") as f:
@@ -4041,13 +4043,14 @@ def check_main_model_drift():
     msg = (
         f"⚠️ 八爪鱼：检测到主模型漂移\n"
         f"当前模式：{current_mode}\n"
-        f"当前主会话模型：{current_override or '未设置'}\n"
+        f"当前主会话模型：{actual_model or compared_model or '未设置'}\n"
+        f"当前 session override：{current_override or '未设置'}\n"
         f"策略期望主模型：{expected_model}\n"
         f"当前仅提醒，不自动改主会话。"
     )
     if send_text(msg):
         print("✅ check_main_model_drift: 文本通知已发送")
-    print(f"[drift-check] 检测到主模型漂移：{current_override or 'unset'} -> {expected_model}（notify-only）")
+    print(f"[drift-check] 检测到主模型漂移：{compared_model or 'unset'} -> {expected_model}（notify-only）")
 
 
 def main():

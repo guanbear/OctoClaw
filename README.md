@@ -465,6 +465,7 @@ How we use them:
 - PinchBench, Artificial Analysis, and Claw-Eval are primary benchmark inputs
 - OpenClaw live compatibility is a local feedback layer
 - OpenRouter rankings are secondary only; they help with ecosystem / routing confidence, not core capability ranking
+- `main_model` is chosen with a capability floor first, then ranked within eligible candidates; fast/cheap mid-tier models should not win the main brain slot just on latency or price
 
 What can be inferred automatically:
 

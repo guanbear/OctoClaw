@@ -52,7 +52,7 @@ from octopus_config import (
 )
 from clawteam_bridge import load_bridge_summary
 from model_health import load_model_health_state
-from main_model_drift import assess_main_model_drift
+from main_model_drift import assess_main_model_drift, load_actual_main_model
 from replay_summary import (
     DEFAULT_MAX_BLOCKED_SESSION_RATE,
     DEFAULT_MIN_DELEGATED_EVENTS,
@@ -140,80 +140,9 @@ def worker_pool_model_full(worker_pool):
     return str(policy_data.get("worker_pools", {}).get(worker_pool, "") or "").strip() or "?"
 
 
-def _extract_session_model_from_file(session_file):
-    if not session_file or not os.path.exists(session_file):
-        return ("", "")
-    try:
-        with open(session_file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except Exception:
-        return ("", "")
-
-    def is_real_inference_model(provider, model_id):
-        provider = str(provider or "").strip().lower()
-        model_id = str(model_id or "").strip().lower()
-        full = f"{provider}/{model_id}" if provider else model_id
-        if not model_id:
-            return False
-        ignored_prefixes = (
-            "openclaw/",
-            "system/",
-        )
-        ignored_models = {
-            "delivery-mirror",
-            "tool-result",
-        }
-        if full.startswith(ignored_prefixes):
-            return False
-        if model_id in ignored_models:
-            return False
-        return True
-
-    for raw in reversed(lines[-400:]):
-        try:
-            event = json.loads(raw)
-        except Exception:
-            continue
-        if event.get("type") == "custom" and event.get("customType") == "model-snapshot":
-            data = event.get("data") or {}
-            provider = str(data.get("provider") or "").strip()
-            model_id = str(data.get("modelId") or "").strip()
-            if is_real_inference_model(provider, model_id):
-                return (f"{provider}/{model_id}" if provider else model_id, "model-snapshot")
-        if event.get("type") == "model_change":
-            provider = str(event.get("provider") or "").strip()
-            model_id = str(event.get("modelId") or "").strip()
-            if is_real_inference_model(provider, model_id):
-                return (f"{provider}/{model_id}" if provider else model_id, "model_change")
-        if event.get("type") == "message":
-            msg = event.get("message") or {}
-            if msg.get("role") == "assistant":
-                provider = str(msg.get("provider") or "").strip()
-                model_id = str(msg.get("model") or "").strip()
-                if is_real_inference_model(provider, model_id):
-                    return (f"{provider}/{model_id}" if provider else model_id, "assistant-message")
-    return ("", "")
-
-
 def load_main_session_actual_model():
     session_key = resolve_main_session_key(config_data) or "agent:main:main"
-    session_index = load_json(MAIN_AGENT_SESSIONS_FILE) or {}
-    session_entry = session_index.get(session_key) or {}
-    if not session_entry and session_key:
-        for value in session_index.values():
-            if isinstance(value, dict) and str(value.get("channelSessionKey", "") or "").strip() == session_key:
-                session_entry = value
-                break
-    if not session_entry and session_key != "agent:main:main":
-        session_entry = session_index.get("agent:main:main") or {}
-    session_file = str(session_entry.get("sessionFile") or "").strip()
-    model_path, source = _extract_session_model_from_file(session_file)
-    return {
-        "session_key": session_key,
-        "session_file": session_file,
-        "model_path": model_path,
-        "source": source,
-    }
+    return load_actual_main_model(session_key, sessions_file=MAIN_AGENT_SESSIONS_FILE)
 
 
 def load_tasks():
@@ -298,9 +227,7 @@ session_thread_map = load_session_thread_map()
 session_binding_count = len(session_thread_map.get("bindings", {}) or {})
 session_thread_count = len(session_thread_map.get("threads", {}) or {})
 main_model = str(policy_data.get("main_model", "") or "").strip()
-main_drift = assess_main_model_drift(config=config_data)
-if actual_model and not str(main_drift.get("actual_model", "") or "").strip():
-    main_drift["actual_model"] = actual_model
+main_drift = assess_main_model_drift(config=config_data, actual_model=actual_model)
 workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
 tmux_session_name = str(workbench.get("tmux_session_name", "") or "").strip()
 
