@@ -577,7 +577,7 @@ def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert
     return fallback
 
 
-def _should_seed_task_anchor(record: dict, previous_status: str, anchor_messages: dict) -> bool:
+def _should_sync_task_anchor(record: dict, previous_status: str, anchor_messages: dict) -> bool:
     task_id = str(record.get("id", "") or "").strip()
     session_key = str(record.get("session_key", "") or "").strip()
     status = str(record.get("status", "") or "").strip().lower()
@@ -586,33 +586,37 @@ def _should_seed_task_anchor(record: dict, previous_status: str, anchor_messages
         return False
     if route == "direct":
         return False
-    if status not in {"queued", "dispatched", "running", "blocked", "needs_approval"}:
+    if status not in {"queued", "dispatched", "running", "blocked", "needs_approval", "done", "failed", "deferred"}:
         return False
-    if str(previous_status or "").strip():
-        return False
-    if isinstance(anchor_messages.get(task_id), dict) and str(anchor_messages[task_id].get("message_id", "") or "").strip():
-        return False
-    return True
+    existing_anchor = anchor_messages.get(task_id, {}) if isinstance(anchor_messages.get(task_id), dict) else {}
+    has_existing_message = bool(str(existing_anchor.get("message_id", "") or "").strip())
+    previous_value = str(previous_status or "").strip().lower()
+    if not previous_value:
+        return not has_existing_message
+    return previous_value != status or has_existing_message
 
 
-def _seed_task_anchor(record: dict, previous_status: str) -> dict:
+def _sync_task_anchor(record: dict, previous_status: str) -> dict:
     notify_state = load_notify_state()
     anchor_messages = notify_state.get("task_anchor_messages", {})
     if not isinstance(anchor_messages, dict):
         anchor_messages = {}
-    if not _should_seed_task_anchor(record, previous_status, anchor_messages):
+    if not _should_sync_task_anchor(record, previous_status, anchor_messages):
         return {"ok": False, "skipped": True}
 
+    task_id = str(record.get("id", "") or "").strip()
+    existing_anchor = anchor_messages.get(task_id, {}) if isinstance(anchor_messages.get(task_id), dict) else {}
+    existing_message_id = str(existing_anchor.get("message_id", "") or "").strip()
+
     try:
-        result = send_task_notification(record)
+        result = send_task_notification(record, existing_message_id=existing_message_id)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
     if not result.get("ok"):
         return result
 
-    task_id = str(record.get("id", "") or "").strip()
-    message_id = str(result.get("message_id", "") or result.get("messageId", "") or "").strip()
+    message_id = str(result.get("message_id", "") or result.get("messageId", "") or existing_message_id).strip()
     anchor_messages[task_id] = {
         "backend": str(result.get("backend", "") or ""),
         "message_id": message_id,
@@ -821,7 +825,7 @@ def cmd_upsert(args):
         save_state(fp, state)
     if current_record:
         sync_task(current_record, event_type="upsert", previous_status=previous_status)
-        _seed_task_anchor(current_record, previous_status)
+        _sync_task_anchor(current_record, previous_status)
     for record, record_previous_status in lineage_syncs:
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
     print(f"[ok] upsert id={args.id} status={args.status or 'dispatched'}")
@@ -900,6 +904,7 @@ def _finish(task_id: str, status: str, summary: str, *, report_path: str = "", a
         save_state(fp, state)
     if current_record:
         sync_task(current_record, event_type=status, previous_status=previous_status)
+        _sync_task_anchor(current_record, previous_status)
     for record, record_previous_status in lineage_syncs:
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
     print(f"[ok] {status} id={task_id}")
