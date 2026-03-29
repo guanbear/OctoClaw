@@ -1050,16 +1050,16 @@ const plugin = {
     {
       name: "octoclaw_status",
       label: "OctoClaw Status",
-      description: "Show current OctoClaw runner and task state. Default to compact dashboard; use table/lanes only when the user explicitly asks for those views.",
+      description: "Show current OctoClaw runner and task state. Default to task anchors; use compact/table/lanes only when the user explicitly asks for those legacy views.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: {
-          format: { type: "string", enum: ["compact", "table", "lanes"] }
+          format: { type: "string", enum: ["anchors", "compact", "table", "lanes"] }
         }
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const format = params.format || "compact";
+        const format = params.format || "anchors";
         const output = await runStatus(format, ctx?.cwd || process.cwd());
         return statusToolResponse(output, format);
       },
@@ -1092,10 +1092,10 @@ const plugin = {
 
   pi.registerCommand({
     name: "octostatus",
-    description: "Show OctoClaw status; default compact dashboard, table/lanes only when explicitly requested",
+    description: "Show OctoClaw status; default task anchors, with compact/table/lanes available when explicitly requested",
     acceptsArgs: true,
     handler: async (ctx) => {
-      const format = String(ctx.args || "").trim() || "compact";
+      const format = String(ctx.args || "").trim() || "anchors";
       const output = await runStatus(format, ctx?.cwd || process.cwd());
       if (ctx.hasUI) {
         ctx.ui.notify(`OctoClaw status (${format})`);
