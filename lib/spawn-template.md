@@ -8,13 +8,14 @@
 
 ```bash
 python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
-  upsert --id {TASK_ID} --label {LABEL} --model {MODEL} \
-  --status running --expected-done "+{N}min"
+  upsert --id {TASK_ID} --model {MODEL} --model-band {MODEL_BAND} \
+  --status running --expected-done "+{N}min" \
+  --worker-pool {WORKER_POOL} --work-type {WORK_TYPE} --phase {PHASE}
 ```
 
 字段说明：
-- `id`：格式 `{label}-{YYYYMMDD}-{序号}`，例：`octopus-fix-20260309-001`
-- `expected-done`：trivial=+3min | simple=+5min | normal=+8min | hard=+15min | deep=+20min
+- `id`：格式 `{worker-pool-slug}-{YYYYMMDD}-{序号}`，例：`code-20260309-001`
+- `expected-done`：fast=+3min | normal=+8min | strong=+15min | heavy=+20min
 - `source`：必须是 `octopus`（不写则 patrol 不会处理）
 
 ## 📋 文件读取规范（防 token 超限）
@@ -62,8 +63,8 @@ python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py \
 
 ```bash
 mkdir -p /workspace/tmp/octopus/agent-notes
-echo "- $(date +%Y-%m-%d): 经验一句话（≤50字）" >> /workspace/tmp/octopus/agent-notes/{LABEL}.md
-# 例：echo "- 2026-03-12: grep搜索前先确认路径，避免全盘扫描" >> /workspace/tmp/octopus/agent-notes/octopus-fix.md
+echo "- $(date +%Y-%m-%d): 经验一句话（≤50字）" >> /workspace/tmp/octopus/agent-notes/{WORKER_POOL}.md
+# 例：echo "- 2026-03-12: grep搜索前先确认路径，避免全盘扫描" >> /workspace/tmp/octopus/agent-notes/octoclaw-code.md
 ```
 
 格式：`- YYYY-MM-DD: 一句话经验（≤50字）`
@@ -134,11 +135,13 @@ RESULT 的 `report` 字段填路径，`summary` 仍要写可直接转述的结�
 
 ```json
 {
-  "id": "octopus-fix-20260309-001",
+  "id": "code-20260309-001",
   "source": "octopus",
-  "label": "octopus-fix",
+  "worker_pool": "octoclaw-code",
+  "work_type": "code",
+  "phase": "implement",
   "model": "vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6",
-  "tier": "normal",
+  "model_band": "normal",
   "status": "running",
   "summary": "",
   "files_changed": [],
@@ -164,9 +167,9 @@ RESULT 的 `report` 字段填路径，`summary` 仍要写可直接转述的结�
 
 ## 🧠 thinking 参数（可选）
 
-| tier | thinking | 适用场景 |
+| model_band | thinking | 适用场景 |
 |------|----------|---------|
-| trivial / simple | `off` | 配置修改、单行改动 |
+| fast | `off` | 配置修改、单行改动 |
 | normal | `minimal` | 写代码、调 API |
-| hard | `low` | 复杂逻辑、多文件 |
-| deep | `medium` | 架构分析、深度调研 |
+| strong | `low` | 复杂逻辑、多文件 |
+| heavy | `medium` | 架构分析、深度调研 |

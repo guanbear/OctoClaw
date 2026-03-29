@@ -780,48 +780,36 @@ echo "🐙 安装八爪鱼 (Octopus) skill..."
 # 1. 创建工作目录
 mkdir -p "$WORKSPACE/tmp/octopus"
 
-# 2. 模式选择引导
+# 2. 选模方式引导
 echo ""
-echo "⚖️  选择调度模式（可随时通过对话切换）："
+echo "🧠  选择选模方式（新版本仅保留 policy-first）："
 echo ""
-echo "  1) ⚖️  平衡模式（默认）- trivial/simple→GLM，normal→Sonnet，deep→Sonnet"
-echo "  2) ⚡ 速度优先          - 所有任务选延迟最低的可用模型"
-echo "  3) 🎯 效果优先          - 所有任务使用 Opus"
-echo "  4) 💰 成本优先          - 尽量使用 GLM，降低费用"
-echo "  5) 🔒 保密模式          - 只用私有模型（GLM）"
-echo "  6) 🧠 自动选模          - 根据本地模型、速度、价格与能力自动分配"
-echo "  7) 🔧 自定义模式        - 手动为每个触手指定模型（高级用户）"
+echo "  1) 🧠 自动选模（默认）- 按 worker_pool / phase / profile 走 policy-first"
+echo "  2) 🔧 自定义映射      - 手动指定 worker_pool/profile 模型（高级用户）"
 echo ""
-read -p "请输入选择 [1-7，直接回车选平衡模式]: " mode_choice
+read -p "请输入选择 [1-2，直接回车选自动选模]: " mode_choice
 
-# 自定义模式用关联数组存储用户为每个触手指定的模型
+# 自定义模式用关联数组存储用户为每个 worker pool/profile 指定的模型
 declare -A CUSTOM_MODELS
 MAIN_MODEL=""
 
 case "$mode_choice" in
-    2) MODE="speed" ;;
-    3) MODE="quality" ;;
-    4) MODE="cost" ;;
-    5) MODE="private" ;;
-    6) MODE="auto" ;;
-    7)
+    2)
         MODE="custom"
         MODE_LABEL="🔧 自定义模式"
         echo ""
-        echo "🔧 自定义模式：为每个触手指定模型（直接回车跳过使用平衡模式默认值）"
+        echo "🔧 自定义模式：为核心 worker_pool/profile 指定模型（直接回车跳过）"
         echo "可用模型示例：vendor-claude-sonnet-4-6/aws-claude-sonnet-4-6"
         echo "             lixiang-kimi-2-5/kivy-kimi-k2_5"
         echo ""
-        for LABEL in octopus-power octopus-scout octopus-writer octopus-fix octopus-test octopus-analyze octopus-runner octopus-feishu; do
+        for LABEL in octoclaw-main octoclaw-runner octoclaw-research octoclaw-code octoclaw-review profile:writer; do
             case $LABEL in
-                octopus-power)   NAME="💪 鲸力手" ;;
-                octopus-scout)   NAME="🔍 梭鱼眼" ;;
-                octopus-writer)  NAME="✍️  墨鱼手" ;;
-                octopus-fix)     NAME="🔧 螃蟹手" ;;
-                octopus-test)    NAME="🧪 海胆手" ;;
-                octopus-analyze) NAME="📊 章鱼脑" ;;
-                octopus-runner)  NAME="🏃 飞鱼腿" ;;
-                octopus-feishu)  NAME="🐦 鸽  手" ;;
+                octoclaw-main)      NAME="🤖 主脑" ;;
+                octoclaw-runner)    NAME="🏃 Runner" ;;
+                octoclaw-research)  NAME="🔍 Research" ;;
+                octoclaw-code)      NAME="🔧 Code" ;;
+                octoclaw-review)    NAME="🧪 Review" ;;
+                profile:writer)     NAME="✍️  Writer" ;;
             esac
             read -p "  $NAME ($LABEL): " CUSTOM_MODEL
             if [ -n "$CUSTOM_MODEL" ]; then
@@ -838,7 +826,6 @@ MODE_FILE="$WORKSPACE/tmp/octopus-mode.json"
 mkdir -p "$WORKSPACE/tmp"
 
 if [ "$MODE" = "custom" ]; then
-    # 使用 python3 安全生成 JSON（避免 bash 字符串拼接导致 JSON 格式错误）
     CUSTOM_PAIRS=""
     for KEY in "${!CUSTOM_MODELS[@]}"; do
         CUSTOM_PAIRS+="${KEY}=${CUSTOM_MODELS[$KEY]}"$'\n'
@@ -862,52 +849,23 @@ mode = {
     'mode': 'custom',
     'customModels': custom_models,
     'updated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-    'description': '自定义模式：每个触手使用指定模型，未指定的 fallback 自动选模策略',
-    'modes': {
-        'speed': {'trivial': 'dynamic_fastest', 'simple': 'dynamic_fastest', 'normal': 'dynamic_fastest', 'deep': 'dynamic_fastest', 'concurrency': 5},
-        'quality': {'trivial': 'claudeopus', 'simple': 'claudeopus', 'normal': 'claudeopus', 'deep': 'claudeopus', 'concurrency': 3},
-        'cost': {'trivial': 'kimi', 'simple': 'sonnet', 'normal': 'sonnet', 'deep': 'sonnet', 'concurrency': 3},
-        'balanced': {'trivial': 'kimi', 'simple': 'sonnet', 'normal': 'sonnet', 'deep': 'claudeopus', 'concurrency': 5},
-        'private': {'trivial': 'kimi', 'simple': 'kimi', 'normal': 'kimi', 'deep': 'claudeopus', 'concurrency': 5, 'autoPrivate': True},
-        'auto': {'trivial': 'auto', 'simple': 'auto', 'normal': 'auto', 'deep': 'auto', 'concurrency': 5}
-    }
+    'description': '自定义模式：按 worker_pool/profile 覆盖 policy-first 选模'
 }
 print(json.dumps(mode, ensure_ascii=False, indent=2))
 " 2>/dev/null)
     echo "$OCTOPUS_MODE_JSON" > "$MODE_FILE"
 else
-    case "$MODE" in
-        balanced) MODE_DESC='平衡模式：轻任务用低成本模型，复杂任务用高质量模型' ;;
-        speed)    MODE_DESC='速度优先：所有任务选延迟最低的可用模型' ;;
-        quality)  MODE_DESC='效果优先：所有任务使用 Opus' ;;
-        cost)     MODE_DESC='成本优先：尽量使用 GLM，降低费用' ;;
-        private)  MODE_DESC='保密模式：只用私有模型（GLM）' ;;
-        auto)     MODE_DESC='自动选模：根据本地模型、速度、价格和能力动态分配' ;;
-        *)        MODE_DESC="$MODE" ;;
-    esac
+    MODE_DESC='自动选模：根据本地模型、速度、价格和能力生成 worker_pool/profile policy'
     cat > "$MODE_FILE" << EOF
 {
   "mode": "$MODE",
   "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "description": "$MODE_DESC",
-  "modes": {
-    "speed": {"trivial": "dynamic_fastest", "simple": "dynamic_fastest", "normal": "dynamic_fastest", "deep": "dynamic_fastest", "concurrency": 5},
-    "quality": {"trivial": "claudeopus", "simple": "claudeopus", "normal": "claudeopus", "deep": "claudeopus", "concurrency": 3},
-    "cost": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "sonnet", "concurrency": 3},
-    "balanced": {"trivial": "glm", "simple": "sonnet", "normal": "sonnet", "deep": "claudeopus", "concurrency": 5},
-    "private": {"trivial": "glm", "simple": "kimi", "normal": "kimi", "deep": "claudeopus", "concurrency": 5, "autoPrivate": true},
-    "auto": {"trivial": "auto", "simple": "auto", "normal": "auto", "deep": "auto", "concurrency": 5}
-  }
+  "description": "$MODE_DESC"
 }
 EOF
 fi
 
 case "$MODE" in
-    balanced) MODE_LABEL='⚖️  平衡模式' ;;
-    speed)    MODE_LABEL='⚡ 速度优先' ;;
-    quality)  MODE_LABEL='🎯 效果优先' ;;
-    cost)     MODE_LABEL='💰 成本优先' ;;
-    private)  MODE_LABEL='🔒 保密模式' ;;
     auto)     MODE_LABEL='🧠 自动选模' ;;
     custom)   MODE_LABEL='🔧 自定义模式' ;;
 esac
@@ -1380,24 +1338,24 @@ def pick(patterns):
     return ""
 
 glm = pick(["glm-4.7", "glm4.7", "kivy-glm-4.7", "glm-5", "kivy-glm-5", "glm"])
-cheap = pick(["minimax", "m2.7", "kimi", "glm-4.7", "glm"])
-coding = pick(["gpt-5.4", "glm-5", "sonnet", "glm-4.7", "minimax"])
-deep = pick(["gpt-5.4", "glm-5", "opus", "sonnet", "minimax"])
+fast = pick(["minimax", "m2.7", "kimi", "glm-4.7", "glm"])
+strong = pick(["gpt-5.4", "glm-5", "sonnet", "glm-4.7", "minimax"])
+heavy = pick(["gpt-5.4", "glm-5", "opus", "sonnet", "minimax"])
 
 data = json.load(open(alias_file)) if os.path.exists(alias_file) else {}
-if cheap:
-    data.update({"trivial": cheap, "simple": cheap})
+if fast:
+    data["fast"] = fast
 if glm:
     data["normal"] = glm
-if coding:
-    data.update({"hard": coding, "normal_fallback": coding})
-if deep:
-    data.update({"deep": deep, "deep_quality": deep})
+if strong:
+    data["strong"] = strong
+if heavy:
+    data["heavy"] = heavy
 data["updated_at"] = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
 os.makedirs(os.path.dirname(alias_file), exist_ok=True)
 with open(alias_file, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
-print(f"✅ 别名文件已更新: cheap={cheap or '未找到'}, normal={glm or '未找到'}, hard={coding or '未找到'}, deep={deep or '未找到'}")
+print(f"✅ 别名文件已更新: fast={fast or '未找到'}, normal={glm or '未找到'}, strong={strong or '未找到'}, heavy={heavy or '未找到'}")
 EOF
 
 echo "🧠 正在生成自动选模情报..."
@@ -1504,7 +1462,7 @@ print('✅ 无版本号旧规则已清除')
 
 ### spawn 规范
 
-- label：`octopus-power/scout/writer/fix/test/analyze/runner/feishu`
+- taxonomy：`worker_pool / work_type / phase / profile / model_band`
 - 查询状态、轻 shell、日志检查、curl/grep/head/tail 这类快任务，命中后优先走 runner，不再直接 spawn 子 Agent
 - task 描述遵循【上下文】【目标】【要求】，尽量短；大输出写 `__STATE_DIR__/shared/{task_id}.md`
 - 子 Agent 开始前必须写 task-state，结束时必须输出 `---RESULT---`
@@ -1512,7 +1470,7 @@ print('✅ 无版本号旧规则已清除')
 - `octoclaw_spawn.py` 负责统一生成 task-state 注册、RESULT 契约、共享文件路径和兼容参数
 - `spawn_single` 进入统一运行面时，默认使用 `clawteam spawn tmux ...`
 - `spawn_multi` 进入统一运行面时，优先使用 ClawTeam team/task/inbox/board/tmux，最小链路可拆为 planner / worker / review
-- 并发上限：balanced/private/auto ≤5，quality/cost ≤3；高价模型同时运行 ≤3
+- 并发上限：默认 ≤5；高价模型同时运行 ≤3
 - 除非你正在修 `octoclaw_spawn.py` 本身，或当前环境里包装器真的不可用，否则禁止主会话直接调用 `sessions_spawn`
 - 若极端情况下必须使用 `sessions_spawn`：
   - `runtime=subagent` 时**禁止**传 `streamTo`
@@ -1523,16 +1481,20 @@ print('✅ 无版本号旧规则已清除')
   - 不要输出内部犹豫文本、调试思路或英语自言自语
   - 先把错误写入 `.learnings/ERRORS.md` / task-state，再决定是否回退到主会话直接执行
 
-### 触手名字
+### 工位类型
 
-💪鲸力手·power | 🔍梭鱼眼·scout | ✍️墨鱼手·writer | 🔧螃蟹手·fix | 🧪海胆手·test | 📊章鱼脑·analyze | 🏃飞鱼腿·runner | 🐦鸽手·feishu
+- `octoclaw-main`：主脑
+- `octoclaw-runner`：Runner
+- `octoclaw-research`：Research
+- `octoclaw-code`：Code
+- `octoclaw-review`：Review
 
 ### 任务分级与模型选择
 
-- 级别：`trivial/simple/normal/hard/deep`
-- 选模优先读 `__STATE_DIR__/model-policy.json`（auto 模式），否则读 `octopus-mode.json` + `octopus-model-aliases.json`
-- `runner` 优先低首 token 延迟；`fix/test` 优先 coding；`analyze/power` 优先深度能力
-- 用户临时要求“最强/不惜成本”可升高模型；“保密/私有”优先私有模型
+- 强度带：`quick / standard / strong / heavy`
+- 选模优先读 `__STATE_DIR__/model-policy.json`；`octopus-mode.json` 只保留 `auto/custom`
+- `runner` 优先低首 token 延迟；`research/report` 优先写作与总结；`code/review` 优先实现与验证
+- 用户临时要求“最强/不惜成本”可升高 band；“保密/私有”偏好由 policy 负责，不再靠旧 mode 切换
 
 ### 模型降级（铁甲虾协作）
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Set Octopus main agent session modelOverride."""
+"""Set OctoClaw main agent session modelOverride."""
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -7,40 +9,36 @@ import os
 import subprocess
 import sys
 
-from octopus_config import MODEL_POLICY_FILE, resolve_main_session_key
+from octopus_config import MODE_FILE, MODEL_POLICY_FILE, resolve_main_session_key
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MODE_MODEL_MAP = {
-    "cost":    "lixiang-glm-5/kivy-glm-5",
-    "private": "lixiang-glm-5/kivy-glm-5",
-    "balanced": None,   # 清除 override，用全局默认
-    "custom":   "KEEP", # 不变
-    "auto":     "AUTO",
-}
-
-def get_quality_model():
-    """quality 模式用 resolve-model.py --tier deep，感知铁甲虾降级"""
+def load_mode_data() -> dict:
     try:
-        result = subprocess.run(
-            ["python3", os.path.join(SCRIPT_DIR, "resolve-model.py"), "--tier", "deep"],
-            capture_output=True, text=True, timeout=10
-        )
-        return result.stdout.strip()
-    except:
-        return "vendor-claude-opus-4-6/aws-claude-opus-4-6"
+        with open(MODE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
-def load_policy_main_model():
+
+def load_policy_main_model() -> str:
     try:
         with open(MODEL_POLICY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data.get("main_model", "")
+        return str(data.get("main_model", "") or "").strip()
     except Exception:
         return ""
 
 
-def set_session_model(model_path):
-    """修改主 session 的 modelOverride，model_path=None 则清除。"""
+def load_custom_main_model() -> str:
+    mode_data = load_mode_data()
+    custom_models = mode_data.get("customModels", {})
+    if not isinstance(custom_models, dict):
+        return ""
+    return str(custom_models.get("main", "") or "").strip()
+
+
+def set_session_model(model_path: str | None) -> bool:
     main_session = resolve_main_session_key()
     if not main_session:
         print("Error: main session not found", file=sys.stderr)
@@ -54,10 +52,7 @@ def set_session_model(model_path):
             gateway_port = config.get("port", 3000)
 
         url = f"http://localhost:{gateway_port}/api/sessions/agent:main:{main_session}"
-        if model_path is None:
-            payload = {"modelOverride": None}
-        else:
-            payload = {"modelOverride": model_path}
+        payload = {"modelOverride": model_path}
         result = subprocess.run(
             [
                 "curl",
@@ -79,52 +74,40 @@ def set_session_model(model_path):
             timeout=15,
         )
         return result.stdout.strip() in {"200", "204"}
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return False
 
-def main():
+
+def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", required=True)
+    parser.add_argument("--mode", required=True, choices=["auto", "custom", "custom_explicit"])
     parser.add_argument("--explicit-model", default="")
     args = parser.parse_args()
-    mode = args.mode
 
-    if mode == "custom":
-        print("custom 模式：主模型不变")
-        return
-    if mode == "custom_explicit":
+    model: str | None
+    if args.mode == "custom_explicit":
         model = args.explicit_model.strip()
         if not model:
             print("custom_explicit 模式缺少 --explicit-model", file=sys.stderr)
             sys.exit(1)
-        if set_session_model(model):
-            print(f"✅ 主模型已设置为: {model}（custom_explicit 模式）")
+    elif args.mode == "custom":
+        model = load_custom_main_model()
+        if not model:
+            print("custom 模式：未设置 main 覆盖，保持现状")
             return
-        print("❌ 设置失败", file=sys.stderr)
-        sys.exit(1)
-
-    if mode == "auto":
+    else:
         model = load_policy_main_model()
         if not model:
             print("auto 模式：未找到 model-policy main_model", file=sys.stderr)
             sys.exit(1)
-    elif mode == "quality":
-        model = get_quality_model()
-    else:
-        model = MODE_MODEL_MAP.get(mode)
-        if model is None and mode not in MODE_MODEL_MAP:
-            print(f"未知模式: {mode}", file=sys.stderr)
-            sys.exit(1)
 
     if set_session_model(model):
-        if model:
-            print(f"✅ 主模型已设置为: {model}（{mode} 模式）")
-        else:
-            print(f"✅ 主模型 override 已清除（{mode} 模式，使用全局默认）")
-    else:
-        print("❌ 设置失败", file=sys.stderr)
-        sys.exit(1)
+        print(f"✅ 主模型已设置为: {model}（{args.mode} 模式）")
+        return
+    print("❌ 设置失败", file=sys.stderr)
+    sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

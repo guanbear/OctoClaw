@@ -24,10 +24,9 @@ from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, lo
 from runtime_protocol import normalize_worker_result
 from runner_playbooks import infer_runner_playbook
 from worker_taxonomy import (
-    legacy_label_for_worker_pool,
+    infer_model_band as taxonomy_infer_model_band,
     resolve_phase as taxonomy_resolve_phase,
     resolve_work_type as taxonomy_resolve_work_type,
-    worker_pool_from_legacy_label,
 )
 
 
@@ -62,7 +61,6 @@ def apply_policy_fields(payload: dict, decision: dict) -> dict:
     model_meta = decision_model(decision)
     skill_meta = decision_skill(decision)
     review_meta = decision_review(decision)
-    compat = decision.get("compat", {}) if isinstance(decision.get("compat", {}), dict) else {}
 
     payload["policy_summary"] = decision.get("summary", "")
     payload["policy_decision"] = decision
@@ -72,8 +70,6 @@ def apply_policy_fields(payload: dict, decision: dict) -> dict:
     payload["scores"] = route_meta.get("scores", {})
     payload["system_preferred_route"] = route_meta.get("system_preferred_route", route_meta.get("route"))
     payload["task_class"] = route_meta.get("task_class")
-    payload["role_hint"] = compat.get("legacy_role_hint")
-    payload["tier_hint"] = model_meta.get("legacy_tier")
     payload["expected_latency_ms"] = route_meta.get("expected_latency_ms")
     payload["expected_cost_band"] = route_meta.get("expected_cost_band")
     payload["context_growth_band"] = route_meta.get("context_growth_band")
@@ -84,6 +80,8 @@ def apply_policy_fields(payload: dict, decision: dict) -> dict:
     payload["phase"] = route_meta.get("phase")
     payload["protocol"] = route_meta.get("protocol")
     payload["profile"] = payload.get("profile") or model_meta.get("profile", "")
+    payload["model_band"] = payload.get("model_band") or model_meta.get("model_band", "")
+    payload["selector_band"] = payload.get("selector_band") or model_meta.get("selector_band", "")
     payload["skill_bundle"] = skill_meta.get("default_skill_bundle", [])
     payload["review_required"] = review_meta.get("required", False)
     return payload
@@ -111,31 +109,22 @@ def compat_spawn_step_from_decision(decision: dict, fallback: dict | None = None
     fallback = fallback if isinstance(fallback, dict) else {}
     route_meta = decision_route(decision)
     model_meta = decision_model(decision)
-    compat = decision.get("compat", {}) if isinstance(decision.get("compat", {}), dict) else {}
 
     route = str(route_meta.get("route", fallback.get("route", "spawn_single")) or "spawn_single")
     worker_pool = str(route_meta.get("worker_pool", fallback.get("worker_pool", "")) or "")
     work_type = str(route_meta.get("work_type", fallback.get("work_type", "")) or "")
     phase = str(route_meta.get("phase", fallback.get("phase", "")) or "")
     profile = str(model_meta.get("profile", fallback.get("profile", "")) or "")
-    legacy_label = str(model_meta.get("legacy_label", "") or fallback.get("legacy_label", "") or fallback.get("label", "") or "")
-    if not legacy_label and worker_pool:
-        legacy_label = legacy_label_for_worker_pool(
-            worker_pool,
-            phase=phase,
-            route=route,
-            profile=profile,
-            role_hint=str(compat.get("legacy_role_hint", "") or ""),
-        )
-    legacy_tier = str(model_meta.get("legacy_tier", "") or fallback.get("legacy_tier", "") or fallback.get("tier", "") or "")
+    model_band = str(model_meta.get("model_band", "") or fallback.get("model_band", "") or "")
+    if not model_band:
+        model_band = taxonomy_infer_model_band(route=route, worker_pool=worker_pool, work_type=work_type, protocol=str(route_meta.get("protocol", "") or "")) or "normal"
     return {
         "worker_pool": worker_pool,
         "work_type": work_type,
         "phase": phase,
         "profile": profile,
-        "label": legacy_label,
-        "legacy_label": legacy_label,
-        "tier": legacy_tier,
+        "model_band": model_band,
+        "selector_band": str(model_meta.get("selector_band", "") or fallback.get("selector_band", "") or ""),
         "model": str(model_meta.get("selected_model", "") or fallback.get("model", "") or ""),
         "policy_decision": decision,
     }
@@ -180,21 +169,20 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
         operator_surface["operator_hint"] = f"clawteam/{backend_name}" + (f" {team_name}" if team_name else "")
     else:
         operator_surface["operator_hint"] = backend or str(operator_surface.get("operator_hint", "") or "")
+
     def step_taxonomy(entry: dict) -> dict[str, str]:
         if not isinstance(entry, dict):
-            return {"worker_pool": "", "work_type": "", "phase": "", "profile": ""}
-        label = str(entry.get("legacy_label", "") or entry.get("label", "") or "")
-        worker_pool = str(entry.get("worker_pool", "") or "") or worker_pool_from_legacy_label(label)
+            return {"worker_pool": "", "work_type": "", "phase": "", "profile": "", "model_band": "", "selector_band": ""}
+        worker_pool = str(entry.get("worker_pool", "") or "")
         profile = str(entry.get("profile", "") or "")
         work_type = str(entry.get("work_type", "") or "") or str(
-            taxonomy_resolve_work_type({"worker_pool": worker_pool, "label": label, "profile": profile}) or ""
+            taxonomy_resolve_work_type({"worker_pool": worker_pool, "profile": profile}) or ""
         )
         phase = str(entry.get("phase", "") or "") or str(
             taxonomy_resolve_phase(
                 {
                     "worker_pool": worker_pool,
                     "work_type": work_type,
-                    "label": label,
                     "profile": profile,
                 }
             )
@@ -205,6 +193,8 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
             "work_type": work_type,
             "phase": phase,
             "profile": profile,
+            "model_band": str(entry.get("model_band", "") or ""),
+            "selector_band": str(entry.get("selector_band", "") or ""),
         }
 
     return {
@@ -222,12 +212,12 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
         },
         "step_models": {
             name: {
-                "label": str((plan.get(name) or {}).get("label", "") or ""),
                 "worker_pool": step_taxonomy(plan.get(name) or {}).get("worker_pool", ""),
                 "work_type": step_taxonomy(plan.get(name) or {}).get("work_type", ""),
                 "phase": step_taxonomy(plan.get(name) or {}).get("phase", ""),
                 "profile": step_taxonomy(plan.get(name) or {}).get("profile", ""),
-                "tier": str((plan.get(name) or {}).get("tier", "") or ""),
+                "model_band": step_taxonomy(plan.get(name) or {}).get("model_band", ""),
+                "selector_band": step_taxonomy(plan.get(name) or {}).get("selector_band", ""),
                 "model": str((plan.get(name) or {}).get("model", "") or ""),
             }
             for name in ordered_steps
@@ -267,13 +257,11 @@ def register_multi_parent_task(
     )
     upsert_runtime_task(
         id=str(parent_spec.get("task_id", "") or ""),
-        label=str(parent_spec.get("label", "") or ""),
-        legacy_label=str(parent_spec.get("legacy_label", "") or parent_spec.get("label", "") or ""),
         model=str(parent_spec.get("model", "") or ""),
         status=status,
         summary=summary,
         title=task_title(task),
-        tier=str(parent_spec.get("tier", "") or ""),
+        model_band=str(parent_spec.get("model_band", "") or ""),
         task_description=task,
         expected_done=str(parent_spec.get("expected_done", "") or ""),
         source="octopus",
@@ -445,15 +433,15 @@ def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
     }
 
 
-def build_spawn_handoff(route: str, label: str, task: str) -> dict:
+def build_spawn_handoff(route: str, worker_pool: str, task: str) -> dict:
     reply = "我会交给一个子任务继续处理，稍后给你结论。"
     if route == "spawn_multi":
         reply = "我会拆成分阶段子任务处理，先做调研/分析，再回给你结论。"
-    elif label == "octopus-fix":
+    elif worker_pool == "octoclaw-code":
         reply = "我会先交给修复子任务分析并整理修复建议。"
-    elif label == "octopus-scout":
+    elif worker_pool == "octoclaw-research":
         reply = "我会先交给调研子任务收集信息，再回来汇总结论。"
-    elif label == "octopus-analyze":
+    elif worker_pool == "octoclaw-review":
         reply = "我会先交给分析子任务处理，再回来给你结论。"
     return {
         "kind": "plan",
@@ -505,10 +493,8 @@ def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str
         spec = build_spawn_spec(
             step_task,
             route="spawn_single",
-            label=str(step.get("label", "") or ""),
-            legacy_label=str(step.get("legacy_label", "") or step.get("label", "") or ""),
-            tier=str(step.get("tier", "") or ""),
-            legacy_tier=str(step.get("legacy_tier", "") or step.get("tier", "") or ""),
+            model_band=str(step.get("model_band", "") or ""),
+            selector_band=str(step.get("selector_band", "") or ""),
             model=str(step.get("model", "") or ""),
             worker_pool=str(step.get("worker_pool", "") or ""),
             work_type=str(step.get("work_type", "") or ""),
@@ -524,9 +510,12 @@ def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str
         steps.append(
             {
                 "step": step_name,
-                "label": spec.get("label", ""),
-                "tier": spec.get("tier", ""),
                 "model": spec.get("model", ""),
+                "model_band": spec.get("model_band", ""),
+                "selector_band": spec.get("selector_band", ""),
+                "worker_pool": spec.get("worker_pool", ""),
+                "work_type": spec.get("work_type", ""),
+                "phase": spec.get("phase", ""),
                 "task_id": spec.get("task_id", ""),
                 "executed": bool(spec.get("executed", False)),
                 "execution_error": spec.get("execution_error", ""),
@@ -617,8 +606,8 @@ def dispatch_runner(args) -> dict:
         summary or args.task[:40],
         "--timeout-seconds",
         str(args.timeout_seconds),
-        "--tier",
-        args.tier or "trivial",
+        "--model-band",
+        args.model_band or "fast",
         "--task-description",
         args.task,
     ]
@@ -644,13 +633,12 @@ def recommend_spawn(args, task: str) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     route_meta = decision_route(decision)
     model_meta = decision_model(decision)
+    requested_model_band = getattr(args, "model_band", "") or ""
     spawn_spec = build_spawn_spec(
         task,
         route="spawn_single",
-        label=args.label,
-        legacy_label=str(model_meta.get("legacy_label", "") or args.label or ""),
-        tier=args.tier,
-        legacy_tier=str(model_meta.get("legacy_tier", "") or args.tier or ""),
+        model_band=requested_model_band or str(model_meta.get("model_band", "") or ""),
+        selector_band=str(model_meta.get("selector_band", "") or ""),
         worker_pool=str(route_meta.get("worker_pool", "") or ""),
         work_type=str(route_meta.get("work_type", "") or ""),
         phase=str(route_meta.get("phase", "") or ""),
@@ -663,10 +651,10 @@ def recommend_spawn(args, task: str) -> dict:
     return apply_policy_fields({
         "route": "spawn_single",
         "executed": bool(spawn_spec.get("executed", False)),
-        "label": spawn_spec["label"],
-        "tier": spawn_spec["tier"],
         "model": spawn_spec["model"],
         "profile": spawn_spec.get("profile", ""),
+        "model_band": spawn_spec.get("model_band", ""),
+        "selector_band": spawn_spec.get("selector_band", ""),
         "reason": "needs_subagent" if not spawn_spec.get("execution_error") else "subagent_spawn_failed",
         "task": task,
         "handoff": spawn_spec["handoff"],
@@ -678,13 +666,12 @@ def recommend_multi_spawn(args, task: str) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     spawn_cfg = load_octopus_config().get("spawn_execution", {})
     multi_exec_enabled = isinstance(spawn_cfg, dict) and bool(spawn_cfg.get("enabled", False)) and str(spawn_cfg.get("backend", "plan") or "plan").strip().lower() == "clawteam"
+    requested_model_band = getattr(args, "model_band", "") or ""
     primary_spawn = build_spawn_spec(
         task,
         route="spawn_multi",
-        label=args.label,
-        legacy_label=str(decision_model(decision).get("legacy_label", "") or args.label or ""),
-        tier=args.tier,
-        legacy_tier=str(decision_model(decision).get("legacy_tier", "") or args.tier or ""),
+        model_band=requested_model_band or str(decision_model(decision).get("model_band", "") or ""),
+        selector_band=str(decision_model(decision).get("selector_band", "") or ""),
         worker_pool=str(decision_route(decision).get("worker_pool", "") or ""),
         work_type=str(decision_route(decision).get("work_type", "") or ""),
         phase=str(decision_route(decision).get("phase", "") or ""),
@@ -705,7 +692,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         review_task = build_multi_step_task(task, "review")
         review_decision = build_decision(review_task, force_route="spawn_single")
         plan["review"] = compat_spawn_step_from_decision(review_decision)
-    execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octopus-team-{now_compact()}"))
+    execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octoclaw-team-{now_compact()}"))
     parent_runtime = "clawteam" if multi_exec_enabled else "plan"
     primary_spawn["runtime"] = parent_runtime
     primary_spawn["task_kind"] = "team_parent"
@@ -727,10 +714,10 @@ def recommend_multi_spawn(args, task: str) -> dict:
         "route": "spawn_multi",
         "task_id": primary_spawn.get("task_id", ""),
         "executed": bool(execution.get("executed", False)),
-        "label": primary_spawn["label"],
-        "tier": primary_spawn["tier"],
         "model": primary_spawn["model"],
         "profile": primary_spawn.get("profile", ""),
+        "model_band": primary_spawn.get("model_band", ""),
+        "selector_band": primary_spawn.get("selector_band", ""),
         "runtime": parent_runtime,
         "task_kind": "team_parent",
         "reason": "parallel_or_staged_workflow",
@@ -751,8 +738,7 @@ def main():
     parser.add_argument("--summary", default="")
     parser.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
     parser.add_argument("--id", default="")
-    parser.add_argument("--label", default="")
-    parser.add_argument("--tier", default="")
+    parser.add_argument("--model-band", dest="model_band", default="")
     parser.add_argument("--force-route", choices=["auto", "direct", "runner", "spawn_single", "spawn_multi"], default="auto")
     parser.add_argument("--policy-json", default="")
     parser.add_argument("--wait", action="store_true")
@@ -772,8 +758,6 @@ def main():
         forced_route = ""
         if args.force_route != "auto":
             forced_route = args.force_route
-        elif args.label in ("octopus-runner", "octoclaw-runner"):
-            forced_route = "runner"
         decision = build_decision(task, args.command, force_route=forced_route)
     args._policy_decision = decision
     route = decision_route(decision)
@@ -828,8 +812,8 @@ def main():
         if not args.wait and route.get("should_wait"):
             args.wait = True
             args.wait_timeout_seconds = route.get("wait_timeout_seconds", args.wait_timeout_seconds)
-        if not args.tier:
-            args.tier = str(model_meta.get("legacy_tier", "") or args.tier or "trivial")
+        if not args.model_band:
+            args.model_band = str(model_meta.get("model_band", "") or args.model_band or "fast")
         payload = dispatch_runner(args)
         payload = apply_policy_fields(payload, decision)
         print(json.dumps(payload, ensure_ascii=False))

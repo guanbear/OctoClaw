@@ -21,7 +21,6 @@ from clawteam_bridge import sync_task
 from runtime_task_record import normalize_task_record, normalize_task_records
 from runtime_protocol import normalize_worker_result
 from worker_taxonomy import (
-    model_band_from_legacy_tier,
     normalize_model_band,
     resolve_executor as taxonomy_resolve_executor,
 )
@@ -556,10 +555,7 @@ def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert
 def cmd_upsert(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     lineage_syncs = []
-    model_band_arg = normalize_model_band(getattr(args, "model_band", "") or "", default="") or model_band_from_legacy_tier(
-        getattr(args, "tier", "") or "",
-        default="",
-    )
+    model_band_arg = normalize_model_band(getattr(args, "model_band", "") or "", default="")
     with open(STATE_FILE, "a+") as fp:
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
@@ -573,8 +569,7 @@ def cmd_upsert(args):
         if existing:
             previous_status = str(existing.get("status", "") or "")
             # Update fields if provided
-            if args.label:
-                existing["label"] = args.label
+            existing.pop("label", None)
             existing.pop("legacy_label", None)
             if args.model:
                 existing["model"] = args.model
@@ -658,7 +653,6 @@ def cmd_upsert(args):
         else:
             record = {
                 "id": args.id,
-                "label": args.label or "",
                 "model": args.model or "",
                 "status": args.status or "dispatched",
                 "summary": args.summary or "",
@@ -859,8 +853,6 @@ def main():
     # upsert
     p_upsert = sub.add_parser("upsert")
     p_upsert.add_argument("--id", required=True)
-    p_upsert.add_argument("--label")
-    p_upsert.add_argument("--legacy-label", dest="legacy_label")
     p_upsert.add_argument("--model")
     p_upsert.add_argument("--status")
     p_upsert.add_argument("--summary")
@@ -868,7 +860,6 @@ def main():
     p_upsert.add_argument("--deps")
     p_upsert.add_argument("--expected-done", dest="expected_done")
     p_upsert.add_argument("--model-band", dest="model_band")
-    p_upsert.add_argument("--tier")
     p_upsert.add_argument("--task-description", dest="task_description")
     p_upsert.add_argument("--source")
     p_upsert.add_argument("--session-id", dest="session_id")

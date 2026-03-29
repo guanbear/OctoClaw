@@ -25,7 +25,8 @@ class OctoClawSpawnTests(unittest.TestCase):
                 "protocol": "normal",
             },
             "model_policy": {
-                "legacy_tier": "normal",
+                "model_band": "normal",
+                "selector_band": "standard",
                 "profile": "writer",
             },
             "skill_policy": {
@@ -52,7 +53,8 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["work_type"], "research")
         self.assertEqual(spec["phase"], "report")
         self.assertEqual(spec["profile"], "writer")
-        self.assertEqual(spec["label"], "octopus-writer")
+        self.assertEqual(spec["model_band"], "normal")
+        self.assertEqual(spec["selector_band"], "standard")
         self.assertEqual(spec["brief"]["schema_version"], "octoclaw.brief/v1")
         self.assertEqual(spec["brief"]["expected_output"]["schema_version"], "octoclaw.worker_result/v1")
         self.assertEqual(spec["result_contract"]["status"], "done")
@@ -80,8 +82,6 @@ class OctoClawSpawnTests(unittest.TestCase):
         }
 
         with (
-            patch.object(octoclaw_spawn, "infer_label", side_effect=AssertionError("legacy infer_label should not drive spawn")),
-            patch.object(octoclaw_spawn, "infer_tier", side_effect=AssertionError("legacy infer_tier should not drive spawn")),
             patch.object(octoclaw_spawn, "resolve_model_and_thinking", return_value=("model/code", "medium")) as resolve_mock,
             patch.object(octoclaw_spawn, "should_execute_spawn", return_value=False),
         ):
@@ -97,9 +97,8 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["work_type"], "code")
         self.assertEqual(spec["phase"], "implement")
         self.assertEqual(spec["profile"], "code")
-        self.assertEqual(spec["label"], "octopus-fix")
-        self.assertEqual(spec["legacy_label"], "octopus-fix")
-        self.assertEqual(spec["tier"], "normal")
+        self.assertEqual(spec["model_band"], "strong")
+        self.assertEqual(spec["selector_band"], "strong")
         self.assertEqual(spec["model"], "model/code")
         self.assertEqual(
             resolve_mock.call_args.kwargs,

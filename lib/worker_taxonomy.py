@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared worker taxonomy helpers for the Phase 3 migration."""
+"""Shared worker taxonomy helpers for the worker-pool-first runtime."""
 
 from __future__ import annotations
 
@@ -14,29 +14,11 @@ VALID_WORKER_POOLS = {
     "octoclaw-review",
 }
 
-LEGACY_LABEL_TO_WORKER_POOL = {
-    "main": "octoclaw-main",
-    "octoclaw-main": "octoclaw-main",
-    "octopus-runner": "octoclaw-runner",
-    "octoclaw-runner": "octoclaw-runner",
-    "octopus-feishu": "octoclaw-runner",
-    "octopus-scout": "octoclaw-research",
-    "octopus-writer": "octoclaw-research",
-    "octopus-analyze": "octoclaw-research",
-    "octopus-power": "octoclaw-research",
-    "octopus-fix": "octoclaw-code",
-    "octopus-test": "octoclaw-review",
-}
-
-MODEL_ROLE_TO_LEGACY_LABEL = {
-    "runner": "octopus-runner",
-    "scout": "octopus-scout",
-    "writer": "octopus-writer",
-    "analyze": "octopus-analyze",
-    "fix": "octopus-fix",
-    "test": "octopus-test",
-    "power": "octopus-power",
-    "main": "main",
+VALID_MODEL_BANDS = {
+    "fast",
+    "normal",
+    "strong",
+    "heavy",
 }
 
 WORKER_POOL_TO_WORK_TYPE = {
@@ -47,31 +29,33 @@ WORKER_POOL_TO_WORK_TYPE = {
     "octoclaw-review": "review",
 }
 
-LEGACY_LABEL_TO_WORK_TYPE = {
-    "octopus-runner": "ops",
-    "octoclaw-runner": "ops",
-    "octopus-fix": "code",
-    "octopus-test": "review",
-    "octopus-scout": "research",
-    "octopus-analyze": "research",
-    "octopus-writer": "research",
-}
-
-LEGACY_LABEL_TO_PHASE = {
-    "octopus-runner": "inspect",
-    "octoclaw-runner": "inspect",
-    "octopus-fix": "implement",
-    "octopus-test": "verify",
-    "octopus-scout": "collect",
-    "octopus-analyze": "inspect",
-    "octopus-writer": "report",
-}
-
 DEFAULT_PHASE_BY_WORK_TYPE = {
     "ops": "inspect",
     "research": "collect",
     "code": "implement",
     "review": "verify",
+}
+
+MODEL_BAND_TO_SELECTOR_BAND = {
+    "fast": "quick",
+    "normal": "standard",
+    "strong": "strong",
+    "heavy": "heavy",
+}
+
+SELECTOR_BAND_TO_MODEL_BAND = {
+    "quick": "fast",
+    "standard": "normal",
+    "strong": "strong",
+    "heavy": "heavy",
+}
+
+DEFAULT_MODEL_BAND_BY_WORKER_POOL = {
+    "octoclaw-main": "normal",
+    "octoclaw-runner": "fast",
+    "octoclaw-research": "normal",
+    "octoclaw-code": "strong",
+    "octoclaw-review": "strong",
 }
 
 WORKER_POOL_DISPLAY = {
@@ -82,31 +66,6 @@ WORKER_POOL_DISPLAY = {
     "octoclaw-review": {"emoji": "🧪", "name": "海胆手"},
 }
 
-LEGACY_LABEL_DISPLAY = {
-    "main": {"emoji": "🤖", "name": "主脑"},
-    "octoclaw-main": {"emoji": "🤖", "name": "主脑"},
-    "octopus-power": {"emoji": "💪", "name": "鲸力手"},
-    "octopus-scout": {"emoji": "🔍", "name": "梭鱼眼"},
-    "octopus-writer": {"emoji": "✍️", "name": "墨鱼手"},
-    "octopus-fix": {"emoji": "🔧", "name": "螃蟹手"},
-    "octopus-test": {"emoji": "🧪", "name": "海胆手"},
-    "octopus-analyze": {"emoji": "📊", "name": "章鱼脑"},
-    "octopus-runner": {"emoji": "🏃", "name": "飞鱼腿"},
-    "octoclaw-runner": {"emoji": "🏃", "name": "飞鱼腿"},
-    "octopus-feishu": {"emoji": "🐦", "name": "鸽手"},
-}
-
-
-def legacy_label_value(task: dict[str, Any] | str, default: str = "") -> str:
-    if isinstance(task, str):
-        return str(task or "").strip() or default
-    if not isinstance(task, dict):
-        return default
-    explicit = str(task.get("legacy_label", "") or "").strip()
-    if explicit:
-        return explicit
-    return str(task.get("label", "") or "").strip() or default
-
 
 def normalize_worker_pool(value: str, default: str = "") -> str:
     text = str(value or "").strip()
@@ -115,9 +74,23 @@ def normalize_worker_pool(value: str, default: str = "") -> str:
     return default
 
 
-def worker_pool_from_legacy_label(label: str, default: str = "") -> str:
-    text = str(label or "").strip()
-    return LEGACY_LABEL_TO_WORKER_POOL.get(text, default)
+def normalize_model_band(value: str, default: str = "") -> str:
+    text = str(value or "").strip().lower()
+    if text in VALID_MODEL_BANDS:
+        return text
+    return default
+
+
+def selector_band_for_model_band(model_band: str, *, route: str = "") -> str:
+    normalized = normalize_model_band(model_band, default="normal")
+    if str(route or "").strip().lower() == "runner":
+        return "quick"
+    return MODEL_BAND_TO_SELECTOR_BAND.get(normalized, "standard")
+
+
+def model_band_for_selector_band(selector_band: str, default: str = "normal") -> str:
+    text = str(selector_band or "").strip().lower()
+    return SELECTOR_BAND_TO_MODEL_BAND.get(text, default)
 
 
 def infer_worker_pool(route: str, work_type: str) -> str:
@@ -132,67 +105,40 @@ def infer_worker_pool(route: str, work_type: str) -> str:
     return "octoclaw-research"
 
 
-def model_role_for_worker_pool(
-    worker_pool: str,
+def infer_model_band(
     *,
-    phase: str = "",
     route: str = "",
-    profile: str = "",
+    worker_pool: str = "",
+    work_type: str = "",
+    protocol: str = "",
 ) -> str:
-    pool = normalize_worker_pool(worker_pool, default="octoclaw-research")
-    current_phase = str(phase or "").strip()
-    current_route = str(route or "").strip()
-    current_profile = str(profile or "").strip()
+    current_route = str(route or "").strip().lower()
+    current_pool = normalize_worker_pool(worker_pool, default="")
+    current_work_type = str(work_type or "").strip().lower()
+    current_protocol = str(protocol or "").strip().lower()
 
-    if pool == "octoclaw-main":
-        return "main"
-    if pool == "octoclaw-runner":
-        return "runner"
+    if current_protocol == "heavy":
+        return "heavy"
+    if current_route == "runner" or current_pool == "octoclaw-runner":
+        return "fast"
     if current_route == "spawn_multi":
-        return "power"
-    if pool == "octoclaw-review":
-        return "test"
-    if pool == "octoclaw-code":
-        return "test" if current_phase == "verify" else "fix"
-    if current_profile == "writer" or current_phase == "report":
-        return "writer"
-    if current_phase == "inspect":
-        return "analyze"
-    return "scout"
-
-
-def legacy_label_for_worker_pool(
-    worker_pool: str,
-    *,
-    phase: str = "",
-    route: str = "",
-    profile: str = "",
-    role_hint: str = "",
-) -> str:
-    computed = MODEL_ROLE_TO_LEGACY_LABEL.get(
-        model_role_for_worker_pool(worker_pool, phase=phase, route=route, profile=profile),
-        "octopus-scout",
-    )
-    hint = str(role_hint or "").strip()
-    hinted_pool = worker_pool_from_legacy_label(hint)
-    if hint and hint not in {"main", "octoclaw-main"} and hinted_pool == normalize_worker_pool(worker_pool) and hint == computed:
-        return hint
-    return computed
+        return "heavy"
+    if current_work_type in {"code", "review"} or current_pool in {"octoclaw-code", "octoclaw-review"}:
+        return "strong"
+    if current_route == "direct":
+        return "fast"
+    return DEFAULT_MODEL_BAND_BY_WORKER_POOL.get(current_pool, "normal")
 
 
 def resolve_worker_pool(task: dict[str, Any] | str, default: str = "") -> str:
     if isinstance(task, str):
-        return normalize_worker_pool(task, default=default) or worker_pool_from_legacy_label(task, default=default)
+        return normalize_worker_pool(task, default=default)
     if not isinstance(task, dict):
         return default
 
-    explicit = normalize_worker_pool(str(task.get("worker_pool", "") or "").strip())
+    explicit = normalize_worker_pool(str(task.get("worker_pool", "") or "").strip(), default="")
     if explicit:
         return explicit
-
-    label = worker_pool_from_legacy_label(legacy_label_value(task), default="")
-    if label:
-        return label
 
     route = str(task.get("route", "") or "").strip().lower()
     runtime = str(task.get("runtime", "") or "").strip().lower()
@@ -217,9 +163,7 @@ def resolve_worker_pool(task: dict[str, Any] | str, default: str = "") -> str:
 def resolve_work_type(task: dict[str, Any] | str, default: str = "") -> str:
     if isinstance(task, str):
         worker_pool = resolve_worker_pool(task, default="")
-        if worker_pool:
-            return WORKER_POOL_TO_WORK_TYPE.get(worker_pool, default)
-        return LEGACY_LABEL_TO_WORK_TYPE.get(str(task).strip(), default)
+        return WORKER_POOL_TO_WORK_TYPE.get(worker_pool, default)
     if not isinstance(task, dict):
         return default
 
@@ -237,14 +181,14 @@ def resolve_work_type(task: dict[str, Any] | str, default: str = "") -> str:
         if work_type:
             return work_type
 
-    label = legacy_label_value(task)
-    return LEGACY_LABEL_TO_WORK_TYPE.get(label, default)
+    return default
 
 
 def resolve_phase(task: dict[str, Any] | str, default: str = "") -> str:
     if isinstance(task, str):
-        label = str(task).strip()
-        return LEGACY_LABEL_TO_PHASE.get(label, default)
+        worker_pool = resolve_worker_pool(task, default="")
+        work_type = WORKER_POOL_TO_WORK_TYPE.get(worker_pool, "")
+        return DEFAULT_PHASE_BY_WORK_TYPE.get(work_type, default)
     if not isinstance(task, dict):
         return default
 
@@ -257,17 +201,58 @@ def resolve_phase(task: dict[str, Any] | str, default: str = "") -> str:
         return "inspect"
 
     profile = str(task.get("profile", "") or "").strip().lower()
-    work_type = resolve_work_type(task, default="")
     if profile == "writer":
         return "report"
-    if work_type:
-        phase = DEFAULT_PHASE_BY_WORK_TYPE.get(work_type, "")
-        if phase:
-            label = legacy_label_value(task)
-            return LEGACY_LABEL_TO_PHASE.get(label, phase)
 
-    label = legacy_label_value(task)
-    return LEGACY_LABEL_TO_PHASE.get(label, default)
+    work_type = resolve_work_type(task, default="")
+    return DEFAULT_PHASE_BY_WORK_TYPE.get(work_type, default)
+
+
+def resolve_model_band(task: dict[str, Any] | str, default: str = "") -> str:
+    if isinstance(task, str):
+        return normalize_model_band(task, default=default)
+    if not isinstance(task, dict):
+        return default
+
+    explicit = normalize_model_band(str(task.get("model_band", "") or "").strip(), default="")
+    if explicit:
+        return explicit
+
+    return infer_model_band(
+        route=str(task.get("route", "") or ""),
+        worker_pool=resolve_worker_pool(task, default=""),
+        work_type=resolve_work_type(task, default=""),
+        protocol=str(task.get("protocol", "") or ""),
+    ) or default
+
+
+def model_role_for_worker_pool(
+    worker_pool: str,
+    *,
+    phase: str = "",
+    route: str = "",
+    profile: str = "",
+) -> str:
+    pool = normalize_worker_pool(worker_pool, default="octoclaw-research")
+    current_phase = str(phase or "").strip()
+    current_route = str(route or "").strip()
+    current_profile = str(profile or "").strip()
+
+    if pool == "octoclaw-main":
+        return "main"
+    if pool == "octoclaw-runner":
+        return "runner"
+    if current_route == "spawn_multi":
+        return "team"
+    if pool == "octoclaw-review":
+        return "review"
+    if pool == "octoclaw-code":
+        return "review" if current_phase == "verify" else "code"
+    if current_profile == "writer" or current_phase == "report":
+        return "writer"
+    if current_phase == "inspect":
+        return "inspect"
+    return "research"
 
 
 def resolve_executor(task: dict[str, Any] | str, default: str = "subagent") -> str:
@@ -300,26 +285,13 @@ def is_runner_task(task: dict[str, Any] | str) -> bool:
 
 
 def role_display(task: dict[str, Any] | str) -> dict[str, str]:
-    if isinstance(task, str):
-        worker_pool = resolve_worker_pool(task, default="")
-        if worker_pool in WORKER_POOL_DISPLAY:
-            return dict(WORKER_POOL_DISPLAY[worker_pool])
-        label = str(task).strip()
-        if label in LEGACY_LABEL_DISPLAY:
-            return dict(LEGACY_LABEL_DISPLAY[label])
-        return {"emoji": "🤖", "name": label or "任务"}
-
-    explicit_worker_pool = normalize_worker_pool(str(task.get("worker_pool", "") or "").strip(), default="")
-    if explicit_worker_pool and explicit_worker_pool in WORKER_POOL_DISPLAY:
-        return dict(WORKER_POOL_DISPLAY[explicit_worker_pool])
-
-    label = legacy_label_value(task)
-    if label in LEGACY_LABEL_DISPLAY:
-        return dict(LEGACY_LABEL_DISPLAY[label])
-
     worker_pool = resolve_worker_pool(task, default="")
     if worker_pool in WORKER_POOL_DISPLAY:
         return dict(WORKER_POOL_DISPLAY[worker_pool])
-    if worker_pool:
-        return {"emoji": "🤖", "name": worker_pool.replace("octoclaw-", "")}
-    return {"emoji": "🤖", "name": label.replace("octopus-", "") if label else "任务"}
+
+    if isinstance(task, str):
+        label = str(task).strip()
+        clean = label.replace("octoclaw-", "").replace("octopus-", "") or "任务"
+        return {"emoji": "🤖", "name": clean}
+
+    return {"emoji": "🤖", "name": "任务"}

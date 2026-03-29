@@ -17,7 +17,6 @@
     "tool_policy",
     "route_hint_policy",
     "runtime_switches",
-    "compat",
     "hook_interface"
   ],
   "properties": {
@@ -114,8 +113,8 @@
       "required": [
         "worker_pool",
         "model_selector_role",
-        "selector_tier",
-        "tier",
+        "selector_band",
+        "model_band",
         "selected_model",
         "profile",
         "reasoning_effort",
@@ -124,10 +123,8 @@
       "properties": {
         "worker_pool": { "type": "string" },
         "model_selector_role": { "type": "string" },
-        "selector_tier": { "type": "string" },
-        "legacy_label": { "type": "string" },
-        "legacy_tier": { "type": "string" },
-        "tier": { "type": "string" },
+        "selector_band": { "type": "string" },
+        "model_band": { "type": "string" },
         "selected_model": { "type": "string" },
         "profile": { "type": "string" },
         "reasoning_effort": { "type": "string" },
@@ -275,15 +272,6 @@
         "direct_model_override_enabled": { "type": "boolean" },
         "delegation_enforcement_enabled": { "type": "boolean" },
         "sticky_lane_enabled": { "type": "boolean" }
-      }
-    },
-    "compat": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["legacy_role_hint", "legacy_tier_hint"],
-      "properties": {
-        "legacy_role_hint": { "type": "string" },
-        "legacy_tier_hint": { "type": "string" }
       }
     },
     "hook_interface": {

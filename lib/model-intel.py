@@ -200,13 +200,13 @@ def infer_family_metadata(model_id: str, override: dict) -> dict:
     preferred_use = override.get("preferred_use")
     if not isinstance(preferred_use, list):
         if size_class == "nano":
-            preferred_use = ["direct", "trivial", "simple"]
+            preferred_use = ["direct", "runner", "fast"]
         elif size_class == "mini":
-            preferred_use = ["direct", "runner", "writer", "simple"]
+            preferred_use = ["direct", "runner", "report", "fast"]
         elif size_class == "base":
-            preferred_use = ["runner", "fix", "test", "scout", "writer", "normal"]
+            preferred_use = ["runner", "research", "report", "normal"]
         else:
-            preferred_use = ["main", "analyze", "power", "hard", "deep"]
+            preferred_use = ["main", "code", "review", "strong", "heavy"]
 
     upgrade_path = override.get("upgrade_path")
     if not isinstance(upgrade_path, list):

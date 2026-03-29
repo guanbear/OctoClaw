@@ -19,7 +19,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         payload = normalize_task_record(
             {
                 "id": "runner-1",
-                "label": "octopus-runner",
+                "worker_pool": "octoclaw-runner",
                 "status": "queued",
                 "summary": "check redis port",
                 "route": "runner",
@@ -39,7 +39,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         payload = normalize_task_record(
             {
                 "id": "spawn-1",
-                "label": "octopus-fix",
+                "worker_pool": "octoclaw-code",
                 "status": "dispatched",
                 "route": "spawn_single",
                 "runtime": "subagent",
@@ -81,7 +81,6 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         payload = normalize_task_record(
             {
                 "id": "done-1",
-                "legacy_label": "octopus-test",
                 "status": "done",
                 "summary": "verified the release notes output",
                 "route": "spawn_single",
@@ -92,7 +91,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
             }
         )
         self.assertNotIn("legacy_label", payload)
-        self.assertEqual(payload["label"], "")
+        self.assertNotIn("label", payload)
         self.assertEqual(payload["artifacts"]["worker_result"]["schema_version"], "octoclaw.worker_result/v1")
         self.assertEqual(payload["artifacts"]["worker_result"]["status"], "done")
         self.assertEqual(payload["artifacts"]["worker_result"]["report"], "/tmp/review-report.md")
@@ -109,8 +108,6 @@ class RuntimeTaskRecordTests(unittest.TestCase):
                     "upsert",
                     "--id",
                     "spawn-2",
-                    "--label",
-                    "octopus-scout",
                     "--status",
                     "dispatched",
                     "--summary",
@@ -154,7 +151,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(task["phase"], "collect")
         self.assertEqual(task["profile"], "research")
         self.assertTrue(task["review_required"])
-        self.assertEqual(task["label"], "octopus-scout")
+        self.assertNotIn("label", task)
         self.assertEqual(task["artifacts"]["report_path"], "/tmp/gateway-report.md")
 
     def test_task_state_update_infers_executor_from_worker_pool_first(self) -> None:

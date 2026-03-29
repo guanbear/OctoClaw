@@ -4,14 +4,13 @@ import unittest
 from lib.worker_taxonomy import (
     infer_worker_pool,
     is_runner_task,
-    legacy_label_for_worker_pool,
     model_role_for_worker_pool,
+    resolve_model_band,
     resolve_executor,
     resolve_phase,
     resolve_work_type,
     resolve_worker_pool,
     role_display,
-    worker_pool_from_legacy_label,
 )
 
 
@@ -23,39 +22,19 @@ class WorkerTaxonomyTests(unittest.TestCase):
         self.assertEqual(infer_worker_pool("spawn_single", "review"), "octoclaw-review")
         self.assertEqual(infer_worker_pool("spawn_single", "research"), "octoclaw-research")
 
-    def test_research_pool_legacy_label_depends_on_phase_and_profile(self) -> None:
+    def test_selector_role_uses_new_taxonomy(self) -> None:
         self.assertEqual(
-            legacy_label_for_worker_pool("octoclaw-research", phase="collect", route="spawn_single"),
-            "octopus-scout",
+            model_role_for_worker_pool("octoclaw-research", phase="report", route="spawn_single", profile="writer"),
+            "writer",
         )
-        self.assertEqual(
-            legacy_label_for_worker_pool("octoclaw-research", phase="inspect", route="spawn_single"),
-            "octopus-analyze",
-        )
-        self.assertEqual(
-            legacy_label_for_worker_pool("octoclaw-research", phase="report", route="spawn_single", profile="writer"),
-            "octopus-writer",
-        )
-
-    def test_spawn_multi_uses_power_selector_role_but_preserves_worker_pool(self) -> None:
         self.assertEqual(
             model_role_for_worker_pool("octoclaw-code", phase="implement", route="spawn_multi", profile="code"),
-            "power",
-        )
-        self.assertEqual(
-            legacy_label_for_worker_pool("octoclaw-code", phase="implement", route="spawn_multi", profile="code"),
-            "octopus-power",
+            "team",
         )
 
-    def test_legacy_label_fallback_maps_to_worker_pool(self) -> None:
-        self.assertEqual(worker_pool_from_legacy_label("octopus-fix"), "octoclaw-code")
-        self.assertEqual(worker_pool_from_legacy_label("octopus-test"), "octoclaw-review")
-        self.assertEqual(worker_pool_from_legacy_label("octopus-runner"), "octoclaw-runner")
-
-    def test_resolve_worker_pool_prefers_explicit_pool_then_legacy_label(self) -> None:
-        self.assertEqual(resolve_worker_pool({"worker_pool": "octoclaw-review", "label": "octopus-fix"}), "octoclaw-review")
-        self.assertEqual(resolve_worker_pool({"label": "octopus-fix"}), "octoclaw-code")
-        self.assertEqual(resolve_worker_pool({"legacy_label": "octopus-test", "label": "octopus-fix"}), "octoclaw-review")
+    def test_resolve_worker_pool_prefers_explicit_pool_then_route_and_work_type(self) -> None:
+        self.assertEqual(resolve_worker_pool({"worker_pool": "octoclaw-review"}), "octoclaw-review")
+        self.assertEqual(resolve_worker_pool({"route": "spawn_single", "work_type": "code"}), "octoclaw-code")
         self.assertEqual(resolve_worker_pool({"route": "runner", "work_type": "ops"}), "octoclaw-runner")
 
     def test_work_type_and_phase_can_be_derived_from_worker_pool_first(self) -> None:
@@ -63,10 +42,14 @@ class WorkerTaxonomyTests(unittest.TestCase):
         self.assertEqual(resolve_phase({"worker_pool": "octoclaw-review"}), "verify")
         self.assertEqual(resolve_phase({"worker_pool": "octoclaw-research", "profile": "writer"}), "report")
 
-    def test_role_display_prefers_worker_pool_but_falls_back_to_legacy_label(self) -> None:
+    def test_role_display_uses_worker_pool_without_legacy_labels(self) -> None:
         self.assertEqual(role_display({"worker_pool": "octoclaw-code"})["name"], "螃蟹手")
         self.assertEqual(role_display({"worker_pool": "octoclaw-research"})["emoji"], "🔍")
-        self.assertEqual(role_display({"label": "octopus-analyze"})["name"], "章鱼脑")
+        self.assertEqual(role_display("octoclaw-runner")["name"], "飞鱼腿")
+
+    def test_model_band_resolution_ignores_removed_tier_fields(self) -> None:
+        self.assertEqual(resolve_model_band({"worker_pool": "octoclaw-code"}), "strong")
+        self.assertEqual(resolve_model_band({"route": "runner", "unexpected_band": "legacy"}), "fast")
 
     def test_executor_and_runner_detection_use_worker_pool_first(self) -> None:
         self.assertEqual(resolve_executor({"worker_pool": "octoclaw-runner"}), "runner")

@@ -100,10 +100,8 @@ def resolve_runner_model() -> str:
         [
             "python3",
             RESOLVE_MODEL_PY,
-            "--tier",
-            "trivial",
-            "--label",
-            "octopus-runner",
+            "--selector-band",
+            "quick",
             "--worker-pool",
             "octoclaw-runner",
             "--phase",
@@ -138,7 +136,7 @@ def main():
     parser.add_argument("--summary", default="")
     parser.add_argument("--cwd", default="/workspace")
     parser.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
-    parser.add_argument("--tier", default="trivial")
+    parser.add_argument("--model-band", dest="model_band", default="fast")
     parser.add_argument("--task-description", dest="task_description", default="")
     args = parser.parse_args()
 
@@ -156,16 +154,14 @@ def main():
             "upsert",
             "--id",
             job_id,
-            "--label",
-            "octopus-runner",
             "--model",
             model,
             "--status",
             "queued",
             "--summary",
             args.summary or job_id,
-            "--tier",
-            args.tier,
+            "--model-band",
+            args.model_band,
             "--expected-done",
             expected_done_offset(args.timeout_seconds),
             "--task-description",
@@ -212,8 +208,8 @@ def main():
             args.cwd,
             "--timeout-seconds",
             str(args.timeout_seconds),
-            "--tier",
-            args.tier,
+            "--model-band",
+            args.model_band,
             "--model",
             model,
             "--task-description",

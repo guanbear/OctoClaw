@@ -13,7 +13,7 @@
   2. 排队中：status=queued
   3. 待确认：status=pending_confirm（主 Agent 等待用户确认）
   4. 可能卡死：status=running/dispatched 且 spawned_at 超过15分钟没更新
-  5. ⏱️ 超时检测：根据任务 tier 判断运行时长是否超阈值，超时则自动终止并告警
+  5. ⏱️ 超时检测：根据任务 model_band 判断运行时长是否超阈值，超时则自动终止并告警
 
 触发逻辑：
   - 有状态变化（running变化/新排队/新完成/新失败/新卡死）→ 发飞书面板
@@ -27,11 +27,10 @@
   ⚠️ 可能卡死（N个）— 超15分钟无更新
 
 超时阈值：
-  trivial  → 3 min
-  simple   → 5 min
-  normal   → 8 min（默认）
-  hard     → 15 min
-  deep     → 20 min
+  fast    → 3 min
+  normal  → 8 min（默认）
+  strong  → 15 min
+  heavy   → 20 min
 """
 
 import sys
@@ -58,9 +57,23 @@ from octopus_config import (
 from session_ops import send_agent_message
 
 try:
-    from worker_taxonomy import is_runner_task as taxonomy_is_runner_task, resolve_executor, resolve_worker_pool, role_display
+    from worker_taxonomy import (
+        is_runner_task as taxonomy_is_runner_task,
+        resolve_executor,
+        resolve_model_band,
+        resolve_worker_pool,
+        role_display,
+        selector_band_for_model_band,
+    )
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.worker_taxonomy import is_runner_task as taxonomy_is_runner_task, resolve_executor, resolve_worker_pool, role_display
+    from lib.worker_taxonomy import (
+        is_runner_task as taxonomy_is_runner_task,
+        resolve_executor,
+        resolve_model_band,
+        resolve_worker_pool,
+        role_display,
+        selector_band_for_model_band,
+    )
 
 # ⚠️ 注意：巡逻任务本身通过 cron 运行，不写入 task-state.json
 # 因此不会在巡逻报告中出现自己。
@@ -102,8 +115,8 @@ ORDINAL_CHARS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", 
 
 
 def get_label_name(label: str) -> str:
-    """兼容旧调用：仅 label 输入时返回显示名。"""
-    return role_display({"label": label})["name"]
+    """兼容旧调用：字符串输入时返回可读名称。"""
+    return role_display(str(label or "").strip())["name"]
 
 
 def get_task_display_name(task: dict, ordinal: str = "") -> str:
@@ -180,40 +193,40 @@ AUTO_REDISPATCH_RETRY_LIMITS = {
     "stuck": 1,
     "tool_error": 1,
 }
-TIER_SEQUENCE = ["trivial", "simple", "normal", "hard", "deep"]
+MODEL_BAND_SEQUENCE = ["fast", "normal", "strong", "heavy"]
 
 # ── 超时阈值（分钟）：软超时先告警，硬超时自动收口 ──
 # 硬超时 = 软超时 × 2
-# tier 字段未定义时默认 normal（15分钟软超时）
-TIER_TIMEOUT_MINUTES = {
-    "trivial": 3,
-    "simple": 5,
+MODEL_BAND_TIMEOUT_MINUTES = {
+    "fast": 3,
     "normal": 8,
-    "hard": 15,
-    "deep": 20,
+    "strong": 15,
+    "heavy": 20,
 }
-DEFAULT_TIER = "normal"  # 无 tier 字段时的默认级别
+DEFAULT_MODEL_BAND = "normal"
 
-# 特定 label 的默认 tier（当 task 没有 tier 字段时使用）
-LABEL_DEFAULT_TIER = {
-    "octopus-analyze": "deep",   # 章鱼脑默认 deep（20min 阈值）
-    "octopus-power": "deep",     # 鲸力手默认 deep
-}
-
-WORKER_POOL_DEFAULT_TIER = {
-    "octoclaw-runner": "trivial",
-    "octoclaw-code": "normal",
-    "octoclaw-review": "normal",
+WORKER_POOL_DEFAULT_MODEL_BAND = {
+    "octoclaw-runner": "fast",
+    "octoclaw-code": "strong",
+    "octoclaw-review": "strong",
     "octoclaw-research": "normal",
+    "octoclaw-main": "normal",
 }
 
 
-def tier_default_for_task(task: dict) -> str:
+def task_model_band(task: dict) -> str:
+    return str(resolve_model_band(task, default=DEFAULT_MODEL_BAND) or DEFAULT_MODEL_BAND).lower()
+
+
+def task_session_identity(task: dict) -> str:
+    return str(task.get("owner", "") or task.get("label", "") or task.get("session_id", "") or "").strip()
+
+
+def default_model_band_for_task(task: dict) -> str:
     worker_pool = resolve_worker_pool(task)
-    if worker_pool in WORKER_POOL_DEFAULT_TIER:
-        return WORKER_POOL_DEFAULT_TIER[worker_pool]
-    label = str(task.get("label", "") or "")
-    return LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
+    if worker_pool in WORKER_POOL_DEFAULT_MODEL_BAND:
+        return WORKER_POOL_DEFAULT_MODEL_BAND[worker_pool]
+    return DEFAULT_MODEL_BAND
 
 
 def load_task_state(path: str) -> dict:
@@ -470,7 +483,7 @@ def classify_tasks(tasks: list) -> tuple:
             # ── 新增：session 已结束但 task 仍为 running → 自动标 failed ──
             # 仅对运行超过2分钟的任务检查（避免刚启动的任务被误判）
             if age_minutes >= 2 and not runner_task:
-                task_label = t.get("label", "")
+                task_label = task_session_identity(t)
                 session_status = t.get("session_status", "")
                 # "missing" 更像观测缺失，不应直接等同于 session 已结束。
                 # 老版本对缺失 session 走保守路径，这里也保持同样策略，
@@ -521,7 +534,7 @@ def classify_tasks(tasks: list) -> tuple:
             if is_stuck:
                 # ── 改进：区分"卡死/真实失败"和"完成但无RESULT" ──
                 task_id = t.get("id", "")
-                task_label = t.get("label", "")
+                task_label = task_session_identity(t)
                 if runner_task:
                     task_label = ""
                 # 检查 session 是否已结束 + 是否幽灵完成
@@ -658,7 +671,7 @@ def session_updated_at_dt(session: dict):
 
 def build_session_candidates(task: dict, sessions_data: dict) -> list[dict]:
     """按 task label 选出可能匹配的 session，并按更新时间倒序排序。"""
-    label = task.get("label", "")
+    label = task_session_identity(task)
     if not label:
         return []
 
@@ -1408,7 +1421,7 @@ def check_task_transcript_errors(task: dict) -> str | None:
     
     返回：错误描述字符串，或 None（无异常）
     """
-    label = task.get("label", "")
+    label = task_session_identity(task)
     if not label:
         return None
 
@@ -1773,12 +1786,15 @@ _EXEC_STATS_PRICING: dict = {
     "haiku":   (0.25,  1.25),
     "default": (3.00, 15.00),
 }
-_EXEC_STATS_TIER_TOKENS: dict = {
-    "trivial": 800, "simple": 2000, "normal": 5000, "hard": 10000, "deep": 20000,
+_EXEC_STATS_MODEL_BAND_TOKENS: dict = {
+    "fast": 1600,
+    "normal": 5000,
+    "strong": 10000,
+    "heavy": 20000,
 }
 
 
-def _calc_task_cost(model: str, tier: str) -> float:
+def _calc_task_cost(model: str, model_band: str) -> float:
     """快速估算单个任务成本（USD），不依赖 budget.py"""
     m = model.lower()
     key = "default"
@@ -1787,7 +1803,7 @@ def _calc_task_cost(model: str, tier: str) -> float:
             key = k
             break
     p_in, p_out = _EXEC_STATS_PRICING[key]
-    tokens = _EXEC_STATS_TIER_TOKENS.get(tier, 5000)
+    tokens = _EXEC_STATS_MODEL_BAND_TOKENS.get(model_band, 5000)
     return round((tokens * 0.75 * p_in + tokens * 0.25 * p_out) / 1_000_000, 5)
 
 
@@ -1805,9 +1821,9 @@ def build_exec_stats_text(recent_done: list):
             if t.get("_finish_type") != "done":
                 continue
             model = t.get("model", "")
-            tier = t.get("tier", "normal")
-            actual = _calc_task_cost(model, tier)
-            baseline = _calc_task_cost("sonnet", tier)
+            model_band = task_model_band(t)
+            actual = _calc_task_cost(model, model_band)
+            baseline = _calc_task_cost("sonnet", model_band)
             total_actual += actual
             total_baseline += baseline
             label_name = get_task_display_name(t)
@@ -1819,7 +1835,7 @@ def build_exec_stats_text(recent_done: list):
                 elapsed_str = format_age((completed_at - start_at).total_seconds() / 60)
             else:
                 elapsed_str = "-"
-            rows.append(f"  {label_name} · {model_short} · {tier} · {elapsed_str} · ${actual:.4f}")
+            rows.append(f"  {label_name} · {model_short} · {model_band} · {elapsed_str} · ${actual:.4f}")
         if not rows:
             return None
         saved = total_baseline - total_actual
@@ -2299,7 +2315,7 @@ def send_dm_alert(stuck_tasks: list) -> str | None:
                 "id": task_id,
                 "label": label,
                 "model": model,
-                "tier": t.get("tier", "normal"),
+                "model_band": task_model_band(t),
                 "reason": reason,
                 "elapsed": f"{elapsed_min}min"
             })
@@ -2627,21 +2643,19 @@ def _update_deferred_report_count(deferred_list: list):
 
 
 def get_timeout_minutes(task: dict) -> int:
-    """兼容旧调用：返回 tier 最低保障（分钟），等同于 TIER_MIN[tier]。"""
-    label_default = tier_default_for_task(task)
-    tier = task.get("tier", label_default).lower()
-    return TIER_TIMEOUT_MINUTES.get(tier, TIER_TIMEOUT_MINUTES[DEFAULT_TIER])
+    """兼容旧调用：返回 model_band 最低保障（分钟）。"""
+    model_band = task_model_band(task) or default_model_band_for_task(task)
+    return MODEL_BAND_TIMEOUT_MINUTES.get(model_band, MODEL_BAND_TIMEOUT_MINUTES[DEFAULT_MODEL_BAND])
 
 
 def calculate_timeout(task: dict) -> float:
-    """动态超时公式：max(expected_duration × 1.5, TIER_MIN[tier])（分钟）
+    """动态超时公式：max(expected_duration × 1.5, MIN_TIMEOUT[model_band])（分钟）
 
     expected_duration = expected_done_at - spawned_at（分钟）
-    若 expected_done_at 为空，fallback 到 TIER_MIN[tier] × 2
+    若 expected_done_at 为空，fallback 到 MIN_TIMEOUT[model_band] × 2
     """
-    label_default = tier_default_for_task(task)
-    tier = task.get("tier", label_default).lower()
-    tier_min = float(TIER_TIMEOUT_MINUTES.get(tier, TIER_TIMEOUT_MINUTES[DEFAULT_TIER]))
+    model_band = task_model_band(task) or default_model_band_for_task(task)
+    band_min = float(MODEL_BAND_TIMEOUT_MINUTES.get(model_band, MODEL_BAND_TIMEOUT_MINUTES[DEFAULT_MODEL_BAND]))
 
     expected_done_at_str = task.get("expected_done_at") or ""
     spawned_at_str = task.get("spawned_at") or task.get("started_at") or ""
@@ -2656,9 +2670,9 @@ def calculate_timeout(task: dict) -> float:
     if expected_duration is not None and expected_duration > 0:
         dynamic = expected_duration * 1.5
     else:
-        dynamic = tier_min * 2  # fallback
+        dynamic = band_min * 2  # fallback
 
-    return max(dynamic, tier_min)
+    return max(dynamic, band_min)
 
 
 def calculate_hard_timeout(task: dict) -> float:
@@ -2666,19 +2680,19 @@ def calculate_hard_timeout(task: dict) -> float:
     return calculate_timeout(task) * 2.0
 
 
-def tier_rank(tier: str) -> int:
+def model_band_rank(model_band: str) -> int:
     try:
-        return TIER_SEQUENCE.index((tier or DEFAULT_TIER).lower())
+        return MODEL_BAND_SEQUENCE.index((model_band or DEFAULT_MODEL_BAND).lower())
     except ValueError:
-        return TIER_SEQUENCE.index(DEFAULT_TIER)
+        return MODEL_BAND_SEQUENCE.index(DEFAULT_MODEL_BAND)
 
 
-def elevate_tier(base_tier: str, *, floor: str = "", steps: int = 0) -> str:
-    rank = tier_rank(base_tier)
+def elevate_model_band(base_model_band: str, *, floor: str = "", steps: int = 0) -> str:
+    rank = model_band_rank(base_model_band)
     if floor:
-        rank = max(rank, tier_rank(floor))
-    rank = min(len(TIER_SEQUENCE) - 1, rank + max(0, steps))
-    return TIER_SEQUENCE[rank]
+        rank = max(rank, model_band_rank(floor))
+    rank = min(len(MODEL_BAND_SEQUENCE) - 1, rank + max(0, steps))
+    return MODEL_BAND_SEQUENCE[rank]
 
 
 def apply_task_updates(task_id: str, updates: dict, *, allowed_statuses: tuple[str, ...] | None = None) -> bool:
@@ -2725,17 +2739,17 @@ def mark_task_failed(task_id: str, summary: str, *, extra_updates: dict | None =
     return apply_task_updates(task_id, updates, allowed_statuses=("running", "dispatched", "queued", "failed"))
 
 
-def choose_retry_tier(task: dict, reason: str) -> str:
-    base_tier = str(task.get("tier", tier_default_for_task(task)) or DEFAULT_TIER).lower()
+def choose_retry_model_band(task: dict, reason: str) -> str:
+    base_model_band = str(task_model_band(task) or default_model_band_for_task(task) or DEFAULT_MODEL_BAND).lower()
     current_model = str(task.get("model", "") or "").lower()
     if reason == "token_overflow":
-        return elevate_tier(base_tier, floor="hard")
+        return elevate_model_band(base_model_band, floor="strong")
     if reason == "stuck":
         steps = 1 if any(x in current_model for x in ("glm", "minimax")) else 0
-        return elevate_tier(base_tier, floor="normal", steps=steps)
+        return elevate_model_band(base_model_band, floor="normal", steps=steps)
     if reason == "tool_error":
-        return elevate_tier(base_tier, floor="normal")
-    return base_tier
+        return elevate_model_band(base_model_band, floor="normal")
+    return base_model_band
 
 
 def build_retry_task_text(task: dict, reason: str) -> str:
@@ -2784,16 +2798,14 @@ def auto_redispatch_task(task: dict, reason: str, *, source: str) -> str | None:
         return None
 
     task_id = str(task.get("id", "") or "")
-    label = str(task.get("label", "octopus-fix") or "octopus-fix")
-    retry_tier = choose_retry_tier(task, reason)
+    retry_tier = choose_retry_model_band(task, reason)
     retry_text = build_retry_task_text(task, reason)
 
     try:
         spawn_spec = build_spawn_spec(
             retry_text,
             route="spawn_single",
-            label=label,
-            tier=retry_tier,
+            model_band=retry_tier,
             parent_id=task_id,
             register=True,
         )
@@ -2940,7 +2952,7 @@ def analyze_timeout_reason(task: dict) -> str:
 
     返回值：ghost_completion / token_overflow / tool_error / stuck / unknown
     """
-    label = task.get("label", "")
+    label = task_session_identity(task)
     if not label:
         return "unknown"
 
@@ -3147,9 +3159,9 @@ def send_timeout_alert(task: dict, elapsed_minutes: float, run_id: str | None, k
     发送超时告警到飞书（简单文本消息）。
     timeout_reason: analyze_timeout_reason() 返回的分析结果
     """
-    label = task.get("label", task.get("id", "未知"))
+    label = task_session_identity(task) or task.get("id", "未知")
     display_name = get_task_display_name(task)
-    tier = task.get("tier", DEFAULT_TIER)
+    model_band = task_model_band(task)
     timeout_minutes = calculate_timeout(task)
     total_seconds = int(elapsed_minutes * 60)
     m = total_seconds // 60
@@ -3178,7 +3190,7 @@ def send_timeout_alert(task: dict, elapsed_minutes: float, run_id: str | None, k
         f"⏰ 八爪鱼超时告警\n\n"
         f"触手：{display_name}（{label}）\n"
         f"任务：{task.get('summary', '（无标题）')[:20]} | {task.get('id', '未知')}\n"
-        f"级别：{tier}（动态超时 {timeout_minutes:.0f}min）\n"
+        f"级别：{model_band}（动态超时 {timeout_minutes:.0f}min）\n"
         f"运行时长：{m}m {s}s\n"
         f"超时原因：{reason_str}\n"
         f"建议操作：{advice_str}\n"
@@ -3233,7 +3245,7 @@ def check_and_handle_timeout(tasks: list) -> list:
             continue
 
         task_id = task.get("id", "")
-        label = task.get("label", "")
+        label = task_session_identity(task)
         # ── 发告警前再次从文件确认状态，防止已完成时误告警 ──
         try:
             _fresh_data = load_task_state(TASK_STATE_FILE)
@@ -3353,8 +3365,10 @@ def check_model_aliases():
     2. 用 subprocess 运行 openclaw models list --json，获取可用模型列表
     3. 对比别名文件里的模型是否在可用列表中
     4. 发现不可用的模型：
-       - trivial/simple/normal：从可用列表找名字含 glm 的替代
-       - normal_fallback/deep/deep_fallback：从可用列表找名字含 sonnet 的替代
+       - fast：优先找 minimax / kimi / glm
+       - normal：优先找 glm
+       - strong：优先找 gpt-5.4 / glm-5 / sonnet
+       - heavy：优先找 gpt-5.4 / opus / sonnet
     5. 有变化则更新别名文件 + 飞书通知
     """
     global _ALIAS_CHECK_LAST_TS
@@ -3408,42 +3422,37 @@ def check_model_aliases():
         print("⚠️  check_model_aliases: 可用模型列表为空，跳过检测")
         return
 
-    # 按类别选替代模型
-    glm_candidates = [m for m in available_ids if "glm" in m.lower()]
-    sonnet_candidates = [m for m in available_ids if "sonnet" in m.lower()]
-    # lixiang 私有模型优先，bailian 公有模型排后（私有 < 公有）
-    def _glm_sort_key(m):
-        if "bailian" in m.lower():
-            return (1, m)  # 公有，排后
-        return (0, m)  # 私有/其他，排前
-    glm_candidates.sort(key=_glm_sort_key)
-    sonnet_candidates.sort()
+    def pick_candidates(patterns: list[str]) -> list[str]:
+        hits = []
+        for model_id in available_ids:
+            lower = model_id.lower()
+            if any(pattern in lower for pattern in patterns):
+                hits.append(model_id)
+        return sorted(hits)
 
-    glm_keys = ["trivial", "simple", "normal"]
-    sonnet_keys = ["normal_fallback", "deep", "deep_fallback"]
+    def pick_private_first(patterns: list[str]) -> list[str]:
+        hits = pick_candidates(patterns)
+        return sorted(hits, key=lambda model_id: (1 if "bailian" in model_id.lower() else 0, model_id))
+
+    candidate_map = {
+        "fast": pick_candidates(["minimax", "m2.7", "kimi", "glm-4.7", "glm"]),
+        "normal": pick_private_first(["glm-4.7", "glm4.7", "kivy-glm-4.7", "glm-5", "kivy-glm-5", "glm"]),
+        "strong": pick_candidates(["gpt-5.4", "glm-5", "sonnet", "glm-4.7", "minimax"]),
+        "heavy": pick_candidates(["gpt-5.4", "glm-5", "opus", "sonnet", "minimax"]),
+    }
     changed = {}
 
-    for key in glm_keys:
+    for key in ("fast", "normal", "strong", "heavy"):
         model = aliases.get(key, "")
+        candidates = candidate_map.get(key, [])
         if model and model not in available_ids:
-            if glm_candidates:
-                new_model = glm_candidates[0]
+            if candidates:
+                new_model = candidates[0]
                 print(f"🔄  check_model_aliases: {key} 模型 {model} 不可用，替换为 {new_model}")
                 changed[key] = (model, new_model)
                 aliases[key] = new_model
             else:
-                print(f"⚠️  check_model_aliases: {key} 模型 {model} 不可用，且无 GLM 候选")
-
-    for key in sonnet_keys:
-        model = aliases.get(key, "")
-        if model and model not in available_ids:
-            if sonnet_candidates:
-                new_model = sonnet_candidates[0]
-                print(f"🔄  check_model_aliases: {key} 模型 {model} 不可用，替换为 {new_model}")
-                changed[key] = (model, new_model)
-                aliases[key] = new_model
-            else:
-                print(f"⚠️  check_model_aliases: {key} 模型 {model} 不可用，且无 Sonnet 候选")
+                print(f"⚠️  check_model_aliases: {key} 模型 {model} 不可用，且无候选")
 
     if changed:
         aliases["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -3461,7 +3470,7 @@ def check_model_aliases():
         if send_text(f"🔄 模型别名自动更新\n{change_lines}"):
             print("✅ check_model_aliases: 文本通知已发送")
     else:
-        print(f"✅ check_model_aliases: 所有别名模型均可用（共检查 {len(glm_keys + sonnet_keys)} 项）")
+        print(f"✅ check_model_aliases: 所有别名模型均可用（共检查 {len(candidate_map)} 项）")
 
 
 def update_task_status(task_id: str, new_status: str, extra: dict = None):
@@ -3570,7 +3579,7 @@ def check_model_violation(tasks: list):
     
     违规判定条件：
     1. 任务状态为 running/dispatched/done/failed（排除 queued/pending_confirm）
-    2. 任务有 tier 字段
+    2. 任务有 model_band 字段
     3. 任务的 model 与 resolve-model.py 应返回的结果不一致
     
     ERRORS.md 格式：
@@ -3631,27 +3640,35 @@ def check_model_violation(tasks: list):
             if ts and ts < cutoff:
                 continue  # 超过24小时，跳过
         
-        tier = task.get("tier", "")
-        label = task.get("label", "")
+        model_band = task_model_band(task)
         actual_model = task.get("model", "")
-        
-        if not tier or not actual_model:
+
+        if not model_band or not actual_model:
             continue  # 缺少必要字段，跳过
-        
-        # 推断 tier（如果任务没有显式 tier，从 label 推断）
-        if not tier:
-            tier = LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
-        
+
         # 模拟 resolve-model.py 的逻辑，计算应该使用的模型
         try:
             result = subprocess.run(
-                ["python3", "/workspace/openclaw/skills/octopus/lib/resolve-model.py", "--tier", tier, "--label", label],
+                [
+                    "python3",
+                    "/workspace/openclaw/skills/octopus/lib/resolve-model.py",
+                    "--selector-band",
+                    selector_band_for_model_band(model_band),
+                    "--worker-pool",
+                    str(resolve_worker_pool(task) or ""),
+                    "--phase",
+                    str(task.get("phase", "") or ""),
+                    "--route",
+                    str(task.get("route", "") or ""),
+                    "--profile",
+                    str(task.get("profile", "") or ""),
+                ],
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
                 expected_model = result.stdout.strip()
             else:
-                print(f"⚠️  resolve-model.py 失败 (tier={tier}, label={label}): {result.stderr[:100]}", file=sys.stderr)
+                print(f"⚠️  resolve-model.py 失败 (model_band={model_band}): {result.stderr[:100]}", file=sys.stderr)
                 continue
         except Exception as e:
             print(f"⚠️  resolve-model.py 异常: {e}", file=sys.stderr)
@@ -3662,8 +3679,7 @@ def check_model_violation(tasks: list):
             task_id = task.get("id", "unknown")
             violations.append({
                 "task_id": task_id,
-                "tier": tier,
-                "label": label,
+                "model_band": model_band,
                 "expected_model": expected_model,
                 "actual_model": actual_model,
                 "status": status
@@ -3735,7 +3751,6 @@ def check_queued_tasks(tasks: list) -> int:
             continue
         deps = task.get("deps", [])
         task_desc = task.get("task_description", "").strip()
-        label = task.get("label", "octopus-fix")
         model = task.get("model", "lixiang-glm-5/kivy-glm-5")
 
         if not task_desc:
@@ -3757,17 +3772,31 @@ def check_queued_tasks(tasks: list) -> int:
 
         # 所有依赖已完成（或无依赖），执行 spawn
         # ── BUG-3 修复：spawn 前重新解析 model，使用 ironclaw 降级保护 ──
-        # 从 task 推断 tier（优先 task.tier，再从 label 查表，最后默认 normal）
-        tier = task.get("tier", "")
-        if not tier:
-            tier = LABEL_DEFAULT_TIER.get(label, DEFAULT_TIER)
-        cache_key = (tier, label)
+        model_band = task_model_band(task)
+        worker_pool = str(resolve_worker_pool(task) or "")
+        phase = str(task.get("phase", "") or "")
+        profile = str(task.get("profile", "") or "")
+        route = str(task.get("route", "") or "")
+        cache_key = (model_band, worker_pool, phase, profile, route)
         cached_model = resolved_model_cache.get(cache_key, "__missing__")
         if cached_model == "__missing__":
             # 调用 resolve-model.py 获取最新 model（感知全局降级和模型守卫）
             try:
                 resolve_result = subprocess.run(
-                    ["python3", "/workspace/openclaw/skills/octopus/lib/resolve-model.py", "--tier", tier, "--label", label],
+                    [
+                        "python3",
+                        "/workspace/openclaw/skills/octopus/lib/resolve-model.py",
+                        "--selector-band",
+                        selector_band_for_model_band(model_band),
+                        "--worker-pool",
+                        worker_pool,
+                        "--phase",
+                        phase,
+                        "--route",
+                        route,
+                        "--profile",
+                        profile,
+                    ],
                     capture_output=True, text=True, timeout=5
                 )
                 if resolve_result.returncode == 0:
@@ -3775,7 +3804,7 @@ def check_queued_tasks(tasks: list) -> int:
                     if resolved_model:
                         resolved_model_cache[cache_key] = resolved_model
                         model = resolved_model
-                        print(f"  🔄 resolved model: {model} (tier={tier})")
+                        print(f"  🔄 resolved model: {model} (model_band={model_band})")
                     else:
                         resolved_model_cache[cache_key] = None
                         print(f"  ⚠️  resolve-model.py 返回空，使用原 model: {model}")
@@ -3787,7 +3816,7 @@ def check_queued_tasks(tasks: list) -> int:
                 print(f"  ⚠️  resolve-model.py 异常: {e}，使用原 model: {model}")
         elif cached_model:
             model = cached_model
-            print(f"  ♻️  复用 resolved model: {model} (tier={tier})")
+            print(f"  ♻️  复用 resolved model: {model} (model_band={model_band})")
 
         print(f"  🚀 queued 任务 {task_id} 依赖全部完成，正在 spawn...")
         try:
@@ -3831,15 +3860,14 @@ def check_main_model_drift():
     DRIFT_COOLDOWN_FILE = "/tmp/octopus-drift-recovered.json"
     MODE_FILE = "/workspace/tmp/octopus-mode.json"
     POLICY_FILE = "/workspace/tmp/octopus/model-policy.json"
-    MODES_NEED_CHECK = {"cost", "quality", "private", "auto"}
 
     try:
         mode_data = json.load(open(MODE_FILE))
-        current_mode = mode_data.get("mode", "balanced")
+        current_mode = mode_data.get("mode", "auto")
     except:
         return
 
-    if current_mode not in MODES_NEED_CHECK:
+    if current_mode not in {"auto", "custom"}:
         return
 
     main_session = resolve_main_session_key()
@@ -3861,18 +3889,21 @@ def check_main_model_drift():
         return
 
     # 期望的模型
-    if current_mode in ("cost", "private"):
-        expected_model = "lixiang-glm-5/kivy-glm-5"
-    elif current_mode == "auto":
+    if current_mode == "auto":
         try:
             expected_model = json.load(open(POLICY_FILE)).get("main_model", "")
         except Exception:
             expected_model = ""
         if not expected_model:
             return
-    else:  # quality
-        expected_model = None
-        return
+    else:
+        try:
+            custom_models = mode_data.get("customModels", {})
+            expected_model = str(custom_models.get("main", "") or "").strip() if isinstance(custom_models, dict) else ""
+        except Exception:
+            expected_model = ""
+        if not expected_model:
+            return
 
     if current_override == expected_model:
         # 一致，清除 drift 标记
@@ -3899,11 +3930,10 @@ def check_main_model_drift():
     with open(DRIFT_COOLDOWN_FILE, "w") as f:
         json.dump({"ts": now, "mode": current_mode, "recovered_model": expected_model}, f)
 
-    model_name = "GLM" if "glm" in expected_model else expected_model
     msg = (
         f"🔄 八爪鱼：主模型已自动恢复\n"
         f"当前模式：{current_mode}\n"
-        f"已重新设置主模型为 {model_name}（因重启后 modelOverride 丢失）"
+        f"已重新设置主模型为 {expected_model}（因重启后 modelOverride 丢失）"
     )
     if send_text(msg):
         print("✅ check_main_model_drift: 文本通知已发送")
@@ -4002,7 +4032,7 @@ def main():
         for t in orphans:
             task = t.get("task", {})
             task_id = task.get("id", "")
-            task_label = task.get("label", "")
+            task_label = task_session_identity(task)
             if task_id not in {s.get("id") for s in stuck}:
                 # 先检查 transcript 是否有成功 RESULT → 自动标 done，不报警
                 if check_result_success(task_id, task_label, task.get("spawned_at") or task.get("started_at")):
@@ -4416,7 +4446,7 @@ def main():
                 "id": t.get("id", ""),
                 "label": t.get("label", ""),
                 "model": t.get("model", ""),
-                "tier": t.get("tier", "normal"),
+                "model_band": task_model_band(t),
                 "reason": t.get("_stuck_reason", "超时无响应"),
                 "elapsed": f"{elapsed_min}min"
             })

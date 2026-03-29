@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
-    from worker_taxonomy import is_runner_task, resolve_executor, resolve_worker_pool, role_display
+    from worker_taxonomy import is_runner_task, resolve_executor, resolve_model_band, resolve_worker_pool, role_display
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.worker_taxonomy import is_runner_task, resolve_executor, resolve_worker_pool, role_display
+    from lib.worker_taxonomy import is_runner_task, resolve_executor, resolve_model_band, resolve_worker_pool, role_display
 
 FINAL_STATUSES = {"done", "failed", "deferred", "completed"}
 SUCCESS_STATUSES = {"done", "completed"}
@@ -80,6 +80,10 @@ def table_model(path: str) -> str:
 
 def task_model_display(path: str, limit: int = 52) -> str:
     return short_model(path, limit=limit)
+
+
+def task_model_band(task: dict[str, Any]) -> str:
+    return str(resolve_model_band(task, default="normal") or "normal")
 
 
 def model_cost_badge(path: str) -> str:
@@ -410,13 +414,13 @@ def _compact_task_line(task: dict, now: datetime) -> str:
     name = preferred_task_title(task, limit=52)
     model = task_model_display(task.get("model", ""))
     cost = model_cost_badge(task.get("model", ""))
-    tier = str(task.get("tier", "?"))[:8]
+    model_band = task_model_band(task)[:8]
     duration = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
     eta = task.get("expected_done_at")
     eta_text = f" · 预计 {format_clock(eta, now)}" if eta else ""
     op_hint = operator_hint(task)
     op_text = f" · {op_hint}" if op_hint else ""
-    return f"  {emoji} {role} · {model} · {cost} · {tier} · ⏱️ {duration}{eta_text}{op_text}\n    └ {name}"
+    return f"  {emoji} {role} · {model} · {cost} · {model_band} · ⏱️ {duration}{eta_text}{op_text}\n    └ {name}"
 
 
 def _compact_lineage_lines(lineage: dict[str, Any], now: datetime) -> list[str]:
@@ -470,7 +474,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             deps = ",".join(task.get("deps", [])[:2]) or "?"
             lines.append(
                 f"  {task_role_emoji(task)} {task_role_name(task)} · {task_model_display(task.get('model', ''))} · "
-                f"{model_cost_badge(task.get('model', ''))} · {str(task.get('tier', '?'))[:8]} · wait {deps}"
+                f"{model_cost_badge(task.get('model', ''))} · {task_model_band(task)[:8]} · wait {deps}"
                 f"{(' · ' + operator_hint(task)) if operator_hint(task) else ''}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=52)}")
@@ -481,7 +485,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             reason = task.get("session_status") or task.get("recovery_action") or "needs attention"
             lines.append(
                 f"  {task_role_emoji(task)} {task_role_name(task)} · {task_model_display(task.get('model', ''))} · "
-                f"{str(task.get('tier', '?'))[:8]} · {str(reason)[:24]}"
+                f"{task_model_band(task)[:8]} · {str(reason)[:24]}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=52)}")
         lines.append("")
@@ -498,7 +502,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             lines.append(
                 f"  ✅ {task_role_emoji(task)} {task_role_name(task)} · "
                 f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
-                f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
+                f"{task_model_band(task)[:8]} · {duration} · {completed}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=60)}")
     if snapshot["failed_recent"]:
@@ -512,7 +516,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             lines.append(
                 f"  ❌ {task_role_emoji(task)} {task_role_name(task)} · "
                 f"{task_model_display(task.get('model', ''))} · {model_cost_badge(task.get('model', ''))} · "
-                f"{str(task.get('tier', '?'))[:8]} · {duration} · {completed}"
+                f"{task_model_band(task)[:8]} · {duration} · {completed}"
             )
             lines.append(f"    └ {preferred_task_title(task, limit=60)}")
     if recent_done_count or recent_failed_count:

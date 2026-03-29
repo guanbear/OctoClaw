@@ -163,17 +163,19 @@ def cmd_enqueue(args):
         existing = next((job for job in jobs if job.get("id") == args.id), None)
         job = {
             "id": args.id,
-            "label": "octopus-runner",
             "summary": args.summary or args.id,
             "command": args.shell_command,
             "cwd": args.cwd or "/workspace",
             "timeout_seconds": args.timeout_seconds,
             "status": "queued",
-            "tier": args.tier or "trivial",
+            "model_band": args.model_band or "fast",
             "source": "octopus",
             "enqueued_at": now_iso(),
             "model": args.model or runner_model(),
             "task_description": args.task_description or args.shell_command,
+            "worker_pool": "octoclaw-runner",
+            "work_type": "ops",
+            "phase": "inspect",
         }
         if existing:
             existing.update(job)
@@ -256,7 +258,7 @@ def main():
     p_enqueue.add_argument("--summary", default="")
     p_enqueue.add_argument("--cwd", default="/workspace")
     p_enqueue.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
-    p_enqueue.add_argument("--tier", default="trivial")
+    p_enqueue.add_argument("--model-band", dest="model_band", default="fast")
     p_enqueue.add_argument("--model", default="")
     p_enqueue.add_argument("--task-description", dest="task_description", default="")
 

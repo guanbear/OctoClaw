@@ -112,7 +112,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": ["zh", "en"],
             "available": ["zh", "en", "ja", "ko", "es", "pt", "ru"],
         },
-        "default_reasoning_effort_by_tier": {
+        "default_reasoning_effort_by_model_band": {
             "fast": "low",
             "normal": "medium",
             "strong": "high",

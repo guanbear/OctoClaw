@@ -42,11 +42,10 @@ update_task_running() {
   local task_description="$4"
   python3 "$TASK_STATE_PY" upsert \
     --id "$job_id" \
-    --label octopus-runner \
     --model "$model" \
     --status running \
     --summary "$summary" \
-    --tier trivial \
+    --model-band fast \
     --task-description "$task_description" \
     --title "$summary" \
     --executor runner \

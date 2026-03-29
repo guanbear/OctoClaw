@@ -58,10 +58,10 @@ _SCORING_RULES = [
     # 多文件维度 (+0.10): 涉及多个文件 → strong
     (0.10, [r"\b(multiple files|多个文件|across files|整个项目|全局|codebase|"
              r"all.*\.py|所有.*文件)\b"], "multi_file"),
-    # 简单维度 (-0.12): 明显简单任务 → 不升级
+    # 轻量维度 (-0.12): 明显轻量任务 → 不升级
     (-0.12, [r"\b(what is|是什么|translate|翻译|rename|重命名|typo|拼写|"
-              r"add comment|加注释|fix typo|简单|simple change|一行)\b"], "simple"),
-    # 创意/写作维度 (+0.05): 内容创作略高于 trivial
+              r"add comment|加注释|fix typo|简单|simple change|一行)\b"], "light_edit"),
+    # 创意/写作维度 (+0.05): 内容创作略高于纯快路径
     (0.05, [r"\b(write.*article|写.*文章|draft|起草|creative|创意|blog|文案)\b"], "creative"),
     # 约束维度 (+0.06): 多约束条件 → 更高模型
     (0.06, [r"\b(must|必须|require|要求|ensure|保证|constraint|限制|comply|符合|"
@@ -298,8 +298,8 @@ def build_short_name_map(aliases: dict) -> dict:
     我们把 aliases 里出现的路径，按已知短名特征归类。
     """
     mapping = {}
-    for tier, full_path in aliases.items():
-        if tier in ("updated_at", "_note"):
+    for alias_key, full_path in aliases.items():
+        if alias_key in ("updated_at", "_note"):
             continue
         if not isinstance(full_path, str) or "/" not in full_path:
             continue

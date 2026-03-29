@@ -16,7 +16,7 @@ class StatusRenderTests(unittest.TestCase):
         self.tasks = [
             {
                 "id": "team-parent",
-                "label": "octopus-power",
+                "worker_pool": "octoclaw-research",
                 "status": "running",
                 "summary": "spawn_multi running: planner done · review queued",
                 "task_description": "Fix and verify the release pipeline",
@@ -37,7 +37,7 @@ class StatusRenderTests(unittest.TestCase):
             },
             {
                 "id": "step-plan",
-                "label": "octopus-analyze",
+                "worker_pool": "octoclaw-research",
                 "status": "done",
                 "summary": "planner completed the analysis",
                 "task_description": "Break down the failure",
@@ -50,7 +50,7 @@ class StatusRenderTests(unittest.TestCase):
             },
             {
                 "id": "step-review",
-                "label": "octopus-test",
+                "worker_pool": "octoclaw-review",
                 "status": "queued",
                 "summary": "review is waiting",
                 "task_description": "Verify the final patch",
@@ -62,7 +62,7 @@ class StatusRenderTests(unittest.TestCase):
             },
             {
                 "id": "single-research",
-                "label": "octopus-scout",
+                "worker_pool": "octoclaw-research",
                 "status": "running",
                 "summary": "researching rollback options",
                 "task_description": "Research rollback options",
@@ -73,7 +73,7 @@ class StatusRenderTests(unittest.TestCase):
             },
             {
                 "id": "runner-1",
-                "label": "octopus-runner",
+                "worker_pool": "octoclaw-runner",
                 "status": "queued",
                 "summary": "check nginx health",
                 "task_description": "Check nginx health",

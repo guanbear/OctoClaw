@@ -31,11 +31,11 @@ from octopus_config import (
 )
 from runtime_protocol import build_result_contract, build_task_brief
 from worker_taxonomy import (
+    infer_model_band as taxonomy_infer_model_band,
     infer_worker_pool as taxonomy_infer_worker_pool,
-    legacy_label_for_worker_pool,
     resolve_phase as taxonomy_resolve_phase,
     resolve_work_type as taxonomy_resolve_work_type,
-    worker_pool_from_legacy_label,
+    selector_band_for_model_band,
 )
 
 
@@ -44,20 +44,19 @@ RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
 TASK_STATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
 
 DEFAULT_RUNTIME = "subagent"
-DEFAULT_TIER_MINUTES = {
-    "trivial": 3,
-    "simple": 5,
+DEFAULT_MODEL_BAND_MINUTES = {
+    "fast": 3,
     "normal": 8,
-    "hard": 15,
-    "deep": 20,
+    "strong": 15,
+    "heavy": 20,
 }
 
-DEFAULT_TIER_BY_WORKER_POOL = {
-    "octoclaw-runner": "trivial",
+DEFAULT_MODEL_BAND_BY_WORKER_POOL = {
+    "octoclaw-runner": "fast",
     "octoclaw-research": "normal",
-    "octoclaw-code": "normal",
-    "octoclaw-review": "normal",
-    "octoclaw-main": "simple",
+    "octoclaw-code": "strong",
+    "octoclaw-review": "strong",
+    "octoclaw-main": "normal",
 }
 
 STOPWORDS = {
@@ -71,35 +70,7 @@ def now_compact() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
 
 
-def infer_label(task: str) -> str:
-    text = (task or "").lower()
-    rules = [
-        ("octopus-test", [r"\b(test|pytest|unit test|regression|验证|测试)\b"]),
-        ("octopus-writer", [r"\b(write|draft|doc|readme|总结|文档|说明|报告|翻译)\b"]),
-        ("octopus-scout", [r"\b(research|compare|investigate|调研|对比|查资料)\b"]),
-        ("octopus-analyze", [r"\b(analy|root cause|日志分析|根因|分析)\b"]),
-        ("octopus-fix", [r"\b(fix|bug|修复|排障|hotfix)\b"]),
-    ]
-    for label, patterns in rules:
-        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
-            return label
-    return "octopus-power"
-
-
-def infer_tier(task: str, label: str) -> str:
-    text = (task or "").lower()
-    if any(token in text for token in ["并行", "同时", "分别", "一边", "parallel"]):
-        return "hard"
-    if any(token in text for token in ["架构", "重构", "多文件", "根因", "系统设计", "microservice", "refactor"]):
-        return "hard"
-    if label in ("octopus-power", "octopus-analyze"):
-        return "hard"
-    if label in ("octopus-fix", "octopus-test", "octopus-scout", "octopus-writer"):
-        return "normal"
-    return "normal"
-
-
-def infer_tier_from_taxonomy(
+def infer_model_band_from_taxonomy(
     *,
     route: str,
     worker_pool: str,
@@ -113,60 +84,41 @@ def infer_tier_from_taxonomy(
     current_phase = str(phase or "").strip()
     current_protocol = str(protocol or "").strip()
 
+    inferred = taxonomy_infer_model_band(
+        route=current_route,
+        worker_pool=current_worker_pool,
+        work_type=current_work_type,
+        protocol=current_protocol,
+    )
+    if inferred:
+        return inferred
     if current_route == "runner" or current_worker_pool == "octoclaw-runner":
-        return "trivial"
+        return "fast"
     if current_route == "spawn_multi":
-        return "hard"
+        return "heavy"
     if current_protocol == "heavy":
-        return "hard"
-    if current_worker_pool in DEFAULT_TIER_BY_WORKER_POOL:
-        return DEFAULT_TIER_BY_WORKER_POOL[current_worker_pool]
+        return "heavy"
+    if current_worker_pool in DEFAULT_MODEL_BAND_BY_WORKER_POOL:
+        return DEFAULT_MODEL_BAND_BY_WORKER_POOL[current_worker_pool]
     if current_work_type == "review" or current_phase == "verify":
-        return "normal"
+        return "strong"
     return "normal"
 
 
-def compat_label_for_taxonomy(
-    *,
-    explicit_label: str,
-    legacy_label: str,
-    worker_pool: str,
-    phase: str,
-    route: str,
-    profile: str,
-    role_hint: str,
-) -> str:
-    current_worker_pool = str(worker_pool or "").strip()
-    explicit = str(explicit_label or "").strip()
-    explicit_legacy = str(legacy_label or "").strip()
-
-    for candidate in (explicit_legacy, explicit):
-        if candidate and worker_pool_from_legacy_label(candidate) == current_worker_pool:
-            return candidate
-
-    if current_worker_pool:
-        return legacy_label_for_worker_pool(
-            current_worker_pool,
-            phase=phase,
-            route=route,
-            profile=profile,
-            role_hint=role_hint,
-        )
-
-    for candidate in (explicit_legacy, explicit, str(role_hint or "").strip()):
-        if candidate:
-            return candidate
-    return "octopus-power"
+def worker_pool_slug(worker_pool: str) -> str:
+    text = str(worker_pool or "").strip()
+    if not text:
+        return "task"
+    return text.replace("octoclaw-", "")
 
 
-def expected_done_offset(tier: str) -> str:
-    minutes = DEFAULT_TIER_MINUTES.get(tier or "normal", 8)
+def expected_done_offset(model_band: str) -> str:
+    minutes = DEFAULT_MODEL_BAND_MINUTES.get(model_band or "normal", 8)
     return f"+{minutes}min"
 
 
 def resolve_model_and_thinking(
-    tier: str,
-    label: str,
+    selector_band: str,
     description: str,
     *,
     worker_pool: str = "",
@@ -174,7 +126,7 @@ def resolve_model_and_thinking(
     route: str = "",
     profile: str = "",
 ) -> tuple[str, str]:
-    cmd = ["python3", RESOLVE_MODEL_PY, "--tier", tier, "--label", label, "--description", description]
+    cmd = ["python3", RESOLVE_MODEL_PY, "--selector-band", selector_band, "--description", description]
     if worker_pool:
         cmd.extend(["--worker-pool", worker_pool])
     if phase:
@@ -217,12 +169,12 @@ def compact_text(text: str, limit: int = 160) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def prefers_longform_result(label: str, route: str) -> bool:
-    return label in ("octopus-scout", "octopus-analyze", "octopus-writer") or route == "spawn_multi"
+def prefers_longform_result(worker_pool: str, phase: str, route: str) -> bool:
+    return worker_pool == "octoclaw-research" or phase == "report" or route == "spawn_multi"
 
 
-def result_summary_contract(label: str, route: str) -> str:
-    if prefers_longform_result(label, route):
+def result_summary_contract(worker_pool: str, phase: str, route: str) -> str:
+    if prefers_longform_result(worker_pool, phase, route):
         return "4-8句可直接转述给用户的中文结论；前2句先给总判断，后续补关键差异/建议；允许轻量编号；禁表格/代码块"
     return "2-5句结论，每句≤30字，禁列表/表格/代码块"
 
@@ -245,7 +197,7 @@ def score_related_task(task_tokens: set[str], candidate: dict, parent_id: str) -
         return 100.0
     haystack = " ".join(
         str(candidate.get(field, "") or "")
-        for field in ("task_description", "summary", "label", "route")
+        for field in ("task_description", "summary", "worker_pool", "work_type", "phase", "route")
     )
     candidate_tokens = tokenize(haystack)
     overlap = len(task_tokens & candidate_tokens)
@@ -302,7 +254,9 @@ def build_context_bundle(task: str, parent_id: str, task_id: str) -> dict:
             "summary": summary,
             "report_path": report_path,
             "route": str(candidate.get("route", "") or ""),
-            "label": str(candidate.get("label", "") or ""),
+            "worker_pool": str(candidate.get("worker_pool", "") or ""),
+            "work_type": str(candidate.get("work_type", "") or ""),
+            "phase": str(candidate.get("phase", "") or ""),
         })
 
     context_summary = "\n".join(summary_lines).strip()
@@ -410,11 +364,11 @@ def clawteam_data_dir() -> str:
     return os.path.join(workspace, "tmp", "octopus", "clawteam-bridge", "clawteam-data")
 
 
-def resolve_profile(label: str, model: str, tier: str) -> str:
+def resolve_profile(worker_pool: str, model: str, model_band: str) -> str:
     cfg = spawn_execution_config()
-    label_map = cfg.get("profile_by_label", {})
-    if isinstance(label_map, dict):
-        value = str(label_map.get(label, "") or "").strip()
+    worker_pool_map = cfg.get("profile_by_worker_pool", {})
+    if isinstance(worker_pool_map, dict):
+        value = str(worker_pool_map.get(worker_pool, "") or "").strip()
         if value:
             return value
 
@@ -432,9 +386,9 @@ def resolve_profile(label: str, model: str, tier: str) -> str:
         if matches:
             return matches[0][1]
 
-    tier_map = cfg.get("profile_by_tier", {})
-    if isinstance(tier_map, dict):
-        value = str(tier_map.get(tier, "") or "").strip()
+    model_band_map = cfg.get("profile_by_model_band", {})
+    if isinstance(model_band_map, dict):
+        value = str(model_band_map.get(model_band, "") or "").strip()
         if value:
             return value
 
@@ -494,9 +448,9 @@ def build_clawteam_spawn_command(
 def execute_clawteam_spawn(
     *,
     task_id: str,
-    label: str,
+    worker_pool: str,
     model: str,
-    tier: str,
+    model_band: str,
     prompt: str,
     thinking: str,
     profile_override: str = "",
@@ -507,7 +461,7 @@ def execute_clawteam_spawn(
         raise RuntimeError("未找到 openclaw 命令，无法执行 ClawTeam spawn")
 
     team_name = resolve_spawn_team_name()
-    profile = profile_override or resolve_profile(label, model, tier)
+    profile = profile_override or resolve_profile(worker_pool, model, model_band)
     agent_name = resolve_agent_name(task_id)
     command = build_clawteam_spawn_command(
         team_name=team_name,
@@ -546,9 +500,8 @@ def execute_clawteam_spawn(
 def build_task_prompt(
     *,
     task_id: str,
-    label: str,
     model: str,
-    tier: str,
+    model_band: str,
     task: str,
     expected_done: str,
     report_path: str,
@@ -565,7 +518,7 @@ def build_task_prompt(
     brief: dict | None = None,
     result_contract: dict | None = None,
 ) -> str:
-    summary_hint = result_summary_contract(label, route)
+    summary_hint = result_summary_contract(worker_pool, phase, route)
     brief_payload = brief if isinstance(brief, dict) else build_task_brief(
         task_id=task_id,
         goal=task.strip(),
@@ -588,7 +541,7 @@ def build_task_prompt(
         "【状态写入】开始前先执行：",
         (
             f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert "
-            f"--id {task_id} --label {label} --model '{model}' --status running --tier {tier} "
+            f"--id {task_id} --model '{model}' --status running --model-band {model_band} "
             f"--expected-done '{expected_done}' --route {route} --runtime subagent --executor subagent "
             f"--report-path '{report_path}' --worker-pool {worker_pool or 'octoclaw-research'} "
             f"--work-type {work_type or 'research'} --phase {phase or 'collect'} "
@@ -626,9 +579,8 @@ def build_task_prompt(
 def register_dispatched_task(
     *,
     task_id: str,
-    label: str,
     model: str,
-    tier: str,
+    model_band: str,
     task: str,
     expected_done: str,
     route: str,
@@ -644,7 +596,6 @@ def register_dispatched_task(
     protocol: str = "",
     profile: str = "",
     review_required: bool = False,
-    legacy_label: str = "",
     owner: str = "",
     deps: list[str] | None = None,
     artifacts_json: dict | None = None,
@@ -655,16 +606,12 @@ def register_dispatched_task(
         "upsert",
         "--id",
         task_id,
-        "--label",
-        label,
-        "--legacy-label",
-        legacy_label or label,
         "--model",
         model,
         "--status",
         "dispatched",
-        "--tier",
-        tier,
+        "--model-band",
+        model_band,
         "--task-description",
         task,
         "--expected-done",
@@ -718,9 +665,8 @@ def register_dispatched_task(
 def register_failed_spawn_task(
     *,
     task_id: str,
-    label: str,
     model: str,
-    tier: str,
+    model_band: str,
     task: str,
     route: str,
     runtime: str,
@@ -740,10 +686,8 @@ def register_failed_spawn_task(
 ) -> None:
     register_dispatched_task(
         task_id=task_id,
-        label=label,
-        legacy_label=label,
         model=model,
-        tier=tier,
+        model_band=model_band,
         task=task,
         expected_done="",
         route=route,
@@ -785,10 +729,8 @@ def build_spawn_spec(
     task: str,
     *,
     route: str = "",
-    label: str = "",
-    legacy_label: str = "",
-    tier: str = "",
-    legacy_tier: str = "",
+    model_band: str = "",
+    selector_band: str = "",
     model: str = "",
     worker_pool: str = "",
     work_type: str = "",
@@ -820,13 +762,8 @@ def build_spawn_spec(
     hinted_worker_pool = str(worker_pool or route_decision.get("worker_pool", "") or "")
     hinted_work_type = str(work_type or route_decision.get("work_type", "") or "")
     hinted_phase = str(phase or route_decision.get("phase", "") or "")
-    hinted_legacy_label = str(legacy_label or label or model_policy.get("legacy_label", "") or "")
 
-    resolved_worker_pool = (
-        hinted_worker_pool
-        or worker_pool_from_legacy_label(hinted_legacy_label)
-        or taxonomy_infer_worker_pool(final_route, hinted_work_type)
-    )
+    resolved_worker_pool = hinted_worker_pool or taxonomy_infer_worker_pool(final_route, hinted_work_type)
     if not resolved_worker_pool:
         resolved_worker_pool = taxonomy_infer_worker_pool(final_route, hinted_work_type)
 
@@ -834,7 +771,6 @@ def build_spawn_spec(
         taxonomy_resolve_work_type(
             {
                 "worker_pool": resolved_worker_pool,
-                "label": hinted_legacy_label,
                 "route": final_route,
                 "profile": preliminary_profile,
             }
@@ -851,7 +787,6 @@ def build_spawn_spec(
             {
                 "worker_pool": resolved_worker_pool,
                 "work_type": resolved_work_type,
-                "label": hinted_legacy_label,
                 "route": final_route,
                 "profile": preliminary_profile,
             }
@@ -862,18 +797,9 @@ def build_spawn_spec(
         resolved_phase = "inspect" if resolved_worker_pool == "octoclaw-runner" else "collect"
 
     protocol = str(route_decision.get("protocol", "") or "")
-    final_label = compat_label_for_taxonomy(
-        explicit_label=label,
-        legacy_label=str(legacy_label or model_policy.get("legacy_label", "") or ""),
-        worker_pool=resolved_worker_pool,
-        phase=resolved_phase,
-        route=final_route,
-        profile=preliminary_profile,
-        role_hint=str(route_meta.get("role_hint", "") or ""),
-    )
-    final_tier = (
-        str(legacy_tier or tier or model_policy.get("legacy_tier", "") or "").strip()
-        or infer_tier_from_taxonomy(
+    final_model_band = (
+        str(model_band or model_policy.get("model_band", "") or "").strip()
+        or infer_model_band_from_taxonomy(
             route=final_route,
             worker_pool=resolved_worker_pool,
             work_type=resolved_work_type,
@@ -881,12 +807,15 @@ def build_spawn_spec(
             protocol=protocol,
         )
     )
+    final_selector_band = str(selector_band or model_policy.get("selector_band", "") or "").strip() or selector_band_for_model_band(
+        final_model_band,
+        route=final_route,
+    )
     final_model = model or str(model_policy.get("selected_model", "") or "")
     thinking = str(model_policy.get("reasoning_effort", "") or "")
     if not final_model:
         final_model, resolved_thinking = resolve_model_and_thinking(
-            final_tier,
-            final_label,
+            final_selector_band,
             task,
             worker_pool=resolved_worker_pool,
             phase=resolved_phase,
@@ -897,7 +826,7 @@ def build_spawn_spec(
             thinking = resolved_thinking
     if not final_model:
         raise ValueError("无法解析 spawn 模型")
-    profile = preliminary_profile or resolve_profile(final_label, final_model, final_tier)
+    profile = preliminary_profile or resolve_profile(resolved_worker_pool, final_model, final_model_band)
     skill_bundle = skill_policy.get("default_skill_bundle", [])
     if not isinstance(skill_bundle, list):
         skill_bundle = []
@@ -906,7 +835,7 @@ def build_spawn_spec(
     spawn_team_name = resolve_spawn_team_name()
     base_artifacts = initial_spawn_artifacts(route=final_route, runtime=runtime, team_name=spawn_team_name)
 
-    task_id = f"{final_label}-{now_compact()}"
+    task_id = f"{worker_pool_slug(resolved_worker_pool)}-{now_compact()}"
     report_path = os.path.join(SHARED_DIR, f"{task_id}.md")
     context_bundle = build_context_bundle(task, parent_id, task_id)
 
@@ -916,9 +845,8 @@ def build_spawn_spec(
         log_spawn_error(task, error_text, runtime=runtime, stream_to=stream_to, parent_id=parent_id)
         register_failed_spawn_task(
             task_id=task_id,
-            label=final_label,
             model=final_model,
-            tier=final_tier,
+            model_band=final_model_band,
             task=task,
             route=final_route,
             runtime=runtime,
@@ -937,8 +865,8 @@ def build_spawn_spec(
             summary=f"spawn派发失败：{compact_text(error_text, 120)}",
         )
         raise ValueError(error_text)
-    expected_done = expected_done_offset(final_tier)
-    summary_hint = result_summary_contract(final_label, final_route)
+    expected_done = expected_done_offset(final_model_band)
+    summary_hint = result_summary_contract(resolved_worker_pool, resolved_phase, final_route)
     brief = build_task_brief(
         task_id=task_id,
         goal=task,
@@ -965,9 +893,8 @@ def build_spawn_spec(
     )
     prompt = build_task_prompt(
         task_id=task_id,
-        label=final_label,
         model=final_model,
-        tier=final_tier,
+        model_band=final_model_band,
         task=task,
         expected_done=expected_done,
         report_path=report_path,
@@ -988,10 +915,8 @@ def build_spawn_spec(
     if register:
         register_dispatched_task(
             task_id=task_id,
-            label=final_label,
-            legacy_label=final_label,
             model=final_model,
-            tier=final_tier,
+            model_band=final_model_band,
             task=task,
             expected_done=expected_done,
             route=final_route,
@@ -1018,9 +943,9 @@ def build_spawn_spec(
         try:
             spawn_execution = execute_clawteam_spawn(
                 task_id=task_id,
-                label=final_label,
+                worker_pool=resolved_worker_pool,
                 model=final_model,
-                tier=final_tier,
+                model_band=final_model_band,
                 prompt=prompt,
                 thinking=thinking,
                 profile_override=profile,
@@ -1074,7 +999,6 @@ def build_spawn_spec(
             )
 
     payload = {
-        "label": final_label,
         "model": final_model,
         "message": prompt,
         "runtime": runtime,
@@ -1088,12 +1012,11 @@ def build_spawn_spec(
         "route": final_route,
         "task_id": task_id,
         "title": task_title(task),
-        "label": final_label,
-        "legacy_label": final_label,
-        "tier": final_tier,
         "model": final_model,
         "thinking": thinking,
         "profile": profile,
+        "model_band": final_model_band,
+        "selector_band": final_selector_band,
         "runtime": runtime,
         "stream_to": stream_to or "",
         "report_path": report_path,
@@ -1142,8 +1065,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Validated OctoClaw subagent spawn wrapper")
     parser.add_argument("--task", required=True)
     parser.add_argument("--route", choices=["spawn_single", "spawn_multi"], default="spawn_single")
-    parser.add_argument("--label", default="")
-    parser.add_argument("--tier", default="")
+    parser.add_argument("--model-band", dest="model_band", default="")
+    parser.add_argument("--selector-band", dest="selector_band", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--runtime", default=DEFAULT_RUNTIME, choices=["subagent", "acp"])
     parser.add_argument("--stream-to", dest="stream_to", default="")
@@ -1168,8 +1091,8 @@ def main() -> None:
     spec = build_spawn_spec(
         args.task,
         route=args.route,
-        label=args.label,
-        tier=args.tier,
+        model_band=args.model_band,
+        selector_band=args.selector_band,
         model=args.model,
         runtime=args.runtime,
         stream_to=args.stream_to,

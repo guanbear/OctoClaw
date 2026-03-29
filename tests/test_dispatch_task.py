@@ -26,22 +26,20 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
                 "protocol": "normal",
             },
             "model_policy": {
-                "legacy_label": "octopus-fix",
-                "legacy_tier": "normal",
+                "model_band": "strong",
+                "selector_band": "strong",
                 "profile": "code",
             },
         }
         args = argparse.Namespace(
-            label="",
-            tier="",
+            model_band="",
             id="parent-1",
             _policy_decision=decision,
         )
 
         with patch.object(dispatch_task, "build_spawn_spec", return_value={
-            "label": "octopus-fix",
-            "legacy_label": "octopus-fix",
-            "tier": "normal",
+            "model_band": "strong",
+            "selector_band": "strong",
             "model": "model/code",
             "profile": "code",
             "worker_pool": "octoclaw-code",
@@ -56,10 +54,8 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
             spawn_mock.call_args.kwargs,
             {
                 "route": "spawn_single",
-                "label": "",
-                "legacy_label": "octopus-fix",
-                "tier": "",
-                "legacy_tier": "normal",
+                "model_band": "strong",
+                "selector_band": "strong",
                 "worker_pool": "octoclaw-code",
                 "work_type": "code",
                 "phase": "implement",
@@ -81,8 +77,8 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
                 "protocol": "normal",
             },
             "model_policy": {
-                "legacy_label": "octopus-fix",
-                "legacy_tier": "hard",
+                "model_band": "heavy",
+                "selector_band": "heavy",
                 "selected_model": "model/primary",
                 "profile": "code",
             },
@@ -98,7 +94,8 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
                 "phase": "inspect",
             },
             "model_policy": {
-                "legacy_tier": "normal",
+                "model_band": "normal",
+                "selector_band": "standard",
                 "selected_model": "model/planner",
                 "profile": "research",
             },
@@ -111,22 +108,21 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
                 "phase": "verify",
             },
             "model_policy": {
-                "legacy_tier": "normal",
+                "model_band": "strong",
+                "selector_band": "strong",
                 "selected_model": "model/review",
                 "profile": "review",
             },
         }
         args = argparse.Namespace(
-            label="",
-            tier="",
+            model_band="",
             id="parent-2",
             _policy_decision=primary_decision,
         )
         primary_spawn = {
             "task_id": "team-root",
-            "label": "octopus-fix",
-            "legacy_label": "octopus-fix",
-            "tier": "hard",
+            "model_band": "heavy",
+            "selector_band": "heavy",
             "model": "model/primary",
             "profile": "code",
             "worker_pool": "octoclaw-code",
@@ -149,17 +145,17 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
         self.assertEqual(plan["planner"]["work_type"], "research")
         self.assertEqual(plan["planner"]["phase"], "inspect")
         self.assertEqual(plan["planner"]["profile"], "research")
-        self.assertEqual(plan["planner"]["label"], "octopus-analyze")
+        self.assertEqual(plan["planner"]["model_band"], "normal")
         self.assertEqual(plan["worker"]["worker_pool"], "octoclaw-code")
         self.assertEqual(plan["worker"]["work_type"], "code")
         self.assertEqual(plan["worker"]["phase"], "implement")
         self.assertEqual(plan["worker"]["profile"], "code")
-        self.assertEqual(plan["worker"]["label"], "octopus-fix")
+        self.assertEqual(plan["worker"]["model_band"], "heavy")
         self.assertEqual(plan["review"]["worker_pool"], "octoclaw-review")
         self.assertEqual(plan["review"]["work_type"], "review")
         self.assertEqual(plan["review"]["phase"], "verify")
         self.assertEqual(plan["review"]["profile"], "review")
-        self.assertEqual(plan["review"]["label"], "octopus-test")
+        self.assertEqual(plan["review"]["model_band"], "strong")
 
 
 if __name__ == "__main__":

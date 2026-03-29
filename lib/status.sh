@@ -71,13 +71,11 @@ from status_render import (
 )
 
 TASK_FILE = "/workspace/tmp/octopus/task-state.json"
-ALIASES_FILE = "/workspace/tmp/octopus-model-aliases.json"
 RUNNER_QUEUE_FILE = "/workspace/tmp/octopus/runner-queue.json"
 
 now = datetime.now(timezone(timedelta(hours=8)))
 
 mode_data = load_json(MODE_FILE) or {}
-aliases = load_json(ALIASES_FILE) or {}
 policy_data = load_json(MODEL_POLICY_FILE) or {}
 config_data = load_octopus_config()
 runner_health = load_json(RUNNER_HEALTH_FILE) or {}
@@ -89,21 +87,8 @@ auto_policy_ready = bool(model_auto_cfg.get("enabled", True)) and any(
     for key in ("profiles", "worker_pools", "worker_pool_phases")
 )
 
-mode = mode_data.get("mode", "balanced")
-MODE_LABELS = {
-    "balanced": "平衡模式",
-    "quality": "效果优先",
-    "cost": "成本优先",
-    "speed": "速度优先",
-    "private": "保密模式",
-    "custom": "自定义模式",
-    "auto": "自动选模",
-}
-mode_label = MODE_LABELS.get(mode, mode)
-if auto_policy_ready:
-    mode_label = "自动选模（policy-first）"
-
-rules = mode_data.get("modes", {}).get(mode, {})
+mode = "auto"
+mode_label = "自动选模（policy-first）"
 
 
 def summarize_replay_status(config: dict) -> dict | None:
@@ -140,52 +125,6 @@ def summarize_replay_status(config: dict) -> dict | None:
     summary["effective_phase"] = phase
     summary["missing"] = False
     return summary
-
-
-def tier_model(tier):
-    if mode == "auto":
-        auto_tier = policy_data.get("tiers", {}).get(tier, "")
-        if auto_tier:
-            return short_model(auto_tier)
-    short = rules.get(tier)
-    if short and isinstance(short, str) and "/" in short:
-        return short_model(short)
-    if short:
-        model_short = {
-            "glm": "GLM",
-            "kimi": "Kimi",
-            "sonnet": "Sonnet",
-            "claudeopus": "Opus",
-            "dynamic_fastest": "最快可用",
-        }
-        return model_short.get(short, short)
-    full = aliases.get(tier, "")
-    if full:
-        return short_model(full)
-    return "?"
-
-
-def tier_model_full(tier):
-    if mode == "auto":
-        auto_tier = str(policy_data.get("tiers", {}).get(tier, "") or "").strip()
-        if auto_tier:
-            return auto_tier
-    short = rules.get(tier)
-    alias_full = str(aliases.get(tier, "") or "").strip()
-    symbolic_map = {
-        "glm": "zhipu/GLM-4.7",
-        "kimi": "moonshot/Kimi",
-        "sonnet": "vendor-claude-sonnet/aws-claude-sonnet",
-        "claudeopus": "vendor-claude-opus/aws-claude-opus",
-        "dynamic_fastest": "dynamic_fastest",
-    }
-    if isinstance(short, str) and short:
-        if "/" in short:
-            return short
-        return symbolic_map.get(short, short)
-    if alias_full:
-        return alias_full
-    return "?"
 
 
 def worker_pool_model_full(worker_pool):
@@ -376,19 +315,13 @@ main_session_model = load_main_session_actual_model()
 actual_model = main_session_model.get("model_path", "")
 print("A) 🤖 主会话实际模型：" + (actual_model or "?"))
 print(f"B) 🧭 OctoClaw 调度策略：{mode_label}")
-if auto_policy_ready:
-    print(
-        "   runner → "
-        f"{worker_pool_model_full('octoclaw-runner')}  |  research → {worker_pool_model_full('octoclaw-research')}  |  "
-        f"code → {worker_pool_model_full('octoclaw-code')}  |  review → {worker_pool_model_full('octoclaw-review')}"
-    )
-else:
-    print(
-        "   trivial/simple → "
-        f"{tier_model_full('trivial')}  |  normal/hard → {tier_model_full('normal')}  |  deep → {tier_model_full('deep')}"
-    )
+print(
+    "   runner → "
+    f"{worker_pool_model_full('octoclaw-runner')}  |  research → {worker_pool_model_full('octoclaw-research')}  |  "
+    f"code → {worker_pool_model_full('octoclaw-code')}  |  review → {worker_pool_model_full('octoclaw-review')}"
+)
 main_model = str(policy_data.get("main_model", "") or "").strip()
-if (mode == "auto" or auto_policy_ready) and main_model:
+if main_model:
     print(f"   策略主链 → {main_model}")
 print(f"🖥️  视图：{fmt}")
 workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"

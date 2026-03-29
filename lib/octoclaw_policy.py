@@ -28,8 +28,8 @@ from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config
 from runtime_protocol import BRIEF_SCHEMA_VERSION, WORKER_RESULT_SCHEMA_VERSION
 from worker_taxonomy import (
     infer_worker_pool as taxonomy_infer_worker_pool,
-    legacy_label_for_worker_pool,
     model_role_for_worker_pool,
+    selector_band_for_model_band,
 )
 
 
@@ -394,15 +394,6 @@ def infer_worker_pool(route: str, work_type: str) -> str:
     return taxonomy_infer_worker_pool(route, work_type)
 
 
-def infer_legacy_label(work_type: str, phase: str, route: str, profile: str = "") -> str:
-    return legacy_label_for_worker_pool(
-        infer_worker_pool(route, work_type),
-        phase=phase,
-        route=route,
-        profile=profile,
-    )
-
-
 def infer_model_band(features: dict[str, Any], route: str, work_type: str, protocol: str) -> str:
     if protocol == "heavy":
         return "heavy"
@@ -424,17 +415,6 @@ def infer_model_band(features: dict[str, Any], route: str, work_type: str, proto
     if route == "direct":
         return "fast"
     return "normal"
-
-
-def selector_tier_for_model_band(model_band: str, route: str) -> str:
-    if route == "runner":
-        return "trivial"
-    return {
-        "fast": "simple",
-        "normal": "normal",
-        "strong": "hard",
-        "heavy": "deep",
-    }.get(model_band, "normal")
 
 
 def resolve_policy_profile(runtime_cfg: dict[str, Any], user_profile: str, selected_model: str) -> str:
@@ -462,20 +442,9 @@ def reasoning_effort_from_config(cfg: dict[str, Any], model_band: str, derived_p
             value = str(entry.get("reasoning_effort", "") or "").strip()
             if value:
                 return value
-    by_tier = cfg.get("default_reasoning_effort_by_tier", {})
-    if isinstance(by_tier, dict):
-        value = str(by_tier.get(model_band, "") or "").strip()
-        if value:
-            return value
-    legacy_fallbacks = {
-        "fast": "simple",
-        "normal": "normal",
-        "strong": "hard",
-        "heavy": "deep",
-    }
-    by_legacy_tier = cfg.get("default_reasoning_effort_by_legacy_tier", {})
-    if isinstance(by_legacy_tier, dict):
-        value = str(by_legacy_tier.get(legacy_fallbacks.get(model_band, "normal"), "") or "").strip()
+    by_model_band = cfg.get("default_reasoning_effort_by_model_band", {})
+    if isinstance(by_model_band, dict):
+        value = str(by_model_band.get(model_band, "") or "").strip()
         if value:
             return value
     if model_band == "fast":
@@ -687,9 +656,7 @@ def build_decision(
     worker_pool = infer_worker_pool(route, work_type)
     user_profile = infer_user_facing_profile(work_type, phase, route)
     model_band = infer_model_band(features, route, work_type, protocol)
-    selector_tier = selector_tier_for_model_band(model_band, route)
-    legacy_tier = selector_tier
-    legacy_label = infer_legacy_label(work_type, phase, route, user_profile)
+    selector_band = selector_band_for_model_band(model_band, route=route)
     model_selector_role = model_role_for_worker_pool(
         worker_pool,
         phase=phase,
@@ -697,8 +664,7 @@ def build_decision(
         profile=user_profile,
     )
     selected_model, model_thinking = resolve_model_and_thinking(
-        selector_tier,
-        "",
+        selector_band,
         task,
         worker_pool=worker_pool,
         phase=phase,
@@ -753,12 +719,10 @@ def build_decision(
             "context_growth_band": str(route_meta.get("context_growth_band", "") or ""),
         },
         "model_policy": {
-            "legacy_label": legacy_label,
-            "legacy_tier": legacy_tier,
             "worker_pool": worker_pool,
             "model_selector_role": model_selector_role,
-            "selector_tier": selector_tier,
-            "tier": model_band,
+            "selector_band": selector_band,
+            "model_band": model_band,
             "selected_model": selected_model,
             "profile": profile,
             "reasoning_effort": reasoning_effort,
@@ -777,10 +741,6 @@ def build_decision(
         "tool_policy": tool_policy(route, dispatch_required),
         "route_hint_policy": route_hint_policy,
         "runtime_switches": runtime_switches_summary(runtime_cfg),
-        "compat": {
-            "legacy_role_hint": str(route_meta.get("role_hint", "") or ""),
-            "legacy_tier_hint": legacy_tier,
-        },
     }
     decision["summary"] = summarize_decision(decision)
     decision["hook_interface"] = hook_interface(runtime_cfg, decision)
@@ -795,11 +755,11 @@ def summarize_decision(decision: dict[str, Any]) -> str:
     work_type = route_decision.get("work_type", "")
     phase = route_decision.get("phase", "")
     profile = model_policy.get("profile", "")
-    tier = model_policy.get("tier", "")
+    model_band = model_policy.get("model_band", "")
     model = model_policy.get("selected_model", "")
     if model:
-        return f"policy={route} -> {worker_pool} / {work_type}:{phase} / {tier} / profile={profile} / model={model}"
-    return f"policy={route} -> {worker_pool} / {work_type}:{phase} / {tier} / profile={profile}"
+        return f"policy={route} -> {worker_pool} / {work_type}:{phase} / {model_band} / profile={profile} / model={model}"
+    return f"policy={route} -> {worker_pool} / {work_type}:{phase} / {model_band} / profile={profile}"
 
 
 def main() -> None:

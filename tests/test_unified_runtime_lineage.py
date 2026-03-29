@@ -43,9 +43,8 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="octoclaw-team-parent-") as workspace:
             parent_spec = {
                 "task_id": "team-root-1",
-                "label": "octopus-power",
                 "model": "openai/gpt-5.4",
-                "tier": "hard",
+                "model_band": "heavy",
                 "expected_done": "+15min",
                 "report_path": "/tmp/team-root-1.md",
                 "context_path": "/tmp/team-root-1-context.md",
@@ -67,9 +66,9 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
                 },
             }
             plan = {
-                "planner": {"label": "octopus-analyze", "tier": "normal", "model": "planner-model"},
-                "worker": {"label": "octopus-fix", "tier": "hard", "model": "worker-model"},
-                "review": {"label": "octopus-test", "tier": "normal", "model": "review-model"},
+                "planner": {"worker_pool": "octoclaw-research", "work_type": "research", "phase": "inspect", "profile": "research", "model_band": "normal", "model": "planner-model"},
+                "worker": {"worker_pool": "octoclaw-code", "work_type": "code", "phase": "implement", "profile": "code", "model_band": "heavy", "model": "worker-model"},
+                "review": {"worker_pool": "octoclaw-review", "work_type": "review", "phase": "verify", "profile": "review", "model_band": "strong", "model": "review-model"},
             }
             execution = {
                 "executed": True,
@@ -137,7 +136,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "team-root",
-                "--label", "octopus-power",
                 "--status", "running",
                 "--summary", "multi-step task in progress",
                 "--task-description", "Investigate, fix, and verify the failing workflow",
@@ -157,7 +155,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "team-step-a",
-                "--label", "octopus-analyze",
                 "--status", "running",
                 "--summary", "planner step",
                 "--task-description", "Break down the workflow failure into a plan",
@@ -176,7 +173,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "team-step-b",
-                "--label", "octopus-test",
                 "--status", "queued",
                 "--summary", "review step",
                 "--task-description", "Verify the final fix and call out regressions",
@@ -219,7 +215,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "team-parent",
-                "--label", "octopus-power",
                 "--status", "dispatched",
                 "--summary", "spawn_multi planned",
                 "--task-description", "Investigate, fix, and verify a flaky release flow",
@@ -243,7 +238,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "step-plan",
-                "--label", "octopus-analyze",
                 "--status", "running",
                 "--summary", "planner is working",
                 "--task-description", "Plan the investigation",
@@ -262,7 +256,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "step-review",
-                "--label", "octopus-test",
                 "--status", "queued",
                 "--summary", "review is waiting",
                 "--task-description", "Verify the final result",
@@ -336,7 +329,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "team-root",
-                "--label", "octopus-power",
                 "--status", "running",
                 "--summary", "spawn_multi running",
                 "--task-description", "Repair and verify the deployment pipeline",
@@ -360,7 +352,6 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
             self.upsert(
                 env,
                 "--id", "step-worker",
-                "--label", "octopus-fix",
                 "--status", "running",
                 "--summary", "worker is patching",
                 "--task-description", "Patch the deployment pipeline",

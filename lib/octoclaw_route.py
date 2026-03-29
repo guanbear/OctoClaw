@@ -737,34 +737,6 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     return features
 
 
-def infer_role_hint(features: dict) -> str:
-    if features["tool_observation_only"]:
-        return "octopus-runner"
-    if features["requires_mutation"] and not features["requires_research"]:
-        return "octopus-fix"
-    if features["requires_code_work"]:
-        return "octopus-fix"
-    if features["requires_writing"] and not features["requires_code_work"]:
-        return "octopus-writer"
-    if features["requires_research"] and not features["requires_code_work"]:
-        return "octopus-scout"
-    if features["high_risk"]:
-        return "octopus-analyze"
-    return "octopus-power"
-
-
-def infer_tier_hint(features: dict, route: str) -> str:
-    if route == "runner":
-        return "trivial"
-    if route == "direct":
-        return "simple"
-    if features["high_risk"] or route == "spawn_multi":
-        return "hard"
-    if features["requires_code_work"] or features["requires_research"] or features["estimated_steps"] >= 3:
-        return "normal"
-    return "simple"
-
-
 def infer_work_type_hint(features: dict, route: str) -> str:
     if route == "runner":
         return "ops"
@@ -1053,15 +1025,6 @@ def infer_route(task: str, command: str = "") -> dict:
     phase_hint = infer_phase_hint(features, route, work_type_hint)
     worker_pool_hint = taxonomy_infer_worker_pool(route, work_type_hint)
     model_band_hint = infer_model_band_hint(features, route, work_type_hint)
-    role_hint = infer_role_hint(features)
-    if route == "direct":
-        role_hint = "main"
-    elif route == "runner":
-        role_hint = "octopus-runner"
-    elif route == "spawn_multi":
-        role_hint = "octopus-power"
-
-    tier_hint = infer_tier_hint(features, route)
     should_wait = route == "runner"
     wait_timeout_seconds = 0
     if route == "runner":
@@ -1082,8 +1045,6 @@ def infer_route(task: str, command: str = "") -> dict:
         "work_type_hint": work_type_hint,
         "phase_hint": phase_hint,
         "model_band_hint": model_band_hint,
-        "role_hint": role_hint,
-        "tier_hint": tier_hint,
         "expected_latency_ms": expected_latency_ms(route, features),
         "expected_cost_band": expected_cost_band(route, features),
         "context_growth_band": features["context_growth"],

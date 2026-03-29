@@ -6,9 +6,9 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from worker_taxonomy import resolve_executor, resolve_phase, resolve_work_type, resolve_worker_pool
+    from worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.worker_taxonomy import resolve_executor, resolve_phase, resolve_work_type, resolve_worker_pool
+    from lib.worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
 
 try:
     from runtime_protocol import normalize_worker_result
@@ -98,6 +98,13 @@ def infer_runtime(task: dict[str, Any]) -> str:
     return ""
 
 
+def infer_model_band(task: dict[str, Any], work_type: str) -> str:
+    candidate = dict(task)
+    if work_type and not _normalized_str(candidate.get("work_type")):
+        candidate["work_type"] = work_type
+    return _normalized_str(resolve_model_band(candidate))
+
+
 def infer_title(task: dict[str, Any]) -> str:
     for field in ("title", "task_description", "summary", "id"):
         value = compact_text(_normalized_str(task.get(field)))
@@ -168,10 +175,11 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["protocol"] = _normalized_str(normalized.get("protocol")) or "normal"
     normalized["profile"] = _normalized_str(normalized.get("profile"))
     normalized["review_required"] = _normalized_bool(normalized.get("review_required"))
-    normalized["label"] = _normalized_str(normalized.get("label"))
+    normalized.pop("label", None)
     normalized.pop("legacy_label", None)
     normalized["owner"] = _normalized_str(normalized.get("owner"))
-    normalized["tier"] = _normalized_str(normalized.get("tier"))
+    normalized["model_band"] = infer_model_band(normalized, work_type)
+    normalized.pop("tier", None)
     normalized["model"] = _normalized_str(normalized.get("model"))
     normalized["summary"] = _normalized_str(normalized.get("summary"))
     normalized["task_description"] = _normalized_str(normalized.get("task_description"))

@@ -184,8 +184,8 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["work_type_hint"], "research")
         self.assertEqual(payload["phase_hint"], "report")
         self.assertEqual(payload["model_band_hint"], "normal")
-        self.assertEqual(payload["role_hint"], "octopus-writer")
-        self.assertEqual(payload["tier_hint"], "normal")
+        self.assertNotIn("role_hint", payload)
+        self.assertNotIn("tier_hint", payload)
 
     def test_runner_policy_uses_workspace_local_model_policy(self) -> None:
         payload = self.run_policy(
@@ -202,10 +202,10 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
         self.assertEqual(payload["model_policy"]["selected_model"], "model/profile-ops")
         self.assertEqual(payload["model_policy"]["profile"], "ops-fast")
-        self.assertEqual(payload["model_policy"]["tier"], "fast")
-        self.assertEqual(payload["model_policy"]["selector_tier"], "trivial")
+        self.assertEqual(payload["model_policy"]["model_band"], "fast")
+        self.assertEqual(payload["model_policy"]["selector_band"], "quick")
 
-    def test_model_policy_tracks_worker_pool_first_with_legacy_label_as_compat(self) -> None:
+    def test_model_policy_tracks_worker_pool_first_without_legacy_compat_fields(self) -> None:
         payload = self.run_policy(
             "调研三个兼容方案并写一版简短建议",
             model_policy={
@@ -219,10 +219,10 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-research")
         self.assertEqual(payload["model_policy"]["worker_pool"], "octoclaw-research")
         self.assertEqual(payload["model_policy"]["model_selector_role"], "writer")
-        self.assertEqual(payload["model_policy"]["selector_tier"], "deep")
-        self.assertEqual(payload["model_policy"]["tier"], "heavy")
+        self.assertEqual(payload["model_policy"]["selector_band"], "heavy")
+        self.assertEqual(payload["model_policy"]["model_band"], "heavy")
         self.assertEqual(payload["model_policy"]["selected_model"], "model/profile-writer")
-        self.assertEqual(payload["model_policy"]["legacy_label"], "octopus-writer")
+        self.assertNotIn("legacy_label", payload["model_policy"])
 
 
 if __name__ == "__main__":

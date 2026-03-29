@@ -74,7 +74,7 @@ def _owner(task: dict[str, Any]) -> str:
     explicit = str(task.get("owner", "") or "").strip()
     if explicit:
         return explicit
-    return str(task.get("label", "") or task.get("executor", "") or "unknown")
+    return str(task.get("worker_pool", "") or task.get("executor", "") or "unknown")
 
 
 def _team_name() -> str:
@@ -414,13 +414,13 @@ def _task_brief(record: dict[str, Any]) -> dict[str, Any]:
     operator_surface = artifacts.get("operator_surface", {}) if isinstance(artifacts.get("operator_surface", {}), dict) else {}
     display = role_display(record)
     explicit_owner = str(record.get("owner", "") or "").strip()
-    label = str(record.get("label", "") or "").strip()
+    worker_pool = str(record.get("worker_pool", "") or "").strip()
     executor = str(record.get("executor", "") or "").strip()
     display_owner = str(display.get("name", "") or "").strip()
-    if explicit_owner and explicit_owner not in {label, executor}:
+    if explicit_owner and explicit_owner not in {worker_pool, executor}:
         brief_owner = explicit_owner
     else:
-        brief_owner = display_owner or explicit_owner or label or executor or "unknown"
+        brief_owner = display_owner or explicit_owner or worker_pool or executor or "unknown"
     return {
         "id": str(record.get("id", "") or ""),
         "title": str(record.get("title", "") or ""),

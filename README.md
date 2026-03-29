@@ -60,7 +60,7 @@ OctoClaw now treats `auto` as the default, policy-first mode:
 
 - primary selectors are `worker_pool / phase / profile / route`
 - `model-policy.json` is the source of truth when available
-- older mode tables such as `balanced / quality / cost / private` only remain as last-resort compatibility fallback
+- `octopus-mode.json` only keeps `auto` and `custom`
 
 ## Quick Start
 
