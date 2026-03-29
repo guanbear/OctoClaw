@@ -621,11 +621,13 @@ OctoClaw 要做的不是“又一个 router”，而是：
 
 OctoClaw 当前应优先支持：
 
-- Feishu
+- WebChat / Control UI
 - Slack
-- Discord
+- Feishu
 - Telegram
-- 微信（优先评估 ClawBot 插件接入）
+- Discord
+- WhatsApp
+- 微信（官方 ClawBot 插件，先按轻交互评估）
 
 暂不作为当前阶段目标：
 
@@ -644,6 +646,10 @@ OctoClaw 当前应优先支持：
 - fallback text
 
 然后为每个 IM 做最适合它的 renderer。
+
+展示层产品化和 IM 能力矩阵的详细规划见：
+
+- [octoclaw-display-layer-productization-plan-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-display-layer-productization-plan-v1-2026-03-29.md)
 
 ### 7.3 终端 + UI 双栈观测
 
@@ -1149,6 +1155,10 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 输出：
 
 - CLI + tmux + Web + IM 四层展示面
+
+详细规划见：
+
+- [octoclaw-display-layer-productization-plan-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-display-layer-productization-plan-v1-2026-03-29.md)
 
 ### Phase 7：做策略闭环
 
