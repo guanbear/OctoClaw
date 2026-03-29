@@ -228,6 +228,20 @@ _openclaw_cron_add() {
     return 1
 }
 
+_openclaw_cron_id_by_name() {
+    local cron_name="$1"
+    _openclaw_cron_list 2>/dev/null | awk -v name="$cron_name" '$2 == name {print $1; exit}'
+}
+
+_openclaw_cron_remove_by_name() {
+    local cron_name="$1" cron_id
+    cron_id="$(_openclaw_cron_id_by_name "$cron_name")"
+    if [ -z "$cron_id" ]; then
+        return 0
+    fi
+    openclaw cron rm "$cron_id" >/dev/null 2>&1 || true
+}
+
 _delete_cron_by_name() {
     local cron_name="$1"
     local gw_url gw_token job_id http_code
@@ -776,10 +790,10 @@ do_uninstall() {
     _stop_patrol_service
     _stop_runner_service
     _remove_systemd_units
-    _delete_cron_by_name "octopus-patrol"
-    _delete_cron_by_name "octopus-probe"
-    _delete_cron_by_name "octopus-plan-sync"
-    _delete_cron_by_name "octopus-update-check"
+    _delete_cron_by_name "octoclaw-patrol"
+    _delete_cron_by_name "octoclaw-probe"
+    _delete_cron_by_name "octoclaw-plan-sync"
+    _delete_cron_by_name "octoclaw-update-check"
 
     # 2. 从 AGENTS.md 删除规则注入
     if [ -f "$AGENTS_FILE" ]; then
@@ -840,12 +854,12 @@ do_disable() {
     if [ "${PATROL_MODE:-loop}" = "loop" ]; then
         _stop_patrol_service
     else
-        _disable_cron_by_name "octopus-patrol"
+        _disable_cron_by_name "octoclaw-patrol"
     fi
     _stop_runner_service
-    _disable_cron_by_name "octopus-probe"
-    _disable_cron_by_name "octopus-plan-sync"
-    _disable_cron_by_name "octopus-update-check"
+    _disable_cron_by_name "octoclaw-probe"
+    _disable_cron_by_name "octoclaw-plan-sync"
+    _disable_cron_by_name "octoclaw-update-check"
 
     echo ""
     echo "✅ 八爪鱼已暂停（巡逻与 runner 已停止，文件保留）"
@@ -876,12 +890,12 @@ do_enable() {
     if [ "${PATROL_MODE:-loop}" = "loop" ]; then
         _start_patrol_service
     else
-        _enable_cron_by_name "octopus-patrol"
+        _enable_cron_by_name "octoclaw-patrol"
     fi
     _start_runner_service
-    _enable_cron_by_name "octopus-probe"
-    _enable_cron_by_name "octopus-plan-sync"
-    _enable_cron_by_name "octopus-update-check"
+    _enable_cron_by_name "octoclaw-probe"
+    _enable_cron_by_name "octoclaw-plan-sync"
+    _enable_cron_by_name "octoclaw-update-check"
 
     echo ""
     echo "✅ 八爪鱼已重新启用"
@@ -1227,7 +1241,7 @@ install_patrol_cron() {
         # 迁移：若旧版已注册 octopus-patrol cron，删除它（避免重复运行浪费 token）
         if command -v openclaw &>/dev/null && _openclaw_cron_exists "octopus-patrol"; then
             echo "ℹ️  检测到旧版 octopus-patrol cron，迁移删除中..."
-            _delete_cron_by_name "octopus-patrol"
+            _openclaw_cron_remove_by_name "octopus-patrol"
         fi
 
         _start_patrol_service
@@ -1240,7 +1254,11 @@ install_patrol_cron() {
         fi
         echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
         if _openclaw_cron_exists "octopus-update-check"; then
-            echo "ℹ️  octopus-update-check cron 已存在，跳过"
+            echo "ℹ️  检测到旧版 octopus-update-check cron，迁移删除中..."
+            _openclaw_cron_remove_by_name "octopus-update-check"
+        fi
+        if _openclaw_cron_exists "octoclaw-update-check"; then
+            echo "ℹ️  octoclaw-update-check cron 已存在，跳过"
             return 0
         fi
     else
@@ -1265,9 +1283,13 @@ except Exception:
     print('')
 " 2>/dev/null)
 
-        # 注册 octopus-patrol cron
+        # 注册 octoclaw-patrol cron
         if _openclaw_cron_exists "octopus-patrol"; then
-            echo "ℹ️  octopus-patrol cron 已存在，跳过"
+            echo "ℹ️  检测到旧版 octopus-patrol cron，迁移删除中..."
+            _openclaw_cron_remove_by_name "octopus-patrol"
+        fi
+        if _openclaw_cron_exists "octoclaw-patrol"; then
+            echo "ℹ️  octoclaw-patrol cron 已存在，跳过"
         else
             if [[ -n "$USER_OPEN_ID" ]]; then
                 DELIVERY_OPTS="--announce --channel feishu --to user:${USER_OPEN_ID}"
@@ -1287,13 +1309,13 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
 执行完成后直接结束，无需回复或发送任何其他通知。'
 
             if _openclaw_cron_add \
-                --name octopus-patrol \
+                --name octoclaw-patrol \
                 --every 1m \
                 --session isolated \
                 --timeout-seconds 60 \
                 $DELIVERY_OPTS \
                 --message "$PATROL_MSG" 2>/dev/null; then
-                echo "✅ octopus-patrol cron 注册成功（每1分钟，cron 模式）"
+                echo "✅ octoclaw-patrol cron 注册成功（每1分钟，cron 模式）"
             else
                 echo "⚠️  cron 注册失败，可手动在 OpenClaw 中添加"
             fi
@@ -1301,20 +1323,24 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
 
         echo "📡 注册八爪鱼版本检查 cron（每天09:00 Asia/Shanghai）..."
         if _openclaw_cron_exists "octopus-update-check"; then
-            echo "ℹ️  octopus-update-check cron 已存在，跳过"
+            echo "ℹ️  检测到旧版 octopus-update-check cron，迁移删除中..."
+            _openclaw_cron_remove_by_name "octopus-update-check"
+        fi
+        if _openclaw_cron_exists "octoclaw-update-check"; then
+            echo "ℹ️  octoclaw-update-check cron 已存在，跳过"
             return 0
         fi
     fi
 
     if _openclaw_cron_add \
-        --name octopus-update-check \
+        --name octoclaw-update-check \
         --cron "0 9 * * *" \
         --tz Asia/Shanghai \
         --session isolated \
         --timeout-seconds 120 \
         --no-deliver \
         --message "执行八爪鱼版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1"; then
-        echo "✅ octopus-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
+        echo "✅ octoclaw-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
     else
         echo "⚠️  版本检查 cron 注册失败，可手动在 OpenClaw 中添加"
         cat /tmp/octoclaw-cron-cli.err 2>/dev/null
@@ -1333,7 +1359,7 @@ install_probe_cron() {
 
     # ── FEATURE_MODEL_PROBE 开关（默认 false）────────────────────────────────
     if [ "${FEATURE_MODEL_PROBE:-false}" != "true" ]; then
-        echo "ℹ️  FEATURE_MODEL_PROBE=false，跳过 octopus-probe cron 注册（默认关闭）"
+        echo "ℹ️  FEATURE_MODEL_PROBE=false，跳过 octoclaw-probe cron 注册（默认关闭）"
         echo "    若需启用，请将 lib/config.sh 中 FEATURE_MODEL_PROBE 改为 true 后重新运行 install.sh"
         return 0
     fi
@@ -1360,7 +1386,11 @@ install_probe_cron() {
 
     # 检查是否已存在
     if _openclaw_cron_exists "octopus-probe"; then
-        echo "ℹ️  octopus-probe cron 已存在，跳过"
+        echo "ℹ️  检测到旧版 octopus-probe cron，迁移删除中..."
+        _openclaw_cron_remove_by_name "octopus-probe"
+    fi
+    if _openclaw_cron_exists "octoclaw-probe"; then
+        echo "ℹ️  octoclaw-probe cron 已存在，跳过"
         return 0
     fi
 
@@ -1378,13 +1408,13 @@ EOF
 )"
 
     if _openclaw_cron_add \
-        --name octopus-probe \
+        --name octoclaw-probe \
         --every 15m \
         --session isolated \
         --timeout-seconds 120 \
         --no-deliver \
         --message "$PROBE_MSG"; then
-        echo "✅ octopus-probe cron 注册成功（每15分钟，时间戳复用策略）"
+        echo "✅ octoclaw-probe cron 注册成功（每15分钟，时间戳复用策略）"
     else
         echo "⚠️  cron 注册失败，可手动在 OpenClaw 中添加（每15分钟运行 probe-models.sh）"
         cat /tmp/octoclaw-cron-cli.err 2>/dev/null
@@ -1399,17 +1429,17 @@ fi
 
 install_plan_sync_cron() {
     if [ "${FEATURE_OMNIROUTE_PLAN_SYNC:-true}" != "true" ]; then
-        echo "ℹ️  FEATURE_OMNIROUTE_PLAN_SYNC=false，跳过 octopus-plan-sync cron 注册"
+        echo "ℹ️  FEATURE_OMNIROUTE_PLAN_SYNC=false，跳过 octoclaw-plan-sync cron 注册"
         return 0
     fi
 
     if ! command -v openclaw &>/dev/null; then
-        echo "⚠️  openclaw CLI 未找到，跳过 octopus-plan-sync cron 注册"
+        echo "⚠️  openclaw CLI 未找到，跳过 octoclaw-plan-sync cron 注册"
         return 0
     fi
 
     if ! command -v omniroute &>/dev/null; then
-        echo "ℹ️  未检测到 omniroute，跳过 octopus-plan-sync cron 注册"
+        echo "ℹ️  未检测到 omniroute，跳过 octoclaw-plan-sync cron 注册"
         return 0
     fi
 
@@ -1420,7 +1450,11 @@ install_plan_sync_cron() {
     echo "📡 注册 Omniroute 套餐状态同步 cron（每${interval_minutes}分钟）..."
 
     if _openclaw_cron_exists "octopus-plan-sync"; then
-        echo "ℹ️  octopus-plan-sync cron 已存在，跳过"
+        echo "ℹ️  检测到旧版 octopus-plan-sync cron，迁移删除中..."
+        _openclaw_cron_remove_by_name "octopus-plan-sync"
+    fi
+    if _openclaw_cron_exists "octoclaw-plan-sync"; then
+        echo "ℹ️  octoclaw-plan-sync cron 已存在，跳过"
         return 0
     fi
 
@@ -1438,15 +1472,15 @@ EOF
 )"
 
     if _openclaw_cron_add \
-        --name octopus-plan-sync \
+        --name octoclaw-plan-sync \
         --every "${interval_minutes}m" \
         --session isolated \
         --timeout-seconds 120 \
         --no-deliver \
         --message "$PLAN_SYNC_MSG"; then
-        echo "✅ octopus-plan-sync cron 注册成功（每${interval_minutes}分钟）"
+        echo "✅ octoclaw-plan-sync cron 注册成功（每${interval_minutes}分钟）"
     else
-        echo "⚠️  octopus-plan-sync cron 注册失败"
+        echo "⚠️  octoclaw-plan-sync cron 注册失败"
         cat /tmp/octoclaw-cron-cli.err 2>/dev/null
     fi
 }
@@ -1459,22 +1493,26 @@ fi
 
 install_error_review_schedule() {
     local cron_tag cron_line existing
-    cron_tag="# octopus-error-review"
+    cron_tag="# octoclaw-error-review"
     cron_line="30 2 * * * cd ${WORKSPACE}/openclaw/skills/octopus && WORKSPACE=${WORKSPACE} PYTHONPATH=${WORKSPACE}/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py >> ${WORKSPACE}/tmp/octopus/error-review.log 2>&1 ${cron_tag}"
 
     if command -v crontab >/dev/null 2>&1; then
         echo "📡 注册 OctoClaw 夜间错误复盘计划（每天 02:30，零 token 纯脚本）..."
         existing="$(crontab -l 2>/dev/null || true)"
-        existing="$(printf '%s\n' "$existing" | grep -v 'octopus-error-review' || true)"
+        existing="$(printf '%s\n' "$existing" | grep -v 'octoclaw-error-review' || true)"
         { printf '%s\n' "$existing"; printf '%s\n' "$cron_line"; } | crontab -
-        echo "✅ octopus-error-review 已写入 crontab"
+        echo "✅ octoclaw-error-review 已写入 crontab"
         return 0
     fi
 
     if command -v openclaw >/dev/null 2>&1; then
         echo "⚠️  未检测到 crontab，回退使用 openclaw cron 注册 nightly review（会消耗少量 token）..."
         if _openclaw_cron_exists "octopus-error-review"; then
-            echo "ℹ️  octopus-error-review cron 已存在，跳过"
+            echo "ℹ️  检测到旧版 octopus-error-review cron，迁移删除中..."
+            _openclaw_cron_remove_by_name "octopus-error-review"
+        fi
+        if _openclaw_cron_exists "octoclaw-error-review"; then
+            echo "ℹ️  octoclaw-error-review cron 已存在，跳过"
             return 0
         fi
         local ERROR_REVIEW_MSG
@@ -1491,16 +1529,16 @@ EOF
 )"
 
         if _openclaw_cron_add \
-            --name octopus-error-review \
+            --name octoclaw-error-review \
             --cron "30 2 * * *" \
             --tz Asia/Shanghai \
             --session isolated \
             --timeout-seconds 120 \
             --no-deliver \
             --message "$ERROR_REVIEW_MSG"; then
-            echo "✅ octopus-error-review cron 注册成功（每天02:30）"
+            echo "✅ octoclaw-error-review cron 注册成功（每天02:30）"
         else
-            echo "⚠️  octopus-error-review cron 注册失败"
+            echo "⚠️  octoclaw-error-review cron 注册失败"
             cat /tmp/octoclaw-cron-cli.err 2>/dev/null
         fi
         return 0
