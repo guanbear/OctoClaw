@@ -10,7 +10,8 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
-from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, save_json
+from model_health import resolve_model_health, selection_penalty_for_role
+from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, save_json
 from model_plan_state import compute_plan_value_score, ensure_plan_state_file, get_plan_state_entry, preferred_fallback_model, should_fallback_due_to_plan
 from model_pricing import ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens
 
@@ -476,6 +477,12 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
             "profiles": {},
             "worker_pools": {},
             "worker_pool_phases": {},
+            "health": {
+                "generated_at": now_iso(),
+                "source_file": MODEL_HEALTH_FILE,
+                "models": {},
+                "selection_penalties": {},
+            },
             "sources": [],
         }
         save_json(MODEL_POLICY_FILE, policy)
@@ -494,6 +501,9 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         ttft_values.append(model.get("speed", {}).get("ttft_ms", 3000))
         tps_values.append(model.get("speed", {}).get("output_tps", 45))
 
+    health_state = load_json(MODEL_HEALTH_FILE)
+    health_models: dict[str, dict] = {}
+    health_penalties: dict[str, dict] = {}
     enriched = []
     for model in models:
         pricing = model.get("pricing", {})
@@ -532,6 +542,19 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
         if should_fallback_due_to_plan(model["id"]):
             reliability = max(0.0, reliability - 0.20)
 
+        health_entry = resolve_model_health(
+            model["id"],
+            state=health_state,
+            speed_snapshot=speed,
+            plan_should_fallback=should_fallback_due_to_plan(model["id"]),
+        )
+        role_health_penalties = {
+            role: selection_penalty_for_role(health_entry, role)
+            for role in ("runner", "router", "fix", "test", "scout", "writer", "analyze", "power", "main")
+        }
+        health_models[model["id"]] = health_entry
+        health_penalties[model["id"]] = role_health_penalties
+
         role_scores = {
             "runner": (
                 (
@@ -544,7 +567,7 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
                     + 0.01 * size_preference["runner"].get(size_class, 0.80)
                 ) * local_speed_boost
                 + fast_lane_bonus
-            ),
+            ) - role_health_penalties["runner"],
             "router": (
                 (
                     0.52 * ttft_score
@@ -558,20 +581,25 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
                     + 0.02 * availability_score
                 ) * local_speed_boost
                 + fast_lane_bonus
-            ),
-            "fix": 0.24 * coding + 0.16 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["fix"].get(size_class, 0.80),
-            "test": 0.22 * coding + 0.18 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["test"].get(size_class, 0.80),
-            "scout": 0.19 * openclaw + 0.17 * reasoning + 0.17 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["scout"].get(size_class, 0.80),
-            "writer": 0.26 * writing + 0.18 * reasoning + 0.13 * throughput_score + 0.10 * pinchbench + 0.08 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.06 * plan_value_score + 0.04 * size_preference["writer"].get(size_class, 0.80),
-            "analyze": 0.21 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.04 * price_score + 0.03 * size_preference["analyze"].get(size_class, 0.80),
-            "power": 0.19 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.08 * reliability + 0.04 * price_score + 0.04 * size_preference["power"].get(size_class, 0.80),
-            "main": 0.19 * coding + 0.16 * openclaw + 0.15 * reasoning + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * ttft_score + 0.02 * availability_score + 0.02 * size_preference["main"].get(size_class, 0.80),
+            ) - role_health_penalties["router"],
+            "fix": 0.24 * coding + 0.16 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["fix"].get(size_class, 0.80) - role_health_penalties["fix"],
+            "test": 0.22 * coding + 0.18 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["test"].get(size_class, 0.80) - role_health_penalties["test"],
+            "scout": 0.19 * openclaw + 0.17 * reasoning + 0.17 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["scout"].get(size_class, 0.80) - role_health_penalties["scout"],
+            "writer": 0.26 * writing + 0.18 * reasoning + 0.13 * throughput_score + 0.10 * pinchbench + 0.08 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.06 * plan_value_score + 0.04 * size_preference["writer"].get(size_class, 0.80) - role_health_penalties["writer"],
+            "analyze": 0.21 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.04 * price_score + 0.03 * size_preference["analyze"].get(size_class, 0.80) - role_health_penalties["analyze"],
+            "power": 0.19 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.08 * reliability + 0.04 * price_score + 0.04 * size_preference["power"].get(size_class, 0.80) - role_health_penalties["power"],
+            "main": 0.19 * coding + 0.16 * openclaw + 0.15 * reasoning + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * ttft_score + 0.02 * availability_score + 0.02 * size_preference["main"].get(size_class, 0.80) - role_health_penalties["main"],
         }
         enriched.append((model, role_scores))
 
     def pick(role: str) -> str:
         ordered = sorted(enriched, key=lambda item: item[1][role], reverse=True)
+        cooldown_candidates: list[str] = []
         for model, _ in ordered:
+            health_entry = health_models.get(model["id"], {})
+            if str(health_entry.get("state", "healthy") or "healthy").strip().lower() == "cooldown":
+                cooldown_candidates.append(model["id"])
+                continue
             if should_fallback_due_to_plan(model["id"]):
                 fallback = preferred_fallback_model(model["id"])
                 if fallback:
@@ -580,6 +608,8 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
                             return candidate["id"]
                     continue
             return model["id"]
+        if cooldown_candidates:
+            return cooldown_candidates[0]
         return ordered[0][0]["id"]
 
     profiles = {
@@ -633,6 +663,12 @@ def compute_policy(catalog: dict, mode: str = "auto") -> dict:
                 "fallback_path": model.get("fallback_path", []),
             }
             for model in models
+        },
+        "health": {
+            "generated_at": now_iso(),
+            "source_file": MODEL_HEALTH_FILE,
+            "models": health_models,
+            "selection_penalties": health_penalties,
         },
         "sources": sources,
         "source_policy": load_source_registry(),

@@ -35,17 +35,9 @@ class ResolveModelTests(unittest.TestCase):
             "worker_pools": {
                 "octoclaw-research": "model/research-default",
             },
-            "labels": {
-                "octopus-writer": "model/legacy-writer",
-            },
-            "tiers": {
-                "normal": "model/tier-normal",
-            },
         }
         with patch.object(resolve_model, "load_json", return_value=policy):
             result = resolve_model.resolve_auto_policy_model(
-                "normal",
-                "octopus-writer",
                 worker_pool="octoclaw-research",
                 phase="report",
                 profile="writer",
@@ -62,17 +54,9 @@ class ResolveModelTests(unittest.TestCase):
             "worker_pools": {
                 "octoclaw-code": "model/code-default",
             },
-            "labels": {
-                "octopus-fix": "model/legacy-fix",
-            },
-            "tiers": {
-                "normal": "model/tier-normal",
-            },
         }
         with patch.object(resolve_model, "load_json", return_value=policy):
             result = resolve_model.resolve_auto_policy_model(
-                "normal",
-                "octopus-fix",
                 worker_pool="octoclaw-code",
                 phase="verify",
                 profile="code",
@@ -81,37 +65,29 @@ class ResolveModelTests(unittest.TestCase):
 
     def test_cache_key_is_selector_aware_for_worker_pool_phase_and_profile(self) -> None:
         key = resolve_model.cache_key(
-            "normal",
-            label="octopus-writer",
+            "standard",
             worker_pool="octoclaw-research",
             phase="report",
             profile="writer",
             route="spawn_single",
         )
+        self.assertIn("selector_band=standard", key)
         self.assertIn("worker_pool=octoclaw-research", key)
         self.assertIn("phase=report", key)
         self.assertIn("profile=writer", key)
-        self.assertTrue(key.endswith("::normal"))
+        self.assertTrue(key.endswith("::standard"))
 
-    def test_auto_policy_falls_back_to_main_model_not_legacy_label_or_tier(self) -> None:
+    def test_auto_policy_falls_back_to_main_model(self) -> None:
         policy = {
             "main_model": "model/main",
-            "labels": {
-                "octopus-fix": "model/legacy-fix",
-            },
-            "tiers": {
-                "normal": "model/legacy-tier",
-            },
         }
         with patch.object(resolve_model, "load_json", return_value=policy):
             result = resolve_model.resolve_auto_policy_model(
-                "normal",
-                "octopus-fix",
                 route="direct",
             )
         self.assertEqual(result, "model/main")
 
-    def test_selector_aware_cache_does_not_fall_back_to_generic_tier(self) -> None:
+    def test_selector_aware_cache_does_not_fall_back_to_generic_selector_band(self) -> None:
         cache = {
             "generated_at": 9999999999,
             "ttl": resolve_model.CACHE_TTL,
@@ -119,19 +95,19 @@ class ResolveModelTests(unittest.TestCase):
             "ironclaw_guarded": False,
             "policy_marker": "policy-v1",
             "models": {
-                "trivial": "model/stale-generic",
+                "quick": "model/stale-generic",
             },
         }
         with patch.object(resolve_model, "load_json", return_value=cache), patch.object(
             resolve_model, "_get_ironclaw_guarded", return_value=False
         ):
             result = resolve_model.read_cache(
-                "trivial",
+                "quick",
                 worker_pool="octoclaw-runner",
                 phase="inspect",
                 profile="ops-fast",
                 route="runner",
-                allow_generic_tier_fallback=False,
+                allow_generic_selector_fallback=False,
                 policy_marker="policy-v1",
                 expected_mode="auto_policy",
             )
@@ -139,7 +115,7 @@ class ResolveModelTests(unittest.TestCase):
 
     def test_selector_aware_cache_can_read_selector_key_under_auto_policy(self) -> None:
         key = resolve_model.cache_key(
-            "normal",
+            "standard",
             worker_pool="octoclaw-code",
             phase="implement",
             profile="code",
@@ -153,23 +129,75 @@ class ResolveModelTests(unittest.TestCase):
             "policy_marker": "policy-v2",
             "models": {
                 key: "model/code-implement",
-                "normal": "model/stale-generic",
+                "standard": "model/stale-generic",
             },
         }
         with patch.object(resolve_model, "load_json", return_value=cache), patch.object(
             resolve_model, "_get_ironclaw_guarded", return_value=False
         ):
             result = resolve_model.read_cache(
-                "normal",
+                "standard",
                 worker_pool="octoclaw-code",
                 phase="implement",
                 profile="code",
                 route="spawn_single",
-                allow_generic_tier_fallback=False,
+                allow_generic_selector_fallback=False,
                 policy_marker="policy-v2",
                 expected_mode="auto_policy",
             )
         self.assertEqual(result, "model/code-implement")
+
+    def test_policy_health_fallback_avoids_cooldown_candidate(self) -> None:
+        policy = {
+            "family_routing": {
+                "model/primary": {
+                    "fallback_path": ["model/fallback", "model/other"],
+                }
+            },
+            "health": {
+                "models": {
+                    "model/primary": {"state": "cooldown"},
+                    "model/fallback": {"state": "healthy"},
+                }
+            },
+        }
+        result = resolve_model.resolve_policy_health_fallback("model/primary", policy=policy)
+        self.assertEqual(result, "model/fallback")
+
+    def test_cache_respects_health_marker(self) -> None:
+        key = resolve_model.cache_key(
+            "standard",
+            worker_pool="octoclaw-main",
+            phase="orchestrate",
+            profile="research",
+            route="direct",
+        )
+        cache = {
+            "generated_at": 9999999999,
+            "ttl": resolve_model.CACHE_TTL,
+            "mode": "auto_policy",
+            "ironclaw_guarded": False,
+            "policy_marker": "policy-v2",
+            "health_marker": "health-a",
+            "models": {
+                key: "model/main-a",
+            },
+        }
+        with patch.object(resolve_model, "load_json", return_value=cache), patch.object(
+            resolve_model, "_get_ironclaw_guarded", return_value=False
+        ):
+            result = resolve_model.read_cache(
+                "standard",
+                worker_pool="octoclaw-main",
+                phase="orchestrate",
+                profile="research",
+                route="direct",
+                allow_generic_selector_fallback=False,
+                policy_marker="policy-v2",
+                health_marker="health-b",
+                expected_mode="auto_policy",
+            )
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ CONFIG_FILE = f"{WORKSPACE}/tmp/octopus-config.json"
 MODE_FILE = f"{WORKSPACE}/tmp/octopus-mode.json"
 MODEL_CATALOG_FILE = f"{WORKSPACE}/tmp/octopus/model-catalog.json"
 MODEL_POLICY_FILE = f"{WORKSPACE}/tmp/octopus/model-policy.json"
+MODEL_HEALTH_FILE = f"{WORKSPACE}/tmp/octopus/model-health.json"
 MODEL_SPEED_FILE = f"{WORKSPACE}/tmp/octopus/model-speed.json"
 MODEL_PLAN_STATE_FILE = f"{WORKSPACE}/tmp/octopus/model-plan-state.json"
 MODEL_BENCHMARKS_FILE = f"{WORKSPACE}/tmp/octopus/model-benchmarks.json"
@@ -46,6 +47,51 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "prefer_private": False,
         "prefer_low_cost": False,
+    },
+    "model_health": {
+        "enabled": True,
+        "degraded_thresholds": {
+            "rate_limit": 2,
+            "timeout": 2,
+            "failover": 2,
+        },
+        "cooldown_thresholds": {
+            "rate_limit": 3,
+            "timeout": 3,
+            "failover": 3,
+        },
+        "cooldown_minutes": 20,
+        "latency_thresholds_ms": {
+            "interactive": 3000,
+            "code": 5000,
+            "batch": 6500,
+        },
+        "quota_pressure_penalty": {
+            "high": 0.10,
+            "critical": 0.22,
+        },
+        "degraded_penalty_by_role": {
+            "runner": 0.22,
+            "router": 0.20,
+            "main": 0.20,
+            "fix": 0.12,
+            "test": 0.12,
+            "scout": 0.08,
+            "writer": 0.06,
+            "analyze": 0.10,
+            "power": 0.12,
+        },
+        "cooldown_penalty_by_role": {
+            "runner": 0.85,
+            "router": 0.80,
+            "main": 0.80,
+            "fix": 0.70,
+            "test": 0.70,
+            "scout": 0.55,
+            "writer": 0.45,
+            "analyze": 0.60,
+            "power": 0.70,
+        },
     },
     "runtime_policy": {
         "enabled": True,
@@ -199,6 +245,12 @@ def load_octopus_config() -> dict[str, Any]:
     if isinstance(data, dict):
         return deep_merge(DEFAULT_CONFIG, data)
     return json.loads(json.dumps(DEFAULT_CONFIG))
+
+
+def model_health_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or load_octopus_config()
+    section = cfg.get("model_health", {})
+    return section if isinstance(section, dict) else {}
 
 
 def workbench_config(config: dict[str, Any] | None = None) -> dict[str, Any]:

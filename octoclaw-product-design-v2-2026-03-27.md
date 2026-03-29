@@ -613,6 +613,10 @@ OctoClaw 要做的不是“又一个 router”，而是：
 
 也意味着它后续可以独立出来服务别的多 Agent 产品，但现在先不以开源为目标牵着当前实现走。
 
+选模健康度、cooldown、和上游 failover 的分层设计见：
+
+- [octoclaw-model-health-cooldown-design-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-model-health-cooldown-design-v1-2026-03-29.md)
+
 ### 7.2 IM-native 展示层
 
 OctoClaw 当前应优先支持：

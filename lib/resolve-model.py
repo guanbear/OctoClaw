@@ -4,7 +4,7 @@ resolve-model.py — OctoClaw model selection entry.
 
 Primary path:
 1. Prefer worker_pool/profile/phase driven auto policy from model-policy.json
-2. Fall back to legacy mode/tier rules only when auto policy is unavailable
+2. Fall back to lightweight selector-band defaults only when auto policy is unavailable
 3. Apply guard overrides and complexity-based upgrades
 """
 
@@ -17,7 +17,9 @@ import re
 import sys
 import time
 
+from model_health import model_health_marker, model_in_cooldown
 from octopus_config import CONFIG_FILE, MODE_FILE, MODEL_ALIASES_FILE, MODEL_POLICY_FILE, load_json as load_shared_json
+from worker_taxonomy import model_band_for_selector_band
 
 GLOBAL_DEG_FILE = "/tmp/ironclaw-global-degradation.json"
 GUARD_FILE = "/tmp/ironclaw-model-guard-override.json"
@@ -34,26 +36,26 @@ BUILTIN_MAP = {
     "minimax": "minimax/minimax-m2.7",
 }
 
-VALID_TIERS = ["trivial", "simple", "normal", "hard", "deep"]
+VALID_SELECTOR_BANDS = ["quick", "standard", "strong", "heavy"]
 
 # 多维度关键词权重（ClawRouter 启发，15维度简化版）
-# 正分 → 建议升级tier；负分 → 建议降级tier
+# 正分 → 建议升级 band；负分 → 建议降级 band
 # 仅用于升级安全网（不降级，尊重主 Agent 判断）
 _SCORING_RULES = [
     # (weight, pattern_list, dimension_name)
-    # 代码维度 (+0.15): 含代码标志 → 至少 normal
+    # 代码维度 (+0.15): 含代码标志 → 至少 standard
     (0.15, [r"```", r"\bdef\b", r"\bclass\b", r"\bfunction\b", r"\bimport\b",
              r"\breturn\b", r"=>", r"\basync\b", r"\bawait\b"], "code"),
-    # 复杂度维度 (+0.18): 架构/重构/分布式 → hard/deep
+    # 复杂度维度 (+0.18): 架构/重构/分布式 → strong/heavy
     (0.18, [r"\b(architect|重构|refactor|distributed|分布式|design pattern|设计模式|"
              r"scalab|优化系统|system design|microservice|微服务)\b"], "complexity"),
-    # 推理维度 (+0.18): 分析/比较/论证 → deep
+    # 推理维度 (+0.18): 分析/比较/论证 → heavy
     (0.18, [r"\b(analyz|分析|compar|比较|prove|论证|step.by.step|逐步|"
              r"root cause|根因|tradeoff|权衡|综合评估)\b"], "reasoning"),
-    # Agentic 维度 (+0.08): 部署/运行/测试/批量 → normal+
+    # Agentic 维度 (+0.08): 部署/运行/测试/批量 → standard+
     (0.08, [r"\b(deploy|部署|run tests|运行测试|execute|批量|batch|migrate|迁移|"
              r"rollout|上线|pipeline)\b"], "agentic"),
-    # 多文件维度 (+0.10): 涉及多个文件 → hard
+    # 多文件维度 (+0.10): 涉及多个文件 → strong
     (0.10, [r"\b(multiple files|多个文件|across files|整个项目|全局|codebase|"
              r"all.*\.py|所有.*文件)\b"], "multi_file"),
     # 简单维度 (-0.12): 明显简单任务 → 不升级
@@ -66,16 +68,15 @@ _SCORING_RULES = [
              r"standard|规范)\b"], "constraint"),
 ]
 
-# tier 数值映射（用于比较高低）
-_TIER_RANK = {t: i for i, t in enumerate(VALID_TIERS)}
+# selector band 数值映射（用于比较高低）
+_SELECTOR_BAND_RANK = {band: i for i, band in enumerate(VALID_SELECTOR_BANDS)}
 
 
 def score_description_complexity(description: str) -> str | None:
     """
-    对任务描述进行多维度关键词评分，返回建议 tier 或 None（无法判断）。
-    只用于升级安全网：若建议 tier > 请求 tier 则升级，否则保持原 tier。
-    评分 < -0.05 → trivial；-0.05~0.10 → simple；0.10~0.25 → normal；
-    0.25~0.40 → hard；> 0.40 → deep
+    对任务描述进行多维度关键词评分，返回建议 selector band 或 None（无法判断）。
+    只用于升级安全网：若建议 band > 请求 band 则升级，否则保持原 band。
+    评分 < -0.05 → quick；-0.05~0.20 → standard；0.20~0.40 → strong；> 0.40 → heavy
     """
     if not description or len(description.strip()) < 5:
         return None
@@ -95,17 +96,15 @@ def score_description_complexity(description: str) -> str | None:
     if not matched_dims:
         return None
 
-    # 评分 → tier
+    # 评分 → selector band
     if total_score < -0.05:
-        suggested = "trivial"
-    elif total_score < 0.10:
-        suggested = "simple"
-    elif total_score < 0.25:
-        suggested = "normal"
+        suggested = "quick"
+    elif total_score < 0.20:
+        suggested = "standard"
     elif total_score < 0.40:
-        suggested = "hard"
+        suggested = "strong"
     else:
-        suggested = "deep"
+        suggested = "heavy"
 
     print(
         f"INFO: description scoring: score={total_score:.2f} dims=[{', '.join(matched_dims)}] → {suggested}",
@@ -151,13 +150,12 @@ def model_auto_enabled(config: dict | None = None) -> bool:
 
 def selector_context_present(
     *,
-    label: str = "",
     worker_pool: str = "",
     phase: str = "",
     profile: str = "",
     route: str = "",
 ) -> bool:
-    return any(str(value or "").strip() for value in (label, worker_pool, phase, profile, route))
+    return any(str(value or "").strip() for value in (worker_pool, phase, profile, route))
 
 
 def has_auto_policy(policy: dict | None) -> bool:
@@ -179,13 +177,15 @@ def policy_generation_marker(policy: dict | None) -> str:
 
 
 def selector_key(
-    label: str = "",
+    selector_band: str = "",
     worker_pool: str = "",
     phase: str = "",
     profile: str = "",
     route: str = "",
 ) -> str:
     parts = []
+    if selector_band:
+        parts.append(f"selector_band={str(selector_band).strip()}")
     if profile:
         parts.append(f"profile={str(profile).strip()}")
     if worker_pool:
@@ -194,39 +194,36 @@ def selector_key(
         parts.append(f"phase={str(phase).strip()}")
     if route:
         parts.append(f"route={str(route).strip()}")
-    if label:
-        parts.append(f"label={str(label).strip()}")
     return "|".join(part for part in parts if part)
 
 
 def cache_key(
-    tier: str,
-    label: str = "",
+    selector_band: str,
     worker_pool: str = "",
     phase: str = "",
     profile: str = "",
     route: str = "",
 ) -> str:
     selector = selector_key(
-        label=label,
+        selector_band=selector_band,
         worker_pool=worker_pool,
         phase=phase,
         profile=profile,
         route=route,
     )
-    return f"{selector}::{tier}" if selector else tier
+    return f"{selector}::{selector_band}" if selector else selector_band
 
 
 def read_cache(
-    tier: str,
-    label: str = "",
+    selector_band: str,
     worker_pool: str = "",
     phase: str = "",
     profile: str = "",
     route: str = "",
     *,
-    allow_generic_tier_fallback: bool = True,
+    allow_generic_selector_fallback: bool = True,
     policy_marker: str = "",
+    health_marker: str = "",
     expected_mode: str = "",
 ) -> str | None:
     """
@@ -251,10 +248,12 @@ def read_cache(
     cached_policy_marker = str(cache.get("policy_marker", "") or "").strip()
     if str(policy_marker or "").strip() != cached_policy_marker:
         return None
+    cached_health_marker = str(cache.get("health_marker", "") or "").strip()
+    if str(health_marker or "").strip() != cached_health_marker:
+        return None
     models = cache.get("models", {})
     selected_key = cache_key(
-        tier,
-        label=label,
+        selector_band,
         worker_pool=worker_pool,
         phase=phase,
         profile=profile,
@@ -262,22 +261,27 @@ def read_cache(
     )
     if selected_key in models:
         return models.get(selected_key)
-    legacy_key = f"{str(label or '').strip()}::{tier}" if str(label or "").strip() else ""
-    if legacy_key and legacy_key in models:
-        return models.get(legacy_key)
-    if allow_generic_tier_fallback:
-        return models.get(tier)
+    if allow_generic_selector_fallback:
+        return models.get(selector_band)
     return None
 
 
-def write_cache(mode: str, ironclaw_guarded: bool, models: dict, *, policy_marker: str = "") -> None:
-    """将所有 tier 的模型结果写入缓存文件。"""
+def write_cache(
+    mode: str,
+    ironclaw_guarded: bool,
+    models: dict,
+    *,
+    policy_marker: str = "",
+    health_marker: str = "",
+) -> None:
+    """将 selector band 的模型结果写入缓存文件。"""
     cache = {
         "generated_at": int(time.time()),
         "ttl": CACHE_TTL,
         "mode": mode,
         "ironclaw_guarded": ironclaw_guarded,
         "policy_marker": str(policy_marker or "").strip(),
+        "health_marker": str(health_marker or "").strip(),
         "models": models,
     }
     try:
@@ -290,7 +294,7 @@ def write_cache(mode: str, ironclaw_guarded: bool, models: dict, *, policy_marke
 def build_short_name_map(aliases: dict) -> dict:
     """
     从 aliases 文件推断短名 → 完整路径映射。
-    aliases 格式: {tier: "vendor-model/provider-model", ...}
+    aliases 格式: {selector_band/model_band: "vendor-model/provider-model", ...}
     我们把 aliases 里出现的路径，按已知短名特征归类。
     """
     mapping = {}
@@ -314,8 +318,7 @@ def build_short_name_map(aliases: dict) -> dict:
 
 
 def resolve_auto_policy_model(
-    tier: str,
-    label: str,
+    selector_band: str = "",
     *,
     worker_pool: str = "",
     phase: str = "",
@@ -353,12 +356,40 @@ def resolve_auto_policy_model(
     return None
 
 
+def resolve_custom_mode_model(
+    custom_models: dict,
+    selector_band: str = "",
+    *,
+    worker_pool: str = "",
+    phase: str = "",
+    route: str = "",
+    profile: str = "",
+) -> str | None:
+    if not isinstance(custom_models, dict):
+        return None
+    if profile:
+        profile_model = custom_models.get(f"profile:{profile}")
+        if isinstance(profile_model, str) and profile_model.strip():
+            return profile_model.strip()
+    if worker_pool:
+        pool_model = custom_models.get(worker_pool)
+        if isinstance(pool_model, str) and pool_model.strip():
+            return pool_model.strip()
+    if route == "direct":
+        direct_model = custom_models.get("main")
+        if isinstance(direct_model, str) and direct_model.strip():
+            return direct_model.strip()
+    main_model = custom_models.get("main")
+    if isinstance(main_model, str) and main_model.strip():
+        return main_model.strip()
+    return None
+
+
 def resolve_mode_short_name(
     mode: str,
-    rules: dict,
-    tier: str,
+    custom_models: dict,
+    selector_band: str = "",
     *,
-    label: str = "",
     worker_pool: str = "",
     phase: str = "",
     route: str = "",
@@ -366,18 +397,49 @@ def resolve_mode_short_name(
 ) -> str | None:
     if mode == "auto":
         return resolve_auto_policy_model(
-            tier,
-            label,
+            selector_band,
             worker_pool=worker_pool,
             phase=phase,
             route=route,
             profile=profile,
         )
     if mode == "custom":
-        tier_list = rules.get("custom", {}).get(tier, [])
-        return tier_list[0] if tier_list else None
-    tier_list = rules.get(mode, {}).get(tier, [])
-    return tier_list[0] if tier_list else None
+        return resolve_custom_mode_model(
+            custom_models,
+            selector_band,
+            worker_pool=worker_pool,
+            phase=phase,
+            route=route,
+            profile=profile,
+        )
+    return None
+
+
+def resolve_policy_health_fallback(selected_model: str, *, policy: dict | None = None) -> str:
+    if not isinstance(policy, dict):
+        return selected_model
+    health = policy.get("health", {})
+    health_models = health.get("models", {}) if isinstance(health, dict) else {}
+    selected_health = health_models.get(selected_model, {}) if isinstance(health_models, dict) else {}
+    if not isinstance(selected_health, dict) or not model_in_cooldown(selected_health):
+        return selected_model
+    family_routing = policy.get("family_routing", {})
+    family_entry = family_routing.get(selected_model, {}) if isinstance(family_routing, dict) else {}
+    fallback_path = family_entry.get("fallback_path", []) if isinstance(family_entry, dict) else []
+    if not isinstance(fallback_path, list):
+        return selected_model
+    for candidate in fallback_path:
+        model_id = str(candidate or "").strip()
+        if not model_id:
+            continue
+        candidate_health = health_models.get(model_id, {}) if isinstance(health_models, dict) else {}
+        if not isinstance(candidate_health, dict) or not model_in_cooldown(candidate_health):
+            print(
+                f"INFO: selected model in cooldown, switching via policy fallback {selected_model} -> {model_id}",
+                file=sys.stderr,
+            )
+            return model_id
+    return selected_model
 
 
 def resolve_short_name(short_name: str, aliases_data: dict | None) -> str:
@@ -401,22 +463,31 @@ def resolve_short_name(short_name: str, aliases_data: dict | None) -> str:
     return BUILTIN_MAP["sonnet"]
 
 
+def fallback_short_name_for_selector_band(selector_band: str) -> str:
+    band = str(selector_band or "").strip().lower()
+    if band == "quick":
+        return "minimax"
+    if band == "standard":
+        return "glm"
+    if band == "strong":
+        return "gpt54"
+    return "claudeopus"
+
+
 def main():
     parser = argparse.ArgumentParser(description="八爪鱼统一模型选择入口")
-    parser.add_argument("--tier", required=True, choices=VALID_TIERS, help="任务级别")
-    parser.add_argument("--label", default="", help="任务标签（仅用于日志，不影响选模型）")
+    parser.add_argument("--selector-band", dest="selector_band", default="", choices=VALID_SELECTOR_BANDS, help="选模强度带")
     parser.add_argument("--worker-pool", dest="worker_pool", default="", help="优先 worker pool（Phase 3 source of truth）")
     parser.add_argument("--phase", default="", help="工作阶段，如 collect/inspect/report/implement/verify")
     parser.add_argument("--route", default="", help="当前 route，用于 team/runner 特殊优先级")
     parser.add_argument("--profile", default="", help="用户侧 profile，如 code/research/review/writer")
-    parser.add_argument("--description", default="", help="任务描述（用于多维度复杂度评分，可升级tier）")
+    parser.add_argument("--description", default="", help="任务描述（用于多维度复杂度评分，可升级 band）")
     args = parser.parse_args()
 
-    tier = args.tier
+    selector_band = str(args.selector_band or "").strip() or "standard"
     runtime_config = load_runtime_config()
     policy_data = load_json(MODEL_POLICY_FILE)
     selector_aware_request = selector_context_present(
-        label=args.label,
         worker_pool=args.worker_pool,
         phase=args.phase,
         profile=args.profile,
@@ -424,68 +495,65 @@ def main():
     )
     auto_policy_active = model_auto_enabled(runtime_config) and has_auto_policy(policy_data)
     policy_marker = policy_generation_marker(policy_data) if auto_policy_active else ""
+    health_marker = model_health_marker(policy_data.get("health", {})) if auto_policy_active and isinstance(policy_data, dict) else ""
     expected_cache_mode = "auto_policy" if auto_policy_active else _get_current_mode()
 
-    # ── Step 0: 检查模型缓存 ─────────────────────────────────────────────
-    # 注意：description 评分结果不进缓存（缓存仅按 mode/guard 状态）
-    # 缓存命中后若有 description 仍需做升级检测
     cached_model = read_cache(
-        tier,
-        args.label,
+        selector_band,
         worker_pool=args.worker_pool,
         phase=args.phase,
         profile=args.profile,
         route=args.route,
-        allow_generic_tier_fallback=not (auto_policy_active and selector_aware_request),
+        allow_generic_selector_fallback=not (auto_policy_active and selector_aware_request),
         policy_marker=policy_marker,
+        health_marker=health_marker,
         expected_mode=expected_cache_mode,
     )
     if cached_model:
-        # 即使命中缓存，也检查 description 是否建议升级 tier
         if args.description:
-            suggested_tier = score_description_complexity(args.description)
-            if suggested_tier and _TIER_RANK[suggested_tier] > _TIER_RANK[tier]:
+            suggested_band = score_description_complexity(args.description)
+            if suggested_band and _SELECTOR_BAND_RANK[suggested_band] > _SELECTOR_BAND_RANK[selector_band]:
                 print(
-                    f"INFO: description suggests upgrading tier {tier} → {suggested_tier} (cache bypass)",
+                    f"INFO: description suggests upgrading band {selector_band} → {suggested_band} (cache bypass)",
                     file=sys.stderr,
                 )
-                tier = suggested_tier
+                selector_band = suggested_band
                 cached_model = read_cache(
-                    tier,
-                    args.label,
+                    selector_band,
                     worker_pool=args.worker_pool,
                     phase=args.phase,
                     profile=args.profile,
                     route=args.route,
-                    allow_generic_tier_fallback=not (auto_policy_active and selector_aware_request),
+                    allow_generic_selector_fallback=not (auto_policy_active and selector_aware_request),
                     policy_marker=policy_marker,
+                    health_marker=health_marker,
                     expected_mode=expected_cache_mode,
                 )
         if cached_model:
-            print(f"INFO: 命中模型缓存 tier={tier} model={cached_model}", file=sys.stderr)
+            print(f"INFO: 命中模型缓存 selector_band={selector_band} model={cached_model}", file=sys.stderr)
             print(cached_model)
             return
 
-    # ── Step 1: 全局降级检测 ──────────────────────────────────────────────
     override_mode = None
     deg_data = load_json(GLOBAL_DEG_FILE)
     if deg_data and deg_data.get("active") is True:
         override_mode = deg_data.get("override_mode")
 
-    # ── Step 2: 读 octopus-mode.json，确定最终 mode ───────────────────────
     mode_data = load_json(MODE_FILE)
     if not mode_data:
-        # 文件不存在时默认走 policy-first auto
-        mode_data = {"mode": "auto", "modes": {}}
+        mode_data = {"mode": "auto", "customModels": {}}
 
     mode = override_mode if override_mode else mode_data.get("mode", "auto")
-    rules = mode_data.get("modes", {})
+    if mode not in {"auto", "custom"}:
+        mode = "auto"
+    custom_models = mode_data.get("customModels", {})
+    if not isinstance(custom_models, dict):
+        custom_models = {}
 
     auto_selected_model = None
     if auto_policy_active:
         auto_selected_model = resolve_auto_policy_model(
-            tier,
-            args.label,
+            selector_band,
             worker_pool=args.worker_pool,
             phase=args.phase,
             route=args.route,
@@ -495,51 +563,48 @@ def main():
 
     short_name = None if auto_selected_model else resolve_mode_short_name(
         mode,
-        rules,
-        tier,
-        label=args.label,
+        custom_models,
+        selector_band,
         worker_pool=args.worker_pool,
         phase=args.phase,
         route=args.route,
         profile=args.profile,
     )
 
-    # ── Step 3: 短名 → 完整路径（从别名文件推断）───────────────────────────
     aliases_data = load_json(MODEL_ALIASES_FILE)
 
-    # 如果 rules 里没找到，用别名文件作 fallback
     if auto_selected_model:
         full_path = auto_selected_model
     else:
-        if not short_name:
-            if aliases_data and tier in aliases_data:
-                full_path = aliases_data[tier]
-                if not (isinstance(full_path, str) and "/" in full_path):
-                    full_path = ""
-            else:
-                full_path = ""
-            if not full_path:
-                # 最终 fallback：compat tier alias 逻辑
-                short_name = "glm" if tier in ("trivial", "simple", "normal") else "sonnet"
-        else:
-            full_path = ""
-        if not full_path:
+        full_path = ""
+        if short_name:
             full_path = resolve_short_name(short_name, aliases_data)
+        if not full_path and isinstance(aliases_data, dict):
+            model_band = model_band_for_selector_band(selector_band, default="normal")
+            candidate = str(
+                aliases_data.get(selector_band, "")
+                or aliases_data.get(model_band, "")
+                or ""
+            ).strip()
+            if "/" in candidate:
+                full_path = candidate
+        if not full_path:
+            full_path = resolve_short_name(fallback_short_name_for_selector_band(selector_band), aliases_data)
 
-    # ── Step 3.5: 多维度描述升级检测 ─────────────────────────────────────
-    # 若 description 建议更高 tier → 重新按更高 tier 选模型（仅升级，不降级）
+    if auto_policy_active:
+        full_path = resolve_policy_health_fallback(full_path, policy=policy_data)
+
     if args.description:
-        suggested_tier = score_description_complexity(args.description)
-        if suggested_tier and _TIER_RANK[suggested_tier] > _TIER_RANK[tier]:
+        suggested_band = score_description_complexity(args.description)
+        if suggested_band and _SELECTOR_BAND_RANK[suggested_band] > _SELECTOR_BAND_RANK[selector_band]:
             print(
-                f"INFO: description suggests upgrading tier {tier} → {suggested_tier}, re-selecting model",
+                f"INFO: description suggests upgrading band {selector_band} → {suggested_band}, re-selecting model",
                 file=sys.stderr,
             )
-            tier = suggested_tier
+            selector_band = suggested_band
             if auto_policy_active:
                 upgraded_model = resolve_auto_policy_model(
-                    tier,
-                    args.label,
+                    suggested_band,
                     worker_pool=args.worker_pool,
                     phase=args.phase,
                     route=args.route,
@@ -547,26 +612,31 @@ def main():
                     policy=policy_data,
                 )
                 if upgraded_model:
-                    full_path = upgraded_model
+                    full_path = resolve_policy_health_fallback(upgraded_model, policy=policy_data)
             else:
                 upgraded_short = resolve_mode_short_name(
                     mode,
-                    rules,
-                    tier,
-                    label=args.label,
+                    custom_models,
+                    suggested_band,
                     worker_pool=args.worker_pool,
                     phase=args.phase,
                     route=args.route,
                     profile=args.profile,
                 )
-                if not upgraded_short:
-                    if aliases_data and tier in aliases_data:
-                        up_full = aliases_data[tier]
-                        if isinstance(up_full, str) and "/" in up_full:
-                            upgraded_short = up_full
-                    if not upgraded_short:
-                        upgraded_short = "glm" if tier in ("trivial", "simple", "normal") else "sonnet"
-                full_path = resolve_short_name(upgraded_short, aliases_data)
+                if upgraded_short:
+                    full_path = resolve_short_name(upgraded_short, aliases_data)
+                else:
+                    upgraded_band_model = ""
+                    if isinstance(aliases_data, dict):
+                        upgraded_band_model = str(
+                            aliases_data.get(suggested_band, "")
+                            or aliases_data.get(model_band_for_selector_band(suggested_band, default="normal"), "")
+                            or ""
+                        ).strip()
+                    full_path = upgraded_band_model if "/" in upgraded_band_model else resolve_short_name(
+                        fallback_short_name_for_selector_band(suggested_band),
+                        aliases_data,
+                    )
 
     # ── Step 4: 模型守卫降级检测 ─────────────────────────────────────────
     guard_data = load_json(GUARD_FILE)
@@ -590,28 +660,24 @@ def main():
             if original_model and current_model and full_path == original_model:
                 full_path = current_model
 
-    # ── Step 5: 写入缓存 & 输出 ───────────────────────────────────────────
-    # 计算所有 tier 的模型，写入缓存（避免每个 tier 都重新计算）
     ironclaw_guarded = _get_ironclaw_guarded()
-    all_tiers_models: dict = {}
+    all_selector_models: dict = {}
     if auto_policy_active and selector_aware_request:
-        all_tiers_models[
-            cache_key(
-                tier,
-                label=args.label,
-                worker_pool=args.worker_pool,
-                phase=args.phase,
-                profile=args.profile,
+        all_selector_models[
+                    cache_key(
+                        selector_band,
+                        worker_pool=args.worker_pool,
+                        phase=args.phase,
+                        profile=args.profile,
                 route=args.route,
             )
         ] = full_path
     else:
-        for t in VALID_TIERS:
-            if t == tier:
-                all_tiers_models[
+        for band in VALID_SELECTOR_BANDS:
+            if band == selector_band:
+                all_selector_models[
                     cache_key(
-                        t,
-                        args.label if auto_policy_active else "",
+                        band,
                         worker_pool=args.worker_pool if auto_policy_active else "",
                         phase=args.phase if auto_policy_active else "",
                         profile=args.profile if auto_policy_active else "",
@@ -619,59 +685,69 @@ def main():
                     )
                 ] = full_path
                 if not (auto_policy_active and selector_aware_request):
-                    all_tiers_models[t] = full_path
+                    all_selector_models[band] = full_path
             else:
                 if auto_policy_active:
-                    t_full_path = resolve_auto_policy_model(
-                        t,
-                        args.label,
+                    band_full_path = resolve_auto_policy_model(
+                        band,
                         worker_pool=args.worker_pool,
                         phase=args.phase,
                         route=args.route,
                         profile=args.profile,
                         policy=policy_data,
                     ) or full_path
+                    band_full_path = resolve_policy_health_fallback(band_full_path, policy=policy_data)
                 else:
-                    t_short = resolve_mode_short_name(
+                    band_short = resolve_mode_short_name(
                         mode,
-                        rules,
-                        t,
-                        label=args.label,
+                        custom_models,
+                        band,
                         worker_pool=args.worker_pool,
                         phase=args.phase,
                         route=args.route,
                         profile=args.profile,
                     )
-                    if not t_short:
-                        if aliases_data and t in aliases_data:
-                            t_full = aliases_data[t]
-                            if isinstance(t_full, str) and "/" in t_full:
-                                t_short = t_full
-                        if not t_short:
-                            t_short = "glm" if t in ("trivial", "simple", "normal") else "sonnet"
-                    t_full_path = resolve_short_name(t_short, aliases_data)
+                    if band_short:
+                        band_full_path = resolve_short_name(band_short, aliases_data)
+                    else:
+                        candidate = ""
+                        if isinstance(aliases_data, dict):
+                            candidate = str(
+                                aliases_data.get(band, "")
+                                or aliases_data.get(model_band_for_selector_band(band, default="normal"), "")
+                                or ""
+                            ).strip()
+                        band_full_path = candidate if "/" in candidate else resolve_short_name(
+                            fallback_short_name_for_selector_band(band),
+                            aliases_data,
+                        )
                 if guard_data and guard_data.get("guarded") is True:
                     g_status = guard_data.get("status", "")
                     if g_status == "ratelimit":
-                        t_full_path = BUILTIN_MAP.get("glm", "lixiang-glm-5/kivy-glm-5")
+                        band_full_path = BUILTIN_MAP.get("glm", "lixiang-glm-5/kivy-glm-5")
                     elif g_status != "all_fail":
                         orig = guard_data.get("original_model", "")
                         curr = guard_data.get("current_model", "")
-                        if orig and curr and t_full_path == orig:
-                            t_full_path = curr
-                all_tiers_models[
+                        if orig and curr and band_full_path == orig:
+                            band_full_path = curr
+                all_selector_models[
                     cache_key(
-                        t,
-                        args.label if auto_policy_active else "",
+                        band,
                         worker_pool=args.worker_pool if auto_policy_active else "",
                         phase=args.phase if auto_policy_active else "",
                         profile=args.profile if auto_policy_active else "",
                         route=args.route if auto_policy_active else "",
                     )
-                ] = t_full_path
+                ] = band_full_path
                 if not (auto_policy_active and selector_aware_request):
-                    all_tiers_models[t] = t_full_path
-    write_cache(expected_cache_mode, ironclaw_guarded, all_tiers_models, policy_marker=policy_marker)
+                    all_selector_models[band] = band_full_path
+    write_cache(
+        expected_cache_mode,
+        ironclaw_guarded,
+        all_selector_models,
+        policy_marker=policy_marker,
+        health_marker=health_marker,
+    )
     print(full_path)
 
 
