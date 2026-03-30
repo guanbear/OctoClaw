@@ -11,6 +11,7 @@ from lib.task_events import (
     load_session_thread_map,
     load_task_events,
     register_session_binding,
+    resolve_session_binding,
     summarize_task_events,
     task_event_snapshot,
 )
@@ -77,6 +78,33 @@ class TaskEventsTests(unittest.TestCase):
             self.assertIn("agent:main:slack:channel:C123:thread:1712345.000100", payload["bindings"])
             self.assertIn("slack:channel:C123:1712345.000100", payload["threads"])
             self.assertEqual(payload["threads"]["slack:channel:C123:1712345.000100"]["message_id"], "m-1")
+
+    def test_resolve_session_binding_reuses_latest_active_thread_for_same_binding_key(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-session-map-") as tmpdir:
+            mapping_path = Path(tmpdir) / "session-thread-map.json"
+            register_session_binding(
+                "agent:main:slack:channel:C123:thread:1712345.000100",
+                {
+                    "ok": True,
+                    "origin": "slack",
+                    "target": "channel:C123",
+                    "thread_id": "1712345.000100",
+                },
+                task={"id": "task-1", "route": "spawn_single", "worker_pool": "octoclaw-code"},
+                source="anchor_send",
+                message_id="m-1",
+                action="send",
+                path=str(mapping_path),
+            )
+
+            resolved = resolve_session_binding(
+                "agent:main:slack:channel:C123",
+                path=str(mapping_path),
+            )
+
+            self.assertEqual(resolved["target"], "channel:C123")
+            self.assertEqual(resolved["thread_id"], "1712345.000100")
+            self.assertEqual(resolved["last_message_id"], "m-1")
 
 
 if __name__ == "__main__":

@@ -150,6 +150,77 @@ def load_session_thread_map(path: str = SESSION_THREAD_MAP_FILE) -> dict[str, An
     return payload
 
 
+def _thread_candidates(threads: dict[str, Any], binding_key: str) -> list[dict[str, Any]]:
+    if not binding_key or not isinstance(threads, dict):
+        return []
+    candidates: list[dict[str, Any]] = []
+    for thread_key, raw_entry in threads.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        if _text(raw_entry.get("binding_key")) != binding_key:
+            continue
+        entry = dict(raw_entry)
+        entry.setdefault("thread_key", _text(thread_key))
+        candidates.append(entry)
+    candidates.sort(
+        key=lambda item: (
+            0 if _text(item.get("thread_state")) == "closed" else 1,
+            _text(item.get("updated_at")),
+        ),
+        reverse=True,
+    )
+    return candidates
+
+
+def resolve_session_binding(
+    session_key: str,
+    route: dict[str, Any] | None = None,
+    *,
+    path: str = SESSION_THREAD_MAP_FILE,
+) -> dict[str, Any]:
+    key = _text(session_key)
+    if not key:
+        return {}
+
+    base = session_binding_from_route(key, route)
+    payload = load_session_thread_map(path)
+    bindings = payload.get("bindings", {}) if isinstance(payload.get("bindings", {}), dict) else {}
+    threads = payload.get("threads", {}) if isinstance(payload.get("threads", {}), dict) else {}
+    stored_binding = bindings.get(key, {}) if isinstance(bindings.get(key, {}), dict) else {}
+
+    resolved = _merge_non_empty(base, stored_binding)
+    explicit_thread = bool(_text(base.get("thread_id")))
+    explicit_target = bool(_text(base.get("target")))
+
+    if not explicit_thread:
+        stored_thread_key = _text(stored_binding.get("thread_key"))
+        if stored_thread_key and isinstance(threads.get(stored_thread_key), dict):
+            resolved = _merge_non_empty(resolved, threads.get(stored_thread_key, {}))
+        else:
+            thread_key = _text(base.get("thread_key"))
+            if thread_key and isinstance(threads.get(thread_key), dict):
+                resolved = _merge_non_empty(resolved, threads.get(thread_key, {}))
+            else:
+                binding_key = _text(resolved.get("binding_key")) or _text(base.get("binding_key"))
+                candidates = _thread_candidates(threads, binding_key)
+                if candidates:
+                    resolved = _merge_non_empty(resolved, candidates[0])
+
+    if not explicit_target and not _text(resolved.get("target")):
+        resolved = _merge_non_empty(resolved, base)
+
+    resolved["session_key"] = key
+    resolved["origin"] = _text(resolved.get("origin")) or _text(base.get("origin"))
+    resolved["target"] = _text(resolved.get("target")) or _text(base.get("target"))
+    resolved["thread_id"] = _text(resolved.get("thread_id")) or (_text(base.get("thread_id")) if explicit_thread else "")
+    resolved["target_kind"] = _text(resolved.get("target_kind")) or _text(base.get("target_kind"))
+    resolved["binding_key"] = _text(resolved.get("binding_key")) or _text(base.get("binding_key"))
+    if not _text(resolved.get("thread_key")) and _text(resolved.get("origin")) and _text(resolved.get("target")):
+        resolved["thread_key"] = f"{resolved['origin']}:{resolved['target']}:{resolved['thread_id'] or 'root'}"
+    resolved["is_thread_bound"] = bool(_text(resolved.get("thread_id")))
+    return resolved if _text(resolved.get("target")) else base
+
+
 def register_session_binding(
     session_key: str,
     route: dict[str, Any] | None = None,

@@ -75,7 +75,9 @@ OctoClaw uses them to keep `task-state`, task anchors, patrol notifications, and
 The next source-backed borrowings from ClawTeam and DeerFlow are still the right track, but Anthropic's official guidance suggests doing them in this order:
 
 1. richer delegated task events
+   status: landed
 2. harder IM thread/topic binding
+   status: landed (baseline thread-truth and anchor reuse)
 3. ownership lock plus dead-agent recovery
 4. delegated worker session resume
 5. artifact index and retrieval

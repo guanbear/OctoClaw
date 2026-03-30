@@ -2736,6 +2736,7 @@ def send_state_change_task_anchors(tasks: list[dict], *, anchor_messages: dict |
             updated_messages[task_id] = {
                 "backend": str(result.get("backend", "") or ""),
                 "message_id": str(result.get("message_id", "") or ""),
+                "thread_key": str((result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {}).get("thread_key", "") or ""),
                 "updated_at": datetime.now().isoformat(),
             }
     return {"sent": sent, "task_anchor_messages": updated_messages}

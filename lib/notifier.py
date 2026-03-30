@@ -10,12 +10,12 @@ from typing import Any
 
 try:
     from octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
-    from task_events import append_task_event, register_session_binding
+    from task_events import append_task_event, register_session_binding, resolve_session_binding
     from task_display import build_operator_task_surface, render_task_anchor_slack
     from session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
-    from lib.task_events import append_task_event, register_session_binding
+    from lib.task_events import append_task_event, register_session_binding, resolve_session_binding
     from lib.task_display import build_operator_task_surface, render_task_anchor_slack
     from lib.session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 
@@ -154,7 +154,19 @@ def send_task_notification(
             "payload": payload,
         }
 
-    route = resolve_message_target_from_session_key(session_key)
+    binding = resolve_session_binding(session_key)
+    route = {
+        "ok": bool(str(binding.get("target", "") or "").strip()),
+        "origin": str(binding.get("origin", "") or "").strip(),
+        "session_key": session_key,
+        "target": str(binding.get("target", "") or "").strip(),
+        "thread_id": str(binding.get("thread_id", "") or "").strip(),
+        "thread_key": str(binding.get("thread_key", "") or "").strip(),
+        "binding_key": str(binding.get("binding_key", "") or "").strip(),
+        "message_id": str(binding.get("last_message_id", "") or binding.get("message_id", "") or "").strip(),
+    }
+    if not route.get("ok"):
+        route = resolve_message_target_from_session_key(session_key)
     if not route.get("ok"):
         append_task_event(
             task,
@@ -175,7 +187,7 @@ def send_task_notification(
         message = str(transport.get("text", "") or text)
 
     editable_backends = {"slack", "discord", "telegram"}
-    message_id_value = str(existing_message_id or "").strip()
+    message_id_value = str(existing_message_id or route.get("message_id") or "").strip()
     if message_id_value and resolved_backend in editable_backends:
         result = edit_channel_message(
             resolved_backend,
@@ -196,6 +208,7 @@ def send_task_notification(
                 source="anchor_edit",
                 message_id=str(result.get("message_id", "") or message_id_value),
                 action="edit",
+                thread_state="active",
             )
             append_task_event(
                 task,
@@ -231,6 +244,7 @@ def send_task_notification(
             source="anchor_send",
             message_id=str(result.get("message_id", "") or result.get("messageId", "") or ""),
             action="send",
+            thread_state="active",
         )
         append_task_event(
             task,

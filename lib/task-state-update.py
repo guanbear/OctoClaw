@@ -26,7 +26,7 @@ from runtime_task_record import (
     task_notification_state,
     task_state_model,
 )
-from task_events import append_task_event
+from task_events import append_task_event, resolve_session_binding
 from runtime_protocol import normalize_worker_result
 from worker_taxonomy import (
     normalize_model_band,
@@ -726,6 +726,9 @@ def _sync_task_anchor(record: dict, previous_status: str) -> dict:
     task_id = str(record.get("id", "") or "").strip()
     existing_anchor = anchor_messages.get(task_id, {}) if isinstance(anchor_messages.get(task_id), dict) else {}
     existing_message_id = str(existing_anchor.get("message_id", "") or "").strip()
+    if not existing_message_id:
+        binding = resolve_session_binding(str(record.get("session_key", "") or "").strip())
+        existing_message_id = str(binding.get("last_message_id", "") or binding.get("message_id", "") or "").strip()
 
     try:
         result = send_task_notification(record, existing_message_id=existing_message_id)
@@ -739,6 +742,7 @@ def _sync_task_anchor(record: dict, previous_status: str) -> dict:
     anchor_messages[task_id] = {
         "backend": str(result.get("backend", "") or ""),
         "message_id": message_id,
+        "thread_key": str((result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {}).get("thread_key", "") or ""),
         "updated_at": now_iso(),
     }
     notify_state["task_anchor_messages"] = anchor_messages

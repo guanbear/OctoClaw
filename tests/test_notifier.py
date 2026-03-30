@@ -70,8 +70,10 @@ class NotifierTaskPayloadTests(unittest.TestCase):
 
     @patch("lib.notifier.append_task_event")
     @patch("lib.notifier.register_session_binding")
+    @patch("lib.notifier.resolve_session_binding")
     @patch("lib.notifier.send_channel_message")
-    def test_send_task_notification_routes_slack_session_to_channel_send(self, mock_send, mock_register, mock_event) -> None:
+    def test_send_task_notification_routes_slack_session_to_channel_send(self, mock_send, mock_resolve_binding, mock_register, mock_event) -> None:
+        mock_resolve_binding.return_value = {}
         mock_send.return_value = {"ok": True, "messageId": "m-1"}
 
         result = send_task_notification(
@@ -91,8 +93,10 @@ class NotifierTaskPayloadTests(unittest.TestCase):
 
     @patch("lib.notifier.append_task_event")
     @patch("lib.notifier.register_session_binding")
+    @patch("lib.notifier.resolve_session_binding")
     @patch("lib.notifier.edit_channel_message")
-    def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit, mock_register, mock_event) -> None:
+    def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit, mock_resolve_binding, mock_register, mock_event) -> None:
+        mock_resolve_binding.return_value = {}
         mock_edit.return_value = {"ok": True}
 
         result = send_task_notification(
@@ -108,6 +112,33 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(args[2], "1712345.000200")
         mock_register.assert_called_once()
         self.assertTrue(any(call.args[1] == "anchor_edited" for call in mock_event.call_args_list))
+
+    @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier.register_session_binding")
+    @patch("lib.notifier.resolve_session_binding")
+    @patch("lib.notifier.edit_channel_message")
+    def test_send_task_notification_reuses_bound_anchor_message_id(self, mock_edit, mock_resolve_binding, mock_register, mock_event) -> None:
+        mock_resolve_binding.return_value = {
+            "origin": "slack",
+            "target": "channel:C123",
+            "thread_id": "1712345.000100",
+            "thread_key": "slack:channel:C123:1712345.000100",
+            "last_message_id": "1712345.000200",
+        }
+        mock_edit.return_value = {"ok": True}
+
+        result = send_task_notification(
+            {**self.task, "session_key": "agent:main:slack:channel:C123"},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "edit")
+        args = mock_edit.call_args[0]
+        self.assertEqual(args[0], "slack")
+        self.assertEqual(args[1], "channel:C123")
+        self.assertEqual(args[2], "1712345.000200")
+        self.assertEqual(mock_register.call_count, 1)
+        self.assertEqual(mock_resolve_binding.call_count, 1)
 
     @patch("lib.notifier.send_text")
     def test_send_task_notification_uses_feishu_direct_api(self, mock_send_text) -> None:

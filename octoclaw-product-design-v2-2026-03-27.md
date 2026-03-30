@@ -1581,7 +1581,9 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 先做：
 
 1. richer delegated event stream
+   当前状态：已完成基础落地
 2. harder IM thread/topic binding
+   当前状态：已完成 session-thread truth + anchor reuse 基础落地
 3. ownership lock + dead-agent recovery
 4. worker session resume store
 
