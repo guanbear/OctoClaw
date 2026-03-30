@@ -55,6 +55,22 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
     lineage = detail.get("lineage", {}) if isinstance(detail.get("lineage"), dict) else {}
     if lineage.get("child_task_ids"):
         lines.append("Children: " + ", ".join(str(item) for item in lineage.get("child_task_ids", [])))
+    checklist = detail.get("checklist", {}) if isinstance(detail.get("checklist"), dict) else {}
+    checklist_items = checklist.get("items", []) if isinstance(checklist.get("items"), list) else []
+    if checklist_items:
+        lines.append("Checklist:")
+        for item in checklist_items[:5]:
+            if not isinstance(item, dict):
+                continue
+            state = str(item.get("state", "") or "pending").strip().lower()
+            marker = {
+                "done": "[x]",
+                "failed": "[!]",
+                "blocked": "[-]",
+                "in_progress": "[>]",
+            }.get(state, "[ ]")
+            title = str(item.get("title", "") or item.get("id", "item")).strip()
+            lines.append(f"- {marker} {title}")
     artifacts = detail.get("artifacts", []) if isinstance(detail.get("artifacts"), list) else []
     if artifacts:
         lines.append("Artifacts:")

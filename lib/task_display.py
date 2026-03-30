@@ -446,6 +446,9 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "session_status": _text(normalized.get("session_status")),
         "resume_state": _text(((normalized.get("session_resume") or {}) if isinstance(normalized.get("session_resume"), dict) else {}).get("resume_state")),
         "resume_key": _text(((normalized.get("session_resume") or {}) if isinstance(normalized.get("session_resume"), dict) else {}).get("resume_key")),
+        "checklist_kind": _text(((normalized.get("checklist") or {}) if isinstance(normalized.get("checklist"), dict) else {}).get("kind")),
+        "checklist_open_count": int((((normalized.get("checklist") or {}) if isinstance(normalized.get("checklist"), dict) else {}).get("open_count", 0) or 0)),
+        "checklist_completed_count": int((((normalized.get("checklist") or {}) if isinstance(normalized.get("checklist"), dict) else {}).get("completed_count", 0) or 0)),
         "phase": _text(normalized.get("phase")),
         "profile": _text(normalized.get("profile")),
         "eta": _text(normalized.get("expected_done_at")),
@@ -547,6 +550,7 @@ def build_task_detail(
             "model_health_summary": _text(normalized.get("model_health_summary")),
         },
         "artifacts": artifacts,
+        "checklist": normalized.get("checklist", {}) if isinstance(normalized.get("checklist"), dict) else {},
         "events": events,
         "task_event_summary": normalized.get("task_event_summary", {}),
         "anchor": anchor,
@@ -601,6 +605,10 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
             lines.append(" | ".join(meta_bits))
     if queue_position is not None:
         lines.append(f"Queue position: {queue_position}")
+    checklist_open_count = int(anchor.get("checklist_open_count") or 0)
+    checklist_completed_count = int(anchor.get("checklist_completed_count") or 0)
+    if checklist_open_count or checklist_completed_count:
+        lines.append(f"Checklist: {checklist_completed_count} done / {checklist_open_count} open")
     if summary:
         lines.append(summary)
 

@@ -194,6 +194,29 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(anchor["resume_state"], "stale")
         self.assertEqual(anchor["resume_key"], "octoclaw:octo-worker-1:sess-1")
 
+    def test_build_task_detail_includes_checklist(self) -> None:
+        detail = build_task_detail(
+            {
+                "id": "research-3",
+                "worker_pool": "octoclaw-research",
+                "status": "running",
+                "summary": "continue provider comparison",
+                "route": "spawn_single",
+                "checklist": {
+                    "kind": "explicit",
+                    "items": [
+                        {"id": "collect", "title": "Collect sources", "state": "done"},
+                        {"id": "summarize", "title": "Summarize differences", "state": "in_progress"},
+                    ],
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(detail["checklist"]["completed_count"], 1)
+        self.assertEqual(detail["checklist"]["open_count"], 1)
+        self.assertEqual(detail["checklist"]["items"][0]["state"], "done")
+
     def test_render_task_anchor_text_includes_commands(self) -> None:
         anchor = build_task_anchor(
             {
@@ -203,6 +226,13 @@ class TaskDisplayTests(unittest.TestCase):
                 "summary": "research OpenClaw changelog and news",
                 "route": "spawn_single",
                 "model": "omniroute/cx/gpt-5.4",
+                "checklist": {
+                    "kind": "explicit",
+                    "items": [
+                        {"id": "collect", "title": "Collect sources", "state": "done"},
+                        {"id": "summarize", "title": "Summarize differences", "state": "pending"},
+                    ],
+                },
             },
             now=self.now,
         )
@@ -223,6 +253,7 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("Reply with:", rendered)
         self.assertIn("details", rendered)
         self.assertIn("stop", rendered)
+        self.assertIn("Checklist: 1 done / 1 open", rendered)
 
     def test_render_task_anchor_slack_returns_blocks(self) -> None:
         anchor = build_task_anchor(

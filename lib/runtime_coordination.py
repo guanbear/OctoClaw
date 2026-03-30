@@ -28,6 +28,13 @@ TASK_CHECKLIST_STORE_SCHEMA_VERSION = "octoclaw.task_checklists/v1"
 
 FINAL_LIFECYCLE_STATES = {"finished", "cancelled"}
 OPEN_CHECKLIST_STATES = {"pending", "in_progress", "blocked"}
+CHECKLIST_STATE_ORDER = {
+    "pending": 0,
+    "in_progress": 1,
+    "blocked": 2,
+    "done": 3,
+    "failed": 4,
+}
 
 
 def now_iso() -> str:
@@ -277,6 +284,76 @@ def checklist_snapshot(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_checklist_state(base_state: str, persisted_state: str) -> str:
+    base = _text(base_state).lower() or "pending"
+    persisted = _text(persisted_state).lower() or "pending"
+    return base if CHECKLIST_STATE_ORDER.get(base, 0) >= CHECKLIST_STATE_ORDER.get(persisted, 0) else persisted
+
+
+def _recount_checklist(snapshot: dict[str, Any]) -> dict[str, Any]:
+    items = snapshot.get("items", []) if isinstance(snapshot.get("items"), list) else []
+    open_count = sum(1 for item in items if isinstance(item, dict) and _text(item.get("state")).lower() in OPEN_CHECKLIST_STATES)
+    completed_count = sum(1 for item in items if isinstance(item, dict) and _text(item.get("state")).lower() == "done")
+    snapshot["open_count"] = open_count
+    snapshot["completed_count"] = completed_count
+    return snapshot
+
+
+def _merge_checklist_items(
+    base_items: list[dict[str, Any]],
+    persisted_items: list[dict[str, Any]],
+    *,
+    include_persisted_only: bool = True,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    persisted_by_id = {
+        _text(item.get("id")): item
+        for item in persisted_items
+        if isinstance(item, dict) and _text(item.get("id"))
+    }
+    seen: set[str] = set()
+
+    for item in base_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = _text(item.get("id"))
+        persisted = persisted_by_id.get(item_id, {})
+        merged_item = dict(item)
+        if isinstance(persisted, dict) and persisted:
+            merged_item["state"] = _merge_checklist_state(merged_item.get("state", ""), persisted.get("state", ""))
+            merged_item["updated_at"] = _text(merged_item.get("updated_at")) or _text(persisted.get("updated_at")) or now_iso()
+            if not _text(merged_item.get("title")):
+                merged_item["title"] = _text(persisted.get("title"))
+            if not _text(merged_item.get("source")):
+                merged_item["source"] = _text(persisted.get("source"))
+            if not _text(merged_item.get("linked_task_id")):
+                merged_item["linked_task_id"] = _text(persisted.get("linked_task_id"))
+        merged.append(merged_item)
+        if item_id:
+            seen.add(item_id)
+
+    if not include_persisted_only:
+        return merged
+
+    for item in persisted_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = _text(item.get("id"))
+        if item_id and item_id in seen:
+            continue
+        merged.append(
+            {
+                "id": item_id or f"persisted-{len(merged)+1}",
+                "title": _text(item.get("title")) or item_id or "Checklist item",
+                "state": _text(item.get("state")).lower() or "pending",
+                "source": _text(item.get("source")) or "persisted",
+                "linked_task_id": _text(item.get("linked_task_id")),
+                "updated_at": _text(item.get("updated_at")) or now_iso(),
+            }
+        )
+    return merged
+
+
 def artifact_entries_for_task(task: dict[str, Any]) -> list[dict[str, Any]]:
     task_id = _text(task.get("id"))
     parent_id = _text(task.get("parent_id"))
@@ -411,6 +488,36 @@ def load_task_checklists(path: str = TASK_CHECKLIST_STORE_FILE) -> dict[str, Any
     return payload
 
 
+def resolve_task_checklist(task: dict[str, Any] | str, *, path: str = TASK_CHECKLIST_STORE_FILE) -> dict[str, Any]:
+    if isinstance(task, dict):
+        task_id = _text(task.get("id"))
+        base = checklist_snapshot(task)
+    else:
+        task_id = _text(task)
+        base = {"kind": "persisted", "items": [], "open_count": 0, "completed_count": 0, "updated_at": ""}
+    if not task_id:
+        return _recount_checklist(base)
+
+    payload = load_task_checklists(path)
+    persisted = payload.get("tasks", {}).get(task_id, {}) if isinstance(payload.get("tasks", {}), dict) else {}
+    if not isinstance(persisted, dict) or not persisted:
+        return _recount_checklist(base)
+
+    persisted_items = persisted.get("items", []) if isinstance(persisted.get("items", []), list) else []
+    base_items = base.get("items", []) if isinstance(base.get("items", []), list) else []
+    base_kind = _text(base.get("kind")).lower()
+    merged = {
+        "kind": _text(base.get("kind")) or _text(persisted.get("kind")) or "persisted",
+        "items": _merge_checklist_items(
+            base_items,
+            persisted_items,
+            include_persisted_only=base_kind not in {"explicit", "artifact"},
+        ),
+        "updated_at": _text(base.get("updated_at")) or _text(persisted.get("updated_at")) or now_iso(),
+    }
+    return _recount_checklist(merged)
+
+
 def upsert_artifact_index(task: dict[str, Any], *, path: str = ARTIFACT_INDEX_FILE) -> dict[str, Any]:
     payload = load_artifact_index(path)
     artifacts = payload.get("artifacts", {}) if isinstance(payload.get("artifacts", {}), dict) else {}
@@ -535,7 +642,7 @@ def upsert_worker_session(task: dict[str, Any], *, path: str = WORKER_SESSION_ST
 def upsert_checklist(task: dict[str, Any], *, path: str = TASK_CHECKLIST_STORE_FILE) -> dict[str, Any]:
     payload = load_task_checklists(path)
     tasks = payload.get("tasks", {}) if isinstance(payload.get("tasks", {}), dict) else {}
-    snapshot = checklist_snapshot(task)
+    snapshot = resolve_task_checklist(task, path=path)
     tasks[_text(task.get("id"))] = snapshot
     payload["schema_version"] = TASK_CHECKLIST_STORE_SCHEMA_VERSION
     payload["updated_at"] = _text(task.get("updated_at")) or now_iso()

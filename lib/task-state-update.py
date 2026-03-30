@@ -160,6 +160,12 @@ def parse_json_arg(value: str) -> dict:
     raise argparse.ArgumentTypeError("JSON value must be an object")
 
 
+def apply_checklist_update(task: dict, checklist_json: dict | None) -> None:
+    if not isinstance(task, dict) or not isinstance(checklist_json, dict) or not checklist_json:
+        return
+    task["checklist"] = dict(checklist_json)
+
+
 def _log_task_transition(record: dict, previous_status: str, *, anchor_result: dict | None = None) -> None:
     if not isinstance(record, dict):
         return
@@ -885,6 +891,7 @@ def cmd_upsert(args):
                     artifacts = {}
                 artifacts.update(args.artifacts_json)
                 existing["artifacts"] = artifacts
+            apply_checklist_update(existing, getattr(args, "checklist_json", {}))
             if args.executor or not existing.get("executor") or args.route or args.runtime or args.worker_pool or args.task_kind:
                 existing["executor"] = infer_executor(existing, args.executor or "")
             existing["updated_at"] = now_iso()
@@ -988,6 +995,7 @@ def cmd_upsert(args):
                 record["observability_health"] = args.observability_health
             if args.artifacts_json:
                 record["artifacts"] = dict(args.artifacts_json)
+            apply_checklist_update(record, getattr(args, "checklist_json", {}))
             record["executor"] = infer_executor(record, args.executor or "")
             tasks.append(record)
             current_record = normalize_task_record(record)
@@ -1015,6 +1023,7 @@ def cmd_done(args):
         args.summary,
         report_path=args.report_path,
         artifacts_json=args.artifacts_json,
+        checklist_json=args.checklist_json,
         lifecycle_state=args.lifecycle_state,
         outcome_state=args.outcome_state,
         handoff_state=args.handoff_state,
@@ -1035,6 +1044,7 @@ def cmd_failed(args):
         args.summary,
         report_path=args.report_path,
         artifacts_json=args.artifacts_json,
+        checklist_json=args.checklist_json,
         lifecycle_state=args.lifecycle_state,
         outcome_state=args.outcome_state,
         handoff_state=args.handoff_state,
@@ -1055,6 +1065,7 @@ def cmd_blocked(args):
         args.summary,
         report_path=args.report_path,
         artifacts_json=args.artifacts_json,
+        checklist_json=args.checklist_json,
         lifecycle_state=args.lifecycle_state or "finished",
         outcome_state=args.outcome_state or "blocked",
         handoff_state=args.handoff_state or ("user_safe_ready" if args.user_safe_summary or args.summary else "internal_only"),
@@ -1100,6 +1111,7 @@ def cmd_event(args):
                     artifacts = {}
                 artifacts.update(args.artifacts_json)
                 existing["artifacts"] = artifacts
+            apply_checklist_update(existing, getattr(args, "checklist_json", {}))
             existing["updated_at"] = now_iso()
             current_record = normalize_task_record(existing)
             existing.clear()
@@ -1128,6 +1140,7 @@ def cmd_event(args):
                 record["handoff_state"] = args.handoff_state
             if args.artifacts_json:
                 record["artifacts"] = dict(args.artifacts_json)
+            apply_checklist_update(record, getattr(args, "checklist_json", {}))
             tasks.append(record)
             current_record = normalize_task_record(record)
             tasks[-1] = dict(current_record)
@@ -1136,6 +1149,48 @@ def cmd_event(args):
     append_task_event(current_record, args.kind, message=args.message, extra=args.event_json if isinstance(args.event_json, dict) else None)
     _sync_runtime_coordination(current_record)
     print(f"[ok] event id={args.id} kind={args.kind}")
+
+
+def cmd_checklist(args):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    with open(STATE_FILE, "a+") as fp:
+        fcntl.flock(fp, fcntl.LOCK_EX)
+        state = load_state(fp)
+        tasks = state["tasks"]
+        existing = next((t for t in tasks if t.get("id") == args.id), None)
+        previous_status = str(existing.get("status", "") or "") if isinstance(existing, dict) else ""
+        if existing:
+            apply_checklist_update(existing, args.checklist_json)
+            if args.summary:
+                existing["summary"] = args.summary
+            existing["updated_at"] = now_iso()
+            current_record = normalize_task_record(existing)
+            existing.clear()
+            existing.update(current_record)
+        else:
+            record = {
+                "id": args.id,
+                "status": "queued",
+                "summary": args.summary or "",
+                "spawned_at": now_iso(),
+                "updated_at": now_iso(),
+            }
+            apply_checklist_update(record, args.checklist_json)
+            tasks.append(record)
+            current_record = normalize_task_record(record)
+            tasks[-1] = dict(current_record)
+        state["tasks"] = tasks
+        save_state(fp, state)
+    _sync_runtime_coordination(current_record)
+    append_task_event(
+        current_record,
+        "checklist_updated",
+        message=args.message or f"checklist updated ({int(((current_record.get('checklist') or {}) if isinstance(current_record.get('checklist'), dict) else {}).get('open_count', 0) or 0)} open)",
+        extra={"checklist_open_count": int(((current_record.get("checklist") or {}) if isinstance(current_record.get("checklist"), dict) else {}).get("open_count", 0) or 0)},
+    )
+    anchor_result = _sync_task_anchor(current_record, previous_status)
+    _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
+    print(f"[ok] checklist id={args.id}")
 
 
 def _finish(
@@ -1155,6 +1210,7 @@ def _finish(
     result_ready_at: str = "",
     handoff_ready_at: str = "",
     observability_health: str = "",
+    checklist_json: dict | None = None,
 ):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     lineage_syncs = []
@@ -1181,6 +1237,7 @@ def _finish(
                     artifacts = {}
                 artifacts.update(artifacts_json)
                 existing["artifacts"] = artifacts
+            apply_checklist_update(existing, checklist_json)
             if lifecycle_state:
                 existing["lifecycle_state"] = lifecycle_state
             if outcome_state:
@@ -1218,6 +1275,7 @@ def _finish(
                 record["report_path"] = report_path
             if artifacts_json:
                 record["artifacts"] = dict(artifacts_json)
+            apply_checklist_update(record, checklist_json)
             if lifecycle_state:
                 record["lifecycle_state"] = lifecycle_state
             if outcome_state:
@@ -1430,6 +1488,7 @@ def main():
     p_upsert.add_argument("--handoff-ready-at", dest="handoff_ready_at")
     p_upsert.add_argument("--observability-health", dest="observability_health")
     p_upsert.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
+    p_upsert.add_argument("--checklist-json", dest="checklist_json", type=parse_json_arg, default={})
 
     # done
     p_done = sub.add_parser("done")
@@ -1447,6 +1506,7 @@ def main():
     p_done.add_argument("--handoff-ready-at", dest="handoff_ready_at", default="")
     p_done.add_argument("--observability-health", dest="observability_health", default="")
     p_done.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
+    p_done.add_argument("--checklist-json", dest="checklist_json", type=parse_json_arg, default={})
 
     # failed
     p_failed = sub.add_parser("failed")
@@ -1464,6 +1524,7 @@ def main():
     p_failed.add_argument("--handoff-ready-at", dest="handoff_ready_at", default="")
     p_failed.add_argument("--observability-health", dest="observability_health", default="")
     p_failed.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
+    p_failed.add_argument("--checklist-json", dest="checklist_json", type=parse_json_arg, default={})
 
     p_blocked = sub.add_parser("blocked")
     p_blocked.add_argument("--id", required=True)
@@ -1480,6 +1541,7 @@ def main():
     p_blocked.add_argument("--handoff-ready-at", dest="handoff_ready_at", default="")
     p_blocked.add_argument("--observability-health", dest="observability_health", default="")
     p_blocked.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
+    p_blocked.add_argument("--checklist-json", dest="checklist_json", type=parse_json_arg, default={})
 
     p_event = sub.add_parser("event")
     p_event.add_argument("--id", required=True)
@@ -1496,6 +1558,13 @@ def main():
     p_event.add_argument("--handoff-state", dest="handoff_state", default="")
     p_event.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
     p_event.add_argument("--event-json", dest="event_json", type=parse_json_arg, default={})
+    p_event.add_argument("--checklist-json", dest="checklist_json", type=parse_json_arg, default={})
+
+    p_checklist = sub.add_parser("checklist")
+    p_checklist.add_argument("--id", required=True)
+    p_checklist.add_argument("--checklist-json", dest="checklist_json", type=parse_json_arg, required=True)
+    p_checklist.add_argument("--summary", default="")
+    p_checklist.add_argument("--message", default="")
 
     # list
     sub.add_parser("list")
@@ -1517,6 +1586,8 @@ def main():
         cmd_blocked(args)
     elif args.command == "event":
         cmd_event(args)
+    elif args.command == "checklist":
+        cmd_checklist(args)
     elif args.command == "list":
         cmd_list(args)
     elif args.command == "archive-stale-dispatched":

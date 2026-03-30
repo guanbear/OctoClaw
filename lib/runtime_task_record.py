@@ -26,9 +26,9 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.runtime_protocol import normalize_result_status, normalize_worker_result
 
 try:
-    from runtime_coordination import checklist_snapshot, ownership_snapshot, session_resume_snapshot
+    from runtime_coordination import ownership_snapshot, resolve_task_checklist, session_resume_snapshot
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.runtime_coordination import checklist_snapshot, ownership_snapshot, session_resume_snapshot
+    from lib.runtime_coordination import ownership_snapshot, resolve_task_checklist, session_resume_snapshot
 
 
 TASK_RECORD_SCHEMA_VERSION = "octoclaw.runtime_task.record/v1"
@@ -569,7 +569,7 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     explicit_resume = normalized.get("session_resume") if isinstance(normalized.get("session_resume"), dict) else {}
     derived_resume = session_resume_snapshot(normalized)
     normalized["session_resume"] = {**derived_resume, **{k: v for k, v in explicit_resume.items() if v not in (None, "", [], {})}}
-    normalized["checklist"] = checklist_snapshot(normalized)
+    normalized["checklist"] = resolve_task_checklist(normalized)
     event_snapshot = task_event_snapshot(normalized["id"]) if normalized["id"] else {}
     normalized["task_event_summary"] = {
         "task_event_count": int(event_snapshot.get("task_event_count", 0) or 0),

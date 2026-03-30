@@ -207,6 +207,92 @@ class TaskStateUpdateArchiveTests(unittest.TestCase):
             self.assertEqual(resume["resume_state"], "active")
             self.assertEqual(resume["agent_id"], "octo-worker-1")
 
+    def test_checklist_command_persists_and_survives_followup_upsert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            env = {**os.environ, "WORKSPACE": str(workspace)}
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "upsert",
+                    "--id",
+                    "research-checklist-1",
+                    "--status",
+                    "running",
+                    "--summary",
+                    "compare providers",
+                    "--route",
+                    "spawn_single",
+                    "--runtime",
+                    "subagent",
+                    "--worker-pool",
+                    "octoclaw-research",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "checklist",
+                    "--id",
+                    "research-checklist-1",
+                    "--checklist-json",
+                    json.dumps(
+                        {
+                            "kind": "explicit",
+                            "items": [
+                                {"id": "collect", "title": "Collect sources", "state": "done"},
+                                {"id": "summarize", "title": "Write summary", "state": "pending"},
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "--message",
+                    "checklist initialized",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "upsert",
+                    "--id",
+                    "research-checklist-1",
+                    "--status",
+                    "running",
+                    "--summary",
+                    "continue provider comparison",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            state = json.loads((workspace / "tmp" / "octopus" / "task-state.json").read_text(encoding="utf-8"))
+            task = state["tasks"][0]
+            checklist = task["checklist"]
+            self.assertEqual(checklist["completed_count"], 1)
+            self.assertEqual(checklist["open_count"], 1)
+            self.assertEqual(checklist["items"][0]["state"], "done")
+
+            checklist_store = json.loads((workspace / "tmp" / "octopus" / "task-checklists.json").read_text(encoding="utf-8"))
+            self.assertIn("research-checklist-1", checklist_store["tasks"])
+
+            events = (workspace / "tmp" / "octopus" / "task-events.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertTrue(any('"kind": "checklist_updated"' in line for line in events))
+
 
 if __name__ == "__main__":
     unittest.main()

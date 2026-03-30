@@ -7,9 +7,11 @@ from lib.runtime_coordination import (
     artifact_entries_for_task,
     ownership_snapshot,
     recover_stale_ownership,
+    resolve_task_checklist,
     resolve_task_artifacts,
     resolve_worker_session,
     upsert_artifact_index,
+    upsert_checklist,
     upsert_worker_session,
 )
 
@@ -130,6 +132,44 @@ class RuntimeCoordinationTests(unittest.TestCase):
         )
 
         self.assertTrue(any(entry["kind"] == "worker_result" for entry in entries))
+
+    def test_resolve_task_checklist_preserves_persisted_progress(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-task-checklist-") as tmpdir:
+            checklist_path = Path(tmpdir) / "task-checklists.json"
+            upsert_checklist(
+                {
+                    "id": "task-1",
+                    "updated_at": "2026-03-30T10:00:00+00:00",
+                    "checklist": {
+                        "kind": "explicit",
+                        "items": [
+                            {"id": "read", "title": "Read sources", "state": "done"},
+                            {"id": "write", "title": "Write summary", "state": "in_progress"},
+                        ],
+                    },
+                },
+                path=str(checklist_path),
+            )
+
+            resolved = resolve_task_checklist(
+                {
+                    "id": "task-1",
+                    "updated_at": "2026-03-30T10:05:00+00:00",
+                    "checklist": {
+                        "kind": "explicit",
+                        "items": [
+                            {"id": "read", "title": "Read sources"},
+                            {"id": "write", "title": "Write summary"},
+                        ],
+                    },
+                },
+                path=str(checklist_path),
+            )
+
+            self.assertEqual(resolved["completed_count"], 1)
+            self.assertEqual(resolved["open_count"], 1)
+            self.assertEqual(resolved["items"][0]["state"], "done")
+            self.assertEqual(resolved["items"][1]["state"], "in_progress")
 
 
 if __name__ == "__main__":
