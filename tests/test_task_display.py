@@ -38,6 +38,7 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(anchor["route"], "runner")
         self.assertEqual(anchor["active_models"], ["minimax-portal/MiniMax-M2.7"])
         self.assertEqual(anchor["duration"], "2m")
+        self.assertEqual(anchor["resume_state"], "none")
 
     def test_build_task_actions_supports_text_fallbacks(self) -> None:
         actions = build_task_actions(
@@ -126,6 +127,27 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual([event["kind"] for event in detail["events"]], ["checkpoint", "handoff_ready"])
         self.assertEqual(detail["task_event_summary"]["latest_kind"], "handoff_ready")
+
+    def test_build_task_anchor_exposes_session_resume_fields(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "research-1",
+                "worker_pool": "octoclaw-research",
+                "status": "queued",
+                "summary": "resume the provider research",
+                "route": "spawn_single",
+                "session_status": "missing",
+                "session_resume": {
+                    "resume_state": "stale",
+                    "resume_key": "octoclaw:octo-worker-1:sess-1",
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(anchor["session_status"], "missing")
+        self.assertEqual(anchor["resume_state"], "stale")
+        self.assertEqual(anchor["resume_key"], "octoclaw:octo-worker-1:sess-1")
 
     def test_render_task_anchor_text_includes_commands(self) -> None:
         anchor = build_task_anchor(

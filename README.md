@@ -81,6 +81,7 @@ The next source-backed borrowings from ClawTeam and DeerFlow are still the right
 3. ownership lock plus dead-agent recovery
    status: landed (baseline ownership recovery and queued reclaim)
 4. delegated worker session resume
+   status: landed (baseline resume-store readback and resume-state surfacing)
 5. artifact index and retrieval
 6. todo/checklist persistence across context loss
 

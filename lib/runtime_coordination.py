@@ -373,6 +373,36 @@ def load_worker_session_store(path: str = WORKER_SESSION_STORE_FILE) -> dict[str
     return payload
 
 
+def list_worker_sessions(*, task_id: str = "", path: str = WORKER_SESSION_STORE_FILE) -> list[dict[str, Any]]:
+    payload = load_worker_session_store(path)
+    sessions = payload.get("sessions", {}) if isinstance(payload.get("sessions", {}), dict) else {}
+    task_index = payload.get("task_index", {}) if isinstance(payload.get("task_index", {}), dict) else {}
+    keys: list[str] = []
+    if task_id:
+        items = task_index.get(task_id, [])
+        if isinstance(items, list):
+            keys.extend(_text(item) for item in items if _text(item))
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        entry = sessions.get(key)
+        if isinstance(entry, dict):
+            results.append(dict(entry))
+    results.sort(key=lambda item: _text(item.get("last_observed_at")), reverse=True)
+    return results
+
+
+def resolve_worker_session(task: dict[str, Any] | str, *, path: str = WORKER_SESSION_STORE_FILE) -> dict[str, Any]:
+    task_id = _text(task.get("id")) if isinstance(task, dict) else _text(task)
+    if not task_id:
+        return {}
+    sessions = list_worker_sessions(task_id=task_id, path=path)
+    return sessions[0] if sessions else {}
+
+
 def load_task_checklists(path: str = TASK_CHECKLIST_STORE_FILE) -> dict[str, Any]:
     payload = _load_json(path)
     payload.setdefault("schema_version", TASK_CHECKLIST_STORE_SCHEMA_VERSION)

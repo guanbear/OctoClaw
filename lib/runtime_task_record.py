@@ -563,8 +563,12 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
         artifacts["worker_result"] = worker_result
     normalized.update(task_state_model({**normalized, "artifacts": artifacts}))
     normalized["artifacts"] = artifacts
-    normalized["ownership"] = ownership_snapshot(normalized)
-    normalized["session_resume"] = session_resume_snapshot(normalized)
+    explicit_ownership = normalized.get("ownership") if isinstance(normalized.get("ownership"), dict) else {}
+    derived_ownership = ownership_snapshot(normalized)
+    normalized["ownership"] = {**derived_ownership, **{k: v for k, v in explicit_ownership.items() if v not in (None, "", [], {})}}
+    explicit_resume = normalized.get("session_resume") if isinstance(normalized.get("session_resume"), dict) else {}
+    derived_resume = session_resume_snapshot(normalized)
+    normalized["session_resume"] = {**derived_resume, **{k: v for k, v in explicit_resume.items() if v not in (None, "", [], {})}}
     normalized["checklist"] = checklist_snapshot(normalized)
     event_snapshot = task_event_snapshot(normalized["id"]) if normalized["id"] else {}
     normalized["task_event_summary"] = {

@@ -258,8 +258,29 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("⏸️ 排队中（0个）", rendered)
         self.assertIn("❓ 待确认（0个）", rendered)
         self.assertIn("⚠️ 异常与恢复（0个）", rendered)
-        self.assertIn("✅ 最近完成（0个）", rendered)
-        self.assertIn("(none)", rendered)
+
+    def test_table_recover_note_includes_resume_state(self) -> None:
+        snapshot = build_status_snapshot(
+            [
+                {
+                    "id": "recover-1",
+                    "worker_pool": "octoclaw-research",
+                    "status": "queued",
+                    "summary": "resume provider research",
+                    "task_description": "Resume provider research",
+                    "route": "spawn_single",
+                    "runtime": "subagent",
+                    "executor": "subagent",
+                    "session_status": "missing",
+                    "recovery_action": "dead_agent_recovered",
+                    "session_resume": {"resume_state": "recovered"},
+                }
+            ],
+            now=self.now,
+        )
+
+        rendered = render_status_table(snapshot)
+        self.assertIn("resume:recovered", rendered)
 
     def test_main_model_drift_summary_renders_aligned_and_drifted_states(self) -> None:
         aligned = render_main_model_drift_summary(

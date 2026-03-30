@@ -521,7 +521,7 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
     steer_needed = []
 
     for task in tasks:
-        if task.get("recovery_action") in ("needs_steer", "steered"):
+        if task.get("recovery_action") in ("needs_steer", "steered", "dead_agent_recovered"):
             if not is_system_maintenance_task(task):
                 steer_needed.append(task)
         if not _should_count_recent(task, recent_window, lineage_child_ids, now):
@@ -757,7 +757,10 @@ def render_status_table(snapshot: dict) -> str:
             if group_name == "queued":
                 note = "deps:" + ",".join(task.get("deps", [])[:2])
             elif group_name == "recover":
-                note = str(task.get("session_status") or task.get("recovery_action") or "")[:16]
+                resume_state = str(((task.get("session_resume") or {}) if isinstance(task.get("session_resume"), dict) else {}).get("resume_state", "") or task.get("resume_state", "") or "").strip()
+                session_status = str(task.get("session_status") or "").strip()
+                recovery_action = str(task.get("recovery_action") or "").strip()
+                note = " / ".join(part for part in [f"resume:{resume_state}" if resume_state else "", recovery_action, session_status] if part)[:18]
             else:
                 note = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
             rows.append(

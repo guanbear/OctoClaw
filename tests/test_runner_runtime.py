@@ -99,7 +99,7 @@ class RunnerRuntimeTests(unittest.TestCase):
             meta_path = Path(workspace) / "tmp" / "octopus" / "runner-results" / "runner-test-1.json"
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             self.assertEqual(meta["status"], "done")
-            self.assertEqual(meta["summary"], "runner完成: hello runner")
+            self.assertEqual(meta["summary"], "Runner completed · hello runner")
             self.assertEqual(meta["report_path"], task["report_path"])
             self.assertEqual(meta["result_path"], str(meta_path))
             self.assertEqual(meta["worker_id"], "test-runner")
@@ -169,7 +169,7 @@ class RunnerRuntimeTests(unittest.TestCase):
 
             self.assertTrue(wait["completed"])
             self.assertEqual(wait["status"], "done")
-            self.assertEqual(wait["summary"], "runner完成: runner handoff")
+            self.assertEqual(wait["summary"], "Runner completed · runner handoff")
             self.assertEqual(wait["execution_backend"], "runner_queue")
             self.assertTrue(wait["report_path"])
             self.assertTrue(Path(wait["report_path"]).exists())
@@ -179,7 +179,7 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(handoff["report_path"], wait["report_path"])
             self.assertEqual(handoff["execution_backend"], "runner_queue")
             self.assertEqual(handoff["worker_result"]["status"], "done")
-            self.assertIn("runner完成", handoff["summary"])
+            self.assertIn("Runner completed", handoff["summary"])
             self.assertIn("runner handoff", handoff["reply_text"])
 
 

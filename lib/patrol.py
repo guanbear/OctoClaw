@@ -48,7 +48,7 @@ from collections import deque
 from notifier import backend_supports_cards, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec
 from clawteam_bridge import sync_task
-from runtime_coordination import recover_stale_ownership, sync_runtime_surfaces
+from runtime_coordination import recover_stale_ownership, resolve_worker_session, session_resume_snapshot, sync_runtime_surfaces
 from runtime_task_record import normalize_task_record, task_is_recent_final, task_notification_state, task_state_model
 from octopus_config import (
     MAIN_AGENT_SESSIONS_FILE,
@@ -901,6 +901,7 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
     state_by_id = {t.get("id"): t for t in state_tasks if isinstance(t, dict) and t.get("id")}
     changed = False
     observed_at = datetime.now(timezone.utc).isoformat()
+    resumed_events: list[dict] = []
 
     for task in tasks:
         status = task.get("status", "")
@@ -926,6 +927,9 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
                     state_task[key] = value
                     changed = True
                 task[key] = value
+            resume = session_resume_snapshot(state_task)
+            state_task["session_resume"] = resume
+            task["session_resume"] = dict(resume)
             continue
 
         if not sessions_data:
@@ -933,12 +937,33 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
 
         candidates = build_session_candidates(task, sessions_data)
         if not candidates:
+            resume = resolve_worker_session(task)
+            resume_state = str(resume.get("resume_state", "") or "").strip()
+            resume_status = str(resume.get("session_status", "") or "").strip()
             if state_task.get("session_status") != "missing":
-                state_task["session_status"] = "missing"
+                state_task["session_status"] = resume_status or "missing"
                 state_task["last_observed_at"] = observed_at
                 changed = True
-            task["session_status"] = state_task.get("session_status", "missing")
+            if resume:
+                resume_updates = {
+                    "session_id": str(resume.get("session_id", "") or ""),
+                    "run_id": str(resume.get("run_id", "") or ""),
+                    "agent_id": str(resume.get("agent_id", "") or state_task.get("agent_id", "")),
+                    "agent_namespace": str(resume.get("agent_namespace", "") or state_task.get("agent_namespace", "")),
+                    "resume_key": str(resume.get("resume_key", "") or ""),
+                    "resume_state": resume_state or "stale",
+                }
+                for key, value in resume_updates.items():
+                    if value and state_task.get(key) != value:
+                        state_task[key] = value
+                        changed = True
+                    if value:
+                        task[key] = value
+            task["session_status"] = state_task.get("session_status", resume_status or "missing")
             task["last_observed_at"] = state_task.get("last_observed_at", observed_at)
+            resume_snapshot = session_resume_snapshot(state_task)
+            state_task["session_resume"] = resume_snapshot
+            task["session_resume"] = dict(resume_snapshot)
             continue
 
         session = candidates[0]
@@ -956,6 +981,7 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
             session_status = "completed"
         elif history.get("last_event") in ("error", "length"):
             session_status = f"history_{history.get('last_event')}"
+        previous_resume_state = str(((state_task.get("session_resume") or {}) if isinstance(state_task.get("session_resume"), dict) else {}).get("resume_state", "") or state_task.get("resume_state", "") or "").strip()
 
         updates = {
             "session_key": session.get("_session_key", ""),
@@ -967,15 +993,33 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
             "session_last_event": history.get("last_event", "unknown"),
             "session_last_text": history.get("last_text", ""),
             "session_has_result": bool(history.get("has_result")),
+            "resume_state": "active" if session_id or run_id else previous_resume_state,
         }
         for key, value in updates.items():
             if state_task.get(key) != value:
                 state_task[key] = value
                 changed = True
             task[key] = value
+        resume_snapshot = session_resume_snapshot(state_task)
+        state_task["session_resume"] = resume_snapshot
+        task["session_resume"] = dict(resume_snapshot)
+        if previous_resume_state in {"stale", "recovered", "ready"} and updates["resume_state"] == "active":
+            resumed_events.append(dict(task))
 
     if changed:
         save_task_state(TASK_STATE_FILE, state)
+    for task in resumed_events:
+        append_task_event(
+            task,
+            "worker_resumed",
+            message=str(task.get("summary") or task.get("task_description") or task.get("id") or "worker resumed"),
+            extra={
+                "session_id": str(task.get("session_id", "") or ""),
+                "run_id": str(task.get("run_id", "") or ""),
+                "resume_state": str(task.get("resume_state", "") or ""),
+            },
+        )
+        sync_runtime_surfaces(task, thread_action="touch")
     return tasks
 
 
