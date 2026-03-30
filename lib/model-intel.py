@@ -92,15 +92,14 @@ SIZE_CLASS_ORDER = {
     "strong": 3,
 }
 
-ROLE_SIZE_PREFERENCE = {
+SELECTOR_ROLE_SIZE_PREFERENCE = {
     "runner": {"nano": 1.00, "mini": 0.98, "base": 0.92, "strong": 0.72},
-    "router": {"nano": 0.82, "mini": 1.00, "base": 0.95, "strong": 0.68},
-    "fix": {"nano": 0.45, "mini": 0.70, "base": 0.95, "strong": 1.00},
-    "test": {"nano": 0.55, "mini": 0.78, "base": 0.96, "strong": 1.00},
-    "scout": {"nano": 0.65, "mini": 0.86, "base": 0.98, "strong": 0.92},
+    "research": {"nano": 0.65, "mini": 0.86, "base": 0.98, "strong": 0.92},
     "writer": {"nano": 0.72, "mini": 0.90, "base": 1.00, "strong": 0.90},
-    "analyze": {"nano": 0.30, "mini": 0.56, "base": 0.88, "strong": 1.00},
-    "power": {"nano": 0.20, "mini": 0.45, "base": 0.82, "strong": 1.00},
+    "code": {"nano": 0.45, "mini": 0.70, "base": 0.95, "strong": 1.00},
+    "review": {"nano": 0.55, "mini": 0.78, "base": 0.96, "strong": 1.00},
+    "inspect": {"nano": 0.30, "mini": 0.56, "base": 0.88, "strong": 1.00},
+    "team": {"nano": 0.20, "mini": 0.45, "base": 0.82, "strong": 1.00},
     "main": {"nano": 0.18, "mini": 0.40, "base": 0.78, "strong": 1.00},
 }
 
@@ -658,7 +657,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         plan_value_score = compute_plan_value_score(model["id"])
         availability_score = 0.0 if should_fallback_due_to_plan(model["id"]) else 1.0
         size_class = str(model.get("size_class", "base") or "base")
-        size_preference = ROLE_SIZE_PREFERENCE
+        size_preference = SELECTOR_ROLE_SIZE_PREFERENCE
         main_capability_score = compute_main_capability_score(
             reasoning=reasoning,
             coding=coding,
@@ -684,7 +683,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         )
         role_health_penalties = {
             role: selection_penalty_for_role(health_entry, role)
-            for role in ("runner", "router", "fix", "test", "scout", "writer", "analyze", "power", "main")
+            for role in ("runner", "research", "writer", "code", "review", "inspect", "team", "main")
         }
         health_models[model["id"]] = health_entry
         health_penalties[model["id"]] = role_health_penalties
@@ -714,26 +713,12 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
                 ) * local_speed_boost
                 + fast_lane_bonus
             ) - role_health_penalties["runner"],
-            "router": (
-                (
-                    0.52 * ttft_score
-                    + 0.18 * throughput_score
-                    + 0.08 * reliability
-                    + 0.10 * reasoning
-                    + 0.04 * openclaw
-                    + 0.04 * plan_value_score
-                    + 0.01 * price_score
-                    + 0.01 * size_preference["router"].get(size_class, 0.80)
-                    + 0.02 * availability_score
-                ) * local_speed_boost
-                + fast_lane_bonus
-            ) - role_health_penalties["router"],
-            "fix": 0.24 * coding + 0.16 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["fix"].get(size_class, 0.80) - role_health_penalties["fix"],
-            "test": 0.22 * coding + 0.18 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["test"].get(size_class, 0.80) - role_health_penalties["test"],
-            "scout": 0.19 * openclaw + 0.17 * reasoning + 0.17 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["scout"].get(size_class, 0.80) - role_health_penalties["scout"],
+            "research": 0.19 * openclaw + 0.17 * reasoning + 0.17 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["research"].get(size_class, 0.80) - role_health_penalties["research"],
             "writer": 0.26 * writing + 0.18 * reasoning + 0.13 * throughput_score + 0.10 * pinchbench + 0.08 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.06 * plan_value_score + 0.04 * size_preference["writer"].get(size_class, 0.80) - role_health_penalties["writer"],
-            "analyze": 0.21 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.04 * price_score + 0.03 * size_preference["analyze"].get(size_class, 0.80) - role_health_penalties["analyze"],
-            "power": 0.19 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.08 * reliability + 0.04 * price_score + 0.04 * size_preference["power"].get(size_class, 0.80) - role_health_penalties["power"],
+            "code": 0.24 * coding + 0.16 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["code"].get(size_class, 0.80) - role_health_penalties["code"],
+            "review": 0.22 * coding + 0.18 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["review"].get(size_class, 0.80) - role_health_penalties["review"],
+            "inspect": 0.21 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.04 * price_score + 0.03 * size_preference["inspect"].get(size_class, 0.80) - role_health_penalties["inspect"],
+            "team": 0.19 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.08 * reliability + 0.04 * price_score + 0.04 * size_preference["team"].get(size_class, 0.80) - role_health_penalties["team"],
             "main": 0.19 * coding + 0.16 * openclaw + 0.15 * reasoning + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * ttft_score + 0.02 * availability_score + 0.02 * size_preference["main"].get(size_class, 0.80) - role_health_penalties["main"],
         }
         enriched.append((model, role_scores))
@@ -832,10 +817,10 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
 
     profiles = {
         "ops-fast": pick("runner"),
-        "research": pick("scout"),
+        "research": pick("research"),
         "writer": pick("writer"),
-        "code": pick("fix"),
-        "review": pick("test"),
+        "code": pick("code"),
+        "review": pick("review"),
     }
     main_model = pick("main")
     main_selection_meta["selected_model"] = main_model
@@ -851,16 +836,16 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
             "inspect": pick("runner"),
         },
         "octoclaw-research": {
-            "collect": pick("scout"),
-            "inspect": pick("analyze"),
+            "collect": pick("research"),
+            "inspect": pick("inspect"),
             "report": pick("writer"),
         },
         "octoclaw-code": {
-            "implement": pick("fix"),
-            "verify": pick("test"),
+            "implement": pick("code"),
+            "verify": pick("review"),
         },
         "octoclaw-review": {
-            "verify": pick("test"),
+            "verify": pick("review"),
         },
         "octoclaw-main": {
             "orchestrate": main_model,

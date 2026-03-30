@@ -1646,6 +1646,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
      - `risk`
      - `latency target`
    - main lane 明确走 capability floor，而不是平衡分数竞争
+   当前状态：已启动，selector-role 打分词汇与 health/config 配置已开始切到新 taxonomy
 
 7. Resolve-Model Rewrite
    - 不再保留旧 router 风格的第二套复杂度评分器
@@ -1653,6 +1654,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
      - capability floor
      - worker_pool/profile/phase/route/contract
      - health / quota / fallback
+   当前状态：已启动，description-based band upgrade 已从主路径移除
 
 8. Config Vocabulary Rewrite
    - `octopus_config.py` 中的旧 role / tier / mode 词汇继续拆除

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-resolve-model.py — OctoClaw model selection entry.
+resolve-model.py — OctoClaw policy-first model selection entry.
 
 Primary path:
 1. Prefer worker_pool/profile/phase driven auto policy from model-policy.json
-2. Fall back to lightweight selector-band defaults only when auto policy is unavailable
-3. Apply guard overrides and complexity-based upgrades
+2. Fall back to explicit custom overrides only when auto policy is unavailable
+3. Use selector-band aliases purely as low-level final fallback
+4. Apply health / guard overrides
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import time
 
@@ -37,81 +37,6 @@ BUILTIN_MAP = {
 }
 
 VALID_SELECTOR_BANDS = ["quick", "standard", "strong", "heavy"]
-
-# 多维度关键词权重（ClawRouter 启发，15维度简化版）
-# 正分 → 建议升级 band；负分 → 建议降级 band
-# 仅用于升级安全网（不降级，尊重主 Agent 判断）
-_SCORING_RULES = [
-    # (weight, pattern_list, dimension_name)
-    # 代码维度 (+0.15): 含代码标志 → 至少 standard
-    (0.15, [r"```", r"\bdef\b", r"\bclass\b", r"\bfunction\b", r"\bimport\b",
-             r"\breturn\b", r"=>", r"\basync\b", r"\bawait\b"], "code"),
-    # 复杂度维度 (+0.18): 架构/重构/分布式 → strong/heavy
-    (0.18, [r"\b(architect|重构|refactor|distributed|分布式|design pattern|设计模式|"
-             r"scalab|优化系统|system design|microservice|微服务)\b"], "complexity"),
-    # 推理维度 (+0.18): 分析/比较/论证 → heavy
-    (0.18, [r"\b(analyz|分析|compar|比较|prove|论证|step.by.step|逐步|"
-             r"root cause|根因|tradeoff|权衡|综合评估)\b"], "reasoning"),
-    # Agentic 维度 (+0.08): 部署/运行/测试/批量 → standard+
-    (0.08, [r"\b(deploy|部署|run tests|运行测试|execute|批量|batch|migrate|迁移|"
-             r"rollout|上线|pipeline)\b"], "agentic"),
-    # 多文件维度 (+0.10): 涉及多个文件 → strong
-    (0.10, [r"\b(multiple files|多个文件|across files|整个项目|全局|codebase|"
-             r"all.*\.py|所有.*文件)\b"], "multi_file"),
-    # 轻量维度 (-0.12): 明显轻量任务 → 不升级
-    (-0.12, [r"\b(what is|是什么|translate|翻译|rename|重命名|typo|拼写|"
-              r"add comment|加注释|fix typo|简单|simple change|一行)\b"], "light_edit"),
-    # 创意/写作维度 (+0.05): 内容创作略高于纯快路径
-    (0.05, [r"\b(write.*article|写.*文章|draft|起草|creative|创意|blog|文案)\b"], "creative"),
-    # 约束维度 (+0.06): 多约束条件 → 更高模型
-    (0.06, [r"\b(must|必须|require|要求|ensure|保证|constraint|限制|comply|符合|"
-             r"standard|规范)\b"], "constraint"),
-]
-
-# selector band 数值映射（用于比较高低）
-_SELECTOR_BAND_RANK = {band: i for i, band in enumerate(VALID_SELECTOR_BANDS)}
-
-
-def score_description_complexity(description: str) -> str | None:
-    """
-    对任务描述进行多维度关键词评分，返回建议 selector band 或 None（无法判断）。
-    只用于升级安全网：若建议 band > 请求 band 则升级，否则保持原 band。
-    评分 < -0.05 → quick；-0.05~0.20 → standard；0.20~0.40 → strong；> 0.40 → heavy
-    """
-    if not description or len(description.strip()) < 5:
-        return None
-
-    text = description.lower()
-    total_score = 0.0
-    matched_dims = []
-
-    for weight, patterns, dim_name in _SCORING_RULES:
-        for pat in patterns:
-            if re.search(pat, text, re.IGNORECASE):
-                total_score += weight
-                matched_dims.append(f"{dim_name}({weight:+.2f})")
-                break  # 每维度只计一次
-
-    # 无任何维度匹配 → 无法判断
-    if not matched_dims:
-        return None
-
-    # 评分 → selector band
-    if total_score < -0.05:
-        suggested = "quick"
-    elif total_score < 0.20:
-        suggested = "standard"
-    elif total_score < 0.40:
-        suggested = "strong"
-    else:
-        suggested = "heavy"
-
-    print(
-        f"INFO: description scoring: score={total_score:.2f} dims=[{', '.join(matched_dims)}] → {suggested}",
-        file=sys.stderr,
-    )
-    return suggested
-
 
 def load_json(path):
     """安全读取 JSON 文件，不存在或解析失败返回 None。"""
@@ -385,36 +310,6 @@ def resolve_custom_mode_model(
     return None
 
 
-def resolve_mode_short_name(
-    mode: str,
-    custom_models: dict,
-    selector_band: str = "",
-    *,
-    worker_pool: str = "",
-    phase: str = "",
-    route: str = "",
-    profile: str = "",
-) -> str | None:
-    if mode == "auto":
-        return resolve_auto_policy_model(
-            selector_band,
-            worker_pool=worker_pool,
-            phase=phase,
-            route=route,
-            profile=profile,
-        )
-    if mode == "custom":
-        return resolve_custom_mode_model(
-            custom_models,
-            selector_band,
-            worker_pool=worker_pool,
-            phase=phase,
-            route=route,
-            profile=profile,
-        )
-    return None
-
-
 def resolve_policy_health_fallback(selected_model: str, *, policy: dict | None = None) -> str:
     if not isinstance(policy, dict):
         return selected_model
@@ -481,7 +376,7 @@ def main():
     parser.add_argument("--phase", default="", help="工作阶段，如 collect/inspect/report/implement/verify")
     parser.add_argument("--route", default="", help="当前 route，用于 team/runner 特殊优先级")
     parser.add_argument("--profile", default="", help="用户侧 profile，如 code/research/review/writer")
-    parser.add_argument("--description", default="", help="任务描述（用于多维度复杂度评分，可升级 band）")
+    parser.add_argument("--description", default="", help="任务描述（仅用于上下文，不驱动 band 升级）")
     args = parser.parse_args()
 
     selector_band = str(args.selector_band or "").strip() or "standard"
@@ -510,29 +405,9 @@ def main():
         expected_mode=expected_cache_mode,
     )
     if cached_model:
-        if args.description:
-            suggested_band = score_description_complexity(args.description)
-            if suggested_band and _SELECTOR_BAND_RANK[suggested_band] > _SELECTOR_BAND_RANK[selector_band]:
-                print(
-                    f"INFO: description suggests upgrading band {selector_band} → {suggested_band} (cache bypass)",
-                    file=sys.stderr,
-                )
-                selector_band = suggested_band
-                cached_model = read_cache(
-                    selector_band,
-                    worker_pool=args.worker_pool,
-                    phase=args.phase,
-                    profile=args.profile,
-                    route=args.route,
-                    allow_generic_selector_fallback=not (auto_policy_active and selector_aware_request),
-                    policy_marker=policy_marker,
-                    health_marker=health_marker,
-                    expected_mode=expected_cache_mode,
-                )
-        if cached_model:
-            print(f"INFO: 命中模型缓存 selector_band={selector_band} model={cached_model}", file=sys.stderr)
-            print(cached_model)
-            return
+        print(f"INFO: 命中模型缓存 selector_band={selector_band} model={cached_model}", file=sys.stderr)
+        print(cached_model)
+        return
 
     override_mode = None
     deg_data = load_json(GLOBAL_DEG_FILE)
@@ -561,15 +436,16 @@ def main():
             policy=policy_data,
         )
 
-    short_name = None if auto_selected_model else resolve_mode_short_name(
-        mode,
-        custom_models,
-        selector_band,
-        worker_pool=args.worker_pool,
-        phase=args.phase,
-        route=args.route,
-        profile=args.profile,
-    )
+    short_name = None
+    if not auto_selected_model and mode == "custom":
+        short_name = resolve_custom_mode_model(
+            custom_models,
+            selector_band,
+            worker_pool=args.worker_pool,
+            phase=args.phase,
+            route=args.route,
+            profile=args.profile,
+        )
 
     aliases_data = load_json(MODEL_ALIASES_FILE)
 
@@ -593,50 +469,6 @@ def main():
 
     if auto_policy_active:
         full_path = resolve_policy_health_fallback(full_path, policy=policy_data)
-
-    if args.description:
-        suggested_band = score_description_complexity(args.description)
-        if suggested_band and _SELECTOR_BAND_RANK[suggested_band] > _SELECTOR_BAND_RANK[selector_band]:
-            print(
-                f"INFO: description suggests upgrading band {selector_band} → {suggested_band}, re-selecting model",
-                file=sys.stderr,
-            )
-            selector_band = suggested_band
-            if auto_policy_active:
-                upgraded_model = resolve_auto_policy_model(
-                    suggested_band,
-                    worker_pool=args.worker_pool,
-                    phase=args.phase,
-                    route=args.route,
-                    profile=args.profile,
-                    policy=policy_data,
-                )
-                if upgraded_model:
-                    full_path = resolve_policy_health_fallback(upgraded_model, policy=policy_data)
-            else:
-                upgraded_short = resolve_mode_short_name(
-                    mode,
-                    custom_models,
-                    suggested_band,
-                    worker_pool=args.worker_pool,
-                    phase=args.phase,
-                    route=args.route,
-                    profile=args.profile,
-                )
-                if upgraded_short:
-                    full_path = resolve_short_name(upgraded_short, aliases_data)
-                else:
-                    upgraded_band_model = ""
-                    if isinstance(aliases_data, dict):
-                        upgraded_band_model = str(
-                            aliases_data.get(suggested_band, "")
-                            or aliases_data.get(model_band_for_selector_band(suggested_band, default="normal"), "")
-                            or ""
-                        ).strip()
-                    full_path = upgraded_band_model if "/" in upgraded_band_model else resolve_short_name(
-                        fallback_short_name_for_selector_band(suggested_band),
-                        aliases_data,
-                    )
 
     # ── Step 4: 模型守卫降级检测 ─────────────────────────────────────────
     guard_data = load_json(GUARD_FILE)
@@ -698,15 +530,16 @@ def main():
                     ) or full_path
                     band_full_path = resolve_policy_health_fallback(band_full_path, policy=policy_data)
                 else:
-                    band_short = resolve_mode_short_name(
-                        mode,
-                        custom_models,
-                        band,
-                        worker_pool=args.worker_pool,
-                        phase=args.phase,
-                        route=args.route,
-                        profile=args.profile,
-                    )
+                    band_short = None
+                    if mode == "custom":
+                        band_short = resolve_custom_mode_model(
+                            custom_models,
+                            band,
+                            worker_pool=args.worker_pool,
+                            phase=args.phase,
+                            route=args.route,
+                            profile=args.profile,
+                        )
                     if band_short:
                         band_full_path = resolve_short_name(band_short, aliases_data)
                     else:

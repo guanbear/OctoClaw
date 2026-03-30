@@ -11,15 +11,14 @@ from typing import Any
 from octopus_config import MODEL_HEALTH_FILE, load_json, load_octopus_config, model_health_config, save_json
 
 
-ROLE_LATENCY_CLASS = {
+SELECTOR_ROLE_LATENCY_CLASS = {
     "runner": "interactive",
-    "router": "interactive",
     "main": "interactive",
-    "fix": "code",
-    "test": "code",
-    "analyze": "code",
-    "power": "code",
-    "scout": "batch",
+    "code": "code",
+    "review": "code",
+    "inspect": "code",
+    "team": "code",
+    "research": "batch",
     "writer": "batch",
 }
 
@@ -169,22 +168,23 @@ def selection_penalty_for_role(
     config: dict[str, Any] | None = None,
 ) -> float:
     runtime_cfg = config or model_health_config(load_octopus_config())
-    degraded = runtime_cfg.get("degraded_penalty_by_role", {}) if isinstance(runtime_cfg, dict) else {}
-    cooldown = runtime_cfg.get("cooldown_penalty_by_role", {}) if isinstance(runtime_cfg, dict) else {}
+    degraded = runtime_cfg.get("degraded_penalty_by_selector_role", {}) if isinstance(runtime_cfg, dict) else {}
+    cooldown = runtime_cfg.get("cooldown_penalty_by_selector_role", {}) if isinstance(runtime_cfg, dict) else {}
     latency_thresholds = runtime_cfg.get("latency_thresholds_ms", {}) if isinstance(runtime_cfg, dict) else {}
     quota_penalty = runtime_cfg.get("quota_pressure_penalty", {}) if isinstance(runtime_cfg, dict) else {}
 
+    selector_role = str(role or "").strip().lower()
     state_name = str(health_entry.get("state", "healthy") or "healthy").strip().lower()
     penalty = 0.0
     if state_name == "cooldown":
-        penalty += float(cooldown.get(role, 0.70) or 0.70)
+        penalty += float(cooldown.get(selector_role, 0.70) or 0.70)
     elif state_name == "degraded":
-        penalty += float(degraded.get(role, 0.10) or 0.10)
+        penalty += float(degraded.get(selector_role, 0.10) or 0.10)
 
     quota_pressure = str(health_entry.get("quota_pressure", "") or "").strip().lower()
     penalty += float(quota_penalty.get(quota_pressure, 0.0) or 0.0)
 
-    latency_class = ROLE_LATENCY_CLASS.get(role, "batch")
+    latency_class = SELECTOR_ROLE_LATENCY_CLASS.get(selector_role, "batch")
     threshold = float(latency_thresholds.get(latency_class, 0) or 0)
     p95 = float(health_entry.get("first_token_p95_ms", 0) or 0)
     if threshold > 0 and p95 > threshold:
