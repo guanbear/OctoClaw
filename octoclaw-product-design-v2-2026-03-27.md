@@ -1519,6 +1519,59 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 截至 2026-03-30，更合理的整体路线不是“继续横向扩功能”，而是按下面顺序收紧系统真相和连续性。
 
+### 12.0 前面已做资产的处理原则
+
+这条新路线不是推翻前面的开发，而是在已有骨架上继续收紧语义和运行时真相。
+
+后续开发应明确区分三类资产。
+
+#### 12.0.1 可以直接复用的资产
+
+这些已经是新架构地基，不应推倒重来：
+
+- `worker_pool-first` 的 taxonomy
+- `policy-first` 的选模骨架
+- main lane capability floor
+- unified runtime task record
+- `brief / result / artifact` 协议
+- unified runtime surface
+- `lifecycle_state / outcome_state / handoff_state`
+- replay / drift / route diff 基础能力
+
+换句话说：
+
+> **前面做的大部分 schema、policy、runtime、protocol 工作，仍然是后续路线的基础。**
+
+#### 12.0.2 需要改“判定语义”但不需要重写的资产
+
+这些不该被删除，但要按新的方法论继续收紧语义：
+
+- `direct / runner / spawn_single / spawn_multi`
+- sticky lane
+- route hint merge
+- skill bundle 注入
+- patrol 对 delegated work 的解释方式
+
+核心变化是：
+
+- 从“任务分类”转向“执行合同选择”
+- 从“复杂就多 agent”转向“先 workflow，再按需 agent”
+
+#### 12.0.3 需要继续拆除或降级的旧思路
+
+后续应继续减少这些残留：
+
+- prompt-only delegation 习惯
+- 语义分类优先于执行合同的 route 逻辑
+- “任务复杂就默认 `spawn_multi`” 的倾向
+- 旧 label/tier 驱动的残留判断
+
+简化地说：
+
+- 保留 runtime 骨架
+- 重写 lane 语义
+- 继续拆旧 heuristics 残留
+
 ### 12.1 第一段：把 delegated runtime truth 做硬
 
 目标：
@@ -1579,7 +1632,23 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 15. context-budget-aware compaction policies
 16. heavier protocol only where data proves it is worth it
 
-### 12.5 和原 Phase 的对应关系
+### 12.5 文档真相源
+
+后续开发不应只靠聊天记录推进，而应以这几份文档为真相源：
+
+1. [octoclaw-product-design-v2-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-product-design-v2-2026-03-27.md)
+2. [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
+3. [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+4. [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
+
+其中：
+
+- 主设计文档负责产品边界、Phase、路线和资产取舍
+- Anthropic 笔记负责方法论和优先级
+- DeerFlow / ClawTeam 笔记负责源码级借鉴点
+- 状态机文档负责 delegated runtime truth 的修复方向
+
+### 12.6 和原 Phase 的对应关系
 
 如果仍按原 Phase 记法理解，接下来最主要的推进重心是：
 
