@@ -48,7 +48,8 @@ from collections import deque
 from notifier import backend_supports_cards, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec
 from clawteam_bridge import sync_task
-from runtime_task_record import task_is_recent_final, task_notification_state, task_state_model
+from runtime_coordination import recover_stale_ownership, sync_runtime_surfaces
+from runtime_task_record import normalize_task_record, task_is_recent_final, task_notification_state, task_state_model
 from octopus_config import (
     MAIN_AGENT_SESSIONS_FILE,
     RUNNER_HEALTH_FILE,
@@ -58,6 +59,7 @@ from octopus_config import (
     resolve_main_session_key,
 )
 from session_ops import send_agent_message
+from task_events import append_task_event
 
 try:
     from worker_taxonomy import (
@@ -975,6 +977,49 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
     if changed:
         save_task_state(TASK_STATE_FILE, state)
     return tasks
+
+
+def recover_dead_agent_tasks(tasks: list[dict], *, stale_after_seconds: int = 900) -> list[dict]:
+    """Recover delegated tasks whose owner/session is no longer alive."""
+    recovered = recover_stale_ownership(tasks, stale_after_seconds=stale_after_seconds)
+    if not recovered:
+        return []
+
+    state = load_task_state(TASK_STATE_FILE)
+    state_tasks = state.get("tasks", [])
+    state_by_id = {str(task.get("id", "") or ""): task for task in state_tasks if isinstance(task, dict)}
+    updated: list[dict] = []
+    for task in recovered:
+        task_id = str(task.get("id", "") or "").strip()
+        if not task_id:
+            continue
+        previous = state_by_id.get(task_id, {})
+        previous_status = str(previous.get("status", "") or "")
+        normalized = normalize_task_record(task)
+        if task_id in state_by_id:
+            current = state_by_id[task_id]
+            current.clear()
+            current.update(normalized)
+        updated.append((normalized, previous_status))
+
+    if updated:
+        state["tasks"] = state_tasks
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        save_task_state(TASK_STATE_FILE, state)
+        for record, previous_status in updated:
+            append_task_event(
+                record,
+                "ownership_recovered",
+                message=str(record.get("summary") or "dead agent recovered"),
+                extra={
+                    "previous_status": previous_status,
+                    "recovery_action": str(record.get("recovery_action", "") or ""),
+                    "session_status": str(record.get("session_status", "") or ""),
+                },
+            )
+            sync_runtime_surfaces(record, thread_action="touch")
+            sync_task(record, event_type="upsert", previous_status=previous_status)
+    return [record for record, _ in updated]
 
 
 def build_steer_message(task: dict) -> str:
@@ -4099,6 +4144,13 @@ def main():
 
     # ── v1.3: 先补充 session 观测字段，让后续判断不只依赖 task-state 本身 ──
     tasks = annotate_tasks_with_session_state(tasks)
+
+    # ── Slice C: 发现 owner/session 已失活时，释放锁并把任务回收到 queued ──
+    recovered = recover_dead_agent_tasks(tasks)
+    if recovered:
+        print(f"  ♻️ 本轮回收失活 delegated 任务 {len(recovered)} 个：{[t.get('id') for t in recovered]}")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
 
     # ── v1.4: 对仍然活着但有异常迹象的任务，先尝试 steer，再决定是否重派 ──
     steered = attempt_task_steers(tasks)

@@ -88,6 +88,56 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertEqual(sent["action"], "edit")
         self.assertEqual(mock_send.call_args[1]["existing_message_id"], "1712345.000200")
 
+    @patch("patrol.append_task_event")
+    @patch("patrol.sync_runtime_surfaces")
+    @patch("patrol.sync_task")
+    def test_recover_dead_agent_tasks_requeues_missing_session_owner(self, mock_sync_task, mock_sync_runtime_surfaces, mock_append_task_event) -> None:
+        with patch.object(
+            patrol,
+            "load_task_state",
+            return_value={
+                "tasks": [
+                    {
+                        "id": "task-1",
+                        "status": "running",
+                        "route": "spawn_single",
+                        "runtime": "subagent",
+                        "worker_pool": "octoclaw-research",
+                        "session_status": "missing",
+                        "agent_id": "octo-worker-1",
+                        "session_id": "sess-1",
+                        "run_id": "run-1",
+                        "summary": "research provider docs",
+                    }
+                ],
+                "updated_at": "",
+            },
+        ), patch.object(patrol, "save_task_state") as mock_save:
+            recovered = patrol.recover_dead_agent_tasks(
+                [
+                    {
+                        "id": "task-1",
+                        "status": "running",
+                        "route": "spawn_single",
+                        "runtime": "subagent",
+                        "worker_pool": "octoclaw-research",
+                        "session_status": "missing",
+                        "agent_id": "octo-worker-1",
+                        "session_id": "sess-1",
+                        "run_id": "run-1",
+                        "summary": "research provider docs",
+                    }
+                ]
+            )
+
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(recovered[0]["status"], "queued")
+        self.assertEqual(recovered[0]["recovery_action"], "dead_agent_recovered")
+        mock_save.assert_called_once()
+        mock_sync_task.assert_called_once()
+        mock_sync_runtime_surfaces.assert_called_once()
+        mock_append_task_event.assert_called_once()
+
     def test_get_recent_done_tasks_includes_final_blocked_handoffs(self) -> None:
         now = patrol.now_utc()
         completed_at = (now - patrol.timedelta(minutes=5)).isoformat()

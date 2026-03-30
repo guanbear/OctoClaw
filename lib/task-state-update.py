@@ -19,6 +19,7 @@ if SCRIPT_DIR not in sys.path:
 
 from clawteam_bridge import sync_task
 from notifier import send_task_notification
+from runtime_coordination import sync_runtime_surfaces
 from runtime_task_record import (
     normalize_task_record,
     normalize_task_records,
@@ -756,6 +757,15 @@ def _sync_task_anchor(record: dict, previous_status: str) -> dict:
     }
 
 
+def _sync_runtime_coordination(record: dict) -> None:
+    if not isinstance(record, dict) or not str(record.get("id", "") or "").strip():
+        return
+    try:
+        sync_runtime_surfaces(record, thread_action="close" if task_is_final(record) else "touch")
+    except Exception:
+        return
+
+
 def cmd_upsert(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     lineage_syncs = []
@@ -987,10 +997,12 @@ def cmd_upsert(args):
         state["tasks"] = tasks
         save_state(fp, state)
     if current_record:
+        _sync_runtime_coordination(current_record)
         sync_task(current_record, event_type="upsert", previous_status=previous_status)
         anchor_result = _sync_task_anchor(current_record, previous_status)
         _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
     for record, record_previous_status in lineage_syncs:
+        _sync_runtime_coordination(record)
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
         _log_task_transition(record, record_previous_status)
     print(f"[ok] upsert id={args.id} status={args.status or 'dispatched'}")
@@ -1122,6 +1134,7 @@ def cmd_event(args):
         state["tasks"] = tasks
         save_state(fp, state)
     append_task_event(current_record, args.kind, message=args.message, extra=args.event_json if isinstance(args.event_json, dict) else None)
+    _sync_runtime_coordination(current_record)
     print(f"[ok] event id={args.id} kind={args.kind}")
 
 
@@ -1234,10 +1247,12 @@ def _finish(
         state["tasks"] = cleanup_old(tasks)
         save_state(fp, state)
     if current_record:
+        _sync_runtime_coordination(current_record)
         sync_task(current_record, event_type=status, previous_status=previous_status)
         anchor_result = _sync_task_anchor(current_record, previous_status)
         _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
     for record, record_previous_status in lineage_syncs:
+        _sync_runtime_coordination(record)
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
         _log_task_transition(record, record_previous_status)
     print(f"[ok] {status} id={task_id}")

@@ -1585,6 +1585,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 2. harder IM thread/topic binding
    当前状态：已完成 session-thread truth + anchor reuse 基础落地
 3. ownership lock + dead-agent recovery
+   当前状态：已完成基础落地
 4. worker session resume store
 
 这四步做完，系统会明显减少：

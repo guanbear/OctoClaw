@@ -108,11 +108,14 @@ def ownership_snapshot(task: dict[str, Any], *, lease_seconds: int = 900) -> dic
     run_id = _text(task.get("run_id"))
     lifecycle_state = _text(task.get("lifecycle_state")).lower()
     session_status = _text(task.get("session_status")).lower()
+    recovery_action = _text(task.get("recovery_action")).lower()
     claimed_at = _text(task.get("started_at")) or _text(task.get("spawned_at")) or _text(task.get("updated_at"))
     last_heartbeat_at = _text(task.get("last_observed_at")) or _text(task.get("updated_at")) or claimed_at
 
     if lifecycle_state in FINAL_LIFECYCLE_STATES:
         state = "released"
+    elif recovery_action == "dead_agent_recovered":
+        state = "recovered"
     elif owner_id or session_id or run_id:
         if session_status in {"missing", "timeout", "stale", "lost"}:
             state = "stale"
@@ -143,10 +146,13 @@ def session_resume_snapshot(task: dict[str, Any]) -> dict[str, Any]:
     run_id = _text(task.get("run_id"))
     session_status = _text(task.get("session_status")).lower()
     lifecycle_state = _text(task.get("lifecycle_state")).lower()
+    recovery_action = _text(task.get("recovery_action")).lower()
     last_observed_at = _text(task.get("last_observed_at")) or _text(task.get("updated_at"))
 
     if lifecycle_state in FINAL_LIFECYCLE_STATES:
         resume_state = "complete"
+    elif recovery_action == "dead_agent_recovered":
+        resume_state = "recovered"
     elif session_status in {"missing", "timeout", "stale", "lost"}:
         resume_state = "stale"
     elif session_id or run_id:
@@ -506,15 +512,24 @@ def recover_stale_ownership(tasks: list[dict[str, Any]], *, stale_after_seconds:
     for task in tasks:
         if not isinstance(task, dict):
             continue
+        if _text(task.get("route")).lower() == "runner" or _text(task.get("runtime")).lower() == "runner":
+            continue
         ownership = ownership_snapshot(task, lease_seconds=max(60, int(stale_after_seconds)))
-        if ownership.get("state") != "claimed":
+        session_status = _text(task.get("session_status")).lower()
+        should_recover = ownership.get("state") == "stale" and session_status in {"missing", "timeout", "stale", "lost"}
+        if not should_recover:
+            if ownership.get("state") != "claimed":
+                continue
+            heartbeat = _parse_iso(_text(ownership.get("last_heartbeat_at")))
+            if heartbeat is None or heartbeat >= cutoff:
+                continue
+            should_recover = True
+        if not should_recover:
             continue
-        heartbeat = _parse_iso(_text(ownership.get("last_heartbeat_at")))
-        if heartbeat is None or heartbeat >= cutoff:
-            continue
-        task["ownership"] = {**ownership, "state": "stale", "lease_expires_at": ""}
-        task["session_status"] = _text(task.get("session_status")) or "stale"
+        task["ownership"] = {**ownership, "state": "recovered", "lease_expires_at": ""}
+        task["session_status"] = session_status or "lost"
         task["recovery_action"] = "dead_agent_recovered"
+        task["last_recovered_at"] = now_iso()
         if _text(task.get("status")).lower() in {"running", "in_progress", "dispatched"}:
             task["status"] = "queued"
         recovered.append(task)

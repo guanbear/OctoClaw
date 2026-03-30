@@ -79,6 +79,7 @@ The next source-backed borrowings from ClawTeam and DeerFlow are still the right
 2. harder IM thread/topic binding
    status: landed (baseline thread-truth and anchor reuse)
 3. ownership lock plus dead-agent recovery
+   status: landed (baseline ownership recovery and queued reclaim)
 4. delegated worker session resume
 5. artifact index and retrieval
 6. todo/checklist persistence across context loss

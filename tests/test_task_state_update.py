@@ -156,6 +156,57 @@ class TaskStateUpdateArchiveTests(unittest.TestCase):
             events = (workspace / "tmp" / "octopus" / "task-events.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertTrue(any('"kind": "checkpoint"' in line for line in events))
 
+    def test_upsert_writes_ownership_and_worker_session_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            env = {**os.environ, "WORKSPACE": str(workspace)}
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "upsert",
+                    "--id",
+                    "research-ownership-1",
+                    "--status",
+                    "running",
+                    "--summary",
+                    "investigate timeout",
+                    "--route",
+                    "spawn_single",
+                    "--runtime",
+                    "subagent",
+                    "--worker-pool",
+                    "octoclaw-research",
+                    "--agent-id",
+                    "octo-worker-1",
+                    "--session-id",
+                    "sess-1",
+                    "--run-id",
+                    "run-1",
+                    "--session-status",
+                    "active",
+                    "--last-observed-at",
+                    "+1",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            ownership_store = json.loads((workspace / "tmp" / "octopus" / "task-ownership.json").read_text(encoding="utf-8"))
+            worker_store = json.loads((workspace / "tmp" / "octopus" / "worker-session-store.json").read_text(encoding="utf-8"))
+
+            ownership = ownership_store["tasks"]["research-ownership-1"]
+            self.assertEqual(ownership["state"], "claimed")
+            self.assertEqual(ownership["owner_id"], "octo-worker-1")
+
+            resume_keys = worker_store["task_index"]["research-ownership-1"]
+            self.assertEqual(len(resume_keys), 1)
+            resume = worker_store["sessions"][resume_keys[0]]
+            self.assertEqual(resume["resume_state"], "active")
+            self.assertEqual(resume["agent_id"], "octo-worker-1")
+
 
 if __name__ == "__main__":
     unittest.main()
