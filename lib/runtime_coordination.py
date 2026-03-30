@@ -465,6 +465,40 @@ def list_artifacts(*, task_id: str = "", thread_key: str = "", path: str = ARTIF
     return results
 
 
+def resolve_task_artifacts(
+    task: dict[str, Any] | str,
+    *,
+    include_thread: bool = True,
+    path: str = ARTIFACT_INDEX_FILE,
+) -> list[dict[str, Any]]:
+    if isinstance(task, dict):
+        task_id = _text(task.get("id"))
+        thread_key = _text(task.get("session_thread_key")) if include_thread else ""
+    else:
+        task_id = _text(task)
+        thread_key = ""
+    if not task_id and not thread_key:
+        return []
+    entries = list_artifacts(task_id=task_id, thread_key=thread_key, path=path)
+    resolved: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        artifact_id = _text(entry.get("artifact_id"))
+        dedupe_key = artifact_id or f"{_text(entry.get('kind'))}:{_text(entry.get('path'))}:{_text(entry.get('task_id'))}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        payload = dict(entry)
+        payload["source"] = "thread_index" if task_id and _text(entry.get("task_id")) != task_id else "task_index"
+        payload["related_to_thread"] = bool(task_id and _text(entry.get("task_id")) != task_id)
+        resolved.append(payload)
+    resolved.sort(key=lambda item: (_text(item.get("updated_at")), _text(item.get("artifact_id"))), reverse=True)
+    resolved.sort(key=lambda item: 1 if bool(item.get("related_to_thread")) else 0)
+    return resolved
+
+
 def upsert_ownership(task: dict[str, Any], *, path: str = OWNERSHIP_STORE_FILE) -> dict[str, Any]:
     payload = load_ownership_store(path)
     tasks = payload.get("tasks", {}) if isinstance(payload.get("tasks", {}), dict) else {}

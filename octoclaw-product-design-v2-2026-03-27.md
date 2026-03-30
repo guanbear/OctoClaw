@@ -1606,6 +1606,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 再做：
 
 5. artifact index + retrieval
+   当前状态：已完成基础落地
 6. todo/checklist persistence
 7. context pack / memory compaction for long-running follow-ups
 8. stronger brief/result shaping and retrieval helpers

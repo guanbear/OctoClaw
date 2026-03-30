@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from lib.task_display import (
     build_operator_task_surface,
@@ -97,6 +98,50 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["lineage"]["active_child_count"], 1)
         self.assertEqual(detail["lineage"]["completed_child_count"], 1)
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
+
+    @patch("lib.task_display.resolve_task_artifacts")
+    def test_build_task_detail_prefers_artifact_index_rows(self, mock_resolve_task_artifacts) -> None:
+        mock_resolve_task_artifacts.return_value = [
+            {
+                "artifact_id": "report-a",
+                "task_id": "task-a",
+                "kind": "report",
+                "title": "Primary report",
+                "path": "/tmp/task-a-report.md",
+                "preview": "summarized findings",
+                "updated_at": "2026-03-30T10:00:00+00:00",
+            },
+            {
+                "artifact_id": "report-b",
+                "task_id": "task-b",
+                "kind": "report",
+                "title": "Thread review",
+                "path": "/tmp/task-b-review.md",
+                "preview": "review notes",
+                "updated_at": "2026-03-30T10:05:00+00:00",
+                "source": "thread_index",
+                "related_to_thread": True,
+            },
+        ]
+
+        detail = build_task_detail(
+            {
+                "id": "task-a",
+                "worker_pool": "octoclaw-research",
+                "status": "done",
+                "summary": "report ready",
+                "route": "spawn_single",
+                "session_thread_key": "slack:channel:C123:1712345.000100",
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(detail["artifacts"][0]["artifact_id"], "report-a")
+        self.assertEqual(detail["artifacts"][0]["source"], "task_index")
+        self.assertEqual(detail["artifacts"][1]["artifact_id"], "report-b")
+        self.assertEqual(detail["artifacts"][1]["source"], "thread_index")
+        self.assertTrue(detail["artifacts"][1]["related_to_thread"])
+        self.assertIn("task-b", detail["artifacts"][1]["title"])
 
     def test_build_task_detail_prefers_task_event_preview(self) -> None:
         detail = build_task_detail(

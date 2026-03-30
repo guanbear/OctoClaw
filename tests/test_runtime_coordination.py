@@ -3,10 +3,51 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.runtime_coordination import ownership_snapshot, recover_stale_ownership, resolve_worker_session, upsert_worker_session
+from lib.runtime_coordination import (
+    artifact_entries_for_task,
+    ownership_snapshot,
+    recover_stale_ownership,
+    resolve_task_artifacts,
+    resolve_worker_session,
+    upsert_artifact_index,
+    upsert_worker_session,
+)
 
 
 class RuntimeCoordinationTests(unittest.TestCase):
+    def test_resolve_task_artifacts_includes_thread_related_entries(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-artifact-index-") as tmpdir:
+            index_path = Path(tmpdir) / "artifact-index.json"
+            task_a = {
+                "id": "task-a",
+                "worker_pool": "octoclaw-research",
+                "status": "done",
+                "summary": "drafted report",
+                "report_path": "/tmp/task-a-report.md",
+                "session_thread_key": "slack:channel:C123:1712345.000100",
+                "updated_at": "2026-03-30T10:00:00+00:00",
+            }
+            task_b = {
+                "id": "task-b",
+                "worker_pool": "octoclaw-review",
+                "status": "done",
+                "summary": "review notes ready",
+                "artifacts": {"report_path": "/tmp/task-b-review.md"},
+                "session_thread_key": "slack:channel:C123:1712345.000100",
+                "updated_at": "2026-03-30T10:05:00+00:00",
+            }
+
+            upsert_artifact_index(task_a, path=str(index_path))
+            upsert_artifact_index(task_b, path=str(index_path))
+
+            artifacts = resolve_task_artifacts(task_a, path=str(index_path))
+
+            self.assertEqual([item["task_id"] for item in artifacts], ["task-a", "task-b"])
+            self.assertEqual(artifacts[0]["source"], "task_index")
+            self.assertFalse(artifacts[0]["related_to_thread"])
+            self.assertEqual(artifacts[1]["source"], "thread_index")
+            self.assertTrue(artifacts[1]["related_to_thread"])
+
     def test_ownership_snapshot_marks_recovered_tasks(self) -> None:
         snapshot = ownership_snapshot(
             {
@@ -69,6 +110,26 @@ class RuntimeCoordinationTests(unittest.TestCase):
             self.assertEqual(resolved["agent_id"], "octo-worker-1")
             self.assertEqual(resolved["session_id"], "sess-1")
             self.assertEqual(resolved["resume_state"], "active")
+
+    def test_artifact_entries_for_task_collects_worker_result(self) -> None:
+        entries = artifact_entries_for_task(
+            {
+                "id": "task-1",
+                "worker_pool": "octoclaw-code",
+                "status": "done",
+                "summary": "patched login",
+                "artifacts": {
+                    "worker_result": {
+                        "task_id": "task-1",
+                        "status": "done",
+                        "summary": "login patch landed",
+                        "report": "/tmp/task-1-result.md",
+                    }
+                },
+            }
+        )
+
+        self.assertTrue(any(entry["kind"] == "worker_result" for entry in entries))
 
 
 if __name__ == "__main__":

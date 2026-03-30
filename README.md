@@ -64,6 +64,7 @@ Recent runtime slices now also land two DeerFlow/ClawTeam-inspired observability
 
 - delegated task event log: `/workspace/tmp/octopus/task-events.jsonl`
 - persistent IM thread map: `/workspace/tmp/octopus/session-thread-map.json`
+- artifact index: `/workspace/tmp/octopus/artifact-index.json`
 
 OctoClaw uses them to keep `task-state`, task anchors, patrol notifications, and IM follow-ups aligned around:
 
@@ -83,6 +84,7 @@ The next source-backed borrowings from ClawTeam and DeerFlow are still the right
 4. delegated worker session resume
    status: landed (baseline resume-store readback and resume-state surfacing)
 5. artifact index and retrieval
+   status: landed (baseline task/thread artifact lookup and detail surfacing)
 6. todo/checklist persistence across context loss
 
 In other words:

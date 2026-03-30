@@ -8,9 +8,11 @@ from typing import Any
 
 try:
     from runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
+    from runtime_coordination import resolve_task_artifacts
     from worker_taxonomy import role_display
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
+    from lib.runtime_coordination import resolve_task_artifacts
     from lib.worker_taxonomy import role_display
 
 
@@ -197,6 +199,31 @@ def _collect_active_models(task: dict[str, Any]) -> list[str]:
 
 
 def _collect_artifacts(task: dict[str, Any]) -> list[dict[str, Any]]:
+    indexed_rows = resolve_task_artifacts(task, include_thread=True)
+    if indexed_rows:
+        rows: list[dict[str, Any]] = []
+        for artifact in indexed_rows:
+            if not isinstance(artifact, dict):
+                continue
+            title = _text(artifact.get("title")) or _text(artifact.get("artifact_id")) or "Artifact"
+            if artifact.get("related_to_thread"):
+                related_task_id = _text(artifact.get("task_id"))
+                title = f"{title} · {related_task_id}" if related_task_id else f"{title} · thread"
+            rows.append(
+                {
+                    "artifact_id": _text(artifact.get("artifact_id")),
+                    "kind": _text(artifact.get("kind")),
+                    "title": title,
+                    "path": _text(artifact.get("path")),
+                    "preview": _compact(_text(artifact.get("preview")), limit=72),
+                    "ready": True,
+                    "source": _text(artifact.get("source")) or "task_index",
+                    "task_id": _text(artifact.get("task_id")),
+                    "related_to_thread": bool(artifact.get("related_to_thread")),
+                }
+            )
+        return rows
+
     artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
     rows: list[dict[str, Any]] = []
     report_path = _text(artifacts.get("report_path") or task.get("report_path"))
