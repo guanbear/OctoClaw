@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
-"""System-preferred task router for OctoClaw.
+"""Contract-first route inspection for OctoClaw.
 
-This module is not a keyword toy router. It is a lightweight orchestration
-preference layer that tries to answer three questions, in order:
+This module no longer tries to behave like a full lightweight router.
+Its job is narrower and more stable:
 
-1. Should the main agent handle this directly?
-2. If not, should a persistent runner handle it?
-3. If not, should we isolate the work into one or multiple subagents?
+1. Hard-gate obvious runner work.
+2. Extract execution-contract hints for policy merge.
+3. Emit only a weak route bias for non-runner lanes.
 
 Design goals:
 - stable before clever
+- contract-first, not task-taxonomy-first
 - cheap to run
 - explainable in production
 - easy to improve with replay/eval feedback later
 
 Output:
-- system_preferred_route: initial route bias before main-brain hint merge
+- system_preferred_route: weak initial route bias before main-brain hint merge
 - route: compatibility alias for the same preferred route
+- work_contract_hint: execution-contract hint used by policy/runtime
 """
 
 from __future__ import annotations
@@ -737,9 +739,171 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     return features
 
 
-def infer_work_type_hint(features: dict, route: str) -> str:
+def direct_contract_candidate(features: dict) -> bool:
+    if features.get("high_risk"):
+        return False
+    if features.get("requires_tools"):
+        return False
+    if features.get("requires_mutation"):
+        return False
+    if features.get("requires_code_work"):
+        return False
+    if features.get("parallelizable"):
+        return False
+    if int(features.get("estimated_steps", 0) or 0) >= 3:
+        return False
+    if features.get("requires_research") and not features.get("external_lookup_only"):
+        return False
+    if features.get("requires_writing") and not features.get("summary_output_hits"):
+        return False
+    if features.get("context_growth") in {"medium", "high"}:
+        return False
+    return bool(
+        features.get("simple_direct_candidate")
+        or features.get("external_lookup_only")
+        or (
+            int(features.get("task_length", 0) or 0) <= 120
+            and int(features.get("estimated_steps", 0) or 0) <= 2
+            and not features.get("requires_research")
+            and not features.get("requires_writing")
+        )
+    )
+
+
+def infer_parallel_gain_band(features: dict) -> str:
+    if int(features.get("parallel_hits", 0) or 0) > 0:
+        return "high"
+    if features.get("parallelizable") and (
+        int(features.get("estimated_steps", 0) or 0) >= 5
+        or (features.get("requires_code_work") and int(features.get("verify_hits", 0) or 0) > 0)
+    ):
+        return "high"
+    if features.get("parallelizable") or int(features.get("estimated_steps", 0) or 0) >= 4:
+        return "medium"
+    return "low"
+
+
+def coordinated_work_candidate(features: dict) -> bool:
+    if not features.get("parallelizable"):
+        return False
+    if int(features.get("parallel_hits", 0) or 0) > 0:
+        return True
+    if int(features.get("estimated_steps", 0) or 0) >= 5:
+        return True
+    if features.get("requires_code_work") and int(features.get("verify_hits", 0) or 0) > 0 and int(
+        features.get("estimated_steps", 0) or 0
+    ) >= 4:
+        return True
+    if features.get("high_risk") and int(features.get("estimated_steps", 0) or 0) >= 4:
+        return True
+    return False
+
+
+def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
+    if route == "runner" or features.get("hard_runner_candidate"):
+        return "inspect_report"
+    if direct_contract_candidate(features):
+        return "answer_now"
+    if coordinated_work_candidate(features):
+        return "coordinated_work"
+    if int(features.get("summary_output_hits", 0) or 0) > 0:
+        return "deliverable_work"
+    if features.get("tool_observation_only"):
+        return "inspect_report"
+    return "deliverable_work"
+
+
+def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple[str, dict[str, float], list[str], float]:
+    scores = {
+        "direct": 0.0,
+        "runner": 0.0,
+        "spawn_single": 0.0,
+        "spawn_multi": 0.0,
+    }
+    reason_codes: list[str] = [f"work_contract:{work_contract_hint}"]
+
+    if work_contract_hint == "answer_now":
+        scores["direct"] = 0.82
+        scores["spawn_single"] = 0.36
+        if features.get("external_lookup_only"):
+            reason_codes.append("direct_lookup_contract")
+        else:
+            reason_codes.append("direct_answer_contract")
+    elif work_contract_hint == "inspect_report":
+        scores["spawn_single"] = 0.72
+        scores["runner"] = 0.44
+        reason_codes.append("inspect_report_contract")
+        if features.get("requires_tools"):
+            reason_codes.append("tool_observation_contract")
+    elif work_contract_hint == "coordinated_work":
+        scores["spawn_multi"] = 0.78
+        scores["spawn_single"] = 0.67
+        reason_codes.append("coordinated_work_contract")
+        reason_codes.append(f"parallel_gain:{infer_parallel_gain_band(features)}")
+    else:
+        scores["spawn_single"] = 0.82
+        scores["direct"] = 0.08
+        reason_codes.append("deliverable_work_contract")
+
+    if features.get("high_risk"):
+        scores["direct"] = max(0.0, scores["direct"] - 0.4)
+        scores["spawn_single"] += 0.08
+        scores["spawn_multi"] += 0.08
+        reason_codes.append("high_risk")
+
+    if features.get("requires_mutation"):
+        scores["direct"] = 0.0
+        scores["runner"] = max(0.0, scores["runner"] - 0.35)
+        scores["spawn_single"] += 0.18
+        reason_codes.append("mutation_work")
+
+    if features.get("requires_code_work"):
+        scores["direct"] = 0.0
+        scores["spawn_single"] += 0.14
+        reason_codes.append("code_work")
+
+    if features.get("requires_research"):
+        scores["direct"] = max(0.0, scores["direct"] - 0.18)
+        scores["spawn_single"] += 0.08
+        reason_codes.append("research_work")
+
+    if features.get("requires_writing"):
+        scores["runner"] = max(0.0, scores["runner"] - 0.18)
+        scores["spawn_single"] += 0.08
+        reason_codes.append("writing_work")
+
+    if features.get("multi_step"):
+        scores["spawn_single"] += 0.06
+        reason_codes.append("multi_step")
+
+    if features.get("parallelizable"):
+        scores["spawn_multi"] += 0.06
+        reason_codes.append("parallelizable")
+
+    route = max(scores, key=scores.get)
+    if work_contract_hint == "inspect_report":
+        route = "spawn_single"
+        reason_codes.append("prefer_spawn_single_over_soft_runner_bias")
+    if work_contract_hint == "coordinated_work" and infer_parallel_gain_band(features) == "medium":
+        route = "spawn_single"
+        reason_codes.append("prefer_spawn_single_over_weak_multi_bias")
+    if work_contract_hint == "answer_now" and not direct_contract_candidate(features):
+        route = "spawn_single"
+        reason_codes.append("direct_contract_veto_to_spawn_single")
+
+    ordered_scores = sorted(scores.values(), reverse=True)
+    top_score = ordered_scores[0] if ordered_scores else 0.0
+    second_score = ordered_scores[1] if len(ordered_scores) > 1 else 0.0
+    confidence = round(min(1.0, top_score), 3)
+    score_margin = round(top_score - second_score, 3)
+    return route, {key: round(value, 3) for key, value in scores.items()}, reason_codes, max(score_margin, 0.0)
+
+
+def infer_work_type_hint(features: dict, route: str, work_contract_hint: str = "") -> str:
     if route == "runner":
         return "ops"
+    if work_contract_hint == "inspect_report":
+        return "review" if features["verify_hits"] > 0 else "research"
     if features["verify_hits"] > 0 and not features["requires_mutation"]:
         return "review"
     if features["requires_mutation"] or features["requires_code_work"]:
@@ -747,8 +911,10 @@ def infer_work_type_hint(features: dict, route: str) -> str:
     return "research"
 
 
-def infer_phase_hint(features: dict, route: str, work_type: str) -> str:
+def infer_phase_hint(features: dict, route: str, work_type: str, work_contract_hint: str = "") -> str:
     if route == "runner":
+        return "inspect"
+    if work_contract_hint == "inspect_report" and work_type == "research":
         return "inspect"
     if work_type == "review":
         return "verify"
@@ -848,7 +1014,7 @@ def choose_semantic_model_hint() -> str:
     return "minimax-portal/MiniMax-M2.7-highspeed"
 
 
-def should_request_semantic_review(features: dict, scores: dict, route: str) -> tuple[bool, float, str]:
+def should_request_semantic_review(features: dict, scores: dict, route: str, work_contract_hint: str) -> tuple[bool, float, str]:
     ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     if len(ordered) < 2:
         return False, 1.0, ""
@@ -861,6 +1027,13 @@ def should_request_semantic_review(features: dict, scores: dict, route: str) -> 
 
     if features["requires_mutation"] and route == "runner":
         return True, margin, "mutation_vs_runner"
+
+    if work_contract_hint == "inspect_report" and not features.get("hard_runner_candidate"):
+        if features["requires_research"] or features["requires_writing"] or features["semantic_ambiguity_hits"] > 0:
+            return True, margin, "inspect_report_boundary"
+
+    if work_contract_hint == "coordinated_work" and infer_parallel_gain_band(features) == "medium":
+        return True, margin, "single_vs_multi_boundary"
 
     if features["semantic_ambiguity_hits"] > 0 and margin < 0.55:
         return True, margin, "ambiguous_task_shape"
@@ -902,129 +1075,30 @@ def infer_route(task: str, command: str = "") -> dict:
     enabled_packs = normalize_enabled_language_packs(runtime_cfg)
     features = extract_features(task, command, runtime_cfg=runtime_cfg)
 
-    direct_score = 0.0
-    runner_score = 0.0
-    spawn_single_score = 0.0
-    spawn_multi_score = 0.0
-    reason_codes: list[str] = []
-
     hard_route, hard_reasons = hard_gate_route(features, runtime_cfg=runtime_cfg)
     if hard_route:
         route = hard_route
+        work_contract_hint = infer_work_contract_hint(features, route=hard_route)
         scores = {"direct": 0.0, "runner": 0.0, "spawn_single": 0.0, "spawn_multi": 0.0}
         scores[route] = 1.0
-        reason_codes.extend(hard_reasons)
-    else:
-        if features["simple_direct_candidate"]:
-            direct_score += 0.9
-            reason_codes.append("simple_direct_candidate")
-
-        if not features["requires_tools"] and features["task_length"] <= 120 and features["estimated_steps"] <= 2:
-            direct_score += 0.6
-            reason_codes.append("small_context_task")
-
-        if features["external_lookup_only"] and features["estimated_steps"] <= 2:
-            direct_score += 0.5
-            reason_codes.append("single_round_lookup")
-
-        if features["requires_tools"]:
-            runner_score += 0.7
-            spawn_single_score += 0.15
-            reason_codes.append("tool_needed")
-
-        if features["requires_tools"] and (
-            features["runner_negative_hits"] > 0
-            or features["simple_hits"] > 0
-            or features["summary_output_hits"] > 0
-            or features["requires_writing"]
-        ):
-            runner_score -= 0.55
-            spawn_single_score += 0.45
-            reason_codes.append("tool_plus_reasoning_or_writing")
-
-        if features["requires_mutation"]:
-            runner_score -= 0.8
-            spawn_single_score += 1.15
-            spawn_multi_score += 0.1
-            reason_codes.append("mutation_work")
-
-        if features["local_state_hits"] > 0:
-            runner_score += 0.8
-            reason_codes.append("local_state_inspection")
-
-        if features["requires_code_work"]:
-            spawn_single_score += 1.0
-            reason_codes.append("code_work")
-
-        if features["requires_research"]:
-            spawn_single_score += 0.7
-            reason_codes.append("research_work")
-
-        if features["requires_writing"]:
-            spawn_single_score += 0.3
-            reason_codes.append("writing_work")
-
-        if features["multi_step"]:
-            spawn_single_score += 0.55
-            reason_codes.append("multi_step")
-
-        if features["parallelizable"]:
-            spawn_multi_score += 0.95
-            reason_codes.append("parallelizable")
-
-        if features["parallelizable"] and features["estimated_steps"] >= 3:
-            spawn_multi_score += 0.8
-            reason_codes.append("parallelizable_staged_work")
-
-        if features["high_risk"]:
-            spawn_single_score += 0.65
-            spawn_multi_score += 0.35
-            reason_codes.append("high_risk")
-
-        if features["verify_hits"] > 0 and (features["requires_code_work"] or features["requires_research"]):
-            spawn_multi_score += 0.45
-            reason_codes.append("verification_after_work")
-
-        if features["requires_tools"] and (features["requires_code_work"] or features["requires_research"]):
-            runner_score -= 0.4
-            spawn_single_score += 0.4
-            reason_codes.append("tool_plus_reasoning")
-
-        if features["local_state_hits"] > 0 and features["requires_mutation"]:
-            runner_score -= 0.6
-            spawn_single_score += 0.45
-            reason_codes.append("local_change_not_runner")
-
-        if features["cost_sensitive_hits"] > 0 and features["requires_tools"] and not features["requires_code_work"]:
-            runner_score += 0.1
-            reason_codes.append("cost_sensitive_fast_path")
-
-        scores = {
-            "direct": round(direct_score, 3),
-            "runner": round(runner_score, 3),
-            "spawn_single": round(spawn_single_score, 3),
-            "spawn_multi": round(spawn_multi_score, 3),
-        }
-
-        route = max(scores, key=scores.get)
-        confidence = round(min(1.0, max(scores.values()) / 2.0), 3)
-
-        if route == "direct" and scores["spawn_single"] >= 0.9:
-            route = "spawn_single"
-            reason_codes.append("prefer_stability_over_ambiguous_direct")
-        elif route == "runner" and scores["spawn_single"] >= 0.95 and features["requires_research"]:
-            route = "spawn_single"
-            reason_codes.append("prefer_research_isolation_over_runner")
-    if hard_route:
+        reason_codes = [*hard_reasons, f"work_contract:{work_contract_hint}"]
+        score_margin = 1.0
         confidence = 0.92 if route in ("runner", "direct") else 0.88
+    else:
+        work_contract_hint = infer_work_contract_hint(features)
+        route, scores, reason_codes, score_margin = contract_driven_route_bias(features, work_contract_hint)
+        confidence = round(min(1.0, max(scores.values())), 3)
 
-    needs_semantic_review, score_margin, semantic_reason = should_request_semantic_review(features, scores, route)
+    needs_semantic_review, score_margin, semantic_reason = should_request_semantic_review(features, scores, route, work_contract_hint)
     semantic_model_hint = choose_semantic_model_hint() if needs_semantic_review else ""
 
-    work_type_hint = infer_work_type_hint(features, route)
-    phase_hint = infer_phase_hint(features, route, work_type_hint)
+    work_type_hint = infer_work_type_hint(features, route, work_contract_hint)
+    phase_hint = infer_phase_hint(features, route, work_type_hint, work_contract_hint)
     worker_pool_hint = taxonomy_infer_worker_pool(route, work_type_hint)
     model_band_hint = infer_model_band_hint(features, route, work_type_hint)
+    parallel_gain_band = infer_parallel_gain_band(features)
+    needs_durable_runtime = route != "direct" or work_contract_hint in {"deliverable_work", "coordinated_work"}
+    needs_artifact = work_contract_hint in {"inspect_report", "deliverable_work", "coordinated_work"}
     should_wait = route == "runner"
     wait_timeout_seconds = 0
     if route == "runner":
@@ -1041,10 +1115,14 @@ def infer_route(task: str, command: str = "") -> dict:
         "scores": scores,
         "features": features,
         "task_class": infer_task_class(features, route),
+        "work_contract_hint": work_contract_hint,
         "worker_pool_hint": worker_pool_hint,
         "work_type_hint": work_type_hint,
         "phase_hint": phase_hint,
         "model_band_hint": model_band_hint,
+        "parallel_gain_band": parallel_gain_band,
+        "needs_durable_runtime": needs_durable_runtime,
+        "needs_artifact": needs_artifact,
         "expected_latency_ms": expected_latency_ms(route, features),
         "expected_cost_band": expected_cost_band(route, features),
         "context_growth_band": features["context_growth"],

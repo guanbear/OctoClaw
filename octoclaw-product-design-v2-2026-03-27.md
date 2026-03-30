@@ -1572,6 +1572,26 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - 重写 lane 语义
 - 继续拆旧 heuristics 残留
 
+#### 12.0.4 需要直接重写的内核
+
+如果按“这是重构，不是兼容升级”的标准继续推进，下面几块不应再只是微调，而应直接按新方法论重写：
+
+- route kernel
+- model policy kernel
+- resolve-model 入口
+- spawn template / prompt contract
+- budget / cost accounting core
+
+这些模块的共同问题是：
+
+- 仍然残留旧的“语义分类器”思维
+- 仍然夹杂旧 role / tier / mode 词汇
+- 还没有完全接受 `workflow-first / policy-first / contract-first`
+
+因此后续路线不是“尽量复用一切”，而是：
+
+> **保留 runtime truth 地基，重写 route / model / config / template 这些旧内核。**
+
 ### 12.1 第一段：把 delegated runtime truth 做硬
 
 目标：
@@ -1596,7 +1616,68 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - agent 死掉后任务永远卡住
 - Slack/WebChat/thread follow-up 串线
 
-### 12.2 第二段：把 artifact 和上下文工程做实
+### 12.2 第二段：重写 route / model / config 内核
+
+目标：
+
+- 让 OctoClaw 的决策内核和新方法论真正一致
+- 让 `hard_runner_only` 收缩成真正的唯一硬前置 gate
+- 让主脑、worker、选模、配置都使用同一套执行合同语言
+
+具体包括：
+
+5. Route Kernel Rewrite
+   - `octoclaw_route.py` 不再充当全量轻量路由器
+   - 只保留：
+     - `runner` hard gate
+     - `work_contract_hint`
+     - risk / parallel_gain / needs_artifact / needs_durable_runtime 等 feature extraction
+     - 弱 `system_preferred_route` bias
+   - `direct / spawn_single / spawn_multi` 的最终决定更明确地下沉到 policy merge
+   当前状态：已启动，第一拍已把 route 收缩成 `runner` hard gate + `work_contract_hint` + weak route bias
+
+6. Model Policy Kernel Rewrite
+   - 彻底去掉旧 `fix / test / scout / analyze / power` 角色词汇
+   - 选模输入统一改成：
+     - `worker_pool`
+     - `work_contract`
+     - `phase`
+     - `profile`
+     - `risk`
+     - `latency target`
+   - main lane 明确走 capability floor，而不是平衡分数竞争
+
+7. Resolve-Model Rewrite
+   - 不再保留旧 router 风格的第二套复杂度评分器
+   - 简化成 policy engine：
+     - capability floor
+     - worker_pool/profile/phase/route/contract
+     - health / quota / fallback
+
+8. Config Vocabulary Rewrite
+   - `octopus_config.py` 中的旧 role / tier / mode 词汇继续拆除
+   - runtime 配置、health penalty、policy tuning 全部收敛到新 vocabulary
+
+9. Spawn Template / Prompt Contract Rewrite
+   - 彻底重写 spawn template 和相关说明文案
+   - 不再继续修补旧 `source=octopus`、旧 mode、旧 prompt 习惯
+   - 明确围绕：
+     - objective
+     - boundary
+     - allowed tools
+     - expected artifact
+     - checklist delta
+     - worker_result contract
+
+10. Budget / Cost Core Rewrite
+    - 废掉旧 `tier` 成本核
+    - 改成基于实际 selected model / model band / worker policy 的成本记账
+
+这一段的核心判断是：
+
+> **OctoClaw 后续不再把 route 当“任务分类”，而是当“执行合同选择”；不再把选模当旧路由器延长线，而是当 policy engine。**
+
+### 12.3 第三段：把 artifact 和上下文工程做实
 
 目标：
 
@@ -1605,14 +1686,14 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 再做：
 
-5. artifact index + retrieval
+11. artifact index + retrieval
    当前状态：已完成基础落地
-6. todo/checklist persistence
+12. todo/checklist persistence
    当前状态：已完成基础落地
-7. context pack / memory compaction for long-running follow-ups
-8. stronger brief/result shaping and retrieval helpers
+13. context pack / memory compaction for long-running follow-ups
+14. stronger brief/result shaping and retrieval helpers
 
-### 12.3 第三段：把展示层产品化
+### 12.4 第四段：把展示层产品化
 
 目标：
 
@@ -1620,12 +1701,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 继续做：
 
-9. task graph and event timeline
-10. artifact explorer
-11. IM capability-matrix renderer
-12. replay and policy diff surfaces
+15. task graph and event timeline
+16. artifact explorer
+17. IM capability-matrix renderer
+18. replay and policy diff surfaces
 
-### 12.4 第四段：把策略闭环做深
+### 12.5 第五段：把策略闭环做深
 
 目标：
 
@@ -1633,12 +1714,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 最后做：
 
-13. tool evaluation and state-machine evals
-14. route and policy replay calibration
-15. context-budget-aware compaction policies
-16. heavier protocol only where data proves it is worth it
+19. tool evaluation and state-machine evals
+20. route and policy replay calibration
+21. context-budget-aware compaction policies
+22. heavier protocol only where data proves it is worth it
 
-### 12.5 文档真相源
+### 12.6 文档真相源
 
 后续开发不应只靠聊天记录推进，而应以这几份文档为真相源：
 
@@ -1654,7 +1735,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - DeerFlow / ClawTeam 笔记负责源码级借鉴点
 - 状态机文档负责 delegated runtime truth 的修复方向
 
-### 12.6 和原 Phase 的对应关系
+### 12.7 和原 Phase 的对应关系
 
 如果仍按原 Phase 记法理解，接下来最主要的推进重心是：
 

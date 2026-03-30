@@ -701,6 +701,7 @@ def build_decision(
         "route_decision": {
             "system_preferred_route": base_route,
             "route": route,
+            "work_contract_hint": str(route_meta.get("work_contract_hint", "") or ""),
             "dispatch_required": dispatch_required,
             "confidence": route_meta.get("confidence", 0.0),
             "reason": merged_reason_codes[0] if merged_reason_codes else route_meta.get("reason", ""),
@@ -717,6 +718,9 @@ def build_decision(
             "expected_latency_ms": int(route_meta.get("expected_latency_ms", 0) or 0),
             "expected_cost_band": str(route_meta.get("expected_cost_band", "") or ""),
             "context_growth_band": str(route_meta.get("context_growth_band", "") or ""),
+            "parallel_gain_band": str(route_meta.get("parallel_gain_band", "") or ""),
+            "artifact_required": bool(route_meta.get("needs_artifact", False)),
+            "durable_runtime_required": bool(route_meta.get("needs_durable_runtime", False)),
         },
         "model_policy": {
             "worker_pool": worker_pool,

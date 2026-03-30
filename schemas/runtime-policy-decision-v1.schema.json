@@ -48,6 +48,7 @@
       "required": [
         "route",
         "system_preferred_route",
+        "work_contract_hint",
         "dispatch_required",
         "confidence",
         "reason",
@@ -63,7 +64,10 @@
         "wait_timeout_seconds",
         "expected_latency_ms",
         "expected_cost_band",
-        "context_growth_band"
+        "context_growth_band",
+        "parallel_gain_band",
+        "artifact_required",
+        "durable_runtime_required"
       ],
       "properties": {
         "route": {
@@ -73,6 +77,10 @@
         "system_preferred_route": {
           "type": "string",
           "enum": ["direct", "runner", "spawn_single", "spawn_multi"]
+        },
+        "work_contract_hint": {
+          "type": "string",
+          "enum": ["answer_now", "inspect_report", "deliverable_work", "coordinated_work"]
         },
         "dispatch_required": { "type": "boolean" },
         "confidence": { "type": "number" },
@@ -104,7 +112,10 @@
         "wait_timeout_seconds": { "type": "integer" },
         "expected_latency_ms": { "type": "integer" },
         "expected_cost_band": { "type": "string" },
-        "context_growth_band": { "type": "string" }
+        "context_growth_band": { "type": "string" },
+        "parallel_gain_band": { "type": "string" },
+        "artifact_required": { "type": "boolean" },
+        "durable_runtime_required": { "type": "boolean" }
       }
     },
     "model_policy": {

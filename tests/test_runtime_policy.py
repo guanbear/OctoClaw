@@ -190,17 +190,25 @@ class RuntimePolicyTests(unittest.TestCase):
         )
         self.assertEqual(payload["route_language_packs"], ["zh", "en", "es"])
         self.assertEqual(payload["system_preferred_route"], "spawn_single")
+        self.assertEqual(payload["work_contract_hint"], "deliverable_work")
         self.assertTrue(payload["features"]["requires_research"])
         self.assertTrue(payload["features"]["requires_writing"])
 
     def test_route_outputs_new_taxonomy_hints(self) -> None:
         payload = self.run_route("调研三个兼容方案并写一版简短建议")
+        self.assertEqual(payload["work_contract_hint"], "deliverable_work")
         self.assertEqual(payload["worker_pool_hint"], "octoclaw-research")
         self.assertEqual(payload["work_type_hint"], "research")
         self.assertEqual(payload["phase_hint"], "report")
         self.assertEqual(payload["model_band_hint"], "normal")
         self.assertNotIn("role_hint", payload)
         self.assertNotIn("tier_hint", payload)
+
+    def test_inspect_plus_summary_prefers_spawn_single_over_soft_runner_bias(self) -> None:
+        payload = self.run_route("检查一下 nginx 日志里最近有什么异常，并给我一个简短总结")
+        self.assertEqual(payload["work_contract_hint"], "deliverable_work")
+        self.assertEqual(payload["system_preferred_route"], "spawn_single")
+        self.assertNotEqual(payload["system_preferred_route"], "runner")
 
     def test_runner_policy_uses_workspace_local_model_policy(self) -> None:
         payload = self.run_policy(
