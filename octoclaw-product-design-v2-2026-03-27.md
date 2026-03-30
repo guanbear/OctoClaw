@@ -47,16 +47,66 @@ OctoClaw 的目标不是“会开很多 agent”，而是：
 
 > **OctoClaw 不是 worker 本身，而是 worker 的调度系统。**
 
-### 2.3 产品方法论：轻量 harness，重型协议按需开启
+### 2.3 产品方法论
 
-OctoClaw 可以借鉴 harness engineering，但不能把自己做成一个默认很重的 runtime。
+OctoClaw 的方法论不是“造一个更大的 Agent 框架”，而是把多 Agent 的关键工程能力收敛成一套可控、可解释、可运维的系统。
 
-正确方向是：
+它的核心方法论应该明确成下面几条。
 
-- 默认全局启用 **lightweight harness**
-- 只在复杂任务上叠加 **heavy profile / heavy protocol**
+#### 2.3.1 workflow-first，agent-second
 
-这里的 lightweight harness 指的是：
+默认先问：
+
+- 这件事能不能在当前链路同步完成
+- 能不能交给边界清楚的 runner workflow
+- 是否真的需要独立 worker
+- 是否真的值得多 worker 协调
+
+也就是说：
+
+- 先做清晰 workflow
+- 再按需上 agent
+- 多 agent 不是默认答案
+
+#### 2.3.2 policy-first，而不是 prompt-first
+
+委派、review、选模、执行面切换，必须首先是系统行为。
+
+模型可以辅助判断，但不能变成唯一裁决者。
+
+这意味着 OctoClaw 的核心是：
+
+- runtime policy
+- route / dispatch
+- model policy
+- review gate
+- explainable decision
+
+而不是依赖主脑“记不记得该派任务”。
+
+#### 2.3.3 context-engineered harness
+
+OctoClaw 应该把 context engineering 当成产品主线，而不是 prompt 微调。
+
+真正重要的是：
+
+- brief 里放什么
+- summary 回什么
+- 什么进入主链
+- 什么落 artifact
+- follow-up 时带什么 compact context
+
+所以 OctoClaw 的默认 harness 应该服务于：
+
+- 降低主上下文膨胀
+- 让长任务跨 session 也能续上
+- 让委派结果可回收、可复用、可检索
+
+#### 2.3.4 light by default，heavy on demand
+
+OctoClaw 可以借鉴 harness engineering，但不能默认把所有任务做成重型 runtime。
+
+默认全局启用的应该是 lightweight harness：
 
 - runtime policy
 - route / dispatch
@@ -65,51 +115,67 @@ OctoClaw 可以借鉴 harness engineering，但不能把自己做成一个默认
 - task / inbox / board
 - explainable decision
 
-它的目的不是增加层数，而是：
-
-- 减少主上下文膨胀
-- 避免 prompt 自觉式委派
-- 让决策和收作业更稳定
-
-heavy 部分只在复杂任务上启用，例如：
+heavy protocol 只在复杂任务上叠加，例如：
 
 - checkpoint summary
 - 更强的 artifact-first 约束
-- 更长超时
+- 更长 timeout
 - 更严格的 review / merge gate
 - 更强的多 worker 协作协议
 
-所以 OctoClaw 的方法论不是：
+所以正确方向不是：
 
 - “所有请求都上重型 harness”
 
 而是：
 
-> **用轻量 harness 提升效率和降本，再按需叠加重型执行协议。**
+> **先用轻量 harness 提升效率和降本，再按需叠加重型执行协议。**
 
-### 2.4 官方方法论校准
+#### 2.3.5 artifact-first，event-first，state-first
 
-结合 Anthropic 官方工程文章和 Claude Cookbooks 的最新结论，OctoClaw 当前方向不需要推翻，但需要更明确地校准优先级。
+OctoClaw 不应把执行真相藏在聊天 transcript 和主脑记忆里。
 
-校准后的结论是：
+真正的一等公民应该是：
 
-- 保持 `workflow-first`
-- 保持 `policy-first`
-- 多 agent 继续按需开启，不默认放大
-- 把 `context engineering / tool ergonomics / long-running harness / eval discipline` 提到比“继续扩多 agent 拓扑”更高的位置
+- task state
+- delegated event stream
+- artifacts
+- thread/session continuity
+- review and delivery readiness
 
-这意味着 OctoClaw 仍然应坚持：
+长结果、日志、diff、研究材料优先落 artifact；
+执行过程优先落 event；
+状态优先落结构化 truth，而不是让外层展示面临时猜。
 
-- 自己做调度脑、成本脑、展示脑
-- 不变成通用 agent framework
-- 不把所有复杂任务都升级成 research-style multi-agent execution
+#### 2.3.6 observable and evaluable by default
 
-相关笔记见：
+OctoClaw 不只是调度，还要能解释、回放、评估和复盘。
 
-- [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
-- [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+所以默认就应该有：
 
-主要官方参考包括：
+- replay
+- route/model/review reasons
+- patrol and failure surfaces
+- state-machine visibility
+- small eval loops
+
+没有这些，系统只会越来越复杂，不会越来越稳。
+
+### 2.4 借鉴来源与边界
+
+OctoClaw 的设计确实参考了外部系统，但借的是工程方法，不是整套产品形态。
+
+#### 2.4.1 Anthropic：借方法论，不借产品壳
+
+Anthropic 官方文章和 Claude Cookbooks 给 OctoClaw 的主要启发是：
+
+- `workflow-first`
+- `context engineering`
+- `tool ergonomics`
+- `long-running harness`
+- `eval / postmortem discipline`
+
+最关键的参考包括：
 
 - [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
 - [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
@@ -118,6 +184,53 @@ heavy 部分只在复杂任务上启用，例如：
 - [Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)
 - [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
 - [Claude Cookbooks](https://platform.claude.com/cookbooks)
+
+Anthropic 对 OctoClaw 的真正影响应该是：
+
+- 让 OctoClaw 更像一个可靠 harness
+- 而不是让 OctoClaw 变成另一个“通用 agent SDK”
+
+#### 2.4.2 DeerFlow：借显式状态、事件、artifact 思想
+
+DeerFlow 最值得借的是：
+
+- explicit thread state
+- delegated event stream
+- artifact-first delivery
+- thread/topic binding
+- todo persistence across context loss
+
+但不应照搬：
+
+- 整套 LangGraph 栈
+- DeerFlow 自己的完整产品边界
+
+DeerFlow 对 OctoClaw 的价值，是帮助它把 runtime truth 做硬。
+
+#### 2.4.3 ClawTeam：借运行面，不借策略脑
+
+ClawTeam 最值得借的是：
+
+- task truth
+- spawn liveness
+- session persistence
+- board / inbox / tmux workbench
+
+但不应让 ClawTeam 反过来主导：
+
+- route
+- model policy
+- review policy
+- budget policy
+
+所以结论很简单：
+
+> **ClawTeam 是运行面，DeerFlow 是状态/事件参考，Anthropic 是方法论来源，而 OctoClaw 自己负责把它们产品化。**
+
+相关笔记见：
+
+- [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
+- [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
 
 ---
 
