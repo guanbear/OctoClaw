@@ -11,9 +11,9 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import infer_session_origin
 
 try:
-    from task_events import session_binding_from_route
+    from task_events import session_binding_from_route, task_event_snapshot
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.task_events import session_binding_from_route
+    from lib.task_events import session_binding_from_route, task_event_snapshot
 
 try:
     from worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
@@ -24,6 +24,11 @@ try:
     from runtime_protocol import normalize_result_status, normalize_worker_result
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.runtime_protocol import normalize_result_status, normalize_worker_result
+
+try:
+    from runtime_coordination import checklist_snapshot, ownership_snapshot, session_resume_snapshot
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_coordination import checklist_snapshot, ownership_snapshot, session_resume_snapshot
 
 
 TASK_RECORD_SCHEMA_VERSION = "octoclaw.runtime_task.record/v1"
@@ -558,6 +563,18 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
         artifacts["worker_result"] = worker_result
     normalized.update(task_state_model({**normalized, "artifacts": artifacts}))
     normalized["artifacts"] = artifacts
+    normalized["ownership"] = ownership_snapshot(normalized)
+    normalized["session_resume"] = session_resume_snapshot(normalized)
+    normalized["checklist"] = checklist_snapshot(normalized)
+    event_snapshot = task_event_snapshot(normalized["id"]) if normalized["id"] else {}
+    normalized["task_event_summary"] = {
+        "task_event_count": int(event_snapshot.get("task_event_count", 0) or 0),
+        "kind_counts": event_snapshot.get("kind_counts", {}) if isinstance(event_snapshot.get("kind_counts", {}), dict) else {},
+        "degraded_event_count": int(event_snapshot.get("degraded_event_count", 0) or 0),
+        "latest_kind": _normalized_str(event_snapshot.get("latest_kind")),
+        "latest_time": _normalized_str(event_snapshot.get("latest_time")),
+    }
+    normalized["task_events_preview"] = event_snapshot.get("preview", []) if isinstance(event_snapshot.get("preview", []), list) else []
     return normalized
 
 

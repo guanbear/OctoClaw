@@ -14,6 +14,23 @@ TASK_EVENTS_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "task-events.jsonl"
 SESSION_THREAD_MAP_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "session-thread-map.json")
 TASK_EVENT_SCHEMA_VERSION = "octoclaw.task_event/v1"
 SESSION_THREAD_MAP_SCHEMA_VERSION = "octoclaw.session_thread_map/v1"
+EVENT_IMPORTANCE = {
+    "failed": "high",
+    "task_failed": "high",
+    "source_blocked": "high",
+    "task_blocked": "high",
+    "handoff_ready": "high",
+    "user_notified": "high",
+    "artifact_ready": "normal",
+    "task_completed": "normal",
+    "result_ready": "normal",
+    "task_started": "normal",
+    "task_running": "normal",
+    "checkpoint": "normal",
+    "progress_note": "low",
+    "route_selected": "low",
+    "dispatch_started": "low",
+}
 
 
 def now_iso() -> str:
@@ -31,6 +48,15 @@ def _merge_non_empty(current: dict[str, Any], incoming: dict[str, Any]) -> dict[
             continue
         merged[key] = value
     return merged
+
+
+def _append_unique(items: list[str], value: str) -> list[str]:
+    text = _text(value)
+    if not text:
+        return items
+    if text not in items:
+        items.append(text)
+    return items
 
 
 def _strip_agent_prefix(session_key: str) -> str:
@@ -102,6 +128,7 @@ def session_binding_from_route(session_key: str, route: dict[str, Any] | None = 
     thread_key = ""
     if origin and target:
         thread_key = f"{origin}:{target}:{thread_id or 'root'}"
+    binding_key = f"{origin}:{target}" if origin and target else ""
     return {
         "session_key": _text(session_key),
         "origin": origin,
@@ -109,6 +136,7 @@ def session_binding_from_route(session_key: str, route: dict[str, Any] | None = 
         "target_kind": target_kind,
         "thread_id": thread_id,
         "thread_key": thread_key,
+        "binding_key": binding_key,
         "is_thread_bound": bool(thread_id),
     }
 
@@ -130,6 +158,8 @@ def register_session_binding(
     source: str = "",
     message_id: str = "",
     action: str = "",
+    thread_state: str = "",
+    thread_title: str = "",
     path: str = SESSION_THREAD_MAP_FILE,
 ) -> dict[str, Any]:
     key = _text(session_key)
@@ -147,6 +177,8 @@ def register_session_binding(
         "worker_pool": _text(task_payload.get("worker_pool")),
         "message_id": _text(message_id),
         "last_action": _text(action),
+        "thread_state": _text(thread_state) or ("closed" if _text(action) in {"close", "archive"} else "active"),
+        "thread_title": _text(thread_title) or _text(task_payload.get("title")) or _text(task_payload.get("task_description")),
     }
 
     try:
@@ -155,10 +187,33 @@ def register_session_binding(
         threads = payload.get("threads", {}) if isinstance(payload.get("threads", {}), dict) else {}
 
         merged_binding = _merge_non_empty(bindings.get(key, {}), base)
+        task_ids = bindings.get(key, {}).get("task_ids", [])
+        if not isinstance(task_ids, list):
+            task_ids = []
+        merged_binding["task_ids"] = _append_unique(task_ids, base.get("task_id", ""))
+        message_ids = bindings.get(key, {}).get("message_ids", [])
+        if not isinstance(message_ids, list):
+            message_ids = []
+        merged_binding["message_ids"] = _append_unique(message_ids, base.get("message_id", ""))
+        merged_binding["last_task_id"] = _text(base.get("task_id"))
+        merged_binding["last_message_id"] = _text(base.get("message_id"))
+        if merged_binding.get("thread_state") == "closed" and not _text(merged_binding.get("closed_at")):
+            merged_binding["closed_at"] = merged_binding.get("updated_at", now_iso())
         bindings[key] = merged_binding
         thread_key = _text(merged_binding.get("thread_key"))
         if thread_key:
-            threads[thread_key] = _merge_non_empty(threads.get(thread_key, {}), {**merged_binding, "session_key": key})
+            thread_entry = _merge_non_empty(threads.get(thread_key, {}), {**merged_binding, "session_key": key})
+            thread_task_ids = thread_entry.get("task_ids", [])
+            if not isinstance(thread_task_ids, list):
+                thread_task_ids = []
+            thread_entry["task_ids"] = _append_unique(thread_task_ids, base.get("task_id", ""))
+            thread_message_ids = thread_entry.get("message_ids", [])
+            if not isinstance(thread_message_ids, list):
+                thread_message_ids = []
+            thread_entry["message_ids"] = _append_unique(thread_message_ids, base.get("message_id", ""))
+            if thread_entry.get("thread_state") == "closed" and not _text(thread_entry.get("closed_at")):
+                thread_entry["closed_at"] = merged_binding.get("updated_at", now_iso())
+            threads[thread_key] = thread_entry
 
         payload["schema_version"] = SESSION_THREAD_MAP_SCHEMA_VERSION
         payload["updated_at"] = merged_binding.get("updated_at", now_iso())
@@ -190,6 +245,12 @@ def task_event_payload(task: dict[str, Any], kind: str, *, message: str = "", ex
         "lifecycle_state": _text(raw_task.get("lifecycle_state")),
         "outcome_state": _text(raw_task.get("outcome_state")),
         "handoff_state": _text(raw_task.get("handoff_state")),
+        "ownership_state": _text(((raw_task.get("ownership") or {}) if isinstance(raw_task.get("ownership"), dict) else {}).get("state")),
+        "owner_id": _text(((raw_task.get("ownership") or {}) if isinstance(raw_task.get("ownership"), dict) else {}).get("owner_id")),
+        "resume_state": _text(((raw_task.get("session_resume") or {}) if isinstance(raw_task.get("session_resume"), dict) else {}).get("resume_state")),
+        "resume_key": _text(((raw_task.get("session_resume") or {}) if isinstance(raw_task.get("session_resume"), dict) else {}).get("resume_key")),
+        "checklist_open_count": ((raw_task.get("checklist") or {}) if isinstance(raw_task.get("checklist"), dict) else {}).get("open_count", 0),
+        "artifact_count": len(((raw_task.get("artifacts") or {}) if isinstance(raw_task.get("artifacts"), dict) else {})),
         "deliverable_kind": _text(raw_task.get("deliverable_kind")),
         "observability_health": _text(raw_task.get("observability_health")),
         "summary": _text(raw_task.get("summary")),
@@ -263,4 +324,43 @@ def summarize_task_events(events: list[dict[str, Any]]) -> dict[str, Any]:
         "session_count": len(sessions),
         "thread_count": len(thread_keys),
         "degraded_event_count": degraded,
+    }
+
+
+def task_events_for_task(task_id: str, *, path: str = TASK_EVENTS_FILE, limit: int = 200) -> list[dict[str, Any]]:
+    key = _text(task_id)
+    if not key:
+        return []
+    events = load_task_events(path, limit=limit)
+    return [event for event in events if isinstance(event, dict) and _text(event.get("task_id")) == key]
+
+
+def task_event_snapshot(
+    task_id: str,
+    *,
+    path: str = TASK_EVENTS_FILE,
+    limit: int = 200,
+    preview_limit: int = 8,
+) -> dict[str, Any]:
+    events = task_events_for_task(task_id, path=path, limit=limit)
+    summary = summarize_task_events(events)
+    preview: list[dict[str, Any]] = []
+    for event in events[-max(0, preview_limit) :]:
+        kind = _text(event.get("kind")) or "unknown"
+        preview.append(
+            {
+                "time": _text(event.get("time")),
+                "kind": kind,
+                "message": _text(event.get("message")),
+                "importance": EVENT_IMPORTANCE.get(kind, "normal"),
+            }
+        )
+    latest = events[-1] if events else {}
+    return {
+        "task_event_count": summary.get("task_event_count", 0),
+        "kind_counts": summary.get("kind_counts", {}),
+        "degraded_event_count": summary.get("degraded_event_count", 0),
+        "latest_kind": _text(latest.get("kind")),
+        "latest_time": _text(latest.get("time")),
+        "preview": preview,
     }

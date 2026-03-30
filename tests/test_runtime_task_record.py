@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from lib.runtime_task_record import TASK_RECORD_SCHEMA_VERSION, normalize_task_record
 
@@ -127,6 +128,35 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["agent_id"], "octo-worker-1")
         self.assertEqual(payload["agent_namespace"], "octoclaw")
         self.assertTrue(payload["managed_by_octoclaw"])
+
+    @patch("lib.runtime_task_record.task_event_snapshot")
+    def test_normalize_attaches_task_event_summary_and_preview(self, mock_snapshot) -> None:
+        mock_snapshot.return_value = {
+            "task_event_count": 2,
+            "kind_counts": {"checkpoint": 1, "handoff_ready": 1},
+            "degraded_event_count": 0,
+            "latest_kind": "handoff_ready",
+            "latest_time": "2026-03-29T09:12:38+00:00",
+            "preview": [
+                {"time": "2026-03-29T09:10:00+00:00", "kind": "checkpoint", "message": "checkpoint", "importance": "normal"},
+                {"time": "2026-03-29T09:12:38+00:00", "kind": "handoff_ready", "message": "ready", "importance": "high"},
+            ],
+        }
+        payload = normalize_task_record(
+            {
+                "id": "evented-1",
+                "status": "blocked",
+                "summary": "safe summary ready",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+            }
+        )
+
+        self.assertEqual(payload["task_event_summary"]["task_event_count"], 2)
+        self.assertEqual(payload["task_event_summary"]["latest_kind"], "handoff_ready")
+        self.assertEqual(len(payload["task_events_preview"]), 2)
+        self.assertEqual(payload["task_events_preview"][0]["kind"], "checkpoint")
 
     def test_normalize_final_blocked_result_tracks_handoff_readiness(self) -> None:
         payload = normalize_task_record(

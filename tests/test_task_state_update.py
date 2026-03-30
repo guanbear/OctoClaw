@@ -101,6 +101,61 @@ class TaskStateUpdateArchiveTests(unittest.TestCase):
             self.assertIn("safe blocked explanation", task["user_safe_summary"])
             self.assertTrue(task["completed_at"])
 
+    def test_event_command_appends_checkpoint_event_and_updates_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            env = {**os.environ, "WORKSPACE": str(workspace)}
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "upsert",
+                    "--id",
+                    "research-1",
+                    "--status",
+                    "running",
+                    "--summary",
+                    "gathering references",
+                    "--route",
+                    "spawn_single",
+                    "--runtime",
+                    "subagent",
+                    "--worker-pool",
+                    "octoclaw-research",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "event",
+                    "--id",
+                    "research-1",
+                    "--kind",
+                    "checkpoint",
+                    "--message",
+                    "first checkpoint ready",
+                    "--summary",
+                    "checkpoint summary",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            state = json.loads((workspace / "tmp" / "octopus" / "task-state.json").read_text(encoding="utf-8"))
+            task = state["tasks"][0]
+            self.assertEqual(task["summary"], "checkpoint summary")
+
+            events = (workspace / "tmp" / "octopus" / "task-events.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertTrue(any('"kind": "checkpoint"' in line for line in events))
+
 
 if __name__ == "__main__":
     unittest.main()

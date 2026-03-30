@@ -97,6 +97,36 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["lineage"]["completed_child_count"], 1)
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
 
+    def test_build_task_detail_prefers_task_event_preview(self) -> None:
+        detail = build_task_detail(
+            {
+                "id": "research-2",
+                "worker_pool": "octoclaw-research",
+                "status": "blocked",
+                "summary": "safe blocked handoff ready",
+                "route": "spawn_single",
+                "task_event_summary": {"task_event_count": 2, "latest_kind": "handoff_ready"},
+                "task_events_preview": [
+                    {
+                        "time": "2026-03-29T07:59:00+00:00",
+                        "kind": "checkpoint",
+                        "message": "collected the accessible references",
+                        "importance": "normal",
+                    },
+                    {
+                        "time": "2026-03-29T08:00:00+00:00",
+                        "kind": "handoff_ready",
+                        "message": "safe blocked handoff ready",
+                        "importance": "high",
+                    },
+                ],
+            },
+            now=self.now,
+        )
+
+        self.assertEqual([event["kind"] for event in detail["events"]], ["checkpoint", "handoff_ready"])
+        self.assertEqual(detail["task_event_summary"]["latest_kind"], "handoff_ready")
+
     def test_render_task_anchor_text_includes_commands(self) -> None:
         anchor = build_task_anchor(
             {

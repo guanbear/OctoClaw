@@ -56,7 +56,12 @@ def _normalize_task(task: dict[str, Any]) -> dict[str, Any]:
         from runtime_task_record import normalize_task_record
     except ModuleNotFoundError:  # pragma: no cover - package import path for tests
         from lib.runtime_task_record import normalize_task_record
-    return normalize_task_record(task)
+    normalized = normalize_task_record(task)
+    if isinstance(task.get("task_events_preview"), list):
+        normalized["task_events_preview"] = [event for event in task["task_events_preview"] if isinstance(event, dict)]
+    if isinstance(task.get("task_event_summary"), dict):
+        normalized["task_event_summary"] = dict(task["task_event_summary"])
+    return normalized
 
 
 def _compact(text: str, limit: int = 96) -> str:
@@ -446,51 +451,55 @@ def build_task_detail(
 
     children = [item for item in all_normalized if _text(item.get("parent_id")) == task_id or _text(item.get("id")) in child_ids]
     artifacts = _collect_artifacts(normalized)
+    preview_events = normalized.get("task_events_preview", []) if isinstance(normalized.get("task_events_preview", []), list) else []
     events: list[dict[str, Any]] = []
-    events.append(
-        {
-            "time": _text(normalized.get("updated_at") or normalized.get("completed_at") or normalized.get("started_at")),
-            "kind": "route_selected",
-            "message": f"{anchor['route']} via {anchor['worker_pool']}",
-            "importance": "normal",
-        }
-    )
-    if _text(state_model.get("handoff_state")).lower() in {"user_safe_ready", "delivered"}:
+    if preview_events:
+        events = [event for event in preview_events if isinstance(event, dict)]
+    else:
         events.append(
             {
-                "time": _text(normalized.get("handoff_ready_at") or normalized.get("completed_at") or normalized.get("updated_at")),
-                "kind": "handoff_ready",
-                "message": _text(normalized.get("user_safe_summary") or normalized.get("summary")),
-                "importance": "high",
-            }
-        )
-    elif _text(state_model.get("outcome_state")).lower() == "blocked":
-        events.append(
-            {
-                "time": _text(normalized.get("result_ready_at") or normalized.get("completed_at") or normalized.get("updated_at")),
-                "kind": "result_blocked",
-                "message": _text(normalized.get("blocked_reason") or normalized.get("summary")),
-                "importance": "high",
-            }
-        )
-    if normalized.get("review_required"):
-        events.append(
-            {
-                "time": _text(normalized.get("updated_at")),
-                "kind": "review_requested",
-                "message": "Review required",
-                "importance": "high",
-            }
-        )
-    if artifacts:
-        events.append(
-            {
-                "time": _text(normalized.get("updated_at") or normalized.get("completed_at")),
-                "kind": "artifact_ready",
-                "message": f"{len(artifacts)} artifact(s) available",
+                "time": _text(normalized.get("updated_at") or normalized.get("completed_at") or normalized.get("started_at")),
+                "kind": "route_selected",
+                "message": f"{anchor['route']} via {anchor['worker_pool']}",
                 "importance": "normal",
             }
         )
+        if _text(state_model.get("handoff_state")).lower() in {"user_safe_ready", "delivered"}:
+            events.append(
+                {
+                    "time": _text(normalized.get("handoff_ready_at") or normalized.get("completed_at") or normalized.get("updated_at")),
+                    "kind": "handoff_ready",
+                    "message": _text(normalized.get("user_safe_summary") or normalized.get("summary")),
+                    "importance": "high",
+                }
+            )
+        elif _text(state_model.get("outcome_state")).lower() == "blocked":
+            events.append(
+                {
+                    "time": _text(normalized.get("result_ready_at") or normalized.get("completed_at") or normalized.get("updated_at")),
+                    "kind": "result_blocked",
+                    "message": _text(normalized.get("blocked_reason") or normalized.get("summary")),
+                    "importance": "high",
+                }
+            )
+        if normalized.get("review_required"):
+            events.append(
+                {
+                    "time": _text(normalized.get("updated_at")),
+                    "kind": "review_requested",
+                    "message": "Review required",
+                    "importance": "high",
+                }
+            )
+        if artifacts:
+            events.append(
+                {
+                    "time": _text(normalized.get("updated_at") or normalized.get("completed_at")),
+                    "kind": "artifact_ready",
+                    "message": f"{len(artifacts)} artifact(s) available",
+                    "importance": "normal",
+                }
+            )
 
     return {
         "task_id": anchor["task_id"],
@@ -509,6 +518,7 @@ def build_task_detail(
         },
         "artifacts": artifacts,
         "events": events,
+        "task_event_summary": normalized.get("task_event_summary", {}),
         "anchor": anchor,
     }
 

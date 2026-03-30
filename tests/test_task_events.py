@@ -12,6 +12,7 @@ from lib.task_events import (
     load_task_events,
     register_session_binding,
     summarize_task_events,
+    task_event_snapshot,
 )
 
 
@@ -47,6 +48,10 @@ class TaskEventsTests(unittest.TestCase):
             self.assertEqual(summary["task_event_count"], 1)
             self.assertEqual(summary["session_count"], 1)
             self.assertEqual(summary["thread_count"], 1)
+            snapshot = task_event_snapshot("research-1", path=str(events_path))
+            self.assertEqual(snapshot["task_event_count"], 1)
+            self.assertEqual(snapshot["latest_kind"], "handoff_ready")
+            self.assertEqual(snapshot["preview"][0]["importance"], "high")
 
     def test_register_session_binding_persists_thread_index(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-session-map-") as tmpdir:

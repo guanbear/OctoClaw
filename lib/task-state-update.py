@@ -168,21 +168,43 @@ def _log_task_transition(record: dict, previous_status: str, *, anchor_result: d
     route = str(record.get("route", "") or "").strip()
     worker_pool = str(record.get("worker_pool", "") or "").strip()
     base_message = f"{route or 'task'} via {worker_pool or '?'}".strip()
+    artifact_paths: list[str] = []
+    report_path = str(record.get("report_path", "") or "").strip()
+    if report_path:
+        artifact_paths.append(report_path)
+    artifacts = record.get("artifacts", {}) if isinstance(record.get("artifacts", {}), dict) else {}
+    for key in ("report_path", "context_path"):
+        value = str(artifacts.get(key, "") or "").strip()
+        if value and value not in artifact_paths:
+            artifact_paths.append(value)
     try:
         if not previous:
             append_task_event(record, "route_selected", message=base_message)
         if current == "dispatched" and previous not in {"dispatched", "running"}:
             append_task_event(record, "dispatch_started", message=base_message)
         if current == "running" and previous != "running":
-            append_task_event(record, "worker_started", message=str(record.get("summary", "") or base_message))
+            append_task_event(record, "task_started", message=str(record.get("summary", "") or base_message))
+            append_task_event(record, "task_running", message=str(record.get("summary", "") or base_message))
         if current == "done" and previous != "done":
+            if artifact_paths:
+                append_task_event(record, "artifact_ready", message=f"{len(artifact_paths)} artifact(s) ready", extra={"artifact_paths": artifact_paths})
+            append_task_event(record, "task_completed", message=str(record.get("summary", "") or "task completed"))
             append_task_event(record, "result_ready", message=str(record.get("summary", "") or "task completed"))
         elif current == "blocked_final" and previous != "blocked_final":
+            if artifact_paths:
+                append_task_event(record, "artifact_ready", message=f"{len(artifact_paths)} artifact(s) ready", extra={"artifact_paths": artifact_paths})
+            append_task_event(record, "task_blocked", message=str(record.get("blocked_reason", "") or record.get("summary", "") or "task blocked"))
             append_task_event(record, "source_blocked", message=str(record.get("blocked_reason", "") or record.get("summary", "") or "task blocked"))
             append_task_event(record, "result_ready", message=str(record.get("summary", "") or "blocked result ready"))
         elif current == "partial_final" and previous != "partial_final":
+            if artifact_paths:
+                append_task_event(record, "artifact_ready", message=f"{len(artifact_paths)} artifact(s) ready", extra={"artifact_paths": artifact_paths})
+            append_task_event(record, "task_completed", message=str(record.get("summary", "") or "partial result ready"))
             append_task_event(record, "result_ready", message=str(record.get("summary", "") or "partial result ready"))
         elif current == "failed" and previous != "failed":
+            if artifact_paths:
+                append_task_event(record, "artifact_ready", message=f"{len(artifact_paths)} artifact(s) ready", extra={"artifact_paths": artifact_paths})
+            append_task_event(record, "task_failed", message=str(record.get("summary", "") or "task failed"))
             append_task_event(record, "failed", message=str(record.get("summary", "") or "task failed"))
         if state_model["handoff_state"] in {"user_safe_ready", "delivered"}:
             append_task_event(record, "handoff_ready", message=str(record.get("user_safe_summary", "") or record.get("summary", "") or "handoff ready"))
@@ -1030,6 +1052,75 @@ def cmd_blocked(args):
     )
 
 
+def cmd_event(args):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    with open(STATE_FILE, "a+") as fp:
+        fcntl.flock(fp, fcntl.LOCK_EX)
+        state = load_state(fp)
+        tasks = state["tasks"]
+        existing = next((t for t in tasks if t.get("id") == args.id), None)
+        if existing:
+            if args.status:
+                existing["status"] = args.status
+            if args.summary:
+                existing["summary"] = args.summary
+            if args.report_path:
+                existing["report_path"] = args.report_path
+            if args.user_safe_summary:
+                existing["user_safe_summary"] = args.user_safe_summary
+            if args.observability_health:
+                existing["observability_health"] = args.observability_health
+            if args.blocked_reason:
+                existing["blocked_reason"] = args.blocked_reason
+            if args.lifecycle_state:
+                existing["lifecycle_state"] = args.lifecycle_state
+            if args.outcome_state:
+                existing["outcome_state"] = args.outcome_state
+            if args.handoff_state:
+                existing["handoff_state"] = args.handoff_state
+            if args.artifacts_json:
+                artifacts = existing.get("artifacts", {})
+                if not isinstance(artifacts, dict):
+                    artifacts = {}
+                artifacts.update(args.artifacts_json)
+                existing["artifacts"] = artifacts
+            existing["updated_at"] = now_iso()
+            current_record = normalize_task_record(existing)
+            existing.clear()
+            existing.update(current_record)
+        else:
+            record = {
+                "id": args.id,
+                "status": args.status or "running",
+                "summary": args.summary or "",
+                "spawned_at": now_iso(),
+                "updated_at": now_iso(),
+            }
+            if args.report_path:
+                record["report_path"] = args.report_path
+            if args.user_safe_summary:
+                record["user_safe_summary"] = args.user_safe_summary
+            if args.observability_health:
+                record["observability_health"] = args.observability_health
+            if args.blocked_reason:
+                record["blocked_reason"] = args.blocked_reason
+            if args.lifecycle_state:
+                record["lifecycle_state"] = args.lifecycle_state
+            if args.outcome_state:
+                record["outcome_state"] = args.outcome_state
+            if args.handoff_state:
+                record["handoff_state"] = args.handoff_state
+            if args.artifacts_json:
+                record["artifacts"] = dict(args.artifacts_json)
+            tasks.append(record)
+            current_record = normalize_task_record(record)
+            tasks[-1] = dict(current_record)
+        state["tasks"] = tasks
+        save_state(fp, state)
+    append_task_event(current_record, args.kind, message=args.message, extra=args.event_json if isinstance(args.event_json, dict) else None)
+    print(f"[ok] event id={args.id} kind={args.kind}")
+
+
 def _finish(
     task_id: str,
     status: str,
@@ -1371,6 +1462,22 @@ def main():
     p_blocked.add_argument("--observability-health", dest="observability_health", default="")
     p_blocked.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
+    p_event = sub.add_parser("event")
+    p_event.add_argument("--id", required=True)
+    p_event.add_argument("--kind", required=True)
+    p_event.add_argument("--message", default="")
+    p_event.add_argument("--status", default="")
+    p_event.add_argument("--summary", default="")
+    p_event.add_argument("--report-path", dest="report_path", default="")
+    p_event.add_argument("--user-safe-summary", dest="user_safe_summary", default="")
+    p_event.add_argument("--blocked-reason", dest="blocked_reason", default="")
+    p_event.add_argument("--observability-health", dest="observability_health", default="")
+    p_event.add_argument("--lifecycle-state", dest="lifecycle_state", default="")
+    p_event.add_argument("--outcome-state", dest="outcome_state", default="")
+    p_event.add_argument("--handoff-state", dest="handoff_state", default="")
+    p_event.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
+    p_event.add_argument("--event-json", dest="event_json", type=parse_json_arg, default={})
+
     # list
     sub.add_parser("list")
 
@@ -1389,6 +1496,8 @@ def main():
         cmd_failed(args)
     elif args.command == "blocked":
         cmd_blocked(args)
+    elif args.command == "event":
+        cmd_event(args)
     elif args.command == "list":
         cmd_list(args)
     elif args.command == "archive-stale-dispatched":
