@@ -58,6 +58,7 @@ Recent design notes worth reading before deeper runtime changes:
 
 - [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
 - [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+- [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
 
 Recent runtime slices now also land two DeerFlow/ClawTeam-inspired observability primitives:
 
@@ -71,14 +72,20 @@ OctoClaw uses them to keep `task-state`, task anchors, patrol notifications, and
 - `handoff_state`
 - `session_key` / `session_target` / `session_thread_key`
 
-The next source-backed borrowings from ClawTeam and DeerFlow are:
+The next source-backed borrowings from ClawTeam and DeerFlow are still the right track, but Anthropic's official guidance suggests doing them in this order:
 
 1. richer delegated task events
 2. harder IM thread/topic binding
-3. artifact index and retrieval
-4. ownership lock plus dead-agent recovery
-5. delegated worker session resume
+3. ownership lock plus dead-agent recovery
+4. delegated worker session resume
+5. artifact index and retrieval
 6. todo/checklist persistence across context loss
+
+In other words:
+
+- first harden delegated runtime truth and continuity
+- then improve artifact retrieval
+- then add stronger context-persistence layers
 
 ## Model Selection
 

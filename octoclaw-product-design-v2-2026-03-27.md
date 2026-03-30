@@ -87,6 +87,38 @@ heavy 部分只在复杂任务上启用，例如：
 
 > **用轻量 harness 提升效率和降本，再按需叠加重型执行协议。**
 
+### 2.4 官方方法论校准
+
+结合 Anthropic 官方工程文章和 Claude Cookbooks 的最新结论，OctoClaw 当前方向不需要推翻，但需要更明确地校准优先级。
+
+校准后的结论是：
+
+- 保持 `workflow-first`
+- 保持 `policy-first`
+- 多 agent 继续按需开启，不默认放大
+- 把 `context engineering / tool ergonomics / long-running harness / eval discipline` 提到比“继续扩多 agent 拓扑”更高的位置
+
+这意味着 OctoClaw 仍然应坚持：
+
+- 自己做调度脑、成本脑、展示脑
+- 不变成通用 agent framework
+- 不把所有复杂任务都升级成 research-style multi-agent execution
+
+相关笔记见：
+
+- [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
+- [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+
+主要官方参考包括：
+
+- [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
+- [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+- [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)
+- [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+- [Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)
+- [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+- [Claude Cookbooks](https://platform.claude.com/cookbooks)
+
 ---
 
 ## 3. 产品目标
@@ -366,7 +398,74 @@ flowchart TB
 - `heavy` 不再是独立 route
 - 它是 `spawn_single / spawn_multi` 上的一种执行协议增强
 
-### 6.2 runner 的定位
+但这 4 条 lane 不应再被理解为“任务语义标签”。
+
+更准确的说法是：
+
+> **route 是执行合同选择，不是任务分类结果。**
+
+也就是说，OctoClaw 不该主要问：
+
+- 这句话像不像研究任务
+- 这句话像不像代码任务
+
+而应该主要问：
+
+- 这件事是否能在当前主链同步完成
+- 这件事是否是边界清楚的工具工作流
+- 这件事是否需要独立上下文和独立交付物
+- 这件事是否真的值得多 worker 协调
+
+### 6.1.1 `work_contract` 应成为 route 的正交维度
+
+建议在 route 之外，再维护一个更稳定的执行合同维度，例如：
+
+- `answer_now`
+- `inspect_report`
+- `deliverable_work`
+- `coordinated_work`
+
+它不是给用户看的新 route，而是给系统自己看的决策中间层。
+
+这样可以减少很多灰区误判：
+
+- `direct` 对应 `answer_now`
+- `runner` 对应 `inspect_report`
+- `spawn_single` 对应 `deliverable_work`
+- `spawn_multi` 对应 `coordinated_work`
+
+### 6.1.2 route 的推荐判定顺序
+
+推荐顺序应是：
+
+1. 先看 continuity
+   - 当前 session/thread 是否已有任务
+   - sticky lane 是否应复用
+   - 是否已有 artifact/checklist/checkpoint
+2. 再判是否满足 `direct` 合同
+3. 再判是否满足 `runner` 合同
+4. 其余默认进入 `spawn_single`
+5. 只有明确可并行或必须分阶段时才进入 `spawn_multi`
+
+这比“先做任务语义分类，再猜 route”更稳。
+
+### 6.2 `direct` 的定位
+
+`direct` 不应表示“主脑先试试看能不能做”。
+
+它应只表示：
+
+- 当前上下文内可同步完成
+- 不需要 durable runtime
+- 不需要独立 artifact 流
+- 不需要长时间工具链
+- 不需要 checkpoint / 恢复 / review
+
+一句话：
+
+> **`direct = answer-now lane`。**
+
+### 6.3 runner 的定位
 
 `runner` 不是普通 subagent，而是 **特殊 executor**。
 
@@ -382,7 +481,19 @@ flowchart TB
 - 轻工具任务不要过度 agent 化
 - 避免每次都 spawn 一个真正 agent session
 
-### 6.3 spawn_single 的定位
+但更精确的定义应该是：
+
+- 边界清楚的工具工作流
+- 低歧义
+- 低上下文依赖
+- 最好有 playbook 或程序化步骤
+- 输出偏状态、检查结果、执行结果、收集报告
+
+一句话：
+
+> **`runner = bounded tool workflow`，而不是“轻量子 agent”。**
+
+### 6.4 spawn_single 的定位
 
 用于：
 
@@ -398,7 +509,19 @@ flowchart TB
 - 一个 tmux 工位
 - 一个 summary / artifact 回传
 
-### 6.4 spawn_multi 的定位
+在经过 Anthropic 官方方法论校准后，`spawn_single` 应被视为：
+
+> **默认 delegated lane。**
+
+只要满足任一条件，就应优先走 `spawn_single`：
+
+- 需要独立上下文
+- 需要 synthesis / writing / coding judgment
+- 需要 durable artifact
+- 可能跨多个 context window
+- 结果不是简单状态，而是交付物
+
+### 6.5 spawn_multi 的定位
 
 用于：
 
@@ -414,7 +537,18 @@ flowchart TB
 - 多个 worker
 - board / inbox / tmux 可观察
 
-### 6.5 heavy profile 的定位
+但 `spawn_multi` 不应因为“任务复杂”就触发。
+
+它只应在这两类场景开启：
+
+- 真正存在并行收益
+- 明确需要 planner / worker / review 这种分阶段协作
+
+也就是说：
+
+> **复杂但高耦合的任务，通常仍应先走 `spawn_single`。**
+
+### 6.6 heavy profile 的定位
 
 heavy profile 不是新 runtime，而是：
 
@@ -452,9 +586,12 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - 是否 review
 - 是否启用 heavy profile
 
+并且 route 的判定语义需要从“任务像什么”进一步收紧成“执行合同是什么”。
+
 决策输入至少包括：
 
 - task shape
+- work contract
 - latency sensitivity
 - risk
 - context growth
@@ -495,12 +632,23 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 输入应该包括：
 
 - task shape / work type / phase
+- work contract
 - risk
 - latency target
 - context budget
 - available model set
 - benchmark snapshot
 - quota health
+
+主链选模还应明确一条额外原则：
+
+> **main lane 必须走能力门槛，不应被单纯的价格或 TTFT 拉低。**
+
+这意味着：
+
+- 不再靠硬白名单
+- 也不再让中档模型自由竞争主链
+- 而是先过 `capability floor`，再在合格模型里比较健康度、延迟和成本
 - internal effective cost
 - market price baseline
 
@@ -948,7 +1096,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 ---
 
-## 11. 实现步骤方案
+## 11. 实现步骤方案与当前完成度
 
 ### Phase 0：统一数据模型
 
@@ -971,6 +1119,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 - schema v2
 - backward-compatible mapper
+
+当前状态（2026-03-30）：
+
+- 已基本完成
+- 统一 runtime task record 和 decision schema 已落地
+- 但仍有少量 runtime 细节实现正在继续从旧字段迁移到更强的 runtime truth
 
 并行要求：
 
@@ -1051,6 +1205,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - `skills` 只保留能力和模板
 - skill bundle 进入 runtime policy
 
+当前状态（2026-03-30）：
+
+- 已基本完成
+- `hard_runner_only`、`route_hint`、sticky lane、replay、policy merge、language packs、policy-first 选模均已落地
+- 但 route 语义仍需要继续从“任务分类”收紧成“执行合同选择”
+
 ### Phase 2：把 ClawTeam 运行面彻底打通
 
 目标：
@@ -1067,6 +1227,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 输出：
 
 - 一个统一的协作控制面
+
+当前状态（2026-03-30）：
+
+- 已基本完成
+- unified runtime surface、lineage、parent/child aggregation、runner/shared workbench 都已落地
+- 这一阶段后续只保留少量稳定性修补
 
 ### Phase 3：重构 worker 类型
 
@@ -1099,6 +1265,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 - [octoclaw-worker-taxonomy-migration-v1-2026-03-28.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-worker-taxonomy-migration-v1-2026-03-28.md)
 
+当前状态（2026-03-30）：
+
+- 已基本完成
+- `worker_pool-first` 已进入 policy、spawn、dispatch、status、patrol、task truth 主链
+- 旧 label/tier 主导行为已大面积拆除
+
 ### Phase 4：把 brief / summary / artifact 协议做实
 
 目标：
@@ -1117,6 +1289,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 - DeerFlow-like execution protocol on ClawTeam
 
+当前状态（2026-03-30）：
+
+- 已基本完成
+- brief/result schema、worker result 规范化、parent/child 汇总都已落地
+- 后续更大的重点不再是“有没有协议”，而是“如何把协议与 context engineering 做得更省、更稳、更可检索”
+
 ### Phase 5：叠加 heavy profile
 
 目标：
@@ -1134,6 +1312,13 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 输出：
 
 - heavy profile on unified runtime
+
+当前状态（2026-03-30）：
+
+- 部分完成
+- Phase 5A/5B 相关的 task inbox、Slack anchors、handoff-aware state machine、main-model capability floor 已落地
+- 但完整的 heavy protocol 仍未彻底产品化
+- 这一阶段应与后面的 continuity hardening 一起推进，而不是单独追求“更重”
 
 ### Phase 6：做展示层产品化
 
@@ -1163,6 +1348,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - [octoclaw-task-display-schema-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-task-display-schema-v1-2026-03-29.md)
 - [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
 - [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+
+当前状态（2026-03-30）：
+
+- 部分完成
+- status、task anchor、Slack 状态回写、drift surface 已有基础
+- 但 Web UI、artifact explorer、event timeline、capability-matrix renderer 仍是后续主战场
 
 ### Phase 7：做策略闭环
 
@@ -1198,29 +1389,95 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
   - 下一批按收益排序最值得继续借的包括：
     - 更细粒度的 delegated event stream
     - 更硬的 IM thread/topic binding
-    - artifact index + retrieval surface
     - ownership lock + dead-agent recovery
     - worker session resume store
+    - artifact index + retrieval surface
     - todo/checklist persistence across context loss
+
+当前状态（2026-03-30）：
+
+- 已启动，但远未完成
+- replay、route diff、drift、policy-first 选模已进入基础可用状态
+- 真正的 self-tuning、tool eval、state-machine eval、artifact retrieval eval 还在后续路线中
 
 ---
 
-## 12. 推荐的开发优先级
+## 12. 后续整体开发路线
 
-如果只能按收益排序，我建议是：
+截至 2026-03-30，更合理的整体路线不是“继续横向扩功能”，而是按下面顺序收紧系统真相和连续性。
 
-1. **Phase 1：runtime policy**
-2. **Phase 2：ClawTeam 统一运行面**
-3. **Phase 3：worker 类型重构**
-4. **Phase 4：brief/summary/artifact 协议**
-5. **Phase 6：展示层**
-6. **Phase 5：heavy profile**
-7. **Phase 7：策略闭环**
+### 12.1 第一段：把 delegated runtime truth 做硬
+
+目标：
+
+- 让 OctoClaw 更像可靠 harness，而不是只会派单
+
+先做：
+
+1. richer delegated event stream
+2. harder IM thread/topic binding
+3. ownership lock + dead-agent recovery
+4. worker session resume store
+
+这四步做完，系统会明显减少：
+
+- 派发了但看不清进度
+- 任务结束了但外层误以为还在跑
+- agent 死掉后任务永远卡住
+- Slack/WebChat/thread follow-up 串线
+
+### 12.2 第二段：把 artifact 和上下文工程做实
+
+目标：
+
+- 降低上下文膨胀
+- 提高 follow-up 的质量和稳定性
+
+再做：
+
+5. artifact index + retrieval
+6. todo/checklist persistence
+7. context pack / memory compaction for long-running follow-ups
+8. stronger brief/result shaping and retrieval helpers
+
+### 12.3 第三段：把展示层产品化
+
+目标：
+
+- 让状态、结果、风险、上下文切换真正可见
+
+继续做：
+
+9. task graph and event timeline
+10. artifact explorer
+11. IM capability-matrix renderer
+12. replay and policy diff surfaces
+
+### 12.4 第四段：把策略闭环做深
+
+目标：
+
+- 让 OctoClaw 越跑越准，而不是只靠规则扩张
+
+最后做：
+
+13. tool evaluation and state-machine evals
+14. route and policy replay calibration
+15. context-budget-aware compaction policies
+16. heavier protocol only where data proves it is worth it
+
+### 12.5 和原 Phase 的对应关系
+
+如果仍按原 Phase 记法理解，接下来最主要的推进重心是：
+
+- 继续完成 **Phase 5**
+- 同时推进 **Phase 6**
+- 再逐步把 **Phase 7** 做深
 
 说明：
 
-- `heavy profile` 不是最早该做的
-- 先把普通多 Agent 做稳，比先做重模式更值
+- 不要把后续重点理解成“继续扩多 agent”
+- 应理解成“把 runtime truth、context engineering、observability、eval 做硬”
 
 ---
 
@@ -1236,6 +1493,9 @@ OctoClaw 未来最应该长成的，不是“更多 agent”，而是：
 - runtime policy 而不是 prompt 习惯
 - ClawTeam 统一运行面
 - brief / summary / artifact 协议
+- 更强的 delegated runtime truth
+- 更强的 context engineering
+- 更强的 eval 与 postmortem discipline
 - IM-native + UI + tmux 三位一体展示
 
 这才是最值得投入重构的方向。
