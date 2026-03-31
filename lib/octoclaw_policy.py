@@ -715,10 +715,14 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
             "enabled": (
                 policy_enabled
                 and bool(hooks_cfg.get("before_tool_call", True))
-                and bool(switch_cfg.get("delegation_enforcement", True))
+                and (
+                    route_hint_policy["required"]
+                    or bool(switch_cfg.get("delegation_enforcement", True))
+                )
             ),
             "action": "enforce_delegation_policy",
             "tool_policy": decision["tool_policy"],
+            "delegation_enforcement": bool(switch_cfg.get("delegation_enforcement", True)),
             "route_hint_required": route_hint_policy["required"],
             "route_hint_submitted": route_hint_policy["submitted"],
             "route_hint_tool": "octoclaw_route_hint",

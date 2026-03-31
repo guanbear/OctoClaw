@@ -51,7 +51,7 @@ PRESETS: dict[str, dict[str, Any]] = {
             "route_hint_required": True,
             "replay_logging": True,
             "direct_model_override": False,
-            "delegation_enforcement": False,
+            "delegation_enforcement": True,
         },
         "route_stickiness": {
             "enabled": True,

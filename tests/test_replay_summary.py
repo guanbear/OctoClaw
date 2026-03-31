@@ -175,12 +175,27 @@ class ReplaySummaryTests(unittest.TestCase):
                 {
                     "switches": {
                         "route_hint_required": True,
+                        "delegation_enforcement": True,
                     },
                     "hooks": {
                         "before_model_resolve": False,
                         "before_tool_call": True,
                     },
                     "route_stickiness": {"enabled": True},
+                }
+            ),
+            "guided",
+        )
+        self.assertEqual(
+            infer_runtime_policy_phase(
+                {
+                    "switches": {
+                        "delegation_enforcement": True,
+                        "direct_model_override": False,
+                    },
+                    "hooks": {
+                        "before_model_resolve": False,
+                    },
                 }
             ),
             "guided",

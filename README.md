@@ -209,10 +209,10 @@ Suggested rollout presets for `bin/runtime-policy-rollout.sh`:
   - keeps replay on
   - disables route-hint enforcement and delegation hard blocks
 - `RUNTIME_POLICY_PRESET=guided`
-  - enables route-hint collection and prompt guidance
-  - keeps direct model override and hard delegation enforcement off
+  - enables route-hint enforcement, sticky follow-up reuse, and hard delegation gating
+  - keeps direct model override off, so the main session model stays unchanged
 - `RUNTIME_POLICY_PRESET=enforced`
-  - enables the full runtime-policy path, including delegation enforcement
+  - enables the full runtime-policy path, including main-session model override
   - best used only after replay validation
 
 ## Common Commands

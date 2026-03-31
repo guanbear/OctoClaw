@@ -27,6 +27,20 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
         self.assertFalse(payload["hooks"]["before_model_resolve"])
         self.assertFalse(payload["route_stickiness"]["enabled"])
 
+    def test_render_policy_guided_enforces_dispatch_without_model_override(self) -> None:
+        result = subprocess.run(
+            ["python3", str(ROLLOUT_SCRIPT), "render-policy", "--preset", "guided"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["switches"]["route_hint_required"])
+        self.assertTrue(payload["switches"]["delegation_enforcement"])
+        self.assertFalse(payload["switches"]["direct_model_override"])
+        self.assertTrue(payload["hooks"]["before_tool_call"])
+        self.assertFalse(payload["hooks"]["before_model_resolve"])
+
     def test_merge_and_cleanup_runtime_policy(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-test-") as tmpdir:
             config_path = Path(tmpdir) / "octopus-config.json"
@@ -51,6 +65,7 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
             merged = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertIn("runtime_policy", merged)
             self.assertTrue(merged["runtime_policy"]["switches"]["route_hint_required"])
+            self.assertTrue(merged["runtime_policy"]["switches"]["delegation_enforcement"])
             self.assertFalse(merged["runtime_policy"]["switches"]["direct_model_override"])
             self.assertTrue(merged["notification"]["backend"] == "auto")
 

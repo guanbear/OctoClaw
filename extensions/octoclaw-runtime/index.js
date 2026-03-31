@@ -704,6 +704,7 @@ const plugin = {
     const toolName = String(event?.toolName || ctx?.toolName || "").trim();
     const routeHintTool = String(hookConfig?.route_hint_tool || "octoclaw_route_hint").trim();
     const routeHintIsRequired = Boolean(hookConfig?.route_hint_required);
+    const delegationEnforcementEnabled = Boolean(hookConfig?.delegation_enforcement);
     const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted);
     const allowedPreHintTools = new Set([routeHintTool, "octoclaw_policy_decide", "octoclaw_status"]);
     if (routeHintIsRequired && !routeHintAlreadySubmitted && !allowedPreHintTools.has(toolName)) {
@@ -749,6 +750,10 @@ const plugin = {
     }
 
     if (!isDelegatedRoute(decision)) {
+      return;
+    }
+
+    if (!delegationEnforcementEnabled) {
       return;
     }
 

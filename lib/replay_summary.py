@@ -108,14 +108,11 @@ def infer_runtime_policy_phase(runtime_policy: dict[str, Any] | None) -> str:
     if not isinstance(route_stickiness, dict):
         route_stickiness = {}
 
-    if (
-        bool(switches.get("delegation_enforcement"))
-        or bool(switches.get("direct_model_override"))
-        or bool(hooks.get("before_model_resolve"))
-    ):
+    if bool(switches.get("direct_model_override")) or bool(hooks.get("before_model_resolve")):
         return "enforced"
     if (
-        bool(switches.get("route_hint_required"))
+        bool(switches.get("delegation_enforcement"))
+        or bool(switches.get("route_hint_required"))
         or bool(hooks.get("before_tool_call"))
         or bool(route_stickiness.get("enabled"))
     ):

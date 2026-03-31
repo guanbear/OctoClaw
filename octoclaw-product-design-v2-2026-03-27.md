@@ -902,6 +902,18 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - `conservative / guided / enforced` 这类可运维的 rollout preset
 - 推荐使用独立 rollout 入口，而不是把这类逻辑继续堆进主 `install.sh`
 
+其中 rollout 语义应保持清晰：
+
+- `conservative`
+  - 真实注入 policy/replay
+  - 但不硬拦普通工具，不强制 delegated route
+- `guided`
+  - 开启 route-hint / sticky / before_tool_call
+  - 对 delegated route 做硬派发门禁
+  - 但仍不做主会话 model override
+- `enforced`
+  - 在 `guided` 基础上，再开启主会话 model override
+
 灰区路由的详细设计见：
 
 - [octoclaw-grayzone-routing-design-v1-2026-03-27.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-grayzone-routing-design-v1-2026-03-27.md)
