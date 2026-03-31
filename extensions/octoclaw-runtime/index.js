@@ -329,6 +329,26 @@ function parsePolicyDecisionJson(raw) {
   }
 }
 
+function preHintAllowedTools(decision, routeHintTool) {
+  const toolPolicy = decision?.tool_policy || {};
+  const allowed = new Set([
+    routeHintTool,
+    "octoclaw_policy_decide",
+    "octoclaw_status",
+    "octoclaw_task_action",
+  ]);
+  const delegateTool = String(toolPolicy?.must_delegate_via || "").trim();
+  if (delegateTool) {
+    allowed.add(delegateTool);
+  }
+  const controlTools = Array.isArray(toolPolicy?.allowed_control_tools) ? toolPolicy.allowed_control_tools : [];
+  for (const toolName of controlTools) {
+    const value = String(toolName || "").trim();
+    if (value) allowed.add(value);
+  }
+  return allowed;
+}
+
 function runtimeSwitches(decision) {
   return decision?.runtime_switches || {};
 }
@@ -706,7 +726,7 @@ const plugin = {
     const routeHintIsRequired = Boolean(hookConfig?.route_hint_required);
     const delegationEnforcementEnabled = Boolean(hookConfig?.delegation_enforcement);
     const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted);
-    const allowedPreHintTools = new Set([routeHintTool, "octoclaw_policy_decide", "octoclaw_status"]);
+    const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
     if (routeHintIsRequired && !routeHintAlreadySubmitted && !allowedPreHintTools.has(toolName)) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
@@ -1277,4 +1297,5 @@ export const __octoclawTest = {
   resolvePolicyStateKey,
   isManagedAgentContext,
   buildPolicyMetadata,
+  preHintAllowedTools,
 };

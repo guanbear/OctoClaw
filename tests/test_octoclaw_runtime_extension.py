@@ -95,6 +95,26 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
 
         self.assertFalse(payload)
 
+    def test_pre_hint_allows_octoclaw_control_tools_including_dispatch(self) -> None:
+        payload = run_runtime_helper(
+            """Array.from(__octoclawTest.preHintAllowedTools({
+                tool_policy: {
+                    must_delegate_via: "octoclaw_dispatch",
+                    allowed_control_tools: [
+                        "octoclaw_policy_decide",
+                        "octoclaw_route_hint",
+                        "octoclaw_dispatch",
+                        "octoclaw_status"
+                    ]
+                }
+            }, "octoclaw_route_hint")).sort()"""
+        )
+
+        self.assertIn("octoclaw_route_hint", payload)
+        self.assertIn("octoclaw_dispatch", payload)
+        self.assertIn("octoclaw_policy_decide", payload)
+        self.assertIn("octoclaw_status", payload)
+
 
 if __name__ == "__main__":
     unittest.main()
