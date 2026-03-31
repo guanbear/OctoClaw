@@ -49,11 +49,15 @@ class RuntimeProtocolTests(unittest.TestCase):
         self.assertIn("follow-up 优先使用 context_pack", " ".join(brief["constraints"]))
         self.assertEqual(brief["context_pack"]["schema_version"], "octoclaw.context_pack/v1")
         self.assertTrue(brief["context_budget"]["prefer_context_pack"])
+        self.assertEqual(brief["work_contract"], "")
         self.assertIn("repo", brief["allowed_tools"])
         self.assertIn("test", brief["allowed_tools"])
         self.assertTrue(brief["expected_artifacts"][0].endswith("/tmp/task-1.md"))
         self.assertTrue(brief["retrieval_hints"]["prefer_context_pack"])
         self.assertEqual(brief["retrieval_hints"]["followup_command_hint"], "retrieve task-1")
+        self.assertEqual(brief["budget_policy"], {})
+        self.assertEqual(brief["merge_contract"], "")
+        self.assertEqual(brief["handoff_contract"], "")
 
     def test_normalize_worker_result_maps_legacy_status_and_report(self) -> None:
         payload = normalize_worker_result(

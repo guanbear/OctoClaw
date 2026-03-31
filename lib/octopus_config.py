@@ -126,6 +126,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "ttl_minutes": 180,
             "apply_on_followup_only": True,
             "ack_followup_enabled": True,
+            "max_apply_count": 3,
+            "require_contract_match": True,
         },
         "route_language_packs": {
             "enabled": ["zh", "en"],

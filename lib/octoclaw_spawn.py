@@ -961,6 +961,7 @@ def build_spawn_spec(
     brief = build_task_brief(
         task_id=task_id,
         goal=task,
+        work_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
         route=final_route,
         worker_pool=resolved_worker_pool,
         work_type=resolved_work_type,
@@ -976,6 +977,9 @@ def build_spawn_spec(
         skill_bundle=skill_bundle,
         expected_done=expected_done,
         summary_hint=summary_hint,
+        budget_policy=policy.get("budget_policy") if isinstance(policy.get("budget_policy"), dict) else {},
+        merge_contract=str(prompt_policy.get("merge_contract", "") or ""),
+        handoff_contract=str(prompt_policy.get("handoff_contract", "") or ""),
     )
     result_contract = build_result_contract(summary_hint, artifact_first=True)
     base_artifacts.update(

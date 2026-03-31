@@ -10,6 +10,7 @@
     "summary",
     "request",
     "route_decision",
+    "budget_policy",
     "model_policy",
     "skill_policy",
     "review_policy",
@@ -48,6 +49,7 @@
       "required": [
         "route",
         "system_preferred_route",
+        "work_contract",
         "work_contract_hint",
         "dispatch_required",
         "confidence",
@@ -77,6 +79,10 @@
         "system_preferred_route": {
           "type": "string",
           "enum": ["direct", "runner", "spawn_single", "spawn_multi"]
+        },
+        "work_contract": {
+          "type": "string",
+          "enum": ["answer_now", "inspect_report", "deliverable_work", "coordinated_work"]
         },
         "work_contract_hint": {
           "type": "string",
@@ -116,6 +122,26 @@
         "parallel_gain_band": { "type": "string" },
         "artifact_required": { "type": "boolean" },
         "durable_runtime_required": { "type": "boolean" }
+      }
+    },
+    "budget_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "budget_cap",
+        "retry_cap",
+        "max_workers",
+        "latency_target",
+        "interruptibility",
+        "upgrade_allowed"
+      ],
+      "properties": {
+        "budget_cap": { "type": "string" },
+        "retry_cap": { "type": "integer" },
+        "max_workers": { "type": "integer" },
+        "latency_target": { "type": "string" },
+        "interruptibility": { "type": "string" },
+        "upgrade_allowed": { "type": "boolean" }
       }
     },
     "model_policy": {
@@ -172,21 +198,35 @@
       "additionalProperties": false,
       "required": [
         "brief_required",
+        "work_contract",
         "artifact_first",
         "transcript_to_main",
         "summary_required",
         "checkpoint_summary_required",
         "direct_reply_allowed",
-        "final_answer_from_handoff"
+        "final_answer_from_handoff",
+        "final_compose_required",
+        "user_safe_summary_required",
+        "child_results_are_evidence",
+        "merge_contract",
+        "handoff_contract",
+        "review_gate_required"
       ],
       "properties": {
         "brief_required": { "type": "boolean" },
+        "work_contract": { "type": "string" },
         "artifact_first": { "type": "boolean" },
         "transcript_to_main": { "type": "boolean" },
         "summary_required": { "type": "boolean" },
         "checkpoint_summary_required": { "type": "boolean" },
         "direct_reply_allowed": { "type": "boolean" },
-        "final_answer_from_handoff": { "type": "boolean" }
+        "final_answer_from_handoff": { "type": "boolean" },
+        "final_compose_required": { "type": "boolean" },
+        "user_safe_summary_required": { "type": "boolean" },
+        "child_results_are_evidence": { "type": "boolean" },
+        "merge_contract": { "type": "string" },
+        "handoff_contract": { "type": "string" },
+        "review_gate_required": { "type": "boolean" }
       }
     },
     "tool_policy": {
@@ -234,7 +274,13 @@
         "merge_notes",
         "sticky_applied",
         "sticky_route",
-        "sticky_work_type"
+        "sticky_work_type",
+        "sticky_work_contract",
+        "sticky_applied_count",
+        "sticky_decay_blocked",
+        "sticky_goal_shift_blocked",
+        "ack_followup_candidate",
+        "ack_followup_applied"
       ],
       "properties": {
         "required": { "type": "boolean" },
@@ -260,7 +306,13 @@
         },
         "sticky_applied": { "type": "boolean" },
         "sticky_route": { "type": "string" },
-        "sticky_work_type": { "type": "string" }
+        "sticky_work_type": { "type": "string" },
+        "sticky_work_contract": { "type": "string" },
+        "sticky_applied_count": { "type": "integer" },
+        "sticky_decay_blocked": { "type": "boolean" },
+        "sticky_goal_shift_blocked": { "type": "boolean" },
+        "ack_followup_candidate": { "type": "boolean" },
+        "ack_followup_applied": { "type": "boolean" }
       }
     },
     "runtime_switches": {
@@ -273,7 +325,8 @@
         "replay_logging_enabled",
         "direct_model_override_enabled",
         "delegation_enforcement_enabled",
-        "sticky_lane_enabled"
+        "sticky_lane_enabled",
+        "ack_followup_enabled"
       ],
       "properties": {
         "policy_enabled": { "type": "boolean" },
@@ -282,7 +335,8 @@
         "replay_logging_enabled": { "type": "boolean" },
         "direct_model_override_enabled": { "type": "boolean" },
         "delegation_enforcement_enabled": { "type": "boolean" },
-        "sticky_lane_enabled": { "type": "boolean" }
+        "sticky_lane_enabled": { "type": "boolean" },
+        "ack_followup_enabled": { "type": "boolean" }
       }
     },
     "hook_interface": {

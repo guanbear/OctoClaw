@@ -263,12 +263,21 @@ async function persistStickyLane(sessionKey, decision, logger, options = {}) {
     const pathname = resolveRouteStickinessPath();
     const current = await readJsonFile(pathname, {});
     const next = current && typeof current === "object" ? { ...current } : {};
+    const previous = next[sessionKey] && typeof next[sessionKey] === "object" ? next[sessionKey] : {};
+    const workContract = String(decision?.route_decision?.work_contract || decision?.route_decision?.work_contract_hint || "").trim();
+    const previousWorkContract = String(previous?.work_contract || previous?.work_contract_hint || "").trim();
+    const previousRoute = String(previous?.route || "").trim();
+    const preservedAppliedCount = previousRoute === stickyRoute && previousWorkContract === workContract
+      ? Number(previous?.applied_count || 0)
+      : 0;
     next[sessionKey] = {
       route: stickyRoute,
       work_type: String(decision?.route_decision?.work_type || "").trim(),
+      work_contract: workContract,
       phase: String(decision?.route_decision?.phase || "").trim(),
       protocol: String(decision?.route_decision?.protocol || "").trim(),
       system_preferred_route: String(decision?.route_decision?.system_preferred_route || "").trim(),
+      applied_count: preservedAppliedCount,
       updated_at: new Date().toISOString(),
       source: String(options.source || "runtime_policy").trim() || "runtime_policy",
       reason_codes: Array.isArray(decision?.route_decision?.reason_codes)

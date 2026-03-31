@@ -22,6 +22,9 @@
     "objective": {
       "type": "string"
     },
+    "work_contract": {
+      "type": "string"
+    },
     "route": {
       "type": "string"
     },
@@ -90,6 +93,15 @@
     },
     "retrieval_hints": {
       "type": "object"
+    },
+    "budget_policy": {
+      "type": "object"
+    },
+    "merge_contract": {
+      "type": "string"
+    },
+    "handoff_contract": {
+      "type": "string"
     },
     "skill_bundle": {
       "type": "array",

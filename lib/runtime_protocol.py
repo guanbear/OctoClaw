@@ -166,6 +166,10 @@ def build_task_brief(
     skill_bundle: list[str] | None = None,
     expected_done: str = "",
     summary_hint: str = "",
+    work_contract: str = "",
+    budget_policy: dict[str, Any] | None = None,
+    merge_contract: str = "",
+    handoff_contract: str = "",
 ) -> dict[str, Any]:
     constraints = [
         "开始前先写 running 状态",
@@ -188,6 +192,7 @@ def build_task_brief(
         "task_id": str(task_id or "").strip(),
         "goal": _compact_text(goal, 400),
         "objective": _compact_text(goal, 240),
+        "work_contract": str(work_contract or "").strip(),
         "route": str(route or "").strip(),
         "worker_pool": str(worker_pool or "").strip(),
         "work_type": str(work_type or "").strip(),
@@ -218,6 +223,9 @@ def build_task_brief(
             context_pack=context_pack,
             context_budget=context_budget,
         ),
+        "budget_policy": dict(budget_policy) if isinstance(budget_policy, dict) else {},
+        "merge_contract": str(merge_contract or "").strip(),
+        "handoff_contract": str(handoff_contract or "").strip(),
         "skill_bundle": [str(item).strip() for item in (skill_bundle or []) if str(item).strip()],
         "expected_output": build_result_contract(summary_hint, artifact_first=True),
     }

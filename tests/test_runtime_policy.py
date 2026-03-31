@@ -53,6 +53,8 @@ class RuntimePolicyTests(unittest.TestCase):
         session_key: str = "",
         sticky_route: str = "",
         sticky_work_type: str = "",
+        sticky_work_contract: str = "",
+        sticky_applied_count: int = 0,
         route_language_packs: Optional[list[str]] = None,
         model_policy: Optional[dict[str, object]] = None,
     ) -> dict:
@@ -70,6 +72,8 @@ class RuntimePolicyTests(unittest.TestCase):
                     session_key: {
                         "route": sticky_route,
                         "work_type": sticky_work_type,
+                        "work_contract": sticky_work_contract,
+                        "applied_count": sticky_applied_count,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
                 }
@@ -104,12 +108,14 @@ class RuntimePolicyTests(unittest.TestCase):
             sticky_work_type="code",
         )
         self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_decision"]["work_contract"], "deliverable_work")
         self.assertEqual(payload["route_decision"]["work_type"], "research")
         self.assertEqual(payload["route_decision"]["phase"], "report")
         self.assertEqual(payload["route_decision"]["reason"], "route_sticky_lane:spawn_single")
         self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
         self.assertEqual(payload["route_hint_policy"]["source"], "sticky_lane")
         self.assertEqual(payload["route_hint_policy"]["sticky_route"], "spawn_single")
+        self.assertEqual(payload["route_hint_policy"]["sticky_work_contract"], "")
         self.assertEqual(payload["route_hint_policy"]["sticky_work_type"], "")
 
     def test_sticky_different_lane_only_changes_route(self) -> None:
@@ -121,6 +127,7 @@ class RuntimePolicyTests(unittest.TestCase):
         )
         self.assertEqual(payload["route_decision"]["system_preferred_route"], "spawn_single")
         self.assertEqual(payload["route_decision"]["route"], "spawn_multi")
+        self.assertEqual(payload["route_decision"]["work_contract"], "coordinated_work")
         self.assertEqual(payload["route_decision"]["work_type"], "code")
         self.assertEqual(payload["route_decision"]["phase"], "implement")
         self.assertEqual(payload["route_decision"]["reason"], "route_sticky_lane:spawn_multi")
@@ -136,6 +143,7 @@ class RuntimePolicyTests(unittest.TestCase):
             sticky_work_type="code",
         )
         self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_decision"]["work_contract"], "deliverable_work")
         self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:spawn_single")
         self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
         self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
@@ -150,6 +158,7 @@ class RuntimePolicyTests(unittest.TestCase):
             sticky_work_type="research",
         )
         self.assertEqual(payload["route_decision"]["route"], "spawn_multi")
+        self.assertEqual(payload["route_decision"]["work_contract"], "coordinated_work")
         self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:spawn_multi")
         self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
         self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
@@ -161,6 +170,33 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["route_hint_policy"]["sticky_applied"])
         self.assertFalse(payload["route_hint_policy"]["ack_followup_applied"])
         self.assertNotEqual(payload["route_decision"]["route"], "runner")
+
+    def test_sticky_goal_shift_blocks_inherit_when_contract_changes(self) -> None:
+        payload = self.run_policy(
+            "继续，补个测试",
+            session_key="demo",
+            sticky_route="spawn_multi",
+            sticky_work_type="research",
+            sticky_work_contract="coordinated_work",
+        )
+        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_decision"]["reason"], "route_sticky_goal_shift:coordinated_work_to_deliverable_work")
+        self.assertFalse(payload["route_hint_policy"]["sticky_applied"])
+        self.assertTrue(payload["route_hint_policy"]["sticky_goal_shift_blocked"])
+
+    def test_sticky_decay_blocks_after_max_apply_count(self) -> None:
+        payload = self.run_policy(
+            "继续，顺手写一版发布说明",
+            session_key="demo",
+            sticky_route="spawn_single",
+            sticky_work_type="code",
+            sticky_work_contract="deliverable_work",
+            sticky_applied_count=3,
+        )
+        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_decision"]["reason"], "route_sticky_decay_blocked:spawn_single")
+        self.assertFalse(payload["route_hint_policy"]["sticky_applied"])
+        self.assertTrue(payload["route_hint_policy"]["sticky_decay_blocked"])
 
     def test_release_notes_are_not_high_risk_but_production_release_is(self) -> None:
         notes_payload = self.run_route("继续，顺手写一版发布说明")
@@ -223,10 +259,14 @@ class RuntimePolicyTests(unittest.TestCase):
         )
         self.assertEqual(payload["route_decision"]["route"], "runner")
         self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
         self.assertEqual(payload["model_policy"]["selected_model"], "model/profile-ops")
         self.assertEqual(payload["model_policy"]["profile"], "ops-fast")
         self.assertEqual(payload["model_policy"]["model_band"], "fast")
         self.assertEqual(payload["model_policy"]["selector_band"], "quick")
+        self.assertEqual(payload["budget_policy"]["budget_cap"], "low")
+        self.assertEqual(payload["budget_policy"]["max_workers"], 1)
+        self.assertEqual(payload["prompt_contract"]["merge_contract"], "inspect_report")
 
     def test_model_policy_tracks_worker_pool_first_without_legacy_compat_fields(self) -> None:
         payload = self.run_policy(
@@ -245,6 +285,9 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["model_policy"]["selector_band"], "heavy")
         self.assertEqual(payload["model_policy"]["model_band"], "heavy")
         self.assertEqual(payload["model_policy"]["selected_model"], "model/profile-writer")
+        self.assertEqual(payload["route_decision"]["work_contract"], "deliverable_work")
+        self.assertEqual(payload["budget_policy"]["budget_cap"], "medium")
+        self.assertEqual(payload["prompt_contract"]["handoff_contract"], "deliverable_handoff")
         self.assertNotIn("legacy_label", payload["model_policy"])
 
 

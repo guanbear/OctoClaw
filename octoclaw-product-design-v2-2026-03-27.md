@@ -529,7 +529,7 @@ flowchart TB
 - 这件事是否需要独立上下文和独立交付物
 - 这件事是否真的值得多 worker 协调
 
-### 6.1.1 `work_contract` 应成为 route 的正交维度
+### 6.1.1 `work_contract` 应成为系统主字段，而不只是 route 的正交维度
 
 建议在 route 之外，再维护一个更稳定的执行合同维度，例如：
 
@@ -538,7 +538,16 @@ flowchart TB
 - `deliverable_work`
 - `coordinated_work`
 
-它不是给用户看的新 route，而是给系统自己看的决策中间层。
+它不是给用户看的新 route，而是给系统自己看的核心协议字段。
+
+后续这些面都应直接消费它：
+
+- route / policy merge
+- brief schema
+- result / handoff schema
+- review gate
+- retry / budget policy
+- UI / replay / eval
 
 这样可以减少很多灰区误判：
 
@@ -546,6 +555,10 @@ flowchart TB
 - `runner` 对应 `inspect_report`
 - `spawn_single` 对应 `deliverable_work`
 - `spawn_multi` 对应 `coordinated_work`
+
+一句话：
+
+> **OctoClaw 后续不再只是“按 route 跑”，而是“按 work_contract 组织路由、预算、handoff 和评估”。**
 
 ### 6.1.2 route 的推荐判定顺序
 
@@ -561,6 +574,51 @@ flowchart TB
 5. 只有明确可并行或必须分阶段时才进入 `spawn_multi`
 
 这比“先做任务语义分类，再猜 route”更稳。
+
+### 6.1.3 sticky lane 需要显式失效条件
+
+sticky lane 仍然是有价值的，但不能让它形成错误惯性。
+
+至少应有两层保护：
+
+- `lane decay`
+  - follow-up 连续复用到一定次数后，必须回到 system preferred + route_hint merge 重新判断
+- `goal shift detector`
+  - 表面像“继续”，但如果 `work_contract` 已明显变化，就不应继续沿用旧 lane
+
+更实际地说：
+
+- `deliverable_work -> coordinated_work`
+- `coordinated_work -> deliverable_work`
+- `inspect_report -> answer_now`
+
+这类变化都应被当成重新分诊信号。
+
+### 6.1.4 预算和升级门槛必须写成决策表
+
+OctoClaw 的“省钱”和“快”不能只靠感觉，必须有可执行的经济学闭环。
+
+最小决策表至少要把这些输入写进去：
+
+- `work_contract`
+- `risk`
+- `artifact_need`
+- `latency_target`
+- `interruptibility`
+- `parallel_gain`
+
+并输出这些字段：
+
+- `route`
+- `max_workers`
+- `model_band / selector_role`
+- `review_required`
+- `budget_cap`
+- `retry_cap`
+
+也就是说：
+
+> **升级到 `spawn_single / spawn_multi` 不只是“感觉更复杂”，而是“预期收益高于预期成本”。**
 
 ### 6.2 `direct` 的定位
 
@@ -809,6 +867,14 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
 - delegated lane 允许通过 **sticky lane** 复用到 follow-up 请求
 - runtime policy 和 hook 负责最终执行约束
 - classifier 保留为后续可插拔增强，不作为第一版前置依赖
+
+同时 sticky lane 的实现侧应满足：
+
+- 允许 follow-up 复用 delegated lane
+- 但必须有 `lane decay`
+- 必须有 `goal shift detector`
+- 不得绕过 review gate 和 policy veto
+- 不得把旧 lane 当成硬事实，只能当连续性提示
 
 同时要求实现侧必须提供显式 rollout switches，至少包括：
 
@@ -1717,6 +1783,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 目标：
 
 - 让 OctoClaw 越跑越准，而不是只靠规则扩张
+- 让 OctoClaw 越跑越省，而不是只靠主观“感觉更便宜”
 
 最后做：
 
@@ -1724,6 +1791,30 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 20. route and policy replay calibration
 21. context-budget-aware compaction policies
 22. heavier protocol only where data proves it is worth it
+
+这里应明确补成两条硬主线：
+
+- **经济学闭环**
+  - budget decision table
+  - route upgrade ladder
+  - retry cap
+  - review cost model
+- **评估系统**
+  - capability eval
+  - regression eval
+  - replay calibration
+  - state-machine / tool / route drift metrics
+
+默认至少追这 8 个指标：
+
+- 首响时间
+- 最终完成时间
+- 单任务总 token 成本
+- 平均 spawn 数
+- 无效 spawn 率
+- review 命中率
+- 恢复成功率
+- 任务成功率或用户满意度代理指标
 
 ### 12.6 文档真相源
 

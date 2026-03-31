@@ -24,7 +24,7 @@ from typing import Any
 
 from octoclaw_route import infer_route
 from octoclaw_spawn import resolve_model_and_thinking
-from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config
+from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config, save_json
 from runtime_protocol import BRIEF_SCHEMA_VERSION, WORKER_RESULT_SCHEMA_VERSION
 from worker_taxonomy import (
     infer_worker_pool as taxonomy_infer_worker_pool,
@@ -187,8 +187,39 @@ def load_route_stickiness(policy_cfg: dict[str, Any], session_key: str) -> dict[
     return entry
 
 
+def sticky_contract_value(entry: dict[str, Any]) -> str:
+    return str(entry.get("work_contract", entry.get("work_contract_hint", "")) or "").strip()
+
+
+def sticky_apply_limit(policy_cfg: dict[str, Any]) -> int:
+    section = policy_cfg.get("route_stickiness", {})
+    if not isinstance(section, dict):
+        return 0
+    try:
+        return max(int(section.get("max_apply_count", 3) or 0), 0)
+    except (TypeError, ValueError):
+        return 3
+
+
+def mark_sticky_lane_applied(session_key: str, entry: dict[str, Any]) -> dict[str, Any]:
+    if not session_key or not isinstance(entry, dict):
+        return entry
+    current = load_json(ROUTE_STICKINESS_FILE)
+    payload = dict(current) if isinstance(current, dict) else {}
+    existing = payload.get(session_key)
+    if not isinstance(existing, dict):
+        existing = dict(entry)
+    applied_count = int(existing.get("applied_count", 0) or 0) + 1
+    existing["applied_count"] = applied_count
+    existing["last_applied_at"] = utc_now()
+    payload[session_key] = existing
+    save_json(ROUTE_STICKINESS_FILE, payload)
+    return existing
+
+
 def apply_sticky_route(
     base_route: str,
+    base_work_contract: str,
     features: dict[str, Any],
     route_hint: dict[str, Any],
     metadata: dict[str, Any],
@@ -215,11 +246,37 @@ def apply_sticky_route(
     sticky_route = str(sticky.get("route", "") or "").strip()
     if sticky_route not in ("spawn_single", "spawn_multi"):
         return base_route, {}, []
+    sticky_contract = sticky_contract_value(sticky)
+    max_apply_count = sticky_apply_limit(policy_cfg)
+    applied_count = int(sticky.get("applied_count", 0) or 0)
+    if max_apply_count > 0 and applied_count >= max_apply_count:
+        return base_route, {
+            "route": sticky_route,
+            "applied": False,
+            "applied_count": applied_count,
+            "decay_blocked": True,
+            "work_contract": sticky_contract,
+        }, [f"route_sticky_decay_blocked:{sticky_route}"]
+    require_contract_match = bool(section.get("require_contract_match", True)) if isinstance(section, dict) else True
+    if require_contract_match and not ack_followup_candidate:
+        current_contract = str(base_work_contract or "").strip()
+        if sticky_contract and current_contract and sticky_contract != current_contract:
+            return base_route, {
+                "route": sticky_route,
+                "applied": False,
+                "applied_count": applied_count,
+                "goal_shift_blocked": True,
+                "work_contract": sticky_contract,
+                "current_work_contract": current_contract,
+            }, [f"route_sticky_goal_shift:{sticky_contract}_to_{current_contract}"]
+    sticky = mark_sticky_lane_applied(session_key, sticky)
     sticky_state = {
         "route": sticky_route,
         "applied": True,
+        "applied_count": int(sticky.get("applied_count", applied_count + 1) or 0),
         "ack_followup_candidate": ack_followup_candidate,
         "ack_followup_applied": ack_followup_candidate,
+        "work_contract": sticky_contract,
     }
     sticky_reason = [f"route_ack_followup_inherit:{sticky_route}" if ack_followup_candidate else f"route_sticky_lane:{sticky_route}"]
     if base_route == sticky_route:
@@ -306,6 +363,21 @@ def merge_phase(
     return base_phase
 
 
+def merge_work_contract(base_work_contract: str, route: str, sticky_state: dict[str, Any] | None = None) -> str:
+    sticky_contract = str((sticky_state or {}).get("work_contract", "") or "").strip()
+    if bool((sticky_state or {}).get("applied")) and sticky_contract:
+        return sticky_contract
+    if route == "direct":
+        return "answer_now"
+    if route == "runner":
+        return "inspect_report"
+    if route == "spawn_multi":
+        return "coordinated_work"
+    if route == "spawn_single":
+        return "deliverable_work"
+    return str(base_work_contract or "").strip()
+
+
 def build_route_hint_policy(
     base_route: str,
     final_route: str,
@@ -344,6 +416,10 @@ def build_route_hint_policy(
         "sticky_applied": bool((sticky_state or {}).get("applied")),
         "sticky_route": str((sticky_state or {}).get("route", "") or ""),
         "sticky_work_type": str((sticky_state or {}).get("work_type", "") or ""),
+        "sticky_work_contract": str((sticky_state or {}).get("work_contract", "") or ""),
+        "sticky_applied_count": int((sticky_state or {}).get("applied_count", 0) or 0),
+        "sticky_decay_blocked": bool((sticky_state or {}).get("decay_blocked")),
+        "sticky_goal_shift_blocked": bool((sticky_state or {}).get("goal_shift_blocked")),
         "ack_followup_candidate": bool((sticky_state or {}).get("ack_followup_candidate")),
         "ack_followup_applied": bool((sticky_state or {}).get("ack_followup_applied")),
     }
@@ -497,8 +573,66 @@ def resolve_skill_bundle(policy_cfg: dict[str, Any], work_type: str, profile: st
     return deduped
 
 
-def prompt_contract(protocol: str, route: str) -> dict[str, Any]:
+def resolve_merge_contract(route: str, work_contract: str) -> str:
+    if route == "direct":
+        return "none"
+    if route == "runner" or work_contract == "inspect_report":
+        return "inspect_report"
+    if route == "spawn_multi" or work_contract == "coordinated_work":
+        return "coordinated_compose"
+    return "single_worker_result"
+
+
+def resolve_handoff_contract(route: str, work_contract: str) -> str:
+    if route == "direct":
+        return "direct_answer"
+    if route == "runner" or work_contract == "inspect_report":
+        return "runner_report"
+    if route == "spawn_multi" or work_contract == "coordinated_work":
+        return "team_evidence_handoff"
+    return "deliverable_handoff"
+
+
+def budget_policy(features: dict[str, Any], route: str, work_contract: str, protocol: str, needs_review: bool) -> dict[str, Any]:
+    if route == "direct":
+        budget_cap = "tiny"
+        retry_cap = 0
+        max_workers = 0
+        latency_target = "interactive"
+        interruptibility = "high"
+    elif route == "runner":
+        budget_cap = "low"
+        retry_cap = 1
+        max_workers = 1
+        latency_target = "interactive"
+        interruptibility = "high"
+    elif route == "spawn_multi" or work_contract == "coordinated_work":
+        budget_cap = "high" if protocol == "heavy" or features.get("high_risk") else "medium"
+        retry_cap = 1
+        max_workers = 3 if str(features.get("parallel_gain_band", "") or "") == "high" else 2
+        latency_target = "background"
+        interruptibility = "low"
+    else:
+        budget_cap = "medium" if protocol == "heavy" or needs_review else "low"
+        retry_cap = 1
+        max_workers = 1
+        latency_target = "background"
+        interruptibility = "medium"
     return {
+        "budget_cap": budget_cap,
+        "retry_cap": retry_cap,
+        "max_workers": max_workers,
+        "latency_target": latency_target,
+        "interruptibility": interruptibility,
+        "upgrade_allowed": route != "spawn_multi",
+    }
+
+
+def prompt_contract(protocol: str, route: str, work_contract: str, needs_review: bool) -> dict[str, Any]:
+    merge_contract = resolve_merge_contract(route, work_contract)
+    handoff_contract = resolve_handoff_contract(route, work_contract)
+    return {
+        "work_contract": work_contract,
         "brief_required": route != "direct",
         "brief_schema_version": BRIEF_SCHEMA_VERSION,
         "artifact_first": route != "direct",
@@ -509,6 +643,12 @@ def prompt_contract(protocol: str, route: str) -> dict[str, Any]:
         "checkpoint_summary_required": protocol == "heavy",
         "direct_reply_allowed": route == "direct",
         "final_answer_from_handoff": route != "direct",
+        "final_compose_required": route != "direct",
+        "user_safe_summary_required": route != "direct",
+        "child_results_are_evidence": route == "spawn_multi",
+        "merge_contract": merge_contract,
+        "handoff_contract": handoff_contract,
+        "review_gate_required": bool(needs_review),
     }
 
 
@@ -633,9 +773,11 @@ def build_decision(
     sticky_state: dict[str, Any] = {}
     merge_reason_codes: list[str] = []
     route = base_route
+    base_work_contract = str(route_meta.get("work_contract_hint", "") or "")
     if route_hint_required(route_meta, force_route, runtime_cfg):
         route, sticky_state, sticky_reasons = apply_sticky_route(
             base_route,
+            base_work_contract,
             features,
             route_hint,
             metadata,
@@ -651,6 +793,7 @@ def build_decision(
     work_type = merge_work_type(route, base_work_type, route_hint)
     base_phase = infer_phase(task, features, work_type, route, metadata)
     phase = merge_phase(route, base_phase, route_hint)
+    work_contract = merge_work_contract(base_work_contract, route, sticky_state)
     executor_type = infer_executor_type(route)
     protocol = infer_protocol(features, route, work_type)
     worker_pool = infer_worker_pool(route, work_type)
@@ -686,6 +829,8 @@ def build_decision(
     dispatch_required = route != "direct"
     should_wait = route == "runner"
     wait_timeout_seconds = int(route_meta.get("wait_timeout_seconds", 0) or 0) if should_wait else 0
+    route_budget = budget_policy(features, route, work_contract, protocol, needs_review)
+    prompt_policy = prompt_contract(protocol, route, work_contract, needs_review)
 
     decision = {
         "schema_version": SCHEMA_VERSION,
@@ -701,6 +846,7 @@ def build_decision(
         "route_decision": {
             "system_preferred_route": base_route,
             "route": route,
+            "work_contract": work_contract,
             "work_contract_hint": str(route_meta.get("work_contract_hint", "") or ""),
             "dispatch_required": dispatch_required,
             "confidence": route_meta.get("confidence", 0.0),
@@ -722,6 +868,7 @@ def build_decision(
             "artifact_required": bool(route_meta.get("needs_artifact", False)),
             "durable_runtime_required": bool(route_meta.get("needs_durable_runtime", False)),
         },
+        "budget_policy": route_budget,
         "model_policy": {
             "worker_pool": worker_pool,
             "model_selector_role": model_selector_role,
@@ -741,7 +888,7 @@ def build_decision(
             "review_worker_pool": "octoclaw-review" if needs_review else "",
             "review_trigger": "policy_required" if needs_review else "",
         },
-        "prompt_contract": prompt_contract(protocol, route),
+        "prompt_contract": prompt_policy,
         "tool_policy": tool_policy(route, dispatch_required),
         "route_hint_policy": route_hint_policy,
         "runtime_switches": runtime_switches_summary(runtime_cfg),
