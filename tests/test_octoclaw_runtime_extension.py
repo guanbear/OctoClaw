@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXTENSION_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "index.js"
+
+
+def run_runtime_helper(expression: str) -> dict:
+    script = f"""
+import {{ __octoclawTest }} from {json.dumps(str(EXTENSION_PATH))};
+const value = {expression};
+console.log(JSON.stringify(value));
+"""
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+class OctoClawRuntimeExtensionTests(unittest.TestCase):
+    def test_prefers_custom_im_session_key_over_generic_session_id(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.resolvePolicyStateKeys({
+                sessionId: "sess-generic-1",
+                sessionKey: "agent:main:slack:channel:C123:thread:1712345.000100"
+            })"""
+        )
+
+        self.assertEqual(payload[0], "agent:main:slack:channel:C123:thread:1712345.000100")
+        self.assertEqual(payload[1], "sess-generic-1")
+
+    def test_managed_context_accepts_prefixed_slack_main_session(self) -> None:
+        payload = run_runtime_helper(
+            """({
+                managed: __octoclawTest.isManagedAgentContext({
+                    sessionKey: "agent:main:slack:channel:C123:thread:1712345.000100",
+                    agentId: "agent:main:main",
+                    trigger: "message"
+                }),
+                metadata: __octoclawTest.buildPolicyMetadata({
+                    sessionKey: "agent:main:slack:channel:C123:thread:1712345.000100",
+                    sessionId: "sess-generic-1",
+                    agentId: "agent:main:main",
+                    channelId: "slack",
+                    messageProvider: "slack",
+                    trigger: "message"
+                })
+            })"""
+        )
+
+        self.assertTrue(payload["managed"])
+        self.assertEqual(payload["metadata"]["session_key"], "agent:main:slack:channel:C123:thread:1712345.000100")
+        self.assertEqual(payload["metadata"]["session_origin"], "slack")
+        self.assertEqual(payload["metadata"]["session_target"], "channel:C123")
+        self.assertEqual(payload["metadata"]["session_thread_id"], "1712345.000100")
+        self.assertEqual(payload["metadata"]["session_thread_key"], "slack:channel:C123:1712345.000100")
+
+    def test_managed_context_accepts_generic_webchat_session(self) -> None:
+        payload = run_runtime_helper(
+            """({
+                managed: __octoclawTest.isManagedAgentContext({
+                    sessionKey: "webchat:thread:alpha",
+                    trigger: "message"
+                }),
+                metadata: __octoclawTest.buildPolicyMetadata({
+                    sessionKey: "webchat:thread:alpha",
+                    sessionId: "session-raw",
+                    trigger: "message"
+                })
+            })"""
+        )
+
+        self.assertTrue(payload["managed"])
+        self.assertEqual(payload["metadata"]["session_key"], "webchat:thread:alpha")
+        self.assertEqual(payload["metadata"]["session_origin"], "webchat")
+        self.assertEqual(payload["metadata"]["session_target"], "thread:alpha")
+        self.assertEqual(payload["metadata"]["session_thread_key"], "webchat:thread:alpha:root")
+
+    def test_non_im_custom_main_agent_stays_unmanaged(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.isManagedAgentContext({
+                sessionKey: "agent:main:custom-reviewer",
+                agentId: "agent:main:custom-reviewer",
+                trigger: "message"
+            })"""
+        )
+
+        self.assertFalse(payload)
+
+
+if __name__ == "__main__":
+    unittest.main()

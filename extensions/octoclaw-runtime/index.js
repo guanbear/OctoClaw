@@ -126,6 +126,21 @@ function truncateText(value, limit = 320) {
 const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
 const policyStateBySession = new Map();
 const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
+const IM_SESSION_ORIGINS = new Set([
+  "slack",
+  "discord",
+  "telegram",
+  "whatsapp",
+  "signal",
+  "msteams",
+  "googlechat",
+  "wechat",
+  "webchat",
+  "feishu",
+]);
+const USER_SESSION_KINDS = new Set(["dm", "direct", "user"]);
+const CHANNEL_SESSION_KINDS = new Set(["channel", "group", "room", "conversation", "space", "chat"]);
+const THREAD_SESSION_KINDS = new Set(["thread", "topic"]);
 const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
@@ -150,15 +165,82 @@ function prunePolicyState() {
   }
 }
 
-function resolvePolicyStateKeys(ctx = {}) {
-  const keys = [];
-  for (const raw of [ctx.sessionId, ctx.sessionKey]) {
-    const value = String(raw || "").trim();
-    if (value && !keys.includes(value)) {
-      keys.push(value);
+function stripAgentSessionPrefix(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  const parts = value.split(":");
+  if (parts.length >= 3 && parts[0] === "agent") {
+    return parts.slice(2).join(":");
+  }
+  return value;
+}
+
+function parseSessionRoute(raw) {
+  const sessionKey = String(raw || "").trim();
+  const stripped = stripAgentSessionPrefix(sessionKey);
+  const parts = stripped.split(":").filter(Boolean);
+  const origin = String(parts[0] || "").trim().toLowerCase();
+  let target = "";
+  let threadId = "";
+
+  if (parts.length >= 3 && USER_SESSION_KINDS.has(parts[1])) {
+    target = `user:${parts[2]}`;
+    if (parts.length >= 5 && THREAD_SESSION_KINDS.has(parts[3])) {
+      threadId = parts[4];
+    }
+  } else if (parts.length >= 3 && CHANNEL_SESSION_KINDS.has(parts[1])) {
+    target = `${parts[1]}:${parts[2]}`;
+    if (parts.length >= 5 && THREAD_SESSION_KINDS.has(parts[3])) {
+      threadId = parts[4];
+    }
+  } else if (parts.length >= 3 && THREAD_SESSION_KINDS.has(parts[1])) {
+    target = `${parts[1]}:${parts[2]}`;
+  } else if (parts.length >= 2 && IM_SESSION_ORIGINS.has(origin)) {
+    target = parts.slice(1, Math.min(3, parts.length)).join(":");
+    if (parts.length >= 4 && THREAD_SESSION_KINDS.has(parts[2])) {
+      threadId = parts[3];
     }
   }
-  return keys;
+
+  const bindingKey = origin && target ? `${origin}:${target}` : "";
+  const threadKey = bindingKey ? `${bindingKey}:${threadId || "root"}` : "";
+  const looksLikeImSession = Boolean(origin && (target || (IM_SESSION_ORIGINS.has(origin) && parts.length >= 2)));
+  const isPrimaryMainSession = sessionKey.toLowerCase() === "agent:main:main" || stripped.toLowerCase() === "main";
+  return {
+    sessionKey,
+    stripped,
+    origin,
+    target,
+    threadId,
+    bindingKey,
+    threadKey,
+    looksLikeImSession,
+    isPrimaryMainSession,
+  };
+}
+
+function sessionPreferenceRank(raw) {
+  const parsed = parseSessionRoute(raw);
+  if (parsed.looksLikeImSession) return 30;
+  if (parsed.isPrimaryMainSession) return 20;
+  if (/^agent:main:/i.test(String(raw || "").trim())) return 10;
+  return 0;
+}
+
+function resolvePolicyStateKeys(ctx = {}) {
+  const entries = [];
+  for (const raw of [ctx.sessionKey, ctx.sessionId]) {
+    const value = String(raw || "").trim();
+    if (value && !entries.some((entry) => entry.value === value)) {
+      entries.push({
+        value,
+        rank: sessionPreferenceRank(value),
+        order: entries.length,
+      });
+    }
+  }
+  entries.sort((left, right) => right.rank - left.rank || left.order - right.order);
+  return entries.map((entry) => entry.value);
 }
 
 function resolvePolicyStateKey(ctx = {}) {
@@ -314,9 +396,16 @@ function isManagedAgentContext(ctx = {}) {
     return false;
   }
   const sessionKey = String(ctx.sessionKey || "");
+  const sessionId = String(ctx.sessionId || "");
   const agentId = String(ctx.agentId || "");
   if (/subagent/i.test(sessionKey) || /subagent/i.test(agentId)) {
     return false;
+  }
+  const managedRefs = [parseSessionRoute(sessionKey), parseSessionRoute(sessionId)].filter(
+    (item) => item.sessionKey,
+  );
+  if (managedRefs.some((item) => item.looksLikeImSession || item.isPrimaryMainSession)) {
+    return true;
   }
   if (/^agent:main:(?!main$)/i.test(sessionKey) || /^agent:main:(?!main$)/i.test(agentId)) {
     return false;
@@ -327,8 +416,14 @@ function isManagedAgentContext(ctx = {}) {
 function buildPolicyMetadata(ctx = {}) {
   const metadata = {};
   const stableSessionKey = resolvePolicyStateKey(ctx);
+  const stableSession = parseSessionRoute(stableSessionKey);
   if (ctx.channelId) metadata.channel = ctx.channelId;
   if (stableSessionKey) metadata.session_key = stableSessionKey;
+  if (stableSession.origin) metadata.session_origin = stableSession.origin;
+  if (stableSession.target) metadata.session_target = stableSession.target;
+  if (stableSession.threadId) metadata.session_thread_id = stableSession.threadId;
+  if (stableSession.threadKey) metadata.session_thread_key = stableSession.threadKey;
+  if (stableSession.bindingKey) metadata.session_binding_key = stableSession.bindingKey;
   if (ctx.trigger) metadata.trigger = ctx.trigger;
   if (ctx.agentId) metadata.agent_id = ctx.agentId;
   if (ctx.sessionId) metadata.session_id = ctx.sessionId;
@@ -1170,3 +1265,11 @@ const plugin = {
 };
 
 export default plugin;
+export const __octoclawTest = {
+  stripAgentSessionPrefix,
+  parseSessionRoute,
+  resolvePolicyStateKeys,
+  resolvePolicyStateKey,
+  isManagedAgentContext,
+  buildPolicyMetadata,
+};
