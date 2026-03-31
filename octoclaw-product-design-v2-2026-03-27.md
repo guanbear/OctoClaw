@@ -664,6 +664,26 @@ OctoClaw 的“省钱”和“快”不能只靠感觉，必须有可执行的�
 
 > **`runner = bounded tool workflow`，而不是“轻量子 agent”。**
 
+#### 6.3.1 后续收口方向：尽量减少常驻守护进程
+
+当前 `runner / patrol` 仍然保留常驻 loop / daemon 形态，原因是它们还分别承担：
+
+- `runner`
+  - bounded tool workflow 的快速执行
+- `patrol`
+  - ownership / recovery / notification / state truth 巡检
+
+但这不应成为长期终局。后续重构目标应明确为：
+
+- 把更多 `patrol` 能力并入统一 `runtime observer`
+- 把 `runner` 收缩成更轻的 `on-demand executor`
+- 能被 ClawTeam 或程序化工具流替代的轻任务，不再强依赖独立常驻 daemon
+- 尽量减少 stop/start/loop 管理成本，而不是继续扩守护进程数量
+
+也就是说，OctoClaw 的长期方向不是“增加更多守护进程”，而是：
+
+> **保留统一运行面，但尽量把运行面做成更轻、更可恢复、更少常驻 loop 的系统。**
+
 ### 6.4 spawn_single 的定位
 
 用于：
@@ -1793,6 +1813,16 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 18. replay and policy diff surfaces
     当前状态：已完成第一拍，replay summary 已显式输出 policy diff 与 economics metrics
 
+同时新增一条运行面简化支线：
+
+19. runtime simplification track
+    目标：
+    - 把更多 `patrol` 能力并入统一 `runtime observer`
+    - 把 `runner` 收缩成更轻的 `on-demand executor`
+    - 能被 ClawTeam 或程序化工具流替代的 bounded workflow，不再默认依赖常驻 daemon
+    - 尽量减少守护进程、loop 和 stop/start 管理复杂度
+    当前状态：已立项，作为后续架构收口目标
+
 ### 12.5 第五段：把策略闭环做深
 
 目标：
@@ -1802,10 +1832,10 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 最后做：
 
-19. tool evaluation and state-machine evals
-20. route and policy replay calibration
-21. context-budget-aware compaction policies
-22. heavier protocol only where data proves it is worth it
+20. tool evaluation and state-machine evals
+21. route and policy replay calibration
+22. context-budget-aware compaction policies
+23. heavier protocol only where data proves it is worth it
 
 这里应明确补成两条硬主线：
 

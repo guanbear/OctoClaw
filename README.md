@@ -12,6 +12,13 @@ OctoClaw is built for three things:
 - faster response through a persistent runner and async workers
 - better reliability through patrol, session awareness, and self-healing
 
+Longer-term runtime direction:
+
+- reduce always-on daemons where practical
+- fold more patrol responsibilities into a unified runtime observer
+- shrink runner toward a lighter on-demand executor
+- let more bounded workflows move to ClawTeam or programmatic tool execution when that is operationally simpler
+
 Recommended operator setup for the unified runtime direction:
 
 - `SUPERVISOR_MODE=tmux`
