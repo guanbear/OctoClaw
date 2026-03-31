@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 from learning_log import append_error_entry
+from context_pack import build_context_pack
 from octoclaw_route import infer_route
 from octopus_config import (
     CONTEXT_DIR,
@@ -274,61 +275,12 @@ def load_recent_related_tasks(task: str, parent_id: str, limit: int = 3) -> list
 
 def build_context_bundle(task: str, parent_id: str, task_id: str) -> dict:
     related_tasks = load_recent_related_tasks(task, parent_id)
-    summary_lines: list[str] = []
-    refs: list[dict] = []
-
-    for candidate in related_tasks:
-        candidate_id = str(candidate.get("id", "") or "")
-        summary = compact_text(str(candidate.get("summary", "") or candidate.get("task_description", "") or ""))
-        if not summary:
-            continue
-        report_path = str(candidate.get("report_path", "") or "")
-        line = f"- {candidate_id}: {summary}"
-        if report_path:
-            line += f" | report={report_path}"
-        summary_lines.append(line)
-        refs.append({
-            "task_id": candidate_id,
-            "status": str(candidate.get("status", "") or ""),
-            "summary": summary,
-            "report_path": report_path,
-            "route": str(candidate.get("route", "") or ""),
-            "worker_pool": str(candidate.get("worker_pool", "") or ""),
-            "work_type": str(candidate.get("work_type", "") or ""),
-            "phase": str(candidate.get("phase", "") or ""),
-        })
-
-    context_summary = "\n".join(summary_lines).strip()
-    context_path = ""
-    if context_summary:
-        os.makedirs(CONTEXT_DIR, exist_ok=True)
-        context_path = os.path.join(CONTEXT_DIR, f"{task_id}.md")
-        content = "\n".join([
-            f"# OctoClaw Context Pack: {task_id}",
-            "",
-            "## Requested Task",
-            task.strip(),
-            "",
-            "## Related Recent Tasks",
-            context_summary,
-            "",
-            "## Usage",
-            "- 优先使用短摘要判断，不要把长历史直接塞进子任务上下文。",
-            "- 若需要详细背景，先 head -n 80 对应 report_path 或共享文件。",
-        ]).rstrip() + "\n"
-        with open(context_path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-    return {
-        "summary": context_summary,
-        "refs": refs,
-        "context_path": context_path,
-        "budget": {
-            "inline_history_max_items": 3,
-            "inline_history_max_chars": 480,
-            "share_large_context": True,
-        },
-    }
+    return build_context_pack(
+        task_id=task_id,
+        requested_task=task,
+        related_tasks=related_tasks,
+        context_dir=CONTEXT_DIR,
+    )
 
 
 def validate_runtime(runtime: str, stream_to: str, supports_acp: bool) -> list[str]:
@@ -1019,6 +971,8 @@ def build_spawn_spec(
         report_path=report_path,
         context_summary=str(context_bundle.get("summary", "") or ""),
         context_path=str(context_bundle.get("context_path", "") or ""),
+        context_pack=context_bundle.get("context_pack") if isinstance(context_bundle.get("context_pack"), dict) else {},
+        context_budget=context_bundle.get("budget") if isinstance(context_bundle.get("budget"), dict) else {},
         skill_bundle=skill_bundle,
         expected_done=expected_done,
         summary_hint=summary_hint,
@@ -1028,6 +982,7 @@ def build_spawn_spec(
         {
             "brief": brief,
             "expected_output": brief.get("expected_output", {}),
+            "context_pack_path": str(context_bundle.get("context_pack_path", "") or ""),
         }
     )
     prompt = build_task_prompt(
@@ -1176,6 +1131,8 @@ def build_spawn_spec(
         "prompt_contract": prompt_policy,
         "context_summary": context_bundle.get("summary", ""),
         "context_path": context_bundle.get("context_path", ""),
+        "context_pack_path": context_bundle.get("context_pack_path", ""),
+        "context_pack": context_bundle.get("context_pack", {}),
         "context_refs": context_bundle.get("refs", []),
         "context_budget": context_bundle.get("budget", {}),
         "brief": brief,

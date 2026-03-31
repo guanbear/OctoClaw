@@ -32,6 +32,12 @@ class RuntimeProtocolTests(unittest.TestCase):
             report_path="/tmp/task-1.md",
             context_summary="recent auth middleware refactor introduced regressions",
             context_path="/tmp/task-1-context.md",
+            context_pack={
+                "schema_version": "octoclaw.context_pack/v1",
+                "related_task_count": 1,
+                "summary": "auth-refactor task is blocked with report ready",
+            },
+            context_budget={"prefer_context_pack": True},
             skill_bundle=["git", "tests"],
             expected_done="+8min",
             summary_hint="2-5句结论，必要时指出风险",
@@ -40,6 +46,9 @@ class RuntimeProtocolTests(unittest.TestCase):
         self.assertEqual(brief["expected_output"]["schema_version"], WORKER_RESULT_SCHEMA_VERSION)
         self.assertTrue(brief["review_required"])
         self.assertIn("详细报告默认写到 /tmp/task-1.md", brief["constraints"])
+        self.assertIn("follow-up 优先使用 context_pack", " ".join(brief["constraints"]))
+        self.assertEqual(brief["context_pack"]["schema_version"], "octoclaw.context_pack/v1")
+        self.assertTrue(brief["context_budget"]["prefer_context_pack"])
 
     def test_normalize_worker_result_maps_legacy_status_and_report(self) -> None:
         payload = normalize_worker_result(

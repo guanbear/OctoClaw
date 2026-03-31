@@ -108,6 +108,7 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["selector_band"], "standard")
         self.assertEqual(spec["brief"]["schema_version"], "octoclaw.brief/v1")
         self.assertEqual(spec["brief"]["expected_output"]["schema_version"], "octoclaw.worker_result/v1")
+        self.assertEqual(spec["brief"]["context_pack"]["schema_version"], "octoclaw.context_pack/v1")
         self.assertEqual(spec["result_contract"]["status"], "done")
         self.assertIn("\"next_step\":", spec["task_prompt"])
         self.assertIn("\"risks\": []", spec["task_prompt"])

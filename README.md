@@ -512,6 +512,7 @@ OctoClaw follows a lightweight harness direction by default:
 - workers receive brief-first task packets (`octoclaw.brief/v1`)
 - workers are asked to return a structured result contract (`octoclaw.worker_result/v1`)
 - workers now follow a stronger runtime contract: checkpoint/progress events, checklist persistence, artifact-first results, and explicit `blocked` vs `failed`
+- long-running follow-ups now prefer a compact `context_pack` over replaying raw transcript history
 - long outputs become artifacts instead of bloating the main context
 - task / inbox / board make delegation observable
 

@@ -1695,6 +1695,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 12. todo/checklist persistence
    当前状态：已完成基础落地
 13. context pack / memory compaction for long-running follow-ups
+   当前状态：已完成第一拍，spawn/runtime 已改为 context-pack-first follow-up handoff
 14. stronger brief/result shaping and retrieval helpers
 
 ### 12.4 第四段：把展示层产品化
@@ -1751,6 +1752,15 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 
 - 不要把后续重点理解成“继续扩多 agent”
 - 应理解成“把 runtime truth、context engineering、observability、eval 做硬”
+
+截至当前版本，剩余的主线工作可以按两种口径理解：
+
+- 按编号：还剩 8 个编号项（14-22）
+- 按真正的大阶段：还剩 4 段
+  - 完成 `12.3` 的第二拍：brief/result shaping and retrieval helpers
+  - 推进 `12.4`：展示层产品化
+  - 推进 `12.5`：策略闭环深化
+  - 最后做更强的 context-budget / heavier-protocol 校准
 
 ---
 

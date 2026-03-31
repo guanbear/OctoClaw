@@ -55,6 +55,12 @@
     "context_path": {
       "type": "string"
     },
+    "context_pack": {
+      "type": "object"
+    },
+    "context_budget": {
+      "type": "object"
+    },
     "skill_bundle": {
       "type": "array",
       "items": {

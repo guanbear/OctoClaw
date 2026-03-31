@@ -65,6 +65,8 @@ def build_task_brief(
     report_path: str,
     context_summary: str = "",
     context_path: str = "",
+    context_pack: dict[str, Any] | None = None,
+    context_budget: dict[str, Any] | None = None,
     skill_bundle: list[str] | None = None,
     expected_done: str = "",
     summary_hint: str = "",
@@ -82,6 +84,8 @@ def build_task_brief(
         constraints.append("需要 checkpoint summary，中间结果优先 artifact 化")
     if context_path:
         constraints.append(f"如需详细背景，优先读取 {context_path}")
+    if isinstance(context_pack, dict) and int(context_pack.get("related_task_count", 0) or 0) > 0:
+        constraints.append("follow-up 优先使用 context_pack，而不是回灌长 transcript")
 
     brief = {
         "schema_version": BRIEF_SCHEMA_VERSION,
@@ -98,6 +102,8 @@ def build_task_brief(
         "constraints": constraints,
         "context_summary": _compact_text(context_summary, 400),
         "context_path": str(context_path or "").strip(),
+        "context_pack": dict(context_pack) if isinstance(context_pack, dict) else {},
+        "context_budget": dict(context_budget) if isinstance(context_budget, dict) else {},
         "skill_bundle": [str(item).strip() for item in (skill_bundle or []) if str(item).strip()],
         "expected_output": build_result_contract(summary_hint, artifact_first=True),
     }
