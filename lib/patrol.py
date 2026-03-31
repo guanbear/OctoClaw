@@ -4651,7 +4651,7 @@ def main():
                 if _bcode == 1:
                     print(f"⚠️  {_bmsg}", file=sys.stderr)
                     # 发送 DM 预算警告（每日最多提醒一次）
-                    _alert_flag = "/tmp/octopus-budget-warn-today.flag"
+                    _alert_flag = "/tmp/octoclaw-budget-warn-today.flag"
                     _today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     _flag_content = ""
                     try:
@@ -4660,12 +4660,12 @@ def main():
                     except FileNotFoundError:
                         pass
                     if _flag_content != _today_str:
-                        send_state_change_dm(f"💰 八爪鱼预算警告\n{_bmsg}", reply_to_message_id=None)
+                        send_state_change_dm(f"💰 OctoClaw 预算警告\n{_bmsg}", reply_to_message_id=None)
                         with open(_alert_flag, "w") as _ff:
                             _ff.write(_today_str)
                 elif _bcode == 2:
                     print(f"🚨 {_bmsg}", file=sys.stderr)
-                    send_state_change_dm(f"🚨 八爪鱼预算超限！\n{_bmsg}\n请检查任务调度策略。", reply_to_message_id=None)
+                    send_state_change_dm(f"🚨 OctoClaw 预算超限！\n{_bmsg}\n请检查任务调度策略。", reply_to_message_id=None)
         except Exception as _be:
             print(f"⚠️  预算追踪异常（不影响巡逻）: {_be}", file=sys.stderr)
 

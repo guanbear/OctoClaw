@@ -1670,10 +1670,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
      - expected artifact
      - checklist delta
      - worker_result contract
+   当前状态：已完成第一拍，`spawn-template.md` 与 live `build_task_prompt()` 已切到 artifact-first / checklist / checkpoint / blocked-vs-failed 合同
 
 10. Budget / Cost Core Rewrite
     - 废掉旧 `tier` 成本核
     - 改成基于实际 selected model / model band / worker policy 的成本记账
+    当前状态：已完成第一拍，`budget.py` 已改为 policy-first 记账并回写 `cost_estimate` / `artifacts.budget`
 
 这一段的核心判断是：
 

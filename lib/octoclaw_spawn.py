@@ -586,7 +586,7 @@ def build_task_prompt(
     )
     result_payload = result_contract if isinstance(result_contract, dict) else build_result_contract(summary_hint, artifact_first=True)
     lines = [
-        "【状态写入】开始前先执行：",
+        "【状态写入 / entry】开始前先执行：",
         (
             f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert "
             f"--id {task_id} --model '{model}' --status running --model-band {model_band} "
@@ -603,23 +603,50 @@ def build_task_prompt(
         "```",
         "",
         "【执行约束】",
+        "- 优先按 TASK BRIEF 执行；不要自行改目标、边界、交付格式",
         "- 每 turn ≤500字；分段读文件，避免一次性灌长上下文",
-        "- 大段内容写共享文件，不要直接塞进上下文或 RESULT",
-        "- 如果遇到阻塞，立刻执行 failed 状态写入，然后输出 failure RESULT",
+        "- 大段内容、长 diff、长日志分析优先写共享文件，不要直接塞进上下文或 RESULT",
         f"- 详细报告默认写到：{report_path}",
         "- 若填写 report，summary 仍需自包含，不能只写“已写入报告”",
+        "- 真正失败才用 failed；仍有可交付解释但被阻塞时用 blocked",
         "",
         "【文件读取强制要求】",
         "- cat -> head -n 60",
         "- grep/rg -> | head -20",
         "- 日志 -> tail -n 50",
         "",
+        "【运行中事件】",
+        (
+            f"checkpoint: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py event "
+            f"--id {task_id} --kind checkpoint --message '当前阶段一句话总结' --summary '当前阶段一句话总结'"
+        ),
+        (
+            f"artifact_ready: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py event "
+            f"--id {task_id} --kind artifact_ready --report-path '{report_path}' --message 'artifact ready'"
+        ),
+        (
+            f"checklist: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py checklist "
+            f"--id {task_id} --checklist-json '{{\"kind\":\"explicit\",\"items\":[...]}}'"
+        ),
+        "",
         "【RESULT 规范】",
         "---RESULT---",
         json.dumps(result_payload, ensure_ascii=False),
         "",
-        "【Fail Fast】",
-        f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py failed --id {task_id} --summary \"阻塞原因（1句）：xxx，建议：xxx\"",
+        "【收口命令】",
+        (
+            f"done: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py done "
+            f"--id {task_id} --summary '结果一句话总结' --report-path '{report_path}'"
+        ),
+        (
+            f"blocked: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py blocked "
+            f"--id {task_id} --summary '可交付受阻说明' --report-path '{report_path}' "
+            f"--blocked-reason '阻塞原因（1句）'"
+        ),
+        (
+            f"failed: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py failed "
+            f"--id {task_id} --summary '失败原因（1句）：xxx，建议：xxx'"
+        ),
     ]
     return "\n".join(lines).strip()
 

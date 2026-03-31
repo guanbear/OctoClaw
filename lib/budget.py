@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-budget.py — 八爪鱼成本追踪模块（NadirClaw 启发）
+budget.py — OctoClaw policy-first budget tracker.
 
-功能:
-  1. 累计当日/当月任务成本估算（基于 model + tier）
-  2. 支持可配置的日/月预算上限
-  3. 超过阈值时返回警告/超限状态
-  4. 可被 patrol.py 调用，也可独立运行
+This module no longer estimates cost from legacy task tiers. Instead it tracks
+budget pressure from the runtime decision truth we now have:
 
-用法:
-  python3 budget.py status          # 显示当前预算状态（JSON）
-  python3 budget.py check           # 检查预算 (exit 0=正常, 1=警告, 2=超限)
-  python3 budget.py record --task-id xxx --model yyy --tier zzz [--tokens N]
-  python3 budget.py reset           # 重置当日预算记录（测试用）
+- selected model
+- model band
+- worker pool
+- route
+- phase / protocol
+
+It can still be called from patrol, and it also annotates task-state records
+with a compact human-readable `cost_estimate` plus a structured
+`artifacts.budget` payload for retrieval and status surfaces.
 """
 
 from __future__ import annotations
@@ -22,170 +23,297 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
-from model_pricing import estimate_task_cost_usd
+try:
+    from model_pricing import estimate_task_cost_usd
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.model_pricing import estimate_task_cost_usd
 
-# ── 路径常量 ────────────────────────────────────────────────────────────────
-TASK_STATE_FILE = "/workspace/tmp/octopus/task-state.json"
-BUDGET_LOG_FILE = "/workspace/tmp/octopus-budget.json"
-BUDGET_CONFIG_FILE = "/workspace/tmp/octopus-budget-config.json"
+try:
+    from octopus_config import TASK_STATE_FILE, WORKSPACE
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.octopus_config import TASK_STATE_FILE, WORKSPACE
 
-# ── 每个 tier 的 token 估算（input + output，单位 tokens）──────────────────
-_TIER_TOKENS: dict[str, int] = {
-    "trivial": 800,
-    "simple":  2000,
-    "normal":  5000,
-    "hard":    10000,
-    "deep":    20000,
+try:
+    from runtime_task_record import normalize_task_record
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_task_record import normalize_task_record
+
+
+BUDGET_LOG_FILE = f"{WORKSPACE}/tmp/octoclaw-budget.json"
+BUDGET_CONFIG_FILE = f"{WORKSPACE}/tmp/octoclaw-budget-config.json"
+
+DEFAULT_TOKENS_BY_MODEL_BAND: dict[str, int] = {
+    "fast": 1400,
+    "normal": 5200,
+    "strong": 9800,
+    "heavy": 18000,
 }
 
-# ── 默认预算配置 ──────────────────────────────────────────────────────────
-_DEFAULT_CONFIG = {
-    "daily_limit_usd": 5.0,       # 日预算上限（美元）
-    "monthly_limit_usd": 50.0,    # 月预算上限（美元）
-    "warn_threshold": 0.80,       # 警告阈值（占上限百分比）
+WORKER_POOL_MULTIPLIER: dict[str, float] = {
+    "octoclaw-main": 0.65,
+    "octoclaw-runner": 0.35,
+    "octoclaw-research": 1.00,
+    "octoclaw-code": 1.10,
+    "octoclaw-review": 0.90,
+}
+
+ROUTE_MULTIPLIER: dict[str, float] = {
+    "direct": 0.60,
+    "runner": 0.35,
+    "spawn_single": 1.00,
+    "spawn_multi": 1.20,
+}
+
+PHASE_MULTIPLIER: dict[str, float] = {
+    "inspect": 0.75,
+    "collect": 1.00,
+    "report": 1.15,
+    "implement": 1.20,
+    "verify": 0.90,
+}
+
+PROTOCOL_MULTIPLIER: dict[str, float] = {
+    "normal": 1.00,
+    "heavy": 1.75,
+}
+
+FALLBACK_USD_PER_1M_TOKENS_BY_MODEL_KEYWORD: dict[str, float] = {
+    "minimax": 0.50,
+    "glm-5": 1.20,
+    "glm-4.7": 0.28,
+    "glm": 0.40,
+    "gpt-5.4": 3.40,
+    "gpt": 2.00,
+    "sonnet": 3.20,
+    "opus": 14.00,
+}
+
+FALLBACK_USD_PER_1M_TOKENS_BY_MODEL_BAND: dict[str, float] = {
+    "fast": 0.45,
+    "normal": 0.90,
+    "strong": 2.40,
+    "heavy": 5.50,
+}
+
+DEFAULT_CONFIG = {
+    "daily_limit_usd": 5.0,
+    "monthly_limit_usd": 50.0,
+    "warn_threshold": 0.80,
     "enabled": True,
 }
 
 
-def _load_json(path: str) -> dict | list | None:
-    """安全读取 JSON 文件，不存在或解析失败返回 None。"""
+def _load_json(path: str) -> dict[str, Any] | list[Any] | None:
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
 
-def _save_json(path: str, data: dict | list) -> bool:
-    """安全写入 JSON 文件，返回是否成功。"""
+def _save_json(path: str, payload: dict[str, Any] | list[Any]) -> bool:
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
+        temp_path = path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        os.replace(temp_path, path)
         return True
-    except OSError as e:
-        print(f"WARNING: budget.py 写入失败 {path}: {e}", file=sys.stderr)
+    except OSError as exc:
+        print(f"WARNING: budget.py failed to write {path}: {exc}", file=sys.stderr)
         return False
 
 
-def _get_config() -> dict:
-    """读取预算配置，不存在则返回默认值。"""
-    cfg = _load_json(BUDGET_CONFIG_FILE)
+def _load_budget_log(path: str = BUDGET_LOG_FILE) -> dict[str, Any]:
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("schema_version", "octoclaw.budget_log/v2")
+    payload.setdefault("updated_at", "")
+    payload.setdefault("daily", {})
+    payload.setdefault("monthly", {})
+    payload.setdefault("tasks", [])
+    return payload
+
+
+def _get_config(path: str = BUDGET_CONFIG_FILE) -> dict[str, Any]:
+    cfg = _load_json(path)
     if isinstance(cfg, dict):
-        merged = dict(_DEFAULT_CONFIG)
+        merged = dict(DEFAULT_CONFIG)
         merged.update(cfg)
         return merged
-    return dict(_DEFAULT_CONFIG)
+    return dict(DEFAULT_CONFIG)
 
 
-def _get_model_short_name(model_path: str) -> str:
-    """从完整模型路径中提取短名关键字，用于查定价。"""
-    lower = model_path.lower()
-    for key in ("opus", "sonnet", "haiku", "glm", "kimi", "gpt4o"):
-        if key in lower:
-            return key
-    return "default"
+def _text(value: Any) -> str:
+    return str(value or "").strip()
 
 
-def estimate_cost(model: str, tier: str, tokens: int | None = None) -> float:
-    """
-    估算单次任务成本（美元）。
-    如果提供了 tokens，使用实际 tokens；否则按 tier 估算。
-    假设 input:output = 3:1。
-    """
-    total_tokens = tokens if tokens and tokens > 0 else _TIER_TOKENS.get(tier, 5000)
-    normalized_cost = estimate_task_cost_usd(model, total_tokens)
+def _int_like(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _band(value: str) -> str:
+    text = _text(value).lower()
+    return text if text in DEFAULT_TOKENS_BY_MODEL_BAND else "normal"
+
+
+def _cost_keyword(model_id: str) -> str:
+    lowered = _text(model_id).lower()
+    for keyword in FALLBACK_USD_PER_1M_TOKENS_BY_MODEL_KEYWORD:
+        if keyword in lowered:
+            return keyword
+    return ""
+
+
+def _estimate_tokens(
+    *,
+    model_band: str,
+    worker_pool: str,
+    route: str,
+    phase: str,
+    protocol: str,
+    tokens: int | None = None,
+) -> int:
+    if tokens and tokens > 0:
+        return int(tokens)
+    band = _band(model_band)
+    estimate = float(DEFAULT_TOKENS_BY_MODEL_BAND.get(band, DEFAULT_TOKENS_BY_MODEL_BAND["normal"]))
+    estimate *= WORKER_POOL_MULTIPLIER.get(_text(worker_pool), 1.0)
+    estimate *= ROUTE_MULTIPLIER.get(_text(route).lower(), 1.0)
+    estimate *= PHASE_MULTIPLIER.get(_text(phase).lower(), 1.0)
+    estimate *= PROTOCOL_MULTIPLIER.get(_text(protocol).lower(), 1.0)
+    return max(400, int(round(estimate)))
+
+
+def estimate_cost(
+    *,
+    model: str,
+    model_band: str,
+    worker_pool: str,
+    route: str,
+    phase: str,
+    protocol: str,
+    tokens: int | None = None,
+) -> tuple[float, int]:
+    token_estimate = _estimate_tokens(
+        model_band=model_band,
+        worker_pool=worker_pool,
+        route=route,
+        phase=phase,
+        protocol=protocol,
+        tokens=tokens,
+    )
+    normalized_cost = estimate_task_cost_usd(model, token_estimate)
     if normalized_cost is not None:
-        return round(normalized_cost, 6)
+        return round(normalized_cost, 6), token_estimate
 
-    # fallback：老逻辑兜底
-    short = _get_model_short_name(model)
-    fallback_pricing: dict[str, tuple[float, float]] = {
-        "glm":     (0.10,  0.30),
-        "kimi":    (0.15,  0.45),
-        "sonnet":  (3.00, 15.00),
-        "opus":    (15.0, 75.00),
-        "haiku":   (0.25,  1.25),
-        "gpt4o":   (5.00, 15.00),
-        "default": (3.00, 15.00),
-    }
-    price_in, price_out = fallback_pricing.get(short, fallback_pricing["default"])
-    input_tokens = total_tokens * 0.75
-    output_tokens = total_tokens * 0.25
-    return round((input_tokens * price_in + output_tokens * price_out) / 1_000_000, 6)
+    keyword = _cost_keyword(model)
+    usd_per_1m = FALLBACK_USD_PER_1M_TOKENS_BY_MODEL_KEYWORD.get(
+        keyword,
+        FALLBACK_USD_PER_1M_TOKENS_BY_MODEL_BAND.get(_band(model_band), 0.90),
+    )
+    return round((token_estimate / 1_000_000) * usd_per_1m, 6), token_estimate
 
 
-def _load_budget_log() -> dict:
-    """读取预算日志，返回结构化对象。"""
-    log = _load_json(BUDGET_LOG_FILE)
-    if not isinstance(log, dict):
-        log = {}
-    if "daily" not in log or not isinstance(log["daily"], dict):
-        log["daily"] = {}
-    if "monthly" not in log or not isinstance(log["monthly"], dict):
-        log["monthly"] = {}
-    if "tasks" not in log or not isinstance(log["tasks"], list):
-        log["tasks"] = []
-    return log
+def _task_record_map(log: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    records = log.get("tasks", [])
+    if not isinstance(records, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for item in records:
+        if isinstance(item, dict):
+            task_id = _text(item.get("id"))
+            if task_id:
+                result[task_id] = item
+    return result
 
 
-def record_task(task_id: str, model: str, tier: str, tokens: int | None = None) -> float:
-    """
-    记录一次已完成任务的成本。
-    返回本次估算成本（美元）。
-    避免重复记录同一 task_id。
-    """
-    log = _load_budget_log()
+def _format_cost_estimate(entry: dict[str, Any]) -> str:
+    cost = float(entry.get("cost_usd", 0.0) or 0.0)
+    band = _text(entry.get("model_band"))
+    pool = _text(entry.get("worker_pool"))
+    route = _text(entry.get("route"))
+    descriptor = "/".join(part for part in (band, pool.replace("octoclaw-", ""), route) if part)
+    return f"${cost:.4f}" + (f" · {descriptor}" if descriptor else "")
 
-    # 防止重复记录
-    existing_ids = {t.get("id") for t in log["tasks"]}
-    if task_id in existing_ids:
-        return 0.0
 
-    cost = estimate_cost(model, tier, tokens)
+def record_task(
+    task_id: str,
+    model: str,
+    *,
+    model_band: str = "",
+    worker_pool: str = "",
+    route: str = "",
+    phase: str = "",
+    protocol: str = "",
+    tokens: int | None = None,
+    status: str = "",
+    path: str = BUDGET_LOG_FILE,
+) -> dict[str, Any]:
+    log = _load_budget_log(path)
+    existing = _task_record_map(log).get(task_id)
+    if existing:
+        payload = dict(existing)
+        payload["already_recorded"] = True
+        return payload
+
+    cost_usd, token_estimate = estimate_cost(
+        model=model,
+        model_band=model_band,
+        worker_pool=worker_pool,
+        route=route,
+        phase=phase,
+        protocol=protocol,
+        tokens=tokens,
+    )
     now = datetime.now(timezone.utc)
     day_key = now.strftime("%Y-%m-%d")
     month_key = now.strftime("%Y-%m")
 
-    log["daily"][day_key] = round(log["daily"].get(day_key, 0.0) + cost, 6)
-    log["monthly"][month_key] = round(log["monthly"].get(month_key, 0.0) + cost, 6)
-    log["tasks"].append({
-        "id": task_id,
-        "model": model,
-        "tier": tier,
-        "tokens": tokens,
-        "cost_usd": cost,
-        "recorded_at": now.isoformat(),
-    })
+    log["daily"][day_key] = round(float(log["daily"].get(day_key, 0.0) or 0.0) + cost_usd, 6)
+    log["monthly"][month_key] = round(float(log["monthly"].get(month_key, 0.0) or 0.0) + cost_usd, 6)
 
-    # 只保留最近 500 条任务记录，防止文件膨胀
+    entry = {
+        "id": task_id,
+        "model": _text(model),
+        "model_band": _band(model_band),
+        "worker_pool": _text(worker_pool),
+        "route": _text(route),
+        "phase": _text(phase),
+        "protocol": _text(protocol) or "normal",
+        "status": _text(status),
+        "tokens_estimate": int(token_estimate),
+        "cost_usd": cost_usd,
+        "recorded_at": now.astimezone().isoformat(),
+        "already_recorded": False,
+    }
+    log["tasks"].append(entry)
     if len(log["tasks"]) > 500:
         log["tasks"] = log["tasks"][-500:]
+    log["updated_at"] = now.astimezone().isoformat()
+    _save_json(path, log)
+    return entry
 
-    _save_json(BUDGET_LOG_FILE, log)
-    return cost
 
-
-def get_status() -> dict:
-    """
-    返回当前预算状态字典。
-    包含：today_usd, month_usd, daily_limit, monthly_limit,
-          daily_pct, monthly_pct, alert_level (ok/warn/over)
-    """
-    cfg = _get_config()
-    log = _load_budget_log()
+def get_status(*, log_path: str = BUDGET_LOG_FILE, config_path: str = BUDGET_CONFIG_FILE) -> dict[str, Any]:
+    cfg = _get_config(config_path)
+    log = _load_budget_log(log_path)
     now = datetime.now(timezone.utc)
     day_key = now.strftime("%Y-%m-%d")
     month_key = now.strftime("%Y-%m")
 
-    today_usd = log["daily"].get(day_key, 0.0)
-    month_usd = log["monthly"].get(month_key, 0.0)
-    daily_limit = cfg["daily_limit_usd"]
-    monthly_limit = cfg["monthly_limit_usd"]
-    warn_pct = cfg["warn_threshold"]
+    today_usd = float(log["daily"].get(day_key, 0.0) or 0.0)
+    month_usd = float(log["monthly"].get(month_key, 0.0) or 0.0)
+    daily_limit = float(cfg["daily_limit_usd"])
+    monthly_limit = float(cfg["monthly_limit_usd"])
+    warn_pct = float(cfg["warn_threshold"])
 
     daily_pct = today_usd / daily_limit if daily_limit > 0 else 0.0
     monthly_pct = month_usd / monthly_limit if monthly_limit > 0 else 0.0
@@ -209,16 +337,13 @@ def get_status() -> dict:
         "monthly_pct": round(monthly_pct * 100, 1),
         "alert_level": alert_level,
         "warn_threshold_pct": round(warn_pct * 100, 1),
-        "enabled": cfg.get("enabled", True),
+        "enabled": bool(cfg.get("enabled", True)),
+        "tracked_tasks": len(log.get("tasks", [])) if isinstance(log.get("tasks", []), list) else 0,
     }
 
 
-def check_budget() -> tuple[int, str]:
-    """
-    检查预算状态，返回 (exit_code, message)。
-    exit_code: 0=正常, 1=警告, 2=超限, 3=已禁用
-    """
-    status = get_status()
+def check_budget(*, log_path: str = BUDGET_LOG_FILE, config_path: str = BUDGET_CONFIG_FILE) -> tuple[int, str]:
+    status = get_status(log_path=log_path, config_path=config_path)
     level = status["alert_level"]
     today = status["today_usd"]
     dlimit = status["daily_limit_usd"]
@@ -226,115 +351,195 @@ def check_budget() -> tuple[int, str]:
     mlimit = status["monthly_limit_usd"]
 
     if level == "disabled":
-        return 3, "预算追踪已禁用"
-    elif level == "over":
+        return 3, "OctoClaw budget tracking disabled"
+    if level == "over":
         return 2, (
-            f"⚠️ 预算超限！今日: ${today:.3f}/${dlimit} ({status['daily_pct']}%), "
-            f"本月: ${month:.3f}/${mlimit} ({status['monthly_pct']}%)"
+            f"Budget over limit. Today: ${today:.3f}/${dlimit} ({status['daily_pct']}%), "
+            f"Month: ${month:.3f}/${mlimit} ({status['monthly_pct']}%)"
         )
-    elif level == "warn":
+    if level == "warn":
         return 1, (
-            f"💰 预算警告！今日: ${today:.3f}/${dlimit} ({status['daily_pct']}%), "
-            f"本月: ${month:.3f}/${mlimit} ({status['monthly_pct']}%)"
+            f"Budget warning. Today: ${today:.3f}/${dlimit} ({status['daily_pct']}%), "
+            f"Month: ${month:.3f}/${mlimit} ({status['monthly_pct']}%)"
         )
-    else:
-        return 0, (
-            f"✅ 预算正常：今日 ${today:.3f}/${dlimit} ({status['daily_pct']}%), "
-            f"本月 ${month:.3f}/${mlimit} ({status['monthly_pct']}%)"
-        )
+    return 0, (
+        f"Budget healthy. Today ${today:.3f}/${dlimit} ({status['daily_pct']}%), "
+        f"Month ${month:.3f}/${mlimit} ({status['monthly_pct']}%)"
+    )
 
 
-def sync_from_task_state() -> int:
-    """
-    从 task-state.json 批量同步已完成任务的成本记录。
-    返回新增记录数。
-    """
-    task_data = _load_json(TASK_STATE_FILE)
-    if not task_data:
+def _load_task_container(path: str = TASK_STATE_FILE) -> tuple[str, Any, list[dict[str, Any]]]:
+    payload = _load_json(path)
+    if isinstance(payload, dict) and isinstance(payload.get("tasks"), list):
+        tasks = [item for item in payload.get("tasks", []) if isinstance(item, dict)]
+        return "state", payload, tasks
+    if isinstance(payload, dict) and "id" in payload:
+        return "single", payload, [payload]
+    if isinstance(payload, dict):
+        values = [item for item in payload.values() if isinstance(item, dict)]
+        return "keyed", payload, values
+    if isinstance(payload, list):
+        tasks = [item for item in payload if isinstance(item, dict)]
+        return "list", payload, tasks
+    return "", None, []
+
+
+def _save_task_container(kind: str, container: Any, tasks: list[dict[str, Any]], path: str = TASK_STATE_FILE) -> None:
+    if kind == "state" and isinstance(container, dict):
+        container["tasks"] = tasks
+        _save_json(path, container)
+        return
+    if kind == "single" and isinstance(container, dict):
+        _save_json(path, tasks[0] if tasks else container)
+        return
+    if kind == "keyed" and isinstance(container, dict):
+        rebuilt = dict(container)
+        rebuilt.clear()
+        for item in tasks:
+            task_id = _text(item.get("id"))
+            rebuilt[task_id or f"task-{len(rebuilt)+1}"] = item
+        _save_json(path, rebuilt)
+        return
+    if kind == "list":
+        _save_json(path, tasks)
+
+
+def _is_budget_trackable(task: dict[str, Any]) -> bool:
+    normalized = normalize_task_record(task)
+    lifecycle_state = _text(normalized.get("lifecycle_state")).lower()
+    outcome_state = _text(normalized.get("outcome_state")).lower()
+    if lifecycle_state not in {"finished", "cancelled"}:
+        return False
+    return outcome_state in {"done", "failed", "blocked", "partial"}
+
+
+def _annotate_task_with_budget(task: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    task["cost_estimate"] = _format_cost_estimate(entry)
+    artifacts = task.get("artifacts") if isinstance(task.get("artifacts"), dict) else {}
+    budget_artifact = {
+        "model": _text(entry.get("model")),
+        "model_band": _text(entry.get("model_band")),
+        "worker_pool": _text(entry.get("worker_pool")),
+        "route": _text(entry.get("route")),
+        "phase": _text(entry.get("phase")),
+        "protocol": _text(entry.get("protocol")) or "normal",
+        "status": _text(entry.get("status")),
+        "tokens_estimate": int(entry.get("tokens_estimate", 0) or 0),
+        "cost_usd": float(entry.get("cost_usd", 0.0) or 0.0),
+        "recorded_at": _text(entry.get("recorded_at")),
+    }
+    artifacts["budget"] = budget_artifact
+    task["artifacts"] = artifacts
+    return task
+
+
+def sync_from_task_state(*, state_path: str = TASK_STATE_FILE, log_path: str = BUDGET_LOG_FILE) -> int:
+    kind, container, tasks = _load_task_container(state_path)
+    if not tasks:
         return 0
 
-    # task-state.json 可能是 dict（单任务）或 dict-of-dicts（多任务keyed by id）
-    tasks: list[dict] = []
-    if isinstance(task_data, dict):
-        # 判断是单任务还是多任务字典
-        if "id" in task_data:
-            # 单任务
-            tasks = [task_data]
-        else:
-            # 多任务字典（keyed by task_id）
-            tasks = list(task_data.values())
-    elif isinstance(task_data, list):
-        tasks = task_data
-
-    count = 0
+    synced = 0
+    changed = False
     for task in tasks:
-        if not isinstance(task, dict):
+        if not isinstance(task, dict) or not _is_budget_trackable(task):
             continue
-        status = task.get("status", "")
-        if status not in ("done", "failed"):
-            continue  # 只记录已完成任务
-        task_id = task.get("id", "")
-        model = task.get("model", "unknown")
-        tier = task.get("tier", "normal")
+        normalized = normalize_task_record(task)
+        task_id = _text(normalized.get("id"))
+        model = _text(normalized.get("model"))
         if not task_id or not model:
             continue
-        cost = record_task(task_id, model, tier)
-        if cost > 0:
-            count += 1
+        existing_budget = (
+            (task.get("artifacts") or {}) if isinstance(task.get("artifacts"), dict) else {}
+        ).get("budget")
+        entry = record_task(
+            task_id,
+            model,
+            model_band=_text(normalized.get("model_band")),
+            worker_pool=_text(normalized.get("worker_pool")),
+            route=_text(normalized.get("route")),
+            phase=_text(normalized.get("phase")),
+            protocol=_text(normalized.get("protocol")) or "normal",
+            tokens=_int_like(((existing_budget or {}) if isinstance(existing_budget, dict) else {}).get("tokens_estimate")),
+            status=_text(normalized.get("status")),
+            path=log_path,
+        )
+        if not entry.get("already_recorded"):
+            synced += 1
+        before = _text(task.get("cost_estimate"))
+        _annotate_task_with_budget(task, entry)
+        if before != _text(task.get("cost_estimate")) or not isinstance(existing_budget, dict):
+            changed = True
 
-    return count
+    if changed and kind:
+        _save_task_container(kind, container, tasks, state_path)
+    return synced
 
 
-def main():
-    parser = argparse.ArgumentParser(description="八爪鱼成本追踪模块")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="OctoClaw budget tracker")
     subparsers = parser.add_subparsers(dest="cmd")
 
-    subparsers.add_parser("status", help="显示当前预算状态")
-    subparsers.add_parser("check", help="检查预算（exit 0=正常, 1=警告, 2=超限）")
-    subparsers.add_parser("sync", help="从 task-state.json 同步任务成本")
-    subparsers.add_parser("reset", help="重置当日预算记录（测试用）")
+    subparsers.add_parser("status", help="show current budget status")
+    subparsers.add_parser("check", help="check budget (exit 0=ok, 1=warn, 2=over)")
+    subparsers.add_parser("sync", help="sync finished tasks from task-state")
+    subparsers.add_parser("reset", help="reset today's budget usage")
 
-    rec_parser = subparsers.add_parser("record", help="记录单次任务成本")
-    rec_parser.add_argument("--task-id", required=True, help="任务ID")
-    rec_parser.add_argument("--model", required=True, help="模型路径")
-    rec_parser.add_argument("--tier", default="normal",
-                            choices=["trivial", "simple", "normal", "hard", "deep"])
-    rec_parser.add_argument("--tokens", type=int, default=0, help="实际 token 数（可选）")
+    rec_parser = subparsers.add_parser("record", help="record a single task cost")
+    rec_parser.add_argument("--task-id", required=True, help="task id")
+    rec_parser.add_argument("--model", required=True, help="selected model id")
+    rec_parser.add_argument("--model-band", default="normal", choices=["fast", "normal", "strong", "heavy"])
+    rec_parser.add_argument("--worker-pool", default="")
+    rec_parser.add_argument("--route", default="")
+    rec_parser.add_argument("--phase", default="")
+    rec_parser.add_argument("--protocol", default="normal")
+    rec_parser.add_argument("--status", default="")
+    rec_parser.add_argument("--tokens", type=int, default=0, help="actual token count if known")
 
     args = parser.parse_args()
 
     if args.cmd == "status":
-        status = get_status()
-        print(json.dumps(status, ensure_ascii=False, indent=2))
+        print(json.dumps(get_status(), ensure_ascii=False, indent=2))
+        return
 
-    elif args.cmd == "check":
-        code, msg = check_budget()
-        print(msg)
+    if args.cmd == "check":
+        code, message = check_budget()
+        print(message)
         sys.exit(code)
 
-    elif args.cmd == "sync":
-        n = sync_from_task_state()
-        print(f"✅ 已同步 {n} 条新任务成本记录")
+    if args.cmd == "sync":
+        count = sync_from_task_state()
+        print(f"ok synced={count}")
+        return
 
-    elif args.cmd == "record":
+    if args.cmd == "record":
         tokens = args.tokens if args.tokens > 0 else None
-        cost = record_task(args.task_id, args.model, args.tier, tokens)
-        if cost > 0:
-            print(f"✅ 已记录 task={args.task_id} cost=${cost:.6f}")
+        entry = record_task(
+            args.task_id,
+            args.model,
+            model_band=args.model_band,
+            worker_pool=args.worker_pool,
+            route=args.route,
+            phase=args.phase,
+            protocol=args.protocol,
+            status=args.status,
+            tokens=tokens,
+        )
+        if entry.get("already_recorded"):
+            print(f"skip existing task={args.task_id}")
         else:
-            print(f"ℹ️  task={args.task_id} 已存在，跳过重复记录")
+            print(f"ok task={args.task_id} cost=${float(entry['cost_usd']):.6f}")
+        return
 
-    elif args.cmd == "reset":
+    if args.cmd == "reset":
         log = _load_budget_log()
-        now = datetime.now(timezone.utc)
-        day_key = now.strftime("%Y-%m-%d")
+        day_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if day_key in log["daily"]:
             del log["daily"][day_key]
         _save_json(BUDGET_LOG_FILE, log)
-        print(f"✅ 已重置 {day_key} 的预算记录")
+        print(f"ok reset_day={day_key}")
+        return
 
-    else:
-        parser.print_help()
+    parser.print_help()
 
 
 if __name__ == "__main__":

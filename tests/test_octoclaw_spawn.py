@@ -111,6 +111,8 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["result_contract"]["status"], "done")
         self.assertIn("\"next_step\":", spec["task_prompt"])
         self.assertIn("\"risks\": []", spec["task_prompt"])
+        self.assertIn("task-state-update.py blocked", spec["task_prompt"])
+        self.assertIn("task-state-update.py checklist", spec["task_prompt"])
 
     def test_build_spawn_spec_does_not_need_legacy_inputs_when_taxonomy_exists(self) -> None:
         policy = {
