@@ -519,11 +519,23 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
     system_failed_recent = []
     system_done_recent = []
     steer_needed = []
+    primary_problem_ids = {
+        _task_id(task)
+        for group in (running, queued, deferred, pending)
+        for task in group
+    }
 
     for task in tasks:
-        if task.get("recovery_action") in ("needs_steer", "steered", "dead_agent_recovered"):
-            if not is_system_maintenance_task(task):
+        recovery_action = str(task.get("recovery_action") or "").strip().lower()
+        task_id = _task_id(task)
+        task_status = str(task.get("status") or "").strip().lower()
+        recent = _should_count_recent(task, recent_window, lineage_child_ids, now)
+        if not is_system_maintenance_task(task):
+            if recovery_action == "needs_steer":
                 steer_needed.append(task)
+            elif recovery_action in {"steered", "dead_agent_recovered"}:
+                if recent and task_id not in primary_problem_ids and task_status not in SUCCESS_STATUSES:
+                    steer_needed.append(task)
         if not _should_count_recent(task, recent_window, lineage_child_ids, now):
             continue
         if task.get("status") == "done":
@@ -719,6 +731,17 @@ def _table_row(columns: list[str], widths: list[int]) -> str:
     return "|" + "|".join(cells) + "|"
 
 
+def _recovery_note(task: dict[str, Any]) -> str:
+    resume_state = str(
+        ((task.get("session_resume") or {}) if isinstance(task.get("session_resume"), dict) else {}).get("resume_state", "")
+        or task.get("resume_state", "")
+        or ""
+    ).strip()
+    session_status = str(task.get("session_status") or "").strip()
+    recovery_action = str(task.get("recovery_action") or "").strip()
+    return " / ".join(part for part in [f"resume:{resume_state}" if resume_state else "", recovery_action, session_status] if part)[:18]
+
+
 def render_status_table(snapshot: dict) -> str:
     now = snapshot["now"]
     rows = []
@@ -755,12 +778,9 @@ def render_status_table(snapshot: dict) -> str:
     ):
         for task in tasks[:16]:
             if group_name == "queued":
-                note = "deps:" + ",".join(task.get("deps", [])[:2])
+                note = _recovery_note(task) or ("deps:" + ",".join(task.get("deps", [])[:2]))
             elif group_name == "recover":
-                resume_state = str(((task.get("session_resume") or {}) if isinstance(task.get("session_resume"), dict) else {}).get("resume_state", "") or task.get("resume_state", "") or "").strip()
-                session_status = str(task.get("session_status") or "").strip()
-                recovery_action = str(task.get("recovery_action") or "").strip()
-                note = " / ".join(part for part in [f"resume:{resume_state}" if resume_state else "", recovery_action, session_status] if part)[:18]
+                note = _recovery_note(task)
             else:
                 note = format_duration(task.get("started_at") or task.get("spawned_at") or "", now)
             rows.append(

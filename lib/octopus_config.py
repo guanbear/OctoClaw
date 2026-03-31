@@ -406,6 +406,47 @@ def infer_session_origin(value: Any) -> str:
     return text
 
 
+IM_SESSION_ORIGINS = {
+    "discord",
+    "feishu",
+    "googlechat",
+    "msteams",
+    "signal",
+    "slack",
+    "telegram",
+    "webchat",
+    "wechat",
+    "whatsapp",
+}
+
+
+def infer_agent_session_origin(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text.startswith("agent:"):
+        return ""
+    for part in text.split(":"):
+        part = part.strip()
+        if part in IM_SESSION_ORIGINS:
+            return part
+    return ""
+
+
+def is_user_facing_session_key(session_key: Any, *, origin: str = "") -> bool:
+    text = str(session_key or "").strip().lower()
+    if not text:
+        return False
+    if not text.startswith("agent:"):
+        return True
+    if not text.startswith("agent:main:"):
+        return False
+    if any(marker in text for marker in (":cron:", ":run:", ":subagent:")):
+        return False
+    if "clawteam-" in text or ":clawteam" in text:
+        return False
+    inferred_origin = str(origin or infer_agent_session_origin(text) or "").strip().lower()
+    return inferred_origin in IM_SESSION_ORIGINS
+
+
 def _session_updated_sort_value(value: Any) -> float:
     if isinstance(value, (int, float)):
         return float(value)
@@ -451,6 +492,7 @@ def load_session_descriptors() -> list[dict[str, Any]]:
             infer_session_origin(channel_session_key)
             or infer_session_origin(value.get("messageProvider"))
             or infer_session_origin(value.get("channelId"))
+            or infer_agent_session_origin(control_key)
             or infer_session_origin(control_key)
         )
         entry = {
@@ -465,7 +507,7 @@ def load_session_descriptors() -> list[dict[str, Any]]:
             "updated_at": value.get("updatedAt"),
             "updated_sort": _session_updated_sort_value(value.get("updatedAt")),
             "is_subagent": "subagent" in key.lower() or "subagent" in str(value.get("agentId", "") or "").lower(),
-            "is_user_facing": not control_key.startswith("agent:"),
+            "is_user_facing": is_user_facing_session_key(control_key, origin=origin),
             "is_main_agent": key == "agent:main:main",
         }
         descriptors[key] = _merge_session_descriptor(descriptors.get(key, {}), entry)

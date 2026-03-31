@@ -259,6 +259,39 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("❓ 待确认（0个）", rendered)
         self.assertIn("⚠️ 异常与恢复（0个）", rendered)
 
+    def test_recovery_section_hides_old_requeued_recovery_tasks(self) -> None:
+        tasks = [
+            {
+                "id": "stale-recovered",
+                "worker_pool": "octoclaw-code",
+                "status": "queued",
+                "summary": "多阶段修复方案",
+                "task_description": "多阶段修复方案",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "executor": "subagent",
+                "recovery_action": "dead_agent_recovered",
+                "updated_at": "2026-03-26T12:00:00+00:00",
+            },
+            {
+                "id": "needs-steer",
+                "worker_pool": "octoclaw-code",
+                "status": "failed",
+                "summary": "需要人工检查",
+                "task_description": "需要人工检查",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "executor": "subagent",
+                "recovery_action": "needs_steer",
+                "updated_at": "2026-03-28T11:58:00+00:00",
+            },
+        ]
+
+        snapshot = build_status_snapshot(tasks, now=self.now)
+
+        self.assertEqual([task["id"] for task in snapshot["queued"]], ["stale-recovered"])
+        self.assertEqual([task["id"] for task in snapshot["steer_needed"]], ["needs-steer"])
+
     def test_table_recover_note_includes_resume_state(self) -> None:
         snapshot = build_status_snapshot(
             [

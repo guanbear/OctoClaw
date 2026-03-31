@@ -63,6 +63,41 @@ class OctoClawSessionResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolved, "webchat:thread:alpha")
 
+    def test_resolve_main_session_prefers_namespaced_im_main_session(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-session-main-") as tmpdir:
+            sessions_path = Path(tmpdir) / "sessions.json"
+            main_sessions_path = Path(tmpdir) / "main-sessions.json"
+            sessions_path.write_text("{}", encoding="utf-8")
+            main_sessions_path.write_text(
+                json.dumps(
+                    {
+                        "agent:main:main": {
+                            "updatedAt": 10,
+                            "sessionId": "main-root",
+                        },
+                        "agent:main:slack:direct:u123": {
+                            "updatedAt": 50,
+                            "sessionId": "slack-main",
+                            "modelOverride": "MiniMax-M2.7",
+                        },
+                        "agent:main:clawteam-octoclaw-validation-worker": {
+                            "updatedAt": 60,
+                            "sessionId": "worker-main",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(self.module, "SESSIONS_FILE", str(sessions_path)),
+                patch.object(self.module, "MAIN_AGENT_SESSIONS_FILE", str(main_sessions_path)),
+            ):
+                resolved = self.module.resolve_main_session_key({"main_session": {"strategy": "latest_user_session"}})
+
+        self.assertEqual(resolved, "agent:main:slack:direct:u123")
+
 
 if __name__ == "__main__":
     unittest.main()
