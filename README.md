@@ -90,6 +90,8 @@ The next source-backed borrowings from ClawTeam and DeerFlow are still the right
    status: landed (baseline persisted checklists, detail rendering, and checklist update command)
 7. stronger brief/result shaping and retrieval helpers
    status: landed (baseline structured objective/boundary/allowed_tools/done_definition and retrieve command)
+8. task graph, event timeline, artifact explorer, and replay/economics surfaces
+   status: landed (baseline graph/timeline/explorer commands plus policy diff and economics replay summary)
 
 In other words:
 
@@ -102,6 +104,11 @@ Useful retrieval entrypoints:
 ```bash
 python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py retrieve --id <task-id>
 python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py retrieve --id <task-id> --format json
+python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py graph --id <task-id>
+python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py timeline --id <task-id>
+python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py explorer --id <task-id>
+python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase conservative
+python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py --tasks /workspace/openclaw/skills/octopus/eval/tasks-minimal.json
 ```
 
 ## Model Selection

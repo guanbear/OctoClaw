@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,20 +51,29 @@ def summarize_markdown(report: dict) -> str:
         "",
         f"- Total tasks: `{report['summary']['total']}`",
         f"- Expected route matches: `{report['summary']['route_matches']}/{report['summary']['total']}`",
+        f"- Expected work-contract matches: `{report['summary']['work_contract_matches']}/{report['summary']['total']}`",
+        f"- Direct tasks: `{report['summary']['direct_tasks']}`",
         f"- Runner tasks: `{report['summary']['runner_tasks']}`",
-        f"- Spawn tasks: `{report['summary']['spawn_tasks']}`",
+        f"- Spawn single tasks: `{report['summary']['spawn_single_tasks']}`",
+        f"- Spawn multi tasks: `{report['summary']['spawn_multi_tasks']}`",
+        f"- Delegated tasks: `{report['summary']['delegated_tasks']}`",
+        f"- Average elapsed ms: `{report['summary']['avg_elapsed_ms']}`",
+        f"- Average spawn count: `{report['summary']['avg_spawn_count']}`",
+        f"- Invalid delegation count: `{report['summary']['invalid_delegation_count']}`",
         f"- Total estimated cost USD: `{report['summary']['total_estimated_cost_usd']}`",
+        f"- Avg estimated cost USD: `{report['summary']['avg_estimated_cost_usd']}`",
+        f"- Budget caps: `{json.dumps(report['summary']['budget_cap_counts'], ensure_ascii=False)}`",
         "",
         "## Results",
         "",
-        "| ID | Route | Expected | Match | Elapsed ms | Model | Tier | Cost USD |",
-        "| --- | --- | --- | --- | ---: | --- | --- | ---: |",
+        "| ID | Route | Contract | Expected | Match | Elapsed ms | Spawn | Model | Band | Budget | Cost USD |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- | ---: |",
     ]
     for item in report["results"]:
         lines.append(
-            f"| {item['id']} | {item['route']} | {item.get('expect_route','')} | "
-            f"{'yes' if item.get('route_match') else 'no'} | {item['elapsed_ms']} | "
-            f"{item.get('model','')} | {item.get('tier','')} | {item.get('estimated_cost_usd', 0)} |"
+            f"| {item['id']} | {item['route']} | {item.get('work_contract','')} | {item.get('expect_route','')} | "
+            f"{'yes' if item.get('route_match') and item.get('work_contract_match', True) else 'no'} | {item['elapsed_ms']} | {item.get('spawn_count', 0)} | "
+            f"{item.get('model','')} | {item.get('model_band','')} | {item.get('budget_cap','')} | {item.get('estimated_cost_usd', 0)} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -76,6 +86,75 @@ def execute_runner_job(workspace: str) -> None:
     result = run_cmd(["bash", str(RUNNER_LOOP_SH)], env=env)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "runner loop failed")
+
+
+def normalize_expected_route(value: str) -> str:
+    route = str(value or "").strip()
+    if route == "spawn":
+        return "delegated"
+    return route
+
+
+def route_matches_expected(actual_route: str, expected_route: str) -> bool:
+    expected = normalize_expected_route(expected_route)
+    actual = str(actual_route or "").strip()
+    if not expected:
+        return True
+    if expected == "delegated":
+        return actual in {"spawn_single", "spawn_multi"}
+    return actual == expected
+
+
+def estimate_eval_token_budget(route: str, budget_policy: dict[str, object] | None = None) -> int:
+    budget_policy = budget_policy if isinstance(budget_policy, dict) else {}
+    budget_cap = str(budget_policy.get("budget_cap", "") or "").strip()
+    max_workers = int(budget_policy.get("max_workers", 0) or 0)
+    defaults = {
+        "direct": 1200,
+        "runner": 1800,
+        "spawn_single": 7000,
+        "spawn_multi": 14000,
+    }
+    budget_cap_defaults = {
+        "tiny": 1000,
+        "low": 2500,
+        "medium": 7000,
+        "high": 14000,
+    }
+    tokens = budget_cap_defaults.get(budget_cap, defaults.get(route, 5000))
+    if route == "spawn_multi" and max_workers > 1:
+        tokens = max(tokens, 5000 * max_workers)
+    return tokens
+
+
+def summarize_results(results: list[dict]) -> dict[str, object]:
+    budget_cap_counts = Counter(str(item.get("budget_cap", "") or "").strip() for item in results if str(item.get("budget_cap", "") or "").strip())
+    total = len(results)
+    total_cost = round(sum(float(item.get("estimated_cost_usd", 0.0) or 0.0) for item in results), 6)
+    total_elapsed = sum(int(item.get("elapsed_ms", 0) or 0) for item in results)
+    total_spawn = sum(int(item.get("spawn_count", 0) or 0) for item in results)
+    return {
+        "total": total,
+        "route_matches": len([item for item in results if item.get("route_match")]),
+        "work_contract_matches": len([item for item in results if item.get("work_contract_match", True)]),
+        "direct_tasks": len([item for item in results if item.get("route") == "direct"]),
+        "runner_tasks": len([item for item in results if item.get("route") == "runner"]),
+        "spawn_single_tasks": len([item for item in results if item.get("route") == "spawn_single"]),
+        "spawn_multi_tasks": len([item for item in results if item.get("route") == "spawn_multi"]),
+        "delegated_tasks": len([item for item in results if item.get("route") in {"spawn_single", "spawn_multi"}]),
+        "avg_elapsed_ms": int(total_elapsed / total) if total else 0,
+        "avg_spawn_count": round(total_spawn / total, 3) if total else 0.0,
+        "invalid_delegation_count": len(
+            [
+                item
+                for item in results
+                if item.get("route") in {"spawn_single", "spawn_multi"} and normalize_expected_route(str(item.get("expect_route", "") or "")) in {"direct", "runner"}
+            ]
+        ),
+        "total_estimated_cost_usd": total_cost,
+        "avg_estimated_cost_usd": round(total_cost / total, 6) if total else 0.0,
+        "budget_cap_counts": dict(sorted(budget_cap_counts.items())),
+    }
 
 
 def main():
@@ -135,41 +214,58 @@ def main():
 
         payload = json.loads(dispatch.stdout.strip())
         route = payload.get("route", "")
+        policy_decision = payload.get("policy_decision", {}) if isinstance(payload.get("policy_decision"), dict) else {}
+        route_decision = policy_decision.get("route_decision", {}) if isinstance(policy_decision.get("route_decision"), dict) else {}
+        budget_policy = policy_decision.get("budget_policy", {}) if isinstance(policy_decision.get("budget_policy"), dict) else {}
+        model_policy = policy_decision.get("model_policy", {}) if isinstance(policy_decision.get("model_policy"), dict) else {}
+        prompt_contract = policy_decision.get("prompt_contract", {}) if isinstance(policy_decision.get("prompt_contract"), dict) else {}
+        work_contract = str(route_decision.get("work_contract", "") or prompt_contract.get("work_contract", "") or "")
 
         if route == "runner" and payload.get("executed"):
             exec_start = time.time()
             execute_runner_job(workspace)
             elapsed_ms += int((time.time() - exec_start) * 1000)
             job = payload.get("job", {})
-            model = job.get("model", "")
-            tier = job.get("tier", "trivial")
+            model = job.get("model", "") or model_policy.get("selected_model", "")
+            model_band = job.get("model_band", "") or payload.get("model_band", "") or model_policy.get("model_band", "")
+            spawn_count = 0
         else:
-            model = payload.get("model", "")
-            tier = payload.get("tier", "")
+            model = payload.get("model", "") or model_policy.get("selected_model", "")
+            model_band = payload.get("model_band", "") or model_policy.get("model_band", "")
+            if route == "spawn_multi":
+                steps = payload.get("steps", []) if isinstance(payload.get("steps"), list) else []
+                spawn_count = max(1, len(steps))
+            elif route == "spawn_single":
+                spawn_count = 1
+            else:
+                spawn_count = 0
 
-        est_cost = estimate_task_cost_usd(model, {"trivial": 800, "simple": 2000, "normal": 5000, "hard": 10000, "deep": 20000}.get(tier, 5000)) or 0.0
+        est_cost = estimate_task_cost_usd(model, estimate_eval_token_budget(route, budget_policy)) or 0.0
 
         results.append(
             {
                 "id": task["id"],
                 "task": task["task"],
                 "route": route,
+                "work_contract": work_contract,
                 "expect_route": task.get("expect_route", ""),
-                "route_match": route == task.get("expect_route", ""),
+                "expect_work_contract": task.get("expect_work_contract", ""),
+                "route_match": route_matches_expected(route, str(task.get("expect_route", "") or "")),
+                "work_contract_match": not task.get("expect_work_contract") or work_contract == str(task.get("expect_work_contract", "") or ""),
                 "elapsed_ms": elapsed_ms,
                 "model": model,
-                "tier": tier,
+                "model_band": model_band,
+                "worker_pool": payload.get("worker_pool", "") or route_decision.get("worker_pool", ""),
+                "budget_cap": str(budget_policy.get("budget_cap", "") or ""),
+                "retry_cap": int(budget_policy.get("retry_cap", 0) or 0),
+                "max_workers": int(budget_policy.get("max_workers", 0) or 0),
+                "review_required": bool(payload.get("review_required", False)),
+                "spawn_count": spawn_count,
                 "estimated_cost_usd": round(est_cost, 6),
             }
         )
 
-    summary = {
-        "total": len(results),
-        "route_matches": len([r for r in results if r.get("route_match")]),
-        "runner_tasks": len([r for r in results if r.get("route") == "runner"]),
-        "spawn_tasks": len([r for r in results if r.get("route") == "spawn"]),
-        "total_estimated_cost_usd": round(sum(float(r.get("estimated_cost_usd", 0.0)) for r in results), 6),
-    }
+    summary = summarize_results(results)
 
     report = {
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(),

@@ -3,32 +3,44 @@
     "id": "runner-log-status",
     "task": "查一下 redis 日志和端口状态",
     "command": "pwd",
-    "expect_route": "runner"
+    "expect_route": "runner",
+    "expect_work_contract": "inspect_report"
   },
   {
     "id": "runner-api-health",
     "task": "检查接口健康状态和响应头",
     "command": "printf 'ok\\n'",
-    "expect_route": "runner"
+    "expect_route": "runner",
+    "expect_work_contract": "inspect_report"
+  },
+  {
+    "id": "direct-explain-jwt",
+    "task": "解释一下 JWT 和 session 的区别",
+    "expect_route": "direct",
+    "expect_work_contract": "answer_now"
   },
   {
     "id": "spawn-fix-auth",
     "task": "帮我修复登录模块的 bug 并补一条测试",
-    "expect_route": "spawn"
+    "expect_route": "spawn_single",
+    "expect_work_contract": "deliverable_work"
   },
   {
     "id": "spawn-refactor-auth",
     "task": "帮我重构用户认证模块并补充测试",
-    "expect_route": "spawn"
+    "expect_route": "spawn_single",
+    "expect_work_contract": "deliverable_work"
   },
   {
     "id": "spawn-research-jwt",
     "task": "调研 JWT 最佳实践并总结迁移建议",
-    "expect_route": "spawn"
+    "expect_route": "spawn_single",
+    "expect_work_contract": "deliverable_work"
   },
   {
     "id": "spawn-analyze-rootcause",
     "task": "分析最近一次 Redis 连接抖动的根因并给出修复建议",
-    "expect_route": "spawn"
+    "expect_route": "spawn_single",
+    "expect_work_contract": "deliverable_work"
   }
 ]

@@ -41,11 +41,13 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(payload["events"]["total"], 6)
         self.assertEqual(payload["events"]["by_type"]["policy_resolved"], 1)
         self.assertEqual(payload["task_metrics"]["route_counts"], {"spawn_single": 1})
+        self.assertEqual(payload["task_metrics"]["work_contract_counts"], {"deliverable_work": 1})
         self.assertEqual(payload["task_metrics"]["worker_pool_counts"], {"octoclaw-code": 1})
         self.assertEqual(payload["tool_metrics"]["blocked_event_count"], 2)
         self.assertTrue(payload["promotion"]["ready"])
         rendered = render_text(payload)
         self.assertIn("Worker pool counts", rendered)
+        self.assertIn("Economics", rendered)
 
     def test_guided_phase_requires_route_hint_coverage(self) -> None:
         events = [
@@ -59,6 +61,8 @@ class ReplaySummaryTests(unittest.TestCase):
                 "route": "runner",
                 "systemPreferredRoute": "runner",
                 "workerPool": "octoclaw-runner",
+                "workContract": "inspect_report",
+                "budgetPolicy": {"budget_cap": "low", "retry_cap": 1, "max_workers": 1, "latency_target": "interactive", "interruptibility": "high", "upgrade_allowed": True},
                 "routeHintRequired": False,
                 "routeHintSubmitted": False,
                 "stickyApplied": False,
@@ -74,6 +78,9 @@ class ReplaySummaryTests(unittest.TestCase):
                 "route": "spawn_single",
                 "systemPreferredRoute": "spawn_single",
                 "workerPool": "octoclaw-research",
+                "workContract": "deliverable_work",
+                "workContractHint": "deliverable_work",
+                "budgetPolicy": {"budget_cap": "low", "retry_cap": 1, "max_workers": 1, "latency_target": "background", "interruptibility": "medium", "upgrade_allowed": True},
                 "routeHintRequired": True,
                 "routeHintSubmitted": True,
                 "stickyApplied": False,
@@ -136,6 +143,7 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(payload["source"]["format"], "jsonl")
         self.assertEqual(payload["task_metrics"]["runner_task_count"], 1)
         self.assertEqual(payload["task_metrics"]["delegated_task_count"], 2)
+        self.assertEqual(payload["economics_metrics"]["budget_cap_counts"], {"low": 2})
         self.assertEqual(payload["route_hint_metrics"]["required_count"], 1)
         self.assertEqual(payload["route_hint_metrics"]["submitted_count"], 1)
         self.assertEqual(payload["route_hint_metrics"]["submission_rate"], 1.0)

@@ -1774,9 +1774,12 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 继续做：
 
 15. task graph and event timeline
+    当前状态：已完成第一拍，CLI / anchor commands 已支持 graph、timeline，并开始复用 delegated event stream
 16. artifact explorer
+    当前状态：已完成第一拍，artifact explorer 已支持主报告、context pack、相关 thread artifact 和推荐阅读顺序
 17. IM capability-matrix renderer
 18. replay and policy diff surfaces
+    当前状态：已完成第一拍，replay summary 已显式输出 policy diff 与 economics metrics
 
 ### 12.5 第五段：把策略闭环做深
 
@@ -1813,6 +1816,8 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - 平均 spawn 数
 - 无效 spawn 率
 - review 命中率
+- 恢复成功率
+- 任务成功率 / 满意度代理指标
 - 恢复成功率
 - 任务成功率或用户满意度代理指标
 

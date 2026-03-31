@@ -12,7 +12,17 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from runtime_task_record import normalize_task_records
-from task_display import build_task_actions, build_task_anchor, build_task_detail, build_task_queue_view, build_task_retrieval_bundle, render_task_anchor_text
+from task_display import (
+    build_task_actions,
+    build_task_anchor,
+    build_task_artifact_explorer,
+    build_task_detail,
+    build_task_graph,
+    build_task_queue_view,
+    build_task_retrieval_bundle,
+    build_task_timeline,
+    render_task_anchor_text,
+)
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
@@ -32,7 +42,16 @@ def load_tasks(path: str) -> list[dict[str, Any]]:
         tasks = loaded
     else:
         tasks = []
-    return normalize_task_records(tasks if isinstance(tasks, list) else [])
+    raw_tasks = tasks if isinstance(tasks, list) else []
+    normalized = normalize_task_records(raw_tasks)
+    for raw, item in zip(raw_tasks, normalized):
+        if not isinstance(raw, dict) or not isinstance(item, dict):
+            continue
+        if isinstance(raw.get("task_events_preview"), list):
+            item["task_events_preview"] = [event for event in raw.get("task_events_preview", []) if isinstance(event, dict)]
+        if isinstance(raw.get("task_event_summary"), dict):
+            item["task_event_summary"] = dict(raw.get("task_event_summary", {}))
+    return normalized
 
 
 def find_task(tasks: list[dict[str, Any]], task_id: str) -> dict[str, Any] | None:
@@ -137,6 +156,93 @@ def render_queue_text(view: dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "(no tasks)"
 
 
+def render_graph_text(graph: dict[str, Any]) -> str:
+    summary = graph.get("summary", {}) if isinstance(graph.get("summary"), dict) else {}
+    nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
+    edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
+    lines = [
+        f"Task graph: {str(graph.get('root_task_id', '') or '').strip()}",
+        f"Nodes: {int(summary.get('node_count', 0) or 0)} | Edges: {int(summary.get('edge_count', 0) or 0)} | Active: {int(summary.get('active_count', 0) or 0)}",
+    ]
+    if summary.get("route_counts"):
+        lines.append(f"Routes: {json.dumps(summary['route_counts'], ensure_ascii=False)}")
+    if summary.get("worker_pool_counts"):
+        lines.append(f"Pools: {json.dumps(summary['worker_pool_counts'], ensure_ascii=False)}")
+    if nodes:
+        lines.append("Nodes:")
+        current_task_id = str(graph.get("current_task_id", "") or "").strip()
+        for node in nodes[:8]:
+            if not isinstance(node, dict):
+                continue
+            marker = "*" if str(node.get("task_id", "") or "").strip() == current_task_id else "-"
+            title = str(node.get("title", "") or node.get("task_id", "")).strip()
+            state = str(node.get("state_label", "") or node.get("state", "")).strip()
+            route = str(node.get("route", "") or "").strip()
+            lines.append(f"{marker} {str(node.get('task_id', '') or '').strip()} | {state} | {route} | {title}")
+    if edges:
+        lines.append("Edges:")
+        for edge in edges[:12]:
+            if not isinstance(edge, dict):
+                continue
+            lines.append(f"- {str(edge.get('source', '') or '').strip()} -> {str(edge.get('target', '') or '').strip()}")
+    return "\n".join(lines)
+
+
+def render_timeline_text(timeline: dict[str, Any]) -> str:
+    summary = timeline.get("summary", {}) if isinstance(timeline.get("summary"), dict) else {}
+    events = timeline.get("events", []) if isinstance(timeline.get("events"), list) else []
+    lines = [
+        f"Timeline: {str(timeline.get('task_id', '') or '').strip()}",
+        f"Events: {int(summary.get('event_count', 0) or 0)}",
+    ]
+    if summary.get("kind_counts"):
+        lines.append(f"Kinds: {json.dumps(summary['kind_counts'], ensure_ascii=False)}")
+    for event in events[:12]:
+        if not isinstance(event, dict):
+            continue
+        when = str(event.get("time", "") or "").strip() or "?"
+        kind = str(event.get("kind", "") or "").strip() or "event"
+        task_id = str(event.get("task_id", "") or "").strip()
+        message = str(event.get("message", "") or "").strip()
+        lines.append(f"- {when} | {kind} | {task_id} | {message}".rstrip(" |"))
+    return "\n".join(lines)
+
+
+def render_explorer_text(explorer: dict[str, Any]) -> str:
+    lines = [
+        f"Artifact explorer: {str(explorer.get('task_id', '') or '').strip()}",
+    ]
+    summary = str(explorer.get("summary", "") or "").strip()
+    if summary:
+        lines.append(f"Summary: {summary}")
+    if explorer.get("primary_report"):
+        lines.append(f"Primary report: {str(explorer.get('primary_report', '') or '').strip()}")
+    if explorer.get("context_pack_path"):
+        lines.append(f"Context pack: {str(explorer.get('context_pack_path', '') or '').strip()}")
+    if explorer.get("by_kind"):
+        lines.append(f"Kinds: {json.dumps(explorer['by_kind'], ensure_ascii=False)}")
+    read_order = explorer.get("recommended_read_order", []) if isinstance(explorer.get("recommended_read_order"), list) else []
+    if read_order:
+        lines.append("Read order:")
+        for item in read_order[:5]:
+            lines.append(f"- {str(item or '').strip()}")
+    primary = explorer.get("primary_artifacts", []) if isinstance(explorer.get("primary_artifacts"), list) else []
+    if primary:
+        lines.append("Primary artifacts:")
+        for artifact in primary[:6]:
+            if not isinstance(artifact, dict):
+                continue
+            lines.append(f"- {str(artifact.get('kind', '') or '').strip()}: {str(artifact.get('path', '') or artifact.get('preview', '') or '').strip()}".rstrip(": "))
+    related = explorer.get("related_thread_artifacts", []) if isinstance(explorer.get("related_thread_artifacts"), list) else []
+    if related:
+        lines.append("Related thread artifacts:")
+        for artifact in related[:6]:
+            if not isinstance(artifact, dict):
+                continue
+            lines.append(f"- {str(artifact.get('task_id', '') or '').strip()} · {str(artifact.get('kind', '') or '').strip()}: {str(artifact.get('path', '') or artifact.get('preview', '') or '').strip()}".rstrip(": "))
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="OctoClaw task display CLI")
     parser.add_argument("--state-file", default=TASK_STATE_FILE)
@@ -154,6 +260,15 @@ def main() -> int:
 
     p_retrieve = sub.add_parser("retrieve")
     p_retrieve.add_argument("--id", required=True)
+
+    p_graph = sub.add_parser("graph")
+    p_graph.add_argument("--id", required=True)
+
+    p_timeline = sub.add_parser("timeline")
+    p_timeline.add_argument("--id", required=True)
+
+    p_explorer = sub.add_parser("explorer")
+    p_explorer.add_argument("--id", required=True)
 
     sub.add_parser("queue")
 
@@ -210,6 +325,30 @@ def main() -> int:
             print_json(bundle)
         else:
             print(render_retrieval_text(bundle))
+        return 0
+
+    if args.command == "graph":
+        graph = build_task_graph(task, all_tasks=tasks)
+        if args.format == "json":
+            print_json(graph)
+        else:
+            print(render_graph_text(graph))
+        return 0
+
+    if args.command == "timeline":
+        timeline = build_task_timeline(task, all_tasks=tasks)
+        if args.format == "json":
+            print_json(timeline)
+        else:
+            print(render_timeline_text(timeline))
+        return 0
+
+    if args.command == "explorer":
+        explorer = build_task_artifact_explorer(task, all_tasks=tasks)
+        if args.format == "json":
+            print_json(explorer)
+        else:
+            print(render_explorer_text(explorer))
         return 0
 
     return 1

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -52,17 +53,24 @@ def action_command_value(task_id: str, fallback_command: str) -> str:
 def _normalize_task(task: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(task, dict):
         return {}
+    preview_events = [event for event in task.get("task_events_preview", []) if isinstance(event, dict)] if isinstance(task.get("task_events_preview"), list) else []
+    event_summary = dict(task.get("task_event_summary", {})) if isinstance(task.get("task_event_summary"), dict) else {}
     if _text(task.get("schema_version")).startswith("octoclaw.runtime_task.record/"):
-        return dict(task)
+        normalized = dict(task)
+        if preview_events:
+            normalized["task_events_preview"] = preview_events
+        if event_summary:
+            normalized["task_event_summary"] = event_summary
+        return normalized
     try:
         from runtime_task_record import normalize_task_record
     except ModuleNotFoundError:  # pragma: no cover - package import path for tests
         from lib.runtime_task_record import normalize_task_record
     normalized = normalize_task_record(task)
-    if isinstance(task.get("task_events_preview"), list):
-        normalized["task_events_preview"] = [event for event in task["task_events_preview"] if isinstance(event, dict)]
-    if isinstance(task.get("task_event_summary"), dict):
-        normalized["task_event_summary"] = dict(task["task_event_summary"])
+    if preview_events:
+        normalized["task_events_preview"] = preview_events
+    if event_summary:
+        normalized["task_event_summary"] = event_summary
     return normalized
 
 
@@ -127,6 +135,23 @@ def _parse_time(value: str) -> datetime | None:
         return parsed
     except Exception:
         return None
+
+
+def _event_time_value(event: dict[str, Any]) -> datetime | None:
+    if not isinstance(event, dict):
+        return None
+    for key in ("time", "at", "updated_at", "completed_at", "started_at"):
+        parsed = _parse_time(_text(event.get(key)))
+        if parsed:
+            return parsed
+    return None
+
+
+def _event_time_label(event: dict[str, Any]) -> str:
+    parsed = _event_time_value(event)
+    if not parsed:
+        return ""
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _iso_now(now: datetime | None = None) -> datetime:
@@ -290,6 +315,33 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
             "requires_confirmation": False,
             "fallback_command": "queue",
         },
+        {
+            "id": "retrieve",
+            "kind": "retrieve",
+            "label": "Retrieve",
+            "enabled": True,
+            "danger": False,
+            "requires_confirmation": False,
+            "fallback_command": "retrieve",
+        },
+        {
+            "id": "timeline",
+            "kind": "timeline",
+            "label": "Timeline",
+            "enabled": True,
+            "danger": False,
+            "requires_confirmation": False,
+            "fallback_command": "timeline",
+        },
+        {
+            "id": "graph",
+            "kind": "graph",
+            "label": "Graph",
+            "enabled": True,
+            "danger": False,
+            "requires_confirmation": False,
+            "fallback_command": "graph",
+        },
     ]
 
     if queue_bucket in ACTIVE_STATES and not is_terminal:
@@ -316,6 +368,17 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
                 "danger": False,
                 "requires_confirmation": False,
                 "fallback_command": "artifacts",
+            }
+        )
+        actions.append(
+            {
+                "id": "explorer",
+                "kind": "explorer",
+                "label": "Explorer",
+                "enabled": True,
+                "danger": False,
+                "requires_confirmation": False,
+                "fallback_command": "explorer",
             }
         )
 
@@ -554,6 +617,201 @@ def build_task_detail(
         "events": events,
         "task_event_summary": normalized.get("task_event_summary", {}),
         "anchor": anchor,
+    }
+
+
+def _task_map(tasks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {_text(item.get("id")): item for item in tasks if _text(item.get("id"))}
+
+
+def _root_task_for(task: dict[str, Any], tasks_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    current = task
+    seen: set[str] = set()
+    while True:
+        current_id = _text(current.get("id"))
+        parent_id = _text(current.get("parent_id"))
+        if not parent_id or parent_id in seen:
+            return current
+        parent = tasks_by_id.get(parent_id)
+        if not isinstance(parent, dict):
+            return current
+        seen.add(current_id)
+        current = parent
+
+
+def build_task_graph(
+    task: dict[str, Any],
+    *,
+    all_tasks: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    all_normalized = [_normalize_task(item) for item in (all_tasks or []) if isinstance(item, dict)]
+    if not all_normalized:
+        all_normalized = [_normalize_task(task)]
+    tasks_by_id = _task_map(all_normalized)
+    normalized = _normalize_task(task)
+    root = _root_task_for(normalized, tasks_by_id)
+    root_id = _text(root.get("id"))
+
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for item in all_normalized:
+        parent_id = _text(item.get("parent_id"))
+        if not parent_id:
+            continue
+        children_by_parent.setdefault(parent_id, []).append(item)
+
+    ordered_ids: list[str] = []
+    edges: list[dict[str, str]] = []
+    queue: list[str] = [root_id] if root_id else [_text(normalized.get("id"))]
+    seen: set[str] = set()
+    while queue:
+        current_id = queue.pop(0)
+        if not current_id or current_id in seen:
+            continue
+        current = tasks_by_id.get(current_id)
+        if not isinstance(current, dict):
+            continue
+        seen.add(current_id)
+        ordered_ids.append(current_id)
+        for child in sorted(children_by_parent.get(current_id, []), key=lambda item: _text(item.get("started_at") or item.get("updated_at") or item.get("id"))):
+            child_id = _text(child.get("id"))
+            if not child_id:
+                continue
+            edges.append({"source": current_id, "target": child_id, "relation": "child"})
+            queue.append(child_id)
+
+    if _text(normalized.get("id")) not in ordered_ids and _text(normalized.get("id")):
+        ordered_ids.append(_text(normalized.get("id")))
+
+    nodes = [build_task_anchor(tasks_by_id.get(task_id, normalized), now=now) for task_id in ordered_ids]
+    route_counts = Counter(_text(node.get("route")) for node in nodes if _text(node.get("route")))
+    worker_pool_counts = Counter(_text(node.get("worker_pool")) for node in nodes if _text(node.get("worker_pool")))
+    queue_counts = Counter(_text(node.get("queue_bucket")) for node in nodes if _text(node.get("queue_bucket")))
+    return {
+        "task_id": _text(normalized.get("id")),
+        "root_task_id": root_id,
+        "current_task_id": _text(normalized.get("id")),
+        "nodes": nodes,
+        "edges": edges,
+        "summary": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "active_count": sum(1 for node in nodes if _text(node.get("queue_bucket")) in ACTIVE_STATES),
+            "blocked_count": sum(1 for node in nodes if _text(node.get("queue_bucket")) in BLOCKED_STATES),
+            "terminal_count": sum(1 for node in nodes if bool(node.get("terminal"))),
+            "route_counts": dict(sorted(route_counts.items())),
+            "worker_pool_counts": dict(sorted(worker_pool_counts.items())),
+            "queue_counts": dict(sorted(queue_counts.items())),
+        },
+    }
+
+
+def build_task_timeline(
+    task: dict[str, Any],
+    *,
+    all_tasks: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_task(task)
+    detail = build_task_detail(normalized, all_tasks=all_tasks, now=now)
+    graph = build_task_graph(normalized, all_tasks=all_tasks, now=now)
+    all_normalized = [_normalize_task(item) for item in (all_tasks or []) if isinstance(item, dict)]
+    tasks_by_id = _task_map(all_normalized)
+
+    events: list[dict[str, Any]] = []
+    for event in detail.get("events", []) if isinstance(detail.get("events"), list) else []:
+        if not isinstance(event, dict):
+            continue
+        events.append(
+            {
+                "time": _event_time_label(event),
+                "kind": _text(event.get("kind")),
+                "task_id": _text(normalized.get("id")),
+                "source": "task",
+                "importance": _text(event.get("importance")) or "normal",
+                "message": _text(event.get("message")),
+            }
+        )
+
+    for edge in graph.get("edges", []) if isinstance(graph.get("edges"), list) else []:
+        if not isinstance(edge, dict):
+            continue
+        child_id = _text(edge.get("target"))
+        child = tasks_by_id.get(child_id)
+        if not isinstance(child, dict):
+            continue
+        child_anchor = build_task_anchor(child, now=now)
+        child_title = _text(child_anchor.get("title")) or child_id
+        started_at = _text(child.get("started_at"))
+        if started_at:
+            events.append(
+                {
+                    "time": _event_time_label({"time": started_at}),
+                    "kind": "child_started",
+                    "task_id": child_id,
+                    "source": "graph",
+                    "importance": "normal",
+                    "message": f"{child_title} started via {child_anchor.get('route', '') or '?'}",
+                }
+            )
+        final_time = _text(child.get("completed_at") or child.get("updated_at"))
+        if child_anchor.get("terminal") and final_time:
+            final_kind = "child_finished"
+            state = _text(child_anchor.get("state"))
+            if state == "failed":
+                final_kind = "child_failed"
+            elif state == "blocked":
+                final_kind = "child_blocked"
+            elif state == "partial":
+                final_kind = "child_partial"
+            events.append(
+                {
+                    "time": _event_time_label({"time": final_time}),
+                    "kind": final_kind,
+                    "task_id": child_id,
+                    "source": "graph",
+                    "importance": "high" if final_kind in {"child_failed", "child_blocked"} else "normal",
+                    "message": f"{child_title} {child_anchor.get('state_label', state or 'finished')}",
+                }
+            )
+
+    events.sort(key=lambda item: (_event_time_value(item) or datetime.min.replace(tzinfo=timezone.utc), _text(item.get("kind")), _text(item.get("task_id"))))
+    kind_counts = Counter(_text(item.get("kind")) for item in events if _text(item.get("kind")))
+    source_counts = Counter(_text(item.get("source")) for item in events if _text(item.get("source")))
+    return {
+        "task_id": _text(normalized.get("id")),
+        "root_task_id": _text(graph.get("root_task_id")),
+        "events": events,
+        "summary": {
+            "event_count": len(events),
+            "kind_counts": dict(sorted(kind_counts.items())),
+            "source_counts": dict(sorted(source_counts.items())),
+        },
+    }
+
+
+def build_task_artifact_explorer(
+    task: dict[str, Any],
+    *,
+    all_tasks: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    bundle = build_task_retrieval_bundle(task, all_tasks=all_tasks, now=now)
+    primary = bundle.get("primary_artifacts", []) if isinstance(bundle.get("primary_artifacts"), list) else []
+    related = bundle.get("related_thread_artifacts", []) if isinstance(bundle.get("related_thread_artifacts"), list) else []
+    by_kind = Counter(_text(item.get("kind")) for item in [*primary, *related] if isinstance(item, dict) and _text(item.get("kind")))
+    thread_task_ids = sorted({_text(item.get("task_id")) for item in related if isinstance(item, dict) and _text(item.get("task_id"))})
+    return {
+        "task_id": _text(bundle.get("task_id")),
+        "summary": _text(bundle.get("user_safe_summary") or bundle.get("summary")),
+        "primary_report": _text(bundle.get("primary_report")),
+        "context_path": _text(bundle.get("context_path")),
+        "context_pack_path": _text(bundle.get("context_pack_path")),
+        "recommended_read_order": bundle.get("recommended_read_order", []) if isinstance(bundle.get("recommended_read_order"), list) else [],
+        "primary_artifacts": primary,
+        "related_thread_artifacts": related,
+        "by_kind": dict(sorted(by_kind.items())),
+        "thread_task_ids": thread_task_ids,
     }
 
 

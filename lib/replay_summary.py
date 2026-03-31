@@ -149,6 +149,44 @@ def collect_language_pack_usage(events: list[dict[str, Any]]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _string_field(event: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = str(event.get(key, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _bool_field(event: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        if key in event:
+            return bool(event.get(key))
+    return False
+
+
+def _dict_field(event: dict[str, Any], *keys: str) -> dict[str, Any]:
+    for key in keys:
+        value = event.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def count_work_contracts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter(_string_field(item, "workContract", "work_contract") for item in items if _string_field(item, "workContract", "work_contract"))
+    return dict(sorted(counts.items()))
+
+
+def count_budget_field(items: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for item in items:
+        budget = _dict_field(item, "budgetPolicy", "budget_policy")
+        value = str(budget.get(field, "") or "").strip()
+        if value:
+            counts[value] += 1
+    return dict(sorted(counts.items()))
+
+
 def build_promotion_checks(
     summary: dict[str, Any],
     *,
@@ -267,6 +305,22 @@ def summarize_events(
         and str(event.get("systemPreferredRoute", "") or "").strip()
         and str(event.get("finalRoute", "") or "").strip() != str(event.get("systemPreferredRoute", "") or "").strip()
     )
+    work_contract_shift_count = sum(
+        1
+        for event in task_events
+        if _string_field(event, "workContractHint", "work_contract_hint")
+        and _string_field(event, "workContract", "work_contract")
+        and _string_field(event, "workContractHint", "work_contract_hint") != _string_field(event, "workContract", "work_contract")
+    )
+    sticky_override_count = sum(
+        1
+        for event in route_hint_events
+        if _bool_field(event, "stickyApplied", "sticky_applied")
+        and _string_field(event, "finalRoute", "final_route")
+        and _string_field(event, "systemPreferredRoute", "system_preferred_route")
+        and _string_field(event, "finalRoute", "final_route") != _string_field(event, "systemPreferredRoute", "system_preferred_route")
+    )
+    review_required_count = sum(1 for event in task_events if _bool_field(event, "reviewRequired", "review_required"))
 
     summary = {
         "source": {
@@ -288,6 +342,7 @@ def summarize_events(
             "task_event_count": len(task_events),
             "route_counts": count_routes(task_events, "route"),
             "system_preferred_route_counts": count_routes(task_events, "systemPreferredRoute"),
+            "work_contract_counts": count_work_contracts(task_events),
             "worker_pool_counts": count_worker_pools(task_events),
             "delegated_task_count": len(delegated_task_events),
             "runner_task_count": len(runner_task_events),
@@ -301,6 +356,14 @@ def summarize_events(
             "submission_rate": ratio(route_hint_submitted_count, route_hint_required_count),
             "route_change_count": route_change_count,
             "route_change_rate": ratio(route_change_count, route_hint_submitted_count),
+            "sticky_override_count": sticky_override_count,
+            "work_contract_shift_count": work_contract_shift_count,
+        },
+        "policy_diff": {
+            "route_change_count": route_change_count,
+            "route_change_rate": ratio(route_change_count, route_hint_submitted_count),
+            "sticky_override_count": sticky_override_count,
+            "work_contract_shift_count": work_contract_shift_count,
         },
         "dispatch_metrics": {
             "dispatch_called_count": len(dispatch_events),
@@ -316,6 +379,15 @@ def summarize_events(
             "blocked_event_types": dict(sorted(Counter(str(event.get("event", "") or "") for event in blocked_events).items())),
             "blocked_session_count": len(blocked_sessions),
             "blocked_session_rate": ratio(len(blocked_sessions), len(session_ids)),
+        },
+        "economics_metrics": {
+            "budget_cap_counts": count_budget_field(task_events, "budget_cap"),
+            "retry_cap_counts": count_budget_field(task_events, "retry_cap"),
+            "max_workers_counts": count_budget_field(task_events, "max_workers"),
+            "latency_target_counts": count_budget_field(task_events, "latency_target"),
+            "interruptibility_counts": count_budget_field(task_events, "interruptibility"),
+            "upgrade_allowed_count": sum(1 for event in task_events if _bool_field(_dict_field(event, "budgetPolicy", "budget_policy"), "upgrade_allowed")),
+            "review_required_count": review_required_count,
         },
         "observed_language_packs": collect_language_pack_usage(events),
     }
@@ -336,8 +408,10 @@ def render_text(summary: dict[str, Any]) -> str:
     events = summary["events"]
     task_metrics = summary["task_metrics"]
     route_hint_metrics = summary["route_hint_metrics"]
+    policy_diff = summary["policy_diff"]
     dispatch_metrics = summary["dispatch_metrics"]
     tool_metrics = summary["tool_metrics"]
+    economics_metrics = summary["economics_metrics"]
     promotion = summary["promotion"]
 
     lines = [
@@ -360,6 +434,7 @@ def render_text(summary: dict[str, Any]) -> str:
             f"- Task events: `{task_metrics['task_event_count']}`",
             f"- Route counts: `{json.dumps(task_metrics['route_counts'], ensure_ascii=False)}`",
             f"- System preferred counts: `{json.dumps(task_metrics['system_preferred_route_counts'], ensure_ascii=False)}`",
+            f"- Work contract counts: `{json.dumps(task_metrics['work_contract_counts'], ensure_ascii=False)}`",
             f"- Worker pool counts: `{json.dumps(task_metrics['worker_pool_counts'], ensure_ascii=False)}`",
             f"- Delegated tasks: `{task_metrics['delegated_task_count']}`",
             f"- Runner tasks: `{task_metrics['runner_task_count']}`",
@@ -368,12 +443,24 @@ def render_text(summary: dict[str, Any]) -> str:
             "Route Hint Metrics",
             f"- Required: `{route_hint_metrics['required_count']}`",
             f"- Submitted: `{route_hint_metrics['submitted_count']}` ({compact_ratio(route_hint_metrics['submission_rate'])})",
-            f"- Final route changed from system preferred: `{route_hint_metrics['route_change_count']}` ({compact_ratio(route_hint_metrics['route_change_rate'])})",
+            "",
+            "Policy Diff",
+            f"- Final route changed from system preferred: `{policy_diff['route_change_count']}` ({compact_ratio(policy_diff['route_change_rate'])})",
+            f"- Sticky overrides of system preferred: `{policy_diff['sticky_override_count']}`",
+            f"- Work contract shifts from hint: `{policy_diff['work_contract_shift_count']}`",
             "",
             "Dispatch / Blocks",
             f"- Dispatch called: `{dispatch_metrics['dispatch_called_count']}` ({compact_ratio(dispatch_metrics['dispatch_session_coverage_rate'])} session coverage)",
             f"- Blocked sessions: `{tool_metrics['blocked_session_count']}` ({compact_ratio(tool_metrics['blocked_session_rate'])})",
             f"- Blocked event types: `{json.dumps(tool_metrics['blocked_event_types'], ensure_ascii=False)}`",
+            "",
+            "Economics",
+            f"- Budget caps: `{json.dumps(economics_metrics['budget_cap_counts'], ensure_ascii=False)}`",
+            f"- Retry caps: `{json.dumps(economics_metrics['retry_cap_counts'], ensure_ascii=False)}`",
+            f"- Max workers: `{json.dumps(economics_metrics['max_workers_counts'], ensure_ascii=False)}`",
+            f"- Latency targets: `{json.dumps(economics_metrics['latency_target_counts'], ensure_ascii=False)}`",
+            f"- Interruptibility: `{json.dumps(economics_metrics['interruptibility_counts'], ensure_ascii=False)}`",
+            f"- Review required: `{economics_metrics['review_required_count']}`",
             "",
             f"Promotion Heuristic: `{promotion['phase']}` -> `{promotion['target']}`",
         ]

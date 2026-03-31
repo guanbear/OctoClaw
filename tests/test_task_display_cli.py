@@ -24,7 +24,17 @@ class TaskDisplayCliTests(unittest.TestCase):
                             "summary": "fix login 401 and add tests",
                             "route": "spawn_single",
                             "model": "omniroute/cx/gpt-5.4",
-                            "artifacts": {"report_path": "/tmp/task-1.md"},
+                            "started_at": "2026-03-31T10:00:00Z",
+                            "updated_at": "2026-03-31T10:05:00Z",
+                            "artifacts": {"report_path": "/tmp/task-1.md", "context_pack_path": "/tmp/task-1-context.json"},
+                            "task_events_preview": [
+                                {
+                                    "time": "2026-03-31T10:05:00Z",
+                                    "kind": "checkpoint",
+                                    "message": "checkpoint saved",
+                                    "importance": "normal",
+                                }
+                            ],
                         },
                         {
                             "id": "task-2",
@@ -32,6 +42,9 @@ class TaskDisplayCliTests(unittest.TestCase):
                             "status": "queued",
                             "summary": "check nginx health",
                             "route": "runner",
+                            "parent_id": "task-1",
+                            "started_at": "2026-03-31T10:01:00Z",
+                            "updated_at": "2026-03-31T10:02:00Z",
                         },
                     ]
                 },
@@ -78,6 +91,26 @@ class TaskDisplayCliTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Primary report: /tmp/task-1.md", out)
         self.assertIn("Summary:", out)
+
+    def test_graph_text_surfaces_child_relationship(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "graph", "--id", "task-1"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Task graph: task-1", out)
+        self.assertIn("task-1 -> task-2", out)
+
+    def test_timeline_json_includes_child_events(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "--format", "json", "timeline", "--id", "task-1"])
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        kinds = [item["kind"] for item in payload["events"]]
+        self.assertIn("checkpoint", kinds)
+        self.assertIn("child_started", kinds)
+
+    def test_explorer_text_surfaces_context_pack(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "explorer", "--id", "task-1"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Context pack: /tmp/task-1-context.json", out)
+        self.assertIn("Primary artifacts:", out)
 
     def test_missing_task_returns_error(self) -> None:
         code, _out, err = self._run(["--state-file", self.state_file, "anchor", "--id", "missing"])

@@ -23,8 +23,18 @@ class TaskAnchorCommandTests(unittest.TestCase):
                             "summary": "fix login 401 and add tests",
                             "route": "spawn_single",
                             "model": "omniroute/cx/gpt-5.4",
+                            "started_at": "2026-03-31T10:00:00Z",
+                            "updated_at": "2026-03-31T10:05:00Z",
                             "session_key": "agent:main:slack:channel:C123:thread:1712345.000100",
-                            "artifacts": {"report_path": "/tmp/task-1.md"},
+                            "artifacts": {"report_path": "/tmp/task-1.md", "context_pack_path": "/tmp/task-1-context.json"},
+                            "task_events_preview": [
+                                {
+                                    "time": "2026-03-31T10:05:00Z",
+                                    "kind": "checkpoint",
+                                    "message": "checkpoint saved",
+                                    "importance": "normal",
+                                }
+                            ],
                         },
                         {
                             "id": "task-2",
@@ -32,6 +42,9 @@ class TaskAnchorCommandTests(unittest.TestCase):
                             "status": "queued",
                             "summary": "check nginx health",
                             "route": "runner",
+                            "parent_id": "task-1",
+                            "started_at": "2026-03-31T10:01:00Z",
+                            "updated_at": "2026-03-31T10:02:00Z",
                         },
                         {
                             "id": "task-3",
@@ -77,6 +90,22 @@ class TaskAnchorCommandTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("Primary report: /tmp/task-1.md", result["text"])
         self.assertIn("Summary:", result["text"])
+
+    def test_execute_graph_returns_lineage(self) -> None:
+        result = execute_task_anchor_command("graph task-1", state_file=self.state_file)
+        self.assertTrue(result["ok"])
+        self.assertIn("task-1 -> task-2", result["text"])
+
+    def test_execute_timeline_returns_checkpoint_and_child_started(self) -> None:
+        result = execute_task_anchor_command("timeline task-1", state_file=self.state_file)
+        self.assertTrue(result["ok"])
+        self.assertIn("checkpoint", result["text"])
+        self.assertIn("child_started", result["text"])
+
+    def test_execute_explorer_returns_context_pack(self) -> None:
+        result = execute_task_anchor_command("explorer task-1", state_file=self.state_file)
+        self.assertTrue(result["ok"])
+        self.assertIn("/tmp/task-1-context.json", result["text"])
 
     @patch("lib.task_anchor_commands._run_task_state_upsert")
     @patch("lib.task_anchor_commands.send_agent_message")
