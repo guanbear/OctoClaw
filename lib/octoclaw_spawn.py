@@ -17,6 +17,10 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -394,6 +398,102 @@ def resolve_agent_name(task_id: str) -> str:
     return name[:48].rstrip("-") or f"octo-{now_compact()}"
 
 
+def derive_spawn_session_keys(team_name: str, agent_name: str) -> list[str]:
+    normalized_team = re.sub(r"[^a-z0-9_-]+", "-", str(team_name or "").strip().lower()).strip("-")
+    normalized_agent = re.sub(r"[^a-z0-9_-]+", "-", str(agent_name or "").strip().lower()).strip("-")
+    candidates: list[str] = []
+    for value in (
+        f"agent:main:clawteam-{normalized_team}-{normalized_agent}" if normalized_team and normalized_agent else "",
+        f"agent:main:{normalized_agent}" if normalized_agent else "",
+        f"clawteam-{normalized_team}-{normalized_agent}" if normalized_team and normalized_agent else "",
+    ):
+        text = str(value or "").strip()
+        if text and text not in candidates:
+            candidates.append(text)
+    return candidates
+
+
+def load_openclaw_gateway_options() -> tuple[int, str]:
+    config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+    gateway_port = 3000
+    gateway_token = ""
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        gateway_cfg = config.get("gateway", {}) if isinstance(config, dict) else {}
+        if isinstance(gateway_cfg, dict):
+            gateway_port = int(gateway_cfg.get("port", config.get("port", 3000)) or 3000)
+            auth_cfg = gateway_cfg.get("auth", {})
+            if isinstance(auth_cfg, dict):
+                gateway_token = str(auth_cfg.get("token", "") or "").strip()
+        elif isinstance(config, dict):
+            gateway_port = int(config.get("port", 3000) or 3000)
+    except Exception:
+        pass
+    return gateway_port, gateway_token
+
+
+def patch_openclaw_session_model(session_key: str, model: str) -> tuple[bool, int, str]:
+    gateway_port, gateway_token = load_openclaw_gateway_options()
+    encoded_session = urllib.parse.quote(str(session_key or "").strip(), safe=":")
+    url = f"http://127.0.0.1:{gateway_port}/api/sessions/{encoded_session}"
+    payload = json.dumps({"modelOverride": model}, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if gateway_token:
+        headers["Authorization"] = f"Bearer {gateway_token}"
+    request = urllib.request.Request(url, data=payload, headers=headers, method="PATCH")
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return response.status in (200, 204), int(response.status), ""
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail = ""
+        return False, int(exc.code), detail.strip()
+    except Exception as exc:
+        return False, 0, str(exc)
+
+
+def apply_spawn_session_model_override(
+    *,
+    team_name: str,
+    agent_name: str,
+    model: str,
+    attempts: int = 8,
+    sleep_seconds: float = 0.75,
+) -> dict:
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        return {"applied": False, "session_key": "", "status_code": 0, "error": "empty-model"}
+    candidates = derive_spawn_session_keys(team_name, agent_name)
+    if not candidates:
+        return {"applied": False, "session_key": "", "status_code": 0, "error": "missing-session-key"}
+
+    last_status = 0
+    last_error = ""
+    for _ in range(max(attempts, 1)):
+        for session_key in candidates:
+            ok, status_code, detail = patch_openclaw_session_model(session_key, selected_model)
+            if ok:
+                return {
+                    "applied": True,
+                    "session_key": session_key,
+                    "status_code": status_code,
+                    "error": "",
+                }
+            last_status = status_code
+            last_error = detail or last_error
+        time.sleep(max(sleep_seconds, 0))
+    return {
+        "applied": False,
+        "session_key": candidates[0],
+        "status_code": last_status,
+        "error": last_error,
+    }
+
+
 def build_clawteam_spawn_command(
     *,
     team_name: str,
@@ -484,12 +584,21 @@ def execute_clawteam_spawn(
     if result.returncode != 0:
         detail = stderr or stdout or "clawteam spawn failed"
         raise RuntimeError(detail)
+    session_override = apply_spawn_session_model_override(
+        team_name=team_name,
+        agent_name=agent_name,
+        model=model,
+    )
     return {
         "backend": "clawteam",
         "team_name": team_name,
         "agent_name": agent_name,
         "profile": profile,
         "thinking": thinking,
+        "session_key": str(session_override.get("session_key", "") or ""),
+        "model_override_applied": bool(session_override.get("applied", False)),
+        "model_override_status": int(session_override.get("status_code", 0) or 0),
+        "model_override_error": str(session_override.get("error", "") or ""),
         "command": command,
         "stdout": stdout,
         "stderr": stderr,
@@ -1067,6 +1176,10 @@ def build_spawn_spec(
                         "team_name": str((spawn_execution or {}).get("team_name", "") or ""),
                         "agent_name": agent_owner,
                         "profile": str((spawn_execution or {}).get("profile", "") or ""),
+                        "session_key": str((spawn_execution or {}).get("session_key", "") or ""),
+                        "model_override_applied": bool((spawn_execution or {}).get("model_override_applied", False)),
+                        "model_override_status": int((spawn_execution or {}).get("model_override_status", 0) or 0),
+                        "model_override_error": str((spawn_execution or {}).get("model_override_error", "") or ""),
                     },
                 }
             )

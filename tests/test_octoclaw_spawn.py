@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,17 @@ octoclaw_spawn = importlib.import_module("octoclaw_spawn")
 
 
 class OctoClawSpawnTests(unittest.TestCase):
+    def test_derive_spawn_session_keys_prefers_clawteam_session(self) -> None:
+        keys = octoclaw_spawn.derive_spawn_session_keys("octoclaw-validation", "octo-research-1")
+        self.assertEqual(
+            keys,
+            [
+                "agent:main:clawteam-octoclaw-validation-octo-research-1",
+                "agent:main:octo-research-1",
+                "clawteam-octoclaw-validation-octo-research-1",
+            ],
+        )
+
     def test_build_clawteam_spawn_command_omits_unsupported_spawn_options(self) -> None:
         with patch.object(octoclaw_spawn, "clawteam_spawn_supports_option", return_value=False):
             command = octoclaw_spawn.build_clawteam_spawn_command(
@@ -114,6 +126,42 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("\"risks\": []", spec["task_prompt"])
         self.assertIn("task-state-update.py blocked", spec["task_prompt"])
         self.assertIn("task-state-update.py checklist", spec["task_prompt"])
+
+    def test_execute_clawteam_spawn_applies_session_model_override(self) -> None:
+        completed = subprocess.CompletedProcess(args=["clawteam"], returncode=0, stdout="{}", stderr="")
+        with (
+            patch.object(octoclaw_spawn.shutil, "which", return_value="/usr/bin/mock"),
+            patch.object(octoclaw_spawn, "build_clawteam_spawn_command", return_value=["clawteam", "spawn"]),
+            patch.object(octoclaw_spawn.subprocess, "run", return_value=completed),
+            patch.object(
+                octoclaw_spawn,
+                "apply_spawn_session_model_override",
+                return_value={
+                    "applied": True,
+                    "session_key": "agent:main:clawteam-octoclaw-validation-octo-research-1",
+                    "status_code": 200,
+                    "error": "",
+                },
+            ) as override_mock,
+        ):
+            payload = octoclaw_spawn.execute_clawteam_spawn(
+                task_id="research-1",
+                worker_pool="octoclaw-research",
+                model="zhipu/GLM-4.7",
+                model_band="normal",
+                prompt="do the work",
+                thinking="medium",
+                profile_override="research",
+            )
+
+        self.assertTrue(payload["model_override_applied"])
+        self.assertEqual(payload["session_key"], "agent:main:clawteam-octoclaw-validation-octo-research-1")
+        self.assertEqual(payload["model_override_status"], 200)
+        override_mock.assert_called_once_with(
+            team_name="octoclaw-validation",
+            agent_name="octo-research-1",
+            model="zhipu/GLM-4.7",
+        )
 
     def test_build_spawn_spec_does_not_need_legacy_inputs_when_taxonomy_exists(self) -> None:
         policy = {
