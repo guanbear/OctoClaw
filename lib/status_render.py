@@ -519,23 +519,11 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
     system_failed_recent = []
     system_done_recent = []
     steer_needed = []
-    primary_problem_ids = {
-        _task_id(task)
-        for group in (running, queued, deferred, pending)
-        for task in group
-    }
-
     for task in tasks:
         recovery_action = str(task.get("recovery_action") or "").strip().lower()
-        task_id = _task_id(task)
-        task_status = str(task.get("status") or "").strip().lower()
-        recent = _should_count_recent(task, recent_window, lineage_child_ids, now)
         if not is_system_maintenance_task(task):
             if recovery_action == "needs_steer":
                 steer_needed.append(task)
-            elif recovery_action in {"steered", "dead_agent_recovered"}:
-                if recent and task_id not in primary_problem_ids and task_status not in SUCCESS_STATUSES:
-                    steer_needed.append(task)
         if not _should_count_recent(task, recent_window, lineage_child_ids, now):
             continue
         if task.get("status") == "done":
