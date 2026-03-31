@@ -13,8 +13,8 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from session_ops import send_agent_message
-from task_display_cli import find_task, load_tasks, render_detail_text, render_queue_text
-from task_display import build_task_actions, build_task_detail, build_task_queue_view, render_task_anchor_text
+from task_display_cli import find_task, load_tasks, render_detail_text, render_queue_text, render_retrieval_text
+from task_display import build_task_actions, build_task_detail, build_task_queue_view, build_task_retrieval_bundle, render_task_anchor_text
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
@@ -27,6 +27,8 @@ TASK_ACTION_ALIASES = {
     "queue": "queue",
     "artifacts": "artifacts",
     "artifact": "artifacts",
+    "retrieve": "retrieve",
+    "result": "retrieve",
     "stop": "stop",
     "retry": "retry",
     "approve": "approve",
@@ -120,6 +122,12 @@ def execute_task_anchor_command(
             path = str(artifact.get("path", "") or artifact.get("preview", "") or "").strip()
             lines.append(f"- {title}: {path}".rstrip(": "))
         return {"ok": True, "status": "ok", "action": action, "task_id": task_id, "data": artifacts, "text": "\n".join(lines)}
+
+    if action == "retrieve":
+        bundle = build_task_retrieval_bundle(task, all_tasks=tasks)
+        if output_format == "json":
+            return {"ok": True, "status": "ok", "action": action, "task_id": task_id, "data": bundle, "text": json.dumps(bundle, ensure_ascii=False, indent=2)}
+        return {"ok": True, "status": "ok", "action": action, "task_id": task_id, "data": bundle, "text": render_retrieval_text(bundle)}
 
     if action == "stop":
         session_key = str(task.get("session_key", "") or "").strip()

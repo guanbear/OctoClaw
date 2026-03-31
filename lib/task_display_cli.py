@@ -12,7 +12,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from runtime_task_record import normalize_task_records
-from task_display import build_task_actions, build_task_anchor, build_task_detail, build_task_queue_view, render_task_anchor_text
+from task_display import build_task_actions, build_task_anchor, build_task_detail, build_task_queue_view, build_task_retrieval_bundle, render_task_anchor_text
 
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
@@ -83,6 +83,48 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_retrieval_text(bundle: dict[str, Any]) -> str:
+    lines = [
+        f"Task: {str(bundle.get('task_id', '') or '').strip()}",
+        f"State: {str(bundle.get('state', '') or '').strip()} | Route: {str(bundle.get('route', '') or '').strip()} | Pool: {str(bundle.get('worker_pool', '') or '').strip()}",
+    ]
+    summary = str(bundle.get("user_safe_summary", "") or bundle.get("summary", "") or "").strip()
+    if summary:
+        lines.append(f"Summary: {summary}")
+    next_step = str(bundle.get("next_step", "") or "").strip()
+    if next_step and next_step.lower() != "none":
+        lines.append(f"Next: {next_step}")
+    primary_report = str(bundle.get("primary_report", "") or "").strip()
+    if primary_report:
+        lines.append(f"Primary report: {primary_report}")
+    context_pack_path = str(bundle.get("context_pack_path", "") or "").strip()
+    if context_pack_path:
+        lines.append(f"Context pack: {context_pack_path}")
+    context_path = str(bundle.get("context_path", "") or "").strip()
+    if context_path:
+        lines.append(f"Context: {context_path}")
+    checklist = bundle.get("checklist", {}) if isinstance(bundle.get("checklist"), dict) else {}
+    if checklist:
+        lines.append(
+            f"Checklist: {int(checklist.get('completed_count', 0) or 0)} done / {int(checklist.get('open_count', 0) or 0)} open"
+        )
+    primary_artifacts = bundle.get("primary_artifacts", []) if isinstance(bundle.get("primary_artifacts"), list) else []
+    if primary_artifacts:
+        lines.append("Primary artifacts:")
+        for artifact in primary_artifacts[:3]:
+            if not isinstance(artifact, dict):
+                continue
+            lines.append(f"- {str(artifact.get('kind', '') or '').strip()}: {str(artifact.get('path', '') or artifact.get('preview', '') or '').strip()}".rstrip(": "))
+    related_artifacts = bundle.get("related_thread_artifacts", []) if isinstance(bundle.get("related_thread_artifacts"), list) else []
+    if related_artifacts:
+        lines.append("Related thread artifacts:")
+        for artifact in related_artifacts[:3]:
+            if not isinstance(artifact, dict):
+                continue
+            lines.append(f"- {str(artifact.get('task_id', '') or '').strip()} · {str(artifact.get('kind', '') or '').strip()}: {str(artifact.get('path', '') or artifact.get('preview', '') or '').strip()}".rstrip(": "))
+    return "\n".join(lines)
+
+
 def render_queue_text(view: dict[str, Any]) -> str:
     lines: list[str] = []
     for section in ("running", "queued", "blocked", "recently_completed"):
@@ -109,6 +151,9 @@ def main() -> int:
 
     p_artifacts = sub.add_parser("artifacts")
     p_artifacts.add_argument("--id", required=True)
+
+    p_retrieve = sub.add_parser("retrieve")
+    p_retrieve.add_argument("--id", required=True)
 
     sub.add_parser("queue")
 
@@ -157,6 +202,14 @@ def main() -> int:
                     title = str(artifact.get("title", "") or artifact.get("artifact_id", "artifact")).strip()
                     path = str(artifact.get("path", "") or artifact.get("preview", "") or "").strip()
                     print(f"- {title}: {path}".rstrip(": "))
+        return 0
+
+    if args.command == "retrieve":
+        bundle = build_task_retrieval_bundle(task, all_tasks=tasks)
+        if args.format == "json":
+            print_json(bundle)
+        else:
+            print(render_retrieval_text(bundle))
         return 0
 
     return 1

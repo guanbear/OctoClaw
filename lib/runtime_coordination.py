@@ -392,6 +392,9 @@ def artifact_entries_for_task(task: dict[str, Any]) -> list[dict[str, Any]]:
     context_path = _text(task.get("context_path")) or _text(artifacts.get("context_path"))
     if context_path:
         add("context", context_path, path=context_path, preview=_text(artifacts.get("context_summary")) or _text(task.get("context_summary")))
+    context_pack_path = _text(artifacts.get("context_pack_path"))
+    if context_pack_path:
+        add("context_pack", context_pack_path, path=context_pack_path, preview=_text(artifacts.get("context_summary")) or _text(task.get("context_summary")), title_suffix=" · context pack")
     worker_result = artifacts.get("worker_result") if isinstance(artifacts.get("worker_result"), dict) else {}
     if worker_result:
         add(
@@ -417,9 +420,18 @@ def artifact_entries_for_task(task: dict[str, Any]) -> list[dict[str, Any]]:
                 _text(child_id),
                 path=_text(result.get("report")),
                 preview=_text(result.get("summary")),
-                title_suffix=f" · {_text(child_id)}",
-                extra={"result_status": _text(result.get("status"))},
-            )
+            title_suffix=f" · {_text(child_id)}",
+            extra={"result_status": _text(result.get("status"))},
+        )
+    budget_artifact = artifacts.get("budget") if isinstance(artifacts.get("budget"), dict) else {}
+    if budget_artifact:
+        add(
+            "budget",
+            _text(budget_artifact.get("recorded_at")) or task_id,
+            preview=f"${budget_artifact.get('cost_usd', 0.0)} · {_text(budget_artifact.get('model_band'))} · {_text(budget_artifact.get('worker_pool'))}",
+            title_suffix=" · budget",
+            extra={"cost_usd": budget_artifact.get("cost_usd")},
+        )
     return entries
 
 

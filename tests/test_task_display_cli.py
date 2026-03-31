@@ -73,6 +73,12 @@ class TaskDisplayCliTests(unittest.TestCase):
         self.assertIn("[running]", out)
         self.assertIn("[queued]", out)
 
+    def test_retrieve_text_surfaces_primary_report(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-1"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Primary report: /tmp/task-1.md", out)
+        self.assertIn("Summary:", out)
+
     def test_missing_task_returns_error(self) -> None:
         code, _out, err = self._run(["--state-file", self.state_file, "anchor", "--id", "missing"])
         self.assertEqual(code, 1)

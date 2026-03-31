@@ -30,6 +30,12 @@
     "summary": {
       "type": "string"
     },
+    "user_safe_summary": {
+      "type": "string"
+    },
+    "deliverable_kind": {
+      "type": "string"
+    },
     "artifacts": {
       "type": "array",
       "items": {
@@ -46,6 +52,12 @@
       "type": "string"
     },
     "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verification": {
       "type": "array",
       "items": {
         "type": "string"

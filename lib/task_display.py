@@ -557,6 +557,39 @@ def build_task_detail(
     }
 
 
+def build_task_retrieval_bundle(
+    task: dict[str, Any],
+    *,
+    all_tasks: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    detail = build_task_detail(task, all_tasks=all_tasks, now=now)
+    normalized = _normalize_task(task)
+    artifacts = detail.get("artifacts", []) if isinstance(detail.get("artifacts"), list) else []
+    primary = [item for item in artifacts if isinstance(item, dict) and not bool(item.get("related_to_thread"))]
+    related = [item for item in artifacts if isinstance(item, dict) and bool(item.get("related_to_thread"))]
+    worker_result = ((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("worker_result")
+    next_step = _text(worker_result.get("next_step")) if isinstance(worker_result, dict) else ""
+    user_safe_summary = _text(worker_result.get("user_safe_summary")) if isinstance(worker_result, dict) else ""
+    primary_report = _text(normalized.get("report_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("report_path"))
+    return {
+        "task_id": _text(normalized.get("id")),
+        "summary": _clean_task_summary(normalized, limit=160),
+        "user_safe_summary": user_safe_summary or _text(normalized.get("user_safe_summary")),
+        "next_step": next_step,
+        "state": _text(detail.get("state")),
+        "route": _text(normalized.get("route")),
+        "worker_pool": _text(normalized.get("worker_pool")),
+        "primary_report": primary_report,
+        "context_path": _text(normalized.get("context_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_path")),
+        "context_pack_path": _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
+        "checklist": detail.get("checklist", {}) if isinstance(detail.get("checklist"), dict) else {},
+        "primary_artifacts": primary[:5],
+        "related_thread_artifacts": related[:5],
+        "recommended_read_order": [item for item in [primary_report, _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")), _text(normalized.get("context_path"))] if item],
+    }
+
+
 def build_task_queue_view(tasks: list[dict[str, Any]], *, now: datetime | None = None) -> dict[str, Any]:
     anchors = [build_task_anchor(task, now=now) for task in tasks if isinstance(task, dict)]
     return {

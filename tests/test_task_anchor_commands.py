@@ -72,6 +72,12 @@ class TaskAnchorCommandTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("/tmp/task-1.md", result["text"])
 
+    def test_execute_retrieve_returns_summary_and_report(self) -> None:
+        result = execute_task_anchor_command("retrieve task-1", state_file=self.state_file)
+        self.assertTrue(result["ok"])
+        self.assertIn("Primary report: /tmp/task-1.md", result["text"])
+        self.assertIn("Summary:", result["text"])
+
     @patch("lib.task_anchor_commands._run_task_state_upsert")
     @patch("lib.task_anchor_commands.send_agent_message")
     def test_execute_stop_requests_session_stop_and_updates_state(self, mock_send, mock_upsert) -> None:

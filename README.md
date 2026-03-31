@@ -88,12 +88,21 @@ The next source-backed borrowings from ClawTeam and DeerFlow are still the right
    status: landed (baseline task/thread artifact lookup and detail surfacing)
 6. todo/checklist persistence across context loss
    status: landed (baseline persisted checklists, detail rendering, and checklist update command)
+7. stronger brief/result shaping and retrieval helpers
+   status: landed (baseline structured objective/boundary/allowed_tools/done_definition and retrieve command)
 
 In other words:
 
 - first harden delegated runtime truth and continuity
 - then improve artifact retrieval
 - then add stronger context-persistence layers
+
+Useful retrieval entrypoints:
+
+```bash
+python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py retrieve --id <task-id>
+python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py retrieve --id <task-id> --format json
+```
 
 ## Model Selection
 

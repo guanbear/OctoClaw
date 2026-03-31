@@ -1697,6 +1697,7 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 13. context pack / memory compaction for long-running follow-ups
    当前状态：已完成第一拍，spawn/runtime 已改为 context-pack-first follow-up handoff
 14. stronger brief/result shaping and retrieval helpers
+   当前状态：已完成第一拍，brief/result 已增加 objective、boundary、allowed_tools、done_definition、retrieval_hints，并新增 retrieve helper
 
 ### 12.4 第四段：把展示层产品化
 
@@ -1756,8 +1757,9 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 截至当前版本，剩余的主线工作可以按两种口径理解：
 
 - 按编号：还剩 8 个编号项（14-22）
+- 按编号：还剩 7 个编号项（15-22），其中 `14` 已完成第一拍
 - 按真正的大阶段：还剩 4 段
-  - 完成 `12.3` 的第二拍：brief/result shaping and retrieval helpers
+  - 完成 `12.3` 的收口：继续打磨 brief/result shaping 和 retrieval helper 的消费面
   - 推进 `12.4`：展示层产品化
   - 推进 `12.5`：策略闭环深化
   - 最后做更强的 context-budget / heavier-protocol 校准

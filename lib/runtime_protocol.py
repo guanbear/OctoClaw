@@ -26,6 +26,99 @@ def _string_list(value: Any) -> list[str]:
     return []
 
 
+def _allowed_tools(worker_pool: str, work_type: str, phase: str, route: str) -> list[str]:
+    current_pool = str(worker_pool or "").strip()
+    current_work_type = str(work_type or "").strip()
+    current_phase = str(phase or "").strip()
+    current_route = str(route or "").strip()
+    tools: list[str] = []
+    if current_route == "runner" or current_pool == "octoclaw-runner":
+        tools.extend(["shell", "logs", "status"])
+    if current_work_type == "research" or current_pool == "octoclaw-research":
+        tools.extend(["docs", "web", "report"])
+    if current_work_type == "code" or current_pool == "octoclaw-code":
+        tools.extend(["repo", "test", "review"])
+    if current_work_type == "review" or current_pool == "octoclaw-review":
+        tools.extend(["review", "risk", "regression"])
+    if current_phase == "report":
+        tools.append("writer")
+    deduped: list[str] = []
+    for item in tools:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def _done_definition(route: str, review_required: bool, report_path: str) -> str:
+    pieces = [
+        "交付必须包含结构化 RESULT",
+        "summary 需要可直接转述",
+    ]
+    if report_path:
+        pieces.append(f"长输出写到 {report_path}")
+    if route == "runner":
+        pieces.append("输出事实检查结果，不做多余推测")
+    if review_required:
+        pieces.append("显式说明风险与建议 review next_step")
+    return "；".join(pieces)
+
+
+def _expected_artifacts(report_path: str, context_path: str, context_pack: dict[str, Any] | None) -> list[str]:
+    items: list[str] = []
+    for value in (
+        str(report_path or "").strip(),
+        str(context_path or "").strip(),
+        str(((context_pack or {}) if isinstance(context_pack, dict) else {}).get("context_pack_path", "") or "").strip(),
+    ):
+        if value and value not in items:
+            items.append(value)
+    return items
+
+
+def _checklist_delta(context_pack: dict[str, Any] | None) -> list[str]:
+    if not isinstance(context_pack, dict):
+        return []
+    related = context_pack.get("related_tasks", [])
+    if not isinstance(related, list):
+        return []
+    deltas: list[str] = []
+    for item in related[:3]:
+        if not isinstance(item, dict):
+            continue
+        task_id = str(item.get("task_id", "") or "").strip()
+        checklist = item.get("checklist", {}) if isinstance(item.get("checklist"), dict) else {}
+        open_count = int(checklist.get("open_count", 0) or 0)
+        completed_count = int(checklist.get("completed_count", 0) or 0)
+        next_step = str(item.get("next_step", "") or "").strip()
+        parts = []
+        if completed_count or open_count:
+            parts.append(f"{completed_count} done / {open_count} open")
+        if next_step and next_step.lower() != "none":
+            parts.append(f"next={next_step}")
+        if task_id and parts:
+            deltas.append(f"{task_id}: " + " ; ".join(parts))
+    return deltas
+
+
+def _retrieval_hints(
+    *,
+    task_id: str,
+    report_path: str,
+    context_path: str,
+    context_pack: dict[str, Any] | None,
+    context_budget: dict[str, Any] | None,
+) -> dict[str, Any]:
+    pack = dict(context_pack) if isinstance(context_pack, dict) else {}
+    budget = dict(context_budget) if isinstance(context_budget, dict) else {}
+    return {
+        "prefer_context_pack": bool(budget.get("prefer_context_pack", False)),
+        "report_path": str(report_path or "").strip(),
+        "context_path": str(context_path or "").strip(),
+        "context_pack_path": str(pack.get("context_pack_path", "") or "").strip(),
+        "followup_command_hint": f"retrieve {str(task_id or '').strip()}".strip(),
+    }
+
+
 def normalize_result_status(value: str, default: str = "failed") -> str:
     text = str(value or "").strip().lower()
     if text in {"done", "success", "completed"}:
@@ -43,10 +136,13 @@ def build_result_contract(summary_hint: str, *, artifact_first: bool = True) -> 
         "schema_version": WORKER_RESULT_SCHEMA_VERSION,
         "status": "done",
         "summary": summary_hint,
+        "user_safe_summary": "若可直接转述给用户，写 1-3 句中文摘要；否则留空字符串",
+        "deliverable_kind": "final_answer",
         "artifacts": artifacts_hint,
         "files": [],
         "report": "共享文件路径或null" if artifact_first else "null",
         "risks": [],
+        "verification": [],
         "next_step": "若无需后续动作则写 none",
     }
 
@@ -91,6 +187,7 @@ def build_task_brief(
         "schema_version": BRIEF_SCHEMA_VERSION,
         "task_id": str(task_id or "").strip(),
         "goal": _compact_text(goal, 400),
+        "objective": _compact_text(goal, 240),
         "route": str(route or "").strip(),
         "worker_pool": str(worker_pool or "").strip(),
         "work_type": str(work_type or "").strip(),
@@ -99,11 +196,28 @@ def build_task_brief(
         "protocol": str(protocol or "").strip() or "normal",
         "review_required": bool(review_required),
         "expected_done": str(expected_done or "").strip(),
+        "boundary": {
+            "artifact_first": True,
+            "avoid_raw_transcript": True,
+            "review_required": bool(review_required),
+            "followup_uses_context_pack": isinstance(context_pack, dict) and int(context_pack.get("related_task_count", 0) or 0) > 0,
+        },
+        "allowed_tools": _allowed_tools(worker_pool, work_type, phase, route),
+        "done_definition": _done_definition(route, review_required, report_path),
+        "expected_artifacts": _expected_artifacts(report_path, context_path, context_pack),
         "constraints": constraints,
         "context_summary": _compact_text(context_summary, 400),
         "context_path": str(context_path or "").strip(),
         "context_pack": dict(context_pack) if isinstance(context_pack, dict) else {},
         "context_budget": dict(context_budget) if isinstance(context_budget, dict) else {},
+        "checklist_delta": _checklist_delta(context_pack),
+        "retrieval_hints": _retrieval_hints(
+            task_id=task_id,
+            report_path=report_path,
+            context_path=context_path,
+            context_pack=context_pack,
+            context_budget=context_budget,
+        ),
         "skill_bundle": [str(item).strip() for item in (skill_bundle or []) if str(item).strip()],
         "expected_output": build_result_contract(summary_hint, artifact_first=True),
     }
@@ -126,9 +240,12 @@ def normalize_worker_result(
         "task_id": str(data.get("task_id", "") or task_id or "").strip(),
         "status": normalize_result_status(str(data.get("status", "") or "")),
         "summary": _compact_text(str(data.get("summary", "") or ""), 500),
+        "user_safe_summary": _compact_text(str(data.get("user_safe_summary", "") or ""), 320),
+        "deliverable_kind": _compact_text(str(data.get("deliverable_kind", "") or ""), 80),
         "artifacts": artifacts,
         "files": _string_list(data.get("files")),
         "report": report,
         "risks": _string_list(data.get("risks")),
+        "verification": _string_list(data.get("verification")),
         "next_step": _compact_text(str(data.get("next_step", "") or ""), 240),
     }

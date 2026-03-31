@@ -19,6 +19,9 @@
     "goal": {
       "type": "string"
     },
+    "objective": {
+      "type": "string"
+    },
     "route": {
       "type": "string"
     },
@@ -43,6 +46,24 @@
     "expected_done": {
       "type": "string"
     },
+    "boundary": {
+      "type": "object"
+    },
+    "allowed_tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "done_definition": {
+      "type": "string"
+    },
+    "expected_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "constraints": {
       "type": "array",
       "items": {
@@ -59,6 +80,15 @@
       "type": "object"
     },
     "context_budget": {
+      "type": "object"
+    },
+    "checklist_delta": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "retrieval_hints": {
       "type": "object"
     },
     "skill_bundle": {
