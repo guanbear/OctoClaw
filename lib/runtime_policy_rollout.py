@@ -48,7 +48,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "enabled": True,
         "switches": {
             "hard_runner_only": True,
-            "route_hint_required": True,
+            "route_hint_required": False,
             "replay_logging": True,
             "direct_model_override": False,
             "delegation_enforcement": True,
@@ -69,14 +69,14 @@ PRESETS: dict[str, dict[str, Any]] = {
             "hard_runner_only": True,
             "route_hint_required": True,
             "replay_logging": True,
-            "direct_model_override": True,
+            "direct_model_override": False,
             "delegation_enforcement": True,
         },
         "route_stickiness": {
             "enabled": True,
         },
         "hooks": {
-            "before_model_resolve": True,
+            "before_model_resolve": False,
             "before_prompt_build": True,
             "before_tool_call": True,
             "agent_end": True,

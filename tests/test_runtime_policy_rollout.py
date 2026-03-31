@@ -35,6 +35,20 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
             check=True,
         )
         payload = json.loads(result.stdout)
+        self.assertFalse(payload["switches"]["route_hint_required"])
+        self.assertTrue(payload["switches"]["delegation_enforcement"])
+        self.assertFalse(payload["switches"]["direct_model_override"])
+        self.assertTrue(payload["hooks"]["before_tool_call"])
+        self.assertFalse(payload["hooks"]["before_model_resolve"])
+
+    def test_render_policy_enforced_defaults_to_runtime_enforcement_without_model_override(self) -> None:
+        result = subprocess.run(
+            ["python3", str(ROLLOUT_SCRIPT), "render-policy", "--preset", "enforced"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
         self.assertTrue(payload["switches"]["route_hint_required"])
         self.assertTrue(payload["switches"]["delegation_enforcement"])
         self.assertFalse(payload["switches"]["direct_model_override"])
@@ -64,7 +78,7 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
             )
             merged = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertIn("runtime_policy", merged)
-            self.assertTrue(merged["runtime_policy"]["switches"]["route_hint_required"])
+            self.assertFalse(merged["runtime_policy"]["switches"]["route_hint_required"])
             self.assertTrue(merged["runtime_policy"]["switches"]["delegation_enforcement"])
             self.assertFalse(merged["runtime_policy"]["switches"]["direct_model_override"])
             self.assertTrue(merged["notification"]["backend"] == "auto")
@@ -270,7 +284,7 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
         self.assertEqual(payload["current_phase"], "enforced")
         self.assertEqual(payload["summary_phase"], "guided")
         self.assertEqual(payload["suggested_preset"], "enforced")
-        self.assertFalse(payload["ready"])
+        self.assertTrue(payload["ready"])
 
     def test_check_handles_missing_replay_log_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-missing-replay-") as tmpdir:

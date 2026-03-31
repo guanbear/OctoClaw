@@ -108,6 +108,8 @@ def infer_runtime_policy_phase(runtime_policy: dict[str, Any] | None) -> str:
     if not isinstance(route_stickiness, dict):
         route_stickiness = {}
 
+    if bool(switches.get("route_hint_required")):
+        return "enforced"
     if bool(switches.get("direct_model_override")) or bool(hooks.get("before_model_resolve")):
         return "enforced"
     if (
@@ -241,9 +243,11 @@ def build_promotion_checks(
             {
                 "name": "route_hint_coverage",
                 "ok": (
-                    route_hint_required_count > 0
-                    and route_hint_submission_rate is not None
-                    and route_hint_submission_rate >= min_route_hint_submission_rate
+                    route_hint_required_count == 0
+                    or (
+                        route_hint_submission_rate is not None
+                        and route_hint_submission_rate >= min_route_hint_submission_rate
+                    )
                 ),
                 "detail": (
                     f"route hint submission {compact_ratio(route_hint_submission_rate)} "

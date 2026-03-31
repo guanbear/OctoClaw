@@ -928,11 +928,14 @@ OctoClaw 需要有自己的独特价值，不能只是“把 ClawTeam 接进来�
   - 真实注入 policy/replay
   - 但不硬拦普通工具，不强制 delegated route
 - `guided`
-  - 开启 route-hint / sticky / before_tool_call
+  - 开启 sticky / before_tool_call
   - 对 delegated route 做硬派发门禁
+  - 默认不强制 `route_hint`
   - 但仍不做主会话 model override
 - `enforced`
-  - 在 `guided` 基础上，再开启主会话 model override
+  - 在 `guided` 基础上，加强灰区和运行时门禁
+  - 默认仍不改主会话模型
+  - `main model override` 作为独立、条件触发的能力单独开启
 
 灰区路由的详细设计见：
 

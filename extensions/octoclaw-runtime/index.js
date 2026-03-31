@@ -861,13 +861,15 @@ const plugin = {
         required: ["routeHint"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const stateKey = resolvePolicyStateKey(ctx);
-        const existing = getPolicyStateForContext(ctx).state;
+        const { key: existingStateKey, state: existing } = getPolicyStateForContext(ctx);
         const task = String(params.task || existing?.prompt || "").trim();
         if (!task) {
           throw new Error("octoclaw_route_hint requires task context");
         }
         const metadata = buildPolicyMetadata(ctx);
+        const replaySessionKey = String(
+          existingStateKey || metadata.session_key || existing?.decision?.request?.session_key || "",
+        ).trim();
         const routeHintPayload = {
           route_hint: params.routeHint,
           work_type: params.workType || "",
@@ -882,7 +884,7 @@ const plugin = {
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         args.push("--route-hint-json", JSON.stringify(routeHintPayload));
         const payload = await runJsonScript("octoclaw_policy.py", args, ctx?.cwd || process.cwd());
-        const stickyPersisted = await persistStickyLane(stateKey, payload, pi.logger, { source: "route_hint" });
+        const stickyPersisted = await persistStickyLane(replaySessionKey, payload, pi.logger, { source: "route_hint" });
         setPolicyStateForContext(ctx, {
           ...(existing || {}),
           prompt: task,
@@ -898,7 +900,7 @@ const plugin = {
         await recordPolicyReplay(
           "route_hint_submitted",
           {
-            sessionKey: stateKey || "",
+            sessionKey: replaySessionKey,
             sessionId: String(ctx?.sessionId || ""),
             routeHint: params.routeHint,
             workType: params.workType || "",
@@ -1027,6 +1029,7 @@ const plugin = {
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         const { key: stateKey, state } = getPolicyStateForContext(ctx);
+        const replaySessionKey = String(stateKey || metadata.session_key || state?.decision?.request?.session_key || "").trim();
         const policyDecisionJson = params.policyJson || (state?.decision ? JSON.stringify(state.decision) : "");
         const cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
@@ -1044,7 +1047,7 @@ const plugin = {
                 reason_codes: Array.isArray(payload?.reason_codes) ? payload.reason_codes : [],
               },
             };
-        const stickyPersisted = await persistStickyLane(stateKey, stickyDecision, pi.logger, { source: "dispatch" });
+        const stickyPersisted = await persistStickyLane(replaySessionKey, stickyDecision, pi.logger, { source: "dispatch" });
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`,
@@ -1053,7 +1056,7 @@ const plugin = {
         await recordPolicyReplay(
           "dispatch_called",
           {
-            sessionKey: stateKey || "",
+            sessionKey: replaySessionKey,
             sessionId: String(ctx?.sessionId || ""),
             route: String(payload?.route || ""),
             systemPreferredRoute: String(cachedDecision?.route_decision?.system_preferred_route || payload?.system_preferred_route || ""),

@@ -160,7 +160,30 @@ def route_hint_required(route_meta: dict[str, Any], forced_route: str = "", poli
     reason_codes = list(route_meta.get("reason_codes", []) or [])
     if "hard_runner_only" in reason_codes:
         return False
-    return True
+    route = str(route_meta.get("route", route_meta.get("system_preferred_route", "")) or "").strip()
+    if route in {"", "direct", "runner"}:
+        return False
+    if bool(route_meta.get("needs_semantic_review")):
+        return True
+    work_contract = str(route_meta.get("work_contract_hint", "") or "").strip()
+    if work_contract == "coordinated_work":
+        return True
+    features = route_meta.get("features", {})
+    if isinstance(features, dict) and int(features.get("semantic_ambiguity_hits", 0) or 0) > 0:
+        return True
+    try:
+        confidence = float(route_meta.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    try:
+        score_margin = float(route_meta.get("score_margin", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score_margin = 0.0
+    if confidence < 0.72:
+        return True
+    if score_margin < 0.26:
+        return True
+    return False
 
 
 def load_route_stickiness(policy_cfg: dict[str, Any], session_key: str) -> dict[str, Any]:
@@ -379,6 +402,7 @@ def merge_work_contract(base_work_contract: str, route: str, sticky_state: dict[
 
 
 def build_route_hint_policy(
+    route_meta: dict[str, Any],
     base_route: str,
     final_route: str,
     base_reason_codes: list[str],
@@ -389,7 +413,7 @@ def build_route_hint_policy(
 ) -> dict[str, Any]:
     hard_gate_applied = "hard_runner_only" in base_reason_codes
     submitted = bool(route_hint.get("route_hint"))
-    required = route_hint_required({"reason_codes": base_reason_codes}, forced_route, policy_cfg)
+    required = route_hint_required(route_meta, forced_route, policy_cfg)
     source = "system_preferred"
     if submitted:
         source = "main_agent"
@@ -778,20 +802,19 @@ def build_decision(
     merge_reason_codes: list[str] = []
     route = base_route
     base_work_contract = str(route_meta.get("work_contract_hint", "") or "")
-    if route_hint_required(route_meta, force_route, runtime_cfg):
-        route, sticky_state, sticky_reasons = apply_sticky_route(
-            base_route,
-            base_work_contract,
-            features,
-            route_hint,
-            metadata,
-            runtime_cfg,
-            force_route,
-        )
-        merge_reason_codes.extend(sticky_reasons)
-        if route_hint.get("route_hint"):
-            route, hint_reasons = merge_route_from_hint(route, features, route_hint)
-            merge_reason_codes.extend(hint_reasons)
+    route, sticky_state, sticky_reasons = apply_sticky_route(
+        base_route,
+        base_work_contract,
+        features,
+        route_hint,
+        metadata,
+        runtime_cfg,
+        force_route,
+    )
+    merge_reason_codes.extend(sticky_reasons)
+    if route_hint.get("route_hint"):
+        route, hint_reasons = merge_route_from_hint(route, features, route_hint)
+        merge_reason_codes.extend(hint_reasons)
 
     base_work_type = infer_work_type(task, features, route, metadata)
     work_type = merge_work_type(route, base_work_type, route_hint)
@@ -827,7 +850,7 @@ def build_decision(
     default_skill_bundle = resolve_skill_bundle(runtime_cfg, work_type, profile)
     base_reason_codes = list(route_meta.get("reason_codes", []) or [])
     merged_reason_codes = [*merge_reason_codes, *base_reason_codes]
-    route_hint_policy = build_route_hint_policy(base_route, route, base_reason_codes, route_hint, force_route, runtime_cfg, sticky_state)
+    route_hint_policy = build_route_hint_policy(route_meta, base_route, route, base_reason_codes, route_hint, force_route, runtime_cfg, sticky_state)
     route_hint_policy["ack_followup_candidate"] = bool(features.get("ack_followup_candidate")) or bool(route_hint_policy.get("ack_followup_candidate"))
     route_hint_policy["merge_notes"] = merge_reason_codes
     dispatch_required = route != "direct"

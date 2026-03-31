@@ -8,6 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import sys
+
+sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "lib")))
+from octoclaw_policy import route_hint_required
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLICY_SCRIPT = REPO_ROOT / "lib" / "octoclaw_policy.py"
@@ -289,6 +294,42 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["budget_policy"]["budget_cap"], "medium")
         self.assertEqual(payload["prompt_contract"]["handoff_contract"], "deliverable_handoff")
         self.assertNotIn("legacy_label", payload["model_policy"])
+
+    def test_route_hint_not_required_for_clear_spawn_single_path(self) -> None:
+        self.assertFalse(
+            route_hint_required(
+                {
+                    "route": "spawn_single",
+                    "system_preferred_route": "spawn_single",
+                    "reason_codes": ["work_contract:deliverable_work", "research_work"],
+                    "confidence": 0.82,
+                    "score_margin": 0.46,
+                    "work_contract_hint": "deliverable_work",
+                    "needs_semantic_review": False,
+                    "features": {"semantic_ambiguity_hits": 0},
+                },
+                "",
+                {"switches": {"route_hint_required": True}},
+            )
+        )
+
+    def test_route_hint_required_for_semantic_boundary(self) -> None:
+        self.assertTrue(
+            route_hint_required(
+                {
+                    "route": "spawn_single",
+                    "system_preferred_route": "spawn_single",
+                    "reason_codes": ["work_contract:deliverable_work", "research_work"],
+                    "confidence": 0.74,
+                    "score_margin": 0.18,
+                    "work_contract_hint": "deliverable_work",
+                    "needs_semantic_review": True,
+                    "features": {"semantic_ambiguity_hits": 1},
+                },
+                "",
+                {"switches": {"route_hint_required": True}},
+            )
+        )
 
 
 if __name__ == "__main__":

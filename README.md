@@ -160,9 +160,9 @@ Recommended gradual rollout switches in `tmp/octoclaw-config.json`:
     "enabled": true,
     "switches": {
       "hard_runner_only": true,
-      "route_hint_required": true,
+      "route_hint_required": false,
       "replay_logging": true,
-      "direct_model_override": true,
+      "direct_model_override": false,
       "delegation_enforcement": true
     },
     "route_stickiness": {
@@ -216,11 +216,11 @@ Suggested rollout presets for `bin/runtime-policy-rollout.sh`:
   - keeps replay on
   - disables route-hint enforcement and delegation hard blocks
 - `RUNTIME_POLICY_PRESET=guided`
-  - enables route-hint enforcement, sticky follow-up reuse, and hard delegation gating
+  - enables sticky follow-up reuse and hard delegation gating
   - keeps direct model override off, so the main session model stays unchanged
 - `RUNTIME_POLICY_PRESET=enforced`
-  - enables the full runtime-policy path, including main-session model override
-  - best used only after replay validation
+  - enables stronger gray-zone/runtime enforcement while still keeping direct model override off by default
+  - best used only after replay validation; turn on direct model override separately when you really need it
 
 ## Common Commands
 
