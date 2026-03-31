@@ -126,6 +126,23 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("\"risks\": []", spec["task_prompt"])
         self.assertIn("task-state-update.py blocked", spec["task_prompt"])
         self.assertIn("task-state-update.py checklist", spec["task_prompt"])
+        self.assertEqual(spec["spawn_prompt_path"], "")
+
+    def test_prepare_spawn_prompt_externalizes_long_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            long_prompt = "A" * 2500
+            with patch.object(octoclaw_spawn, "CONTEXT_DIR", tmpdir):
+                bootstrap, prompt_path = octoclaw_spawn.prepare_spawn_prompt(
+                    task_id="research-1",
+                    prompt=long_prompt,
+                    report_path="/tmp/report.md",
+                    context_path="/tmp/context.md",
+                )
+                self.assertTrue(prompt_path.endswith("research-1.spawn-prompt.md"))
+                self.assertIn("First read the full task contract", bootstrap)
+                self.assertIn(prompt_path, bootstrap)
+                self.assertIn("/tmp/report.md", bootstrap)
+                self.assertEqual(Path(prompt_path).read_text(encoding="utf-8"), long_prompt)
 
     def test_execute_clawteam_spawn_applies_session_model_override(self) -> None:
         completed = subprocess.CompletedProcess(args=["clawteam"], returncode=0, stdout="{}", stderr="")

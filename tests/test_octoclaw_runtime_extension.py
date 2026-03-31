@@ -104,7 +104,8 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
                         "octoclaw_policy_decide",
                         "octoclaw_route_hint",
                         "octoclaw_dispatch",
-                        "octoclaw_status"
+                        "octoclaw_status",
+                        "octoclaw_task_action"
                     ]
                 }
             }, "octoclaw_route_hint")).sort()"""
@@ -114,6 +115,7 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
         self.assertIn("octoclaw_dispatch", payload)
         self.assertIn("octoclaw_policy_decide", payload)
         self.assertIn("octoclaw_status", payload)
+        self.assertIn("octoclaw_task_action", payload)
 
     def test_tool_context_can_recover_policy_state_by_prompt_when_ctx_has_no_session(self) -> None:
         payload = run_runtime_helper(

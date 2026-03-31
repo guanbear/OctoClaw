@@ -690,6 +690,7 @@ def tool_policy(route: str, dispatch_required: bool) -> dict[str, Any]:
             "octoclaw_route_hint",
             "octoclaw_dispatch",
             "octoclaw_status",
+            "octoclaw_task_action",
         ],
         "delegate_first": dispatch_required,
         "block_tool_patterns": block_patterns,

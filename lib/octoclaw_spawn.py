@@ -64,6 +64,7 @@ DEFAULT_MODEL_BAND_BY_WORKER_POOL = {
     "octoclaw-review": "strong",
     "octoclaw-main": "normal",
 }
+MAX_INLINE_SPAWN_PROMPT_CHARS = 1800
 
 STOPWORDS = {
     "the", "and", "for", "with", "from", "that", "this", "then", "into", "will",
@@ -285,6 +286,49 @@ def build_context_bundle(task: str, parent_id: str, task_id: str) -> dict:
         related_tasks=related_tasks,
         context_dir=CONTEXT_DIR,
     )
+
+
+def prompt_file_path(task_id: str) -> str:
+    return os.path.join(CONTEXT_DIR, f"{task_id}.spawn-prompt.md")
+
+
+def persist_prompt_file(path: str, prompt: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(prompt)
+
+
+def build_bootstrap_prompt(*, prompt_path: str, report_path: str, context_path: str) -> str:
+    lines = [
+        "OctoClaw bootstrap task.",
+        f"1. First read the full task contract from: {prompt_path}",
+        "2. Follow that file exactly before doing any other work.",
+        "3. Do not ask for more context until you have read the file.",
+    ]
+    if context_path:
+        lines.append(f"4. If you need background, read context from: {context_path}")
+    if report_path:
+        lines.append(f"5. Persist detailed output to: {report_path}")
+    lines.append("Return RESULT only after following the prompt file contract.")
+    return "\n".join(lines)
+
+
+def prepare_spawn_prompt(
+    *,
+    task_id: str,
+    prompt: str,
+    report_path: str,
+    context_path: str,
+) -> tuple[str, str]:
+    if len(prompt) <= MAX_INLINE_SPAWN_PROMPT_CHARS:
+        return prompt, ""
+    external_path = prompt_file_path(task_id)
+    persist_prompt_file(external_path, prompt)
+    return build_bootstrap_prompt(
+        prompt_path=external_path,
+        report_path=report_path,
+        context_path=context_path,
+    ), external_path
 
 
 def validate_runtime(runtime: str, stream_to: str, supports_acp: bool) -> list[str]:
@@ -1151,14 +1195,24 @@ def build_spawn_spec(
     spawn_execution: dict[str, object] | None = None
     execution_error = ""
     executed = False
+    spawn_prompt = prompt
+    spawn_prompt_path = ""
     if should_execute_spawn(final_route, runtime, explicit=execute):
+        spawn_prompt, spawn_prompt_path = prepare_spawn_prompt(
+            task_id=task_id,
+            prompt=prompt,
+            report_path=report_path,
+            context_path=str(context_bundle.get("context_path", "") or ""),
+        )
+        if spawn_prompt_path:
+            base_artifacts["spawn_prompt_path"] = spawn_prompt_path
         try:
             spawn_execution = execute_clawteam_spawn(
                 task_id=task_id,
                 worker_pool=resolved_worker_pool,
                 model=final_model,
                 model_band=final_model_band,
-                prompt=prompt,
+                prompt=spawn_prompt,
                 thinking=thinking,
                 profile_override=profile,
             )
@@ -1257,6 +1311,7 @@ def build_spawn_spec(
         "expected_done": expected_done,
         "task_prompt": prompt,
         "task_prompt_preview": prompt[:320] + ("…" if len(prompt) > 320 else ""),
+        "spawn_prompt_path": spawn_prompt_path,
         "handoff": {
             "kind": "background" if executed else "plan",
             "status": "pending" if executed else ("failed" if execution_error else "planned"),
