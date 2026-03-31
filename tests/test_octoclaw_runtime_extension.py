@@ -115,6 +115,55 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
         self.assertIn("octoclaw_policy_decide", payload)
         self.assertIn("octoclaw_status", payload)
 
+    def test_tool_context_can_recover_policy_state_by_prompt_when_ctx_has_no_session(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u123",
+                  sessionId: "sess-1",
+                  agentId: "agent:main:main",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                const state = {
+                  prompt: "检查 nginx error log 并总结问题",
+                  decision: { request: { session_key: "agent:main:slack:direct:u123" } },
+                  createdAt: now,
+                  updatedAt: now
+                };
+                __octoclawTest.__setPolicyState?.(ctx, state);
+                return __octoclawTest.resolveToolPolicyContext({}, "检查 nginx error log 并总结问题");
+            })()"""
+        )
+
+        self.assertEqual(payload["key"], "agent:main:slack:direct:u123")
+        self.assertEqual(payload["state"]["decision"]["request"]["session_key"], "agent:main:slack:direct:u123")
+
+    def test_build_policy_metadata_can_use_recovered_state_key(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u234",
+                  sessionId: "sess-2",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "检查 8080 端口",
+                  decision: { request: { session_key: "agent:main:slack:direct:u234" } },
+                  createdAt: now,
+                  updatedAt: now
+                });
+                const recovered = __octoclawTest.resolveToolPolicyContext({}, "检查 8080 端口");
+                return __octoclawTest.buildPolicyMetadata({}, { stateKey: recovered.key });
+            })()"""
+        )
+
+        self.assertEqual(payload["session_key"], "agent:main:slack:direct:u234")
+        self.assertEqual(payload["session_origin"], "slack")
+
 
 if __name__ == "__main__":
     unittest.main()

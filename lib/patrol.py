@@ -46,10 +46,10 @@ from datetime import datetime, timezone, timedelta
 from collections import deque
 
 from notifier import backend_supports_cards, send_task_notification, send_text
-from octoclaw_spawn import build_spawn_spec
+from octoclaw_spawn import build_spawn_spec, build_task_prompt, execute_clawteam_spawn
 from clawteam_bridge import sync_task
 from runtime_coordination import recover_stale_ownership, resolve_worker_session, session_resume_snapshot, sync_runtime_surfaces
-from runtime_task_record import normalize_task_record, task_is_recent_final, task_notification_state, task_state_model
+from runtime_task_record import normalize_task_record, task_is_final, task_is_recent_final, task_notification_state, task_state_model
 from octopus_config import (
     MAIN_AGENT_SESSIONS_FILE,
     RUNNER_HEALTH_FILE,
@@ -2964,10 +2964,153 @@ def apply_task_updates(task_id: str, updates: dict, *, allowed_statuses: tuple[s
             break
         if changed and current_record:
             sync_task(current_record, event_type="patrol_update", previous_status=previous_status)
+            sync_runtime_surfaces(
+                current_record,
+                thread_action="close" if task_is_final(current_record) else "touch",
+            )
         return changed
     except Exception as e:
         print(f"⚠️  apply_task_updates({task_id}) 失败: {e}", file=sys.stderr)
     return False
+
+
+def _task_artifacts(task: dict) -> dict:
+    value = task.get("artifacts", {})
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _extract_spawn_payload_session(payload: dict) -> tuple[str, str]:
+    if not isinstance(payload, dict):
+        return "", ""
+    session_id = str(
+        payload.get("sessionId", "")
+        or payload.get("session_id", "")
+        or payload.get("activeSessionId", "")
+        or ""
+    ).strip()
+    run_id = str(
+        payload.get("runId", "")
+        or payload.get("run_id", "")
+        or payload.get("activeRunId", "")
+        or ""
+    ).strip()
+    return session_id, run_id
+
+
+def _build_existing_task_prompt(task: dict, *, model: str, model_band: str) -> str:
+    artifacts = _task_artifacts(task)
+    brief = artifacts.get("brief")
+    expected_output = artifacts.get("expected_output")
+    task_id = str(task.get("id", "") or "").strip()
+    task_desc = str(task.get("task_description", "") or task.get("summary", "") or task_id).strip()
+    return build_task_prompt(
+        task_id=task_id,
+        model=model,
+        model_band=model_band,
+        task=task_desc,
+        expected_done=str(task.get("expected_done", "") or "+8min"),
+        report_path=str(task.get("report_path", "") or ""),
+        route=str(task.get("route", "") or "spawn_single"),
+        context_summary=str(task.get("context_summary", "") or ""),
+        context_path=str(task.get("context_path", "") or ""),
+        profile=str(task.get("profile", "") or "default"),
+        worker_pool=str(task.get("worker_pool", "") or "octoclaw-research"),
+        work_type=str(task.get("work_type", "") or "research"),
+        phase=str(task.get("phase", "") or "collect"),
+        protocol=str(task.get("protocol", "") or "normal"),
+        review_required=bool(task.get("review_required", False)),
+        brief=brief if isinstance(brief, dict) else None,
+        result_contract=expected_output if isinstance(expected_output, dict) else None,
+    )
+
+
+def _resume_existing_subagent_task(task: dict, *, model: str, model_band: str) -> bool:
+    task_id = str(task.get("id", "") or "").strip()
+    if not task_id:
+        return False
+
+    prompt = _build_existing_task_prompt(task, model=model, model_band=model_band)
+    spawn_execution = execute_clawteam_spawn(
+        task_id=task_id,
+        worker_pool=str(task.get("worker_pool", "") or "octoclaw-research"),
+        model=model,
+        model_band=model_band,
+        prompt=prompt,
+        thinking="",
+        profile_override=str(task.get("profile", "") or ""),
+    )
+    payload = spawn_execution.get("payload", {}) if isinstance(spawn_execution.get("payload", {}), dict) else {}
+    session_id, run_id = _extract_spawn_payload_session(payload)
+    agent_owner = str(spawn_execution.get("agent_name", "") or "").strip()
+    operator_surface = {
+        "kind": "spawn",
+        "backend": "clawteam",
+        "backend_name": "tmux",
+        "team_name": str(spawn_execution.get("team_name", "") or "").strip(),
+        "agent_name": agent_owner,
+        "tmux_session_name": "octoclaw-runtime",
+        "operator_hint": f"clawteam/tmux {str(spawn_execution.get('team_name', '') or '').strip()}/{agent_owner}".strip("/"),
+        "attach_hint": "tmux attach -t octoclaw-runtime",
+        "schema_version": "octoclaw.task_display/v1",
+    }
+    merged_artifacts = _task_artifacts(task)
+    merged_artifacts.update(
+        {
+            "execution_backend": "clawteam_tmux",
+            "operator_surface": operator_surface,
+            "operator_hint": str(operator_surface.get("operator_hint", "") or ""),
+            "spawn_execution": {
+                "backend": str(spawn_execution.get("backend", "") or ""),
+                "team_name": str(spawn_execution.get("team_name", "") or ""),
+                "agent_name": agent_owner,
+                "profile": str(spawn_execution.get("profile", "") or ""),
+                "session_key": str(spawn_execution.get("session_key", "") or ""),
+                "model_override_applied": bool(spawn_execution.get("model_override_applied", False)),
+                "model_override_status": int(spawn_execution.get("model_override_status", 0) or 0),
+                "model_override_error": str(spawn_execution.get("model_override_error", "") or ""),
+            },
+        }
+    )
+
+    now_iso = datetime.now(timezone.utc).astimezone().isoformat()
+    updates = {
+        "status": "running",
+        "model": model,
+        "model_band": model_band,
+        "owner": agent_owner,
+        "agent_id": agent_owner,
+        "agent_namespace": "octoclaw",
+        "spawned_at": now_iso,
+        "dispatched_at": now_iso,
+        "started_at": now_iso,
+        "updated_at": now_iso,
+        "last_observed_at": now_iso,
+        "session_id": session_id,
+        "run_id": run_id,
+        "session_status": "spawned" if (session_id or run_id or agent_owner) else str(task.get("session_status", "") or ""),
+        "resume_state": "recovered",
+        "recovery_action": None,
+        "artifacts": merged_artifacts,
+    }
+    probe_record = dict(task)
+    probe_record.update({key: value for key, value in updates.items() if value is not None})
+    updates["session_resume"] = session_resume_snapshot(probe_record)
+    changed = apply_task_updates(task_id, updates, allowed_statuses=("queued", "dispatched"))
+    if changed:
+        resumed = dict(task)
+        resumed.update({key: value for key, value in updates.items() if value is not None})
+        append_task_event(
+            resumed,
+            "worker_resumed",
+            message=str(task.get("summary") or task.get("task_description") or task_id),
+            extra={
+                "resume_state": "recovered",
+                "agent_name": agent_owner,
+                "session_id": session_id,
+                "run_id": run_id,
+            },
+        )
+    return changed
 
 
 def mark_task_failed(task_id: str, summary: str, *, extra_updates: dict | None = None) -> bool:
@@ -4043,33 +4186,11 @@ def check_queued_tasks(tasks: list) -> int:
 
         print(f"  🚀 queued 任务 {task_id} 依赖全部完成，正在 spawn...")
         try:
-            cron_name = f"queued-{task_id}"[:64]  # cron name 长度限制
-            result = subprocess.run(
-                [
-                    "openclaw", "cron", "add",
-                    "--name", cron_name,
-                    "--session", "isolated",
-                    "--at", "1m",
-                    "--model", model,
-                    "--announce",
-                    "--channel", "last",
-                    "--delete-after-run",
-                    "--message", task_desc,
-                ],
-                capture_output=True, text=True, timeout=20
-            )
-            if result.returncode == 0:
-                print(f"  ✅ 已 spawn queued 任务 {task_id} (label={label}, model={model})")
-                update_task_status(task_id, "dispatched", {
-                    "model": model,  # 同步更新为 resolve-model 实际返回的 model
-                    "dispatched_at": datetime.now(timezone.utc).isoformat()
-                })
+            if _resume_existing_subagent_task(task, model=model, model_band=model_band):
+                print(f"  ✅ 已恢复 queued 任务 {task_id} (model={model})")
                 spawned_count += 1
             else:
-                err_msg = result.stderr[:200] if result.stderr else result.stdout[:200]
-                print(f"  ❌ spawn queued 任务 {task_id} 失败: {err_msg}", file=sys.stderr)
-        except subprocess.TimeoutExpired:
-            print(f"  ❌ spawn queued 任务 {task_id} 超时", file=sys.stderr)
+                print(f"  ⚠️  queued 任务 {task_id} 未写入 running 状态", file=sys.stderr)
         except Exception as e:
             print(f"  ❌ spawn queued 任务 {task_id} 异常: {e}", file=sys.stderr)
 

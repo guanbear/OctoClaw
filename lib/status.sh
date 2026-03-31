@@ -100,7 +100,7 @@ mode = "auto"
 mode_label = "自动选模（policy-first）"
 
 
-def summarize_replay_status(config: dict) -> dict | None:
+def summarize_replay_status(config: dict, *, fast: bool = False) -> dict | None:
     runtime_policy = config.get("runtime_policy") if isinstance(config, dict) else {}
     if not isinstance(runtime_policy, dict):
         return None
@@ -115,6 +115,18 @@ def summarize_replay_status(config: dict) -> dict | None:
             "phase": phase,
             "missing": True,
             "path": str(replay_path),
+        }
+
+    if fast:
+        return {
+            "phase": phase,
+            "effective_phase": phase,
+            "missing": False,
+            "promotion": {
+                "phase": phase,
+                "target": phase,
+                "ready": False,
+            },
         }
 
     summary_phase = "guided" if phase == "enforced" else phase
@@ -217,21 +229,25 @@ if not runner_health_ok and isinstance(runner_health, dict) and runner_health.ge
 snapshot = build_status_snapshot(tasks, now=now)
 
 backend = config_data.get("notification", {}).get("backend", "auto")
-bridge_summary = load_bridge_summary()
-replay_status = summarize_replay_status(config_data)
+task_first_view = fmt in ("compact", "anchors")
+bridge_summary = load_bridge_summary() if not task_first_view else {}
+replay_status = summarize_replay_status(config_data, fast=task_first_view)
 main_session_model = load_main_session_actual_model()
 actual_model = main_session_model.get("model_path", "")
 model_health_summary = summarize_model_health(model_health_state)
-task_event_summary = summarize_task_events(load_task_events(limit=400))
-session_thread_map = load_session_thread_map()
-session_binding_count = len(session_thread_map.get("bindings", {}) or {})
-session_thread_count = len(session_thread_map.get("threads", {}) or {})
+if task_first_view:
+    task_event_summary = {}
+    session_binding_count = 0
+    session_thread_count = 0
+else:
+    task_event_summary = summarize_task_events(load_task_events(limit=400))
+    session_thread_map = load_session_thread_map()
+    session_binding_count = len(session_thread_map.get("bindings", {}) or {})
+    session_thread_count = len(session_thread_map.get("threads", {}) or {})
 main_model = str(policy_data.get("main_model", "") or "").strip()
 main_drift = assess_main_model_drift(config=config_data, actual_model=actual_model)
 workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
 tmux_session_name = str(workbench.get("tmux_session_name", "") or "").strip()
-
-task_first_view = fmt in ("compact", "anchors")
 if task_first_view:
     print(
         f"任务 {len(snapshot['running']) + len(snapshot['queued']) + len(snapshot['pending']) + len(snapshot['active_lineages'])} · "

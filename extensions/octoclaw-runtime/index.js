@@ -257,6 +257,34 @@ function getPolicyStateForContext(ctx = {}) {
   return { key: "", state: null };
 }
 
+function findPolicyStateByPrompt(prompt = "") {
+  const task = String(prompt || "").trim();
+  if (!task) return { key: "", state: null };
+  prunePolicyState();
+  let bestKey = "";
+  let bestState = null;
+  let bestUpdatedAt = 0;
+  let bestRank = -1;
+  for (const [key, state] of policyStateBySession.entries()) {
+    if (!state || String(state.prompt || "").trim() !== task) continue;
+    const updatedAt = Number(state.updatedAt || state.createdAt || 0);
+    const rank = sessionPreferenceRank(key);
+    if (updatedAt > bestUpdatedAt || (updatedAt === bestUpdatedAt && rank >= bestRank)) {
+      bestUpdatedAt = updatedAt;
+      bestRank = rank;
+      bestKey = key;
+      bestState = state;
+    }
+  }
+  return { key: bestKey, state: bestState };
+}
+
+function resolveToolPolicyContext(ctx = {}, prompt = "") {
+  const direct = getPolicyStateForContext(ctx);
+  if (direct.key || direct.state) return direct;
+  return findPolicyStateByPrompt(prompt);
+}
+
 function setPolicyStateForContext(ctx = {}, payload) {
   for (const key of resolvePolicyStateKeys(ctx)) {
     policyStateBySession.set(key, payload);
@@ -433,9 +461,9 @@ function isManagedAgentContext(ctx = {}) {
   return true;
 }
 
-function buildPolicyMetadata(ctx = {}) {
+function buildPolicyMetadata(ctx = {}, options = {}) {
   const metadata = {};
-  const stableSessionKey = resolvePolicyStateKey(ctx);
+  const stableSessionKey = String(options.stateKey || resolvePolicyStateKey(ctx) || "").trim();
   const stableSession = parseSessionRoute(stableSessionKey);
   if (ctx.channelId) metadata.channel = ctx.channelId;
   if (stableSessionKey) metadata.session_key = stableSessionKey;
@@ -861,12 +889,12 @@ const plugin = {
         required: ["routeHint"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const { key: existingStateKey, state: existing } = getPolicyStateForContext(ctx);
+        const { key: existingStateKey, state: existing } = resolveToolPolicyContext(ctx, params.task || "");
         const task = String(params.task || existing?.prompt || "").trim();
         if (!task) {
           throw new Error("octoclaw_route_hint requires task context");
         }
-        const metadata = buildPolicyMetadata(ctx);
+        const metadata = buildPolicyMetadata(ctx, { stateKey: existingStateKey || existing?.decision?.request?.session_key || "" });
         const replaySessionKey = String(
           existingStateKey || metadata.session_key || existing?.decision?.request?.session_key || "",
         ).trim();
@@ -1016,7 +1044,8 @@ const plugin = {
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
-        const metadata = { ...buildPolicyMetadata(ctx) };
+        const { key: stateKey, state } = resolveToolPolicyContext(ctx, params.task || "");
+        const metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || state?.decision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
         if (params.metadataJson) {
           try {
@@ -1028,7 +1057,6 @@ const plugin = {
         }
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
-        const { key: stateKey, state } = getPolicyStateForContext(ctx);
         const replaySessionKey = String(stateKey || metadata.session_key || state?.decision?.request?.session_key || "").trim();
         const policyDecisionJson = params.policyJson || (state?.decision ? JSON.stringify(state.decision) : "");
         const cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
@@ -1104,7 +1132,8 @@ const plugin = {
         if (params.runtime) args.push("--runtime", params.runtime);
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
-        const metadata = { ...buildPolicyMetadata(ctx) };
+        const { key: existingStateKey, state: existingState } = resolveToolPolicyContext(ctx, params.task || "");
+        const metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || existingState?.decision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
         if (params.metadataJson) {
           try {
@@ -1298,7 +1327,11 @@ export const __octoclawTest = {
   parseSessionRoute,
   resolvePolicyStateKeys,
   resolvePolicyStateKey,
+  findPolicyStateByPrompt,
+  resolveToolPolicyContext,
   isManagedAgentContext,
   buildPolicyMetadata,
   preHintAllowedTools,
+  __setPolicyState: setPolicyStateForContext,
+  __resetPolicyState: () => policyStateBySession.clear(),
 };
