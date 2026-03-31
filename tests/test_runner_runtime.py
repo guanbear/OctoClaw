@@ -30,6 +30,7 @@ class RunnerRuntimeTests(unittest.TestCase):
     def test_runner_loop_writes_unified_report_and_artifacts(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-runner-runtime-") as workspace:
             env = {**os.environ, "WORKSPACE": workspace}
+            session_key = "agent:main:slack:direct:u-runner"
             dispatch = subprocess.run(
                 [
                     "python3",
@@ -46,6 +47,16 @@ class RunnerRuntimeTests(unittest.TestCase):
                     "15",
                     "--task-description",
                     "Check runner output",
+                    "--session-key",
+                    session_key,
+                    "--session-id",
+                    "sess-runner-1",
+                    "--agent-id",
+                    "agent:main:main",
+                    "--agent-namespace",
+                    "octoclaw",
+                    "--managed-by-octoclaw",
+                    "true",
                 ],
                 capture_output=True,
                 text=True,
@@ -77,10 +88,15 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(task["runtime"], "runner")
             self.assertEqual(task["executor"], "runner")
             self.assertEqual(task["worker_pool"], "octoclaw-runner")
+            self.assertEqual(task["session_key"], session_key)
+            self.assertEqual(task["session_id"], "sess-runner-1")
+            self.assertEqual(task["agent_id"], "agent:main:main")
+            self.assertEqual(task["agent_namespace"], "octoclaw")
             self.assertTrue(task["report_path"])
             self.assertTrue(Path(task["report_path"]).exists())
             self.assertEqual(task["artifacts"]["execution_backend"], "runner_queue")
             self.assertEqual(task["artifacts"]["worker_id"], "test-runner")
+            self.assertEqual(task["artifacts"]["session_key"], session_key)
             self.assertEqual(task["artifacts"]["exit_code"], 0)
             self.assertEqual(task["artifacts"]["timeout_seconds"], 15)
             self.assertEqual(task["artifacts"]["report_path"], task["report_path"])
@@ -103,6 +119,7 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(meta["report_path"], task["report_path"])
             self.assertEqual(meta["result_path"], str(meta_path))
             self.assertEqual(meta["worker_id"], "test-runner")
+            self.assertEqual(meta["session_key"], session_key)
             self.assertEqual(meta["timeout_seconds"], 15)
             self.assertEqual(meta["worker_result"]["schema_version"], "octoclaw.worker_result/v1")
             self.assertEqual(meta["worker_result"]["status"], "done")

@@ -26,6 +26,24 @@ console.log(JSON.stringify(value));
 
 
 class OctoClawRuntimeExtensionTests(unittest.TestCase):
+    def test_extract_prompt_text_unwraps_busy_queue_wrapper(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.extractPromptText({
+                prompt: `[Queued messages while agent was busy]
+
+---
+Queued #1
+System: [2026-04-01 00:16:27 GMT+8] Slack DM from U0AL9T5U89Z: 顺便看下 8083 端口有没有监听
+
+Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"m1"}
+\`\`\``
+            })"""
+        )
+
+        self.assertEqual(payload, "顺便看下 8083 端口有没有监听")
+
     def test_prefers_custom_im_session_key_over_generic_session_id(self) -> None:
         payload = run_runtime_helper(
             """__octoclawTest.resolvePolicyStateKeys({
@@ -165,6 +183,26 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
 
         self.assertEqual(payload["session_key"], "agent:main:slack:direct:u234")
         self.assertEqual(payload["session_origin"], "slack")
+
+    def test_retain_policy_state_when_delegated_route_ended_without_dispatch(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.shouldRetainPolicyStateOnAgentEnd({
+                decision: { route_decision: { route: "spawn_single" } },
+                delegated: false
+            })"""
+        )
+
+        self.assertTrue(payload)
+
+    def test_clear_policy_state_after_successful_delegation(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.shouldRetainPolicyStateOnAgentEnd({
+                decision: { route_decision: { route: "spawn_single" } },
+                delegated: true
+            })"""
+        )
+
+        self.assertFalse(payload)
 
 
 if __name__ == "__main__":

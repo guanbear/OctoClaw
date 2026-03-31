@@ -40,23 +40,46 @@ update_task_running() {
   local model="$2"
   local summary="$3"
   local task_description="$4"
-  python3 "$TASK_STATE_PY" upsert \
-    --id "$job_id" \
-    --model "$model" \
-    --status running \
-    --summary "$summary" \
-    --model-band fast \
-    --task-description "$task_description" \
-    --title "$summary" \
-    --executor runner \
-    --route runner \
-    --runtime runner \
-    --worker-pool octoclaw-runner \
-    --work-type ops \
-    --phase inspect \
-    --protocol normal \
-    --profile ops-fast \
-    --review-required false >/dev/null
+  local session_key="${5:-}"
+  local session_id="${6:-}"
+  local agent_id="${7:-}"
+  local agent_namespace="${8:-}"
+  local managed_by_octoclaw="${9:-}"
+  local cmd=(
+    python3 "$TASK_STATE_PY" upsert
+    --id "$job_id"
+    --model "$model"
+    --status running
+    --summary "$summary"
+    --model-band fast
+    --task-description "$task_description"
+    --title "$summary"
+    --executor runner
+    --route runner
+    --runtime runner
+    --worker-pool octoclaw-runner
+    --work-type ops
+    --phase inspect
+    --protocol normal
+    --profile ops-fast
+    --review-required false
+  )
+  if [[ -n "$session_key" ]]; then
+    cmd+=(--session-key "$session_key")
+  fi
+  if [[ -n "$session_id" ]]; then
+    cmd+=(--session-id "$session_id")
+  fi
+  if [[ -n "$agent_id" ]]; then
+    cmd+=(--agent-id "$agent_id")
+  fi
+  if [[ -n "$agent_namespace" ]]; then
+    cmd+=(--agent-namespace "$agent_namespace")
+  fi
+  if [[ -n "$managed_by_octoclaw" ]]; then
+    cmd+=(--managed-by-octoclaw "$managed_by_octoclaw")
+  fi
+  "${cmd[@]}" >/dev/null
 }
 
 finish_task() {
@@ -106,7 +129,7 @@ import json
 import sys
 
 job = json.loads(sys.argv[1])
-for key in ("id", "command", "cwd", "timeout_seconds", "summary", "model", "task_description"):
+for key in ("id", "command", "cwd", "timeout_seconds", "summary", "model", "task_description", "session_key", "session_id", "agent_id", "agent_namespace", "managed_by_octoclaw"):
     value = str(job.get(key, ""))
     print(base64.b64encode(value.encode("utf-8")).decode("ascii"))
 PY
@@ -135,7 +158,12 @@ PY
   timeout_seconds="$(decode_field "${job_fields[3]:-}")"
   summary="$(decode_field "${job_fields[4]:-}")"
   model="$(decode_field "${job_fields[5]:-}")"
-  task_description="$(decode_field "${job_fields[6]:-}")"
+task_description="$(decode_field "${job_fields[6]:-}")"
+session_key="$(decode_field "${job_fields[7]:-}")"
+session_id="$(decode_field "${job_fields[8]:-}")"
+agent_id="$(decode_field "${job_fields[9]:-}")"
+agent_namespace="$(decode_field "${job_fields[10]:-}")"
+managed_by_octoclaw="$(decode_field "${job_fields[11]:-}")"
   cwd="${cwd:-/workspace}"
   timeout_seconds="${timeout_seconds:-$DEFAULT_TIMEOUT}"
 
@@ -146,7 +174,7 @@ PY
   meta_file="${results_dir}/${job_id}.json"
 
   heartbeat "$job_id"
-  update_task_running "$job_id" "$model" "$summary" "$task_description"
+  update_task_running "$job_id" "$model" "$summary" "$task_description" "$session_key" "$session_id" "$agent_id" "$agent_namespace" "$managed_by_octoclaw"
 
   set +e
   (
@@ -180,7 +208,7 @@ PY
   fi
 
   report_file="${WORKSPACE}/tmp/octopus/shared/${job_id}.md"
-  report_dump="$(python3 - "$SCRIPT_DIR" "$meta_file" "$job_id" "$command" "$cwd" "$timeout_seconds" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" "$report_file" "$WORKER_ID" <<'PY'
+report_dump="$(python3 - "$SCRIPT_DIR" "$meta_file" "$job_id" "$command" "$cwd" "$timeout_seconds" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" "$report_file" "$WORKER_ID" "$session_key" "$session_id" "$agent_id" "$agent_namespace" "$managed_by_octoclaw" <<'PY'
 import base64
 import json
 import os
@@ -206,6 +234,11 @@ from runtime_protocol import normalize_worker_result
     status,
     report_path,
     worker_id,
+    session_key,
+    session_id,
+    agent_id,
+    agent_namespace,
+    managed_by_octoclaw,
 ) = sys.argv[1:]
 
 def read_text(path: str) -> str:
@@ -289,6 +322,11 @@ artifacts = {
     "result_path": meta_file,
     "report_path": report_path,
     "worker_id": worker_id,
+    "session_key": session_key,
+    "session_id": session_id,
+    "agent_id": agent_id,
+    "agent_namespace": agent_namespace,
+    "managed_by_octoclaw": managed_by_octoclaw,
 }
 worker_result = normalize_worker_result(
     {
@@ -321,6 +359,11 @@ payload = {
     "report_path": report_path,
     "result_path": meta_file,
     "worker_id": worker_id,
+    "session_key": session_key,
+    "session_id": session_id,
+    "agent_id": agent_id,
+    "agent_namespace": agent_namespace,
+    "managed_by_octoclaw": managed_by_octoclaw,
     "execution_backend": "runner_queue",
     "finished_at": datetime.now(timezone.utc).astimezone().isoformat(),
     "worker_result": worker_result,

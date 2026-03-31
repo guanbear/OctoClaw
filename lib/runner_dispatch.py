@@ -138,6 +138,11 @@ def main():
     parser.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
     parser.add_argument("--model-band", dest="model_band", default="fast")
     parser.add_argument("--task-description", dest="task_description", default="")
+    parser.add_argument("--session-key", dest="session_key", default="")
+    parser.add_argument("--session-id", dest="session_id", default="")
+    parser.add_argument("--agent-id", dest="agent_id", default="")
+    parser.add_argument("--agent-namespace", dest="agent_namespace", default="")
+    parser.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", default="")
     args = parser.parse_args()
 
     job_id = args.id or f"runner-{now_compact()}"
@@ -188,6 +193,11 @@ def main():
             "false",
             "--artifacts-json",
             json.dumps(runner_artifacts(), ensure_ascii=False),
+            *(["--session-key", args.session_key] if args.session_key else []),
+            *(["--session-id", args.session_id] if args.session_id else []),
+            *(["--agent-id", args.agent_id] if args.agent_id else []),
+            *(["--agent-namespace", args.agent_namespace] if args.agent_namespace else []),
+            *(["--managed-by-octoclaw", args.managed_by_octoclaw] if args.managed_by_octoclaw else []),
         ],
         stdout=subprocess.DEVNULL,
         check=True,
@@ -214,6 +224,11 @@ def main():
             model,
             "--task-description",
             args.task_description or args.command,
+            *(["--session-key", args.session_key] if args.session_key else []),
+            *(["--session-id", args.session_id] if args.session_id else []),
+            *(["--agent-id", args.agent_id] if args.agent_id else []),
+            *(["--agent-namespace", args.agent_namespace] if args.agent_namespace else []),
+            *(["--managed-by-octoclaw", args.managed_by_octoclaw] if args.managed_by_octoclaw else []),
         ]
     )
     print(json.dumps(payload, ensure_ascii=False))

@@ -610,6 +610,8 @@ def wait_for_runner_result(job_id: str, timeout_seconds: int) -> dict:
 
 
 def dispatch_runner(args) -> dict:
+    decision = getattr(args, "_policy_decision", {}) or {}
+    identity = octoclaw_identity_fields(decision)
     playbook = None
     command = args.command
     summary = args.summary
@@ -638,6 +640,16 @@ def dispatch_runner(args) -> dict:
         "--task-description",
         args.task,
     ]
+    if str(identity.get("session_key", "") or "").strip():
+        dispatch_cmd.extend(["--session-key", str(identity["session_key"])])
+    if str(identity.get("session_id", "") or "").strip():
+        dispatch_cmd.extend(["--session-id", str(identity["session_id"])])
+    if str(identity.get("agent_id", "") or "").strip():
+        dispatch_cmd.extend(["--agent-id", str(identity["agent_id"])])
+    if str(identity.get("agent_namespace", "") or "").strip():
+        dispatch_cmd.extend(["--agent-namespace", str(identity["agent_namespace"])])
+    if str(identity.get("managed_by_octoclaw", "") or "").strip():
+        dispatch_cmd.extend(["--managed-by-octoclaw", str(identity["managed_by_octoclaw"])])
     result = subprocess.run(dispatch_cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "runner dispatch failed")

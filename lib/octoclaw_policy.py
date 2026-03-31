@@ -853,6 +853,12 @@ def build_decision(
     merged_reason_codes = [*merge_reason_codes, *base_reason_codes]
     route_hint_policy = build_route_hint_policy(route_meta, base_route, route, base_reason_codes, route_hint, force_route, runtime_cfg, sticky_state)
     route_hint_policy["ack_followup_candidate"] = bool(features.get("ack_followup_candidate")) or bool(route_hint_policy.get("ack_followup_candidate"))
+    if bool((sticky_state or {}).get("applied")) and route in {"spawn_single", "spawn_multi"}:
+        route_hint_policy["required"] = False
+        merge_reason_codes.append("route_hint_suppressed:sticky_lane")
+    elif bool(route_hint_policy.get("ack_followup_applied")) and route in {"spawn_single", "spawn_multi"}:
+        route_hint_policy["required"] = False
+        merge_reason_codes.append("route_hint_suppressed:ack_followup")
     route_hint_policy["merge_notes"] = merge_reason_codes
     dispatch_required = route != "direct"
     should_wait = route == "runner"

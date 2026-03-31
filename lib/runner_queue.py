@@ -176,6 +176,11 @@ def cmd_enqueue(args):
             "worker_pool": "octoclaw-runner",
             "work_type": "ops",
             "phase": "inspect",
+            "session_key": args.session_key or "",
+            "session_id": args.session_id or "",
+            "agent_id": args.agent_id or "",
+            "agent_namespace": args.agent_namespace or "",
+            "managed_by_octoclaw": args.managed_by_octoclaw or "",
         }
         if existing:
             existing.update(job)
@@ -261,6 +266,11 @@ def main():
     p_enqueue.add_argument("--model-band", dest="model_band", default="fast")
     p_enqueue.add_argument("--model", default="")
     p_enqueue.add_argument("--task-description", dest="task_description", default="")
+    p_enqueue.add_argument("--session-key", dest="session_key", default="")
+    p_enqueue.add_argument("--session-id", dest="session_id", default="")
+    p_enqueue.add_argument("--agent-id", dest="agent_id", default="")
+    p_enqueue.add_argument("--agent-namespace", dest="agent_namespace", default="")
+    p_enqueue.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", default="")
 
     p_claim = sub.add_parser("claim")
     p_claim.add_argument("--worker-id", required=True)

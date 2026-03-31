@@ -169,6 +169,17 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
         self.assertTrue(payload["route_hint_policy"]["ack_followup_applied"])
 
+    def test_ack_followup_sticky_lane_suppresses_route_hint_requirement(self) -> None:
+        payload = self.run_policy(
+            "好",
+            session_key="demo",
+            sticky_route="spawn_single",
+            sticky_work_type="research",
+            sticky_work_contract="deliverable_work",
+        )
+        self.assertFalse(payload["route_hint_policy"]["required"])
+        self.assertIn("route_hint_suppressed:sticky_lane", payload["route_hint_policy"]["merge_notes"])
+
     def test_ack_followup_without_sticky_lane_stays_non_runner_and_unapplied(self) -> None:
         payload = self.run_policy("好")
         self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])

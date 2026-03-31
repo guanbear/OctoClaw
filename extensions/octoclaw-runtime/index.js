@@ -320,8 +320,30 @@ function extractMessageText(content) {
   return "";
 }
 
+function unwrapQueuedBusyPrompt(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  if (!text.startsWith("[Queued messages while agent was busy]")) {
+    return text;
+  }
+  const sections = text.split(/\n---\n(?=Queued #\d+)/g);
+  const messages = [];
+  for (const section of sections) {
+    const lines = String(section || "").split("\n");
+    const systemLine = lines.find((line) => String(line || "").startsWith("System:"));
+    if (!systemLine) continue;
+    const rawLine = String(systemLine).replace(/^System:\s*/, "").trim();
+    const lastColon = rawLine.lastIndexOf(": ");
+    const message = String(lastColon >= 0 ? rawLine.slice(lastColon + 2) : rawLine).trim();
+    if (message) {
+      messages.push(message);
+    }
+  }
+  return messages.length > 0 ? messages.join("\n\n") : text;
+}
+
 function extractPromptText(event = {}) {
-  const prompt = String(event?.prompt || "").trim();
+  const prompt = unwrapQueuedBusyPrompt(String(event?.prompt || "").trim());
   if (prompt) {
     return prompt;
   }
@@ -331,7 +353,7 @@ function extractPromptText(event = {}) {
     if (String(message?.role || "").trim().toLowerCase() !== "user") {
       continue;
     }
-    const text = extractMessageText(message?.content);
+    const text = unwrapQueuedBusyPrompt(extractMessageText(message?.content));
     if (text) {
       return text;
     }
@@ -614,7 +636,17 @@ function isDelegatedRoute(decision) {
 }
 
 function routeHintRequired(decision) {
+  if (decision?.route_hint_policy?.ack_followup_applied) {
+    return false;
+  }
+  if (decision?.route_hint_policy?.sticky_applied) {
+    return false;
+  }
   return Boolean(decision?.route_hint_policy?.required);
+}
+
+function shouldRetainPolicyStateOnAgentEnd(state) {
+  return Boolean(isDelegatedRoute(state?.decision) && !state?.delegated);
 }
 
 function policySummaryText(payload) {
@@ -865,6 +897,9 @@ const plugin = {
       pi.logger,
       state?.decision || null,
     );
+    if (shouldRetainPolicyStateOnAgentEnd(state)) {
+      return;
+    }
     clearPolicyStateForContext(ctx);
   }, 50);
 
@@ -1044,8 +1079,23 @@ const plugin = {
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
-        const { key: stateKey, state } = resolveToolPolicyContext(ctx, params.task || "");
-        const metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || state?.decision?.request?.session_key || "" }) };
+        let { key: stateKey, state } = resolveToolPolicyContext(ctx, params.task || "");
+        const hadCachedDecision = Boolean(params.policyJson || state?.decision);
+        let cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
+        if (!cachedDecision) {
+          const resolved = await resolvePolicyDecisionForContext(
+            String(params.task || "").trim(),
+            ctx,
+            ctx?.cwd || process.cwd(),
+            pi.logger,
+          );
+          if (resolved?.decision) {
+            stateKey = resolved.stateKey || stateKey;
+            state = resolved.state || state;
+            cachedDecision = resolved.decision;
+          }
+        }
+        const metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || cachedDecision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
         if (params.metadataJson) {
           try {
@@ -1057,14 +1107,21 @@ const plugin = {
         }
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
-        const replaySessionKey = String(stateKey || metadata.session_key || state?.decision?.request?.session_key || "").trim();
-        const policyDecisionJson = params.policyJson || (state?.decision ? JSON.stringify(state.decision) : "");
-        const cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
+        const policyDecisionJson = params.policyJson || (cachedDecision ? JSON.stringify(cachedDecision) : "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
         args.push("--wait", "--wait-timeout-seconds", "12");
         const payload = await runJsonScript("dispatch_task.py", args, ctx?.cwd || process.cwd());
-        const stickyDecision = delegatedStickyRoute(cachedDecision)
-          ? cachedDecision
+        const authoritativeDecision = payload?.policy_decision || cachedDecision || parsePolicyDecisionJson(params.policyJson || "");
+        const replaySessionKey = String(
+          stateKey
+          || metadata.session_key
+          || authoritativeDecision?.request?.session_key
+          || payload?.job?.session_key
+          || payload?.session_key
+          || "",
+        ).trim();
+        const stickyDecision = delegatedStickyRoute(authoritativeDecision)
+          ? authoritativeDecision
           : {
               route_decision: {
                 route: String(payload?.route || ""),
@@ -1086,14 +1143,17 @@ const plugin = {
           {
             sessionKey: replaySessionKey,
             sessionId: String(ctx?.sessionId || ""),
-            route: String(payload?.route || ""),
-            systemPreferredRoute: String(cachedDecision?.route_decision?.system_preferred_route || payload?.system_preferred_route || ""),
+            route: String(authoritativeDecision?.route_decision?.route || payload?.route || ""),
+            systemPreferredRoute: String(authoritativeDecision?.route_decision?.system_preferred_route || payload?.system_preferred_route || ""),
+            workerPool: String(authoritativeDecision?.route_decision?.worker_pool || payload?.worker_pool || ""),
+            routeHintRequired: Boolean(authoritativeDecision?.route_hint_policy?.required),
+            routeHintSubmitted: Boolean(state?.routeHintSubmitted || authoritativeDecision?.route_hint_policy?.submitted),
             executed: Boolean(payload?.executed),
-            usedCachedPolicy: Boolean(!params.policyJson && state?.decision),
+            usedCachedPolicy: hadCachedDecision,
             stickyPersisted,
           },
           pi.logger,
-          cachedDecision,
+          authoritativeDecision,
         );
         return toolResponse(
           summary,
@@ -1329,9 +1389,12 @@ export const __octoclawTest = {
   resolvePolicyStateKey,
   findPolicyStateByPrompt,
   resolveToolPolicyContext,
+  unwrapQueuedBusyPrompt,
+  extractPromptText,
   isManagedAgentContext,
   buildPolicyMetadata,
   preHintAllowedTools,
+  shouldRetainPolicyStateOnAgentEnd,
   __setPolicyState: setPolicyStateForContext,
   __resetPolicyState: () => policyStateBySession.clear(),
 };
