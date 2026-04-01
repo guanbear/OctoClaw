@@ -126,6 +126,8 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("\"risks\": []", spec["task_prompt"])
         self.assertIn("task-state-update.py blocked", spec["task_prompt"])
         self.assertIn("task-state-update.py checklist", spec["task_prompt"])
+        self.assertIn(str(octoclaw_spawn.TASK_STATE_PY), spec["task_prompt"])
+        self.assertNotIn("/workspace/openclaw/skills/octopus/lib/task-state-update.py", spec["task_prompt"])
         self.assertEqual(spec["spawn_prompt_path"], "")
 
     def test_prepare_spawn_prompt_externalizes_long_prompt(self) -> None:
@@ -145,7 +147,12 @@ class OctoClawSpawnTests(unittest.TestCase):
                 self.assertEqual(Path(prompt_path).read_text(encoding="utf-8"), long_prompt)
 
     def test_execute_clawteam_spawn_applies_session_model_override(self) -> None:
-        completed = subprocess.CompletedProcess(args=["clawteam"], returncode=0, stdout="{}", stderr="")
+        completed = subprocess.CompletedProcess(
+            args=["clawteam"],
+            returncode=0,
+            stdout='{"sessionKey":"agent:main:octo-research-1","sessionId":"child-sess-1","runId":"run-1","taskId":"native-task-1","parentFlowId":"flow-1"}',
+            stderr="",
+        )
         with (
             patch.object(octoclaw_spawn.shutil, "which", return_value="/usr/bin/mock"),
             patch.object(octoclaw_spawn, "build_clawteam_spawn_command", return_value=["clawteam", "spawn"]),
@@ -173,12 +180,85 @@ class OctoClawSpawnTests(unittest.TestCase):
 
         self.assertTrue(payload["model_override_applied"])
         self.assertEqual(payload["session_key"], "agent:main:clawteam-octoclaw-validation-octo-research-1")
+        self.assertEqual(payload["child_session_key"], "agent:main:octo-research-1")
+        self.assertEqual(payload["session_id"], "child-sess-1")
+        self.assertEqual(payload["run_id"], "run-1")
+        self.assertEqual(payload["native_task_id"], "native-task-1")
+        self.assertEqual(payload["native_flow_id"], "flow-1")
         self.assertEqual(payload["model_override_status"], 200)
         override_mock.assert_called_once_with(
             team_name="octoclaw-validation",
             agent_name="octo-research-1",
             model="zhipu/GLM-4.7",
         )
+
+    def test_build_spawn_spec_backfills_child_session_facts_after_spawn(self) -> None:
+        policy = {
+            "route_decision": {
+                "route": "spawn_single",
+                "worker_pool": "octoclaw-research",
+                "work_type": "research",
+                "phase": "collect",
+                "protocol": "normal",
+            },
+            "model_policy": {
+                "profile": "research",
+            },
+            "skill_policy": {
+                "default_skill_bundle": [],
+            },
+            "review_policy": {
+                "required": False,
+            },
+        }
+        subprocess_calls = []
+
+        def _fake_run(cmd, *args, **kwargs):
+            subprocess_calls.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch.object(octoclaw_spawn, "resolve_model_and_thinking", return_value=("model/research", "medium")),
+            patch.object(octoclaw_spawn, "should_execute_spawn", return_value=True),
+            patch.object(octoclaw_spawn, "prepare_spawn_prompt", return_value=("prompt", "")),
+            patch.object(
+                octoclaw_spawn,
+                "execute_clawteam_spawn",
+                return_value={
+                    "backend": "clawteam",
+                    "team_name": "octoclaw-validation",
+                    "agent_name": "octo-research-1",
+                    "profile": "research",
+                    "thinking": "medium",
+                    "session_key": "agent:main:clawteam-octoclaw-validation-octo-research-1",
+                    "child_session_key": "agent:main:octo-research-1",
+                    "session_id": "child-sess-2",
+                    "run_id": "run-2",
+                    "native_task_id": "native-task-2",
+                    "native_flow_id": "flow-2",
+                    "model_override_applied": True,
+                    "model_override_status": 200,
+                    "model_override_error": "",
+                },
+            ),
+            patch.object(octoclaw_spawn.subprocess, "run", side_effect=_fake_run),
+        ):
+            spec = octoclaw_spawn.build_spawn_spec(
+                "Research provider docs and summarize the key changes",
+                route="spawn_single",
+                register=False,
+                execute=True,
+                policy_decision=policy,
+            )
+
+        self.assertEqual(spec["spawn_execution"]["session_id"], "child-sess-2")
+        self.assertEqual(spec["spawn_execution"]["run_id"], "run-2")
+        self.assertEqual(spec["spawn_execution"]["native_task_id"], "native-task-2")
+        upsert_cmd = subprocess_calls[-1]
+        self.assertIn("--session-id", upsert_cmd)
+        self.assertIn("child-sess-2", upsert_cmd)
+        self.assertIn("--run-id", upsert_cmd)
+        self.assertIn("run-2", upsert_cmd)
 
     def test_build_spawn_spec_does_not_need_legacy_inputs_when_taxonomy_exists(self) -> None:
         policy = {

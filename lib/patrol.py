@@ -72,6 +72,10 @@ from octopus_config import (
 )
 from session_ops import send_agent_message
 from task_events import append_task_event
+try:
+    from openclaw_taskflow_adapter import enrich_task_record_with_taskflow, list_native_openclaw_tasks
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.openclaw_taskflow_adapter import enrich_task_record_with_taskflow, list_native_openclaw_tasks
 
 try:
     from worker_taxonomy import (
@@ -384,6 +388,39 @@ def save_task_state(path: str, data: dict):
             json.dump(data, f, indent=2, ensure_ascii=False)
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def refresh_openclaw_taskflow_bindings(tasks: list[dict]) -> bool:
+    if not isinstance(tasks, list) or not tasks:
+        return False
+    try:
+        native_tasks = list_native_openclaw_tasks()
+    except Exception:
+        native_tasks = []
+    if not native_tasks:
+        return False
+    changed = False
+    refreshed: list[dict] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            refreshed.append(task)
+            continue
+        route = str(task.get("route", "") or "").strip().lower()
+        if route not in {"runner", "spawn_single", "spawn_multi"} or task_is_final(task):
+            refreshed.append(task)
+            continue
+        try:
+            enriched = normalize_task_record(enrich_task_record_with_taskflow(task, native_tasks=native_tasks))
+        except Exception:
+            refreshed.append(task)
+            continue
+        refreshed.append(enriched)
+        if enriched != task:
+            changed = True
+    if changed:
+        save_task_state(TASK_STATE_FILE, {"tasks": refreshed, "updated_at": datetime.now(timezone.utc).isoformat()})
+        tasks[:] = refreshed
+    return changed
 
 
 def load_tasks() -> list:
@@ -4500,12 +4537,14 @@ def main():
 
     # ── v1.3: 先补充 session 观测字段，让后续判断不只依赖 task-state 本身 ──
     tasks = annotate_tasks_with_session_state(tasks)
+    refresh_openclaw_taskflow_bindings(tasks)
 
     hydrated = hydrate_completed_session_results(tasks)
     if hydrated > 0:
         print(f"  ✅ 本轮从 child session transcript 回收结果 {hydrated} 个")
         tasks = load_tasks()
         tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
 
     # ── Slice C: 发现 owner/session 已失活时，释放锁并把任务回收到 queued ──
     recovered = recover_dead_agent_tasks(tasks)
@@ -4513,6 +4552,7 @@ def main():
         print(f"  ♻️ 本轮回收失活 delegated 任务 {len(recovered)} 个：{[t.get('id') for t in recovered]}")
         tasks = load_tasks()
         tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
 
     # ── v1.4: 对仍然活着但有异常迹象的任务，先尝试 steer，再决定是否重派 ──
     steered = attempt_task_steers(tasks)
@@ -4520,6 +4560,7 @@ def main():
         print(f"  🧭 本轮已 steer 任务 {steered} 个")
         tasks = load_tasks()
         tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
 
     # ── 超时检测：先于分类，自动终止超时任务 ──
     killed_tasks = check_and_kill_timed_out_tasks(tasks)
@@ -4527,12 +4568,16 @@ def main():
         print(f"⏱️  本轮处理超时任务 {len(killed_tasks)} 个：{[t.get('id') for t in killed_tasks]}")
         # 重新加载任务（告警/收口后状态可能已更新）
         tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
 
     # ── 排队任务检测：依赖全部 done → 自动 spawn ──
     spawned = check_queued_tasks(tasks)
     if spawned > 0:
         print(f"  🚀 本轮自动 spawn 排队任务 {spawned} 个，重新加载状态")
         tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
     
     # ── 模型违规检测：检查近期任务的 model 是否符合预期 ──
     check_model_violation(tasks)

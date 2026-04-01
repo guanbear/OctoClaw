@@ -33,10 +33,13 @@ from worker_taxonomy import (
     normalize_model_band,
     resolve_executor as taxonomy_resolve_executor,
 )
+from octopus_config import PATROL_NOTIFY_STATE_FILE, TASK_STATE_FILE
+try:
+    from openclaw_taskflow_adapter import enrich_task_record_with_taskflow
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.openclaw_taskflow_adapter import enrich_task_record_with_taskflow
 
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
-STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
-PATROL_NOTIFY_STATE_FILE = f"{WORKSPACE}/tmp/octopus/patrol-notify-state.json"
+STATE_FILE = TASK_STATE_FILE
 
 
 def now_iso() -> str:
@@ -896,6 +899,7 @@ def cmd_upsert(args):
                 existing["executor"] = infer_executor(existing, args.executor or "")
             existing["updated_at"] = now_iso()
             normalized = normalize_task_record(existing)
+            normalized = normalize_task_record(enrich_task_record_with_taskflow(normalized))
             existing.clear()
             existing.update(normalized)
             current_record = dict(existing)
@@ -999,6 +1003,7 @@ def cmd_upsert(args):
             record["executor"] = infer_executor(record, args.executor or "")
             tasks.append(record)
             current_record = normalize_task_record(record)
+            current_record = normalize_task_record(enrich_task_record_with_taskflow(current_record))
             tasks[-1] = dict(current_record)
 
         current_record, lineage_syncs = _lineage_sync_records(tasks, current_record or {})

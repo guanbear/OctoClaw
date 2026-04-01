@@ -226,6 +226,13 @@ class TaskDisplayTests(unittest.TestCase):
                 "summary": "research OpenClaw changelog and news",
                 "route": "spawn_single",
                 "model": "omniroute/cx/gpt-5.4",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored_bound",
+                    "native_binding_state": "bound",
+                    "task_id": "native-task-1",
+                    "flow_id": "flow-1",
+                },
                 "checklist": {
                     "kind": "explicit",
                     "items": [
@@ -254,6 +261,59 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("details", rendered)
         self.assertIn("stop", rendered)
         self.assertIn("Checklist: 1 done / 1 open", rendered)
+        self.assertIn("Substrate: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", rendered)
+
+    def test_build_task_anchor_exposes_openclaw_taskflow_binding(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "research-2",
+                "worker_pool": "octoclaw-research",
+                "status": "running",
+                "summary": "collect release notes",
+                "route": "spawn_single",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored_bound",
+                    "native_binding_state": "bound",
+                    "task_id": "native-task-2",
+                    "flow_id": "flow-2",
+                    "flow_kind": "one_task",
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(anchor["openclaw_taskflow_backend"], "mirror")
+        self.assertEqual(anchor["openclaw_taskflow_state"], "mirrored_bound")
+        self.assertEqual(anchor["openclaw_task_id"], "native-task-2")
+        self.assertEqual(anchor["openclaw_flow_id"], "flow-2")
+        self.assertEqual(anchor["openclaw_flow_kind"], "one_task")
+        self.assertIn("native-task-2", anchor["substrate_summary"])
+
+    def test_build_task_detail_includes_substrate_binding(self) -> None:
+        detail = build_task_detail(
+            {
+                "id": "code-2",
+                "worker_pool": "octoclaw-code",
+                "status": "running",
+                "summary": "fix login flow",
+                "route": "spawn_single",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored_bound",
+                    "native_binding_state": "bound",
+                    "task_id": "native-task-3",
+                    "flow_id": "flow-3",
+                    "flow_kind": "one_task",
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(detail["substrate"]["backend"], "mirror")
+        self.assertEqual(detail["substrate"]["task_id"], "native-task-3")
+        self.assertEqual(detail["substrate"]["flow_id"], "flow-3")
+        self.assertIn("flow-3", detail["substrate"]["summary"])
 
     def test_render_task_anchor_slack_returns_blocks(self) -> None:
         anchor = build_task_anchor(

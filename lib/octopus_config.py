@@ -7,7 +7,71 @@ import json
 import os
 from typing import Any
 
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
+DEFAULT_WORKSPACE = "/workspace"
+
+
+def _normalize_path(path: str) -> str:
+    return os.path.abspath(os.path.expanduser(str(path or "").strip()))
+
+
+def resolve_skill_root() -> str:
+    configured = str(os.environ.get("OCTOCLAW_SKILL_ROOT", "") or "").strip()
+    if configured:
+        return _normalize_path(configured)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def infer_workspace_from_skill_root(skill_root: str) -> str:
+    normalized = _normalize_path(skill_root)
+    markers = [
+        os.path.join("openclaw", "skills", "octopus"),
+        os.path.join("skills", "octopus"),
+    ]
+    for marker in markers:
+        suffix = os.sep + marker
+        if normalized.endswith(suffix):
+            candidate = normalized[: -len(suffix)]
+            if candidate:
+                return candidate
+    return ""
+
+
+SKILL_ROOT = resolve_skill_root()
+
+
+def resolve_workspace() -> str:
+    for env_name in ("WORKSPACE", "OCTOCLAW_WORKSPACE"):
+        configured = str(os.environ.get(env_name, "") or "").strip()
+        if configured:
+            return _normalize_path(configured)
+
+    inferred = infer_workspace_from_skill_root(SKILL_ROOT)
+    if inferred:
+        return inferred
+
+    openclaw_workspace = os.path.expanduser("~/.openclaw/workspace")
+    if os.path.isdir(openclaw_workspace):
+        return _normalize_path(openclaw_workspace)
+
+    return DEFAULT_WORKSPACE
+
+
+WORKSPACE = resolve_workspace()
+LIB_DIR = os.path.join(SKILL_ROOT, "lib")
+
+
+def workspace_path(*parts: str) -> str:
+    return os.path.join(WORKSPACE, *parts)
+
+
+def skill_path(*parts: str) -> str:
+    return os.path.join(SKILL_ROOT, *parts)
+
+
+def lib_path(*parts: str) -> str:
+    return os.path.join(LIB_DIR, *parts)
+
+
 CONFIG_FILE = f"{WORKSPACE}/tmp/octoclaw-config.json"
 LEGACY_CONFIG_FILE = f"{WORKSPACE}/tmp/octopus-config.json"
 MODE_FILE = f"{WORKSPACE}/tmp/octoclaw-mode.json"
@@ -21,6 +85,7 @@ MODEL_BENCHMARKS_FILE = f"{WORKSPACE}/tmp/octopus/model-benchmarks.json"
 MODEL_SOURCES_FILE = f"{WORKSPACE}/tmp/octopus/model-sources.json"
 MODEL_ALIASES_FILE = f"{WORKSPACE}/tmp/octopus-model-aliases.json"
 TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
+OPENCLAW_TASKFLOW_MIRROR_FILE = f"{WORKSPACE}/tmp/octopus/openclaw-taskflow-mirror.json"
 CLAWTEAM_BRIDGE_DIR = f"{WORKSPACE}/tmp/octopus/clawteam-bridge"
 RUNNER_QUEUE_FILE = f"{WORKSPACE}/tmp/octopus/runner-queue.json"
 RUNNER_HEALTH_FILE = f"{WORKSPACE}/tmp/octopus/runner-health.json"
@@ -28,6 +93,15 @@ RUNNER_RESULTS_DIR = f"{WORKSPACE}/tmp/octopus/runner-results"
 SHARED_DIR = f"{WORKSPACE}/tmp/octopus/shared"
 CONTEXT_DIR = f"{WORKSPACE}/tmp/octopus/context"
 ROUTE_STICKINESS_FILE = f"{WORKSPACE}/tmp/octopus/route-stickiness.json"
+RUNNER_DAEMON_PID_FILE = f"{WORKSPACE}/tmp/octopus/runner-daemon.pid"
+RUNNER_RESTART_COOLDOWN_FILE = f"{WORKSPACE}/tmp/octopus/runner-restart-cooldown.json"
+PATROL_CARD_STATE_FILE = f"{WORKSPACE}/tmp/octopus/patrol-card-state.json"
+PATROL_NOTIFY_STATE_FILE = f"{WORKSPACE}/tmp/octopus/patrol-notify-state.json"
+PATROL_LAST_STATE_FILE = f"{WORKSPACE}/tmp/octopus/patrol-last-state.json"
+PATROL_LAST_DONE_IDS_FILE = f"{WORKSPACE}/tmp/octopus/.patrol-last-done-ids"
+FEISHU_CARD_STATE_FILE = f"{WORKSPACE}/tmp/octopus/feishu-card-state.json"
+FEISHU_ALMIGHTY_DIR = skill_path("..", "feishu-almighty")
+ERRORS_FILE = f"{WORKSPACE}/.learnings/ERRORS.md"
 
 SESSIONS_FILE = os.path.expanduser("~/.openclaw/sessions.json")
 MAIN_AGENT_SESSIONS_FILE = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
@@ -202,6 +276,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "inbox_send": "{clawteam_bin_q} inbox send {team_q} {recipient_q} {message_q}",
         },
     },
+    "openclaw_taskflow": {
+        "enabled": True,
+        "backend": "mirror",
+        "native_binding_enabled": True,
+        "register_runner_tasks": True,
+        "register_runner_one_task_flows": False,
+        "register_spawn_single_flows": True,
+        "register_spawn_multi_linear_flows": True,
+    },
     "spawn_execution": {
         "enabled": False,
         "backend": "plan",
@@ -291,6 +374,12 @@ def load_octopus_config() -> dict[str, Any]:
 def model_health_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config or load_octopus_config()
     section = cfg.get("model_health", {})
+    return section if isinstance(section, dict) else {}
+
+
+def openclaw_taskflow_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or load_octopus_config()
+    section = cfg.get("openclaw_taskflow", {})
     return section if isinstance(section, dict) else {}
 
 

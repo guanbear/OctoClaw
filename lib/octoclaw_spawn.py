@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,7 @@ from octopus_config import (
     CONTEXT_DIR,
     SHARED_DIR,
     TASK_STATE_FILE,
+    WORKSPACE,
     load_json,
     load_octopus_config,
     spawn_operator_surface,
@@ -399,8 +401,7 @@ def clawteam_data_dir() -> str:
     root_dir = str(bridge_cfg.get("root_dir", "") or "").strip()
     if root_dir:
         return os.path.join(root_dir, "clawteam-data")
-    workspace = os.environ.get("WORKSPACE", "/workspace")
-    return os.path.join(workspace, "tmp", "octopus", "clawteam-bridge", "clawteam-data")
+    return os.path.join(WORKSPACE, "tmp", "octopus", "clawteam-bridge", "clawteam-data")
 
 
 def resolve_profile(worker_pool: str, model: str, model_band: str) -> str:
@@ -633,6 +634,23 @@ def execute_clawteam_spawn(
         agent_name=agent_name,
         model=model,
     )
+    def _payload_value(*keys: str) -> str:
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+        for key in keys:
+            value = session.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    child_session_key = _payload_value("childSessionKey", "child_session_key", "sessionKey", "session_key")
+    child_session_id = _payload_value("childSessionId", "child_session_id", "sessionId", "session_id")
+    run_id = _payload_value("runId", "run_id")
+    native_task_id = _payload_value("taskId", "task_id")
+    native_flow_id = _payload_value("parentFlowId", "parent_flow_id", "flowId", "flow_id")
     return {
         "backend": "clawteam",
         "team_name": team_name,
@@ -640,6 +658,11 @@ def execute_clawteam_spawn(
         "profile": profile,
         "thinking": thinking,
         "session_key": str(session_override.get("session_key", "") or ""),
+        "child_session_key": child_session_key,
+        "session_id": child_session_id,
+        "run_id": run_id,
+        "native_task_id": native_task_id,
+        "native_flow_id": native_flow_id,
         "model_override_applied": bool(session_override.get("applied", False)),
         "model_override_status": int(session_override.get("status_code", 0) or 0),
         "model_override_error": str(session_override.get("error", "") or ""),
@@ -690,10 +713,11 @@ def build_task_prompt(
         summary_hint=summary_hint,
     )
     result_payload = result_contract if isinstance(result_contract, dict) else build_result_contract(summary_hint, artifact_first=True)
+    task_state_py = shlex.quote(TASK_STATE_PY)
     lines = [
         "【状态写入 / entry】开始前先执行：",
         (
-            f"python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py upsert "
+            f"python3 {task_state_py} upsert "
             f"--id {task_id} --model '{model}' --status running --model-band {model_band} "
             f"--expected-done '{expected_done}' --route {route} --runtime subagent --executor subagent "
             f"--report-path '{report_path}' --worker-pool {worker_pool or 'octoclaw-research'} "
@@ -722,15 +746,15 @@ def build_task_prompt(
         "",
         "【运行中事件】",
         (
-            f"checkpoint: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py event "
+            f"checkpoint: python3 {task_state_py} event "
             f"--id {task_id} --kind checkpoint --message '当前阶段一句话总结' --summary '当前阶段一句话总结'"
         ),
         (
-            f"artifact_ready: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py event "
+            f"artifact_ready: python3 {task_state_py} event "
             f"--id {task_id} --kind artifact_ready --report-path '{report_path}' --message 'artifact ready'"
         ),
         (
-            f"checklist: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py checklist "
+            f"checklist: python3 {task_state_py} checklist "
             f"--id {task_id} --checklist-json '{{\"kind\":\"explicit\",\"items\":[...]}}'"
         ),
         "",
@@ -740,16 +764,16 @@ def build_task_prompt(
         "",
         "【收口命令】",
         (
-            f"done: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py done "
+            f"done: python3 {task_state_py} done "
             f"--id {task_id} --summary '结果一句话总结' --report-path '{report_path}'"
         ),
         (
-            f"blocked: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py blocked "
+            f"blocked: python3 {task_state_py} blocked "
             f"--id {task_id} --summary '可交付受阻说明' --report-path '{report_path}' "
             f"--blocked-reason '阻塞原因（1句）'"
         ),
         (
-            f"failed: python3 /workspace/openclaw/skills/octopus/lib/task-state-update.py failed "
+            f"failed: python3 {task_state_py} failed "
             f"--id {task_id} --summary '失败原因（1句）：xxx，建议：xxx'"
         ),
     ]
@@ -1231,6 +1255,11 @@ def build_spawn_spec(
                         "agent_name": agent_owner,
                         "profile": str((spawn_execution or {}).get("profile", "") or ""),
                         "session_key": str((spawn_execution or {}).get("session_key", "") or ""),
+                        "child_session_key": str((spawn_execution or {}).get("child_session_key", "") or ""),
+                        "session_id": str((spawn_execution or {}).get("session_id", "") or ""),
+                        "run_id": str((spawn_execution or {}).get("run_id", "") or ""),
+                        "native_task_id": str((spawn_execution or {}).get("native_task_id", "") or ""),
+                        "native_flow_id": str((spawn_execution or {}).get("native_flow_id", "") or ""),
                         "model_override_applied": bool((spawn_execution or {}).get("model_override_applied", False)),
                         "model_override_status": int((spawn_execution or {}).get("model_override_status", 0) or 0),
                         "model_override_error": str((spawn_execution or {}).get("model_override_error", "") or ""),
@@ -1252,6 +1281,12 @@ def build_spawn_spec(
             ]
             if agent_owner:
                 cmd.extend(["--owner", agent_owner])
+            child_session_id = str((spawn_execution or {}).get("session_id", "") or "").strip()
+            child_run_id = str((spawn_execution or {}).get("run_id", "") or "").strip()
+            if child_session_id:
+                cmd.extend(["--session-id", child_session_id])
+            if child_run_id:
+                cmd.extend(["--run-id", child_run_id])
             subprocess.run(
                 cmd,
                 check=False,

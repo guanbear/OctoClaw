@@ -70,6 +70,17 @@ def _normalized_choice(value: Any, allowed: set[str]) -> str:
     return text if text in allowed else ""
 
 
+def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
+    explicit = dict(task.get("openclaw_taskflow", {})) if isinstance(task.get("openclaw_taskflow"), dict) else {}
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    artifact_binding = dict(artifacts.get("openclaw_taskflow", {})) if isinstance(artifacts.get("openclaw_taskflow"), dict) else {}
+    merged = dict(artifact_binding)
+    for key, value in explicit.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
 def infer_managed_by_octoclaw(task: dict[str, Any]) -> bool:
     explicit = task.get("managed_by_octoclaw")
     if explicit is not None and str(explicit).strip() != "":
@@ -175,6 +186,9 @@ def merge_artifacts(task: dict[str, Any]) -> dict[str, Any]:
         artifacts["context_summary"] = context_summary
     if files_changed:
         artifacts["files_changed"] = files_changed
+    taskflow = _taskflow_binding(task)
+    if taskflow:
+        artifacts["openclaw_taskflow"] = taskflow
 
     operator_surface = artifacts.get("operator_surface")
     if isinstance(operator_surface, dict):
@@ -189,7 +203,6 @@ def merge_artifacts(task: dict[str, Any]) -> dict[str, Any]:
         artifacts["operator_surface"] = merged_surface
         artifacts["display_text"] = str(display_surface.get("text_fallback", "") or "")
     return artifacts
-
 
 def _final_worker_result(task: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, Any] | None:
     status = _normalized_str(task.get("status")).lower()
@@ -569,6 +582,13 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
         worker_result = _final_worker_result(normalized, artifacts)
     if worker_result:
         artifacts["worker_result"] = worker_result
+    taskflow = _taskflow_binding({**normalized, "artifacts": artifacts})
+    normalized["openclaw_taskflow"] = taskflow
+    normalized["openclaw_taskflow_backend"] = _normalized_str(normalized.get("openclaw_taskflow_backend") or taskflow.get("backend"))
+    normalized["openclaw_taskflow_state"] = _normalized_str(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state"))
+    normalized["openclaw_task_id"] = _normalized_str(normalized.get("openclaw_task_id") or taskflow.get("task_id"))
+    normalized["openclaw_flow_id"] = _normalized_str(normalized.get("openclaw_flow_id") or taskflow.get("flow_id"))
+    normalized["openclaw_flow_kind"] = _normalized_str(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind"))
     normalized.update(task_state_model({**normalized, "artifacts": artifacts}))
     normalized["artifacts"] = artifacts
     explicit_ownership = normalized.get("ownership") if isinstance(normalized.get("ownership"), dict) else {}

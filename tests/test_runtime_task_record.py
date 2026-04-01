@@ -129,6 +129,32 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["agent_namespace"], "octoclaw")
         self.assertTrue(payload["managed_by_octoclaw"])
 
+    def test_normalize_promotes_openclaw_taskflow_binding_fields(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "spawn-3",
+                "status": "running",
+                "summary": "research provider docs",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored_bound",
+                    "task_id": "native-task-3",
+                    "flow_id": "flow-3",
+                    "flow_kind": "one_task",
+                },
+            }
+        )
+
+        self.assertEqual(payload["openclaw_taskflow_backend"], "mirror")
+        self.assertEqual(payload["openclaw_taskflow_state"], "mirrored_bound")
+        self.assertEqual(payload["openclaw_task_id"], "native-task-3")
+        self.assertEqual(payload["openclaw_flow_id"], "flow-3")
+        self.assertEqual(payload["openclaw_flow_kind"], "one_task")
+        self.assertEqual(payload["artifacts"]["openclaw_taskflow"]["task_id"], "native-task-3")
+
     @patch("lib.runtime_task_record.task_event_snapshot")
     def test_normalize_attaches_task_event_summary_and_preview(self, mock_snapshot) -> None:
         mock_snapshot.return_value = {
@@ -308,6 +334,9 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(task["worker_pool"], "octoclaw-runner")
         self.assertEqual(task["work_type"], "ops")
         self.assertEqual(task["phase"], "inspect")
+        self.assertEqual(task["openclaw_taskflow_backend"], "mirror")
+        self.assertEqual(task["openclaw_taskflow_state"], "mirrored")
+        self.assertEqual(task["artifacts"]["openclaw_taskflow"]["task_runtime"], "openclaw_task")
 
     def test_schema_required_fields_match_normalized_output(self) -> None:
         schema = json.loads(TASK_RECORD_SCHEMA.read_text(encoding="utf-8"))

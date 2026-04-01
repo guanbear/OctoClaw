@@ -44,6 +44,35 @@ def _text_list(value: Any) -> list[str]:
     return []
 
 
+def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
+    explicit = dict(task.get("openclaw_taskflow", {})) if isinstance(task.get("openclaw_taskflow"), dict) else {}
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    artifact_binding = dict(artifacts.get("openclaw_taskflow", {})) if isinstance(artifacts.get("openclaw_taskflow"), dict) else {}
+    merged = dict(artifact_binding)
+    for key, value in explicit.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
+def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
+    if not isinstance(binding, dict) or not binding:
+        return ""
+    backend = _text(binding.get("backend")) or "mirror"
+    state = _text(binding.get("binding_state")) or "unknown"
+    native_state = _text(binding.get("native_binding_state"))
+    task_id = _text(binding.get("task_id"))
+    flow_id = _text(binding.get("flow_id"))
+    parts = [backend, state]
+    if native_state and native_state not in {"none", state}:
+        parts.append(native_state)
+    if task_id:
+        parts.append(f"task {task_id}")
+    if flow_id:
+        parts.append(f"flow {flow_id}")
+    return " · ".join(parts)
+
+
 def action_command_value(task_id: str, fallback_command: str) -> str:
     command = _text(fallback_command)
     task_ref = _text(task_id)
@@ -487,6 +516,7 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
     display = role_display(normalized)
     summary = _clean_task_summary(normalized, limit=120)
     models = _collect_active_models(normalized)
+    taskflow = _taskflow_binding(normalized)
 
     anchor = {
         "task_id": _text(normalized.get("id")),
@@ -522,6 +552,13 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "started_at": _text(normalized.get("started_at")),
         "updated_at": _text(normalized.get("updated_at")),
         "duration": _duration_label(_text(normalized.get("started_at")), now=now),
+        "openclaw_taskflow_backend": _text(normalized.get("openclaw_taskflow_backend") or taskflow.get("backend")),
+        "openclaw_taskflow_state": _text(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state")),
+        "openclaw_native_binding_state": _text(taskflow.get("native_binding_state")),
+        "openclaw_task_id": _text(normalized.get("openclaw_task_id") or taskflow.get("task_id")),
+        "openclaw_flow_id": _text(normalized.get("openclaw_flow_id") or taskflow.get("flow_id")),
+        "openclaw_flow_kind": _text(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind")),
+        "substrate_summary": _taskflow_substrate_summary(taskflow),
     }
     return anchor
 
@@ -601,6 +638,15 @@ def build_task_detail(
         "task_id": anchor["task_id"],
         "summary": anchor["summary"],
         "state": anchor["state"],
+        "substrate": {
+            "backend": _text(anchor.get("openclaw_taskflow_backend")),
+            "state": _text(anchor.get("openclaw_taskflow_state")),
+            "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
+            "task_id": _text(anchor.get("openclaw_task_id")),
+            "flow_id": _text(anchor.get("openclaw_flow_id")),
+            "flow_kind": _text(anchor.get("openclaw_flow_kind")),
+            "summary": _text(anchor.get("substrate_summary")),
+        },
         "lineage": {
             "parent_task_id": _text(normalized.get("parent_id")),
             "child_task_ids": [_text(item.get("id")) for item in children],
@@ -900,6 +946,9 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
     checklist_completed_count = int(anchor.get("checklist_completed_count") or 0)
     if checklist_open_count or checklist_completed_count:
         lines.append(f"Checklist: {checklist_completed_count} done / {checklist_open_count} open")
+    substrate_summary = _text(anchor.get("substrate_summary"))
+    if substrate_summary:
+        lines.append(f"Substrate: {substrate_summary}")
     if summary:
         lines.append(summary)
 

@@ -19,6 +19,57 @@ patrol = importlib.import_module("patrol")
 
 class PatrolNotificationTests(unittest.TestCase):
     @patch("patrol.save_task_state")
+    @patch("patrol.list_native_openclaw_tasks")
+    def test_refresh_openclaw_taskflow_bindings_updates_active_spawn_tasks(self, mock_list_native, mock_save) -> None:
+        tasks = [
+            {
+                "id": "spawn-1",
+                "status": "running",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "summary": "research provider docs",
+                "task_description": "research provider docs",
+                "session_key": "agent:main:slack:channel:C123:thread:1",
+                "session_id": "child-sess-1",
+                "run_id": "run-1",
+            }
+        ]
+        mock_list_native.return_value = [
+            {
+                "taskId": "native-task-1",
+                "runtime": "subagent",
+                "status": "running",
+                "runId": "run-1",
+                "requesterSessionKey": "agent:main:slack:channel:C123:thread:1",
+                "childSessionKey": "child-sess-1",
+                "parentFlowId": "flow-1",
+                "task": "research provider docs",
+            }
+        ]
+
+        changed = patrol.refresh_openclaw_taskflow_bindings(tasks)
+
+        self.assertTrue(changed)
+        self.assertEqual(tasks[0]["openclaw_task_id"], "native-task-1")
+        self.assertEqual(tasks[0]["openclaw_flow_id"], "flow-1")
+        mock_save.assert_called_once()
+
+    @patch("patrol.save_task_state")
+    @patch("patrol.list_native_openclaw_tasks")
+    def test_refresh_openclaw_taskflow_bindings_skips_final_and_direct_tasks(self, mock_list_native, mock_save) -> None:
+        tasks = [
+            {"id": "done-1", "status": "done", "route": "spawn_single", "worker_pool": "octoclaw-code"},
+            {"id": "direct-1", "status": "running", "route": "direct", "worker_pool": "octoclaw-main"},
+        ]
+        mock_list_native.return_value = [{"taskId": "native-task-1", "runtime": "subagent", "status": "running"}]
+
+        changed = patrol.refresh_openclaw_taskflow_bindings(tasks)
+
+        self.assertFalse(changed)
+        mock_save.assert_not_called()
+
+    @patch("patrol.save_task_state")
     def test_annotate_runner_task_preserves_session_binding(self, mock_save) -> None:
         record = {
             "id": "runner-1",
