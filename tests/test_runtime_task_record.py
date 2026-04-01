@@ -188,6 +188,33 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["result_ready_at"], "2026-03-29T09:12:38+00:00")
         self.assertEqual(payload["handoff_ready_at"], "2026-03-29T09:12:38+00:00")
 
+    def test_normalize_done_review_task_uses_worker_user_safe_summary(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "research-1",
+                "status": "done",
+                "summary": "Internal completion summary",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "review_required": True,
+                "completed_at": "2026-04-01T21:38:04+08:00",
+                "report_path": "/tmp/research-report.md",
+                "artifacts": {
+                    "worker_result": {
+                        "status": "done",
+                        "summary": "Release analysis finished and upgrade is recommended with caveats.",
+                        "user_safe_summary": "",
+                        "report": "/tmp/research-report.md",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(payload["handoff_state"], "user_safe_ready")
+        self.assertIn("upgrade is recommended", payload["user_safe_summary"])
+        self.assertEqual(payload["deliverable_kind"], "final_answer")
+
     def test_task_state_update_writes_unified_runtime_fields(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-task-record-") as workspace:
             env = {**os.environ, "WORKSPACE": workspace}

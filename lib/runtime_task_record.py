@@ -308,7 +308,9 @@ def infer_handoff_state(
         if explicit:
             return explicit
         return derived
-    explicit_safe_summary = _normalized_str(task.get("user_safe_summary"))
+    explicit_safe_summary = _normalized_str(task.get("user_safe_summary")) or _normalized_str(
+        (worker_result or {}).get("user_safe_summary")
+    )
     summary = explicit_safe_summary or _normalized_str(task.get("summary")) or _normalized_str((worker_result or {}).get("summary"))
     has_summary = bool(summary or _normalized_str(task.get("report_path")))
     if lifecycle_state in FINAL_LIFECYCLE_STATES:
@@ -381,12 +383,16 @@ def infer_deliverable_kind(task: dict[str, Any], lifecycle_state: str, outcome_s
 
 
 def infer_user_safe_summary(task: dict[str, Any], handoff_state: str, worker_result: dict[str, Any] | None = None) -> str:
-    explicit = _normalized_str(task.get("user_safe_summary"))
+    explicit = _normalized_str(task.get("user_safe_summary")) or _normalized_str((worker_result or {}).get("user_safe_summary"))
     if explicit:
         return explicit
     if handoff_state not in {"user_safe_ready", "delivered"}:
         return ""
-    return _normalized_str((worker_result or {}).get("summary")) or _normalized_str(task.get("summary"))
+    return (
+        _normalized_str((worker_result or {}).get("user_safe_summary"))
+        or _normalized_str((worker_result or {}).get("summary"))
+        or _normalized_str(task.get("summary"))
+    )
 
 
 def infer_result_ready_at(task: dict[str, Any], lifecycle_state: str, outcome_state: str, worker_result: dict[str, Any] | None = None) -> str:

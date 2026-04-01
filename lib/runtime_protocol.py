@@ -239,6 +239,11 @@ def normalize_worker_result(
     default_report: str = "",
 ) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
+    status = normalize_result_status(str(data.get("status", "") or ""))
+    summary = _compact_text(str(data.get("summary", "") or ""), 500)
+    user_safe_summary = _compact_text(str(data.get("user_safe_summary", "") or ""), 320)
+    if not user_safe_summary and status in {"done", "partial", "blocked"}:
+        user_safe_summary = _compact_text(summary, 320)
     report = str(data.get("report", "") or default_report or "").strip()
     artifacts = _string_list(data.get("artifacts"))
     if report and report not in artifacts:
@@ -246,9 +251,9 @@ def normalize_worker_result(
     return {
         "schema_version": WORKER_RESULT_SCHEMA_VERSION,
         "task_id": str(data.get("task_id", "") or task_id or "").strip(),
-        "status": normalize_result_status(str(data.get("status", "") or "")),
-        "summary": _compact_text(str(data.get("summary", "") or ""), 500),
-        "user_safe_summary": _compact_text(str(data.get("user_safe_summary", "") or ""), 320),
+        "status": status,
+        "summary": summary,
+        "user_safe_summary": user_safe_summary,
         "deliverable_kind": _compact_text(str(data.get("deliverable_kind", "") or ""), 80),
         "artifacts": artifacts,
         "files": _string_list(data.get("files")),

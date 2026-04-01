@@ -268,6 +268,12 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["system_preferred_route"], "runner")
         self.assertTrue(payload["features"]["tool_observation_only"])
 
+    def test_cron_health_question_prefers_runner(self) -> None:
+        payload = self.run_route("我的cron都正常吗")
+        self.assertEqual(payload["system_preferred_route"], "runner")
+        self.assertEqual(payload["work_contract_hint"], "inspect_report")
+        self.assertTrue(payload["features"]["tool_observation_only"])
+
     def test_runner_policy_uses_workspace_local_model_policy(self) -> None:
         payload = self.run_policy(
             "看下 8080 端口开了没",

@@ -66,14 +66,13 @@ def recent_minutes(value: str) -> float | None:
     return max(0.0, (now - dt.astimezone(timezone.utc)).total_seconds() / 60.0)
 
 
-def find_reusable_job(command: str, task_description: str) -> dict | None:
+def find_reusable_job(command: str) -> dict | None:
     queue = load_json(RUNNER_QUEUE_FILE)
     if not isinstance(queue, dict):
         return None
 
     command_key = normalize_text(command)
-    task_key = normalize_text(task_description)
-    if not command_key and not task_key:
+    if not command_key:
         return None
 
     for job in queue.get("jobs", []):
@@ -88,9 +87,8 @@ def find_reusable_job(command: str, task_description: str) -> dict | None:
             if age is None or age > RECENT_DONE_REUSE_MINUTES:
                 continue
 
-        same_command = command_key and normalize_text(str(job.get("command", "") or "")) == command_key
-        same_task = task_key and normalize_text(str(job.get("task_description", "") or "")) == task_key
-        if same_command or same_task:
+        same_command = normalize_text(str(job.get("command", "") or "")) == command_key
+        if same_command:
             return job
     return None
 
@@ -120,13 +118,16 @@ def resolve_runner_model() -> str:
     return ""
 
 
-def runner_artifacts() -> dict:
+def runner_artifacts(playbook: dict | None = None) -> dict:
     surface = runner_operator_surface()
-    return {
+    payload = {
         "execution_backend": "runner_queue",
         "operator_surface": surface,
         "operator_hint": str(surface.get("operator_hint", "") or ""),
     }
+    if isinstance(playbook, dict) and playbook:
+        payload["runner_plan"] = dict(playbook)
+    return payload
 
 
 def main():
@@ -134,7 +135,7 @@ def main():
     parser.add_argument("--id", default="")
     parser.add_argument("--command", required=True)
     parser.add_argument("--summary", default="")
-    parser.add_argument("--cwd", default="/workspace")
+    parser.add_argument("--cwd", default=os.environ.get("WORKSPACE", "/workspace"))
     parser.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
     parser.add_argument("--model-band", dest="model_band", default="fast")
     parser.add_argument("--task-description", dest="task_description", default="")
@@ -143,14 +144,23 @@ def main():
     parser.add_argument("--agent-id", dest="agent_id", default="")
     parser.add_argument("--agent-namespace", dest="agent_namespace", default="")
     parser.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", default="")
+    parser.add_argument("--playbook-json", dest="playbook_json", default="")
     args = parser.parse_args()
 
     job_id = args.id or f"runner-{now_compact()}"
-    reusable = find_reusable_job(args.command, args.task_description or args.command)
+    reusable = find_reusable_job(args.command)
     if reusable:
         print(json.dumps(reusable, ensure_ascii=False))
         return
     model = resolve_runner_model()
+    playbook = {}
+    if str(args.playbook_json or "").strip():
+        try:
+            parsed = json.loads(args.playbook_json)
+            if isinstance(parsed, dict):
+                playbook = parsed
+        except json.JSONDecodeError:
+            playbook = {}
 
     subprocess.run(
         [
@@ -192,7 +202,7 @@ def main():
             "--review-required",
             "false",
             "--artifacts-json",
-            json.dumps(runner_artifacts(), ensure_ascii=False),
+            json.dumps(runner_artifacts(playbook), ensure_ascii=False),
             *(["--session-key", args.session_key] if args.session_key else []),
             *(["--session-id", args.session_id] if args.session_id else []),
             *(["--agent-id", args.agent_id] if args.agent_id else []),

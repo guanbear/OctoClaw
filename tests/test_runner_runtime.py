@@ -16,6 +16,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 dispatch_task = importlib.import_module("dispatch_task")
+runner_dispatch = importlib.import_module("runner_dispatch")
 runner_playbooks = importlib.import_module("runner_playbooks")
 
 RUNNER_DISPATCH = REPO_ROOT / "lib" / "runner_dispatch.py"
@@ -205,6 +206,43 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(payload)
         self.assertEqual(payload["kind"], "local_file_probe")
         self.assertEqual(payload["command"], "tail -n 80 /var/log/nginx/error.log")
+
+    def test_implicit_nginx_error_log_probe_uses_file_tail(self) -> None:
+        payload = runner_playbooks.infer_runner_playbook("检查一下 nginx error log 最近 80 行，然后总结问题")
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["kind"], "local_file_probe")
+        self.assertEqual(payload["command"], "tail -n 80 /var/log/nginx/error.log")
+
+    def test_scheduler_health_probe_handles_cron_question(self) -> None:
+        payload = runner_playbooks.infer_runner_playbook("我的cron都正常吗")
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["kind"], "scheduler_health")
+        self.assertIn("crontab -l", payload["command"])
+        self.assertIn("systemctl list-timers", payload["command"])
+
+    def test_find_reusable_job_requires_same_command_not_same_description(self) -> None:
+        with patch.object(
+            runner_dispatch,
+            "load_json",
+            return_value={
+                "jobs": [
+                    {
+                        "id": "runner-old",
+                        "status": "done",
+                        "finished_at": "2026-04-01T20:55:09+08:00",
+                        "command": "journalctl -u nginx -n 40 --no-pager || true",
+                        "task_description": "检查一下 nginx error log 最近 80 行，然后总结问题",
+                    }
+                ]
+            },
+        ), patch.object(
+            runner_dispatch,
+            "recent_minutes",
+            return_value=1.0,
+        ):
+            reusable = runner_dispatch.find_reusable_job("tail -n 80 /var/log/nginx/error.log")
+
+        self.assertIsNone(reusable)
 
 
 if __name__ == "__main__":

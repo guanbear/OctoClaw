@@ -77,6 +77,7 @@ class RuntimeProtocolTests(unittest.TestCase):
         self.assertEqual(payload["files"], ["lib/auth.py"])
         self.assertEqual(payload["next_step"], "hand to review worker")
         self.assertEqual(payload["verification"], [])
+        self.assertEqual(payload["user_safe_summary"], "Found the root cause and prepared a patch.")
 
     def test_schema_required_fields_match_protocol_helpers(self) -> None:
         brief_schema = json.loads(BRIEF_SCHEMA.read_text(encoding="utf-8"))

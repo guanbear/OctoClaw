@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import importlib
+import json
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,6 +18,122 @@ patrol = importlib.import_module("patrol")
 
 
 class PatrolNotificationTests(unittest.TestCase):
+    @patch("patrol.save_task_state")
+    def test_annotate_runner_task_preserves_session_binding(self, mock_save) -> None:
+        record = {
+            "id": "runner-1",
+            "status": "running",
+            "route": "runner",
+            "runtime": "runner",
+            "worker_pool": "octoclaw-runner",
+            "summary": "check nginx logs",
+            "session_key": "agent:main:slack:direct:u-runner",
+            "session_id": "sess-runner-1",
+            "run_id": "run-runner-1",
+            "agent_id": "agent:main:main",
+            "agent_namespace": "octoclaw",
+        }
+
+        with patch.object(
+            patrol,
+            "load_task_state",
+            return_value={"tasks": [dict(record)], "updated_at": ""},
+        ), patch.object(patrol, "load_main_agent_sessions", return_value={}):
+            tasks = patrol.annotate_tasks_with_session_state([dict(record)])
+
+        self.assertEqual(tasks[0]["session_key"], "agent:main:slack:direct:u-runner")
+        self.assertEqual(tasks[0]["session_id"], "sess-runner-1")
+        self.assertEqual(tasks[0]["session_status"], "runner_local")
+        mock_save.assert_called_once()
+
+    def test_extract_session_worker_result_parses_structured_result(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-patrol-home-") as home:
+            session_dir = Path(home) / ".openclaw" / "agents" / "main" / "sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            transcript = session_dir / "sess-result-1.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "---RESULT---\n"
+                                '{"status":"done","summary":"release analysis ready","user_safe_summary":"可以升级，但先注意认证配置变更。","report":"/tmp/release.md","artifacts":["/tmp/release.md"],"files":[],"risks":["auth migration"],"verification":[],"next_step":"none"}',
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": home}, clear=False):
+                payload = patrol.extract_session_worker_result(
+                    "sess-result-1",
+                    task_id="research-1",
+                    default_report="/tmp/fallback.md",
+                )
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["task_id"], "research-1")
+        self.assertEqual(payload["report"], "/tmp/release.md")
+        self.assertEqual(payload["user_safe_summary"], "可以升级，但先注意认证配置变更。")
+
+    @patch("patrol.subprocess.run")
+    def test_hydrate_completed_session_results_finishes_task_via_task_state_update(self, mock_run) -> None:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = ""
+        with tempfile.TemporaryDirectory(prefix="octoclaw-patrol-home-") as home:
+            session_dir = Path(home) / ".openclaw" / "agents" / "main" / "sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            (session_dir / "sess-result-2.jsonl").write_text(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "---RESULT---\n"
+                                '{"status":"done","summary":"release analysis ready","user_safe_summary":"推荐升级，但注意 MiniMax 图片生成配置。","report":"/tmp/release-2.md","artifacts":["/tmp/release-2.md"],"files":[],"risks":[],"verification":[],"next_step":"none"}',
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": home}, clear=False):
+                hydrated = patrol.hydrate_completed_session_results(
+                    [
+                        {
+                            "id": "research-2",
+                            "status": "running",
+                            "route": "spawn_single",
+                            "runtime": "subagent",
+                            "worker_pool": "octoclaw-research",
+                            "summary": "collecting release notes",
+                            "session_id": "sess-result-2",
+                            "session_status": "completed",
+                            "session_last_event": "success",
+                            "session_has_result": True,
+                            "report_path": "/tmp/release-2.md",
+                            "artifacts": {},
+                        }
+                    ]
+                )
+
+        self.assertEqual(hydrated, 1)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("done", cmd)
+        self.assertIn("--id", cmd)
+        self.assertIn("research-2", cmd)
+
     @patch("patrol.send_task_notification")
     def test_send_state_change_task_anchor_skips_tasks_without_session_key(self, mock_send) -> None:
         sent = patrol.send_state_change_task_anchor(

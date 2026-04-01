@@ -640,6 +640,8 @@ def dispatch_runner(args) -> dict:
         "--task-description",
         args.task,
     ]
+    if playbook:
+        dispatch_cmd.extend(["--playbook-json", json.dumps(playbook, ensure_ascii=False)])
     if str(identity.get("session_key", "") or "").strip():
         dispatch_cmd.extend(["--session-key", str(identity["session_key"])])
     if str(identity.get("session_id", "") or "").strip():
@@ -773,7 +775,7 @@ def main():
     parser = argparse.ArgumentParser(description="Unified OctoClaw dispatcher")
     parser.add_argument("--task", required=True)
     parser.add_argument("--command", default="")
-    parser.add_argument("--cwd", default="/workspace")
+    parser.add_argument("--cwd", default=os.environ.get("WORKSPACE", "/workspace"))
     parser.add_argument("--summary", default="")
     parser.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
     parser.add_argument("--id", default="")

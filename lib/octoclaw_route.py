@@ -40,6 +40,7 @@ SUPPORTED_ROUTE_LANGUAGE_PACKS = DEFAULT_ROUTE_LANGUAGE_PACKS + OPTIONAL_ROUTE_L
 RUNNER_PATTERNS = {
     "common": (
         r"\b(curl|grep|rg|tail|head|pwd|ls|find|cat|jq|sed|awk|ss|ps|top|netstat)\b",
+        r"\b(cron|crontab|timer|timers|list-timers)\b",
     ),
     "zh": (
         r"(日志|端口|版本|环境变量|连通性|健康检查|进程|服务状态|端口监听|磁盘|内存|cpu|负载)",
@@ -66,7 +67,7 @@ RUNNER_PATTERNS = {
 
 RUNNER_READ_ONLY_INTENT_PATTERNS = {
     "zh": (
-        r"(看下|看一下|看看|查下|查一下|查看|搜一下|搜下|搜索|列出|显示|读取|有没有|确认一下|检查一下)",
+        r"(看下|看一下|看看|查下|查一下|查看|搜一下|搜下|搜索|列出|显示|读取|有没有|确认一下|检查一下|正常吗)",
     ),
     "en": (
         r"\b(check|inspect|show|list|display|read|search|find|look at|verify|confirm)\b",
@@ -90,10 +91,10 @@ RUNNER_READ_ONLY_INTENT_PATTERNS = {
 
 RUNNER_TARGET_PATTERNS = {
     "zh": (
-        r"(日志|端口|进程|状态|文件|目录|环境变量|监听|路径|配置|版本|health|输出)",
+        r"(日志|端口|进程|状态|文件|目录|环境变量|监听|路径|配置|版本|health|输出|cron|crontab|定时任务|计划任务|timer|timers)",
     ),
     "en": (
-        r"\b(log|logs|port|ports|process|pid|status|file|files|directory|directories|env|environment|path|config|version|health|output)\b",
+        r"\b(log|logs|port|ports|process|pid|status|file|files|directory|directories|env|environment|path|config|version|health|output|cron|crontab|timer|timers|scheduler)\b",
     ),
     "ja": (
         r"(ログ|ポート|プロセス|状態|ファイル|ディレクトリ|環境変数|パス|設定|バージョン|出力)",
@@ -670,6 +671,10 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     elif external_lookup_hits > 0 and research_hits == 0 and code_hits == 0:
         latency_sensitivity = "normal"
 
+    observation_signal = bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0 or (
+        runner_read_only_intent_hits > 0 and runner_target_hits > 0
+    )
+
     features = {
         "task_length": len(raw_task),
         "route_language_packs": list(enabled_packs),
@@ -698,7 +703,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "continuation_hits": continuation_hits,
         "ack_followup_hits": ack_followup_hits,
         "remote_target_hits": remote_target_hits,
-        "requires_tools": bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0,
+        "requires_tools": observation_signal,
         "requires_code_work": code_hits > 0,
         "requires_research": research_hits > 0,
         "requires_mutation": mutation_hits > 0 or (implement_hits > 0 and (code_hits > 0 or local_state_hits > 0)),
@@ -713,7 +718,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
             or (verify_hits > 0 and (code_hits > 0 or implement_hits > 0))
         ),
         "tool_observation_only": (
-            (bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0)
+            observation_signal
             and mutation_hits == 0
             and implement_hits == 0
             and code_hits == 0

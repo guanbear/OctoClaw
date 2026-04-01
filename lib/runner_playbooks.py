@@ -43,6 +43,14 @@ SERVICE_PORTS = {
     "mysql": [3306],
 }
 
+SERVICE_LOG_PATHS = {
+    "nginx": {
+        "error": "/var/log/nginx/error.log",
+        "access": "/var/log/nginx/access.log",
+        "default": "/var/log/nginx/error.log",
+    },
+}
+
 PATH_PATTERN = re.compile(r"(/[A-Za-z0-9._/\-]+)")
 TAIL_COUNT_PATTERNS = [
     re.compile(r"\btail\s+-n?\s*(\d{1,4})\b", re.IGNORECASE),
@@ -70,6 +78,31 @@ VERSION_COMMANDS = {
     "node": "node --version",
     "npm": "npm --version",
 }
+
+SCHEDULER_KEYWORDS = [
+    "cron",
+    "crontab",
+    "定时任务",
+    "计划任务",
+    "schedule",
+    "scheduler",
+    "timer",
+    "timers",
+    "list-timers",
+]
+
+ERROR_LOG_TOKENS = [
+    "error log",
+    "error.log",
+    "错误日志",
+    "报错日志",
+]
+
+ACCESS_LOG_TOKENS = [
+    "access log",
+    "access.log",
+    "访问日志",
+]
 
 
 def contains_any(text: str, patterns: Iterable[str]) -> bool:
@@ -281,6 +314,54 @@ def build_service_health_plan(task: str) -> dict | None:
     return plan
 
 
+def _infer_service_log_path(service: str, task: str) -> tuple[str, str]:
+    lowered = task.lower()
+    mapping = SERVICE_LOG_PATHS.get(service, {})
+    if not isinstance(mapping, dict) or not mapping:
+        return "", ""
+    if contains_any(lowered, ACCESS_LOG_TOKENS):
+        return str(mapping.get("access", "") or mapping.get("default", "") or ""), "access"
+    if contains_any(lowered, ERROR_LOG_TOKENS):
+        return str(mapping.get("error", "") or mapping.get("default", "") or ""), "error"
+    return str(mapping.get("default", "") or mapping.get("error", "") or ""), "default"
+
+
+def build_service_log_file_probe_plan(task: str) -> dict | None:
+    service = extract_service_name(task)
+    if not service:
+        return None
+    lowered = task.lower()
+    if not any(token in lowered for token in ["log", "logs", "日志"]):
+        return None
+
+    path, log_kind = _infer_service_log_path(service, task)
+    if not path:
+        return None
+
+    line_count = extract_line_count(task)
+    display = "error" if log_kind == "error" else ("access" if log_kind == "access" else "")
+    summary = f"查看 {service} {display + ' ' if display else ''}log 最近 {line_count} 行".strip()
+    plan = {
+        "kind": "local_file_probe",
+        "summary": summary,
+        "command": f"tail -n {line_count} {path}",
+        "reason_codes": [
+            "runner_playbook_service_log_file_probe",
+            f"service:{service}",
+            f"log_kind:{log_kind}",
+        ],
+        "confidence": 0.94,
+    }
+    remote_target = extract_remote_target(task)
+    if remote_target:
+        plan["kind"] = "remote_local_file_probe"
+        plan["summary"] = f"查看 {remote_target} 上 {service} {display + ' ' if display else ''}log 最近 {line_count} 行".strip()
+        plan["command"] = wrap_remote_command(remote_target, plan["command"])
+        plan["reason_codes"] = [*plan["reason_codes"], f"remote_target:{remote_target}"]
+        plan["confidence"] = 0.95
+    return plan
+
+
 def build_local_file_probe_plan(task: str) -> dict | None:
     lowered = task.lower()
     if not any(token in lowered for token in ["grep", "tail", "head", "cat", "查看文件", "查一下文件", "日志文件"]):
@@ -305,8 +386,45 @@ def build_local_file_probe_plan(task: str) -> dict | None:
     }
 
 
+def build_scheduler_health_plan(task: str) -> dict | None:
+    lowered = task.lower()
+    if not contains_any(lowered, SCHEDULER_KEYWORDS):
+        return None
+
+    command = "\n".join(
+        [
+            "printf '== crontab ==\\n'",
+            "crontab -l 2>&1 || true",
+            "printf '\\n== systemd timers ==\\n'",
+            "systemctl list-timers --all --no-pager 2>&1 | sed -n '1,80p' || true",
+        ]
+    )
+    plan = {
+        "kind": "scheduler_health",
+        "summary": "检查当前机器的 cron / systemd timer 状态",
+        "command": command,
+        "reason_codes": ["runner_playbook_scheduler_health"],
+        "confidence": 0.9,
+    }
+    remote_target = extract_remote_target(task)
+    if remote_target:
+        plan["kind"] = "remote_scheduler_health"
+        plan["summary"] = f"检查 {remote_target} 的 cron / systemd timer 状态"
+        plan["command"] = wrap_remote_command(remote_target, command)
+        plan["reason_codes"] = [*plan["reason_codes"], f"remote_target:{remote_target}"]
+        plan["confidence"] = 0.92
+    return plan
+
+
 def infer_runner_playbook(task: str) -> dict | None:
-    for builder in (build_version_probe_plan, build_system_summary_plan, build_local_file_probe_plan, build_service_health_plan):
+    for builder in (
+        build_version_probe_plan,
+        build_system_summary_plan,
+        build_local_file_probe_plan,
+        build_scheduler_health_plan,
+        build_service_log_file_probe_plan,
+        build_service_health_plan,
+    ):
         plan = builder(task)
         if plan:
             return plan

@@ -49,11 +49,23 @@ from notifier import backend_supports_cards, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec, build_task_prompt, execute_clawteam_spawn
 from clawteam_bridge import sync_task
 from runtime_coordination import recover_stale_ownership, resolve_worker_session, session_resume_snapshot, sync_runtime_surfaces
+from runtime_protocol import normalize_worker_result
 from runtime_task_record import normalize_task_record, task_is_final, task_is_recent_final, task_notification_state, task_state_model
 from octopus_config import (
+    ERRORS_FILE,
     MAIN_AGENT_SESSIONS_FILE,
+    MODEL_ALIASES_FILE,
+    PATROL_CARD_STATE_FILE,
+    PATROL_LAST_DONE_IDS_FILE,
+    PATROL_LAST_STATE_FILE,
+    PATROL_NOTIFY_STATE_FILE,
+    RUNNER_DAEMON_PID_FILE,
     RUNNER_HEALTH_FILE,
+    RUNNER_RESTART_COOLDOWN_FILE,
+    TASK_STATE_FILE,
+    WORKSPACE,
     get_notification_backend,
+    lib_path,
     load_json,
     notification_enabled,
     resolve_main_session_key,
@@ -85,6 +97,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
 SYSTEM_LABELS = {'octoclaw-patrol', 'octoclaw-probe', 'ironclaw-heartbeat', 'ironclaw-probe'}
 # 内部查询任务 ID 前缀，过滤出面板和通知
 INTERNAL_ID_PREFIXES = ('status-query-',)
+TASK_STATE_UPDATE_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task-state-update.py")
 
 # 模型名简化映射（完整路径 → 短名）
 MODEL_SHORT = {
@@ -178,8 +191,8 @@ def assign_ordinals(task_list: list) -> dict:
 
     return ordinal_map
 
-TASK_STATE_FILE = "/workspace/tmp/octopus/task-state.json"
 FEISHU_CARD_SCRIPT = os.path.join(os.path.dirname(__file__), "feishu-card.py")
+RESOLVE_MODEL_SCRIPT = lib_path("resolve-model.py")
 SESSION_HISTORY_TAIL_LINES = 30
 STEER_MIN_AGE_MINUTES = 2
 STEER_COOLDOWN_SECONDS = 300
@@ -188,8 +201,6 @@ STEER_COOLDOWN_SECONDS = 300
 STUCK_THRESHOLD_MINUTES = 15
 RUNNER_STALE_SECONDS = 120
 RUNNER_RESTART_COOLDOWN_SECONDS = 600
-RUNNER_DAEMON_PID_FILE = "/workspace/tmp/octopus/runner-daemon.pid"
-RUNNER_RESTART_COOLDOWN_FILE = "/workspace/tmp/octopus/runner-restart-cooldown.json"
 FAILED_NOTIFY_RETRY_SECONDS = 900
 # session 刚结束到 task-state/bridge 落盘之间，给一个短暂收尾宽限，避免 patrol 误判 orphan/stuck。
 FINISH_GRACE_SECONDS = 180
@@ -887,6 +898,194 @@ def summarize_session_history(session_id: str, tail_lines: int = SESSION_HISTORY
     return result
 
 
+def _session_message_texts(obj: dict) -> list[str]:
+    texts: list[str] = []
+    if not isinstance(obj, dict):
+        return texts
+    content = obj.get("content")
+    if isinstance(content, str) and content.strip():
+        texts.append(content)
+    elif isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text)
+    return texts
+
+
+def _strip_result_code_fence(text: str) -> str:
+    body = str(text or "").strip()
+    if body.startswith("```json"):
+        body = body[len("```json"):].strip()
+    elif body.startswith("```"):
+        body = body[len("```"):].strip()
+    if body.endswith("```"):
+        body = body[:-3].strip()
+    return body
+
+
+def _parse_result_json_fragment(text: str) -> dict | None:
+    body = _strip_result_code_fence(text)
+    start = body.find("{")
+    if start < 0:
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        payload, _ = decoder.raw_decode(body[start:])
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _parse_result_kv_block(text: str) -> dict | None:
+    body = _strip_result_code_fence(text)
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not lines:
+        return None
+    payload: dict[str, str] = {}
+    for line in lines:
+        if line.startswith("---END---"):
+            break
+        if ":" in line:
+            key, value = line.split(":", 1)
+        elif "：" in line:
+            key, value = line.split("：", 1)
+        else:
+            continue
+        payload[key.strip().lower()] = value.strip()
+    if not payload:
+        return None
+    report = payload.get("报告") or payload.get("report") or ""
+    return {
+        "status": payload.get("状态") or payload.get("status") or "",
+        "summary": payload.get("摘要") or payload.get("summary") or "",
+        "user_safe_summary": payload.get("用户摘要") or payload.get("user_safe_summary") or payload.get("摘要") or payload.get("summary") or "",
+        "report": report,
+        "artifacts": [report] if report else [],
+        "files": [],
+        "risks": [],
+        "verification": [],
+        "next_step": payload.get("下一步") or payload.get("next_step") or "",
+    }
+
+
+def extract_session_worker_result(session_id: str, *, task_id: str = "", default_report: str = "", tail_lines: int = SESSION_HISTORY_TAIL_LINES) -> dict | None:
+    if not session_id:
+        return None
+    transcript_path = os.path.expanduser(f"~/.openclaw/agents/main/sessions/{session_id}.jsonl")
+    if not os.path.exists(transcript_path):
+        return None
+    try:
+        with open(transcript_path, "rb") as f:
+            lines = list(deque(f, tail_lines))
+    except Exception:
+        return None
+
+    parsed_lines: list[dict] = []
+    for raw in lines:
+        try:
+            obj = json.loads(raw.decode("utf-8", errors="ignore"))
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            parsed_lines.append(obj)
+
+    for obj in reversed(parsed_lines):
+        for text in reversed(_session_message_texts(obj)):
+            marker_index = text.rfind("---RESULT---")
+            if marker_index < 0:
+                continue
+            payload_text = text[marker_index + len("---RESULT---"):].strip()
+            payload_text = payload_text.split("---END---", 1)[0].strip()
+            payload = _parse_result_json_fragment(payload_text) or _parse_result_kv_block(payload_text)
+            if isinstance(payload, dict) and payload:
+                return normalize_worker_result(payload, task_id=task_id, default_report=default_report)
+    return None
+
+
+def finish_task_from_session_result(task: dict, worker_result: dict) -> bool:
+    task_id = str(task.get("id", "") or "").strip()
+    if not task_id:
+        return False
+
+    result_status = str(worker_result.get("status", "") or "").strip().lower()
+    finish_command = "blocked" if result_status == "blocked" else ("failed" if result_status == "failed" else "done")
+    summary = str(worker_result.get("summary", "") or task.get("summary", "") or task.get("session_last_text", "") or task_id).strip()
+    report_path = str(worker_result.get("report", "") or task.get("report_path", "") or "").strip()
+    user_safe_summary = str(worker_result.get("user_safe_summary", "") or worker_result.get("summary", "") or task.get("user_safe_summary", "") or "").strip()
+    blocked_reason = str(task.get("blocked_reason", "") or worker_result.get("next_step", "") or worker_result.get("summary", "") or "").strip()
+
+    artifacts = _task_artifacts(task)
+    artifacts["worker_result"] = dict(worker_result)
+    if report_path:
+        artifacts["report_path"] = report_path
+    artifacts["session_result_hydrated"] = {
+        "session_id": str(task.get("session_id", "") or ""),
+        "hydrated_at": datetime.now(timezone.utc).astimezone().isoformat(),
+    }
+
+    cmd = [
+        "python3",
+        TASK_STATE_UPDATE_PY,
+        finish_command,
+        "--id",
+        task_id,
+        "--summary",
+        summary,
+        "--artifacts-json",
+        json.dumps(artifacts, ensure_ascii=False),
+    ]
+    if report_path:
+        cmd.extend(["--report-path", report_path])
+    if user_safe_summary:
+        cmd.extend(["--user-safe-summary", user_safe_summary])
+    if finish_command == "blocked" and blocked_reason:
+        cmd.extend(["--blocked-reason", blocked_reason])
+
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        print(
+            f"⚠️  finish_task_from_session_result({task_id}) 失败: {result.stderr.strip() or result.stdout.strip()}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def hydrate_completed_session_results(tasks: list[dict]) -> int:
+    hydrated = 0
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if is_runner_task(task) or task_is_final(task):
+            continue
+        if str(task.get("status", "") or "").strip().lower() not in {"queued", "running", "dispatched"}:
+            continue
+        session_id = str(task.get("session_id", "") or "").strip()
+        if not session_id:
+            continue
+        session_status = str(task.get("session_status", "") or "").strip().lower()
+        last_event = str(task.get("session_last_event", "") or "").strip().lower()
+        if session_status != "completed" and last_event != "success":
+            continue
+        if not bool(task.get("session_has_result")) and last_event != "success":
+            continue
+        existing_result = _task_artifacts(task).get("worker_result")
+        if isinstance(existing_result, dict) and str(existing_result.get("status", "") or "").strip():
+            continue
+        worker_result = extract_session_worker_result(
+            session_id,
+            task_id=str(task.get("id", "") or ""),
+            default_report=str(task.get("report_path", "") or ""),
+        )
+        if not isinstance(worker_result, dict) or not str(worker_result.get("status", "") or "").strip():
+            continue
+        if finish_task_from_session_result(task, worker_result):
+            hydrated += 1
+    return hydrated
+
+
 def annotate_tasks_with_session_state(tasks: list) -> list:
     """
     为 running/dispatched/queued 任务补充 session 观测字段，并回写 task-state.json。
@@ -918,15 +1117,16 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
             updates = {
                 "session_status": "runner_local",
                 "last_observed_at": observed_at,
-                "session_key": "",
-                "session_id": "",
-                "run_id": "",
             }
             for key, value in updates.items():
                 if state_task.get(key) != value:
                     state_task[key] = value
                     changed = True
                 task[key] = value
+            for key in ("session_key", "session_id", "run_id", "agent_id", "agent_namespace"):
+                current_value = str(state_task.get(key, "") or "").strip()
+                if current_value:
+                    task[key] = current_value
             resume = session_resume_snapshot(state_task)
             state_task["session_resume"] = resume
             task["session_resume"] = dict(resume)
@@ -1082,7 +1282,7 @@ def build_steer_message(task: dict) -> str:
         base.extend(
             [
                 "你刚才很可能输出过长被截断了。",
-                "详细内容写到 /workspace/tmp/octopus/shared/{TASK_ID}.md，再输出 ---RESULT---。",
+                f"详细内容写到 {WORKSPACE}/tmp/octopus/shared/{{TASK_ID}}.md，再输出 ---RESULT---。",
                 "summary 保持 2-5 句短句。",
             ]
         )
@@ -1226,7 +1426,6 @@ def check_orphan_tasks(tasks: list, active_sessions: list) -> list:
     return orphans
 
 
-LAST_DONE_IDS_FILE = "/workspace/tmp/octopus/.patrol-last-done-ids"
 RECENT_DONE_MINUTES = 60
 MAX_RECENT_DONE = 10
 
@@ -2247,7 +2446,6 @@ def build_idle_card(recent_done: list = None) -> dict:
     }
 
 
-PATROL_CARD_STATE_FILE = "/workspace/tmp/octopus/patrol-card-state.json"
 PATROL_CARD_EXPIRE_SECONDS = 24 * 60 * 60  # 24小时：超过24小时的旧卡片直接发新卡
 PATROL_CARD_MAX_AGE_SECONDS = 25 * 24 * 60 * 60  # 25天：超25天自动撤回旧卡 + 发新卡（飞书卡片有效期约30天）
 
@@ -2727,9 +2925,6 @@ def send_event_card_b(event_type: str, task: dict) -> str | None:
 
 
 # ── 状态变化通知相关 ──
-PATROL_NOTIFY_STATE_FILE = "/workspace/tmp/octopus/patrol-notify-state.json"
-
-
 def load_notify_state() -> dict:
     """读取上次通知状态快照"""
     try:
@@ -3727,7 +3922,7 @@ def check_model_aliases():
     检查别名文件里的模型是否可用，失败时自动重新匹配并更新。
     带 10 分钟缓存，避免每次巡逻都触发 openclaw models list。
     逻辑：
-    1. 读取 /workspace/tmp/octopus-model-aliases.json
+    1. 读取当前 WORKSPACE 下的 octopus-model-aliases.json
     2. 用 subprocess 运行 openclaw models list --json，获取可用模型列表
     3. 对比别名文件里的模型是否在可用列表中
     4. 发现不可用的模型：
@@ -3745,7 +3940,7 @@ def check_model_aliases():
         return
     _ALIAS_CHECK_LAST_TS = now_ts
 
-    alias_path = "/workspace/tmp/octopus-model-aliases.json"
+    alias_path = MODEL_ALIASES_FILE
     try:
         with open(alias_path) as f:
             aliases = json.load(f)
@@ -3861,15 +4056,12 @@ def check_model_violations():
     """
     静默检测模型违规：读取 task-state.json 里最近20个 done/failed 任务的 model 字段。
     如果 model 包含完整路径字符串（如 vendor-claude/ 或 aws-claude）而不是短名，
-    视为可能的违规，写入 /workspace/.learnings/ERRORS.md。
+    视为可能的违规，写入当前 WORKSPACE 的 .learnings/ERRORS.md。
     
     合规模型名：短名白名单 + lixiang-*/kivy-* 前缀
     短名白名单：glm, sonnet, opus, claudeopus, kimi, gemini
     """
     import datetime as _dt
-    
-    ERRORS_FILE = "/workspace/.learnings/ERRORS.md"
-    TASK_STATE_FILE = "/workspace/tmp/octopus/task-state.json"
     
     # 短名白名单（这些是合规的 resolve-model 输出）
     SHORT_NAME_WHITELIST = {"glm", "sonnet", "opus", "claudeopus", "kimi", "gemini"}
@@ -3940,7 +4132,7 @@ def check_model_violations():
 def check_model_violation(tasks: list):
     """
     检查近期任务的 model 字段是否符合 resolve-model.py 的预期结果。
-    发现违规则静默写入 /workspace/.learnings/ERRORS.md。
+    发现违规则静默写入当前 WORKSPACE 的 .learnings/ERRORS.md。
     不发飞书告警。
     
     违规判定条件：
@@ -3954,7 +4146,6 @@ def check_model_violation(tasks: list):
     import datetime as _dt
     from collections import defaultdict
     
-    ERRORS_FILE = "/workspace/.learnings/ERRORS.md"
     RECENT_HOURS = 24  # 只检查最近24小时的任务
     
     now = now_utc()
@@ -4017,7 +4208,7 @@ def check_model_violation(tasks: list):
             result = subprocess.run(
                 [
                     "python3",
-                    "/workspace/openclaw/skills/octopus/lib/resolve-model.py",
+                    RESOLVE_MODEL_SCRIPT,
                     "--selector-band",
                     selector_band_for_model_band(model_band),
                     "--worker-pool",
@@ -4151,7 +4342,7 @@ def check_queued_tasks(tasks: list) -> int:
                 resolve_result = subprocess.run(
                     [
                         "python3",
-                        "/workspace/openclaw/skills/octopus/lib/resolve-model.py",
+                        RESOLVE_MODEL_SCRIPT,
                         "--selector-band",
                         selector_band_for_model_band(model_band),
                         "--worker-pool",
@@ -4310,6 +4501,12 @@ def main():
     # ── v1.3: 先补充 session 观测字段，让后续判断不只依赖 task-state 本身 ──
     tasks = annotate_tasks_with_session_state(tasks)
 
+    hydrated = hydrate_completed_session_results(tasks)
+    if hydrated > 0:
+        print(f"  ✅ 本轮从 child session transcript 回收结果 {hydrated} 个")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+
     # ── Slice C: 发现 owner/session 已失活时，释放锁并把任务回收到 queued ──
     recovered = recover_dead_agent_tasks(tasks)
     if recovered:
@@ -4426,7 +4623,7 @@ def main():
                         "孤儿任务：无task_description，可能因task描述过长导致session启动即失败，静默标记",
                         extra_updates={"notified_failed": True},
                     )
-                    _errors_md = "/workspace/.learnings/ERRORS.md"
+                    _errors_md = ERRORS_FILE
                     _err_line = f"\n| ERR-{datetime.now().strftime('%Y%m%d')}-ORPHAN | low | open | 重现1次 | 孤儿任务{task_id}无task_description，session启动即失败，可能task描述过长 |"
                     try:
                         with open(_errors_md, "a") as _ef:
@@ -4487,7 +4684,7 @@ def main():
     # 快照字段：running_ids + queued_count + failed_count + stuck_count
     # 有变化（新完成/新失败/新超时/新排队/running数量变化）→ 发飞书面板
     # 无变化 → 静默退出，不发任何通知
-    _PATROL_STATE_FILE = "/workspace/tmp/octopus/patrol-last-state.json"
+    _PATROL_STATE_FILE = PATROL_LAST_STATE_FILE
     import time as _time_mod
 
     current_running_ids = sorted([t.get("id", "") for t in running])
