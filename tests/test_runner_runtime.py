@@ -16,6 +16,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 dispatch_task = importlib.import_module("dispatch_task")
+runner_playbooks = importlib.import_module("runner_playbooks")
 
 RUNNER_DISPATCH = REPO_ROOT / "lib" / "runner_dispatch.py"
 RUNNER_LOOP = REPO_ROOT / "lib" / "runner_loop.sh"
@@ -198,6 +199,12 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(handoff["worker_result"]["status"], "done")
             self.assertIn("Runner completed", handoff["summary"])
             self.assertIn("runner handoff", handoff["reply_text"])
+
+    def test_explicit_log_file_probe_keeps_tail_command_and_count(self) -> None:
+        payload = runner_playbooks.infer_runner_playbook("tail -80 /var/log/nginx/error.log")
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["kind"], "local_file_probe")
+        self.assertEqual(payload["command"], "tail -n 80 /var/log/nginx/error.log")
 
 
 if __name__ == "__main__":

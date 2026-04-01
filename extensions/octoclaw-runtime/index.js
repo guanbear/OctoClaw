@@ -279,10 +279,62 @@ function findPolicyStateByPrompt(prompt = "") {
   return { key: bestKey, state: bestState };
 }
 
+function promptTokenScore(prompt = "", candidatePrompt = "") {
+  const query = String(prompt || "").trim().toLowerCase();
+  const candidate = String(candidatePrompt || "").trim().toLowerCase();
+  if (!query || !candidate) return 0;
+  if (query === candidate) return 100;
+  const tokens = Array.from(
+    new Set(
+      query
+        .split(/[^a-z0-9\u4e00-\u9fff._/-]+/i)
+        .map((item) => item.trim())
+        .filter((item) => item.length >= 3),
+    ),
+  );
+  let score = 0;
+  for (const token of tokens) {
+    const parts = token.split(/[./_-]+/).filter((item) => item.length >= 3);
+    const variants = parts.length > 0 ? parts : [token];
+    if (variants.some((variant) => candidate.includes(variant))) {
+      score += 1;
+    }
+  }
+  return score;
+}
+
+function findRecentDelegatedPolicyState(prompt = "", maxAgeMs = 2 * 60 * 1000) {
+  const now = Date.now();
+  let bestKey = "";
+  let bestState = null;
+  let bestScore = -1;
+  let bestUpdatedAt = 0;
+  let bestRank = -1;
+  for (const [key, state] of policyStateBySession.entries()) {
+    const route = String(state?.decision?.route_decision?.route || "").trim();
+    if (!DELEGATED_ROUTE_NAMES.has(route)) continue;
+    const updatedAt = Number(state?.updatedAt || state?.createdAt || 0);
+    if (!updatedAt || now - updatedAt > maxAgeMs) continue;
+    const score = promptTokenScore(prompt, state?.prompt || "");
+    if (score <= 0) continue;
+    const rank = sessionPreferenceRank(key);
+    if (score > bestScore || (score === bestScore && updatedAt > bestUpdatedAt) || (score === bestScore && updatedAt === bestUpdatedAt && rank > bestRank)) {
+      bestScore = score;
+      bestUpdatedAt = updatedAt;
+      bestRank = rank;
+      bestKey = key;
+      bestState = state;
+    }
+  }
+  return { key: bestKey, state: bestState };
+}
+
 function resolveToolPolicyContext(ctx = {}, prompt = "") {
   const direct = getPolicyStateForContext(ctx);
   if (direct.key || direct.state) return direct;
-  return findPolicyStateByPrompt(prompt);
+  const byPrompt = findPolicyStateByPrompt(prompt);
+  if (byPrompt.key || byPrompt.state) return byPrompt;
+  return findRecentDelegatedPolicyState(prompt);
 }
 
 function setPolicyStateForContext(ctx = {}, payload) {

@@ -569,6 +569,12 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     text = raw_task.lower()
     command = (command or "").strip()
     enabled_packs = normalize_enabled_language_packs(runtime_cfg)
+    explicit_local_probe = bool(
+        re.search(r"/[A-Za-z0-9._/\-]+", raw_task)
+        or re.search(r"(?:最近|近)\s*\d{1,4}\s*行", raw_task)
+        or re.search(r"\btail\s+-n?\s*\d{1,4}\b", text)
+        or re.search(r"\b\d{2,5}\s*(?:端口|port)\b", text)
+    )
 
     runner_hits = count_matches(text, resolve_language_patterns("RUNNER_PATTERNS", enabled_packs))
     code_hits = count_matches(text, resolve_language_patterns("CODE_PATTERNS", enabled_packs))
@@ -595,6 +601,15 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     command_read_only = command_looks_read_only(command)
     effective_write_hits = write_hits
     if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
+        effective_write_hits = 0
+    if (
+        explicit_local_probe
+        and runner_read_only_intent_hits > 0
+        and runner_target_hits > 0
+        and code_hits == 0
+        and research_hits == 0
+        and mutation_hits == 0
+    ):
         effective_write_hits = 0
 
     short_ack_candidate = (
@@ -626,7 +641,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         estimated_steps += 1
     if code_hits > 0:
         estimated_steps += 1
-    if write_hits > 0:
+    if effective_write_hits > 0:
         estimated_steps += 1
     if parallel_hits > 0:
         estimated_steps += 1
@@ -664,6 +679,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "runner_read_only_intent_hits": runner_read_only_intent_hits,
         "runner_target_hits": runner_target_hits,
         "runner_negative_hits": runner_negative_hits,
+        "explicit_local_probe": explicit_local_probe,
         "code_hits": code_hits,
         "research_hits": research_hits,
         "external_lookup_hits": external_lookup_hits,
@@ -806,10 +822,10 @@ def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
         return "answer_now"
     if coordinated_work_candidate(features):
         return "coordinated_work"
-    if int(features.get("summary_output_hits", 0) or 0) > 0:
-        return "deliverable_work"
     if features.get("tool_observation_only"):
         return "inspect_report"
+    if int(features.get("summary_output_hits", 0) or 0) > 0:
+        return "deliverable_work"
     return "deliverable_work"
 
 
@@ -835,6 +851,10 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
         reason_codes.append("inspect_report_contract")
         if features.get("requires_tools"):
             reason_codes.append("tool_observation_contract")
+        if features.get("tool_observation_only"):
+            scores["runner"] = 0.82
+            scores["spawn_single"] = 0.54
+            reason_codes.append("tool_observation_only")
     elif work_contract_hint == "coordinated_work":
         scores["spawn_multi"] = 0.78
         scores["spawn_single"] = 0.67
@@ -882,8 +902,12 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
 
     route = max(scores, key=scores.get)
     if work_contract_hint == "inspect_report":
-        route = "spawn_single"
-        reason_codes.append("prefer_spawn_single_over_soft_runner_bias")
+        if features.get("explicit_local_probe") or features.get("hard_runner_candidate"):
+            route = "runner"
+            reason_codes.append("prefer_runner_for_explicit_probe")
+        else:
+            route = "spawn_single"
+            reason_codes.append("prefer_spawn_single_over_soft_runner_bias")
     if work_contract_hint == "coordinated_work" and infer_parallel_gain_band(features) == "medium":
         route = "spawn_single"
         reason_codes.append("prefer_spawn_single_over_weak_multi_bias")

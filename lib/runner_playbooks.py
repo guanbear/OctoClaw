@@ -44,6 +44,11 @@ SERVICE_PORTS = {
 }
 
 PATH_PATTERN = re.compile(r"(/[A-Za-z0-9._/\-]+)")
+TAIL_COUNT_PATTERNS = [
+    re.compile(r"\btail\s+-n?\s*(\d{1,4})\b", re.IGNORECASE),
+    re.compile(r"(?:最近|近)\s*(\d{1,4})\s*行"),
+    re.compile(r"\blast\s+(\d{1,4})\s+lines?\b", re.IGNORECASE),
+]
 REMOTE_HINT_PATTERNS = [
     "远程",
     "remote",
@@ -130,6 +135,20 @@ def wrap_remote_command(target: str, command: str) -> str:
     ])
     remote_cmd = f"/bin/sh -lc {shlex.quote(remote_script)}"
     return f"ssh {shlex.quote(target)} {shlex.quote(remote_cmd)}"
+
+
+def extract_line_count(task: str, default: int = 40) -> int:
+    text = str(task or "")
+    for pattern in TAIL_COUNT_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        try:
+            value = int(match.group(1))
+        except Exception:
+            continue
+        return max(1, min(value, 5000))
+    return default
 
 
 def build_system_summary_plan(task: str) -> dict | None:
@@ -270,10 +289,11 @@ def build_local_file_probe_plan(task: str) -> dict | None:
     if not paths:
         return None
     path = paths[0]
+    line_count = extract_line_count(task)
     if "tail" in lowered or "最近" in lowered:
-        command = f"tail -n 40 {path}"
+        command = f"tail -n {line_count} {path}"
     elif "head" in lowered or "前" in lowered:
-        command = f"head -n 40 {path}"
+        command = f"head -n {line_count} {path}"
     else:
         command = f"sed -n '1,120p' {path}"
     return {
@@ -286,7 +306,7 @@ def build_local_file_probe_plan(task: str) -> dict | None:
 
 
 def infer_runner_playbook(task: str) -> dict | None:
-    for builder in (build_version_probe_plan, build_system_summary_plan, build_service_health_plan, build_local_file_probe_plan):
+    for builder in (build_version_probe_plan, build_system_summary_plan, build_local_file_probe_plan, build_service_health_plan):
         plan = builder(task)
         if plan:
             return plan

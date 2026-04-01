@@ -258,9 +258,15 @@ class RuntimePolicyTests(unittest.TestCase):
 
     def test_inspect_plus_summary_prefers_spawn_single_over_soft_runner_bias(self) -> None:
         payload = self.run_route("检查一下 nginx 日志里最近有什么异常，并给我一个简短总结")
-        self.assertEqual(payload["work_contract_hint"], "deliverable_work")
+        self.assertEqual(payload["work_contract_hint"], "inspect_report")
         self.assertEqual(payload["system_preferred_route"], "spawn_single")
         self.assertNotEqual(payload["system_preferred_route"], "runner")
+
+    def test_explicit_log_tail_probe_prefers_runner(self) -> None:
+        payload = self.run_route("检查一下 nginx error log 最近 80 行，然后总结问题")
+        self.assertEqual(payload["work_contract_hint"], "inspect_report")
+        self.assertEqual(payload["system_preferred_route"], "runner")
+        self.assertTrue(payload["features"]["tool_observation_only"])
 
     def test_runner_policy_uses_workspace_local_model_policy(self) -> None:
         payload = self.run_policy(

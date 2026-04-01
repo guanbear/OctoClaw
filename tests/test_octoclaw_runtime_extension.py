@@ -184,6 +184,29 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["session_key"], "agent:main:slack:direct:u234")
         self.assertEqual(payload["session_origin"], "slack")
 
+    def test_tool_context_can_recover_recent_delegated_state_for_shell_like_followup(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u345",
+                  sessionId: "sess-3",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "检查一下 nginx error log 最近 80 行，然后总结问题",
+                  decision: { request: { session_key: "agent:main:slack:direct:u345" }, route_decision: { route: "spawn_single" } },
+                  createdAt: now,
+                  updatedAt: now
+                });
+                return __octoclawTest.resolveToolPolicyContext({}, "tail -80 /var/log/nginx/error.log");
+            })()"""
+        )
+
+        self.assertEqual(payload["key"], "agent:main:slack:direct:u345")
+        self.assertEqual(payload["state"]["decision"]["request"]["session_key"], "agent:main:slack:direct:u345")
+
     def test_retain_policy_state_when_delegated_route_ended_without_dispatch(self) -> None:
         payload = run_runtime_helper(
             """__octoclawTest.shouldRetainPolicyStateOnAgentEnd({
