@@ -198,6 +198,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
                 "runtime": "subagent",
                 "worker_pool": "octoclaw-research",
                 "review_required": True,
+                "handoff_state": "internal_only",
                 "completed_at": "2026-04-01T21:38:04+08:00",
                 "report_path": "/tmp/research-report.md",
                 "artifacts": {

@@ -328,6 +328,8 @@ def infer_handoff_state(
     if explicit:
         if derived in {"internal_only", "user_safe_ready", "delivered"} and explicit == "none":
             return derived
+        if explicit == "internal_only" and derived in {"user_safe_ready", "delivered"}:
+            return derived
         return explicit
     return derived
 
