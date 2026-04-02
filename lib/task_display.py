@@ -212,8 +212,12 @@ def _state_label(state: str, lifecycle_state: str = "", outcome_state: str = "",
     lifecycle = _text(lifecycle_state).lower()
     outcome = _text(outcome_state).lower()
     handoff = _text(handoff_state).lower()
+    if lifecycle in {"finished", "cancelled"} and outcome == "done" and handoff == "delivered":
+        return "delivered"
     if lifecycle in {"finished", "cancelled"} and outcome == "blocked":
-        return "blocked (handoff ready)" if handoff in {"user_safe_ready", "delivered"} else "blocked"
+        if handoff == "delivered":
+            return "blocked (delivered)"
+        return "blocked (handoff ready)" if handoff == "user_safe_ready" else "blocked"
     if lifecycle in {"finished", "cancelled"} and outcome == "partial":
         return "partial answer"
     mapping = {
@@ -551,6 +555,9 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "model_summary": ", ".join(models[:2]) + ("…" if len(models) > 2 else "") if models else "",
         "started_at": _text(normalized.get("started_at")),
         "updated_at": _text(normalized.get("updated_at")),
+        "result_ready_at": _text(normalized.get("result_ready_at")),
+        "handoff_ready_at": _text(normalized.get("handoff_ready_at")),
+        "delivered_at": _text(normalized.get("delivered_at")),
         "duration": _duration_label(_text(normalized.get("started_at")), now=now),
         "openclaw_taskflow_backend": _text(normalized.get("openclaw_taskflow_backend") or taskflow.get("backend")),
         "openclaw_taskflow_state": _text(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state")),
@@ -602,6 +609,15 @@ def build_task_detail(
                 {
                     "time": _text(normalized.get("handoff_ready_at") or normalized.get("completed_at") or normalized.get("updated_at")),
                     "kind": "handoff_ready",
+                    "message": _text(normalized.get("user_safe_summary") or normalized.get("summary")),
+                    "importance": "high",
+                }
+            )
+        if _text(state_model.get("handoff_state")).lower() == "delivered":
+            events.append(
+                {
+                    "time": _text(normalized.get("delivered_at") or normalized.get("updated_at") or normalized.get("completed_at")),
+                    "kind": "user_notified",
                     "message": _text(normalized.get("user_safe_summary") or normalized.get("summary")),
                     "importance": "high",
                 }

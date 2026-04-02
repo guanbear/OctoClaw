@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lib.runtime_task_record import TASK_RECORD_SCHEMA_VERSION, normalize_task_record
+from lib.runtime_task_record import TASK_RECORD_SCHEMA_VERSION, normalize_task_record, task_notification_state
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +16,49 @@ TASK_RECORD_SCHEMA = REPO_ROOT / "schemas" / "runtime-task-record-v1.schema.json
 
 
 class RuntimeTaskRecordTests(unittest.TestCase):
+    def test_task_notification_state_waits_for_user_safe_handoff_for_reviewed_done_tasks(self) -> None:
+        state = task_notification_state(
+            {
+                "id": "research-internal-1",
+                "status": "done",
+                "summary": "",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "review_required": True,
+                "completed_at": "2026-04-02T02:00:00+00:00",
+                "artifacts": {
+                    "worker_result": {
+                        "status": "done",
+                        "summary": "",
+                        "user_safe_summary": "",
+                        "report": "",
+                        "next_step": "none",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(state, "done_internal")
+
+    def test_task_notification_state_promotes_ready_handoffs_to_done(self) -> None:
+        state = task_notification_state(
+            {
+                "id": "research-ready-1",
+                "status": "done",
+                "summary": "final summary ready",
+                "user_safe_summary": "这是可以直接发给用户的总结。",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "review_required": True,
+                "completed_at": "2026-04-02T02:05:00+00:00",
+                "report_path": "/tmp/research-ready-1.md",
+            }
+        )
+
+        self.assertEqual(state, "done")
+
     def test_normalize_runner_task_defaults(self) -> None:
         payload = normalize_task_record(
             {

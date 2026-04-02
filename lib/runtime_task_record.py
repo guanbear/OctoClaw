@@ -483,13 +483,14 @@ def task_is_recent_final(task: dict[str, Any]) -> bool:
 
 def task_notification_state(task: dict[str, Any]) -> str:
     state = task_state_model(task)
+    handoff_state = state["handoff_state"]
     if state["lifecycle_state"] in FINAL_LIFECYCLE_STATES:
         if state["outcome_state"] == "done":
-            return "done"
+            return "done" if handoff_state in {"user_safe_ready", "delivered"} else "done_internal"
         if state["outcome_state"] == "blocked":
-            return "blocked_final"
+            return "blocked_final" if handoff_state in {"user_safe_ready", "delivered"} else "blocked_internal"
         if state["outcome_state"] == "partial":
-            return "partial_final"
+            return "partial_final" if handoff_state in {"user_safe_ready", "delivered"} else "partial_internal"
         if state["outcome_state"] == "failed":
             return "failed"
         if state["outcome_state"] == "cancelled":

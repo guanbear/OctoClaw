@@ -173,6 +173,26 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual([event["kind"] for event in detail["events"]], ["checkpoint", "handoff_ready"])
         self.assertEqual(detail["task_event_summary"]["latest_kind"], "handoff_ready")
 
+    def test_build_task_detail_adds_user_notified_event_for_delivered_handoff(self) -> None:
+        detail = build_task_detail(
+            {
+                "id": "research-4",
+                "worker_pool": "octoclaw-research",
+                "status": "done",
+                "summary": "release summary delivered",
+                "user_safe_summary": "最终总结已经发回原线程。",
+                "route": "spawn_single",
+                "handoff_state": "delivered",
+                "handoff_ready_at": "2026-03-29T08:00:00+00:00",
+                "delivered_at": "2026-03-29T08:02:00+00:00",
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(detail["anchor"]["state_label"], "delivered")
+        self.assertEqual([event["kind"] for event in detail["events"]], ["route_selected", "handoff_ready", "user_notified"])
+        self.assertEqual(detail["events"][-1]["time"], "2026-03-29T08:02:00+00:00")
+
     def test_build_task_anchor_exposes_session_resume_fields(self) -> None:
         anchor = build_task_anchor(
             {

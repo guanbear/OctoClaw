@@ -323,6 +323,7 @@ def _status_label(status: str) -> str:
     value = str(status or "").strip().lower()
     mapping = {
         "done": "done",
+        "done_internal": "running",
         "completed": "done",
         "failed": "failed",
         "running": "running",
@@ -332,6 +333,8 @@ def _status_label(status: str) -> str:
         "pending": "queued",
         "pending_confirm": "blocked",
         "blocked": "blocked",
+        "blocked_internal": "blocked",
+        "partial_internal": "running",
         "deferred": "deferred",
     }
     return mapping.get(value, value or "unknown")
