@@ -520,6 +520,56 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in recent], ["research-blocked-1"])
         self.assertEqual(recent[0]["_finish_type"], "blocked")
 
+    def test_get_recent_done_tasks_skips_internal_done_without_handoff(self) -> None:
+        now = patrol.now_utc()
+        completed_at = (now - patrol.timedelta(minutes=5)).isoformat()
+        tasks = [
+            {
+                "id": "research-internal-1",
+                "status": "done",
+                "summary": "",
+                "completed_at": completed_at,
+                "route": "spawn_single",
+                "worker_pool": "octoclaw-research",
+                "review_required": True,
+                "artifacts": {
+                    "worker_result": {
+                        "status": "done",
+                        "summary": "",
+                        "user_safe_summary": "",
+                        "report": "",
+                        "next_step": "none",
+                    }
+                },
+            }
+        ]
+
+        recent = patrol.get_recent_done_tasks(tasks)
+
+        self.assertEqual(recent, [])
+
+    def test_get_recent_done_tasks_includes_ready_done_handoffs(self) -> None:
+        now = patrol.now_utc()
+        completed_at = (now - patrol.timedelta(minutes=5)).isoformat()
+        tasks = [
+            {
+                "id": "research-ready-1",
+                "status": "done",
+                "summary": "final summary ready",
+                "user_safe_summary": "这是可以直接发给用户的总结。",
+                "completed_at": completed_at,
+                "route": "spawn_single",
+                "worker_pool": "octoclaw-research",
+                "review_required": True,
+                "report_path": "/tmp/research-ready-1.md",
+            }
+        ]
+
+        recent = patrol.get_recent_done_tasks(tasks)
+
+        self.assertEqual([item["id"] for item in recent], ["research-ready-1"])
+        self.assertEqual(recent[0]["_finish_type"], "done")
+
 
 if __name__ == "__main__":
     unittest.main()
