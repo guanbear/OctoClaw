@@ -96,6 +96,19 @@ function toolResponse(summary, details = {}) {
   };
 }
 
+function compactDispatchDetails(payload) {
+  const taskId = payload?.job?.id || payload?.task_id || "";
+  const reportPath = payload?.handoff?.report_path || payload?.report_path || "";
+  const status = payload?.status || (payload?.executed ? "executed" : "planned");
+  return {
+    route: payload?.route || "",
+    task_id: taskId,
+    report_path: reportPath,
+    status,
+    handoff_kind: payload?.handoff?.kind || "",
+  };
+}
+
 async function appendJsonl(pathname, payload) {
   await fs.mkdir(path.dirname(pathname), { recursive: true });
   await fs.appendFile(pathname, `${JSON.stringify(payload)}\n`, "utf8");
@@ -154,6 +167,13 @@ const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
 const OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT = [
   "When the user asks for task progress or acts on an OctoClaw task anchor, prefer the octoclaw_task_action tool.",
   "Use it for commands like: details <task_id>, queue, artifacts <task_id>, stop <task_id>, retry <task_id>, approve <task_id>, reject <task_id>.",
+].join("\n");
+const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
+  "Before dispatching this task to a subagent, briefly confirm:",
+  "- What is the core deliverable?",
+  "- What are the key constraints?",
+  "- Is the task boundary clear enough for a subagent to execute independently?",
+  "Then proceed with octoclaw_dispatch.",
 ].join("\n");
 
 function prunePolicyState() {
@@ -748,18 +768,22 @@ async function userFacingHandoff(payload, fallback, cwd) {
   const base = handoffText(payload, fallback);
   const handoff = payload?.handoff || {};
   const reportPath = handoff?.report_path || payload?.report_path || "";
+  const taskId = payload?.job?.id || payload?.task_id || "";
   if (!reportPath) {
     return base;
   }
+  const artifactsCmd = taskId
+    ? `octoclaw_task_action artifacts ${taskId}`
+    : "octoclaw_task_action artifacts";
   try {
     const preview = await readReportExcerpt(reportPath, cwd);
     if (preview?.exists && preview?.excerpt) {
-      return `${base}\n\n报告摘录：\n${preview.excerpt}\n\n完整报告：${reportPath}`;
+      return `${base}\n\n报告摘录：\n${preview.excerpt}\n\n结果已写入：\`${reportPath}\`\n（用 \`${artifactsCmd}\` 读取完整内容）`;
     }
   } catch {
     // Fall back to the base handoff text when report preview fails.
   }
-  return `${base}\n\n完整报告：${reportPath}`;
+  return `${base}\n\n结果已写入：\`${reportPath}\`\n（用 \`${artifactsCmd}\` 读取完整内容）`;
 }
 
 const plugin = {
@@ -817,6 +841,12 @@ const plugin = {
     }
     if (isDelegatedRoute(decision)) {
       prependSystem.push(OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
+    }
+    const route = String(decision?.route_decision?.route || "");
+    const isSpawnRoute = route === "spawn_single" || route === "spawn_multi";
+    const reviewRequired = Boolean(decision?.review_policy?.required);
+    if (isSpawnRoute && reviewRequired) {
+      prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
     }
     prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
     if (prependSystem.length === 0) return;
@@ -1161,7 +1191,9 @@ const plugin = {
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         const policyDecisionJson = params.policyJson || (cachedDecision ? JSON.stringify(cachedDecision) : "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
-        args.push("--wait", "--wait-timeout-seconds", "12");
+        const dispatchRoute = String(cachedDecision?.route_decision?.route || params.route || "").trim();
+        const waitTimeoutSeconds = { runner: 12, spawn_single: 30, spawn_multi: 5, direct: 5 }[dispatchRoute] ?? 12;
+        args.push("--wait", "--wait-timeout-seconds", String(waitTimeoutSeconds));
         const payload = await runJsonScript("dispatch_task.py", args, ctx?.cwd || process.cwd());
         const authoritativeDecision = payload?.policy_decision || cachedDecision || parsePolicyDecisionJson(params.policyJson || "");
         const replaySessionKey = String(
@@ -1209,7 +1241,7 @@ const plugin = {
         );
         return toolResponse(
           summary,
-          payload,
+          compactDispatchDetails(payload),
         );
       },
     },
@@ -1266,7 +1298,7 @@ const plugin = {
         );
         return toolResponse(
           summary,
-          payload,
+          compactDispatchDetails(payload),
         );
       },
     },

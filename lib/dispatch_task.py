@@ -34,6 +34,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNNER_DISPATCH_PY = os.path.join(SCRIPT_DIR, "runner_dispatch.py")
 RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
 TASK_STATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
+MAX_INLINE_CHARS = 1200
 
 
 def decision_route(decision: dict) -> dict:
@@ -433,6 +434,10 @@ def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
             report_path = _write_shared_report(job_id or f"runner-{now_compact()}", merged)
         if not reply_text:
             reply_text = compact_text(str(worker_result.get("summary", "") or ""), 220) or runner_summary or "已通过常驻 runner 完成检查。"
+        if len(reply_text) > MAX_INLINE_CHARS:
+            if not report_path:
+                report_path = _write_shared_report(job_id or f"runner-{now_compact()}", merged or reply_text)
+            reply_text = reply_text[:MAX_INLINE_CHARS] + f"\n\n[输出已截断，完整内容：{report_path}]"
         summary = runner_summary or compact_text(str(worker_result.get("summary", "") or ""), 180) or (
             "已通过常驻 runner 完成检查，详细输出已写入共享文件。" if report_path else "已通过常驻 runner 完成检查。"
         )

@@ -29,6 +29,15 @@ Use `task-state-update.py upsert` for the entry write.
 - Treat the task brief as the contract source of truth.
 - If the task is long-running, emit periodic progress events instead of silently running.
 
+When completing a major step or reaching a clear checkpoint, emit an inline signal **before** running the state command:
+
+```
+CHECKPOINT: <one-line description of what is done>
+ARTIFACTS_READY: <comma-separated file list, if any>
+```
+
+Only emit the final `---RESULT---` block after all steps are complete.
+
 Recommended event kinds:
 
 - `checkpoint`

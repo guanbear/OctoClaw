@@ -745,6 +745,11 @@ def build_task_prompt(
         "- 日志 -> tail -n 50",
         "",
         "【运行中事件】",
+        "每完成一个重要阶段，先输出内联信号（在执行 state 命令之前）：",
+        "CHECKPOINT: <当前阶段一句话总结>",
+        "ARTIFACTS_READY: <已生成的文件列表（如有）>",
+        "全部阶段完成后再输出最终 ---RESULT--- 块。",
+        "",
         (
             f"checkpoint: python3 {task_state_py} event "
             f"--id {task_id} --kind checkpoint --message '当前阶段一句话总结' --summary '当前阶段一句话总结'"

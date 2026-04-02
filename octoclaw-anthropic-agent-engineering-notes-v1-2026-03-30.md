@@ -57,6 +57,8 @@ For OctoClaw, the architectural direction is still correct:
 - ClawTeam remains an execution runtime
 - OctoClaw remains the orchestration, routing, model-policy, and observability layer
 
+**Update (2026-04-02): OpenClaw 3.31/4.1 introduced native flow task capabilities (task creation, state tracking, subtask lifecycle, possible DAG support). This changes the role of ClawTeam: it is no longer a required execution runtime. The preferred architecture is now `OpenClaw → OctoClaw policy → OpenClaw native flow_task → workers`, with ClawTeam repositioned as an optional tmux operator workbench. The six borrowings in Section 6 remain valid but their implementation paths have changed — see Section 6.4 below.**
+
 So the answer is:
 
 > OctoClaw does not need a product-position rewrite, but it does need a priority shift.
@@ -263,6 +265,21 @@ They need refinement:
 - artifact retrieval should support context-pack creation for later follow-ups
 - session resume should be explicit runtime truth, not best-effort rediscovery
 - checklist persistence should focus on parent-task continuity, not just worker-local notes
+
+### 6.4 Implementation paths after OpenClaw native flow task (added 2026-04-02)
+
+With OpenClaw 3.31/4.1 native flow task available, the implementation path for each borrowing shifts:
+
+| Borrowing | Pre-flow-task path | Post-flow-task path |
+|-----------|-------------------|---------------------|
+| 1. Richer delegated event stream | Self-built `task-events.jsonl` | Consume native flow task events; OctoClaw as adapter layer |
+| 2. IM thread binding | Borrow from ClawTeam | Still OctoClaw's own; flow task does not handle IM layer |
+| 3. Artifact index and retrieval | Borrow from ClawTeam inbox | OctoClaw maintains retrieval layer on top of native artifacts |
+| 4. Ownership lock + dead-agent recovery | ClawTeam task lifecycle | Prefer native flow task state; patrol becomes monitor layer |
+| 5. Delegated worker session resume | ClawTeam session store | Native flow task may provide; OctoClaw as fallback |
+| 6. Todo/checklist persistence | DeerFlow todo_middleware | Still OctoClaw's own |
+
+`task-state.json` is also repositioned: it is no longer the execution source of truth (that is now the native flow task), but instead becomes OctoClaw's own **policy metadata store** (model choice, cost record, route decision, patrol metadata).
 
 ## 7. Recommended next implementation order
 

@@ -34,7 +34,10 @@ def bridge_enabled() -> bool:
 
 
 def bridge_backend() -> str:
-    backend = str(bridge_config().get("backend", "mirror") or "mirror").strip().lower()
+    cfg = bridge_config()
+    backend = str(cfg.get("backend", "mirror") or "mirror").strip().lower()
+    if backend in ("hybrid", "cli") and not bool(cfg.get("cli_opt_in", False)):
+        return "mirror"
     return backend if backend in ("mirror", "hybrid", "cli") else "mirror"
 
 

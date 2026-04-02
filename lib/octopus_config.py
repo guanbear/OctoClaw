@@ -262,6 +262,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "clawteam_bridge": {
         "enabled": False,
         "backend": "mirror",
+        "cli_opt_in": False,
         "team_name": "octoclaw-validation",
         "inbox_owner": "main",
         "emit_result_mail": True,
