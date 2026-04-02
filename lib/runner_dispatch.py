@@ -10,7 +10,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-from octopus_config import RUNNER_QUEUE_FILE, load_json, runner_operator_surface
+from octopus_config import RUNNER_QUEUE_FILE, WORKSPACE, load_json, runner_operator_surface
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 QUEUE_PY = os.path.join(SCRIPT_DIR, "runner_queue.py")
@@ -135,7 +135,7 @@ def main():
     parser.add_argument("--id", default="")
     parser.add_argument("--command", required=True)
     parser.add_argument("--summary", default="")
-    parser.add_argument("--cwd", default=os.environ.get("WORKSPACE", "/workspace"))
+    parser.add_argument("--cwd", default=WORKSPACE)
     parser.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
     parser.add_argument("--model-band", dest="model_band", default="fast")
     parser.add_argument("--task-description", dest="task_description", default="")
@@ -161,7 +161,6 @@ def main():
                 playbook = parsed
         except json.JSONDecodeError:
             playbook = {}
-
     subprocess.run(
         [
             "python3",

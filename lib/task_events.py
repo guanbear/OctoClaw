@@ -8,8 +8,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+try:
+    from octopus_config import WORKSPACE
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.octopus_config import WORKSPACE
 
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 TASK_EVENTS_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "task-events.jsonl")
 SESSION_THREAD_MAP_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "session-thread-map.json")
 TASK_EVENT_SCHEMA_VERSION = "octoclaw.task_event/v1"

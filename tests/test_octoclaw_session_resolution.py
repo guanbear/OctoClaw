@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -97,6 +98,34 @@ class OctoClawSessionResolutionTests(unittest.TestCase):
                 resolved = self.module.resolve_main_session_key({"main_session": {"strategy": "latest_user_session"}})
 
         self.assertEqual(resolved, "agent:main:slack:direct:u123")
+
+    def test_workspace_infers_from_skill_root_when_env_missing(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "WORKSPACE": "",
+                "OCTOCLAW_WORKSPACE": "",
+                "OCTOCLAW_SKILL_ROOT": "/Users/demo/workspace/openclaw/skills/octopus",
+            },
+            clear=False,
+        ), patch("os.path.isdir", return_value=False):
+            module = importlib.reload(self.module)
+
+        self.assertEqual(module.WORKSPACE, "/Users/demo/workspace")
+
+    def test_workspace_prefers_explicit_env_over_inferred_path(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "WORKSPACE": "/tmp/octoclaw-explicit",
+                "OCTOCLAW_WORKSPACE": "",
+                "OCTOCLAW_SKILL_ROOT": "/Users/demo/workspace/openclaw/skills/octopus",
+            },
+            clear=False,
+        ), patch("os.path.isdir", return_value=False):
+            module = importlib.reload(self.module)
+
+        self.assertEqual(module.WORKSPACE, "/tmp/octoclaw-explicit")
 
 
 if __name__ == "__main__":

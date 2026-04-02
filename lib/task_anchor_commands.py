@@ -12,6 +12,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+from octopus_config import TASK_STATE_FILE
 from session_ops import send_agent_message
 from task_display_cli import (
     find_task,
@@ -34,8 +35,6 @@ from task_display import (
     render_task_anchor_text,
 )
 
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
-TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
 TASK_STATE_UPDATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
 
 TASK_ACTION_ALIASES = {

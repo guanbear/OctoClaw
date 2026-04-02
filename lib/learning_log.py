@@ -15,8 +15,8 @@ import os
 import re
 from datetime import datetime, timezone
 
+from octopus_config import WORKSPACE
 
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 OPENCLAW_WORKSPACE = os.path.expanduser("~/.openclaw/workspace")
 
 

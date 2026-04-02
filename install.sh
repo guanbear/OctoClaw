@@ -3,7 +3,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE="${WORKSPACE:-/workspace}"
+if [ -f "$SCRIPT_DIR/lib/workspace.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/lib/workspace.sh"
+    WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR/lib")"
+else
+    WORKSPACE="${WORKSPACE:-/workspace}"
+fi
 OCTOPUS_RULES_VERSION="v1.7.0"
 SKILL_ROOT="${SKILL_ROOT:-$SCRIPT_DIR}"
 
@@ -1502,14 +1508,17 @@ except Exception:
                 echo "⚠️  未获取到 open_id，patrol delivery fallback → feishu announce"
             fi
 
-            PATROL_MSG='运行 OctoClaw 巡逻脚本，检查任务状态，有异常则发飞书卡片。
+            PATROL_MSG="$(cat <<EOF
+运行 OctoClaw 巡逻脚本，检查任务状态，有异常则发飞书卡片。
 
 执行以下命令：
-```bash
-python3 /workspace/openclaw/skills/octopus/lib/patrol.py
-```
+\`\`\`bash
+python3 $SKILL_ROOT/lib/patrol.py
+\`\`\`
 
-执行完成后直接结束，无需回复或发送任何其他通知。'
+执行完成后直接结束，无需回复或发送任何其他通知。
+EOF
+)"
 
             if _openclaw_cron_add \
                 --name octoclaw-patrol \
@@ -1542,7 +1551,7 @@ python3 /workspace/openclaw/skills/octopus/lib/patrol.py
         --session isolated \
         --timeout-seconds 120 \
         --no-deliver \
-        --message "执行 OctoClaw 版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash /workspace/openclaw/skills/octopus/lib/auto-update.sh check 2>&1"; then
+        --message "执行 OctoClaw 版本检查：OCTOCLAW_AUTO_UPDATE_ON_CHECK=true bash $SKILL_ROOT/lib/auto-update.sh check 2>&1"; then
         echo "✅ octoclaw-update-check cron 注册成功（每天09:00 Asia/Shanghai 自动检查新版本）"
     else
         echo "⚠️  版本检查 cron 注册失败，可手动在 OpenClaw 中添加"
@@ -1598,13 +1607,13 @@ install_probe_cron() {
     fi
 
     local PROBE_MSG
-    PROBE_MSG="$(cat <<'EOF'
+    PROBE_MSG="$(cat <<EOF
 运行模型延迟探测脚本，更新延迟数据供八爪鱼调度使用。
 
 执行以下命令：
-```bash
-bash /workspace/openclaw/skills/octopus/lib/probe-models.sh
-```
+\`\`\`bash
+bash $SKILL_ROOT/lib/probe-models.sh
+\`\`\`
 
 执行完成后直接结束，无需回复或发送任何通知。
 EOF
@@ -1662,13 +1671,13 @@ install_plan_sync_cron() {
     fi
 
     local PLAN_SYNC_MSG
-    PLAN_SYNC_MSG="$(cat <<'EOF'
+    PLAN_SYNC_MSG="$(cat <<EOF
 同步 Omniroute 套餐状态并刷新 OctoClaw 自动选模策略。
 
 执行以下命令：
-```bash
-cd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/sync-omniroute-plan.py sync && WORKSPACE=/workspace python3 ./lib/model-intel.py refresh --mode auto
-```
+\`\`\`bash
+cd $SKILL_ROOT && WORKSPACE=$WORKSPACE PYTHONPATH=$SKILL_ROOT/lib python3 ./lib/sync-omniroute-plan.py sync && WORKSPACE=$WORKSPACE python3 ./lib/model-intel.py refresh --mode auto
+\`\`\`
 
 执行完成后直接结束，无需回复或发送任何通知。
 EOF
@@ -1719,13 +1728,13 @@ install_error_review_schedule() {
             return 0
         fi
         local ERROR_REVIEW_MSG
-        ERROR_REVIEW_MSG="$(cat <<'EOF'
+        ERROR_REVIEW_MSG="$(cat <<EOF
 执行 OctoClaw 夜间错误复盘。
 
 执行以下命令：
-```bash
-cd /workspace/openclaw/skills/octopus && WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 ./lib/nightly_error_review.py
-```
+\`\`\`bash
+cd $SKILL_ROOT && WORKSPACE=$WORKSPACE PYTHONPATH=$SKILL_ROOT/lib python3 ./lib/nightly_error_review.py
+\`\`\`
 
 执行完成后直接结束，无需额外回复。
 EOF
@@ -1760,8 +1769,8 @@ fi
 if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
     echo ""
     echo "🔍 正在探测模型延迟（首次安装）..."
-    if [ -f "/workspace/openclaw/skills/ironclaw/bin/ironclaw" ]; then
-        /workspace/openclaw/skills/ironclaw/bin/ironclaw model probe 2>/dev/null && echo "✅ 模型延迟探测完成" || echo "⚠️  探测跳过（铁甲虾未安装）"
+    if [ -f "$WORKSPACE/openclaw/skills/ironclaw/bin/ironclaw" ]; then
+        "$WORKSPACE/openclaw/skills/ironclaw/bin/ironclaw" model probe 2>/dev/null && echo "✅ 模型延迟探测完成" || echo "⚠️  探测跳过（铁甲虾未安装）"
     else
         if [ -f "$WORKSPACE/openclaw/skills/octopus/lib/probe-models.sh" ]; then
             bash "$WORKSPACE/openclaw/skills/octopus/lib/probe-models.sh" 2>/dev/null && echo "✅ 模型延迟探测完成（OctoClaw 自探测）" || echo "⚠️  探测脚本执行失败，延迟数据将由 octoclaw-probe cron 定期更新"

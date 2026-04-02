@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
-from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, load_json, load_octopus_config, spawn_operator_surface
+from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
 from runtime_protocol import normalize_worker_result
 from runner_playbooks import infer_runner_playbook
 from worker_taxonomy import (
@@ -780,7 +780,7 @@ def main():
     parser = argparse.ArgumentParser(description="Unified OctoClaw dispatcher")
     parser.add_argument("--task", required=True)
     parser.add_argument("--command", default="")
-    parser.add_argument("--cwd", default=os.environ.get("WORKSPACE", "/workspace"))
+    parser.add_argument("--cwd", default=WORKSPACE)
     parser.add_argument("--summary", default="")
     parser.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
     parser.add_argument("--id", default="")

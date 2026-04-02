@@ -11,6 +11,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+from octopus_config import TASK_STATE_FILE
 from runtime_task_record import normalize_task_records
 from task_display import (
     build_task_actions,
@@ -23,10 +24,6 @@ from task_display import (
     build_task_timeline,
     render_task_anchor_text,
 )
-
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
-TASK_STATE_FILE = f"{WORKSPACE}/tmp/octopus/task-state.json"
-
 
 def load_tasks(path: str) -> list[dict[str, Any]]:
     try:

@@ -11,8 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from octopus_config import WORKSPACE
 
-DEFAULT_WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
+DEFAULT_WORKSPACE = WORKSPACE
 DEFAULT_REPLAY_LOG = Path(DEFAULT_WORKSPACE) / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
 DEFAULT_MIN_POLICY_EVENTS = 30
 DEFAULT_MIN_RUNNER_EVENTS = 3

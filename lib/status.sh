@@ -44,6 +44,8 @@ from octopus_config import (
     MODE_FILE,
     MODEL_POLICY_FILE,
     RUNNER_HEALTH_FILE,
+    RUNNER_QUEUE_FILE,
+    TASK_STATE_FILE,
     MAIN_AGENT_SESSIONS_FILE,
     resolve_main_session_key,
     load_json,
@@ -77,9 +79,6 @@ from status_render import (
     short_model,
     summarize_model_health,
 )
-
-TASK_FILE = "/workspace/tmp/octopus/task-state.json"
-RUNNER_QUEUE_FILE = "/workspace/tmp/octopus/runner-queue.json"
 
 now = datetime.now(timezone(timedelta(hours=8)))
 

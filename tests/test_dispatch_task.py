@@ -157,6 +157,5 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
         self.assertEqual(plan["review"]["profile"], "review")
         self.assertEqual(plan["review"]["model_band"], "strong")
 
-
 if __name__ == "__main__":
     unittest.main()

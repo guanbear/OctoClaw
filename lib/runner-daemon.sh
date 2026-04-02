@@ -5,8 +5,10 @@
 
 set -euo pipefail
 
-WORKSPACE="${WORKSPACE:-/workspace}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/workspace.sh"
+WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
 RUNNER_SCRIPT="$SCRIPT_DIR/runner_loop.sh"
 PID_FILE="$WORKSPACE/tmp/octopus/runner-daemon.pid"
 LOG_FILE="$WORKSPACE/tmp/octopus/runner.log"

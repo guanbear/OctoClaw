@@ -33,6 +33,9 @@ import requests
 from datetime import datetime
 import time
 
+from octopus_config import FEISHU_ALMIGHTY_DIR as OCTO_FEISHU_ALMIGHTY_DIR
+from octopus_config import FEISHU_CARD_STATE_FILE
+
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 def _get_app_id():
     """从 openclaw 配置动态读取飞书 APP_ID，fallback 到硬编码默认值"""
@@ -77,9 +80,9 @@ def get_target_open_id():
 
 TARGET_OPEN_ID = get_target_open_id()
 
-STATE_FILE = "/workspace/tmp/octopus/feishu-card-state.json"
+STATE_FILE = FEISHU_CARD_STATE_FILE
 
-FEISHU_ALMIGHTY_DIR = "/workspace/openclaw/skills/feishu-almighty"
+FEISHU_ALMIGHTY_DIR = OCTO_FEISHU_ALMIGHTY_DIR
 
 FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 

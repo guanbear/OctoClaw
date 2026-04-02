@@ -2,7 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE="${WORKSPACE:-/workspace}"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/workspace.sh"
+WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
 QUEUE_PY="$SCRIPT_DIR/runner_queue.py"
 TASK_STATE_PY="$SCRIPT_DIR/task-state-update.py"
 
@@ -164,7 +166,7 @@ session_id="$(decode_field "${job_fields[8]:-}")"
 agent_id="$(decode_field "${job_fields[9]:-}")"
 agent_namespace="$(decode_field "${job_fields[10]:-}")"
 managed_by_octoclaw="$(decode_field "${job_fields[11]:-}")"
-  cwd="${cwd:-/workspace}"
+  cwd="${cwd:-$WORKSPACE}"
   timeout_seconds="${timeout_seconds:-$DEFAULT_TIMEOUT}"
 
   results_dir="${WORKSPACE}/tmp/octopus/runner-results"

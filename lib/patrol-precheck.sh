@@ -1,5 +1,9 @@
 #!/bin/bash
-STATE_FILE="/workspace/tmp/octopus/task-state.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/workspace.sh"
+WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
+STATE_FILE="$WORKSPACE/tmp/octopus/task-state.json"
 if [ ! -f "$STATE_FILE" ]; then
   echo "PATROL_SKIP: no state file"
   exit 0

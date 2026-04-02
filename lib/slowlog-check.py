@@ -8,8 +8,10 @@ slowlog-check.py - 主 Agent 慢响应检测
 import json, os, glob, sys, subprocess
 from datetime import datetime, timezone, timedelta
 
+from octopus_config import WORKSPACE
+
 SESSION_DIR = "/root/.openclaw/agents/main/sessions/"
-ERRORS_MD = "/workspace/.learnings/ERRORS.md"
+ERRORS_MD = f"{WORKSPACE}/.learnings/ERRORS.md"
 SLOWLOG_STATE = "/tmp/octopus-slowlog-lastrun"
 THRESHOLD_SEC = 180  # 3分钟
 

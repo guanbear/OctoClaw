@@ -16,6 +16,7 @@ from octopus_config import (
     RUNNER_HEALTH_FILE,
     RUNNER_QUEUE_FILE,
     RUNNER_RESULTS_DIR,
+    WORKSPACE,
     load_json,
 )
 
@@ -165,7 +166,7 @@ def cmd_enqueue(args):
             "id": args.id,
             "summary": args.summary or args.id,
             "command": args.shell_command,
-            "cwd": args.cwd or "/workspace",
+            "cwd": args.cwd or WORKSPACE,
             "timeout_seconds": args.timeout_seconds,
             "status": "queued",
             "model_band": args.model_band or "fast",
@@ -261,7 +262,7 @@ def main():
     p_enqueue.add_argument("--id", required=True)
     p_enqueue.add_argument("--command", dest="shell_command", required=True)
     p_enqueue.add_argument("--summary", default="")
-    p_enqueue.add_argument("--cwd", default="/workspace")
+    p_enqueue.add_argument("--cwd", default=WORKSPACE)
     p_enqueue.add_argument("--timeout-seconds", dest="timeout_seconds", type=int, default=120)
     p_enqueue.add_argument("--model-band", dest="model_band", default="fast")
     p_enqueue.add_argument("--model", default="")

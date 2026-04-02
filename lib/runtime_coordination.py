@@ -13,12 +13,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
+    from octopus_config import WORKSPACE
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.octopus_config import WORKSPACE
+
+try:
     from task_events import register_session_binding
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.task_events import register_session_binding
 
-
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 ARTIFACT_INDEX_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "artifact-index.json")
 OWNERSHIP_STORE_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "task-ownership.json")
 WORKER_SESSION_STORE_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "worker-session-store.json")

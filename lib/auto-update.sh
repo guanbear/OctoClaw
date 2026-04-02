@@ -3,12 +3,15 @@ set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB_DIR="$SKILL_DIR/lib"
+# shellcheck source=/dev/null
+source "$LIB_DIR/workspace.sh"
+WORKSPACE="$(resolve_octoclaw_workspace "$LIB_DIR")"
 MANAGER="$SKILL_DIR/bin/octoclaw-manage.sh"
 MANIFEST_FILE="$SKILL_DIR/.octoclaw-source.json"
 DEFAULT_REPO_URL="${OCTOCLAW_REPO_URL:-https://github.com/guanbear/OctoClaw.git}"
 DEFAULT_REF="${OCTOCLAW_REF:-codex/release-v0.1.0}"
 DEFAULT_SOURCE_KIND="${OCTOCLAW_SOURCE_KIND:-github}"
-DEFAULT_CHECKOUT_DIR="${OCTOCLAW_CHECKOUT_DIR:-/workspace/openclaw/repos/octoclaw}"
+DEFAULT_CHECKOUT_DIR="${OCTOCLAW_CHECKOUT_DIR:-$WORKSPACE/openclaw/repos/octoclaw}"
 AUTO_UPDATE_ON_CHECK="${OCTOCLAW_AUTO_UPDATE_ON_CHECK:-false}"
 
 read_manifest_field() {

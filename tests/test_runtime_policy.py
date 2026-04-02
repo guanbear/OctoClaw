@@ -11,7 +11,7 @@ from typing import Optional
 import sys
 
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "lib")))
-from octoclaw_policy import route_hint_required
+from octoclaw_policy import build_decision, route_hint_required
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -295,6 +295,14 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["budget_policy"]["budget_cap"], "low")
         self.assertEqual(payload["budget_policy"]["max_workers"], 1)
         self.assertEqual(payload["prompt_contract"]["merge_contract"], "inspect_report")
+
+    def test_force_route_runner_keeps_runner_as_final_route(self) -> None:
+        payload = build_decision("检查接口健康状态和响应头", "printf ok", {}, force_route="runner")
+        self.assertEqual(payload["route_decision"]["system_preferred_route"], "runner")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
+        self.assertEqual(payload["model_policy"]["model_band"], "fast")
 
     def test_model_policy_tracks_worker_pool_first_without_legacy_compat_fields(self) -> None:
         payload = self.run_policy(

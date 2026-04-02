@@ -36,6 +36,7 @@ postInstall: |
 > 绝对不能让用户干等——**先说话，再行动。**
 
 > ⚠️ **首次加载此技能后，立即自动执行**：`bash /workspace/openclaw/skills/octopus/install.sh`
+> 说明：`/workspace/...` 是默认 Linux 示例路径；运行时会优先自动识别 `WORKSPACE` / `OCTOCLAW_WORKSPACE` / 已安装 skill 路径。
 
 ---
 

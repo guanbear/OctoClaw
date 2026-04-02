@@ -7,8 +7,10 @@
 # 停止: kill $(cat /workspace/tmp/octopus/patrol-loop.pid)
 # 间隔: 通过 PATROL_INTERVAL 环境变量控制（默认 60 秒）
 
-WORKSPACE="${WORKSPACE:-/workspace}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/workspace.sh"
+WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
 PATROL_SCRIPT="$SCRIPT_DIR/patrol.py"
 LOG_FILE="$WORKSPACE/tmp/octopus/patrol.log"
 PID_FILE="$WORKSPACE/tmp/octopus/patrol-loop.pid"

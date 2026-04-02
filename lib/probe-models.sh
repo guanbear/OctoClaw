@@ -2,17 +2,26 @@
 # 八爪鱼轻量模型延迟探测
 # 如果铁甲虾在，使用铁甲虾的探测；否则自己探测
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/workspace.sh"
+WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
 LATENCY_FILE="/tmp/ironclaw-model-latency.json"
 MAX_AGE=1200  # 20分钟
-IRONCLAW_BIN="/workspace/openclaw/skills/ironclaw/bin/ironclaw"
+IRONCLAW_BIN="${IRONCLAW_BIN:-$WORKSPACE/openclaw/skills/ironclaw/bin/ironclaw}"
 
 # ── 公共函数：从延迟文件生成模型别名 ────────────────────────────────
 generate_model_aliases() {
 python3 << 'PYEOF'
 import json, time, os
 
+WORKSPACE = (
+    os.environ.get("WORKSPACE")
+    or os.environ.get("OCTOCLAW_WORKSPACE")
+    or "/workspace"
+)
 LATENCY_FILE = "/tmp/ironclaw-model-latency.json"
-ALIAS_FILE   = "/workspace/tmp/octopus-model-aliases.json"
+ALIAS_FILE = os.path.join(WORKSPACE, "tmp", "octopus-model-aliases.json")
 
 DEFAULTS = {
     "trivial": "lixiang-glm-5/kivy-glm-5",            # 用户偏好：trivial 用 GLM，不用 Kimi
@@ -79,7 +88,7 @@ def select_model_with_aws_preference(keyword, models_dict, threshold=0.5):
 
 def check_pending_confirm(tier, proposed_model):
     """检查 task-state.json 是否已有针对该 tier+proposed_model 的 pending_confirm 记录"""
-    state_file = "/workspace/tmp/octopus/task-state.json"
+    state_file = os.path.join(WORKSPACE, "tmp", "octopus", "task-state.json")
     try:
         with open(state_file) as f:
             state = json.load(f)
@@ -97,7 +106,7 @@ def check_pending_confirm(tier, proposed_model):
 def write_pending_confirm(tier, current_model, proposed_model, speedup_pct):
     """向 task-state.json 写入 pending_confirm 记录"""
     import datetime
-    state_file = "/workspace/tmp/octopus/task-state.json"
+    state_file = os.path.join(WORKSPACE, "tmp", "octopus", "task-state.json")
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
     try:
         with open(state_file) as f:
@@ -261,7 +270,7 @@ def send_model_switch_card(tier, current_model, proposed_model, current_lat, pro
     return send_feishu_text(msg)
 
 
-CANDIDATES_FILE = "/workspace/tmp/octopus/.model-switch-candidates.json"
+CANDIDATES_FILE = os.path.join(WORKSPACE, "tmp", "octopus", ".model-switch-candidates.json")
 DEBOUNCE_COUNT  = 3       # 至少连续检测到 N 次
 DEBOUNCE_MINS   = 30      # 且首次检测距今至少 N 分钟
 
@@ -664,7 +673,7 @@ trivial_model = trivial_model or DEFAULTS["trivial"]
 # 读取当前已写入的别名文件里的 trivial 模型，判断是否发生了跨厂商切换
 _trivial_current = None
 try:
-    ALIAS_FILE = "/workspace/tmp/octopus-model-aliases.json"
+    ALIAS_FILE = os.path.join(WORKSPACE, "tmp", "octopus-model-aliases.json")
     if os.path.exists(ALIAS_FILE):
         with open(ALIAS_FILE) as _f:
             _existing = json.load(_f)

@@ -768,6 +768,7 @@ def apply_forced_route(route_meta: dict[str, Any], forced_route: str) -> dict[st
     if not forced_route:
         return route_meta
     payload = dict(route_meta)
+    payload["system_preferred_route"] = forced_route
     payload["route"] = forced_route
     reasons = list(payload.get("reason_codes", []) or [])
     reasons.insert(0, f"forced_route:{forced_route}")

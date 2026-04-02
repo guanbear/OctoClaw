@@ -26,6 +26,11 @@ Recommended operator setup for the unified runtime direction:
 - one fixed `tmux` slot for `patrol-loop`
 - later attach ClawTeam task/inbox/board on top of the same workbench
 
+Workspace note:
+
+- OctoClaw now auto-detects its workspace from `WORKSPACE`, `OCTOCLAW_WORKSPACE`, or the installed skill path.
+- `/workspace/...` below is the default Linux example path, not a hard requirement.
+
 ---
 
 ## Why OctoClaw
