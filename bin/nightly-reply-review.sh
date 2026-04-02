@@ -22,6 +22,8 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 git -C "${REPO_ROOT}" fetch origin codex/release-v0.1.0
 git -C "${REPO_ROOT}" reset --hard origin/codex/release-v0.1.0
 
+openclaw agents add octoclaw-reviewer --workspace "${WORKSPACE}" --model zai/glm-4.7 --non-interactive --json >/dev/null 2>&1 || true
+
 scp "${SSH_OPTS[@]}" "${VM_HOST}:/root/.openclaw/agents/main/sessions/sessions.json" "${TMP_DIR}/sessions.json"
 python3 - <<'PY' "${TMP_DIR}/sessions.json" "${TMP_DIR}/session-files.txt"
 import json, sys

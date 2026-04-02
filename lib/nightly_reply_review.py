@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default="")
     parser.add_argument("--prompt-output", default="")
     parser.add_argument("--session-id", default="")
-    parser.add_argument("--agent", default="main")
+    parser.add_argument("--agent", default="octoclaw-reviewer")
     parser.add_argument("--thinking", default="medium")
     parser.add_argument("--skip-agent", action="store_true")
     return parser.parse_args()
