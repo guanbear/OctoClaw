@@ -1102,6 +1102,16 @@ def finish_task_from_session_result(task: dict, worker_result: dict) -> bool:
     return True
 
 
+def _task_handoff_already_complete(task: dict, existing_result: dict | None = None) -> bool:
+    result = existing_result if isinstance(existing_result, dict) else {}
+    state_model = task_state_model(task)
+    handoff_state = str(state_model.get("handoff_state", "") or task.get("handoff_state", "") or "").strip().lower()
+    if handoff_state not in {"user_safe_ready", "delivered"}:
+        return False
+    user_safe_summary = str(task.get("user_safe_summary", "") or result.get("user_safe_summary", "") or "").strip()
+    return bool(user_safe_summary)
+
+
 def hydrate_completed_session_results(tasks: list[dict]) -> int:
     hydrated = 0
     for task in tasks:
@@ -1115,7 +1125,7 @@ def hydrate_completed_session_results(tasks: list[dict]) -> int:
         if not session_id:
             continue
         existing_result = _task_artifacts(task).get("worker_result")
-        if isinstance(existing_result, dict) and str(existing_result.get("status", "") or "").strip():
+        if isinstance(existing_result, dict) and str(existing_result.get("status", "") or "").strip() and _task_handoff_already_complete(task, existing_result):
             continue
         worker_result = extract_session_worker_result(
             session_id,
