@@ -25,6 +25,18 @@ TERMINAL_JOB_RETENTION_HOURS = 48
 MAX_TERMINAL_JOBS = 200
 
 
+def parse_json_arg(value: str) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("expected JSON object")
+    return parsed
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat()
 
@@ -137,6 +149,22 @@ def runner_model() -> str:
     return ""
 
 
+def _promote_taskflow_fields(job: dict[str, Any], artifacts: dict[str, Any]) -> None:
+    if not isinstance(job, dict) or not isinstance(artifacts, dict):
+        return
+    binding = artifacts.get("openclaw_taskflow", {})
+    if not isinstance(binding, dict) or not binding:
+        return
+    job["openclaw_taskflow"] = dict(binding)
+    job["openclaw_taskflow_backend"] = str(binding.get("backend", "") or "")
+    job["openclaw_taskflow_state"] = str(binding.get("binding_state", "") or "")
+    job["openclaw_task_runtime"] = str(binding.get("task_runtime", "") or "")
+    job["openclaw_flow_runtime"] = str(binding.get("flow_runtime", "") or "")
+    job["openclaw_task_id"] = str(binding.get("task_id", "") or "")
+    job["openclaw_flow_id"] = str(binding.get("flow_id", "") or "")
+    job["openclaw_flow_kind"] = str(binding.get("flow_kind", "") or "")
+
+
 def cmd_ensure(_args):
     ensure_parent(RUNNER_QUEUE_FILE)
     ensure_parent(RUNNER_HEALTH_FILE)
@@ -162,6 +190,7 @@ def cmd_enqueue(args):
     def mutate(state):
         jobs = state["jobs"]
         existing = next((job for job in jobs if job.get("id") == args.id), None)
+        artifacts = dict(args.artifacts_json) if isinstance(args.artifacts_json, dict) else {}
         job = {
             "id": args.id,
             "summary": args.summary or args.id,
@@ -182,7 +211,12 @@ def cmd_enqueue(args):
             "agent_id": args.agent_id or "",
             "agent_namespace": args.agent_namespace or "",
             "managed_by_octoclaw": args.managed_by_octoclaw or "",
+            "route": "runner",
+            "runtime": "runner",
+            "executor": "runner",
+            "artifacts": artifacts,
         }
+        _promote_taskflow_fields(job, artifacts)
         if existing:
             existing.update(job)
         else:
@@ -272,6 +306,7 @@ def main():
     p_enqueue.add_argument("--agent-id", dest="agent_id", default="")
     p_enqueue.add_argument("--agent-namespace", dest="agent_namespace", default="")
     p_enqueue.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", default="")
+    p_enqueue.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
 
     p_claim = sub.add_parser("claim")
     p_claim.add_argument("--worker-id", required=True)

@@ -68,6 +68,19 @@ class RunnerRuntimeTests(unittest.TestCase):
             payload = json.loads(dispatch.stdout.strip())
             self.assertEqual(payload["id"], "runner-test-1")
             self.assertEqual(payload["status"], "queued")
+            self.assertEqual(payload["route"], "runner")
+            self.assertEqual(payload["runtime"], "runner")
+            self.assertEqual(payload["openclaw_taskflow_backend"], "mirror")
+            self.assertEqual(payload["openclaw_taskflow_state"], "mirrored")
+            self.assertEqual(payload["openclaw_task_runtime"], "openclaw_task")
+            self.assertEqual(payload["artifacts"]["openclaw_taskflow"]["binding_state"], "mirrored")
+
+            queued_task = self._find_task(workspace, "runner-test-1")
+            self.assertEqual(queued_task["status"], "queued")
+            self.assertEqual(queued_task["openclaw_taskflow_backend"], "mirror")
+            self.assertEqual(queued_task["openclaw_taskflow_state"], "mirrored")
+            self.assertEqual(queued_task["openclaw_task_runtime"], "openclaw_task")
+            self.assertEqual(queued_task["artifacts"]["openclaw_taskflow"]["task_runtime"], "openclaw_task")
 
             loop = subprocess.run(
                 ["bash", str(RUNNER_LOOP)],

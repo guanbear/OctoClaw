@@ -9,7 +9,9 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
+from openclaw_taskflow_adapter import register_taskflow_binding
 from octopus_config import RUNNER_QUEUE_FILE, WORKSPACE, load_json, runner_operator_surface
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -118,7 +120,7 @@ def resolve_runner_model() -> str:
     return ""
 
 
-def runner_artifacts(playbook: dict | None = None) -> dict:
+def runner_artifacts(playbook: dict | None = None, taskflow_binding: dict | None = None) -> dict:
     surface = runner_operator_surface()
     payload = {
         "execution_backend": "runner_queue",
@@ -127,7 +129,35 @@ def runner_artifacts(playbook: dict | None = None) -> dict:
     }
     if isinstance(playbook, dict) and playbook:
         payload["runner_plan"] = dict(playbook)
+    if isinstance(taskflow_binding, dict) and taskflow_binding:
+        payload["openclaw_taskflow"] = dict(taskflow_binding)
     return payload
+
+
+def build_runner_task_seed(args: argparse.Namespace, *, model: str, playbook: dict | None = None) -> dict[str, Any]:
+    return {
+        "id": args.id,
+        "model": model,
+        "status": "queued",
+        "summary": args.summary or args.id,
+        "model_band": args.model_band or "fast",
+        "task_description": args.task_description or args.command,
+        "executor": "runner",
+        "route": "runner",
+        "runtime": "runner",
+        "worker_pool": "octoclaw-runner",
+        "work_type": "ops",
+        "phase": "inspect",
+        "protocol": "normal",
+        "profile": "ops-fast",
+        "review_required": False,
+        "session_key": args.session_key or "",
+        "session_id": args.session_id or "",
+        "agent_id": args.agent_id or "",
+        "agent_namespace": args.agent_namespace or "",
+        "managed_by_octoclaw": args.managed_by_octoclaw or "",
+        "artifacts": runner_artifacts(playbook),
+    }
 
 
 def main():
@@ -161,6 +191,9 @@ def main():
                 playbook = parsed
         except json.JSONDecodeError:
             playbook = {}
+    task_seed = build_runner_task_seed(args, model=model, playbook=playbook)
+    taskflow_binding = register_taskflow_binding(task_seed)
+    artifacts = runner_artifacts(playbook, taskflow_binding)
     subprocess.run(
         [
             "python3",
@@ -201,7 +234,7 @@ def main():
             "--review-required",
             "false",
             "--artifacts-json",
-            json.dumps(runner_artifacts(playbook), ensure_ascii=False),
+            json.dumps(artifacts, ensure_ascii=False),
             *(["--session-key", args.session_key] if args.session_key else []),
             *(["--session-id", args.session_id] if args.session_id else []),
             *(["--agent-id", args.agent_id] if args.agent_id else []),
@@ -238,8 +271,20 @@ def main():
             *(["--agent-id", args.agent_id] if args.agent_id else []),
             *(["--agent-namespace", args.agent_namespace] if args.agent_namespace else []),
             *(["--managed-by-octoclaw", args.managed_by_octoclaw] if args.managed_by_octoclaw else []),
+            "--artifacts-json",
+            json.dumps(artifacts, ensure_ascii=False),
         ]
     )
+    if isinstance(payload, dict):
+        payload.setdefault("artifacts", artifacts)
+        if taskflow_binding:
+            payload.setdefault("openclaw_taskflow", dict(taskflow_binding))
+            payload.setdefault("openclaw_taskflow_backend", str(taskflow_binding.get("backend", "") or ""))
+            payload.setdefault("openclaw_taskflow_state", str(taskflow_binding.get("binding_state", "") or ""))
+            payload.setdefault("openclaw_task_runtime", str(taskflow_binding.get("task_runtime", "") or ""))
+            payload.setdefault("openclaw_flow_runtime", str(taskflow_binding.get("flow_runtime", "") or ""))
+            payload.setdefault("openclaw_task_id", str(taskflow_binding.get("task_id", "") or ""))
+            payload.setdefault("openclaw_flow_id", str(taskflow_binding.get("flow_id", "") or ""))
     print(json.dumps(payload, ensure_ascii=False))
 
 
