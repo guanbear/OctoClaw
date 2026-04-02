@@ -33,6 +33,68 @@ SYSTEM_TASK_PATTERNS = (
 )
 
 
+def _taskflow_field(task: dict[str, Any], key: str) -> str:
+    direct = str(task.get(f"openclaw_{key}", "") or "").strip()
+    if direct:
+        return direct
+    binding = task.get("openclaw_taskflow", {}) if isinstance(task.get("openclaw_taskflow", {}), dict) else {}
+    return str(binding.get(key, "") or "").strip()
+
+
+def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
+    tracked = 0
+    mirrored = 0
+    native_bound = 0
+    native_active = 0
+    handoff_ready = 0
+    delivered = 0
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        binding_state = _taskflow_field(task, "taskflow_state") or _taskflow_field(task, "binding_state")
+        native_binding = _taskflow_field(task, "native_binding_state")
+        native_status = _taskflow_field(task, "native_status").lower()
+        handoff_state = str(task.get("handoff_state", "") or "").strip().lower()
+        if binding_state:
+            tracked += 1
+            if "mirror" in binding_state:
+                mirrored += 1
+        if native_binding == "bound":
+            native_bound += 1
+        if native_status in {"queued", "running", "blocked"}:
+            native_active += 1
+        if handoff_state == "user_safe_ready":
+            handoff_ready += 1
+        elif handoff_state == "delivered":
+            delivered += 1
+
+    return {
+        "tracked": tracked,
+        "mirrored": mirrored,
+        "native_bound": native_bound,
+        "native_active": native_active,
+        "handoff_ready": handoff_ready,
+        "delivered": delivered,
+    }
+
+
+def render_taskflow_substrate_summary(summary: dict[str, int]) -> str:
+    tracked = int(summary.get("tracked", 0) or 0)
+    if tracked <= 0:
+        return "🧩 Substrate：no mirrored taskflow bindings yet"
+    mirrored = int(summary.get("mirrored", 0) or 0)
+    native_bound = int(summary.get("native_bound", 0) or 0)
+    native_active = int(summary.get("native_active", 0) or 0)
+    handoff_ready = int(summary.get("handoff_ready", 0) or 0)
+    delivered = int(summary.get("delivered", 0) or 0)
+    return (
+        "🧩 Substrate："
+        f"tracked {tracked} · mirrored {mirrored} · native bound {native_bound} · "
+        f"native active {native_active} · handoff ready/delivered {handoff_ready}/{delivered}"
+    )
+
+
 def task_executor(task: dict) -> str:
     return resolve_executor(task)
 
@@ -667,6 +729,13 @@ def render_status_text_compact(snapshot: dict) -> str:
     recent_failed_count = len(snapshot["failed_recent"])
     problem_tasks = list(snapshot["steer_needed"]) + list(snapshot["failed_recent"])
     system_maintenance = list(snapshot.get("system_active_lineages", [])) + list(snapshot.get("system_running", [])) + list(snapshot.get("system_queued", [])) + list(snapshot.get("system_done_recent", []))
+    substrate_summary = summarize_taskflow_substrate(
+        list(snapshot["running"])
+        + list(snapshot["queued"])
+        + list(snapshot["pending"])
+        + list(snapshot["done_recent"])
+        + [lineage.get("parent", {}) for lineage in snapshot.get("active_lineages", []) if isinstance(lineage.get("parent", {}), dict)]
+    )
     lines = [
         "🐙 八爪鱼（OctoClaw）任务收件箱",
         (
@@ -674,6 +743,7 @@ def render_status_text_compact(snapshot: dict) -> str:
             f"排队 {len(snapshot['queued'])} | 待确认 {len(snapshot['pending'])} | "
             f"异常 {len(problem_tasks)} | 近期完成 {recent_done_count}"
         ),
+        render_taskflow_substrate_summary(substrate_summary),
         "",
     ]
 

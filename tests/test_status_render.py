@@ -8,8 +8,10 @@ from lib.status_render import (
     render_model_health_summary,
     render_status_task_anchors,
     render_status_lanes,
+    render_taskflow_substrate_summary,
     render_status_table,
     render_status_text_compact,
+    summarize_taskflow_substrate,
     summarize_model_health,
 )
 
@@ -74,6 +76,13 @@ class StatusRenderTests(unittest.TestCase):
                 "runtime": "subagent",
                 "executor": "subagent",
                 "started_at": "2026-03-28T11:50:00+00:00",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored_bound",
+                    "native_binding_state": "bound",
+                    "native_status": "running",
+                    "native_runtime": "subagent",
+                },
             },
             {
                 "id": "runner-1",
@@ -84,6 +93,10 @@ class StatusRenderTests(unittest.TestCase):
                 "route": "runner",
                 "runtime": "runner",
                 "executor": "runner",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored",
+                },
                 "artifacts": {
                     "operator_hint": "tmux octoclaw-runtime:runner",
                 },
@@ -106,6 +119,7 @@ class StatusRenderTests(unittest.TestCase):
         rendered = render_status_text_compact(snapshot)
 
         self.assertIn("🐙 八爪鱼（OctoClaw）任务收件箱", rendered)
+        self.assertIn("🧩 Substrate：tracked 2 · mirrored 2 · native bound 1 · native active 1 · handoff ready/delivered 0/0", rendered)
         self.assertIn("🕸️ 协作流程（1个）", rendered)
         self.assertIn("Fix and verify the release pipeline", rendered)
         self.assertIn("子步骤：planner(done) · review(queued)", rendered)
@@ -238,6 +252,49 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("cooldown 1", rendered)
         self.assertIn("quota high/critical 1/1", rendered)
         self.assertIn("zhipu/GLM-5.1 cooldown quota:high", rendered)
+
+    def test_taskflow_substrate_summary_counts_bound_active_and_delivered_tasks(self) -> None:
+        summary = summarize_taskflow_substrate(
+            [
+                {
+                    "id": "bound-running",
+                    "openclaw_taskflow": {
+                        "binding_state": "mirrored_bound",
+                        "native_binding_state": "bound",
+                        "native_status": "running",
+                    },
+                },
+                {
+                    "id": "delivered-done",
+                    "openclaw_taskflow": {
+                        "binding_state": "mirrored_bound",
+                        "native_binding_state": "bound",
+                        "native_status": "done",
+                    },
+                    "handoff_state": "delivered",
+                },
+                {
+                    "id": "mirror-only",
+                    "openclaw_taskflow": {
+                        "binding_state": "mirrored",
+                    },
+                    "handoff_state": "user_safe_ready",
+                },
+            ]
+        )
+
+        self.assertEqual(summary["tracked"], 3)
+        self.assertEqual(summary["mirrored"], 3)
+        self.assertEqual(summary["native_bound"], 2)
+        self.assertEqual(summary["native_active"], 1)
+        self.assertEqual(summary["handoff_ready"], 1)
+        self.assertEqual(summary["delivered"], 1)
+
+        rendered = render_taskflow_substrate_summary(summary)
+        self.assertIn("tracked 3", rendered)
+        self.assertIn("native bound 2", rendered)
+        self.assertIn("native active 1", rendered)
+        self.assertIn("handoff ready/delivered 1/1", rendered)
 
     def test_task_anchor_render_outputs_text_fallback_anchors(self) -> None:
         snapshot = build_status_snapshot(self.tasks, now=self.now)
