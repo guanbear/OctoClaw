@@ -79,6 +79,8 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(tasks[0]["openclaw_taskflow_backend"], "mirror")
         self.assertEqual(tasks[0]["openclaw_taskflow_state"], "mirrored")
+        self.assertEqual(tasks[0]["openclaw_task_runtime"], "openclaw_task")
+        self.assertEqual(tasks[0]["openclaw_flow_runtime"], "")
         self.assertEqual(tasks[0]["openclaw_flow_kind"], "")
         artifacts = tasks[0].get("artifacts", {})
         self.assertIsInstance(artifacts, dict)

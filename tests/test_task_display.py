@@ -296,6 +296,8 @@ class TaskDisplayTests(unittest.TestCase):
                 "openclaw_taskflow": {
                     "backend": "mirror",
                     "binding_state": "mirrored_bound",
+                    "task_runtime": "openclaw_task",
+                    "flow_runtime": "openclaw_flow",
                     "native_binding_state": "bound",
                     "native_status": "running",
                     "native_runtime": "subagent",
@@ -311,6 +313,8 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual(anchor["openclaw_taskflow_backend"], "mirror")
         self.assertEqual(anchor["openclaw_taskflow_state"], "mirrored_bound")
+        self.assertEqual(anchor["openclaw_task_runtime"], "openclaw_task")
+        self.assertEqual(anchor["openclaw_flow_runtime"], "openclaw_flow")
         self.assertEqual(anchor["openclaw_native_binding_state"], "bound")
         self.assertEqual(anchor["openclaw_native_status"], "running")
         self.assertEqual(anchor["openclaw_native_runtime"], "subagent")
@@ -334,6 +338,8 @@ class TaskDisplayTests(unittest.TestCase):
                 "openclaw_taskflow": {
                     "backend": "mirror",
                     "binding_state": "mirrored_bound",
+                    "task_runtime": "openclaw_task",
+                    "flow_runtime": "openclaw_flow",
                     "native_binding_state": "bound",
                     "native_status": "running",
                     "native_runtime": "subagent",
@@ -348,6 +354,8 @@ class TaskDisplayTests(unittest.TestCase):
         )
 
         self.assertEqual(detail["substrate"]["backend"], "mirror")
+        self.assertEqual(detail["substrate"]["task_runtime"], "openclaw_task")
+        self.assertEqual(detail["substrate"]["flow_runtime"], "openclaw_flow")
         self.assertEqual(detail["substrate"]["native_binding_state"], "bound")
         self.assertEqual(detail["substrate"]["native_status"], "running")
         self.assertEqual(detail["substrate"]["native_runtime"], "subagent")

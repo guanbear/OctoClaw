@@ -74,7 +74,10 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
         lines.append(f"Substrate detail: {substrate_summary}")
     taskflow_task_id = str(substrate.get("task_id", "") or "").strip()
     taskflow_flow_id = str(substrate.get("flow_id", "") or "").strip()
-    if taskflow_task_id or taskflow_flow_id:
+    task_runtime = str(substrate.get("task_runtime", "") or "").strip()
+    flow_runtime = str(substrate.get("flow_runtime", "") or "").strip()
+    runtime_summary = "/".join(part for part in [task_runtime, flow_runtime] if part)
+    if taskflow_task_id or taskflow_flow_id or runtime_summary:
         lines.append(
             "OpenClaw binding: "
             + " | ".join(
@@ -82,6 +85,7 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
                 for part in [
                     f"task {taskflow_task_id}" if taskflow_task_id else "",
                     f"flow {taskflow_flow_id}" if taskflow_flow_id else "",
+                    f"runtime {runtime_summary}" if runtime_summary else "",
                 ]
                 if part
             )

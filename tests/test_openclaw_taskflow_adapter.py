@@ -139,6 +139,8 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
 
         self.assertEqual(enriched["openclaw_taskflow_backend"], "mirror")
         self.assertEqual(enriched["openclaw_taskflow_state"], "mirrored_bound")
+        self.assertEqual(enriched["openclaw_task_runtime"], "openclaw_task")
+        self.assertEqual(enriched["openclaw_flow_runtime"], "openclaw_flow")
         self.assertEqual(enriched["openclaw_native_binding_state"], "bound")
         self.assertEqual(enriched["openclaw_native_status"], "running")
         self.assertEqual(enriched["openclaw_native_runtime"], "subagent")

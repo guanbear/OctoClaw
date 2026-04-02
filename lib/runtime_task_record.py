@@ -587,6 +587,8 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["openclaw_taskflow"] = taskflow
     normalized["openclaw_taskflow_backend"] = _normalized_str(normalized.get("openclaw_taskflow_backend") or taskflow.get("backend"))
     normalized["openclaw_taskflow_state"] = _normalized_str(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state"))
+    normalized["openclaw_task_runtime"] = _normalized_str(normalized.get("openclaw_task_runtime") or taskflow.get("task_runtime"))
+    normalized["openclaw_flow_runtime"] = _normalized_str(normalized.get("openclaw_flow_runtime") or taskflow.get("flow_runtime"))
     normalized["openclaw_task_id"] = _normalized_str(normalized.get("openclaw_task_id") or taskflow.get("task_id"))
     normalized["openclaw_flow_id"] = _normalized_str(normalized.get("openclaw_flow_id") or taskflow.get("flow_id"))
     normalized["openclaw_flow_kind"] = _normalized_str(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind"))

@@ -29,6 +29,8 @@ class TaskDisplayCliTests(unittest.TestCase):
                             "openclaw_taskflow": {
                                 "backend": "mirror",
                                 "binding_state": "mirrored_bound",
+                                "task_runtime": "openclaw_task",
+                                "flow_runtime": "openclaw_flow",
                                 "native_binding_state": "bound",
                                 "task_id": "native-task-1",
                                 "flow_id": "flow-1",
@@ -91,7 +93,7 @@ class TaskDisplayCliTests(unittest.TestCase):
         code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-1"])
         self.assertEqual(code, 0, err)
         self.assertIn("Substrate detail: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
-        self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1", out)
+        self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1 | runtime openclaw_task/openclaw_flow", out)
 
     def test_queue_text_groups_tasks(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "queue"])

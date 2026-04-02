@@ -567,6 +567,8 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "duration": _duration_label(_text(normalized.get("started_at")), now=now),
         "openclaw_taskflow_backend": _text(normalized.get("openclaw_taskflow_backend") or taskflow.get("backend")),
         "openclaw_taskflow_state": _text(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state")),
+        "openclaw_task_runtime": _text(normalized.get("openclaw_task_runtime") or taskflow.get("task_runtime")),
+        "openclaw_flow_runtime": _text(normalized.get("openclaw_flow_runtime") or taskflow.get("flow_runtime")),
         "openclaw_native_binding_state": _text(taskflow.get("native_binding_state")),
         "openclaw_native_status": _text(normalized.get("openclaw_native_status") or taskflow.get("native_status")),
         "openclaw_native_runtime": _text(normalized.get("openclaw_native_runtime") or taskflow.get("native_runtime")),
@@ -667,6 +669,8 @@ def build_task_detail(
         "substrate": {
             "backend": _text(anchor.get("openclaw_taskflow_backend")),
             "state": _text(anchor.get("openclaw_taskflow_state")),
+            "task_runtime": _text(anchor.get("openclaw_task_runtime")),
+            "flow_runtime": _text(anchor.get("openclaw_flow_runtime")),
             "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
             "native_status": _text(anchor.get("openclaw_native_status")),
             "native_runtime": _text(anchor.get("openclaw_native_runtime")),

@@ -373,6 +373,8 @@ def enrich_task_record_with_taskflow(
     updated["openclaw_taskflow"] = resolved
     updated["openclaw_taskflow_backend"] = _normalized_str(resolved.get("backend"))
     updated["openclaw_taskflow_state"] = _normalized_str(resolved.get("binding_state"))
+    updated["openclaw_task_runtime"] = _normalized_str(resolved.get("task_runtime"))
+    updated["openclaw_flow_runtime"] = _normalized_str(resolved.get("flow_runtime"))
     updated["openclaw_task_id"] = _normalized_str(resolved.get("task_id"))
     updated["openclaw_flow_id"] = _normalized_str(resolved.get("flow_id"))
     updated["openclaw_flow_kind"] = _normalized_str(resolved.get("flow_kind"))
