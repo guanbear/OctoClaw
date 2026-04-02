@@ -26,6 +26,13 @@ class TaskDisplayCliTests(unittest.TestCase):
                             "model": "omniroute/cx/gpt-5.4",
                             "started_at": "2026-03-31T10:00:00Z",
                             "updated_at": "2026-03-31T10:05:00Z",
+                            "openclaw_taskflow": {
+                                "backend": "mirror",
+                                "binding_state": "mirrored_bound",
+                                "native_binding_state": "bound",
+                                "task_id": "native-task-1",
+                                "flow_id": "flow-1",
+                            },
                             "artifacts": {"report_path": "/tmp/task-1.md", "context_pack_path": "/tmp/task-1-context.json"},
                             "task_events_preview": [
                                 {
@@ -80,6 +87,12 @@ class TaskDisplayCliTests(unittest.TestCase):
         self.assertEqual(payload["task_id"], "task-1")
         self.assertEqual(payload["artifacts"][0]["path"], "/tmp/task-1.md")
 
+    def test_detail_text_surfaces_substrate_binding(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-1"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Substrate detail: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
+        self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1", out)
+
     def test_queue_text_groups_tasks(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "queue"])
         self.assertEqual(code, 0, err)
@@ -89,6 +102,7 @@ class TaskDisplayCliTests(unittest.TestCase):
     def test_retrieve_text_surfaces_primary_report(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-1"])
         self.assertEqual(code, 0, err)
+        self.assertIn("Substrate: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
         self.assertIn("Primary report: /tmp/task-1.md", out)
         self.assertIn("Summary:", out)
 

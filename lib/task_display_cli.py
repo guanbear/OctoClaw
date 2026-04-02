@@ -68,6 +68,24 @@ def print_json(data: Any) -> None:
 def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
     anchor = detail.get("anchor", {}) if isinstance(detail.get("anchor"), dict) else {}
     lines = [render_task_anchor_text(anchor, build_task_actions(task))]
+    substrate = detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {}
+    substrate_summary = str(substrate.get("summary", "") or "").strip()
+    if substrate_summary:
+        lines.append(f"Substrate detail: {substrate_summary}")
+    taskflow_task_id = str(substrate.get("task_id", "") or "").strip()
+    taskflow_flow_id = str(substrate.get("flow_id", "") or "").strip()
+    if taskflow_task_id or taskflow_flow_id:
+        lines.append(
+            "OpenClaw binding: "
+            + " | ".join(
+                part
+                for part in [
+                    f"task {taskflow_task_id}" if taskflow_task_id else "",
+                    f"flow {taskflow_flow_id}" if taskflow_flow_id else "",
+                ]
+                if part
+            )
+        )
     lineage = detail.get("lineage", {}) if isinstance(detail.get("lineage"), dict) else {}
     if lineage.get("child_task_ids"):
         lines.append("Children: " + ", ".join(str(item) for item in lineage.get("child_task_ids", [])))
@@ -104,6 +122,10 @@ def render_retrieval_text(bundle: dict[str, Any]) -> str:
         f"Task: {str(bundle.get('task_id', '') or '').strip()}",
         f"State: {str(bundle.get('state', '') or '').strip()} | Route: {str(bundle.get('route', '') or '').strip()} | Pool: {str(bundle.get('worker_pool', '') or '').strip()}",
     ]
+    substrate = bundle.get("substrate", {}) if isinstance(bundle.get("substrate"), dict) else {}
+    substrate_summary = str(substrate.get("summary", "") or "").strip()
+    if substrate_summary:
+        lines.append(f"Substrate: {substrate_summary}")
     summary = str(bundle.get("user_safe_summary", "") or bundle.get("summary", "") or "").strip()
     if summary:
         lines.append(f"Summary: {summary}")

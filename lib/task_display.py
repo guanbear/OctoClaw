@@ -884,6 +884,7 @@ def build_task_retrieval_bundle(
         "state": _text(detail.get("state")),
         "route": _text(normalized.get("route")),
         "worker_pool": _text(normalized.get("worker_pool")),
+        "substrate": detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {},
         "primary_report": primary_report,
         "context_path": _text(normalized.get("context_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_path")),
         "context_pack_path": _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
