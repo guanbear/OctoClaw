@@ -17,11 +17,12 @@ mkdir -p "${TMP_DIR}" "${SESSIONS_DIR}"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 PYTHON_BIN="${OCTOCLAW_PYTHON_BIN:-python3}"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 
 git -C "${REPO_ROOT}" fetch origin codex/release-v0.1.0
 git -C "${REPO_ROOT}" reset --hard origin/codex/release-v0.1.0
 
-scp "${VM_HOST}:/root/.openclaw/agents/main/sessions/sessions.json" "${TMP_DIR}/sessions.json"
+scp "${SSH_OPTS[@]}" "${VM_HOST}:/root/.openclaw/agents/main/sessions/sessions.json" "${TMP_DIR}/sessions.json"
 python3 - <<'PY' "${TMP_DIR}/sessions.json" "${TMP_DIR}/session-files.txt"
 import json, sys
 from pathlib import Path
@@ -44,11 +45,11 @@ PY
 
 while IFS= read -r remote_file; do
   [ -n "${remote_file}" ] || continue
-  scp "${VM_HOST}:${remote_file}" "${SESSIONS_DIR}/$(basename "${remote_file}")"
+  scp "${SSH_OPTS[@]}" "${VM_HOST}:${remote_file}" "${SESSIONS_DIR}/$(basename "${remote_file}")"
 done < "${TMP_DIR}/session-files.txt"
 
-scp "${VM_HOST}:/workspace/tmp/octopus/runtime-policy-replay.jsonl" "${TMP_DIR}/runtime-policy-replay.jsonl" || true
-scp "${VM_HOST}:/workspace/tmp/octopus/task-state.json" "${TMP_DIR}/task-state.json" || true
+scp "${SSH_OPTS[@]}" "${VM_HOST}:/workspace/tmp/octopus/runtime-policy-replay.jsonl" "${TMP_DIR}/runtime-policy-replay.jsonl" || true
+scp "${SSH_OPTS[@]}" "${VM_HOST}:/workspace/tmp/octopus/task-state.json" "${TMP_DIR}/task-state.json" || true
 
 "${PYTHON_BIN}" "${REPO_ROOT}/lib/reply_review_packet.py" \
   --sessions-index "${TMP_DIR}/sessions.json" \
