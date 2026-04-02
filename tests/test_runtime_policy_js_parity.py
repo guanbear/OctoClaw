@@ -111,6 +111,14 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "task": "分三个子任务并行进行：1) 检查认证模块现有漏洞 2) 检查存储层备份状态 3) 检查API网关限流配置，每项出独立报告",
                 "config": {},
             },
+            {
+                "task": "八爪鱼状态",
+                "config": {},
+            },
+            {
+                "task": "details task-123",
+                "config": {},
+            },
         ]
 
         for case in cases:

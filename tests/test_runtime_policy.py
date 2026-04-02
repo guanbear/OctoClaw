@@ -274,6 +274,19 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["work_contract_hint"], "inspect_report")
         self.assertTrue(payload["features"]["tool_observation_only"])
 
+    def test_octoclaw_status_prefers_direct_control_lane(self) -> None:
+        payload = self.run_route("八爪鱼状态")
+        self.assertEqual(payload["system_preferred_route"], "direct")
+        self.assertEqual(payload["work_contract_hint"], "answer_now")
+        self.assertTrue(payload["features"]["observer_control_candidate"])
+        self.assertEqual(payload["task_class"], "control_observer")
+
+    def test_task_details_command_prefers_direct_control_lane(self) -> None:
+        payload = self.run_route("details task-123")
+        self.assertEqual(payload["system_preferred_route"], "direct")
+        self.assertTrue(payload["features"]["observer_control_candidate"])
+        self.assertFalse(payload["features"]["hard_runner_candidate"])
+
     def test_runner_policy_uses_workspace_local_model_policy(self) -> None:
         payload = self.run_policy(
             "看下 8080 端口开了没",

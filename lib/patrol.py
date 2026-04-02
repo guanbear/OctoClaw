@@ -1116,12 +1116,6 @@ def hydrate_completed_session_results(tasks: list[dict]) -> int:
         session_id = str(task.get("session_id", "") or "").strip()
         if not session_id:
             continue
-        session_status = str(task.get("session_status", "") or "").strip().lower()
-        last_event = str(task.get("session_last_event", "") or "").strip().lower()
-        if session_status != "completed" and last_event != "success":
-            continue
-        if not bool(task.get("session_has_result")) and last_event != "success":
-            continue
         existing_result = _task_artifacts(task).get("worker_result")
         if isinstance(existing_result, dict) and str(existing_result.get("status", "") or "").strip():
             continue
@@ -1130,10 +1124,16 @@ def hydrate_completed_session_results(tasks: list[dict]) -> int:
             task_id=str(task.get("id", "") or ""),
             default_report=str(task.get("report_path", "") or ""),
         )
-        if not isinstance(worker_result, dict) or not str(worker_result.get("status", "") or "").strip():
+        if isinstance(worker_result, dict) and str(worker_result.get("status", "") or "").strip():
+            if finish_task_from_session_result(task, worker_result):
+                hydrated += 1
             continue
-        if finish_task_from_session_result(task, worker_result):
-            hydrated += 1
+        session_status = str(task.get("session_status", "") or "").strip().lower()
+        last_event = str(task.get("session_last_event", "") or "").strip().lower()
+        if session_status != "completed" and last_event != "success":
+            continue
+        if not bool(task.get("session_has_result")) and last_event != "success":
+            continue
     return hydrated
 
 

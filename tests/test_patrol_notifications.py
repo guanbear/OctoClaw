@@ -185,6 +185,57 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertIn("--id", cmd)
         self.assertIn("research-2", cmd)
 
+    @patch("patrol.subprocess.run")
+    def test_hydrate_completed_session_results_finishes_when_transcript_has_result_before_session_status_catches_up(self, mock_run) -> None:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = ""
+        with tempfile.TemporaryDirectory(prefix="octoclaw-patrol-home-") as home:
+            session_dir = Path(home) / ".openclaw" / "agents" / "main" / "sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            (session_dir / "sess-result-3.jsonl").write_text(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "---RESULT---\n"
+                                '{"status":"done","summary":"task finished early","user_safe_summary":"结果已经整理好了。","report":"/tmp/release-3.md","artifacts":["/tmp/release-3.md"],"files":[],"risks":[],"verification":[],"next_step":"none"}',
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": home}, clear=False):
+                hydrated = patrol.hydrate_completed_session_results(
+                    [
+                        {
+                            "id": "research-3",
+                            "status": "running",
+                            "route": "spawn_single",
+                            "runtime": "subagent",
+                            "worker_pool": "octoclaw-research",
+                            "summary": "collecting release notes",
+                            "session_id": "sess-result-3",
+                            "session_status": "running",
+                            "session_last_event": "streaming",
+                            "session_has_result": False,
+                            "report_path": "/tmp/release-3.md",
+                            "artifacts": {},
+                        }
+                    ]
+                )
+
+        self.assertEqual(hydrated, 1)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("done", cmd)
+        self.assertIn("research-3", cmd)
+
     @patch("patrol.send_task_notification")
     def test_send_state_change_task_anchor_skips_tasks_without_session_key(self, mock_send) -> None:
         sent = patrol.send_state_change_task_anchor(

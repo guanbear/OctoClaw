@@ -499,6 +499,15 @@ REMOTE_TARGET_PATTERNS = {
     ),
 }
 
+OBSERVER_CONTROL_PATTERNS = {
+    "zh": (
+        r"(八爪鱼状态|八爪鱼队列|八爪鱼面板|任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|收件箱|队列面板)",
+    ),
+    "en": (
+        r"\b(octoclaw status|octoclaw queue|task details|task timeline|task graph|task retrieve|task result|task artifacts|task report|runtime status|task inbox)\b",
+    ),
+}
+
 ROUTE_PATTERN_LIBRARY = {
     "RUNNER_PATTERNS": RUNNER_PATTERNS,
     "RUNNER_READ_ONLY_INTENT_PATTERNS": RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -522,6 +531,7 @@ ROUTE_PATTERN_LIBRARY = {
     "CONTINUATION_PATTERNS": CONTINUATION_PATTERNS,
     "ACK_FOLLOWUP_PATTERNS": ACK_FOLLOWUP_PATTERNS,
     "REMOTE_TARGET_PATTERNS": REMOTE_TARGET_PATTERNS,
+    "OBSERVER_CONTROL_PATTERNS": OBSERVER_CONTROL_PATTERNS,
 }
 
 
@@ -599,7 +609,15 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     runner_read_only_intent_hits = count_matches(text, resolve_language_patterns("RUNNER_READ_ONLY_INTENT_PATTERNS", enabled_packs))
     runner_target_hits = count_matches(text, resolve_language_patterns("RUNNER_TARGET_PATTERNS", enabled_packs))
     runner_negative_hits = count_matches(text, resolve_language_patterns("RUNNER_NEGATIVE_PATTERNS", enabled_packs))
+    observer_control_hits = count_matches(text, resolve_language_patterns("OBSERVER_CONTROL_PATTERNS", enabled_packs))
     command_read_only = command_looks_read_only(command)
+    explicit_observer_command = bool(
+        re.fullmatch(r"\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*", raw_task, re.IGNORECASE)
+        or re.fullmatch(r"\s*(?:queue|inbox)\s*", raw_task, re.IGNORECASE)
+        or re.fullmatch(r"\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
+        or re.fullmatch(r"\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
+    )
+    observer_control_candidate = bool(explicit_observer_command or observer_control_hits > 0)
     effective_write_hits = write_hits
     if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
         effective_write_hits = 0
@@ -671,7 +689,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     elif external_lookup_hits > 0 and research_hits == 0 and code_hits == 0:
         latency_sensitivity = "normal"
 
-    observation_signal = bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0 or (
+    observation_signal = observer_control_candidate or bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0 or (
         runner_read_only_intent_hits > 0 and runner_target_hits > 0
     )
 
@@ -684,6 +702,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "runner_read_only_intent_hits": runner_read_only_intent_hits,
         "runner_target_hits": runner_target_hits,
         "runner_negative_hits": runner_negative_hits,
+        "observer_control_hits": observer_control_hits,
+        "observer_control_candidate": observer_control_candidate,
         "explicit_local_probe": explicit_local_probe,
         "code_hits": code_hits,
         "research_hits": research_hits,
@@ -734,7 +754,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "simple_direct_candidate": simple_hits > 0 and runner_hits == 0 and code_hits == 0 and research_hits == 0 and local_state_hits == 0,
     }
     features["hard_runner_candidate"] = bool(
-        runner_negative_hits == 0
+        not observer_control_candidate
+        and runner_negative_hits == 0
         and not features["high_risk"]
         and not features["parallelizable"]
         and features["simple_hits"] == 0
@@ -763,6 +784,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
 def direct_contract_candidate(features: dict) -> bool:
     if features.get("high_risk"):
         return False
+    if features.get("observer_control_candidate"):
+        return True
     if features.get("requires_tools"):
         return False
     if features.get("requires_mutation"):
@@ -823,6 +846,8 @@ def coordinated_work_candidate(features: dict) -> bool:
 def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
     if route == "runner" or features.get("hard_runner_candidate"):
         return "inspect_report"
+    if features.get("observer_control_candidate"):
+        return "answer_now"
     if direct_contract_candidate(features):
         return "answer_now"
     if coordinated_work_candidate(features):
@@ -846,7 +871,11 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
     if work_contract_hint == "answer_now":
         scores["direct"] = 0.82
         scores["spawn_single"] = 0.36
-        if features.get("external_lookup_only"):
+        if features.get("observer_control_candidate"):
+            scores["direct"] = 0.96
+            scores["spawn_single"] = 0.08
+            reason_codes.append("observer_control_contract")
+        elif features.get("external_lookup_only"):
             reason_codes.append("direct_lookup_contract")
         else:
             reason_codes.append("direct_answer_contract")
@@ -919,6 +948,9 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
     if work_contract_hint == "answer_now" and not direct_contract_candidate(features):
         route = "spawn_single"
         reason_codes.append("direct_contract_veto_to_spawn_single")
+    if features.get("observer_control_candidate"):
+        route = "direct"
+        reason_codes.append("prefer_direct_control_lane")
 
     ordered_scores = sorted(scores.values(), reverse=True)
     top_score = ordered_scores[0] if ordered_scores else 0.0
@@ -995,6 +1027,8 @@ def expected_cost_band(route: str, features: dict) -> str:
 
 
 def infer_task_class(features: dict, route: str) -> str:
+    if route == "direct" and features.get("observer_control_candidate"):
+        return "control_observer"
     if route == "runner":
         if features.get("target_scope") == "remote":
             return "fast_remote_check"

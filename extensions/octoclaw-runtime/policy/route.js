@@ -226,6 +226,11 @@ const REMOTE_TARGET_PATTERNS = {
   ru: [String.raw`(удал[её]нн|другая машина|другой хост|целевой хост)`],
 };
 
+const OBSERVER_CONTROL_PATTERNS = {
+  zh: [String.raw`(八爪鱼状态|八爪鱼队列|八爪鱼面板|任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|收件箱|队列面板)`],
+  en: [String.raw`\b(octoclaw status|octoclaw queue|task details|task timeline|task graph|task retrieve|task result|task artifacts|task report|runtime status|task inbox)\b`],
+};
+
 const ROUTE_PATTERN_LIBRARY = {
   RUNNER_PATTERNS,
   RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -249,6 +254,7 @@ const ROUTE_PATTERN_LIBRARY = {
   CONTINUATION_PATTERNS,
   ACK_FOLLOWUP_PATTERNS,
   REMOTE_TARGET_PATTERNS,
+  OBSERVER_CONTROL_PATTERNS,
 };
 
 const languagePatternCache = new Map();
@@ -343,7 +349,15 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   const runnerReadOnlyIntentHits = countMatches(text, resolveLanguagePatterns("RUNNER_READ_ONLY_INTENT_PATTERNS", enabledPacks));
   const runnerTargetHits = countMatches(text, resolveLanguagePatterns("RUNNER_TARGET_PATTERNS", enabledPacks));
   const runnerNegativeHits = countMatches(text, resolveLanguagePatterns("RUNNER_NEGATIVE_PATTERNS", enabledPacks));
+  const observerControlHits = countMatches(text, resolveLanguagePatterns("OBSERVER_CONTROL_PATTERNS", enabledPacks));
   const commandReadOnly = commandLooksReadOnly(normalizedCommand);
+  const explicitObserverCommand = Boolean(
+    /^\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*$/iu.test(rawTask)
+      || /^\s*(?:queue|inbox)\s*$/iu.test(rawTask)
+      || /^\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask)
+      || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
+  );
+  const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0);
 
   let effectiveWriteHits = writeHits;
   if (summaryOutputHits > 0 && codeHits === 0 && researchHits === 0 && mutationHits === 0) {
@@ -409,7 +423,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   else if (externalLookupHits > 0 && researchHits === 0 && codeHits === 0) latencySensitivity = "normal";
 
   const observationSignal = Boolean(
-    normalizedCommand
+    observerControlCandidate
+      || normalizedCommand
       || runnerHits > 0
       || localStateHits > 0
       || remoteTargetHits > 0
@@ -425,6 +440,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     runner_read_only_intent_hits: runnerReadOnlyIntentHits,
     runner_target_hits: runnerTargetHits,
     runner_negative_hits: runnerNegativeHits,
+    observer_control_hits: observerControlHits,
+    observer_control_candidate: observerControlCandidate,
     explicit_local_probe: explicitLocalProbe,
     code_hits: codeHits,
     research_hits: researchHits,
@@ -476,7 +493,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   };
 
   features.hard_runner_candidate = Boolean(
-    runnerNegativeHits === 0
+    !observerControlCandidate
+    && runnerNegativeHits === 0
     && !features.high_risk
     && !features.parallelizable
     && features.simple_hits === 0
@@ -505,6 +523,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
 
 function directContractCandidate(features) {
   if (features.high_risk) return false;
+  if (features.observer_control_candidate) return true;
   if (features.requires_tools) return false;
   if (features.requires_mutation) return false;
   if (features.requires_code_work) return false;
@@ -546,6 +565,7 @@ function coordinatedWorkCandidate(features) {
 
 function inferWorkContractHint(features, route = "") {
   if (route === "runner" || features.hard_runner_candidate) return "inspect_report";
+  if (features.observer_control_candidate) return "answer_now";
   if (directContractCandidate(features)) return "answer_now";
   if (coordinatedWorkCandidate(features)) return "coordinated_work";
   if (features.tool_observation_only) return "inspect_report";
@@ -564,7 +584,13 @@ function contractDrivenRouteBias(features, workContractHint) {
   if (workContractHint === "answer_now") {
     scores.direct = 0.82;
     scores.spawn_single = 0.36;
-    reasonCodes.push(features.external_lookup_only ? "direct_lookup_contract" : "direct_answer_contract");
+    if (features.observer_control_candidate) {
+      scores.direct = 0.96;
+      scores.spawn_single = 0.08;
+      reasonCodes.push("observer_control_contract");
+    } else {
+      reasonCodes.push(features.external_lookup_only ? "direct_lookup_contract" : "direct_answer_contract");
+    }
   } else if (workContractHint === "inspect_report") {
     scores.spawn_single = 0.72;
     scores.runner = 0.44;
@@ -640,6 +666,10 @@ function contractDrivenRouteBias(features, workContractHint) {
     route = "spawn_single";
     reasonCodes.push("direct_contract_veto_to_spawn_single");
   }
+  if (features.observer_control_candidate) {
+    route = "direct";
+    reasonCodes.push("prefer_direct_control_lane");
+  }
 
   const orderedScores = Object.values(scores).sort((a, b) => b - a);
   const topScore = orderedScores[0] || 0.0;
@@ -703,6 +733,7 @@ function expectedCostBand(route, features) {
 }
 
 function inferTaskClass(features, route) {
+  if (route === "direct" && features.observer_control_candidate) return "control_observer";
   if (route === "runner") {
     if (features.target_scope === "remote") return "fast_remote_check";
     if (features.target_scope === "local") return "fast_local_check";
