@@ -152,6 +152,10 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
                 merged["plugins"]["entries"]["octoclaw-runtime"]["config"]["octoclawRoot"],
                 "/workspace/openclaw/skills/octopus",
             )
+            self.assertEqual(
+                merged["plugins"]["entries"]["octoclaw-runtime"]["config"]["workspaceRoot"],
+                "/workspace",
+            )
             self.assertTrue(
                 merged["plugins"]["entries"]["octoclaw-runtime"]["hooks"]["allowPromptInjection"]
             )

@@ -218,6 +218,8 @@ def merge_openclaw_plugin_config(config_path: Path, octoclaw_root: str | None = 
         entry_config = {}
     if octoclaw_root:
         entry_config["octoclawRoot"] = octoclaw_root
+        workspace_root = str(Path(octoclaw_root).resolve().parents[2])
+        entry_config["workspaceRoot"] = workspace_root
     entry["config"] = entry_config
     hooks = entry.get("hooks")
     if not isinstance(hooks, dict):

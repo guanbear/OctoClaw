@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDecision } from "./policy/decide.js";
@@ -7,10 +9,37 @@ import { inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const HOME_DIR = os.homedir();
 let OCTOCLAW_ROOT_OVERRIDE = "";
+let WORKSPACE_ROOT_OVERRIDE = "";
+
+function firstExistingPath(candidates, matcher = null) {
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").trim();
+    if (!raw) continue;
+    const resolved = path.resolve(raw);
+    try {
+      if (!fsSync.existsSync(resolved)) continue;
+      if (matcher && !matcher(resolved)) continue;
+      return resolved;
+    } catch {
+      continue;
+    }
+  }
+  return "";
+}
 
 function resolveOctoClawRoot() {
-  return OCTOCLAW_ROOT_OVERRIDE || process.env.OCTOCLAW_ROOT || path.resolve(__dirname, "..", "..");
+  const resolved = firstExistingPath(
+    [
+      OCTOCLAW_ROOT_OVERRIDE,
+      process.env.OCTOCLAW_ROOT,
+      path.join(HOME_DIR, ".openclaw", "workspace", "openclaw", "skills", "octopus"),
+      path.resolve(__dirname, "..", ".."),
+    ],
+    (candidate) => fsSync.existsSync(path.join(candidate, "lib")),
+  );
+  return resolved || path.resolve(__dirname, "..", "..");
 }
 
 function resolveScript(...parts) {
@@ -18,7 +47,28 @@ function resolveScript(...parts) {
 }
 
 function resolveWorkspaceRoot() {
-  return process.env.WORKSPACE || "/workspace";
+  const root = resolveOctoClawRoot();
+  const resolved = firstExistingPath(
+    [
+      WORKSPACE_ROOT_OVERRIDE,
+      process.env.WORKSPACE,
+      root ? path.resolve(root, "..", "..", "..") : "",
+      path.join(HOME_DIR, ".openclaw", "workspace"),
+    ],
+    (candidate) => fsSync.existsSync(path.join(candidate, "tmp")),
+  );
+  return resolved || process.env.WORKSPACE || "/workspace";
+}
+
+function resolvePythonBin() {
+  const resolved = firstExistingPath(
+    [
+      process.env.OCTOCLAW_PYTHON_BIN,
+      "/opt/homebrew/bin/python3",
+      "/usr/local/bin/python3",
+    ],
+  );
+  return resolved || "python3";
 }
 
 function resolveReplayLogPath() {
@@ -33,7 +83,13 @@ function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd || process.cwd(),
-      env: { ...process.env, ...(options.env || {}) },
+      env: {
+        ...process.env,
+        WORKSPACE: resolveWorkspaceRoot(),
+        OCTOCLAW_ROOT: resolveOctoClawRoot(),
+        OCTOCLAW_PYTHON_BIN: resolvePythonBin(),
+        ...(options.env || {}),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -56,7 +112,7 @@ function runCommand(command, args, options = {}) {
 }
 
 async function runJsonScript(scriptName, args, cwd) {
-  const result = await runCommand("python3", [resolveScript(scriptName), ...args], { cwd });
+  const result = await runCommand(resolvePythonBin(), [resolveScript(scriptName), ...args], { cwd });
   if (result.code !== 0) {
     throw new Error(result.stderr || `${scriptName} failed`);
   }
@@ -77,7 +133,7 @@ async function runStatus(format, cwd) {
 
 async function readReportExcerpt(reportPath, cwd) {
   const result = await runCommand(
-    "python3",
+    resolvePythonBin(),
     [resolveScript("report_excerpt.py"), "--path", reportPath, "--max-lines", "20", "--max-chars", "1800"],
     { cwd },
   );
@@ -845,11 +901,12 @@ const plugin = {
   name: "OctoClaw Runtime",
   description: "Runtime policy hooks, dispatch tools, and replay logging for OctoClaw",
   register(pi) {
-  OCTOCLAW_ROOT_OVERRIDE = String(pi?.pluginConfig?.octoclawRoot || "").trim();
-  const registerLifecycleHook = (hookName, handler, priority = 180) => {
-    if (typeof pi.on === "function") {
-      pi.on(hookName, handler, { priority });
-      return true;
+    OCTOCLAW_ROOT_OVERRIDE = String(pi?.pluginConfig?.octoclawRoot || "").trim();
+    WORKSPACE_ROOT_OVERRIDE = String(pi?.pluginConfig?.workspaceRoot || "").trim();
+    const registerLifecycleHook = (hookName, handler, priority = 180) => {
+      if (typeof pi.on === "function") {
+        pi.on(hookName, handler, { priority });
+        return true;
     }
     if (typeof pi.registerHook === "function") {
       pi.registerHook(hookName, handler, { priority });
@@ -1518,6 +1575,9 @@ const plugin = {
 
 export default plugin;
 export const __octoclawTest = {
+  resolveOctoClawRoot,
+  resolveWorkspaceRoot,
+  resolvePythonBin,
   stripAgentSessionPrefix,
   parseSessionRoute,
   resolvePolicyStateKeys,

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
+from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTENSION_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "index.js"
 
 
-def run_runtime_helper(expression: str) -> dict:
+def run_runtime_helper(expression: str, env: Optional[dict] = None) -> dict:
     script = f"""
 import {{ __octoclawTest }} from {json.dumps(str(EXTENSION_PATH))};
 const value = {expression};
@@ -20,12 +22,41 @@ console.log(JSON.stringify(value));
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
+        env={**os.environ, **(env or {})},
         check=True,
     )
     return json.loads(result.stdout)
 
 
 class OctoClawRuntimeExtensionTests(unittest.TestCase):
+    def test_runtime_paths_prefer_managed_openclaw_workspace_layout(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-runtime-home-") as tmpdir:
+            home = Path(tmpdir)
+            octoclaw_root = home / ".openclaw" / "workspace" / "openclaw" / "skills" / "octopus"
+            workspace_root = home / ".openclaw" / "workspace"
+            (octoclaw_root / "lib").mkdir(parents=True)
+            (workspace_root / "tmp").mkdir(parents=True)
+            payload = run_runtime_helper(
+                """({
+                    octoclawRoot: __octoclawTest.resolveOctoClawRoot(),
+                    workspaceRoot: __octoclawTest.resolveWorkspaceRoot(),
+                    pythonBin: __octoclawTest.resolvePythonBin()
+                })""",
+                env={
+                    "HOME": str(home),
+                    "OCTOCLAW_ROOT": "",
+                    "WORKSPACE": "",
+                    "OCTOCLAW_PYTHON_BIN": "",
+                    "PATH": os.environ.get("PATH", ""),
+                },
+            )
+
+            self.assertEqual(payload["octoclawRoot"], str(octoclaw_root))
+            self.assertEqual(payload["workspaceRoot"], str(workspace_root))
+            self.assertTrue(payload["pythonBin"].endswith("python3"))
+
     def test_extract_prompt_text_unwraps_busy_queue_wrapper(self) -> None:
         payload = run_runtime_helper(
             """__octoclawTest.extractPromptText({

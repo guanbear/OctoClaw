@@ -7,8 +7,10 @@ if [ -f "$SCRIPT_DIR/lib/workspace.sh" ]; then
     # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/workspace.sh"
     WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR/lib")"
+    PYTHON_BIN="$(resolve_octoclaw_python)"
 else
     WORKSPACE="${WORKSPACE:-/workspace}"
+    PYTHON_BIN="${OCTOCLAW_PYTHON_BIN:-python3}"
 fi
 OCTOPUS_RULES_VERSION="v1.7.0"
 SKILL_ROOT="${SKILL_ROOT:-$SCRIPT_DIR}"
@@ -2053,6 +2055,26 @@ install_runtime_extension() {
     echo "✅ 已安装 runtime extension (${mode}) → $target_dir"
 }
 
+register_runtime_extension_in_openclaw_config() {
+    local config_path="${OPENCLAW_HOME}/openclaw.json"
+    local rollout_script="${SKILL_ROOT}/lib/runtime_policy_rollout.py"
+
+    if [ ! -f "$config_path" ]; then
+        echo "ℹ️ 未找到 OpenClaw 配置，跳过 runtime extension 注册"
+        return 0
+    fi
+    if [ ! -f "$rollout_script" ]; then
+        echo "⚠️ 未找到 runtime policy rollout 脚本，跳过 runtime extension 注册"
+        return 0
+    fi
+
+    if "$PYTHON_BIN" "$rollout_script" merge-openclaw-plugin --config "$config_path" --octoclaw-root "$SKILL_ROOT" >/dev/null; then
+        echo "✅ 已将 runtime extension 注册到 OpenClaw 配置"
+    else
+        echo "⚠️ runtime extension 注册失败，保留自动发现回退" >&2
+    fi
+}
+
 # 自动注入 octoclaw:core-rules 到 AGENTS.md（在展示安装完成之前，确保规则已就绪）
 case "$INSTALL_ACTION" in
     inject-only|inject-agents)
@@ -2062,6 +2084,7 @@ case "$INSTALL_ACTION" in
         ;;
     extension-only|install-extension)
         install_runtime_extension
+        register_runtime_extension_in_openclaw_config
         echo "✅ 仅执行 runtime extension 安装完成"
         exit 0
         ;;
@@ -2069,6 +2092,7 @@ esac
 
 inject_agents_md
 install_runtime_extension
+register_runtime_extension_in_openclaw_config
 
 echo ""
 echo "🎉 八爪鱼安装完成！"
