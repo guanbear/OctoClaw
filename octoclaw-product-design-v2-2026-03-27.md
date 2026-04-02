@@ -2001,6 +2001,78 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - 恢复成功率
 - 任务成功率或用户满意度代理指标
 
+### 12.5.1 当前明确开发计划（2026-04-02）
+
+在完成前面这些基础建设之后，后续开发不应再继续“多线散跑”，而应收成三段式主线。
+
+#### A. 先打通一条真实可重复的 golden path
+
+这是当前最高优先级。
+
+完成标准不是“局部模块都变好了”，而是：
+
+- Slack / WebChat / 同类 IM 入口
+- 一条真实任务
+- 从 `policy_resolved`
+- 到 `dispatch_called`
+- 到 detached task / runner / spawn
+- 到 final handoff / user-safe reply
+- 整条链路至少能稳定重复成功
+
+这一段只收这些问题：
+
+1. upstream busy queue / transcript append
+   - 查清为什么 queued follow-up 有时根本没进主会话 transcript
+   - 让 busy wrapper 在 OctoClaw 上游和下游都可追踪
+2. route truth -> dispatch truth 单一化
+   - 不再允许 `policy_resolved=spawn_single`，但 `dispatch_called=runner` 还靠二次猜测
+   - 对 `runner` 类任务引入结构化 `runner_plan / probe_spec`
+3. runner local probe / script-probe 收口
+   - 本地日志、端口、cron、脚本状态检查默认走 `runner`
+   - 不再让 runner 在执行前重新自然语言猜命令
+4. delegated handoff and reply reliability
+   - child task 完成后必须稳定形成 `user_safe_summary`
+   - IM anchor / progress update 超时不能让任务看起来像“没回复”
+
+在这一步完成前，应暂停继续扩新展示面和新花样协议。
+
+#### B. 再把 detached substrate 和 observer 收口
+
+当 golden path 跑稳后，第二段才继续推进 substrate 与运行面收敛。
+
+目标：
+
+- detached work 的真相更多交给 OpenClaw `tasks / flows`
+- OctoClaw 保留策略脑、合同层、artifact/context/review/budget 这类高价值层
+- `patrol` 逐步并入 `runtime observer`
+- `runner` 逐步走向 `runner-as-task` 与更轻的 on-demand executor
+
+明确顺序：
+
+1. `runner-as-task`
+2. `spawn_single` 更原生的 task binding / native-preferred create
+3. simple multi-stage workflow -> linear flow
+4. `status / details / timeline / graph / retrieve` 全面读 substrate facts
+5. `patrol` 从 detached lifecycle 猜测器收成 observer / recovery coordinator
+
+#### C. 最后把经济学闭环和评估闭环做深
+
+在真实 happy path 稳定、substrate truth 收口之后，再做更重的 tuning 和评估闭环。
+
+优先顺序：
+
+1. `eval_fixture_export`
+   - 让真实 runtime events 自动反哺 regression fixtures
+2. tool / state-machine / route drift evals
+3. budget decision table + route upgrade ladder
+4. replay calibration
+5. context-budget-aware compaction
+6. heavier protocol only where data proves worthwhile
+
+一句话收口：
+
+> **后面的开发顺序不再是“继续铺功能”，而是“先打通真实成功链，再把 substrate 收口，最后才做系统性 tuning”。**
+
 ### 12.6 文档真相源
 
 后续开发不应只靠聊天记录推进，而应以这几份文档为真相源：
