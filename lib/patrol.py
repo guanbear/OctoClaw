@@ -39,12 +39,14 @@ import sys
 import json
 import os
 import fcntl
+import re
 import subprocess
 import time
 import argparse
 from datetime import datetime, timezone, timedelta
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 from notifier import backend_supports_cards, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec, build_task_prompt, execute_spawn_backend
@@ -116,6 +118,8 @@ SYSTEM_LABELS = {'octoclaw-patrol', 'octoclaw-probe', 'ironclaw-heartbeat', 'iro
 # 内部查询任务 ID 前缀，过滤出面板和通知
 INTERNAL_ID_PREFIXES = ('status-query-',)
 TASK_STATE_UPDATE_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task-state-update.py")
+CHECKPOINT_LINE_RE = re.compile(r"^\s*CHECKPOINT\s*[:：]\s*(.+?)\s*$", re.IGNORECASE)
+ARTIFACTS_READY_LINE_RE = re.compile(r"^\s*ARTIFACTS_READY\s*[:：]\s*(.+?)\s*$", re.IGNORECASE)
 
 # 模型名简化映射（完整路径 → 短名）
 MODEL_SHORT = {
@@ -1020,6 +1024,83 @@ def _parse_result_kv_block(text: str) -> dict | None:
     }
 
 
+def _parse_artifacts_ready_value(value: str) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    lowered = text.lower()
+    if lowered in {"none", "n/a", "na", "无", "暂无"}:
+        return []
+    parts = re.split(r"[\n,]+", text)
+    results: list[str] = []
+    for part in parts:
+        item = str(part or "").strip().strip("'\"")
+        if not item:
+            continue
+        results.append(item)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in results:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def extract_session_progress_markers(session_id: str, *, tail_lines: int = SESSION_HISTORY_TAIL_LINES) -> dict[str, Any] | None:
+    if not session_id:
+        return None
+    transcript_path = os.path.expanduser(f"~/.openclaw/agents/main/sessions/{session_id}.jsonl")
+    if not os.path.exists(transcript_path):
+        return None
+    try:
+        with open(transcript_path, "rb") as f:
+            lines = list(deque(f, tail_lines))
+    except Exception:
+        return None
+
+    parsed_lines: list[dict] = []
+    for raw in lines:
+        try:
+            obj = json.loads(raw.decode("utf-8", errors="ignore"))
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            parsed_lines.append(obj)
+
+    latest_checkpoint = ""
+    latest_artifacts: list[str] = []
+    for obj in reversed(parsed_lines):
+        for text in reversed(_session_message_texts(obj)):
+            for raw_line in reversed(text.splitlines()):
+                line = str(raw_line or "").strip()
+                if not line:
+                    continue
+                if not latest_checkpoint:
+                    checkpoint_match = CHECKPOINT_LINE_RE.match(line)
+                    if checkpoint_match:
+                        latest_checkpoint = str(checkpoint_match.group(1) or "").strip()
+                        continue
+                if not latest_artifacts:
+                    artifacts_match = ARTIFACTS_READY_LINE_RE.match(line)
+                    if artifacts_match:
+                        latest_artifacts = _parse_artifacts_ready_value(artifacts_match.group(1))
+                if latest_checkpoint and latest_artifacts:
+                    break
+            if latest_checkpoint and latest_artifacts:
+                break
+        if latest_checkpoint and latest_artifacts:
+            break
+
+    if not latest_checkpoint and not latest_artifacts:
+        return None
+    return {
+        "checkpoint_message": latest_checkpoint,
+        "artifact_paths": latest_artifacts,
+    }
+
+
 def extract_session_worker_result(session_id: str, *, task_id: str = "", default_report: str = "", tail_lines: int = SESSION_HISTORY_TAIL_LINES) -> dict | None:
     if not session_id:
         return None
@@ -1111,6 +1192,106 @@ def _task_handoff_already_complete(task: dict, existing_result: dict | None = No
         return False
     user_safe_summary = str(task.get("user_safe_summary", "") or result.get("user_safe_summary", "") or "").strip()
     return bool(user_safe_summary)
+
+
+def _emit_task_event(
+    task_id: str,
+    *,
+    kind: str,
+    message: str = "",
+    summary: str = "",
+    artifacts_json: dict | None = None,
+    event_json: dict | None = None,
+) -> bool:
+    cmd = [
+        "python3",
+        TASK_STATE_UPDATE_PY,
+        "event",
+        "--id",
+        task_id,
+        "--kind",
+        kind,
+    ]
+    if message:
+        cmd.extend(["--message", message])
+    if summary:
+        cmd.extend(["--summary", summary])
+    if isinstance(artifacts_json, dict) and artifacts_json:
+        cmd.extend(["--artifacts-json", json.dumps(artifacts_json, ensure_ascii=False)])
+    if isinstance(event_json, dict) and event_json:
+        cmd.extend(["--event-json", json.dumps(event_json, ensure_ascii=False)])
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        print(
+            f"⚠️  _emit_task_event({task_id}, {kind}) 失败: {result.stderr.strip() or result.stdout.strip()}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def hydrate_session_progress_markers(tasks: list[dict]) -> int:
+    hydrated = 0
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if is_runner_task(task) or task_is_final(task):
+            continue
+        if str(task.get("status", "") or "").strip().lower() not in {"queued", "running", "dispatched"}:
+            continue
+        session_id = str(task.get("session_id", "") or "").strip()
+        task_id = str(task.get("id", "") or "").strip()
+        if not session_id or not task_id:
+            continue
+        markers = extract_session_progress_markers(session_id)
+        if not isinstance(markers, dict):
+            continue
+
+        artifacts = _task_artifacts(task)
+        hydrated_state = artifacts.get("session_progress_hydrated", {})
+        if not isinstance(hydrated_state, dict):
+            hydrated_state = {}
+
+        checkpoint_message = str(markers.get("checkpoint_message", "") or "").strip()
+        artifact_paths = markers.get("artifact_paths", []) if isinstance(markers.get("artifact_paths", []), list) else []
+        artifact_paths = [str(item or "").strip() for item in artifact_paths if str(item or "").strip()]
+
+        existing_checkpoint = str(hydrated_state.get("checkpoint_message", "") or "").strip()
+        existing_artifacts = [str(item or "").strip() for item in hydrated_state.get("artifact_paths", [])] if isinstance(hydrated_state.get("artifact_paths", []), list) else []
+
+        updated = False
+        next_state = dict(hydrated_state)
+        next_state["session_id"] = session_id
+        next_state["hydrated_at"] = datetime.now(timezone.utc).astimezone().isoformat()
+        if checkpoint_message:
+            next_state["checkpoint_message"] = checkpoint_message
+        if artifact_paths:
+            next_state["artifact_paths"] = artifact_paths
+
+        if checkpoint_message and checkpoint_message != existing_checkpoint:
+            emitted = _emit_task_event(
+                task_id,
+                kind="checkpoint",
+                message=checkpoint_message,
+                summary=checkpoint_message,
+                artifacts_json={"session_progress_hydrated": next_state},
+                event_json={"source": "session_progress", "session_id": session_id},
+            )
+            updated = updated or emitted
+
+        if artifact_paths and artifact_paths != existing_artifacts:
+            emitted = _emit_task_event(
+                task_id,
+                kind="artifact_ready",
+                message=f"{len(artifact_paths)} artifact(s) ready",
+                artifacts_json={"session_progress_hydrated": next_state},
+                event_json={"source": "session_progress", "session_id": session_id, "artifact_paths": artifact_paths},
+            )
+            updated = updated or emitted
+
+        if updated:
+            hydrated += 1
+    return hydrated
 
 
 def hydrate_completed_session_results(tasks: list[dict]) -> int:
@@ -4659,6 +4840,13 @@ def main():
     # ── v1.3: 先补充 session 观测字段，让后续判断不只依赖 task-state 本身 ──
     tasks = annotate_tasks_with_session_state(tasks)
     refresh_openclaw_taskflow_bindings(tasks)
+
+    progress_hydrated = hydrate_session_progress_markers(tasks)
+    if progress_hydrated > 0:
+        print(f"  🧭 本轮从 child session transcript 回收进度信号 {progress_hydrated} 个")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
 
     hydrated = hydrate_completed_session_results(tasks)
     if hydrated > 0:

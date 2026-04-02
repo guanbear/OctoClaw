@@ -167,6 +167,127 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertEqual(payload["report"], "/tmp/release.md")
         self.assertEqual(payload["user_safe_summary"], "可以升级，但先注意认证配置变更。")
 
+    def test_extract_session_progress_markers_parses_checkpoint_and_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-patrol-home-") as home:
+            session_dir = Path(home) / ".openclaw" / "agents" / "main" / "sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            transcript = session_dir / "sess-progress-1.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "CHECKPOINT: changelog collected\nARTIFACTS_READY: /tmp/release.md, /tmp/release.json",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": home}, clear=False):
+                payload = patrol.extract_session_progress_markers("sess-progress-1")
+
+        self.assertEqual(payload["checkpoint_message"], "changelog collected")
+        self.assertEqual(payload["artifact_paths"], ["/tmp/release.md", "/tmp/release.json"])
+
+    @patch("patrol.subprocess.run")
+    def test_hydrate_session_progress_markers_emits_checkpoint_and_artifact_events(self, mock_run) -> None:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = ""
+        with tempfile.TemporaryDirectory(prefix="octoclaw-patrol-home-") as home:
+            session_dir = Path(home) / ".openclaw" / "agents" / "main" / "sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            (session_dir / "sess-progress-2.jsonl").write_text(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "CHECKPOINT: summarized release notes\nARTIFACTS_READY: /tmp/release-2.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": home}, clear=False):
+                hydrated = patrol.hydrate_session_progress_markers(
+                    [
+                        {
+                            "id": "research-progress-2",
+                            "status": "running",
+                            "route": "spawn_single",
+                            "runtime": "subagent",
+                            "worker_pool": "octoclaw-research",
+                            "session_id": "sess-progress-2",
+                            "artifacts": {},
+                        }
+                    ]
+                )
+
+        self.assertEqual(hydrated, 1)
+        self.assertEqual(mock_run.call_count, 2)
+        first_cmd = mock_run.call_args_list[0][0][0]
+        second_cmd = mock_run.call_args_list[1][0][0]
+        self.assertIn("checkpoint", first_cmd)
+        self.assertIn("summarized release notes", first_cmd)
+        self.assertIn("artifact_ready", second_cmd)
+
+    @patch("patrol.subprocess.run")
+    def test_hydrate_session_progress_markers_skips_duplicate_markers(self, mock_run) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-patrol-home-") as home:
+            session_dir = Path(home) / ".openclaw" / "agents" / "main" / "sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            (session_dir / "sess-progress-3.jsonl").write_text(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "CHECKPOINT: summarized release notes\nARTIFACTS_READY: /tmp/release-3.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": home}, clear=False):
+                hydrated = patrol.hydrate_session_progress_markers(
+                    [
+                        {
+                            "id": "research-progress-3",
+                            "status": "running",
+                            "route": "spawn_single",
+                            "runtime": "subagent",
+                            "worker_pool": "octoclaw-research",
+                            "session_id": "sess-progress-3",
+                            "artifacts": {
+                                "session_progress_hydrated": {
+                                    "checkpoint_message": "summarized release notes",
+                                    "artifact_paths": ["/tmp/release-3.md"],
+                                }
+                            },
+                        }
+                    ]
+                )
+
+        self.assertEqual(hydrated, 0)
+        mock_run.assert_not_called()
+
     @patch("patrol.subprocess.run")
     def test_hydrate_completed_session_results_finishes_task_via_task_state_update(self, mock_run) -> None:
         mock_run.return_value.returncode = 0
