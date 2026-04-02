@@ -229,7 +229,7 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "native")
         self.assertEqual(payload["backend_name"], "openclaw_agent")
         self.assertEqual(payload["pid"], 43210)
-        self.assertTrue(payload["session_key"].startswith("agent:main:subagent:"))
+        self.assertEqual(payload["session_key"], "")
         self.assertTrue(payload["session_id"].startswith("octoclaw-subagent-"))
         self.assertTrue(payload["stdout_path"].endswith(".stdout.log"))
         self.assertTrue(payload["stderr_path"].endswith(".stderr.log"))
@@ -345,8 +345,8 @@ class OctoClawSpawnTests(unittest.TestCase):
                     "agent_name": "main",
                     "profile": "research",
                     "thinking": "medium",
-                    "session_key": "agent:main:subagent:research-1",
-                    "child_session_key": "agent:main:subagent:research-1",
+                    "session_key": "",
+                    "child_session_key": "",
                     "session_id": "octoclaw-subagent-research-1",
                     "run_id": "",
                     "native_task_id": "",
@@ -379,8 +379,7 @@ class OctoClawSpawnTests(unittest.TestCase):
         upsert_cmd = subprocess_calls[-1]
         self.assertIn("--status", upsert_cmd)
         self.assertIn("running", upsert_cmd)
-        self.assertIn("--session-key", upsert_cmd)
-        self.assertIn("agent:main:subagent:research-1", upsert_cmd)
+        self.assertNotIn("--session-key", upsert_cmd)
 
     def test_build_spawn_spec_does_not_need_legacy_inputs_when_taxonomy_exists(self) -> None:
         policy = {

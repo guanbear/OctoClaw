@@ -489,15 +489,13 @@ def build_native_openclaw_command(
 ) -> tuple[list[str], str, str]:
     cfg = spawn_execution_config()
     openclaw_bin = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
-    session_key = resolve_native_session_key(task_id)
+    session_key = ""
     session_id = resolve_native_session_id(task_id)
     command = [
         openclaw_bin,
         "agent",
         "--agent",
         "main",
-        "--session-key",
-        session_key,
         "--session-id",
         session_id,
         "--lane",
