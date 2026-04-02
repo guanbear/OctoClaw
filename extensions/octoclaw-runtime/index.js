@@ -709,11 +709,11 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       decision,
       createdAt: existing?.createdAt || Date.now(),
       updatedAt: Date.now(),
-      delegated: Boolean(existing?.delegated),
-      delegationTool: existing?.delegationTool || "",
-      routeHintSubmitted: Boolean(existing?.routeHintSubmitted),
-      routeHintPayload: existing?.routeHintPayload || null,
-      blockedTools: Array.isArray(existing?.blockedTools) ? existing.blockedTools : [],
+      delegated: false,
+      delegationTool: "",
+      routeHintSubmitted: false,
+      routeHintPayload: null,
+      blockedTools: [],
     };
     setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
@@ -1593,6 +1593,7 @@ export const __octoclawTest = {
   buildPolicyMetadata,
   preHintAllowedTools,
   shouldRetainPolicyStateOnAgentEnd,
+  resolvePolicyDecisionForContext,
   inferRoute,
   buildDecision,
   __setPolicyState: setPolicyStateForContext,

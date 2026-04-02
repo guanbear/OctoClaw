@@ -15,7 +15,7 @@ POLICY_CONFIG_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "policy" / 
 def run_runtime_helper(expression: str, env: Optional[dict] = None) -> dict:
     script = f"""
 import {{ __octoclawTest }} from {json.dumps(str(EXTENSION_PATH))};
-const value = {expression};
+const value = await ({expression});
 console.log(JSON.stringify(value));
 """
     result = subprocess.run(
@@ -320,6 +320,55 @@ Conversation info (untrusted metadata):
         )
 
         self.assertFalse(payload)
+
+    def test_new_prompt_resets_ephemeral_policy_state(self) -> None:
+        payload = run_runtime_helper(
+            """(async () => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u567",
+                  sessionId: "sess-5",
+                  trigger: "message",
+                  agentId: "agent:main:main"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "检查一下 nginx error log 最近 80 行，然后总结问题",
+                  decision: {
+                    request: { session_key: "agent:main:slack:direct:u567" },
+                    route_decision: { route: "spawn_single" }
+                  },
+                  createdAt: now,
+                  updatedAt: now,
+                  delegated: true,
+                  delegationTool: "octoclaw_dispatch",
+                  routeHintSubmitted: true,
+                  routeHintPayload: { route_hint: "spawn_single" },
+                  blockedTools: ["exec"]
+                });
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  "八爪鱼状态",
+                  ctx,
+                  process.cwd(),
+                  null
+                );
+                return {
+                  delegated: resolved?.state?.delegated,
+                  delegationTool: resolved?.state?.delegationTool || "",
+                  routeHintSubmitted: resolved?.state?.routeHintSubmitted,
+                  blockedTools: resolved?.state?.blockedTools || [],
+                  taskClass: resolved?.decision?.route_decision?.task_class || "",
+                  route: resolved?.decision?.route_decision?.route || ""
+                };
+            })()"""
+        )
+
+        self.assertFalse(payload["delegated"])
+        self.assertEqual(payload["delegationTool"], "")
+        self.assertFalse(payload["routeHintSubmitted"])
+        self.assertEqual(payload["blockedTools"], [])
+        self.assertEqual(payload["taskClass"], "control_observer")
+        self.assertEqual(payload["route"], "direct")
 
 
 if __name__ == "__main__":
