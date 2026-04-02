@@ -119,6 +119,10 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "task": "details task-123",
                 "config": {},
             },
+            {
+                "task": "stop task-123",
+                "config": {},
+            },
         ]
 
         for case in cases:

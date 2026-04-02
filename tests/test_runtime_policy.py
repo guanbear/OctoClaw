@@ -287,6 +287,13 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["observer_control_candidate"])
         self.assertFalse(payload["features"]["hard_runner_candidate"])
 
+    def test_task_stop_command_prefers_direct_control_lane(self) -> None:
+        payload = self.run_route("stop task-123")
+        self.assertEqual(payload["system_preferred_route"], "direct")
+        self.assertEqual(payload["task_class"], "control_observer")
+        self.assertTrue(payload["features"]["observer_control_candidate"])
+        self.assertFalse(payload["features"]["hard_runner_candidate"])
+
     def test_runner_policy_uses_workspace_local_model_policy(self) -> None:
         payload = self.run_policy(
             "看下 8080 端口开了没",

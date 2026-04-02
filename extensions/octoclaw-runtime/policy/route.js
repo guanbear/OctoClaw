@@ -227,8 +227,8 @@ const REMOTE_TARGET_PATTERNS = {
 };
 
 const OBSERVER_CONTROL_PATTERNS = {
-  zh: [String.raw`(八爪鱼状态|八爪鱼队列|八爪鱼面板|任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|收件箱|队列面板)`],
-  en: [String.raw`\b(octoclaw status|octoclaw queue|task details|task timeline|task graph|task retrieve|task result|task artifacts|task report|runtime status|task inbox)\b`],
+  zh: [String.raw`(八爪鱼状态|八爪鱼队列|八爪鱼面板|任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|收件箱|队列面板|任务停止|任务重试|任务批准|任务拒绝)`],
+  en: [String.raw`\b(octoclaw status|octoclaw queue|task details|task timeline|task graph|task retrieve|task result|task artifacts|task report|task stop|task retry|task approve|task reject|runtime status|task inbox)\b`],
 };
 
 const ROUTE_PATTERN_LIBRARY = {
@@ -354,8 +354,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   const explicitObserverCommand = Boolean(
     /^\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*$/iu.test(rawTask)
       || /^\s*(?:queue|inbox)\s*$/iu.test(rawTask)
-      || /^\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask)
-      || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
+      || /^\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?|stop|retry|approve|reject)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask)
+      || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
   );
   const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0);
 
