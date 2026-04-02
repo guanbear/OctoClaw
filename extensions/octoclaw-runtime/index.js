@@ -413,6 +413,10 @@ function resolveToolPolicyContext(ctx = {}, prompt = "") {
   if (direct.state && (!prompt || promptsEquivalent(prompt, direct.state.prompt || ""))) {
     return direct;
   }
+  const taskClass = String(inferRoute(prompt || "").task_class || "").trim();
+  if (taskClass === "control_observer") {
+    return { key: "", state: null };
+  }
   const byPrompt = findPolicyStateByPrompt(prompt);
   if (byPrompt.key || byPrompt.state) return byPrompt;
   return findRecentDelegatedPolicyState(prompt);
