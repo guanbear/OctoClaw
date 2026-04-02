@@ -808,6 +808,13 @@ OctoClaw 的“省钱”和“快”不能只靠感觉，必须有可执行的�
 - 能被 ClawTeam 或程序化工具流替代的轻任务，不再强依赖独立常驻 daemon
 - 尽量减少 stop/start/loop 管理成本，而不是继续扩守护进程数量
 
+过渡期内，运行面仍需要一个统一 operator 入口来隐藏 `systemd / tmux / shell` 差异。也就是说：
+
+- `octoclawctl`
+  - 负责 `status / ps / up / down / restart / patrol-once`
+  - 让运维操作不再分散在 `install.sh`、`status.sh`、`runner-daemon.sh`、`patrol-loop.sh`
+  - 先把运行面收成一个产品化入口，再继续减少守护进程数量
+
 也就是说，OctoClaw 的长期方向不是“增加更多守护进程”，而是：
 
 > **保留统一运行面，但尽量把运行面做成更轻、更可恢复、更少常驻 loop 的系统。**

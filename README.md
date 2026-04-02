@@ -288,6 +288,11 @@ python3 /workspace/openclaw/skills/octopus/lib/runner_dispatch.py --command 'pwd
 bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
 bash /workspace/openclaw/skills/octopus/lib/status.sh --format lanes
 
+# Unified runtime control
+bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh status
+bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh ps
+bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh restart runtime
+
 # Status view now includes replay-based promotion hints when runtime-policy replay is enabled
 bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
 
@@ -344,6 +349,9 @@ cat /workspace/tmp/octopus/route-stickiness.json
 
 # Force a patrol cycle
 python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
+
+# Or use the unified control entrypoint
+bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh patrol-once
 
 # Disable runtime policy without uninstalling the extension
 bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh disable
