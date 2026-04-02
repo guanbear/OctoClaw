@@ -153,6 +153,56 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(result["backend"], "feishu")
         self.assertEqual(result["message_id"], "msg-feishu-1")
 
+    @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier.register_session_binding")
+    @patch("lib.notifier.resolve_session_binding")
+    @patch("lib.notifier.send_channel_message")
+    @patch("lib.notifier.edit_channel_message")
+    def test_send_task_notification_falls_back_to_text_for_user_safe_final_task(
+        self,
+        mock_edit,
+        mock_send,
+        mock_resolve_binding,
+        mock_register,
+        mock_event,
+    ) -> None:
+        mock_resolve_binding.return_value = {
+            "origin": "slack",
+            "target": "channel:C123",
+            "thread_id": "1712345.000100",
+            "last_message_id": "1712345.000200",
+        }
+        mock_edit.return_value = {"ok": False, "error": "message send timed out after 20s"}
+        mock_send.side_effect = [
+            {"ok": False, "error": "message send timed out after 20s"},
+            {"ok": True, "messageId": "m-fallback-1"},
+        ]
+
+        result = send_task_notification(
+            {
+                **self.task,
+                "status": "done",
+                "handoff_state": "user_safe_ready",
+                "user_safe_summary": "结论已经出来了，建议先检查认证配置。",
+                "report_path": "/tmp/final-report.md",
+                "session_key": "agent:main:slack:channel:C123:thread:1712345.000100",
+            }
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["text_fallback_used"])
+        self.assertEqual(mock_send.call_count, 2)
+        first_kwargs = mock_send.call_args_list[0].kwargs
+        second_args = mock_send.call_args_list[1].args
+        second_kwargs = mock_send.call_args_list[1].kwargs
+        self.assertIn("interactive", first_kwargs)
+        self.assertIsNone(second_kwargs.get("interactive"))
+        self.assertIn("结论已经出来了", second_args[2])
+        self.assertIn("/tmp/final-report.md", second_args[2])
+        self.assertEqual(second_kwargs["thread_id"], "1712345.000100")
+        self.assertTrue(any(call.args[1] == "anchor_sent" for call in mock_event.call_args_list))
+        self.assertGreaterEqual(mock_register.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,16 +10,88 @@ from typing import Any
 
 try:
     from octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
+    from runtime_task_record import task_state_model
     from task_events import append_task_event, register_session_binding, resolve_session_binding
     from task_display import build_operator_task_surface, render_task_anchor_slack
     from session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
+    from lib.runtime_task_record import task_state_model
     from lib.task_events import append_task_event, register_session_binding, resolve_session_binding
     from lib.task_display import build_operator_task_surface, render_task_anchor_slack
     from lib.session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 
 FEISHU_CARD_SCRIPT = os.path.join(os.path.dirname(__file__), "feishu-card.py")
+
+
+def _minimal_handoff_text(task: dict[str, Any]) -> str:
+    state = task_state_model(task)
+    if str(state.get("handoff_state", "") or "").strip().lower() not in {"user_safe_ready", "delivered"}:
+        return ""
+    summary = str(
+        task.get("user_safe_summary", "")
+        or state.get("user_safe_summary", "")
+        or task.get("summary", "")
+        or ""
+    ).strip()
+    if not summary:
+        return ""
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    report_path = str(task.get("report_path", "") or artifacts.get("report_path", "") or "").strip()
+    lines = [summary]
+    if report_path:
+        lines.append(f"报告：{report_path}")
+    return "\n".join(lines[:2]).strip()
+
+
+def _send_text_fallback(
+    *,
+    task: dict[str, Any],
+    backend: str,
+    route: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    fallback_text = _minimal_handoff_text(task)
+    if not fallback_text:
+        return None
+    result = send_channel_message(
+        backend,
+        str(route.get("target", "") or ""),
+        fallback_text,
+        thread_id=str(route.get("thread_id", "") or "").strip(),
+        reply_to="",
+        interactive=None,
+    )
+    result.setdefault("backend", backend)
+    result.setdefault("payload", payload)
+    result.setdefault("resolved_target", route)
+    result.setdefault("action", "send")
+    if not result.get("ok"):
+        return result
+    message_id = str(result.get("message_id", "") or result.get("messageId", "") or "").strip()
+    register_session_binding(
+        str(task.get("session_key", "") or ""),
+        route,
+        task=task,
+        source="anchor_send_text_fallback",
+        message_id=message_id,
+        action="send",
+        thread_state="active",
+    )
+    append_task_event(
+        task,
+        "anchor_sent",
+        message=fallback_text,
+        extra={
+            "backend": backend,
+            "message_id": message_id,
+            "action": "send",
+            "fallback_mode": "text_only",
+            "resolved_target": route,
+        },
+    )
+    result["text_fallback_used"] = True
+    return result
 
 
 def _load_feishu_module():
@@ -258,6 +330,9 @@ def send_task_notification(
             },
         )
     else:
+        fallback_result = _send_text_fallback(task=task, backend=resolved_backend, route=route, payload=payload)
+        if isinstance(fallback_result, dict) and fallback_result.get("ok"):
+            return fallback_result
         append_task_event(
             task,
             "anchor_send_failed",
