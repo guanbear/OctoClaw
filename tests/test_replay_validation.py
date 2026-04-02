@@ -1,0 +1,36 @@
+import unittest
+
+from lib.replay_validation import Turn, score_turn, select_turns
+
+
+class ReplayValidationTests(unittest.TestCase):
+    def test_score_turn_prefers_substantive_prompts(self):
+        rich = Turn(
+            session_key="agent:main:main",
+            session_file="/tmp/a.jsonl",
+            user_timestamp="2026-04-02T10:00:00+08:00",
+            user_prompt="帮我调研 OpenClaw 3.31 的 task flow，并先给我一个三点总结。",
+            assistant_reply="处理中",
+        )
+        trivial = Turn(
+            session_key="agent:main:main",
+            session_file="/tmp/b.jsonl",
+            user_timestamp="2026-04-02T10:01:00+08:00",
+            user_prompt="ping",
+            assistant_reply="pong",
+        )
+        self.assertGreater(score_turn(rich), score_turn(trivial))
+
+    def test_select_turns_dedupes_by_prompt(self):
+        turns = [
+            Turn("k1", "/tmp/a", "2026-04-02T10:00:00+08:00", "帮我调研 OpenClaw 3.31 的 task flow", "A"),
+            Turn("k2", "/tmp/b", "2026-04-02T10:01:00+08:00", "帮我调研 OpenClaw 3.31 的 task flow", "B"),
+            Turn("k3", "/tmp/c", "2026-04-02T10:02:00+08:00", "请帮我总结 breaking changes", "C"),
+        ]
+        selected = select_turns(turns, 5)
+        prompts = [turn.user_prompt for turn in selected]
+        self.assertEqual(prompts.count("帮我调研 OpenClaw 3.31 的 task flow"), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

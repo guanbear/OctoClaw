@@ -7,12 +7,15 @@ WORKSPACE_DEFAULT="${HOME}/.openclaw/workspace"
 WORKSPACE="${WORKSPACE:-${WORKSPACE_DEFAULT}}"
 CONFIG_FILE="${OCTOCLAW_CONFIG_FILE:-${WORKSPACE}/tmp/octoclaw-config.json}"
 VM_HOST="${OCTOCLAW_REPLY_REVIEW_SOURCE_HOST:-root@45.141.139.142}"
+SOURCE_MODE="${OCTOCLAW_REPLY_REVIEW_SOURCE_MODE:-local}"
 TZ_NAME="${OCTOCLAW_REPLY_REVIEW_TZ:-Asia/Shanghai}"
 SKIP_AGENT="${OCTOCLAW_REPLY_REVIEW_SKIP_AGENT:-false}"
 REPORT_DAY="${1:-$(TZ="${TZ_NAME}" date -v-1d +%F 2>/dev/null || TZ="${TZ_NAME}" python3 - <<'PY'\nfrom datetime import datetime, timedelta\nfrom zoneinfo import ZoneInfo\nprint((datetime.now(ZoneInfo(\"Asia/Shanghai\")) - timedelta(days=1)).strftime(\"%Y-%m-%d\"))\nPY\n)}"
 REVIEW_AGENT="${OCTOCLAW_REPLY_REVIEW_AGENT:-octoclaw-reviewer-${REPORT_DAY//-/}-$(date +%H%M%S)}"
 TMP_DIR="${WORKSPACE}/tmp/octopus/reply-review/${REPORT_DAY}"
 SESSIONS_DIR="${TMP_DIR}/sessions"
+LOCAL_OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
+LOCAL_SESSIONS_INDEX="${OCTOCLAW_REPLY_REVIEW_SESSIONS_INDEX:-${LOCAL_OPENCLAW_HOME}/agents/main/sessions/sessions.json}"
 
 mkdir -p "${TMP_DIR}" "${SESSIONS_DIR}"
 
@@ -39,13 +42,25 @@ fetch_remote_file() {
   mv "${tmp_path}" "${local_path}"
 }
 
+copy_local_file() {
+  local source_path="$1"
+  local local_path="$2"
+  mkdir -p "$(dirname "${local_path}")"
+  cp "${source_path}" "${local_path}"
+}
+
 git -C "${REPO_ROOT}" fetch origin codex/release-v0.1.0
 git -C "${REPO_ROOT}" reset --hard origin/codex/release-v0.1.0
 
 openclaw agents add "${REVIEW_AGENT}" --workspace "${WORKSPACE}" --model zai/glm-4.7 --non-interactive --json >/dev/null 2>&1 || true
 
-echo "[nightly-reply-review] fetch sessions index ${REPORT_DAY}"
-fetch_remote_file "/root/.openclaw/agents/main/sessions/sessions.json" "${TMP_DIR}/sessions.json"
+if [ "${SOURCE_MODE}" = "remote" ]; then
+  echo "[nightly-reply-review] fetch remote sessions index ${REPORT_DAY}"
+  fetch_remote_file "/root/.openclaw/agents/main/sessions/sessions.json" "${TMP_DIR}/sessions.json"
+else
+  echo "[nightly-reply-review] use local sessions index ${REPORT_DAY}"
+  copy_local_file "${LOCAL_SESSIONS_INDEX}" "${TMP_DIR}/sessions.json"
+fi
 python3 - <<'PY' "${TMP_DIR}/sessions.json" "${TMP_DIR}/session-files.txt"
 import json, sys
 from pathlib import Path
@@ -69,12 +84,21 @@ PY
 while IFS= read -r remote_file; do
   [ -n "${remote_file}" ] || continue
   echo "[nightly-reply-review] fetch session $(basename "${remote_file}")"
-  fetch_remote_file "${remote_file}" "${SESSIONS_DIR}/$(basename "${remote_file}")"
+  if [ "${SOURCE_MODE}" = "remote" ]; then
+    fetch_remote_file "${remote_file}" "${SESSIONS_DIR}/$(basename "${remote_file}")"
+  else
+    copy_local_file "${remote_file}" "${SESSIONS_DIR}/$(basename "${remote_file}")"
+  fi
 done < "${TMP_DIR}/session-files.txt"
 
 echo "[nightly-reply-review] fetch replay/task-state"
-fetch_remote_file "/workspace/tmp/octopus/runtime-policy-replay.jsonl" "${TMP_DIR}/runtime-policy-replay.jsonl" || true
-fetch_remote_file "/workspace/tmp/octopus/task-state.json" "${TMP_DIR}/task-state.json" || true
+if [ "${SOURCE_MODE}" = "remote" ]; then
+  fetch_remote_file "/workspace/tmp/octopus/runtime-policy-replay.jsonl" "${TMP_DIR}/runtime-policy-replay.jsonl" || true
+  fetch_remote_file "/workspace/tmp/octopus/task-state.json" "${TMP_DIR}/task-state.json" || true
+else
+  cp "${WORKSPACE}/tmp/octopus/runtime-policy-replay.jsonl" "${TMP_DIR}/runtime-policy-replay.jsonl" 2>/dev/null || true
+  cp "${WORKSPACE}/tmp/octopus/task-state.json" "${TMP_DIR}/task-state.json" 2>/dev/null || true
+fi
 
 "${PYTHON_BIN}" "${REPO_ROOT}/lib/reply_review_packet.py" \
   --sessions-index "${TMP_DIR}/sessions.json" \
