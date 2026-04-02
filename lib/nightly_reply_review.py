@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -119,6 +120,34 @@ def extract_text_result(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def parse_json_object(raw: str) -> dict:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+        return payload if isinstance(payload, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    marker = text.find("{")
+    if marker >= 0:
+        candidate = text[marker:].strip()
+        try:
+            payload = json.loads(candidate)
+            return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError:
+            pass
+    matches = list(re.finditer(r"(?m)^\{", text))
+    for match in reversed(matches):
+        candidate = text[match.start() :].strip()
+        try:
+            payload = json.loads(candidate)
+            return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
 def run_openclaw_review(*, prompt: str, agent: str, session_id: str, thinking: str) -> str:
     result = subprocess.run(
         [
@@ -140,7 +169,9 @@ def run_openclaw_review(*, prompt: str, agent: str, session_id: str, thinking: s
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "").strip() or "openclaw agent failed")
-    payload = json.loads(result.stdout or "{}")
+    payload = parse_json_object(result.stdout)
+    if not payload:
+        payload = parse_json_object(result.stderr)
     return extract_text_result(payload)
 
 
@@ -151,7 +182,7 @@ def main() -> int:
     repo_root = Path(args.repo_root or os.getcwd()).expanduser().resolve()
     output = Path(args.output or (repo_root / "reports" / "reply-review" / f"{day}.md")).expanduser().resolve()
     prompt_output = Path(args.prompt_output or (repo_root / "reports" / "reply-review" / "packets" / f"{day}.prompt.md")).expanduser().resolve()
-    session_id = args.session_id or f"octoclaw-reply-review-{day}"
+    session_id = args.session_id or f"octoclaw-reply-review-{day}-{datetime.now(tz).strftime('%H%M%S')}"
 
     packet = json.loads(Path(args.packet).expanduser().resolve().read_text())
     prompt = build_prompt(packet, day=day, timezone=str(tz))
