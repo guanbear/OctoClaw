@@ -231,6 +231,8 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(payload["pid"], 43210)
         self.assertEqual(payload["session_key"], "")
         self.assertTrue(payload["session_id"].startswith("octoclaw-subagent-"))
+        self.assertNotIn("--model", payload["command"])
+        self.assertNotIn("--lane", payload["command"])
         self.assertTrue(payload["stdout_path"].endswith(".stdout.log"))
         self.assertTrue(payload["stderr_path"].endswith(".stderr.log"))
         self.assertTrue(payload["wrapper_path"].endswith(".run.sh"))
