@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/workspace.sh"
 WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
+PYTHON_BIN="$(resolve_octoclaw_python)"
 RUNNER_SCRIPT="$SCRIPT_DIR/runner_loop.sh"
 PID_FILE="$WORKSPACE/tmp/octopus/runner-daemon.pid"
 LOG_FILE="$WORKSPACE/tmp/octopus/runner.log"
@@ -38,7 +39,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] runner-daemon 启动 (PID=$$)" >> "$LOG_FIL
 while true; do
     START=$(date +%s)
     set +e
-    WORKSPACE="$WORKSPACE" bash "$RUNNER_SCRIPT" >> "$LOG_FILE" 2>&1
+    WORKSPACE="$WORKSPACE" OCTOCLAW_PYTHON_BIN="$PYTHON_BIN" bash "$RUNNER_SCRIPT" >> "$LOG_FILE" 2>&1
     EXIT_CODE=$?
     set -e
     END=$(date +%s)

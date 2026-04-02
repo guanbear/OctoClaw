@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/workspace.sh"
 WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
+PYTHON_BIN="${OCTOCLAW_PYTHON_BIN:-$(resolve_octoclaw_python)}"
 QUEUE_PY="$SCRIPT_DIR/runner_queue.py"
 TASK_STATE_PY="$SCRIPT_DIR/task-state-update.py"
 
@@ -15,7 +16,7 @@ MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
 MAX_IDLE_SECONDS="${RUNNER_MAX_IDLE_SECONDS:-900}"
 MAX_JOBS="${RUNNER_MAX_JOBS_PER_WORKER:-30}"
 WORKER_ID="${RUNNER_WORKER_ID:-runner-$(hostname)-$$}"
-STARTED_AT="$(python3 - <<'PY'
+STARTED_AT="$("$PYTHON_BIN" - <<'PY'
 from datetime import datetime, timezone
 print(datetime.now(timezone.utc).astimezone().isoformat())
 PY
@@ -26,10 +27,10 @@ jobs_completed=0
 last_heartbeat=0
 last_job_epoch="$START_EPOCH"
 
-python3 "$QUEUE_PY" ensure >/dev/null
+"$PYTHON_BIN" "$QUEUE_PY" ensure >/dev/null
 
 heartbeat() {
-  python3 "$QUEUE_PY" heartbeat \
+  "$PYTHON_BIN" "$QUEUE_PY" heartbeat \
     --worker-id "$WORKER_ID" \
     --pid "$$" \
     --job-id "${1:-}" \
@@ -48,7 +49,7 @@ update_task_running() {
   local agent_namespace="${8:-}"
   local managed_by_octoclaw="${9:-}"
   local cmd=(
-    python3 "$TASK_STATE_PY" upsert
+    "$PYTHON_BIN" "$TASK_STATE_PY" upsert
     --id "$job_id"
     --model "$model"
     --status running
@@ -90,7 +91,7 @@ finish_task() {
   local summary="$3"
   local report_path="${4:-}"
   local artifacts_json="${5:-}"
-  local cmd=(python3 "$TASK_STATE_PY" "$outcome" --id "$job_id" --summary "$summary")
+  local cmd=("$PYTHON_BIN" "$TASK_STATE_PY" "$outcome" --id "$job_id" --summary "$summary")
   if [[ -n "$report_path" ]]; then
     cmd+=(--report-path "$report_path")
   fi
@@ -116,7 +117,7 @@ while true; do
     last_heartbeat="$now_epoch"
   fi
 
-  job_json="$(python3 "$QUEUE_PY" claim --worker-id "$WORKER_ID")"
+  job_json="$("$PYTHON_BIN" "$QUEUE_PY" claim --worker-id "$WORKER_ID")"
   if [[ "$job_json" == "{}" ]]; then
     if (( jobs_completed > 0 )) && (( MAX_IDLE_SECONDS > 0 )) && (( now_epoch - last_job_epoch >= MAX_IDLE_SECONDS )); then
       recycle_runner "max_idle_seconds_reached"
@@ -125,7 +126,7 @@ while true; do
     continue
   fi
 
-  job_dump="$(python3 - "$job_json" <<'PY'
+  job_dump="$("$PYTHON_BIN" - "$job_json" <<'PY'
 import base64
 import json
 import sys
@@ -144,7 +145,7 @@ PY
 $job_dump
 EOF
   decode_field() {
-    python3 - "$1" <<'PY'
+    "$PYTHON_BIN" - "$1" <<'PY'
 import base64
 import sys
 raw = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -181,7 +182,7 @@ managed_by_octoclaw="$(decode_field "${job_fields[11]:-}")"
   set +e
   (
     cd "$cwd" 2>/dev/null || cd "$WORKSPACE"
-    python3 - "$command" "$timeout_seconds" "$stdout_file" "$stderr_file" <<'PY'
+    "$PYTHON_BIN" - "$command" "$timeout_seconds" "$stdout_file" "$stderr_file" <<'PY'
 import subprocess
 import sys
 
@@ -210,7 +211,7 @@ PY
   fi
 
   report_file="${WORKSPACE}/tmp/octopus/shared/${job_id}.md"
-report_dump="$(python3 - "$SCRIPT_DIR" "$meta_file" "$job_id" "$command" "$cwd" "$timeout_seconds" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" "$report_file" "$WORKER_ID" "$session_key" "$session_id" "$agent_id" "$agent_namespace" "$managed_by_octoclaw" <<'PY'
+report_dump="$("$PYTHON_BIN" - "$SCRIPT_DIR" "$meta_file" "$job_id" "$command" "$cwd" "$timeout_seconds" "$exit_code" "$stdout_file" "$stderr_file" "$result_status" "$report_file" "$WORKER_ID" "$session_key" "$session_id" "$agent_id" "$agent_namespace" "$managed_by_octoclaw" <<'PY'
 import base64
 import json
 import os
@@ -388,7 +389,7 @@ EOF
   report_path="$(decode_field "${report_fields[1]:-}")"
   artifacts_json="$(decode_field "${report_fields[2]:-}")"
 
-  python3 "$QUEUE_PY" complete \
+  "$PYTHON_BIN" "$QUEUE_PY" complete \
     --id "$job_id" \
     --status "$result_status" \
     --summary "$result_summary" \

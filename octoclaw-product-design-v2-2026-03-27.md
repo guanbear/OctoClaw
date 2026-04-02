@@ -251,6 +251,7 @@ ClawTeam 最值得借的是：
 - [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
 - [octoclaw-openclaw-task-flow-analysis-v1-2026-04-01.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-openclaw-task-flow-analysis-v1-2026-04-01.md)
 - [octoclaw-openclaw-task-flow-migration-plan-v1-2026-04-01.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-openclaw-task-flow-migration-plan-v1-2026-04-01.md)
+- Runtime compatibility note: the current OctoClaw shell/Python control plane already assumes Python 3.10+ syntax in several scripts. Hosts that only expose system Python 3.9 should prefer a managed interpreter such as `/opt/homebrew/bin/python3`; longer term, more of this control surface should move to Node/TS where that meaningfully reduces interpreter drift.
 
 ---
 

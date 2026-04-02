@@ -28,12 +28,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/workspace.sh"
+PYTHON_BIN="$(resolve_octoclaw_python)"
 
-python3 - "$FORMAT" "$SCRIPT_DIR" <<'PYEOF'
+"$PYTHON_BIN" - "$FORMAT" "$SCRIPT_DIR" <<'PYEOF'
 import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 fmt = sys.argv[1] if len(sys.argv) > 1 else "compact"
 script_dir = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
@@ -99,7 +103,7 @@ mode = "auto"
 mode_label = "自动选模（policy-first）"
 
 
-def summarize_replay_status(config: dict, *, fast: bool = False) -> dict | None:
+def summarize_replay_status(config: Dict[str, Any], *, fast: bool = False) -> Optional[Dict[str, Any]]:
     runtime_policy = config.get("runtime_policy") if isinstance(config, dict) else {}
     if not isinstance(runtime_policy, dict):
         return None
@@ -157,10 +161,10 @@ def load_main_session_actual_model():
 
 
 def load_tasks():
-    if not os.path.exists(TASK_FILE):
+    if not os.path.exists(TASK_STATE_FILE):
         return []
     try:
-        with open(TASK_FILE, "r", encoding="utf-8") as f:
+        with open(TASK_STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         tasks = data.get("tasks", [])
         tasks = [task for task in tasks if task.get("source") in {"octoclaw", "octopus"}]

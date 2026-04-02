@@ -6,6 +6,7 @@
 2. OpenClaw `tasks / flows` 先作为 substrate facts 接入。
 3. ClawTeam 逐步从核心依赖降成 optional operator backend。
 4. 不把 ACP / cron / unrelated subagent task 混进 OctoClaw 视图。
+5. 运行时解释器要收口：当前 control-plane Python 脚本默认以 3.10+ 为基线，部署面需要优先提供稳定解释器；长期再评估哪些脚本值得继续保留，哪些应迁到 Node/TS。
 
 ## 2. 边界
 

@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/workspace.sh"
 WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR")"
+PYTHON_BIN="$(resolve_octoclaw_python)"
 PATROL_SCRIPT="$SCRIPT_DIR/patrol.py"
 LOG_FILE="$WORKSPACE/tmp/octopus/patrol.log"
 PID_FILE="$WORKSPACE/tmp/octopus/patrol-loop.pid"
@@ -39,7 +40,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] patrol-loop 启动 (PID=$$)，间隔 ${INTE
 
 while true; do
     START=$(date +%s)
-    python3 "$PATROL_SCRIPT" >> "$LOG_FILE" 2>&1
+    "$PYTHON_BIN" "$PATROL_SCRIPT" >> "$LOG_FILE" 2>&1
     EXIT_CODE=$?
     END=$(date +%s)
     ELAPSED=$((END - START))

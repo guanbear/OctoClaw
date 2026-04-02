@@ -30,3 +30,20 @@ resolve_octoclaw_workspace() {
   fi
   printf '/workspace\n'
 }
+
+resolve_octoclaw_python() {
+  local candidates=(
+    "${OCTOCLAW_PYTHON_BIN:-}"
+    "/opt/homebrew/bin/python3"
+    "/usr/local/bin/python3"
+    "$(command -v python3 2>/dev/null || true)"
+  )
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf 'python3\n'
+}
