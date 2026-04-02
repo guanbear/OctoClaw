@@ -590,6 +590,16 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["openclaw_task_id"] = _normalized_str(normalized.get("openclaw_task_id") or taskflow.get("task_id"))
     normalized["openclaw_flow_id"] = _normalized_str(normalized.get("openclaw_flow_id") or taskflow.get("flow_id"))
     normalized["openclaw_flow_kind"] = _normalized_str(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind"))
+    normalized["openclaw_native_binding_state"] = _normalized_str(normalized.get("openclaw_native_binding_state") or taskflow.get("native_binding_state"))
+    normalized["openclaw_native_status"] = _normalized_str(normalized.get("openclaw_native_status") or taskflow.get("native_status"))
+    normalized["openclaw_native_runtime"] = _normalized_str(normalized.get("openclaw_native_runtime") or taskflow.get("native_runtime"))
+    normalized["openclaw_native_seen_at"] = _normalized_str(normalized.get("openclaw_native_seen_at") or taskflow.get("native_seen_at"))
+    native_match_score = normalized.get("openclaw_native_match_score")
+    if str(native_match_score or "").strip():
+        normalized["openclaw_native_match_score"] = int(native_match_score or 0)
+    else:
+        inferred_match_score = taskflow.get("native_match_score")
+        normalized["openclaw_native_match_score"] = int(inferred_match_score or 0) if str(inferred_match_score or "").strip() else 0
     normalized.update(task_state_model({**normalized, "artifacts": artifacts}))
     normalized["artifacts"] = artifacts
     explicit_ownership = normalized.get("ownership") if isinstance(normalized.get("ownership"), dict) else {}

@@ -184,6 +184,11 @@ class RuntimeTaskRecordTests(unittest.TestCase):
                 "openclaw_taskflow": {
                     "backend": "mirror",
                     "binding_state": "mirrored_bound",
+                    "native_binding_state": "bound",
+                    "native_status": "running",
+                    "native_runtime": "subagent",
+                    "native_seen_at": "2026-04-03T08:30:00Z",
+                    "native_match_score": 125,
                     "task_id": "native-task-3",
                     "flow_id": "flow-3",
                     "flow_kind": "one_task",
@@ -193,6 +198,11 @@ class RuntimeTaskRecordTests(unittest.TestCase):
 
         self.assertEqual(payload["openclaw_taskflow_backend"], "mirror")
         self.assertEqual(payload["openclaw_taskflow_state"], "mirrored_bound")
+        self.assertEqual(payload["openclaw_native_binding_state"], "bound")
+        self.assertEqual(payload["openclaw_native_status"], "running")
+        self.assertEqual(payload["openclaw_native_runtime"], "subagent")
+        self.assertEqual(payload["openclaw_native_seen_at"], "2026-04-03T08:30:00Z")
+        self.assertEqual(payload["openclaw_native_match_score"], 125)
         self.assertEqual(payload["openclaw_task_id"], "native-task-3")
         self.assertEqual(payload["openclaw_flow_id"], "flow-3")
         self.assertEqual(payload["openclaw_flow_kind"], "one_task")

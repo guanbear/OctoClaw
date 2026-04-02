@@ -250,6 +250,8 @@ class TaskDisplayTests(unittest.TestCase):
                     "backend": "mirror",
                     "binding_state": "mirrored_bound",
                     "native_binding_state": "bound",
+                    "native_runtime": "subagent",
+                    "native_status": "running",
                     "task_id": "native-task-1",
                     "flow_id": "flow-1",
                 },
@@ -281,7 +283,7 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("details", rendered)
         self.assertIn("stop", rendered)
         self.assertIn("Checklist: 1 done / 1 open", rendered)
-        self.assertIn("Substrate: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", rendered)
+        self.assertIn("Substrate: mirror · mirrored_bound · bound · subagent · running · task native-task-1 · flow flow-1", rendered)
 
     def test_build_task_anchor_exposes_openclaw_taskflow_binding(self) -> None:
         anchor = build_task_anchor(
@@ -295,6 +297,10 @@ class TaskDisplayTests(unittest.TestCase):
                     "backend": "mirror",
                     "binding_state": "mirrored_bound",
                     "native_binding_state": "bound",
+                    "native_status": "running",
+                    "native_runtime": "subagent",
+                    "native_seen_at": "2026-04-03T09:00:00Z",
+                    "native_match_score": 120,
                     "task_id": "native-task-2",
                     "flow_id": "flow-2",
                     "flow_kind": "one_task",
@@ -305,9 +311,16 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual(anchor["openclaw_taskflow_backend"], "mirror")
         self.assertEqual(anchor["openclaw_taskflow_state"], "mirrored_bound")
+        self.assertEqual(anchor["openclaw_native_binding_state"], "bound")
+        self.assertEqual(anchor["openclaw_native_status"], "running")
+        self.assertEqual(anchor["openclaw_native_runtime"], "subagent")
+        self.assertEqual(anchor["openclaw_native_seen_at"], "2026-04-03T09:00:00Z")
+        self.assertEqual(anchor["openclaw_native_match_score"], 120)
         self.assertEqual(anchor["openclaw_task_id"], "native-task-2")
         self.assertEqual(anchor["openclaw_flow_id"], "flow-2")
         self.assertEqual(anchor["openclaw_flow_kind"], "one_task")
+        self.assertIn("subagent", anchor["substrate_summary"])
+        self.assertIn("running", anchor["substrate_summary"])
         self.assertIn("native-task-2", anchor["substrate_summary"])
 
     def test_build_task_detail_includes_substrate_binding(self) -> None:
@@ -322,6 +335,10 @@ class TaskDisplayTests(unittest.TestCase):
                     "backend": "mirror",
                     "binding_state": "mirrored_bound",
                     "native_binding_state": "bound",
+                    "native_status": "running",
+                    "native_runtime": "subagent",
+                    "native_seen_at": "2026-04-03T09:10:00Z",
+                    "native_match_score": 118,
                     "task_id": "native-task-3",
                     "flow_id": "flow-3",
                     "flow_kind": "one_task",
@@ -331,8 +348,14 @@ class TaskDisplayTests(unittest.TestCase):
         )
 
         self.assertEqual(detail["substrate"]["backend"], "mirror")
+        self.assertEqual(detail["substrate"]["native_binding_state"], "bound")
+        self.assertEqual(detail["substrate"]["native_status"], "running")
+        self.assertEqual(detail["substrate"]["native_runtime"], "subagent")
+        self.assertEqual(detail["substrate"]["native_seen_at"], "2026-04-03T09:10:00Z")
+        self.assertEqual(detail["substrate"]["native_match_score"], 118)
         self.assertEqual(detail["substrate"]["task_id"], "native-task-3")
         self.assertEqual(detail["substrate"]["flow_id"], "flow-3")
+        self.assertIn("subagent", detail["substrate"]["summary"])
         self.assertIn("flow-3", detail["substrate"]["summary"])
 
     def test_render_task_anchor_slack_returns_blocks(self) -> None:

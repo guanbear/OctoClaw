@@ -376,4 +376,10 @@ def enrich_task_record_with_taskflow(
     updated["openclaw_task_id"] = _normalized_str(resolved.get("task_id"))
     updated["openclaw_flow_id"] = _normalized_str(resolved.get("flow_id"))
     updated["openclaw_flow_kind"] = _normalized_str(resolved.get("flow_kind"))
+    updated["openclaw_native_binding_state"] = _normalized_str(resolved.get("native_binding_state"))
+    updated["openclaw_native_status"] = _normalized_str(resolved.get("native_status"))
+    updated["openclaw_native_runtime"] = _normalized_str(resolved.get("native_runtime"))
+    updated["openclaw_native_seen_at"] = _normalized_str(resolved.get("native_seen_at"))
+    native_match_score = resolved.get("native_match_score")
+    updated["openclaw_native_match_score"] = int(native_match_score or 0) if str(native_match_score or "").strip() else 0
     return updated

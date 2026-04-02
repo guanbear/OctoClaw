@@ -89,6 +89,61 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertEqual(resolved["flow_id"], "flow-1")
         self.assertEqual(resolved["binding_state"], "mirrored_bound")
         self.assertEqual(resolved["native_binding_state"], "bound")
+        self.assertEqual(resolved["native_status"], "running")
+        self.assertEqual(resolved["native_runtime"], "subagent")
+        self.assertGreater(resolved["native_match_score"], 0)
+        self.assertTrue(resolved["native_seen_at"])
+
+    def test_enrich_task_record_with_taskflow_promotes_native_binding_facts(self) -> None:
+        config = {
+            "openclaw_taskflow": {
+                "enabled": True,
+                "backend": "mirror",
+                "register_runner_tasks": True,
+                "register_runner_one_task_flows": False,
+                "register_spawn_single_flows": True,
+                "register_spawn_multi_linear_flows": True,
+                "native_binding_enabled": True,
+            }
+        }
+        task = {
+            "id": "spawn-2",
+            "route": "spawn_single",
+            "runtime": "subagent",
+            "status": "running",
+            "worker_pool": "octoclaw-research",
+            "summary": "research provider docs",
+            "task_description": "research provider docs",
+            "session_key": "agent:main:slack:channel:C123:thread:1",
+            "session_id": "child-sess-2",
+            "run_id": "run-2",
+        }
+        native_tasks = [
+            {
+                "taskId": "native-task-2",
+                "runtime": "subagent",
+                "status": "running",
+                "runId": "run-2",
+                "requesterSessionKey": "agent:main:slack:channel:C123:thread:1",
+                "childSessionKey": "child-sess-2",
+                "parentFlowId": "flow-2",
+                "task": "research provider docs",
+            }
+        ]
+
+        enriched = openclaw_taskflow_adapter.enrich_task_record_with_taskflow(
+            task,
+            native_tasks=native_tasks,
+            config=config,
+        )
+
+        self.assertEqual(enriched["openclaw_taskflow_backend"], "mirror")
+        self.assertEqual(enriched["openclaw_taskflow_state"], "mirrored_bound")
+        self.assertEqual(enriched["openclaw_native_binding_state"], "bound")
+        self.assertEqual(enriched["openclaw_native_status"], "running")
+        self.assertEqual(enriched["openclaw_native_runtime"], "subagent")
+        self.assertGreater(enriched["openclaw_native_match_score"], 0)
+        self.assertTrue(enriched["openclaw_native_seen_at"])
 
 
 if __name__ == "__main__":

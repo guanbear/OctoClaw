@@ -61,11 +61,17 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
     backend = _text(binding.get("backend")) or "mirror"
     state = _text(binding.get("binding_state")) or "unknown"
     native_state = _text(binding.get("native_binding_state"))
+    native_runtime = _text(binding.get("native_runtime"))
+    native_status = _text(binding.get("native_status"))
     task_id = _text(binding.get("task_id"))
     flow_id = _text(binding.get("flow_id"))
     parts = [backend, state]
     if native_state and native_state not in {"none", state}:
         parts.append(native_state)
+    if native_runtime:
+        parts.append(native_runtime)
+    if native_status:
+        parts.append(native_status)
     if task_id:
         parts.append(f"task {task_id}")
     if flow_id:
@@ -562,6 +568,10 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "openclaw_taskflow_backend": _text(normalized.get("openclaw_taskflow_backend") or taskflow.get("backend")),
         "openclaw_taskflow_state": _text(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state")),
         "openclaw_native_binding_state": _text(taskflow.get("native_binding_state")),
+        "openclaw_native_status": _text(normalized.get("openclaw_native_status") or taskflow.get("native_status")),
+        "openclaw_native_runtime": _text(normalized.get("openclaw_native_runtime") or taskflow.get("native_runtime")),
+        "openclaw_native_seen_at": _text(normalized.get("openclaw_native_seen_at") or taskflow.get("native_seen_at")),
+        "openclaw_native_match_score": int(normalized.get("openclaw_native_match_score") or taskflow.get("native_match_score") or 0),
         "openclaw_task_id": _text(normalized.get("openclaw_task_id") or taskflow.get("task_id")),
         "openclaw_flow_id": _text(normalized.get("openclaw_flow_id") or taskflow.get("flow_id")),
         "openclaw_flow_kind": _text(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind")),
@@ -658,6 +668,10 @@ def build_task_detail(
             "backend": _text(anchor.get("openclaw_taskflow_backend")),
             "state": _text(anchor.get("openclaw_taskflow_state")),
             "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
+            "native_status": _text(anchor.get("openclaw_native_status")),
+            "native_runtime": _text(anchor.get("openclaw_native_runtime")),
+            "native_seen_at": _text(anchor.get("openclaw_native_seen_at")),
+            "native_match_score": int(anchor.get("openclaw_native_match_score") or 0),
             "task_id": _text(anchor.get("openclaw_task_id")),
             "flow_id": _text(anchor.get("openclaw_flow_id")),
             "flow_kind": _text(anchor.get("openclaw_flow_kind")),
