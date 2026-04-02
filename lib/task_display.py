@@ -603,6 +603,8 @@ def build_task_detail(
 
     children = [item for item in all_normalized if _text(item.get("parent_id")) == task_id or _text(item.get("id")) in child_ids]
     artifacts = _collect_artifacts(normalized)
+    raw_artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts"), dict) else {}
+    runner_plan = dict(raw_artifacts.get("runner_plan", {})) if isinstance(raw_artifacts.get("runner_plan"), dict) else {}
     preview_events = normalized.get("task_events_preview", []) if isinstance(normalized.get("task_events_preview", []), list) else []
     events: list[dict[str, Any]] = []
     if preview_events:
@@ -693,6 +695,7 @@ def build_task_detail(
             "model_health_summary": _text(normalized.get("model_health_summary")),
         },
         "artifacts": artifacts,
+        "runner_plan": runner_plan,
         "checklist": normalized.get("checklist", {}) if isinstance(normalized.get("checklist"), dict) else {},
         "events": events,
         "task_event_summary": normalized.get("task_event_summary", {}),
@@ -907,6 +910,7 @@ def build_task_retrieval_bundle(
     primary = [item for item in artifacts if isinstance(item, dict) and not bool(item.get("related_to_thread"))]
     related = [item for item in artifacts if isinstance(item, dict) and bool(item.get("related_to_thread"))]
     worker_result = ((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("worker_result")
+    runner_plan = ((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("runner_plan")
     next_step = _text(worker_result.get("next_step")) if isinstance(worker_result, dict) else ""
     user_safe_summary = _text(worker_result.get("user_safe_summary")) if isinstance(worker_result, dict) else ""
     primary_report = _text(normalized.get("report_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("report_path"))
@@ -922,6 +926,7 @@ def build_task_retrieval_bundle(
         "primary_report": primary_report,
         "context_path": _text(normalized.get("context_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_path")),
         "context_pack_path": _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
+        "runner_plan": dict(runner_plan) if isinstance(runner_plan, dict) else {},
         "checklist": detail.get("checklist", {}) if isinstance(detail.get("checklist"), dict) else {},
         "primary_artifacts": primary[:5],
         "related_thread_artifacts": related[:5],

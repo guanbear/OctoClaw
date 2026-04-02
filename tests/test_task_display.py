@@ -366,6 +366,32 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("subagent", detail["substrate"]["summary"])
         self.assertIn("flow-3", detail["substrate"]["summary"])
 
+    def test_build_task_detail_exposes_runner_plan_from_artifacts(self) -> None:
+        detail = build_task_detail(
+            {
+                "id": "runner-3",
+                "worker_pool": "octoclaw-runner",
+                "status": "queued",
+                "summary": "check nginx error log",
+                "route": "runner",
+                "runtime": "runner",
+                "artifacts": {
+                    "runner_plan": {
+                        "kind": "local_file_probe",
+                        "command": "tail -n 80 /var/log/nginx/error.log",
+                        "probe_spec": {
+                            "path": "/var/log/nginx/error.log",
+                            "line_count": 80,
+                        },
+                    }
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(detail["runner_plan"]["kind"], "local_file_probe")
+        self.assertEqual(detail["runner_plan"]["probe_spec"]["line_count"], 80)
+
     def test_render_task_anchor_slack_returns_blocks(self) -> None:
         anchor = build_task_anchor(
             {

@@ -54,6 +54,12 @@ class TaskDisplayCliTests(unittest.TestCase):
                             "parent_id": "task-1",
                             "started_at": "2026-03-31T10:01:00Z",
                             "updated_at": "2026-03-31T10:02:00Z",
+                            "artifacts": {
+                                "runner_plan": {
+                                    "kind": "local_file_probe",
+                                    "command": "tail -n 80 /var/log/nginx/error.log",
+                                }
+                            },
                         },
                     ]
                 },
@@ -95,6 +101,11 @@ class TaskDisplayCliTests(unittest.TestCase):
         self.assertIn("Substrate detail: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
         self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1 | runtime openclaw_task/openclaw_flow", out)
 
+    def test_detail_text_surfaces_runner_plan(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-2"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Runner plan: local_file_probe | tail -n 80 /var/log/nginx/error.log", out)
+
     def test_queue_text_groups_tasks(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "queue"])
         self.assertEqual(code, 0, err)
@@ -107,6 +118,11 @@ class TaskDisplayCliTests(unittest.TestCase):
         self.assertIn("Substrate: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
         self.assertIn("Primary report: /tmp/task-1.md", out)
         self.assertIn("Summary:", out)
+
+    def test_retrieve_text_surfaces_runner_plan(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-2"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Runner plan: local_file_probe | tail -n 80 /var/log/nginx/error.log", out)
 
     def test_graph_text_surfaces_child_relationship(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "graph", "--id", "task-1"])

@@ -93,6 +93,13 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
     lineage = detail.get("lineage", {}) if isinstance(detail.get("lineage"), dict) else {}
     if lineage.get("child_task_ids"):
         lines.append("Children: " + ", ".join(str(item) for item in lineage.get("child_task_ids", [])))
+    runner_plan = detail.get("runner_plan", {}) if isinstance(detail.get("runner_plan", {}), dict) else {}
+    if runner_plan:
+        plan_kind = str(runner_plan.get("kind", "") or "").strip()
+        plan_command = str(runner_plan.get("command", "") or "").strip()
+        summary = " | ".join(part for part in [plan_kind, plan_command] if part)
+        if summary:
+            lines.append(f"Runner plan: {summary}")
     checklist = detail.get("checklist", {}) if isinstance(detail.get("checklist"), dict) else {}
     checklist_items = checklist.get("items", []) if isinstance(checklist.get("items"), list) else []
     if checklist_items:
@@ -130,6 +137,13 @@ def render_retrieval_text(bundle: dict[str, Any]) -> str:
     substrate_summary = str(substrate.get("summary", "") or "").strip()
     if substrate_summary:
         lines.append(f"Substrate: {substrate_summary}")
+    runner_plan = bundle.get("runner_plan", {}) if isinstance(bundle.get("runner_plan", {}), dict) else {}
+    if runner_plan:
+        plan_kind = str(runner_plan.get("kind", "") or "").strip()
+        plan_command = str(runner_plan.get("command", "") or "").strip()
+        summary = " | ".join(part for part in [plan_kind, plan_command] if part)
+        if summary:
+            lines.append(f"Runner plan: {summary}")
     summary = str(bundle.get("user_safe_summary", "") or bundle.get("summary", "") or "").strip()
     if summary:
         lines.append(f"Summary: {summary}")
