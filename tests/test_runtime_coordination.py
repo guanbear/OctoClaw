@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
+import importlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import lib.runtime_coordination as runtime_coordination
+from lib.checklist_history import load_checklist_history
 
 from lib.runtime_coordination import (
     artifact_entries_for_task,
+    build_recovery_event,
+    mark_task_for_reassignment,
     ownership_snapshot,
     recover_stale_ownership,
     resolve_task_checklist,
     resolve_task_artifacts,
     resolve_worker_session,
+    sync_runtime_surfaces,
     upsert_artifact_index,
     upsert_checklist,
     upsert_worker_session,
@@ -170,6 +179,92 @@ class RuntimeCoordinationTests(unittest.TestCase):
             self.assertEqual(resolved["open_count"], 1)
             self.assertEqual(resolved["items"][0]["state"], "done")
             self.assertEqual(resolved["items"][1]["state"], "in_progress")
+
+    def test_build_recovery_event_is_deterministic(self) -> None:
+        first = build_recovery_event("task-1", "agent-1", "heartbeat_stale")
+        second = build_recovery_event("task-1", "agent-1", "heartbeat_stale")
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["event_type"], "reassignment")
+        self.assertEqual(first["old_owner_id"], "agent-1")
+
+    def test_mark_task_for_reassignment_is_idempotent(self) -> None:
+        task = {
+            "id": "task-1",
+            "status": "running",
+            "lifecycle_state": "running",
+            "outcome_state": "failed",
+            "handoff_state": "user_safe_ready",
+            "owner": "agent-1",
+            "agent_id": "agent-1",
+            "session_id": "sess-1",
+            "run_id": "run-1",
+            "recovery_reason": "heartbeat_stale",
+        }
+
+        first = mark_task_for_reassignment(task)
+        first_history = list(first["recovery_history"])
+        first_recovered_at = first["last_recovered_at"]
+        second = mark_task_for_reassignment(task)
+
+        self.assertEqual(second["status"], "queued")
+        self.assertEqual(second["lifecycle_state"], "queued")
+        self.assertEqual(second["outcome_state"], "pending")
+        self.assertEqual(second["owner"], "")
+        self.assertEqual(second["session_id"], "")
+        self.assertEqual(second["run_id"], "")
+        self.assertEqual(second["recovery_action"], "queued_for_reassignment")
+        self.assertEqual(second["recovery_history"], first_history)
+        self.assertEqual(second["last_recovered_at"], first_recovered_at)
+
+    def test_sync_runtime_surfaces_only_writes_checklist_history_on_changes(self) -> None:
+        original_workspace = os.environ.get("WORKSPACE")
+        with tempfile.TemporaryDirectory(prefix="octoclaw-runtime-surfaces-") as tmpdir:
+            with patch.dict(os.environ, {"WORKSPACE": tmpdir}, clear=False):
+                reloaded = importlib.reload(runtime_coordination)
+                task = {
+                    "id": "task-1",
+                    "status": "queued",
+                    "route": "spawn_single",
+                    "runtime": "subagent",
+                    "worker_pool": "octoclaw-code",
+                    "updated_at": "2026-04-02T00:00:00+00:00",
+                    "checklist": {
+                        "kind": "explicit",
+                        "items": [
+                            {"id": "read", "title": "Read sources", "state": "pending"},
+                            {"id": "write", "title": "Write summary", "state": "pending"},
+                        ],
+                    },
+                }
+
+                reloaded.sync_runtime_surfaces(dict(task))
+                first_history = load_checklist_history("task-1", tmpdir)
+
+                reloaded.sync_runtime_surfaces(dict(task))
+                second_history = load_checklist_history("task-1", tmpdir)
+
+                updated = dict(task)
+                updated["updated_at"] = "2026-04-02T00:10:00+00:00"
+                updated["checklist"] = {
+                    "kind": "explicit",
+                    "items": [
+                        {"id": "read", "title": "Read sources", "state": "done"},
+                        {"id": "write", "title": "Write summary", "state": "pending"},
+                    ],
+                }
+                reloaded.sync_runtime_surfaces(updated)
+                third_history = load_checklist_history("task-1", tmpdir)
+
+        if original_workspace is None:
+            os.environ.pop("WORKSPACE", None)
+        else:
+            os.environ["WORKSPACE"] = original_workspace
+        importlib.reload(runtime_coordination)
+
+        self.assertEqual([event["event_type"] for event in first_history], ["item_added", "item_added", "snapshot"])
+        self.assertEqual(len(second_history), len(first_history))
+        self.assertTrue(any(event["event_type"] == "item_done" and event["item_id"] == "read" for event in third_history))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from octopus_config import WORKSPACE, load_json, save_json
+try:
+    from octopus_config import WORKSPACE, load_json, save_json
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.octopus_config import WORKSPACE, load_json, save_json
 
 MODEL_PRICING_FILE = f"{WORKSPACE}/tmp/octopus/model-pricing.json"
 CNY_PER_USD = 7.2

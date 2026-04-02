@@ -44,11 +44,19 @@ import time
 import argparse
 from datetime import datetime, timezone, timedelta
 from collections import deque
+from pathlib import Path
 
 from notifier import backend_supports_cards, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec, build_task_prompt, execute_clawteam_spawn
 from clawteam_bridge import sync_task
-from runtime_coordination import recover_stale_ownership, resolve_worker_session, session_resume_snapshot, sync_runtime_surfaces
+from runtime_coordination import (
+    mark_task_for_reassignment,
+    ownership_snapshot,
+    recover_stale_ownership,
+    resolve_worker_session,
+    session_resume_snapshot,
+    sync_runtime_surfaces,
+)
 from runtime_protocol import normalize_worker_result
 from runtime_task_record import normalize_task_record, task_is_final, task_is_recent_final, task_notification_state, task_state_model
 from octopus_config import (
@@ -72,6 +80,12 @@ from octopus_config import (
 )
 from session_ops import send_agent_message
 from task_events import append_task_event
+
+try:
+    from agent_heartbeat import is_agent_alive
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.agent_heartbeat import is_agent_alive
+
 try:
     from openclaw_taskflow_adapter import enrich_task_record_with_taskflow, list_native_openclaw_tasks
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
@@ -1301,6 +1315,55 @@ def recover_dead_agent_tasks(tasks: list[dict], *, stale_after_seconds: int = 90
             sync_runtime_surfaces(record, thread_action="touch")
             sync_task(record, event_type="upsert", previous_status=previous_status)
     return [record for record, _ in updated]
+
+
+def patrol_heartbeat_check(workspace: str, stale_after_seconds: int = 60) -> list[dict]:
+    """Requeue claimed tasks whose owning agent heartbeat has gone stale."""
+    workspace_path = Path(workspace).resolve()
+    state_path = workspace_path / "tmp" / "octopus" / "task-state.json"
+    state = load_task_state(str(state_path))
+    state_tasks = state.get("tasks", [])
+    updated: list[tuple[dict, str, str]] = []
+
+    for task in state_tasks:
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("route", "") or "").strip().lower() == "runner" or str(task.get("runtime", "") or "").strip().lower() == "runner":
+            continue
+        ownership = ownership_snapshot(task, lease_seconds=max(60, int(stale_after_seconds)))
+        if str(ownership.get("state", "") or "").strip().lower() != "claimed":
+            continue
+        owner_id = str(ownership.get("owner_id", "") or task.get("owner", "") or task.get("agent_id", "")).strip()
+        if not owner_id or is_agent_alive(owner_id, workspace_path, stale_after_seconds=stale_after_seconds):
+            continue
+        previous_status = str(task.get("status", "") or "")
+        task["recovery_reason"] = "heartbeat_stale"
+        task["previous_owner_id"] = owner_id
+        mark_task_for_reassignment(task)
+        normalized = normalize_task_record(task)
+        task.clear()
+        task.update(normalized)
+        updated.append((normalized, previous_status, owner_id))
+
+    if updated:
+        state["tasks"] = state_tasks
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        save_task_state(str(state_path), state)
+        for record, previous_status, owner_id in updated:
+            append_task_event(
+                record,
+                "ownership_reassigned",
+                message=str(record.get("summary") or "stale heartbeat reassigned"),
+                extra={
+                    "previous_status": previous_status,
+                    "previous_owner_id": owner_id,
+                    "recovery_action": str(record.get("recovery_action", "") or ""),
+                    "recovery_reason": str(record.get("recovery_reason", "") or ""),
+                },
+            )
+            sync_runtime_surfaces(record, thread_action="touch")
+            sync_task(record, event_type="upsert", previous_status=previous_status)
+    return [record for record, _, _ in updated]
 
 
 def build_steer_message(task: dict) -> str:
@@ -4542,6 +4605,13 @@ def main():
     hydrated = hydrate_completed_session_results(tasks)
     if hydrated > 0:
         print(f"  ✅ 本轮从 child session transcript 回收结果 {hydrated} 个")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
+
+    heartbeat_reassigned = patrol_heartbeat_check(WORKSPACE)
+    if heartbeat_reassigned:
+        print(f"  💓 本轮根据 agent heartbeat 回收任务 {len(heartbeat_reassigned)} 个：{[t.get('id') for t in heartbeat_reassigned]}")
         tasks = load_tasks()
         tasks = annotate_tasks_with_session_state(tasks)
         refresh_openclaw_taskflow_bindings(tasks)

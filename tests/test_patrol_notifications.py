@@ -258,6 +258,54 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertEqual(sent["action"], "edit")
         self.assertEqual(mock_send.call_args[1]["existing_message_id"], "1712345.000200")
 
+    @patch("patrol.sync_task")
+    @patch("patrol.sync_runtime_surfaces")
+    @patch("patrol.append_task_event")
+    @patch("patrol.save_task_state")
+    @patch("patrol.load_task_state")
+    @patch("patrol.is_agent_alive", return_value=False)
+    def test_patrol_heartbeat_check_requeues_claimed_tasks(
+        self,
+        mock_is_alive,
+        mock_load_state,
+        mock_save_state,
+        mock_append_event,
+        mock_sync_surfaces,
+        mock_sync_task,
+    ) -> None:
+        mock_load_state.return_value = {
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "status": "running",
+                    "lifecycle_state": "running",
+                    "route": "spawn_single",
+                    "runtime": "subagent",
+                    "worker_pool": "octoclaw-code",
+                    "summary": "patch auth middleware",
+                    "task_description": "patch auth middleware",
+                    "owner": "agent-1",
+                    "agent_id": "agent-1",
+                    "session_id": "sess-1",
+                    "run_id": "run-1",
+                }
+            ],
+            "updated_at": "",
+        }
+
+        updated = patrol.patrol_heartbeat_check("/tmp/octoclaw-heartbeat-check", stale_after_seconds=60)
+
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(updated[0]["status"], "queued")
+        self.assertEqual(updated[0]["owner"], "")
+        self.assertEqual(updated[0]["recovery_reason"], "heartbeat_stale")
+        mock_is_alive.assert_called_once()
+        mock_save_state.assert_called_once()
+        mock_append_event.assert_called_once()
+        self.assertEqual(mock_append_event.call_args[0][1], "ownership_reassigned")
+        mock_sync_surfaces.assert_called_once()
+        mock_sync_task.assert_called_once()
+
     @patch("patrol.append_task_event")
     @patch("patrol.sync_runtime_surfaces")
     @patch("patrol.sync_task")
