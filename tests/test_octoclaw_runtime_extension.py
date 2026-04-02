@@ -9,11 +9,29 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTENSION_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "index.js"
+POLICY_CONFIG_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "policy" / "config.js"
 
 
 def run_runtime_helper(expression: str, env: Optional[dict] = None) -> dict:
     script = f"""
 import {{ __octoclawTest }} from {json.dumps(str(EXTENSION_PATH))};
+const value = {expression};
+console.log(JSON.stringify(value));
+"""
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env={**os.environ, **(env or {})},
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def run_module_helper(module_path: Path, expression: str, env: Optional[dict] = None) -> dict:
+    script = f"""
+import * as mod from {json.dumps(str(module_path))};
 const value = {expression};
 console.log(JSON.stringify(value));
 """
@@ -56,6 +74,28 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
             self.assertEqual(payload["octoclawRoot"], str(octoclaw_root))
             self.assertEqual(payload["workspaceRoot"], str(workspace_root))
             self.assertTrue(payload["pythonBin"].endswith("python3"))
+
+    def test_policy_config_prefers_managed_openclaw_workspace_layout(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-policy-home-") as tmpdir:
+            home = Path(tmpdir)
+            workspace_root = home / ".openclaw" / "workspace"
+            (workspace_root / "tmp").mkdir(parents=True)
+            payload = run_module_helper(
+                POLICY_CONFIG_PATH,
+                "({ workspace: mod.resolveWorkspace(), configFile: mod.CONFIG_FILE, policyFile: mod.MODEL_POLICY_FILE })",
+                env={
+                    "HOME": str(home),
+                    "WORKSPACE": "",
+                    "OCTOCLAW_WORKSPACE": "",
+                    "PATH": os.environ.get("PATH", ""),
+                },
+            )
+
+            self.assertEqual(payload["workspace"], str(workspace_root))
+            self.assertEqual(payload["configFile"], str(workspace_root / "tmp" / "octoclaw-config.json"))
+            self.assertEqual(payload["policyFile"], str(workspace_root / "tmp" / "octopus" / "model-policy.json"))
 
     def test_extract_prompt_text_unwraps_busy_queue_wrapper(self) -> None:
         payload = run_runtime_helper(

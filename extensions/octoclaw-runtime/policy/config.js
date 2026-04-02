@@ -17,6 +17,12 @@ export function resolveWorkspace() {
     const configured = String(process.env[envName] || "").trim();
     if (configured) return normalizePath(configured);
   }
+  const managedWorkspace = path.join(os.homedir(), ".openclaw", "workspace");
+  try {
+    if (fs.existsSync(path.join(managedWorkspace, "tmp"))) return managedWorkspace;
+  } catch {
+    // ignore and keep fallback below
+  }
   return DEFAULT_WORKSPACE;
 }
 
