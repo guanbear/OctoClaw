@@ -676,14 +676,20 @@ def prompt_contract(protocol: str, route: str, work_contract: str, needs_review:
     }
 
 
-def tool_policy(route: str, dispatch_required: bool) -> dict[str, Any]:
+def tool_policy(route: str, dispatch_required: bool, task_class: str = "") -> dict[str, Any]:
     block_patterns: list[str] = []
     if dispatch_required and route in ("spawn_single", "spawn_multi"):
         block_patterns.extend(["sessions_spawn", "subagents_send", "manual_subagent_spawn"])
     if route == "runner":
         block_patterns.extend(["manual_long_shell_loop"])
+    observer_control_tools = [
+        "octoclaw_policy_decide",
+        "octoclaw_route_hint",
+        "octoclaw_status",
+        "octoclaw_task_action",
+    ]
     return {
-        "allow_direct_tools": route == "direct",
+        "allow_direct_tools": route == "direct" and task_class != "control_observer",
         "must_delegate_via": "octoclaw_dispatch" if dispatch_required else "",
         "allowed_control_tools": [
             "octoclaw_policy_decide",
@@ -692,6 +698,8 @@ def tool_policy(route: str, dispatch_required: bool) -> dict[str, Any]:
             "octoclaw_status",
             "octoclaw_task_action",
         ],
+        "observer_control_tools": observer_control_tools,
+        "control_observer_only": task_class == "control_observer",
         "delegate_first": dispatch_required,
         "block_tool_patterns": block_patterns,
     }
@@ -741,6 +749,8 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
                 policy_enabled
                 and bool(hooks_cfg.get("before_tool_call", True))
                 and (
+                    route_decision["task_class"] == "control_observer"
+                    or
                     route_hint_policy["required"]
                     or bool(switch_cfg.get("delegation_enforcement", True))
                 )
@@ -864,6 +874,7 @@ def build_decision(
     dispatch_required = route != "direct"
     should_wait = route == "runner"
     wait_timeout_seconds = int(route_meta.get("wait_timeout_seconds", 0) or 0) if should_wait else 0
+    task_class = str(route_meta.get("task_class", "") or "")
     route_budget = budget_policy(features, route, work_contract, protocol, needs_review)
     prompt_policy = prompt_contract(protocol, route, work_contract, needs_review)
 
@@ -924,7 +935,7 @@ def build_decision(
             "review_trigger": "policy_required" if needs_review else "",
         },
         "prompt_contract": prompt_policy,
-        "tool_policy": tool_policy(route, dispatch_required),
+        "tool_policy": tool_policy(route, dispatch_required, task_class),
         "route_hint_policy": route_hint_policy,
         "runtime_switches": runtime_switches_summary(runtime_cfg),
     }

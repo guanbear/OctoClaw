@@ -220,6 +220,7 @@ STUCK_THRESHOLD_MINUTES = 15
 RUNNER_STALE_SECONDS = 120
 RUNNER_RESTART_COOLDOWN_SECONDS = 600
 FAILED_NOTIFY_RETRY_SECONDS = 900
+HANDOFF_ANCHOR_RETRY_SECONDS = 180
 # session 刚结束到 task-state/bridge 落盘之间，给一个短暂收尾宽限，避免 patrol 误判 orphan/stuck。
 FINISH_GRACE_SECONDS = 180
 AUTO_REDISPATCH_RETRY_LIMITS = {
@@ -3082,11 +3083,19 @@ def send_state_change_task_anchor(task: dict, *, anchor_state: dict | None = Non
         return {"ok": False, "error": "missing task_id or session_key"}
     previous = anchor_state if isinstance(anchor_state, dict) else {}
     existing_message_id = str(previous.get("message_id", "") or "").strip()
+    attempted_at = datetime.now().isoformat()
     try:
         result = send_task_notification(task, existing_message_id=existing_message_id)
     except Exception as exc:
         print(f"⚠️  发送 task anchor 失败 [{task_id}]: {exc}", file=sys.stderr)
-        return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "task_id": task_id,
+            "message_id": existing_message_id,
+            "action": "none",
+            "error": str(exc),
+            "attempted_at": attempted_at,
+        }
     if result.get("ok"):
         action = str(result.get("action", "send") or "send")
         message_id = str(result.get("message_id", "") or result.get("messageId", "") or existing_message_id).strip()
@@ -3097,6 +3106,8 @@ def send_state_change_task_anchor(task: dict, *, anchor_state: dict | None = Non
             "backend": str(result.get("backend", "") or ""),
             "message_id": message_id,
             "action": action,
+            "resolved_target": result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {},
+            "attempted_at": attempted_at,
         }
     error = str(result.get("error", "") or "").strip()
     if error:
@@ -3108,7 +3119,31 @@ def send_state_change_task_anchor(task: dict, *, anchor_state: dict | None = Non
         "message_id": existing_message_id,
         "action": "none",
         "error": error,
+        "resolved_target": result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {},
+        "attempted_at": attempted_at,
     }
+
+
+def should_retry_handoff_anchor(task: dict, *, anchor_state: dict | None = None, now: datetime | None = None) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if task_notification_state(task) not in {"done", "blocked_final", "partial_final"}:
+        return False
+    state_model = task_state_model(task)
+    if str(state_model.get("handoff_state", "") or "").strip().lower() != "user_safe_ready":
+        return False
+    if str(task.get("session_key", "") or "").strip() == "":
+        return False
+    if str(task.get("delivered_at", "") or state_model.get("delivered_at", "") or "").strip():
+        return False
+    current_time = now or datetime.now(timezone.utc)
+    previous = anchor_state if isinstance(anchor_state, dict) else {}
+    last_attempt = parse_iso(str(previous.get("last_attempt_at", "") or previous.get("updated_at", "") or ""))
+    if last_attempt is None:
+        return True
+    if last_attempt.tzinfo is None:
+        last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+    return (current_time - last_attempt.astimezone(timezone.utc)).total_seconds() >= HANDOFF_ANCHOR_RETRY_SECONDS
 
 
 def send_state_change_task_anchors(tasks: list[dict], *, anchor_messages: dict | None = None) -> dict:
@@ -3123,14 +3158,21 @@ def send_state_change_task_anchors(tasks: list[dict], *, anchor_messages: dict |
             continue
         seen.add(task_id)
         result = send_state_change_task_anchor(task, anchor_state=updated_messages.get(task_id, {}))
+        previous = updated_messages.get(task_id, {}) if isinstance(updated_messages.get(task_id, {}), dict) else {}
+        resolved_target = result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {}
+        updated_at = str(result.get("attempted_at", "") or datetime.now().isoformat())
+        message_id = str(result.get("message_id", "") or previous.get("message_id", "") or "").strip()
+        updated_messages[task_id] = {
+            "backend": str(result.get("backend", "") or previous.get("backend", "") or ""),
+            "message_id": message_id,
+            "thread_key": str(resolved_target.get("thread_key", "") or previous.get("thread_key", "") or ""),
+            "updated_at": updated_at,
+            "last_attempt_at": updated_at,
+            "last_error": str(result.get("error", "") or ""),
+            "last_result": "ok" if result.get("ok") else "failed",
+        }
         if result.get("ok"):
             sent += 1
-            updated_messages[task_id] = {
-                "backend": str(result.get("backend", "") or ""),
-                "message_id": str(result.get("message_id", "") or ""),
-                "thread_key": str((result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {}).get("thread_key", "") or ""),
-                "updated_at": datetime.now().isoformat(),
-            }
     return {"sent": sent, "task_anchor_messages": updated_messages}
 
 
@@ -5072,6 +5114,28 @@ def main():
                 send_state_change_dm(msg, reply_to_message_id=panel_msg_id)
                 anchor_result = send_state_change_task_anchors(
                     changed_tasks_for_anchor[:5],
+                    anchor_messages=anchor_messages,
+                )
+                anchor_messages = anchor_result.get("task_anchor_messages", anchor_messages)
+            retry_ids = {
+                str(task.get("id", "") or "").strip()
+                for task in changed_tasks_for_anchor
+                if isinstance(task, dict) and str(task.get("id", "") or "").strip()
+            }
+            handoff_retry_tasks = [
+                task
+                for task in tasks
+                if isinstance(task, dict)
+                and str(task.get("id", "") or "").strip() not in retry_ids
+                and should_retry_handoff_anchor(
+                    task,
+                    anchor_state=anchor_messages.get(str(task.get("id", "") or "").strip(), {}),
+                    now=notify_now,
+                )
+            ]
+            if handoff_retry_tasks:
+                anchor_result = send_state_change_task_anchors(
+                    handoff_retry_tasks[:5],
                     anchor_messages=anchor_messages,
                 )
                 anchor_messages = anchor_result.get("task_anchor_messages", anchor_messages)

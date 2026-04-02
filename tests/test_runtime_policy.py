@@ -281,6 +281,17 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["observer_control_candidate"])
         self.assertEqual(payload["task_class"], "control_observer")
 
+    def test_control_observer_policy_only_allows_control_tools(self) -> None:
+        payload = self.run_policy("八爪鱼状态")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertFalse(payload["tool_policy"]["allow_direct_tools"])
+        self.assertTrue(payload["tool_policy"]["control_observer_only"])
+        self.assertEqual(
+            payload["tool_policy"]["observer_control_tools"],
+            ["octoclaw_policy_decide", "octoclaw_route_hint", "octoclaw_status", "octoclaw_task_action"],
+        )
+
     def test_task_details_command_prefers_direct_control_lane(self) -> None:
         payload = self.run_route("details task-123")
         self.assertEqual(payload["system_preferred_route"], "direct")

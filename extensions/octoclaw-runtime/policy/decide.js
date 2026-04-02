@@ -526,7 +526,7 @@ function promptContract(protocol, route, workContract, needsReview) {
   };
 }
 
-function toolPolicy(route, dispatchRequired) {
+function toolPolicy(route, dispatchRequired, taskClass = "") {
   const blockPatterns = [];
   if (dispatchRequired && ["spawn_single", "spawn_multi"].includes(route)) {
     blockPatterns.push("sessions_spawn", "subagents_send", "manual_subagent_spawn");
@@ -534,8 +534,14 @@ function toolPolicy(route, dispatchRequired) {
   if (route === "runner") {
     blockPatterns.push("manual_long_shell_loop");
   }
+  const observerControlTools = [
+    "octoclaw_policy_decide",
+    "octoclaw_route_hint",
+    "octoclaw_status",
+    "octoclaw_task_action",
+  ];
   return {
-    allow_direct_tools: route === "direct",
+    allow_direct_tools: route === "direct" && taskClass !== "control_observer",
     must_delegate_via: dispatchRequired ? "octoclaw_dispatch" : "",
     allowed_control_tools: [
       "octoclaw_policy_decide",
@@ -544,6 +550,8 @@ function toolPolicy(route, dispatchRequired) {
       "octoclaw_status",
       "octoclaw_task_action",
     ],
+    observer_control_tools: observerControlTools,
+    control_observer_only: taskClass === "control_observer",
     delegate_first: dispatchRequired,
     block_tool_patterns: blockPatterns,
   };
@@ -592,7 +600,11 @@ function hookInterface(policyCfg, decision) {
       enabled: (
         policyEnabled
         && Boolean("before_tool_call" in hooksCfg ? hooksCfg.before_tool_call : true)
-        && (routeHintPolicy.required || Boolean("delegation_enforcement" in switchCfg ? switchCfg.delegation_enforcement : true))
+        && (
+          routeDecision.task_class === "control_observer"
+          || routeHintPolicy.required
+          || Boolean("delegation_enforcement" in switchCfg ? switchCfg.delegation_enforcement : true)
+        )
       ),
       action: "enforce_delegation_policy",
       tool_policy: decision.tool_policy,
@@ -730,6 +742,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const dispatchRequired = route !== "direct";
   const shouldWait = route === "runner";
   const waitTimeoutSeconds = shouldWait ? Number(routeMeta.wait_timeout_seconds || 0) : 0;
+  const taskClass = String(routeMeta.task_class || "");
   const routeBudget = budgetPolicy(features, route, workContract, protocol, needsReview);
   const promptPolicy = promptContract(protocol, route, workContract, needsReview);
 
@@ -754,7 +767,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       reason: mergedReasonCodes[0] || String(routeMeta.reason || ""),
       reason_codes: mergedReasonCodes,
       scores: routeMeta.scores || {},
-      task_class: String(routeMeta.task_class || ""),
+      task_class: taskClass,
       executor_type: executorType,
       worker_pool: workerPool,
       work_type: workType,
@@ -790,7 +803,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       review_trigger: needsReview ? "policy_required" : "",
     },
     prompt_contract: promptPolicy,
-    tool_policy: toolPolicy(route, dispatchRequired),
+    tool_policy: toolPolicy(route, dispatchRequired, taskClass),
     route_hint_policy: routeHintPolicy,
     runtime_switches: runtimeSwitchesSummary(runtimeCfg),
   };

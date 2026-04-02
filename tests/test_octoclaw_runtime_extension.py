@@ -329,6 +329,23 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["key"], "")
         self.assertIsNone(payload["state"])
 
+    def test_control_observer_tool_set_excludes_exec_and_includes_status_actions(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("八爪鱼状态");
+                return {
+                  controlOnly: __octoclawTest.isControlObserverDecision(decision),
+                  tools: Array.from(__octoclawTest.observerControlTools(decision, "octoclaw_route_hint")).sort()
+                };
+            })()"""
+        )
+
+        self.assertTrue(payload["controlOnly"])
+        self.assertIn("octoclaw_status", payload["tools"])
+        self.assertIn("octoclaw_task_action", payload["tools"])
+        self.assertNotIn("exec", payload["tools"])
+        self.assertNotIn("octoclaw_dispatch", payload["tools"])
+
     def test_retain_policy_state_when_delegated_route_ended_without_dispatch(self) -> None:
         payload = run_runtime_helper(
             """__octoclawTest.shouldRetainPolicyStateOnAgentEnd({

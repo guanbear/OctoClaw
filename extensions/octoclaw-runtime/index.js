@@ -589,6 +589,23 @@ function preHintAllowedTools(decision, routeHintTool) {
   return allowed;
 }
 
+function observerControlTools(decision, routeHintTool) {
+  const toolPolicy = decision?.tool_policy || {};
+  const configured = Array.isArray(toolPolicy?.observer_control_tools) ? toolPolicy.observer_control_tools : [];
+  const allowed = new Set(configured.map((item) => String(item || "").trim()).filter(Boolean));
+  if (routeHintTool) {
+    allowed.add(String(routeHintTool).trim());
+  }
+  allowed.add("octoclaw_policy_decide");
+  allowed.add("octoclaw_status");
+  allowed.add("octoclaw_task_action");
+  return allowed;
+}
+
+function isControlObserverDecision(decision) {
+  return String(decision?.route_decision?.task_class || "").trim() === "control_observer";
+}
+
 function runtimeSwitches(decision) {
   return decision?.runtime_switches || {};
 }
@@ -987,6 +1004,32 @@ const plugin = {
     const delegationEnforcementEnabled = Boolean(hookConfig?.delegation_enforcement);
     const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted);
     const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
+    const allowedObserverTools = observerControlTools(decision, routeHintTool);
+    if (isControlObserverDecision(decision)) {
+      if (allowedObserverTools.has(toolName)) {
+        return;
+      }
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+      }));
+      await recordPolicyReplay(
+        "tool_blocked_control_observer",
+        {
+          sessionKey: stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          toolName,
+          allowedTools: [...allowedObserverTools],
+        },
+        pi.logger,
+        decision,
+      );
+      return {
+        block: true,
+        blockReason: `OctoClaw control/observer request must use control tools only: ${[...allowedObserverTools].join(", ")}.`,
+      };
+    }
     if (routeHintIsRequired && !routeHintAlreadySubmitted && !allowedPreHintTools.has(toolName)) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
@@ -1599,6 +1642,8 @@ export const __octoclawTest = {
   isManagedAgentContext,
   buildPolicyMetadata,
   preHintAllowedTools,
+  observerControlTools,
+  isControlObserverDecision,
   shouldRetainPolicyStateOnAgentEnd,
   resolvePolicyDecisionForContext,
   inferRoute,
