@@ -411,8 +411,6 @@ def refresh_openclaw_taskflow_bindings(tasks: list[dict]) -> bool:
         native_tasks = list_native_openclaw_tasks()
     except Exception:
         native_tasks = []
-    if not native_tasks:
-        return False
     changed = False
     refreshed: list[dict] = []
     for task in tasks:

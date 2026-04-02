@@ -57,6 +57,38 @@ class PatrolNotificationTests(unittest.TestCase):
 
     @patch("patrol.save_task_state")
     @patch("patrol.list_native_openclaw_tasks")
+    def test_refresh_openclaw_taskflow_bindings_mirrors_runner_without_native_tasks(self, mock_list_native, mock_save) -> None:
+        tasks = [
+            {
+                "id": "runner-1",
+                "status": "running",
+                "route": "runner",
+                "runtime": "runner",
+                "worker_pool": "octoclaw-runner",
+                "summary": "check cron health",
+                "task_description": "check cron health",
+                "session_key": "agent:main:slack:direct:u-runner",
+                "session_id": "sess-runner-1",
+                "run_id": "run-runner-1",
+            }
+        ]
+        mock_list_native.return_value = []
+
+        changed = patrol.refresh_openclaw_taskflow_bindings(tasks)
+
+        self.assertTrue(changed)
+        self.assertEqual(tasks[0]["openclaw_taskflow_backend"], "mirror")
+        self.assertEqual(tasks[0]["openclaw_taskflow_state"], "mirrored")
+        self.assertEqual(tasks[0]["openclaw_flow_kind"], "")
+        artifacts = tasks[0].get("artifacts", {})
+        self.assertIsInstance(artifacts, dict)
+        binding = artifacts.get("openclaw_taskflow", {})
+        self.assertEqual(binding.get("task_runtime"), "openclaw_task")
+        self.assertEqual(binding.get("session_key"), "agent:main:slack:direct:u-runner")
+        mock_save.assert_called_once()
+
+    @patch("patrol.save_task_state")
+    @patch("patrol.list_native_openclaw_tasks")
     def test_refresh_openclaw_taskflow_bindings_skips_final_and_direct_tasks(self, mock_list_native, mock_save) -> None:
         tasks = [
             {"id": "done-1", "status": "done", "route": "spawn_single", "worker_pool": "octoclaw-code"},
