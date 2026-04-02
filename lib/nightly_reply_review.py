@@ -94,6 +94,17 @@ def build_prompt(packet: dict, *, day: str, timezone: str) -> str:
 def extract_text_result(payload: dict) -> str:
     if not isinstance(payload, dict):
         return ""
+    payloads = payload.get("payloads")
+    if isinstance(payloads, list):
+        texts = []
+        for item in payloads:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                texts.append(text.strip())
+        if texts:
+            return "\n\n".join(texts)
     text = payload.get("text")
     if isinstance(text, str) and text.strip():
         return text.strip()
