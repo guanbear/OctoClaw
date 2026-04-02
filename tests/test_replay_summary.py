@@ -24,19 +24,43 @@ class ReplaySummaryTests(unittest.TestCase):
         return json.loads(result.stdout)
 
     def test_json_array_fixture_reports_core_counts(self) -> None:
-        payload = self.run_summary(
-            FIXTURES_PATH,
-            "--phase",
-            "conservative",
-            "--min-policy-events",
-            "1",
-            "--min-runner-events",
-            "0",
-            "--min-delegated-events",
-            "1",
-            "--max-blocked-session-rate",
-            "1.0",
-        )
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-task-state-") as tmpdir:
+            task_state_path = Path(tmpdir) / "task-state.json"
+            task_state_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "spawn-1",
+                                "status": "running",
+                                "handoff_state": "user_safe_ready",
+                                "openclaw_taskflow": {
+                                    "binding_state": "mirrored_bound",
+                                    "native_binding_state": "bound",
+                                    "native_status": "running",
+                                },
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            payload = self.run_summary(
+                FIXTURES_PATH,
+                "--task-state",
+                str(task_state_path),
+                "--phase",
+                "conservative",
+                "--min-policy-events",
+                "1",
+                "--min-runner-events",
+                "0",
+                "--min-delegated-events",
+                "1",
+                "--max-blocked-session-rate",
+                "1.0",
+            )
         self.assertEqual(payload["source"]["format"], "json_array")
         self.assertEqual(payload["events"]["total"], 6)
         self.assertEqual(payload["events"]["by_type"]["policy_resolved"], 1)
@@ -44,10 +68,15 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(payload["task_metrics"]["work_contract_counts"], {"deliverable_work": 1})
         self.assertEqual(payload["task_metrics"]["worker_pool_counts"], {"octoclaw-code": 1})
         self.assertEqual(payload["tool_metrics"]["blocked_event_count"], 2)
+        self.assertEqual(payload["substrate_metrics"]["tracked"], 1)
+        self.assertEqual(payload["substrate_metrics"]["native_bound"], 1)
+        self.assertEqual(payload["substrate_metrics"]["native_active"], 1)
+        self.assertEqual(payload["substrate_metrics"]["handoff_ready"], 1)
         self.assertTrue(payload["promotion"]["ready"])
         rendered = render_text(payload)
         self.assertIn("Worker pool counts", rendered)
         self.assertIn("Economics", rendered)
+        self.assertIn("Substrate Snapshot", rendered)
 
     def test_guided_phase_requires_route_hint_coverage(self) -> None:
         events = [

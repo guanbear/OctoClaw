@@ -11,10 +11,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from octopus_config import WORKSPACE
+try:
+    from octopus_config import WORKSPACE
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.octopus_config import WORKSPACE
+try:
+    from status_render import summarize_taskflow_substrate
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.status_render import summarize_taskflow_substrate
 
 DEFAULT_WORKSPACE = WORKSPACE
 DEFAULT_REPLAY_LOG = Path(DEFAULT_WORKSPACE) / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
+DEFAULT_TASK_STATE = Path(DEFAULT_WORKSPACE) / "tmp" / "octopus" / "task-state.json"
 DEFAULT_MIN_POLICY_EVENTS = 30
 DEFAULT_MIN_RUNNER_EVENTS = 3
 DEFAULT_MIN_DELEGATED_EVENTS = 10
@@ -267,6 +275,43 @@ def build_promotion_checks(
     }
 
 
+def load_task_state_snapshot(path: Path) -> dict[str, Any]:
+    resolved = path.expanduser().resolve()
+    if not resolved.exists():
+        return {
+            "path": str(resolved),
+            "available": False,
+            "tracked": 0,
+            "mirrored": 0,
+            "native_bound": 0,
+            "native_active": 0,
+            "handoff_ready": 0,
+            "delivered": 0,
+        }
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "path": str(resolved),
+            "available": False,
+            "tracked": 0,
+            "mirrored": 0,
+            "native_bound": 0,
+            "native_active": 0,
+            "handoff_ready": 0,
+            "delivered": 0,
+        }
+    tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
+    if not isinstance(tasks, list):
+        tasks = []
+    summary = summarize_taskflow_substrate([task for task in tasks if isinstance(task, dict)])
+    return {
+        "path": str(resolved),
+        "available": True,
+        **summary,
+    }
+
+
 def summarize_events(
     events: list[dict[str, Any]],
     *,
@@ -279,6 +324,7 @@ def summarize_events(
     min_delegated_events: int,
     max_blocked_session_rate: float,
     min_route_hint_submission_rate: float,
+    task_state_path: str = "",
 ) -> dict[str, Any]:
     event_counts = Counter(str(event.get("event", "") or "").strip() for event in events if str(event.get("event", "") or "").strip())
     policy_events = [event for event in events if event.get("event") == "policy_resolved"]
@@ -392,6 +438,7 @@ def summarize_events(
             "review_required_count": review_required_count,
         },
         "observed_language_packs": collect_language_pack_usage(events),
+        "substrate_metrics": load_task_state_snapshot(Path(task_state_path or DEFAULT_TASK_STATE)),
     }
     summary["promotion"] = build_promotion_checks(
         summary,
@@ -414,6 +461,7 @@ def render_text(summary: dict[str, Any]) -> str:
     dispatch_metrics = summary["dispatch_metrics"]
     tool_metrics = summary["tool_metrics"]
     economics_metrics = summary["economics_metrics"]
+    substrate_metrics = summary["substrate_metrics"]
     promotion = summary["promotion"]
 
     lines = [
@@ -464,6 +512,13 @@ def render_text(summary: dict[str, Any]) -> str:
             f"- Interruptibility: `{json.dumps(economics_metrics['interruptibility_counts'], ensure_ascii=False)}`",
             f"- Review required: `{economics_metrics['review_required_count']}`",
             "",
+            "Substrate Snapshot",
+            f"- Task state: `{substrate_metrics['path']}`",
+            f"- Available: `{substrate_metrics['available']}`",
+            f"- Tracked/mirrored: `{substrate_metrics['tracked']}/{substrate_metrics['mirrored']}`",
+            f"- Native bound/active: `{substrate_metrics['native_bound']}/{substrate_metrics['native_active']}`",
+            f"- Handoff ready/delivered: `{substrate_metrics['handoff_ready']}/{substrate_metrics['delivered']}`",
+            "",
             f"Promotion Heuristic: `{promotion['phase']}` -> `{promotion['target']}`",
         ]
     )
@@ -478,6 +533,7 @@ def render_text(summary: dict[str, Any]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Summarize OctoClaw runtime-policy replay events")
     parser.add_argument("--events", default=str(DEFAULT_REPLAY_LOG), help="Replay log path (JSONL or JSON array)")
+    parser.add_argument("--task-state", default=str(DEFAULT_TASK_STATE), help="Optional task-state snapshot path for substrate metrics")
     parser.add_argument("--phase", choices=("conservative", "guided"), default="conservative")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     parser.add_argument("--output", default="", help="Optional file to write the summary to")
@@ -506,6 +562,7 @@ def main() -> int:
         min_delegated_events=args.min_delegated_events,
         max_blocked_session_rate=args.max_blocked_session_rate,
         min_route_hint_submission_rate=args.min_route_hint_submission_rate,
+        task_state_path=args.task_state,
     )
 
     if args.format == "json":
