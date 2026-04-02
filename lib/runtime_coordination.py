@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -290,6 +292,91 @@ def _merge_checklist_state(base_state: str, persisted_state: str) -> str:
     return base if CHECKLIST_STATE_ORDER.get(base, 0) >= CHECKLIST_STATE_ORDER.get(persisted, 0) else persisted
 
 
+def _title_key(item: dict[str, Any]) -> str:
+    """Normalised title for fuzzy matching when item IDs have diverged."""
+    return " ".join(_text(item.get("title")).lower().split())
+
+
+def _checklist_conflict_type(
+    base_items: list[dict[str, Any]],
+    persisted_items: list[dict[str, Any]],
+) -> str:
+    """Classify the merge situation.
+
+    Returns:
+      'trivial'  — one or both sides empty; nothing complex to resolve
+      'stable'   — majority of base IDs found in persisted; use ID-based merge
+      'diverged' — IDs mostly don't match (context loss / checklist regeneration)
+    """
+    if not base_items or not persisted_items:
+        return "trivial"
+    base_ids = {_text(i.get("id")) for i in base_items if isinstance(i, dict) and _text(i.get("id"))}
+    persisted_ids = {_text(i.get("id")) for i in persisted_items if isinstance(i, dict) and _text(i.get("id"))}
+    if not base_ids or not persisted_ids:
+        return "trivial"
+    overlap = base_ids & persisted_ids
+    # Fewer than half of base IDs match → assume context loss regenerated new IDs
+    return "stable" if len(overlap) >= len(base_ids) * 0.5 else "diverged"
+
+
+def _merge_checklist_items_diverged(
+    base_items: list[dict[str, Any]],
+    persisted_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge when item IDs have diverged (context loss / checklist regeneration).
+
+    Strategy:
+    - Match base items → persisted items by normalised title (first match wins).
+    - For matched pairs: take max state order.
+    - For unmatched persisted items: include only if state == 'done' (they
+      represent completed work, not phantom pending/blocked items).
+    - For unmatched base items: keep as-is.
+    """
+    persisted_by_title: dict[str, dict[str, Any]] = {}
+    for item in persisted_items:
+        if not isinstance(item, dict):
+            continue
+        key = _title_key(item)
+        if key and key not in persisted_by_title:
+            persisted_by_title[key] = item
+
+    merged: list[dict[str, Any]] = []
+    matched_titles: set[str] = set()
+
+    for item in base_items:
+        if not isinstance(item, dict):
+            continue
+        key = _title_key(item)
+        persisted = persisted_by_title.get(key, {}) if key else {}
+        merged_item = dict(item)
+        if persisted:
+            merged_item["state"] = _merge_checklist_state(merged_item.get("state", ""), persisted.get("state", ""))
+            if not _text(merged_item.get("linked_task_id")):
+                merged_item["linked_task_id"] = _text(persisted.get("linked_task_id"))
+            matched_titles.add(key)
+        merged.append(merged_item)
+
+    # Include persisted-only items whose work is done — genuine completed steps
+    for item in persisted_items:
+        if not isinstance(item, dict):
+            continue
+        key = _title_key(item)
+        if key and key in matched_titles:
+            continue
+        if _text(item.get("state")).lower() != "done":
+            continue  # drop phantom pending/blocked items; they are likely stale
+        merged.append({
+            "id": _text(item.get("id")) or f"persisted-done-{len(merged) + 1}",
+            "title": _text(item.get("title")) or "Completed item",
+            "state": "done",
+            "source": _text(item.get("source")) or "persisted",
+            "linked_task_id": _text(item.get("linked_task_id")),
+            "updated_at": _text(item.get("updated_at")) or now_iso(),
+        })
+
+    return merged
+
+
 def _recount_checklist(snapshot: dict[str, Any]) -> dict[str, Any]:
     items = snapshot.get("items", []) if isinstance(snapshot.get("items"), list) else []
     open_count = sum(1 for item in items if isinstance(item, dict) and _text(item.get("state")).lower() in OPEN_CHECKLIST_STATES)
@@ -305,6 +392,10 @@ def _merge_checklist_items(
     *,
     include_persisted_only: bool = True,
 ) -> list[dict[str, Any]]:
+    # When item IDs have diverged (context loss / checklist regeneration), use
+    # title-based matching with conservative phantom-item filtering.
+    if _checklist_conflict_type(base_items, persisted_items) == "diverged":
+        return _merge_checklist_items_diverged(base_items, persisted_items)
     merged: list[dict[str, Any]] = []
     persisted_by_id = {
         _text(item.get("id")): item
@@ -717,3 +808,199 @@ def recover_stale_ownership(tasks: list[dict[str, Any]], *, stale_after_seconds:
             task["status"] = "queued"
         recovered.append(task)
     return recovered
+
+
+# ---------------------------------------------------------------------------
+# Atomic ownership lock — compare-and-swap via POSIX advisory file lock
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def _exclusive_lock(path: str):
+    """Acquire an exclusive advisory lock on `path + '.lock'`.
+
+    Uses fcntl.LOCK_EX so only one process can hold the lock at a time.
+    The lock is always released when the context manager exits, even on error.
+    """
+    lock_path = path + ".lock"
+    _ensure_parent(lock_path)
+    with open(lock_path, "w", encoding="utf-8") as lf:
+        try:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
+def try_claim_ownership(
+    task_id: str,
+    owner_id: str,
+    *,
+    namespace: str = "octoclaw",
+    lease_seconds: int = 900,
+    path: str = OWNERSHIP_STORE_FILE,
+) -> dict[str, Any]:
+    """Atomically claim ownership of a task (compare-and-swap).
+
+    Serialises concurrent callers with an OS-level advisory lock so only one
+    process can write the "claimed" record at a time.
+
+    Claimable conditions:
+    - state is 'unclaimed' or 'recovered'
+    - state is 'stale'  (session confirmed dead)
+    - state is 'claimed' by the same owner_id  (idempotent re-claim / renewal)
+    - state is 'claimed' but lease_expires_at is in the past  (lease expired)
+
+    Returns a result dict:
+      success  : bool
+      reason   : 'claimed' | 'renewed' | 'already_claimed' | 'task_released' |
+                 'missing_task_or_owner'
+      state    : resulting ownership state string
+      owner_id : current owner (may differ from caller on failure)
+      version  : new version counter value
+    """
+    task_id = _text(task_id)
+    owner_id = _text(owner_id)
+    if not task_id or not owner_id:
+        return {"success": False, "reason": "missing_task_or_owner", "state": "", "owner_id": "", "version": 0}
+
+    now = datetime.now(timezone.utc)
+    with _exclusive_lock(path):
+        payload = load_ownership_store(path)
+        tasks = payload.get("tasks", {}) if isinstance(payload.get("tasks"), dict) else {}
+        existing: dict[str, Any] = tasks.get(task_id, {}) if isinstance(tasks.get(task_id), dict) else {}
+
+        existing_state = _text(existing.get("state")) or "unclaimed"
+        existing_owner = _text(existing.get("owner_id"))
+        version = int(existing.get("version") or 0)
+
+        if existing_state == "released":
+            return {"success": False, "reason": "task_released", "state": "released",
+                    "owner_id": existing_owner, "version": version}
+
+        if existing_state == "claimed" and existing_owner != owner_id:
+            # Check whether the lease has expired; if so, the lock is claimable
+            lease_expires_at = _parse_iso(_text(existing.get("lease_expires_at")))
+            if lease_expires_at is not None and lease_expires_at > now:
+                return {"success": False, "reason": "already_claimed", "state": "claimed",
+                        "owner_id": existing_owner, "version": version}
+            # Lease expired — fall through and overwrite
+
+        claimed_at = now.isoformat()
+        new_version = version + 1
+        record: dict[str, Any] = {
+            "task_id": task_id,
+            "owner_id": owner_id,
+            "owner_namespace": _text(namespace) or "octoclaw",
+            "state": "claimed",
+            "claimed_at": claimed_at,
+            "last_heartbeat_at": claimed_at,
+            "lease_seconds": max(60, int(lease_seconds)),
+            "lease_expires_at": (now + timedelta(seconds=max(60, int(lease_seconds)))).isoformat(),
+            "version": new_version,
+        }
+        tasks[task_id] = record
+        payload["tasks"] = tasks
+        payload["updated_at"] = claimed_at
+        _save_json(path, payload)
+
+    reason = "renewed" if existing_state == "claimed" and existing_owner == owner_id else "claimed"
+    return {"success": True, "reason": reason, "state": "claimed", "owner_id": owner_id, "version": new_version}
+
+
+def try_renew_ownership(
+    task_id: str,
+    owner_id: str,
+    *,
+    lease_seconds: int = 900,
+    path: str = OWNERSHIP_STORE_FILE,
+) -> dict[str, Any]:
+    """Refresh the lease for a task currently owned by owner_id.
+
+    Returns success=False if the caller is no longer the owner (e.g. the task
+    was recovered by another agent).  Callers should treat a failed renewal as
+    a signal to stop work and hand off cleanly.
+    """
+    task_id = _text(task_id)
+    owner_id = _text(owner_id)
+    if not task_id or not owner_id:
+        return {"success": False, "reason": "missing_task_or_owner", "state": "", "owner_id": "", "version": 0}
+
+    now = datetime.now(timezone.utc)
+    with _exclusive_lock(path):
+        payload = load_ownership_store(path)
+        tasks = payload.get("tasks", {}) if isinstance(payload.get("tasks"), dict) else {}
+        existing: dict[str, Any] = tasks.get(task_id, {}) if isinstance(tasks.get(task_id), dict) else {}
+
+        existing_state = _text(existing.get("state")) or "unclaimed"
+        existing_owner = _text(existing.get("owner_id"))
+        version = int(existing.get("version") or 0)
+
+        if existing_state != "claimed" or existing_owner != owner_id:
+            return {"success": False, "reason": "not_owner", "state": existing_state,
+                    "owner_id": existing_owner, "version": version}
+
+        new_heartbeat = now.isoformat()
+        new_version = version + 1
+        existing = dict(existing)
+        existing["last_heartbeat_at"] = new_heartbeat
+        existing["lease_expires_at"] = (now + timedelta(seconds=max(60, int(lease_seconds)))).isoformat()
+        existing["version"] = new_version
+        tasks[task_id] = existing
+        payload["tasks"] = tasks
+        payload["updated_at"] = new_heartbeat
+        _save_json(path, payload)
+
+    return {"success": True, "reason": "renewed", "state": "claimed", "owner_id": owner_id, "version": new_version}
+
+
+def try_release_ownership(
+    task_id: str,
+    owner_id: str,
+    *,
+    path: str = OWNERSHIP_STORE_FILE,
+) -> dict[str, Any]:
+    """Release ownership of a task.
+
+    Succeeds if the caller is the current owner OR if the lease has already
+    expired (another agent may reclaim safely after this returns).
+    Idempotent: releasing an already-released or unclaimed task returns
+    success=True with reason='already_released'.
+    """
+    task_id = _text(task_id)
+    owner_id = _text(owner_id)
+    if not task_id or not owner_id:
+        return {"success": False, "reason": "missing_task_or_owner", "state": "", "owner_id": "", "version": 0}
+
+    now = datetime.now(timezone.utc)
+    with _exclusive_lock(path):
+        payload = load_ownership_store(path)
+        tasks = payload.get("tasks", {}) if isinstance(payload.get("tasks"), dict) else {}
+        existing: dict[str, Any] = tasks.get(task_id, {}) if isinstance(tasks.get(task_id), dict) else {}
+
+        existing_state = _text(existing.get("state")) or "unclaimed"
+        existing_owner = _text(existing.get("owner_id"))
+        version = int(existing.get("version") or 0)
+
+        if existing_state in ("unclaimed", "released"):
+            return {"success": True, "reason": "already_released", "state": existing_state,
+                    "owner_id": existing_owner, "version": version}
+
+        if existing_owner != owner_id:
+            # Allow release only if the lease has expired (task is effectively abandoned)
+            lease_expires_at = _parse_iso(_text(existing.get("lease_expires_at")))
+            if lease_expires_at is not None and lease_expires_at > now:
+                return {"success": False, "reason": "not_owner", "state": existing_state,
+                        "owner_id": existing_owner, "version": version}
+
+        new_version = version + 1
+        record = dict(existing)
+        record["state"] = "released"
+        record["lease_expires_at"] = ""
+        record["released_at"] = now.isoformat()
+        record["version"] = new_version
+        tasks[task_id] = record
+        payload["tasks"] = tasks
+        payload["updated_at"] = now.isoformat()
+        _save_json(path, payload)
+
+    return {"success": True, "reason": "released", "state": "released", "owner_id": owner_id, "version": new_version}

@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from collections import Counter
@@ -157,11 +158,104 @@ def summarize_results(results: list[dict]) -> dict[str, object]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Policy state snapshot — enables reproducible replay and regression detection
+# ---------------------------------------------------------------------------
+
+_POLICY_STATE_FILES: list[tuple[str, Path]] = [
+    ("octopus-config.json", Path("tmp") / "octopus-config.json"),
+    ("octoclaw-mode.json", Path("tmp") / "octoclaw-mode.json"),
+    ("model-policy.json", Path("tmp") / "octopus" / "model-policy.json"),
+    ("route-stickiness.json", Path("tmp") / "octopus" / "route-stickiness.json"),
+]
+
+
+def snapshot_policy_state(workspace: str) -> dict:
+    """Capture policy config files to a serialisable dict for reproducible replay.
+
+    The returned dict can be embedded in a report JSON, then later passed to
+    restore_policy_state() to recreate identical conditions.
+    """
+    ws = Path(workspace)
+    state: dict = {"snapshotted_at": datetime.now(timezone.utc).isoformat(), "files": {}}
+    for key, rel in _POLICY_STATE_FILES:
+        full = ws / rel
+        if full.exists():
+            try:
+                state["files"][key] = json.loads(full.read_text("utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
+    return state
+
+
+def restore_policy_state(state: dict, workspace: str) -> None:
+    """Write snapshotted policy files back to workspace before a replay run.
+
+    Only files captured in the snapshot are written; missing files are skipped
+    so the workspace retains its own defaults for anything not in the snapshot.
+    """
+    ws = Path(workspace)
+    key_to_rel = dict(_POLICY_STATE_FILES)
+    files = state.get("files", {}) if isinstance(state.get("files"), dict) else {}
+    for key, content in files.items():
+        rel = key_to_rel.get(key)
+        if rel is None:
+            continue
+        full = ws / rel
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(json.dumps(content, ensure_ascii=False, indent=2), "utf-8")
+
+
+def compare_reports(baseline: dict, current: dict) -> list[dict]:
+    """Return route regressions: tasks where route or work_contract changed.
+
+    Only tasks present in both reports are compared.  New tasks in current
+    or tasks removed from baseline are ignored.
+    """
+    baseline_by_id = {
+        str(item.get("id", "")): item
+        for item in baseline.get("results", [])
+        if isinstance(item, dict)
+    }
+    regressions: list[dict] = []
+    for item in current.get("results", []):
+        if not isinstance(item, dict):
+            continue
+        task_id = str(item.get("id", "") or "")
+        base = baseline_by_id.get(task_id)
+        if base is None:
+            continue
+        route_changed = item.get("route") != base.get("route")
+        contract_changed = item.get("work_contract") != base.get("work_contract")
+        if route_changed or contract_changed:
+            regressions.append({
+                "id": task_id,
+                "task": item.get("task", ""),
+                "baseline_route": base.get("route", ""),
+                "current_route": item.get("route", ""),
+                "baseline_contract": base.get("work_contract", ""),
+                "current_contract": item.get("work_contract", ""),
+            })
+    return regressions
+
+
 def main():
     parser = argparse.ArgumentParser(description="Minimal replay/eval for OctoClaw")
     parser.add_argument("--tasks", default=str(PROJECT_DIR / "eval" / "tasks-minimal.json"))
     parser.add_argument("--workspace", default="")
     parser.add_argument("--output-dir", default=str(PROJECT_DIR / "eval" / "reports"))
+    parser.add_argument(
+        "--replay-from", default="",
+        help="Path to a previous report JSON; restores its policy snapshot before running",
+    )
+    parser.add_argument(
+        "--save-policy-snapshot", action="store_true",
+        help="Embed a policy state snapshot in the report for future replay",
+    )
+    parser.add_argument(
+        "--assert-baseline", default="",
+        help="Path to baseline report JSON; exit nonzero if any route regressions found",
+    )
     args = parser.parse_args()
 
     task_file = Path(args.tasks).resolve()
@@ -174,6 +268,15 @@ def main():
 
     env = dict(os.environ)
     env["WORKSPACE"] = workspace
+
+    # Restore policy state from a previous report so the run is comparable
+    if args.replay_from:
+        try:
+            prior = json.loads(Path(args.replay_from).read_text("utf-8"))
+            if "policy_snapshot" in prior:
+                restore_policy_state(prior["policy_snapshot"], workspace)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"warning: could not load replay-from report: {exc}", file=sys.stderr)
 
     ensure = run_cmd(["python3", str(RUNNER_QUEUE_PY), "ensure"], env=env)
     if ensure.returncode != 0:
@@ -275,6 +378,10 @@ def main():
         "results": results,
     }
 
+    # Embed policy snapshot when requested or when replay/assert flags are used
+    if args.save_policy_snapshot or args.replay_from or args.assert_baseline:
+        report["policy_snapshot"] = snapshot_policy_state(workspace)
+
     stamp = now_compact()
     json_path = output_dir / f"eval-report-{stamp}.json"
     md_path = output_dir / f"eval-report-{stamp}.md"
@@ -284,6 +391,21 @@ def main():
         f.write(summarize_markdown(report))
 
     print(json.dumps({"json": str(json_path), "markdown": str(md_path), "summary": summary}, ensure_ascii=False))
+
+    # Regression check — must come after writing the report so the report is
+    # always saved even when regressions are found
+    if args.assert_baseline:
+        try:
+            baseline = json.loads(Path(args.assert_baseline).read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"error: could not load baseline report: {exc}")
+        regressions = compare_reports(baseline, report)
+        if regressions:
+            print(
+                json.dumps({"regressions": regressions}, ensure_ascii=False),
+                file=sys.stderr,
+            )
+            raise SystemExit(f"{len(regressions)} route regression(s) found (see stderr)")
 
 
 if __name__ == "__main__":
