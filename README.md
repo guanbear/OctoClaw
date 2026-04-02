@@ -323,6 +323,16 @@ bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh run --format te
 # Render a cron command for nightly execution
 bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh render-cron
 
+# Build a Slack reply/delegation review packet from real OpenClaw sessions
+python3 /workspace/openclaw/skills/octopus/lib/reply_review_packet.py \
+  --sessions-index /root/.openclaw/agents/main/sessions/sessions.json \
+  --session-dir /root/.openclaw/agents/main/sessions \
+  --replay-log /workspace/tmp/octopus/runtime-policy-replay.jsonl \
+  --day 2026-04-02
+
+# Run the nightly AI-assisted reply review and push a daily report into reports/reply-review/
+bash /workspace/openclaw/skills/octopus/bin/nightly-reply-review.sh
+
 # Recommended: enable this only after conservative observation has started producing useful replay
 
 # Replay event schema and sample fixtures

@@ -252,6 +252,7 @@ ClawTeam 最值得借的是：
 - [octoclaw-openclaw-task-flow-analysis-v1-2026-04-01.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-openclaw-task-flow-analysis-v1-2026-04-01.md)
 - [octoclaw-openclaw-task-flow-migration-plan-v1-2026-04-01.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-openclaw-task-flow-migration-plan-v1-2026-04-01.md)
 - Runtime compatibility note: the current OctoClaw shell/Python control plane already assumes Python 3.10+ syntax in several scripts. Hosts that only expose system Python 3.9 should prefer a managed interpreter such as `/opt/homebrew/bin/python3`; longer term, more of this control surface should move to Node/TS where that meaningfully reduces interpreter drift.
+- Operational note: macmini nightly review/report jobs are now expected to run on a managed Python such as `/opt/homebrew/bin/python3` (verified on macOS 3.14.x). Keep Python as glue where it meaningfully speeds iteration, but bias long-lived runtime substrate and plugin surfaces toward OpenClaw / Node/TS once behavior stabilizes.
 
 ---
 

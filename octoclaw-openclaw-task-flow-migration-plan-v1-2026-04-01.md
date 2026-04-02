@@ -7,6 +7,7 @@
 3. ClawTeam 逐步从核心依赖降成 optional operator backend。
 4. 不把 ACP / cron / unrelated subagent task 混进 OctoClaw 视图。
 5. 运行时解释器要收口：当前 control-plane Python 脚本默认以 3.10+ 为基线，部署面需要优先提供稳定解释器；长期再评估哪些脚本值得继续保留，哪些应迁到 Node/TS。
+6. nightly review / quality reporting 这类“取材 + 打包 + 调 OpenClaw 分析”的链路允许保留 Python 作为 glue code，但应尽量把 runtime substrate 和长期稳定面收向 OpenClaw / Node/TS；当前 macmini 已验证 `/opt/homebrew/bin/python3` 可作为稳定解释器。
 
 ## 2. 边界
 
