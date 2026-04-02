@@ -212,6 +212,8 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(payload)
         self.assertEqual(payload["kind"], "local_file_probe")
         self.assertEqual(payload["command"], "tail -n 80 /var/log/nginx/error.log")
+        self.assertEqual(payload["probe_spec"]["path"], "/var/log/nginx/error.log")
+        self.assertEqual(payload["probe_spec"]["line_count"], 80)
 
     def test_scheduler_health_probe_handles_cron_question(self) -> None:
         payload = runner_playbooks.infer_runner_playbook("我的cron都正常吗")
@@ -219,6 +221,47 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["kind"], "scheduler_health")
         self.assertIn("crontab -l", payload["command"])
         self.assertIn("systemctl list-timers", payload["command"])
+        self.assertEqual(payload["probe_spec"]["checks"], ["crontab", "systemd_timers"])
+
+    def test_dispatch_runner_reuses_precomputed_runner_plan(self) -> None:
+        args = importlib.import_module("argparse").Namespace(
+            task="检查一下 nginx error log 最近 80 行，然后总结问题",
+            command="",
+            summary="",
+            cwd="/tmp",
+            timeout_seconds=30,
+            id="runner-precomputed-1",
+            model_band="fast",
+            wait=False,
+            wait_timeout_seconds=12,
+            _policy_decision={
+                "request": {"metadata": {}, "session_key": "agent:main:slack:direct:u999"},
+                "route_decision": {"route": "runner"},
+            },
+            _runner_playbook={
+                "kind": "local_file_probe",
+                "summary": "查看 nginx error log 最近 80 行",
+                "command": "tail -n 80 /var/log/nginx/error.log",
+                "probe_spec": {
+                    "kind": "local_file_probe",
+                    "path": "/var/log/nginx/error.log",
+                    "mode": "tail",
+                    "line_count": 80,
+                },
+            },
+        )
+
+        proc = type("Proc", (), {"returncode": 0, "stdout": json.dumps({"id": "runner-precomputed-1", "status": "queued"}), "stderr": ""})()
+        with patch.object(dispatch_task, "infer_runner_playbook", side_effect=AssertionError("should not infer twice")), patch.object(
+            dispatch_task.subprocess,
+            "run",
+            return_value=proc,
+        ):
+            payload = dispatch_task.dispatch_runner(args)
+
+        self.assertEqual(payload["job"]["id"], "runner-precomputed-1")
+        self.assertEqual(payload["runner_plan"]["probe_spec"]["path"], "/var/log/nginx/error.log")
+        self.assertEqual(payload["playbook"]["command"], "tail -n 80 /var/log/nginx/error.log")
 
     def test_find_reusable_job_requires_same_command_not_same_description(self) -> None:
         with patch.object(

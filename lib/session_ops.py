@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 import uuid
 from typing import Any
 
@@ -86,6 +87,56 @@ def send_agent_message(session_key: str, message: str, timeout_seconds: int = 0)
         return {"ok": False, "status": "error", "runId": run_id, "error": "invalid agent.wait response"}
     wait_res.setdefault("runId", run_id)
     return wait_res
+
+
+TRANSIENT_MESSAGE_ERROR_SNIPPETS = (
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "connection reset",
+    "econnreset",
+    "broken pipe",
+    "eof",
+)
+
+
+def _looks_transient_message_error(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return any(snippet in lowered for snippet in TRANSIENT_MESSAGE_ERROR_SNIPPETS)
+
+
+def _run_message_cli(cmd: list[str], *, timeout_seconds: int = 20, retry_attempts: int = 1) -> dict:
+    attempts = max(1, int(retry_attempts) + 1)
+    last_error = "invalid message send response"
+    for attempt in range(1, attempts + 1):
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=max(5, int(timeout_seconds)),
+            )
+            if result.returncode == 0:
+                payload = json.loads(result.stdout or "{}")
+                if isinstance(payload, dict):
+                    payload.setdefault("ok", True)
+                    if attempt > 1:
+                        payload.setdefault("retry_count", attempt - 1)
+                    return payload
+                last_error = "invalid message send response"
+            else:
+                last_error = (result.stderr or result.stdout or "").strip() or "message command failed"
+        except subprocess.TimeoutExpired:
+            last_error = f"message send timed out after {timeout_seconds}s"
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt < attempts and _looks_transient_message_error(last_error):
+            time.sleep(0.4)
+            continue
+        break
+    return {"ok": False, "status": "error", "error": last_error}
 
 
 def _strip_agent_prefix(session_key: str) -> str:
@@ -234,26 +285,7 @@ def send_channel_message(
     if components:
         cmd.extend(["--components", json.dumps(components, ensure_ascii=False)])
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=max(5, int(timeout_seconds)),
-        )
-        if result.returncode != 0:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": (result.stderr or result.stdout or "").strip(),
-            }
-        payload = json.loads(result.stdout or "{}")
-        if isinstance(payload, dict):
-            payload.setdefault("ok", True)
-            return payload
-    except Exception as exc:
-        return {"ok": False, "status": "error", "error": str(exc)}
-    return {"ok": False, "status": "error", "error": "invalid message send response"}
+    return _run_message_cli(cmd, timeout_seconds=timeout_seconds, retry_attempts=1)
 
 
 def edit_channel_message(
@@ -290,23 +322,4 @@ def edit_channel_message(
         "--json",
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=max(5, int(timeout_seconds)),
-        )
-        if result.returncode != 0:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": (result.stderr or result.stdout or "").strip(),
-            }
-        payload = json.loads(result.stdout or "{}")
-        if isinstance(payload, dict):
-            payload.setdefault("ok", True)
-            return payload
-    except Exception as exc:
-        return {"ok": False, "status": "error", "error": str(exc)}
-    return {"ok": False, "status": "error", "error": "invalid message edit response"}
+    return _run_message_cli(cmd, timeout_seconds=timeout_seconds, retry_attempts=1)

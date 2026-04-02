@@ -617,15 +617,17 @@ def wait_for_runner_result(job_id: str, timeout_seconds: int) -> dict:
 def dispatch_runner(args) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     identity = octoclaw_identity_fields(decision)
-    playbook = None
+    playbook = getattr(args, "_runner_playbook", None)
+    if not isinstance(playbook, dict) or not playbook:
+        playbook = None
     command = args.command
     summary = args.summary
-    if not command:
+    if not command and not playbook:
         playbook = infer_runner_playbook(args.task)
-        if playbook:
-            command = playbook.get("command", "")
-            if not summary:
-                summary = playbook.get("summary", "")
+    if playbook:
+        command = command or str(playbook.get("command", "") or "")
+        if not summary:
+            summary = str(playbook.get("summary", "") or "")
 
     dispatch_cmd = [
         "python3",
@@ -668,6 +670,7 @@ def dispatch_runner(args) -> dict:
         "reason": "lightweight_task",
     }
     if playbook:
+        response["runner_plan"] = playbook
         response["playbook"] = playbook
     if args.wait:
         response["wait"] = wait_for_runner_result(payload.get("id", ""), args.wait_timeout_seconds)
@@ -867,6 +870,9 @@ def main():
             return
         if playbook and not args.summary:
             args.summary = playbook.get("summary", "")
+        if playbook:
+            args.command = args.command or str(playbook.get("command", "") or "")
+            args._runner_playbook = playbook
         if not args.wait and route.get("should_wait"):
             args.wait = True
             args.wait_timeout_seconds = route.get("wait_timeout_seconds", args.wait_timeout_seconds)

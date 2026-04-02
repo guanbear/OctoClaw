@@ -288,7 +288,7 @@ function findPolicyStateByPrompt(prompt = "") {
   let bestUpdatedAt = 0;
   let bestRank = -1;
   for (const [key, state] of policyStateBySession.entries()) {
-    if (!state || String(state.prompt || "").trim() !== task) continue;
+    if (!state || !promptsEquivalent(task, state.prompt || "")) continue;
     const updatedAt = Number(state.updatedAt || state.createdAt || 0);
     const rank = sessionPreferenceRank(key);
     if (updatedAt > bestUpdatedAt || (updatedAt === bestUpdatedAt && rank >= bestRank)) {
@@ -327,6 +327,7 @@ function promptTokenScore(prompt = "", candidatePrompt = "") {
 
 function findRecentDelegatedPolicyState(prompt = "", maxAgeMs = 2 * 60 * 1000) {
   const now = Date.now();
+  const normalizedPrompt = promptLookupCandidates(prompt)[0] || String(prompt || "").trim();
   let bestKey = "";
   let bestState = null;
   let bestScore = -1;
@@ -337,7 +338,7 @@ function findRecentDelegatedPolicyState(prompt = "", maxAgeMs = 2 * 60 * 1000) {
     if (!DELEGATED_ROUTE_NAMES.has(route)) continue;
     const updatedAt = Number(state?.updatedAt || state?.createdAt || 0);
     if (!updatedAt || now - updatedAt > maxAgeMs) continue;
-    const score = promptTokenScore(prompt, state?.prompt || "");
+    const score = promptTokenScore(normalizedPrompt, promptLookupCandidates(state?.prompt || "")[0] || state?.prompt || "");
     if (score <= 0) continue;
     const rank = sessionPreferenceRank(key);
     if (score > bestScore || (score === bestScore && updatedAt > bestUpdatedAt) || (score === bestScore && updatedAt === bestUpdatedAt && rank > bestRank)) {
@@ -353,7 +354,9 @@ function findRecentDelegatedPolicyState(prompt = "", maxAgeMs = 2 * 60 * 1000) {
 
 function resolveToolPolicyContext(ctx = {}, prompt = "") {
   const direct = getPolicyStateForContext(ctx);
-  if (direct.key || direct.state) return direct;
+  if (direct.state && (!prompt || promptsEquivalent(prompt, direct.state.prompt || ""))) {
+    return direct;
+  }
   const byPrompt = findPolicyStateByPrompt(prompt);
   if (byPrompt.key || byPrompt.state) return byPrompt;
   return findRecentDelegatedPolicyState(prompt);
@@ -394,11 +397,10 @@ function extractMessageText(content) {
   return "";
 }
 
-function unwrapQueuedBusyPrompt(raw) {
+function extractQueuedBusyMessages(raw) {
   const text = String(raw || "").trim();
-  if (!text) return "";
   if (!text.startsWith("[Queued messages while agent was busy]")) {
-    return text;
+    return [];
   }
   const sections = text.split(/\n---\n(?=Queued #\d+)/g);
   const messages = [];
@@ -413,7 +415,51 @@ function unwrapQueuedBusyPrompt(raw) {
       messages.push(message);
     }
   }
-  return messages.length > 0 ? messages.join("\n\n") : text;
+  return messages;
+}
+
+function unwrapQueuedBusyPrompt(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  const messages = extractQueuedBusyMessages(text);
+  if (messages.length === 0) {
+    return text;
+  }
+  return messages.join("\n\n");
+}
+
+function promptLookupCandidates(raw) {
+  const base = String(raw || "").trim();
+  if (!base) return [];
+  const values = [];
+  const seen = new Set();
+  const pushValue = (value) => {
+    const normalized = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    values.push(normalized);
+  };
+  const queuedMessages = extractQueuedBusyMessages(base);
+  if (queuedMessages.length > 0) {
+    pushValue(queuedMessages[queuedMessages.length - 1]);
+    for (const message of queuedMessages) {
+      pushValue(message);
+    }
+    pushValue(queuedMessages.join("\n\n"));
+  }
+  pushValue(unwrapQueuedBusyPrompt(base));
+  pushValue(base);
+  return values;
+}
+
+function promptsEquivalent(left = "", right = "") {
+  const leftCandidates = promptLookupCandidates(left);
+  const rightCandidates = promptLookupCandidates(right);
+  if (leftCandidates.length === 0 || rightCandidates.length === 0) {
+    return false;
+  }
+  const rightSet = new Set(rightCandidates);
+  return leftCandidates.some((value) => rightSet.has(value));
 }
 
 function extractPromptText(event = {}) {
@@ -594,7 +640,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   prunePolicyState();
   const stateKey = resolvePolicyStateKey(ctx);
   const existing = getPolicyStateForContext(ctx).state;
-  if (!options.force && existing?.prompt === prompt && existing?.decision) {
+  if (!options.force && existing?.decision && promptsEquivalent(existing?.prompt || "", prompt)) {
     existing.updatedAt = Date.now();
     setPolicyStateForContext(ctx, existing);
     return { stateKey, state: existing, decision: existing.decision };
@@ -1476,6 +1522,9 @@ export const __octoclawTest = {
   parseSessionRoute,
   resolvePolicyStateKeys,
   resolvePolicyStateKey,
+  extractQueuedBusyMessages,
+  promptLookupCandidates,
+  promptsEquivalent,
   findPolicyStateByPrompt,
   resolveToolPolicyContext,
   unwrapQueuedBusyPrompt,

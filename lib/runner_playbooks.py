@@ -209,6 +209,10 @@ def build_system_summary_plan(task: str) -> dict | None:
         "kind": "system_summary",
         "summary": "检查当前机器系统摘要",
         "command": "\n".join(commands),
+        "probe_spec": {
+            "kind": "system_summary",
+            "metrics": requested,
+        },
         "reason_codes": ["runner_playbook_system_summary"],
         "confidence": 0.88,
     }
@@ -243,6 +247,11 @@ def build_version_probe_plan(task: str) -> dict | None:
             "kind": "remote_version_probe",
             "summary": f"检查 {remote_target} 的 {target_tool} 版本",
             "command": wrap_remote_command(remote_target, base_command),
+            "probe_spec": {
+                "kind": "version_probe",
+                "tool": target_tool,
+                "remote_target": remote_target,
+            },
             "reason_codes": ["runner_playbook_version_probe", f"remote_target:{remote_target}", f"tool:{target_tool}"],
             "confidence": 0.9,
         }
@@ -251,6 +260,10 @@ def build_version_probe_plan(task: str) -> dict | None:
         "kind": "version_probe",
         "summary": f"检查当前机器的 {target_tool} 版本",
         "command": base_command,
+        "probe_spec": {
+            "kind": "version_probe",
+            "tool": target_tool,
+        },
         "reason_codes": ["runner_playbook_version_probe", f"tool:{target_tool}"],
         "confidence": 0.86,
     }
@@ -301,6 +314,14 @@ def build_service_health_plan(task: str) -> dict | None:
         "kind": "service_health",
         "summary": f"检查 {service} 的端口、状态与日志",
         "command": "\n".join(commands),
+        "probe_spec": {
+            "kind": "service_health",
+            "service": service,
+            "ports": ports,
+            "includes_logs": wants_logs,
+            "includes_process": wants_process,
+            "includes_ports": wants_ports,
+        },
         "reason_codes": ["runner_playbook_service_health", f"service:{service}"],
         "confidence": 0.9,
     }
@@ -345,6 +366,14 @@ def build_service_log_file_probe_plan(task: str) -> dict | None:
         "kind": "local_file_probe",
         "summary": summary,
         "command": f"tail -n {line_count} {path}",
+        "probe_spec": {
+            "kind": "local_file_probe",
+            "path": path,
+            "mode": "tail",
+            "line_count": line_count,
+            "service": service,
+            "log_kind": log_kind,
+        },
         "reason_codes": [
             "runner_playbook_service_log_file_probe",
             f"service:{service}",
@@ -373,14 +402,23 @@ def build_local_file_probe_plan(task: str) -> dict | None:
     line_count = extract_line_count(task)
     if "tail" in lowered or "最近" in lowered:
         command = f"tail -n {line_count} {path}"
+        mode = "tail"
     elif "head" in lowered or "前" in lowered:
         command = f"head -n {line_count} {path}"
+        mode = "head"
     else:
         command = f"sed -n '1,120p' {path}"
+        mode = "read"
     return {
         "kind": "local_file_probe",
         "summary": f"查看文件 {os.path.basename(path)}",
         "command": command,
+        "probe_spec": {
+            "kind": "local_file_probe",
+            "path": path,
+            "mode": mode,
+            "line_count": line_count if mode in {"tail", "head"} else 120,
+        },
         "reason_codes": ["runner_playbook_local_file_probe"],
         "confidence": 0.82,
     }
@@ -403,6 +441,10 @@ def build_scheduler_health_plan(task: str) -> dict | None:
         "kind": "scheduler_health",
         "summary": "检查当前机器的 cron / systemd timer 状态",
         "command": command,
+        "probe_spec": {
+            "kind": "scheduler_health",
+            "checks": ["crontab", "systemd_timers"],
+        },
         "reason_codes": ["runner_playbook_scheduler_health"],
         "confidence": 0.9,
     }

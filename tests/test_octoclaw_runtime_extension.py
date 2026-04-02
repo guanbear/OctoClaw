@@ -207,6 +207,29 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["key"], "agent:main:slack:direct:u345")
         self.assertEqual(payload["state"]["decision"]["request"]["session_key"], "agent:main:slack:direct:u345")
 
+    def test_tool_context_does_not_reuse_stale_session_state_for_different_prompt(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u456",
+                  sessionId: "sess-4",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "帮我分析下 openclaw 2026.3.31 这个release",
+                  decision: { request: { session_key: "agent:main:slack:direct:u456" }, route_decision: { route: "spawn_single" } },
+                  createdAt: now,
+                  updatedAt: now
+                });
+                return __octoclawTest.resolveToolPolicyContext(ctx, "我的cron都正常吗");
+            })()"""
+        )
+
+        self.assertEqual(payload["key"], "")
+        self.assertIsNone(payload["state"])
+
     def test_retain_policy_state_when_delegated_route_ended_without_dispatch(self) -> None:
         payload = run_runtime_helper(
             """__octoclawTest.shouldRetainPolicyStateOnAgentEnd({

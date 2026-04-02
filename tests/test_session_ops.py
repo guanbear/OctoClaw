@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -86,6 +87,20 @@ class SessionOpsMessageSendTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "error")
         self.assertIn("boom", result["error"])
+
+    @patch("lib.session_ops.has_openclaw_cli", return_value=True)
+    @patch("lib.session_ops.subprocess.run")
+    def test_send_channel_message_retries_once_on_timeout(self, mock_run, _mock_cli) -> None:
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd=["openclaw", "message", "send"], timeout=20),
+            type("Proc", (), {"returncode": 0, "stdout": json.dumps({"messageId": "m-2"}), "stderr": ""})(),
+        ]
+
+        result = session_ops.send_channel_message("slack", "channel:C123", "hello")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["retry_count"], 1)
+        self.assertEqual(mock_run.call_count, 2)
 
     @patch("lib.session_ops.has_openclaw_cli", return_value=True)
     @patch("lib.session_ops.subprocess.run")
