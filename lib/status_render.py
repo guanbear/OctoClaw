@@ -46,6 +46,8 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
     mirrored = 0
     native_bound = 0
     native_active = 0
+    checkpointed = 0
+    artifact_ready = 0
     handoff_ready = 0
     delivered = 0
 
@@ -56,6 +58,8 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
         native_binding = _taskflow_field(task, "native_binding_state")
         native_status = _taskflow_field(task, "native_status").lower()
         handoff_state = str(task.get("handoff_state", "") or "").strip().lower()
+        task_event_summary = task.get("task_event_summary", {}) if isinstance(task.get("task_event_summary", {}), dict) else {}
+        kind_counts = task_event_summary.get("kind_counts", {}) if isinstance(task_event_summary.get("kind_counts", {}), dict) else {}
         if binding_state:
             tracked += 1
             if "mirror" in binding_state:
@@ -64,6 +68,10 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
             native_bound += 1
         if native_status in {"queued", "running", "blocked"}:
             native_active += 1
+        if int(kind_counts.get("checkpoint", 0) or 0) > 0:
+            checkpointed += 1
+        if int(kind_counts.get("artifact_ready", 0) or 0) > 0:
+            artifact_ready += 1
         if handoff_state == "user_safe_ready":
             handoff_ready += 1
         elif handoff_state == "delivered":
@@ -74,6 +82,8 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "mirrored": mirrored,
         "native_bound": native_bound,
         "native_active": native_active,
+        "checkpointed": checkpointed,
+        "artifact_ready": artifact_ready,
         "handoff_ready": handoff_ready,
         "delivered": delivered,
     }
@@ -86,12 +96,15 @@ def render_taskflow_substrate_summary(summary: dict[str, int]) -> str:
     mirrored = int(summary.get("mirrored", 0) or 0)
     native_bound = int(summary.get("native_bound", 0) or 0)
     native_active = int(summary.get("native_active", 0) or 0)
+    checkpointed = int(summary.get("checkpointed", 0) or 0)
+    artifact_ready = int(summary.get("artifact_ready", 0) or 0)
     handoff_ready = int(summary.get("handoff_ready", 0) or 0)
     delivered = int(summary.get("delivered", 0) or 0)
     return (
         "🧩 Substrate："
         f"tracked {tracked} · mirrored {mirrored} · native bound {native_bound} · "
-        f"native active {native_active} · handoff ready/delivered {handoff_ready}/{delivered}"
+        f"native active {native_active} · checkpoints/artifacts {checkpointed}/{artifact_ready} · "
+        f"handoff ready/delivered {handoff_ready}/{delivered}"
     )
 
 

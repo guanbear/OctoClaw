@@ -119,7 +119,10 @@ class StatusRenderTests(unittest.TestCase):
         rendered = render_status_text_compact(snapshot)
 
         self.assertIn("🐙 八爪鱼（OctoClaw）任务收件箱", rendered)
-        self.assertIn("🧩 Substrate：tracked 2 · mirrored 2 · native bound 1 · native active 1 · handoff ready/delivered 0/0", rendered)
+        self.assertIn(
+            "🧩 Substrate：tracked 2 · mirrored 2 · native bound 1 · native active 1 · checkpoints/artifacts 0/0 · handoff ready/delivered 0/0",
+            rendered,
+        )
         self.assertIn("🕸️ 协作流程（1个）", rendered)
         self.assertIn("Fix and verify the release pipeline", rendered)
         self.assertIn("子步骤：planner(done) · review(queued)", rendered)
@@ -263,6 +266,7 @@ class StatusRenderTests(unittest.TestCase):
                         "native_binding_state": "bound",
                         "native_status": "running",
                     },
+                    "task_event_summary": {"kind_counts": {"checkpoint": 1, "artifact_ready": 1}},
                 },
                 {
                     "id": "delivered-done",
@@ -287,6 +291,8 @@ class StatusRenderTests(unittest.TestCase):
         self.assertEqual(summary["mirrored"], 3)
         self.assertEqual(summary["native_bound"], 2)
         self.assertEqual(summary["native_active"], 1)
+        self.assertEqual(summary["checkpointed"], 1)
+        self.assertEqual(summary["artifact_ready"], 1)
         self.assertEqual(summary["handoff_ready"], 1)
         self.assertEqual(summary["delivered"], 1)
 
@@ -294,6 +300,7 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("tracked 3", rendered)
         self.assertIn("native bound 2", rendered)
         self.assertIn("native active 1", rendered)
+        self.assertIn("checkpoints/artifacts 1/1", rendered)
         self.assertIn("handoff ready/delivered 1/1", rendered)
 
     def test_task_anchor_render_outputs_text_fallback_anchors(self) -> None:

@@ -80,6 +80,7 @@ def summarize_markdown(report: dict) -> str:
         f"- Avg estimated cost USD: `{report['summary']['avg_estimated_cost_usd']}`",
         f"- Budget caps: `{json.dumps(report['summary']['budget_cap_counts'], ensure_ascii=False)}`",
         f"- Taskflow tracked/bound/active: `{report['summary']['taskflow_tracked_tasks']}/{report['summary']['taskflow_native_bound_tasks']}/{report['summary']['taskflow_native_active_tasks']}`",
+        f"- Progress checkpoint/artifact: `{report['summary']['taskflow_checkpointed_tasks']}/{report['summary']['taskflow_artifact_ready_tasks']}`",
         f"- Handoff ready/delivered: `{report['summary']['taskflow_handoff_ready_tasks']}/{report['summary']['taskflow_delivered_tasks']}`",
         "",
         "## Results",
@@ -181,6 +182,8 @@ def summarize_results(results: list[dict]) -> dict[str, object]:
                 if str(item.get("taskflow_native_status", "") or "").strip().lower() in {"queued", "running", "blocked"}
             ]
         ),
+        "taskflow_checkpointed_tasks": len([item for item in results if bool(item.get("taskflow_checkpointed"))]),
+        "taskflow_artifact_ready_tasks": len([item for item in results if bool(item.get("taskflow_artifact_ready"))]),
         "taskflow_handoff_ready_tasks": len([item for item in results if str(item.get("taskflow_handoff_state", "") or "").strip() == "user_safe_ready"]),
         "taskflow_delivered_tasks": len([item for item in results if str(item.get("taskflow_handoff_state", "") or "").strip() == "delivered"]),
     }
@@ -214,6 +217,8 @@ def _load_task_state_index(workspace: str) -> dict[str, dict]:
 
 def _taskflow_fields_for_eval(task_record: dict | None) -> dict[str, object]:
     task = task_record if isinstance(task_record, dict) else {}
+    task_event_summary = task.get("task_event_summary", {}) if isinstance(task.get("task_event_summary", {}), dict) else {}
+    kind_counts = task_event_summary.get("kind_counts", {}) if isinstance(task_event_summary.get("kind_counts", {}), dict) else {}
     return {
         "taskflow_state": str(task.get("openclaw_taskflow_state", "") or "").strip(),
         "taskflow_task_runtime": str(task.get("openclaw_task_runtime", "") or "").strip(),
@@ -223,6 +228,8 @@ def _taskflow_fields_for_eval(task_record: dict | None) -> dict[str, object]:
         "taskflow_native_runtime": str(task.get("openclaw_native_runtime", "") or "").strip(),
         "taskflow_task_id": str(task.get("openclaw_task_id", "") or "").strip(),
         "taskflow_flow_id": str(task.get("openclaw_flow_id", "") or "").strip(),
+        "taskflow_checkpointed": int(kind_counts.get("checkpoint", 0) or 0) > 0,
+        "taskflow_artifact_ready": int(kind_counts.get("artifact_ready", 0) or 0) > 0,
         "taskflow_handoff_state": str(task.get("handoff_state", "") or "").strip(),
     }
 

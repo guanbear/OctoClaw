@@ -46,6 +46,7 @@ class EvalSuiteTests(unittest.TestCase):
                     "expect_route": "runner",
                     "taskflow_state": "mirrored",
                     "taskflow_task_runtime": "openclaw_task",
+                    "taskflow_checkpointed": True,
                 },
                 {
                     "route": "spawn_single",
@@ -59,6 +60,7 @@ class EvalSuiteTests(unittest.TestCase):
                     "taskflow_state": "mirrored_bound",
                     "taskflow_native_binding_state": "bound",
                     "taskflow_native_status": "running",
+                    "taskflow_artifact_ready": True,
                     "taskflow_handoff_state": "delivered",
                 },
             ]
@@ -70,6 +72,8 @@ class EvalSuiteTests(unittest.TestCase):
         self.assertEqual(summary["taskflow_tracked_tasks"], 2)
         self.assertEqual(summary["taskflow_native_bound_tasks"], 1)
         self.assertEqual(summary["taskflow_native_active_tasks"], 1)
+        self.assertEqual(summary["taskflow_checkpointed_tasks"], 1)
+        self.assertEqual(summary["taskflow_artifact_ready_tasks"], 1)
         self.assertEqual(summary["taskflow_handoff_ready_tasks"], 0)
         self.assertEqual(summary["taskflow_delivered_tasks"], 1)
 
@@ -85,6 +89,7 @@ class EvalSuiteTests(unittest.TestCase):
                 "openclaw_task_id": "native-task-1",
                 "openclaw_flow_id": "flow-1",
                 "handoff_state": "user_safe_ready",
+                "task_event_summary": {"kind_counts": {"checkpoint": 1, "artifact_ready": 1}},
             }
         )
 
@@ -96,6 +101,8 @@ class EvalSuiteTests(unittest.TestCase):
         self.assertEqual(fields["taskflow_native_runtime"], "subagent")
         self.assertEqual(fields["taskflow_task_id"], "native-task-1")
         self.assertEqual(fields["taskflow_flow_id"], "flow-1")
+        self.assertTrue(fields["taskflow_checkpointed"])
+        self.assertTrue(fields["taskflow_artifact_ready"])
         self.assertEqual(fields["taskflow_handoff_state"], "user_safe_ready")
 
 

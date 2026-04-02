@@ -34,6 +34,7 @@ class ReplaySummaryTests(unittest.TestCase):
                                 "id": "spawn-1",
                                 "status": "running",
                                 "handoff_state": "user_safe_ready",
+                                "task_event_summary": {"kind_counts": {"checkpoint": 1, "artifact_ready": 1}},
                                 "openclaw_taskflow": {
                                     "binding_state": "mirrored_bound",
                                     "native_binding_state": "bound",
@@ -71,6 +72,8 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(payload["substrate_metrics"]["tracked"], 1)
         self.assertEqual(payload["substrate_metrics"]["native_bound"], 1)
         self.assertEqual(payload["substrate_metrics"]["native_active"], 1)
+        self.assertEqual(payload["substrate_metrics"]["checkpointed"], 1)
+        self.assertEqual(payload["substrate_metrics"]["artifact_ready"], 1)
         self.assertEqual(payload["substrate_metrics"]["handoff_ready"], 1)
         self.assertTrue(payload["promotion"]["ready"])
         rendered = render_text(payload)

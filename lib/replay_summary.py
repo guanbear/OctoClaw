@@ -285,6 +285,8 @@ def load_task_state_snapshot(path: Path) -> dict[str, Any]:
             "mirrored": 0,
             "native_bound": 0,
             "native_active": 0,
+            "checkpointed": 0,
+            "artifact_ready": 0,
             "handoff_ready": 0,
             "delivered": 0,
         }
@@ -298,6 +300,8 @@ def load_task_state_snapshot(path: Path) -> dict[str, Any]:
             "mirrored": 0,
             "native_bound": 0,
             "native_active": 0,
+            "checkpointed": 0,
+            "artifact_ready": 0,
             "handoff_ready": 0,
             "delivered": 0,
         }
@@ -517,6 +521,7 @@ def render_text(summary: dict[str, Any]) -> str:
             f"- Available: `{substrate_metrics['available']}`",
             f"- Tracked/mirrored: `{substrate_metrics['tracked']}/{substrate_metrics['mirrored']}`",
             f"- Native bound/active: `{substrate_metrics['native_bound']}/{substrate_metrics['native_active']}`",
+            f"- Checkpoints/artifacts: `{substrate_metrics['checkpointed']}/{substrate_metrics['artifact_ready']}`",
             f"- Handoff ready/delivered: `{substrate_metrics['handoff_ready']}/{substrate_metrics['delivered']}`",
             "",
             f"Promotion Heuristic: `{promotion['phase']}` -> `{promotion['target']}`",
