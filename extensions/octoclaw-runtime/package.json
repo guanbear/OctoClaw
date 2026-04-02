@@ -6,6 +6,7 @@
   "main": "index.js",
   "files": [
     "index.js",
+    "policy",
     "openclaw.plugin.json"
   ],
   "openclaw": {

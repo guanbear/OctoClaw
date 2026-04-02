@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildDecision } from "./policy/decide.js";
+import { inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -451,6 +453,16 @@ function parsePolicyDecisionJson(raw) {
   }
 }
 
+function parseObjectJson(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function preHintAllowedTools(decision, routeHintTool) {
   const toolPolicy = decision?.tool_policy || {};
   const allowed = new Set([
@@ -588,12 +600,8 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
     return { stateKey, state: existing, decision: existing.decision };
   }
   const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
-  const args = ["--task", prompt];
-  if (metadata.channel) args.push("--channel", String(metadata.channel));
-  if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
-  if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
   try {
-    const decision = await runJsonScript("octoclaw_policy.py", args, cwd);
+    const decision = buildDecision(prompt, { metadata });
     const nextState = {
       prompt,
       decision,
@@ -1024,11 +1032,11 @@ const plugin = {
           reason: params.reason || "",
           source: "main_agent",
         };
-        const args = ["--task", task];
-        if (params.command) args.push("--command", params.command);
-        if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
-        args.push("--route-hint-json", JSON.stringify(routeHintPayload));
-        const payload = await runJsonScript("octoclaw_policy.py", args, ctx?.cwd || process.cwd());
+        const payload = buildDecision(task, {
+          command: params.command || "",
+          metadata,
+          routeHint: routeHintPayload,
+        });
         const stickyPersisted = await persistStickyLane(replaySessionKey, payload, pi.logger, { source: "route_hint" });
         setPolicyStateForContext(ctx, {
           ...(existing || {}),
@@ -1093,13 +1101,14 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const args = ["--task", params.task];
-        if (params.command) args.push("--command", params.command);
-        if (params.channel) args.push("--channel", params.channel);
-        if (params.sessionKey) args.push("--session-key", params.sessionKey);
-        if (params.forceRoute) args.push("--force-route", params.forceRoute);
-        if (params.metadataJson) args.push("--metadata-json", params.metadataJson);
-        const payload = await runJsonScript("octoclaw_policy.py", args, ctx?.cwd || process.cwd());
+        const metadata = { ...buildPolicyMetadata(ctx), ...parseObjectJson(params.metadataJson) };
+        if (params.channel) metadata.channel = params.channel;
+        if (params.sessionKey) metadata.session_key = params.sessionKey;
+        const payload = buildDecision(params.task, {
+          command: params.command || "",
+          metadata,
+          forceRoute: params.forceRoute || "",
+        });
         return toolResponse(policySummaryText(payload), payload);
       },
     },
@@ -1121,11 +1130,7 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const payload = await runJsonScript(
-          "octoclaw_route.py",
-          ["--task", params.task, ...(params.command ? ["--command", params.command] : [])],
-          ctx?.cwd || process.cwd(),
-        );
+        const payload = inferRoute(params.task, params.command || "");
         return toolResponse(
           `OctoClaw system preferred route: ${payload.system_preferred_route || payload.route} (confidence ${payload.confidence ?? "n/a"})`,
           payload,
@@ -1419,7 +1424,7 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octoroute <task>", "error");
         return;
       }
-      const payload = await runJsonScript("octoclaw_route.py", ["--task", task], ctx?.cwd || process.cwd());
+      const payload = inferRoute(task);
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(`OctoClaw system preferred route: ${payload.system_preferred_route || payload.route}`);
@@ -1437,7 +1442,7 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octopolicy <task>", "error");
         return;
       }
-      const payload = await runJsonScript("octoclaw_policy.py", ["--task", task], ctx?.cwd || process.cwd());
+      const payload = buildDecision(task);
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(policySummaryText(payload));
@@ -1479,6 +1484,8 @@ export const __octoclawTest = {
   buildPolicyMetadata,
   preHintAllowedTools,
   shouldRetainPolicyStateOnAgentEnd,
+  inferRoute,
+  buildDecision,
   __setPolicyState: setPolicyStateForContext,
   __resetPolicyState: () => policyStateBySession.clear(),
 };
