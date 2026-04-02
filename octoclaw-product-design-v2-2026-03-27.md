@@ -47,6 +47,24 @@ OctoClaw 的目标不是“会开很多 agent”，而是：
 
 > **OctoClaw 不是 worker 本身，而是 worker 的调度系统。**
 
+但在最新重构语义里，还需要再补一层更精确的理解：
+
+- OpenClaw `tasks / flows` 是 **detached runtime substrate**
+- OctoClaw `direct / runner / spawn_single / spawn_multi` 是 **execution lanes**
+- `status / details / timeline / graph / retrieve` 是 **control / observer surface**
+
+这三层不是同义词，也不是互斥关系。
+
+例如：
+
+- 一个 cron 相关请求可以走 `runner` 这个执行 lane
+- 但它仍然应该落成 OpenClaw `task / flow` substrate 事实
+- 一个 `八爪鱼状态` 请求则更接近 control / observer，而不是普通业务 `direct`
+
+一句话：
+
+> **OctoClaw 后续不是把所有东西都塞成“route”，而是明确区分 substrate、execution lane 和 control / observer。**
+
 ### 2.3 产品方法论
 
 OctoClaw 的方法论不是“造一个更大的 Agent 框架”，而是把多 Agent 的关键工程能力收敛成一套可控、可解释、可运维的系统。
@@ -298,6 +316,28 @@ ClawTeam 最值得借的是：
 所有非 `direct` 工作都收敛到统一运行面；
 不同的是执行协议，而不是再造多套 runtime。
 
+这里还需要再显式区分两件事：
+
+- **substrate truth**
+  - OpenClaw `tasks / flows`
+  - OctoClaw 本地 task-state / event stream / artifact index
+- **execution semantics**
+  - `direct`
+  - `runner`
+  - `spawn_single`
+  - `spawn_multi`
+
+也就是说：
+
+> **task / flow 解决“有没有 detached work truth”，execution lane 解决“这件事由谁来做、怎么做”。**
+
+后续的主线不是把 lane 变成 substrate 的对立面，而是：
+
+- `runner-as-task`
+- `spawn_single` 更原生地绑定 detached task
+- `simple multi-stage workflow` 逐步走 linear flow
+- control / observer 直接消费 substrate facts，而不是继续靠脚本猜
+
 ### 4.2.1 轻量 harness 默认开启
 
 默认应全局开启的能力：
@@ -351,7 +391,7 @@ ClawTeam 最值得借的是：
 
 ## 5. 最终产品形态
 
-### 5.1 四层结构
+### 5.1 OpenClaw 外壳 + OctoClaw 三层内核
 
 #### 1. OpenClaw 外壳层
 
@@ -362,40 +402,73 @@ ClawTeam 最值得借的是：
 - workspace
 - channel / user interaction shell
 
-#### 2. OctoClaw 策略层
+#### 2. Substrate Layer（detached runtime substrate）
+
+负责：
+
+- OpenClaw `tasks / flows`
+- detached task ledger
+- parent shell / return-to-session baseline
+- blocked / retry / reopen substrate
+- OctoClaw 本地 mirror / binding / taskflow aware runtime truth
+
+这一层回答的是：
+
+- 现在是否存在 detached work
+- 它当前 queued / running / done / blocked / failed 吗
+- 应该回到哪个 session / thread
+- lineage / audit / cancel / reopen 应该怎么做
+
+它不是 OctoClaw 的策略脑，但它应成为后续 detached work 的共同事实层。
+
+#### 3. OctoClaw 策略与执行合同层
 
 负责：
 
 - route
+- work contract
 - model / profile resolution
 - cost / budget / quota policy
 - review gate
 - patrol / retry / escalation
 - final compose policy
 
-#### 3. ClawTeam 运行面
+#### 4. Execution Lane Layer
 
-负责：
-
-- task
-- inbox
-- board
-- tmux
-- worktree / workspace isolation
-- worker observability
-
-#### 4. 执行层
-
-负责真正执行：
+负责真正决定这件事由什么 lane 完成：
 
 - `direct`
 - `runner`
 - `spawn_single`
 - `spawn_multi`
 
+这里必须明确：
+
+- `runner` 是 execution lane，不是 task substrate 的对立面
+- `spawn_single / spawn_multi` 也不是 detached truth 的来源本身
+- 未来正确方向是 `runner-as-task`、`spawn_single` 更原生地绑定 detached task、simple multi-stage workflow 渐进接 linear flow
+
 其中复杂任务不是进入独立的新 runtime，而是：
 
 > **在 ClawTeam 运行面上启用更重的 heavy profile / protocol。**
+
+#### 5. Control / Observer Layer
+
+负责：
+
+- `octoclaw_status`
+- `details / timeline / graph / retrieve`
+- runtime observer
+- replay / eval / economics surfaces
+- patrol 后续逐步并入的观察与恢复能力
+
+这层的目标不是“再做一次任务”，而是：
+
+- 读取 substrate facts
+- 渲染 execution lane 的当前与历史状态
+- 提供 task action / inspect / replay 能力
+
+也就是说，像 `八爪鱼状态` 这类请求，产品语义上更接近 control / observer，而不是普通业务 `direct`。
 
 ### 5.2 总体架构图
 
@@ -413,6 +486,11 @@ flowchart TB
         MA["Main Agent"]
     end
 
+    subgraph SB["Substrate Layer"]
+        TF["OpenClaw Tasks / Flows"]
+        MT["OctoClaw Mirror / Binding"]
+    end
+
     subgraph OP["OctoClaw 策略层"]
         RT["Runtime Policy Router"]
         MP["Model Policy Engine"]
@@ -421,14 +499,15 @@ flowchart TB
         EV["Replay / Eval / Policy Tuning"]
     end
 
-    subgraph CT["ClawTeam 运行面"]
+    subgraph CT["Execution Backends"]
         TQ["Task / DAG / Dependency"]
         MB["Inbox / Result Collection"]
         BD["Board / Event Log"]
         WS["tmux / Worktree / Workspace"]
+        CL["ClawTeam optional operator backend"]
     end
 
-    subgraph EX["执行层"]
+    subgraph EX["Execution Lanes"]
         DR["direct"]
         RN["runner"]
         SG["spawn_single"]
@@ -449,15 +528,23 @@ flowchart TB
     UI --> GW
     GW --> RT
     GW --> MA
+    GW --> TF
 
     RT --> MP
     RT --> RV
     RT --> DR
     RT --> TQ
+    RT --> TF
+
+    TF --> MT
+    MT --> BD
+    MT --> UI
+    MT --> TM
 
     TQ --> MB
     TQ --> BD
     TQ --> WS
+    TQ --> CL
     TQ --> RN
     TQ --> SG
     TQ --> MG
@@ -483,6 +570,7 @@ flowchart TB
     MA --> GW
 
     PT --> TQ
+    PT --> TF
     PT --> RN
     PT --> SG
     PT --> MG
@@ -638,6 +726,31 @@ OctoClaw 的“省钱”和“快”不能只靠感觉，必须有可执行的�
 
 > **`direct = answer-now lane`。**
 
+### 6.2.1 control / observer 请求不应与普通 `direct` 混为一谈
+
+像下面这些请求：
+
+- `八爪鱼状态`
+- `details <task-id>`
+- `timeline <task-id>`
+- `graph <task-id>`
+- `retrieve <task-id>`
+
+产品语义上更接近：
+
+- control-plane request
+- observer surface query
+
+它们当前实现上可能仍然表现为主脑同步响应，但设计上不应再把它们理解成普通业务 `direct`。
+
+更准确地说，它们应优先命中：
+
+- `octoclaw_status`
+- `octoclaw_task_action`
+- runtime observer / replay / display surfaces
+
+而不是进入新的业务执行 lane。
+
 ### 6.3 runner 的定位
 
 `runner` 不是普通 subagent，而是 **特殊 executor**。
@@ -665,6 +778,17 @@ OctoClaw 的“省钱”和“快”不能只靠感觉，必须有可执行的�
 一句话：
 
 > **`runner = bounded tool workflow`，而不是“轻量子 agent”。**
+
+这里还需要补一条，以避免和 OpenClaw `task / flow` substrate 混淆：
+
+- `runner` 是 **execution lane**
+- 不是 detached truth 自身
+- 但未来应逐步演进成 **runner-as-task**
+- 对一部分 simple linear workflow，还可以继续走向 **runner-as-flow**
+
+因此像 cron / script / local probe 这类请求，后续最合理的终局不是“task 和 runner 二选一”，而是：
+
+> **taskified runner：它既是 runner lane，又有 detached task substrate。**
 
 #### 6.3.1 后续收口方向：尽量减少常驻守护进程
 
@@ -1718,6 +1842,15 @@ ClawTeam 是 OctoClaw 当前唯一需要明确依赖进核心设计里的外部 
 - 任务结束了但外层误以为还在跑
 - agent 死掉后任务永远卡住
 - Slack/WebChat/thread follow-up 串线
+
+同时应并行推进一条 substrate 迁移支线：
+
+4.5 OpenClaw task/flow substrate migration
+   - 保持 `mirror-first + native-fact binding`
+   - 先让 `runner / spawn_single / spawn_multi` 全部 task-flow aware
+   - 先推进 `runner-as-task`
+   - 再视上游能力进入 `native-preferred create`
+   当前状态：已完成第一拍，task-state / patrol / display 已开始消费 substrate facts；后续重点是 `runner-as-task` 与更原生的 detached runtime binding
 
 ### 12.2 第二段：重写 route / model / config 内核
 
