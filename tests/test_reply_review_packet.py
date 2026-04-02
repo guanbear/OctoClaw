@@ -92,6 +92,58 @@ class ReplyReviewPacketTests(unittest.TestCase):
             self.assertEqual(case["policy"]["route"], "spawn_single")
             self.assertTrue(case["dispatch"]["called"])
 
+    def test_build_packet_skips_internal_delegated_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            session_dir = tmp / "sessions"
+            session_dir.mkdir()
+            session_file = session_dir / "abc.jsonl"
+            self.write_jsonl(
+                session_file,
+                [
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-02T10:00:00Z",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "route=spawn_single ; system_preferred_route=spawn_single ; worker_pool=octoclaw-code\nDelegated run: do not solve directly"}],
+                        },
+                    },
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-02T10:00:05Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "internal handoff"}],
+                        },
+                    },
+                ],
+            )
+            sessions_index = {
+                "agent:main:slack:direct:u0al9t5u89z": {
+                    "sessionFile": str(session_file),
+                    "origin": {"provider": "slack", "surface": "slack"},
+                }
+            }
+            sessions_path = tmp / "sessions.json"
+            sessions_path.write_text(json.dumps(sessions_index, ensure_ascii=False), encoding="utf-8")
+            args = type(
+                "Args",
+                (),
+                {
+                    "sessions_index": str(sessions_path),
+                    "session_dir": str(session_dir),
+                    "replay_log": "",
+                    "task_state": "",
+                    "day": "2026-04-02",
+                    "timezone": "Asia/Shanghai",
+                    "limit": 10,
+                    "output": "",
+                },
+            )()
+            packet = reply_review_packet.build_packet(args)
+            self.assertEqual(packet["case_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

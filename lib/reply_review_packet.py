@@ -58,14 +58,10 @@ def message_text(content) -> str:
 
 def normalize_prompt(text: str) -> str:
     cleaned = str(text or "").strip()
-    cleaned = re.sub(
-        r"^Sender \(untrusted metadata\):\s*```json\s*.*?```\s*",
-        "",
-        cleaned,
-        flags=re.S,
-    )
+    cleaned = re.sub(r"Sender \(untrusted metadata\):\s*```json\s*.*?```\s*", "", cleaned, flags=re.S)
+    cleaned = re.sub(r"Conversation info \(untrusted metadata\):\s*```json\s*.*?```\s*", "", cleaned, flags=re.S)
     cleaned = re.sub(r"^(?:System:.*(?:\n|$))+", "", cleaned, flags=re.M)
-    cleaned = re.sub(r"^\[[^\]]+\]\s*", "", cleaned).strip()
+    cleaned = re.sub(r"^\[[^\]]+\]\s*", "", cleaned, flags=re.M).strip()
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 
@@ -74,6 +70,21 @@ def normalize_assistant_text(text: str) -> str:
     cleaned = str(text or "").strip()
     cleaned = cleaned.replace("[[reply_to_current]]", "").strip()
     return cleaned
+
+
+def looks_internal_prompt(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    markers = (
+        "delegated run:",
+        "allowed control tools:",
+        "preferred skill bundle:",
+        "system_preferred_route=",
+        "worker_pool=",
+        "protocol=heavy",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def load_sessions_index(path: Path) -> dict[str, dict]:
@@ -198,6 +209,8 @@ def collect_turns(
         if stamp.astimezone(tz).date() != review_date:
             continue
         if not turn.user_prompt or not turn.assistant_reply:
+            continue
+        if looks_internal_prompt(turn.user_prompt):
             continue
         filtered.append(turn)
     return filtered
