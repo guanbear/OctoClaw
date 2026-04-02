@@ -162,7 +162,8 @@ export function resolveModelAndThinking(
     selectedModel = resolveAutoPolicyModel(policyData, { workerPool, phase, route, profile }) || "";
   } else {
     const modeData = loadJson(MODE_FILE) || { mode: "auto", customModels: {} };
-    const mode = ["auto", "custom"].includes(String(getCurrentMode() || modeData.mode || "auto")) ? String(getCurrentMode() || modeData.mode || "auto") : "auto";
+    const currentMode = getCurrentMode();
+    const mode = ["auto", "custom"].includes(String(currentMode || modeData.mode || "auto")) ? String(currentMode || modeData.mode || "auto") : "auto";
     const customModels = modeData && typeof modeData === "object" && modeData.customModels && typeof modeData.customModels === "object"
       ? modeData.customModels
       : {};

@@ -141,8 +141,9 @@ function stickyContractValue(entry) {
 }
 
 function stickyApplyLimit(policyCfg) {
-  const section = policyCfg?.route_stickiness && typeof policyCfg.route_stickiness === "object" ? policyCfg.route_stickiness : {};
-  const parsed = Number(section.max_apply_count ?? 3);
+  const raw = policyCfg?.route_stickiness;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return 0;
+  const parsed = Number(raw.max_apply_count ?? 3);
   return Number.isFinite(parsed) ? Math.max(parsed, 0) : 3;
 }
 
@@ -344,10 +345,10 @@ function runtimeSwitchesSummary(policyCfg) {
   return {
     policy_enabled: Boolean("enabled" in (policyCfg || {}) ? policyCfg.enabled : true),
     hard_runner_only_enabled: Boolean("hard_runner_only" in switches ? switches.hard_runner_only : true),
-    route_hint_required_enabled: Boolean("route_hint_required" in switches ? switches.route_hint_required : true),
+    route_hint_required_enabled: Boolean("route_hint_required" in switches ? switches.route_hint_required : false),
     replay_logging_enabled: Boolean("replay_logging" in switches ? switches.replay_logging : true),
-    direct_model_override_enabled: Boolean("direct_model_override" in switches ? switches.direct_model_override : true),
-    delegation_enforcement_enabled: Boolean("delegation_enforcement" in switches ? switches.delegation_enforcement : true),
+    direct_model_override_enabled: Boolean("direct_model_override" in switches ? switches.direct_model_override : false),
+    delegation_enforcement_enabled: Boolean("delegation_enforcement" in switches ? switches.delegation_enforcement : false),
     sticky_lane_enabled: Boolean("enabled" in routeStickiness ? routeStickiness.enabled : true),
     ack_followup_enabled: Boolean("ack_followup_enabled" in routeStickiness ? routeStickiness.ack_followup_enabled : true),
   };

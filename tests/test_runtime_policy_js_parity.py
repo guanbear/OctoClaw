@@ -107,6 +107,10 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "task": "发布到生产环境前再检查一下鉴权配置",
                 "config": {},
             },
+            {
+                "task": "分三个子任务并行进行：1) 检查认证模块现有漏洞 2) 检查存储层备份状态 3) 检查API网关限流配置，每项出独立报告",
+                "config": {},
+            },
         ]
 
         for case in cases:
@@ -188,6 +192,12 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                     "source": "main_agent",
                 },
             },
+            {
+                "task": "检查一下服务健康状态",
+                "metadata": {},
+                "config": {},
+                "force_route": "runner",
+            },
         ]
 
         for case in cases:
@@ -207,16 +217,67 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                         case["task"],
                         metadata=case.get("metadata"),
                         route_hint=case.get("route_hint"),
+                        force_route=case.get("force_route", ""),
                     )
                     js_payload = _run_node_expression(
                         "__octoclawTest.buildDecision("
                         f"{json.dumps(case['task'])}, "
-                        f"{json.dumps({'metadata': case.get('metadata', {}), 'routeHint': case.get('route_hint', {})})}"
+                        f"{json.dumps({'metadata': case.get('metadata', {}), 'routeHint': case.get('route_hint', {}), 'forceRoute': case.get('force_route', '')})}"
                         ")",
                         workspace=js_workspace,
                     )
 
                     self.assertEqual(_normalize_decision(js_payload), _normalize_decision(python_payload))
+
+
+_GUARD_FILE = Path("/tmp/ironclaw-model-guard-override.json")
+_GLM_BUILTIN = "lixiang-glm-5/kivy-glm-5"
+
+
+class RuntimePolicyModelGuardTests(unittest.TestCase):
+    """JS-only guard tests — Python does not implement the guard layer."""
+
+    def setUp(self) -> None:
+        self._guard_backup: Optional[str] = None
+        if _GUARD_FILE.exists():
+            self._guard_backup = _GUARD_FILE.read_text("utf-8")
+
+    def tearDown(self) -> None:
+        if self._guard_backup is not None:
+            _GUARD_FILE.write_text(self._guard_backup, "utf-8")
+        elif _GUARD_FILE.exists():
+            _GUARD_FILE.unlink()
+
+    def _write_guard(self, payload: dict) -> None:
+        _GUARD_FILE.write_text(json.dumps(payload), "utf-8")
+
+    def test_guard_all_fail_returns_empty_model(self) -> None:
+        self._write_guard({"guarded": True, "status": "all_fail"})
+        with tempfile.TemporaryDirectory(prefix="octoclaw-guard-") as ws:
+            result = _run_node_expression(
+                "__octoclawTest.buildDecision('看下磁盘使用率', {})",
+                workspace=ws,
+            )
+        self.assertEqual(result["model_policy"]["selected_model"], "")
+
+    def test_guard_ratelimit_falls_back_to_glm(self) -> None:
+        self._write_guard({"guarded": True, "status": "ratelimit"})
+        with tempfile.TemporaryDirectory(prefix="octoclaw-guard-") as ws:
+            result = _run_node_expression(
+                "__octoclawTest.buildDecision('看下磁盘使用率', {})",
+                workspace=ws,
+            )
+        self.assertEqual(result["model_policy"]["selected_model"], _GLM_BUILTIN)
+
+    def test_guard_inactive_does_not_redirect(self) -> None:
+        self._write_guard({"guarded": False})
+        with tempfile.TemporaryDirectory(prefix="octoclaw-guard-") as ws:
+            result = _run_node_expression(
+                "__octoclawTest.buildDecision('看下磁盘使用率', {})",
+                workspace=ws,
+            )
+        # When guard is not active, model must not be forcibly set to GLM
+        self.assertNotEqual(result["model_policy"]["selected_model"], "")
 
 
 if __name__ == "__main__":
