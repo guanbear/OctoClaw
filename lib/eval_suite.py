@@ -7,13 +7,22 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from model_pricing import estimate_task_cost_usd
+try:
+    from model_pricing import estimate_task_cost_usd
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.model_pricing import estimate_task_cost_usd
+
+try:
+    from eval_state_machine import DEFAULT_CASES_FILE as DEFAULT_STATE_MACHINE_TASKS_FILE, run_state_machine_eval
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.eval_state_machine import DEFAULT_CASES_FILE as DEFAULT_STATE_MACHINE_TASKS_FILE, run_state_machine_eval
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -21,6 +30,8 @@ PROJECT_DIR = SCRIPT_DIR.parent
 DISPATCH_PY = SCRIPT_DIR / "dispatch_task.py"
 RUNNER_QUEUE_PY = SCRIPT_DIR / "runner_queue.py"
 RUNNER_LOOP_SH = SCRIPT_DIR / "runner_loop.sh"
+DEFAULT_ROUTE_TASKS_FILE = PROJECT_DIR / "eval" / "tasks-minimal.json"
+DEFAULT_OUTPUT_DIR = PROJECT_DIR / "eval" / "reports"
 
 
 def now_compact() -> str:
@@ -157,18 +168,28 @@ def summarize_results(results: list[dict]) -> dict[str, object]:
     }
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Minimal replay/eval for OctoClaw")
-    parser.add_argument("--tasks", default=str(PROJECT_DIR / "eval" / "tasks-minimal.json"))
+    parser.add_argument("--mode", choices=("route", "state_machine"), default="route")
+    parser.add_argument("--tasks", default="")
     parser.add_argument("--workspace", default="")
-    parser.add_argument("--output-dir", default=str(PROJECT_DIR / "eval" / "reports"))
-    args = parser.parse_args()
+    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--freeze-time", default="")
+    return parser
 
-    task_file = Path(args.tasks).resolve()
-    output_dir = Path(args.output_dir).resolve()
+
+def resolve_tasks_path(mode: str, tasks: str = "") -> Path:
+    if str(tasks or "").strip():
+        return Path(tasks).resolve()
+    if str(mode or "").strip() == "state_machine":
+        return Path(DEFAULT_STATE_MACHINE_TASKS_FILE).resolve()
+    return DEFAULT_ROUTE_TASKS_FILE.resolve()
+
+
+def run_route_eval(*, task_file: Path, workspace: str = "", output_dir: Path = DEFAULT_OUTPUT_DIR) -> dict[str, object]:
+    output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    workspace = args.workspace
     if not workspace:
         workspace = tempfile.mkdtemp(prefix="octoclaw-eval-")
 
@@ -283,8 +304,32 @@ def main():
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(summarize_markdown(report))
 
-    print(json.dumps({"json": str(json_path), "markdown": str(md_path), "summary": summary}, ensure_ascii=False))
+    return {"json": str(json_path), "markdown": str(md_path), "summary": summary}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    task_file = resolve_tasks_path(args.mode, args.tasks)
+    try:
+        if args.mode == "state_machine":
+            payload = run_state_machine_eval(
+                tasks_file=task_file,
+                workspace=args.workspace,
+                freeze_time=args.freeze_time,
+            )
+        else:
+            payload = run_route_eval(
+                task_file=task_file,
+                workspace=args.workspace,
+                output_dir=Path(args.output_dir),
+            )
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

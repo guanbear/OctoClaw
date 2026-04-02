@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -62,6 +63,13 @@ def _save_json(path: str, payload: dict[str, Any]) -> None:
     _ensure_parent(path)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+
+def _workspace_for_store(path: str) -> Path:
+    store_path = Path(path)
+    if len(store_path.parents) >= 3:
+        return store_path.parents[2]
+    return Path(WORKSPACE)
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -297,6 +305,103 @@ def _recount_checklist(snapshot: dict[str, Any]) -> dict[str, Any]:
     snapshot["open_count"] = open_count
     snapshot["completed_count"] = completed_count
     return snapshot
+
+
+def _normalized_checklist_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    items = snapshot.get("items", []) if isinstance(snapshot.get("items"), list) else []
+    normalized_items: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        normalized_items.append(
+            {
+                "id": _text(item.get("id")),
+                "title": _text(item.get("title")),
+                "state": _text(item.get("state")).lower() or "pending",
+                "source": _text(item.get("source")),
+                "linked_task_id": _text(item.get("linked_task_id")),
+            }
+        )
+    return {
+        "kind": _text(snapshot.get("kind")),
+        "items": normalized_items,
+    }
+
+
+def _checklist_signature(snapshot: dict[str, Any]) -> str:
+    return json.dumps(_normalized_checklist_snapshot(snapshot), ensure_ascii=False, sort_keys=True)
+
+
+def _checklist_items_by_id(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    items = snapshot.get("items", []) if isinstance(snapshot.get("items"), list) else []
+    return {
+        _text(item.get("id")): item
+        for item in items
+        if isinstance(item, dict) and _text(item.get("id"))
+    }
+
+
+def _append_checklist_history_if_changed(task: dict[str, Any], previous: dict[str, Any], current: dict[str, Any], *, actor: str = "runtime_sync") -> None:
+    task_id = _text(task.get("id"))
+    if not task_id or _checklist_signature(previous) == _checklist_signature(current):
+        return
+    try:
+        from checklist_history import append_checklist_event
+    except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+        from lib.checklist_history import append_checklist_event
+
+    workspace = str(_workspace_for_store(TASK_CHECKLIST_STORE_FILE))
+    previous_items = _checklist_items_by_id(previous)
+    current_items = _checklist_items_by_id(current)
+
+    for item_id, item in current_items.items():
+        current_state = _text(item.get("state")).lower() or "pending"
+        previous_item = previous_items.get(item_id)
+        if previous_item is None:
+            append_checklist_event(
+                task_id,
+                "item_added",
+                item_id,
+                "",
+                current_state,
+                actor,
+                workspace,
+                details={
+                    "title": _text(item.get("title")),
+                    "source": _text(item.get("source")),
+                    "linked_task_id": _text(item.get("linked_task_id")),
+                },
+            )
+            continue
+        previous_state = _text(previous_item.get("state")).lower() or "pending"
+        if previous_state == current_state:
+            continue
+        event_type = "item_done" if current_state == "done" else ("item_blocked" if current_state == "blocked" else "item_reset")
+        append_checklist_event(
+            task_id,
+            event_type,
+            item_id,
+            previous_state,
+            current_state,
+            actor,
+            workspace,
+            details={
+                "title": _text(item.get("title")),
+                "source": _text(item.get("source")),
+                "linked_task_id": _text(item.get("linked_task_id")),
+            },
+        )
+
+    append_checklist_event(
+        task_id,
+        "snapshot",
+        "",
+        "",
+        "",
+        actor,
+        workspace,
+        snapshot=current,
+    )
 
 
 def _merge_checklist_items(
@@ -680,7 +785,9 @@ def sync_runtime_surfaces(task: dict[str, Any], *, thread_action: str = "") -> d
     artifact_summary = upsert_artifact_index(task)
     ownership = upsert_ownership(task)
     session_resume = upsert_worker_session(task)
+    previous_checklist = resolve_task_checklist(_text(task.get("id"))) if _text(task.get("id")) else {}
     checklist = upsert_checklist(task)
+    _append_checklist_history_if_changed(task, previous_checklist, checklist)
     return {
         "artifact_count": int(artifact_summary.get("artifact_count", 0) or 0),
         "ownership_state": _text(ownership.get("state")),
@@ -717,3 +824,53 @@ def recover_stale_ownership(tasks: list[dict[str, Any]], *, stale_after_seconds:
             task["status"] = "queued"
         recovered.append(task)
     return recovered
+
+
+def build_recovery_event(task_id: str, old_owner_id: str, reason: str) -> dict[str, Any]:
+    task_text = _text(task_id)
+    owner_text = _text(old_owner_id)
+    reason_text = _text(reason) or "unspecified"
+    return {
+        "event_key": _artifact_id(task_text or "task", "recovery", f"{owner_text or 'unowned'}:{reason_text}"),
+        "event_type": "reassignment",
+        "task_id": task_text,
+        "old_owner_id": owner_text,
+        "reason": reason_text,
+        "target_lifecycle_state": "queued",
+    }
+
+
+def mark_task_for_reassignment(task_record: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(task_record, dict):
+        return {}
+    history = task_record.get("recovery_history", [])
+    recovery_history = [dict(entry) for entry in history if isinstance(entry, dict)]
+    old_owner_id = _text(task_record.get("owner")) or _text(task_record.get("agent_id"))
+    if not old_owner_id:
+        for entry in reversed(recovery_history):
+            old_owner_id = _text(entry.get("old_owner_id"))
+            if old_owner_id:
+                break
+    reason = _text(task_record.get("recovery_reason")) or "stale_agent"
+    event = build_recovery_event(_text(task_record.get("id")), old_owner_id, reason)
+    if not any(_text(entry.get("event_key")) == _text(event.get("event_key")) for entry in recovery_history):
+        recovery_history.append(event)
+
+    task_record["status"] = "queued"
+    task_record["lifecycle_state"] = "queued"
+    task_record["outcome_state"] = "pending"
+    task_record["handoff_state"] = "none"
+    task_record["owner"] = ""
+    task_record["agent_id"] = ""
+    task_record["session_id"] = ""
+    task_record["run_id"] = ""
+    task_record["session_status"] = ""
+    task_record["last_observed_at"] = ""
+    task_record["recovery_action"] = "queued_for_reassignment"
+    task_record["recovery_reason"] = reason
+    task_record["recovery_history"] = recovery_history
+    if not _text(task_record.get("last_recovered_at")):
+        task_record["last_recovered_at"] = now_iso()
+    task_record["ownership"] = ownership_snapshot(task_record)
+    task_record["session_resume"] = session_resume_snapshot(task_record)
+    return task_record

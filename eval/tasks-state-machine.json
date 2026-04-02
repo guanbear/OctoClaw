@@ -1,0 +1,155 @@
+[
+  {
+    "id": "ownership-unclaimed-claimed-stale-recovered",
+    "description": "Delegated task owner becomes stale and is recovered back to queued.",
+    "state_family": "ownership",
+    "initial_state": "unclaimed",
+    "initial_task": {
+      "id": "ownership-task-1",
+      "source": "octoclaw",
+      "route": "spawn_single",
+      "runtime": "subagent",
+      "worker_pool": "octoclaw-research",
+      "status": "queued",
+      "lifecycle_state": "queued",
+      "task_description": "Investigate provider docs drift",
+      "summary": "investigate provider docs drift"
+    },
+    "actions": [
+      {
+        "type": "claim",
+        "expect_state": "claimed",
+        "owner_id": "octo-worker-1",
+        "session_id": "sess-ownership-1",
+        "run_id": "run-ownership-1"
+      },
+      {
+        "type": "mark_stale",
+        "expect_state": "stale",
+        "session_status": "stale",
+        "advance_seconds": 901
+      },
+      {
+        "type": "recover_stale_ownership",
+        "expect_state": "recovered",
+        "stale_after_seconds": 900
+      }
+    ],
+    "expect_final": {
+      "state": "recovered",
+      "task": {
+        "status": "queued",
+        "recovery_action": "dead_agent_recovered",
+        "session_status": "stale"
+      }
+    }
+  },
+  {
+    "id": "execution-pending-blocked-unblocked-running-done",
+    "description": "Task execution lifecycle progresses from pending to blocked, then resumes and completes.",
+    "state_family": "execution",
+    "initial_state": "pending",
+    "initial_task": {
+      "id": "execution-task-1",
+      "source": "octoclaw",
+      "route": "spawn_single",
+      "runtime": "subagent",
+      "worker_pool": "octoclaw-code",
+      "status": "queued",
+      "lifecycle_state": "queued",
+      "outcome_state": "pending",
+      "task_description": "Patch auth middleware",
+      "summary": "patch auth middleware"
+    },
+    "actions": [
+      {
+        "type": "block",
+        "expect_state": "blocked",
+        "reason": "awaiting API token"
+      },
+      {
+        "type": "unblock",
+        "expect_state": "unblocked"
+      },
+      {
+        "type": "start",
+        "expect_state": "running"
+      },
+      {
+        "type": "complete",
+        "expect_state": "done"
+      }
+    ],
+    "expect_final": {
+      "state": "done",
+      "task": {
+        "status": "done",
+        "lifecycle_state": "finished",
+        "outcome_state": "done"
+      }
+    }
+  },
+  {
+    "id": "error-retry-final-failure",
+    "description": "Task errors repeatedly, retries up to the configured maximum, then lands in final failure.",
+    "state_family": "retry",
+    "initial_state": "pending",
+    "initial_task": {
+      "id": "retry-task-1",
+      "source": "octoclaw",
+      "route": "spawn_single",
+      "runtime": "subagent",
+      "worker_pool": "octoclaw-review",
+      "status": "queued",
+      "lifecycle_state": "queued",
+      "outcome_state": "pending",
+      "task_description": "Review rollout plan",
+      "summary": "review rollout plan",
+      "retry_count": 0
+    },
+    "max_retries": 3,
+    "actions": [
+      {
+        "type": "error",
+        "expect_state": "error",
+        "error_message": "transient failure #1"
+      },
+      {
+        "type": "retry",
+        "expect_state": "retry"
+      },
+      {
+        "type": "error",
+        "expect_state": "error",
+        "error_message": "transient failure #2"
+      },
+      {
+        "type": "retry",
+        "expect_state": "retry"
+      },
+      {
+        "type": "error",
+        "expect_state": "error",
+        "error_message": "transient failure #3"
+      },
+      {
+        "type": "retry",
+        "expect_state": "retry"
+      },
+      {
+        "type": "error",
+        "expect_state": "final_failure",
+        "error_message": "terminal failure after max retries"
+      }
+    ],
+    "expect_final": {
+      "state": "final_failure",
+      "task": {
+        "status": "failed",
+        "lifecycle_state": "finished",
+        "outcome_state": "failed",
+        "retry_count": 3
+      }
+    }
+  }
+]

@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 import unittest
 
-from lib.eval_suite import estimate_eval_token_budget, normalize_expected_route, route_matches_expected, summarize_results
+from lib.eval_suite import (
+    DEFAULT_ROUTE_TASKS_FILE,
+    DEFAULT_STATE_MACHINE_TASKS_FILE,
+    estimate_eval_token_budget,
+    normalize_expected_route,
+    resolve_tasks_path,
+    route_matches_expected,
+    summarize_results,
+)
 
 
 class EvalSuiteTests(unittest.TestCase):
@@ -18,6 +26,10 @@ class EvalSuiteTests(unittest.TestCase):
         self.assertEqual(estimate_eval_token_budget("direct", {"budget_cap": "tiny"}), 1000)
         self.assertEqual(estimate_eval_token_budget("spawn_single", {"budget_cap": "medium"}), 7000)
         self.assertEqual(estimate_eval_token_budget("spawn_multi", {"budget_cap": "high", "max_workers": 3}), 15000)
+
+    def test_resolve_tasks_path_defaults_per_mode(self) -> None:
+        self.assertEqual(resolve_tasks_path("route"), DEFAULT_ROUTE_TASKS_FILE.resolve())
+        self.assertEqual(resolve_tasks_path("state_machine"), DEFAULT_STATE_MACHINE_TASKS_FILE.resolve())
 
     def test_summarize_results_reports_cost_spawn_and_budget_counts(self) -> None:
         summary = summarize_results(

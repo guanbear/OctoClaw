@@ -124,9 +124,9 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["result_contract"]["status"], "done")
         self.assertIn("\"next_step\":", spec["task_prompt"])
         self.assertIn("\"risks\": []", spec["task_prompt"])
-        self.assertIn("task-state-update.py blocked", spec["task_prompt"])
-        self.assertIn("task-state-update.py checklist", spec["task_prompt"])
         self.assertIn(str(octoclaw_spawn.TASK_STATE_PY), spec["task_prompt"])
+        self.assertIn(" blocked --id ", spec["task_prompt"])
+        self.assertIn(" checklist --id ", spec["task_prompt"])
         self.assertNotIn("/workspace/openclaw/skills/octopus/lib/task-state-update.py", spec["task_prompt"])
         self.assertEqual(spec["spawn_prompt_path"], "")
 
