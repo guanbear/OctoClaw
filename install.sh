@@ -1317,8 +1317,8 @@ cfg = {
     "leader_name": "main",
   },
   "spawn_execution": {
-    "enabled": "${CLAWTEAM_AVAILABLE}".lower() == "true",
-    "backend": "clawteam",
+    "enabled": True,
+    "backend": "clawteam" if "${CLAWTEAM_AVAILABLE}".lower() == "true" else "native",
     "backend_name": "tmux",
     "team_name": "octoclaw-validation",
     "workspace": False,
@@ -1347,6 +1347,14 @@ if isinstance(existing_main, dict):
     session_key = str(existing_main.get("session_key", "") or "").strip()
     if session_key:
         cfg["main_session"]["session_key"] = session_key
+
+spawn_existing = existing.get("spawn_execution")
+if isinstance(spawn_existing, dict):
+    old_enabled = bool(spawn_existing.get("enabled", False))
+    old_backend = str(spawn_existing.get("backend", "plan") or "plan").strip().lower()
+    if "${CLAWTEAM_AVAILABLE}".lower() != "true" and (not old_enabled) and old_backend in {"", "plan", "clawteam"}:
+        cfg["spawn_execution"]["enabled"] = True
+        cfg["spawn_execution"]["backend"] = "native"
 
 if not isinstance(cfg.get("runtime_policy"), dict):
     cfg["runtime_policy"] = {

@@ -192,6 +192,52 @@ class OctoClawSpawnTests(unittest.TestCase):
             model="zhipu/GLM-4.7",
         )
 
+    def test_should_execute_spawn_accepts_native_backend(self) -> None:
+        with patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"enabled": True, "backend": "native"}):
+            self.assertTrue(octoclaw_spawn.should_execute_spawn("spawn_single", "subagent"))
+
+    def test_execute_native_openclaw_spawn_starts_detached_agent(self) -> None:
+        created = {}
+
+        class _Proc:
+            pid = 43210
+
+        def _fake_popen(cmd, **kwargs):
+            created["cmd"] = cmd
+            created["kwargs"] = kwargs
+            return _Proc()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(octoclaw_spawn, "WORKSPACE", tmpdir),
+                patch.object(octoclaw_spawn, "SCRIPT_DIR", str(Path(tmpdir) / "lib")),
+                patch.object(octoclaw_spawn, "TASK_STATE_PY", str(Path(tmpdir) / "task-state-update.py")),
+                patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"openclaw_bin": "openclaw"}),
+                patch.object(octoclaw_spawn.shutil, "which", return_value="/usr/bin/openclaw"),
+                patch.object(octoclaw_spawn, "resolve_python_bin", return_value="/opt/homebrew/bin/python3"),
+                patch.object(octoclaw_spawn.subprocess, "Popen", side_effect=_fake_popen),
+            ):
+                payload = octoclaw_spawn.execute_native_openclaw_spawn(
+                    task_id="research-1",
+                    worker_pool="octoclaw-research",
+                    model="zai/glm-4.7",
+                    model_band="normal",
+                    prompt="do the work",
+                    thinking="medium",
+                )
+
+        self.assertEqual(payload["backend"], "native")
+        self.assertEqual(payload["backend_name"], "openclaw_agent")
+        self.assertEqual(payload["pid"], 43210)
+        self.assertTrue(payload["session_key"].startswith("agent:main:subagent:"))
+        self.assertTrue(payload["session_id"].startswith("octoclaw-subagent-"))
+        self.assertTrue(payload["stdout_path"].endswith(".stdout.log"))
+        self.assertTrue(payload["stderr_path"].endswith(".stderr.log"))
+        self.assertTrue(payload["wrapper_path"].endswith(".run.sh"))
+        self.assertEqual(created["kwargs"]["cwd"], tmpdir)
+        self.assertEqual(created["kwargs"]["env"]["OCTOCLAW_DISABLE_RUNTIME_POLICY"], "1")
+        self.assertTrue(created["kwargs"]["start_new_session"])
+
     def test_build_spawn_spec_backfills_child_session_facts_after_spawn(self) -> None:
         policy = {
             "route_decision": {
@@ -223,9 +269,10 @@ class OctoClawSpawnTests(unittest.TestCase):
             patch.object(octoclaw_spawn, "prepare_spawn_prompt", return_value=("prompt", "")),
             patch.object(
                 octoclaw_spawn,
-                "execute_clawteam_spawn",
+                "execute_spawn_backend",
                 return_value={
                     "backend": "clawteam",
+                    "backend_name": "tmux",
                     "team_name": "octoclaw-validation",
                     "agent_name": "octo-research-1",
                     "profile": "research",
@@ -258,7 +305,82 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("--session-id", upsert_cmd)
         self.assertIn("child-sess-2", upsert_cmd)
         self.assertIn("--run-id", upsert_cmd)
-        self.assertIn("run-2", upsert_cmd)
+
+    def test_build_spawn_spec_marks_native_spawn_running(self) -> None:
+        policy = {
+            "route_decision": {
+                "route": "spawn_single",
+                "worker_pool": "octoclaw-research",
+                "work_type": "research",
+                "phase": "collect",
+                "protocol": "normal",
+            },
+            "model_policy": {
+                "profile": "research",
+            },
+            "skill_policy": {
+                "default_skill_bundle": [],
+            },
+            "review_policy": {
+                "required": False,
+            },
+        }
+        subprocess_calls = []
+
+        def _fake_run(cmd, *args, **kwargs):
+            subprocess_calls.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with (
+            patch.object(octoclaw_spawn, "resolve_model_and_thinking", return_value=("zai/glm-4.7", "medium")),
+            patch.object(octoclaw_spawn, "should_execute_spawn", return_value=True),
+            patch.object(octoclaw_spawn, "prepare_spawn_prompt", return_value=("prompt", "")),
+            patch.object(
+                octoclaw_spawn,
+                "execute_spawn_backend",
+                return_value={
+                    "backend": "native",
+                    "backend_name": "openclaw_agent",
+                    "team_name": "",
+                    "agent_name": "main",
+                    "profile": "research",
+                    "thinking": "medium",
+                    "session_key": "agent:main:subagent:research-1",
+                    "child_session_key": "agent:main:subagent:research-1",
+                    "session_id": "octoclaw-subagent-research-1",
+                    "run_id": "",
+                    "native_task_id": "",
+                    "native_flow_id": "",
+                    "pid": 22222,
+                    "stdout_path": "/tmp/native.stdout.log",
+                    "stderr_path": "/tmp/native.stderr.log",
+                    "wrapper_path": "/tmp/native.run.sh",
+                    "model_override_applied": True,
+                    "model_override_status": 0,
+                    "model_override_error": "",
+                },
+            ),
+            patch.object(octoclaw_spawn.subprocess, "run", side_effect=_fake_run),
+        ):
+            spec = octoclaw_spawn.build_spawn_spec(
+                "Research provider docs and summarize the key changes",
+                route="spawn_single",
+                register=False,
+                execute=True,
+                policy_decision=policy,
+            )
+
+        self.assertTrue(spec["executed"])
+        self.assertEqual(spec["spawn_execution"]["backend"], "native")
+        self.assertEqual(spec["spawn_execution"]["pid"], 22222)
+        self.assertIn("OpenClaw 原生后台会话", spec["handoff"]["reply_text"])
+        self.assertEqual(spec["operator_surface"]["backend_name"], "openclaw_agent")
+        self.assertEqual(spec["operator_surface"]["attach_hint"], "")
+        upsert_cmd = subprocess_calls[-1]
+        self.assertIn("--status", upsert_cmd)
+        self.assertIn("running", upsert_cmd)
+        self.assertIn("--session-key", upsert_cmd)
+        self.assertIn("agent:main:subagent:research-1", upsert_cmd)
 
     def test_build_spawn_spec_does_not_need_legacy_inputs_when_taxonomy_exists(self) -> None:
         policy = {

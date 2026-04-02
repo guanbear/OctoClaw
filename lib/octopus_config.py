@@ -287,8 +287,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "register_spawn_multi_linear_flows": True,
     },
     "spawn_execution": {
-        "enabled": False,
-        "backend": "plan",
+        "enabled": True,
+        "backend": "native",
         "backend_name": "tmux",
         "team_name": "",
         "workspace": False,
@@ -434,6 +434,10 @@ def spawn_operator_surface(
     workbench = workbench_config(cfg)
     backend = str(spawn_cfg.get("backend", "plan") or "plan").strip() or "plan"
     backend_name = str(spawn_cfg.get("backend_name", "tmux") or "tmux").strip() or "tmux"
+    if backend == "native":
+        backend_name = "openclaw_agent"
+    elif backend not in {"clawteam", "plan"}:
+        backend_name = backend
     session_name = str(workbench.get("tmux_session_name", "") or "").strip()
     team_value = str(team_name or spawn_cfg.get("team_name", "") or bridge_cfg.get("team_name", "") or "").strip()
     surface = {
@@ -451,9 +455,18 @@ def spawn_operator_surface(
         if agent_name:
             hint += f"/{agent_name}"
         surface["operator_hint"] = hint
+    elif backend == "native":
+        hint = "openclaw/native"
+        if agent_name:
+            hint += f" {agent_name}"
+        surface["operator_hint"] = hint
     else:
         surface["operator_hint"] = backend or "plan"
-    surface["attach_hint"] = tmux_attach_hint(session_name) if backend_name == "tmux" and session_name else ""
+    surface["attach_hint"] = (
+        tmux_attach_hint(session_name)
+        if backend == "clawteam" and backend_name == "tmux" and session_name
+        else ""
+    )
     return surface
 
 

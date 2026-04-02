@@ -47,7 +47,7 @@ from collections import deque
 from pathlib import Path
 
 from notifier import backend_supports_cards, send_task_notification, send_text
-from octoclaw_spawn import build_spawn_spec, build_task_prompt, execute_clawteam_spawn
+from octoclaw_spawn import build_spawn_spec, build_task_prompt, execute_spawn_backend
 from clawteam_bridge import sync_task
 from runtime_coordination import (
     mark_task_for_reassignment,
@@ -3333,7 +3333,7 @@ def _resume_existing_subagent_task(task: dict, *, model: str, model_band: str) -
         return False
 
     prompt = _build_existing_task_prompt(task, model=model, model_band=model_band)
-    spawn_execution = execute_clawteam_spawn(
+    spawn_execution = execute_spawn_backend(
         task_id=task_id,
         worker_pool=str(task.get("worker_pool", "") or "octoclaw-research"),
         model=model,
@@ -3345,29 +3345,37 @@ def _resume_existing_subagent_task(task: dict, *, model: str, model_band: str) -
     payload = spawn_execution.get("payload", {}) if isinstance(spawn_execution.get("payload", {}), dict) else {}
     session_id, run_id = _extract_spawn_payload_session(payload)
     agent_owner = str(spawn_execution.get("agent_name", "") or "").strip()
-    operator_surface = {
-        "kind": "spawn",
-        "backend": "clawteam",
-        "backend_name": "tmux",
-        "team_name": str(spawn_execution.get("team_name", "") or "").strip(),
-        "agent_name": agent_owner,
-        "tmux_session_name": "octoclaw-runtime",
-        "operator_hint": f"clawteam/tmux {str(spawn_execution.get('team_name', '') or '').strip()}/{agent_owner}".strip("/"),
-        "attach_hint": "tmux attach -t octoclaw-runtime",
-        "schema_version": "octoclaw.task_display/v1",
-    }
+    operator_surface = dict(
+        spawn_operator_surface(
+            agent_name=agent_owner,
+            team_name=str(spawn_execution.get("team_name", "") or "").strip(),
+        )
+    )
+    operator_surface["schema_version"] = "octoclaw.task_display/v1"
     merged_artifacts = _task_artifacts(task)
     merged_artifacts.update(
         {
-            "execution_backend": "clawteam_tmux",
+            "execution_backend": (
+                f"{str(spawn_execution.get('backend', 'spawn') or 'spawn')}_"
+                f"{str(spawn_execution.get('backend_name', 'tmux') or 'tmux')}"
+            ),
             "operator_surface": operator_surface,
             "operator_hint": str(operator_surface.get("operator_hint", "") or ""),
             "spawn_execution": {
                 "backend": str(spawn_execution.get("backend", "") or ""),
+                "backend_name": str(spawn_execution.get("backend_name", "") or ""),
                 "team_name": str(spawn_execution.get("team_name", "") or ""),
                 "agent_name": agent_owner,
                 "profile": str(spawn_execution.get("profile", "") or ""),
                 "session_key": str(spawn_execution.get("session_key", "") or ""),
+                "child_session_key": str(spawn_execution.get("child_session_key", "") or ""),
+                "session_id": str(spawn_execution.get("session_id", "") or ""),
+                "run_id": str(spawn_execution.get("run_id", "") or ""),
+                "native_task_id": str(spawn_execution.get("native_task_id", "") or ""),
+                "native_flow_id": str(spawn_execution.get("native_flow_id", "") or ""),
+                "pid": int(spawn_execution.get("pid", 0) or 0),
+                "stdout_path": str(spawn_execution.get("stdout_path", "") or ""),
+                "stderr_path": str(spawn_execution.get("stderr_path", "") or ""),
                 "model_override_applied": bool(spawn_execution.get("model_override_applied", False)),
                 "model_override_status": int(spawn_execution.get("model_override_status", 0) or 0),
                 "model_override_error": str(spawn_execution.get("model_override_error", "") or ""),

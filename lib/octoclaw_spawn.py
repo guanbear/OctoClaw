@@ -376,7 +376,14 @@ def should_execute_spawn(route: str, runtime: str, explicit: bool | None = None)
     if route != "spawn_single" or runtime != "subagent":
         return False
     cfg = spawn_execution_config()
-    return bool(cfg.get("enabled", False)) and str(cfg.get("backend", "plan") or "plan").strip().lower() == "clawteam"
+    backend = str(cfg.get("backend", "plan") or "plan").strip().lower()
+    return bool(cfg.get("enabled", False)) and backend in {"clawteam", "native"}
+
+
+def resolve_spawn_backend() -> str:
+    cfg = spawn_execution_config()
+    backend = str(cfg.get("backend", "plan") or "plan").strip().lower()
+    return backend or "plan"
 
 
 def resolve_spawn_team_name() -> str:
@@ -441,6 +448,204 @@ def resolve_agent_name(task_id: str) -> str:
     base = re.sub(r"[^a-z0-9_-]+", "-", task_id.lower()).strip("-")
     name = f"{prefix}-{base}" if prefix else base
     return name[:48].rstrip("-") or f"octo-{now_compact()}"
+
+
+def resolve_native_session_key(task_id: str) -> str:
+    slug = re.sub(r"[^a-z0-9_-]+", "-", str(task_id or "").strip().lower()).strip("-")
+    return f"agent:main:subagent:{slug or now_compact()}"
+
+
+def resolve_native_session_id(task_id: str) -> str:
+    slug = re.sub(r"[^a-z0-9_-]+", "-", str(task_id or "").strip().lower()).strip("-")
+    return f"octoclaw-subagent-{slug or now_compact()}"
+
+
+def native_spawn_dir() -> str:
+    return os.path.join(WORKSPACE, "tmp", "octopus", "native-spawn")
+
+
+def resolve_python_bin() -> str:
+    configured = str(os.environ.get("OCTOCLAW_PYTHON_BIN", "") or "").strip()
+    candidates = [
+        configured,
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        shutil.which("python3") or "",
+        sys.executable,
+    ]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text and os.path.exists(text):
+            return text
+    return "python3"
+
+
+def build_native_openclaw_command(
+    *,
+    task_id: str,
+    prompt: str,
+    model: str,
+    thinking: str,
+) -> tuple[list[str], str, str]:
+    cfg = spawn_execution_config()
+    openclaw_bin = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
+    session_key = resolve_native_session_key(task_id)
+    session_id = resolve_native_session_id(task_id)
+    command = [
+        openclaw_bin,
+        "agent",
+        "--agent",
+        "main",
+        "--session-key",
+        session_key,
+        "--session-id",
+        session_id,
+        "--lane",
+        "subagent",
+        "--model",
+        model,
+        "--message",
+        prompt,
+        "--json",
+    ]
+    if thinking:
+        command.extend(["--thinking", thinking])
+    return command, session_key, session_id
+
+
+def execute_native_openclaw_spawn(
+    *,
+    task_id: str,
+    worker_pool: str,
+    model: str,
+    model_band: str,
+    prompt: str,
+    thinking: str,
+    profile_override: str = "",
+) -> dict:
+    command, child_session_key, child_session_id = build_native_openclaw_command(
+        task_id=task_id,
+        prompt=prompt,
+        model=model,
+        thinking=thinking,
+    )
+    openclaw_bin = command[0]
+    if shutil.which(openclaw_bin) is None:
+        raise RuntimeError(f"未找到 {openclaw_bin} 命令，无法执行 native OpenClaw spawn")
+
+    os.makedirs(native_spawn_dir(), exist_ok=True)
+    stdout_path = os.path.join(native_spawn_dir(), f"{task_id}.stdout.log")
+    stderr_path = os.path.join(native_spawn_dir(), f"{task_id}.stderr.log")
+    wrapper_path = os.path.join(native_spawn_dir(), f"{task_id}.run.sh")
+    python_bin = resolve_python_bin()
+    fail_summary = compact_text(f"spawn启动失败：native openclaw agent exited non-zero for {task_id}", 180)
+    command_str = " ".join(shlex.quote(part) for part in command)
+    script = "\n".join(
+        [
+            "#!/bin/bash",
+            "set -uo pipefail",
+            f"export WORKSPACE={shlex.quote(WORKSPACE)}",
+            f"export OCTOCLAW_ROOT={shlex.quote(SCRIPT_DIR)}",
+            f"export OCTOCLAW_PYTHON_BIN={shlex.quote(python_bin)}",
+            "export OCTOCLAW_DISABLE_RUNTIME_POLICY=1",
+            "export OPENCLAW_NO_RESPAWN=1",
+            f"cd {shlex.quote(WORKSPACE)} || exit 1",
+            f"{command_str}",
+            "rc=$?",
+            'if [ "$rc" -ne 0 ]; then',
+            f"  {shlex.quote(python_bin)} {shlex.quote(TASK_STATE_PY)} failed --id {shlex.quote(task_id)} --summary {shlex.quote(fail_summary)} >/dev/null 2>&1 || true",
+            "fi",
+            'exit "$rc"',
+            "",
+        ]
+    )
+    with open(wrapper_path, "w", encoding="utf-8") as fh:
+        fh.write(script)
+    os.chmod(wrapper_path, 0o755)
+
+    env = dict(os.environ)
+    env["WORKSPACE"] = WORKSPACE
+    env["OCTOCLAW_ROOT"] = SCRIPT_DIR
+    env["OCTOCLAW_PYTHON_BIN"] = python_bin
+    env["OCTOCLAW_DISABLE_RUNTIME_POLICY"] = "1"
+    env["OPENCLAW_NO_RESPAWN"] = "1"
+    path_parts = ["/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", "")]
+    env["PATH"] = ":".join(part for part in path_parts if part)
+
+    with open(stdout_path, "a", encoding="utf-8") as stdout_fh, open(stderr_path, "a", encoding="utf-8") as stderr_fh:
+        proc = subprocess.Popen(
+            [wrapper_path],
+            stdout=stdout_fh,
+            stderr=stderr_fh,
+            cwd=WORKSPACE,
+            env=env,
+            start_new_session=True,
+            text=True,
+        )
+
+    return {
+        "backend": "native",
+        "backend_name": "openclaw_agent",
+        "team_name": "",
+        "agent_name": "main",
+        "profile": profile_override,
+        "thinking": thinking,
+        "session_key": child_session_key,
+        "child_session_key": child_session_key,
+        "session_id": child_session_id,
+        "run_id": "",
+        "native_task_id": "",
+        "native_flow_id": "",
+        "model_override_applied": True,
+        "model_override_status": 0,
+        "model_override_error": "",
+        "pid": int(proc.pid),
+        "stdout_path": stdout_path,
+        "stderr_path": stderr_path,
+        "wrapper_path": wrapper_path,
+        "command": command,
+        "payload": {
+            "sessionKey": child_session_key,
+            "sessionId": child_session_id,
+            "taskId": "",
+            "flowId": "",
+            "pid": int(proc.pid),
+        },
+    }
+
+
+def execute_spawn_backend(
+    *,
+    task_id: str,
+    worker_pool: str,
+    model: str,
+    model_band: str,
+    prompt: str,
+    thinking: str,
+    profile_override: str = "",
+) -> dict:
+    backend = resolve_spawn_backend()
+    if backend == "clawteam":
+        return execute_clawteam_spawn(
+            task_id=task_id,
+            worker_pool=worker_pool,
+            model=model,
+            model_band=model_band,
+            prompt=prompt,
+            thinking=thinking,
+            profile_override=profile_override,
+        )
+    if backend == "native":
+        return execute_native_openclaw_spawn(
+            task_id=task_id,
+            worker_pool=worker_pool,
+            model=model,
+            model_band=model_band,
+            prompt=prompt,
+            thinking=thinking,
+            profile_override=profile_override,
+        )
+    raise RuntimeError(f"不支持的 spawn backend: {backend}")
 
 
 def derive_spawn_session_keys(team_name: str, agent_name: str) -> list[str]:
@@ -972,7 +1177,8 @@ def register_failed_spawn_task(
 def initial_spawn_artifacts(*, route: str, runtime: str, team_name: str) -> dict:
     execution_backend = "spawn_plan"
     if should_execute_spawn(route, runtime, explicit=None):
-        execution_backend = "clawteam"
+        backend = resolve_spawn_backend()
+        execution_backend = backend if backend in {"clawteam", "native"} else "spawn_plan"
     surface = spawn_operator_surface(team_name=team_name)
     return {
         "execution_backend": execution_backend,
@@ -1236,7 +1442,7 @@ def build_spawn_spec(
         if spawn_prompt_path:
             base_artifacts["spawn_prompt_path"] = spawn_prompt_path
         try:
-            spawn_execution = execute_clawteam_spawn(
+            spawn_execution = execute_spawn_backend(
                 task_id=task_id,
                 worker_pool=resolved_worker_pool,
                 model=final_model,
@@ -1248,14 +1454,17 @@ def build_spawn_spec(
             agent_owner = str((spawn_execution or {}).get("agent_name", "") or "")
             base_artifacts.update(
                 {
-                    "execution_backend": f"{str((spawn_execution or {}).get('backend', 'clawteam') or 'clawteam')}_"
-                    f"{str(spawn_execution_config().get('backend_name', 'tmux') or 'tmux')}",
+                    "execution_backend": (
+                        f"{str((spawn_execution or {}).get('backend', 'spawn') or 'spawn')}_"
+                        f"{str((spawn_execution or {}).get('backend_name', spawn_execution_config().get('backend_name', 'tmux')) or 'tmux')}"
+                    ),
                     "operator_surface": spawn_operator_surface(
                         agent_name=agent_owner,
                         team_name=spawn_team_name,
                     ),
                     "spawn_execution": {
                         "backend": str((spawn_execution or {}).get("backend", "") or ""),
+                        "backend_name": str((spawn_execution or {}).get("backend_name", "") or ""),
                         "team_name": str((spawn_execution or {}).get("team_name", "") or ""),
                         "agent_name": agent_owner,
                         "profile": str((spawn_execution or {}).get("profile", "") or ""),
@@ -1265,6 +1474,10 @@ def build_spawn_spec(
                         "run_id": str((spawn_execution or {}).get("run_id", "") or ""),
                         "native_task_id": str((spawn_execution or {}).get("native_task_id", "") or ""),
                         "native_flow_id": str((spawn_execution or {}).get("native_flow_id", "") or ""),
+                        "pid": int((spawn_execution or {}).get("pid", 0) or 0),
+                        "stdout_path": str((spawn_execution or {}).get("stdout_path", "") or ""),
+                        "stderr_path": str((spawn_execution or {}).get("stderr_path", "") or ""),
+                        "wrapper_path": str((spawn_execution or {}).get("wrapper_path", "") or ""),
                         "model_override_applied": bool((spawn_execution or {}).get("model_override_applied", False)),
                         "model_override_status": int((spawn_execution or {}).get("model_override_status", 0) or 0),
                         "model_override_error": str((spawn_execution or {}).get("model_override_error", "") or ""),
@@ -1292,6 +1505,13 @@ def build_spawn_spec(
                 cmd.extend(["--session-id", child_session_id])
             if child_run_id:
                 cmd.extend(["--run-id", child_run_id])
+            child_session_key = str((spawn_execution or {}).get("child_session_key", "") or "").strip()
+            if child_session_key:
+                cmd.extend(["--session-key", child_session_key])
+            pid = int((spawn_execution or {}).get("pid", 0) or 0)
+            if pid > 0:
+                cmd.extend(["--session-status", "spawned"])
+                cmd.extend(["--status", "running"])
             subprocess.run(
                 cmd,
                 check=False,
@@ -1355,11 +1575,19 @@ def build_spawn_spec(
         "handoff": {
             "kind": "background" if executed else "plan",
             "status": "pending" if executed else ("failed" if execution_error else "planned"),
-            "summary": "子任务已通过 ClawTeam/tmux 启动。" if executed else ("子任务启动失败。" if execution_error else "已生成统一子任务派发规范。"),
+            "summary": (
+                "子任务已通过 native OpenClaw session 启动。"
+                if executed and str((spawn_execution or {}).get("backend", "") or "") == "native"
+                else ("子任务已通过 ClawTeam/tmux 启动。" if executed else ("子任务启动失败。" if execution_error else "已生成统一子任务派发规范。"))
+            ),
             "reply_text": (
-                "我已经把这个子任务挂到 ClawTeam/tmux 工位里继续处理，稍后回来汇总结论。"
-                if executed
-                else ("子任务启动失败，我已记录失败状态。" if execution_error else "我会按 OctoClaw 统一 spawn 规范派给子任务处理。")
+                "我已经把这个子任务挂到 OpenClaw 原生后台会话里继续处理，稍后回来汇总结论。"
+                if executed and str((spawn_execution or {}).get("backend", "") or "") == "native"
+                else (
+                    "我已经把这个子任务挂到 ClawTeam/tmux 工位里继续处理，稍后回来汇总结论。"
+                    if executed
+                    else ("子任务启动失败，我已记录失败状态。" if execution_error else "我会按 OctoClaw 统一 spawn 规范派给子任务处理。")
+                )
             ),
             "report_path": report_path,
             "user_safe": True,

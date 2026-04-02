@@ -651,6 +651,9 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
 }
 
 function isManagedAgentContext(ctx = {}) {
+  if (String(process.env.OCTOCLAW_DISABLE_RUNTIME_POLICY || "").trim() === "1") {
+    return false;
+  }
   const trigger = String(ctx.trigger || "").trim().toLowerCase();
   if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) {
     return false;
