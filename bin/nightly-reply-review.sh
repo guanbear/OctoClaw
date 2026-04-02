@@ -10,6 +10,7 @@ VM_HOST="${OCTOCLAW_REPLY_REVIEW_SOURCE_HOST:-root@45.141.139.142}"
 TZ_NAME="${OCTOCLAW_REPLY_REVIEW_TZ:-Asia/Shanghai}"
 SKIP_AGENT="${OCTOCLAW_REPLY_REVIEW_SKIP_AGENT:-false}"
 REPORT_DAY="${1:-$(TZ="${TZ_NAME}" date -v-1d +%F 2>/dev/null || TZ="${TZ_NAME}" python3 - <<'PY'\nfrom datetime import datetime, timedelta\nfrom zoneinfo import ZoneInfo\nprint((datetime.now(ZoneInfo(\"Asia/Shanghai\")) - timedelta(days=1)).strftime(\"%Y-%m-%d\"))\nPY\n)}"
+REVIEW_AGENT="${OCTOCLAW_REPLY_REVIEW_AGENT:-octoclaw-reviewer-${REPORT_DAY//-/}-$(date +%H%M%S)}"
 TMP_DIR="${WORKSPACE}/tmp/octopus/reply-review/${REPORT_DAY}"
 SESSIONS_DIR="${TMP_DIR}/sessions"
 
@@ -22,7 +23,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 git -C "${REPO_ROOT}" fetch origin codex/release-v0.1.0
 git -C "${REPO_ROOT}" reset --hard origin/codex/release-v0.1.0
 
-openclaw agents add octoclaw-reviewer --workspace "${WORKSPACE}" --model zai/glm-4.7 --non-interactive --json >/dev/null 2>&1 || true
+openclaw agents add "${REVIEW_AGENT}" --workspace "${WORKSPACE}" --model zai/glm-4.7 --non-interactive --json >/dev/null 2>&1 || true
 
 scp "${SSH_OPTS[@]}" "${VM_HOST}:/root/.openclaw/agents/main/sessions/sessions.json" "${TMP_DIR}/sessions.json"
 python3 - <<'PY' "${TMP_DIR}/sessions.json" "${TMP_DIR}/session-files.txt"
@@ -72,6 +73,7 @@ review_cmd=(
   --packet "${TMP_DIR}/reply-review-packet.json"
   --day "${REPORT_DAY}"
   --timezone "${TZ_NAME}"
+  --agent "${REVIEW_AGENT}"
   --repo-root "${REPO_ROOT}"
   --output "${REPO_ROOT}/reports/reply-review/${REPORT_DAY}.md"
   --prompt-output "${REPO_ROOT}/reports/reply-review/packets/${REPORT_DAY}.prompt.md"
