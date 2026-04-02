@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 from typing import Any
 
 try:
@@ -22,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 
 FEISHU_CARD_SCRIPT = os.path.join(os.path.dirname(__file__), "feishu-card.py")
+TASK_STATE_UPDATE_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task-state-update.py")
 
 
 def _minimal_handoff_text(task: dict[str, Any]) -> str:
@@ -90,8 +93,79 @@ def _send_text_fallback(
             "resolved_target": route,
         },
     )
+    _mark_task_delivered(task, result)
     result["text_fallback_used"] = True
     return result
+
+
+def _mark_task_delivered(task: dict[str, Any], result: dict[str, Any] | None = None) -> bool:
+    state = task_state_model(task)
+    handoff_state = str(state.get("handoff_state", "") or "").strip().lower()
+    if handoff_state not in {"user_safe_ready", "delivered"}:
+        return False
+    task_id = str(task.get("id", "") or "").strip()
+    if not task_id:
+        return False
+    summary = str(
+        task.get("user_safe_summary", "")
+        or state.get("user_safe_summary", "")
+        or task.get("summary", "")
+        or ""
+    ).strip()
+    report_path = str(
+        task.get("report_path", "")
+        or ((task.get("artifacts") or {}) if isinstance(task.get("artifacts"), dict) else {}).get("report_path", "")
+        or ""
+    ).strip()
+    event_json = {
+        "backend": str((result or {}).get("backend", "") or "").strip(),
+        "message_id": str((result or {}).get("message_id", "") or (result or {}).get("messageId", "") or "").strip(),
+        "action": str((result or {}).get("action", "") or "").strip(),
+    }
+    event_json = {key: value for key, value in event_json.items() if value}
+    cmd = [
+        sys.executable,
+        TASK_STATE_UPDATE_PY,
+        "event",
+        "--id",
+        task_id,
+        "--kind",
+        "user_notified",
+        "--message",
+        "notification delivered",
+        "--handoff-state",
+        "delivered",
+    ]
+    if summary:
+        cmd.extend(["--user-safe-summary", summary])
+    if report_path:
+        cmd.extend(["--report-path", report_path])
+    if event_json:
+        cmd.extend(["--event-json", json.dumps(event_json, ensure_ascii=False)])
+    try:
+        run_result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except Exception as exc:
+        append_task_event(
+            task,
+            "delivery_mark_failed",
+            message=str(exc),
+            extra={"backend": event_json.get("backend", ""), "action": event_json.get("action", "")},
+        )
+        return False
+    if run_result.returncode != 0:
+        append_task_event(
+            task,
+            "delivery_mark_failed",
+            message=(run_result.stderr or run_result.stdout or "task-state-update event failed").strip(),
+            extra={"backend": event_json.get("backend", ""), "action": event_json.get("action", "")},
+        )
+        return False
+    task["handoff_state"] = "delivered"
+    if summary:
+        task["user_safe_summary"] = summary
+    if report_path:
+        task["report_path"] = report_path
+    return True
 
 
 def _load_feishu_module():
@@ -218,13 +292,16 @@ def send_task_notification(
         message_id = send_text(text, config=cfg, reply_to=reply_to)
         if message_id:
             append_task_event(task, "anchor_sent", message=text, extra={"backend": resolved_backend, "message_id": message_id, "action": "send"})
-        return {
+        result = {
             "ok": bool(message_id),
             "backend": resolved_backend,
             "message_id": message_id,
             "action": "send",
             "payload": payload,
         }
+        if result["ok"]:
+            _mark_task_delivered(task, result)
+        return result
 
     binding = resolve_session_binding(session_key)
     route = {
@@ -293,6 +370,7 @@ def send_task_notification(
                     "resolved_target": route,
                 },
             )
+            _mark_task_delivered(task, result)
             return result
 
     interactive_payload = interactive if resolved_backend in {"slack", "telegram", "discord", "msteams"} else None
@@ -329,6 +407,7 @@ def send_task_notification(
                 "resolved_target": route,
             },
         )
+        _mark_task_delivered(task, result)
     else:
         fallback_result = _send_text_fallback(task=task, backend=resolved_backend, route=route, payload=payload)
         if isinstance(fallback_result, dict) and fallback_result.get("ok"):

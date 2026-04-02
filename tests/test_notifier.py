@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 
-from lib.notifier import build_task_notification_payload, send_task_notification
+from lib.notifier import _mark_task_delivered, build_task_notification_payload, send_task_notification
 
 
 class NotifierTaskPayloadTests(unittest.TestCase):
@@ -69,10 +69,11 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(payload["transport"]["kind"], "slack")
 
     @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier._mark_task_delivered")
     @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.resolve_session_binding")
     @patch("lib.notifier.send_channel_message")
-    def test_send_task_notification_routes_slack_session_to_channel_send(self, mock_send, mock_resolve_binding, mock_register, mock_event) -> None:
+    def test_send_task_notification_routes_slack_session_to_channel_send(self, mock_send, mock_resolve_binding, mock_register, mock_delivered, mock_event) -> None:
         mock_resolve_binding.return_value = {}
         mock_send.return_value = {"ok": True, "messageId": "m-1"}
 
@@ -89,13 +90,15 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertIn("interactive", mock_send.call_args[1])
         self.assertEqual(mock_send.call_args[1]["interactive"]["blocks"][-1]["type"], "buttons")
         mock_register.assert_called_once()
+        mock_delivered.assert_called_once()
         self.assertTrue(any(call.args[1] == "anchor_sent" for call in mock_event.call_args_list))
 
     @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier._mark_task_delivered")
     @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.resolve_session_binding")
     @patch("lib.notifier.edit_channel_message")
-    def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit, mock_resolve_binding, mock_register, mock_event) -> None:
+    def test_send_task_notification_edits_existing_slack_anchor_when_message_id_present(self, mock_edit, mock_resolve_binding, mock_register, mock_delivered, mock_event) -> None:
         mock_resolve_binding.return_value = {}
         mock_edit.return_value = {"ok": True}
 
@@ -111,13 +114,15 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(args[1], "channel:C123")
         self.assertEqual(args[2], "1712345.000200")
         mock_register.assert_called_once()
+        mock_delivered.assert_called_once()
         self.assertTrue(any(call.args[1] == "anchor_edited" for call in mock_event.call_args_list))
 
     @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier._mark_task_delivered")
     @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.resolve_session_binding")
     @patch("lib.notifier.edit_channel_message")
-    def test_send_task_notification_reuses_bound_anchor_message_id(self, mock_edit, mock_resolve_binding, mock_register, mock_event) -> None:
+    def test_send_task_notification_reuses_bound_anchor_message_id(self, mock_edit, mock_resolve_binding, mock_register, mock_delivered, mock_event) -> None:
         mock_resolve_binding.return_value = {
             "origin": "slack",
             "target": "channel:C123",
@@ -138,10 +143,12 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(args[1], "channel:C123")
         self.assertEqual(args[2], "1712345.000200")
         self.assertEqual(mock_register.call_count, 1)
+        mock_delivered.assert_called_once()
         self.assertEqual(mock_resolve_binding.call_count, 1)
 
     @patch("lib.notifier.send_text")
-    def test_send_task_notification_uses_feishu_direct_api(self, mock_send_text) -> None:
+    @patch("lib.notifier._mark_task_delivered")
+    def test_send_task_notification_uses_feishu_direct_api(self, mock_delivered, mock_send_text) -> None:
         mock_send_text.return_value = "msg-feishu-1"
 
         result = send_task_notification(
@@ -152,8 +159,10 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["backend"], "feishu")
         self.assertEqual(result["message_id"], "msg-feishu-1")
+        mock_delivered.assert_called_once()
 
     @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier._mark_task_delivered")
     @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.resolve_session_binding")
     @patch("lib.notifier.send_channel_message")
@@ -164,6 +173,7 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         mock_send,
         mock_resolve_binding,
         mock_register,
+        mock_delivered,
         mock_event,
     ) -> None:
         mock_resolve_binding.return_value = {
@@ -202,6 +212,35 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(second_kwargs["thread_id"], "1712345.000100")
         self.assertTrue(any(call.args[1] == "anchor_sent" for call in mock_event.call_args_list))
         self.assertGreaterEqual(mock_register.call_count, 1)
+        mock_delivered.assert_called_once()
+
+    @patch("lib.notifier.subprocess.run")
+    def test_mark_task_delivered_updates_task_state_with_user_notified_event(self, mock_run) -> None:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "[ok]"
+        mock_run.return_value.stderr = ""
+        task = {
+            "id": "research-1",
+            "status": "done",
+            "handoff_state": "user_safe_ready",
+            "user_safe_summary": "这是最终给用户的总结。",
+            "report_path": "/tmp/report.md",
+        }
+
+        ok = _mark_task_delivered(task, {"backend": "slack", "messageId": "m-1", "action": "send"})
+
+        self.assertTrue(ok)
+        self.assertEqual(task["handoff_state"], "delivered")
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("task-state-update.py", cmd[1])
+        self.assertEqual(cmd[2:8], ["event", "--id", "research-1", "--kind", "user_notified", "--message"])
+        self.assertIn("notification delivered", cmd)
+        self.assertIn("--handoff-state", cmd)
+        self.assertIn("delivered", cmd)
+        self.assertIn("--user-safe-summary", cmd)
+        self.assertIn("这是最终给用户的总结。", cmd)
+        self.assertIn("--report-path", cmd)
+        self.assertIn("/tmp/report.md", cmd)
 
 
 if __name__ == "__main__":
