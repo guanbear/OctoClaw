@@ -10,6 +10,7 @@ REPORT_DAY="${1:-$(TZ="${TZ_NAME}" date -v-1d +%F 2>/dev/null || TZ="${TZ_NAME}"
 OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
 SESSIONS_INDEX="${OCTOCLAW_REPLAY_VALIDATION_SESSIONS_INDEX:-${OPENCLAW_HOME}/agents/main/sessions/sessions.json}"
 LIMIT="${OCTOCLAW_REPLAY_VALIDATION_LIMIT:-3}"
+REPLY_REVIEW_PACKET="${WORKSPACE}/tmp/octopus/reply-review/${REPORT_DAY}/reply-review-packet.json"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 PYTHON_BIN="${OCTOCLAW_PYTHON_BIN:-python3}"
@@ -21,15 +22,22 @@ REPORT_PATH="${REPO_ROOT}/reports/reply-review-validation/${REPORT_DAY}.md"
 CASES_PATH="${REPO_ROOT}/reports/reply-review-validation/packets/${REPORT_DAY}.json"
 
 echo "[nightly-replay-validation] replay ${REPORT_DAY}"
-"${PYTHON_BIN}" "${REPO_ROOT}/lib/replay_validation.py" \
-  --sessions-index "${SESSIONS_INDEX}" \
-  --day "${REPORT_DAY}" \
-  --timezone "${TZ_NAME}" \
-  --limit "${LIMIT}" \
-  --workspace "${WORKSPACE}" \
-  --openclaw-home "${OPENCLAW_HOME}" \
-  --output "${REPORT_PATH}" \
+validation_cmd=(
+  "${PYTHON_BIN}" "${REPO_ROOT}/lib/replay_validation.py"
+  --day "${REPORT_DAY}"
+  --timezone "${TZ_NAME}"
+  --limit "${LIMIT}"
+  --workspace "${WORKSPACE}"
+  --openclaw-home "${OPENCLAW_HOME}"
+  --output "${REPORT_PATH}"
   --cases-output "${CASES_PATH}"
+)
+if [ -f "${REPLY_REVIEW_PACKET}" ]; then
+  validation_cmd+=(--packet "${REPLY_REVIEW_PACKET}")
+else
+  validation_cmd+=(--sessions-index "${SESSIONS_INDEX}")
+fi
+"${validation_cmd[@]}"
 
 git -C "${REPO_ROOT}" add "${REPORT_PATH#"${REPO_ROOT}/"}" "${CASES_PATH#"${REPO_ROOT}/"}"
 if ! git -C "${REPO_ROOT}" diff --cached --quiet --exit-code; then

@@ -60,7 +60,8 @@ class CaseResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay valuable prompts against latest OctoClaw")
-    parser.add_argument("--sessions-index", required=True)
+    parser.add_argument("--sessions-index", default="")
+    parser.add_argument("--packet", default="")
     parser.add_argument("--day", required=True)
     parser.add_argument("--timezone", default=DEFAULT_TIMEZONE)
     parser.add_argument("--limit", type=int, default=3)
@@ -187,6 +188,28 @@ def select_turns(turns: list[Turn], limit: int) -> list[Turn]:
             deduped[key] = turn
     ranked = sorted(deduped.values(), key=score_turn, reverse=True)
     return [turn for turn in ranked if score_turn(turn) > 0][:limit]
+
+
+def turns_from_packet(path: Path) -> list[Turn]:
+    payload = json.loads(path.read_text())
+    cases = payload.get("cases") or []
+    turns: list[Turn] = []
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        prompt = normalize_prompt(str(case.get("user_prompt") or case.get("prompt") or "").strip())
+        if not prompt or looks_internal_prompt(prompt):
+            continue
+        turns.append(
+            Turn(
+                session_key=str(case.get("session_key") or ""),
+                session_file=str(case.get("session_file") or ""),
+                user_timestamp=str(case.get("user_timestamp") or ""),
+                user_prompt=prompt,
+                assistant_reply=str(case.get("assistant_reply") or "").strip(),
+            )
+        )
+    return turns
 
 
 def parse_agent_json(stdout_text: str) -> tuple[str, dict]:
@@ -385,8 +408,12 @@ def main() -> int:
     args = parse_args()
     tz = ZoneInfo(args.timezone)
     review_day = datetime.strptime(args.day, "%Y-%m-%d").replace(tzinfo=tz)
-    sessions_index = load_sessions_index(Path(args.sessions_index))
-    turns = collect_turns_all(sessions_index=sessions_index, review_day=review_day, tz=tz)
+    turns: list[Turn]
+    if args.packet:
+        turns = turns_from_packet(Path(args.packet))
+    else:
+        sessions_index = load_sessions_index(Path(args.sessions_index))
+        turns = collect_turns_all(sessions_index=sessions_index, review_day=review_day, tz=tz)
     selected = select_turns(turns, args.limit)
 
     workspace = args.workspace or os.environ.get("WORKSPACE") or str(Path.home() / ".openclaw" / "workspace")
