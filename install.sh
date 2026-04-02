@@ -362,7 +362,7 @@ _openclaw_cron_id_by_name() {
 
 _openclaw_cron_remove_by_name() {
     local cron_name="$1" cron_id gw_url gw_token http_code
-    cron_id="$(_openclaw_cron_id_by_name "$cron_name")"
+    cron_id="$(_openclaw_cron_id_by_name "$cron_name" || true)"
     if [ -z "$cron_id" ]; then
         _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
         return 0
