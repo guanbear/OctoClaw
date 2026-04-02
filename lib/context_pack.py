@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +18,11 @@ try:
     from runtime_task_record import normalize_task_record
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.runtime_task_record import normalize_task_record
+
+try:
+    from artifact_retrieval import build_artifact_context_section
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.artifact_retrieval import build_artifact_context_section
 
 
 CONTEXT_PACK_SCHEMA_VERSION = "octoclaw.context_pack/v1"
@@ -123,6 +129,27 @@ def _render_entry(entry: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _resolve_workspace(context_dir: str) -> str:
+    candidates: list[Path] = []
+    env_workspace = _text(os.environ.get("WORKSPACE"))
+    if env_workspace:
+        candidates.append(Path(env_workspace).resolve())
+    context_path = Path(context_dir).resolve()
+    candidates.extend([context_path.parent, context_path])
+    if len(context_path.parents) >= 3:
+        candidates.append(context_path.parents[2])
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate_text = str(candidate)
+        if candidate_text in seen:
+            continue
+        seen.add(candidate_text)
+        if (candidate / "tmp" / "octopus" / "artifact-index.json").exists():
+            return candidate_text
+    return env_workspace or str(context_path.parent)
+
+
 def build_context_pack(
     *,
     task_id: str,
@@ -135,6 +162,13 @@ def build_context_pack(
     for entry in entries[:3]:
         summary_lines.extend(_render_entry(entry))
     summary = "\n".join(summary_lines).strip()
+    task_ids = [_text(entry.get("task_id")) for entry in entries[:3] if _text(entry.get("task_id"))]
+    artifact_section = build_artifact_context_section(task_ids, workspace=_resolve_workspace(context_dir), limit=5)
+    sections: list[dict[str, str]] = []
+    if summary:
+        sections.append({"title": "Compact Summary", "content": summary})
+    if artifact_section:
+        sections.append({"title": "Relevant artifacts", "content": artifact_section})
     pack = {
         "schema_version": CONTEXT_PACK_SCHEMA_VERSION,
         "task_id": _text(task_id),
@@ -142,6 +176,7 @@ def build_context_pack(
         "generated_at": now_iso(),
         "related_task_count": len(entries),
         "summary": summary,
+        "sections": sections,
         "related_tasks": entries[:3],
         "compact_rules": {
             "max_related_tasks": 3,
@@ -170,6 +205,8 @@ def build_context_pack(
                 "## Compact Summary",
                 summary or "(no related context found)",
                 "",
+                artifact_section,
+                "" if artifact_section else "",
                 "## Rules",
                 "- Prefer this compact pack before reopening raw transcripts.",
                 "- Follow artifact paths or context paths only when the compact pack is insufficient.",
