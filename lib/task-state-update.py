@@ -1087,6 +1087,7 @@ def cmd_blocked(args):
 
 def cmd_event(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    delivered_event = str(args.kind or "").strip().lower() == "user_notified" or str(args.handoff_state or "").strip().lower() == "delivered"
     with open(STATE_FILE, "a+") as fp:
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
@@ -1111,6 +1112,10 @@ def cmd_event(args):
                 existing["outcome_state"] = args.outcome_state
             if args.handoff_state:
                 existing["handoff_state"] = args.handoff_state
+            if delivered_event:
+                existing["delivered_at"] = now_iso()
+                existing.pop("failed_notify_last_attempt_at", None)
+                existing.pop("failed_notify_attempts", None)
             if args.artifacts_json:
                 artifacts = existing.get("artifacts", {})
                 if not isinstance(artifacts, dict):
@@ -1144,6 +1149,8 @@ def cmd_event(args):
                 record["outcome_state"] = args.outcome_state
             if args.handoff_state:
                 record["handoff_state"] = args.handoff_state
+            if delivered_event:
+                record["delivered_at"] = now_iso()
             if args.artifacts_json:
                 record["artifacts"] = dict(args.artifacts_json)
             apply_checklist_update(record, getattr(args, "checklist_json", {}))

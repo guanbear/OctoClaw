@@ -156,6 +156,70 @@ class TaskStateUpdateArchiveTests(unittest.TestCase):
             events = (workspace / "tmp" / "octopus" / "task-events.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertTrue(any('"kind": "checkpoint"' in line for line in events))
 
+    def test_user_notified_event_marks_delivered_timestamp_and_clears_failed_notify_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            env = {**os.environ, "WORKSPACE": str(workspace)}
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "upsert",
+                    "--id",
+                    "research-delivered-1",
+                    "--status",
+                    "done",
+                    "--summary",
+                    "release summary ready",
+                    "--route",
+                    "spawn_single",
+                    "--runtime",
+                    "subagent",
+                    "--worker-pool",
+                    "octoclaw-research",
+                    "--handoff-state",
+                    "user_safe_ready",
+                    "--user-safe-summary",
+                    "已经整理出可直接发给用户的总结。",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            state_path = workspace / "tmp" / "octopus" / "task-state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            task = state["tasks"][0]
+            task["failed_notify_last_attempt_at"] = "2026-04-01T10:00:00Z"
+            task["failed_notify_attempts"] = 2
+            state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "event",
+                    "--id",
+                    "research-delivered-1",
+                    "--kind",
+                    "user_notified",
+                    "--handoff-state",
+                    "delivered",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            task = updated["tasks"][0]
+            self.assertEqual(task["handoff_state"], "delivered")
+            self.assertTrue(task["delivered_at"])
+            self.assertNotIn("failed_notify_last_attempt_at", task)
+            self.assertNotIn("failed_notify_attempts", task)
+
     def test_upsert_writes_ownership_and_worker_session_stores(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
