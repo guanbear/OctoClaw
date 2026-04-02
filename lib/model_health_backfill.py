@@ -100,7 +100,10 @@ def load_fallback_events(
     if not files:
         return [], {"files": [], "missing": True}
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, int(lookback_hours or DEFAULT_LOOKBACK_HOURS)))
+    explicit_log_file = bool(str(log_file or "").strip())
+    cutoff = None if explicit_log_file else (
+        datetime.now(timezone.utc) - timedelta(hours=max(1, int(lookback_hours or DEFAULT_LOOKBACK_HOURS)))
+    )
     events: list[dict[str, Any]] = []
     invalid_lines = 0
     scanned_lines = 0
@@ -127,7 +130,7 @@ def load_fallback_events(
             if not event:
                 continue
             timestamp = parse_timestamp(str(event.get("time", "") or ""))
-            if timestamp and timestamp < cutoff:
+            if cutoff is not None and timestamp and timestamp < cutoff:
                 continue
             events.append(event)
 
@@ -136,8 +139,9 @@ def load_fallback_events(
         "missing": False,
         "scanned_lines": scanned_lines,
         "invalid_lines": invalid_lines,
+        "explicit_log_file": explicit_log_file,
         "lookback_hours": int(lookback_hours or DEFAULT_LOOKBACK_HOURS),
-        "cutoff": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "cutoff": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ") if cutoff is not None else "",
     }
     return events, meta
 

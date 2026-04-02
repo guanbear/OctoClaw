@@ -258,10 +258,17 @@ function roundTo(value, digits = 3) {
   return Math.round(Number(value || 0) * factor) / factor;
 }
 
+function toPythonLikeBoundaryPattern(pattern) {
+  let normalized = String(pattern || "");
+  normalized = normalized.replace(/^\\b(?=\()/u, String.raw`(?<![\p{L}\p{N}_])`);
+  normalized = normalized.replace(/\\b$/u, String.raw`(?![\p{L}\p{N}_])`);
+  return normalized;
+}
+
 function countMatches(text, patterns) {
   return (patterns || []).reduce((count, pattern) => {
     try {
-      return count + (new RegExp(pattern, "iu").test(text) ? 1 : 0);
+      return count + (new RegExp(toPythonLikeBoundaryPattern(pattern), "iu").test(text) ? 1 : 0);
     } catch {
       return count;
     }

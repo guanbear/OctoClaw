@@ -330,6 +330,8 @@ def _checklist_conflict_type(
 def _merge_checklist_items_diverged(
     base_items: list[dict[str, Any]],
     persisted_items: list[dict[str, Any]],
+    *,
+    include_persisted_only: bool = True,
 ) -> list[dict[str, Any]]:
     """Merge when item IDs have diverged (context loss / checklist regeneration).
 
@@ -341,6 +343,8 @@ def _merge_checklist_items_diverged(
     - For unmatched base items: keep as-is.
     """
     persisted_by_title: dict[str, dict[str, Any]] = {}
+    merged: list[dict[str, Any]] = []
+
     for item in persisted_items:
         if not isinstance(item, dict):
             continue
@@ -348,7 +352,6 @@ def _merge_checklist_items_diverged(
         if key and key not in persisted_by_title:
             persisted_by_title[key] = item
 
-    merged: list[dict[str, Any]] = []
     matched_titles: set[str] = set()
 
     for item in base_items:
@@ -363,6 +366,9 @@ def _merge_checklist_items_diverged(
                 merged_item["linked_task_id"] = _text(persisted.get("linked_task_id"))
             matched_titles.add(key)
         merged.append(merged_item)
+
+    if not include_persisted_only:
+        return merged
 
     # Include persisted-only items whose work is done — genuine completed steps
     for item in persisted_items:
@@ -500,7 +506,11 @@ def _merge_checklist_items(
     # When item IDs have diverged (context loss / checklist regeneration), use
     # title-based matching with conservative phantom-item filtering.
     if _checklist_conflict_type(base_items, persisted_items) == "diverged":
-        return _merge_checklist_items_diverged(base_items, persisted_items)
+        return _merge_checklist_items_diverged(
+            base_items,
+            persisted_items,
+            include_persisted_only=include_persisted_only,
+        )
     merged: list[dict[str, Any]] = []
     persisted_by_id = {
         _text(item.get("id")): item

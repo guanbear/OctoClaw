@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
+WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 
 from clawteam_bridge import sync_task
 from notifier import send_task_notification
