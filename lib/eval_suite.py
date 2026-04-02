@@ -24,6 +24,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.eval_state_machine import DEFAULT_CASES_FILE as DEFAULT_STATE_MACHINE_TASKS_FILE, run_state_machine_eval
 
+try:
+    from runtime_task_record import normalize_task_record
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_task_record import normalize_task_record
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -74,6 +79,8 @@ def summarize_markdown(report: dict) -> str:
         f"- Total estimated cost USD: `{report['summary']['total_estimated_cost_usd']}`",
         f"- Avg estimated cost USD: `{report['summary']['avg_estimated_cost_usd']}`",
         f"- Budget caps: `{json.dumps(report['summary']['budget_cap_counts'], ensure_ascii=False)}`",
+        f"- Taskflow tracked/bound/active: `{report['summary']['taskflow_tracked_tasks']}/{report['summary']['taskflow_native_bound_tasks']}/{report['summary']['taskflow_native_active_tasks']}`",
+        f"- Handoff ready/delivered: `{report['summary']['taskflow_handoff_ready_tasks']}/{report['summary']['taskflow_delivered_tasks']}`",
         "",
         "## Results",
         "",
@@ -165,7 +172,77 @@ def summarize_results(results: list[dict]) -> dict[str, object]:
         "total_estimated_cost_usd": total_cost,
         "avg_estimated_cost_usd": round(total_cost / total, 6) if total else 0.0,
         "budget_cap_counts": dict(sorted(budget_cap_counts.items())),
+        "taskflow_tracked_tasks": len([item for item in results if str(item.get("taskflow_state", "") or "").strip()]),
+        "taskflow_native_bound_tasks": len([item for item in results if str(item.get("taskflow_native_binding_state", "") or "").strip() == "bound"]),
+        "taskflow_native_active_tasks": len(
+            [
+                item
+                for item in results
+                if str(item.get("taskflow_native_status", "") or "").strip().lower() in {"queued", "running", "blocked"}
+            ]
+        ),
+        "taskflow_handoff_ready_tasks": len([item for item in results if str(item.get("taskflow_handoff_state", "") or "").strip() == "user_safe_ready"]),
+        "taskflow_delivered_tasks": len([item for item in results if str(item.get("taskflow_handoff_state", "") or "").strip() == "delivered"]),
     }
+
+
+def _task_state_path(workspace: str) -> Path:
+    return Path(workspace).resolve() / "tmp" / "octopus" / "task-state.json"
+
+
+def _load_task_state_index(workspace: str) -> dict[str, dict]:
+    path = _task_state_path(workspace)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
+    if not isinstance(tasks, list):
+        return {}
+    indexed: dict[str, dict] = {}
+    for item in tasks:
+        if not isinstance(item, dict):
+            continue
+        task_id = str(item.get("id", "") or "").strip()
+        if not task_id:
+            continue
+        indexed[task_id] = normalize_task_record(item)
+    return indexed
+
+
+def _taskflow_fields_for_eval(task_record: dict | None) -> dict[str, object]:
+    task = task_record if isinstance(task_record, dict) else {}
+    return {
+        "taskflow_state": str(task.get("openclaw_taskflow_state", "") or "").strip(),
+        "taskflow_task_runtime": str(task.get("openclaw_task_runtime", "") or "").strip(),
+        "taskflow_flow_runtime": str(task.get("openclaw_flow_runtime", "") or "").strip(),
+        "taskflow_native_binding_state": str(task.get("openclaw_native_binding_state", "") or "").strip(),
+        "taskflow_native_status": str(task.get("openclaw_native_status", "") or "").strip(),
+        "taskflow_native_runtime": str(task.get("openclaw_native_runtime", "") or "").strip(),
+        "taskflow_task_id": str(task.get("openclaw_task_id", "") or "").strip(),
+        "taskflow_flow_id": str(task.get("openclaw_flow_id", "") or "").strip(),
+        "taskflow_handoff_state": str(task.get("handoff_state", "") or "").strip(),
+    }
+
+
+def _resolve_eval_task_record(workspace: str, route: str, payload: dict) -> dict[str, object]:
+    state_index = _load_task_state_index(workspace)
+    if not state_index:
+        return {}
+    candidates: list[str] = []
+    if route == "runner":
+        job = payload.get("job", {}) if isinstance(payload.get("job", {}), dict) else {}
+        candidates.append(str(job.get("id", "") or "").strip())
+    else:
+        candidates.append(str(payload.get("task_id", "") or "").strip())
+        spawn_spec = payload.get("spawn_spec", {}) if isinstance(payload.get("spawn_spec", {}), dict) else {}
+        candidates.append(str(spawn_spec.get("task_id", "") or "").strip())
+    for task_id in candidates:
+        if task_id and task_id in state_index:
+            return state_index[task_id]
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +449,8 @@ def run_route_eval(
                 spawn_count = 0
 
         est_cost = estimate_task_cost_usd(model, estimate_eval_token_budget(route, budget_policy)) or 0.0
+        task_record = _resolve_eval_task_record(workspace, route, payload)
+        taskflow_fields = _taskflow_fields_for_eval(task_record)
 
         results.append(
             {
@@ -393,6 +472,7 @@ def run_route_eval(
                 "review_required": bool(payload.get("review_required", False)),
                 "spawn_count": spawn_count,
                 "estimated_cost_usd": round(est_cost, 6),
+                **taskflow_fields,
             }
         )
 
