@@ -10,6 +10,7 @@
 - OpenClaw 3.31/4.1 原生 flow task 对架构的影响
 - ClawTeam 依赖重定位
 - Router 演进路线
+- Python vs Node/TS 语言选型与迁移路径
 - 优先级行动计划
 
 参考来源：
@@ -301,6 +302,7 @@ llama.cpp 部署本身有运维成本，在系统还不稳定时加这一层只�
 | before_prompt_build 加 pre-delegation confirm | Anthropic 笔记 5.3 | `extensions/octoclaw-runtime/index.js` |
 | ClawTeam bridge `hybrid/cli` 模式降级为 opt-in | flow task 变化 | `lib/clawteam_bridge.py`, `lib/octopus_config.py` |
 | dispatch timeout 按 route 类型分档 | 代码问题 3.1 | `lib/dispatch_task.py` |
+| **policy/route 核心逻辑迁移至 TS**（消除热路径 subprocess） | 语言选型 §10 | 新增 `extensions/octoclaw-runtime/policy/` |
 
 ### P2：中期目标，建立反馈闭环
 
@@ -309,6 +311,7 @@ llama.cpp 部署本身有运维成本，在系统还不稳定时加这一层只�
 | `eval_fixture_export.py`：task-events → eval fixtures | Anthropic 笔记 5.6 | 新增 `lib/eval_fixture_export.py` |
 | task-state.json 重定义为策略元数据存储 | flow task 变化 | `lib/task-state-update.py`, schema |
 | patrol 改为消费原生 flow task 状态 | flow task 变化 | `lib/patrol.py` |
+| **taskflow adapter 迁移至原生 TS binding**（flow task API 稳定后） | 语言选型 §10 | 替换 `lib/openclaw_taskflow_adapter.py` |
 
 ### P3：长期收口，不急
 
@@ -317,6 +320,7 @@ llama.cpp 部署本身有运维成本，在系统还不稳定时加这一层只�
 | `spawn_multi` 触发阈值收紧 | Anthropic 笔记 5.1/5.5 |
 | route kernel 从评分体系迁向 `work_contract` hard gate | 产品设计 v2 第 12.2 节 |
 | 灰区 router 数据积累（为未来小模型 router 备料） | roadmap |
+| dispatch spawn 路径 TS 化（runner daemon 保留 Python） | 语言选型 §10 |
 
 ---
 
@@ -348,3 +352,102 @@ llama.cpp 部署本身有运维成本，在系统还不稳定时加这一层只�
 | `octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md` | 第 3 节结论补充 flow task 影响；第 6 节六条借鉴加"flow task 后实现路径"列 |
 | `octoclaw-product-design-v2-2026-03-27.md` | 第 10 节 ClawTeam 依赖边界更新；第 12.1 节第一段的实现路径更新 |
 | `octoclaw-clawteam-unified-runtime-v1-2026-03-25.md` | 整体架构图和结论补充 flow task 替代路径说明 |
+
+---
+
+## 10. Python vs Node/TS 语言选型与迁移路径
+
+### 10.1 总体判断
+
+**Python 代码质量本身没问题，不需要全面重写。** 问题在架构边界：`index.js`（OpenClaw extension）和 Python 之间的通信方式是 subprocess + JSON stdout，导致热路径上有严重的冷启动开销。
+
+### 10.2 核心瓶颈：每次工具调用都要 fork 一个 Python 进程
+
+```
+OpenClaw 调用工具 (Node.js event loop)
+    → index.js spawn("python3", ["octoclaw_policy.py", ...])
+        → Python 进程冷启动 + import 所有模块 (~150-300ms)
+        → 读磁盘配置文件
+        → 计算结果，print JSON
+    → index.js 解析 stdout
+```
+
+`octoclaw_policy.py` 和 `octoclaw_route.py` 通过 `before_model_resolve` + `before_prompt_build` hook **每次请求都触发**，意味着每个用户请求至少有 2 次 Python 冷启动。对于"runner 快路径"这个核心目标来说，这个开销是反效果的。
+
+### 10.3 应该迁移到 Node/TS 的部分
+
+#### 必须迁移（P1，高价值）
+
+**`octoclaw_route.py` + `octoclaw_policy.py` 核心逻辑 → TS**
+
+迁移后的目录结构：
+
+```
+extensions/octoclaw-runtime/
+  index.js                   ← 现有，基本不动
+  policy/
+    route.ts                 ← octoclaw_route.py 的 infer_route() 逻辑
+    decide.ts                ← octoclaw_policy.py 的 build_decision() 逻辑
+    taxonomy.ts              ← worker_taxonomy.py 的数据和映射规则
+    stickiness.ts            ← route stickiness 逻辑（从 octoclaw_policy.py 拆出）
+```
+
+`index.js` 里的 `resolvePolicyDecisionForContext` 直接调 `decide.ts`，不再 fork Python。
+
+Python `octoclaw_policy.py` 保留 `main()` CLI 入口，供 `/octopolicy` 命令行调试使用，但不再是请求热路径。
+
+**迁移难度**：中等。`octoclaw_policy.py` 约 990 行，核心逻辑主要是 dict 操作、正则匹配、评分计算，没有 Python 特有的重型依赖，翻译成 TS 约 500-600 行。`worker_taxonomy.py` 的数据部分直接变 TS const 对象。
+
+**预期收益**：
+
+| 指标 | 迁移前 | 迁移后 |
+|------|--------|--------|
+| `before_model_resolve` hook 耗时 | ~200ms（Python fork） | ~2ms（in-process） |
+| `before_prompt_build` hook 耗时 | ~200ms（Python fork） | ~2ms（in-process） |
+| 每次请求 policy overhead 合计 | 400–600ms | 4–10ms |
+
+#### 迁移但优先级低（P2）
+
+**`openclaw_taskflow_adapter.py` → native TS binding**
+
+当前文件里有：
+
+```python
+subprocess.run(["openclaw", "tasks", "list", "--json"], ...)
+```
+
+这是"用 shell 调自己"的典型反模式。等 OpenClaw flow task JS API 稳定后，应该直接调原生 API，消除这个 subprocess 往返。
+
+### 10.4 应该保留 Python 的部分
+
+| 模块 | 理由 |
+|------|------|
+| `runner_dispatch.py` / `runner_queue.py` / `runner-daemon.sh` | 长驻进程 + shell 子进程管理，Python+bash 天然合适；每个 job 仅调用一次，无冷启动压力 |
+| `patrol.py` | 周期性后台任务，不在请求热路径 |
+| `dispatch_task.py` | 调用频率低（每次真实 dispatch 才触发），短期可留；policy/route 迁完后进一步简化 |
+| `model_health.py` / nightly scripts | 维护脚本，Python 完全胜任 |
+| `task-state-update.py` / `task_events.py` | 文件 I/O 工具，非热路径 |
+| IM 集成 / feishu / notifier | 非核心路径 |
+
+### 10.5 不建议做的
+
+- **全量重写**：Python 代码有完整测试覆盖，重写会引入回归风险，且收益和迁移热路径相比不成比例。
+- **共享进程模型**（如用 `python-bridge` 之类的库维持一个常驻 Python 进程）：增加运维复杂度，不如直接把热路径逻辑迁到 TS 干净。
+- **先迁 `dispatch_task.py`**：它不在热路径上（每次真实 dispatch 才调），优先级低于 policy/route。
+
+### 10.6 迁移顺序
+
+```
+Phase 1（P1）：policy/route → TS
+  - 新建 extensions/octoclaw-runtime/policy/
+  - 实现 route.ts + decide.ts + taxonomy.ts
+  - index.js 内部调用切换，Python CLI wrapper 保留
+  - 补 TS 单元测试，对照 Python 测试用例
+
+Phase 2（P2）：taskflow adapter → native TS
+  - 等 OpenClaw flow task JS API 文档稳定
+  - 替换 openclaw_taskflow_adapter.py 的 subprocess 调用
+
+Phase 3（P3，可选）：dispatch spawn 路径 TS 化
+  - runner daemon 永远留在 Python
+  - spawn spec 构建可以迁，但不急
