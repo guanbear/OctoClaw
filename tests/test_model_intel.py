@@ -141,6 +141,54 @@ class ModelIntelTests(unittest.TestCase):
         self.assertFalse(mid["eligible"])
         self.assertIn("capability_score", mid["failed_checks"])
 
+    def test_compute_policy_prefers_models_with_available_auth_provider(self) -> None:
+        catalog = {
+            "models": [
+                {
+                    "id": "anthropic/claude-opus-4-6",
+                    "available": True,
+                    "provider": "anthropic",
+                    "pricing": {"input": 15.0, "output": 75.0},
+                    "scores": {"coding": 0.95, "reasoning": 0.95, "openclaw": 0.92, "writing": 0.90, "reliability": 0.91},
+                    "benchmark_scores": {},
+                    "source_factors": {},
+                    "speed": {"ttft_ms": 6200, "output_tps": 42},
+                    "size_class": "strong",
+                    "family": "claude",
+                    "preferred_use": [],
+                    "upgrade_path": [],
+                    "fallback_path": [],
+                    "source_refs": [],
+                },
+                {
+                    "id": "zai/glm-4.7",
+                    "available": True,
+                    "provider": "zai",
+                    "pricing": {"input": 0.45, "output": 1.2},
+                    "scores": {"coding": 0.83, "reasoning": 0.82, "openclaw": 0.81, "writing": 0.78, "reliability": 0.83},
+                    "benchmark_scores": {},
+                    "source_factors": {},
+                    "speed": {"ttft_ms": 2600, "output_tps": 72},
+                    "size_class": "base",
+                    "family": "glm",
+                    "preferred_use": [],
+                    "upgrade_path": [],
+                    "fallback_path": [],
+                    "source_refs": [],
+                },
+            ]
+        }
+        with patch.object(model_intel, "load_json", return_value={}), patch.object(
+            model_intel, "save_json", return_value=True
+        ), patch.object(model_intel, "load_octopus_config", return_value={}), patch.object(
+            model_intel, "load_available_auth_providers", return_value={"zai"}
+        ):
+            policy = model_intel.compute_policy(catalog, mode="auto")
+
+        self.assertEqual(policy["main_model"], "zai/glm-4.7")
+        self.assertEqual(policy["profiles"]["research"], "zai/glm-4.7")
+        self.assertEqual(policy["health"]["available_auth_providers"], ["zai"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
 from model_health import resolve_model_health, selection_penalty_for_role
 from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, load_octopus_config, save_json
@@ -114,6 +115,9 @@ DEFAULT_MAIN_SELECTION = {
     "relax_step": 0.03,
     "max_relax_rounds": 2,
 }
+
+OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
+MAIN_AGENT_AUTH_PROFILES_PATH = Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
 
 
 def now_iso() -> str:
@@ -584,10 +588,51 @@ def build_catalog() -> dict:
     return catalog
 
 
+def load_available_auth_providers() -> set[str]:
+    providers: set[str] = set()
+
+    def consume_profiles(payload: dict) -> None:
+        if not isinstance(payload, dict):
+            return
+        profiles = payload.get("profiles", {})
+        if not isinstance(profiles, dict):
+            return
+        for entry in profiles.values():
+            if not isinstance(entry, dict):
+                continue
+            provider = str(entry.get("provider", "") or "").strip().lower()
+            if provider:
+                providers.add(provider)
+
+    agent_auth = load_json(str(MAIN_AGENT_AUTH_PROFILES_PATH))
+    consume_profiles(agent_auth)
+
+    openclaw_cfg = load_json(str(OPENCLAW_CONFIG_PATH))
+    if isinstance(openclaw_cfg, dict):
+        auth_cfg = openclaw_cfg.get("auth", {})
+        if isinstance(auth_cfg, dict):
+            consume_profiles(auth_cfg)
+
+    return providers
+
+
+def filter_models_for_available_auth(models: list[dict], available_providers: set[str]) -> list[dict]:
+    if not available_providers:
+        return list(models)
+    filtered = [
+        model
+        for model in models
+        if str(model.get("provider", "") or "").strip().lower() in available_providers
+    ]
+    return filtered or list(models)
+
+
 def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None) -> dict:
     runtime_config = config if isinstance(config, dict) else load_octopus_config()
     main_selection_cfg = resolve_main_selection_config(runtime_config)
-    models = [m for m in catalog.get("models", []) if m.get("available", True)]
+    all_models = [m for m in catalog.get("models", []) if m.get("available", True)]
+    available_auth_providers = load_available_auth_providers()
+    models = filter_models_for_available_auth(all_models, available_auth_providers)
     if not models:
         policy = {
             "generated_at": now_iso(),
@@ -875,6 +920,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
             "source_file": MODEL_HEALTH_FILE,
             "models": health_models,
             "selection_penalties": health_penalties,
+            "available_auth_providers": sorted(available_auth_providers),
         },
         "sources": sources,
         "source_policy": load_source_registry(),
