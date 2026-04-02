@@ -808,6 +808,14 @@ _stop_patrol_service() {
     _stop_patrol_loop
 }
 
+_spawn_background_process() {
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "$@" &
+        return 0
+    fi
+    nohup "$@" >/dev/null 2>&1 &
+}
+
 _start_patrol_loop() {
     local loop_script="$SCRIPT_DIR/lib/patrol-loop.sh"
     mkdir -p "$WORKSPACE/tmp/octopus"
@@ -828,7 +836,11 @@ _start_patrol_loop() {
         return 1
     fi
 
-    PATROL_INTERVAL="$PATROL_INTERVAL" setsid bash "$loop_script" >> "$_PATROL_LOOP_LOG" 2>&1 &
+    if command -v setsid >/dev/null 2>&1; then
+        PATROL_INTERVAL="$PATROL_INTERVAL" setsid bash "$loop_script" >> "$_PATROL_LOOP_LOG" 2>&1 &
+    else
+        PATROL_INTERVAL="$PATROL_INTERVAL" nohup bash "$loop_script" >> "$_PATROL_LOOP_LOG" 2>&1 &
+    fi
     sleep 0.8
 
     if [ -f "$_PATROL_LOOP_PID_FILE" ]; then
@@ -882,14 +894,25 @@ _start_runner_daemon() {
         return 1
     fi
 
-    WORKSPACE="$WORKSPACE" \
-    RUNNER_POLL_INTERVAL_SECONDS="$RUNNER_POLL_INTERVAL_SECONDS" \
-    RUNNER_HEARTBEAT_INTERVAL_SECONDS="$RUNNER_HEARTBEAT_INTERVAL_SECONDS" \
-    RUNNER_DEFAULT_TIMEOUT_SECONDS="$RUNNER_DEFAULT_TIMEOUT_SECONDS" \
-    RUNNER_MAX_AGE_MINUTES="$RUNNER_MAX_AGE_MINUTES" \
-    RUNNER_MAX_IDLE_SECONDS="$RUNNER_MAX_IDLE_SECONDS" \
-    RUNNER_MAX_JOBS_PER_WORKER="$RUNNER_MAX_JOBS_PER_WORKER" \
-    setsid bash "$daemon_script" >> "$_RUNNER_DAEMON_LOG" 2>&1 &
+    if command -v setsid >/dev/null 2>&1; then
+        WORKSPACE="$WORKSPACE" \
+        RUNNER_POLL_INTERVAL_SECONDS="$RUNNER_POLL_INTERVAL_SECONDS" \
+        RUNNER_HEARTBEAT_INTERVAL_SECONDS="$RUNNER_HEARTBEAT_INTERVAL_SECONDS" \
+        RUNNER_DEFAULT_TIMEOUT_SECONDS="$RUNNER_DEFAULT_TIMEOUT_SECONDS" \
+        RUNNER_MAX_AGE_MINUTES="$RUNNER_MAX_AGE_MINUTES" \
+        RUNNER_MAX_IDLE_SECONDS="$RUNNER_MAX_IDLE_SECONDS" \
+        RUNNER_MAX_JOBS_PER_WORKER="$RUNNER_MAX_JOBS_PER_WORKER" \
+        setsid bash "$daemon_script" >> "$_RUNNER_DAEMON_LOG" 2>&1 &
+    else
+        WORKSPACE="$WORKSPACE" \
+        RUNNER_POLL_INTERVAL_SECONDS="$RUNNER_POLL_INTERVAL_SECONDS" \
+        RUNNER_HEARTBEAT_INTERVAL_SECONDS="$RUNNER_HEARTBEAT_INTERVAL_SECONDS" \
+        RUNNER_DEFAULT_TIMEOUT_SECONDS="$RUNNER_DEFAULT_TIMEOUT_SECONDS" \
+        RUNNER_MAX_AGE_MINUTES="$RUNNER_MAX_AGE_MINUTES" \
+        RUNNER_MAX_IDLE_SECONDS="$RUNNER_MAX_IDLE_SECONDS" \
+        RUNNER_MAX_JOBS_PER_WORKER="$RUNNER_MAX_JOBS_PER_WORKER" \
+        nohup bash "$daemon_script" >> "$_RUNNER_DAEMON_LOG" 2>&1 &
+    fi
     sleep 0.8
 
     if [ -f "$_RUNNER_DAEMON_PID_FILE" ]; then
