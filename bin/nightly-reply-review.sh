@@ -65,14 +65,19 @@ if [ "${SKIP_AGENT}" = "true" ]; then
   REVIEW_ARGS+=(--skip-agent)
 fi
 
-"${PYTHON_BIN}" "${REPO_ROOT}/lib/nightly_reply_review.py" \
-  --packet "${TMP_DIR}/reply-review-packet.json" \
-  --day "${REPORT_DAY}" \
-  --timezone "${TZ_NAME}" \
-  --repo-root "${REPO_ROOT}" \
-  --output "${REPO_ROOT}/reports/reply-review/${REPORT_DAY}.md" \
-  --prompt-output "${REPO_ROOT}/reports/reply-review/packets/${REPORT_DAY}.prompt.md" \
-  "${REVIEW_ARGS[@]}"
+review_cmd=(
+  "${PYTHON_BIN}" "${REPO_ROOT}/lib/nightly_reply_review.py"
+  --packet "${TMP_DIR}/reply-review-packet.json"
+  --day "${REPORT_DAY}"
+  --timezone "${TZ_NAME}"
+  --repo-root "${REPO_ROOT}"
+  --output "${REPO_ROOT}/reports/reply-review/${REPORT_DAY}.md"
+  --prompt-output "${REPO_ROOT}/reports/reply-review/packets/${REPORT_DAY}.prompt.md"
+)
+if [ "${#REVIEW_ARGS[@]}" -gt 0 ]; then
+  review_cmd+=("${REVIEW_ARGS[@]}")
+fi
+"${review_cmd[@]}"
 
 git -C "${REPO_ROOT}" add "reports/reply-review/${REPORT_DAY}.md" "reports/reply-review/packets/${REPORT_DAY}.prompt.md"
 if ! git -C "${REPO_ROOT}" diff --cached --quiet --exit-code; then
