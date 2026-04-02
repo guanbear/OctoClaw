@@ -276,6 +276,56 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["runner_plan"]["probe_spec"]["path"], "/var/log/nginx/error.log")
         self.assertEqual(payload["playbook"]["command"], "tail -n 80 /var/log/nginx/error.log")
 
+    def test_dispatch_runner_uses_on_demand_loop_when_waiting_without_healthy_runner(self) -> None:
+        args = importlib.import_module("argparse").Namespace(
+            task="检查一下 nginx error log 最近 80 行，然后总结问题",
+            command="tail -n 80 /var/log/nginx/error.log",
+            summary="查看 nginx error log 最近 80 行",
+            cwd="/tmp",
+            timeout_seconds=30,
+            id="runner-ondemand-1",
+            model_band="fast",
+            wait=True,
+            wait_timeout_seconds=12,
+            _policy_decision={
+                "request": {"metadata": {}, "session_key": "agent:main:slack:direct:u999"},
+                "route_decision": {"route": "runner"},
+            },
+            _runner_playbook=None,
+        )
+
+        dispatch_proc = type("Proc", (), {"returncode": 0, "stdout": json.dumps({"id": "runner-ondemand-1", "status": "queued"}), "stderr": ""})()
+        runner_loop_proc = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        def fake_run(cmd, *args_, **kwargs):
+            if cmd[:2] == ["python3", dispatch_task.RUNNER_DISPATCH_PY]:
+                return dispatch_proc
+            if cmd[:2] == ["bash", dispatch_task.RUNNER_LOOP_SH]:
+                return runner_loop_proc
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with patch.object(dispatch_task.subprocess, "run", side_effect=fake_run), patch.object(
+            dispatch_task,
+            "runner_health_is_healthy",
+            return_value=False,
+        ), patch.object(
+            dispatch_task,
+            "wait_for_runner_result",
+            return_value={
+                "completed": True,
+                "status": "done",
+                "summary": "Runner completed · hello",
+                "report_path": "/tmp/runner-ondemand-1.md",
+                "worker_result": {"status": "done"},
+            },
+        ):
+            payload = dispatch_task.dispatch_runner(args)
+
+        self.assertEqual(payload["runner_execution_mode"], "on_demand")
+        self.assertTrue(payload["runner_execution"]["triggered"])
+        self.assertTrue(payload["runner_execution"]["ok"])
+        self.assertEqual(payload["wait"]["status"], "done")
+
     def test_find_reusable_job_requires_same_command_not_same_description(self) -> None:
         with patch.object(
             runner_dispatch,

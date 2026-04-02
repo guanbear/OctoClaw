@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
-from octopus_config import RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
+from octopus_config import RUNNER_HEALTH_FILE, RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
 from runtime_protocol import normalize_worker_result
 from runner_playbooks import infer_runner_playbook
 from worker_taxonomy import (
@@ -32,9 +32,11 @@ from worker_taxonomy import (
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNNER_DISPATCH_PY = os.path.join(SCRIPT_DIR, "runner_dispatch.py")
+RUNNER_LOOP_SH = os.path.join(SCRIPT_DIR, "runner_loop.sh")
 RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
 TASK_STATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
 MAX_INLINE_CHARS = 1200
+RUNNER_STALE_SECONDS = 60
 
 
 def decision_route(decision: dict) -> dict:
@@ -160,6 +162,16 @@ def compat_spawn_step_from_decision(decision: dict, fallback: dict | None = None
 
 def now_compact() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+
+
+def parse_iso(value: str):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def task_title(task: str, limit: int = 72) -> str:
@@ -614,6 +626,45 @@ def wait_for_runner_result(job_id: str, timeout_seconds: int) -> dict:
     return {"completed": False, "timeout_seconds": timeout_seconds}
 
 
+def runner_health_is_healthy(stale_after_seconds: int = RUNNER_STALE_SECONDS) -> bool:
+    health = load_json(RUNNER_HEALTH_FILE)
+    if not isinstance(health, dict) or not health.get("worker_id"):
+        return False
+    last = parse_iso(str(health.get("last_heartbeat_at", "") or ""))
+    if last is None:
+        return False
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    age_seconds = max(0, int((datetime.now(timezone.utc) - last.astimezone(timezone.utc)).total_seconds()))
+    return age_seconds <= stale_after_seconds
+
+
+def run_runner_on_demand(job_id: str) -> dict:
+    worker_id = f"runner-ondemand-{job_id or now_compact()}"
+    env = {
+        **os.environ,
+        "WORKSPACE": WORKSPACE,
+        "RUNNER_MAX_JOBS_PER_WORKER": "1",
+        "RUNNER_MAX_IDLE_SECONDS": "1",
+        "RUNNER_POLL_INTERVAL_SECONDS": "1",
+        "RUNNER_HEARTBEAT_INTERVAL_SECONDS": "1",
+        "RUNNER_WORKER_ID": worker_id,
+    }
+    result = subprocess.run(
+        ["bash", RUNNER_LOOP_SH],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    return {
+        "triggered": True,
+        "worker_id": worker_id,
+        "returncode": int(result.returncode),
+        "ok": result.returncode == 0,
+    }
+
+
 def dispatch_runner(args) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     identity = octoclaw_identity_fields(decision)
@@ -668,12 +719,17 @@ def dispatch_runner(args) -> dict:
         "executed": True,
         "job": payload,
         "reason": "lightweight_task",
+        "runner_execution_mode": "daemon",
     }
     if playbook:
         response["runner_plan"] = playbook
         response["playbook"] = playbook
+    if args.wait and not runner_health_is_healthy():
+        response["runner_execution_mode"] = "on_demand"
+        response["runner_execution"] = run_runner_on_demand(str(payload.get("id", "") or ""))
     if args.wait:
-        response["wait"] = wait_for_runner_result(payload.get("id", ""), args.wait_timeout_seconds)
+        wait_timeout = 1 if response.get("runner_execution_mode") == "on_demand" else args.wait_timeout_seconds
+        response["wait"] = wait_for_runner_result(payload.get("id", ""), wait_timeout)
     response["handoff"] = build_runner_handoff(args.task, response, response.get("wait"))
     return response
 

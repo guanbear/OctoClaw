@@ -9,6 +9,7 @@ LIB_DIR="$SKILL_ROOT/lib"
 source "$LIB_DIR/workspace.sh"
 WORKSPACE="$(resolve_octoclaw_workspace "$LIB_DIR")"
 PYTHON_BIN="$(resolve_octoclaw_python)"
+RUNTIME_OBSERVER_PY="$LIB_DIR/runtime_observer.py"
 
 if [ -f "$LIB_DIR/config.sh" ]; then
     # shellcheck source=/dev/null
@@ -27,6 +28,7 @@ RUNNER_DEFAULT_TIMEOUT_SECONDS="${RUNNER_DEFAULT_TIMEOUT_SECONDS:-120}"
 RUNNER_MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
 RUNNER_MAX_IDLE_SECONDS="${RUNNER_MAX_IDLE_SECONDS:-900}"
 RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-30}"
+RUNNER_MODE="${RUNNER_MODE:-daemon}"
 
 OPENCLAW_SERVICE="${OPENCLAW_SERVICE:-openclaw.service}"
 RUNNER_SERVICE="${RUNNER_SERVICE:-octoclaw-runner.service}"
@@ -44,7 +46,7 @@ PATROL_PID_FILE="$WORKSPACE/tmp/octopus/patrol-loop.pid"
 print_usage() {
     cat <<'EOF'
 Usage:
-  bash bin/octoclawctl.sh <status|ps|up|down|restart|reload|patrol-once|runner-status> [target]
+  bash bin/octoclawctl.sh <status|ps|up|down|restart|reload|patrol-once|observe-once|runner-status> [target]
 
 Targets:
   all       openclaw + runner + patrol (default for up/down/restart)
@@ -59,6 +61,11 @@ Examples:
   bash bin/octoclawctl.sh up runtime
   bash bin/octoclawctl.sh restart all
   bash bin/octoclawctl.sh patrol-once
+  bash bin/octoclawctl.sh observe-once
+
+Runtime env:
+  RUNNER_MODE=daemon    keep resident runner runtime (default)
+  RUNNER_MODE=ondemand  skip resident runner; dispatch will trigger one-shot runner passes when needed
 EOF
 }
 
@@ -197,6 +204,10 @@ restart_openclaw_service() {
 }
 
 start_runner_runtime() {
+    if [ "$RUNNER_MODE" = "ondemand" ]; then
+        rm -f "$RUNNER_PID_FILE" "$RUNNER_HEALTH_FILE"
+        return 0
+    fi
     local mode
     mode="$(resolve_supervisor_mode)"
     mkdir -p "$WORKSPACE/tmp/octopus"
@@ -228,6 +239,10 @@ start_runner_runtime() {
 }
 
 stop_runner_runtime() {
+    if [ "$RUNNER_MODE" = "ondemand" ]; then
+        rm -f "$RUNNER_PID_FILE" "$RUNNER_HEALTH_FILE"
+        return 0
+    fi
     local mode
     mode="$(resolve_supervisor_mode)"
     case "$mode" in
@@ -319,13 +334,41 @@ run_runner_status() {
     "$PYTHON_BIN" "$RUNNER_QUEUE_PY" status
 }
 
+run_observer_once() {
+    export WORKSPACE
+    "$PYTHON_BIN" "$RUNTIME_OBSERVER_PY" --workspace "$WORKSPACE" --format text
+}
+
 print_process_snapshot() {
     local mode
     mode="$(resolve_supervisor_mode)"
     echo "supervisor_mode=$mode"
     echo "workspace=$WORKSPACE"
+    echo "runner_mode=$RUNNER_MODE"
     echo "openclaw_service=$(service_state "$OPENCLAW_SERVICE")"
-    if [ "$mode" = "systemd" ]; then
+    if [ "$RUNNER_MODE" = "ondemand" ]; then
+        echo "runner_service=ondemand"
+        if [ "$mode" = "systemd" ]; then
+            echo "patrol_service=$(service_state "$PATROL_SERVICE")"
+        elif [ "$mode" = "tmux" ]; then
+            if tmux_available && tmux_session_exists; then
+                echo "tmux_session=$TMUX_SESSION_NAME"
+                echo "runner_window=ondemand"
+                echo "patrol_window=$([ "$(tmux_window_exists "$TMUX_PATROL_WINDOW_NAME"; echo $?)" -eq 0 ] && echo present || echo missing)"
+            else
+                echo "tmux_session=missing"
+                echo "runner_window=ondemand"
+                echo "patrol_window=missing"
+            fi
+        else
+            local patrol_pid
+            patrol_pid="$(read_pid_file "$PATROL_PID_FILE")"
+            echo "runner_pid="
+            echo "runner_running=ondemand"
+            echo "patrol_pid=${patrol_pid:-}"
+            echo "patrol_running=$([ -n "$patrol_pid" ] && pid_is_running "$patrol_pid" && echo true || echo false)"
+        fi
+    elif [ "$mode" = "systemd" ]; then
         echo "runner_service=$(service_state "$RUNNER_SERVICE")"
         echo "patrol_service=$(service_state "$PATROL_SERVICE")"
     elif [ "$mode" = "tmux" ]; then
@@ -415,6 +458,9 @@ case "$COMMAND" in
         ;;
     patrol-once)
         run_patrol_once
+        ;;
+    observe-once)
+        run_observer_once
         ;;
     runner-status)
         run_runner_status
