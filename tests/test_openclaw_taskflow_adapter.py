@@ -68,6 +68,9 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
                 "taskId": "native-task-1",
                 "runtime": "subagent",
                 "status": "running",
+                "syncMode": "managed",
+                "state": "running",
+                "revision": 7,
                 "runId": "run-1",
                 "requesterSessionKey": "agent:main:slack:channel:C123:thread:1",
                 "childSessionKey": "child-sess-1",
@@ -89,6 +92,9 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertEqual(resolved["flow_id"], "flow-1")
         self.assertEqual(resolved["binding_state"], "mirrored_bound")
         self.assertEqual(resolved["native_binding_state"], "bound")
+        self.assertEqual(resolved["sync_mode"], "managed")
+        self.assertEqual(resolved["substrate_state"], "running")
+        self.assertEqual(resolved["substrate_revision"], 7)
         self.assertEqual(resolved["native_status"], "running")
         self.assertEqual(resolved["native_runtime"], "subagent")
         self.assertGreater(resolved["native_match_score"], 0)
@@ -123,6 +129,8 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
                 "taskId": "native-task-2",
                 "runtime": "subagent",
                 "status": "running",
+                "state": "running",
+                "revision": 3,
                 "runId": "run-2",
                 "requesterSessionKey": "agent:main:slack:channel:C123:thread:1",
                 "childSessionKey": "child-sess-2",
@@ -141,11 +149,31 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertEqual(enriched["openclaw_taskflow_state"], "mirrored_bound")
         self.assertEqual(enriched["openclaw_task_runtime"], "openclaw_task")
         self.assertEqual(enriched["openclaw_flow_runtime"], "openclaw_flow")
+        self.assertEqual(enriched["openclaw_taskflow_sync_mode"], "mirrored")
+        self.assertEqual(enriched["openclaw_taskflow_substrate_state"], "running")
+        self.assertEqual(enriched["openclaw_taskflow_substrate_revision"], 3)
         self.assertEqual(enriched["openclaw_native_binding_state"], "bound")
         self.assertEqual(enriched["openclaw_native_status"], "running")
         self.assertEqual(enriched["openclaw_native_runtime"], "subagent")
         self.assertGreater(enriched["openclaw_native_match_score"], 0)
         self.assertTrue(enriched["openclaw_native_seen_at"])
+
+    @patch("lib.openclaw_taskflow_adapter._run_openclaw_cli")
+    def test_cancel_native_taskflow_prefers_flow_cancel(self, mock_cli) -> None:
+        mock_cli.return_value = {"ok": True, "status": "ok"}
+
+        result = openclaw_taskflow_adapter.cancel_native_taskflow(
+            {
+                "id": "task-ctrl-1",
+                "openclaw_task_id": "native-task-ctrl-1",
+                "openclaw_flow_id": "flow-ctrl-1",
+            }
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["target_kind"], "flow")
+        self.assertEqual(result["target_id"], "flow-ctrl-1")
+        self.assertEqual(mock_cli.call_args[0][0], ["flows", "cancel", "flow-ctrl-1"])
 
 
 if __name__ == "__main__":

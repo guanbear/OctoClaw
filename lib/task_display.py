@@ -44,6 +44,18 @@ def _text_list(value: Any) -> list[str]:
     return []
 
 
+def _int_or_zero(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    text = _text(value)
+    if not text:
+        return 0
+    try:
+        return int(text)
+    except ValueError:
+        return 0
+
+
 def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
     explicit = dict(task.get("openclaw_taskflow", {})) if isinstance(task.get("openclaw_taskflow"), dict) else {}
     artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
@@ -60,12 +72,22 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
         return ""
     backend = _text(binding.get("backend")) or "mirror"
     state = _text(binding.get("binding_state")) or "unknown"
+    sync_mode = _text(binding.get("sync_mode"))
+    substrate_state = _text(binding.get("substrate_state"))
+    substrate_revision = binding.get("substrate_revision")
     native_state = _text(binding.get("native_binding_state"))
     native_runtime = _text(binding.get("native_runtime"))
     native_status = _text(binding.get("native_status"))
     task_id = _text(binding.get("task_id"))
     flow_id = _text(binding.get("flow_id"))
     parts = [backend, state]
+    if sync_mode and sync_mode not in {backend, state}:
+        parts.append(sync_mode)
+    if substrate_state and substrate_state not in {state, native_status}:
+        parts.append(substrate_state)
+    revision = _int_or_zero(substrate_revision)
+    if str(substrate_revision or "").strip() and revision >= 0:
+        parts.append(f"rev {revision}")
     if native_state and native_state not in {"none", state}:
         parts.append(native_state)
     if native_runtime:
@@ -569,6 +591,9 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "openclaw_taskflow_state": _text(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state")),
         "openclaw_task_runtime": _text(normalized.get("openclaw_task_runtime") or taskflow.get("task_runtime")),
         "openclaw_flow_runtime": _text(normalized.get("openclaw_flow_runtime") or taskflow.get("flow_runtime")),
+        "openclaw_taskflow_sync_mode": _text(normalized.get("openclaw_taskflow_sync_mode") or taskflow.get("sync_mode")),
+        "openclaw_taskflow_substrate_state": _text(normalized.get("openclaw_taskflow_substrate_state") or taskflow.get("substrate_state")),
+        "openclaw_taskflow_substrate_revision": _int_or_zero(normalized.get("openclaw_taskflow_substrate_revision") or taskflow.get("substrate_revision")),
         "openclaw_native_binding_state": _text(taskflow.get("native_binding_state")),
         "openclaw_native_status": _text(normalized.get("openclaw_native_status") or taskflow.get("native_status")),
         "openclaw_native_runtime": _text(normalized.get("openclaw_native_runtime") or taskflow.get("native_runtime")),
@@ -673,6 +698,9 @@ def build_task_detail(
             "state": _text(anchor.get("openclaw_taskflow_state")),
             "task_runtime": _text(anchor.get("openclaw_task_runtime")),
             "flow_runtime": _text(anchor.get("openclaw_flow_runtime")),
+            "sync_mode": _text(anchor.get("openclaw_taskflow_sync_mode")),
+            "substrate_state": _text(anchor.get("openclaw_taskflow_substrate_state")),
+            "substrate_revision": _int_or_zero(anchor.get("openclaw_taskflow_substrate_revision")),
             "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
             "native_status": _text(anchor.get("openclaw_native_status")),
             "native_runtime": _text(anchor.get("openclaw_native_runtime")),

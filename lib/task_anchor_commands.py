@@ -12,6 +12,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+from openclaw_taskflow_adapter import cancel_native_taskflow
 from octopus_config import TASK_STATE_FILE
 from session_ops import send_agent_message
 from task_display_cli import (
@@ -36,6 +37,7 @@ from task_display import (
 )
 
 TASK_STATE_UPDATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
+ACTIVE_TASK_STATUSES = {"queued", "dispatched", "running", "blocked", "needs_approval", "pending_confirm"}
 
 TASK_ACTION_ALIASES = {
     "view": "details",
@@ -96,6 +98,43 @@ def _run_task_state_upsert(task_id: str, **fields: Any) -> dict[str, Any]:
         "stderr": (result.stderr or "").strip(),
         "cmd": cmd,
     }
+
+
+def _task_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
+    explicit = dict(task.get("openclaw_taskflow", {})) if isinstance(task.get("openclaw_taskflow"), dict) else {}
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    artifact_binding = dict(artifacts.get("openclaw_taskflow", {})) if isinstance(artifacts.get("openclaw_taskflow"), dict) else {}
+    merged = dict(artifact_binding)
+    for key, value in explicit.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
+def _task_has_native_binding(task: dict[str, Any]) -> bool:
+    binding = _taskflow_binding(task)
+    return bool(
+        _task_text(task.get("openclaw_task_id"))
+        or _task_text(task.get("openclaw_flow_id"))
+        or _task_text(binding.get("task_id"))
+        or _task_text(binding.get("flow_id"))
+    )
+
+
+def _task_looks_active(task: dict[str, Any]) -> bool:
+    status = _task_text(task.get("status")).lower()
+    native_status = _task_text(task.get("openclaw_native_status")).lower()
+    return status in ACTIVE_TASK_STATUSES or native_status in {"queued", "running", "blocked"}
+
+
+def _cancel_native_if_available(task: dict[str, Any]) -> dict[str, Any]:
+    if not _task_has_native_binding(task):
+        return {"ok": False, "status": "skipped", "error": "no native binding"}
+    return cancel_native_taskflow(task)
 
 
 def execute_task_anchor_command(
@@ -170,24 +209,36 @@ def execute_task_anchor_command(
 
     if action == "stop":
         session_key = str(task.get("session_key", "") or "").strip()
-        stop_result = send_agent_message(session_key, "/stop", timeout_seconds=0) if session_key else {"ok": False, "error": "missing session_key"}
+        native_result = _cancel_native_if_available(task)
+        stop_result = (
+            send_agent_message(session_key, "/stop", timeout_seconds=0)
+            if session_key and not native_result.get("ok")
+            else {"ok": False, "status": "skipped", "error": "native cancel handled stop"}
+        )
         update_result = _run_task_state_upsert(
             task_id,
             status="deferred",
             summary="Operator requested stop; task deferred",
             recovery_action="operator_stop_request",
         )
-        ok = bool(stop_result.get("ok")) or bool(update_result.get("ok"))
+        ok = bool(native_result.get("ok")) or bool(stop_result.get("ok")) or bool(update_result.get("ok"))
         return {
             "ok": ok,
             "status": "ok" if ok else "error",
             "action": action,
             "task_id": task_id,
-            "data": {"stop_result": stop_result, "update_result": update_result},
+            "data": {"native_result": native_result, "stop_result": stop_result, "update_result": update_result},
             "text": f"Stop requested for {task_id}.",
         }
 
     if action == "retry":
+        native_result = _cancel_native_if_available(task) if _task_looks_active(task) else {"ok": False, "status": "skipped", "error": "task is not active"}
+        session_key = str(task.get("session_key", "") or "").strip()
+        stop_result = (
+            send_agent_message(session_key, "/stop", timeout_seconds=0)
+            if session_key and _task_looks_active(task) and not native_result.get("ok")
+            else {"ok": False, "status": "skipped", "error": "native cancel handled retry pre-stop"}
+        )
         retry_count = int(task.get("retry_count", 0) or 0) + 1
         update_result = _run_task_state_upsert(
             task_id,
@@ -196,13 +247,14 @@ def execute_task_anchor_command(
             recovery_action="manual_retry_request",
             retry_count=retry_count,
         )
+        ok = bool(update_result.get("ok"))
         return {
-            "ok": bool(update_result.get("ok")),
-            "status": "ok" if update_result.get("ok") else "error",
+            "ok": ok,
+            "status": "ok" if ok else "error",
             "action": action,
             "task_id": task_id,
-            "data": {"update_result": update_result},
-            "text": f"Retry queued for {task_id}." if update_result.get("ok") else f"Retry failed for {task_id}.",
+            "data": {"native_result": native_result, "stop_result": stop_result, "update_result": update_result},
+            "text": f"Retry queued for {task_id}." if ok else f"Retry failed for {task_id}.",
         }
 
     if action == "approve":
@@ -226,20 +278,25 @@ def execute_task_anchor_command(
 
     if action == "reject":
         session_key = str(task.get("session_key", "") or "").strip()
-        message_result = send_agent_message(session_key, "Rejected. Stop this task and wait for a new instruction.", timeout_seconds=0) if session_key else {"ok": False, "error": "missing session_key"}
+        native_result = _cancel_native_if_available(task) if _task_looks_active(task) else {"ok": False, "status": "skipped", "error": "task is not active"}
+        message_result = (
+            send_agent_message(session_key, "Rejected. Stop this task and wait for a new instruction.", timeout_seconds=0)
+            if session_key and not native_result.get("ok")
+            else {"ok": False, "status": "skipped", "error": "native cancel handled rejection"}
+        )
         update_result = _run_task_state_upsert(
             task_id,
             status="deferred",
             summary="Rejected by operator; task deferred",
             recovery_action="operator_rejected",
         )
-        ok = bool(message_result.get("ok")) or bool(update_result.get("ok"))
+        ok = bool(native_result.get("ok")) or bool(message_result.get("ok")) or bool(update_result.get("ok"))
         return {
             "ok": ok,
             "status": "ok" if ok else "error",
             "action": action,
             "task_id": task_id,
-            "data": {"message_result": message_result, "update_result": update_result},
+            "data": {"native_result": native_result, "message_result": message_result, "update_result": update_result},
             "text": f"Rejected {task_id}.",
         }
 

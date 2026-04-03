@@ -70,6 +70,18 @@ def _normalized_choice(value: Any, allowed: set[str]) -> str:
     return text if text in allowed else ""
 
 
+def _normalized_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    text = _normalized_str(value)
+    if not text:
+        return 0
+    try:
+        return int(text)
+    except ValueError:
+        return 0
+
+
 def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
     explicit = dict(task.get("openclaw_taskflow", {})) if isinstance(task.get("openclaw_taskflow"), dict) else {}
     artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
@@ -589,6 +601,13 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["openclaw_taskflow_state"] = _normalized_str(normalized.get("openclaw_taskflow_state") or taskflow.get("binding_state"))
     normalized["openclaw_task_runtime"] = _normalized_str(normalized.get("openclaw_task_runtime") or taskflow.get("task_runtime"))
     normalized["openclaw_flow_runtime"] = _normalized_str(normalized.get("openclaw_flow_runtime") or taskflow.get("flow_runtime"))
+    normalized["openclaw_taskflow_sync_mode"] = _normalized_str(normalized.get("openclaw_taskflow_sync_mode") or taskflow.get("sync_mode"))
+    normalized["openclaw_taskflow_substrate_state"] = _normalized_str(normalized.get("openclaw_taskflow_substrate_state") or taskflow.get("substrate_state"))
+    substrate_revision = normalized.get("openclaw_taskflow_substrate_revision")
+    if str(substrate_revision or "").strip():
+        normalized["openclaw_taskflow_substrate_revision"] = _normalized_int(substrate_revision)
+    else:
+        normalized["openclaw_taskflow_substrate_revision"] = _normalized_int(taskflow.get("substrate_revision"))
     normalized["openclaw_task_id"] = _normalized_str(normalized.get("openclaw_task_id") or taskflow.get("task_id"))
     normalized["openclaw_flow_id"] = _normalized_str(normalized.get("openclaw_flow_id") or taskflow.get("flow_id"))
     normalized["openclaw_flow_kind"] = _normalized_str(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind"))

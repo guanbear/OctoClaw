@@ -214,6 +214,32 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(anchor["resume_state"], "stale")
         self.assertEqual(anchor["resume_key"], "octoclaw:octo-worker-1:sess-1")
 
+    def test_build_task_anchor_includes_taskflow_sync_mode_and_revision(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "research-5",
+                "worker_pool": "octoclaw-research",
+                "status": "running",
+                "summary": "continue provider comparison",
+                "route": "spawn_single",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored_bound",
+                    "sync_mode": "managed",
+                    "substrate_state": "running",
+                    "substrate_revision": 9,
+                    "task_id": "native-task-5",
+                    "flow_id": "flow-5",
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(anchor["openclaw_taskflow_sync_mode"], "managed")
+        self.assertEqual(anchor["openclaw_taskflow_substrate_revision"], 9)
+        self.assertIn("managed", anchor["substrate_summary"])
+        self.assertIn("rev 9", anchor["substrate_summary"])
+
     def test_build_task_detail_includes_checklist(self) -> None:
         detail = build_task_detail(
             {
