@@ -7,8 +7,12 @@ WORKSPACE_DEFAULT="${HOME}/.openclaw/workspace"
 WORKSPACE="${WORKSPACE:-${WORKSPACE_DEFAULT}}"
 TZ_NAME="${OCTOCLAW_REPLAY_VALIDATION_TZ:-Asia/Shanghai}"
 REPORT_DAY="${1:-$(TZ="${TZ_NAME}" date -v-1d +%F 2>/dev/null || TZ="${TZ_NAME}" python3 - <<'PY'\nfrom datetime import datetime, timedelta\nfrom zoneinfo import ZoneInfo\nprint((datetime.now(ZoneInfo(\"Asia/Shanghai\")) - timedelta(days=1)).strftime(\"%Y-%m-%d\"))\nPY\n)}"
-OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
-SESSIONS_INDEX="${OCTOCLAW_REPLAY_VALIDATION_SESSIONS_INDEX:-${OPENCLAW_HOME}/agents/main/sessions/sessions.json}"
+OPENCLAW_HOME_INPUT="${OPENCLAW_HOME:-${HOME}/.openclaw}"
+OPENCLAW_HOME_ROOT="${OPENCLAW_HOME_INPUT}"
+if [ -f "${OPENCLAW_HOME_ROOT}/openclaw.json" ]; then
+  OPENCLAW_HOME_ROOT="$(cd "${OPENCLAW_HOME_ROOT}/.." && pwd)"
+fi
+SESSIONS_INDEX="${OCTOCLAW_REPLAY_VALIDATION_SESSIONS_INDEX:-${OPENCLAW_HOME_ROOT}/.openclaw/agents/main/sessions/sessions.json}"
 LIMIT="${OCTOCLAW_REPLAY_VALIDATION_LIMIT:-3}"
 REPLY_REVIEW_PACKET="${WORKSPACE}/tmp/octopus/reply-review/${REPORT_DAY}/reply-review-packet.json"
 
@@ -28,7 +32,7 @@ validation_cmd=(
   --timezone "${TZ_NAME}"
   --limit "${LIMIT}"
   --workspace "${WORKSPACE}"
-  --openclaw-home "${OPENCLAW_HOME}"
+  --openclaw-home "${OPENCLAW_HOME_ROOT}"
   --output "${REPORT_PATH}"
   --cases-output "${CASES_PATH}"
 )

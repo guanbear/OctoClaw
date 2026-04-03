@@ -15,7 +15,11 @@ REVIEW_AGENT="${OCTOCLAW_REPLY_REVIEW_AGENT:-octoclaw-reviewer-${REPORT_DAY//-/}
 TMP_DIR="${WORKSPACE}/tmp/octopus/reply-review/${REPORT_DAY}"
 SESSIONS_DIR="${TMP_DIR}/sessions"
 LOCAL_OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
-LOCAL_SESSIONS_INDEX="${OCTOCLAW_REPLY_REVIEW_SESSIONS_INDEX:-${LOCAL_OPENCLAW_HOME}/agents/main/sessions/sessions.json}"
+OPENCLAW_HOME_ROOT="${LOCAL_OPENCLAW_HOME}"
+if [ -f "${OPENCLAW_HOME_ROOT}/openclaw.json" ]; then
+  OPENCLAW_HOME_ROOT="$(cd "${OPENCLAW_HOME_ROOT}/.." && pwd)"
+fi
+LOCAL_SESSIONS_INDEX="${OCTOCLAW_REPLY_REVIEW_SESSIONS_INDEX:-${OPENCLAW_HOME_ROOT}/.openclaw/agents/main/sessions/sessions.json}"
 
 mkdir -p "${TMP_DIR}" "${SESSIONS_DIR}"
 
@@ -52,7 +56,7 @@ copy_local_file() {
 git -C "${REPO_ROOT}" fetch origin codex/release-v0.1.0
 git -C "${REPO_ROOT}" reset --hard origin/codex/release-v0.1.0
 
-openclaw agents add "${REVIEW_AGENT}" --workspace "${WORKSPACE}" --model zai/glm-4.7 --non-interactive --json >/dev/null 2>&1 || true
+OPENCLAW_HOME="${OPENCLAW_HOME_ROOT}" openclaw agents add "${REVIEW_AGENT}" --workspace "${WORKSPACE}" --model zai/glm-4.7 --non-interactive --json >/dev/null 2>&1 || true
 
 if [ "${SOURCE_MODE}" = "remote" ]; then
   echo "[nightly-reply-review] fetch remote sessions index ${REPORT_DAY}"
