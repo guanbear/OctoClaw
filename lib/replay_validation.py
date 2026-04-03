@@ -58,6 +58,22 @@ class CaseResult:
     findings: list[str]
 
 
+SAFE_REPLAY_BLOCKLIST = (
+    "安装",
+    "install",
+    "卸载",
+    "删除",
+    "rm ",
+    "sudo",
+    "elevated",
+    "allowfrom",
+    "配置",
+    "patch",
+    "修改配置",
+    "开 elevated",
+)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay valuable prompts against latest OctoClaw")
     parser.add_argument("--sessions-index", default="")
@@ -179,6 +195,11 @@ def score_turn(turn: Turn) -> int:
     return score
 
 
+def is_safe_replay_prompt(prompt: str) -> bool:
+    lowered = prompt.lower()
+    return not any(token in lowered or token in prompt for token in SAFE_REPLAY_BLOCKLIST)
+
+
 def select_turns(turns: list[Turn], limit: int) -> list[Turn]:
     deduped: dict[str, Turn] = {}
     for turn in turns:
@@ -187,7 +208,7 @@ def select_turns(turns: list[Turn], limit: int) -> list[Turn]:
         if not existing or score_turn(turn) > score_turn(existing):
             deduped[key] = turn
     ranked = sorted(deduped.values(), key=score_turn, reverse=True)
-    return [turn for turn in ranked if score_turn(turn) > 0][:limit]
+    return [turn for turn in ranked if score_turn(turn) > 0 and is_safe_replay_prompt(turn.user_prompt)][:limit]
 
 
 def turns_from_packet(path: Path) -> list[Turn]:
@@ -276,25 +297,34 @@ def run_case(
     before_ids = {task.get("id") for task in load_tasks(task_path)}
     before_replay = len(load_replay_lines(replay_path))
 
-    proc = subprocess.run(
-        [
-            "openclaw",
-            "agent",
-            "--agent",
-            agent,
-            "--session-id",
-            session_id,
-            "--thinking",
-            "low",
-            "--json",
-            "--message",
-            prompt,
-        ],
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                "openclaw",
+                "agent",
+                "--agent",
+                agent,
+                "--session-id",
+                session_id,
+                "--thinking",
+                "low",
+                "--json",
+                "--message",
+                prompt,
+            ],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=240,
+        )
+    except subprocess.TimeoutExpired as exc:
+        proc = subprocess.CompletedProcess(
+            args=exc.cmd,
+            returncode=124,
+            stdout=exc.stdout or "",
+            stderr=(exc.stderr or "") + "\n[replay_validation] timeout after 240s",
+        )
     time.sleep(8)
 
     after_tasks = load_tasks(task_path)

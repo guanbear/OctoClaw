@@ -1,6 +1,6 @@
 import unittest
 
-from lib.replay_validation import Turn, score_turn, select_turns
+from lib.replay_validation import Turn, is_safe_replay_prompt, score_turn, select_turns
 
 
 class ReplayValidationTests(unittest.TestCase):
@@ -30,6 +30,11 @@ class ReplayValidationTests(unittest.TestCase):
         selected = select_turns(turns, 5)
         prompts = [turn.user_prompt for turn in selected]
         self.assertEqual(prompts.count("帮我调研 OpenClaw 3.31 的 task flow"), 1)
+
+    def test_safe_replay_prompt_filters_destructive_install(self):
+        self.assertFalse(is_safe_replay_prompt("给我的机器里安装 ffmpeg/ffprobe"))
+        self.assertFalse(is_safe_replay_prompt("给当前 Slack 会话开 elevated"))
+        self.assertTrue(is_safe_replay_prompt("帮我调研 OpenClaw 3.31 的 task flow，并先给我一个三点总结。"))
 
 
 if __name__ == "__main__":
