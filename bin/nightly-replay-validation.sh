@@ -37,9 +37,9 @@ validation_cmd=(
   --cases-output "${CASES_PATH}"
 )
 if [ -f "${REPLY_REVIEW_PACKET}" ]; then
-  validation_cmd+=(--packet "${REPLY_REVIEW_PACKET}")
+  validation_cmd+=(--packet "${REPLY_REVIEW_PACKET}" --source-label "reply-review-packet(local real conversations)")
 else
-  validation_cmd+=(--sessions-index "${SESSIONS_INDEX}")
+  validation_cmd+=(--sessions-index "${SESSIONS_INDEX}" --source-label "sessions-index(local)")
 fi
 "${validation_cmd[@]}"
 

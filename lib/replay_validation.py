@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -58,6 +59,16 @@ class CaseResult:
     findings: list[str]
 
 
+@dataclass
+class RuntimeInfo:
+    source_label: str
+    workspace: str
+    openclaw_home: str
+    python_executable: str
+    python_version: str
+    openclaw_version: str
+
+
 SAFE_REPLAY_BLOCKLIST = (
     "安装",
     "install",
@@ -86,6 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workspace", default="")
     parser.add_argument("--openclaw-home", default="")
     parser.add_argument("--agent-model", default="zai/glm-4.7")
+    parser.add_argument("--source-label", default="")
     return parser.parse_args()
 
 
@@ -372,7 +384,18 @@ def run_case(
     )
 
 
-def render_report(day: str, cases: list[CaseResult]) -> str:
+def detect_openclaw_version(env: dict[str, str]) -> str:
+    proc = subprocess.run(
+        ["openclaw", "--version"],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return (proc.stdout or proc.stderr or "").strip() or "unknown"
+
+
+def render_report(day: str, cases: list[CaseResult], runtime: RuntimeInfo) -> str:
     lines = [
         f"# Nightly Replay Validation - {day}",
         "",
@@ -382,6 +405,11 @@ def render_report(day: str, cases: list[CaseResult]) -> str:
     ]
     total_findings = sum(len(case.findings) for case in cases)
     lines.append(f"- Finding signals: {total_findings}")
+    lines.append(f"- Source: {runtime.source_label}")
+    lines.append(f"- Python: `{runtime.python_executable}` ({runtime.python_version})")
+    lines.append(f"- OpenClaw: `{runtime.openclaw_version}`")
+    lines.append(f"- Workspace: `{runtime.workspace}`")
+    lines.append(f"- OpenClaw home: `{runtime.openclaw_home}`")
     lines.append("")
     lines.append("## Cases")
     lines.append("")
@@ -448,6 +476,9 @@ def main() -> int:
 
     workspace = args.workspace or os.environ.get("WORKSPACE") or str(Path.home() / ".openclaw" / "workspace")
     openclaw_home = args.openclaw_home or os.environ.get("OPENCLAW_HOME") or str(Path.home() / ".openclaw")
+    env = os.environ.copy()
+    env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "")
+    env["OPENCLAW_HOME"] = openclaw_home
     task_path = Path(workspace) / "tmp" / "octopus" / "task-state.json"
     replay_path = Path(workspace) / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
 
@@ -463,10 +494,19 @@ def main() -> int:
         )
         for index, turn in enumerate(selected, start=1)
     ]
+    source_label = args.source_label or ("reply-review-packet(local real conversations)" if args.packet else "sessions-index(local)")
+    runtime = RuntimeInfo(
+        source_label=source_label,
+        workspace=workspace,
+        openclaw_home=openclaw_home,
+        python_executable=sys.executable,
+        python_version=sys.version.split()[0],
+        openclaw_version=detect_openclaw_version(env),
+    )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_report(args.day, case_results), encoding="utf-8")
+    output_path.write_text(render_report(args.day, case_results, runtime), encoding="utf-8")
     if args.cases_output:
         cases_path = Path(args.cases_output)
         cases_path.parent.mkdir(parents=True, exist_ok=True)
