@@ -1,6 +1,6 @@
 import unittest
 
-from lib.replay_validation import Turn, is_safe_replay_prompt, score_turn, select_turns
+from lib.replay_validation import Turn, ensure_text, is_safe_replay_prompt, score_turn, select_turns
 
 
 class ReplayValidationTests(unittest.TestCase):
@@ -35,6 +35,11 @@ class ReplayValidationTests(unittest.TestCase):
         self.assertFalse(is_safe_replay_prompt("给我的机器里安装 ffmpeg/ffprobe"))
         self.assertFalse(is_safe_replay_prompt("给当前 Slack 会话开 elevated"))
         self.assertTrue(is_safe_replay_prompt("帮我调研 OpenClaw 3.31 的 task flow，并先给我一个三点总结。"))
+
+    def test_ensure_text_decodes_timeout_bytes(self):
+        self.assertEqual(ensure_text(b"timeout bytes"), "timeout bytes")
+        self.assertEqual(ensure_text("already text"), "already text")
+        self.assertEqual(ensure_text(None), "")
 
 
 if __name__ == "__main__":

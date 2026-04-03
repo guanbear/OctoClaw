@@ -270,6 +270,14 @@ def load_replay_lines(path: Path) -> list[str]:
     return path.read_text(errors="ignore").splitlines()
 
 
+def ensure_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def run_case(
     *,
     index: int,
@@ -334,8 +342,8 @@ def run_case(
         proc = subprocess.CompletedProcess(
             args=exc.cmd,
             returncode=124,
-            stdout=exc.stdout or "",
-            stderr=(exc.stderr or "") + "\n[replay_validation] timeout after 240s",
+            stdout=ensure_text(exc.stdout),
+            stderr=ensure_text(exc.stderr) + "\n[replay_validation] timeout after 240s",
         )
     time.sleep(8)
 
