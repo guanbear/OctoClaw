@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LIB_DIR = REPO_ROOT / "lib"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
@@ -13,34 +15,20 @@ from lib import runtime_observer
 
 
 class RuntimeObserverTests(unittest.TestCase):
-    @patch("lib.runtime_observer.recover_dead_agent_tasks")
-    @patch("lib.runtime_observer.patrol_heartbeat_check")
-    @patch("lib.runtime_observer.hydrate_completed_session_results")
-    @patch("lib.runtime_observer.hydrate_session_progress_markers")
-    @patch("lib.runtime_observer.refresh_openclaw_taskflow_bindings")
-    @patch("lib.runtime_observer.annotate_tasks_with_session_state")
-    @patch("lib.runtime_observer.load_tasks")
-    @patch("lib.runtime_observer.check_runner_health")
+    @patch("lib.runtime_observer.observe_runtime_state_once")
     def test_observe_runtime_once_runs_observation_pipeline(
         self,
-        mock_runner_health,
-        mock_load_tasks,
-        mock_annotate,
-        mock_refresh,
-        mock_progress,
-        mock_results,
-        mock_heartbeat,
-        mock_recover,
+        mock_observe,
     ) -> None:
-        task = {"id": "task-1", "status": "running"}
-        mock_runner_health.return_value = {"present": True, "healthy": True, "reason": "ok"}
-        mock_load_tasks.side_effect = [[task], [task], [task], [task], [task]]
-        mock_annotate.side_effect = lambda tasks: tasks
-        mock_refresh.return_value = False
-        mock_progress.return_value = 1
-        mock_results.return_value = 1
-        mock_heartbeat.return_value = [{"id": "task-heartbeat"}]
-        mock_recover.return_value = [{"id": "task-recovered"}]
+        mock_observe.return_value = {
+            "runner_health": {"present": True, "healthy": True, "reason": "ok"},
+            "runner_execution_mode": "daemon",
+            "tasks": [{"id": "task-1", "status": "running"}],
+            "progress_hydrated": 1,
+            "results_hydrated": 1,
+            "heartbeat_reassigned": [{"id": "task-heartbeat"}],
+            "recovered": [{"id": "task-recovered"}],
+        }
 
         payload = runtime_observer.observe_runtime_once(workspace="/tmp/octoclaw")
 

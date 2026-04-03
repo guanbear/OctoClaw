@@ -18,6 +18,41 @@ patrol = importlib.import_module("patrol")
 
 
 class PatrolNotificationTests(unittest.TestCase):
+    @patch.dict(os.environ, {"RUNNER_MODE": "ondemand"}, clear=False)
+    @patch("patrol.recover_dead_agent_tasks")
+    @patch("patrol.patrol_heartbeat_check")
+    @patch("patrol.hydrate_completed_session_results")
+    @patch("patrol.hydrate_session_progress_markers")
+    @patch("patrol.refresh_openclaw_taskflow_bindings")
+    @patch("patrol.annotate_tasks_with_session_state")
+    @patch("patrol.load_tasks")
+    @patch("patrol.check_runner_health")
+    def test_observe_runtime_state_once_marks_on_demand_runner_mode(
+        self,
+        mock_runner_health,
+        mock_load_tasks,
+        mock_annotate,
+        mock_refresh,
+        mock_progress,
+        mock_results,
+        mock_heartbeat,
+        mock_recover,
+    ) -> None:
+        task = {"id": "runner-1", "status": "queued", "route": "runner"}
+        mock_runner_health.return_value = {"present": False, "healthy": False, "reason": "missing"}
+        mock_load_tasks.side_effect = [[task]]
+        mock_annotate.side_effect = lambda tasks: tasks
+        mock_refresh.return_value = False
+        mock_progress.return_value = 0
+        mock_results.return_value = 0
+        mock_heartbeat.return_value = []
+        mock_recover.return_value = []
+
+        payload = patrol.observe_runtime_state_once("/tmp/octoclaw")
+
+        self.assertEqual(payload["runner_execution_mode"], "ondemand")
+        self.assertEqual(payload["tasks"][0]["id"], "runner-1")
+
     @patch("patrol.save_task_state")
     @patch("patrol.list_native_openclaw_tasks")
     def test_refresh_openclaw_taskflow_bindings_updates_active_spawn_tasks(self, mock_list_native, mock_save) -> None:

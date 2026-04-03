@@ -15,97 +15,39 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import WORKSPACE
 
 try:
-    from patrol import (
-        annotate_tasks_with_session_state,
-        check_runner_health,
-        hydrate_completed_session_results,
-        hydrate_session_progress_markers,
-        load_tasks,
-        patrol_heartbeat_check,
-        recover_dead_agent_tasks,
-        refresh_openclaw_taskflow_bindings,
-    )
+    from patrol import observe_runtime_state_once
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.patrol import (
-        annotate_tasks_with_session_state,
-        check_runner_health,
-        hydrate_completed_session_results,
-        hydrate_session_progress_markers,
-        load_tasks,
-        patrol_heartbeat_check,
-        recover_dead_agent_tasks,
-        refresh_openclaw_taskflow_bindings,
-    )
-
-try:
-    from runtime_task_record import task_is_final
-except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.runtime_task_record import task_is_final
-
-
-def _task_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
-    counts = Counter(str(task.get("status", "") or "").strip().lower() for task in tasks if isinstance(task, dict))
-    return {
-        "total": len([task for task in tasks if isinstance(task, dict)]),
-        "queued": int(counts.get("queued", 0) or 0),
-        "running": int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0),
-        "pending": int(counts.get("pending_confirm", 0) or 0),
-        "done": int(counts.get("done", 0) or 0) + int(counts.get("completed", 0) or 0),
-        "failed": int(counts.get("failed", 0) or 0) + int(counts.get("blocked", 0) or 0) + int(counts.get("deferred", 0) or 0),
-    }
-
-
-def _reload_observed_tasks() -> list[dict[str, Any]]:
-    tasks = load_tasks()
-    if not tasks:
-        return []
-    tasks = annotate_tasks_with_session_state(tasks)
-    refresh_openclaw_taskflow_bindings(tasks)
-    return tasks
-
+    from lib.patrol import observe_runtime_state_once
 
 def observe_runtime_once(*, workspace: str = WORKSPACE) -> dict[str, Any]:
-    runner = check_runner_health()
-    runner_mode = "daemon" if runner.get("present", False) else "on_demand"
-    tasks = _reload_observed_tasks()
-
-    progress_hydrated = hydrate_session_progress_markers(tasks)
-    if progress_hydrated > 0:
-        tasks = _reload_observed_tasks()
-
-    result_hydrated = hydrate_completed_session_results(tasks)
-    if result_hydrated > 0:
-        tasks = _reload_observed_tasks()
-
-    heartbeat_reassigned = patrol_heartbeat_check(workspace)
-    if heartbeat_reassigned:
-        tasks = _reload_observed_tasks()
-
-    recovered = recover_dead_agent_tasks(tasks)
-    if recovered:
-        tasks = _reload_observed_tasks()
-
-    counts = _task_counts(tasks)
-    final_tasks = len([task for task in tasks if isinstance(task, dict) and task_is_final(task)])
-    active_tasks = counts["queued"] + counts["running"] + counts["pending"]
+    payload = observe_runtime_state_once(workspace=workspace)
+    tasks = payload.get("tasks", []) if isinstance(payload.get("tasks", []), list) else []
+    counts = Counter(str(task.get("status", "") or "").strip().lower() for task in tasks if isinstance(task, dict))
+    active_tasks = int(counts.get("queued", 0) or 0) + int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0) + int(counts.get("pending_confirm", 0) or 0)
+    final_tasks = int(counts.get("done", 0) or 0) + int(counts.get("completed", 0) or 0) + int(counts.get("failed", 0) or 0) + int(counts.get("blocked", 0) or 0) + int(counts.get("deferred", 0) or 0)
     return {
         "observed_at": datetime.now(timezone.utc).astimezone().isoformat(),
         "workspace": workspace,
-        "runner_health": runner,
-        "runner_execution_mode": runner_mode,
+        "runner_health": payload.get("runner_health", {}),
+        "runner_execution_mode": str(payload.get("runner_execution_mode", "") or "daemon"),
         "changes": {
-            "progress_hydrated": int(progress_hydrated or 0),
-            "results_hydrated": int(result_hydrated or 0),
-            "heartbeat_reassigned": len(heartbeat_reassigned),
-            "dead_agent_recovered": len(recovered),
+            "progress_hydrated": int(payload.get("progress_hydrated", 0) or 0),
+            "results_hydrated": int(payload.get("results_hydrated", 0) or 0),
+            "heartbeat_reassigned": len(payload.get("heartbeat_reassigned", []) or []),
+            "dead_agent_recovered": len(payload.get("recovered", []) or []),
         },
         "counts": {
-            **counts,
+            "total": len([task for task in tasks if isinstance(task, dict)]),
+            "queued": int(counts.get("queued", 0) or 0),
+            "running": int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0),
+            "pending": int(counts.get("pending_confirm", 0) or 0),
+            "done": int(counts.get("done", 0) or 0) + int(counts.get("completed", 0) or 0),
+            "failed": int(counts.get("failed", 0) or 0) + int(counts.get("blocked", 0) or 0) + int(counts.get("deferred", 0) or 0),
             "active": active_tasks,
             "final": final_tasks,
         },
-        "recovered_task_ids": [str(item.get("id", "") or "").strip() for item in recovered if isinstance(item, dict)],
-        "heartbeat_reassigned_task_ids": [str(item.get("id", "") or "").strip() for item in heartbeat_reassigned if isinstance(item, dict)],
+        "recovered_task_ids": [str(item.get("id", "") or "").strip() for item in (payload.get("recovered", []) or []) if isinstance(item, dict)],
+        "heartbeat_reassigned_task_ids": [str(item.get("id", "") or "").strip() for item in (payload.get("heartbeat_reassigned", []) or []) if isinstance(item, dict)],
     }
 
 

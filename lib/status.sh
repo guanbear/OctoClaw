@@ -52,6 +52,7 @@ from octopus_config import (
     TASK_STATE_FILE,
     MAIN_AGENT_SESSIONS_FILE,
     resolve_main_session_key,
+    resolve_runner_mode,
     load_json,
     load_octopus_config,
     workbench_config,
@@ -89,6 +90,7 @@ now = datetime.now(timezone(timedelta(hours=8)))
 mode_data = load_json(MODE_FILE) or {}
 policy_data = load_json(MODEL_POLICY_FILE) or {}
 config_data = load_octopus_config()
+runner_mode = resolve_runner_mode(config_data)
 runner_health = load_json(RUNNER_HEALTH_FILE) or {}
 model_health_state = load_model_health_state()
 RUNNER_STALE_SECONDS = 120
@@ -201,9 +203,10 @@ print(f"🐙 八爪鱼状态 [{ts}]")
 print("━━━━━━━━━━━━━━━━━━━━")
 runner_health_ok = False
 runner_health_age = None
+runner_note = ""
+stale_note = ""
 if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     runner_job = runner_health.get("job_id", "")
-    runner_note = ""
     heartbeat = runner_health.get("last_heartbeat_at", "")
     heartbeat_dt = None
     try:
@@ -220,11 +223,10 @@ if isinstance(runner_health, dict) and runner_health.get("worker_id"):
         runner_health_ok = runner_health_age <= RUNNER_STALE_SECONDS
     if runner_job and heartbeat_dt and runner_health_ok and (now - heartbeat_dt).total_seconds() <= 30:
         runner_note = f" · 当前任务 {runner_job}"
-    stale_note = ""
     if runner_health_age is not None and not runner_health_ok:
         stale_note = f" · stale {runner_health_age}s"
 tasks = load_tasks()
-if not runner_health_ok and isinstance(runner_health, dict) and runner_health.get("worker_id"):
+if runner_mode != "ondemand" and not runner_health_ok and isinstance(runner_health, dict) and runner_health.get("worker_id"):
     for task in tasks:
         if str(task.get("executor", "") or "") == "runner" and str(task.get("status", "") or "") in ("running", "dispatched"):
             task["status"] = "queued"
@@ -319,7 +321,12 @@ else:
                 f"blocked {compact_ratio(tool_metrics.get('blocked_session_rate'))} · "
                 f"packs {packs_text}"
             )
-    if isinstance(runner_health, dict) and runner_health.get("worker_id"):
+    if runner_mode == "ondemand":
+        if isinstance(runner_health, dict) and runner_health.get("worker_id"):
+            print(f"🏃 Runner：on-demand · {runner_health.get('worker_id')}{runner_note}{stale_note}")
+        else:
+            print("🏃 Runner：on-demand")
+    elif isinstance(runner_health, dict) and runner_health.get("worker_id"):
         print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
     for line in render_model_health_summary(model_health_summary):
         print(line)
@@ -354,7 +361,9 @@ else:
 
 if task_first_view:
     diagnostics = []
-    if isinstance(runner_health, dict) and runner_health.get("worker_id"):
+    if runner_mode == "ondemand":
+        diagnostics.append("Runner：on-demand")
+    elif isinstance(runner_health, dict) and runner_health.get("worker_id"):
         diagnostics.append(f"Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
     model_health_lines = render_model_health_summary(model_health_summary)
     if model_health_lines and model_health_lines != ["🩺 模型健康：no health signals yet"]:

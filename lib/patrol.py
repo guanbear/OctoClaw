@@ -79,6 +79,7 @@ from octopus_config import (
     load_json,
     notification_enabled,
     resolve_main_session_key,
+    resolve_runner_mode,
 )
 from session_ops import send_agent_message
 from task_events import append_task_event
@@ -521,6 +522,47 @@ def maybe_restart_runner() -> bool:
     except Exception as e:
         print(f"  ⚠️  runner 自动重启失败: {e}", file=sys.stderr)
         return False
+
+
+def reload_observed_tasks() -> list[dict]:
+    tasks = load_tasks()
+    if not tasks:
+        return []
+    tasks = annotate_tasks_with_session_state(tasks)
+    refresh_openclaw_taskflow_bindings(tasks)
+    return tasks
+
+
+def observe_runtime_state_once(workspace: str = WORKSPACE) -> dict[str, Any]:
+    runner_health = check_runner_health()
+    runner_mode = resolve_runner_mode()
+    tasks = reload_observed_tasks()
+
+    progress_hydrated = hydrate_session_progress_markers(tasks)
+    if progress_hydrated > 0:
+        tasks = reload_observed_tasks()
+
+    hydrated = hydrate_completed_session_results(tasks)
+    if hydrated > 0:
+        tasks = reload_observed_tasks()
+
+    heartbeat_reassigned = patrol_heartbeat_check(workspace)
+    if heartbeat_reassigned:
+        tasks = reload_observed_tasks()
+
+    recovered = recover_dead_agent_tasks(tasks)
+    if recovered:
+        tasks = reload_observed_tasks()
+
+    return {
+        "runner_health": runner_health,
+        "runner_execution_mode": runner_mode,
+        "tasks": tasks,
+        "progress_hydrated": int(progress_hydrated or 0),
+        "results_hydrated": int(hydrated or 0),
+        "heartbeat_reassigned": heartbeat_reassigned,
+        "recovered": recovered,
+    }
 
 
 def now_utc() -> datetime:
@@ -4806,8 +4848,18 @@ def main():
         print("🐙 八爪鱼巡逻开始（强制模式）...")
     else:
         print("🐙 八爪鱼巡逻开始...")
-    runner_health = check_runner_health()
-    if runner_health.get("present"):
+    observation = observe_runtime_state_once(WORKSPACE)
+    runner_health = observation.get("runner_health", {}) if isinstance(observation.get("runner_health", {}), dict) else {}
+    runner_mode = str(observation.get("runner_execution_mode", "") or "daemon").strip() or "daemon"
+    if runner_mode == "ondemand":
+        if runner_health.get("present") and runner_health.get("healthy"):
+            print(
+                f"  🏃 Runner 按需活跃：{runner_health.get('health', {}).get('worker_id', '')} "
+                f"({runner_health.get('age_seconds', 0)}s)"
+            )
+        else:
+            print("  ℹ️  Runner 按需执行模式（无需常驻心跳）")
+    elif runner_health.get("present"):
         if runner_health.get("healthy"):
             print(
                 f"  🏃 Runner 心跳正常：{runner_health.get('health', {}).get('worker_id', '')} "
@@ -4831,44 +4883,28 @@ def main():
                 send_text(msg)
     else:
         print("  ℹ️  Runner 未启动或无心跳文件")
-    tasks = load_tasks()
+    tasks = observation.get("tasks", []) if isinstance(observation.get("tasks", []), list) else []
 
     if not tasks:
         print("✅ task-state.json 为空或不存在，无需巡逻")
         return
 
-    # ── v1.3: 先补充 session 观测字段，让后续判断不只依赖 task-state 本身 ──
-    tasks = annotate_tasks_with_session_state(tasks)
-    refresh_openclaw_taskflow_bindings(tasks)
-
-    progress_hydrated = hydrate_session_progress_markers(tasks)
+    progress_hydrated = int(observation.get("progress_hydrated", 0) or 0)
     if progress_hydrated > 0:
         print(f"  🧭 本轮从 child session transcript 回收进度信号 {progress_hydrated} 个")
-        tasks = load_tasks()
-        tasks = annotate_tasks_with_session_state(tasks)
-        refresh_openclaw_taskflow_bindings(tasks)
 
-    hydrated = hydrate_completed_session_results(tasks)
+    hydrated = int(observation.get("results_hydrated", 0) or 0)
     if hydrated > 0:
         print(f"  ✅ 本轮从 child session transcript 回收结果 {hydrated} 个")
-        tasks = load_tasks()
-        tasks = annotate_tasks_with_session_state(tasks)
-        refresh_openclaw_taskflow_bindings(tasks)
 
-    heartbeat_reassigned = patrol_heartbeat_check(WORKSPACE)
+    heartbeat_reassigned = observation.get("heartbeat_reassigned", [])
     if heartbeat_reassigned:
         print(f"  💓 本轮根据 agent heartbeat 回收任务 {len(heartbeat_reassigned)} 个：{[t.get('id') for t in heartbeat_reassigned]}")
-        tasks = load_tasks()
-        tasks = annotate_tasks_with_session_state(tasks)
-        refresh_openclaw_taskflow_bindings(tasks)
 
     # ── Slice C: 发现 owner/session 已失活时，释放锁并把任务回收到 queued ──
-    recovered = recover_dead_agent_tasks(tasks)
+    recovered = observation.get("recovered", [])
     if recovered:
         print(f"  ♻️ 本轮回收失活 delegated 任务 {len(recovered)} 个：{[t.get('id') for t in recovered]}")
-        tasks = load_tasks()
-        tasks = annotate_tasks_with_session_state(tasks)
-        refresh_openclaw_taskflow_bindings(tasks)
 
     # ── v1.4: 对仍然活着但有异常迹象的任务，先尝试 steer，再决定是否重派 ──
     steered = attempt_task_steers(tasks)

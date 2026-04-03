@@ -60,6 +60,20 @@ WORKSPACE = resolve_workspace()
 LIB_DIR = os.path.join(SKILL_ROOT, "lib")
 
 
+def resolve_runner_mode(config: dict[str, Any] | None = None) -> str:
+    configured = str(os.environ.get("RUNNER_MODE", "") or "").strip().lower()
+    if configured in {"daemon", "ondemand", "on_demand"}:
+        return "ondemand" if configured in {"ondemand", "on_demand"} else "daemon"
+
+    payload = config if isinstance(config, dict) else {}
+    runtime = payload.get("runtime", {}) if isinstance(payload.get("runtime", {}), dict) else {}
+    runtime_mode = str(runtime.get("runner_mode", "") or "").strip().lower()
+    if runtime_mode in {"daemon", "ondemand", "on_demand"}:
+        return "ondemand" if runtime_mode in {"ondemand", "on_demand"} else "daemon"
+
+    return "daemon"
+
+
 def workspace_path(*parts: str) -> str:
     return os.path.join(WORKSPACE, *parts)
 
