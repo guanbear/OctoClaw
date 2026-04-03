@@ -889,6 +889,13 @@ def sync_runtime_surfaces(task: dict[str, Any], *, thread_action: str = "") -> d
     artifact_summary = upsert_artifact_index(task)
     ownership = upsert_ownership(task)
     session_resume = upsert_worker_session(task)
+    if _text(task.get("id")) and isinstance(task.get("resume_context"), dict) and task.get("resume_context"):
+        try:
+            from session_resume import save_resume_context
+        except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+            from lib.session_resume import save_resume_context
+
+        save_resume_context(_text(task.get("id")), dict(task.get("resume_context")), workspace=_workspace_for_store(WORKER_SESSION_STORE_FILE))
     previous_checklist = resolve_task_checklist(_text(task.get("id"))) if _text(task.get("id")) else {}
     checklist = upsert_checklist(task)
     _append_checklist_history_if_changed(task, previous_checklist, checklist)
@@ -1177,4 +1184,10 @@ def mark_task_for_reassignment(task_record: dict[str, Any]) -> dict[str, Any]:
         task_record["last_recovered_at"] = now_iso()
     task_record["ownership"] = ownership_snapshot(task_record)
     task_record["session_resume"] = session_resume_snapshot(task_record)
+    try:
+        from session_resume import clear_resume_context
+    except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+        from lib.session_resume import clear_resume_context
+
+    clear_resume_context(_text(task_record.get("id")), workspace=_workspace_for_store(WORKER_SESSION_STORE_FILE))
     return task_record

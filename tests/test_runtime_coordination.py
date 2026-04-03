@@ -25,6 +25,19 @@ from lib.runtime_coordination import (
 )
 
 
+def _configure_runtime_workspace(module, workspace: str) -> None:
+    module.WORKSPACE = workspace
+    module.ARTIFACT_INDEX_FILE = str(Path(workspace) / "tmp" / "octopus" / "artifact-index.json")
+    module.OWNERSHIP_STORE_FILE = str(Path(workspace) / "tmp" / "octopus" / "task-ownership.json")
+    module.WORKER_SESSION_STORE_FILE = str(Path(workspace) / "tmp" / "octopus" / "worker-session-store.json")
+    module.TASK_CHECKLIST_STORE_FILE = str(Path(workspace) / "tmp" / "octopus" / "task-checklists.json")
+    module.upsert_artifact_index.__kwdefaults__["path"] = module.ARTIFACT_INDEX_FILE
+    module.upsert_ownership.__kwdefaults__["path"] = module.OWNERSHIP_STORE_FILE
+    module.upsert_worker_session.__kwdefaults__["path"] = module.WORKER_SESSION_STORE_FILE
+    module.resolve_task_checklist.__kwdefaults__["path"] = module.TASK_CHECKLIST_STORE_FILE
+    module.upsert_checklist.__kwdefaults__["path"] = module.TASK_CHECKLIST_STORE_FILE
+
+
 class RuntimeCoordinationTests(unittest.TestCase):
     def test_resolve_task_artifacts_includes_thread_related_entries(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-artifact-index-") as tmpdir:
@@ -222,6 +235,7 @@ class RuntimeCoordinationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="octoclaw-runtime-surfaces-") as tmpdir:
             with patch.dict(os.environ, {"WORKSPACE": tmpdir}, clear=False):
                 reloaded = importlib.reload(runtime_coordination)
+                _configure_runtime_workspace(reloaded, tmpdir)
                 task = {
                     "id": "task-1",
                     "status": "queued",
