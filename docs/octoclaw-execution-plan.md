@@ -149,6 +149,61 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ---
 
+## P2.5：把 router 核心收成可拆分 Auto Router
+
+### 为什么现在该把这件事写进 canonical plan
+
+当前 OctoClaw 已经不只是 route score 脚本了，而是逐步形成：
+
+- signal extraction
+- route / model / budget decision
+- replay / validation / learning feedback
+- model-intel / health / cooldown
+
+如果这部分边界现在不写清楚，后面很容易出现两种坏结果：
+
+1. 把整个 OctoClaw 误收成“一个黑盒 router”
+2. 或者反过来，把本来可以独立沉淀的 router core 永远绑死在当前 runtime 细节里
+
+### 目标
+
+把 router 部分明确设计成：
+
+- **先在 OctoClaw 内部服役**
+- **但未来可以独立抽成开源 Auto Router**
+- **目标兼容 OpenAI-compatible / OpenRouter Auto-like recommendation mode**
+
+### 推荐的子层结构
+
+1. signal layer
+2. V2-style router core
+   - rules
+   - semantic route
+   - optional tiny local judge
+3. R2-style budget planner
+   - `(model, output_budget)` 联合选择
+4. policy / gateway adapter
+5. model-intel / auto-update layer
+
+### 近期交付物
+
+- router boundary map
+- `signal / route / budget / model_intel` 的 schema 草案
+- model-intel 自动更新面
+  - 价格
+  - 能力画像
+  - 健康/冷却
+- OpenAI-compatible recommendation surface 草案
+
+### 这条线的约束
+
+- 不把 OctoClaw 完整 runtime 直接等同于 router
+- 不要求现在就拆仓
+- 不要求立刻变成通用 proxy
+- 先把内部接口做干净，再考虑独立开源
+
+---
+
 ## P3：把 IM / display adaptation 从 baseline 做到“可持续产品面”
 
 ### 当前状态
@@ -273,6 +328,7 @@ runner on-demand fallback 已经出现，observer 也已落地，说明系统确
 3. 在 current baseline 还没统一前大规模做 Web full cockpit
 4. 在控制面与 substrate 关系没收清前做激进 Python→Node/TS 迁移
 5. 为了抽象而抽象地重做 taxonomy / protocol 命名
+6. 在 router core 的 schema 和 model-intel 更新面没收清前，急着把整个 OctoClaw 拆成单独“路由产品”
 
 ---
 
@@ -299,6 +355,9 @@ runner on-demand fallback 已经出现，observer 也已落地，说明系统确
 
 ### Phase 2：统一反馈闭环
 核心问题：replay / review / validate / promote / learning 的一体化
+
+### Phase 2.5：收口可拆分 router core
+核心问题：signal / route / budget / model-intel 的边界与自动更新机制
 
 ### Phase 3：收口 IM / display 产品面
 核心问题：channel capability、anchor/update/action 统一语义

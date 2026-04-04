@@ -88,6 +88,64 @@ OctoClaw 当前真正负责的是四层增量：
 
 这四层合在一起，才是当前代码里的 OctoClaw，而不只是其中某一层。
 
+### 4.2.1 Router core 应设计成可抽离子系统
+
+虽然 OctoClaw 不是“一个只做模型打分的 router”，但这不代表 router 核心不应该被设计成可拆出。
+
+当前更合理的方向是：
+
+- **OctoClaw 继续是完整系统**
+  - policy / control / observer / feedback / IM-display adaptation
+- **其中 router core 则刻意收成可抽离子系统**
+  - 未来可以独立为一个更通用的 Auto Router 项目
+  - 目标形态可以接近 OpenRouter Auto 模式的开源实现
+
+这个可抽离 router 的边界，建议明确分成 5 层：
+
+1. **Signal layer**
+   - task_type
+   - complexity
+   - language
+   - tool_need
+   - risk_level
+   - context_size
+
+2. **Router core（V2-style）**
+   - rules
+   - semantic route
+   - optional tiny judge
+   - 不直接绑死某个 provider 或某个 runtime
+
+3. **Budget planner（R2-style）**
+   - 选择 `(model, output_budget)`，而不是只选模型
+   - 预算与质量/成本一起进入目标函数
+
+4. **Policy / gateway adapter**
+   - provider 偏好
+   - latency / cost / privacy policy
+   - fallback chain
+   - OpenAI-compatible response surface
+
+5. **Model-intel / auto-update**
+   - price refresh
+   - capability profile refresh
+   - health / cooldown refresh
+   - telemetry-fed policy updates
+
+这里最重要的不是“现在就把它拆仓”，而是：
+
+> **先把接口边界做对，让 OctoClaw 内部的 router 核心未来可以被单独开源。**
+
+这条判断也符合外部参考的现实：
+
+- NVIDIA 的 LLM Router v2 更接近“intent-based + auto-routing”的推荐器，返回推荐模型名，而不是替代整套执行系统
+- R2-Router 的研究重点则是联合选择 `(LLM, token budget)`，非常适合作为 budget planner 的设计参考
+
+所以对 OctoClaw 来说，正确吸收方式不是“把整个系统做成一个神奇黑盒 router”，而是：
+
+- **把 router core 设计成可拆**
+- **把完整 runtime / observer / IM / feedback 继续保留在 OctoClaw 内部**
+
 ### 4.3 Operator backend 是增强层，不是唯一运行面
 
 ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当前代码方向已经很明确：
@@ -299,6 +357,18 @@ OctoClaw 不应该只做终端体验，也不该试图把所有 IM 强行做成�
 - channel-specific rendering
 - rich when possible, text fallback when necessary
 - IM 做 lightweight ops，full cockpit 留给更强的 control/UI 面
+
+### 7.7 Router extraction should be interface-first
+
+如果后续真的要把 router 单独开源，必须坚持：
+
+- 先抽接口，再抽仓库
+- 先稳定 signal / route / budget / model-intel schema，再谈 provider 泛化
+- 先做到 OpenAI-compatible recommendation API，再决定是否要兼做 proxy
+
+换句话说：
+
+> **“可抽离”是当前设计目标；“立刻拆出去”不是当前主线。**
 
 ---
 
