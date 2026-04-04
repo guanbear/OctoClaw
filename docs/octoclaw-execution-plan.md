@@ -142,6 +142,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ### 近期交付物
 - 一份 feedback loop map
+- 一套统一 feedback manifest / phase contract
 - 每条工具在闭环中的角色说明
 - promotion / validation / learning 之间的输入输出约定
 - 明确哪些 nightly job 是核心，哪些只是辅助分析

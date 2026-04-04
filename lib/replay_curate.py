@@ -8,6 +8,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from feedback_loop import shared_case_fields
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.feedback_loop import shared_case_fields
 from replay_review import FOCUS_CHOICES, build_review_payload
 from replay_summary import DEFAULT_REPLAY_LOG, load_events
 
@@ -52,6 +56,18 @@ def curate_cases(
                 "event_count": int(record.get("event_count") or 0),
             },
         }
+        case.update(
+            shared_case_fields(
+                prompt=str(record.get("prompt") or ""),
+                route=str(record.get("route") or ""),
+                worker_pool=str(record.get("worker_pool") or ""),
+                route_language_packs=list(record.get("route_language_packs") or []),
+                tags=list(record.get("tags") or []),
+                review_required=bool(record.get("review_required")),
+                blocked_events=list(record.get("blocked_events") or []),
+                confidence=record.get("confidence"),
+            )
+        )
         if include_events:
             case["review"] = {
                 "dispatch_called": bool(record.get("dispatch_called")),
@@ -118,6 +134,8 @@ def main() -> int:
     )
     cases = curate_cases(review_payload["records"], dedupe_by=args.dedupe_by, include_events=args.include_events)
     payload = {
+        "schema_version": "octoclaw.replay_curate/v1",
+        "loop_phase": "curate",
         "source": review_payload["source"],
         "filters": {
             **review_payload["filters"],

@@ -103,6 +103,15 @@ OctoClaw uses them to keep `task-state`, task anchors, patrol notifications, and
 - `handoff_state`
 - `session_key` / `session_target` / `session_thread_key`
 
+Feedback loop baseline now follows one canonical phase chain:
+
+```text
+observe -> summarize -> review -> curate -> validate -> promote -> learn
+```
+
+The existing replay / review / validation / rollout / learning tools stay in place,
+but P2 unifies them with a shared manifest and promotion gating contract.
+
 The next source-backed borrowings from ClawTeam and DeerFlow are still the right track, but Anthropic's official guidance suggests doing them in this order:
 
 1. richer delegated task events

@@ -53,6 +53,9 @@ class ReplayCurateTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["records_selected"], 2)
         self.assertEqual(payload["counts"]["cases_selected"], 1)
         self.assertEqual(payload["cases"][0]["expected_route"], "spawn_single")
+        self.assertEqual(payload["schema_version"], "octoclaw.replay_curate/v1")
+        self.assertTrue(payload["cases"][0]["prompt_hash"])
+        self.assertTrue(payload["cases"][0]["normalized_prompt"])
 
     def test_curate_can_include_review_metadata(self) -> None:
         events = [
@@ -92,6 +95,7 @@ class ReplayCurateTests(unittest.TestCase):
         self.assertIn("review", payload["cases"][0])
         self.assertTrue(payload["cases"][0]["review"]["sticky_applied"])
         self.assertEqual(payload["cases"][0]["review"]["blocked_events"], ["tool_blocked_before_route_hint"])
+        self.assertEqual(payload["cases"][0]["candidate_severity"], "high")
 
 
 if __name__ == "__main__":

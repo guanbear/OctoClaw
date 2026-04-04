@@ -233,6 +233,78 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
         self.assertEqual(payload["observation"]["suggested_preset"], "guided")
         self.assertTrue(payload["promotion"]["ready"])
 
+    def test_recommend_requires_validation_summary_for_ready(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-validated-") as tmpdir:
+            config_path = Path(tmpdir) / "octopus-config.json"
+            validation_path = Path(tmpdir) / "validation-summary.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "runtime_policy": {
+                            "enabled": True,
+                            "switches": {
+                                "hard_runner_only": True,
+                                "route_hint_required": False,
+                                "replay_logging": True,
+                                "direct_model_override": False,
+                                "delegation_enforcement": False,
+                            },
+                            "hooks": {
+                                "before_model_resolve": False,
+                                "before_prompt_build": True,
+                                "before_tool_call": False,
+                                "agent_end": True,
+                            },
+                            "route_stickiness": {"enabled": False},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            validation_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "octoclaw.feedback_validation_summary/v1",
+                        "passed": True,
+                        "cases_total": 3,
+                        "cases_passed": 3,
+                        "cases_failed": 0,
+                        "findings": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(ROLLOUT_SCRIPT),
+                    "recommend",
+                    "--config",
+                    str(config_path),
+                    "--events",
+                    str(FIXTURES_PATH),
+                    "--validation-summary",
+                    str(validation_path),
+                    "--format",
+                    "json",
+                    "--min-policy-events",
+                    "1",
+                    "--min-runner-events",
+                    "0",
+                    "--min-delegated-events",
+                    "1",
+                    "--max-blocked-session-rate",
+                    "1.0",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["promotion_gate"]["status"], "promotion-ready")
+        self.assertEqual(payload["promotion_gate"]["validation_status"], "passed")
+
     def test_recommend_outputs_guided_summary_for_enforced_runtime(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-recommend-") as tmpdir:
             config_path = Path(tmpdir) / "octopus-config.json"
@@ -288,7 +360,8 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
         self.assertEqual(payload["current_phase"], "enforced")
         self.assertEqual(payload["summary_phase"], "guided")
         self.assertEqual(payload["suggested_preset"], "enforced")
-        self.assertTrue(payload["ready"])
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["promotion_gate"]["status"], "needs-validation")
 
     def test_check_handles_missing_replay_log_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-rollout-missing-replay-") as tmpdir:

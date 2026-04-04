@@ -16,6 +16,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 try:
+    from feedback_loop import build_validation_summary
+except ModuleNotFoundError:
+    from lib.feedback_loop import build_validation_summary
+
+try:
     from reply_review_packet import (
         DEFAULT_TIMEZONE,
         iter_jsonl,
@@ -94,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--output", required=True)
     parser.add_argument("--cases-output", default="")
+    parser.add_argument("--summary-output", default="")
     parser.add_argument("--workspace", default="")
     parser.add_argument("--openclaw-home", default="")
     parser.add_argument("--agent-model", default="zai/glm-4.7")
@@ -515,6 +521,21 @@ def main() -> int:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_report(args.day, case_results, runtime), encoding="utf-8")
+    passed_cases = [case for case in case_results if not case.findings]
+    findings = sorted({finding for case in case_results for finding in case.findings})
+    validation_summary = build_validation_summary(
+        source_run_id="",
+        source_label=source_label,
+        report_path=str(output_path),
+        cases_total=len(case_results),
+        cases_passed=len(passed_cases),
+        cases_failed=len(case_results) - len(passed_cases),
+        findings=findings,
+        passed=len(case_results) > 0 and len(passed_cases) == len(case_results),
+    )
+    summary_path = Path(args.summary_output) if args.summary_output else output_path.with_name(output_path.stem + "-summary.json")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(validation_summary, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.cases_output:
         cases_path = Path(args.cases_output)
         cases_path.parent.mkdir(parents=True, exist_ok=True)

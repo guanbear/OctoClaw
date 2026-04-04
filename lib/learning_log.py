@@ -152,9 +152,15 @@ def append_learning_entry(
     priority: str = "medium",
     area: str = "infra",
     tags: list[str] | None = None,
+    source: str = "nightly_error_review",
+    sink_type: str = "operator-learning",
+    run_id: str = "",
+    phase: str = "learn",
+    evidence_paths: list[str] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc).astimezone()
     entry_id = f"LRN-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
+    evidence = ", ".join(str(item).strip() for item in (evidence_paths or []) if str(item).strip())
     entry = "\n".join(
         [
             f"## [{entry_id}] {category}",
@@ -174,7 +180,11 @@ def append_learning_entry(
             suggested_action.strip(),
             "",
             "### Metadata",
-            f"- Source: nightly_error_review",
+            f"- Source: {source}",
+            f"- Sink-Type: {sink_type}",
+            f"- Phase: {phase}",
+            f"- Run-ID: {run_id or '(none)'}",
+            f"- Evidence: {evidence or '(none)'}",
             f"- Tags: {', '.join(tags or []) or '(none)'}",
             "",
             "---",

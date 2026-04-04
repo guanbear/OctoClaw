@@ -375,6 +375,8 @@ def summarize_events(
     review_required_count = sum(1 for event in task_events if _bool_field(event, "reviewRequired", "review_required"))
 
     summary = {
+        "schema_version": "octoclaw.replay_summary/v1",
+        "loop_phase": "summarize",
         "source": {
             "path": source_path,
             "format": source_format,

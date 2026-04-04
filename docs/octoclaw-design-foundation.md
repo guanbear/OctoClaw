@@ -382,6 +382,30 @@ runner 不是单纯“长期常驻快腿”，而是：
 
 这些能力已经存在，后续设计应围绕“怎么统一和深化”而不是“有没有必要做”。
 
+### 7.5.1 统一 feedback loop phase model
+
+P2 收口后，反馈闭环默认采用这条主链：
+
+```text
+observe -> summarize -> review -> curate -> validate -> promote -> learn
+```
+
+其中：
+
+- `replay_summary` 属于 summarize
+- `replay_review` / `reply_review_packet` 属于 review
+- `replay_curate` 属于 curate
+- `replay_validation` / `eval_fixture_export` 属于 validate
+- `runtime_policy_rollout` 属于 promote
+- `learning_log` / `nightly_error_review` 属于 learn
+
+关键约束：
+
+- promotion 不能直接吃原始 replay 噪音
+- validate 是进入 promote 的门槛
+- learn 和 promote 分层，不变成自动改策略黑箱
+- nightly 产物要能通过统一 manifest 串起来
+
 ### 7.6 IM-native but surface-adaptive
 
 OctoClaw 不应该只做终端体验，也不该试图把所有 IM 强行做成同一种 UI。

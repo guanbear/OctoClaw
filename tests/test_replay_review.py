@@ -22,6 +22,7 @@ class ReplayReviewTests(unittest.TestCase):
 
     def test_review_builds_session_records_and_tags(self) -> None:
         payload = self.run_review("--focus", "all")
+        self.assertEqual(payload["schema_version"], "octoclaw.replay_review/v1")
         self.assertEqual(payload["source"]["format"], "json_array")
         self.assertEqual(payload["counts"]["sessions_total"], 3)
         self.assertEqual(payload["counts"]["by_route"], {"spawn_single": 1})
@@ -29,6 +30,9 @@ class ReplayReviewTests(unittest.TestCase):
         self.assertIn("blocked", payload["counts"]["by_tag"])
         self.assertIn("delegated", first["tags"])
         self.assertEqual(first["route_language_packs"], [])
+        self.assertTrue(first["normalized_prompt"])
+        self.assertTrue(first["prompt_hash"])
+        self.assertIn(first["candidate_severity"], {"low", "medium", "high"})
 
     def test_review_focus_filters_blocked_sessions(self) -> None:
         payload = self.run_review("--focus", "blocked")

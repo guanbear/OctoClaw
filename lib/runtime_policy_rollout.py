@@ -9,6 +9,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    from feedback_loop import MANIFEST_SCHEMA_VERSION, VALIDATION_SCHEMA_VERSION
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.feedback_loop import MANIFEST_SCHEMA_VERSION, VALIDATION_SCHEMA_VERSION
 from octopus_config import DEFAULT_CONFIG, deep_merge, load_json, save_json
 from replay_summary import (
     DEFAULT_MAX_BLOCKED_SESSION_RATE,
@@ -278,6 +282,20 @@ def resolve_observation_phase(config_path: Path, explicit_phase: str | None) -> 
     return current_phase, current_phase
 
 
+def load_validation_summary(path: str) -> dict[str, Any]:
+    if not path:
+        return {}
+    payload = load_json(path)
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_feedback_manifest(path: str) -> dict[str, Any]:
+    if not path:
+        return {}
+    payload = load_json(path)
+    return payload if isinstance(payload, dict) else {}
+
+
 def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]:
     config_path = Path(args.config).expanduser().resolve()
     current_phase, summary_phase = resolve_observation_phase(config_path, getattr(args, "phase", None))
@@ -317,24 +335,47 @@ def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]
         min_route_hint_submission_rate=args.min_route_hint_submission_rate,
     )
     promotion = summary.get("promotion", {}) or {}
+    validation = load_validation_summary(getattr(args, "validation_summary", ""))
+    manifest = load_feedback_manifest(getattr(args, "feedback_manifest", ""))
+    manifest_validation_status = str(manifest.get("validation_status", "") or "").strip()
+    validation_passed = bool(validation.get("passed")) if validation else manifest_validation_status == "passed"
+    validation_status = (
+        "passed"
+        if validation_passed
+        else ("failed" if validation else (manifest_validation_status or "missing"))
+    )
+    promotion_gate = {
+        "status": "promotion-ready" if (promotion.get("ready") and validation_passed) else (
+            "needs-validation" if not validation and not manifest_validation_status else "promotion-blocked"
+        ),
+        "validation_status": validation_status,
+        "validation_summary_path": str(getattr(args, "validation_summary", "") or ""),
+        "feedback_manifest_path": str(getattr(args, "feedback_manifest", "") or ""),
+        "heuristic_ready": bool(promotion.get("ready")),
+    }
     summary["observation"] = {
         "current_phase": current_phase,
         "summary_phase": summary_phase,
         "suggested_preset": promotion.get("target") if promotion.get("ready") else current_phase,
     }
+    summary["validation"] = validation
+    summary["feedback_manifest"] = manifest
+    summary["promotion_gate"] = promotion_gate
     return summary
 
 
 def render_recommendation(summary: dict[str, Any]) -> dict[str, Any]:
     promotion = summary.get("promotion", {}) or {}
     observation = summary.get("observation", {}) or {}
+    gate = summary.get("promotion_gate", {}) or {}
     return {
         "current_phase": observation.get("current_phase"),
         "summary_phase": observation.get("summary_phase"),
         "suggested_preset": observation.get("suggested_preset"),
-        "ready": bool(promotion.get("ready")),
+        "ready": bool(promotion.get("ready")) and gate.get("status") == "promotion-ready",
         "target": promotion.get("target"),
         "checks": promotion.get("checks", []),
+        "promotion_gate": gate,
         "task_event_count": summary.get("task_metrics", {}).get("task_event_count", 0),
         "runner_task_count": summary.get("task_metrics", {}).get("runner_task_count", 0),
         "delegated_task_count": summary.get("task_metrics", {}).get("delegated_task_count", 0),
@@ -374,6 +415,8 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("--config", required=True)
     check_parser.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
+    check_parser.add_argument("--validation-summary", default="")
+    check_parser.add_argument("--feedback-manifest", default="")
     check_parser.add_argument("--phase", choices=("conservative", "guided"))
     check_parser.add_argument("--format", choices=("text", "json"), default="text")
     check_parser.add_argument("--min-policy-events", type=int, default=DEFAULT_MIN_POLICY_EVENTS)
@@ -389,6 +432,8 @@ def build_parser() -> argparse.ArgumentParser:
     recommend_parser = subparsers.add_parser("recommend")
     recommend_parser.add_argument("--config", required=True)
     recommend_parser.add_argument("--events", default=str(DEFAULT_REPLAY_LOG))
+    recommend_parser.add_argument("--validation-summary", default="")
+    recommend_parser.add_argument("--feedback-manifest", default="")
     recommend_parser.add_argument("--phase", choices=("conservative", "guided"))
     recommend_parser.add_argument("--format", choices=("text", "json"), default="text")
     recommend_parser.add_argument("--min-policy-events", type=int, default=DEFAULT_MIN_POLICY_EVENTS)

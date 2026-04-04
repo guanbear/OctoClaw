@@ -164,6 +164,10 @@ def main() -> int:
             details=f"Nightly review found the same issue {candidate['count']} times.\nSignature: {candidate['signature']}",
             suggested_action=candidate["suggested_fix"],
             priority="high" if candidate["count"] >= 3 else "medium",
+            source="nightly_error_review",
+            sink_type="operator-learning",
+            phase="learn",
+            evidence_paths=[report_path],
             tags=["octoclaw", "nightly-review", "error-promotion"],
         )
 

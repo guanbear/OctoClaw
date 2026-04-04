@@ -9,6 +9,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+try:
+    from feedback_loop import shared_case_fields
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.feedback_loop import shared_case_fields
 from replay_summary import DEFAULT_REPLAY_LOG, TOOL_BLOCK_EVENTS, event_session_key, load_events, parse_timestamp
 
 
@@ -123,33 +127,47 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if delegated and route != "runner" and dispatch_event is None:
             tags.append("no_dispatch")
 
-        records.append(
-            {
-                "session_key": session_key,
-                "session_id": _first_non_empty(last_event.get("sessionId"), first_event.get("sessionId")),
-                "first_event_at": str(first_event.get("at", "") or ""),
-                "last_event_at": str(last_event.get("at", "") or ""),
-                "event_count": len(ordered),
-                "prompt": prompt,
-                "route": route,
-                "system_preferred_route": system_preferred_route,
-                "worker_pool": worker_pool,
-                "route_hint": _first_non_empty(route_hint_event.get("routeHint") if route_hint_event else ""),
-                "work_type": _first_non_empty(route_hint_event.get("workType") if route_hint_event else ""),
-                "phase": _first_non_empty(route_hint_event.get("phase") if route_hint_event else ""),
-                "review_required": bool(route_hint_event.get("reviewRequired")) if route_hint_event else False,
-                "confidence": route_hint_event.get("confidence") if route_hint_event else None,
-                "reason": _first_non_empty(route_hint_event.get("reason") if route_hint_event else ""),
-                "route_hint_required": route_hint_required,
-                "route_hint_submitted": route_hint_submitted,
-                "dispatch_called": dispatch_event is not None,
-                "sticky_applied": sticky_applied,
-                "sticky_persisted": sticky_persisted,
-                "blocked_events": blocked,
-                "route_language_packs": _find_route_language_packs(ordered),
-                "tags": tags,
-            }
+        review_required = bool(route_hint_event.get("reviewRequired")) if route_hint_event else False
+        confidence = route_hint_event.get("confidence") if route_hint_event else None
+        route_language_packs = _find_route_language_packs(ordered)
+        record = {
+            "session_key": session_key,
+            "session_id": _first_non_empty(last_event.get("sessionId"), first_event.get("sessionId")),
+            "first_event_at": str(first_event.get("at", "") or ""),
+            "last_event_at": str(last_event.get("at", "") or ""),
+            "event_count": len(ordered),
+            "prompt": prompt,
+            "route": route,
+            "system_preferred_route": system_preferred_route,
+            "worker_pool": worker_pool,
+            "route_hint": _first_non_empty(route_hint_event.get("routeHint") if route_hint_event else ""),
+            "work_type": _first_non_empty(route_hint_event.get("workType") if route_hint_event else ""),
+            "phase": _first_non_empty(route_hint_event.get("phase") if route_hint_event else ""),
+            "review_required": review_required,
+            "confidence": confidence,
+            "reason": _first_non_empty(route_hint_event.get("reason") if route_hint_event else ""),
+            "route_hint_required": route_hint_required,
+            "route_hint_submitted": route_hint_submitted,
+            "dispatch_called": dispatch_event is not None,
+            "sticky_applied": sticky_applied,
+            "sticky_persisted": sticky_persisted,
+            "blocked_events": blocked,
+            "route_language_packs": route_language_packs,
+            "tags": tags,
+        }
+        record.update(
+            shared_case_fields(
+                prompt=prompt,
+                route=route,
+                worker_pool=worker_pool,
+                route_language_packs=route_language_packs,
+                tags=tags,
+                review_required=review_required,
+                blocked_events=blocked,
+                confidence=confidence,
+            )
         )
+        records.append(record)
 
     return sorted(records, key=lambda item: (item.get("last_event_at", ""), item.get("session_key", "")), reverse=True)
 
@@ -192,6 +210,8 @@ def build_review_payload(
     records = derive_review_records(events)
     filtered = filter_review_records(records, focus=focus, route=route, tag=tag, limit=limit, offset=offset)
     return {
+        "schema_version": "octoclaw.replay_review/v1",
+        "loop_phase": "review",
         "source": {
             "path": source_path,
             "format": source_format,

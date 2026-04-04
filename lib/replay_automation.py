@@ -10,6 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+try:
+    from feedback_loop import build_feedback_manifest, build_phase_record, build_run_id
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.feedback_loop import build_feedback_manifest, build_phase_record, build_run_id
 from model_health_backfill import run_backfill as run_model_health_backfill
 from model_health_quota_backfill import run_quota_backfill as run_model_health_quota_backfill
 from octopus_config import CONFIG_FILE, DEFAULT_CONFIG, deep_merge, load_json, load_octopus_config, save_json
@@ -245,6 +249,8 @@ def run_replay_automation(
     dated_dir.mkdir(parents=True, exist_ok=True)
 
     generated: dict[str, str] = {}
+    phase_records: list[dict[str, Any]] = []
+    run_id = build_run_id("feedback")
 
     backfill_result = run_model_health_backfill(
         log_file=str(openclaw_log) if openclaw_log else "",
@@ -264,6 +270,18 @@ def run_replay_automation(
     quota_backfill_json = dated_dir / "model-health-quota-backfill.json"
     _write_json(quota_backfill_json, quota_backfill_result)
     generated["model_health_quota_backfill_json"] = str(quota_backfill_json)
+    phase_records.append(
+        build_phase_record(
+            phase="observe",
+            status="completed",
+            artifacts={
+                "events_path": str(events_path),
+                "model_health_backfill_json": str(backfill_json),
+                "model_health_quota_backfill_json": str(quota_backfill_json),
+            },
+            notes=["Replay log and model-health side inputs collected"],
+        )
+    )
 
     summary_payload = None
     if bool(replay_cfg.get("summary_enabled", True)):
@@ -285,6 +303,14 @@ def run_replay_automation(
         _write_text(summary_text, render_text(summary_payload))
         generated["summary_json"] = str(summary_json)
         generated["summary_text"] = str(summary_text)
+        phase_records.append(
+            build_phase_record(
+                phase="summarize",
+                status="completed",
+                artifacts={"summary_json": str(summary_json), "summary_text": str(summary_text)},
+                upstream_phases=["observe"],
+            )
+        )
 
     review_payloads: dict[str, dict[str, Any]] = {}
     if bool(replay_cfg.get("review_enabled", True)):
@@ -304,6 +330,14 @@ def run_replay_automation(
             path = dated_dir / f"review-{focus}.json"
             _write_json(path, payload)
             generated[f"review_{focus}_json"] = str(path)
+        phase_records.append(
+            build_phase_record(
+                phase="review",
+                status="completed",
+                artifacts={key: value for key, value in generated.items() if key.startswith("review_")},
+                upstream_phases=["summarize"],
+            )
+        )
 
     curated_sets: dict[str, list[dict[str, Any]]] = {}
     if bool(replay_cfg.get("curate_enabled", True)):
@@ -337,6 +371,14 @@ def run_replay_automation(
                 },
             )
             generated[f"curated_{name}_json"] = str(path)
+        phase_records.append(
+            build_phase_record(
+                phase="curate",
+                status="completed",
+                artifacts={key: value for key, value in generated.items() if key.startswith("curated_")},
+                upstream_phases=["review"],
+            )
+        )
 
     if bool(replay_cfg.get("llm_review_enabled", False)):
         packet = build_llm_review_packet(
@@ -356,16 +398,33 @@ def run_replay_automation(
         generated["llm_review_prompt_md"] = str(prompt_path)
         generated["llm_review_report_md"] = str(report_path)
 
-    manifest = {
-        "enabled": enabled,
-        "forced": bool(force),
-        "skipped": False,
-        "phase": phase,
-        "events_path": str(events_path),
-        "output_dir": str(dated_dir),
-        "events_count": len(events),
-        "generated": generated,
-    }
+    manifest = build_feedback_manifest(
+        run_id=run_id,
+        source_inputs={
+            "events_path": str(events_path),
+            "phase": phase,
+            "events_count": len(events),
+            "forced": bool(force),
+            "enabled": enabled,
+        },
+        phase_records=phase_records,
+        generated_artifacts=generated,
+        output_dir=str(dated_dir),
+        validation_status="pending_validation",
+        promotion_eligibility="operator-review-only",
+        learning_written=False,
+    )
+    manifest.update(
+        {
+            "enabled": enabled,
+            "forced": bool(force),
+            "skipped": False,
+            "phase": phase,
+            "events_path": str(events_path),
+            "events_count": len(events),
+            "generated": generated,
+        }
+    )
     manifest_path = dated_dir / "manifest.json"
     _write_json(manifest_path, manifest)
     manifest["manifest_path"] = str(manifest_path)
