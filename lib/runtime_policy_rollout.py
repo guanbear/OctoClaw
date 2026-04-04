@@ -286,14 +286,22 @@ def load_validation_summary(path: str) -> dict[str, Any]:
     if not path:
         return {}
     payload = load_json(path)
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    if str(payload.get("schema_version", "") or "").strip() != VALIDATION_SCHEMA_VERSION:
+        return {}
+    return payload
 
 
 def load_feedback_manifest(path: str) -> dict[str, Any]:
     if not path:
         return {}
     payload = load_json(path)
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    if str(payload.get("schema_version", "") or "").strip() != MANIFEST_SCHEMA_VERSION:
+        return {}
+    return payload
 
 
 def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]:
@@ -338,20 +346,31 @@ def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]
     validation = load_validation_summary(getattr(args, "validation_summary", ""))
     manifest = load_feedback_manifest(getattr(args, "feedback_manifest", ""))
     manifest_validation_status = str(manifest.get("validation_status", "") or "").strip()
-    validation_passed = bool(validation.get("passed")) if validation else manifest_validation_status == "passed"
+    manifest_run_id = str(manifest.get("run_id", "") or "").strip()
+    validation_run_id = str(validation.get("source_run_id", "") or "").strip()
+    linked_validation = bool(validation and manifest and manifest_run_id and validation_run_id == manifest_run_id)
+    validation_passed = bool(validation.get("passed")) if linked_validation else manifest_validation_status == "passed" and bool(manifest_run_id)
     validation_status = (
         "passed"
         if validation_passed
         else ("failed" if validation else (manifest_validation_status or "missing"))
     )
+    gate_status = "needs-validation"
+    if validation and not manifest:
+        gate_status = "promotion-blocked"
+    elif manifest and not validation and manifest_validation_status:
+        gate_status = "promotion-blocked" if manifest_validation_status != "passed" else "needs-validation"
+    elif validation and manifest and not linked_validation:
+        gate_status = "promotion-blocked"
+    elif promotion.get("ready") and validation_passed:
+        gate_status = "promotion-ready"
     promotion_gate = {
-        "status": "promotion-ready" if (promotion.get("ready") and validation_passed) else (
-            "needs-validation" if not validation and not manifest_validation_status else "promotion-blocked"
-        ),
+        "status": gate_status,
         "validation_status": validation_status,
         "validation_summary_path": str(getattr(args, "validation_summary", "") or ""),
         "feedback_manifest_path": str(getattr(args, "feedback_manifest", "") or ""),
         "heuristic_ready": bool(promotion.get("ready")),
+        "linked_run_id": manifest_run_id if linked_validation else "",
     }
     summary["observation"] = {
         "current_phase": current_phase,

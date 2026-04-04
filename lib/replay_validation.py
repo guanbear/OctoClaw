@@ -19,6 +19,10 @@ try:
     from feedback_loop import build_validation_summary
 except ModuleNotFoundError:
     from lib.feedback_loop import build_validation_summary
+try:
+    from octopus_config import load_json
+except ModuleNotFoundError:
+    from lib.octopus_config import load_json
 
 try:
     from reply_review_packet import (
@@ -100,6 +104,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True)
     parser.add_argument("--cases-output", default="")
     parser.add_argument("--summary-output", default="")
+    parser.add_argument("--source-run-id", default="")
+    parser.add_argument("--feedback-manifest", default="")
     parser.add_argument("--workspace", default="")
     parser.add_argument("--openclaw-home", default="")
     parser.add_argument("--agent-model", default="zai/glm-4.7")
@@ -524,9 +530,10 @@ def main() -> int:
     passed_cases = [case for case in case_results if not case.findings]
     findings = sorted({finding for case in case_results for finding in case.findings})
     validation_summary = build_validation_summary(
-        source_run_id="",
+        source_run_id=str(args.source_run_id or ((load_json(args.feedback_manifest) or {}) if args.feedback_manifest else {}).get("run_id", "")).strip(),
         source_label=source_label,
         report_path=str(output_path),
+        source_manifest_path=str(Path(args.feedback_manifest).expanduser().resolve()) if args.feedback_manifest else "",
         cases_total=len(case_results),
         cases_passed=len(passed_cases),
         cases_failed=len(case_results) - len(passed_cases),

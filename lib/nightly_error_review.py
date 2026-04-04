@@ -13,6 +13,10 @@ import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+try:
+    from feedback_loop import build_run_id
+except ModuleNotFoundError:
+    from lib.feedback_loop import build_run_id
 from learning_log import append_learning_entry, error_targets
 from octopus_config import SHARED_DIR
 
@@ -149,6 +153,7 @@ def build_report(records: list[dict]) -> tuple[str, list[dict]]:
 
 def main() -> int:
     now = datetime.now(timezone.utc).astimezone()
+    run_id = build_run_id("error-review")
     records = load_all_error_entries()
     report, promotions = build_report(records)
 
@@ -167,6 +172,7 @@ def main() -> int:
             source="nightly_error_review",
             sink_type="operator-learning",
             phase="learn",
+            run_id=run_id,
             evidence_paths=[report_path],
             tags=["octoclaw", "nightly-review", "error-promotion"],
         )
