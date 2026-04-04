@@ -83,6 +83,10 @@ from octopus_config import (
 )
 from session_ops import send_agent_message
 from task_events import append_task_event
+try:
+    from runtime_snapshot import build_runtime_snapshot, observe_runtime_snapshot
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_snapshot import build_runtime_snapshot, observe_runtime_snapshot
 
 try:
     from agent_heartbeat import is_agent_alive
@@ -534,8 +538,9 @@ def reload_observed_tasks() -> list[dict]:
 
 
 def observe_runtime_state_once(workspace: str = WORKSPACE) -> dict[str, Any]:
-    runner_health = check_runner_health()
-    runner_mode = resolve_runner_mode()
+    base_snapshot = observe_runtime_snapshot(workspace=workspace)
+    runner_health = base_snapshot.get("runner_health", {}) if isinstance(base_snapshot.get("runner_health"), dict) else {}
+    runner_mode = str(base_snapshot.get("runner_execution_mode", "") or resolve_runner_mode())
     tasks = reload_observed_tasks()
 
     progress_hydrated = hydrate_session_progress_markers(tasks)
@@ -554,15 +559,24 @@ def observe_runtime_state_once(workspace: str = WORKSPACE) -> dict[str, Any]:
     if recovered:
         tasks = reload_observed_tasks()
 
-    return {
-        "runner_health": runner_health,
-        "runner_execution_mode": runner_mode,
-        "tasks": tasks,
-        "progress_hydrated": int(progress_hydrated or 0),
-        "results_hydrated": int(hydrated or 0),
-        "heartbeat_reassigned": heartbeat_reassigned,
-        "recovered": recovered,
-    }
+    queue_counts = base_snapshot.get("queue_counts", {}) if isinstance(base_snapshot.get("queue_counts"), dict) else {}
+    return build_runtime_snapshot(
+        workspace=workspace,
+        tasks=tasks,
+        runner_health=runner_health,
+        runner_execution_mode=runner_mode,
+        queue_counts=queue_counts,
+        changes={
+            "progress_hydrated": int(progress_hydrated or 0),
+            "results_hydrated": int(hydrated or 0),
+            "heartbeat_reassigned": len(heartbeat_reassigned or []),
+            "dead_agent_recovered": len(recovered or []),
+        },
+        recovered_task_ids=[str(item.get("id", "") or "").strip() for item in (recovered or []) if isinstance(item, dict)],
+        heartbeat_reassigned_task_ids=[
+            str(item.get("id", "") or "").strip() for item in (heartbeat_reassigned or []) if isinstance(item, dict)
+        ],
+    )
 
 
 def now_utc() -> datetime:

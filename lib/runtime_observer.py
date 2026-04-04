@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
-from datetime import datetime, timezone
 from typing import Any
 
 try:
@@ -15,52 +13,20 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import WORKSPACE
 
 try:
-    from patrol import observe_runtime_state_once
+    from runtime_snapshot import observe_runtime_snapshot
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.patrol import observe_runtime_state_once
+    from lib.runtime_snapshot import observe_runtime_snapshot
 
 def observe_runtime_once(*, workspace: str = WORKSPACE) -> dict[str, Any]:
-    payload = observe_runtime_state_once(workspace=workspace)
-    tasks = payload.get("tasks", []) if isinstance(payload.get("tasks", []), list) else []
-    counts = Counter(str(task.get("status", "") or "").strip().lower() for task in tasks if isinstance(task, dict))
-    active_tasks = int(counts.get("queued", 0) or 0) + int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0) + int(counts.get("pending_confirm", 0) or 0)
-    final_tasks = int(counts.get("done", 0) or 0) + int(counts.get("completed", 0) or 0) + int(counts.get("failed", 0) or 0) + int(counts.get("blocked", 0) or 0) + int(counts.get("deferred", 0) or 0)
-    return {
-        "observed_at": datetime.now(timezone.utc).astimezone().isoformat(),
-        "workspace": workspace,
-        "runner_health": payload.get("runner_health", {}),
-        "runner_execution_mode": str(payload.get("runner_execution_mode", "") or "daemon"),
-        "changes": {
-            "progress_hydrated": int(payload.get("progress_hydrated", 0) or 0),
-            "results_hydrated": int(payload.get("results_hydrated", 0) or 0),
-            "heartbeat_reassigned": len(payload.get("heartbeat_reassigned", []) or []),
-            "dead_agent_recovered": len(payload.get("recovered", []) or []),
-        },
-        "counts": {
-            "total": len([task for task in tasks if isinstance(task, dict)]),
-            "queued": int(counts.get("queued", 0) or 0),
-            "running": int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0),
-            "pending": int(counts.get("pending_confirm", 0) or 0),
-            "done": int(counts.get("done", 0) or 0) + int(counts.get("completed", 0) or 0),
-            "failed": int(counts.get("failed", 0) or 0) + int(counts.get("blocked", 0) or 0) + int(counts.get("deferred", 0) or 0),
-            "active": active_tasks,
-            "final": final_tasks,
-        },
-        "recovered_task_ids": [str(item.get("id", "") or "").strip() for item in (payload.get("recovered", []) or []) if isinstance(item, dict)],
-        "heartbeat_reassigned_task_ids": [str(item.get("id", "") or "").strip() for item in (payload.get("heartbeat_reassigned", []) or []) if isinstance(item, dict)],
-    }
+    return observe_runtime_snapshot(workspace=workspace)
 
 
 def render_observer_text(payload: dict[str, Any]) -> str:
-    runner = payload.get("runner_health", {}) if isinstance(payload.get("runner_health", {}), dict) else {}
+    runner = payload.get("runner", {}) if isinstance(payload.get("runner", {}), dict) else {}
     counts = payload.get("counts", {}) if isinstance(payload.get("counts", {}), dict) else {}
     changes = payload.get("changes", {}) if isinstance(payload.get("changes", {}), dict) else {}
-    runner_mode = str(payload.get("runner_execution_mode", "") or "").strip() or ("daemon" if runner.get("present", False) else "on_demand")
-    runner_state = "healthy"
-    if not runner.get("present", False):
-        runner_state = "on-demand"
-    elif not runner.get("healthy", False):
-        runner_state = str(runner.get("reason", "stale") or "stale")
+    runner_mode = str(runner.get("mode", "") or payload.get("runner_execution_mode", "") or "").strip() or "ondemand"
+    runner_state = str(runner.get("state", "") or "healthy").strip() or "healthy"
     age = runner.get("age_seconds")
     age_text = f" age={age}s" if isinstance(age, int) else ""
     return "\n".join(

@@ -47,16 +47,15 @@ from octopus_config import (
     CONFIG_FILE,
     MODE_FILE,
     MODEL_POLICY_FILE,
-    RUNNER_HEALTH_FILE,
     RUNNER_QUEUE_FILE,
     TASK_STATE_FILE,
     MAIN_AGENT_SESSIONS_FILE,
     resolve_main_session_key,
-    resolve_runner_mode,
     load_json,
     load_octopus_config,
     workbench_config,
 )
+from runtime_snapshot import observe_runtime_snapshot
 from clawteam_bridge import load_bridge_summary
 from model_health import load_model_health_state
 from main_model_drift import assess_main_model_drift, load_actual_main_model
@@ -90,8 +89,10 @@ now = datetime.now(timezone(timedelta(hours=8)))
 mode_data = load_json(MODE_FILE) or {}
 policy_data = load_json(MODEL_POLICY_FILE) or {}
 config_data = load_octopus_config()
-runner_mode = resolve_runner_mode(config_data)
-runner_health = load_json(RUNNER_HEALTH_FILE) or {}
+runtime_snapshot = observe_runtime_snapshot()
+runner_mode = str(runtime_snapshot.get("runner_execution_mode", "") or "daemon")
+runner_health = runtime_snapshot.get("runner_health", {}) if isinstance(runtime_snapshot.get("runner_health"), dict) else {}
+runner_summary = runtime_snapshot.get("runner", {}) if isinstance(runtime_snapshot.get("runner"), dict) else {}
 model_health_state = load_model_health_state()
 RUNNER_STALE_SECONDS = 120
 workbench = workbench_config(config_data)
@@ -226,11 +227,6 @@ if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     if runner_health_age is not None and not runner_health_ok:
         stale_note = f" · stale {runner_health_age}s"
 tasks = load_tasks()
-if runner_mode != "ondemand" and not runner_health_ok and isinstance(runner_health, dict) and runner_health.get("worker_id"):
-    for task in tasks:
-        if str(task.get("executor", "") or "") == "runner" and str(task.get("status", "") or "") in ("running", "dispatched"):
-            task["status"] = "queued"
-            task["summary"] = str(task.get("summary") or "runner 心跳过期，等待恢复")
 snapshot = build_status_snapshot(tasks, now=now)
 
 backend = config_data.get("notification", {}).get("backend", "auto")
@@ -327,7 +323,8 @@ else:
         else:
             print("🏃 Runner：on-demand")
     elif isinstance(runner_health, dict) and runner_health.get("worker_id"):
-        print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
+        recovery_note = " · recovery suggested" if runner_summary.get("recovery_suggested") else ""
+        print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}{recovery_note}")
     for line in render_model_health_summary(model_health_summary):
         print(line)
     print("A) 🤖 主会话实际模型：" + (actual_model or "?"))

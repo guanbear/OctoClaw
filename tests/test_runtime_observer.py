@@ -15,36 +15,36 @@ from lib import runtime_observer
 
 
 class RuntimeObserverTests(unittest.TestCase):
-    @patch("lib.runtime_observer.observe_runtime_state_once")
+    @patch("lib.runtime_observer.observe_runtime_snapshot")
     def test_observe_runtime_once_runs_observation_pipeline(
         self,
         mock_observe,
     ) -> None:
         mock_observe.return_value = {
+            "observed_at": "2026-04-04T11:00:00+08:00",
+            "workspace": "/tmp/octoclaw",
             "runner_health": {"present": True, "healthy": True, "reason": "ok"},
+            "runner": {"state": "healthy", "mode": "daemon", "present": True, "healthy": True},
             "runner_execution_mode": "daemon",
             "tasks": [{"id": "task-1", "status": "running"}],
-            "progress_hydrated": 1,
-            "results_hydrated": 1,
-            "heartbeat_reassigned": [{"id": "task-heartbeat"}],
-            "recovered": [{"id": "task-recovered"}],
+            "changes": {"progress_hydrated": 0, "results_hydrated": 0, "heartbeat_reassigned": 0, "dead_agent_recovered": 0},
+            "counts": {"active": 1, "queued": 0, "running": 1, "pending": 0, "final": 0},
+            "recovered_task_ids": [],
+            "heartbeat_reassigned_task_ids": [],
         }
 
         payload = runtime_observer.observe_runtime_once(workspace="/tmp/octoclaw")
 
-        self.assertEqual(payload["changes"]["progress_hydrated"], 1)
-        self.assertEqual(payload["changes"]["results_hydrated"], 1)
-        self.assertEqual(payload["changes"]["heartbeat_reassigned"], 1)
-        self.assertEqual(payload["changes"]["dead_agent_recovered"], 1)
+        self.assertEqual(payload["observed_at"], "2026-04-04T11:00:00+08:00")
         self.assertEqual(payload["counts"]["active"], 1)
-        self.assertEqual(payload["recovered_task_ids"], ["task-recovered"])
         self.assertEqual(payload["runner_execution_mode"], "daemon")
+        mock_observe.assert_called_once_with(workspace="/tmp/octoclaw")
 
     def test_render_observer_text_includes_runner_and_change_summary(self) -> None:
         text = runtime_observer.render_observer_text(
             {
                 "observed_at": "2026-04-03T10:00:00+08:00",
-                "runner_health": {"present": True, "healthy": False, "reason": "stale", "age_seconds": 91},
+                "runner": {"state": "stale", "mode": "daemon", "present": True, "healthy": False, "age_seconds": 91},
                 "counts": {"active": 3, "queued": 1, "running": 2, "pending": 0, "final": 4},
                 "changes": {"progress_hydrated": 2, "results_hydrated": 1, "heartbeat_reassigned": 0, "dead_agent_recovered": 1},
             }
@@ -59,7 +59,7 @@ class RuntimeObserverTests(unittest.TestCase):
         text = runtime_observer.render_observer_text(
             {
                 "observed_at": "2026-04-03T10:00:00+08:00",
-                "runner_health": {"present": False, "healthy": False, "reason": "missing"},
+                "runner": {"state": "on-demand", "mode": "on_demand", "present": False, "healthy": False},
                 "runner_execution_mode": "on_demand",
                 "counts": {"active": 0, "queued": 0, "running": 0, "pending": 0, "final": 0},
                 "changes": {"progress_hydrated": 0, "results_hydrated": 0, "heartbeat_reassigned": 0, "dead_agent_recovered": 0},
