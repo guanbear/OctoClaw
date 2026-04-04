@@ -71,6 +71,10 @@
 ### 完成标准
 - 设计底稿明确写出 feedback loop、IM adaptation、observer/taskflow baseline 已落地
 - 执行计划明确区分：已完成 baseline / 下一步深化 / 明确延后项
+- canonical 文档入口固定在 `docs/`
+  - `docs/octoclaw-design-foundation.md`
+  - `docs/octoclaw-execution-plan.md`
+  - 根目录旧文档默认视为 supporting/archive source，而不是新的计划真相源
 
 > 这一项本轮已经完成。
 
@@ -198,6 +202,15 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - substrate field inventory
 - legacy mirror 依赖清单
 - 哪些表面已完全 substrate-aware，哪些仍处于过渡态
+- `spawn_single` 的 native-preferred create 路径
+- simple `spawn_multi -> linear flow` 的收口路径
+- legacy mirror / fallback 清理顺序
+
+### 这条线现在最具体的推进顺序
+1. `spawn_single`：从 mirror/binding-first 继续推进到 native-preferred create
+2. simple `spawn_multi`：优先收成 linear flow，而不是继续长时间停留在并行 detached shell
+3. display / retrieve / observer / review：把 substrate-aware facts 变成默认读面
+4. 清理 legacy mirror / compatibility fallback，只保留仍然有明确恢复价值的那部分
 
 ---
 
@@ -260,6 +273,22 @@ runner on-demand fallback 已经出现，observer 也已落地，说明系统确
 3. 在 current baseline 还没统一前大规模做 Web full cockpit
 4. 在控制面与 substrate 关系没收清前做激进 Python→Node/TS 迁移
 5. 为了抽象而抽象地重做 taxonomy / protocol 命名
+
+---
+
+## 5.1 明确不是 OctoClaw 当前 blocker 的上游 caveat
+
+以下问题需要明确标记为 upstream / environment caveat，而不是继续吞回 OctoClaw 主线：
+
+- OpenClaw busy-queue / transcript append 在进程刷新或重连窗口下的丢消息风险
+- 某些 IM ingress 没有稳定进入主会话 transcript，导致 OctoClaw replay 根本看不到事件
+
+处理原则：
+
+- 记录为外部依赖风险
+- 在 operator 文档和排障里明确说明
+- 不再把它们重新包装成 OctoClaw runtime 主线 blocker
+- OctoClaw 主线只继续修“消息已经进入 session transcript 之后”的 policy / dispatch / handoff / observer 问题
 
 ---
 
