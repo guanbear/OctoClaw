@@ -56,6 +56,44 @@ class RuntimeSnapshotTests(unittest.TestCase):
         self.assertFalse(payload["runner"]["present"])
         self.assertEqual(payload["counts"]["queued"], 1)
 
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
+    def test_build_runtime_snapshot_normalizes_on_demand_aliases(self, _mock_cfg) -> None:
+        payload = runtime_snapshot.build_runtime_snapshot(
+            runner_health={"present": False, "healthy": False, "reason": "missing"},
+            runner_execution_mode="on_demand",
+        )
+
+        self.assertEqual(payload["runner_execution_mode"], "ondemand")
+        self.assertEqual(payload["runner"]["mode"], "ondemand")
+        self.assertEqual(payload["runner"]["state"], "on-demand")
+        self.assertFalse(payload["runner"]["recovery_suggested"])
+
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
+    def test_build_runtime_snapshot_does_not_suggest_recovery_for_ondemand_mode(self, _mock_cfg) -> None:
+        payload = runtime_snapshot.build_runtime_snapshot(
+            workspace="/tmp/octoclaw",
+            tasks=[],
+            runner_health={"present": False, "healthy": False, "reason": "missing"},
+            runner_execution_mode="ondemand",
+            queue_counts={},
+        )
+
+        self.assertEqual(payload["runner"]["mode"], "ondemand")
+        self.assertFalse(payload["runner"]["recovery_suggested"])
+
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
+    def test_build_runtime_snapshot_marks_missing_runner_in_daemon_mode_for_recovery(self, _mock_cfg) -> None:
+        payload = runtime_snapshot.build_runtime_snapshot(
+            workspace="/tmp/octoclaw",
+            tasks=[],
+            runner_health={"present": False, "healthy": False, "reason": "missing"},
+            runner_execution_mode="daemon",
+            queue_counts={},
+        )
+
+        self.assertEqual(payload["runner"]["state"], "missing")
+        self.assertTrue(payload["runner"]["recovery_suggested"])
+
 
 if __name__ == "__main__":
     unittest.main()

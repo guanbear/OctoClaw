@@ -19,6 +19,14 @@ Longer-term runtime direction:
 - shrink runner toward a lighter on-demand executor
 - let more bounded workflows move to ClawTeam or programmatic tool execution when that is operationally simpler
 
+Runtime role map:
+
+- `runner` = lightweight execution lane
+- `daemon|ondemand` = runner execution mode
+- `observer` = read-only runtime snapshot
+- `patrol` = recovery / reconciliation / notification loop
+- `octoclawctl` = operator control entrypoint
+
 Recommended operator setup for the unified runtime direction:
 
 - `SUPERVISOR_MODE=tmux`
@@ -71,6 +79,15 @@ Current internal source-of-truth docs:
 - [docs/octoclaw-design-foundation.md](./docs/octoclaw-design-foundation.md) — canonical design draft (Chinese)
 - [docs/octoclaw-execution-plan.md](./docs/octoclaw-execution-plan.md) — canonical execution plan (Chinese)
 - [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md) — archived design-note index and classification
+
+Current runtime role map:
+
+- `observer` = read-only runtime snapshot producer
+- `status` = observer text/table/anchor view
+- `patrol` = scheduled supervisor / reconciler / notifier
+- `runner` = lightweight execution lane
+- `daemon|ondemand` = runner execution modes
+- `octoclawctl` = operator control entrypoint
 
 Recent runtime slices now also land two DeerFlow/ClawTeam-inspired observability primitives:
 

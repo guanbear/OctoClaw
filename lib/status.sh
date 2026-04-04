@@ -202,10 +202,16 @@ def load_tasks():
 ts = now.strftime("%Y-%m-%d %H:%M")
 print(f"🐙 八爪鱼状态 [{ts}]")
 print("━━━━━━━━━━━━━━━━━━━━")
-runner_health_ok = False
-runner_health_age = None
+runner_health_ok = bool(runner_summary.get("healthy", False))
 runner_note = ""
-stale_note = ""
+runner_state = str(runner_summary.get("state", "") or ("on-demand" if runner_mode == "ondemand" else "missing")).strip()
+runner_age = runner_summary.get("age_seconds")
+runner_worker_id = str(
+    runner_summary.get("worker_id")
+    or runner_health.get("worker_id")
+    or (runner_health.get("health", {}) if isinstance(runner_health.get("health", {}), dict) else {}).get("worker_id", "")
+    or ""
+).strip()
 if isinstance(runner_health, dict) and runner_health.get("worker_id"):
     runner_job = runner_health.get("job_id", "")
     heartbeat = runner_health.get("last_heartbeat_at", "")
@@ -219,13 +225,8 @@ if isinstance(runner_health, dict) and runner_health.get("worker_id"):
                 heartbeat_dt = heartbeat_dt.astimezone(now.tzinfo)
     except Exception:
         heartbeat_dt = None
-    if heartbeat_dt:
-        runner_health_age = int(max(0, (now - heartbeat_dt).total_seconds()))
-        runner_health_ok = runner_health_age <= RUNNER_STALE_SECONDS
     if runner_job and heartbeat_dt and runner_health_ok and (now - heartbeat_dt).total_seconds() <= 30:
         runner_note = f" · 当前任务 {runner_job}"
-    if runner_health_age is not None and not runner_health_ok:
-        stale_note = f" · stale {runner_health_age}s"
 tasks = load_tasks()
 snapshot = build_status_snapshot(tasks, now=now)
 
@@ -318,13 +319,15 @@ else:
                 f"packs {packs_text}"
             )
     if runner_mode == "ondemand":
-        if isinstance(runner_health, dict) and runner_health.get("worker_id"):
-            print(f"🏃 Runner：on-demand · {runner_health.get('worker_id')}{runner_note}{stale_note}")
+        if runner_worker_id:
+            print(f"🏃 Runner：on-demand · {runner_worker_id}{runner_note}")
         else:
             print("🏃 Runner：on-demand")
-    elif isinstance(runner_health, dict) and runner_health.get("worker_id"):
+    else:
+        age_note = f" · age={runner_age}s" if isinstance(runner_age, int) else ""
+        state_note = "" if runner_state == "healthy" else f" · {runner_state}"
         recovery_note = " · recovery suggested" if runner_summary.get("recovery_suggested") else ""
-        print(f"🏃 Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}{recovery_note}")
+        print(f"🏃 Runner：{runner_worker_id or runner_state}{state_note}{age_note}{runner_note}{recovery_note}")
     for line in render_model_health_summary(model_health_summary):
         print(line)
     print("A) 🤖 主会话实际模型：" + (actual_model or "?"))
@@ -360,8 +363,11 @@ if task_first_view:
     diagnostics = []
     if runner_mode == "ondemand":
         diagnostics.append("Runner：on-demand")
-    elif isinstance(runner_health, dict) and runner_health.get("worker_id"):
-        diagnostics.append(f"Runner：{runner_health.get('worker_id')}{runner_note}{stale_note}")
+    else:
+        age_note = f" · age={runner_age}s" if isinstance(runner_age, int) else ""
+        state_note = "" if runner_state == "healthy" else f" · {runner_state}"
+        recovery_note = " · recovery suggested" if runner_summary.get("recovery_suggested") else ""
+        diagnostics.append(f"Runner：{runner_worker_id or runner_state}{state_note}{age_note}{runner_note}{recovery_note}")
     model_health_lines = render_model_health_summary(model_health_summary)
     if model_health_lines and model_health_lines != ["🩺 模型健康：no health signals yet"]:
         diagnostics.extend(model_health_lines)

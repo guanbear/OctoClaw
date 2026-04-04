@@ -321,7 +321,7 @@ class RunnerRuntimeTests(unittest.TestCase):
         ):
             payload = dispatch_task.dispatch_runner(args)
 
-        self.assertEqual(payload["runner_execution_mode"], "on_demand")
+        self.assertEqual(payload["runner_execution_mode"], "ondemand")
         self.assertTrue(payload["runner_execution"]["triggered"])
         self.assertTrue(payload["runner_execution"]["ok"])
         self.assertEqual(payload["wait"]["status"], "done")

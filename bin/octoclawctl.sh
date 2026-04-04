@@ -48,7 +48,22 @@ print_usage() {
 Usage:
   bash bin/octoclawctl.sh <status|ps|up|down|restart|reload|patrol-once|observe-once|runner-status> [target]
 
-Targets:
+Observe commands:
+  status         render the compact operator status view
+  ps             print runtime process/supervisor state
+  observe-once   print the read-only runtime observer snapshot once
+  runner-status  print runner queue/health details
+
+Control commands:
+  up             start the selected runtime target
+  down           stop the selected runtime target
+  restart        restart the selected runtime target
+  reload         alias of restart for managed targets
+
+Supervise commands:
+  patrol-once    run a single patrol supervision pass
+
+Targets (for up/down/restart/reload):
   all       openclaw + runner + patrol (default for up/down/restart)
   runtime   runner + patrol
   openclaw  main OpenClaw service only
@@ -64,7 +79,7 @@ Examples:
   bash bin/octoclawctl.sh observe-once
 
 Runtime env:
-  RUNNER_MODE=daemon    keep resident runner runtime (default)
+  RUNNER_MODE=daemon    keep resident runner mode (default)
   RUNNER_MODE=ondemand  skip resident runner; dispatch will trigger one-shot runner passes when needed
 EOF
 }

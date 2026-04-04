@@ -725,10 +725,10 @@ def dispatch_runner(args) -> dict:
         response["runner_plan"] = playbook
         response["playbook"] = playbook
     if args.wait and not runner_health_is_healthy():
-        response["runner_execution_mode"] = "on_demand"
+        response["runner_execution_mode"] = "ondemand"
         response["runner_execution"] = run_runner_on_demand(str(payload.get("id", "") or ""))
     if args.wait:
-        wait_timeout = 1 if response.get("runner_execution_mode") == "on_demand" else args.wait_timeout_seconds
+        wait_timeout = 1 if response.get("runner_execution_mode") == "ondemand" else args.wait_timeout_seconds
         response["wait"] = wait_for_runner_result(payload.get("id", ""), wait_timeout)
     response["handoff"] = build_runner_handoff(args.task, response, response.get("wait"))
     return response

@@ -34,6 +34,15 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
 RUNNER_STALE_SECONDS = 120
 
 
+def normalize_runner_mode(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"ondemand", "on_demand"}:
+        return "ondemand"
+    if text == "daemon":
+        return "daemon"
+    return ""
+
+
 def parse_iso(value: str) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -132,10 +141,10 @@ def build_runtime_snapshot(
         + int(counts_by_status.get("deferred", 0) or 0)
     )
     runner = dict(runner_health or {})
-    mode = str(runner_execution_mode or "").strip() or ("daemon" if runner.get("present", False) else "ondemand")
+    mode = normalize_runner_mode(runner_execution_mode) or ("daemon" if runner.get("present", False) else "ondemand")
     runner_state = "healthy"
     if not runner.get("present", False):
-        runner_state = "on-demand"
+        runner_state = "on-demand" if mode == "ondemand" else str(runner.get("reason", "missing") or "missing")
     elif not runner.get("healthy", False):
         runner_state = str(runner.get("reason", "stale") or "stale")
     workbench = workbench_config(load_octopus_config())
@@ -151,7 +160,7 @@ def build_runtime_snapshot(
             "age_seconds": int(runner.get("age_seconds", 0) or 0) if runner.get("age_seconds") is not None else None,
             "worker_id": str(runner.get("worker_id", "") or "").strip(),
             "mode": mode,
-            "recovery_suggested": bool(mode != "ondemand" and runner.get("present", False) and not runner.get("healthy", False)),
+            "recovery_suggested": bool(mode != "ondemand" and runner_state != "healthy"),
         },
         "counts": {
             "total": len(runtime_tasks),
@@ -187,7 +196,7 @@ def build_runtime_snapshot(
 def observe_runtime_snapshot(*, workspace: str = WORKSPACE) -> dict[str, Any]:
     tasks = load_runtime_tasks()
     runner_health = load_runner_health()
-    runner_execution_mode = resolve_runner_mode()
+    runner_execution_mode = normalize_runner_mode(resolve_runner_mode()) or "daemon"
     queue_counts = load_runner_queue_counts()
     return build_runtime_snapshot(
         workspace=workspace,

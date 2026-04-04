@@ -102,6 +102,8 @@
 - 一份更严格的 runtime role map（observer / patrol / runner / ctl）
 - 对应代码中的职责清单和收口方向
 - 明确哪些 loop 保留常驻、哪些改成按需或 observer 吸收
+- 明确 `runner = lane`、`daemon|ondemand = mode`、`status = observer view`
+- 让 CLI help / README / canonical docs 都使用同一套角色定义
 
 ---
 

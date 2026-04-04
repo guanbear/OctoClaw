@@ -160,6 +160,23 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 
 ---
 
+## 4.4 运行时角色图（P1 约束）
+
+P1 之后，运行时角色应固定成下面这张表：
+
+| 角色 | 定义 | 是否只读 | 是否主动干预 |
+|---|---|---:|---:|
+| `observer` | 统一 runtime snapshot producer | 是 | 否 |
+| `status` | observer 的文本/表格/anchor 视图 | 是 | 否 |
+| `patrol` | scheduled supervisor / reconciler / notifier | 否 | 是 |
+| `runner` | 轻任务执行 lane | 否 | 是 |
+| `daemon/ondemand` | runner 的 execution mode，而不是新的 lane | n/a | n/a |
+| `ctl` | operator control entrypoint | 否 | 是 |
+
+这张角色图必须在 docs / code / CLI 中保持一致。
+
+---
+
 ## 5. 当前已经落地到什么程度
 
 这部分是对旧设计文档最重要的校准。
@@ -306,6 +323,24 @@ runner 不是单纯“长期常驻快腿”，而是：
 > **轻任务执行 lane + 可以常驻也可以 on-demand 的执行器形态。**
 
 这点必须和最近提交对齐，否则会误判很多已完成工作。
+
+### 6.2.1 runtime role map（P1 收口后的统一定义）
+
+为避免后续文档和代码继续混用，P1 统一采用下面这组定义：
+
+- **`runner`**：轻任务执行 **lane**
+- **`daemon|ondemand`**：runner 的 **execution mode**
+- **`observer`**：只读 runtime snapshot producer
+- **`patrol`**：scheduled supervisor / reconciler / notifier
+- **`ctl`**：operator control entrypoint
+- **`status`**：observer 的文本视图，而不是独立世界观
+
+这组定义意味着：
+
+- 不能再把 `runner` 直接等同于常驻进程
+- 不能再把 `observer` 和 `patrol` 当同一个角色
+- 不能再让 `status` 在展示层偷偷修改 runtime 事实
+- 不能再让 `ctl` 维护自己的平行状态心智
 
 ### 6.3 observer 也不是唯一主线
 
