@@ -66,11 +66,11 @@ It sits between the main OpenClaw agent and sub-agents, then handles:
 - Text status views: [`status.sh`](./lib/status.sh)
 - Minimal replay/eval harness: [`eval_suite.py`](./lib/eval_suite.py)
 
-Recent design notes worth reading before deeper runtime changes:
+Current internal source-of-truth docs:
 
-- [octoclaw-state-machine-remediation-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-state-machine-remediation-v1-2026-03-29.md)
-- [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
-- [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
+- [docs/octoclaw-design-foundation.md](./docs/octoclaw-design-foundation.md) — canonical design draft (Chinese)
+- [docs/octoclaw-execution-plan.md](./docs/octoclaw-execution-plan.md) — canonical execution plan (Chinese)
+- [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md) — archived design-note index and classification
 
 Recent runtime slices now also land two DeerFlow/ClawTeam-inspired observability primitives:
 
@@ -456,8 +456,8 @@ Because current OpenClaw TUI exposes `--profile` rather than a direct `--model` 
 - OctoClaw maps the final selected model to a profile only when needed by the execution backend
 - ClawTeam receives the final OpenClaw command and runs it in tmux
 
-See [clawteam-integration-analysis-2026-03-25.md](./clawteam-integration-analysis-2026-03-25.md) for the architecture notes and tradeoffs.
-See [octoclaw-clawteam-unified-runtime-v1-2026-03-25.md](./octoclaw-clawteam-unified-runtime-v1-2026-03-25.md) for the target unified runtime design.
+See [clawteam-integration-analysis-2026-03-25.md](./docs/archive/design-notes/clawteam-integration-analysis-2026-03-25.md) for the architecture notes and tradeoffs.
+See [octoclaw-clawteam-unified-runtime-v1-2026-03-25.md](./docs/archive/design-notes/octoclaw-clawteam-unified-runtime-v1-2026-03-25.md) for the target unified runtime design.
 
 Useful inspection commands:
 
@@ -573,9 +573,12 @@ Heavier protocol rules are only turned on for complex `spawn_single` / `spawn_mu
 ├── README.md
 ├── README.zh-CN.md
 ├── SKILL.md
-├── install.sh
 ├── CHANGELOG.md
 ├── RELEASE_NOTES_v0.1.0.md
+├── docs/
+│   ├── octoclaw-design-foundation.md
+│   ├── octoclaw-execution-plan.md
+│   └── archive/
 ├── schemas/
 ├── extensions/
 │   └── octoclaw-runtime/
@@ -603,6 +606,5 @@ Heavier protocol rules are only turned on for complex `spawn_single` / `spawn_mu
 
 ## Archived Design Notes
 
-- [SKILL.md](./SKILL.md)
-- [octoclaw-direction-analysis-2026-03-19.md](./octoclaw-direction-analysis-2026-03-19.md)
-- [octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md](./octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md)
+- [Archive index](./docs/archive/design-notes/README.md)
+- Historical design notes now live under [`docs/archive/design-notes/`](./docs/archive/design-notes/)

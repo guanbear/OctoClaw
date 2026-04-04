@@ -14,6 +14,14 @@ OctoClaw 重点解决三件事：
 
 ---
 
+## 当前文档真相源
+
+- [docs/octoclaw-design-foundation.md](./docs/octoclaw-design-foundation.md)：新的主设计底稿
+- [docs/octoclaw-execution-plan.md](./docs/octoclaw-execution-plan.md)：新的执行计划
+- [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md)：历史设计归档索引与分级说明
+
+这三份文档替代根目录里分散的旧设计笔记，作为后续开发时优先查看的入口。
+
 ## 为什么是 OctoClaw
 
 OctoClaw 不是单纯的模型路由器，也不是单纯的 agent 模板。
@@ -167,6 +175,5 @@ WORKSPACE=/workspace PYTHONPATH=/workspace/openclaw/skills/octopus/lib python3 .
 
 ## 历史设计归档
 
-- [SKILL.md](./SKILL.md)
-- [octoclaw-direction-analysis-2026-03-19.md](./octoclaw-direction-analysis-2026-03-19.md)
-- [octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md](./octoclaw-roadmap-multi-agent-cost-speed-2026-03-20.md)
+- [归档索引](./docs/archive/design-notes/README.md)
+- 所有旧设计文档现已迁移到 [`docs/archive/design-notes/`](./docs/archive/design-notes/)
