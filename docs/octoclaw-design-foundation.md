@@ -1,33 +1,34 @@
 # OctoClaw 主设计底稿
 
-> 状态：当前 canonical 设计底稿（2026-04-03）  
+> 状态：当前 canonical 设计底稿（2026-04-04）  
 > 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
 > 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
-## 1. 这份文档解决什么问题
+## 1. 这份文档现在要解决什么问题
 
-OctoClaw 过去两周快速积累了大量设计笔记、方向分析、路线图和专题方案。它们各自都提供了价值，但也带来了三个问题：
+OctoClaw 的问题已经不再是“方向是否成立”，而是：
 
-1. **source of truth 分散**：设计判断散落在多份日期文档里，需要靠记忆决定“现在到底信哪一份”。
-2. **时间序列叠加导致口径漂移**：越早的文档越强调 ClawTeam 作为核心运行面，越新的提交则明显转向 unified runtime observer、taskflow-bound substrate 和更轻的 on-demand runner。
-3. **近期计划与长期终局混在一起**：有的文档更像方向分析，有的更像迁移计划，有的更像切片实施记录，缺少统一抽象层。
+1. **设计真相源分散**：产品设计、复盘、taskflow 迁移、展示层、状态机、借鉴笔记都各自有价值，但没有一份文档把“哪些已经落地、哪些仍是缺口、哪些只保留历史价值”说清楚。
+2. **近期实现推进很快，文档容易落后**：尤其是 2026-04-02 到 2026-04-03 的提交已经把 runtime observer、taskflow substrate、reply review、replay validation、IM thread truth、task anchors、resume persistence 推进到了“基础可用”阶段。
+3. **旧文档里的一些主题仍然有效，但不能再按原来的优先级理解**：比如反馈闭环、IM 适配、展示层、artifact retrieval 不是“未来才开始做”，而是“已经落地第一拍，下一步应该做深、做统一”。
 
-这份主设计底稿的目标，是把这些分散判断收口成当前可执行的长期设计真相源。
+这份文档的目标，是把当前代码与旧设计重新对齐，给后续开发提供一个基于**现状**而不是基于**旧路线假设**的判断底稿。
 
 ---
 
 ## 2. 当前一句话定义
 
-> **OctoClaw 是 OpenClaw 之上的执行面调度层、成本控制层和可观察控制层。**
+> **OctoClaw 是 OpenClaw 之上的执行面调度层、成本控制层、反馈闭环层和可观察控制层。**
 
-它的职责不是“再造一个通用 agent framework”，也不是“替代 OpenClaw 的 task runtime”，而是：
+这里特意把“反馈闭环层”补回来，因为当前代码已经不只是 route/dispatch/status：
 
-- 决定一个请求该走哪条执行 lane
-- 决定不同任务该用什么 worker pool / phase / model policy
-- 用统一的 runtime truth 把任务、artifact、session、状态和回传串起来
-- 在需要时使用更重的 operator backend，但不把它们当成唯一依赖
+- 有 replay log、summary、review、curate、automation
+- 有 nightly reply review / replay validation / learning log
+- 有 route diff / policy diff / promotion hints / eval fixture export
+
+也就是说，OctoClaw 已经开始具备“观察 → 复盘 → 提炼 → 调整”的基础闭环，而不是只有静态策略。
 
 ---
 
@@ -37,10 +38,14 @@ OctoClaw **不是**：
 
 - 一个独立于 OpenClaw 的通用多 Agent 平台
 - 一个只做模型打分的 router
-- 一个永远依赖长期常驻 worker / tmux swarm 才能工作的 runtime
-- 一个以 README 叙事为中心、却没有运行时真相源的提示词集合
+- 一个完全依赖长期常驻 swarm 才能运行的 runtime
+- 一个只在终端里可见、没有 IM 与多表面适配能力的内部脚本集合
 
-换句话说，OctoClaw 不应该把“调度脑”“运行面”“展示面”“实验笔记”继续混成一团。
+换句话说，它不能被缩减成“只剩 observer + taskflow substrate”，因为这会丢掉已经落地的：
+
+- replay/review/eval feedback loop
+- IM/session/thread/task-anchor 适配层
+- notification / channel rendering / task action surface
 
 ---
 
@@ -48,108 +53,209 @@ OctoClaw **不是**：
 
 ### 4.1 OpenClaw 负责 substrate facts
 
-OpenClaw 是 runtime substrate，负责：
+OpenClaw 继续是 runtime substrate，负责：
 
 - detached task / flow 事实层
-- 任务的基础生命周期与回到 session 的基线能力
-- 原生 node / gateway / extension / tool 接入面
+- 任务基础生命周期与回到 session 的基线能力
+- node / gateway / extension / tool 接入面
 
-OctoClaw 不再把自己定位成 substrate 替代品，而是**覆盖在 substrate 上面的决策与控制层**。
+### 4.2 OctoClaw 负责四类增量能力
 
-### 4.2 OctoClaw 负责 policy + control
+OctoClaw 当前真正负责的是四层增量：
 
-OctoClaw 继续拥有：
+1. **Policy layer**
+   - route decision
+   - worker_pool / work_type / phase / profile / model policy
+   - review / budget / delivery policy
 
-- route decision
-- work contract / worker pool / phase / profile 选择
-- model selection policy
-- review / budget / delivery policy
-- runtime task record 与 artifact 组织
-- text-first 的 status / details / timeline / graph / retrieve / ctl 观察面
+2. **Control / observer layer**
+   - status / details / timeline / graph / retrieve / queue / ctl
+   - runtime observer
+   - patrol-based recovery and visibility
 
-### 4.3 Operator backend 是可选层，不是核心真相源
+3. **Feedback loop layer**
+   - replay logging / replay summary / replay review / replay curate
+   - nightly replay automation
+   - nightly reply review / validation
+   - eval fixture export / learning log / promotion hints
 
-ClawTeam、tmux workbench、programmatic tool execution 都属于**可选 operator backend**。
+4. **IM / display adaptation layer**
+   - session-thread truth
+   - task anchors
+   - channel-specific notification rendering
+   - task action fallback commands
+   - text/rich dual rendering surface
 
-它们的价值在于：
+这四层合在一起，才是当前代码里的 OctoClaw，而不只是其中某一层。
 
-- 提供更重的协作运行面
-- 承载更强的 inbox / board / 人工接管 / 工作台体验
-- 在重任务或人工介入场景中提升可操作性
+### 4.3 Operator backend 是增强层，不是唯一运行面
 
-但它们不应该继续被定义成 OctoClaw 的唯一核心运行面。当前方向已经收敛到：
+ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当前代码方向已经很明确：
 
-- `ClawTeam`：保留为 optional backend
-- `tmux`：作为推荐 operator workbench
-- 更轻、更程序化的路径：优先让更多工作落在 OpenClaw substrate + OctoClaw control plane 上
+- ClawTeam 仍有参考价值
+- tmux 仍是推荐 operator workbench
+- 但默认真相源越来越偏向 OpenClaw substrate + OctoClaw 自己的 control/feedback/display surface
+
+这意味着：
+
+> **OctoClaw 现在的核心竞争力，不是“能不能借一个重 runtime”，而是“能不能把 policy、feedback、IM、observer 这些系统层做成一套可持续演进的产品心智”。**
 
 ---
 
-## 5. 当前执行模型
+## 5. 当前已经落地到什么程度
 
-### 5.1 四条执行 lane 仍然成立
+这部分是对旧设计文档最重要的校准。
 
-当前仍以四条 lane 为基础：
+### 5.1 substrate / observer / continuity：已到基础可用
+
+以下方向不是空白，而是已经落地了第一拍：
+
+- `aedaffc` — runner jobs 进入 taskflow-bound tasks
+- `8b9510b` — native taskflow control metadata
+- `d963dfa` — session resume context persistence
+- `ec335e8` — runtime observer + on-demand runner fallback
+- `e9bf47b` — patrol observation pass 与 on-demand runner mode 收口
+- `17abf08` — unified `octoclawctl` control entrypoint
+
+配套代码/测试包括：
+
+- `lib/openclaw_taskflow_adapter.py`
+- `lib/runtime_observer.py`
+- `lib/session_resume.py`
+- `tests/test_openclaw_taskflow_adapter.py`
+- `tests/test_runtime_observer.py`
+- `tests/test_session_resume.py`
+
+所以现在不能再把“taskflow substrate 接入”“observer 基础层”“resume continuity”写成纯未来事项。
+
+### 5.2 反馈闭环：已不是概念，已经有 baseline
+
+你提到的“反馈闭环”我之前写轻了，这次需要纠正。
+
+当前代码里已经有完整的 baseline：
+
+- replay 事件：`runtime-policy-replay.jsonl`
+- 汇总：`lib/replay_summary.py`
+- review：`lib/replay_review.py`
+- curate：`lib/replay_curate.py`
+- automation：`lib/replay_automation.py`
+- reply/delegation review packet：`lib/reply_review_packet.py`
+- replay validation：`lib/replay_validation.py`
+- eval fixture export：`lib/eval_fixture_export.py`
+- learn/error promotion：`lib/learning_log.py`、`lib/nightly_error_review.py`
+- rollout promotion hints：`lib/runtime_policy_rollout.py`
+
+配套测试也已经存在：
+
+- `tests/test_replay_review.py`
+- `tests/test_replay_automation.py`
+- `tests/test_replay_summary.py`
+- `tests/test_replay_curate.py`
+- `tests/test_runtime_policy_replay_schema.py`
+- `tests/test_reply_review_packet.py`
+
+这说明当前更准确的说法应该是：
+
+> **反馈闭环已经从“要不要做”进入“怎么把各条闭环统一成一个更稳的学习系统”。**
+
+也就是说，问题不是从 0 开始补 feedback loop，而是：
+
+- 现在 replay / review / nightly review / validation / learning promotion 已经有了
+- 但还没完全收成一个清晰的“观察 → 判断 → 提升 → 回归验证”的统一产品面
+
+### 5.3 IM 适配：也已经落地第一拍，而不是还没开始
+
+你指出“IM 的适配”被我写没了，这个判断是对的。
+
+当前代码里已落地的 IM / channel / anchor 基础包括：
+
+- session-thread binding map
+- anchor send / edit / fallback send
+- task notification payload by backend
+- Slack / Feishu / Telegram / Discord / WhatsApp 等适配分支
+- task action fallback commands（details / queue / artifacts / retrieve / graph / timeline / explorer / stop / retry / approve / reject）
+- text fallback + rich payload 并存
+
+主要代码：
+
+- `lib/im_thread.py`
+- `lib/notifier.py`
+- `lib/task_display.py`
+- `lib/task_anchor_commands.py`
+- `lib/session_ops.py`
+
+主要测试：
+
+- `tests/test_im_thread.py`
+- `tests/test_notifier.py`
+- `tests/test_task_display.py`
+- `tests/test_task_anchor_commands.py`
+- `tests/test_task_events.py`
+- `tests/test_patrol_notifications.py`
+
+这意味着旧文档中关于：
+
+- IM-native 展示层
+- channel capability matrix
+- thread/topic binding
+- anchor-first task presentation
+
+并不是“过时到可以忽略”，而是：
+
+> **很多已经进入基础实现，但还没有完全收口成一份更稳定的产品化描述。**
+
+### 5.4 artifact/retrieve/display surface：已不是未来设想
+
+当前不是只有 task-state 和脚本：
+
+- `details / timeline / graph / retrieve / explorer / queue`
+- operator surface
+- task anchor text/slack payload
+- artifact index / related thread artifacts / context pack / resume snapshot
+
+这些都已经是产品表面的一部分。
+
+所以“展示层”现在的真实状态应定义为：
+
+- **CLI / text-first operator surface：已基础可用**
+- **IM anchor / thread / fallback interaction：已基础可用**
+- **Web/UI cockpit / richer capability matrix parity：仍在后续主战场**
+
+---
+
+## 6. 当前执行模型
+
+### 6.1 四条 lane 仍然成立
+
+仍然是：
 
 - `direct`
 - `runner`
 - `spawn_single`
 - `spawn_multi`
 
-但新的解释口径不是“任务像什么”，而是“**该请求应该签哪种执行合同**”。
-
-也就是说，route 的目标是选择：
+但 route 的意义应继续从“任务像什么”收敛到“执行合同选择”：
 
 - 是否需要 durable runtime
-- 是否值得委派
-- 是否需要 fan-out / multi-owner coordination
-- 是否要走更重的 review / artifact / recovery protocol
+- 是否需要 artifact-first 结果
+- 是否需要 review / merge / handoff guardrail
+- 是否值得 multi-worker 协同
 
-### 5.2 runner 不再被理解为“必须永远常驻的快腿”
+### 6.2 runner 的当前定义要更精确
 
-后续提交已经把方向进一步推向：
+runner 不是单纯“长期常驻快腿”，而是：
 
-- unified runtime observer
-- on-demand runner fallback
-- runner task taskflow-bound substrate
+> **轻任务执行 lane + 可以常驻也可以 on-demand 的执行器形态。**
 
-因此，runner 的当前定义应调整为：
+这点必须和最近提交对齐，否则会误判很多已完成工作。
 
-> **优先服务轻量 shell / API / 状态检查的执行 lane；具体运行形态可以是常驻、半常驻或按需拉起，但其结果必须进入统一的 runtime truth。**
+### 6.3 observer 也不是唯一主线
 
-### 5.3 spawn 任务必须 artifact-first
+我上次把 observer 线写得太重，导致挤掉了 feedback loop 和 IM adaptation。现在更准确的表达应该是：
 
-复杂任务不应把长结果直接回灌主上下文，而应优先落成：
-
-- task event log
-- artifact index
-- checklist persistence
-- report / packet / retrieve-friendly output
-
-这也是 OctoClaw 区别于“只会把 prompt 扔给子 agent”的关键所在。
-
----
-
-## 6. 当前运行时方向：用较新的提交校准旧设计
-
-以下几类较新的提交，足以说明 3 月中下旬的许多文档虽然仍有价值，但已经不是完整真相源：
-
-- `aedaffc` — Promote runner jobs to taskflow-bound tasks
-- `17abf08` — Add unified octoclawctl runtime control entrypoint
-- `ec335e8` — Extract runtime observer and add on-demand runner fallback
-- `e9bf47b` — Unify patrol observation pass and ondemand runner mode
-- `8b9510b` — add native taskflow control metadata
-- `d963dfa` — persist session resume contexts
-
-这些提交意味着：
-
-1. **taskflow substrate 已经从 spawn 扩到 runner 与 control metadata 侧。**
-2. **patrol 不再只是独立脚本语义，而是朝统一 observer 收拢。**
-3. **runner 方向从“重度长期常驻”收敛到“必要时常驻、否则可按需”。**
-4. **控制面已经开始收口到统一入口，而不是多个分散脚本心智模型。**
-5. **resume / continuity 已经成为 runtime truth 的一部分，而不是附加功能。**
-
-因此，凡是仍把 ClawTeam 视为唯一核心运行面、把 runner 视为必须持续常驻、或者没有把 taskflow-bound substrate 当成第一事实层的旧文档，都只能作为历史设计记录或局部参考。
+- observer 是一条核心收口线
+- 但它要和 feedback loop、IM/display、substrate binding 一起看
+- 不能把系统缩减成“observer-only 架构”
 
 ---
 
@@ -157,78 +263,107 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于**可选 operat
 
 ### 7.1 workflow-first，agent-second
 
-优先判断 workflow 是否足以解决问题；只有当 workflow 无法满足目标，才升级到更重的 agent coordination。
+默认先问 workflow 是否足够，只有必要时才上更重的 agent coordination。
 
 ### 7.2 policy-first，而不是 prompt-first
 
-委派、回收、review、model choice、lane selection 必须先是系统行为，再由模型协助，而不是把核心判断寄托给主脑“记不记得该怎么做”。
+委派、review、lane selection、budget choice 必须先是系统行为。
 
 ### 7.3 substrate-first truth
 
-任务状态、artifact、resume、control metadata 应尽量绑定 OpenClaw substrate facts，再由 OctoClaw 追加策略语义，而不是反过来伪造一套脱离 substrate 的平行真相层。
+执行事实尽量绑定 OpenClaw substrate，OctoClaw 在其上叠加策略语义、反馈语义和展示语义。
 
-### 7.4 optional backend，而不是 backend-first
+### 7.4 artifact-first，event-first，state-first
 
-ClawTeam / tmux / heavier operator runtime 的价值是真实存在的，但它们必须是可选增强，不应再定义系统边界。
+长结果、回放、review、任务恢复都不应继续依赖原始 transcript。
 
-### 7.5 artifact-first，而不是 transcript-first
+### 7.5 feedback-first operations
 
-复杂任务的主要产出应该是 artifact 与 structured result，而不是把原始对话和长输出塞回主链。
+系统必须允许：
 
-### 7.6 文档层也要有 source-of-truth 分级
+- replay 观察
+- nightly review
+- validation
+- learning promotion
+- rollout promotion heuristics
 
-从现在开始，文档也要遵守分层：
+这些能力已经存在，后续设计应围绕“怎么统一和深化”而不是“有没有必要做”。
 
-1. **canonical**：本文件 + 执行计划
-2. **active supporting references**：仍值得作为局部设计依据的专题文档
-3. **historical archive**：保留决策演化背景，但不再作为当前真相源
+### 7.6 IM-native but surface-adaptive
 
----
+OctoClaw 不应该只做终端体验，也不该试图把所有 IM 强行做成同一种 UI。
 
-## 8. 当前架构中的关键张力
+更合理的原则是：
 
-### 8.1 Python control plane 仍然过重
-
-当前 repo 仍有大量 Python runtime/control-plane 脚本。这并不等于马上要全面迁移，但意味着语言边界必须在后续执行计划里明确，不然设计和实现会继续漂移。
-
-### 8.2 route 语义与 work contract 心智尚未完全对齐
-
-文档层已经更偏向“执行合同选择”，但部分实现与叙事仍带有“任务像什么”的旧惯性。
-
-### 8.3 observer / patrol / runner 的统一仍在进行中
-
-近期提交显示方向已经清晰，但还没有完全到“单一运行时心智”。
-
-### 8.4 README 与历史文档仍混杂操作说明、方向判断、实验材料
-
-这是本轮文档重组要解决的问题之一：README 做入口，新 canonical docs 做判断，archive 保留历史，不再让读者在根目录里自己猜哪篇最重要。
+- 统一 common data model
+- channel-specific rendering
+- rich when possible, text fallback when necessary
+- IM 做 lightweight ops，full cockpit 留给更强的 control/UI 面
 
 ---
 
-## 9. 文档分级结论
+## 8. 当前仍存在的关键张力
+
+### 8.1 实现上已经有多条闭环，但还没有一份统一的闭环产品叙事
+
+replay、review、nightly automation、reply review、validation、learning promotion 都有了，但它们目前更像一组能力，而不是一个被文档明确命名的统一系统。
+
+### 8.2 IM/display 已有 baseline，但 capability matrix 还没有产品级收口
+
+anchor、thread binding、notification backend、task actions 已经存在；但：
+
+- 不同 channel 的交互深度仍不完全对齐
+- capability matrix 还主要存在于旧设计文档里
+- Web/UI full cockpit 仍未形成统一后续路线
+
+### 8.3 observer / runner / patrol / ctl 的职责虽然推进很快，但仍在收口中
+
+这条线仍重要，但它应该被理解为“收口已落地 baseline 的系统层”，不是唯一未完成主题。
+
+### 8.4 Python / Node/TS 的边界仍未最终收清
+
+当前 Python 在 glue code、nightly review、taskflow/control-plane 里仍承担大量角色；要不要迁、迁哪些，必须建立在已经落地的真实行为之上，而不是抽象洁癖。
+
+---
+
+## 9. 文档分级结论（重新解释）
 
 完整分级见 [`archive/design-notes/README.md`](./archive/design-notes/README.md)。
 
-高层结论是：
+但这里需要强调一个关键修正：
 
-- **仍有局部参考价值，但不再能当总纲的文档**：`octoclaw-product-design-v2-*`、`octoclaw-review-and-action-plan-*`、`octoclaw-openclaw-task-flow-*`、`octoclaw-state-machine-remediation-*` 等
-- **更偏外部研究/借鉴输入的文档**：`clawteam-*`、`deerflow-*`、`octoclaw-anthropic-agent-engineering-notes-*`
-- **明显属于早期路线判断、已经被后续 runtime direction 收口的文档**：`octoclaw-direction-analysis-*`、`octoclaw-roadmap-*`、`octoclaw-strategy-summary-*`
+- `octoclaw-product-design-v2-*` 和 `octoclaw-review-and-action-plan-*` 虽然不是当前 canonical docs，**但不是因为它们提到的很多事情没做，而是因为它们把“已落地 / 部分落地 / 未落地”混在同一条路线里，没有被最新代码状态重新切层。**
+- 其中关于：
+  - feedback loop
+  - IM/display adaptation
+  - task anchor / artifact / retrieve
+  - replay / review / policy diff
+  - economics / eval / learning loop
+
+  这些主题并没有消失，而是需要被重新纳入当前 canonical 设计叙事。
 
 ---
 
-## 10. 现在的目标结构
-
-当前可以把 OctoClaw 的目标结构收敛成：
+## 10. 当前系统的更准确目标结构
 
 ```text
 OpenClaw substrate
   -> tasks / flows / native control metadata / session return baseline
 
-OctoClaw policy + control
-  -> route / dispatch / model policy / task records / artifact shaping
-  -> status / details / timeline / graph / retrieve / ctl
-  -> observer / resume / recovery / budget / delivery policy
+OctoClaw policy layer
+  -> route / dispatch / model policy / budget / review / delivery policy
+
+OctoClaw observer + control layer
+  -> status / details / timeline / graph / retrieve / queue / ctl
+  -> patrol / observer / runtime continuity
+
+OctoClaw feedback loop layer
+  -> replay / summary / review / curate / automation / validation / learning
+
+OctoClaw IM / display adaptation layer
+  -> session-thread truth
+  -> task anchors
+  -> channel renderers / notification adapters / fallback commands
 
 Optional operator backend
   -> tmux workbench
@@ -236,22 +371,19 @@ Optional operator backend
   -> programmatic execution helpers
 ```
 
-如果未来再继续演进，核心不是“再加更多 agent 类型”，而是：
-
-- 进一步减少不必要的常驻件
-- 让 substrate 绑定更完整
-- 让 control surface 更一致
-- 让 heavy backend 更晚、更按需地介入
+这比我上一次写的版本更接近当前代码现实。
 
 ---
 
 ## 11. 这份底稿的使用方式
 
-后续所有实现判断，优先问四个问题：
+以后如果你要判断一个改动是否值得做，优先问六个问题：
 
-1. 这项改动是在强化 substrate truth，还是又造了一套平行 truth？
-2. 这项改动是在简化 lane / control / observer 心智，还是又增加新的分叉？
-3. 这项改动是在削弱对重 backend 的刚性依赖，还是把系统重新绑回去？
-4. 这项改动能否进入执行计划的近期优先级，而不是只停留在概念层？
+1. 它是在强化 substrate truth，还是又造了一套平行真相源？
+2. 它是在收口 observer/control，还是又增加一条新的运行时心智分叉？
+3. 它是在补强反馈闭环，还是让 replay/review/validation 更分散？
+4. 它是在增强 IM/display 适配的一致性，还是让不同 channel 的行为继续各自漂移？
+5. 它是在减少对重 backend 的刚性依赖，还是重新把系统绑回去？
+6. 它对应的“当前状态”到底是未做、第一拍已做、还是应该进入收口/深化阶段？
 
-如果答不上来，就先回到 [`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md) 看阶段优先级，而不是继续新增专题设计文档。
+如果答不上来，就先回到 [`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md) 看新的阶段计划，而不是再按旧文档的相对优先级继续推进。

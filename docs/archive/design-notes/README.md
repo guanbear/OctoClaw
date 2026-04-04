@@ -39,8 +39,8 @@
 
 | 文档 | 状态 | 判断依据 | 后续使用方式 |
 |---|---|---|---|
-| `octoclaw-review-and-action-plan-v1-2026-04-02.md` | Partially outdated | 时间最新，复盘质量高，但仍早于 2026-04-03 的 observer / on-demand runner / taskflow control 收口 | 作为近期问题清单和差距分析参考 |
-| `octoclaw-product-design-v2-2026-03-27.md` | Partially outdated | 三脑定位、substrate/lane/control 划分仍重要，但很多后续判断已需要由更新提交校准 | 作为主设计底稿的重要来源，而非当前总纲 |
+| `octoclaw-review-and-action-plan-v1-2026-04-02.md` | Supporting reference | 复盘质量高，尤其是 route/tool/result shaping 与中期反馈闭环思路仍有效；但“哪些事项尚未落地”的判断已被 2026-04-03 后续提交部分改写 | 作为问题清单、反馈闭环与中期整理参考 |
+| `octoclaw-product-design-v2-2026-03-27.md` | Supporting reference | 三脑定位、feedback loop、IM/display、artifact/retrieve、substrate/lane/control 分层都仍重要；问题在于文档内“已做/未做/下一步”状态已与当前实现不同步 | 作为主设计底稿的高价值来源，而非当前总纲 |
 | `octoclaw-openclaw-task-flow-analysis-v1-2026-04-01.md` | Supporting reference | 对 taskflow substrate 的分析仍有价值 | 作为 substrate 绑定专题参考 |
 | `octoclaw-openclaw-task-flow-migration-plan-v1-2026-04-01.md` | Partially outdated | 迁移方向正确，但 phase 状态与 2026-04-03 后续落地不再完全同步 | 作为 taskflow 迁移背景参考 |
 | `octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md` | Supporting reference | 外部工程方法论输入，且 2026-04-02 有补充更新 | 作为方法论依据参考 |
@@ -51,7 +51,7 @@
 | `octoclaw-worker-taxonomy-migration-v1-2026-03-28.md` | Supporting reference | taxonomy 仍相关，但不应脱离新的 control/runtime 边界单独驱动路线 | 作为 worker pool 参考 |
 | `octoclaw-legacy-core-removal-roadmap-v1-2026-03-29.md` | Supporting reference | 旧内核拆除仍有工程价值 | 作为技术债清单参考 |
 | `octoclaw-model-health-cooldown-design-v1-2026-03-29.md` | Supporting reference | 是局部 model policy 方案，不影响总架构定义 | 作为选模健康度专题参考 |
-| `octoclaw-display-layer-productization-plan-v1-2026-03-29.md` | Partially outdated | 展示面仍重要，但应晚于 observer/control truth 收口 | 作为后续产品化参考 |
+| `octoclaw-display-layer-productization-plan-v1-2026-03-29.md` | Supporting reference | IM capability matrix 与 display 分层思路仍高价值；部分能力现在已有 baseline，不应再按纯未来方案理解 | 作为 IM/display 产品化参考 |
 | `octoclaw-task-display-schema-v1-2026-03-29.md` | Supporting reference | schema 本身仍有专题价值 | 作为显示层 schema 参考 |
 | `octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md` | Historical reference | 更偏 source borrowing 记录；当前不应再由它决定系统边界 | 作为借鉴背景材料 |
 | `octoclaw-clawteam-unified-runtime-v1-2026-03-25.md` | Historical reference | 明显建立在 ClawTeam 核心运行面的假设上，已被后续 optional-backend 方向修正 | 仅保留历史语境 |

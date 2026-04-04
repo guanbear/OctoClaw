@@ -1,253 +1,301 @@
 # OctoClaw 执行计划
 
-> 状态：当前 canonical 执行计划（2026-04-03）  
-> 优先级原则：**近期执行优先，长期终局保留在后半部分**  
+> 状态：当前 canonical 执行计划（2026-04-04）  
+> 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
 > 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
-## 1. 计划目的
+## 1. 这次为什么要重写计划
 
-这份计划不是简单复述旧路线图，而是把当前 repo 的实现现实、较新的提交方向、以及仍未解决的设计张力串成一个更适合继续开发的阶段计划。
+上一个版本的问题不在于方向完全错，而在于它把很多已经落地的能力重新写成了“接下来要开始做”。
 
-它的目标是回答三件事：
+这会导致两个误判：
 
-1. 接下来**先做什么**最值
-2. 哪些事**现在不该做**
-3. 长期终局应该朝哪里收口
+1. 把已经完成的第一拍工作当成未开始，低估当前系统成熟度
+2. 把真正应该做的事——**统一、压缩、做深**——写成了过于基础的建设任务
+
+所以这版计划不再从“要不要做 feedback loop / IM 适配 / observer / taskflow substrate”开始，而是先承认哪些已经存在，再决定后续主线。
 
 ---
 
-## 2. 当前判断：真正值得优先解决的问题
+## 2. 当前状态：哪些已经不是待办，而是 baseline
 
-### P0. 文档与控制面真相源先收口
+### 2.1 已完成第一拍的能力
 
-虽然本轮不改代码，但后续开发必须建立在更清晰的文档分层上：
+以下能力已经进入 baseline，而不是从零开始：
 
-- 设计判断看 `octoclaw-design-foundation.md`
-- 阶段优先级看本文件
-- 旧文档只作为 archive / decision history
-
-否则后续每次重构都还会重新争论“到底应该按 3 月 25 日的 ClawTeam 方案，还是按 4 月 3 日的 unified runtime 方向走”。
-
-### P1. 统一 observer / patrol / runner 的运行时心智
-
-较新的提交已经把方向推向：
-
-- runtime observer 收口
-- on-demand runner fallback
-- patrol observation pass 统一
-
-因此近期第一优先级，不是继续发散新的 worker 形态，而是把这条线做清楚：
-
-- 什么属于 observer
-- 什么属于 runner execution
-- 什么属于 control entrypoint
-- 哪些状态必须统一落到 substrate + task record
-
-### P2. 让 route / dispatch / result contract 更像“执行合同系统”
-
-当前文档判断已经比实现更先进。接下来应优先把：
-
-- route reason
-- work contract
-- result shaping
-- retrieve path
-- timeout / wait / handoff 语义
-
-全部收敛到同一心智，而不是继续维持“语义分类 + 局部补丁”。
-
-### P3. 把 taskflow-bound substrate 做成真正的默认事实层
-
-近期提交已经证明方向正确：
-
-- runner jobs → taskflow-bound tasks
+#### A. substrate / continuity / observer baseline
+- taskflow-bound runner jobs
 - native taskflow control metadata
 - session resume context persistence
+- runtime observer
+- on-demand runner fallback
+- patrol observation pass 收口
+- unified `octoclawctl` control entrypoint
 
-下一步应继续补齐：
+#### B. feedback loop baseline
+- runtime-policy replay log
+- replay summary / policy diff / promotion hints
+- replay review / replay curate
+- nightly replay automation
+- nightly reply review / local replay validation
+- eval fixture export
+- learning/error promotion helpers
 
-- lane 与 substrate 的对应关系
-- observer / ctl 对 substrate facts 的读取优先级
-- 各类 replay / review / retrieve 工具对同一事实层的复用
+#### C. IM / display baseline
+- session-thread truth
+- task anchor rendering and updates
+- backend-specific notification payloads
+- Slack / Discord / Telegram / Feishu / WhatsApp 等分支
+- task action fallback commands
+- details / timeline / graph / retrieve / explorer / queue surfaces
 
-### P4. 把重 backend 降到真正可选
+### 2.2 这意味着什么
 
-ClawTeam / heavier tmux runtime 不该立刻被删，但必须继续降级为：
+当前最重要的不是“补一条新大线”，而是三件事：
 
-- operator enhancement
-- heavier collaboration path
-- 特定复杂任务才启用
-
-而不是成为默认依赖或文档心智中心。
+1. **把已落地的多条线变成统一产品心智**
+2. **把重复/漂移/重叠的实现边界收口**
+3. **把真正未完成的深水区从“基础建设”里分离出来**
 
 ---
 
-## 3. 近期执行计划（推荐按这个顺序推进）
+## 3. 新的优先级排序
 
-## Phase 1：统一 runtime observer 心智
+## P0：先把 canonical docs 与代码现实对齐
 
 ### 目标
+以后看计划时，不再把“第一拍已完成的能力”误判成未开始。
 
-把当前 `patrol`、`runtime observer`、`on-demand runner fallback`、`octoclawctl` 的职责边界收清楚。
+### 完成标准
+- 设计底稿明确写出 feedback loop、IM adaptation、observer/taskflow baseline 已落地
+- 执行计划明确区分：已完成 baseline / 下一步深化 / 明确延后项
 
-### 要完成的结果
-
-- 明确 observer 的职责边界与输入输出
-- 明确 patrol 是 observer 的哪一部分，而不是与 observer 平级并列的另一套世界
-- 明确 runner 在“常驻 / 按需”两种形态下，统一如何进入 runtime truth
-- 明确 `octoclawctl` 应该成为什么级别的统一控制入口
-
-### 为什么排第一
-
-因为不先收口这条线，后面的 taskflow、result shaping、optional backend 都会继续建立在模糊职责边界上。
-
-### 成功信号
-
-- 维护者可以用一句话解释 observer / patrol / runner / ctl 的关系
-- 新增控制面逻辑时不再需要猜测应挂在哪个脚本上
-
-### 风险
-
-- 可能暴露大量历史脚本命名与职责重叠
-- 短期会发现更多“其实该删/该合并”的组件
+> 这一项本轮已经完成。
 
 ---
 
-## Phase 2：把 route/dispatch 完全收口到执行合同
+## P1：把 observer / patrol / runner / ctl 收成一套统一运行时心智
 
-### 目标
+### 为什么这仍然排第一
+因为虽然这条线已经落地第一拍，但当前仍然容易出现以下心智分裂：
 
-把 route / dispatch / handoff / retrieve 的心智统一成执行合同系统。
+- patrol 是独立系统，还是 observer 的一部分？
+- runner 是 runtime 组件，还是 lane 形态？
+- ctl 是状态工具，还是统一控制入口？
+- on-demand fallback 和常驻 runner 的职责边界到底是什么？
 
-### 要完成的结果
+### 现在真正该做的，不是“开始做 observer”
+而是：
 
-- 任务为什么走 `direct / runner / spawn_single / spawn_multi` 的原因可解释
-- `wait-timeout`、`planned/executed`、handoff 语义更加一致
-- summary / details / report_path 对主模型和人类都更好消费
-- route 决策不再主要依赖“任务长得像什么”
+- 压缩重复职责
+- 定义统一术语
+- 让控制入口、状态入口、恢复入口围绕同一心智工作
+- 继续减少“看起来像多个系统”的感觉
 
-### 依赖
-
-需要先有更清晰的 observer / task truth 心智，否则 contract 无法稳定落地。
-
-### 成功信号
-
-- replay/review 中的误判原因更容易归因
-- follow-up 不再频繁因为 route 结果不透明而重复派单
-
----
-
-## Phase 3：taskflow substrate 继续扩面
-
-### 目标
-
-让更多 lane 和 control action 都以 taskflow-bound substrate 为第一事实层。
-
-### 要完成的结果
-
-- runner / spawn / retrieve / review 的核心事实都能绑定 substrate
-- status / timeline / graph / retrieve 优先读 substrate-aware records
-- resume / recovery / ownership 语义围绕同一事实层工作
-
-### 为什么现在做
-
-因为近期提交已经证明这条线有价值，而且它直接决定 OctoClaw 是否会继续维持平行 runtime truth。
-
-### 风险
-
-- 需要处理与旧本地镜像记录的兼容关系
-- 可能暴露 OpenClaw native capability 公开面不够稳定的地方
+### 近期交付物
+- 一份更严格的 runtime role map（observer / patrol / runner / ctl）
+- 对应代码中的职责清单和收口方向
+- 明确哪些 loop 保留常驻、哪些改成按需或 observer 吸收
 
 ---
 
-## Phase 4：压缩长期常驻件，保留真正值钱的常驻能力
+## P2：把 feedback loop 从“已有能力集合”收成统一闭环
 
-### 目标
+### 为什么它现在应该升优先级
+因为这条线你已经做了很多，反而最容易因为缺少统一产品命名而被忽视。
 
-进一步验证哪些 daemon / loop 必须常驻，哪些应该按需执行或被 observer 吸收。
+当前已经有：
 
-### 要完成的结果
+- replay log
+- replay summary
+- replay review
+- curate
+- nightly automation
+- reply review packet
+- validation
+- eval fixture export
+- learning/error promotion
+- rollout promotion hints
 
-- 能解释为什么某个常驻进程存在
-- runner 常驻不再成为默认前提
-- patrol-loop 与其他 observer 逻辑不再重复保活
+问题不再是“有没有”，而是：
 
-### 关注点
+- 哪条是主闭环
+- 哪条是旁路观察工具
+- 哪些输出进入策略晋升
+- 哪些只是 operator review 参考
+- economics / route diff / policy diff / validation / learnings 之间如何形成闭环链路
 
-这不是“为了省进程数而省进程数”，而是为了减少状态漂移、恢复成本和运维心智负担。
-
----
-
-## Phase 5：把重 backend 真正降到 optional operator lane
-
-### 目标
-
-把 ClawTeam / heavier tmux runtime 的角色稳定到“增强层”。
-
-### 要完成的结果
-
-- 默认单机/轻部署路径不依赖重 backend
-- 需要 board/inbox/human handoff 时才启用更重运行面
-- 文档和代码都不再把 ClawTeam 当成总架构中心
-
-### 风险
-
-- 如果 control surface 自身还不够好，会导致大家继续依赖重 backend 兜底
-
----
-
-## 4. 中期终局（作为后半部分保留，而非当前第一优先级）
-
-长期来看，OctoClaw 更合理的终局不是“更多 agent 类型”，而是下面这个结构：
+### 近期目标
+把它明确收成：
 
 ```text
-OpenClaw substrate truth
-  +
-OctoClaw policy / control / observer layer
-  +
-optional operator backends
+observe -> summarize -> review -> curate -> validate -> promote -> learn
 ```
 
-在这个终局里：
+### 近期交付物
+- 一份 feedback loop map
+- 每条工具在闭环中的角色说明
+- promotion / validation / learning 之间的输入输出约定
+- 明确哪些 nightly job 是核心，哪些只是辅助分析
 
-- route 更像 contract selection
-- artifact / retrieve 比 transcript 更重要
-- control surface 比 prompt 技巧更重要
-- optional backend 只在需要时介入
-- 语言边界会逐步收口，而不是无限扩散
-
----
-
-## 5. 明确延后项（现在先不要做）
-
-以下事项不是“永远不做”，但不应排在近期主线前面：
-
-1. 再新增一批专题设计文档
-2. 把系统重新包装成通用多 Agent framework
-3. 为了抽象而抽象地大规模改 worker taxonomy
-4. 在 observer / taskflow 心智未稳定前做大规模 UI/看板产品化
-5. 在控制面仍分裂时直接强推全面 Python→Node/TS 迁移
+### 为什么这是高优先级
+因为“省钱”和“更稳”不应该只靠 intuition；这条线其实已经是 OctoClaw 的核心差异化之一。
 
 ---
 
-## 6. 旧文档如何映射到当前计划
+## P3：把 IM / display adaptation 从 baseline 做到“可持续产品面”
 
-- **总纲/方向类旧文档**：主要提供历史决策背景，不再直接指导实现顺序
-- **产品设计与复盘类文档**：提供这份计划的输入材料，但已被本文件重组
-- **专题方案类文档**：保留为局部实现时的 supporting references
-- **外部项目借鉴类文档**：保留为 why / tradeoff 证据，不再决定系统边界
+### 当前状态
+这条线也已经不是空白：
 
-完整分级见 [`archive/design-notes/README.md`](./archive/design-notes/README.md)。
+- session-thread truth 有了
+- task anchor 有了
+- notification backend 分支有了
+- task action fallback commands 有了
+- Slack / Feishu / Telegram / Discord 等基础适配有了
+- details/timeline/graph/retrieve/explorer 有了
+
+### 现在真正缺的是什么
+不是“再证明 IM 重要”，而是：
+
+- capability matrix 与当前代码现实重新对齐
+- channel 之间哪些是 L0/L1/L2 能力要重新定义
+- IM / CLI / tmux / Web/UI 的职责边界要更清楚
+- anchor / thread / action / artifact retrieval 的语义要更统一
+
+### 近期目标
+把 IM/display 线明确成：
+
+- **IM = lightweight ops surface**
+- **CLI/tmux = operator control surface**
+- **Web/UI = future full cockpit**
+
+### 近期交付物
+- 一份基于当前代码的 capability matrix（不是纯设计假设）
+- 不同 channel 的统一 anchor/update/action 语义说明
+- 哪些 channel 已经“够用”，哪些只是基本 fallback
+
+---
+
+## P4：继续做 substrate convergence，但重点从“接入”转向“替换旧平行真相层”
+
+### 当前状态
+你已经把很多 substrate-aware 能力做起来了。
+
+所以现在的重点不再是笼统写“接 OpenClaw tasks/flows”，而是：
+
+- 哪些旧 mirror/legacy 记录还需要存在
+- 哪些字段已经可以直接 substrate-first
+- observer / display / retrieve / review 是否都优先消费 substrate-aware facts
+- 哪些 fallback 还必须保留
+
+### 近期目标
+把“taskflow substrate 已接入”推进到“taskflow substrate 成为默认第一事实层”。
+
+### 近期交付物
+- substrate field inventory
+- legacy mirror 依赖清单
+- 哪些表面已完全 substrate-aware，哪些仍处于过渡态
+
+---
+
+## P5：压缩长期常驻件，但不要为了压缩而压缩
+
+### 当前状态
+runner on-demand fallback 已经出现，observer 也已落地，说明系统确实在往“少常驻、强控制面”收口。
+
+### 现在真正要判断的
+- 哪些 daemon/loop 是真正有复利价值的
+- 哪些只是历史过渡件
+- 哪些应该被 observer 或 on-demand path 吸收
+
+### 原则
+不是为了进程更少而更少，而是为了：
+
+- 降低状态漂移
+- 降低恢复复杂度
+- 降低 operator 心智负担
+
+---
+
+## P6：把重 backend 彻底降成可选增强层
+
+### 当前状态
+这条线不再是“是否要去 ClawTeam 化”，而是：
+
+- 文档心智上已经应当 optional-backend 化
+- 实现上还需要继续消除“默认把 ClawTeam 当主运行面”的残留假设
+
+### 近期目标
+确保默认路径的核心价值来自：
+
+- OpenClaw substrate
+- OctoClaw policy/control/feedback/display
+
+而不是来自重 backend。
+
+---
+
+## 4. 明确哪些事情现在不要重做
+
+以下事情现在不该被重新当成主线建设任务：
+
+1. “开始做 feedback loop” —— baseline 已有，应改为统一/深化
+2. “开始做 IM 适配” —— baseline 已有，应改为 capability 收口与产品化
+3. “开始接 taskflow substrate” —— baseline 已有，应改为 substrate-first 清理
+4. “开始做 observer” —— baseline 已有，应改为职责收口
+
+这些都不是 0→1 问题了，而是 1→2、2→3 的问题。
+
+---
+
+## 5. 明确延后项
+
+以下仍然不应排到近期主线前面：
+
+1. 再新增一堆平级专题设计文档
+2. 把系统包装成通用多 Agent framework
+3. 在 current baseline 还没统一前大规模做 Web full cockpit
+4. 在控制面与 substrate 关系没收清前做激进 Python→Node/TS 迁移
+5. 为了抽象而抽象地重做 taxonomy / protocol 命名
+
+---
+
+## 6. 新的阶段顺序（更贴近当前现实）
+
+### Phase 1：收口运行时心智
+核心问题：observer / patrol / runner / ctl 的统一边界
+
+### Phase 2：统一反馈闭环
+核心问题：replay / review / validate / promote / learning 的一体化
+
+### Phase 3：收口 IM / display 产品面
+核心问题：channel capability、anchor/update/action 统一语义
+
+### Phase 4：做 substrate-first 清理
+核心问题：减少平行真相层与 legacy 依赖
+
+### Phase 5：压缩常驻件与重 backend 依赖
+核心问题：让默认路径更轻、更稳、更少历史包袱
 
 ---
 
 ## 7. 维护规则
 
-以后如果出现新的重要方向变化，优先更新这两份 canonical docs，而不是再往根目录平铺新的“v1/v2/v3 总纲”。
+以后如果新增重要实现，不要再先写一个新的平级“总纲”。优先问：
 
-推荐规则：
+- 这是在补哪条主线？
+  - runtime mind
+  - feedback loop
+  - IM/display
+  - substrate convergence
+  - backend simplification
 
-- 新的总设计判断 → 更新 `octoclaw-design-foundation.md`
-- 新的阶段优先级或实施顺序变化 → 更新 `octoclaw-execution-plan.md`
-- 新的专题论证 / slice 记录 → 新增到 archive 或 supporting notes 区域，并明确它不是总真相源
+然后更新这两份 canonical docs：
+
+- 总体判断变化 → `octoclaw-design-foundation.md`
+- 优先级变化 → `octoclaw-execution-plan.md`
+
+专题笔记可以继续写，但默认进入 supporting/archive 层，而不是再次成为根目录 source of truth。
