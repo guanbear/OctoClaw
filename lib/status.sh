@@ -163,71 +163,17 @@ def load_main_session_actual_model():
     return load_actual_main_model(session_key, sessions_file=MAIN_AGENT_SESSIONS_FILE)
 
 
-def load_tasks():
-    if not os.path.exists(TASK_STATE_FILE):
-        return []
-    try:
-        with open(TASK_STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        tasks = data.get("tasks", [])
-        tasks = [task for task in tasks if task.get("source") in {"octoclaw", "octopus"}]
-        queue_raw = load_json(RUNNER_QUEUE_FILE) or {}
-        jobs = queue_raw.get("jobs", []) if isinstance(queue_raw, dict) else []
-        queue_by_id = {
-            str(job.get("id")): job
-            for job in jobs
-            if isinstance(job, dict) and str(job.get("id", "")).startswith("runner-")
-        }
-        for task in tasks:
-            job = queue_by_id.get(str(task.get("id", "")))
-            if not job:
-                continue
-            job_status = str(job.get("status", "") or "")
-            if job_status in ("done", "failed"):
-                task["status"] = "done" if job_status == "done" else "failed"
-                task["summary"] = str(job.get("summary") or task.get("summary") or "")
-                if job.get("started_at"):
-                    task["started_at"] = job.get("started_at")
-                if job.get("finished_at"):
-                    task["completed_at"] = job.get("finished_at")
-                if job.get("model"):
-                    task["model"] = job.get("model")
-                if job.get("task_description"):
-                    task["task_description"] = job.get("task_description")
-        return tasks
-    except Exception:
-        return []
-
-
 ts = now.strftime("%Y-%m-%d %H:%M")
 print(f"🐙 八爪鱼状态 [{ts}]")
 print("━━━━━━━━━━━━━━━━━━━━")
-runner_health_ok = bool(runner_summary.get("healthy", False))
 runner_note = ""
 runner_state = str(runner_summary.get("state", "") or ("on-demand" if runner_mode == "ondemand" else "missing")).strip()
 runner_age = runner_summary.get("age_seconds")
-runner_worker_id = str(
-    runner_summary.get("worker_id")
-    or runner_health.get("worker_id")
-    or (runner_health.get("health", {}) if isinstance(runner_health.get("health", {}), dict) else {}).get("worker_id", "")
-    or ""
-).strip()
-if isinstance(runner_health, dict) and runner_health.get("worker_id"):
-    runner_job = runner_health.get("job_id", "")
-    heartbeat = runner_health.get("last_heartbeat_at", "")
-    heartbeat_dt = None
-    try:
-        if heartbeat:
-            if heartbeat.endswith("Z"):
-                heartbeat = heartbeat[:-1] + "+00:00"
-            heartbeat_dt = datetime.fromisoformat(heartbeat)
-            if heartbeat_dt.tzinfo:
-                heartbeat_dt = heartbeat_dt.astimezone(now.tzinfo)
-    except Exception:
-        heartbeat_dt = None
-    if runner_job and heartbeat_dt and runner_health_ok and (now - heartbeat_dt).total_seconds() <= 30:
-        runner_note = f" · 当前任务 {runner_job}"
-tasks = load_tasks()
+runner_worker_id = str(runner_summary.get("worker_id") or "").strip()
+runner_job = str(runner_summary.get("job_id") or "").strip()
+if runner_job and bool(runner_summary.get("healthy", False)):
+    runner_note = f" · 当前任务 {runner_job}"
+tasks = runtime_snapshot.get("tasks", []) if isinstance(runtime_snapshot.get("tasks"), list) else []
 snapshot = build_status_snapshot(tasks, now=now)
 
 backend = config_data.get("notification", {}).get("backend", "auto")

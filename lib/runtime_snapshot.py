@@ -60,7 +60,31 @@ def load_runtime_tasks() -> list[dict[str, Any]]:
     tasks = raw.get("tasks", [])
     if not isinstance(tasks, list):
         return []
-    return [task for task in tasks if isinstance(task, dict) and task.get("source") in {"octoclaw", "octopus"}]
+    filtered = [dict(task) for task in tasks if isinstance(task, dict) and task.get("source") in {"octoclaw", "octopus"}]
+    queue_raw = load_json(RUNNER_QUEUE_FILE)
+    jobs = queue_raw.get("jobs", []) if isinstance(queue_raw, dict) else []
+    queue_by_id = {
+        str(job.get("id")): job
+        for job in jobs
+        if isinstance(job, dict) and str(job.get("id", "")).startswith("runner-")
+    }
+    for task in filtered:
+        job = queue_by_id.get(str(task.get("id", "")))
+        if not job:
+            continue
+        job_status = str(job.get("status", "") or "")
+        if job_status in {"done", "failed"}:
+            task["status"] = "done" if job_status == "done" else "failed"
+            task["summary"] = str(job.get("summary") or task.get("summary") or "")
+            if job.get("started_at"):
+                task["started_at"] = job.get("started_at")
+            if job.get("finished_at"):
+                task["completed_at"] = job.get("finished_at")
+            if job.get("model"):
+                task["model"] = job.get("model")
+            if job.get("task_description"):
+                task["task_description"] = job.get("task_description")
+    return filtered
 
 
 def load_runner_queue_counts() -> dict[str, int]:
@@ -159,6 +183,8 @@ def build_runtime_snapshot(
             "healthy": bool(runner.get("healthy", False)),
             "age_seconds": int(runner.get("age_seconds", 0) or 0) if runner.get("age_seconds") is not None else None,
             "worker_id": str(runner.get("worker_id", "") or "").strip(),
+            "job_id": str(runner.get("job_id", "") or "").strip(),
+            "reason": str(runner.get("reason", "") or "").strip(),
             "mode": mode,
             "recovery_suggested": bool(mode != "ondemand" and runner_state != "healthy"),
         },
