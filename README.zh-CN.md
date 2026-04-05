@@ -22,7 +22,7 @@ OctoClaw 重点解决三件事：
 - [docs/octoclaw-auto-router-implementation-checklist.md](./docs/octoclaw-auto-router-implementation-checklist.md)：Auto Router 实施清单
 - [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md)：历史设计归档索引与分级说明
 
-这三份文档替代根目录里分散的旧设计笔记，作为后续开发时优先查看的入口。
+这些文档替代根目录里分散的旧设计笔记，作为后续开发时优先查看的入口。
 
 ## 为什么是 OctoClaw
 
