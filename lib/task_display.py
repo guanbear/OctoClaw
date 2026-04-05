@@ -494,6 +494,19 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
     return actions
 
 
+def _action_availability(actions: list[dict[str, Any]]) -> list[str]:
+    available: list[str] = []
+    for item in actions:
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("enabled", False)):
+            continue
+        action_id = _text(item.get("id")) or _text(item.get("kind"))
+        if action_id and action_id not in available:
+            available.append(action_id)
+    return available
+
+
 def build_task_interactive_payload(
     task: dict[str, Any],
     *,
@@ -639,6 +652,7 @@ def build_task_detail(
 
     children = [item for item in all_normalized if _text(item.get("parent_id")) == task_id or _text(item.get("id")) in child_ids]
     artifacts = _collect_artifacts(normalized)
+    actions = build_task_actions(normalized)
     raw_artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts"), dict) else {}
     runner_plan = dict(raw_artifacts.get("runner_plan", {})) if isinstance(raw_artifacts.get("runner_plan"), dict) else {}
     preview_events = normalized.get("task_events_preview", []) if isinstance(normalized.get("task_events_preview", []), list) else []
@@ -736,6 +750,7 @@ def build_task_detail(
             "model_health_summary": _text(normalized.get("model_health_summary")),
         },
         "artifacts": artifacts,
+        "action_availability": _action_availability(actions),
         "substrate_display_contract": substrate_display_contract(),
         "runner_plan": runner_plan,
         "checklist": normalized.get("checklist", {}) if isinstance(normalized.get("checklist"), dict) else {},
@@ -995,6 +1010,7 @@ def build_operator_task_surface(task: dict[str, Any], *, now: datetime | None = 
         "surface_role": ownership_for_surface("cli"),
         "task_anchor": anchor,
         "task_actions": actions,
+        "action_availability": _action_availability(actions),
         "interactive": build_task_interactive_payload(normalized, anchor=anchor, actions=actions),
         "substrate_display_contract": substrate_display_contract(),
         "text_fallback": render_task_anchor_text(anchor, actions),

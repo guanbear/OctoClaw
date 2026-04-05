@@ -100,6 +100,7 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["lineage"]["active_child_count"], 1)
         self.assertEqual(detail["lineage"]["completed_child_count"], 1)
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
+        self.assertIn("view", detail["action_availability"])
         self.assertIn("required_fields", detail["substrate_display_contract"])
 
     def test_build_operator_task_surface_contains_substrate_contract(self) -> None:
@@ -115,6 +116,7 @@ class TaskDisplayTests(unittest.TestCase):
         )
 
         self.assertEqual(surface["task_anchor"]["task_id"], "spawn-1")
+        self.assertIn("view", surface["action_availability"])
         self.assertIn("required_fields", surface["substrate_display_contract"])
         self.assertEqual(surface["surface_role"]["role"], "canonical_text_operator_surface")
 
