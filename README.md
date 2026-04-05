@@ -78,6 +78,8 @@ Current internal source-of-truth docs:
 
 - [docs/octoclaw-design-foundation.md](./docs/octoclaw-design-foundation.md) — canonical design draft (Chinese)
 - [docs/octoclaw-execution-plan.md](./docs/octoclaw-execution-plan.md) — canonical execution plan (Chinese)
+- [docs/octoclaw-auto-router-design.md](./docs/octoclaw-auto-router-design.md) — auto-router design draft (Chinese)
+- [docs/octoclaw-auto-router-implementation-checklist.md](./docs/octoclaw-auto-router-implementation-checklist.md) — auto-router implementation checklist (Chinese)
 - [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md) — archived design-note index and classification
 
 Current runtime role map:

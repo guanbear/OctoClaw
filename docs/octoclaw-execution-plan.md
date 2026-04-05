@@ -197,6 +197,9 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
   - 能力画像
   - 健康/冷却
 - OpenAI-compatible recommendation surface 草案
+- 对应 canonical docs：
+  - [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
+  - [`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
 
 ### 这条线的约束
 

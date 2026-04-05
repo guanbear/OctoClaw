@@ -18,6 +18,8 @@ OctoClaw 重点解决三件事：
 
 - [docs/octoclaw-design-foundation.md](./docs/octoclaw-design-foundation.md)：新的主设计底稿
 - [docs/octoclaw-execution-plan.md](./docs/octoclaw-execution-plan.md)：新的执行计划
+- [docs/octoclaw-auto-router-design.md](./docs/octoclaw-auto-router-design.md)：Auto Router 设计稿
+- [docs/octoclaw-auto-router-implementation-checklist.md](./docs/octoclaw-auto-router-implementation-checklist.md)：Auto Router 实施清单
 - [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md)：历史设计归档索引与分级说明
 
 这三份文档替代根目录里分散的旧设计笔记，作为后续开发时优先查看的入口。

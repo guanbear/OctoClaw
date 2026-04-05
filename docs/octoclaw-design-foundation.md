@@ -146,6 +146,11 @@ OctoClaw 当前真正负责的是四层增量：
 - **把 router core 设计成可拆**
 - **把完整 runtime / observer / IM / feedback 继续保留在 OctoClaw 内部**
 
+P2.5 的正式设计与执行清单见：
+
+- [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
+- [`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
+
 ### 4.3 Operator backend 是增强层，不是唯一运行面
 
 ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当前代码方向已经很明确：
