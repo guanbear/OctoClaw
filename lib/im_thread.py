@@ -16,6 +16,11 @@ import time
 from typing import Any
 
 try:
+    from im_display_contract import interaction_contract
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.im_display_contract import interaction_contract
+
+try:
     from notifier import build_task_notification_payload, send_task_notification
     from octopus_config import load_octopus_config
     from session_ops import edit_channel_message, send_channel_message
@@ -183,6 +188,7 @@ def _push_one(
       otherwise sends a reply into the thread.
     * ``'close'``  — same as ``'update'`` but marks the thread as closed.
     """
+    contract = interaction_contract(action)
     if action == "open":
         # Delegate to the full send_task_notification path so Feishu / rich
         # cards are handled correctly for every backend.
@@ -213,7 +219,7 @@ def _push_one(
             "action": action,
         }
 
-    thread_state = "closed" if action == "close" else "active"
+    thread_state = _text(contract.get("thread_state")) or ("closed" if action == "close" else "active")
 
     # Prefer editing the existing anchor on backends that support it.
     if last_message_id and origin in _EDITABLE_BACKENDS:

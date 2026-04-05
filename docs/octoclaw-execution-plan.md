@@ -244,6 +244,8 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 一份基于当前代码的 capability matrix（不是纯设计假设）
 - 不同 channel 的统一 anchor/update/action 语义说明
 - 哪些 channel 已经“够用”，哪些只是基本 fallback
+- 当前 contract 文档：
+  - [`octoclaw-im-display-contract.md`](./octoclaw-im-display-contract.md)
 
 ---
 

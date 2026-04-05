@@ -278,6 +278,10 @@ P1 之后，运行时角色应固定成下面这张表：
 - `tests/test_task_events.py`
 - `tests/test_patrol_notifications.py`
 
+当前 P3/P4 的正式交互与显示 contract 已收口到：
+
+- [`octoclaw-im-display-contract.md`](./octoclaw-im-display-contract.md)
+
 这意味着旧文档中关于：
 
 - IM-native 展示层

@@ -11,6 +11,11 @@ import sys
 from typing import Any
 
 try:
+    from im_display_contract import capability_for_surface
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.im_display_contract import capability_for_surface
+
+try:
     from octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
     from runtime_task_record import task_state_model
     from task_events import append_task_event, register_session_binding, resolve_session_binding
@@ -223,6 +228,7 @@ def build_task_notification_payload(
         "task_actions": actions,
         "operator_surface": surface,
         "interactive": interactive,
+        "capability": capability_for_surface(resolved_backend or "whatsapp"),
         "transport": {
             "kind": "none",
             "supports_rich": False,

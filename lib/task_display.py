@@ -8,6 +8,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
+    from im_display_contract import action_contract, substrate_display_contract
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.im_display_contract import action_contract, substrate_display_contract
+
+try:
     from runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
     from runtime_coordination import resolve_task_artifacts
     from worker_taxonomy import role_display
@@ -482,6 +487,10 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
+    for item in actions:
+        contract = action_contract(_text(item.get("id")) or _text(item.get("kind")))
+        item["action_class"] = _text(contract.get("class")) or "observe"
+        item["replay_safe"] = bool(contract.get("replay_safe", True))
     return actions
 
 
@@ -599,6 +608,8 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "openclaw_native_runtime": _text(normalized.get("openclaw_native_runtime") or taskflow.get("native_runtime")),
         "openclaw_native_seen_at": _text(normalized.get("openclaw_native_seen_at") or taskflow.get("native_seen_at")),
         "openclaw_native_match_score": int(normalized.get("openclaw_native_match_score") or taskflow.get("native_match_score") or 0),
+        "openclaw_create_preference": _text(taskflow.get("create_preference")),
+        "openclaw_create_status": _text(taskflow.get("create_status")),
         "openclaw_task_id": _text(normalized.get("openclaw_task_id") or taskflow.get("task_id")),
         "openclaw_flow_id": _text(normalized.get("openclaw_flow_id") or taskflow.get("flow_id")),
         "openclaw_flow_kind": _text(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind")),
@@ -706,6 +717,8 @@ def build_task_detail(
             "native_runtime": _text(anchor.get("openclaw_native_runtime")),
             "native_seen_at": _text(anchor.get("openclaw_native_seen_at")),
             "native_match_score": int(anchor.get("openclaw_native_match_score") or 0),
+            "create_preference": _text(anchor.get("openclaw_create_preference")),
+            "create_status": _text(anchor.get("openclaw_create_status")),
             "task_id": _text(anchor.get("openclaw_task_id")),
             "flow_id": _text(anchor.get("openclaw_flow_id")),
             "flow_kind": _text(anchor.get("openclaw_flow_kind")),
@@ -723,6 +736,7 @@ def build_task_detail(
             "model_health_summary": _text(normalized.get("model_health_summary")),
         },
         "artifacts": artifacts,
+        "substrate_display_contract": substrate_display_contract(),
         "runner_plan": runner_plan,
         "checklist": normalized.get("checklist", {}) if isinstance(normalized.get("checklist"), dict) else {},
         "events": events,
@@ -981,6 +995,7 @@ def build_operator_task_surface(task: dict[str, Any], *, now: datetime | None = 
         "task_anchor": anchor,
         "task_actions": actions,
         "interactive": build_task_interactive_payload(normalized, anchor=anchor, actions=actions),
+        "substrate_display_contract": substrate_display_contract(),
         "text_fallback": render_task_anchor_text(anchor, actions),
     }
 

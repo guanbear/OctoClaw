@@ -36,6 +36,8 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
                 mirror = openclaw_taskflow_adapter.load_taskflow_mirror()
 
         self.assertEqual(binding["binding_state"], "mirrored")
+        self.assertEqual(binding["create_preference"], "mirror_only")
+        self.assertTrue(binding["create_status"])
         self.assertIn("runner-1", mirror["entries"])
         self.assertEqual(mirror["entries"]["runner-1"]["link"]["task_runtime"], "openclaw_task")
 
@@ -157,6 +159,7 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertEqual(enriched["openclaw_native_runtime"], "subagent")
         self.assertGreater(enriched["openclaw_native_match_score"], 0)
         self.assertTrue(enriched["openclaw_native_seen_at"])
+        self.assertIn("create_preference", enriched["artifacts"]["openclaw_taskflow"])
 
     @patch("lib.openclaw_taskflow_adapter._run_openclaw_cli")
     def test_cancel_native_taskflow_prefers_flow_cancel(self, mock_cli) -> None:

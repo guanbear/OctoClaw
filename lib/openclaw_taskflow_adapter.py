@@ -94,6 +94,20 @@ def has_openclaw_cli() -> bool:
     return shutil.which("openclaw") is not None
 
 
+def native_create_supported() -> bool:
+    if not has_openclaw_cli():
+        return False
+    for args in (["tasks", "--help"], ["tasks", "list", "--help"]):
+        try:
+            result = subprocess.run(["openclaw", *args], capture_output=True, text=True, timeout=10, check=False)
+        except Exception:
+            continue
+        output = "\n".join(part for part in [result.stdout or "", result.stderr or ""] if part)
+        if "create" in output.lower():
+            return True
+    return False
+
+
 def _normalized_int(value: Any) -> int:
     if isinstance(value, bool):
         return int(value)
@@ -461,11 +475,17 @@ def build_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | Non
     if task_id or flow_id:
         binding_state = "mirrored_bound"
         native_binding_state = "bound"
+    create_preference = "native_preferred" if route in {"spawn_single", "spawn_multi"} or _runner_wants_flow(config) else "mirror_only"
+    create_status = "native_bound" if native_binding_state == "bound" else (
+        "native_unavailable_fallback_mirror" if create_preference == "native_preferred" and not native_create_supported() else "mirror_only"
+    )
     return {
         "schema_version": TASKFLOW_LINK_SCHEMA_VERSION,
         "backend": _normalized_str(cfg.get("backend")) or "mirror",
         "binding_state": binding_state,
         "native_binding_state": native_binding_state,
+        "create_preference": create_preference,
+        "create_status": create_status,
         "sync_mode": sync_mode,
         "substrate_state": "",
         "substrate_revision": 0,

@@ -27,6 +27,7 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertIn("slack", payload)
         self.assertIn("interactive", payload)
         self.assertIn("blocks", payload["slack"])
+        self.assertEqual(payload["capability"]["level"], "L2")
         self.assertIn("fix login 401", payload["text"])
 
     def test_build_task_notification_payload_keeps_feishu_text_fallback(self) -> None:
@@ -44,6 +45,7 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "whatsapp")
         self.assertEqual(payload["transport"]["kind"], "whatsapp")
         self.assertFalse(payload["transport"]["supports_rich"])
+        self.assertEqual(payload["capability"]["level"], "L0")
         self.assertNotIn("slack", payload)
         self.assertIn("Route: spawn_single", payload["text"])
 

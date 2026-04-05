@@ -58,6 +58,8 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("queue", fallback_commands)
         self.assertIn("stop", fallback_commands)
         self.assertIn("artifacts", fallback_commands)
+        self.assertTrue(any(item["action_class"] == "destructive-control" for item in actions if item["id"] == "stop"))
+        self.assertTrue(all("replay_safe" in item for item in actions))
 
     def test_build_task_detail_tracks_lineage_and_artifacts(self) -> None:
         parent = {
@@ -98,6 +100,22 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["lineage"]["active_child_count"], 1)
         self.assertEqual(detail["lineage"]["completed_child_count"], 1)
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
+        self.assertIn("required_fields", detail["substrate_display_contract"])
+
+    def test_build_operator_task_surface_contains_substrate_contract(self) -> None:
+        surface = build_operator_task_surface(
+            {
+                "id": "spawn-1",
+                "worker_pool": "octoclaw-code",
+                "status": "running",
+                "summary": "patch login flow",
+                "route": "spawn_single",
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(surface["task_anchor"]["task_id"], "spawn-1")
+        self.assertIn("required_fields", surface["substrate_display_contract"])
 
     @patch("lib.task_display.resolve_task_artifacts")
     def test_build_task_detail_prefers_artifact_index_rows(self, mock_resolve_task_artifacts) -> None:
