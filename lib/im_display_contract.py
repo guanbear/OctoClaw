@@ -204,6 +204,10 @@ def capability_for_surface(surface: str) -> dict[str, Any]:
     return dict(CAPABILITY_MATRIX.get(str(surface or "").strip().lower(), CAPABILITY_MATRIX["whatsapp"]))
 
 
+def ownership_for_surface(surface: str) -> dict[str, Any]:
+    return dict(SURFACE_ROLE_MAP.get(str(surface or "").strip().lower(), {}))
+
+
 def interaction_contract(action: str) -> dict[str, Any]:
     return dict(INTERACTION_STATE_MACHINE.get(str(action or "").strip().lower(), {}))
 

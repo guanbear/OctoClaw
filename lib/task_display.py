@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
-    from im_display_contract import action_contract, substrate_display_contract
+    from im_display_contract import action_contract, ownership_for_surface, substrate_display_contract
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.im_display_contract import action_contract, substrate_display_contract
+    from lib.im_display_contract import action_contract, ownership_for_surface, substrate_display_contract
 
 try:
     from runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
@@ -992,6 +992,7 @@ def build_operator_task_surface(task: dict[str, Any], *, now: datetime | None = 
     actions = build_task_actions(normalized)
     return {
         "schema_version": "octoclaw.task_display/v1",
+        "surface_role": ownership_for_surface("cli"),
         "task_anchor": anchor,
         "task_actions": actions,
         "interactive": build_task_interactive_payload(normalized, anchor=anchor, actions=actions),

@@ -11,9 +11,9 @@ import sys
 from typing import Any
 
 try:
-    from im_display_contract import capability_for_surface
+    from im_display_contract import capability_for_surface, ownership_for_surface
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.im_display_contract import capability_for_surface
+    from lib.im_display_contract import capability_for_surface, ownership_for_surface
 
 try:
     from octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
@@ -229,6 +229,7 @@ def build_task_notification_payload(
         "operator_surface": surface,
         "interactive": interactive,
         "capability": capability_for_surface(resolved_backend or "whatsapp"),
+        "surface_role": ownership_for_surface("im"),
         "transport": {
             "kind": "none",
             "supports_rich": False,

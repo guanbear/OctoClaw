@@ -116,6 +116,7 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual(surface["task_anchor"]["task_id"], "spawn-1")
         self.assertIn("required_fields", surface["substrate_display_contract"])
+        self.assertEqual(surface["surface_role"]["role"], "canonical_text_operator_surface")
 
     @patch("lib.task_display.resolve_task_artifacts")
     def test_build_task_detail_prefers_artifact_index_rows(self, mock_resolve_task_artifacts) -> None:

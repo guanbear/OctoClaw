@@ -28,6 +28,7 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertIn("interactive", payload)
         self.assertIn("blocks", payload["slack"])
         self.assertEqual(payload["capability"]["level"], "L2")
+        self.assertEqual(payload["surface_role"]["role"], "lightweight_ops")
         self.assertIn("fix login 401", payload["text"])
 
     def test_build_task_notification_payload_keeps_feishu_text_fallback(self) -> None:
