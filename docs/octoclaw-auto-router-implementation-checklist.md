@@ -40,52 +40,53 @@
 ## 3. 分阶段 checklist
 
 ## Phase 2.5A：补齐设计真相源
-- [ ] 新增 `docs/octoclaw-auto-router-design.md`
-- [ ] 新增 `docs/octoclaw-auto-router-implementation-checklist.md`
-- [ ] 在 `docs/octoclaw-execution-plan.md` 中引用它们
-- [ ] 在 `README.md` 中补入口
+- [x] 新增 `docs/octoclaw-auto-router-design.md`
+- [x] 新增 `docs/octoclaw-auto-router-implementation-checklist.md`
+- [x] 在 `docs/octoclaw-execution-plan.md` 中引用它们
+- [x] 在 `README.md` 中补入口
 
 ## Phase 2.5B：做 current code boundary map
-- [ ] 明确 `octoclaw_route.py` → Router Core
-- [ ] 明确 `octoclaw_policy.py` → Policy/Gateway Adapter
-- [ ] 明确 `model-intel.py` → Model-Intel Layer
-- [ ] 明确 `budget.py` → Budget Planner
-- [ ] 明确 replay/validation/learning → Feedback Interface
+- [x] 明确 `octoclaw_route.py` → Router Core
+- [x] 明确 `octoclaw_policy.py` → Policy/Gateway Adapter
+- [x] 明确 `model-intel.py` → Model-Intel Layer
+- [x] 明确 `budget.py` → Budget Planner
+- [x] 明确 replay/validation/learning → Feedback Interface
+- [x] 明确 `lib/auto_router.py` → internal-first contract composition layer
 
 ## Phase 2.5C：定义 signal schema
-- [ ] request fields
-- [ ] contract fields
-- [ ] continuity fields
-- [ ] model signals
-- [ ] feedback signals
-- [ ] producer/consumer mapping
+- [x] request fields
+- [x] contract fields
+- [x] continuity fields
+- [x] model signals
+- [x] feedback signals
+- [x] producer/consumer mapping
 
 ## Phase 2.5D：定义 recommendation contract
-- [ ] route
-- [ ] work_contract
-- [ ] confidence
-- [ ] reason_codes
-- [ ] model_recommendation
-- [ ] budget_recommendation
-- [ ] review_required
-- [ ] evidence_source
-- [ ] policy_phase
+- [x] route
+- [x] work_contract
+- [x] confidence
+- [x] reason_codes
+- [x] model_recommendation
+- [x] budget_recommendation
+- [x] review_required
+- [x] evidence_source
+- [x] policy_phase
 
 ## Phase 2.5E：定义 budget planner contract
-- [ ] target_model
-- [ ] fallback_model
-- [ ] output_budget
-- [ ] retry_budget
-- [ ] latency_target
-- [ ] max_workers
-- [ ] upgrade_allowed
-- [ ] cost_ceiling
+- [x] target_model
+- [x] fallback_model
+- [x] output_budget
+- [x] retry_budget
+- [x] latency_target
+- [x] max_workers
+- [x] upgrade_allowed
+- [x] cost_ceiling
 
 ## Phase 2.5F：定义 internal-first recommendation surface
-- [ ] internal recommendation object
-- [ ] future OpenAI-compatible mapping notes
-- [ ] future OpenRouter Auto-like mapping notes
-- [ ] 明确“不服务化”的当前边界
+- [x] internal recommendation object
+- [x] future OpenAI-compatible mapping notes
+- [x] future OpenRouter Auto-like mapping notes
+- [x] 明确“不服务化”的当前边界
 
 ---
 
@@ -123,12 +124,19 @@
 
 ## 6. 文档/设计阶段完成标准
 
-- [ ] 两份缺失文档补齐
-- [ ] current code → target layer 映射完整
-- [ ] recommendation contract 明确
-- [ ] signal schema 明确
-- [ ] budget planner contract 明确
-- [ ] internal-first vs extractable 分界明确
+- [x] 两份缺失文档补齐
+- [x] current code → target layer 映射完整
+- [x] recommendation contract 明确
+- [x] signal schema 明确
+- [x] budget planner contract 明确
+- [x] internal-first vs extractable 分界明确
+
+## 6.1 当前代码实现状态
+
+- [x] 新增 `lib/auto_router.py`
+- [x] `build_decision()` 输出 `auto_router` payload
+- [x] 新增 `tests/test_auto_router.py`
+- [x] internal-first recommendation surface 已可直接渲染与验证
 
 ---
 
@@ -141,6 +149,7 @@
 - route / budget / model-intel 的边界已清楚
 - current runtime 能明确通过 adapter 消费 recommendation
 - feedback loop 能为 router 提供校准证据
+- `lib/auto_router.py` 已能直接输出 internal-first recommendation payload
 
 ---
 

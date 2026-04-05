@@ -22,6 +22,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from auto_router import build_auto_router_payload
 from octoclaw_route import infer_route
 from octoclaw_spawn import resolve_model_and_thinking
 from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config, save_json
@@ -881,6 +882,7 @@ def build_decision(
     decision = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": utc_now(),
+        "features": features,
         "route_language_packs": list(route_meta.get("route_language_packs", []) or []),
         "request": {
             "task": task,
@@ -940,6 +942,7 @@ def build_decision(
         "runtime_switches": runtime_switches_summary(runtime_cfg),
     }
     decision["summary"] = summarize_decision(decision)
+    decision["auto_router"] = build_auto_router_payload(decision)
     decision["hook_interface"] = hook_interface(runtime_cfg, decision)
     return decision
 

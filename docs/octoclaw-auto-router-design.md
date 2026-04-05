@@ -18,6 +18,20 @@ P2.5 的目标不是马上把 OctoClaw 变成通用代理，而是：
 
 > **先把 router 相关能力在 OctoClaw 内部收成一个边界清楚、可持续演进、未来可独立开源的 Auto Router 子系统。**
 
+### 当前实现状态（2026-04-05）
+
+P2.5 的 internal-first baseline 已经落地：
+
+- `lib/auto_router.py`
+  - 统一 signal / router_core / budget_planner / adapter / model_intel contract
+  - 直接输出 internal-first recommendation payload
+- `lib/octoclaw_policy.py`
+  - `build_decision()` 现在附带 `auto_router` recommendation
+
+这意味着：
+
+> **P2.5 已从纯文档阶段进入“internal-first contract 已实现”的状态。**
+
 ---
 
 ## 2. 非目标
@@ -271,6 +285,7 @@ router core 输出应至少包含：
 
 | 当前模块 | 当前职责 | 目标层 |
 |---|---|---|
+| `lib/auto_router.py` | internal-first signal / recommendation / adapter contract aggregation | Auto Router composition layer |
 | `lib/octoclaw_route.py` | route heuristics / work-contract bias / gray-zone judgement | Router Core |
 | `lib/octoclaw_policy.py` | route merge / sticky lane / budget policy / dispatch-facing decision | Policy / Gateway Adapter |
 | `lib/model-intel.py` | model scoring / capability / role preference / health signal整合 | Model-Intel / Auto-Update |

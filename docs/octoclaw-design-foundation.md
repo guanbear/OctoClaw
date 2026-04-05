@@ -146,6 +146,11 @@ OctoClaw 当前真正负责的是四层增量：
 - **把 router core 设计成可拆**
 - **把完整 runtime / observer / IM / feedback 继续保留在 OctoClaw 内部**
 
+当前 internal-first baseline 已落地到：
+
+- `lib/auto_router.py`
+- `octoclaw_policy.build_decision().auto_router`
+
 P2.5 的正式设计与执行清单见：
 
 - [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)

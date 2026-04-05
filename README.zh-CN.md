@@ -92,6 +92,9 @@ ls ~/.openclaw/extensions/octoclaw-runtime
 # 先做路由决策
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task '帮我分析这个报错并给修复建议'
 
+# 看 internal-first Auto Router recommendation
+python3 /workspace/openclaw/skills/octopus/lib/auto_router.py --task '帮我分析这个报错并给修复建议'
+
 # 统一派发入口
 python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task '查一下 redis 日志和端口状态' --command 'ss -lntp | grep 6379'
 

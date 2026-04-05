@@ -303,6 +303,9 @@ python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'look a
 # Inspect the system preferred route first
 python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze this error and give me a fix plan'
 
+# Internal-first auto-router recommendation object
+python3 /workspace/openclaw/skills/octopus/lib/auto_router.py --task 'analyze this error and give me a fix plan'
+
 # Unified dispatch entry
 python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task 'check redis logs and port status' --command 'ss -lntp | grep 6379'
 

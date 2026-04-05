@@ -200,6 +200,9 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 对应 canonical docs：
   - [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
   - [`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
+- internal-first implementation baseline：
+  - `lib/auto_router.py`
+  - `octoclaw_policy.build_decision().auto_router`
 
 ### 这条线的约束
 
