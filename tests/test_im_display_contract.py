@@ -36,6 +36,8 @@ class ImDisplayContractTests(unittest.TestCase):
     def test_substrate_display_contract_exposes_required_and_forbidden_fields(self) -> None:
         payload = substrate_display_contract()
         self.assertIn("task_id", payload["required_fields"])
+        self.assertIn("create_preference", payload["optional_fields"])
+        self.assertIn("create_status", payload["optional_fields"])
         self.assertIn("guessed_task_state", payload["forbidden_inferred_fields"])
 
 

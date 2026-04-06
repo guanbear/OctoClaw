@@ -129,3 +129,63 @@ P3+P4 当前已落到这些代码：
 这意味着当前已不是纯规划，而是：
 
 > **interaction contract first, substrate truth second** 的 baseline 已进入代码。
+
+---
+
+## 7. Signoff status（2026-04-06）
+
+### P3 product-surface signoff: approved
+
+本阶段冻结的 P3-owned clauses：
+
+- surface ownership
+- interaction state machine
+- action taxonomy
+- capability matrix
+- accepted fallback / gap ledger
+
+当前接受的产品面定位：
+
+- **IM** = lightweight ops + notifications
+- **CLI** = canonical text operator surface + canonical observer
+- **tmux/workbench** = live control/workbench
+- **Web/UI** = future full cockpit
+
+当前接受的 fallback/gap：
+
+- Feishu 仍是 **L1**：thread-capable，但无 edit/update、无 interactive actions
+- WhatsApp / WeChat 仍是 **L0**：text-first fallback surface
+- Web/UI 仍是 **future**，不算本阶段已实现 rich surface
+
+### P4 native-preferred + cleanup/transition signoff: approved with explicit exceptions
+
+本阶段冻结的 P4-owned clauses：
+
+- minimum substrate display contract
+- `create_preference` / `create_status`
+- native-preferred create posture
+- cleanup policy
+- legacy mirror / fallback transition inventory
+- explicit read-order matrix + exception ledger
+
+当前 transition 结论：
+
+- `spawn_single` / `spawn_multi` 的 create posture 已明确为 **native-preferred**
+- `create_preference` / `create_status` 已进入 shared substrate display contract
+- cleanup policy 维持 **preview/apply + retention + terminal-only + mirror-entry-only deletion**
+
+### Read-order matrix
+
+| Surface | Status | Interpretation |
+|---|---|---|
+| `display` | `mixed` | substrate facts 已暴露，但主 anchor/state/summary 仍不是纯 substrate-first |
+| `retrieve` | `mixed` | substrate 已暴露，但 read order 仍偏 report/context-first |
+| `observer` | `not-yet-evidenced` | 当前没有明确 substrate/taskflow-first observer read path |
+| `review` | `not-yet-evidenced` | 当前只有 review flag/event，不是 substrate-first review surface |
+
+### Exception ledger
+
+- `display` 暂不宣称 substrate-first，只能算 `mixed`
+- `retrieve` 暂不宣称 substrate-first，只能算 `mixed`
+- `observer` 仍是显式 transition exception
+- `review` 仍是显式 transition exception

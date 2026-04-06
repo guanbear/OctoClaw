@@ -191,6 +191,8 @@ SUBSTRATE_DISPLAY_CONTRACT = {
         "model_summary",
         "cost_estimate",
         "related_thread_artifacts",
+        "create_preference",
+        "create_status",
     ],
     "forbidden_inferred_fields": [
         "guessed_task_state",
