@@ -2,7 +2,7 @@
 import importlib.util
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 
@@ -17,6 +17,27 @@ SPEC.loader.exec_module(model_intel)
 
 
 class ModelIntelTests(unittest.TestCase):
+    def test_resolve_openclaw_bin_uses_configured_absolute_path(self) -> None:
+        with patch.object(model_intel, "load_octopus_config", return_value={"spawn_execution": {"openclaw_bin": "/opt/homebrew/bin/openclaw"}}), patch.object(
+            model_intel.os.path, "exists", side_effect=lambda path: path == "/opt/homebrew/bin/openclaw"
+        ), patch.object(model_intel.shutil, "which", return_value=None):
+            self.assertEqual(model_intel.resolve_openclaw_bin(), "/opt/homebrew/bin/openclaw")
+
+    def test_load_models_from_openclaw_expands_noninteractive_path(self) -> None:
+        mocked_run = Mock(return_value=Mock(returncode=0, stdout='["omniroute/cx/gpt-5.4"]'))
+        with patch.object(model_intel, "load_octopus_config", return_value={"spawn_execution": {"openclaw_bin": "/opt/homebrew/bin/openclaw"}}), patch.object(
+            model_intel.os.path, "exists", side_effect=lambda path: path == "/opt/homebrew/bin/openclaw"
+        ), patch.object(model_intel.shutil, "which", return_value=None), patch.object(
+            model_intel.subprocess, "run", mocked_run
+        ):
+            model_ids = model_intel.load_models_from_openclaw()
+
+        self.assertEqual(model_ids, ["omniroute/cx/gpt-5.4"])
+        args, kwargs = mocked_run.call_args
+        self.assertEqual(args[0][0], "/opt/homebrew/bin/openclaw")
+        self.assertIn("/opt/homebrew/bin", kwargs["env"]["PATH"])
+        self.assertIn("/usr/local/bin", kwargs["env"]["PATH"])
+
     def test_collect_candidate_model_ids_prefers_primary_configured_ids(self) -> None:
         model_ids = model_intel.collect_candidate_model_ids(
             ["omniroute/cx/gpt-5.4", "zai/glm-4.7"],

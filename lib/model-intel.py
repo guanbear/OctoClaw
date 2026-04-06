@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,6 +129,10 @@ PROVIDER_AUTH_EQUIVALENTS = {
 
 OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 MAIN_AGENT_AUTH_PROFILES_PATH = Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+COMMON_OPENCLAW_BIN_CANDIDATES = [
+    "/opt/homebrew/bin/openclaw",
+    "/usr/local/bin/openclaw",
+]
 
 
 def now_iso() -> str:
@@ -249,11 +254,45 @@ def infer_family_metadata(model_id: str, override: dict) -> dict:
     }
 
 
+def resolve_openclaw_bin(runtime_config: dict | None = None) -> str:
+    config = runtime_config if isinstance(runtime_config, dict) else load_octopus_config()
+    spawn_cfg = config.get("spawn_execution", {}) if isinstance(config, dict) else {}
+    configured_bin = ""
+    if isinstance(spawn_cfg, dict):
+        configured_bin = str(spawn_cfg.get("openclaw_bin", "") or "").strip()
+
+    candidates = [
+        str(os.environ.get("OPENCLAW_BIN", "") or "").strip(),
+        configured_bin,
+        shutil.which("openclaw") or "",
+        *COMMON_OPENCLAW_BIN_CANDIDATES,
+    ]
+    for candidate in candidates:
+        normalized = str(candidate or "").strip()
+        if not normalized:
+            continue
+        if os.path.isabs(normalized):
+            if os.path.exists(normalized):
+                return normalized
+            continue
+        resolved = shutil.which(normalized)
+        if resolved:
+            return resolved
+    return "openclaw"
+
+
 def load_models_from_openclaw() -> list[str]:
     try:
+        env = dict(os.environ)
+        path_entries = [entry for entry in str(env.get("PATH", "") or "").split(os.pathsep) if entry]
+        for entry in ["/opt/homebrew/bin", "/usr/local/bin"]:
+            if entry not in path_entries:
+                path_entries.insert(0, entry)
+        env["PATH"] = os.pathsep.join(path_entries)
         result = subprocess.run(
-            ["openclaw", "models", "list", "--json"],
+            [resolve_openclaw_bin(), "models", "list", "--json"],
             capture_output=True,
+            env=env,
             text=True,
             timeout=15,
         )
