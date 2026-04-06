@@ -625,3 +625,48 @@ def enrich_task_record_with_taskflow(
     native_match_score = resolved.get("native_match_score")
     updated["openclaw_native_match_score"] = int(native_match_score or 0) if str(native_match_score or "").strip() else 0
     return updated
+
+
+def summarize_taskflow_inventory(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = {
+        "total_tasks": 0,
+        "taskflow_tracked": 0,
+        "native_bound": 0,
+        "native_preferred": 0,
+        "mirror_only": 0,
+        "native_unavailable_fallback_mirror": 0,
+        "cleanup_candidates": 0,
+        "flow_kind_counts": {},
+        "route_counts": {},
+    }
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        summary["total_tasks"] += 1
+        binding = _binding_from_task(task)
+        if not binding:
+            continue
+        summary["taskflow_tracked"] += 1
+        route = _normalized_str(task.get("route")).lower()
+        if route:
+            route_counts = summary["route_counts"]
+            route_counts[route] = int(route_counts.get(route, 0) or 0) + 1
+        flow_kind = _normalized_str(binding.get("flow_kind")).lower()
+        if flow_kind:
+            flow_counts = summary["flow_kind_counts"]
+            flow_counts[flow_kind] = int(flow_counts.get(flow_kind, 0) or 0) + 1
+        if _normalized_str(binding.get("native_binding_state")).lower() == "bound":
+            summary["native_bound"] += 1
+        if _normalized_str(binding.get("create_preference")).lower() == "native_preferred":
+            summary["native_preferred"] += 1
+        create_status = _normalized_str(binding.get("create_status")).lower()
+        if create_status == "mirror_only":
+            summary["mirror_only"] += 1
+        elif create_status == "native_unavailable_fallback_mirror":
+            summary["native_unavailable_fallback_mirror"] += 1
+        lifecycle_state = _normalized_str(task.get("lifecycle_state")).lower()
+        status = _normalized_str(task.get("status")).lower()
+        is_terminal = lifecycle_state in {"finished", "cancelled"} or status in {"done", "failed", "blocked", "cancelled", "deferred"}
+        if is_terminal and create_status in {"mirror_only", "native_unavailable_fallback_mirror"}:
+            summary["cleanup_candidates"] += 1
+    return summary

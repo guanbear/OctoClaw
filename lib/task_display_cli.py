@@ -24,6 +24,7 @@ from task_display import (
     build_task_timeline,
     render_task_anchor_text,
 )
+from openclaw_taskflow_adapter import summarize_taskflow_inventory
 
 def load_tasks(path: str) -> list[dict[str, Any]]:
     try:
@@ -90,6 +91,13 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
                 if part
             )
         )
+    create_preference = str(substrate.get("create_preference", "") or "").strip()
+    create_status = str(substrate.get("create_status", "") or "").strip()
+    if create_preference or create_status:
+        lines.append(
+            "Create path: "
+            + " | ".join(part for part in [f"preference {create_preference}" if create_preference else "", f"status {create_status}" if create_status else ""] if part)
+        )
     lineage = detail.get("lineage", {}) if isinstance(detail.get("lineage"), dict) else {}
     if lineage.get("child_task_ids"):
         lines.append("Children: " + ", ".join(str(item) for item in lineage.get("child_task_ids", [])))
@@ -137,6 +145,13 @@ def render_retrieval_text(bundle: dict[str, Any]) -> str:
     substrate_summary = str(substrate.get("summary", "") or "").strip()
     if substrate_summary:
         lines.append(f"Substrate: {substrate_summary}")
+    create_preference = str(substrate.get("create_preference", "") or "").strip()
+    create_status = str(substrate.get("create_status", "") or "").strip()
+    if create_preference or create_status:
+        lines.append(
+            "Create path: "
+            + " | ".join(part for part in [f"preference {create_preference}" if create_preference else "", f"status {create_status}" if create_status else ""] if part)
+        )
     runner_plan = bundle.get("runner_plan", {}) if isinstance(bundle.get("runner_plan", {}), dict) else {}
     if runner_plan:
         plan_kind = str(runner_plan.get("kind", "") or "").strip()
@@ -280,6 +295,24 @@ def render_explorer_text(explorer: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_substrate_text(summary: dict[str, Any]) -> str:
+    lines = [
+        "Substrate inventory",
+        f"- Total tasks: `{int(summary.get('total_tasks', 0) or 0)}`",
+        f"- Taskflow tracked: `{int(summary.get('taskflow_tracked', 0) or 0)}`",
+        f"- Native bound: `{int(summary.get('native_bound', 0) or 0)}`",
+        f"- Native preferred: `{int(summary.get('native_preferred', 0) or 0)}`",
+        f"- Mirror only: `{int(summary.get('mirror_only', 0) or 0)}`",
+        f"- Native unavailable fallback mirror: `{int(summary.get('native_unavailable_fallback_mirror', 0) or 0)}`",
+        f"- Cleanup candidates: `{int(summary.get('cleanup_candidates', 0) or 0)}`",
+    ]
+    if summary.get("route_counts"):
+        lines.append(f"- Routes: `{json.dumps(summary['route_counts'], ensure_ascii=False)}`")
+    if summary.get("flow_kind_counts"):
+        lines.append(f"- Flow kinds: `{json.dumps(summary['flow_kind_counts'], ensure_ascii=False)}`")
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="OctoClaw task display CLI")
     parser.add_argument("--state-file", default=TASK_STATE_FILE)
@@ -308,6 +341,7 @@ def main() -> int:
     p_explorer.add_argument("--id", required=True)
 
     sub.add_parser("queue")
+    sub.add_parser("substrate")
 
     args = parser.parse_args()
     tasks = load_tasks(args.state_file)
@@ -318,6 +352,14 @@ def main() -> int:
             print_json(queue_view)
         else:
             print(render_queue_text(queue_view))
+        return 0
+
+    if args.command == "substrate":
+        summary = summarize_taskflow_inventory(tasks)
+        if args.format == "json":
+            print_json(summary)
+        else:
+            print(render_substrate_text(summary))
         return 0
 
     task = find_task(tasks, getattr(args, "id", ""))

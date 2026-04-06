@@ -32,6 +32,8 @@ class TaskDisplayCliTests(unittest.TestCase):
                                 "task_runtime": "openclaw_task",
                                 "flow_runtime": "openclaw_flow",
                                 "native_binding_state": "bound",
+                                "create_preference": "native_preferred",
+                                "create_status": "native_bound",
                                 "task_id": "native-task-1",
                                 "flow_id": "flow-1",
                             },
@@ -48,18 +50,33 @@ class TaskDisplayCliTests(unittest.TestCase):
                         {
                             "id": "task-2",
                             "worker_pool": "octoclaw-runner",
-                            "status": "queued",
+                            "status": "done",
+                            "lifecycle_state": "finished",
                             "summary": "check nginx health",
                             "route": "runner",
                             "parent_id": "task-1",
                             "started_at": "2026-03-31T10:01:00Z",
                             "updated_at": "2026-03-31T10:02:00Z",
+                            "openclaw_taskflow": {
+                                "backend": "mirror",
+                                "binding_state": "mirrored",
+                                "task_runtime": "openclaw_task",
+                                "create_preference": "mirror_only",
+                                "create_status": "mirror_only",
+                            },
                             "artifacts": {
                                 "runner_plan": {
                                     "kind": "local_file_probe",
                                     "command": "tail -n 80 /var/log/nginx/error.log",
                                 }
                             },
+                        },
+                        {
+                            "id": "task-3",
+                            "worker_pool": "octoclaw-review",
+                            "status": "queued",
+                            "summary": "review pending",
+                            "route": "spawn_single",
                         },
                     ]
                 },
@@ -100,6 +117,7 @@ class TaskDisplayCliTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Substrate detail: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
         self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1 | runtime openclaw_task/openclaw_flow", out)
+        self.assertIn("Create path: preference native_preferred | status native_bound", out)
 
     def test_detail_text_surfaces_runner_plan(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-2"])
@@ -116,8 +134,17 @@ class TaskDisplayCliTests(unittest.TestCase):
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-1"])
         self.assertEqual(code, 0, err)
         self.assertIn("Substrate: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
+        self.assertIn("Create path: preference native_preferred | status native_bound", out)
         self.assertIn("Primary report: /tmp/task-1.md", out)
         self.assertIn("Summary:", out)
+
+    def test_substrate_text_summarizes_inventory(self) -> None:
+        code, out, err = self._run(["--state-file", self.state_file, "substrate"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Substrate inventory", out)
+        self.assertIn("Taskflow tracked", out)
+        self.assertIn("Native preferred", out)
+        self.assertIn("Cleanup candidates", out)
 
     def test_retrieve_text_surfaces_runner_plan(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-2"])

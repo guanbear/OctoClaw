@@ -91,6 +91,8 @@
 - `model_summary`
 - `cost_estimate`
 - `related_thread_artifacts`
+- `create_preference`
+- `create_status`
 
 ### Forbidden inferred fields
 - guessed task state

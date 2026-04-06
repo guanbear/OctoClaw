@@ -102,6 +102,34 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertGreater(resolved["native_match_score"], 0)
         self.assertTrue(resolved["native_seen_at"])
 
+    def test_spawn_multi_binding_prefers_linear_flow_shape(self) -> None:
+        config = {
+            "openclaw_taskflow": {
+                "enabled": True,
+                "backend": "mirror",
+                "register_runner_tasks": True,
+                "register_runner_one_task_flows": False,
+                "register_spawn_single_flows": True,
+                "register_spawn_multi_linear_flows": True,
+                "native_binding_enabled": True,
+            }
+        }
+        task = {
+            "id": "multi-1",
+            "route": "spawn_multi",
+            "runtime": "subagent",
+            "status": "queued",
+            "worker_pool": "octoclaw-research",
+            "summary": "coordinate research + review",
+            "task_description": "coordinate research + review",
+        }
+
+        binding = openclaw_taskflow_adapter.build_taskflow_binding(task, config=config)
+
+        self.assertEqual(binding["flow_kind"], "linear")
+        self.assertEqual(binding["flow_runtime"], "openclaw_flow")
+        self.assertEqual(binding["create_preference"], "native_preferred")
+
     def test_enrich_task_record_with_taskflow_promotes_native_binding_facts(self) -> None:
         config = {
             "openclaw_taskflow": {
