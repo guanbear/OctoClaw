@@ -81,6 +81,41 @@ class PatrolSessionMatchingTests(unittest.TestCase):
 
         drift_cfg_mock.assert_called_once_with()
 
+    def test_build_session_candidates_requires_expected_spawn_session_for_managed_tasks(self) -> None:
+        task = {
+            "id": "task-3",
+            "worker_pool": "octoclaw-research",
+            "managed_by_octoclaw": True,
+            "owner": "main",
+            "agent_id": "main",
+            "session_id": "old-stale-session",
+            "artifacts": {
+                "spawn_execution": {
+                    "backend": "native",
+                    "session_id": "expected-child-session",
+                    "child_session_key": "agent:main:subagent:research-3",
+                }
+            },
+        }
+        sessions = {
+            "agent:main:main": {
+                "label": "main",
+                "agentName": "main",
+                "sessionId": "old-stale-session",
+                "updatedAt": "2026-03-29T10:06:00+00:00",
+            },
+            "agent:main:subagent:research-3": {
+                "label": "main",
+                "agentName": "main",
+                "sessionId": "expected-child-session",
+                "updatedAt": "2026-03-29T10:07:00+00:00",
+            },
+        }
+
+        candidates = patrol.build_session_candidates(task, sessions)
+
+        self.assertEqual([item["_session_key"] for item in candidates], ["agent:main:subagent:research-3"])
+
 
 if __name__ == "__main__":
     unittest.main()

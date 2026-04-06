@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -146,6 +147,21 @@ class OctoClawSpawnTests(unittest.TestCase):
                 self.assertIn("/tmp/report.md", bootstrap)
                 self.assertEqual(Path(prompt_path).read_text(encoding="utf-8"), long_prompt)
 
+    def test_prepare_spawn_prompt_keeps_native_prompt_inline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            long_prompt = "A" * 2500
+            with patch.object(octoclaw_spawn, "CONTEXT_DIR", tmpdir):
+                prompt, prompt_path = octoclaw_spawn.prepare_spawn_prompt(
+                    task_id="research-1",
+                    prompt=long_prompt,
+                    report_path="/tmp/report.md",
+                    context_path="/tmp/context.md",
+                    backend="native",
+                )
+
+        self.assertEqual(prompt, long_prompt)
+        self.assertEqual(prompt_path, "")
+
     def test_execute_clawteam_spawn_applies_session_model_override(self) -> None:
         completed = subprocess.CompletedProcess(
             args=["clawteam"],
@@ -262,6 +278,87 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("--session-id", command)
         self.assertNotIn("--session-key", command)
         self.assertNotIn("--thinking", command)
+
+    def test_build_native_task_prompt_avoids_local_runtime_file_contract(self) -> None:
+        brief = {
+            "task_id": "research-1",
+            "report_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-1.md",
+            "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-1.json",
+            "constraints": [
+                "详细报告默认写到 /Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-1.md"
+            ],
+        }
+        result_contract = octoclaw_spawn.build_result_contract("summarize findings", artifact_first=True)
+
+        prompt = octoclaw_spawn.build_native_task_prompt(
+            task_id="research-1",
+            task="Summarize the latest features",
+            brief=brief,
+            result_contract=result_contract,
+        )
+
+        self.assertIn("---RESULT---", prompt)
+        self.assertNotIn(str(octoclaw_spawn.TASK_STATE_PY), prompt)
+        self.assertNotIn("/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-1.md", prompt)
+        self.assertIn("不要尝试调用本地 task-state-update.py", prompt)
+
+    def test_finalize_native_spawn_result_writes_done_state_from_stdout_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stdout_path = Path(tmpdir) / "native.stdout.log"
+            stderr_path = Path(tmpdir) / "native.stderr.log"
+            report_path = Path(tmpdir) / "native-report.md"
+            stdout_path.write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "result": {
+                            "payloads": [
+                                {
+                                    "text": "---RESULT---\n"
+                                    + json.dumps(
+                                        {
+                                            "status": "done",
+                                            "summary": "4.5 新特性已经整理完成",
+                                            "user_safe_summary": "4.5 主要是后台任务、插件和安全链路重构。",
+                                            "report": "# Report\n\nKey findings.",
+                                            "artifacts": [],
+                                            "files": [],
+                                            "risks": [],
+                                            "verification": [],
+                                            "next_step": "none",
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                }
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            stderr_path.write_text("", encoding="utf-8")
+            subprocess_calls = []
+
+            def _fake_run(cmd, *args, **kwargs):
+                subprocess_calls.append(cmd)
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+            with patch.object(octoclaw_spawn.subprocess, "run", side_effect=_fake_run):
+                result = octoclaw_spawn.finalize_native_spawn_result(
+                    task_id="research-1",
+                    stdout_path=str(stdout_path),
+                    stderr_path=str(stderr_path),
+                    report_path=str(report_path),
+                    exit_code=0,
+                )
+                report_content = report_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(report_content, "# Report\n\nKey findings.\n")
+        finish_cmd = subprocess_calls[-1]
+        self.assertIn("done", finish_cmd)
+        self.assertIn("--artifacts-json", finish_cmd)
 
     def test_build_spawn_spec_backfills_child_session_facts_after_spawn(self) -> None:
         policy = {

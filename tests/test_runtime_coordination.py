@@ -135,6 +135,34 @@ class RuntimeCoordinationTests(unittest.TestCase):
             self.assertEqual(resolved["session_id"], "sess-1")
             self.assertEqual(resolved["resume_state"], "active")
 
+    def test_resolve_worker_session_uses_spawn_execution_identity_when_runtime_fields_cleared(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-worker-session-") as tmpdir:
+            store_path = Path(tmpdir) / "worker-session-store.json"
+            upsert_worker_session(
+                {
+                    "id": "task-2",
+                    "status": "queued",
+                    "route": "spawn_single",
+                    "runtime": "subagent",
+                    "worker_pool": "octoclaw-research",
+                    "artifacts": {
+                        "spawn_execution": {
+                            "backend": "native",
+                            "session_id": "octoclaw-subagent-task-2",
+                            "child_session_key": "agent:main:subagent:task-2",
+                        }
+                    },
+                    "updated_at": "2026-04-07T00:00:00+00:00",
+                },
+                path=str(store_path),
+            )
+
+            resolved = resolve_worker_session("task-2", path=str(store_path))
+
+            self.assertEqual(resolved["session_id"], "octoclaw-subagent-task-2")
+            self.assertEqual(resolved["session_key"], "agent:main:subagent:task-2")
+            self.assertEqual(resolved["resume_key"], "session:agent:main:subagent:task-2")
+
     def test_artifact_entries_for_task_collects_worker_result(self) -> None:
         entries = artifact_entries_for_task(
             {

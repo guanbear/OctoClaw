@@ -37,7 +37,7 @@ from octopus_config import (
     load_octopus_config,
     spawn_operator_surface,
 )
-from runtime_protocol import build_result_contract, build_task_brief
+from runtime_protocol import build_result_contract, build_task_brief, normalize_result_status
 from worker_taxonomy import (
     infer_model_band as taxonomy_infer_model_band,
     infer_worker_pool as taxonomy_infer_worker_pool,
@@ -336,7 +336,10 @@ def prepare_spawn_prompt(
     prompt: str,
     report_path: str,
     context_path: str,
+    backend: str = "",
 ) -> tuple[str, str]:
+    if str(backend or "").strip().lower() == "native":
+        return prompt, ""
     if len(prompt) <= MAX_INLINE_SPAWN_PROMPT_CHARS:
         return prompt, ""
     external_path = prompt_file_path(task_id)
@@ -346,6 +349,295 @@ def prepare_spawn_prompt(
         report_path=report_path,
         context_path=context_path,
     ), external_path
+
+
+def _native_contract_brief_payload(brief: dict | None) -> dict:
+    payload = json.loads(json.dumps(brief if isinstance(brief, dict) else {}, ensure_ascii=False))
+
+    def _scrub(value):
+        if isinstance(value, dict):
+            cleaned = {}
+            for key, item in value.items():
+                if key in {"report_path", "context_path", "context_pack_path"}:
+                    cleaned[key] = ""
+                else:
+                    cleaned[key] = _scrub(item)
+            return cleaned
+        if isinstance(value, list):
+            cleaned_items = [_scrub(item) for item in value]
+            return [item for item in cleaned_items if item not in ("", [], {})]
+        if isinstance(value, str):
+            text = value.replace(TASK_STATE_PY, "").strip()
+            text = re.sub(r"/(?:Users|root)/[^\s'\"`]+", "", text).strip()
+            if text.startswith("/Users/") or text.startswith("/root/"):
+                return ""
+            return text
+        return value
+
+    return _scrub(payload) if payload else {}
+
+
+def _native_result_contract_payload(result_contract: dict | None) -> dict:
+    payload = dict(result_contract) if isinstance(result_contract, dict) else {}
+    payload["artifacts"] = []
+    payload["report"] = "可选详细 Markdown；没有则写空字符串"
+    payload["files"] = []
+    payload["verification"] = payload.get("verification") if isinstance(payload.get("verification"), list) else []
+    payload["risks"] = payload.get("risks") if isinstance(payload.get("risks"), list) else []
+    payload["next_step"] = str(payload.get("next_step") or "none")
+    return payload
+
+
+def build_native_task_prompt(
+    *,
+    task_id: str,
+    task: str,
+    brief: dict | None,
+    result_contract: dict | None,
+) -> str:
+    brief_payload = _native_contract_brief_payload(brief)
+    result_payload = _native_result_contract_payload(result_contract)
+    lines = [
+        "【TASK BRIEF / 必读输入】",
+        "```json",
+        json.dumps(brief_payload, ensure_ascii=False, indent=2),
+        "```",
+        "",
+        "【Native 执行约束】",
+        "- 只使用当前会话实际可访问的文件和环境，不要依赖 /Users/... 或其他宿主机绝对路径",
+        "- 不要尝试调用本地 task-state-update.py，也不要尝试写宿主机 report 文件",
+        "- 如果当前 workspace 里缺少某个路径，不要卡住；基于 TASK BRIEF 继续，必要时在 RESULT 里写 blocked",
+        "- 最终只输出一个 ---RESULT--- 块，里面放合法 JSON；不要附加额外解释",
+        "",
+        "【原始任务】",
+        task.strip(),
+        "",
+        "【RESULT 规范】",
+        "---RESULT---",
+        json.dumps(result_payload, ensure_ascii=False),
+        "",
+        f"task_id={task_id}",
+    ]
+    return "\n".join(lines).strip()
+
+
+def _strip_result_code_fence(text: str) -> str:
+    body = str(text or "").strip()
+    if body.startswith("```json"):
+        body = body[len("```json"):].strip()
+    elif body.startswith("```"):
+        body = body[len("```"):].strip()
+    if body.endswith("```"):
+        body = body[:-3].strip()
+    return body
+
+
+def _parse_result_json_fragment(text: str) -> dict | None:
+    body = _strip_result_code_fence(text)
+    start = body.find("{")
+    if start < 0:
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        payload, _ = decoder.raw_decode(body[start:])
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _parse_result_kv_block(text: str) -> dict | None:
+    body = _strip_result_code_fence(text)
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not lines:
+        return None
+    payload: dict[str, str] = {}
+    for line in lines:
+        if line.startswith("---END---"):
+            break
+        if ":" in line:
+            key, value = line.split(":", 1)
+        elif "：" in line:
+            key, value = line.split("：", 1)
+        else:
+            continue
+        payload[key.strip().lower()] = value.strip()
+    if not payload:
+        return None
+    return {
+        "status": payload.get("状态") or payload.get("status") or "",
+        "summary": payload.get("摘要") or payload.get("summary") or "",
+        "user_safe_summary": payload.get("用户摘要") or payload.get("user_safe_summary") or "",
+        "report": payload.get("报告") or payload.get("report") or "",
+        "artifacts": [],
+        "files": [],
+        "risks": [],
+        "verification": [],
+        "next_step": payload.get("下一步") or payload.get("next_step") or "",
+    }
+
+
+def _extract_native_result_payload(text: str) -> dict | None:
+    body = str(text or "")
+    candidate = body.split("---RESULT---", 1)[1] if "---RESULT---" in body else body
+    parsed = _parse_result_json_fragment(candidate)
+    if parsed:
+        return parsed
+    return _parse_result_kv_block(candidate)
+
+
+def _load_native_stdout_payload(stdout_path: str) -> dict:
+    text = ""
+    try:
+        with open(stdout_path, "r", encoding="utf-8", errors="ignore") as fh:
+            text = fh.read().strip()
+    except Exception:
+        return {}
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+        return payload if isinstance(payload, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    last_payload: dict = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            last_payload = payload
+    return last_payload
+
+
+def _native_payload_texts(payload: dict) -> list[str]:
+    texts: list[str] = []
+    if not isinstance(payload, dict):
+        return texts
+    for key in ("text", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            texts.append(value.strip())
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    for item in result.get("payloads", []) if isinstance(result.get("payloads", []), list) else []:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            texts.append(text.strip())
+    return texts
+
+
+def _read_log_tail(path: str, limit: int = 400) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+    except Exception:
+        return ""
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "…"
+
+
+def _write_native_report(report_path: str, report_text: str) -> str:
+    path = str(report_path or "").strip()
+    body = str(report_text or "").strip()
+    if not path or not body:
+        return ""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(body if body.endswith("\n") else body + "\n")
+    return path
+
+
+def finalize_native_spawn_result(
+    *,
+    task_id: str,
+    stdout_path: str,
+    stderr_path: str,
+    report_path: str,
+    exit_code: int,
+) -> dict:
+    stderr_tail = _read_log_tail(stderr_path, limit=240)
+    stdout_payload = _load_native_stdout_payload(stdout_path)
+    texts = _native_payload_texts(stdout_payload)
+    result_payload: dict | None = None
+    reply_preview = ""
+    for text in reversed(texts):
+        reply_preview = compact_text(text, 180)
+        parsed = _extract_native_result_payload(text)
+        if isinstance(parsed, dict):
+            result_payload = parsed
+            break
+
+    if int(exit_code) != 0:
+        summary = compact_text(stderr_tail or reply_preview or f"spawn启动失败：native openclaw agent exited non-zero for {task_id}", 180)
+        subprocess.run(
+            ["python3", TASK_STATE_PY, "failed", "--id", task_id, "--summary", summary],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return {"status": "failed", "summary": summary}
+
+    if not result_payload:
+        summary = compact_text(reply_preview or stderr_tail or "native openclaw agent 未返回结构化 RESULT", 180)
+        subprocess.run(
+            ["python3", TASK_STATE_PY, "failed", "--id", task_id, "--summary", summary],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return {"status": "failed", "summary": summary}
+
+    status = normalize_result_status(str(result_payload.get("status", "") or ""), default="failed")
+    summary = compact_text(
+        str(result_payload.get("summary", "") or result_payload.get("user_safe_summary", "") or reply_preview or "native spawn completed").strip(),
+        180,
+    )
+    user_safe_summary = str(result_payload.get("user_safe_summary", "") or "").strip()
+    blocked_reason = compact_text(
+        str(result_payload.get("next_step", "") or result_payload.get("report", "") or result_payload.get("summary", "") or "").strip(),
+        180,
+    ) if status == "blocked" else ""
+    report_written = _write_native_report(report_path, str(result_payload.get("report", "") or ""))
+    artifacts_json = {
+        "worker_result": {
+            "task_id": task_id,
+            "status": status,
+            "summary": summary,
+            "user_safe_summary": user_safe_summary,
+            "report": report_written,
+            "artifacts": result_payload.get("artifacts", []) if isinstance(result_payload.get("artifacts"), list) else [],
+            "files": result_payload.get("files", []) if isinstance(result_payload.get("files"), list) else [],
+            "risks": result_payload.get("risks", []) if isinstance(result_payload.get("risks"), list) else [],
+            "verification": result_payload.get("verification", []) if isinstance(result_payload.get("verification"), list) else [],
+            "next_step": str(result_payload.get("next_step", "") or "none"),
+        }
+    }
+    command = [
+        "python3",
+        TASK_STATE_PY,
+        "blocked" if status == "blocked" else ("done" if status == "done" else "failed"),
+        "--id",
+        task_id,
+        "--summary",
+        summary,
+        "--artifacts-json",
+        json.dumps(artifacts_json, ensure_ascii=False),
+    ]
+    if report_written:
+        command.extend(["--report-path", report_written])
+    if user_safe_summary:
+        command.extend(["--user-safe-summary", user_safe_summary])
+    if blocked_reason and status == "blocked":
+        command.extend(["--blocked-reason", blocked_reason])
+    subprocess.run(command, check=False, capture_output=True, text=True)
+    return {"status": status, "summary": summary, "report_path": report_written}
 
 
 def validate_runtime(runtime: str, stream_to: str, supports_acp: bool) -> list[str]:
@@ -564,6 +856,12 @@ def execute_native_openclaw_spawn(
             f"cd {shlex.quote(WORKSPACE)} || exit 1",
             f"{command_str}",
             "rc=$?",
+            f"{shlex.quote(python_bin)} {shlex.quote(os.path.abspath(__file__))} native-finalize "
+            f"--task-id {shlex.quote(task_id)} "
+            f"--stdout-path {shlex.quote(stdout_path)} "
+            f"--stderr-path {shlex.quote(stderr_path)} "
+            f"--report-path {shlex.quote(os.path.join(SHARED_DIR, f'{task_id}.md'))} "
+            f"--exit-code \"$rc\" >/dev/null 2>&1 || true",
             'if [ "$rc" -ne 0 ]; then',
             f"  {shlex.quote(python_bin)} {shlex.quote(TASK_STATE_PY)} failed --id {shlex.quote(task_id)} --summary {shlex.quote(fail_summary)} >/dev/null 2>&1 || true",
             "fi",
@@ -1409,6 +1707,14 @@ def build_spawn_spec(
         brief=brief,
         result_contract=result_contract,
     )
+    planned_backend = resolve_spawn_backend() if should_execute_spawn(final_route, runtime, explicit=execute) else ""
+    if planned_backend == "native":
+        prompt = build_native_task_prompt(
+            task_id=task_id,
+            task=task,
+            brief=brief,
+            result_contract=result_contract,
+        )
 
     if register:
         register_dispatched_task(
@@ -1450,6 +1756,7 @@ def build_spawn_spec(
             prompt=prompt,
             report_path=report_path,
             context_path=str(context_bundle.get("context_path", "") or ""),
+            backend=planned_backend,
         )
         if spawn_prompt_path:
             base_artifacts["spawn_prompt_path"] = spawn_prompt_path
@@ -1612,6 +1919,25 @@ def build_spawn_spec(
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "native-finalize":
+        parser = argparse.ArgumentParser(description="Finalize native OpenClaw spawn result")
+        parser.add_argument("native_finalize")
+        parser.add_argument("--task-id", dest="task_id", required=True)
+        parser.add_argument("--stdout-path", dest="stdout_path", required=True)
+        parser.add_argument("--stderr-path", dest="stderr_path", required=True)
+        parser.add_argument("--report-path", dest="report_path", default="")
+        parser.add_argument("--exit-code", dest="exit_code", type=int, default=0)
+        args = parser.parse_args()
+        result = finalize_native_spawn_result(
+            task_id=args.task_id,
+            stdout_path=args.stdout_path,
+            stderr_path=args.stderr_path,
+            report_path=args.report_path,
+            exit_code=args.exit_code,
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return
+
     parser = argparse.ArgumentParser(description="Validated OctoClaw subagent spawn wrapper")
     parser.add_argument("--task", required=True)
     parser.add_argument("--route", choices=["spawn_single", "spawn_multi"], default="spawn_single")

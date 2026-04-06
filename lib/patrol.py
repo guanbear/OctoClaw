@@ -282,10 +282,22 @@ def task_session_identity(task: dict) -> str:
 def task_session_selectors(task: dict) -> dict[str, object]:
     if not isinstance(task, dict):
         return {}
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    spawn_execution = artifacts.get("spawn_execution", {}) if isinstance(artifacts.get("spawn_execution", {}), dict) else {}
+    expected_session_key = str(
+        spawn_execution.get("child_session_key", "")
+        or spawn_execution.get("session_key", "")
+        or ""
+    ).strip()
+    expected_session_id = str(spawn_execution.get("session_id", "") or "").strip()
+    expected_run_id = str(spawn_execution.get("run_id", "") or "").strip()
     return {
         "session_key": str(task.get("session_key", "") or "").strip(),
         "session_id": str(task.get("session_id", "") or "").strip(),
         "run_id": str(task.get("run_id", "") or "").strip(),
+        "expected_session_key": expected_session_key,
+        "expected_session_id": expected_session_id,
+        "expected_run_id": expected_run_id,
         "agent_id": str(task.get("agent_id", "") or "").strip(),
         "owner": str(task.get("owner", "") or "").strip(),
         "label": str(task.get("label", "") or "").strip(),
@@ -317,6 +329,9 @@ def _session_match_score(task: dict, key: str, value: dict, selectors: dict[str,
     session_key = str(selectors.get("session_key", "") or "").strip()
     session_id = str(selectors.get("session_id", "") or "").strip()
     run_id = str(selectors.get("run_id", "") or "").strip()
+    expected_session_key = str(selectors.get("expected_session_key", "") or "").strip()
+    expected_session_id = str(selectors.get("expected_session_id", "") or "").strip()
+    expected_run_id = str(selectors.get("expected_run_id", "") or "").strip()
     agent_id = str(selectors.get("agent_id", "") or "").strip()
     owner = str(selectors.get("owner", "") or "").strip()
     label = str(selectors.get("label", "") or "").strip()
@@ -336,6 +351,21 @@ def _session_match_score(task: dict, key: str, value: dict, selectors: dict[str,
     }
     agent_identity_candidates.discard("")
     label_value = str(value.get("label", "") or "").strip()
+    expects_explicit_child = any((expected_session_key, expected_session_id, expected_run_id))
+
+    if expects_explicit_child:
+        explicit_match = False
+        if expected_session_key and (key == expected_session_key or channel_session_key == expected_session_key):
+            score = max(score, 260)
+            explicit_match = True
+        if expected_session_id and expected_session_id in session_ids:
+            score = max(score, 255)
+            explicit_match = True
+        if expected_run_id and expected_run_id in session_ids:
+            score = max(score, 250)
+            explicit_match = True
+        if not explicit_match:
+            return 0
 
     if session_key and (key == session_key or channel_session_key == session_key):
         score = max(score, 220)
@@ -898,7 +928,7 @@ def build_session_candidates(task: dict | str, sessions_data: dict) -> list[dict
         return _legacy_label_candidates(str(task or "").strip(), sessions_data)
 
     selectors = task_session_selectors(task)
-    if not any(str(selectors.get(field, "") or "").strip() for field in ("session_key", "session_id", "run_id", "agent_id", "owner", "label")):
+    if not any(str(selectors.get(field, "") or "").strip() for field in ("session_key", "session_id", "run_id", "expected_session_key", "expected_session_id", "expected_run_id", "agent_id", "owner", "label")):
         return []
 
     task_spawned = parse_iso(task.get("spawned_at") or task.get("started_at") or task.get("updated_at") or "")
@@ -919,7 +949,8 @@ def build_session_candidates(task: dict | str, sessions_data: dict) -> list[dict
                 continue
         candidates.append(session)
 
-    if not candidates and str(selectors.get("label", "") or "").strip():
+    has_expected_child = any(str(selectors.get(field, "") or "").strip() for field in ("expected_session_key", "expected_session_id", "expected_run_id"))
+    if not candidates and not has_expected_child and str(selectors.get("label", "") or "").strip():
         return _legacy_label_candidates(str(selectors.get("label", "") or "").strip(), sessions_data)
 
     candidates.sort(key=lambda item: (int(item.get("_match_score", 0) or 0), session_updated_at_iso(item) or ""), reverse=True)
@@ -1443,6 +1474,7 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
                 changed = True
             if resume:
                 resume_updates = {
+                    "session_key": str(resume.get("session_key", "") or ""),
                     "session_id": str(resume.get("session_id", "") or ""),
                     "run_id": str(resume.get("run_id", "") or ""),
                     "agent_id": str(resume.get("agent_id", "") or state_task.get("agent_id", "")),

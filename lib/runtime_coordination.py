@@ -159,11 +159,14 @@ def ownership_snapshot(task: dict[str, Any], *, lease_seconds: int = 900) -> dic
 
 
 def session_resume_snapshot(task: dict[str, Any]) -> dict[str, Any]:
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    spawn_execution = artifacts.get("spawn_execution", {}) if isinstance(artifacts.get("spawn_execution", {}), dict) else {}
     task_id = _text(task.get("id"))
     agent_id = _text(task.get("agent_id")) or _text(task.get("owner"))
     agent_namespace = _text(task.get("agent_namespace")) or ("octoclaw" if agent_id else "")
-    session_id = _text(task.get("session_id"))
-    run_id = _text(task.get("run_id"))
+    session_key = _text(task.get("session_key")) or _text(spawn_execution.get("child_session_key")) or _text(spawn_execution.get("session_key"))
+    session_id = _text(spawn_execution.get("session_id")) or _text(task.get("session_id"))
+    run_id = _text(spawn_execution.get("run_id")) or _text(task.get("run_id"))
     session_status = _text(task.get("session_status")).lower()
     lifecycle_state = _text(task.get("lifecycle_state")).lower()
     recovery_action = _text(task.get("recovery_action")).lower()
@@ -183,6 +186,8 @@ def session_resume_snapshot(task: dict[str, Any]) -> dict[str, Any]:
     resume_key = ""
     if agent_namespace and agent_id and (session_id or run_id):
         resume_key = f"{agent_namespace}:{agent_id}:{session_id or run_id}"
+    elif session_key:
+        resume_key = f"session:{session_key}"
     elif task_id:
         resume_key = f"task:{task_id}"
 
@@ -191,6 +196,7 @@ def session_resume_snapshot(task: dict[str, Any]) -> dict[str, Any]:
         "resume_key": resume_key,
         "agent_id": agent_id,
         "agent_namespace": agent_namespace,
+        "session_key": session_key,
         "session_id": session_id,
         "run_id": run_id,
         "session_status": session_status,
