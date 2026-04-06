@@ -15,6 +15,8 @@ class ImDisplayContractTests(unittest.TestCase):
         self.assertEqual(capability_for_surface("slack")["level"], "L2")
         self.assertEqual(capability_for_surface("feishu")["level"], "L1")
         self.assertEqual(capability_for_surface("whatsapp")["level"], "L0")
+        self.assertTrue(capability_for_surface("discord")["edit_update"])
+        self.assertFalse(capability_for_surface("wechat")["interactive_actions"])
 
     def test_interaction_contract_marks_update_as_idempotent(self) -> None:
         contract = interaction_contract("update")

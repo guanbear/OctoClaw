@@ -8,7 +8,9 @@ from lib.task_display import (
     build_task_actions,
     build_task_anchor,
     build_task_detail,
+    build_task_graph,
     build_task_queue_view,
+    build_task_timeline,
     render_task_anchor_slack,
     render_task_anchor_text,
 )
@@ -102,6 +104,47 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
         self.assertIn("view", detail["action_availability"])
         self.assertIn("required_fields", detail["substrate_display_contract"])
+
+    def test_build_task_graph_and_timeline_follow_linear_step_ids_without_parent_links(self) -> None:
+        parent = {
+            "id": "flow-parent",
+            "worker_pool": "octoclaw-research",
+            "status": "running",
+            "summary": "coordinate research + review",
+            "route": "spawn_multi",
+            "artifacts": {
+                "step_order": ["research", "review"],
+                "step_task_ids": {"research": "step-1", "review": "step-2"},
+            },
+        }
+        children = [
+            {
+                "id": "step-1",
+                "worker_pool": "octoclaw-research",
+                "status": "done",
+                "summary": "gathered sources",
+                "route": "spawn_single",
+                "started_at": "2026-03-29T07:50:00Z",
+                "completed_at": "2026-03-29T07:55:00Z",
+            },
+            {
+                "id": "step-2",
+                "worker_pool": "octoclaw-review",
+                "status": "running",
+                "summary": "review the draft",
+                "route": "spawn_single",
+                "started_at": "2026-03-29T07:56:00Z",
+            },
+        ]
+
+        graph = build_task_graph(parent, all_tasks=[parent, *children], now=self.now)
+        timeline = build_task_timeline(parent, all_tasks=[parent, *children], now=self.now)
+
+        self.assertIn({"source": "flow-parent", "target": "step-1", "relation": "child"}, graph["edges"])
+        self.assertIn({"source": "step-1", "target": "step-2", "relation": "linear_step"}, graph["edges"])
+        event_kinds = [event["kind"] for event in timeline["events"]]
+        self.assertIn("child_started", event_kinds)
+        self.assertIn("child_finished", event_kinds)
 
     def test_build_operator_task_surface_contains_substrate_contract(self) -> None:
         surface = build_operator_task_surface(

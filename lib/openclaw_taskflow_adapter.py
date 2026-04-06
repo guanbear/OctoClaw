@@ -15,7 +15,7 @@ import json
 import os
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -28,10 +28,26 @@ TASKFLOW_LINK_SCHEMA_VERSION = "octoclaw.taskflow.link/v1"
 TASKFLOW_MIRROR_SCHEMA_VERSION = "octoclaw.taskflow.mirror/v1"
 SUPPORTED_TASKFLOW_ROUTES = {"runner", "spawn_single", "spawn_multi"}
 NATIVE_BINDING_THRESHOLD = 100
+DEFAULT_TASKFLOW_MIRROR_RETENTION_HOURS = 48
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat()
+
+
+def _parse_time(value: Any) -> datetime | None:
+    raw = _normalized_str(value)
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return None
 
 
 def _normalized_str(value: Any) -> str:
@@ -118,6 +134,11 @@ def _normalized_int(value: Any) -> int:
         return int(text)
     except ValueError:
         return 0
+
+
+def _retention_hours(config: dict[str, Any] | None = None) -> int:
+    hours = _normalized_int(_taskflow_cfg(config).get("mirror_cleanup_retention_hours"))
+    return hours if hours > 0 else DEFAULT_TASKFLOW_MIRROR_RETENTION_HOURS
 
 
 def _first_present(payload: dict[str, Any], *keys: str) -> Any:
@@ -636,6 +657,7 @@ def summarize_taskflow_inventory(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         "mirror_only": 0,
         "native_unavailable_fallback_mirror": 0,
         "cleanup_candidates": 0,
+        "cleanup_retention_hours": DEFAULT_TASKFLOW_MIRROR_RETENTION_HOURS,
         "flow_kind_counts": {},
         "route_counts": {},
     }
@@ -670,3 +692,104 @@ def summarize_taskflow_inventory(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         if is_terminal and create_status in {"mirror_only", "native_unavailable_fallback_mirror"}:
             summary["cleanup_candidates"] += 1
     return summary
+
+
+def describe_taskflow_cleanup(
+    tasks: list[dict[str, Any]],
+    *,
+    mirror_payload: dict[str, Any] | None = None,
+    now: datetime | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    retention_hours = _retention_hours(config)
+    current_time = now or datetime.now(timezone.utc).astimezone()
+    cutoff = current_time - timedelta(hours=retention_hours)
+    mirror = mirror_payload if isinstance(mirror_payload, dict) else load_taskflow_mirror()
+    entries = mirror.get("entries", {}) if isinstance(mirror.get("entries", {}), dict) else {}
+    candidates: list[dict[str, Any]] = []
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        binding = _binding_from_task(task)
+        if not binding:
+            continue
+        create_status = _normalized_str(binding.get("create_status")).lower()
+        if create_status not in {"mirror_only", "native_unavailable_fallback_mirror"}:
+            continue
+        lifecycle_state = _normalized_str(task.get("lifecycle_state")).lower()
+        status = _normalized_str(task.get("status")).lower()
+        is_terminal = lifecycle_state in {"finished", "cancelled"} or status in {"done", "failed", "blocked", "cancelled", "deferred"}
+        if not is_terminal:
+            continue
+        task_id = _normalized_str(task.get("id"))
+        mirror_entry = entries.get(task_id) if isinstance(entries.get(task_id), dict) else {}
+        last_seen = (
+            _parse_time(task.get("completed_at"))
+            or _parse_time(task.get("updated_at"))
+            or _parse_time(mirror_entry.get("updated_at"))
+        )
+        age_hours: int | None = None
+        eligible_now = False
+        if last_seen:
+            age_hours = max(0, int((current_time - last_seen).total_seconds() // 3600))
+            eligible_now = last_seen <= cutoff
+        candidates.append(
+            {
+                "task_id": task_id,
+                "route": _normalized_str(task.get("route")),
+                "status": status,
+                "lifecycle_state": lifecycle_state,
+                "create_status": create_status,
+                "mirror_entry_present": bool(mirror_entry),
+                "last_seen_at": last_seen.astimezone().isoformat() if last_seen else "",
+                "age_hours": age_hours,
+                "retention_hours": retention_hours,
+                "eligible_now": eligible_now and bool(mirror_entry),
+            }
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            0 if bool(item.get("eligible_now")) else 1,
+            -int(item.get("age_hours") or 0),
+            _normalized_str(item.get("task_id")),
+        )
+    )
+    return {
+        "retention_hours": retention_hours,
+        "candidate_count": len(candidates),
+        "eligible_count": sum(1 for item in candidates if bool(item.get("eligible_now"))),
+        "candidates": candidates,
+    }
+
+
+def cleanup_taskflow_mirror(
+    tasks: list[dict[str, Any]],
+    *,
+    path: str | None = None,
+    now: datetime | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    mirror_path = path or OPENCLAW_TASKFLOW_MIRROR_FILE
+    mirror = load_taskflow_mirror(mirror_path)
+    preview = describe_taskflow_cleanup(tasks, mirror_payload=mirror, now=now, config=config)
+    entries = mirror.get("entries", {}) if isinstance(mirror.get("entries", {}), dict) else {}
+    removed_task_ids: list[str] = []
+    for item in preview.get("candidates", []):
+        if not isinstance(item, dict) or not bool(item.get("eligible_now")):
+            continue
+        task_id = _normalized_str(item.get("task_id"))
+        if task_id and task_id in entries:
+            removed_task_ids.append(task_id)
+            entries.pop(task_id, None)
+    if removed_task_ids:
+        mirror["entries"] = entries
+        _persist_mirror(mirror_path, mirror)
+    return {
+        "retention_hours": int(preview.get("retention_hours", _retention_hours(config)) or _retention_hours(config)),
+        "candidate_count": int(preview.get("candidate_count", 0) or 0),
+        "removed_count": len(removed_task_ids),
+        "removed_task_ids": removed_task_ids,
+        "remaining_entries": len(entries),
+    }

@@ -94,6 +94,16 @@
 - `create_preference`
 - `create_status`
 
+### Substrate cleanup policy
+- mirror cleanup 只针对 `mirror_only` / `native_unavailable_fallback_mirror` 的 terminal task
+- 默认 retention：`48h`
+- cleanup 先 preview，再 apply
+- cleanup 只删 taskflow mirror entry，不回写 runtime truth
+- current operator surface:
+  - `task_display_cli.py substrate`
+  - `task_display_cli.py substrate --cleanup-preview`
+  - `task_display_cli.py substrate --cleanup-apply`
+
 ### Forbidden inferred fields
 - guessed task state
 - renderer-authored truth
@@ -109,7 +119,12 @@ P3+P4 当前已落到这些代码：
 - `lib/im_thread.py`：interaction contract / thread_state usage
 - `lib/notifier.py`：surface capability metadata
 - `lib/task_display.py`：action taxonomy + substrate display contract exposure
-- `lib/openclaw_taskflow_adapter.py`：create preference / create status surfaced into taskflow bindings
+- `lib/openclaw_taskflow_adapter.py`：create preference / create status surfaced into taskflow bindings，mirror cleanup preview/apply
+
+另外，simple `spawn_multi` 的 linear flow baseline 现在也进入了 graph/timeline：
+
+- step-order / step-task-id 可以在没有 `parent_id` 的情况下形成 linear step edges
+- timeline 会去重 child step events，避免同一步骤因多条 edge 重复刷屏
 
 这意味着当前已不是纯规划，而是：
 

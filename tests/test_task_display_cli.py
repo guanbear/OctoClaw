@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
+from unittest.mock import patch
 
 from lib import task_display_cli
 
@@ -145,6 +146,44 @@ class TaskDisplayCliTests(unittest.TestCase):
         self.assertIn("Taskflow tracked", out)
         self.assertIn("Native preferred", out)
         self.assertIn("Cleanup candidates", out)
+
+    @patch("lib.task_display_cli.describe_taskflow_cleanup")
+    def test_substrate_cleanup_preview_text_lists_candidates(self, mock_preview) -> None:
+        mock_preview.return_value = {
+            "retention_hours": 24,
+            "candidate_count": 1,
+            "eligible_count": 1,
+            "candidates": [
+                {
+                    "task_id": "task-2",
+                    "route": "runner",
+                    "create_status": "mirror_only",
+                    "age_hours": 72,
+                    "eligible_now": True,
+                }
+            ],
+        }
+
+        code, out, err = self._run(["--state-file", self.state_file, "substrate", "--cleanup-preview"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Substrate cleanup (preview)", out)
+        self.assertIn("task-2 | runner | mirror_only | 72h | eligible", out)
+
+    @patch("lib.task_display_cli.cleanup_taskflow_mirror")
+    def test_substrate_cleanup_apply_text_reports_removed_entries(self, mock_cleanup) -> None:
+        mock_cleanup.return_value = {
+            "retention_hours": 24,
+            "candidate_count": 2,
+            "removed_count": 1,
+            "removed_task_ids": ["task-2"],
+            "remaining_entries": 1,
+        }
+
+        code, out, err = self._run(["--state-file", self.state_file, "substrate", "--cleanup-apply"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Substrate cleanup (applied)", out)
+        self.assertIn("Removed: `1`", out)
+        self.assertIn("task-2", out)
 
     def test_retrieve_text_surfaces_runner_plan(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-2"])

@@ -24,7 +24,7 @@ from task_display import (
     build_task_timeline,
     render_task_anchor_text,
 )
-from openclaw_taskflow_adapter import summarize_taskflow_inventory
+from openclaw_taskflow_adapter import cleanup_taskflow_mirror, describe_taskflow_cleanup, summarize_taskflow_inventory
 
 def load_tasks(path: str) -> list[dict[str, Any]]:
     try:
@@ -305,11 +305,43 @@ def render_substrate_text(summary: dict[str, Any]) -> str:
         f"- Mirror only: `{int(summary.get('mirror_only', 0) or 0)}`",
         f"- Native unavailable fallback mirror: `{int(summary.get('native_unavailable_fallback_mirror', 0) or 0)}`",
         f"- Cleanup candidates: `{int(summary.get('cleanup_candidates', 0) or 0)}`",
+        f"- Cleanup retention hours: `{int(summary.get('cleanup_retention_hours', 48) or 48)}`",
     ]
     if summary.get("route_counts"):
         lines.append(f"- Routes: `{json.dumps(summary['route_counts'], ensure_ascii=False)}`")
     if summary.get("flow_kind_counts"):
         lines.append(f"- Flow kinds: `{json.dumps(summary['flow_kind_counts'], ensure_ascii=False)}`")
+    return "\n".join(lines)
+
+
+def render_substrate_cleanup_text(payload: dict[str, Any], *, applied: bool = False) -> str:
+    lines = [
+        "Substrate cleanup" + (" (applied)" if applied else " (preview)"),
+        f"- Retention hours: `{int(payload.get('retention_hours', 0) or 0)}`",
+        f"- Candidates: `{int(payload.get('candidate_count', 0) or 0)}`",
+    ]
+    if applied:
+        lines.append(f"- Removed: `{int(payload.get('removed_count', 0) or 0)}`")
+        removed = payload.get("removed_task_ids", []) if isinstance(payload.get("removed_task_ids"), list) else []
+        if removed:
+            lines.append("- Removed task ids: `" + ", ".join(str(item) for item in removed) + "`")
+    else:
+        lines.append(f"- Eligible now: `{int(payload.get('eligible_count', 0) or 0)}`")
+        candidates = payload.get("candidates", []) if isinstance(payload.get("candidates"), list) else []
+        if candidates:
+            lines.append("Candidates:")
+            for item in candidates[:8]:
+                if not isinstance(item, dict):
+                    continue
+                eligible = "eligible" if bool(item.get("eligible_now")) else "wait"
+                age_hours = item.get("age_hours")
+                age_label = f"{int(age_hours)}h" if isinstance(age_hours, int) else "unknown"
+                task_id = str(item.get("task_id", "") or "").strip()
+                route = str(item.get("route", "") or "").strip()
+                create_status = str(item.get("create_status", "") or "").strip()
+                lines.append(
+                    f"- {task_id} | {route} | {create_status} | {age_label} | {eligible}"
+                )
     return "\n".join(lines)
 
 
@@ -341,7 +373,9 @@ def main() -> int:
     p_explorer.add_argument("--id", required=True)
 
     sub.add_parser("queue")
-    sub.add_parser("substrate")
+    p_substrate = sub.add_parser("substrate")
+    p_substrate.add_argument("--cleanup-preview", action="store_true")
+    p_substrate.add_argument("--cleanup-apply", action="store_true")
 
     args = parser.parse_args()
     tasks = load_tasks(args.state_file)
@@ -355,6 +389,20 @@ def main() -> int:
         return 0
 
     if args.command == "substrate":
+        if args.cleanup_apply:
+            payload = cleanup_taskflow_mirror(tasks)
+            if args.format == "json":
+                print_json(payload)
+            else:
+                print(render_substrate_cleanup_text(payload, applied=True))
+            return 0
+        if args.cleanup_preview:
+            payload = describe_taskflow_cleanup(tasks)
+            if args.format == "json":
+                print_json(payload)
+            else:
+                print(render_substrate_cleanup_text(payload, applied=False))
+            return 0
         summary = summarize_taskflow_inventory(tasks)
         if args.format == "json":
             print_json(summary)

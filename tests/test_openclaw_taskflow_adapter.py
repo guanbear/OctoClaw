@@ -189,6 +189,81 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertTrue(enriched["openclaw_native_seen_at"])
         self.assertIn("create_preference", enriched["artifacts"]["openclaw_taskflow"])
 
+    def test_describe_taskflow_cleanup_marks_terminal_mirror_entries_after_retention(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-taskflow-") as td:
+            mirror_path = Path(td) / "openclaw-taskflow-mirror.json"
+            mirror_path.write_text(
+                '{"schema_version":"octoclaw.taskflow.mirror/v1","updated_at":"2026-04-05T00:00:00Z","entries":{"task-clean":{"task_id":"task-clean","updated_at":"2026-04-01T00:00:00Z","link":{"create_status":"mirror_only"}}}}',
+                encoding="utf-8",
+            )
+            config = {"openclaw_taskflow": {"mirror_cleanup_retention_hours": 24}}
+            payload = openclaw_taskflow_adapter.describe_taskflow_cleanup(
+                [
+                    {
+                        "id": "task-clean",
+                        "route": "runner",
+                        "status": "done",
+                        "lifecycle_state": "finished",
+                        "updated_at": "2026-04-01T00:00:00Z",
+                        "openclaw_taskflow": {"create_status": "mirror_only"},
+                    },
+                    {
+                        "id": "task-bound",
+                        "route": "spawn_single",
+                        "status": "done",
+                        "lifecycle_state": "finished",
+                        "updated_at": "2026-04-05T00:00:00Z",
+                        "openclaw_taskflow": {"create_status": "native_bound"},
+                    },
+                ],
+                mirror_payload=openclaw_taskflow_adapter.load_taskflow_mirror(str(mirror_path)),
+                now=openclaw_taskflow_adapter._parse_time("2026-04-06T12:00:00Z"),
+                config=config,
+            )
+
+        self.assertEqual(payload["candidate_count"], 1)
+        self.assertEqual(payload["eligible_count"], 1)
+        self.assertEqual(payload["candidates"][0]["task_id"], "task-clean")
+        self.assertTrue(payload["candidates"][0]["eligible_now"])
+
+    def test_cleanup_taskflow_mirror_removes_only_eligible_terminal_entries(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-taskflow-") as td:
+            mirror_path = Path(td) / "openclaw-taskflow-mirror.json"
+            mirror_path.write_text(
+                '{"schema_version":"octoclaw.taskflow.mirror/v1","updated_at":"2026-04-05T00:00:00Z","entries":{"task-clean":{"task_id":"task-clean","updated_at":"2026-04-01T00:00:00Z","link":{"create_status":"mirror_only"}},"task-keep":{"task_id":"task-keep","updated_at":"2026-04-06T10:00:00Z","link":{"create_status":"native_unavailable_fallback_mirror"}}}}',
+                encoding="utf-8",
+            )
+            config = {"openclaw_taskflow": {"mirror_cleanup_retention_hours": 24}}
+            result = openclaw_taskflow_adapter.cleanup_taskflow_mirror(
+                [
+                    {
+                        "id": "task-clean",
+                        "route": "runner",
+                        "status": "done",
+                        "lifecycle_state": "finished",
+                        "updated_at": "2026-04-01T00:00:00Z",
+                        "openclaw_taskflow": {"create_status": "mirror_only"},
+                    },
+                    {
+                        "id": "task-keep",
+                        "route": "spawn_single",
+                        "status": "done",
+                        "lifecycle_state": "finished",
+                        "updated_at": "2026-04-06T10:00:00Z",
+                        "openclaw_taskflow": {"create_status": "native_unavailable_fallback_mirror"},
+                    },
+                ],
+                path=str(mirror_path),
+                now=openclaw_taskflow_adapter._parse_time("2026-04-06T12:00:00Z"),
+                config=config,
+            )
+            mirror = openclaw_taskflow_adapter.load_taskflow_mirror(str(mirror_path))
+
+        self.assertEqual(result["removed_count"], 1)
+        self.assertEqual(result["removed_task_ids"], ["task-clean"])
+        self.assertNotIn("task-clean", mirror["entries"])
+        self.assertIn("task-keep", mirror["entries"])
+
     @patch("lib.openclaw_taskflow_adapter._run_openclaw_cli")
     def test_cancel_native_taskflow_prefers_flow_cancel(self, mock_cli) -> None:
         mock_cli.return_value = {"ok": True, "status": "ok"}

@@ -642,14 +642,7 @@ def build_task_detail(
     state_model = task_state_model(normalized)
     all_normalized = [_normalize_task(item) for item in (all_tasks or []) if isinstance(item, dict)]
     task_id = _text(normalized.get("id"))
-    child_ids = _text_list(normalized.get("child_ids"))
-    if not child_ids:
-        artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts", {}), dict) else {}
-        child_ids = _text_list(artifacts.get("child_task_ids"))
-        if not child_ids:
-            step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
-            child_ids = [str(value).strip() for value in step_task_ids.values() if str(value).strip()]
-
+    child_ids = _declared_child_ids(normalized)
     children = [item for item in all_normalized if _text(item.get("parent_id")) == task_id or _text(item.get("id")) in child_ids]
     artifacts = _collect_artifacts(normalized)
     actions = build_task_actions(normalized)
@@ -764,6 +757,39 @@ def _task_map(tasks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {_text(item.get("id")): item for item in tasks if _text(item.get("id"))}
 
 
+def _declared_child_ids(task: dict[str, Any]) -> list[str]:
+    child_ids = _text_list(task.get("child_ids"))
+    if child_ids:
+        return child_ids
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    child_ids = _text_list(artifacts.get("child_task_ids"))
+    if child_ids:
+        return child_ids
+    step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in step_task_ids.values():
+        child_id = _text(value)
+        if child_id and child_id not in seen:
+            seen.add(child_id)
+            ordered.append(child_id)
+    return ordered
+
+
+def _linear_step_pairs(task: dict[str, Any]) -> list[tuple[str, str]]:
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    step_order = artifacts.get("step_order", []) if isinstance(artifacts.get("step_order", []), list) else []
+    step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
+    ordered_task_ids = [_text(step_task_ids.get(step)) for step in step_order if _text(step_task_ids.get(step))]
+    pairs: list[tuple[str, str]] = []
+    for idx in range(len(ordered_task_ids) - 1):
+        source = ordered_task_ids[idx]
+        target = ordered_task_ids[idx + 1]
+        if source and target and source != target:
+            pairs.append((source, target))
+    return pairs
+
+
 def _root_task_for(task: dict[str, Any], tasks_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
     current = task
     seen: set[str] = set()
@@ -794,7 +820,13 @@ def build_task_graph(
     root_id = _text(root.get("id"))
 
     children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    declared_children_by_task: dict[str, list[str]] = {}
+    linear_step_pairs_by_task: dict[str, list[tuple[str, str]]] = {}
     for item in all_normalized:
+        current_id = _text(item.get("id"))
+        if current_id:
+            declared_children_by_task[current_id] = _declared_child_ids(item)
+            linear_step_pairs_by_task[current_id] = _linear_step_pairs(item)
         parent_id = _text(item.get("parent_id"))
         if not parent_id:
             continue
@@ -802,6 +834,7 @@ def build_task_graph(
 
     ordered_ids: list[str] = []
     edges: list[dict[str, str]] = []
+    seen_edges: set[tuple[str, str, str]] = set()
     queue: list[str] = [root_id] if root_id else [_text(normalized.get("id"))]
     seen: set[str] = set()
     while queue:
@@ -817,11 +850,36 @@ def build_task_graph(
             child_id = _text(child.get("id"))
             if not child_id:
                 continue
-            edges.append({"source": current_id, "target": child_id, "relation": "child"})
+            edge_key = (current_id, child_id, "child")
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                edges.append({"source": current_id, "target": child_id, "relation": "child"})
+            queue.append(child_id)
+        for child_id in declared_children_by_task.get(current_id, []):
+            child = tasks_by_id.get(child_id)
+            if not isinstance(child, dict):
+                continue
+            edge_key = (current_id, child_id, "child")
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                edges.append({"source": current_id, "target": child_id, "relation": "child"})
             queue.append(child_id)
 
     if _text(normalized.get("id")) not in ordered_ids and _text(normalized.get("id")):
         ordered_ids.append(_text(normalized.get("id")))
+
+    for owner_id, pairs in linear_step_pairs_by_task.items():
+        if owner_id not in ordered_ids:
+            continue
+        for source, target in pairs:
+            if source not in ordered_ids:
+                ordered_ids.append(source)
+            if target not in ordered_ids:
+                ordered_ids.append(target)
+            edge_key = (source, target, "linear_step")
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                edges.append({"source": source, "target": target, "relation": "linear_step"})
 
     nodes = [build_task_anchor(tasks_by_id.get(task_id, normalized), now=now) for task_id in ordered_ids]
     route_counts = Counter(_text(node.get("route")) for node in nodes if _text(node.get("route")))
@@ -873,6 +931,8 @@ def build_task_timeline(
             }
         )
 
+    seen_child_started: set[str] = set()
+    seen_child_finished: set[str] = set()
     for edge in graph.get("edges", []) if isinstance(graph.get("edges"), list) else []:
         if not isinstance(edge, dict):
             continue
@@ -883,7 +943,8 @@ def build_task_timeline(
         child_anchor = build_task_anchor(child, now=now)
         child_title = _text(child_anchor.get("title")) or child_id
         started_at = _text(child.get("started_at"))
-        if started_at:
+        if started_at and child_id not in seen_child_started:
+            seen_child_started.add(child_id)
             events.append(
                 {
                     "time": _event_time_label({"time": started_at}),
@@ -895,7 +956,8 @@ def build_task_timeline(
                 }
             )
         final_time = _text(child.get("completed_at") or child.get("updated_at"))
-        if child_anchor.get("terminal") and final_time:
+        if child_anchor.get("terminal") and final_time and child_id not in seen_child_finished:
+            seen_child_finished.add(child_id)
             final_kind = "child_finished"
             state = _text(child_anchor.get("state"))
             if state == "failed":

@@ -272,6 +272,12 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - simple `spawn_multi -> linear flow` 的收口路径
 - legacy mirror / fallback 清理顺序
 
+### 当前已落的 baseline（2026-04-06）
+- `task_display_cli substrate` 已能输出 substrate inventory
+- taskflow binding 已显式暴露 `create_preference / create_status`
+- simple `spawn_multi` 已能通过 `step_order / step_task_ids` 在 graph/timeline 上形成 linear flow baseline
+- taskflow mirror cleanup 已有 preview/apply contract，默认 retention `48h`
+
 ### 这条线现在最具体的推进顺序
 1. `spawn_single`：从 mirror/binding-first 继续推进到 native-preferred create
 2. simple `spawn_multi`：优先收成 linear flow，而不是继续长时间停留在并行 detached shell
