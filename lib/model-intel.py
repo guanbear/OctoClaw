@@ -512,7 +512,8 @@ def resolve_main_selection_config(config: dict | None = None) -> dict:
         override = {}
     merged = dict(DEFAULT_MAIN_SELECTION)
     merged.update(override)
-    merged["min_size_class"] = str(merged.get("min_size_class", "base") or "base").strip() or "base"
+    default_min_size_class = str(DEFAULT_MAIN_SELECTION.get("min_size_class", "strong") or "strong").strip() or "strong"
+    merged["min_size_class"] = str(merged.get("min_size_class", default_min_size_class) or default_min_size_class).strip() or default_min_size_class
     merged["relax_step"] = max(0.0, float(merged.get("relax_step", DEFAULT_MAIN_SELECTION["relax_step"]) or 0.0))
     merged["max_relax_rounds"] = max(0, int(merged.get("max_relax_rounds", DEFAULT_MAIN_SELECTION["max_relax_rounds"]) or 0))
     for key in (
@@ -560,8 +561,9 @@ def evaluate_main_candidate(
 ) -> dict:
     relax_step = float(config.get("relax_step", 0.0) or 0.0)
     relax_offset = relax_step * max(0, relax_round)
-    min_size_class = str(config.get("min_size_class", "base") or "base").strip() or "base"
-    min_size_rank = SIZE_CLASS_ORDER.get(min_size_class, SIZE_CLASS_ORDER["base"])
+    default_min_size_class = str(DEFAULT_MAIN_SELECTION.get("min_size_class", "strong") or "strong").strip() or "strong"
+    min_size_class = str(config.get("min_size_class", default_min_size_class) or default_min_size_class).strip() or default_min_size_class
+    min_size_rank = SIZE_CLASS_ORDER.get(min_size_class, SIZE_CLASS_ORDER[default_min_size_class])
     actual_size_rank = SIZE_CLASS_ORDER.get(size_class, SIZE_CLASS_ORDER["base"])
     thresholds = {
         "reasoning": max(0.0, float(config.get("min_reasoning", 0.0) or 0.0) - relax_offset),

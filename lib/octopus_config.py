@@ -145,7 +145,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "min_reliability": 0.82,
             "min_benchmark_support": 0.78,
             "min_capability_score": 0.86,
-            "min_size_class": "base",
+            "min_size_class": "strong",
             "relax_step": 0.03,
             "max_relax_rounds": 2,
         },
