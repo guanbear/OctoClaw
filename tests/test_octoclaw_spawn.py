@@ -229,8 +229,10 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "native")
         self.assertEqual(payload["backend_name"], "openclaw_agent")
         self.assertEqual(payload["pid"], 43210)
-        self.assertEqual(payload["session_key"], "")
+        self.assertEqual(payload["session_key"], "agent:main:subagent:research-1")
         self.assertTrue(payload["session_id"].startswith("octoclaw-subagent-"))
+        self.assertIn("--session-key", payload["command"])
+        self.assertIn("agent:main:subagent:research-1", payload["command"])
         self.assertNotIn("--model", payload["command"])
         self.assertNotIn("--lane", payload["command"])
         self.assertTrue(payload["stdout_path"].endswith(".stdout.log"))
@@ -307,6 +309,7 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("--session-id", upsert_cmd)
         self.assertIn("child-sess-2", upsert_cmd)
         self.assertIn("--run-id", upsert_cmd)
+        self.assertNotIn("--session-key", upsert_cmd)
 
     def test_build_spawn_spec_marks_native_spawn_running(self) -> None:
         policy = {

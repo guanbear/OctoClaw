@@ -489,7 +489,7 @@ def build_native_openclaw_command(
 ) -> tuple[list[str], str, str]:
     cfg = spawn_execution_config()
     openclaw_bin = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
-    session_key = ""
+    session_key = resolve_native_session_key(task_id)
     session_id = resolve_native_session_id(task_id)
     command = [
         openclaw_bin,
@@ -498,6 +498,8 @@ def build_native_openclaw_command(
         "main",
         "--session-id",
         session_id,
+        "--session-key",
+        session_key,
         "--message",
         prompt,
         "--json",
@@ -1499,9 +1501,6 @@ def build_spawn_spec(
                 cmd.extend(["--session-id", child_session_id])
             if child_run_id:
                 cmd.extend(["--run-id", child_run_id])
-            child_session_key = str((spawn_execution or {}).get("child_session_key", "") or "").strip()
-            if child_session_key:
-                cmd.extend(["--session-key", child_session_key])
             pid = int((spawn_execution or {}).get("pid", 0) or 0)
             if pid > 0:
                 cmd.extend(["--session-status", "spawned"])

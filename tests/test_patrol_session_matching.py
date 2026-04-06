@@ -3,6 +3,7 @@ import importlib
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,17 @@ class PatrolSessionMatchingTests(unittest.TestCase):
 
         self.assertEqual(candidates[0]["sessionId"], "sess-right")
         self.assertEqual(candidates[0]["_session_key"], "agent:main:octo-worker-2")
+
+    def test_check_main_model_drift_uses_default_config_loader(self) -> None:
+        with (
+            patch.object(patrol, "os") as os_mock,
+            patch("main_model_drift.main_session_drift_config", return_value={"enabled": False}) as drift_cfg_mock,
+            patch("main_model_drift.assess_main_model_drift", return_value={"enabled": False}),
+        ):
+            os_mock.path.exists.return_value = False
+            patrol.check_main_model_drift()
+
+        drift_cfg_mock.assert_called_once_with()
 
 
 if __name__ == "__main__":

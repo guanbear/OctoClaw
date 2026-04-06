@@ -508,6 +508,15 @@ OBSERVER_CONTROL_PATTERNS = {
     ),
 }
 
+TASK_PROGRESS_PATTERNS = {
+    "zh": (
+        r"(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗)",
+    ),
+    "en": (
+        r"\b(is it done|done yet|finished yet|still running|any progress|task status|task progress|what(?:'s| is) the status|how(?:'s| is) it going|where are we at)\b",
+    ),
+}
+
 ROUTE_PATTERN_LIBRARY = {
     "RUNNER_PATTERNS": RUNNER_PATTERNS,
     "RUNNER_READ_ONLY_INTENT_PATTERNS": RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -532,6 +541,7 @@ ROUTE_PATTERN_LIBRARY = {
     "ACK_FOLLOWUP_PATTERNS": ACK_FOLLOWUP_PATTERNS,
     "REMOTE_TARGET_PATTERNS": REMOTE_TARGET_PATTERNS,
     "OBSERVER_CONTROL_PATTERNS": OBSERVER_CONTROL_PATTERNS,
+    "TASK_PROGRESS_PATTERNS": TASK_PROGRESS_PATTERNS,
 }
 
 
@@ -610,6 +620,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     runner_target_hits = count_matches(text, resolve_language_patterns("RUNNER_TARGET_PATTERNS", enabled_packs))
     runner_negative_hits = count_matches(text, resolve_language_patterns("RUNNER_NEGATIVE_PATTERNS", enabled_packs))
     observer_control_hits = count_matches(text, resolve_language_patterns("OBSERVER_CONTROL_PATTERNS", enabled_packs))
+    task_progress_hits = count_matches(text, resolve_language_patterns("TASK_PROGRESS_PATTERNS", enabled_packs))
     command_read_only = command_looks_read_only(command)
     explicit_observer_command = bool(
         re.fullmatch(r"\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*", raw_task, re.IGNORECASE)
@@ -617,7 +628,6 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         or re.fullmatch(r"\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?|stop|retry|approve|reject)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
         or re.fullmatch(r"\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
     )
-    observer_control_candidate = bool(explicit_observer_command or observer_control_hits > 0)
     effective_write_hits = write_hits
     if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
         effective_write_hits = 0
@@ -652,6 +662,24 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         and implement_hits == 0
         and mutation_hits == 0
     )
+
+    task_progress_candidate = bool(
+        task_progress_hits > 0
+        and len(raw_task) <= 80
+        and not command
+        and runner_hits == 0
+        and code_hits == 0
+        and research_hits == 0
+        and effective_write_hits == 0
+        and summary_output_hits == 0
+        and multi_step_hits == 0
+        and parallel_hits == 0
+        and high_risk_hits == 0
+        and verify_hits == 0
+        and implement_hits == 0
+        and mutation_hits == 0
+    )
+    observer_control_candidate = bool(explicit_observer_command or observer_control_hits > 0 or task_progress_candidate)
 
     estimated_steps = 1
     if multi_step_hits > 0:
@@ -703,7 +731,9 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "runner_target_hits": runner_target_hits,
         "runner_negative_hits": runner_negative_hits,
         "observer_control_hits": observer_control_hits,
+        "task_progress_hits": task_progress_hits,
         "observer_control_candidate": observer_control_candidate,
+        "task_progress_candidate": task_progress_candidate,
         "explicit_local_probe": explicit_local_probe,
         "code_hits": code_hits,
         "research_hits": research_hits,

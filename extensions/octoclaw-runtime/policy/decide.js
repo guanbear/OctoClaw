@@ -1,4 +1,16 @@
-import { ROUTE_STICKINESS_FILE, loadJson, loadOctoClawConfig, saveJson } from "./config.js";
+import {
+  MODEL_BENCHMARKS_FILE,
+  MODEL_CATALOG_FILE,
+  MODEL_HEALTH_FILE,
+  MODEL_PLAN_STATE_FILE,
+  MODEL_POLICY_FILE,
+  MODEL_SOURCES_FILE,
+  MODEL_SPEED_FILE,
+  ROUTE_STICKINESS_FILE,
+  loadJson,
+  loadOctoClawConfig,
+  saveJson,
+} from "./config.js";
 import { resolveModelAndThinking } from "./model.js";
 import { inferRoute } from "./route.js";
 import {
@@ -10,6 +22,12 @@ import {
 const SCHEMA_VERSION = "octoclaw.runtime_policy.decision/v1";
 const BRIEF_SCHEMA_VERSION = "octoclaw.brief/v1";
 const WORKER_RESULT_SCHEMA_VERSION = "octoclaw.worker_result/v1";
+const AUTO_ROUTER_SIGNAL_SCHEMA_VERSION = "octoclaw.auto_router.signal/v1";
+const AUTO_ROUTER_CORE_SCHEMA_VERSION = "octoclaw.auto_router.router_core/v1";
+const AUTO_ROUTER_BUDGET_SCHEMA_VERSION = "octoclaw.auto_router.budget_planner/v1";
+const AUTO_ROUTER_MODEL_INTEL_SCHEMA_VERSION = "octoclaw.auto_router.model_intel/v1";
+const AUTO_ROUTER_ADAPTER_SCHEMA_VERSION = "octoclaw.auto_router.adapter/v1";
+const AUTO_ROUTER_RECOMMENDATION_SCHEMA_VERSION = "octoclaw.auto_router.recommendation/v1";
 const VALID_FORCE_ROUTES = new Set(["", "direct", "runner", "spawn_single", "spawn_multi"]);
 const VALID_ROUTE_HINT_ROUTES = new Set(["", "direct", "spawn_single", "spawn_multi"]);
 const VALID_ROUTE_HINT_WORK_TYPES = new Set(["", "ops", "research", "code", "review"]);
@@ -33,6 +51,10 @@ function normalizeChannel(value) {
 
 function normalizeMetadata(raw) {
   return raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
+}
+
+function normalizedText(value) {
+  return String(value || "").trim();
 }
 
 function parseUtcTimestamp(value) {
@@ -661,6 +683,121 @@ export function summarizeDecision(decision) {
     : `policy=${route} -> ${workerPool} / ${workType}:${phase} / ${modelBand} / profile=${profile}`;
 }
 
+function inferPolicyPhase(runtimeSwitches = {}) {
+  if (runtimeSwitches.route_hint_required_enabled || runtimeSwitches.direct_model_override_enabled) {
+    return "enforced";
+  }
+  if (runtimeSwitches.delegation_enforcement_enabled || runtimeSwitches.sticky_lane_enabled) {
+    return "guided";
+  }
+  return "conservative";
+}
+
+function buildAutoRouterPayload(decision) {
+  const request = decision?.request && typeof decision.request === "object" ? decision.request : {};
+  const routeDecision = decision?.route_decision && typeof decision.route_decision === "object" ? decision.route_decision : {};
+  const modelPolicy = decision?.model_policy && typeof decision.model_policy === "object" ? decision.model_policy : {};
+  const budget = decision?.budget_policy && typeof decision.budget_policy === "object" ? decision.budget_policy : {};
+  const routeHintPolicy = decision?.route_hint_policy && typeof decision.route_hint_policy === "object" ? decision.route_hint_policy : {};
+  const prompt = decision?.prompt_contract && typeof decision.prompt_contract === "object" ? decision.prompt_contract : {};
+  const tools = decision?.tool_policy && typeof decision.tool_policy === "object" ? decision.tool_policy : {};
+  const runtimeSwitches = decision?.runtime_switches && typeof decision.runtime_switches === "object" ? decision.runtime_switches : {};
+  const features = decision?.features && typeof decision.features === "object" ? decision.features : {};
+  const feedbackSignals = {
+    policy_phase: inferPolicyPhase(runtimeSwitches),
+    replay_logging_enabled: Boolean(runtimeSwitches.replay_logging_enabled),
+    promotion_eligibility: "",
+    validation_status: "",
+    learning_flags: [],
+  };
+  const signal = {
+    schema_version: AUTO_ROUTER_SIGNAL_SCHEMA_VERSION,
+    request: {
+      task: normalizedText(request.task),
+      command: normalizedText(request.command),
+      metadata: request.metadata && typeof request.metadata === "object" ? { ...request.metadata } : {},
+      session_key: normalizedText(request.session_key),
+      session_origin: normalizedText(request.channel),
+    },
+    contract: {
+      work_contract_hint: normalizedText(routeDecision.work_contract_hint),
+      artifact_need: Boolean(routeDecision.artifact_required),
+      durable_runtime_need: Boolean(routeDecision.durable_runtime_required),
+      parallel_gain: normalizedText(routeDecision.parallel_gain_band),
+      risk_level: features.high_risk ? "high" : (decision?.review_policy?.required ? "medium" : "low"),
+    },
+    continuity: {
+      route_hint: normalizedText(routeHintPolicy.hint_route),
+      sticky_lane: normalizedText(routeHintPolicy.sticky_route),
+      followup_kind: routeHintPolicy.ack_followup_candidate ? "ack" : "",
+      session_resume: request.metadata?.resume_context && typeof request.metadata.resume_context === "object"
+        ? request.metadata.resume_context
+        : {},
+    },
+    model_signals: {
+      model_band_hint: normalizedText(modelPolicy.model_band),
+      semantic_model_hint: "",
+      expected_cost_band: normalizedText(routeDecision.expected_cost_band),
+      expected_latency_ms: Number(routeDecision.expected_latency_ms || 0),
+    },
+    feedback_signals: feedbackSignals,
+  };
+  const fallbacks = Array.isArray(modelPolicy.fallbacks) ? modelPolicy.fallbacks : [];
+  const selectedModel = normalizedText(modelPolicy.selected_model);
+  return {
+    schema_version: AUTO_ROUTER_RECOMMENDATION_SCHEMA_VERSION,
+    internal_first: true,
+    signal,
+    router_core: {
+      schema_version: AUTO_ROUTER_CORE_SCHEMA_VERSION,
+      route: normalizedText(routeDecision.route),
+      work_contract: normalizedText(routeDecision.work_contract),
+      confidence: Number(routeDecision.confidence || 0),
+      reason_codes: Array.isArray(routeDecision.reason_codes) ? [...routeDecision.reason_codes] : [],
+      required_evidence: decision?.review_policy?.required ? ["validation"] : ["replay"],
+      review_required: Boolean(decision?.review_policy?.required),
+      next_evaluation_target: decision?.review_policy?.required ? "validation" : "replay",
+    },
+    budget_planner: {
+      schema_version: AUTO_ROUTER_BUDGET_SCHEMA_VERSION,
+      target_model: selectedModel,
+      fallback_model: normalizedText(fallbacks[0] || ""),
+      output_budget: normalizedText(budget.budget_cap),
+      retry_budget: Number(budget.retry_cap || 0),
+      latency_target: normalizedText(budget.latency_target),
+      max_workers: Number(budget.max_workers || 0),
+      upgrade_allowed: Boolean(budget.upgrade_allowed),
+      cost_ceiling: normalizedText(budget.budget_cap),
+    },
+    model_intel: {
+      schema_version: AUTO_ROUTER_MODEL_INTEL_SCHEMA_VERSION,
+      selected_model: selectedModel,
+      provider: selectedModel.includes("/") ? selectedModel.split("/")[0] : "",
+      model_band: normalizedText(modelPolicy.model_band),
+      selector_band: normalizedText(modelPolicy.selector_band),
+      selector_role: normalizedText(modelPolicy.model_selector_role),
+      source_files: {
+        catalog: MODEL_CATALOG_FILE,
+        policy: MODEL_POLICY_FILE,
+        health: MODEL_HEALTH_FILE,
+        speed: MODEL_SPEED_FILE,
+        plan_state: MODEL_PLAN_STATE_FILE,
+        benchmarks: MODEL_BENCHMARKS_FILE,
+        sources: MODEL_SOURCES_FILE,
+      },
+    },
+    adapter: {
+      schema_version: AUTO_ROUTER_ADAPTER_SCHEMA_VERSION,
+      policy_phase: feedbackSignals.policy_phase,
+      merge_contract: normalizedText(prompt.merge_contract),
+      handoff_contract: normalizedText(prompt.handoff_contract),
+      route_hint_required: Boolean(routeHintPolicy.required),
+      dispatch_required: Boolean(tools.dispatch_required),
+      control_observer_only: Boolean(tools.control_observer_only),
+    },
+  };
+}
+
 export function buildDecision(task, { command = "", metadata = {}, forceRoute = "", routeHint = {} } = {}) {
   const normalizedMetadata = normalizeMetadata(metadata);
   const normalizedRouteHint = normalizeRouteHint(routeHint);
@@ -749,6 +886,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const decision = {
     schema_version: SCHEMA_VERSION,
     generated_at: utcNow(),
+    features: { ...features },
     route_language_packs: Array.isArray(routeMeta.route_language_packs) ? [...routeMeta.route_language_packs] : [],
     request: {
       task,
@@ -808,6 +946,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     runtime_switches: runtimeSwitchesSummary(runtimeCfg),
   };
   decision.summary = summarizeDecision(decision);
+  decision.auto_router = buildAutoRouterPayload(decision);
   decision.hook_interface = hookInterface(runtimeCfg, decision);
   return decision;
 }

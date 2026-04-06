@@ -4790,7 +4790,7 @@ def check_main_model_drift():
     from main_model_drift import assess_main_model_drift, main_session_drift_config
 
     DRIFT_NOTICE_FILE = "/tmp/octopus-drift-notified.json"
-    drift_cfg = main_session_drift_config(load_octopus_config())
+    drift_cfg = main_session_drift_config()
     assessment = assess_main_model_drift()
     if not assessment.get("enabled"):
         return

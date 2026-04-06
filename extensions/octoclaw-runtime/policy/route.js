@@ -231,6 +231,11 @@ const OBSERVER_CONTROL_PATTERNS = {
   en: [String.raw`\b(octoclaw status|octoclaw queue|task details|task timeline|task graph|task retrieve|task result|task artifacts|task report|task stop|task retry|task approve|task reject|runtime status|task inbox)\b`],
 };
 
+const TASK_PROGRESS_PATTERNS = {
+  zh: [String.raw`(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗)`],
+  en: [String.raw`\b(is it done|done yet|finished yet|still running|any progress|task status|task progress|what(?:'s| is) the status|how(?:'s| is) it going|where are we at)\b`],
+};
+
 const ROUTE_PATTERN_LIBRARY = {
   RUNNER_PATTERNS,
   RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -255,6 +260,7 @@ const ROUTE_PATTERN_LIBRARY = {
   ACK_FOLLOWUP_PATTERNS,
   REMOTE_TARGET_PATTERNS,
   OBSERVER_CONTROL_PATTERNS,
+  TASK_PROGRESS_PATTERNS,
 };
 
 const languagePatternCache = new Map();
@@ -350,6 +356,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   const runnerTargetHits = countMatches(text, resolveLanguagePatterns("RUNNER_TARGET_PATTERNS", enabledPacks));
   const runnerNegativeHits = countMatches(text, resolveLanguagePatterns("RUNNER_NEGATIVE_PATTERNS", enabledPacks));
   const observerControlHits = countMatches(text, resolveLanguagePatterns("OBSERVER_CONTROL_PATTERNS", enabledPacks));
+  const taskProgressHits = countMatches(text, resolveLanguagePatterns("TASK_PROGRESS_PATTERNS", enabledPacks));
   const commandReadOnly = commandLooksReadOnly(normalizedCommand);
   const explicitObserverCommand = Boolean(
     /^\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*$/iu.test(rawTask)
@@ -357,7 +364,6 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       || /^\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?|stop|retry|approve|reject)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask)
       || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
   );
-  const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0);
 
   let effectiveWriteHits = writeHits;
   if (summaryOutputHits > 0 && codeHits === 0 && researchHits === 0 && mutationHits === 0) {
@@ -393,8 +399,26 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     && remoteTargetHits === 0
     && verifyHits === 0
     && implementHits === 0
-    && mutationHits === 0
+      && mutationHits === 0
   );
+
+  const taskProgressCandidate = Boolean(
+    taskProgressHits > 0
+      && rawTask.length <= 80
+      && !normalizedCommand
+      && runnerHits === 0
+      && codeHits === 0
+      && researchHits === 0
+      && effectiveWriteHits === 0
+      && summaryOutputHits === 0
+      && multiStepHits === 0
+      && parallelHits === 0
+      && highRiskHits === 0
+      && verifyHits === 0
+      && implementHits === 0
+      && mutationHits === 0,
+  );
+  const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0 || taskProgressCandidate);
 
   let estimatedSteps = 1;
   if (multiStepHits > 0) estimatedSteps += 1;
@@ -441,7 +465,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     runner_target_hits: runnerTargetHits,
     runner_negative_hits: runnerNegativeHits,
     observer_control_hits: observerControlHits,
+    task_progress_hits: taskProgressHits,
     observer_control_candidate: observerControlCandidate,
+    task_progress_candidate: taskProgressCandidate,
     explicit_local_probe: explicitLocalProbe,
     code_hits: codeHits,
     research_hits: researchHits,

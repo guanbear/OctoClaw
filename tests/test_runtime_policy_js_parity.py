@@ -36,6 +36,11 @@ console.log(JSON.stringify(value));
 def _normalize_decision(payload: dict) -> dict:
     normalized = json.loads(json.dumps(payload))
     normalized.pop("generated_at", None)
+    auto_router = normalized.get("auto_router")
+    if isinstance(auto_router, dict):
+        model_intel = auto_router.get("model_intel")
+        if isinstance(model_intel, dict):
+            model_intel.pop("source_files", None)
     return normalized
 
 
@@ -113,6 +118,14 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
             },
             {
                 "task": "八爪鱼状态",
+                "config": {},
+            },
+            {
+                "task": "好了吗",
+                "config": {},
+            },
+            {
+                "task": "在吗",
                 "config": {},
             },
             {
