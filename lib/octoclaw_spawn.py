@@ -141,6 +141,21 @@ def clawteam_spawn_supports_option(option: str, *, clawteam_bin: str) -> bool:
     return option in clawteam_spawn_help_text(clawteam_bin)
 
 
+@lru_cache(maxsize=8)
+def openclaw_agent_help_text(openclaw_bin: str) -> str:
+    result = subprocess.run(
+        [openclaw_bin, "agent", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return "\n".join(part for part in (result.stdout, result.stderr) if part)
+
+
+def openclaw_agent_supports_option(option: str, *, openclaw_bin: str) -> bool:
+    return option in openclaw_agent_help_text(openclaw_bin)
+
+
 def resolve_model_and_thinking(
     selector_band: str,
     description: str,
@@ -491,6 +506,7 @@ def build_native_openclaw_command(
     openclaw_bin = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
     session_key = resolve_native_session_key(task_id)
     session_id = resolve_native_session_id(task_id)
+    supports_thinking = openclaw_agent_supports_option("--thinking", openclaw_bin=openclaw_bin)
     command = [
         openclaw_bin,
         "agent",
@@ -504,7 +520,7 @@ def build_native_openclaw_command(
         prompt,
         "--json",
     ]
-    if thinking:
+    if thinking and supports_thinking:
         command.extend(["--thinking", thinking])
     return command, session_key, session_id
 

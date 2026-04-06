@@ -213,6 +213,7 @@ class OctoClawSpawnTests(unittest.TestCase):
                 patch.object(octoclaw_spawn, "SCRIPT_DIR", str(Path(tmpdir) / "lib")),
                 patch.object(octoclaw_spawn, "TASK_STATE_PY", str(Path(tmpdir) / "task-state-update.py")),
                 patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"openclaw_bin": "openclaw"}),
+                patch.object(octoclaw_spawn, "openclaw_agent_supports_option", return_value=True),
                 patch.object(octoclaw_spawn.shutil, "which", return_value="/usr/bin/openclaw"),
                 patch.object(octoclaw_spawn, "resolve_python_bin", return_value="/opt/homebrew/bin/python3"),
                 patch.object(octoclaw_spawn.subprocess, "Popen", side_effect=_fake_popen),
@@ -235,12 +236,32 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("agent:main:subagent:research-1", payload["command"])
         self.assertNotIn("--model", payload["command"])
         self.assertNotIn("--lane", payload["command"])
+        self.assertNotIn("--session-key", payload["command"])
         self.assertTrue(payload["stdout_path"].endswith(".stdout.log"))
         self.assertTrue(payload["stderr_path"].endswith(".stderr.log"))
         self.assertTrue(payload["wrapper_path"].endswith(".run.sh"))
         self.assertEqual(created["kwargs"]["cwd"], tmpdir)
         self.assertEqual(created["kwargs"]["env"]["OCTOCLAW_DISABLE_RUNTIME_POLICY"], "1")
         self.assertTrue(created["kwargs"]["start_new_session"])
+
+    def test_build_native_openclaw_command_uses_supported_agent_options_only(self) -> None:
+        with (
+            patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"openclaw_bin": "openclaw"}),
+            patch.object(octoclaw_spawn, "resolve_native_session_id", return_value="octoclaw-subagent-research-1"),
+            patch.object(octoclaw_spawn, "openclaw_agent_supports_option", return_value=False),
+        ):
+            command, session_key, session_id = octoclaw_spawn.build_native_openclaw_command(
+                task_id="research-1",
+                prompt="do the work",
+                model="omniroute/cx/gpt-5.4",
+                thinking="medium",
+            )
+
+        self.assertEqual(session_key, "")
+        self.assertEqual(session_id, "octoclaw-subagent-research-1")
+        self.assertIn("--session-id", command)
+        self.assertNotIn("--session-key", command)
+        self.assertNotIn("--thinking", command)
 
     def test_build_spawn_spec_backfills_child_session_facts_after_spawn(self) -> None:
         policy = {
