@@ -796,7 +796,7 @@ def build_native_openclaw_command(
 ) -> tuple[list[str], str, str]:
     cfg = spawn_execution_config()
     openclaw_bin = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
-    session_key = resolve_native_session_key(task_id)
+    session_key = ""
     session_id = resolve_native_session_id(task_id)
     supports_thinking = openclaw_agent_supports_option("--thinking", openclaw_bin=openclaw_bin)
     command = [
@@ -806,8 +806,6 @@ def build_native_openclaw_command(
         "main",
         "--session-id",
         session_id,
-        "--session-key",
-        session_key,
         "--message",
         prompt,
         "--json",
