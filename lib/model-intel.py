@@ -111,9 +111,19 @@ DEFAULT_MAIN_SELECTION = {
     "min_reliability": 0.82,
     "min_benchmark_support": 0.78,
     "min_capability_score": 0.86,
-    "min_size_class": "base",
+    "min_size_class": "strong",
     "relax_step": 0.03,
     "max_relax_rounds": 2,
+}
+
+PROVIDER_AUTH_EQUIVALENTS = {
+    "omniroute": {"omniroute", "openai-codex", "openai"},
+    "openai-codex": {"openai-codex", "omniroute", "openai"},
+    "openai": {"openai", "openai-codex", "omniroute"},
+    "zai": {"zai", "zhipu"},
+    "zhipu": {"zhipu", "zai"},
+    "minimax": {"minimax", "minimax-portal"},
+    "minimax-portal": {"minimax-portal", "minimax"},
 }
 
 OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
@@ -280,6 +290,9 @@ def collect_candidate_model_ids(primary_ids: list[str], *sources: dict) -> list[
     for model_id in primary_ids:
         remember(model_id)
 
+    if ordered:
+        return ordered
+
     for source in sources:
         if not isinstance(source, dict):
             continue
@@ -288,6 +301,57 @@ def collect_candidate_model_ids(primary_ids: list[str], *sources: dict) -> list[
                 remember(str(model_id))
 
     return ordered
+
+
+def resolve_benchmark_override(model_id: str, overrides: dict[str, dict]) -> tuple[str, dict]:
+    if not isinstance(overrides, dict):
+        return "", {}
+    if model_id in overrides and isinstance(overrides.get(model_id), dict):
+        return model_id, dict(overrides[model_id])
+
+    model_lower = str(model_id or "").strip().lower()
+    for key, value in overrides.items():
+        if str(key or "").strip().lower() == model_lower and isinstance(value, dict):
+            return str(key), dict(value)
+
+    target_prior = match_prior(model_id)
+    target_short_name = str(target_prior.get("short_name", "") or "").strip().lower()
+    if not target_short_name:
+        return "", {}
+    target_family = str(infer_family_metadata(model_id, {}).get("family", "") or "").strip().lower()
+    target_provider = model_lower.split("/", 1)[0] if "/" in model_lower else ""
+
+    candidates: list[tuple[int, float, str, dict]] = []
+    for key, value in overrides.items():
+        if not isinstance(value, dict):
+            continue
+        candidate_key = str(key or "").strip()
+        if "/" not in candidate_key:
+            continue
+        candidate_prior = match_prior(candidate_key)
+        candidate_short_name = str(candidate_prior.get("short_name", "") or "").strip().lower()
+        if candidate_short_name != target_short_name:
+            continue
+        candidate_family = str(infer_family_metadata(candidate_key, value).get("family", "") or "").strip().lower()
+        score = 0
+        if candidate_family and candidate_family == target_family:
+            score += 4
+        candidate_provider = candidate_key.lower().split("/", 1)[0]
+        if target_provider and candidate_provider == target_provider:
+            score += 2
+        benchmark_meta = value.get("benchmark_meta", {})
+        confidence_sum = 0.0
+        if isinstance(benchmark_meta, dict):
+            for meta in benchmark_meta.values():
+                if isinstance(meta, dict):
+                    confidence_sum += float(meta.get("confidence", 0.0) or 0.0)
+        candidates.append((score, confidence_sum, candidate_key, dict(value)))
+
+    if not candidates:
+        return "", {}
+
+    _, _, selected_key, selected_value = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+    return selected_key, selected_value
 
 
 def load_latency_data() -> dict:
@@ -445,6 +509,7 @@ def evaluate_main_candidate(
     *,
     model_id: str,
     size_class: str,
+    main_capable: bool,
     reasoning: float,
     coding: float,
     openclaw: float,
@@ -469,6 +534,8 @@ def evaluate_main_candidate(
         "size_class": min_size_class,
     }
     failed_checks: list[str] = []
+    if not main_capable:
+        failed_checks.append("main_capable")
     if actual_size_rank < min_size_rank:
         failed_checks.append(f"size_class<{min_size_class}")
     if reasoning < thresholds["reasoning"]:
@@ -490,6 +557,7 @@ def evaluate_main_candidate(
         "failed_checks": failed_checks,
         "thresholds": thresholds,
         "metrics": {
+            "main_capable": bool(main_capable),
             "reasoning": round(reasoning, 6),
             "coding": round(coding, 6),
             "openclaw": round(openclaw, 6),
@@ -510,8 +578,10 @@ def build_catalog() -> dict:
     speed_data = load_speed_data()
     benchmark_overrides = load_benchmark_overrides()
     source_registry = load_source_registry()
+    configured_ids = load_models_from_openclaw()
+    configured_set = {str(model_id).strip() for model_id in configured_ids}
     model_ids = collect_candidate_model_ids(
-        load_models_from_openclaw(),
+        configured_ids,
         latency_data,
         speed_data,
         benchmark_overrides,
@@ -521,7 +591,7 @@ def build_catalog() -> dict:
     for model_id in model_ids:
         prior = match_prior(model_id)
         latency = latency_data.get(model_id, {})
-        override = benchmark_overrides.get(model_id, {})
+        benchmark_source_model, override = resolve_benchmark_override(model_id, benchmark_overrides)
         benchmark_scores = dict(override.get("benchmark_scores", {}))
         benchmark_meta = dict(override.get("benchmark_meta", {}))
         family_meta = infer_family_metadata(model_id, override)
@@ -566,6 +636,8 @@ def build_catalog() -> dict:
                 "upgrade_path": family_meta["upgrade_path"],
                 "fallback_path": family_meta["fallback_path"],
                 "available": bool(local_speed.get("available", latency.get("available", True))) if isinstance(local_speed, dict) else bool(latency.get("available", True)),
+                "configured": model_id in configured_set,
+                "benchmark_source_model": benchmark_source_model,
                 "pricing": pricing,
                 "scores": scores,
                 "benchmark_scores": benchmark_scores,
@@ -619,12 +691,32 @@ def load_available_auth_providers() -> set[str]:
 def filter_models_for_available_auth(models: list[dict], available_providers: set[str]) -> list[dict]:
     if not available_providers:
         return list(models)
+    normalized_available: set[str] = set()
+    for provider in available_providers:
+        provider_name = str(provider or "").strip().lower()
+        if not provider_name:
+            continue
+        normalized_available.update(PROVIDER_AUTH_EQUIVALENTS.get(provider_name, {provider_name}))
     filtered = [
         model
         for model in models
-        if str(model.get("provider", "") or "").strip().lower() in available_providers
+        if bool(model.get("configured"))
+        or str(model.get("provider", "") or "").strip().lower() in normalized_available
     ]
     return filtered or list(models)
+
+
+def is_main_capable_model(model: dict) -> bool:
+    preferred_use = model.get("preferred_use", [])
+    preferred_tags = {
+        str(item or "").strip().lower()
+        for item in preferred_use
+        if isinstance(item, str)
+    }
+    if "main" in preferred_tags:
+        return True
+    size_class = str(model.get("size_class", "base") or "base").strip().lower()
+    return SIZE_CLASS_ORDER.get(size_class, SIZE_CLASS_ORDER["base"]) >= SIZE_CLASS_ORDER["strong"]
 
 
 def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None) -> dict:
@@ -693,12 +785,24 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         writing = float(scores.get("writing", 0.65))
         benchmark_scores = model.get("benchmark_scores", {})
         source_factors = model.get("source_factors", {})
-        pinchbench = float(benchmark_scores.get("pinchbench", openclaw)) * float(source_factors.get("pinchbench", 1.0))
-        aa_coding = float(benchmark_scores.get("artificial_analysis_coding", coding)) * float(source_factors.get("artificial_analysis_coding", 1.0))
-        claw_eval = float(benchmark_scores.get("claw_eval", benchmark_scores.get("openclaw_live_compat", openclaw))) * float(source_factors.get("claw_eval", 1.0))
-        openrouter_rankings = float(benchmark_scores.get("openrouter_rankings", 0.5)) * float(source_factors.get("openrouter_rankings", 1.0))
-        openclaw_live_compat = float(benchmark_scores.get("openclaw_live_compat", claw_eval)) * float(source_factors.get("openclaw_live_compat", 1.0))
-        benchmark_support = 0.35 * pinchbench + 0.30 * aa_coding + 0.25 * claw_eval + 0.10 * openrouter_rankings
+        raw_pinchbench = float(benchmark_scores.get("pinchbench", openclaw))
+        raw_aa_coding = float(benchmark_scores.get("artificial_analysis_coding", coding))
+        raw_claw_eval = float(benchmark_scores.get("claw_eval", benchmark_scores.get("openclaw_live_compat", openclaw)))
+        raw_openrouter_rankings = float(benchmark_scores.get("openrouter_rankings", 0.5))
+        raw_openclaw_live_compat = float(benchmark_scores.get("openclaw_live_compat", raw_claw_eval))
+        pinchbench = raw_pinchbench * float(source_factors.get("pinchbench", 1.0))
+        aa_coding = raw_aa_coding * float(source_factors.get("artificial_analysis_coding", 1.0))
+        claw_eval = raw_claw_eval * float(source_factors.get("claw_eval", 1.0))
+        openrouter_rankings = raw_openrouter_rankings * float(source_factors.get("openrouter_rankings", 1.0))
+        openclaw_live_compat = raw_openclaw_live_compat * float(source_factors.get("openclaw_live_compat", 1.0))
+        raw_benchmark_support = 0.35 * raw_pinchbench + 0.30 * raw_aa_coding + 0.25 * raw_claw_eval + 0.10 * raw_openrouter_rankings
+        weighted_benchmark_support = 0.35 * pinchbench + 0.30 * aa_coding + 0.25 * claw_eval + 0.10 * openrouter_rankings
+        evidence_confidence = (
+            0.35 * float(source_factors.get("pinchbench", 0.55))
+            + 0.30 * float(source_factors.get("artificial_analysis_coding", 0.55))
+            + 0.25 * float(source_factors.get("claw_eval", 0.55))
+            + 0.10 * float(source_factors.get("openrouter_rankings", 0.35))
+        )
         plan_value_score = compute_plan_value_score(model["id"])
         availability_score = 0.0 if should_fallback_due_to_plan(model["id"]) else 1.0
         size_class = str(model.get("size_class", "base") or "base")
@@ -708,7 +812,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
             coding=coding,
             openclaw=openclaw,
             reliability=reliability,
-            benchmark_support=benchmark_support,
+            benchmark_support=raw_benchmark_support,
         )
         local_speed_present = isinstance(speed.get("ttft_ms"), (int, float)) and isinstance(speed.get("output_tps"), (int, float))
         local_speed_boost = 1.0 if local_speed_present else 0.88
@@ -735,11 +839,12 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         main_candidate_evaluations[model["id"]] = evaluate_main_candidate(
             model_id=model["id"],
             size_class=size_class,
+            main_capable=is_main_capable_model(model),
             reasoning=reasoning,
             coding=coding,
             openclaw=openclaw,
             reliability=reliability,
-            benchmark_support=benchmark_support,
+            benchmark_support=raw_benchmark_support,
             capability_score=main_capability_score,
             config=main_selection_cfg,
             relax_round=0,
@@ -748,23 +853,24 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         role_scores = {
             "runner": (
                 (
-                    0.64 * ttft_score
+                    0.48 * ttft_score
                     + 0.20 * throughput_score
-                    + 0.05 * reliability
-                    + 0.05 * plan_value_score
-                    + 0.02 * price_score
-                    + 0.01 * claw_eval
-                    + 0.01 * size_preference["runner"].get(size_class, 0.80)
+                    + 0.10 * plan_value_score
+                    + 0.08 * price_score
+                    + 0.06 * reliability
+                    + 0.04 * openclaw_live_compat
+                    + 0.02 * evidence_confidence
+                    + 0.02 * size_preference["runner"].get(size_class, 0.80)
                 ) * local_speed_boost
                 + fast_lane_bonus
             ) - role_health_penalties["runner"],
-            "research": 0.19 * openclaw + 0.17 * reasoning + 0.17 * writing + 0.14 * pinchbench + 0.10 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["research"].get(size_class, 0.80) - role_health_penalties["research"],
-            "writer": 0.26 * writing + 0.18 * reasoning + 0.13 * throughput_score + 0.10 * pinchbench + 0.08 * claw_eval + 0.08 * reliability + 0.07 * price_score + 0.06 * plan_value_score + 0.04 * size_preference["writer"].get(size_class, 0.80) - role_health_penalties["writer"],
-            "code": 0.24 * coding + 0.16 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["code"].get(size_class, 0.80) - role_health_penalties["code"],
-            "review": 0.22 * coding + 0.18 * openclaw + 0.15 * reliability + 0.13 * claw_eval + 0.10 * aa_coding + 0.08 * openclaw_live_compat + 0.06 * price_score + 0.04 * plan_value_score + 0.04 * size_preference["review"].get(size_class, 0.80) - role_health_penalties["review"],
-            "inspect": 0.21 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.04 * price_score + 0.03 * size_preference["inspect"].get(size_class, 0.80) - role_health_penalties["inspect"],
-            "team": 0.19 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.08 * reliability + 0.04 * price_score + 0.04 * size_preference["team"].get(size_class, 0.80) - role_health_penalties["team"],
-            "main": 0.19 * coding + 0.16 * openclaw + 0.15 * reasoning + 0.14 * pinchbench + 0.12 * claw_eval + 0.08 * aa_coding + 0.07 * reliability + 0.05 * ttft_score + 0.02 * availability_score + 0.02 * size_preference["main"].get(size_class, 0.80) - role_health_penalties["main"],
+            "research": 0.18 * openclaw + 0.17 * reasoning + 0.15 * writing + 0.12 * weighted_benchmark_support + 0.08 * reliability + 0.08 * price_score + 0.08 * plan_value_score + 0.06 * evidence_confidence + 0.04 * size_preference["research"].get(size_class, 0.80) - role_health_penalties["research"],
+            "writer": 0.24 * writing + 0.18 * reasoning + 0.12 * throughput_score + 0.10 * price_score + 0.10 * plan_value_score + 0.08 * weighted_benchmark_support + 0.08 * reliability + 0.05 * evidence_confidence + 0.05 * size_preference["writer"].get(size_class, 0.80) - role_health_penalties["writer"],
+            "code": 0.23 * coding + 0.16 * openclaw + 0.12 * reasoning + 0.10 * raw_benchmark_support + 0.09 * openclaw_live_compat + 0.09 * reliability + 0.08 * price_score + 0.06 * plan_value_score + 0.04 * evidence_confidence + 0.03 * size_preference["code"].get(size_class, 0.80) - role_health_penalties["code"],
+            "review": 0.21 * coding + 0.17 * reasoning + 0.16 * openclaw + 0.10 * raw_benchmark_support + 0.09 * openclaw_live_compat + 0.09 * reliability + 0.07 * price_score + 0.05 * plan_value_score + 0.03 * evidence_confidence + 0.03 * size_preference["review"].get(size_class, 0.80) - role_health_penalties["review"],
+            "inspect": 0.22 * reasoning + 0.16 * coding + 0.15 * openclaw + 0.12 * weighted_benchmark_support + 0.09 * reliability + 0.07 * price_score + 0.06 * evidence_confidence + 0.05 * throughput_score + 0.04 * size_preference["inspect"].get(size_class, 0.80) - role_health_penalties["inspect"],
+            "team": 0.19 * reasoning + 0.17 * coding + 0.15 * openclaw + 0.12 * weighted_benchmark_support + 0.10 * reliability + 0.07 * price_score + 0.06 * evidence_confidence + 0.06 * plan_value_score + 0.04 * size_preference["team"].get(size_class, 0.80) - role_health_penalties["team"],
+            "main": 0.30 * main_capability_score + 0.18 * coding + 0.16 * reasoning + 0.12 * openclaw + 0.10 * raw_benchmark_support + 0.05 * evidence_confidence + 0.05 * reliability + 0.03 * ttft_score + 0.01 * availability_score - role_health_penalties["main"],
         }
         enriched.append((model, role_scores))
 
@@ -780,16 +886,20 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         ordered = sorted(enriched, key=lambda item: item[1][role], reverse=True)
         full_ordered = list(ordered)
         if role == "main":
+            main_capable_ordered = [item for item in ordered if is_main_capable_model(item[0])]
+            candidate_pool = main_capable_ordered or list(ordered)
+            candidate_pool_ids = {model["id"] for model, _ in candidate_pool}
             selected_round = 0
             eligible_ordered: list[tuple[dict, dict]] = []
             candidate_rows: list[dict] = []
             for relax_round in range(int(main_selection_cfg.get("max_relax_rounds", 0) or 0) + 1):
                 candidate_rows = []
                 eligible_ordered = []
-                for model, scores in ordered:
+                for model, scores in full_ordered:
                     evaluation = evaluate_main_candidate(
                         model_id=model["id"],
                         size_class=str(model.get("size_class", "base") or "base"),
+                        main_capable=is_main_capable_model(model),
                         reasoning=float(model.get("scores", {}).get("reasoning", 0.65)),
                         coding=float(model.get("scores", {}).get("coding", 0.65)),
                         openclaw=float(model.get("scores", {}).get("openclaw", 0.65)),
@@ -802,16 +912,19 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
                     row = dict(evaluation)
                     row["score"] = round(float(scores["main"]), 6)
                     candidate_rows.append(row)
-                    if evaluation["eligible"]:
+                    if evaluation["eligible"] and model["id"] in candidate_pool_ids:
                         eligible_ordered.append((model, scores))
                 if eligible_ordered:
                     selected_round = relax_round
                     break
             if eligible_ordered:
                 ordered = eligible_ordered
+                main_selection_meta["selection_path"] = "capability_gate"
+            else:
+                ordered = candidate_pool
+                main_selection_meta["selection_path"] = "capability_ranked_fallback" if main_capable_ordered else "ranked_no_main_capable"
             main_selection_meta["relax_round"] = selected_round
             main_selection_meta["candidates"] = candidate_rows
-            main_selection_meta["selection_path"] = "capability_gate"
         cooldown_candidates: list[str] = []
         for model, _ in ordered:
             health_entry = health_models.get(model["id"], {})
