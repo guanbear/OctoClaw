@@ -88,6 +88,10 @@
 - [x] future OpenRouter Auto-like mapping notes
 - [x] 明确“不服务化”的当前边界
 
+> 2026-04-07 runtime baseline：
+> delegated dispatch 现在会带 `pre_dispatch_ack` contract；runtime 先尝试发 channel/thread ack，
+> 发不出去时回退到 progress update。当前 transport 仍通过 Python helper bridge，后续可再并回 JS hot path。
+
 ---
 
 ## 4. 文件映射清单
