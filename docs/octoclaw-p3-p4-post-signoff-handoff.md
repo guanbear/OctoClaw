@@ -1,6 +1,6 @@
 # OctoClaw P3/P4 Post-Signoff Execution Handoff
 
-> 状态：after P3 signoff + P4 transition signoff（2026-04-06）
+> 状态：after P3 signoff + P4 closeout（2026-04-07）
 
 ## What is now frozen
 
@@ -17,32 +17,31 @@
 - `create_preference` / `create_status`
 - cleanup preview/apply policy
 - legacy mirror / fallback inventory framing
-- read-order matrix + exception ledger
+- read-order matrix
 
-## What is explicitly **not** frozen as “already complete”
+## What is now evidenced by follow-up implementation
 
-- `display` substrate-first convergence
-- `retrieve` substrate-first convergence
-- `observer` substrate-first convergence
-- `review` substrate-first convergence
+- `display` = `substrate_first`
+- `retrieve` = `substrate_first`
+- `observer` = `evidenced_substrate_aware`
+- `review` = `evidenced_substrate_aware`
 
-这些只能按当前状态继续表述为：
+本轮 evidence 以 **OpenClaw 2026.4.5** 已发布 TaskFlow/runtime 源码语义为准：
 
-- `display` = `mixed`
-- `retrieve` = `mixed`
-- `observer` = `not-yet-evidenced`
-- `review` = `not-yet-evidenced`
+- operator first read = `flow/task target`
+- then `taskSummary` / linked child health / review surface
+- artifacts/report/context 退回到补充面
 
 ## Recommended next execution scope
 
-### Lane 1 — make mixed surfaces more honestly substrate-first
-- tighten `display` read ordering
-- tighten `retrieve` read ordering
-- keep artifact/report UX intact while reducing mirror/runtime-first ambiguity
+### Lane 1 — keep substrate-first surfaces aligned
+- preserve `display` read ordering against regressions
+- preserve `retrieve` read ordering against regressions
+- keep artifact/report UX intact while ensuring it does not overtake substrate truth
 
-### Lane 2 — build explicit substrate-aware observer/review surfaces
-- add a substrate/taskflow-aware observer view instead of only runner/count snapshots
-- add a review surface that is more than `review_requested` event exposure
+### Lane 2 — keep observer/review surfaces evidenced
+- preserve the substrate/taskflow-aware observer view
+- preserve the review surface beyond `review_requested` event exposure
 
 ### Lane 3 — continue bounded cleanup
 - keep cleanup preview-first

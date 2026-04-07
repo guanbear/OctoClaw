@@ -120,7 +120,7 @@ class StatusRenderTests(unittest.TestCase):
 
         self.assertIn("🐙 八爪鱼（OctoClaw）任务收件箱", rendered)
         self.assertIn(
-            "🧩 Substrate：tracked 2 · mirrored 2 · native bound 1 · native active 1 · checkpoints/artifacts 0/0 · handoff ready/delivered 0/0",
+            "🧩 Substrate：tracked 2 · mirrored 2 · managed 0 · native bound 1 · native active 1 · checkpoints/artifacts 0/0 · handoff ready/delivered 0/0",
             rendered,
         )
         self.assertIn("🕸️ 协作流程（1个）", rendered)

@@ -148,6 +148,98 @@ def _substrate_preferred_state(task: dict[str, Any], binding: dict[str, Any], fa
     return fallback_state
 
 
+def _create_path_summary(create_preference: str, create_status: str) -> str:
+    preference = _text(create_preference)
+    status = _text(create_status)
+    if not preference and not status:
+        return ""
+    return " | ".join(
+        part
+        for part in [
+            f"preference {preference}" if preference else "",
+            f"status {status}" if status else "",
+        ]
+        if part
+    )
+
+
+def _substrate_read_target(substrate: dict[str, Any], *, fallback_task_id: str = "") -> str:
+    flow_id = _text(substrate.get("flow_id"))
+    task_id = _text(substrate.get("task_id"))
+    if flow_id:
+        return f"TaskFlow flow {flow_id}"
+    if task_id:
+        return f"TaskFlow task {task_id}"
+    if fallback_task_id:
+        return f"OctoClaw task {fallback_task_id}"
+    return ""
+
+
+def _build_review_surface(
+    task: dict[str, Any],
+    children: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    review_children = [
+        item
+        for item in children
+        if _text(item.get("worker_pool")).lower() == "octoclaw-review"
+        or _text(item.get("work_type")).lower() == "review"
+        or _text(item.get("phase")).lower() == "verify"
+    ]
+    if review_children:
+        review_child = sorted(
+            review_children,
+            key=lambda item: (
+                0 if task_queue_bucket(item) in ACTIVE_STATES else 1,
+                _text(item.get("updated_at")) or _text(item.get("started_at")) or _text(item.get("id")),
+            ),
+        )[0]
+        anchor = build_task_anchor(review_child, now=now)
+        create_path = _create_path_summary(
+            _text(anchor.get("openclaw_create_preference")),
+            _text(anchor.get("openclaw_create_status")),
+        )
+        return {
+            "required": True,
+            "surface_state": "child_task",
+            "state": _text(anchor.get("state")),
+            "state_label": _text(anchor.get("state_label")),
+            "task_id": _text(anchor.get("task_id")),
+            "route": _text(anchor.get("route")),
+            "worker_pool": _text(anchor.get("worker_pool")),
+            "substrate_summary": _text(anchor.get("substrate_summary")),
+            "create_path": create_path,
+            "action_hint": action_command_value(_text(anchor.get("task_id")), "details"),
+        }
+    if task.get("review_required"):
+        return {
+            "required": True,
+            "surface_state": "required",
+            "state": "needs_review",
+            "state_label": "Review required",
+            "task_id": "",
+            "route": "",
+            "worker_pool": "octoclaw-review",
+            "substrate_summary": "",
+            "create_path": "",
+            "action_hint": action_command_value(_text(task.get("id")), "details"),
+        }
+    return {
+        "required": False,
+        "surface_state": "not_required",
+        "state": "",
+        "state_label": "",
+        "task_id": "",
+        "route": "",
+        "worker_pool": "",
+        "substrate_summary": "",
+        "create_path": "",
+        "action_hint": "",
+    }
+
+
 def action_command_value(task_id: str, fallback_command: str) -> str:
     command = _text(fallback_command)
     task_ref = _text(task_id)
@@ -692,6 +784,19 @@ def build_task_detail(
     actions = build_task_actions(normalized)
     raw_artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts"), dict) else {}
     runner_plan = dict(raw_artifacts.get("runner_plan", {})) if isinstance(raw_artifacts.get("runner_plan"), dict) else {}
+    review = _build_review_surface(normalized, children, now=now)
+    task_summary = {
+        "child_count": len(children),
+        "active_child_count": sum(1 for item in children if task_queue_bucket(item) in ACTIVE_STATES),
+        "completed_child_count": sum(1 for item in children if task_is_recent_final(item)),
+        "review_child_count": sum(
+            1
+            for item in children
+            if _text(item.get("worker_pool")).lower() == "octoclaw-review"
+            or _text(item.get("work_type")).lower() == "review"
+            or _text(item.get("phase")).lower() == "verify"
+        ),
+    }
     preview_events = normalized.get("task_events_preview", []) if isinstance(normalized.get("task_events_preview", []), list) else []
     events: list[dict[str, Any]] = []
     if preview_events:
@@ -778,8 +883,8 @@ def build_task_detail(
         "lineage": {
             "parent_task_id": _text(normalized.get("parent_id")),
             "child_task_ids": [_text(item.get("id")) for item in children],
-            "active_child_count": sum(1 for item in children if task_queue_bucket(item) in ACTIVE_STATES),
-            "completed_child_count": sum(1 for item in children if task_is_recent_final(item)),
+            "active_child_count": task_summary["active_child_count"],
+            "completed_child_count": task_summary["completed_child_count"],
         },
         "models": {
             "main_model": anchor["active_models"][0] if anchor["active_models"] else "",
@@ -790,6 +895,8 @@ def build_task_detail(
         "action_availability": _action_availability(actions),
         "substrate_display_contract": substrate_display_contract(),
         "runner_plan": runner_plan,
+        "review": review,
+        "task_summary": task_summary,
         "checklist": normalized.get("checklist", {}) if isinstance(normalized.get("checklist"), dict) else {},
         "events": events,
         "task_event_summary": normalized.get("task_event_summary", {}),
@@ -1077,6 +1184,46 @@ def build_task_retrieval_bundle(
     next_step = _text(worker_result.get("next_step")) if isinstance(worker_result, dict) else ""
     user_safe_summary = _text(worker_result.get("user_safe_summary")) if isinstance(worker_result, dict) else ""
     primary_report = _text(normalized.get("report_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("report_path"))
+    substrate = detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {}
+    review = detail.get("review", {}) if isinstance(detail.get("review"), dict) else {}
+    task_summary = detail.get("task_summary", {}) if isinstance(detail.get("task_summary"), dict) else {}
+    create_path = _create_path_summary(_text(substrate.get("create_preference")), _text(substrate.get("create_status")))
+    recommended_read_order: list[str] = []
+    substrate_summary = _text(substrate.get("summary"))
+    substrate_target = _substrate_read_target(substrate, fallback_task_id=_text(normalized.get("id")))
+    if substrate_target:
+        recommended_read_order.append(substrate_target)
+    if substrate_summary:
+        recommended_read_order.append(f"substrate summary: {substrate_summary}")
+    if create_path:
+        recommended_read_order.append(f"create path: {create_path}")
+    if int(task_summary.get("child_count", 0) or 0):
+        recommended_read_order.append(
+            "task summary: "
+            + " · ".join(
+                [
+                    f"{int(task_summary.get('active_child_count', 0) or 0)} active child",
+                    f"{int(task_summary.get('completed_child_count', 0) or 0)} completed child",
+                ]
+            )
+        )
+    if bool(review.get("required")):
+        review_label = _text(review.get("state_label")) or "Review required"
+        if _text(review.get("task_id")):
+            recommended_read_order.append(f"review surface: {review_label} via {_text(review.get('task_id'))}")
+        else:
+            recommended_read_order.append(f"review surface: {review_label}")
+    recommended_read_order.extend(
+        [
+            item
+            for item in [
+                primary_report,
+                _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
+                _text(normalized.get("context_path")),
+            ]
+            if item
+        ]
+    )
     return {
         "task_id": _text(normalized.get("id")),
         "summary": _clean_task_summary(normalized, limit=160),
@@ -1085,7 +1232,9 @@ def build_task_retrieval_bundle(
         "state": _text(detail.get("state")),
         "route": _text(normalized.get("route")),
         "worker_pool": _text(normalized.get("worker_pool")),
-        "substrate": detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {},
+        "substrate": substrate,
+        "review": review,
+        "task_summary": task_summary,
         "primary_report": primary_report,
         "context_path": _text(normalized.get("context_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_path")),
         "context_pack_path": _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
@@ -1093,7 +1242,7 @@ def build_task_retrieval_bundle(
         "checklist": detail.get("checklist", {}) if isinstance(detail.get("checklist"), dict) else {},
         "primary_artifacts": primary[:5],
         "related_thread_artifacts": related[:5],
-        "recommended_read_order": [item for item in [primary_report, _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")), _text(normalized.get("context_path"))] if item],
+        "recommended_read_order": recommended_read_order,
     }
 
 
@@ -1133,11 +1282,17 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
     model_summary = _text(anchor.get("model_summary"))
     duration = _text(anchor.get("duration"))
     queue_position = anchor.get("queue_position")
+    substrate_summary = _text(anchor.get("substrate_summary"))
+    create_path = _create_path_summary(_text(anchor.get("openclaw_create_preference")), _text(anchor.get("openclaw_create_status")))
 
     lines = [
         f"{emoji} OctoClaw task: {title}",
-        f"State: {state} | Route: {route or '?'} | Pool: {worker_name}",
     ]
+    if substrate_summary:
+        lines.append(f"Substrate: {substrate_summary}")
+    if create_path:
+        lines.append(f"Create path: {create_path}")
+    lines.append(f"State: {state} | Route: {route or '?'} | Pool: {worker_name}")
     if model_summary or duration:
         meta_bits = []
         if model_summary:
@@ -1152,9 +1307,6 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
     checklist_completed_count = int(anchor.get("checklist_completed_count") or 0)
     if checklist_open_count or checklist_completed_count:
         lines.append(f"Checklist: {checklist_completed_count} done / {checklist_open_count} open")
-    substrate_summary = _text(anchor.get("substrate_summary"))
-    if substrate_summary:
-        lines.append(f"Substrate: {substrate_summary}")
     if summary:
         lines.append(summary)
 
@@ -1177,6 +1329,8 @@ def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any
     pool = _text(anchor.get("worker_pool_display")) or _text(anchor.get("worker_pool"))
     summary = _text(anchor.get("summary"))
     model_summary = _text(anchor.get("model_summary"))
+    substrate_summary = _text(anchor.get("substrate_summary"))
+    create_path = _create_path_summary(_text(anchor.get("openclaw_create_preference")), _text(anchor.get("openclaw_create_status")))
 
     fields = [
         {"type": "mrkdwn", "text": f"*State*\n{state}"},
@@ -1196,6 +1350,18 @@ def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any
             "fields": fields[:10],
         },
     ]
+    if substrate_summary or create_path:
+        substrate_bits = []
+        if substrate_summary:
+            substrate_bits.append(f"*Substrate*\n{substrate_summary}")
+        if create_path:
+            substrate_bits.append(f"*Create path*\n{create_path}")
+        blocks.append(
+            {
+                "type": "section",
+                "fields": [{"type": "mrkdwn", "text": item} for item in substrate_bits[:10]],
+            }
+        )
     if summary:
         blocks.append(
             {

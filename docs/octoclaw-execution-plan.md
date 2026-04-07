@@ -349,17 +349,18 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - taskflow mirror cleanup 已有 preview/apply contract，默认 retention `48h`
 - managed TaskFlow substrate 已进入 delegation 主链
 - `spawn_single` / `spawn_multi` 的 create posture 已冻结为 **native-preferred**
-- P4 已完成 transition signoff，但明确保留例外面：
-  - `display = mixed`
-  - `retrieve = mixed`
-  - `observer = not-yet-evidenced`
-  - `review = not-yet-evidenced`
+- P4 已按 **OpenClaw 2026.4.5 TaskFlow source semantics** 完成 closeout：
+  - `display = substrate_first`
+  - `retrieve = substrate_first`
+  - `observer = evidenced_substrate_aware`
+  - `review = evidenced_substrate_aware`
+  - canonical read path 现在先读 `TaskFlow flow/task target + taskSummary + review surface`，再读 report/context
 
 ### 这条线现在最具体的推进顺序
-1. `spawn_single`：从 mirror/binding-first 继续推进到 native-preferred create
-2. simple `spawn_multi`：优先收成 linear flow，而不是继续长时间停留在并行 detached shell
-3. display / retrieve / observer / review：把 substrate-aware facts 变成默认读面
-4. 清理 legacy mirror / compatibility fallback，只保留仍然有明确恢复价值的那部分
+1. 保持 `spawn_single` / `spawn_multi` 的 native-preferred create posture，不回退成 mirror-first
+2. simple `spawn_multi`：继续按 linear flow 思路验证和收口，而不是回到并行 detached shell 心智
+3. 清理 legacy mirror / compatibility fallback，只保留仍然有明确恢复价值的那部分
+4. 更深的 substrate-only hardening 转入 `P5/P6`，不再作为 P4 exception ledger
 
 ---
 

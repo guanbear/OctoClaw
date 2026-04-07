@@ -78,6 +78,18 @@ class TaskDisplayCliTests(unittest.TestCase):
                             "status": "queued",
                             "summary": "review pending",
                             "route": "spawn_single",
+                            "parent_id": "task-1",
+                            "openclaw_taskflow": {
+                                "backend": "mirror",
+                                "binding_state": "mirrored_bound",
+                                "task_runtime": "openclaw_task",
+                                "flow_runtime": "openclaw_flow",
+                                "native_binding_state": "bound",
+                                "create_preference": "native_preferred",
+                                "create_status": "native_bound",
+                                "task_id": "native-review-1",
+                                "flow_id": "flow-1",
+                            },
                         },
                     ]
                 },
@@ -116,9 +128,12 @@ class TaskDisplayCliTests(unittest.TestCase):
     def test_detail_text_surfaces_substrate_binding(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-1"])
         self.assertEqual(code, 0, err)
+        self.assertIn("TaskFlow target: flow flow-1", out)
         self.assertIn("Substrate detail: mirror bound to native · bound · flow flow-1", out)
         self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1 | runtime openclaw_task/openclaw_flow", out)
         self.assertIn("Create path: preference native_preferred | status native_bound", out)
+        self.assertIn("Task summary: 1 active child | 1 completed child | 2 linked", out)
+        self.assertIn("Review surface: queued | task task-3 | mirror bound to native · bound · flow flow-1", out)
 
     def test_detail_text_surfaces_runner_plan(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-2"])
@@ -134,8 +149,13 @@ class TaskDisplayCliTests(unittest.TestCase):
     def test_retrieve_text_surfaces_primary_report(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-1"])
         self.assertEqual(code, 0, err)
+        self.assertIn("TaskFlow target: flow flow-1", out)
         self.assertIn("Substrate: mirror bound to native · bound · flow flow-1", out)
         self.assertIn("Create path: preference native_preferred | status native_bound", out)
+        self.assertIn("Task summary: 1 active child | 1 completed child | 2 linked", out)
+        self.assertIn("Review surface: queued | task task-3 | mirror bound to native · bound · flow flow-1", out)
+        self.assertIn("Read order:", out)
+        self.assertIn("TaskFlow flow flow-1", out)
         self.assertIn("Primary report: /tmp/task-1.md", out)
         self.assertIn("Summary:", out)
 

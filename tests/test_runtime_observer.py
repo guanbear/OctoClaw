@@ -15,7 +15,7 @@ from lib import runtime_observer
 
 
 class RuntimeObserverTests(unittest.TestCase):
-    @patch("lib.runtime_observer.observe_runtime_snapshot")
+    @patch("lib.runtime_observer.observe_runtime_state_once")
     def test_observe_runtime_once_runs_observation_pipeline(
         self,
         mock_observe,
@@ -26,7 +26,25 @@ class RuntimeObserverTests(unittest.TestCase):
             "runner_health": {"present": True, "healthy": True, "reason": "ok"},
             "runner": {"state": "healthy", "mode": "daemon", "present": True, "healthy": True},
             "runner_execution_mode": "daemon",
-            "tasks": [{"id": "task-1", "status": "running"}],
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "status": "running",
+                    "route": "spawn_single",
+                    "summary": "investigate release",
+                    "openclaw_taskflow": {
+                        "task_id": "native-task-1",
+                        "flow_id": "flow-1",
+                        "backend": "mirror",
+                        "binding_state": "mirrored_bound",
+                        "task_runtime": "openclaw_task",
+                        "flow_runtime": "openclaw_flow",
+                        "native_binding_state": "bound",
+                        "create_preference": "native_preferred",
+                        "create_status": "native_bound",
+                    },
+                }
+            ],
             "changes": {"progress_hydrated": 0, "results_hydrated": 0, "heartbeat_reassigned": 0, "dead_agent_recovered": 0},
             "counts": {"active": 1, "queued": 0, "running": 1, "pending": 0, "final": 0},
             "recovered_task_ids": [],
@@ -38,6 +56,8 @@ class RuntimeObserverTests(unittest.TestCase):
         self.assertEqual(payload["observed_at"], "2026-04-04T11:00:00+08:00")
         self.assertEqual(payload["counts"]["active"], 1)
         self.assertEqual(payload["runner_execution_mode"], "daemon")
+        self.assertEqual(payload["surface_status"]["display"], "substrate_first")
+        self.assertEqual(payload["active_substrate_tasks"][0]["taskflow_target"], "flow flow-1")
         mock_observe.assert_called_once_with(workspace="/tmp/octoclaw")
 
     def test_render_observer_text_includes_runner_and_change_summary(self) -> None:
@@ -54,6 +74,7 @@ class RuntimeObserverTests(unittest.TestCase):
         self.assertIn("mode=daemon", text)
         self.assertIn("Counts: active 3", text)
         self.assertIn("Changes: progress 2", text)
+        self.assertIn("Surfaces:", text)
 
     def test_render_observer_text_marks_missing_runner_as_on_demand(self) -> None:
         text = runtime_observer.render_observer_text(
@@ -67,6 +88,49 @@ class RuntimeObserverTests(unittest.TestCase):
         )
 
         self.assertIn("Runner: on-demand mode=on_demand", text)
+
+    def test_render_observer_text_surfaces_substrate_tasks_and_review(self) -> None:
+        text = runtime_observer.render_observer_text(
+            {
+                "observed_at": "2026-04-07T10:00:00+08:00",
+                "runner_health": {"present": True, "healthy": True},
+                "runner_execution_mode": "daemon",
+                "counts": {"active": 1, "queued": 1, "running": 0, "pending": 0, "final": 0},
+                "changes": {"progress_hydrated": 1, "results_hydrated": 0, "heartbeat_reassigned": 0, "dead_agent_recovered": 0},
+                "substrate": {"tracked": 3, "managed": 1, "native_bound": 2},
+                "surface_status": {
+                    "display": "substrate_first",
+                    "retrieve": "substrate_first",
+                    "observer": "substrate_aware",
+                    "review": "substrate_aware",
+                },
+                "active_substrate_tasks": [
+                    {
+                        "task_id": "task-1",
+                        "state": "running",
+                        "route": "spawn_single",
+                        "taskflow_target": "flow flow-1",
+                        "substrate_summary": "mirror bound to native · running · flow flow-1",
+                        "create_path": "preference native_preferred | status native_bound",
+                        "task_summary": {"child_count": 1, "active_child_count": 1, "completed_child_count": 0},
+                    }
+                ],
+                "review_surfaces": [
+                    {
+                        "task_id": "task-1",
+                        "state_label": "Review required",
+                        "review_task_id": "review-1",
+                        "substrate_summary": "mirror bound to native · queued · task native-review-1",
+                        "action_hint": "details review-1",
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("Active substrate tasks:", text)
+        self.assertIn("flow flow-1", text)
+        self.assertIn("Review surfaces:", text)
+        self.assertIn("details review-1", text)
 
 
 if __name__ == "__main__":

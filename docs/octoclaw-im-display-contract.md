@@ -157,7 +157,7 @@ P3+P4 当前已落到这些代码：
 - WhatsApp / WeChat 仍是 **L0**：text-first fallback surface
 - Web/UI 仍是 **future**，不算本阶段已实现 rich surface
 
-### P4 native-preferred + cleanup/transition signoff: approved with explicit exceptions
+### P4 native-preferred + cleanup closeout: approved with evidenced convergence
 
 本阶段冻结的 P4-owned clauses：
 
@@ -166,9 +166,9 @@ P3+P4 当前已落到这些代码：
 - native-preferred create posture
 - cleanup policy
 - legacy mirror / fallback transition inventory
-- explicit read-order matrix + exception ledger
+- explicit read-order matrix
 
-当前 transition 结论：
+当前 closeout 结论：
 
 - `spawn_single` / `spawn_multi` 的 create posture 已明确为 **native-preferred**
 - `create_preference` / `create_status` 已进入 shared substrate display contract
@@ -178,14 +178,15 @@ P3+P4 当前已落到这些代码：
 
 | Surface | Status | Interpretation |
 |---|---|---|
-| `display` | `mixed` | substrate facts 已暴露，但主 anchor/state/summary 仍不是纯 substrate-first |
-| `retrieve` | `mixed` | substrate 已暴露，但 read order 仍偏 report/context-first |
-| `observer` | `not-yet-evidenced` | 当前没有明确 substrate/taskflow-first observer read path |
-| `review` | `not-yet-evidenced` | 当前只有 review flag/event，不是 substrate-first review surface |
+| `display` | `substrate_first` | anchor/slack payload 先显式暴露 `TaskFlow target + substrate summary + create path`，再展示 report-oriented summary |
+| `retrieve` | `substrate_first` | canonical read order 先读 `TaskFlow flow/task target + taskSummary + review surface`，再读 report/context |
+| `observer` | `evidenced_substrate_aware` | runtime observer 已有显式 substrate/taskflow-aware read path，不再只有 runner/count snapshot |
+| `review` | `evidenced_substrate_aware` | detail/retrieve 已有 review surface，能露出 review child task 与其 substrate 状态 |
 
-### Exception ledger
+### Read-order basis
 
-- `display` 暂不宣称 substrate-first，只能算 `mixed`
-- `retrieve` 暂不宣称 substrate-first，只能算 `mixed`
-- `observer` 仍是显式 transition exception
-- `review` 仍是显式 transition exception
+本轮 closeout 以 **OpenClaw 2026.4.5** 的 TaskFlow/runtime 源码为准：
+
+- operator first read = `flow/task target`
+- then `taskSummary` / `wait` / `blocked` / linked child task health
+- artifacts/report/context 是后续补充面，不应反向主导 substrate truth

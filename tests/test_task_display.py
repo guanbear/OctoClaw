@@ -7,6 +7,7 @@ from lib.task_display import (
     build_operator_task_surface,
     build_task_actions,
     build_task_anchor,
+    build_task_retrieval_bundle,
     build_task_detail,
     build_task_graph,
     build_task_queue_view,
@@ -101,9 +102,49 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["lineage"]["child_task_ids"], ["child-1", "child-2"])
         self.assertEqual(detail["lineage"]["active_child_count"], 1)
         self.assertEqual(detail["lineage"]["completed_child_count"], 1)
+        self.assertEqual(detail["task_summary"]["child_count"], 2)
+        self.assertTrue(detail["review"]["required"])
+        self.assertEqual(detail["review"]["task_id"], "child-2")
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
         self.assertIn("view", detail["action_availability"])
         self.assertIn("required_fields", detail["substrate_display_contract"])
+
+    def test_build_task_retrieval_bundle_prefers_taskflow_read_order(self) -> None:
+        parent = {
+            "id": "task-1",
+            "worker_pool": "octoclaw-research",
+            "status": "running",
+            "summary": "coordinating release analysis",
+            "route": "spawn_single",
+            "report_path": "/tmp/task-1.md",
+            "artifacts": {"context_pack_path": "/tmp/task-1-context.json"},
+            "openclaw_taskflow": {
+                "backend": "mirror",
+                "binding_state": "mirrored_bound",
+                "task_runtime": "openclaw_task",
+                "flow_runtime": "openclaw_flow",
+                "native_binding_state": "bound",
+                "create_preference": "native_preferred",
+                "create_status": "native_bound",
+                "task_id": "native-task-1",
+                "flow_id": "flow-1",
+            },
+        }
+        child = {
+            "id": "review-1",
+            "parent_id": "task-1",
+            "worker_pool": "octoclaw-review",
+            "status": "queued",
+            "summary": "review pending",
+            "route": "spawn_single",
+        }
+
+        bundle = build_task_retrieval_bundle(parent, all_tasks=[parent, child], now=self.now)
+
+        self.assertEqual(bundle["task_summary"]["child_count"], 1)
+        self.assertTrue(bundle["review"]["required"])
+        self.assertEqual(bundle["recommended_read_order"][0], "TaskFlow flow flow-1")
+        self.assertIn("create path: preference native_preferred | status native_bound", bundle["recommended_read_order"])
 
     def test_build_task_graph_and_timeline_follow_linear_step_ids_without_parent_links(self) -> None:
         parent = {

@@ -70,11 +70,15 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
     anchor = detail.get("anchor", {}) if isinstance(detail.get("anchor"), dict) else {}
     lines = [render_task_anchor_text(anchor, build_task_actions(task))]
     substrate = detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {}
+    taskflow_flow_id = str(substrate.get("flow_id", "") or "").strip()
+    taskflow_task_id = str(substrate.get("task_id", "") or "").strip()
+    if taskflow_flow_id:
+        lines.append(f"TaskFlow target: flow {taskflow_flow_id}")
+    elif taskflow_task_id:
+        lines.append(f"TaskFlow target: task {taskflow_task_id}")
     substrate_summary = str(substrate.get("summary", "") or "").strip()
     if substrate_summary:
         lines.append(f"Substrate detail: {substrate_summary}")
-    taskflow_task_id = str(substrate.get("task_id", "") or "").strip()
-    taskflow_flow_id = str(substrate.get("flow_id", "") or "").strip()
     task_runtime = str(substrate.get("task_runtime", "") or "").strip()
     flow_runtime = str(substrate.get("flow_runtime", "") or "").strip()
     runtime_summary = "/".join(part for part in [task_runtime, flow_runtime] if part)
@@ -98,6 +102,26 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
             "Create path: "
             + " | ".join(part for part in [f"preference {create_preference}" if create_preference else "", f"status {create_status}" if create_status else ""] if part)
         )
+    task_summary = detail.get("task_summary", {}) if isinstance(detail.get("task_summary"), dict) else {}
+    if int(task_summary.get("child_count", 0) or 0):
+        lines.append(
+            "Task summary: "
+            + " | ".join(
+                [
+                    f"{int(task_summary.get('active_child_count', 0) or 0)} active child",
+                    f"{int(task_summary.get('completed_child_count', 0) or 0)} completed child",
+                    f"{int(task_summary.get('child_count', 0) or 0)} linked",
+                ]
+            )
+        )
+    review = detail.get("review", {}) if isinstance(detail.get("review"), dict) else {}
+    if bool(review.get("required")):
+        review_bits = [str(review.get("state_label", "") or "Review required").strip()]
+        if str(review.get("task_id", "") or "").strip():
+            review_bits.append(f"task {str(review.get('task_id', '') or '').strip()}")
+        if str(review.get("substrate_summary", "") or "").strip():
+            review_bits.append(str(review.get("substrate_summary", "") or "").strip())
+        lines.append("Review surface: " + " | ".join(bit for bit in review_bits if bit))
     lineage = detail.get("lineage", {}) if isinstance(detail.get("lineage"), dict) else {}
     if lineage.get("child_task_ids"):
         lines.append("Children: " + ", ".join(str(item) for item in lineage.get("child_task_ids", [])))
@@ -142,6 +166,12 @@ def render_retrieval_text(bundle: dict[str, Any]) -> str:
         f"State: {str(bundle.get('state', '') or '').strip()} | Route: {str(bundle.get('route', '') or '').strip()} | Pool: {str(bundle.get('worker_pool', '') or '').strip()}",
     ]
     substrate = bundle.get("substrate", {}) if isinstance(bundle.get("substrate"), dict) else {}
+    taskflow_flow_id = str(substrate.get("flow_id", "") or "").strip()
+    taskflow_task_id = str(substrate.get("task_id", "") or "").strip()
+    if taskflow_flow_id:
+        lines.append(f"TaskFlow target: flow {taskflow_flow_id}")
+    elif taskflow_task_id:
+        lines.append(f"TaskFlow target: task {taskflow_task_id}")
     substrate_summary = str(substrate.get("summary", "") or "").strip()
     if substrate_summary:
         lines.append(f"Substrate: {substrate_summary}")
@@ -152,6 +182,26 @@ def render_retrieval_text(bundle: dict[str, Any]) -> str:
             "Create path: "
             + " | ".join(part for part in [f"preference {create_preference}" if create_preference else "", f"status {create_status}" if create_status else ""] if part)
         )
+    task_summary = bundle.get("task_summary", {}) if isinstance(bundle.get("task_summary"), dict) else {}
+    if int(task_summary.get("child_count", 0) or 0):
+        lines.append(
+            "Task summary: "
+            + " | ".join(
+                [
+                    f"{int(task_summary.get('active_child_count', 0) or 0)} active child",
+                    f"{int(task_summary.get('completed_child_count', 0) or 0)} completed child",
+                    f"{int(task_summary.get('child_count', 0) or 0)} linked",
+                ]
+            )
+        )
+    review = bundle.get("review", {}) if isinstance(bundle.get("review"), dict) else {}
+    if bool(review.get("required")):
+        review_bits = [str(review.get("state_label", "") or "Review required").strip()]
+        if str(review.get("task_id", "") or "").strip():
+            review_bits.append(f"task {str(review.get('task_id', '') or '').strip()}")
+        if str(review.get("substrate_summary", "") or "").strip():
+            review_bits.append(str(review.get("substrate_summary", "") or "").strip())
+        lines.append("Review surface: " + " | ".join(bit for bit in review_bits if bit))
     runner_plan = bundle.get("runner_plan", {}) if isinstance(bundle.get("runner_plan", {}), dict) else {}
     if runner_plan:
         plan_kind = str(runner_plan.get("kind", "") or "").strip()
@@ -165,6 +215,11 @@ def render_retrieval_text(bundle: dict[str, Any]) -> str:
     next_step = str(bundle.get("next_step", "") or "").strip()
     if next_step and next_step.lower() != "none":
         lines.append(f"Next: {next_step}")
+    read_order = bundle.get("recommended_read_order", []) if isinstance(bundle.get("recommended_read_order"), list) else []
+    if read_order:
+        lines.append("Read order:")
+        for item in read_order[:5]:
+            lines.append(f"- {str(item or '').strip()}")
     primary_report = str(bundle.get("primary_report", "") or "").strip()
     if primary_report:
         lines.append(f"Primary report: {primary_report}")

@@ -326,13 +326,23 @@ P1 之后，运行时角色应固定成下面这张表：
 2026-04-06 之后，这条线已经进一步进入：
 
 - **P3 signoff 已完成**
-- **P4 transition signoff 已完成**
+- **P4 closeout 已完成**
 
 但这里的 signoff 语义是：
 
 - P3 的 surface ownership / interaction contract 已冻结
 - P4 的 native-preferred posture / cleanup policy / substrate display contract 已冻结
-- 还**不等于**所有表面都已经 full substrate-first
+- 并且这次 closeout 已把以下表面推进到新的稳定状态：
+  - `display = substrate_first`
+  - `retrieve = substrate_first`
+  - `observer = evidenced_substrate_aware`
+  - `review = evidenced_substrate_aware`
+
+这次判断基于 **OpenClaw 2026.4.5** 已发布源码里的 TaskFlow/runtime 语义：
+
+- operator first read = `flow/task target`
+- 然后是 `taskSummary` / `wait` / `blocked` / linked child task health
+- artifacts/report/context 是补充面，不应反向主导 substrate truth
 
 ### 5.4 artifact/retrieve/display surface：已不是未来设想
 
@@ -351,11 +361,15 @@ P1 之后，运行时角色应固定成下面这张表：
 - **IM anchor / thread / fallback interaction：已基础可用**
 - **Web/UI cockpit / richer capability matrix parity：仍在后续主战场**
 
-P3/P4 signoff 之后，后续主线不应再回头重写 capability matrix，而应继续推进：
+P3/P4 signoff 之后，后续主线不应再回头重写 capability matrix。
 
-- `display` 从 `mixed` 收到 substrate-first
-- `retrieve` 从 `mixed` 收到 substrate-first
-- `observer` / `review` 从 `not-yet-evidenced` 推进到有明确 substrate-aware surface
+当前这些 surface 已完成本轮收口：
+
+- `display` 已 substrate-first
+- `retrieve` 已 substrate-first
+- `observer` / `review` 已有明确 substrate-aware surface
+
+后续不再把它们当作未完成例外面，而是把更深的 substrate-only hardening 放到 P5/P6。
 
 ---
 
