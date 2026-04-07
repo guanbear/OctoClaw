@@ -8,12 +8,26 @@ if [ -f "$SCRIPT_DIR/lib/workspace.sh" ]; then
     source "$SCRIPT_DIR/lib/workspace.sh"
     WORKSPACE="$(resolve_octoclaw_workspace "$SCRIPT_DIR/lib")"
     PYTHON_BIN="$(resolve_octoclaw_python)"
+    OPENCLAW_BIN="$(resolve_octoclaw_openclaw_bin)"
 else
     WORKSPACE="${WORKSPACE:-/workspace}"
     PYTHON_BIN="${OCTOCLAW_PYTHON_BIN:-python3}"
+    OPENCLAW_BIN="${OCTOCLAW_OPENCLAW_BIN:-openclaw}"
 fi
+export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 OCTOPUS_RULES_VERSION="v1.7.0"
 SKILL_ROOT="${SKILL_ROOT:-$SCRIPT_DIR}"
+
+has_openclaw_cli() {
+    if [ -n "${OPENCLAW_BIN:-}" ] && [ "${OPENCLAW_BIN}" != "openclaw" ] && [ -x "${OPENCLAW_BIN}" ]; then
+        return 0
+    fi
+    command -v openclaw >/dev/null 2>&1
+}
+
+run_openclaw_cli() {
+    "${OPENCLAW_BIN}" "$@"
+}
 
 detect_openclaw_workdir() {
     local service_file
@@ -224,9 +238,11 @@ _openclaw_cron_list() {
             return 0
         fi
     fi
-    if output="$(timeout 8 openclaw cron list 2>/tmp/octoclaw-cron-cli.err)"; then
-        printf '%s\n' "$output"
-        return 0
+    if has_openclaw_cli; then
+        if output="$(timeout 8 "${OPENCLAW_BIN}" cron list 2>/tmp/octoclaw-cron-cli.err)"; then
+            printf '%s\n' "$output"
+            return 0
+        fi
     fi
     return 1
 }
@@ -343,8 +359,11 @@ _openclaw_cron_exists() {
 
 _openclaw_cron_add() {
     local attempt
+    if ! has_openclaw_cli; then
+        return 1
+    fi
     for attempt in 1 2; do
-        if timeout 12 openclaw cron add "$@"; then
+        if timeout 12 "${OPENCLAW_BIN}" cron add "$@"; then
             return 0
         fi
         sleep 1
@@ -385,7 +404,7 @@ _openclaw_cron_remove_by_name() {
         _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
         return 0
     fi
-    if timeout 8 openclaw cron rm "$cron_id" >/dev/null 2>&1; then
+    if has_openclaw_cli && timeout 8 "${OPENCLAW_BIN}" cron rm "$cron_id" >/dev/null 2>&1; then
         _openclaw_cron_store_remove_by_name "$cron_name" >/dev/null 2>&1 || true
         return 0
     fi
@@ -1323,7 +1342,7 @@ cfg = {
     "team_name": "octoclaw-validation",
     "workspace": False,
     "agent_name_prefix": "octo",
-    "openclaw_bin": "openclaw",
+    "openclaw_bin": "${OPENCLAW_BIN}",
     "default_profile": "",
     "profile_by_model_prefix": {},
   }
@@ -1458,7 +1477,7 @@ install_patrol_cron() {
         echo "🔄 巡逻模式：loop（零 token），间隔 ${PATROL_INTERVAL}s"
 
         # 迁移：若旧版已注册 octopus-patrol cron，删除它（避免重复运行浪费 token）
-        if command -v openclaw &>/dev/null && _openclaw_cron_exists "octopus-patrol"; then
+        if has_openclaw_cli && _openclaw_cron_exists "octopus-patrol"; then
             echo "ℹ️  检测到旧版 octopus-patrol cron，迁移删除中..."
             _openclaw_cron_remove_by_name "octopus-patrol"
         fi
@@ -1467,7 +1486,7 @@ install_patrol_cron() {
         _start_runner_service
 
         # 注册每日版本检查 cron（仅版本检查，每天一次，token 消耗可忽略）
-        if ! command -v openclaw &>/dev/null; then
+        if ! has_openclaw_cli; then
             echo "⚠️  openclaw CLI 未找到，跳过版本检查 cron 注册"
             return 0
         fi
@@ -1485,7 +1504,7 @@ install_patrol_cron() {
         echo "🔄 巡逻模式：cron（每1分钟，消耗 token）"
 
         # 检查 openclaw CLI 是否可用
-        if ! command -v openclaw &>/dev/null; then
+        if ! has_openclaw_cli; then
             echo "⚠️  openclaw CLI 未找到，跳过 cron 注册（可手动注册）"
             return 0
         fi
@@ -1587,7 +1606,7 @@ install_probe_cron() {
     fi
 
     # 检查 openclaw CLI 是否可用
-    if ! command -v openclaw &>/dev/null; then
+    if ! has_openclaw_cli; then
         echo "⚠️  openclaw CLI 未找到，跳过 cron 注册（可手动注册）"
         return 0
     fi
@@ -1655,7 +1674,7 @@ install_plan_sync_cron() {
         return 0
     fi
 
-    if ! command -v openclaw &>/dev/null; then
+    if ! has_openclaw_cli; then
         echo "⚠️  openclaw CLI 未找到，跳过 octoclaw-plan-sync cron 注册"
         return 0
     fi
@@ -1727,7 +1746,7 @@ install_error_review_schedule() {
         return 0
     fi
 
-    if command -v openclaw >/dev/null 2>&1; then
+    if has_openclaw_cli; then
         echo "⚠️  未检测到 crontab，回退使用 openclaw cron 注册 nightly review（会消耗少量 token）..."
         if _openclaw_cron_exists "octopus-error-review"; then
             echo "ℹ️  检测到旧版 octopus-error-review cron，迁移删除中..."

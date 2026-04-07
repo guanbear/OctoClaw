@@ -47,3 +47,20 @@ resolve_octoclaw_python() {
   done
   printf 'python3\n'
 }
+
+resolve_octoclaw_openclaw_bin() {
+  local candidates=(
+    "${OCTOCLAW_OPENCLAW_BIN:-}"
+    "/opt/homebrew/bin/openclaw"
+    "/usr/local/bin/openclaw"
+    "$(command -v openclaw 2>/dev/null || true)"
+  )
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf 'openclaw\n'
+}

@@ -27,6 +27,7 @@ QUEUE_STATES = {"queued"}
 RUNNING_STATES = {"running"}
 BLOCKED_STATES = {"blocked"}
 FINAL_STATES = {"done", "completed", "failed", "deferred", "cancelled", "blocked", "partial"}
+PENDING_STATES = {"pending_confirm", "needs_approval"}
 GENERIC_SUMMARY_PREFIXES = (
     "runner完成",
     "runner失败",
@@ -403,6 +404,19 @@ def _state_label(state: str, lifecycle_state: str = "", outcome_state: str = "",
     return mapping.get(current, current or "unknown")
 
 
+def _surface_queue_bucket(anchor: dict[str, Any]) -> str:
+    if _text(anchor.get("queue_bucket")).lower() == "recently_completed":
+        return "recently_completed"
+    state = _text(anchor.get("state")).lower()
+    if state in RUNNING_STATES:
+        return "running"
+    if state in QUEUE_STATES:
+        return "queued"
+    if state in BLOCKED_STATES:
+        return "blocked"
+    return _text(anchor.get("queue_bucket")).lower()
+
+
 def _collect_active_models(task: dict[str, Any]) -> list[str]:
     models: list[str] = []
     primary = _text(task.get("model"))
@@ -722,6 +736,7 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "progress": None,
         "summary": summary,
         "queue_bucket": queue_bucket,
+        "surface_queue_bucket": _surface_queue_bucket({"state": state, "queue_bucket": queue_bucket}),
         "lifecycle_state": lifecycle_state,
         "outcome_state": outcome_state,
         "handoff_state": handoff_state,
@@ -1251,10 +1266,10 @@ def build_task_retrieval_bundle(
 def build_task_queue_view(tasks: list[dict[str, Any]], *, now: datetime | None = None) -> dict[str, Any]:
     anchors = [build_task_anchor(task, now=now) for task in tasks if isinstance(task, dict)]
     return {
-        "running": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in RUNNING_STATES],
-        "queued": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in QUEUE_STATES],
-        "blocked": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in BLOCKED_STATES],
-        "recently_completed": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() == "recently_completed"],
+        "running": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() in RUNNING_STATES],
+        "queued": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() in QUEUE_STATES],
+        "blocked": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() in BLOCKED_STATES],
+        "recently_completed": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() == "recently_completed"],
     }
 
 

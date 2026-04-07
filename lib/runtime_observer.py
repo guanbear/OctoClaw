@@ -25,12 +25,38 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.status_render import summarize_taskflow_substrate
 
 try:
-    from task_display import build_task_detail
+    from task_display import build_task_anchor, build_task_detail
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.task_display import build_task_detail
+    from lib.task_display import build_task_anchor, build_task_detail
 
 
 ACTIVE_STATUSES = {"queued", "running", "dispatched", "pending_confirm"}
+PENDING_SURFACE_STATES = {"pending_confirm", "needs_approval"}
+
+
+def _surface_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter()
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        anchor = build_task_anchor(task)
+        state = str(anchor.get("state", "") or "").strip().lower()
+        if state == "running":
+            counts["running"] += 1
+            counts["active"] += 1
+        elif state == "queued":
+            counts["queued"] += 1
+            counts["active"] += 1
+        elif state in PENDING_SURFACE_STATES:
+            counts["pending"] += 1
+            counts["active"] += 1
+        elif state in {"done", "completed", "delivered"}:
+            counts["done"] += 1
+            counts["final"] += 1
+        elif state in {"failed", "deferred", "cancelled", "partial", "blocked"}:
+            counts["failed"] += 1
+            counts["final"] += 1
+    return {key: int(value or 0) for key, value in counts.items()}
 
 
 def _create_path_summary(preference: str, status: str) -> str:
@@ -100,9 +126,7 @@ def _review_surface_views(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def observe_runtime_once(*, workspace: str = WORKSPACE) -> dict[str, Any]:
     payload = observe_runtime_read_model(workspace=workspace)
     tasks = payload.get("tasks", []) if isinstance(payload.get("tasks", []), list) else []
-    counts = Counter(str(task.get("status", "") or "").strip().lower() for task in tasks if isinstance(task, dict))
-    active_tasks = int(counts.get("queued", 0) or 0) + int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0) + int(counts.get("pending_confirm", 0) or 0)
-    final_tasks = int(counts.get("done", 0) or 0) + int(counts.get("completed", 0) or 0) + int(counts.get("failed", 0) or 0) + int(counts.get("blocked", 0) or 0) + int(counts.get("deferred", 0) or 0)
+    surface_counts = _surface_counts(tasks)
     return {
         "observed_at": str(payload.get("observed_at", "") or datetime.now(timezone.utc).astimezone().isoformat()),
         "workspace": workspace,
@@ -127,13 +151,13 @@ def observe_runtime_once(*, workspace: str = WORKSPACE) -> dict[str, Any]:
         },
         "counts": {
             "total": len([task for task in tasks if isinstance(task, dict)]),
-            "queued": int(counts.get("queued", 0) or 0),
-            "running": int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0),
-            "pending": int(counts.get("pending_confirm", 0) or 0),
-            "done": int(counts.get("done", 0) or 0) + int(counts.get("completed", 0) or 0),
-            "failed": int(counts.get("failed", 0) or 0) + int(counts.get("blocked", 0) or 0) + int(counts.get("deferred", 0) or 0),
-            "active": active_tasks,
-            "final": final_tasks,
+            "queued": int(surface_counts.get("queued", 0) or 0),
+            "running": int(surface_counts.get("running", 0) or 0),
+            "pending": int(surface_counts.get("pending", 0) or 0),
+            "done": int(surface_counts.get("done", 0) or 0),
+            "failed": int(surface_counts.get("failed", 0) or 0),
+            "active": int(surface_counts.get("active", 0) or 0),
+            "final": int(surface_counts.get("final", 0) or 0),
         },
         "recovered_task_ids": [str(item.get("id", "") or "").strip() for item in (payload.get("recovered", []) or []) if isinstance(item, dict)],
         "heartbeat_reassigned_task_ids": [str(item.get("id", "") or "").strip() for item in (payload.get("heartbeat_reassigned", []) or []) if isinstance(item, dict)],

@@ -204,6 +204,31 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("required_fields", surface["substrate_display_contract"])
         self.assertEqual(surface["surface_role"]["role"], "canonical_text_operator_surface")
 
+    def test_build_task_queue_view_prefers_surface_state_over_raw_status(self) -> None:
+        queue = build_task_queue_view(
+            [
+                {
+                    "id": "managed-queued",
+                    "worker_pool": "octoclaw-research",
+                    "status": "running",
+                    "summary": "flow still queued",
+                    "route": "spawn_single",
+                    "openclaw_taskflow": {
+                        "backend": "managed",
+                        "sync_mode": "managed",
+                        "substrate_state": "queued",
+                        "flow_id": "flow-1",
+                        "create_preference": "native_preferred",
+                        "create_status": "native_unavailable_fallback_mirror",
+                    },
+                }
+            ],
+            now=self.now,
+        )
+
+        self.assertEqual([item["task_id"] for item in queue["queued"]], ["managed-queued"])
+        self.assertEqual(queue["running"], [])
+
     @patch("lib.task_display.resolve_task_artifacts")
     def test_build_task_detail_prefers_artifact_index_rows(self, mock_resolve_task_artifacts) -> None:
         mock_resolve_task_artifacts.return_value = [

@@ -152,6 +152,41 @@ class RuntimeObserverTests(unittest.TestCase):
         self.assertIn("Review surfaces:", text)
         self.assertIn("details review-1", text)
 
+    @patch("lib.runtime_observer.observe_runtime_read_model")
+    def test_observe_runtime_once_prefers_surface_state_for_counts(
+        self,
+        mock_observe,
+    ) -> None:
+        mock_observe.return_value = {
+            "observed_at": "2026-04-07T23:33:10+08:00",
+            "workspace": "/tmp/octoclaw",
+            "runner_health": {"present": True, "healthy": True, "reason": "ok"},
+            "runner_execution_mode": "ondemand",
+            "tasks": [
+                {
+                    "id": "task-managed",
+                    "status": "running",
+                    "route": "spawn_single",
+                    "summary": "native flow still queued",
+                    "openclaw_taskflow": {
+                        "backend": "managed",
+                        "sync_mode": "managed",
+                        "substrate_state": "queued",
+                        "flow_id": "flow-1",
+                        "create_preference": "native_preferred",
+                        "create_status": "native_unavailable_fallback_mirror",
+                    },
+                }
+            ],
+        }
+
+        payload = runtime_observer.observe_runtime_once(workspace="/tmp/octoclaw")
+
+        self.assertEqual(payload["counts"]["queued"], 1)
+        self.assertEqual(payload["counts"]["running"], 0)
+        self.assertEqual(payload["counts"]["active"], 1)
+        self.assertEqual(payload["active_substrate_tasks"][0]["state"], "queued")
+
 
 if __name__ == "__main__":
     unittest.main()
