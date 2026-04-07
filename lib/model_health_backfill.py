@@ -170,9 +170,7 @@ def load_fallback_events(
             if not text:
                 continue
             scanned_lines += 1
-            try:
-                record = json.loads(text)
-            except json.JSONDecodeError:
+            if "[model-fallback/decision]" in text and "model fallback decision:" in text:
                 event = extract_plaintext_fallback_event(text)
                 if not event:
                     invalid_lines += 1
@@ -181,6 +179,13 @@ def load_fallback_events(
                 if cutoff is not None and timestamp and timestamp < cutoff:
                     continue
                 events.append(event)
+                continue
+            if not text.startswith("{"):
+                continue
+            try:
+                record = json.loads(text)
+            except json.JSONDecodeError:
+                invalid_lines += 1
                 continue
             if not isinstance(record, dict):
                 invalid_lines += 1
