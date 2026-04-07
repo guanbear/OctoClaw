@@ -2,7 +2,7 @@
 
 > 状态：当前 canonical 设计底稿（2026-04-07）
 > 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
-> 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
@@ -589,6 +589,31 @@ Optional heavy backends
 ```
 
 也就是说，P5 不该再创造一套新 runtime，而是要把当前 transition state 继续压缩掉。
+
+### 8.6 P6 之后不再开新大题，而是进入 transition cleanup
+
+截至 `2026-04-07`：
+
+- `P4` baseline 已完成
+- `P5` baseline 已完成
+- `P6` baseline 已完成
+- macmini 上的 `runner / spawn_single / observer / patrol` 实机验收已通过
+
+所以后续主线不再是继续扩 P4/P5/P6，而是：
+
+1. **先做 transition state 清理**
+2. **再做 router / model-intel 深化**
+
+这阶段的 focused design 见：
+
+- [`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)
+
+它的目标不是继续发明能力，而是：
+
+- durable policy state
+- substrate-only read path tightening
+- legacy mirror / fallback shrink
+- optional backend true detach
 
 ---
 

@@ -2,7 +2,7 @@
 
 > 状态：当前 canonical 执行计划（2026-04-07）
 > 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
-> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
@@ -526,6 +526,24 @@ P6 关单前，至少应满足：
 2. 启用 ClawTeam / tmux / resident runner 时，surface 明确标为 `optional`
 3. `status / observer / display / retrieve` 不再把 backend 当真相源
 4. ClawTeam bridge 关闭时，默认主路径不受影响
+
+### P6 之后的主线
+
+`P4/P5/P6` baseline 与 macmini 实机验收通过后，后续主线顺序固定为：
+
+1. **transition state 清理**
+2. **router / model-intel 深化**
+
+transition cleanup 的 focused design 见：
+
+- [`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)
+
+当前不再建议在这之前：
+
+- 重开新的大设计专题
+- 直接重写成全 Node/TS
+- 提前拆独立 router 仓库
+- 再扩新的 backend / cockpit
 
 ---
 
