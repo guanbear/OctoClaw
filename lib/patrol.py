@@ -1469,7 +1469,8 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
 
         candidates = build_session_candidates(task, sessions_data)
         if not candidates:
-            resume = resolve_worker_session(task)
+            use_spawn_resume_only = _task_has_independent_native_spawn(state_task) or _task_has_independent_native_spawn(task)
+            resume = session_resume_snapshot(state_task) if use_spawn_resume_only else resolve_worker_session(task)
             resume_state = str(resume.get("resume_state", "") or "").strip()
             resume_status = str(resume.get("session_status", "") or "").strip()
             if state_task.get("session_status") != "missing":
@@ -1571,8 +1572,32 @@ def recover_dead_agent_tasks(tasks: list[dict], *, stale_after_seconds: int = 90
         if not task_id:
             continue
         previous = state_by_id.get(task_id, {})
+        current_normalized = normalize_task_record(previous) if isinstance(previous, dict) and previous else {}
+        current_artifacts = current_normalized.get("artifacts", {}) if isinstance(current_normalized.get("artifacts", {}), dict) else {}
+        current_event_summary = current_normalized.get("task_event_summary", {}) if isinstance(current_normalized.get("task_event_summary", {}), dict) else {}
+        latest_kind = str(current_event_summary.get("latest_kind", "") or "").strip().lower()
+        if (
+            task_is_final(current_normalized)
+            or bool(current_artifacts.get("worker_result"))
+            or str(current_normalized.get("handoff_state", "") or "").strip().lower() in {"user_safe_ready", "delivered"}
+            or latest_kind in {"task_completed", "result_ready", "handoff_ready", "user_notified"}
+        ):
+            continue
         previous_status = str(previous.get("status", "") or "")
-        normalized = normalize_task_record(task)
+        merged = dict(previous) if isinstance(previous, dict) else {}
+        for key in (
+            "status",
+            "session_status",
+            "recovery_action",
+            "recovery_reason",
+            "last_recovered_at",
+            "ownership",
+            "session_resume",
+            "updated_at",
+        ):
+            if key in task:
+                merged[key] = task.get(key)
+        normalized = normalize_task_record(merged or task)
         if task_id in state_by_id:
             current = state_by_id[task_id]
             current.clear()

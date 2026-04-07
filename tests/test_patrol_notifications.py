@@ -158,7 +158,11 @@ class PatrolNotificationTests(unittest.TestCase):
             patrol,
             "load_task_state",
             return_value={"tasks": [dict(record)], "updated_at": ""},
-        ), patch.object(patrol, "load_main_agent_sessions", return_value={}):
+        ), patch.object(
+            patrol,
+            "load_main_agent_sessions",
+            return_value={"sessions": [{"sessionId": "sess-other", "_session_key": "agent:main:other"}]},
+        ):
             tasks = patrol.annotate_tasks_with_session_state([dict(record)])
 
         self.assertEqual(tasks[0]["session_key"], "agent:main:slack:direct:u-runner")
@@ -648,6 +652,59 @@ class PatrolNotificationTests(unittest.TestCase):
         mock_sync_surfaces.assert_called_once()
         mock_sync_task.assert_called_once()
 
+    @patch("patrol.sync_task")
+    @patch("patrol.sync_runtime_surfaces")
+    @patch("patrol.append_task_event")
+    @patch("patrol.save_task_state")
+    @patch("patrol.load_task_state")
+    @patch("patrol.is_agent_alive", return_value=False)
+    def test_patrol_heartbeat_check_keeps_running_native_spawn_tasks_claimed(
+        self,
+        mock_is_alive,
+        mock_load_state,
+        mock_save_state,
+        mock_append_event,
+        mock_sync_surfaces,
+        mock_sync_task,
+    ) -> None:
+        mock_load_state.return_value = {
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "status": "running",
+                    "lifecycle_state": "running",
+                    "route": "spawn_single",
+                    "runtime": "subagent",
+                    "worker_pool": "octoclaw-code",
+                    "summary": "patch auth middleware",
+                    "task_description": "patch auth middleware",
+                    "owner": "agent-1",
+                    "agent_id": "agent-1",
+                    "session_id": "sess-1",
+                    "run_id": "run-1",
+                    "artifacts": {
+                        "spawn_execution": {
+                            "backend": "native",
+                            "child_session_key": "agent:main:subagent:task-1",
+                            "session_id": "sess-1",
+                            "run_id": "run-1",
+                            "pid": 12345,
+                        }
+                    },
+                }
+            ],
+            "updated_at": "",
+        }
+
+        updated = patrol.patrol_heartbeat_check("/tmp/octoclaw-heartbeat-check", stale_after_seconds=60)
+
+        self.assertEqual(updated, [])
+        mock_is_alive.assert_called_once()
+        mock_save_state.assert_not_called()
+        mock_append_event.assert_not_called()
+        mock_sync_surfaces.assert_not_called()
+        mock_sync_task.assert_not_called()
+
     @patch("patrol.append_task_event")
     @patch("patrol.sync_runtime_surfaces")
     @patch("patrol.sync_task")
@@ -697,6 +754,58 @@ class PatrolNotificationTests(unittest.TestCase):
         mock_sync_task.assert_called_once()
         mock_sync_runtime_surfaces.assert_called_once()
         mock_append_task_event.assert_called_once()
+
+    @patch("patrol.append_task_event")
+    @patch("patrol.sync_runtime_surfaces")
+    @patch("patrol.sync_task")
+    def test_recover_dead_agent_tasks_skips_overwriting_finalized_task(self, mock_sync_task, mock_sync_runtime_surfaces, mock_append_task_event) -> None:
+        with patch.object(
+            patrol,
+            "load_task_state",
+            return_value={
+                "tasks": [
+                    {
+                        "id": "task-2",
+                        "status": "queued",
+                        "route": "spawn_single",
+                        "runtime": "subagent",
+                        "worker_pool": "octoclaw-research",
+                        "session_status": "missing",
+                        "summary": "latest final summary",
+                        "handoff_state": "user_safe_ready",
+                        "artifacts": {
+                            "worker_result": {
+                                "task_id": "task-2",
+                                "status": "done",
+                                "summary": "latest final summary",
+                            }
+                        },
+                        "task_event_summary": {"latest_kind": "handoff_ready"},
+                    }
+                ],
+                "updated_at": "",
+            },
+        ), patch.object(patrol, "save_task_state") as mock_save:
+            recovered = patrol.recover_dead_agent_tasks(
+                [
+                    {
+                        "id": "task-2",
+                        "status": "queued",
+                        "route": "spawn_single",
+                        "runtime": "subagent",
+                        "worker_pool": "octoclaw-research",
+                        "session_status": "missing",
+                        "summary": "",
+                        "recovery_action": "dead_agent_recovered",
+                    }
+                ]
+            )
+
+        self.assertEqual(recovered, [])
+        mock_save.assert_not_called()
+        mock_sync_task.assert_not_called()
+        mock_sync_runtime_surfaces.assert_not_called()
+        mock_append_task_event.assert_not_called()
 
     def test_get_recent_done_tasks_includes_final_blocked_handoffs(self) -> None:
         now = patrol.now_utc()
