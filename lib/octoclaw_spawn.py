@@ -788,6 +788,31 @@ def resolve_python_bin() -> str:
     return "python3"
 
 
+def resolve_openclaw_bin(config: dict[str, Any] | None = None) -> str:
+    cfg = config if isinstance(config, dict) else spawn_execution_config()
+    configured = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
+    path = os.pathsep.join(
+        part
+        for part in [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            str(os.environ.get("PATH", "") or "").strip(),
+        ]
+        if part
+    )
+    candidates = [configured, "openclaw", "/opt/homebrew/bin/openclaw", "/usr/local/bin/openclaw"]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if not text:
+            continue
+        resolved = shutil.which(text, path=path)
+        if resolved:
+            return resolved
+        if os.path.isabs(text) and os.path.exists(text) and os.access(text, os.X_OK):
+            return text
+    return configured
+
+
 def build_native_openclaw_command(
     *,
     task_id: str,
@@ -796,7 +821,7 @@ def build_native_openclaw_command(
     thinking: str,
 ) -> tuple[list[str], str, str]:
     cfg = spawn_execution_config()
-    openclaw_bin = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
+    openclaw_bin = resolve_openclaw_bin(cfg)
     session_key = ""
     session_id = resolve_native_session_id(task_id)
     supports_thinking = openclaw_agent_supports_option("--thinking", openclaw_bin=openclaw_bin)
@@ -850,6 +875,7 @@ def execute_native_openclaw_spawn(
             f"export WORKSPACE={shlex.quote(WORKSPACE)}",
             f"export OCTOCLAW_ROOT={shlex.quote(SCRIPT_DIR)}",
             f"export OCTOCLAW_PYTHON_BIN={shlex.quote(python_bin)}",
+            "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH",
             "export OCTOCLAW_DISABLE_RUNTIME_POLICY=1",
             "export OPENCLAW_NO_RESPAWN=1",
             f"cd {shlex.quote(WORKSPACE)} || exit 1",
@@ -1064,7 +1090,7 @@ def build_clawteam_spawn_command(
     bridge_cfg = clawteam_runtime_config()
     spawn_cfg = spawn_execution_config()
     clawteam_bin = str(bridge_cfg.get("clawteam_bin", "clawteam") or "clawteam").strip() or "clawteam"
-    openclaw_bin = str(spawn_cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
+    openclaw_bin = resolve_openclaw_bin(spawn_cfg)
     backend_name = str(spawn_cfg.get("backend_name", "tmux") or "tmux").strip() or "tmux"
     workspace_enabled = bool(spawn_cfg.get("workspace", False))
     supports_profile = clawteam_spawn_supports_option("--profile", clawteam_bin=clawteam_bin)
@@ -1116,7 +1142,7 @@ def execute_clawteam_spawn(
 ) -> dict:
     if shutil.which(str(clawteam_runtime_config().get("clawteam_bin", "clawteam") or "clawteam")) is None:
         raise RuntimeError("未找到 clawteam 命令，无法执行 ClawTeam spawn")
-    if shutil.which(str(spawn_execution_config().get("openclaw_bin", "openclaw") or "openclaw")) is None:
+    if shutil.which(resolve_openclaw_bin(spawn_execution_config())) is None:
         raise RuntimeError("未找到 openclaw 命令，无法执行 ClawTeam spawn")
 
     team_name = resolve_spawn_team_name()
@@ -1847,6 +1873,9 @@ def build_spawn_spec(
                 cmd.extend(["--session-id", child_session_id])
             if child_run_id:
                 cmd.extend(["--run-id", child_run_id])
+            child_session_key = str((spawn_execution or {}).get("child_session_key", "") or "").strip()
+            if child_session_key:
+                cmd.extend(["--session-key", child_session_key])
             pid = int((spawn_execution or {}).get("pid", 0) or 0)
             if pid > 0:
                 cmd.extend(["--session-status", "spawned"])

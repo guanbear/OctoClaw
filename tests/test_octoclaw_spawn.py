@@ -172,6 +172,7 @@ class OctoClawSpawnTests(unittest.TestCase):
         with (
             patch.object(octoclaw_spawn.shutil, "which", return_value="/usr/bin/mock"),
             patch.object(octoclaw_spawn, "build_clawteam_spawn_command", return_value=["clawteam", "spawn"]),
+            patch.object(octoclaw_spawn, "resolve_openclaw_bin", return_value="/opt/homebrew/bin/openclaw"),
             patch.object(octoclaw_spawn.subprocess, "run", return_value=completed),
             patch.object(
                 octoclaw_spawn,
@@ -229,6 +230,7 @@ class OctoClawSpawnTests(unittest.TestCase):
                 patch.object(octoclaw_spawn, "SCRIPT_DIR", str(Path(tmpdir) / "lib")),
                 patch.object(octoclaw_spawn, "TASK_STATE_PY", str(Path(tmpdir) / "task-state-update.py")),
                 patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"openclaw_bin": "openclaw"}),
+                patch.object(octoclaw_spawn, "resolve_openclaw_bin", return_value="/opt/homebrew/bin/openclaw"),
                 patch.object(octoclaw_spawn, "openclaw_agent_supports_option", return_value=True),
                 patch.object(octoclaw_spawn.shutil, "which", return_value="/usr/bin/openclaw"),
                 patch.object(octoclaw_spawn, "resolve_python_bin", return_value="/opt/homebrew/bin/python3"),
@@ -256,11 +258,13 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertTrue(payload["wrapper_path"].endswith(".run.sh"))
         self.assertEqual(created["kwargs"]["cwd"], tmpdir)
         self.assertEqual(created["kwargs"]["env"]["OCTOCLAW_DISABLE_RUNTIME_POLICY"], "1")
+        self.assertIn("/opt/homebrew/bin:/usr/local/bin", created["kwargs"]["env"]["PATH"])
         self.assertTrue(created["kwargs"]["start_new_session"])
 
     def test_build_native_openclaw_command_uses_supported_agent_options_only(self) -> None:
         with (
             patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"openclaw_bin": "openclaw"}),
+            patch.object(octoclaw_spawn, "resolve_openclaw_bin", return_value="/opt/homebrew/bin/openclaw"),
             patch.object(octoclaw_spawn, "resolve_native_session_id", return_value="octoclaw-subagent-research-1"),
             patch.object(octoclaw_spawn, "openclaw_agent_supports_option", return_value=False),
         ):
@@ -276,6 +280,23 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("--session-id", command)
         self.assertNotIn("--session-key", command)
         self.assertNotIn("--thinking", command)
+        self.assertEqual(command[0], "/opt/homebrew/bin/openclaw")
+
+    def test_resolve_openclaw_bin_prefers_homebrew_path_when_path_is_minimal(self) -> None:
+        with (
+            patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"openclaw_bin": "openclaw"}),
+            patch.dict(octoclaw_spawn.os.environ, {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}, clear=False),
+            patch.object(
+                octoclaw_spawn.shutil,
+                "which",
+                side_effect=lambda candidate, path=None: "/opt/homebrew/bin/openclaw"
+                if candidate in {"openclaw", "/opt/homebrew/bin/openclaw"}
+                else None,
+            ),
+        ):
+            resolved = octoclaw_spawn.resolve_openclaw_bin()
+
+        self.assertEqual(resolved, "/opt/homebrew/bin/openclaw")
 
     def test_build_native_task_prompt_avoids_local_runtime_file_contract(self) -> None:
         brief = {
@@ -425,7 +446,6 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("--session-id", upsert_cmd)
         self.assertIn("child-sess-2", upsert_cmd)
         self.assertIn("--run-id", upsert_cmd)
-        self.assertNotIn("--session-key", upsert_cmd)
 
     def test_build_spawn_spec_marks_native_spawn_running(self) -> None:
         policy = {
