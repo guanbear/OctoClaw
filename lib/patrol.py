@@ -83,13 +83,14 @@ from octopus_config import (
     patrol_config,
     resolve_main_session_key,
     resolve_runner_mode,
+    spawn_operator_surface,
 )
 from session_ops import send_agent_message
 from task_events import append_task_event
 try:
-    from runtime_snapshot import build_runtime_snapshot, observe_runtime_snapshot
+    from runtime_snapshot import build_runtime_snapshot, load_runner_queue_counts
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.runtime_snapshot import build_runtime_snapshot, observe_runtime_snapshot
+    from lib.runtime_snapshot import build_runtime_snapshot, load_runner_queue_counts
 
 try:
     from agent_heartbeat import is_agent_alive
@@ -617,68 +618,49 @@ def reload_observed_tasks(*, persist: bool = True) -> list[dict]:
     return tasks
 
 
-def observe_runtime_read_model(workspace: str = WORKSPACE) -> dict[str, Any]:
-    base_snapshot = observe_runtime_snapshot(workspace=workspace)
-    runner_health = base_snapshot.get("runner_health", {}) if isinstance(base_snapshot.get("runner_health"), dict) else {}
-    runner_mode = str(base_snapshot.get("runner_execution_mode", "") or resolve_runner_mode())
-    tasks = reload_observed_tasks(persist=False)
-    queue_counts = base_snapshot.get("queue_counts", {}) if isinstance(base_snapshot.get("queue_counts"), dict) else {}
-    return build_runtime_snapshot(
-        workspace=workspace,
-        tasks=tasks,
-        runner_health=runner_health,
-        runner_execution_mode=runner_mode,
-        queue_counts=queue_counts,
-        changes={
-            "progress_hydrated": 0,
-            "results_hydrated": 0,
-            "heartbeat_reassigned": 0,
-            "dead_agent_recovered": 0,
-        },
-        recovered_task_ids=[],
-        heartbeat_reassigned_task_ids=[],
-    )
-
-
 def observe_runtime_state_once(workspace: str = WORKSPACE) -> dict[str, Any]:
-    base_snapshot = observe_runtime_snapshot(workspace=workspace)
-    runner_health = base_snapshot.get("runner_health", {}) if isinstance(base_snapshot.get("runner_health"), dict) else {}
-    runner_mode = str(base_snapshot.get("runner_execution_mode", "") or resolve_runner_mode())
-    tasks = reload_observed_tasks(persist=True)
+    runner_health = check_runner_health()
+    runner_mode = resolve_runner_mode()
+    tasks = reload_observed_tasks()
 
     progress_hydrated = hydrate_session_progress_markers(tasks)
     if progress_hydrated > 0:
-        tasks = reload_observed_tasks(persist=True)
+        tasks = reload_observed_tasks()
 
     hydrated = hydrate_completed_session_results(tasks)
     if hydrated > 0:
-        tasks = reload_observed_tasks(persist=True)
+        tasks = reload_observed_tasks()
 
     heartbeat_reassigned = patrol_heartbeat_check(workspace)
     if heartbeat_reassigned:
-        tasks = reload_observed_tasks(persist=True)
+        tasks = reload_observed_tasks()
 
     recovered = recover_dead_agent_tasks(tasks)
     if recovered:
-        tasks = reload_observed_tasks(persist=True)
+        tasks = reload_observed_tasks()
 
-    queue_counts = base_snapshot.get("queue_counts", {}) if isinstance(base_snapshot.get("queue_counts"), dict) else {}
+    return {
+        "runner_health": runner_health,
+        "runner_execution_mode": runner_mode,
+        "tasks": tasks,
+        "progress_hydrated": int(progress_hydrated or 0),
+        "results_hydrated": int(hydrated or 0),
+        "heartbeat_reassigned": heartbeat_reassigned,
+        "recovered": recovered,
+    }
+
+
+def observe_runtime_read_model(workspace: str = WORKSPACE) -> dict[str, Any]:
+    runner_health = check_runner_health()
+    runner_mode = resolve_runner_mode()
+    tasks = reload_observed_tasks(persist=False)
+    queue_counts = load_runner_queue_counts()
     return build_runtime_snapshot(
         workspace=workspace,
         tasks=tasks,
         runner_health=runner_health,
         runner_execution_mode=runner_mode,
         queue_counts=queue_counts,
-        changes={
-            "progress_hydrated": int(progress_hydrated or 0),
-            "results_hydrated": int(hydrated or 0),
-            "heartbeat_reassigned": len(heartbeat_reassigned or []),
-            "dead_agent_recovered": len(recovered or []),
-        },
-        recovered_task_ids=[str(item.get("id", "") or "").strip() for item in (recovered or []) if isinstance(item, dict)],
-        heartbeat_reassigned_task_ids=[
-            str(item.get("id", "") or "").strip() for item in (heartbeat_reassigned or []) if isinstance(item, dict)
-        ],
     )
 
 
@@ -4953,7 +4935,7 @@ def check_main_model_drift():
     from main_model_drift import assess_main_model_drift, main_session_drift_config
 
     DRIFT_NOTICE_FILE = "/tmp/octopus-drift-notified.json"
-    drift_cfg = main_session_drift_config()
+    drift_cfg = main_session_drift_config(load_octopus_config())
     assessment = assess_main_model_drift()
     if not assessment.get("enabled"):
         return
