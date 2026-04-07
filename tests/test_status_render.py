@@ -308,6 +308,8 @@ class StatusRenderTests(unittest.TestCase):
         rendered = render_status_task_anchors(snapshot)
 
         self.assertIn("八爪鱼（OctoClaw）任务锚点", rendered)
+        self.assertIn("🔵 运行中（1个）", rendered)
+        self.assertIn("⏸️ 排队中（1个）", rendered)
         self.assertIn("OctoClaw task", rendered)
         self.assertIn("Fix and verify the release pipeline", rendered)
         self.assertIn("Reply with:", rendered)
@@ -355,6 +357,62 @@ class StatusRenderTests(unittest.TestCase):
 
         self.assertEqual([task["id"] for task in snapshot["queued"]], ["stale-recovered"])
         self.assertEqual([task["id"] for task in snapshot["steer_needed"]], ["needs-steer"])
+
+    def test_snapshot_hides_stale_mirror_only_queued_tasks_from_main_queue(self) -> None:
+        tasks = [
+            {
+                "id": "stale-mirror",
+                "worker_pool": "octoclaw-research",
+                "status": "queued",
+                "summary": "old queued mirror record",
+                "task_description": "Old queued mirror record",
+                "route": "spawn_single",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored",
+                },
+                "session_key": "agent:main:main",
+                "session_id": "stale-session",
+                "recovery_action": "dead_agent_recovered",
+                "updated_at": "2026-03-28T09:00:00+00:00",
+            },
+            {
+                "id": "fresh-queued",
+                "worker_pool": "octoclaw-research",
+                "status": "queued",
+                "summary": "fresh queued task",
+                "task_description": "Fresh queued task",
+                "route": "spawn_single",
+                "updated_at": "2026-03-28T11:50:00+00:00",
+            },
+        ]
+
+        snapshot = build_status_snapshot(tasks, now=self.now)
+        rendered = render_status_task_anchors(snapshot)
+
+        self.assertEqual([task["id"] for task in snapshot["queued"]], ["fresh-queued"])
+        self.assertEqual([task["id"] for task in snapshot["stale_queued"]], ["stale-mirror"])
+        self.assertIn("🗃️ 已折叠陈旧排队（1个）", rendered)
+
+    def test_snapshot_counts_recent_completed_status_as_recent_done(self) -> None:
+        tasks = [
+            {
+                "id": "recent-completed",
+                "worker_pool": "octoclaw-code",
+                "status": "completed",
+                "summary": "patch applied",
+                "task_description": "Patch applied",
+                "route": "spawn_single",
+                "completed_at": "2026-03-28T11:50:00+00:00",
+                "handoff_state": "delivered",
+            }
+        ]
+
+        snapshot = build_status_snapshot(tasks, now=self.now)
+        rendered = render_status_task_anchors(snapshot)
+
+        self.assertEqual([task["id"] for task in snapshot["done_recent"]], ["recent-completed"])
+        self.assertIn("✅ 最近完成（1个，30m）", rendered)
 
     def test_table_recover_note_includes_resume_state(self) -> None:
         snapshot = build_status_snapshot(

@@ -12,6 +12,11 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import is_runner_task, resolve_executor, resolve_model_band, resolve_worker_pool, role_display
 
 try:
+    from runtime_task_record import task_queue_bucket, task_state_model
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_task_record import task_queue_bucket, task_state_model
+
+try:
     from task_display import build_task_actions, build_task_anchor, render_task_anchor_text
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.task_display import build_task_actions, build_task_anchor, render_task_anchor_text
@@ -274,7 +279,7 @@ def render_model_health_summary(summary: dict[str, Any]) -> list[str]:
                 bits.append(f"quota:{quota}")
             highlights.append(" ".join(bits))
         if highlights:
-            lines.append("   top: " + " | ".join(highlights))
+            lines.append("   health watch: " + " | ".join(highlights))
     return lines
 
 
@@ -570,6 +575,66 @@ def _should_count_recent(task: dict[str, Any], recent_window: datetime, lineage_
     return completed >= recent_window.replace(tzinfo=None)
 
 
+def _task_binding(task: dict[str, Any]) -> dict[str, Any]:
+    direct = task.get("openclaw_taskflow", {}) if isinstance(task.get("openclaw_taskflow", {}), dict) else {}
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    artifact_binding = artifacts.get("openclaw_taskflow", {}) if isinstance(artifacts.get("openclaw_taskflow", {}), dict) else {}
+    merged = dict(artifact_binding)
+    merged.update({key: value for key, value in direct.items() if value not in (None, "", [], {})})
+    return merged
+
+
+def _task_clock(task: dict[str, Any]) -> datetime | None:
+    for field in ("updated_at", "completed_at", "started_at", "spawned_at", "created_at"):
+        parsed = parse_time(str(task.get(field, "") or ""))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _is_stale_mirror_only_queued(task: dict[str, Any], now: datetime, *, stale_minutes: int = 90) -> bool:
+    if str(task_queue_bucket(task) or "").strip().lower() != "queued":
+        return False
+    binding = _task_binding(task)
+    if not binding:
+        return False
+    backend = str(binding.get("backend", "") or "").strip().lower()
+    if backend and backend != "mirror":
+        return False
+    binding_state = str(binding.get("binding_state", "") or "").strip().lower()
+    native_binding_state = str(binding.get("native_binding_state", "") or "").strip().lower()
+    native_status = str(binding.get("native_status", "") or "").strip().lower()
+    flow_id = str(binding.get("flow_id", "") or "").strip()
+    task_id = str(binding.get("task_id", "") or "").strip()
+    substrate_state = str(binding.get("substrate_state", "") or "").strip().lower()
+    if flow_id or task_id or native_binding_state == "bound" or native_status in {"queued", "running", "blocked"} or substrate_state in {"queued", "running", "blocked"}:
+        return False
+    if binding_state not in {"", "mirrored"}:
+        return False
+    recovery_action = str(task.get("recovery_action", "") or "").strip().lower()
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    spawn_execution = artifacts.get("spawn_execution", {}) if isinstance(artifacts.get("spawn_execution", {}), dict) else {}
+    has_session_identity = any(
+        str(value or "").strip()
+        for value in (
+            task.get("session_key"),
+            task.get("session_id"),
+            task.get("run_id"),
+            spawn_execution.get("session_id"),
+            spawn_execution.get("run_id"),
+        )
+    )
+    if has_session_identity and recovery_action != "dead_agent_recovered":
+        return False
+    clock = _task_clock(task)
+    if clock is None:
+        return False
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=timezone.utc)
+    age_minutes = max(0.0, (now - clock.astimezone(now.tzinfo)).total_seconds() / 60.0)
+    return age_minutes >= float(stale_minutes)
+
+
 def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent_minutes: int = 30) -> dict:
     now = now or datetime.now(timezone(timedelta(hours=8)))
     recent_window = now - timedelta(minutes=recent_minutes)
@@ -587,14 +652,18 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
     user_lineages = [lineage for lineage in active_lineages if not is_system_maintenance_task(lineage.get("parent", {}))]
     system_lineages = [lineage for lineage in active_lineages if is_system_maintenance_task(lineage.get("parent", {}))]
 
-    running = [task for task in user_tasks if task.get("status") in ("running", "dispatched")]
-    queued = [task for task in user_tasks if task.get("status") == "queued"]
-    deferred = [task for task in user_tasks if task.get("status") == "deferred"]
-    pending = [task for task in user_tasks if task.get("status") == "pending_confirm"]
-    system_running = [task for task in system_tasks if task.get("status") in ("running", "dispatched")]
-    system_queued = [task for task in system_tasks if task.get("status") == "queued"]
-    system_deferred = [task for task in system_tasks if task.get("status") == "deferred"]
-    system_pending = [task for task in system_tasks if task.get("status") == "pending_confirm"]
+    running = [task for task in user_tasks if task_queue_bucket(task) == "running"]
+    queued_all = [task for task in user_tasks if task_queue_bucket(task) == "queued"]
+    stale_queued = [task for task in queued_all if _is_stale_mirror_only_queued(task, now)]
+    queued = [task for task in queued_all if _task_id(task) not in {_task_id(item) for item in stale_queued}]
+    deferred = [task for task in user_tasks if str(task.get("status") or "").strip().lower() == "deferred"]
+    pending = [task for task in user_tasks if str(task.get("status") or "").strip().lower() == "pending_confirm"]
+    system_running = [task for task in system_tasks if task_queue_bucket(task) == "running"]
+    system_queued_all = [task for task in system_tasks if task_queue_bucket(task) == "queued"]
+    system_stale_queued = [task for task in system_queued_all if _is_stale_mirror_only_queued(task, now)]
+    system_queued = [task for task in system_queued_all if _task_id(task) not in {_task_id(item) for item in system_stale_queued}]
+    system_deferred = [task for task in system_tasks if str(task.get("status") or "").strip().lower() == "deferred"]
+    system_pending = [task for task in system_tasks if str(task.get("status") or "").strip().lower() == "pending_confirm"]
     failed_recent = []
     done_recent = []
     system_failed_recent = []
@@ -607,12 +676,17 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
                 steer_needed.append(task)
         if not _should_count_recent(task, recent_window, lineage_child_ids, now):
             continue
-        if task.get("status") == "done":
+        state_model = task_state_model(task)
+        outcome_state = str(state_model.get("outcome_state", "") or "").strip().lower()
+        lifecycle_state = str(state_model.get("lifecycle_state", "") or "").strip().lower()
+        if lifecycle_state not in {"finished", "cancelled"}:
+            continue
+        if outcome_state == "done":
             if is_system_maintenance_task(task):
                 system_done_recent.append(task)
             else:
                 done_recent.append(task)
-        elif task.get("status") == "failed":
+        elif outcome_state == "failed":
             if is_system_maintenance_task(task):
                 system_failed_recent.append(task)
             else:
@@ -622,10 +696,12 @@ def build_status_snapshot(tasks: list[dict], now: datetime | None = None, recent
         "now": now,
         "running": running,
         "queued": queued,
+        "stale_queued": stale_queued,
         "deferred": deferred,
         "pending": pending,
         "system_running": system_running,
         "system_queued": system_queued,
+        "system_stale_queued": system_stale_queued,
         "system_deferred": system_deferred,
         "system_pending": system_pending,
         "done_recent": done_recent,
@@ -746,6 +822,7 @@ def render_status_text_compact(snapshot: dict) -> str:
     now = snapshot["now"]
     recent_done_count = len(snapshot["done_recent"])
     recent_failed_count = len(snapshot["failed_recent"])
+    stale_queued_count = len(snapshot.get("stale_queued", []))
     problem_tasks = list(snapshot["steer_needed"]) + list(snapshot["failed_recent"])
     system_maintenance = list(snapshot.get("system_active_lineages", [])) + list(snapshot.get("system_running", [])) + list(snapshot.get("system_queued", [])) + list(snapshot.get("system_done_recent", []))
     substrate_summary = summarize_taskflow_substrate(
@@ -779,7 +856,10 @@ def render_status_text_compact(snapshot: dict) -> str:
             lines.append("")
 
     _append_anchor_section(lines, f"🔵 运行中（{len(snapshot['running'])}个）", snapshot["running"], now, limit=6)
-    _append_anchor_section(lines, f"⏸️ 排队中（{len(snapshot['queued'])}个）", snapshot["queued"], now, limit=6)
+    queued_title = f"⏸️ 排队中（{len(snapshot['queued'])}个）"
+    if stale_queued_count:
+        queued_title += f" · 已折叠陈旧 {stale_queued_count}"
+    _append_anchor_section(lines, queued_title, snapshot["queued"], now, limit=6)
     _append_anchor_section(lines, f"❓ 待确认（{len(snapshot['pending'])}个）", snapshot["pending"], now, limit=4)
     _append_anchor_section(lines, f"⚠️ 异常与恢复（{len(problem_tasks)}个）", problem_tasks, now, limit=6)
     _append_anchor_section(lines, f"✅ 最近完成（{recent_done_count}个）", snapshot["done_recent"], now, limit=4)
@@ -967,51 +1047,47 @@ def render_status_task_anchors(snapshot: dict) -> str:
     now = snapshot["now"]
     lines = ["🐙 八爪鱼（OctoClaw）任务锚点", ""]
 
-    anchors: list[str] = []
+    sections: list[tuple[str, list[dict[str, Any]], int]] = []
+    lineage_parents = [
+        lineage.get("parent", {})
+        for lineage in snapshot.get("active_lineages", [])[:6]
+        if isinstance(lineage.get("parent", {}), dict)
+    ]
+    if lineage_parents:
+        sections.append((f"🕸️ 协作流（{len(lineage_parents)}个）", lineage_parents, 6))
+    sections.extend(
+        [
+            (f"🔵 运行中（{len(snapshot.get('running', []))}个）", snapshot.get("running", []), 8),
+            (f"✅ 最近完成（{len(snapshot.get('done_recent', []))}个，30m）", snapshot.get("done_recent", []), 4),
+            (f"⏸️ 排队中（{len(snapshot.get('queued', []))}个）", snapshot.get("queued", []), 8),
+            (f"❓ 待确认（{len(snapshot.get('pending', []))}个）", snapshot.get("pending", []), 4),
+            (f"⚠️ 异常与恢复（{len(snapshot.get('steer_needed', [])) + len(snapshot.get('failed_recent', []))}个）", list(snapshot.get("steer_needed", [])) + list(snapshot.get("failed_recent", [])), 6),
+        ]
+    )
+    system_done_recent = snapshot.get("system_done_recent", []) if isinstance(snapshot.get("system_done_recent", []), list) else []
+    if system_done_recent:
+        sections.append((f"⚙️ 系统维护（{len(system_done_recent)}个近期完成）", system_done_recent, 2))
 
-    for lineage in snapshot.get("active_lineages", [])[:6]:
-        parent = lineage.get("parent", {})
-        if not isinstance(parent, dict):
+    rendered_sections: list[str] = []
+    for title, tasks, limit in sections:
+        task_list = [task for task in tasks if isinstance(task, dict)]
+        if not task_list:
             continue
-        anchor = build_task_anchor(parent, now=now)
-        actions = build_task_actions(parent)
-        anchors.append(render_task_anchor_text(anchor, actions))
-
-    for group_name in ("running", "queued", "pending", "steer_needed"):
-        for task in snapshot.get(group_name, [])[:8]:
-            if not isinstance(task, dict):
-                continue
+        rendered_sections.append(title)
+        for task in task_list[:limit]:
             anchor = build_task_anchor(task, now=now)
             actions = build_task_actions(task)
-            anchors.append(render_task_anchor_text(anchor, actions))
+            rendered_sections.append(render_task_anchor_text(anchor, actions))
+            rendered_sections.append("")
 
-    done_recent = snapshot.get("done_recent", []) if isinstance(snapshot.get("done_recent", []), list) else []
-    for task in done_recent[:4]:
-        if not isinstance(task, dict):
-            continue
-        anchor = build_task_anchor(task, now=now)
-        actions = build_task_actions(task)
-        anchors.append(render_task_anchor_text(anchor, actions))
+    stale_queued = snapshot.get("stale_queued", []) if isinstance(snapshot.get("stale_queued", []), list) else []
+    if stale_queued:
+        rendered_sections.append(f"🗃️ 已折叠陈旧排队（{len(stale_queued)}个）")
+        rendered_sections.append("这些通常是旧的 mirror-only queued 记录；默认不再占用主面板。")
 
-    failed_recent = snapshot.get("failed_recent", []) if isinstance(snapshot.get("failed_recent", []), list) else []
-    for task in failed_recent[:4]:
-        if not isinstance(task, dict):
-            continue
-        anchor = build_task_anchor(task, now=now)
-        actions = build_task_actions(task)
-        anchors.append(render_task_anchor_text(anchor, actions))
-
-    system_done_recent = snapshot.get("system_done_recent", []) if isinstance(snapshot.get("system_done_recent", []), list) else []
-    for task in system_done_recent[:2]:
-        if not isinstance(task, dict):
-            continue
-        anchor = build_task_anchor(task, now=now)
-        actions = build_task_actions(task)
-        anchors.append(render_task_anchor_text(anchor, actions))
-
-    if not anchors:
+    if not rendered_sections:
         lines.append("(no visible task anchors)")
         return "\n".join(lines)
 
-    lines.append("\n\n".join(anchors))
+    lines.append("\n".join(rendered_sections).rstrip())
     return "\n".join(lines).rstrip()

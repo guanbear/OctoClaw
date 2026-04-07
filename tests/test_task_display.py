@@ -369,6 +369,24 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(anchor["state"], "running")
         self.assertIn("flow flow-parent-1", anchor["substrate_summary"])
 
+    def test_build_task_anchor_labels_legacy_mirror_only_substrate(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "legacy-mirror",
+                "worker_pool": "octoclaw-research",
+                "status": "queued",
+                "summary": "old queued record",
+                "route": "spawn_single",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored",
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(anchor["substrate_summary"], "legacy mirror only")
+
     def test_build_task_detail_includes_checklist(self) -> None:
         detail = build_task_detail(
             {

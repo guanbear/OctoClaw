@@ -89,13 +89,15 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
     elif backend == "mirror" and (flow_id or task_id or native_state == "bound" or binding_state in {"mirrored_bound", "bound"}):
         substrate_label = "mirror bound to native"
     elif backend == "mirror":
-        substrate_label = "mirror record"
+        substrate_label = "legacy mirror only"
     elif backend == "native":
         substrate_label = "native task"
     else:
         substrate_label = backend.replace("_", " ")
 
     state_value = substrate_state or native_status or native_state or binding_state
+    if substrate_label == "legacy mirror only" and state_value in {"", "mirrored", "none"}:
+        state_value = ""
     if state_value == "queued" and substrate_label == "mirror bound to native":
         state_value = "bound"
     state_label = {
