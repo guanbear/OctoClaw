@@ -1,6 +1,6 @@
 # OctoClaw 主设计底稿
 
-> 状态：当前 canonical 设计底稿（2026-04-07）
+> 状态：当前 canonical 设计底稿（2026-04-08）
 > 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
 > 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
@@ -592,7 +592,7 @@ Optional heavy backends
 
 ### 8.6 P6 之后不再开新大题，而是进入 transition cleanup
 
-截至 `2026-04-07`：
+截至 `2026-04-08`：
 
 - `P4` baseline 已完成
 - `P5` baseline 已完成
@@ -608,12 +608,17 @@ Optional heavy backends
 
 - [`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)
 
-它的目标不是继续发明能力，而是：
+其中第一轮 transition cleanup 已在 `2026-04-08` 完成：
 
 - durable policy state
 - substrate-only read path tightening
 - legacy mirror / fallback shrink
 - optional backend true detach
+
+所以当前更准确的下一步已经变成：
+
+1. `router / model-intel` 深化
+2. 仅在真实验收发现缺口时继续做更深的 substrate-only hardening
 
 ---
 

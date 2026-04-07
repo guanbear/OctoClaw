@@ -1,6 +1,6 @@
 # OctoClaw Transition Cleanup 设计稿
 
-> 状态：focused design note（2026-04-07）
+> 状态：focused design note + completed first pass（2026-04-08）
 > 前置：P4/P5/P6 baseline 已完成，macmini 实机验收已通过
 > 约束：基于 OpenClaw 2026.4.5 substrate/runtime 语义；runtime hot path 优先 Node.js / JS；不在本阶段重开 router / IM / backend 新专题
 
@@ -47,6 +47,8 @@ Transition cleanup 应分成四条线，但要按顺序收：
 - 没有 durable policy state，observer/control 再干净也会在恢复/续接时漂
 - 没有 substrate-only read path，mirror 就永远删不动
 - mirror/fallback 没缩掉，optional backend 就会继续被过渡逻辑暗绑住
+
+> 截至 `2026-04-08`，这四条线的第一轮实现已全部落地；本设计稿后续主要保留为“为什么这样收”和“如果需要第二轮 hardening 应看哪里”。
 
 ---
 

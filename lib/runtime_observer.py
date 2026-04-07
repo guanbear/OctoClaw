@@ -91,6 +91,7 @@ def _active_substrate_views(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]
             {
                 "task_id": str(detail.get("task_id", "") or "").strip(),
                 "state": str(detail.get("state", "") or "").strip(),
+                "read_path_mode": str(detail.get("read_path_mode", "") or "").strip(),
                 "route": str((detail.get("anchor", {}) if isinstance(detail.get("anchor"), dict) else {}).get("route", "") or "").strip(),
                 "taskflow_target": f"flow {flow_id}" if flow_id else (f"task {taskflow_task_id}" if taskflow_task_id else ""),
                 "substrate_summary": substrate_summary,
@@ -115,6 +116,7 @@ def _review_surface_views(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         views.append(
             {
                 "task_id": str(detail.get("task_id", "") or "").strip(),
+                "read_path_mode": str(detail.get("read_path_mode", "") or "").strip(),
                 "state_label": str(review.get("state_label", "") or "").strip(),
                 "review_task_id": str(review.get("task_id", "") or "").strip(),
                 "substrate_summary": str(review.get("substrate_summary", "") or "").strip(),

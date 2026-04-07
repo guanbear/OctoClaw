@@ -255,6 +255,54 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["session_key"], "agent:main:slack:direct:u234")
         self.assertEqual(payload["session_origin"], "slack")
 
+    def test_policy_state_persists_across_runtime_processes(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-policy-state-") as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "tmp" / "octopus").mkdir(parents=True)
+            env = {
+                "WORKSPACE": str(workspace),
+                "HOME": str(workspace),
+                "OCTOCLAW_ROOT": str(REPO_ROOT),
+            }
+            first = run_runtime_helper(
+                """(() => {
+                    __octoclawTest.__resetPolicyState?.();
+                    const ctx = {
+                      sessionKey: "agent:main:slack:direct:u999",
+                      sessionId: "sess-999",
+                      trigger: "message"
+                    };
+                    const now = Date.now();
+                    __octoclawTest.__setPolicyState?.(ctx, {
+                      prompt: "检查 nginx error log 并总结问题",
+                      decision: {
+                        request: { session_key: "agent:main:slack:direct:u999" },
+                        route_decision: { route: "spawn_single", work_contract: "research_report" },
+                        tool_policy: { must_delegate_via: "octoclaw_dispatch" }
+                      },
+                      createdAt: now,
+                      updatedAt: now
+                    });
+                    return {
+                      path: __octoclawTest.resolvePolicyStatePath(),
+                      persisted: __octoclawTest.__readPersistedPolicyState?.()
+                    };
+                })()""",
+                env=env,
+            )
+            second = run_runtime_helper(
+                """__octoclawTest.resolveToolPolicyContext({}, "检查 nginx error log 并总结问题")""",
+                env=env,
+            )
+
+        self.assertEqual(Path(first["path"]), workspace / "tmp" / "octopus" / "runtime-policy-state.json")
+        self.assertIn("agent:main:slack:direct:u999", first["persisted"]["entries"])
+        self.assertEqual(second["key"], "agent:main:slack:direct:u999")
+        self.assertEqual(second["state"]["decision"]["route_decision"]["route"], "spawn_single")
+        self.assertEqual(second["state"]["decision"]["tool_policy"]["must_delegate_via"], "octoclaw_dispatch")
+
     def test_tool_context_can_recover_recent_delegated_state_for_shell_like_followup(self) -> None:
         payload = run_runtime_helper(
             """(() => {

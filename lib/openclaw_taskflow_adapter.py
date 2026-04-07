@@ -29,6 +29,7 @@ SUPPORTED_TASKFLOW_ROUTES = {"runner", "spawn_single", "spawn_multi"}
 NATIVE_BINDING_THRESHOLD = 100
 DEFAULT_TASKFLOW_MIRROR_RETENTION_HOURS = 48
 RUNTIME_HELPER = os.path.join(LIB_DIR, "openclaw_taskflow_runtime_helper.mjs")
+_NATIVE_CREATE_SUPPORTED_CACHE: bool | None = None
 
 
 def now_iso() -> str:
@@ -92,6 +93,22 @@ def _load_mirror_unlocked(path: str) -> dict[str, Any]:
     return payload
 
 
+def _retain_legacy_mirror_entry(binding: dict[str, Any]) -> bool:
+    if not isinstance(binding, dict):
+        return False
+    native_binding_state = _normalized_str(binding.get("native_binding_state")).lower()
+    if native_binding_state == "bound":
+        return False
+    create_status = _normalized_str(binding.get("create_status")).lower()
+    if create_status in {"mirror_only", "native_unavailable_fallback_mirror"}:
+        return True
+    backend = _normalized_str(binding.get("backend")).lower()
+    sync_mode = _normalized_str(binding.get("sync_mode")).lower()
+    if backend == "managed" or sync_mode == "managed":
+        return False
+    return _normalized_str(binding.get("binding_state")).lower() == "mirrored"
+
+
 def _persist_mirror(path: str, payload: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload["schema_version"] = TASKFLOW_MIRROR_SCHEMA_VERSION
@@ -138,7 +155,11 @@ def has_openclaw_cli(config: dict[str, Any] | None = None) -> bool:
 
 
 def native_create_supported() -> bool:
+    global _NATIVE_CREATE_SUPPORTED_CACHE
+    if _NATIVE_CREATE_SUPPORTED_CACHE is not None:
+        return _NATIVE_CREATE_SUPPORTED_CACHE
     if not has_openclaw_cli():
+        _NATIVE_CREATE_SUPPORTED_CACHE = False
         return False
     for args in (["tasks", "--help"], ["tasks", "list", "--help"]):
         try:
@@ -147,7 +168,9 @@ def native_create_supported() -> bool:
             continue
         output = "\n".join(part for part in [result.stdout or "", result.stderr or ""] if part)
         if "create" in output.lower():
+            _NATIVE_CREATE_SUPPORTED_CACHE = True
             return True
+    _NATIVE_CREATE_SUPPORTED_CACHE = False
     return False
 
 
@@ -813,15 +836,19 @@ def register_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | 
             fcntl.flock(fh, fcntl.LOCK_EX)
             mirror = _load_mirror_unlocked(path)
             entries = mirror.get("entries", {})
-            entries[_normalized_str(task.get("id"))] = {
-                "task_id": _normalized_str(task.get("id")),
-                "route": _normalized_str(task.get("route")),
-                "worker_pool": _normalized_str(task.get("worker_pool")),
-                "status": _normalized_str(task.get("status")),
-                "summary": _normalized_str(task.get("summary")),
-                "link": binding,
-                "updated_at": now_iso(),
-            }
+            task_id = _normalized_str(task.get("id"))
+            if _retain_legacy_mirror_entry(binding):
+                entries[task_id] = {
+                    "task_id": task_id,
+                    "route": _normalized_str(task.get("route")),
+                    "worker_pool": _normalized_str(task.get("worker_pool")),
+                    "status": _normalized_str(task.get("status")),
+                    "summary": _normalized_str(task.get("summary")),
+                    "link": binding,
+                    "updated_at": now_iso(),
+                }
+            elif task_id:
+                entries.pop(task_id, None)
             mirror["entries"] = entries
             _persist_mirror(path, mirror)
             fcntl.flock(fh, fcntl.LOCK_UN)
@@ -875,6 +902,30 @@ def enrich_task_record_with_taskflow(
     updated["openclaw_native_seen_at"] = _normalized_str(resolved.get("native_seen_at"))
     native_match_score = resolved.get("native_match_score")
     updated["openclaw_native_match_score"] = int(native_match_score or 0) if str(native_match_score or "").strip() else 0
+    try:
+        os.makedirs(os.path.dirname(OPENCLAW_TASKFLOW_MIRROR_FILE), exist_ok=True)
+        with open(OPENCLAW_TASKFLOW_MIRROR_FILE, "a+", encoding="utf-8") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            mirror = _load_mirror_unlocked(OPENCLAW_TASKFLOW_MIRROR_FILE)
+            entries = mirror.get("entries", {})
+            task_key = _normalized_str(updated.get("id"))
+            if _retain_legacy_mirror_entry(resolved):
+                entries[task_key] = {
+                    "task_id": task_key,
+                    "route": _normalized_str(updated.get("route")),
+                    "worker_pool": _normalized_str(updated.get("worker_pool")),
+                    "status": _normalized_str(updated.get("status")),
+                    "summary": _normalized_str(updated.get("summary")),
+                    "link": resolved,
+                    "updated_at": now_iso(),
+                }
+            elif task_key:
+                entries.pop(task_key, None)
+            mirror["entries"] = entries
+            _persist_mirror(OPENCLAW_TASKFLOW_MIRROR_FILE, mirror)
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    except OSError:
+        pass
     return updated
 
 
@@ -945,8 +996,6 @@ def describe_taskflow_cleanup(
         if not binding:
             continue
         create_status = _normalized_str(binding.get("create_status")).lower()
-        if create_status not in {"mirror_only", "native_unavailable_fallback_mirror"}:
-            continue
         lifecycle_state = _normalized_str(task.get("lifecycle_state")).lower()
         status = _normalized_str(task.get("status")).lower()
         is_terminal = lifecycle_state in {"finished", "cancelled"} or status in {"done", "failed", "blocked", "cancelled", "deferred"}
@@ -954,6 +1003,16 @@ def describe_taskflow_cleanup(
             continue
         task_id = _normalized_str(task.get("id"))
         mirror_entry = entries.get(task_id) if isinstance(entries.get(task_id), dict) else {}
+        native_binding_state = _normalized_str(binding.get("native_binding_state")).lower()
+        backend = _normalized_str(binding.get("backend")).lower()
+        sync_mode = _normalized_str(binding.get("sync_mode")).lower()
+        cleanup_reason = ""
+        if create_status in {"mirror_only", "native_unavailable_fallback_mirror"}:
+            cleanup_reason = "legacy_fallback_retention_expired"
+        elif mirror_entry and (native_binding_state == "bound" or backend == "managed" or sync_mode == "managed"):
+            cleanup_reason = "native_or_managed_superseded"
+        if not cleanup_reason:
+            continue
         last_seen = (
             _parse_time(task.get("completed_at"))
             or _parse_time(task.get("updated_at"))
@@ -971,6 +1030,7 @@ def describe_taskflow_cleanup(
                 "status": status,
                 "lifecycle_state": lifecycle_state,
                 "create_status": create_status,
+                "cleanup_reason": cleanup_reason,
                 "mirror_entry_present": bool(mirror_entry),
                 "last_seen_at": last_seen.astimezone().isoformat() if last_seen else "",
                 "age_hours": age_hours,

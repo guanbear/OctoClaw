@@ -106,6 +106,9 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertTrue(detail["review"]["required"])
         self.assertEqual(detail["review"]["task_id"], "child-2")
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
+        self.assertEqual(detail["read_path_mode"], "substrate_first_contract")
+        self.assertEqual(detail["read_path_fallback_role"], "compatibility_only")
+        self.assertTrue(detail["recommended_read_order"][0].startswith("OctoClaw task"))
         self.assertIn("view", detail["action_availability"])
         self.assertIn("required_fields", detail["substrate_display_contract"])
 
@@ -143,6 +146,7 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual(bundle["task_summary"]["child_count"], 1)
         self.assertTrue(bundle["review"]["required"])
+        self.assertEqual(bundle["read_path_mode"], "substrate_first_contract")
         self.assertEqual(bundle["recommended_read_order"][0], "TaskFlow flow flow-1")
         self.assertIn("create path: preference native_preferred | status native_bound", bundle["recommended_read_order"])
 

@@ -178,6 +178,51 @@ def _substrate_read_target(substrate: dict[str, Any], *, fallback_task_id: str =
     return ""
 
 
+def _build_recommended_read_order(
+    *,
+    task_id: str,
+    substrate: dict[str, Any],
+    review: dict[str, Any],
+    task_summary: dict[str, Any],
+    normalized: dict[str, Any],
+) -> list[str]:
+    recommended_read_order: list[str] = []
+    substrate_target = _substrate_read_target(substrate, fallback_task_id=task_id)
+    substrate_summary = _text(substrate.get("summary"))
+    create_path = _create_path_summary(_text(substrate.get("create_preference")), _text(substrate.get("create_status")))
+    if substrate_target:
+        recommended_read_order.append(substrate_target)
+    if substrate_summary:
+        recommended_read_order.append(f"substrate summary: {substrate_summary}")
+    if create_path:
+        recommended_read_order.append(f"create path: {create_path}")
+    if int(task_summary.get("child_count", 0) or 0):
+        recommended_read_order.append(
+            "task summary: "
+            + " · ".join(
+                [
+                    f"{int(task_summary.get('active_child_count', 0) or 0)} active child",
+                    f"{int(task_summary.get('completed_child_count', 0) or 0)} completed child",
+                ]
+            )
+        )
+    if bool(review.get("required")):
+        review_label = _text(review.get("state_label")) or "Review required"
+        if _text(review.get("task_id")):
+            recommended_read_order.append(f"review surface: {review_label} via {_text(review.get('task_id'))}")
+        else:
+            recommended_read_order.append(f"review surface: {review_label}")
+    artifact_paths = [
+        _text(normalized.get("report_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("report_path")),
+        _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
+        _text(normalized.get("context_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_path")),
+    ]
+    recommended_read_order.extend([item for item in artifact_paths if item])
+    if not substrate_target and artifact_paths:
+        recommended_read_order.append("compatibility fallback: report/context artifacts only")
+    return recommended_read_order
+
+
 def _build_review_surface(
     task: dict[str, Any],
     children: list[dict[str, Any]],
@@ -873,30 +918,42 @@ def build_task_detail(
                 }
             )
 
+    substrate = {
+        "backend": _text(anchor.get("openclaw_taskflow_backend")),
+        "state": _text(anchor.get("openclaw_taskflow_state")),
+        "task_runtime": _text(anchor.get("openclaw_task_runtime")),
+        "flow_runtime": _text(anchor.get("openclaw_flow_runtime")),
+        "sync_mode": _text(anchor.get("openclaw_taskflow_sync_mode")),
+        "substrate_state": _text(anchor.get("openclaw_taskflow_substrate_state")),
+        "substrate_revision": _int_or_zero(anchor.get("openclaw_taskflow_substrate_revision")),
+        "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
+        "native_status": _text(anchor.get("openclaw_native_status")),
+        "native_runtime": _text(anchor.get("openclaw_native_runtime")),
+        "native_seen_at": _text(anchor.get("openclaw_native_seen_at")),
+        "native_match_score": int(anchor.get("openclaw_native_match_score") or 0),
+        "create_preference": _text(anchor.get("openclaw_create_preference")),
+        "create_status": _text(anchor.get("openclaw_create_status")),
+        "task_id": _text(anchor.get("openclaw_task_id")),
+        "flow_id": _text(anchor.get("openclaw_flow_id")),
+        "flow_kind": _text(anchor.get("openclaw_flow_kind")),
+        "summary": _text(anchor.get("substrate_summary")),
+    }
+    recommended_read_order = _build_recommended_read_order(
+        task_id=anchor["task_id"],
+        substrate=substrate,
+        review=review,
+        task_summary=task_summary,
+        normalized=normalized,
+    )
+
     return {
         "task_id": anchor["task_id"],
         "summary": anchor["summary"],
         "state": anchor["state"],
-        "substrate": {
-            "backend": _text(anchor.get("openclaw_taskflow_backend")),
-            "state": _text(anchor.get("openclaw_taskflow_state")),
-            "task_runtime": _text(anchor.get("openclaw_task_runtime")),
-            "flow_runtime": _text(anchor.get("openclaw_flow_runtime")),
-            "sync_mode": _text(anchor.get("openclaw_taskflow_sync_mode")),
-            "substrate_state": _text(anchor.get("openclaw_taskflow_substrate_state")),
-            "substrate_revision": _int_or_zero(anchor.get("openclaw_taskflow_substrate_revision")),
-            "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
-            "native_status": _text(anchor.get("openclaw_native_status")),
-            "native_runtime": _text(anchor.get("openclaw_native_runtime")),
-            "native_seen_at": _text(anchor.get("openclaw_native_seen_at")),
-            "native_match_score": int(anchor.get("openclaw_native_match_score") or 0),
-            "create_preference": _text(anchor.get("openclaw_create_preference")),
-            "create_status": _text(anchor.get("openclaw_create_status")),
-            "task_id": _text(anchor.get("openclaw_task_id")),
-            "flow_id": _text(anchor.get("openclaw_flow_id")),
-            "flow_kind": _text(anchor.get("openclaw_flow_kind")),
-            "summary": _text(anchor.get("substrate_summary")),
-        },
+        "read_path_mode": "substrate_first_contract",
+        "read_path_fallback_role": "compatibility_only",
+        "recommended_read_order": recommended_read_order,
+        "substrate": substrate,
         "lineage": {
             "parent_task_id": _text(normalized.get("parent_id")),
             "child_task_ids": [_text(item.get("id")) for item in children],
@@ -1204,49 +1261,15 @@ def build_task_retrieval_bundle(
     substrate = detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {}
     review = detail.get("review", {}) if isinstance(detail.get("review"), dict) else {}
     task_summary = detail.get("task_summary", {}) if isinstance(detail.get("task_summary"), dict) else {}
-    create_path = _create_path_summary(_text(substrate.get("create_preference")), _text(substrate.get("create_status")))
-    recommended_read_order: list[str] = []
-    substrate_summary = _text(substrate.get("summary"))
-    substrate_target = _substrate_read_target(substrate, fallback_task_id=_text(normalized.get("id")))
-    if substrate_target:
-        recommended_read_order.append(substrate_target)
-    if substrate_summary:
-        recommended_read_order.append(f"substrate summary: {substrate_summary}")
-    if create_path:
-        recommended_read_order.append(f"create path: {create_path}")
-    if int(task_summary.get("child_count", 0) or 0):
-        recommended_read_order.append(
-            "task summary: "
-            + " · ".join(
-                [
-                    f"{int(task_summary.get('active_child_count', 0) or 0)} active child",
-                    f"{int(task_summary.get('completed_child_count', 0) or 0)} completed child",
-                ]
-            )
-        )
-    if bool(review.get("required")):
-        review_label = _text(review.get("state_label")) or "Review required"
-        if _text(review.get("task_id")):
-            recommended_read_order.append(f"review surface: {review_label} via {_text(review.get('task_id'))}")
-        else:
-            recommended_read_order.append(f"review surface: {review_label}")
-    recommended_read_order.extend(
-        [
-            item
-            for item in [
-                primary_report,
-                _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
-                _text(normalized.get("context_path")),
-            ]
-            if item
-        ]
-    )
+    recommended_read_order = detail.get("recommended_read_order", []) if isinstance(detail.get("recommended_read_order", []), list) else []
     return {
         "task_id": _text(normalized.get("id")),
         "summary": _clean_task_summary(normalized, limit=160),
         "user_safe_summary": user_safe_summary or _text(normalized.get("user_safe_summary")),
         "next_step": next_step,
         "state": _text(detail.get("state")),
+        "read_path_mode": _text(detail.get("read_path_mode")) or "substrate_first_contract",
+        "read_path_fallback_role": _text(detail.get("read_path_fallback_role")) or "compatibility_only",
         "route": _text(normalized.get("route")),
         "worker_pool": _text(normalized.get("worker_pool")),
         "substrate": substrate,

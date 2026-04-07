@@ -1,6 +1,6 @@
 # OctoClaw 执行计划
 
-> 状态：当前 canonical 执行计划（2026-04-07）
+> 状态：当前 canonical 执行计划（2026-04-08）
 > 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
 > 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
@@ -533,6 +533,18 @@ P6 关单前，至少应满足：
 
 1. **transition state 清理**
 2. **router / model-intel 深化**
+
+截至 `2026-04-08`：
+
+- `TC1 durable policy state` 已完成
+- `TC2 substrate-only read path tightening` 已完成
+- `TC3 legacy mirror / fallback shrink` 已完成
+- `TC4 optional backend true detach` 已完成
+
+这意味着后续主线已从 “先清 transition state” 进入：
+
+1. **router / model-intel 深化**
+2. **更深的 substrate-only hardening（仅在真实验收发现缺口时继续）**
 
 transition cleanup 的 focused design 见：
 

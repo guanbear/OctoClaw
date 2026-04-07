@@ -102,6 +102,20 @@ def render_detail_text(task: dict[str, Any], detail: dict[str, Any]) -> str:
             "Create path: "
             + " | ".join(part for part in [f"preference {create_preference}" if create_preference else "", f"status {create_status}" if create_status else ""] if part)
         )
+    read_path_mode = str(detail.get("read_path_mode", "") or "").strip()
+    read_path_fallback_role = str(detail.get("read_path_fallback_role", "") or "").strip()
+    if read_path_mode or read_path_fallback_role:
+        lines.append(
+            "Read path: "
+            + " | ".join(
+                part
+                for part in [
+                    read_path_mode,
+                    f"fallback {read_path_fallback_role}" if read_path_fallback_role else "",
+                ]
+                if part
+            )
+        )
     task_summary = detail.get("task_summary", {}) if isinstance(detail.get("task_summary"), dict) else {}
     if int(task_summary.get("child_count", 0) or 0):
         lines.append(
@@ -181,6 +195,20 @@ def render_retrieval_text(bundle: dict[str, Any]) -> str:
         lines.append(
             "Create path: "
             + " | ".join(part for part in [f"preference {create_preference}" if create_preference else "", f"status {create_status}" if create_status else ""] if part)
+        )
+    read_path_mode = str(bundle.get("read_path_mode", "") or "").strip()
+    read_path_fallback_role = str(bundle.get("read_path_fallback_role", "") or "").strip()
+    if read_path_mode or read_path_fallback_role:
+        lines.append(
+            "Read path: "
+            + " | ".join(
+                part
+                for part in [
+                    read_path_mode,
+                    f"fallback {read_path_fallback_role}" if read_path_fallback_role else "",
+                ]
+                if part
+            )
         )
     task_summary = bundle.get("task_summary", {}) if isinstance(bundle.get("task_summary"), dict) else {}
     if int(task_summary.get("child_count", 0) or 0):

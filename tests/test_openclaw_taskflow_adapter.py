@@ -264,6 +264,93 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertNotIn("task-clean", mirror["entries"])
         self.assertIn("task-keep", mirror["entries"])
 
+    def test_describe_taskflow_cleanup_marks_native_bound_superseded_mirror_entries(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-taskflow-") as td:
+            mirror_path = Path(td) / "openclaw-taskflow-mirror.json"
+            mirror_path.write_text(
+                '{"schema_version":"octoclaw.taskflow.mirror/v1","updated_at":"2026-04-05T00:00:00Z","entries":{"task-bound":{"task_id":"task-bound","updated_at":"2026-04-01T00:00:00Z","link":{"create_status":"native_bound"}}}}',
+                encoding="utf-8",
+            )
+            payload = openclaw_taskflow_adapter.describe_taskflow_cleanup(
+                [
+                    {
+                        "id": "task-bound",
+                        "route": "spawn_single",
+                        "status": "done",
+                        "lifecycle_state": "finished",
+                        "updated_at": "2026-04-01T00:00:00Z",
+                        "openclaw_taskflow": {
+                            "backend": "managed",
+                            "sync_mode": "managed",
+                            "native_binding_state": "bound",
+                            "create_status": "native_bound",
+                        },
+                    }
+                ],
+                mirror_payload=openclaw_taskflow_adapter.load_taskflow_mirror(str(mirror_path)),
+                now=openclaw_taskflow_adapter._parse_time("2026-04-06T12:00:00Z"),
+                config={"openclaw_taskflow": {"mirror_cleanup_retention_hours": 24}},
+            )
+
+        self.assertEqual(payload["candidate_count"], 1)
+        self.assertEqual(payload["candidates"][0]["cleanup_reason"], "native_or_managed_superseded")
+        self.assertTrue(payload["candidates"][0]["eligible_now"])
+
+    def test_enrich_task_record_with_taskflow_drops_superseded_mirror_entry(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-taskflow-") as td:
+            mirror_path = Path(td) / "openclaw-taskflow-mirror.json"
+            config = {
+                "openclaw_taskflow": {
+                    "enabled": True,
+                    "backend": "mirror",
+                    "register_runner_tasks": True,
+                    "register_runner_one_task_flows": False,
+                    "register_spawn_single_flows": True,
+                    "register_spawn_multi_linear_flows": True,
+                    "native_binding_enabled": True,
+                }
+            }
+            task = {
+                "id": "spawn-drop-1",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "status": "running",
+                "worker_pool": "octoclaw-research",
+                "summary": "research provider docs",
+                "task_description": "research provider docs",
+                "session_key": "agent:main:slack:channel:C123:thread:1",
+                "session_id": "child-sess-drop-1",
+                "run_id": "run-drop-1",
+            }
+            native_tasks = [
+                {
+                    "taskId": "native-task-drop-1",
+                    "runtime": "subagent",
+                    "status": "running",
+                    "syncMode": "managed",
+                    "state": "running",
+                    "revision": 2,
+                    "runId": "run-drop-1",
+                    "requesterSessionKey": "agent:main:slack:channel:C123:thread:1",
+                    "childSessionKey": "child-sess-drop-1",
+                    "parentFlowId": "flow-drop-1",
+                    "task": "research provider docs",
+                }
+            ]
+            with patch.object(openclaw_taskflow_adapter, "OPENCLAW_TASKFLOW_MIRROR_FILE", str(mirror_path)):
+                openclaw_taskflow_adapter.register_taskflow_binding(task, config=config)
+                before = openclaw_taskflow_adapter.load_taskflow_mirror(str(mirror_path))
+                enriched = openclaw_taskflow_adapter.enrich_task_record_with_taskflow(
+                    task,
+                    native_tasks=native_tasks,
+                    config=config,
+                )
+                after = openclaw_taskflow_adapter.load_taskflow_mirror(str(mirror_path))
+
+        self.assertIn("spawn-drop-1", before["entries"])
+        self.assertNotIn("spawn-drop-1", after["entries"])
+        self.assertEqual(enriched["openclaw_native_binding_state"], "bound")
+
     @patch("lib.openclaw_taskflow_adapter._run_runtime_helper")
     def test_create_managed_taskflow_binding_seeds_managed_flow(self, mock_helper) -> None:
         mock_helper.return_value = {

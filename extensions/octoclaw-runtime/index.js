@@ -79,6 +79,26 @@ function resolveRouteStickinessPath() {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "route-stickiness.json");
 }
 
+function resolvePolicyStatePath() {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-state.json");
+}
+
+function readJsonFileSync(pathname, fallback = {}) {
+  try {
+    const raw = fsSync.readFileSync(pathname, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFileSync(pathname, payload) {
+  fsSync.mkdirSync(path.dirname(pathname), { recursive: true });
+  const tempPath = `${pathname}.tmp`;
+  fsSync.writeFileSync(tempPath, JSON.stringify(payload, null, 2), "utf8");
+  fsSync.renameSync(tempPath, pathname);
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -315,7 +335,9 @@ function truncateText(value, limit = 320) {
 }
 
 const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
+const POLICY_STATE_SCHEMA_VERSION = "octoclaw.runtime.policy_state/v1";
 const policyStateBySession = new Map();
+let policyStateLoaded = false;
 const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
 const IM_SESSION_ORIGINS = new Set([
   "slack",
@@ -354,12 +376,108 @@ const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
   "Then proceed with octoclaw_dispatch.",
 ].join("\n");
 
+function compactPersistedDecision(decision) {
+  if (!decision || typeof decision !== "object") return {};
+  return {
+    request: {
+      session_key: String(decision?.request?.session_key || "").trim(),
+      session_id: String(decision?.request?.session_id || "").trim(),
+    },
+    route_decision: {
+      route: String(decision?.route_decision?.route || "").trim(),
+      system_preferred_route: String(decision?.route_decision?.system_preferred_route || "").trim(),
+      work_contract: String(decision?.route_decision?.work_contract || "").trim(),
+      work_contract_hint: String(decision?.route_decision?.work_contract_hint || "").trim(),
+      work_type: String(decision?.route_decision?.work_type || "").trim(),
+      task_class: String(decision?.route_decision?.task_class || "").trim(),
+      phase: String(decision?.route_decision?.phase || "").trim(),
+      protocol: String(decision?.route_decision?.protocol || "").trim(),
+      worker_pool: String(decision?.route_decision?.worker_pool || "").trim(),
+    },
+    tool_policy: decision?.tool_policy && typeof decision.tool_policy === "object" ? {
+      must_delegate_via: String(decision.tool_policy.must_delegate_via || "").trim(),
+      allowed_control_tools: Array.isArray(decision.tool_policy.allowed_control_tools)
+        ? decision.tool_policy.allowed_control_tools.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
+      observer_control_tools: Array.isArray(decision.tool_policy.observer_control_tools)
+        ? decision.tool_policy.observer_control_tools.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
+      allow_direct_tools: Boolean(decision.tool_policy.allow_direct_tools),
+    } : {},
+    runtime_switches: decision?.runtime_switches && typeof decision.runtime_switches === "object"
+      ? { ...decision.runtime_switches }
+      : {},
+    pre_dispatch_ack: decision?.pre_dispatch_ack && typeof decision.pre_dispatch_ack === "object"
+      ? {
+          required: Boolean(decision.pre_dispatch_ack.required),
+          fallback_to_progress_update: Boolean(decision.pre_dispatch_ack.fallback_to_progress_update),
+          text: String(decision.pre_dispatch_ack.text || "").trim(),
+        }
+      : {},
+  };
+}
+
+function compactPersistedPolicyState(value) {
+  if (!value || typeof value !== "object") return null;
+  const createdAt = Number(value.createdAt || Date.now());
+  const updatedAt = Number(value.updatedAt || createdAt || Date.now());
+  return {
+    prompt: String(value.prompt || "").trim(),
+    createdAt,
+    updatedAt,
+    preDispatchAckSent: Boolean(value.preDispatchAckSent),
+    preDispatchAckText: String(value.preDispatchAckText || "").trim(),
+    preDispatchAckMode: String(value.preDispatchAckMode || "").trim(),
+    decision: compactPersistedDecision(value.decision),
+  };
+}
+
+function ensurePolicyStateLoaded() {
+  if (policyStateLoaded) return;
+  policyStateLoaded = true;
+  const pathname = resolvePolicyStatePath();
+  const payload = readJsonFileSync(pathname, {});
+  const entries = payload && typeof payload === "object" && payload.entries && typeof payload.entries === "object"
+    ? payload.entries
+    : {};
+  for (const [key, value] of Object.entries(entries)) {
+    const compact = compactPersistedPolicyState(value);
+    if (!compact) continue;
+    const updatedAt = Number(compact.updatedAt || compact.createdAt || 0);
+    if (!updatedAt || Date.now() - updatedAt > POLICY_STATE_TTL_MS) continue;
+    policyStateBySession.set(String(key || "").trim(), compact);
+  }
+}
+
+function persistPolicyState() {
+  ensurePolicyStateLoaded();
+  const entries = {};
+  for (const [key, value] of policyStateBySession.entries()) {
+    const compact = compactPersistedPolicyState(value);
+    if (compact) {
+      entries[key] = compact;
+    }
+  }
+  writeJsonFileSync(resolvePolicyStatePath(), {
+    schema_version: POLICY_STATE_SCHEMA_VERSION,
+    updated_at: new Date().toISOString(),
+    ttl_ms: POLICY_STATE_TTL_MS,
+    entries,
+  });
+}
+
 function prunePolicyState() {
+  ensurePolicyStateLoaded();
   const now = Date.now();
+  let changed = false;
   for (const [key, value] of policyStateBySession.entries()) {
     if (!value || now - Number(value.updatedAt || value.createdAt || 0) > POLICY_STATE_TTL_MS) {
       policyStateBySession.delete(key);
+      changed = true;
     }
+  }
+  if (changed) {
+    persistPolicyState();
   }
 }
 
@@ -446,6 +564,7 @@ function resolvePolicyStateKey(ctx = {}) {
 }
 
 function getPolicyStateForContext(ctx = {}) {
+  ensurePolicyStateLoaded();
   for (const key of resolvePolicyStateKeys(ctx)) {
     const state = policyStateBySession.get(key);
     if (state) {
@@ -502,6 +621,7 @@ function promptTokenScore(prompt = "", candidatePrompt = "") {
 }
 
 function findRecentDelegatedPolicyState(prompt = "", maxAgeMs = 2 * 60 * 1000) {
+  ensurePolicyStateLoaded();
   const now = Date.now();
   const normalizedPrompt = promptLookupCandidates(prompt)[0] || String(prompt || "").trim();
   let bestKey = "";
@@ -543,14 +663,25 @@ function resolveToolPolicyContext(ctx = {}, prompt = "") {
 }
 
 function setPolicyStateForContext(ctx = {}, payload) {
+  ensurePolicyStateLoaded();
+  let changed = false;
   for (const key of resolvePolicyStateKeys(ctx)) {
-    policyStateBySession.set(key, payload);
+    policyStateBySession.set(key, compactPersistedPolicyState(payload) || payload);
+    changed = true;
+  }
+  if (changed) {
+    persistPolicyState();
   }
 }
 
 function clearPolicyStateForContext(ctx = {}) {
+  ensurePolicyStateLoaded();
+  let changed = false;
   for (const key of resolvePolicyStateKeys(ctx)) {
-    policyStateBySession.delete(key);
+    changed = policyStateBySession.delete(key) || changed;
+  }
+  if (changed) {
+    persistPolicyState();
   }
 }
 
@@ -894,12 +1025,15 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
 
 function updatePolicyState(stateKey, mutator) {
   if (!stateKey) return null;
+  ensurePolicyStateLoaded();
   const current = policyStateBySession.get(stateKey);
   if (!current) return null;
   const next = typeof mutator === "function" ? mutator(current) : { ...current, ...mutator };
   next.updatedAt = Date.now();
-  policyStateBySession.set(stateKey, next);
-  return next;
+  const compact = compactPersistedPolicyState(next) || next;
+  policyStateBySession.set(stateKey, compact);
+  persistPolicyState();
+  return compact;
 }
 
 function compactPolicyPrompt(decision) {
@@ -1762,6 +1896,7 @@ export const __octoclawTest = {
   resolveOctoClawRoot,
   resolveWorkspaceRoot,
   resolvePythonBin,
+  resolvePolicyStatePath,
   stripAgentSessionPrefix,
   parseSessionRoute,
   resolvePolicyStateKeys,
@@ -1787,5 +1922,10 @@ export const __octoclawTest = {
   inferRoute,
   buildDecision,
   __setPolicyState: setPolicyStateForContext,
-  __resetPolicyState: () => policyStateBySession.clear(),
+  __readPersistedPolicyState: () => readJsonFileSync(resolvePolicyStatePath(), {}),
+  __resetPolicyState: () => {
+    ensurePolicyStateLoaded();
+    policyStateBySession.clear();
+    persistPolicyState();
+  },
 };

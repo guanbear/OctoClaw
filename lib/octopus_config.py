@@ -502,7 +502,9 @@ def tmux_attach_hint(session_name: str) -> str:
 def _spawn_backend_name(backend: str, backend_name: str) -> str:
     if backend == "native":
         return "openclaw_agent"
-    if backend in {"clawteam", "plan"}:
+    if backend == "plan":
+        return ""
+    if backend == "clawteam":
         return backend_name
     return backend or backend_name
 
@@ -573,6 +575,10 @@ def spawn_operator_surface(
     session_name = str(workbench.get("tmux_session_name", "") or "").strip()
     team_value = str(team_name or spawn_cfg.get("team_name", "") or bridge_cfg.get("team_name", "") or "").strip()
     optional_backend = _spawn_backend_is_optional(backend)
+    if not optional_backend:
+        team_value = ""
+        session_name = ""
+        backend_name = ""
     surface = {
         "kind": "spawn",
         "role": "execution_lane",

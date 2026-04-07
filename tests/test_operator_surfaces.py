@@ -49,6 +49,7 @@ class OperatorSurfaceTests(unittest.TestCase):
         surface = spawn_operator_surface(agent_name="research")
 
         self.assertEqual(surface["backend"], "native")
+        self.assertEqual(surface["backend_name"], "")
         self.assertEqual(surface["backend_posture"], "default_runtime")
         self.assertFalse(surface["optional_backend"])
         self.assertEqual(surface["operator_hint"], "")
@@ -71,6 +72,24 @@ class OperatorSurfaceTests(unittest.TestCase):
         self.assertTrue(surface["optional_backend"])
         self.assertEqual(surface["operator_hint"], "opt clawteam/tmux octoclaw-validation/review")
         self.assertTrue(surface["attach_hint"].startswith("tmux attach -t octoclaw-runtime"))
+
+    @patch(
+        "lib.octopus_config.load_octopus_config",
+        return_value={
+            "spawn_execution": {"backend": "plan", "backend_name": "tmux"},
+            "clawteam_bridge": {"team_name": "octoclaw-validation"},
+            "workbench": {"supervisor_mode": "tmux", "tmux_session_name": "octoclaw-runtime"},
+        },
+    )
+    def test_spawn_surface_plan_mode_stays_backend_neutral(self, _mock_cfg) -> None:
+        surface = spawn_operator_surface(agent_name="planner")
+
+        self.assertEqual(surface["backend"], "plan")
+        self.assertEqual(surface["backend_name"], "")
+        self.assertFalse(surface["optional_backend"])
+        self.assertEqual(surface["operator_hint"], "plan-only")
+        self.assertEqual(surface["attach_hint"], "")
+        self.assertEqual(surface["tmux_session_name"], "")
 
 
 if __name__ == "__main__":

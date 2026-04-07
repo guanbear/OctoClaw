@@ -58,6 +58,7 @@ class RuntimeObserverTests(unittest.TestCase):
         self.assertEqual(payload["runner_execution_mode"], "daemon")
         self.assertEqual(payload["surface_status"]["display"], "substrate_first")
         self.assertEqual(payload["active_substrate_tasks"][0]["taskflow_target"], "flow flow-1")
+        self.assertEqual(payload["active_substrate_tasks"][0]["read_path_mode"], "substrate_first_contract")
         mock_observe.assert_called_once_with(workspace="/tmp/octoclaw")
 
     def test_render_runner_status_text_uses_observer_payload(self) -> None:
