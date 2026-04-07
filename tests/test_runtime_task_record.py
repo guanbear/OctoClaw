@@ -218,6 +218,30 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["openclaw_flow_kind"], "one_task")
         self.assertEqual(payload["artifacts"]["openclaw_taskflow"]["task_id"], "native-task-3")
 
+    def test_normalize_native_session_without_session_key_is_not_marked_degraded(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "native-1",
+                "status": "done",
+                "summary": "1+1=2",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "session_id": "octoclaw-subagent-native-1",
+                "artifacts": {
+                    "execution_backend": "native_openclaw_agent",
+                    "spawn_execution": {
+                        "backend": "native",
+                        "session_id": "octoclaw-subagent-native-1",
+                    },
+                },
+                "completed_at": "2026-04-07T10:05:11+08:00",
+                "user_safe_summary": "验证通过：1+1=2。",
+            }
+        )
+
+        self.assertEqual(payload["observability_health"], "healthy")
+
     @patch("lib.runtime_task_record.task_event_snapshot")
     def test_normalize_attaches_task_event_summary_and_preview(self, mock_snapshot) -> None:
         mock_snapshot.return_value = {

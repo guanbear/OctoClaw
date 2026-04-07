@@ -448,14 +448,20 @@ def infer_observability_health(task: dict[str, Any], lifecycle_state: str, hando
         return explicit
     route = _normalized_str(task.get("route")).lower()
     runtime = _normalized_str(task.get("runtime")).lower()
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
+    spawn_execution = artifacts.get("spawn_execution", {}) if isinstance(artifacts.get("spawn_execution", {}), dict) else {}
+    execution_backend = _normalized_str(artifacts.get("execution_backend")).lower()
+    spawn_backend = _normalized_str(spawn_execution.get("backend")).lower()
     session_key = _normalized_str(task.get("session_key"))
-    run_id = _normalized_str(task.get("run_id"))
+    session_id = _normalized_str(task.get("session_id")) or _normalized_str(spawn_execution.get("session_id"))
+    run_id = _normalized_str(task.get("run_id")) or _normalized_str(spawn_execution.get("run_id"))
     managed = infer_managed_by_octoclaw(task)
-    if managed and route in {"runner", "spawn_single", "spawn_multi"} and not session_key:
+    native_session_backed = (execution_backend == "native_openclaw_agent" or spawn_backend == "native") and bool(session_id)
+    if managed and route in {"runner", "spawn_single", "spawn_multi"} and not session_key and not native_session_backed:
         return "degraded_missing_session_key"
-    if managed and runtime == "subagent" and lifecycle_state in {"running", "finished"} and not run_id:
+    if managed and runtime == "subagent" and lifecycle_state in {"running", "finished"} and not run_id and not native_session_backed:
         return "degraded_missing_run_id"
-    if handoff_state in {"user_safe_ready", "delivered"} and route != "direct" and not session_key:
+    if handoff_state in {"user_safe_ready", "delivered"} and route != "direct" and not session_key and not native_session_backed:
         return "degraded_missing_anchor"
     return "healthy"
 
