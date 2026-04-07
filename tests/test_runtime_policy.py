@@ -335,8 +335,44 @@ class RuntimePolicyTests(unittest.TestCase):
         payload = self.run_route("在吗")
         self.assertEqual(payload["system_preferred_route"], "direct")
         self.assertFalse(payload["features"]["observer_control_candidate"])
-        self.assertFalse(payload["features"]["task_progress_candidate"])
+        self.assertFalse(payload["features"].get("task_progress_candidate"))
         self.assertEqual(payload["task_class"], "direct_answer")
+
+    def test_current_model_question_prefers_direct_control_lane(self) -> None:
+        payload = self.run_policy("你现在是啥模型")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertTrue(payload["tool_policy"]["control_observer_only"])
+        self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
+        self.assertEqual(payload["route_recommendation"]["protected_lane"], "control_observer")
+        self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
+        self.assertIn("workflow_meta_control_contract", payload["route_decision"]["reason_codes"])
+
+    def test_workflow_provenance_question_prefers_direct_control_lane(self) -> None:
+        payload = self.run_route("刚才的查询是子任务做的吗 是啥模型做的")
+        self.assertEqual(payload["system_preferred_route"], "direct")
+        self.assertEqual(payload["task_class"], "control_observer")
+        self.assertEqual(payload["protected_lane"], "control_observer")
+        self.assertTrue(payload["features"]["observer_control_candidate"])
+        self.assertTrue(payload["features"]["workflow_meta_candidate"])
+        self.assertEqual(payload["work_contract_hint"], "answer_now")
+
+    def test_dispatch_provenance_question_prefers_protected_direct_lane(self) -> None:
+        payload = self.run_policy("这次有没有走 dispatch")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
+        self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
+
+    def test_route_provenance_question_prefers_protected_direct_lane(self) -> None:
+        payload = self.run_route("现在走的是什么路由")
+        self.assertEqual(payload["system_preferred_route"], "direct")
+        self.assertEqual(payload["task_class"], "control_observer")
+        self.assertEqual(payload["protected_lane"], "control_observer")
 
     def test_control_observer_policy_only_allows_control_tools(self) -> None:
         payload = self.run_policy("八爪鱼状态")
@@ -355,6 +391,13 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
         self.assertFalse(payload["tool_policy"]["allow_direct_tools"])
         self.assertTrue(payload["tool_policy"]["control_observer_only"])
+
+    def test_repo_commit_summary_query_prefers_spawn_single(self) -> None:
+        payload = self.run_policy("你帮我查下 octoclaw项目 今天都有啥提交 改了啥")
+        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_decision"]["work_type"], "research")
+        self.assertEqual(payload["route_decision"]["phase"], "collect")
+        self.assertEqual(payload["route_decision"]["work_contract"], "deliverable_work")
 
     def test_task_details_command_prefers_direct_control_lane(self) -> None:
         payload = self.run_route("details task-123")

@@ -928,6 +928,7 @@ def build_decision(
             "route": route,
             "work_contract": work_contract,
             "work_contract_hint": str(route_meta.get("work_contract_hint", "") or ""),
+            "protected_lane": str(route_meta.get("protected_lane", "") or ""),
             "dispatch_required": dispatch_required,
             "confidence": route_meta.get("confidence", 0.0),
             "reason": merged_reason_codes[0] if merged_reason_codes else route_meta.get("reason", ""),

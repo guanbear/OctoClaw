@@ -433,9 +433,37 @@ runner 不是单纯“长期常驻快腿”，而是：
 
 默认先问 workflow 是否足够，只有必要时才上更重的 agent coordination。
 
+这也意味着像“你现在是啥模型”“刚才是不是子任务做的”“这次有没有走 dispatch”这类 workflow/session provenance 元问题，
+默认应留在主会话的稳定 `control_observer` / direct scope，而不是升格成新的 delegated run。
+
 ### 7.2 policy-first，而不是 prompt-first
 
 委派、review、lane selection、budget choice 必须先是系统行为。
+
+### 7.2.1 误判治理要先收系统边界，再谈小模型
+
+当前误判高，优先不应该理解成“语义模型太弱”，而应该先检查三件事：
+
+- protected lanes 是否定义清楚
+- `contract -> lane` 的默认边界是否稳定
+- Python / JS / 运行副本是否在同一代 contract 上
+
+因此更合理的治理顺序是：
+
+1. 先收 protected lanes
+   - `control_observer`
+   - workflow/session provenance
+   - task action / queue / details / status
+2. 再补 goldens / parity / replay regression
+   - 先把高频误判收成 durable cases
+   - 让 Python / JS / macmini 运行副本对齐
+3. 最后才给模糊样本接 tiny judge
+   - 只做歧义裁决
+   - 不做默认前置依赖
+
+换句话说：
+
+> **误判治理首先是 contract-first / boundary-first 的系统工程，不是先上一个更聪明的小模型。**
 
 ### 7.3 substrate-first truth
 

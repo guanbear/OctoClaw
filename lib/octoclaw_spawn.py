@@ -1811,16 +1811,20 @@ def build_spawn_spec(
                 profile_override=profile,
             )
             agent_owner = str((spawn_execution or {}).get("agent_name", "") or "")
+            operator_surface = spawn_operator_surface(
+                agent_name=agent_owner,
+                team_name=spawn_team_name,
+                backend_override=str((spawn_execution or {}).get("backend", "") or ""),
+                backend_name_override=str((spawn_execution or {}).get("backend_name", "") or ""),
+            )
+            operator_surface["backend_name"] = str((spawn_execution or {}).get("backend_name", "") or "")
             base_artifacts.update(
                 {
                     "execution_backend": (
                         f"{str((spawn_execution or {}).get('backend', 'spawn') or 'spawn')}_"
                         f"{str((spawn_execution or {}).get('backend_name', spawn_execution_config().get('backend_name', 'tmux')) or 'tmux')}"
                     ),
-                    "operator_surface": spawn_operator_surface(
-                        agent_name=agent_owner,
-                        team_name=spawn_team_name,
-                    ),
+                    "operator_surface": operator_surface,
                     "spawn_execution": {
                         "backend": str((spawn_execution or {}).get("backend", "") or ""),
                         "backend_name": str((spawn_execution or {}).get("backend_name", "") or ""),

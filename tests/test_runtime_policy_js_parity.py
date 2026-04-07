@@ -121,6 +121,14 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "config": {},
             },
             {
+                "task": "你现在是啥模型",
+                "config": {},
+            },
+            {
+                "task": "这次有没有走 dispatch",
+                "config": {},
+            },
+            {
                 "task": "查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗",
                 "config": {},
             },

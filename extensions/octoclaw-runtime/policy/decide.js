@@ -930,6 +930,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       route,
       work_contract: workContract,
       work_contract_hint: String(routeMeta.work_contract_hint || ""),
+      protected_lane: String(routeMeta.protected_lane || ""),
       dispatch_required: dispatchRequired,
       confidence: Number(routeMeta.confidence || 0.0),
       reason: mergedReasonCodes[0] || String(routeMeta.reason || ""),

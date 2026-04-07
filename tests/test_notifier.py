@@ -165,6 +165,28 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         mock_delivered.assert_called_once()
 
     @patch("lib.notifier.append_task_event")
+    @patch("lib.notifier.resolve_session_binding")
+    @patch("lib.notifier.send_channel_message")
+    def test_send_task_notification_skips_none_backend_without_anchor_resolution_error(
+        self,
+        mock_send,
+        mock_resolve_binding,
+        mock_event,
+    ) -> None:
+        result = send_task_notification(
+            {**self.task, "session_key": "agent:main:main"},
+            backend="none",
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["backend"], "none")
+        self.assertEqual(result["error"], "")
+        mock_resolve_binding.assert_not_called()
+        mock_send.assert_not_called()
+        mock_event.assert_not_called()
+
+    @patch("lib.notifier.append_task_event")
     @patch("lib.notifier._mark_task_delivered")
     @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.resolve_session_binding")

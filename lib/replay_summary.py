@@ -195,6 +195,15 @@ def count_budget_field(items: list[dict[str, Any]], field: str) -> dict[str, int
     return dict(sorted(counts.items()))
 
 
+def count_string_field(items: list[dict[str, Any]], *keys: str) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for item in items:
+        value = _string_field(item, *keys)
+        if value:
+            counts[value] += 1
+    return dict(sorted(counts.items()))
+
+
 def build_promotion_checks(
     summary: dict[str, Any],
     *,
@@ -345,8 +354,25 @@ def summarize_events(
     blocked_sessions = collect_session_ids(blocked_events)
     delegated_task_events = [event for event in task_events if str(event.get("route", "") or "") != "direct"]
     runner_task_events = [event for event in task_events if str(event.get("route", "") or "") == "runner"]
+    protected_lane_events = [event for event in task_events if _string_field(event, "protectedLane", "protected_lane")]
     sticky_task_events = [event for event in task_events if "stickyApplied" in event]
     sticky_persist_events = [event for event in [*route_hint_events, *dispatch_events] if "stickyPersisted" in event]
+    protected_lane_sessions = collect_session_ids(protected_lane_events)
+    dispatch_sessions = collect_session_ids(dispatch_events)
+    protected_lane_misroute_sessions = {
+        key
+        for key in protected_lane_sessions
+        if key in dispatch_sessions
+    }
+    protected_lane_misroute_sessions.update(
+        key
+        for key in (
+            event_session_key(event)
+            for event in protected_lane_events
+            if _string_field(event, "route") and _string_field(event, "route") != "direct"
+        )
+        if key
+    )
 
     route_hint_required_count = count_boolean(task_events, "routeHintRequired")
     route_hint_submitted_count = len(route_hint_events)
@@ -396,6 +422,7 @@ def summarize_events(
             "task_event_count": len(task_events),
             "route_counts": count_routes(task_events, "route"),
             "system_preferred_route_counts": count_routes(task_events, "systemPreferredRoute"),
+            "protected_lane_counts": count_string_field(task_events, "protectedLane", "protected_lane"),
             "work_contract_counts": count_work_contracts(task_events),
             "worker_pool_counts": count_worker_pools(task_events),
             "delegated_task_count": len(delegated_task_events),
@@ -418,13 +445,22 @@ def summarize_events(
             "route_change_rate": ratio(route_change_count, route_hint_submitted_count),
             "sticky_override_count": sticky_override_count,
             "work_contract_shift_count": work_contract_shift_count,
+            "protected_lane_misroute_count": len(protected_lane_misroute_sessions),
+        },
+        "protected_lane_metrics": {
+            "count": len(protected_lane_events),
+            "session_count": len(protected_lane_sessions),
+            "dispatch_session_count": len(protected_lane_sessions & dispatch_sessions),
+            "dispatch_session_rate": ratio(len(protected_lane_sessions & dispatch_sessions), len(protected_lane_sessions)),
+            "misroute_session_count": len(protected_lane_misroute_sessions),
+            "misroute_session_rate": ratio(len(protected_lane_misroute_sessions), len(protected_lane_sessions)),
         },
         "dispatch_metrics": {
             "dispatch_called_count": len(dispatch_events),
-            "dispatch_called_session_count": len(collect_session_ids(dispatch_events)),
+            "dispatch_called_session_count": len(dispatch_sessions),
             "delegated_session_count": len(collect_session_ids(delegated_task_events)),
             "dispatch_session_coverage_rate": ratio(
-                len(collect_session_ids(dispatch_events)),
+                len(dispatch_sessions),
                 len(collect_session_ids(delegated_task_events)),
             ),
         },
@@ -464,6 +500,7 @@ def render_text(summary: dict[str, Any]) -> str:
     task_metrics = summary["task_metrics"]
     route_hint_metrics = summary["route_hint_metrics"]
     policy_diff = summary["policy_diff"]
+    protected_lane_metrics = summary["protected_lane_metrics"]
     dispatch_metrics = summary["dispatch_metrics"]
     tool_metrics = summary["tool_metrics"]
     economics_metrics = summary["economics_metrics"]
@@ -490,6 +527,7 @@ def render_text(summary: dict[str, Any]) -> str:
             f"- Task events: `{task_metrics['task_event_count']}`",
             f"- Route counts: `{json.dumps(task_metrics['route_counts'], ensure_ascii=False)}`",
             f"- System preferred counts: `{json.dumps(task_metrics['system_preferred_route_counts'], ensure_ascii=False)}`",
+            f"- Protected lane counts: `{json.dumps(task_metrics['protected_lane_counts'], ensure_ascii=False)}`",
             f"- Work contract counts: `{json.dumps(task_metrics['work_contract_counts'], ensure_ascii=False)}`",
             f"- Worker pool counts: `{json.dumps(task_metrics['worker_pool_counts'], ensure_ascii=False)}`",
             f"- Delegated tasks: `{task_metrics['delegated_task_count']}`",
@@ -504,6 +542,13 @@ def render_text(summary: dict[str, Any]) -> str:
             f"- Final route changed from system preferred: `{policy_diff['route_change_count']}` ({compact_ratio(policy_diff['route_change_rate'])})",
             f"- Sticky overrides of system preferred: `{policy_diff['sticky_override_count']}`",
             f"- Work contract shifts from hint: `{policy_diff['work_contract_shift_count']}`",
+            f"- Protected-lane misroutes: `{policy_diff['protected_lane_misroute_count']}`",
+            "",
+            "Protected Lanes",
+            f"- Protected lane events: `{protected_lane_metrics['count']}`",
+            f"- Protected lane sessions: `{protected_lane_metrics['session_count']}`",
+            f"- Protected lane dispatch sessions: `{protected_lane_metrics['dispatch_session_count']}` ({compact_ratio(protected_lane_metrics['dispatch_session_rate'])})",
+            f"- Protected lane misroutes: `{protected_lane_metrics['misroute_session_count']}` ({compact_ratio(protected_lane_metrics['misroute_session_rate'])})",
             "",
             "Dispatch / Blocks",
             f"- Dispatch called: `{dispatch_metrics['dispatch_called_count']}` ({compact_ratio(dispatch_metrics['dispatch_session_coverage_rate'])} session coverage)",

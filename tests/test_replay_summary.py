@@ -182,6 +182,78 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertTrue(payload["promotion"]["ready"])
         self.assertEqual(payload["promotion"]["target"], "enforced")
 
+    def test_summary_reports_protected_lane_dispatch_and_misroute(self) -> None:
+        events = [
+            {
+                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                "event": "policy_resolved",
+                "at": "2026-04-08T09:00:00.000Z",
+                "sessionKey": "meta-1",
+                "sessionId": "meta-1",
+                "route": "direct",
+                "systemPreferredRoute": "direct",
+                "workerPool": "octoclaw-main",
+                "workContract": "answer_now",
+                "protectedLane": "control_observer",
+                "prompt": "你现在是啥模型",
+            },
+            {
+                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                "event": "dispatch_called",
+                "at": "2026-04-08T09:00:01.000Z",
+                "sessionKey": "meta-1",
+                "sessionId": "meta-1",
+                "route": "spawn_single",
+                "systemPreferredRoute": "direct",
+                "protectedLane": "control_observer",
+                "executed": True,
+            },
+            {
+                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                "event": "policy_resolved",
+                "at": "2026-04-08T09:01:00.000Z",
+                "sessionKey": "meta-2",
+                "sessionId": "meta-2",
+                "route": "direct",
+                "systemPreferredRoute": "direct",
+                "workerPool": "octoclaw-main",
+                "workContract": "answer_now",
+                "protectedLane": "control_observer",
+                "prompt": "这次有没有走 dispatch",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-protected-summary-") as tmpdir:
+            events_path = Path(tmpdir) / "runtime-policy-replay.jsonl"
+            with open(events_path, "w", encoding="utf-8") as fh:
+                for event in events:
+                    fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+            payload = self.run_summary(
+                events_path,
+                "--phase",
+                "guided",
+                "--min-policy-events",
+                "2",
+                "--min-runner-events",
+                "0",
+                "--min-delegated-events",
+                "0",
+                "--max-blocked-session-rate",
+                "1.0",
+                "--min-route-hint-submission-rate",
+                "0.0",
+            )
+
+        self.assertEqual(payload["task_metrics"]["protected_lane_counts"], {"control_observer": 2})
+        self.assertEqual(payload["protected_lane_metrics"]["session_count"], 2)
+        self.assertEqual(payload["protected_lane_metrics"]["dispatch_session_count"], 1)
+        self.assertEqual(payload["protected_lane_metrics"]["misroute_session_count"], 1)
+        self.assertEqual(payload["policy_diff"]["protected_lane_misroute_count"], 1)
+        rendered = render_text(payload)
+        self.assertIn("Protected Lanes", rendered)
+        self.assertIn("Protected-lane misroutes", rendered)
+
     def test_infer_runtime_policy_phase_prefers_conservative_guided_and_enforced(self) -> None:
         self.assertEqual(infer_runtime_policy_phase(None), "conservative")
         self.assertEqual(

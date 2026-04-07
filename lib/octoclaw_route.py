@@ -179,6 +179,7 @@ RESEARCH_PATTERNS = {
     "zh": (
         r"(调研|对比|分析|研究|根因|方案|api|数据源|可行性)",
         r"((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))",
+        r"((项目|仓库).*(提交|改了啥|改了什么|变更)|((提交|改了啥|改了什么|变更).*(项目|仓库)))",
     ),
     "en": (
         r"\b(research|compare|analy|investigate|root cause|api|datasource|feasibility)\b",
@@ -206,6 +207,7 @@ EXTERNAL_LOOKUP_PATTERNS = {
         r"(天气|花粉|汇率|航班|酒店|机票|新闻|价格|行情|官网|接口文档|文档链接)",
         r"((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))",
         r"((今天|今日|最近).*(有更新吗|有没有更新|更新了什么)|((有更新吗|有没有更新|更新了什么).*(github|gitlab|仓库|repo|repository)))",
+        r"((项目|仓库).*(提交|改了啥|改了什么|变更)|((提交|改了啥|改了什么|变更).*(项目|仓库)))",
     ),
     "en": (
         r"\b(weather|pollen|exchange rate|flight|hotel|price|news|official docs?|documentation)\b",
@@ -523,6 +525,20 @@ TASK_PROGRESS_PATTERNS = {
     ),
 }
 
+WORKFLOW_META_PATTERNS = {
+    "zh": (
+        r"(你现在是啥模型|你现在是什么模型|现在是啥模型|现在是什么模型|当前是啥模型|当前是什么模型|现在用的啥模型|现在用的什么模型|当前用的啥模型|当前用的什么模型)",
+        r"(主会话模型|策略主链|主链漂移|子任务模型|当前路由|现在走的是什么路由|这次走的是什么路由)",
+        r"(刚才(那次|这个)?(查询|问题|任务)?是子任务做的吗|刚才(那次|这个)?(查询|问题|任务)?是不是子任务做的|是不是子任务做的|是不是主会话自己查的|是不是主agent自己查的)",
+        r"(谁查的|谁做的|谁回的|是谁处理的|谁执行的|啥模型做的|什么模型做的|是谁用什么模型做的)",
+        r"(有没有走\s*(dispatch|路由|router)|走了\s*(dispatch|路由|router)\s*吗|有没有走\s*octoclaw_dispatch|判定了\s*direct\s*吗|是不是\s*direct|是不是走了\s*direct|是不是委派了|有没有委派)",
+    ),
+    "en": (
+        r"\b(what model are you (?:on|using) now|current model|which model are you (?:on|using)|main session model|policy primary model|drifted model)\b",
+        r"\b(was this delegated|was this a subtask|did this go through dispatch|did router choose direct|what route was chosen|current route|who handled this|who answered this|who ran this)\b",
+    ),
+}
+
 ROUTE_PATTERN_LIBRARY = {
     "RUNNER_PATTERNS": RUNNER_PATTERNS,
     "RUNNER_READ_ONLY_INTENT_PATTERNS": RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -548,6 +564,7 @@ ROUTE_PATTERN_LIBRARY = {
     "REMOTE_TARGET_PATTERNS": REMOTE_TARGET_PATTERNS,
     "OBSERVER_CONTROL_PATTERNS": OBSERVER_CONTROL_PATTERNS,
     "TASK_PROGRESS_PATTERNS": TASK_PROGRESS_PATTERNS,
+    "WORKFLOW_META_PATTERNS": WORKFLOW_META_PATTERNS,
 }
 
 
@@ -627,6 +644,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     runner_negative_hits = count_matches(text, resolve_language_patterns("RUNNER_NEGATIVE_PATTERNS", enabled_packs))
     observer_control_hits = count_matches(text, resolve_language_patterns("OBSERVER_CONTROL_PATTERNS", enabled_packs))
     task_progress_hits = count_matches(text, resolve_language_patterns("TASK_PROGRESS_PATTERNS", enabled_packs))
+    workflow_meta_hits = count_matches(text, resolve_language_patterns("WORKFLOW_META_PATTERNS", enabled_packs))
     command_read_only = command_looks_read_only(command)
     explicit_observer_command = bool(
         re.fullmatch(r"\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*", raw_task, re.IGNORECASE)
@@ -634,16 +652,24 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         or re.fullmatch(r"\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?|stop|retry|approve|reject)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
         or re.fullmatch(r"\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
     )
+    workflow_meta_candidate = workflow_meta_hits > 0
     repo_activity_lookup = bool(
-        re.search(r"(github|gitlab|仓库|repo|repository)", text, re.IGNORECASE)
-        and re.search(r"(commit|release|tag|pr|mr|issue|更新)", text, re.IGNORECASE)
-        and re.search(r"(有没有|有更新吗|更新了什么|今天|今日|最近|latest|recent|today|updates?)", text, re.IGNORECASE)
+        (
+            re.search(r"(github|gitlab|仓库|repo|repository|项目)", text, re.IGNORECASE)
+            and re.search(r"(commit|release|tag|pr|mr|issue|更新|提交|改了啥|改了什么|变更)", text, re.IGNORECASE)
+            and re.search(r"(有没有|有更新吗|更新了什么|今天|今日|最近|latest|recent|today|updates?)", text, re.IGNORECASE)
+        )
+        or (
+            re.search(r"(项目|仓库)", text, re.IGNORECASE)
+            and re.search(r"(提交|改了啥|改了什么|变更)", text, re.IGNORECASE)
+        )
     )
 
     if repo_activity_lookup:
         research_hits = max(research_hits, 1)
         external_lookup_hits = max(external_lookup_hits, 1)
         mutation_hits = 0
+
     effective_write_hits = write_hits
     if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
         effective_write_hits = 0
@@ -695,7 +721,6 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         and implement_hits == 0
         and mutation_hits == 0
     )
-    observer_control_candidate = bool(explicit_observer_command or observer_control_hits > 0 or task_progress_candidate)
 
     estimated_steps = 1
     if multi_step_hits > 0:
@@ -733,6 +758,12 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     elif external_lookup_hits > 0 and research_hits == 0 and code_hits == 0:
         latency_sensitivity = "normal"
 
+    observer_control_candidate = bool(
+        explicit_observer_command
+        or observer_control_hits > 0
+        or workflow_meta_candidate
+        or task_progress_candidate
+    )
     observation_signal = observer_control_candidate or bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0 or (
         runner_read_only_intent_hits > 0 and runner_target_hits > 0
     )
@@ -750,6 +781,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "task_progress_hits": task_progress_hits,
         "observer_control_candidate": observer_control_candidate,
         "task_progress_candidate": task_progress_candidate,
+        "workflow_meta_hits": workflow_meta_hits,
+        "workflow_meta_candidate": workflow_meta_candidate,
         "explicit_local_probe": explicit_local_probe,
         "code_hits": code_hits,
         "research_hits": research_hits,
@@ -921,7 +954,10 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
         if features.get("observer_control_candidate"):
             scores["direct"] = 0.96
             scores["spawn_single"] = 0.08
-            reason_codes.append("observer_control_contract")
+            if features.get("workflow_meta_candidate"):
+                reason_codes.append("workflow_meta_control_contract")
+            else:
+                reason_codes.append("observer_control_contract")
         elif features.get("external_lookup_only"):
             reason_codes.append("direct_lookup_contract")
         else:
@@ -1105,6 +1141,14 @@ def infer_execution_owner(route: str) -> str:
     return "subagent"
 
 
+def infer_protected_lane(features: dict, route: str, task_class: str) -> str:
+    if route == "direct" and task_class == "control_observer":
+        return "control_observer"
+    if route == "direct" and features.get("workflow_meta_candidate"):
+        return "workflow_meta"
+    return ""
+
+
 def choose_semantic_model_hint() -> str:
     try:
         from octopus_config import MODEL_POLICY_FILE, load_json  # lazy import to keep route script cheap
@@ -1206,6 +1250,8 @@ def infer_route(task: str, command: str = "") -> dict:
     phase_hint = infer_phase_hint(features, route, work_type_hint, work_contract_hint)
     worker_pool_hint = taxonomy_infer_worker_pool(route, work_type_hint)
     model_band_hint = infer_model_band_hint(features, route, work_type_hint)
+    task_class = infer_task_class(features, route)
+    protected_lane = infer_protected_lane(features, route, task_class)
     parallel_gain_band = infer_parallel_gain_band(features)
     needs_durable_runtime = route != "direct" or work_contract_hint in {"deliverable_work", "coordinated_work"}
     needs_artifact = work_contract_hint in {"inspect_report", "deliverable_work", "coordinated_work"}
@@ -1224,7 +1270,8 @@ def infer_route(task: str, command: str = "") -> dict:
         "reason_codes": reason_codes,
         "scores": scores,
         "features": features,
-        "task_class": infer_task_class(features, route),
+        "task_class": task_class,
+        "protected_lane": protected_lane,
         "work_contract_hint": work_contract_hint,
         "worker_pool_hint": worker_pool_hint,
         "work_type_hint": work_type_hint,

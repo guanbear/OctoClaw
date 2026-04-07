@@ -295,6 +295,15 @@ def send_task_notification(
     interactive = payload.get("interactive", {}) if isinstance(payload.get("interactive"), dict) else {}
     session_key = str(task.get("session_key", "") or "").strip()
 
+    if resolved_backend == "none":
+        return {
+            "ok": False,
+            "backend": resolved_backend,
+            "payload": payload,
+            "skipped": True,
+            "error": "",
+        }
+
     if resolved_backend == "feishu":
         message_id = send_text(text, config=cfg, reply_to=reply_to)
         if message_id:

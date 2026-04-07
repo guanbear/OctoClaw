@@ -1,8 +1,8 @@
 # OctoClaw 执行计划
 
-> 状态：当前 canonical 执行计划（2026-04-08）
+> 状态：当前 canonical 执行计划（2026-04-07）  
 > 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
-> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
@@ -28,13 +28,11 @@
 #### A. substrate / continuity / observer baseline
 - taskflow-bound runner jobs
 - native taskflow control metadata
-- managed TaskFlow substrate for eligible delegation
 - session resume context persistence
 - runtime observer
 - on-demand runner fallback
 - patrol observation pass 收口
 - unified `octoclawctl` control entrypoint
-- delegated pre-dispatch ack baseline
 
 #### B. feedback loop baseline
 - runtime-policy replay log
@@ -113,6 +111,7 @@
 - nightly failure summary
 - 汇总后推送到 Slack / IM channel
 - 不在 nightly job 中自动修代码或自动补救任务
+
 ---
 
 ## 3. 新的优先级排序
@@ -156,8 +155,6 @@
 - 一份更严格的 runtime role map（observer / patrol / runner / ctl）
 - 对应代码中的职责清单和收口方向
 - 明确哪些 loop 保留常驻、哪些改成按需或 observer 吸收
-- 明确 `runner = lane`、`daemon|ondemand = mode`、`status = observer view`
-- 让 CLI help / README / canonical docs 都使用同一套角色定义
 
 ---
 
@@ -196,7 +193,6 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ### 近期交付物
 - 一份 feedback loop map
-- 一套统一 feedback manifest / phase contract
 - 每条工具在闭环中的角色说明
 - promotion / validation / learning 之间的输入输出约定
 - 明确哪些 nightly job 是核心，哪些只是辅助分析
@@ -207,6 +203,9 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 ---
 
 ## P2.5：把 router 核心收成可拆分 Auto Router
+
+配套设计底稿见：[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)  
+施工清单见：[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
 
 ### 为什么现在该把这件事写进 canonical plan
 
@@ -245,24 +244,31 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 ### 近期交付物
 
 - router boundary map
+- protected lanes inventory
+  - `control_observer`
+  - workflow/session provenance
+  - task action / queue / details / status
 - `signal / route / budget / model_intel` 的 schema 草案
+- `route outcome` schema 草案
 - model-intel 自动更新面
   - 价格
   - 能力画像
   - 健康/冷却
+  - `OpenRouter catalog` 同步
+    - 目录 / 价格 / context / provider / modality
+  - `OpenRouter rankings` 同步
+    - 作为低权重生态信号，不压过本地 truth
+  - freshness / decay / stale fallback 语义
 - OpenAI-compatible recommendation surface 草案
-- 对应 canonical docs：
-  - [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
-  - [`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
-- internal-first implementation baseline：
-  - `lib/auto_router.py`
-  - `octoclaw_policy.build_decision().auto_router`
-
-### 当前已落的 baseline（2026-04-07）
-- `lib/auto_router.py` 已输出 internal-first recommendation payload
-- `build_decision().auto_router` 已进入主策略决策对象
-- route recommendation seam 已显式进入 policy/runtime 边界
-- delegated pre-dispatch ack 已进入 runtime baseline
+- 在 replay / validation / promotion 里沉淀 route outcome 字段
+  - 为后续从静态映射升级到 feedback-driven router 预留训练面
+- shadow rollout / diff logging 约定
+- golden misroute suite
+  - 把高频误判样本沉淀成 durable regression set
+- Python / JS / runtime parity baseline
+- 明确 runtime / offline ownership
+  - runtime hot path 以 JS/TS 为主
+  - feedback / calibration / learned router 以 Python 为主
 
 ### 这条线的约束
 
@@ -270,6 +276,23 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 不要求现在就拆仓
 - 不要求立刻变成通用 proxy
 - 先把内部接口做干净，再考虑独立开源
+- 默认先走 OpenClaw plugin-first 形态，不把独立 service 当当前前置目标
+- 默认先优化 delegated lanes，而不是直接改主 agent
+- `control_observer` 不进入普通业务 auto-router 训练面
+- 先 shadow/recommendation，再 promotion，不直接硬切主路径
+- 先做 protected lanes / goldens / parity，再考虑 tiny judge
+
+### 这条线的近期推进顺序
+
+当前状态：`1 / 2` 已落地，`3` 仍未开始。
+
+1. 先收 protected lanes
+   - 明确哪些问题必须留在 main-agent stable scope
+   - workflow-first，非必要不委派
+2. 再补 goldens / parity / replay diff
+   - 先降低高频误判，再扩 recommendation 面
+3. 最后才给模糊样本接 tiny judge
+   - tiny judge 是歧义裁决器，不是主路由器
 
 ---
 
@@ -304,18 +327,6 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 一份基于当前代码的 capability matrix（不是纯设计假设）
 - 不同 channel 的统一 anchor/update/action 语义说明
 - 哪些 channel 已经“够用”，哪些只是基本 fallback
-- 当前 contract 文档：
-  - [`octoclaw-im-display-contract.md`](./octoclaw-im-display-contract.md)
-  - [`octoclaw-p3-p4-post-signoff-handoff.md`](./octoclaw-p3-p4-post-signoff-handoff.md)
-
-### 当前状态（2026-04-07）
-- P3 contract 已完成 signoff 并冻结：
-  - surface ownership
-  - interaction state machine
-  - action taxonomy
-  - capability matrix
-  - accepted fallback / gap ledger
-- 后续不应再回头重定义 P3 的角色边界，而应在既有 contract 下继续收口体验与验证
 
 ---
 
@@ -330,37 +341,26 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 哪些字段已经可以直接 substrate-first
 - observer / display / retrieve / review 是否都优先消费 substrate-aware facts
 - 哪些 fallback 还必须保留
+- 哪些路径应该对齐 upstream `managed TaskFlow`，哪些仍然只适合停在 mirrored / binding-first
 
 ### 近期目标
-把“taskflow substrate 已接入”推进到“taskflow substrate 成为默认第一事实层”。
+把“taskflow substrate 已接入”推进到“`managed TaskFlow` 成为默认目标 substrate，旧 mirror 退成兼容层”。
 
 ### 近期交付物
 - substrate field inventory
 - legacy mirror 依赖清单
 - 哪些表面已完全 substrate-aware，哪些仍处于过渡态
+- OctoClaw 字段与 upstream `task_mirrored / managed` 的映射表
+- `revision / state / wait / cancelRequestedAt` 对应到本地 runtime 语义的落点
 - `spawn_single` 的 native-preferred create 路径
-- simple `spawn_multi -> linear flow` 的收口路径
+- simple `spawn_multi -> managed TaskFlow` 的收口路径（authoring 先保持 linear-first）
 - legacy mirror / fallback 清理顺序
 
-### 当前已落的 baseline（2026-04-07）
-- `task_display_cli substrate` 已能输出 substrate inventory
-- taskflow binding 已显式暴露 `create_preference / create_status`
-- simple `spawn_multi` 已能通过 `step_order / step_task_ids` 在 graph/timeline 上形成 linear flow baseline
-- taskflow mirror cleanup 已有 preview/apply contract，默认 retention `48h`
-- managed TaskFlow substrate 已进入 delegation 主链
-- `spawn_single` / `spawn_multi` 的 create posture 已冻结为 **native-preferred**
-- P4 已按 **OpenClaw 2026.4.5 TaskFlow source semantics** 完成 closeout：
-  - `display = substrate_first`
-  - `retrieve = substrate_first`
-  - `observer = evidenced_substrate_aware`
-  - `review = evidenced_substrate_aware`
-  - canonical read path 现在先读 `TaskFlow flow/task target + taskSummary + review surface`，再读 report/context
-
 ### 这条线现在最具体的推进顺序
-1. 保持 `spawn_single` / `spawn_multi` 的 native-preferred create posture，不回退成 mirror-first
-2. simple `spawn_multi`：继续按 linear flow 思路验证和收口，而不是回到并行 detached shell 心智
-3. 清理 legacy mirror / compatibility fallback，只保留仍然有明确恢复价值的那部分
-4. 更深的 substrate-only hardening 转入 `P5/P6`，不再作为 P4 exception ledger
+1. `spawn_single`：从 mirror/binding-first 继续推进到 native-preferred create
+2. simple `spawn_multi`：优先收成 `managed TaskFlow`，而不是继续长时间停留在并行 detached shell
+3. display / retrieve / observer / review：把 substrate-aware facts 变成默认读面，并逐步区分 mirrored facts 与 managed truth
+4. 清理 legacy mirror / compatibility fallback，只保留仍然有明确恢复价值的那部分
 
 ---
 
@@ -504,58 +504,6 @@ P5 关单前，至少应满足：
 - OctoClaw policy/control/feedback/display
 
 而不是来自重 backend。
-
-### 设计约束
-
-- 默认 surface 不把 heavy backend 当 primary identity
-- `status / detail / retrieve / observer / notifier` 只把 backend 当 secondary operator hint
-- 不显式启用 tmux / ClawTeam / resident runner 时，系统仍应呈现为完整主路径，而不是“降级模式”
-
-### P6 子项
-
-1. execution/operator surface backend-neutral 化
-2. ClawTeam bridge / tmux workbench / resident runner optional 化
-3. status / observer / display contract 口径同步
-4. operator docs 与 ctl 心智同步
-
-### 完成标准
-
-P6 关单前，至少应满足：
-
-1. 默认 runner / spawn surface 不再默认亮出 heavy backend 身份
-2. 启用 ClawTeam / tmux / resident runner 时，surface 明确标为 `optional`
-3. `status / observer / display / retrieve` 不再把 backend 当真相源
-4. ClawTeam bridge 关闭时，默认主路径不受影响
-
-### P6 之后的主线
-
-`P4/P5/P6` baseline 与 macmini 实机验收通过后，后续主线顺序固定为：
-
-1. **transition state 清理**
-2. **router / model-intel 深化**
-
-截至 `2026-04-08`：
-
-- `TC1 durable policy state` 已完成
-- `TC2 substrate-only read path tightening` 已完成
-- `TC3 legacy mirror / fallback shrink` 已完成
-- `TC4 optional backend true detach` 已完成
-
-这意味着后续主线已从 “先清 transition state” 进入：
-
-1. **router / model-intel 深化**
-2. **更深的 substrate-only hardening（仅在真实验收发现缺口时继续）**
-
-transition cleanup 的 focused design 见：
-
-- [`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)
-
-当前不再建议在这之前：
-
-- 重开新的大设计专题
-- 直接重写成全 Node/TS
-- 提前拆独立 router 仓库
-- 再扩新的 backend / cockpit
 
 ---
 

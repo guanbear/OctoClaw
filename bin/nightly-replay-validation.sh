@@ -6,7 +6,17 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WORKSPACE_DEFAULT="${HOME}/.openclaw/workspace"
 WORKSPACE="${WORKSPACE:-${WORKSPACE_DEFAULT}}"
 TZ_NAME="${OCTOCLAW_REPLAY_VALIDATION_TZ:-Asia/Shanghai}"
-REPORT_DAY="${1:-$(TZ="${TZ_NAME}" date -v-1d +%F 2>/dev/null || TZ="${TZ_NAME}" python3 - <<'PY'\nfrom datetime import datetime, timedelta\nfrom zoneinfo import ZoneInfo\nprint((datetime.now(ZoneInfo(\"Asia/Shanghai\")) - timedelta(days=1)).strftime(\"%Y-%m-%d\"))\nPY\n)}"
+if [ -n "${1:-}" ]; then
+  REPORT_DAY="$1"
+else
+  REPORT_DAY="$(TZ="${TZ_NAME}" date -v-1d +%F 2>/dev/null || TZ="${TZ_NAME}" python3 - <<'PY'
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+print((datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=1)).strftime("%Y-%m-%d"))
+PY
+)"
+fi
 OPENCLAW_HOME_INPUT="${OPENCLAW_HOME:-${HOME}/.openclaw}"
 OPENCLAW_HOME_ROOT="${OPENCLAW_HOME_INPUT}"
 if [ -f "${OPENCLAW_HOME_ROOT}/openclaw.json" ]; then

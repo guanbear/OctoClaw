@@ -147,11 +147,12 @@ def collect_turns(
     for session_key, meta in sessions_index.items():
         if not is_slack_session(session_key, meta):
             continue
-        session_file = Path(str(meta.get("sessionFile") or "").strip())
+        raw_session_file = Path(str(meta.get("sessionFile") or "").strip())
+        session_file = raw_session_file
         if not session_file.is_absolute():
-            session_file = session_dir / session_file.name
+            session_file = session_dir / session_file
         elif not session_file.exists():
-            session_file = session_dir / session_file.name
+            session_file = session_dir / raw_session_file.name
         if not session_file.exists():
             continue
         messages: list[tuple[datetime | None, str, str]] = []
@@ -263,6 +264,16 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
             if route:
                 matched_dispatch = event
                 break
+        protected_lane = str(matched_policy.get("protectedLane") or matched_policy.get("protected_lane") or "") if matched_policy else ""
+        policy_route = str(matched_policy.get("route") or "") if matched_policy else ""
+        dispatch_route = str(matched_dispatch.get("route") or "") if matched_dispatch else ""
+        protected_lane_misroute = bool(
+            protected_lane and (
+                bool(matched_dispatch)
+                or (policy_route and policy_route != "direct")
+                or (dispatch_route and dispatch_route != "direct")
+            )
+        )
         results.append(
             {
                 "session_key": turn.session_key,
@@ -276,6 +287,7 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
                     "route": matched_policy.get("route") if matched_policy else "",
                     "system_preferred_route": matched_policy.get("systemPreferredRoute") if matched_policy else "",
                     "worker_pool": matched_policy.get("workerPool") if matched_policy else "",
+                    "protected_lane": protected_lane,
                     "work_type": matched_policy.get("workType") if matched_policy else "",
                     "phase": matched_policy.get("phase") if matched_policy else "",
                     "review_required": matched_policy.get("reviewRequired") if matched_policy else False,
@@ -286,7 +298,9 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
                     "called": bool(matched_dispatch),
                     "route": matched_dispatch.get("route") if matched_dispatch else "",
                     "worker_pool": matched_dispatch.get("workerPool") if matched_dispatch else "",
+                    "protected_lane": matched_dispatch.get("protectedLane") if matched_dispatch else "",
                 },
+                "protected_lane_misroute": protected_lane_misroute,
             }
         )
     return results

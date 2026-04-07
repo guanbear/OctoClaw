@@ -22,12 +22,17 @@ def _sorted_route_candidates(scores: dict[str, Any]) -> list[dict[str, Any]]:
 def build_route_recommendation(route_meta: dict[str, Any], resolved: dict[str, Any]) -> dict[str, Any]:
     features = route_meta.get("features", {}) if isinstance(route_meta.get("features"), dict) else {}
     reason_codes = [str(item or "") for item in list(route_meta.get("reason_codes", []) or [])]
+    protected_lane = str(route_meta.get("protected_lane", "") or "").strip()
     repo_activity_hits = int(features.get("repo_activity_hits", 0) or 0)
     semantic_reason = str(route_meta.get("semantic_review_reason", "") or "")
     conflict_type = "repo_activity_lookup" if repo_activity_hits > 0 else semantic_reason
-    arbitration_required = bool(repo_activity_hits > 0 or route_meta.get("needs_semantic_review"))
-    strategy = "rule_fallback" if repo_activity_hits > 0 else ("route_hint_or_future_tiny_judge" if route_meta.get("needs_semantic_review") else "none")
-    resolved_by = "rule_fallback" if repo_activity_hits > 0 else "base_policy"
+    arbitration_required = False if protected_lane else bool(repo_activity_hits > 0 or route_meta.get("needs_semantic_review"))
+    strategy = (
+        "none"
+        if protected_lane
+        else ("rule_fallback" if repo_activity_hits > 0 else ("route_hint_or_future_tiny_judge" if route_meta.get("needs_semantic_review") else "none"))
+    )
+    resolved_by = "protected_lane" if protected_lane else ("rule_fallback" if repo_activity_hits > 0 else "base_policy")
     return {
         "schema_version": "octoclaw.route_recommendation/v1",
         "recommended_route": str(resolved.get("route") or route_meta.get("route") or route_meta.get("system_preferred_route") or "direct"),
@@ -35,6 +40,8 @@ def build_route_recommendation(route_meta: dict[str, Any], resolved: dict[str, A
         "recommended_work_type": str(resolved.get("work_type", "") or ""),
         "recommended_phase": str(resolved.get("phase", "") or ""),
         "recommended_model_band": str(resolved.get("model_band", "") or ""),
+        "protected_lane": protected_lane,
+        "bypass_delegated_optimization": bool(protected_lane),
         "work_contract_hint": str(route_meta.get("work_contract_hint", "") or ""),
         "top_candidates": _sorted_route_candidates(route_meta.get("scores", {})),
         "arbitration": {

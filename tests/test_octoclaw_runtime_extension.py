@@ -394,6 +394,35 @@ Conversation info (untrusted metadata):
         self.assertNotIn("exec", payload["tools"])
         self.assertNotIn("octoclaw_dispatch", payload["tools"])
 
+    def test_workflow_meta_question_stays_in_direct_control_lane(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("你现在是啥模型");
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  protectedLane: decision.route_decision.protected_lane,
+                  workContract: decision.route_decision.work_contract,
+                  reasonCodes: decision.route_decision.reason_codes,
+                  recommendation: decision.route_recommendation,
+                  ack: decision.pre_dispatch_ack,
+                  shouldSend: __octoclawTest.shouldSendPreDispatchAck(decision, {}, { trigger: "message" }),
+                  tools: Array.from(__octoclawTest.observerControlTools(decision, "octoclaw_route_hint")).sort()
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "control_observer")
+        self.assertEqual(payload["protectedLane"], "control_observer")
+        self.assertEqual(payload["workContract"], "answer_now")
+        self.assertIn("workflow_meta_control_contract", payload["reasonCodes"])
+        self.assertFalse(payload["recommendation"]["arbitration"]["required"])
+        self.assertTrue(payload["recommendation"]["bypass_delegated_optimization"])
+        self.assertFalse(payload["ack"]["required"])
+        self.assertFalse(payload["shouldSend"])
+        self.assertNotIn("octoclaw_dispatch", payload["tools"])
+
     def test_pre_dispatch_ack_policy_is_enabled_for_delegated_research(self) -> None:
         payload = run_runtime_helper(
             """(() => {

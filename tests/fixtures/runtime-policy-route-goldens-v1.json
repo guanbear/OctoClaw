@@ -1,0 +1,47 @@
+[
+  {
+    "task": "你现在是啥模型",
+    "expected": {
+      "system_preferred_route": "direct",
+      "task_class": "control_observer",
+      "work_contract_hint": "answer_now",
+      "protected_lane": "control_observer"
+    }
+  },
+  {
+    "task": "刚才的查询是子任务做的吗 是啥模型做的",
+    "expected": {
+      "system_preferred_route": "direct",
+      "task_class": "control_observer",
+      "work_contract_hint": "answer_now",
+      "protected_lane": "control_observer"
+    }
+  },
+  {
+    "task": "这次有没有走 dispatch",
+    "expected": {
+      "system_preferred_route": "direct",
+      "task_class": "control_observer",
+      "work_contract_hint": "answer_now",
+      "protected_lane": "control_observer"
+    }
+  },
+  {
+    "task": "八爪鱼状态",
+    "expected": {
+      "system_preferred_route": "direct",
+      "task_class": "control_observer",
+      "work_contract_hint": "answer_now",
+      "protected_lane": "control_observer"
+    }
+  },
+  {
+    "task": "你帮我查下 octoclaw项目 今天都有啥提交 改了啥",
+    "expected": {
+      "system_preferred_route": "spawn_single",
+      "task_class": "focused_research",
+      "work_contract_hint": "deliverable_work",
+      "protected_lane": ""
+    }
+  }
+]

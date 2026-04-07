@@ -82,6 +82,7 @@ Current internal source-of-truth docs:
 - [docs/octoclaw-auto-router-design.md](./docs/octoclaw-auto-router-design.md) — auto-router design draft (Chinese)
 - [docs/octoclaw-auto-router-implementation-checklist.md](./docs/octoclaw-auto-router-implementation-checklist.md) — auto-router implementation checklist (Chinese)
 - [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md) — archived design-note index and classification
+- [docs/wiki/README.md](./docs/wiki/README.md) — LLM-maintained knowledge compilation layer (non-canonical)
 
 Current runtime role map:
 
@@ -370,6 +371,17 @@ python3 /workspace/openclaw/skills/octopus/lib/reply_review_packet.py \
 # Run the nightly AI-assisted reply review and push a daily report into reports/reply-review/
 bash /workspace/openclaw/skills/octopus/bin/nightly-reply-review.sh
 
+# VM-side follow-up: wait for the replay validation report, let an OpenClaw agent analyze/fix it, then notify Slack
+bash /workspace/openclaw/skills/octopus/bin/nightly-report-followup.sh
+
+# Render a suggested cron line for the VM-side follow-up (default 01:20 local time)
+python3 /workspace/openclaw/skills/octopus/lib/nightly_report_followup.py render-cron
+
+# Optional: route the notification to a specific Slack target instead of the configured main session
+OCTOCLAW_NIGHTLY_FOLLOWUP_NOTIFY_CHANNEL=slack \
+OCTOCLAW_NIGHTLY_FOLLOWUP_NOTIFY_TARGET=channel:C123 \
+bash /workspace/openclaw/skills/octopus/bin/nightly-report-followup.sh
+
 # Recommended: enable this only after conservative observation has started producing useful replay
 
 # Replay event schema and sample fixtures
@@ -610,6 +622,7 @@ Heavier protocol rules are only turned on for complex `spawn_single` / `spawn_mu
 ├── docs/
 │   ├── octoclaw-design-foundation.md
 │   ├── octoclaw-execution-plan.md
+│   ├── wiki/
 │   └── archive/
 ├── schemas/
 ├── extensions/
@@ -640,3 +653,8 @@ Heavier protocol rules are only turned on for complex `spawn_single` / `spawn_mu
 
 - [Archive index](./docs/archive/design-notes/README.md)
 - Historical design notes now live under [`docs/archive/design-notes/`](./docs/archive/design-notes/)
+
+## Knowledge Compilation Layer
+
+- [Wiki layer README](./docs/wiki/README.md)
+- This layer is for LLM-maintained synthesis and cross-linking, not canonical design truth

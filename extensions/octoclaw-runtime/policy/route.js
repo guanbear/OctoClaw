@@ -77,6 +77,7 @@ const RESEARCH_PATTERNS = {
   zh: [
     String.raw`(调研|对比|分析|研究|根因|方案|api|数据源|可行性)`,
     String.raw`((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))`,
+    String.raw`((项目|仓库).*(提交|改了啥|改了什么|变更)|((提交|改了啥|改了什么|变更).*(项目|仓库)))`,
   ],
   en: [
     String.raw`\b(research|compare|analy|investigate|root cause|api|datasource|feasibility)\b`,
@@ -94,6 +95,7 @@ const EXTERNAL_LOOKUP_PATTERNS = {
     String.raw`(天气|花粉|汇率|航班|酒店|机票|新闻|价格|行情|官网|接口文档|文档链接)`,
     String.raw`((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))`,
     String.raw`((今天|今日|最近).*(有更新吗|有没有更新|更新了什么)|((有更新吗|有没有更新|更新了什么).*(github|gitlab|仓库|repo|repository)))`,
+    String.raw`((项目|仓库).*(提交|改了啥|改了什么|变更)|((提交|改了啥|改了什么|变更).*(项目|仓库)))`,
   ],
   en: [
     String.raw`\b(weather|pollen|exchange rate|flight|hotel|price|news|official docs?|documentation)\b`,
@@ -250,6 +252,20 @@ const TASK_PROGRESS_PATTERNS = {
   en: [String.raw`\b(is it done|done yet|finished yet|still running|any progress|task status|task progress|what(?:'s| is) the status|how(?:'s| is) it going|where are we at)\b`],
 };
 
+const WORKFLOW_META_PATTERNS = {
+  zh: [
+    String.raw`(你现在是啥模型|你现在是什么模型|现在是啥模型|现在是什么模型|当前是啥模型|当前是什么模型|现在用的啥模型|现在用的什么模型|当前用的啥模型|当前用的什么模型)`,
+    String.raw`(主会话模型|策略主链|主链漂移|子任务模型|当前路由|现在走的是什么路由|这次走的是什么路由)`,
+    String.raw`(刚才(那次|这个)?(查询|问题|任务)?是子任务做的吗|刚才(那次|这个)?(查询|问题|任务)?是不是子任务做的|是不是子任务做的|是不是主会话自己查的|是不是主agent自己查的)`,
+    String.raw`(谁查的|谁做的|谁回的|是谁处理的|谁执行的|啥模型做的|什么模型做的|是谁用什么模型做的)`,
+    String.raw`(有没有走\s*(dispatch|路由|router)|走了\s*(dispatch|路由|router)\s*吗|有没有走\s*octoclaw_dispatch|判定了\s*direct\s*吗|是不是\s*direct|是不是走了\s*direct|是不是委派了|有没有委派)`,
+  ],
+  en: [
+    String.raw`\b(what model are you (?:on|using) now|current model|which model are you (?:on|using)|main session model|policy primary model|drifted model)\b`,
+    String.raw`\b(was this delegated|was this a subtask|did this go through dispatch|did router choose direct|what route was chosen|current route|who handled this|who answered this|who ran this)\b`,
+  ],
+};
+
 const ROUTE_PATTERN_LIBRARY = {
   RUNNER_PATTERNS,
   RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -275,6 +291,7 @@ const ROUTE_PATTERN_LIBRARY = {
   REMOTE_TARGET_PATTERNS,
   OBSERVER_CONTROL_PATTERNS,
   TASK_PROGRESS_PATTERNS,
+  WORKFLOW_META_PATTERNS,
 };
 
 const languagePatternCache = new Map();
@@ -371,6 +388,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   const runnerNegativeHits = countMatches(text, resolveLanguagePatterns("RUNNER_NEGATIVE_PATTERNS", enabledPacks));
   const observerControlHits = countMatches(text, resolveLanguagePatterns("OBSERVER_CONTROL_PATTERNS", enabledPacks));
   const taskProgressHits = countMatches(text, resolveLanguagePatterns("TASK_PROGRESS_PATTERNS", enabledPacks));
+  const workflowMetaHits = countMatches(text, resolveLanguagePatterns("WORKFLOW_META_PATTERNS", enabledPacks));
   const commandReadOnly = commandLooksReadOnly(normalizedCommand);
   const explicitObserverCommand = Boolean(
     /^\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*$/iu.test(rawTask)
@@ -378,11 +396,18 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       || /^\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?|stop|retry|approve|reject)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask)
       || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
   );
+  const workflowMetaCandidate = workflowMetaHits > 0;
 
   const repoActivityLookup = Boolean(
-    /(github|gitlab|仓库|repo|repository)/iu.test(text)
-      && /(commit|release|tag|pr|mr|issue|更新)/iu.test(text)
-      && /(有没有|有更新吗|更新了什么|今天|今日|最近|latest|recent|today|updates?)/iu.test(text),
+    (
+      /(github|gitlab|仓库|repo|repository|项目)/iu.test(text)
+      && /(commit|release|tag|pr|mr|issue|更新|提交|改了啥|改了什么|变更)/iu.test(text)
+      && /(有没有|有更新吗|更新了什么|今天|今日|最近|latest|recent|today|updates?)/iu.test(text)
+    )
+    || (
+      /(项目|仓库)/iu.test(text)
+      && /(提交|改了啥|改了什么|变更)/iu.test(text)
+    )
   );
 
   let effectiveResearchHits = researchHits;
@@ -446,7 +471,6 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       && implementHits === 0
       && effectiveMutationHits === 0,
   );
-  const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0 || taskProgressCandidate);
 
   let estimatedSteps = 1;
   if (multiStepHits > 0) estimatedSteps += 1;
@@ -474,6 +498,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   if (localStateHits > 0 || normalizedCommand) latencySensitivity = "high";
   else if (effectiveExternalLookupHits > 0 && effectiveResearchHits === 0 && codeHits === 0) latencySensitivity = "normal";
 
+  const observerControlCandidate = Boolean(
+    explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate || taskProgressCandidate
+  );
   const observationSignal = Boolean(
     observerControlCandidate
       || normalizedCommand
@@ -496,6 +523,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     task_progress_hits: taskProgressHits,
     observer_control_candidate: observerControlCandidate,
     task_progress_candidate: taskProgressCandidate,
+    workflow_meta_hits: workflowMetaHits,
+    workflow_meta_candidate: workflowMetaCandidate,
     explicit_local_probe: explicitLocalProbe,
     code_hits: codeHits,
     research_hits: effectiveResearchHits,
@@ -642,7 +671,7 @@ function contractDrivenRouteBias(features, workContractHint) {
     if (features.observer_control_candidate) {
       scores.direct = 0.96;
       scores.spawn_single = 0.08;
-      reasonCodes.push("observer_control_contract");
+      reasonCodes.push(features.workflow_meta_candidate ? "workflow_meta_control_contract" : "observer_control_contract");
     } else {
       reasonCodes.push(features.external_lookup_only ? "direct_lookup_contract" : "direct_answer_contract");
     }
@@ -809,6 +838,12 @@ function inferExecutionOwner(route) {
   return "subagent";
 }
 
+function inferProtectedLane(features, route, taskClass) {
+  if (route === "direct" && taskClass === "control_observer") return "control_observer";
+  if (route === "direct" && features.workflow_meta_candidate) return "workflow_meta";
+  return "";
+}
+
 function chooseSemanticModelHint() {
   const policy = loadJson(MODEL_POLICY_FILE);
   if (policy && typeof policy === "object" && !Array.isArray(policy)) {
@@ -904,6 +939,8 @@ export function inferRoute(task, command = "") {
   const phaseHint = inferPhaseHint(features, route, workTypeHint, workContractHint);
   const workerPoolHint = taxonomyInferWorkerPool(route, workTypeHint);
   const modelBandHint = inferModelBandHint(features, route, workTypeHint);
+  const taskClass = inferTaskClass(features, route);
+  const protectedLane = inferProtectedLane(features, route, taskClass);
   const parallelGainBand = inferParallelGainBand(features);
   const needsDurableRuntime = route !== "direct" || ["deliverable_work", "coordinated_work"].includes(workContractHint);
   const needsArtifact = ["inspect_report", "deliverable_work", "coordinated_work"].includes(workContractHint);
@@ -920,7 +957,8 @@ export function inferRoute(task, command = "") {
     reason_codes: [...reasonCodes],
     scores,
     features,
-    task_class: inferTaskClass(features, route),
+    task_class: taskClass,
+    protected_lane: protectedLane,
     work_contract_hint: workContractHint,
     worker_pool_hint: workerPoolHint,
     work_type_hint: workTypeHint,

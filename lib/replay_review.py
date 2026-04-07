@@ -102,16 +102,27 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             task_event.get("workerPool") if task_event else "",
             route_hint_event.get("workerPool") if route_hint_event else "",
         )
+        protected_lane = _first_non_empty(
+            task_event.get("protectedLane") if task_event else "",
+            task_event.get("protected_lane") if task_event else "",
+            dispatch_event.get("protectedLane") if dispatch_event else "",
+            dispatch_event.get("protected_lane") if dispatch_event else "",
+        )
 
         route_hint_required = bool(task_event.get("routeHintRequired")) if task_event else False
         route_hint_submitted = bool(task_event.get("routeHintSubmitted")) if task_event else bool(route_hint_event)
         sticky_applied = bool(task_event.get("stickyApplied")) if task_event else False
         sticky_persisted = bool(route_hint_event.get("stickyPersisted")) if route_hint_event else False
         delegated = bool(task_event.get("delegated")) if task_event else _is_delegated_route(route)
+        review_required = bool(route_hint_event.get("reviewRequired")) if route_hint_event else False
+        confidence = route_hint_event.get("confidence") if route_hint_event else None
+        route_language_packs = _find_route_language_packs(ordered)
 
         tags: list[str] = []
         if blocked:
             tags.append("blocked")
+        if protected_lane:
+            tags.append("protected_lane")
         if route_hint_required and not route_hint_event:
             tags.append("missing_hint")
         if sticky_applied or sticky_persisted:
@@ -126,10 +137,9 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             tags.append("direct")
         if delegated and route != "runner" and dispatch_event is None:
             tags.append("no_dispatch")
+        if protected_lane and (dispatch_event is not None or (route and route != "direct")):
+            tags.append("protected_lane_misroute")
 
-        review_required = bool(route_hint_event.get("reviewRequired")) if route_hint_event else False
-        confidence = route_hint_event.get("confidence") if route_hint_event else None
-        route_language_packs = _find_route_language_packs(ordered)
         record = {
             "session_key": session_key,
             "session_id": _first_non_empty(last_event.get("sessionId"), first_event.get("sessionId")),
@@ -140,6 +150,7 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "route": route,
             "system_preferred_route": system_preferred_route,
             "worker_pool": worker_pool,
+            "protected_lane": protected_lane,
             "route_hint": _first_non_empty(route_hint_event.get("routeHint") if route_hint_event else ""),
             "work_type": _first_non_empty(route_hint_event.get("workType") if route_hint_event else ""),
             "phase": _first_non_empty(route_hint_event.get("phase") if route_hint_event else ""),
@@ -261,6 +272,7 @@ def render_review_text(payload: dict[str, Any]) -> str:
                 f"   prompt: {record.get('prompt') or '(no prompt)'}",
                 "   details: "
                 + f"preferred={record.get('system_preferred_route') or 'n/a'}"
+                + f" · protected={record.get('protected_lane') or 'n/a'}"
                 + f" · hint={record.get('route_hint') or 'n/a'}"
                 + f" · dispatch={'yes' if record.get('dispatch_called') else 'no'}"
                 + f" · sticky={'yes' if record.get('sticky_applied') or record.get('sticky_persisted') else 'no'}"
