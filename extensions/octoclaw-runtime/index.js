@@ -154,6 +154,126 @@ function toolResponse(summary, details = {}) {
   };
 }
 
+function preDispatchAckText(decision) {
+  return String(decision?.pre_dispatch_ack?.text || "").trim();
+}
+
+function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
+  if (!isDelegatedRoute(decision)) return false;
+  if (!decision?.pre_dispatch_ack?.required) return false;
+  if (state?.preDispatchAckSent) return false;
+  const trigger = String(ctx?.trigger || "").trim().toLowerCase();
+  if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) return false;
+  return Boolean(preDispatchAckText(decision));
+}
+
+async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger) {
+  const message = preDispatchAckText(decision);
+  if (typeof onUpdate !== "function" || !message) {
+    return { attempted: false, sent: false, reason: "progress_update_unavailable", message };
+  }
+  const candidates = [
+    { content: [{ type: "text", text: message }] },
+    message,
+  ];
+  for (const payload of candidates) {
+    try {
+      await onUpdate(payload);
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        preDispatchAckSent: true,
+        preDispatchAckText: message,
+        preDispatchAckMode: "progress_update",
+      }));
+      return {
+        attempted: true,
+        sent: true,
+        reason: "progress_update_sent",
+        message,
+      };
+    } catch (err) {
+      logger?.warn?.(`octoclaw pre-dispatch progress ack failed: ${String(err)}`);
+    }
+  }
+  return {
+    attempted: true,
+    sent: false,
+    reason: "progress_update_failed",
+    message,
+  };
+}
+
+async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger) {
+  const message = preDispatchAckText(decision);
+  if (!shouldSendPreDispatchAck(decision, state, ctx)) {
+    return { attempted: false, sent: false, reason: "not_required", message: "" };
+  }
+  const sessionKey = String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
+  if (!sessionKey) {
+    return { attempted: false, sent: false, reason: "missing_session_key", message };
+  }
+  try {
+    const payload = await runJsonScript(
+      "send_pre_dispatch_ack.py",
+      ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
+      ctx?.cwd || process.cwd(),
+    );
+    const sent = Boolean(payload?.sent || payload?.ok);
+    if (sent) {
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        preDispatchAckSent: true,
+        preDispatchAckText: message,
+        preDispatchAckMode: "channel_message",
+      }));
+    }
+    return {
+      attempted: true,
+      sent,
+      reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
+      message,
+      payload,
+    };
+  } catch (err) {
+    logger?.warn?.(`octoclaw pre-dispatch ack failed: ${String(err)}`);
+    return {
+      attempted: true,
+      sent: false,
+      reason: String(err),
+      message,
+    };
+  }
+}
+
+async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, onUpdate, logger) {
+  const channelAttempt = await maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger);
+  if (channelAttempt.sent) {
+    return {
+      ...channelAttempt,
+      fallback_used: false,
+      channel_attempt: channelAttempt,
+    };
+  }
+  if (!decision?.pre_dispatch_ack?.fallback_to_progress_update) {
+    return {
+      ...channelAttempt,
+      fallback_used: false,
+      channel_attempt: channelAttempt,
+    };
+  }
+  const progressAttempt = await maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger);
+  return {
+    attempted: Boolean(channelAttempt.attempted || progressAttempt.attempted),
+    sent: Boolean(channelAttempt.sent || progressAttempt.sent),
+    reason: progressAttempt.sent ? progressAttempt.reason : channelAttempt.reason,
+    message: progressAttempt.message || channelAttempt.message || "",
+    payload: channelAttempt.payload,
+    fallback_used: Boolean(progressAttempt.sent),
+    channel_attempt: channelAttempt,
+    progress_attempt: progressAttempt,
+  };
+}
+
 function compactDispatchDetails(payload) {
   const taskId = payload?.job?.id || payload?.task_id || "";
   const reportPath = payload?.handoff?.report_path || payload?.report_path || "";
@@ -738,6 +858,8 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       routeHintSubmitted: false,
       routeHintPayload: null,
       blockedTools: [],
+      preDispatchAckSent: false,
+      preDispatchAckText: "",
     };
     setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
@@ -754,6 +876,9 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         stickyApplied: Boolean(decision?.route_hint_policy?.sticky_applied),
         ackFollowupCandidate: Boolean(decision?.route_hint_policy?.ack_followup_candidate),
         ackFollowupApplied: Boolean(decision?.route_hint_policy?.ack_followup_applied),
+        routeRecommendationConflict: Boolean(decision?.route_recommendation?.arbitration?.required),
+        routeRecommendationStrategy: String(decision?.route_recommendation?.arbitration?.strategy || ""),
+        routeRecommendationConflictType: String(decision?.route_recommendation?.arbitration?.conflict_type || ""),
         routeLanguagePacks: Array.isArray(decision?.route_language_packs) ? decision.route_language_packs : [],
         prompt: truncateText(prompt),
       },
@@ -1349,6 +1474,7 @@ const plugin = {
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         const policyDecisionJson = params.policyJson || (cachedDecision ? JSON.stringify(cachedDecision) : "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
+        const ackResult = await ensurePreDispatchAck(cachedDecision, metadata, stateKey, state, ctx, _onUpdate, pi.logger);
         const dispatchRoute = String(cachedDecision?.route_decision?.route || params.route || "").trim();
         const waitTimeoutSeconds = { runner: 12, spawn_single: 30, spawn_multi: 5, direct: 5 }[dispatchRoute] ?? 12;
         args.push("--wait", "--wait-timeout-seconds", String(waitTimeoutSeconds));
@@ -1393,6 +1519,14 @@ const plugin = {
             executed: Boolean(payload?.executed),
             usedCachedPolicy: hadCachedDecision,
             stickyPersisted,
+            preDispatchAckRequired: Boolean(cachedDecision?.pre_dispatch_ack?.required),
+            preDispatchAckSent: Boolean(ackResult?.sent),
+            preDispatchAckReason: String(ackResult?.reason || ""),
+            preDispatchAckFallbackUsed: Boolean(ackResult?.fallback_used),
+            preDispatchAckChannelReason: String(ackResult?.channel_attempt?.reason || ""),
+            routeRecommendationConflict: Boolean(authoritativeDecision?.route_recommendation?.arbitration?.required),
+            routeRecommendationStrategy: String(authoritativeDecision?.route_recommendation?.arbitration?.strategy || ""),
+            routeRecommendationConflictType: String(authoritativeDecision?.route_recommendation?.arbitration?.conflict_type || ""),
           },
           pi.logger,
           authoritativeDecision,
@@ -1645,6 +1779,10 @@ export const __octoclawTest = {
   observerControlTools,
   isControlObserverDecision,
   shouldRetainPolicyStateOnAgentEnd,
+  preDispatchAckText,
+  shouldSendPreDispatchAck,
+  maybeEmitPreDispatchAckProgress,
+  ensurePreDispatchAck,
   resolvePolicyDecisionForContext,
   inferRoute,
   buildDecision,

@@ -301,7 +301,8 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual(anchor["openclaw_taskflow_sync_mode"], "managed")
         self.assertEqual(anchor["openclaw_taskflow_substrate_revision"], 9)
-        self.assertIn("managed", anchor["substrate_summary"])
+        self.assertIn("mirror bound to native", anchor["substrate_summary"])
+        self.assertIn("running", anchor["substrate_summary"])
         self.assertIn("rev 9", anchor["substrate_summary"])
 
     def test_build_task_anchor_prefers_managed_substrate_state(self) -> None:
@@ -396,7 +397,7 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("details", rendered)
         self.assertIn("stop", rendered)
         self.assertIn("Checklist: 1 done / 1 open", rendered)
-        self.assertIn("Substrate: mirror · mirrored_bound · bound · subagent · running · task native-task-1 · flow flow-1", rendered)
+        self.assertIn("Substrate: mirror bound to native · running · flow flow-1", rendered)
 
     def test_build_task_anchor_exposes_openclaw_taskflow_binding(self) -> None:
         anchor = build_task_anchor(
@@ -436,9 +437,9 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(anchor["openclaw_task_id"], "native-task-2")
         self.assertEqual(anchor["openclaw_flow_id"], "flow-2")
         self.assertEqual(anchor["openclaw_flow_kind"], "one_task")
-        self.assertIn("subagent", anchor["substrate_summary"])
+        self.assertIn("mirror bound to native", anchor["substrate_summary"])
         self.assertIn("running", anchor["substrate_summary"])
-        self.assertIn("native-task-2", anchor["substrate_summary"])
+        self.assertIn("flow-2", anchor["substrate_summary"])
 
     def test_build_task_detail_includes_substrate_binding(self) -> None:
         detail = build_task_detail(
@@ -476,7 +477,7 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["substrate"]["native_match_score"], 118)
         self.assertEqual(detail["substrate"]["task_id"], "native-task-3")
         self.assertEqual(detail["substrate"]["flow_id"], "flow-3")
-        self.assertIn("subagent", detail["substrate"]["summary"])
+        self.assertIn("mirror bound to native", detail["substrate"]["summary"])
         self.assertIn("flow-3", detail["substrate"]["summary"])
 
     def test_build_task_detail_exposes_runner_plan_from_artifacts(self) -> None:

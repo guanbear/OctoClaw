@@ -246,6 +246,48 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["requires_research"])
         self.assertTrue(payload["features"]["requires_writing"])
 
+    def test_github_update_lookup_routes_to_research_instead_of_code(self) -> None:
+        payload = self.run_policy(
+            "查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗",
+            model_policy={
+                "generated_at": "2026-04-07T00:00:00Z",
+                "main_model": "omniroute/cx/gpt-5.4",
+                "worker_pools": {
+                    "octoclaw-code": "omniroute/cx/gpt-5.4",
+                    "octoclaw-research": "minimax-portal/MiniMax-M2.7-highspeed",
+                },
+                "worker_pool_phases": {
+                    "octoclaw-code": {"implement": "omniroute/cx/gpt-5.4"},
+                    "octoclaw-research": {"collect": "minimax-portal/MiniMax-M2.7-highspeed"},
+                },
+            },
+        )
+        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-research")
+        self.assertEqual(payload["route_decision"]["work_type"], "research")
+        self.assertEqual(payload["route_decision"]["phase"], "collect")
+        self.assertFalse(payload["request"]["metadata"])
+        self.assertEqual(payload["model_policy"]["selected_model"], "minimax-portal/MiniMax-M2.7-highspeed")
+        self.assertNotIn("mutation_work", payload["route_decision"]["reason_codes"])
+        self.assertEqual(payload["route_recommendation"]["schema_version"], "octoclaw.route_recommendation/v1")
+        self.assertTrue(payload["route_recommendation"]["arbitration"]["required"])
+        self.assertEqual(payload["route_recommendation"]["arbitration"]["strategy"], "rule_fallback")
+        self.assertEqual(payload["route_recommendation"]["arbitration"]["conflict_type"], "repo_activity_lookup")
+        self.assertEqual(payload["route_recommendation"]["recommended_route"], "spawn_single")
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
+        self.assertIn("查一下", payload["pre_dispatch_ack"]["text"])
+
+    def test_spawn_single_requires_pre_dispatch_ack(self) -> None:
+        payload = self.run_policy("调研三个兼容方案并写一版简短建议")
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
+        self.assertEqual(payload["pre_dispatch_ack"]["style"], "brief_status")
+        self.assertTrue(payload["pre_dispatch_ack"]["channel_delivery_preferred"])
+
+    def test_direct_route_does_not_require_pre_dispatch_ack(self) -> None:
+        payload = self.run_policy("八爪鱼状态")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertEqual(payload["pre_dispatch_ack"]["text"], "")
+
     def test_route_outputs_new_taxonomy_hints(self) -> None:
         payload = self.run_route("调研三个兼容方案并写一版简短建议")
         self.assertEqual(payload["work_contract_hint"], "deliverable_work")

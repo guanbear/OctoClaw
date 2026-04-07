@@ -76,33 +76,53 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
     if not isinstance(binding, dict) or not binding:
         return ""
     backend = _text(binding.get("backend")) or "mirror"
-    state = _text(binding.get("binding_state")) or "unknown"
-    sync_mode = _text(binding.get("sync_mode"))
     substrate_state = _text(binding.get("substrate_state"))
     substrate_revision = binding.get("substrate_revision")
     native_state = _text(binding.get("native_binding_state"))
-    native_runtime = _text(binding.get("native_runtime"))
     native_status = _text(binding.get("native_status"))
     task_id = _text(binding.get("task_id"))
     flow_id = _text(binding.get("flow_id"))
-    parts = [backend, state]
-    if sync_mode and sync_mode not in {backend, state}:
-        parts.append(sync_mode)
-    if substrate_state and substrate_state not in {state, native_status}:
-        parts.append(substrate_state)
+    binding_state = _text(binding.get("binding_state"))
+
+    if backend == "managed":
+        substrate_label = "managed flow"
+    elif backend == "mirror" and (flow_id or task_id or native_state == "bound" or binding_state in {"mirrored_bound", "bound"}):
+        substrate_label = "mirror bound to native"
+    elif backend == "mirror":
+        substrate_label = "mirror record"
+    elif backend == "native":
+        substrate_label = "native task"
+    else:
+        substrate_label = backend.replace("_", " ")
+
+    state_value = substrate_state or native_status or native_state or binding_state
+    if state_value == "queued" and substrate_label == "mirror bound to native":
+        state_value = "bound"
+    state_label = {
+        "queued": "queued",
+        "running": "running",
+        "waiting": "waiting",
+        "blocked": "blocked",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "succeeded": "completed",
+        "done": "completed",
+        "completed": "completed",
+        "bound": "bound",
+        "mirrored_bound": "bound",
+        "mirrored": "waiting for native bind",
+    }.get(state_value, state_value.replace("_", " ") if state_value else "")
+
+    parts = [substrate_label]
+    if state_label and state_label != substrate_label:
+        parts.append(state_label)
     revision = _int_or_zero(substrate_revision)
     if str(substrate_revision or "").strip() and revision >= 0:
         parts.append(f"rev {revision}")
-    if native_state and native_state not in {"none", state}:
-        parts.append(native_state)
-    if native_runtime:
-        parts.append(native_runtime)
-    if native_status:
-        parts.append(native_status)
-    if task_id:
-        parts.append(f"task {task_id}")
     if flow_id:
         parts.append(f"flow {flow_id}")
+    elif task_id:
+        parts.append(f"task {task_id}")
     return " · ".join(parts)
 
 

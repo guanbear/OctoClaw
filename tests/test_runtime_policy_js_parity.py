@@ -121,6 +121,10 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "config": {},
             },
             {
+                "task": "查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗",
+                "config": {},
+            },
+            {
                 "task": "好了吗",
                 "config": {},
             },

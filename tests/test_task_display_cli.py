@@ -116,7 +116,7 @@ class TaskDisplayCliTests(unittest.TestCase):
     def test_detail_text_surfaces_substrate_binding(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-1"])
         self.assertEqual(code, 0, err)
-        self.assertIn("Substrate detail: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
+        self.assertIn("Substrate detail: mirror bound to native · bound · flow flow-1", out)
         self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1 | runtime openclaw_task/openclaw_flow", out)
         self.assertIn("Create path: preference native_preferred | status native_bound", out)
 
@@ -134,7 +134,7 @@ class TaskDisplayCliTests(unittest.TestCase):
     def test_retrieve_text_surfaces_primary_report(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-1"])
         self.assertEqual(code, 0, err)
-        self.assertIn("Substrate: mirror · mirrored_bound · bound · task native-task-1 · flow flow-1", out)
+        self.assertIn("Substrate: mirror bound to native · bound · flow flow-1", out)
         self.assertIn("Create path: preference native_preferred | status native_bound", out)
         self.assertIn("Primary report: /tmp/task-1.md", out)
         self.assertIn("Summary:", out)

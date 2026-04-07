@@ -178,9 +178,11 @@ CODE_PATTERNS = {
 RESEARCH_PATTERNS = {
     "zh": (
         r"(调研|对比|分析|研究|根因|方案|api|数据源|可行性)",
+        r"((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))",
     ),
     "en": (
         r"\b(research|compare|analy|investigate|root cause|api|datasource|feasibility)\b",
+        r"\b((github|gitlab|repo|repository)\b.*\b(commit|release|tag|pull request|pr|issue|updates?)\b|(\bcommit|release|tag|pull request|pr|issue|updates?\b).*\b(github|gitlab|repo|repository))",
     ),
     "ja": (
         r"(調査|比較|分析|研究|根本原因|提案|実現可能性)",
@@ -202,9 +204,13 @@ RESEARCH_PATTERNS = {
 EXTERNAL_LOOKUP_PATTERNS = {
     "zh": (
         r"(天气|花粉|汇率|航班|酒店|机票|新闻|价格|行情|官网|接口文档|文档链接)",
+        r"((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))",
+        r"((今天|今日|最近).*(有更新吗|有没有更新|更新了什么)|((有更新吗|有没有更新|更新了什么).*(github|gitlab|仓库|repo|repository)))",
     ),
     "en": (
         r"\b(weather|pollen|exchange rate|flight|hotel|price|news|official docs?|documentation)\b",
+        r"\b((github|gitlab|repo|repository)\b.*\b(commit|release|tag|pull request|pr|issue|updates?)\b|(\bcommit|release|tag|pull request|pr|issue|updates?\b).*\b(github|gitlab|repo|repository))",
+        r"\b(any|latest|recent|today'?s)\s+updates?\b.*\b(github|gitlab|repo|repository)\b",
     ),
 }
 
@@ -628,6 +634,16 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         or re.fullmatch(r"\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?|stop|retry|approve|reject)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
         or re.fullmatch(r"\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
     )
+    repo_activity_lookup = bool(
+        re.search(r"(github|gitlab|仓库|repo|repository)", text, re.IGNORECASE)
+        and re.search(r"(commit|release|tag|pr|mr|issue|更新)", text, re.IGNORECASE)
+        and re.search(r"(有没有|有更新吗|更新了什么|今天|今日|最近|latest|recent|today|updates?)", text, re.IGNORECASE)
+    )
+
+    if repo_activity_lookup:
+        research_hits = max(research_hits, 1)
+        external_lookup_hits = max(external_lookup_hits, 1)
+        mutation_hits = 0
     effective_write_hits = write_hits
     if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
         effective_write_hits = 0
@@ -748,6 +764,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "verify_hits": verify_hits,
         "implement_hits": implement_hits,
         "mutation_hits": mutation_hits,
+        "repo_activity_hits": 1 if repo_activity_lookup else 0,
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
         "continuation_hits": continuation_hits,

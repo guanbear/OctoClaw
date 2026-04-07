@@ -346,6 +346,86 @@ Conversation info (untrusted metadata):
         self.assertNotIn("exec", payload["tools"])
         self.assertNotIn("octoclaw_dispatch", payload["tools"])
 
+    def test_pre_dispatch_ack_policy_is_enabled_for_delegated_research(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗");
+                return {
+                  route: decision.route_decision.route,
+                  workerPool: decision.route_decision.worker_pool,
+                  recommendation: decision.route_recommendation,
+                  ack: decision.pre_dispatch_ack,
+                  helperText: __octoclawTest.preDispatchAckText(decision),
+                  shouldSend: __octoclawTest.shouldSendPreDispatchAck(decision, {}, { trigger: "message" })
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "spawn_single")
+        self.assertEqual(payload["workerPool"], "octoclaw-research")
+        self.assertTrue(payload["recommendation"]["arbitration"]["required"])
+        self.assertEqual(payload["recommendation"]["arbitration"]["strategy"], "rule_fallback")
+        self.assertTrue(payload["ack"]["required"])
+        self.assertIn("查一下", payload["ack"]["text"])
+        self.assertEqual(payload["helperText"], payload["ack"]["text"])
+        self.assertTrue(payload["shouldSend"])
+
+    def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("八爪鱼状态");
+                return {
+                  route: decision.route_decision.route,
+                  ack: decision.pre_dispatch_ack,
+                  shouldSend: __octoclawTest.shouldSendPreDispatchAck(decision, {}, { trigger: "message" })
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertFalse(payload["ack"]["required"])
+        self.assertFalse(payload["shouldSend"])
+
+    def test_pre_dispatch_ack_falls_back_to_progress_update(self) -> None:
+        payload = run_runtime_helper(
+            """(async () => {
+                const decision = __octoclawTest.buildDecision("调研三个兼容方案并写一版简短建议");
+                const updates = [];
+                const result = await __octoclawTest.ensurePreDispatchAck(
+                  decision,
+                  {},
+                  "",
+                  {},
+                  { trigger: "message" },
+                  async (payload) => { updates.push(payload); },
+                  null
+                );
+                return { result, updates };
+            })()"""
+        )
+
+        self.assertTrue(payload["result"]["sent"])
+        self.assertTrue(payload["result"]["fallback_used"])
+        self.assertEqual(payload["result"]["channel_attempt"]["reason"], "missing_session_key")
+        self.assertEqual(payload["result"]["reason"], "progress_update_sent")
+        self.assertEqual(len(payload["updates"]), 1)
+
+    def test_pre_dispatch_ack_dedupes_when_state_already_sent(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("调研三个兼容方案并写一版简短建议");
+                return {
+                  shouldSend: __octoclawTest.shouldSendPreDispatchAck(
+                    decision,
+                    { preDispatchAckSent: true },
+                    { trigger: "message" }
+                  )
+                };
+            })()"""
+        )
+
+        self.assertFalse(payload["shouldSend"])
+
     def test_retain_policy_state_when_delegated_route_ended_without_dispatch(self) -> None:
         payload = run_runtime_helper(
             """__octoclawTest.shouldRetainPolicyStateOnAgentEnd({

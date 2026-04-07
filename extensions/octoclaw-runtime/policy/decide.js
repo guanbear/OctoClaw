@@ -12,6 +12,7 @@ import {
   saveJson,
 } from "./config.js";
 import { resolveModelAndThinking } from "./model.js";
+import { buildRouteRecommendation } from "./recommendation.js";
 import { inferRoute } from "./route.js";
 import {
   inferWorkerPool as taxonomyInferWorkerPool,
@@ -548,6 +549,27 @@ function promptContract(protocol, route, workContract, needsReview) {
   };
 }
 
+function preDispatchAckPolicy(route, workType, phase, taskClass = "") {
+  const required = ["spawn_single", "spawn_multi"].includes(route) && taskClass !== "control_observer";
+  let text = "我先处理一下，稍后把结果告诉你。";
+  if (route === "spawn_multi") {
+    text = "我先分派处理一下，稍后把结果汇总给你。";
+  } else if (workType === "research") {
+    text = "我先查一下，马上给你结论。";
+  } else if (workType === "review") {
+    text = "我先核对一下，结果回来我帮你收口。";
+  } else if (workType === "code" || phase === "implement") {
+    text = "我先开一个子任务处理，结果回来我帮你收口。";
+  }
+  return {
+    required,
+    style: "brief_status",
+    channel_delivery_preferred: required,
+    fallback_to_progress_update: required,
+    text: required ? text : "",
+  };
+}
+
 function toolPolicy(route, dispatchRequired, taskClass = "") {
   const blockPatterns = [];
   if (dispatchRequired && ["spawn_single", "spawn_multi"].includes(route)) {
@@ -882,6 +904,14 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const taskClass = String(routeMeta.task_class || "");
   const routeBudget = budgetPolicy(features, route, workContract, protocol, needsReview);
   const promptPolicy = promptContract(protocol, route, workContract, needsReview);
+  const preDispatchAck = preDispatchAckPolicy(route, workType, phase, taskClass);
+  const routeRecommendation = buildRouteRecommendation(routeMeta, {
+    route,
+    worker_pool: workerPool,
+    work_type: workType,
+    phase,
+    model_band: modelBand,
+  });
 
   const decision = {
     schema_version: SCHEMA_VERSION,
@@ -940,7 +970,9 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       review_worker_pool: needsReview ? "octoclaw-review" : "",
       review_trigger: needsReview ? "policy_required" : "",
     },
+    route_recommendation: routeRecommendation,
     prompt_contract: promptPolicy,
+    pre_dispatch_ack: preDispatchAck,
     tool_policy: toolPolicy(route, dispatchRequired, taskClass),
     route_hint_policy: routeHintPolicy,
     runtime_switches: runtimeSwitchesSummary(runtimeCfg),

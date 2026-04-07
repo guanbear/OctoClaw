@@ -96,7 +96,121 @@
 - `lib/octoclaw_route.py`
 - `lib/octoclaw_policy.py`
 - `lib/model-intel.py`
-- `lib/budget.py`
+- `lib/model_pricing.py`
+- `lib/model-sources.json`
+- `lib/model-benchmarks.json`
+- `lib/runtime_snapshot.py`
+- `lib/octopus_config.py`
+
+### 4.4 测试面
+
+- `tests/test_runtime_policy.py`
+- `tests/test_runtime_policy_js_parity.py`
+- `tests/test_runtime_policy_replay_schema.py`
+- `tests/test_dispatch_task.py`
+- `tests/test_replay_summary.py`
+- `tests/test_replay_review.py`
+- `tests/test_replay_curate.py`
+- `tests/test_replay_validation.py`
+- `tests/test_replay_automation.py`
+- `tests/test_runtime_policy_rollout.py`
+
+---
+
+## 5. 建议拆 PR / slice
+
+## 5.1 Slice A：抽出 recommendation contract
+
+### 目标
+
+把当前 `buildDecision(...)` 里隐含的 recommendation 语义抽出来，形成独立 contract，但不改变现有默认行为。
+
+> 2026-04-07 baseline：
+> 已落一版薄 `route_recommendation` / arbitration seam，当前只做规则冲突裁决与 replay 记录；
+> `tiny judge` 仍未接入，继续保持 `rule_fallback`。
+
+### Checklist
+
+- [ ] 设计并落地 `route-recommendation/v1` schema
+- [ ] 设计并落地 `budget-recommendation/v1` schema
+- [ ] 设计并落地 `route-outcome/v1` schema
+- [ ] 在 runtime policy 决策中明确区分：
+  - `recommendation`
+  - `resolution`
+  - `execution_result`
+- [ ] 在 `extensions/octoclaw-runtime/policy/` 新建 recommendation helper 模块
+- [ ] 保持当前 `runtime-policy decision` schema 向后兼容
+- [ ] 不在这一拍改 `hard_runner_only` 默认值
+- [ ] 不在这一拍改 `direct_model_override` 默认值
+
+### 主要文件
+
+- `extensions/octoclaw-runtime/policy/decide.js`
+- `extensions/octoclaw-runtime/policy/recommendation.js`
+- `schemas/route-recommendation-v1.schema.json`
+- `schemas/budget-recommendation-v1.schema.json`
+- `schemas/route-outcome-v1.schema.json`
+- `schemas/runtime-policy-decision-v1.schema.json`
+
+### 测试
+
+- [ ] 给 recommendation schema 加结构化 fixture
+- [ ] 补 `tests/test_runtime_policy.py`
+- [ ] 补 `tests/test_runtime_policy_js_parity.py`
+- [ ] 补 `tests/test_runtime_policy_replay_schema.py`
+
+### 验收标准
+
+- JS 侧能独立生成 recommendation payload
+- 现有 runtime policy tests 不回归
+- 新 schema 可以被 fixture 校验
+
+---
+
+## 5.2 Slice B：把 delegated-lane recommendation 接进 runtime hot path
+
+### 目标
+
+先让 `runner / spawn_single / spawn_multi` 真正消费 lane-local recommendation；main-agent direct 继续稳定。
+
+### Checklist
+
+- [ ] 明确 `execution_contract routing` 和 `lane-local route/budget recommendation` 的分层
+- [ ] 在 recommendation 中加入：
+  - `agent_scope`
+  - `route_class`
+  - `candidate_models`
+  - `output_budget`
+  - `reasoning_mode`
+- [ ] `runner` 可消费 recommendation 中的 `profile / model_band / output_budget`
+- [ ] `spawn_single` 可消费 recommendation 中的 `worker_pool / profile / model candidate`
+- [ ] `spawn_multi` 先支持 parent planner / worker / review 的 lane-local recommendation 占位
+- [ ] `control_observer` 默认 bypass delegated optimization
+- [ ] 保持 `main-agent direct` 默认 stable scope
+- [ ] 保持 `before_model_resolve` 不因 P2.5 baseline 自动放开
+
+### 主要文件
+
+- `extensions/octoclaw-runtime/policy/decide.js`
+- `extensions/octoclaw-runtime/policy/route.js`
+- `extensions/octoclaw-runtime/policy/model.js`
+- `extensions/octoclaw-runtime/index.js`
+- `lib/dispatch_task.py`
+- `lib/octopus_config.py`
+
+### 测试
+
+- [ ] `tests/test_dispatch_task.py`
+- [ ] `tests/test_runtime_policy.py`
+- [ ] `tests/test_runtime_policy_js_parity.py`
+- [ ] 增加 `control_observer` bypass case
+- [ ] 增加 delegated-only route recommendation case
+
+### 验收标准
+
+- `runner / spawn_*` 路径能拿到 recommendation
+- main-agent direct 默认行为不变
+- `control_observer` 不被 delegated recommendation 污染
 
 ### 支撑代码
 - `lib/runtime_policy_rollout.py`

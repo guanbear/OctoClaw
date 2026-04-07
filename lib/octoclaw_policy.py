@@ -24,6 +24,7 @@ from typing import Any
 
 from auto_router import build_auto_router_payload
 from octoclaw_route import infer_route
+from route_recommendation import build_route_recommendation
 from octoclaw_spawn import resolve_model_and_thinking
 from octopus_config import ROUTE_STICKINESS_FILE, load_json, load_octopus_config, save_json
 from runtime_protocol import BRIEF_SCHEMA_VERSION, WORKER_RESULT_SCHEMA_VERSION
@@ -677,6 +678,26 @@ def prompt_contract(protocol: str, route: str, work_contract: str, needs_review:
     }
 
 
+def pre_dispatch_ack_policy(route: str, work_type: str, phase: str, task_class: str = "") -> dict[str, Any]:
+    required = route in {"spawn_single", "spawn_multi"} and task_class != "control_observer"
+    text = "我先处理一下，稍后把结果告诉你。"
+    if route == "spawn_multi":
+        text = "我先分派处理一下，稍后把结果汇总给你。"
+    elif work_type == "research":
+        text = "我先查一下，马上给你结论。"
+    elif work_type == "review":
+        text = "我先核对一下，结果回来我帮你收口。"
+    elif work_type == "code" or phase == "implement":
+        text = "我先开一个子任务处理，结果回来我帮你收口。"
+    return {
+        "required": required,
+        "style": "brief_status",
+        "channel_delivery_preferred": required,
+        "fallback_to_progress_update": required,
+        "text": text if required else "",
+    }
+
+
 def tool_policy(route: str, dispatch_required: bool, task_class: str = "") -> dict[str, Any]:
     block_patterns: list[str] = []
     if dispatch_required and route in ("spawn_single", "spawn_multi"):
@@ -878,6 +899,17 @@ def build_decision(
     task_class = str(route_meta.get("task_class", "") or "")
     route_budget = budget_policy(features, route, work_contract, protocol, needs_review)
     prompt_policy = prompt_contract(protocol, route, work_contract, needs_review)
+    pre_dispatch_ack = pre_dispatch_ack_policy(route, work_type, phase, task_class)
+    route_recommendation = build_route_recommendation(
+        route_meta,
+        {
+            "route": route,
+            "worker_pool": worker_pool,
+            "work_type": work_type,
+            "phase": phase,
+            "model_band": model_band,
+        },
+    )
 
     decision = {
         "schema_version": SCHEMA_VERSION,
@@ -936,7 +968,9 @@ def build_decision(
             "review_worker_pool": "octoclaw-review" if needs_review else "",
             "review_trigger": "policy_required" if needs_review else "",
         },
+        "route_recommendation": route_recommendation,
         "prompt_contract": prompt_policy,
+        "pre_dispatch_ack": pre_dispatch_ack,
         "tool_policy": tool_policy(route, dispatch_required, task_class),
         "route_hint_policy": route_hint_policy,
         "runtime_switches": runtime_switches_summary(runtime_cfg),

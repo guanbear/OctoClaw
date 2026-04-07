@@ -74,8 +74,14 @@ const CODE_PATTERNS = {
 };
 
 const RESEARCH_PATTERNS = {
-  zh: [String.raw`(调研|对比|分析|研究|根因|方案|api|数据源|可行性)`],
-  en: [String.raw`\b(research|compare|analy|investigate|root cause|api|datasource|feasibility)\b`],
+  zh: [
+    String.raw`(调研|对比|分析|研究|根因|方案|api|数据源|可行性)`,
+    String.raw`((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))`,
+  ],
+  en: [
+    String.raw`\b(research|compare|analy|investigate|root cause|api|datasource|feasibility)\b`,
+    String.raw`\b((github|gitlab|repo|repository)\b.*\b(commit|release|tag|pull request|pr|issue|updates?)\b|(\bcommit|release|tag|pull request|pr|issue|updates?\b).*\b(github|gitlab|repo|repository))`,
+  ],
   ja: [String.raw`(調査|比較|分析|研究|根本原因|提案|実現可能性)`],
   ko: [String.raw`(조사|비교|분석|연구|근본 원인|제안|타당성)`],
   es: [String.raw`(investiga|compara|analiza|investigación|causa raíz|factibilidad)`],
@@ -84,8 +90,16 @@ const RESEARCH_PATTERNS = {
 };
 
 const EXTERNAL_LOOKUP_PATTERNS = {
-  zh: [String.raw`(天气|花粉|汇率|航班|酒店|机票|新闻|价格|行情|官网|接口文档|文档链接)`],
-  en: [String.raw`\b(weather|pollen|exchange rate|flight|hotel|price|news|official docs?|documentation)\b`],
+  zh: [
+    String.raw`(天气|花粉|汇率|航班|酒店|机票|新闻|价格|行情|官网|接口文档|文档链接)`,
+    String.raw`((github|gitlab|仓库|repo|repository).*(commit|release|tag|pr|mr|issue|更新)|((commit|release|tag|pr|mr|issue|更新).*(github|gitlab|仓库|repo|repository)))`,
+    String.raw`((今天|今日|最近).*(有更新吗|有没有更新|更新了什么)|((有更新吗|有没有更新|更新了什么).*(github|gitlab|仓库|repo|repository)))`,
+  ],
+  en: [
+    String.raw`\b(weather|pollen|exchange rate|flight|hotel|price|news|official docs?|documentation)\b`,
+    String.raw`\b((github|gitlab|repo|repository)\b.*\b(commit|release|tag|pull request|pr|issue|updates?)\b|(\bcommit|release|tag|pull request|pr|issue|updates?\b).*\b(github|gitlab|repo|repository))`,
+    String.raw`\b(any|latest|recent|today'?s)\s+updates?\b.*\b(github|gitlab|repo|repository)\b`,
+  ],
 };
 
 const WRITE_PATTERNS = {
@@ -365,8 +379,23 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
   );
 
+  const repoActivityLookup = Boolean(
+    /(github|gitlab|仓库|repo|repository)/iu.test(text)
+      && /(commit|release|tag|pr|mr|issue|更新)/iu.test(text)
+      && /(有没有|有更新吗|更新了什么|今天|今日|最近|latest|recent|today|updates?)/iu.test(text),
+  );
+
+  let effectiveResearchHits = researchHits;
+  let effectiveExternalLookupHits = externalLookupHits;
+  let effectiveMutationHits = mutationHits;
+  if (repoActivityLookup) {
+    effectiveResearchHits = Math.max(effectiveResearchHits, 1);
+    effectiveExternalLookupHits = Math.max(effectiveExternalLookupHits, 1);
+    effectiveMutationHits = 0;
+  }
+
   let effectiveWriteHits = writeHits;
-  if (summaryOutputHits > 0 && codeHits === 0 && researchHits === 0 && mutationHits === 0) {
+  if (summaryOutputHits > 0 && codeHits === 0 && effectiveResearchHits === 0 && effectiveMutationHits === 0) {
     effectiveWriteHits = 0;
   }
   if (
@@ -374,8 +403,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     && runnerReadOnlyIntentHits > 0
     && runnerTargetHits > 0
     && codeHits === 0
-    && researchHits === 0
-    && mutationHits === 0
+    && effectiveResearchHits === 0
+    && effectiveMutationHits === 0
   ) {
     effectiveWriteHits = 0;
   }
@@ -389,7 +418,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     && runnerTargetHits === 0
     && runnerNegativeHits === 0
     && codeHits === 0
-    && researchHits === 0
+    && effectiveResearchHits === 0
     && effectiveWriteHits === 0
     && summaryOutputHits === 0
     && multiStepHits === 0
@@ -399,16 +428,15 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     && remoteTargetHits === 0
     && verifyHits === 0
     && implementHits === 0
-      && mutationHits === 0
+    && effectiveMutationHits === 0
   );
-
   const taskProgressCandidate = Boolean(
     taskProgressHits > 0
       && rawTask.length <= 80
       && !normalizedCommand
       && runnerHits === 0
       && codeHits === 0
-      && researchHits === 0
+      && effectiveResearchHits === 0
       && effectiveWriteHits === 0
       && summaryOutputHits === 0
       && multiStepHits === 0
@@ -416,18 +444,18 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       && highRiskHits === 0
       && verifyHits === 0
       && implementHits === 0
-      && mutationHits === 0,
+      && effectiveMutationHits === 0,
   );
   const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0 || taskProgressCandidate);
 
   let estimatedSteps = 1;
   if (multiStepHits > 0) estimatedSteps += 1;
-  if (researchHits > 0) estimatedSteps += 1;
+  if (effectiveResearchHits > 0) estimatedSteps += 1;
   if (codeHits > 0) estimatedSteps += 1;
   if (effectiveWriteHits > 0) estimatedSteps += 1;
   if (parallelHits > 0) estimatedSteps += 1;
   if (verifyHits > 0) estimatedSteps += 1;
-  if (mutationHits > 0) estimatedSteps += 1;
+  if (effectiveMutationHits > 0) estimatedSteps += 1;
   if (rawTask.length > 140) estimatedSteps += 1;
 
   let taskShape = "single_step";
@@ -435,16 +463,16 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   else if (estimatedSteps >= 2) taskShape = "multi_step";
 
   let contextGrowth = "low";
-  if (codeHits > 0 || localStateHits > 0 || verifyHits > 0 || mutationHits > 0) {
+  if (codeHits > 0 || localStateHits > 0 || verifyHits > 0 || effectiveMutationHits > 0) {
     contextGrowth = "medium";
   }
-  if (estimatedSteps >= 4 || mutationHits > 0 || (researchHits > 0 && (codeHits > 0 || writeHits > 0))) {
+  if (estimatedSteps >= 4 || effectiveMutationHits > 0 || (effectiveResearchHits > 0 && (codeHits > 0 || writeHits > 0))) {
     contextGrowth = "high";
   }
 
   let latencySensitivity = "normal";
   if (localStateHits > 0 || normalizedCommand) latencySensitivity = "high";
-  else if (externalLookupHits > 0 && researchHits === 0 && codeHits === 0) latencySensitivity = "normal";
+  else if (effectiveExternalLookupHits > 0 && effectiveResearchHits === 0 && codeHits === 0) latencySensitivity = "normal";
 
   const observationSignal = Boolean(
     observerControlCandidate
@@ -470,8 +498,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     task_progress_candidate: taskProgressCandidate,
     explicit_local_probe: explicitLocalProbe,
     code_hits: codeHits,
-    research_hits: researchHits,
-    external_lookup_hits: externalLookupHits,
+    research_hits: effectiveResearchHits,
+    external_lookup_hits: effectiveExternalLookupHits,
     write_hits: writeHits,
     summary_output_hits: summaryOutputHits,
     multi_step_hits: multiStepHits,
@@ -481,7 +509,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     local_state_hits: localStateHits,
     verify_hits: verifyHits,
     implement_hits: implementHits,
-    mutation_hits: mutationHits,
+    mutation_hits: effectiveMutationHits,
+    repo_activity_hits: repoActivityLookup ? 1 : 0,
     cost_sensitive_hits: costSensitiveHits,
     semantic_ambiguity_hits: semanticAmbiguityHits,
     continuation_hits: continuationHits,
@@ -489,24 +518,24 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     remote_target_hits: remoteTargetHits,
     requires_tools: observationSignal,
     requires_code_work: codeHits > 0,
-    requires_research: researchHits > 0,
-    requires_mutation: mutationHits > 0 || (implementHits > 0 && (codeHits > 0 || localStateHits > 0)),
-    external_lookup_only: externalLookupHits > 0 && researchHits === 0 && codeHits === 0 && writeHits === 0,
+    requires_research: effectiveResearchHits > 0,
+    requires_mutation: effectiveMutationHits > 0 || (implementHits > 0 && (codeHits > 0 || localStateHits > 0)),
+    external_lookup_only: effectiveExternalLookupHits > 0 && effectiveResearchHits === 0 && codeHits === 0 && writeHits === 0,
     requires_writing: effectiveWriteHits > 0,
     estimated_steps: estimatedSteps,
     task_shape: taskShape,
     multi_step: estimatedSteps >= 2,
     parallelizable: (
       parallelHits > 0
-      || (researchHits > 0 && writeHits > 0 && multiStepHits > 0)
+      || (effectiveResearchHits > 0 && writeHits > 0 && multiStepHits > 0)
       || (verifyHits > 0 && (codeHits > 0 || implementHits > 0))
     ),
     tool_observation_only: (
       observationSignal
-      && mutationHits === 0
+      && effectiveMutationHits === 0
       && implementHits === 0
       && codeHits === 0
-      && researchHits === 0
+      && effectiveResearchHits === 0
       && effectiveWriteHits === 0
     ),
     target_scope: remoteTargetHits > 0 ? "remote" : (localStateHits > 0 ? "local" : "generic"),
@@ -515,7 +544,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     followup_candidate: continuationHits > 0 || shortAckCandidate,
     context_growth: contextGrowth,
     latency_sensitivity: latencySensitivity,
-    simple_direct_candidate: simpleHits > 0 && runnerHits === 0 && codeHits === 0 && researchHits === 0 && localStateHits === 0,
+    simple_direct_candidate: simpleHits > 0 && runnerHits === 0 && codeHits === 0 && effectiveResearchHits === 0 && localStateHits === 0,
   };
 
   features.hard_runner_candidate = Boolean(
