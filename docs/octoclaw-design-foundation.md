@@ -1,6 +1,6 @@
 # OctoClaw 主设计底稿
 
-> 状态：当前 canonical 设计底稿（2026-04-04）  
+> 状态：当前 canonical 设计底稿（2026-04-07）
 > 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
 > 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
@@ -150,6 +150,8 @@ OctoClaw 当前真正负责的是四层增量：
 
 - `lib/auto_router.py`
 - `octoclaw_policy.build_decision().auto_router`
+- route recommendation seam
+- delegated pre-dispatch ack baseline
 
 P2.5 的正式设计与执行清单见：
 
@@ -281,6 +283,7 @@ P1 之后，运行时角色应固定成下面这张表：
 当前 P3/P4 的正式交互与显示 contract 已收口到：
 
 - [`octoclaw-im-display-contract.md`](./octoclaw-im-display-contract.md)
+- [`octoclaw-p3-p4-post-signoff-handoff.md`](./octoclaw-p3-p4-post-signoff-handoff.md)
 
 这意味着旧文档中关于：
 
@@ -292,6 +295,17 @@ P1 之后，运行时角色应固定成下面这张表：
 并不是“过时到可以忽略”，而是：
 
 > **很多已经进入基础实现，但还没有完全收口成一份更稳定的产品化描述。**
+
+2026-04-06 之后，这条线已经进一步进入：
+
+- **P3 signoff 已完成**
+- **P4 transition signoff 已完成**
+
+但这里的 signoff 语义是：
+
+- P3 的 surface ownership / interaction contract 已冻结
+- P4 的 native-preferred posture / cleanup policy / substrate display contract 已冻结
+- 还**不等于**所有表面都已经 full substrate-first
 
 ### 5.4 artifact/retrieve/display surface：已不是未来设想
 
@@ -309,6 +323,12 @@ P1 之后，运行时角色应固定成下面这张表：
 - **CLI / text-first operator surface：已基础可用**
 - **IM anchor / thread / fallback interaction：已基础可用**
 - **Web/UI cockpit / richer capability matrix parity：仍在后续主战场**
+
+P3/P4 signoff 之后，后续主线不应再回头重写 capability matrix，而应继续推进：
+
+- `display` 从 `mixed` 收到 substrate-first
+- `retrieve` 从 `mixed` 收到 substrate-first
+- `observer` / `review` 从 `not-yet-evidenced` 推进到有明确 substrate-aware surface
 
 ---
 

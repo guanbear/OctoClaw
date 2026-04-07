@@ -1,6 +1,6 @@
 # OctoClaw 执行计划
 
-> 状态：当前 canonical 执行计划（2026-04-04）  
+> 状态：当前 canonical 执行计划（2026-04-07）
 > 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
 > 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
@@ -28,11 +28,13 @@
 #### A. substrate / continuity / observer baseline
 - taskflow-bound runner jobs
 - native taskflow control metadata
+- managed TaskFlow substrate for eligible delegation
 - session resume context persistence
 - runtime observer
 - on-demand runner fallback
 - patrol observation pass 收口
 - unified `octoclawctl` control entrypoint
+- delegated pre-dispatch ack baseline
 
 #### B. feedback loop baseline
 - runtime-policy replay log
@@ -204,6 +206,12 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
   - `lib/auto_router.py`
   - `octoclaw_policy.build_decision().auto_router`
 
+### 当前已落的 baseline（2026-04-07）
+- `lib/auto_router.py` 已输出 internal-first recommendation payload
+- `build_decision().auto_router` 已进入主策略决策对象
+- route recommendation seam 已显式进入 policy/runtime 边界
+- delegated pre-dispatch ack 已进入 runtime baseline
+
 ### 这条线的约束
 
 - 不把 OctoClaw 完整 runtime 直接等同于 router
@@ -246,6 +254,16 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 哪些 channel 已经“够用”，哪些只是基本 fallback
 - 当前 contract 文档：
   - [`octoclaw-im-display-contract.md`](./octoclaw-im-display-contract.md)
+  - [`octoclaw-p3-p4-post-signoff-handoff.md`](./octoclaw-p3-p4-post-signoff-handoff.md)
+
+### 当前状态（2026-04-07）
+- P3 contract 已完成 signoff 并冻结：
+  - surface ownership
+  - interaction state machine
+  - action taxonomy
+  - capability matrix
+  - accepted fallback / gap ledger
+- 后续不应再回头重定义 P3 的角色边界，而应在既有 contract 下继续收口体验与验证
 
 ---
 
@@ -272,11 +290,18 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - simple `spawn_multi -> linear flow` 的收口路径
 - legacy mirror / fallback 清理顺序
 
-### 当前已落的 baseline（2026-04-06）
+### 当前已落的 baseline（2026-04-07）
 - `task_display_cli substrate` 已能输出 substrate inventory
 - taskflow binding 已显式暴露 `create_preference / create_status`
 - simple `spawn_multi` 已能通过 `step_order / step_task_ids` 在 graph/timeline 上形成 linear flow baseline
 - taskflow mirror cleanup 已有 preview/apply contract，默认 retention `48h`
+- managed TaskFlow substrate 已进入 delegation 主链
+- `spawn_single` / `spawn_multi` 的 create posture 已冻结为 **native-preferred**
+- P4 已完成 transition signoff，但明确保留例外面：
+  - `display = mixed`
+  - `retrieve = mixed`
+  - `observer = not-yet-evidenced`
+  - `review = not-yet-evidenced`
 
 ### 这条线现在最具体的推进顺序
 1. `spawn_single`：从 mirror/binding-first 继续推进到 native-preferred create
