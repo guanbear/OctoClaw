@@ -364,22 +364,128 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ---
 
-## P5：压缩长期常驻件，但不要为了压缩而压缩
+## P5：做 runtime simplification，而不是继续扩 runtime
 
 ### 当前状态
-runner on-demand fallback 已经出现，observer 也已落地，说明系统确实在往“少常驻、强控制面”收口。
+P4 之后，系统已经具备这些前提：
 
-### 现在真正要判断的
-- 哪些 daemon/loop 是真正有复利价值的
-- 哪些只是历史过渡件
-- 哪些应该被 observer 或 on-demand path 吸收
+- substrate-first surfaces 已经建立
+- runtime observer 已经落地
+- `RUNNER_MODE=ondemand` 已经出现
+- `octoclawctl` 已经成为统一 operator 入口雏形
+- patrol / observer / runner 的边界开始收清
 
-### 原则
-不是为了进程更少而更少，而是为了：
+所以 P5 不再是“补一条新能力”，而是：
 
-- 降低状态漂移
-- 降低恢复复杂度
-- 降低 operator 心智负担
+> **把当前能跑的 runtime，收成更轻、更稳、更少历史包袱的正式运行时。**
+
+### 目标
+
+P5 要完成的不是“更炫的运行时”，而是 4 个收口目标：
+
+1. **observer 成为唯一 read-model truth producer**
+2. **patrol 收成 recovery + notify coordinator**
+3. **runner 默认走 on-demand，daemon 退成 opt-in acceleration**
+4. **ctl 成为唯一推荐 operator 入口**
+
+### 非目标
+
+P5 不应该顺手混进这些题：
+
+- 不重做 router / auto-router
+- 不重开 P3 的产品面大题
+- 不做大规模 Python -> TS 全量迁移
+- 不新增一套并行 backend 或新的长期常驻件
+- 不把 patrol 再做成第二个 runtime engine
+
+### 具体工作包
+
+#### P5A：Observer Centralization
+
+目标：
+
+- 把残留在 `status` / `patrol` / `task_display` / 其它 surface 里的自算真相逻辑继续往 `runtime_observer` / runtime snapshot 收
+
+完成标志：
+
+- `status / observe-once / detail / retrieve / review` 默认围绕同一份 substrate-aware read model
+- text surface 只是 observer render，不再各自维护另一套解释器
+
+#### P5B：Runner Simplification
+
+目标：
+
+- 让 `runner` 真正成为 execution lane，而不是默认常驻前提
+
+完成标志：
+
+- `RUNNER_MODE=ondemand` 成为主姿势
+- `daemon` 明确是 opt-in acceleration
+- 没有 resident runner heartbeat 时，不再天然视为 runtime 异常
+- runner 类任务在无常驻 runner 情况下也能完成 smoke
+
+#### P5C：Patrol Slimming
+
+目标：
+
+- 继续把 patrol 从“隐形主循环”收成 detect / reconcile / notify / bounded recovery 组件
+
+完成标志：
+
+- patrol 不再承担另一套主真相合成职责
+- detect-only / recover / notify 语义更清晰
+- patrol 停掉再拉起，不导致 runtime truth 漂移
+
+#### P5D：Operator Consolidation
+
+目标：
+
+- 日常运维默认只需要 `octoclawctl`
+
+完成标志：
+
+- 常用操作都可通过 `octoclawctl` 完成
+  - `status`
+  - `observe-once`
+  - `patrol-once`
+  - `runner-status`
+  - `ps`
+  - `up/down/restart`
+- 旧脚本退成 wrapper / compatibility shell，而不是 operator 的主心智
+
+#### P5E：Optional-Backend Preparation
+
+目标：
+
+- 把重 backend 明确降成增强层，为 P6 做准备
+
+完成标志：
+
+- tmux / ClawTeam / workbench / resident runner 更明确是 optional backend
+- 默认路径的核心价值继续来自
+  - OpenClaw substrate
+  - OctoClaw policy / observer / feedback / display
+
+### 实施原则
+
+- 基于 **OpenClaw 2026.4.5** 的 runtime / TaskFlow 语义继续收口
+- runtime hot path **优先 Node.js / JS**
+- Python 优先用于 offline analysis / nightly / calibration / compatibility glue
+- 不为“进程更少”而简化，而是为：
+  - 降低状态漂移
+  - 降低恢复复杂度
+  - 降低 operator 心智负担
+
+### 完成标准
+
+P5 关单前，至少应满足：
+
+1. `status / observe-once / runner-status / patrol-once` 读的是同一套 runtime truth
+2. `RUNNER_MODE=ondemand` 可以作为主姿势通过 smoke
+3. 没有常驻 runner 时，runner lane 仍可正常完成基础任务
+4. patrol 重启不会导致真相层分叉
+5. 维护者默认只靠 `octoclawctl` 就能完成日常观察与控制
+6. patrol 不再像第二套 runtime engine，runner 也不再像默认真相源
 
 ---
 

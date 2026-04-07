@@ -489,7 +489,7 @@ def save_task_state(path: str, data: dict):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def refresh_openclaw_taskflow_bindings(tasks: list[dict]) -> bool:
+def refresh_openclaw_taskflow_bindings(tasks: list[dict], *, persist: bool = True) -> bool:
     if not isinstance(tasks, list) or not tasks:
         return False
     try:
@@ -518,8 +518,9 @@ def refresh_openclaw_taskflow_bindings(tasks: list[dict]) -> bool:
         refreshed.append(enriched)
         if enriched != task:
             changed = True
-    if changed:
+    if changed and persist:
         save_task_state(TASK_STATE_FILE, {"tasks": refreshed, "updated_at": datetime.now(timezone.utc).isoformat()})
+    if changed:
         tasks[:] = refreshed
     return changed
 
@@ -607,36 +608,59 @@ def maybe_restart_runner() -> bool:
         return False
 
 
-def reload_observed_tasks() -> list[dict]:
+def reload_observed_tasks(*, persist: bool = True) -> list[dict]:
     tasks = load_tasks()
     if not tasks:
         return []
-    tasks = annotate_tasks_with_session_state(tasks)
-    refresh_openclaw_taskflow_bindings(tasks)
+    tasks = annotate_tasks_with_session_state(tasks, persist=persist)
+    refresh_openclaw_taskflow_bindings(tasks, persist=persist)
     return tasks
+
+
+def observe_runtime_read_model(workspace: str = WORKSPACE) -> dict[str, Any]:
+    base_snapshot = observe_runtime_snapshot(workspace=workspace)
+    runner_health = base_snapshot.get("runner_health", {}) if isinstance(base_snapshot.get("runner_health"), dict) else {}
+    runner_mode = str(base_snapshot.get("runner_execution_mode", "") or resolve_runner_mode())
+    tasks = reload_observed_tasks(persist=False)
+    queue_counts = base_snapshot.get("queue_counts", {}) if isinstance(base_snapshot.get("queue_counts"), dict) else {}
+    return build_runtime_snapshot(
+        workspace=workspace,
+        tasks=tasks,
+        runner_health=runner_health,
+        runner_execution_mode=runner_mode,
+        queue_counts=queue_counts,
+        changes={
+            "progress_hydrated": 0,
+            "results_hydrated": 0,
+            "heartbeat_reassigned": 0,
+            "dead_agent_recovered": 0,
+        },
+        recovered_task_ids=[],
+        heartbeat_reassigned_task_ids=[],
+    )
 
 
 def observe_runtime_state_once(workspace: str = WORKSPACE) -> dict[str, Any]:
     base_snapshot = observe_runtime_snapshot(workspace=workspace)
     runner_health = base_snapshot.get("runner_health", {}) if isinstance(base_snapshot.get("runner_health"), dict) else {}
     runner_mode = str(base_snapshot.get("runner_execution_mode", "") or resolve_runner_mode())
-    tasks = reload_observed_tasks()
+    tasks = reload_observed_tasks(persist=True)
 
     progress_hydrated = hydrate_session_progress_markers(tasks)
     if progress_hydrated > 0:
-        tasks = reload_observed_tasks()
+        tasks = reload_observed_tasks(persist=True)
 
     hydrated = hydrate_completed_session_results(tasks)
     if hydrated > 0:
-        tasks = reload_observed_tasks()
+        tasks = reload_observed_tasks(persist=True)
 
     heartbeat_reassigned = patrol_heartbeat_check(workspace)
     if heartbeat_reassigned:
-        tasks = reload_observed_tasks()
+        tasks = reload_observed_tasks(persist=True)
 
     recovered = recover_dead_agent_tasks(tasks)
     if recovered:
-        tasks = reload_observed_tasks()
+        tasks = reload_observed_tasks(persist=True)
 
     queue_counts = base_snapshot.get("queue_counts", {}) if isinstance(base_snapshot.get("queue_counts"), dict) else {}
     return build_runtime_snapshot(
@@ -1463,7 +1487,7 @@ def hydrate_completed_session_results(tasks: list[dict]) -> int:
     return hydrated
 
 
-def annotate_tasks_with_session_state(tasks: list) -> list:
+def annotate_tasks_with_session_state(tasks: list, *, persist: bool = True) -> list:
     """
     为 running/dispatched/queued 任务补充 session 观测字段，并回写 task-state.json。
     这一步让 patrol 不再只靠文件状态猜任务状态。
@@ -1585,20 +1609,21 @@ def annotate_tasks_with_session_state(tasks: list) -> list:
         if previous_resume_state in {"stale", "recovered", "ready"} and updates["resume_state"] == "active":
             resumed_events.append(dict(task))
 
-    if changed:
+    if changed and persist:
         save_task_state(TASK_STATE_FILE, state)
-    for task in resumed_events:
-        append_task_event(
-            task,
-            "worker_resumed",
-            message=str(task.get("summary") or task.get("task_description") or task.get("id") or "worker resumed"),
-            extra={
-                "session_id": str(task.get("session_id", "") or ""),
-                "run_id": str(task.get("run_id", "") or ""),
-                "resume_state": str(task.get("resume_state", "") or ""),
-            },
-        )
-        sync_runtime_surfaces(task, thread_action="touch")
+    if persist:
+        for task in resumed_events:
+            append_task_event(
+                task,
+                "worker_resumed",
+                message=str(task.get("summary") or task.get("task_description") or task.get("id") or "worker resumed"),
+                extra={
+                    "session_id": str(task.get("session_id", "") or ""),
+                    "run_id": str(task.get("run_id", "") or ""),
+                    "resume_state": str(task.get("resume_state", "") or ""),
+                },
+            )
+            sync_runtime_surfaces(task, thread_action="touch")
     return tasks
 
 

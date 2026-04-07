@@ -15,9 +15,9 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import WORKSPACE
 
 try:
-    from patrol import observe_runtime_state_once
+    from patrol import observe_runtime_read_model
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.patrol import observe_runtime_state_once
+    from lib.patrol import observe_runtime_read_model
 
 try:
     from status_render import summarize_taskflow_substrate
@@ -98,7 +98,7 @@ def _review_surface_views(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return views[:5]
 
 def observe_runtime_once(*, workspace: str = WORKSPACE) -> dict[str, Any]:
-    payload = observe_runtime_state_once(workspace=workspace)
+    payload = observe_runtime_read_model(workspace=workspace)
     tasks = payload.get("tasks", []) if isinstance(payload.get("tasks", []), list) else []
     counts = Counter(str(task.get("status", "") or "").strip().lower() for task in tasks if isinstance(task, dict))
     active_tasks = int(counts.get("queued", 0) or 0) + int(counts.get("running", 0) or 0) + int(counts.get("dispatched", 0) or 0) + int(counts.get("pending_confirm", 0) or 0)
@@ -107,7 +107,9 @@ def observe_runtime_once(*, workspace: str = WORKSPACE) -> dict[str, Any]:
         "observed_at": str(payload.get("observed_at", "") or datetime.now(timezone.utc).astimezone().isoformat()),
         "workspace": workspace,
         "runner_health": payload.get("runner_health", {}),
-        "runner_execution_mode": str(payload.get("runner_execution_mode", "") or "daemon"),
+        "runner_execution_mode": str(payload.get("runner_execution_mode", "") or "ondemand"),
+        "queue_counts": payload.get("queue_counts", {}) if isinstance(payload.get("queue_counts", {}), dict) else {},
+        "workbench": payload.get("workbench", {}) if isinstance(payload.get("workbench", {}), dict) else {},
         "substrate": summarize_taskflow_substrate(tasks),
         "surface_status": {
             "display": "substrate_first",
@@ -138,6 +140,40 @@ def observe_runtime_once(*, workspace: str = WORKSPACE) -> dict[str, Any]:
     }
 
 
+def render_runner_status_text(payload: dict[str, Any]) -> str:
+    runner = payload.get("runner_health", {}) if isinstance(payload.get("runner_health", {}), dict) and payload.get("runner_health") else {}
+    if not runner:
+        runner = payload.get("runner", {}) if isinstance(payload.get("runner", {}), dict) else {}
+    queue_counts = payload.get("queue_counts", {}) if isinstance(payload.get("queue_counts", {}), dict) else {}
+    mode = str(payload.get("runner_execution_mode", "") or "").strip() or str(runner.get("mode", "") or "").strip() or "ondemand"
+    state = str((payload.get("runner", {}) if isinstance(payload.get("runner", {}), dict) else {}).get("state", "") or runner.get("reason", "") or "on-demand").strip()
+    lines = [
+        f"Runner status [{str(payload.get('observed_at', '') or '').strip()}]",
+        f"- Mode: {mode}",
+        f"- State: {state}",
+        (
+            f"- Queue: queued {int(queue_counts.get('queued', 0) or 0)} · "
+            f"running {int(queue_counts.get('running', 0) or 0)} · "
+            f"done {int(queue_counts.get('done', 0) or 0)} · "
+            f"failed {int(queue_counts.get('failed', 0) or 0)} · "
+            f"total {int(queue_counts.get('total', 0) or 0)}"
+        ),
+    ]
+    worker_id = str(runner.get("worker_id", "") or "").strip()
+    job_id = str(runner.get("job_id", "") or "").strip()
+    age = runner.get("age_seconds")
+    details = []
+    if worker_id:
+        details.append(f"worker {worker_id}")
+    if job_id:
+        details.append(f"job {job_id}")
+    if isinstance(age, int):
+        details.append(f"age {age}s")
+    if details:
+        lines.append("- " + " · ".join(details))
+    return "\n".join(lines)
+
+
 def render_observer_text(payload: dict[str, Any]) -> str:
     runner = payload.get("runner_health", {}) if isinstance(payload.get("runner_health", {}), dict) and payload.get("runner_health") else {}
     if not runner:
@@ -155,7 +191,7 @@ def render_observer_text(payload: dict[str, Any]) -> str:
         }
     active_substrate_tasks = payload.get("active_substrate_tasks", []) if isinstance(payload.get("active_substrate_tasks", []), list) else []
     review_surfaces = payload.get("review_surfaces", []) if isinstance(payload.get("review_surfaces", []), list) else []
-    runner_mode = str(payload.get("runner_execution_mode", "") or "").strip() or ("daemon" if runner.get("present", False) else "on_demand")
+    runner_mode = str(payload.get("runner_execution_mode", "") or "").strip() or ("daemon" if runner.get("present", False) else "ondemand")
     runner_state = "healthy"
     if not runner.get("present", False):
         runner_state = "on-demand"
@@ -237,9 +273,9 @@ def render_observer_text(payload: dict[str, Any]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Observe and refresh OctoClaw runtime state once")
+    parser = argparse.ArgumentParser(description="Observe OctoClaw runtime state once")
     parser.add_argument("--workspace", default=WORKSPACE)
-    parser.add_argument("--format", choices=["text", "json"], default="text")
+    parser.add_argument("--format", choices=["text", "json", "runner"], default="text")
     return parser
 
 
@@ -248,6 +284,8 @@ def main() -> None:
     payload = observe_runtime_once(workspace=args.workspace)
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+    elif args.format == "runner":
+        print(render_runner_status_text(payload))
     else:
         print(render_observer_text(payload))
 

@@ -528,6 +528,68 @@ anchor、thread binding、notification backend、task actions 已经存在；但
 
 当前 Python 在 glue code、nightly review、taskflow/control-plane 里仍承担大量角色；要不要迁、迁哪些，必须建立在已经落地的真实行为之上，而不是抽象洁癖。
 
+### 8.5 P5 的真正主题不是“加能力”，而是 runtime simplification
+
+P4 收口之后，下一阶段不该再把主线理解成：
+
+- 再补一个新 backend
+- 再扩一套新的 operator workflow
+- 再让 patrol / runner / status 各自长一套逻辑
+
+P5 更准确的定义应是：
+
+> **把已经能跑的 OctoClaw，收成更轻、更稳、更少历史包袱的正式 runtime。**
+
+它的主目标不是能力扩张，而是四件事：
+
+1. **observer 成为唯一 read-model truth producer**
+   - `status / observe / detail / retrieve / review` 尽量围绕同一份 runtime snapshot / substrate-aware read model
+2. **patrol 收成 recovery + notify coordinator**
+   - patrol 负责 detect / reconcile / notify / bounded recovery
+   - 不再暗中承担另一套主生命周期引擎
+3. **runner 收成 lane，而不是常驻真相层**
+   - `RUNNER_MODE=ondemand` 应成为默认心智
+   - `daemon` 是 opt-in acceleration，不是系统成立前提
+4. **ctl 成为统一 operator 入口**
+   - 维护者默认通过 `octoclawctl` 观察、控制、诊断
+   - 而不是记忆分散脚本和隐含守护进程关系
+
+这条线和 P4 不同：
+
+- **P4** 是 `substrate-first`
+- **P5** 是 `runtime-first simplification`
+
+这也意味着，P5 的实现原则应明确成：
+
+- **基于 OpenClaw 2026.4.5 runtime / TaskFlow 语义继续收口**
+- **runtime hot path 优先 Node.js / JS**
+- **Python 更偏 offline analysis / nightly / calibration / compatibility glue**
+
+如果 P5 做对，最终系统心智应变成：
+
+```text
+OpenClaw substrate
+  -> native task / TaskFlow truth
+
+OctoClaw runtime observer
+  -> read-model / snapshot / text surfaces
+
+OctoClaw patrol
+  -> detect / reconcile / notify / bounded recovery
+
+OctoClaw execution lanes
+  -> direct / runner / spawn_single / spawn_multi
+  -> runner defaults to ondemand, daemon is optional acceleration
+
+OctoClaw operator control
+  -> octoclawctl as the primary entrypoint
+
+Optional heavy backends
+  -> tmux / ClawTeam / workbench / resident runner
+```
+
+也就是说，P5 不该再创造一套新 runtime，而是要把当前 transition state 继续压缩掉。
+
 ---
 
 ## 9. 文档分级结论（重新解释）

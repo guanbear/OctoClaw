@@ -55,7 +55,7 @@ from octopus_config import (
     load_octopus_config,
     workbench_config,
 )
-from runtime_snapshot import observe_runtime_snapshot
+from runtime_observer import observe_runtime_once
 from clawteam_bridge import load_bridge_summary
 from model_health import load_model_health_state
 from main_model_drift import assess_main_model_drift, load_actual_main_model
@@ -89,7 +89,7 @@ now = datetime.now(timezone(timedelta(hours=8)))
 mode_data = load_json(MODE_FILE) or {}
 policy_data = load_json(MODEL_POLICY_FILE) or {}
 config_data = load_octopus_config()
-runtime_snapshot = observe_runtime_snapshot()
+runtime_snapshot = observe_runtime_once()
 runner_mode = str(runtime_snapshot.get("runner_execution_mode", "") or "daemon")
 runner_health = runtime_snapshot.get("runner_health", {}) if isinstance(runtime_snapshot.get("runner_health"), dict) else {}
 runner_summary = runtime_snapshot.get("runner", {}) if isinstance(runtime_snapshot.get("runner"), dict) else {}

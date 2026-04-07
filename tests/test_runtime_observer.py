@@ -15,7 +15,7 @@ from lib import runtime_observer
 
 
 class RuntimeObserverTests(unittest.TestCase):
-    @patch("lib.runtime_observer.observe_runtime_state_once")
+    @patch("lib.runtime_observer.observe_runtime_read_model")
     def test_observe_runtime_once_runs_observation_pipeline(
         self,
         mock_observe,
@@ -59,6 +59,20 @@ class RuntimeObserverTests(unittest.TestCase):
         self.assertEqual(payload["surface_status"]["display"], "substrate_first")
         self.assertEqual(payload["active_substrate_tasks"][0]["taskflow_target"], "flow flow-1")
         mock_observe.assert_called_once_with(workspace="/tmp/octoclaw")
+
+    def test_render_runner_status_text_uses_observer_payload(self) -> None:
+        text = runtime_observer.render_runner_status_text(
+            {
+                "observed_at": "2026-04-07T18:00:00+08:00",
+                "runner": {"state": "on-demand", "mode": "ondemand", "present": False, "healthy": False},
+                "runner_execution_mode": "ondemand",
+                "queue_counts": {"queued": 2, "running": 0, "done": 5, "failed": 1, "total": 8},
+            }
+        )
+
+        self.assertIn("Mode: ondemand", text)
+        self.assertIn("State: on-demand", text)
+        self.assertIn("Queue: queued 2", text)
 
     def test_render_observer_text_includes_runner_and_change_summary(self) -> None:
         text = runtime_observer.render_observer_text(

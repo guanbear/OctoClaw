@@ -222,7 +222,7 @@ def build_runtime_snapshot(
 def observe_runtime_snapshot(*, workspace: str = WORKSPACE) -> dict[str, Any]:
     tasks = load_runtime_tasks()
     runner_health = load_runner_health()
-    runner_execution_mode = normalize_runner_mode(resolve_runner_mode()) or "daemon"
+    runner_execution_mode = normalize_runner_mode(resolve_runner_mode()) or "ondemand"
     queue_counts = load_runner_queue_counts()
     return build_runtime_snapshot(
         workspace=workspace,

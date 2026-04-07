@@ -82,7 +82,7 @@ class PatrolNotificationTests(unittest.TestCase):
         task = {"id": "runner-1", "status": "queued", "route": "runner"}
         mock_runner_health.return_value = {"present": False, "healthy": False, "reason": "missing"}
         mock_load_tasks.side_effect = [[task]]
-        mock_annotate.side_effect = lambda tasks: tasks
+        mock_annotate.side_effect = lambda tasks, persist=True: tasks
         mock_refresh.return_value = False
         mock_progress.return_value = 0
         mock_results.return_value = 0
@@ -93,6 +93,38 @@ class PatrolNotificationTests(unittest.TestCase):
 
         self.assertEqual(payload["runner_execution_mode"], "ondemand")
         self.assertEqual(payload["tasks"][0]["id"], "runner-1")
+
+    @patch("patrol.recover_dead_agent_tasks")
+    @patch("patrol.patrol_heartbeat_check")
+    @patch("patrol.hydrate_completed_session_results")
+    @patch("patrol.hydrate_session_progress_markers")
+    @patch("patrol.refresh_openclaw_taskflow_bindings")
+    @patch("patrol.annotate_tasks_with_session_state")
+    @patch("patrol.load_tasks")
+    def test_observe_runtime_read_model_is_read_only(
+        self,
+        mock_load_tasks,
+        mock_annotate,
+        mock_refresh,
+        mock_progress,
+        mock_results,
+        mock_heartbeat,
+        mock_recover,
+    ) -> None:
+        task = {"id": "spawn-1", "status": "running", "route": "spawn_single"}
+        mock_load_tasks.return_value = [task]
+        mock_annotate.side_effect = lambda tasks, persist=True: tasks
+        mock_refresh.return_value = False
+
+        payload = patrol.observe_runtime_read_model("/tmp/octoclaw")
+
+        self.assertEqual(payload["tasks"][0]["id"], "spawn-1")
+        mock_annotate.assert_called_once_with([task], persist=False)
+        mock_refresh.assert_called_once()
+        self.assertFalse(mock_progress.called)
+        self.assertFalse(mock_results.called)
+        self.assertFalse(mock_heartbeat.called)
+        self.assertFalse(mock_recover.called)
 
     @patch("patrol.save_task_state")
     @patch("patrol.list_native_openclaw_tasks")

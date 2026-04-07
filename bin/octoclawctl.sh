@@ -28,7 +28,20 @@ RUNNER_DEFAULT_TIMEOUT_SECONDS="${RUNNER_DEFAULT_TIMEOUT_SECONDS:-120}"
 RUNNER_MAX_AGE_MINUTES="${RUNNER_MAX_AGE_MINUTES:-120}"
 RUNNER_MAX_IDLE_SECONDS="${RUNNER_MAX_IDLE_SECONDS:-900}"
 RUNNER_MAX_JOBS_PER_WORKER="${RUNNER_MAX_JOBS_PER_WORKER:-30}"
-RUNNER_MODE="${RUNNER_MODE:-daemon}"
+RUNNER_MODE="${RUNNER_MODE:-}"
+if [ -z "$RUNNER_MODE" ]; then
+    RUNNER_MODE="$("$PYTHON_BIN" -c "import sys; sys.path.insert(0, '$LIB_DIR'); from octopus_config import resolve_runner_mode; print(resolve_runner_mode())")"
+fi
+case "$RUNNER_MODE" in
+    on_demand)
+        RUNNER_MODE="ondemand"
+        ;;
+    daemon|ondemand)
+        ;;
+    *)
+        RUNNER_MODE="ondemand"
+        ;;
+esac
 
 OPENCLAW_SERVICE="${OPENCLAW_SERVICE:-openclaw.service}"
 RUNNER_SERVICE="${RUNNER_SERVICE:-octoclaw-runner.service}"
@@ -79,8 +92,8 @@ Examples:
   bash bin/octoclawctl.sh observe-once
 
 Runtime env:
-  RUNNER_MODE=daemon    keep resident runner mode (default)
-  RUNNER_MODE=ondemand  skip resident runner; dispatch will trigger one-shot runner passes when needed
+  RUNNER_MODE=ondemand  skip resident runner; dispatch will trigger one-shot runner passes when needed (default)
+  RUNNER_MODE=daemon    keep resident runner mode as opt-in acceleration
 EOF
 }
 
@@ -341,12 +354,12 @@ restart_patrol_runtime() {
 
 run_patrol_once() {
     export WORKSPACE
-    "$PYTHON_BIN" "$PATROL_PY" --force
+    "$PYTHON_BIN" "$PATROL_PY"
 }
 
 run_runner_status() {
     export WORKSPACE
-    "$PYTHON_BIN" "$RUNNER_QUEUE_PY" status
+    "$PYTHON_BIN" "$RUNTIME_OBSERVER_PY" --workspace "$WORKSPACE" --format runner
 }
 
 run_observer_once() {
