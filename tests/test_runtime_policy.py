@@ -351,6 +351,17 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
         self.assertIn("workflow_meta_control_contract", payload["route_decision"]["reason_codes"])
 
+    def test_exact_current_model_phrase_prefers_direct_control_lane(self) -> None:
+        payload = self.run_policy("你是啥模型")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertTrue(payload["tool_policy"]["control_observer_only"])
+        self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
+        self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
+
     def test_workflow_provenance_question_prefers_direct_control_lane(self) -> None:
         payload = self.run_route("刚才的查询是子任务做的吗 是啥模型做的")
         self.assertEqual(payload["system_preferred_route"], "direct")
@@ -398,6 +409,65 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["work_type"], "research")
         self.assertEqual(payload["route_decision"]["phase"], "collect")
         self.assertEqual(payload["route_decision"]["work_contract"], "deliverable_work")
+
+    def test_model_speed_benchmark_query_prefers_runner_workflow(self) -> None:
+        payload = self.run_policy("你测试下 MiniMax-M2.7-highspeed 和 glm-5.1 的首token和 吞吐的速度")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
+        self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
+        self.assertEqual(payload["route_decision"]["phase"], "inspect")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertFalse(payload["route_recommendation"]["bypass_delegated_optimization"])
+
+    def test_policy_refreshes_model_health_feedback_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-policy-feedback-") as workspace:
+            octopus_dir = Path(workspace) / "tmp" / "octopus"
+            logs_dir = Path(workspace) / "logs"
+            octopus_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            (Path(workspace) / "tmp" / "octopus-config.json").write_text(
+                json.dumps(
+                    {
+                        "runtime_policy": {
+                            "model_health_feedback": {
+                                "enabled": True,
+                                "stale_after_seconds": 0,
+                                "lookback_hours": 24,
+                                "max_files": 7,
+                                "log_dir": str(logs_dir),
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (logs_dir / "gateway.err.log").write_text(
+                "2026-04-08T00:55:40.882+08:00 [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
+                encoding="utf-8",
+            )
+            env = {**os.environ, "WORKSPACE": workspace}
+            result = subprocess.run(
+                ["python3", str(POLICY_SCRIPT), "--task", "调研三个兼容方案并写一版简短建议"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+
+            health_path = octopus_dir / "model-health.json"
+            health = json.loads(health_path.read_text(encoding="utf-8"))
+            entry = health["models"]["minimax-portal/MiniMax-M2.7-highspeed"]
+            self.assertEqual(entry["recent_failover_count"], 1)
+            self.assertEqual(entry["last_error_reason"], "failover")
+            self.assertEqual(
+                health["sources"]["model_fallback_log_backfill"]["event_count"],
+                1,
+            )
 
     def test_task_details_command_prefers_direct_control_lane(self) -> None:
         payload = self.run_route("details task-123")

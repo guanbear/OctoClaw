@@ -236,6 +236,18 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertIn("systemctl list-timers", payload["command"])
         self.assertEqual(payload["probe_spec"]["checks"], ["crontab", "systemd_timers"])
 
+    def test_model_benchmark_query_uses_model_telemetry_report_playbook(self) -> None:
+        payload = runner_playbooks.infer_runner_playbook("你测试下 MiniMax-M2.7-highspeed 和 glm-5.1 的首token和 吞吐的速度")
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["kind"], "model_telemetry_report")
+        self.assertIn("model_telemetry_report.py", payload["command"])
+        self.assertEqual(payload["probe_spec"]["kind"], "model_telemetry_report")
+        self.assertEqual(
+            payload["probe_spec"]["metrics"],
+            ["ttft_ms", "output_tps", "health_state", "fallback_failures"],
+        )
+        self.assertIn("runner_playbook_model_telemetry_report", payload["reason_codes"])
+
     def test_dispatch_runner_reuses_precomputed_runner_plan(self) -> None:
         args = importlib.import_module("argparse").Namespace(
             task="检查一下 nginx error log 最近 80 行，然后总结问题",

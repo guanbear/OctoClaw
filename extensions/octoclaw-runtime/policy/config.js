@@ -149,6 +149,14 @@ const DEFAULT_RUNTIME_POLICY = {
     before_tool_call: true,
     agent_end: true,
   },
+  model_health_feedback: {
+    enabled: false,
+    stale_after_seconds: 120,
+    lookback_hours: 24,
+    max_files: 7,
+    log_dir: "",
+    log_file: "",
+  },
   skill_bundles: {
     ops: ["shell", "logs", "status"],
     research: ["web", "docs", "report"],

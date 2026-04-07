@@ -17,6 +17,8 @@ import re
 import shlex
 from typing import Iterable
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_TELEMETRY_REPORT_PY = os.path.join(SCRIPT_DIR, "model_telemetry_report.py")
 
 SYSTEM_METRIC_KEYWORDS = {
     "python": ["python", "python版本", "python version"],
@@ -103,6 +105,24 @@ ACCESS_LOG_TOKENS = [
     "access.log",
     "访问日志",
 ]
+
+MODEL_BENCHMARK_HINTS = [
+    "首token",
+    "首 token",
+    "ttft",
+    "吞吐",
+    "tokens/s",
+    "token/s",
+    "throughput",
+    "响应速度",
+    "测速",
+    "模型速度",
+]
+
+MODEL_REFERENCE_PATTERN = re.compile(
+    r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|(?:gpt|glm|minimax|claude|qwen|kimi|deepseek|gemini|sonnet|opus)[-A-Za-z0-9_.]*)",
+    re.IGNORECASE,
+)
 
 
 def contains_any(text: str, patterns: Iterable[str]) -> bool:
@@ -216,6 +236,38 @@ def build_system_summary_plan(task: str) -> dict | None:
         "reason_codes": ["runner_playbook_system_summary"],
         "confidence": 0.88,
     }
+
+
+def build_model_telemetry_report_plan(task: str) -> dict | None:
+    lowered = task.lower()
+    if not contains_any(lowered, MODEL_BENCHMARK_HINTS):
+        return None
+    model_refs = {value.lower() for value in MODEL_REFERENCE_PATTERN.findall(task)}
+    if not model_refs:
+        return None
+
+    base_command = f"python3 {shlex.quote(MODEL_TELEMETRY_REPORT_PY)} --task {shlex.quote(task)}"
+    plan = {
+        "kind": "model_telemetry_report",
+        "summary": "比较请求模型的本地速度与健康快照",
+        "command": base_command,
+        "probe_spec": {
+            "kind": "model_telemetry_report",
+            "task": task,
+            "models": sorted(model_refs),
+            "metrics": ["ttft_ms", "output_tps", "health_state", "fallback_failures"],
+        },
+        "reason_codes": ["runner_playbook_model_telemetry_report"],
+        "confidence": 0.93,
+    }
+    remote_target = extract_remote_target(task)
+    if remote_target:
+        plan["kind"] = "remote_model_telemetry_report"
+        plan["summary"] = f"比较 {remote_target} 上请求模型的本地速度与健康快照"
+        plan["command"] = wrap_remote_command(remote_target, base_command)
+        plan["reason_codes"] = [*plan["reason_codes"], f"remote_target:{remote_target}"]
+        plan["confidence"] = 0.95
+    return plan
 
 
 def build_version_probe_plan(task: str) -> dict | None:
@@ -460,6 +512,7 @@ def build_scheduler_health_plan(task: str) -> dict | None:
 
 def infer_runner_playbook(task: str) -> dict | None:
     for builder in (
+        build_model_telemetry_report_plan,
         build_version_probe_plan,
         build_system_summary_plan,
         build_local_file_probe_plan,

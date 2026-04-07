@@ -221,9 +221,11 @@ Python 不再承担：
 - [ ] protected lanes 不混入普通业务 auto-router 训练面
 - [x] 建立高频误判 goldens：
   - `你现在是啥模型`
+  - `你是啥模型`
   - `刚才是不是子任务做的`
   - `有没有走 dispatch`
   - `八爪鱼状态 / details / queue`
+  - 模型测速 / 首 token / 吞吐对比
 - [x] 建立 Python / JS / runtime 副本 parity check
 - [x] 把 protected lane 写入 replay / review / summary，支持 nightly diff：
   - `policy_resolved.protectedLane`
@@ -238,9 +240,16 @@ Python 不再承担：
 - [ ] `runner` 可消费 recommendation 中的 `profile / model_band / output_budget`
 - [ ] `spawn_single` 可消费 recommendation 中的 `worker_pool / profile / model candidate`
 - [ ] `spawn_multi` 先支持 parent planner / worker / review 的 lane-local recommendation 占位
-- [ ] `control_observer` 默认 bypass delegated optimization
-- [ ] 保持 `main-agent direct` 默认 stable scope
-- [ ] 保持 `before_model_resolve` 不因 P2.5 baseline 自动放开
+- [x] `control_observer` 默认 bypass delegated optimization
+- [x] 保持 `main-agent direct` 默认 stable scope
+- [x] 保持 `before_model_resolve` 不因 P2.5 baseline 自动放开
+- [x] 模型测速 / 比速 query 默认走 `runner + inspect_report`
+- [x] 增加 local telemetry snapshot workflow：
+  - `lib/model_telemetry_report.py`
+  - `runner_playbook_model_telemetry_report`
+- [x] gateway fallback plain-text log 可回灌 `model-health`
+- [x] stale-gated health feedback hook 已接到 Python policy 决策入口
+- [x] `model_health_feedback` 通过 runtime config 显式开关，不默认放开 main-agent override
 
 ### 主要文件
 
@@ -250,13 +259,20 @@ Python 不再承担：
 - `extensions/octoclaw-runtime/index.js`
 - `lib/dispatch_task.py`
 - `lib/octopus_config.py`
+- `lib/model_health_backfill.py`
+- `lib/model_telemetry_report.py`
+- `lib/runner_playbooks.py`
 
 ### 测试
 
 - [ ] `tests/test_dispatch_task.py`
-- [ ] `tests/test_runtime_policy.py`
-- [ ] `tests/test_runtime_policy_js_parity.py`
-- [ ] 增加 `control_observer` bypass case
+- [x] `tests/test_runtime_policy.py`
+- [x] `tests/test_runtime_policy_js_parity.py`
+- [x] `tests/test_route_goldens.py`
+- [x] `tests/test_runner_runtime.py`
+- [x] `tests/test_model_health_backfill.py`
+- [x] `tests/test_model_telemetry_report.py`
+- [x] 增加 `control_observer` bypass case
 - [ ] 增加 delegated-only route recommendation case
 
 ### 验收标准
@@ -265,6 +281,8 @@ Python 不再承担：
 - main-agent direct 默认行为不变
 - `control_observer` 不被 delegated recommendation 污染
 - 高优先级 workflow/meta 问题不再误落到 `spawn_single`
+- 模型测速类 query 不再误落到 `spawn_single`
+- fallback timeout/auth/failover 能进入 `model-health`
 - Python / JS / 运行副本对同一 golden case 给出一致 lane
 
 ---

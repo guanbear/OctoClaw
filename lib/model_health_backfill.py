@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,14 @@ DEFAULT_OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME") or Path.home() / ".
 DEFAULT_LOG_DIR = DEFAULT_OPENCLAW_HOME / "logs"
 DEFAULT_LOOKBACK_HOURS = 24
 DEFAULT_MAX_FILES = 7
+DEFAULT_REFRESH_STALE_AFTER_SECONDS = 120
+
+PLAINTEXT_FALLBACK_PATTERN = re.compile(
+    r"^(?P<time>\S+)\s+\[model-fallback/decision\]\s+model fallback decision:\s+"
+    r"decision=(?P<decision>\S+)\s+requested=(?P<requested>\S+)\s+candidate=(?P<candidate>\S+)\s+"
+    r"reason=(?P<reason>\S+)\s+next=(?P<next>\S+)",
+    re.IGNORECASE,
+)
 
 
 def parse_timestamp(raw: str | None) -> datetime | None:
@@ -45,11 +54,15 @@ def discover_log_files(
     if not directory.exists():
         return []
 
-    candidates = sorted(
-        [path for path in directory.glob("openclaw*.log") if path.is_file()],
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
-    )
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    for pattern in ("openclaw*.log*", "gateway*.log*"):
+        for path in directory.glob(pattern):
+            if not path.is_file() or path in seen:
+                continue
+            seen.add(path)
+            candidates.append(path)
+    candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
     return candidates[: max(1, int(max_files or DEFAULT_MAX_FILES))]
 
 
@@ -60,6 +73,14 @@ def _maybe_decision_payload(record: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(value, dict) and str(value.get("event", "") or "").strip() == "model_fallback_decision":
             return value
     return None
+
+
+def _split_model_id(raw: str | None) -> tuple[str, str]:
+    text = str(raw or "").strip()
+    if "/" not in text:
+        return "", text
+    provider, model = text.split("/", 1)
+    return provider.strip(), model.strip()
 
 
 def extract_fallback_event(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -86,6 +107,37 @@ def extract_fallback_event(record: dict[str, Any]) -> dict[str, Any] | None:
         "next_candidate_model": str(payload.get("nextCandidateModel", "") or "").strip(),
         "allow_transient_cooldown_probe": bool(payload.get("allowTransientCooldownProbe")),
         "raw": payload,
+    }
+
+
+def extract_plaintext_fallback_event(line: str) -> dict[str, Any] | None:
+    match = PLAINTEXT_FALLBACK_PATTERN.search(str(line or "").strip())
+    if not match:
+        return None
+    provider, model = _split_model_id(match.group("candidate"))
+    if not provider or not model:
+        return None
+    next_provider, next_model = _split_model_id(match.group("next"))
+    return {
+        "time": match.group("time"),
+        "decision": str(match.group("decision") or "").strip().lower(),
+        "reason": str(match.group("reason") or "").strip().lower(),
+        "status": None,
+        "code": "",
+        "candidate_provider": provider,
+        "candidate_model": model,
+        "model_id": f"{provider}/{model}",
+        "next_candidate_provider": next_provider,
+        "next_candidate_model": next_model,
+        "allow_transient_cooldown_probe": False,
+        "raw": {
+            "decision": match.group("decision"),
+            "requested": match.group("requested"),
+            "candidate": match.group("candidate"),
+            "reason": match.group("reason"),
+            "next": match.group("next"),
+            "source": "plaintext_gateway_log",
+        },
     }
 
 
@@ -121,7 +173,14 @@ def load_fallback_events(
             try:
                 record = json.loads(text)
             except json.JSONDecodeError:
-                invalid_lines += 1
+                event = extract_plaintext_fallback_event(text)
+                if not event:
+                    invalid_lines += 1
+                    continue
+                timestamp = parse_timestamp(str(event.get("time", "") or ""))
+                if cutoff is not None and timestamp and timestamp < cutoff:
+                    continue
+                events.append(event)
                 continue
             if not isinstance(record, dict):
                 invalid_lines += 1
@@ -241,6 +300,62 @@ def apply_fallback_events_to_health(
     }
     save_json(output_path, payload)
     return payload
+
+
+def _feedback_updated_at(payload: dict[str, Any]) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+    sources = payload.get("sources", {}) if isinstance(payload.get("sources"), dict) else {}
+    source = sources.get("model_fallback_log_backfill", {}) if isinstance(sources.get("model_fallback_log_backfill"), dict) else {}
+    return (
+        parse_timestamp(str(source.get("updated_at", "") or ""))
+        or parse_timestamp(str(payload.get("generated_at", "") or ""))
+    )
+
+
+def refresh_model_health_feedback_if_stale(
+    *,
+    feedback_cfg: dict[str, Any] | None = None,
+    health_file: str = MODEL_HEALTH_FILE,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    cfg = feedback_cfg if isinstance(feedback_cfg, dict) else {}
+    if not bool(cfg.get("enabled", False)):
+        return {"enabled": False, "refreshed": False, "reason": "disabled"}
+
+    log_file = str(cfg.get("log_file", "") or "").strip()
+    log_dir = str(cfg.get("log_dir", "") or "").strip()
+    if not log_file and not log_dir:
+        return {"enabled": True, "refreshed": False, "reason": "missing_log_target"}
+
+    stale_after_seconds = max(0, int(cfg.get("stale_after_seconds", DEFAULT_REFRESH_STALE_AFTER_SECONDS) or DEFAULT_REFRESH_STALE_AFTER_SECONDS))
+    current = now or datetime.now(timezone.utc)
+    existing_payload = load_json(health_file)
+    updated_at = _feedback_updated_at(existing_payload if isinstance(existing_payload, dict) else {})
+    if updated_at is not None and stale_after_seconds > 0:
+        age_seconds = max(0, int((current - updated_at).total_seconds()))
+        if age_seconds < stale_after_seconds:
+            return {
+                "enabled": True,
+                "refreshed": False,
+                "reason": "fresh",
+                "updated_at": updated_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "age_seconds": age_seconds,
+            }
+
+    result = run_backfill(
+        log_file=log_file,
+        log_dir=log_dir,
+        health_file=health_file,
+        lookback_hours=int(cfg.get("lookback_hours", DEFAULT_LOOKBACK_HOURS) or DEFAULT_LOOKBACK_HOURS),
+        max_files=int(cfg.get("max_files", DEFAULT_MAX_FILES) or DEFAULT_MAX_FILES),
+    )
+    return {
+        "enabled": True,
+        "refreshed": not bool(result.get("skipped")),
+        "reason": str(result.get("reason", "") or ""),
+        "result": result,
+    }
 
 
 def run_backfill(

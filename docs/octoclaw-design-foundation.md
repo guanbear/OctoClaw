@@ -454,6 +454,8 @@ runner 不是单纯“长期常驻快腿”，而是：
    - `control_observer`
    - workflow/session provenance
    - task action / queue / details / status
+   - current-model / route / dispatch provenance
+   - model / fallback / workflow metadata query
 2. 再补 goldens / parity / replay regression
    - 先把高频误判收成 durable cases
    - 让 Python / JS / macmini 运行副本对齐
@@ -464,6 +466,27 @@ runner 不是单纯“长期常驻快腿”，而是：
 换句话说：
 
 > **误判治理首先是 contract-first / boundary-first 的系统工程，不是先上一个更聪明的小模型。**
+
+### 7.2.2 模型测速与健康反馈也应 workflow-first
+
+像“测试 MiniMax 和 GLM-5.1 的首 token / 吞吐速度”这类请求，本质上不是普通 research deliverable，
+也不是应该默认上 `spawn_single` 的 agent 任务。
+
+更合理的默认 contract 是：
+
+- `runner`
+- `inspect_report`
+- 读取本地 telemetry / health snapshot
+- 必要时再升级到更重的 benchmark workflow
+
+同样，主会话 fallback 中真实发生过的 `timeout / auth / failover` 也不应只留在 OpenClaw 日志里。
+它们应以受控、stale-gated 的方式回灌到 OctoClaw `model-health`，帮助后续 lane-local model selection 避开已知坏链路。
+
+这条反馈线的约束也必须和现有设计保持一致：
+
+- 允许回灌 `model-health`
+- 不默认打开 `direct_model_override`
+- 不因为这一拍就把主会话模型 silently 改掉
 
 ### 7.3 substrate-first truth
 

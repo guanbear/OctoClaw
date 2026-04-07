@@ -125,11 +125,19 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "config": {},
             },
             {
+                "task": "你是啥模型",
+                "config": {},
+            },
+            {
                 "task": "这次有没有走 dispatch",
                 "config": {},
             },
             {
                 "task": "查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗",
+                "config": {},
+            },
+            {
+                "task": "你测试下 MiniMax-M2.7-highspeed 和 glm-5.1 的首token和 吞吐的速度",
                 "config": {},
             },
             {

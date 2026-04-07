@@ -301,6 +301,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "before_tool_call": True,
             "agent_end": True,
         },
+        "model_health_feedback": {
+            "enabled": False,
+            "stale_after_seconds": 120,
+            "lookback_hours": 24,
+            "max_files": 7,
+            "log_dir": "",
+            "log_file": "",
+        },
         "skill_bundles": {
             "ops": ["shell", "logs", "status"],
             "research": ["web", "docs", "report"],

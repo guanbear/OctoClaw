@@ -112,6 +112,13 @@
 - 汇总后推送到 Slack / IM channel
 - 不在 nightly job 中自动修代码或自动补救任务
 
+#### E. workflow-meta 与模型测速先收回 workflow-first baseline
+- workflow/session provenance 问题默认留在 `direct + control_observer`
+- 不让“当前模型 / 有没有走 dispatch / 刚才是不是子任务做的”再误落到 delegated lane
+- 模型测速 / 首 token / 吞吐对比默认走 `runner + inspect_report`
+- OpenClaw gateway fallback log 以 stale-gated 方式回灌 `model-health`
+- 这条反馈线帮助 selection 避开坏链路，但不默认放开 main-agent `direct_model_override`
+
 ---
 
 ## 3. 新的优先级排序

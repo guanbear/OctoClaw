@@ -67,6 +67,27 @@ class ModelHealthBackfillTests(unittest.TestCase):
             self.assertEqual(events[0]["model_id"], "zhipu/GLM-5.1")
             self.assertEqual(events[1]["model_id"], "openai/gpt-5.4")
 
+    def test_load_fallback_events_extracts_plaintext_gateway_lines(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-fallback-log-") as tmpdir:
+            log_path = Path(tmpdir) / "gateway.err.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-04-08T00:55:40.882+08:00 [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1",
+                        "2026-04-08T00:55:43.100+08:00 [model-fallback/decision] model fallback decision: decision=candidate_succeeded requested=omniroute/cx/gpt-5.4 candidate=zhipu/GLM-5.1 reason=unknown next=none",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            events, meta = model_health_backfill.load_fallback_events(log_file=str(log_path))
+            self.assertFalse(meta["missing"])
+            self.assertEqual(len(events), 2)
+            self.assertEqual(events[0]["model_id"], "minimax-portal/MiniMax-M2.7-highspeed")
+            self.assertEqual(events[0]["reason"], "auth")
+            self.assertEqual(events[1]["model_id"], "zhipu/GLM-5.1")
+            self.assertEqual(events[1]["decision"], "candidate_succeeded")
+
     def test_apply_backfill_overwrites_previous_backfill_managed_counts(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-health-backfill-") as tmpdir:
             health_path = Path(tmpdir) / "model-health.json"
@@ -105,6 +126,42 @@ class ModelHealthBackfillTests(unittest.TestCase):
             self.assertEqual(entry["recent_429_count"], 1)
             self.assertEqual(entry["recent_failover_count"], 0)
             self.assertEqual(entry["last_error_reason"], "rate_limit")
+
+    def test_refresh_if_stale_runs_backfill_with_explicit_feedback_config(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-health-refresh-") as tmpdir:
+            tmp_path = Path(tmpdir)
+            log_path = tmp_path / "gateway.err.log"
+            health_path = tmp_path / "model-health.json"
+            log_path.write_text(
+                "2026-04-08T00:55:40.882+08:00 [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
+                encoding="utf-8",
+            )
+            result = model_health_backfill.refresh_model_health_feedback_if_stale(
+                feedback_cfg={
+                    "enabled": True,
+                    "stale_after_seconds": 0,
+                    "lookback_hours": 24,
+                    "max_files": 7,
+                    "log_dir": str(tmp_path),
+                },
+                health_file=str(health_path),
+            )
+            self.assertTrue(result["enabled"])
+            self.assertTrue(result["refreshed"])
+            self.assertEqual(result["result"]["event_count"], 1)
+
+            second = model_health_backfill.refresh_model_health_feedback_if_stale(
+                feedback_cfg={
+                    "enabled": True,
+                    "stale_after_seconds": 3600,
+                    "lookback_hours": 24,
+                    "max_files": 7,
+                    "log_dir": str(tmp_path),
+                },
+                health_file=str(health_path),
+            )
+            self.assertFalse(second["refreshed"])
+            self.assertEqual(second["reason"], "fresh")
 
 
 if __name__ == "__main__":

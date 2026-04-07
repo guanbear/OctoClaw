@@ -137,6 +137,16 @@ RUNNER_NEGATIVE_PATTERNS = {
     ),
 }
 
+MODEL_BENCHMARK_PATTERNS = {
+    "zh": (
+        r"(首\s*token|首token|首字延迟|首包延迟|首包|吞吐|tokens/s|token/s|tps|ttft|throughput|输出速度|响应速度)",
+        r"(测速|测一下速度|测下速度|测性能|速度对比|模型测速|模型速度|延迟对比)",
+    ),
+    "en": (
+        r"\b(first token|ttft|throughput|tokens/s|token/s|tps|latency|model speed|speed test|benchmark)\b",
+    ),
+}
+
 READ_ONLY_COMMAND_PATTERNS = [
     r"^\s*(grep|rg|tail|head|pwd|ls|find|cat|jq|awk|ss|ps|top|netstat|lsof)\b",
     r"^\s*sed\b(?!.*\s-i\b)",
@@ -527,6 +537,7 @@ TASK_PROGRESS_PATTERNS = {
 
 WORKFLOW_META_PATTERNS = {
     "zh": (
+        r"(你是啥模型|你是什么模型|现在啥模型|当前啥模型|现在啥model|当前啥model)",
         r"(你现在是啥模型|你现在是什么模型|现在是啥模型|现在是什么模型|当前是啥模型|当前是什么模型|现在用的啥模型|现在用的什么模型|当前用的啥模型|当前用的什么模型)",
         r"(主会话模型|策略主链|主链漂移|子任务模型|当前路由|现在走的是什么路由|这次走的是什么路由)",
         r"(刚才(那次|这个)?(查询|问题|任务)?是子任务做的吗|刚才(那次|这个)?(查询|问题|任务)?是不是子任务做的|是不是子任务做的|是不是主会话自己查的|是不是主agent自己查的)",
@@ -565,11 +576,26 @@ ROUTE_PATTERN_LIBRARY = {
     "OBSERVER_CONTROL_PATTERNS": OBSERVER_CONTROL_PATTERNS,
     "TASK_PROGRESS_PATTERNS": TASK_PROGRESS_PATTERNS,
     "WORKFLOW_META_PATTERNS": WORKFLOW_META_PATTERNS,
+    "MODEL_BENCHMARK_PATTERNS": MODEL_BENCHMARK_PATTERNS,
 }
+
+MODEL_REFERENCE_REGEX = re.compile(
+    r"(?:[a-z0-9_.-]+/[a-z0-9_.-]+|(?:gpt|glm|minimax|claude|qwen|kimi|deepseek|gemini|sonnet|opus)[-a-z0-9_.]*)",
+    re.IGNORECASE,
+)
 
 
 def count_matches(text: str, patterns: Iterable[str]) -> int:
     return sum(1 for pattern in patterns if re.search(pattern, text, re.IGNORECASE))
+
+
+def count_model_reference_hits(text: str) -> int:
+    hits: set[str] = set()
+    for value in MODEL_REFERENCE_REGEX.findall(str(text or "")):
+        normalized = str(value or "").strip().lower()
+        if len(normalized) >= 5:
+            hits.add(normalized)
+    return len(hits)
 
 
 def normalize_enabled_language_packs(runtime_cfg: dict | None = None) -> tuple[str, ...]:
@@ -645,6 +671,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     observer_control_hits = count_matches(text, resolve_language_patterns("OBSERVER_CONTROL_PATTERNS", enabled_packs))
     task_progress_hits = count_matches(text, resolve_language_patterns("TASK_PROGRESS_PATTERNS", enabled_packs))
     workflow_meta_hits = count_matches(text, resolve_language_patterns("WORKFLOW_META_PATTERNS", enabled_packs))
+    model_benchmark_hits = count_matches(text, resolve_language_patterns("MODEL_BENCHMARK_PATTERNS", enabled_packs))
+    model_reference_hits = count_model_reference_hits(text)
     command_read_only = command_looks_read_only(command)
     explicit_observer_command = bool(
         re.fullmatch(r"\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*", raw_task, re.IGNORECASE)
@@ -653,6 +681,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         or re.fullmatch(r"\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
     )
     workflow_meta_candidate = workflow_meta_hits > 0
+    model_benchmark_candidate = bool(model_benchmark_hits > 0 and model_reference_hits > 0 and not workflow_meta_candidate)
     repo_activity_lookup = bool(
         (
             re.search(r"(github|gitlab|仓库|repo|repository|项目)", text, re.IGNORECASE)
@@ -665,22 +694,37 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         )
     )
 
+    effective_research_hits = research_hits
+    effective_external_lookup_hits = external_lookup_hits
+    effective_mutation_hits = mutation_hits
     if repo_activity_lookup:
-        research_hits = max(research_hits, 1)
-        external_lookup_hits = max(external_lookup_hits, 1)
-        mutation_hits = 0
+        effective_research_hits = max(effective_research_hits, 1)
+        effective_external_lookup_hits = max(effective_external_lookup_hits, 1)
+        effective_mutation_hits = 0
+
+    effective_code_hits = code_hits
+    effective_local_state_hits = local_state_hits
+    effective_runner_negative_hits = runner_negative_hits
+    if model_benchmark_candidate:
+        effective_code_hits = 0
+        effective_research_hits = 0
+        effective_mutation_hits = 0
+        effective_local_state_hits = max(effective_local_state_hits, 1)
+        effective_runner_negative_hits = 0
 
     effective_write_hits = write_hits
-    if summary_output_hits > 0 and code_hits == 0 and research_hits == 0 and mutation_hits == 0:
+    if summary_output_hits > 0 and effective_code_hits == 0 and effective_research_hits == 0 and effective_mutation_hits == 0:
         effective_write_hits = 0
     if (
         explicit_local_probe
         and runner_read_only_intent_hits > 0
         and runner_target_hits > 0
-        and code_hits == 0
-        and research_hits == 0
-        and mutation_hits == 0
+        and effective_code_hits == 0
+        and effective_research_hits == 0
+        and effective_mutation_hits == 0
     ):
+        effective_write_hits = 0
+    if model_benchmark_candidate:
         effective_write_hits = 0
 
     short_ack_candidate = (
@@ -690,19 +734,19 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         and runner_hits == 0
         and runner_read_only_intent_hits == 0
         and runner_target_hits == 0
-        and runner_negative_hits == 0
-        and code_hits == 0
-        and research_hits == 0
+        and effective_runner_negative_hits == 0
+        and effective_code_hits == 0
+        and effective_research_hits == 0
         and effective_write_hits == 0
         and summary_output_hits == 0
         and multi_step_hits == 0
         and parallel_hits == 0
         and high_risk_hits == 0
-        and local_state_hits == 0
+        and effective_local_state_hits == 0
         and remote_target_hits == 0
         and verify_hits == 0
         and implement_hits == 0
-        and mutation_hits == 0
+        and effective_mutation_hits == 0
     )
 
     task_progress_candidate = bool(
@@ -725,9 +769,9 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     estimated_steps = 1
     if multi_step_hits > 0:
         estimated_steps += 1
-    if research_hits > 0:
+    if effective_research_hits > 0:
         estimated_steps += 1
-    if code_hits > 0:
+    if effective_code_hits > 0:
         estimated_steps += 1
     if effective_write_hits > 0:
         estimated_steps += 1
@@ -735,7 +779,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         estimated_steps += 1
     if verify_hits > 0:
         estimated_steps += 1
-    if mutation_hits > 0:
+    if effective_mutation_hits > 0:
         estimated_steps += 1
     if len(raw_task) > 140:
         estimated_steps += 1
@@ -747,15 +791,15 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         task_shape = "multi_step"
 
     context_growth = "low"
-    if code_hits > 0 or local_state_hits > 0 or verify_hits > 0 or mutation_hits > 0:
+    if effective_code_hits > 0 or effective_local_state_hits > 0 or verify_hits > 0 or effective_mutation_hits > 0:
         context_growth = "medium"
-    if estimated_steps >= 4 or mutation_hits > 0 or (research_hits > 0 and (code_hits > 0 or write_hits > 0)):
+    if estimated_steps >= 4 or effective_mutation_hits > 0 or (effective_research_hits > 0 and (effective_code_hits > 0 or write_hits > 0)):
         context_growth = "high"
 
     latency_sensitivity = "normal"
-    if local_state_hits > 0 or command:
+    if effective_local_state_hits > 0 or command:
         latency_sensitivity = "high"
-    elif external_lookup_hits > 0 and research_hits == 0 and code_hits == 0:
+    elif effective_external_lookup_hits > 0 and effective_research_hits == 0 and effective_code_hits == 0:
         latency_sensitivity = "normal"
 
     observer_control_candidate = bool(
@@ -764,7 +808,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         or workflow_meta_candidate
         or task_progress_candidate
     )
-    observation_signal = observer_control_candidate or bool(command) or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0 or (
+    observation_signal = observer_control_candidate or model_benchmark_candidate or bool(command) or runner_hits > 0 or effective_local_state_hits > 0 or remote_target_hits > 0 or (
         runner_read_only_intent_hits > 0 and runner_target_hits > 0
     )
 
@@ -776,27 +820,30 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "runner_hits": runner_hits,
         "runner_read_only_intent_hits": runner_read_only_intent_hits,
         "runner_target_hits": runner_target_hits,
-        "runner_negative_hits": runner_negative_hits,
+        "runner_negative_hits": effective_runner_negative_hits,
         "observer_control_hits": observer_control_hits,
         "task_progress_hits": task_progress_hits,
         "observer_control_candidate": observer_control_candidate,
         "task_progress_candidate": task_progress_candidate,
         "workflow_meta_hits": workflow_meta_hits,
         "workflow_meta_candidate": workflow_meta_candidate,
+        "model_benchmark_hits": model_benchmark_hits,
+        "model_reference_hits": model_reference_hits,
+        "model_benchmark_candidate": model_benchmark_candidate,
         "explicit_local_probe": explicit_local_probe,
-        "code_hits": code_hits,
-        "research_hits": research_hits,
-        "external_lookup_hits": external_lookup_hits,
+        "code_hits": effective_code_hits,
+        "research_hits": effective_research_hits,
+        "external_lookup_hits": effective_external_lookup_hits,
         "write_hits": write_hits,
         "summary_output_hits": summary_output_hits,
         "multi_step_hits": multi_step_hits,
         "parallel_hits": parallel_hits,
         "high_risk_hits": high_risk_hits,
         "simple_hits": simple_hits,
-        "local_state_hits": local_state_hits,
+        "local_state_hits": effective_local_state_hits,
         "verify_hits": verify_hits,
         "implement_hits": implement_hits,
-        "mutation_hits": mutation_hits,
+        "mutation_hits": effective_mutation_hits,
         "repo_activity_hits": 1 if repo_activity_lookup else 0,
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
@@ -804,38 +851,38 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "ack_followup_hits": ack_followup_hits,
         "remote_target_hits": remote_target_hits,
         "requires_tools": observation_signal,
-        "requires_code_work": code_hits > 0,
-        "requires_research": research_hits > 0,
-        "requires_mutation": mutation_hits > 0 or (implement_hits > 0 and (code_hits > 0 or local_state_hits > 0)),
-        "external_lookup_only": external_lookup_hits > 0 and research_hits == 0 and code_hits == 0 and write_hits == 0,
+        "requires_code_work": effective_code_hits > 0,
+        "requires_research": effective_research_hits > 0,
+        "requires_mutation": effective_mutation_hits > 0 or (implement_hits > 0 and (effective_code_hits > 0 or effective_local_state_hits > 0)),
+        "external_lookup_only": effective_external_lookup_hits > 0 and effective_research_hits == 0 and effective_code_hits == 0 and write_hits == 0,
         "requires_writing": effective_write_hits > 0,
         "estimated_steps": estimated_steps,
         "task_shape": task_shape,
         "multi_step": estimated_steps >= 2,
         "parallelizable": (
             parallel_hits > 0
-            or (research_hits > 0 and write_hits > 0 and multi_step_hits > 0)
-            or (verify_hits > 0 and (code_hits > 0 or implement_hits > 0))
+            or (effective_research_hits > 0 and write_hits > 0 and multi_step_hits > 0)
+            or (verify_hits > 0 and (effective_code_hits > 0 or implement_hits > 0))
         ),
         "tool_observation_only": (
             observation_signal
-            and mutation_hits == 0
+            and effective_mutation_hits == 0
             and implement_hits == 0
-            and code_hits == 0
-            and research_hits == 0
+            and effective_code_hits == 0
+            and effective_research_hits == 0
             and effective_write_hits == 0
         ),
-        "target_scope": "remote" if remote_target_hits > 0 else ("local" if local_state_hits > 0 else "generic"),
+        "target_scope": "remote" if remote_target_hits > 0 else ("local" if effective_local_state_hits > 0 else "generic"),
         "high_risk": high_risk_hits > 0,
         "ack_followup_candidate": short_ack_candidate,
         "followup_candidate": continuation_hits > 0 or short_ack_candidate,
         "context_growth": context_growth,
         "latency_sensitivity": latency_sensitivity,
-        "simple_direct_candidate": simple_hits > 0 and runner_hits == 0 and code_hits == 0 and research_hits == 0 and local_state_hits == 0,
+        "simple_direct_candidate": simple_hits > 0 and runner_hits == 0 and effective_code_hits == 0 and effective_research_hits == 0 and effective_local_state_hits == 0,
     }
     features["hard_runner_candidate"] = bool(
         not observer_control_candidate
-        and runner_negative_hits == 0
+        and effective_runner_negative_hits == 0
         and not features["high_risk"]
         and not features["parallelizable"]
         and features["simple_hits"] == 0
@@ -846,15 +893,16 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         and not features["requires_writing"]
         and features["estimated_steps"] <= 2
         and (
-            command_read_only
+            model_benchmark_candidate
+            or command_read_only
             or (
                 runner_read_only_intent_hits > 0
-                and (runner_target_hits > 0 or runner_hits > 0 or local_state_hits > 0 or remote_target_hits > 0)
+                and (runner_target_hits > 0 or runner_hits > 0 or effective_local_state_hits > 0 or remote_target_hits > 0)
             )
             or (
                 features["tool_observation_only"]
                 and runner_target_hits > 0
-                and (runner_read_only_intent_hits > 0 or runner_hits > 0 or local_state_hits > 0)
+                and (runner_read_only_intent_hits > 0 or runner_hits > 0 or effective_local_state_hits > 0)
             )
         )
     )
@@ -925,6 +973,8 @@ def coordinated_work_candidate(features: dict) -> bool:
 
 def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
     if route == "runner" or features.get("hard_runner_candidate"):
+        return "inspect_report"
+    if features.get("model_benchmark_candidate"):
         return "inspect_report"
     if features.get("observer_control_candidate"):
         return "answer_now"
@@ -1019,7 +1069,10 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
 
     route = max(scores, key=scores.get)
     if work_contract_hint == "inspect_report":
-        if features.get("explicit_local_probe") or features.get("hard_runner_candidate"):
+        if features.get("model_benchmark_candidate"):
+            route = "runner"
+            reason_codes.append("prefer_runner_for_model_benchmark")
+        elif features.get("explicit_local_probe") or features.get("hard_runner_candidate"):
             route = "runner"
             reason_codes.append("prefer_runner_for_explicit_probe")
         else:
@@ -1209,6 +1262,8 @@ def hard_gate_route(features: dict, runtime_cfg: dict | None = None) -> tuple[st
 
     if features.get("hard_runner_candidate"):
         reasons.append("hard_runner_only")
+        if features.get("model_benchmark_candidate"):
+            reasons.append("model_benchmark_workflow")
         if features.get("command_read_only"):
             reasons.append("read_only_command")
         if features.get("runner_read_only_intent_hits", 0) > 0:

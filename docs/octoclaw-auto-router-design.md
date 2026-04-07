@@ -429,6 +429,43 @@ ClawXRouter 的默认心智更接近：
 - `before_model_resolve` 即使存在，也只在 `direct` route 且显式开启 override 时才该生效
 - `runner` / `spawn_single` / `spawn_multi` 则天然更适合接 lane-local 的 model/profile/budget 决策
 
+### 4.4.1 模型测速类请求应先落 workflow，不要默认上 agent
+
+另一类近期暴露出的高频误判，是“比较两个模型的首 token / 吞吐 / 响应速度”。
+
+这类请求如果直接落到 `spawn_single`，通常会有三个问题：
+
+- 本来只需要读本地 telemetry / health snapshot，却先付出 agent dispatch 成本
+- 结果不稳定，容易受 delegated lane 自身波动影响
+- 和 `workflow-first, agent-second` 的总原则冲突
+
+因此更合理的默认 contract 是：
+
+- `runner`
+- `inspect_report`
+- 本地 telemetry / model-health snapshot workflow
+
+也就是说：
+
+> **模型测速/比速问题默认应先当成 workflow inspect，而不是 generic delegated task。**
+
+### 4.4.2 fallback 事实应回灌 model-health，但不应偷偷切主模型
+
+OpenClaw 主会话在运行中产生的 `timeout / auth / failover`，如果只停留在 gateway log，
+后续 route/model selection 就无法及时感知这些坏事实。
+
+因此需要一条轻量反馈线：
+
+- 从 fallback log 回灌 `model-health`
+- 让 timeout / auth / failover 进入 degraded / cooldown 判断
+- 采用 stale-gated refresh，避免每轮都重扫日志
+
+但这条线不等于放开主会话自动改模：
+
+- `direct_model_override` 默认仍保持 `false`
+- health feedback 先服务于 health-aware selection / visibility
+- 是否 override main-agent 仍是后续独立 rollout 决策
+
 因此这份设计里的 `agent scope` 应明确分成：
 
 1. **main-agent stable scope**

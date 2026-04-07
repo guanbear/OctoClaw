@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from auto_router import build_auto_router_payload
+from model_health_backfill import refresh_model_health_feedback_if_stale
 from octoclaw_route import infer_route
 from route_recommendation import build_route_recommendation
 from octoclaw_spawn import resolve_model_and_thinking
@@ -830,7 +831,11 @@ def build_decision(
     route_hint = normalize_route_hint(route_hint)
     route_meta = apply_forced_route(infer_route(task, command), force_route)
     features = route_meta.get("features", {})
-    runtime_cfg = load_octopus_config().get("runtime_policy", {})
+    config = load_octopus_config()
+    runtime_cfg = config.get("runtime_policy", {})
+    _model_health_feedback_result = refresh_model_health_feedback_if_stale(
+        feedback_cfg=(runtime_cfg.get("model_health_feedback", {}) if isinstance(runtime_cfg, dict) else {}),
+    )
     base_route = str(route_meta.get("system_preferred_route", route_meta.get("route", "direct")) or "direct")
     sticky_state: dict[str, Any] = {}
     merge_reason_codes: list[str] = []
