@@ -1915,15 +1915,19 @@ def build_spawn_spec(
             "kind": "background" if executed else "plan",
             "status": "pending" if executed else ("failed" if execution_error else "planned"),
             "summary": (
-                "子任务已通过 native OpenClaw session 启动。"
-                if executed and str((spawn_execution or {}).get("backend", "") or "") == "native"
-                else ("子任务已通过 ClawTeam/tmux 启动。" if executed else ("子任务启动失败。" if execution_error else "已生成统一子任务派发规范。"))
-            ),
-            "reply_text": (
-                "我已经把这个子任务挂到 OpenClaw 原生后台会话里继续处理，稍后回来汇总结论。"
+                f"子任务已通过 native OpenClaw session 异步启动（task={task_id}）。正常完成会自动回推；若几分钟后仍无新消息，可用 details {task_id} / queue 查看。"
                 if executed and str((spawn_execution or {}).get("backend", "") or "") == "native"
                 else (
-                    "我已经把这个子任务挂到 ClawTeam/tmux 工位里继续处理，稍后回来汇总结论。"
+                    f"子任务已通过 ClawTeam/tmux 异步启动（task={task_id}）。正常完成会自动回推；若几分钟后仍无新消息，可用 details {task_id} / queue 查看。"
+                    if executed
+                    else ("子任务启动失败。" if execution_error else "已生成统一子任务派发规范。")
+                )
+            ),
+            "reply_text": (
+                f"我已经把这个子任务挂到 OpenClaw 原生后台会话里继续处理。正常完成会自动回到当前会话；如果几分钟后还没收到更新，你可以随时发 `details {task_id}` 或 `queue` 来看进度。"
+                if executed and str((spawn_execution or {}).get("backend", "") or "") == "native"
+                else (
+                    f"我已经把这个子任务挂到 ClawTeam/tmux 工位里继续处理。正常完成会自动回到当前会话；如果几分钟后还没收到更新，你可以随时发 `details {task_id}` 或 `queue` 来看进度。"
                     if executed
                     else ("子任务启动失败，我已记录失败状态。" if execution_error else "我会按 OctoClaw 统一 spawn 规范派给子任务处理。")
                 )

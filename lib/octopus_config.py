@@ -8,6 +8,73 @@ import os
 from typing import Any
 
 DEFAULT_WORKSPACE = "/workspace"
+RUNTIME_POLICY_MODE_ALIASES = {
+    "observe": "conservative",
+    "observation": "conservative",
+    "monitor": "conservative",
+}
+RUNTIME_POLICY_MODE_PRESETS: dict[str, dict[str, Any]] = {
+    "conservative": {
+        "switches": {
+            "hard_runner_only": True,
+            "route_hint_required": False,
+            "replay_logging": True,
+            "direct_model_override": False,
+            "delegation_enforcement": False,
+        },
+        "route_stickiness": {
+            "enabled": False,
+        },
+        "hooks": {
+            "before_model_resolve": False,
+            "before_prompt_build": True,
+            "before_tool_call": False,
+            "agent_end": True,
+        },
+    },
+    "guided": {
+        "switches": {
+            "hard_runner_only": True,
+            "route_hint_required": False,
+            "replay_logging": True,
+            "direct_model_override": False,
+            "delegation_enforcement": True,
+        },
+        "route_stickiness": {
+            "enabled": False,
+        },
+        "hooks": {
+            "before_model_resolve": False,
+            "before_prompt_build": True,
+            "before_tool_call": True,
+            "agent_end": True,
+        },
+    },
+    "enforced": {
+        "switches": {
+            "hard_runner_only": True,
+            "route_hint_required": True,
+            "replay_logging": True,
+            "direct_model_override": False,
+            "delegation_enforcement": True,
+        },
+        "route_stickiness": {
+            "enabled": True,
+        },
+        "hooks": {
+            "before_model_resolve": False,
+            "before_prompt_build": True,
+            "before_tool_call": True,
+            "agent_end": True,
+        },
+    },
+}
+
+
+def resolve_runtime_policy_mode(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    normalized = RUNTIME_POLICY_MODE_ALIASES.get(raw, raw)
+    return normalized if normalized in RUNTIME_POLICY_MODE_PRESETS else "guided"
 
 
 def _normalize_path(path: str) -> str:
@@ -201,13 +268,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "runtime_policy": {
+        "mode": "guided",
         "enabled": True,
         "switches": {
             "hard_runner_only": True,
             "route_hint_required": False,
             "replay_logging": True,
             "direct_model_override": False,
-            "delegation_enforcement": False,
+            "delegation_enforcement": True,
         },
         "route_stickiness": {
             "enabled": False,
@@ -230,7 +298,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "hooks": {
             "before_model_resolve": False,
             "before_prompt_build": True,
-            "before_tool_call": False,
+            "before_tool_call": True,
             "agent_end": True,
         },
         "skill_bundles": {
@@ -262,6 +330,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "reasoning_effort": "medium",
             },
         },
+    },
+    "patrol": {
+        "mode": "detect_only",
+        "auto_redispatch": False,
     },
     "replay_automation": {
         "enabled": False,
@@ -383,8 +455,17 @@ def load_octopus_config() -> dict[str, Any]:
     if isinstance(data, dict):
         if not os.path.exists(CONFIG_FILE):
             save_json(CONFIG_FILE, data)
-        return deep_merge(DEFAULT_CONFIG, data)
-    return json.loads(json.dumps(DEFAULT_CONFIG))
+        merged = deep_merge(DEFAULT_CONFIG, data)
+    else:
+        merged = json.loads(json.dumps(DEFAULT_CONFIG))
+    runtime_cfg = merged.get("runtime_policy", {})
+    runtime_cfg = runtime_cfg if isinstance(runtime_cfg, dict) else {}
+    mode = resolve_runtime_policy_mode(runtime_cfg.get("mode", DEFAULT_CONFIG["runtime_policy"].get("mode", "guided")))
+    merged["runtime_policy"] = deep_merge(
+        deep_merge(DEFAULT_CONFIG["runtime_policy"], RUNTIME_POLICY_MODE_PRESETS.get(mode, {})),
+        dict(runtime_cfg, mode=mode),
+    )
+    return merged
 
 
 def model_health_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -402,6 +483,12 @@ def openclaw_taskflow_config(config: dict[str, Any] | None = None) -> dict[str, 
 def workbench_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config or load_octopus_config()
     section = cfg.get("workbench", {})
+    return section if isinstance(section, dict) else {}
+
+
+def patrol_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = config or load_octopus_config()
+    section = cfg.get("patrol", {})
     return section if isinstance(section, dict) else {}
 
 

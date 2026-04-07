@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,46 @@ patrol = importlib.import_module("patrol")
 
 
 class PatrolNotificationTests(unittest.TestCase):
+    @patch("patrol.mark_task_timed_out")
+    @patch("patrol.kill_subagent")
+    @patch("patrol.send_timeout_alert")
+    @patch("patrol.save_task_state")
+    @patch("patrol.load_task_state")
+    def test_check_and_handle_timeout_detect_only_does_not_auto_repair(
+        self,
+        mock_load_task_state,
+        mock_save_task_state,
+        mock_send_timeout_alert,
+        mock_kill_subagent,
+        mock_mark_task_timed_out,
+    ) -> None:
+        task = {
+            "id": "code-1",
+            "status": "running",
+            "route": "spawn_single",
+            "worker_pool": "octoclaw-code",
+            "summary": "inspect patrol runtime",
+            "started_at": "2026-04-07T07:00:00Z",
+        }
+        mock_load_task_state.return_value = {"tasks": [dict(task)], "updated_at": ""}
+
+        with patch.object(patrol, "now_utc", return_value=datetime(2026, 4, 7, 7, 3, 0, tzinfo=timezone.utc)), patch.object(
+            patrol, "calculate_timeout", return_value=1
+        ), patch.object(
+            patrol, "calculate_hard_timeout", return_value=2
+        ), patch.object(
+            patrol, "analyze_timeout_reason", return_value="stuck"
+        ), patch.object(
+            patrol, "_patrol_detect_only", return_value=True
+        ):
+            timed_out = patrol.check_and_handle_timeout([dict(task)])
+
+        self.assertEqual(timed_out[0]["_timeout_action"], "alerted")
+        mock_send_timeout_alert.assert_called_once()
+        mock_mark_task_timed_out.assert_not_called()
+        mock_kill_subagent.assert_not_called()
+        self.assertTrue(mock_save_task_state.called)
+
     @patch.dict(os.environ, {"RUNNER_MODE": "ondemand"}, clear=False)
     @patch("patrol.recover_dead_agent_tasks")
     @patch("patrol.patrol_heartbeat_check")

@@ -25,6 +25,7 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
         self.assertFalse(payload["switches"]["route_hint_required"])
         self.assertFalse(payload["switches"]["delegation_enforcement"])
         self.assertFalse(payload["hooks"]["before_model_resolve"])
+        self.assertFalse(payload["hooks"]["before_tool_call"])
         self.assertFalse(payload["route_stickiness"]["enabled"])
 
     def test_render_policy_guided_enforces_dispatch_without_model_override(self) -> None:

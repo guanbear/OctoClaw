@@ -170,6 +170,33 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 
 > **OctoClaw 现在的核心竞争力，不是“能不能借一个重 runtime”，而是“能不能把 policy、feedback、IM、observer 这些系统层做成一套可持续演进的产品心智”。**
 
+### 4.4 当前稳定性 operating mode
+
+近期稳定性问题说明，OctoClaw 不能继续让多条运行路径都像“半主链路”一样并存。当前更合理的 operating mode 应明确为：
+
+1. **OpenClaw managed TaskFlow 是主状态源**
+   - `running / done / failed / cancel` 这类 substrate facts 优先相信 native task / TaskFlow
+   - 本地 mirror / task-state 主要承担 cache、binding、display adaptation，不应继续和 substrate 并列争抢真相
+
+2. **runtime event / handoff 是主回推链路**
+   - delegated task 正常完成后，应优先通过 runtime event / handoff 回到当前会话
+   - 但产品语义必须是“异步 SLA”，不是“强实时保证”
+   - 如果 anchor / announce 未成功，应清楚回退到 `details <task_id>` / `queue` / status surface，而不是假装马上会回来
+
+3. **patrol 是补偿与告警层，不是主生命周期引擎**
+   - patrol 可以做 detect / notify / reconcile / observer 视角补偿
+   - patrol 不应继续默认承担 auto-redispatch、强行收口、暗中修复这类主流程职责
+   - 特别是在 detect-only mode 下，patrol 应避免把“后台补救”伪装成“稳定主链路”
+
+4. **tmux / ClawTeam / runner 属于执行层，不是状态真相源**
+   - 它们可以继续作为 operator backend 与执行面
+   - 但任务状态、完成感知、父子关联仍应收敛到 native TaskFlow + runtime event
+
+5. **入口约束要以 runtime mode 为主，而不是堆低层开关**
+   - 对维护者而言，首要心智应是 `conservative / guided / enforced`
+   - `before_tool_call`、`delegation_enforcement`、`route_hint_required` 这类低层 switches / hooks 更适合作为 override，而不是让操作者逐个记忆
+   - 当前默认 operating mode 更适合落在 `guided`：非 direct 请求默认走 dispatch，但保留必要的降级和观察面
+
 ---
 
 ## 4.4 运行时角色图（P1 约束）

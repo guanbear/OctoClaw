@@ -61,6 +61,58 @@
 2. **把重复/漂移/重叠的实现边界收口**
 3. **把真正未完成的深水区从“基础建设”里分离出来**
 
+### 2.3 OpenClaw 2026.4.2 对当前计划的影响
+
+`2026.4.2` 带来的核心变化不是“让前面的优先级重排”，而是把 substrate convergence 的目标说得更清楚了：
+
+- `task` 继续是 execution unit
+- `TaskFlow` 变成了更明确的 durable parent-job substrate
+- upstream 已有 `task_mirrored` / `managed` 两类 sync mode
+- `managed TaskFlow` 已支持 child task spawning、sticky cancel、revision / state / wait / cancel intent
+- trusted authoring layer 也开始有绑定式 runtime seam
+
+对当前计划的直接结论：
+
+1. **P1 不回退，也不需要重开**
+   - 你已经做完的 observer / patrol / runner / ctl 收口不被这次 upstream 变化推翻
+   - 只需要在后续术语里把 “taskflow substrate” 说得更精确
+2. **P2 不改主线**
+   - feedback loop 的优先级和闭环设计不受影响
+   - 只是后面在 replay / review / validate 里，可以更自然地区分 mirrored facts 与 managed substrate truth
+3. **主要受影响的是 P4**
+   - 原来写成 “继续接 OpenClaw tasks/flows” 的地方，现在应收成 “向 managed TaskFlow substrate 收敛”
+   - `simple spawn_multi` 的目标也应从泛泛的 linear flow，升级成更明确的 `managed TaskFlow (linear-first authoring)`
+
+### 2.4 当前稳定性整改线
+
+在继续推进 P1/P2/P4 之前，需要先把运行模式收成一个更稳的 baseline。当前这一条整改线的目标不是“发明新能力”，而是把已经存在的能力重新排成主次。
+
+#### A. 入口约束默认进入 guided
+- 主要操控面应是 runtime policy mode，而不是零散 switches
+- 默认 mode 应落在 `guided`
+- 非 direct 请求原则上要走 `octoclaw_dispatch`
+- `before_tool_call` 与 `delegation_enforcement` 应作为 guided baseline 打开
+- `conservative` 保留给观察/灰度场景，`enforced` 留给更强 rollout
+
+#### B. patrol 回到 detect / notify / reconcile
+- 关闭 patrol 默认 auto-redispatch
+- detect-only 模式下不再把 timeout/异常暗中升级成自动修复
+- 先修 patrol 自己的运行面可靠性
+  - config load
+  - `openclaw` PATH / bin resolution
+  - handoff / notify 重试的可观测性
+
+#### C. delegated completion 改成异步 SLA
+- 正常路径仍然是 runtime event / handoff 自动回推
+- 但产品表述要改成“异步后台完成后回推”
+- 如果 anchor / announce 未成功，要明确 fallback 到 `details` / `queue` / status surface
+
+#### D. nightly analysis 只做分析与记录
+- nightly replay validation
+- nightly reply review
+- nightly failure summary
+- 汇总后推送到 Slack / IM channel
+- 不在 nightly job 中自动修代码或自动补救任务
 ---
 
 ## 3. 新的优先级排序

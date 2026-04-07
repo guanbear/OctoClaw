@@ -40,6 +40,7 @@ import json
 import os
 import fcntl
 import re
+import shutil
 import subprocess
 import time
 import argparse
@@ -77,7 +78,9 @@ from octopus_config import (
     get_notification_backend,
     lib_path,
     load_json,
+    load_octopus_config,
     notification_enabled,
+    patrol_config,
     resolve_main_session_key,
     resolve_runner_mode,
 )
@@ -256,6 +259,48 @@ WORKER_POOL_DEFAULT_MODEL_BAND = {
     "octoclaw-research": "normal",
     "octoclaw-main": "normal",
 }
+
+
+def _patrol_settings(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    section = patrol_config(config)
+    return section if isinstance(section, dict) else {}
+
+
+def _patrol_detect_only(config: dict[str, Any] | None = None) -> bool:
+    settings = _patrol_settings(config)
+    mode = str(settings.get("mode", "detect_only") or "detect_only").strip().lower()
+    return mode in {"detect_only", "notify_only", "analysis_only"}
+
+
+def _auto_redispatch_enabled(config: dict[str, Any] | None = None) -> bool:
+    settings = _patrol_settings(config)
+    if "auto_redispatch" in settings:
+        return bool(settings.get("auto_redispatch"))
+    return not _patrol_detect_only(config)
+
+
+def _openclaw_env() -> dict[str, str]:
+    env = dict(os.environ)
+    path_parts = ["/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", "")]
+    env["PATH"] = ":".join(part for part in path_parts if part)
+    return env
+
+
+def _resolve_openclaw_bin(config: dict[str, Any] | None = None) -> str:
+    cfg = config or load_octopus_config()
+    spawn_cfg = cfg.get("spawn_execution", {}) if isinstance(cfg.get("spawn_execution", {}), dict) else {}
+    configured = str(spawn_cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
+    candidates = [configured, "openclaw", "/opt/homebrew/bin/openclaw", "/usr/local/bin/openclaw"]
+    env = _openclaw_env()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        resolved = shutil.which(candidate, path=env.get("PATH", ""))
+        if resolved:
+            return resolved
+        if os.path.isabs(candidate) and os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return configured
 
 
 def task_model_band(task: dict) -> str:
@@ -3828,6 +3873,8 @@ def build_retry_task_text(task: dict, reason: str) -> str:
 
 
 def should_auto_redispatch(task: dict, reason: str) -> bool:
+    if not _auto_redispatch_enabled():
+        return False
     limit = AUTO_REDISPATCH_RETRY_LIMITS.get(reason, 0)
     if limit <= 0:
         return False
@@ -3901,11 +3948,12 @@ def auto_redispatch_task(task: dict, reason: str, *, source: str) -> str | None:
     model = str(spawn_spec.get("model", "") or payload.get("model", "") or "")
     message = str(payload.get("message", "") or "")
     cron_name = f"octoclaw-retry-{reason}-{int(time.time())}"[:64]
+    openclaw_bin = _resolve_openclaw_bin()
 
     try:
         result = subprocess.run(
             [
-                "openclaw", "cron", "add",
+                openclaw_bin, "cron", "add",
                 "--name", cron_name,
                 "--session", "isolated",
                 "--at", "1m",
@@ -3915,7 +3963,7 @@ def auto_redispatch_task(task: dict, reason: str, *, source: str) -> str | None:
                 "--delete-after-run",
                 "--message", message,
             ],
-            capture_output=True, text=True, timeout=20
+            capture_output=True, text=True, timeout=20, env=_openclaw_env()
         )
         if result.returncode == 0:
             apply_task_updates(
@@ -4148,9 +4196,10 @@ def kill_subagent(run_id: str) -> bool:
 
     # fallback：尝试 openclaw gateway kill（若 CLI 版本支持）
     try:
+        openclaw_bin = _resolve_openclaw_bin()
         result = subprocess.run(
-            ["openclaw", "gateway", "kill", run_id],
-            capture_output=True, text=True, timeout=10
+            [openclaw_bin, "gateway", "kill", run_id],
+            capture_output=True, text=True, timeout=10, env=_openclaw_env()
         )
         if result.returncode == 0:
             print(f"🔴 已终止 subagent via CLI: {run_id}")
@@ -4338,7 +4387,12 @@ def check_and_handle_timeout(tasks: list) -> list:
         hard_timeout_hit = elapsed_minutes >= hard_timeout_minutes
         session_status = str(task.get("session_status", "") or "")
         run_id = str(task.get("run_id", "") or task.get("session_id", "") or "")
+        detect_only = _patrol_detect_only()
         if hard_timeout_hit:
+            if detect_only:
+                print(f"ℹ️  detect-only: {task_id} 已达到硬超时阈值，仅记录告警，不自动终止/收口")
+                timed_out_tasks.append({**task, "_timeout_action": "alerted"})
+                continue
             killed = False
             if status == "running" and run_id and session_status not in ("missing", "stale", "completed"):
                 killed = kill_subagent(run_id)
@@ -4428,9 +4482,10 @@ def check_model_aliases():
 
     # 获取可用模型列表
     try:
+        openclaw_bin = _resolve_openclaw_bin()
         result = subprocess.run(
-            ["openclaw", "models", "list", "--json"],
-            capture_output=True, text=True, timeout=15
+            [openclaw_bin, "models", "list", "--json"],
+            capture_output=True, text=True, timeout=15, env=_openclaw_env()
         )
         if result.returncode != 0:
             print(f"⚠️  check_model_aliases: openclaw models list 失败: {result.stderr[:200]}")
@@ -5039,6 +5094,7 @@ def main():
 
     running, queued, pending_confirm, deferred, stuck = classify_tasks(tasks)
     recent_done = get_recent_done_tasks(tasks, force=force_mode)
+    detect_only = _patrol_detect_only()
 
     # ── 孤儿任务检测：running 但无活跃 session ──
     active_sessions = get_active_subagent_sessions()
@@ -5057,6 +5113,13 @@ def main():
             if task_id not in {s.get("id") for s in stuck}:
                 # 先检查 transcript 是否有成功 RESULT → 自动标 done，不报警
                 if check_result_success(task_id, task, task.get("spawned_at") or task.get("started_at")):
+                    if detect_only:
+                        print(f"  ℹ️  detect-only: 孤儿任务 {task_id} transcript 含成功RESULT，保留观察态，等待主链路收口")
+                        task["_stuck_reason"] = "孤儿任务：transcript含成功RESULT，但主链路尚未收口"
+                        task["_orphan"] = True
+                        task["_result_ready_without_handoff"] = True
+                        stuck.append(task)
+                        continue
                     print(f"  ✅ 孤儿任务 {task_id} transcript 含成功RESULT，自动标记 done（不报警）")
                     task["_auto_done"] = True  # 标记已自动完成，防止GLM升级循环重复处理
                     try:
@@ -5101,7 +5164,9 @@ def main():
             orphan_reason = "stuck"
         if should_auto_redispatch(task, orphan_reason):
             orphan_retry_candidates.append((task, orphan_reason))
-    if orphan_retry_candidates:
+    if detect_only and orphans:
+        print("ℹ️  detect-only: 跳过孤儿任务自动补发/自动收口，仅保留告警与观测")
+    elif orphan_retry_candidates:
         print(f"🔼 检测到 {len(orphan_retry_candidates)} 个孤儿任务可自动补发：")
         for task, orphan_reason in orphan_retry_candidates:
             task_id = task.get("id", "")
