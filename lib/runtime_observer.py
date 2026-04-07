@@ -182,6 +182,7 @@ def render_observer_text(payload: dict[str, Any]) -> str:
     changes = payload.get("changes", {}) if isinstance(payload.get("changes", {}), dict) else {}
     substrate = payload.get("substrate", {}) if isinstance(payload.get("substrate", {}), dict) else {}
     surface_status = payload.get("surface_status", {}) if isinstance(payload.get("surface_status", {}), dict) else {}
+    workbench = payload.get("workbench", {}) if isinstance(payload.get("workbench", {}), dict) else {}
     if not surface_status:
         surface_status = {
             "display": "substrate_first",
@@ -231,6 +232,9 @@ def render_observer_text(payload: dict[str, Any]) -> str:
                 ]
             )
         )
+    if bool(workbench.get("optional_backend")):
+        session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+        lines.append(f"- Optional workbench: tmux {session_name}" if session_name else "- Optional workbench: enabled")
     if active_substrate_tasks:
         lines.append("- Active substrate tasks:")
         for item in active_substrate_tasks[:3]:

@@ -226,7 +226,7 @@ else:
         if backend in ("hybrid", "cli"):
             cli_note = " · cli-ready" if bridge_summary.get("cli_available") else " · cli-missing"
         print(
-            f"🤝 Bridge：{bridge_summary.get('team', 'octoclaw-validation')} · "
+            f"🤝 Optional bridge：{bridge_summary.get('team', 'octoclaw-validation')} · "
             f"{backend}{cli_note} · tasks {bridge_tasks} · "
             f"lineages {bridge_summary.get('lineage_count', 0)} · inbox {bridge_summary.get('inbox_count', 0)}"
         )
@@ -291,9 +291,7 @@ else:
     if workbench_mode == "tmux" and tmux_session_name:
         runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
         patrol_window = str(workbench.get("tmux_patrol_window_name", "patrol") or "patrol").strip() or "patrol"
-        print(f"🧰 Workbench：tmux {tmux_session_name} · runner={runner_window} · patrol={patrol_window}")
-    else:
-        print(f"🧰 Workbench：{workbench_mode}")
+        print(f"🧰 Optional workbench：tmux {tmux_session_name} · runner={runner_window} · patrol={patrol_window}")
     print("━━━━━━━━━━━━━━━━━━━━")
 
 if fmt == "table":

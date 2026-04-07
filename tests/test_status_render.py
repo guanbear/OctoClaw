@@ -37,7 +37,7 @@ class StatusRenderTests(unittest.TestCase):
                         "planner": "step-plan",
                         "review": "step-review",
                     },
-                    "operator_hint": "clawteam/tmux octopus-validation",
+                    "operator_hint": "opt clawteam/tmux octopus-validation",
                 },
                 "started_at": "2026-03-28T11:55:00+00:00",
             },
@@ -98,7 +98,7 @@ class StatusRenderTests(unittest.TestCase):
                     "binding_state": "mirrored",
                 },
                 "artifacts": {
-                    "operator_hint": "tmux octoclaw-runtime:runner",
+                    "operator_hint": "opt tmux octoclaw-runtime:runner",
                 },
             },
         ]
@@ -142,7 +142,7 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("Team lane", lanes_rendered)
         self.assertIn("planner", lanes_rendered)
         self.assertIn("review", lanes_rendered)
-        self.assertIn("clawteam/tmux", lanes_rendered)
+        self.assertIn("opt clawteam/tmux", lanes_rendered)
 
     def test_worker_pool_only_tasks_render_without_legacy_labels(self) -> None:
         tasks = [

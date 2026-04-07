@@ -172,6 +172,8 @@ def build_runtime_snapshot(
     elif not runner.get("healthy", False):
         runner_state = str(runner.get("reason", "stale") or "stale")
     workbench = workbench_config(load_octopus_config())
+    workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
+    workbench_session = str(workbench.get("tmux_session_name", "") or "").strip()
     return {
         "observed_at": datetime.now(timezone.utc).astimezone().isoformat(),
         "workspace": workspace,
@@ -213,8 +215,10 @@ def build_runtime_snapshot(
             str(item).strip() for item in (heartbeat_reassigned_task_ids or []) if str(item).strip()
         ],
         "workbench": {
-            "supervisor_mode": str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto",
-            "tmux_session_name": str(workbench.get("tmux_session_name", "") or "").strip(),
+            "role": "optional_workbench",
+            "optional_backend": bool(workbench_mode == "tmux" and workbench_session),
+            "supervisor_mode": workbench_mode,
+            "tmux_session_name": workbench_session,
         },
     }
 

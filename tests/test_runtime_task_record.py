@@ -94,7 +94,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
                 "report_path": "/tmp/report.md",
                 "context_path": "/tmp/context.md",
                 "files_changed": ["lib/auth.py"],
-                "artifacts": {"custom": "keep-me", "operator_surface": {"operator_hint": "clawteam/tmux test-team"}},
+                "artifacts": {"custom": "keep-me", "operator_surface": {"operator_hint": "opt clawteam/tmux test-team"}},
             }
         )
         self.assertEqual(payload["executor"], "subagent")
@@ -107,7 +107,7 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["artifacts"]["context_path"], "/tmp/context.md")
         self.assertEqual(payload["artifacts"]["files_changed"], ["lib/auth.py"])
         self.assertEqual(payload["artifacts"]["operator_surface"]["schema_version"], "octoclaw.task_display/v1")
-        self.assertEqual(payload["artifacts"]["operator_surface"]["operator_hint"], "clawteam/tmux test-team")
+        self.assertEqual(payload["artifacts"]["operator_surface"]["operator_hint"], "opt clawteam/tmux test-team")
         self.assertEqual(payload["artifacts"]["operator_surface"]["task_anchor"]["task_id"], "spawn-1")
         self.assertIn("OctoClaw task", payload["artifacts"]["display_text"])
 

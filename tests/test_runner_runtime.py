@@ -115,7 +115,7 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(task["artifacts"]["exit_code"], 0)
             self.assertEqual(task["artifacts"]["timeout_seconds"], 15)
             self.assertEqual(task["artifacts"]["report_path"], task["report_path"])
-            self.assertEqual(task["artifacts"]["operator_hint"], "auto runner-daemon")
+            self.assertEqual(task["artifacts"]["operator_hint"], "")
             self.assertNotIn("label", task)
             self.assertNotIn("legacy_label", task)
             self.assertEqual(task["model_band"], "fast")

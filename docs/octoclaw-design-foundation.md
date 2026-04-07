@@ -158,12 +158,12 @@ P2.5 的正式设计与执行清单见：
 - [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
 - [`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
 
-### 4.3 Operator backend 是增强层，不是唯一运行面
+### 4.3 Operator backend 是增强层，不是默认运行面
 
 ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当前代码方向已经很明确：
 
 - ClawTeam 仍有参考价值
-- tmux 仍是推荐 operator workbench
+- tmux 仍可作为 operator workbench
 - 但默认真相源越来越偏向 OpenClaw substrate + OctoClaw 自己的 control/feedback/display surface
 
 这意味着：
@@ -634,7 +634,29 @@ OctoClaw IM / display adaptation layer
 Optional operator backend
   -> tmux workbench
   -> ClawTeam / heavier swarm runtime
-  -> programmatic execution helpers
+  -> resident runner / programmatic execution helpers
+
+---
+
+## 10.1 P6 的设计意图
+
+P6 不是“删除 tmux / ClawTeam / runner-daemon”，而是：
+
+- 让默认路径的核心价值来自 substrate + policy + observer + feedback + display
+- 让 heavy backend 只在显式启用时出现
+- 让 operator surface 只把 backend 当 secondary hint，而不当 primary identity
+
+P6 关单后，系统应默认呈现为：
+
+- `runner lane`
+- `spawn lane`
+- `observer/control surfaces`
+
+只有在显式启用 tmux / ClawTeam / resident runner 时，才暴露：
+
+- optional workbench
+- optional validation bridge
+- optional acceleration backend
 ```
 
 这比我上一次写的版本更接近当前代码现实。

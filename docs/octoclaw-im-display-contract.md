@@ -12,7 +12,7 @@
 |---|---|---|---|
 | IM | lightweight ops + notifications | partial | no |
 | CLI | canonical text operator surface | full | yes |
-| tmux/workbench | live control/workbench | full | no |
+| tmux/workbench | optional live control/workbench | full | no |
 | Web/UI | future full cockpit | future | future |
 
 ---
@@ -148,7 +148,7 @@ P3+P4 当前已落到这些代码：
 
 - **IM** = lightweight ops + notifications
 - **CLI** = canonical text operator surface + canonical observer
-- **tmux/workbench** = live control/workbench
+- **tmux/workbench** = optional live control/workbench
 - **Web/UI** = future full cockpit
 
 当前接受的 fallback/gap：

@@ -34,6 +34,8 @@ class RuntimeSnapshotTests(unittest.TestCase):
         self.assertTrue(payload["runner"]["recovery_suggested"])
         self.assertEqual(payload["counts"]["active"], 2)
         self.assertEqual(payload["queue_counts"]["running"], 1)
+        self.assertEqual(payload["workbench"]["role"], "optional_workbench")
+        self.assertTrue(payload["workbench"]["optional_backend"])
         self.assertEqual(payload["workbench"]["supervisor_mode"], "tmux")
 
     @patch("lib.runtime_snapshot.load_runtime_tasks", return_value=[{"id": "runner-1", "status": "queued", "source": "octoclaw"}])
@@ -55,6 +57,7 @@ class RuntimeSnapshotTests(unittest.TestCase):
         self.assertEqual(payload["runner"]["state"], "on-demand")
         self.assertFalse(payload["runner"]["present"])
         self.assertEqual(payload["counts"]["queued"], 1)
+        self.assertFalse(payload["workbench"]["optional_backend"])
 
     @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
     def test_build_runtime_snapshot_normalizes_on_demand_aliases(self, _mock_cfg) -> None:

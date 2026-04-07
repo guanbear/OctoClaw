@@ -20,7 +20,7 @@ SURFACE_ROLE_MAP = {
         "canonical_observer": True,
     },
     "tmux": {
-        "role": "live_control_workbench",
+        "role": "optional_live_control_workbench",
         "authoritative_for": ["live_runtime_inspection", "manual_intervention"],
         "control_mode": "full",
         "canonical_observer": False,

@@ -55,7 +55,7 @@ class NotifierTaskPayloadTests(unittest.TestCase):
             **self.task,
             "artifacts": {
                 "operator_surface": {
-                    "operator_hint": "clawteam/tmux octoclaw-validation",
+                    "operator_hint": "opt clawteam/tmux octoclaw-validation",
                 }
             },
         }

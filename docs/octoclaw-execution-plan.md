@@ -505,6 +505,28 @@ P5 关单前，至少应满足：
 
 而不是来自重 backend。
 
+### 设计约束
+
+- 默认 surface 不把 heavy backend 当 primary identity
+- `status / detail / retrieve / observer / notifier` 只把 backend 当 secondary operator hint
+- 不显式启用 tmux / ClawTeam / resident runner 时，系统仍应呈现为完整主路径，而不是“降级模式”
+
+### P6 子项
+
+1. execution/operator surface backend-neutral 化
+2. ClawTeam bridge / tmux workbench / resident runner optional 化
+3. status / observer / display contract 口径同步
+4. operator docs 与 ctl 心智同步
+
+### 完成标准
+
+P6 关单前，至少应满足：
+
+1. 默认 runner / spawn surface 不再默认亮出 heavy backend 身份
+2. 启用 ClawTeam / tmux / resident runner 时，surface 明确标为 `optional`
+3. `status / observer / display / retrieve` 不再把 backend 当真相源
+4. ClawTeam bridge 关闭时，默认主路径不受影响
+
 ---
 
 ## 4. 明确哪些事情现在不要重做

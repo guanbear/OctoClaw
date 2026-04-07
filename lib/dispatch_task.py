@@ -209,14 +209,11 @@ def configured_spawn_backend() -> str:
 def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str, *, parent_spec: dict | None = None) -> dict:
     ordered_steps = [name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict)]
     child_task_ids = [str(step.get("task_id", "") or "").strip() for step in steps if str(step.get("task_id", "") or "").strip()]
-    operator_surface = spawn_operator_surface()
-    operator_surface["backend"] = backend
-    backend_name = str(operator_surface.get("backend_name", "tmux") or "tmux")
-    if backend == "clawteam":
-        team_name = str(operator_surface.get("team_name", "") or "").strip()
-        operator_surface["operator_hint"] = f"clawteam/{backend_name}" + (f" {team_name}" if team_name else "")
-    else:
-        operator_surface["operator_hint"] = backend or str(operator_surface.get("operator_hint", "") or "")
+    backend_name_override = "tmux" if backend == "clawteam" else ("openclaw_agent" if backend == "native" else "")
+    operator_surface = spawn_operator_surface(
+        backend_override=backend,
+        backend_name_override=backend_name_override,
+    )
 
     def step_taxonomy(entry: dict) -> dict[str, str]:
         if not isinstance(entry, dict):

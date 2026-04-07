@@ -499,24 +499,55 @@ def tmux_attach_hint(session_name: str) -> str:
     return f"tmux attach -t {session}"
 
 
+def _spawn_backend_name(backend: str, backend_name: str) -> str:
+    if backend == "native":
+        return "openclaw_agent"
+    if backend in {"clawteam", "plan"}:
+        return backend_name
+    return backend or backend_name
+
+
+def _spawn_backend_is_optional(backend: str) -> bool:
+    return backend == "clawteam"
+
+
+def _spawn_operator_hint(*, backend: str, backend_name: str, team_name: str, agent_name: str) -> str:
+    if backend == "clawteam":
+        hint = f"opt clawteam/{backend_name}"
+        if team_name:
+            hint += f" {team_name}"
+        if agent_name:
+            hint += f"/{agent_name}"
+        return hint
+    if backend == "plan":
+        return "plan-only"
+    return ""
+
+
 def runner_operator_surface(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config or load_octopus_config()
     workbench = workbench_config(cfg)
     mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
     session_name = str(workbench.get("tmux_session_name", "") or "").strip()
     window_name = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
+    optional_backend = mode == "tmux" and bool(session_name)
     surface = {
         "kind": "runner",
+        "role": "execution_lane",
+        "backend_posture": "optional_backend" if optional_backend else "default_runtime",
+        "optional_backend": optional_backend,
         "supervisor_mode": mode,
+        "supervisor_backend": "tmux" if optional_backend else "",
         "tmux_session_name": session_name,
         "tmux_window_name": window_name,
+        "surface_summary": "runner lane (default runtime path)" if not optional_backend else "runner lane with optional tmux workbench",
     }
-    if mode == "tmux" and session_name:
+    if optional_backend:
         surface["attach_hint"] = tmux_attach_hint(session_name)
-        surface["operator_hint"] = f"tmux {session_name}:{window_name}"
+        surface["operator_hint"] = f"opt tmux {session_name}:{window_name}"
     else:
         surface["attach_hint"] = ""
-        surface["operator_hint"] = f"{mode} runner-daemon"
+        surface["operator_hint"] = ""
     return surface
 
 
@@ -524,6 +555,8 @@ def spawn_operator_surface(
     *,
     agent_name: str = "",
     team_name: str = "",
+    backend_override: str = "",
+    backend_name_override: str = "",
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg = config or load_octopus_config()
@@ -534,36 +567,34 @@ def spawn_operator_surface(
     if not isinstance(bridge_cfg, dict):
         bridge_cfg = {}
     workbench = workbench_config(cfg)
-    backend = str(spawn_cfg.get("backend", "plan") or "plan").strip() or "plan"
-    backend_name = str(spawn_cfg.get("backend_name", "tmux") or "tmux").strip() or "tmux"
-    if backend == "native":
-        backend_name = "openclaw_agent"
-    elif backend not in {"clawteam", "plan"}:
-        backend_name = backend
+    backend = str(backend_override or spawn_cfg.get("backend", "plan") or "plan").strip() or "plan"
+    configured_backend_name = str(backend_name_override or spawn_cfg.get("backend_name", "tmux") or "tmux").strip() or "tmux"
+    backend_name = _spawn_backend_name(backend, configured_backend_name)
     session_name = str(workbench.get("tmux_session_name", "") or "").strip()
     team_value = str(team_name or spawn_cfg.get("team_name", "") or bridge_cfg.get("team_name", "") or "").strip()
+    optional_backend = _spawn_backend_is_optional(backend)
     surface = {
         "kind": "spawn",
+        "role": "execution_lane",
+        "backend_posture": "optional_backend" if optional_backend else ("planning_only" if backend == "plan" else "default_runtime"),
+        "optional_backend": optional_backend,
         "backend": backend,
         "backend_name": backend_name,
         "team_name": team_value,
         "agent_name": str(agent_name or "").strip(),
         "tmux_session_name": session_name,
+        "surface_summary": (
+            "spawn lane (default OpenClaw substrate path)"
+            if backend == "native"
+            else ("spawn lane with optional heavy backend" if optional_backend else "planning-only spawn surface")
+        ),
     }
-    if backend == "clawteam":
-        hint = f"clawteam/{backend_name}"
-        if team_value:
-            hint += f" {team_value}"
-        if agent_name:
-            hint += f"/{agent_name}"
-        surface["operator_hint"] = hint
-    elif backend == "native":
-        hint = "openclaw/native"
-        if agent_name:
-            hint += f" {agent_name}"
-        surface["operator_hint"] = hint
-    else:
-        surface["operator_hint"] = backend or "plan"
+    surface["operator_hint"] = _spawn_operator_hint(
+        backend=backend,
+        backend_name=backend_name,
+        team_name=team_value,
+        agent_name=str(agent_name or "").strip(),
+    )
     surface["attach_hint"] = (
         tmux_attach_hint(session_name)
         if backend == "clawteam" and backend_name == "tmux" and session_name

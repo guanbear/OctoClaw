@@ -118,6 +118,11 @@ class RuntimeObserverTests(unittest.TestCase):
                     "observer": "substrate_aware",
                     "review": "substrate_aware",
                 },
+                "workbench": {
+                    "role": "optional_workbench",
+                    "optional_backend": True,
+                    "tmux_session_name": "octoclaw-runtime",
+                },
                 "active_substrate_tasks": [
                     {
                         "task_id": "task-1",
@@ -142,6 +147,7 @@ class RuntimeObserverTests(unittest.TestCase):
         )
 
         self.assertIn("Active substrate tasks:", text)
+        self.assertIn("Optional workbench: tmux octoclaw-runtime", text)
         self.assertIn("flow flow-1", text)
         self.assertIn("Review surfaces:", text)
         self.assertIn("details review-1", text)

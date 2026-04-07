@@ -451,6 +451,8 @@ def _workbench_summary() -> dict[str, Any]:
     runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
     patrol_window = str(workbench.get("tmux_patrol_window_name", "patrol") or "patrol").strip() or "patrol"
     payload = {
+        "role": "optional_workbench",
+        "optional_backend": bool(mode == "tmux" and session_name),
         "supervisor_mode": mode,
         "tmux_session_name": session_name,
         "runner_window_name": runner_window,
@@ -676,6 +678,8 @@ def load_bridge_summary() -> dict[str, Any]:
         last_cli_sync = {}
     return {
         "enabled": True,
+        "role": "optional_validation_bridge",
+        "optional_backend": True,
         "backend": bridge_backend(),
         "team": _team_name(),
         "root": paths["root"],

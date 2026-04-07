@@ -195,6 +195,8 @@ class UnifiedRuntimeLineageTests(unittest.TestCase):
         self.assertEqual(board["task_kind_counts"]["team_parent"], 1)
         self.assertEqual(board["task_kind_counts"]["team_step"], 2)
         self.assertTrue(board["lineages"])
+        self.assertEqual(board["workbench"]["role"], "optional_workbench")
+        self.assertFalse(board["workbench"]["optional_backend"])
         self.assertEqual(board["workbench"]["supervisor_mode"], "auto")
         lineage = next(item for item in board["lineages"] if item["parent"]["id"] == "team-root")
         self.assertEqual(lineage["child_count"], 2)
