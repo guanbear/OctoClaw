@@ -44,6 +44,7 @@ def _taskflow_field(task: dict[str, Any], key: str) -> str:
 def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
     tracked = 0
     mirrored = 0
+    managed = 0
     native_bound = 0
     native_active = 0
     checkpointed = 0
@@ -57,6 +58,7 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
         binding_state = _taskflow_field(task, "taskflow_state") or _taskflow_field(task, "binding_state")
         native_binding = _taskflow_field(task, "native_binding_state")
         native_status = _taskflow_field(task, "native_status").lower()
+        sync_mode = _taskflow_field(task, "taskflow_sync_mode")
         handoff_state = str(task.get("handoff_state", "") or "").strip().lower()
         task_event_summary = task.get("task_event_summary", {}) if isinstance(task.get("task_event_summary", {}), dict) else {}
         kind_counts = task_event_summary.get("kind_counts", {}) if isinstance(task_event_summary.get("kind_counts", {}), dict) else {}
@@ -64,6 +66,8 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
             tracked += 1
             if "mirror" in binding_state:
                 mirrored += 1
+        if sync_mode == "managed":
+            managed += 1
         if native_binding == "bound":
             native_bound += 1
         if native_status in {"queued", "running", "blocked"}:
@@ -80,6 +84,7 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
     return {
         "tracked": tracked,
         "mirrored": mirrored,
+        "managed": managed,
         "native_bound": native_bound,
         "native_active": native_active,
         "checkpointed": checkpointed,
@@ -94,6 +99,7 @@ def render_taskflow_substrate_summary(summary: dict[str, int]) -> str:
     if tracked <= 0:
         return "🧩 Substrate：no mirrored taskflow bindings yet"
     mirrored = int(summary.get("mirrored", 0) or 0)
+    managed = int(summary.get("managed", 0) or 0)
     native_bound = int(summary.get("native_bound", 0) or 0)
     native_active = int(summary.get("native_active", 0) or 0)
     checkpointed = int(summary.get("checkpointed", 0) or 0)
@@ -102,7 +108,7 @@ def render_taskflow_substrate_summary(summary: dict[str, int]) -> str:
     delivered = int(summary.get("delivered", 0) or 0)
     return (
         "🧩 Substrate："
-        f"tracked {tracked} · mirrored {mirrored} · native bound {native_bound} · "
+        f"tracked {tracked} · mirrored {mirrored} · managed {managed} · native bound {native_bound} · "
         f"native active {native_active} · checkpoints/artifacts {checkpointed}/{artifact_ready} · "
         f"handoff ready/delivered {handoff_ready}/{delivered}"
     )

@@ -157,5 +157,49 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
         self.assertEqual(plan["review"]["profile"], "review")
         self.assertEqual(plan["review"]["model_band"], "strong")
 
+    def test_execute_multi_spawn_plan_runs_under_native_backend(self) -> None:
+        args = argparse.Namespace()
+        plan = {
+            "planner": {"worker_pool": "octoclaw-research", "model_band": "normal"},
+            "worker": {"worker_pool": "octoclaw-code", "model_band": "strong"},
+        }
+
+        with (
+            patch.object(dispatch_task, "configured_spawn_backend", return_value="native"),
+            patch.object(dispatch_task, "build_spawn_spec", side_effect=[
+                {
+                    "model": "model/planner",
+                    "model_band": "normal",
+                    "selector_band": "normal",
+                    "worker_pool": "octoclaw-research",
+                    "work_type": "research",
+                    "phase": "inspect",
+                    "task_id": "planner-1",
+                    "executed": True,
+                    "report_path": "/tmp/planner-1.md",
+                    "task_kind": "team_step",
+                    "spawn_execution": {"backend": "native"},
+                },
+                {
+                    "model": "model/worker",
+                    "model_band": "strong",
+                    "selector_band": "strong",
+                    "worker_pool": "octoclaw-code",
+                    "work_type": "code",
+                    "phase": "implement",
+                    "task_id": "worker-1",
+                    "executed": True,
+                    "report_path": "/tmp/worker-1.md",
+                    "task_kind": "team_step",
+                    "spawn_execution": {"backend": "native"},
+                },
+            ]),
+        ):
+            result = dispatch_task.execute_multi_spawn_plan(args, "Fix the workflow", plan, parent_task_id="team-root")
+
+        self.assertTrue(result["executed"])
+        self.assertEqual([step["task_id"] for step in result["steps"]], ["planner-1", "worker-1"])
+        self.assertIn("OpenClaw 原生后台", result["handoff"]["summary"])
+
 if __name__ == "__main__":
     unittest.main()

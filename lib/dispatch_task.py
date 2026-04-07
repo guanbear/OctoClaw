@@ -198,7 +198,15 @@ def upsert_runtime_task(**fields) -> None:
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
-def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) -> dict:
+def configured_spawn_backend() -> str:
+    spawn_cfg = load_octopus_config().get("spawn_execution", {})
+    if not isinstance(spawn_cfg, dict) or not spawn_cfg.get("enabled", False):
+        return ""
+    backend = str(spawn_cfg.get("backend", "plan") or "plan").strip().lower()
+    return backend if backend in {"native", "clawteam"} else ""
+
+
+def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str, *, parent_spec: dict | None = None) -> dict:
     ordered_steps = [name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict)]
     child_task_ids = [str(step.get("task_id", "") or "").strip() for step in steps if str(step.get("task_id", "") or "").strip()]
     operator_surface = spawn_operator_surface()
@@ -237,7 +245,7 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
             "selector_band": str(entry.get("selector_band", "") or ""),
         }
 
-    return {
+    artifacts = {
         "step_order": ordered_steps,
         "child_task_ids": child_task_ids,
         "step_task_ids": {
@@ -272,6 +280,13 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str) ->
         "operator_surface": operator_surface,
         "operator_hint": str(operator_surface.get("operator_hint", "") or ""),
     }
+    parent_artifacts = (parent_spec or {}).get("artifacts", {}) if isinstance((parent_spec or {}).get("artifacts", {}), dict) else {}
+    taskflow = (parent_spec or {}).get("openclaw_taskflow", {})
+    if not isinstance(taskflow, dict):
+        taskflow = parent_artifacts.get("openclaw_taskflow", {}) if isinstance(parent_artifacts.get("openclaw_taskflow", {}), dict) else {}
+    if isinstance(taskflow, dict) and taskflow:
+        artifacts["openclaw_taskflow"] = dict(taskflow)
+    return artifacts
 
 
 def register_multi_parent_task(
@@ -319,7 +334,7 @@ def register_multi_parent_task(
         protocol=str(route_meta.get("protocol", "") or "normal"),
         profile=str(model_meta.get("profile", "") or parent_spec.get("profile", "")),
         review_required="true" if bool(decision_review(decision).get("required", False)) else "false",
-        artifacts_json=json.dumps(build_multi_parent_artifacts(plan, execution.get("steps", []), backend), ensure_ascii=False),
+        artifacts_json=json.dumps(build_multi_parent_artifacts(plan, execution.get("steps", []), backend, parent_spec=parent_spec), ensure_ascii=False),
         **octoclaw_identity_fields(decision),
     )
 
@@ -519,8 +534,8 @@ def build_multi_step_task(base_task: str, step_name: str) -> str:
 
 
 def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str) -> dict:
-    spawn_cfg = load_octopus_config().get("spawn_execution", {})
-    if not isinstance(spawn_cfg, dict) or not spawn_cfg.get("enabled", False) or str(spawn_cfg.get("backend", "plan") or "plan").strip().lower() != "clawteam":
+    backend = configured_spawn_backend()
+    if not backend:
         return {"executed": False, "steps": [], "handoff": build_spawn_handoff("spawn_multi", "", task)}
 
     ordered_steps = [name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict)]
@@ -584,14 +599,15 @@ def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str
         previous_task_id = str(spec.get("task_id", "") or previous_task_id)
 
     step_names = " / ".join(ordered_steps)
+    backend_label = "OpenClaw 原生后台" if backend == "native" else "ClawTeam/tmux"
     return {
         "executed": True,
         "steps": steps,
         "handoff": {
             "kind": "background",
             "status": "pending",
-            "summary": f"多子任务流程已通过 ClawTeam/tmux 启动：{step_names}。",
-            "reply_text": f"我已经把这个任务拆成 {step_names} 几个工位挂到 ClawTeam/tmux 里继续处理，稍后回来汇总结论。",
+            "summary": f"多子任务流程已通过{backend_label}启动：{step_names}。",
+            "reply_text": f"我已经把这个任务拆成 {step_names} 几个工位挂到{backend_label}里继续处理，稍后回来汇总结论。",
             "report_path": "",
             "user_safe": True,
         },
@@ -769,8 +785,8 @@ def recommend_spawn(args, task: str) -> dict:
 
 def recommend_multi_spawn(args, task: str) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
-    spawn_cfg = load_octopus_config().get("spawn_execution", {})
-    multi_exec_enabled = isinstance(spawn_cfg, dict) and bool(spawn_cfg.get("enabled", False)) and str(spawn_cfg.get("backend", "plan") or "plan").strip().lower() == "clawteam"
+    multi_exec_backend = configured_spawn_backend()
+    multi_exec_enabled = bool(multi_exec_backend)
     requested_model_band = getattr(args, "model_band", "") or ""
     primary_spawn = build_spawn_spec(
         task,
@@ -798,7 +814,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         review_decision = build_decision(review_task, metadata=decision_metadata(decision), force_route="spawn_single")
         plan["review"] = compat_spawn_step_from_decision(review_decision)
     execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octoclaw-team-{now_compact()}"))
-    parent_runtime = "clawteam" if multi_exec_enabled else "plan"
+    parent_runtime = multi_exec_backend if multi_exec_enabled else "plan"
     primary_spawn["runtime"] = parent_runtime
     primary_spawn["task_kind"] = "team_parent"
     primary_spawn["child_ids"] = [

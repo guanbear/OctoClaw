@@ -106,6 +106,28 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _substrate_preferred_state(task: dict[str, Any], binding: dict[str, Any], fallback_state: str) -> str:
+    if not isinstance(binding, dict) or not binding:
+        return fallback_state
+    substrate_state = _text(task.get("openclaw_taskflow_substrate_state") or binding.get("substrate_state")).lower()
+    sync_mode = _text(task.get("openclaw_taskflow_sync_mode") or binding.get("sync_mode")).lower()
+    native_binding_state = _text(task.get("openclaw_native_binding_state") or binding.get("native_binding_state")).lower()
+    mapped = {
+        "queued": "queued",
+        "running": "running",
+        "waiting": "blocked",
+        "blocked": "blocked",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "succeeded": "done",
+    }.get(substrate_state, "")
+    if not mapped:
+        return fallback_state
+    if native_binding_state == "bound" or sync_mode == "managed":
+        return mapped
+    return fallback_state
+
+
 def action_command_value(task_id: str, fallback_command: str) -> str:
     command = _text(fallback_command)
     task_ref = _text(task_id)
@@ -571,6 +593,8 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
     summary = _clean_task_summary(normalized, limit=120)
     models = _collect_active_models(normalized)
     taskflow = _taskflow_binding(normalized)
+    if _text(lifecycle_state).lower() not in {"finished", "cancelled"}:
+        state = _substrate_preferred_state(normalized, taskflow, state)
 
     anchor = {
         "task_id": _text(normalized.get("id")),

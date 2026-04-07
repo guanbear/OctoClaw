@@ -295,6 +295,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "backend": "mirror",
         "native_binding_enabled": True,
+        "native_create_enabled": True,
         "register_runner_tasks": True,
         "register_runner_one_task_flows": False,
         "register_spawn_single_flows": True,

@@ -2,10 +2,9 @@
 """OctoClaw <-> OpenClaw task/flow substrate adapter.
 
 Current phase:
-- mirror-first registration into OctoClaw-local mirror file
-- native-fact binding against ``openclaw tasks list --json`` output
-
-This module intentionally does not write into OpenClaw's native task ledger.
+- native-preferred managed TaskFlow create for eligible spawn routes
+- mirror registration into OctoClaw-local mirror file
+- native-fact binding against OpenClaw task / flow ledgers
 """
 
 from __future__ import annotations
@@ -19,9 +18,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
-    from octopus_config import OPENCLAW_TASKFLOW_MIRROR_FILE, openclaw_taskflow_config
+    from octopus_config import LIB_DIR, OPENCLAW_TASKFLOW_MIRROR_FILE, load_octopus_config, openclaw_taskflow_config
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.octopus_config import OPENCLAW_TASKFLOW_MIRROR_FILE, openclaw_taskflow_config
+    from lib.octopus_config import LIB_DIR, OPENCLAW_TASKFLOW_MIRROR_FILE, load_octopus_config, openclaw_taskflow_config
 
 
 TASKFLOW_LINK_SCHEMA_VERSION = "octoclaw.taskflow.link/v1"
@@ -29,6 +28,7 @@ TASKFLOW_MIRROR_SCHEMA_VERSION = "octoclaw.taskflow.mirror/v1"
 SUPPORTED_TASKFLOW_ROUTES = {"runner", "spawn_single", "spawn_multi"}
 NATIVE_BINDING_THRESHOLD = 100
 DEFAULT_TASKFLOW_MIRROR_RETENTION_HOURS = 48
+RUNTIME_HELPER = os.path.join(LIB_DIR, "openclaw_taskflow_runtime_helper.mjs")
 
 
 def now_iso() -> str:
@@ -106,8 +106,35 @@ def load_taskflow_mirror(path: str | None = None) -> dict[str, Any]:
     return _load_mirror_unlocked(path or OPENCLAW_TASKFLOW_MIRROR_FILE)
 
 
-def has_openclaw_cli() -> bool:
-    return shutil.which("openclaw") is not None
+def _openclaw_bin(config: dict[str, Any] | None = None) -> str:
+    cfg = config or load_octopus_config()
+    spawn_cfg = cfg.get("spawn_execution", {}) if isinstance(cfg.get("spawn_execution", {}), dict) else {}
+    configured = _normalized_str(spawn_cfg.get("openclaw_bin"))
+    candidates = [configured] if configured else []
+    candidates.extend(["openclaw", "/opt/homebrew/bin/openclaw", "/usr/local/bin/openclaw"])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        if os.path.isabs(candidate) and os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return configured or "openclaw"
+
+
+def _node_bin() -> str:
+    for candidate in ("node", "/opt/homebrew/bin/node", "/usr/local/bin/node"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        if os.path.isabs(candidate) and os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return ""
+
+
+def has_openclaw_cli(config: dict[str, Any] | None = None) -> bool:
+    return shutil.which(_openclaw_bin(config)) is not None
 
 
 def native_create_supported() -> bool:
@@ -216,11 +243,11 @@ def _native_substrate_revision(native_task: dict[str, Any]) -> int:
     )
 
 
-def _run_openclaw_cli(args: list[str], *, timeout_seconds: int = 20) -> dict[str, Any]:
-    cmd = ["openclaw", *args]
+def _run_openclaw_cli(args: list[str], *, timeout_seconds: int = 20, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    cmd = [_openclaw_bin(config), *args]
     if "--json" not in cmd:
         cmd.append("--json")
-    if not has_openclaw_cli():
+    if not has_openclaw_cli(config):
         return {
             "ok": False,
             "status": "unavailable",
@@ -285,6 +312,10 @@ def _native_binding_enabled(config: dict[str, Any] | None = None) -> bool:
     return _bool(_taskflow_cfg(config).get("native_binding_enabled"), default=True)
 
 
+def _native_create_enabled(config: dict[str, Any] | None = None) -> bool:
+    return _bool(_taskflow_cfg(config).get("native_create_enabled"), default=True)
+
+
 def _native_runtime_candidates(task: dict[str, Any]) -> list[str]:
     runtime = _normalized_str(task.get("runtime")).lower()
     route = _normalized_str(task.get("route")).lower()
@@ -331,10 +362,10 @@ def _native_lookup_payload(task: dict[str, Any]) -> dict[str, str]:
 
 
 def list_native_openclaw_tasks(config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    if not _native_binding_enabled(config) or not has_openclaw_cli():
+    if not _native_binding_enabled(config) or not has_openclaw_cli(config):
         return []
     result = subprocess.run(
-        ["openclaw", "tasks", "list", "--json"],
+        [_openclaw_bin(config), "tasks", "list", "--json"],
         capture_output=True,
         text=True,
         check=False,
@@ -349,6 +380,31 @@ def list_native_openclaw_tasks(config: dict[str, Any] | None = None) -> list[dic
         return [item for item in payload if isinstance(item, dict)]
     if isinstance(payload, dict):
         for key in ("tasks", "items", "rows"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def list_native_openclaw_flows(config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not _native_binding_enabled(config) or not has_openclaw_cli(config):
+        return []
+    result = subprocess.run(
+        [_openclaw_bin(config), "tasks", "flow", "list", "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("flows", "items", "rows"):
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
@@ -434,11 +490,49 @@ def _apply_native_taskflow_facts(
     return updated
 
 
+def _native_flow_match_score(resolved: dict[str, Any], native_flow: dict[str, Any]) -> int:
+    if not isinstance(native_flow, dict):
+        return 0
+    score = 0
+    expected_flow_id = _normalized_str(resolved.get("flow_id"))
+    flow_id = _normalized_str(native_flow.get("flowId") or native_flow.get("flow_id") or native_flow.get("id"))
+    owner_key = _normalized_str(native_flow.get("ownerKey") or native_flow.get("owner_key"))
+    controller_id = _normalized_str(native_flow.get("controllerId") or native_flow.get("controller_id"))
+    requester_session_key = _normalized_str(resolved.get("session_key"))
+    expected_controller = _normalized_str(resolved.get("controller_id"))
+    if expected_flow_id and expected_flow_id == flow_id:
+        score += 320
+    if requester_session_key and requester_session_key == owner_key:
+        score += 120
+    if expected_controller and expected_controller == controller_id:
+        score += 180
+    return score
+
+
+def _apply_native_flow_facts(resolved: dict[str, Any], native_flow: dict[str, Any], *, match_score: int = 0) -> dict[str, Any]:
+    updated = dict(resolved)
+    updated["flow_id"] = _normalized_str(native_flow.get("flowId") or native_flow.get("flow_id") or native_flow.get("id") or updated.get("flow_id"))
+    updated["backend"] = "managed"
+    updated["binding_state"] = "mirrored_bound"
+    updated["native_binding_state"] = "bound"
+    updated["sync_mode"] = _normalized_str(native_flow.get("syncMode") or native_flow.get("sync_mode") or updated.get("sync_mode")) or "managed"
+    updated["substrate_state"] = _normalized_str(native_flow.get("status") or native_flow.get("state") or updated.get("substrate_state"))
+    updated["substrate_revision"] = _normalized_int(
+        native_flow.get("revision") or native_flow.get("stateRevision") or native_flow.get("state_revision") or updated.get("substrate_revision")
+    )
+    updated["controller_id"] = _normalized_str(native_flow.get("controllerId") or native_flow.get("controller_id") or updated.get("controller_id"))
+    updated["native_seen_at"] = now_iso()
+    if match_score:
+        updated["native_match_score"] = max(match_score, _normalized_int(updated.get("native_match_score")))
+    return updated
+
+
 def reconcile_native_taskflow_binding(
     task: dict[str, Any],
     *,
     binding: dict[str, Any] | None = None,
     native_tasks: list[dict[str, Any]] | None = None,
+    native_flows: list[dict[str, Any]] | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved = dict(binding or _binding_from_task(task) or build_taskflow_binding(task, config=config))
@@ -462,16 +556,28 @@ def reconcile_native_taskflow_binding(
         if score > best_score:
             best_score = score
             best_match = native_task
-    if not best_match or best_score < NATIVE_BINDING_THRESHOLD:
-        if lookup["native_task_id"] or lookup["native_flow_id"]:
-            if not _normalized_str(resolved.get("sync_mode")):
-                resolved["sync_mode"] = _default_sync_mode(config=config, binding=resolved)
-            resolved["native_seen_at"] = now_iso()
-            return resolved
+    if best_match and best_score >= NATIVE_BINDING_THRESHOLD:
+        resolved = _apply_native_taskflow_facts(resolved, best_match, match_score=best_score, config=config)
+    elif lookup["native_task_id"] or lookup["native_flow_id"]:
+        if not _normalized_str(resolved.get("sync_mode")):
+            resolved["sync_mode"] = _default_sync_mode(config=config, binding=resolved)
+        resolved["native_seen_at"] = now_iso()
+    else:
         resolved.setdefault("native_binding_state", "none")
-        return resolved
 
-    return _apply_native_taskflow_facts(resolved, best_match, match_score=best_score, config=config)
+    flow_candidates = native_flows if isinstance(native_flows, list) else list_native_openclaw_flows(config=config)
+    best_flow: dict[str, Any] | None = None
+    best_flow_score = 0
+    for native_flow in flow_candidates:
+        if not isinstance(native_flow, dict):
+            continue
+        score = _native_flow_match_score(resolved, native_flow)
+        if score > best_flow_score:
+            best_flow_score = score
+            best_flow = native_flow
+    if best_flow and best_flow_score >= NATIVE_BINDING_THRESHOLD:
+        resolved = _apply_native_flow_facts(resolved, best_flow, match_score=best_flow_score)
+    return resolved
 
 
 def build_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -487,12 +593,14 @@ def build_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | Non
         return {}
     flow_kind = _flow_kind(task, config=config)
     lookup = _native_lookup_payload(task)
+    explicit = _binding_from_task(task)
     task_runtime = "openclaw_task"
     binding_state = "mirrored"
     native_binding_state = "none"
-    task_id = lookup["native_task_id"]
-    flow_id = lookup["native_flow_id"]
-    sync_mode = _default_sync_mode(config=config)
+    task_id = lookup["native_task_id"] or _normalized_str(explicit.get("task_id"))
+    flow_id = lookup["native_flow_id"] or _normalized_str(explicit.get("flow_id"))
+    sync_mode = _normalized_str(explicit.get("sync_mode")) or _default_sync_mode(config=config, binding=explicit)
+    backend = _normalized_str(explicit.get("backend")) or _normalized_str(cfg.get("backend")) or "mirror"
     if task_id or flow_id:
         binding_state = "mirrored_bound"
         native_binding_state = "bound"
@@ -502,14 +610,14 @@ def build_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | Non
     )
     return {
         "schema_version": TASKFLOW_LINK_SCHEMA_VERSION,
-        "backend": _normalized_str(cfg.get("backend")) or "mirror",
+        "backend": backend,
         "binding_state": binding_state,
         "native_binding_state": native_binding_state,
         "create_preference": create_preference,
         "create_status": create_status,
         "sync_mode": sync_mode,
-        "substrate_state": "",
-        "substrate_revision": 0,
+        "substrate_state": _normalized_str(explicit.get("substrate_state")),
+        "substrate_revision": _normalized_int(explicit.get("substrate_revision")),
         "task_runtime": task_runtime,
         "flow_runtime": "openclaw_flow" if flow_kind else "",
         "flow_kind": flow_kind,
@@ -523,10 +631,125 @@ def build_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | Non
         "session_key": lookup["session_key"],
         "session_id": lookup["session_id"] or lookup["child_session_id"],
         "run_id": lookup["run_id"],
+        "controller_id": _normalized_str(explicit.get("controller_id")),
         "summary": _normalized_str(task.get("summary")),
         "task_text": lookup["task_text"],
         "updated_at": now_iso(),
     }
+
+
+def _helper_available() -> bool:
+    return os.path.exists(RUNTIME_HELPER) and bool(_node_bin())
+
+
+def _run_runtime_helper(args: list[str], *, timeout_seconds: int = 20, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _helper_available():
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "error": "openclaw taskflow runtime helper unavailable",
+        }
+    cmd = [_node_bin(), RUNTIME_HELPER, *args, "--openclaw-bin", _openclaw_bin(config)]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=max(5, int(timeout_seconds)),
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "error": str(exc),
+            "cmd": cmd,
+        }
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    payload: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = None
+    if result.returncode == 0 and isinstance(payload, dict):
+        payload.setdefault("ok", True)
+        payload.setdefault("status", "ok")
+        return payload
+    return {
+        "ok": False,
+        "status": "error" if result.returncode else "unavailable",
+        "error": _normalized_str((payload or {}).get("error")) or stderr or stdout or "runtime helper failed",
+        "stdout": stdout,
+        "stderr": stderr,
+        "returncode": result.returncode,
+        "cmd": cmd,
+    }
+
+
+def create_managed_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not isinstance(task, dict) or not _native_create_enabled(config):
+        return {}
+    flow_kind = _flow_kind(task, config=config)
+    if not flow_kind:
+        return {}
+    existing = _binding_from_task(task)
+    if _normalized_str(existing.get("flow_id")):
+        seeded = build_taskflow_binding(task, config=config)
+        seeded["backend"] = "managed"
+        seeded["sync_mode"] = _normalized_str(existing.get("sync_mode")) or "managed"
+        return seeded
+    session_key = _normalized_str(task.get("session_key"))
+    if not session_key:
+        return {}
+    status = _normalized_str(task.get("status")).lower()
+    flow_status = "running" if status in {"running", "started"} else "queued"
+    task_text = _normalized_str(task.get("task_description") or task.get("summary") or task.get("title") or task.get("id"))
+    controller_id = f"octoclaw:{_normalized_str(task.get('id')) or now_iso()}:{flow_kind}"
+    state_json = {
+        "octoclaw_task_id": _normalized_str(task.get("id")),
+        "route": _normalized_str(task.get("route")),
+        "worker_pool": _normalized_str(task.get("worker_pool")),
+        "phase": _normalized_str(task.get("phase")),
+        "runtime": _normalized_str(task.get("runtime")),
+    }
+    helper_result = _run_runtime_helper(
+        [
+            "create-managed-flow",
+            "--session-key",
+            session_key,
+            "--controller-id",
+            controller_id,
+            "--goal",
+            task_text,
+            "--status",
+            flow_status,
+            "--current-step",
+            _normalized_str(task.get("phase")) or _normalized_str(task.get("route")) or "queued",
+            "--notify-policy",
+            "silent",
+            "--state-json",
+            json.dumps(state_json, ensure_ascii=False),
+        ],
+        config=config,
+    )
+    if not helper_result.get("ok"):
+        return {}
+    flow = helper_result.get("flow", {}) if isinstance(helper_result.get("flow", {}), dict) else {}
+    seeded = build_taskflow_binding(task, config=config)
+    seeded["backend"] = "managed"
+    seeded["binding_state"] = "mirrored_bound"
+    seeded["native_binding_state"] = "bound"
+    seeded["sync_mode"] = "managed"
+    seeded["flow_id"] = _normalized_str(flow.get("flowId") or flow.get("flow_id") or helper_result.get("flow_id"))
+    seeded["substrate_state"] = _normalized_str(flow.get("status") or flow_status)
+    seeded["substrate_revision"] = _normalized_int(flow.get("revision"))
+    seeded["controller_id"] = controller_id
+    seeded["native_seen_at"] = now_iso()
+    return seeded
 
 
 def cancel_native_taskflow(
@@ -546,7 +769,7 @@ def cancel_native_taskflow(
             "attempts": attempts,
         }
     if flow_id:
-        flow_result = _run_openclaw_cli(["flows", "cancel", flow_id], timeout_seconds=timeout_seconds)
+        flow_result = _run_openclaw_cli(["tasks", "flow", "cancel", flow_id], timeout_seconds=timeout_seconds)
         attempts.append({"kind": "flow", "id": flow_id, "result": flow_result})
         if flow_result.get("ok"):
             return {
@@ -613,6 +836,7 @@ def enrich_task_record_with_taskflow(
     task: dict[str, Any],
     *,
     native_tasks: list[dict[str, Any]] | None = None,
+    native_flows: list[dict[str, Any]] | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(task, dict):
@@ -622,7 +846,13 @@ def enrich_task_record_with_taskflow(
         binding = register_taskflow_binding(task, config=config)
     if not binding:
         return task
-    resolved = reconcile_native_taskflow_binding(task, binding=binding, native_tasks=native_tasks, config=config)
+    resolved = reconcile_native_taskflow_binding(
+        task,
+        binding=binding,
+        native_tasks=native_tasks,
+        native_flows=native_flows,
+        config=config,
+    )
     updated = dict(task)
     artifacts = dict(updated.get("artifacts", {})) if isinstance(updated.get("artifacts"), dict) else {}
     artifacts["openclaw_taskflow"] = resolved

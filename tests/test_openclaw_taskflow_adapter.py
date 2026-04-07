@@ -264,6 +264,107 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertNotIn("task-clean", mirror["entries"])
         self.assertIn("task-keep", mirror["entries"])
 
+    @patch("lib.openclaw_taskflow_adapter._run_runtime_helper")
+    def test_create_managed_taskflow_binding_seeds_managed_flow(self, mock_helper) -> None:
+        mock_helper.return_value = {
+            "ok": True,
+            "status": "ok",
+            "flow_id": "flow-managed-1",
+            "flow": {
+                "flowId": "flow-managed-1",
+                "status": "queued",
+                "revision": 1,
+            },
+        }
+        config = {
+            "openclaw_taskflow": {
+                "enabled": True,
+                "backend": "mirror",
+                "native_binding_enabled": True,
+                "native_create_enabled": True,
+                "register_runner_tasks": True,
+                "register_runner_one_task_flows": False,
+                "register_spawn_single_flows": True,
+                "register_spawn_multi_linear_flows": True,
+            }
+        }
+
+        binding = openclaw_taskflow_adapter.create_managed_taskflow_binding(
+            {
+                "id": "spawn-managed-1",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "status": "queued",
+                "worker_pool": "octoclaw-research",
+                "phase": "inspect",
+                "task_description": "research provider docs",
+                "session_key": "agent:main:test",
+            },
+            config=config,
+        )
+
+        self.assertEqual(binding["backend"], "managed")
+        self.assertEqual(binding["binding_state"], "mirrored_bound")
+        self.assertEqual(binding["sync_mode"], "managed")
+        self.assertEqual(binding["flow_id"], "flow-managed-1")
+        self.assertEqual(binding["substrate_state"], "queued")
+        self.assertEqual(binding["substrate_revision"], 1)
+        self.assertTrue(binding["controller_id"].startswith("octoclaw:spawn-managed-1:"))
+
+    def test_reconcile_native_taskflow_binding_merges_flow_facts_without_task_match(self) -> None:
+        config = {
+            "openclaw_taskflow": {
+                "enabled": True,
+                "backend": "mirror",
+                "native_binding_enabled": True,
+                "native_create_enabled": True,
+                "register_runner_tasks": True,
+                "register_runner_one_task_flows": False,
+                "register_spawn_single_flows": True,
+                "register_spawn_multi_linear_flows": True,
+            }
+        }
+        task = {
+            "id": "team-parent-1",
+            "route": "spawn_multi",
+            "runtime": "subagent",
+            "status": "running",
+            "worker_pool": "octoclaw-code",
+            "summary": "coordinate a staged fix",
+            "task_description": "coordinate a staged fix",
+            "session_key": "agent:main:test",
+            "openclaw_taskflow": {
+                "backend": "managed",
+                "binding_state": "mirrored_bound",
+                "native_binding_state": "bound",
+                "sync_mode": "managed",
+                "flow_id": "flow-parent-1",
+                "controller_id": "octoclaw:team-parent-1:linear",
+            },
+        }
+
+        resolved = openclaw_taskflow_adapter.reconcile_native_taskflow_binding(
+            task,
+            native_tasks=[],
+            native_flows=[
+                {
+                    "flowId": "flow-parent-1",
+                    "ownerKey": "agent:main:test",
+                    "controllerId": "octoclaw:team-parent-1:linear",
+                    "syncMode": "managed",
+                    "status": "running",
+                    "revision": 4,
+                }
+            ],
+            config=config,
+        )
+
+        self.assertEqual(resolved["backend"], "managed")
+        self.assertEqual(resolved["flow_id"], "flow-parent-1")
+        self.assertEqual(resolved["substrate_state"], "running")
+        self.assertEqual(resolved["substrate_revision"], 4)
+        self.assertEqual(resolved["sync_mode"], "managed")
+
     @patch("lib.openclaw_taskflow_adapter._run_openclaw_cli")
     def test_cancel_native_taskflow_prefers_flow_cancel(self, mock_cli) -> None:
         mock_cli.return_value = {"ok": True, "status": "ok"}
@@ -279,7 +380,7 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["target_kind"], "flow")
         self.assertEqual(result["target_id"], "flow-ctrl-1")
-        self.assertEqual(mock_cli.call_args[0][0], ["flows", "cancel", "flow-ctrl-1"])
+        self.assertEqual(mock_cli.call_args[0][0], ["tasks", "flow", "cancel", "flow-ctrl-1"])
 
 
 if __name__ == "__main__":

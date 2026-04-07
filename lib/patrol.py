@@ -94,9 +94,9 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.agent_heartbeat import is_agent_alive
 
 try:
-    from openclaw_taskflow_adapter import enrich_task_record_with_taskflow, list_native_openclaw_tasks
+    from openclaw_taskflow_adapter import enrich_task_record_with_taskflow, list_native_openclaw_flows, list_native_openclaw_tasks
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.openclaw_taskflow_adapter import enrich_task_record_with_taskflow, list_native_openclaw_tasks
+    from lib.openclaw_taskflow_adapter import enrich_task_record_with_taskflow, list_native_openclaw_flows, list_native_openclaw_tasks
 
 try:
     from worker_taxonomy import (
@@ -451,6 +451,10 @@ def refresh_openclaw_taskflow_bindings(tasks: list[dict]) -> bool:
         native_tasks = list_native_openclaw_tasks()
     except Exception:
         native_tasks = []
+    try:
+        native_flows = list_native_openclaw_flows()
+    except Exception:
+        native_flows = []
     changed = False
     refreshed: list[dict] = []
     for task in tasks:
@@ -462,7 +466,7 @@ def refresh_openclaw_taskflow_bindings(tasks: list[dict]) -> bool:
             refreshed.append(task)
             continue
         try:
-            enriched = normalize_task_record(enrich_task_record_with_taskflow(task, native_tasks=native_tasks))
+            enriched = normalize_task_record(enrich_task_record_with_taskflow(task, native_tasks=native_tasks, native_flows=native_flows))
         except Exception:
             refreshed.append(task)
             continue
@@ -1595,6 +1599,26 @@ def recover_dead_agent_tasks(tasks: list[dict], *, stale_after_seconds: int = 90
     return [record for record, _ in updated]
 
 
+def _task_has_independent_native_spawn(task: dict[str, Any]) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if task_is_final(task):
+        return False
+    status = str(task.get("status", "") or "").strip().lower()
+    lifecycle_state = str(task.get("lifecycle_state", "") or "").strip().lower()
+    if status not in {"running", "dispatched"} and lifecycle_state not in {"running", "dispatched"}:
+        return False
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    spawn_execution = artifacts.get("spawn_execution", {}) if isinstance(artifacts.get("spawn_execution"), dict) else {}
+    if str(spawn_execution.get("backend", "") or "").strip().lower() != "native":
+        return False
+    child_session_key = str(spawn_execution.get("child_session_key", "") or spawn_execution.get("session_key", "") or "").strip()
+    session_id = str(spawn_execution.get("session_id", "") or task.get("session_id", "") or "").strip()
+    run_id = str(spawn_execution.get("run_id", "") or task.get("run_id", "") or "").strip()
+    pid = int(spawn_execution.get("pid", 0) or 0)
+    return bool(child_session_key or session_id or run_id or pid > 0)
+
+
 def patrol_heartbeat_check(workspace: str, stale_after_seconds: int = 60) -> list[dict]:
     """Requeue claimed tasks whose owning agent heartbeat has gone stale."""
     workspace_path = Path(workspace).resolve()
@@ -1613,6 +1637,8 @@ def patrol_heartbeat_check(workspace: str, stale_after_seconds: int = 60) -> lis
             continue
         owner_id = str(ownership.get("owner_id", "") or task.get("owner", "") or task.get("agent_id", "")).strip()
         if not owner_id or is_agent_alive(owner_id, workspace_path, stale_after_seconds=stale_after_seconds):
+            continue
+        if _task_has_independent_native_spawn(task):
             continue
         previous_status = str(task.get("status", "") or "")
         task["recovery_reason"] = "heartbeat_stale"

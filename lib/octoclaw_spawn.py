@@ -27,6 +27,7 @@ from functools import lru_cache
 
 from learning_log import append_error_entry
 from context_pack import build_context_pack
+from openclaw_taskflow_adapter import create_managed_taskflow_binding
 from octoclaw_route import infer_route
 from octopus_config import (
     CONTEXT_DIR,
@@ -1652,6 +1653,21 @@ def build_spawn_spec(
             summary=f"spawn派发失败：{compact_text(error_text, 120)}",
         )
         raise ValueError(error_text)
+    taskflow_binding = create_managed_taskflow_binding(
+        {
+            "id": task_id,
+            "route": final_route,
+            "runtime": runtime,
+            "status": "queued" if should_execute_spawn(final_route, runtime, explicit=execute) else "dispatched",
+            "worker_pool": resolved_worker_pool,
+            "phase": resolved_phase,
+            "summary": task_title(task, 60),
+            "task_description": task,
+            "session_key": resolved_session_key,
+        }
+    )
+    if taskflow_binding:
+        base_artifacts["openclaw_taskflow"] = taskflow_binding
     expected_done = expected_done_offset(final_model_band)
     summary_hint = result_summary_contract(resolved_worker_pool, resolved_phase, final_route)
     brief = build_task_brief(
@@ -1818,6 +1834,15 @@ def build_spawn_spec(
                 cmd.extend(["--owner", agent_owner])
             child_session_id = str((spawn_execution or {}).get("session_id", "") or "").strip()
             child_run_id = str((spawn_execution or {}).get("run_id", "") or "").strip()
+            taskflow_binding = base_artifacts.get("openclaw_taskflow")
+            if isinstance(taskflow_binding, dict) and taskflow_binding:
+                taskflow_binding["updated_at"] = datetime.now(timezone.utc).astimezone().isoformat()
+                if str((spawn_execution or {}).get("backend", "") or "").strip() == "native":
+                    taskflow_binding["substrate_state"] = "running"
+                taskflow_binding["session_id"] = child_session_id or str(taskflow_binding.get("session_id", "") or "")
+                taskflow_binding["run_id"] = child_run_id or str(taskflow_binding.get("run_id", "") or "")
+                taskflow_binding["task_id"] = str((spawn_execution or {}).get("native_task_id", "") or taskflow_binding.get("task_id", "") or "")
+                taskflow_binding["flow_id"] = str((spawn_execution or {}).get("native_flow_id", "") or taskflow_binding.get("flow_id", "") or "")
             if child_session_id:
                 cmd.extend(["--session-id", child_session_id])
             if child_run_id:
@@ -1911,6 +1936,7 @@ def build_spawn_spec(
         "execution_error": execution_error,
         "spawn_execution": spawn_execution or {},
         "operator_surface": base_artifacts.get("operator_surface", {}),
+        "openclaw_taskflow": base_artifacts.get("openclaw_taskflow", {}),
         "policy_decision": policy,
         "registered": register,
     }

@@ -304,6 +304,29 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("managed", anchor["substrate_summary"])
         self.assertIn("rev 9", anchor["substrate_summary"])
 
+    def test_build_task_anchor_prefers_managed_substrate_state(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "team-parent-1",
+                "worker_pool": "octoclaw-code",
+                "status": "queued",
+                "summary": "coordinate staged fix",
+                "route": "spawn_multi",
+                "openclaw_taskflow": {
+                    "backend": "managed",
+                    "binding_state": "mirrored_bound",
+                    "sync_mode": "managed",
+                    "substrate_state": "running",
+                    "substrate_revision": 2,
+                    "flow_id": "flow-parent-1",
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(anchor["state"], "running")
+        self.assertIn("flow flow-parent-1", anchor["substrate_summary"])
+
     def test_build_task_detail_includes_checklist(self) -> None:
         detail = build_task_detail(
             {
