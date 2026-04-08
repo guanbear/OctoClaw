@@ -419,6 +419,7 @@ Python 不再承担：
 - [ ] 在 `model-intel` 中显式支持：
   - `openrouter_catalog`
   - `openrouter_rankings`
+  - `models_dev_registry`
 - [ ] 定义 `OpenRouter catalog` 字段映射：
   - model id
   - pricing
@@ -426,7 +427,9 @@ Python 不再承担：
   - provider
   - modality / capability hints
 - [ ] 定义 `rankings` 的权重与衰减规则
+- [ ] 明确 `free model` 过滤或降权规则
 - [ ] 增加 freshness / decay / stale fallback 语义
+- [ ] 增加 last-good snapshot / stale-if-error cache
 - [ ] 保持本地 truth 优先级高于生态信号：
   - `openclaw_live_compat`
   - local pricing / overrides
@@ -448,14 +451,18 @@ Python 不再承担：
 
 - [ ] `tests/test_model_intel.py`
 - [ ] 新增 OpenRouter source mapping case
+- [ ] 新增 `models.dev` source mapping case
 - [ ] 新增 stale / fallback case
 - [ ] 新增 rankings 不压过本地 truth case
+- [ ] 新增 free-model filtered rankings case
 
 ### 验收标准
 
 - `model-intel refresh` 能产出带 source freshness 的 catalog snapshot
 - `OpenRouter catalog` 可以更新目录与价格字段
+- `models.dev` adapter 可以更新 capability / limits / modality 字段
 - `OpenRouter rankings` 只作为低权重生态信号
+- 免费模型不会误导 paid auto-routing
 - runtime route 不会因为外部 source 短暂失败而退化成不可用
 
 ---

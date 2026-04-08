@@ -7,9 +7,21 @@ import re
 from typing import Any
 
 try:
-    from octopus_config import WORKSPACE, load_json, save_json
+    from octopus_config import (
+        MODEL_INTEL_OPENROUTER_CATALOG_FILE,
+        MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE,
+        WORKSPACE,
+        load_json,
+        save_json,
+    )
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.octopus_config import WORKSPACE, load_json, save_json
+    from lib.octopus_config import (
+        MODEL_INTEL_OPENROUTER_CATALOG_FILE,
+        MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE,
+        WORKSPACE,
+        load_json,
+        save_json,
+    )
 
 MODEL_PRICING_FILE = f"{WORKSPACE}/tmp/octopus/model-pricing.json"
 CNY_PER_USD = 7.2
@@ -99,13 +111,86 @@ def ensure_pricing_file() -> dict[str, Any]:
     return DEFAULT_MODEL_PRICING
 
 
+def _load_external_openrouter_catalog() -> tuple[dict[str, Any], str]:
+    primary = load_json(MODEL_INTEL_OPENROUTER_CATALOG_FILE)
+    if isinstance(primary, dict) and isinstance(primary.get("records"), list):
+        return primary, MODEL_INTEL_OPENROUTER_CATALOG_FILE
+    last_good = load_json(MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE)
+    if isinstance(last_good, dict) and isinstance(last_good.get("records"), list):
+        return last_good, MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE
+    return {}, ""
+
+
+def _build_external_pricing_entries(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    records = snapshot.get("records", [])
+    if not isinstance(records, list):
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        model_id = str(record.get("id", "") or "").strip()
+        if not model_id:
+            continue
+        name = str(record.get("name", "") or "").strip()
+        canonical_slug = str(record.get("canonical_slug", "") or "").strip()
+        prompt_cost = float(record.get("prompt_cost_per_1m_usd", 0.0) or 0.0)
+        completion_cost = float(record.get("completion_cost_per_1m_usd", 0.0) or 0.0)
+        effective_cny = round(((prompt_cost * 0.75) + (completion_cost * 0.25)) * CNY_PER_USD, 6)
+        match_patterns = [re.escape(model_id.lower())]
+        if canonical_slug:
+            match_patterns.append(re.escape(canonical_slug.lower()))
+        if name:
+            match_patterns.append(re.escape(name.lower()))
+        suffix = model_id.split("/")[-1].strip().lower()
+        if suffix and suffix not in {pattern.lower() for pattern in match_patterns}:
+            match_patterns.append(re.escape(suffix))
+        entries.append(
+            {
+                "match_patterns": list(dict.fromkeys(match_patterns)),
+                "model_key": f"openrouter::{model_id}",
+                "pricing_mode": "provider_metered_token",
+                "prompt_cost_per_1m_usd": prompt_cost,
+                "completion_cost_per_1m_usd": completion_cost,
+                "effective_cny_per_1m_tokens": effective_cny,
+                "cost_score": 1 if record.get("is_free") else 2,
+                "is_external_sync": True,
+                "source_refs": ["openrouter_catalog_sync"],
+                "notes": [
+                    "Generated from OpenRouter catalog sync snapshot",
+                ],
+            }
+        )
+    return entries
+
+
 def load_pricing_file() -> dict[str, Any]:
-    return ensure_pricing_file()
+    local_payload = ensure_pricing_file()
+    catalog_snapshot, snapshot_path = _load_external_openrouter_catalog()
+    external_entries = _build_external_pricing_entries(catalog_snapshot)
+    if not external_entries:
+        return local_payload
+
+    merged = dict(local_payload)
+    local_models = local_payload.get("models", [])
+    merged["models"] = list(local_models) + external_entries
+    external_sources = dict(merged.get("external_sources", {}))
+    external_sources["openrouter_catalog"] = {
+        "source_file": snapshot_path,
+        "record_count": len(catalog_snapshot.get("records", []))
+        if isinstance(catalog_snapshot.get("records"), list)
+        else 0,
+        "updated_at": catalog_snapshot.get("generated_at", ""),
+        "last_good": snapshot_path == MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE,
+    }
+    merged["external_sources"] = external_sources
+    return merged
 
 
 def get_pricing_entry(model_id: str) -> dict[str, Any] | None:
     model_lower = model_id.lower()
-    data = ensure_pricing_file()
+    data = load_pricing_file()
     for entry in data.get("models", []):
         patterns = entry.get("match_patterns", [])
         if any(re.search(pattern, model_lower) for pattern in patterns):

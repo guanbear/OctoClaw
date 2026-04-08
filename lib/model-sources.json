@@ -15,6 +15,13 @@
       "decay_days": 30,
       "min_factor": 0.35
     },
+    "models_dev_registry": {
+      "role": "external_model_registry",
+      "description": "外部模型注册表，提供结构化 capability、limits、modalities 与基础定价线索。",
+      "default_confidence": 0.86,
+      "decay_days": 45,
+      "min_factor": 0.6
+    },
     "artificial_analysis_coding": {
       "role": "general_capability",
       "description": "通用 coding/reasoning/latency 榜单主源。",

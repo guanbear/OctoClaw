@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from model_health import resolve_model_health, selection_penalty_for_role
-from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_INTEL_SOURCE_STATUS_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, load_octopus_config, save_json
+from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_INTEL_MODELS_DEV_FILE, MODEL_INTEL_MODELS_DEV_LAST_GOOD_FILE, MODEL_INTEL_OPENROUTER_CATALOG_FILE, MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE, MODEL_INTEL_OPENROUTER_RANKINGS_FILE, MODEL_INTEL_OPENROUTER_RANKINGS_LAST_GOOD_FILE, MODEL_INTEL_SOURCE_STATUS_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, WORKSPACE, load_json, load_octopus_config, save_json
 from model_plan_state import compute_plan_value_score, ensure_plan_state_file, get_plan_state_entry, preferred_fallback_model, should_fallback_due_to_plan
 from model_pricing import MODEL_PRICING_FILE, ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens, load_pricing_file
 
@@ -144,8 +144,9 @@ MODEL_INTEL_SOURCE_PRECEDENCE = {
     "runtime": ["provider_runtime_observation", "operator_override", "built_in_defaults"],
 }
 SOURCE_STATUS_FILE_HINTS = {
-    "openrouter_catalog": MODEL_PRICING_FILE,
-    "openrouter_rankings": MODEL_BENCHMARKS_FILE,
+    "openrouter_catalog": MODEL_INTEL_OPENROUTER_CATALOG_FILE,
+    "openrouter_rankings": MODEL_INTEL_OPENROUTER_RANKINGS_FILE,
+    "models_dev_registry": MODEL_INTEL_MODELS_DEV_FILE,
     "artificial_analysis_coding": MODEL_BENCHMARKS_FILE,
     "pinchbench": MODEL_BENCHMARKS_FILE,
     "claw_eval": MODEL_BENCHMARKS_FILE,
@@ -500,6 +501,166 @@ def ensure_source_registry_file() -> dict:
     return payload
 
 
+def load_snapshot_with_last_good(primary_path: str, last_good_path: str) -> tuple[dict[str, Any], str]:
+    primary = load_json(primary_path)
+    if isinstance(primary, dict) and isinstance(primary.get("records"), list):
+        return primary, primary_path
+    last_good = load_json(last_good_path)
+    if isinstance(last_good, dict) and isinstance(last_good.get("records"), list):
+        return last_good, last_good_path
+    return {}, ""
+
+
+def normalize_model_lookup_key(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"\(free\)", "", text)
+    text = re.sub(r"^[^:]+:\s*", "", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def build_model_lookup_keys(*values: Any) -> list[str]:
+    keys: list[str] = []
+
+    def remember(raw: Any) -> None:
+        text = str(raw or "").strip()
+        if not text:
+            return
+        variants = [text, text.lower()]
+        if "/" in text:
+            suffix = text.split("/", 1)[1]
+            variants.append(suffix)
+            variants.append(text.rsplit("/", 1)[-1])
+        for variant in variants:
+            normalized = normalize_model_lookup_key(variant)
+            if normalized and normalized not in keys:
+                keys.append(normalized)
+
+    for value in values:
+        if isinstance(value, list):
+            for item in value:
+                remember(item)
+            continue
+        remember(value)
+    return keys
+
+
+def index_snapshot_records(records: list[dict[str, Any]], *, fields: list[str]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for field in fields:
+            value = record.get(field)
+            keys = build_model_lookup_keys(value)
+            for key in keys:
+                index.setdefault(key, record)
+    return index
+
+
+def load_external_model_intel_snapshots() -> dict[str, dict[str, Any]]:
+    snapshot_specs = {
+        "models_dev_registry": {
+            "primary": MODEL_INTEL_MODELS_DEV_FILE,
+            "last_good": MODEL_INTEL_MODELS_DEV_LAST_GOOD_FILE,
+            "fields": ["full_id", "model_id", "name", "family"],
+        },
+        "openrouter_catalog": {
+            "primary": MODEL_INTEL_OPENROUTER_CATALOG_FILE,
+            "last_good": MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE,
+            "fields": ["id", "canonical_slug", "name", "normalized_name"],
+        },
+        "openrouter_rankings": {
+            "primary": MODEL_INTEL_OPENROUTER_RANKINGS_FILE,
+            "last_good": MODEL_INTEL_OPENROUTER_RANKINGS_LAST_GOOD_FILE,
+            "fields": ["model_id", "name"],
+        },
+    }
+    snapshots: dict[str, dict[str, Any]] = {}
+    for source_name, spec in snapshot_specs.items():
+        payload, source_file = load_snapshot_with_last_good(spec["primary"], spec["last_good"])
+        records = payload.get("records", []) if isinstance(payload, dict) and isinstance(payload.get("records"), list) else []
+        snapshots[source_name] = {
+            "payload": payload if isinstance(payload, dict) else {},
+            "records": records,
+            "lookup": index_snapshot_records(records, fields=list(spec["fields"])),
+            "source_file": source_file,
+            "updated_at": str((payload or {}).get("generated_at", "") or file_updated_at(source_file) or "").strip(),
+            "last_good": bool(source_file and source_file == spec["last_good"]),
+        }
+    return snapshots
+
+
+def resolve_external_record(snapshot: dict[str, Any], *keys: Any) -> dict[str, Any]:
+    lookup = snapshot.get("lookup", {}) if isinstance(snapshot, dict) else {}
+    if not isinstance(lookup, dict):
+        return {}
+    for key in build_model_lookup_keys(*keys):
+        record = lookup.get(key)
+        if isinstance(record, dict):
+            return record
+    return {}
+
+
+def extract_external_metadata(
+    *,
+    model_id: str,
+    short_name: str,
+    snapshots: dict[str, dict[str, Any]],
+    source_registry: dict[str, Any],
+) -> dict[str, Any]:
+    models_dev = resolve_external_record(snapshots.get("models_dev_registry", {}), model_id, short_name)
+    openrouter_catalog = resolve_external_record(snapshots.get("openrouter_catalog", {}), model_id, short_name)
+    openrouter_rankings = resolve_external_record(snapshots.get("openrouter_rankings", {}), model_id, short_name)
+    capability_hints = {
+        "tool_call": bool(models_dev.get("tool_call")) or "tools" in {
+            str(item).strip().lower() for item in openrouter_catalog.get("supported_parameters", [])
+        },
+        "reasoning": bool(models_dev.get("reasoning")),
+        "open_weights": bool(models_dev.get("open_weights")),
+    }
+    input_modalities = list(models_dev.get("input_modalities") or []) or list(openrouter_catalog.get("input_modalities") or [])
+    output_modalities = list(models_dev.get("output_modalities") or []) or list(openrouter_catalog.get("output_modalities") or [])
+    limits = {
+        "context_length": int(openrouter_catalog.get("context_length") or models_dev.get("context_length") or 0),
+        "max_completion_tokens": int(openrouter_catalog.get("max_completion_tokens") or models_dev.get("output_limit") or 0),
+        "output_limit": int(models_dev.get("output_limit") or openrouter_catalog.get("max_completion_tokens") or 0),
+    }
+    source_refs: list[str] = []
+    if models_dev:
+        source_refs.append("models_dev_registry_sync")
+    if openrouter_catalog:
+        source_refs.append("openrouter_catalog_sync")
+    ranking_meta = {}
+    if openrouter_rankings:
+        ranking_meta = {
+            "source_model": str(openrouter_rankings.get("model_id") or openrouter_rankings.get("name") or "").strip(),
+            "confidence": float(
+                source_registry.get("openrouter_rankings", {}).get("default_confidence", 0.55)
+                if isinstance(source_registry, dict)
+                else 0.55
+            ),
+            "updated_at": str(snapshots.get("openrouter_rankings", {}).get("updated_at", "") or "").strip(),
+            "filtered_free_models": True,
+        }
+    return {
+        "models_dev": models_dev,
+        "openrouter_catalog": openrouter_catalog,
+        "openrouter_rankings": openrouter_rankings,
+        "capability_hints": capability_hints,
+        "modalities": {
+            "input": input_modalities,
+            "output": output_modalities,
+            "primary": str(openrouter_catalog.get("modality") or "").strip(),
+        },
+        "limits": limits,
+        "ranking_meta": ranking_meta,
+        "source_refs": source_refs,
+    }
+
+
 def summarize_benchmark_sources(benchmark_overrides: dict[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for override in benchmark_overrides.values():
@@ -521,6 +682,7 @@ def summarize_source_status(
     configured_ids: list[str],
     speed_data: dict[str, Any],
     health_state: dict[str, Any],
+    external_snapshots: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     pricing_data = load_pricing_file()
     plan_state_data = load_json(MODEL_PLAN_STATE_FILE)
@@ -529,10 +691,14 @@ def summarize_source_status(
     health_models = health_state.get("models", {}) if isinstance(health_state, dict) else {}
     plan_models = plan_state_data.get("models", {}) if isinstance(plan_state_data, dict) else {}
     pricing_models = pricing_data.get("models", []) if isinstance(pricing_data, dict) else []
+    openrouter_catalog_records = external_snapshots.get("openrouter_catalog", {}).get("records", [])
+    openrouter_ranking_records = external_snapshots.get("openrouter_rankings", {}).get("records", [])
+    models_dev_records = external_snapshots.get("models_dev_registry", {}).get("records", [])
 
     observed_counts = {
-        "openrouter_catalog": len(pricing_models) if isinstance(pricing_models, list) else 0,
-        "openrouter_rankings": benchmark_source_counts.get("openrouter_rankings", 0),
+        "openrouter_catalog": len(openrouter_catalog_records) if isinstance(openrouter_catalog_records, list) else 0,
+        "openrouter_rankings": len(openrouter_ranking_records) if isinstance(openrouter_ranking_records, list) else benchmark_source_counts.get("openrouter_rankings", 0),
+        "models_dev_registry": len(models_dev_records) if isinstance(models_dev_records, list) else 0,
         "artificial_analysis_coding": benchmark_source_counts.get("artificial_analysis_coding", 0),
         "pinchbench": benchmark_source_counts.get("pinchbench", 0),
         "claw_eval": benchmark_source_counts.get("claw_eval", 0),
@@ -547,7 +713,10 @@ def summarize_source_status(
         meta = dict(source_meta) if isinstance(source_meta, dict) else {}
         hint_file = SOURCE_STATUS_FILE_HINTS.get(source_name, MODEL_SOURCES_FILE)
         embedded_updated_at = None
-        if hint_file == MODEL_PRICING_FILE and isinstance(pricing_data, dict):
+        if source_name in external_snapshots:
+            embedded_updated_at = external_snapshots.get(source_name, {}).get("updated_at")
+            hint_file = str(external_snapshots.get(source_name, {}).get("source_file", "") or hint_file)
+        elif hint_file == MODEL_PRICING_FILE and isinstance(pricing_data, dict):
             embedded_updated_at = pricing_data.get("updated_at")
         elif hint_file == MODEL_PLAN_STATE_FILE and isinstance(plan_state_data, dict):
             embedded_updated_at = plan_state_data.get("updated_at")
@@ -766,6 +935,7 @@ def build_catalog() -> dict:
     speed_data = load_speed_data()
     benchmark_overrides = load_benchmark_overrides()
     source_registry = load_source_registry()
+    external_snapshots = load_external_model_intel_snapshots()
     configured_ids = load_models_from_openclaw()
     health_state = load_json(MODEL_HEALTH_FILE)
     configured_set = {str(model_id).strip() for model_id in configured_ids}
@@ -784,6 +954,12 @@ def build_catalog() -> dict:
         benchmark_scores = dict(override.get("benchmark_scores", {}))
         benchmark_meta = dict(override.get("benchmark_meta", {}))
         family_meta = infer_family_metadata(model_id, override)
+        external_meta = extract_external_metadata(
+            model_id=model_id,
+            short_name=override.get("short_name", prior["short_name"]),
+            snapshots=external_snapshots,
+            source_registry=source_registry,
+        )
 
         pricing = dict(prior["pricing"])
         pricing.update(override.get("pricing", {}))
@@ -797,6 +973,10 @@ def build_catalog() -> dict:
 
         scores = dict(prior["scores"])
         scores.update(override.get("scores", {}))
+        if external_meta["capability_hints"].get("reasoning"):
+            scores["reasoning_capable"] = True
+        if external_meta["capability_hints"].get("tool_call"):
+            scores["tool_capable"] = True
 
         speed = dict(prior["speed"])
         speed.update(override.get("speed", {}))
@@ -813,7 +993,17 @@ def build_catalog() -> dict:
         if isinstance(error_rate, (int, float)):
             scores["reliability"] = max(0.0, min(1.0, 1.0 - float(error_rate)))
 
+        ranking_record = external_meta.get("openrouter_rankings", {})
+        if isinstance(ranking_record, dict) and ranking_record and "openrouter_rankings" not in benchmark_scores:
+            ranking_score = ranking_record.get("score")
+            if isinstance(ranking_score, (int, float)):
+                benchmark_scores["openrouter_rankings"] = float(ranking_score)
+                benchmark_meta["openrouter_rankings"] = external_meta.get("ranking_meta", {})
+
         plan_state = get_plan_state_entry(model_id) or {}
+        source_refs = sorted(
+            set(prior.get("source_refs", []) + override.get("source_refs", []) + external_meta.get("source_refs", []))
+        )
 
         records.append(
             {
@@ -838,9 +1028,17 @@ def build_catalog() -> dict:
                 "speed": speed,
                 "provider": model_id.split("/")[0] if "/" in model_id else "unknown",
                 "private": any(token in model_id.lower() for token in ("lixiang-", "kivy-", "bailian", "private")),
-                "source_refs": sorted(set(prior.get("source_refs", []) + override.get("source_refs", []))),
+                "source_refs": source_refs,
                 "pricing_entry": pricing_entry or {},
                 "plan_state": plan_state,
+                "capability_hints": external_meta.get("capability_hints", {}),
+                "modalities": external_meta.get("modalities", {}),
+                "limits": external_meta.get("limits", {}),
+                "external_metadata": {
+                    "models_dev": external_meta.get("models_dev", {}),
+                    "openrouter_catalog": external_meta.get("openrouter_catalog", {}),
+                    "openrouter_rankings": external_meta.get("openrouter_rankings", {}),
+                },
             }
         )
 
@@ -850,6 +1048,7 @@ def build_catalog() -> dict:
         configured_ids=configured_ids,
         speed_data=speed_data,
         health_state=health_state if isinstance(health_state, dict) else {},
+        external_snapshots=external_snapshots,
     )
     catalog = {
         "generated_at": now_iso(),
@@ -1253,15 +1452,49 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
     return policy
 
 
+def sync_external_model_intel_sources() -> dict[str, Any]:
+    script_path = Path(__file__).with_name("model-intel-sync.mjs")
+    env = dict(os.environ)
+    env["WORKSPACE"] = WORKSPACE
+    path_entries = [entry for entry in str(env.get("PATH", "") or "").split(os.pathsep) if entry]
+    for entry in ["/opt/homebrew/bin", "/usr/local/bin"]:
+        if entry not in path_entries:
+            path_entries.insert(0, entry)
+    env["PATH"] = os.pathsep.join(path_entries)
+    result = subprocess.run(
+        ["node", str(script_path), "refresh"],
+        capture_output=True,
+        text=True,
+        cwd=str(script_path.parent.parent),
+        env=env,
+        timeout=120,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build OctoClaw model intelligence files")
-    parser.add_argument("command", choices=["refresh"])
+    parser.add_argument("command", choices=["refresh", "sync"])
     parser.add_argument("--mode", default="auto")
     args = parser.parse_args()
 
+    sync_result = None
+    if args.command == "sync":
+        sync_result = sync_external_model_intel_sources()
     catalog = build_catalog()
     policy = compute_policy(catalog, mode=args.mode, config=load_octopus_config())
-    print(json.dumps({"catalog": MODEL_CATALOG_FILE, "policy": MODEL_POLICY_FILE, "main_model": policy.get("main_model", "")}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "catalog": MODEL_CATALOG_FILE,
+                "policy": MODEL_POLICY_FILE,
+                "main_model": policy.get("main_model", ""),
+                "sync": sync_result,
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -19,6 +19,19 @@ SPEC.loader.exec_module(model_intel)
 
 
 class ModelIntelTests(unittest.TestCase):
+    def test_sync_external_model_intel_sources_invokes_node_adapter(self) -> None:
+        mocked_run = Mock(return_value=Mock(stdout='{"results":[{"source":"openrouter_catalog","ok":true}]}'))
+        with patch.object(model_intel.subprocess, "run", mocked_run):
+            payload = model_intel.sync_external_model_intel_sources()
+
+        self.assertEqual(payload["results"][0]["source"], "openrouter_catalog")
+        args, kwargs = mocked_run.call_args
+        self.assertEqual(args[0][0], "node")
+        self.assertTrue(str(args[0][1]).endswith("model-intel-sync.mjs"))
+        self.assertEqual(args[0][2], "refresh")
+        self.assertIn("/opt/homebrew/bin", kwargs["env"]["PATH"])
+        self.assertIn("/usr/local/bin", kwargs["env"]["PATH"])
+
     def test_ensure_source_registry_file_merges_missing_seed_sources(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-source-registry-") as workspace:
             existing_file = Path(workspace) / "model-sources-existing.json"
@@ -162,6 +175,86 @@ class ModelIntelTests(unittest.TestCase):
         self.assertEqual(catalog["schema_version"], model_intel.MODEL_INTEL_CATALOG_SCHEMA_VERSION)
         self.assertEqual(catalog["facts_plane"]["source_status_file"], model_intel.MODEL_INTEL_SOURCE_STATUS_FILE)
         self.assertIn("pricing", catalog["facts_plane"]["source_precedence"])
+
+    def test_build_catalog_surfaces_external_snapshot_metadata_and_rankings(self) -> None:
+        source_registry = {
+            "openrouter_catalog": {"default_confidence": 0.88, "role": "directory_pricing"},
+            "openrouter_rankings": {"default_confidence": 0.55, "role": "ecosystem_signal"},
+            "models_dev_registry": {"default_confidence": 0.86, "role": "external_model_registry"},
+        }
+        ranking_lookup_key = model_intel.normalize_model_lookup_key("gpt-5.4")
+        external_snapshots = {
+            "models_dev_registry": {
+                "records": [{"full_id": "openai/gpt-5.4"}],
+                "lookup": {
+                    ranking_lookup_key: {
+                        "full_id": "openai/gpt-5.4",
+                        "tool_call": True,
+                        "reasoning": True,
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "output_limit": 16000,
+                    }
+                },
+                "updated_at": "2026-04-08T00:00:00Z",
+                "source_file": "/tmp/models-dev.json",
+            },
+            "openrouter_catalog": {
+                "records": [{"id": "openai/gpt-5.4"}],
+                "lookup": {
+                    ranking_lookup_key: {
+                        "id": "openai/gpt-5.4",
+                        "name": "GPT-5.4",
+                        "modality": "text->text",
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "context_length": 256000,
+                        "max_completion_tokens": 32000,
+                        "supported_parameters": ["tools", "response_format"],
+                    }
+                },
+                "updated_at": "2026-04-08T00:00:00Z",
+                "source_file": "/tmp/openrouter-catalog.json",
+            },
+            "openrouter_rankings": {
+                "records": [{"model_id": "openai/gpt-5.4", "score": 0.91}],
+                "lookup": {
+                    ranking_lookup_key: {
+                        "model_id": "openai/gpt-5.4",
+                        "name": "GPT-5.4",
+                        "score": 0.91,
+                    }
+                },
+                "updated_at": "2026-04-08T00:00:00Z",
+                "source_file": "/tmp/openrouter-rankings.json",
+            },
+        }
+        with patch.object(model_intel, "ensure_pricing_file"), patch.object(
+            model_intel, "ensure_plan_state_file"
+        ), patch.object(model_intel, "ensure_benchmark_snapshot_file"), patch.object(
+            model_intel, "ensure_source_registry_file"
+        ), patch.object(model_intel, "load_latency_data", return_value={}), patch.object(
+            model_intel, "load_speed_data", return_value={}
+        ), patch.object(model_intel, "load_benchmark_overrides", return_value={}), patch.object(
+            model_intel, "load_source_registry", return_value=source_registry
+        ), patch.object(model_intel, "load_external_model_intel_snapshots", return_value=external_snapshots), patch.object(
+            model_intel, "load_models_from_openclaw", return_value=["omniroute/cx/gpt-5.4"]
+        ), patch.object(model_intel, "get_pricing_entry", return_value={}), patch.object(
+            model_intel, "get_plan_state_entry", return_value={}
+        ), patch.object(
+            model_intel, "load_pricing_file", return_value={"models": []}
+        ), patch.object(model_intel, "load_json", return_value={}), patch.object(
+            model_intel, "save_json", return_value=True
+        ):
+            catalog = model_intel.build_catalog()
+
+        record = catalog["models"][0]
+        self.assertTrue(record["capability_hints"]["tool_call"])
+        self.assertTrue(record["capability_hints"]["reasoning"])
+        self.assertEqual(record["limits"]["context_length"], 256000)
+        self.assertEqual(record["limits"]["max_completion_tokens"], 32000)
+        self.assertEqual(record["benchmark_scores"]["openrouter_rankings"], 0.91)
+        self.assertIn("models_dev_registry", catalog["facts_plane"]["active_sources"])
 
     def test_compute_policy_empty_catalog_uses_new_fields_only(self) -> None:
         with patch.object(model_intel, "save_json", return_value=True), patch.object(
