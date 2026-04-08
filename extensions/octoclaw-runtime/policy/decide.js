@@ -595,6 +595,18 @@ function preDispatchAckPolicy(route, workType, phase, taskClass = "") {
   };
 }
 
+function stateGroundingPolicy(routeMeta, route, taskClass) {
+  const protectedLane = normalizedText(routeMeta?.protected_lane);
+  const required = Boolean(route === "direct" && taskClass === "control_observer" && protectedLane === "control_observer");
+  return {
+    required,
+    source: required ? "runtime_read_model" : "",
+    scope: required ? "task_status_or_provenance" : "",
+    target: required ? "explicit_or_recent_task" : "",
+    fallback: required ? "ack_uncertainty" : "",
+  };
+}
+
 function toolPolicy(route, dispatchRequired, taskClass = "") {
   const blockPatterns = [];
   if (dispatchRequired && ["spawn_single", "spawn_multi"].includes(route)) {
@@ -643,6 +655,7 @@ function hookInterface(policyCfg, decision) {
   const skillPolicy = decision.skill_policy;
   const reviewPolicy = decision.review_policy;
   const routeHintPolicy = decision.route_hint_policy;
+  const stateGrounding = decision.state_grounding && typeof decision.state_grounding === "object" ? decision.state_grounding : {};
 
   return {
     before_model_resolve: {
@@ -670,6 +683,7 @@ function hookInterface(policyCfg, decision) {
         route_hint_required: routeHintPolicy.required,
         route_hint_submitted: routeHintPolicy.submitted,
       },
+      state_grounding: stateGrounding,
       skill_bundle: skillPolicy.default_skill_bundle,
       prompt_contract: decision.prompt_contract,
     },
@@ -998,6 +1012,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const routeBudget = budgetPolicy(features, route, workContract, protocol, needsReview);
   const promptPolicy = promptContract(protocol, route, workContract, needsReview);
   const preDispatchAck = preDispatchAckPolicy(route, workType, phase, taskClass);
+  const stateGrounding = stateGroundingPolicy(routeMeta, route, taskClass);
   const routeRecommendation = buildRouteRecommendation(routeMeta, {
     route,
     worker_pool: workerPool,
@@ -1077,6 +1092,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     budget_recommendation: budgetRecommendation,
     prompt_contract: promptPolicy,
     pre_dispatch_ack: preDispatchAck,
+    state_grounding: stateGrounding,
     tool_policy: toolPolicy(route, dispatchRequired, taskClass),
     route_hint_policy: routeHintPolicy,
     runtime_switches: runtimeSwitchesSummary(runtimeCfg),

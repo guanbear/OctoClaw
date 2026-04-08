@@ -206,6 +206,25 @@ Conversation info (untrusted metadata):
         self.assertIn("octoclaw_status", payload)
         self.assertIn("octoclaw_task_action", payload)
 
+    def test_state_grounding_helpers_format_loaded_and_missing_context(self) -> None:
+        loaded = run_runtime_helper(
+            """__octoclawTest.formatStateGroundingContext({
+                required: true,
+                found: true,
+                prompt_context: "[OctoClaw state grounding]\\nstatus=running"
+            })"""
+        )
+        missing = run_runtime_helper(
+            """__octoclawTest.formatStateGroundingContext({
+                required: true,
+                found: false,
+                reason: "task_not_found"
+            })"""
+        )
+
+        self.assertIn("status=running", loaded)
+        self.assertIn("Do not claim queued/running/done/handler facts", missing)
+
     def test_tool_context_can_recover_policy_state_by_prompt_when_ctx_has_no_session(self) -> None:
         payload = run_runtime_helper(
             """(() => {

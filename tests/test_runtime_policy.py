@@ -219,6 +219,20 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(notes_payload["features"]["high_risk"])
         self.assertNotIn("high_risk", notes_payload["reason_codes"])
 
+    def test_control_observer_status_queries_require_state_grounding(self) -> None:
+        payload = self.run_policy("刚才那个任务还在 queued 吗")
+
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertTrue(payload["state_grounding"]["required"])
+        self.assertEqual(payload["state_grounding"]["source"], "runtime_read_model")
+
+    def test_non_protected_direct_queries_do_not_require_state_grounding(self) -> None:
+        payload = self.run_policy("帮我润色一下这句话")
+
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertFalse(payload["state_grounding"]["required"])
+
         prod_payload = self.run_route("发布到生产环境前再检查一下鉴权配置")
         self.assertTrue(prod_payload["features"]["high_risk"])
         self.assertIn("high_risk", prod_payload["reason_codes"])

@@ -699,6 +699,18 @@ def pre_dispatch_ack_policy(route: str, work_type: str, phase: str, task_class: 
     }
 
 
+def state_grounding_policy(route_meta: dict[str, Any], route: str, task_class: str) -> dict[str, Any]:
+    protected_lane = str(route_meta.get("protected_lane", "") or "").strip()
+    required = bool(route == "direct" and task_class == "control_observer" and protected_lane == "control_observer")
+    return {
+        "required": required,
+        "source": "runtime_read_model" if required else "",
+        "scope": "task_status_or_provenance" if required else "",
+        "target": "explicit_or_recent_task" if required else "",
+        "fallback": "ack_uncertainty" if required else "",
+    }
+
+
 def tool_policy(route: str, dispatch_required: bool, task_class: str = "") -> dict[str, Any]:
     block_patterns: list[str] = []
     if dispatch_required and route in ("spawn_single", "spawn_multi"):
@@ -745,6 +757,7 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
     skill_policy = decision["skill_policy"]
     review_policy = decision["review_policy"]
     route_hint_policy = decision["route_hint_policy"]
+    state_grounding = decision.get("state_grounding", {}) if isinstance(decision.get("state_grounding", {}), dict) else {}
 
     return {
         "before_model_resolve": {
@@ -772,6 +785,7 @@ def hook_interface(policy_cfg: dict[str, Any], decision: dict[str, Any]) -> dict
                 "route_hint_required": route_hint_policy["required"],
                 "route_hint_submitted": route_hint_policy["submitted"],
             },
+            "state_grounding": state_grounding,
             "skill_bundle": skill_policy["default_skill_bundle"],
             "prompt_contract": decision["prompt_contract"],
         },
@@ -913,6 +927,7 @@ def build_decision(
     route_budget = budget_policy(features, route, work_contract, protocol, needs_review)
     prompt_policy = prompt_contract(protocol, route, work_contract, needs_review)
     pre_dispatch_ack = pre_dispatch_ack_policy(route, work_type, phase, task_class)
+    state_grounding = state_grounding_policy(route_meta, route, task_class)
     route_recommendation = build_route_recommendation(
         route_meta,
         {
@@ -995,6 +1010,7 @@ def build_decision(
         "budget_recommendation": budget_recommendation,
         "prompt_contract": prompt_policy,
         "pre_dispatch_ack": pre_dispatch_ack,
+        "state_grounding": state_grounding,
         "tool_policy": tool_policy(route, dispatch_required, task_class),
         "route_hint_policy": route_hint_policy,
         "runtime_switches": runtime_switches_summary(runtime_cfg),

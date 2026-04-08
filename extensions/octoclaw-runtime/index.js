@@ -168,6 +168,54 @@ async function readReportExcerpt(reportPath, cwd) {
   }
 }
 
+async function loadStateGrounding(decision, prompt, ctx, logger) {
+  const config = decision?.hook_interface?.before_prompt_build?.state_grounding || {};
+  if (!config?.required) {
+    return { required: false, found: false, reason: "disabled" };
+  }
+  try {
+    return await runJsonScript(
+      "state_grounding.py",
+      [
+        "--prompt",
+        String(prompt || ""),
+        "--protected-lane",
+        String(decision?.route_decision?.protected_lane || ""),
+        "--scope",
+        String(config.scope || ""),
+        "--workspace",
+        resolveWorkspaceRoot(),
+      ],
+      ctx?.cwd || process.cwd(),
+    );
+  } catch (err) {
+    logger?.warn?.(`octoclaw state grounding failed: ${String(err)}`);
+    return {
+      required: true,
+      found: false,
+      scope: String(config.scope || ""),
+      reason: "loader_failed",
+    };
+  }
+}
+
+function stateGroundingRequired(decision) {
+  return Boolean(decision?.hook_interface?.before_prompt_build?.state_grounding?.required);
+}
+
+function formatStateGroundingContext(grounding) {
+  if (grounding?.found && String(grounding?.prompt_context || "").trim()) {
+    return String(grounding.prompt_context).trim();
+  }
+  if (!grounding?.required) return "";
+  return [
+    "[OctoClaw state grounding]",
+    "Authoritative state grounding is missing for this protected-lane reply.",
+    "Do not claim queued/running/done/handler facts from memory or stale wording.",
+    "If needed, say you need to re-check the current task state.",
+  ].join("\n");
+}
+
 function toolResponse(summary, details = {}) {
   return {
     content: [{ type: "text", text: summary }],
@@ -1307,10 +1355,20 @@ const plugin = {
       prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
     }
     prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
-    if (prependSystem.length === 0) return;
+    const grounding = await loadStateGrounding(decision, prompt, ctx, pi.logger);
+    const groundingContext = formatStateGroundingContext(grounding);
+    updatePolicyState(resolved?.stateKey, (current) => ({
+      ...current,
+      stateGroundingRequired: Boolean(grounding?.required),
+      stateGroundingLoaded: Boolean(grounding?.found),
+      stateGroundingReason: String(grounding?.reason || ""),
+      stateGroundingScope: String(grounding?.scope || ""),
+      stateGroundingPacketType: String(grounding?.packet_type || ""),
+    }));
+    if (prependSystem.length === 0 && !groundingContext) return;
     return {
       prependSystemContext: prependSystem.join("\n\n"),
-      prependContext: compactPolicyPrompt(decision),
+      prependContext: [compactPolicyPrompt(decision), groundingContext].filter(Boolean).join("\n\n"),
     };
   });
 
@@ -2011,6 +2069,8 @@ export const __octoclawTest = {
   shouldSendPreDispatchAck,
   maybeEmitPreDispatchAckProgress,
   ensurePreDispatchAck,
+  stateGroundingRequired,
+  formatStateGroundingContext,
   resolvePolicyDecisionForContext,
   inferRoute,
   buildDecision,

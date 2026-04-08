@@ -628,6 +628,7 @@ P5 不应该顺手混进这些题：
 - 已出现 `task_completed` 或 `task_failed`/`task_blocked` 事件的任务，不再长期停留在旧 projection 状态
 - `result_ready` / `handoff_ready` 事件能直接触发 anchor/notifier 更新，而不是只能等 patrol 补偿
 - 历史 bad case 能通过 task-events + read-model 复盘出真实生命周期
+- protected-lane 的状态/归因类问答会由 runtime 自动注入 state grounding packet，而不是继续依赖主 agent 自己记得去查
 
 ### 当前结论
 

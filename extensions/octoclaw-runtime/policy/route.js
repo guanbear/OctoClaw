@@ -256,7 +256,7 @@ const OBSERVER_CONTROL_PATTERNS = {
 };
 
 const TASK_PROGRESS_PATTERNS = {
-  zh: [String.raw`(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗)`],
+  zh: [String.raw`(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗|还在\s*queued\s*吗|还在排队吗|跑了没|跑起来了吗|完成了没)`],
   en: [String.raw`\b(is it done|done yet|finished yet|still running|any progress|task status|task progress|what(?:'s| is) the status|how(?:'s| is) it going|where are we at)\b`],
 };
 
