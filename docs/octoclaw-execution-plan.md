@@ -680,10 +680,12 @@ router / model-intel 深化的 focused design 见：
    - source-attributed catalog / health / source-status
    - `models.dev` 风格 registry adapter
    - freshness / precedence contract
+   - paid-only ecosystem signal + local-truth precedence clamp
 2. **RM2：Router Recommendation 硬化**
    - route-budget integration tests
    - recommendation regression tests
    - lane-local recommendation consumption contract
+   - replay/review curated cases with route-budget consistency evidence
 3. **RM3：Replay / Eval 校准接入**
    - replay-driven router eval
    - model-intel update compatibility tests

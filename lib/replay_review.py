@@ -52,6 +52,32 @@ def _first_non_empty(*values: Any) -> str:
     return ""
 
 
+def _event_dict(event: dict[str, Any], *keys: str) -> dict[str, Any]:
+    for key in keys:
+        value = event.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _event_int(event: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = event.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+    return None
+
+
+def _event_bool(event: dict[str, Any], *keys: str) -> bool | None:
+    for key in keys:
+        value = event.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
 def _find_route_language_packs(events: list[dict[str, Any]]) -> list[str]:
     for event in reversed(events):
         packs = event.get("routeLanguagePacks", event.get("route_language_packs"))
@@ -117,6 +143,28 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         review_required = bool(route_hint_event.get("reviewRequired")) if route_hint_event else False
         confidence = route_hint_event.get("confidence") if route_hint_event else None
         route_language_packs = _find_route_language_packs(ordered)
+        budget_event = task_event or {}
+        budget_payload = _event_dict(budget_event, "budgetPolicy", "budget_policy")
+        route_recommendation_payload = _event_dict(budget_event, "routeRecommendation", "route_recommendation")
+        auto_router_payload = _event_dict(budget_event, "autoRouter", "auto_router")
+        auto_router_budget = _event_dict(auto_router_payload, "budgetPlanner", "budget_planner")
+        auto_router_consistency = _event_dict(auto_router_budget, "consistency")
+        budget_cap = _first_non_empty(budget_payload.get("budget_cap"), budget_event.get("budgetCap"), budget_event.get("budget_cap"))
+        latency_target = _first_non_empty(budget_payload.get("latency_target"), budget_event.get("latencyTarget"), budget_event.get("latency_target"))
+        max_workers = _event_int(budget_payload, "max_workers") or _event_int(budget_event, "maxWorkers", "max_workers") or 0
+        retry_cap = _event_int(budget_payload, "retry_cap") or _event_int(budget_event, "retryCap", "retry_cap") or 0
+        route_budget_consistent = _event_bool(auto_router_consistency, "route_budget_consistent")
+        recommended_route = _first_non_empty(route_recommendation_payload.get("recommended_route"), budget_event.get("recommendedRoute"), budget_event.get("recommended_route"))
+        arbitration_strategy = _first_non_empty(
+            _event_dict(route_recommendation_payload, "arbitration").get("strategy"),
+            budget_event.get("arbitrationStrategy"),
+            budget_event.get("arbitration_strategy"),
+        )
+        arbitration_conflict_type = _first_non_empty(
+            _event_dict(route_recommendation_payload, "arbitration").get("conflict_type"),
+            budget_event.get("arbitrationConflictType"),
+            budget_event.get("arbitration_conflict_type"),
+        )
 
         tags: list[str] = []
         if blocked:
@@ -157,6 +205,14 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "review_required": review_required,
             "confidence": confidence,
             "reason": _first_non_empty(route_hint_event.get("reason") if route_hint_event else ""),
+            "budget_cap": budget_cap,
+            "latency_target": latency_target,
+            "max_workers": max_workers,
+            "retry_cap": retry_cap,
+            "recommended_route": recommended_route,
+            "arbitration_strategy": arbitration_strategy,
+            "arbitration_conflict_type": arbitration_conflict_type,
+            "route_budget_consistent": route_budget_consistent,
             "route_hint_required": route_hint_required,
             "route_hint_submitted": route_hint_submitted,
             "dispatch_called": dispatch_event is not None,

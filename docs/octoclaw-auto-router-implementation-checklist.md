@@ -413,31 +413,31 @@ Python 不再承担：
 
 ### Checklist
 
-- [ ] 明确区分两类 source：
+- [x] 明确区分两类 source：
   - `directory_pricing`
   - `ecosystem_signal`
-- [ ] 在 `model-intel` 中显式支持：
+- [x] 在 `model-intel` 中显式支持：
   - `openrouter_catalog`
   - `openrouter_rankings`
   - `models_dev_registry`
-- [ ] 定义 `OpenRouter catalog` 字段映射：
+- [x] 定义 `OpenRouter catalog` 字段映射：
   - model id
   - pricing
   - context window
   - provider
   - modality / capability hints
-- [ ] 定义 `rankings` 的权重与衰减规则
-- [ ] 明确 `free model` 过滤或降权规则
-- [ ] 增加 freshness / decay / stale fallback 语义
-- [ ] 增加 last-good snapshot / stale-if-error cache
-- [ ] 保持本地 truth 优先级高于生态信号：
+- [x] 定义 `rankings` 的权重与衰减规则
+- [x] 明确 `free model` 过滤或降权规则
+- [x] 增加 freshness / decay / stale fallback 语义
+- [x] 增加 last-good snapshot / stale-if-error cache
+- [x] 保持本地 truth 优先级高于生态信号：
   - `openclaw_live_compat`
   - local pricing / overrides
   - model health / cooldown
   - runtime quota / capacity truth
-- [ ] 支持手动 refresh 入口
+- [x] 支持手动 refresh 入口
 - [ ] 支持自动 refresh 调度占位
-- [ ] 失败时回退到 last-good snapshot，不阻塞 runtime
+- [x] 失败时回退到 last-good snapshot，不阻塞 runtime
 
 ### 主要文件
 
@@ -449,12 +449,12 @@ Python 不再承担：
 
 ### 测试
 
-- [ ] `tests/test_model_intel.py`
-- [ ] 新增 OpenRouter source mapping case
-- [ ] 新增 `models.dev` source mapping case
+- [x] `tests/test_model_intel.py`
+- [x] 新增 OpenRouter source mapping case
+- [x] 新增 `models.dev` source mapping case
 - [ ] 新增 stale / fallback case
-- [ ] 新增 rankings 不压过本地 truth case
-- [ ] 新增 free-model filtered rankings case
+- [x] 新增 rankings 不压过本地 truth case
+- [x] 新增 free-model filtered rankings case
 
 ### 验收标准
 

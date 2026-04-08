@@ -78,6 +78,53 @@ class ReplayReviewTests(unittest.TestCase):
         self.assertIn("protected_lane", record["tags"])
         self.assertIn("protected_lane_misroute", record["tags"])
 
+    def test_review_captures_budget_and_recommendation_metadata(self) -> None:
+        events = [
+            {
+                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                "event": "policy_resolved",
+                "at": "2026-04-08T11:00:00.000Z",
+                "sessionKey": "router-session",
+                "sessionId": "router-session",
+                "route": "spawn_single",
+                "systemPreferredRoute": "spawn_single",
+                "prompt": "调研一个 release 并总结",
+                "budgetPolicy": {
+                    "budget_cap": "low",
+                    "latency_target": "background",
+                    "max_workers": 1,
+                    "retry_cap": 1,
+                },
+                "routeRecommendation": {
+                    "recommended_route": "spawn_single",
+                    "arbitration": {
+                        "strategy": "rule_fallback",
+                        "conflict_type": "repo_activity_lookup",
+                    },
+                },
+                "autoRouter": {
+                    "budgetPlanner": {
+                        "consistency": {
+                            "route_budget_consistent": True,
+                        }
+                    }
+                },
+            }
+        ]
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-review-") as tmpdir:
+            events_path = Path(tmpdir) / "events.jsonl"
+            events_path.write_text("\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n", encoding="utf-8")
+            payload = self.run_review("--focus", "all", events_path=events_path)
+        record = payload["records"][0]
+        self.assertEqual(record["budget_cap"], "low")
+        self.assertEqual(record["latency_target"], "background")
+        self.assertEqual(record["max_workers"], 1)
+        self.assertEqual(record["retry_cap"], 1)
+        self.assertEqual(record["recommended_route"], "spawn_single")
+        self.assertEqual(record["arbitration_strategy"], "rule_fallback")
+        self.assertEqual(record["arbitration_conflict_type"], "repo_activity_lookup")
+        self.assertTrue(record["route_budget_consistent"])
+
 
 if __name__ == "__main__":
     unittest.main()

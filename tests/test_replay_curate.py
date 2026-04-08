@@ -97,6 +97,48 @@ class ReplayCurateTests(unittest.TestCase):
         self.assertEqual(payload["cases"][0]["review"]["blocked_events"], ["tool_blocked_before_route_hint"])
         self.assertEqual(payload["cases"][0]["candidate_severity"], "high")
 
+    def test_curate_surfaces_budget_and_recommendation_fields(self) -> None:
+        events = [
+            {
+                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                "event": "policy_resolved",
+                "at": "2026-04-08T11:10:00.000Z",
+                "sessionKey": "s4",
+                "sessionId": "s4",
+                "route": "runner",
+                "systemPreferredRoute": "runner",
+                "prompt": "check whether port 8080 is open",
+                "budgetPolicy": {
+                    "budget_cap": "low",
+                    "latency_target": "interactive",
+                    "max_workers": 1,
+                    "retry_cap": 1,
+                },
+                "routeRecommendation": {
+                    "recommended_route": "runner",
+                    "arbitration": {"strategy": "rule_fallback"},
+                },
+                "autoRouter": {
+                    "budgetPlanner": {
+                        "consistency": {"route_budget_consistent": True}
+                    }
+                },
+            }
+        ]
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-curate-") as tmpdir:
+            path = Path(tmpdir) / "events.jsonl"
+            with open(path, "w", encoding="utf-8") as fh:
+                for event in events:
+                    fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+            payload = self.run_curate(path, "--include-events")
+
+        case = payload["cases"][0]
+        self.assertEqual(case["budget"]["budget_cap"], "low")
+        self.assertEqual(case["budget"]["latency_target"], "interactive")
+        self.assertEqual(case["recommendation"]["recommended_route"], "runner")
+        self.assertTrue(case["recommendation"]["route_budget_consistent"])
+        self.assertTrue(case["review"]["route_budget_consistent"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -217,6 +217,10 @@ class ModelIntelTests(unittest.TestCase):
                 "source_file": "/tmp/openrouter-catalog.json",
             },
             "openrouter_rankings": {
+                "payload": {
+                    "filters": {"exclude_free_models": True, "policy": "paid_only_ecosystem_signal"},
+                    "counts": {"candidate_count": 9, "retained_count": 5, "skipped_free_count": 4},
+                },
                 "records": [{"model_id": "openai/gpt-5.4", "score": 0.91}],
                 "lookup": {
                     ranking_lookup_key: {
@@ -254,7 +258,37 @@ class ModelIntelTests(unittest.TestCase):
         self.assertEqual(record["limits"]["context_length"], 256000)
         self.assertEqual(record["limits"]["max_completion_tokens"], 32000)
         self.assertEqual(record["benchmark_scores"]["openrouter_rankings"], 0.91)
+        self.assertEqual(record["benchmark_meta"]["openrouter_rankings"]["filter_policy"], "paid_only_ecosystem_signal")
+        self.assertEqual(record["benchmark_meta"]["openrouter_rankings"]["counts"]["skipped_free_count"], 4)
         self.assertIn("models_dev_registry", catalog["facts_plane"]["active_sources"])
+        self.assertIn("openrouter_rankings_sync", record["source_refs"])
+
+    def test_compute_openrouter_rankings_factor_caps_ecosystem_signal_when_local_truth_exists(self) -> None:
+        factor, policy = model_intel.compute_openrouter_rankings_factor(
+            {
+                "benchmark_scores": {"openrouter_rankings": 0.95, "openclaw_live_compat": 0.82},
+                "benchmark_meta": {
+                    "openrouter_rankings": {
+                        "filtered_free_models": True,
+                        "filter_policy": "paid_only_ecosystem_signal",
+                    }
+                },
+                "source_factors": {"openrouter_rankings": 0.91},
+                "local_truth_signals": {
+                    "configured": True,
+                    "openclaw_live_compat": True,
+                    "local_speed": False,
+                    "runtime_health": True,
+                    "plan_state": False,
+                },
+            }
+        )
+
+        self.assertAlmostEqual(factor, 0.35)
+        self.assertTrue(policy["capped"])
+        self.assertIn("local_truth:compat_or_runtime", policy["cap_reasons"])
+        self.assertTrue(policy["filtered_free_models"])
+        self.assertEqual(policy["filter_policy"], "paid_only_ecosystem_signal")
 
     def test_compute_policy_empty_catalog_uses_new_fields_only(self) -> None:
         with patch.object(model_intel, "save_json", return_value=True), patch.object(

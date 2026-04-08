@@ -278,6 +278,7 @@ Model-Intel Facts Plane
 - `models.dev`-style registry adapter
 - source precedence / freshness contract
 - source-status snapshot
+- paid-only `OpenRouter rankings` ecosystem signal + local-truth precedence clamp
 
 ### RM2：Router Recommendation 硬化
 
@@ -287,6 +288,7 @@ Model-Intel Facts Plane
 - recommendation contract regression tests
 - lane consumption contract
 - upgrade / fallback ladder 文档化
+- replay/review curated cases 携带 route-budget consistency 证据
 
 ### RM3：Replay / Eval 校准接入
 

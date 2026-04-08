@@ -130,18 +130,76 @@ def build_budget_planner_payload(
     *,
     budget_policy: dict[str, Any],
     model_policy: dict[str, Any],
+    route: str,
 ) -> dict[str, Any]:
     fallbacks = list(model_policy.get("fallbacks") or [])
+    output_budget = _text(budget_policy.get("budget_cap"))
+    latency_target = _text(budget_policy.get("latency_target"))
+    max_workers = int(budget_policy.get("max_workers", 0) or 0)
+    retry_budget = int(budget_policy.get("retry_cap", 0) or 0)
+    consistency = build_budget_consistency_payload(
+        route=route,
+        output_budget=output_budget,
+        latency_target=latency_target,
+        max_workers=max_workers,
+        retry_budget=retry_budget,
+    )
     return {
         "schema_version": BUDGET_PLANNER_SCHEMA_VERSION,
         "target_model": _text(model_policy.get("selected_model")),
         "fallback_model": _text(fallbacks[0] if fallbacks else ""),
-        "output_budget": _text(budget_policy.get("budget_cap")),
-        "retry_budget": int(budget_policy.get("retry_cap", 0) or 0),
-        "latency_target": _text(budget_policy.get("latency_target")),
-        "max_workers": int(budget_policy.get("max_workers", 0) or 0),
+        "output_budget": output_budget,
+        "retry_budget": retry_budget,
+        "latency_target": latency_target,
+        "max_workers": max_workers,
         "upgrade_allowed": bool(budget_policy.get("upgrade_allowed")),
-        "cost_ceiling": _text(budget_policy.get("budget_cap")),
+        "cost_ceiling": output_budget,
+        "consistency": consistency,
+    }
+
+
+def build_budget_consistency_payload(
+    *,
+    route: str,
+    output_budget: str,
+    latency_target: str,
+    max_workers: int,
+    retry_budget: int,
+) -> dict[str, Any]:
+    route_name = _text(route)
+    output_ok = False
+    latency_ok = False
+    workers_ok = False
+    retry_ok = retry_budget >= 0
+
+    if route_name == "direct":
+        output_ok = output_budget == "tiny"
+        latency_ok = latency_target == "interactive"
+        workers_ok = max_workers == 0
+    elif route_name == "runner":
+        output_ok = output_budget in {"tiny", "low"}
+        latency_ok = latency_target == "interactive"
+        workers_ok = max_workers == 1
+    elif route_name == "spawn_single":
+        output_ok = output_budget in {"low", "medium"}
+        latency_ok = latency_target == "background"
+        workers_ok = max_workers == 1
+    elif route_name == "spawn_multi":
+        output_ok = output_budget in {"medium", "high"}
+        latency_ok = latency_target == "background"
+        workers_ok = max_workers >= 2
+    else:
+        output_ok = bool(output_budget)
+        latency_ok = bool(latency_target)
+        workers_ok = max_workers >= 0
+
+    return {
+        "route": route_name,
+        "route_matches_output_budget": bool(output_ok),
+        "route_matches_latency_target": bool(latency_ok),
+        "route_matches_worker_budget": bool(workers_ok),
+        "retry_budget_valid": bool(retry_ok),
+        "route_budget_consistent": bool(output_ok and latency_ok and workers_ok and retry_ok),
     }
 
 
@@ -244,6 +302,7 @@ def build_auto_router_payload(decision: dict[str, Any]) -> dict[str, Any]:
         "budget_planner": build_budget_planner_payload(
             budget_policy=budget_policy,
             model_policy=model_policy,
+            route=_text(route_decision.get("route")),
         ),
         "model_intel": build_model_intel_payload(model_policy=model_policy),
         "adapter": build_adapter_payload(

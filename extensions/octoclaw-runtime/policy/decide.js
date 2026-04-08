@@ -781,13 +781,51 @@ function buildAutoRouterPayload(decision) {
   };
   const fallbacks = Array.isArray(modelPolicy.fallbacks) ? modelPolicy.fallbacks : [];
   const selectedModel = normalizedText(modelPolicy.selected_model);
+  const routeName = normalizedText(routeDecision.route);
+  const outputBudget = normalizedText(budget.budget_cap);
+  const latencyTarget = normalizedText(budget.latency_target);
+  const maxWorkers = Number(budget.max_workers || 0);
+  const retryBudget = Number(budget.retry_cap || 0);
+  let outputOk = false;
+  let latencyOk = false;
+  let workersOk = false;
+  let retryOk = retryBudget >= 0;
+  if (routeName === "direct") {
+    outputOk = outputBudget === "tiny";
+    latencyOk = latencyTarget === "interactive";
+    workersOk = maxWorkers === 0;
+  } else if (routeName === "runner") {
+    outputOk = outputBudget === "tiny" || outputBudget === "low";
+    latencyOk = latencyTarget === "interactive";
+    workersOk = maxWorkers === 1;
+  } else if (routeName === "spawn_single") {
+    outputOk = outputBudget === "low" || outputBudget === "medium";
+    latencyOk = latencyTarget === "background";
+    workersOk = maxWorkers === 1;
+  } else if (routeName === "spawn_multi") {
+    outputOk = outputBudget === "medium" || outputBudget === "high";
+    latencyOk = latencyTarget === "background";
+    workersOk = maxWorkers >= 2;
+  } else {
+    outputOk = Boolean(outputBudget);
+    latencyOk = Boolean(latencyTarget);
+    workersOk = maxWorkers >= 0;
+  }
+  const consistency = {
+    route: routeName,
+    route_matches_output_budget: Boolean(outputOk),
+    route_matches_latency_target: Boolean(latencyOk),
+    route_matches_worker_budget: Boolean(workersOk),
+    retry_budget_valid: Boolean(retryOk),
+    route_budget_consistent: Boolean(outputOk && latencyOk && workersOk && retryOk),
+  };
   return {
     schema_version: AUTO_ROUTER_RECOMMENDATION_SCHEMA_VERSION,
     internal_first: true,
     signal,
     router_core: {
       schema_version: AUTO_ROUTER_CORE_SCHEMA_VERSION,
-      route: normalizedText(routeDecision.route),
+      route: routeName,
       work_contract: normalizedText(routeDecision.work_contract),
       confidence: Number(routeDecision.confidence || 0),
       reason_codes: Array.isArray(routeDecision.reason_codes) ? [...routeDecision.reason_codes] : [],
@@ -799,12 +837,13 @@ function buildAutoRouterPayload(decision) {
       schema_version: AUTO_ROUTER_BUDGET_SCHEMA_VERSION,
       target_model: selectedModel,
       fallback_model: normalizedText(fallbacks[0] || ""),
-      output_budget: normalizedText(budget.budget_cap),
-      retry_budget: Number(budget.retry_cap || 0),
-      latency_target: normalizedText(budget.latency_target),
-      max_workers: Number(budget.max_workers || 0),
+      output_budget: outputBudget,
+      retry_budget: retryBudget,
+      latency_target: latencyTarget,
+      max_workers: maxWorkers,
       upgrade_allowed: Boolean(budget.upgrade_allowed),
-      cost_ceiling: normalizedText(budget.budget_cap),
+      cost_ceiling: outputBudget,
+      consistency,
     },
     model_intel: {
       schema_version: AUTO_ROUTER_MODEL_INTEL_SCHEMA_VERSION,

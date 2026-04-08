@@ -522,6 +522,19 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["budget_policy"]["budget_cap"], "low")
         self.assertEqual(payload["budget_policy"]["max_workers"], 1)
         self.assertEqual(payload["prompt_contract"]["merge_contract"], "inspect_report")
+        self.assertTrue(payload["auto_router"]["budget_planner"]["consistency"]["route_budget_consistent"])
+        self.assertTrue(payload["auto_router"]["budget_planner"]["consistency"]["route_matches_latency_target"])
+
+    def test_spawn_multi_auto_router_budget_consistency_is_true(self) -> None:
+        payload = build_decision(
+            "分三个子任务并行进行：1) 检查认证模块现有漏洞 2) 检查存储层备份状态 3) 检查API网关限流配置，每项出独立报告，每项都给出单独风险结论和建议",
+            force_route="spawn_multi",
+        )
+        self.assertEqual(payload["route_decision"]["route"], "spawn_multi")
+        consistency = payload["auto_router"]["budget_planner"]["consistency"]
+        self.assertTrue(consistency["route_budget_consistent"])
+        self.assertTrue(consistency["route_matches_worker_budget"])
+        self.assertTrue(consistency["route_matches_output_budget"])
 
     def test_force_route_runner_keeps_runner_as_final_route(self) -> None:
         payload = build_decision("检查接口健康状态和响应头", "printf ok", {}, force_route="runner")

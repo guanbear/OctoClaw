@@ -41,6 +41,18 @@ def curate_cases(
             "prompt": str(record.get("prompt") or ""),
             "expected_route": str(record.get("route") or ""),
             "system_preferred_route": str(record.get("system_preferred_route") or ""),
+            "budget": {
+                "budget_cap": str(record.get("budget_cap") or ""),
+                "latency_target": str(record.get("latency_target") or ""),
+                "max_workers": int(record.get("max_workers") or 0),
+                "retry_cap": int(record.get("retry_cap") or 0),
+            },
+            "recommendation": {
+                "recommended_route": str(record.get("recommended_route") or ""),
+                "arbitration_strategy": str(record.get("arbitration_strategy") or ""),
+                "arbitration_conflict_type": str(record.get("arbitration_conflict_type") or ""),
+                "route_budget_consistent": record.get("route_budget_consistent"),
+            },
             "route_hint": str(record.get("route_hint") or ""),
             "work_type": str(record.get("work_type") or ""),
             "phase": str(record.get("phase") or ""),
@@ -78,6 +90,14 @@ def curate_cases(
                 "blocked_events": list(record.get("blocked_events") or []),
                 "reason": str(record.get("reason") or ""),
                 "worker_pool": str(record.get("worker_pool") or ""),
+                "budget_cap": str(record.get("budget_cap") or ""),
+                "latency_target": str(record.get("latency_target") or ""),
+                "max_workers": int(record.get("max_workers") or 0),
+                "retry_cap": int(record.get("retry_cap") or 0),
+                "recommended_route": str(record.get("recommended_route") or ""),
+                "arbitration_strategy": str(record.get("arbitration_strategy") or ""),
+                "arbitration_conflict_type": str(record.get("arbitration_conflict_type") or ""),
+                "route_budget_consistent": record.get("route_budget_consistent"),
             }
         curated.append(case)
     return curated

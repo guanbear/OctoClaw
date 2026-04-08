@@ -633,8 +633,13 @@ def extract_external_metadata(
         source_refs.append("models_dev_registry_sync")
     if openrouter_catalog:
         source_refs.append("openrouter_catalog_sync")
+    if openrouter_rankings:
+        source_refs.append("openrouter_rankings_sync")
     ranking_meta = {}
     if openrouter_rankings:
+        rankings_payload = snapshots.get("openrouter_rankings", {}).get("payload", {})
+        ranking_filters = rankings_payload.get("filters", {}) if isinstance(rankings_payload, dict) else {}
+        ranking_counts = rankings_payload.get("counts", {}) if isinstance(rankings_payload, dict) else {}
         ranking_meta = {
             "source_model": str(openrouter_rankings.get("model_id") or openrouter_rankings.get("name") or "").strip(),
             "confidence": float(
@@ -643,7 +648,9 @@ def extract_external_metadata(
                 else 0.55
             ),
             "updated_at": str(snapshots.get("openrouter_rankings", {}).get("updated_at", "") or "").strip(),
-            "filtered_free_models": True,
+            "filtered_free_models": bool(ranking_filters.get("exclude_free_models", True)),
+            "filter_policy": str(ranking_filters.get("policy", "paid_only_ecosystem_signal") or "paid_only_ecosystem_signal"),
+            "counts": dict(ranking_counts) if isinstance(ranking_counts, dict) else {},
         }
     return {
         "models_dev": models_dev,
@@ -814,6 +821,49 @@ def compute_source_factor(source_name: str, source_registry: dict, benchmark_met
     return max(0.2, min(1.0, confidence_factor * freshness_factor * family_penalty))
 
 
+def compute_openrouter_rankings_factor(model: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    benchmark_scores = model.get("benchmark_scores", {}) if isinstance(model.get("benchmark_scores"), dict) else {}
+    benchmark_meta = model.get("benchmark_meta", {}) if isinstance(model.get("benchmark_meta"), dict) else {}
+    source_factors = model.get("source_factors", {}) if isinstance(model.get("source_factors"), dict) else {}
+    local_truth_signals = model.get("local_truth_signals", {}) if isinstance(model.get("local_truth_signals"), dict) else {}
+    base_factor = float(source_factors.get("openrouter_rankings", 1.0) or 1.0)
+    applied_factor = base_factor
+    cap_reasons: list[str] = []
+    cap_limit = 1.0
+
+    if bool(local_truth_signals.get("openclaw_live_compat")) or bool(local_truth_signals.get("runtime_health")):
+        cap_limit = min(cap_limit, 0.35)
+        cap_reasons.append("local_truth:compat_or_runtime")
+    if bool(local_truth_signals.get("local_speed")):
+        cap_limit = min(cap_limit, 0.40)
+        cap_reasons.append("local_truth:local_speed")
+    if bool(local_truth_signals.get("configured")):
+        cap_limit = min(cap_limit, 0.50)
+        cap_reasons.append("local_truth:configured")
+    if bool(local_truth_signals.get("plan_state")):
+        cap_limit = min(cap_limit, 0.55)
+        cap_reasons.append("local_truth:plan_state")
+
+    if cap_limit < 1.0:
+        applied_factor = min(applied_factor, cap_limit)
+
+    meta = benchmark_meta.get("openrouter_rankings", {}) if isinstance(benchmark_meta, dict) else {}
+    return (
+        applied_factor,
+        {
+            "present": "openrouter_rankings" in benchmark_scores,
+            "base_factor": round(base_factor, 6),
+            "applied_factor": round(applied_factor, 6),
+            "capped": applied_factor < base_factor,
+            "cap_reasons": cap_reasons,
+            "filtered_free_models": bool(meta.get("filtered_free_models")),
+            "filter_policy": str(meta.get("filter_policy", "") or ""),
+            "counts": dict(meta.get("counts", {})) if isinstance(meta.get("counts"), dict) else {},
+            "local_truth_signals": {key: bool(value) for key, value in local_truth_signals.items()},
+        },
+    )
+
+
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
@@ -938,6 +988,7 @@ def build_catalog() -> dict:
     external_snapshots = load_external_model_intel_snapshots()
     configured_ids = load_models_from_openclaw()
     health_state = load_json(MODEL_HEALTH_FILE)
+    health_models = health_state.get("models", {}) if isinstance(health_state, dict) else {}
     configured_set = {str(model_id).strip() for model_id in configured_ids}
     model_ids = collect_candidate_model_ids(
         configured_ids,
@@ -1001,6 +1052,13 @@ def build_catalog() -> dict:
                 benchmark_meta["openrouter_rankings"] = external_meta.get("ranking_meta", {})
 
         plan_state = get_plan_state_entry(model_id) or {}
+        local_truth_signals = {
+            "configured": model_id in configured_set,
+            "openclaw_live_compat": "openclaw_live_compat" in benchmark_scores,
+            "local_speed": isinstance(local_speed, dict) and bool(local_speed),
+            "runtime_health": isinstance(health_models, dict) and bool(health_models.get(model_id)),
+            "plan_state": bool(plan_state),
+        }
         source_refs = sorted(
             set(prior.get("source_refs", []) + override.get("source_refs", []) + external_meta.get("source_refs", []))
         )
@@ -1039,6 +1097,7 @@ def build_catalog() -> dict:
                     "openrouter_catalog": external_meta.get("openrouter_catalog", {}),
                     "openrouter_rankings": external_meta.get("openrouter_rankings", {}),
                 },
+                "local_truth_signals": local_truth_signals,
             }
         )
 
@@ -1202,7 +1261,8 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         pinchbench = raw_pinchbench * float(source_factors.get("pinchbench", 1.0))
         aa_coding = raw_aa_coding * float(source_factors.get("artificial_analysis_coding", 1.0))
         claw_eval = raw_claw_eval * float(source_factors.get("claw_eval", 1.0))
-        openrouter_rankings = raw_openrouter_rankings * float(source_factors.get("openrouter_rankings", 1.0))
+        openrouter_rankings_factor, ranking_signal_policy = compute_openrouter_rankings_factor(model)
+        openrouter_rankings = raw_openrouter_rankings * openrouter_rankings_factor
         openclaw_live_compat = raw_openclaw_live_compat * float(source_factors.get("openclaw_live_compat", 1.0))
         raw_benchmark_support = 0.35 * raw_pinchbench + 0.30 * raw_aa_coding + 0.25 * raw_claw_eval + 0.10 * raw_openrouter_rankings
         weighted_benchmark_support = 0.35 * pinchbench + 0.30 * aa_coding + 0.25 * claw_eval + 0.10 * openrouter_rankings
@@ -1210,7 +1270,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
             0.35 * float(source_factors.get("pinchbench", 0.55))
             + 0.30 * float(source_factors.get("artificial_analysis_coding", 0.55))
             + 0.25 * float(source_factors.get("claw_eval", 0.55))
-            + 0.10 * float(source_factors.get("openrouter_rankings", 0.35))
+            + 0.10 * openrouter_rankings_factor
         )
         plan_value_score = compute_plan_value_score(model["id"])
         availability_score = 0.0 if should_fallback_due_to_plan(model["id"]) else 1.0
@@ -1281,6 +1341,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
             "team": 0.19 * reasoning + 0.17 * coding + 0.15 * openclaw + 0.12 * weighted_benchmark_support + 0.10 * reliability + 0.07 * price_score + 0.06 * evidence_confidence + 0.06 * plan_value_score + 0.04 * size_preference["team"].get(size_class, 0.80) - role_health_penalties["team"],
             "main": 0.30 * main_capability_score + 0.18 * coding + 0.16 * reasoning + 0.12 * openclaw + 0.10 * raw_benchmark_support + 0.05 * evidence_confidence + 0.05 * reliability + 0.03 * ttft_score + 0.01 * availability_score - role_health_penalties["main"],
         }
+        model["ranking_signal_policy"] = ranking_signal_policy
         enriched.append((model, role_scores))
 
     main_selection_meta = {
