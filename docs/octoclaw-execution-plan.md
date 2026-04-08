@@ -253,6 +253,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - router boundary map
 - protected lanes inventory
   - `control_observer`
+  - `session_control`
   - workflow/session provenance
   - task action / queue / details / status
 - `signal / route / budget / model_intel` 的 schema 草案
@@ -296,6 +297,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 1. 先收 protected lanes
    - 明确哪些问题必须留在 main-agent stable scope
    - workflow-first，非必要不委派
+   - current-session mutation 不能被错误委派给子任务
 2. 再补 goldens / parity / replay diff
    - 先降低高频误判，再扩 recommendation 面
 3. 最后才给模糊样本接 tiny judge

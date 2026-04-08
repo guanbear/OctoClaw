@@ -584,8 +584,14 @@ function toolPolicy(route, dispatchRequired, taskClass = "") {
     "octoclaw_status",
     "octoclaw_task_action",
   ];
+  const sessionControlTools = [
+    "octoclaw_policy_decide",
+    "octoclaw_route_hint",
+    "octoclaw_status",
+    "session_status",
+  ];
   return {
-    allow_direct_tools: route === "direct" && taskClass !== "control_observer",
+    allow_direct_tools: route === "direct" && !["control_observer", "session_control"].includes(taskClass),
     must_delegate_via: dispatchRequired ? "octoclaw_dispatch" : "",
     allowed_control_tools: [
       "octoclaw_policy_decide",
@@ -595,7 +601,9 @@ function toolPolicy(route, dispatchRequired, taskClass = "") {
       "octoclaw_task_action",
     ],
     observer_control_tools: observerControlTools,
+    session_control_tools: sessionControlTools,
     control_observer_only: taskClass === "control_observer",
+    session_control_only: taskClass === "session_control",
     delegate_first: dispatchRequired,
     block_tool_patterns: blockPatterns,
   };

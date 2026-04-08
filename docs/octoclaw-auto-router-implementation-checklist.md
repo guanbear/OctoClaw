@@ -214,9 +214,11 @@ Python 不再承担：
 - [x] 明确 `execution_contract routing` 和 `lane-local route/budget recommendation` 的分层
 - [x] 建立 protected direct lanes baseline：
   - `control_observer`
+  - `session_control`
   - workflow/session provenance
   - task action / queue / details / status
 - [x] workflow/session metadata query 默认归到 `control_observer`
+- [x] current-session model switch / session mutation 默认归到 `session_control`
 - [x] protected lanes 默认 bypass delegated optimization
 - [ ] protected lanes 不混入普通业务 auto-router 训练面
 - [x] 建立高频误判 goldens：
@@ -225,6 +227,7 @@ Python 不再承担：
   - `刚才是不是子任务做的`
   - `有没有走 dispatch`
   - `八爪鱼状态 / details / queue`
+  - `切换到 Mini Max M2.7`
   - 模型测速 / 首 token / 吞吐对比
 - [x] 建立 Python / JS / runtime 副本 parity check
 - [x] 把 protected lane 写入 replay / review / summary，支持 nightly diff：

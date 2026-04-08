@@ -654,7 +654,7 @@ function resolveToolPolicyContext(ctx = {}, prompt = "") {
     return direct;
   }
   const taskClass = String(inferRoute(prompt || "").task_class || "").trim();
-  if (taskClass === "control_observer") {
+  if (taskClass === "control_observer" || taskClass === "session_control") {
     return { key: "", state: null };
   }
   const byPrompt = findPolicyStateByPrompt(prompt);
@@ -853,8 +853,25 @@ function observerControlTools(decision, routeHintTool) {
   return allowed;
 }
 
+function sessionControlTools(decision, routeHintTool) {
+  const toolPolicy = decision?.tool_policy || {};
+  const configured = Array.isArray(toolPolicy?.session_control_tools) ? toolPolicy.session_control_tools : [];
+  const allowed = new Set(configured.map((item) => String(item || "").trim()).filter(Boolean));
+  if (routeHintTool) {
+    allowed.add(String(routeHintTool).trim());
+  }
+  allowed.add("octoclaw_policy_decide");
+  allowed.add("octoclaw_status");
+  allowed.add("session_status");
+  return allowed;
+}
+
 function isControlObserverDecision(decision) {
   return String(decision?.route_decision?.task_class || "").trim() === "control_observer";
+}
+
+function isSessionControlDecision(decision) {
+  return String(decision?.route_decision?.task_class || "").trim() === "session_control";
 }
 
 function runtimeSwitches(decision) {
@@ -1265,6 +1282,7 @@ const plugin = {
     const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted);
     const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
     const allowedObserverTools = observerControlTools(decision, routeHintTool);
+    const allowedSessionTools = sessionControlTools(decision, routeHintTool);
     if (isControlObserverDecision(decision)) {
       if (allowedObserverTools.has(toolName)) {
         return;
@@ -1288,6 +1306,31 @@ const plugin = {
       return {
         block: true,
         blockReason: `OctoClaw control/observer request must use control tools only: ${[...allowedObserverTools].join(", ")}.`,
+      };
+    }
+    if (isSessionControlDecision(decision)) {
+      if (allowedSessionTools.has(toolName)) {
+        return;
+      }
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+      }));
+      await recordPolicyReplay(
+        "tool_blocked_session_control",
+        {
+          sessionKey: stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          toolName,
+          allowedTools: [...allowedSessionTools],
+        },
+        pi.logger,
+        decision,
+      );
+      return {
+        block: true,
+        blockReason: `OctoClaw current-session control request must use session control tools only: ${[...allowedSessionTools].join(", ")}.`,
       };
     }
     if (routeHintIsRequired && !routeHintAlreadySubmitted && !allowedPreHintTools.has(toolName)) {
@@ -1914,7 +1957,9 @@ export const __octoclawTest = {
   buildPolicyMetadata,
   preHintAllowedTools,
   observerControlTools,
+  sessionControlTools,
   isControlObserverDecision,
+  isSessionControlDecision,
   shouldRetainPolicyStateOnAgentEnd,
   preDispatchAckText,
   shouldSendPreDispatchAck,

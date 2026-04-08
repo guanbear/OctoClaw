@@ -452,9 +452,11 @@ runner 不是单纯“长期常驻快腿”，而是：
 
 1. 先收 protected lanes
    - `control_observer`
+   - `session_control`
    - workflow/session provenance
    - task action / queue / details / status
    - current-model / route / dispatch provenance
+   - current-session model switch / current-session control mutation
    - model / fallback / workflow metadata query
 2. 再补 goldens / parity / replay regression
    - 先把高频误判收成 durable cases

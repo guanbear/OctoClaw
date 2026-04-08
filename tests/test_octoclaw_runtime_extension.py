@@ -394,6 +394,51 @@ Conversation info (untrusted metadata):
         self.assertNotIn("exec", payload["tools"])
         self.assertNotIn("octoclaw_dispatch", payload["tools"])
 
+    def test_session_control_tool_context_does_not_reuse_recent_delegated_state(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u999",
+                  sessionId: "sess-session-ctrl-1",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "帮我分析下 openclaw 2026.3.31 这个release",
+                  decision: {
+                    request: { session_key: "agent:main:slack:direct:u999" },
+                    route_decision: { route: "spawn_single" }
+                  },
+                  createdAt: now,
+                  updatedAt: now,
+                  delegated: true,
+                  delegationTool: "octoclaw_dispatch"
+                });
+                return __octoclawTest.resolveToolPolicyContext(ctx, "切换到 Mini Max M2.7");
+            })()"""
+        )
+
+        self.assertEqual(payload["key"], "")
+        self.assertIsNone(payload["state"])
+
+    def test_session_control_tool_set_excludes_exec_and_includes_session_status(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("切换到 Mini Max M2.7");
+                return {
+                  sessionControl: __octoclawTest.isSessionControlDecision(decision),
+                  tools: Array.from(__octoclawTest.sessionControlTools(decision, "octoclaw_route_hint")).sort()
+                };
+            })()"""
+        )
+
+        self.assertTrue(payload["sessionControl"])
+        self.assertIn("session_status", payload["tools"])
+        self.assertIn("octoclaw_status", payload["tools"])
+        self.assertNotIn("exec", payload["tools"])
+        self.assertNotIn("octoclaw_dispatch", payload["tools"])
+
     def test_workflow_meta_question_stays_in_direct_control_lane(self) -> None:
         payload = run_runtime_helper(
             """(() => {
@@ -421,6 +466,36 @@ Conversation info (untrusted metadata):
         self.assertTrue(payload["recommendation"]["bypass_delegated_optimization"])
         self.assertFalse(payload["ack"]["required"])
         self.assertFalse(payload["shouldSend"])
+        self.assertNotIn("octoclaw_dispatch", payload["tools"])
+
+    def test_session_control_question_stays_in_direct_protected_lane(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("切换到 Mini Max M2.7");
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  protectedLane: decision.route_decision.protected_lane,
+                  workContract: decision.route_decision.work_contract,
+                  reasonCodes: decision.route_decision.reason_codes,
+                  recommendation: decision.route_recommendation,
+                  ack: decision.pre_dispatch_ack,
+                  shouldSend: __octoclawTest.shouldSendPreDispatchAck(decision, {}, { trigger: "message" }),
+                  tools: Array.from(__octoclawTest.sessionControlTools(decision, "octoclaw_route_hint")).sort()
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "session_control")
+        self.assertEqual(payload["protectedLane"], "session_control")
+        self.assertEqual(payload["workContract"], "answer_now")
+        self.assertIn("session_control_direct_contract", payload["reasonCodes"])
+        self.assertFalse(payload["recommendation"]["arbitration"]["required"])
+        self.assertTrue(payload["recommendation"]["bypass_delegated_optimization"])
+        self.assertFalse(payload["ack"]["required"])
+        self.assertFalse(payload["shouldSend"])
+        self.assertIn("session_status", payload["tools"])
         self.assertNotIn("octoclaw_dispatch", payload["tools"])
 
     def test_pre_dispatch_ack_policy_is_enabled_for_delegated_research(self) -> None:

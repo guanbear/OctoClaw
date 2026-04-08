@@ -275,6 +275,16 @@ const WORKFLOW_META_PATTERNS = {
   ],
 };
 
+const SESSION_CONTROL_PATTERNS = {
+  zh: [
+    String.raw`(切换|切到|换到|换成|改成|改到|切换模型|切模型|换模型).{0,32}(mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus|m2\.7|5\.1|4\.7)`,
+    String.raw`(把(当前|现在)?模型(切到|换成|改成)).{0,32}(mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus|m2\.7|5\.1|4\.7)`,
+  ],
+  en: [
+    String.raw`\b(switch|change|set)\b.{0,32}\b(model|mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus)\b`,
+  ],
+};
+
 const ROUTE_PATTERN_LIBRARY = {
   RUNNER_PATTERNS,
   RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -301,6 +311,7 @@ const ROUTE_PATTERN_LIBRARY = {
   OBSERVER_CONTROL_PATTERNS,
   TASK_PROGRESS_PATTERNS,
   WORKFLOW_META_PATTERNS,
+  SESSION_CONTROL_PATTERNS,
   MODEL_BENCHMARK_PATTERNS,
 };
 
@@ -407,6 +418,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   const observerControlHits = countMatches(text, resolveLanguagePatterns("OBSERVER_CONTROL_PATTERNS", enabledPacks));
   const taskProgressHits = countMatches(text, resolveLanguagePatterns("TASK_PROGRESS_PATTERNS", enabledPacks));
   const workflowMetaHits = countMatches(text, resolveLanguagePatterns("WORKFLOW_META_PATTERNS", enabledPacks));
+  const sessionControlHits = countMatches(text, resolveLanguagePatterns("SESSION_CONTROL_PATTERNS", enabledPacks));
   const modelBenchmarkHits = countMatches(text, resolveLanguagePatterns("MODEL_BENCHMARK_PATTERNS", enabledPacks));
   const modelReferenceHits = countModelReferenceHits(text);
   const commandReadOnly = commandLooksReadOnly(normalizedCommand);
@@ -417,7 +429,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
   );
   const workflowMetaCandidate = workflowMetaHits > 0;
-  const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate);
+  const sessionControlCandidate = Boolean(sessionControlHits > 0);
+  const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate);
+  const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate && !sessionControlCandidate);
 
   const repoActivityLookup = Boolean(
     (
@@ -561,6 +575,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     task_progress_candidate: taskProgressCandidate,
     workflow_meta_hits: workflowMetaHits,
     workflow_meta_candidate: workflowMetaCandidate,
+    session_control_hits: sessionControlHits,
+    session_control_candidate: sessionControlCandidate,
     model_benchmark_hits: modelBenchmarkHits,
     model_reference_hits: modelReferenceHits,
     model_benchmark_candidate: modelBenchmarkCandidate,
@@ -647,6 +663,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
 
 function directContractCandidate(features) {
   if (features.high_risk) return false;
+  if (features.session_control_candidate) return true;
   if (features.observer_control_candidate) return true;
   if (features.requires_tools) return false;
   if (features.requires_mutation) return false;
@@ -690,6 +707,7 @@ function coordinatedWorkCandidate(features) {
 function inferWorkContractHint(features, route = "") {
   if (route === "runner" || features.hard_runner_candidate) return "inspect_report";
   if (features.model_benchmark_candidate) return "inspect_report";
+  if (features.session_control_candidate) return "answer_now";
   if (features.observer_control_candidate) return "answer_now";
   if (directContractCandidate(features)) return "answer_now";
   if (coordinatedWorkCandidate(features)) return "coordinated_work";
@@ -709,7 +727,11 @@ function contractDrivenRouteBias(features, workContractHint) {
   if (workContractHint === "answer_now") {
     scores.direct = 0.82;
     scores.spawn_single = 0.36;
-    if (features.observer_control_candidate) {
+    if (features.session_control_candidate) {
+      scores.direct = 0.97;
+      scores.spawn_single = 0.04;
+      reasonCodes.push("session_control_direct_contract");
+    } else if (features.observer_control_candidate) {
       scores.direct = 0.96;
       scores.spawn_single = 0.08;
       reasonCodes.push(features.workflow_meta_candidate ? "workflow_meta_control_contract" : "observer_control_contract");
@@ -794,7 +816,10 @@ function contractDrivenRouteBias(features, workContractHint) {
     route = "spawn_single";
     reasonCodes.push("direct_contract_veto_to_spawn_single");
   }
-  if (features.observer_control_candidate) {
+  if (features.session_control_candidate) {
+    route = "direct";
+    reasonCodes.push("prefer_direct_session_control_lane");
+  } else if (features.observer_control_candidate) {
     route = "direct";
     reasonCodes.push("prefer_direct_control_lane");
   }
@@ -861,6 +886,7 @@ function expectedCostBand(route, features) {
 }
 
 function inferTaskClass(features, route) {
+  if (route === "direct" && features.session_control_candidate) return "session_control";
   if (route === "direct" && features.observer_control_candidate) return "control_observer";
   if (route === "runner") {
     if (features.target_scope === "remote") return "fast_remote_check";
@@ -883,6 +909,7 @@ function inferExecutionOwner(route) {
 }
 
 function inferProtectedLane(features, route, taskClass) {
+  if (route === "direct" && taskClass === "session_control") return "session_control";
   if (route === "direct" && taskClass === "control_observer") return "control_observer";
   if (route === "direct" && features.workflow_meta_candidate) return "workflow_meta";
   return "";

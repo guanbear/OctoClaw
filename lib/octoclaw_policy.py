@@ -711,8 +711,14 @@ def tool_policy(route: str, dispatch_required: bool, task_class: str = "") -> di
         "octoclaw_status",
         "octoclaw_task_action",
     ]
+    session_control_tools = [
+        "octoclaw_policy_decide",
+        "octoclaw_route_hint",
+        "octoclaw_status",
+        "session_status",
+    ]
     return {
-        "allow_direct_tools": route == "direct" and task_class != "control_observer",
+        "allow_direct_tools": route == "direct" and task_class not in {"control_observer", "session_control"},
         "must_delegate_via": "octoclaw_dispatch" if dispatch_required else "",
         "allowed_control_tools": [
             "octoclaw_policy_decide",
@@ -722,7 +728,9 @@ def tool_policy(route: str, dispatch_required: bool, task_class: str = "") -> di
             "octoclaw_task_action",
         ],
         "observer_control_tools": observer_control_tools,
+        "session_control_tools": session_control_tools,
         "control_observer_only": task_class == "control_observer",
+        "session_control_only": task_class == "session_control",
         "delegate_first": dispatch_required,
         "block_tool_patterns": block_patterns,
     }

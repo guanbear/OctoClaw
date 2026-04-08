@@ -45,6 +45,15 @@
     }
   },
   {
+    "task": "切换到 Mini Max M2.7",
+    "expected": {
+      "system_preferred_route": "direct",
+      "task_class": "session_control",
+      "work_contract_hint": "answer_now",
+      "protected_lane": "session_control"
+    }
+  },
+  {
     "task": "你帮我查下 octoclaw项目 今天都有啥提交 改了啥",
     "expected": {
       "system_preferred_route": "spawn_single",

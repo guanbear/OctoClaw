@@ -550,6 +550,16 @@ WORKFLOW_META_PATTERNS = {
     ),
 }
 
+SESSION_CONTROL_PATTERNS = {
+    "zh": (
+        r"(切换|切到|换到|换成|改成|改到|切换模型|切模型|换模型).{0,32}(mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus|m2\.7|5\.1|4\.7)",
+        r"(把(当前|现在)?模型(切到|换成|改成)).{0,32}(mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus|m2\.7|5\.1|4\.7)",
+    ),
+    "en": (
+        r"\b(switch|change|set)\b.{0,32}\b(model|mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus)\b",
+    ),
+}
+
 ROUTE_PATTERN_LIBRARY = {
     "RUNNER_PATTERNS": RUNNER_PATTERNS,
     "RUNNER_READ_ONLY_INTENT_PATTERNS": RUNNER_READ_ONLY_INTENT_PATTERNS,
@@ -576,6 +586,7 @@ ROUTE_PATTERN_LIBRARY = {
     "OBSERVER_CONTROL_PATTERNS": OBSERVER_CONTROL_PATTERNS,
     "TASK_PROGRESS_PATTERNS": TASK_PROGRESS_PATTERNS,
     "WORKFLOW_META_PATTERNS": WORKFLOW_META_PATTERNS,
+    "SESSION_CONTROL_PATTERNS": SESSION_CONTROL_PATTERNS,
     "MODEL_BENCHMARK_PATTERNS": MODEL_BENCHMARK_PATTERNS,
 }
 
@@ -671,6 +682,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     observer_control_hits = count_matches(text, resolve_language_patterns("OBSERVER_CONTROL_PATTERNS", enabled_packs))
     task_progress_hits = count_matches(text, resolve_language_patterns("TASK_PROGRESS_PATTERNS", enabled_packs))
     workflow_meta_hits = count_matches(text, resolve_language_patterns("WORKFLOW_META_PATTERNS", enabled_packs))
+    session_control_hits = count_matches(text, resolve_language_patterns("SESSION_CONTROL_PATTERNS", enabled_packs))
     model_benchmark_hits = count_matches(text, resolve_language_patterns("MODEL_BENCHMARK_PATTERNS", enabled_packs))
     model_reference_hits = count_model_reference_hits(text)
     command_read_only = command_looks_read_only(command)
@@ -681,7 +693,9 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         or re.fullmatch(r"\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*", raw_task, re.IGNORECASE)
     )
     workflow_meta_candidate = workflow_meta_hits > 0
-    model_benchmark_candidate = bool(model_benchmark_hits > 0 and model_reference_hits > 0 and not workflow_meta_candidate)
+    session_control_candidate = bool(session_control_hits > 0)
+    observer_control_candidate = bool(explicit_observer_command or observer_control_hits > 0 or workflow_meta_candidate)
+    model_benchmark_candidate = bool(model_benchmark_hits > 0 and model_reference_hits > 0 and not workflow_meta_candidate and not session_control_candidate)
     repo_activity_lookup = bool(
         (
             re.search(r"(github|gitlab|仓库|repo|repository|项目)", text, re.IGNORECASE)
@@ -827,6 +841,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "task_progress_candidate": task_progress_candidate,
         "workflow_meta_hits": workflow_meta_hits,
         "workflow_meta_candidate": workflow_meta_candidate,
+        "session_control_hits": session_control_hits,
+        "session_control_candidate": session_control_candidate,
         "model_benchmark_hits": model_benchmark_hits,
         "model_reference_hits": model_reference_hits,
         "model_benchmark_candidate": model_benchmark_candidate,
@@ -912,6 +928,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
 def direct_contract_candidate(features: dict) -> bool:
     if features.get("high_risk"):
         return False
+    if features.get("session_control_candidate"):
+        return True
     if features.get("observer_control_candidate"):
         return True
     if features.get("requires_tools"):
@@ -976,6 +994,8 @@ def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
         return "inspect_report"
     if features.get("model_benchmark_candidate"):
         return "inspect_report"
+    if features.get("session_control_candidate"):
+        return "answer_now"
     if features.get("observer_control_candidate"):
         return "answer_now"
     if direct_contract_candidate(features):
@@ -1001,7 +1021,11 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
     if work_contract_hint == "answer_now":
         scores["direct"] = 0.82
         scores["spawn_single"] = 0.36
-        if features.get("observer_control_candidate"):
+        if features.get("session_control_candidate"):
+            scores["direct"] = 0.97
+            scores["spawn_single"] = 0.04
+            reason_codes.append("session_control_direct_contract")
+        elif features.get("observer_control_candidate"):
             scores["direct"] = 0.96
             scores["spawn_single"] = 0.08
             if features.get("workflow_meta_candidate"):
@@ -1084,7 +1108,10 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
     if work_contract_hint == "answer_now" and not direct_contract_candidate(features):
         route = "spawn_single"
         reason_codes.append("direct_contract_veto_to_spawn_single")
-    if features.get("observer_control_candidate"):
+    if features.get("session_control_candidate"):
+        route = "direct"
+        reason_codes.append("prefer_direct_session_control_lane")
+    elif features.get("observer_control_candidate"):
         route = "direct"
         reason_codes.append("prefer_direct_control_lane")
 
@@ -1163,6 +1190,8 @@ def expected_cost_band(route: str, features: dict) -> str:
 
 
 def infer_task_class(features: dict, route: str) -> str:
+    if route == "direct" and features.get("session_control_candidate"):
+        return "session_control"
     if route == "direct" and features.get("observer_control_candidate"):
         return "control_observer"
     if route == "runner":
@@ -1195,6 +1224,8 @@ def infer_execution_owner(route: str) -> str:
 
 
 def infer_protected_lane(features: dict, route: str, task_class: str) -> str:
+    if route == "direct" and task_class == "session_control":
+        return "session_control"
     if route == "direct" and task_class == "control_observer":
         return "control_observer"
     if route == "direct" and features.get("workflow_meta_candidate"):

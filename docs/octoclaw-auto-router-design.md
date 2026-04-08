@@ -389,6 +389,28 @@ OctoClaw 当前已经存在一类明确不同于普通业务请求的任务：
 
 > **这类样本不应和普通业务 `direct` 混在一起训练 learned router。**
 
+### 4.1.5 当前会话控制 mutation 也应是 protected lane
+
+还有一类不能被强行委派给子任务，但也不属于纯 observer query 的请求：
+
+- 切换当前会话模型
+- 改当前主会话的 session-level control state
+
+这类操作影响的是**当前主会话本身**，不是某个可替代的子任务执行单元。
+因此它们也应该留在 workflow-first 的 protected lane 里，但应与 `control_observer` 分开：
+
+- `direct`
+- `main-agent stable scope`
+- `session_control`
+- 只允许 session-control 工具，不允许被误导到 delegated lane
+
+如果把它们当成普通 deliverable work，很容易出现逻辑死结：
+
+- policy 要求 `spawn_single`
+- 但子任务并不能修改当前主会话
+
+因此 `session_control` 应视为 protected direct lane，而不是 delegated optimization 的候选。
+
 ### 4.2 正确的数据流
 
 ```text

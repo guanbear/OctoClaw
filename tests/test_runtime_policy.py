@@ -403,6 +403,25 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["tool_policy"]["allow_direct_tools"])
         self.assertTrue(payload["tool_policy"]["control_observer_only"])
 
+    def test_session_control_request_prefers_direct_protected_lane(self) -> None:
+        payload = self.run_policy("切换到 Mini Max M2.7")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "session_control")
+        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "session_control")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertFalse(payload["tool_policy"]["allow_direct_tools"])
+        self.assertFalse(payload["tool_policy"]["control_observer_only"])
+        self.assertTrue(payload["tool_policy"]["session_control_only"])
+        self.assertEqual(
+            payload["tool_policy"]["session_control_tools"],
+            ["octoclaw_policy_decide", "octoclaw_route_hint", "octoclaw_status", "session_status"],
+        )
+        self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
+        self.assertEqual(payload["route_recommendation"]["protected_lane"], "session_control")
+        self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
+        self.assertIn("session_control_direct_contract", payload["route_decision"]["reason_codes"])
+
     def test_repo_commit_summary_query_prefers_spawn_single(self) -> None:
         payload = self.run_policy("你帮我查下 octoclaw项目 今天都有啥提交 改了啥")
         self.assertEqual(payload["route_decision"]["route"], "spawn_single")
