@@ -729,12 +729,12 @@ def _should_sync_task_anchor(record: dict, previous_status: str, anchor_messages
     return previous_value != status or has_existing_message
 
 
-def _sync_task_anchor(record: dict, previous_status: str) -> dict:
+def _sync_task_anchor(record: dict, previous_status: str, *, force: bool = False) -> dict:
     notify_state = load_notify_state()
     anchor_messages = notify_state.get("task_anchor_messages", {})
     if not isinstance(anchor_messages, dict):
         anchor_messages = {}
-    if not _should_sync_task_anchor(record, previous_status, anchor_messages):
+    if not force and not _should_sync_task_anchor(record, previous_status, anchor_messages):
         return {"ok": False, "skipped": True}
 
     task_id = str(record.get("id", "") or "").strip()
@@ -768,6 +768,29 @@ def _sync_task_anchor(record: dict, previous_status: str) -> dict:
         "message_id": message_id,
         "action": str(result.get("action", "send") or "send"),
     }
+
+
+RELAY_SYNC_EVENT_KINDS = {
+    "task_started",
+    "task_running",
+    "task_completed",
+    "task_blocked",
+    "source_blocked",
+    "task_failed",
+    "failed",
+    "result_ready",
+    "handoff_ready",
+}
+
+FORCED_ANCHOR_EVENT_KINDS = {
+    "task_completed",
+    "task_blocked",
+    "source_blocked",
+    "task_failed",
+    "failed",
+    "result_ready",
+    "handoff_ready",
+}
 
 
 def _sync_runtime_coordination(record: dict) -> None:
@@ -1091,12 +1114,14 @@ def cmd_blocked(args):
 def cmd_event(args):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     delivered_event = str(args.kind or "").strip().lower() == "user_notified" or str(args.handoff_state or "").strip().lower() == "delivered"
+    previous_status = ""
     with open(STATE_FILE, "a+") as fp:
         fcntl.flock(fp, fcntl.LOCK_EX)
         state = load_state(fp)
         tasks = state["tasks"]
         existing = next((t for t in tasks if t.get("id") == args.id), None)
         if existing:
+            previous_status = str(existing.get("status", "") or "")
             if args.status:
                 existing["status"] = args.status
             if args.summary:
@@ -1164,6 +1189,10 @@ def cmd_event(args):
         save_state(fp, state)
     append_task_event(current_record, args.kind, message=args.message, extra=args.event_json if isinstance(args.event_json, dict) else None)
     _sync_runtime_coordination(current_record)
+    event_kind = str(args.kind or "").strip().lower()
+    if event_kind in RELAY_SYNC_EVENT_KINDS:
+        sync_task(current_record, event_type=event_kind, previous_status=previous_status)
+        _sync_task_anchor(current_record, previous_status, force=event_kind in FORCED_ANCHOR_EVENT_KINDS)
     print(f"[ok] event id={args.id} kind={args.kind}")
 
 

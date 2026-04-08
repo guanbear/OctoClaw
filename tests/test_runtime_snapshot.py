@@ -97,6 +97,53 @@ class RuntimeSnapshotTests(unittest.TestCase):
         self.assertEqual(payload["runner"]["state"], "missing")
         self.assertTrue(payload["runner"]["recovery_suggested"])
 
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
+    def test_build_runtime_snapshot_uses_event_facts_to_mark_running(self, _mock_cfg) -> None:
+        payload = runtime_snapshot.build_runtime_snapshot(
+            workspace="/tmp/octoclaw",
+            tasks=[{"id": "research-1", "status": "queued", "route": "spawn_single", "source": "octoclaw"}],
+            runner_health={"present": False, "healthy": False, "reason": "missing"},
+            runner_execution_mode="ondemand",
+            queue_counts={},
+            task_events=[
+                {"task_id": "research-1", "kind": "task_started", "time": "2026-04-08T21:18:30+08:00"},
+                {"task_id": "research-1", "kind": "task_running", "time": "2026-04-08T21:18:31+08:00"},
+            ],
+        )
+
+        task = payload["tasks"][0]
+        self.assertEqual(task["projection_status"], "queued")
+        self.assertEqual(task["read_model_status"], "running")
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(task["status_source"], "event_read_model")
+        self.assertEqual(task["latest_event_kind"], "task_running")
+        self.assertEqual(payload["counts"]["running"], 1)
+        self.assertEqual(payload["counts"]["queued"], 0)
+
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
+    def test_build_runtime_snapshot_uses_event_facts_to_mark_done(self, _mock_cfg) -> None:
+        payload = runtime_snapshot.build_runtime_snapshot(
+            workspace="/tmp/octoclaw",
+            tasks=[{"id": "research-2", "status": "running", "route": "spawn_single", "source": "octoclaw"}],
+            runner_health={"present": False, "healthy": False, "reason": "missing"},
+            runner_execution_mode="ondemand",
+            queue_counts={},
+            task_events=[
+                {"task_id": "research-2", "kind": "task_completed", "time": "2026-04-08T21:21:00+08:00"},
+                {"task_id": "research-2", "kind": "result_ready", "time": "2026-04-08T21:21:01+08:00"},
+                {"task_id": "research-2", "kind": "handoff_ready", "time": "2026-04-08T21:21:02+08:00"},
+            ],
+        )
+
+        task = payload["tasks"][0]
+        self.assertEqual(task["projection_status"], "running")
+        self.assertEqual(task["read_model_status"], "done")
+        self.assertEqual(task["status"], "done")
+        self.assertEqual(task["result_ready_at"], "2026-04-08T21:21:01+08:00")
+        self.assertEqual(task["handoff_ready_at"], "2026-04-08T21:21:02+08:00")
+        self.assertEqual(payload["counts"]["done"], 1)
+        self.assertEqual(payload["counts"]["running"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -166,6 +166,31 @@ class TaskStateAnchorSeedTests(unittest.TestCase):
             self.assertTrue(result["skipped"])
             mock_send.assert_not_called()
 
+    def test_sync_task_anchor_force_bypasses_status_gate_for_completion_relay(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-anchor-seed-") as tmpdir:
+            notify_path = Path(tmpdir) / "patrol-notify-state.json"
+            with (
+                patch.object(task_state_update, "PATROL_NOTIFY_STATE_FILE", str(notify_path)),
+                patch.object(
+                    task_state_update,
+                    "send_task_notification",
+                    return_value={"ok": True, "backend": "slack", "messageId": "m-2", "action": "send"},
+                ) as mock_send,
+            ):
+                result = task_state_update._sync_task_anchor(
+                    {
+                        "id": "task-2",
+                        "session_key": "slack:channel:C234",
+                        "status": "done",
+                        "route": "spawn_single",
+                    },
+                    "done",
+                    force=True,
+                )
+
+            self.assertTrue(result["ok"])
+            mock_send.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

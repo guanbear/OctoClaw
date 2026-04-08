@@ -600,6 +600,35 @@ P5 不应该顺手混进这些题：
   - direct-path latency
   - explanation/grounding risk
 
+#### P5G：Completion Relay + Observer Snapshot
+
+目标：
+
+- 把 delegated task 的状态读取和结果回推，收口到现有 `runtime_snapshot` / `observe_runtime_read_model` 主线上
+- 让 completion relay 取代 “等 patrol 之后再发现” 的关键路径
+
+完成标志：
+
+- `runtime_snapshot` 会吸收 `task-events` 的 running/done/blocked/failed/handoff-ready 事实，用于修正 read-model
+- `task-state-update.py event` 对关键 completion 事件会立即触发 projection/bridge/notifier relay
+- `status / details / observer / protected-lane state answers` 统一基于 read-model，而不是散落的 task-state 猜测
+- `patrol` 停掉时，已完成任务的最终 truth 仍能通过 native/projection/event 正确显示
+
+#### H5：Snapshot And Completion Relay
+
+交付物：
+
+- `runtime_snapshot.py` 扩展 task-event aware read-model
+- `task-state-update.py event` 补齐 completion relay
+- 文档里明确 native truth / projection / event / observer snapshot / patrol 的职责边界
+
+验收标准：
+
+- 已出现 `task_running` 事件的任务，不再在 read-model 中显示为 queued
+- 已出现 `task_completed` 或 `task_failed`/`task_blocked` 事件的任务，不再长期停留在旧 projection 状态
+- `result_ready` / `handoff_ready` 事件能直接触发 anchor/notifier 更新，而不是只能等 patrol 补偿
+- 历史 bad case 能通过 task-events + read-model 复盘出真实生命周期
+
 ### 当前结论
 
 按 2026-04-08 的基线，P5F 以“ownership 与 contract 收口完成、实现保持渐进归类”为完成口径。
@@ -629,6 +658,7 @@ P5 关单前，至少应满足：
 5. 维护者默认只靠 `octoclawctl` 就能完成日常观察与控制
 6. patrol 不再像第二套 runtime engine，runner 也不再像默认真相源
 7. runtime / workflow / evaluation harness 的 ownership 与 contract inventory 已明确
+8. task completion truth 默认通过 native substrate + projection + event read-model 收口，而不是继续依赖 patrol 事后猜测
 
 ---
 

@@ -700,6 +700,31 @@ P5F 的 canonical artifact 现在应以两份文档为准：
 - `docs/octoclaw-harness-ownership-map.md`
 - `docs/octoclaw-harness-contract-inventory.md`
 
+### 7.9 Completion relay and observer snapshot should replace ad-hoc status guessing
+
+P4/P5 进入当前阶段后，OctoClaw 不再适合继续把 `patrol` 或主 agent 的经验性判断当成任务状态入口。
+
+更稳的职责边界应当是：
+
+- OpenClaw native task / managed TaskFlow = execution truth
+- `task-state` = OctoClaw projection / metadata store
+- `task-events` = transition log and delivery hints
+- `runtime_snapshot` + `observe_runtime_read_model` = unified read model
+- completion relay = task 完成后立即把 projection / event / notifier 串起来
+- `patrol` = detect / reconcile / retry，退出关键路径
+
+这意味着：
+
+- 不是再新造一套 snapshot 层，而是把现有 `runtime_snapshot.py` / `observe_runtime_read_model` 扶正成唯一读面
+- 任务 `running / done / blocked / failed / handoff_ready` 的展示与解释，要优先相信 native/projection/event 合成后的 read-model
+- 主 agent 在回答 “queued 了吗 / 跑了没 / 完成没 / 谁做的” 这类问题时，必须 grounding 到该 read-model，而不是沿用历史话术
+
+非目标：
+
+- 不把 `tmux` / runner / workbench 重新拉回状态真相源
+- 不让 `patrol` 重新承担首次 completion 收口
+- 不发明一套与现有 `runtime_snapshot` 平行的 observer 子系统
+
 ---
 
 ## 8. 当前仍存在的关键张力
