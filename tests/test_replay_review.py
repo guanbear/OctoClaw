@@ -102,6 +102,33 @@ class ReplayReviewTests(unittest.TestCase):
                         "conflict_type": "repo_activity_lookup",
                     },
                 },
+                "budgetRecommendation": {
+                    "schema_version": "octoclaw.budget_recommendation/v1",
+                    "target_model": "model/research",
+                    "fallback_model": "",
+                    "output_budget": "low",
+                    "retry_budget": 1,
+                    "latency_target": "background",
+                    "max_workers": 1,
+                    "reasoning_mode": "medium",
+                    "upgrade_allowed": True,
+                    "cost_ceiling": "low",
+                    "consistency": {"route": "spawn_single", "route_matches_output_budget": True, "route_matches_latency_target": True, "route_matches_worker_budget": True, "retry_budget_valid": True, "route_budget_consistent": True}
+                },
+                "routeOutcome": {
+                    "schema_version": "octoclaw.route_outcome/v1",
+                    "execution_contract": "spawn_single",
+                    "resolved_execution_contract": "spawn_single",
+                    "agent_scope": "subagent_lane",
+                    "route_class": "delegated_single",
+                    "recommended_model": "model/research",
+                    "resolved_model": "model/research",
+                    "route_source": "rule",
+                    "queue_pressure_band": "low",
+                    "quota_pressure_band": "high",
+                    "validation_outcome": "pass",
+                    "fallback_taken": False
+                },
                 "autoRouter": {
                     "budgetPlanner": {
                         "consistency": {
@@ -124,6 +151,15 @@ class ReplayReviewTests(unittest.TestCase):
         self.assertEqual(record["arbitration_strategy"], "rule_fallback")
         self.assertEqual(record["arbitration_conflict_type"], "repo_activity_lookup")
         self.assertTrue(record["route_budget_consistent"])
+        self.assertEqual(record["execution_contract"], "spawn_single")
+        self.assertEqual(record["route_class"], "delegated_single")
+        self.assertEqual(record["recommended_model"], "model/research")
+        self.assertEqual(record["resolved_model"], "model/research")
+        self.assertEqual(record["route_source"], "rule")
+        self.assertEqual(record["queue_pressure_band"], "low")
+        self.assertEqual(record["quota_pressure_band"], "high")
+        self.assertEqual(record["validation_outcome"], "pass")
+        self.assertFalse(record["fallback_taken"])
 
 
 if __name__ == "__main__":

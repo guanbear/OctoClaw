@@ -1,6 +1,6 @@
 # OctoClaw Auto Router Implementation Checklist
 
-> 状态：P2.5 施工清单（2026-04-08，post-P2.5 深化入口已补）  
+> 状态：P2.5 baseline 已收口（2026-04-08，post-P2.5 深化入口已补）  
 > 用途：把 [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md) 翻成可执行的 implementation slices。  
 > 关联文档：[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)、[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)
 
@@ -95,6 +95,12 @@ Python 不再承担：
 - `control_observer` 不被混入普通业务 auto-router 训练面
 - tiny judge 是可插拔选项，不是前置依赖
 
+`2026-04-08` 的 closeout 已把以上 baseline 条件收齐。后续 remaining work 不再视为 P2.5 blocker，而统一转入：
+
+- `RM1/RM2` 的 source / recommendation hardening
+- `RM3` 的 calibration / validation / rollout 深化
+- `RM4` 的 extractable readiness / packaging prep
+
 ---
 
 ## 4. 文件落点总览
@@ -171,17 +177,17 @@ Python 不再承担：
 
 ### Checklist
 
-- [ ] 设计并落地 `route-recommendation/v1` schema
-- [ ] 设计并落地 `budget-recommendation/v1` schema
-- [ ] 设计并落地 `route-outcome/v1` schema
-- [ ] 在 runtime policy 决策中明确区分：
+- [x] 设计并落地 `route-recommendation/v1` schema
+- [x] 设计并落地 `budget-recommendation/v1` schema
+- [x] 设计并落地 `route-outcome/v1` schema
+- [x] 在 runtime policy 决策中明确区分：
   - `recommendation`
   - `resolution`
   - `execution_result`
-- [ ] 在 `extensions/octoclaw-runtime/policy/` 新建 recommendation helper 模块
-- [ ] 保持当前 `runtime-policy decision` schema 向后兼容
-- [ ] 不在这一拍改 `hard_runner_only` 默认值
-- [ ] 不在这一拍改 `direct_model_override` 默认值
+- [x] 在 `extensions/octoclaw-runtime/policy/` 新建 recommendation helper 模块
+- [x] 保持当前 `runtime-policy decision` schema 向后兼容
+- [x] 不在这一拍改 `hard_runner_only` 默认值
+- [x] 不在这一拍改 `direct_model_override` 默认值
 
 ### 主要文件
 
@@ -194,10 +200,10 @@ Python 不再承担：
 
 ### 测试
 
-- [ ] 给 recommendation schema 加结构化 fixture
-- [ ] 补 `tests/test_runtime_policy.py`
-- [ ] 补 `tests/test_runtime_policy_js_parity.py`
-- [ ] 补 `tests/test_runtime_policy_replay_schema.py`
+- [x] 给 recommendation schema 加结构化 fixture
+- [x] 补 `tests/test_runtime_policy.py`
+- [x] 补 `tests/test_runtime_policy_js_parity.py`
+- [x] 补 `tests/test_runtime_policy_replay_schema.py`
 
 ### 验收标准
 
@@ -224,7 +230,7 @@ Python 不再承担：
 - [x] workflow/session metadata query 默认归到 `control_observer`
 - [x] current-session model switch / session mutation 默认归到 `session_control`
 - [x] protected lanes 默认 bypass delegated optimization
-- [ ] protected lanes 不混入普通业务 auto-router 训练面
+- [x] protected lanes 不混入普通业务 auto-router 训练面
 - [x] 建立高频误判 goldens：
   - `你现在是啥模型`
   - `你是啥模型`
@@ -244,9 +250,9 @@ Python 不再承担：
   - `candidate_models`
   - `output_budget`
   - `reasoning_mode`
-- [ ] `runner` 可消费 recommendation 中的 `profile / model_band / output_budget`
-- [ ] `spawn_single` 可消费 recommendation 中的 `worker_pool / profile / model candidate`
-- [ ] `spawn_multi` 先支持 parent planner / worker / review 的 lane-local recommendation 占位
+- [x] `runner` 可消费 recommendation 中的 `profile / model_band / output_budget`
+- [x] `spawn_single` 可消费 recommendation 中的 `worker_pool / profile / model candidate`
+- [x] `spawn_multi` 先支持 parent planner / worker / review 的 lane-local recommendation 占位
 - [x] `control_observer` 默认 bypass delegated optimization
 - [x] 保持 `main-agent direct` 默认 stable scope
 - [x] 保持 `before_model_resolve` 不因 P2.5 baseline 自动放开
@@ -272,7 +278,7 @@ Python 不再承担：
 
 ### 测试
 
-- [ ] `tests/test_dispatch_task.py`
+- [x] `tests/test_dispatch_task.py`
 - [x] `tests/test_runtime_policy.py`
 - [x] `tests/test_runtime_policy_js_parity.py`
 - [x] `tests/test_route_goldens.py`
@@ -280,7 +286,7 @@ Python 不再承担：
 - [x] `tests/test_model_health_backfill.py`
 - [x] `tests/test_model_telemetry_report.py`
 - [x] 增加 `control_observer` bypass case
-- [ ] 增加 delegated-only route recommendation case
+- [x] 增加 delegated-only route recommendation case
 
 ### 验收标准
 
@@ -302,19 +308,19 @@ Python 不再承担：
 
 ### Checklist
 
-- [ ] 为 runtime replay event 增加 recommendation / resolved target / outcome 字段
-- [ ] replay summary 能看到 route diff
+- [x] 为 runtime replay event 增加 recommendation / resolved target / outcome 字段
+- [x] replay summary 能看到 route diff
 - [ ] replay validation 能汇总 route outcome
 - [x] nightly 分析能汇总高频误判与 protected-lane 漏判
 - [x] nightly packet 会优先挑出 short protected-lane / direct slow reply / delegation explanation risk
 - [x] nightly reply review 默认尝试语义 review，失败时回退 packet-only review
 - [ ] feedback manifest 能关联 route outcome artifacts
 - [ ] rollout check / recommendation 能感知 shadow diff 指标
-- [ ] 记录三类分开的 outcome：
+- [x] 记录三类分开的 outcome：
   - `main-agent direct`
   - `runner`
   - `subagent/team`
-- [ ] 记录以下关键字段：
+- [x] 记录以下关键字段：
   - `execution_contract`
   - `agent_scope`
   - `route_class`
@@ -344,10 +350,10 @@ Python 不再承担：
 
 ### 测试
 
-- [ ] `tests/test_runtime_policy_replay_schema.py`
-- [ ] `tests/test_replay_summary.py`
-- [ ] `tests/test_replay_review.py`
-- [ ] `tests/test_replay_curate.py`
+- [x] `tests/test_runtime_policy_replay_schema.py`
+- [x] `tests/test_replay_summary.py`
+- [x] `tests/test_replay_review.py`
+- [x] `tests/test_replay_curate.py`
 - [ ] `tests/test_replay_validation.py`
 - [ ] `tests/test_replay_automation.py`
 - [ ] `tests/test_runtime_policy_rollout.py`
@@ -368,16 +374,16 @@ Python 不再承担：
 
 ### Checklist
 
-- [ ] 明确 `policy adapter` 的输入输出 contract
-- [ ] 把以下因素作为 final resolution 的一等输入：
+- [x] 明确 `policy adapter` 的输入输出 contract
+- [x] 把以下因素作为 final resolution 的一等输入：
   - model health
   - cooldown
   - quota pressure
   - runner health
   - queue pressure
   - worker availability
-- [ ] 推荐和最终 resolved target 分开记录
-- [ ] fallback chain 的触发原因结构化
+- [x] 推荐和最终 resolved target 分开记录
+- [x] fallback chain 的触发原因结构化
 - [ ] `model_health.py` 与 runtime recommendation 的字段命名对齐
 - [ ] `runtime_snapshot.py` 暴露给 route outcome 可消费的 capacity snapshot
 
@@ -394,7 +400,7 @@ Python 不再承担：
 
 - [ ] `tests/test_model_health.py`
 - [ ] `tests/test_runtime_observer.py`
-- [ ] `tests/test_dispatch_task.py`
+- [x] `tests/test_dispatch_task.py`
 - [ ] 新增 fallback / quota / queue-pressure case
 
 ### 验收标准
@@ -402,6 +408,9 @@ Python 不再承担：
 - recommendation 和 resolution 分层清楚
 - fallback / cooldown / queue pressure 不再是隐式副作用
 - outcome 中能解释“为什么没用推荐模型”
+
+> 注：`Slice D` 的 baseline closeout 已完成，当前 route outcome 已能记录 runner health / queue pressure / quota pressure / fallback reason。  
+> 更进一步把这些字段统一到 `runtime_snapshot` / `model_health` 的单一 read-model，转入 post-P2.5 的 RM 深化，不再阻塞 closeout。
 
 ---
 

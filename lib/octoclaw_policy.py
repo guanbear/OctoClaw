@@ -22,7 +22,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from auto_router import build_auto_router_payload
+from auto_router import build_auto_router_payload, build_budget_recommendation_payload
 from model_health_backfill import refresh_model_health_feedback_if_stale
 from octoclaw_route import infer_route
 from route_recommendation import build_route_recommendation
@@ -923,6 +923,15 @@ def build_decision(
             "model_band": model_band,
         },
     )
+    budget_recommendation = build_budget_recommendation_payload(
+        budget_policy=route_budget,
+        model_policy={
+            "selected_model": selected_model,
+            "fallbacks": [],
+            "reasoning_effort": reasoning_effort,
+        },
+        route=route,
+    )
 
     decision = {
         "schema_version": SCHEMA_VERSION,
@@ -983,6 +992,7 @@ def build_decision(
             "review_trigger": "policy_required" if needs_review else "",
         },
         "route_recommendation": route_recommendation,
+        "budget_recommendation": budget_recommendation,
         "prompt_contract": prompt_policy,
         "pre_dispatch_ack": pre_dispatch_ack,
         "tool_policy": tool_policy(route, dispatch_required, task_class),

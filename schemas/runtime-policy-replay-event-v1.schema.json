@@ -37,7 +37,24 @@
     "workerPool": { "type": "string" },
     "workContract": { "type": "string" },
     "workContractHint": { "type": "string" },
-    "budgetPolicy": { "type": "string" },
+    "budgetPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "budget_cap": { "type": "string" },
+        "retry_cap": { "type": "integer" },
+        "max_workers": { "type": "integer" },
+        "latency_target": { "type": "string" },
+        "interruptibility": { "type": "string" },
+        "upgrade_allowed": { "type": "boolean" }
+      }
+    },
+    "routeRecommendation": { "$ref": "route-recommendation-v1.schema.json" },
+    "budgetRecommendation": { "$ref": "budget-recommendation-v1.schema.json" },
+    "routeOutcome": { "$ref": "route-outcome-v1.schema.json" },
+    "autoRouter": {
+      "type": "object"
+    },
     "routeHintRequired": { "type": "boolean" },
     "routeHintSubmitted": { "type": "boolean" },
     "stickyApplied": { "type": "boolean" },
@@ -65,6 +82,27 @@
     "routeLanguagePacks": {
       "type": "array",
       "items": { "type": "string" }
-    }
+    },
+    "executionContract": { "type": "string" },
+    "agentScope": { "type": "string" },
+    "routeClass": { "type": "string" },
+    "recommendedModel": { "type": "string" },
+    "resolvedModel": { "type": "string" },
+    "outputBudget": { "type": "string" },
+    "reasoningMode": { "type": "string" },
+    "candidateModels": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "routeSource": { "type": "string" },
+    "fallbackTaken": { "type": "boolean" },
+    "runnerHealthSnapshot": {
+      "type": "object"
+    },
+    "queuePressureBand": { "type": "string" },
+    "quotaPressureBand": { "type": "string" },
+    "actualCost": { "type": ["number", "integer", "null"] },
+    "actualLatency": { "type": ["number", "integer", "null"] },
+    "validationOutcome": { "type": "string" }
   }
 }

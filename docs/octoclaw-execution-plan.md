@@ -214,6 +214,22 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 配套设计底稿见：[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)  
 施工清单见：[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
 
+### 当前状态
+
+`2026-04-08` 的 P2.5 closeout 已完成。当前已经具备：
+
+- 独立的 `route recommendation` / `budget recommendation` / `route outcome` contract
+- delegated lanes 对 recommendation 的实际消费
+- replay / review / curate / summary 对 outcome 的可见性
+- final resolution 层对 `health / quota / queue pressure / runner capacity` 的 baseline 记录
+- extractable readiness baseline 与 packaging prep baseline
+
+从这一点往后，router 线不再叫“P2.5 还没收口”，而进入 post-P2.5 深化：
+
+- `RM1/RM2`：facts plane / recommendation hardening
+- `RM3`：calibration / validation / rollout 深化
+- `RM4`：extractable readiness / packaging prep
+
 ### 为什么现在该把这件事写进 canonical plan
 
 当前 OctoClaw 已经不只是 route score 脚本了，而是逐步形成：
@@ -295,19 +311,21 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 先 shadow/recommendation，再 promotion，不直接硬切主路径
 - 先做 protected lanes / goldens / parity，再考虑 tiny judge
 
-### 这条线的近期推进顺序
+### 这条线的后续推进顺序
 
-当前状态：`1 / 2` 已落地，`3` 仍未开始。
+P2.5 closeout 之后，router 线按下面顺序继续：
 
-1. 先收 protected lanes
-   - 明确哪些问题必须留在 main-agent stable scope
-   - workflow-first，非必要不委派
-   - current-session mutation 不能被错误委派给子任务
-2. 再补 goldens / parity / replay diff
-   - 先降低高频误判，再扩 recommendation 面
-   - nightly 必须覆盖 direct path / protected lane / session-control 的坏例子
-3. 最后才给模糊样本接 tiny judge
-   - tiny judge 是歧义裁决器，不是主路由器
+1. `RM1/RM2`：继续做 source / recommendation hardening
+   - source freshness / precedence / stale fallback 再收紧
+   - route-budget integration / regression coverage 再补齐
+2. `RM3`：把 replay / validation / rollout 真正收成 calibration plane
+   - route correctness
+   - budget correctness
+   - final delivery correctness
+   - threshold / weight tuning inputs
+3. 最后才考虑更深的 tiny judge / extractable package
+   - tiny judge 仍是可插拔增强，不是前置依赖
+   - extractable package 仍以 recommendation kernel 为主，不把 runtime adapter 一起抽走
 
 ---
 

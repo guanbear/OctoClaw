@@ -30,6 +30,14 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
                 "selector_band": "strong",
                 "profile": "code",
             },
+            "route_recommendation": {
+                "recommended_route": "spawn_single",
+                "recommended_worker_pool": "octoclaw-code",
+            },
+            "budget_recommendation": {
+                "output_budget": "medium",
+                "reasoning_mode": "high",
+            },
         }
         args = argparse.Namespace(
             model_band="",
@@ -64,6 +72,10 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
                 "register": True,
                 "execute": None,
                 "policy_decision": decision,
+                "metadata": {
+                    "route_recommendation": decision["route_recommendation"],
+                    "budget_recommendation": decision["budget_recommendation"],
+                },
             },
         )
 

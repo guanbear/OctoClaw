@@ -204,6 +204,14 @@ def count_string_field(items: list[dict[str, Any]], *keys: str) -> dict[str, int
     return dict(sorted(counts.items()))
 
 
+def route_outcome_value(event: dict[str, Any], nested_key: str, *flat_keys: str) -> str:
+    nested = _dict_field(event, "routeOutcome", "route_outcome")
+    value = str(nested.get(nested_key, "") or "").strip()
+    if value:
+        return value
+    return _string_field(event, *flat_keys)
+
+
 def build_promotion_checks(
     summary: dict[str, Any],
     *,
@@ -469,6 +477,32 @@ def summarize_events(
             "blocked_event_types": dict(sorted(Counter(str(event.get("event", "") or "") for event in blocked_events).items())),
             "blocked_session_count": len(blocked_sessions),
             "blocked_session_rate": ratio(len(blocked_sessions), len(session_ids)),
+        },
+        "route_outcome_metrics": {
+            "execution_contract_counts": dict(
+                sorted(
+                    Counter(
+                        route_outcome_value(event, "execution_contract", "executionContract", "execution_contract")
+                        for event in task_events
+                        if route_outcome_value(event, "execution_contract", "executionContract", "execution_contract")
+                    ).items()
+                )
+            ),
+            "route_class_counts": dict(
+                sorted(
+                    Counter(
+                        route_outcome_value(event, "route_class", "routeClass", "route_class")
+                        for event in task_events
+                        if route_outcome_value(event, "route_class", "routeClass", "route_class")
+                    ).items()
+                )
+            ),
+            "fallback_taken_count": sum(
+                1
+                for event in task_events
+                if _bool_field(_dict_field(event, "routeOutcome", "route_outcome"), "fallback_taken")
+                or _bool_field(event, "fallbackTaken", "fallback_taken")
+            ),
         },
         "economics_metrics": {
             "budget_cap_counts": count_budget_field(task_events, "budget_cap"),

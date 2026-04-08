@@ -37,6 +37,7 @@ BUDGET_PLANNER_SCHEMA_VERSION = "octoclaw.auto_router.budget_planner/v1"
 MODEL_INTEL_SCHEMA_VERSION = "octoclaw.auto_router.model_intel/v1"
 ADAPTER_SCHEMA_VERSION = "octoclaw.auto_router.adapter/v1"
 RECOMMENDATION_SCHEMA_VERSION = "octoclaw.auto_router.recommendation/v1"
+BUDGET_RECOMMENDATION_SCHEMA_VERSION = "octoclaw.budget_recommendation/v1"
 DEFAULT_MODEL_INTEL_PRECEDENCE = {
     "identity": ["operator_override", "curated_local_catalog", "external_model_registry"],
     "capabilities": ["operator_override", "external_model_registry", "curated_local_catalog", "built_in_defaults"],
@@ -194,6 +195,21 @@ def build_budget_planner_payload(
         "cost_ceiling": output_budget,
         "consistency": consistency,
     }
+
+
+def build_budget_recommendation_payload(
+    *,
+    budget_policy: dict[str, Any],
+    model_policy: dict[str, Any],
+    route: str,
+) -> dict[str, Any]:
+    payload = build_budget_planner_payload(
+        budget_policy=budget_policy,
+        model_policy=model_policy,
+        route=route,
+    )
+    payload["schema_version"] = BUDGET_RECOMMENDATION_SCHEMA_VERSION
+    return payload
 
 
 def build_budget_consistency_payload(

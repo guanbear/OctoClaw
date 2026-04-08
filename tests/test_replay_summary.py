@@ -69,6 +69,7 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(payload["task_metrics"]["work_contract_counts"], {"deliverable_work": 1})
         self.assertEqual(payload["task_metrics"]["worker_pool_counts"], {"octoclaw-code": 1})
         self.assertEqual(payload["tool_metrics"]["blocked_event_count"], 2)
+        self.assertEqual(payload["route_outcome_metrics"]["execution_contract_counts"], {"spawn_single": 1})
         self.assertEqual(payload["substrate_metrics"]["tracked"], 1)
         self.assertEqual(payload["substrate_metrics"]["native_bound"], 1)
         self.assertEqual(payload["substrate_metrics"]["native_active"], 1)
@@ -95,6 +96,13 @@ class ReplaySummaryTests(unittest.TestCase):
                 "workerPool": "octoclaw-runner",
                 "workContract": "inspect_report",
                 "budgetPolicy": {"budget_cap": "low", "retry_cap": 1, "max_workers": 1, "latency_target": "interactive", "interruptibility": "high", "upgrade_allowed": True},
+                "routeOutcome": {
+                    "schema_version": "octoclaw.route_outcome/v1",
+                    "execution_contract": "runner",
+                    "resolved_execution_contract": "runner",
+                    "agent_scope": "runner_lane",
+                    "route_class": "delegated_runner"
+                },
                 "routeHintRequired": False,
                 "routeHintSubmitted": False,
                 "stickyApplied": False,
@@ -113,6 +121,13 @@ class ReplaySummaryTests(unittest.TestCase):
                 "workContract": "deliverable_work",
                 "workContractHint": "deliverable_work",
                 "budgetPolicy": {"budget_cap": "low", "retry_cap": 1, "max_workers": 1, "latency_target": "background", "interruptibility": "medium", "upgrade_allowed": True},
+                "routeOutcome": {
+                    "schema_version": "octoclaw.route_outcome/v1",
+                    "execution_contract": "spawn_single",
+                    "resolved_execution_contract": "spawn_single",
+                    "agent_scope": "subagent_lane",
+                    "route_class": "delegated_single"
+                },
                 "routeHintRequired": True,
                 "routeHintSubmitted": True,
                 "stickyApplied": False,
@@ -176,6 +191,7 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(payload["task_metrics"]["runner_task_count"], 1)
         self.assertEqual(payload["task_metrics"]["delegated_task_count"], 2)
         self.assertEqual(payload["economics_metrics"]["budget_cap_counts"], {"low": 2})
+        self.assertEqual(payload["route_outcome_metrics"]["route_class_counts"], {"delegated_runner": 1, "delegated_single": 1})
         self.assertEqual(payload["route_hint_metrics"]["required_count"], 1)
         self.assertEqual(payload["route_hint_metrics"]["submitted_count"], 1)
         self.assertEqual(payload["route_hint_metrics"]["submission_rate"], 1.0)

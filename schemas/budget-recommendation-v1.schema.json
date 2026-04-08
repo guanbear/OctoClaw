@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/budget-recommendation-v1.schema.json",
+  "title": "OctoClaw Budget Recommendation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "output_budget",
+    "latency_target",
+    "max_workers",
+    "retry_budget",
+    "consistency"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.budget_recommendation/v1"
+    },
+    "target_model": { "type": "string" },
+    "fallback_model": { "type": "string" },
+    "output_budget": { "type": "string" },
+    "retry_budget": { "type": "integer" },
+    "latency_target": { "type": "string" },
+    "max_workers": { "type": "integer" },
+    "reasoning_mode": { "type": "string" },
+    "upgrade_allowed": { "type": "boolean" },
+    "cost_ceiling": { "type": "string" },
+    "consistency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route",
+        "route_matches_output_budget",
+        "route_matches_latency_target",
+        "route_matches_worker_budget",
+        "retry_budget_valid",
+        "route_budget_consistent"
+      ],
+      "properties": {
+        "route": { "type": "string" },
+        "route_matches_output_budget": { "type": "boolean" },
+        "route_matches_latency_target": { "type": "boolean" },
+        "route_matches_worker_budget": { "type": "boolean" },
+        "retry_budget_valid": { "type": "boolean" },
+        "route_budget_consistent": { "type": "boolean" }
+      }
+    }
+  }
+}

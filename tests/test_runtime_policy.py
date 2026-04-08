@@ -379,6 +379,16 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
         self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
 
+    def test_budget_recommendation_is_emitted_with_consistency_fields(self) -> None:
+        payload = self.run_policy("检查一下 nginx error log 最近 80 行，然后总结问题")
+        budget = payload["budget_recommendation"]
+        self.assertEqual(budget["schema_version"], "octoclaw.budget_recommendation/v1")
+        self.assertEqual(budget["output_budget"], payload["budget_policy"]["budget_cap"])
+        self.assertEqual(budget["latency_target"], payload["budget_policy"]["latency_target"])
+        self.assertEqual(budget["max_workers"], payload["budget_policy"]["max_workers"])
+        self.assertEqual(budget["reasoning_mode"], payload["model_policy"]["reasoning_effort"])
+        self.assertTrue(budget["consistency"]["route_budget_consistent"])
+
     def test_route_provenance_question_prefers_protected_direct_lane(self) -> None:
         payload = self.run_route("现在走的是什么路由")
         self.assertEqual(payload["system_preferred_route"], "direct")

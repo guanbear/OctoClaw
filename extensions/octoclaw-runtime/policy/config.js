@@ -113,6 +113,8 @@ export const MODEL_BENCHMARKS_FILE = path.join(WORKSPACE, "tmp", "octopus", "mod
 export const MODEL_SOURCES_FILE = path.join(WORKSPACE, "tmp", "octopus", "model-sources.json");
 export const MODEL_INTEL_SOURCE_STATUS_FILE = path.join(WORKSPACE, "tmp", "octopus", "model-intel-source-status.json");
 export const ROUTE_STICKINESS_FILE = path.join(WORKSPACE, "tmp", "octopus", "route-stickiness.json");
+export const RUNNER_QUEUE_FILE = path.join(WORKSPACE, "tmp", "octopus", "runner-queue.json");
+export const RUNNER_HEALTH_FILE = path.join(WORKSPACE, "tmp", "octopus", "runner-health.json");
 export const GLOBAL_DEG_FILE = "/tmp/ironclaw-global-degradation.json";
 export const GUARD_FILE = "/tmp/ironclaw-model-guard-override.json";
 

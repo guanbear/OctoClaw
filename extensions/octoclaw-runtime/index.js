@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDecision } from "./policy/decide.js";
+import { buildRouteOutcome } from "./policy/outcome.js";
 import { inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -924,15 +925,60 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
     return;
   }
   try {
+    const enrichedPayload = enrichReplayPayload(eventType, payload, decision);
     await appendJsonl(resolveReplayLogPath(), {
       schema_version: "octoclaw.runtime_policy.replay_event/v1",
       event: eventType,
       at: new Date().toISOString(),
-      ...payload,
+      ...enrichedPayload,
     });
   } catch (err) {
     logger?.warn?.(`octoclaw runtime replay log failed: ${String(err)}`);
   }
+}
+
+function enrichReplayPayload(eventType, payload = {}, decision = null) {
+  if (!decision || typeof decision !== "object") {
+    return payload || {};
+  }
+  const routeDecision = decision?.route_decision && typeof decision.route_decision === "object" ? decision.route_decision : {};
+  const routeRecommendation = decision?.route_recommendation && typeof decision.route_recommendation === "object" ? decision.route_recommendation : {};
+  const budgetPolicy = decision?.budget_policy && typeof decision.budget_policy === "object" ? decision.budget_policy : {};
+  const budgetRecommendation = decision?.budget_recommendation && typeof decision.budget_recommendation === "object" ? decision.budget_recommendation : {};
+  const autoRouter = decision?.auto_router && typeof decision.auto_router === "object" ? decision.auto_router : {};
+  const routerCore = autoRouter?.router_core && typeof autoRouter.router_core === "object" ? autoRouter.router_core : {};
+  const modelIntel = autoRouter?.model_intel && typeof autoRouter.model_intel === "object" ? autoRouter.model_intel : {};
+  const routeOutcome = buildRouteOutcome(eventType, decision, payload || {});
+  const candidateModels = Array.isArray(modelIntel.candidate_models) ? modelIntel.candidate_models : [];
+  return {
+    ...payload,
+    workContract: String(payload?.workContract || routeDecision.work_contract || ""),
+    workContractHint: String(payload?.workContractHint || routeDecision.work_contract_hint || ""),
+    budgetPolicy: payload?.budgetPolicy && typeof payload.budgetPolicy === "object" ? payload.budgetPolicy : budgetPolicy,
+    routeRecommendation: payload?.routeRecommendation && typeof payload.routeRecommendation === "object" ? payload.routeRecommendation : routeRecommendation,
+    budgetRecommendation: payload?.budgetRecommendation && typeof payload.budgetRecommendation === "object" ? payload.budgetRecommendation : budgetRecommendation,
+    autoRouter: payload?.autoRouter && typeof payload.autoRouter === "object" ? payload.autoRouter : autoRouter,
+    routeOutcome: payload?.routeOutcome && typeof payload.routeOutcome === "object" ? payload.routeOutcome : routeOutcome,
+    executionContract: String(payload?.executionContract || routeOutcome.execution_contract || routeDecision.route || ""),
+    agentScope: String(payload?.agentScope || routeOutcome.agent_scope || routerCore.agent_scope || ""),
+    routeClass: String(payload?.routeClass || routeOutcome.route_class || routerCore.route_class || ""),
+    recommendedModel: String(payload?.recommendedModel || routeOutcome.recommended_model || modelIntel.selected_model || ""),
+    resolvedModel: String(payload?.resolvedModel || routeOutcome.resolved_model || ""),
+    outputBudget: String(payload?.outputBudget || routeOutcome.output_budget || budgetRecommendation.output_budget || ""),
+    reasoningMode: String(payload?.reasoningMode || routeOutcome.reasoning_mode || budgetRecommendation.reasoning_mode || ""),
+    candidateModels: Array.isArray(payload?.candidateModels) ? payload.candidateModels : candidateModels,
+    routeSource: String(payload?.routeSource || routeOutcome.route_source || ""),
+    fallbackTaken: Boolean("fallbackTaken" in (payload || {}) ? payload.fallbackTaken : routeOutcome.fallback_taken),
+    runnerHealthSnapshot:
+      payload?.runnerHealthSnapshot && typeof payload.runnerHealthSnapshot === "object"
+        ? payload.runnerHealthSnapshot
+        : routeOutcome.runner_health_snapshot,
+    queuePressureBand: String(payload?.queuePressureBand || routeOutcome.queue_pressure_band || ""),
+    quotaPressureBand: String(payload?.quotaPressureBand || routeOutcome.quota_pressure_band || ""),
+    actualCost: payload?.actualCost ?? routeOutcome.actual_cost ?? null,
+    actualLatency: payload?.actualLatency ?? routeOutcome.actual_latency ?? null,
+    validationOutcome: String(payload?.validationOutcome || routeOutcome.validation_outcome || ""),
+  };
 }
 
 function isManagedAgentContext(ctx = {}) {

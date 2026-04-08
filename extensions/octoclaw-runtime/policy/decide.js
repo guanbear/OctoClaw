@@ -13,7 +13,7 @@ import {
   saveJson,
 } from "./config.js";
 import { resolveModelAndThinking } from "./model.js";
-import { buildRouteRecommendation } from "./recommendation.js";
+import { buildBudgetRecommendation, buildRouteRecommendation } from "./recommendation.js";
 import { inferRoute } from "./route.js";
 import {
   inferWorkerPool as taxonomyInferWorkerPool,
@@ -1005,6 +1005,15 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     phase,
     model_band: modelBand,
   });
+  const budgetRecommendation = buildBudgetRecommendation(
+    routeBudget,
+    {
+      selected_model: selectedModel,
+      fallbacks: [],
+      reasoning_effort: reasoningEffort,
+    },
+    route,
+  );
 
   const decision = {
     schema_version: SCHEMA_VERSION,
@@ -1065,6 +1074,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       review_trigger: needsReview ? "policy_required" : "",
     },
     route_recommendation: routeRecommendation,
+    budget_recommendation: budgetRecommendation,
     prompt_contract: promptPolicy,
     pre_dispatch_ack: preDispatchAck,
     tool_policy: toolPolicy(route, dispatchRequired, taskClass),

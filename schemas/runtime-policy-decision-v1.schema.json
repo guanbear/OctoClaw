@@ -171,6 +171,16 @@
         }
       }
     },
+    "route_recommendation": {
+      "$ref": "./route-recommendation-v1.schema.json"
+    },
+    "budget_recommendation": {
+      "$ref": "./budget-recommendation-v1.schema.json"
+    },
+    "auto_router": {
+      "type": "object",
+      "additionalProperties": true
+    },
     "skill_policy": {
       "type": "object",
       "additionalProperties": false,

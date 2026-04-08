@@ -118,6 +118,17 @@ class ReplayCurateTests(unittest.TestCase):
                     "recommended_route": "runner",
                     "arbitration": {"strategy": "rule_fallback"},
                 },
+                "routeOutcome": {
+                    "schema_version": "octoclaw.route_outcome/v1",
+                    "execution_contract": "runner",
+                    "resolved_execution_contract": "runner",
+                    "agent_scope": "runner_lane",
+                    "route_class": "delegated_runner",
+                    "recommended_model": "model/runner",
+                    "resolved_model": "model/runner",
+                    "route_source": "rule",
+                    "fallback_taken": False
+                },
                 "autoRouter": {
                     "budgetPlanner": {
                         "consistency": {"route_budget_consistent": True}
@@ -138,6 +149,11 @@ class ReplayCurateTests(unittest.TestCase):
         self.assertEqual(case["recommendation"]["recommended_route"], "runner")
         self.assertTrue(case["recommendation"]["route_budget_consistent"])
         self.assertTrue(case["review"]["route_budget_consistent"])
+        self.assertEqual(case["outcome"]["execution_contract"], "runner")
+        self.assertEqual(case["outcome"]["route_class"], "delegated_runner")
+        self.assertEqual(case["outcome"]["recommended_model"], "model/runner")
+        self.assertEqual(case["review"]["resolved_model"], "model/runner")
+        self.assertEqual(case["review"]["route_source"], "rule")
 
 
 if __name__ == "__main__":

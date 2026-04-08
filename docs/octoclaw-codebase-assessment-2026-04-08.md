@@ -1,6 +1,6 @@
 # OctoClaw 代码库评估报告（2026-04-08）
 
-> 状态：基于 `codex/release-v0.1.0` 最新提交（`5b7bd68`）综合评估
+> 状态：基于 `codex/release-v0.1.0` 的 `P2.5 closeout` 后续状态更新（2026-04-08）
 > 评估范围：设计意图 vs 实现完成度、当前主线进展、代码质量问题、后续优先级
 > 关联文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
 
@@ -8,11 +8,11 @@
 
 ## 1. 总体判断
 
-**骨架完整，核心理念与设计文档高度对齐，当前正处于 P2.5 Auto Router 收口阶段。**
+**骨架完整，核心理念与设计文档高度对齐，P2.5 Auto Router baseline 已完成收口。**
 
 - Phase 0–5 的核心建设已经完成，不存在地基缺失的问题
 - 架构方向（policy-first / workflow-first / work_contract routing / artifact-first）与 Anthropic 工程方法论一致
-- 当前卡点不是"有没有做某件事"，而是 P2.5 Slice A 的 schema contract 层还没落地，导致后续 Slice B/C/D 的收口缺乏共同的输入输出约定
+- 当前主线不再是“补齐 P2.5 baseline”，而是进入 post-P2.5 的 hardening / calibration / extractable prep
 
 ---
 
@@ -79,15 +79,15 @@
 
 | Slice | 内容 | 状态 | 说明 |
 |-------|------|------|------|
-| **A** | route / budget / outcome recommendation schemas | 🔴 未完成 | `schemas/` 目录仍缺 3 个文件：`route-recommendation-v1`、`budget-recommendation-v1`、`route-outcome-v1` |
-| **B** | delegated-lane 消费 recommendation | 🟡 部分完成 | recommendation payload 关键字段已加入 ✅；`runner / spawn_single` 实际读取 `profile / model_band / output_budget` 还未接 |
-| **C** | route outcome + shadow rollout | 🟡 部分完成 | nightly 分析 ✅；`runtime-policy-replay-event-v1.schema.json` 缺少 `execution_contract / agent_scope / route_class / recommended_model / resolved_model` 字段 |
-| **D** | policy adapter 收口（health/quota/capacity） | 🔴 未开始 | model_health + queue pressure + quota pressure 未接进 recommendation final resolution 层 |
-| **E** | model-intel source adapters | ✅ 基本完成 | auto refresh 调度占位 + stale fallback case 还缺，其余已落地 |
+| **A** | route / budget / outcome recommendation schemas | ✅ 已完成 | 三个 schema 已落地，decision/replay contract 已补齐 |
+| **B** | delegated-lane 消费 recommendation | ✅ 已完成 | `runner / spawn_single / spawn_multi` 已接入 lane-local recommendation |
+| **C** | route outcome + shadow rollout | ✅ baseline 完成 | replay / review / curate / summary 已可见；更深 validation/rollout 进入 RM3 |
+| **D** | policy adapter 收口（health/quota/capacity） | ✅ baseline 完成 | final resolution 已记录 health/quota/queue pressure/capacity；更彻底 read-model 统一进入 RM 深化 |
+| **E** | model-intel source adapters | ✅ 基本完成 | auto refresh 调度占位仍属后续 hardening |
 | **F** | tiny judge adapter | ⬜ 有意延后 | 设计有意不做前置，optional |
-| **G** | offline calibration / learned-router 训练面 | 🟡 部分完成 | calibration evidence format + tuning inputs 已落地（`router_eval.py`），threshold / weight 调整视图还未完整 |
+| **G** | offline calibration / learned-router 训练面 | 🟡 部分完成 | calibration evidence format + tuning inputs 已落地，后续进入更深 RM3 |
 
-**checklist 总体完成度：42 项已完成，61 项待完成（截至 `5b7bd68`）**
+**结论：P2.5 baseline blocker 已关闭；剩余工作统一转入 RM 深化。**
 
 ---
 
@@ -159,28 +159,28 @@ ARTIFACTS_READY: <list files if any>
 
 ## 6. 后续优先级
 
-### P0 立即可做（改动小，收益直接）
+### P0 已关闭（原 blocker 已处理）
 
 | 行动 | 文件 |
 |------|------|
-| 补 3 个缺失 schema（Slice A 直接阻塞） | `schemas/route-recommendation-v1.schema.json` 等 |
-| `dispatch` / `spawn` tool result 对模型友好化 | `extensions/octoclaw-runtime/index.js` |
-| runner result 加 `MAX_INLINE_CHARS` 截断 | `lib/dispatch_task.py` |
+| 补 3 个缺失 schema（Slice A 直接阻塞） | ✅ 已完成 |
+| `dispatch` / `spawn` tool result 对模型友好化 | ✅ 已完成 |
+| runner result 加 `MAX_INLINE_CHARS` 截断 | ✅ 已完成 |
 
-### P1 下一轮迭代（对 golden path 稳定性提升明显）
-
-| 行动 | 文件 |
-|------|------|
-| dispatch timeout 按 route 分档（runner: 12s，spawn_single: 45s） | `lib/dispatch_task.py` |
-| `spawn-template.md` 加 `CHECKPOINT` / `ARTIFACTS_READY` 中间信号约定 | `lib/spawn-template.md`, `lib/octoclaw_spawn.py` |
-| Slice B 完成：`runner / spawn_single` 实际消费 `profile / model_band / output_budget` | `lib/dispatch_task.py`, `lib/octoclaw_spawn.py` |
-| Slice C 完成：replay event schema 补入 route outcome 字段 | `schemas/runtime-policy-replay-event-v1.schema.json` |
-
-### P2 中期目标（P2.5 收口）
+### P1 下一轮迭代（post-P2.5 hardening）
 
 | 行动 | 文件 |
 |------|------|
-| Slice D：model_health + queue pressure + quota pressure 接进 recommendation final resolution | `lib/model_health.py`, `lib/runtime_snapshot.py` |
+| dispatch timeout 按 route 分档（runner: 12s，spawn_single: 45s） | 仍值得继续硬化 |
+| `spawn-template.md` 加 `CHECKPOINT` / `ARTIFACTS_READY` 中间信号约定 | 继续作为 reliability 配套 |
+| validation / rollout 更深消费 route outcome | `lib/replay_validation.py`, `lib/runtime_policy_rollout.py` |
+| route outcome / replay artifacts 与 feedback manifest 更紧密关联 | `lib/feedback_loop.py` |
+
+### P2 中期目标（RM 深化）
+
+| 行动 | 文件 |
+|------|------|
+| 更彻底统一 `model_health / runtime_snapshot / route outcome` 的 read-model | `lib/model_health.py`, `lib/runtime_snapshot.py` |
 | RM1：model-intel facts plane 硬化（source-attributed catalog, freshness/precedence contract） | `lib/model-intel.py` |
 | RM2：router recommendation 硬化（route-budget 集成测试，regression tests） | `lib/router_eval.py` |
 | RM3：replay/eval 校准接入（replay-driven router eval，drift diagnostics） | `lib/router_eval.py`, `lib/replay_validation.py` |
@@ -200,6 +200,10 @@ ARTIFACTS_READY: <list files if any>
 
 OctoClaw 当前的实现状态与设计文档的意图基本对齐，没有方向性偏差。
 
-当前主要工作是 **P2.5 Auto Router 的 contract 层收口**：payload 字段和 calibration evidence 格式已经在最近两个提交里稳定下来，下一步最短路径是把 3 个 schema 文件落地，再打通 delegated-lane 消费 recommendation 的链路（Slice B 剩余部分），最后完成 Slice C 让 replay/nightly 能看到端到端的 route diff。
+当前主要工作已经从 **P2.5 Auto Router contract closeout** 切换到 **post-P2.5 hardening / calibration / extractable prep**。
 
-独立的代码质量问题（dispatch timeout 分档、tool result 瘦身、CHECKPOINT 信号）可以随时插空修，不阻塞主线。
+下一步最短路径不再是补 baseline contract，而是：
+
+1. 继续把 validation / rollout / feedback-manifest 接到 route outcome
+2. 做更深的 route-budget calibration / drift diagnostics
+3. 继续把 facts plane / recommendation plane 朝 extractable kernel 收紧

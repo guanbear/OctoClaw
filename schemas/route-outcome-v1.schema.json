@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/route-outcome-v1.schema.json",
+  "title": "OctoClaw Route Outcome v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "execution_contract",
+    "resolved_execution_contract",
+    "agent_scope",
+    "route_class"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.route_outcome/v1"
+    },
+    "event_type": { "type": "string" },
+    "execution_contract": { "type": "string" },
+    "resolved_execution_contract": { "type": "string" },
+    "agent_scope": { "type": "string" },
+    "route_class": { "type": "string" },
+    "worker_pool": { "type": "string" },
+    "phase": { "type": "string" },
+    "protocol": { "type": "string" },
+    "profile": { "type": "string" },
+    "skill_bundle": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "recommended_model": { "type": "string" },
+    "resolved_model": { "type": "string" },
+    "output_budget": { "type": "string" },
+    "reasoning_mode": { "type": "string" },
+    "review_required": { "type": "boolean" },
+    "artifact_first": { "type": "boolean" },
+    "handoff_contract": { "type": "string" },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "route_source": { "type": "string" },
+    "sticky_applied": { "type": "boolean" },
+    "ack_followup_applied": { "type": "boolean" },
+    "channel": { "type": "string" },
+    "route_language_packs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "fallback_taken": { "type": "boolean" },
+    "runner_health_snapshot": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "queue_pressure_band": { "type": "string" },
+    "quota_pressure_band": { "type": "string" },
+    "actual_cost": {
+      "type": ["number", "integer", "null"]
+    },
+    "actual_latency": {
+      "type": ["number", "integer", "null"]
+    },
+    "validation_outcome": { "type": "string" }
+  }
+}

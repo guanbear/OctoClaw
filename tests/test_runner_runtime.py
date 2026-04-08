@@ -262,6 +262,9 @@ class RunnerRuntimeTests(unittest.TestCase):
             _policy_decision={
                 "request": {"metadata": {}, "session_key": "agent:main:slack:direct:u999"},
                 "route_decision": {"route": "runner"},
+                "route_recommendation": {"recommended_route": "runner"},
+                "budget_recommendation": {"output_budget": "low", "reasoning_mode": "low"},
+                "auto_router": {"router_core": {"route_class": "delegated_runner", "agent_scope": "runner_lane"}},
             },
             _runner_playbook={
                 "kind": "local_file_probe",
@@ -287,6 +290,9 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["job"]["id"], "runner-precomputed-1")
         self.assertEqual(payload["runner_plan"]["probe_spec"]["path"], "/var/log/nginx/error.log")
         self.assertEqual(payload["playbook"]["command"], "tail -n 80 /var/log/nginx/error.log")
+        self.assertEqual(payload["route_recommendation"]["recommended_route"], "runner")
+        self.assertEqual(payload["budget_recommendation"]["output_budget"], "low")
+        self.assertEqual(payload["execution_contract"]["route_class"], "delegated_runner")
 
     def test_dispatch_runner_uses_on_demand_loop_when_waiting_without_healthy_runner(self) -> None:
         args = importlib.import_module("argparse").Namespace(

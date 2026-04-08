@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/route-recommendation-v1.schema.json",
+  "title": "OctoClaw Route Recommendation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "recommended_route",
+    "arbitration"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.route_recommendation/v1"
+    },
+    "recommended_route": { "type": "string" },
+    "recommended_worker_pool": { "type": "string" },
+    "recommended_work_type": { "type": "string" },
+    "recommended_phase": { "type": "string" },
+    "recommended_model_band": { "type": "string" },
+    "protected_lane": { "type": "string" },
+    "bypass_delegated_optimization": { "type": "boolean" },
+    "work_contract_hint": { "type": "string" },
+    "top_candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["route", "score"],
+        "properties": {
+          "route": { "type": "string" },
+          "score": { "type": "number" }
+        }
+      }
+    },
+    "arbitration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "strategy", "resolved_by"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "strategy": { "type": "string" },
+        "resolved_by": { "type": "string" },
+        "conflict_type": { "type": "string" },
+        "semantic_review_requested": { "type": "boolean" },
+        "semantic_review_reason": { "type": "string" },
+        "score_margin": { "type": "number" },
+        "tiny_judge_ready": { "type": "boolean" },
+        "fallback_policy": { "type": "string" }
+      }
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

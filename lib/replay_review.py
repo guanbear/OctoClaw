@@ -146,10 +146,18 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         budget_event = task_event or {}
         budget_payload = _event_dict(budget_event, "budgetPolicy", "budget_policy")
         route_recommendation_payload = _event_dict(budget_event, "routeRecommendation", "route_recommendation")
+        budget_recommendation_payload = _event_dict(budget_event, "budgetRecommendation", "budget_recommendation")
+        route_outcome_payload = _event_dict(budget_event, "routeOutcome", "route_outcome")
         auto_router_payload = _event_dict(budget_event, "autoRouter", "auto_router")
         auto_router_budget = _event_dict(auto_router_payload, "budgetPlanner", "budget_planner")
         auto_router_consistency = _event_dict(auto_router_budget, "consistency")
-        budget_cap = _first_non_empty(budget_payload.get("budget_cap"), budget_event.get("budgetCap"), budget_event.get("budget_cap"))
+        budget_cap = _first_non_empty(
+            budget_recommendation_payload.get("output_budget"),
+            route_outcome_payload.get("output_budget"),
+            budget_payload.get("budget_cap"),
+            budget_event.get("budgetCap"),
+            budget_event.get("budget_cap"),
+        )
         latency_target = _first_non_empty(budget_payload.get("latency_target"), budget_event.get("latencyTarget"), budget_event.get("latency_target"))
         max_workers = _event_int(budget_payload, "max_workers") or _event_int(budget_event, "maxWorkers", "max_workers") or 0
         retry_cap = _event_int(budget_payload, "retry_cap") or _event_int(budget_event, "retryCap", "retry_cap") or 0
@@ -165,6 +173,18 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             budget_event.get("arbitrationConflictType"),
             budget_event.get("arbitration_conflict_type"),
         )
+        execution_contract = _first_non_empty(route_outcome_payload.get("execution_contract"), budget_event.get("executionContract"), budget_event.get("execution_contract"))
+        agent_scope = _first_non_empty(route_outcome_payload.get("agent_scope"), budget_event.get("agentScope"), budget_event.get("agent_scope"))
+        route_class = _first_non_empty(route_outcome_payload.get("route_class"), budget_event.get("routeClass"), budget_event.get("route_class"))
+        recommended_model = _first_non_empty(route_outcome_payload.get("recommended_model"), budget_event.get("recommendedModel"), budget_event.get("recommended_model"))
+        resolved_model = _first_non_empty(route_outcome_payload.get("resolved_model"), budget_event.get("resolvedModel"), budget_event.get("resolved_model"))
+        route_source = _first_non_empty(route_outcome_payload.get("route_source"), budget_event.get("routeSource"), budget_event.get("route_source"))
+        queue_pressure_band = _first_non_empty(route_outcome_payload.get("queue_pressure_band"), budget_event.get("queuePressureBand"), budget_event.get("queue_pressure_band"))
+        quota_pressure_band = _first_non_empty(route_outcome_payload.get("quota_pressure_band"), budget_event.get("quotaPressureBand"), budget_event.get("quota_pressure_band"))
+        validation_outcome = _first_non_empty(route_outcome_payload.get("validation_outcome"), budget_event.get("validationOutcome"), budget_event.get("validation_outcome"))
+        fallback_taken = _event_bool(route_outcome_payload, "fallback_taken")
+        if fallback_taken is None:
+            fallback_taken = _event_bool(budget_event, "fallbackTaken", "fallback_taken")
 
         tags: list[str] = []
         if blocked:
@@ -213,6 +233,16 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "arbitration_strategy": arbitration_strategy,
             "arbitration_conflict_type": arbitration_conflict_type,
             "route_budget_consistent": route_budget_consistent,
+            "execution_contract": execution_contract,
+            "agent_scope": agent_scope,
+            "route_class": route_class,
+            "recommended_model": recommended_model,
+            "resolved_model": resolved_model,
+            "route_source": route_source,
+            "fallback_taken": fallback_taken,
+            "queue_pressure_band": queue_pressure_band,
+            "quota_pressure_band": quota_pressure_band,
+            "validation_outcome": validation_outcome,
             "route_hint_required": route_hint_required,
             "route_hint_submitted": route_hint_submitted,
             "dispatch_called": dispatch_event is not None,

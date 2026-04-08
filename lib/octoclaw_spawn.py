@@ -1674,6 +1674,16 @@ def build_spawn_spec(
     request_metadata = dict(policy_metadata(policy))
     if isinstance(metadata, dict):
         request_metadata.update(metadata)
+    route_recommendation = (
+        request_metadata.get("route_recommendation")
+        if isinstance(request_metadata.get("route_recommendation"), dict)
+        else (policy.get("route_recommendation") if isinstance(policy.get("route_recommendation"), dict) else {})
+    )
+    budget_recommendation = (
+        request_metadata.get("budget_recommendation")
+        if isinstance(request_metadata.get("budget_recommendation"), dict)
+        else (policy.get("budget_recommendation") if isinstance(policy.get("budget_recommendation"), dict) else {})
+    )
     route_decision = policy.get("route_decision", {}) if isinstance(policy.get("route_decision", {}), dict) else {}
     model_policy = policy.get("model_policy", {}) if isinstance(policy.get("model_policy", {}), dict) else {}
     skill_policy = policy.get("skill_policy", {}) if isinstance(policy.get("skill_policy", {}), dict) else {}
@@ -1690,7 +1700,7 @@ def build_spawn_spec(
     hinted_work_type = str(work_type or route_decision.get("work_type", "") or "")
     hinted_phase = str(phase or route_decision.get("phase", "") or "")
 
-    resolved_worker_pool = hinted_worker_pool or taxonomy_infer_worker_pool(final_route, hinted_work_type)
+    resolved_worker_pool = hinted_worker_pool or str(route_recommendation.get("recommended_worker_pool", "") or "") or taxonomy_infer_worker_pool(final_route, hinted_work_type)
     if not resolved_worker_pool:
         resolved_worker_pool = taxonomy_infer_worker_pool(final_route, hinted_work_type)
 
@@ -1738,8 +1748,19 @@ def build_spawn_spec(
         final_model_band,
         route=final_route,
     )
-    final_model = model or str(model_policy.get("selected_model", "") or "")
-    thinking = str(model_policy.get("reasoning_effort", "") or "")
+    candidate_models = [
+        str(item or "").strip()
+        for item in list(
+            ((policy.get("auto_router", {}) or {}).get("model_intel", {}) or {}).get("candidate_models", [])
+            if isinstance((policy.get("auto_router", {}) or {}).get("model_intel", {}), dict)
+            else []
+        )
+        if str(item or "").strip()
+    ]
+    final_model = model or str(model_policy.get("selected_model", "") or "") or str(budget_recommendation.get("target_model", "") or "")
+    if not final_model and candidate_models:
+        final_model = candidate_models[0]
+    thinking = str(model_policy.get("reasoning_effort", "") or budget_recommendation.get("reasoning_mode", "") or "")
     if not final_model:
         final_model, resolved_thinking = resolve_model_and_thinking(
             final_selector_band,
@@ -1849,6 +1870,16 @@ def build_spawn_spec(
             "brief": brief,
             "expected_output": brief.get("expected_output", {}),
             "context_pack_path": str(context_bundle.get("context_pack_path", "") or ""),
+            "route_recommendation": route_recommendation,
+            "budget_recommendation": budget_recommendation,
+            "execution_contract": {
+                "execution_contract": str(route_recommendation.get("recommended_route", "") or final_route),
+                "worker_pool": resolved_worker_pool,
+                "profile": profile,
+                "model_candidates": candidate_models,
+                "output_budget": str(budget_recommendation.get("output_budget", "") or ""),
+                "reasoning_mode": str(budget_recommendation.get("reasoning_mode", "") or ""),
+            },
         }
     )
     prompt = build_task_prompt(

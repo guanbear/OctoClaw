@@ -153,6 +153,18 @@ OctoClaw 当前真正负责的是四层增量：
 - route recommendation seam
 - delegated pre-dispatch ack baseline
 
+`2026-04-08` 的 P2.5 closeout 之后，这条线已经进一步收成：
+
+- `route recommendation` / `budget recommendation` / `route outcome` 三个正式 contract
+- delegated lanes 对 recommendation 的实际消费
+- replay / review / curate / summary 的 route outcome 可见性
+- final resolution baseline 对 `health / quota / queue pressure / runner capacity` 的结构化记录
+- extractable readiness baseline + packaging prep baseline
+
+因此现在更准确的表述是：
+
+> **P2.5 baseline 已完成；后续 router 线进入 RM 深化，而不再是“补齐第一拍”。**
+
 P2.5 的正式设计与执行清单见：
 
 - [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
@@ -826,6 +838,12 @@ Optional heavy backends
    - replay-driven eval
    - compatibility test
    - recommendation drift diagnostics
+
+P2.5 closeout 完成后，router/model-intel 主线的下一步已经固定为：
+
+1. `RM1/RM2`：facts plane / recommendation hardening
+2. `RM3`：validation / rollout / calibration plane 深化
+3. `RM4` 之后只继续做 extractable readiness / packaging，不提前拆 runtime adapter
 
 后续继续深化时，外部参考的吸收边界也应固定：
 

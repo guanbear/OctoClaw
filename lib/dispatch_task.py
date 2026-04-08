@@ -54,6 +54,16 @@ def decision_skill(decision: dict) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def decision_route_recommendation(decision: dict) -> dict:
+    value = decision.get("route_recommendation", {})
+    return value if isinstance(value, dict) else {}
+
+
+def decision_budget_recommendation(decision: dict) -> dict:
+    value = decision.get("budget_recommendation", {})
+    return value if isinstance(value, dict) else {}
+
+
 def decision_review(decision: dict) -> dict:
     value = decision.get("review_policy", {})
     return value if isinstance(value, dict) else {}
@@ -681,6 +691,8 @@ def run_runner_on_demand(job_id: str) -> dict:
 def dispatch_runner(args) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     identity = octoclaw_identity_fields(decision)
+    route_recommendation = decision_route_recommendation(decision)
+    budget_recommendation = decision_budget_recommendation(decision)
     playbook = getattr(args, "_runner_playbook", None)
     if not isinstance(playbook, dict) or not playbook:
         playbook = None
@@ -705,7 +717,14 @@ def dispatch_runner(args) -> dict:
         "--summary",
         summary or args.task[:40],
         "--timeout-seconds",
-        str(args.timeout_seconds),
+        str(
+            90
+            if (
+                int(args.timeout_seconds) == 120
+                and str(budget_recommendation.get("output_budget", "") or "").strip().lower() in {"tiny", "low"}
+            )
+            else args.timeout_seconds
+        ),
         "--model-band",
         args.model_band or "fast",
         "--task-description",
@@ -733,6 +752,14 @@ def dispatch_runner(args) -> dict:
         "job": payload,
         "reason": "lightweight_task",
         "runner_execution_mode": "daemon",
+        "route_recommendation": route_recommendation,
+        "budget_recommendation": budget_recommendation,
+        "execution_contract": {
+            "route_class": str((decision.get("auto_router", {}) or {}).get("router_core", {}).get("route_class", "") or ""),
+            "agent_scope": str((decision.get("auto_router", {}) or {}).get("router_core", {}).get("agent_scope", "") or ""),
+            "output_budget": str(budget_recommendation.get("output_budget", "") or ""),
+            "reasoning_mode": str(budget_recommendation.get("reasoning_mode", "") or ""),
+        },
     }
     if playbook:
         response["runner_plan"] = playbook
@@ -751,6 +778,8 @@ def recommend_spawn(args, task: str) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     route_meta = decision_route(decision)
     model_meta = decision_model(decision)
+    route_recommendation = decision_route_recommendation(decision)
+    budget_recommendation = decision_budget_recommendation(decision)
     requested_model_band = getattr(args, "model_band", "") or ""
     spawn_spec = build_spawn_spec(
         task,
@@ -765,6 +794,10 @@ def recommend_spawn(args, task: str) -> dict:
         register=True,
         execute=None,
         policy_decision=decision,
+        metadata={
+            "route_recommendation": route_recommendation,
+            "budget_recommendation": budget_recommendation,
+        },
     )
     return apply_policy_fields({
         "route": "spawn_single",
@@ -777,6 +810,8 @@ def recommend_spawn(args, task: str) -> dict:
         "task": task,
         "handoff": spawn_spec["handoff"],
         "spawn_spec": spawn_spec,
+        "route_recommendation": route_recommendation,
+        "budget_recommendation": budget_recommendation,
     }, decision)
 
 
@@ -798,6 +833,10 @@ def recommend_multi_spawn(args, task: str) -> dict:
         task_kind="team_parent",
         register=False,
         policy_decision=decision,
+        metadata={
+            "route_recommendation": decision_route_recommendation(decision),
+            "budget_recommendation": decision_budget_recommendation(decision),
+        },
     )
     planner_task = build_multi_step_task(task, "planner")
     planner_decision = build_decision(planner_task, metadata=decision_metadata(decision), force_route="spawn_single")

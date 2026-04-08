@@ -8,6 +8,62 @@ function sortedRouteCandidates(scores = {}) {
     }));
 }
 
+export function buildBudgetRecommendation(budgetPolicy = {}, modelPolicy = {}, route = "") {
+  const routeName = String(route || "").trim();
+  const fallbacks = Array.isArray(modelPolicy?.fallbacks) ? modelPolicy.fallbacks : [];
+  const outputBudget = String(budgetPolicy?.budget_cap || "").trim();
+  const latencyTarget = String(budgetPolicy?.latency_target || "").trim();
+  const maxWorkers = Number(budgetPolicy?.max_workers || 0);
+  const retryBudget = Number(budgetPolicy?.retry_cap || 0);
+  let outputOk = false;
+  let latencyOk = false;
+  let workersOk = false;
+  const retryOk = retryBudget >= 0;
+
+  if (routeName === "direct") {
+    outputOk = outputBudget === "tiny";
+    latencyOk = latencyTarget === "interactive";
+    workersOk = maxWorkers === 0;
+  } else if (routeName === "runner") {
+    outputOk = outputBudget === "tiny" || outputBudget === "low";
+    latencyOk = latencyTarget === "interactive";
+    workersOk = maxWorkers === 1;
+  } else if (routeName === "spawn_single") {
+    outputOk = outputBudget === "low" || outputBudget === "medium";
+    latencyOk = latencyTarget === "background";
+    workersOk = maxWorkers === 1;
+  } else if (routeName === "spawn_multi") {
+    outputOk = outputBudget === "medium" || outputBudget === "high";
+    latencyOk = latencyTarget === "background";
+    workersOk = maxWorkers >= 2;
+  } else {
+    outputOk = Boolean(outputBudget);
+    latencyOk = Boolean(latencyTarget);
+    workersOk = maxWorkers >= 0;
+  }
+
+  return {
+    schema_version: "octoclaw.budget_recommendation/v1",
+    target_model: String(modelPolicy?.selected_model || "").trim(),
+    fallback_model: String(fallbacks[0] || "").trim(),
+    output_budget: outputBudget,
+    retry_budget: retryBudget,
+    latency_target: latencyTarget,
+    max_workers: maxWorkers,
+    reasoning_mode: String(modelPolicy?.reasoning_effort || "").trim(),
+    upgrade_allowed: Boolean(budgetPolicy?.upgrade_allowed),
+    cost_ceiling: outputBudget,
+    consistency: {
+      route: routeName,
+      route_matches_output_budget: Boolean(outputOk),
+      route_matches_latency_target: Boolean(latencyOk),
+      route_matches_worker_budget: Boolean(workersOk),
+      retry_budget_valid: Boolean(retryOk),
+      route_budget_consistent: Boolean(outputOk && latencyOk && workersOk && retryOk),
+    },
+  };
+}
+
 export function buildRouteRecommendation(routeMeta = {}, resolved = {}) {
   const features = routeMeta?.features && typeof routeMeta.features === "object" ? routeMeta.features : {};
   const scores = routeMeta?.scores && typeof routeMeta.scores === "object" ? routeMeta.scores : {};
