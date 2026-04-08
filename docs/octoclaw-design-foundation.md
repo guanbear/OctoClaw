@@ -590,6 +590,51 @@ OctoClaw 不应该只做终端体验，也不该试图把所有 IM 强行做成�
 
 > **“可抽离”是当前设计目标；“立刻拆出去”不是当前主线。**
 
+### 7.8 Harness should be layered, not monolithic
+
+参考 OpenHarness、DeerFlow 这类项目，OctoClaw 确实值得把 `harness` 当成一级设计对象。
+
+它们给 OctoClaw 最值得借的点是：
+
+- harness 不是“若干脚本”，而是显式的产品层
+- tool / skill / memory / artifact / eval 都应有清晰归属
+- 长任务 durability、artifact-first、progress surface、eval discipline 应被视为基础设施
+
+但 OctoClaw 不应直接照搬它们的默认重量：
+
+- 不把所有请求都送进一个重型 super-agent harness
+- 不把 LangGraph 风格重 orchestration 当成默认主路径
+- 不为了“像 harness”而新增另一套并行 runtime
+
+更适合 OctoClaw 的做法，是把当前已经存在的能力正式收成三层：
+
+1. **runtime harness**
+   - `route / policy / dispatch / brief / summary / artifact / review gate / substrate-aware state`
+   - 目标是让 workflow-first 的轻量执行协议默认存在
+2. **workflow harness**
+   - 面向特定 workflow 的标准化执行骨架
+   - 例如：runner playbook、model telemetry、benchmark/inspect workflow、future review workflow
+3. **evaluation harness**
+   - `eval_suite / replay_validation / reply_review_packet / nightly_reply_review / failure_summary`
+   - 目标是让 replay、review、validation、nightly 成为统一反馈面
+
+这个分层不是新 runtime，而是对现有实现的命名、归类和 contract 收口。
+也就是说：
+
+- 先明确哪些文件和流程属于哪一层
+- 先统一 `brief / result / artifact / event / eval outcome` 这些 contract
+- 再要求新功能必须落到三层之一
+
+而不是先做一次大规模迁仓或重构。
+
+如果这件事做对了，agent 的效率和 token 成本也会一起下降：
+
+- brief 代替长 transcript
+- summary + artifact 代替全量回灌
+- protected lane 默认走 lightweight runtime harness
+- 测速、日志、状态类问题优先走 workflow harness，而不是现场让 agent 现想流程
+- replay/nightly 通过 evaluation harness 主动暴露坏例子，减少靠用户追问才发现问题
+
 ---
 
 ## 8. 当前仍存在的关键张力

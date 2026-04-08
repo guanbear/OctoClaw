@@ -476,6 +476,26 @@ P5 不应该顺手混进这些题：
   - OpenClaw substrate
   - OctoClaw policy / observer / feedback / display
 
+#### P5F：Harness Consolidation（non-disruptive）
+
+目标：
+
+- 把当前已经存在但分散的 harness 能力正式收成三层：
+  - runtime harness
+  - workflow harness
+  - evaluation harness
+
+完成标志：
+
+- 有一份明确的 harness ownership map：
+  - 哪些模块属于 runtime harness
+  - 哪些模块属于 workflow harness
+  - 哪些模块属于 evaluation harness
+- `brief / result / artifact / event / eval outcome` 有统一 contract inventory
+- 新增 workflow / review / benchmark / replay job 默认落到三层之一，而不是继续长成旁路脚本
+- 不新增一套新的常驻 runtime，也不引入新的 super-agent 默认主路径
+- 现有实现保持渐进归类，不要求一次性大迁移
+
 ### 实施原则
 
 - 基于 **OpenClaw 2026.4.5** 的 runtime / TaskFlow 语义继续收口
@@ -485,6 +505,7 @@ P5 不应该顺手混进这些题：
   - 降低状态漂移
   - 降低恢复复杂度
   - 降低 operator 心智负担
+- harness consolidation 以 **contract first / ownership first** 为主，不以“大重构” 为前提
 
 ### 完成标准
 
@@ -496,6 +517,7 @@ P5 关单前，至少应满足：
 4. patrol 重启不会导致真相层分叉
 5. 维护者默认只靠 `octoclawctl` 就能完成日常观察与控制
 6. patrol 不再像第二套 runtime engine，runner 也不再像默认真相源
+7. runtime / workflow / evaluation harness 的 ownership 与 contract inventory 已明确
 
 ---
 
