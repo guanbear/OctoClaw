@@ -1,8 +1,8 @@
 # OctoClaw Auto Router 设计草案
 
-> 状态：P2.5 配套设计底稿（2026-04-04）  
-> 用途：把 OctoClaw 内部的路由子系统收成独立设计面，供 P2 / P2.5 / P4 实现时统一边界。  
-> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
+> 状态：P2.5 配套设计底稿（2026-04-08，post-P2.5 深化已纳入）  
+> 用途：把 OctoClaw 内部的路由子系统收成独立设计面，供 P2 / P2.5 / 后续 router/model-intel 深化实现时统一边界。  
+> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
 
 ---
 
@@ -24,6 +24,10 @@
 所以这份文档的目标不是讨论“OctoClaw 是否要做路由”，而是更具体地回答：
 
 > **OctoClaw 应该怎样把 Auto Router 做成一个可抽离、可演进、又不脱离当前 runtime 现实的子系统。**
+
+P2.5 之后的深化路径不再写在这份文档里单独扩张，而是由 focused design 单独承接：
+
+- [`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
 
 ---
 

@@ -1,6 +1,6 @@
 # OctoClaw 主设计底稿
 
-> 状态：当前 canonical 设计底稿（2026-04-08）
+> 状态：当前 canonical 设计底稿（2026-04-08，router/model-intel 深化已纳入）
 > 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
 > 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
@@ -735,6 +735,10 @@ Optional heavy backends
 1. **先做 transition state 清理**
 2. **再做 router / model-intel 深化**
 
+这条深化线的 focused design 见：
+
+- [`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
+
 这阶段的 focused design 见：
 
 - [`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)
@@ -750,6 +754,38 @@ Optional heavy backends
 
 1. `router / model-intel` 深化
 2. 仅在真实验收发现缺口时继续做更深的 substrate-only hardening
+
+### 8.7 router / model-intel 深化的目标
+
+这一段的目的不是“把 OctoClaw 变成另一个 OmniRoute”，而是把 `P2.5 internal-first seam` 做成真正可长期演进的子系统。
+
+核心要收的不是 feature，而是三层：
+
+1. **Model-Intel Facts Plane**
+   - source-attributed catalog
+   - pricing / capability / limit / freshness / status
+   - health / cooldown / quota observation
+2. **Router Recommendation Plane**
+   - route + budget 联合 recommendation
+   - lane-local consumption contract
+   - regression / integration test
+3. **Feedback Calibration Plane**
+   - replay-driven eval
+   - compatibility test
+   - recommendation drift diagnostics
+
+后续继续深化时，外部参考的吸收边界也应固定：
+
+- 借 `models.dev` 的 **schema-first / source-attributed / generated artifact**
+- 借 OmniRoute 的 **外部 sync 分层、non-blocking sync、stale-if-error cache、统一 catalog builder**
+- 不照搬 OmniRoute 的 combo/provider gateway 主心智
+
+实施原则继续保持：
+
+- runtime hot path 优先 Node.js / JS
+- Python 继续偏 replay / eval / calibration / compatibility glue
+- 不在这一步急着拆独立 router 仓库
+- 不在这一步重做整个 runtime / cockpit
 
 ---
 

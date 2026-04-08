@@ -1,8 +1,8 @@
 # OctoClaw Auto Router Implementation Checklist
 
-> 状态：P2.5 施工清单（2026-04-05）  
+> 状态：P2.5 施工清单（2026-04-08，post-P2.5 深化入口已补）  
 > 用途：把 [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md) 翻成可执行的 implementation slices。  
-> 关联文档：[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)
+> 关联文档：[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)、[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)
 
 ---
 
@@ -22,6 +22,10 @@
 3. 哪些东西先不碰
 4. 哪些测试要补
 5. 哪个阶段才允许放开默认行为
+
+P2.5 之后的深化工作不再继续往这份 checklist 里平铺扩张，而是由 focused design 单独承接：
+
+- [`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
 
 ---
 

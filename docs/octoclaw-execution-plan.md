@@ -1,8 +1,8 @@
 # OctoClaw 执行计划
 
-> 状态：当前 canonical 执行计划（2026-04-07）  
+> 状态：当前 canonical 执行计划（2026-04-08，router/model-intel 深化已纳入）  
 > 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
-> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
@@ -537,6 +537,71 @@ P5 关单前，至少应满足：
 
 而不是来自重 backend。
 
+### P6 之后的主线
+
+`P4/P5/P6` baseline 与 macmini 实机验收通过后，后续主线顺序固定为：
+
+1. **transition state 清理**
+2. **router / model-intel 深化**
+
+截至 `2026-04-08`：
+
+- `TC1 durable policy state` 已完成
+- `TC2 substrate-only read path tightening` 已完成
+- `TC3 legacy mirror / fallback shrink` 已完成
+- `TC4 optional backend true detach` 已完成
+
+这意味着后续主线已从 “先清 transition state” 进入：
+
+1. **router / model-intel 深化**
+2. **更深的 substrate-only hardening（仅在真实验收发现缺口时继续）**
+
+router / model-intel 深化的 focused design 见：
+
+- [`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
+
+### router / model-intel 深化的目标
+
+这一段的目标不是“再做一个新 router”，而是把已有的 `P2.5 internal-first seam` 推进成：
+
+1. **更可信的 model-intel facts plane**
+2. **更稳定的 recommendation contract**
+3. **更可校准的 replay / eval loop**
+
+### 这一段吸收外部参考的原则
+
+- 借 `models.dev` 的：
+  - schema-first model registry
+  - source-attributed facts
+  - generated machine-readable artifact
+- 借 OmniRoute 的：
+  - external sync 与 policy 分层
+  - non-blocking sync
+  - stale-if-error cache
+  - 统一 catalog builder 避免 surface drift
+- 不照搬 OmniRoute 的：
+  - combo/provider gateway 主心智
+  - 大一统 runtime / dashboard 产品形态
+
+### 这一段的工作包
+
+1. **RM1：Model-Intel Facts Plane 硬化**
+   - source-attributed catalog / health / source-status
+   - `models.dev` 风格 registry adapter
+   - freshness / precedence contract
+2. **RM2：Router Recommendation 硬化**
+   - route-budget integration tests
+   - recommendation regression tests
+   - lane-local recommendation consumption contract
+3. **RM3：Replay / Eval 校准接入**
+   - replay-driven router eval
+   - model-intel update compatibility tests
+   - recommendation drift diagnostics
+4. **RM4：Extractable Readiness**
+   - minimal package boundary map
+   - public surface shortlist
+   - internal-only runtime coupling 清单
+
 ---
 
 ## 4. 明确哪些事情现在不要重做
@@ -591,6 +656,9 @@ P5 关单前，至少应满足：
 
 ### Phase 2.5：收口可拆分 router core
 核心问题：signal / route / budget / model-intel 的边界与自动更新机制
+
+### Phase 2.6：router / model-intel 深化
+核心问题：把 `internal-first seam` 推进成 facts plane + recommendation plane + calibration plane
 
 ### Phase 3：收口 IM / display 产品面
 核心问题：channel capability、anchor/update/action 统一语义
