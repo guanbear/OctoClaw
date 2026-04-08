@@ -314,9 +314,12 @@ Model-Intel Facts Plane
 - model-intel update compatibility tests
 - recommendation drift diagnostics
 - tuning inputs for threshold / weight adjustment
+- validation summary / feedback manifest / rollout recommendation 对 route outcome metrics 的联通
 - baseline 先落在：
   - `router_eval` 读 replay/curate cases 输出 route/budget drift 摘要
   - source adapter compatibility tests 覆盖 parser / last-good fallback / schema drift
+  - validation summary 输出 `route correctness / budget correctness / delivery correctness / coverage`
+  - rollout recommendation 在 promotion gate 中显式识别 `route outcome` coverage
 
 ### RM4：Extractable readiness baseline
 

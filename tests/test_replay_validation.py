@@ -3,7 +3,17 @@ from pathlib import Path
 import json
 import tempfile
 
-from lib.replay_validation import Turn, ensure_text, is_safe_replay_prompt, score_turn, select_packet_turns, select_turns, turns_from_packet
+from lib.replay_validation import (
+    CaseResult,
+    Turn,
+    ensure_text,
+    is_safe_replay_prompt,
+    score_turn,
+    select_packet_turns,
+    select_turns,
+    summarize_route_outcomes,
+    turns_from_packet,
+)
 
 
 class ReplayValidationTests(unittest.TestCase):
@@ -74,6 +84,64 @@ class ReplayValidationTests(unittest.TestCase):
             turns = turns_from_packet(packet_path)
             selected = select_packet_turns(turns, 2)
             self.assertEqual([turn.user_prompt for turn in selected], ["你是啥模型", "帮我调研 OpenClaw 2026.4.5 的 task flow"])
+
+    def test_summarize_route_outcomes_reports_coverage_and_correctness(self):
+        cases = [
+            CaseResult(
+                agent="a1",
+                session_id="s1",
+                prompt="runner case",
+                return_code=0,
+                reply_text="ok",
+                stderr_tail="",
+                new_tasks=[],
+                replay_events=[
+                    {
+                        "event": "agent_end",
+                        "routeBudgetConsistent": True,
+                        "routeOutcome": {
+                            "execution_contract": "runner",
+                            "resolved_execution_contract": "runner",
+                            "route_class": "inspect",
+                            "fallback_taken": False,
+                        },
+                    }
+                ],
+                findings=[],
+            ),
+            CaseResult(
+                agent="a2",
+                session_id="s2",
+                prompt="spawn case",
+                return_code=0,
+                reply_text="ok",
+                stderr_tail="",
+                new_tasks=[],
+                replay_events=[
+                    {
+                        "event": "agent_end",
+                        "routeBudgetConsistent": False,
+                        "routeOutcome": {
+                            "execution_contract": "spawn_single",
+                            "resolved_execution_contract": "direct",
+                            "route_class": "delegated",
+                            "fallback_taken": True,
+                        },
+                    }
+                ],
+                findings=["empty_reply"],
+            ),
+        ]
+        payload = summarize_route_outcomes(cases)
+        self.assertEqual(payload["cases_total"], 2)
+        self.assertEqual(payload["cases_with_outcome"], 2)
+        self.assertTrue(payload["coverage_complete"])
+        self.assertEqual(payload["route_correct_cases"], 1)
+        self.assertEqual(payload["budget_correct_cases"], 1)
+        self.assertEqual(payload["delivery_correct_cases"], 1)
+        self.assertEqual(payload["fallback_taken_count"], 1)
+        self.assertEqual(payload["execution_contract_counts"]["runner"], 1)
+        self.assertEqual(payload["execution_contract_counts"]["spawn_single"], 1)
 
 
 if __name__ == "__main__":

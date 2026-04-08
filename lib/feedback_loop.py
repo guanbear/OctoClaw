@@ -99,6 +99,8 @@ def build_feedback_manifest(
     promotion_eligibility: str,
     learning_written: bool,
     upstream_run_ids: list[str] | None = None,
+    validation_artifacts: dict[str, str] | None = None,
+    route_outcome_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -110,6 +112,8 @@ def build_feedback_manifest(
         "generated_artifacts": dict(generated_artifacts),
         "upstream_run_ids": [str(item).strip() for item in (upstream_run_ids or []) if str(item).strip()],
         "validation_status": validation_status,
+        "validation_artifacts": dict(validation_artifacts or {}),
+        "route_outcome_metrics": dict(route_outcome_metrics or {}),
         "promotion_eligibility": promotion_eligibility,
         "learning_written": bool(learning_written),
         "output_dir": output_dir,
@@ -127,6 +131,8 @@ def build_validation_summary(
     cases_failed: int,
     findings: list[str],
     passed: bool,
+    route_outcome_metrics: dict[str, Any] | None = None,
+    generated_artifacts: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": VALIDATION_SCHEMA_VERSION,
@@ -139,5 +145,7 @@ def build_validation_summary(
         "cases_passed": int(cases_passed or 0),
         "cases_failed": int(cases_failed or 0),
         "findings": [str(item).strip() for item in findings if str(item).strip()],
+        "route_outcome_metrics": dict(route_outcome_metrics or {}),
+        "generated_artifacts": dict(generated_artifacts or {}),
         "passed": bool(passed),
     }

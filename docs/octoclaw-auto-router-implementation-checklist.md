@@ -310,12 +310,12 @@ Python 不再承担：
 
 - [x] 为 runtime replay event 增加 recommendation / resolved target / outcome 字段
 - [x] replay summary 能看到 route diff
-- [ ] replay validation 能汇总 route outcome
+- [x] replay validation 能汇总 route outcome
 - [x] nightly 分析能汇总高频误判与 protected-lane 漏判
 - [x] nightly packet 会优先挑出 short protected-lane / direct slow reply / delegation explanation risk
 - [x] nightly reply review 默认尝试语义 review，失败时回退 packet-only review
-- [ ] feedback manifest 能关联 route outcome artifacts
-- [ ] rollout check / recommendation 能感知 shadow diff 指标
+- [x] feedback manifest 能关联 route outcome artifacts
+- [x] rollout check / recommendation 能感知 shadow diff 指标
 - [x] 记录三类分开的 outcome：
   - `main-agent direct`
   - `runner`
@@ -354,9 +354,9 @@ Python 不再承担：
 - [x] `tests/test_replay_summary.py`
 - [x] `tests/test_replay_review.py`
 - [x] `tests/test_replay_curate.py`
-- [ ] `tests/test_replay_validation.py`
+- [x] `tests/test_replay_validation.py`
 - [ ] `tests/test_replay_automation.py`
-- [ ] `tests/test_runtime_policy_rollout.py`
+- [x] `tests/test_runtime_policy_rollout.py`
 
 ### 验收标准
 

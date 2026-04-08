@@ -94,6 +94,183 @@ SAFE_REPLAY_BLOCKLIST = (
 )
 
 
+def _event_dict(event: dict[str, object], *keys: str) -> dict[str, object]:
+    for key in keys:
+        value = event.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _event_bool(event: dict[str, object], *keys: str) -> bool | None:
+    for key in keys:
+        value = event.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _first_non_empty(*values: object) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def summarize_route_outcomes(cases: list[CaseResult]) -> dict[str, object]:
+    execution_contract_counts: dict[str, int] = {}
+    route_class_counts: dict[str, int] = {}
+    route_correct_cases = 0
+    budget_correct_cases = 0
+    delivery_correct_cases = 0
+    cases_with_outcome = 0
+    fallback_taken_count = 0
+    missing_outcome_cases: list[str] = []
+    evidence: list[dict[str, object]] = []
+
+    for case in cases:
+        latest_event: dict[str, object] | None = None
+        latest_outcome: dict[str, object] = {}
+        for event in reversed(case.replay_events):
+            if not isinstance(event, dict):
+                continue
+            payload = _event_dict(event, "routeOutcome", "route_outcome")
+            if payload:
+                latest_event = event
+                latest_outcome = payload
+                break
+
+        budget_consistent: bool | None = None
+        for event in reversed(case.replay_events):
+            if not isinstance(event, dict):
+                continue
+            budget_consistent = _event_bool(event, "routeBudgetConsistent", "route_budget_consistent")
+            if budget_consistent is None:
+                auto_router = _event_dict(event, "autoRouter", "auto_router")
+                planner = _event_dict(auto_router, "budgetPlanner", "budget_planner")
+                consistency = _event_dict(planner, "consistency")
+                budget_consistent = _event_bool(consistency, "route_budget_consistent")
+            if budget_consistent is not None:
+                break
+
+        route_correct = False
+        if latest_outcome:
+            cases_with_outcome += 1
+            execution_contract = _first_non_empty(
+                latest_outcome.get("execution_contract"),
+                latest_event.get("executionContract") if latest_event else "",
+                latest_event.get("execution_contract") if latest_event else "",
+            )
+            resolved_execution_contract = _first_non_empty(
+                latest_outcome.get("resolved_execution_contract"),
+                latest_event.get("resolvedExecutionContract") if latest_event else "",
+                latest_event.get("resolved_execution_contract") if latest_event else "",
+                latest_event.get("route") if latest_event else "",
+            )
+            route_class = _first_non_empty(
+                latest_outcome.get("route_class"),
+                latest_event.get("routeClass") if latest_event else "",
+                latest_event.get("route_class") if latest_event else "",
+            )
+            if execution_contract:
+                execution_contract_counts[execution_contract] = execution_contract_counts.get(execution_contract, 0) + 1
+            if route_class:
+                route_class_counts[route_class] = route_class_counts.get(route_class, 0) + 1
+            route_correct = bool(execution_contract and resolved_execution_contract and execution_contract == resolved_execution_contract)
+            if route_correct:
+                route_correct_cases += 1
+            if bool(
+                latest_outcome.get("fallback_taken")
+                or (latest_event and latest_event.get("fallbackTaken"))
+                or (latest_event and latest_event.get("fallback_taken"))
+            ):
+                fallback_taken_count += 1
+        else:
+            missing_outcome_cases.append(case.prompt)
+            execution_contract = ""
+            resolved_execution_contract = ""
+            route_class = ""
+
+        delivery_correct = not case.findings
+        if delivery_correct:
+            delivery_correct_cases += 1
+        if budget_consistent is True:
+            budget_correct_cases += 1
+
+        evidence.append(
+            {
+                "prompt": case.prompt,
+                "route_outcome_present": bool(latest_outcome),
+                "execution_contract": execution_contract,
+                "resolved_execution_contract": resolved_execution_contract,
+                "route_class": route_class,
+                "route_correct": route_correct,
+                "budget_correct": budget_consistent,
+                "delivery_correct": delivery_correct,
+                "fallback_taken": bool(
+                    latest_outcome.get("fallback_taken")
+                    or (latest_event and latest_event.get("fallbackTaken"))
+                    or (latest_event and latest_event.get("fallback_taken"))
+                ),
+                "findings": list(case.findings),
+            }
+        )
+
+    total = len(cases)
+    return {
+        "cases_total": total,
+        "cases_with_outcome": cases_with_outcome,
+        "coverage_complete": total > 0 and cases_with_outcome == total,
+        "coverage_rate": round(cases_with_outcome / total, 6) if total else 0.0,
+        "route_correct_cases": route_correct_cases,
+        "route_correctness_rate": round(route_correct_cases / total, 6) if total else 0.0,
+        "budget_correct_cases": budget_correct_cases,
+        "budget_correctness_rate": round(budget_correct_cases / total, 6) if total else 0.0,
+        "delivery_correct_cases": delivery_correct_cases,
+        "delivery_correctness_rate": round(delivery_correct_cases / total, 6) if total else 0.0,
+        "fallback_taken_count": fallback_taken_count,
+        "fallback_rate": round(fallback_taken_count / total, 6) if total else 0.0,
+        "execution_contract_counts": dict(sorted(execution_contract_counts.items())),
+        "route_class_counts": dict(sorted(route_class_counts.items())),
+        "missing_outcome_prompts": missing_outcome_cases,
+        "evidence": evidence,
+    }
+
+
+def attach_validation_to_manifest(
+    manifest_path: str,
+    *,
+    validation_summary_path: str,
+    validation_cases_path: str,
+    validation_summary: dict[str, object],
+) -> None:
+    if not manifest_path:
+        return
+    path = Path(manifest_path).expanduser().resolve()
+    if not path.exists():
+        return
+    payload = load_json(str(path))
+    if not isinstance(payload, dict):
+        return
+    if str(payload.get("schema_version", "") or "").strip() != "octoclaw.feedback_manifest/v1":
+        return
+    generated = payload.get("generated_artifacts")
+    if not isinstance(generated, dict):
+        generated = {}
+    generated["validation_summary_json"] = validation_summary_path
+    if validation_cases_path:
+        generated["validation_cases_json"] = validation_cases_path
+    payload["generated_artifacts"] = generated
+    payload["validation_status"] = "passed" if bool(validation_summary.get("passed")) else "failed"
+    payload["validation_artifacts"] = {
+        "validation_summary_json": validation_summary_path,
+        "validation_cases_json": validation_cases_path,
+    }
+    payload["route_outcome_metrics"] = dict(validation_summary.get("route_outcome_metrics") or {})
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay valuable prompts against latest OctoClaw")
     parser.add_argument("--sessions-index", default="")
@@ -546,6 +723,12 @@ def main() -> int:
     output_path.write_text(render_report(args.day, case_results, runtime), encoding="utf-8")
     passed_cases = [case for case in case_results if not case.findings]
     findings = sorted({finding for case in case_results for finding in case.findings})
+    route_outcome_metrics = summarize_route_outcomes(case_results)
+    validation_artifacts = {
+        "validation_report_md": str(output_path),
+    }
+    summary_path = Path(args.summary_output) if args.summary_output else output_path.with_name(output_path.stem + "-summary.json")
+    validation_artifacts["validation_summary_json"] = str(summary_path)
     validation_summary = build_validation_summary(
         source_run_id=str(args.source_run_id or ((load_json(args.feedback_manifest) or {}) if args.feedback_manifest else {}).get("run_id", "")).strip(),
         source_label=source_label,
@@ -555,11 +738,14 @@ def main() -> int:
         cases_passed=len(passed_cases),
         cases_failed=len(case_results) - len(passed_cases),
         findings=findings,
-        passed=len(case_results) > 0 and len(passed_cases) == len(case_results),
+        passed=len(case_results) > 0 and len(passed_cases) == len(case_results) and bool(route_outcome_metrics.get("coverage_complete")),
+        route_outcome_metrics=route_outcome_metrics,
+        generated_artifacts=validation_artifacts,
     )
-    summary_path = Path(args.summary_output) if args.summary_output else output_path.with_name(output_path.stem + "-summary.json")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
+    validation_summary["generated_artifacts"] = dict(validation_artifacts)
     summary_path.write_text(json.dumps(validation_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    cases_path: Path | None = None
     if args.cases_output:
         cases_path = Path(args.cases_output)
         cases_path.parent.mkdir(parents=True, exist_ok=True)
@@ -567,6 +753,13 @@ def main() -> int:
             json.dumps([asdict(case) for case in case_results], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        validation_artifacts["validation_cases_json"] = str(cases_path)
+    attach_validation_to_manifest(
+        args.feedback_manifest,
+        validation_summary_path=str(summary_path),
+        validation_cases_path=str(cases_path) if cases_path else "",
+        validation_summary=validation_summary,
+    )
     print(str(output_path))
     return 0
 

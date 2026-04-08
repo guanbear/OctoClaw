@@ -45,10 +45,14 @@ class FeedbackLoopTests(unittest.TestCase):
             validation_status="pending_validation",
             promotion_eligibility="operator-review-only",
             learning_written=False,
+            validation_artifacts={"validation_summary_json": "/tmp/validation-summary.json"},
+            route_outcome_metrics={"coverage_complete": True},
         )
         self.assertEqual(manifest["schema_version"], MANIFEST_SCHEMA_VERSION)
         self.assertEqual(manifest["phase_records"][1]["upstream_phases"], ["observe"])
         self.assertEqual(manifest["promotion_eligibility"], "operator-review-only")
+        self.assertEqual(manifest["validation_artifacts"]["validation_summary_json"], "/tmp/validation-summary.json")
+        self.assertTrue(manifest["route_outcome_metrics"]["coverage_complete"])
 
     def test_build_validation_summary_marks_passed(self) -> None:
         payload = build_validation_summary(
@@ -60,10 +64,14 @@ class FeedbackLoopTests(unittest.TestCase):
             cases_failed=0,
             findings=[],
             passed=True,
+            route_outcome_metrics={"coverage_complete": True, "route_correctness_rate": 1.0},
+            generated_artifacts={"validation_report_md": "/tmp/report.md"},
         )
         self.assertEqual(payload["schema_version"], VALIDATION_SCHEMA_VERSION)
         self.assertTrue(payload["passed"])
         self.assertEqual(payload["cases_total"], 4)
+        self.assertTrue(payload["route_outcome_metrics"]["coverage_complete"])
+        self.assertEqual(payload["generated_artifacts"]["validation_report_md"], "/tmp/report.md")
 
 
 if __name__ == "__main__":

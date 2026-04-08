@@ -323,6 +323,7 @@ P2.5 closeout 之后，router 线按下面顺序继续：
    - budget correctness
    - final delivery correctness
    - threshold / weight tuning inputs
+   - feedback manifest 与 validation artifacts / route outcome metrics 关联
 3. 最后才考虑更深的 tiny judge / extractable package
    - tiny judge 仍是可插拔增强，不是前置依赖
    - extractable package 仍以 recommendation kernel 为主，不把 runtime adapter 一起抽走

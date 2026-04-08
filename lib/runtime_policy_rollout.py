@@ -350,6 +350,8 @@ def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]
     validation_run_id = str(validation.get("source_run_id", "") or "").strip()
     linked_validation = bool(validation and manifest and manifest_run_id and validation_run_id == manifest_run_id)
     validation_passed = bool(validation.get("passed")) if linked_validation else manifest_validation_status == "passed" and bool(manifest_run_id)
+    route_outcome_metrics = validation.get("route_outcome_metrics", {}) if isinstance(validation.get("route_outcome_metrics"), dict) else {}
+    route_outcome_complete = bool(route_outcome_metrics.get("coverage_complete")) if route_outcome_metrics else True
     validation_status = (
         "passed"
         if validation_passed
@@ -362,11 +364,14 @@ def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]
         gate_status = "promotion-blocked" if manifest_validation_status != "passed" else "needs-validation"
     elif validation and manifest and not linked_validation:
         gate_status = "promotion-blocked"
+    elif validation and manifest and linked_validation and not route_outcome_complete:
+        gate_status = "promotion-blocked"
     elif promotion.get("ready") and validation_passed:
         gate_status = "promotion-ready"
     promotion_gate = {
         "status": gate_status,
         "validation_status": validation_status,
+        "route_outcome_status": "complete" if route_outcome_complete else "incomplete",
         "validation_summary_path": str(getattr(args, "validation_summary", "") or ""),
         "feedback_manifest_path": str(getattr(args, "feedback_manifest", "") or ""),
         "heuristic_ready": bool(promotion.get("ready")),
@@ -378,6 +383,7 @@ def build_replay_observation_summary(args: argparse.Namespace) -> dict[str, Any]
         "suggested_preset": promotion.get("target") if promotion.get("ready") else current_phase,
     }
     summary["validation"] = validation
+    summary["validation_route_outcomes"] = route_outcome_metrics
     summary["feedback_manifest"] = manifest
     summary["promotion_gate"] = promotion_gate
     return summary
@@ -395,6 +401,7 @@ def render_recommendation(summary: dict[str, Any]) -> dict[str, Any]:
         "target": promotion.get("target"),
         "checks": promotion.get("checks", []),
         "promotion_gate": gate,
+        "route_outcome_metrics": summary.get("validation_route_outcomes", {}),
         "task_event_count": summary.get("task_metrics", {}).get("task_event_count", 0),
         "runner_task_count": summary.get("task_metrics", {}).get("runner_task_count", 0),
         "delegated_task_count": summary.get("task_metrics", {}).get("delegated_task_count", 0),
