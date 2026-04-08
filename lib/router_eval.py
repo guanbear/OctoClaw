@@ -14,6 +14,115 @@ from replay_review import FOCUS_CHOICES, build_review_payload
 from replay_summary import DEFAULT_REPLAY_LOG, load_events
 
 
+def _normalize_route(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def classify_case_drift(case: dict[str, Any]) -> dict[str, Any]:
+    expected_route = _normalize_route(case.get("expected_route"))
+    recommendation = case.get("recommendation", {}) if isinstance(case.get("recommendation"), dict) else {}
+    budget = case.get("budget", {}) if isinstance(case.get("budget"), dict) else {}
+    recommended_route = _normalize_route(recommendation.get("recommended_route"))
+    raw_budget_consistent = recommendation.get("route_budget_consistent")
+    budget_consistent = raw_budget_consistent if isinstance(raw_budget_consistent, bool) else None
+
+    if not recommended_route:
+        route_drift = "missing_recommendation"
+    elif recommended_route == expected_route:
+        route_drift = "match"
+    else:
+        route_drift = "route_mismatch"
+
+    if budget_consistent is True:
+        budget_drift = "match"
+    elif budget_consistent is False:
+        budget_drift = "budget_mismatch"
+    else:
+        budget_drift = "unknown"
+
+    if route_drift == "match" and budget_drift == "match":
+        overall = "match"
+    elif route_drift == "missing_recommendation" and budget_drift == "unknown":
+        overall = "missing_recommendation"
+    elif route_drift == "route_mismatch" and budget_drift == "budget_mismatch":
+        overall = "route_and_budget_mismatch"
+    elif route_drift == "route_mismatch":
+        overall = "route_mismatch"
+    elif budget_drift == "budget_mismatch":
+        overall = "budget_mismatch"
+    else:
+        overall = "unknown"
+
+    evidence = {
+        "schema_version": "octoclaw.router_eval.calibration_evidence/v1",
+        "expected_route": expected_route,
+        "recommended_route": recommended_route,
+        "system_preferred_route": _normalize_route(case.get("system_preferred_route")),
+        "budget_cap": _normalize_route(budget.get("budget_cap")),
+        "latency_target": _normalize_route(budget.get("latency_target")),
+        "max_workers": int(budget.get("max_workers") or 0),
+        "retry_cap": int(budget.get("retry_cap") or 0),
+        "route_drift_class": route_drift,
+        "budget_drift_class": budget_drift,
+        "overall_drift_class": overall,
+        "route_budget_consistent": budget_consistent,
+        "tags": list(case.get("tags") or []),
+    }
+    return {
+        "expected_route": expected_route,
+        "recommended_route": recommended_route,
+        "route_budget_consistent": budget_consistent,
+        "route_drift_class": route_drift,
+        "budget_drift_class": budget_drift,
+        "overall_drift_class": overall,
+        "calibration_evidence": evidence,
+    }
+
+
+def build_tuning_inputs(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    route_transition_counts: Counter[tuple[str, str]] = Counter()
+    budget_caps_by_expected: Counter[tuple[str, str]] = Counter()
+    latency_targets_by_expected: Counter[tuple[str, str]] = Counter()
+    inconsistent_cases_by_expected: Counter[str] = Counter()
+    missing_recommendation_by_expected: Counter[str] = Counter()
+    overall_drift_breakdown: Counter[str] = Counter()
+
+    for case in cases:
+        drift = classify_case_drift(case)
+        expected_route = drift["expected_route"] or "unknown"
+        recommended_route = drift["recommended_route"] or "missing"
+        budget = case.get("budget", {}) if isinstance(case.get("budget"), dict) else {}
+        budget_cap = _normalize_route(budget.get("budget_cap")) or "unknown"
+        latency_target = _normalize_route(budget.get("latency_target")) or "unknown"
+        route_transition_counts[(expected_route, recommended_route)] += 1
+        budget_caps_by_expected[(expected_route, budget_cap)] += 1
+        latency_targets_by_expected[(expected_route, latency_target)] += 1
+        overall_drift_breakdown[drift["overall_drift_class"]] += 1
+        if drift["budget_drift_class"] == "budget_mismatch":
+            inconsistent_cases_by_expected[expected_route] += 1
+        if drift["route_drift_class"] == "missing_recommendation":
+            missing_recommendation_by_expected[expected_route] += 1
+
+    def _pairs(counter: Counter[tuple[str, str]]) -> list[dict[str, Any]]:
+        return [
+            {"expected_route": left, "value": right, "count": count}
+            for (left, right), count in sorted(counter.items())
+        ]
+
+    return {
+        "schema_version": "octoclaw.router_eval.tuning_inputs/v1",
+        "route_transition_counts": [
+            {"expected_route": expected, "recommended_route": recommended, "count": count}
+            for (expected, recommended), count in sorted(route_transition_counts.items())
+        ],
+        "budget_caps_by_expected_route": _pairs(budget_caps_by_expected),
+        "latency_targets_by_expected_route": _pairs(latency_targets_by_expected),
+        "inconsistent_cases_by_expected_route": dict(sorted(inconsistent_cases_by_expected.items())),
+        "missing_recommendation_by_expected_route": dict(sorted(missing_recommendation_by_expected.items())),
+        "overall_drift_breakdown": dict(sorted(overall_drift_breakdown.items())),
+    }
+
+
 def evaluate_router_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     recommendation_present = 0
     recommendation_matches = 0
@@ -23,14 +132,18 @@ def evaluate_router_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     drift_cases: list[dict[str, Any]] = []
     by_expected = Counter()
     by_recommended = Counter()
+    route_drift_breakdown = Counter()
+    budget_drift_breakdown = Counter()
+    overall_drift_breakdown = Counter()
+    calibration_ready = 0
 
     for case in cases:
-        expected_route = str(case.get("expected_route") or "").strip()
-        recommendation = case.get("recommendation", {}) if isinstance(case.get("recommendation"), dict) else {}
+        drift = classify_case_drift(case)
+        expected_route = drift["expected_route"]
+        recommended_route = drift["recommended_route"]
+        budget_consistent = drift["route_budget_consistent"]
+        evidence = drift["calibration_evidence"]
         budget = case.get("budget", {}) if isinstance(case.get("budget"), dict) else {}
-        recommended_route = str(recommendation.get("recommended_route") or "").strip()
-        raw_budget_consistent = recommendation.get("route_budget_consistent")
-        budget_consistent = raw_budget_consistent if isinstance(raw_budget_consistent, bool) else None
 
         if expected_route:
             by_expected[expected_route] += 1
@@ -46,7 +159,13 @@ def evaluate_router_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
         elif budget_consistent is None:
             route_budget_unknown += 1
 
-        if (recommended_route and recommended_route != expected_route) or budget_consistent is False:
+        route_drift_breakdown[drift["route_drift_class"]] += 1
+        budget_drift_breakdown[drift["budget_drift_class"]] += 1
+        overall_drift_breakdown[drift["overall_drift_class"]] += 1
+        if drift["overall_drift_class"] != "missing_recommendation":
+            calibration_ready += 1
+
+        if drift["overall_drift_class"] not in {"match", "unknown", "missing_recommendation"}:
             drift_cases.append(
                 {
                     "id": str(case.get("id") or ""),
@@ -54,10 +173,14 @@ def evaluate_router_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
                     "expected_route": expected_route,
                     "recommended_route": recommended_route,
                     "route_budget_consistent": budget_consistent,
+                    "route_drift_class": drift["route_drift_class"],
+                    "budget_drift_class": drift["budget_drift_class"],
+                    "overall_drift_class": drift["overall_drift_class"],
                     "budget_cap": str(budget.get("budget_cap") or ""),
                     "latency_target": str(budget.get("latency_target") or ""),
                     "max_workers": int(budget.get("max_workers") or 0),
                     "tags": list(case.get("tags") or []),
+                    "calibration_evidence": evidence,
                 }
             )
 
@@ -69,6 +192,7 @@ def evaluate_router_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
             "total_cases": total,
             "recommendation_present": recommendation_present,
             "recommendation_missing": recommendation_missing,
+            "calibration_ready_cases": calibration_ready,
             "recommendation_matches_expected_route": recommendation_matches,
             "recommendation_match_rate": recommendation_match_rate,
             "route_budget_consistent_cases": route_budget_consistent,
@@ -77,8 +201,12 @@ def evaluate_router_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
             "drift_cases": len(drift_cases),
             "by_expected_route": dict(sorted(by_expected.items())),
             "by_recommended_route": dict(sorted(by_recommended.items())),
+            "route_drift_breakdown": dict(sorted(route_drift_breakdown.items())),
+            "budget_drift_breakdown": dict(sorted(budget_drift_breakdown.items())),
+            "overall_drift_breakdown": dict(sorted(overall_drift_breakdown.items())),
         },
         "drift_cases": drift_cases,
+        "tuning_inputs": build_tuning_inputs(cases),
     }
 
 
@@ -97,7 +225,7 @@ def render_text(payload: dict[str, Any]) -> str:
     ]
     for index, case in enumerate(payload.get("drift_cases", [])[:10], start=1):
         lines.append(
-            f"{index}. `{case.get('id')}` · expected `{case.get('expected_route') or 'n/a'}` · recommended `{case.get('recommended_route') or 'missing'}` · budget_ok `{case.get('route_budget_consistent')}`"
+            f"{index}. `{case.get('id')}` · expected `{case.get('expected_route') or 'n/a'}` · recommended `{case.get('recommended_route') or 'missing'}` · drift `{case.get('overall_drift_class')}` · budget_ok `{case.get('route_budget_consistent')}`"
         )
         lines.append(f"   prompt: {case.get('prompt') or '(no prompt)'}")
     return "\n".join(lines)
@@ -136,6 +264,7 @@ def build_payload(
         },
         "summary": evaluation["summary"],
         "drift_cases": evaluation["drift_cases"],
+        "tuning_inputs": evaluation["tuning_inputs"],
         "cases": cases,
     }
 

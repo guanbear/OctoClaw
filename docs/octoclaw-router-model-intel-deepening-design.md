@@ -240,11 +240,26 @@ Model-Intel Facts Plane
    - 防止 schema / resolution drift
 4. **model-intel update compatibility tests**
    - 防止外部源格式变化导致 router 误选
+5. **calibration evidence format**
+   - 对每个 curated case 统一记录：
+     - route drift class
+     - budget drift class
+     - overall drift class
+     - budget cap / latency target / worker budget
+6. **tuning inputs**
+   - replay/eval 不只产 operator summary
+   - 还要产后续调：
+     - route ladder
+     - budget threshold
+     - source weighting
+     的输入视图
 
 ### 6.3 原则
 
 - calibration plane 提供的是 **证据**
 - router core 仍然不直接包含 replay 逻辑
+- 旧 replay 缺 recommendation 字段时，应归为 `unknown / missing_recommendation`
+  - 不应被误判成 hard drift
 
 ---
 
@@ -297,6 +312,8 @@ Model-Intel Facts Plane
 - replay-driven router eval
 - calibration evidence format
 - model-intel update compatibility tests
+- recommendation drift diagnostics
+- tuning inputs for threshold / weight adjustment
 - baseline 先落在：
   - `router_eval` 读 replay/curate cases 输出 route/budget drift 摘要
   - source adapter compatibility tests 覆盖 parser / last-good fallback / schema drift
