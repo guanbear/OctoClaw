@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+ROUTER_EVAL_SCRIPT = REPO_ROOT / "lib" / "router_eval.py"
+
+
+class RouterEvalTests(unittest.TestCase):
+    def run_eval(self, events_path: Path, *extra_args: str) -> dict:
+        result = subprocess.run(
+            ["python3", str(ROUTER_EVAL_SCRIPT), "--events", str(events_path), "--format", "json", *extra_args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
+
+    def test_router_eval_summarizes_recommendation_and_budget_consistency(self) -> None:
+        events = [
+            {
+                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                "event": "policy_resolved",
+                "at": "2026-04-08T12:00:00.000Z",
+                "sessionKey": "s1",
+                "sessionId": "s1",
+                "route": "runner",
+                "systemPreferredRoute": "runner",
+                "prompt": "check whether port 8080 is open",
+                "budgetPolicy": {
+                    "budget_cap": "low",
+                    "latency_target": "interactive",
+                    "max_workers": 1,
+                    "retry_cap": 1,
+                },
+                "routeRecommendation": {
+                    "recommended_route": "runner",
+                },
+                "autoRouter": {
+                    "budgetPlanner": {
+                        "consistency": {"route_budget_consistent": True}
+                    }
+                },
+            },
+            {
+                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                "event": "policy_resolved",
+                "at": "2026-04-08T12:01:00.000Z",
+                "sessionKey": "s2",
+                "sessionId": "s2",
+                "route": "spawn_single",
+                "systemPreferredRoute": "spawn_single",
+                "prompt": "调研 release 并总结",
+                "budgetPolicy": {
+                    "budget_cap": "low",
+                    "latency_target": "background",
+                    "max_workers": 1,
+                    "retry_cap": 1,
+                },
+                "routeRecommendation": {
+                    "recommended_route": "runner",
+                },
+                "autoRouter": {
+                    "budgetPlanner": {
+                        "consistency": {"route_budget_consistent": False}
+                    }
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory(prefix="octoclaw-router-eval-") as tmpdir:
+            path = Path(tmpdir) / "events.jsonl"
+            path.write_text("\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n", encoding="utf-8")
+            payload = self.run_eval(path)
+
+        self.assertEqual(payload["schema_version"], "octoclaw.router_eval/v1")
+        self.assertEqual(payload["summary"]["total_cases"], 2)
+        self.assertEqual(payload["summary"]["recommendation_present"], 2)
+        self.assertEqual(payload["summary"]["recommendation_matches_expected_route"], 1)
+        self.assertEqual(payload["summary"]["route_budget_consistent_cases"], 1)
+        self.assertEqual(payload["summary"]["drift_cases"], 1)
+        self.assertEqual(payload["drift_cases"][0]["expected_route"], "spawn_single")
+        self.assertEqual(payload["drift_cases"][0]["recommended_route"], "runner")
+
+
+if __name__ == "__main__":
+    unittest.main()

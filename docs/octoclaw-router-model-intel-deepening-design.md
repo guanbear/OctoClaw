@@ -297,6 +297,9 @@ Model-Intel Facts Plane
 - replay-driven router eval
 - calibration evidence format
 - model-intel update compatibility tests
+- baseline 先落在：
+  - `router_eval` 读 replay/curate cases 输出 route/budget drift 摘要
+  - source adapter compatibility tests 覆盖 parser / last-good fallback / schema drift
 
 ### RM4：Extractable readiness baseline
 

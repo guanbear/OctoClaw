@@ -690,6 +690,7 @@ router / model-intel 深化的 focused design 见：
    - replay-driven router eval
    - model-intel update compatibility tests
    - recommendation drift diagnostics
+   - baseline 先以 `router_eval` + source adapter compatibility tests 落地
 4. **RM4：Extractable Readiness**
    - minimal package boundary map
    - public surface shortlist

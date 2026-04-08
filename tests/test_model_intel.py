@@ -19,6 +19,17 @@ SPEC.loader.exec_module(model_intel)
 
 
 class ModelIntelTests(unittest.TestCase):
+    def test_load_snapshot_with_last_good_falls_back_when_primary_is_invalid(self) -> None:
+        with patch.object(
+            model_intel,
+            "load_json",
+            side_effect=lambda path: {"broken": True} if str(path).endswith("primary.json") else {"records": [{"id": "openai/gpt-5.4"}]},
+        ):
+            payload, source_file = model_intel.load_snapshot_with_last_good("/tmp/primary.json", "/tmp/last-good.json")
+
+        self.assertEqual(source_file, "/tmp/last-good.json")
+        self.assertEqual(payload["records"][0]["id"], "openai/gpt-5.4")
+
     def test_sync_external_model_intel_sources_invokes_node_adapter(self) -> None:
         mocked_run = Mock(return_value=Mock(stdout='{"results":[{"source":"openrouter_catalog","ok":true}]}'))
         with patch.object(model_intel.subprocess, "run", mocked_run):
