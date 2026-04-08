@@ -590,6 +590,29 @@ OctoClaw 不应该只做终端体验，也不该试图把所有 IM 强行做成�
 
 > **“可抽离”是当前设计目标；“立刻拆出去”不是当前主线。**
 
+### 7.7A Model-Intel should be a generated facts plane
+
+`model-intel` 的正确形态，不是 runtime 热路径里顺手拼出来的 provider 事实，而是：
+
+- source-attributed
+- generated artifacts
+- stale-tolerant
+- last-good recoverable
+
+这层最值得借鉴的是：
+
+- `models.dev` 的 schema-first registry
+- OmniRoute 的 external sync / stale-if-error / catalog builder 分层
+
+同时必须坚持：
+
+- `OpenRouter rankings` 只作为低权重生态信号
+- 免费模型要过滤或显式降权，不能污染 paid auto-routing
+- 本地 truth
+  - `openclaw_live_compat`
+  - runtime health / cooldown / quota
+  仍高于外部目录与榜单
+
 ### 7.8 Harness should be layered, not monolithic
 
 参考 OpenHarness、DeerFlow 这类项目，OctoClaw 确实值得把 `harness` 当成一级设计对象。
@@ -605,6 +628,22 @@ OctoClaw 不应该只做终端体验，也不该试图把所有 IM 强行做成�
 - 不把所有请求都送进一个重型 super-agent harness
 - 不把 LangGraph 风格重 orchestration 当成默认主路径
 - 不为了“像 harness”而新增另一套并行 runtime
+
+更具体地说，参考项目的借鉴边界应明确如下：
+
+| Project | Borrow | Don't Borrow |
+| --- | --- | --- |
+| OpenHarness | 把 harness 当一级产品层；把 tool/skill/memory/artifact/eval 的 ownership 讲清楚 | 不把 OctoClaw 扩成另一套通用 agent infra；不引入新的并行 runtime |
+| DeerFlow | durability、checkpoint、artifact/state/replay 作为基础设施的意识 | 不把 graph orchestration / planner-team-reporter 变成默认主路径 |
+| OpenHands | dev-task runtime、ACI、评测基础设施的产品化表达 | 不把 OctoClaw 主线收成“软件工程 agent 产品” |
+| PydanticAI | typed contract、output/tool validation、eval discipline | 不为 typed schema 做大规模框架迁移 |
+| AutoGen | 多层 architecture 的表达方式；team/bench 的边界意识 | 不默认走重 orchestration、多 agent team 作为主姿势 |
+
+借鉴的节奏也应保持克制：
+
+- 先读公开设计/README，对齐方向和边界
+- 真正落具体 contract 时，再定点读局部源码
+- 不因为“参考项目做了”就先引入对应 runtime 形态
 
 更适合 OctoClaw 的做法，是把当前已经存在的能力正式收成三层：
 
@@ -634,6 +673,19 @@ OctoClaw 不应该只做终端体验，也不该试图把所有 IM 强行做成�
 - protected lane 默认走 lightweight runtime harness
 - 测速、日志、状态类问题优先走 workflow harness，而不是现场让 agent 现想流程
 - replay/nightly 通过 evaluation harness 主动暴露坏例子，减少靠用户追问才发现问题
+
+这也意味着，`protected lanes` 不应继续靠“想到一个坏例子就补一条 regex”前进。
+更系统的做法是：
+
+- 先明确它属于哪一层 harness
+- 再明确它属于哪种 contract
+- 再补 golden case / replay diff / nightly review
+- 最后才考虑是否需要 cheap judge 或局部小模型裁决
+
+P5F 的 canonical artifact 现在应以两份文档为准：
+
+- `docs/octoclaw-harness-ownership-map.md`
+- `docs/octoclaw-harness-contract-inventory.md`
 
 ---
 

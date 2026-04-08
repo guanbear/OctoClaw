@@ -266,7 +266,11 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
     - 目录 / 价格 / context / provider / modality
   - `OpenRouter rankings` 同步
     - 作为低权重生态信号，不压过本地 truth
+    - 默认过滤免费模型，或至少单独降权免费模型
+  - `models.dev` 风格 registry adapter
+    - 结构化 capability / limits / modality / status
   - freshness / decay / stale fallback 语义
+  - last-good snapshot / stale-if-error cache
 - OpenAI-compatible recommendation surface 草案
 - 在 replay / validation / promotion 里沉淀 route outcome 字段
   - 为后续从静态映射升级到 feedback-driven router 预留训练面
@@ -284,6 +288,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 不要求现在就拆仓
 - 不要求立刻变成通用 proxy
 - 先把内部接口做干净，再考虑独立开源
+- 先把外部 source adapter 和 online update 收稳，再深化 learned router
 - 默认先走 OpenClaw plugin-first 形态，不把独立 service 当当前前置目标
 - 默认先优化 delegated lanes，而不是直接改主 agent
 - `control_observer` 不进入普通业务 auto-router 训练面
@@ -496,16 +501,102 @@ P5 不应该顺手混进这些题：
 - 不新增一套新的常驻 runtime，也不引入新的 super-agent 默认主路径
 - 现有实现保持渐进归类，不要求一次性大迁移
 
+当前 canonical artifact：
+
+- `docs/octoclaw-harness-ownership-map.md`
+- `docs/octoclaw-harness-contract-inventory.md`
+
 ### 实施原则
 
 - 基于 **OpenClaw 2026.4.5** 的 runtime / TaskFlow 语义继续收口
 - runtime hot path **优先 Node.js / JS**
 - Python 优先用于 offline analysis / nightly / calibration / compatibility glue
+- 先读参考项目的公开设计/README 对齐方向；真正落具体 contract 时，再定点读局部源码
 - 不为“进程更少”而简化，而是为：
   - 降低状态漂移
   - 降低恢复复杂度
   - 降低 operator 心智负担
 - harness consolidation 以 **contract first / ownership first** 为主，不以“大重构” 为前提
+
+### 代码级 backlog
+
+#### H1：Harness Ownership Map
+
+交付物：
+
+- 在 canonical docs 中落一份 ownership map，明确：
+  - 哪些文件属于 runtime harness
+  - 哪些文件属于 workflow harness
+  - 哪些文件属于 evaluation harness
+- 对新增模块要求在 PR/提交说明里显式标注 harness layer
+
+验收标准：
+
+- `route / policy / dispatch / context / artifact / task-state` 已明确归到 runtime harness
+- `runner_playbooks / telemetry / benchmark / inspect` 已明确归到 workflow harness
+- `eval_suite / replay_validation / reply_review_packet / nightly review / failure summary` 已明确归到 evaluation harness
+
+#### H2：Contract Inventory
+
+交付物：
+
+- 统一梳理并命名这 5 类 contract：
+  - `brief`
+  - `result`
+  - `artifact`
+  - `event`
+  - `eval outcome`
+- 为每类 contract 标出当前 canonical producer / consumer / storage
+
+验收标准：
+
+- 新增 workflow 不再自造一套 result/artifact 字段
+- replay/nightly/eval 读取的 outcome 结构可以对齐到统一 inventory
+
+#### H3：Workflow Harness Normalization
+
+交付物：
+
+- 把 benchmark / telemetry / inspect 这类“非必要不指派 agent”的流程，优先收成 workflow harness
+- 要求这类能力优先走 playbook / report workflow，而不是 generic `spawn_single`
+
+验收标准：
+
+- 典型测速、日志、状态诊断类需求默认不再落 generic delegated agent lane
+- 新增 workflow 默认产出 brief/result/artifact 三件套
+
+#### H4：Evaluation Harness Consolidation
+
+交付物：
+
+- 收口 nightly / replay / review / failure summary 的 packet 和 outcome 口径
+- 对 protected lane、direct slow reply、delegation explanation risk 形成固定 nightly coverage
+
+验收标准：
+
+- casual bad case 不再完全依赖用户二次追问才暴露
+- nightly summary 能稳定区分：
+  - protected-lane misroute
+  - direct-path latency
+  - explanation/grounding risk
+
+### 当前结论
+
+按 2026-04-08 的基线，P5F 以“ownership 与 contract 收口完成、实现保持渐进归类”为完成口径。
+
+- H1 由 `octoclaw-harness-ownership-map.md` 关单
+- H2 由 `octoclaw-harness-contract-inventory.md` 关单
+- H3 由既有 workflow harness baseline 关单：
+  - `runner_playbooks.py`
+  - `model_telemetry_report.py`
+- H4 由既有 evaluation harness baseline 关单：
+  - `eval_suite.py`
+  - `reply_review_packet.py`
+  - `replay_validation.py`
+  - `replay_review.py`
+  - `replay_summary.py`
+  - `nightly_reply_review.py`
+  - `nightly_failure_summary.py`
 
 ### 完成标准
 
