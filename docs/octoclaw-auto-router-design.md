@@ -755,9 +755,11 @@ V2 才值得开始吸收 NVIDIA auto-routing 与 learned router 的那一侧能�
 
 0. **protected lanes 先收硬边界**
    - `control_observer`
+   - `session_control`
    - workflow/session provenance
    - status/details/task-action
    - 这些 lane 默认 bypass delegated optimization，也不进普通业务训练面
+   - 新增 protected lane 必须先补 contract doc + golden + replay/nightly diff，避免退化成无边界补丁
 
 1. **规则先跑**
    - 负责明显 case 的快速命中

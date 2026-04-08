@@ -300,6 +300,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
    - current-session mutation 不能被错误委派给子任务
 2. 再补 goldens / parity / replay diff
    - 先降低高频误判，再扩 recommendation 面
+   - nightly 必须覆盖 direct path / protected lane / session-control 的坏例子
 3. 最后才给模糊样本接 tiny judge
    - tiny judge 是歧义裁决器，不是主路由器
 

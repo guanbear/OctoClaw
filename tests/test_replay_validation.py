@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+import json
+import tempfile
 
-from lib.replay_validation import Turn, ensure_text, is_safe_replay_prompt, score_turn, select_turns
+from lib.replay_validation import Turn, ensure_text, is_safe_replay_prompt, score_turn, select_packet_turns, select_turns, turns_from_packet
 
 
 class ReplayValidationTests(unittest.TestCase):
@@ -40,6 +43,37 @@ class ReplayValidationTests(unittest.TestCase):
         self.assertEqual(ensure_text(b"timeout bytes"), "timeout bytes")
         self.assertEqual(ensure_text("already text"), "already text")
         self.assertEqual(ensure_text(None), "")
+
+    def test_packet_turn_selection_keeps_short_protected_cases(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            packet_path = Path(tmpdir) / "packet.json"
+            packet_path.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "session_key": "s1",
+                                "session_file": "/tmp/s1.jsonl",
+                                "user_timestamp": "2026-04-08T09:00:00+08:00",
+                                "user_prompt": "你是啥模型",
+                                "assistant_reply": "当前是 zhipu/GLM-5.1。",
+                            },
+                            {
+                                "session_key": "s2",
+                                "session_file": "/tmp/s2.jsonl",
+                                "user_timestamp": "2026-04-08T09:01:00+08:00",
+                                "user_prompt": "帮我调研 OpenClaw 2026.4.5 的 task flow",
+                                "assistant_reply": "处理中",
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            turns = turns_from_packet(packet_path)
+            selected = select_packet_turns(turns, 2)
+            self.assertEqual([turn.user_prompt for turn in selected], ["你是啥模型", "帮我调研 OpenClaw 2026.4.5 的 task flow"])
 
 
 if __name__ == "__main__":

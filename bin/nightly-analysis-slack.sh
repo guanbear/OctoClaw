@@ -17,6 +17,7 @@ REPLAY_LOG="${OCTOCLAW_NIGHTLY_ANALYSIS_REPLAY_LOG:-${WORKSPACE}/tmp/octopus/run
 TASK_STATE="${OCTOCLAW_NIGHTLY_ANALYSIS_TASK_STATE:-${WORKSPACE}/tmp/octopus/task-state.json}"
 PYTHON_BIN="${OCTOCLAW_PYTHON_BIN:-python3}"
 LIMIT="${OCTOCLAW_NIGHTLY_ANALYSIS_LIMIT:-24}"
+SKIP_AGENT="${OCTOCLAW_NIGHTLY_ANALYSIS_SKIP_AGENT:-false}"
 NOTIFY_BACKEND="${OCTOCLAW_NIGHTLY_ANALYSIS_NOTIFY_BACKEND:-slack}"
 NOTIFY_SESSION_KEY="${OCTOCLAW_NIGHTLY_ANALYSIS_NOTIFY_SESSION_KEY:-}"
 NOTIFY_CHANNEL="${OCTOCLAW_NIGHTLY_ANALYSIS_NOTIFY_CHANNEL:-}"
@@ -39,6 +40,7 @@ VALIDATION_REPORT="${BASE_DIR}/replay-validation.md"
 VALIDATION_CASES="${BASE_DIR}/replay-validation-cases.json"
 REPLY_REVIEW_REPORT="${BASE_DIR}/reply-review.md"
 REPLY_REVIEW_PROMPT="${BASE_DIR}/reply-review.prompt.md"
+REPLY_REVIEW_ERROR="${BASE_DIR}/reply-review.error.log"
 FAILURE_REPORT="${BASE_DIR}/failure-summary.md"
 FAILURE_JSON="${BASE_DIR}/failure-summary.json"
 SUMMARY_PATH="${BASE_DIR}/summary.txt"
@@ -70,14 +72,54 @@ echo "[nightly-analysis] replay validation ${REPORT_DAY}"
   --cases-output "${VALIDATION_CASES}"
 
 echo "[nightly-analysis] reply review ${REPORT_DAY}"
-"${PYTHON_BIN}" "${REPO_ROOT}/lib/nightly_reply_review.py" \
-  --packet "${PACKET_PATH}" \
-  --day "${REPORT_DAY}" \
-  --timezone "${TZ_NAME}" \
-  --repo-root "${REPO_ROOT}" \
-  --output "${REPLY_REVIEW_REPORT}" \
-  --prompt-output "${REPLY_REVIEW_PROMPT}" \
-  --skip-agent
+rm -f "${REPLY_REVIEW_ERROR}"
+if [ "${SKIP_AGENT}" = "true" ]; then
+  "${PYTHON_BIN}" "${REPO_ROOT}/lib/nightly_reply_review.py" \
+    --packet "${PACKET_PATH}" \
+    --day "${REPORT_DAY}" \
+    --timezone "${TZ_NAME}" \
+    --repo-root "${REPO_ROOT}" \
+    --output "${REPLY_REVIEW_REPORT}" \
+    --prompt-output "${REPLY_REVIEW_PROMPT}" \
+    --skip-agent
+else
+  if ! "${PYTHON_BIN}" "${REPO_ROOT}/lib/nightly_reply_review.py" \
+    --packet "${PACKET_PATH}" \
+    --day "${REPORT_DAY}" \
+    --timezone "${TZ_NAME}" \
+    --repo-root "${REPO_ROOT}" \
+    --output "${REPLY_REVIEW_REPORT}" \
+      --prompt-output "${REPLY_REVIEW_PROMPT}" \
+    2>"${REPLY_REVIEW_ERROR}"; then
+    echo "[nightly-analysis] reply review agent failed; fallback to packet-only review"
+    "${PYTHON_BIN}" "${REPO_ROOT}/lib/nightly_reply_review.py" \
+      --packet "${PACKET_PATH}" \
+      --day "${REPORT_DAY}" \
+      --timezone "${TZ_NAME}" \
+      --repo-root "${REPO_ROOT}" \
+      --output "${REPLY_REVIEW_REPORT}" \
+      --prompt-output "${REPLY_REVIEW_PROMPT}" \
+      --skip-agent
+    "${PYTHON_BIN}" - <<'PY' "${REPLY_REVIEW_REPORT}" "${REPLY_REVIEW_ERROR}"
+from pathlib import Path
+import sys
+
+report = Path(sys.argv[1])
+error = Path(sys.argv[2])
+text = report.read_text(encoding="utf-8").rstrip()
+detail = error.read_text(encoding="utf-8", errors="ignore").strip() if error.exists() else "unknown error"
+report.write_text(
+    text
+    + "\n\n## Agent Review Fallback\n\n"
+    + "- Agent review failed during nightly analysis; packet-only review was generated instead.\n"
+    + f"- Error: `{detail[:400]}`\n",
+    encoding="utf-8",
+)
+PY
+  else
+    rm -f "${REPLY_REVIEW_ERROR}"
+  fi
+fi
 
 echo "[nightly-analysis] failure summary ${REPORT_DAY}"
 "${PYTHON_BIN}" "${REPO_ROOT}/lib/nightly_failure_summary.py" \
@@ -87,11 +129,12 @@ echo "[nightly-analysis] failure summary ${REPORT_DAY}"
   --output "${FAILURE_REPORT}" \
   --json-output "${FAILURE_JSON}" > /dev/null
 
-"${PYTHON_BIN}" - <<'PY' "${REPORT_DAY}" "${VALIDATION_REPORT}" "${REPLY_REVIEW_REPORT}" "${FAILURE_REPORT}" "${SUMMARY_PATH}"
+"${PYTHON_BIN}" - <<'PY' "${REPORT_DAY}" "${PACKET_PATH}" "${VALIDATION_REPORT}" "${REPLY_REVIEW_REPORT}" "${FAILURE_REPORT}" "${SUMMARY_PATH}" "${REPLY_REVIEW_ERROR}"
 from pathlib import Path
+import json
 import sys
 
-day, validation_path, reply_review_path, failure_path, summary_path = sys.argv[1:]
+day, packet_path, validation_path, reply_review_path, failure_path, summary_path, reply_review_error = sys.argv[1:]
 
 def first_meaningful_line(path: str) -> str:
     candidate = Path(path)
@@ -106,11 +149,26 @@ def first_meaningful_line(path: str) -> str:
         return text
     return "generated"
 
+packet = {}
+packet_candidate = Path(packet_path)
+if packet_candidate.exists():
+    try:
+        packet = json.loads(packet_candidate.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        packet = {}
+selection_metrics = packet.get("selection_metrics") if isinstance(packet, dict) else {}
+reply_review_mode = "semantic"
+error_candidate = Path(reply_review_error)
+if error_candidate.exists() and error_candidate.stat().st_size > 0:
+    reply_review_mode = "packet-only fallback"
+
 summary = "\n".join(
     [
         f"OctoClaw nightly analysis {day}",
         "",
         "- Mode: analysis-only (no autofix)",
+        f"- Reply review mode: {reply_review_mode}",
+        f"- Packet selection metrics: {json.dumps(selection_metrics, ensure_ascii=False, sort_keys=True) if selection_metrics else '{}'}",
         f"- Replay validation: {validation_path}",
         f"  {first_meaningful_line(validation_path)}",
         f"- Reply review: {reply_review_path}",

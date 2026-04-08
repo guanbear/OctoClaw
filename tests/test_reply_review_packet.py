@@ -86,6 +86,7 @@ class ReplyReviewPacketTests(unittest.TestCase):
             )()
             packet = reply_review_packet.build_packet(args)
             self.assertEqual(packet["case_count"], 1)
+            self.assertEqual(packet["selection_metrics"]["direct_case_count"], 0)
             case = packet["cases"][0]
             self.assertEqual(case["user_prompt"], "帮我查下 openclaw 最近更新")
             self.assertEqual(case["assistant_reply"], "已开始调研，我稍后给你总结。")
@@ -172,6 +173,8 @@ class ReplyReviewPacketTests(unittest.TestCase):
             )()
             packet = reply_review_packet.build_packet(args)
             self.assertEqual(packet["case_count"], 1)
+            self.assertEqual(packet["selection_metrics"]["protected_lane_case_count"], 1)
+            self.assertEqual(packet["selection_metrics"]["protected_lane_misroute_count"], 1)
             case = packet["cases"][0]
             self.assertEqual(case["policy"]["protected_lane"], "control_observer")
             self.assertEqual(case["dispatch"]["protected_lane"], "control_observer")
@@ -228,6 +231,82 @@ class ReplyReviewPacketTests(unittest.TestCase):
             )()
             packet = reply_review_packet.build_packet(args)
             self.assertEqual(packet["case_count"], 0)
+
+    def test_build_packet_prioritizes_short_protected_lane_cases_for_nightly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            session_dir = tmp / "sessions"
+            session_file = session_dir / "local" / "mix.jsonl"
+            session_file.parent.mkdir(parents=True)
+            self.write_jsonl(
+                session_file,
+                [
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "你是啥模型"}],
+                        },
+                    },
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-08T00:00:30Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "我先派个子任务看一下。"}],
+                        },
+                    },
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-08T00:02:00Z",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "帮我调研 OpenClaw 2026.4.5 的 breaking changes，然后写个三点总结"}],
+                        },
+                    },
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-08T00:02:06Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "我先查一下，稍后给你总结。"}],
+                        },
+                    },
+                ],
+            )
+            sessions_index = {
+                "local::agent:main:slack:direct:mix": {
+                    "sessionFile": "local/mix.jsonl",
+                    "origin": {"provider": "slack", "surface": "slack"},
+                }
+            }
+            sessions_path = tmp / "sessions.json"
+            sessions_path.write_text(json.dumps(sessions_index, ensure_ascii=False), encoding="utf-8")
+            args = type(
+                "Args",
+                (),
+                {
+                    "sessions_index": str(sessions_path),
+                    "session_dir": str(session_dir),
+                    "replay_log": "",
+                    "task_state": "",
+                    "day": "2026-04-08",
+                    "timezone": "Asia/Shanghai",
+                    "limit": 1,
+                    "output": "",
+                },
+            )()
+            packet = reply_review_packet.build_packet(args)
+            self.assertEqual(packet["case_count"], 1)
+            case = packet["cases"][0]
+            self.assertEqual(case["user_prompt"], "你是啥模型")
+            self.assertEqual(case["analysis"]["current_expected"]["protected_lane"], "control_observer")
+            self.assertIn("direct_policy_missing", case["analysis"]["selection_tags"])
+            self.assertIn("delegation_explanation_risk", case["analysis"]["selection_tags"])
+            self.assertEqual(packet["selection_metrics"]["direct_case_count"], 1)
+            self.assertEqual(packet["selection_metrics"]["protected_lane_case_count"], 1)
+            self.assertEqual(packet["selection_metrics"]["direct_policy_missing_count"], 1)
 
 
 if __name__ == "__main__":

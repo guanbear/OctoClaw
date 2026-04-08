@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from collections import Counter
 from zoneinfo import ZoneInfo
 
 
@@ -38,6 +40,172 @@ def parse_iso(value: str | None) -> datetime | None:
         return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _safe_infer_route(prompt: str) -> dict:
+    try:
+        from octoclaw_route import infer_route  # type: ignore
+    except ModuleNotFoundError:
+        repo_root = Path(__file__).resolve().parents[1]
+        lib_root = repo_root / "lib"
+        for candidate in (str(lib_root), str(repo_root)):
+            if candidate not in sys.path:
+                sys.path.insert(0, candidate)
+        try:
+            from octoclaw_route import infer_route  # type: ignore
+        except ModuleNotFoundError:
+            from lib.octoclaw_route import infer_route  # type: ignore
+
+    try:
+        payload = infer_route(prompt)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _assistant_latency_seconds(user_timestamp: str, assistant_timestamp: str) -> float | None:
+    user_at = parse_iso(user_timestamp)
+    assistant_at = parse_iso(assistant_timestamp)
+    if user_at is None or assistant_at is None:
+        return None
+    delta = (assistant_at - user_at).total_seconds()
+    if delta < 0:
+        return None
+    return round(delta, 3)
+
+
+def _explanation_risk(reply_text: str, expected_protected_lane: str, expected_task_class: str) -> bool:
+    reply = str(reply_text or "")
+    if not reply or not (expected_protected_lane or expected_task_class):
+        return False
+    delegation_markers = (
+        "spawn_single",
+        "octoclaw_dispatch",
+        "子任务",
+        "委派",
+        "delegat",
+        "dispatch",
+    )
+    return any(marker.lower() in reply.lower() for marker in delegation_markers)
+
+
+def _selection_tags(
+    *,
+    protected_lane_misroute: bool,
+    expected_route: str,
+    expected_task_class: str,
+    expected_protected_lane: str,
+    policy_matched: bool,
+    dispatch_called: bool,
+    assistant_latency_seconds: float | None,
+    user_prompt: str,
+    assistant_reply: str,
+) -> list[str]:
+    tags: list[str] = []
+    prompt = str(user_prompt or "").strip()
+    if protected_lane_misroute:
+        tags.append("protected_lane_misroute")
+    if expected_route == "direct":
+        tags.append("direct_path")
+    if expected_protected_lane:
+        tags.append("protected_lane")
+        tags.append(expected_protected_lane)
+    if expected_task_class:
+        tags.append(expected_task_class)
+    if len(prompt) <= 16:
+        tags.append("casual_short")
+    if expected_route == "direct" and not policy_matched:
+        tags.append("direct_policy_missing")
+    if expected_route == "direct" and assistant_latency_seconds is not None and assistant_latency_seconds >= 20:
+        tags.append("direct_slow_reply")
+    if dispatch_called:
+        tags.append("dispatch_called")
+    if _explanation_risk(assistant_reply, expected_protected_lane, expected_task_class):
+        tags.append("delegation_explanation_risk")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for tag in tags:
+        if tag and tag not in seen:
+            seen.add(tag)
+            ordered.append(tag)
+    return ordered
+
+
+def _selection_score(case: dict) -> int:
+    score = 0
+    prompt = str(case.get("user_prompt", "") or "").strip()
+    analysis = case.get("analysis") if isinstance(case.get("analysis"), dict) else {}
+    tags = analysis.get("selection_tags") if isinstance(analysis.get("selection_tags"), list) else []
+    tag_set = {str(tag or "") for tag in tags}
+    if "protected_lane_misroute" in tag_set:
+        score += 500
+    if "delegation_explanation_risk" in tag_set:
+        score += 320
+    if "direct_policy_missing" in tag_set:
+        score += 260
+    if "direct_slow_reply" in tag_set:
+        score += 220
+    if "protected_lane" in tag_set:
+        score += 180
+    if "dispatch_called" in tag_set:
+        score += 120
+    if "casual_short" in tag_set:
+        score += 90
+    if "direct_path" in tag_set:
+        score += 70
+    score += min(len(prompt), 80)
+    return score
+
+
+def select_cases(cases: list[dict], limit: int) -> list[dict]:
+    ordered = sorted(
+        cases,
+        key=lambda item: (
+            _selection_score(item),
+            str(item.get("assistant_timestamp", "") or ""),
+            str(item.get("user_timestamp", "") or ""),
+        ),
+        reverse=True,
+    )
+    return ordered[: max(1, limit)]
+
+
+def summarize_selected_cases(cases: list[dict]) -> dict:
+    metrics: Counter[str] = Counter()
+    metric_keys = [
+        "direct_case_count",
+        "protected_lane_case_count",
+        "protected_lane_misroute_count",
+        "direct_policy_missing_count",
+        "direct_slow_reply_count",
+        "delegation_explanation_risk_count",
+        "session_control_case_count",
+        "control_observer_case_count",
+        "casual_short_case_count",
+    ]
+    for case in cases:
+        analysis = case.get("analysis") if isinstance(case.get("analysis"), dict) else {}
+        tags = analysis.get("selection_tags") if isinstance(analysis.get("selection_tags"), list) else []
+        tag_set = {str(tag or "") for tag in tags}
+        if "direct_path" in tag_set:
+            metrics["direct_case_count"] += 1
+        if "protected_lane" in tag_set:
+            metrics["protected_lane_case_count"] += 1
+        if "protected_lane_misroute" in tag_set:
+            metrics["protected_lane_misroute_count"] += 1
+        if "direct_policy_missing" in tag_set:
+            metrics["direct_policy_missing_count"] += 1
+        if "direct_slow_reply" in tag_set:
+            metrics["direct_slow_reply_count"] += 1
+        if "delegation_explanation_risk" in tag_set:
+            metrics["delegation_explanation_risk_count"] += 1
+        if "session_control" in tag_set:
+            metrics["session_control_case_count"] += 1
+        if "control_observer" in tag_set:
+            metrics["control_observer_case_count"] += 1
+        if "casual_short" in tag_set:
+            metrics["casual_short_case_count"] += 1
+    return {key: int(metrics.get(key, 0)) for key in metric_keys}
 
 
 def message_text(content) -> str:
@@ -267,12 +435,30 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
         protected_lane = str(matched_policy.get("protectedLane") or matched_policy.get("protected_lane") or "") if matched_policy else ""
         policy_route = str(matched_policy.get("route") or "") if matched_policy else ""
         dispatch_route = str(matched_dispatch.get("route") or "") if matched_dispatch else ""
+        current_expected = _safe_infer_route(turn.user_prompt)
+        expected_route = str(current_expected.get("route") or "")
+        expected_task_class = str(current_expected.get("task_class") or "")
+        expected_protected_lane = str(current_expected.get("protected_lane") or "")
+        assistant_latency_seconds = _assistant_latency_seconds(turn.user_timestamp, turn.assistant_timestamp)
+        policy_matched = bool(matched_policy)
+        dispatch_called = bool(matched_dispatch)
         protected_lane_misroute = bool(
             protected_lane and (
-                bool(matched_dispatch)
+                dispatch_called
                 or (policy_route and policy_route != "direct")
                 or (dispatch_route and dispatch_route != "direct")
             )
+        )
+        selection_tags = _selection_tags(
+            protected_lane_misroute=protected_lane_misroute,
+            expected_route=expected_route,
+            expected_task_class=expected_task_class,
+            expected_protected_lane=expected_protected_lane,
+            policy_matched=policy_matched,
+            dispatch_called=dispatch_called,
+            assistant_latency_seconds=assistant_latency_seconds,
+            user_prompt=turn.user_prompt,
+            assistant_reply=turn.assistant_reply,
         )
         results.append(
             {
@@ -295,12 +481,31 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
                     "route_language_packs": matched_policy.get("routeLanguagePacks") if matched_policy else [],
                 },
                 "dispatch": {
-                    "called": bool(matched_dispatch),
+                    "called": dispatch_called,
                     "route": matched_dispatch.get("route") if matched_dispatch else "",
                     "worker_pool": matched_dispatch.get("workerPool") if matched_dispatch else "",
                     "protected_lane": matched_dispatch.get("protectedLane") if matched_dispatch else "",
                 },
                 "protected_lane_misroute": protected_lane_misroute,
+                "analysis": {
+                    "assistant_latency_seconds": assistant_latency_seconds,
+                    "policy_matched": policy_matched,
+                    "current_expected": {
+                        "route": expected_route,
+                        "task_class": expected_task_class,
+                        "protected_lane": expected_protected_lane,
+                        "work_contract_hint": str(current_expected.get("work_contract_hint") or ""),
+                    },
+                    "selection_tags": selection_tags,
+                    "selection_score": _selection_score(
+                        {
+                            "user_prompt": turn.user_prompt,
+                            "assistant_timestamp": turn.assistant_timestamp,
+                            "user_timestamp": turn.user_timestamp,
+                            "analysis": {"selection_tags": selection_tags},
+                        }
+                    ),
+                },
             }
         )
     return results
@@ -319,13 +524,15 @@ def build_packet(args: argparse.Namespace) -> dict:
     )
     replay_events = load_replay_events(Path(args.replay_log)) if args.replay_log else []
     cases = attach_replay(turns, replay_events)
+    selected_cases = select_cases(cases, args.limit)
     packet = {
         "schema_version": "octoclaw.reply_review_packet/v1",
         "day": review_day.strftime("%Y-%m-%d"),
         "timezone": str(tz),
         "sessions_considered": len([key for key, meta in sessions_index.items() if is_slack_session(key, meta)]),
-        "case_count": min(len(cases), max(1, args.limit)),
-        "cases": cases[: max(1, args.limit)],
+        "case_count": len(selected_cases),
+        "selection_metrics": summarize_selected_cases(selected_cases),
+        "cases": selected_cases,
     }
     return packet
 

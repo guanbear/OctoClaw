@@ -235,6 +235,22 @@ def select_turns(turns: list[Turn], limit: int) -> list[Turn]:
     return [turn for turn in ranked if score_turn(turn) > 0 and is_safe_replay_prompt(turn.user_prompt)][:limit]
 
 
+def select_packet_turns(turns: list[Turn], limit: int) -> list[Turn]:
+    selected: list[Turn] = []
+    seen: set[str] = set()
+    for turn in turns:
+        key = re.sub(r"\s+", " ", turn.user_prompt).strip().lower()
+        if not key or key in seen:
+            continue
+        if not is_safe_replay_prompt(turn.user_prompt):
+            continue
+        seen.add(key)
+        selected.append(turn)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def turns_from_packet(path: Path) -> list[Turn]:
     payload = json.loads(path.read_text())
     cases = payload.get("cases") or []
@@ -489,10 +505,11 @@ def main() -> int:
     turns: list[Turn]
     if args.packet:
         turns = turns_from_packet(Path(args.packet))
+        selected = select_packet_turns(turns, args.limit)
     else:
         sessions_index = load_sessions_index(Path(args.sessions_index))
         turns = collect_turns_all(sessions_index=sessions_index, review_day=review_day, tz=tz)
-    selected = select_turns(turns, args.limit)
+        selected = select_turns(turns, args.limit)
 
     workspace = args.workspace or os.environ.get("WORKSPACE") or str(Path.home() / ".openclaw" / "workspace")
     openclaw_home = args.openclaw_home or os.environ.get("OPENCLAW_HOME") or str(Path.home() / ".openclaw")

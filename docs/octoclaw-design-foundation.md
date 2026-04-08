@@ -465,6 +465,19 @@ runner 不是单纯“长期常驻快腿”，而是：
    - 只做歧义裁决
    - 不做默认前置依赖
 
+同时，protected lanes 不应继续以“想到一个坏例子就补一条 regex”的方式演化。
+更稳定的做法是把它们当成一个小而硬的 taxonomy：
+
+- `control_observer`
+- `session_control`
+- 后续如果新增，也必须满足：
+  - 先在设计文档里说明 contract
+  - 先补 golden case
+  - 先进入 replay / nightly diff
+  - 再允许进入运行时
+
+这样新增 protected lane 就不是临时补丁，而是一次受约束的 contract 扩展。
+
 换句话说：
 
 > **误判治理首先是 contract-first / boundary-first 的系统工程，不是先上一个更聪明的小模型。**
@@ -489,6 +502,26 @@ runner 不是单纯“长期常驻快腿”，而是：
 - 允许回灌 `model-health`
 - 不默认打开 `direct_model_override`
 - 不因为这一拍就把主会话模型 silently 改掉
+
+### 7.2.3 nightly 必须覆盖 direct path，而不只看任务失败
+
+如果 nightly 只分析 delegated task failure，就会漏掉大量 casual bad case：
+
+- direct path 慢回复
+- protected lane 被错误解释成委派
+- session-control / control-observer 的错误口径
+- fallback / 漂移造成的用户困惑
+
+因此 nightly 至少要覆盖两层：
+
+- 结构层：replay / failure / protected-lane misroute
+- 语义层：reply review，重点看 direct path、protected lane、session-control 的解释质量
+
+这也意味着 nightly packet 不应只挑“长 prompt / 重任务”，还要显式优先：
+
+- short protected-lane prompts
+- direct path slow replies
+- delegation explanation risk
 
 ### 7.3 substrate-first truth
 

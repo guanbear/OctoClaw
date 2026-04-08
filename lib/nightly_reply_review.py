@@ -12,7 +12,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from octopus_config import WORKSPACE
+try:
+    from octopus_config import WORKSPACE
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.octopus_config import WORKSPACE
 
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -35,10 +38,14 @@ def parse_args() -> argparse.Namespace:
 
 def build_prompt(packet: dict, *, day: str, timezone: str) -> str:
     cases = packet.get("cases") or []
+    selection_metrics = packet.get("selection_metrics") or {}
     case_lines: list[str] = []
     for index, case in enumerate(cases, start=1):
         policy = case.get("policy") or {}
         dispatch = case.get("dispatch") or {}
+        analysis = case.get("analysis") or {}
+        current_expected = analysis.get("current_expected") if isinstance(analysis.get("current_expected"), dict) else {}
+        selection_tags = analysis.get("selection_tags") if isinstance(analysis.get("selection_tags"), list) else []
         case_lines.extend(
             [
                 f"## Case {index}",
@@ -46,9 +53,14 @@ def build_prompt(packet: dict, *, day: str, timezone: str) -> str:
                 f"- user_timestamp: {case.get('user_timestamp')}",
                 f"- assistant_timestamp: {case.get('assistant_timestamp')}",
                 f"- route: {policy.get('route') or '(none)'}",
+                f"- task_class: {current_expected.get('task_class') or '(none)'}",
+                f"- protected_lane: {current_expected.get('protected_lane') or '(none)'}",
                 f"- system_preferred_route: {policy.get('system_preferred_route') or '(none)'}",
                 f"- worker_pool: {policy.get('worker_pool') or dispatch.get('worker_pool') or '(none)'}",
                 f"- dispatch_called: {bool(dispatch.get('called'))}",
+                f"- policy_matched: {bool(analysis.get('policy_matched'))}",
+                f"- assistant_latency_seconds: {analysis.get('assistant_latency_seconds') if analysis.get('assistant_latency_seconds') is not None else '(unknown)'}",
+                f"- selection_tags: {', '.join(str(tag) for tag in selection_tags) if selection_tags else '(none)'}",
                 "",
                 "### User Prompt",
                 case.get("user_prompt") or "(empty)",
@@ -65,6 +77,7 @@ def build_prompt(packet: dict, *, day: str, timezone: str) -> str:
         [
             f"You are reviewing OctoClaw Slack conversations for {day} ({timezone}).",
             "Focus on reply quality, delegation quality, and concrete product/runtime bugs.",
+            "Treat workflow/session meta and session-control requests as workflow-first protected lanes, not generic delegated work.",
             "Do not rewrite the whole system. Be specific, actionable, and concise.",
             "",
             "Return a Markdown report with exactly these sections:",
@@ -80,10 +93,13 @@ def build_prompt(packet: dict, *, day: str, timezone: str) -> str:
             "- Prioritize real defects, user-visible confusion, and delegation mismatches.",
             "- Call out when a reply was too vague, overlong, under-informative, or failed to close the loop.",
             "- Call out when route/worker choice looked wrong or missing.",
+            "- For protected lanes (`control_observer`, `session_control`), call out any invented delegation explanation or policy story that was not grounded in authoritative state.",
+            "- For direct-path cases, call out slow replies, fallback confusion, and missing visibility into model/session state.",
             "- If evidence is insufficient, say so explicitly.",
             "- Use short bullets.",
             "",
             f"Packet summary: sessions_considered={packet.get('sessions_considered', 0)}, case_count={packet.get('case_count', 0)}",
+            f"Selection metrics: {json.dumps(selection_metrics, ensure_ascii=False, sort_keys=True)}",
             "",
             "## Cases",
             "",
