@@ -100,6 +100,8 @@ class RouterEvalTests(unittest.TestCase):
                 {"expected_route": "spawn_single", "recommended_route": "runner", "count": 1},
             ],
         )
+        self.assertEqual(payload["tuning_suggestions"][0]["kind"], "budget_ladder_review")
+        self.assertEqual(payload["tuning_suggestions"][1]["kind"], "route_ladder_review")
 
     def test_router_eval_treats_missing_recommendation_as_unknown_not_drift(self) -> None:
         events = [

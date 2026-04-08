@@ -238,7 +238,7 @@ Python 不再承担：
   - `policy_resolved.protectedLane`
   - `dispatch_called.protectedLane`
   - `protected_lane_misroute`
-- [ ] 在 recommendation 中加入：
+- [x] 在 recommendation 中加入：
   - `agent_scope`
   - `route_class`
   - `candidate_models`

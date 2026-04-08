@@ -522,6 +522,10 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["budget_policy"]["budget_cap"], "low")
         self.assertEqual(payload["budget_policy"]["max_workers"], 1)
         self.assertEqual(payload["prompt_contract"]["merge_contract"], "inspect_report")
+        self.assertEqual(payload["auto_router"]["router_core"]["route_class"], "delegated_runner")
+        self.assertEqual(payload["auto_router"]["router_core"]["agent_scope"], "runner_lane")
+        self.assertEqual(payload["auto_router"]["budget_planner"]["reasoning_mode"], payload["model_policy"]["reasoning_effort"])
+        self.assertIn(payload["model_policy"]["selected_model"], payload["auto_router"]["model_intel"]["candidate_models"])
         self.assertTrue(payload["auto_router"]["budget_planner"]["consistency"]["route_budget_consistent"])
         self.assertTrue(payload["auto_router"]["budget_planner"]["consistency"]["route_matches_latency_target"])
 
@@ -531,6 +535,8 @@ class RuntimePolicyTests(unittest.TestCase):
             force_route="spawn_multi",
         )
         self.assertEqual(payload["route_decision"]["route"], "spawn_multi")
+        self.assertEqual(payload["auto_router"]["router_core"]["route_class"], "delegated_multi")
+        self.assertEqual(payload["auto_router"]["router_core"]["agent_scope"], "team_lane")
         consistency = payload["auto_router"]["budget_planner"]["consistency"]
         self.assertTrue(consistency["route_budget_consistent"])
         self.assertTrue(consistency["route_matches_worker_budget"])

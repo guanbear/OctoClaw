@@ -27,11 +27,15 @@ class AutoRouterTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "octoclaw.auto_router.recommendation/v1")
         self.assertTrue(payload["internal_first"])
         self.assertEqual(payload["router_core"]["route"], decision["route_decision"]["route"])
+        self.assertIn(payload["router_core"]["route_class"], {"main_direct", "delegated_runner", "delegated_single", "delegated_multi", "control_observer", "session_control"})
+        self.assertIn(payload["router_core"]["agent_scope"], {"main_agent", "runner_lane", "subagent_lane", "team_lane"})
         self.assertEqual(payload["router_core"]["work_contract"], decision["route_decision"]["work_contract"])
         self.assertEqual(payload["budget_planner"]["target_model"], decision["model_policy"]["selected_model"])
+        self.assertEqual(payload["budget_planner"]["reasoning_mode"], decision["model_policy"]["reasoning_effort"])
         self.assertEqual(payload["adapter"]["policy_phase"], "guided")
         self.assertTrue(payload["signal"]["request"]["task"])
         self.assertIn(payload["signal"]["contract"]["risk_level"], {"low", "medium", "high"})
+        self.assertIn(decision["model_policy"]["selected_model"], payload["model_intel"]["candidate_models"])
         self.assertEqual(
             payload["model_intel"]["facts_plane"]["source_status_file"],
             payload["model_intel"]["source_files"]["source_status"],

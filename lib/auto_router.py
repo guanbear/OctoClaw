@@ -49,6 +49,34 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def infer_route_class(*, route: str, protected_lane: str, task_class: str) -> str:
+    if protected_lane == "control_observer" or task_class == "control_observer":
+        return "control_observer"
+    if protected_lane == "session_control" or task_class == "session_control":
+        return "session_control"
+    if route == "direct":
+        return "main_direct"
+    if route == "runner":
+        return "delegated_runner"
+    if route == "spawn_multi":
+        return "delegated_multi"
+    if route == "spawn_single":
+        return "delegated_single"
+    return "unknown"
+
+
+def infer_agent_scope(executor_type: str) -> str:
+    if executor_type == "main":
+        return "main_agent"
+    if executor_type == "runner":
+        return "runner_lane"
+    if executor_type == "team":
+        return "team_lane"
+    if executor_type == "subagent":
+        return "subagent_lane"
+    return "unknown"
+
+
 def infer_policy_phase(runtime_switches: dict[str, Any] | None) -> str:
     switches = dict(runtime_switches or {})
     if bool(switches.get("route_hint_required_enabled")) or bool(switches.get("direct_model_override_enabled")):
@@ -114,10 +142,19 @@ def build_router_core_payload(
     route_decision: dict[str, Any],
     review_required: bool,
 ) -> dict[str, Any]:
+    executor_type = _text(route_decision.get("executor_type"))
+    route = _text(route_decision.get("route"))
     return {
         "schema_version": ROUTER_CORE_SCHEMA_VERSION,
-        "route": _text(route_decision.get("route")),
+        "route": route,
+        "route_class": infer_route_class(
+            route=route,
+            protected_lane=_text(route_decision.get("protected_lane")),
+            task_class=_text(route_decision.get("task_class")),
+        ),
+        "agent_scope": infer_agent_scope(executor_type),
         "work_contract": _text(route_decision.get("work_contract")),
+        "executor_type": executor_type,
         "confidence": route_meta.get("confidence", 0.0),
         "reason_codes": list(route_decision.get("reason_codes") or route_meta.get("reason_codes") or []),
         "required_evidence": ["validation"] if review_required else ["replay"],
@@ -152,6 +189,7 @@ def build_budget_planner_payload(
         "retry_budget": retry_budget,
         "latency_target": latency_target,
         "max_workers": max_workers,
+        "reasoning_mode": _text(model_policy.get("reasoning_effort")),
         "upgrade_allowed": bool(budget_policy.get("upgrade_allowed")),
         "cost_ceiling": output_budget,
         "consistency": consistency,
@@ -207,9 +245,21 @@ def build_model_intel_payload(*, model_policy: dict[str, Any]) -> dict[str, Any]
     selected_model = _text(model_policy.get("selected_model"))
     provider = selected_model.split("/")[0] if "/" in selected_model else ""
     facts_plane = model_policy.get("facts_plane") if isinstance(model_policy.get("facts_plane"), dict) else {}
+    fallbacks = [
+        _text(item)
+        for item in list(model_policy.get("fallbacks") or [])
+        if _text(item)
+    ]
+    candidate_models = []
+    if selected_model:
+        candidate_models.append(selected_model)
+    for fallback in fallbacks:
+        if fallback not in candidate_models:
+            candidate_models.append(fallback)
     return {
         "schema_version": MODEL_INTEL_SCHEMA_VERSION,
         "selected_model": selected_model,
+        "candidate_models": candidate_models,
         "provider": provider,
         "model_band": _text(model_policy.get("model_band")),
         "selector_band": _text(model_policy.get("selector_band")),

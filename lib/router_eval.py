@@ -123,6 +123,48 @@ def build_tuning_inputs(cases: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_tuning_suggestions(tuning_inputs: dict[str, Any]) -> list[dict[str, Any]]:
+    suggestions: list[dict[str, Any]] = []
+    for route, count in sorted((tuning_inputs.get("missing_recommendation_by_expected_route") or {}).items()):
+        if int(count or 0) <= 0:
+            continue
+        suggestions.append(
+            {
+                "kind": "missing_recommendation_coverage",
+                "expected_route": route,
+                "count": int(count),
+                "action": f"Expand recommendation coverage for `{route}` cases before adjusting thresholds.",
+            }
+        )
+    for route, count in sorted((tuning_inputs.get("inconsistent_cases_by_expected_route") or {}).items()):
+        if int(count or 0) <= 0:
+            continue
+        suggestions.append(
+            {
+                "kind": "budget_ladder_review",
+                "expected_route": route,
+                "count": int(count),
+                "action": f"Review budget ladder and latency targets for `{route}`.",
+            }
+        )
+    for item in tuning_inputs.get("route_transition_counts", []) or []:
+        expected = _normalize_route(item.get("expected_route"))
+        recommended = _normalize_route(item.get("recommended_route"))
+        count = int(item.get("count") or 0)
+        if not expected or expected == recommended or recommended in {"", "missing"} or count <= 0:
+            continue
+        suggestions.append(
+            {
+                "kind": "route_ladder_review",
+                "expected_route": expected,
+                "recommended_route": recommended,
+                "count": count,
+                "action": f"Review why `{expected}` cases are being recommended as `{recommended}`.",
+            }
+        )
+    return suggestions[:12]
+
+
 def evaluate_router_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     recommendation_present = 0
     recommendation_matches = 0
@@ -265,6 +307,7 @@ def build_payload(
         "summary": evaluation["summary"],
         "drift_cases": evaluation["drift_cases"],
         "tuning_inputs": evaluation["tuning_inputs"],
+        "tuning_suggestions": build_tuning_suggestions(evaluation["tuning_inputs"]),
         "cases": cases,
     }
 

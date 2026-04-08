@@ -49,6 +49,24 @@ function roundTo(value, digits = 3) {
   return Math.round(Number(value || 0) * factor) / factor;
 }
 
+function inferRouteClass(route, protectedLane, taskClass) {
+  if (protectedLane === "control_observer" || taskClass === "control_observer") return "control_observer";
+  if (protectedLane === "session_control" || taskClass === "session_control") return "session_control";
+  if (route === "direct") return "main_direct";
+  if (route === "runner") return "delegated_runner";
+  if (route === "spawn_multi") return "delegated_multi";
+  if (route === "spawn_single") return "delegated_single";
+  return "unknown";
+}
+
+function inferAgentScope(executorType) {
+  if (executorType === "main") return "main_agent";
+  if (executorType === "runner") return "runner_lane";
+  if (executorType === "team") return "team_lane";
+  if (executorType === "subagent") return "subagent_lane";
+  return "unknown";
+}
+
 function utcNow() {
   return new Date().toISOString();
 }
@@ -819,6 +837,14 @@ function buildAutoRouterPayload(decision) {
     retry_budget_valid: Boolean(retryOk),
     route_budget_consistent: Boolean(outputOk && latencyOk && workersOk && retryOk),
   };
+  const candidateModels = [];
+  if (selectedModel) candidateModels.push(selectedModel);
+  for (const fallback of fallbacks) {
+    const value = normalizedText(fallback);
+    if (value && !candidateModels.includes(value)) {
+      candidateModels.push(value);
+    }
+  }
   return {
     schema_version: AUTO_ROUTER_RECOMMENDATION_SCHEMA_VERSION,
     internal_first: true,
@@ -826,7 +852,10 @@ function buildAutoRouterPayload(decision) {
     router_core: {
       schema_version: AUTO_ROUTER_CORE_SCHEMA_VERSION,
       route: routeName,
+      route_class: inferRouteClass(routeName, normalizedText(routeDecision.protected_lane), normalizedText(routeDecision.task_class)),
+      agent_scope: inferAgentScope(normalizedText(routeDecision.executor_type)),
       work_contract: normalizedText(routeDecision.work_contract),
+      executor_type: normalizedText(routeDecision.executor_type),
       confidence: Number(routeDecision.confidence || 0),
       reason_codes: Array.isArray(routeDecision.reason_codes) ? [...routeDecision.reason_codes] : [],
       required_evidence: decision?.review_policy?.required ? ["validation"] : ["replay"],
@@ -841,6 +870,7 @@ function buildAutoRouterPayload(decision) {
       retry_budget: retryBudget,
       latency_target: latencyTarget,
       max_workers: maxWorkers,
+      reasoning_mode: normalizedText(modelPolicy.reasoning_effort),
       upgrade_allowed: Boolean(budget.upgrade_allowed),
       cost_ceiling: outputBudget,
       consistency,
@@ -848,6 +878,7 @@ function buildAutoRouterPayload(decision) {
     model_intel: {
       schema_version: AUTO_ROUTER_MODEL_INTEL_SCHEMA_VERSION,
       selected_model: selectedModel,
+      candidate_models: candidateModels,
       provider: selectedModel.includes("/") ? selectedModel.split("/")[0] : "",
       model_band: normalizedText(modelPolicy.model_band),
       selector_band: normalizedText(modelPolicy.selector_band),
