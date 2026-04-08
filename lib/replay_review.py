@@ -174,6 +174,12 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             budget_event.get("arbitration_conflict_type"),
         )
         execution_contract = _first_non_empty(route_outcome_payload.get("execution_contract"), budget_event.get("executionContract"), budget_event.get("execution_contract"))
+        resolved_execution_contract = _first_non_empty(
+            route_outcome_payload.get("resolved_execution_contract"),
+            budget_event.get("resolvedExecutionContract"),
+            budget_event.get("resolved_execution_contract"),
+            route,
+        )
         agent_scope = _first_non_empty(route_outcome_payload.get("agent_scope"), budget_event.get("agentScope"), budget_event.get("agent_scope"))
         route_class = _first_non_empty(route_outcome_payload.get("route_class"), budget_event.get("routeClass"), budget_event.get("route_class"))
         recommended_model = _first_non_empty(route_outcome_payload.get("recommended_model"), budget_event.get("recommendedModel"), budget_event.get("recommended_model"))
@@ -234,6 +240,7 @@ def derive_review_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "arbitration_conflict_type": arbitration_conflict_type,
             "route_budget_consistent": route_budget_consistent,
             "execution_contract": execution_contract,
+            "resolved_execution_contract": resolved_execution_contract,
             "agent_scope": agent_scope,
             "route_class": route_class,
             "recommended_model": recommended_model,

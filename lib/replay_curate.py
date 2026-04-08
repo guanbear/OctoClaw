@@ -55,6 +55,7 @@ def curate_cases(
             },
             "outcome": {
                 "execution_contract": str(record.get("execution_contract") or ""),
+                "resolved_execution_contract": str(record.get("resolved_execution_contract") or ""),
                 "agent_scope": str(record.get("agent_scope") or ""),
                 "route_class": str(record.get("route_class") or ""),
                 "recommended_model": str(record.get("recommended_model") or ""),
@@ -111,6 +112,7 @@ def curate_cases(
                 "arbitration_conflict_type": str(record.get("arbitration_conflict_type") or ""),
                 "route_budget_consistent": record.get("route_budget_consistent"),
                 "execution_contract": str(record.get("execution_contract") or ""),
+                "resolved_execution_contract": str(record.get("resolved_execution_contract") or ""),
                 "agent_scope": str(record.get("agent_scope") or ""),
                 "route_class": str(record.get("route_class") or ""),
                 "recommended_model": str(record.get("recommended_model") or ""),

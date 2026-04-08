@@ -150,9 +150,11 @@ class ReplayCurateTests(unittest.TestCase):
         self.assertTrue(case["recommendation"]["route_budget_consistent"])
         self.assertTrue(case["review"]["route_budget_consistent"])
         self.assertEqual(case["outcome"]["execution_contract"], "runner")
+        self.assertEqual(case["outcome"]["resolved_execution_contract"], "runner")
         self.assertEqual(case["outcome"]["route_class"], "delegated_runner")
         self.assertEqual(case["outcome"]["recommended_model"], "model/runner")
         self.assertEqual(case["review"]["resolved_model"], "model/runner")
+        self.assertEqual(case["review"]["resolved_execution_contract"], "runner")
         self.assertEqual(case["review"]["route_source"], "rule")
 
 

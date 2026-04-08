@@ -40,6 +40,15 @@ class RouterEvalTests(unittest.TestCase):
                 "routeRecommendation": {
                     "recommended_route": "runner",
                 },
+                "routeOutcome": {
+                    "execution_contract": "runner",
+                    "resolved_execution_contract": "runner",
+                    "recommended_model": "model/runner",
+                    "resolved_model": "model/runner",
+                    "queue_pressure_band": "none",
+                    "quota_pressure_band": "none",
+                    "fallback_taken": False,
+                },
                 "autoRouter": {
                     "budgetPlanner": {
                         "consistency": {"route_budget_consistent": True}
@@ -64,6 +73,15 @@ class RouterEvalTests(unittest.TestCase):
                 "routeRecommendation": {
                     "recommended_route": "runner",
                 },
+                "routeOutcome": {
+                    "execution_contract": "runner",
+                    "resolved_execution_contract": "spawn_single",
+                    "recommended_model": "model/runner",
+                    "resolved_model": "model/fallback",
+                    "queue_pressure_band": "high",
+                    "quota_pressure_band": "high",
+                    "fallback_taken": True,
+                },
                 "autoRouter": {
                     "budgetPlanner": {
                         "consistency": {"route_budget_consistent": False}
@@ -85,9 +103,12 @@ class RouterEvalTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["route_drift_breakdown"]["match"], 1)
         self.assertEqual(payload["summary"]["route_drift_breakdown"]["route_mismatch"], 1)
         self.assertEqual(payload["summary"]["budget_drift_breakdown"]["budget_mismatch"], 1)
+        self.assertEqual(payload["summary"]["resolution_drift_breakdown"]["execution_contract_mismatch"], 1)
         self.assertEqual(payload["summary"]["overall_drift_breakdown"]["route_and_budget_mismatch"], 1)
+        self.assertEqual(payload["summary"]["fallback_taken_count"], 1)
         self.assertEqual(payload["drift_cases"][0]["expected_route"], "spawn_single")
         self.assertEqual(payload["drift_cases"][0]["recommended_route"], "runner")
+        self.assertEqual(payload["drift_cases"][0]["resolution_drift_class"], "execution_contract_mismatch")
         self.assertEqual(payload["drift_cases"][0]["overall_drift_class"], "route_and_budget_mismatch")
         self.assertEqual(
             payload["drift_cases"][0]["calibration_evidence"]["schema_version"],
@@ -100,8 +121,19 @@ class RouterEvalTests(unittest.TestCase):
                 {"expected_route": "spawn_single", "recommended_route": "runner", "count": 1},
             ],
         )
+        self.assertEqual(
+            payload["tuning_inputs"]["route_resolution_transitions"],
+            [
+                {"expected_route": "runner", "resolved_execution_contract": "runner", "count": 1},
+                {"expected_route": "spawn_single", "resolved_execution_contract": "spawn_single", "count": 1},
+            ],
+        )
+        kinds = [item["kind"] for item in payload["tuning_suggestions"]]
         self.assertEqual(payload["tuning_suggestions"][0]["kind"], "budget_ladder_review")
-        self.assertEqual(payload["tuning_suggestions"][1]["kind"], "route_ladder_review")
+        self.assertIn("route_ladder_review", kinds)
+        self.assertIn("model_resolution_review", kinds)
+        self.assertIn("quota_pressure_review", kinds)
+        self.assertIn("queue_pressure_review", kinds)
 
     def test_router_eval_treats_missing_recommendation_as_unknown_not_drift(self) -> None:
         events = [
@@ -132,6 +164,7 @@ class RouterEvalTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["route_drift_breakdown"]["missing_recommendation"], 1)
         self.assertEqual(payload["summary"]["overall_drift_breakdown"]["missing_recommendation"], 1)
         self.assertEqual(payload["summary"]["calibration_ready_cases"], 0)
+        self.assertEqual(payload["summary"]["resolution_drift_breakdown"]["match"], 1)
 
 
 if __name__ == "__main__":

@@ -244,6 +244,7 @@ Model-Intel Facts Plane
    - 对每个 curated case 统一记录：
      - route drift class
      - budget drift class
+     - resolution drift class
      - overall drift class
      - budget cap / latency target / worker budget
 6. **tuning inputs**
@@ -251,6 +252,7 @@ Model-Intel Facts Plane
    - 还要产后续调：
      - route ladder
      - budget threshold
+     - runtime resolution clamp
      - source weighting
      的输入视图
 
@@ -320,6 +322,12 @@ Model-Intel Facts Plane
   - source adapter compatibility tests 覆盖 parser / last-good fallback / schema drift
   - validation summary 输出 `route correctness / budget correctness / delivery correctness / coverage`
   - rollout recommendation 在 promotion gate 中显式识别 `route outcome` coverage
+  - router eval 显式区分 `route drift / budget drift / resolution drift`
+  - tuning suggestions 可区分：
+    - route ladder review
+    - budget ladder review
+    - resolution clamp review
+    - queue / quota pressure review
 
 ### RM4：Extractable readiness baseline
 

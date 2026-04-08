@@ -152,6 +152,7 @@ class ReplayReviewTests(unittest.TestCase):
         self.assertEqual(record["arbitration_conflict_type"], "repo_activity_lookup")
         self.assertTrue(record["route_budget_consistent"])
         self.assertEqual(record["execution_contract"], "spawn_single")
+        self.assertEqual(record["resolved_execution_contract"], "spawn_single")
         self.assertEqual(record["route_class"], "delegated_single")
         self.assertEqual(record["recommended_model"], "model/research")
         self.assertEqual(record["resolved_model"], "model/research")
