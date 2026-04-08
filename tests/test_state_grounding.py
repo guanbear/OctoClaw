@@ -78,6 +78,42 @@ class StateGroundingTests(unittest.TestCase):
         self.assertEqual(payload["packet_type"], "session_model")
         self.assertEqual(payload["packet"]["current_model"], "zhipu/GLM-5.1")
 
+    @patch("lib.state_grounding.observe_runtime_read_model")
+    def test_build_state_grounding_prefers_current_turn_task_id(self, mock_read_model) -> None:
+        mock_read_model.return_value = {
+            "tasks": [
+                {
+                    "id": "research-old",
+                    "status": "running",
+                    "projection_status": "running",
+                    "read_model_status": "running",
+                    "route": "spawn_single",
+                    "worker_pool": "octoclaw-research",
+                    "latest_event_at": "2026-04-08T10:05:00+08:00",
+                },
+                {
+                    "id": "research-current",
+                    "status": "done",
+                    "projection_status": "done",
+                    "read_model_status": "done",
+                    "route": "spawn_single",
+                    "worker_pool": "octoclaw-research",
+                    "latest_event_at": "2026-04-08T10:00:00+08:00",
+                },
+            ]
+        }
+
+        payload = state_grounding.build_state_grounding(
+            "刚才那个任务还在 queued 吗",
+            protected_lane="control_observer",
+            scope="task_status_or_provenance",
+            preferred_task_id="research-current",
+        )
+
+        self.assertTrue(payload["required"])
+        self.assertTrue(payload["found"])
+        self.assertEqual(payload["packet"]["task_id"], "research-current")
+
 
 if __name__ == "__main__":
     unittest.main()

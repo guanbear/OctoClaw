@@ -719,6 +719,7 @@ P4/P5 进入当前阶段后，OctoClaw 不再适合继续把 `patrol` 或主 age
 - 任务 `running / done / blocked / failed / handoff_ready` 的展示与解释，要优先相信 native/projection/event 合成后的 read-model
 - 主 agent 在回答 “queued 了吗 / 跑了没 / 完成没 / 谁做的” 这类问题时，必须 grounding 到该 read-model，而不是沿用历史话术
 - 这类 protected-lane 问题的最佳实现不是“提醒 agent 自己先查”，而是由 runtime 在 `before_prompt_build` 里自动预取最小 state grounding packet，再注入 prompt
+- 若同一 turn 刚成功触发 delegated dispatch/spawn，runtime 应把该 `task_id` 写入当前 turn state，并在下一次 protected-lane grounding 中优先绑定这条 freshly-dispatched task，而不是退回“最近任务”猜测
 
 非目标：
 

@@ -168,11 +168,12 @@ async function readReportExcerpt(reportPath, cwd) {
   }
 }
 
-async function loadStateGrounding(decision, prompt, ctx, logger) {
+async function loadStateGrounding(decision, prompt, ctx, logger, policyState = null) {
   const config = decision?.hook_interface?.before_prompt_build?.state_grounding || {};
   if (!config?.required) {
     return { required: false, found: false, reason: "disabled" };
   }
+  const preferredTaskId = String(policyState?.currentTaskId || "").trim();
   try {
     return await runJsonScript(
       "state_grounding.py",
@@ -185,6 +186,8 @@ async function loadStateGrounding(decision, prompt, ctx, logger) {
         String(config.scope || ""),
         "--workspace",
         resolveWorkspaceRoot(),
+        "--preferred-task-id",
+        preferredTaskId,
       ],
       ctx?.cwd || process.cwd(),
     );
@@ -477,6 +480,11 @@ function compactPersistedPolicyState(value) {
     preDispatchAckSent: Boolean(value.preDispatchAckSent),
     preDispatchAckText: String(value.preDispatchAckText || "").trim(),
     preDispatchAckMode: String(value.preDispatchAckMode || "").trim(),
+    currentTaskId: String(value.currentTaskId || "").trim(),
+    currentTaskRoute: String(value.currentTaskRoute || "").trim(),
+    currentTaskStatus: String(value.currentTaskStatus || "").trim(),
+    currentTaskReportPath: String(value.currentTaskReportPath || "").trim(),
+    currentTaskUpdatedAt: Number(value.currentTaskUpdatedAt || 0),
     decision: compactPersistedDecision(value.decision),
   };
 }
@@ -1102,6 +1110,11 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       blockedTools: [],
       preDispatchAckSent: false,
       preDispatchAckText: "",
+      currentTaskId: String(existing?.currentTaskId || "").trim(),
+      currentTaskRoute: String(existing?.currentTaskRoute || "").trim(),
+      currentTaskStatus: String(existing?.currentTaskStatus || "").trim(),
+      currentTaskReportPath: String(existing?.currentTaskReportPath || "").trim(),
+      currentTaskUpdatedAt: Number(existing?.currentTaskUpdatedAt || 0),
     };
     setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
@@ -1355,7 +1368,7 @@ const plugin = {
       prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
     }
     prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
-    const grounding = await loadStateGrounding(decision, prompt, ctx, pi.logger);
+    const grounding = await loadStateGrounding(decision, prompt, ctx, pi.logger, resolved?.state || null);
     const groundingContext = formatStateGroundingContext(grounding);
     updatePolicyState(resolved?.stateKey, (current) => ({
       ...current,
@@ -1814,6 +1827,16 @@ const plugin = {
           pi.logger,
           authoritativeDecision,
         );
+        updatePolicyState(stateKey, (current) => ({
+          ...current,
+          delegated: true,
+          delegationTool: "octoclaw_dispatch",
+          currentTaskId: String(payload?.job?.id || payload?.task_id || ""),
+          currentTaskRoute: String(payload?.route || authoritativeDecision?.route_decision?.route || ""),
+          currentTaskStatus: String(payload?.status || (payload?.executed ? "executed" : "planned")),
+          currentTaskReportPath: String(payload?.handoff?.report_path || payload?.report_path || ""),
+          currentTaskUpdatedAt: Date.now(),
+        }));
         return toolResponse(
           summary,
           compactDispatchDetails(payload),
@@ -1871,6 +1894,16 @@ const plugin = {
           `OctoClaw spawn registered: ${payload.worker_pool || payload.route} / ${payload.model}`,
           ctx?.cwd || process.cwd(),
         );
+        updatePolicyState(existingStateKey, (current) => ({
+          ...current,
+          delegated: true,
+          delegationTool: "octoclaw_spawn",
+          currentTaskId: String(payload?.job?.id || payload?.task_id || ""),
+          currentTaskRoute: String(payload?.route || ""),
+          currentTaskStatus: String(payload?.status || (payload?.executed ? "executed" : "planned")),
+          currentTaskReportPath: String(payload?.handoff?.report_path || payload?.report_path || ""),
+          currentTaskUpdatedAt: Date.now(),
+        }));
         return toolResponse(
           summary,
           compactDispatchDetails(payload),

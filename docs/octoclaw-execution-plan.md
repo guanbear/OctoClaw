@@ -629,6 +629,7 @@ P5 不应该顺手混进这些题：
 - `result_ready` / `handoff_ready` 事件能直接触发 anchor/notifier 更新，而不是只能等 patrol 补偿
 - 历史 bad case 能通过 task-events + read-model 复盘出真实生命周期
 - protected-lane 的状态/归因类问答会由 runtime 自动注入 state grounding packet，而不是继续依赖主 agent 自己记得去查
+- delegated dispatch/spawn 会把 freshly-created `task_id` 写入 runtime state，使后续 protected-lane grounding 优先绑定本轮 task，而不是误读旧的 recent task
 
 ### 当前结论
 

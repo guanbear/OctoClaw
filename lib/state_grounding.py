@@ -57,12 +57,17 @@ def _task_sort_key(task: dict[str, Any]) -> tuple[int, float]:
     return (active_rank, 0.0)
 
 
-def _select_task(tasks: list[dict[str, Any]], prompt: str) -> dict[str, Any] | None:
+def _select_task(tasks: list[dict[str, Any]], prompt: str, preferred_task_id: str = "") -> dict[str, Any] | None:
     explicit = TASK_ID_RE.findall(prompt or "")
     if explicit:
         wanted = explicit[-1].lower()
         for task in tasks:
             if _text(task.get("id")).lower() == wanted:
+                return task
+    preferred = _text(preferred_task_id).lower()
+    if preferred:
+        for task in tasks:
+            if _text(task.get("id")).lower() == preferred:
                 return task
     ranked = sorted(tasks, key=_task_sort_key, reverse=True)
     return ranked[0] if ranked else None
@@ -120,7 +125,14 @@ def _session_model_context() -> dict[str, Any]:
     return {"packet_type": "session_model", "packet": packet, "prompt_context": "\n".join(lines)}
 
 
-def build_state_grounding(prompt: str, *, protected_lane: str = "", scope: str = "", workspace: str = "") -> dict[str, Any]:
+def build_state_grounding(
+    prompt: str,
+    *,
+    protected_lane: str = "",
+    scope: str = "",
+    workspace: str = "",
+    preferred_task_id: str = "",
+) -> dict[str, Any]:
     if _text(protected_lane) != "control_observer":
         return {"required": False, "found": False, "reason": "not_protected_lane"}
     prompt_text = _text(prompt)
@@ -134,7 +146,7 @@ def build_state_grounding(prompt: str, *, protected_lane: str = "", scope: str =
         return {"required": True, "found": False, "scope": scope or "task_status_or_provenance", "reason": "no_status_or_provenance_intent"}
     payload = observe_runtime_read_model(workspace=workspace) if workspace else observe_runtime_read_model()
     tasks = [dict(task) for task in (payload.get("tasks", []) if isinstance(payload, dict) else []) if isinstance(task, dict)]
-    task = _select_task(tasks, prompt_text)
+    task = _select_task(tasks, prompt_text, preferred_task_id=preferred_task_id)
     if not task:
         return {"required": True, "found": False, "scope": scope or "task_status_or_provenance", "reason": "task_not_found"}
     return {
@@ -166,12 +178,14 @@ def main() -> None:
     parser.add_argument("--protected-lane", default="")
     parser.add_argument("--scope", default="")
     parser.add_argument("--workspace", default="")
+    parser.add_argument("--preferred-task-id", default="")
     args = parser.parse_args()
     payload = build_state_grounding(
         args.prompt,
         protected_lane=args.protected_lane,
         scope=args.scope,
         workspace=args.workspace,
+        preferred_task_id=args.preferred_task_id,
     )
     print(json.dumps(payload, ensure_ascii=False))
 
