@@ -430,7 +430,6 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   );
   const workflowMetaCandidate = workflowMetaHits > 0;
   const sessionControlCandidate = Boolean(sessionControlHits > 0);
-  const observerControlCandidate = Boolean(explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate);
   const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate && !sessionControlCandidate);
 
   const repoActivityLookup = Boolean(
