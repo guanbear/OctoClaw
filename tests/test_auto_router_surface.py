@@ -54,6 +54,18 @@ class AutoRouterSurfaceTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["main_model"], "openai/gpt-5.4")
         self.assertIn("catalog", payload["files"])
 
+    def test_surface_layout_command_returns_package_layout_manifest(self) -> None:
+        result = subprocess.run(
+            ["node", str(SURFACE_SCRIPT), "layout"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["schema_version"], "octoclaw.auto_router.package_layout/v1")
+        self.assertEqual(payload["package_name"], "octoclaw-auto-router")
+
 
 if __name__ == "__main__":
     unittest.main()

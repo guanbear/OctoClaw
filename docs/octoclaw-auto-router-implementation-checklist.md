@@ -559,6 +559,7 @@ Python 不再承担：
 6. **PR-6：tiny judge adapter（可选）**
 7. **PR-7：offline calibration / learned-router prep**
 8. **PR-8：extractable readiness baseline**
+9. **PR-9：extractable packaging prep**
 
 推荐不要打包成一个大 PR。
 
@@ -592,6 +593,9 @@ Python 不再承担：
 - `tests/fixtures/route-outcome/`
 - `docs/octoclaw-auto-router-boundary-map.md`
 - `lib/auto-router-boundary.mjs`
+- `docs/octoclaw-auto-router-package-layout.md`
+- `lib/auto-router-package-layout.mjs`
+- `lib/auto-router-surface.mjs`
 
 ---
 

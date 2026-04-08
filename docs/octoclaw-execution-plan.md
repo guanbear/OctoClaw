@@ -696,6 +696,8 @@ router / model-intel 深化的 focused design 见：
    - public surface shortlist
    - machine-readable boundary manifest
    - internal-only runtime coupling 清单
+   - package layout baseline
+   - unified public surface shell
 
 ---
 

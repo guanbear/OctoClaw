@@ -309,6 +309,8 @@ Model-Intel Facts Plane
 - minimal package boundary map
 - public surface shortlist
 - machine-readable boundary manifest
+- package layout baseline
+- unified public surface shell
 - 明确“什么时候可以讨论拆独立 router package”
 
 ---

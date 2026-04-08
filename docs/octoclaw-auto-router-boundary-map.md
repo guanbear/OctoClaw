@@ -150,12 +150,17 @@
 2. 先冻结 facts-plane source/status shape
 3. 先抽统一 public surface 壳
    - `manifest`
+   - `layout`
    - `facts`
    - `recommend`
    - `eval`
-4. 再抽 source adapter 和 router eval
-5. runtime adapter 继续留在 OctoClaw
-6. 只有当 policy adapter / lane consumption 再瘦一轮之后，才讨论独立服务或 package
+4. 再补 package layout baseline
+   - ownership groups
+   - public entry commands
+   - runtime exclusions
+5. 再抽 source adapter 和 router eval
+6. runtime adapter 继续留在 OctoClaw
+7. 只有当 policy adapter / lane consumption 再瘦一轮之后，才讨论独立服务或 package
 
 ---
 
