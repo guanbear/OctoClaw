@@ -81,10 +81,12 @@ class ReplayAutomationTests(unittest.TestCase):
             self.assertEqual(manifest["schema_version"], "octoclaw.feedback_manifest/v1")
             self.assertEqual(manifest["validation_status"], "pending_validation")
             self.assertEqual(manifest["promotion_eligibility"], "operator-review-only")
-            self.assertEqual([record["phase"] for record in manifest["phase_records"]], ["observe", "summarize", "review", "curate"])
+            self.assertEqual([record["phase"] for record in manifest["phase_records"]], ["observe", "summarize", "review", "curate", "calibrate"])
             self.assertTrue((manifest_path.parent / "summary.json").exists())
             self.assertTrue((manifest_path.parent / "review-blocked.json").exists())
             self.assertTrue((manifest_path.parent / "curated-blocked.json").exists())
+            self.assertTrue((manifest_path.parent / "router-eval.json").exists())
+            self.assertTrue((manifest_path.parent / "router-tuning-report.md").exists())
 
     def test_run_skips_cleanly_when_enabled_but_replay_log_missing(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-replay-automation-") as tmpdir:
@@ -151,6 +153,33 @@ class ReplayAutomationTests(unittest.TestCase):
             packet = json.loads((manifest_path.parent / "llm-review-packet.json").read_text(encoding="utf-8"))
             self.assertEqual(packet["schema_version"], "octoclaw.replay_automation.llm_review_packet/v1")
             self.assertLessEqual(len(packet["cases"]), 3)
+
+    def test_run_writes_router_eval_and_tuning_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-automation-") as tmpdir:
+            config_path = Path(tmpdir) / "octopus-config.json"
+            out_dir = Path(tmpdir) / "nightly"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "replay_automation": {
+                            "enabled": True,
+                            "output_dir": str(out_dir),
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            output = self.run_script("run", "--config", str(config_path), "--events", str(FIXTURES), "--format", "json")
+            payload = json.loads(output)
+            manifest_path = Path(payload["manifest_path"])
+            router_eval = json.loads((manifest_path.parent / "router-eval.json").read_text(encoding="utf-8"))
+            tuning_report = (manifest_path.parent / "router-tuning-report.md").read_text(encoding="utf-8")
+            self.assertEqual(router_eval["schema_version"], "octoclaw.router_eval/v1")
+            self.assertIn("tuning_suggestions", router_eval)
+            self.assertIn("Router Calibration Report", tuning_report)
+            self.assertIn("router_eval_json", payload["generated"])
 
     def test_run_writes_model_health_backfill_result(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-replay-automation-") as tmpdir:

@@ -17,6 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
 from model_health_backfill import run_backfill as run_model_health_backfill
 from model_health_quota_backfill import run_quota_backfill as run_model_health_quota_backfill
 from octopus_config import CONFIG_FILE, DEFAULT_CONFIG, deep_merge, load_json, load_octopus_config, save_json
+from router_eval import build_payload as build_router_eval_payload, render_text as render_router_eval_text
 from replay_curate import curate_cases
 from replay_review import build_review_payload
 from replay_summary import DEFAULT_REPLAY_LOG, infer_runtime_policy_phase, load_events, render_text, summarize_events
@@ -210,6 +211,43 @@ def render_llm_review_report(packet: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_router_tuning_report(payload: dict[str, Any]) -> str:
+    summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+    tuning_suggestions = payload.get("tuning_suggestions", []) or []
+    tuning_inputs = payload.get("tuning_inputs", {}) if isinstance(payload.get("tuning_inputs"), dict) else {}
+    lines = [
+        "# OctoClaw Router Calibration Report",
+        "",
+        "## Snapshot",
+        f"- Cases: `{summary.get('total_cases', 0)}`",
+        f"- Recommendation present: `{summary.get('recommendation_present', 0)}`",
+        f"- Recommendation match rate: `{summary.get('recommendation_match_rate', 0)}`",
+        f"- Route-budget consistency rate: `{summary.get('route_budget_consistency_rate', 0)}`",
+        f"- Fallback taken: `{summary.get('fallback_taken_count', 0)}`",
+        f"- Resolution drift breakdown: `{json.dumps(summary.get('resolution_drift_breakdown', {}), ensure_ascii=False)}`",
+        "",
+        "## Suggested Reviews",
+    ]
+    if tuning_suggestions:
+        for suggestion in tuning_suggestions[:12]:
+            lines.append(
+                f"- `{suggestion.get('kind', 'unknown')}`: {suggestion.get('action', '').strip()}"
+            )
+    else:
+        lines.append("- No immediate route/budget/resolution tuning suggestions.")
+    lines.extend(
+        [
+            "",
+            "## Pressure Signals",
+            f"- Queue pressure on drift: `{json.dumps(tuning_inputs.get('queue_pressure_band_on_drift', {}), ensure_ascii=False)}`",
+            f"- Quota pressure on drift: `{json.dumps(tuning_inputs.get('quota_pressure_band_on_drift', {}), ensure_ascii=False)}`",
+            f"- Route resolution transitions: `{len(tuning_inputs.get('route_resolution_transitions', []) or [])}`",
+            f"- Model resolution transitions: `{len(tuning_inputs.get('model_resolution_transitions', []) or [])}`",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def run_replay_automation(
     *,
     config: dict[str, Any],
@@ -379,6 +417,38 @@ def run_replay_automation(
                 upstream_phases=["review"],
             )
         )
+
+    router_eval_payload = build_router_eval_payload(
+        events_path=events_path,
+        focus="all",
+        route="",
+        tag="",
+        limit=200,
+        offset=0,
+        dedupe_by="prompt",
+    )
+    router_eval_json = dated_dir / "router-eval.json"
+    router_eval_text = dated_dir / "router-eval.txt"
+    router_tuning_md = dated_dir / "router-tuning-report.md"
+    _write_json(router_eval_json, router_eval_payload)
+    _write_text(router_eval_text, render_router_eval_text(router_eval_payload))
+    _write_text(router_tuning_md, render_router_tuning_report(router_eval_payload))
+    generated["router_eval_json"] = str(router_eval_json)
+    generated["router_eval_text"] = str(router_eval_text)
+    generated["router_tuning_report_md"] = str(router_tuning_md)
+    phase_records.append(
+        build_phase_record(
+            phase="calibrate",
+            status="completed",
+            artifacts={
+                "router_eval_json": str(router_eval_json),
+                "router_eval_text": str(router_eval_text),
+                "router_tuning_report_md": str(router_tuning_md),
+            },
+            upstream_phases=["curate"],
+            notes=["Replay nightly calibration artifacts generated from route outcomes and curated cases"],
+        )
+    )
 
     if bool(replay_cfg.get("llm_review_enabled", False)):
         packet = build_llm_review_packet(

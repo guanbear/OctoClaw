@@ -445,7 +445,7 @@ Python 不再承担：
   - model health / cooldown
   - runtime quota / capacity truth
 - [x] 支持手动 refresh 入口
-- [ ] 支持自动 refresh 调度占位
+- [x] 支持自动 refresh 调度占位
 - [x] 失败时回退到 last-good snapshot，不阻塞 runtime
 
 ### 主要文件
@@ -461,7 +461,7 @@ Python 不再承担：
 - [x] `tests/test_model_intel.py`
 - [x] 新增 OpenRouter source mapping case
 - [x] 新增 `models.dev` source mapping case
-- [ ] 新增 stale / fallback case
+- [x] 新增 stale / fallback case
 - [x] 新增 rankings 不压过本地 truth case
 - [x] 新增 free-model filtered rankings case
 

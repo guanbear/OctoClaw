@@ -58,6 +58,44 @@ class ModelIntelSyncCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(payload["records"]), 1)
         self.assertEqual(payload["records"][0]["model_id"], "openai/gpt-5.4")
 
+    def test_build_source_status_prefers_last_good_when_primary_missing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-model-intel-sync-") as tmpdir:
+            last_good = Path(tmpdir) / "last-good.json"
+            last_good.write_text(
+                json.dumps({"generated_at": "2026-04-08T00:00:00.000Z", "records": [{"id": "openai/gpt-5.4"}]}),
+                encoding="utf-8",
+            )
+            payload = run_node_expression(
+                f"__modelIntelSyncTest.buildSourceStatus({{source:'openrouter_catalog', primaryFile:{json.dumps(str(Path(tmpdir) / 'primary.json'))}, lastGoodFile:{json.dumps(str(last_good))}}})"
+            )
+        self.assertFalse(payload["primary_present"])
+        self.assertTrue(payload["last_good_present"])
+        self.assertTrue(payload["using_last_good"])
+        self.assertEqual(payload["freshness"], "fresh")
+        self.assertEqual(payload["records"], 1)
+
+    def test_render_cron_outputs_refresh_schedule_contract(self) -> None:
+        payload = run_node_expression("__modelIntelSyncTest.renderCron({workspace:'/tmp/octoclaw', intervalHours:4})")
+        self.assertEqual(payload["schema_version"], "octoclaw.model_intel.refresh_schedule/v1")
+        self.assertEqual(payload["interval_hours"], 4)
+        self.assertIn("model-intel-sync.mjs", payload["command"])
+        self.assertIn(" refresh", payload["command"])
+        self.assertIn("*/4", payload["cron"])
+
+    def test_render_cron_cli_accepts_workspace_and_interval(self) -> None:
+        result = subprocess.run(
+            ["node", str(SYNC_SCRIPT), "render-cron", "--workspace", "/tmp/octoclaw-cli", "--interval-hours", "5"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            env={**os.environ, "WORKSPACE": tempfile.gettempdir()},
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["workspace"], "/tmp/octoclaw-cli")
+        self.assertEqual(payload["interval_hours"], 5)
+        self.assertIn("*/5", payload["cron"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -70,5 +70,32 @@
       "work_contract_hint": "inspect_report",
       "protected_lane": ""
     }
+  },
+  {
+    "task": "检查一下 nginx error log 最近 80 行，然后总结问题",
+    "expected": {
+      "system_preferred_route": "runner",
+      "task_class": "fast_tool_check",
+      "work_contract_hint": "inspect_report",
+      "protected_lane": ""
+    }
+  },
+  {
+    "task": "我的cron都正常吗",
+    "expected": {
+      "system_preferred_route": "runner",
+      "task_class": "fast_tool_check",
+      "work_contract_hint": "inspect_report",
+      "protected_lane": ""
+    }
+  },
+  {
+    "task": "帮我分析下 openclaw 2026.3.31 这个release",
+    "expected": {
+      "system_preferred_route": "spawn_single",
+      "task_class": "focused_research",
+      "work_contract_hint": "deliverable_work",
+      "protected_lane": ""
+    }
   }
 ]

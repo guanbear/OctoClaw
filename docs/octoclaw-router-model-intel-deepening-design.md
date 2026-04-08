@@ -323,6 +323,7 @@ Model-Intel Facts Plane
   - validation summary 输出 `route correctness / budget correctness / delivery correctness / coverage`
   - rollout recommendation 在 promotion gate 中显式识别 `route outcome` coverage
   - router eval 显式区分 `route drift / budget drift / resolution drift`
+  - nightly replay automation 默认产出 `router-eval.json` 与 `router-tuning-report.md`
   - tuning suggestions 可区分：
     - route ladder review
     - budget ladder review
