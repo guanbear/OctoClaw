@@ -1,0 +1,1923 @@
+[
+  {
+    "agent": "octoclaw-replay-20260409002001-1",
+    "session_id": "octoclaw-replay-20260409002001-1-s1",
+    "prompt": "怎么测你自己决定。我不要求，我不是让你在网上查速度，我就让你实测。你现在用 GM 5.1 的手 token 的速度，还有吞吐的生成速度。然后再对比一下。模型列表里还有 Minimax M2.7 的，然后这两个速度做下对比。",
+    "return_code": 124,
+    "reply_text": "",
+    "stderr_tail": "Gateway agent failed; falling back to embedded: GatewayClientRequestError: invalid agent params: unknown agent id \"octoclaw-replay-20260409002001-1\"\n[agents] inherited auth-profiles from main agent\n\n[replay_validation] timeout after 240s",
+    "new_tasks": [
+      {
+        "id": "research-20260408162315357569",
+        "model": "minimax-portal/MiniMax-M2.7",
+        "status": "dispatched",
+        "summary": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性…",
+        "spawned_at": "2026-04-09T00:23:15.568378+08:00",
+        "updated_at": "2026-04-09T00:23:15.568962+08:00",
+        "expected_done_at": "2026-04-09T00:31:15.568979+08:00",
+        "model_band": "normal",
+        "task_description": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP 定理、BASE 理论等设计理论。开始生成时，请先输出\"Minimax M2.7 测试开始\"，生成完成后输出\"Minimax M2.7 测试完成\"。",
+        "source": "octoclaw",
+        "agent_namespace": "octoclaw",
+        "managed_by_octoclaw": true,
+        "route": "spawn_single",
+        "runtime": "subagent",
+        "report_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260408162315357569.md",
+        "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260408162315357569.md",
+        "context_summary": "- review-20260403050003164008 · review · spawn_single · failed summary: MiniMax Token 未找到，建议用户重新提供 checklist: 1 done / 3 open next: inspect report and decide next step artifacts: 查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，找到相关信息后提供…",
+        "task_kind": "subtask",
+        "title": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP…",
+        "worker_pool": "octoclaw-research",
+        "work_type": "research",
+        "phase": "collect",
+        "review_required": false,
+        "artifacts": {
+          "execution_backend": "native",
+          "operator_surface": {
+            "kind": "spawn",
+            "role": "execution_lane",
+            "backend_posture": "default_runtime",
+            "optional_backend": false,
+            "backend": "native",
+            "backend_name": "",
+            "team_name": "",
+            "agent_name": "",
+            "tmux_session_name": "",
+            "surface_summary": "spawn lane (default OpenClaw substrate path)",
+            "operator_hint": "",
+            "attach_hint": "",
+            "schema_version": "octoclaw.task_display/v1",
+            "surface_role": {
+              "role": "canonical_text_operator_surface",
+              "authoritative_for": [
+                "details",
+                "queue",
+                "retrieve",
+                "timeline",
+                "graph"
+              ],
+              "control_mode": "full",
+              "canonical_observer": true
+            },
+            "task_anchor": {
+              "task_id": "research-20260408162315357569",
+              "title": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP…",
+              "state": "queued",
+              "state_label": "queued",
+              "route": "spawn_single",
+              "worker_pool": "octoclaw-research",
+              "worker_pool_display": "Research",
+              "worker_pool_emoji": "🔍",
+              "progress": null,
+              "summary": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性…",
+              "queue_bucket": "queued",
+              "surface_queue_bucket": "queued",
+              "lifecycle_state": "queued",
+              "outcome_state": "pending",
+              "handoff_state": "none",
+              "terminal": false,
+              "deliverable_kind": "internal_progress",
+              "observability_health": "degraded_missing_session_key",
+              "session_status": "",
+              "resume_state": "none",
+              "resume_key": "task:research-20260408162315357569",
+              "checklist_kind": "delegated_default",
+              "checklist_open_count": 3,
+              "checklist_completed_count": 1,
+              "phase": "collect",
+              "profile": "",
+              "eta": "2026-04-09T00:31:15.568979+08:00",
+              "queue_position": null,
+              "cost_estimate": "",
+              "active_models": [
+                "minimax-portal/MiniMax-M2.7"
+              ],
+              "model_summary": "minimax-portal/MiniMax-M2.7",
+              "started_at": "",
+              "updated_at": "2026-04-09T00:23:15.568962+08:00",
+              "result_ready_at": "",
+              "handoff_ready_at": "",
+              "delivered_at": "",
+              "duration": null,
+              "openclaw_taskflow_backend": "mirror",
+              "openclaw_taskflow_state": "mirrored",
+              "openclaw_task_runtime": "openclaw_task",
+              "openclaw_flow_runtime": "openclaw_flow",
+              "openclaw_taskflow_sync_mode": "mirrored",
+              "openclaw_taskflow_substrate_state": "",
+              "openclaw_taskflow_substrate_revision": 0,
+              "openclaw_native_binding_state": "none",
+              "openclaw_native_status": "",
+              "openclaw_native_runtime": "",
+              "openclaw_native_seen_at": "",
+              "openclaw_native_match_score": 0,
+              "openclaw_create_preference": "native_preferred",
+              "openclaw_create_status": "native_unavailable_fallback_mirror",
+              "openclaw_task_id": "",
+              "openclaw_flow_id": "",
+              "openclaw_flow_kind": "one_task",
+              "substrate_summary": "legacy mirror only"
+            },
+            "task_actions": [
+              {
+                "id": "view",
+                "kind": "view",
+                "label": "View",
+                "enabled": true,
+                "danger": false,
+                "requires_confirmation": false,
+                "fallback_command": "details",
+                "action_class": "observe",
+                "replay_safe": true
+              },
+              {
+                "id": "show_queue",
+                "kind": "show_queue",
+                "label": "Queue",
+                "enabled": true,
+                "danger": false,
+                "requires_confirmation": false,
+                "fallback_command": "queue",
+                "action_class": "observe",
+                "replay_safe": true
+              },
+              {
+                "id": "retrieve",
+                "kind": "retrieve",
+                "label": "Retrieve",
+                "enabled": true,
+                "danger": false,
+                "requires_confirmation": false,
+                "fallback_command": "retrieve",
+                "action_class": "navigate",
+                "replay_safe": true
+              },
+              {
+                "id": "timeline",
+                "kind": "timeline",
+                "label": "Timeline",
+                "enabled": true,
+                "danger": false,
+                "requires_confirmation": false,
+                "fallback_command": "timeline",
+                "action_class": "navigate",
+                "replay_safe": true
+              },
+              {
+                "id": "graph",
+                "kind": "graph",
+                "label": "Graph",
+                "enabled": true,
+                "danger": false,
+                "requires_confirmation": false,
+                "fallback_command": "graph",
+                "action_class": "navigate",
+                "replay_safe": true
+              },
+              {
+                "id": "stop",
+                "kind": "stop",
+                "label": "Stop",
+                "enabled": true,
+                "danger": true,
+                "requires_confirmation": true,
+                "fallback_command": "stop",
+                "action_class": "destructive-control",
+                "replay_safe": false
+              },
+              {
+                "id": "open_artifacts",
+                "kind": "open_artifacts",
+                "label": "Artifacts",
+                "enabled": true,
+                "danger": false,
+                "requires_confirmation": false,
+                "fallback_command": "artifacts",
+                "action_class": "navigate",
+                "replay_safe": true
+              },
+              {
+                "id": "explorer",
+                "kind": "explorer",
+                "label": "Explorer",
+                "enabled": true,
+                "danger": false,
+                "requires_confirmation": false,
+                "fallback_command": "explorer",
+                "action_class": "navigate",
+                "replay_safe": true
+              }
+            ],
+            "action_availability": [
+              "view",
+              "show_queue",
+              "retrieve",
+              "timeline",
+              "graph",
+              "stop",
+              "open_artifacts",
+              "explorer"
+            ],
+            "interactive": {
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "OctoClaw task: 请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP…"
+                },
+                {
+                  "type": "text",
+                  "text": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性…"
+                },
+                {
+                  "type": "buttons",
+                  "buttons": [
+                    {
+                      "label": "View",
+                      "value": "details research-20260408162315357569",
+                      "style": "primary"
+                    },
+                    {
+                      "label": "Queue",
+                      "value": "queue research-20260408162315357569",
+                      "style": "secondary"
+                    },
+                    {
+                      "label": "Retrieve",
+                      "value": "retrieve research-20260408162315357569",
+                      "style": "secondary"
+                    },
+                    {
+                      "label": "Timeline",
+                      "value": "timeline research-20260408162315357569",
+                      "style": "secondary"
+                    },
+                    {
+                      "label": "Graph",
+                      "value": "graph research-20260408162315357569",
+                      "style": "secondary"
+                    }
+                  ]
+                }
+              ]
+            },
+            "substrate_display_contract": {
+              "required_fields": [
+                "task_id",
+                "state",
+                "route",
+                "worker_pool",
+                "substrate_summary",
+                "action_availability"
+              ],
+              "optional_fields": [
+                "queue_position",
+                "model_summary",
+                "cost_estimate",
+                "related_thread_artifacts",
+                "create_preference",
+                "create_status"
+              ],
+              "forbidden_inferred_fields": [
+                "guessed_task_state",
+                "renderer_authored_truth",
+                "unconfirmed_delivery_state"
+              ]
+            },
+            "text_fallback": "🔍 OctoClaw task: 请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP…\nSubstrate: legacy mirror only\nCreate path: preference native_preferred | status native_unavailable_fallback_mirror\nState: queued | Route: spawn_single | Pool: Research\nModel: minimax-portal/MiniMax-M2.7\nChecklist: 1 done / 3 open\n请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性…\nReply with: details research-20260408162315357569 / queue research-20260408162315357569 / retrieve research-20260408162315357569 / timeline research-20260408162315357569 / graph research-20260408162315357569 / stop research-20260408162315357569 / artifacts research-20260408162315357569 / explorer research-20260408162315357569"
+          },
+          "operator_hint": "",
+          "brief": {
+            "schema_version": "octoclaw.brief/v1",
+            "task_id": "research-20260408162315357569",
+            "goal": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP 定理、BASE 理论等设计理论。开始生成时，请先输出\"Minimax M2.7 测试开始\"，生成完成后输出\"Minimax M2.7 测试完成\"。",
+            "objective": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP 定理、BASE 理论等设计理论。开始生成时，请先输出\"Minimax M2.7 测试开始\"，生成完成后输出\"Minimax M2.7 测试完成\"。",
+            "work_contract": "",
+            "route": "spawn_single",
+            "worker_pool": "octoclaw-research",
+            "work_type": "research",
+            "phase": "collect",
+            "profile": "default",
+            "protocol": "normal",
+            "review_required": false,
+            "expected_done": "+8min",
+            "boundary": {
+              "artifact_first": true,
+              "avoid_raw_transcript": true,
+              "review_required": false,
+              "followup_uses_context_pack": true
+            },
+            "allowed_tools": [
+              "docs",
+              "web",
+              "report"
+            ],
+            "done_definition": "交付必须包含结构化 RESULT；summary 需要可直接转述；长输出写到 /Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260408162315357569.md",
+            "expected_artifacts": [
+              "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260408162315357569.md",
+              "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260408162315357569.md"
+            ],
+            "constraints": [
+              "开始前先写 running 状态",
+              "默认只读必要上下文，避免长 transcript 回灌主脑",
+              "长输出或长 diff 优先写共享文件，不要直接塞回 RESULT",
+              "详细报告默认写到 /Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260408162315357569.md",
+              "如需详细背景，优先读取 /Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260408162315357569.md",
+              "follow-up 优先使用 context_pack，而不是回灌长 transcript"
+            ],
+            "context_summary": "- review-20260403050003164008 · review · spawn_single · failed summary: MiniMax Token 未找到，建议用户重新提供 checklist: 1 done / 3 open next: inspect report and decide next step artifacts: 查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，找到相关信息后提供 90 秒的版本, 查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，… - research-20260403045819935202 · research · spawn_single · done summary: AI圈新闻调研完成：Claude Code泄露是前…",
+            "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260408162315357569.md",
+            "context_pack": {
+              "schema_version": "octoclaw.context_pack/v1",
+              "task_id": "research-20260408162315357569",
+              "requested_task": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP 定理、BASE 理论等设计理论。开始生成时，请先输出\"Minimax M2.7 测试开始\"，生成完成后输出\"Minimax M2.7 测试完成\"。",
+              "generated_at": "2026-04-09T00:23:15.458029+08:00",
+              "related_task_count": 3,
+              "summary": "- review-20260403050003164008 · review · spawn_single · failed\n  summary: MiniMax Token 未找到，建议用户重新提供\n  checklist: 1 done / 3 open\n  next: inspect report and decide next step\n  artifacts: 查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，找到相关信息后提供 90 秒的版本, 查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，…\n- research-20260403045819935202 · research · spawn_single · done\n  summary: AI圈新闻调研完成：Claude Code泄露是前端供应链事故，OpenClaw插件架构重构提升扩展性\n  checklist: 1 done / 3 open\n  artifacts: 调研最近 AI 圈的重大新闻（重点关注 Claude Code 代码泄露等事件），以及 OpenClaw 相关的新闻动态。需要用中文总结报告，…, 调研最近 AI 圈的重大新闻（重点关注 Claude Code 代码泄露等事件），以及 O…\n- research-20260402222828702379 · research · spawn_single · failed\n  summary: Bootstrap分析完成：核心发现spawn执行链全坏，所有研究任务都无法完成\n  checklist: 1 done / 3 open\n  next: inspect report and decide next step\n  artifacts: You are reviewing OctoClaw Slack conversations for 2026-04-02 (Asia/Sha…, You are reviewing OctoClaw Slack conversation…",
+              "related_tasks": [
+                {
+                  "task_id": "review-20260403050003164008",
+                  "title": "查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，找到相关信息后提供 90 秒的版本",
+                  "summary": "MiniMax Token 未找到，建议用户重新提供",
+                  "route": "spawn_single",
+                  "worker_pool": "octoclaw-review",
+                  "status": "done",
+                  "lifecycle_state": "finished",
+                  "outcome_state": "failed",
+                  "handoff_state": "internal_only",
+                  "report_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/review-20260403050003164008.md",
+                  "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/review-20260403050003164008.md",
+                  "artifacts": [
+                    {
+                      "artifact_id": "review-20260403050003164008:worker_result:review-20260403050003164008",
+                      "kind": "worker_result",
+                      "title": "查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，找到相关信息后提供 90 秒的版本",
+                      "path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/review-20260403050003164008.md",
+                      "preview": "spawn启动失败：native openclaw agent exited non-zero for review-20260403050003164008",
+                      "related_to_thread": false
+                    },
+                    {
+                      "artifact_id": "review-20260403050003164008:report:-Users-guanbear-.openclaw-workspace-tmp-octopus-shared-review-20260403050003164008.md",
+                      "kind": "report",
+                      "title": "查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，找到相关信息后提供 90 秒的版本",
+                      "path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/review-20260403050003164008.md",
+                      "preview": "MiniMax Token 未找到，建议用户重新提供",
+                      "related_to_thread": false
+                    }
+                  ],
+                  "checklist": {
+                    "kind": "delegated_default",
+                    "open_count": 3,
+                    "completed_count": 1
+                  },
+                  "task_events": [],
+                  "next_step": "inspect report and decide next step",
+                  "updated_at": "2026-04-03T13:06:05.555840+08:00"
+                },
+                {
+                  "task_id": "research-20260403045819935202",
+                  "title": "调研最近 AI 圈的重大新闻（重点关注 Claude Code 代码泄露等事件），以及 OpenClaw 相关的新闻动态。需要用中文总结报告，…",
+                  "summary": "AI圈新闻调研完成：Claude Code泄露是前端供应链事故，OpenClaw插件架构重构提升扩展性",
+                  "route": "spawn_single",
+                  "worker_pool": "octoclaw-research",
+                  "status": "done",
+                  "lifecycle_state": "finished",
+                  "outcome_state": "done",
+                  "handoff_state": "user_safe_ready",
+                  "report_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260403045819935202.md",
+                  "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260403045819935202.md",
+                  "artifacts": [
+                    {
+                      "artifact_id": "research-20260403045819935202:worker_result:research-20260403045819935202",
+                      "kind": "worker_result",
+                      "title": "调研最近 AI 圈的重大新闻（重点关注 Claude Code 代码泄露等事件），以及 OpenClaw 相关的新闻动态。需要用中文总结报告，…",
+                      "path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260403045819935202.md",
+                      "preview": "AI圈新闻调研完成：Claude Code泄露是前端供应链事故，OpenClaw插件架构重构提升扩展性",
+                      "related_to_thread": false
+                    },
+                    {
+                      "artifact_id": "research-20260403045819935202:report:-Users-guanbear-.openclaw-workspace-tmp-octopus-shared-research-20260403045819935202.md",
+                      "kind": "report",
+                      "title": "调研最近 AI 圈的重大新闻（重点关注 Claude Code 代码泄露等事件），以及 OpenClaw 相关的新闻动态。需要用中文总结报告，…",
+                      "path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260403045819935202.md",
+                      "preview": "AI圈新闻调研完成：Claude Code泄露是前端供应链事故，OpenClaw插件架构重构提升扩展性",
+                      "related_to_thread": false
+                    }
+                  ],
+                  "checklist": {
+                    "kind": "delegated_default",
+                    "open_count": 3,
+                    "completed_count": 1
+                  },
+                  "task_events": [],
+                  "next_step": "none",
+                  "updated_at": "2026-04-03T12:59:40.103983+08:00"
+                },
+                {
+                  "task_id": "research-20260402222828702379",
+                  "title": "You are reviewing OctoClaw Slack conversations for 2026-04-02 (Asia/Sha…",
+                  "summary": "Bootstrap分析完成：核心发现spawn执行链全坏，所有研究任务都无法完成",
+                  "route": "spawn_single",
+                  "worker_pool": "octoclaw-research",
+                  "status": "done",
+                  "lifecycle_state": "finished",
+                  "outcome_state": "failed",
+                  "handoff_state": "internal_only",
+                  "report_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260402222828702379.md",
+                  "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260402222828702379.md",
+                  "artifacts": [
+                    {
+                      "artifact_id": "research-20260402222828702379:worker_result:research-20260402222828702379",
+                      "kind": "worker_result",
+                      "title": "You are reviewing OctoClaw Slack conversations for 2026-04-02 (Asia/Sha…",
+                      "path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260402222828702379.md",
+                      "preview": "spawn启动失败：native openclaw agent exited non-zero for research-20260402222828702379",
+                      "related_to_thread": false
+                    },
+                    {
+                      "artifact_id": "research-20260402222828702379:report:-Users-guanbear-.openclaw-workspace-tmp-octopus-shared-research-20260402222828702379.md",
+                      "kind": "report",
+                      "title": "You are reviewing OctoClaw Slack conversations for 2026-04-02 (Asia/Sha…",
+                      "path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260402222828702379.md",
+                      "preview": "Bootstrap分析完成：核心发现spawn执行链全坏，所有研究任务都无法完成",
+                      "related_to_thread": false
+                    }
+                  ],
+                  "checklist": {
+                    "kind": "delegated_default",
+                    "open_count": 3,
+                    "completed_count": 1
+                  },
+                  "task_events": [],
+                  "next_step": "inspect report and decide next step",
+                  "updated_at": "2026-04-03T06:29:43.413572+08:00"
+                }
+              ],
+              "compact_rules": {
+                "max_related_tasks": 3,
+                "max_artifacts_per_task": 2,
+                "max_events_per_task": 3,
+                "artifact_first": true
+              }
+            },
+            "context_budget": {
+              "inline_history_max_items": 3,
+              "inline_history_max_chars": 480,
+              "share_large_context": true,
+              "prefer_context_pack": true
+            },
+            "checklist_delta": [
+              "review-20260403050003164008: 1 done / 3 open ; next=inspect report and decide next step",
+              "research-20260403045819935202: 1 done / 3 open",
+              "research-20260402222828702379: 1 done / 3 open ; next=inspect report and decide next step"
+            ],
+            "retrieval_hints": {
+              "prefer_context_pack": true,
+              "report_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260408162315357569.md",
+              "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260408162315357569.md",
+              "context_pack_path": "",
+              "followup_command_hint": "retrieve research-20260408162315357569"
+            },
+            "budget_policy": {},
+            "merge_contract": "",
+            "handoff_contract": "",
+            "skill_bundle": [],
+            "expected_output": {
+              "schema_version": "octoclaw.worker_result/v1",
+              "status": "done",
+              "summary": "4-8句可直接转述给用户的中文结论；前2句先给总判断，后续补关键差异/建议；允许轻量编号；禁表格/代码块",
+              "user_safe_summary": "若可直接转述给用户，写 1-3 句中文摘要；否则留空字符串",
+              "deliverable_kind": "final_answer",
+              "artifacts": [
+                "path-or-id"
+              ],
+              "files": [],
+              "report": "共享文件路径或null",
+              "risks": [],
+              "verification": [],
+              "next_step": "若无需后续动作则写 none"
+            }
+          },
+          "expected_output": {
+            "schema_version": "octoclaw.worker_result/v1",
+            "status": "done",
+            "summary": "4-8句可直接转述给用户的中文结论；前2句先给总判断，后续补关键差异/建议；允许轻量编号；禁表格/代码块",
+            "user_safe_summary": "若可直接转述给用户，写 1-3 句中文摘要；否则留空字符串",
+            "deliverable_kind": "final_answer",
+            "artifacts": [
+              "path-or-id"
+            ],
+            "files": [],
+            "report": "共享文件路径或null",
+            "risks": [],
+            "verification": [],
+            "next_step": "若无需后续动作则写 none"
+          },
+          "context_pack_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260408162315357569.context.json",
+          "route_recommendation": {},
+          "budget_recommendation": {},
+          "execution_contract": {
+            "execution_contract": "spawn_single",
+            "worker_pool": "octoclaw-research",
+            "profile": "",
+            "model_candidates": [],
+            "output_budget": "",
+            "reasoning_mode": ""
+          },
+          "report_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/shared/research-20260408162315357569.md",
+          "context_path": "/Users/guanbear/.openclaw/workspace/tmp/octopus/context/research-20260408162315357569.md",
+          "context_summary": "- review-20260403050003164008 · review · spawn_single · failed summary: MiniMax Token 未找到，建议用户重新提供 checklist: 1 done / 3 open next: inspect report and decide next step artifacts: 查找之前记忆中保存的 Minimax Token，用户之前提供过并且让我记忆过。查看聊天记录/记忆，找到相关信息后提供…",
+          "display_text": "🔍 OctoClaw task: 请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 CAP…\nSubstrate: legacy mirror only\nCreate path: preference native_preferred | status native_unavailable_fallback_mirror\nState: queued | Route: spawn_single | Pool: Research\nModel: minimax-portal/MiniMax-M2.7\nChecklist: 1 done / 3 open\n请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性…\nReply with: details research-20260408162315357569 / queue research-20260408162315357569 / retrieve research-20260408162315357569 / timeline research-20260408162315357569 / graph research-20260408162315357569 / stop research-20260408162315357569 / artifacts research-20260408162315357569 / explorer research-20260408162315357569",
+          "openclaw_taskflow": {
+            "schema_version": "octoclaw.taskflow.link/v1",
+            "backend": "mirror",
+            "binding_state": "mirrored",
+            "native_binding_state": "none",
+            "create_preference": "native_preferred",
+            "create_status": "native_unavailable_fallback_mirror",
+            "sync_mode": "mirrored",
+            "substrate_state": "",
+            "substrate_revision": 0,
+            "task_runtime": "openclaw_task",
+            "flow_runtime": "openclaw_flow",
+            "flow_kind": "one_task",
+            "task_id": "",
+            "flow_id": "",
+            "mirror_task_key": "research-20260408162315357569",
+            "mirror_flow_key": "research-20260408162315357569",
+            "route": "spawn_single",
+            "runtime": "subagent",
+            "worker_pool": "octoclaw-research",
+            "session_key": "",
+            "session_id": "",
+            "run_id": "",
+            "controller_id": "",
+            "summary": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性…",
+            "task_text": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 cap 定理、base 理论等设计理论。开始生成时，请先输出\"minimax m2.7 测试开始\"，生成完成后输出\"minimax m2.7 测试完成\"。",
+            "updated_at": "2026-04-09T00:23:35.734067+08:00"
+          }
+        },
+        "executor": "subagent",
+        "schema_version": "octoclaw.runtime_task.record/v1",
+        "executor_type": "subagent",
+        "protocol": "normal",
+        "profile": "",
+        "owner": "",
+        "session_key": "",
+        "session_origin": "",
+        "session_target": "",
+        "session_thread_id": "",
+        "session_thread_key": "",
+        "agent_id": "",
+        "parent_id": "",
+        "deps": [],
+        "child_ids": [],
+        "files_changed": [],
+        "started_at": "",
+        "completed_at": "",
+        "session_id": "",
+        "run_id": "",
+        "session_status": "missing",
+        "last_observed_at": "2026-04-08T16:24:02.109561+00:00",
+        "recovery_action": "",
+        "retry_count": 0,
+        "openclaw_taskflow": {
+          "schema_version": "octoclaw.taskflow.link/v1",
+          "backend": "mirror",
+          "binding_state": "mirrored",
+          "native_binding_state": "none",
+          "create_preference": "native_preferred",
+          "create_status": "native_unavailable_fallback_mirror",
+          "sync_mode": "mirrored",
+          "substrate_state": "",
+          "substrate_revision": 0,
+          "task_runtime": "openclaw_task",
+          "flow_runtime": "openclaw_flow",
+          "flow_kind": "one_task",
+          "task_id": "",
+          "flow_id": "",
+          "mirror_task_key": "research-20260408162315357569",
+          "mirror_flow_key": "research-20260408162315357569",
+          "route": "spawn_single",
+          "runtime": "subagent",
+          "worker_pool": "octoclaw-research",
+          "session_key": "",
+          "session_id": "",
+          "run_id": "",
+          "controller_id": "",
+          "summary": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性…",
+          "task_text": "请生成一段 2000 字的技术文档，主题是\"现代分布式系统设计的核心原则\"。内容要详实，包括一致性、可用性、分区容错性等核心概念，以及 cap 定理、base 理论等设计理论。开始生成时，请先输出\"minimax m2.7 测试开始\"，生成完成后输出\"minimax m2.7 测试完成\"。",
+          "updated_at": "2026-04-09T00:23:35.734067+08:00"
+        },
+        "openclaw_taskflow_backend": "mirror",
+        "openclaw_taskflow_state": "mirrored",
+        "openclaw_task_runtime": "openclaw_task",
+        "openclaw_flow_runtime": "openclaw_flow",
+        "openclaw_taskflow_sync_mode": "mirrored",
+        "openclaw_taskflow_substrate_state": "",
+        "openclaw_taskflow_substrate_revision": 0,
+        "openclaw_task_id": "",
+        "openclaw_flow_id": "",
+        "openclaw_flow_kind": "one_task",
+        "openclaw_native_binding_state": "none",
+        "openclaw_native_status": "",
+        "openclaw_native_runtime": "",
+        "openclaw_native_seen_at": "",
+        "openclaw_native_match_score": 0,
+        "lifecycle_state": "queued",
+        "outcome_state": "pending",
+        "handoff_state": "none",
+        "blocked_on": "",
+        "blocked_reason": "",
+        "deliverable_kind": "internal_progress",
+        "user_safe_summary": "",
+        "result_ready_at": "",
+        "handoff_ready_at": "",
+        "observability_health": "degraded_missing_session_key",
+        "ownership": {
+          "task_id": "research-20260408162315357569",
+          "owner_id": "",
+          "owner_namespace": "octoclaw",
+          "owner_session_id": "",
+          "run_id": "",
+          "state": "unclaimed",
+          "claimed_at": "2026-04-09T00:23:15.568378+08:00",
+          "last_heartbeat_at": "2026-04-09T00:23:15.568962+08:00",
+          "lease_seconds": 900,
+          "lease_expires_at": ""
+        },
+        "session_resume": {
+          "task_id": "research-20260408162315357569",
+          "resume_key": "task:research-20260408162315357569",
+          "agent_id": "",
+          "agent_namespace": "octoclaw",
+          "session_key": "",
+          "session_id": "",
+          "run_id": "",
+          "session_status": "missing",
+          "resume_state": "stale",
+          "last_observed_at": "2026-04-08T16:24:02.109561+00:00"
+        },
+        "checklist": {
+          "kind": "delegated_default",
+          "items": [
+            {
+              "id": "dispatch",
+              "title": "Dispatch delegated work",
+              "state": "pending",
+              "source": "default",
+              "linked_task_id": "",
+              "updated_at": "2026-04-09T00:23:15.568962+08:00"
+            },
+            {
+              "id": "execute",
+              "title": "Execute delegated work",
+              "state": "pending",
+              "source": "default",
+              "linked_task_id": "",
+              "updated_at": "2026-04-09T00:23:15.568962+08:00"
+            },
+            {
+              "id": "report",
+              "title": "Persist report or result",
+              "state": "done",
+              "source": "default",
+              "linked_task_id": "",
+              "updated_at": "2026-04-09T00:23:15.568962+08:00"
+            },
+            {
+              "id": "handoff",
+              "title": "Prepare user-safe handoff",
+              "state": "pending",
+              "source": "default",
+              "linked_task_id": "",
+              "updated_at": "2026-04-09T00:23:15.568962+08:00"
+            }
+          ],
+          "open_count": 3,
+          "completed_count": 1,
+          "updated_at": "2026-04-09T00:23:15.568962+08:00"
+        },
+        "task_event_summary": {
+          "task_event_count": 0,
+          "kind_counts": {},
+          "degraded_event_count": 0,
+          "latest_kind": "",
+          "latest_time": ""
+        },
+        "task_events_preview": [],
+        "resume_key": "task:research-20260408162315357569",
+        "resume_state": "none"
+      }
+    ],
+    "replay_events": [
+      {
+        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+        "event": "policy_resolved",
+        "at": "2026-04-08T16:20:32.334Z",
+        "sessionKey": "agent:octoclaw-replay-20260409002001-1:main",
+        "sessionId": "octoclaw-replay-20260409002001-1-s1",
+        "trigger": "user",
+        "route": "runner",
+        "systemPreferredRoute": "runner",
+        "workerPool": "octoclaw-runner",
+        "protectedLane": "",
+        "routeHintRequired": false,
+        "routeHintSubmitted": false,
+        "stickyApplied": false,
+        "ackFollowupCandidate": false,
+        "ackFollowupApplied": false,
+        "routeRecommendationConflict": false,
+        "routeRecommendationStrategy": "none",
+        "routeRecommendationConflictType": "",
+        "routeLanguagePacks": [
+          "zh",
+          "en"
+        ],
+        "prompt": "怎么测你自己决定。我不要求，我不是让你在网上查速度，我就让你实测。你现在用 GM 5.1 的手 token 的速度，还有吞吐的生成速度。然后再对比一下。模型列表里还有 Minimax M2.7 的，然后这两个速度做下对比。",
+        "workContract": "inspect_report",
+        "workContractHint": "inspect_report",
+        "budgetPolicy": {
+          "budget_cap": "low",
+          "retry_cap": 1,
+          "max_workers": 1,
+          "latency_target": "interactive",
+          "interruptibility": "high",
+          "upgrade_allowed": true
+        },
+        "routeRecommendation": {
+          "schema_version": "octoclaw.route_recommendation/v1",
+          "recommended_route": "runner",
+          "recommended_worker_pool": "octoclaw-runner",
+          "recommended_work_type": "ops",
+          "recommended_phase": "inspect",
+          "recommended_model_band": "fast",
+          "protected_lane": "",
+          "bypass_delegated_optimization": false,
+          "work_contract_hint": "inspect_report",
+          "top_candidates": [
+            {
+              "route": "runner",
+              "score": 1
+            },
+            {
+              "route": "direct",
+              "score": 0
+            }
+          ],
+          "arbitration": {
+            "required": false,
+            "strategy": "none",
+            "resolved_by": "base_policy",
+            "conflict_type": "",
+            "semantic_review_requested": false,
+            "semantic_review_reason": "",
+            "score_margin": 1,
+            "tiny_judge_ready": false,
+            "fallback_policy": "rule_only"
+          },
+          "reason_codes": [
+            "hard_runner_only",
+            "model_benchmark_workflow",
+            "local_read_only_probe",
+            "work_contract:inspect_report"
+          ]
+        },
+        "budgetRecommendation": {
+          "schema_version": "octoclaw.budget_recommendation/v1",
+          "target_model": "minimax-portal/MiniMax-M2.7",
+          "fallback_model": "",
+          "output_budget": "low",
+          "retry_budget": 1,
+          "latency_target": "interactive",
+          "max_workers": 1,
+          "reasoning_mode": "low",
+          "upgrade_allowed": true,
+          "cost_ceiling": "low",
+          "consistency": {
+            "route": "runner",
+            "route_matches_output_budget": true,
+            "route_matches_latency_target": true,
+            "route_matches_worker_budget": true,
+            "retry_budget_valid": true,
+            "route_budget_consistent": true
+          }
+        },
+        "autoRouter": {
+          "schema_version": "octoclaw.auto_router.recommendation/v1",
+          "internal_first": true,
+          "signal": {
+            "schema_version": "octoclaw.auto_router.signal/v1",
+            "request": {
+              "task": "怎么测你自己决定。我不要求，我不是让你在网上查速度，我就让你实测。你现在用 GM 5.1 的手 token 的速度，还有吞吐的生成速度。然后再对比一下。模型列表里还有 Minimax M2.7 的，然后这两个速度做下对比。",
+              "command": "",
+              "metadata": {
+                "session_key": "agent:octoclaw-replay-20260409002001-1:main",
+                "session_origin": "main",
+                "trigger": "user",
+                "agent_id": "octoclaw-replay-20260409002001-1",
+                "session_id": "octoclaw-replay-20260409002001-1-s1",
+                "agent_namespace": "octoclaw",
+                "managed_by_octoclaw": true
+              },
+              "session_key": "agent:octoclaw-replay-20260409002001-1:main",
+              "session_origin": ""
+            },
+            "contract": {
+              "work_contract_hint": "inspect_report",
+              "artifact_need": true,
+              "durable_runtime_need": true,
+              "parallel_gain": "low",
+              "risk_level": "low"
+            },
+            "continuity": {
+              "route_hint": "",
+              "sticky_lane": "",
+              "followup_kind": "",
+              "session_resume": {}
+            },
+            "model_signals": {
+              "model_band_hint": "fast",
+              "semantic_model_hint": "",
+              "expected_cost_band": "low",
+              "expected_latency_ms": 1500
+            },
+            "feedback_signals": {
+              "policy_phase": "guided",
+              "replay_logging_enabled": true,
+              "promotion_eligibility": "",
+              "validation_status": "",
+              "learning_flags": []
+            }
+          },
+          "router_core": {
+            "schema_version": "octoclaw.auto_router.router_core/v1",
+            "route": "runner",
+            "route_class": "delegated_runner",
+            "agent_scope": "runner_lane",
+            "work_contract": "inspect_report",
+            "executor_type": "runner",
+            "confidence": 0.92,
+            "reason_codes": [
+              "hard_runner_only",
+              "model_benchmark_workflow",
+              "local_read_only_probe",
+              "work_contract:inspect_report"
+            ],
+            "required_evidence": [
+              "replay"
+            ],
+            "review_required": false,
+            "next_evaluation_target": "replay"
+          },
+          "budget_planner": {
+            "schema_version": "octoclaw.auto_router.budget_planner/v1",
+            "target_model": "minimax-portal/MiniMax-M2.7",
+            "fallback_model": "",
+            "output_budget": "low",
+            "retry_budget": 1,
+            "latency_target": "interactive",
+            "max_workers": 1,
+            "reasoning_mode": "low",
+            "upgrade_allowed": true,
+            "cost_ceiling": "low",
+            "consistency": {
+              "route": "runner",
+              "route_matches_output_budget": true,
+              "route_matches_latency_target": true,
+              "route_matches_worker_budget": true,
+              "retry_budget_valid": true,
+              "route_budget_consistent": true
+            }
+          },
+          "model_intel": {
+            "schema_version": "octoclaw.auto_router.model_intel/v1",
+            "selected_model": "minimax-portal/MiniMax-M2.7",
+            "candidate_models": [
+              "minimax-portal/MiniMax-M2.7"
+            ],
+            "provider": "minimax-portal",
+            "model_band": "fast",
+            "selector_band": "quick",
+            "selector_role": "runner",
+            "facts_plane": {
+              "source_status_file": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-intel-source-status.json",
+              "source_precedence": {
+                "identity": [
+                  "operator_override",
+                  "curated_local_catalog",
+                  "external_model_registry"
+                ],
+                "capabilities": [
+                  "operator_override",
+                  "external_model_registry",
+                  "curated_local_catalog",
+                  "built_in_defaults"
+                ],
+                "pricing": [
+                  "operator_override",
+                  "external_model_registry",
+                  "secondary_sync_source",
+                  "built_in_defaults"
+                ],
+                "runtime": [
+                  "provider_runtime_observation",
+                  "operator_override",
+                  "built_in_defaults"
+                ]
+              }
+            },
+            "source_files": {
+              "catalog": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-catalog.json",
+              "policy": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-policy.json",
+              "health": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-health.json",
+              "speed": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-speed.json",
+              "plan_state": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-plan-state.json",
+              "benchmarks": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-benchmarks.json",
+              "sources": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-sources.json",
+              "source_status": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-intel-source-status.json"
+            }
+          },
+          "adapter": {
+            "schema_version": "octoclaw.auto_router.adapter/v1",
+            "policy_phase": "guided",
+            "merge_contract": "inspect_report",
+            "handoff_contract": "runner_report",
+            "route_hint_required": false,
+            "dispatch_required": false,
+            "control_observer_only": false
+          }
+        },
+        "routeOutcome": {
+          "schema_version": "octoclaw.route_outcome/v1",
+          "event_type": "policy_resolved",
+          "execution_contract": "runner",
+          "resolved_execution_contract": "runner",
+          "agent_scope": "runner_lane",
+          "route_class": "delegated_runner",
+          "worker_pool": "octoclaw-runner",
+          "phase": "inspect",
+          "protocol": "normal",
+          "profile": "ops-fast",
+          "skill_bundle": [
+            "shell",
+            "logs",
+            "status"
+          ],
+          "recommended_model": "minimax-portal/MiniMax-M2.7",
+          "resolved_model": "minimax-portal/MiniMax-M2.7",
+          "output_budget": "low",
+          "reasoning_mode": "low",
+          "review_required": false,
+          "artifact_first": true,
+          "handoff_contract": "runner_report",
+          "reason_codes": [
+            "hard_runner_only",
+            "model_benchmark_workflow",
+            "local_read_only_probe",
+            "work_contract:inspect_report"
+          ],
+          "route_source": "rule",
+          "sticky_applied": false,
+          "ack_followup_applied": false,
+          "channel": "",
+          "route_language_packs": [
+            "zh",
+            "en"
+          ],
+          "fallback_taken": false,
+          "runner_health_snapshot": {
+            "present": true,
+            "worker_id": "runner-macmini.bearhome-62634",
+            "last_heartbeat_at": "2026-04-09T00:20:23.496685+08:00",
+            "reason": "ok"
+          },
+          "queue_pressure_band": "none",
+          "quota_pressure_band": "",
+          "actual_cost": null,
+          "actual_latency": null,
+          "validation_outcome": ""
+        },
+        "executionContract": "runner",
+        "agentScope": "runner_lane",
+        "routeClass": "delegated_runner",
+        "recommendedModel": "minimax-portal/MiniMax-M2.7",
+        "resolvedModel": "minimax-portal/MiniMax-M2.7",
+        "outputBudget": "low",
+        "reasoningMode": "low",
+        "candidateModels": [
+          "minimax-portal/MiniMax-M2.7"
+        ],
+        "routeSource": "rule",
+        "fallbackTaken": false,
+        "runnerHealthSnapshot": {
+          "present": true,
+          "worker_id": "runner-macmini.bearhome-62634",
+          "last_heartbeat_at": "2026-04-09T00:20:23.496685+08:00",
+          "reason": "ok"
+        },
+        "queuePressureBand": "none",
+        "quotaPressureBand": "",
+        "actualCost": null,
+        "actualLatency": null,
+        "validationOutcome": ""
+      }
+    ],
+    "findings": [
+      "empty_reply",
+      "missing_system_preferred_route_in_task_state"
+    ]
+  },
+  {
+    "agent": "octoclaw-replay-20260409002421-2",
+    "session_id": "octoclaw-replay-20260409002421-2-s1",
+    "prompt": "你能不能测试一下 GLM 5.1 和 Minimax 2.7？就是你调用这个两个模型做一下速度测试，主要是手 token 的回复速度，还有吞吐速度，能做一下这个测试吗？首 token，首个 token。",
+    "return_code": 0,
+    "reply_text": "",
+    "stderr_tail": ",\n            \"propertiesCount\": 4\n          },\n          {\n            \"name\": \"session_status\",\n            \"summaryChars\": 336,\n            \"schemaChars\": 89,\n            \"propertiesCount\": 2\n          },\n          {\n            \"name\": \"web_search\",\n            \"summaryChars\": 93,\n            \"schemaChars\": 446,\n            \"propertiesCount\": 4\n          },\n          {\n            \"name\": \"web_fetch\",\n            \"summaryChars\": 129,\n            \"schemaChars\": 374,\n            \"propertiesCount\": 3\n          },\n          {\n            \"name\": \"image\",\n            \"summaryChars\": 201,\n            \"schemaChars\": 342,\n            \"propertiesCount\": 6\n          },\n          {\n            \"name\": \"pdf\",\n            \"summaryChars\": 275,\n            \"schemaChars\": 400,\n            \"propertiesCount\": 6\n          },\n          {\n            \"name\": \"browser\",\n            \"summaryChars\": 1066,\n            \"schemaChars\": 2799,\n            \"propertiesCount\": 48\n          },\n          {\n            \"name\": \"memory_search\",\n            \"summaryChars\": 334,\n            \"schemaChars\": 139,\n            \"propertiesCount\": 3\n          },\n          {\n            \"name\": \"memory_get\",\n            \"summaryChars\": 151,\n            \"schemaChars\": 128,\n            \"propertiesCount\": 3\n          },\n          {\n            \"name\": \"octoclaw_route_hint\",\n            \"summaryChars\": 116,\n            \"schemaChars\": 790,\n            \"propertiesCount\": 8\n          },\n          {\n            \"name\": \"octoclaw_policy_decide\",\n            \"summaryChars\": 149,\n            \"schemaChars\": 644,\n            \"propertiesCount\": 6\n          },\n          {\n            \"name\": \"octoclaw_route\",\n            \"summaryChars\": 89,\n            \"schemaChars\": 250,\n            \"propertiesCount\": 2\n          },\n          {\n            \"name\": \"octoclaw_dispatch\",\n            \"summaryChars\": 104,\n            \"schemaChars\": 753,\n            \"propertiesCount\": 8\n          },\n          {\n            \"name\": \"octoclaw_spawn\",\n            \"summaryChars\": 113,\n            \"schemaChars\": 766,\n            \"propertiesCount\": 9\n          },\n          {\n            \"name\": \"octoclaw_task_action\",\n            \"summaryChars\": 102,\n            \"schemaChars\": 405,\n            \"propertiesCount\": 4\n          },\n          {\n            \"name\": \"octoclaw_status\",\n            \"summaryChars\": 152,\n            \"schemaChars\": 133,\n            \"propertiesCount\": 1\n          }\n        ]\n      }\n    },\n    \"stopReason\": \"stop\"\n  }\n}\n",
+    "new_tasks": [],
+    "replay_events": [
+      {
+        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+        "event": "policy_resolved",
+        "at": "2026-04-08T16:24:49.067Z",
+        "sessionKey": "agent:octoclaw-replay-20260409002421-2:main",
+        "sessionId": "octoclaw-replay-20260409002421-2-s1",
+        "trigger": "user",
+        "route": "runner",
+        "systemPreferredRoute": "runner",
+        "workerPool": "octoclaw-runner",
+        "protectedLane": "",
+        "routeHintRequired": false,
+        "routeHintSubmitted": false,
+        "stickyApplied": false,
+        "ackFollowupCandidate": false,
+        "ackFollowupApplied": false,
+        "routeRecommendationConflict": false,
+        "routeRecommendationStrategy": "none",
+        "routeRecommendationConflictType": "",
+        "routeLanguagePacks": [
+          "zh",
+          "en"
+        ],
+        "prompt": "你能不能测试一下 GLM 5.1 和 Minimax 2.7？就是你调用这个两个模型做一下速度测试，主要是手 token 的回复速度，还有吞吐速度，能做一下这个测试吗？首 token，首个 token。",
+        "workContract": "inspect_report",
+        "workContractHint": "inspect_report",
+        "budgetPolicy": {
+          "budget_cap": "low",
+          "retry_cap": 1,
+          "max_workers": 1,
+          "latency_target": "interactive",
+          "interruptibility": "high",
+          "upgrade_allowed": true
+        },
+        "routeRecommendation": {
+          "schema_version": "octoclaw.route_recommendation/v1",
+          "recommended_route": "runner",
+          "recommended_worker_pool": "octoclaw-runner",
+          "recommended_work_type": "ops",
+          "recommended_phase": "inspect",
+          "recommended_model_band": "fast",
+          "protected_lane": "",
+          "bypass_delegated_optimization": false,
+          "work_contract_hint": "inspect_report",
+          "top_candidates": [
+            {
+              "route": "runner",
+              "score": 1
+            },
+            {
+              "route": "direct",
+              "score": 0
+            }
+          ],
+          "arbitration": {
+            "required": false,
+            "strategy": "none",
+            "resolved_by": "base_policy",
+            "conflict_type": "",
+            "semantic_review_requested": false,
+            "semantic_review_reason": "",
+            "score_margin": 1,
+            "tiny_judge_ready": false,
+            "fallback_policy": "rule_only"
+          },
+          "reason_codes": [
+            "hard_runner_only",
+            "model_benchmark_workflow",
+            "local_read_only_probe",
+            "work_contract:inspect_report"
+          ]
+        },
+        "budgetRecommendation": {
+          "schema_version": "octoclaw.budget_recommendation/v1",
+          "target_model": "minimax-portal/MiniMax-M2.7",
+          "fallback_model": "",
+          "output_budget": "low",
+          "retry_budget": 1,
+          "latency_target": "interactive",
+          "max_workers": 1,
+          "reasoning_mode": "low",
+          "upgrade_allowed": true,
+          "cost_ceiling": "low",
+          "consistency": {
+            "route": "runner",
+            "route_matches_output_budget": true,
+            "route_matches_latency_target": true,
+            "route_matches_worker_budget": true,
+            "retry_budget_valid": true,
+            "route_budget_consistent": true
+          }
+        },
+        "autoRouter": {
+          "schema_version": "octoclaw.auto_router.recommendation/v1",
+          "internal_first": true,
+          "signal": {
+            "schema_version": "octoclaw.auto_router.signal/v1",
+            "request": {
+              "task": "你能不能测试一下 GLM 5.1 和 Minimax 2.7？就是你调用这个两个模型做一下速度测试，主要是手 token 的回复速度，还有吞吐速度，能做一下这个测试吗？首 token，首个 token。",
+              "command": "",
+              "metadata": {
+                "session_key": "agent:octoclaw-replay-20260409002421-2:main",
+                "session_origin": "main",
+                "trigger": "user",
+                "agent_id": "octoclaw-replay-20260409002421-2",
+                "session_id": "octoclaw-replay-20260409002421-2-s1",
+                "agent_namespace": "octoclaw",
+                "managed_by_octoclaw": true
+              },
+              "session_key": "agent:octoclaw-replay-20260409002421-2:main",
+              "session_origin": ""
+            },
+            "contract": {
+              "work_contract_hint": "inspect_report",
+              "artifact_need": true,
+              "durable_runtime_need": true,
+              "parallel_gain": "low",
+              "risk_level": "low"
+            },
+            "continuity": {
+              "route_hint": "",
+              "sticky_lane": "",
+              "followup_kind": "",
+              "session_resume": {}
+            },
+            "model_signals": {
+              "model_band_hint": "fast",
+              "semantic_model_hint": "",
+              "expected_cost_band": "low",
+              "expected_latency_ms": 1500
+            },
+            "feedback_signals": {
+              "policy_phase": "guided",
+              "replay_logging_enabled": true,
+              "promotion_eligibility": "",
+              "validation_status": "",
+              "learning_flags": []
+            }
+          },
+          "router_core": {
+            "schema_version": "octoclaw.auto_router.router_core/v1",
+            "route": "runner",
+            "route_class": "delegated_runner",
+            "agent_scope": "runner_lane",
+            "work_contract": "inspect_report",
+            "executor_type": "runner",
+            "confidence": 0.92,
+            "reason_codes": [
+              "hard_runner_only",
+              "model_benchmark_workflow",
+              "local_read_only_probe",
+              "work_contract:inspect_report"
+            ],
+            "required_evidence": [
+              "replay"
+            ],
+            "review_required": false,
+            "next_evaluation_target": "replay"
+          },
+          "budget_planner": {
+            "schema_version": "octoclaw.auto_router.budget_planner/v1",
+            "target_model": "minimax-portal/MiniMax-M2.7",
+            "fallback_model": "",
+            "output_budget": "low",
+            "retry_budget": 1,
+            "latency_target": "interactive",
+            "max_workers": 1,
+            "reasoning_mode": "low",
+            "upgrade_allowed": true,
+            "cost_ceiling": "low",
+            "consistency": {
+              "route": "runner",
+              "route_matches_output_budget": true,
+              "route_matches_latency_target": true,
+              "route_matches_worker_budget": true,
+              "retry_budget_valid": true,
+              "route_budget_consistent": true
+            }
+          },
+          "model_intel": {
+            "schema_version": "octoclaw.auto_router.model_intel/v1",
+            "selected_model": "minimax-portal/MiniMax-M2.7",
+            "candidate_models": [
+              "minimax-portal/MiniMax-M2.7"
+            ],
+            "provider": "minimax-portal",
+            "model_band": "fast",
+            "selector_band": "quick",
+            "selector_role": "runner",
+            "facts_plane": {
+              "source_status_file": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-intel-source-status.json",
+              "source_precedence": {
+                "identity": [
+                  "operator_override",
+                  "curated_local_catalog",
+                  "external_model_registry"
+                ],
+                "capabilities": [
+                  "operator_override",
+                  "external_model_registry",
+                  "curated_local_catalog",
+                  "built_in_defaults"
+                ],
+                "pricing": [
+                  "operator_override",
+                  "external_model_registry",
+                  "secondary_sync_source",
+                  "built_in_defaults"
+                ],
+                "runtime": [
+                  "provider_runtime_observation",
+                  "operator_override",
+                  "built_in_defaults"
+                ]
+              }
+            },
+            "source_files": {
+              "catalog": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-catalog.json",
+              "policy": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-policy.json",
+              "health": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-health.json",
+              "speed": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-speed.json",
+              "plan_state": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-plan-state.json",
+              "benchmarks": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-benchmarks.json",
+              "sources": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-sources.json",
+              "source_status": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-intel-source-status.json"
+            }
+          },
+          "adapter": {
+            "schema_version": "octoclaw.auto_router.adapter/v1",
+            "policy_phase": "guided",
+            "merge_contract": "inspect_report",
+            "handoff_contract": "runner_report",
+            "route_hint_required": false,
+            "dispatch_required": false,
+            "control_observer_only": false
+          }
+        },
+        "routeOutcome": {
+          "schema_version": "octoclaw.route_outcome/v1",
+          "event_type": "policy_resolved",
+          "execution_contract": "runner",
+          "resolved_execution_contract": "runner",
+          "agent_scope": "runner_lane",
+          "route_class": "delegated_runner",
+          "worker_pool": "octoclaw-runner",
+          "phase": "inspect",
+          "protocol": "normal",
+          "profile": "ops-fast",
+          "skill_bundle": [
+            "shell",
+            "logs",
+            "status"
+          ],
+          "recommended_model": "minimax-portal/MiniMax-M2.7",
+          "resolved_model": "minimax-portal/MiniMax-M2.7",
+          "output_budget": "low",
+          "reasoning_mode": "low",
+          "review_required": false,
+          "artifact_first": true,
+          "handoff_contract": "runner_report",
+          "reason_codes": [
+            "hard_runner_only",
+            "model_benchmark_workflow",
+            "local_read_only_probe",
+            "work_contract:inspect_report"
+          ],
+          "route_source": "rule",
+          "sticky_applied": false,
+          "ack_followup_applied": false,
+          "channel": "",
+          "route_language_packs": [
+            "zh",
+            "en"
+          ],
+          "fallback_taken": false,
+          "runner_health_snapshot": {
+            "present": true,
+            "worker_id": "runner-macmini.bearhome-98558",
+            "last_heartbeat_at": "2026-04-09T00:24:46.093241+08:00",
+            "reason": "ok"
+          },
+          "queue_pressure_band": "none",
+          "quota_pressure_band": "",
+          "actual_cost": null,
+          "actual_latency": null,
+          "validation_outcome": ""
+        },
+        "executionContract": "runner",
+        "agentScope": "runner_lane",
+        "routeClass": "delegated_runner",
+        "recommendedModel": "minimax-portal/MiniMax-M2.7",
+        "resolvedModel": "minimax-portal/MiniMax-M2.7",
+        "outputBudget": "low",
+        "reasoningMode": "low",
+        "candidateModels": [
+          "minimax-portal/MiniMax-M2.7"
+        ],
+        "routeSource": "rule",
+        "fallbackTaken": false,
+        "runnerHealthSnapshot": {
+          "present": true,
+          "worker_id": "runner-macmini.bearhome-98558",
+          "last_heartbeat_at": "2026-04-09T00:24:46.093241+08:00",
+          "reason": "ok"
+        },
+        "queuePressureBand": "none",
+        "quotaPressureBand": "",
+        "actualCost": null,
+        "actualLatency": null,
+        "validationOutcome": ""
+      },
+      {
+        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+        "event": "agent_end",
+        "at": "2026-04-08T16:26:04.510Z",
+        "sessionKey": "agent:octoclaw-replay-20260409002001-1:main",
+        "sessionId": "octoclaw-replay-20260409002001-1-s1",
+        "route": "runner",
+        "systemPreferredRoute": "runner",
+        "workerPool": "octoclaw-runner",
+        "routeHintRequired": false,
+        "routeHintSubmitted": false,
+        "delegated": false,
+        "delegationTool": "",
+        "blockedTools": [],
+        "ackFollowupCandidate": false,
+        "ackFollowupApplied": false,
+        "routeLanguagePacks": [],
+        "workContract": "inspect_report",
+        "workContractHint": "inspect_report",
+        "budgetPolicy": {},
+        "routeRecommendation": {},
+        "budgetRecommendation": {},
+        "autoRouter": {},
+        "routeOutcome": {
+          "schema_version": "octoclaw.route_outcome/v1",
+          "event_type": "agent_end",
+          "execution_contract": "runner",
+          "resolved_execution_contract": "runner",
+          "agent_scope": "",
+          "route_class": "",
+          "worker_pool": "octoclaw-runner",
+          "phase": "inspect",
+          "protocol": "normal",
+          "profile": "",
+          "skill_bundle": [],
+          "recommended_model": "",
+          "resolved_model": "",
+          "output_budget": "",
+          "reasoning_mode": "",
+          "review_required": false,
+          "artifact_first": false,
+          "handoff_contract": "",
+          "reason_codes": [],
+          "route_source": "rule",
+          "sticky_applied": false,
+          "ack_followup_applied": false,
+          "channel": "",
+          "route_language_packs": [],
+          "fallback_taken": false,
+          "runner_health_snapshot": {
+            "present": true,
+            "worker_id": "runner-macmini.bearhome-62634",
+            "last_heartbeat_at": "2026-04-09T00:25:54.120050+08:00",
+            "reason": "ok"
+          },
+          "queue_pressure_band": "none",
+          "quota_pressure_band": "",
+          "actual_cost": null,
+          "actual_latency": null,
+          "validation_outcome": ""
+        },
+        "executionContract": "runner",
+        "agentScope": "",
+        "routeClass": "",
+        "recommendedModel": "",
+        "resolvedModel": "",
+        "outputBudget": "",
+        "reasoningMode": "",
+        "candidateModels": [],
+        "routeSource": "rule",
+        "fallbackTaken": false,
+        "runnerHealthSnapshot": {
+          "present": true,
+          "worker_id": "runner-macmini.bearhome-62634",
+          "last_heartbeat_at": "2026-04-09T00:25:54.120050+08:00",
+          "reason": "ok"
+        },
+        "queuePressureBand": "none",
+        "quotaPressureBand": "",
+        "actualCost": null,
+        "actualLatency": null,
+        "validationOutcome": ""
+      },
+      {
+        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+        "event": "agent_end",
+        "at": "2026-04-08T16:26:12.501Z",
+        "sessionKey": "agent:octoclaw-replay-20260409002421-2:main",
+        "sessionId": "octoclaw-replay-20260409002421-2-s1",
+        "route": "runner",
+        "systemPreferredRoute": "runner",
+        "workerPool": "octoclaw-runner",
+        "routeHintRequired": false,
+        "routeHintSubmitted": false,
+        "delegated": false,
+        "delegationTool": "",
+        "blockedTools": [],
+        "ackFollowupCandidate": false,
+        "ackFollowupApplied": false,
+        "routeLanguagePacks": [],
+        "workContract": "inspect_report",
+        "workContractHint": "inspect_report",
+        "budgetPolicy": {},
+        "routeRecommendation": {},
+        "budgetRecommendation": {},
+        "autoRouter": {},
+        "routeOutcome": {
+          "schema_version": "octoclaw.route_outcome/v1",
+          "event_type": "agent_end",
+          "execution_contract": "runner",
+          "resolved_execution_contract": "runner",
+          "agent_scope": "",
+          "route_class": "",
+          "worker_pool": "octoclaw-runner",
+          "phase": "inspect",
+          "protocol": "normal",
+          "profile": "",
+          "skill_bundle": [],
+          "recommended_model": "",
+          "resolved_model": "",
+          "output_budget": "",
+          "reasoning_mode": "",
+          "review_required": false,
+          "artifact_first": false,
+          "handoff_contract": "",
+          "reason_codes": [],
+          "route_source": "rule",
+          "sticky_applied": false,
+          "ack_followup_applied": false,
+          "channel": "",
+          "route_language_packs": [],
+          "fallback_taken": false,
+          "runner_health_snapshot": {
+            "present": true,
+            "worker_id": "runner-macmini.bearhome-98558",
+            "last_heartbeat_at": "2026-04-09T00:26:06.430369+08:00",
+            "reason": "ok"
+          },
+          "queue_pressure_band": "none",
+          "quota_pressure_band": "",
+          "actual_cost": null,
+          "actual_latency": null,
+          "validation_outcome": ""
+        },
+        "executionContract": "runner",
+        "agentScope": "",
+        "routeClass": "",
+        "recommendedModel": "",
+        "resolvedModel": "",
+        "outputBudget": "",
+        "reasoningMode": "",
+        "candidateModels": [],
+        "routeSource": "rule",
+        "fallbackTaken": false,
+        "runnerHealthSnapshot": {
+          "present": true,
+          "worker_id": "runner-macmini.bearhome-98558",
+          "last_heartbeat_at": "2026-04-09T00:26:06.430369+08:00",
+          "reason": "ok"
+        },
+        "queuePressureBand": "none",
+        "quotaPressureBand": "",
+        "actualCost": null,
+        "actualLatency": null,
+        "validationOutcome": ""
+      }
+    ],
+    "findings": [
+      "empty_reply"
+    ]
+  },
+  {
+    "agent": "octoclaw-replay-20260409002749-3",
+    "session_id": "octoclaw-replay-20260409002749-3-s1",
+    "prompt": "Continue where you left off. The previous model attempt failed or timed out.",
+    "return_code": 0,
+    "reply_text": "",
+    "stderr_tail": ",\n            \"propertiesCount\": 4\n          },\n          {\n            \"name\": \"session_status\",\n            \"summaryChars\": 336,\n            \"schemaChars\": 89,\n            \"propertiesCount\": 2\n          },\n          {\n            \"name\": \"web_search\",\n            \"summaryChars\": 93,\n            \"schemaChars\": 446,\n            \"propertiesCount\": 4\n          },\n          {\n            \"name\": \"web_fetch\",\n            \"summaryChars\": 129,\n            \"schemaChars\": 374,\n            \"propertiesCount\": 3\n          },\n          {\n            \"name\": \"image\",\n            \"summaryChars\": 201,\n            \"schemaChars\": 342,\n            \"propertiesCount\": 6\n          },\n          {\n            \"name\": \"pdf\",\n            \"summaryChars\": 275,\n            \"schemaChars\": 400,\n            \"propertiesCount\": 6\n          },\n          {\n            \"name\": \"browser\",\n            \"summaryChars\": 1066,\n            \"schemaChars\": 2799,\n            \"propertiesCount\": 48\n          },\n          {\n            \"name\": \"memory_search\",\n            \"summaryChars\": 334,\n            \"schemaChars\": 139,\n            \"propertiesCount\": 3\n          },\n          {\n            \"name\": \"memory_get\",\n            \"summaryChars\": 151,\n            \"schemaChars\": 128,\n            \"propertiesCount\": 3\n          },\n          {\n            \"name\": \"octoclaw_route_hint\",\n            \"summaryChars\": 116,\n            \"schemaChars\": 790,\n            \"propertiesCount\": 8\n          },\n          {\n            \"name\": \"octoclaw_policy_decide\",\n            \"summaryChars\": 149,\n            \"schemaChars\": 644,\n            \"propertiesCount\": 6\n          },\n          {\n            \"name\": \"octoclaw_route\",\n            \"summaryChars\": 89,\n            \"schemaChars\": 250,\n            \"propertiesCount\": 2\n          },\n          {\n            \"name\": \"octoclaw_dispatch\",\n            \"summaryChars\": 104,\n            \"schemaChars\": 753,\n            \"propertiesCount\": 8\n          },\n          {\n            \"name\": \"octoclaw_spawn\",\n            \"summaryChars\": 113,\n            \"schemaChars\": 766,\n            \"propertiesCount\": 9\n          },\n          {\n            \"name\": \"octoclaw_task_action\",\n            \"summaryChars\": 102,\n            \"schemaChars\": 405,\n            \"propertiesCount\": 4\n          },\n          {\n            \"name\": \"octoclaw_status\",\n            \"summaryChars\": 152,\n            \"schemaChars\": 133,\n            \"propertiesCount\": 1\n          }\n        ]\n      }\n    },\n    \"stopReason\": \"stop\"\n  }\n}\n",
+    "new_tasks": [],
+    "replay_events": [
+      {
+        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+        "event": "policy_resolved",
+        "at": "2026-04-08T16:28:16.725Z",
+        "sessionKey": "agent:octoclaw-replay-20260409002749-3:main",
+        "sessionId": "octoclaw-replay-20260409002749-3-s1",
+        "trigger": "user",
+        "route": "direct",
+        "systemPreferredRoute": "direct",
+        "workerPool": "octoclaw-main",
+        "protectedLane": "",
+        "routeHintRequired": false,
+        "routeHintSubmitted": false,
+        "stickyApplied": false,
+        "ackFollowupCandidate": false,
+        "ackFollowupApplied": false,
+        "routeRecommendationConflict": false,
+        "routeRecommendationStrategy": "none",
+        "routeRecommendationConflictType": "",
+        "routeLanguagePacks": [
+          "zh",
+          "en"
+        ],
+        "prompt": "Continue where you left off. The previous model attempt failed or timed out.",
+        "workContract": "answer_now",
+        "workContractHint": "answer_now",
+        "budgetPolicy": {
+          "budget_cap": "tiny",
+          "retry_cap": 0,
+          "max_workers": 0,
+          "latency_target": "interactive",
+          "interruptibility": "high",
+          "upgrade_allowed": true
+        },
+        "routeRecommendation": {
+          "schema_version": "octoclaw.route_recommendation/v1",
+          "recommended_route": "direct",
+          "recommended_worker_pool": "octoclaw-main",
+          "recommended_work_type": "research",
+          "recommended_phase": "collect",
+          "recommended_model_band": "fast",
+          "protected_lane": "",
+          "bypass_delegated_optimization": false,
+          "work_contract_hint": "answer_now",
+          "top_candidates": [
+            {
+              "route": "direct",
+              "score": 0.82
+            },
+            {
+              "route": "spawn_single",
+              "score": 0.36
+            }
+          ],
+          "arbitration": {
+            "required": false,
+            "strategy": "none",
+            "resolved_by": "base_policy",
+            "conflict_type": "",
+            "semantic_review_requested": false,
+            "semantic_review_reason": "",
+            "score_margin": 0.46,
+            "tiny_judge_ready": false,
+            "fallback_policy": "rule_only"
+          },
+          "reason_codes": [
+            "work_contract:answer_now",
+            "direct_answer_contract"
+          ]
+        },
+        "budgetRecommendation": {
+          "schema_version": "octoclaw.budget_recommendation/v1",
+          "target_model": "minimax-portal/MiniMax-M2.7",
+          "fallback_model": "",
+          "output_budget": "tiny",
+          "retry_budget": 0,
+          "latency_target": "interactive",
+          "max_workers": 0,
+          "reasoning_mode": "medium",
+          "upgrade_allowed": true,
+          "cost_ceiling": "tiny",
+          "consistency": {
+            "route": "direct",
+            "route_matches_output_budget": true,
+            "route_matches_latency_target": true,
+            "route_matches_worker_budget": true,
+            "retry_budget_valid": true,
+            "route_budget_consistent": true
+          }
+        },
+        "autoRouter": {
+          "schema_version": "octoclaw.auto_router.recommendation/v1",
+          "internal_first": true,
+          "signal": {
+            "schema_version": "octoclaw.auto_router.signal/v1",
+            "request": {
+              "task": "Continue where you left off. The previous model attempt failed or timed out.",
+              "command": "",
+              "metadata": {
+                "session_key": "agent:octoclaw-replay-20260409002749-3:main",
+                "session_origin": "main",
+                "trigger": "user",
+                "agent_id": "octoclaw-replay-20260409002749-3",
+                "session_id": "octoclaw-replay-20260409002749-3-s1",
+                "agent_namespace": "octoclaw",
+                "managed_by_octoclaw": true
+              },
+              "session_key": "agent:octoclaw-replay-20260409002749-3:main",
+              "session_origin": ""
+            },
+            "contract": {
+              "work_contract_hint": "answer_now",
+              "artifact_need": false,
+              "durable_runtime_need": false,
+              "parallel_gain": "low",
+              "risk_level": "low"
+            },
+            "continuity": {
+              "route_hint": "",
+              "sticky_lane": "",
+              "followup_kind": "",
+              "session_resume": {}
+            },
+            "model_signals": {
+              "model_band_hint": "fast",
+              "semantic_model_hint": "",
+              "expected_cost_band": "low",
+              "expected_latency_ms": 1200
+            },
+            "feedback_signals": {
+              "policy_phase": "guided",
+              "replay_logging_enabled": true,
+              "promotion_eligibility": "",
+              "validation_status": "",
+              "learning_flags": []
+            }
+          },
+          "router_core": {
+            "schema_version": "octoclaw.auto_router.router_core/v1",
+            "route": "direct",
+            "route_class": "main_direct",
+            "agent_scope": "main_agent",
+            "work_contract": "answer_now",
+            "executor_type": "main",
+            "confidence": 0.82,
+            "reason_codes": [
+              "work_contract:answer_now",
+              "direct_answer_contract"
+            ],
+            "required_evidence": [
+              "replay"
+            ],
+            "review_required": false,
+            "next_evaluation_target": "replay"
+          },
+          "budget_planner": {
+            "schema_version": "octoclaw.auto_router.budget_planner/v1",
+            "target_model": "minimax-portal/MiniMax-M2.7",
+            "fallback_model": "",
+            "output_budget": "tiny",
+            "retry_budget": 0,
+            "latency_target": "interactive",
+            "max_workers": 0,
+            "reasoning_mode": "medium",
+            "upgrade_allowed": true,
+            "cost_ceiling": "tiny",
+            "consistency": {
+              "route": "direct",
+              "route_matches_output_budget": true,
+              "route_matches_latency_target": true,
+              "route_matches_worker_budget": true,
+              "retry_budget_valid": true,
+              "route_budget_consistent": true
+            }
+          },
+          "model_intel": {
+            "schema_version": "octoclaw.auto_router.model_intel/v1",
+            "selected_model": "minimax-portal/MiniMax-M2.7",
+            "candidate_models": [
+              "minimax-portal/MiniMax-M2.7"
+            ],
+            "provider": "minimax-portal",
+            "model_band": "fast",
+            "selector_band": "quick",
+            "selector_role": "main",
+            "facts_plane": {
+              "source_status_file": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-intel-source-status.json",
+              "source_precedence": {
+                "identity": [
+                  "operator_override",
+                  "curated_local_catalog",
+                  "external_model_registry"
+                ],
+                "capabilities": [
+                  "operator_override",
+                  "external_model_registry",
+                  "curated_local_catalog",
+                  "built_in_defaults"
+                ],
+                "pricing": [
+                  "operator_override",
+                  "external_model_registry",
+                  "secondary_sync_source",
+                  "built_in_defaults"
+                ],
+                "runtime": [
+                  "provider_runtime_observation",
+                  "operator_override",
+                  "built_in_defaults"
+                ]
+              }
+            },
+            "source_files": {
+              "catalog": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-catalog.json",
+              "policy": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-policy.json",
+              "health": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-health.json",
+              "speed": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-speed.json",
+              "plan_state": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-plan-state.json",
+              "benchmarks": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-benchmarks.json",
+              "sources": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-sources.json",
+              "source_status": "/Users/guanbear/.openclaw/workspace/tmp/octopus/model-intel-source-status.json"
+            }
+          },
+          "adapter": {
+            "schema_version": "octoclaw.auto_router.adapter/v1",
+            "policy_phase": "guided",
+            "merge_contract": "none",
+            "handoff_contract": "direct_answer",
+            "route_hint_required": false,
+            "dispatch_required": false,
+            "control_observer_only": false
+          }
+        },
+        "routeOutcome": {
+          "schema_version": "octoclaw.route_outcome/v1",
+          "event_type": "policy_resolved",
+          "execution_contract": "direct",
+          "resolved_execution_contract": "direct",
+          "agent_scope": "main_agent",
+          "route_class": "main_direct",
+          "worker_pool": "octoclaw-main",
+          "phase": "collect",
+          "protocol": "normal",
+          "profile": "research",
+          "skill_bundle": [
+            "web",
+            "docs",
+            "report"
+          ],
+          "recommended_model": "minimax-portal/MiniMax-M2.7",
+          "resolved_model": "minimax-portal/MiniMax-M2.7",
+          "output_budget": "tiny",
+          "reasoning_mode": "medium",
+          "review_required": false,
+          "artifact_first": false,
+          "handoff_contract": "direct_answer",
+          "reason_codes": [
+            "work_contract:answer_now",
+            "direct_answer_contract"
+          ],
+          "route_source": "rule",
+          "sticky_applied": false,
+          "ack_followup_applied": false,
+          "channel": "",
+          "route_language_packs": [
+            "zh",
+            "en"
+          ],
+          "fallback_taken": false,
+          "runner_health_snapshot": {
+            "present": true,
+            "worker_id": "runner-macmini.bearhome-62634",
+            "last_heartbeat_at": "2026-04-09T00:28:13.045313+08:00",
+            "reason": "ok"
+          },
+          "queue_pressure_band": "none",
+          "quota_pressure_band": "",
+          "actual_cost": null,
+          "actual_latency": null,
+          "validation_outcome": ""
+        },
+        "executionContract": "direct",
+        "agentScope": "main_agent",
+        "routeClass": "main_direct",
+        "recommendedModel": "minimax-portal/MiniMax-M2.7",
+        "resolvedModel": "minimax-portal/MiniMax-M2.7",
+        "outputBudget": "tiny",
+        "reasoningMode": "medium",
+        "candidateModels": [
+          "minimax-portal/MiniMax-M2.7"
+        ],
+        "routeSource": "rule",
+        "fallbackTaken": false,
+        "runnerHealthSnapshot": {
+          "present": true,
+          "worker_id": "runner-macmini.bearhome-62634",
+          "last_heartbeat_at": "2026-04-09T00:28:13.045313+08:00",
+          "reason": "ok"
+        },
+        "queuePressureBand": "none",
+        "quotaPressureBand": "",
+        "actualCost": null,
+        "actualLatency": null,
+        "validationOutcome": ""
+      },
+      {
+        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+        "event": "agent_end",
+        "at": "2026-04-08T16:31:17.712Z",
+        "sessionKey": "agent:octoclaw-replay-20260409002749-3:main",
+        "sessionId": "octoclaw-replay-20260409002749-3-s1",
+        "route": "direct",
+        "systemPreferredRoute": "direct",
+        "workerPool": "octoclaw-main",
+        "routeHintRequired": false,
+        "routeHintSubmitted": false,
+        "delegated": false,
+        "delegationTool": "",
+        "blockedTools": [],
+        "ackFollowupCandidate": false,
+        "ackFollowupApplied": false,
+        "routeLanguagePacks": [],
+        "workContract": "answer_now",
+        "workContractHint": "answer_now",
+        "budgetPolicy": {},
+        "routeRecommendation": {},
+        "budgetRecommendation": {},
+        "autoRouter": {},
+        "routeOutcome": {
+          "schema_version": "octoclaw.route_outcome/v1",
+          "event_type": "agent_end",
+          "execution_contract": "direct",
+          "resolved_execution_contract": "direct",
+          "agent_scope": "",
+          "route_class": "",
+          "worker_pool": "octoclaw-main",
+          "phase": "collect",
+          "protocol": "normal",
+          "profile": "",
+          "skill_bundle": [],
+          "recommended_model": "",
+          "resolved_model": "",
+          "output_budget": "",
+          "reasoning_mode": "",
+          "review_required": false,
+          "artifact_first": false,
+          "handoff_contract": "",
+          "reason_codes": [],
+          "route_source": "rule",
+          "sticky_applied": false,
+          "ack_followup_applied": false,
+          "channel": "",
+          "route_language_packs": [],
+          "fallback_taken": false,
+          "runner_health_snapshot": {
+            "present": true,
+            "worker_id": "runner-macmini.bearhome-62634",
+            "last_heartbeat_at": "2026-04-09T00:31:09.064940+08:00",
+            "reason": "ok"
+          },
+          "queue_pressure_band": "none",
+          "quota_pressure_band": "",
+          "actual_cost": null,
+          "actual_latency": null,
+          "validation_outcome": ""
+        },
+        "executionContract": "direct",
+        "agentScope": "",
+        "routeClass": "",
+        "recommendedModel": "",
+        "resolvedModel": "",
+        "outputBudget": "",
+        "reasoningMode": "",
+        "candidateModels": [],
+        "routeSource": "rule",
+        "fallbackTaken": false,
+        "runnerHealthSnapshot": {
+          "present": true,
+          "worker_id": "runner-macmini.bearhome-62634",
+          "last_heartbeat_at": "2026-04-09T00:31:09.064940+08:00",
+          "reason": "ok"
+        },
+        "queuePressureBand": "none",
+        "quotaPressureBand": "",
+        "actualCost": null,
+        "actualLatency": null,
+        "validationOutcome": ""
+      }
+    ],
+    "findings": [
+      "empty_reply"
+    ]
+  }
+]
