@@ -694,6 +694,7 @@ router / model-intel 深化的 focused design 见：
 4. **RM4：Extractable Readiness**
    - minimal package boundary map
    - public surface shortlist
+   - machine-readable boundary manifest
    - internal-only runtime coupling 清单
 
 ---

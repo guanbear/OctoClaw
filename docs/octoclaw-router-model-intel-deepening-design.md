@@ -307,6 +307,8 @@ Model-Intel Facts Plane
 
 - internal interfaces 再收口
 - minimal package boundary map
+- public surface shortlist
+- machine-readable boundary manifest
 - 明确“什么时候可以讨论拆独立 router package”
 
 ---

@@ -558,6 +558,7 @@ Python 不再承担：
 5. **PR-5：model-intel source adapters / OpenRouter sync**
 6. **PR-6：tiny judge adapter（可选）**
 7. **PR-7：offline calibration / learned-router prep**
+8. **PR-8：extractable readiness baseline**
 
 推荐不要打包成一个大 PR。
 
@@ -589,6 +590,8 @@ Python 不再承担：
 - `extensions/octoclaw-runtime/policy/outcome.js`
 - `tests/fixtures/route-recommendation/`
 - `tests/fixtures/route-outcome/`
+- `docs/octoclaw-auto-router-boundary-map.md`
+- `lib/auto-router-boundary.mjs`
 
 ---
 

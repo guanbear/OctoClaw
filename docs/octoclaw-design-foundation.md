@@ -157,6 +157,7 @@ P2.5 的正式设计与执行清单见：
 
 - [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
 - [`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
+- [`octoclaw-auto-router-boundary-map.md`](./octoclaw-auto-router-boundary-map.md)
 
 ### 4.3 Operator backend 是增强层，不是默认运行面
 
