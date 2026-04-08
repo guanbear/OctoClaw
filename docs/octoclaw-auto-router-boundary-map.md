@@ -148,9 +148,14 @@
 
 1. 先冻结 recommendation schema
 2. 先冻结 facts-plane source/status shape
-3. 先抽 source adapter 和 router eval
-4. runtime adapter 继续留在 OctoClaw
-5. 只有当 policy adapter / lane consumption 再瘦一轮之后，才讨论独立服务或 package
+3. 先抽统一 public surface 壳
+   - `manifest`
+   - `facts`
+   - `recommend`
+   - `eval`
+4. 再抽 source adapter 和 router eval
+5. runtime adapter 继续留在 OctoClaw
+6. 只有当 policy adapter / lane consumption 再瘦一轮之后，才讨论独立服务或 package
 
 ---
 
