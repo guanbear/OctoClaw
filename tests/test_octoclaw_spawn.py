@@ -243,7 +243,17 @@ class OctoClawSpawnTests(unittest.TestCase):
                     model_band="normal",
                     prompt="do the work",
                     thinking="medium",
+                    route="spawn_single",
+                    work_type="research",
+                    phase="collect",
+                    protocol="heavy",
+                    review_required=True,
                 )
+                wrapper = Path(payload["wrapper_path"]).read_text(encoding="utf-8")
+                self.assertIn("--model zai/glm-4.7", wrapper)
+                self.assertIn("--worker-pool octoclaw-research", wrapper)
+                self.assertIn("--protocol heavy", wrapper)
+                self.assertIn("--review-required true", wrapper)
 
         self.assertEqual(payload["backend"], "native")
         self.assertEqual(payload["backend_name"], "openclaw_agent")
@@ -260,6 +270,73 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(created["kwargs"]["env"]["OCTOCLAW_DISABLE_RUNTIME_POLICY"], "1")
         self.assertIn("/opt/homebrew/bin:/usr/local/bin", created["kwargs"]["env"]["PATH"])
         self.assertTrue(created["kwargs"]["start_new_session"])
+
+    def test_finalize_native_spawn_result_upserts_metadata_and_materializes_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stdout_path = Path(tmpdir) / "stdout.log"
+            stderr_path = Path(tmpdir) / "stderr.log"
+            report_path = Path(tmpdir) / "report.md"
+            stdout_payload = {
+                "result": {
+                    "payloads": [
+                        {
+                            "text": (
+                                "---RESULT---\n"
+                                "{\"schema_version\":\"octoclaw.worker_result/v1\","
+                                "\"status\":\"done\","
+                                "\"summary\":\"MiniMax 测速完成。\","
+                                "\"user_safe_summary\":\"MiniMax 实测完成。\","
+                                "\"artifacts\":[],"
+                                "\"files\":[],"
+                                "\"risks\":[\"single run\"],"
+                                "\"verification\":[\"TTFT=1.2s\",\"TPS=18\"],"
+                                "\"next_step\":\"none\"}"
+                            )
+                        }
+                    ]
+                }
+            }
+            stdout_path.write_text(json.dumps(stdout_payload, ensure_ascii=False), encoding="utf-8")
+            stderr_path.write_text("", encoding="utf-8")
+            calls = []
+
+            def _fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            with patch.object(octoclaw_spawn.subprocess, "run", side_effect=_fake_run):
+                result = octoclaw_spawn.finalize_native_spawn_result(
+                    task_id="research-1",
+                    stdout_path=str(stdout_path),
+                    stderr_path=str(stderr_path),
+                    report_path=str(report_path),
+                    exit_code=0,
+                    model="minimax-portal/MiniMax-M2.7-highspeed",
+                    model_band="fast",
+                    route="spawn_single",
+                    runtime="subagent",
+                    worker_pool="octoclaw-research",
+                    work_type="research",
+                    phase="collect",
+                    protocol="heavy",
+                    profile="default",
+                    review_required=False,
+                )
+                self.assertEqual(result["status"], "done")
+                self.assertEqual(result["report_path"], str(report_path))
+                report_text = report_path.read_text(encoding="utf-8")
+                self.assertIn("MiniMax 测速完成。", report_text)
+                self.assertIn("TTFT=1.2s", report_text)
+                self.assertGreaterEqual(len(calls), 2)
+                upsert_cmd = calls[0]
+                done_cmd = calls[1]
+                self.assertIn("upsert", upsert_cmd)
+                self.assertIn("--worker-pool", upsert_cmd)
+                self.assertIn("octoclaw-research", upsert_cmd)
+                self.assertIn("--model", upsert_cmd)
+                self.assertIn("minimax-portal/MiniMax-M2.7-highspeed", upsert_cmd)
+                self.assertIn("done", done_cmd)
+                self.assertIn(str(report_path), done_cmd)
 
     def test_build_native_openclaw_command_uses_supported_agent_options_only(self) -> None:
         with (

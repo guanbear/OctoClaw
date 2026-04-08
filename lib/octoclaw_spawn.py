@@ -555,6 +555,42 @@ def _write_native_report(report_path: str, report_text: str) -> str:
     return path
 
 
+def _render_native_result_report(task_id: str, result_payload: dict, *, summary: str = "") -> str:
+    if not isinstance(result_payload, dict):
+        return ""
+    lines = [
+        f"# Native Spawn Result: {task_id}",
+        "",
+        f"- status: {str(result_payload.get('status', '') or '').strip() or 'unknown'}",
+    ]
+    resolved_summary = str(result_payload.get("summary", "") or result_payload.get("user_safe_summary", "") or summary or "").strip()
+    if resolved_summary:
+        lines.extend(["", "## Summary", resolved_summary])
+    user_safe_summary = str(result_payload.get("user_safe_summary", "") or "").strip()
+    if user_safe_summary and user_safe_summary != resolved_summary:
+        lines.extend(["", "## User Safe Summary", user_safe_summary])
+    verification = result_payload.get("verification", []) if isinstance(result_payload.get("verification"), list) else []
+    if verification:
+        lines.extend(["", "## Verification"])
+        lines.extend([f"- {str(item).strip()}" for item in verification if str(item).strip()])
+    risks = result_payload.get("risks", []) if isinstance(result_payload.get("risks"), list) else []
+    if risks:
+        lines.extend(["", "## Risks"])
+        lines.extend([f"- {str(item).strip()}" for item in risks if str(item).strip()])
+    next_step = str(result_payload.get("next_step", "") or "").strip()
+    if next_step:
+        lines.extend(["", "## Next Step", next_step])
+    files = result_payload.get("files", []) if isinstance(result_payload.get("files"), list) else []
+    if files:
+        lines.extend(["", "## Files"])
+        lines.extend([f"- {str(item).strip()}" for item in files if str(item).strip()])
+    artifacts = result_payload.get("artifacts", []) if isinstance(result_payload.get("artifacts"), list) else []
+    if artifacts:
+        lines.extend(["", "## Artifacts"])
+        lines.extend([f"- {str(item).strip()}" for item in artifacts if str(item).strip()])
+    return "\n".join(lines).strip()
+
+
 def finalize_native_spawn_result(
     *,
     task_id: str,
@@ -562,6 +598,16 @@ def finalize_native_spawn_result(
     stderr_path: str,
     report_path: str,
     exit_code: int,
+    model: str = "",
+    model_band: str = "",
+    route: str = "",
+    runtime: str = "",
+    worker_pool: str = "",
+    work_type: str = "",
+    phase: str = "",
+    protocol: str = "",
+    profile: str = "",
+    review_required: bool = False,
 ) -> dict:
     stderr_tail = _read_log_tail(stderr_path, limit=240)
     stdout_payload = _load_native_stdout_payload(stdout_path)
@@ -605,7 +651,13 @@ def finalize_native_spawn_result(
         str(result_payload.get("next_step", "") or result_payload.get("report", "") or result_payload.get("summary", "") or "").strip(),
         180,
     ) if status == "blocked" else ""
-    report_written = _write_native_report(report_path, str(result_payload.get("report", "") or ""))
+    report_value = str(result_payload.get("report", "") or "").strip()
+    report_written = ""
+    if report_value and os.path.exists(report_value):
+        report_written = report_value
+    else:
+        report_body = report_value or _render_native_result_report(task_id, result_payload, summary=summary)
+        report_written = _write_native_report(report_path, report_body)
     artifacts_json = {
         "worker_result": {
             "task_id": task_id,
@@ -620,6 +672,44 @@ def finalize_native_spawn_result(
             "next_step": str(result_payload.get("next_step", "") or "none"),
         }
     }
+    if report_written:
+        artifacts_json["report_path"] = report_written
+    upsert_command = [
+        "python3",
+        TASK_STATE_PY,
+        "upsert",
+        "--id",
+        task_id,
+        "--status",
+        "running",
+        "--summary",
+        summary,
+        "--route",
+        route or "spawn_single",
+        "--runtime",
+        runtime or "subagent",
+        "--worker-pool",
+        worker_pool or "octoclaw-research",
+        "--work-type",
+        work_type or "research",
+        "--phase",
+        phase or "collect",
+        "--protocol",
+        protocol or "normal",
+        "--profile",
+        profile or "default",
+        "--review-required",
+        "true" if review_required else "false",
+        "--artifacts-json",
+        json.dumps(artifacts_json, ensure_ascii=False),
+    ]
+    if model:
+        upsert_command.extend(["--model", model])
+    if model_band:
+        upsert_command.extend(["--model-band", model_band])
+    if report_written:
+        upsert_command.extend(["--report-path", report_written])
+    subprocess.run(upsert_command, check=False, capture_output=True, text=True)
     command = [
         "python3",
         TASK_STATE_PY,
@@ -648,6 +738,15 @@ def validate_runtime(runtime: str, stream_to: str, supports_acp: bool) -> list[s
     if runtime == "acp" and stream_to and not supports_acp:
         problems.append("当前会话未声明支持 ACP 绑定，不要传 runtime=acp + streamTo")
     return problems
+
+
+def parse_bool_arg(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
 
 
 def log_spawn_error(task: str, error_text: str, *, runtime: str, stream_to: str, parent_id: str) -> None:
@@ -850,6 +949,11 @@ def execute_native_openclaw_spawn(
     prompt: str,
     thinking: str,
     profile_override: str = "",
+    route: str = "",
+    work_type: str = "",
+    phase: str = "",
+    protocol: str = "",
+    review_required: bool = False,
 ) -> dict:
     command, child_session_key, child_session_id = build_native_openclaw_command(
         task_id=task_id,
@@ -886,6 +990,16 @@ def execute_native_openclaw_spawn(
             f"--stdout-path {shlex.quote(stdout_path)} "
             f"--stderr-path {shlex.quote(stderr_path)} "
             f"--report-path {shlex.quote(os.path.join(SHARED_DIR, f'{task_id}.md'))} "
+            f"--model {shlex.quote(model)} "
+            f"--model-band {shlex.quote(model_band)} "
+            f"--route {shlex.quote(route or 'spawn_single')} "
+            f"--runtime {shlex.quote('subagent')} "
+            f"--worker-pool {shlex.quote(worker_pool)} "
+            f"--work-type {shlex.quote(work_type or 'research')} "
+            f"--phase {shlex.quote(phase or 'collect')} "
+            f"--protocol {shlex.quote(protocol or 'normal')} "
+            f"--profile {shlex.quote(profile_override or '')} "
+            f"--review-required {'true' if review_required else 'false'} "
             f"--exit-code \"$rc\" >/dev/null 2>&1 || true",
             'if [ "$rc" -ne 0 ]; then',
             f"  {shlex.quote(python_bin)} {shlex.quote(TASK_STATE_PY)} failed --id {shlex.quote(task_id)} --summary {shlex.quote(fail_summary)} >/dev/null 2>&1 || true",
@@ -958,6 +1072,11 @@ def execute_spawn_backend(
     prompt: str,
     thinking: str,
     profile_override: str = "",
+    route: str = "",
+    work_type: str = "",
+    phase: str = "",
+    protocol: str = "",
+    review_required: bool = False,
 ) -> dict:
     backend = resolve_spawn_backend()
     if backend == "clawteam":
@@ -979,6 +1098,11 @@ def execute_spawn_backend(
             prompt=prompt,
             thinking=thinking,
             profile_override=profile_override,
+            route=route,
+            work_type=work_type,
+            phase=phase,
+            protocol=protocol,
+            review_required=review_required,
         )
     raise RuntimeError(f"不支持的 spawn backend: {backend}")
 
@@ -1809,6 +1933,11 @@ def build_spawn_spec(
                 prompt=spawn_prompt,
                 thinking=thinking,
                 profile_override=profile,
+                route=final_route,
+                work_type=resolved_work_type,
+                phase=resolved_phase,
+                protocol=protocol,
+                review_required=review_required,
             )
             agent_owner = str((spawn_execution or {}).get("agent_name", "") or "")
             operator_surface = spawn_operator_surface(
@@ -1988,6 +2117,16 @@ def main() -> None:
         parser.add_argument("--stderr-path", dest="stderr_path", required=True)
         parser.add_argument("--report-path", dest="report_path", default="")
         parser.add_argument("--exit-code", dest="exit_code", type=int, default=0)
+        parser.add_argument("--model", dest="model", default="")
+        parser.add_argument("--model-band", dest="model_band", default="")
+        parser.add_argument("--route", dest="route", default="")
+        parser.add_argument("--runtime", dest="runtime", default="")
+        parser.add_argument("--worker-pool", dest="worker_pool", default="")
+        parser.add_argument("--work-type", dest="work_type", default="")
+        parser.add_argument("--phase", dest="phase", default="")
+        parser.add_argument("--protocol", dest="protocol", default="")
+        parser.add_argument("--profile", dest="profile", default="")
+        parser.add_argument("--review-required", dest="review_required", type=parse_bool_arg, default=False)
         args = parser.parse_args()
         result = finalize_native_spawn_result(
             task_id=args.task_id,
@@ -1995,6 +2134,16 @@ def main() -> None:
             stderr_path=args.stderr_path,
             report_path=args.report_path,
             exit_code=args.exit_code,
+            model=args.model,
+            model_band=args.model_band,
+            route=args.route,
+            runtime=args.runtime,
+            worker_pool=args.worker_pool,
+            work_type=args.work_type,
+            phase=args.phase,
+            protocol=args.protocol,
+            profile=args.profile,
+            review_required=bool(args.review_required),
         )
         print(json.dumps(result, ensure_ascii=False))
         return
