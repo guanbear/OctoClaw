@@ -56,6 +56,13 @@
       "default_confidence": 0.94,
       "decay_days": 14,
       "min_factor": 0.8
+    },
+    "runtime_health": {
+      "role": "runtime_observation",
+      "description": "本地 runtime 的健康、429、timeout、quota pressure 与 cooldown 观测。",
+      "default_confidence": 0.97,
+      "decay_days": 3,
+      "min_factor": 0.85
     }
   }
 }

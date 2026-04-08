@@ -41,6 +41,9 @@ def _normalize_decision(payload: dict) -> dict:
         model_intel = auto_router.get("model_intel")
         if isinstance(model_intel, dict):
             model_intel.pop("source_files", None)
+            facts_plane = model_intel.get("facts_plane")
+            if isinstance(facts_plane, dict):
+                facts_plane.pop("source_status_file", None)
     return normalized
 
 

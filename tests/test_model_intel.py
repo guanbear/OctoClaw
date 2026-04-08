@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
+import json
+import tempfile
 import sys
 import unittest
 from unittest.mock import Mock, patch
@@ -17,6 +19,71 @@ SPEC.loader.exec_module(model_intel)
 
 
 class ModelIntelTests(unittest.TestCase):
+    def test_ensure_source_registry_file_merges_missing_seed_sources(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-source-registry-") as workspace:
+            existing_file = Path(workspace) / "model-sources-existing.json"
+            seed_file = Path(workspace) / "model-sources.json"
+            module_file = Path(workspace) / "model-intel.py"
+            module_file.write_text("# test module placeholder\n", encoding="utf-8")
+            existing_file.write_text(
+                json.dumps(
+                    {
+                        "updated_at": "2026-04-01T00:00:00Z",
+                        "sources": {
+                            "openrouter_catalog": {
+                                "role": "custom_override",
+                                "description": "custom",
+                                "default_confidence": 0.5,
+                                "decay_days": 30,
+                                "min_factor": 0.4,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            seed_file.write_text(
+                json.dumps(
+                    {
+                        "updated_at": "2026-04-02T00:00:00Z",
+                        "sources": {
+                            "openrouter_catalog": {
+                                "role": "directory_pricing",
+                            },
+                            "runtime_health": {
+                                "role": "runtime_observation",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_load_json(path: str):
+                mapping = {
+                    str(existing_file): json.loads(existing_file.read_text(encoding="utf-8")),
+                    str(seed_file): json.loads(seed_file.read_text(encoding="utf-8")),
+                }
+                return mapping.get(str(path), {})
+
+            saved_payloads: list[dict] = []
+
+            def fake_save_json(path: str, payload: dict):
+                if str(path) == str(existing_file):
+                    saved_payloads.append(payload)
+                return True
+
+            with patch.object(model_intel, "__file__", str(module_file)), patch.object(
+                model_intel, "MODEL_SOURCES_FILE", str(existing_file)
+            ), patch.object(model_intel, "load_json", side_effect=fake_load_json), patch.object(
+                model_intel, "save_json", side_effect=fake_save_json
+            ):
+                payload = model_intel.ensure_source_registry_file()
+
+        self.assertIn("runtime_health", payload["sources"])
+        self.assertEqual(payload["sources"]["openrouter_catalog"]["role"], "custom_override")
+        self.assertEqual(saved_payloads[0]["sources"]["runtime_health"]["role"], "runtime_observation")
+
     def test_resolve_openclaw_bin_uses_configured_absolute_path(self) -> None:
         with patch.object(model_intel, "load_octopus_config", return_value={"spawn_execution": {"openclaw_bin": "/opt/homebrew/bin/openclaw"}}), patch.object(
             model_intel.os.path, "exists", side_effect=lambda path: path == "/opt/homebrew/bin/openclaw"
@@ -92,6 +159,9 @@ class ModelIntelTests(unittest.TestCase):
         self.assertEqual([model["id"] for model in catalog["models"]], ["zai/glm-4.7"])
         self.assertEqual(catalog["models"][0]["benchmark_source_model"], "zhipu/GLM-4.7")
         self.assertEqual(catalog["models"][0]["benchmark_scores"]["pinchbench"], 0.83)
+        self.assertEqual(catalog["schema_version"], model_intel.MODEL_INTEL_CATALOG_SCHEMA_VERSION)
+        self.assertEqual(catalog["facts_plane"]["source_status_file"], model_intel.MODEL_INTEL_SOURCE_STATUS_FILE)
+        self.assertIn("pricing", catalog["facts_plane"]["source_precedence"])
 
     def test_compute_policy_empty_catalog_uses_new_fields_only(self) -> None:
         with patch.object(model_intel, "save_json", return_value=True), patch.object(
@@ -104,6 +174,7 @@ class ModelIntelTests(unittest.TestCase):
         self.assertEqual(policy["worker_pools"], {})
         self.assertEqual(policy["worker_pool_phases"], {})
         self.assertIn("main_selection", policy)
+        self.assertEqual(policy["facts_plane"]["source_status_file"], model_intel.MODEL_INTEL_SOURCE_STATUS_FILE)
         self.assertNotIn("labels", policy)
         self.assertNotIn("tiers", policy)
 

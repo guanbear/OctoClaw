@@ -111,6 +111,7 @@ export const MODEL_PLAN_STATE_FILE = path.join(WORKSPACE, "tmp", "octopus", "mod
 export const MODEL_CATALOG_FILE = path.join(WORKSPACE, "tmp", "octopus", "model-catalog.json");
 export const MODEL_BENCHMARKS_FILE = path.join(WORKSPACE, "tmp", "octopus", "model-benchmarks.json");
 export const MODEL_SOURCES_FILE = path.join(WORKSPACE, "tmp", "octopus", "model-sources.json");
+export const MODEL_INTEL_SOURCE_STATUS_FILE = path.join(WORKSPACE, "tmp", "octopus", "model-intel-source-status.json");
 export const ROUTE_STICKINESS_FILE = path.join(WORKSPACE, "tmp", "octopus", "route-stickiness.json");
 export const GLOBAL_DEG_FILE = "/tmp/ironclaw-global-degradation.json";
 export const GUARD_FILE = "/tmp/ironclaw-model-guard-override.json";

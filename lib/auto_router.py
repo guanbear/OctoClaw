@@ -12,6 +12,7 @@ try:
         MODEL_BENCHMARKS_FILE,
         MODEL_CATALOG_FILE,
         MODEL_HEALTH_FILE,
+        MODEL_INTEL_SOURCE_STATUS_FILE,
         MODEL_PLAN_STATE_FILE,
         MODEL_POLICY_FILE,
         MODEL_SOURCES_FILE,
@@ -22,6 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
         MODEL_BENCHMARKS_FILE,
         MODEL_CATALOG_FILE,
         MODEL_HEALTH_FILE,
+        MODEL_INTEL_SOURCE_STATUS_FILE,
         MODEL_PLAN_STATE_FILE,
         MODEL_POLICY_FILE,
         MODEL_SOURCES_FILE,
@@ -35,6 +37,12 @@ BUDGET_PLANNER_SCHEMA_VERSION = "octoclaw.auto_router.budget_planner/v1"
 MODEL_INTEL_SCHEMA_VERSION = "octoclaw.auto_router.model_intel/v1"
 ADAPTER_SCHEMA_VERSION = "octoclaw.auto_router.adapter/v1"
 RECOMMENDATION_SCHEMA_VERSION = "octoclaw.auto_router.recommendation/v1"
+DEFAULT_MODEL_INTEL_PRECEDENCE = {
+    "identity": ["operator_override", "curated_local_catalog", "external_model_registry"],
+    "capabilities": ["operator_override", "external_model_registry", "curated_local_catalog", "built_in_defaults"],
+    "pricing": ["operator_override", "external_model_registry", "secondary_sync_source", "built_in_defaults"],
+    "runtime": ["provider_runtime_observation", "operator_override", "built_in_defaults"],
+}
 
 
 def _text(value: Any) -> str:
@@ -140,6 +148,7 @@ def build_budget_planner_payload(
 def build_model_intel_payload(*, model_policy: dict[str, Any]) -> dict[str, Any]:
     selected_model = _text(model_policy.get("selected_model"))
     provider = selected_model.split("/")[0] if "/" in selected_model else ""
+    facts_plane = model_policy.get("facts_plane") if isinstance(model_policy.get("facts_plane"), dict) else {}
     return {
         "schema_version": MODEL_INTEL_SCHEMA_VERSION,
         "selected_model": selected_model,
@@ -147,6 +156,11 @@ def build_model_intel_payload(*, model_policy: dict[str, Any]) -> dict[str, Any]
         "model_band": _text(model_policy.get("model_band")),
         "selector_band": _text(model_policy.get("selector_band")),
         "selector_role": _text(model_policy.get("model_selector_role")),
+        "facts_plane": facts_plane
+        or {
+            "source_status_file": MODEL_INTEL_SOURCE_STATUS_FILE,
+            "source_precedence": DEFAULT_MODEL_INTEL_PRECEDENCE,
+        },
         "source_files": {
             "catalog": MODEL_CATALOG_FILE,
             "policy": MODEL_POLICY_FILE,
@@ -155,6 +169,7 @@ def build_model_intel_payload(*, model_policy: dict[str, Any]) -> dict[str, Any]
             "plan_state": MODEL_PLAN_STATE_FILE,
             "benchmarks": MODEL_BENCHMARKS_FILE,
             "sources": MODEL_SOURCES_FILE,
+            "source_status": MODEL_INTEL_SOURCE_STATUS_FILE,
         },
     }
 

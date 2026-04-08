@@ -29,9 +29,14 @@ class AutoRouterTests(unittest.TestCase):
         self.assertEqual(payload["router_core"]["route"], decision["route_decision"]["route"])
         self.assertEqual(payload["router_core"]["work_contract"], decision["route_decision"]["work_contract"])
         self.assertEqual(payload["budget_planner"]["target_model"], decision["model_policy"]["selected_model"])
-        self.assertEqual(payload["adapter"]["policy_phase"], "conservative")
+        self.assertEqual(payload["adapter"]["policy_phase"], "guided")
         self.assertTrue(payload["signal"]["request"]["task"])
         self.assertIn(payload["signal"]["contract"]["risk_level"], {"low", "medium", "high"})
+        self.assertEqual(
+            payload["model_intel"]["facts_plane"]["source_status_file"],
+            payload["model_intel"]["source_files"]["source_status"],
+        )
+        self.assertIn("runtime", payload["model_intel"]["facts_plane"]["source_precedence"])
 
     def test_auto_router_cli_renders_recommendation_payload(self) -> None:
         result = subprocess.run(

@@ -2,6 +2,7 @@ import {
   MODEL_BENCHMARKS_FILE,
   MODEL_CATALOG_FILE,
   MODEL_HEALTH_FILE,
+  MODEL_INTEL_SOURCE_STATUS_FILE,
   MODEL_PLAN_STATE_FILE,
   MODEL_POLICY_FILE,
   MODEL_SOURCES_FILE,
@@ -29,6 +30,12 @@ const AUTO_ROUTER_BUDGET_SCHEMA_VERSION = "octoclaw.auto_router.budget_planner/v
 const AUTO_ROUTER_MODEL_INTEL_SCHEMA_VERSION = "octoclaw.auto_router.model_intel/v1";
 const AUTO_ROUTER_ADAPTER_SCHEMA_VERSION = "octoclaw.auto_router.adapter/v1";
 const AUTO_ROUTER_RECOMMENDATION_SCHEMA_VERSION = "octoclaw.auto_router.recommendation/v1";
+const DEFAULT_MODEL_INTEL_PRECEDENCE = {
+  identity: ["operator_override", "curated_local_catalog", "external_model_registry"],
+  capabilities: ["operator_override", "external_model_registry", "curated_local_catalog", "built_in_defaults"],
+  pricing: ["operator_override", "external_model_registry", "secondary_sync_source", "built_in_defaults"],
+  runtime: ["provider_runtime_observation", "operator_override", "built_in_defaults"],
+};
 const VALID_FORCE_ROUTES = new Set(["", "direct", "runner", "spawn_single", "spawn_multi"]);
 const VALID_ROUTE_HINT_ROUTES = new Set(["", "direct", "spawn_single", "spawn_multi"]);
 const VALID_ROUTE_HINT_WORK_TYPES = new Set(["", "ops", "research", "code", "review"]);
@@ -806,6 +813,13 @@ function buildAutoRouterPayload(decision) {
       model_band: normalizedText(modelPolicy.model_band),
       selector_band: normalizedText(modelPolicy.selector_band),
       selector_role: normalizedText(modelPolicy.model_selector_role),
+      facts_plane:
+        modelPolicy.facts_plane && typeof modelPolicy.facts_plane === "object"
+          ? JSON.parse(JSON.stringify(modelPolicy.facts_plane))
+          : {
+              source_status_file: MODEL_INTEL_SOURCE_STATUS_FILE,
+              source_precedence: DEFAULT_MODEL_INTEL_PRECEDENCE,
+            },
       source_files: {
         catalog: MODEL_CATALOG_FILE,
         policy: MODEL_POLICY_FILE,
@@ -814,6 +828,7 @@ function buildAutoRouterPayload(decision) {
         plan_state: MODEL_PLAN_STATE_FILE,
         benchmarks: MODEL_BENCHMARKS_FILE,
         sources: MODEL_SOURCES_FILE,
+        source_status: MODEL_INTEL_SOURCE_STATUS_FILE,
       },
     },
     adapter: {

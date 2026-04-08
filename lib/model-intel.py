@@ -11,11 +11,12 @@ import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from model_health import resolve_model_health, selection_penalty_for_role
-from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, load_octopus_config, save_json
+from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_INTEL_SOURCE_STATUS_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, load_json, load_octopus_config, save_json
 from model_plan_state import compute_plan_value_score, ensure_plan_state_file, get_plan_state_entry, preferred_fallback_model, should_fallback_due_to_plan
-from model_pricing import ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens
+from model_pricing import MODEL_PRICING_FILE, ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens, load_pricing_file
 
 LATENCY_FILE = "/tmp/ironclaw-model-latency.json"
 RETIRED_MODEL_PATTERNS = [r"glm-5-turbo", r"glm5-turbo"]
@@ -134,6 +135,26 @@ COMMON_OPENCLAW_BIN_CANDIDATES = [
     "/usr/local/bin/openclaw",
 ]
 
+MODEL_INTEL_CATALOG_SCHEMA_VERSION = "octoclaw.model_intel.catalog/v1"
+MODEL_INTEL_SOURCE_STATUS_SCHEMA_VERSION = "octoclaw.model_intel.source_status/v1"
+MODEL_INTEL_SOURCE_PRECEDENCE = {
+    "identity": ["operator_override", "curated_local_catalog", "external_model_registry"],
+    "capabilities": ["operator_override", "external_model_registry", "curated_local_catalog", "built_in_defaults"],
+    "pricing": ["operator_override", "external_model_registry", "secondary_sync_source", "built_in_defaults"],
+    "runtime": ["provider_runtime_observation", "operator_override", "built_in_defaults"],
+}
+SOURCE_STATUS_FILE_HINTS = {
+    "openrouter_catalog": MODEL_PRICING_FILE,
+    "openrouter_rankings": MODEL_BENCHMARKS_FILE,
+    "artificial_analysis_coding": MODEL_BENCHMARKS_FILE,
+    "pinchbench": MODEL_BENCHMARKS_FILE,
+    "claw_eval": MODEL_BENCHMARKS_FILE,
+    "openclaw_live_compat": MODEL_BENCHMARKS_FILE,
+    "local_speed": MODEL_SPEED_FILE,
+    "plan_state": MODEL_PLAN_STATE_FILE,
+    "runtime_health": MODEL_HEALTH_FILE,
+}
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -154,6 +175,32 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def iso_from_timestamp(timestamp: float | int | None) -> str | None:
+    if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+        return None
+    return datetime.fromtimestamp(float(timestamp), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def file_updated_at(path: str) -> str | None:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return iso_from_timestamp(stat.st_mtime)
+
+
+def freshness_state(updated_at: str | None, *, fresh_days: int = 14, stale_days: int = 45) -> str:
+    parsed = parse_iso_datetime(updated_at)
+    if parsed is None:
+        return "missing"
+    age_days = (datetime.now(timezone.utc) - parsed).total_seconds() / 86400.0
+    if age_days <= fresh_days:
+        return "fresh"
+    if age_days <= stale_days:
+        return "aging"
+    return "stale"
 
 
 def parse_openclaw_json_output(raw: str):
@@ -431,11 +478,19 @@ def load_source_registry() -> dict:
 
 def ensure_source_registry_file() -> dict:
     data = load_json(MODEL_SOURCES_FILE)
-    if isinstance(data, dict) and isinstance(data.get("sources"), dict):
-        return data
-
     seed_file = os.path.join(os.path.dirname(__file__), "model-sources.json")
     seed = load_json(seed_file)
+    if isinstance(data, dict) and isinstance(data.get("sources"), dict):
+        payload = dict(data)
+        if isinstance(seed, dict) and isinstance(seed.get("sources"), dict):
+            merged_sources = dict(seed.get("sources", {}))
+            merged_sources.update(payload.get("sources", {}))
+            if merged_sources != payload.get("sources", {}):
+                payload["sources"] = merged_sources
+                payload["updated_at"] = now_iso()
+                save_json(MODEL_SOURCES_FILE, payload)
+            return payload
+        return data
     if isinstance(seed, dict):
         save_json(MODEL_SOURCES_FILE, seed)
         return seed
@@ -443,6 +498,98 @@ def ensure_source_registry_file() -> dict:
     payload = {"updated_at": now_iso(), "sources": {}}
     save_json(MODEL_SOURCES_FILE, payload)
     return payload
+
+
+def summarize_benchmark_sources(benchmark_overrides: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for override in benchmark_overrides.values():
+        if not isinstance(override, dict):
+            continue
+        benchmark_scores = override.get("benchmark_scores", {})
+        if not isinstance(benchmark_scores, dict):
+            continue
+        for source_name, value in benchmark_scores.items():
+            if isinstance(value, (int, float)):
+                counts[source_name] = counts.get(source_name, 0) + 1
+    return counts
+
+
+def summarize_source_status(
+    *,
+    source_registry: dict[str, Any],
+    benchmark_overrides: dict[str, Any],
+    configured_ids: list[str],
+    speed_data: dict[str, Any],
+    health_state: dict[str, Any],
+) -> dict[str, Any]:
+    pricing_data = load_pricing_file()
+    plan_state_data = load_json(MODEL_PLAN_STATE_FILE)
+    benchmark_source_counts = summarize_benchmark_sources(benchmark_overrides)
+    speed_models = speed_data if isinstance(speed_data, dict) else {}
+    health_models = health_state.get("models", {}) if isinstance(health_state, dict) else {}
+    plan_models = plan_state_data.get("models", {}) if isinstance(plan_state_data, dict) else {}
+    pricing_models = pricing_data.get("models", []) if isinstance(pricing_data, dict) else []
+
+    observed_counts = {
+        "openrouter_catalog": len(pricing_models) if isinstance(pricing_models, list) else 0,
+        "openrouter_rankings": benchmark_source_counts.get("openrouter_rankings", 0),
+        "artificial_analysis_coding": benchmark_source_counts.get("artificial_analysis_coding", 0),
+        "pinchbench": benchmark_source_counts.get("pinchbench", 0),
+        "claw_eval": benchmark_source_counts.get("claw_eval", 0),
+        "openclaw_live_compat": max(benchmark_source_counts.get("openclaw_live_compat", 0), len(configured_ids)),
+        "local_speed": len(speed_models),
+        "plan_state": len(plan_models) if isinstance(plan_models, dict) else 0,
+        "runtime_health": len(health_models) if isinstance(health_models, dict) else 0,
+    }
+
+    sources: dict[str, Any] = {}
+    for source_name, source_meta in source_registry.items():
+        meta = dict(source_meta) if isinstance(source_meta, dict) else {}
+        hint_file = SOURCE_STATUS_FILE_HINTS.get(source_name, MODEL_SOURCES_FILE)
+        embedded_updated_at = None
+        if hint_file == MODEL_PRICING_FILE and isinstance(pricing_data, dict):
+            embedded_updated_at = pricing_data.get("updated_at")
+        elif hint_file == MODEL_PLAN_STATE_FILE and isinstance(plan_state_data, dict):
+            embedded_updated_at = plan_state_data.get("updated_at")
+        elif hint_file == MODEL_HEALTH_FILE and isinstance(health_state, dict):
+            embedded_updated_at = health_state.get("generated_at") or health_state.get("updated_at")
+        observed_models = int(observed_counts.get(source_name, 0) or 0)
+        updated_at = str(embedded_updated_at or file_updated_at(hint_file) or "")
+        sources[source_name] = {
+            "role": str(meta.get("role", "") or "").strip(),
+            "description": str(meta.get("description", "") or "").strip(),
+            "default_confidence": float(meta.get("default_confidence", 0.0) or 0.0),
+            "decay_days": int(meta.get("decay_days", 0) or 0),
+            "min_factor": float(meta.get("min_factor", 0.0) or 0.0),
+            "source_file": hint_file,
+            "updated_at": updated_at,
+            "freshness": freshness_state(updated_at),
+            "active": observed_models > 0,
+            "observed_models": observed_models,
+        }
+
+    payload = {
+        "generated_at": now_iso(),
+        "schema_version": MODEL_INTEL_SOURCE_STATUS_SCHEMA_VERSION,
+        "source_precedence": MODEL_INTEL_SOURCE_PRECEDENCE,
+        "sources": sources,
+    }
+    save_json(MODEL_INTEL_SOURCE_STATUS_FILE, payload)
+    return payload
+
+
+def build_facts_plane_summary(source_status: dict[str, Any]) -> dict[str, Any]:
+    sources = source_status.get("sources", {}) if isinstance(source_status, dict) else {}
+    active_sources = sorted(name for name, entry in sources.items() if isinstance(entry, dict) and entry.get("active"))
+    stale_sources = sorted(name for name, entry in sources.items() if isinstance(entry, dict) and entry.get("freshness") == "stale")
+    return {
+        "catalog_schema_version": MODEL_INTEL_CATALOG_SCHEMA_VERSION,
+        "source_status_schema_version": MODEL_INTEL_SOURCE_STATUS_SCHEMA_VERSION,
+        "source_precedence": MODEL_INTEL_SOURCE_PRECEDENCE,
+        "source_status_file": MODEL_INTEL_SOURCE_STATUS_FILE,
+        "active_sources": active_sources,
+        "stale_sources": stale_sources,
+    }
 
 
 def ensure_benchmark_snapshot_file() -> dict:
@@ -620,6 +767,7 @@ def build_catalog() -> dict:
     benchmark_overrides = load_benchmark_overrides()
     source_registry = load_source_registry()
     configured_ids = load_models_from_openclaw()
+    health_state = load_json(MODEL_HEALTH_FILE)
     configured_set = {str(model_id).strip() for model_id in configured_ids}
     model_ids = collect_candidate_model_ids(
         configured_ids,
@@ -696,7 +844,19 @@ def build_catalog() -> dict:
             }
         )
 
-    catalog = {"generated_at": now_iso(), "models": records}
+    source_status = summarize_source_status(
+        source_registry=source_registry,
+        benchmark_overrides=benchmark_overrides,
+        configured_ids=configured_ids,
+        speed_data=speed_data,
+        health_state=health_state if isinstance(health_state, dict) else {},
+    )
+    catalog = {
+        "generated_at": now_iso(),
+        "schema_version": MODEL_INTEL_CATALOG_SCHEMA_VERSION,
+        "facts_plane": build_facts_plane_summary(source_status),
+        "models": records,
+    }
     save_json(MODEL_CATALOG_FILE, catalog)
     return catalog
 
@@ -763,6 +923,14 @@ def is_main_capable_model(model: dict) -> bool:
 def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None) -> dict:
     runtime_config = config if isinstance(config, dict) else load_octopus_config()
     main_selection_cfg = resolve_main_selection_config(runtime_config)
+    facts_plane = catalog.get("facts_plane", {}) if isinstance(catalog.get("facts_plane"), dict) else {
+        "catalog_schema_version": MODEL_INTEL_CATALOG_SCHEMA_VERSION,
+        "source_status_schema_version": MODEL_INTEL_SOURCE_STATUS_SCHEMA_VERSION,
+        "source_precedence": MODEL_INTEL_SOURCE_PRECEDENCE,
+        "source_status_file": MODEL_INTEL_SOURCE_STATUS_FILE,
+        "active_sources": [],
+        "stale_sources": [],
+    }
     all_models = [m for m in catalog.get("models", []) if m.get("available", True)]
     available_auth_providers = load_available_auth_providers()
     models = filter_models_for_available_auth(all_models, available_auth_providers)
@@ -786,6 +954,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
                 "models": {},
                 "selection_penalties": {},
             },
+            "facts_plane": facts_plane,
             "sources": [],
         }
         save_json(MODEL_POLICY_FILE, policy)
@@ -1076,6 +1245,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
             "selection_penalties": health_penalties,
             "available_auth_providers": sorted(available_auth_providers),
         },
+        "facts_plane": facts_plane,
         "sources": sources,
         "source_policy": load_source_registry(),
     }
