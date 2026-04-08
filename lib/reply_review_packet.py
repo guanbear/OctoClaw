@@ -100,13 +100,18 @@ def _selection_tags(
     assistant_latency_seconds: float | None,
     user_prompt: str,
     assistant_reply: str,
+    runner_lane_mismatch: bool,
 ) -> list[str]:
     tags: list[str] = []
     prompt = str(user_prompt or "").strip()
     if protected_lane_misroute:
         tags.append("protected_lane_misroute")
+    if runner_lane_mismatch:
+        tags.append("runner_lane_mismatch")
     if expected_route == "direct":
         tags.append("direct_path")
+    if expected_route == "runner":
+        tags.append("runner_path")
     if expected_protected_lane:
         tags.append("protected_lane")
         tags.append(expected_protected_lane)
@@ -139,6 +144,8 @@ def _selection_score(case: dict) -> int:
     tag_set = {str(tag or "") for tag in tags}
     if "protected_lane_misroute" in tag_set:
         score += 500
+    if "runner_lane_mismatch" in tag_set:
+        score += 420
     if "delegation_explanation_risk" in tag_set:
         score += 320
     if "direct_policy_missing" in tag_set:
@@ -179,6 +186,8 @@ def summarize_selected_cases(cases: list[dict]) -> dict:
         "direct_policy_missing_count",
         "direct_slow_reply_count",
         "delegation_explanation_risk_count",
+        "runner_case_count",
+        "runner_lane_mismatch_count",
         "session_control_case_count",
         "control_observer_case_count",
         "casual_short_case_count",
@@ -199,6 +208,10 @@ def summarize_selected_cases(cases: list[dict]) -> dict:
             metrics["direct_slow_reply_count"] += 1
         if "delegation_explanation_risk" in tag_set:
             metrics["delegation_explanation_risk_count"] += 1
+        if "runner_path" in tag_set:
+            metrics["runner_case_count"] += 1
+        if "runner_lane_mismatch" in tag_set:
+            metrics["runner_lane_mismatch_count"] += 1
         if "session_control" in tag_set:
             metrics["session_control_case_count"] += 1
         if "control_observer" in tag_set:
@@ -449,6 +462,12 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
                 or (dispatch_route and dispatch_route != "direct")
             )
         )
+        runner_lane_mismatch = bool(
+            policy_route == "runner" and (
+                not dispatch_called
+                or dispatch_route not in {"", "runner"}
+            )
+        )
         selection_tags = _selection_tags(
             protected_lane_misroute=protected_lane_misroute,
             expected_route=expected_route,
@@ -459,6 +478,7 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
             assistant_latency_seconds=assistant_latency_seconds,
             user_prompt=turn.user_prompt,
             assistant_reply=turn.assistant_reply,
+            runner_lane_mismatch=runner_lane_mismatch,
         )
         results.append(
             {
@@ -487,6 +507,7 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
                     "protected_lane": matched_dispatch.get("protectedLane") if matched_dispatch else "",
                 },
                 "protected_lane_misroute": protected_lane_misroute,
+                "runner_lane_mismatch": runner_lane_mismatch,
                 "analysis": {
                     "assistant_latency_seconds": assistant_latency_seconds,
                     "policy_matched": policy_matched,

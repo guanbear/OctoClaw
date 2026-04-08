@@ -180,6 +180,80 @@ class ReplyReviewPacketTests(unittest.TestCase):
             self.assertEqual(case["dispatch"]["protected_lane"], "control_observer")
             self.assertTrue(case["protected_lane_misroute"])
 
+    def test_build_packet_marks_runner_lane_mismatch_when_policy_is_runner_but_no_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            session_dir = tmp / "sessions"
+            session_file = session_dir / "local" / "runner.jsonl"
+            session_file.parent.mkdir(parents=True)
+            self.write_jsonl(
+                session_file,
+                [
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-09T06:54:00Z",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "帮我查下openclaw 又有新版本了吗 有啥新特性"}],
+                        },
+                    },
+                    {
+                        "type": "message",
+                        "timestamp": "2026-04-09T06:54:10Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "有新版，我直接查了 GitHub API。"}],
+                        },
+                    },
+                ],
+            )
+            sessions_index = {
+                "local::agent:main:slack:direct:runner": {
+                    "sessionFile": "local/runner.jsonl",
+                    "origin": {"provider": "slack", "surface": "slack"},
+                }
+            }
+            sessions_path = tmp / "sessions.json"
+            sessions_path.write_text(json.dumps(sessions_index, ensure_ascii=False), encoding="utf-8")
+            replay_path = tmp / "runtime-policy-replay.jsonl"
+            self.write_jsonl(
+                replay_path,
+                [
+                    {
+                        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                        "event": "policy_resolved",
+                        "at": "2026-04-09T06:54:01Z",
+                        "sessionKey": "local::agent:main:slack:direct:runner",
+                        "sessionId": "runner",
+                        "prompt": "帮我查下openclaw 又有新版本了吗 有啥新特性",
+                        "route": "runner",
+                        "systemPreferredRoute": "runner",
+                        "workerPool": "octoclaw-runner",
+                    },
+                ],
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "sessions_index": str(sessions_path),
+                    "session_dir": str(session_dir),
+                    "replay_log": str(replay_path),
+                    "task_state": "",
+                    "day": "2026-04-09",
+                    "timezone": "Asia/Shanghai",
+                    "limit": 10,
+                    "output": "",
+                },
+            )()
+            packet = reply_review_packet.build_packet(args)
+            self.assertEqual(packet["selection_metrics"]["runner_case_count"], 1)
+            self.assertEqual(packet["selection_metrics"]["runner_lane_mismatch_count"], 1)
+            case = packet["cases"][0]
+            self.assertEqual(case["policy"]["route"], "runner")
+            self.assertFalse(case["dispatch"]["called"])
+            self.assertTrue(case["runner_lane_mismatch"])
+
     def test_build_packet_skips_internal_delegated_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

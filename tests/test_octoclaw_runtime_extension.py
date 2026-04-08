@@ -206,25 +206,6 @@ Conversation info (untrusted metadata):
         self.assertIn("octoclaw_status", payload)
         self.assertIn("octoclaw_task_action", payload)
 
-    def test_state_grounding_helpers_format_loaded_and_missing_context(self) -> None:
-        loaded = run_runtime_helper(
-            """__octoclawTest.formatStateGroundingContext({
-                required: true,
-                found: true,
-                prompt_context: "[OctoClaw state grounding]\\nstatus=running"
-            })"""
-        )
-        missing = run_runtime_helper(
-            """__octoclawTest.formatStateGroundingContext({
-                required: true,
-                found: false,
-                reason: "task_not_found"
-            })"""
-        )
-
-        self.assertIn("status=running", loaded)
-        self.assertIn("Do not claim queued/running/done/handler facts", missing)
-
     def test_tool_context_can_recover_policy_state_by_prompt_when_ctx_has_no_session(self) -> None:
         payload = run_runtime_helper(
             """(() => {
@@ -273,54 +254,6 @@ Conversation info (untrusted metadata):
 
         self.assertEqual(payload["session_key"], "agent:main:slack:direct:u234")
         self.assertEqual(payload["session_origin"], "slack")
-
-    def test_policy_state_persists_across_runtime_processes(self) -> None:
-        import tempfile
-
-        with tempfile.TemporaryDirectory(prefix="octoclaw-policy-state-") as tmpdir:
-            workspace = Path(tmpdir)
-            (workspace / "tmp" / "octopus").mkdir(parents=True)
-            env = {
-                "WORKSPACE": str(workspace),
-                "HOME": str(workspace),
-                "OCTOCLAW_ROOT": str(REPO_ROOT),
-            }
-            first = run_runtime_helper(
-                """(() => {
-                    __octoclawTest.__resetPolicyState?.();
-                    const ctx = {
-                      sessionKey: "agent:main:slack:direct:u999",
-                      sessionId: "sess-999",
-                      trigger: "message"
-                    };
-                    const now = Date.now();
-                    __octoclawTest.__setPolicyState?.(ctx, {
-                      prompt: "检查 nginx error log 并总结问题",
-                      decision: {
-                        request: { session_key: "agent:main:slack:direct:u999" },
-                        route_decision: { route: "spawn_single", work_contract: "research_report" },
-                        tool_policy: { must_delegate_via: "octoclaw_dispatch" }
-                      },
-                      createdAt: now,
-                      updatedAt: now
-                    });
-                    return {
-                      path: __octoclawTest.resolvePolicyStatePath(),
-                      persisted: __octoclawTest.__readPersistedPolicyState?.()
-                    };
-                })()""",
-                env=env,
-            )
-            second = run_runtime_helper(
-                """__octoclawTest.resolveToolPolicyContext({}, "检查 nginx error log 并总结问题")""",
-                env=env,
-            )
-
-        self.assertEqual(Path(first["path"]), workspace / "tmp" / "octopus" / "runtime-policy-state.json")
-        self.assertIn("agent:main:slack:direct:u999", first["persisted"]["entries"])
-        self.assertEqual(second["key"], "agent:main:slack:direct:u999")
-        self.assertEqual(second["state"]["decision"]["route_decision"]["route"], "spawn_single")
-        self.assertEqual(second["state"]["decision"]["tool_policy"]["must_delegate_via"], "octoclaw_dispatch")
 
     def test_tool_context_can_recover_recent_delegated_state_for_shell_like_followup(self) -> None:
         payload = run_runtime_helper(
@@ -457,6 +390,39 @@ Conversation info (untrusted metadata):
         self.assertIn("octoclaw_status", payload["tools"])
         self.assertNotIn("exec", payload["tools"])
         self.assertNotIn("octoclaw_dispatch", payload["tools"])
+
+    def test_runner_workflow_tool_set_includes_dispatch_and_excludes_web_fetch(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("帮我查下openclaw 又有新版本了吗 有啥新特性");
+                return {
+                  route: decision.route_decision.route,
+                  workContract: decision.route_decision.work_contract,
+                  tools: Array.from(__octoclawTest.runnerWorkflowTools(decision, "octoclaw_route_hint")).sort()
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertIn("octoclaw_dispatch", payload["tools"])
+        self.assertNotIn("web_fetch", payload["tools"])
+
+    def test_runner_workflow_enforcement_blocks_generic_external_tools(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("帮我查下openclaw 又有新版本了吗 有啥新特性");
+                return {
+                  blocked: __octoclawTest.workflowEnforcementRule(decision, "web_fetch", "octoclaw_route_hint"),
+                  allowed: __octoclawTest.workflowEnforcementRule(decision, "octoclaw_dispatch", "octoclaw_route_hint")
+                };
+            })()"""
+        )
+
+        self.assertTrue(payload["blocked"]["block"])
+        self.assertEqual(payload["blocked"]["route"], "runner")
+        self.assertIn("octoclaw_dispatch", payload["blocked"]["allowedTools"])
+        self.assertFalse(payload["allowed"]["block"])
 
     def test_workflow_meta_question_stays_in_direct_control_lane(self) -> None:
         payload = run_runtime_helper(
