@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildConversationGrounding, buildDirectLookupGuard, __conversationControlTest } from "./conversation-control.js";
 import { buildDecision } from "./policy/decide.js";
 import { inferRoute } from "./policy/route.js";
 
@@ -75,12 +76,24 @@ function resolveReplayLogPath() {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-replay.jsonl");
 }
 
+function resolveTaskStatePath() {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "task-state.json");
+}
+
 function resolveRouteStickinessPath() {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "route-stickiness.json");
 }
 
 function resolvePolicyStateLedgerPath() {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-state.json");
+}
+
+function resolveRootSessionsPath() {
+  return path.join(HOME_DIR, ".openclaw", "sessions.json");
+}
+
+function resolveMainAgentSessionsPath() {
+  return path.join(HOME_DIR, ".openclaw", "agents", "main", "sessions", "sessions.json");
 }
 
 function runCommand(command, args, options = {}) {
@@ -162,6 +175,10 @@ function preDispatchAckText(decision) {
   return String(decision?.pre_dispatch_ack?.text || "").trim();
 }
 
+function latencyAckText(decision) {
+  return String(decision?.latency_ack?.text || "").trim();
+}
+
 function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
   if (!isDelegatedRoute(decision)) return false;
   if (!decision?.pre_dispatch_ack?.required) return false;
@@ -212,7 +229,8 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
     return { attempted: false, sent: false, reason: "not_required", message: "" };
   }
-  const sessionKey = String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
+  const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx)
+    || String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
   if (!sessionKey) {
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
@@ -240,6 +258,60 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     };
   } catch (err) {
     logger?.warn?.(`octoclaw pre-dispatch ack failed: ${String(err)}`);
+    return {
+      attempted: true,
+      sent: false,
+      reason: String(err),
+      message,
+    };
+  }
+}
+
+function shouldSendLatencyAck(decision, state = {}, ctx = {}, toolName = "") {
+  if (isDelegatedRoute(decision)) return false;
+  if (!decision?.latency_ack?.required) return false;
+  if (state?.latencyAckSent) return false;
+  const trigger = String(ctx?.trigger || "").trim().toLowerCase();
+  if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) return false;
+  const name = String(toolName || "").trim();
+  if (!name || name.startsWith("octoclaw_")) return false;
+  return Boolean(latencyAckText(decision));
+}
+
+async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, logger, toolName) {
+  const message = latencyAckText(decision);
+  if (!shouldSendLatencyAck(decision, state, ctx, toolName)) {
+    return { attempted: false, sent: false, reason: "not_required", message: "" };
+  }
+  const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx)
+    || String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
+  if (!sessionKey) {
+    return { attempted: false, sent: false, reason: "missing_session_key", message };
+  }
+  try {
+    const payload = await runJsonScript(
+      "send_pre_dispatch_ack.py",
+      ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
+      ctx?.cwd || process.cwd(),
+    );
+    const sent = Boolean(payload?.sent || payload?.ok);
+    if (sent) {
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        latencyAckSent: true,
+        latencyAckText: message,
+        latencyAckMode: "channel_message",
+      }));
+    }
+    return {
+      attempted: true,
+      sent,
+      reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
+      message,
+      payload,
+    };
+  } catch (err) {
+    logger?.warn?.(`octoclaw latency ack failed: ${String(err)}`);
     return {
       attempted: true,
       sent: false,
@@ -437,6 +509,57 @@ function parseSessionRoute(raw) {
   };
 }
 
+function parseUpdatedSortValue(value) {
+  if (typeof value === "number") return value;
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text);
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+}
+
+function loadSessionDescriptors() {
+  const descriptors = new Map();
+  const register = (sessionKey, value = {}) => {
+    const key = String(sessionKey || "").trim();
+    if (!key) return;
+    const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const channelSessionKey = String(record.channelSessionKey || "").trim();
+    const controlKey = channelSessionKey || key;
+    const parsed = parseSessionRoute(controlKey);
+    const next = {
+      sessionKey: key,
+      controlKey,
+      channelSessionKey,
+      origin: String(parsed.origin || "").trim(),
+      bindingKey: String(parsed.bindingKey || "").trim(),
+      threadKey: String(parsed.threadKey || "").trim(),
+      updatedSort: parseUpdatedSortValue(record.updatedAt),
+      isSubagent: isSubagentSessionRef(key) || isSubagentSessionRef(record.agentId),
+      isUserFacing: Boolean(parsed.looksLikeImSession),
+    };
+    const previous = descriptors.get(key);
+    if (!previous || next.updatedSort >= Number(previous.updatedSort || 0)) {
+      descriptors.set(key, next);
+    }
+  };
+
+  for (const pathname of [resolveRootSessionsPath(), resolveMainAgentSessionsPath()]) {
+    const raw = readJsonFileSync(pathname, {});
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    for (const [key, value] of Object.entries(raw)) {
+      register(key, value);
+      if (value && typeof value === "object" && typeof value.channelSessionKey === "string" && value.channelSessionKey) {
+        register(String(value.channelSessionKey), { channelSessionKey: String(value.channelSessionKey) });
+      }
+    }
+  }
+
+  return [...descriptors.values()].sort(
+    (left, right) => Number(right.updatedSort || 0) - Number(left.updatedSort || 0),
+  );
+}
+
 function isSubagentSessionRef(raw) {
   const value = String(raw || "").trim().toLowerCase();
   if (!value) return false;
@@ -444,6 +567,43 @@ function isSubagentSessionRef(raw) {
   if (value.includes(":subagent:")) return true;
   if (/^agent:[^:]+:(?!main$)/i.test(String(raw || "").trim()) && value.includes("subagent")) return true;
   return false;
+}
+
+function resolveAckDeliverySessionKey(metadata = {}, stateKey = "", state = null, ctx = {}) {
+  const directCandidates = [
+    metadata.session_key,
+    state?.canonicalSessionKey,
+    stateKey,
+    ctx?.sessionKey,
+    ctx?.sessionId,
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  for (const candidate of directCandidates) {
+    const parsed = parseSessionRoute(candidate);
+    if (parsed.looksLikeImSession && !isSubagentSessionRef(candidate)) {
+      return candidate;
+    }
+  }
+
+  const desiredThreadKey = String(metadata.session_thread_key || "").trim();
+  const desiredBindingKey = String(metadata.session_binding_key || "").trim();
+  const desiredOrigin = String(metadata.session_origin || "").trim().toLowerCase();
+  const candidates = loadSessionDescriptors().filter((entry) => entry.isUserFacing && !entry.isSubagent);
+
+  if (desiredThreadKey) {
+    const match = candidates.find((entry) => entry.threadKey === desiredThreadKey);
+    if (match?.controlKey) return match.controlKey;
+  }
+  if (desiredBindingKey) {
+    const match = candidates.find((entry) => entry.bindingKey === desiredBindingKey);
+    if (match?.controlKey) return match.controlKey;
+  }
+  if (desiredOrigin) {
+    const match = candidates.find((entry) => entry.origin === desiredOrigin);
+    if (match?.controlKey) return match.controlKey;
+  }
+  return String(candidates[0]?.controlKey || "").trim();
 }
 
 function detectSessionBoundary(ctx = {}) {
@@ -1026,6 +1186,8 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       blockedTools: [],
       preDispatchAckSent: false,
       preDispatchAckText: "",
+      latencyAckSent: false,
+      latencyAckText: "",
     };
     setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
@@ -1037,9 +1199,12 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         route: String(decision?.route_decision?.route || ""),
         systemPreferredRoute: String(decision?.route_decision?.system_preferred_route || ""),
         workerPool: String(decision?.route_decision?.worker_pool || ""),
+        taskClass: String(decision?.route_decision?.task_class || ""),
         protectedLane: String(decision?.route_decision?.protected_lane || ""),
         routeHintRequired: Boolean(decision?.route_hint_policy?.required),
         routeHintSubmitted: Boolean(nextState.routeHintSubmitted),
+        stateGroundingRequired: Boolean(decision?.state_grounding?.required),
+        latencyAckRequired: Boolean(decision?.latency_ack?.required),
         stickyApplied: Boolean(decision?.route_hint_policy?.sticky_applied),
         ackFollowupCandidate: Boolean(decision?.route_hint_policy?.ack_followup_candidate),
         ackFollowupApplied: Boolean(decision?.route_hint_policy?.ack_followup_applied),
@@ -1120,6 +1285,12 @@ function compactPolicyPrompt(decision) {
   }
   if (routeHintPolicy?.sticky_applied && routeHintPolicy?.sticky_route) {
     lines.push(`Sticky lane is active for this session follow-up: ${routeHintPolicy.sticky_route}`);
+  }
+  if (decision?.state_grounding?.required) {
+    lines.push("This is a fact-grounded control follow-up. Prefer current execution facts over memory.");
+  }
+  if (decision?.latency_ack?.required) {
+    lines.push("This is a bounded live lookup. Verify with tools before answering; do not answer from memory.");
   }
   if (skillBundle.length > 0) {
     lines.push(`Preferred skill bundle: ${skillBundle.join(", ")}`);
@@ -1299,6 +1470,10 @@ const plugin = {
     const decision = resolved?.decision;
     const hookConfig = decision?.hook_interface?.before_prompt_build;
     if (!hookConfig?.enabled) return;
+    const stateKey = String(resolved?.stateKey || resolvePolicyStateKey(ctx) || "").trim();
+    const state = resolved?.state || getPolicyStateForContext(ctx).state;
+    const metadata = buildPolicyMetadata(ctx, { stateKey });
+    await maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, pi.logger, "direct_lookup");
     const prependSystem = [];
     if (routeHintRequired(decision)) {
       prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
@@ -1311,6 +1486,26 @@ const plugin = {
     const reviewRequired = Boolean(decision?.review_policy?.required);
     if (isSpawnRoute && reviewRequired) {
       prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
+    }
+    const lookupGuard = buildDirectLookupGuard(decision);
+    if (lookupGuard) {
+      prependSystem.push(lookupGuard);
+    }
+    if (decision?.state_grounding?.required) {
+      const grounding = buildConversationGrounding({
+        prompt,
+        replayLogPath: resolveReplayLogPath(),
+        taskStatePath: resolveTaskStatePath(),
+        sessionKeys: [
+          stateKey,
+          metadata.session_key,
+          state?.canonicalSessionKey,
+          ctx?.sessionKey,
+        ].filter(Boolean),
+      });
+      if (grounding?.context) {
+        prependSystem.push(grounding.context);
+      }
     }
     prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
     if (prependSystem.length === 0) return;
@@ -1335,6 +1530,36 @@ const plugin = {
     const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
     const allowedObserverTools = observerControlTools(decision, routeHintTool);
     const allowedSessionTools = sessionControlTools(decision, routeHintTool);
+    const metadata = buildPolicyMetadata(ctx, { stateKey });
+    if (
+      String(decision?.route_decision?.route || "") === "direct"
+      && !isControlObserverDecision(decision)
+      && !isSessionControlDecision(decision)
+      && toolName
+      && !toolName.startsWith("octoclaw_")
+    ) {
+      const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, pi.logger, toolName);
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        directToolsSeen: Array.from(new Set([...(Array.isArray(current?.directToolsSeen) ? current.directToolsSeen : []), toolName])),
+      }));
+      await recordPolicyReplay(
+        "direct_tool_called",
+        {
+          sessionKey: stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          taskClass: String(decision?.route_decision?.task_class || ""),
+          protectedLane: String(decision?.route_decision?.protected_lane || ""),
+          toolName,
+          latencyAckRequired: Boolean(decision?.latency_ack?.required),
+          latencyAckSent: Boolean(latencyAck?.sent),
+          latencyAckReason: String(latencyAck?.reason || ""),
+        },
+        pi.logger,
+        decision,
+      );
+    }
     if (isControlObserverDecision(decision)) {
       if (allowedObserverTools.has(toolName)) {
         return;
@@ -1479,6 +1704,8 @@ const plugin = {
         route: String(state?.decision?.route_decision?.route || ""),
         systemPreferredRoute: String(state?.decision?.route_decision?.system_preferred_route || ""),
         workerPool: String(state?.decision?.route_decision?.worker_pool || ""),
+        taskClass: String(state?.decision?.route_decision?.task_class || ""),
+        protectedLane: String(state?.decision?.route_decision?.protected_lane || ""),
         routeHintRequired: Boolean(state?.decision?.route_hint_policy?.required),
         routeHintSubmitted: Boolean(state?.routeHintSubmitted),
         delegated: Boolean(state?.delegated),
@@ -1486,6 +1713,8 @@ const plugin = {
         blockedTools: Array.isArray(state?.blockedTools) ? state.blockedTools : [],
         ackFollowupCandidate: Boolean(state?.decision?.route_hint_policy?.ack_followup_candidate),
         ackFollowupApplied: Boolean(state?.decision?.route_hint_policy?.ack_followup_applied),
+        latencyAckRequired: Boolean(state?.decision?.latency_ack?.required),
+        latencyAckSent: Boolean(state?.latencyAckSent),
         routeLanguagePacks: Array.isArray(state?.decision?.route_language_packs) ? state.decision.route_language_packs : [],
       },
       pi.logger,
@@ -1568,6 +1797,8 @@ const plugin = {
             systemPreferredRoute: String(payload?.route_decision?.system_preferred_route || ""),
             finalRoute: String(payload?.route_decision?.route || ""),
             workerPool: String(payload?.route_decision?.worker_pool || ""),
+            taskClass: String(payload?.route_decision?.task_class || ""),
+            protectedLane: String(payload?.route_decision?.protected_lane || ""),
             stickyApplied: Boolean(payload?.route_hint_policy?.sticky_applied),
             ackFollowupCandidate: Boolean(payload?.route_hint_policy?.ack_followup_candidate),
             ackFollowupApplied: Boolean(payload?.route_hint_policy?.ack_followup_applied),
@@ -1741,6 +1972,7 @@ const plugin = {
             route: String(authoritativeDecision?.route_decision?.route || payload?.route || ""),
             systemPreferredRoute: String(authoritativeDecision?.route_decision?.system_preferred_route || payload?.system_preferred_route || ""),
             workerPool: String(authoritativeDecision?.route_decision?.worker_pool || payload?.worker_pool || ""),
+            taskClass: String(authoritativeDecision?.route_decision?.task_class || ""),
             protectedLane: String(authoritativeDecision?.route_decision?.protected_lane || ""),
             routeHintRequired: Boolean(authoritativeDecision?.route_hint_policy?.required),
             routeHintSubmitted: Boolean(state?.routeHintSubmitted || authoritativeDecision?.route_hint_policy?.submitted),
@@ -1752,6 +1984,8 @@ const plugin = {
             preDispatchAckReason: String(ackResult?.reason || ""),
             preDispatchAckFallbackUsed: Boolean(ackResult?.fallback_used),
             preDispatchAckChannelReason: String(ackResult?.channel_attempt?.reason || ""),
+            taskId: String(payload?.task_id || payload?.materialization?.task_id || ""),
+            runnerJobId: String(payload?.job?.id || payload?.materialization?.runner_job_id || ""),
             routeRecommendationConflict: Boolean(authoritativeDecision?.route_recommendation?.arbitration?.required),
             routeRecommendationStrategy: String(authoritativeDecision?.route_recommendation?.arbitration?.strategy || ""),
             routeRecommendationConflictType: String(authoritativeDecision?.route_recommendation?.arbitration?.conflict_type || ""),
@@ -1997,8 +2231,12 @@ export const __octoclawTest = {
   resolveWorkspaceRoot,
   resolvePythonBin,
   resolvePolicyStateLedgerPath,
+  resolveReplayLogPath,
+  resolveTaskStatePath,
   stripAgentSessionPrefix,
   parseSessionRoute,
+  loadSessionDescriptors,
+  resolveAckDeliverySessionKey,
   isSubagentSessionRef,
   detectSessionBoundary,
   resolvePolicyStateKeys,
@@ -2023,11 +2261,17 @@ export const __octoclawTest = {
   shouldRetainPolicyStateOnAgentEnd,
   preDispatchAckText,
   shouldSendPreDispatchAck,
+  latencyAckText,
+  shouldSendLatencyAck,
   maybeEmitPreDispatchAckProgress,
   ensurePreDispatchAck,
+  maybeSendLatencyAck,
   resolvePolicyDecisionForContext,
   inferRoute,
   buildDecision,
+  buildConversationGrounding,
+  buildDirectLookupGuard,
+  __conversationControlTest,
   __setPolicyState: setPolicyStateForContext,
   __resetPolicyState: () => {
     policyStateBySession.clear();

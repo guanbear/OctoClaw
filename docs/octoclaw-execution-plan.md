@@ -624,6 +624,25 @@ P5 不应该顺手混进这些题：
 - `I4 Capability-Bound Failure Surface`
 - `I5 Execution-Fact-Grounded Explanation`
 
+### P5J：Conversation Control Plane 收口
+
+在 `I1-I5` 的 delegated materialization 基线之外，当前还需要一条更薄的 conversation refactor，专门解决：
+
+- follow-up 仍可能按旧记忆回答，而不是按最新 execution facts 回答
+- direct slow lookup 没有稳定的快速 ack
+
+这条线固定分成四步：
+
+1. route / task-class hardening
+   - workflow meta / task progress follow-up 进入受保护的 `direct/control_observer`
+   - bounded software/repo update lookup 进入 `direct/simple_lookup`
+2. JS-native state grounding
+   - 在 runtime hot path 接入 replay + task-state grounding
+3. direct slow-path latency ack
+   - direct lookup 也必须能先发轻量 ack
+4. acceptance/nightly coverage
+   - 为 follow-up grounding 和 latency ack 建回归与验收矩阵
+
 ### 实施原则
 
 - 基于 **OpenClaw 2026.4.5** 的 runtime / TaskFlow 语义继续收口

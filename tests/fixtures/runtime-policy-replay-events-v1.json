@@ -9,6 +9,8 @@
     "route": "spawn_single",
     "systemPreferredRoute": "spawn_single",
     "workerPool": "octoclaw-code",
+    "taskClass": "focused_code_work",
+    "protectedLane": "",
     "workContract": "deliverable_work",
     "workContractHint": "deliverable_work",
     "budgetPolicy": {
@@ -132,6 +134,8 @@
     "systemPreferredRoute": "spawn_single",
     "finalRoute": "spawn_single",
     "workerPool": "octoclaw-code",
+    "taskClass": "focused_code_work",
+    "protectedLane": "",
     "stickyApplied": false,
     "stickyPersisted": true
   },
@@ -144,6 +148,20 @@
     "route": "spawn_single",
     "toolName": "exec",
     "requiredTool": "octoclaw_route_hint"
+  },
+  {
+    "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+    "event": "direct_tool_called",
+    "at": "2026-03-28T08:30:06.500Z",
+    "sessionKey": "session-main-2",
+    "sessionId": "session-main-2",
+    "route": "direct",
+    "taskClass": "simple_lookup",
+    "protectedLane": "",
+    "toolName": "web_fetch",
+    "latencyAckRequired": true,
+    "latencyAckSent": true,
+    "latencyAckReason": "channel_message_sent"
   },
   {
     "schema_version": "octoclaw.runtime_policy.replay_event/v1",
@@ -162,6 +180,7 @@
     "sessionId": "session-main-1",
     "route": "runner",
     "systemPreferredRoute": "runner",
+    "taskClass": "fast_tool_check",
     "executed": true,
     "usedCachedPolicy": true,
     "stickyPersisted": false,
@@ -191,6 +210,8 @@
     "route": "spawn_single",
     "systemPreferredRoute": "spawn_single",
     "workerPool": "octoclaw-code",
+    "taskClass": "focused_code_work",
+    "protectedLane": "",
     "workContract": "deliverable_work",
     "routeHintRequired": false,
     "routeHintSubmitted": true,

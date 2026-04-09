@@ -23,7 +23,11 @@
         "route_hint_submitted",
         "tool_blocked_before_route_hint",
         "tool_blocked_manual_delegation",
+        "tool_blocked_control_observer",
+        "tool_blocked_session_control",
+        "tool_blocked_runner_policy",
         "tool_blocked_delegation_policy",
+        "direct_tool_called",
         "dispatch_called",
         "agent_end"
       ]
@@ -35,6 +39,8 @@
     "route": { "type": "string" },
     "systemPreferredRoute": { "type": "string" },
     "workerPool": { "type": "string" },
+    "taskClass": { "type": "string" },
+    "protectedLane": { "type": "string" },
     "workContract": { "type": "string" },
     "workContractHint": { "type": "string" },
     "budgetPolicy": {
@@ -57,6 +63,10 @@
     },
     "routeHintRequired": { "type": "boolean" },
     "routeHintSubmitted": { "type": "boolean" },
+    "stateGroundingRequired": { "type": "boolean" },
+    "latencyAckRequired": { "type": "boolean" },
+    "latencyAckSent": { "type": "boolean" },
+    "latencyAckReason": { "type": "string" },
     "stickyApplied": { "type": "boolean" },
     "stickyPersisted": { "type": "boolean" },
     "ackFollowupCandidate": { "type": "boolean" },
@@ -72,9 +82,13 @@
     "reason": { "type": "string" },
     "finalRoute": { "type": "string" },
     "executed": { "type": "boolean" },
+    "taskId": { "type": "string" },
+    "runnerJobId": { "type": "string" },
     "usedCachedPolicy": { "type": "boolean" },
     "delegated": { "type": "boolean" },
     "delegationTool": { "type": "string" },
+    "materialization": { "type": "object" },
+    "capability_failure": { "type": "object" },
     "blockedTools": {
       "type": "array",
       "items": { "type": "string" }

@@ -541,12 +541,16 @@ WORKFLOW_META_PATTERNS = {
         r"(你现在是啥模型|你现在是什么模型|现在是啥模型|现在是什么模型|当前是啥模型|当前是什么模型|现在用的啥模型|现在用的什么模型|当前用的啥模型|当前用的什么模型)",
         r"(主会话模型|策略主链|主链漂移|子任务模型|当前路由|现在走的是什么路由|这次走的是什么路由)",
         r"(刚才(那次|这个)?(查询|问题|任务)?是子任务做的吗|刚才(那次|这个)?(查询|问题|任务)?是不是子任务做的|是不是子任务做的|是不是主会话自己查的|是不是主agent自己查的)",
+        r"(你是怎么查的|咋查的|如何查的|用什么查的|怎么查到的)",
+        r"(刚才那个任务那个判定是啥|刚才那个任务判定是啥|刚才任务那个判定是啥|不是\s*runner\s*吗|是不是\s*runner|是不是\s*spawn_single|是不是\s*single)",
+        r"(刚才(single|spawn|runner)成功了吗|刚才那个(single|spawn|runner)成功了吗|那个single怎么样了|那个任务怎么样了|还在queued吗|还在排队吗)",
         r"(谁查的|谁做的|谁回的|是谁处理的|谁执行的|啥模型做的|什么模型做的|是谁用什么模型做的)",
         r"(有没有走\s*(dispatch|路由|router)|走了\s*(dispatch|路由|router)\s*吗|有没有走\s*octoclaw_dispatch|判定了\s*direct\s*吗|是不是\s*direct|是不是走了\s*direct|是不是委派了|有没有委派)",
     ),
     "en": (
         r"\b(what model are you (?:on|using) now|current model|which model are you (?:on|using)|main session model|policy primary model|drifted model)\b",
         r"\b(was this delegated|was this a subtask|did this go through dispatch|did router choose direct|what route was chosen|current route|who handled this|who answered this|who ran this)\b",
+        r"\b(how did you check|how was this checked|what tool did you use|was this runner|was this spawn(?:_single)?|did the single succeed|is it still queued)\b",
     ),
 }
 
@@ -707,11 +711,31 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
             and re.search(r"(提交|改了啥|改了什么|变更)", text, re.IGNORECASE)
         )
     )
+    bounded_software_update_lookup = bool(
+        re.search(r"(openclaw|octoclaw)", text, re.IGNORECASE)
+        and re.search(r"(有啥更新|有什么更新|更新了什么|最近.*更新|最新.*更新|最新.*release|新版本|release|memory方向|特性|变化)", text, re.IGNORECASE)
+        and not re.search(
+            r"(改了啥|改了什么|提交|commit|pr|issue|详细|分析|总结|报告|写一版|release analysis|commit summary|summari[sz]e)",
+            raw_task,
+            re.IGNORECASE,
+        )
+    )
+    bounded_repo_update_lookup = bool(
+        (repo_activity_lookup or bounded_software_update_lookup)
+        and not re.search(
+            r"(改了啥|改了什么|都有啥提交|今天都有啥提交|提交明细|详细变更|分析|总结|release|报告|写一版|recommend|analysis|what changed|commit summary|summari[sz]e commits?|release analysis)",
+            raw_task,
+            re.IGNORECASE,
+        )
+        and multi_step_hits == 0
+        and summary_output_hits == 0
+        and write_hits == 0
+    )
 
     effective_research_hits = research_hits
     effective_external_lookup_hits = external_lookup_hits
     effective_mutation_hits = mutation_hits
-    if repo_activity_lookup:
+    if repo_activity_lookup or bounded_software_update_lookup:
         effective_research_hits = max(effective_research_hits, 1)
         effective_external_lookup_hits = max(effective_external_lookup_hits, 1)
         effective_mutation_hits = 0
@@ -862,6 +886,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "mutation_hits": effective_mutation_hits,
         "repo_activity_hits": 1 if repo_activity_lookup else 0,
         "requires_external_lookup": effective_external_lookup_hits > 0,
+        "bounded_software_update_lookup": bounded_software_update_lookup,
+        "bounded_repo_update_lookup": bounded_repo_update_lookup,
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
         "continuation_hits": continuation_hits,
@@ -940,6 +966,8 @@ def direct_contract_candidate(features: dict) -> bool:
     if features.get("session_control_candidate"):
         return True
     if features.get("observer_control_candidate"):
+        return True
+    if features.get("bounded_repo_update_lookup"):
         return True
     if features.get("requires_tools"):
         return False
@@ -1406,6 +1434,8 @@ def infer_task_class(features: dict, route: str) -> str:
         return "session_control"
     if route == "direct" and features.get("observer_control_candidate"):
         return "control_observer"
+    if route == "direct" and features.get("bounded_repo_update_lookup"):
+        return "simple_lookup"
     if route == "runner":
         if features.get("target_scope") == "remote":
             return "fast_remote_check"

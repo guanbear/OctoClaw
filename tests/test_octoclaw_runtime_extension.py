@@ -302,6 +302,42 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["session_key"], "agent:main:slack:direct:u234")
         self.assertEqual(payload["session_origin"], "slack")
 
+    def test_ack_delivery_session_key_prefers_user_facing_thread_from_session_registry(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-ack-ledger-") as tmpdir:
+            home = Path(tmpdir)
+            root_sessions = home / ".openclaw" / "sessions.json"
+            root_sessions.parent.mkdir(parents=True, exist_ok=True)
+            root_sessions.write_text(
+                json.dumps(
+                    {
+                        "octoclaw-subagent-research-1": {
+                            "channelSessionKey": "agent:main:slack:channel:C123:thread:1712345.000100",
+                            "updatedAt": "2026-04-09T20:58:00Z",
+                        },
+                        "agent:main:slack:channel:C123:thread:1712345.000100": {
+                            "updatedAt": "2026-04-09T20:58:01Z",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                """__octoclawTest.resolveAckDeliverySessionKey(
+                    {
+                      session_thread_key: "slack:channel:C123:1712345.000100",
+                      session_origin: "slack"
+                    },
+                    "octoclaw-subagent-research-1",
+                    {},
+                    {}
+                )""",
+                env={"HOME": str(home), "WORKSPACE": str(home)},
+            )
+
+        self.assertEqual(payload, "agent:main:slack:channel:C123:thread:1712345.000100")
+
     def test_tool_context_can_recover_recent_delegated_state_for_shell_like_followup(self) -> None:
         payload = run_runtime_helper(
             """(() => {
@@ -324,6 +360,158 @@ Conversation info (untrusted metadata):
 
         self.assertEqual(payload["key"], "agent:main:slack:direct:u345")
         self.assertEqual(payload["state"]["decision"]["request"]["session_key"], "agent:main:slack:direct:u345")
+
+    def test_conversation_grounding_recovers_direct_lookup_provenance_from_replay(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-direct-") as tmpdir:
+            workspace = Path(tmpdir)
+            replay_path = workspace / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
+            replay_path.parent.mkdir(parents=True, exist_ok=True)
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-09T12:54:00Z",
+                                "sessionKey": "agent:main:slack:direct:u555",
+                                "sessionId": "sess-u555",
+                                "prompt": "你再看下 OpenClaw有啥更新 尤其是Memory方向",
+                                "route": "direct",
+                                "systemPreferredRoute": "direct",
+                                "workerPool": "octoclaw-main",
+                                "taskClass": "simple_lookup",
+                                "protectedLane": "",
+                                "routeHintRequired": False,
+                                "routeHintSubmitted": False,
+                                "stateGroundingRequired": False,
+                                "latencyAckRequired": True,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "direct_tool_called",
+                                "at": "2026-04-09T12:54:01Z",
+                                "sessionKey": "agent:main:slack:direct:u555",
+                                "sessionId": "sess-u555",
+                                "route": "direct",
+                                "taskClass": "simple_lookup",
+                                "protectedLane": "",
+                                "toolName": "web_fetch",
+                                "latencyAckRequired": True,
+                                "latencyAckSent": True,
+                                "latencyAckReason": "channel_message_sent",
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "你是怎么查的",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(workspace / "tmp" / "octopus" / "task-state.json"))},
+                    sessionKeys: ["agent:main:slack:direct:u555"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "simple_lookup")
+        self.assertIn("Direct tools used: web_fetch", payload["context"])
+
+    def test_conversation_grounding_recovers_task_progress_from_task_state(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-task-") as tmpdir:
+            workspace = Path(tmpdir)
+            octopus_dir = workspace / "tmp" / "octopus"
+            octopus_dir.mkdir(parents=True, exist_ok=True)
+            replay_path = octopus_dir / "runtime-policy-replay.jsonl"
+            task_state_path = octopus_dir / "task-state.json"
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-09T12:54:00Z",
+                                "sessionKey": "agent:main:slack:direct:u777",
+                                "sessionId": "sess-u777",
+                                "prompt": "调研一下 OpenClaw Memory 最新改动",
+                                "route": "spawn_single",
+                                "systemPreferredRoute": "spawn_single",
+                                "workerPool": "octoclaw-research",
+                                "taskClass": "focused_research",
+                                "protectedLane": "",
+                                "routeHintRequired": False,
+                                "routeHintSubmitted": False,
+                                "stateGroundingRequired": False,
+                                "latencyAckRequired": False,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "dispatch_called",
+                                "at": "2026-04-09T12:54:02Z",
+                                "sessionKey": "agent:main:slack:direct:u777",
+                                "sessionId": "sess-u777",
+                                "route": "spawn_single",
+                                "systemPreferredRoute": "spawn_single",
+                                "workerPool": "octoclaw-research",
+                                "taskClass": "focused_research",
+                                "protectedLane": "",
+                                "executed": True,
+                                "usedCachedPolicy": False,
+                                "stickyPersisted": False,
+                                "materialization": {
+                                    "status": "materialized",
+                                    "kind": "spawn_child_task",
+                                    "task_id": "research-123"
+                                }
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            task_state_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "research-123",
+                                "status": "completed",
+                                "summary": "Memory update summary ready",
+                                "executor": "spawn_single",
+                                "route": "spawn_single",
+                                "runtime": "openclaw_task"
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "不是 刚才single成功了吗",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(task_state_path))},
+                    sessionKeys: ["agent:main:slack:direct:u777"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["route"], "spawn_single")
+        self.assertEqual(payload["facts"]["taskId"], "research-123")
+        self.assertEqual(payload["facts"]["currentTaskStatus"], "completed")
+        self.assertIn("Current task status: completed", payload["context"])
 
     def test_tool_context_does_not_reuse_stale_session_state_for_different_prompt(self) -> None:
         payload = run_runtime_helper(
@@ -441,7 +629,7 @@ Conversation info (untrusted metadata):
     def test_runner_workflow_tool_set_includes_dispatch_and_excludes_web_fetch(self) -> None:
         payload = run_runtime_helper(
             """(() => {
-                const decision = __octoclawTest.buildDecision("帮我查下openclaw 又有新版本了吗 有啥新特性");
+                const decision = __octoclawTest.buildDecision("看下 8080 端口开了没");
                 return {
                   route: decision.route_decision.route,
                   workContract: decision.route_decision.work_contract,
@@ -458,7 +646,7 @@ Conversation info (untrusted metadata):
     def test_runner_workflow_enforcement_blocks_generic_external_tools(self) -> None:
         payload = run_runtime_helper(
             """(() => {
-                const decision = __octoclawTest.buildDecision("帮我查下openclaw 又有新版本了吗 有啥新特性");
+                const decision = __octoclawTest.buildDecision("看下 8080 端口开了没");
                 return {
                   blocked: __octoclawTest.workflowEnforcementRule(decision, "web_fetch", "octoclaw_route_hint"),
                   allowed: __octoclawTest.workflowEnforcementRule(decision, "octoclaw_dispatch", "octoclaw_route_hint")
@@ -533,7 +721,7 @@ Conversation info (untrusted metadata):
     def test_pre_dispatch_ack_policy_is_enabled_for_delegated_research(self) -> None:
         payload = run_runtime_helper(
             """(() => {
-                const decision = __octoclawTest.buildDecision("查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗");
+                const decision = __octoclawTest.buildDecision("你帮我查下 octoclaw项目 今天都有啥提交 改了啥");
                 return {
                   route: decision.route_decision.route,
                   workerPool: decision.route_decision.worker_pool,
@@ -547,12 +735,33 @@ Conversation info (untrusted metadata):
 
         self.assertEqual(payload["route"], "spawn_single")
         self.assertEqual(payload["workerPool"], "octoclaw-research")
-        self.assertTrue(payload["recommendation"]["arbitration"]["required"])
-        self.assertEqual(payload["recommendation"]["arbitration"]["strategy"], "rule_fallback")
+        self.assertFalse(payload["recommendation"]["bypass_delegated_optimization"])
         self.assertTrue(payload["ack"]["required"])
-        self.assertIn("查一下", payload["ack"]["text"])
+        self.assertIn("我先查一下", payload["ack"]["text"])
         self.assertEqual(payload["helperText"], payload["ack"]["text"])
         self.assertTrue(payload["shouldSend"])
+
+    def test_bounded_update_lookup_uses_latency_ack_instead_of_pre_dispatch_ack(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("你再看下 OpenClaw有啥更新 尤其是Memory方向");
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  workContract: decision.route_decision.work_contract,
+                  ack: decision.pre_dispatch_ack,
+                  latencyAck: decision.latency_ack,
+                  shouldSendLatencyAck: __octoclawTest.shouldSendLatencyAck(decision, {}, { trigger: "message" }, "web_fetch")
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "simple_lookup")
+        self.assertEqual(payload["workContract"], "answer_now")
+        self.assertFalse(payload["ack"]["required"])
+        self.assertTrue(payload["latencyAck"]["required"])
+        self.assertTrue(payload["shouldSendLatencyAck"])
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(

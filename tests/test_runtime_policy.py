@@ -246,7 +246,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["requires_research"])
         self.assertTrue(payload["features"]["requires_writing"])
 
-    def test_github_update_lookup_routes_to_research_instead_of_code(self) -> None:
+    def test_github_update_lookup_prefers_direct_simple_lookup(self) -> None:
         payload = self.run_policy(
             "查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗",
             model_policy={
@@ -262,20 +262,43 @@ class RuntimePolicyTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
-        self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-research")
-        self.assertEqual(payload["route_decision"]["work_type"], "research")
-        self.assertEqual(payload["route_decision"]["phase"], "collect")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "simple_lookup")
+        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
         self.assertFalse(payload["request"]["metadata"])
-        self.assertEqual(payload["model_policy"]["selected_model"], "minimax-portal/MiniMax-M2.7-highspeed")
-        self.assertNotIn("mutation_work", payload["route_decision"]["reason_codes"])
         self.assertEqual(payload["route_recommendation"]["schema_version"], "octoclaw.route_recommendation/v1")
         self.assertTrue(payload["route_recommendation"]["arbitration"]["required"])
-        self.assertEqual(payload["route_recommendation"]["arbitration"]["strategy"], "rule_fallback")
         self.assertEqual(payload["route_recommendation"]["arbitration"]["conflict_type"], "repo_activity_lookup")
-        self.assertEqual(payload["route_recommendation"]["recommended_route"], "spawn_single")
-        self.assertTrue(payload["pre_dispatch_ack"]["required"])
-        self.assertIn("查一下", payload["pre_dispatch_ack"]["text"])
+        self.assertEqual(payload["route_recommendation"]["recommended_route"], "direct")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertTrue(payload["latency_ack"]["required"])
+        self.assertIn("最新更新", payload["latency_ack"]["text"])
+        self.assertFalse(payload["state_grounding"]["required"])
+
+    def test_bounded_openclaw_update_lookup_prefers_direct_simple_lookup(self) -> None:
+        payload = self.run_policy("你再看下 OpenClaw有啥更新 尤其是Memory方向")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "simple_lookup")
+        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertTrue(payload["latency_ack"]["required"])
+        self.assertIn("最新更新", payload["latency_ack"]["text"])
+
+    def test_workflow_meta_task_progress_followup_prefers_grounded_direct_lane(self) -> None:
+        payload = self.run_policy("不是 刚才single成功了吗")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertTrue(payload["state_grounding"]["required"])
+        self.assertFalse(payload["latency_ack"]["required"])
+
+    def test_workflow_meta_provenance_followup_prefers_grounded_direct_lane(self) -> None:
+        payload = self.run_policy("你是怎么查的")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertTrue(payload["state_grounding"]["required"])
+        self.assertFalse(payload["latency_ack"]["required"])
 
     def test_spawn_single_requires_pre_dispatch_ack(self) -> None:
         payload = self.run_policy("调研三个兼容方案并写一版简短建议")

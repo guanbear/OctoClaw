@@ -14,7 +14,11 @@
     "model_policy",
     "skill_policy",
     "review_policy",
+    "route_recommendation",
     "prompt_contract",
+    "pre_dispatch_ack",
+    "state_grounding",
+    "latency_ack",
     "tool_policy",
     "route_hint_policy",
     "runtime_switches",
@@ -51,6 +55,7 @@
         "system_preferred_route",
         "work_contract",
         "work_contract_hint",
+        "protected_lane",
         "dispatch_required",
         "confidence",
         "reason",
@@ -88,6 +93,7 @@
           "type": "string",
           "enum": ["answer_now", "inspect_report", "deliverable_work", "coordinated_work"]
         },
+        "protected_lane": { "type": "string" },
         "dispatch_required": { "type": "boolean" },
         "confidence": { "type": "number" },
         "reason": { "type": "string" },
@@ -203,6 +209,38 @@
         "review_trigger": { "type": "string" }
       }
     },
+    "route_recommendation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "schema_version",
+        "recommended_route",
+        "recommended_worker_pool",
+        "recommended_work_type",
+        "recommended_phase",
+        "recommended_model_band",
+        "protected_lane",
+        "bypass_delegated_optimization",
+        "work_contract_hint",
+        "top_candidates",
+        "arbitration",
+        "reason_codes"
+      ],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "recommended_route": { "type": "string" },
+        "recommended_worker_pool": { "type": "string" },
+        "recommended_work_type": { "type": "string" },
+        "recommended_phase": { "type": "string" },
+        "recommended_model_band": { "type": "string" },
+        "protected_lane": { "type": "string" },
+        "bypass_delegated_optimization": { "type": "boolean" },
+        "work_contract_hint": { "type": "string" },
+        "top_candidates": { "type": "array", "items": { "type": "object" } },
+        "arbitration": { "type": "object" },
+        "reason_codes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "prompt_contract": {
       "type": "object",
       "additionalProperties": false,
@@ -239,6 +277,46 @@
         "review_gate_required": { "type": "boolean" }
       }
     },
+    "pre_dispatch_ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "style",
+        "channel_delivery_preferred",
+        "fallback_to_progress_update",
+        "text"
+      ],
+      "properties": {
+        "required": { "type": "boolean" },
+        "style": { "type": "string" },
+        "channel_delivery_preferred": { "type": "boolean" },
+        "fallback_to_progress_update": { "type": "boolean" },
+        "text": { "type": "string" }
+      }
+    },
+    "state_grounding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "source", "subject", "fallback_to_control_tools"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "source": { "type": "string" },
+        "subject": { "type": "string" },
+        "fallback_to_control_tools": { "type": "boolean" }
+      }
+    },
+    "latency_ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "style", "channel_delivery_preferred", "text"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "style": { "type": "string" },
+        "channel_delivery_preferred": { "type": "boolean" },
+        "text": { "type": "string" }
+      }
+    },
     "tool_policy": {
       "type": "object",
       "additionalProperties": false,
@@ -246,6 +324,10 @@
         "allow_direct_tools",
         "must_delegate_via",
         "allowed_control_tools",
+        "observer_control_tools",
+        "session_control_tools",
+        "control_observer_only",
+        "session_control_only",
         "delegate_first",
         "block_tool_patterns"
       ],
@@ -256,6 +338,16 @@
           "type": "array",
           "items": { "type": "string" }
         },
+        "observer_control_tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "session_control_tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "control_observer_only": { "type": "boolean" },
+        "session_control_only": { "type": "boolean" },
         "delegate_first": { "type": "boolean" },
         "block_tool_patterns": {
           "type": "array",
@@ -401,19 +493,21 @@
                 "work_type",
                 "phase",
                 "protocol",
-                "review_required"
+                "review_required",
+                "route_hint_required",
+                "route_hint_submitted"
               ],
               "properties": {
-              "route": { "type": "string" },
-              "worker_pool": { "type": "string" },
-              "work_type": { "type": "string" },
-              "phase": { "type": "string" },
-              "protocol": { "type": "string" },
-              "review_required": { "type": "boolean" },
-              "route_hint_required": { "type": "boolean" },
-              "route_hint_submitted": { "type": "boolean" }
-            }
-          },
+                "route": { "type": "string" },
+                "worker_pool": { "type": "string" },
+                "work_type": { "type": "string" },
+                "phase": { "type": "string" },
+                "protocol": { "type": "string" },
+                "review_required": { "type": "boolean" },
+                "route_hint_required": { "type": "boolean" },
+                "route_hint_submitted": { "type": "boolean" }
+              }
+            },
             "skill_bundle": {
               "type": "array",
               "items": { "type": "string" }

@@ -140,6 +140,18 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "config": {},
             },
             {
+                "task": "你再看下 OpenClaw有啥更新 尤其是Memory方向",
+                "config": {},
+            },
+            {
+                "task": "你是怎么查的",
+                "config": {},
+            },
+            {
+                "task": "不是 刚才single成功了吗",
+                "config": {},
+            },
+            {
                 "task": "你测试下 MiniMax-M2.7-highspeed 和 glm-5.1 的首token和 吞吐的速度",
                 "config": {},
             },

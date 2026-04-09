@@ -228,6 +228,28 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 
 > **把 route decision 真正收成 execution contract 的一条结构性重构线。**
 
+### 4.4.2 当前新增主线：Conversation Control Plane
+
+`Delegated Materialization Plane` 解决的是 “route 选了以后怎样稳定落成 execution contract”。但 `2026-04-09` 的真实运行又暴露出另一条独立缺口：
+
+- 有 execution facts，但聊天 follow-up 仍可能按旧记忆回答
+- 有 direct live lookup，但 slow path 仍可能在 compaction/tool 前没有快速 ack
+
+这说明系统还需要一层更薄的 **conversation control plane**。它不新增新的 runtime，也不重做 substrate；只做两件事：
+
+1. **fact-grounded follow-up guarantee**
+   - `刚才那个任务怎样了`
+   - `不是 runner 吗`
+   - `single 成功了吗`
+   - `你是怎么查的`
+   这类 follow-up 统一走受保护的 `direct/control_observer`，并在 hot path 里优先绑定 replay + task-state 的最新 execution facts。
+
+2. **latency-first direct lookup guarantee**
+   - 对 `bounded live lookup`，例如“看下 OpenClaw 最近有啥更新”
+   - 在 direct path 中也要先发轻量 ack，而不是只有 delegated path 才会发状态回执
+
+这条线的目标不是增加更多 heuristic，而是把聊天入口也收进已有的 execution/read-model 真相层里。
+
 ---
 
 ## 5. 当前已经落地到什么程度

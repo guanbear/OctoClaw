@@ -817,6 +817,25 @@ def state_grounding_policy(route_meta: dict[str, Any], route: str, task_class: s
         "scope": "task_status_or_provenance" if required else "",
         "target": "explicit_or_recent_task" if required else "",
         "fallback": "ack_uncertainty" if required else "",
+        "subject": "latest_execution_turn" if required else "",
+        "fallback_to_control_tools": required,
+    }
+
+
+def latency_ack_policy(route: str, task_class: str, features: dict[str, Any]) -> dict[str, Any]:
+    required = (
+        route == "direct"
+        and task_class not in {"control_observer", "session_control"}
+        and bool(features.get("external_lookup_only") or features.get("bounded_repo_update_lookup"))
+    )
+    text = ""
+    if required:
+        text = "我先看一下最新更新，马上给你结论。" if features.get("bounded_repo_update_lookup") else "我先查一下，马上给你结论。"
+    return {
+        "required": required,
+        "style": "brief_status",
+        "channel_delivery_preferred": required,
+        "text": text,
     }
 
 
@@ -1041,6 +1060,7 @@ def build_decision(
     prompt_policy = prompt_contract(protocol, route, work_contract, needs_review)
     pre_dispatch_ack = pre_dispatch_ack_policy(route, work_type, phase, task_class)
     state_grounding = state_grounding_policy(route_meta, route, task_class)
+    latency_ack = latency_ack_policy(route, task_class, features)
     route_recommendation = build_route_recommendation(
         route_meta,
         {
@@ -1129,6 +1149,7 @@ def build_decision(
         "prompt_contract": prompt_policy,
         "pre_dispatch_ack": pre_dispatch_ack,
         "state_grounding": state_grounding,
+        "latency_ack": latency_ack,
         "tool_policy": tool_policy(route, dispatch_required, task_class),
         "route_hint_policy": route_hint_policy,
         "runtime_switches": runtime_switches_summary(runtime_cfg),

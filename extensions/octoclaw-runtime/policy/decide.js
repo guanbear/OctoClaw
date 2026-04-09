@@ -703,6 +703,26 @@ function stateGroundingPolicy(routeMeta, route, taskClass) {
     scope: required ? "task_status_or_provenance" : "",
     target: required ? "explicit_or_recent_task" : "",
     fallback: required ? "ack_uncertainty" : "",
+    subject: required ? "latest_execution_turn" : "",
+    fallback_to_control_tools: required,
+  };
+}
+
+function latencyAckPolicy(route, taskClass, features = {}) {
+  const required = (
+    route === "direct"
+    && taskClass !== "control_observer"
+    && taskClass !== "session_control"
+    && Boolean(features.external_lookup_only || features.bounded_repo_update_lookup)
+  );
+  const text = !required
+    ? ""
+    : (features.bounded_repo_update_lookup ? "我先看一下最新更新，马上给你结论。" : "我先查一下，马上给你结论。");
+  return {
+    required,
+    style: "brief_status",
+    channel_delivery_preferred: required,
+    text,
   };
 }
 
@@ -1116,6 +1136,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const promptPolicy = promptContract(protocol, route, workContract, needsReview);
   const preDispatchAck = preDispatchAckPolicy(route, workType, phase, taskClass);
   const stateGrounding = stateGroundingPolicy(routeMeta, route, taskClass);
+  const latencyAck = latencyAckPolicy(route, taskClass, features);
   const routeRecommendation = buildRouteRecommendation(routeMeta, {
     route,
     worker_pool: workerPool,
@@ -1201,6 +1222,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     prompt_contract: promptPolicy,
     pre_dispatch_ack: preDispatchAck,
     state_grounding: stateGrounding,
+    latency_ack: latencyAck,
     tool_policy: toolPolicy(route, dispatchRequired, taskClass),
     route_hint_policy: routeHintPolicy,
     runtime_switches: runtimeSwitchesSummary(runtimeCfg),
