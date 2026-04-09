@@ -5,7 +5,6 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
-from unittest.mock import patch
 
 from lib import task_display_cli
 
@@ -33,8 +32,6 @@ class TaskDisplayCliTests(unittest.TestCase):
                                 "task_runtime": "openclaw_task",
                                 "flow_runtime": "openclaw_flow",
                                 "native_binding_state": "bound",
-                                "create_preference": "native_preferred",
-                                "create_status": "native_bound",
                                 "task_id": "native-task-1",
                                 "flow_id": "flow-1",
                             },
@@ -51,44 +48,35 @@ class TaskDisplayCliTests(unittest.TestCase):
                         {
                             "id": "task-2",
                             "worker_pool": "octoclaw-runner",
-                            "status": "done",
-                            "lifecycle_state": "finished",
+                            "status": "queued",
                             "summary": "check nginx health",
                             "route": "runner",
                             "parent_id": "task-1",
                             "started_at": "2026-03-31T10:01:00Z",
                             "updated_at": "2026-03-31T10:02:00Z",
-                            "openclaw_taskflow": {
-                                "backend": "mirror",
-                                "binding_state": "mirrored",
-                                "task_runtime": "openclaw_task",
-                                "create_preference": "mirror_only",
-                                "create_status": "mirror_only",
-                            },
                             "artifacts": {
+                                "delegated_materialization": {
+                                    "lane": "runner",
+                                    "kind": "runner_playbook",
+                                    "status": "materialization_failed",
+                                    "execution_contract": "inspect_report",
+                                    "task_id": "",
+                                    "runner_job_id": "",
+                                    "child_spec_id": "",
+                                    "session_key": "agent:main:slack:direct:u1",
+                                    "executed": False,
+                                    "capability_failure": {
+                                        "lane": "runner",
+                                        "reason": "runner_playbook_missing",
+                                        "detail": "no registered playbook",
+                                        "missing_capabilities": ["registered_runner_playbook"],
+                                        "fallback_permitted": False
+                                    }
+                                },
                                 "runner_plan": {
                                     "kind": "local_file_probe",
                                     "command": "tail -n 80 /var/log/nginx/error.log",
                                 }
-                            },
-                        },
-                        {
-                            "id": "task-3",
-                            "worker_pool": "octoclaw-review",
-                            "status": "queued",
-                            "summary": "review pending",
-                            "route": "spawn_single",
-                            "parent_id": "task-1",
-                            "openclaw_taskflow": {
-                                "backend": "mirror",
-                                "binding_state": "mirrored_bound",
-                                "task_runtime": "openclaw_task",
-                                "flow_runtime": "openclaw_flow",
-                                "native_binding_state": "bound",
-                                "create_preference": "native_preferred",
-                                "create_status": "native_bound",
-                                "task_id": "native-review-1",
-                                "flow_id": "flow-1",
                             },
                         },
                     ]
@@ -128,17 +116,14 @@ class TaskDisplayCliTests(unittest.TestCase):
     def test_detail_text_surfaces_substrate_binding(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-1"])
         self.assertEqual(code, 0, err)
-        self.assertIn("TaskFlow target: flow flow-1", out)
         self.assertIn("Substrate detail: mirror bound to native · bound · flow flow-1", out)
         self.assertIn("OpenClaw binding: task native-task-1 | flow flow-1 | runtime openclaw_task/openclaw_flow", out)
-        self.assertIn("Create path: preference native_preferred | status native_bound", out)
-        self.assertIn("Task summary: 1 active child | 1 completed child | 2 linked", out)
-        self.assertIn("Review surface: queued | task task-3 | mirror bound to native · bound · flow flow-1", out)
 
     def test_detail_text_surfaces_runner_plan(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "detail", "--id", "task-2"])
         self.assertEqual(code, 0, err)
         self.assertIn("Runner plan: local_file_probe | tail -n 80 /var/log/nginx/error.log", out)
+        self.assertIn("Materialization: runner playbook · materialization failed · runner playbook missing", out)
 
     def test_queue_text_groups_tasks(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "queue"])
@@ -149,66 +134,15 @@ class TaskDisplayCliTests(unittest.TestCase):
     def test_retrieve_text_surfaces_primary_report(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-1"])
         self.assertEqual(code, 0, err)
-        self.assertIn("TaskFlow target: flow flow-1", out)
         self.assertIn("Substrate: mirror bound to native · bound · flow flow-1", out)
-        self.assertIn("Create path: preference native_preferred | status native_bound", out)
-        self.assertIn("Task summary: 1 active child | 1 completed child | 2 linked", out)
-        self.assertIn("Review surface: queued | task task-3 | mirror bound to native · bound · flow flow-1", out)
-        self.assertIn("Read order:", out)
-        self.assertIn("TaskFlow flow flow-1", out)
         self.assertIn("Primary report: /tmp/task-1.md", out)
         self.assertIn("Summary:", out)
-
-    def test_substrate_text_summarizes_inventory(self) -> None:
-        code, out, err = self._run(["--state-file", self.state_file, "substrate"])
-        self.assertEqual(code, 0, err)
-        self.assertIn("Substrate inventory", out)
-        self.assertIn("Taskflow tracked", out)
-        self.assertIn("Native preferred", out)
-        self.assertIn("Cleanup candidates", out)
-
-    @patch("lib.task_display_cli.describe_taskflow_cleanup")
-    def test_substrate_cleanup_preview_text_lists_candidates(self, mock_preview) -> None:
-        mock_preview.return_value = {
-            "retention_hours": 24,
-            "candidate_count": 1,
-            "eligible_count": 1,
-            "candidates": [
-                {
-                    "task_id": "task-2",
-                    "route": "runner",
-                    "create_status": "mirror_only",
-                    "age_hours": 72,
-                    "eligible_now": True,
-                }
-            ],
-        }
-
-        code, out, err = self._run(["--state-file", self.state_file, "substrate", "--cleanup-preview"])
-        self.assertEqual(code, 0, err)
-        self.assertIn("Substrate cleanup (preview)", out)
-        self.assertIn("task-2 | runner | mirror_only | 72h | eligible", out)
-
-    @patch("lib.task_display_cli.cleanup_taskflow_mirror")
-    def test_substrate_cleanup_apply_text_reports_removed_entries(self, mock_cleanup) -> None:
-        mock_cleanup.return_value = {
-            "retention_hours": 24,
-            "candidate_count": 2,
-            "removed_count": 1,
-            "removed_task_ids": ["task-2"],
-            "remaining_entries": 1,
-        }
-
-        code, out, err = self._run(["--state-file", self.state_file, "substrate", "--cleanup-apply"])
-        self.assertEqual(code, 0, err)
-        self.assertIn("Substrate cleanup (applied)", out)
-        self.assertIn("Removed: `1`", out)
-        self.assertIn("task-2", out)
 
     def test_retrieve_text_surfaces_runner_plan(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "retrieve", "--id", "task-2"])
         self.assertEqual(code, 0, err)
         self.assertIn("Runner plan: local_file_probe | tail -n 80 /var/log/nginx/error.log", out)
+        self.assertIn("Materialization: runner playbook · materialization failed · runner playbook missing", out)
 
     def test_graph_text_surfaces_child_relationship(self) -> None:
         code, out, err = self._run(["--state-file", self.state_file, "graph", "--id", "task-1"])

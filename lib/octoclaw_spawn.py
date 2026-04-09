@@ -38,7 +38,13 @@ from octopus_config import (
     load_octopus_config,
     spawn_operator_surface,
 )
-from runtime_protocol import build_result_contract, build_task_brief, normalize_result_status
+from runtime_protocol import (
+    build_capability_bound_failure,
+    build_delegated_materialization,
+    build_result_contract,
+    build_task_brief,
+    normalize_result_status,
+)
 from worker_taxonomy import (
     infer_model_band as taxonomy_infer_model_band,
     infer_worker_pool as taxonomy_infer_worker_pool,
@@ -1674,16 +1680,6 @@ def build_spawn_spec(
     request_metadata = dict(policy_metadata(policy))
     if isinstance(metadata, dict):
         request_metadata.update(metadata)
-    route_recommendation = (
-        request_metadata.get("route_recommendation")
-        if isinstance(request_metadata.get("route_recommendation"), dict)
-        else (policy.get("route_recommendation") if isinstance(policy.get("route_recommendation"), dict) else {})
-    )
-    budget_recommendation = (
-        request_metadata.get("budget_recommendation")
-        if isinstance(request_metadata.get("budget_recommendation"), dict)
-        else (policy.get("budget_recommendation") if isinstance(policy.get("budget_recommendation"), dict) else {})
-    )
     route_decision = policy.get("route_decision", {}) if isinstance(policy.get("route_decision", {}), dict) else {}
     model_policy = policy.get("model_policy", {}) if isinstance(policy.get("model_policy", {}), dict) else {}
     skill_policy = policy.get("skill_policy", {}) if isinstance(policy.get("skill_policy", {}), dict) else {}
@@ -1700,7 +1696,7 @@ def build_spawn_spec(
     hinted_work_type = str(work_type or route_decision.get("work_type", "") or "")
     hinted_phase = str(phase or route_decision.get("phase", "") or "")
 
-    resolved_worker_pool = hinted_worker_pool or str(route_recommendation.get("recommended_worker_pool", "") or "") or taxonomy_infer_worker_pool(final_route, hinted_work_type)
+    resolved_worker_pool = hinted_worker_pool or taxonomy_infer_worker_pool(final_route, hinted_work_type)
     if not resolved_worker_pool:
         resolved_worker_pool = taxonomy_infer_worker_pool(final_route, hinted_work_type)
 
@@ -1748,19 +1744,8 @@ def build_spawn_spec(
         final_model_band,
         route=final_route,
     )
-    candidate_models = [
-        str(item or "").strip()
-        for item in list(
-            ((policy.get("auto_router", {}) or {}).get("model_intel", {}) or {}).get("candidate_models", [])
-            if isinstance((policy.get("auto_router", {}) or {}).get("model_intel", {}), dict)
-            else []
-        )
-        if str(item or "").strip()
-    ]
-    final_model = model or str(model_policy.get("selected_model", "") or "") or str(budget_recommendation.get("target_model", "") or "")
-    if not final_model and candidate_models:
-        final_model = candidate_models[0]
-    thinking = str(model_policy.get("reasoning_effort", "") or budget_recommendation.get("reasoning_mode", "") or "")
+    final_model = model or str(model_policy.get("selected_model", "") or "")
+    thinking = str(model_policy.get("reasoning_effort", "") or "")
     if not final_model:
         final_model, resolved_thinking = resolve_model_and_thinking(
             final_selector_band,
@@ -1865,21 +1850,21 @@ def build_spawn_spec(
         handoff_contract=str(prompt_policy.get("handoff_contract", "") or ""),
     )
     result_contract = build_result_contract(summary_hint, artifact_first=True)
+    base_artifacts["delegated_materialization"] = build_delegated_materialization(
+        lane=final_route,
+        kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
+        status="materialized",
+        execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
+        task_id=task_id,
+        child_spec_id=task_id,
+        session_key=resolved_session_key,
+        executed=False,
+    )
     base_artifacts.update(
         {
             "brief": brief,
             "expected_output": brief.get("expected_output", {}),
             "context_pack_path": str(context_bundle.get("context_pack_path", "") or ""),
-            "route_recommendation": route_recommendation,
-            "budget_recommendation": budget_recommendation,
-            "execution_contract": {
-                "execution_contract": str(route_recommendation.get("recommended_route", "") or final_route),
-                "worker_pool": resolved_worker_pool,
-                "profile": profile,
-                "model_candidates": candidate_models,
-                "output_budget": str(budget_recommendation.get("output_budget", "") or ""),
-                "reasoning_mode": str(budget_recommendation.get("reasoning_mode", "") or ""),
-            },
         }
     )
     prompt = build_task_prompt(
@@ -2007,6 +1992,16 @@ def build_spawn_spec(
                     },
                 }
             )
+            base_artifacts["delegated_materialization"] = build_delegated_materialization(
+                lane=final_route,
+                kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
+                status="materialization_failed",
+                execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
+                task_id=task_id,
+                child_spec_id=task_id,
+                session_key=resolved_session_key,
+                executed=True,
+            )
             base_artifacts["operator_hint"] = str(
                 ((base_artifacts.get("operator_surface") or {}) if isinstance(base_artifacts.get("operator_surface"), dict) else {}).get("operator_hint", "")
                 or ""
@@ -2053,6 +2048,23 @@ def build_spawn_spec(
             executed = True
         except Exception as exc:
             execution_error = compact_text(str(exc), 220)
+            base_artifacts["delegated_materialization"] = build_delegated_materialization(
+                lane=final_route,
+                kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
+                status="materialized",
+                execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
+                task_id=task_id,
+                child_spec_id=task_id,
+                session_key=resolved_session_key,
+                executed=False,
+                capability_failure=build_capability_bound_failure(
+                    final_route,
+                    "spawn_backend_execution_failed",
+                    detail=execution_error,
+                    missing_capabilities=["spawn_backend_execution"],
+                    fallback_permitted=False,
+                ),
+            )
             subprocess.run(
                 ["python3", TASK_STATE_PY, "failed", "--id", task_id, "--summary", f"spawn启动失败：{execution_error}"],
                 check=False,
@@ -2069,6 +2081,27 @@ def build_spawn_spec(
         payload["thinking"] = thinking
     if runtime == "acp" and stream_to:
         payload["streamTo"] = stream_to
+
+    capability_failure: dict[str, object] = {}
+    if execution_error:
+        capability_failure = build_capability_bound_failure(
+            final_route,
+            "spawn_backend_execution_failed",
+            detail=execution_error,
+            missing_capabilities=["spawn_backend_execution"],
+            fallback_permitted=False,
+        )
+    materialization = build_delegated_materialization(
+        lane=final_route,
+        kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
+        status="materialization_failed" if capability_failure else "materialized",
+        execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
+        task_id=task_id,
+        child_spec_id=task_id,
+        session_key=resolved_session_key,
+        executed=executed,
+        capability_failure=capability_failure,
+    )
 
     return {
         "route": final_route,
@@ -2131,6 +2164,8 @@ def build_spawn_spec(
         "sessions_spawn_payload": payload,
         "executed": executed,
         "execution_error": execution_error,
+        "capability_failure": capability_failure,
+        "materialization": materialization,
         "spawn_execution": spawn_execution or {},
         "operator_surface": base_artifacts.get("operator_surface", {}),
         "openclaw_taskflow": base_artifacts.get("openclaw_taskflow", {}),

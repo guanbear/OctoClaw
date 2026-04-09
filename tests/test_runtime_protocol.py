@@ -5,9 +5,14 @@ from pathlib import Path
 
 from lib.runtime_protocol import (
     BRIEF_SCHEMA_VERSION,
+    CAPABILITY_BOUND_FAILURE_SCHEMA_VERSION,
+    DELEGATED_MATERIALIZATION_SCHEMA_VERSION,
     WORKER_RESULT_SCHEMA_VERSION,
+    build_capability_bound_failure,
+    build_delegated_materialization,
     build_result_contract,
     build_task_brief,
+    normalize_delegated_materialization,
     normalize_worker_result,
 )
 
@@ -15,6 +20,8 @@ from lib.runtime_protocol import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BRIEF_SCHEMA = REPO_ROOT / "schemas" / "runtime-brief-v1.schema.json"
 RESULT_SCHEMA = REPO_ROOT / "schemas" / "worker-result-v1.schema.json"
+MATERIALIZATION_SCHEMA = REPO_ROOT / "schemas" / "delegated-materialization-v1.schema.json"
+FAILURE_SCHEMA = REPO_ROOT / "schemas" / "capability-bound-failure-v1.schema.json"
 
 
 class RuntimeProtocolTests(unittest.TestCase):
@@ -82,6 +89,8 @@ class RuntimeProtocolTests(unittest.TestCase):
     def test_schema_required_fields_match_protocol_helpers(self) -> None:
         brief_schema = json.loads(BRIEF_SCHEMA.read_text(encoding="utf-8"))
         result_schema = json.loads(RESULT_SCHEMA.read_text(encoding="utf-8"))
+        materialization_schema = json.loads(MATERIALIZATION_SCHEMA.read_text(encoding="utf-8"))
+        failure_schema = json.loads(FAILURE_SCHEMA.read_text(encoding="utf-8"))
         brief = build_task_brief(
             task_id="task-2",
             goal="Draft release notes",
@@ -96,12 +105,70 @@ class RuntimeProtocolTests(unittest.TestCase):
             summary_hint="输出一版可直接发给用户的说明",
         )
         result = build_result_contract("输出一版可直接发给用户的说明")
+        failure = build_capability_bound_failure(
+            "runner",
+            "runner_playbook_missing",
+            detail="no registered playbook",
+            missing_capabilities=["registered_runner_playbook"],
+        )
+        materialization = build_delegated_materialization(
+            lane="runner",
+            kind="runner_playbook",
+            status="materialization_failed",
+            execution_contract="inspect_report",
+            runner_job_id="",
+            capability_failure=failure,
+        )
         for field in brief_schema["required"]:
             with self.subTest(field=field):
                 self.assertIn(field, brief)
         for field in result_schema["required"]:
             with self.subTest(field=field):
                 self.assertIn(field, result)
+        for field in failure_schema["required"]:
+            with self.subTest(field=field):
+                self.assertIn(field, failure)
+        for field in materialization_schema["required"]:
+            with self.subTest(field=field):
+                self.assertIn(field, materialization)
+
+    def test_build_delegated_materialization_keeps_lane_and_failure(self) -> None:
+        failure = build_capability_bound_failure(
+            "spawn_single",
+            "spawn_backend_execution_failed",
+            detail="openclaw not found",
+            missing_capabilities=["spawn_backend_execution"],
+        )
+        materialization = build_delegated_materialization(
+            lane="spawn_single",
+            kind="spawn_child_task",
+            execution_contract="deliverable_work",
+            task_id="research-1",
+            child_spec_id="research-1",
+            session_key="agent:main:slack:direct:u1",
+            executed=False,
+            capability_failure=failure,
+        )
+        self.assertEqual(materialization["schema_version"], DELEGATED_MATERIALIZATION_SCHEMA_VERSION)
+        self.assertEqual(materialization["lane"], "spawn_single")
+        self.assertEqual(materialization["kind"], "spawn_child_task")
+        self.assertEqual(materialization["status"], "materialized")
+        self.assertEqual(materialization["task_id"], "research-1")
+        self.assertEqual(materialization["capability_failure"]["schema_version"], CAPABILITY_BOUND_FAILURE_SCHEMA_VERSION)
+
+    def test_normalize_delegated_materialization_marks_failure_when_reason_present(self) -> None:
+        normalized = normalize_delegated_materialization(
+            {
+                "lane": "runner",
+                "kind": "runner_playbook",
+                "capability_failure": {
+                    "reason": "runner_playbook_missing",
+                    "detail": "no playbook",
+                },
+            }
+        )
+        self.assertEqual(normalized["status"], "materialization_failed")
+        self.assertEqual(normalized["capability_failure"]["reason"], "runner_playbook_missing")
 
 
 if __name__ == "__main__":

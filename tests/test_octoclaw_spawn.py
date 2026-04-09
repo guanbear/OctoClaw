@@ -123,6 +123,9 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["brief"]["expected_output"]["schema_version"], "octoclaw.worker_result/v1")
         self.assertEqual(spec["brief"]["context_pack"]["schema_version"], "octoclaw.context_pack/v1")
         self.assertEqual(spec["result_contract"]["status"], "done")
+        self.assertEqual(spec["materialization"]["lane"], "spawn_single")
+        self.assertEqual(spec["materialization"]["kind"], "spawn_child_task")
+        self.assertEqual(spec["materialization"]["task_id"], spec["task_id"])
         self.assertIn("\"next_step\":", spec["task_prompt"])
         self.assertIn("\"risks\": []", spec["task_prompt"])
         self.assertIn(str(octoclaw_spawn.TASK_STATE_PY), spec["task_prompt"])
@@ -519,6 +522,8 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(spec["spawn_execution"]["session_id"], "child-sess-2")
         self.assertEqual(spec["spawn_execution"]["run_id"], "run-2")
         self.assertEqual(spec["spawn_execution"]["native_task_id"], "native-task-2")
+        self.assertTrue(spec["materialization"]["executed"])
+        self.assertEqual(spec["materialization"]["kind"], "spawn_child_task")
         upsert_cmd = subprocess_calls[-1]
         self.assertIn("--session-id", upsert_cmd)
         self.assertIn("child-sess-2", upsert_cmd)
@@ -598,6 +603,47 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("--status", upsert_cmd)
         self.assertIn("running", upsert_cmd)
         self.assertNotIn("--session-key", upsert_cmd)
+
+    def test_build_spawn_spec_marks_materialization_failed_when_backend_execution_raises(self) -> None:
+        policy = {
+            "route_decision": {
+                "route": "spawn_single",
+                "worker_pool": "octoclaw-research",
+                "work_type": "research",
+                "phase": "collect",
+                "protocol": "normal",
+                "work_contract": "deliverable_work",
+            },
+            "model_policy": {
+                "profile": "research",
+            },
+            "skill_policy": {
+                "default_skill_bundle": [],
+            },
+            "review_policy": {
+                "required": False,
+            },
+        }
+
+        with (
+            patch.object(octoclaw_spawn, "resolve_model_and_thinking", return_value=("model/research", "medium")),
+            patch.object(octoclaw_spawn, "should_execute_spawn", return_value=True),
+            patch.object(octoclaw_spawn, "prepare_spawn_prompt", return_value=("prompt", "")),
+            patch.object(octoclaw_spawn, "execute_spawn_backend", side_effect=FileNotFoundError("openclaw")),
+            patch.object(octoclaw_spawn.subprocess, "run", return_value=subprocess.CompletedProcess(args=["python3"], returncode=0, stdout="", stderr="")),
+        ):
+            spec = octoclaw_spawn.build_spawn_spec(
+                "Research provider docs and summarize the key changes",
+                route="spawn_single",
+                register=False,
+                execute=True,
+                policy_decision=policy,
+            )
+
+        self.assertFalse(spec["executed"])
+        self.assertEqual(spec["materialization"]["status"], "materialization_failed")
+        self.assertEqual(spec["capability_failure"]["reason"], "spawn_backend_execution_failed")
+        self.assertEqual(spec["materialization"]["capability_failure"]["reason"], "spawn_backend_execution_failed")
 
     def test_build_spawn_spec_does_not_need_legacy_inputs_when_taxonomy_exists(self) -> None:
         policy = {

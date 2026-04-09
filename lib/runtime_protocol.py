@@ -8,6 +8,8 @@ from typing import Any
 
 BRIEF_SCHEMA_VERSION = "octoclaw.brief/v1"
 WORKER_RESULT_SCHEMA_VERSION = "octoclaw.worker_result/v1"
+DELEGATED_MATERIALIZATION_SCHEMA_VERSION = "octoclaw.delegated_materialization/v1"
+CAPABILITY_BOUND_FAILURE_SCHEMA_VERSION = "octoclaw.capability_bound_failure/v1"
 
 
 def _compact_text(text: str, limit: int) -> str:
@@ -261,4 +263,107 @@ def normalize_worker_result(
         "risks": _string_list(data.get("risks")),
         "verification": _string_list(data.get("verification")),
         "next_step": _compact_text(str(data.get("next_step", "") or ""), 240),
+    }
+
+
+def normalize_materialization_status(value: str, default: str = "materialized") -> str:
+    text = str(value or "").strip().lower()
+    if text in {"materialized", "materialization_failed", "not_applicable"}:
+        return text
+    return default
+
+
+def build_capability_bound_failure(
+    lane: str,
+    reason: str,
+    *,
+    detail: str = "",
+    missing_capabilities: list[str] | None = None,
+    fallback_permitted: bool = False,
+) -> dict[str, Any]:
+    return {
+        "schema_version": CAPABILITY_BOUND_FAILURE_SCHEMA_VERSION,
+        "lane": str(lane or "").strip(),
+        "reason": str(reason or "").strip(),
+        "detail": _compact_text(str(detail or ""), 320),
+        "missing_capabilities": [str(item).strip() for item in (missing_capabilities or []) if str(item).strip()],
+        "fallback_permitted": bool(fallback_permitted),
+    }
+
+
+def normalize_capability_bound_failure(
+    payload: dict[str, Any] | None,
+    *,
+    lane: str = "",
+) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    return {
+        "schema_version": CAPABILITY_BOUND_FAILURE_SCHEMA_VERSION,
+        "lane": str(data.get("lane", "") or lane or "").strip(),
+        "reason": str(data.get("reason", "") or "").strip(),
+        "detail": _compact_text(str(data.get("detail", "") or ""), 320),
+        "missing_capabilities": [
+            str(item).strip()
+            for item in (data.get("missing_capabilities") if isinstance(data.get("missing_capabilities"), list) else [])
+            if str(item).strip()
+        ],
+        "fallback_permitted": bool(data.get("fallback_permitted", False)),
+    }
+
+
+def build_delegated_materialization(
+    *,
+    lane: str,
+    kind: str,
+    status: str = "materialized",
+    execution_contract: str = "",
+    task_id: str = "",
+    runner_job_id: str = "",
+    child_spec_id: str = "",
+    session_key: str = "",
+    executed: bool | None = None,
+    capability_failure: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": DELEGATED_MATERIALIZATION_SCHEMA_VERSION,
+        "lane": str(lane or "").strip(),
+        "kind": str(kind or "").strip(),
+        "status": normalize_materialization_status(status),
+        "execution_contract": str(execution_contract or "").strip(),
+        "task_id": str(task_id or "").strip(),
+        "runner_job_id": str(runner_job_id or "").strip(),
+        "child_spec_id": str(child_spec_id or "").strip(),
+        "session_key": str(session_key or "").strip(),
+        "executed": bool(executed) if isinstance(executed, bool) else False,
+        "capability_failure": capability_failure if isinstance(capability_failure, dict) else {},
+    }
+    return payload
+
+
+def normalize_delegated_materialization(
+    payload: dict[str, Any] | None,
+    *,
+    lane: str = "",
+    kind: str = "",
+    execution_contract: str = "",
+) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    failure = normalize_capability_bound_failure(
+        data.get("capability_failure") if isinstance(data.get("capability_failure"), dict) else {},
+        lane=str(data.get("lane", "") or lane or ""),
+    )
+    return {
+        "schema_version": DELEGATED_MATERIALIZATION_SCHEMA_VERSION,
+        "lane": str(data.get("lane", "") or lane or "").strip(),
+        "kind": str(data.get("kind", "") or kind or "").strip(),
+        "status": normalize_materialization_status(
+            str(data.get("status", "") or ("materialization_failed" if failure.get("reason") else "materialized")),
+        ),
+        "execution_contract": str(data.get("execution_contract", "") or execution_contract or "").strip(),
+        "task_id": str(data.get("task_id", "") or "").strip(),
+        "runner_job_id": str(data.get("runner_job_id", "") or "").strip(),
+        "child_spec_id": str(data.get("child_spec_id", "") or "").strip(),
+        "session_key": str(data.get("session_key", "") or "").strip(),
+        "executed": bool(data.get("executed", False)),
+        "capability_failure": failure if failure.get("reason") else {},
     }

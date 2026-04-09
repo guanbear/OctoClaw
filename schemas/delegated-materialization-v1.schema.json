@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/delegated-materialization-v1.schema.json",
+  "title": "OctoClaw Delegated Materialization v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lane",
+    "kind",
+    "status",
+    "execution_contract",
+    "task_id",
+    "runner_job_id",
+    "child_spec_id",
+    "session_key",
+    "executed",
+    "capability_failure"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.delegated_materialization/v1"
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["runner", "spawn_single", "spawn_multi"]
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["runner_playbook", "spawn_child_task", "spawn_team_flow"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["materialized", "materialization_failed", "not_applicable"]
+    },
+    "execution_contract": { "type": "string" },
+    "task_id": { "type": "string" },
+    "runner_job_id": { "type": "string" },
+    "child_spec_id": { "type": "string" },
+    "session_key": { "type": "string" },
+    "executed": { "type": "boolean" },
+    "capability_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "lane",
+        "reason",
+        "detail",
+        "missing_capabilities",
+        "fallback_permitted"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "octoclaw.capability_bound_failure/v1"
+        },
+        "lane": { "type": "string" },
+        "reason": { "type": "string" },
+        "detail": { "type": "string" },
+        "missing_capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "fallback_permitted": { "type": "boolean" }
+      }
+    }
+  }
+}

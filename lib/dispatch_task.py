@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
 from octopus_config import RUNNER_HEALTH_FILE, RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
-from runtime_protocol import normalize_worker_result
+from runtime_protocol import build_capability_bound_failure, build_delegated_materialization, normalize_worker_result
 from runner_playbooks import infer_runner_playbook
 from worker_taxonomy import (
     infer_model_band as taxonomy_infer_model_band,
@@ -51,16 +51,6 @@ def decision_model(decision: dict) -> dict:
 
 def decision_skill(decision: dict) -> dict:
     value = decision.get("skill_policy", {})
-    return value if isinstance(value, dict) else {}
-
-
-def decision_route_recommendation(decision: dict) -> dict:
-    value = decision.get("route_recommendation", {})
-    return value if isinstance(value, dict) else {}
-
-
-def decision_budget_recommendation(decision: dict) -> dict:
-    value = decision.get("budget_recommendation", {})
     return value if isinstance(value, dict) else {}
 
 
@@ -219,11 +209,14 @@ def configured_spawn_backend() -> str:
 def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str, *, parent_spec: dict | None = None) -> dict:
     ordered_steps = [name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict)]
     child_task_ids = [str(step.get("task_id", "") or "").strip() for step in steps if str(step.get("task_id", "") or "").strip()]
-    backend_name_override = "tmux" if backend == "clawteam" else ("openclaw_agent" if backend == "native" else "")
-    operator_surface = spawn_operator_surface(
-        backend_override=backend,
-        backend_name_override=backend_name_override,
-    )
+    operator_surface = spawn_operator_surface()
+    operator_surface["backend"] = backend
+    backend_name = str(operator_surface.get("backend_name", "tmux") or "tmux")
+    if backend == "clawteam":
+        team_name = str(operator_surface.get("team_name", "") or "").strip()
+        operator_surface["operator_hint"] = f"clawteam/{backend_name}" + (f" {team_name}" if team_name else "")
+    else:
+        operator_surface["operator_hint"] = backend or str(operator_surface.get("operator_hint", "") or "")
 
     def step_taxonomy(entry: dict) -> dict[str, str]:
         if not isinstance(entry, dict):
@@ -293,6 +286,12 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str, *,
         taskflow = parent_artifacts.get("openclaw_taskflow", {}) if isinstance(parent_artifacts.get("openclaw_taskflow", {}), dict) else {}
     if isinstance(taskflow, dict) and taskflow:
         artifacts["openclaw_taskflow"] = dict(taskflow)
+    delegated_materialization = (parent_spec or {}).get("materialization")
+    if isinstance(delegated_materialization, dict) and delegated_materialization:
+        artifacts["delegated_materialization"] = dict(delegated_materialization)
+    capability_failure = (parent_spec or {}).get("capability_failure")
+    if isinstance(capability_failure, dict) and capability_failure:
+        artifacts["capability_failure"] = dict(capability_failure)
     return artifacts
 
 
@@ -449,6 +448,48 @@ def _runner_result_payload(
     }
 
 
+def build_runner_materialization(
+    *,
+    execution_contract: str,
+    session_key: str = "",
+    job_id: str = "",
+    executed: bool = False,
+    failure: dict | None = None,
+) -> dict:
+    return build_delegated_materialization(
+        lane="runner",
+        kind="runner_playbook",
+        status="materialization_failed" if isinstance(failure, dict) and failure else "materialized",
+        execution_contract=execution_contract,
+        runner_job_id=job_id,
+        session_key=session_key,
+        executed=executed,
+        capability_failure=failure,
+    )
+
+
+def build_spawn_materialization(
+    *,
+    route: str,
+    execution_contract: str,
+    session_key: str = "",
+    task_id: str = "",
+    executed: bool = False,
+    failure: dict | None = None,
+) -> dict:
+    return build_delegated_materialization(
+        lane=route,
+        kind="spawn_team_flow" if route == "spawn_multi" else "spawn_child_task",
+        status="materialization_failed" if isinstance(failure, dict) and failure else "materialized",
+        execution_contract=execution_contract,
+        task_id=task_id,
+        child_spec_id=task_id,
+        session_key=session_key,
+        executed=executed,
+        capability_failure=failure,
+    )
+
+
 def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
     job = payload.get("job", {}) if isinstance(payload, dict) else {}
     job_id = str(job.get("id", "") or "")
@@ -543,11 +584,63 @@ def build_multi_step_task(base_task: str, step_name: str) -> str:
 def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str) -> dict:
     backend = configured_spawn_backend()
     if not backend:
-        return {"executed": False, "steps": [], "handoff": build_spawn_handoff("spawn_multi", "", task)}
+        failure = build_capability_bound_failure(
+            "spawn_multi",
+            "spawn_backend_unavailable",
+            detail="spawn_multi lane selected but no enabled spawn backend could materialize the child workflow.",
+            missing_capabilities=["spawn_backend"],
+            fallback_permitted=False,
+        )
+        return {
+            "executed": False,
+            "steps": [],
+            "capability_failure": failure,
+            "materialization": build_spawn_materialization(
+                route="spawn_multi",
+                execution_contract="coordinated_work",
+                task_id=parent_task_id,
+                executed=False,
+                failure=failure,
+            ),
+            "handoff": {
+                "kind": "plan",
+                "status": "failed",
+                "summary": "spawn_multi workflow 无法 materialize：缺少可用 backend。",
+                "reply_text": "当前任务判定应走多子任务流程，但当前环境没有可用的 spawn backend，因此没有真正派发执行。",
+                "report_path": "",
+                "user_safe": True,
+            },
+        }
 
     ordered_steps = [name for name in ("planner", "worker", "review") if isinstance(plan.get(name), dict)]
     if not ordered_steps:
-        return {"executed": False, "steps": [], "handoff": build_spawn_handoff("spawn_multi", "", task)}
+        failure = build_capability_bound_failure(
+            "spawn_multi",
+            "spawn_plan_missing",
+            detail="spawn_multi lane selected but no valid planner/worker/review step specification was generated.",
+            missing_capabilities=["spawn_multi_step_plan"],
+            fallback_permitted=False,
+        )
+        return {
+            "executed": False,
+            "steps": [],
+            "capability_failure": failure,
+            "materialization": build_spawn_materialization(
+                route="spawn_multi",
+                execution_contract="coordinated_work",
+                task_id=parent_task_id,
+                executed=False,
+                failure=failure,
+            ),
+            "handoff": {
+                "kind": "plan",
+                "status": "failed",
+                "summary": "spawn_multi workflow 无法 materialize：缺少有效 step plan。",
+                "reply_text": "当前任务判定应走多子任务流程，但没有生成有效的子步骤规范，因此没有真正派发执行。",
+                "report_path": "",
+                "user_safe": True,
+            },
+        }
 
     parent_id = parent_task_id
     previous_task_id = ""
@@ -591,9 +684,24 @@ def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str
             }
         )
         if not spec.get("executed", False):
+            failure = spec.get("capability_failure") if isinstance(spec.get("capability_failure"), dict) and spec.get("capability_failure") else build_capability_bound_failure(
+                "spawn_multi",
+                "spawn_child_materialization_failed",
+                detail=f"{step_name} child workflow did not execute.",
+                missing_capabilities=["spawn_backend_execution"],
+                fallback_permitted=False,
+            )
             return {
                 "executed": False,
                 "steps": steps,
+                "capability_failure": failure,
+                "materialization": build_spawn_materialization(
+                    route="spawn_multi",
+                    execution_contract="coordinated_work",
+                    task_id=parent_task_id,
+                    executed=False,
+                    failure=failure,
+                ),
                 "handoff": {
                     "kind": "plan",
                     "status": "failed",
@@ -610,6 +718,13 @@ def execute_multi_spawn_plan(args, task: str, plan: dict, *, parent_task_id: str
     return {
         "executed": True,
         "steps": steps,
+        "capability_failure": {},
+        "materialization": build_spawn_materialization(
+            route="spawn_multi",
+            execution_contract="coordinated_work",
+            task_id=parent_task_id,
+            executed=True,
+        ),
         "handoff": {
             "kind": "background",
             "status": "pending",
@@ -691,8 +806,6 @@ def run_runner_on_demand(job_id: str) -> dict:
 def dispatch_runner(args) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     identity = octoclaw_identity_fields(decision)
-    route_recommendation = decision_route_recommendation(decision)
-    budget_recommendation = decision_budget_recommendation(decision)
     playbook = getattr(args, "_runner_playbook", None)
     if not isinstance(playbook, dict) or not playbook:
         playbook = None
@@ -717,14 +830,7 @@ def dispatch_runner(args) -> dict:
         "--summary",
         summary or args.task[:40],
         "--timeout-seconds",
-        str(
-            90
-            if (
-                int(args.timeout_seconds) == 120
-                and str(budget_recommendation.get("output_budget", "") or "").strip().lower() in {"tiny", "low"}
-            )
-            else args.timeout_seconds
-        ),
+        str(args.timeout_seconds),
         "--model-band",
         args.model_band or "fast",
         "--task-description",
@@ -752,23 +858,21 @@ def dispatch_runner(args) -> dict:
         "job": payload,
         "reason": "lightweight_task",
         "runner_execution_mode": "daemon",
-        "route_recommendation": route_recommendation,
-        "budget_recommendation": budget_recommendation,
-        "execution_contract": {
-            "route_class": str((decision.get("auto_router", {}) or {}).get("router_core", {}).get("route_class", "") or ""),
-            "agent_scope": str((decision.get("auto_router", {}) or {}).get("router_core", {}).get("agent_scope", "") or ""),
-            "output_budget": str(budget_recommendation.get("output_budget", "") or ""),
-            "reasoning_mode": str(budget_recommendation.get("reasoning_mode", "") or ""),
-        },
+        "materialization": build_runner_materialization(
+            execution_contract="inspect_report",
+            session_key=str(identity.get("session_key", "") or ""),
+            job_id=str(payload.get("id", "") or ""),
+            executed=True,
+        ),
     }
     if playbook:
         response["runner_plan"] = playbook
         response["playbook"] = playbook
     if args.wait and not runner_health_is_healthy():
-        response["runner_execution_mode"] = "ondemand"
+        response["runner_execution_mode"] = "on_demand"
         response["runner_execution"] = run_runner_on_demand(str(payload.get("id", "") or ""))
     if args.wait:
-        wait_timeout = 1 if response.get("runner_execution_mode") == "ondemand" else args.wait_timeout_seconds
+        wait_timeout = 1 if response.get("runner_execution_mode") == "on_demand" else args.wait_timeout_seconds
         response["wait"] = wait_for_runner_result(payload.get("id", ""), wait_timeout)
     response["handoff"] = build_runner_handoff(args.task, response, response.get("wait"))
     return response
@@ -778,8 +882,6 @@ def recommend_spawn(args, task: str) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     route_meta = decision_route(decision)
     model_meta = decision_model(decision)
-    route_recommendation = decision_route_recommendation(decision)
-    budget_recommendation = decision_budget_recommendation(decision)
     requested_model_band = getattr(args, "model_band", "") or ""
     spawn_spec = build_spawn_spec(
         task,
@@ -794,10 +896,6 @@ def recommend_spawn(args, task: str) -> dict:
         register=True,
         execute=None,
         policy_decision=decision,
-        metadata={
-            "route_recommendation": route_recommendation,
-            "budget_recommendation": budget_recommendation,
-        },
     )
     return apply_policy_fields({
         "route": "spawn_single",
@@ -809,9 +907,8 @@ def recommend_spawn(args, task: str) -> dict:
         "reason": "needs_subagent" if not spawn_spec.get("execution_error") else "subagent_spawn_failed",
         "task": task,
         "handoff": spawn_spec["handoff"],
+        "materialization": spawn_spec.get("materialization", {}),
         "spawn_spec": spawn_spec,
-        "route_recommendation": route_recommendation,
-        "budget_recommendation": budget_recommendation,
     }, decision)
 
 
@@ -833,10 +930,6 @@ def recommend_multi_spawn(args, task: str) -> dict:
         task_kind="team_parent",
         register=False,
         policy_decision=decision,
-        metadata={
-            "route_recommendation": decision_route_recommendation(decision),
-            "budget_recommendation": decision_budget_recommendation(decision),
-        },
     )
     planner_task = build_multi_step_task(task, "planner")
     planner_decision = build_decision(planner_task, metadata=decision_metadata(decision), force_route="spawn_single")
@@ -858,6 +951,21 @@ def recommend_multi_spawn(args, task: str) -> dict:
         for step in execution.get("steps", [])
         if str(step.get("task_id", "") or "").strip()
     ]
+    capability_failure = {}
+    if isinstance(execution.get("capability_failure"), dict) and execution.get("capability_failure"):
+        capability_failure = dict(execution.get("capability_failure"))
+    materialization = dict(execution.get("materialization", {})) if isinstance(execution.get("materialization"), dict) and execution.get("materialization") else {}
+    if materialization and not str(materialization.get("session_key", "") or "").strip():
+        materialization["session_key"] = str(octoclaw_identity_fields(decision).get("session_key", "") or "")
+    primary_spawn["capability_failure"] = capability_failure
+    primary_spawn["materialization"] = materialization if materialization else build_spawn_materialization(
+        route="spawn_multi",
+        execution_contract="coordinated_work",
+        session_key=str(octoclaw_identity_fields(decision).get("session_key", "") or ""),
+        task_id=str(primary_spawn.get("task_id", "") or ""),
+        executed=bool(execution.get("executed", False)),
+        failure=capability_failure,
+    )
     register_multi_parent_task(
         task=task,
         parent_spec=primary_spawn,
@@ -883,6 +991,8 @@ def recommend_multi_spawn(args, task: str) -> dict:
         "plan": plan,
         "handoff": execution.get("handoff", primary_spawn["handoff"]),
         "steps": execution.get("steps", []),
+        "capability_failure": capability_failure,
+        "materialization": dict(primary_spawn.get("materialization", {})) if isinstance(primary_spawn.get("materialization"), dict) else {},
         "spawn_spec": primary_spawn,
     }, decision)
 
@@ -956,6 +1066,13 @@ def main():
     if final_route == "runner":
         playbook = infer_runner_playbook(task) if not args.command else None
         if not args.command and not playbook:
+            failure = build_capability_bound_failure(
+                "runner",
+                "runner_playbook_missing",
+                detail="runner lane was selected but no registered playbook or explicit command could materialize the workflow.",
+                missing_capabilities=["registered_runner_playbook"],
+                fallback_permitted=False,
+            )
             payload = apply_policy_fields(
                 {
                     "route": "runner",
@@ -963,11 +1080,17 @@ def main():
                     "task": task,
                     "should_wait": route.get("should_wait", False),
                     "wait_timeout_seconds": route.get("wait_timeout_seconds", 0),
+                    "materialization": build_runner_materialization(
+                        execution_contract="inspect_report",
+                        session_key=str(octoclaw_identity_fields(decision).get("session_key", "") or ""),
+                        failure=failure,
+                    ),
+                    "capability_failure": failure,
                     "handoff": {
                         "kind": "plan",
-                        "status": "planned",
-                        "summary": "当前任务更适合 runner，但缺少可执行命令。",
-                        "reply_text": "当前任务适合交给常驻 runner，但还缺少具体命令或工具步骤。",
+                        "status": "failed",
+                        "summary": "runner workflow 无法 materialize：缺少可执行 playbook。",
+                        "reply_text": "当前任务判定应走 runner，但缺少已注册 playbook 或显式命令，因此没有真正派发执行。",
                         "report_path": "",
                         "user_safe": True,
                     },

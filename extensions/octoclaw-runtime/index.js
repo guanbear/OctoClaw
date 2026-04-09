@@ -79,6 +79,10 @@ function resolveRouteStickinessPath() {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "route-stickiness.json");
 }
 
+function resolvePolicyStateLedgerPath() {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-state.json");
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -158,33 +162,6 @@ function preDispatchAckText(decision) {
   return String(decision?.pre_dispatch_ack?.text || "").trim();
 }
 
-function directEntryAckText(decision, toolName = "") {
-  const route = String(decision?.route_decision?.route || "").trim();
-  if (route !== "direct") return "";
-  if (isControlObserverDecision(decision) || isSessionControlDecision(decision)) return "";
-  const tool = String(toolName || "").trim();
-  if (!tool || tool.startsWith("octoclaw_") || tool === "session_status") return "";
-  const workType = String(decision?.route_decision?.work_type || "").trim();
-  if (workType === "code") return "我先看一下，马上给你结论。";
-  if (workType === "research") return "我先查一下，马上给你结论。";
-  return "我先处理一下，马上给你结论。";
-}
-
-function entryAckText(decision, toolName = "") {
-  return preDispatchAckText(decision) || directEntryAckText(decision, toolName);
-}
-
-function shouldSendEntryAck(decision, state = {}, ctx = {}, toolName = "") {
-  if (state?.preDispatchAckSent || state?.entryAckSent) return false;
-  const trigger = String(ctx?.trigger || "").trim().toLowerCase();
-  if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) return false;
-  if (isDelegatedRoute(decision)) {
-    const delegateTool = String(decision?.tool_policy?.must_delegate_via || "").trim();
-    return Boolean(decision?.pre_dispatch_ack?.required) && Boolean(preDispatchAckText(decision)) && Boolean(delegateTool) && String(toolName || "").trim() === delegateTool;
-  }
-  return Boolean(directEntryAckText(decision, toolName));
-}
-
 function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
   if (!isDelegatedRoute(decision)) return false;
   if (!decision?.pre_dispatch_ack?.required) return false;
@@ -194,7 +171,8 @@ function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
   return Boolean(preDispatchAckText(decision));
 }
 
-async function maybeEmitAckProgress(onUpdate, message, stateKey, logger) {
+async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger) {
+  const message = preDispatchAckText(decision);
   if (typeof onUpdate !== "function" || !message) {
     return { attempted: false, sent: false, reason: "progress_update_unavailable", message };
   }
@@ -207,12 +185,9 @@ async function maybeEmitAckProgress(onUpdate, message, stateKey, logger) {
       await onUpdate(payload);
       updatePolicyState(stateKey, (current) => ({
         ...current,
-        entryAckSent: true,
-        entryAckText: message,
         preDispatchAckSent: true,
         preDispatchAckText: message,
         preDispatchAckMode: "progress_update",
-        entryAckMode: "progress_update",
       }));
       return {
         attempted: true,
@@ -230,10 +205,6 @@ async function maybeEmitAckProgress(onUpdate, message, stateKey, logger) {
     reason: "progress_update_failed",
     message,
   };
-}
-
-async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger) {
-  return maybeEmitAckProgress(onUpdate, preDispatchAckText(decision), stateKey, logger);
 }
 
 async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger) {
@@ -255,12 +226,9 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
-        entryAckSent: true,
-        entryAckText: message,
         preDispatchAckSent: true,
         preDispatchAckText: message,
         preDispatchAckMode: "channel_message",
-        entryAckMode: "channel_message",
       }));
     }
     return {
@@ -279,83 +247,6 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
       message,
     };
   }
-}
-
-async function maybeSendEntryAck(decision, metadata, stateKey, state, ctx, logger, toolName = "") {
-  const message = entryAckText(decision, toolName);
-  if (!shouldSendEntryAck(decision, state, ctx, toolName)) {
-    return { attempted: false, sent: false, reason: "not_required", message: "" };
-  }
-  const sessionKey = String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
-  if (!sessionKey) {
-    return { attempted: false, sent: false, reason: "missing_session_key", message };
-  }
-  try {
-    const payload = await runJsonScript(
-      "send_pre_dispatch_ack.py",
-      ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
-      ctx?.cwd || process.cwd(),
-    );
-    const sent = Boolean(payload?.sent || payload?.ok);
-    if (sent) {
-      updatePolicyState(stateKey, (current) => ({
-        ...current,
-        entryAckSent: true,
-        entryAckText: message,
-        preDispatchAckSent: true,
-        preDispatchAckText: message,
-        preDispatchAckMode: "channel_message",
-        entryAckMode: "channel_message",
-      }));
-    }
-    return {
-      attempted: true,
-      sent,
-      reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
-      message,
-      payload,
-    };
-  } catch (err) {
-    logger?.warn?.(`octoclaw pre-dispatch ack failed: ${String(err)}`);
-    return {
-      attempted: true,
-      sent: false,
-      reason: String(err),
-      message,
-    };
-  }
-}
-
-async function ensureEntryAck(decision, metadata, stateKey, state, ctx, onUpdate, logger, toolName = "") {
-  const channelAttempt = await maybeSendEntryAck(decision, metadata, stateKey, state, ctx, logger, toolName);
-  if (channelAttempt.sent) {
-    return {
-      ...channelAttempt,
-      fallback_used: false,
-      channel_attempt: channelAttempt,
-    };
-  }
-  const allowProgressFallback = isDelegatedRoute(decision)
-    ? Boolean(decision?.pre_dispatch_ack?.fallback_to_progress_update)
-    : true;
-  if (!allowProgressFallback) {
-    return {
-      ...channelAttempt,
-      fallback_used: false,
-      channel_attempt: channelAttempt,
-    };
-  }
-  const progressAttempt = await maybeEmitAckProgress(onUpdate, entryAckText(decision, toolName), stateKey, logger);
-  return {
-    attempted: Boolean(channelAttempt.attempted || progressAttempt.attempted),
-    sent: Boolean(channelAttempt.sent || progressAttempt.sent),
-    reason: progressAttempt.sent ? progressAttempt.reason : channelAttempt.reason,
-    message: progressAttempt.message || channelAttempt.message || "",
-    payload: channelAttempt.payload,
-    fallback_used: Boolean(progressAttempt.sent),
-    channel_attempt: channelAttempt,
-    progress_attempt: progressAttempt,
-  };
 }
 
 async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, onUpdate, logger) {
@@ -391,12 +282,18 @@ function compactDispatchDetails(payload) {
   const taskId = payload?.job?.id || payload?.task_id || "";
   const reportPath = payload?.handoff?.report_path || payload?.report_path || "";
   const status = payload?.status || (payload?.executed ? "executed" : "planned");
+  const materialization = payload?.materialization && typeof payload.materialization === "object" ? payload.materialization : {};
+  const capabilityFailure = payload?.capability_failure && typeof payload.capability_failure === "object"
+    ? payload.capability_failure
+    : (materialization?.capability_failure && typeof materialization.capability_failure === "object" ? materialization.capability_failure : {});
   return {
     route: payload?.route || "",
     task_id: taskId,
     report_path: reportPath,
     status,
     handoff_kind: payload?.handoff?.kind || "",
+    materialization,
+    capability_failure: capabilityFailure,
   };
 }
 
@@ -421,6 +318,15 @@ async function writeJsonFile(pathname, payload) {
   await fs.rename(tempPath, pathname);
 }
 
+function readJsonFileSync(pathname, fallback = {}) {
+  try {
+    const raw = fsSync.readFileSync(pathname, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
 function truncateText(value, limit = 320) {
   const text = String(value || "").trim();
   if (text.length <= limit) return text;
@@ -429,6 +335,7 @@ function truncateText(value, limit = 320) {
 
 const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
 const policyStateBySession = new Map();
+let policyStateLedgerMtimeMs = 0;
 const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
 const IM_SESSION_ORIGINS = new Set([
   "slack",
@@ -530,7 +437,52 @@ function parseSessionRoute(raw) {
   };
 }
 
+function isSubagentSessionRef(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (!value) return false;
+  if (value.includes("octoclaw-subagent-")) return true;
+  if (value.includes(":subagent:")) return true;
+  if (/^agent:[^:]+:(?!main$)/i.test(String(raw || "").trim()) && value.includes("subagent")) return true;
+  return false;
+}
+
+function detectSessionBoundary(ctx = {}) {
+  const sessionKey = String(ctx.sessionKey || "").trim();
+  const sessionId = String(ctx.sessionId || "").trim();
+  const agentId = String(ctx.agentId || "").trim();
+  const parsedSessionKey = parseSessionRoute(sessionKey);
+  const parsedSessionId = parseSessionRoute(sessionId);
+  const hasCanonicalUserSession = Boolean(
+    parsedSessionKey.looksLikeImSession
+      || parsedSessionKey.isPrimaryMainSession
+      || parsedSessionId.looksLikeImSession
+      || parsedSessionId.isPrimaryMainSession,
+  );
+  const subagentRefs = [sessionKey, sessionId, agentId].filter((item) => isSubagentSessionRef(item));
+  const contaminatedBySubagent = hasCanonicalUserSession && subagentRefs.length > 0;
+  const canonicalCandidates = [sessionKey, sessionId]
+    .map((raw) => ({ raw: String(raw || "").trim(), parsed: parseSessionRoute(raw) }))
+    .filter((item) => item.raw && !isSubagentSessionRef(item.raw));
+  const canonicalUserSession = canonicalCandidates.find((item) => item.parsed.looksLikeImSession)
+    || canonicalCandidates.find((item) => item.parsed.isPrimaryMainSession)
+    || canonicalCandidates[0]
+    || null;
+  return {
+    sessionKey,
+    sessionId,
+    agentId,
+    hasCanonicalUserSession,
+    contaminatedBySubagent,
+    subagentRefs,
+    canonicalSessionKey: canonicalUserSession ? canonicalUserSession.raw : "",
+    canonicalBindingKey: canonicalUserSession ? canonicalUserSession.parsed.bindingKey : "",
+    canonicalThreadKey: canonicalUserSession ? canonicalUserSession.parsed.threadKey : "",
+    status: contaminatedBySubagent ? "contaminated_subagent_identity" : "clean",
+  };
+}
+
 function sessionPreferenceRank(raw) {
+  if (isSubagentSessionRef(raw)) return -50;
   const parsed = parseSessionRoute(raw);
   if (parsed.looksLikeImSession) return 30;
   if (parsed.isPrimaryMainSession) return 20;
@@ -539,8 +491,10 @@ function sessionPreferenceRank(raw) {
 }
 
 function resolvePolicyStateKeys(ctx = {}) {
+  hydratePolicyStateFromLedger();
   const entries = [];
-  for (const raw of [ctx.sessionKey, ctx.sessionId]) {
+  const boundary = detectSessionBoundary(ctx);
+  for (const raw of [boundary.canonicalSessionKey, ctx.sessionKey, ctx.sessionId]) {
     const value = String(raw || "").trim();
     if (value && !entries.some((entry) => entry.value === value)) {
       entries.push({
@@ -551,7 +505,8 @@ function resolvePolicyStateKeys(ctx = {}) {
     }
   }
   entries.sort((left, right) => right.rank - left.rank || left.order - right.order);
-  return entries.map((entry) => entry.value);
+  const preferred = entries.filter((entry) => entry.rank >= 0);
+  return (preferred.length > 0 ? preferred : entries).map((entry) => entry.value);
 }
 
 function resolvePolicyStateKey(ctx = {}) {
@@ -559,6 +514,7 @@ function resolvePolicyStateKey(ctx = {}) {
 }
 
 function getPolicyStateForContext(ctx = {}) {
+  hydratePolicyStateFromLedger();
   for (const key of resolvePolicyStateKeys(ctx)) {
     const state = policyStateBySession.get(key);
     if (state) {
@@ -571,6 +527,7 @@ function getPolicyStateForContext(ctx = {}) {
 function findPolicyStateByPrompt(prompt = "") {
   const task = String(prompt || "").trim();
   if (!task) return { key: "", state: null };
+  hydratePolicyStateFromLedger();
   prunePolicyState();
   let bestKey = "";
   let bestState = null;
@@ -615,6 +572,7 @@ function promptTokenScore(prompt = "", candidatePrompt = "") {
 }
 
 function findRecentDelegatedPolicyState(prompt = "", maxAgeMs = 2 * 60 * 1000) {
+  hydratePolicyStateFromLedger();
   const now = Date.now();
   const normalizedPrompt = promptLookupCandidates(prompt)[0] || String(prompt || "").trim();
   let bestKey = "";
@@ -659,11 +617,60 @@ function setPolicyStateForContext(ctx = {}, payload) {
   for (const key of resolvePolicyStateKeys(ctx)) {
     policyStateBySession.set(key, payload);
   }
+  persistPolicyStateLedger();
 }
 
 function clearPolicyStateForContext(ctx = {}) {
   for (const key of resolvePolicyStateKeys(ctx)) {
     policyStateBySession.delete(key);
+  }
+  persistPolicyStateLedger();
+}
+
+function hydratePolicyStateFromLedger() {
+  const pathname = resolvePolicyStateLedgerPath();
+  let stat = null;
+  try {
+    stat = fsSync.statSync(pathname);
+  } catch {
+    return;
+  }
+  if (!stat?.mtimeMs || stat.mtimeMs <= policyStateLedgerMtimeMs) {
+    return;
+  }
+  const payload = readJsonFileSync(pathname, {});
+  const sessions = payload && typeof payload === "object" && payload.sessions && typeof payload.sessions === "object"
+    ? payload.sessions
+    : {};
+  policyStateBySession.clear();
+  const now = Date.now();
+  for (const [key, state] of Object.entries(sessions)) {
+    if (!state || typeof state !== "object") continue;
+    const updatedAt = Number(state.updatedAt || state.createdAt || 0);
+    if (updatedAt && now - updatedAt > POLICY_STATE_TTL_MS) continue;
+    policyStateBySession.set(key, state);
+  }
+  policyStateLedgerMtimeMs = stat.mtimeMs;
+}
+
+function persistPolicyStateLedger() {
+  prunePolicyState();
+  const pathname = resolvePolicyStateLedgerPath();
+  const tempPath = `${pathname}.tmp`;
+  const payload = {
+    schema_version: "octoclaw.runtime_policy.state_ledger/v1",
+    updated_at: new Date().toISOString(),
+    ttl_ms: POLICY_STATE_TTL_MS,
+    sessions: Object.fromEntries(policyStateBySession.entries()),
+  };
+  try {
+    fsSync.mkdirSync(path.dirname(pathname), { recursive: true });
+    fsSync.writeFileSync(tempPath, JSON.stringify(payload, null, 2), "utf8");
+    fsSync.renameSync(tempPath, pathname);
+    const stat = fsSync.statSync(pathname);
+    policyStateLedgerMtimeMs = stat?.mtimeMs || Date.now();
+  } catch {
+    // Keep in-memory state even when persistence fails.
   }
 }
 
@@ -776,7 +783,7 @@ function extractPromptText(event = {}) {
 
 function delegatedStickyRoute(decision) {
   const route = String(decision?.route_decision?.route || "").trim();
-  if (route === "runner" || route === "spawn_single" || route === "spawn_multi") {
+  if (route === "spawn_single" || route === "spawn_multi") {
     return route;
   }
   return "";
@@ -969,7 +976,8 @@ function isManagedAgentContext(ctx = {}) {
 
 function buildPolicyMetadata(ctx = {}, options = {}) {
   const metadata = {};
-  const stableSessionKey = String(options.stateKey || resolvePolicyStateKey(ctx) || "").trim();
+  const boundary = detectSessionBoundary(ctx);
+  const stableSessionKey = String(options.stateKey || boundary.canonicalSessionKey || resolvePolicyStateKey(ctx) || "").trim();
   const stableSession = parseSessionRoute(stableSessionKey);
   if (ctx.channelId) metadata.channel = ctx.channelId;
   if (stableSessionKey) metadata.session_key = stableSessionKey;
@@ -984,6 +992,7 @@ function buildPolicyMetadata(ctx = {}, options = {}) {
   if (ctx.messageProvider) metadata.message_provider = ctx.messageProvider;
   metadata.agent_namespace = "octoclaw";
   metadata.managed_by_octoclaw = true;
+  metadata.session_boundary_status = boundary.status;
   return metadata;
 }
 
@@ -999,6 +1008,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
     setPolicyStateForContext(ctx, existing);
     return { stateKey, state: existing, decision: existing.decision };
   }
+  const boundary = detectSessionBoundary(ctx);
   const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
   try {
     const decision = buildDecision(prompt, { metadata });
@@ -1007,16 +1017,15 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       decision,
       createdAt: existing?.createdAt || Date.now(),
       updatedAt: Date.now(),
+      sessionBoundary: boundary,
+      canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || "").trim(),
       delegated: false,
       delegationTool: "",
       routeHintSubmitted: false,
       routeHintPayload: null,
       blockedTools: [],
-      entryAckSent: false,
-      entryAckText: "",
       preDispatchAckSent: false,
       preDispatchAckText: "",
-      currentTaskId: existing?.currentTaskId || "",
     };
     setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
@@ -1038,6 +1047,8 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         routeRecommendationStrategy: String(decision?.route_recommendation?.arbitration?.strategy || ""),
         routeRecommendationConflictType: String(decision?.route_recommendation?.arbitration?.conflict_type || ""),
         routeLanguagePacks: Array.isArray(decision?.route_language_packs) ? decision.route_language_packs : [],
+        sessionBoundaryStatus: String(boundary.status || ""),
+        canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || ""),
         prompt: truncateText(prompt),
       },
       logger,
@@ -1052,11 +1063,13 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
 
 function updatePolicyState(stateKey, mutator) {
   if (!stateKey) return null;
+  hydratePolicyStateFromLedger();
   const current = policyStateBySession.get(stateKey);
   if (!current) return null;
   const next = typeof mutator === "function" ? mutator(current) : { ...current, ...mutator };
   next.updatedAt = Date.now();
   policyStateBySession.set(stateKey, next);
+  persistPolicyStateLedger();
   return next;
 }
 
@@ -1074,7 +1087,6 @@ function compactPolicyPrompt(decision) {
     `review_required=${decision?.review_policy?.required ? "true" : "false"}`,
   ].join(" ; ");
   const lines = [`[OctoClaw runtime policy] ${routeSummary}`];
-  lines.push("These route and policy facts are authoritative for this turn. Do not claim a different current route, worker pool, or policy mode.");
   const skillBundle = Array.isArray(decision?.skill_policy?.default_skill_bundle)
     ? decision.skill_policy.default_skill_bundle
     : [];
@@ -1113,16 +1125,6 @@ function compactPolicyPrompt(decision) {
     lines.push(`Preferred skill bundle: ${skillBundle.join(", ")}`);
   }
   return lines.join("\n");
-}
-
-function groundedPolicyPrompt(decision, groundingPayload = null) {
-  const sections = [compactPolicyPrompt(decision)];
-  const promptContext = String(groundingPayload?.prompt_context || "").trim();
-  if (promptContext) {
-    sections.push(promptContext);
-    sections.push("If these authoritative facts are missing or conflict with memory, say you need to check state instead of guessing.");
-  }
-  return sections.filter(Boolean).join("\n\n");
 }
 
 function stringifyParamsForPolicy(value) {
@@ -1247,105 +1249,6 @@ async function userFacingHandoff(payload, fallback, cwd) {
   return `${base}\n\n结果已写入：\`${reportPath}\`\n（用 \`${artifactsCmd}\` 读取完整内容）`;
 }
 
-function currentTaskIdFromPayload(payload = {}) {
-  return String(payload?.job?.id || payload?.task_id || "").trim();
-}
-
-function resolveDelegatedExecutionContract(ctx = {}, requestedTask = "", explicitDecision = null) {
-  const requested = String(requestedTask || "").trim();
-  const direct = getPolicyStateForContext(ctx);
-  const directState = direct.state;
-  const directDecision = directState?.decision && typeof directState.decision === "object" ? directState.decision : null;
-  const chosenDecision = explicitDecision && typeof explicitDecision === "object" ? explicitDecision : directDecision;
-  const canonicalPrompt = String(directState?.prompt || "").trim();
-  if (canonicalPrompt && isDelegatedRoute(chosenDecision)) {
-    return {
-      stateKey: direct.key || String(chosenDecision?.request?.session_key || "").trim(),
-      state: directState,
-      decision: chosenDecision,
-      canonicalTask: canonicalPrompt,
-      requestedTask: requested,
-      contractLocked: true,
-      taskOverrideIgnored: Boolean(requested && !promptsEquivalent(requested, canonicalPrompt)),
-    };
-  }
-  const resolved = resolveToolPolicyContext(ctx, requested);
-  const resolvedState = resolved.state || directState || null;
-  const resolvedDecision = explicitDecision && typeof explicitDecision === "object"
-    ? explicitDecision
-    : (resolvedState?.decision && typeof resolvedState.decision === "object" ? resolvedState.decision : null);
-  return {
-    stateKey: resolved.key || direct.key || String(resolvedDecision?.request?.session_key || "").trim(),
-    state: resolvedState,
-    decision: resolvedDecision,
-    canonicalTask: requested,
-    requestedTask: requested,
-    contractLocked: false,
-    taskOverrideIgnored: false,
-  };
-}
-
-function resolveDispatchExecutionContract(ctx = {}, params = {}) {
-  const explicitDecision = parsePolicyDecisionJson(params?.policyJson || "");
-  const contract = resolveDelegatedExecutionContract(ctx, params?.task || "", explicitDecision);
-  const requestedRoute = String(params?.forceRoute || "").trim();
-  const lockedRoute = String(contract?.decision?.route_decision?.route || "").trim();
-  const routeOverrideIgnored = Boolean(
-    contract?.contractLocked
-      && requestedRoute
-      && requestedRoute !== "auto"
-      && lockedRoute
-      && requestedRoute !== lockedRoute,
-  );
-  return {
-    ...contract,
-    canonicalRoute: routeOverrideIgnored ? lockedRoute : requestedRoute,
-    routeOverrideIgnored,
-  };
-}
-
-function resolveSpawnExecutionContract(ctx = {}, params = {}) {
-  const explicitDecision = parsePolicyDecisionJson(params?.policyJson || "");
-  const contract = resolveDelegatedExecutionContract(ctx, params?.task || "", explicitDecision);
-  const requestedRoute = String(params?.route || "").trim();
-  const lockedRoute = String(contract?.decision?.route_decision?.route || "").trim();
-  const effectiveLockedRoute = lockedRoute === "spawn_multi" ? "spawn_multi" : (lockedRoute === "spawn_single" ? "spawn_single" : "");
-  const routeOverrideIgnored = Boolean(
-    contract?.contractLocked
-      && requestedRoute
-      && effectiveLockedRoute
-      && requestedRoute !== effectiveLockedRoute,
-  );
-  return {
-    ...contract,
-    canonicalRoute: routeOverrideIgnored ? effectiveLockedRoute : requestedRoute,
-    routeOverrideIgnored,
-  };
-}
-
-async function loadStateGrounding(prompt, decision, ctx, cwd, preferredTaskId = "", logger = null) {
-  const groundingPolicy = decision?.hook_interface?.before_prompt_build?.state_grounding || decision?.state_grounding || {};
-  if (!groundingPolicy || !groundingPolicy.required) {
-    return { required: false, found: false, reason: "not_required" };
-  }
-  try {
-    return await runJsonScript(
-      "state_grounding.py",
-      [
-        "--prompt", String(prompt || ""),
-        "--protected-lane", String(decision?.route_decision?.protected_lane || ""),
-        "--scope", String(groundingPolicy.scope || ""),
-        "--workspace", resolveWorkspaceRoot(),
-        "--preferred-task-id", String(preferredTaskId || ""),
-      ],
-      cwd,
-    );
-  } catch (err) {
-    logger?.warn?.(`octoclaw state grounding failed: ${String(err)}`);
-    return { required: true, found: false, reason: "runtime_error" };
-  }
-}
-
 const plugin = {
   id: "octoclaw-runtime",
   name: "OctoClaw Runtime",
@@ -1410,38 +1313,10 @@ const plugin = {
       prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
     }
     prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
-    const preferredTaskId = String(resolved?.state?.currentTaskId || "").trim();
-    const groundingRequired = Boolean(decision?.state_grounding?.required);
-    const groundingPayload = groundingRequired
-      ? await loadStateGrounding(
-          prompt,
-          decision,
-          ctx,
-          process.cwd(),
-          preferredTaskId,
-          pi.logger,
-        )
-      : null;
-    if (groundingRequired) {
-      await recordPolicyReplay(
-        groundingPayload?.found ? "state_grounding_loaded" : "state_grounding_missing",
-        {
-          sessionKey: resolved?.stateKey || "",
-          sessionId: String(ctx?.sessionId || ""),
-          route: String(decision?.route_decision?.route || ""),
-          protectedLane: String(decision?.route_decision?.protected_lane || ""),
-          scope: String(groundingPayload?.scope || decision?.state_grounding?.scope || ""),
-          reason: String(groundingPayload?.reason || ""),
-          preferredTaskId,
-          found: Boolean(groundingPayload?.found),
-        },
-        pi.logger,
-        decision,
-      );
-    }
+    if (prependSystem.length === 0) return;
     return {
       prependSystemContext: prependSystem.join("\n\n"),
-      prependContext: groundedPolicyPrompt(decision, groundingPayload),
+      prependContext: compactPolicyPrompt(decision),
     };
   });
 
@@ -1550,25 +1425,6 @@ const plugin = {
         block: true,
         blockReason: `OctoClaw runtime policy blocked a manual delegation pattern. Use ${toolPolicy.must_delegate_via || "octoclaw_dispatch"} instead.`,
       };
-    }
-
-    const metadata = buildPolicyMetadata(ctx, { stateKey: stateKey || "" });
-    const ackResult = await maybeSendEntryAck(decision, metadata, stateKey, state, ctx, pi.logger, toolName);
-    if (ackResult.attempted) {
-      await recordPolicyReplay(
-        "entry_ack_attempted",
-        {
-          sessionKey: stateKey || "",
-          sessionId: String(ctx?.sessionId || ""),
-          route: String(decision?.route_decision?.route || ""),
-          toolName,
-          sent: Boolean(ackResult.sent),
-          reason: String(ackResult.reason || ""),
-          mode: String(ackResult.sent ? (ackResult.payload ? "channel_message" : "") : ""),
-        },
-        pi.logger,
-        decision,
-      );
     }
 
     if (!delegationEnforcementEnabled) {
@@ -1715,27 +1571,15 @@ const plugin = {
             stickyApplied: Boolean(payload?.route_hint_policy?.sticky_applied),
             ackFollowupCandidate: Boolean(payload?.route_hint_policy?.ack_followup_candidate),
             ackFollowupApplied: Boolean(payload?.route_hint_policy?.ack_followup_applied),
-            grayZoneEligible: Boolean(payload?.route_hint_policy?.gray_zone_eligible),
-            correctionAllowed: Boolean(payload?.route_hint_policy?.correction_allowed),
-            hintOutcome: String(payload?.route_hint_policy?.hint_outcome || ""),
-            hintAccepted: Boolean(payload?.route_hint_policy?.hint_accepted),
-            hintVetoReason: String(payload?.route_hint_policy?.hint_veto_reason || ""),
             stickyPersisted,
             routeLanguagePacks: Array.isArray(payload?.route_language_packs) ? payload.route_language_packs : [],
           },
           pi.logger,
           payload,
         );
-        const hintOutcome = String(payload?.route_hint_policy?.hint_outcome || "");
-        const hintVetoReason = String(payload?.route_hint_policy?.hint_veto_reason || "");
-        const finalRoute = String(payload?.route_decision?.route || "spawn_single");
-        const nextSummary = hintOutcome === "vetoed"
-          ? `route_hint vetoed (${hintVetoReason || "not_allowed"}): final route remains ${finalRoute}. ${finalRoute === "direct" ? "You may answer directly." : "Next call octoclaw_dispatch."}`
-          : hintOutcome === "coerced"
-            ? `route_hint adjusted: final route is ${finalRoute}. ${finalRoute === "direct" ? "You may answer directly." : "Next call octoclaw_dispatch."}`
-            : finalRoute === "direct"
-              ? `route_hint merged: final route is direct. You may answer directly.`
-              : `route_hint merged: final route is ${finalRoute}. Next call octoclaw_dispatch.`;
+        const nextSummary = payload?.route_decision?.route === "direct"
+          ? `route_hint merged: final route is direct. You may answer directly.`
+          : `route_hint merged: final route is ${payload?.route_decision?.route || "spawn_single"}. Next call octoclaw_dispatch.`;
         return toolResponse(nextSummary, payload);
       },
     },
@@ -1821,20 +1665,17 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const executionContract = resolveDispatchExecutionContract(ctx, params);
-        const dispatchTask = String(executionContract.canonicalTask || params.task || "").trim();
-        const args = ["--task", dispatchTask];
-        if (params.command && !executionContract.contractLocked) args.push("--command", params.command);
+        const args = ["--task", params.task];
+        if (params.command) args.push("--command", params.command);
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
-        if (executionContract.canonicalRoute) args.push("--force-route", executionContract.canonicalRoute);
-        let stateKey = executionContract.stateKey || "";
-        let state = executionContract.state || null;
-        const hadCachedDecision = Boolean(params.policyJson || state?.decision || executionContract.decision);
-        let cachedDecision = executionContract.decision || state?.decision || parsePolicyDecisionJson(params.policyJson || "");
+        if (params.forceRoute) args.push("--force-route", params.forceRoute);
+        let { key: stateKey, state } = resolveToolPolicyContext(ctx, params.task || "");
+        const hadCachedDecision = Boolean(params.policyJson || state?.decision);
+        let cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
         if (!cachedDecision) {
           const resolved = await resolvePolicyDecisionForContext(
-            dispatchTask,
+            String(params.task || "").trim(),
             ctx,
             ctx?.cwd || process.cwd(),
             pi.logger,
@@ -1847,9 +1688,6 @@ const plugin = {
         }
         const metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || cachedDecision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
-        if (executionContract.contractLocked) metadata.execution_contract_locked = true;
-        if (executionContract.taskOverrideIgnored) metadata.execution_task_override_ignored = true;
-        if (executionContract.routeOverrideIgnored) metadata.execution_route_override_ignored = true;
         if (params.metadataJson) {
           try {
             const parsed = JSON.parse(params.metadataJson);
@@ -1894,6 +1732,7 @@ const plugin = {
           `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`,
           ctx?.cwd || process.cwd(),
         );
+        const sessionBoundary = detectSessionBoundary(ctx);
         await recordPolicyReplay(
           "dispatch_called",
           {
@@ -1906,11 +1745,6 @@ const plugin = {
             routeHintRequired: Boolean(authoritativeDecision?.route_hint_policy?.required),
             routeHintSubmitted: Boolean(state?.routeHintSubmitted || authoritativeDecision?.route_hint_policy?.submitted),
             executed: Boolean(payload?.executed),
-            executionContractLocked: Boolean(executionContract.contractLocked),
-            executionTaskOverrideIgnored: Boolean(executionContract.taskOverrideIgnored),
-            executionRouteOverrideIgnored: Boolean(executionContract.routeOverrideIgnored),
-            requestedTask: truncateText(String(params.task || "")),
-            materializedTask: truncateText(dispatchTask),
             usedCachedPolicy: hadCachedDecision,
             stickyPersisted,
             preDispatchAckRequired: Boolean(cachedDecision?.pre_dispatch_ack?.required),
@@ -1921,14 +1755,16 @@ const plugin = {
             routeRecommendationConflict: Boolean(authoritativeDecision?.route_recommendation?.arbitration?.required),
             routeRecommendationStrategy: String(authoritativeDecision?.route_recommendation?.arbitration?.strategy || ""),
             routeRecommendationConflictType: String(authoritativeDecision?.route_recommendation?.arbitration?.conflict_type || ""),
+            sessionBoundaryStatus: String(sessionBoundary.status || ""),
+            canonicalSessionKey: String(sessionBoundary.canonicalSessionKey || replaySessionKey || ""),
+            materialization: payload?.materialization && typeof payload.materialization === "object" ? payload.materialization : {},
+            capability_failure: payload?.capability_failure && typeof payload.capability_failure === "object"
+              ? payload.capability_failure
+              : (payload?.materialization?.capability_failure && typeof payload.materialization.capability_failure === "object" ? payload.materialization.capability_failure : {}),
           },
           pi.logger,
           authoritativeDecision,
         );
-        updatePolicyState(stateKey || replaySessionKey, (current) => ({
-          ...(current || {}),
-          currentTaskId: currentTaskIdFromPayload(payload),
-        }));
         return toolResponse(
           summary,
           compactDispatchDetails(payload),
@@ -1960,21 +1796,15 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const executionContract = resolveSpawnExecutionContract(ctx, params);
-        const spawnTask = String(executionContract.canonicalTask || params.task || "").trim();
-        const args = ["--task", spawnTask, "--register"];
-        if (executionContract.canonicalRoute) args.push("--route", executionContract.canonicalRoute);
+        const args = ["--task", params.task, "--register"];
+        if (params.route) args.push("--route", params.route);
         if (params.model) args.push("--model", params.model);
         if (params.runtime) args.push("--runtime", params.runtime);
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
-        const existingStateKey = executionContract.stateKey || "";
-        const existingState = executionContract.state || null;
+        const { key: existingStateKey, state: existingState } = resolveToolPolicyContext(ctx, params.task || "");
         const metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || existingState?.decision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
-        if (executionContract.contractLocked) metadata.execution_contract_locked = true;
-        if (executionContract.taskOverrideIgnored) metadata.execution_task_override_ignored = true;
-        if (executionContract.routeOverrideIgnored) metadata.execution_route_override_ignored = true;
         if (params.metadataJson) {
           try {
             const parsed = JSON.parse(params.metadataJson);
@@ -1985,13 +1815,8 @@ const plugin = {
         }
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
-        if (executionContract.decision) args.push("--policy-json", JSON.stringify(executionContract.decision));
         if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
         const payload = await runJsonScript("octoclaw_spawn.py", args, ctx?.cwd || process.cwd());
-        updatePolicyState(existingStateKey || metadata.session_key || "", (current) => ({
-          ...(current || {}),
-          currentTaskId: currentTaskIdFromPayload(payload),
-        }));
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw spawn registered: ${payload.worker_pool || payload.route} / ${payload.model}`,
@@ -2171,8 +1996,11 @@ export const __octoclawTest = {
   resolveOctoClawRoot,
   resolveWorkspaceRoot,
   resolvePythonBin,
+  resolvePolicyStateLedgerPath,
   stripAgentSessionPrefix,
   parseSessionRoute,
+  isSubagentSessionRef,
+  detectSessionBoundary,
   resolvePolicyStateKeys,
   resolvePolicyStateKey,
   extractQueuedBusyMessages,
@@ -2194,24 +2022,15 @@ export const __octoclawTest = {
   workflowEnforcementRule,
   shouldRetainPolicyStateOnAgentEnd,
   preDispatchAckText,
-  directEntryAckText,
-  entryAckText,
-  shouldSendEntryAck,
   shouldSendPreDispatchAck,
   maybeEmitPreDispatchAckProgress,
-  maybeSendEntryAck,
-  ensureEntryAck,
   ensurePreDispatchAck,
-  compactPolicyPrompt,
-  groundedPolicyPrompt,
-  currentTaskIdFromPayload,
-  resolveDelegatedExecutionContract,
-  resolveDispatchExecutionContract,
-  resolveSpawnExecutionContract,
-  loadStateGrounding,
   resolvePolicyDecisionForContext,
   inferRoute,
   buildDecision,
   __setPolicyState: setPolicyStateForContext,
-  __resetPolicyState: () => policyStateBySession.clear(),
+  __resetPolicyState: () => {
+    policyStateBySession.clear();
+    persistPolicyStateLedger();
+  },
 };

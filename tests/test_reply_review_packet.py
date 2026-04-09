@@ -254,18 +254,18 @@ class ReplyReviewPacketTests(unittest.TestCase):
             self.assertFalse(case["dispatch"]["called"])
             self.assertTrue(case["runner_lane_mismatch"])
 
-    def test_build_packet_marks_policy_route_explanation_mismatch(self) -> None:
+    def test_build_packet_marks_runner_lane_mismatch_when_dispatch_did_not_materialize(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             session_dir = tmp / "sessions"
-            session_file = session_dir / "local" / "route-mismatch.jsonl"
+            session_file = session_dir / "local" / "runner-dispatch.jsonl"
             session_file.parent.mkdir(parents=True)
             self.write_jsonl(
                 session_file,
                 [
                     {
                         "type": "message",
-                        "timestamp": "2026-04-09T06:54:00Z",
+                        "timestamp": "2026-04-09T07:10:00Z",
                         "message": {
                             "role": "user",
                             "content": [{"type": "text", "text": "帮我查下openclaw 又有新版本了吗 有啥新特性"}],
@@ -273,17 +273,17 @@ class ReplyReviewPacketTests(unittest.TestCase):
                     },
                     {
                         "type": "message",
-                        "timestamp": "2026-04-09T06:54:10Z",
+                        "timestamp": "2026-04-09T07:10:10Z",
                         "message": {
                             "role": "assistant",
-                            "content": [{"type": "text", "text": "主 agent 自己查的，policy 是 direct。"}],
+                            "content": [{"type": "text", "text": "我已经交给 runner 了。"}],
                         },
                     },
                 ],
             )
             sessions_index = {
-                "local::agent:main:slack:direct:route-mismatch": {
-                    "sessionFile": "local/route-mismatch.jsonl",
+                "local::agent:main:slack:direct:runner2": {
+                    "sessionFile": "local/runner-dispatch.jsonl",
                     "origin": {"provider": "slack", "surface": "slack"},
                 }
             }
@@ -296,13 +296,40 @@ class ReplyReviewPacketTests(unittest.TestCase):
                     {
                         "schema_version": "octoclaw.runtime_policy.replay_event/v1",
                         "event": "policy_resolved",
-                        "at": "2026-04-09T06:54:01Z",
-                        "sessionKey": "local::agent:main:slack:direct:route-mismatch",
-                        "sessionId": "route-mismatch",
+                        "at": "2026-04-09T07:10:01Z",
+                        "sessionKey": "local::agent:main:slack:direct:runner2",
+                        "sessionId": "runner2",
                         "prompt": "帮我查下openclaw 又有新版本了吗 有啥新特性",
                         "route": "runner",
                         "systemPreferredRoute": "runner",
                         "workerPool": "octoclaw-runner",
+                    },
+                    {
+                        "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                        "event": "dispatch_called",
+                        "at": "2026-04-09T07:10:03Z",
+                        "sessionKey": "local::agent:main:slack:direct:runner2",
+                        "sessionId": "runner2",
+                        "route": "runner",
+                        "executed": False,
+                        "materialization": {
+                            "lane": "runner",
+                            "kind": "runner_playbook",
+                            "status": "materialization_failed",
+                            "execution_contract": "inspect_report",
+                            "runner_job_id": "",
+                            "task_id": "",
+                            "child_spec_id": "",
+                            "session_key": "local::agent:main:slack:direct:runner2",
+                            "executed": False,
+                            "capability_failure": {
+                                "lane": "runner",
+                                "reason": "runner_playbook_missing",
+                                "detail": "no registered playbook",
+                                "missing_capabilities": ["registered_runner_playbook"],
+                                "fallback_permitted": False,
+                            },
+                        },
                     },
                 ],
             )
@@ -321,10 +348,11 @@ class ReplyReviewPacketTests(unittest.TestCase):
                 },
             )()
             packet = reply_review_packet.build_packet(args)
-            self.assertEqual(packet["selection_metrics"]["policy_route_explanation_mismatch_count"], 1)
             case = packet["cases"][0]
-            self.assertTrue(case["policy_route_explanation_mismatch"])
-            self.assertEqual(case["analysis"]["explicit_route_claim"], "direct")
+            self.assertTrue(case["dispatch"]["called"])
+            self.assertFalse(case["dispatch"]["materialized"])
+            self.assertEqual(case["dispatch"]["capability_failure"]["reason"], "runner_playbook_missing")
+            self.assertTrue(case["runner_lane_mismatch"])
 
     def test_build_packet_skips_internal_delegated_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

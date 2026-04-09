@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -132,8 +133,9 @@ class ModelHealthBackfillTests(unittest.TestCase):
             tmp_path = Path(tmpdir)
             log_path = tmp_path / "gateway.err.log"
             health_path = tmp_path / "model-health.json"
+            recent_log_time = datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
             log_path.write_text(
-                "2026-04-08T00:55:40.882+08:00 [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
+                f"{recent_log_time} [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
                 encoding="utf-8",
             )
             result = model_health_backfill.refresh_model_health_feedback_if_stale(

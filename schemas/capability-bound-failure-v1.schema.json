@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octoclaw.dev/schemas/capability-bound-failure-v1.schema.json",
+  "title": "OctoClaw Capability-Bound Failure v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lane",
+    "reason",
+    "detail",
+    "missing_capabilities",
+    "fallback_permitted"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "octoclaw.capability_bound_failure/v1"
+    },
+    "lane": { "type": "string" },
+    "reason": { "type": "string" },
+    "detail": { "type": "string" },
+    "missing_capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "fallback_permitted": { "type": "boolean" }
+  }
+}

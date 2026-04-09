@@ -7,11 +7,8 @@ from lib.task_display import (
     build_operator_task_surface,
     build_task_actions,
     build_task_anchor,
-    build_task_retrieval_bundle,
     build_task_detail,
-    build_task_graph,
     build_task_queue_view,
-    build_task_timeline,
     render_task_anchor_slack,
     render_task_anchor_text,
 )
@@ -61,8 +58,6 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("queue", fallback_commands)
         self.assertIn("stop", fallback_commands)
         self.assertIn("artifacts", fallback_commands)
-        self.assertTrue(any(item["action_class"] == "destructive-control" for item in actions if item["id"] == "stop"))
-        self.assertTrue(all("replay_safe" in item for item in actions))
 
     def test_build_task_detail_tracks_lineage_and_artifacts(self) -> None:
         parent = {
@@ -102,136 +97,7 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["lineage"]["child_task_ids"], ["child-1", "child-2"])
         self.assertEqual(detail["lineage"]["active_child_count"], 1)
         self.assertEqual(detail["lineage"]["completed_child_count"], 1)
-        self.assertEqual(detail["task_summary"]["child_count"], 2)
-        self.assertTrue(detail["review"]["required"])
-        self.assertEqual(detail["review"]["task_id"], "child-2")
         self.assertEqual(detail["artifacts"][0]["path"], "/tmp/parent-report.md")
-        self.assertEqual(detail["read_path_mode"], "substrate_first_contract")
-        self.assertEqual(detail["read_path_fallback_role"], "compatibility_only")
-        self.assertTrue(detail["recommended_read_order"][0].startswith("OctoClaw task"))
-        self.assertIn("view", detail["action_availability"])
-        self.assertIn("required_fields", detail["substrate_display_contract"])
-
-    def test_build_task_retrieval_bundle_prefers_taskflow_read_order(self) -> None:
-        parent = {
-            "id": "task-1",
-            "worker_pool": "octoclaw-research",
-            "status": "running",
-            "summary": "coordinating release analysis",
-            "route": "spawn_single",
-            "report_path": "/tmp/task-1.md",
-            "artifacts": {"context_pack_path": "/tmp/task-1-context.json"},
-            "openclaw_taskflow": {
-                "backend": "mirror",
-                "binding_state": "mirrored_bound",
-                "task_runtime": "openclaw_task",
-                "flow_runtime": "openclaw_flow",
-                "native_binding_state": "bound",
-                "create_preference": "native_preferred",
-                "create_status": "native_bound",
-                "task_id": "native-task-1",
-                "flow_id": "flow-1",
-            },
-        }
-        child = {
-            "id": "review-1",
-            "parent_id": "task-1",
-            "worker_pool": "octoclaw-review",
-            "status": "queued",
-            "summary": "review pending",
-            "route": "spawn_single",
-        }
-
-        bundle = build_task_retrieval_bundle(parent, all_tasks=[parent, child], now=self.now)
-
-        self.assertEqual(bundle["task_summary"]["child_count"], 1)
-        self.assertTrue(bundle["review"]["required"])
-        self.assertEqual(bundle["read_path_mode"], "substrate_first_contract")
-        self.assertEqual(bundle["recommended_read_order"][0], "TaskFlow flow flow-1")
-        self.assertIn("create path: preference native_preferred | status native_bound", bundle["recommended_read_order"])
-
-    def test_build_task_graph_and_timeline_follow_linear_step_ids_without_parent_links(self) -> None:
-        parent = {
-            "id": "flow-parent",
-            "worker_pool": "octoclaw-research",
-            "status": "running",
-            "summary": "coordinate research + review",
-            "route": "spawn_multi",
-            "artifacts": {
-                "step_order": ["research", "review"],
-                "step_task_ids": {"research": "step-1", "review": "step-2"},
-            },
-        }
-        children = [
-            {
-                "id": "step-1",
-                "worker_pool": "octoclaw-research",
-                "status": "done",
-                "summary": "gathered sources",
-                "route": "spawn_single",
-                "started_at": "2026-03-29T07:50:00Z",
-                "completed_at": "2026-03-29T07:55:00Z",
-            },
-            {
-                "id": "step-2",
-                "worker_pool": "octoclaw-review",
-                "status": "running",
-                "summary": "review the draft",
-                "route": "spawn_single",
-                "started_at": "2026-03-29T07:56:00Z",
-            },
-        ]
-
-        graph = build_task_graph(parent, all_tasks=[parent, *children], now=self.now)
-        timeline = build_task_timeline(parent, all_tasks=[parent, *children], now=self.now)
-
-        self.assertIn({"source": "flow-parent", "target": "step-1", "relation": "child"}, graph["edges"])
-        self.assertIn({"source": "step-1", "target": "step-2", "relation": "linear_step"}, graph["edges"])
-        event_kinds = [event["kind"] for event in timeline["events"]]
-        self.assertIn("child_started", event_kinds)
-        self.assertIn("child_finished", event_kinds)
-
-    def test_build_operator_task_surface_contains_substrate_contract(self) -> None:
-        surface = build_operator_task_surface(
-            {
-                "id": "spawn-1",
-                "worker_pool": "octoclaw-code",
-                "status": "running",
-                "summary": "patch login flow",
-                "route": "spawn_single",
-            },
-            now=self.now,
-        )
-
-        self.assertEqual(surface["task_anchor"]["task_id"], "spawn-1")
-        self.assertIn("view", surface["action_availability"])
-        self.assertIn("required_fields", surface["substrate_display_contract"])
-        self.assertEqual(surface["surface_role"]["role"], "canonical_text_operator_surface")
-
-    def test_build_task_queue_view_prefers_surface_state_over_raw_status(self) -> None:
-        queue = build_task_queue_view(
-            [
-                {
-                    "id": "managed-queued",
-                    "worker_pool": "octoclaw-research",
-                    "status": "running",
-                    "summary": "flow still queued",
-                    "route": "spawn_single",
-                    "openclaw_taskflow": {
-                        "backend": "managed",
-                        "sync_mode": "managed",
-                        "substrate_state": "queued",
-                        "flow_id": "flow-1",
-                        "create_preference": "native_preferred",
-                        "create_status": "native_unavailable_fallback_mirror",
-                    },
-                }
-            ],
-            now=self.now,
-        )
-
-        self.assertEqual([item["task_id"] for item in queue["queued"]], ["managed-queued"])
-        self.assertEqual(queue["running"], [])
 
     @patch("lib.task_display.resolve_task_artifacts")
     def test_build_task_detail_prefers_artifact_index_rows(self, mock_resolve_task_artifacts) -> None:
@@ -593,6 +459,43 @@ class TaskDisplayTests(unittest.TestCase):
 
         self.assertEqual(detail["runner_plan"]["kind"], "local_file_probe")
         self.assertEqual(detail["runner_plan"]["probe_spec"]["line_count"], 80)
+
+    def test_build_task_detail_exposes_materialization_failure(self) -> None:
+        detail = build_task_detail(
+            {
+                "id": "runner-2",
+                "worker_pool": "octoclaw-runner",
+                "status": "queued",
+                "summary": "runner workflow could not materialize",
+                "route": "runner",
+                "artifacts": {
+                    "delegated_materialization": {
+                        "lane": "runner",
+                        "kind": "runner_playbook",
+                        "status": "materialization_failed",
+                        "execution_contract": "inspect_report",
+                        "runner_job_id": "",
+                        "task_id": "",
+                        "child_spec_id": "",
+                        "session_key": "agent:main:slack:direct:u1",
+                        "executed": False,
+                        "capability_failure": {
+                            "lane": "runner",
+                            "reason": "runner_playbook_missing",
+                            "detail": "no registered playbook",
+                            "missing_capabilities": ["registered_runner_playbook"],
+                            "fallback_permitted": False,
+                        },
+                    }
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(detail["materialization"]["status"], "materialization_failed")
+        self.assertEqual(detail["materialization"]["capability_failure"]["reason"], "runner_playbook_missing")
+        self.assertIn("runner playbook", detail["materialization"]["summary"])
+        self.assertEqual(detail["events"][1]["kind"], "materialization_failed")
 
     def test_render_task_anchor_slack_returns_blocks(self) -> None:
         anchor = build_task_anchor(

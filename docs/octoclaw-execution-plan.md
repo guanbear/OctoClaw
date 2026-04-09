@@ -1,8 +1,8 @@
 # OctoClaw 执行计划
 
-> 状态：当前 canonical 执行计划（2026-04-08，router/model-intel 深化已纳入）  
+> 状态：当前 canonical 执行计划（2026-04-07）  
 > 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
-> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
@@ -214,22 +214,6 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 配套设计底稿见：[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)  
 施工清单见：[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
 
-### 当前状态
-
-`2026-04-08` 的 P2.5 closeout 已完成。当前已经具备：
-
-- 独立的 `route recommendation` / `budget recommendation` / `route outcome` contract
-- delegated lanes 对 recommendation 的实际消费
-- replay / review / curate / summary 对 outcome 的可见性
-- final resolution 层对 `health / quota / queue pressure / runner capacity` 的 baseline 记录
-- extractable readiness baseline 与 packaging prep baseline
-
-从这一点往后，router 线不再叫“P2.5 还没收口”，而进入 post-P2.5 深化：
-
-- `RM1/RM2`：facts plane / recommendation hardening
-- `RM3`：calibration / validation / rollout 深化
-- `RM4`：extractable readiness / packaging prep
-
 ### 为什么现在该把这件事写进 canonical plan
 
 当前 OctoClaw 已经不只是 route score 脚本了，而是逐步形成：
@@ -311,23 +295,19 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 先 shadow/recommendation，再 promotion，不直接硬切主路径
 - 先做 protected lanes / goldens / parity，再考虑 tiny judge
 
-### 这条线的后续推进顺序
+### 这条线的近期推进顺序
 
-P2.5 closeout 之后，router 线按下面顺序继续：
+当前状态：`1 / 2` 已落地，`3` 仍未开始。
 
-1. `RM1/RM2`：继续做 source / recommendation hardening
-   - source freshness / precedence / stale fallback 再收紧
-   - route-budget integration / regression coverage 再补齐
-2. `RM3`：把 replay / validation / rollout 真正收成 calibration plane
-   - route correctness
-   - budget correctness
-   - final delivery correctness
-   - threshold / weight tuning inputs
-   - feedback manifest 与 validation artifacts / route outcome metrics 关联
-   - resolution drift / queue-pressure / quota-pressure diagnostics
-3. 最后才考虑更深的 tiny judge / extractable package
-   - tiny judge 仍是可插拔增强，不是前置依赖
-   - extractable package 仍以 recommendation kernel 为主，不把 runtime adapter 一起抽走
+1. 先收 protected lanes
+   - 明确哪些问题必须留在 main-agent stable scope
+   - workflow-first，非必要不委派
+   - current-session mutation 不能被错误委派给子任务
+2. 再补 goldens / parity / replay diff
+   - 先降低高频误判，再扩 recommendation 面
+   - nightly 必须覆盖 direct path / protected lane / session-control 的坏例子
+3. 最后才给模糊样本接 tiny judge
+   - tiny judge 是歧义裁决器，不是主路由器
 
 ---
 
@@ -526,6 +506,124 @@ P5 不应该顺手混进这些题：
 - `docs/octoclaw-harness-ownership-map.md`
 - `docs/octoclaw-harness-contract-inventory.md`
 
+#### P5G：Completion Relay + Observer Snapshot
+
+目标：
+
+- 把 delegated task 的完成收口从“native facts + task-state + patrol + assistant 口头判断”的混合链路，收成更明确的 substrate-first 关键路径：
+  - native task / managed TaskFlow 负责 execution truth
+  - completion relay 负责立即传播完成事实
+  - observer snapshot 负责唯一读面
+  - patrol 退出关键路径，只做 detect / reconcile / retry
+
+完成标志：
+
+- delegated task 一旦进入 native `task_started` / `task_running`，主面和主会话不再继续说 `queued`
+- delegated task 一旦 native `task_completed` / `result_ready`，projection 在短时间内稳定可见
+- `status / details / queue / retrieve / protected-lane state answers` 默认围绕同一份 snapshot，而不是各自猜状态
+- patrol 停掉或延迟时，不会阻止已完成任务显示为完成
+- tmux / runner / workbench 明确只作为 execution backend，不再承担状态真相职责
+
+近期交付物：
+
+- `runtime snapshot` 设计与实现清单
+- `completion relay` 关键路径说明
+- `task-state / task-events / native taskflow facts` 的优先级与合并规则
+- protected-lane 状态问答的 snapshot grounding 规则
+- patrol 从关键路径退出后的 retry / reconcile 边界
+
+建议推进顺序：
+
+1. 统一 `runtime snapshot`
+   - 用 native task / flow facts + task-state projection + task-events 合成一份 snapshot
+2. 建立 `completion relay`
+   - 在 native finalize / runner finalize / dispatch 收口点立即触发 projection 持久化 + notifier
+3. 让主会话的 protected-lane 状态问答强制先查 snapshot
+4. 把 `status / details / retrieve / review` 全部切到 snapshot 读面
+5. 最后再继续瘦身 patrol，只保留 detect / reconcile / bounded retry
+
+#### P5I：Session Boundary + Workflow Materialization Hardening
+
+目标：
+
+- 解决“顶层 route 判对，但在线行为没有按该 route materialize”这一类系统性失配
+- 把用户入口、主会话、子任务 session、runner/spawn materialization 之间的边界收硬
+- 让 `runner / spawn_single / spawn_multi` 从“标签”真正变成固定 execution contract
+
+为什么这条线现在必须进主线：
+
+- `workflow-first` 和 `substrate-first` 本身没有错
+- 但当前在线坏例子说明，仅仅有正确的 `policy_resolved` 还不够
+- 如果用户消息被错误绑定进 `octoclaw-subagent-*` session，或者 delegated lane 在执行期还能被 freeform prompt 洗掉原始 contract，
+  那么前面的 route / continuity / grounding 改造都无法稳定显现到真实聊天体验里
+
+完成标志：
+
+- 用户消息默认只绑定 canonical main session，而不是最近活跃的 subagent session
+- `runner` lane 一旦被选中，就只能 materialize 成固定 runner playbook / runner job
+- `spawn_single / spawn_multi` 一旦被选中，就只能 materialize 成固定 child-task spec / task id / explicit failure
+- 没有 `task_id`、没有 runner job、没有 `dispatch_called.executed=true` 时，assistant 不能声称“已经委派”或“spawn 卡 queued”
+- `executed=false` 有明确 `materialization_failed` 原因，而不是再靠 assistant 口头解释
+
+建议推进顺序：
+
+1. session boundary hardening
+   - native child 不再与 canonical main session 共享用户入口身份
+   - `octoclaw-subagent-*` session 明确为内部 session class
+   - 用户入口拒绝绑定到 subagent session；若检测到污染，优先纠正回 canonical main session
+2. runner workflow realization hardening
+   - `runner` lane 只允许进入已注册 playbook
+   - 不再允许主 agent 在 `runner` lane 下拼二跳 freeform task 再次重路由
+3. spawn materialization contract
+   - `spawn_single / spawn_multi` 必须落到固定 child spec
+   - 成功就给 `task_id`；失败就给 `materialization_failed`
+4. capability-bound failure surface
+   - 当前 lane 没能力时，直接暴露 capability-bound failure
+   - 不再 silently 降级成 direct/freeform 试错
+5. execution-fact-grounded explanation
+   - ack / anchor / status / explanation 只认 materialization 与 execution facts
+
+建议交付物：
+
+- canonical main session 与 subagent session 的边界定义
+- delegated lane materialization contract 说明
+- `materialization_failed` reason taxonomy
+- session binding / runner job / task id / execution fact 的 explanation grounding 规则
+- 一组专门覆盖“route 判对但在线行为偏离”的 replay / smoke cases
+
+实施分包：
+
+1. **Package A：Delegated Materialization Contract**
+   - 新增 `delegated_materialization` 与 `capability_bound_failure` contract
+   - `runner / spawn_single / spawn_multi` 统一产出 materialization facts
+   - `materialization_failed` reason taxonomy 先在 dispatch/spawn 层落地
+2. **Package B：Canonical Session Boundary**
+   - canonical main session 与 `octoclaw-subagent-*` internal session class 分离
+   - policy state lookup 不再跨 subagent boundary 漂移
+   - session binding 从 in-memory fallback 升级为 workspace-local durable ledger
+3. **Package C：Execution-Fact-Grounded Surfaces**
+   - `ack / anchor / status / details / retrieve / review packet` 统一只读 materialization + execution facts
+   - 没有 `runner_job_id`、`task_id`、`dispatch_called.executed=true` 时，不再允许“已经委派”的解释
+
+当前施工顺序：
+
+- 先做 `Package A`
+- 再做 `Package B`
+- 最后做 `Package C`
+
+这样做的原因是：
+
+- 先补 contract，后面的 session 和 explanation 才有稳定事实层
+- 否则会继续出现“route 判对但行为没 materialize，解释又先走了”的系统性失配
+
+代码级 backlog：
+
+- `I1 Session Boundary Hardening`
+- `I2 Runner Workflow Realization Hardening`
+- `I3 Spawn Materialization Contract`
+- `I4 Capability-Bound Failure Surface`
+- `I5 Execution-Fact-Grounded Explanation`
+
 ### 实施原则
 
 - 基于 **OpenClaw 2026.4.5** 的 runtime / TaskFlow 语义继续收口
@@ -600,173 +698,24 @@ P5 不应该顺手混进这些题：
   - direct-path latency
   - explanation/grounding risk
 
-#### P5G：Completion Relay + Observer Snapshot
-
-目标：
-
-- 把 delegated task 的状态读取和结果回推，收口到现有 `runtime_snapshot` / `observe_runtime_read_model` 主线上
-- 让 completion relay 取代 “等 patrol 之后再发现” 的关键路径
-
-完成标志：
-
-- `runtime_snapshot` 会吸收 `task-events` 的 running/done/blocked/failed/handoff-ready 事实，用于修正 read-model
-- `task-state-update.py event` 对关键 completion 事件会立即触发 projection/bridge/notifier relay
-- `status / details / observer / protected-lane state answers` 统一基于 read-model，而不是散落的 task-state 猜测
-- `patrol` 停掉时，已完成任务的最终 truth 仍能通过 native/projection/event 正确显示
-
 #### H5：Snapshot And Completion Relay
 
 交付物：
 
-- `runtime_snapshot.py` 扩展 task-event aware read-model
-- `task-state-update.py event` 补齐 completion relay
-- 文档里明确 native truth / projection / event / observer snapshot / patrol 的职责边界
+- 新增统一 snapshot 读面，明确：
+  - native task / flow facts
+  - task-state projection
+  - task-events event log
+  的合成规则
+- 在 native finalize / runner finalize / dispatch 收口点补 completion relay
+- 为 protected-lane 的状态类问题补 snapshot grounding
 
 验收标准：
 
-- 已出现 `task_running` 事件的任务，不再在 read-model 中显示为 queued
-- 已出现 `task_completed` 或 `task_failed`/`task_blocked` 事件的任务，不再长期停留在旧 projection 状态
-- `result_ready` / `handoff_ready` 事件能直接触发 anchor/notifier 更新，而不是只能等 patrol 补偿
-- 历史 bad case 能通过 task-events + read-model 复盘出真实生命周期
-- protected-lane 的状态/归因类问答会由 runtime 自动注入 state grounding packet，而不是继续依赖主 agent 自己记得去查
-- delegated dispatch/spawn 会把 freshly-created `task_id` 写入 runtime state，使后续 protected-lane grounding 优先绑定本轮 task，而不是误读旧的 recent task
-
-#### P5H：Capability-Aware Continuity And Workflow Realization
-
-目标：
-
-- 不推翻 `workflow-first / policy-first / gray-zone route hint` 的总体设计
-- 把当前运行时从“lane label 存在，但 continuity / workflow / explainability 断裂”的状态，收回到更接近设计原意的形态
-- 让在线决策逐步从 `route-first` 收口到 `contract -> capability -> scope -> lane`
-
-问题定义：
-
-- 首轮 route 经常是合理的，但 follow-up 会丢失 continuity
-- `runner / spawn_single / spawn_multi` 有时只是 lane label，没有先经过明确的 capability feasibility 检查
-- `runner` 有时只是 route label，没有真正落到 workflow harness
-- entry-level ack 仍然不够稳定，用户会空等
-- 主会话解释层会脱离 policy / snapshot，编造 `direct / queued / spawn failed` 之类故事
-- 继续零散补 regex 只会延缓问题，不会解决问题
-
-设计原则：
-
-- 先定 `contract`
-- 再看 `capability`
-- 明确 `scope`
-- 最后才选 `lane`
-- 若没有可行 lane，就返回 capability-bound explanation，而不是误派或误答
-
-#### H6：Continuity Baseline
-
-交付物：
-
-- 恢复受控 sticky lane / active workflow continuity
-- continuity 仅对 active runner / delegated workflow follow-up 生效
-- 加入 `ttl`、`lane decay`、`goal shift detector`
-
-验收标准：
-
-- active runner / delegated workflow 的 `好 / 继续 / 我要实测 / 再查一下` 这类 follow-up 不再轻易掉到 `direct`
-- continuity 不会绕过 review gate、hard veto、protected lane 规则
-- continuity 在目标变化或超时后会自然失效
-
-#### H7：Capability-Aware Workflow Realization
-
-交付物：
-
-- 为在线请求补一份最小 canonical contract taxonomy：
-  - `answer_now`
-  - `inspect_report`
-  - `probe_measurement`
-  - `session_control`
-  - `implement`
-  - `review`
-- 为主要 lane 补一份可计算的 capability / scope feasibility baseline：
-  - `direct`
-  - `runner`
-  - `spawn_single`
-  - `spawn_multi`
-  - `session_control`
-- 为 runner lane 补齐首批真实 workflow playbook：
-  - release/version check
-  - model telemetry snapshot inspection
-  - log / status inspection
-  - bounded code inspect
-- `policy=runner` 时强制进入 workflow harness，而不是仅仅给 main agent 一个 route label
-- 为 `probe_measurement` contract 补独立 capability 分层：
-  - `snapshot inspection`
-  - `live benchmark workflow`
-- 约束在线实现优先走 Node runtime：
-  - route merge / continuity / feasibility merge / entry-level ack / enforcement 先在 runtime 层完成
-  - Python 继续承担 report、snapshot、nightly、离线分析
-
-验收标准：
-
-- lane selection 会先过滤不可行 lane，而不是“先选 lane，再在执行阶段发现做不了”
-- `policy=runner` 的 turn 不再出现 main agent 直接 `web_fetch / exec` 后再声称“这次 policy 是 direct”
-- runner 类请求默认能落到真实 playbook / report workflow，而不是 generic agent improvisation
-- replay / nightly 能稳定标出 `runner workflow mismatch`
-- `probe_measurement` 类请求默认先落到 snapshot inspection；只有显式实测才尝试进入 benchmark workflow
-- 若 benchmark workflow 尚不存在，系统会稳定返回 capability-bound explanation，而不是把 generic subagent 误说成“天然不能测速”
-- 当前 session-only 的动作不会再被错误下放到 delegated lane
-
-#### H8：Entry-Level Ack
-
-交付物：
-
-- 将 ack 从“dispatch 内部顺带触发”提升为入口级行为
-- 非 `direct` 请求在 lane 决定后立即 ack
-- `direct` 但预计超过短阈值的主会话自执行，也应先给用户一句 status reply
-
-验收标准：
-
-- 用户在非 direct 复杂请求上，默认先收到一条简短 ack，再进入执行
-- 主会话自执行的长查询不再让用户完全空等
-- ack 不再依赖 dispatch 内部路径是否成功触发
-
-#### H9：State-Grounded Explanations
-
-交付物：
-
-- lane / dispatch / task status / provenance 解释统一绑定 policy packet 或 snapshot
-- 将 `runner/direct/spawn` 的解释偏差写入 replay / nightly diff
-- runtime 在 `before_prompt_build` 注入 authoritative policy packet，并在受保护场景下注入 state grounding packet
-- freshly-dispatched task id 写回 runtime state，供后续 `queued/running/done/谁做的` 问答优先绑定当前任务
-
-验收标准：
-
-- main agent 不再复读“spawn 一直 queued”“这次 policy 是 direct”之类脱离事实的话术
-- `谁做的 / 有没有走 dispatch / 还在 queued 吗` 这类回答默认与 policy/snapshot 一致
-- nightly 能稳定标出 `policy_route_explanation_mismatch` / 解释偏差类风险
-
-#### H10：Gray-Zone Arbitration Seam
-
-交付物：
-
-- 继续保持 `hard_runner_only` 极窄
-- 其余灰区保留 `route_hint`
-- tiny judge / 本地小模型仅作为后续 route-hint 增强 seam，不直接拿执行权
-- 明确主 agent 在灰区拥有 `route_hint` 纠偏权，但不拥有执行层绕路权
-- `route_hint` 只允许在 capability-feasible lanes 之间纠偏，而不是凭空建议不可行 lane
-- policy 输出显式给出 `gray_zone_eligible / correction_allowed / hint_outcome / hint_veto_reason / hint_effective_route`
-- `hard gate / protected lane / not gray zone` 场景下，`route_hint` 必须被结构化 veto，而不是静默吃掉
-
-验收标准：
-
-- 不回退到“让主 agent 每轮完全自由裁决”
-- 也不继续依赖不断追加零散规则
-- 灰区裁决只在低置信冲突 case 触发，不成为默认前置依赖
-- 当 `spawn_single / spawn_multi` 在灰区被主 agent 认为不合适时，纠偏通过 `route_hint + merge` 完成，而不是直接绕过 enforcement 改成 `direct`
-- 当 main agent 想把 `spawn_single / spawn_multi` 纠偏成 `direct / runner` 时，前提是目标 lane 具备 contract 所需 capability
-- 若没有任何可行 lane，系统返回 capability-bound explanation，而不是伪装成某个 lane 已成功执行
-
-建议推进顺序：
-
-1. `H7 capability-aware workflow realization`
-2. `H6 continuity baseline`
-3. `H8 entry-level ack`
-4. `H9 state-grounded explanations`
-5. `H10 gray-zone arbitration seam`
+- native child 已 `running` 时，主会话与状态面不再回退为 `queued`
+- native child 已 `done` 时，report / summary / handoff 可由 completion relay 直接带回，而不是等待 patrol 下一轮发现
+- `queued / running / done / 谁做的 / 有没有走 dispatch` 这类回答，默认读 snapshot，而不是复用旧经验话术
+- patrol 停掉后，已完成任务的 completion truth 仍可被 observer surface 正确读取
 
 ### 当前结论
 
@@ -797,7 +746,6 @@ P5 关单前，至少应满足：
 5. 维护者默认只靠 `octoclawctl` 就能完成日常观察与控制
 6. patrol 不再像第二套 runtime engine，runner 也不再像默认真相源
 7. runtime / workflow / evaluation harness 的 ownership 与 contract inventory 已明确
-8. task completion truth 默认通过 native substrate + projection + event read-model 收口，而不是继续依赖 patrol 事后猜测
 
 ---
 
@@ -816,79 +764,6 @@ P5 关单前，至少应满足：
 - OctoClaw policy/control/feedback/display
 
 而不是来自重 backend。
-
-### P6 之后的主线
-
-`P4/P5/P6` baseline 与 macmini 实机验收通过后，后续主线顺序固定为：
-
-1. **transition state 清理**
-2. **router / model-intel 深化**
-
-截至 `2026-04-08`：
-
-- `TC1 durable policy state` 已完成
-- `TC2 substrate-only read path tightening` 已完成
-- `TC3 legacy mirror / fallback shrink` 已完成
-- `TC4 optional backend true detach` 已完成
-
-这意味着后续主线已从 “先清 transition state” 进入：
-
-1. **router / model-intel 深化**
-2. **更深的 substrate-only hardening（仅在真实验收发现缺口时继续）**
-
-router / model-intel 深化的 focused design 见：
-
-- [`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
-
-### router / model-intel 深化的目标
-
-这一段的目标不是“再做一个新 router”，而是把已有的 `P2.5 internal-first seam` 推进成：
-
-1. **更可信的 model-intel facts plane**
-2. **更稳定的 recommendation contract**
-3. **更可校准的 replay / eval loop**
-
-### 这一段吸收外部参考的原则
-
-- 借 `models.dev` 的：
-  - schema-first model registry
-  - source-attributed facts
-  - generated machine-readable artifact
-- 借 OmniRoute 的：
-  - external sync 与 policy 分层
-  - non-blocking sync
-  - stale-if-error cache
-  - 统一 catalog builder 避免 surface drift
-- 不照搬 OmniRoute 的：
-  - combo/provider gateway 主心智
-  - 大一统 runtime / dashboard 产品形态
-
-### 这一段的工作包
-
-1. **RM1：Model-Intel Facts Plane 硬化**
-   - source-attributed catalog / health / source-status
-   - `models.dev` 风格 registry adapter
-   - freshness / precedence contract
-   - paid-only ecosystem signal + local-truth precedence clamp
-2. **RM2：Router Recommendation 硬化**
-   - route-budget integration tests
-   - recommendation regression tests
-   - lane-local recommendation consumption contract
-   - replay/review curated cases with route-budget consistency evidence
-3. **RM3：Replay / Eval 校准接入**
-   - replay-driven router eval
-   - model-intel update compatibility tests
-   - recommendation drift diagnostics
-   - calibration evidence format
-   - tuning inputs for threshold / weight adjustment
-   - baseline 先以 `router_eval` + nightly calibration artifacts + source adapter compatibility tests 落地
-4. **RM4：Extractable Readiness**
-   - minimal package boundary map
-   - public surface shortlist
-   - machine-readable boundary manifest
-   - internal-only runtime coupling 清单
-   - package layout baseline
-   - unified public surface shell
 
 ---
 
@@ -932,6 +807,18 @@ router / model-intel 深化的 focused design 见：
 - 不再把它们重新包装成 OctoClaw runtime 主线 blocker
 - OctoClaw 主线只继续修“消息已经进入 session transcript 之后”的 policy / dispatch / handoff / observer 问题
 
+但这里需要补一个明确例外：
+
+- 如果是 **OctoClaw 自己 materialize 的 subagent session / delegated session 反过来污染了主用户入口绑定**，
+  那它就不再只是 upstream caveat，而是 OctoClaw 当前主线 blocker
+
+换句话说：
+
+- “外部 IM ingress 根本没进 transcript” 仍然是 upstream / environment 风险
+- “消息已经进了 OctoClaw 可观察范围，但被错误绑定到 `octoclaw-subagent-*` 等内部 session” 则必须纳入主线修复
+
+因此后续的 session-boundary hardening 属于主线整改，而不是再次把上游问题吞回 OctoClaw。
+
 ---
 
 ## 6. 新的阶段顺序（更贴近当前现实）
@@ -944,9 +831,6 @@ router / model-intel 深化的 focused design 见：
 
 ### Phase 2.5：收口可拆分 router core
 核心问题：signal / route / budget / model-intel 的边界与自动更新机制
-
-### Phase 2.6：router / model-intel 深化
-核心问题：把 `internal-first seam` 推进成 facts plane + recommendation plane + calibration plane
 
 ### Phase 3：收口 IM / display 产品面
 核心问题：channel capability、anchor/update/action 统一语义

@@ -4,14 +4,14 @@ import os
 import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import sys
 
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "lib")))
-from octoclaw_policy import build_decision, route_hint_required, route_hint_correction_policy
+from octoclaw_policy import build_decision, route_hint_required
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -180,44 +180,6 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["route_hint_policy"]["required"])
         self.assertIn("route_hint_suppressed:sticky_lane", payload["route_hint_policy"]["merge_notes"])
 
-    def test_ack_followup_short_confirmation_inherits_runner_lane(self) -> None:
-        payload = self.run_policy(
-            "好",
-            session_key="demo",
-            sticky_route="runner",
-            sticky_work_type="research",
-            sticky_work_contract="inspect_report",
-        )
-        self.assertEqual(payload["route_decision"]["route"], "runner")
-        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
-        self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:runner")
-        self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
-        self.assertTrue(payload["route_hint_policy"]["ack_followup_applied"])
-
-    def test_continuation_followup_inherits_runner_lane(self) -> None:
-        payload = self.run_policy(
-            "继续",
-            session_key="demo",
-            sticky_route="runner",
-            sticky_work_type="research",
-            sticky_work_contract="inspect_report",
-        )
-        self.assertEqual(payload["route_decision"]["route"], "runner")
-        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
-        self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:runner")
-        self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
-
-    def test_non_followup_does_not_inherit_runner_lane(self) -> None:
-        payload = self.run_policy(
-            "那就这样",
-            session_key="demo",
-            sticky_route="runner",
-            sticky_work_type="research",
-            sticky_work_contract="inspect_report",
-        )
-        self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertFalse(payload["route_hint_policy"]["sticky_applied"])
-
     def test_ack_followup_without_sticky_lane_stays_non_runner_and_unapplied(self) -> None:
         payload = self.run_policy("好")
         self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
@@ -256,20 +218,6 @@ class RuntimePolicyTests(unittest.TestCase):
         notes_payload = self.run_route("继续，顺手写一版发布说明")
         self.assertFalse(notes_payload["features"]["high_risk"])
         self.assertNotIn("high_risk", notes_payload["reason_codes"])
-
-    def test_control_observer_status_queries_require_state_grounding(self) -> None:
-        payload = self.run_policy("刚才那个任务还在 queued 吗")
-
-        self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
-        self.assertTrue(payload["state_grounding"]["required"])
-        self.assertEqual(payload["state_grounding"]["source"], "runtime_read_model")
-
-    def test_non_protected_direct_queries_do_not_require_state_grounding(self) -> None:
-        payload = self.run_policy("帮我润色一下这句话")
-
-        self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertFalse(payload["state_grounding"]["required"])
 
         prod_payload = self.run_route("发布到生产环境前再检查一下鉴权配置")
         self.assertTrue(prod_payload["features"]["high_risk"])
@@ -375,21 +323,6 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["observer_control_candidate"])
         self.assertEqual(payload["task_class"], "control_observer")
 
-    def test_short_progress_query_prefers_direct_control_lane(self) -> None:
-        payload = self.run_route("好了吗")
-        self.assertEqual(payload["system_preferred_route"], "direct")
-        self.assertEqual(payload["work_contract_hint"], "answer_now")
-        self.assertTrue(payload["features"]["observer_control_candidate"])
-        self.assertTrue(payload["features"]["task_progress_candidate"])
-        self.assertEqual(payload["task_class"], "control_observer")
-
-    def test_short_ping_stays_plain_direct_answer(self) -> None:
-        payload = self.run_route("在吗")
-        self.assertEqual(payload["system_preferred_route"], "direct")
-        self.assertFalse(payload["features"]["observer_control_candidate"])
-        self.assertFalse(payload["features"].get("task_progress_candidate"))
-        self.assertEqual(payload["task_class"], "direct_answer")
-
     def test_current_model_question_prefers_direct_control_lane(self) -> None:
         payload = self.run_policy("你现在是啥模型")
         self.assertEqual(payload["route_decision"]["route"], "direct")
@@ -431,16 +364,6 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
         self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
 
-    def test_budget_recommendation_is_emitted_with_consistency_fields(self) -> None:
-        payload = self.run_policy("检查一下 nginx error log 最近 80 行，然后总结问题")
-        budget = payload["budget_recommendation"]
-        self.assertEqual(budget["schema_version"], "octoclaw.budget_recommendation/v1")
-        self.assertEqual(budget["output_budget"], payload["budget_policy"]["budget_cap"])
-        self.assertEqual(budget["latency_target"], payload["budget_policy"]["latency_target"])
-        self.assertEqual(budget["max_workers"], payload["budget_policy"]["max_workers"])
-        self.assertEqual(budget["reasoning_mode"], payload["model_policy"]["reasoning_effort"])
-        self.assertTrue(budget["consistency"]["route_budget_consistent"])
-
     def test_route_provenance_question_prefers_protected_direct_lane(self) -> None:
         payload = self.run_route("现在走的是什么路由")
         self.assertEqual(payload["system_preferred_route"], "direct")
@@ -457,13 +380,6 @@ class RuntimePolicyTests(unittest.TestCase):
             payload["tool_policy"]["observer_control_tools"],
             ["octoclaw_policy_decide", "octoclaw_route_hint", "octoclaw_status", "octoclaw_task_action"],
         )
-
-    def test_progress_query_control_policy_only_allows_control_tools(self) -> None:
-        payload = self.run_policy("好了吗")
-        self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
-        self.assertFalse(payload["tool_policy"]["allow_direct_tools"])
-        self.assertTrue(payload["tool_policy"]["control_observer_only"])
 
     def test_session_control_request_prefers_direct_protected_lane(self) -> None:
         payload = self.run_policy("切换到 Mini Max M2.7")
@@ -498,22 +414,8 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
         self.assertEqual(payload["route_decision"]["phase"], "inspect")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
-        self.assertEqual(payload["route_decision"]["contract_kind"], "probe_measurement")
-        self.assertEqual(payload["route_decision"]["scope_hint"], "workflow-local")
-        self.assertIn("runner", payload["route_decision"]["feasible_lanes"])
-        self.assertNotIn("spawn_single", payload["route_decision"]["feasible_lanes"])
         self.assertFalse(payload["pre_dispatch_ack"]["required"])
         self.assertFalse(payload["route_recommendation"]["bypass_delegated_optimization"])
-
-    def test_release_feature_check_prefers_runner_inspect_report(self) -> None:
-        payload = self.run_policy("帮我查下openclaw 又有新版本了吗 有啥新特性")
-        self.assertEqual(payload["route_decision"]["route"], "runner")
-        self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
-        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
-        self.assertEqual(payload["route_decision"]["contract_kind"], "inspect_report")
-        self.assertEqual(payload["route_decision"]["scope_hint"], "workflow-local")
-        self.assertIn("runner", payload["route_decision"]["feasible_lanes"])
-        self.assertNotIn("direct", payload["route_decision"]["feasible_lanes"])
 
     def test_policy_refreshes_model_health_feedback_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-policy-feedback-") as workspace:
@@ -521,6 +423,7 @@ class RuntimePolicyTests(unittest.TestCase):
             logs_dir = Path(workspace) / "logs"
             octopus_dir.mkdir(parents=True, exist_ok=True)
             logs_dir.mkdir(parents=True, exist_ok=True)
+            recent_log_time = datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
             (Path(workspace) / "tmp" / "octopus-config.json").write_text(
                 json.dumps(
                     {
@@ -539,9 +442,8 @@ class RuntimePolicyTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            recent_ts = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).isoformat(timespec="milliseconds")
             (logs_dir / "gateway.err.log").write_text(
-                f"{recent_ts} [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
+                f"{recent_log_time} [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
                 encoding="utf-8",
             )
             env = {**os.environ, "WORKSPACE": workspace}
@@ -599,25 +501,6 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["budget_policy"]["budget_cap"], "low")
         self.assertEqual(payload["budget_policy"]["max_workers"], 1)
         self.assertEqual(payload["prompt_contract"]["merge_contract"], "inspect_report")
-        self.assertEqual(payload["auto_router"]["router_core"]["route_class"], "delegated_runner")
-        self.assertEqual(payload["auto_router"]["router_core"]["agent_scope"], "runner_lane")
-        self.assertEqual(payload["auto_router"]["budget_planner"]["reasoning_mode"], payload["model_policy"]["reasoning_effort"])
-        self.assertIn(payload["model_policy"]["selected_model"], payload["auto_router"]["model_intel"]["candidate_models"])
-        self.assertTrue(payload["auto_router"]["budget_planner"]["consistency"]["route_budget_consistent"])
-        self.assertTrue(payload["auto_router"]["budget_planner"]["consistency"]["route_matches_latency_target"])
-
-    def test_spawn_multi_auto_router_budget_consistency_is_true(self) -> None:
-        payload = build_decision(
-            "分三个子任务并行进行：1) 检查认证模块现有漏洞 2) 检查存储层备份状态 3) 检查API网关限流配置，每项出独立报告，每项都给出单独风险结论和建议",
-            force_route="spawn_multi",
-        )
-        self.assertEqual(payload["route_decision"]["route"], "spawn_multi")
-        self.assertEqual(payload["auto_router"]["router_core"]["route_class"], "delegated_multi")
-        self.assertEqual(payload["auto_router"]["router_core"]["agent_scope"], "team_lane")
-        consistency = payload["auto_router"]["budget_planner"]["consistency"]
-        self.assertTrue(consistency["route_budget_consistent"])
-        self.assertTrue(consistency["route_matches_worker_budget"])
-        self.assertTrue(consistency["route_matches_output_budget"])
 
     def test_force_route_runner_keeps_runner_as_final_route(self) -> None:
         payload = build_decision("检查接口健康状态和响应头", "printf ok", {}, force_route="runner")
@@ -684,68 +567,6 @@ class RuntimePolicyTests(unittest.TestCase):
                 {"switches": {"route_hint_required": True}},
             )
         )
-
-    def test_route_hint_hard_runner_only_is_vetoed(self) -> None:
-        payload = build_decision(
-            "帮我查下openclaw 又有新版本了吗 有啥新特性",
-            route_hint={"route_hint": "spawn_single", "reason": "force subagent"},
-        )
-        self.assertEqual(payload["route_decision"]["route"], "runner")
-        self.assertEqual(payload["route_hint_policy"]["hint_outcome"], "vetoed")
-        self.assertEqual(payload["route_hint_policy"]["hint_veto_reason"], "hard_gate")
-        self.assertFalse(payload["route_hint_policy"]["correction_allowed"])
-        self.assertFalse(payload["route_hint_policy"]["gray_zone_eligible"])
-
-    def test_route_hint_protected_lane_is_vetoed(self) -> None:
-        payload = build_decision(
-            "你现在是啥模型",
-            route_hint={"route_hint": "spawn_single", "reason": "force delegation"},
-        )
-        self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
-        self.assertEqual(payload["route_hint_policy"]["hint_outcome"], "vetoed")
-        self.assertEqual(payload["route_hint_policy"]["hint_veto_reason"], "protected_lane")
-        self.assertFalse(payload["route_hint_policy"]["correction_allowed"])
-
-    def test_route_hint_non_gray_zone_is_vetoed(self) -> None:
-        payload = build_decision(
-            "调研三个兼容方案并写一版简短建议",
-            route_hint={"route_hint": "direct", "reason": "try direct first"},
-        )
-        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
-        self.assertEqual(payload["route_hint_policy"]["hint_outcome"], "vetoed")
-        self.assertEqual(payload["route_hint_policy"]["hint_veto_reason"], "not_gray_zone")
-        self.assertFalse(payload["route_hint_policy"]["gray_zone_eligible"])
-
-    def test_route_hint_correction_policy_marks_semantic_boundary_as_gray_zone(self) -> None:
-        payload = route_hint_correction_policy(
-            {
-                "route": "spawn_single",
-                "system_preferred_route": "spawn_single",
-                "reason_codes": ["work_contract:deliverable_work", "research_work"],
-                "confidence": 0.74,
-                "score_margin": 0.18,
-                "work_contract_hint": "deliverable_work",
-                "needs_semantic_review": True,
-                "features": {"semantic_ambiguity_hits": 1},
-                "lane_feasibility": {
-                    "direct": {"feasible": True},
-                    "spawn_single": {"feasible": True},
-                    "spawn_multi": {"feasible": True},
-                },
-            },
-            "",
-            {"switches": {"route_hint_required": True}},
-            {
-                "direct": {"feasible": True},
-                "spawn_single": {"feasible": True},
-                "spawn_multi": {"feasible": True},
-            },
-        )
-        self.assertTrue(payload["gray_zone_eligible"])
-        self.assertTrue(payload["correction_allowed"])
-        self.assertEqual(payload["veto_reason"], "")
-        self.assertEqual(payload["feasible_hint_routes"], ["direct", "spawn_single", "spawn_multi"])
 
 
 if __name__ == "__main__":

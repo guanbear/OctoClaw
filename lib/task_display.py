@@ -8,11 +8,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
-    from im_display_contract import action_contract, ownership_for_surface, substrate_display_contract
-except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.im_display_contract import action_contract, ownership_for_surface, substrate_display_contract
-
-try:
     from runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
     from runtime_coordination import resolve_task_artifacts
     from worker_taxonomy import role_display
@@ -27,7 +22,6 @@ QUEUE_STATES = {"queued"}
 RUNNING_STATES = {"running"}
 BLOCKED_STATES = {"blocked"}
 FINAL_STATES = {"done", "completed", "failed", "deferred", "cancelled", "blocked", "partial"}
-PENDING_STATES = {"pending_confirm", "needs_approval"}
 GENERIC_SUMMARY_PREFIXES = (
     "runner完成",
     "runner失败",
@@ -129,6 +123,50 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _delegated_materialization(task: dict[str, Any]) -> dict[str, Any]:
+    explicit = dict(task.get("delegated_materialization", {})) if isinstance(task.get("delegated_materialization"), dict) else {}
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    artifact_materialization = dict(artifacts.get("delegated_materialization", {})) if isinstance(artifacts.get("delegated_materialization"), dict) else {}
+    merged = dict(artifact_materialization)
+    for key, value in explicit.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
+    failure = merged.get("capability_failure")
+    if not isinstance(failure, dict):
+        failure = {}
+    merged["capability_failure"] = failure
+    return merged
+
+
+def _capability_failure(task: dict[str, Any], materialization: dict[str, Any]) -> dict[str, Any]:
+    explicit = dict(task.get("capability_failure", {})) if isinstance(task.get("capability_failure"), dict) else {}
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    artifact_failure = dict(artifacts.get("capability_failure", {})) if isinstance(artifacts.get("capability_failure"), dict) else {}
+    materialization_failure = dict(materialization.get("capability_failure", {})) if isinstance(materialization.get("capability_failure"), dict) else {}
+    merged = dict(artifact_failure)
+    merged.update(materialization_failure)
+    merged.update({key: value for key, value in explicit.items() if value not in (None, "", [], {})})
+    return merged
+
+
+def _materialization_summary(materialization: dict[str, Any], capability_failure: dict[str, Any]) -> str:
+    if not isinstance(materialization, dict) or not materialization:
+        return ""
+    kind = _text(materialization.get("kind")).replace("_", " ")
+    status = _text(materialization.get("status")).replace("_", " ")
+    runner_job_id = _text(materialization.get("runner_job_id"))
+    task_id = _text(materialization.get("task_id")) or _text(materialization.get("child_spec_id"))
+    reason = _text(capability_failure.get("reason") if isinstance(capability_failure, dict) else "")
+    parts = [part for part in [kind, status] if part]
+    if reason:
+        parts.append(reason.replace("_", " "))
+    elif runner_job_id:
+        parts.append(f"job {runner_job_id}")
+    elif task_id:
+        parts.append(f"task {task_id}")
+    return " · ".join(parts)
+
+
 def _substrate_preferred_state(task: dict[str, Any], binding: dict[str, Any], fallback_state: str) -> str:
     if not isinstance(binding, dict) or not binding:
         return fallback_state
@@ -149,143 +187,6 @@ def _substrate_preferred_state(task: dict[str, Any], binding: dict[str, Any], fa
     if native_binding_state == "bound" or sync_mode == "managed":
         return mapped
     return fallback_state
-
-
-def _create_path_summary(create_preference: str, create_status: str) -> str:
-    preference = _text(create_preference)
-    status = _text(create_status)
-    if not preference and not status:
-        return ""
-    return " | ".join(
-        part
-        for part in [
-            f"preference {preference}" if preference else "",
-            f"status {status}" if status else "",
-        ]
-        if part
-    )
-
-
-def _substrate_read_target(substrate: dict[str, Any], *, fallback_task_id: str = "") -> str:
-    flow_id = _text(substrate.get("flow_id"))
-    task_id = _text(substrate.get("task_id"))
-    if flow_id:
-        return f"TaskFlow flow {flow_id}"
-    if task_id:
-        return f"TaskFlow task {task_id}"
-    if fallback_task_id:
-        return f"OctoClaw task {fallback_task_id}"
-    return ""
-
-
-def _build_recommended_read_order(
-    *,
-    task_id: str,
-    substrate: dict[str, Any],
-    review: dict[str, Any],
-    task_summary: dict[str, Any],
-    normalized: dict[str, Any],
-) -> list[str]:
-    recommended_read_order: list[str] = []
-    substrate_target = _substrate_read_target(substrate, fallback_task_id=task_id)
-    substrate_summary = _text(substrate.get("summary"))
-    create_path = _create_path_summary(_text(substrate.get("create_preference")), _text(substrate.get("create_status")))
-    if substrate_target:
-        recommended_read_order.append(substrate_target)
-    if substrate_summary:
-        recommended_read_order.append(f"substrate summary: {substrate_summary}")
-    if create_path:
-        recommended_read_order.append(f"create path: {create_path}")
-    if int(task_summary.get("child_count", 0) or 0):
-        recommended_read_order.append(
-            "task summary: "
-            + " · ".join(
-                [
-                    f"{int(task_summary.get('active_child_count', 0) or 0)} active child",
-                    f"{int(task_summary.get('completed_child_count', 0) or 0)} completed child",
-                ]
-            )
-        )
-    if bool(review.get("required")):
-        review_label = _text(review.get("state_label")) or "Review required"
-        if _text(review.get("task_id")):
-            recommended_read_order.append(f"review surface: {review_label} via {_text(review.get('task_id'))}")
-        else:
-            recommended_read_order.append(f"review surface: {review_label}")
-    artifact_paths = [
-        _text(normalized.get("report_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("report_path")),
-        _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
-        _text(normalized.get("context_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_path")),
-    ]
-    recommended_read_order.extend([item for item in artifact_paths if item])
-    if not substrate_target and artifact_paths:
-        recommended_read_order.append("compatibility fallback: report/context artifacts only")
-    return recommended_read_order
-
-
-def _build_review_surface(
-    task: dict[str, Any],
-    children: list[dict[str, Any]],
-    *,
-    now: datetime | None = None,
-) -> dict[str, Any]:
-    review_children = [
-        item
-        for item in children
-        if _text(item.get("worker_pool")).lower() == "octoclaw-review"
-        or _text(item.get("work_type")).lower() == "review"
-        or _text(item.get("phase")).lower() == "verify"
-    ]
-    if review_children:
-        review_child = sorted(
-            review_children,
-            key=lambda item: (
-                0 if task_queue_bucket(item) in ACTIVE_STATES else 1,
-                _text(item.get("updated_at")) or _text(item.get("started_at")) or _text(item.get("id")),
-            ),
-        )[0]
-        anchor = build_task_anchor(review_child, now=now)
-        create_path = _create_path_summary(
-            _text(anchor.get("openclaw_create_preference")),
-            _text(anchor.get("openclaw_create_status")),
-        )
-        return {
-            "required": True,
-            "surface_state": "child_task",
-            "state": _text(anchor.get("state")),
-            "state_label": _text(anchor.get("state_label")),
-            "task_id": _text(anchor.get("task_id")),
-            "route": _text(anchor.get("route")),
-            "worker_pool": _text(anchor.get("worker_pool")),
-            "substrate_summary": _text(anchor.get("substrate_summary")),
-            "create_path": create_path,
-            "action_hint": action_command_value(_text(anchor.get("task_id")), "details"),
-        }
-    if task.get("review_required"):
-        return {
-            "required": True,
-            "surface_state": "required",
-            "state": "needs_review",
-            "state_label": "Review required",
-            "task_id": "",
-            "route": "",
-            "worker_pool": "octoclaw-review",
-            "substrate_summary": "",
-            "create_path": "",
-            "action_hint": action_command_value(_text(task.get("id")), "details"),
-        }
-    return {
-        "required": False,
-        "surface_state": "not_required",
-        "state": "",
-        "state_label": "",
-        "task_id": "",
-        "route": "",
-        "worker_pool": "",
-        "substrate_summary": "",
-        "create_path": "",
-        "action_hint": "",
-    }
 
 
 def action_command_value(task_id: str, fallback_command: str) -> str:
@@ -447,19 +348,6 @@ def _state_label(state: str, lifecycle_state: str = "", outcome_state: str = "",
         "cancelled": "cancelled",
     }
     return mapping.get(current, current or "unknown")
-
-
-def _surface_queue_bucket(anchor: dict[str, Any]) -> str:
-    if _text(anchor.get("queue_bucket")).lower() == "recently_completed":
-        return "recently_completed"
-    state = _text(anchor.get("state")).lower()
-    if state in RUNNING_STATES:
-        return "running"
-    if state in QUEUE_STATES:
-        return "queued"
-    if state in BLOCKED_STATES:
-        return "blocked"
-    return _text(anchor.get("queue_bucket")).lower()
 
 
 def _collect_active_models(task: dict[str, Any]) -> list[str]:
@@ -682,24 +570,7 @@ def build_task_actions(task: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    for item in actions:
-        contract = action_contract(_text(item.get("id")) or _text(item.get("kind")))
-        item["action_class"] = _text(contract.get("class")) or "observe"
-        item["replay_safe"] = bool(contract.get("replay_safe", True))
     return actions
-
-
-def _action_availability(actions: list[dict[str, Any]]) -> list[str]:
-    available: list[str] = []
-    for item in actions:
-        if not isinstance(item, dict):
-            continue
-        if not bool(item.get("enabled", False)):
-            continue
-        action_id = _text(item.get("id")) or _text(item.get("kind"))
-        if action_id and action_id not in available:
-            available.append(action_id)
-    return available
 
 
 def build_task_interactive_payload(
@@ -766,6 +637,8 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
     summary = _clean_task_summary(normalized, limit=120)
     models = _collect_active_models(normalized)
     taskflow = _taskflow_binding(normalized)
+    materialization = _delegated_materialization(normalized)
+    capability_failure = _capability_failure(normalized, materialization)
     if _text(lifecycle_state).lower() not in {"finished", "cancelled"}:
         state = _substrate_preferred_state(normalized, taskflow, state)
 
@@ -781,7 +654,6 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "progress": None,
         "summary": summary,
         "queue_bucket": queue_bucket,
-        "surface_queue_bucket": _surface_queue_bucket({"state": state, "queue_bucket": queue_bucket}),
         "lifecycle_state": lifecycle_state,
         "outcome_state": outcome_state,
         "handoff_state": handoff_state,
@@ -819,12 +691,19 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "openclaw_native_runtime": _text(normalized.get("openclaw_native_runtime") or taskflow.get("native_runtime")),
         "openclaw_native_seen_at": _text(normalized.get("openclaw_native_seen_at") or taskflow.get("native_seen_at")),
         "openclaw_native_match_score": int(normalized.get("openclaw_native_match_score") or taskflow.get("native_match_score") or 0),
-        "openclaw_create_preference": _text(taskflow.get("create_preference")),
-        "openclaw_create_status": _text(taskflow.get("create_status")),
         "openclaw_task_id": _text(normalized.get("openclaw_task_id") or taskflow.get("task_id")),
         "openclaw_flow_id": _text(normalized.get("openclaw_flow_id") or taskflow.get("flow_id")),
         "openclaw_flow_kind": _text(normalized.get("openclaw_flow_kind") or taskflow.get("flow_kind")),
         "substrate_summary": _taskflow_substrate_summary(taskflow),
+        "materialization_status": _text(materialization.get("status")),
+        "materialization_kind": _text(materialization.get("kind")),
+        "materialization_execution_contract": _text(materialization.get("execution_contract")),
+        "materialization_task_id": _text(materialization.get("task_id") or materialization.get("child_spec_id")),
+        "materialization_runner_job_id": _text(materialization.get("runner_job_id")),
+        "materialization_executed": bool(materialization.get("executed", False)),
+        "materialization_summary": _materialization_summary(materialization, capability_failure),
+        "capability_failure_reason": _text(capability_failure.get("reason")),
+        "capability_failure_detail": _text(capability_failure.get("detail")),
     }
     return anchor
 
@@ -840,25 +719,20 @@ def build_task_detail(
     state_model = task_state_model(normalized)
     all_normalized = [_normalize_task(item) for item in (all_tasks or []) if isinstance(item, dict)]
     task_id = _text(normalized.get("id"))
-    child_ids = _declared_child_ids(normalized)
+    child_ids = _text_list(normalized.get("child_ids"))
+    if not child_ids:
+        artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts", {}), dict) else {}
+        child_ids = _text_list(artifacts.get("child_task_ids"))
+        if not child_ids:
+            step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
+            child_ids = [str(value).strip() for value in step_task_ids.values() if str(value).strip()]
+
     children = [item for item in all_normalized if _text(item.get("parent_id")) == task_id or _text(item.get("id")) in child_ids]
     artifacts = _collect_artifacts(normalized)
-    actions = build_task_actions(normalized)
     raw_artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts"), dict) else {}
     runner_plan = dict(raw_artifacts.get("runner_plan", {})) if isinstance(raw_artifacts.get("runner_plan"), dict) else {}
-    review = _build_review_surface(normalized, children, now=now)
-    task_summary = {
-        "child_count": len(children),
-        "active_child_count": sum(1 for item in children if task_queue_bucket(item) in ACTIVE_STATES),
-        "completed_child_count": sum(1 for item in children if task_is_recent_final(item)),
-        "review_child_count": sum(
-            1
-            for item in children
-            if _text(item.get("worker_pool")).lower() == "octoclaw-review"
-            or _text(item.get("work_type")).lower() == "review"
-            or _text(item.get("phase")).lower() == "verify"
-        ),
-    }
+    materialization = _delegated_materialization(normalized)
+    capability_failure = _capability_failure(normalized, materialization)
     preview_events = normalized.get("task_events_preview", []) if isinstance(normalized.get("task_events_preview", []), list) else []
     events: list[dict[str, Any]] = []
     if preview_events:
@@ -872,6 +746,15 @@ def build_task_detail(
                 "importance": "normal",
             }
         )
+        if _text(materialization.get("status")).lower() == "materialization_failed":
+            events.append(
+                {
+                    "time": _text(normalized.get("updated_at") or normalized.get("started_at")),
+                    "kind": "materialization_failed",
+                    "message": _text(capability_failure.get("detail") or capability_failure.get("reason") or anchor.get("materialization_summary")),
+                    "importance": "high",
+                }
+            )
         if _text(state_model.get("handoff_state")).lower() in {"user_safe_ready", "delivered"}:
             events.append(
                 {
@@ -918,47 +801,33 @@ def build_task_detail(
                 }
             )
 
-    substrate = {
-        "backend": _text(anchor.get("openclaw_taskflow_backend")),
-        "state": _text(anchor.get("openclaw_taskflow_state")),
-        "task_runtime": _text(anchor.get("openclaw_task_runtime")),
-        "flow_runtime": _text(anchor.get("openclaw_flow_runtime")),
-        "sync_mode": _text(anchor.get("openclaw_taskflow_sync_mode")),
-        "substrate_state": _text(anchor.get("openclaw_taskflow_substrate_state")),
-        "substrate_revision": _int_or_zero(anchor.get("openclaw_taskflow_substrate_revision")),
-        "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
-        "native_status": _text(anchor.get("openclaw_native_status")),
-        "native_runtime": _text(anchor.get("openclaw_native_runtime")),
-        "native_seen_at": _text(anchor.get("openclaw_native_seen_at")),
-        "native_match_score": int(anchor.get("openclaw_native_match_score") or 0),
-        "create_preference": _text(anchor.get("openclaw_create_preference")),
-        "create_status": _text(anchor.get("openclaw_create_status")),
-        "task_id": _text(anchor.get("openclaw_task_id")),
-        "flow_id": _text(anchor.get("openclaw_flow_id")),
-        "flow_kind": _text(anchor.get("openclaw_flow_kind")),
-        "summary": _text(anchor.get("substrate_summary")),
-    }
-    recommended_read_order = _build_recommended_read_order(
-        task_id=anchor["task_id"],
-        substrate=substrate,
-        review=review,
-        task_summary=task_summary,
-        normalized=normalized,
-    )
-
     return {
         "task_id": anchor["task_id"],
         "summary": anchor["summary"],
         "state": anchor["state"],
-        "read_path_mode": "substrate_first_contract",
-        "read_path_fallback_role": "compatibility_only",
-        "recommended_read_order": recommended_read_order,
-        "substrate": substrate,
+        "substrate": {
+            "backend": _text(anchor.get("openclaw_taskflow_backend")),
+            "state": _text(anchor.get("openclaw_taskflow_state")),
+            "task_runtime": _text(anchor.get("openclaw_task_runtime")),
+            "flow_runtime": _text(anchor.get("openclaw_flow_runtime")),
+            "sync_mode": _text(anchor.get("openclaw_taskflow_sync_mode")),
+            "substrate_state": _text(anchor.get("openclaw_taskflow_substrate_state")),
+            "substrate_revision": _int_or_zero(anchor.get("openclaw_taskflow_substrate_revision")),
+            "native_binding_state": _text(anchor.get("openclaw_native_binding_state")),
+            "native_status": _text(anchor.get("openclaw_native_status")),
+            "native_runtime": _text(anchor.get("openclaw_native_runtime")),
+            "native_seen_at": _text(anchor.get("openclaw_native_seen_at")),
+            "native_match_score": int(anchor.get("openclaw_native_match_score") or 0),
+            "task_id": _text(anchor.get("openclaw_task_id")),
+            "flow_id": _text(anchor.get("openclaw_flow_id")),
+            "flow_kind": _text(anchor.get("openclaw_flow_kind")),
+            "summary": _text(anchor.get("substrate_summary")),
+        },
         "lineage": {
             "parent_task_id": _text(normalized.get("parent_id")),
             "child_task_ids": [_text(item.get("id")) for item in children],
-            "active_child_count": task_summary["active_child_count"],
-            "completed_child_count": task_summary["completed_child_count"],
+            "active_child_count": sum(1 for item in children if task_queue_bucket(item) in ACTIVE_STATES),
+            "completed_child_count": sum(1 for item in children if task_is_recent_final(item)),
         },
         "models": {
             "main_model": anchor["active_models"][0] if anchor["active_models"] else "",
@@ -966,11 +835,20 @@ def build_task_detail(
             "model_health_summary": _text(normalized.get("model_health_summary")),
         },
         "artifacts": artifacts,
-        "action_availability": _action_availability(actions),
-        "substrate_display_contract": substrate_display_contract(),
         "runner_plan": runner_plan,
-        "review": review,
-        "task_summary": task_summary,
+        "materialization": {
+            "lane": _text(materialization.get("lane")),
+            "kind": _text(materialization.get("kind")),
+            "status": _text(materialization.get("status")),
+            "execution_contract": _text(materialization.get("execution_contract")),
+            "task_id": _text(materialization.get("task_id")),
+            "runner_job_id": _text(materialization.get("runner_job_id")),
+            "child_spec_id": _text(materialization.get("child_spec_id")),
+            "session_key": _text(materialization.get("session_key")),
+            "executed": bool(materialization.get("executed", False)),
+            "summary": _text(anchor.get("materialization_summary")),
+            "capability_failure": capability_failure,
+        },
         "checklist": normalized.get("checklist", {}) if isinstance(normalized.get("checklist"), dict) else {},
         "events": events,
         "task_event_summary": normalized.get("task_event_summary", {}),
@@ -980,39 +858,6 @@ def build_task_detail(
 
 def _task_map(tasks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {_text(item.get("id")): item for item in tasks if _text(item.get("id"))}
-
-
-def _declared_child_ids(task: dict[str, Any]) -> list[str]:
-    child_ids = _text_list(task.get("child_ids"))
-    if child_ids:
-        return child_ids
-    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
-    child_ids = _text_list(artifacts.get("child_task_ids"))
-    if child_ids:
-        return child_ids
-    step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for value in step_task_ids.values():
-        child_id = _text(value)
-        if child_id and child_id not in seen:
-            seen.add(child_id)
-            ordered.append(child_id)
-    return ordered
-
-
-def _linear_step_pairs(task: dict[str, Any]) -> list[tuple[str, str]]:
-    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
-    step_order = artifacts.get("step_order", []) if isinstance(artifacts.get("step_order", []), list) else []
-    step_task_ids = artifacts.get("step_task_ids", {}) if isinstance(artifacts.get("step_task_ids", {}), dict) else {}
-    ordered_task_ids = [_text(step_task_ids.get(step)) for step in step_order if _text(step_task_ids.get(step))]
-    pairs: list[tuple[str, str]] = []
-    for idx in range(len(ordered_task_ids) - 1):
-        source = ordered_task_ids[idx]
-        target = ordered_task_ids[idx + 1]
-        if source and target and source != target:
-            pairs.append((source, target))
-    return pairs
 
 
 def _root_task_for(task: dict[str, Any], tasks_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -1045,13 +890,7 @@ def build_task_graph(
     root_id = _text(root.get("id"))
 
     children_by_parent: dict[str, list[dict[str, Any]]] = {}
-    declared_children_by_task: dict[str, list[str]] = {}
-    linear_step_pairs_by_task: dict[str, list[tuple[str, str]]] = {}
     for item in all_normalized:
-        current_id = _text(item.get("id"))
-        if current_id:
-            declared_children_by_task[current_id] = _declared_child_ids(item)
-            linear_step_pairs_by_task[current_id] = _linear_step_pairs(item)
         parent_id = _text(item.get("parent_id"))
         if not parent_id:
             continue
@@ -1059,7 +898,6 @@ def build_task_graph(
 
     ordered_ids: list[str] = []
     edges: list[dict[str, str]] = []
-    seen_edges: set[tuple[str, str, str]] = set()
     queue: list[str] = [root_id] if root_id else [_text(normalized.get("id"))]
     seen: set[str] = set()
     while queue:
@@ -1075,36 +913,11 @@ def build_task_graph(
             child_id = _text(child.get("id"))
             if not child_id:
                 continue
-            edge_key = (current_id, child_id, "child")
-            if edge_key not in seen_edges:
-                seen_edges.add(edge_key)
-                edges.append({"source": current_id, "target": child_id, "relation": "child"})
-            queue.append(child_id)
-        for child_id in declared_children_by_task.get(current_id, []):
-            child = tasks_by_id.get(child_id)
-            if not isinstance(child, dict):
-                continue
-            edge_key = (current_id, child_id, "child")
-            if edge_key not in seen_edges:
-                seen_edges.add(edge_key)
-                edges.append({"source": current_id, "target": child_id, "relation": "child"})
+            edges.append({"source": current_id, "target": child_id, "relation": "child"})
             queue.append(child_id)
 
     if _text(normalized.get("id")) not in ordered_ids and _text(normalized.get("id")):
         ordered_ids.append(_text(normalized.get("id")))
-
-    for owner_id, pairs in linear_step_pairs_by_task.items():
-        if owner_id not in ordered_ids:
-            continue
-        for source, target in pairs:
-            if source not in ordered_ids:
-                ordered_ids.append(source)
-            if target not in ordered_ids:
-                ordered_ids.append(target)
-            edge_key = (source, target, "linear_step")
-            if edge_key not in seen_edges:
-                seen_edges.add(edge_key)
-                edges.append({"source": source, "target": target, "relation": "linear_step"})
 
     nodes = [build_task_anchor(tasks_by_id.get(task_id, normalized), now=now) for task_id in ordered_ids]
     route_counts = Counter(_text(node.get("route")) for node in nodes if _text(node.get("route")))
@@ -1156,8 +969,6 @@ def build_task_timeline(
             }
         )
 
-    seen_child_started: set[str] = set()
-    seen_child_finished: set[str] = set()
     for edge in graph.get("edges", []) if isinstance(graph.get("edges"), list) else []:
         if not isinstance(edge, dict):
             continue
@@ -1168,8 +979,7 @@ def build_task_timeline(
         child_anchor = build_task_anchor(child, now=now)
         child_title = _text(child_anchor.get("title")) or child_id
         started_at = _text(child.get("started_at"))
-        if started_at and child_id not in seen_child_started:
-            seen_child_started.add(child_id)
+        if started_at:
             events.append(
                 {
                     "time": _event_time_label({"time": started_at}),
@@ -1181,8 +991,7 @@ def build_task_timeline(
                 }
             )
         final_time = _text(child.get("completed_at") or child.get("updated_at"))
-        if child_anchor.get("terminal") and final_time and child_id not in seen_child_finished:
-            seen_child_finished.add(child_id)
+        if child_anchor.get("terminal") and final_time:
             final_kind = "child_finished"
             state = _text(child_anchor.get("state"))
             if state == "failed":
@@ -1258,41 +1067,35 @@ def build_task_retrieval_bundle(
     next_step = _text(worker_result.get("next_step")) if isinstance(worker_result, dict) else ""
     user_safe_summary = _text(worker_result.get("user_safe_summary")) if isinstance(worker_result, dict) else ""
     primary_report = _text(normalized.get("report_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("report_path"))
-    substrate = detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {}
-    review = detail.get("review", {}) if isinstance(detail.get("review"), dict) else {}
-    task_summary = detail.get("task_summary", {}) if isinstance(detail.get("task_summary"), dict) else {}
-    recommended_read_order = detail.get("recommended_read_order", []) if isinstance(detail.get("recommended_read_order", []), list) else []
+    materialization = detail.get("materialization", {}) if isinstance(detail.get("materialization"), dict) else {}
     return {
         "task_id": _text(normalized.get("id")),
         "summary": _clean_task_summary(normalized, limit=160),
         "user_safe_summary": user_safe_summary or _text(normalized.get("user_safe_summary")),
         "next_step": next_step,
         "state": _text(detail.get("state")),
-        "read_path_mode": _text(detail.get("read_path_mode")) or "substrate_first_contract",
-        "read_path_fallback_role": _text(detail.get("read_path_fallback_role")) or "compatibility_only",
         "route": _text(normalized.get("route")),
         "worker_pool": _text(normalized.get("worker_pool")),
-        "substrate": substrate,
-        "review": review,
-        "task_summary": task_summary,
+        "substrate": detail.get("substrate", {}) if isinstance(detail.get("substrate"), dict) else {},
         "primary_report": primary_report,
         "context_path": _text(normalized.get("context_path")) or _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_path")),
         "context_pack_path": _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")),
         "runner_plan": dict(runner_plan) if isinstance(runner_plan, dict) else {},
+        "materialization": materialization,
         "checklist": detail.get("checklist", {}) if isinstance(detail.get("checklist"), dict) else {},
         "primary_artifacts": primary[:5],
         "related_thread_artifacts": related[:5],
-        "recommended_read_order": recommended_read_order,
+        "recommended_read_order": [item for item in [primary_report, _text(((normalized.get("artifacts") or {}) if isinstance(normalized.get("artifacts"), dict) else {}).get("context_pack_path")), _text(normalized.get("context_path"))] if item],
     }
 
 
 def build_task_queue_view(tasks: list[dict[str, Any]], *, now: datetime | None = None) -> dict[str, Any]:
     anchors = [build_task_anchor(task, now=now) for task in tasks if isinstance(task, dict)]
     return {
-        "running": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() in RUNNING_STATES],
-        "queued": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() in QUEUE_STATES],
-        "blocked": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() in BLOCKED_STATES],
-        "recently_completed": [anchor for anchor in anchors if _text(anchor.get("surface_queue_bucket")).lower() == "recently_completed"],
+        "running": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in RUNNING_STATES],
+        "queued": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in QUEUE_STATES],
+        "blocked": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() in BLOCKED_STATES],
+        "recently_completed": [anchor for anchor in anchors if _text(anchor.get("queue_bucket")).lower() == "recently_completed"],
     }
 
 
@@ -1302,12 +1105,9 @@ def build_operator_task_surface(task: dict[str, Any], *, now: datetime | None = 
     actions = build_task_actions(normalized)
     return {
         "schema_version": "octoclaw.task_display/v1",
-        "surface_role": ownership_for_surface("cli"),
         "task_anchor": anchor,
         "task_actions": actions,
-        "action_availability": _action_availability(actions),
         "interactive": build_task_interactive_payload(normalized, anchor=anchor, actions=actions),
-        "substrate_display_contract": substrate_display_contract(),
         "text_fallback": render_task_anchor_text(anchor, actions),
     }
 
@@ -1322,17 +1122,11 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
     model_summary = _text(anchor.get("model_summary"))
     duration = _text(anchor.get("duration"))
     queue_position = anchor.get("queue_position")
-    substrate_summary = _text(anchor.get("substrate_summary"))
-    create_path = _create_path_summary(_text(anchor.get("openclaw_create_preference")), _text(anchor.get("openclaw_create_status")))
 
     lines = [
         f"{emoji} OctoClaw task: {title}",
+        f"State: {state} | Route: {route or '?'} | Pool: {worker_name}",
     ]
-    if substrate_summary:
-        lines.append(f"Substrate: {substrate_summary}")
-    if create_path:
-        lines.append(f"Create path: {create_path}")
-    lines.append(f"State: {state} | Route: {route or '?'} | Pool: {worker_name}")
     if model_summary or duration:
         meta_bits = []
         if model_summary:
@@ -1347,6 +1141,12 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
     checklist_completed_count = int(anchor.get("checklist_completed_count") or 0)
     if checklist_open_count or checklist_completed_count:
         lines.append(f"Checklist: {checklist_completed_count} done / {checklist_open_count} open")
+    substrate_summary = _text(anchor.get("substrate_summary"))
+    if substrate_summary:
+        lines.append(f"Substrate: {substrate_summary}")
+    materialization_summary = _text(anchor.get("materialization_summary"))
+    if materialization_summary:
+        lines.append(f"Execution: {materialization_summary}")
     if summary:
         lines.append(summary)
 
@@ -1369,8 +1169,6 @@ def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any
     pool = _text(anchor.get("worker_pool_display")) or _text(anchor.get("worker_pool"))
     summary = _text(anchor.get("summary"))
     model_summary = _text(anchor.get("model_summary"))
-    substrate_summary = _text(anchor.get("substrate_summary"))
-    create_path = _create_path_summary(_text(anchor.get("openclaw_create_preference")), _text(anchor.get("openclaw_create_status")))
 
     fields = [
         {"type": "mrkdwn", "text": f"*State*\n{state}"},
@@ -1390,18 +1188,6 @@ def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any
             "fields": fields[:10],
         },
     ]
-    if substrate_summary or create_path:
-        substrate_bits = []
-        if substrate_summary:
-            substrate_bits.append(f"*Substrate*\n{substrate_summary}")
-        if create_path:
-            substrate_bits.append(f"*Create path*\n{create_path}")
-        blocks.append(
-            {
-                "type": "section",
-                "fields": [{"type": "mrkdwn", "text": item} for item in substrate_bits[:10]],
-            }
-        )
     if summary:
         blocks.append(
             {

@@ -21,9 +21,19 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.worker_taxonomy import resolve_executor, resolve_model_band, resolve_phase, resolve_work_type, resolve_worker_pool
 
 try:
-    from runtime_protocol import normalize_result_status, normalize_worker_result
+    from runtime_protocol import (
+        normalize_capability_bound_failure,
+        normalize_delegated_materialization,
+        normalize_result_status,
+        normalize_worker_result,
+    )
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.runtime_protocol import normalize_result_status, normalize_worker_result
+    from lib.runtime_protocol import (
+        normalize_capability_bound_failure,
+        normalize_delegated_materialization,
+        normalize_result_status,
+        normalize_worker_result,
+    )
 
 try:
     from runtime_coordination import ownership_snapshot, resolve_task_checklist, session_resume_snapshot
@@ -198,6 +208,18 @@ def merge_artifacts(task: dict[str, Any]) -> dict[str, Any]:
         artifacts["context_summary"] = context_summary
     if files_changed:
         artifacts["files_changed"] = files_changed
+    delegated_materialization = normalize_delegated_materialization(
+        task.get("delegated_materialization") if isinstance(task.get("delegated_materialization"), dict) else artifacts.get("delegated_materialization"),
+        lane=_normalized_str(task.get("route")),
+    )
+    if delegated_materialization.get("lane") or delegated_materialization.get("kind"):
+        artifacts["delegated_materialization"] = delegated_materialization
+    capability_failure = normalize_capability_bound_failure(
+        task.get("capability_failure") if isinstance(task.get("capability_failure"), dict) else artifacts.get("capability_failure"),
+        lane=_normalized_str(task.get("route")),
+    )
+    if capability_failure.get("reason"):
+        artifacts["capability_failure"] = capability_failure
     taskflow = _taskflow_binding(task)
     if taskflow:
         artifacts["openclaw_taskflow"] = taskflow
@@ -596,6 +618,20 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["retry_count"] = int(retry_count or 0) if str(retry_count or "").strip() else 0
     normalized["expected_done_at"] = _normalized_str(normalized.get("expected_done_at"))
     artifacts = merge_artifacts(normalized)
+    delegated_materialization = normalize_delegated_materialization(
+        artifacts.get("delegated_materialization") if isinstance(artifacts.get("delegated_materialization"), dict) else normalized.get("delegated_materialization"),
+        lane=normalized["route"],
+    )
+    capability_failure = normalize_capability_bound_failure(
+        artifacts.get("capability_failure") if isinstance(artifacts.get("capability_failure"), dict) else normalized.get("capability_failure"),
+        lane=normalized["route"],
+    )
+    normalized["delegated_materialization"] = delegated_materialization
+    normalized["capability_failure"] = capability_failure
+    if delegated_materialization.get("lane") or delegated_materialization.get("kind"):
+        artifacts["delegated_materialization"] = delegated_materialization
+    if capability_failure.get("reason"):
+        artifacts["capability_failure"] = capability_failure
     worker_result = _existing_worker_result(normalized, artifacts)
     if worker_result is None:
         worker_result = _final_worker_result(normalized, artifacts)

@@ -1,8 +1,8 @@
 # OctoClaw 主设计底稿
 
-> 状态：当前 canonical 设计底稿（2026-04-08，router/model-intel 深化已纳入）
+> 状态：当前 canonical 设计底稿（2026-04-07）  
 > 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
-> 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
@@ -55,9 +55,21 @@ OctoClaw **不是**：
 
 OpenClaw 继续是 runtime substrate，负责：
 
-- detached task / flow 事实层
-- 任务基础生命周期与回到 session 的基线能力
+- detached `tasks + TaskFlow` 事实层
+- owner-scoped task / taskflow 生命周期与回到 session 的基线能力
+- `task_mirrored` / `managed` 两类 TaskFlow substrate，以及其 revision / state / wait / cancel intent 语义
 - node / gateway / extension / tool 接入面
+
+截至 OpenClaw `2026.4.5`，这里更准确的理解不再是“有一层笼统的 tasks/flows”。
+
+更接近的事实是：
+
+- `task` 仍然是 execution unit
+- `TaskFlow` 是 task 之上的 durable parent job
+- `managed TaskFlow` 已经能 first-class 地创建 child task，并用 sticky cancel 语义做父级停机收口
+- 上游还提供了面向 trusted authoring layer 的绑定式 `api.runtime.taskFlow` seam，但并没有把 core 变成 DAG/DSL workflow engine
+
+所以 OctoClaw 后续接的不是一个抽象“flow 概念”，而是一个边界更清楚的 TaskFlow runtime substrate。
 
 ### 4.2 OctoClaw 负责四类增量能力
 
@@ -146,37 +158,12 @@ OctoClaw 当前真正负责的是四层增量：
 - **把 router core 设计成可拆**
 - **把完整 runtime / observer / IM / feedback 继续保留在 OctoClaw 内部**
 
-当前 internal-first baseline 已落地到：
-
-- `lib/auto_router.py`
-- `octoclaw_policy.build_decision().auto_router`
-- route recommendation seam
-- delegated pre-dispatch ack baseline
-
-`2026-04-08` 的 P2.5 closeout 之后，这条线已经进一步收成：
-
-- `route recommendation` / `budget recommendation` / `route outcome` 三个正式 contract
-- delegated lanes 对 recommendation 的实际消费
-- replay / review / curate / summary 的 route outcome 可见性
-- final resolution baseline 对 `health / quota / queue pressure / runner capacity` 的结构化记录
-- extractable readiness baseline + packaging prep baseline
-
-因此现在更准确的表述是：
-
-> **P2.5 baseline 已完成；后续 router 线进入 RM 深化，而不再是“补齐第一拍”。**
-
-P2.5 的正式设计与执行清单见：
-
-- [`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)
-- [`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)
-- [`octoclaw-auto-router-boundary-map.md`](./octoclaw-auto-router-boundary-map.md)
-
-### 4.3 Operator backend 是增强层，不是默认运行面
+### 4.3 Operator backend 是增强层，不是唯一运行面
 
 ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当前代码方向已经很明确：
 
 - ClawTeam 仍有参考价值
-- tmux 仍可作为 operator workbench
+- tmux 仍是推荐 operator workbench
 - 但默认真相源越来越偏向 OpenClaw substrate + OctoClaw 自己的 control/feedback/display surface
 
 这意味着：
@@ -210,22 +197,36 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
    - `before_tool_call`、`delegation_enforcement`、`route_hint_required` 这类低层 switches / hooks 更适合作为 override，而不是让操作者逐个记忆
    - 当前默认 operating mode 更适合落在 `guided`：非 direct 请求默认走 dispatch，但保留必要的降级和观察面
 
----
+### 4.4.1 当前新增主线：Delegated Materialization Plane
 
-## 4.4 运行时角色图（P1 约束）
+随着 `workflow-first / substrate-first` 基线已经成立，当前剩余的系统性风险不再是“route 判不准”，而是：
 
-P1 之后，运行时角色应固定成下面这张表：
+- route 判对了，但 delegated lane 没有稳定 materialize
+- 用户入口与 subagent session boundary 仍可能被污染
+- explanation / anchor / status 有时仍先于 execution fact 发生
 
-| 角色 | 定义 | 是否只读 | 是否主动干预 |
-|---|---|---:|---:|
-| `observer` | 统一 runtime snapshot producer | 是 | 否 |
-| `status` | observer 的文本/表格/anchor 视图 | 是 | 否 |
-| `patrol` | scheduled supervisor / reconciler / notifier | 否 | 是 |
-| `runner` | 轻任务执行 lane | 否 | 是 |
-| `daemon/ondemand` | runner 的 execution mode，而不是新的 lane | n/a | n/a |
-| `ctl` | operator control entrypoint | 否 | 是 |
+所以当前主线需要补上一层明确的 **delegated materialization plane**，它位于：
 
-这张角色图必须在 docs / code / CLI 中保持一致。
+- 上游：`runtime policy route decision`
+- 下游：`runner job / spawn child spec / TaskFlow binding`
+- 侧面：`status / details / retrieve / review / notifier`
+
+这层的职责不是重做 substrate，而是把 delegated lane 收成统一事实：
+
+- `runner` 只允许 materialize 成 `runner_playbook + runner_job_id`
+- `spawn_single / spawn_multi` 只允许 materialize 成 `child spec / task_id / explicit failure`
+- lane capability 不足时，必须产出 `capability_bound_failure`
+- explanation surface 只能消费 materialization + execution facts，不再消费 route label 幻觉
+
+后续收口顺序也应固定为：
+
+1. `Package A`：materialization contract
+2. `Package B`：canonical session boundary
+3. `Package C`：fact-grounded surfaces
+
+也就是说，`I1-I5` 不应被理解成 5 个零散缺陷，而应被理解成：
+
+> **把 route decision 真正收成 execution contract 的一条结构性重构线。**
 
 ---
 
@@ -254,6 +255,19 @@ P1 之后，运行时角色应固定成下面这张表：
 - `tests/test_session_resume.py`
 
 所以现在不能再把“taskflow substrate 接入”“observer 基础层”“resume continuity”写成纯未来事项。
+
+同时也要看到，OpenClaw `2026.4.5` 把上游 substrate 又往前推了一拍：
+
+- TaskFlow 不再只是最小 one-task / linear shell 的表面
+- 上游已经明确区分 `task_mirrored` 与 `managed` 两类 flow sync mode
+- `managed TaskFlow` 已有 revision / opaque state / wait blob / cancel intent
+- child task spawning 与 sticky cancel 已成为 parent-job 语义的一部分
+
+这不会推翻 OctoClaw 当前的第一拍落地，但会直接影响下一阶段的 convergence 目标：
+
+- `spawn_single` / `spawn_multi` 不该只停留在“能看到 native facts”
+- 后续更应该围绕 `managed TaskFlow` 的 owner / cancel / wait / state 语义对齐
+- `mirror-first` 仍然成立，但它现在更明确地是过渡层，而不是长期目标架构
 
 ### 5.2 反馈闭环：已不是概念，已经有 baseline
 
@@ -320,11 +334,6 @@ P1 之后，运行时角色应固定成下面这张表：
 - `tests/test_task_events.py`
 - `tests/test_patrol_notifications.py`
 
-当前 P3/P4 的正式交互与显示 contract 已收口到：
-
-- [`octoclaw-im-display-contract.md`](./octoclaw-im-display-contract.md)
-- [`octoclaw-p3-p4-post-signoff-handoff.md`](./octoclaw-p3-p4-post-signoff-handoff.md)
-
 这意味着旧文档中关于：
 
 - IM-native 展示层
@@ -335,27 +344,6 @@ P1 之后，运行时角色应固定成下面这张表：
 并不是“过时到可以忽略”，而是：
 
 > **很多已经进入基础实现，但还没有完全收口成一份更稳定的产品化描述。**
-
-2026-04-06 之后，这条线已经进一步进入：
-
-- **P3 signoff 已完成**
-- **P4 closeout 已完成**
-
-但这里的 signoff 语义是：
-
-- P3 的 surface ownership / interaction contract 已冻结
-- P4 的 native-preferred posture / cleanup policy / substrate display contract 已冻结
-- 并且这次 closeout 已把以下表面推进到新的稳定状态：
-  - `display = substrate_first`
-  - `retrieve = substrate_first`
-  - `observer = evidenced_substrate_aware`
-  - `review = evidenced_substrate_aware`
-
-这次判断基于 **OpenClaw 2026.4.5** 已发布源码里的 TaskFlow/runtime 语义：
-
-- operator first read = `flow/task target`
-- 然后是 `taskSummary` / `wait` / `blocked` / linked child task health
-- artifacts/report/context 是补充面，不应反向主导 substrate truth
 
 ### 5.4 artifact/retrieve/display surface：已不是未来设想
 
@@ -373,16 +361,6 @@ P1 之后，运行时角色应固定成下面这张表：
 - **CLI / text-first operator surface：已基础可用**
 - **IM anchor / thread / fallback interaction：已基础可用**
 - **Web/UI cockpit / richer capability matrix parity：仍在后续主战场**
-
-P3/P4 signoff 之后，后续主线不应再回头重写 capability matrix。
-
-当前这些 surface 已完成本轮收口：
-
-- `display` 已 substrate-first
-- `retrieve` 已 substrate-first
-- `observer` / `review` 已有明确 substrate-aware surface
-
-后续不再把它们当作未完成例外面，而是把更深的 substrate-only hardening 放到 P5/P6。
 
 ---
 
@@ -411,24 +389,6 @@ runner 不是单纯“长期常驻快腿”，而是：
 > **轻任务执行 lane + 可以常驻也可以 on-demand 的执行器形态。**
 
 这点必须和最近提交对齐，否则会误判很多已完成工作。
-
-### 6.2.1 runtime role map（P1 收口后的统一定义）
-
-为避免后续文档和代码继续混用，P1 统一采用下面这组定义：
-
-- **`runner`**：轻任务执行 **lane**
-- **`daemon|ondemand`**：runner 的 **execution mode**
-- **`observer`**：只读 runtime snapshot producer
-- **`patrol`**：scheduled supervisor / reconciler / notifier
-- **`ctl`**：operator control entrypoint
-- **`status`**：observer 的文本视图，而不是独立世界观
-
-这组定义意味着：
-
-- 不能再把 `runner` 直接等同于常驻进程
-- 不能再把 `observer` 和 `patrol` 当同一个角色
-- 不能再让 `status` 在展示层偷偷修改 runtime 事实
-- 不能再让 `ctl` 维护自己的平行状态心智
 
 ### 6.3 observer 也不是唯一主线
 
@@ -495,67 +455,20 @@ runner 不是单纯“长期常驻快腿”，而是：
 
 > **误判治理首先是 contract-first / boundary-first 的系统工程，不是先上一个更聪明的小模型。**
 
-### 7.2.2 路由应先看 contract / capability / scope，再看 lane
+### 7.2.2 模型测速与健康反馈也应 workflow-first
 
-像最近这批 bad case，表面上看分别是：
+像“测试 MiniMax 和 GLM-5.1 的首 token / 吞吐速度”这类请求，本质上不是普通 research deliverable，
+也不是应该默认上 `spawn_single` 的 agent 任务。
 
-- 测速
-- 查版本
-- 读代码
-- 查状态 / 谁做的 / 有没有 dispatch
-- 切当前 session 模型
+更合理的默认 contract 是：
 
-但更高一层看，它们并不是五个需要各写规则的 case，而是同一个系统问题：
-
-> **当前运行时仍然过于 route-first，而不是先明确 contract、capability 和 scope，再选择 lane。**
-
-更稳定的抽象应是：
-
-1. `contract`
-   - 用户真正要的交付是什么
-   - 例如：`answer_now`、`inspect_report`、`probe_measurement`、`session_control`、`implement`、`review`
-2. `capability`
-   - 当前系统是否真的具备完成这个 contract 的能力
-   - 例如：只读 inspect、外部查询、artifact/report、精确计时、session-local mutation、multi-worker orchestration
-3. `scope`
-   - 这个动作作用在哪一层
-   - 例如：`current-session-only`、`runtime-read-model`、`workflow-local`、`delegated-worker-doable`
-4. `lane`
-   - 在 contract / capability / scope 都明确后，才选择 `direct / runner / spawn_single / spawn_multi / session_control`
-
-这意味着系统不应继续默认：
-
-- 先给 `runner / spawn_single / spawn_multi`
-- 再在执行阶段发现 lane 没能力完成
-- 然后靠主 agent 口头解释、补救或绕路
-
-更合理的原则应是：
-
-- 先判断 contract
-- 再检查当前可用 lane 的 capability feasibility
-- 最后从可行 lane 里选延迟 / token / 交互成本最优的那个
-
-若当前根本没有满足该 contract 的能力，系统应直接返回 capability-bound explanation，
-而不是误派、误答、误解释。
-
-测速只是这个框架下的一个例子：
-
-- contract：`probe_measurement`
-- scope：通常不是 `current-session-only`
-- 关键 capability：精确计时、稳定 probe、统一结果格式
-
-因此“测试 MiniMax 和 GLM-5.1 的首 token / 吞吐速度”这类请求，不该再被理解成一个单独特例，
-而应被看作 `probe_measurement` contract 的一个实例。
-
-当前更准确的产品语义应是：
-
-- 默认先走 `runner + inspect_report`
-- 读取本地 `model-speed / model-health / model-benchmarks`
-- 若用户明确要求实测，再升级到专门 benchmark workflow
-- 若 live benchmark workflow 尚不存在，系统应诚实说明“当前只有 snapshot，没有 live benchmark”，而不是把 generic subagent 说成天然做不到
+- `runner`
+- `inspect_report`
+- 读取本地 telemetry / health snapshot
+- 必要时再升级到更重的 benchmark workflow
 
 同样，主会话 fallback 中真实发生过的 `timeout / auth / failover` 也不应只留在 OpenClaw 日志里。
-它们应以受控、stale-gated 的方式回灌到 OctoClaw `model-health`，帮助后续 capability-aware lane selection 避开已知坏链路。
+它们应以受控、stale-gated 的方式回灌到 OctoClaw `model-health`，帮助后续 lane-local model selection 避开已知坏链路。
 
 这条反馈线的约束也必须和现有设计保持一致：
 
@@ -583,127 +496,74 @@ runner 不是单纯“长期常驻快腿”，而是：
 - direct path slow replies
 - delegation explanation risk
 
-### 7.2.4 当前主要风险不是“设计思想错了”，而是运行时偏离了既有设计
-
-最近一批 bad case 暴露出来的核心问题，更像是运行时 drift，而不是设计方向本身错误：
-
-- `hard_runner_only` / protected lanes 在持续加硬
-- 但 `route_hint`、sticky lane、follow-up continuity 没有同样收稳
-- `runner` 有时只是 route label，没有真正变成稳定 workflow
-- entry-level ack 仍然没有完全独立于 dispatch hot path
-- 主会话解释层有时会脱离真实 policy / snapshot，自行脑补 route 和状态
-
-因此当前不应把问题简单归因为：
-
-- `workflow-first` 错了
-- `policy-first` 错了
-- 应该回退到“主 agent 每轮完全自由裁决”
-
-更准确的判断是：
-
-> **设计方向是对的，但当前实现没有真正跑在“硬边界少而硬 + continuity 稳定 + 灰区 route hint / judge”这套设计上。**
-
-这也解释了为什么早期只靠 `SKILL.md / AGENTS.md` 注入的体验，体感上可能更顺：
-
-- 行为更简单
-- 入口更一致
-- 先应答再执行更容易做到
-
-但那种顺滑主要来自“简单一致”，不是因为它更适合作为长期的 runtime truth / feedback / substrate 收口方案。
-
-因此更系统的修法不是回退到“让主 agent 每轮自由判断”，而是把既有设计补完整：
-
-1. 保持极窄的系统硬边界
-   - `hard_runner_only`
-   - protected lanes
-2. 恢复 follow-up continuity
-   - sticky lane / active workflow continuity
-3. 把 `runner` 真正收成 workflow harness
-   - 不再只是 route label
-4. 保留灰区裁决
-   - `route_hint`
-   - 或后续 tiny judge
-5. 让执行层、解释层、nightly review 围绕同一份 policy/snapshot truth
-
-换句话说：
-
-> **系统性修复的重点应是“恢复 continuity 与 workflow realization”，而不是继续堆更多零散规则。**
-
-这里还需要明确一条执行边界：
-
-- 主 agent **可以**纠偏 `system_preferred_route`
-- 但纠偏方式应是提交结构化 `route_hint`
-- 主 agent **不应**在执行阶段直接绕过 runtime enforcement，自己把 `runner / spawn_single / spawn_multi` 临时改成 `direct`
-
-也就是说：
-
-> **主 agent 应有“灰区纠偏权”，但不应有“执行层绕路权”。**
-
-这条边界尤其适用于：
-
-- `spawn_single / spawn_multi` 在灰区被误判
-- 但主 agent 能基于 capability / continuity / session-local 约束判断 delegated path 并不合适
-
-正确做法应是：
-
-1. 系统先给出 `system_preferred_route`
-2. 主 agent 仅在非 hard gate 灰区给出 `route_hint + reason`
-3. runtime merge 后再执行最终 lane
-4. replay / nightly 记录 route drift 与 override reason
-
-而不是：
-
-- 先判成 `runner` / `spawn_single`
-- 再由主 agent 偷偷直接调用通用工具
-- 事后再口头解释说“我觉得 direct 更好”
-
-### 7.2.5 主 agent 的洞察应被提升成 capability-aware routing，而不是更大自由裁决
-
-最近聊天里，主 agent 有几类观察其实方向是对的：
-
-- 有些操作是 `current-session-only`
-- 有些失败不是“router 错了”，而是 capability 缺失
-- 不能把每一轮都重新交给主 agent 重判，否则会伤速度和 token
-
-这些洞察值得保留，但不应继续停留在：
-
-- “主 agent 能不能做”
-- “子 agent 能不能做”
-- “规则和自由谁更重要”
-
-更稳的提升方式是把它们收进 `contract / capability / scope / lane`：
-
-- 改当前 session 模型
-  - `contract = session_control`
-  - `scope = current-session-only`
-  - 只有 session-control lane 可行
-- 查状态 / 谁做的 / 有没有 dispatch
-  - `contract = control_observer`
-  - `scope = runtime-read-model`
-  - 应走 protected lane，而不是 generic delegated lane
-- 查版本 / 发布 / 新特性
-  - `contract = inspect_report`
-  - 关键 capability 是外部只读查询与快速收口
-  - 更适合 `runner`
-- 读代码并给结论
-  - `contract = inspect_report`
-  - 是否 direct / runner 取决于 bounded inspect capability、预估代码面和延迟预算
-- 实测 TTFT / throughput
-  - `contract = probe_measurement`
-  - 需要 measurement capability；若该 capability 不存在，就不该硬派 generic subagent
-
-因此后续不应再围绕“是否给主 agent 更多自由”讨论，而应围绕：
-
-- 当前请求是什么 contract
-- 哪些 capability 真正存在
-- scope 是否允许 delegated worker 执行
-- 在可行 lane 里哪个成本最低、体验最好
-
-这样既能保留主 agent 在灰区的语义优势，又不会退回到“每轮都让主 agent 自由裁决”的旧路径。
-
 ### 7.3 substrate-first truth
 
 执行事实尽量绑定 OpenClaw substrate，OctoClaw 在其上叠加策略语义、反馈语义和展示语义。
+
+### 7.3.1 session boundary hardening 不违背既有设计，反而是在补 substrate truth
+
+最近在线 bad case 暴露出来的，不是 `workflow-first` 或 `policy-first` 本身错了，
+而是 **用户入口 session / 子任务 session / materialized execution** 之间的边界还不够硬。
+
+更准确地说，当前最危险的偏差不是“router 判错”，而是：
+
+- 顶层 `route` 已经判对
+- 但用户消息可能落进 `octoclaw-subagent-*` 这类子会话
+- 或者 delegated lane 在执行期被 freeform 二跳 prompt 洗掉原始 contract
+- 最后用户看到的是：
+  - 没有真实 task/materialization
+  - 没有一致的 ack / anchor / status
+  - assistant 还会再用旧经验口径解释成“spawn 没通”或“exec 被拦”
+
+这类问题不应被理解成“要给主 agent 更多执行期自由度”，而应被理解成：
+
+- session boundary 还不够 substrate-first
+- execution contract 还没有被固定 materialize
+- explanation layer 还没有完全绑定 execution facts
+
+因此，接下来的整改重点不应再是继续增加 route case，而应是：
+
+- 把用户入口明确绑定到 canonical main session
+- 把 `octoclaw-subagent-*` 明确成非用户可寻址的内部 session class
+- 把 `runner / spawn_single / spawn_multi` 的执行收成固定 materialization contract
+- 把“无能力时如何失败”显式化，而不是让 assistant 自己脑补
+
+这条线和既有设计是一致的，因为它本质上仍然是在强化：
+
+- `workflow-first, agent-second`
+- `policy-first`
+- `substrate-first truth`
+
+而不是回到“主 agent 自己看着办”的 prompt-first 模式。
+
+### 7.3.2 route 正确还不够，必须 materialize 成固定 execution contract
+
+最近的 bad case 说明，仅仅把顶层请求判成 `runner` 或 `spawn_single` 还不够。
+
+如果后续还能发生：
+
+- 主 agent 自己重写子任务 prompt
+- delegated lane 再次被二跳重路由
+- `executed=false` 却没有明确失败面
+
+那么系统表面上看像是“有 routing”，实际上仍然没有稳定 workflow。
+
+因此需要明确一个新的原则：
+
+> **OctoClaw 不只负责 route selection，还必须把 selected route materialize 成固定 execution contract。**
+
+也就是说：
+
+- `runner` 不是建议标签，而是固定 workflow / playbook
+- `spawn_single` 不是“让主 agent 随便写一段 task 文本”，而是固定 child-task contract
+- `spawn_multi` 也必须遵守同样的 materialization 规则
+- 没有 materialize 成 `task_id / runner job / explicit failure` 之前，系统不能声称“已经派出去了”
+
+这样做不是把系统变重，而是在减少三类长期漂移：
+
+- route 与实际执行不一致
+- 状态面与 execution truth 不一致
+- explanation 与 replay / snapshot facts 不一致
 
 ### 7.4 artifact-first，event-first，state-first
 
@@ -720,30 +580,6 @@ runner 不是单纯“长期常驻快腿”，而是：
 - rollout promotion heuristics
 
 这些能力已经存在，后续设计应围绕“怎么统一和深化”而不是“有没有必要做”。
-
-### 7.5.1 统一 feedback loop phase model
-
-P2 收口后，反馈闭环默认采用这条主链：
-
-```text
-observe -> summarize -> review -> curate -> validate -> promote -> learn
-```
-
-其中：
-
-- `replay_summary` 属于 summarize
-- `replay_review` / `reply_review_packet` 属于 review
-- `replay_curate` 属于 curate
-- `replay_validation` / `eval_fixture_export` 属于 validate
-- `runtime_policy_rollout` 属于 promote
-- `learning_log` / `nightly_error_review` 属于 learn
-
-关键约束：
-
-- promotion 不能直接吃原始 replay 噪音
-- validate 是进入 promote 的门槛
-- learn 和 promote 分层，不变成自动改策略黑箱
-- nightly 产物要能通过统一 manifest 串起来
 
 ### 7.6 IM-native but surface-adaptive
 
@@ -865,33 +701,6 @@ P5F 的 canonical artifact 现在应以两份文档为准：
 - `docs/octoclaw-harness-ownership-map.md`
 - `docs/octoclaw-harness-contract-inventory.md`
 
-### 7.9 Completion relay and observer snapshot should replace ad-hoc status guessing
-
-P4/P5 进入当前阶段后，OctoClaw 不再适合继续把 `patrol` 或主 agent 的经验性判断当成任务状态入口。
-
-更稳的职责边界应当是：
-
-- OpenClaw native task / managed TaskFlow = execution truth
-- `task-state` = OctoClaw projection / metadata store
-- `task-events` = transition log and delivery hints
-- `runtime_snapshot` + `observe_runtime_read_model` = unified read model
-- completion relay = task 完成后立即把 projection / event / notifier 串起来
-- `patrol` = detect / reconcile / retry，退出关键路径
-
-这意味着：
-
-- 不是再新造一套 snapshot 层，而是把现有 `runtime_snapshot.py` / `observe_runtime_read_model` 扶正成唯一读面
-- 任务 `running / done / blocked / failed / handoff_ready` 的展示与解释，要优先相信 native/projection/event 合成后的 read-model
-- 主 agent 在回答 “queued 了吗 / 跑了没 / 完成没 / 谁做的” 这类问题时，必须 grounding 到该 read-model，而不是沿用历史话术
-- 这类 protected-lane 问题的最佳实现不是“提醒 agent 自己先查”，而是由 runtime 在 `before_prompt_build` 里自动预取最小 state grounding packet，再注入 prompt
-- 若同一 turn 刚成功触发 delegated dispatch/spawn，runtime 应把该 `task_id` 写入当前 turn state，并在下一次 protected-lane grounding 中优先绑定这条 freshly-dispatched task，而不是退回“最近任务”猜测
-
-非目标：
-
-- 不把 `tmux` / runner / workbench 重新拉回状态真相源
-- 不让 `patrol` 重新承担首次 completion 收口
-- 不发明一套与现有 `runtime_snapshot` 平行的 observer 子系统
-
 ---
 
 ## 8. 当前仍存在的关键张力
@@ -953,6 +762,68 @@ P5 更准确的定义应是：
 - **runtime hot path 优先 Node.js / JS**
 - **Python 更偏 offline analysis / nightly / calibration / compatibility glue**
 
+### 8.5A Completion relay and observer snapshot should replace ad-hoc status guessing
+
+最近的坏例子说明，系统现在最不稳的地方之一，不再是“能不能把子任务跑起来”，而是：
+
+- native / managed substrate 已经产生了真实执行事实
+- `task-state.json`、`task-events.jsonl`、notifier、patrol 仍在以不同节奏传播这些事实
+- 主会话回答 `queued / running / done / 谁做的 / 有没有走 dispatch` 时，仍可能直接复用旧话术，而不是先查 authoritative state
+
+所以这条线的正确收口，不是再给 patrol 增加更多推理，而是把职责明确成：
+
+```text
+OpenClaw native task / managed TaskFlow
+  -> execution truth
+
+OctoClaw completion relay
+  -> completion / result / handoff immediate propagation
+
+OctoClaw observer snapshot
+  -> unified read-model truth for status/details/retrieve/review and protected-lane answers
+
+OctoClaw patrol
+  -> detect / reconcile / notify retry / bounded recovery
+
+Optional execution backend
+  -> runner / tmux / workbench
+  -> never the primary status truth
+```
+
+也就是说：
+
+- `task-state.json` 更适合被理解为 **projection / policy metadata / operator surface cache**
+- `task-events.jsonl` 更适合被理解为 **event log**
+- `managed TaskFlow` / native task facts 才应逐步成为 **第一真相源**
+- patrol 不应再站在关键路径上承担“首次完成收口”或“主状态合成”
+
+这条线的产品原则必须更硬：
+
+1. **native substrate facts first**
+   - 如果 native task / flow 已经显示 `running` 或 `done`，主会话和展示层不允许继续说 `queued`
+2. **completion relay on the critical path**
+   - worker/native finalize 一旦拿到标准化 result，就应立即：
+     - persist projection
+     - append completion/result/handoff events
+     - trigger notifier / IM thread update
+   - patrol 只在 relay 失败时承担 retry / reconcile
+3. **observer snapshot as the only read model**
+   - `status / details / queue / retrieve / review / protected-lane state questions`
+     都应先读同一份 snapshot
+   - 不允许 display / patrol / assistant explanation 再各自猜一套状态
+4. **protected-lane answers must be state-grounded**
+   - 像“还在 queued 吗”“刚才是不是子任务做的”“有没有走 dispatch”“现在什么模型”
+     这类问题，主会话必须先查 snapshot，再组织语言
+
+这条设计不偏离现有主线，反而是在把：
+
+- `substrate-first`
+- `workflow-first, agent-second`
+- `observer as read-model producer`
+- `patrol as detect / reconcile / notify`
+
+这几条已经写进 plan 的原则，变成更可执行的系统约束。
+
 如果 P5 做对，最终系统心智应变成：
 
 ```text
@@ -977,78 +848,6 @@ Optional heavy backends
 ```
 
 也就是说，P5 不该再创造一套新 runtime，而是要把当前 transition state 继续压缩掉。
-
-### 8.6 P6 之后不再开新大题，而是进入 transition cleanup
-
-截至 `2026-04-08`：
-
-- `P4` baseline 已完成
-- `P5` baseline 已完成
-- `P6` baseline 已完成
-- macmini 上的 `runner / spawn_single / observer / patrol` 实机验收已通过
-
-所以后续主线不再是继续扩 P4/P5/P6，而是：
-
-1. **先做 transition state 清理**
-2. **再做 router / model-intel 深化**
-
-这条深化线的 focused design 见：
-
-- [`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
-
-这阶段的 focused design 见：
-
-- [`octoclaw-transition-cleanup-design.md`](./octoclaw-transition-cleanup-design.md)
-
-其中第一轮 transition cleanup 已在 `2026-04-08` 完成：
-
-- durable policy state
-- substrate-only read path tightening
-- legacy mirror / fallback shrink
-- optional backend true detach
-
-所以当前更准确的下一步已经变成：
-
-1. `router / model-intel` 深化
-2. 仅在真实验收发现缺口时继续做更深的 substrate-only hardening
-
-### 8.7 router / model-intel 深化的目标
-
-这一段的目的不是“把 OctoClaw 变成另一个 OmniRoute”，而是把 `P2.5 internal-first seam` 做成真正可长期演进的子系统。
-
-核心要收的不是 feature，而是三层：
-
-1. **Model-Intel Facts Plane**
-   - source-attributed catalog
-   - pricing / capability / limit / freshness / status
-   - health / cooldown / quota observation
-2. **Router Recommendation Plane**
-   - route + budget 联合 recommendation
-   - lane-local consumption contract
-   - regression / integration test
-3. **Feedback Calibration Plane**
-   - replay-driven eval
-   - compatibility test
-   - recommendation drift diagnostics
-
-P2.5 closeout 完成后，router/model-intel 主线的下一步已经固定为：
-
-1. `RM1/RM2`：facts plane / recommendation hardening
-2. `RM3`：validation / rollout / calibration plane 深化
-3. `RM4` 之后只继续做 extractable readiness / packaging，不提前拆 runtime adapter
-
-后续继续深化时，外部参考的吸收边界也应固定：
-
-- 借 `models.dev` 的 **schema-first / source-attributed / generated artifact**
-- 借 OmniRoute 的 **外部 sync 分层、non-blocking sync、stale-if-error cache、统一 catalog builder**
-- 不照搬 OmniRoute 的 combo/provider gateway 主心智
-
-实施原则继续保持：
-
-- runtime hot path 优先 Node.js / JS
-- Python 继续偏 replay / eval / calibration / compatibility glue
-- 不在这一步急着拆独立 router 仓库
-- 不在这一步重做整个 runtime / cockpit
 
 ---
 
@@ -1094,29 +893,7 @@ OctoClaw IM / display adaptation layer
 Optional operator backend
   -> tmux workbench
   -> ClawTeam / heavier swarm runtime
-  -> resident runner / programmatic execution helpers
-
----
-
-## 10.1 P6 的设计意图
-
-P6 不是“删除 tmux / ClawTeam / runner-daemon”，而是：
-
-- 让默认路径的核心价值来自 substrate + policy + observer + feedback + display
-- 让 heavy backend 只在显式启用时出现
-- 让 operator surface 只把 backend 当 secondary hint，而不当 primary identity
-
-P6 关单后，系统应默认呈现为：
-
-- `runner lane`
-- `spawn lane`
-- `observer/control surfaces`
-
-只有在显式启用 tmux / ClawTeam / resident runner 时，才暴露：
-
-- optional workbench
-- optional validation bridge
-- optional acceleration backend
+  -> programmatic execution helpers
 ```
 
 这比我上一次写的版本更接近当前代码现实。

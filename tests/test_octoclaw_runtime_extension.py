@@ -126,6 +126,53 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload[0], "agent:main:slack:channel:C123:thread:1712345.000100")
         self.assertEqual(payload[1], "sess-generic-1")
 
+    def test_detect_session_boundary_prefers_canonical_user_session(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.detectSessionBoundary({
+                sessionKey: "slack:direct:U123",
+                sessionId: "octoclaw-subagent-research-1",
+                agentId: "octoclaw-subagent-research-1"
+            })"""
+        )
+
+        self.assertEqual(payload["status"], "contaminated_subagent_identity")
+        self.assertEqual(payload["canonicalSessionKey"], "slack:direct:U123")
+
+    def test_policy_state_persists_to_workspace_ledger(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-policy-ledger-") as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "tmp").mkdir(parents=True)
+            payload = run_runtime_helper(
+                """(async () => {
+                    const fs = await import("node:fs");
+                    __octoclawTest.__resetPolicyState();
+                    __octoclawTest.__setPolicyState(
+                      { sessionKey: "slack:direct:U999", sessionId: "octoclaw-subagent-1" },
+                      {
+                        prompt: "帮我查下 openclaw 新版本",
+                        decision: { route_decision: { route: "runner" } },
+                        createdAt: Date.now(),
+                        updatedAt: Date.now()
+                      }
+                    );
+                    const ledgerPath = __octoclawTest.resolvePolicyStateLedgerPath();
+                    const raw = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
+                    return {
+                      exists: fs.existsSync(ledgerPath),
+                      keys: Object.keys(raw.sessions || {})
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                },
+            )
+
+            self.assertTrue(payload["exists"])
+            self.assertIn("slack:direct:U999", payload["keys"])
+
     def test_managed_context_accepts_prefixed_slack_main_session(self) -> None:
         payload = run_runtime_helper(
             """({
@@ -205,100 +252,6 @@ Conversation info (untrusted metadata):
         self.assertIn("octoclaw_policy_decide", payload)
         self.assertIn("octoclaw_status", payload)
         self.assertIn("octoclaw_task_action", payload)
-
-    def test_grounded_policy_prompt_includes_authoritative_state_packet(self) -> None:
-        payload = run_runtime_helper(
-            """__octoclawTest.groundedPolicyPrompt(
-                {
-                  route_decision: { route: "runner", system_preferred_route: "runner", worker_pool: "octoclaw-runner", work_type: "research", phase: "investigate", protocol: "normal" },
-                  review_policy: { required: false },
-                  route_hint_policy: {},
-                  skill_policy: {},
-                  tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"] },
-                  prompt_contract: {}
-                },
-                {
-                  prompt_context: "[OctoClaw state grounding]\\ntask_id=research-123\\ndisplay_status=running\\nroute=runner"
-                }
-            )"""
-        )
-
-        self.assertIn("These route and policy facts are authoritative for this turn.", payload)
-        self.assertIn("[OctoClaw state grounding]", payload)
-        self.assertIn("task_id=research-123", payload)
-
-    def test_current_task_id_from_payload_prefers_job_id(self) -> None:
-        payload = run_runtime_helper(
-            """({
-              fromJob: __octoclawTest.currentTaskIdFromPayload({ job: { id: "research-123" }, task_id: "runner-999" }),
-              fromTask: __octoclawTest.currentTaskIdFromPayload({ task_id: "runner-999" })
-            })"""
-        )
-
-        self.assertEqual(payload["fromJob"], "research-123")
-        self.assertEqual(payload["fromTask"], "runner-999")
-
-    def test_dispatch_execution_contract_locks_to_current_delegated_prompt(self) -> None:
-        payload = run_runtime_helper(
-            """(() => {
-                const ctx = {
-                  sessionKey: "agent:main:slack:direct:u777",
-                  sessionId: "sess-dispatch-lock",
-                  trigger: "message"
-                };
-                __octoclawTest.__resetPolicyState?.();
-                const now = Date.now();
-                __octoclawTest.__setPolicyState?.(ctx, {
-                  prompt: "帮我测下 glm 5.1 和 minimax m2.7 首token速度和吞吐速度",
-                  decision: {
-                    request: { session_key: "agent:main:slack:direct:u777" },
-                    route_decision: { route: "runner", worker_pool: "octoclaw-runner" }
-                  },
-                  createdAt: now,
-                  updatedAt: now
-                });
-                return __octoclawTest.resolveDispatchExecutionContract(ctx, {
-                  task: "执行 echo \\\"speed_test_$(date +%s)\\\" 返回结果。",
-                  forceRoute: "runner"
-                });
-            })()"""
-        )
-
-        self.assertTrue(payload["contractLocked"])
-        self.assertTrue(payload["taskOverrideIgnored"])
-        self.assertEqual(payload["canonicalTask"], "帮我测下 glm 5.1 和 minimax m2.7 首token速度和吞吐速度")
-        self.assertEqual(payload["canonicalRoute"], "runner")
-
-    def test_spawn_execution_contract_locks_to_current_spawn_prompt(self) -> None:
-        payload = run_runtime_helper(
-            """(() => {
-                const ctx = {
-                  sessionKey: "agent:main:slack:direct:u778",
-                  sessionId: "sess-spawn-lock",
-                  trigger: "message"
-                };
-                __octoclawTest.__resetPolicyState?.();
-                const now = Date.now();
-                __octoclawTest.__setPolicyState?.(ctx, {
-                  prompt: "再试下 spawn可以了吗",
-                  decision: {
-                    request: { session_key: "agent:main:slack:direct:u778" },
-                    route_decision: { route: "spawn_single", worker_pool: "octoclaw-research" }
-                  },
-                  createdAt: now,
-                  updatedAt: now
-                });
-                return __octoclawTest.resolveSpawnExecutionContract(ctx, {
-                  task: "执行 date 返回结果。",
-                  route: "spawn_single"
-                });
-            })()"""
-        )
-
-        self.assertTrue(payload["contractLocked"])
-        self.assertTrue(payload["taskOverrideIgnored"])
-        self.assertEqual(payload["canonicalTask"], "再试下 spawn可以了吗")
-        self.assertEqual(payload["canonicalRoute"], "spawn_single")
 
     def test_tool_context_can_recover_policy_state_by_prompt_when_ctx_has_no_session(self) -> None:
         payload = run_runtime_helper(
@@ -615,44 +568,6 @@ Conversation info (untrusted metadata):
 
         self.assertEqual(payload["route"], "direct")
         self.assertFalse(payload["ack"]["required"])
-        self.assertFalse(payload["shouldSend"])
-
-    def test_entry_ack_helper_enables_slow_direct_tool_runs(self) -> None:
-        payload = run_runtime_helper(
-            """(() => {
-                const decision = {
-                  route_decision: {
-                    route: "direct",
-                    work_type: "code"
-                  }
-                };
-                return {
-                  text: __octoclawTest.entryAckText(decision, "Read"),
-                  shouldSend: __octoclawTest.shouldSendEntryAck(decision, {}, { trigger: "message" }, "Read")
-                };
-            })()"""
-        )
-
-        self.assertIn("看一下", payload["text"])
-        self.assertTrue(payload["shouldSend"])
-
-    def test_entry_ack_helper_skips_control_tools_for_direct_routes(self) -> None:
-        payload = run_runtime_helper(
-            """(() => {
-                const decision = {
-                  route_decision: {
-                    route: "direct",
-                    work_type: "code"
-                  }
-                };
-                return {
-                  text: __octoclawTest.entryAckText(decision, "octoclaw_status"),
-                  shouldSend: __octoclawTest.shouldSendEntryAck(decision, {}, { trigger: "message" }, "octoclaw_status")
-                };
-            })()"""
-        )
-
-        self.assertEqual(payload["text"], "")
         self.assertFalse(payload["shouldSend"])
 
     def test_pre_dispatch_ack_falls_back_to_progress_update(self) -> None:
