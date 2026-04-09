@@ -401,7 +401,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["tool_policy"]["control_observer_only"])
         self.assertEqual(
             payload["tool_policy"]["observer_control_tools"],
-            ["octoclaw_policy_decide", "octoclaw_route_hint", "octoclaw_status", "octoclaw_task_action"],
+            ["octoclaw_policy_decide", "octoclaw_route_hint", "octoclaw_status", "octoclaw_task_action", "session_status"],
         )
 
     def test_session_control_request_prefers_direct_protected_lane(self) -> None:

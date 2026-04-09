@@ -868,6 +868,7 @@ def tool_policy(route: str, dispatch_required: bool, task_class: str = "") -> di
         "octoclaw_route_hint",
         "octoclaw_status",
         "octoclaw_task_action",
+        "session_status",
     ]
     session_control_tools = [
         "octoclaw_policy_decide",

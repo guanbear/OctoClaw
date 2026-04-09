@@ -746,6 +746,7 @@ function toolPolicy(route, dispatchRequired, taskClass = "") {
     "octoclaw_route_hint",
     "octoclaw_status",
     "octoclaw_task_action",
+    "session_status",
   ];
   const sessionControlTools = [
     "octoclaw_policy_decide",

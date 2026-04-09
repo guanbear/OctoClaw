@@ -528,7 +528,7 @@ OBSERVER_CONTROL_PATTERNS = {
 
 TASK_PROGRESS_PATTERNS = {
     "zh": (
-        r"(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗|还在\s*queued\s*吗|还在排队吗|跑了没|跑起来了吗|完成了没)",
+        r"(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗|(?:single|spawn|runner)\s*成功了吗|还在\s*queued\s*吗|还在排队吗|跑了没|跑起来了吗|完成了没)",
     ),
     "en": (
         r"\b(is it done|done yet|finished yet|still running|any progress|task status|task progress|what(?:'s| is) the status|how(?:'s| is) it going|where are we at)\b",
@@ -543,7 +543,7 @@ WORKFLOW_META_PATTERNS = {
         r"(刚才(那次|这个)?(查询|问题|任务)?是子任务做的吗|刚才(那次|这个)?(查询|问题|任务)?是不是子任务做的|是不是子任务做的|是不是主会话自己查的|是不是主agent自己查的)",
         r"(你是怎么查的|咋查的|如何查的|用什么查的|怎么查到的)",
         r"(刚才那个任务那个判定是啥|刚才那个任务判定是啥|刚才任务那个判定是啥|不是\s*runner\s*吗|是不是\s*runner|是不是\s*spawn_single|是不是\s*single)",
-        r"(刚才(single|spawn|runner)成功了吗|刚才那个(single|spawn|runner)成功了吗|那个single怎么样了|那个任务怎么样了|还在queued吗|还在排队吗)",
+        r"(刚才\s*(single|spawn|runner)\s*成功了吗|刚才那个\s*(single|spawn|runner)\s*成功了吗|那个\s*single怎么样了|那个任务怎么样了|还在\s*queued\s*吗|还在排队吗)",
         r"(谁查的|谁做的|谁回的|是谁处理的|谁执行的|啥模型做的|什么模型做的|是谁用什么模型做的)",
         r"(有没有走\s*(dispatch|路由|router)|走了\s*(dispatch|路由|router)\s*吗|有没有走\s*octoclaw_dispatch|判定了\s*direct\s*吗|是不是\s*direct|是不是走了\s*direct|是不是委派了|有没有委派)",
     ),

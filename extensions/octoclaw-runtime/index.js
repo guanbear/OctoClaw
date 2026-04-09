@@ -1061,6 +1061,7 @@ function observerControlTools(decision, routeHintTool) {
   allowed.add("octoclaw_policy_decide");
   allowed.add("octoclaw_status");
   allowed.add("octoclaw_task_action");
+  allowed.add("session_status");
   return allowed;
 }
 

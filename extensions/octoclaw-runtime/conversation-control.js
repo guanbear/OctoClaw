@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 const META_PROMPT_PATTERNS = [
   /(你是怎么查的|咋查的|如何查的|怎么查到的|用什么查的)/iu,
   /(刚才那个任务.*判定是啥|刚才.*不是\s*runner|是不是\s*runner|是不是\s*spawn_single|是不是\s*single)/iu,
-  /(刚才.*single成功了吗|spawn成功了吗|runner成功了吗|那个single怎么样了|那个任务怎么样了)/iu,
+  /(刚才.*(?:single|spawn|runner)\s*成功了吗|(?:single|spawn|runner)\s*成功了吗|那个\s*(?:single|spawn|runner)怎么样了|那个任务怎么样了)/iu,
   /\b(how did you check|how was this checked|was this runner|was this spawn(?:_single)?|did the single succeed)\b/iu,
 ];
 
@@ -13,11 +13,17 @@ const PROVENANCE_PROMPT_PATTERNS = [
 ];
 
 const TASK_PROGRESS_PROMPT_PATTERNS = [
-  /(single成功了吗|spawn成功了吗|runner成功了吗|任务怎样了|任务怎么样了|现在什么状态|还在queued吗|还在排队吗)/iu,
+  /((?:single|spawn|runner)\s*成功了吗|任务怎样了|任务怎么样了|现在什么状态|还在\s*queued\s*吗|还在排队吗)/iu,
   /\b(single succeeded|spawn succeeded|runner succeeded|task status|still queued|still running)\b/iu,
 ];
 
 const SHORT_EXECUTION_FOLLOWUP_SHAPE_RE = /([?？]|吗|么|啥|谁|哪|怎么|如何|状态|进度|成功|完成|判定|查的|做的|处理的|执行的)/iu;
+const EXECUTION_REFERENCE_PATTERNS = [
+  /(刚才|刚刚|上次|上一条|上一个|前一个|这次|那次).{0,12}(任务|查询|问题|single|spawn|runner|结果|状态|进度|判定|路由|dispatch)/iu,
+  /((这个|那个).{0,8}(任务|查询|single|spawn|runner|结果|状态|进度|判定)|才那个任务)/iu,
+  /((它|这事|那事).{0,8}(怎么样|状态|进度|成功|完成))/iu,
+  /\b(this|that|previous|last)\b.{0,12}\b(task|lookup|query|run|result|status|progress|route|dispatch)\b/iu,
+];
 
 const OPERATOR_SURFACE_REGISTRY = [
   {
@@ -270,7 +276,11 @@ function looksLikeShortExecutionFollowup(prompt = "", subjectTurn = null) {
       || (facts.directTools || []).length > 0
       || String(subjectTurn?.route || "").trim(),
   );
-  return hasRecentExecutionContext && SHORT_EXECUTION_FOLLOWUP_SHAPE_RE.test(text);
+  return (
+    hasRecentExecutionContext
+    && SHORT_EXECUTION_FOLLOWUP_SHAPE_RE.test(text)
+    && EXECUTION_REFERENCE_PATTERNS.some((pattern) => pattern.test(text))
+  );
 }
 
 export function buildConversationControlHints({

@@ -628,6 +628,7 @@ Sender (untrusted metadata):
         self.assertTrue(payload["controlOnly"])
         self.assertIn("octoclaw_status", payload["tools"])
         self.assertIn("octoclaw_task_action", payload["tools"])
+        self.assertIn("session_status", payload["tools"])
         self.assertNotIn("exec", payload["tools"])
         self.assertNotIn("octoclaw_dispatch", payload["tools"])
 
@@ -1052,6 +1053,93 @@ Sender (untrusted metadata):
             self.assertEqual(payload["route"], "direct")
             self.assertEqual(payload["taskClass"], "control_observer")
             self.assertEqual(payload["protectedLane"], "control_observer")
+
+    def test_fresh_update_lookup_is_not_reclassified_as_task_followup(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-followup-boundary-") as tmpdir:
+            workspace = Path(tmpdir)
+            replay_path = workspace / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
+            replay_path.parent.mkdir(parents=True, exist_ok=True)
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-09T14:55:02.606Z",
+                                "sessionKey": "agent:main:slack:direct:u-fresh",
+                                "sessionId": "sess-fresh",
+                                "trigger": "user",
+                                "route": "spawn_single",
+                                "taskClass": "focused_research",
+                                "protectedLane": "",
+                                "prompt": "调研 OpenClaw 最近 release 和 Memory 改动，给我 5 句话总结",
+                            },
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "dispatch_called",
+                                "at": "2026-04-09T14:55:03.100Z",
+                                "sessionKey": "agent:main:slack:direct:u-fresh",
+                                "sessionId": "sess-fresh",
+                                "route": "spawn_single",
+                                "executed": True,
+                                "taskId": "research-20260409121206076161",
+                                "materialization": {
+                                    "status": "materialized",
+                                    "kind": "spawn_child_task",
+                                    "task_id": "research-20260409121206076161",
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            payload = run_runtime_helper(
+                """(async () => {
+                    const hints = __octoclawTest.__conversationControlTest.buildConversationControlHints({
+                      prompt: "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
+                      replayLogPath: __octoclawTest.resolveReplayLogPath(),
+                      taskStatePath: __octoclawTest.resolveTaskStatePath(),
+                      sessionKeys: ["agent:main:slack:direct:u-fresh"]
+                    });
+                    const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                      "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
+                      {
+                        sessionKey: "agent:main:slack:direct:u-fresh",
+                        sessionId: "sess-fresh",
+                        trigger: "message",
+                        agentId: "agent:main:main"
+                      },
+                      process.cwd(),
+                      null
+                    );
+                    return {
+                      hints,
+                      route: resolved?.decision?.route_decision?.route || "",
+                      taskClass: resolved?.decision?.route_decision?.task_class || "",
+                      preDispatchAckRequired: Boolean(resolved?.decision?.pre_dispatch_ack?.required),
+                      latencyAckRequired: Boolean(resolved?.decision?.latency_ack?.required)
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                },
+            )
+
+            self.assertFalse(payload["hints"]["available"])
+            self.assertEqual(payload["route"], "runner")
+            self.assertEqual(payload["taskClass"], "fast_tool_check")
+            self.assertTrue(payload["preDispatchAckRequired"])
+            self.assertFalse(payload["latencyAckRequired"])
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(
