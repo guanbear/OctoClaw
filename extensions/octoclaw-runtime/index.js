@@ -229,8 +229,7 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
     return { attempted: false, sent: false, reason: "not_required", message: "" };
   }
-  const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx)
-    || String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
+  const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   if (!sessionKey) {
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
@@ -283,8 +282,7 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
   if (!shouldSendLatencyAck(decision, state, ctx, toolName)) {
     return { attempted: false, sent: false, reason: "not_required", message: "" };
   }
-  const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx)
-    || String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
+  const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   if (!sessionKey) {
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
