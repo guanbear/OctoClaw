@@ -89,6 +89,24 @@ def _explanation_risk(reply_text: str, expected_protected_lane: str, expected_ta
     return any(marker.lower() in reply.lower() for marker in delegation_markers)
 
 
+def _explicit_route_claim(reply_text: str) -> str:
+    reply = str(reply_text or "").strip().lower()
+    if not reply:
+        return ""
+    patterns = [
+        (r"\broute\s*=\s*(direct|runner|spawn_single|spawn_multi)\b", 1),
+        (r"\bpolicy\s*(?:给的是|是)\s*(direct|runner|spawn_single|spawn_multi)\b", 1),
+        (r"\b当前\s*(?:route|路由)\s*(?:是|为)\s*(direct|runner|spawn_single|spawn_multi)\b", 1),
+    ]
+    for pattern, group in patterns:
+        match = re.search(pattern, reply, re.IGNORECASE)
+        if match:
+            return str(match.group(group) or "").strip().lower()
+    if "直接查了" in reply or "主 agent 自己查的" in reply or "主agent 自己查的" in reply:
+        return "direct"
+    return ""
+
+
 def _selection_tags(
     *,
     protected_lane_misroute: bool,
@@ -101,6 +119,7 @@ def _selection_tags(
     user_prompt: str,
     assistant_reply: str,
     runner_lane_mismatch: bool,
+    policy_route_explanation_mismatch: bool,
 ) -> list[str]:
     tags: list[str] = []
     prompt = str(user_prompt or "").strip()
@@ -108,6 +127,8 @@ def _selection_tags(
         tags.append("protected_lane_misroute")
     if runner_lane_mismatch:
         tags.append("runner_lane_mismatch")
+    if policy_route_explanation_mismatch:
+        tags.append("policy_route_explanation_mismatch")
     if expected_route == "direct":
         tags.append("direct_path")
     if expected_route == "runner":
@@ -146,6 +167,8 @@ def _selection_score(case: dict) -> int:
         score += 500
     if "runner_lane_mismatch" in tag_set:
         score += 420
+    if "policy_route_explanation_mismatch" in tag_set:
+        score += 380
     if "delegation_explanation_risk" in tag_set:
         score += 320
     if "direct_policy_missing" in tag_set:
@@ -188,6 +211,7 @@ def summarize_selected_cases(cases: list[dict]) -> dict:
         "delegation_explanation_risk_count",
         "runner_case_count",
         "runner_lane_mismatch_count",
+        "policy_route_explanation_mismatch_count",
         "session_control_case_count",
         "control_observer_case_count",
         "casual_short_case_count",
@@ -212,6 +236,8 @@ def summarize_selected_cases(cases: list[dict]) -> dict:
             metrics["runner_case_count"] += 1
         if "runner_lane_mismatch" in tag_set:
             metrics["runner_lane_mismatch_count"] += 1
+        if "policy_route_explanation_mismatch" in tag_set:
+            metrics["policy_route_explanation_mismatch_count"] += 1
         if "session_control" in tag_set:
             metrics["session_control_case_count"] += 1
         if "control_observer" in tag_set:
@@ -468,6 +494,12 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
                 or dispatch_route not in {"", "runner"}
             )
         )
+        explicit_route_claim = _explicit_route_claim(turn.assistant_reply)
+        policy_route_explanation_mismatch = bool(
+            explicit_route_claim
+            and policy_route
+            and explicit_route_claim != policy_route
+        )
         selection_tags = _selection_tags(
             protected_lane_misroute=protected_lane_misroute,
             expected_route=expected_route,
@@ -479,6 +511,7 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
             user_prompt=turn.user_prompt,
             assistant_reply=turn.assistant_reply,
             runner_lane_mismatch=runner_lane_mismatch,
+            policy_route_explanation_mismatch=policy_route_explanation_mismatch,
         )
         results.append(
             {
@@ -508,9 +541,11 @@ def attach_replay(turns: list[Turn], replay_events: list[dict]) -> list[dict]:
                 },
                 "protected_lane_misroute": protected_lane_misroute,
                 "runner_lane_mismatch": runner_lane_mismatch,
+                "policy_route_explanation_mismatch": policy_route_explanation_mismatch,
                 "analysis": {
                     "assistant_latency_seconds": assistant_latency_seconds,
                     "policy_matched": policy_matched,
+                    "explicit_route_claim": explicit_route_claim,
                     "current_expected": {
                         "route": expected_route,
                         "task_class": expected_task_class,

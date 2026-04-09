@@ -730,12 +730,14 @@ P5 不应该顺手混进这些题：
 
 - lane / dispatch / task status / provenance 解释统一绑定 policy packet 或 snapshot
 - 将 `runner/direct/spawn` 的解释偏差写入 replay / nightly diff
+- runtime 在 `before_prompt_build` 注入 authoritative policy packet，并在受保护场景下注入 state grounding packet
+- freshly-dispatched task id 写回 runtime state，供后续 `queued/running/done/谁做的` 问答优先绑定当前任务
 
 验收标准：
 
 - main agent 不再复读“spawn 一直 queued”“这次 policy 是 direct”之类脱离事实的话术
 - `谁做的 / 有没有走 dispatch / 还在 queued 吗` 这类回答默认与 policy/snapshot 一致
-- nightly 能稳定标出 `state-grounding violation`
+- nightly 能稳定标出 `policy_route_explanation_mismatch` / 解释偏差类风险
 
 #### H10：Gray-Zone Arbitration Seam
 

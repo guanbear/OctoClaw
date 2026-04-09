@@ -1016,6 +1016,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       entryAckText: "",
       preDispatchAckSent: false,
       preDispatchAckText: "",
+      currentTaskId: existing?.currentTaskId || "",
     };
     setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
@@ -1073,6 +1074,7 @@ function compactPolicyPrompt(decision) {
     `review_required=${decision?.review_policy?.required ? "true" : "false"}`,
   ].join(" ; ");
   const lines = [`[OctoClaw runtime policy] ${routeSummary}`];
+  lines.push("These route and policy facts are authoritative for this turn. Do not claim a different current route, worker pool, or policy mode.");
   const skillBundle = Array.isArray(decision?.skill_policy?.default_skill_bundle)
     ? decision.skill_policy.default_skill_bundle
     : [];
@@ -1111,6 +1113,16 @@ function compactPolicyPrompt(decision) {
     lines.push(`Preferred skill bundle: ${skillBundle.join(", ")}`);
   }
   return lines.join("\n");
+}
+
+function groundedPolicyPrompt(decision, groundingPayload = null) {
+  const sections = [compactPolicyPrompt(decision)];
+  const promptContext = String(groundingPayload?.prompt_context || "").trim();
+  if (promptContext) {
+    sections.push(promptContext);
+    sections.push("If these authoritative facts are missing or conflict with memory, say you need to check state instead of guessing.");
+  }
+  return sections.filter(Boolean).join("\n\n");
 }
 
 function stringifyParamsForPolicy(value) {
@@ -1235,6 +1247,33 @@ async function userFacingHandoff(payload, fallback, cwd) {
   return `${base}\n\n结果已写入：\`${reportPath}\`\n（用 \`${artifactsCmd}\` 读取完整内容）`;
 }
 
+function currentTaskIdFromPayload(payload = {}) {
+  return String(payload?.job?.id || payload?.task_id || "").trim();
+}
+
+async function loadStateGrounding(prompt, decision, ctx, cwd, preferredTaskId = "", logger = null) {
+  const groundingPolicy = decision?.hook_interface?.before_prompt_build?.state_grounding || decision?.state_grounding || {};
+  if (!groundingPolicy || !groundingPolicy.required) {
+    return { required: false, found: false, reason: "not_required" };
+  }
+  try {
+    return await runJsonScript(
+      "state_grounding.py",
+      [
+        "--prompt", String(prompt || ""),
+        "--protected-lane", String(decision?.route_decision?.protected_lane || ""),
+        "--scope", String(groundingPolicy.scope || ""),
+        "--workspace", resolveWorkspaceRoot(),
+        "--preferred-task-id", String(preferredTaskId || ""),
+      ],
+      cwd,
+    );
+  } catch (err) {
+    logger?.warn?.(`octoclaw state grounding failed: ${String(err)}`);
+    return { required: true, found: false, reason: "runtime_error" };
+  }
+}
+
 const plugin = {
   id: "octoclaw-runtime",
   name: "OctoClaw Runtime",
@@ -1299,10 +1338,38 @@ const plugin = {
       prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
     }
     prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
-    if (prependSystem.length === 0) return;
+    const preferredTaskId = String(resolved?.state?.currentTaskId || "").trim();
+    const groundingRequired = Boolean(decision?.state_grounding?.required);
+    const groundingPayload = groundingRequired
+      ? await loadStateGrounding(
+          prompt,
+          decision,
+          ctx,
+          process.cwd(),
+          preferredTaskId,
+          pi.logger,
+        )
+      : null;
+    if (groundingRequired) {
+      await recordPolicyReplay(
+        groundingPayload?.found ? "state_grounding_loaded" : "state_grounding_missing",
+        {
+          sessionKey: resolved?.stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          protectedLane: String(decision?.route_decision?.protected_lane || ""),
+          scope: String(groundingPayload?.scope || decision?.state_grounding?.scope || ""),
+          reason: String(groundingPayload?.reason || ""),
+          preferredTaskId,
+          found: Boolean(groundingPayload?.found),
+        },
+        pi.logger,
+        decision,
+      );
+    }
     return {
       prependSystemContext: prependSystem.join("\n\n"),
-      prependContext: compactPolicyPrompt(decision),
+      prependContext: groundedPolicyPrompt(decision, groundingPayload),
     };
   });
 
@@ -1763,6 +1830,10 @@ const plugin = {
           pi.logger,
           authoritativeDecision,
         );
+        updatePolicyState(stateKey || replaySessionKey, (current) => ({
+          ...(current || {}),
+          currentTaskId: currentTaskIdFromPayload(payload),
+        }));
         return toolResponse(
           summary,
           compactDispatchDetails(payload),
@@ -1815,6 +1886,10 @@ const plugin = {
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
         const payload = await runJsonScript("octoclaw_spawn.py", args, ctx?.cwd || process.cwd());
+        updatePolicyState(existingStateKey || metadata.session_key || "", (current) => ({
+          ...(current || {}),
+          currentTaskId: currentTaskIdFromPayload(payload),
+        }));
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw spawn registered: ${payload.worker_pool || payload.route} / ${payload.model}`,
@@ -2025,6 +2100,10 @@ export const __octoclawTest = {
   maybeSendEntryAck,
   ensureEntryAck,
   ensurePreDispatchAck,
+  compactPolicyPrompt,
+  groundedPolicyPrompt,
+  currentTaskIdFromPayload,
+  loadStateGrounding,
   resolvePolicyDecisionForContext,
   inferRoute,
   buildDecision,

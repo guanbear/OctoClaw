@@ -206,6 +206,38 @@ Conversation info (untrusted metadata):
         self.assertIn("octoclaw_status", payload)
         self.assertIn("octoclaw_task_action", payload)
 
+    def test_grounded_policy_prompt_includes_authoritative_state_packet(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.groundedPolicyPrompt(
+                {
+                  route_decision: { route: "runner", system_preferred_route: "runner", worker_pool: "octoclaw-runner", work_type: "research", phase: "investigate", protocol: "normal" },
+                  review_policy: { required: false },
+                  route_hint_policy: {},
+                  skill_policy: {},
+                  tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"] },
+                  prompt_contract: {}
+                },
+                {
+                  prompt_context: "[OctoClaw state grounding]\\ntask_id=research-123\\ndisplay_status=running\\nroute=runner"
+                }
+            )"""
+        )
+
+        self.assertIn("These route and policy facts are authoritative for this turn.", payload)
+        self.assertIn("[OctoClaw state grounding]", payload)
+        self.assertIn("task_id=research-123", payload)
+
+    def test_current_task_id_from_payload_prefers_job_id(self) -> None:
+        payload = run_runtime_helper(
+            """({
+              fromJob: __octoclawTest.currentTaskIdFromPayload({ job: { id: "research-123" }, task_id: "runner-999" }),
+              fromTask: __octoclawTest.currentTaskIdFromPayload({ task_id: "runner-999" })
+            })"""
+        )
+
+        self.assertEqual(payload["fromJob"], "research-123")
+        self.assertEqual(payload["fromTask"], "runner-999")
+
     def test_tool_context_can_recover_policy_state_by_prompt_when_ctx_has_no_session(self) -> None:
         payload = run_runtime_helper(
             """(() => {
