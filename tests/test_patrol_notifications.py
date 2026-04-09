@@ -243,6 +243,45 @@ class PatrolNotificationTests(unittest.TestCase):
         self.assertEqual(tasks[0]["session_status"], "runner_local")
         mock_save.assert_called_once()
 
+    @patch("patrol.append_task_event")
+    @patch("patrol.save_task_state")
+    def test_annotate_terminalish_task_does_not_emit_worker_resumed(self, mock_save, mock_append_event) -> None:
+        record = {
+            "id": "research-done-1",
+            "status": "running",
+            "route": "spawn_single",
+            "runtime": "subagent",
+            "worker_pool": "octoclaw-research",
+            "summary": "speed probe finished",
+            "session_key": "agent:main:slack:direct:u-runner",
+            "session_id": "sess-done-1",
+            "run_id": "run-done-1",
+            "agent_id": "agent:main:main",
+            "agent_namespace": "octoclaw",
+            "artifacts": {
+                "worker_result": {
+                    "status": "done",
+                    "summary": "benchmark snapshot ready",
+                }
+            },
+        }
+
+        with patch.object(
+            patrol,
+            "load_task_state",
+            return_value={"tasks": [dict(record)], "updated_at": ""},
+        ), patch.object(
+            patrol,
+            "load_main_agent_sessions",
+            return_value={"sessions": [{"sessionId": "sess-done-1", "_session_key": "agent:main:slack:direct:u-runner"}]},
+        ):
+            tasks = patrol.annotate_tasks_with_session_state([dict(record)])
+
+        self.assertEqual(tasks[0]["session_status"], "completed")
+        self.assertEqual(tasks[0]["session_resume"]["resume_state"], "complete")
+        mock_append_event.assert_not_called()
+        mock_save.assert_called_once()
+
     def test_extract_session_worker_result_parses_structured_result(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-patrol-home-") as home:
             session_dir = Path(home) / ".openclaw" / "agents" / "main" / "sessions"

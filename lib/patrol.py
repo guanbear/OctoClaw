@@ -1485,6 +1485,20 @@ def annotate_tasks_with_session_state(tasks: list, *, persist: bool = True) -> l
     observed_at = datetime.now(timezone.utc).isoformat()
     resumed_events: list[dict] = []
 
+    def _terminalish_resume_guard(raw_task: dict[str, Any]) -> bool:
+        normalized = normalize_task_record(raw_task)
+        artifacts = normalized.get("artifacts", {}) if isinstance(normalized.get("artifacts", {}), dict) else {}
+        worker_result = artifacts.get("worker_result")
+        handoff_state = str(normalized.get("handoff_state", "") or raw_task.get("handoff_state", "") or "").strip().lower()
+        event_summary = normalized.get("task_event_summary", {}) if isinstance(normalized.get("task_event_summary", {}), dict) else {}
+        latest_kind = str(event_summary.get("latest_kind", "") or "").strip().lower()
+        return bool(
+            task_is_final(normalized)
+            or isinstance(worker_result, dict)
+            or handoff_state in {"user_safe_ready", "delivered"}
+            or latest_kind in {"task_completed", "result_ready", "handoff_ready", "user_notified"}
+        )
+
     for task in tasks:
         status = task.get("status", "")
         if status not in ("running", "dispatched", "queued"):
@@ -1494,6 +1508,23 @@ def annotate_tasks_with_session_state(tasks: list, *, persist: bool = True) -> l
             continue
         state_task = state_by_id.get(task_id)
         if not state_task:
+            continue
+
+        if _terminalish_resume_guard(state_task):
+            if state_task.get("session_status") != "completed":
+                state_task["session_status"] = "completed"
+                changed = True
+            if state_task.get("last_observed_at") != observed_at:
+                state_task["last_observed_at"] = observed_at
+                changed = True
+            resume_snapshot = session_resume_snapshot(state_task)
+            resume_snapshot["resume_state"] = "complete"
+            resume_snapshot["session_status"] = "completed"
+            resume_snapshot["last_observed_at"] = observed_at
+            state_task["session_resume"] = resume_snapshot
+            task["session_status"] = "completed"
+            task["last_observed_at"] = observed_at
+            task["session_resume"] = dict(resume_snapshot)
             continue
 
         if is_runner_task(task):
