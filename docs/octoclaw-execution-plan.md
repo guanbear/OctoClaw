@@ -631,6 +631,101 @@ P5 不应该顺手混进这些题：
 - protected-lane 的状态/归因类问答会由 runtime 自动注入 state grounding packet，而不是继续依赖主 agent 自己记得去查
 - delegated dispatch/spawn 会把 freshly-created `task_id` 写入 runtime state，使后续 protected-lane grounding 优先绑定本轮 task，而不是误读旧的 recent task
 
+#### P5H：Continuity And Workflow Realization
+
+目标：
+
+- 不推翻 `workflow-first / policy-first / gray-zone route hint` 的总体设计
+- 把当前运行时从“lane label 存在，但 continuity / workflow / explainability 断裂”的状态，收回到更接近设计原意的形态
+
+问题定义：
+
+- 首轮 route 经常是合理的，但 follow-up 会丢失 continuity
+- `runner` 有时只是 route label，没有真正落到 workflow harness
+- entry-level ack 仍然不够稳定，用户会空等
+- 主会话解释层会脱离 policy / snapshot，编造 `direct / queued / spawn failed` 之类故事
+- 继续零散补 regex 只会延缓问题，不会解决问题
+
+#### H6：Continuity Baseline
+
+交付物：
+
+- 恢复受控 sticky lane / active workflow continuity
+- continuity 仅对 active runner / delegated workflow follow-up 生效
+- 加入 `ttl`、`lane decay`、`goal shift detector`
+
+验收标准：
+
+- active runner / delegated workflow 的 `好 / 继续 / 我要实测 / 再查一下` 这类 follow-up 不再轻易掉到 `direct`
+- continuity 不会绕过 review gate、hard veto、protected lane 规则
+- continuity 在目标变化或超时后会自然失效
+
+#### H7：Runner Workflow Realization
+
+交付物：
+
+- 为 runner lane 补齐首批真实 workflow playbook：
+  - release/version check
+  - model benchmark / telemetry inspection
+  - log / status inspection
+  - bounded code inspect
+- `policy=runner` 时强制进入 workflow harness，而不是仅仅给 main agent 一个 route label
+
+验收标准：
+
+- `policy=runner` 的 turn 不再出现 main agent 直接 `web_fetch / exec` 后再声称“这次 policy 是 direct”
+- runner 类请求默认能落到真实 playbook / report workflow，而不是 generic agent improvisation
+- replay / nightly 能稳定标出 `runner workflow mismatch`
+
+#### H8：Entry-Level Ack
+
+交付物：
+
+- 将 ack 从“dispatch 内部顺带触发”提升为入口级行为
+- 非 `direct` 请求在 lane 决定后立即 ack
+- `direct` 但预计超过短阈值的主会话自执行，也应先给用户一句 status reply
+
+验收标准：
+
+- 用户在非 direct 复杂请求上，默认先收到一条简短 ack，再进入执行
+- 主会话自执行的长查询不再让用户完全空等
+- ack 不再依赖 dispatch 内部路径是否成功触发
+
+#### H9：State-Grounded Explanations
+
+交付物：
+
+- lane / dispatch / task status / provenance 解释统一绑定 policy packet 或 snapshot
+- 将 `runner/direct/spawn` 的解释偏差写入 replay / nightly diff
+
+验收标准：
+
+- main agent 不再复读“spawn 一直 queued”“这次 policy 是 direct”之类脱离事实的话术
+- `谁做的 / 有没有走 dispatch / 还在 queued 吗` 这类回答默认与 policy/snapshot 一致
+- nightly 能稳定标出 `state-grounding violation`
+
+#### H10：Gray-Zone Arbitration Seam
+
+交付物：
+
+- 继续保持 `hard_runner_only` 极窄
+- 其余灰区保留 `route_hint`
+- tiny judge / 本地小模型仅作为后续 route-hint 增强 seam，不直接拿执行权
+
+验收标准：
+
+- 不回退到“让主 agent 每轮完全自由裁决”
+- 也不继续依赖不断追加零散规则
+- 灰区裁决只在低置信冲突 case 触发，不成为默认前置依赖
+
+建议推进顺序：
+
+1. `H6 continuity baseline`
+2. `H8 entry-level ack`
+3. `H7 runner workflow realization`
+4. `H9 state-grounded explanations`
+5. `H10 gray-zone arbitration seam`
+
 ### 当前结论
 
 按 2026-04-08 的基线，P5F 以“ownership 与 contract 收口完成、实现保持渐进归类”为完成口径。

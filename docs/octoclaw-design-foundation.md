@@ -536,6 +536,52 @@ runner 不是单纯“长期常驻快腿”，而是：
 - direct path slow replies
 - delegation explanation risk
 
+### 7.2.4 当前主要风险不是“设计思想错了”，而是运行时偏离了既有设计
+
+最近一批 bad case 暴露出来的核心问题，更像是运行时 drift，而不是设计方向本身错误：
+
+- `hard_runner_only` / protected lanes 在持续加硬
+- 但 `route_hint`、sticky lane、follow-up continuity 没有同样收稳
+- `runner` 有时只是 route label，没有真正变成稳定 workflow
+- entry-level ack 仍然没有完全独立于 dispatch hot path
+- 主会话解释层有时会脱离真实 policy / snapshot，自行脑补 route 和状态
+
+因此当前不应把问题简单归因为：
+
+- `workflow-first` 错了
+- `policy-first` 错了
+- 应该回退到“主 agent 每轮完全自由裁决”
+
+更准确的判断是：
+
+> **设计方向是对的，但当前实现没有真正跑在“硬边界少而硬 + continuity 稳定 + 灰区 route hint / judge”这套设计上。**
+
+这也解释了为什么早期只靠 `SKILL.md / AGENTS.md` 注入的体验，体感上可能更顺：
+
+- 行为更简单
+- 入口更一致
+- 先应答再执行更容易做到
+
+但那种顺滑主要来自“简单一致”，不是因为它更适合作为长期的 runtime truth / feedback / substrate 收口方案。
+
+因此更系统的修法不是回退到“让主 agent 每轮自由判断”，而是把既有设计补完整：
+
+1. 保持极窄的系统硬边界
+   - `hard_runner_only`
+   - protected lanes
+2. 恢复 follow-up continuity
+   - sticky lane / active workflow continuity
+3. 把 `runner` 真正收成 workflow harness
+   - 不再只是 route label
+4. 保留灰区裁决
+   - `route_hint`
+   - 或后续 tiny judge
+5. 让执行层、解释层、nightly review 围绕同一份 policy/snapshot truth
+
+换句话说：
+
+> **系统性修复的重点应是“恢复 continuity 与 workflow realization”，而不是继续堆更多零散规则。**
+
 ### 7.3 substrate-first truth
 
 执行事实尽量绑定 OpenClaw substrate，OctoClaw 在其上叠加策略语义、反馈语义和展示语义。
