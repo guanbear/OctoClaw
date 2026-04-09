@@ -208,7 +208,7 @@ def load_route_stickiness(policy_cfg: dict[str, Any], session_key: str) -> dict[
     if datetime.now(timezone.utc) - updated_at > timedelta(minutes=ttl_minutes):
         return {}
     route = str(entry.get("route", "") or "").strip()
-    if route not in ("spawn_single", "spawn_multi"):
+    if route not in ("runner", "spawn_single", "spawn_multi"):
         return {}
     return entry
 
@@ -278,11 +278,8 @@ def apply_sticky_route(
     followup_candidate = bool(features.get("followup_candidate")) or ack_followup_candidate
     if apply_on_followup_only and not followup_candidate:
         return base_route, {}, []
-    if base_route == "runner":
-        return base_route, {}, []
-
     sticky_route = str(sticky.get("route", "") or "").strip()
-    if sticky_route not in ("spawn_single", "spawn_multi"):
+    if sticky_route not in ("runner", "spawn_single", "spawn_multi"):
         return base_route, {}, []
     sticky_contract = sticky_contract_value(sticky)
     max_apply_count = sticky_apply_limit(policy_cfg)
@@ -307,6 +304,15 @@ def apply_sticky_route(
                 "work_contract": sticky_contract,
                 "current_work_contract": current_contract,
             }, [f"route_sticky_goal_shift:{sticky_contract}_to_{current_contract}"]
+    continuity_override_allowed = followup_candidate
+    if sticky_route != base_route and not lane_is_feasible(lane_feasibility, sticky_route) and not continuity_override_allowed:
+        return base_route, {
+            "route": sticky_route,
+            "applied": False,
+            "applied_count": applied_count,
+            "feasibility_blocked": True,
+            "work_contract": sticky_contract,
+        }, [f"route_sticky_infeasible:{sticky_route}"]
     sticky = mark_sticky_lane_applied(session_key, sticky)
     sticky_state = {
         "route": sticky_route,
@@ -420,7 +426,8 @@ def merge_phase(
 
 def merge_work_contract(base_work_contract: str, route: str, sticky_state: dict[str, Any] | None = None) -> str:
     sticky_contract = str((sticky_state or {}).get("work_contract", "") or "").strip()
-    if bool((sticky_state or {}).get("applied")) and sticky_contract:
+    sticky_route = str((sticky_state or {}).get("route", "") or "").strip()
+    if bool((sticky_state or {}).get("applied")) and sticky_contract and sticky_route in {"runner", "spawn_single", "spawn_multi"}:
         return sticky_contract
     if route == "direct":
         return "answer_now"

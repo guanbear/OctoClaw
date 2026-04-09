@@ -37,7 +37,7 @@ const RUNTIME_POLICY_MODE_PRESETS = {
       delegation_enforcement: true,
     },
     route_stickiness: {
-      enabled: false,
+      enabled: true,
     },
     hooks: {
       before_model_resolve: false,
@@ -129,7 +129,7 @@ const DEFAULT_RUNTIME_POLICY = {
     delegation_enforcement: true,
   },
   route_stickiness: {
-    enabled: false,
+    enabled: true,
     ttl_minutes: 180,
     apply_on_followup_only: true,
     ack_followup_enabled: true,

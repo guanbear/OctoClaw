@@ -180,7 +180,7 @@ function loadRouteStickiness(policyCfg, sessionKey) {
   if (!updatedAt) return {};
   if (Date.now() - updatedAt.getTime() > ttlMinutes * 60 * 1000) return {};
   const route = String(entry.route || "").trim();
-  if (!["spawn_single", "spawn_multi"].includes(route)) return {};
+  if (!["runner", "spawn_single", "spawn_multi"].includes(route)) return {};
   return { ...entry };
 }
 
@@ -223,12 +223,8 @@ function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, meta
   if (applyOnFollowupOnly && !followupCandidate) {
     return { route: baseRoute, stickyState: {}, stickyReasons: [] };
   }
-  if (baseRoute === "runner") {
-    return { route: baseRoute, stickyState: {}, stickyReasons: [] };
-  }
-
   const stickyRoute = String(sticky.route || "").trim();
-  if (!["spawn_single", "spawn_multi"].includes(stickyRoute)) {
+  if (!["runner", "spawn_single", "spawn_multi"].includes(stickyRoute)) {
     return { route: baseRoute, stickyState: {}, stickyReasons: [] };
   }
   const stickyContract = stickyContractValue(sticky);
@@ -265,6 +261,20 @@ function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, meta
         stickyReasons: [`route_sticky_goal_shift:${stickyContract}_to_${currentContract}`],
       };
     }
+  }
+  const continuityOverrideAllowed = followupCandidate;
+  if (stickyRoute !== baseRoute && !laneIsFeasible(laneFeasibility, stickyRoute) && !continuityOverrideAllowed) {
+    return {
+      route: baseRoute,
+      stickyState: {
+        route: stickyRoute,
+        applied: false,
+        applied_count: appliedCount,
+        feasibility_blocked: true,
+        work_contract: stickyContract,
+      },
+      stickyReasons: [`route_sticky_infeasible:${stickyRoute}`],
+    };
   }
 
   const nextSticky = markStickyLaneApplied(sessionKey, sticky);
@@ -365,7 +375,7 @@ function mergePhase(route, basePhase, routeHint) {
 
 function mergeWorkContract(baseWorkContract, route, stickyState = {}) {
   const stickyContract = String(stickyState.work_contract || "").trim();
-  if (stickyState.applied && stickyContract) return stickyContract;
+  if (stickyState.applied && stickyContract && ["runner", "spawn_single", "spawn_multi"].includes(String(stickyState.route || "").trim())) return stickyContract;
   if (route === "direct") return "answer_now";
   if (route === "runner") return "inspect_report";
   if (route === "spawn_multi") return "coordinated_work";

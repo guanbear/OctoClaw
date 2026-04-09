@@ -197,6 +197,15 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         }
+        sticky_runner_payload = {
+            "demo": {
+                "route": "runner",
+                "work_type": "research",
+                "work_contract": "inspect_report",
+                "applied_count": 0,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
         cases = [
             {
                 "task": "看下 8080 端口开了没",
@@ -225,6 +234,22 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                     }
                 },
                 "stickiness": sticky_payload,
+            },
+            {
+                "task": "继续",
+                "metadata": {"session_key": "demo"},
+                "config": {
+                    "runtime_policy": {
+                        "route_stickiness": {
+                            "enabled": True,
+                            "ack_followup_enabled": True,
+                        },
+                        "switches": {
+                            "route_hint_required": True,
+                        },
+                    }
+                },
+                "stickiness": sticky_runner_payload,
             },
             {
                 "task": "调研三个兼容方案并写一版简短建议",

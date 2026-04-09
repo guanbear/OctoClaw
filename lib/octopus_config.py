@@ -41,7 +41,7 @@ RUNTIME_POLICY_MODE_PRESETS: dict[str, dict[str, Any]] = {
             "delegation_enforcement": True,
         },
         "route_stickiness": {
-            "enabled": False,
+            "enabled": True,
         },
         "hooks": {
             "before_model_resolve": False,
@@ -285,7 +285,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "delegation_enforcement": True,
         },
         "route_stickiness": {
-            "enabled": False,
+            "enabled": True,
             "ttl_minutes": 180,
             "apply_on_followup_only": True,
             "ack_followup_enabled": True,

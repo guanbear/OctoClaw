@@ -663,7 +663,7 @@ function extractPromptText(event = {}) {
 
 function delegatedStickyRoute(decision) {
   const route = String(decision?.route_decision?.route || "").trim();
-  if (route === "spawn_single" || route === "spawn_multi") {
+  if (route === "runner" || route === "spawn_single" || route === "spawn_multi") {
     return route;
   }
   return "";

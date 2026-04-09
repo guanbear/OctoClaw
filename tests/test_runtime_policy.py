@@ -180,6 +180,44 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["route_hint_policy"]["required"])
         self.assertIn("route_hint_suppressed:sticky_lane", payload["route_hint_policy"]["merge_notes"])
 
+    def test_ack_followup_short_confirmation_inherits_runner_lane(self) -> None:
+        payload = self.run_policy(
+            "好",
+            session_key="demo",
+            sticky_route="runner",
+            sticky_work_type="research",
+            sticky_work_contract="inspect_report",
+        )
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:runner")
+        self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
+        self.assertTrue(payload["route_hint_policy"]["ack_followup_applied"])
+
+    def test_continuation_followup_inherits_runner_lane(self) -> None:
+        payload = self.run_policy(
+            "继续",
+            session_key="demo",
+            sticky_route="runner",
+            sticky_work_type="research",
+            sticky_work_contract="inspect_report",
+        )
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["route_decision"]["reason"], "route_ack_followup_inherit:runner")
+        self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
+
+    def test_non_followup_does_not_inherit_runner_lane(self) -> None:
+        payload = self.run_policy(
+            "那就这样",
+            session_key="demo",
+            sticky_route="runner",
+            sticky_work_type="research",
+            sticky_work_contract="inspect_report",
+        )
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertFalse(payload["route_hint_policy"]["sticky_applied"])
+
     def test_ack_followup_without_sticky_lane_stays_non_runner_and_unapplied(self) -> None:
         payload = self.run_policy("好")
         self.assertTrue(payload["route_hint_policy"]["ack_followup_candidate"])
