@@ -319,7 +319,7 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                         force_route=case.get("force_route", ""),
                     )
                     js_payload = _run_node_expression(
-                        "__octoclawTest.buildDecision("
+                        "__octoclawTest.buildRawDecision("
                         f"{json.dumps(case['task'])}, "
                         f"{json.dumps({'metadata': case.get('metadata', {}), 'routeHint': case.get('route_hint', {}), 'forceRoute': case.get('force_route', '')})}"
                         ")",

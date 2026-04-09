@@ -119,6 +119,24 @@
 - OpenClaw gateway fallback log 以 stale-gated 方式回灌 `model-health`
 - 这条反馈线帮助 selection 避开坏链路，但不默认放开 main-agent `direct_model_override`
 
+#### F. live controller recovery 先于继续补 prompt 词表
+- 当前最主要的问题不是缺更多 route feature，而是 live entry 仍会把：
+  - fresh live lookup
+  - execution/provenance follow-up
+  - local operator surface query
+  混在一起
+- 当前优先级应转向：先把 live controller 收成少量稳定 `intent classes`
+  - `plain_chat`
+  - `runtime_read_model`
+  - `execution_followup`
+  - `local_surface_lookup`
+  - `fresh_live_lookup`
+  - `delegated_work`
+  - `undetermined`
+- `fresh_live_lookup` 默认 workflow-first，不再随机落到 `direct_answer`
+- provenance / “你是怎么查的” 只消费 execution/materialization/tool ledger
+- direct 路径只保留给窄的 `plain_chat + answer_now`
+
 ---
 
 ## 3. 新的优先级排序
@@ -635,9 +653,9 @@ P5 不应该顺手混进这些题：
 
 1. route / task-class hardening
    - workflow meta / task progress follow-up 不再靠词表穷举，而是先走 conversation front gate
-   - front gate 产出 `task_followup` / `local_surface_lookup` hint
+   - front gate 产出 `execution_followup` / `local_surface_lookup` / `fresh_live_lookup` hint
    - route engine 再根据 hint 把 follow-up 收到 `direct/control_observer`，把本机 operator surface 查询收进 `runner`
-   - bounded software/repo update lookup 继续进入 `direct/simple_lookup`
+   - bounded software/repo update lookup 改为 workflow-first，不再继续进入 `direct/simple_lookup`
 2. JS-native state grounding
    - 在 runtime hot path 接入 replay + task-state grounding
 3. direct slow-path latency ack

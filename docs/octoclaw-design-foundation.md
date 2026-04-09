@@ -218,6 +218,42 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 - lane capability 不足时，必须产出 `capability_bound_failure`
 - explanation surface 只能消费 materialization + execution facts，不再消费 route label 幻觉
 
+### 4.4.2 当前新增主线：Live Controller Intent Classes
+
+在最近几轮真实 Slack/macmini 验收里，暴露出的主要问题已经不是 substrate facts 缺失，而是：
+
+- fresh live lookup、execution follow-up、local operator surface query 仍可能互相串线
+- 同一条消息在 front gate、route score、tool policy、reply grounding 中被解释成不同意图
+- direct 路径仍过强，导致 ack、provenance、execution facts 不能稳定绑定
+
+因此 live hot path 不应继续依赖大量自由文本 pattern 直接决定 lane，而应先收成少量 **operational intent classes**。
+
+当前更合理的入口分类是：
+
+1. `plain_chat`
+   - 闲聊、解释、无需验证的即时回答
+2. `runtime_read_model`
+   - 八爪鱼状态、details、retrieve、workflow/runtime status 查询
+3. `execution_followup`
+   - 对最近 execution/materialization/provenance 的追问
+4. `local_surface_lookup`
+   - 本机 gateway / dashboard / runtime version / local status 查询
+5. `fresh_live_lookup`
+   - 新的 bounded live lookup，例如 release / updates / latest state verification
+6. `delegated_work`
+   - 真正需要 spawn/review/artifact 的工作
+7. `undetermined`
+   - 保守逃生口；允许后续 tiny judge 或 workflow-first fallback，而不是强行错判
+
+其中最重要的约束是：
+
+- `execution_followup` 只能走 fact-grounded `control_observer`
+- `local_surface_lookup` 只能走受控 local inspect / runner
+- `fresh_live_lookup` 默认 workflow-first，不再随机落到 `direct_answer`
+- `direct` 只保留给 `plain_chat` 和极窄的 `answer_now`
+
+这不是“把所有自然语言压成几个标签”，而是把 **ack policy / tool policy / provenance source / lane choice** 先统一到少量稳定运行语义上。
+
 后续收口顺序也应固定为：
 
 1. `Package A`：materialization contract

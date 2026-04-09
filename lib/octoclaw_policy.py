@@ -803,13 +803,18 @@ def pre_dispatch_ack_policy(
             feature_flags.get("requires_external_lookup")
             or feature_flags.get("bounded_external_inspect")
             or feature_flags.get("bounded_repo_update_lookup")
+            or feature_flags.get("fresh_live_lookup")
         )
     )
     required = (route in {"spawn_single", "spawn_multi"} or runner_lookup_ack) and task_class != "control_observer"
     text = "我先处理一下，稍后把结果告诉你。"
     if route == "spawn_multi":
         text = "我先分派处理一下，稍后把结果汇总给你。"
-    elif route == "runner" and (feature_flags.get("bounded_repo_update_lookup") or feature_flags.get("bounded_software_update_lookup")):
+    elif route == "runner" and (
+        feature_flags.get("fresh_live_lookup")
+        or feature_flags.get("bounded_repo_update_lookup")
+        or feature_flags.get("bounded_software_update_lookup")
+    ):
         text = "我先看一下最新更新，马上给你结论。"
     elif work_type == "research":
         text = "我先查一下，马上给你结论。"

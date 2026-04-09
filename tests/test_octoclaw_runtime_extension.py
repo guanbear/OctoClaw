@@ -825,7 +825,7 @@ Sender (untrusted metadata):
         self.assertEqual(payload["helperText"], payload["ack"]["text"])
         self.assertTrue(payload["shouldSend"])
 
-    def test_bounded_github_update_lookup_uses_latency_ack_instead_of_pre_dispatch_ack(self) -> None:
+    def test_bounded_github_update_lookup_prefers_runner_pre_dispatch_ack(self) -> None:
         payload = run_runtime_helper(
             """(() => {
                 const decision = __octoclawTest.buildDecision("查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗");
@@ -840,12 +840,13 @@ Sender (untrusted metadata):
             })()"""
         )
 
-        self.assertEqual(payload["route"], "direct")
-        self.assertEqual(payload["taskClass"], "simple_lookup")
-        self.assertEqual(payload["workContract"], "answer_now")
-        self.assertFalse(payload["ack"]["required"])
-        self.assertTrue(payload["latencyAck"]["required"])
-        self.assertTrue(payload["shouldSendLatencyAck"])
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_tool_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertTrue(payload["ack"]["required"])
+        self.assertIn("最新更新", payload["ack"]["text"])
+        self.assertFalse(payload["latencyAck"]["required"])
+        self.assertFalse(payload["shouldSendLatencyAck"])
 
     def test_bounded_openclaw_update_lookup_uses_runner_pre_dispatch_ack(self) -> None:
         payload = run_runtime_helper(
@@ -1048,7 +1049,8 @@ Sender (untrusted metadata):
                 },
             )
 
-            self.assertEqual(payload["hints"]["kind"], "task_followup")
+            self.assertEqual(payload["hints"]["kind"], "execution_followup")
+            self.assertEqual(payload["hints"]["intent_class"], "execution_followup")
             self.assertEqual(payload["hints"]["preferred_task_id"], "research-20260409121206076161")
             self.assertEqual(payload["route"], "direct")
             self.assertEqual(payload["taskClass"], "control_observer")
@@ -1135,11 +1137,44 @@ Sender (untrusted metadata):
                 },
             )
 
-            self.assertFalse(payload["hints"]["available"])
+            self.assertTrue(payload["hints"]["available"])
+            self.assertEqual(payload["hints"]["kind"], "fresh_live_lookup")
+            self.assertEqual(payload["hints"]["intent_class"], "fresh_live_lookup")
             self.assertEqual(payload["route"], "runner")
             self.assertEqual(payload["taskClass"], "fast_tool_check")
             self.assertTrue(payload["preDispatchAckRequired"])
             self.assertFalse(payload["latencyAckRequired"])
+
+    def test_current_version_prompt_prefers_local_surface_lookup(self) -> None:
+        payload = run_runtime_helper(
+            """(async () => {
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  "你现在啥版本",
+                  {
+                    sessionKey: "agent:main:slack:direct:u-version",
+                    sessionId: "sess-version",
+                    trigger: "message",
+                    agentId: "agent:main:main"
+                  },
+                  process.cwd(),
+                  null
+                );
+                const decision = resolved?.decision || {};
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  workContract: decision.route_decision.work_contract,
+                  conversationIntentClass: decision.request.metadata?.conversation_control?.intent_class || "",
+                  conversationKind: decision.request.metadata?.conversation_control?.kind || ""
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_local_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertEqual(payload["conversationIntentClass"], "local_surface_lookup")
+        self.assertEqual(payload["conversationKind"], "local_surface_lookup")
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(

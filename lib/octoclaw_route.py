@@ -660,6 +660,8 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     command = (command or "").strip()
     enabled_packs = normalize_enabled_language_packs(runtime_cfg)
     conversation_control = normalize_conversation_control_metadata(metadata)
+    conversation_kind = str(conversation_control.get("kind") or "").strip().lower()
+    intent_class = str(conversation_control.get("intent_class") or conversation_kind).strip().lower()
     explicit_local_probe = bool(
         re.search(r"/[A-Za-z0-9._/\-]+", raw_task)
         or re.search(r"(?:最近|近)\s*\d{1,4}\s*行", raw_task)
@@ -705,6 +707,15 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     workflow_meta_candidate = workflow_meta_hits > 0
     session_control_candidate = bool(session_control_hits > 0)
     model_benchmark_candidate = bool(model_benchmark_hits > 0 and model_reference_hits > 0 and not workflow_meta_candidate and not session_control_candidate)
+    runtime_version_lookup = bool(
+        not re.search(r"(模型|model)", text, re.IGNORECASE)
+        and not re.search(r"(新版本|更新|发版|release|changelog|新特性|特性|变化|memory|dream|what'?s new|latest|recent)", text, re.IGNORECASE)
+        and (
+            re.search(r"(openclaw|octoclaw).*(版本|version)", raw_task, re.IGNORECASE)
+            or re.search(r"(现在|当前).*(啥版本|什么版本|版本|version)", raw_task, re.IGNORECASE)
+            or re.fullmatch(r"\s*(?:你现在啥版本|你现在是什么版本|当前.*版本|what version are you|current version)\s*", raw_task, re.IGNORECASE)
+        )
+    )
     repo_activity_lookup = bool(
         (
             re.search(r"(github|gitlab|仓库|repo|repository|项目)", text, re.IGNORECASE)
@@ -718,7 +729,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     )
     bounded_software_update_lookup = bool(
         re.search(r"(openclaw|octoclaw)", text, re.IGNORECASE)
-        and re.search(r"(有啥更新|有什么更新|更新了什么|最近.*更新|最新.*更新|最新.*release|新版本|release|memory方向|特性|变化)", text, re.IGNORECASE)
+        and re.search(r"(有啥更新|有什么更新|更新了什么|最近.*更新|最新.*更新|最新.*release|新版本|release|发版|memory方向|dream|特性|变化)", text, re.IGNORECASE)
         and not re.search(
             r"(改了啥|改了什么|提交|commit|pr|issue|详细|分析|总结|报告|写一版|release analysis|commit summary|summari[sz]e)",
             raw_task,
@@ -728,7 +739,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     bounded_repo_update_lookup = bool(
         (repo_activity_lookup or bounded_software_update_lookup)
         and not re.search(
-            r"(改了啥|改了什么|都有啥提交|今天都有啥提交|提交明细|详细变更|分析|总结|release|报告|写一版|recommend|analysis|what changed|commit summary|summari[sz]e commits?|release analysis)",
+            r"(改了啥|改了什么|都有啥提交|今天都有啥提交|提交明细|详细变更|分析|总结|报告|写一版|recommend|analysis|what changed|commit summary|summari[sz]e commits?|release analysis)",
             raw_task,
             re.IGNORECASE,
         )
@@ -736,11 +747,12 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         and summary_output_hits == 0
         and write_hits == 0
     )
+    fresh_live_lookup_candidate = bool(intent_class == "fresh_live_lookup" or bounded_repo_update_lookup)
 
     effective_research_hits = research_hits
     effective_external_lookup_hits = external_lookup_hits
     effective_mutation_hits = mutation_hits
-    if repo_activity_lookup or bounded_software_update_lookup:
+    if repo_activity_lookup or bounded_software_update_lookup or fresh_live_lookup_candidate:
         effective_research_hits = max(effective_research_hits, 1)
         effective_external_lookup_hits = max(effective_external_lookup_hits, 1)
         effective_mutation_hits = 0
@@ -818,7 +830,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         or task_progress_candidate
     )
 
-    if conversation_control.get("kind") == "task_followup":
+    if conversation_kind in {"task_followup", "execution_followup"}:
         workflow_meta_candidate = True
         observer_control_candidate = True
         effective_research_hits = 0
@@ -827,13 +839,23 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         effective_code_hits = 0
         effective_write_hits = 0
         effective_runner_negative_hits = 0
-    elif conversation_control.get("kind") == "local_surface_lookup":
+    elif conversation_kind == "local_surface_lookup" or runtime_version_lookup:
         explicit_local_probe = True
         effective_local_state_hits = max(effective_local_state_hits, 1)
         effective_runner_read_only_intent_hits = max(effective_runner_read_only_intent_hits, 1)
         effective_runner_target_hits = max(effective_runner_target_hits, 1)
         effective_research_hits = 0
         effective_external_lookup_hits = 0
+        effective_mutation_hits = 0
+        effective_code_hits = 0
+        effective_write_hits = 0
+        effective_runner_negative_hits = 0
+    elif conversation_kind == "fresh_live_lookup" or fresh_live_lookup_candidate:
+        workflow_meta_candidate = False
+        observer_control_candidate = False
+        session_control_candidate = False
+        effective_research_hits = max(effective_research_hits, 1)
+        effective_external_lookup_hits = max(effective_external_lookup_hits, 1)
         effective_mutation_hits = 0
         effective_code_hits = 0
         effective_write_hits = 0
@@ -917,6 +939,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "requires_external_lookup": effective_external_lookup_hits > 0,
         "bounded_software_update_lookup": bounded_software_update_lookup,
         "bounded_repo_update_lookup": bounded_repo_update_lookup,
+        "fresh_live_lookup": fresh_live_lookup_candidate,
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
         "continuation_hits": continuation_hits,
@@ -996,8 +1019,10 @@ def direct_contract_candidate(features: dict) -> bool:
         return True
     if features.get("observer_control_candidate"):
         return True
+    if features.get("fresh_live_lookup"):
+        return False
     if features.get("bounded_repo_update_lookup"):
-        return True
+        return False
     if features.get("requires_tools"):
         return False
     if features.get("requires_mutation"):
@@ -1064,6 +1089,8 @@ def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
         return "answer_now"
     if features.get("observer_control_candidate"):
         return "answer_now"
+    if features.get("fresh_live_lookup"):
+        return "inspect_report"
     if features.get("bounded_external_inspect"):
         return "inspect_report"
     if direct_contract_candidate(features):
@@ -1142,6 +1169,8 @@ def infer_capability_requirements(features: dict, contract_kind: str = "", scope
         requirements.append("remote_read_probe")
     if features.get("bounded_external_inspect"):
         requirements.append("external_read_query")
+    if features.get("fresh_live_lookup"):
+        requirements.append("fresh_live_lookup")
     return list(dict.fromkeys(requirements))
 
 
@@ -1185,6 +1214,7 @@ def build_lane_feasibility(features: dict, contract_kind: str = "", scope_hint: 
         baseline["runner"] = {"feasible": True, "reasons": ["contract:inspect_report", "capability:runner_inspect"]}
         direct_eligible = (
             not features.get("requires_tools")
+            and not features.get("fresh_live_lookup")
             and not features.get("requires_external_lookup")
             and not features.get("requires_research")
             and not features.get("requires_code_work")
@@ -1362,6 +1392,9 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
         if features.get("model_benchmark_candidate"):
             route = "runner"
             reason_codes.append("prefer_runner_for_model_benchmark")
+        elif features.get("fresh_live_lookup"):
+            route = "runner"
+            reason_codes.append("prefer_runner_for_fresh_live_lookup")
         elif features.get("bounded_external_inspect"):
             route = "runner"
             reason_codes.append("prefer_runner_for_external_lookup_inspect")

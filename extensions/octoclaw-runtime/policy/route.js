@@ -397,6 +397,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const normalizedCommand = String(command || "").trim();
   const enabledPacks = normalizeEnabledLanguagePacks(runtimeCfg);
   const conversationControl = normalizeConversationControlMetadata(metadata);
+  const intentClass = String(conversationControl.intent_class || "").trim();
   let explicitLocalProbe = Boolean(
     /\/[A-Za-z0-9._/\-]+/.test(rawTask)
       || /(?:最近|近)\s*\d{1,4}\s*行/u.test(rawTask)
@@ -466,11 +467,14 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     && summaryOutputHits === 0
     && writeHits === 0
   );
+  const freshLiveLookupCandidate = Boolean(
+    intentClass === "fresh_live_lookup" || boundedRepoUpdateLookup
+  );
 
   let effectiveResearchHits = researchHits;
   let effectiveExternalLookupHits = externalLookupHits;
   let effectiveMutationHits = mutationHits;
-  if (repoActivityLookup || boundedSoftwareUpdateLookup) {
+  if (repoActivityLookup || boundedSoftwareUpdateLookup || freshLiveLookupCandidate) {
     effectiveResearchHits = Math.max(effectiveResearchHits, 1);
     effectiveExternalLookupHits = Math.max(effectiveExternalLookupHits, 1);
     effectiveMutationHits = 0;
@@ -549,7 +553,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate || taskProgressCandidate
   );
 
-  if (conversationControl.kind === "task_followup") {
+  if (conversationControl.kind === "execution_followup" || conversationControl.kind === "task_followup") {
     workflowMetaCandidate = true;
     observerControlCandidate = true;
     effectiveResearchHits = 0;
@@ -565,6 +569,16 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     effectiveRunnerTargetHits = Math.max(effectiveRunnerTargetHits, 1);
     effectiveResearchHits = 0;
     effectiveExternalLookupHits = 0;
+    effectiveMutationHits = 0;
+    effectiveCodeHits = 0;
+    effectiveWriteHits = 0;
+    effectiveRunnerNegativeHits = 0;
+  } else if (conversationControl.kind === "fresh_live_lookup") {
+    observerControlCandidate = false;
+    workflowMetaCandidate = false;
+    sessionControlCandidate = false;
+    effectiveResearchHits = Math.max(effectiveResearchHits, 1);
+    effectiveExternalLookupHits = Math.max(effectiveExternalLookupHits, 1);
     effectiveMutationHits = 0;
     effectiveCodeHits = 0;
     effectiveWriteHits = 0;
@@ -645,6 +659,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     requires_external_lookup: effectiveExternalLookupHits > 0,
     bounded_software_update_lookup: boundedSoftwareUpdateLookup,
     bounded_repo_update_lookup: boundedRepoUpdateLookup,
+    fresh_live_lookup: freshLiveLookupCandidate,
     cost_sensitive_hits: costSensitiveHits,
     semantic_ambiguity_hits: semanticAmbiguityHits,
     continuation_hits: continuationHits,
@@ -723,7 +738,8 @@ function directContractCandidate(features) {
   if (features.high_risk) return false;
   if (features.session_control_candidate) return true;
   if (features.observer_control_candidate) return true;
-  if (features.bounded_repo_update_lookup) return true;
+  if (features.fresh_live_lookup) return false;
+  if (features.bounded_repo_update_lookup) return false;
   if (features.requires_tools) return false;
   if (features.requires_mutation) return false;
   if (features.requires_code_work) return false;
@@ -768,6 +784,7 @@ function inferWorkContractHint(features, route = "") {
   if (features.model_benchmark_candidate) return "inspect_report";
   if (features.session_control_candidate) return "answer_now";
   if (features.observer_control_candidate) return "answer_now";
+  if (features.fresh_live_lookup) return "inspect_report";
   if (features.bounded_external_inspect) return "inspect_report";
   if (directContractCandidate(features)) return "answer_now";
   if (coordinatedWorkCandidate(features)) return "coordinated_work";
@@ -835,6 +852,7 @@ function inferCapabilityRequirements(features, contractKind = "", scopeHint = ""
   if (features.target_scope === "local") requirements.push("local_read_probe");
   if (features.target_scope === "remote") requirements.push("remote_read_probe");
   if (features.bounded_external_inspect) requirements.push("external_read_query");
+  if (features.fresh_live_lookup) requirements.push("fresh_live_lookup");
   return [...new Set(requirements)];
 }
 
@@ -884,6 +902,7 @@ function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workC
       && !features.requires_research
       && !features.requires_code_work
       && !features.requires_writing
+      && !features.fresh_live_lookup
       && Number(features.estimated_steps || 0) <= 1
       && Number(features.task_length || 0) <= 80;
     baseline.direct = {
@@ -1068,6 +1087,9 @@ function contractDrivenRouteBias(features, workContractHint) {
     if (features.model_benchmark_candidate) {
       route = "runner";
       reasonCodes.push("prefer_runner_for_model_benchmark");
+    } else if (features.fresh_live_lookup) {
+      route = "runner";
+      reasonCodes.push("prefer_runner_for_fresh_live_lookup");
     } else if (features.bounded_external_inspect) {
       route = "runner";
       reasonCodes.push("prefer_runner_for_external_lookup_inspect");

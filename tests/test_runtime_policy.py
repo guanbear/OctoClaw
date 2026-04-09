@@ -246,7 +246,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["features"]["requires_research"])
         self.assertTrue(payload["features"]["requires_writing"])
 
-    def test_github_update_lookup_prefers_direct_simple_lookup(self) -> None:
+    def test_github_update_lookup_prefers_runner_fresh_live_lookup(self) -> None:
         payload = self.run_policy(
             "查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗",
             model_policy={
@@ -262,17 +262,17 @@ class RuntimePolicyTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertEqual(payload["route_decision"]["task_class"], "simple_lookup")
-        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
         self.assertFalse(payload["request"]["metadata"])
         self.assertEqual(payload["route_recommendation"]["schema_version"], "octoclaw.route_recommendation/v1")
         self.assertTrue(payload["route_recommendation"]["arbitration"]["required"])
         self.assertEqual(payload["route_recommendation"]["arbitration"]["conflict_type"], "repo_activity_lookup")
-        self.assertEqual(payload["route_recommendation"]["recommended_route"], "direct")
-        self.assertFalse(payload["pre_dispatch_ack"]["required"])
-        self.assertTrue(payload["latency_ack"]["required"])
-        self.assertIn("最新更新", payload["latency_ack"]["text"])
+        self.assertEqual(payload["route_recommendation"]["recommended_route"], "runner")
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
+        self.assertFalse(payload["latency_ack"]["required"])
+        self.assertIn("最新更新", payload["pre_dispatch_ack"]["text"])
         self.assertFalse(payload["state_grounding"]["required"])
 
     def test_bounded_openclaw_update_lookup_prefers_runner_inspect_with_ack(self) -> None:
@@ -283,6 +283,22 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertTrue(payload["pre_dispatch_ack"]["required"])
         self.assertFalse(payload["latency_ack"]["required"])
         self.assertIn("最新更新", payload["pre_dispatch_ack"]["text"])
+
+    def test_openclaw_release_lookup_prefers_runner_fresh_live_lookup(self) -> None:
+        payload = self.run_policy("行 再查下openclaw 有没有新的发版")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
+        self.assertFalse(payload["latency_ack"]["required"])
+
+    def test_current_version_prompt_prefers_local_surface_lookup(self) -> None:
+        payload = self.run_policy("你现在啥版本")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertFalse(payload["latency_ack"]["required"])
+        self.assertFalse(payload["state_grounding"]["required"])
 
     def test_workflow_meta_task_progress_followup_prefers_grounded_direct_lane(self) -> None:
         payload = self.run_policy("不是 刚才single成功了吗")

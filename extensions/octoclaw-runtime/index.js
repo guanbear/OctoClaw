@@ -10,7 +10,7 @@ import {
   buildDirectLookupGuard,
   __conversationControlTest,
 } from "./conversation-control.js";
-import { buildDecision } from "./policy/decide.js";
+import { buildDecision as buildPolicyDecision } from "./policy/decide.js";
 import { inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1219,6 +1219,33 @@ function buildPolicyMetadata(ctx = {}, options = {}) {
   return metadata;
 }
 
+function enrichConversationControlMetadata(prompt, metadata = {}) {
+  const nextMetadata = metadata && typeof metadata === "object" ? { ...metadata } : {};
+  if (nextMetadata?.conversation_control) return nextMetadata;
+  const conversationControl = buildConversationControlHints({
+    prompt,
+    replayLogPath: resolveReplayLogPath(),
+    taskStatePath: resolveTaskStatePath(),
+    sessionKeys: [
+      nextMetadata.session_key,
+      nextMetadata.session_binding_key,
+      nextMetadata.session_thread_key,
+    ].filter(Boolean),
+  });
+  if (conversationControl?.available) {
+    nextMetadata.conversation_control = conversationControl;
+  }
+  return nextMetadata;
+}
+
+function buildDecision(task, options = {}) {
+  const metadata = enrichConversationControlMetadata(task, options?.metadata || {});
+  return buildPolicyDecision(task, {
+    ...options,
+    metadata,
+  });
+}
+
 async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options = {}) {
   if (!prompt || !isManagedAgentContext(ctx)) {
     return null;
@@ -1258,6 +1285,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || "").trim(),
       delegated: false,
       delegationTool: "",
+      conversationIntentClass: String(metadata?.conversation_control?.intent_class || ""),
       routeHintSubmitted: false,
       routeHintPayload: null,
       blockedTools: [],
@@ -1292,6 +1320,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         sessionBoundaryStatus: String(boundary.status || ""),
         canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || ""),
         conversationControlKind: String(metadata?.conversation_control?.kind || ""),
+        conversationIntentClass: String(metadata?.conversation_control?.intent_class || ""),
         prompt: truncateText(prompt),
       },
       logger,
@@ -2346,6 +2375,7 @@ export const __octoclawTest = {
   maybeSendLatencyAck,
   resolvePolicyDecisionForContext,
   inferRoute,
+  buildRawDecision: buildPolicyDecision,
   buildDecision,
   buildConversationGrounding,
   buildDirectLookupGuard,

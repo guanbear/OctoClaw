@@ -27,6 +27,15 @@ const EXECUTION_REFERENCE_PATTERNS = [
 
 const OPERATOR_SURFACE_REGISTRY = [
   {
+    surface_id: "runtime_version",
+    lane_hint: "runner",
+    scope: "local_surface_lookup",
+    patterns: [
+      /(你现在啥版本|你现在是什么版本|你现在的版本是啥|现在啥版本|现在什么版本|当前.*版本|本机.*版本|openclaw.*版本|版本号)/iu,
+      /\b(current version|what version are you|openclaw version|runtime version)\b/iu,
+    ],
+  },
+  {
     surface_id: "control_ui",
     lane_hint: "runner",
     scope: "local_surface_lookup",
@@ -36,6 +45,13 @@ const OPERATOR_SURFACE_REGISTRY = [
       /((访问|入口|打开|查看).*(地址|url|界面)|(?:地址|url).*(control\s*ui|controlui|gateway|控制台))/iu,
     ],
   },
+];
+
+const FRESH_LIVE_LOOKUP_PATTERNS = [
+  /(查|查下|查一下|再查|再看|看下|看一下|看看|确认|确认下|确认一下).{0,16}(openclaw|octoclaw).{0,20}(更新|发版|release|版本|changelog|memory|dream)/iu,
+  /(openclaw|octoclaw).{0,20}(有啥更新|有什么更新|有没有新的发版|有没有新发版|有没有新的release|有没有新release|最近.*更新|最新.*更新|最近.*发版|最近.*release|新版本)/iu,
+  /\b(check|look up|see|verify|confirm)\b.{0,18}\b(openclaw|octoclaw)\b.{0,24}\b(update|updates|release|version|changelog|memory|dream)\b/iu,
+  /\b(openclaw|octoclaw)\b.{0,24}\b(new release|latest release|recent updates?|latest updates?|what'?s new|changelog)\b/iu,
 ];
 
 function normalizeText(value = "") {
@@ -97,10 +113,26 @@ function isProvenancePrompt(prompt = "") {
     || /\bhow did you check\b/iu.test(text);
 }
 
+function isFreshLiveLookupPrompt(prompt = "") {
+  const text = String(prompt || "").trim();
+  if (!text) return false;
+  if (isMetaPrompt(text) || isTaskProgressPrompt(text) || isProvenancePrompt(text)) return false;
+  if (/(模型|model)/iu.test(text) && /(版本|version)/iu.test(text) && !/(openclaw|octoclaw)/iu.test(text)) return false;
+  return FRESH_LIVE_LOOKUP_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function detectOperatorSurface(prompt = "") {
   const text = String(prompt || "").trim();
   if (!text) return null;
   for (const surface of OPERATOR_SURFACE_REGISTRY) {
+    if (surface.surface_id === "runtime_version") {
+      if (/(模型|model)/iu.test(text)) {
+        continue;
+      }
+      if (/(新版本|更新|发版|release|changelog|新特性|特性|变化|memory|dream|what'?s new|latest|recent)/iu.test(text)) {
+        continue;
+      }
+    }
     const patterns = Array.isArray(surface?.patterns) ? surface.patterns : [];
     if (patterns.some((pattern) => pattern.test(text))) {
       return {
@@ -299,11 +331,24 @@ export function buildConversationControlHints({
     return {
       available: true,
       kind: "local_surface_lookup",
+      intent_class: "local_surface_lookup",
       reason: "operator_surface_registry",
       surface_id: operatorSurface.surface_id,
       lane_hint: operatorSurface.lane_hint,
       scope: operatorSurface.scope,
       require_fresh_lookup: true,
+    };
+  }
+
+  if (isFreshLiveLookupPrompt(promptText)) {
+    return {
+      available: true,
+      kind: "fresh_live_lookup",
+      intent_class: "fresh_live_lookup",
+      reason: "fresh_live_lookup_prompt",
+      lane_hint: "runner",
+      require_fresh_lookup: true,
+      scope: "workflow_fresh_lookup",
     };
   }
 
@@ -322,7 +367,8 @@ export function buildConversationControlHints({
   const preferredTaskId = String(facts.taskId || "").trim();
   return {
     available: true,
-    kind: "task_followup",
+    kind: "execution_followup",
+    intent_class: "execution_followup",
     reason: "recent_execution_followup",
     protected_lane: "control_observer",
     route_hint: "direct",
@@ -427,5 +473,6 @@ export const __conversationControlTest = {
   isMetaPrompt,
   isTaskProgressPrompt,
   isProvenancePrompt,
+  isFreshLiveLookupPrompt,
   detectOperatorSurface,
 };
