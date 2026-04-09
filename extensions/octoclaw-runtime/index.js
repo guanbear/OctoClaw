@@ -158,6 +158,33 @@ function preDispatchAckText(decision) {
   return String(decision?.pre_dispatch_ack?.text || "").trim();
 }
 
+function directEntryAckText(decision, toolName = "") {
+  const route = String(decision?.route_decision?.route || "").trim();
+  if (route !== "direct") return "";
+  if (isControlObserverDecision(decision) || isSessionControlDecision(decision)) return "";
+  const tool = String(toolName || "").trim();
+  if (!tool || tool.startsWith("octoclaw_") || tool === "session_status") return "";
+  const workType = String(decision?.route_decision?.work_type || "").trim();
+  if (workType === "code") return "我先看一下，马上给你结论。";
+  if (workType === "research") return "我先查一下，马上给你结论。";
+  return "我先处理一下，马上给你结论。";
+}
+
+function entryAckText(decision, toolName = "") {
+  return preDispatchAckText(decision) || directEntryAckText(decision, toolName);
+}
+
+function shouldSendEntryAck(decision, state = {}, ctx = {}, toolName = "") {
+  if (state?.preDispatchAckSent || state?.entryAckSent) return false;
+  const trigger = String(ctx?.trigger || "").trim().toLowerCase();
+  if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) return false;
+  if (isDelegatedRoute(decision)) {
+    const delegateTool = String(decision?.tool_policy?.must_delegate_via || "").trim();
+    return Boolean(decision?.pre_dispatch_ack?.required) && Boolean(preDispatchAckText(decision)) && Boolean(delegateTool) && String(toolName || "").trim() === delegateTool;
+  }
+  return Boolean(directEntryAckText(decision, toolName));
+}
+
 function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
   if (!isDelegatedRoute(decision)) return false;
   if (!decision?.pre_dispatch_ack?.required) return false;
@@ -167,8 +194,7 @@ function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
   return Boolean(preDispatchAckText(decision));
 }
 
-async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger) {
-  const message = preDispatchAckText(decision);
+async function maybeEmitAckProgress(onUpdate, message, stateKey, logger) {
   if (typeof onUpdate !== "function" || !message) {
     return { attempted: false, sent: false, reason: "progress_update_unavailable", message };
   }
@@ -181,9 +207,12 @@ async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, log
       await onUpdate(payload);
       updatePolicyState(stateKey, (current) => ({
         ...current,
+        entryAckSent: true,
+        entryAckText: message,
         preDispatchAckSent: true,
         preDispatchAckText: message,
         preDispatchAckMode: "progress_update",
+        entryAckMode: "progress_update",
       }));
       return {
         attempted: true,
@@ -201,6 +230,10 @@ async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, log
     reason: "progress_update_failed",
     message,
   };
+}
+
+async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger) {
+  return maybeEmitAckProgress(onUpdate, preDispatchAckText(decision), stateKey, logger);
 }
 
 async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger) {
@@ -222,9 +255,12 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
+        entryAckSent: true,
+        entryAckText: message,
         preDispatchAckSent: true,
         preDispatchAckText: message,
         preDispatchAckMode: "channel_message",
+        entryAckMode: "channel_message",
       }));
     }
     return {
@@ -243,6 +279,83 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
       message,
     };
   }
+}
+
+async function maybeSendEntryAck(decision, metadata, stateKey, state, ctx, logger, toolName = "") {
+  const message = entryAckText(decision, toolName);
+  if (!shouldSendEntryAck(decision, state, ctx, toolName)) {
+    return { attempted: false, sent: false, reason: "not_required", message: "" };
+  }
+  const sessionKey = String(metadata?.session_key || stateKey || decision?.request?.session_key || "").trim();
+  if (!sessionKey) {
+    return { attempted: false, sent: false, reason: "missing_session_key", message };
+  }
+  try {
+    const payload = await runJsonScript(
+      "send_pre_dispatch_ack.py",
+      ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
+      ctx?.cwd || process.cwd(),
+    );
+    const sent = Boolean(payload?.sent || payload?.ok);
+    if (sent) {
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        entryAckSent: true,
+        entryAckText: message,
+        preDispatchAckSent: true,
+        preDispatchAckText: message,
+        preDispatchAckMode: "channel_message",
+        entryAckMode: "channel_message",
+      }));
+    }
+    return {
+      attempted: true,
+      sent,
+      reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
+      message,
+      payload,
+    };
+  } catch (err) {
+    logger?.warn?.(`octoclaw pre-dispatch ack failed: ${String(err)}`);
+    return {
+      attempted: true,
+      sent: false,
+      reason: String(err),
+      message,
+    };
+  }
+}
+
+async function ensureEntryAck(decision, metadata, stateKey, state, ctx, onUpdate, logger, toolName = "") {
+  const channelAttempt = await maybeSendEntryAck(decision, metadata, stateKey, state, ctx, logger, toolName);
+  if (channelAttempt.sent) {
+    return {
+      ...channelAttempt,
+      fallback_used: false,
+      channel_attempt: channelAttempt,
+    };
+  }
+  const allowProgressFallback = isDelegatedRoute(decision)
+    ? Boolean(decision?.pre_dispatch_ack?.fallback_to_progress_update)
+    : true;
+  if (!allowProgressFallback) {
+    return {
+      ...channelAttempt,
+      fallback_used: false,
+      channel_attempt: channelAttempt,
+    };
+  }
+  const progressAttempt = await maybeEmitAckProgress(onUpdate, entryAckText(decision, toolName), stateKey, logger);
+  return {
+    attempted: Boolean(channelAttempt.attempted || progressAttempt.attempted),
+    sent: Boolean(channelAttempt.sent || progressAttempt.sent),
+    reason: progressAttempt.sent ? progressAttempt.reason : channelAttempt.reason,
+    message: progressAttempt.message || channelAttempt.message || "",
+    payload: channelAttempt.payload,
+    fallback_used: Boolean(progressAttempt.sent),
+    channel_attempt: channelAttempt,
+    progress_attempt: progressAttempt,
+  };
 }
 
 async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, onUpdate, logger) {
@@ -899,6 +1012,8 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       routeHintSubmitted: false,
       routeHintPayload: null,
       blockedTools: [],
+      entryAckSent: false,
+      entryAckText: "",
       preDispatchAckSent: false,
       preDispatchAckText: "",
     };
@@ -1296,6 +1411,25 @@ const plugin = {
         block: true,
         blockReason: `OctoClaw runtime policy blocked a manual delegation pattern. Use ${toolPolicy.must_delegate_via || "octoclaw_dispatch"} instead.`,
       };
+    }
+
+    const metadata = buildPolicyMetadata(ctx, { stateKey: stateKey || "" });
+    const ackResult = await maybeSendEntryAck(decision, metadata, stateKey, state, ctx, pi.logger, toolName);
+    if (ackResult.attempted) {
+      await recordPolicyReplay(
+        "entry_ack_attempted",
+        {
+          sessionKey: stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          toolName,
+          sent: Boolean(ackResult.sent),
+          reason: String(ackResult.reason || ""),
+          mode: String(ackResult.sent ? (ackResult.payload ? "channel_message" : "") : ""),
+        },
+        pi.logger,
+        decision,
+      );
     }
 
     if (!delegationEnforcementEnabled) {
@@ -1883,8 +2017,13 @@ export const __octoclawTest = {
   workflowEnforcementRule,
   shouldRetainPolicyStateOnAgentEnd,
   preDispatchAckText,
+  directEntryAckText,
+  entryAckText,
+  shouldSendEntryAck,
   shouldSendPreDispatchAck,
   maybeEmitPreDispatchAckProgress,
+  maybeSendEntryAck,
+  ensureEntryAck,
   ensurePreDispatchAck,
   resolvePolicyDecisionForContext,
   inferRoute,

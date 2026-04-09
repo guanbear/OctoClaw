@@ -523,6 +523,44 @@ Conversation info (untrusted metadata):
         self.assertFalse(payload["ack"]["required"])
         self.assertFalse(payload["shouldSend"])
 
+    def test_entry_ack_helper_enables_slow_direct_tool_runs(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = {
+                  route_decision: {
+                    route: "direct",
+                    work_type: "code"
+                  }
+                };
+                return {
+                  text: __octoclawTest.entryAckText(decision, "Read"),
+                  shouldSend: __octoclawTest.shouldSendEntryAck(decision, {}, { trigger: "message" }, "Read")
+                };
+            })()"""
+        )
+
+        self.assertIn("看一下", payload["text"])
+        self.assertTrue(payload["shouldSend"])
+
+    def test_entry_ack_helper_skips_control_tools_for_direct_routes(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = {
+                  route_decision: {
+                    route: "direct",
+                    work_type: "code"
+                  }
+                };
+                return {
+                  text: __octoclawTest.entryAckText(decision, "octoclaw_status"),
+                  shouldSend: __octoclawTest.shouldSendEntryAck(decision, {}, { trigger: "message" }, "octoclaw_status")
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["text"], "")
+        self.assertFalse(payload["shouldSend"])
+
     def test_pre_dispatch_ack_falls_back_to_progress_update(self) -> None:
         payload = run_runtime_helper(
             """(async () => {
