@@ -209,7 +209,7 @@ function markStickyLaneApplied(sessionKey, entry) {
   return existing;
 }
 
-function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, metadata, policyCfg, forcedRoute) {
+function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, metadata, policyCfg, forcedRoute, laneFeasibility = {}) {
   if (forcedRoute || routeHint.route_hint) return { route: baseRoute, stickyState: {}, stickyReasons: [] };
   const sessionKey = String(metadata.session_key || "").trim();
   const sticky = loadRouteStickiness(policyCfg, sessionKey);
@@ -286,6 +286,7 @@ function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, meta
 function directAllowedFromHint(features) {
   if (features.high_risk) return false;
   if (features.requires_tools) return false;
+  if (features.requires_external_lookup) return false;
   if (features.requires_mutation) return false;
   if (features.requires_code_work) return false;
   if (features.parallelizable) return false;
@@ -294,12 +295,23 @@ function directAllowedFromHint(features) {
   return true;
 }
 
-function mergeRouteFromHint(baseRoute, features, routeHint) {
+function laneIsFeasible(laneFeasibility, route) {
+  if (!route) return true;
+  const entry = laneFeasibility && typeof laneFeasibility === "object" ? laneFeasibility[route] : null;
+  if (!entry || typeof entry !== "object") return true;
+  return Boolean(entry.feasible);
+}
+
+function mergeRouteFromHint(baseRoute, features, routeHint, laneFeasibility = {}) {
   const hintRoute = String(routeHint.route_hint || "").trim();
   if (!hintRoute) return { route: baseRoute, reasonCodes: [] };
   const reasonCodes = [`main_agent_route_hint:${hintRoute}`];
 
   if (hintRoute === "direct") {
+    if (!laneIsFeasible(laneFeasibility, "direct")) {
+      reasonCodes.push("route_hint_veto:direct_infeasible");
+      return { route: baseRoute, reasonCodes };
+    }
     if (directAllowedFromHint(features)) return { route: "direct", reasonCodes };
     const fallback = features.parallelizable ? "spawn_multi" : "spawn_single";
     reasonCodes.push(`route_hint_veto:direct_to_${fallback}`);
@@ -307,6 +319,11 @@ function mergeRouteFromHint(baseRoute, features, routeHint) {
   }
 
   if (hintRoute === "spawn_multi") {
+    if (!laneIsFeasible(laneFeasibility, "spawn_multi")) {
+      const fallback = laneIsFeasible(laneFeasibility, "spawn_single") ? "spawn_single" : baseRoute;
+      reasonCodes.push(`route_hint_veto:spawn_multi_infeasible_to_${fallback}`);
+      return { route: fallback, reasonCodes };
+    }
     if (
       features.parallelizable
       || Number(features.estimated_steps || 0) >= 4
@@ -320,6 +337,10 @@ function mergeRouteFromHint(baseRoute, features, routeHint) {
   }
 
   if (hintRoute === "spawn_single") {
+    if (!laneIsFeasible(laneFeasibility, "spawn_single")) {
+      reasonCodes.push("route_hint_veto:spawn_single_infeasible");
+      return { route: baseRoute, reasonCodes };
+    }
     if (features.parallelizable && (features.high_risk || Number(features.estimated_steps || 0) >= 5)) {
       reasonCodes.push("route_hint_upgrade:spawn_single_to_spawn_multi");
       return { route: "spawn_multi", reasonCodes };
@@ -933,6 +954,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const effectiveForceRoute = VALID_FORCE_ROUTES.has(forceRoute) ? forceRoute : "";
   const routeMeta = applyForcedRoute(inferRoute(task, command), effectiveForceRoute);
   const features = routeMeta.features || {};
+  const laneFeasibility = routeMeta.lane_feasibility && typeof routeMeta.lane_feasibility === "object" ? routeMeta.lane_feasibility : {};
   const runtimeCfg = loadOctoClawConfig().runtime_policy || {};
   const baseRoute = String(routeMeta.system_preferred_route ?? routeMeta.route ?? "direct") || "direct";
   const baseWorkContract = String(routeMeta.work_contract_hint || "").trim();
@@ -944,12 +966,13 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     normalizedMetadata,
     runtimeCfg,
     effectiveForceRoute,
+    laneFeasibility,
   );
 
   let route = stickyResult.route;
   const mergeReasonCodes = [...stickyResult.stickyReasons];
   if (normalizedRouteHint.route_hint) {
-    const merged = mergeRouteFromHint(route, features, normalizedRouteHint);
+    const merged = mergeRouteFromHint(route, features, normalizedRouteHint, laneFeasibility);
     route = merged.route;
     mergeReasonCodes.push(...merged.reasonCodes);
   }
@@ -1047,6 +1070,11 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       route,
       work_contract: workContract,
       work_contract_hint: String(routeMeta.work_contract_hint || ""),
+      contract_kind: String(routeMeta.contract_kind || ""),
+      scope_hint: String(routeMeta.scope_hint || ""),
+      capability_requirements: Array.isArray(routeMeta.capability_requirements) ? [...routeMeta.capability_requirements] : [],
+      lane_feasibility: laneFeasibility,
+      feasible_lanes: Array.isArray(routeMeta.feasible_lanes) ? [...routeMeta.feasible_lanes] : [],
       protected_lane: String(routeMeta.protected_lane || ""),
       dispatch_required: dispatchRequired,
       confidence: Number(routeMeta.confidence || 0.0),

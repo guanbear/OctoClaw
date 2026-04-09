@@ -861,6 +861,7 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "implement_hits": implement_hits,
         "mutation_hits": effective_mutation_hits,
         "repo_activity_hits": 1 if repo_activity_lookup else 0,
+        "requires_external_lookup": effective_external_lookup_hits > 0,
         "cost_sensitive_hits": cost_sensitive_hits,
         "semantic_ambiguity_hits": semantic_ambiguity_hits,
         "continuation_hits": continuation_hits,
@@ -871,6 +872,14 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         "requires_research": effective_research_hits > 0,
         "requires_mutation": effective_mutation_hits > 0 or (implement_hits > 0 and (effective_code_hits > 0 or effective_local_state_hits > 0)),
         "external_lookup_only": effective_external_lookup_hits > 0 and effective_research_hits == 0 and effective_code_hits == 0 and write_hits == 0,
+        "bounded_external_inspect": (
+            effective_external_lookup_hits > 0
+            and research_hits == 0
+            and effective_code_hits == 0
+            and effective_write_hits == 0
+            and effective_mutation_hits == 0
+            and summary_output_hits == 0
+        ),
         "requires_writing": effective_write_hits > 0,
         "estimated_steps": estimated_steps,
         "task_shape": task_shape,
@@ -998,6 +1007,8 @@ def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
         return "answer_now"
     if features.get("observer_control_candidate"):
         return "answer_now"
+    if features.get("bounded_external_inspect"):
+        return "inspect_report"
     if direct_contract_candidate(features):
         return "answer_now"
     if coordinated_work_candidate(features):
@@ -1007,6 +1018,204 @@ def infer_work_contract_hint(features: dict, route: str | None = None) -> str:
     if int(features.get("summary_output_hits", 0) or 0) > 0:
         return "deliverable_work"
     return "deliverable_work"
+
+
+def infer_contract_kind(features: dict, work_contract_hint: str = "") -> str:
+    if features.get("session_control_candidate"):
+        return "session_control"
+    if features.get("observer_control_candidate"):
+        return "answer_now"
+    if features.get("model_benchmark_candidate"):
+        return "probe_measurement"
+    if work_contract_hint == "inspect_report":
+        return "inspect_report"
+    if int(features.get("verify_hits", 0) or 0) > 0 and not features.get("requires_mutation"):
+        return "review"
+    if features.get("requires_mutation") or features.get("requires_code_work"):
+        return "implement"
+    if work_contract_hint == "answer_now":
+        return "answer_now"
+    if work_contract_hint == "coordinated_work":
+        return "coordinated_work"
+    return "deliverable_work"
+
+
+def infer_scope_hint(features: dict, contract_kind: str = "", work_contract_hint: str = "") -> str:
+    if contract_kind == "session_control":
+        return "current-session-only"
+    if features.get("observer_control_candidate"):
+        return "runtime-read-model"
+    if (
+        contract_kind == "probe_measurement"
+        or work_contract_hint == "inspect_report"
+        or features.get("tool_observation_only")
+        or features.get("bounded_external_inspect")
+        or features.get("target_scope") != "generic"
+    ):
+        return "workflow-local"
+    if features.get("requires_mutation") or features.get("requires_code_work") or features.get("requires_research") or features.get("requires_writing"):
+        return "delegated-worker-doable"
+    return "main-session"
+
+
+def infer_capability_requirements(features: dict, contract_kind: str = "", scope_hint: str = "") -> list[str]:
+    requirements: list[str] = []
+    if contract_kind == "session_control":
+        requirements.append("current_session_mutation")
+    elif contract_kind == "probe_measurement":
+        requirements.extend(["structured_report", "measurement_probe"])
+    elif contract_kind == "inspect_report":
+        requirements.extend(["structured_report", "read_only_inspection"])
+    elif contract_kind == "review":
+        requirements.extend(["structured_report", "evidence_review"])
+    elif contract_kind == "implement":
+        requirements.extend(["artifact_output", "mutation_or_code_execution"])
+    elif contract_kind == "answer_now":
+        requirements.append("text_answer")
+    else:
+        requirements.append("artifact_output")
+
+    if scope_hint == "runtime-read-model":
+        requirements.append("runtime_read_model")
+    if scope_hint == "current-session-only":
+        requirements.append("current_session_scope")
+    if features.get("target_scope") == "local":
+        requirements.append("local_read_probe")
+    if features.get("target_scope") == "remote":
+        requirements.append("remote_read_probe")
+    if features.get("bounded_external_inspect"):
+        requirements.append("external_read_query")
+    return list(dict.fromkeys(requirements))
+
+
+def build_lane_feasibility(features: dict, contract_kind: str = "", scope_hint: str = "", work_contract_hint: str = "") -> dict[str, dict[str, Any]]:
+    baseline: dict[str, dict[str, Any]] = {
+        "direct": {"feasible": False, "reasons": []},
+        "runner": {"feasible": False, "reasons": []},
+        "spawn_single": {"feasible": False, "reasons": []},
+        "spawn_multi": {"feasible": False, "reasons": []},
+        "session_control": {"feasible": False, "reasons": []},
+    }
+
+    if scope_hint == "current-session-only":
+        baseline["direct"] = {"feasible": True, "reasons": ["scope:current-session-only"]}
+        baseline["session_control"] = {
+            "feasible": contract_kind == "session_control",
+            "reasons": ["contract:session_control" if contract_kind == "session_control" else "contract_mismatch"],
+        }
+        baseline["runner"]["reasons"].append("scope_current_session_only")
+        baseline["spawn_single"]["reasons"].append("scope_current_session_only")
+        baseline["spawn_multi"]["reasons"].append("scope_current_session_only")
+        return baseline
+
+    if scope_hint == "runtime-read-model":
+        baseline["direct"] = {"feasible": True, "reasons": ["scope:runtime-read-model"]}
+        baseline["runner"]["reasons"].append("scope_runtime_read_model")
+        baseline["spawn_single"]["reasons"].append("scope_runtime_read_model")
+        baseline["spawn_multi"]["reasons"].append("scope_runtime_read_model")
+        baseline["session_control"]["reasons"].append("scope_runtime_read_model")
+        return baseline
+
+    if contract_kind == "probe_measurement":
+        baseline["runner"] = {"feasible": True, "reasons": ["contract:probe_measurement", "capability:runner_probe_or_snapshot"]}
+        baseline["direct"]["reasons"].append("runner_workflow_required")
+        baseline["spawn_single"]["reasons"].append("no_probe_measurement_capability")
+        baseline["spawn_multi"]["reasons"].append("no_probe_measurement_capability")
+        baseline["session_control"]["reasons"].append("contract_mismatch")
+        return baseline
+
+    if contract_kind == "inspect_report":
+        baseline["runner"] = {"feasible": True, "reasons": ["contract:inspect_report", "capability:runner_inspect"]}
+        direct_eligible = (
+            not features.get("requires_tools")
+            and not features.get("requires_external_lookup")
+            and not features.get("requires_research")
+            and not features.get("requires_code_work")
+            and not features.get("requires_writing")
+            and int(features.get("estimated_steps", 0) or 0) <= 1
+            and int(features.get("task_length", 0) or 0) <= 80
+        )
+        baseline["direct"] = {"feasible": direct_eligible, "reasons": ["bounded_direct_inspect" if direct_eligible else "inspect_prefers_workflow"]}
+        deep_inspect = (
+            not features.get("bounded_external_inspect")
+            and not features.get("model_benchmark_candidate")
+            and (
+                not features.get("tool_observation_only")
+                or (not features.get("explicit_local_probe") and (
+                    int(features.get("summary_output_hits", 0) or 0) > 0
+                    or int(features.get("write_hits", 0) or 0) > 0
+                ))
+            )
+            and (
+                features.get("requires_research")
+                or features.get("requires_code_work")
+                or int(features.get("summary_output_hits", 0) or 0) > 0
+                or int(features.get("write_hits", 0) or 0) > 0
+                or int(features.get("verify_hits", 0) or 0) > 0
+                or int(features.get("task_length", 0) or 0) > 120
+                or int(features.get("estimated_steps", 0) or 0) > 2
+            )
+        )
+        baseline["spawn_single"] = {"feasible": deep_inspect, "reasons": ["deep_inspect_handoff" if deep_inspect else "runner_playbook_preferred"]}
+        baseline["spawn_multi"]["reasons"].append("inspect_report_not_parallel_default")
+        baseline["session_control"]["reasons"].append("contract_mismatch")
+        return baseline
+
+    if contract_kind == "review":
+        baseline["spawn_single"] = {"feasible": True, "reasons": ["contract:review"]}
+        multi_review = coordinated_work_candidate(features)
+        baseline["spawn_multi"] = {"feasible": multi_review, "reasons": ["parallel_review_possible" if multi_review else "single_review_default"]}
+        baseline["direct"]["reasons"].append("review_requires_handoff")
+        baseline["runner"]["reasons"].append("review_not_runner_default")
+        baseline["session_control"]["reasons"].append("contract_mismatch")
+        return baseline
+
+    if contract_kind == "implement":
+        baseline["spawn_single"] = {"feasible": True, "reasons": ["contract:implement"]}
+        multi_implement = coordinated_work_candidate(features)
+        baseline["spawn_multi"] = {"feasible": multi_implement, "reasons": ["parallel_implement_possible" if multi_implement else "single_worker_default"]}
+        baseline["direct"]["reasons"].append("implement_requires_worker")
+        baseline["runner"]["reasons"].append("implement_not_runner_capability")
+        baseline["session_control"]["reasons"].append("contract_mismatch")
+        return baseline
+
+    if contract_kind == "answer_now":
+        baseline["direct"] = {"feasible": True, "reasons": ["contract:answer_now"]}
+        baseline["runner"]["reasons"].append("answer_now_prefers_direct")
+        baseline["spawn_single"]["reasons"].append("answer_now_prefers_direct")
+        baseline["spawn_multi"]["reasons"].append("answer_now_prefers_direct")
+        baseline["session_control"]["reasons"].append("contract_mismatch")
+        return baseline
+
+    multi_deliverable = work_contract_hint == "coordinated_work" or coordinated_work_candidate(features)
+    baseline["spawn_single"] = {"feasible": True, "reasons": [f"contract:{work_contract_hint or contract_kind or 'deliverable_work'}"]}
+    baseline["spawn_multi"] = {"feasible": multi_deliverable, "reasons": ["parallel_deliverable_possible" if multi_deliverable else "single_worker_default"]}
+    baseline["direct"]["reasons"].append("deliverable_requires_handoff")
+    baseline["runner"]["reasons"].append("deliverable_not_runner_default")
+    baseline["session_control"]["reasons"].append("contract_mismatch")
+    return baseline
+
+
+def feasible_lanes_from_baseline(lane_feasibility: dict[str, dict[str, Any]]) -> list[str]:
+    return [lane for lane, state in lane_feasibility.items() if isinstance(state, dict) and bool(state.get("feasible"))]
+
+
+def choose_feasible_route(preferred_route: str, scores: dict[str, float], lane_feasibility: dict[str, dict[str, Any]]) -> tuple[str, list[str]]:
+    preferred = str(preferred_route or "").strip()
+    preferred_state = lane_feasibility.get(preferred, {}) if isinstance(lane_feasibility, dict) else {}
+    if not preferred or not preferred_state or bool(preferred_state.get("feasible")):
+        return preferred_route, []
+
+    candidates = [
+        lane
+        for lane in ("direct", "runner", "spawn_single", "spawn_multi")
+        if bool((lane_feasibility.get(lane, {}) or {}).get("feasible"))
+    ]
+    candidates.sort(key=lambda lane: float(scores.get(lane, 0.0) or 0.0), reverse=True)
+    fallback = candidates[0] if candidates else preferred_route or "direct"
+    if fallback == preferred:
+        return preferred_route, []
+    return fallback, [f"feasibility_filter:{preferred}_to_{fallback}"]
 
 
 def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple[str, dict[str, float], list[str], float]:
@@ -1096,6 +1305,9 @@ def contract_driven_route_bias(features: dict, work_contract_hint: str) -> tuple
         if features.get("model_benchmark_candidate"):
             route = "runner"
             reason_codes.append("prefer_runner_for_model_benchmark")
+        elif features.get("bounded_external_inspect"):
+            route = "runner"
+            reason_codes.append("prefer_runner_for_external_lookup_inspect")
         elif features.get("explicit_local_probe") or features.get("hard_runner_candidate"):
             route = "runner"
             reason_codes.append("prefer_runner_for_explicit_probe")
@@ -1329,6 +1541,14 @@ def infer_route(task: str, command: str = "") -> dict:
         route, scores, reason_codes, score_margin = contract_driven_route_bias(features, work_contract_hint)
         confidence = round(min(1.0, max(scores.values())), 3)
 
+    contract_kind = infer_contract_kind(features, work_contract_hint)
+    scope_hint = infer_scope_hint(features, contract_kind, work_contract_hint)
+    capability_requirements = infer_capability_requirements(features, contract_kind, scope_hint)
+    lane_feasibility = build_lane_feasibility(features, contract_kind, scope_hint, work_contract_hint)
+    route, feasibility_reason_codes = choose_feasible_route(route, scores, lane_feasibility)
+    reason_codes.extend(feasibility_reason_codes)
+    feasible_lanes = feasible_lanes_from_baseline(lane_feasibility)
+
     needs_semantic_review, score_margin, semantic_reason = should_request_semantic_review(features, scores, route, work_contract_hint)
     semantic_model_hint = choose_semantic_model_hint() if needs_semantic_review else ""
 
@@ -1359,6 +1579,11 @@ def infer_route(task: str, command: str = "") -> dict:
         "task_class": task_class,
         "protected_lane": protected_lane,
         "work_contract_hint": work_contract_hint,
+        "contract_kind": contract_kind,
+        "scope_hint": scope_hint,
+        "capability_requirements": capability_requirements,
+        "lane_feasibility": lane_feasibility,
+        "feasible_lanes": feasible_lanes,
         "worker_pool_hint": worker_pool_hint,
         "work_type_hint": work_type_hint,
         "phase_hint": phase_hint,

@@ -594,6 +594,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     implement_hits: implementHits,
     mutation_hits: effectiveMutationHits,
     repo_activity_hits: repoActivityLookup ? 1 : 0,
+    requires_external_lookup: effectiveExternalLookupHits > 0,
     cost_sensitive_hits: costSensitiveHits,
     semantic_ambiguity_hits: semanticAmbiguityHits,
     continuation_hits: continuationHits,
@@ -604,6 +605,14 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     requires_research: effectiveResearchHits > 0,
     requires_mutation: effectiveMutationHits > 0 || (implementHits > 0 && (effectiveCodeHits > 0 || effectiveLocalStateHits > 0)),
     external_lookup_only: effectiveExternalLookupHits > 0 && effectiveResearchHits === 0 && effectiveCodeHits === 0 && writeHits === 0,
+    bounded_external_inspect: (
+      effectiveExternalLookupHits > 0
+      && researchHits === 0
+      && effectiveCodeHits === 0
+      && effectiveWriteHits === 0
+      && effectiveMutationHits === 0
+      && summaryOutputHits === 0
+    ),
     requires_writing: effectiveWriteHits > 0,
     estimated_steps: estimatedSteps,
     task_shape: taskShape,
@@ -708,10 +717,219 @@ function inferWorkContractHint(features, route = "") {
   if (features.model_benchmark_candidate) return "inspect_report";
   if (features.session_control_candidate) return "answer_now";
   if (features.observer_control_candidate) return "answer_now";
+  if (features.bounded_external_inspect) return "inspect_report";
   if (directContractCandidate(features)) return "answer_now";
   if (coordinatedWorkCandidate(features)) return "coordinated_work";
   if (features.tool_observation_only) return "inspect_report";
   return "deliverable_work";
+}
+
+function inferContractKind(features, workContractHint = "") {
+  if (features.session_control_candidate) return "session_control";
+  if (features.observer_control_candidate) return "answer_now";
+  if (features.model_benchmark_candidate) return "probe_measurement";
+  if (workContractHint === "inspect_report") return "inspect_report";
+  if (Number(features.verify_hits || 0) > 0 && !features.requires_mutation) return "review";
+  if (features.requires_mutation || features.requires_code_work) return "implement";
+  if (workContractHint === "answer_now") return "answer_now";
+  if (workContractHint === "coordinated_work") return "coordinated_work";
+  return "deliverable_work";
+}
+
+function inferScopeHint(features, contractKind = "", workContractHint = "") {
+  if (contractKind === "session_control") return "current-session-only";
+  if (features.observer_control_candidate) return "runtime-read-model";
+  if (
+    contractKind === "probe_measurement"
+    || workContractHint === "inspect_report"
+    || features.tool_observation_only
+    || features.bounded_external_inspect
+    || features.target_scope !== "generic"
+  ) {
+    return "workflow-local";
+  }
+  if (features.requires_mutation || features.requires_code_work || features.requires_research || features.requires_writing) {
+    return "delegated-worker-doable";
+  }
+  return "main-session";
+}
+
+function inferCapabilityRequirements(features, contractKind = "", scopeHint = "") {
+  const requirements = [];
+  switch (contractKind) {
+    case "session_control":
+      requirements.push("current_session_mutation");
+      break;
+    case "probe_measurement":
+      requirements.push("structured_report", "measurement_probe");
+      break;
+    case "inspect_report":
+      requirements.push("structured_report", "read_only_inspection");
+      break;
+    case "review":
+      requirements.push("structured_report", "evidence_review");
+      break;
+    case "implement":
+      requirements.push("artifact_output", "mutation_or_code_execution");
+      break;
+    case "answer_now":
+      requirements.push("text_answer");
+      break;
+    default:
+      requirements.push("artifact_output");
+      break;
+  }
+  if (scopeHint === "runtime-read-model") requirements.push("runtime_read_model");
+  if (scopeHint === "current-session-only") requirements.push("current_session_scope");
+  if (features.target_scope === "local") requirements.push("local_read_probe");
+  if (features.target_scope === "remote") requirements.push("remote_read_probe");
+  if (features.bounded_external_inspect) requirements.push("external_read_query");
+  return [...new Set(requirements)];
+}
+
+function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workContractHint = "") {
+  const baseline = {
+    direct: { feasible: false, reasons: [] },
+    runner: { feasible: false, reasons: [] },
+    spawn_single: { feasible: false, reasons: [] },
+    spawn_multi: { feasible: false, reasons: [] },
+    session_control: { feasible: false, reasons: [] },
+  };
+
+  if (scopeHint === "current-session-only") {
+    baseline.direct = { feasible: true, reasons: ["scope:current-session-only"] };
+    baseline.session_control = {
+      feasible: contractKind === "session_control",
+      reasons: [contractKind === "session_control" ? "contract:session_control" : "contract_mismatch"],
+    };
+    baseline.runner.reasons.push("scope_current_session_only");
+    baseline.spawn_single.reasons.push("scope_current_session_only");
+    baseline.spawn_multi.reasons.push("scope_current_session_only");
+    return baseline;
+  }
+
+  if (scopeHint === "runtime-read-model") {
+    baseline.direct = { feasible: true, reasons: ["scope:runtime-read-model"] };
+    baseline.runner.reasons.push("scope_runtime_read_model");
+    baseline.spawn_single.reasons.push("scope_runtime_read_model");
+    baseline.spawn_multi.reasons.push("scope_runtime_read_model");
+    baseline.session_control.reasons.push("scope_runtime_read_model");
+    return baseline;
+  }
+
+  if (contractKind === "probe_measurement") {
+    baseline.runner = { feasible: true, reasons: ["contract:probe_measurement", "capability:runner_probe_or_snapshot"] };
+    baseline.direct.reasons.push("runner_workflow_required");
+    baseline.spawn_single.reasons.push("no_probe_measurement_capability");
+    baseline.spawn_multi.reasons.push("no_probe_measurement_capability");
+    baseline.session_control.reasons.push("contract_mismatch");
+    return baseline;
+  }
+
+  if (contractKind === "inspect_report") {
+    baseline.runner = { feasible: true, reasons: ["contract:inspect_report", "capability:runner_inspect"] };
+    const directEligible = !features.requires_tools
+      && !features.requires_external_lookup
+      && !features.requires_research
+      && !features.requires_code_work
+      && !features.requires_writing
+      && Number(features.estimated_steps || 0) <= 1
+      && Number(features.task_length || 0) <= 80;
+    baseline.direct = {
+      feasible: directEligible,
+      reasons: [directEligible ? "bounded_direct_inspect" : "inspect_prefers_workflow"],
+    };
+    const deepInspect = !features.bounded_external_inspect
+      && !features.model_benchmark_candidate
+      && (
+        !features.tool_observation_only
+        || (!features.explicit_local_probe && (Number(features.summary_output_hits || 0) > 0 || Number(features.write_hits || 0) > 0))
+      )
+      && (
+        features.requires_research
+        || features.requires_code_work
+        || Number(features.summary_output_hits || 0) > 0
+        || Number(features.write_hits || 0) > 0
+        || Number(features.verify_hits || 0) > 0
+        || Number(features.task_length || 0) > 120
+        || Number(features.estimated_steps || 0) > 2
+      );
+    baseline.spawn_single = {
+      feasible: deepInspect,
+      reasons: [deepInspect ? "deep_inspect_handoff" : "runner_playbook_preferred"],
+    };
+    baseline.spawn_multi.reasons.push("inspect_report_not_parallel_default");
+    baseline.session_control.reasons.push("contract_mismatch");
+    return baseline;
+  }
+
+  if (contractKind === "review") {
+    baseline.spawn_single = { feasible: true, reasons: ["contract:review"] };
+    baseline.spawn_multi = {
+      feasible: coordinatedWorkCandidate(features),
+      reasons: [coordinatedWorkCandidate(features) ? "parallel_review_possible" : "single_review_default"],
+    };
+    baseline.direct.reasons.push("review_requires_handoff");
+    baseline.runner.reasons.push("review_not_runner_default");
+    baseline.session_control.reasons.push("contract_mismatch");
+    return baseline;
+  }
+
+  if (contractKind === "implement") {
+    baseline.spawn_single = { feasible: true, reasons: ["contract:implement"] };
+    baseline.spawn_multi = {
+      feasible: coordinatedWorkCandidate(features),
+      reasons: [coordinatedWorkCandidate(features) ? "parallel_implement_possible" : "single_worker_default"],
+    };
+    baseline.direct.reasons.push("implement_requires_worker");
+    baseline.runner.reasons.push("implement_not_runner_capability");
+    baseline.session_control.reasons.push("contract_mismatch");
+    return baseline;
+  }
+
+  if (contractKind === "answer_now") {
+    baseline.direct = { feasible: true, reasons: ["contract:answer_now"] };
+    baseline.runner.reasons.push("answer_now_prefers_direct");
+    baseline.spawn_single.reasons.push("answer_now_prefers_direct");
+    baseline.spawn_multi.reasons.push("answer_now_prefers_direct");
+    baseline.session_control.reasons.push("contract_mismatch");
+    return baseline;
+  }
+
+  baseline.spawn_single = { feasible: true, reasons: [`contract:${workContractHint || contractKind || "deliverable_work"}`] };
+  baseline.spawn_multi = {
+    feasible: workContractHint === "coordinated_work" || coordinatedWorkCandidate(features),
+    reasons: [workContractHint === "coordinated_work" || coordinatedWorkCandidate(features) ? "parallel_deliverable_possible" : "single_worker_default"],
+  };
+  baseline.direct.reasons.push("deliverable_requires_handoff");
+  baseline.runner.reasons.push("deliverable_not_runner_default");
+  baseline.session_control.reasons.push("contract_mismatch");
+  return baseline;
+}
+
+function feasibleLanesFromBaseline(laneFeasibility = {}) {
+  return Object.entries(laneFeasibility)
+    .filter(([, value]) => value && typeof value === "object" && value.feasible)
+    .map(([lane]) => lane);
+}
+
+function chooseFeasibleRoute(preferredRoute, scores = {}, laneFeasibility = {}) {
+  const preferred = String(preferredRoute || "").trim();
+  const preferredState = laneFeasibility[preferred];
+  if (!preferred || !preferredState || preferredState.feasible) {
+    return { route: preferredRoute, reasonCodes: [] };
+  }
+
+  const candidates = ["direct", "runner", "spawn_single", "spawn_multi"]
+    .filter((lane) => laneFeasibility[lane]?.feasible)
+    .sort((left, right) => Number(scores[right] || 0) - Number(scores[left] || 0));
+  const fallback = candidates[0] || preferredRoute || "direct";
+  return {
+    route: fallback,
+    reasonCodes: fallback === preferred
+      ? []
+      : [`feasibility_filter:${preferred}_to_${fallback}`],
+  };
 }
 
 function contractDrivenRouteBias(features, workContractHint) {
@@ -799,6 +1017,9 @@ function contractDrivenRouteBias(features, workContractHint) {
     if (features.model_benchmark_candidate) {
       route = "runner";
       reasonCodes.push("prefer_runner_for_model_benchmark");
+    } else if (features.bounded_external_inspect) {
+      route = "runner";
+      reasonCodes.push("prefer_runner_for_external_lookup_inspect");
     } else if (features.explicit_local_probe || features.hard_runner_candidate) {
       route = "runner";
       reasonCodes.push("prefer_runner_for_explicit_probe");
@@ -1005,6 +1226,17 @@ export function inferRoute(task, command = "") {
     confidence = inferred.confidence;
   }
 
+  const contractKind = inferContractKind(features, workContractHint);
+  const scopeHint = inferScopeHint(features, contractKind, workContractHint);
+  const capabilityRequirements = inferCapabilityRequirements(features, contractKind, scopeHint);
+  const laneFeasibility = buildLaneFeasibility(features, contractKind, scopeHint, workContractHint);
+  const feasibleRoute = chooseFeasibleRoute(route, scores, laneFeasibility);
+  if (feasibleRoute.route !== route) {
+    route = feasibleRoute.route;
+    reasonCodes.push(...feasibleRoute.reasonCodes);
+  }
+  const feasibleLanes = feasibleLanesFromBaseline(laneFeasibility);
+
   const semantic = shouldRequestSemanticReview(features, scores, route, workContractHint);
   const workTypeHint = inferWorkTypeHint(features, route, workContractHint);
   const phaseHint = inferPhaseHint(features, route, workTypeHint, workContractHint);
@@ -1031,6 +1263,11 @@ export function inferRoute(task, command = "") {
     task_class: taskClass,
     protected_lane: protectedLane,
     work_contract_hint: workContractHint,
+    contract_kind: contractKind,
+    scope_hint: scopeHint,
+    capability_requirements: capabilityRequirements,
+    lane_feasibility: laneFeasibility,
+    feasible_lanes: feasibleLanes,
     worker_pool_hint: workerPoolHint,
     work_type_hint: workTypeHint,
     phase_hint: phaseHint,

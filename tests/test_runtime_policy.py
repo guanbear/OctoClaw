@@ -4,7 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -460,8 +460,22 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
         self.assertEqual(payload["route_decision"]["phase"], "inspect")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["route_decision"]["contract_kind"], "probe_measurement")
+        self.assertEqual(payload["route_decision"]["scope_hint"], "workflow-local")
+        self.assertIn("runner", payload["route_decision"]["feasible_lanes"])
+        self.assertNotIn("spawn_single", payload["route_decision"]["feasible_lanes"])
         self.assertFalse(payload["pre_dispatch_ack"]["required"])
         self.assertFalse(payload["route_recommendation"]["bypass_delegated_optimization"])
+
+    def test_release_feature_check_prefers_runner_inspect_report(self) -> None:
+        payload = self.run_policy("帮我查下openclaw 又有新版本了吗 有啥新特性")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["route_decision"]["contract_kind"], "inspect_report")
+        self.assertEqual(payload["route_decision"]["scope_hint"], "workflow-local")
+        self.assertIn("runner", payload["route_decision"]["feasible_lanes"])
+        self.assertNotIn("direct", payload["route_decision"]["feasible_lanes"])
 
     def test_policy_refreshes_model_health_feedback_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-policy-feedback-") as workspace:
@@ -487,8 +501,9 @@ class RuntimePolicyTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            recent_ts = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).isoformat(timespec="milliseconds")
             (logs_dir / "gateway.err.log").write_text(
-                "2026-04-08T00:55:40.882+08:00 [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
+                f"{recent_ts} [model-fallback/decision] model fallback decision: decision=candidate_failed requested=omniroute/cx/gpt-5.4 candidate=minimax-portal/MiniMax-M2.7-highspeed reason=auth next=zhipu/GLM-5.1\n",
                 encoding="utf-8",
             )
             env = {**os.environ, "WORKSPACE": workspace}

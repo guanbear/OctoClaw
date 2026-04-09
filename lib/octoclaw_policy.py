@@ -243,6 +243,17 @@ def mark_sticky_lane_applied(session_key: str, entry: dict[str, Any]) -> dict[st
     return existing
 
 
+def lane_is_feasible(lane_feasibility: dict[str, Any] | None, route: str) -> bool:
+    if not route:
+        return True
+    if not isinstance(lane_feasibility, dict):
+        return True
+    entry = lane_feasibility.get(route)
+    if not isinstance(entry, dict):
+        return True
+    return bool(entry.get("feasible"))
+
+
 def apply_sticky_route(
     base_route: str,
     base_work_contract: str,
@@ -251,6 +262,7 @@ def apply_sticky_route(
     metadata: dict[str, Any],
     policy_cfg: dict[str, Any],
     forced_route: str,
+    lane_feasibility: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any], list[str]]:
     if forced_route or route_hint.get("route_hint"):
         return base_route, {}, []
@@ -315,6 +327,8 @@ def direct_allowed_from_hint(features: dict[str, Any]) -> bool:
         return False
     if features.get("requires_tools"):
         return False
+    if features.get("requires_external_lookup"):
+        return False
     if features.get("requires_mutation"):
         return False
     if features.get("requires_code_work"):
@@ -330,13 +344,21 @@ def direct_allowed_from_hint(features: dict[str, Any]) -> bool:
     return True
 
 
-def merge_route_from_hint(base_route: str, features: dict[str, Any], route_hint: dict[str, Any]) -> tuple[str, list[str]]:
+def merge_route_from_hint(
+    base_route: str,
+    features: dict[str, Any],
+    route_hint: dict[str, Any],
+    lane_feasibility: dict[str, Any] | None = None,
+) -> tuple[str, list[str]]:
     hint_route = str(route_hint.get("route_hint", "") or "").strip()
     if not hint_route:
         return base_route, []
 
     reason_codes = [f"main_agent_route_hint:{hint_route}"]
     if hint_route == "direct":
+        if not lane_is_feasible(lane_feasibility, "direct"):
+            reason_codes.append("route_hint_veto:direct_infeasible")
+            return base_route, reason_codes
         if direct_allowed_from_hint(features):
             return "direct", reason_codes
         fallback = "spawn_multi" if features.get("parallelizable") else "spawn_single"
@@ -344,6 +366,10 @@ def merge_route_from_hint(base_route: str, features: dict[str, Any], route_hint:
         return fallback, reason_codes
 
     if hint_route == "spawn_multi":
+        if not lane_is_feasible(lane_feasibility, "spawn_multi"):
+            fallback = "spawn_single" if lane_is_feasible(lane_feasibility, "spawn_single") else base_route
+            reason_codes.append(f"route_hint_veto:spawn_multi_infeasible_to_{fallback}")
+            return fallback, reason_codes
         if (
             features.get("parallelizable")
             or int(features.get("estimated_steps", 0) or 0) >= 4
@@ -355,6 +381,9 @@ def merge_route_from_hint(base_route: str, features: dict[str, Any], route_hint:
         return "spawn_single", reason_codes
 
     if hint_route == "spawn_single":
+        if not lane_is_feasible(lane_feasibility, "spawn_single"):
+            reason_codes.append("route_hint_veto:spawn_single_infeasible")
+            return base_route, reason_codes
         if features.get("parallelizable") and (features.get("high_risk") or int(features.get("estimated_steps", 0) or 0) >= 5):
             reason_codes.append("route_hint_upgrade:spawn_single_to_spawn_multi")
             return "spawn_multi", reason_codes
@@ -853,6 +882,7 @@ def build_decision(
     route_hint = normalize_route_hint(route_hint)
     route_meta = apply_forced_route(infer_route(task, command), force_route)
     features = route_meta.get("features", {})
+    lane_feasibility = route_meta.get("lane_feasibility", {}) if isinstance(route_meta.get("lane_feasibility", {}), dict) else {}
     config = load_octopus_config()
     runtime_cfg = config.get("runtime_policy", {})
     _model_health_feedback_result = refresh_model_health_feedback_if_stale(
@@ -871,10 +901,11 @@ def build_decision(
         metadata,
         runtime_cfg,
         force_route,
+        lane_feasibility,
     )
     merge_reason_codes.extend(sticky_reasons)
     if route_hint.get("route_hint"):
-        route, hint_reasons = merge_route_from_hint(route, features, route_hint)
+        route, hint_reasons = merge_route_from_hint(route, features, route_hint, lane_feasibility)
         merge_reason_codes.extend(hint_reasons)
 
     base_work_type = infer_work_type(task, features, route, metadata)
@@ -965,6 +996,11 @@ def build_decision(
             "route": route,
             "work_contract": work_contract,
             "work_contract_hint": str(route_meta.get("work_contract_hint", "") or ""),
+            "contract_kind": str(route_meta.get("contract_kind", "") or ""),
+            "scope_hint": str(route_meta.get("scope_hint", "") or ""),
+            "capability_requirements": list(route_meta.get("capability_requirements", []) or []),
+            "lane_feasibility": lane_feasibility,
+            "feasible_lanes": list(route_meta.get("feasible_lanes", []) or []),
             "protected_lane": str(route_meta.get("protected_lane", "") or ""),
             "dispatch_required": dispatch_required,
             "confidence": route_meta.get("confidence", 0.0),

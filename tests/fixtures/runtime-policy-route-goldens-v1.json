@@ -97,5 +97,14 @@
       "work_contract_hint": "deliverable_work",
       "protected_lane": ""
     }
+  },
+  {
+    "task": "帮我查下openclaw 又有新版本了吗 有啥新特性",
+    "expected": {
+      "system_preferred_route": "runner",
+      "task_class": "fast_tool_check",
+      "work_contract_hint": "inspect_report",
+      "protected_lane": ""
+    }
   }
 ]
