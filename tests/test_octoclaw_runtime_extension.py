@@ -901,7 +901,7 @@ Sender (untrusted metadata):
 
     def test_wrapped_controlui_prompt_does_not_accidentally_delegate(self) -> None:
         payload = run_runtime_helper(
-            """(() => {
+            """(async () => {
                 const prompt = __octoclawTest.extractPromptText({
                   prompt: `System: [2026-04-09 22:57:03 GMT+8] Slack DM from guanbear: 你的controlui的访问地址是啥
 
@@ -917,7 +917,18 @@ Sender (untrusted metadata):
 
 你的controlui的访问地址是啥`
                 });
-                const decision = __octoclawTest.buildDecision(prompt);
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  prompt,
+                  {
+                    sessionKey: "agent:main:slack:direct:u-control",
+                    sessionId: "sess-control",
+                    trigger: "message",
+                    agentId: "agent:main:main"
+                  },
+                  process.cwd(),
+                  null
+                );
+                const decision = resolved?.decision || {};
                 return {
                   extracted: prompt,
                   route: decision.route_decision.route,
@@ -929,10 +940,118 @@ Sender (untrusted metadata):
         )
 
         self.assertEqual(payload["extracted"], "你的controlui的访问地址是啥")
-        self.assertEqual(payload["route"], "direct")
-        self.assertEqual(payload["taskClass"], "direct_answer")
-        self.assertTrue(payload["allowDirectTools"])
-        self.assertEqual(payload["mustDelegateVia"], "")
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_local_check")
+        self.assertFalse(payload["allowDirectTools"])
+        self.assertEqual(payload["mustDelegateVia"], "octoclaw_dispatch")
+
+    def test_short_single_followup_uses_recent_execution_facts(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-followup-") as tmpdir:
+            workspace = Path(tmpdir)
+            replay_dir = workspace / "tmp" / "octopus"
+            replay_dir.mkdir(parents=True)
+            (replay_dir / "task-state.json").write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "research-20260409121206076161",
+                                "status": "completed",
+                                "summary": "调研已完成",
+                                "route": "spawn_single",
+                                "worker_pool": "octoclaw-research",
+                                "runtime": "openclaw_task",
+                                "model": "zhipu/GLM-5.1",
+                                "report_path": "/tmp/report.md",
+                                "latest_event_kind": "done",
+                                "latest_event_at": "2026-04-09T14:55:10Z",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (replay_dir / "runtime-policy-replay.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-09T14:55:02.606Z",
+                                "sessionKey": "agent:main:slack:direct:u-followup",
+                                "sessionId": "sess-followup",
+                                "trigger": "user",
+                                "route": "spawn_single",
+                                "taskClass": "focused_subtask",
+                                "protectedLane": "",
+                                "prompt": "调研 OpenClaw 最近 release 和 Memory 改动，给我 5 句话总结",
+                            },
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "dispatch_called",
+                                "at": "2026-04-09T14:55:03.100Z",
+                                "sessionKey": "agent:main:slack:direct:u-followup",
+                                "sessionId": "sess-followup",
+                                "route": "spawn_single",
+                                "executed": True,
+                                "taskId": "research-20260409121206076161",
+                                "materialization": {
+                                    "status": "materialized",
+                                    "kind": "spawn_child_task",
+                                    "task_id": "research-20260409121206076161",
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            payload = run_runtime_helper(
+                """(async () => {
+                    const hints = __octoclawTest.__conversationControlTest.buildConversationControlHints({
+                      prompt: "single 成功了吗",
+                      replayLogPath: __octoclawTest.resolveReplayLogPath(),
+                      taskStatePath: __octoclawTest.resolveTaskStatePath(),
+                      sessionKeys: ["agent:main:slack:direct:u-followup"]
+                    });
+                    const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                      "single 成功了吗",
+                      {
+                        sessionKey: "agent:main:slack:direct:u-followup",
+                        sessionId: "sess-followup",
+                        trigger: "message",
+                        agentId: "agent:main:main"
+                      },
+                      process.cwd(),
+                      null
+                    );
+                    return {
+                      hints,
+                      route: resolved?.decision?.route_decision?.route || "",
+                      taskClass: resolved?.decision?.route_decision?.task_class || "",
+                      protectedLane: resolved?.decision?.route_decision?.protected_lane || ""
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                },
+            )
+
+            self.assertEqual(payload["hints"]["kind"], "task_followup")
+            self.assertEqual(payload["hints"]["preferred_task_id"], "research-20260409121206076161")
+            self.assertEqual(payload["route"], "direct")
+            self.assertEqual(payload["taskClass"], "control_observer")
+            self.assertEqual(payload["protectedLane"], "control_observer")
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(

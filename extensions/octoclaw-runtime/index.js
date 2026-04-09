@@ -4,7 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildConversationGrounding, buildDirectLookupGuard, __conversationControlTest } from "./conversation-control.js";
+import {
+  buildConversationControlHints,
+  buildConversationGrounding,
+  buildDirectLookupGuard,
+  __conversationControlTest,
+} from "./conversation-control.js";
 import { buildDecision } from "./policy/decide.js";
 import { inferRoute } from "./policy/route.js";
 
@@ -1227,6 +1232,20 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   }
   const boundary = detectSessionBoundary(ctx);
   const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
+  const conversationControl = buildConversationControlHints({
+    prompt,
+    replayLogPath: resolveReplayLogPath(),
+    taskStatePath: resolveTaskStatePath(),
+    sessionKeys: [
+      stateKey,
+      metadata.session_key,
+      existing?.canonicalSessionKey,
+      ctx?.sessionKey,
+    ].filter(Boolean),
+  });
+  if (conversationControl?.available) {
+    metadata.conversation_control = conversationControl;
+  }
   try {
     const decision = buildDecision(prompt, { metadata });
     const nextState = {
@@ -1271,6 +1290,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         routeLanguagePacks: Array.isArray(decision?.route_language_packs) ? decision.route_language_packs : [],
         sessionBoundaryStatus: String(boundary.status || ""),
         canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || ""),
+        conversationControlKind: String(metadata?.conversation_control?.kind || ""),
         prompt: truncateText(prompt),
       },
       logger,

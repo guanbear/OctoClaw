@@ -17,6 +17,21 @@ const TASK_PROGRESS_PROMPT_PATTERNS = [
   /\b(single succeeded|spawn succeeded|runner succeeded|task status|still queued|still running)\b/iu,
 ];
 
+const SHORT_EXECUTION_FOLLOWUP_SHAPE_RE = /([?？]|吗|么|啥|谁|哪|怎么|如何|状态|进度|成功|完成|判定|查的|做的|处理的|执行的)/iu;
+
+const OPERATOR_SURFACE_REGISTRY = [
+  {
+    surface_id: "control_ui",
+    lane_hint: "runner",
+    scope: "local_surface_lookup",
+    patterns: [
+      /(control\s*ui|controlui)/iu,
+      /(gateway\s*(ui|status|web)?|网关界面|控制台|web\s*ui|web界面)/iu,
+      /((访问|入口|打开|查看).*(地址|url|界面)|(?:地址|url).*(control\s*ui|controlui|gateway|控制台))/iu,
+    ],
+  },
+];
+
 function normalizeText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -74,6 +89,22 @@ function isProvenancePrompt(prompt = "") {
   return PROVENANCE_PROMPT_PATTERNS.some((pattern) => pattern.test(text))
     || /怎么查/u.test(text)
     || /\bhow did you check\b/iu.test(text);
+}
+
+function detectOperatorSurface(prompt = "") {
+  const text = String(prompt || "").trim();
+  if (!text) return null;
+  for (const surface of OPERATOR_SURFACE_REGISTRY) {
+    const patterns = Array.isArray(surface?.patterns) ? surface.patterns : [];
+    if (patterns.some((pattern) => pattern.test(text))) {
+      return {
+        surface_id: String(surface.surface_id || "").trim(),
+        lane_hint: String(surface.lane_hint || "").trim() || "runner",
+        scope: String(surface.scope || "").trim() || "local_surface_lookup",
+      };
+    }
+  }
+  return null;
 }
 
 function buildTaskIndex(taskStatePath = "") {
@@ -223,6 +254,76 @@ function selectSubjectTurn(turns, prompt = "", sessionKeys = []) {
   return null;
 }
 
+function looksLikeShortExecutionFollowup(prompt = "", subjectTurn = null) {
+  const text = String(prompt || "").trim();
+  if (!text || !subjectTurn) return false;
+  if (text.length > 48) return false;
+  if (/\r?\n/u.test(text)) return false;
+  if (isMetaPrompt(text) || isTaskProgressPrompt(text) || isProvenancePrompt(text)) {
+    return true;
+  }
+  const facts = subjectTurn?.facts || {};
+  const hasRecentExecutionContext = Boolean(
+    facts.dispatchSeen
+      || facts.taskId
+      || facts.runnerJobId
+      || (facts.directTools || []).length > 0
+      || String(subjectTurn?.route || "").trim(),
+  );
+  return hasRecentExecutionContext && SHORT_EXECUTION_FOLLOWUP_SHAPE_RE.test(text);
+}
+
+export function buildConversationControlHints({
+  prompt = "",
+  replayLogPath = "",
+  taskStatePath = "",
+  sessionKeys = [],
+} = {}) {
+  const promptText = String(prompt || "").trim();
+  if (!promptText) {
+    return { available: false, reason: "empty_prompt" };
+  }
+
+  const operatorSurface = detectOperatorSurface(promptText);
+  if (operatorSurface) {
+    return {
+      available: true,
+      kind: "local_surface_lookup",
+      reason: "operator_surface_registry",
+      surface_id: operatorSurface.surface_id,
+      lane_hint: operatorSurface.lane_hint,
+      scope: operatorSurface.scope,
+      require_fresh_lookup: true,
+    };
+  }
+
+  const turns = groupedReplayTurns(readJsonl(replayLogPath));
+  const taskIndex = buildTaskIndex(taskStatePath);
+  const enrichedTurns = turns.map((turn) => ({ ...turn, facts: buildTurnFacts(turn, taskIndex) }));
+  const subjectTurn = selectSubjectTurn(enrichedTurns, promptText, sessionKeys);
+  if (!subjectTurn) {
+    return { available: false, reason: "no_recent_subject_turn" };
+  }
+  if (!looksLikeShortExecutionFollowup(promptText, subjectTurn)) {
+    return { available: false, reason: "no_followup_signal" };
+  }
+
+  const facts = subjectTurn.facts || {};
+  const preferredTaskId = String(facts.taskId || "").trim();
+  return {
+    available: true,
+    kind: "task_followup",
+    reason: "recent_execution_followup",
+    protected_lane: "control_observer",
+    route_hint: "direct",
+    require_state_grounding: true,
+    subject_prompt: String(subjectTurn.prompt || "").trim(),
+    subject_route: String(subjectTurn.route || "").trim(),
+    subject_task_class: String(subjectTurn.taskClass || "").trim(),
+    preferred_task_id: preferredTaskId,
+  };
+}
+
 export function buildConversationGrounding({
   prompt = "",
   replayLogPath = "",
@@ -312,7 +413,9 @@ export function buildDirectLookupGuard(decision = {}) {
 export const __conversationControlTest = {
   groupedReplayTurns,
   buildConversationGrounding,
+  buildConversationControlHints,
   isMetaPrompt,
   isTaskProgressPrompt,
   isProvenancePrompt,
+  detectOperatorSurface,
 };

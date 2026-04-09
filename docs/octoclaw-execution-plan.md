@@ -634,8 +634,10 @@ P5 不应该顺手混进这些题：
 这条线固定分成四步：
 
 1. route / task-class hardening
-   - workflow meta / task progress follow-up 进入受保护的 `direct/control_observer`
-   - bounded software/repo update lookup 进入 `direct/simple_lookup`
+   - workflow meta / task progress follow-up 不再靠词表穷举，而是先走 conversation front gate
+   - front gate 产出 `task_followup` / `local_surface_lookup` hint
+   - route engine 再根据 hint 把 follow-up 收到 `direct/control_observer`，把本机 operator surface 查询收进 `runner`
+   - bounded software/repo update lookup 继续进入 `direct/simple_lookup`
 2. JS-native state grounding
    - 在 runtime hot path 接入 replay + task-state grounding
 3. direct slow-path latency ack

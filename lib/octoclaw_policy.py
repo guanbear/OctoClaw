@@ -997,7 +997,7 @@ def build_decision(
 ) -> dict[str, Any]:
     metadata = normalize_metadata(metadata)
     route_hint = normalize_route_hint(route_hint)
-    route_meta = apply_forced_route(infer_route(task, command), force_route)
+    route_meta = apply_forced_route(infer_route(task, command, metadata=metadata), force_route)
     features = route_meta.get("features", {})
     lane_feasibility = route_meta.get("lane_feasibility", {}) if isinstance(route_meta.get("lane_feasibility", {}), dict) else {}
     config = load_octopus_config()

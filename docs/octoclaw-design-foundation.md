@@ -242,11 +242,19 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
    - `不是 runner 吗`
    - `single 成功了吗`
    - `你是怎么查的`
-   这类 follow-up 统一走受保护的 `direct/control_observer`，并在 hot path 里优先绑定 replay + task-state 的最新 execution facts。
+   这类 follow-up 不再靠词表穷举直接路由，而是先经过 conversation front gate：
+   - 识别“短追问 + 最近 execution turn”
+   - 产出 `task_followup` hint
+   - 再统一进入受保护的 `direct/control_observer`
+   - 并在 hot path 里优先绑定 replay + task-state 的最新 execution facts。
 
 2. **latency-first direct lookup guarantee**
    - 对 `bounded live lookup`，例如“看下 OpenClaw 最近有啥更新”
    - 在 direct path 中也要先发轻量 ack，而不是只有 delegated path 才会发状态回执
+
+3. **bounded operator surface registry**
+   - 对 `Control UI / gateway / 本机 operator surface` 这类查询，使用有界的 surface registry 产出 `local_surface_lookup` hint
+   - route engine 只消费 hint，不直接背负越来越长的 prompt 词表
 
 这条线的目标不是增加更多 heuristic，而是把聊天入口也收进已有的 execution/read-model 真相层里。
 

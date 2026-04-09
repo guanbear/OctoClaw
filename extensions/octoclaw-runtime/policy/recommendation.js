@@ -81,6 +81,8 @@ export function buildRouteRecommendation(routeMeta = {}, resolved = {}) {
     ? "rule_fallback"
     : (routeMeta?.needs_semantic_review ? "route_hint_or_future_tiny_judge" : "none");
   const resolvedBy = protectedLane ? "protected_lane" : (Number(features.repo_activity_hits || 0) > 0 ? "rule_fallback" : "base_policy");
+  const reasonCodeCount = reasonCodes.length;
+  const truncatedReasonCodes = reasonCodes.slice(0, 8);
   return {
     schema_version: "octoclaw.route_recommendation/v1",
     recommended_route: String(resolved?.route || routeMeta?.route || routeMeta?.system_preferred_route || "direct"),
@@ -103,6 +105,8 @@ export function buildRouteRecommendation(routeMeta = {}, resolved = {}) {
       tiny_judge_ready: false,
       fallback_policy: "rule_only",
     },
-    reason_codes: reasonCodes.slice(0, 8),
+    reason_codes: truncatedReasonCodes,
+    reason_code_count: reasonCodeCount,
+    reason_codes_truncated: reasonCodeCount > truncatedReasonCodes.length,
   };
 }

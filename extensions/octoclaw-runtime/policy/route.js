@@ -385,12 +385,19 @@ function commandLooksReadOnly(command) {
   return READ_ONLY_COMMAND_PATTERNS.some((pattern) => new RegExp(pattern, "iu").test(cmd));
 }
 
-export function extractFeatures(task, command = "", runtimeCfg = null) {
+function normalizeConversationControlMetadata(metadata = {}) {
+  const raw = metadata?.conversation_control;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  return { ...raw };
+}
+
+export function extractFeatures(task, command = "", runtimeCfg = null, metadata = {}) {
   const rawTask = String(task || "").trim();
   const text = rawTask.toLowerCase();
   const normalizedCommand = String(command || "").trim();
   const enabledPacks = normalizeEnabledLanguagePacks(runtimeCfg);
-  const explicitLocalProbe = Boolean(
+  const conversationControl = normalizeConversationControlMetadata(metadata);
+  let explicitLocalProbe = Boolean(
     /\/[A-Za-z0-9._/\-]+/.test(rawTask)
       || /(?:最近|近)\s*\d{1,4}\s*行/u.test(rawTask)
       || /\btail\s+-n?\s*\d{1,4}\b/u.test(text)
@@ -432,8 +439,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       || /^\s*(?:details?|view|retrieve|result|graph|timeline|artifacts?|stop|retry|approve|reject)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask)
       || /^\s*(?:任务详情|任务时间线|任务图|任务结果|任务产物|任务报告|任务停止|任务重试|任务批准|任务拒绝)\s+[A-Za-z0-9._:/-]+\s*$/iu.test(rawTask),
   );
-  const workflowMetaCandidate = workflowMetaHits > 0;
-  const sessionControlCandidate = Boolean(sessionControlHits > 0);
+  let workflowMetaCandidate = workflowMetaHits > 0;
+  let sessionControlCandidate = Boolean(sessionControlHits > 0);
   const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate && !sessionControlCandidate);
 
   const repoActivityLookup = Boolean(
@@ -472,6 +479,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   let effectiveCodeHits = codeHits;
   let effectiveLocalStateHits = localStateHits;
   let effectiveRunnerNegativeHits = runnerNegativeHits;
+  let effectiveRunnerReadOnlyIntentHits = runnerReadOnlyIntentHits;
+  let effectiveRunnerTargetHits = runnerTargetHits;
   if (modelBenchmarkCandidate) {
     effectiveCodeHits = 0;
     effectiveResearchHits = 0;
@@ -484,13 +493,13 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   if (summaryOutputHits > 0 && effectiveCodeHits === 0 && effectiveResearchHits === 0 && effectiveMutationHits === 0) {
     effectiveWriteHits = 0;
   }
-  if (
-    explicitLocalProbe
-    && runnerReadOnlyIntentHits > 0
-    && runnerTargetHits > 0
-    && effectiveCodeHits === 0
-    && effectiveResearchHits === 0
-    && effectiveMutationHits === 0
+    if (
+        explicitLocalProbe
+        && effectiveRunnerReadOnlyIntentHits > 0
+        && effectiveRunnerTargetHits > 0
+        && effectiveCodeHits === 0
+        && effectiveResearchHits === 0
+        && effectiveMutationHits === 0
   ) {
     effectiveWriteHits = 0;
   }
@@ -503,8 +512,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     && rawTask.length <= 48
     && !normalizedCommand
     && runnerHits === 0
-    && runnerReadOnlyIntentHits === 0
-    && runnerTargetHits === 0
+    && effectiveRunnerReadOnlyIntentHits === 0
+    && effectiveRunnerTargetHits === 0
     && effectiveRunnerNegativeHits === 0
     && effectiveCodeHits === 0
     && effectiveResearchHits === 0
@@ -536,6 +545,32 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       && effectiveMutationHits === 0,
   );
 
+  let observerControlCandidate = Boolean(
+    explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate || taskProgressCandidate
+  );
+
+  if (conversationControl.kind === "task_followup") {
+    workflowMetaCandidate = true;
+    observerControlCandidate = true;
+    effectiveResearchHits = 0;
+    effectiveExternalLookupHits = 0;
+    effectiveMutationHits = 0;
+    effectiveCodeHits = 0;
+    effectiveWriteHits = 0;
+    effectiveRunnerNegativeHits = 0;
+  } else if (conversationControl.kind === "local_surface_lookup") {
+    explicitLocalProbe = true;
+    effectiveLocalStateHits = Math.max(effectiveLocalStateHits, 1);
+    effectiveRunnerReadOnlyIntentHits = Math.max(effectiveRunnerReadOnlyIntentHits, 1);
+    effectiveRunnerTargetHits = Math.max(effectiveRunnerTargetHits, 1);
+    effectiveResearchHits = 0;
+    effectiveExternalLookupHits = 0;
+    effectiveMutationHits = 0;
+    effectiveCodeHits = 0;
+    effectiveWriteHits = 0;
+    effectiveRunnerNegativeHits = 0;
+  }
+
   let estimatedSteps = 1;
   if (multiStepHits > 0) estimatedSteps += 1;
   if (effectiveResearchHits > 0) estimatedSteps += 1;
@@ -562,9 +597,6 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
   if (effectiveLocalStateHits > 0 || normalizedCommand) latencySensitivity = "high";
   else if (effectiveExternalLookupHits > 0 && effectiveResearchHits === 0 && effectiveCodeHits === 0) latencySensitivity = "normal";
 
-  const observerControlCandidate = Boolean(
-    explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate || taskProgressCandidate
-  );
   const observationSignal = Boolean(
     observerControlCandidate
       || modelBenchmarkCandidate
@@ -572,7 +604,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       || runnerHits > 0
       || effectiveLocalStateHits > 0
       || remoteTargetHits > 0
-      || (runnerReadOnlyIntentHits > 0 && runnerTargetHits > 0),
+      || (effectiveRunnerReadOnlyIntentHits > 0 && effectiveRunnerTargetHits > 0),
   );
 
   const features = {
@@ -581,8 +613,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
     has_command: Boolean(normalizedCommand),
     command_read_only: commandReadOnly,
     runner_hits: runnerHits,
-    runner_read_only_intent_hits: runnerReadOnlyIntentHits,
-    runner_target_hits: runnerTargetHits,
+    runner_read_only_intent_hits: effectiveRunnerReadOnlyIntentHits,
+    runner_target_hits: effectiveRunnerTargetHits,
     runner_negative_hits: effectiveRunnerNegativeHits,
     observer_control_hits: observerControlHits,
     task_progress_hits: taskProgressHits,
@@ -673,13 +705,13 @@ export function extractFeatures(task, command = "", runtimeCfg = null) {
       modelBenchmarkCandidate
       || commandReadOnly
       || (
-        runnerReadOnlyIntentHits > 0
-        && (runnerTargetHits > 0 || runnerHits > 0 || effectiveLocalStateHits > 0 || remoteTargetHits > 0)
+        effectiveRunnerReadOnlyIntentHits > 0
+        && (effectiveRunnerTargetHits > 0 || runnerHits > 0 || effectiveLocalStateHits > 0 || remoteTargetHits > 0)
       )
       || (
         features.tool_observation_only
-        && runnerTargetHits > 0
-        && (runnerReadOnlyIntentHits > 0 || runnerHits > 0 || effectiveLocalStateHits > 0)
+        && effectiveRunnerTargetHits > 0
+        && (effectiveRunnerReadOnlyIntentHits > 0 || runnerHits > 0 || effectiveLocalStateHits > 0)
       )
     )
   );
@@ -1218,10 +1250,10 @@ function hardGateRoute(features, runtimeCfg = null) {
   return { route: null, reasons: [] };
 }
 
-export function inferRoute(task, command = "") {
+export function inferRoute(task, command = "", metadata = {}) {
   const runtimeCfg = loadOctoClawConfig().runtime_policy || {};
   const enabledPacks = normalizeEnabledLanguagePacks(runtimeCfg);
-  const features = extractFeatures(task, command, runtimeCfg);
+  const features = extractFeatures(task, command, runtimeCfg, metadata);
   const { route: hardRoute, reasons: hardReasons } = hardGateRoute(features, runtimeCfg);
 
   let route = hardRoute;

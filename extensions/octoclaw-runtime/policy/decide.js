@@ -1057,7 +1057,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const normalizedMetadata = normalizeMetadata(metadata);
   const normalizedRouteHint = normalizeRouteHint(routeHint);
   const effectiveForceRoute = VALID_FORCE_ROUTES.has(forceRoute) ? forceRoute : "";
-  const routeMeta = applyForcedRoute(inferRoute(task, command), effectiveForceRoute);
+  const routeMeta = applyForcedRoute(inferRoute(task, command, normalizedMetadata), effectiveForceRoute);
   const features = routeMeta.features || {};
   const laneFeasibility = routeMeta.lane_feasibility && typeof routeMeta.lane_feasibility === "object" ? routeMeta.lane_feasibility : {};
   const runtimeCfg = loadOctoClawConfig().runtime_policy || {};
