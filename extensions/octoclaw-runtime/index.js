@@ -603,7 +603,7 @@ function resolveAckDeliverySessionKey(metadata = {}, stateKey = "", state = null
     const match = candidates.find((entry) => entry.origin === desiredOrigin);
     if (match?.controlKey) return match.controlKey;
   }
-  return String(candidates[0]?.controlKey || "").trim();
+  return "";
 }
 
 function detectSessionBoundary(ctx = {}) {

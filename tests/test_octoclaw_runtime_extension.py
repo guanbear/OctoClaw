@@ -338,6 +338,35 @@ Conversation info (untrusted metadata):
 
         self.assertEqual(payload, "agent:main:slack:channel:C123:thread:1712345.000100")
 
+    def test_ack_delivery_session_key_does_not_guess_without_binding_hints(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-ack-ledger-") as tmpdir:
+            home = Path(tmpdir)
+            root_sessions = home / ".openclaw" / "sessions.json"
+            root_sessions.parent.mkdir(parents=True, exist_ok=True)
+            root_sessions.write_text(
+                json.dumps(
+                    {
+                        "agent:main:slack:channel:C123:thread:1712345.000100": {
+                            "updatedAt": "2026-04-09T20:58:01Z",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                """__octoclawTest.resolveAckDeliverySessionKey(
+                    {},
+                    "",
+                    {},
+                    {}
+                )""",
+                env={"HOME": str(home), "WORKSPACE": str(home)},
+            )
+
+        self.assertEqual(payload, "")
+
     def test_tool_context_can_recover_recent_delegated_state_for_shell_like_followup(self) -> None:
         payload = run_runtime_helper(
             """(() => {
