@@ -33,6 +33,8 @@ def build_route_recommendation(route_meta: dict[str, Any], resolved: dict[str, A
         else ("rule_fallback" if repo_activity_hits > 0 else ("route_hint_or_future_tiny_judge" if route_meta.get("needs_semantic_review") else "none"))
     )
     resolved_by = "protected_lane" if protected_lane else ("rule_fallback" if repo_activity_hits > 0 else "base_policy")
+    reason_code_count = len(reason_codes)
+    truncated_reason_codes = reason_codes[:8]
     return {
         "schema_version": "octoclaw.route_recommendation/v1",
         "recommended_route": str(resolved.get("route") or route_meta.get("route") or route_meta.get("system_preferred_route") or "direct"),
@@ -55,5 +57,7 @@ def build_route_recommendation(route_meta: dict[str, Any], resolved: dict[str, A
             "tiny_judge_ready": False,
             "fallback_policy": "rule_only",
         },
-        "reason_codes": reason_codes[:8],
+        "reason_codes": truncated_reason_codes,
+        "reason_code_count": reason_code_count,
+        "reason_codes_truncated": reason_code_count > len(truncated_reason_codes),
     }

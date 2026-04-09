@@ -45,7 +45,9 @@ def build_budget_recommendation(
     else:
         output_ok = bool(output_budget)
         latency_ok = bool(latency_target)
-        workers_ok = max_workers >= 0
+        # Unknown routes should not silently appear budget-consistent just because
+        # max_workers was parsed as a non-negative integer.
+        workers_ok = False
 
     consistency = {
         "route": route_name,

@@ -50,6 +50,8 @@
         "fallback_policy": { "type": "string" }
       }
     },
+    "reason_code_count": { "type": "integer", "minimum": 0 },
+    "reason_codes_truncated": { "type": "boolean" },
     "reason_codes": {
       "type": "array",
       "items": { "type": "string" }

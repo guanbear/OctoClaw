@@ -133,6 +133,10 @@ def build_state_grounding(
     workspace: str = "",
     preferred_task_id: str = "",
 ) -> dict[str, Any]:
+    # State grounding currently serves control/observer provenance and runtime-status
+    # questions only. session_control turns are grounded through their dedicated
+    # session-control tool surface rather than the runtime read model, so they do
+    # not opt into this packet builder.
     if _text(protected_lane) != "control_observer":
         return {"required": False, "found": False, "reason": "not_protected_lane"}
     prompt_text = _text(prompt)

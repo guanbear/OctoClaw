@@ -16,6 +16,17 @@ from lib import state_grounding
 
 
 class StateGroundingTests(unittest.TestCase):
+    def test_session_control_lane_is_explicitly_out_of_scope_for_state_grounding(self) -> None:
+        payload = state_grounding.build_state_grounding(
+            "切换到 Mini Max M2.7",
+            protected_lane="session_control",
+            scope="session_control",
+        )
+
+        self.assertFalse(payload["required"])
+        self.assertFalse(payload["found"])
+        self.assertEqual(payload["reason"], "not_protected_lane")
+
     @patch("lib.state_grounding.observe_runtime_read_model")
     def test_build_state_grounding_prefers_running_recent_task(self, mock_read_model) -> None:
         mock_read_model.return_value = {
