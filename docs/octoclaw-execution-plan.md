@@ -631,20 +631,30 @@ P5 不应该顺手混进这些题：
 - protected-lane 的状态/归因类问答会由 runtime 自动注入 state grounding packet，而不是继续依赖主 agent 自己记得去查
 - delegated dispatch/spawn 会把 freshly-created `task_id` 写入 runtime state，使后续 protected-lane grounding 优先绑定本轮 task，而不是误读旧的 recent task
 
-#### P5H：Continuity And Workflow Realization
+#### P5H：Capability-Aware Continuity And Workflow Realization
 
 目标：
 
 - 不推翻 `workflow-first / policy-first / gray-zone route hint` 的总体设计
 - 把当前运行时从“lane label 存在，但 continuity / workflow / explainability 断裂”的状态，收回到更接近设计原意的形态
+- 让在线决策逐步从 `route-first` 收口到 `contract -> capability -> scope -> lane`
 
 问题定义：
 
 - 首轮 route 经常是合理的，但 follow-up 会丢失 continuity
+- `runner / spawn_single / spawn_multi` 有时只是 lane label，没有先经过明确的 capability feasibility 检查
 - `runner` 有时只是 route label，没有真正落到 workflow harness
 - entry-level ack 仍然不够稳定，用户会空等
 - 主会话解释层会脱离 policy / snapshot，编造 `direct / queued / spawn failed` 之类故事
 - 继续零散补 regex 只会延缓问题，不会解决问题
+
+设计原则：
+
+- 先定 `contract`
+- 再看 `capability`
+- 明确 `scope`
+- 最后才选 `lane`
+- 若没有可行 lane，就返回 capability-bound explanation，而不是误派或误答
 
 #### H6：Continuity Baseline
 
@@ -660,27 +670,45 @@ P5 不应该顺手混进这些题：
 - continuity 不会绕过 review gate、hard veto、protected lane 规则
 - continuity 在目标变化或超时后会自然失效
 
-#### H7：Runner Workflow Realization
+#### H7：Capability-Aware Workflow Realization
 
 交付物：
 
+- 为在线请求补一份最小 canonical contract taxonomy：
+  - `answer_now`
+  - `inspect_report`
+  - `probe_measurement`
+  - `session_control`
+  - `implement`
+  - `review`
+- 为主要 lane 补一份可计算的 capability / scope feasibility baseline：
+  - `direct`
+  - `runner`
+  - `spawn_single`
+  - `spawn_multi`
+  - `session_control`
 - 为 runner lane 补齐首批真实 workflow playbook：
   - release/version check
   - model telemetry snapshot inspection
   - log / status inspection
   - bounded code inspect
 - `policy=runner` 时强制进入 workflow harness，而不是仅仅给 main agent 一个 route label
-- 为 benchmark 能力补独立分层：
+- 为 `probe_measurement` contract 补独立 capability 分层：
   - `snapshot inspection`
   - `live benchmark workflow`
+- 约束在线实现优先走 Node runtime：
+  - route merge / continuity / feasibility merge / entry-level ack / enforcement 先在 runtime 层完成
+  - Python 继续承担 report、snapshot、nightly、离线分析
 
 验收标准：
 
+- lane selection 会先过滤不可行 lane，而不是“先选 lane，再在执行阶段发现做不了”
 - `policy=runner` 的 turn 不再出现 main agent 直接 `web_fetch / exec` 后再声称“这次 policy 是 direct”
 - runner 类请求默认能落到真实 playbook / report workflow，而不是 generic agent improvisation
 - replay / nightly 能稳定标出 `runner workflow mismatch`
-- 模型测速类请求默认先落到 snapshot inspection；只有显式实测才尝试进入 benchmark workflow
+- `probe_measurement` 类请求默认先落到 snapshot inspection；只有显式实测才尝试进入 benchmark workflow
 - 若 benchmark workflow 尚不存在，系统会稳定返回 capability-bound explanation，而不是把 generic subagent 误说成“天然不能测速”
+- 当前 session-only 的动作不会再被错误下放到 delegated lane
 
 #### H8：Entry-Level Ack
 
@@ -717,6 +745,7 @@ P5 不应该顺手混进这些题：
 - 其余灰区保留 `route_hint`
 - tiny judge / 本地小模型仅作为后续 route-hint 增强 seam，不直接拿执行权
 - 明确主 agent 在灰区拥有 `route_hint` 纠偏权，但不拥有执行层绕路权
+- `route_hint` 只允许在 capability-feasible lanes 之间纠偏，而不是凭空建议不可行 lane
 
 验收标准：
 
@@ -724,12 +753,14 @@ P5 不应该顺手混进这些题：
 - 也不继续依赖不断追加零散规则
 - 灰区裁决只在低置信冲突 case 触发，不成为默认前置依赖
 - 当 `spawn_single / spawn_multi` 在灰区被主 agent 认为不合适时，纠偏通过 `route_hint + merge` 完成，而不是直接绕过 enforcement 改成 `direct`
+- 当 main agent 想把 `spawn_single / spawn_multi` 纠偏成 `direct / runner` 时，前提是目标 lane 具备 contract 所需 capability
+- 若没有任何可行 lane，系统返回 capability-bound explanation，而不是伪装成某个 lane 已成功执行
 
 建议推进顺序：
 
-1. `H6 continuity baseline`
-2. `H8 entry-level ack`
-3. `H7 runner workflow realization`
+1. `H7 capability-aware workflow realization`
+2. `H6 continuity baseline`
+3. `H8 entry-level ack`
 4. `H9 state-grounded explanations`
 5. `H10 gray-zone arbitration seam`
 

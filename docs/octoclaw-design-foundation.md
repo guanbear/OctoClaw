@@ -495,35 +495,67 @@ runner 不是单纯“长期常驻快腿”，而是：
 
 > **误判治理首先是 contract-first / boundary-first 的系统工程，不是先上一个更聪明的小模型。**
 
-### 7.2.2 模型测速与健康反馈也应 workflow-first
+### 7.2.2 路由应先看 contract / capability / scope，再看 lane
 
-像“测试 MiniMax 和 GLM-5.1 的首 token / 吞吐速度”这类请求，本质上不是普通 research deliverable，
-也不是应该默认上 `spawn_single` 的 agent 任务。
+像最近这批 bad case，表面上看分别是：
 
-更合理的默认 contract 是：
+- 测速
+- 查版本
+- 读代码
+- 查状态 / 谁做的 / 有没有 dispatch
+- 切当前 session 模型
 
-- `runner`
-- `inspect_report`
-- 读取本地 telemetry / health snapshot
-- 必要时再升级到更重的 benchmark workflow
+但更高一层看，它们并不是五个需要各写规则的 case，而是同一个系统问题：
 
-这里必须继续区分两层能力，避免把“runner 收口”误解成“已经有真实在线测速能力”：
+> **当前运行时仍然过于 route-first，而不是先明确 contract、capability 和 scope，再选择 lane。**
 
-1. `snapshot inspection`
-   - 读取本地 `model-speed / model-health / model-benchmarks`
-   - 这是当前默认、稳定、低成本的 workflow
-2. `live benchmark workflow`
-   - 真正发请求、精确计时 TTFT / throughput
-   - 这是一条单独能力，不应假装已经由 generic subagent 或当前 telemetry report 自动具备
+更稳定的抽象应是：
 
-因此像“测试 MiniMax 和 GLM-5.1 的首 token / 吞吐速度”这类请求，当前更准确的产品语义应是：
+1. `contract`
+   - 用户真正要的交付是什么
+   - 例如：`answer_now`、`inspect_report`、`probe_measurement`、`session_control`、`implement`、`review`
+2. `capability`
+   - 当前系统是否真的具备完成这个 contract 的能力
+   - 例如：只读 inspect、外部查询、artifact/report、精确计时、session-local mutation、multi-worker orchestration
+3. `scope`
+   - 这个动作作用在哪一层
+   - 例如：`current-session-only`、`runtime-read-model`、`workflow-local`、`delegated-worker-doable`
+4. `lane`
+   - 在 contract / capability / scope 都明确后，才选择 `direct / runner / spawn_single / spawn_multi / session_control`
+
+这意味着系统不应继续默认：
+
+- 先给 `runner / spawn_single / spawn_multi`
+- 再在执行阶段发现 lane 没能力完成
+- 然后靠主 agent 口头解释、补救或绕路
+
+更合理的原则应是：
+
+- 先判断 contract
+- 再检查当前可用 lane 的 capability feasibility
+- 最后从可行 lane 里选延迟 / token / 交互成本最优的那个
+
+若当前根本没有满足该 contract 的能力，系统应直接返回 capability-bound explanation，
+而不是误派、误答、误解释。
+
+测速只是这个框架下的一个例子：
+
+- contract：`probe_measurement`
+- scope：通常不是 `current-session-only`
+- 关键 capability：精确计时、稳定 probe、统一结果格式
+
+因此“测试 MiniMax 和 GLM-5.1 的首 token / 吞吐速度”这类请求，不该再被理解成一个单独特例，
+而应被看作 `probe_measurement` contract 的一个实例。
+
+当前更准确的产品语义应是：
 
 - 默认先走 `runner + inspect_report`
+- 读取本地 `model-speed / model-health / model-benchmarks`
 - 若用户明确要求实测，再升级到专门 benchmark workflow
-- 若 benchmark workflow 尚不存在，主 agent 应诚实说明“当前只有 snapshot，没有 live benchmark”，而不是把 generic subagent 说成天然做不到
+- 若 live benchmark workflow 尚不存在，系统应诚实说明“当前只有 snapshot，没有 live benchmark”，而不是把 generic subagent 说成天然做不到
 
 同样，主会话 fallback 中真实发生过的 `timeout / auth / failover` 也不应只留在 OpenClaw 日志里。
-它们应以受控、stale-gated 的方式回灌到 OctoClaw `model-health`，帮助后续 lane-local model selection 避开已知坏链路。
+它们应以受控、stale-gated 的方式回灌到 OctoClaw `model-health`，帮助后续 capability-aware lane selection 避开已知坏链路。
 
 这条反馈线的约束也必须和现有设计保持一致：
 
@@ -624,6 +656,50 @@ runner 不是单纯“长期常驻快腿”，而是：
 - 先判成 `runner` / `spawn_single`
 - 再由主 agent 偷偷直接调用通用工具
 - 事后再口头解释说“我觉得 direct 更好”
+
+### 7.2.5 主 agent 的洞察应被提升成 capability-aware routing，而不是更大自由裁决
+
+最近聊天里，主 agent 有几类观察其实方向是对的：
+
+- 有些操作是 `current-session-only`
+- 有些失败不是“router 错了”，而是 capability 缺失
+- 不能把每一轮都重新交给主 agent 重判，否则会伤速度和 token
+
+这些洞察值得保留，但不应继续停留在：
+
+- “主 agent 能不能做”
+- “子 agent 能不能做”
+- “规则和自由谁更重要”
+
+更稳的提升方式是把它们收进 `contract / capability / scope / lane`：
+
+- 改当前 session 模型
+  - `contract = session_control`
+  - `scope = current-session-only`
+  - 只有 session-control lane 可行
+- 查状态 / 谁做的 / 有没有 dispatch
+  - `contract = control_observer`
+  - `scope = runtime-read-model`
+  - 应走 protected lane，而不是 generic delegated lane
+- 查版本 / 发布 / 新特性
+  - `contract = inspect_report`
+  - 关键 capability 是外部只读查询与快速收口
+  - 更适合 `runner`
+- 读代码并给结论
+  - `contract = inspect_report`
+  - 是否 direct / runner 取决于 bounded inspect capability、预估代码面和延迟预算
+- 实测 TTFT / throughput
+  - `contract = probe_measurement`
+  - 需要 measurement capability；若该 capability 不存在，就不该硬派 generic subagent
+
+因此后续不应再围绕“是否给主 agent 更多自由”讨论，而应围绕：
+
+- 当前请求是什么 contract
+- 哪些 capability 真正存在
+- scope 是否允许 delegated worker 执行
+- 在可行 lane 里哪个成本最低、体验最好
+
+这样既能保留主 agent 在灰区的语义优势，又不会退回到“每轮都让主 agent 自由裁决”的旧路径。
 
 ### 7.3 substrate-first truth
 
