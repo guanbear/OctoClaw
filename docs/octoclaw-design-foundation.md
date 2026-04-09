@@ -507,6 +507,21 @@ runner 不是单纯“长期常驻快腿”，而是：
 - 读取本地 telemetry / health snapshot
 - 必要时再升级到更重的 benchmark workflow
 
+这里必须继续区分两层能力，避免把“runner 收口”误解成“已经有真实在线测速能力”：
+
+1. `snapshot inspection`
+   - 读取本地 `model-speed / model-health / model-benchmarks`
+   - 这是当前默认、稳定、低成本的 workflow
+2. `live benchmark workflow`
+   - 真正发请求、精确计时 TTFT / throughput
+   - 这是一条单独能力，不应假装已经由 generic subagent 或当前 telemetry report 自动具备
+
+因此像“测试 MiniMax 和 GLM-5.1 的首 token / 吞吐速度”这类请求，当前更准确的产品语义应是：
+
+- 默认先走 `runner + inspect_report`
+- 若用户明确要求实测，再升级到专门 benchmark workflow
+- 若 benchmark workflow 尚不存在，主 agent 应诚实说明“当前只有 snapshot，没有 live benchmark”，而不是把 generic subagent 说成天然做不到
+
 同样，主会话 fallback 中真实发生过的 `timeout / auth / failover` 也不应只留在 OpenClaw 日志里。
 它们应以受控、stale-gated 的方式回灌到 OctoClaw `model-health`，帮助后续 lane-local model selection 避开已知坏链路。
 
@@ -581,6 +596,34 @@ runner 不是单纯“长期常驻快腿”，而是：
 换句话说：
 
 > **系统性修复的重点应是“恢复 continuity 与 workflow realization”，而不是继续堆更多零散规则。**
+
+这里还需要明确一条执行边界：
+
+- 主 agent **可以**纠偏 `system_preferred_route`
+- 但纠偏方式应是提交结构化 `route_hint`
+- 主 agent **不应**在执行阶段直接绕过 runtime enforcement，自己把 `runner / spawn_single / spawn_multi` 临时改成 `direct`
+
+也就是说：
+
+> **主 agent 应有“灰区纠偏权”，但不应有“执行层绕路权”。**
+
+这条边界尤其适用于：
+
+- `spawn_single / spawn_multi` 在灰区被误判
+- 但主 agent 能基于 capability / continuity / session-local 约束判断 delegated path 并不合适
+
+正确做法应是：
+
+1. 系统先给出 `system_preferred_route`
+2. 主 agent 仅在非 hard gate 灰区给出 `route_hint + reason`
+3. runtime merge 后再执行最终 lane
+4. replay / nightly 记录 route drift 与 override reason
+
+而不是：
+
+- 先判成 `runner` / `spawn_single`
+- 再由主 agent 偷偷直接调用通用工具
+- 事后再口头解释说“我觉得 direct 更好”
 
 ### 7.3 substrate-first truth
 

@@ -666,16 +666,21 @@ P5 不应该顺手混进这些题：
 
 - 为 runner lane 补齐首批真实 workflow playbook：
   - release/version check
-  - model benchmark / telemetry inspection
+  - model telemetry snapshot inspection
   - log / status inspection
   - bounded code inspect
 - `policy=runner` 时强制进入 workflow harness，而不是仅仅给 main agent 一个 route label
+- 为 benchmark 能力补独立分层：
+  - `snapshot inspection`
+  - `live benchmark workflow`
 
 验收标准：
 
 - `policy=runner` 的 turn 不再出现 main agent 直接 `web_fetch / exec` 后再声称“这次 policy 是 direct”
 - runner 类请求默认能落到真实 playbook / report workflow，而不是 generic agent improvisation
 - replay / nightly 能稳定标出 `runner workflow mismatch`
+- 模型测速类请求默认先落到 snapshot inspection；只有显式实测才尝试进入 benchmark workflow
+- 若 benchmark workflow 尚不存在，系统会稳定返回 capability-bound explanation，而不是把 generic subagent 误说成“天然不能测速”
 
 #### H8：Entry-Level Ack
 
@@ -711,12 +716,14 @@ P5 不应该顺手混进这些题：
 - 继续保持 `hard_runner_only` 极窄
 - 其余灰区保留 `route_hint`
 - tiny judge / 本地小模型仅作为后续 route-hint 增强 seam，不直接拿执行权
+- 明确主 agent 在灰区拥有 `route_hint` 纠偏权，但不拥有执行层绕路权
 
 验收标准：
 
 - 不回退到“让主 agent 每轮完全自由裁决”
 - 也不继续依赖不断追加零散规则
 - 灰区裁决只在低置信冲突 case 触发，不成为默认前置依赖
+- 当 `spawn_single / spawn_multi` 在灰区被主 agent 认为不合适时，纠偏通过 `route_hint + merge` 完成，而不是直接绕过 enforcement 改成 `direct`
 
 建议推进顺序：
 
