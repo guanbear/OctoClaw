@@ -11,7 +11,7 @@ from typing import Optional
 import sys
 
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "lib")))
-from octoclaw_policy import build_decision, route_hint_required
+from octoclaw_policy import build_decision, route_hint_required, route_hint_correction_policy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -684,6 +684,68 @@ class RuntimePolicyTests(unittest.TestCase):
                 {"switches": {"route_hint_required": True}},
             )
         )
+
+    def test_route_hint_hard_runner_only_is_vetoed(self) -> None:
+        payload = build_decision(
+            "帮我查下openclaw 又有新版本了吗 有啥新特性",
+            route_hint={"route_hint": "spawn_single", "reason": "force subagent"},
+        )
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_hint_policy"]["hint_outcome"], "vetoed")
+        self.assertEqual(payload["route_hint_policy"]["hint_veto_reason"], "hard_gate")
+        self.assertFalse(payload["route_hint_policy"]["correction_allowed"])
+        self.assertFalse(payload["route_hint_policy"]["gray_zone_eligible"])
+
+    def test_route_hint_protected_lane_is_vetoed(self) -> None:
+        payload = build_decision(
+            "你现在是啥模型",
+            route_hint={"route_hint": "spawn_single", "reason": "force delegation"},
+        )
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertEqual(payload["route_hint_policy"]["hint_outcome"], "vetoed")
+        self.assertEqual(payload["route_hint_policy"]["hint_veto_reason"], "protected_lane")
+        self.assertFalse(payload["route_hint_policy"]["correction_allowed"])
+
+    def test_route_hint_non_gray_zone_is_vetoed(self) -> None:
+        payload = build_decision(
+            "调研三个兼容方案并写一版简短建议",
+            route_hint={"route_hint": "direct", "reason": "try direct first"},
+        )
+        self.assertEqual(payload["route_decision"]["route"], "spawn_single")
+        self.assertEqual(payload["route_hint_policy"]["hint_outcome"], "vetoed")
+        self.assertEqual(payload["route_hint_policy"]["hint_veto_reason"], "not_gray_zone")
+        self.assertFalse(payload["route_hint_policy"]["gray_zone_eligible"])
+
+    def test_route_hint_correction_policy_marks_semantic_boundary_as_gray_zone(self) -> None:
+        payload = route_hint_correction_policy(
+            {
+                "route": "spawn_single",
+                "system_preferred_route": "spawn_single",
+                "reason_codes": ["work_contract:deliverable_work", "research_work"],
+                "confidence": 0.74,
+                "score_margin": 0.18,
+                "work_contract_hint": "deliverable_work",
+                "needs_semantic_review": True,
+                "features": {"semantic_ambiguity_hits": 1},
+                "lane_feasibility": {
+                    "direct": {"feasible": True},
+                    "spawn_single": {"feasible": True},
+                    "spawn_multi": {"feasible": True},
+                },
+            },
+            "",
+            {"switches": {"route_hint_required": True}},
+            {
+                "direct": {"feasible": True},
+                "spawn_single": {"feasible": True},
+                "spawn_multi": {"feasible": True},
+            },
+        )
+        self.assertTrue(payload["gray_zone_eligible"])
+        self.assertTrue(payload["correction_allowed"])
+        self.assertEqual(payload["veto_reason"], "")
+        self.assertEqual(payload["feasible_hint_routes"], ["direct", "spawn_single", "spawn_multi"])
 
 
 if __name__ == "__main__":

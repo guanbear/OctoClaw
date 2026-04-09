@@ -1643,15 +1643,27 @@ const plugin = {
             stickyApplied: Boolean(payload?.route_hint_policy?.sticky_applied),
             ackFollowupCandidate: Boolean(payload?.route_hint_policy?.ack_followup_candidate),
             ackFollowupApplied: Boolean(payload?.route_hint_policy?.ack_followup_applied),
+            grayZoneEligible: Boolean(payload?.route_hint_policy?.gray_zone_eligible),
+            correctionAllowed: Boolean(payload?.route_hint_policy?.correction_allowed),
+            hintOutcome: String(payload?.route_hint_policy?.hint_outcome || ""),
+            hintAccepted: Boolean(payload?.route_hint_policy?.hint_accepted),
+            hintVetoReason: String(payload?.route_hint_policy?.hint_veto_reason || ""),
             stickyPersisted,
             routeLanguagePacks: Array.isArray(payload?.route_language_packs) ? payload.route_language_packs : [],
           },
           pi.logger,
           payload,
         );
-        const nextSummary = payload?.route_decision?.route === "direct"
-          ? `route_hint merged: final route is direct. You may answer directly.`
-          : `route_hint merged: final route is ${payload?.route_decision?.route || "spawn_single"}. Next call octoclaw_dispatch.`;
+        const hintOutcome = String(payload?.route_hint_policy?.hint_outcome || "");
+        const hintVetoReason = String(payload?.route_hint_policy?.hint_veto_reason || "");
+        const finalRoute = String(payload?.route_decision?.route || "spawn_single");
+        const nextSummary = hintOutcome === "vetoed"
+          ? `route_hint vetoed (${hintVetoReason || "not_allowed"}): final route remains ${finalRoute}. ${finalRoute === "direct" ? "You may answer directly." : "Next call octoclaw_dispatch."}`
+          : hintOutcome === "coerced"
+            ? `route_hint adjusted: final route is ${finalRoute}. ${finalRoute === "direct" ? "You may answer directly." : "Next call octoclaw_dispatch."}`
+            : finalRoute === "direct"
+              ? `route_hint merged: final route is direct. You may answer directly.`
+              : `route_hint merged: final route is ${finalRoute}. Next call octoclaw_dispatch.`;
         return toolResponse(nextSummary, payload);
       },
     },

@@ -748,6 +748,8 @@ P5 不应该顺手混进这些题：
 - tiny judge / 本地小模型仅作为后续 route-hint 增强 seam，不直接拿执行权
 - 明确主 agent 在灰区拥有 `route_hint` 纠偏权，但不拥有执行层绕路权
 - `route_hint` 只允许在 capability-feasible lanes 之间纠偏，而不是凭空建议不可行 lane
+- policy 输出显式给出 `gray_zone_eligible / correction_allowed / hint_outcome / hint_veto_reason / hint_effective_route`
+- `hard gate / protected lane / not gray zone` 场景下，`route_hint` 必须被结构化 veto，而不是静默吃掉
 
 验收标准：
 

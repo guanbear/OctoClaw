@@ -254,6 +254,35 @@ def lane_is_feasible(lane_feasibility: dict[str, Any] | None, route: str) -> boo
     return bool(entry.get("feasible"))
 
 
+def feasible_hint_routes(lane_feasibility: dict[str, Any] | None = None) -> list[str]:
+    return [route for route in ("direct", "spawn_single", "spawn_multi") if lane_is_feasible(lane_feasibility, route)]
+
+
+def route_hint_correction_policy(
+    route_meta: dict[str, Any],
+    forced_route: str = "",
+    policy_cfg: dict[str, Any] | None = None,
+    lane_feasibility: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    reason_codes = list(route_meta.get("reason_codes", []) or [])
+    protected_lane = str(route_meta.get("protected_lane", "") or "").strip()
+    gray_zone_eligible = route_hint_required(route_meta, forced_route, policy_cfg)
+    hard_gate_applied = "hard_runner_only" in reason_codes
+    veto_reason = ""
+    if hard_gate_applied:
+        veto_reason = "hard_gate"
+    elif protected_lane:
+        veto_reason = "protected_lane"
+    elif not gray_zone_eligible:
+        veto_reason = "not_gray_zone"
+    return {
+        "gray_zone_eligible": gray_zone_eligible,
+        "correction_allowed": not bool(veto_reason),
+        "veto_reason": veto_reason,
+        "feasible_hint_routes": feasible_hint_routes(lane_feasibility),
+    }
+
+
 def apply_sticky_route(
     base_route: str,
     base_work_contract: str,
@@ -355,12 +384,16 @@ def merge_route_from_hint(
     features: dict[str, Any],
     route_hint: dict[str, Any],
     lane_feasibility: dict[str, Any] | None = None,
+    correction_policy: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     hint_route = str(route_hint.get("route_hint", "") or "").strip()
     if not hint_route:
         return base_route, []
 
     reason_codes = [f"main_agent_route_hint:{hint_route}"]
+    if correction_policy and not bool(correction_policy.get("correction_allowed")):
+        reason_codes.append(f"route_hint_veto:{str(correction_policy.get('veto_reason', 'not_allowed') or 'not_allowed')}")
+        return base_route, reason_codes
     if hint_route == "direct":
         if not lane_is_feasible(lane_feasibility, "direct"):
             reason_codes.append("route_hint_veto:direct_infeasible")
@@ -460,13 +493,15 @@ def build_route_hint_policy(
         source = "forced_route"
     elif bool((sticky_state or {}).get("applied")):
         source = "sticky_lane"
+    lane_feasibility = route_meta.get("lane_feasibility", {}) if isinstance(route_meta.get("lane_feasibility", {}), dict) else {}
+    correction_policy = route_hint_correction_policy(route_meta, forced_route, policy_cfg, lane_feasibility)
     return {
         "required": required,
         "hard_gate_applied": hard_gate_applied,
         "hard_gate_reason": "hard_runner_only" if hard_gate_applied else "",
         "submitted": submitted,
         "source": source,
-        "accepted_routes": ["direct", "spawn_single", "spawn_multi"],
+        "accepted_routes": correction_policy["feasible_hint_routes"],
         "system_preferred_route": base_route,
         "final_route": final_route,
         "hint_route": str(route_hint.get("route_hint", "") or ""),
@@ -475,6 +510,12 @@ def build_route_hint_policy(
         "hint_review_required": bool(route_hint.get("review_required", False)),
         "hint_confidence": float(route_hint.get("confidence", 0.0) or 0.0),
         "hint_reason": str(route_hint.get("reason", "") or ""),
+        "gray_zone_eligible": bool(correction_policy["gray_zone_eligible"]),
+        "correction_allowed": bool(correction_policy["correction_allowed"]),
+        "hint_veto_reason": "",
+        "hint_outcome": "pending" if submitted else "not_submitted",
+        "hint_accepted": False,
+        "hint_effective_route": final_route,
         "merge_notes": [],
         "sticky_applied": bool((sticky_state or {}).get("applied")),
         "sticky_route": str((sticky_state or {}).get("route", "") or ""),
@@ -486,6 +527,38 @@ def build_route_hint_policy(
         "ack_followup_candidate": bool((sticky_state or {}).get("ack_followup_candidate")),
         "ack_followup_applied": bool((sticky_state or {}).get("ack_followup_applied")),
     }
+
+
+def finalize_route_hint_policy(route_hint_policy: dict[str, Any], merge_reason_codes: list[str], final_route: str) -> dict[str, Any]:
+    policy = dict(route_hint_policy or {})
+    notes = list(merge_reason_codes or [])
+    veto = next((note for note in notes if str(note or "").startswith("route_hint_veto:")), "")
+    policy["hint_effective_route"] = final_route
+    if not bool(policy.get("submitted")):
+        policy["hint_outcome"] = "not_submitted"
+        policy["hint_accepted"] = False
+        policy["hint_veto_reason"] = ""
+        return policy
+    if veto:
+        policy["hint_outcome"] = "vetoed"
+        policy["hint_accepted"] = False
+        policy["hint_veto_reason"] = str(veto).split(":", 1)[1]
+        return policy
+    hint_route = str(policy.get("hint_route", "") or "").strip()
+    if hint_route and hint_route == str(final_route or "").strip():
+        policy["hint_outcome"] = "accepted"
+        policy["hint_accepted"] = True
+        policy["hint_veto_reason"] = ""
+        return policy
+    if any(str(note or "").startswith("route_hint_downgrade:") or str(note or "").startswith("route_hint_upgrade:") for note in notes):
+        policy["hint_outcome"] = "coerced"
+        policy["hint_accepted"] = False
+        policy["hint_veto_reason"] = ""
+        return policy
+    policy["hint_outcome"] = "kept_base"
+    policy["hint_accepted"] = False
+    policy["hint_veto_reason"] = ""
+    return policy
 
 
 def runtime_switches_summary(policy_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -896,6 +969,7 @@ def build_decision(
         feedback_cfg=(runtime_cfg.get("model_health_feedback", {}) if isinstance(runtime_cfg, dict) else {}),
     )
     base_route = str(route_meta.get("system_preferred_route", route_meta.get("route", "direct")) or "direct")
+    correction_policy = route_hint_correction_policy(route_meta, force_route, runtime_cfg, lane_feasibility)
     sticky_state: dict[str, Any] = {}
     merge_reason_codes: list[str] = []
     route = base_route
@@ -912,7 +986,7 @@ def build_decision(
     )
     merge_reason_codes.extend(sticky_reasons)
     if route_hint.get("route_hint"):
-        route, hint_reasons = merge_route_from_hint(route, features, route_hint, lane_feasibility)
+        route, hint_reasons = merge_route_from_hint(route, features, route_hint, lane_feasibility, correction_policy)
         merge_reason_codes.extend(hint_reasons)
 
     base_work_type = infer_work_type(task, features, route, metadata)
@@ -958,6 +1032,7 @@ def build_decision(
         route_hint_policy["required"] = False
         merge_reason_codes.append("route_hint_suppressed:ack_followup")
     route_hint_policy["merge_notes"] = merge_reason_codes
+    route_hint_policy = finalize_route_hint_policy(route_hint_policy, merge_reason_codes, route)
     dispatch_required = route != "direct"
     should_wait = route == "runner"
     wait_timeout_seconds = int(route_meta.get("wait_timeout_seconds", 0) or 0) if should_wait else 0

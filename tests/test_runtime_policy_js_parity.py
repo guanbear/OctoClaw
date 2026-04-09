@@ -266,6 +266,20 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                 },
             },
             {
+                "task": "帮我查下openclaw 又有新版本了吗 有啥新特性",
+                "metadata": {},
+                "config": {},
+                "route_hint": {
+                    "route_hint": "spawn_single",
+                    "work_type": "research",
+                    "phase": "collect",
+                    "review_required": False,
+                    "confidence": 0.7,
+                    "reason": "force subagent",
+                    "source": "main_agent",
+                },
+            },
+            {
                 "task": "检查一下服务健康状态",
                 "metadata": {},
                 "config": {},
