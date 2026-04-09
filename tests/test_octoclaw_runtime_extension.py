@@ -238,6 +238,68 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["fromJob"], "research-123")
         self.assertEqual(payload["fromTask"], "runner-999")
 
+    def test_dispatch_execution_contract_locks_to_current_delegated_prompt(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u777",
+                  sessionId: "sess-dispatch-lock",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "帮我测下 glm 5.1 和 minimax m2.7 首token速度和吞吐速度",
+                  decision: {
+                    request: { session_key: "agent:main:slack:direct:u777" },
+                    route_decision: { route: "runner", worker_pool: "octoclaw-runner" }
+                  },
+                  createdAt: now,
+                  updatedAt: now
+                });
+                return __octoclawTest.resolveDispatchExecutionContract(ctx, {
+                  task: "执行 echo \\\"speed_test_$(date +%s)\\\" 返回结果。",
+                  forceRoute: "runner"
+                });
+            })()"""
+        )
+
+        self.assertTrue(payload["contractLocked"])
+        self.assertTrue(payload["taskOverrideIgnored"])
+        self.assertEqual(payload["canonicalTask"], "帮我测下 glm 5.1 和 minimax m2.7 首token速度和吞吐速度")
+        self.assertEqual(payload["canonicalRoute"], "runner")
+
+    def test_spawn_execution_contract_locks_to_current_spawn_prompt(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u778",
+                  sessionId: "sess-spawn-lock",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "再试下 spawn可以了吗",
+                  decision: {
+                    request: { session_key: "agent:main:slack:direct:u778" },
+                    route_decision: { route: "spawn_single", worker_pool: "octoclaw-research" }
+                  },
+                  createdAt: now,
+                  updatedAt: now
+                });
+                return __octoclawTest.resolveSpawnExecutionContract(ctx, {
+                  task: "执行 date 返回结果。",
+                  route: "spawn_single"
+                });
+            })()"""
+        )
+
+        self.assertTrue(payload["contractLocked"])
+        self.assertTrue(payload["taskOverrideIgnored"])
+        self.assertEqual(payload["canonicalTask"], "再试下 spawn可以了吗")
+        self.assertEqual(payload["canonicalRoute"], "spawn_single")
+
     def test_tool_context_can_recover_policy_state_by_prompt_when_ctx_has_no_session(self) -> None:
         payload = run_runtime_helper(
             """(() => {

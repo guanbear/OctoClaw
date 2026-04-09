@@ -1251,6 +1251,78 @@ function currentTaskIdFromPayload(payload = {}) {
   return String(payload?.job?.id || payload?.task_id || "").trim();
 }
 
+function resolveDelegatedExecutionContract(ctx = {}, requestedTask = "", explicitDecision = null) {
+  const requested = String(requestedTask || "").trim();
+  const direct = getPolicyStateForContext(ctx);
+  const directState = direct.state;
+  const directDecision = directState?.decision && typeof directState.decision === "object" ? directState.decision : null;
+  const chosenDecision = explicitDecision && typeof explicitDecision === "object" ? explicitDecision : directDecision;
+  const canonicalPrompt = String(directState?.prompt || "").trim();
+  if (canonicalPrompt && isDelegatedRoute(chosenDecision)) {
+    return {
+      stateKey: direct.key || String(chosenDecision?.request?.session_key || "").trim(),
+      state: directState,
+      decision: chosenDecision,
+      canonicalTask: canonicalPrompt,
+      requestedTask: requested,
+      contractLocked: true,
+      taskOverrideIgnored: Boolean(requested && !promptsEquivalent(requested, canonicalPrompt)),
+    };
+  }
+  const resolved = resolveToolPolicyContext(ctx, requested);
+  const resolvedState = resolved.state || directState || null;
+  const resolvedDecision = explicitDecision && typeof explicitDecision === "object"
+    ? explicitDecision
+    : (resolvedState?.decision && typeof resolvedState.decision === "object" ? resolvedState.decision : null);
+  return {
+    stateKey: resolved.key || direct.key || String(resolvedDecision?.request?.session_key || "").trim(),
+    state: resolvedState,
+    decision: resolvedDecision,
+    canonicalTask: requested,
+    requestedTask: requested,
+    contractLocked: false,
+    taskOverrideIgnored: false,
+  };
+}
+
+function resolveDispatchExecutionContract(ctx = {}, params = {}) {
+  const explicitDecision = parsePolicyDecisionJson(params?.policyJson || "");
+  const contract = resolveDelegatedExecutionContract(ctx, params?.task || "", explicitDecision);
+  const requestedRoute = String(params?.forceRoute || "").trim();
+  const lockedRoute = String(contract?.decision?.route_decision?.route || "").trim();
+  const routeOverrideIgnored = Boolean(
+    contract?.contractLocked
+      && requestedRoute
+      && requestedRoute !== "auto"
+      && lockedRoute
+      && requestedRoute !== lockedRoute,
+  );
+  return {
+    ...contract,
+    canonicalRoute: routeOverrideIgnored ? lockedRoute : requestedRoute,
+    routeOverrideIgnored,
+  };
+}
+
+function resolveSpawnExecutionContract(ctx = {}, params = {}) {
+  const explicitDecision = parsePolicyDecisionJson(params?.policyJson || "");
+  const contract = resolveDelegatedExecutionContract(ctx, params?.task || "", explicitDecision);
+  const requestedRoute = String(params?.route || "").trim();
+  const lockedRoute = String(contract?.decision?.route_decision?.route || "").trim();
+  const effectiveLockedRoute = lockedRoute === "spawn_multi" ? "spawn_multi" : (lockedRoute === "spawn_single" ? "spawn_single" : "");
+  const routeOverrideIgnored = Boolean(
+    contract?.contractLocked
+      && requestedRoute
+      && effectiveLockedRoute
+      && requestedRoute !== effectiveLockedRoute,
+  );
+  return {
+    ...contract,
+    canonicalRoute: routeOverrideIgnored ? effectiveLockedRoute : requestedRoute,
+    routeOverrideIgnored,
+  };
+}
+
 async function loadStateGrounding(prompt, decision, ctx, cwd, preferredTaskId = "", logger = null) {
   const groundingPolicy = decision?.hook_interface?.before_prompt_build?.state_grounding || decision?.state_grounding || {};
   if (!groundingPolicy || !groundingPolicy.required) {
@@ -1749,17 +1821,20 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const args = ["--task", params.task];
-        if (params.command) args.push("--command", params.command);
+        const executionContract = resolveDispatchExecutionContract(ctx, params);
+        const dispatchTask = String(executionContract.canonicalTask || params.task || "").trim();
+        const args = ["--task", dispatchTask];
+        if (params.command && !executionContract.contractLocked) args.push("--command", params.command);
         if (params.cwd) args.push("--cwd", params.cwd);
         if (typeof params.timeoutSeconds === "number") args.push("--timeout-seconds", String(params.timeoutSeconds));
-        if (params.forceRoute) args.push("--force-route", params.forceRoute);
-        let { key: stateKey, state } = resolveToolPolicyContext(ctx, params.task || "");
-        const hadCachedDecision = Boolean(params.policyJson || state?.decision);
-        let cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
+        if (executionContract.canonicalRoute) args.push("--force-route", executionContract.canonicalRoute);
+        let stateKey = executionContract.stateKey || "";
+        let state = executionContract.state || null;
+        const hadCachedDecision = Boolean(params.policyJson || state?.decision || executionContract.decision);
+        let cachedDecision = executionContract.decision || state?.decision || parsePolicyDecisionJson(params.policyJson || "");
         if (!cachedDecision) {
           const resolved = await resolvePolicyDecisionForContext(
-            String(params.task || "").trim(),
+            dispatchTask,
             ctx,
             ctx?.cwd || process.cwd(),
             pi.logger,
@@ -1772,6 +1847,9 @@ const plugin = {
         }
         const metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || cachedDecision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
+        if (executionContract.contractLocked) metadata.execution_contract_locked = true;
+        if (executionContract.taskOverrideIgnored) metadata.execution_task_override_ignored = true;
+        if (executionContract.routeOverrideIgnored) metadata.execution_route_override_ignored = true;
         if (params.metadataJson) {
           try {
             const parsed = JSON.parse(params.metadataJson);
@@ -1828,6 +1906,11 @@ const plugin = {
             routeHintRequired: Boolean(authoritativeDecision?.route_hint_policy?.required),
             routeHintSubmitted: Boolean(state?.routeHintSubmitted || authoritativeDecision?.route_hint_policy?.submitted),
             executed: Boolean(payload?.executed),
+            executionContractLocked: Boolean(executionContract.contractLocked),
+            executionTaskOverrideIgnored: Boolean(executionContract.taskOverrideIgnored),
+            executionRouteOverrideIgnored: Boolean(executionContract.routeOverrideIgnored),
+            requestedTask: truncateText(String(params.task || "")),
+            materializedTask: truncateText(dispatchTask),
             usedCachedPolicy: hadCachedDecision,
             stickyPersisted,
             preDispatchAckRequired: Boolean(cachedDecision?.pre_dispatch_ack?.required),
@@ -1877,15 +1960,21 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const args = ["--task", params.task, "--register"];
-        if (params.route) args.push("--route", params.route);
+        const executionContract = resolveSpawnExecutionContract(ctx, params);
+        const spawnTask = String(executionContract.canonicalTask || params.task || "").trim();
+        const args = ["--task", spawnTask, "--register"];
+        if (executionContract.canonicalRoute) args.push("--route", executionContract.canonicalRoute);
         if (params.model) args.push("--model", params.model);
         if (params.runtime) args.push("--runtime", params.runtime);
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
-        const { key: existingStateKey, state: existingState } = resolveToolPolicyContext(ctx, params.task || "");
+        const existingStateKey = executionContract.stateKey || "";
+        const existingState = executionContract.state || null;
         const metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || existingState?.decision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
+        if (executionContract.contractLocked) metadata.execution_contract_locked = true;
+        if (executionContract.taskOverrideIgnored) metadata.execution_task_override_ignored = true;
+        if (executionContract.routeOverrideIgnored) metadata.execution_route_override_ignored = true;
         if (params.metadataJson) {
           try {
             const parsed = JSON.parse(params.metadataJson);
@@ -1896,6 +1985,7 @@ const plugin = {
         }
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
+        if (executionContract.decision) args.push("--policy-json", JSON.stringify(executionContract.decision));
         if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
         const payload = await runJsonScript("octoclaw_spawn.py", args, ctx?.cwd || process.cwd());
         updatePolicyState(existingStateKey || metadata.session_key || "", (current) => ({
@@ -2115,6 +2205,9 @@ export const __octoclawTest = {
   compactPolicyPrompt,
   groundedPolicyPrompt,
   currentTaskIdFromPayload,
+  resolveDelegatedExecutionContract,
+  resolveDispatchExecutionContract,
+  resolveSpawnExecutionContract,
   loadStateGrounding,
   resolvePolicyDecisionForContext,
   inferRoute,
