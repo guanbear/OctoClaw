@@ -391,6 +391,22 @@ function normalizeConversationControlMetadata(metadata = {}) {
   return { ...raw };
 }
 
+function inferLookupProject(task = "") {
+  const text = String(task || "").trim().toLowerCase();
+  if (!text) return "";
+  if (text.includes("openclaw")) return "openclaw";
+  if (text.includes("octoclaw")) return "octoclaw";
+  return "";
+}
+
+function inferLookupFocus(task = "") {
+  const text = String(task || "").trim();
+  if (!text) return "";
+  if (/(memory|dream|diary|rem)/iu.test(text)) return "memory";
+  if (/(release|发版|版本|更新|changelog|特性|变化|what'?s new)/iu.test(text)) return "release_updates";
+  return "latest_updates";
+}
+
 export function extractFeatures(task, command = "", runtimeCfg = null, metadata = {}) {
   const rawTask = String(task || "").trim();
   const text = rawTask.toLowerCase();
@@ -398,6 +414,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const enabledPacks = normalizeEnabledLanguagePacks(runtimeCfg);
   const conversationControl = normalizeConversationControlMetadata(metadata);
   const intentClass = String(conversationControl.intent_class || "").trim();
+  const conversationLookupScope = String(conversationControl.lookup_scope || "").trim();
+  const conversationLookupProject = String(conversationControl.lookup_project || "").trim();
+  const conversationLookupFocus = String(conversationControl.lookup_focus || "").trim();
   let explicitLocalProbe = Boolean(
     /\/[A-Za-z0-9._/\-]+/.test(rawTask)
       || /(?:最近|近)\s*\d{1,4}\s*行/u.test(rawTask)
@@ -443,6 +462,15 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   let workflowMetaCandidate = workflowMetaHits > 0;
   let sessionControlCandidate = Boolean(sessionControlHits > 0);
   const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate && !sessionControlCandidate);
+  const runtimeVersionLookup = Boolean(
+    !/(模型|model)/iu.test(text)
+    && !/(新版本|更新|发版|release|changelog|新特性|特性|变化|memory|dream|what'?s new|latest|recent)/iu.test(text)
+    && (
+      /(openclaw|octoclaw).*(版本|version)/iu.test(rawTask)
+      || /(现在|当前).*(啥版本|什么版本|版本|version)/iu.test(rawTask)
+      || /^\s*(?:你现在啥版本|你现在是什么版本|当前.*版本|what version are you|current version)\s*$/iu.test(rawTask)
+    )
+  );
 
   const repoActivityLookup = Boolean(
     (
@@ -470,6 +498,14 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const freshLiveLookupCandidate = Boolean(
     intentClass === "fresh_live_lookup" || boundedRepoUpdateLookup
   );
+  const resolvedLookupProject = conversationLookupProject || (
+    (freshLiveLookupCandidate || runtimeVersionLookup) ? inferLookupProject(rawTask) : ""
+  );
+  const resolvedLookupFocus = conversationLookupFocus || (
+    freshLiveLookupCandidate ? inferLookupFocus(rawTask) : ""
+  );
+  const resolvedLookupScope = conversationLookupScope
+    || (freshLiveLookupCandidate ? "upstream_project" : (runtimeVersionLookup ? "local_instance" : ""));
 
   let effectiveResearchHits = researchHits;
   let effectiveExternalLookupHits = externalLookupHits;
@@ -696,6 +732,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
       && effectiveWriteHits === 0
     ),
     target_scope: remoteTargetHits > 0 ? "remote" : (effectiveLocalStateHits > 0 ? "local" : "generic"),
+    lookup_scope: resolvedLookupScope || "generic",
+    lookup_project: resolvedLookupProject,
+    lookup_focus: resolvedLookupFocus,
     high_risk: highRiskHits > 0,
     ack_followup_candidate: shortAckCandidate,
     followup_candidate: continuationHits > 0 || shortAckCandidate,

@@ -19,6 +19,7 @@ from typing import Iterable
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_TELEMETRY_REPORT_PY = os.path.join(SCRIPT_DIR, "model_telemetry_report.py")
+UPSTREAM_RELEASE_LOOKUP_MJS = os.path.join(SCRIPT_DIR, "upstream_release_lookup.mjs")
 
 SYSTEM_METRIC_KEYWORDS = {
     "python": ["python", "python版本", "python version"],
@@ -69,6 +70,23 @@ REMOTE_HINT_PATTERNS = [
     "mac mini",
 ]
 VERSION_QUERY_TOKENS = ["版本", "version", "--version", "ver"]
+UPSTREAM_UPDATE_TOKENS = [
+    "更新",
+    "发版",
+    "release",
+    "releases",
+    "changelog",
+    "what's new",
+    "what is new",
+    "latest",
+    "recent",
+    "特性",
+    "变化",
+    "memory",
+    "dream",
+    "diary",
+    "rem",
+]
 
 VERSION_COMMANDS = {
     "openclaw": "if command -v openclaw >/dev/null 2>&1; then openclaw --version || openclaw version; "
@@ -128,6 +146,24 @@ MODEL_REFERENCE_PATTERN = re.compile(
 def contains_any(text: str, patterns: Iterable[str]) -> bool:
     lowered = text.lower()
     return any(pattern.lower() in lowered for pattern in patterns)
+
+
+def normalize_hints(hints: dict | None) -> dict:
+    if not isinstance(hints, dict):
+        return {}
+    return {str(key): value for key, value in hints.items()}
+
+
+def hinted_lookup_scope(hints: dict | None) -> str:
+    return str(normalize_hints(hints).get("lookup_scope", "") or "").strip()
+
+
+def hinted_lookup_project(hints: dict | None) -> str:
+    return str(normalize_hints(hints).get("lookup_project", "") or "").strip().lower()
+
+
+def hinted_lookup_focus(hints: dict | None) -> str:
+    return str(normalize_hints(hints).get("lookup_focus", "") or "").strip().lower()
 
 
 def load_ssh_aliases() -> list[str]:
@@ -270,8 +306,47 @@ def build_model_telemetry_report_plan(task: str) -> dict | None:
     return plan
 
 
-def build_version_probe_plan(task: str) -> dict | None:
+def build_upstream_release_lookup_plan(task: str, hints: dict | None = None) -> dict | None:
     lowered = task.lower()
+    scope = hinted_lookup_scope(hints)
+    project = hinted_lookup_project(hints)
+    focus = hinted_lookup_focus(hints)
+    if scope != "upstream_project" and not contains_any(lowered, UPSTREAM_UPDATE_TOKENS):
+        return None
+    if not project:
+        if "openclaw" in lowered:
+            project = "openclaw"
+        elif "octoclaw" in lowered:
+            project = "octoclaw"
+    if project not in {"openclaw", "octoclaw"}:
+        return None
+
+    cmd = (
+        f"node {shlex.quote(UPSTREAM_RELEASE_LOOKUP_MJS)}"
+        f" --project {shlex.quote(project)}"
+        f" --focus {shlex.quote(focus or 'latest_updates')}"
+    )
+    return {
+        "kind": "upstream_release_lookup",
+        "summary": f"检查 {project} 上游最新发版与最近更新",
+        "command": cmd,
+        "probe_spec": {
+            "kind": "upstream_release_lookup",
+            "project": project,
+            "focus": focus or "latest_updates",
+            "source": "github_api",
+        },
+        "reason_codes": ["runner_playbook_upstream_release_lookup", f"project:{project}", f"focus:{focus or 'latest_updates'}"],
+        "confidence": 0.95 if scope == "upstream_project" else 0.88,
+    }
+
+
+def build_version_probe_plan(task: str, hints: dict | None = None) -> dict | None:
+    lowered = task.lower()
+    if hinted_lookup_scope(hints) == "upstream_project":
+        return None
+    if contains_any(lowered, UPSTREAM_UPDATE_TOKENS) and ("openclaw" in lowered or "octoclaw" in lowered):
+        return None
     if not contains_any(lowered, VERSION_QUERY_TOKENS):
         return None
 
@@ -510,9 +585,10 @@ def build_scheduler_health_plan(task: str) -> dict | None:
     return plan
 
 
-def infer_runner_playbook(task: str) -> dict | None:
+def infer_runner_playbook(task: str, hints: dict | None = None) -> dict | None:
     for builder in (
         build_model_telemetry_report_plan,
+        build_upstream_release_lookup_plan,
         build_version_probe_plan,
         build_system_summary_plan,
         build_local_file_probe_plan,
@@ -520,7 +596,7 @@ def infer_runner_playbook(task: str) -> dict | None:
         build_service_log_file_probe_plan,
         build_service_health_plan,
     ):
-        plan = builder(task)
+        plan = builder(task, hints) if builder in {build_upstream_release_lookup_plan, build_version_probe_plan} else builder(task)
         if plan:
             return plan
     return None

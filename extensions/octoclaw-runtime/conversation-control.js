@@ -121,6 +121,22 @@ function isFreshLiveLookupPrompt(prompt = "") {
   return FRESH_LIVE_LOOKUP_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+function inferFreshLookupProject(prompt = "") {
+  const text = String(prompt || "").trim();
+  if (!text) return "";
+  if (/(openclaw)/iu.test(text)) return "openclaw";
+  if (/(octoclaw)/iu.test(text)) return "octoclaw";
+  return "";
+}
+
+function inferFreshLookupFocus(prompt = "") {
+  const text = String(prompt || "").trim();
+  if (!text) return "";
+  if (/(memory|dream|diary|rem)/iu.test(text)) return "memory";
+  if (/(release|发版|版本|更新|changelog|特性|变化|what'?s new)/iu.test(text)) return "release_updates";
+  return "latest_updates";
+}
+
 function detectOperatorSurface(prompt = "") {
   const text = String(prompt || "").trim();
   if (!text) return null;
@@ -336,17 +352,24 @@ export function buildConversationControlHints({
       surface_id: operatorSurface.surface_id,
       lane_hint: operatorSurface.lane_hint,
       scope: operatorSurface.scope,
+      lookup_scope: "local_instance",
+      lookup_project: "openclaw",
       require_fresh_lookup: true,
     };
   }
 
   if (isFreshLiveLookupPrompt(promptText)) {
+    const lookupProject = inferFreshLookupProject(promptText);
+    const lookupFocus = inferFreshLookupFocus(promptText);
     return {
       available: true,
       kind: "fresh_live_lookup",
       intent_class: "fresh_live_lookup",
       reason: "fresh_live_lookup_prompt",
       lane_hint: "runner",
+      lookup_scope: "upstream_project",
+      lookup_project: lookupProject,
+      lookup_focus: lookupFocus,
       require_fresh_lookup: true,
       scope: "workflow_fresh_lookup",
     };

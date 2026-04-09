@@ -654,6 +654,28 @@ def normalize_conversation_control_metadata(metadata: dict[str, Any] | None = No
     return dict(raw) if isinstance(raw, dict) else {}
 
 
+def infer_lookup_project(task: str) -> str:
+    text = (task or "").strip().lower()
+    if not text:
+        return ""
+    if "openclaw" in text:
+        return "openclaw"
+    if "octoclaw" in text:
+        return "octoclaw"
+    return ""
+
+
+def infer_lookup_focus(task: str) -> str:
+    text = (task or "").strip().lower()
+    if not text:
+        return ""
+    if re.search(r"(memory|dream|diary|rem)", text, re.IGNORECASE):
+        return "memory"
+    if re.search(r"(release|发版|版本|更新|changelog|特性|变化|what'?s new)", task or "", re.IGNORECASE):
+        return "release_updates"
+    return "latest_updates"
+
+
 def extract_features(task: str, command: str = "", runtime_cfg: dict | None = None, metadata: dict[str, Any] | None = None) -> dict:
     raw_task = (task or "").strip()
     text = raw_task.lower()
@@ -662,6 +684,9 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
     conversation_control = normalize_conversation_control_metadata(metadata)
     conversation_kind = str(conversation_control.get("kind") or "").strip().lower()
     intent_class = str(conversation_control.get("intent_class") or conversation_kind).strip().lower()
+    lookup_scope = str(conversation_control.get("lookup_scope") or "").strip().lower()
+    lookup_project = str(conversation_control.get("lookup_project") or "").strip().lower()
+    lookup_focus = str(conversation_control.get("lookup_focus") or "").strip().lower()
     explicit_local_probe = bool(
         re.search(r"/[A-Za-z0-9._/\-]+", raw_task)
         or re.search(r"(?:最近|近)\s*\d{1,4}\s*行", raw_task)
@@ -748,6 +773,15 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
         and write_hits == 0
     )
     fresh_live_lookup_candidate = bool(intent_class == "fresh_live_lookup" or bounded_repo_update_lookup)
+    if not lookup_project and (fresh_live_lookup_candidate or runtime_version_lookup):
+        lookup_project = infer_lookup_project(raw_task)
+    if not lookup_focus and fresh_live_lookup_candidate:
+        lookup_focus = infer_lookup_focus(raw_task)
+    if not lookup_scope:
+        if fresh_live_lookup_candidate:
+            lookup_scope = "upstream_project"
+        elif runtime_version_lookup:
+            lookup_scope = "local_instance"
 
     effective_research_hits = research_hits
     effective_external_lookup_hits = external_lookup_hits
@@ -976,6 +1010,9 @@ def extract_features(task: str, command: str = "", runtime_cfg: dict | None = No
             and effective_write_hits == 0
         ),
         "target_scope": "remote" if remote_target_hits > 0 else ("local" if effective_local_state_hits > 0 else "generic"),
+        "lookup_scope": lookup_scope or "generic",
+        "lookup_project": lookup_project,
+        "lookup_focus": lookup_focus,
         "high_risk": high_risk_hits > 0,
         "ack_followup_candidate": short_ack_candidate,
         "followup_candidate": continuation_hits > 0 or short_ack_candidate,

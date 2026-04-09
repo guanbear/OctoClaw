@@ -251,6 +251,9 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 - `local_surface_lookup` 只能走受控 local inspect / runner
 - `fresh_live_lookup` 默认 workflow-first，不再随机落到 `direct_answer`
 - `direct` 只保留给 `plain_chat` 和极窄的 `answer_now`
+- `lookup_scope=local_instance | upstream_project` 也要进入 execution contract
+  - `local_instance`：查本机版本、dashboard、gateway/local status
+  - `upstream_project`：查 OpenClaw/OctoClaw 上游 release、更新、memory 方向变化
 
 这不是“把所有自然语言压成几个标签”，而是把 **ack policy / tool policy / provenance source / lane choice** 先统一到少量稳定运行语义上。
 

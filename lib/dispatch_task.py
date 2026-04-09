@@ -70,6 +70,23 @@ def decision_metadata(decision: dict) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def runner_playbook_hints(decision: dict) -> dict:
+    route_meta = decision_route(decision)
+    metadata = decision_metadata(decision)
+    features = route_meta.get("features", {})
+    if not isinstance(features, dict):
+        features = {}
+    conversation = metadata.get("conversation_control", {})
+    if not isinstance(conversation, dict):
+        conversation = {}
+    return {
+        "lookup_scope": str(conversation.get("lookup_scope") or features.get("lookup_scope") or "").strip(),
+        "lookup_project": str(conversation.get("lookup_project") or features.get("lookup_project") or "").strip(),
+        "lookup_focus": str(conversation.get("lookup_focus") or features.get("lookup_focus") or "").strip(),
+        "target_scope": str(features.get("target_scope") or "").strip(),
+    }
+
+
 def octoclaw_identity_fields(decision: dict) -> dict:
     request = decision_request(decision)
     metadata = decision_metadata(decision)
@@ -822,7 +839,7 @@ def dispatch_runner(args) -> dict:
     command = args.command
     summary = args.summary
     if not command and not playbook:
-        playbook = infer_runner_playbook(args.task)
+        playbook = infer_runner_playbook(args.task, runner_playbook_hints(decision))
     if playbook:
         command = command or str(playbook.get("command", "") or "")
         if not summary:
@@ -1074,7 +1091,7 @@ def main():
         return
 
     if final_route == "runner":
-        playbook = infer_runner_playbook(task) if not args.command else None
+        playbook = infer_runner_playbook(task, runner_playbook_hints(decision)) if not args.command else None
         if not args.command and not playbook:
             failure = build_capability_bound_failure(
                 "runner",

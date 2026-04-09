@@ -307,6 +307,15 @@
 - `fresh_live_lookup` 不能再掉到 `direct_answer`
 - `plain_chat` 才允许普通 direct
 
+另外需要补上一层之前缺失的执行语义：
+
+- `lookup_scope=local_instance`
+  - 例如：`你现在啥版本`、`control ui 地址`
+- `lookup_scope=upstream_project`
+  - 例如：`再查下 OpenClaw 有没有新的发版`
+
+也就是说，`版本/更新` 这类词面不能再共用同一个 probe。前者查本地实例，后者查上游项目。
+
 ### 6.2 把 fresh live lookup 从 direct 主链里拿掉
 
 这是最关键的一条。

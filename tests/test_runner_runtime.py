@@ -251,6 +251,22 @@ class RunnerRuntimeTests(unittest.TestCase):
         )
         self.assertIn("runner_playbook_model_telemetry_report", payload["reason_codes"])
 
+    def test_upstream_release_lookup_uses_dedicated_playbook(self) -> None:
+        payload = runner_playbooks.infer_runner_playbook(
+            "行 再查下openclaw 有没有新的发版",
+            {
+                "lookup_scope": "upstream_project",
+                "lookup_project": "openclaw",
+                "lookup_focus": "release_updates",
+            },
+        )
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["kind"], "upstream_release_lookup")
+        self.assertIn("upstream_release_lookup.mjs", payload["command"])
+        self.assertEqual(payload["probe_spec"]["project"], "openclaw")
+        self.assertEqual(payload["probe_spec"]["focus"], "release_updates")
+        self.assertIn("runner_playbook_upstream_release_lookup", payload["reason_codes"])
+
     def test_dispatch_runner_reuses_precomputed_runner_plan(self) -> None:
         args = importlib.import_module("argparse").Namespace(
             task="检查一下 nginx error log 最近 80 行，然后总结问题",

@@ -280,6 +280,9 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["route"], "runner")
         self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["features"]["lookup_scope"], "upstream_project")
+        self.assertEqual(payload["features"]["lookup_project"], "openclaw")
+        self.assertEqual(payload["features"]["lookup_focus"], "memory")
         self.assertTrue(payload["pre_dispatch_ack"]["required"])
         self.assertFalse(payload["latency_ack"]["required"])
         self.assertIn("最新更新", payload["pre_dispatch_ack"]["text"])
@@ -289,6 +292,8 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["route"], "runner")
         self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["features"]["lookup_scope"], "upstream_project")
+        self.assertEqual(payload["features"]["lookup_project"], "openclaw")
         self.assertTrue(payload["pre_dispatch_ack"]["required"])
         self.assertFalse(payload["latency_ack"]["required"])
 
@@ -297,6 +302,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["route"], "runner")
         self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["features"]["lookup_scope"], "local_instance")
         self.assertFalse(payload["latency_ack"]["required"])
         self.assertFalse(payload["state_grounding"]["required"])
 

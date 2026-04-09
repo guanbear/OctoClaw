@@ -136,6 +136,10 @@
 - `fresh_live_lookup` 默认 workflow-first，不再随机落到 `direct_answer`
 - provenance / “你是怎么查的” 只消费 execution/materialization/tool ledger
 - direct 路径只保留给窄的 `plain_chat + answer_now`
+- 对 lookup 还要显式区分：
+  - `lookup_scope=local_instance`
+  - `lookup_scope=upstream_project`
+- 这样 `你现在啥版本` 不会再和 `有没有新的发版` 共享同一个执行 playbook
 
 ---
 
