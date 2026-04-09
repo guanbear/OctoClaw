@@ -64,6 +64,26 @@ def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
     for key, value in explicit.items():
         if value not in (None, "", [], {}):
             merged[key] = value
+    promoted = {
+        "backend": _text(task.get("openclaw_taskflow_backend")),
+        "binding_state": _text(task.get("openclaw_taskflow_state")),
+        "task_runtime": _text(task.get("openclaw_task_runtime")),
+        "flow_runtime": _text(task.get("openclaw_flow_runtime")),
+        "sync_mode": _text(task.get("openclaw_taskflow_sync_mode")),
+        "substrate_state": _text(task.get("openclaw_taskflow_substrate_state")),
+        "substrate_revision": task.get("openclaw_taskflow_substrate_revision"),
+        "native_binding_state": _text(task.get("openclaw_native_binding_state")),
+        "native_status": _text(task.get("openclaw_native_status")),
+        "native_runtime": _text(task.get("openclaw_native_runtime")),
+        "native_seen_at": _text(task.get("openclaw_native_seen_at")),
+        "native_match_score": task.get("openclaw_native_match_score"),
+        "task_id": _text(task.get("openclaw_task_id")),
+        "flow_id": _text(task.get("openclaw_flow_id")),
+        "flow_kind": _text(task.get("openclaw_flow_kind")),
+    }
+    for key, value in promoted.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
     return merged
 
 

@@ -114,6 +114,16 @@ def apply_policy_fields(payload: dict, decision: dict) -> dict:
     payload["selector_band"] = payload.get("selector_band") or model_meta.get("selector_band", "")
     payload["skill_bundle"] = skill_meta.get("default_skill_bundle", [])
     payload["review_required"] = review_meta.get("required", False)
+    if isinstance(decision.get("route_recommendation"), dict):
+        payload["route_recommendation"] = dict(decision["route_recommendation"])
+    if isinstance(decision.get("budget_recommendation"), dict):
+        payload["budget_recommendation"] = dict(decision["budget_recommendation"])
+    if isinstance(decision.get("auto_router"), dict):
+        auto_router = dict(decision["auto_router"])
+        payload["auto_router"] = auto_router
+        router_core = auto_router.get("router_core")
+        if isinstance(router_core, dict) and "execution_contract" not in payload:
+            payload["execution_contract"] = dict(router_core)
     return payload
 
 
@@ -852,7 +862,7 @@ def dispatch_runner(args) -> dict:
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "runner dispatch failed")
     payload = json.loads(result.stdout.strip() or "{}")
-    response = {
+    response = apply_policy_fields({
         "route": "runner",
         "executed": True,
         "job": payload,
@@ -864,15 +874,15 @@ def dispatch_runner(args) -> dict:
             job_id=str(payload.get("id", "") or ""),
             executed=True,
         ),
-    }
+    }, decision)
     if playbook:
         response["runner_plan"] = playbook
         response["playbook"] = playbook
     if args.wait and not runner_health_is_healthy():
-        response["runner_execution_mode"] = "on_demand"
+        response["runner_execution_mode"] = "ondemand"
         response["runner_execution"] = run_runner_on_demand(str(payload.get("id", "") or ""))
     if args.wait:
-        wait_timeout = 1 if response.get("runner_execution_mode") == "on_demand" else args.wait_timeout_seconds
+        wait_timeout = 1 if response.get("runner_execution_mode") == "ondemand" else args.wait_timeout_seconds
         response["wait"] = wait_for_runner_result(payload.get("id", ""), wait_timeout)
     response["handoff"] = build_runner_handoff(args.task, response, response.get("wait"))
     return response

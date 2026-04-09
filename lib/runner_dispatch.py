@@ -13,6 +13,7 @@ from typing import Any
 
 from openclaw_taskflow_adapter import register_taskflow_binding
 from octopus_config import RUNNER_QUEUE_FILE, WORKSPACE, load_json, runner_operator_surface
+from runtime_protocol import build_delegated_materialization
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 QUEUE_PY = os.path.join(SCRIPT_DIR, "runner_queue.py")
@@ -120,7 +121,23 @@ def resolve_runner_model() -> str:
     return ""
 
 
-def runner_artifacts(playbook: dict | None = None, taskflow_binding: dict | None = None) -> dict:
+def build_runner_materialization(job_id: str, *, session_key: str = "") -> dict[str, Any]:
+    return build_delegated_materialization(
+        lane="runner",
+        kind="runner_playbook",
+        status="materialized",
+        execution_contract="inspect_report",
+        runner_job_id=job_id,
+        session_key=session_key,
+        executed=True,
+    )
+
+
+def runner_artifacts(
+    playbook: dict | None = None,
+    taskflow_binding: dict | None = None,
+    materialization: dict | None = None,
+) -> dict:
     surface = runner_operator_surface()
     payload = {
         "execution_backend": "runner_queue",
@@ -131,15 +148,25 @@ def runner_artifacts(playbook: dict | None = None, taskflow_binding: dict | None
         payload["runner_plan"] = dict(playbook)
     if isinstance(taskflow_binding, dict) and taskflow_binding:
         payload["openclaw_taskflow"] = dict(taskflow_binding)
+    if isinstance(materialization, dict) and materialization:
+        payload["delegated_materialization"] = dict(materialization)
     return payload
 
 
-def build_runner_task_seed(args: argparse.Namespace, *, model: str, playbook: dict | None = None) -> dict[str, Any]:
+def build_runner_task_seed(
+    job_id: str,
+    args: argparse.Namespace,
+    *,
+    model: str,
+    playbook: dict | None = None,
+    materialization: dict | None = None,
+    taskflow_binding: dict | None = None,
+) -> dict[str, Any]:
     return {
-        "id": args.id,
+        "id": job_id,
         "model": model,
         "status": "queued",
-        "summary": args.summary or args.id,
+        "summary": args.summary or job_id,
         "model_band": args.model_band or "fast",
         "task_description": args.task_description or args.command,
         "executor": "runner",
@@ -156,7 +183,7 @@ def build_runner_task_seed(args: argparse.Namespace, *, model: str, playbook: di
         "agent_id": args.agent_id or "",
         "agent_namespace": args.agent_namespace or "",
         "managed_by_octoclaw": args.managed_by_octoclaw or "",
-        "artifacts": runner_artifacts(playbook),
+        "artifacts": runner_artifacts(playbook, taskflow_binding, materialization),
     }
 
 
@@ -191,9 +218,16 @@ def main():
                 playbook = parsed
         except json.JSONDecodeError:
             playbook = {}
-    task_seed = build_runner_task_seed(args, model=model, playbook=playbook)
+    materialization = build_runner_materialization(job_id, session_key=args.session_key or "")
+    task_seed = build_runner_task_seed(
+        job_id,
+        args,
+        model=model,
+        playbook=playbook,
+        materialization=materialization,
+    )
     taskflow_binding = register_taskflow_binding(task_seed)
-    artifacts = runner_artifacts(playbook, taskflow_binding)
+    artifacts = runner_artifacts(playbook, taskflow_binding, materialization)
     subprocess.run(
         [
             "python3",

@@ -81,6 +81,9 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(queued_task["openclaw_taskflow_state"], "mirrored")
             self.assertEqual(queued_task["openclaw_task_runtime"], "openclaw_task")
             self.assertEqual(queued_task["artifacts"]["openclaw_taskflow"]["task_runtime"], "openclaw_task")
+            self.assertEqual(queued_task["delegated_materialization"]["kind"], "runner_playbook")
+            self.assertEqual(queued_task["delegated_materialization"]["runner_job_id"], "runner-test-1")
+            self.assertTrue(queued_task["delegated_materialization"]["executed"])
 
             loop = subprocess.run(
                 ["bash", str(RUNNER_LOOP)],

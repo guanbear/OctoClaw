@@ -1304,6 +1304,7 @@ def _finish(
             if observability_health:
                 existing["observability_health"] = observability_health
             normalized = normalize_task_record(existing)
+            normalized = normalize_task_record(enrich_task_record_with_taskflow(normalized))
             existing.clear()
             existing.update(normalized)
             current_record = dict(existing)
@@ -1343,6 +1344,7 @@ def _finish(
                 record["observability_health"] = observability_health
             tasks.append(record)
             current_record = normalize_task_record(record)
+            current_record = normalize_task_record(enrich_task_record_with_taskflow(current_record))
             tasks[-1] = dict(current_record)
 
         current_record, lineage_syncs = _lineage_sync_records(tasks, current_record or {})

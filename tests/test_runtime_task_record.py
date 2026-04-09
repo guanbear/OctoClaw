@@ -16,6 +16,43 @@ TASK_RECORD_SCHEMA = REPO_ROOT / "schemas" / "runtime-task-record-v1.schema.json
 
 
 class RuntimeTaskRecordTests(unittest.TestCase):
+    @patch("lib.runtime_task_record.load_json")
+    def test_normalize_runner_task_hydrates_result_from_runner_meta(self, mock_load_json) -> None:
+        mock_load_json.return_value = {
+            "id": "runner-hydrated-1",
+            "status": "done",
+            "summary": "Runner completed · hydrated",
+            "report_path": "/tmp/runner-hydrated-1.md",
+            "result_path": "/tmp/runner-hydrated-1.json",
+            "execution_backend": "runner_queue",
+            "worker_result": {
+                "status": "done",
+                "summary": "Runner completed · hydrated",
+                "report": "/tmp/runner-hydrated-1.md",
+                "next_step": "none",
+            },
+        }
+
+        payload = normalize_task_record(
+            {
+                "id": "runner-hydrated-1",
+                "status": "running",
+                "summary": "queued runner task",
+                "route": "runner",
+                "runtime": "runner",
+                "worker_pool": "octoclaw-runner",
+                "artifacts": {
+                    "execution_backend": "runner_queue",
+                },
+            }
+        )
+
+        self.assertEqual(payload["report_path"], "/tmp/runner-hydrated-1.md")
+        self.assertEqual(payload["outcome_state"], "done")
+        self.assertEqual(payload["lifecycle_state"], "finished")
+        self.assertEqual(payload["artifacts"]["worker_result"]["status"], "done")
+        self.assertEqual(payload["artifacts"]["result_path"], "/tmp/runner-hydrated-1.json")
+
     def test_task_notification_state_waits_for_user_safe_handoff_for_reviewed_done_tasks(self) -> None:
         state = task_notification_state(
             {

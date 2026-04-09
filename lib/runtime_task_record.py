@@ -6,9 +6,9 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from octopus_config import infer_session_origin
+    from octopus_config import RUNNER_RESULTS_DIR, infer_session_origin, load_json
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.octopus_config import infer_session_origin
+    from lib.octopus_config import RUNNER_RESULTS_DIR, infer_session_origin, load_json
 
 try:
     from task_events import session_binding_from_route, task_event_snapshot
@@ -92,6 +92,22 @@ def _normalized_int(value: Any) -> int:
         return 0
 
 
+def _has_materialization_fact(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return any(
+        [
+            _normalized_str(payload.get("kind")),
+            _normalized_str(payload.get("task_id")),
+            _normalized_str(payload.get("runner_job_id")),
+            _normalized_str(payload.get("child_spec_id")),
+            _normalized_str(payload.get("execution_contract")),
+            bool(payload.get("executed", False)),
+            isinstance(payload.get("capability_failure"), dict) and bool(_normalized_str((payload.get("capability_failure") or {}).get("reason"))),
+        ]
+    )
+
+
 def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
     explicit = dict(task.get("openclaw_taskflow", {})) if isinstance(task.get("openclaw_taskflow"), dict) else {}
     artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
@@ -100,7 +116,73 @@ def _taskflow_binding(task: dict[str, Any]) -> dict[str, Any]:
     for key, value in explicit.items():
         if value not in (None, "", [], {}):
             merged[key] = value
+    promoted = {
+        "backend": _normalized_str(task.get("openclaw_taskflow_backend")),
+        "binding_state": _normalized_str(task.get("openclaw_taskflow_state")),
+        "task_runtime": _normalized_str(task.get("openclaw_task_runtime")),
+        "flow_runtime": _normalized_str(task.get("openclaw_flow_runtime")),
+        "sync_mode": _normalized_str(task.get("openclaw_taskflow_sync_mode")),
+        "substrate_state": _normalized_str(task.get("openclaw_taskflow_substrate_state")),
+        "substrate_revision": task.get("openclaw_taskflow_substrate_revision"),
+        "native_binding_state": _normalized_str(task.get("openclaw_native_binding_state")),
+        "native_status": _normalized_str(task.get("openclaw_native_status")),
+        "native_runtime": _normalized_str(task.get("openclaw_native_runtime")),
+        "native_seen_at": _normalized_str(task.get("openclaw_native_seen_at")),
+        "native_match_score": task.get("openclaw_native_match_score"),
+        "task_id": _normalized_str(task.get("openclaw_task_id")),
+        "flow_id": _normalized_str(task.get("openclaw_flow_id")),
+        "flow_kind": _normalized_str(task.get("openclaw_flow_kind")),
+    }
+    for key, value in promoted.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
     return merged
+
+
+def _runner_meta_artifacts(task: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, Any]:
+    route = _normalized_str(task.get("route")).lower()
+    worker_pool = _normalized_str(task.get("worker_pool")).lower()
+    execution_backend = _normalized_str(artifacts.get("execution_backend")).lower()
+    if route != "runner" and worker_pool != "octoclaw-runner" and execution_backend != "runner_queue":
+        return {}
+    result_path = _normalized_str(artifacts.get("result_path"))
+    if not result_path and _normalized_str(task.get("id")):
+        result_path = f"{RUNNER_RESULTS_DIR}/{_normalized_str(task.get('id'))}.json"
+    if not result_path:
+        return {}
+    meta = load_json(result_path)
+    if not isinstance(meta, dict):
+        return {}
+    payload: dict[str, Any] = {"result_path": _normalized_str(meta.get("result_path")) or result_path}
+    report_path = _normalized_str(meta.get("report_path"))
+    if report_path:
+        payload["report_path"] = report_path
+    for key in (
+        "execution_backend",
+        "command",
+        "cwd",
+        "worker_id",
+        "stdout_file",
+        "stderr_file",
+        "stdout_excerpt",
+        "stderr_excerpt",
+        "session_key",
+        "session_id",
+        "agent_id",
+        "agent_namespace",
+        "managed_by_octoclaw",
+    ):
+        value = meta.get(key)
+        if value not in (None, "", [], {}):
+            payload[key] = value
+    worker_result = meta.get("worker_result") if isinstance(meta.get("worker_result"), dict) else None
+    if worker_result:
+        payload["worker_result"] = normalize_worker_result(
+            worker_result,
+            task_id=_normalized_str(meta.get("id")) or _normalized_str(task.get("id")),
+            default_report=report_path,
+        )
+    return payload
 
 
 def infer_managed_by_octoclaw(task: dict[str, Any]) -> bool:
@@ -208,11 +290,17 @@ def merge_artifacts(task: dict[str, Any]) -> dict[str, Any]:
         artifacts["context_summary"] = context_summary
     if files_changed:
         artifacts["files_changed"] = files_changed
+    runner_meta = _runner_meta_artifacts(task, artifacts)
+    for key, value in runner_meta.items():
+        if key == "worker_result":
+            artifacts["worker_result"] = value
+        elif value not in (None, "", [], {}):
+            artifacts.setdefault(key, value)
     delegated_materialization = normalize_delegated_materialization(
         task.get("delegated_materialization") if isinstance(task.get("delegated_materialization"), dict) else artifacts.get("delegated_materialization"),
         lane=_normalized_str(task.get("route")),
     )
-    if delegated_materialization.get("lane") or delegated_materialization.get("kind"):
+    if _has_materialization_fact(delegated_materialization):
         artifacts["delegated_materialization"] = delegated_materialization
     capability_failure = normalize_capability_bound_failure(
         task.get("capability_failure") if isinstance(task.get("capability_failure"), dict) else artifacts.get("capability_failure"),
@@ -313,17 +401,21 @@ def infer_outcome_state(task: dict[str, Any], worker_result: dict[str, Any] | No
 
 def infer_lifecycle_state(task: dict[str, Any], outcome_state: str, worker_result: dict[str, Any] | None = None) -> str:
     status = _normalized_str(task.get("status")).lower()
+    has_result_fact = bool(
+        worker_result
+        or _normalized_str(task.get("completed_at"))
+        or _normalized_str(task.get("result_ready_at"))
+        or _normalized_str(task.get("handoff_ready_at"))
+        or _normalized_str(task.get("report_path"))
+    )
     if status == "cancelled" or outcome_state == "cancelled":
         derived = "cancelled"
+    elif outcome_state in {"done", "failed", "partial"} and has_result_fact:
+        derived = "finished"
     elif status in {"done", "completed", "failed", "deferred"}:
         derived = "finished"
     elif status == "blocked":
-        if (
-            _normalized_str(task.get("completed_at"))
-            or worker_result
-            or _normalized_str(task.get("result_ready_at"))
-            or _normalized_str(task.get("handoff_ready_at"))
-        ):
+        if has_result_fact:
             derived = "finished"
         else:
             derived = "finalizing"
@@ -618,6 +710,8 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["retry_count"] = int(retry_count or 0) if str(retry_count or "").strip() else 0
     normalized["expected_done_at"] = _normalized_str(normalized.get("expected_done_at"))
     artifacts = merge_artifacts(normalized)
+    if not normalized["report_path"]:
+        normalized["report_path"] = _normalized_str(artifacts.get("report_path"))
     delegated_materialization = normalize_delegated_materialization(
         artifacts.get("delegated_materialization") if isinstance(artifacts.get("delegated_materialization"), dict) else normalized.get("delegated_materialization"),
         lane=normalized["route"],
@@ -628,8 +722,10 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     )
     normalized["delegated_materialization"] = delegated_materialization
     normalized["capability_failure"] = capability_failure
-    if delegated_materialization.get("lane") or delegated_materialization.get("kind"):
+    if _has_materialization_fact(delegated_materialization):
         artifacts["delegated_materialization"] = delegated_materialization
+    else:
+        artifacts.pop("delegated_materialization", None)
     if capability_failure.get("reason"):
         artifacts["capability_failure"] = capability_failure
     worker_result = _existing_worker_result(normalized, artifacts)
