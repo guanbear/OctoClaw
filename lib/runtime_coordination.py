@@ -255,9 +255,10 @@ def _team_parent_checklist_items(task: dict[str, Any]) -> list[dict[str, Any]]:
 
 def checklist_snapshot(task: dict[str, Any]) -> dict[str, Any]:
     explicit = task.get("checklist")
-    if isinstance(explicit, dict):
+    explicit_kind = _text((explicit or {}).get("kind")) if isinstance(explicit, dict) else ""
+    if isinstance(explicit, dict) and explicit_kind in {"explicit", "artifact"}:
         items = explicit.get("items", []) if isinstance(explicit.get("items", []), list) else []
-        kind = _text(explicit.get("kind")) or "explicit"
+        kind = explicit_kind or "explicit"
     else:
         artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts", {}), dict) else {}
         artifact_checklist = artifacts.get("checklist")

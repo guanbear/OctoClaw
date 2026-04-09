@@ -305,6 +305,39 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(detail["checklist"]["open_count"], 1)
         self.assertEqual(detail["checklist"]["items"][0]["state"], "done")
 
+    def test_build_task_detail_recomputes_runtime_generated_checklist_from_current_facts(self) -> None:
+        detail = build_task_detail(
+            {
+                "id": "runner-finished-1",
+                "worker_pool": "octoclaw-runner",
+                "status": "running",
+                "summary": "cron check completed",
+                "route": "runner",
+                "report_path": "/tmp/runner-finished-1.md",
+                "artifacts": {
+                    "execution_backend": "runner_queue",
+                    "worker_result": {
+                        "status": "done",
+                        "summary": "Runner completed · cron ok",
+                        "report": "/tmp/runner-finished-1.md",
+                        "next_step": "none",
+                    },
+                },
+                "checklist": {
+                    "kind": "delegated_default",
+                    "items": [
+                        {"id": "dispatch", "title": "Dispatch delegated work", "state": "pending"},
+                        {"id": "execute", "title": "Execute delegated work", "state": "pending"},
+                    ],
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(detail["anchor"]["state"], "done")
+        self.assertEqual(detail["checklist"]["completed_count"], 4)
+        self.assertEqual(detail["checklist"]["open_count"], 0)
+
     def test_render_task_anchor_text_includes_commands(self) -> None:
         anchor = build_task_anchor(
             {
