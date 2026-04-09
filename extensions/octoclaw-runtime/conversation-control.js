@@ -240,7 +240,20 @@ function buildTurnFacts(turn, taskIndex) {
       || materialization?.runner_job_id
       || "",
   ).trim();
-  const task = taskId ? taskIndex.get(taskId) || null : null;
+  const taskRecordId = String(taskId || runnerJobId || "").trim();
+  const task = taskRecordId ? taskIndex.get(taskRecordId) || null : null;
+  const artifacts = task?.artifacts && typeof task.artifacts === "object" && !Array.isArray(task.artifacts)
+    ? task.artifacts
+    : {};
+  const runnerPlan = artifacts.runner_plan && typeof artifacts.runner_plan === "object" && !Array.isArray(artifacts.runner_plan)
+    ? artifacts.runner_plan
+    : {};
+  const probeSpec = runnerPlan.probe_spec && typeof runnerPlan.probe_spec === "object" && !Array.isArray(runnerPlan.probe_spec)
+    ? runnerPlan.probe_spec
+    : {};
+  const workerResult = artifacts.worker_result && typeof artifacts.worker_result === "object" && !Array.isArray(artifacts.worker_result)
+    ? artifacts.worker_result
+    : {};
   return {
     dispatchSeen: Boolean(dispatch),
     dispatchExecuted: Boolean(dispatch?.executed),
@@ -251,6 +264,7 @@ function buildTurnFacts(turn, taskIndex) {
     taskId,
     runnerJobId,
     capabilityFailure,
+    taskRecordId,
     directTools: Array.from(
       new Set(
         directToolEvents
@@ -263,6 +277,13 @@ function buildTurnFacts(turn, taskIndex) {
     currentTaskExecutor: String(task?.executor || "").trim(),
     currentTaskRoute: String(task?.route || "").trim(),
     currentTaskRuntime: String(task?.runtime || "").trim(),
+    currentTaskReportPath: String(task?.report_path || artifacts.report_path || workerResult.report || "").trim(),
+    runnerPlanKind: String(runnerPlan.kind || "").trim(),
+    runnerPlanSummary: String(runnerPlan.summary || "").trim(),
+    delegatedProbeKind: String(probeSpec.kind || "").trim(),
+    delegatedProbeSource: String(probeSpec.source || "").trim(),
+    delegatedProbeProject: String(probeSpec.project || "").trim(),
+    delegatedProbeFocus: String(probeSpec.focus || "").trim(),
     task,
   };
 }
@@ -449,10 +470,31 @@ export function buildConversationGrounding({
   if ((facts.directTools || []).length > 0) {
     lines.push(`- Direct tools used: ${facts.directTools.join(", ")}`);
   } else if (isProvenancePrompt(prompt)) {
-    lines.push("- Direct tools used: unavailable");
+    lines.push("- Direct tools used: unavailable in main session");
+  }
+  if (facts.runnerPlanKind) {
+    lines.push(`- Delegated workflow: ${facts.runnerPlanKind}`);
+  }
+  if (facts.runnerPlanSummary) {
+    lines.push(`- Delegated workflow summary: ${facts.runnerPlanSummary}`);
+  }
+  if (facts.delegatedProbeKind) {
+    lines.push(`- Delegated probe: ${facts.delegatedProbeKind}`);
+  }
+  if (facts.delegatedProbeSource) {
+    lines.push(`- Delegated evidence source: ${facts.delegatedProbeSource}`);
+  }
+  if (facts.delegatedProbeProject) {
+    lines.push(`- Delegated lookup project: ${facts.delegatedProbeProject}`);
+  }
+  if (facts.delegatedProbeFocus) {
+    lines.push(`- Delegated lookup focus: ${facts.delegatedProbeFocus}`);
   }
   if (facts.runnerJobId) {
     lines.push(`- Runner job id: ${facts.runnerJobId}`);
+  }
+  if (facts.taskRecordId && !facts.taskId) {
+    lines.push(`- Task record id: ${facts.taskRecordId}`);
   }
   if (facts.taskId) {
     lines.push(`- Task id: ${facts.taskId}`);

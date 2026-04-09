@@ -184,6 +184,10 @@ function latencyAckText(decision) {
   return String(decision?.latency_ack?.text || "").trim();
 }
 
+function conversationIntentClass(decision) {
+  return String(decision?.request?.metadata?.conversation_control?.intent_class || "").trim();
+}
+
 function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
   if (!isDelegatedRoute(decision)) return false;
   if (!decision?.pre_dispatch_ack?.required) return false;
@@ -269,6 +273,13 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
       message,
     };
   }
+}
+
+async function maybeSendEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, logger) {
+  if (!shouldSendPreDispatchAck(decision, state, ctx)) {
+    return { attempted: false, sent: false, reason: "not_required", message: "" };
+  }
+  return maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger);
 }
 
 function shouldSendLatencyAck(decision, state = {}, ctx = {}, toolName = "") {
@@ -1110,6 +1121,73 @@ function isRunnerDecision(decision) {
   return String(decision?.route_decision?.route || "").trim() === "runner";
 }
 
+function assistantMessageRole(message = {}) {
+  return String(message?.role || "").trim().toLowerCase();
+}
+
+function assistantMessageText(message = {}) {
+  return extractMessageText(message?.content);
+}
+
+function replaceAssistantMessageText(message = {}, text = "") {
+  const next = message && typeof message === "object" ? { ...message } : {};
+  if (typeof next.content === "string") {
+    next.content = text;
+    return next;
+  }
+  if (Array.isArray(next.content)) {
+    next.content = [{ type: "text", text }];
+    return next;
+  }
+  if (next.content && typeof next.content === "object" && !Array.isArray(next.content)) {
+    next.content = { ...next.content, text };
+    return next;
+  }
+  next.content = [{ type: "text", text }];
+  return next;
+}
+
+function delegationFailureReply(state = {}) {
+  const route = String(state?.decision?.route_decision?.route || "").trim();
+  const intentClass = String(state?.conversationIntentClass || conversationIntentClass(state?.decision) || "").trim();
+  if (route === "runner" && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)) {
+    return "这次查询还没真正派发到执行链，所以我现在不能把结果说成已经查到。等拿到真实执行结果后我再回复。";
+  }
+  return "这次任务还没真正派发成功，所以我现在不能把它说成已经完成。等拿到真实执行结果后我再回复。";
+}
+
+function contaminationFallbackReply() {
+  return "这条追问命中了被子任务污染的会话上下文，我先按最新执行事实重绑后再回答，这次先不凭旧记忆下结论。";
+}
+
+function guardAssistantMessageForPolicyState(message = {}, state = {}) {
+  if (assistantMessageRole(message) !== "assistant") {
+    return { mode: "pass", message };
+  }
+  const replyText = assistantMessageText(message);
+  if (!replyText) {
+    return { mode: "pass", message };
+  }
+  if (isDelegatedRoute(state?.decision) && !state?.delegated) {
+    return {
+      mode: "replace",
+      reason: "undelegated_route_response_blocked",
+      message: replaceAssistantMessageText(message, delegationFailureReply(state)),
+    };
+  }
+  if (
+    String(state?.decision?.route_decision?.task_class || "").trim() === "control_observer"
+    && String(state?.sessionBoundary?.status || "").trim() === "contaminated_subagent_identity"
+  ) {
+    return {
+      mode: "replace",
+      reason: "contaminated_control_observer_response_blocked",
+      message: replaceAssistantMessageText(message, contaminationFallbackReply()),
+    };
+  }
+  return { mode: "pass", message };
+}
+
 function runtimeSwitches(decision) {
   return decision?.runtime_switches || {};
 }
@@ -1581,6 +1659,7 @@ const plugin = {
     const state = resolved?.state || getPolicyStateForContext(ctx).state;
     const metadata = buildPolicyMetadata(ctx, { stateKey });
     await maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, pi.logger, "direct_lookup");
+    await maybeSendEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);
     const prependSystem = [];
     if (routeHintRequired(decision)) {
       prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
@@ -1613,6 +1692,14 @@ const plugin = {
       if (grounding?.context) {
         prependSystem.push(grounding.context);
       }
+    }
+    if (String(state?.sessionBoundary?.status || resolved?.state?.sessionBoundary?.status || detectSessionBoundary(ctx).status || "") === "contaminated_subagent_identity") {
+      prependSystem.push([
+        "[OctoClaw session boundary guard]",
+        "This turn arrived on a session contaminated by subagent identity.",
+        "Ignore any recalled subagent memory, tool history, or prior task outcome unless it appears in authoritative execution facts below or in fresh workflow outputs from this turn.",
+        "For delegated routes, you must not claim the task was dispatched unless octoclaw_dispatch actually ran and returned a materialized result.",
+      ].join("\n"));
     }
     prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
     if (prependSystem.length === 0) return;
@@ -1832,6 +1919,18 @@ const plugin = {
     }
     clearPolicyStateForContext(ctx);
   }, 50);
+
+  registerLifecycleHook("before_message_write", (event, ctx) => {
+    const { state } = getPolicyStateForContext({
+      sessionKey: String(ctx?.sessionKey || "").trim(),
+      agentId: String(ctx?.agentId || "").trim(),
+    });
+    if (!state) return;
+    const guarded = guardAssistantMessageForPolicyState(event?.message || {}, state);
+    if (guarded.mode === "replace" && guarded.message) {
+      return { message: guarded.message };
+    }
+  }, 120);
 
   pi.registerTool(
     {
@@ -2368,11 +2467,16 @@ export const __octoclawTest = {
   shouldRetainPolicyStateOnAgentEnd,
   preDispatchAckText,
   shouldSendPreDispatchAck,
+  maybeSendEagerPreDispatchAck,
   latencyAckText,
   shouldSendLatencyAck,
   maybeEmitPreDispatchAckProgress,
   ensurePreDispatchAck,
   maybeSendLatencyAck,
+  assistantMessageRole,
+  assistantMessageText,
+  replaceAssistantMessageText,
+  guardAssistantMessageForPolicyState,
   resolvePolicyDecisionForContext,
   inferRoute,
   buildRawDecision: buildPolicyDecision,

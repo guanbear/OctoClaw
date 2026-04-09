@@ -474,6 +474,103 @@ Sender (untrusted metadata):
         self.assertEqual(payload["taskClass"], "simple_lookup")
         self.assertIn("Direct tools used: web_fetch", payload["context"])
 
+    def test_conversation_grounding_recovers_runner_lookup_provenance_from_task_state(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-runner-") as tmpdir:
+            workspace = Path(tmpdir)
+            octopus_dir = workspace / "tmp" / "octopus"
+            octopus_dir.mkdir(parents=True, exist_ok=True)
+            replay_path = octopus_dir / "runtime-policy-replay.jsonl"
+            task_state_path = octopus_dir / "task-state.json"
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-09T23:01:05Z",
+                                "sessionKey": "agent:main:slack:direct:u-runner",
+                                "sessionId": "sess-u-runner",
+                                "prompt": "再查下openclaw 有没有新的发版",
+                                "route": "runner",
+                                "systemPreferredRoute": "runner",
+                                "workerPool": "octoclaw-runner",
+                                "taskClass": "fast_tool_check",
+                                "protectedLane": "",
+                                "routeHintRequired": False,
+                                "routeHintSubmitted": False,
+                                "stateGroundingRequired": False,
+                                "latencyAckRequired": False,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "dispatch_called",
+                                "at": "2026-04-09T23:01:06Z",
+                                "sessionKey": "agent:main:slack:direct:u-runner",
+                                "sessionId": "sess-u-runner",
+                                "route": "runner",
+                                "taskClass": "fast_tool_check",
+                                "executed": True,
+                                "runnerJobId": "runner-123",
+                                "materialization": {
+                                    "status": "materialized",
+                                    "kind": "runner_playbook",
+                                    "runner_job_id": "runner-123",
+                                },
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            task_state_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "runner-123",
+                                "status": "done",
+                                "summary": "最新 release 仍是 v2026.4.9",
+                                "executor": "runner",
+                                "route": "runner",
+                                "runtime": "runner",
+                                "artifacts": {
+                                    "runner_plan": {
+                                        "kind": "upstream_release_lookup",
+                                        "summary": "检查 openclaw 上游最新发版与最近更新",
+                                        "probe_spec": {
+                                            "kind": "upstream_release_lookup",
+                                            "project": "openclaw",
+                                            "focus": "latest_updates",
+                                            "source": "github_api",
+                                        },
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "查了吗 怎么查的",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(task_state_path))},
+                    sessionKeys: ["agent:main:slack:direct:u-runner"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["route"], "runner")
+        self.assertIn("Delegated workflow: upstream_release_lookup", payload["context"])
+        self.assertIn("Delegated evidence source: github_api", payload["context"])
+        self.assertIn("Delegated lookup project: openclaw", payload["context"])
+
     def test_conversation_grounding_recovers_task_progress_from_task_state(self) -> None:
         import tempfile
 
@@ -1231,6 +1328,41 @@ Sender (untrusted metadata):
         )
 
         self.assertFalse(payload["shouldSend"])
+
+    def test_guard_assistant_message_replaces_undelegated_runner_reply(self) -> None:
+        payload = run_runtime_helper(
+            """(() => __octoclawTest.guardAssistantMessageForPolicyState(
+                { role: "assistant", content: "已派任务去查，有结果自动回来告诉你。" },
+                {
+                  decision: {
+                    route_decision: { route: "runner", task_class: "fast_tool_check" },
+                    request: { metadata: { conversation_control: { intent_class: "fresh_live_lookup" } } }
+                  },
+                  conversationIntentClass: "fresh_live_lookup",
+                  delegated: false
+                }
+            ))()"""
+        )
+
+        self.assertEqual(payload["mode"], "replace")
+        self.assertIn("还没真正派发到执行链", json.dumps(payload["message"], ensure_ascii=False))
+
+    def test_guard_assistant_message_replaces_contaminated_control_observer_reply(self) -> None:
+        payload = run_runtime_helper(
+            """(() => __octoclawTest.guardAssistantMessageForPolicyState(
+                { role: "assistant", content: "这次是 web_fetch 查的。" },
+                {
+                  decision: {
+                    route_decision: { route: "direct", task_class: "control_observer" }
+                  },
+                  sessionBoundary: { status: "contaminated_subagent_identity" },
+                  delegated: false
+                }
+            ))()"""
+        )
+
+        self.assertEqual(payload["mode"], "replace")
+        self.assertIn("子任务污染", json.dumps(payload["message"], ensure_ascii=False))
 
     def test_retain_policy_state_when_delegated_route_ended_without_dispatch(self) -> None:
         payload = run_runtime_helper(
