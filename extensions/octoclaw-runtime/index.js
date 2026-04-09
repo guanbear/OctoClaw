@@ -860,13 +860,11 @@ function extractQueuedBusyMessages(raw) {
   if (!text.startsWith("[Queued messages while agent was busy]")) {
     return [];
   }
-  const sections = text.split(/\n---\n(?=Queued #\d+)/g);
   const messages = [];
-  for (const section of sections) {
-    const lines = String(section || "").split("\n");
-    const systemLine = lines.find((line) => String(line || "").startsWith("System:"));
-    if (!systemLine) continue;
-    const rawLine = String(systemLine).replace(/^System:\s*/, "").trim();
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (!String(line || "").startsWith("System:")) continue;
+    const rawLine = String(line).replace(/^System:\s*/, "").trim();
     const lastColon = rawLine.lastIndexOf(": ");
     const message = String(lastColon >= 0 ? rawLine.slice(lastColon + 2) : rawLine).trim();
     if (message) {
@@ -920,8 +918,61 @@ function promptsEquivalent(left = "", right = "") {
   return leftCandidates.some((value) => rightSet.has(value));
 }
 
+function unwrapImRelayPrompt(raw = "") {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  const hasRelayMetadata = /Conversation info \(untrusted metadata\):/u.test(text)
+    || /Sender \(untrusted metadata\):/u.test(text);
+  if (!hasRelayMetadata) return "";
+
+  const afterSender = text.replace(
+    /^.*?Sender \(untrusted metadata\):\s*```[\s\S]*?```\s*/u,
+    "",
+  ).trim();
+  if (afterSender && !/^System:/u.test(afterSender)) {
+    return afterSender;
+  }
+
+  const afterConversation = text.replace(
+    /^.*?Conversation info \(untrusted metadata\):\s*```[\s\S]*?```\s*/u,
+    "",
+  ).trim();
+  if (afterConversation && !/^System:/u.test(afterConversation)) {
+    return afterConversation;
+  }
+
+  const firstLine = text.split(/\r?\n/u, 1)[0] || "";
+  const systemMatch = firstLine.match(/^System:\s*\[[^\]]+\]\s*[^:]+:\s*(.+)$/u);
+  if (systemMatch?.[1]) {
+    return String(systemMatch[1]).trim();
+  }
+  return "";
+}
+
 function extractPromptText(event = {}) {
-  const prompt = unwrapQueuedBusyPrompt(String(event?.prompt || "").trim());
+  const prompt = String(event?.prompt || "").trim();
+  if (prompt.startsWith("[Queued messages while agent was busy]")) {
+    const busyMessages = prompt
+      .split(/\r?\n/u)
+      .filter((line) => String(line || "").startsWith("System:"))
+      .map((line) => {
+        const rawLine = String(line || "").replace(/^System:\s*/, "").trim();
+        const lastColon = rawLine.lastIndexOf(": ");
+        return String(lastColon >= 0 ? rawLine.slice(lastColon + 2) : rawLine).trim();
+      })
+      .filter(Boolean);
+    if (busyMessages.length > 0) {
+      return busyMessages.join("\n\n");
+    }
+  }
+  const relayPrompt = unwrapImRelayPrompt(prompt);
+  if (relayPrompt) {
+    return relayPrompt;
+  }
+  const unwrappedPrompt = unwrapQueuedBusyPrompt(prompt);
+  if (unwrappedPrompt && unwrappedPrompt !== prompt) {
+    return unwrappedPrompt;
+  }
   if (prompt) {
     return prompt;
   }
@@ -931,9 +982,17 @@ function extractPromptText(event = {}) {
     if (String(message?.role || "").trim().toLowerCase() !== "user") {
       continue;
     }
-    const text = unwrapQueuedBusyPrompt(extractMessageText(message?.content));
-    if (text) {
+    const messageText = extractMessageText(message?.content);
+    const relayText = unwrapImRelayPrompt(messageText);
+    if (relayText) {
+      return relayText;
+    }
+    const text = unwrapQueuedBusyPrompt(messageText);
+    if (text && text !== messageText) {
       return text;
+    }
+    if (messageText) {
+      return messageText;
     }
   }
   return "";

@@ -115,6 +115,27 @@ Conversation info (untrusted metadata):
 
         self.assertEqual(payload, "顺便看下 8083 端口有没有监听")
 
+    def test_extract_prompt_text_unwraps_im_relay_wrapper(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.extractPromptText({
+                prompt: `System: [2026-04-09 22:55:55 GMT+8] Slack DM from guanbear: 你是怎么查的
+
+Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"1775746554.447479"}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{"label":"guanbear"}
+\`\`\`
+
+你是怎么查的`
+            })"""
+        )
+
+        self.assertEqual(payload, "你是怎么查的")
+
     def test_prefers_custom_im_session_key_over_generic_session_id(self) -> None:
         payload = run_runtime_helper(
             """__octoclawTest.resolvePolicyStateKeys({
@@ -717,6 +738,39 @@ Conversation info (untrusted metadata):
         self.assertFalse(payload["shouldSend"])
         self.assertNotIn("octoclaw_dispatch", payload["tools"])
 
+    def test_wrapped_workflow_meta_question_stays_in_direct_control_lane(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const prompt = __octoclawTest.extractPromptText({
+                  prompt: `System: [2026-04-09 22:55:26 GMT+8] Slack DM from guanbear: 刚才那个任务判定是啥
+
+Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"1775746525.471159"}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{"label":"guanbear"}
+\`\`\`
+
+刚才那个任务判定是啥`
+                });
+                const decision = __octoclawTest.buildDecision(prompt);
+                return {
+                  extracted: prompt,
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  protectedLane: decision.route_decision.protected_lane
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["extracted"], "刚才那个任务判定是啥")
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "control_observer")
+        self.assertEqual(payload["protectedLane"], "control_observer")
+
     def test_session_control_question_stays_in_direct_protected_lane(self) -> None:
         payload = run_runtime_helper(
             """(() => {
@@ -811,6 +865,74 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["workContract"], "inspect_report")
         self.assertTrue(payload["ack"]["required"])
         self.assertTrue(payload["shouldSend"])
+
+    def test_wrapped_bounded_openclaw_update_lookup_keeps_runner_pre_dispatch_ack(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const prompt = __octoclawTest.extractPromptText({
+                  prompt: `System: [2026-04-09 22:54:32 GMT+8] Slack DM from guanbear: 你再看下 OpenClaw 有啥更新，尤其是 Memory 方向
+
+Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"1775746472.073449"}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{"label":"guanbear"}
+\`\`\`
+
+你再看下 OpenClaw 有啥更新，尤其是 Memory 方向`
+                });
+                const decision = __octoclawTest.buildDecision(prompt);
+                return {
+                  extracted: prompt,
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  ack: decision.pre_dispatch_ack
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["extracted"], "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向")
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_tool_check")
+        self.assertTrue(payload["ack"]["required"])
+
+    def test_wrapped_controlui_prompt_does_not_accidentally_delegate(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const prompt = __octoclawTest.extractPromptText({
+                  prompt: `System: [2026-04-09 22:57:03 GMT+8] Slack DM from guanbear: 你的controlui的访问地址是啥
+
+Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"1775746622.693989"}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{"label":"guanbear"}
+\`\`\`
+
+你的controlui的访问地址是啥`
+                });
+                const decision = __octoclawTest.buildDecision(prompt);
+                return {
+                  extracted: prompt,
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  allowDirectTools: decision.tool_policy.allow_direct_tools,
+                  mustDelegateVia: decision.tool_policy.must_delegate_via
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["extracted"], "你的controlui的访问地址是啥")
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "direct_answer")
+        self.assertTrue(payload["allowDirectTools"])
+        self.assertEqual(payload["mustDelegateVia"], "")
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(
