@@ -673,11 +673,18 @@ function promptContract(protocol, route, workContract, needsReview) {
   };
 }
 
-function preDispatchAckPolicy(route, workType, phase, taskClass = "") {
-  const required = ["spawn_single", "spawn_multi"].includes(route) && taskClass !== "control_observer";
+function preDispatchAckPolicy(route, workType, phase, taskClass = "", features = {}) {
+  const runnerLookupAck = Boolean(
+    route === "runner"
+    && taskClass !== "control_observer"
+    && Boolean(features.requires_external_lookup || features.bounded_external_inspect || features.bounded_repo_update_lookup)
+  );
+  const required = (["spawn_single", "spawn_multi"].includes(route) || runnerLookupAck) && taskClass !== "control_observer";
   let text = "我先处理一下，稍后把结果告诉你。";
   if (route === "spawn_multi") {
     text = "我先分派处理一下，稍后把结果汇总给你。";
+  } else if (route === "runner" && Boolean(features.bounded_repo_update_lookup || features.bounded_software_update_lookup)) {
+    text = "我先看一下最新更新，马上给你结论。";
   } else if (workType === "research") {
     text = "我先查一下，马上给你结论。";
   } else if (workType === "review") {
@@ -1134,7 +1141,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const taskClass = String(routeMeta.task_class || "");
   const routeBudget = budgetPolicy(features, route, workContract, protocol, needsReview);
   const promptPolicy = promptContract(protocol, route, workContract, needsReview);
-  const preDispatchAck = preDispatchAckPolicy(route, workType, phase, taskClass);
+  const preDispatchAck = preDispatchAckPolicy(route, workType, phase, taskClass, features);
   const stateGrounding = stateGroundingPolicy(routeMeta, route, taskClass);
   const latencyAck = latencyAckPolicy(route, taskClass, features);
   const routeRecommendation = buildRouteRecommendation(routeMeta, {

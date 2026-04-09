@@ -275,14 +275,14 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertIn("最新更新", payload["latency_ack"]["text"])
         self.assertFalse(payload["state_grounding"]["required"])
 
-    def test_bounded_openclaw_update_lookup_prefers_direct_simple_lookup(self) -> None:
+    def test_bounded_openclaw_update_lookup_prefers_runner_inspect_with_ack(self) -> None:
         payload = self.run_policy("你再看下 OpenClaw有啥更新 尤其是Memory方向")
-        self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertEqual(payload["route_decision"]["task_class"], "simple_lookup")
-        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
-        self.assertFalse(payload["pre_dispatch_ack"]["required"])
-        self.assertTrue(payload["latency_ack"]["required"])
-        self.assertIn("最新更新", payload["latency_ack"]["text"])
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
+        self.assertFalse(payload["latency_ack"]["required"])
+        self.assertIn("最新更新", payload["pre_dispatch_ack"]["text"])
 
     def test_workflow_meta_task_progress_followup_prefers_grounded_direct_lane(self) -> None:
         payload = self.run_policy("不是 刚才single成功了吗")

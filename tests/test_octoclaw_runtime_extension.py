@@ -741,10 +741,10 @@ Conversation info (untrusted metadata):
         self.assertEqual(payload["helperText"], payload["ack"]["text"])
         self.assertTrue(payload["shouldSend"])
 
-    def test_bounded_update_lookup_uses_latency_ack_instead_of_pre_dispatch_ack(self) -> None:
+    def test_bounded_github_update_lookup_uses_latency_ack_instead_of_pre_dispatch_ack(self) -> None:
         payload = run_runtime_helper(
             """(() => {
-                const decision = __octoclawTest.buildDecision("你再看下 OpenClaw有啥更新 尤其是Memory方向");
+                const decision = __octoclawTest.buildDecision("查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗");
                 return {
                   route: decision.route_decision.route,
                   taskClass: decision.route_decision.task_class,
@@ -762,6 +762,26 @@ Conversation info (untrusted metadata):
         self.assertFalse(payload["ack"]["required"])
         self.assertTrue(payload["latencyAck"]["required"])
         self.assertTrue(payload["shouldSendLatencyAck"])
+
+    def test_bounded_openclaw_update_lookup_uses_runner_pre_dispatch_ack(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("你再看下 OpenClaw有啥更新 尤其是Memory方向");
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  workContract: decision.route_decision.work_contract,
+                  ack: decision.pre_dispatch_ack,
+                  shouldSend: __octoclawTest.shouldSendPreDispatchAck(decision, {}, { trigger: "message" })
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_tool_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertTrue(payload["ack"]["required"])
+        self.assertTrue(payload["shouldSend"])
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(

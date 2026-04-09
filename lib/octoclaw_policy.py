@@ -788,11 +788,29 @@ def prompt_contract(protocol: str, route: str, work_contract: str, needs_review:
     }
 
 
-def pre_dispatch_ack_policy(route: str, work_type: str, phase: str, task_class: str = "") -> dict[str, Any]:
-    required = route in {"spawn_single", "spawn_multi"} and task_class != "control_observer"
+def pre_dispatch_ack_policy(
+    route: str,
+    work_type: str,
+    phase: str,
+    task_class: str = "",
+    features: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    feature_flags = features or {}
+    runner_lookup_ack = bool(
+        route == "runner"
+        and task_class != "control_observer"
+        and (
+            feature_flags.get("requires_external_lookup")
+            or feature_flags.get("bounded_external_inspect")
+            or feature_flags.get("bounded_repo_update_lookup")
+        )
+    )
+    required = (route in {"spawn_single", "spawn_multi"} or runner_lookup_ack) and task_class != "control_observer"
     text = "我先处理一下，稍后把结果告诉你。"
     if route == "spawn_multi":
         text = "我先分派处理一下，稍后把结果汇总给你。"
+    elif route == "runner" and (feature_flags.get("bounded_repo_update_lookup") or feature_flags.get("bounded_software_update_lookup")):
+        text = "我先看一下最新更新，马上给你结论。"
     elif work_type == "research":
         text = "我先查一下，马上给你结论。"
     elif work_type == "review":
@@ -1058,7 +1076,7 @@ def build_decision(
     task_class = str(route_meta.get("task_class", "") or "")
     route_budget = budget_policy(features, route, work_contract, protocol, needs_review)
     prompt_policy = prompt_contract(protocol, route, work_contract, needs_review)
-    pre_dispatch_ack = pre_dispatch_ack_policy(route, work_type, phase, task_class)
+    pre_dispatch_ack = pre_dispatch_ack_policy(route, work_type, phase, task_class, features)
     state_grounding = state_grounding_policy(route_meta, route, task_class)
     latency_ack = latency_ack_policy(route, task_class, features)
     route_recommendation = build_route_recommendation(
