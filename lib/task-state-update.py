@@ -19,7 +19,7 @@ if SCRIPT_DIR not in sys.path:
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 
 from clawteam_bridge import sync_task
-from notifier import send_task_notification
+from notifier import send_task_completion_notification, send_task_notification
 from runtime_coordination import sync_runtime_surfaces
 from runtime_task_record import (
     normalize_task_record,
@@ -99,17 +99,22 @@ def load_notify_state() -> dict:
         with open(PATROL_NOTIFY_STATE_FILE, "r", encoding="utf-8") as fh:
             loaded = json.load(fh)
             if not isinstance(loaded, dict):
-                return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
+                return {"task_ids": {}, "task_anchor_messages": {}, "task_completion_messages": {}, "updated_at": ""}
             loaded.setdefault("task_ids", {})
             loaded.setdefault("task_anchor_messages", {})
+            loaded.setdefault("task_completion_messages", {})
             loaded.setdefault("updated_at", "")
             return loaded
     except Exception:
-        return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
+        return {"task_ids": {}, "task_anchor_messages": {}, "task_completion_messages": {}, "updated_at": ""}
 
 
 def save_notify_state(state: dict):
     try:
+        state.setdefault("task_ids", {})
+        state.setdefault("task_anchor_messages", {})
+        state.setdefault("task_completion_messages", {})
+        state.setdefault("updated_at", "")
         os.makedirs(os.path.dirname(PATROL_NOTIFY_STATE_FILE), exist_ok=True)
         with open(PATROL_NOTIFY_STATE_FILE, "w", encoding="utf-8") as fh:
             json.dump(state, fh, ensure_ascii=False)
@@ -224,16 +229,6 @@ def _log_task_transition(record: dict, previous_status: str, *, anchor_result: d
                 record,
                 "observability_degraded",
                 message=str(state_model.get("observability_health", "") or "observability degraded"),
-            )
-        if isinstance(anchor_result, dict) and anchor_result.get("ok"):
-            append_task_event(
-                record,
-                "user_notified",
-                message=f"anchor {str(anchor_result.get('action', 'send') or 'send')}",
-                extra={
-                    "backend": str(anchor_result.get("backend", "") or ""),
-                    "message_id": str(anchor_result.get("message_id", "") or ""),
-                },
             )
     except Exception:
         return
@@ -740,9 +735,6 @@ def _sync_task_anchor(record: dict, previous_status: str, *, force: bool = False
     task_id = str(record.get("id", "") or "").strip()
     existing_anchor = anchor_messages.get(task_id, {}) if isinstance(anchor_messages.get(task_id), dict) else {}
     existing_message_id = str(existing_anchor.get("message_id", "") or "").strip()
-    if not existing_message_id:
-        binding = resolve_session_binding(str(record.get("session_key", "") or "").strip())
-        existing_message_id = str(binding.get("last_message_id", "") or binding.get("message_id", "") or "").strip()
 
     try:
         result = send_task_notification(record, existing_message_id=existing_message_id)
@@ -768,6 +760,71 @@ def _sync_task_anchor(record: dict, previous_status: str, *, force: bool = False
         "message_id": message_id,
         "action": str(result.get("action", "send") or "send"),
     }
+
+
+def _should_sync_task_completion(record: dict, previous_status: str, completion_messages: dict) -> bool:
+    task_id = str(record.get("id", "") or "").strip()
+    session_key = str(record.get("session_key", "") or "").strip()
+    state_model = task_state_model(record)
+    if not task_id or not session_key:
+        return False
+    if str(state_model.get("handoff_state", "") or "").strip().lower() != "user_safe_ready":
+        return False
+    if str(record.get("delivered_at", "") or state_model.get("delivered_at", "") or "").strip():
+        return False
+    if task_notification_state(record) not in {"done", "blocked_final", "partial_final"}:
+        return False
+    summary = str(record.get("user_safe_summary", "") or record.get("summary", "") or "").strip()
+    report_path = str(record.get("report_path", "") or "").strip()
+    artifacts = record.get("artifacts", {}) if isinstance(record.get("artifacts"), dict) else {}
+    if not summary and not str(artifacts.get("report_path", "") or report_path).strip():
+        return False
+    previous_value = str(previous_status or "").strip().lower()
+    current_value = str(record.get("status", "") or "").strip().lower()
+    existing_completion = completion_messages.get(task_id, {}) if isinstance(completion_messages.get(task_id), dict) else {}
+    if not previous_value:
+        return not bool(str(existing_completion.get("message_id", "") or "").strip())
+    if previous_value != current_value:
+        return True
+    return not bool(str(existing_completion.get("message_id", "") or "").strip())
+
+
+def _sync_task_completion_relay(record: dict, previous_status: str, *, force: bool = False) -> dict:
+    notify_state = load_notify_state()
+    anchor_messages = notify_state.get("task_anchor_messages", {})
+    if not isinstance(anchor_messages, dict):
+        anchor_messages = {}
+    completion_messages = notify_state.get("task_completion_messages", {})
+    if not isinstance(completion_messages, dict):
+        completion_messages = {}
+    if not force and not _should_sync_task_completion(record, previous_status, completion_messages):
+        return {"ok": False, "skipped": True}
+
+    task_id = str(record.get("id", "") or "").strip()
+    anchor_state = anchor_messages.get(task_id, {}) if isinstance(anchor_messages.get(task_id), dict) else {}
+    reply_to_message_id = str(anchor_state.get("message_id", "") or "").strip()
+
+    try:
+        result = send_task_completion_notification(record, reply_to_message_id=reply_to_message_id)
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)}
+
+    resolved_target = result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {}
+    completion_messages[task_id] = {
+        "backend": str(result.get("backend", "") or ""),
+        "message_id": str(result.get("message_id", "") or result.get("messageId", "") or "").strip(),
+        "thread_key": str(resolved_target.get("thread_key", "") or "").strip(),
+        "updated_at": now_iso(),
+        "last_attempt_at": now_iso(),
+        "last_error": str(result.get("error", "") or ""),
+        "last_result": "ok" if result.get("ok") else ("skipped" if result.get("skipped") else "failed"),
+    }
+    if result.get("ok"):
+        completion_messages[task_id]["delivered_at"] = now_iso()
+    notify_state["task_completion_messages"] = completion_messages
+    notify_state["updated_at"] = now_iso()
+    save_notify_state(notify_state)
+    return result
 
 
 RELAY_SYNC_EVENT_KINDS = {
@@ -1040,10 +1097,12 @@ def cmd_upsert(args):
         _sync_runtime_coordination(current_record)
         sync_task(current_record, event_type="upsert", previous_status=previous_status)
         anchor_result = _sync_task_anchor(current_record, previous_status)
+        _sync_task_completion_relay(current_record, previous_status)
         _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
     for record, record_previous_status in lineage_syncs:
         _sync_runtime_coordination(record)
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
+        _sync_task_completion_relay(record, record_previous_status)
         _log_task_transition(record, record_previous_status)
     print(f"[ok] upsert id={args.id} status={args.status or 'dispatched'}")
 
@@ -1193,6 +1252,7 @@ def cmd_event(args):
     if event_kind in RELAY_SYNC_EVENT_KINDS:
         sync_task(current_record, event_type=event_kind, previous_status=previous_status)
         _sync_task_anchor(current_record, previous_status, force=event_kind in FORCED_ANCHOR_EVENT_KINDS)
+        _sync_task_completion_relay(current_record, previous_status, force=event_kind in FORCED_ANCHOR_EVENT_KINDS)
     print(f"[ok] event id={args.id} kind={args.kind}")
 
 
@@ -1355,10 +1415,12 @@ def _finish(
         _sync_runtime_coordination(current_record)
         sync_task(current_record, event_type=status, previous_status=previous_status)
         anchor_result = _sync_task_anchor(current_record, previous_status)
+        _sync_task_completion_relay(current_record, previous_status, force=True)
         _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
     for record, record_previous_status in lineage_syncs:
         _sync_runtime_coordination(record)
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)
+        _sync_task_completion_relay(record, record_previous_status)
         _log_task_transition(record, record_previous_status)
     print(f"[ok] {status} id={task_id}")
 
@@ -1477,6 +1539,7 @@ def cmd_archive_stale_dispatched(args):
     for record, previous_status in touched:
         sync_task(record, event_type="deferred", previous_status=previous_status)
         anchor_result = _sync_task_anchor(record, previous_status)
+        _sync_task_completion_relay(record, previous_status)
         _log_task_transition(record, previous_status, anchor_result=anchor_result)
     print(f"[ok] archived_stale_dispatched count={len(touched)}")
 

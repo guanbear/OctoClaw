@@ -115,20 +115,15 @@ class TaskStateAnchorSeedTests(unittest.TestCase):
             self.assertEqual(result["action"], "edit")
             self.assertEqual(mock_send.call_args[1]["existing_message_id"], "old")
 
-    def test_sync_task_anchor_reuses_bound_message_id_when_local_state_missing(self) -> None:
+    def test_sync_task_anchor_does_not_reuse_bound_message_id_when_local_state_missing(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-anchor-seed-") as tmpdir:
             notify_path = Path(tmpdir) / "patrol-notify-state.json"
             with (
                 patch.object(task_state_update, "PATROL_NOTIFY_STATE_FILE", str(notify_path)),
                 patch.object(
                     task_state_update,
-                    "resolve_session_binding",
-                    return_value={"last_message_id": "bound-1"},
-                ),
-                patch.object(
-                    task_state_update,
                     "send_task_notification",
-                    return_value={"ok": True, "backend": "slack", "messageId": "bound-1", "action": "edit"},
+                    return_value={"ok": True, "backend": "slack", "messageId": "m-3", "action": "send"},
                 ) as mock_send,
             ):
                 result = task_state_update._sync_task_anchor(
@@ -142,8 +137,8 @@ class TaskStateAnchorSeedTests(unittest.TestCase):
                 )
 
             self.assertTrue(result["ok"])
-            self.assertEqual(result["action"], "edit")
-            self.assertEqual(mock_send.call_args[1]["existing_message_id"], "bound-1")
+            self.assertEqual(result["action"], "send")
+            self.assertEqual(mock_send.call_args[1]["existing_message_id"], "")
 
     def test_sync_task_anchor_skips_when_nothing_to_do(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-anchor-seed-") as tmpdir:
@@ -190,6 +185,46 @@ class TaskStateAnchorSeedTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             mock_send.assert_called_once()
+
+    def test_sync_task_completion_relay_uses_anchor_message_as_reply_reference(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-completion-relay-") as tmpdir:
+            notify_path = Path(tmpdir) / "patrol-notify-state.json"
+            notify_path.write_text(
+                json.dumps(
+                    {
+                        "task_ids": {},
+                        "task_anchor_messages": {"task-3": {"message_id": "anchor-1"}},
+                        "task_completion_messages": {},
+                        "updated_at": "",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(task_state_update, "PATROL_NOTIFY_STATE_FILE", str(notify_path)),
+                patch.object(
+                    task_state_update,
+                    "send_task_completion_notification",
+                    return_value={"ok": True, "backend": "slack", "messageId": "relay-1", "action": "send"},
+                ) as mock_send,
+            ):
+                result = task_state_update._sync_task_completion_relay(
+                    {
+                        "id": "task-3",
+                        "session_key": "slack:channel:C123",
+                        "status": "done",
+                        "route": "spawn_single",
+                        "handoff_state": "user_safe_ready",
+                        "user_safe_summary": "完成总结。",
+                    },
+                    "running",
+                    force=True,
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(mock_send.call_args[1]["reply_to_message_id"], "anchor-1")
+            saved = json.loads(notify_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["task_completion_messages"]["task-3"]["message_id"], "relay-1")
 
 
 if __name__ == "__main__":

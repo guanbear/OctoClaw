@@ -560,6 +560,9 @@ P5 不应该顺手混进这些题：
    - 用 native task / flow facts + task-state projection + task-events 合成一份 snapshot
 2. 建立 `completion relay`
    - 在 native finalize / runner finalize / dispatch 收口点立即触发 projection 持久化 + notifier
+   - `task anchor` 只负责首次锚点 / 进度更新，不再兼任“最终已通知用户”
+   - `completion relay` 必须发送一条新的 final relay，并且只在 relay 成功后标记 `delivered`
+   - 首次 anchor 不允许回退复用通用 `last_message_id`，必须生成明确的 anchor message
 3. 让主会话的 protected-lane 状态问答强制先查 snapshot
 4. 把 `status / details / retrieve / review` 全部切到 snapshot 读面
 5. 最后再继续瘦身 patrol，只保留 detect / reconcile / bounded retry

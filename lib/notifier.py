@@ -98,7 +98,6 @@ def _send_text_fallback(
             "resolved_target": route,
         },
     )
-    _mark_task_delivered(task, result)
     result["text_fallback_used"] = True
     return result
 
@@ -315,8 +314,6 @@ def send_task_notification(
             "action": "send",
             "payload": payload,
         }
-        if result["ok"]:
-            _mark_task_delivered(task, result)
         return result
 
     binding = resolve_session_binding(session_key)
@@ -328,7 +325,6 @@ def send_task_notification(
         "thread_id": str(binding.get("thread_id", "") or "").strip(),
         "thread_key": str(binding.get("thread_key", "") or "").strip(),
         "binding_key": str(binding.get("binding_key", "") or "").strip(),
-        "message_id": str(binding.get("last_message_id", "") or binding.get("message_id", "") or "").strip(),
     }
     if not route.get("ok"):
         route = resolve_message_target_from_session_key(session_key)
@@ -352,7 +348,7 @@ def send_task_notification(
         message = str(transport.get("text", "") or text)
 
     editable_backends = {"slack", "discord", "telegram"}
-    message_id_value = str(existing_message_id or route.get("message_id") or "").strip()
+    message_id_value = str(existing_message_id or "").strip()
     if message_id_value and resolved_backend in editable_backends:
         result = edit_channel_message(
             resolved_backend,
@@ -386,7 +382,6 @@ def send_task_notification(
                     "resolved_target": route,
                 },
             )
-            _mark_task_delivered(task, result)
             return result
 
     interactive_payload = interactive if resolved_backend in {"slack", "telegram", "discord", "msteams"} else None
@@ -423,7 +418,6 @@ def send_task_notification(
                 "resolved_target": route,
             },
         )
-        _mark_task_delivered(task, result)
     else:
         fallback_result = _send_text_fallback(task=task, backend=resolved_backend, route=route, payload=payload)
         if isinstance(fallback_result, dict) and fallback_result.get("ok"):
@@ -434,6 +428,142 @@ def send_task_notification(
             message=str(result.get("error") or "send_task_notification failed"),
             extra={"backend": resolved_backend, "resolved_target": route},
         )
+    return result
+
+
+def send_task_completion_notification(
+    task: dict[str, Any],
+    *,
+    backend: str = "auto",
+    config: dict[str, Any] | None = None,
+    reply_to_message_id: str | None = None,
+) -> dict[str, Any]:
+    cfg = config or load_octopus_config()
+    resolved_backend = _resolve_task_backend(task, backend, cfg)
+    if resolved_backend == "none":
+        return {
+            "ok": False,
+            "backend": resolved_backend,
+            "skipped": True,
+            "error": "",
+        }
+
+    message = _minimal_handoff_text(task)
+    if not message:
+        return {
+            "ok": False,
+            "backend": resolved_backend,
+            "skipped": True,
+            "error": "no user-safe handoff text",
+        }
+
+    session_key = str(task.get("session_key", "") or "").strip()
+    route = {
+        "ok": False,
+        "origin": "",
+        "session_key": session_key,
+        "target": "",
+        "thread_id": "",
+        "thread_key": "",
+        "binding_key": "",
+    }
+    if session_key:
+        binding = resolve_session_binding(session_key)
+        route.update(
+            {
+                "ok": bool(str(binding.get("target", "") or "").strip()),
+                "origin": str(binding.get("origin", "") or "").strip(),
+                "target": str(binding.get("target", "") or "").strip(),
+                "thread_id": str(binding.get("thread_id", "") or "").strip(),
+                "thread_key": str(binding.get("thread_key", "") or "").strip(),
+                "binding_key": str(binding.get("binding_key", "") or "").strip(),
+            }
+        )
+        if not route.get("ok"):
+            route = resolve_message_target_from_session_key(session_key)
+
+    if resolved_backend == "feishu":
+        message_id = send_text(message, config=cfg, reply_to=reply_to_message_id)
+        result = {
+            "ok": bool(message_id),
+            "backend": resolved_backend,
+            "message_id": message_id,
+            "action": "send",
+            "resolved_target": route,
+        }
+        if result["ok"]:
+            append_task_event(
+                task,
+                "completion_relay_sent",
+                message=message,
+                extra={"backend": resolved_backend, "message_id": message_id, "action": "send"},
+            )
+            _mark_task_delivered(task, result)
+        else:
+            append_task_event(
+                task,
+                "completion_relay_failed",
+                message="unable to send completion relay",
+                extra={"backend": resolved_backend},
+            )
+        return result
+
+    if not route.get("ok"):
+        append_task_event(
+            task,
+            "completion_relay_resolution_failed",
+            message=str(route.get("error") or "unable to resolve session target"),
+            extra={"backend": resolved_backend},
+        )
+        return {
+            "ok": False,
+            "backend": resolved_backend,
+            "error": route.get("error") or "unable to resolve session target",
+            "resolved_target": route,
+        }
+
+    result = send_channel_message(
+        resolved_backend,
+        str(route.get("target", "") or ""),
+        message,
+        reply_to=str(reply_to_message_id or "").strip(),
+        thread_id=str(route.get("thread_id", "") or "").strip(),
+        interactive=None,
+    )
+    result.setdefault("backend", resolved_backend)
+    result.setdefault("action", "send")
+    result.setdefault("resolved_target", route)
+    if result.get("ok"):
+        message_id = str(result.get("message_id", "") or result.get("messageId", "") or "").strip()
+        register_session_binding(
+            session_key,
+            route,
+            task=task,
+            source="completion_relay_send",
+            message_id=message_id,
+            action="send",
+            thread_state="active",
+        )
+        append_task_event(
+            task,
+            "completion_relay_sent",
+            message=message,
+            extra={
+                "backend": resolved_backend,
+                "message_id": message_id,
+                "action": "send",
+                "resolved_target": route,
+            },
+        )
+        _mark_task_delivered(task, result)
+        return result
+
+    append_task_event(
+        task,
+        "completion_relay_failed",
+        message=str(result.get("error") or "completion relay send failed"),
+        extra={"backend": resolved_backend, "resolved_target": route},
+    )
     return result
 
 

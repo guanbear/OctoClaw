@@ -691,6 +691,50 @@ class PatrolNotificationTests(unittest.TestCase):
         delivered = {**task, "handoff_state": "delivered", "delivered_at": now.isoformat()}
         self.assertFalse(patrol.should_retry_handoff_anchor(delivered, now=now))
 
+    def test_should_retry_completion_relay_when_ready_but_undelivered(self) -> None:
+        now = patrol.now_utc()
+        task = {
+            "id": "research-ready-2",
+            "status": "done",
+            "summary": "release summary ready",
+            "user_safe_summary": "这是可以直接发给用户的总结。",
+            "completed_at": now.isoformat(),
+            "session_key": "agent:main:slack:channel:C123:thread:1712345.000100",
+            "route": "spawn_single",
+            "worker_pool": "octoclaw-research",
+            "handoff_state": "user_safe_ready",
+        }
+
+        self.assertTrue(patrol.should_retry_completion_relay(task, now=now))
+        recent_attempt = {"last_attempt_at": now.isoformat()}
+        self.assertFalse(patrol.should_retry_completion_relay(task, completion_state=recent_attempt, now=now))
+        delivered = {**task, "handoff_state": "delivered", "delivered_at": now.isoformat()}
+        self.assertFalse(patrol.should_retry_completion_relay(delivered, now=now))
+
+    @patch("patrol.send_task_completion_notification")
+    def test_send_state_change_task_completions_records_sent_message(self, mock_send) -> None:
+        mock_send.return_value = {"ok": True, "backend": "slack", "messageId": "relay-1", "action": "send"}
+
+        sent = patrol.send_state_change_task_completions(
+            [
+                {
+                    "id": "task-3",
+                    "session_key": "agent:main:slack:channel:C123:thread:1712345.000100",
+                    "status": "done",
+                    "summary": "release summary ready",
+                    "user_safe_summary": "可以直接给用户的总结。",
+                    "handoff_state": "user_safe_ready",
+                    "route": "spawn_single",
+                }
+            ],
+            anchor_messages={"task-3": {"message_id": "anchor-1"}},
+            completion_messages={},
+        )
+
+        self.assertEqual(sent["sent"], 1)
+        self.assertEqual(sent["task_completion_messages"]["task-3"]["message_id"], "relay-1")
+        self.assertEqual(mock_send.call_args[1]["reply_to_message_id"], "anchor-1")
+
     @patch("patrol.send_task_notification")
     def test_send_state_change_task_anchors_records_failed_attempt_metadata(self, mock_send) -> None:
         mock_send.return_value = {"ok": False, "backend": "slack", "error": "timeout", "resolved_target": {"thread_key": "slack:C123:1712345.000100"}}

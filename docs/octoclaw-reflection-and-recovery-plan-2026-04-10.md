@@ -481,6 +481,10 @@
    - 有明确 lane
    - 有 ack 语义
    - 有 execution facts
+   - delegated 场景下还必须区分：
+     - 首次 anchor / progress update
+     - final completion relay
+     不能再把 edit anchor 当成“用户已经收到最终结果”
 3. `你是怎么查的`
    - 只能基于真实 tool/materialization 账本回答
 4. 升级/部署后，可以明确知道当前 live process 和 session 用的是哪份代码

@@ -859,6 +859,17 @@ Optional execution backend
   -> never the primary status truth
 ```
 
+并且这里要把两种通知语义硬拆开：
+
+- `anchor sync`
+  - 负责起一个可编辑的任务锚点，承载 queued/running/checkpoint 进度
+  - 不等于“已经把最终结果通知给用户”
+- `completion relay`
+  - 负责把 `user_safe_ready` 的最终事实立即回主线程
+  - 只能在成功发送 fresh final message/reply 后标 `delivered`
+
+如果把 anchor edit 当成 delivered，Slack/IM 上就会出现“任务明明完成了，但用户没有收到明确 final relay”的错觉。
+
 也就是说：
 
 - `task-state.json` 更适合被理解为 **projection / policy metadata / operator surface cache**

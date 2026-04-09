@@ -49,7 +49,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from notifier import backend_supports_cards, send_task_notification, send_text
+from notifier import backend_supports_cards, send_task_completion_notification, send_task_notification, send_text
 from octoclaw_spawn import build_spawn_spec, build_task_prompt, execute_spawn_backend
 from clawteam_bridge import sync_task
 from runtime_coordination import (
@@ -1377,7 +1377,7 @@ def hydrate_session_progress_markers(tasks: list[dict]) -> int:
     for task in tasks:
         if not isinstance(task, dict):
             continue
-        if is_runner_task(task) or task_is_final(task):
+        if is_runner_task(task):
             continue
         if str(task.get("status", "") or "").strip().lower() not in {"queued", "running", "dispatched"}:
             continue
@@ -1441,7 +1441,7 @@ def hydrate_completed_session_results(tasks: list[dict]) -> int:
     for task in tasks:
         if not isinstance(task, dict):
             continue
-        if is_runner_task(task) or task_is_final(task):
+        if is_runner_task(task):
             continue
         if str(task.get("status", "") or "").strip().lower() not in {"queued", "running", "dispatched"}:
             continue
@@ -3443,18 +3443,23 @@ def load_notify_state() -> dict:
         with open(PATROL_NOTIFY_STATE_FILE, "r", encoding="utf-8") as f:
             loaded = json.load(f)
             if not isinstance(loaded, dict):
-                return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
+                return {"task_ids": {}, "task_anchor_messages": {}, "task_completion_messages": {}, "updated_at": ""}
             loaded.setdefault("task_ids", {})
             loaded.setdefault("task_anchor_messages", {})
+            loaded.setdefault("task_completion_messages", {})
             loaded.setdefault("updated_at", "")
             return loaded
     except Exception:
-        return {"task_ids": {}, "task_anchor_messages": {}, "updated_at": ""}
+        return {"task_ids": {}, "task_anchor_messages": {}, "task_completion_messages": {}, "updated_at": ""}
 
 
 def save_notify_state(state: dict):
     """保存通知状态快照"""
     try:
+        state.setdefault("task_ids", {})
+        state.setdefault("task_anchor_messages", {})
+        state.setdefault("task_completion_messages", {})
+        state.setdefault("updated_at", "")
         os.makedirs(os.path.dirname(PATROL_NOTIFY_STATE_FILE), exist_ok=True)
         with open(PATROL_NOTIFY_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False)
@@ -3549,6 +3554,28 @@ def should_retry_handoff_anchor(task: dict, *, anchor_state: dict | None = None,
     return (current_time - last_attempt.astimezone(timezone.utc)).total_seconds() >= HANDOFF_ANCHOR_RETRY_SECONDS
 
 
+def should_retry_completion_relay(task: dict, *, completion_state: dict | None = None, now: datetime | None = None) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if task_notification_state(task) not in {"done", "blocked_final", "partial_final"}:
+        return False
+    state_model = task_state_model(task)
+    if str(state_model.get("handoff_state", "") or "").strip().lower() != "user_safe_ready":
+        return False
+    if str(task.get("session_key", "") or "").strip() == "":
+        return False
+    if str(task.get("delivered_at", "") or state_model.get("delivered_at", "") or "").strip():
+        return False
+    current_time = now or datetime.now(timezone.utc)
+    previous = completion_state if isinstance(completion_state, dict) else {}
+    last_attempt = parse_iso(str(previous.get("last_attempt_at", "") or previous.get("updated_at", "") or ""))
+    if last_attempt is None:
+        return True
+    if last_attempt.tzinfo is None:
+        last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+    return (current_time - last_attempt.astimezone(timezone.utc)).total_seconds() >= HANDOFF_ANCHOR_RETRY_SECONDS
+
+
 def send_state_change_task_anchors(tasks: list[dict], *, anchor_messages: dict | None = None) -> dict:
     sent = 0
     updated_messages = dict(anchor_messages or {})
@@ -3577,6 +3604,92 @@ def send_state_change_task_anchors(tasks: list[dict], *, anchor_messages: dict |
         if result.get("ok"):
             sent += 1
     return {"sent": sent, "task_anchor_messages": updated_messages}
+
+
+def send_state_change_task_completion(task: dict, *, completion_state: dict | None = None, anchor_state: dict | None = None) -> dict:
+    if not isinstance(task, dict):
+        return {"ok": False, "error": "invalid task"}
+    task_id = str(task.get("id", "") or "").strip()
+    session_key = str(task.get("session_key", "") or "").strip()
+    if not task_id or not session_key:
+        return {"ok": False, "error": "missing task_id or session_key"}
+    reply_to_message_id = ""
+    if isinstance(anchor_state, dict):
+        reply_to_message_id = str(anchor_state.get("message_id", "") or "").strip()
+    attempted_at = datetime.now().isoformat()
+    try:
+        result = send_task_completion_notification(task, reply_to_message_id=reply_to_message_id)
+    except Exception as exc:
+        print(f"⚠️  发送 completion relay 失败 [{task_id}]: {exc}", file=sys.stderr)
+        return {
+            "ok": False,
+            "task_id": task_id,
+            "message_id": "",
+            "action": "none",
+            "error": str(exc),
+            "attempted_at": attempted_at,
+        }
+    if result.get("ok"):
+        message_id = str(result.get("message_id", "") or result.get("messageId", "") or "").strip()
+        print(f"📨 completion relay 已发送 [{task_id}] -> {result.get('backend', '')}")
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "backend": str(result.get("backend", "") or ""),
+            "message_id": message_id,
+            "action": str(result.get("action", "send") or "send"),
+            "resolved_target": result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {},
+            "attempted_at": attempted_at,
+        }
+    return {
+        "ok": False,
+        "task_id": task_id,
+        "backend": str(result.get("backend", "") or ""),
+        "message_id": "",
+        "action": "none",
+        "error": str(result.get("error", "") or ""),
+        "resolved_target": result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {},
+        "attempted_at": attempted_at,
+    }
+
+
+def send_state_change_task_completions(
+    tasks: list[dict],
+    *,
+    anchor_messages: dict | None = None,
+    completion_messages: dict | None = None,
+) -> dict:
+    sent = 0
+    updated_messages = dict(completion_messages or {})
+    anchor_map = dict(anchor_messages or {})
+    seen = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = str(task.get("id", "") or "").strip()
+        if not task_id or task_id in seen:
+            continue
+        seen.add(task_id)
+        result = send_state_change_task_completion(
+            task,
+            completion_state=updated_messages.get(task_id, {}),
+            anchor_state=anchor_map.get(task_id, {}),
+        )
+        previous = updated_messages.get(task_id, {}) if isinstance(updated_messages.get(task_id), dict) else {}
+        resolved_target = result.get("resolved_target", {}) if isinstance(result.get("resolved_target", {}), dict) else {}
+        updated_at = str(result.get("attempted_at", "") or datetime.now().isoformat())
+        updated_messages[task_id] = {
+            "backend": str(result.get("backend", "") or previous.get("backend", "") or ""),
+            "message_id": str(result.get("message_id", "") or previous.get("message_id", "") or "").strip(),
+            "thread_key": str(resolved_target.get("thread_key", "") or previous.get("thread_key", "") or ""),
+            "updated_at": updated_at,
+            "last_attempt_at": updated_at,
+            "last_error": str(result.get("error", "") or ""),
+            "last_result": "ok" if result.get("ok") else "failed",
+        }
+        if result.get("ok"):
+            sent += 1
+    return {"sent": sent, "task_completion_messages": updated_messages}
 
 
 def _increment_panel_shown_count(pending_list: list):
@@ -5486,9 +5599,11 @@ def main():
             notify_state = load_notify_state()
             old_states = notify_state.get("task_ids", {})
             anchor_messages = notify_state.get("task_anchor_messages", {})
+            completion_messages = notify_state.get("task_completion_messages", {})
             new_states = {t.get("id", ""): task_notification_state(t) for t in tasks if t.get("id")}
             changes = []
             changed_tasks_for_anchor = []
+            changed_tasks_for_completion = []
             for tid, new_status in new_states.items():
                 old_status = old_states.get(tid)
                 if old_status == new_status:
@@ -5510,6 +5625,8 @@ def main():
                 elif new_status == "done" and old_status in ("running", "dispatched"):
                     changes.append(f"✅ {label_name} 完成：{summary}")
                     changed_tasks_for_anchor.append(task)
+                    if str(state_model.get("handoff_state", "") or "").strip().lower() == "user_safe_ready":
+                        changed_tasks_for_completion.append(task)
                     # ── 卡片 B：任务完成事件通知 ──
                     send_event_card_b("done", task)
                 elif new_status in ("blocked_final", "partial_final") and old_status in ("running", "dispatched", "blocked", "pending_confirm", None):
@@ -5523,6 +5640,8 @@ def main():
                     else:
                         changes.append(f"🟣 {label_name} 部分完成：{summary}")
                     changed_tasks_for_anchor.append(task)
+                    if str(state_model.get("handoff_state", "") or "").strip().lower() == "user_safe_ready":
+                        changed_tasks_for_completion.append(task)
                 elif new_status == "failed" and old_status in ("running", "dispatched"):
                     # notified_failed=True 表示已通过独立失败通知发送过，跳过重发（无论是否 force 模式）
                     if not task.get("notified_failed"):
@@ -5541,6 +5660,13 @@ def main():
                     anchor_messages=anchor_messages,
                 )
                 anchor_messages = anchor_result.get("task_anchor_messages", anchor_messages)
+                if changed_tasks_for_completion:
+                    completion_result = send_state_change_task_completions(
+                        changed_tasks_for_completion[:5],
+                        anchor_messages=anchor_messages,
+                        completion_messages=completion_messages,
+                    )
+                    completion_messages = completion_result.get("task_completion_messages", completion_messages)
             retry_ids = {
                 str(task.get("id", "") or "").strip()
                 for task in changed_tasks_for_anchor
@@ -5551,22 +5677,24 @@ def main():
                 for task in tasks
                 if isinstance(task, dict)
                 and str(task.get("id", "") or "").strip() not in retry_ids
-                and should_retry_handoff_anchor(
+                and should_retry_completion_relay(
                     task,
-                    anchor_state=anchor_messages.get(str(task.get("id", "") or "").strip(), {}),
+                    completion_state=completion_messages.get(str(task.get("id", "") or "").strip(), {}),
                     now=notify_now,
                 )
             ]
             if handoff_retry_tasks:
-                anchor_result = send_state_change_task_anchors(
+                completion_result = send_state_change_task_completions(
                     handoff_retry_tasks[:5],
                     anchor_messages=anchor_messages,
+                    completion_messages=completion_messages,
                 )
-                anchor_messages = anchor_result.get("task_anchor_messages", anchor_messages)
+                completion_messages = completion_result.get("task_completion_messages", completion_messages)
             save_notify_state(
                 {
                     "task_ids": new_states,
                     "task_anchor_messages": anchor_messages,
+                    "task_completion_messages": completion_messages,
                     "updated_at": datetime.now().isoformat(),
                 }
             )
