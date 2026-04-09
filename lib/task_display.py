@@ -95,13 +95,26 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
     substrate_revision = binding.get("substrate_revision")
     native_state = _text(binding.get("native_binding_state"))
     native_status = _text(binding.get("native_status"))
+    native_runtime = _text(binding.get("native_runtime"))
+    task_runtime = _text(binding.get("task_runtime"))
+    flow_runtime = _text(binding.get("flow_runtime"))
+    sync_mode = _text(binding.get("sync_mode"))
     task_id = _text(binding.get("task_id"))
     flow_id = _text(binding.get("flow_id"))
     binding_state = _text(binding.get("binding_state"))
 
     if backend == "managed":
         substrate_label = "managed flow"
-    elif backend == "mirror" and (flow_id or task_id or native_state == "bound" or binding_state in {"mirrored_bound", "bound"}):
+    elif backend == "mirror" and (
+        flow_id
+        or task_id
+        or native_state == "bound"
+        or binding_state in {"mirrored_bound", "bound"}
+        or sync_mode == "managed"
+        or native_runtime
+        or task_runtime == "openclaw_task"
+        or flow_runtime == "openclaw_flow"
+    ):
         substrate_label = "mirror bound to native"
     elif backend == "mirror":
         substrate_label = "legacy mirror only"

@@ -460,6 +460,28 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertIn("completed", anchor["substrate_summary"])
         self.assertIn("flow flow-promoted-1", anchor["substrate_summary"])
 
+    def test_build_task_anchor_treats_openclaw_runtime_binding_as_native_bound_summary(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "research-promoted-2",
+                "worker_pool": "octoclaw-research",
+                "status": "completed",
+                "summary": "release analysis complete",
+                "route": "spawn_single",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored",
+                },
+                "openclaw_taskflow_backend": "mirror",
+                "openclaw_taskflow_state": "mirrored",
+                "openclaw_task_runtime": "openclaw_task",
+                "openclaw_flow_runtime": "openclaw_flow",
+            },
+            now=self.now,
+        )
+
+        self.assertIn("mirror bound to native", anchor["substrate_summary"])
+
     def test_build_task_detail_includes_substrate_binding(self) -> None:
         detail = build_task_detail(
             {
