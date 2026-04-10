@@ -506,3 +506,24 @@
 
 如果不这么做，代码会继续增长，但系统感受不会更稳。  
 如果这么做，即使总行数不立刻减少，系统复杂度也会明显下降。
+
+---
+
+## 11. Router policy 重构设计更新
+
+2026-04-10 追加 review draft：
+
+- [octoclaw-router-policy-refactor-2026-04-10.md](./octoclaw-router-policy-refactor-2026-04-10.md)
+- [octoclaw-router-policy-refactor-plan-2026-04-10.md](./octoclaw-router-policy-refactor-plan-2026-04-10.md)
+
+这版修正了“继续用关键词分类”的错误方向：
+
+- 自然语言语义默认交给 main-grade stateless Policy Judge，而不是当前主会话凭长上下文判断。
+- 关键词/regex 只允许做机器可确定的 signal extraction，不再做最终分类。
+- scope / target / evidence source 成为一等字段。
+- ACK 由独立 timer 保障，不等待模型或 runner。
+- 便宜模型和本地模型先 shadow eval，达标后再接真实路由。
+- 常驻 runner pool 用来降低轻任务冷启动；每个 runner job 仍绑定 native task，tmux 只做 optional supervisor。
+- 理想运行面收成 OpenClaw gateway / Node runtime extension；OctoClaw 不再默认安装 patrol loop、runner shell loop、cron 或 systemd unit。
+- 三层 plane 固定为 Live / Execution / Evaluation；harness gate 和指标门槛成为 rollout 条件。
+- 补充全链路 `turn_id / decision_id / job_id / delivery_id`、幂等/supersede、runner backpressure、feature flags/kill switch、ACK/progress/final 三段消息契约。

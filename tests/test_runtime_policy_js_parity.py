@@ -36,6 +36,23 @@ console.log(JSON.stringify(value));
 def _normalize_decision(payload: dict) -> dict:
     normalized = json.loads(json.dumps(payload))
     normalized.pop("generated_at", None)
+    # The Node runtime now owns live-only router-policy contracts that Python
+    # deliberately does not mirror; parity still covers the legacy route/policy
+    # fields while Python is being retired from the live hot path.
+    normalized.pop("correlation", None)
+    normalized.pop("intent_packet", None)
+    normalized.pop("policy_router", None)
+    normalized.pop("router_decision_v2", None)
+    runtime_switches = normalized.get("runtime_switches")
+    if isinstance(runtime_switches, dict):
+        runtime_switches.pop("policy_router_enabled", None)
+        runtime_switches.pop("policy_router_mode", None)
+        runtime_switches.pop("policy_judge_live_enabled", None)
+        runtime_switches.pop("cheap_judge_live_enabled", None)
+        runtime_switches.pop("local_judge_live_enabled", None)
+        runtime_switches.pop("runner_pool_enabled", None)
+        runtime_switches.pop("delivery_relay_enabled", None)
+        runtime_switches.pop("patrol_loop_enabled", None)
     auto_router = normalized.get("auto_router")
     if isinstance(auto_router, dict):
         model_intel = auto_router.get("model_intel")

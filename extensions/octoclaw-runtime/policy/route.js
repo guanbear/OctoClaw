@@ -413,6 +413,16 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const normalizedCommand = String(command || "").trim();
   const enabledPacks = normalizeEnabledLanguagePacks(runtimeCfg);
   const conversationControl = normalizeConversationControlMetadata(metadata);
+  const intentPacket = metadata?.intent_packet && typeof metadata.intent_packet === "object" && !Array.isArray(metadata.intent_packet)
+    ? metadata.intent_packet
+    : {};
+  const intentSignals = intentPacket?.signals && typeof intentPacket.signals === "object" && !Array.isArray(intentPacket.signals)
+    ? intentPacket.signals
+    : {};
+  const signalSurfaceMentions = Array.isArray(intentSignals.surface_mentions)
+    ? intentSignals.surface_mentions.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const signalLocalSurfaceLookup = signalSurfaceMentions.length > 0;
   const intentClass = String(conversationControl.intent_class || "").trim();
   const conversationLookupScope = String(conversationControl.lookup_scope || "").trim();
   const conversationLookupProject = String(conversationControl.lookup_project || "").trim();
@@ -463,12 +473,15 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   let sessionControlCandidate = Boolean(sessionControlHits > 0);
   const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate && !sessionControlCandidate);
   const runtimeVersionLookup = Boolean(
-    !/(模型|model)/iu.test(text)
-    && !/(新版本|更新|发版|release|changelog|新特性|特性|变化|memory|dream|what'?s new|latest|recent)/iu.test(text)
-    && (
+    signalSurfaceMentions.includes("runtime_version")
+    || (
+      !/(模型|model)/iu.test(text)
+      && !/(新版本|更新|发版|release|changelog|新特性|特性|变化|memory|dream|what'?s new|latest|recent)/iu.test(text)
+      && (
       /(openclaw|octoclaw).*(版本|version)/iu.test(rawTask)
       || /(现在|当前).*(啥版本|什么版本|版本|version)/iu.test(rawTask)
       || /^\s*(?:你现在啥版本|你现在是什么版本|当前.*版本|what version are you|current version)\s*$/iu.test(rawTask)
+      )
     )
   );
 
@@ -505,7 +518,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     freshLiveLookupCandidate ? inferLookupFocus(rawTask) : ""
   );
   const resolvedLookupScope = conversationLookupScope
-    || (freshLiveLookupCandidate ? "upstream_project" : (runtimeVersionLookup ? "local_instance" : ""));
+    || (freshLiveLookupCandidate ? "upstream_project" : ((runtimeVersionLookup || signalLocalSurfaceLookup) ? "local_instance" : ""));
 
   let effectiveResearchHits = researchHits;
   let effectiveExternalLookupHits = externalLookupHits;
@@ -598,7 +611,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     effectiveCodeHits = 0;
     effectiveWriteHits = 0;
     effectiveRunnerNegativeHits = 0;
-  } else if (conversationControl.kind === "local_surface_lookup") {
+  } else if (conversationControl.kind === "local_surface_lookup" || signalLocalSurfaceLookup) {
     explicitLocalProbe = true;
     effectiveLocalStateHits = Math.max(effectiveLocalStateHits, 1);
     effectiveRunnerReadOnlyIntentHits = Math.max(effectiveRunnerReadOnlyIntentHits, 1);

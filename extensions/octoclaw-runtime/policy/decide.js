@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   MODEL_BENCHMARKS_FILE,
   MODEL_CATALOG_FILE,
@@ -30,6 +31,7 @@ const AUTO_ROUTER_BUDGET_SCHEMA_VERSION = "octoclaw.auto_router.budget_planner/v
 const AUTO_ROUTER_MODEL_INTEL_SCHEMA_VERSION = "octoclaw.auto_router.model_intel/v1";
 const AUTO_ROUTER_ADAPTER_SCHEMA_VERSION = "octoclaw.auto_router.adapter/v1";
 const AUTO_ROUTER_RECOMMENDATION_SCHEMA_VERSION = "octoclaw.auto_router.recommendation/v1";
+const ROUTER_DECISION_V2_SCHEMA_VERSION = "octoclaw.router_decision/v2";
 const DEFAULT_MODEL_INTEL_PRECEDENCE = {
   identity: ["operator_override", "curated_local_catalog", "external_model_registry"],
   capabilities: ["operator_override", "external_model_registry", "curated_local_catalog", "built_in_defaults"],
@@ -489,6 +491,9 @@ function finalizeRouteHintPolicy(routeHintPolicy, mergeReasonCodes, finalRoute) 
 function runtimeSwitchesSummary(policyCfg) {
   const switches = policyCfg?.switches && typeof policyCfg.switches === "object" ? policyCfg.switches : {};
   const routeStickiness = policyCfg?.route_stickiness && typeof policyCfg.route_stickiness === "object" ? policyCfg.route_stickiness : {};
+  const policyRouter = policyCfg?.policy_router && typeof policyCfg.policy_router === "object" ? policyCfg.policy_router : {};
+  const features = policyCfg?.features && typeof policyCfg.features === "object" ? policyCfg.features : {};
+  const runnerPool = policyCfg?.runner_pool && typeof policyCfg.runner_pool === "object" ? policyCfg.runner_pool : {};
   return {
     policy_enabled: Boolean("enabled" in (policyCfg || {}) ? policyCfg.enabled : true),
     hard_runner_only_enabled: Boolean("hard_runner_only" in switches ? switches.hard_runner_only : true),
@@ -498,7 +503,256 @@ function runtimeSwitchesSummary(policyCfg) {
     delegation_enforcement_enabled: Boolean("delegation_enforcement" in switches ? switches.delegation_enforcement : false),
     sticky_lane_enabled: Boolean("enabled" in routeStickiness ? routeStickiness.enabled : true),
     ack_followup_enabled: Boolean("ack_followup_enabled" in routeStickiness ? routeStickiness.ack_followup_enabled : true),
+    policy_router_enabled: Boolean("enabled" in policyRouter ? policyRouter.enabled : true),
+    policy_router_mode: String(policyRouter.mode || "model_first"),
+    policy_judge_live_enabled: Boolean("policy_judge_live" in features ? features.policy_judge_live : true),
+    cheap_judge_live_enabled: Boolean("cheap_judge_live" in features ? features.cheap_judge_live : false),
+    local_judge_live_enabled: Boolean("local_judge_live" in features ? features.local_judge_live : false),
+    runner_pool_enabled: Boolean("runner_pool_enabled" in features ? features.runner_pool_enabled : ("enabled" in runnerPool ? runnerPool.enabled : true)),
+    delivery_relay_enabled: Boolean("delivery_relay_enabled" in features ? features.delivery_relay_enabled : true),
+    patrol_loop_enabled: Boolean("patrol_loop_enabled" in features ? features.patrol_loop_enabled : false),
   };
+}
+
+function normalizeIntentPacket(metadata = {}) {
+  const packet = metadata?.intent_packet && typeof metadata.intent_packet === "object" && !Array.isArray(metadata.intent_packet)
+    ? metadata.intent_packet
+    : {};
+  if (Object.keys(packet).length > 0) return { ...packet };
+  const conversation = metadata?.conversation_control && typeof metadata.conversation_control === "object" && !Array.isArray(metadata.conversation_control)
+    ? metadata.conversation_control
+    : {};
+  const intentClass = String(conversation.intent_class || conversation.kind || "").trim();
+  if (!intentClass) return {};
+  return {
+    schema_version: "octoclaw.intent_packet/v1-compat",
+    available: true,
+    intent_class: intentClass,
+    confidence: 0.7,
+    source: "conversation_control_compat",
+    reason_codes: [String(conversation.reason || "conversation_control").trim()].filter(Boolean),
+    lookup: {
+      scope: String(conversation.lookup_scope || "").trim(),
+      project: String(conversation.lookup_project || "").trim(),
+      focus: String(conversation.lookup_focus || "").trim(),
+      surface_id: String(conversation.surface_id || "").trim(),
+      require_fresh_lookup: Boolean(conversation.require_fresh_lookup),
+    },
+    lane: {
+      lane_hint: String(conversation.lane_hint || "").trim(),
+      route_hint: String(conversation.route_hint || "").trim(),
+      protected_lane: String(conversation.protected_lane || "").trim(),
+      grounding_required: Boolean(conversation.require_state_grounding),
+    },
+  };
+}
+
+function stableHash(value = "") {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 16);
+}
+
+function stableId(prefix, parts = []) {
+  return `${prefix}-${stableHash(parts.map((part) => String(part || "")).join("\u001f"))}`;
+}
+
+function firstEnabledPolicyJudge(candidates = {}, preferred = "main_grade_model") {
+  const ordered = [
+    String(preferred || "").trim(),
+    "cheap_model",
+    "local_model",
+    "main_grade_model",
+  ].filter(Boolean);
+  for (const key of ordered) {
+    const candidate = candidates?.[key];
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && Boolean("enabled" in candidate ? candidate.enabled : false)) {
+      return { name: key, config: { ...candidate } };
+    }
+  }
+  return { name: "", config: {} };
+}
+
+function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = {}) {
+  const cfg = runtimeCfg?.policy_router && typeof runtimeCfg.policy_router === "object" && !Array.isArray(runtimeCfg.policy_router)
+    ? runtimeCfg.policy_router
+    : {};
+  const candidates = cfg.candidates && typeof cfg.candidates === "object" && !Array.isArray(cfg.candidates) ? cfg.candidates : {};
+  const intentClass = String(intentPacket?.intent_class || "").trim();
+  const confidence = Number(intentPacket?.confidence || 0);
+  const judgeOn = Array.isArray(cfg.judge_on) ? cfg.judge_on.map((item) => String(item || "").trim()).filter(Boolean) : ["undetermined"];
+  const judgeEligible = Boolean(intentPacket?.judge?.eligible || judgeOn.includes(intentClass));
+  const selectedJudge = firstEnabledPolicyJudge(candidates, String(cfg.default_judge || "main_grade_model"));
+  const deterministicFirst = Boolean("deterministic_first" in cfg ? cfg.deterministic_first : false);
+  const enabled = Boolean("enabled" in cfg ? cfg.enabled : true);
+  return {
+    schema_version: "octoclaw.policy_router/v1",
+    enabled,
+    mode: String(cfg.mode || "model_first"),
+    deterministic_first: deterministicFirst,
+    intent_packet: intentPacket && typeof intentPacket === "object" && !Array.isArray(intentPacket) ? { ...intentPacket } : {},
+    decision_source: "legacy_planner_until_stateless_judge_live",
+    judge: {
+      eligible: judgeEligible,
+      invoked: false,
+      invocation_state: judgeEligible && selectedJudge.name
+        ? "eligible_not_invoked_runtime_adapter_pending"
+        : "not_needed_for_deterministic_path",
+      selected: selectedJudge.name,
+      provider: String(selectedJudge.config.provider || selectedJudge.name || ""),
+      model: String(selectedJudge.config.model || ""),
+      tools: String(selectedJudge.config.tools || "none"),
+      prompt_version: "policy-judge-prompt/v1",
+      schema_version: "octoclaw.policy_judge.result/v1",
+      timeout_ms: Number(cfg.timeout_ms || 1200),
+      max_context_chars: Number(cfg.max_context_chars || 2000),
+      reason: String(intentPacket?.judge?.reason || "").trim(),
+    },
+    cache: {
+      ttl_seconds: Number(cfg.cache_ttl_seconds || 120),
+      key_basis: ["normalized_message", "session_binding", "target_binding", "recent_ledger_hash", "runtime_config_version"],
+      hit: false,
+      state: "not_checked_in_legacy_planner",
+    },
+    fallback: {
+      fail_closed_route: String(cfg.fail_closed_route || "runner"),
+      applied: false,
+    },
+    route_guard: {
+      intent_class: intentClass,
+      confidence,
+      system_preferred_route: String(routeMeta?.system_preferred_route || routeMeta?.route || ""),
+      reason_codes: Array.isArray(routeMeta?.reason_codes) ? [...routeMeta.reason_codes] : [],
+    },
+  };
+}
+
+function requestKindForDecision(route, features = {}, taskClass = "", intentPacket = {}) {
+  const intentClass = String(intentPacket?.intent_class || "").trim();
+  if (intentClass === "execution_followup" || taskClass === "control_observer") return "execution_followup";
+  if (features.fresh_live_lookup || features.bounded_repo_update_lookup || features.bounded_software_update_lookup) return "fresh_external_lookup";
+  if (route === "runner" || features.tool_observation_only || features.model_benchmark_candidate) return "surface_query";
+  if (route === "direct") return "chat_or_explain";
+  return "work_request";
+}
+
+function scopeForDecision(route, features = {}, intentPacket = {}, context = {}) {
+  const requestKind = String(context.requestKind || "").trim();
+  const workType = String(context.workType || "").trim();
+  const workContract = String(context.workContract || "").trim();
+  const signal = intentPacket?.signals && typeof intentPacket.signals === "object" && !Array.isArray(intentPacket.signals)
+    ? intentPacket.signals
+    : {};
+  const lookupScope = String(features.lookup_scope || "").trim();
+  if (lookupScope === "upstream_project") return "upstream_project";
+  if (lookupScope === "local_instance") return "local_host";
+  if (String(features.target_scope || "") === "remote") return "remote_host";
+  if (String(features.target_scope || "") === "local") return "local_host";
+  const targets = Array.isArray(signal.target_mentions) ? signal.target_mentions : [];
+  if (targets.includes("macmini") || targets.includes("remote") || targets.includes("ai.guanbear.com")) return "remote_host";
+  if (targets.includes("local")) return "local_host";
+  if (requestKind === "work_request" || ["spawn_single", "spawn_multi"].includes(route)) {
+    if (
+      workType === "code"
+      || workContract === "code_change"
+      || features.requires_code_work
+      || features.requires_mutation
+      || Number(features.implement_hits || 0) > 0
+      || Number(features.mutation_hits || 0) > 0
+    ) {
+      return "current_workspace";
+    }
+    return "task_context";
+  }
+  if (requestKind === "execution_followup") return "current_session";
+  if (requestKind === "chat_or_explain") return "current_session";
+  return "unknown";
+}
+
+function targetForDecision(features = {}, scope = "") {
+  const explicitTarget = String(features.lookup_project || "").trim();
+  if (explicitTarget) return explicitTarget;
+  const targetScope = String(features.target_scope || "").trim();
+  if (targetScope && targetScope !== "generic") return targetScope;
+  if (scope === "current_workspace") return "workspace";
+  if (scope === "task_context") return "delegated_task";
+  return String(scope || "unknown").trim();
+}
+
+function evidenceForDecision(route, features = {}, taskClass = "") {
+  if (taskClass === "control_observer") return ["execution_ledger", "taskflow_state"];
+  if (features.fresh_live_lookup || features.bounded_repo_update_lookup || features.bounded_software_update_lookup) return ["web_lookup", "execution_ledger"];
+  if (route === "runner" && String(features.target_scope || "") === "remote") return ["remote_probe", "execution_ledger"];
+  if (route === "runner") return ["local_probe", "execution_ledger"];
+  if (route === "direct") return ["none"];
+  return ["taskflow_state", "execution_ledger"];
+}
+
+function validateRouterDecisionV2(payload = {}) {
+  const problems = [];
+  const route = String(payload.route || "").trim();
+  const scope = String(payload.scope || "").trim();
+  const evidence = Array.isArray(payload.evidence_required) ? payload.evidence_required : [];
+  if (!["direct", "runner", "spawn_single", "spawn_multi"].includes(route)) problems.push("invalid_route");
+  if (!scope) problems.push("missing_scope");
+  if (evidence.length === 0) problems.push("missing_evidence_required");
+  if (scope === "unknown" && route !== "direct") problems.push("unknown_scope_non_direct_route");
+  return {
+    passed: problems.length === 0,
+    problems,
+    validator_version: "router-decision-validator/v1",
+  };
+}
+
+function buildRouterDecisionV2({
+  task,
+  route,
+  workContract,
+  features,
+  taskClass,
+  workType,
+  phase,
+  routeBudget,
+  preDispatchAck,
+  policyRouter,
+  intentPacket,
+  correlation,
+}) {
+  const requestKind = requestKindForDecision(route, features, taskClass, intentPacket);
+  const scope = scopeForDecision(route, features, intentPacket, {
+    requestKind,
+    workType,
+    workContract,
+  });
+  const target = targetForDecision(features, scope);
+  const evidenceRequired = evidenceForDecision(route, features, taskClass);
+  const payload = {
+    schema_version: ROUTER_DECISION_V2_SCHEMA_VERSION,
+    request_kind: requestKind,
+    scope,
+    target,
+    route,
+    work_contract: workContract,
+    work_type: workType,
+    phase,
+    evidence_required: evidenceRequired,
+    ack: {
+      required: Boolean(preDispatchAck?.required),
+      text: String(preDispatchAck?.text || "").trim(),
+      kind: preDispatchAck?.required ? "ack" : "none",
+    },
+    budget: {
+      latency_target: String(routeBudget?.latency_target || ""),
+      cost_band: String(routeBudget?.budget_cap || ""),
+      max_workers: Number(routeBudget?.max_workers || 0),
+      retry_cap: Number(routeBudget?.retry_cap || 0),
+    },
+    confidence: Number(policyRouter?.route_guard?.confidence || 0),
+    decision_source: String(policyRouter?.decision_source || "legacy_planner_until_stateless_judge_live"),
+    reason_codes: Array.isArray(policyRouter?.route_guard?.reason_codes) ? [...policyRouter.route_guard.reason_codes] : [],
+    correlation: correlation && typeof correlation === "object" ? { ...correlation } : {},
+    task_preview: normalizedText(task).slice(0, 240),
+  };
+  payload.validation = validateRouterDecisionV2(payload);
+  return payload;
 }
 
 function inferProtocol(features, route, workType) {
@@ -1056,6 +1310,7 @@ function buildAutoRouterPayload(decision) {
 
 export function buildDecision(task, { command = "", metadata = {}, forceRoute = "", routeHint = {} } = {}) {
   const normalizedMetadata = normalizeMetadata(metadata);
+  const intentPacket = normalizeIntentPacket(normalizedMetadata);
   const normalizedRouteHint = normalizeRouteHint(routeHint);
   const effectiveForceRoute = VALID_FORCE_ROUTES.has(forceRoute) ? forceRoute : "";
   const routeMeta = applyForcedRoute(inferRoute(task, command, normalizedMetadata), effectiveForceRoute);
@@ -1161,6 +1416,45 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     },
     route,
   );
+  const policyRouter = buildPolicyRouterState(runtimeCfg, intentPacket, routeMeta);
+  const turnId = String(normalizedMetadata.turn_id || "").trim()
+    || stableId("turn", [
+      normalizedMetadata.session_key,
+      normalizedMetadata.channel,
+      normalizedMetadata.session_id,
+      normalizedMetadata.message_id,
+      normalizedText(task),
+    ]);
+  const decisionId = String(normalizedMetadata.decision_id || "").trim()
+    || stableId("decision", [
+      turnId,
+      route,
+      workContract,
+      Array.isArray(routeMeta.reason_codes) ? routeMeta.reason_codes.join(",") : "",
+    ]);
+  const correlation = {
+    turn_id: turnId,
+    decision_id: decisionId,
+    session_key: String(normalizedMetadata.session_key || ""),
+    session_id: String(normalizedMetadata.session_id || ""),
+    delivery_id: "",
+    task_id: "",
+    runner_job_id: "",
+  };
+  const routerDecisionV2 = buildRouterDecisionV2({
+    task,
+    route,
+    workContract,
+    features,
+    taskClass,
+    workType,
+    phase,
+    routeBudget,
+    preDispatchAck,
+    policyRouter,
+    intentPacket,
+    correlation,
+  });
 
   const decision = {
     schema_version: SCHEMA_VERSION,
@@ -1174,6 +1468,10 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       session_key: String(normalizedMetadata.session_key || ""),
       metadata: normalizedMetadata,
     },
+    correlation,
+    intent_packet: intentPacket,
+    policy_router: policyRouter,
+    router_decision_v2: routerDecisionV2,
     route_decision: {
       system_preferred_route: baseRoute,
       route,

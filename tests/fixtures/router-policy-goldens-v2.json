@@ -1,0 +1,86 @@
+[
+  {
+    "task": "你的controlui的访问地址是啥",
+    "expected": {
+      "route": "runner",
+      "task_class": "fast_local_check",
+      "work_contract": "inspect_report",
+      "request_kind": "surface_query",
+      "scope": "local_host",
+      "target": "local",
+      "evidence_required": ["local_probe", "execution_ledger"],
+      "ack_required": false,
+      "intent_class": "undetermined"
+    }
+  },
+  {
+    "task": "你现在啥版本",
+    "expected": {
+      "route": "runner",
+      "task_class": "fast_local_check",
+      "work_contract": "inspect_report",
+      "request_kind": "surface_query",
+      "scope": "local_host",
+      "target": "local",
+      "evidence_required": ["local_probe", "execution_ledger"],
+      "ack_required": false,
+      "intent_class": "undetermined"
+    }
+  },
+  {
+    "task": "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
+    "expected": {
+      "route": "runner",
+      "task_class": "fast_tool_check",
+      "work_contract": "inspect_report",
+      "request_kind": "fresh_external_lookup",
+      "scope": "upstream_project",
+      "target": "openclaw",
+      "evidence_required": ["web_lookup", "execution_ledger"],
+      "ack_required": true,
+      "intent_class": "undetermined"
+    }
+  },
+  {
+    "task": "调研三个兼容方案并写一版简短建议",
+    "expected": {
+      "route": "spawn_single",
+      "task_class": "focused_research",
+      "work_contract": "deliverable_work",
+      "request_kind": "work_request",
+      "scope": "task_context",
+      "target": "delegated_task",
+      "evidence_required": ["taskflow_state", "execution_ledger"],
+      "ack_required": true,
+      "intent_class": "undetermined"
+    }
+  },
+  {
+    "task": "帮我改下代码并跑测试",
+    "expected": {
+      "route": "spawn_single",
+      "task_class": "focused_code_work",
+      "work_contract": "deliverable_work",
+      "request_kind": "work_request",
+      "scope": "current_workspace",
+      "target": "workspace",
+      "evidence_required": ["taskflow_state", "execution_ledger"],
+      "ack_required": true,
+      "intent_class": "undetermined"
+    }
+  },
+  {
+    "task": "八爪鱼状态",
+    "expected": {
+      "route": "direct",
+      "task_class": "control_observer",
+      "work_contract": "answer_now",
+      "request_kind": "execution_followup",
+      "scope": "current_session",
+      "target": "current_session",
+      "evidence_required": ["execution_ledger", "taskflow_state"],
+      "ack_required": false,
+      "intent_class": "undetermined"
+    }
+  }
+]

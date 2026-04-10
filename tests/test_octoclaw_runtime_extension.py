@@ -474,6 +474,61 @@ Sender (untrusted metadata):
         self.assertEqual(payload["taskClass"], "simple_lookup")
         self.assertIn("Direct tools used: web_fetch", payload["context"])
 
+    def test_conversation_grounding_recovers_direct_tools_from_agent_end_snapshot(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-agent-end-") as tmpdir:
+            workspace = Path(tmpdir)
+            replay_path = workspace / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
+            replay_path.parent.mkdir(parents=True, exist_ok=True)
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-09T12:54:00Z",
+                                "turnId": "turn-direct-snapshot",
+                                "sessionKey": "agent:main:slack:direct:u556",
+                                "sessionId": "sess-u556",
+                                "prompt": "查一下 OpenClaw 最新发版",
+                                "route": "direct",
+                                "systemPreferredRoute": "direct",
+                                "workerPool": "octoclaw-main",
+                                "taskClass": "simple_lookup",
+                                "protectedLane": "",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "agent_end",
+                                "at": "2026-04-09T12:54:30Z",
+                                "turnId": "turn-direct-snapshot",
+                                "sessionKey": "agent:main:slack:direct:u556",
+                                "sessionId": "sess-u556",
+                                "route": "direct",
+                                "taskClass": "simple_lookup",
+                                "directToolsSeen": ["web_fetch"],
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "怎么查的",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(workspace / "tmp" / "octopus" / "task-state.json"))},
+                    sessionKeys: ["agent:main:slack:direct:u556"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertIn("Direct tools used: web_fetch", payload["context"])
+
     def test_conversation_grounding_recovers_runner_lookup_provenance_from_task_state(self) -> None:
         import tempfile
 
@@ -1203,12 +1258,13 @@ Sender (untrusted metadata):
 
             payload = run_runtime_helper(
                 """(async () => {
-                    const hints = __octoclawTest.__conversationControlTest.buildConversationControlHints({
+                    const intentPacket = __octoclawTest.__conversationControlTest.buildConversationIntentPacket({
                       prompt: "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
                       replayLogPath: __octoclawTest.resolveReplayLogPath(),
                       taskStatePath: __octoclawTest.resolveTaskStatePath(),
                       sessionKeys: ["agent:main:slack:direct:u-fresh"]
                     });
+                    const hints = __octoclawTest.__conversationControlTest.buildConversationControlHintsFromIntent(intentPacket);
                     const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
                       "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
                       {
@@ -1221,11 +1277,14 @@ Sender (untrusted metadata):
                       null
                     );
                     return {
+                      intentPacket,
                       hints,
                       route: resolved?.decision?.route_decision?.route || "",
                       taskClass: resolved?.decision?.route_decision?.task_class || "",
                       preDispatchAckRequired: Boolean(resolved?.decision?.pre_dispatch_ack?.required),
-                      latencyAckRequired: Boolean(resolved?.decision?.latency_ack?.required)
+                      latencyAckRequired: Boolean(resolved?.decision?.latency_ack?.required),
+                      routerRequestKind: resolved?.decision?.router_decision_v2?.request_kind || "",
+                      routerEvidenceRequired: resolved?.decision?.router_decision_v2?.evidence_required || []
                     };
                 })()""",
                 env={
@@ -1234,13 +1293,71 @@ Sender (untrusted metadata):
                 },
             )
 
-            self.assertTrue(payload["hints"]["available"])
-            self.assertEqual(payload["hints"]["kind"], "fresh_live_lookup")
-            self.assertEqual(payload["hints"]["intent_class"], "fresh_live_lookup")
+            self.assertFalse(payload["hints"]["available"])
+            self.assertEqual(payload["intentPacket"]["intent_class"], "undetermined")
+            self.assertEqual(payload["intentPacket"]["schema_version"], "octoclaw.intent_packet/v1")
+            self.assertEqual(payload["intentPacket"]["signals"]["lookup_mentions"][0]["project"], "openclaw")
+            self.assertTrue(payload["intentPacket"]["judge"]["eligible"])
             self.assertEqual(payload["route"], "runner")
             self.assertEqual(payload["taskClass"], "fast_tool_check")
+            self.assertEqual(payload["routerRequestKind"], "fresh_external_lookup")
+            self.assertIn("web_lookup", payload["routerEvidenceRequired"])
             self.assertTrue(payload["preDispatchAckRequired"])
             self.assertFalse(payload["latencyAckRequired"])
+
+    def test_policy_decision_carries_signal_packet_and_stateless_judge_contract(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("你再看下 OpenClaw 有啥更新，尤其是 Memory 方向");
+                return {
+                  intentClass: decision.intent_packet.intent_class,
+                  packetSource: decision.intent_packet.source,
+                  lookupProject: decision.intent_packet.signals.lookup_mentions[0]?.project || "",
+                  route: decision.route_decision.route,
+                  policyRouterMode: decision.policy_router.mode,
+                  policyRouterSource: decision.policy_router.decision_source,
+                  selectedJudge: decision.policy_router.judge.selected,
+                  judgeInvoked: decision.policy_router.judge.invoked,
+                  judgeTools: decision.policy_router.judge.tools,
+                  routerSchema: decision.router_decision_v2.schema_version,
+                  routerValid: decision.router_decision_v2.validation.passed,
+                  turnId: decision.correlation.turn_id,
+                  decisionId: decision.correlation.decision_id
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["intentClass"], "undetermined")
+        self.assertEqual(payload["packetSource"], "deterministic_front_gate")
+        self.assertEqual(payload["lookupProject"], "openclaw")
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["policyRouterMode"], "model_first")
+        self.assertEqual(payload["policyRouterSource"], "legacy_planner_until_stateless_judge_live")
+        self.assertEqual(payload["selectedJudge"], "main_grade_model")
+        self.assertFalse(payload["judgeInvoked"])
+        self.assertEqual(payload["judgeTools"], "none")
+        self.assertEqual(payload["routerSchema"], "octoclaw.router_decision/v2")
+        self.assertTrue(payload["routerValid"])
+        self.assertTrue(payload["turnId"].startswith("turn-"))
+        self.assertTrue(payload["decisionId"].startswith("decision-"))
+
+    def test_ambiguous_prompt_is_policy_judge_eligible_without_keyword_route_claim(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("这个是不是要换个更稳的做法");
+                return {
+                  intentClass: decision.intent_packet.intent_class,
+                  judgeEligible: decision.policy_router.judge.eligible,
+                  invocationState: decision.policy_router.judge.invocation_state,
+                  route: decision.route_decision.route
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["intentClass"], "undetermined")
+        self.assertTrue(payload["judgeEligible"])
+        self.assertEqual(payload["invocationState"], "eligible_not_invoked_runtime_adapter_pending")
+        self.assertIn(payload["route"], ["direct", "runner", "spawn_single", "spawn_multi"])
 
     def test_current_version_prompt_prefers_local_surface_lookup(self) -> None:
         payload = run_runtime_helper(
@@ -1261,8 +1378,12 @@ Sender (untrusted metadata):
                   route: decision.route_decision.route,
                   taskClass: decision.route_decision.task_class,
                   workContract: decision.route_decision.work_contract,
+                  intentClass: decision.intent_packet?.intent_class || "",
+                  surfaceMentions: decision.intent_packet?.signals?.surface_mentions || [],
                   conversationIntentClass: decision.request.metadata?.conversation_control?.intent_class || "",
-                  conversationKind: decision.request.metadata?.conversation_control?.kind || ""
+                  conversationKind: decision.request.metadata?.conversation_control?.kind || "",
+                  routerRequestKind: decision.router_decision_v2?.request_kind || "",
+                  routerScope: decision.router_decision_v2?.scope || ""
                 };
             })()"""
         )
@@ -1270,8 +1391,11 @@ Sender (untrusted metadata):
         self.assertEqual(payload["route"], "runner")
         self.assertEqual(payload["taskClass"], "fast_local_check")
         self.assertEqual(payload["workContract"], "inspect_report")
-        self.assertEqual(payload["conversationIntentClass"], "local_surface_lookup")
-        self.assertEqual(payload["conversationKind"], "local_surface_lookup")
+        self.assertEqual(payload["intentClass"], "undetermined")
+        self.assertIn("runtime_version", payload["surfaceMentions"])
+        self.assertEqual(payload["conversationIntentClass"], "")
+        self.assertEqual(payload["conversationKind"], "")
+        self.assertEqual(payload["routerRequestKind"], "surface_query")
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(
@@ -1363,6 +1487,40 @@ Sender (untrusted metadata):
 
         self.assertEqual(payload["mode"], "replace")
         self.assertIn("子任务污染", json.dumps(payload["message"], ensure_ascii=False))
+
+    def test_guard_assistant_message_blocks_ungrounded_tool_provenance_claim(self) -> None:
+        payload = run_runtime_helper(
+            """(() => __octoclawTest.guardAssistantMessageForPolicyState(
+                { role: "assistant", content: "查了。我实际用了 web_fetch 和 exec，结果是最新版本。" },
+                {
+                  decision: {
+                    route_decision: { route: "direct", task_class: "direct_answer" },
+                    router_decision_v2: { request_kind: "fresh_external_lookup" }
+                  },
+                  directToolsSeen: []
+                }
+            ))()"""
+        )
+
+        self.assertEqual(payload["mode"], "replace")
+        self.assertEqual(payload["reason"], "ungrounded_tool_provenance_claim_blocked")
+        self.assertIn("没有记录到可验证的 direct tool 调用", json.dumps(payload["message"], ensure_ascii=False))
+
+    def test_guard_assistant_message_allows_recorded_tool_provenance_claim(self) -> None:
+        payload = run_runtime_helper(
+            """(() => __octoclawTest.guardAssistantMessageForPolicyState(
+                { role: "assistant", content: "查了。我实际用了 web_fetch，结果是最新版本。" },
+                {
+                  decision: {
+                    route_decision: { route: "direct", task_class: "direct_answer" },
+                    router_decision_v2: { request_kind: "fresh_external_lookup" }
+                  },
+                  directToolsSeen: ["web_fetch"]
+                }
+            ))()"""
+        )
+
+        self.assertEqual(payload["mode"], "pass")
 
     def test_retain_policy_state_when_delegated_route_ended_without_dispatch(self) -> None:
         payload = run_runtime_helper(

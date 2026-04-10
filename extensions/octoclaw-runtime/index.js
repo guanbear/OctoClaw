@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,6 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildConversationControlHints,
+  buildConversationControlHintsFromIntent,
+  buildConversationIntentPacket,
   buildConversationGrounding,
   buildDirectLookupGuard,
   __conversationControlTest,
@@ -18,6 +21,14 @@ const __dirname = path.dirname(__filename);
 const HOME_DIR = os.homedir();
 let OCTOCLAW_ROOT_OVERRIDE = "";
 let WORKSPACE_ROOT_OVERRIDE = "";
+
+function stableHash(value = "") {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 16);
+}
+
+function stableId(prefix, parts = []) {
+  return `${prefix}-${stableHash(parts.map((part) => String(part || "")).join("\u001f"))}`;
+}
 
 function firstExistingPath(candidates, matcher = null) {
   for (const candidate of candidates) {
@@ -116,25 +127,48 @@ function runCommand(command, args, options = {}) {
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    let killTimer = null;
+    const timeoutMs = Math.max(0, Number(options.timeoutMs || 0));
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+        timedOut = true;
+        try {
+          child.kill("SIGTERM");
+          killTimer = setTimeout(() => {
+            try {
+              child.kill("SIGKILL");
+            } catch {}
+          }, 500);
+        } catch {}
+      }, timeoutMs)
+      : null;
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("error", reject);
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      reject(err);
+    });
     child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       resolve({
-        code: code ?? 1,
+        code: timedOut ? 124 : (code ?? 1),
         stdout: stdout.trim(),
-        stderr: stderr.trim(),
+        stderr: (timedOut ? (stderr || `command timed out after ${timeoutMs}ms`) : stderr).trim(),
+        timedOut,
       });
     });
   });
 }
 
-async function runJsonScript(scriptName, args, cwd) {
-  const result = await runCommand(resolvePythonBin(), [resolveScript(scriptName), ...args], { cwd });
+async function runJsonScript(scriptName, args, cwd, options = {}) {
+  const result = await runCommand(resolvePythonBin(), [resolveScript(scriptName), ...args], { cwd, ...options });
   if (result.code !== 0) {
     throw new Error(result.stderr || `${scriptName} failed`);
   }
@@ -185,7 +219,11 @@ function latencyAckText(decision) {
 }
 
 function conversationIntentClass(decision) {
-  return String(decision?.request?.metadata?.conversation_control?.intent_class || "").trim();
+  return String(
+    decision?.request?.metadata?.intent_packet?.intent_class
+      || decision?.request?.metadata?.conversation_control?.intent_class
+      || "",
+  ).trim();
 }
 
 function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
@@ -243,10 +281,12 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
   try {
+    const timeoutMs = Math.max(500, Number(decision?.pre_dispatch_ack?.channel_timeout_ms || 1800));
     const payload = await runJsonScript(
       "send_pre_dispatch_ack.py",
       ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
       ctx?.cwd || process.cwd(),
+      { timeoutMs },
     );
     const sent = Boolean(payload?.sent || payload?.ok);
     if (sent) {
@@ -282,6 +322,36 @@ async function maybeSendEagerPreDispatchAck(decision, metadata, stateKey, state,
   return maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger);
 }
 
+function scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, logger) {
+  if (!shouldSendPreDispatchAck(decision, state, ctx)) {
+    return { scheduled: false, reason: "not_required" };
+  }
+  const promise = maybeSendEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, logger)
+    .then((result) => recordPolicyReplay(
+      "pre_dispatch_ack_attempted",
+      {
+        sessionKey: stateKey || String(metadata?.session_key || ""),
+        sessionId: String(ctx?.sessionId || ""),
+        route: String(decision?.route_decision?.route || ""),
+        taskClass: String(decision?.route_decision?.task_class || ""),
+        sent: Boolean(result?.sent),
+        reason: String(result?.reason || ""),
+        message: String(result?.message || ""),
+        mode: "eager_async",
+      },
+      logger,
+      decision,
+    ))
+    .catch((err) => {
+      logger?.warn?.(`octoclaw eager pre-dispatch ack scheduling failed: ${String(err)}`);
+    });
+  return {
+    scheduled: true,
+    reason: "scheduled",
+    promise,
+  };
+}
+
 function shouldSendLatencyAck(decision, state = {}, ctx = {}, toolName = "") {
   if (isDelegatedRoute(decision)) return false;
   if (!decision?.latency_ack?.required) return false;
@@ -303,10 +373,12 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
   try {
+    const timeoutMs = Math.max(500, Number(decision?.latency_ack?.channel_timeout_ms || 1800));
     const payload = await runJsonScript(
       "send_pre_dispatch_ack.py",
       ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
       ctx?.cwd || process.cwd(),
+      { timeoutMs },
     );
     const sent = Boolean(payload?.sent || payload?.ok);
     if (sent) {
@@ -1160,6 +1232,47 @@ function contaminationFallbackReply() {
   return "这条追问命中了被子任务污染的会话上下文，我先按最新执行事实重绑后再回答，这次先不凭旧记忆下结论。";
 }
 
+function claimedDirectToolNames(text = "") {
+  const raw = String(text || "");
+  const normalized = raw.toLowerCase();
+  const names = [];
+  const add = (name) => {
+    if (name && !names.includes(name)) names.push(name);
+  };
+  for (const name of [
+    "web_fetch",
+    "web_search",
+    "web.run",
+    "exec",
+    "shell",
+    "bash",
+    "curl",
+    "openclaw",
+    "github api",
+  ]) {
+    if (normalized.includes(name)) add(name);
+  }
+  return names;
+}
+
+function looksLikeToolProvenanceClaim(text = "") {
+  const raw = String(text || "");
+  if (claimedDirectToolNames(raw).length === 0) return false;
+  return /(我|这次|刚才|实际|确实|已经|子任务|runner|主\s*agent).{0,40}(用|用了|调用|跑|执行|查|抓|fetch|拿到|返回)/iu.test(raw)
+    || /\b(i|this run|that run|actually|used|called|ran|fetched|queried)\b.{0,50}\b(web_fetch|web_search|web\.run|exec|shell|bash|curl|openclaw|github api)\b/iu.test(raw)
+    || /direct tools used.{0,80}(实际|actually|used|web_fetch|web_search|exec|unavailable)/iu.test(raw);
+}
+
+function ungroundedToolProvenanceReply(state = {}, claimedTools = []) {
+  const seen = Array.isArray(state?.directToolsSeen) ? state.directToolsSeen.filter(Boolean) : [];
+  if (seen.length > 0) {
+    return `这条回复里有未被执行事实记录覆盖的工具来源声明（${claimedTools.join(", ")}）。目前可确认的 direct tools 只有：${seen.join(", ")}。我不能把未记录的工具说成已经用过。`;
+  }
+  const route = String(state?.decision?.route_decision?.route || "").trim() || "unknown";
+  const requestKind = String(state?.decision?.router_decision_v2?.request_kind || "").trim() || "unknown";
+  return `这条回复试图声明用了 ${claimedTools.join(", ")}，但当前 execution facts 没有记录到可验证的 direct tool 调用。按事实口径：route=${route}，request_kind=${requestKind}，Direct tools used 目前不可用。我需要重新走受控查询或执行链路，不能凭记忆声称已经查过。`;
+}
+
 function guardAssistantMessageForPolicyState(message = {}, state = {}) {
   if (assistantMessageRole(message) !== "assistant") {
     return { mode: "pass", message };
@@ -1183,6 +1296,16 @@ function guardAssistantMessageForPolicyState(message = {}, state = {}) {
       mode: "replace",
       reason: "contaminated_control_observer_response_blocked",
       message: replaceAssistantMessageText(message, contaminationFallbackReply()),
+    };
+  }
+  const claimedTools = claimedDirectToolNames(replyText);
+  const seenTools = new Set((Array.isArray(state?.directToolsSeen) ? state.directToolsSeen : []).map((item) => String(item || "").trim().toLowerCase()).filter(Boolean));
+  const ungroundedClaims = claimedTools.filter((item) => !seenTools.has(String(item || "").trim().toLowerCase()));
+  if (ungroundedClaims.length > 0 && looksLikeToolProvenanceClaim(replyText)) {
+    return {
+      mode: "replace",
+      reason: "ungrounded_tool_provenance_claim_blocked",
+      message: replaceAssistantMessageText(message, ungroundedToolProvenanceReply(state, ungroundedClaims)),
     };
   }
   return { mode: "pass", message };
@@ -1237,11 +1360,17 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
   if (decision && !runtimeSwitches(decision).replay_logging_enabled) {
     return;
   }
+  const correlation = decision?.correlation && typeof decision.correlation === "object" ? decision.correlation : {};
   try {
     await appendJsonl(resolveReplayLogPath(), {
       schema_version: "octoclaw.runtime_policy.replay_event/v1",
       event: eventType,
       at: new Date().toISOString(),
+      turnId: String(correlation.turn_id || payload.turnId || ""),
+      decisionId: String(correlation.decision_id || payload.decisionId || ""),
+      deliveryId: String(correlation.delivery_id || payload.deliveryId || ""),
+      runnerJobId: String(correlation.runner_job_id || payload.runnerJobId || ""),
+      taskId: String(correlation.task_id || payload.taskId || ""),
       ...payload,
     });
   } catch (err) {
@@ -1291,16 +1420,26 @@ function buildPolicyMetadata(ctx = {}, options = {}) {
   if (ctx.agentId) metadata.agent_id = ctx.agentId;
   if (ctx.sessionId) metadata.session_id = ctx.sessionId;
   if (ctx.messageProvider) metadata.message_provider = ctx.messageProvider;
+  metadata.message_id = String(ctx.messageId || ctx.messageTs || ctx.eventId || ctx.ts || "").trim();
   metadata.agent_namespace = "octoclaw";
   metadata.managed_by_octoclaw = true;
   metadata.session_boundary_status = boundary.status;
+  metadata.turn_id = metadata.message_id
+    ? stableId("turn", [
+      stableSessionKey,
+      metadata.message_id,
+      ctx.sessionId,
+      ctx.agentId,
+      ctx.trigger,
+    ])
+    : "";
   return metadata;
 }
 
 function enrichConversationControlMetadata(prompt, metadata = {}) {
   const nextMetadata = metadata && typeof metadata === "object" ? { ...metadata } : {};
-  if (nextMetadata?.conversation_control) return nextMetadata;
-  const conversationControl = buildConversationControlHints({
+  if (nextMetadata?.conversation_control && nextMetadata?.intent_packet) return nextMetadata;
+  const hintOptions = {
     prompt,
     replayLogPath: resolveReplayLogPath(),
     taskStatePath: resolveTaskStatePath(),
@@ -1309,7 +1448,12 @@ function enrichConversationControlMetadata(prompt, metadata = {}) {
       nextMetadata.session_binding_key,
       nextMetadata.session_thread_key,
     ].filter(Boolean),
-  });
+  };
+  const intentPacket = nextMetadata?.intent_packet || buildConversationIntentPacket(hintOptions);
+  if (intentPacket?.available !== false) {
+    nextMetadata.intent_packet = intentPacket;
+  }
+  const conversationControl = nextMetadata?.conversation_control || buildConversationControlHintsFromIntent(intentPacket);
   if (conversationControl?.available) {
     nextMetadata.conversation_control = conversationControl;
   }
@@ -1338,7 +1482,16 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   }
   const boundary = detectSessionBoundary(ctx);
   const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
-  const conversationControl = buildConversationControlHints({
+  if (!String(metadata.turn_id || "").trim()) {
+    metadata.turn_id = stableId("turn", [
+      stateKey,
+      metadata.session_key,
+      ctx?.sessionId,
+      ctx?.agentId,
+      prompt,
+    ]);
+  }
+  const hintOptions = {
     prompt,
     replayLogPath: resolveReplayLogPath(),
     taskStatePath: resolveTaskStatePath(),
@@ -1348,7 +1501,12 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       existing?.canonicalSessionKey,
       ctx?.sessionKey,
     ].filter(Boolean),
-  });
+  };
+  const intentPacket = metadata?.intent_packet || buildConversationIntentPacket(hintOptions);
+  if (intentPacket?.available !== false) {
+    metadata.intent_packet = intentPacket;
+  }
+  const conversationControl = metadata?.conversation_control || buildConversationControlHintsFromIntent(intentPacket);
   if (conversationControl?.available) {
     metadata.conversation_control = conversationControl;
   }
@@ -1363,7 +1521,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || "").trim(),
       delegated: false,
       delegationTool: "",
-      conversationIntentClass: String(metadata?.conversation_control?.intent_class || ""),
+      conversationIntentClass: String(metadata?.intent_packet?.intent_class || metadata?.conversation_control?.intent_class || ""),
       routeHintSubmitted: false,
       routeHintPayload: null,
       blockedTools: [],
@@ -1398,7 +1556,20 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         sessionBoundaryStatus: String(boundary.status || ""),
         canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || ""),
         conversationControlKind: String(metadata?.conversation_control?.kind || ""),
-        conversationIntentClass: String(metadata?.conversation_control?.intent_class || ""),
+        conversationIntentClass: String(metadata?.intent_packet?.intent_class || metadata?.conversation_control?.intent_class || ""),
+        routerRequestKind: String(decision?.router_decision_v2?.request_kind || ""),
+        routerScope: String(decision?.router_decision_v2?.scope || ""),
+        routerTarget: String(decision?.router_decision_v2?.target || ""),
+        routerEvidenceRequired: Array.isArray(decision?.router_decision_v2?.evidence_required) ? decision.router_decision_v2.evidence_required : [],
+        routerDecisionSource: String(decision?.router_decision_v2?.decision_source || ""),
+        routerDecisionValid: Boolean(decision?.router_decision_v2?.validation?.passed),
+        policyJudgeSelected: String(decision?.policy_router?.judge?.selected || ""),
+        policyJudgeInvoked: Boolean(decision?.policy_router?.judge?.invoked),
+        policyJudgePromptVersion: String(decision?.policy_router?.judge?.prompt_version || ""),
+        policyJudgeSchemaVersion: String(decision?.policy_router?.judge?.schema_version || ""),
+        decisionCacheState: String(decision?.policy_router?.cache?.state || ""),
+        intentPacketConfidence: Number(metadata?.intent_packet?.confidence || 0),
+        intentPacketReasons: Array.isArray(metadata?.intent_packet?.reason_codes) ? metadata.intent_packet.reason_codes : [],
         prompt: truncateText(prompt),
       },
       logger,
@@ -1659,7 +1830,7 @@ const plugin = {
     const state = resolved?.state || getPolicyStateForContext(ctx).state;
     const metadata = buildPolicyMetadata(ctx, { stateKey });
     await maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, pi.logger, "direct_lookup");
-    await maybeSendEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);
+    scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);
     const prependSystem = [];
     if (routeHintRequired(decision)) {
       prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
@@ -1904,6 +2075,7 @@ const plugin = {
         routeHintSubmitted: Boolean(state?.routeHintSubmitted),
         delegated: Boolean(state?.delegated),
         delegationTool: String(state?.delegationTool || ""),
+        directToolsSeen: Array.isArray(state?.directToolsSeen) ? state.directToolsSeen : [],
         blockedTools: Array.isArray(state?.blockedTools) ? state.blockedTools : [],
         ackFollowupCandidate: Boolean(state?.decision?.route_hint_policy?.ack_followup_candidate),
         ackFollowupApplied: Boolean(state?.decision?.route_hint_policy?.ack_followup_applied),
@@ -2468,6 +2640,7 @@ export const __octoclawTest = {
   preDispatchAckText,
   shouldSendPreDispatchAck,
   maybeSendEagerPreDispatchAck,
+  scheduleEagerPreDispatchAck,
   latencyAckText,
   shouldSendLatencyAck,
   maybeEmitPreDispatchAckProgress,
