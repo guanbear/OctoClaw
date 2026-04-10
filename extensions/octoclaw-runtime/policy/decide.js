@@ -547,6 +547,60 @@ function normalizeIntentPacket(metadata = {}) {
   };
 }
 
+function normalizePolicyJudgeResult(metadata = {}) {
+  const result = metadata?.policy_judge_result && typeof metadata.policy_judge_result === "object" && !Array.isArray(metadata.policy_judge_result)
+    ? metadata.policy_judge_result
+    : {};
+  if (Object.keys(result).length === 0) return {};
+  return {
+    schema_version: normalizedText(result.schema_version || "octoclaw.policy_judge.result/v1"),
+    selected: normalizedText(result.selected),
+    provider: normalizedText(result.provider),
+    model: normalizedText(result.model),
+    invoked: Boolean(result.invoked),
+    invocation_state: normalizedText(result.invocation_state),
+    route: normalizedText(result.route),
+    request_kind: normalizedText(result.request_kind),
+    scope: normalizedText(result.scope),
+    target: normalizedText(result.target),
+    evidence_required: Array.isArray(result.evidence_required)
+      ? result.evidence_required.map((item) => normalizedText(item)).filter(Boolean)
+      : [],
+    confidence: Math.max(0, Math.min(1, Number(result.confidence || 0))),
+    reason_codes: Array.isArray(result.reason_codes)
+      ? result.reason_codes.map((item) => normalizedText(item)).filter(Boolean).slice(0, 12)
+      : [],
+    raw: result.raw && typeof result.raw === "object" && !Array.isArray(result.raw) ? result.raw : {},
+  };
+}
+
+function policyJudgeApplyState(result = {}, runtimeCfg = {}, forceRoute = "", stickyApplied = false) {
+  const cfg = runtimeCfg?.policy_router && typeof runtimeCfg.policy_router === "object" && !Array.isArray(runtimeCfg.policy_router)
+    ? runtimeCfg.policy_router
+    : {};
+  const threshold = Math.max(0, Math.min(1, Number(cfg.confidence_threshold || 0.78)));
+  const validation = validateRouterDecisionV2({
+    route: normalizedText(result.route),
+    scope: normalizedText(result.scope),
+    evidence_required: Array.isArray(result.evidence_required) ? result.evidence_required : [],
+  });
+  const problems = [...validation.problems];
+  if (!result.invoked) problems.push("judge_not_invoked");
+  if (!VALID_FORCE_ROUTES.has(normalizedText(result.route)) || !normalizedText(result.route)) problems.push("invalid_judge_route");
+  if (forceRoute) problems.push("force_route_takes_precedence");
+  if (stickyApplied) problems.push("sticky_route_takes_precedence");
+  if (Number(result.confidence || 0) < threshold) problems.push("confidence_below_threshold");
+  return {
+    applied: problems.length === 0,
+    threshold,
+    validation: {
+      passed: problems.length === 0,
+      problems,
+      validator_version: "policy-judge-apply-validator/v1",
+    },
+  };
+}
+
 function stableHash(value = "") {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 16);
 }
@@ -571,7 +625,7 @@ function firstEnabledPolicyJudge(candidates = {}, preferred = "main_grade_model"
   return { name: "", config: {} };
 }
 
-function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = {}) {
+function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = {}, options = {}) {
   const cfg = runtimeCfg?.policy_router && typeof runtimeCfg.policy_router === "object" && !Array.isArray(runtimeCfg.policy_router)
     ? runtimeCfg.policy_router
     : {};
@@ -581,6 +635,13 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
   const judgeOn = Array.isArray(cfg.judge_on) ? cfg.judge_on.map((item) => String(item || "").trim()).filter(Boolean) : ["undetermined"];
   const judgeEligible = Boolean(intentPacket?.judge?.eligible || judgeOn.includes(intentClass));
   const selectedJudge = firstEnabledPolicyJudge(candidates, String(cfg.default_judge || "main_grade_model"));
+  const judgeResult = options?.judgeResult && typeof options.judgeResult === "object" && !Array.isArray(options.judgeResult)
+    ? options.judgeResult
+    : {};
+  const judgeApplied = Boolean(options?.judgeApplied);
+  const judgeValidation = options?.judgeValidation && typeof options.judgeValidation === "object" && !Array.isArray(options.judgeValidation)
+    ? options.judgeValidation
+    : {};
   const deterministicFirst = Boolean("deterministic_first" in cfg ? cfg.deterministic_first : false);
   const enabled = Boolean("enabled" in cfg ? cfg.enabled : true);
   return {
@@ -589,22 +650,31 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
     mode: String(cfg.mode || "model_first"),
     deterministic_first: deterministicFirst,
     intent_packet: intentPacket && typeof intentPacket === "object" && !Array.isArray(intentPacket) ? { ...intentPacket } : {},
-    decision_source: "legacy_planner_until_stateless_judge_live",
+    decision_source: judgeApplied ? "policy_judge" : "legacy_planner_until_stateless_judge_live",
     judge: {
       eligible: judgeEligible,
-      invoked: false,
-      invocation_state: judgeEligible && selectedJudge.name
+      invoked: Boolean(judgeResult.invoked),
+      invocation_state: String(judgeResult.invocation_state || (judgeEligible && selectedJudge.name
         ? "eligible_not_invoked_runtime_adapter_pending"
-        : "not_needed_for_deterministic_path",
-      selected: selectedJudge.name,
-      provider: String(selectedJudge.config.provider || selectedJudge.name || ""),
-      model: String(selectedJudge.config.model || ""),
+        : "not_needed_for_deterministic_path")),
+      selected: String(judgeResult.selected || selectedJudge.name || ""),
+      provider: String(judgeResult.provider || selectedJudge.config.provider || selectedJudge.name || ""),
+      model: String(judgeResult.model || selectedJudge.config.model || ""),
       tools: String(selectedJudge.config.tools || "none"),
       prompt_version: "policy-judge-prompt/v1",
       schema_version: "octoclaw.policy_judge.result/v1",
       timeout_ms: Number(cfg.timeout_ms || 1200),
       max_context_chars: Number(cfg.max_context_chars || 2000),
       reason: String(intentPacket?.judge?.reason || "").trim(),
+      applied: judgeApplied,
+      confidence: Number(judgeResult.confidence || 0),
+      validation: judgeValidation,
+      route: String(judgeResult.route || ""),
+      request_kind: String(judgeResult.request_kind || ""),
+      scope: String(judgeResult.scope || ""),
+      target: String(judgeResult.target || ""),
+      evidence_required: Array.isArray(judgeResult.evidence_required) ? [...judgeResult.evidence_required] : [],
+      reason_codes: Array.isArray(judgeResult.reason_codes) ? [...judgeResult.reason_codes] : [],
     },
     cache: {
       ttl_seconds: Number(cfg.cache_ttl_seconds || 120),
@@ -715,19 +785,27 @@ function buildRouterDecisionV2({
   policyRouter,
   intentPacket,
   correlation,
+  policyJudgeResult,
+  policyJudgeApplied,
 }) {
-  const requestKind = requestKindForDecision(route, features, taskClass, intentPacket);
+  const judge = policyJudgeApplied && policyJudgeResult && typeof policyJudgeResult === "object" && !Array.isArray(policyJudgeResult)
+    ? policyJudgeResult
+    : {};
+  const requestKind = String(judge.request_kind || "").trim() || requestKindForDecision(route, features, taskClass, intentPacket);
   const scope = scopeForDecision(route, features, intentPacket, {
     requestKind,
     workType,
     workContract,
   });
-  const target = targetForDecision(features, scope);
-  const evidenceRequired = evidenceForDecision(route, features, taskClass);
+  const effectiveScope = String(judge.scope || "").trim() || scope;
+  const target = String(judge.target || "").trim() || targetForDecision(features, effectiveScope);
+  const evidenceRequired = Array.isArray(judge.evidence_required) && judge.evidence_required.length > 0
+    ? [...judge.evidence_required]
+    : evidenceForDecision(route, features, taskClass);
   const payload = {
     schema_version: ROUTER_DECISION_V2_SCHEMA_VERSION,
     request_kind: requestKind,
-    scope,
+    scope: effectiveScope,
     target,
     route,
     work_contract: workContract,
@@ -745,7 +823,7 @@ function buildRouterDecisionV2({
       max_workers: Number(routeBudget?.max_workers || 0),
       retry_cap: Number(routeBudget?.retry_cap || 0),
     },
-    confidence: Number(policyRouter?.route_guard?.confidence || 0),
+    confidence: Number(judge.confidence || policyRouter?.route_guard?.confidence || 0),
     decision_source: String(policyRouter?.decision_source || "legacy_planner_until_stateless_judge_live"),
     reason_codes: Array.isArray(policyRouter?.route_guard?.reason_codes) ? [...policyRouter.route_guard.reason_codes] : [],
     correlation: correlation && typeof correlation === "object" ? { ...correlation } : {},
@@ -1311,6 +1389,7 @@ function buildAutoRouterPayload(decision) {
 export function buildDecision(task, { command = "", metadata = {}, forceRoute = "", routeHint = {} } = {}) {
   const normalizedMetadata = normalizeMetadata(metadata);
   const intentPacket = normalizeIntentPacket(normalizedMetadata);
+  const policyJudgeResult = normalizePolicyJudgeResult(normalizedMetadata);
   const normalizedRouteHint = normalizeRouteHint(routeHint);
   const effectiveForceRoute = VALID_FORCE_ROUTES.has(forceRoute) ? forceRoute : "";
   const routeMeta = applyForcedRoute(inferRoute(task, command, normalizedMetadata), effectiveForceRoute);
@@ -1333,6 +1412,16 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
 
   let route = stickyResult.route;
   const mergeReasonCodes = [...stickyResult.stickyReasons];
+  const judgeApply = policyJudgeApplyState(policyJudgeResult, runtimeCfg, effectiveForceRoute, Boolean(stickyResult.stickyState?.applied));
+  if (judgeApply.applied) {
+    route = policyJudgeResult.route;
+    mergeReasonCodes.push("policy_judge_route_applied");
+    if (policyJudgeResult.reason_codes.length > 0) {
+      mergeReasonCodes.push(...policyJudgeResult.reason_codes.map((reason) => `policy_judge:${reason}`));
+    }
+  } else if (policyJudgeResult.invoked) {
+    mergeReasonCodes.push(`policy_judge_not_applied:${judgeApply.validation.problems[0] || "unknown"}`);
+  }
   if (normalizedRouteHint.route_hint) {
     const merged = mergeRouteFromHint(route, features, normalizedRouteHint, laneFeasibility, correctionPolicy);
     route = merged.route;
@@ -1416,7 +1505,11 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     },
     route,
   );
-  const policyRouter = buildPolicyRouterState(runtimeCfg, intentPacket, routeMeta);
+  const policyRouter = buildPolicyRouterState(runtimeCfg, intentPacket, routeMeta, {
+    judgeResult: policyJudgeResult,
+    judgeApplied: judgeApply.applied,
+    judgeValidation: judgeApply.validation,
+  });
   const turnId = String(normalizedMetadata.turn_id || "").trim()
     || stableId("turn", [
       normalizedMetadata.session_key,
@@ -1454,6 +1547,8 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     policyRouter,
     intentPacket,
     correlation,
+    policyJudgeResult,
+    policyJudgeApplied: judgeApply.applied,
   });
 
   const decision = {

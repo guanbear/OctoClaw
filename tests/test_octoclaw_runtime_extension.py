@@ -1359,6 +1359,108 @@ Sender (untrusted metadata):
         self.assertEqual(payload["invocationState"], "eligible_not_invoked_runtime_adapter_pending")
         self.assertIn(payload["route"], ["direct", "runner", "spawn_single", "spawn_multi"])
 
+    def test_stateless_policy_judge_result_overrides_legacy_route_when_valid(self) -> None:
+        fixture = {
+            "route": "spawn_single",
+            "request_kind": "work_request",
+            "scope": "task_context",
+            "target": "delegated_task",
+            "evidence_required": ["taskflow_state", "execution_ledger"],
+            "confidence": 0.93,
+            "reason_codes": ["semantic_work_request"],
+        }
+        payload = run_runtime_helper(
+            """(async () => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u-judge",
+                  sessionId: "sess-judge",
+                  trigger: "message",
+                  agentId: "agent:main:main"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  "这个是不是要换个更稳的做法",
+                  ctx,
+                  process.cwd(),
+                  null
+                );
+                const decision = resolved?.decision || {};
+                return {
+                  route: decision.route_decision.route,
+                  policyRouterSource: decision.policy_router.decision_source,
+                  judgeInvoked: decision.policy_router.judge.invoked,
+                  judgeApplied: decision.policy_router.judge.applied,
+                  judgeInvocationState: decision.policy_router.judge.invocation_state,
+                  routerRequestKind: decision.router_decision_v2.request_kind,
+                  routerScope: decision.router_decision_v2.scope,
+                  routerTarget: decision.router_decision_v2.target,
+                  routerEvidenceRequired: decision.router_decision_v2.evidence_required,
+                  routerValid: decision.router_decision_v2.validation.passed,
+                  reasonCodes: decision.route_decision.reason_codes
+                };
+            })()""",
+            env={"OCTOCLAW_POLICY_JUDGE_RESULT_JSON": json.dumps(fixture)},
+        )
+
+        self.assertEqual(payload["route"], "spawn_single")
+        self.assertEqual(payload["policyRouterSource"], "policy_judge")
+        self.assertTrue(payload["judgeInvoked"])
+        self.assertTrue(payload["judgeApplied"])
+        self.assertEqual(payload["judgeInvocationState"], "completed_fixture")
+        self.assertEqual(payload["routerRequestKind"], "work_request")
+        self.assertEqual(payload["routerScope"], "task_context")
+        self.assertEqual(payload["routerTarget"], "delegated_task")
+        self.assertEqual(payload["routerEvidenceRequired"], ["taskflow_state", "execution_ledger"])
+        self.assertTrue(payload["routerValid"])
+        self.assertIn("policy_judge_route_applied", payload["reasonCodes"])
+
+    def test_stateless_policy_judge_low_confidence_falls_back_to_legacy_route(self) -> None:
+        fixture = {
+            "route": "direct",
+            "request_kind": "chat_or_explain",
+            "scope": "current_session",
+            "target": "current_session",
+            "evidence_required": ["none"],
+            "confidence": 0.2,
+            "reason_codes": ["weak_guess"],
+        }
+        payload = run_runtime_helper(
+            """(async () => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u-judge-low",
+                  sessionId: "sess-judge-low",
+                  trigger: "message",
+                  agentId: "agent:main:main"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  "你现在啥版本",
+                  ctx,
+                  process.cwd(),
+                  null
+                );
+                const decision = resolved?.decision || {};
+                return {
+                  route: decision.route_decision.route,
+                  policyRouterSource: decision.policy_router.decision_source,
+                  judgeInvoked: decision.policy_router.judge.invoked,
+                  judgeApplied: decision.policy_router.judge.applied,
+                  judgeValidationProblems: decision.policy_router.judge.validation?.problems || [],
+                  routerRequestKind: decision.router_decision_v2.request_kind,
+                  routerScope: decision.router_decision_v2.scope
+                };
+            })()""",
+            env={"OCTOCLAW_POLICY_JUDGE_RESULT_JSON": json.dumps(fixture)},
+        )
+
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["policyRouterSource"], "legacy_planner_until_stateless_judge_live")
+        self.assertTrue(payload["judgeInvoked"])
+        self.assertFalse(payload["judgeApplied"])
+        self.assertIn("confidence_below_threshold", payload["judgeValidationProblems"])
+        self.assertEqual(payload["routerRequestKind"], "surface_query")
+        self.assertEqual(payload["routerScope"], "local_host")
+
     def test_current_version_prompt_prefers_local_surface_lookup(self) -> None:
         payload = run_runtime_helper(
             """(async () => {
@@ -1452,6 +1554,199 @@ Sender (untrusted metadata):
         )
 
         self.assertFalse(payload["shouldSend"])
+
+    def test_register_pending_delivery_writes_delivery_relay_event(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-delivery-pending-") as tmpdir:
+            workspace = Path(tmpdir)
+            payload = run_runtime_helper(
+                """(async () => {
+                    const fs = await import('node:fs/promises');
+                    const ctx = {
+                      sessionKey: "agent:main:slack:direct:u-delivery",
+                      sessionId: "sess-delivery",
+                      trigger: "message",
+                      agentId: "agent:main:main"
+                    };
+                    __octoclawTest.__resetPolicyState?.();
+                    const decision = __octoclawTest.buildDecision("调研三个兼容方案并写一版简短建议");
+                    const now = Date.now();
+                    __octoclawTest.__setPolicyState?.(ctx, {
+                      prompt: "调研三个兼容方案并写一版简短建议",
+                      decision,
+                      createdAt: now,
+                      updatedAt: now,
+                      delegated: true
+                    });
+                    const result = await __octoclawTest.registerPendingDelivery({
+                      decision,
+                      payload: {
+                        route: "spawn_single",
+                        executed: true,
+                        task_id: "task-123",
+                        job: { id: "runner-123" },
+                        materialization: { task_id: "task-123", status: "materialized" }
+                      },
+                      summary: "任务已创建，等待结果回传",
+                      sessionKey: ctx.sessionKey,
+                      stateKey: ctx.sessionKey,
+                      logger: null
+                    });
+                    const relayPath = __octoclawTest.resolveDeliveryRelayPath();
+                    const lines = (await fs.readFile(relayPath, 'utf8')).trim().split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+                    const state = __octoclawTest.resolveToolPolicyContext(ctx, "").state || {};
+                    return {
+                      result,
+                      lastEvent: lines[lines.length - 1],
+                      pendingDeliveryId: state.pendingDeliveryId || "",
+                      pendingDeliveryTaskId: state.pendingDeliveryTaskId || ""
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                },
+            )
+
+        self.assertTrue(payload["result"]["registered"])
+        self.assertEqual(payload["lastEvent"]["event"], "delivery_pending")
+        self.assertEqual(payload["lastEvent"]["state"], "pending_user_visible_final")
+        self.assertEqual(payload["lastEvent"]["taskId"], "task-123")
+        self.assertTrue(payload["pendingDeliveryId"].startswith("delivery-"))
+        self.assertEqual(payload["pendingDeliveryTaskId"], "task-123")
+
+    def test_record_observed_delivery_writes_observed_event(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-delivery-observed-") as tmpdir:
+            workspace = Path(tmpdir)
+            payload = run_runtime_helper(
+                """(async () => {
+                    const fs = await import('node:fs/promises');
+                    const ctx = {
+                      sessionKey: "agent:main:slack:direct:u-delivery-2",
+                      sessionId: "sess-delivery-2",
+                      trigger: "message",
+                      agentId: "agent:main:main"
+                    };
+                    __octoclawTest.__resetPolicyState?.();
+                    const decision = __octoclawTest.buildDecision("调研三个兼容方案并写一版简短建议");
+                    const now = Date.now();
+                    __octoclawTest.__setPolicyState?.(ctx, {
+                      prompt: "调研三个兼容方案并写一版简短建议",
+                      decision,
+                      createdAt: now,
+                      updatedAt: now,
+                      delegated: true
+                    });
+                    await __octoclawTest.registerPendingDelivery({
+                      decision,
+                      payload: {
+                        route: "spawn_single",
+                        executed: true,
+                        task_id: "task-456",
+                        job: { id: "runner-456" }
+                      },
+                      summary: "任务完成，结果如下",
+                      sessionKey: ctx.sessionKey,
+                      stateKey: ctx.sessionKey,
+                      logger: null
+                    });
+                    const stateBefore = __octoclawTest.resolveToolPolicyContext(ctx, "").state || {};
+                    const observed = await __octoclawTest.recordObservedDeliveryFromMessage(
+                      { role: "assistant", content: "任务完成，结果如下：..." },
+                      stateBefore,
+                      ctx.sessionKey,
+                      null
+                    );
+                    const stateAfter = __octoclawTest.resolveToolPolicyContext(ctx, "").state || {};
+                    const relayPath = __octoclawTest.resolveDeliveryRelayPath();
+                    const lines = (await fs.readFile(relayPath, 'utf8')).trim().split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+                    return {
+                      observed,
+                      stateAfter: {
+                        deliveryObserved: Boolean(stateAfter.deliveryObserved),
+                        pendingDeliveryId: stateAfter.pendingDeliveryId || ""
+                      },
+                      lastEvent: lines[lines.length - 1]
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                },
+            )
+
+        self.assertTrue(payload["observed"]["recorded"])
+        self.assertTrue(payload["stateAfter"]["deliveryObserved"])
+        self.assertEqual(payload["lastEvent"]["event"], "delivery_observed")
+        self.assertEqual(payload["lastEvent"]["state"], "observed_assistant_final")
+
+    def test_resolve_policy_reconciles_pending_deliveries_via_relay_script(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-delivery-resolve-") as tmpdir:
+            workspace = Path(tmpdir)
+            payload = run_runtime_helper(
+                """(async () => {
+                    const fs = await import('node:fs/promises');
+                    const ctx = {
+                      sessionKey: "agent:main:slack:direct:u-relay",
+                      sessionId: "sess-relay",
+                      trigger: "message",
+                      agentId: "agent:main:main"
+                    };
+                    __octoclawTest.__resetPolicyState?.();
+                    const now = Date.now();
+                    __octoclawTest.__setPolicyState?.(ctx, {
+                      prompt: "调研三个兼容方案并写一版简短建议",
+                      decision: __octoclawTest.buildDecision("调研三个兼容方案并写一版简短建议"),
+                      createdAt: now,
+                      updatedAt: now,
+                      delegated: true,
+                      pendingDeliveryId: "delivery-r1",
+                      pendingDeliveryTaskId: "task-r1",
+                      pendingDeliveryRunnerJobId: "runner-r1",
+                      deliveryObserved: false
+                    });
+                    await __octoclawTest.resolvePolicyDecisionForContext(
+                      "顺便再给我一句话总结",
+                      ctx,
+                      process.cwd(),
+                      null
+                    );
+                    const relayPath = __octoclawTest.resolveDeliveryRelayPath();
+                    const lines = (await fs.readFile(relayPath, 'utf8')).trim().split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+                    return {
+                      lastEvent: lines[lines.length - 1],
+                      eventNames: lines.map((item) => item.event)
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                    "OCTOCLAW_DELIVERY_RELAY_RESULT_JSON": json.dumps({
+                        "ok": True,
+                        "session_key": "agent:main:slack:direct:u-relay",
+                        "pending_count": 1,
+                        "items": [
+                            {
+                                "deliveryId": "delivery-r1",
+                                "status": "compensated",
+                                "taskId": "task-r1",
+                                "runnerJobId": "runner-r1",
+                                "summary": "任务完成",
+                                "messageId": "m-r1",
+                            }
+                        ],
+                    }),
+                },
+            )
+
+        self.assertIn("delivery_compensated", payload["eventNames"])
+        self.assertEqual(payload["lastEvent"]["event"], "delivery_compensated")
+        self.assertEqual(payload["lastEvent"]["deliveryId"], "delivery-r1")
 
     def test_guard_assistant_message_replaces_undelegated_runner_reply(self) -> None:
         payload = run_runtime_helper(

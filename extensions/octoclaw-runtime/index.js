@@ -14,6 +14,8 @@ import {
   __conversationControlTest,
 } from "./conversation-control.js";
 import { buildDecision as buildPolicyDecision } from "./policy/decide.js";
+import { loadOctoClawConfig } from "./policy/config.js";
+import { invokePolicyJudge } from "./policy/judge.js";
 import { inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -90,6 +92,10 @@ function resolvePythonBin() {
 
 function resolveReplayLogPath() {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-replay.jsonl");
+}
+
+function resolveDeliveryRelayPath() {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "delivery-relay.jsonl");
 }
 
 function resolveTaskStatePath() {
@@ -1378,6 +1384,166 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
   }
 }
 
+async function recordDeliveryRelayEvent(eventType, payload = {}, logger) {
+  try {
+    await appendJsonl(resolveDeliveryRelayPath(), {
+      schema_version: "octoclaw.delivery_relay.event/v1",
+      event: eventType,
+      at: new Date().toISOString(),
+      ...payload,
+    });
+  } catch (err) {
+    logger?.warn?.(`octoclaw delivery relay log failed: ${String(err)}`);
+  }
+}
+
+function deliveryIdFor(decision = {}, payload = {}) {
+  const correlation = decision?.correlation && typeof decision.correlation === "object" ? decision.correlation : {};
+  return stableId("delivery", [
+    correlation.turn_id,
+    correlation.decision_id,
+    payload?.task_id,
+    payload?.materialization?.task_id,
+    payload?.job?.id,
+    payload?.route,
+  ]);
+}
+
+function deliveryRelayEnabled(decision = {}) {
+  return Boolean(runtimeSwitches(decision).delivery_relay_enabled);
+}
+
+async function registerPendingDelivery({
+  decision = {},
+  payload = {},
+  summary = "",
+  sessionKey = "",
+  stateKey = "",
+  logger = null,
+} = {}) {
+  if (!deliveryRelayEnabled(decision)) return { registered: false, reason: "disabled" };
+  const deliveryId = deliveryIdFor(decision, payload);
+  const taskId = String(payload?.task_id || payload?.materialization?.task_id || "").trim();
+  const runnerJobId = String(payload?.job?.id || payload?.materialization?.runner_job_id || "").trim();
+  const replaySessionKey = String(sessionKey || stateKey || decision?.request?.metadata?.session_key || "").trim();
+  const event = {
+    deliveryId,
+    sessionKey: replaySessionKey,
+    turnId: String(decision?.correlation?.turn_id || ""),
+    decisionId: String(decision?.correlation?.decision_id || ""),
+    route: String(decision?.route_decision?.route || payload?.route || ""),
+    requestKind: String(decision?.router_decision_v2?.request_kind || ""),
+    taskId,
+    runnerJobId,
+    state: "pending_user_visible_final",
+    executed: Boolean(payload?.executed),
+    materialization: payload?.materialization && typeof payload.materialization === "object" ? payload.materialization : {},
+    summary: truncateText(summary, 1000),
+  };
+  await recordDeliveryRelayEvent("delivery_pending", event, logger);
+  if (stateKey) {
+    updatePolicyState(stateKey, (current) => ({
+      ...current,
+      pendingDeliveryId: deliveryId,
+      pendingDeliverySummary: truncateText(summary, 1000),
+      pendingDeliveryTaskId: taskId,
+      pendingDeliveryRunnerJobId: runnerJobId,
+      deliveryObserved: false,
+    }));
+  }
+  return { registered: true, deliveryId };
+}
+
+async function reconcilePendingDeliveriesForSession(sessionKey = "", cwd = process.cwd(), logger = null) {
+  const normalizedSessionKey = String(sessionKey || "").trim();
+  if (!normalizedSessionKey) {
+    return { ok: true, pending_count: 0, items: [], skipped: true, reason: "missing_session_key" };
+  }
+  try {
+    return await runJsonScript(
+      "delivery_relay_reconcile.py",
+      [
+        "--relay-path",
+        resolveDeliveryRelayPath(),
+        "--task-state",
+        resolveTaskStatePath(),
+        "--session-key",
+        normalizedSessionKey,
+      ],
+      cwd,
+      { timeoutMs: 4000 },
+    );
+  } catch (err) {
+    logger?.warn?.(`octoclaw delivery reconcile failed: ${String(err)}`);
+    return { ok: false, pending_count: 0, items: [], error: String(err) };
+  }
+}
+
+async function recordDeliveryReconcileResults(result = {}, logger = null) {
+  const items = Array.isArray(result?.items) ? result.items : [];
+  for (const item of items) {
+    const status = String(item?.status || "").trim();
+    const deliveryId = String(item?.deliveryId || "").trim();
+    if (!deliveryId || !status) continue;
+    if (status === "compensated") {
+      await recordDeliveryRelayEvent("delivery_compensated", {
+        deliveryId,
+        sessionKey: String(result?.session_key || ""),
+        taskId: String(item?.taskId || ""),
+        runnerJobId: String(item?.runnerJobId || ""),
+        state: "completion_relay_sent",
+        messageId: String(item?.messageId || ""),
+        summary: truncateText(item?.summary || "", 1000),
+      }, logger);
+    } else if (status === "already_delivered") {
+      await recordDeliveryRelayEvent("delivery_reconciled_delivered", {
+        deliveryId,
+        sessionKey: String(result?.session_key || ""),
+        taskId: String(item?.taskId || ""),
+        runnerJobId: String(item?.runnerJobId || ""),
+        state: "already_delivered",
+        summary: truncateText(item?.summary || "", 1000),
+      }, logger);
+    } else if (status === "send_failed") {
+      await recordDeliveryRelayEvent("delivery_failed", {
+        deliveryId,
+        sessionKey: String(result?.session_key || ""),
+        taskId: String(item?.taskId || ""),
+        runnerJobId: String(item?.runnerJobId || ""),
+        state: "completion_relay_failed",
+        error: String(item?.error || ""),
+      }, logger);
+    }
+  }
+}
+
+async function recordObservedDeliveryFromMessage(message = {}, state = {}, stateKey = "", logger = null) {
+  const deliveryId = String(state?.pendingDeliveryId || "").trim();
+  if (!deliveryId) return { recorded: false, reason: "no_pending_delivery" };
+  if (state?.deliveryObserved) return { recorded: false, reason: "already_observed", deliveryId };
+  const text = assistantMessageText(message);
+  if (!text) return { recorded: false, reason: "empty_message" };
+  await recordDeliveryRelayEvent(
+    "delivery_observed",
+    {
+      deliveryId,
+      sessionKey: stateKey,
+      route: String(state?.decision?.route_decision?.route || ""),
+      taskId: String(state?.pendingDeliveryTaskId || ""),
+      runnerJobId: String(state?.pendingDeliveryRunnerJobId || ""),
+      state: "observed_assistant_final",
+      messagePreview: truncateText(text, 1000),
+    },
+    logger,
+  );
+  updatePolicyState(stateKey, (current) => ({
+    ...current,
+    deliveryObserved: true,
+    deliveredAt: Date.now(),
+  }));
+  return { recorded: true, deliveryId };
+}
+
 function isManagedAgentContext(ctx = {}) {
   if (String(process.env.OCTOCLAW_DISABLE_RUNTIME_POLICY || "").trim() === "1") {
     return false;
@@ -1475,6 +1641,30 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   prunePolicyState();
   const stateKey = resolvePolicyStateKey(ctx);
   const existing = getPolicyStateForContext(ctx).state;
+  const runtimeCfg = loadOctoClawConfig().runtime_policy || {};
+  const deliveryRelayLive = Boolean(runtimeCfg?.features && typeof runtimeCfg.features === "object" && !Array.isArray(runtimeCfg.features)
+    ? ("delivery_relay_enabled" in runtimeCfg.features ? runtimeCfg.features.delivery_relay_enabled : true)
+    : true);
+  if (deliveryRelayLive) {
+    const reconciled = await reconcilePendingDeliveriesForSession(stateKey || String(ctx?.sessionKey || "").trim(), cwd, logger);
+    await recordDeliveryReconcileResults(reconciled, logger);
+    const compensatedIds = new Set(
+      (Array.isArray(reconciled?.items) ? reconciled.items : [])
+        .filter((item) => ["compensated", "already_delivered"].includes(String(item?.status || "").trim()))
+        .map((item) => String(item?.deliveryId || "").trim())
+        .filter(Boolean),
+    );
+    if (compensatedIds.size > 0 && stateKey) {
+      updatePolicyState(stateKey, (current) => {
+        if (!current || !compensatedIds.has(String(current.pendingDeliveryId || "").trim())) return current;
+        return {
+          ...current,
+          deliveryObserved: true,
+          deliveredAt: Date.now(),
+        };
+      });
+    }
+  }
   if (!options.force && existing?.decision && promptsEquivalent(existing?.prompt || "", prompt)) {
     existing.updatedAt = Date.now();
     setPolicyStateForContext(ctx, existing);
@@ -1509,6 +1699,17 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   const conversationControl = metadata?.conversation_control || buildConversationControlHintsFromIntent(intentPacket);
   if (conversationControl?.available) {
     metadata.conversation_control = conversationControl;
+  }
+  const judgeResult = await invokePolicyJudge({
+    task: prompt,
+    metadata,
+    intentPacket,
+    runtimeCfg,
+    cwd,
+    logger,
+  });
+  if (judgeResult && typeof judgeResult === "object" && Object.keys(judgeResult).length > 0) {
+    metadata.policy_judge_result = judgeResult;
   }
   try {
     const decision = buildDecision(prompt, { metadata });
@@ -1565,6 +1766,10 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
         routerDecisionValid: Boolean(decision?.router_decision_v2?.validation?.passed),
         policyJudgeSelected: String(decision?.policy_router?.judge?.selected || ""),
         policyJudgeInvoked: Boolean(decision?.policy_router?.judge?.invoked),
+        policyJudgeApplied: Boolean(decision?.policy_router?.judge?.applied),
+        policyJudgeInvocationState: String(decision?.policy_router?.judge?.invocation_state || ""),
+        policyJudgeConfidence: Number(decision?.policy_router?.judge?.confidence || 0),
+        policyJudgeValidationProblems: Array.isArray(decision?.policy_router?.judge?.validation?.problems) ? decision.policy_router.judge.validation.problems : [],
         policyJudgePromptVersion: String(decision?.policy_router?.judge?.prompt_version || ""),
         policyJudgeSchemaVersion: String(decision?.policy_router?.judge?.schema_version || ""),
         decisionCacheState: String(decision?.policy_router?.cache?.state || ""),
@@ -2086,19 +2291,39 @@ const plugin = {
       pi.logger,
       state?.decision || null,
     );
+    if (String(state?.pendingDeliveryId || "").trim() && !state?.deliveryObserved) {
+      await recordDeliveryRelayEvent(
+        "delivery_agent_end_pending",
+        {
+          deliveryId: String(state?.pendingDeliveryId || ""),
+          sessionKey: stateKey,
+          route: String(state?.decision?.route_decision?.route || ""),
+          taskId: String(state?.pendingDeliveryTaskId || ""),
+          runnerJobId: String(state?.pendingDeliveryRunnerJobId || ""),
+          state: "pending_at_agent_end",
+        },
+        pi.logger,
+      );
+    }
     if (shouldRetainPolicyStateOnAgentEnd(state)) {
       return;
     }
     clearPolicyStateForContext(ctx);
   }, 50);
 
-  registerLifecycleHook("before_message_write", (event, ctx) => {
-    const { state } = getPolicyStateForContext({
+  registerLifecycleHook("before_message_write", async (event, ctx) => {
+    const { key: stateKey, state } = getPolicyStateForContext({
       sessionKey: String(ctx?.sessionKey || "").trim(),
       agentId: String(ctx?.agentId || "").trim(),
     });
     if (!state) return;
     const guarded = guardAssistantMessageForPolicyState(event?.message || {}, state);
+    const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : (event?.message || {});
+    try {
+      await recordObservedDeliveryFromMessage(visibleMessage, state, stateKey, pi.logger);
+    } catch (err) {
+      pi.logger?.warn?.(`octoclaw delivery observe failed: ${String(err)}`);
+    }
     if (guarded.mode === "replace" && guarded.message) {
       return { message: guarded.message };
     }
@@ -2341,6 +2566,14 @@ const plugin = {
           `OctoClaw dispatch: ${payload.route}${payload.executed ? " (executed)" : " (planned)"}`,
           ctx?.cwd || process.cwd(),
         );
+        const deliveryRegistration = await registerPendingDelivery({
+          decision: authoritativeDecision,
+          payload,
+          summary,
+          sessionKey: replaySessionKey,
+          stateKey,
+          logger: pi.logger,
+        });
         const sessionBoundary = detectSessionBoundary(ctx);
         await recordPolicyReplay(
           "dispatch_called",
@@ -2362,6 +2595,8 @@ const plugin = {
             preDispatchAckReason: String(ackResult?.reason || ""),
             preDispatchAckFallbackUsed: Boolean(ackResult?.fallback_used),
             preDispatchAckChannelReason: String(ackResult?.channel_attempt?.reason || ""),
+            deliveryId: String(deliveryRegistration?.deliveryId || ""),
+            deliveryPendingRegistered: Boolean(deliveryRegistration?.registered),
             taskId: String(payload?.task_id || payload?.materialization?.task_id || ""),
             runnerJobId: String(payload?.job?.id || payload?.materialization?.runner_job_id || ""),
             routeRecommendationConflict: Boolean(authoritativeDecision?.route_recommendation?.arbitration?.required),
@@ -2610,6 +2845,7 @@ export const __octoclawTest = {
   resolvePythonBin,
   resolvePolicyStateLedgerPath,
   resolveReplayLogPath,
+  resolveDeliveryRelayPath,
   resolveTaskStatePath,
   stripAgentSessionPrefix,
   parseSessionRoute,
@@ -2640,6 +2876,10 @@ export const __octoclawTest = {
   preDispatchAckText,
   shouldSendPreDispatchAck,
   maybeSendEagerPreDispatchAck,
+  registerPendingDelivery,
+  reconcilePendingDeliveriesForSession,
+  recordDeliveryReconcileResults,
+  recordObservedDeliveryFromMessage,
   scheduleEagerPreDispatchAck,
   latencyAckText,
   shouldSendLatencyAck,

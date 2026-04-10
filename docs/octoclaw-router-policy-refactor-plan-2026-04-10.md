@@ -81,6 +81,8 @@ ACK timer
 - `work_request` fixtures 必须覆盖 `current_workspace` 与 `task_context`，避免执行型请求因没有本机/远程对象被误判为 `unknown`。
 - ACK 验收必须检查 prompt-build hot path：eager ACK 只能异步投递，且 channel delivery 必须有短超时，不能把主回复卡在 Slack/Python 投递链路上。
 - provenance 验收必须检查“怎么查的”类追问：如果 execution facts 没有记录 direct tool，就不能让回复声称用了 `web_fetch`、`exec`、`openclaw` 等工具。
+- judge 验收必须覆盖三类 adapter：fixture、command、openai-compatible；其中任一 adapter 失败、超时、脏 JSON、低置信度都必须稳定回退 legacy planner。
+- delivery relay 验收必须覆盖 `delivery_pending -> delivery_observed` 正常链路，以及 `delivery_agent_end_pending` 悬挂链路。
 
 ### R1：ACK timer 独立化
 

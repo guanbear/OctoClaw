@@ -177,6 +177,7 @@ const DEFAULT_RUNTIME_POLICY = {
         provider: "stateless_ephemeral_judge",
         model: "inherit_main_grade",
         cost_band: "main_grade",
+        command: "",
         tools: "none",
       },
       cheap_model: {
@@ -185,6 +186,8 @@ const DEFAULT_RUNTIME_POLICY = {
         model: "",
         cost_band: "low",
         base_url: "",
+        api_key_env: "OCTOCLAW_POLICY_JUDGE_API_KEY",
+        command: "",
         tools: "none",
       },
       local_model: {
@@ -193,6 +196,7 @@ const DEFAULT_RUNTIME_POLICY = {
         model: "",
         cost_band: "local",
         base_url: "http://127.0.0.1:11434/v1",
+        command: "",
         tools: "none",
       },
     },

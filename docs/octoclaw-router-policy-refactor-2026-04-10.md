@@ -485,6 +485,40 @@ UX deadline：
 ### 4.5 ACK hot path
 
 pre-dispatch ACK 不能阻塞主回复链路。prompt build 阶段只负责异步投递 eager ACK，并给 channel delivery 设置短超时；dispatch 工具阶段仍会执行 `ensurePreDispatchAck`，作为投递补偿与 progress fallback。这样 ACK 失败不会拖慢主 agent，同时执行链路仍保留可观测记录。
+
+### 4.6 stateless judge adapter
+
+policy judge 不是把模型调用硬塞进 `buildDecision()`，而是走独立 adapter：
+
+- fixture adapter：用于 replay / golden / regression
+- command adapter：用于接本地脚本或便宜模型入口
+- openai-compatible adapter：用于接本地模型服务或兼容网关
+
+judge 结果只有在以下条件同时满足时才能覆盖 legacy planner：
+
+- schema 正常
+- `route/scope/evidence_required` 通过 validator
+- confidence 高于阈值
+- 没有 `forceRoute`
+- 没有 sticky lane 抢占
+
+否则必须显式回退到 legacy planner，并把 `judgeValidationProblems` 写进 replay。
+
+### 4.7 delivery relay
+
+delivery relay 的目标不是“帮用户回答”，而是保证系统知道：
+
+- 哪个 delegated reply 已经进入待通知状态
+- 哪条 assistant final 已经被用户可见地写出
+- 哪些任务在 agent 结束时仍处于“待用户可见 final”
+
+当前最小事件集合：
+
+- `delivery_pending`
+- `delivery_observed`
+- `delivery_agent_end_pending`
+
+这三类事件写入独立 relay ledger，后续 patrol/reconciler 只消费 ledger，不再从 Slack 现象反推。
 - `web_lookup`
 - `taskflow_state`
 - `artifact_read`
