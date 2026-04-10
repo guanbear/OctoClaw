@@ -153,6 +153,8 @@ python3 lib/slack_e2e_acceptance.py --preset smoke
 - 脚本会优先从 `~/.openclaw/agents/main/sessions/sessions.json` 选择最近可用的 Slack session
 - 再通过 gateway `agent` 调用注入 prompt
 - 然后直接用 Slack Web API 拉回 thread/history，统计 ACK 与 final
+- 如果报告里出现 `delivery_mode=embedded_fallback`，则 `ack_verifiable=false` 是预期行为
+- 这说明当前是 CLI fallback 黑盒验收，只稳定验证 Slack 最终回流与 follow-up/provenance；真实“快 ACK”仍要靠用户入站或 gateway 直连链路验收
 
 ---
 

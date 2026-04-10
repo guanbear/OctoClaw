@@ -21,6 +21,15 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
 
 
 DEFAULT_OPENCLAW_CONFIG = os.path.expanduser("~/.openclaw/openclaw.json")
+COMMON_BIN_DIRS = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    os.path.expanduser("~/.npm-global/bin"),
+    os.path.expanduser("~/.local/bin"),
+    os.path.expanduser("~/.bun/bin"),
+    os.path.expanduser("~/.volta/bin"),
+    os.path.expanduser("~/.nvm/versions/node/current/bin"),
+]
 
 SMOKE_SCENARIOS: list[dict[str, Any]] = [
     {
@@ -48,6 +57,15 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def build_harness_prompt(scenario_name: str, prompt: str) -> str:
+    return (
+        f"[codex-slack-e2e scenario={_text(scenario_name) or 'unknown'}] "
+        "这是自动化验收消息。忽略之前未完成任务、历史 runner/playbook 失败和旧执行记忆；"
+        "只基于当前这条消息处理，并正常回复到 Slack。\n\n"
+        f"当前用户问题：{_text(prompt)}"
+    ).strip()
+
+
 def load_json(path: str) -> dict[str, Any]:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -56,7 +74,32 @@ def load_json(path: str) -> dict[str, Any]:
 
 
 def has_openclaw_cli() -> bool:
-    return shutil.which("openclaw") is not None
+    return bool(locate_openclaw_cli())
+
+
+def locate_openclaw_cli() -> str:
+    explicit = _text(os.environ.get("OPENCLAW_BIN"))
+    if explicit:
+        return explicit
+    resolved = shutil.which("openclaw")
+    if resolved:
+        return resolved
+    for candidate in (
+        "/opt/homebrew/bin/openclaw",
+        "/usr/local/bin/openclaw",
+        os.path.expanduser("~/.npm-global/bin/openclaw"),
+    ):
+        if os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def build_exec_env() -> dict[str, str]:
+    env = dict(os.environ)
+    path_parts = [_text(env.get("PATH"))]
+    path_parts.extend(COMMON_BIN_DIRS)
+    env["PATH"] = ":".join(part for part in path_parts if part)
+    return env
 
 
 def load_slack_config(config_path: str = DEFAULT_OPENCLAW_CONFIG) -> dict[str, Any]:
@@ -166,13 +209,14 @@ def launch_agent_turn(
     *,
     timeout_s: int = 180,
 ) -> dict[str, Any]:
-    if not has_openclaw_cli():
+    openclaw_bin = locate_openclaw_cli()
+    if not openclaw_bin:
         return {"ok": False, "error": "openclaw cli unavailable"}
     session_id = _text(session.get("session_id"))
     if not session_id:
         return {"ok": False, "error": "missing session_id"}
     cmd = [
-        "openclaw",
+        openclaw_bin,
         "agent",
         "--session-id",
         session_id,
@@ -187,6 +231,7 @@ def launch_agent_turn(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=build_exec_env(),
         )
     except Exception as exc:
         return {"ok": False, "error": str(exc), "command": cmd}
@@ -234,6 +279,48 @@ def fetch_slack_messages(
     return filtered
 
 
+def fetch_observed_messages(
+    token: str,
+    *,
+    channel_id: str,
+    oldest_root: str = "",
+    thread_id: str = "",
+    oldest_thread: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    observed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    root_messages = fetch_slack_messages(
+        token,
+        channel_id=channel_id,
+        thread_id="",
+        oldest=oldest_root,
+        limit=limit,
+    )
+    for message in root_messages:
+        ts = _text(message.get("ts"))
+        if not ts or ts in seen:
+            continue
+        seen.add(ts)
+        observed.append({**message, "_delivery_scope": "root"})
+    if thread_id:
+        thread_messages = fetch_slack_messages(
+            token,
+            channel_id=channel_id,
+            thread_id=thread_id,
+            oldest=oldest_thread,
+            limit=limit,
+        )
+        for message in thread_messages:
+            ts = _text(message.get("ts"))
+            if not ts or ts in seen:
+                continue
+            seen.add(ts)
+            observed.append({**message, "_delivery_scope": "thread"})
+    observed.sort(key=lambda item: float(_text(item.get("ts")) or 0.0))
+    return observed
+
+
 def message_text(message: dict[str, Any]) -> str:
     text = _text(message.get("text"))
     if text:
@@ -276,6 +363,15 @@ def evaluate_messages(messages: list[dict[str, Any]], *, started_at: float, ack_
     return summary
 
 
+def detect_delivery_mode(process_info: dict[str, Any]) -> str:
+    stderr = _text(process_info.get("stderr"))
+    if "Gateway agent failed; falling back to embedded" in stderr:
+        return "embedded_fallback"
+    if process_info.get("returncode") == 0:
+        return "gateway_or_session_deliver"
+    return "unknown"
+
+
 def run_scenario(
     session: dict[str, Any],
     scenario: dict[str, Any],
@@ -285,6 +381,8 @@ def run_scenario(
     quiet_window_s: float = 4.0,
 ) -> dict[str, Any]:
     prompt = _text(scenario.get("prompt"))
+    scenario_name = _text(scenario.get("name"))
+    effective_prompt = build_harness_prompt(scenario_name, prompt)
     ack_deadline_ms = int(scenario.get("ack_deadline_ms", 1500) or 1500)
     final_timeout_s = int(scenario.get("final_timeout_s", 60) or 60)
     channel_id = resolve_channel_id_for_target(slack_token, session.get("target", ""), session.get("native_channel_id", ""))
@@ -294,18 +392,26 @@ def run_scenario(
             "ok": False,
             "error": "unable to resolve slack channel id",
         }
-    baseline = fetch_slack_messages(
+    thread_id = _text(session.get("thread_id"))
+    baseline_root = fetch_slack_messages(
         slack_token,
         channel_id=channel_id,
-        thread_id=_text(session.get("thread_id")),
+        thread_id="",
         limit=3,
     )
-    oldest = _text(baseline[-1].get("ts")) if baseline else ""
+    baseline_thread = fetch_slack_messages(
+        slack_token,
+        channel_id=channel_id,
+        thread_id=thread_id,
+        limit=3,
+    ) if thread_id else []
+    oldest_root = _text(baseline_root[-1].get("ts")) if baseline_root else ""
+    oldest_thread = _text(baseline_thread[-1].get("ts")) if baseline_thread else ""
     started_at = time.time()
-    launched = launch_agent_turn(session, prompt)
+    launched = launch_agent_turn(session, effective_prompt)
     if not bool(launched.get("ok")):
         return {
-            "name": _text(scenario.get("name")),
+            "name": scenario_name,
             "ok": False,
             "error": _text(launched.get("error")) or "openclaw agent launch failed",
             "send_result": launched,
@@ -315,11 +421,12 @@ def run_scenario(
     messages: list[dict[str, Any]] = []
     last_new_at = started_at
     while time.time() <= deadline:
-        current = fetch_slack_messages(
+        current = fetch_observed_messages(
             slack_token,
             channel_id=channel_id,
-            thread_id=_text(session.get("thread_id")),
-            oldest=oldest,
+            thread_id=thread_id,
+            oldest_root=oldest_root,
+            oldest_thread=oldest_thread,
             limit=40,
         )
         if current:
@@ -342,7 +449,9 @@ def run_scenario(
         process_info["stderr"] = _text(stderr)
     except subprocess.TimeoutExpired:
         process_info["timed_out"] = True
+    delivery_mode = detect_delivery_mode(process_info)
     evaluation = evaluate_messages(messages, started_at=started_at, ack_deadline_ms=ack_deadline_ms, final_timeout_s=final_timeout_s)
+    evaluation["ack_verifiable"] = delivery_mode != "embedded_fallback"
     transcript = [
         {
             "ts": _text(item.get("ts")),
@@ -350,18 +459,22 @@ def run_scenario(
             "user": _text(item.get("user")),
             "bot_id": _text(item.get("bot_id")),
             "subtype": _text(item.get("subtype")),
+            "delivery_scope": _text(item.get("_delivery_scope")),
         }
         for item in messages
     ]
-    ok = bool(evaluation["ack_seen"]) and bool(evaluation["final_seen"]) and bool(transcript)
+    ok = bool(evaluation["final_seen"]) and bool(transcript) and (not evaluation["ack_verifiable"] or bool(evaluation["ack_seen"]))
     return {
-        "name": _text(scenario.get("name")),
+        "name": scenario_name,
         "ok": ok,
         "prompt": prompt,
+        "effective_prompt": effective_prompt,
         "session_key": _text(session.get("session_key")),
         "target": _text(session.get("target")),
         "channel_id": channel_id,
-        "thread_id": _text(session.get("thread_id")),
+        "thread_id": thread_id,
+        "delivery_scopes": sorted({item["delivery_scope"] for item in transcript if _text(item.get("delivery_scope"))}),
+        "delivery_mode": delivery_mode,
         "send_result": process_info,
         "evaluation": evaluation,
         "messages": transcript,
