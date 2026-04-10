@@ -214,6 +214,9 @@ const DEFAULT_RUNTIME_POLICY = {
     worker_unhealthy_after_failures: 2,
     busy_strategy: "queue_or_progress",
   },
+  delivery_relay: {
+    retry_cooldown_seconds: 30,
+  },
   features: {
     policy_judge_live: true,
     cheap_judge_live: false,

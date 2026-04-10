@@ -83,6 +83,8 @@ ACK timer
 - provenance 验收必须检查“怎么查的”类追问：如果 execution facts 没有记录 direct tool，就不能让回复声称用了 `web_fetch`、`exec`、`openclaw` 等工具。
 - judge 验收必须覆盖三类 adapter：fixture、command、openai-compatible；其中任一 adapter 失败、超时、脏 JSON、低置信度都必须稳定回退 legacy planner。
 - delivery relay 验收必须覆盖 `delivery_pending -> delivery_observed` 正常链路，以及 `delivery_agent_end_pending` 悬挂链路。
+- completion relay 验收必须覆盖真实 `task-state-update`/notify 链对 relay ledger 的写回，至少包含 `delivery_compensated` 与 `delivery_failed`。
+- 最近一次 completion relay 失败后，reconciler 必须能返回 `retry_deferred`，避免每个新 turn 都立刻重试一次。
 
 ### R1：ACK timer 独立化
 

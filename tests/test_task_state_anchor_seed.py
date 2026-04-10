@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -225,6 +226,54 @@ class TaskStateAnchorSeedTests(unittest.TestCase):
             self.assertEqual(mock_send.call_args[1]["reply_to_message_id"], "anchor-1")
             saved = json.loads(notify_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["task_completion_messages"]["task-3"]["message_id"], "relay-1")
+
+    def test_sync_task_completion_relay_records_delivery_relay_result(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-completion-relay-ledger-") as tmpdir:
+            notify_path = Path(tmpdir) / "patrol-notify-state.json"
+            relay_path = Path(tmpdir) / "tmp" / "octopus" / "delivery-relay.jsonl"
+            relay_path.parent.mkdir(parents=True, exist_ok=True)
+            relay_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "octoclaw.delivery_relay.event/v1",
+                        "event": "delivery_pending",
+                        "deliveryId": "delivery-task-4",
+                        "sessionKey": "slack:channel:C123",
+                        "taskId": "task-4",
+                        "runnerJobId": "runner-4",
+                        "at": "2026-04-10T01:00:00Z",
+                    }
+                ) + "\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"WORKSPACE": tmpdir}, clear=False),
+                patch.object(task_state_update, "PATROL_NOTIFY_STATE_FILE", str(notify_path)),
+                patch.object(
+                    task_state_update,
+                    "send_task_completion_notification",
+                    return_value={"ok": True, "backend": "slack", "messageId": "relay-4", "action": "send"},
+                ),
+            ):
+                result = task_state_update._sync_task_completion_relay(
+                    {
+                        "id": "task-4",
+                        "session_key": "slack:channel:C123",
+                        "status": "done",
+                        "route": "spawn_single",
+                        "handoff_state": "user_safe_ready",
+                        "user_safe_summary": "完成总结。",
+                        "runner_job_id": "runner-4",
+                    },
+                    "running",
+                    force=True,
+                )
+
+            self.assertTrue(result["ok"])
+            lines = [json.loads(line) for line in relay_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(lines[-1]["event"], "delivery_compensated")
+            self.assertEqual(lines[-1]["deliveryId"], "delivery-task-4")
+            self.assertEqual(lines[-1]["messageId"], "relay-4")
 
 
 if __name__ == "__main__":

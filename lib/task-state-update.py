@@ -19,6 +19,7 @@ if SCRIPT_DIR not in sys.path:
 WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 
 from clawteam_bridge import sync_task
+from delivery_relay import record_task_completion_delivery_result
 from notifier import send_task_completion_notification, send_task_notification
 from runtime_coordination import sync_runtime_surfaces
 from runtime_task_record import (
@@ -824,6 +825,10 @@ def _sync_task_completion_relay(record: dict, previous_status: str, *, force: bo
     notify_state["task_completion_messages"] = completion_messages
     notify_state["updated_at"] = now_iso()
     save_notify_state(notify_state)
+    try:
+        record_task_completion_delivery_result(record, result, source="task_state_update")
+    except Exception:
+        pass
     return result
 
 

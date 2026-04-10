@@ -1413,6 +1413,16 @@ function deliveryRelayEnabled(decision = {}) {
   return Boolean(runtimeSwitches(decision).delivery_relay_enabled);
 }
 
+function resolveDeliveryRelaySettings(runtimeCfg = {}) {
+  const relayCfg = runtimeCfg && typeof runtimeCfg === "object" && !Array.isArray(runtimeCfg)
+    && runtimeCfg.delivery_relay && typeof runtimeCfg.delivery_relay === "object" && !Array.isArray(runtimeCfg.delivery_relay)
+    ? runtimeCfg.delivery_relay
+    : {};
+  return {
+    retry_cooldown_seconds: Math.max(0, Number(relayCfg.retry_cooldown_seconds || 30)),
+  };
+}
+
 async function registerPendingDelivery({
   decision = {},
   payload = {},
@@ -1454,11 +1464,12 @@ async function registerPendingDelivery({
   return { registered: true, deliveryId };
 }
 
-async function reconcilePendingDeliveriesForSession(sessionKey = "", cwd = process.cwd(), logger = null) {
+async function reconcilePendingDeliveriesForSession(sessionKey = "", cwd = process.cwd(), logger = null, runtimeCfg = {}) {
   const normalizedSessionKey = String(sessionKey || "").trim();
   if (!normalizedSessionKey) {
     return { ok: true, pending_count: 0, items: [], skipped: true, reason: "missing_session_key" };
   }
+  const relaySettings = resolveDeliveryRelaySettings(runtimeCfg);
   try {
     return await runJsonScript(
       "delivery_relay_reconcile.py",
@@ -1469,6 +1480,8 @@ async function reconcilePendingDeliveriesForSession(sessionKey = "", cwd = proce
         resolveTaskStatePath(),
         "--session-key",
         normalizedSessionKey,
+        "--retry-cooldown-seconds",
+        String(relaySettings.retry_cooldown_seconds),
       ],
       cwd,
       { timeoutMs: 4000 },
@@ -1512,6 +1525,16 @@ async function recordDeliveryReconcileResults(result = {}, logger = null) {
         runnerJobId: String(item?.runnerJobId || ""),
         state: "completion_relay_failed",
         error: String(item?.error || ""),
+      }, logger);
+    } else if (status === "retry_deferred") {
+      await recordDeliveryRelayEvent("delivery_retry_deferred", {
+        deliveryId,
+        sessionKey: String(result?.session_key || ""),
+        taskId: String(item?.taskId || ""),
+        runnerJobId: String(item?.runnerJobId || ""),
+        state: "completion_relay_retry_deferred",
+        failedAttempts: Number(item?.failedAttempts || 0),
+        retryAfter: String(item?.retryAfter || ""),
       }, logger);
     }
   }
@@ -1646,7 +1669,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
     ? ("delivery_relay_enabled" in runtimeCfg.features ? runtimeCfg.features.delivery_relay_enabled : true)
     : true);
   if (deliveryRelayLive) {
-    const reconciled = await reconcilePendingDeliveriesForSession(stateKey || String(ctx?.sessionKey || "").trim(), cwd, logger);
+    const reconciled = await reconcilePendingDeliveriesForSession(stateKey || String(ctx?.sessionKey || "").trim(), cwd, logger, runtimeCfg);
     await recordDeliveryReconcileResults(reconciled, logger);
     const compensatedIds = new Set(
       (Array.isArray(reconciled?.items) ? reconciled.items : [])

@@ -6,45 +6,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 try:
+    from delivery_relay import load_delivery_events, unresolved_pending_deliveries
     from notifier import send_task_completion_notification
     from runtime_task_record import task_state_model
 except ModuleNotFoundError:  # pragma: no cover
+    from lib.delivery_relay import load_delivery_events, unresolved_pending_deliveries
     from lib.notifier import send_task_completion_notification
     from lib.runtime_task_record import task_state_model
 
 
-TERMINAL_RELAY_EVENTS = {
-    "delivery_observed",
-    "delivery_compensated",
-    "delivery_reconciled_delivered",
-}
-
-
 def _text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def load_jsonl(pathname: str) -> list[dict[str, Any]]:
-    path = Path(pathname)
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            rows.append(payload)
-    return rows
-
 
 def load_tasks(pathname: str) -> list[dict[str, Any]]:
     path = Path(pathname)
@@ -58,28 +35,19 @@ def load_tasks(pathname: str) -> list[dict[str, Any]]:
     return [item for item in tasks if isinstance(item, dict)]
 
 
-def unresolved_pending_deliveries(
-    events: list[dict[str, Any]],
-    *,
-    session_key: str = "",
-    delivery_id: str = "",
-) -> list[dict[str, Any]]:
-    active: dict[str, dict[str, Any]] = {}
-    for event in events:
-        event_name = _text(event.get("event"))
-        current_id = _text(event.get("deliveryId"))
-        if not current_id:
-            continue
-        if delivery_id and current_id != delivery_id:
-            continue
-        if session_key and _text(event.get("sessionKey")) != session_key:
-            continue
-        if event_name == "delivery_pending":
-            active[current_id] = dict(event)
-            continue
-        if event_name in TERMINAL_RELAY_EVENTS:
-            active.pop(current_id, None)
-    return sorted(active.values(), key=lambda item: _text(item.get("at")))
+def _parse_iso(value: Any) -> datetime | None:
+    text = _text(value)
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _task_runner_job_id(task: dict[str, Any]) -> str:
@@ -121,8 +89,12 @@ def reconcile_pending_delivery(
     *,
     tasks: list[dict[str, Any]],
     backend: str = "auto",
+    retry_cooldown_seconds: int = 0,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     delivery_id = _text(pending.get("deliveryId"))
+    failed_attempts = int(pending.get("failedAttempts", 0) or 0)
+    last_failed_at = _text(pending.get("lastFailedAt"))
     task = find_task_for_delivery(tasks, pending)
     if not task:
       return {
@@ -130,6 +102,7 @@ def reconcile_pending_delivery(
           "status": "task_missing",
           "taskId": _text(pending.get("taskId")),
           "runnerJobId": _text(pending.get("runnerJobId")),
+          "failedAttempts": failed_attempts,
       }
 
     state = task_state_model(task)
@@ -144,6 +117,7 @@ def reconcile_pending_delivery(
         "lifecycleState": lifecycle_state,
         "outcomeState": outcome_state,
         "summary": _text(state.get("user_safe_summary")) or _text(task.get("summary")),
+        "failedAttempts": failed_attempts,
     }
     if handoff_state == "delivered":
         result["status"] = "already_delivered"
@@ -151,6 +125,16 @@ def reconcile_pending_delivery(
     if handoff_state != "user_safe_ready":
         result["status"] = "task_not_ready"
         return result
+
+    if retry_cooldown_seconds > 0 and last_failed_at:
+        failed_at = _parse_iso(last_failed_at)
+        current_time = now or datetime.now(timezone.utc)
+        if failed_at and current_time < failed_at + timedelta(seconds=retry_cooldown_seconds):
+            retry_after = failed_at + timedelta(seconds=retry_cooldown_seconds)
+            result["status"] = "retry_deferred"
+            result["retryAfter"] = retry_after.astimezone().isoformat()
+            result["lastFailedAt"] = last_failed_at
+            return result
 
     notify_result = send_task_completion_notification(task, backend=backend)
     result["notifyResult"] = notify_result if isinstance(notify_result, dict) else {}
@@ -160,6 +144,7 @@ def reconcile_pending_delivery(
     else:
         result["status"] = "send_failed"
         result["error"] = _text((notify_result or {}).get("error")) or "completion relay send failed"
+        result["failedAttempts"] = failed_attempts + 1
     return result
 
 
@@ -170,12 +155,18 @@ def reconcile_pending_deliveries(
     session_key: str = "",
     delivery_id: str = "",
     backend: str = "auto",
+    retry_cooldown_seconds: int = 30,
 ) -> dict[str, Any]:
-    events = load_jsonl(relay_path)
+    events = load_delivery_events(relay_path)
     pending_items = unresolved_pending_deliveries(events, session_key=session_key, delivery_id=delivery_id)
     tasks = load_tasks(task_state_path)
     items = [
-        reconcile_pending_delivery(item, tasks=tasks, backend=backend)
+        reconcile_pending_delivery(
+            item,
+            tasks=tasks,
+            backend=backend,
+            retry_cooldown_seconds=retry_cooldown_seconds,
+        )
         for item in pending_items
     ]
     return {
@@ -204,6 +195,7 @@ def main() -> None:
     parser.add_argument("--session-key", default="")
     parser.add_argument("--delivery-id", default="")
     parser.add_argument("--backend", default="auto")
+    parser.add_argument("--retry-cooldown-seconds", type=int, default=30)
     args = parser.parse_args()
     payload = reconcile_pending_deliveries(
         relay_path=args.relay_path,
@@ -211,6 +203,7 @@ def main() -> None:
         session_key=args.session_key,
         delivery_id=args.delivery_id,
         backend=args.backend,
+        retry_cooldown_seconds=int(args.retry_cooldown_seconds or 0),
     )
     print(json.dumps(payload, ensure_ascii=False))
 

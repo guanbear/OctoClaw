@@ -517,8 +517,13 @@ delivery relay 的目标不是“帮用户回答”，而是保证系统知道�
 - `delivery_pending`
 - `delivery_observed`
 - `delivery_agent_end_pending`
+- `delivery_compensated`
+- `delivery_failed`
+- `delivery_retry_deferred`
 
 这三类事件写入独立 relay ledger，后续 patrol/reconciler 只消费 ledger，不再从 Slack 现象反推。
+其中真实 completion relay 发送链路也必须把结果写回同一 ledger，而不是只让 Node extension 侧“事后猜到”。
+如果 completion relay 刚刚失败，reconciler 不应在下一次 turn 里立刻无冷却重试；应进入短冷却窗口，再由后续 turn 或 repair 工具继续补偿。
 - `web_lookup`
 - `taskflow_state`
 - `artifact_read`

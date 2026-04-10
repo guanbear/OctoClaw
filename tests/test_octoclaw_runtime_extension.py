@@ -1748,6 +1748,71 @@ Sender (untrusted metadata):
         self.assertEqual(payload["lastEvent"]["event"], "delivery_compensated")
         self.assertEqual(payload["lastEvent"]["deliveryId"], "delivery-r1")
 
+    def test_resolve_policy_records_delivery_retry_deferred_event(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-delivery-deferred-") as tmpdir:
+            workspace = Path(tmpdir)
+            payload = run_runtime_helper(
+                """(async () => {
+                    const fs = await import('node:fs/promises');
+                    const ctx = {
+                      sessionKey: "agent:main:slack:direct:u-relay-deferred",
+                      sessionId: "sess-relay-deferred",
+                      trigger: "message",
+                      agentId: "agent:main:main"
+                    };
+                    __octoclawTest.__resetPolicyState?.();
+                    const now = Date.now();
+                    __octoclawTest.__setPolicyState?.(ctx, {
+                      prompt: "帮我查一下结果",
+                      decision: __octoclawTest.buildDecision("帮我查一下结果"),
+                      createdAt: now,
+                      updatedAt: now,
+                      delegated: true,
+                      pendingDeliveryId: "delivery-r2",
+                      pendingDeliveryTaskId: "task-r2",
+                      pendingDeliveryRunnerJobId: "runner-r2",
+                      deliveryObserved: false
+                    });
+                    await __octoclawTest.resolvePolicyDecisionForContext(
+                      "再看一下",
+                      ctx,
+                      process.cwd(),
+                      null
+                    );
+                    const relayPath = __octoclawTest.resolveDeliveryRelayPath();
+                    const lines = (await fs.readFile(relayPath, 'utf8')).trim().split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+                    return {
+                      lastEvent: lines[lines.length - 1],
+                      eventNames: lines.map((item) => item.event)
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                    "OCTOCLAW_DELIVERY_RELAY_RESULT_JSON": json.dumps({
+                        "ok": True,
+                        "session_key": "agent:main:slack:direct:u-relay-deferred",
+                        "pending_count": 1,
+                        "items": [
+                            {
+                                "deliveryId": "delivery-r2",
+                                "status": "retry_deferred",
+                                "taskId": "task-r2",
+                                "runnerJobId": "runner-r2",
+                                "failedAttempts": 1,
+                                "retryAfter": "2026-04-10T08:00:00+08:00",
+                            }
+                        ],
+                    }),
+                },
+            )
+
+        self.assertIn("delivery_retry_deferred", payload["eventNames"])
+        self.assertEqual(payload["lastEvent"]["event"], "delivery_retry_deferred")
+        self.assertEqual(payload["lastEvent"]["deliveryId"], "delivery-r2")
+
     def test_guard_assistant_message_replaces_undelegated_runner_reply(self) -> None:
         payload = run_runtime_helper(
             """(() => __octoclawTest.guardAssistantMessageForPolicyState(

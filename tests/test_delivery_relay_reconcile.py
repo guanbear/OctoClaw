@@ -122,6 +122,54 @@ class DeliveryRelayReconcileTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["status"], "task_not_ready")
         mock_send.assert_not_called()
 
+    @patch("lib.delivery_relay_reconcile.send_task_completion_notification")
+    def test_reconcile_pending_deliveries_defers_retry_after_recent_failure(self, mock_send) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-delivery-reconcile-deferred-") as tmpdir:
+            root = Path(tmpdir)
+            relay_path = root / "delivery-relay.jsonl"
+            relay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({
+                            "schema_version": "octoclaw.delivery_relay.event/v1",
+                            "event": "delivery_pending",
+                            "deliveryId": "delivery-3",
+                            "sessionKey": "agent:main:slack:direct:u3",
+                            "taskId": "task-3",
+                            "runnerJobId": "runner-3",
+                            "at": "2999-04-10T01:00:00Z",
+                        }),
+                        json.dumps({
+                            "schema_version": "octoclaw.delivery_relay.event/v1",
+                            "event": "delivery_failed",
+                            "deliveryId": "delivery-3",
+                            "sessionKey": "agent:main:slack:direct:u3",
+                            "taskId": "task-3",
+                            "runnerJobId": "runner-3",
+                            "at": "2999-04-10T01:00:10Z",
+                            "error": "slack timeout",
+                        }),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            task_state_path = root / "task-state.json"
+            task_state_path.write_text(
+                json.dumps({"tasks": [_ready_task("task-3", "agent:main:slack:direct:u3")]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            payload = reconcile_pending_deliveries(
+                relay_path=str(relay_path),
+                task_state_path=str(task_state_path),
+                session_key="agent:main:slack:direct:u3",
+                retry_cooldown_seconds=30,
+            )
+
+        self.assertEqual(payload["items"][0]["status"], "retry_deferred")
+        self.assertEqual(payload["items"][0]["failedAttempts"], 1)
+        mock_send.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
