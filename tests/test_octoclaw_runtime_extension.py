@@ -99,7 +99,7 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
 
     def test_extract_prompt_text_unwraps_busy_queue_wrapper(self) -> None:
         payload = run_runtime_helper(
-            """__octoclawTest.extractPromptText({
+            r"""__octoclawTest.extractPromptText({
                 prompt: `[Queued messages while agent was busy]
 
 ---
@@ -117,7 +117,7 @@ Conversation info (untrusted metadata):
 
     def test_extract_prompt_text_unwraps_im_relay_wrapper(self) -> None:
         payload = run_runtime_helper(
-            """__octoclawTest.extractPromptText({
+            r"""__octoclawTest.extractPromptText({
                 prompt: `System: [2026-04-09 22:55:55 GMT+8] Slack DM from guanbear: 你是怎么查的
 
 Conversation info (untrusted metadata):
@@ -1308,7 +1308,7 @@ Sender (untrusted metadata):
 
     def test_wrapped_workflow_meta_question_stays_in_direct_control_lane(self) -> None:
         payload = run_runtime_helper(
-            """(() => {
+            r"""(() => {
                 const prompt = __octoclawTest.extractPromptText({
                   prompt: `System: [2026-04-09 22:55:26 GMT+8] Slack DM from guanbear: 刚才那个任务判定是啥
 
@@ -1437,7 +1437,7 @@ Sender (untrusted metadata):
 
     def test_wrapped_bounded_openclaw_update_lookup_keeps_runner_pre_dispatch_ack(self) -> None:
         payload = run_runtime_helper(
-            """(() => {
+            r"""(() => {
                 const prompt = __octoclawTest.extractPromptText({
                   prompt: `System: [2026-04-09 22:54:32 GMT+8] Slack DM from guanbear: 你再看下 OpenClaw 有啥更新，尤其是 Memory 方向
 
@@ -1470,7 +1470,7 @@ Sender (untrusted metadata):
 
     def test_wrapped_controlui_prompt_does_not_accidentally_delegate(self) -> None:
         payload = run_runtime_helper(
-            """(async () => {
+            r"""(async () => {
                 const prompt = __octoclawTest.extractPromptText({
                   prompt: `System: [2026-04-09 22:57:03 GMT+8] Slack DM from guanbear: 你的controlui的访问地址是啥
 
