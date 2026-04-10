@@ -142,6 +142,18 @@
 3. `nc -vz github.com 443`
 4. 查看最近 gateway log 是否存在持续性 socket/ping 异常
 
+如果要做黑盒 Slack smoke，可直接运行：
+
+```bash
+python3 lib/slack_e2e_acceptance.py --preset smoke
+```
+
+说明：
+
+- 脚本会优先从 `~/.openclaw/agents/main/sessions/sessions.json` 选择最近可用的 Slack session
+- 再通过 gateway `agent` 调用注入 prompt
+- 然后直接用 Slack Web API 拉回 thread/history，统计 ACK 与 final
+
 ---
 
 ## 5. 当前安全风险与处理建议
