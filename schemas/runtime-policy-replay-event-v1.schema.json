@@ -20,6 +20,9 @@
       "type": "string",
       "enum": [
         "policy_resolved",
+        "policy_judged",
+        "route_validated",
+        "ack_sent",
         "route_hint_submitted",
         "tool_blocked_before_route_hint",
         "tool_blocked_manual_delegation",
@@ -27,7 +30,10 @@
         "tool_blocked_session_control",
         "tool_blocked_runner_policy",
         "tool_blocked_delegation_policy",
+        "tool_used",
         "direct_tool_called",
+        "decision_cache_hit",
+        "decision_cache_miss",
         "dispatch_called",
         "agent_end"
       ]
@@ -64,6 +70,11 @@
     "routeHintRequired": { "type": "boolean" },
     "routeHintSubmitted": { "type": "boolean" },
     "stateGroundingRequired": { "type": "boolean" },
+    "preDispatchAckRequired": { "type": "boolean" },
+    "preDispatchAckSent": { "type": "boolean" },
+    "preDispatchAckReason": { "type": "string" },
+    "preDispatchAckFallbackUsed": { "type": "boolean" },
+    "preDispatchAckChannelReason": { "type": "string" },
     "latencyAckRequired": { "type": "boolean" },
     "latencyAckSent": { "type": "boolean" },
     "latencyAckReason": { "type": "string" },
@@ -80,15 +91,24 @@
     "reviewRequired": { "type": "boolean" },
     "confidence": { "type": "number" },
     "reason": { "type": "string" },
+    "ackKind": { "type": "string" },
+    "ackMode": { "type": "string" },
+    "ackSent": { "type": "boolean" },
+    "ackMessage": { "type": "string" },
     "finalRoute": { "type": "string" },
     "executed": { "type": "boolean" },
     "taskId": { "type": "string" },
     "runnerJobId": { "type": "string" },
     "usedCachedPolicy": { "type": "boolean" },
+    "decisionCacheState": { "type": "string" },
     "delegated": { "type": "boolean" },
     "delegationTool": { "type": "string" },
     "materialization": { "type": "object" },
     "capability_failure": { "type": "object" },
+    "allowedTools": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "blockedTools": {
       "type": "array",
       "items": { "type": "string" }
@@ -96,6 +116,48 @@
     "routeLanguagePacks": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "routerRequestKind": { "type": "string" },
+    "routerScope": { "type": "string" },
+    "routerTarget": { "type": "string" },
+    "routerEvidenceRequired": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "routerDecisionSource": { "type": "string" },
+    "routerDecisionValid": { "type": "boolean" },
+    "policyJudgeSelected": { "type": "string" },
+    "policyJudgeInvoked": { "type": "boolean" },
+    "policyJudgeApplied": { "type": "boolean" },
+    "policyJudgeInvocationState": { "type": "string" },
+    "policyJudgeRoute": { "type": "string" },
+    "policyJudgeConfidence": { "type": "number" },
+    "policyJudgeValidationProblems": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "policyJudgePromptVersion": { "type": "string" },
+    "policyJudgeSchemaVersion": { "type": "string" },
+    "sessionBoundaryStatus": { "type": "string" },
+    "canonicalSessionKey": { "type": "string" },
+    "conversationControlKind": { "type": "string" },
+    "conversationIntentClass": { "type": "string" },
+    "routeRecommendationConflict": { "type": "boolean" },
+    "routeRecommendationStrategy": { "type": "string" },
+    "routeRecommendationConflictType": { "type": "string" },
+    "intentPacketConfidence": { "type": "number" },
+    "intentPacketReasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "deliveryId": { "type": "string" },
+    "rolloutFlags": {
+      "type": "object"
+    },
+    "deliveryPendingRegistered": { "type": "boolean" },
+    "runnerExecutionMode": { "type": "string" },
+    "runner_runtime_resolution": {
+      "type": "object"
     },
     "executionContract": { "type": "string" },
     "agentScope": { "type": "string" },

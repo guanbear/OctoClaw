@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import importlib
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +19,7 @@ if str(LIB_DIR) not in sys.path:
 
 dispatch_task = importlib.import_module("dispatch_task")
 runner_dispatch = importlib.import_module("runner_dispatch")
+runner_queue = importlib.import_module("runner_queue")
 runner_playbooks = importlib.import_module("runner_playbooks")
 
 RUNNER_DISPATCH = REPO_ROOT / "lib" / "runner_dispatch.py"
@@ -28,6 +31,17 @@ class RunnerRuntimeTests(unittest.TestCase):
         state_path = Path(workspace) / "tmp" / "octopus" / "task-state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         return next(task for task in state["tasks"] if task["id"] == task_id)
+
+    def _task_events(self, workspace: str, task_id: str) -> list[dict]:
+        events_path = Path(workspace) / "tmp" / "octopus" / "task-events.jsonl"
+        if not events_path.exists():
+            return []
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return [event for event in events if event.get("task_id") == task_id]
 
     def test_runner_loop_writes_unified_report_and_artifacts(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-runner-runtime-") as workspace:
@@ -74,6 +88,8 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(payload["openclaw_taskflow_state"], "mirrored")
             self.assertEqual(payload["openclaw_task_runtime"], "openclaw_task")
             self.assertEqual(payload["artifacts"]["openclaw_taskflow"]["binding_state"], "mirrored")
+            self.assertEqual(payload["goal_contract"]["schema_version"], "octoclaw.runner_goal_contract/v1")
+            self.assertEqual(payload["goal_contract"]["runner_job_id"], "runner-test-1")
 
             queued_task = self._find_task(workspace, "runner-test-1")
             self.assertEqual(queued_task["status"], "queued")
@@ -84,6 +100,13 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(queued_task["delegated_materialization"]["kind"], "runner_playbook")
             self.assertEqual(queued_task["delegated_materialization"]["runner_job_id"], "runner-test-1")
             self.assertTrue(queued_task["delegated_materialization"]["executed"])
+            self.assertEqual(queued_task["artifacts"]["goal_contract"]["schema_version"], "octoclaw.runner_goal_contract/v1")
+            self.assertEqual(queued_task["artifacts"]["goal_contract"]["task_id"], "runner-test-1")
+            self.assertEqual(queued_task["artifacts"]["goal_contract"]["native_task_binding"]["task_id"], "runner-test-1")
+            queued_events = self._task_events(workspace, "runner-test-1")
+            self.assertIn("task_bound", [event["kind"] for event in queued_events])
+            self.assertIn("dispatch_started", [event["kind"] for event in queued_events])
+            self.assertIn("progress_note", [event["kind"] for event in queued_events])
 
             loop = subprocess.run(
                 ["bash", str(RUNNER_LOOP)],
@@ -91,6 +114,7 @@ class RunnerRuntimeTests(unittest.TestCase):
                 text=True,
                 env={
                     **env,
+                    "OCTOCLAW_ENABLE_LEGACY_LOOPS": "1",
                     "RUNNER_MAX_JOBS_PER_WORKER": "1",
                     "RUNNER_MAX_IDLE_SECONDS": "1",
                     "RUNNER_POLL_INTERVAL_SECONDS": "1",
@@ -129,6 +153,9 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertTrue(Path(task["artifacts"]["stdout_file"]).exists())
             self.assertTrue(Path(task["artifacts"]["stderr_file"]).exists())
             self.assertTrue(Path(task["artifacts"]["result_path"]).exists())
+            events = self._task_events(workspace, "runner-test-1")
+            self.assertIn("runner_started", [event["kind"] for event in events])
+            self.assertIn("result_ready", [event["kind"] for event in events])
 
             meta_path = Path(workspace) / "tmp" / "octopus" / "runner-results" / "runner-test-1.json"
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -179,6 +206,7 @@ class RunnerRuntimeTests(unittest.TestCase):
                 text=True,
                 env={
                     **env,
+                    "OCTOCLAW_ENABLE_LEGACY_LOOPS": "1",
                     "RUNNER_MAX_JOBS_PER_WORKER": "1",
                     "RUNNER_MAX_IDLE_SECONDS": "1",
                     "RUNNER_POLL_INTERVAL_SECONDS": "1",
@@ -216,6 +244,98 @@ class RunnerRuntimeTests(unittest.TestCase):
             self.assertEqual(handoff["worker_result"]["status"], "done")
             self.assertIn("Runner completed", handoff["summary"])
             self.assertIn("runner handoff", handoff["reply_text"])
+
+    def test_recover_stale_running_jobs_marks_orphaned_running_job_failed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-runner-reap-") as workspace:
+            queue_path = Path(workspace) / "tmp" / "octopus" / "runner-queue.json"
+            health_path = Path(workspace) / "tmp" / "octopus" / "runner-health.json"
+            queue_path.parent.mkdir(parents=True, exist_ok=True)
+            queue_path.write_text(
+                json.dumps(
+                    {
+                        "jobs": [
+                            {
+                                "id": "runner-stale-1",
+                                "status": "running",
+                                "worker_id": "runner-old",
+                                "started_at": "2026-04-10T00:00:00+00:00",
+                                "summary": "checking release",
+                            }
+                        ],
+                        "updated_at": "2026-04-10T00:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            health_path.write_text(
+                json.dumps(
+                    {
+                        "worker_id": "runner-new",
+                        "last_heartbeat_at": "2026-04-10T00:10:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(runner_queue, "RUNNER_QUEUE_FILE", str(queue_path)), patch.object(
+                runner_queue,
+                "RUNNER_HEALTH_FILE",
+                str(health_path),
+            ):
+                result = runner_queue.recover_stale_running_jobs(
+                    lease_timeout_seconds=90,
+                    heartbeat_stale_seconds=60,
+                )
+
+            self.assertEqual(result["recovered_count"], 1)
+            refreshed = json.loads(queue_path.read_text(encoding="utf-8"))
+            job = refreshed["jobs"][0]
+            self.assertEqual(job["status"], "failed")
+            self.assertEqual(job["failure_reason"], "runner_lease_expired")
+            self.assertEqual(job["exit_code"], 124)
+
+    def test_runner_heartbeat_tracks_failure_streak_per_worker(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-runner-health-") as workspace:
+            health_path = Path(workspace) / "tmp" / "octopus" / "runner-health.json"
+            health_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with patch.object(runner_queue, "RUNNER_HEALTH_FILE", str(health_path)):
+                with redirect_stdout(io.StringIO()):
+                    runner_queue.cmd_heartbeat(
+                        importlib.import_module("argparse").Namespace(
+                            worker_id="runner-a",
+                            pid=123,
+                            job_id="job-1",
+                            jobs_completed=1,
+                            started_at="2026-04-10T00:00:00+00:00",
+                            job_status="failed",
+                        )
+                    )
+                    runner_queue.cmd_heartbeat(
+                        importlib.import_module("argparse").Namespace(
+                            worker_id="runner-a",
+                            pid=123,
+                            job_id="job-2",
+                            jobs_completed=2,
+                            started_at="2026-04-10T00:00:00+00:00",
+                            job_status="failed",
+                        )
+                    )
+                    runner_queue.cmd_heartbeat(
+                        importlib.import_module("argparse").Namespace(
+                            worker_id="runner-b",
+                            pid=456,
+                            job_id="job-3",
+                            jobs_completed=1,
+                            started_at="2026-04-10T01:00:00+00:00",
+                            job_status="done",
+                        )
+                    )
+
+            payload = json.loads(health_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["worker_id"], "runner-b")
+            self.assertEqual(payload["failure_streak"], 0)
+            self.assertEqual(payload["last_job_status"], "done")
 
     def test_explicit_log_file_probe_keeps_tail_command_and_count(self) -> None:
         payload = runner_playbooks.infer_runner_playbook("tail -80 /var/log/nginx/error.log")
@@ -300,6 +420,23 @@ class RunnerRuntimeTests(unittest.TestCase):
 
         proc = type("Proc", (), {"returncode": 0, "stdout": json.dumps({"id": "runner-precomputed-1", "status": "queued"}), "stderr": ""})()
         with patch.object(dispatch_task, "infer_runner_playbook", side_effect=AssertionError("should not infer twice")), patch.object(
+            dispatch_task,
+            "runner_dispatch_runtime_resolution",
+            return_value={
+                "runner_pool_enabled": True,
+                "max_queue_size": 20,
+                "busy_strategy": "queue_or_progress",
+                "legacy_runner_fallback": True,
+                "queue_counts": {"queued": 0, "running": 0, "done": 0, "failed": 0, "total": 0, "active": 0},
+                "queue_pressure_band": "none",
+                "runner_health_snapshot": {"present": True, "healthy": True, "reason": "ok", "worker_id": "runner-a"},
+                "dispatch_mode": "daemon",
+                "can_dispatch": True,
+                "block_reason": "",
+                "block_detail": "",
+                "fallback_permitted": False,
+            },
+        ), patch.object(
             dispatch_task.subprocess,
             "run",
             return_value=proc,
@@ -343,8 +480,24 @@ class RunnerRuntimeTests(unittest.TestCase):
 
         with patch.object(dispatch_task.subprocess, "run", side_effect=fake_run), patch.object(
             dispatch_task,
-            "runner_health_is_healthy",
-            return_value=False,
+            "runner_dispatch_runtime_resolution",
+            return_value={
+                "runner_pool_enabled": True,
+                "max_queue_size": 20,
+                "busy_strategy": "queue_or_progress",
+                "legacy_runner_fallback": True,
+                "queue_counts": {"queued": 0, "running": 0, "done": 0, "failed": 0, "total": 0, "active": 0},
+                "queue_pressure_band": "none",
+                "runner_health_snapshot": {"present": True, "healthy": False, "reason": "stale", "worker_id": "runner-a"},
+                "dispatch_mode": "ondemand",
+                "can_dispatch": True,
+                "block_reason": "",
+                "block_detail": "",
+                "fallback_permitted": True,
+            },
+        ), patch.object(
+            dispatch_task,
+            "append_runtime_task_event",
         ), patch.object(
             dispatch_task,
             "wait_for_runner_result",
@@ -355,13 +508,14 @@ class RunnerRuntimeTests(unittest.TestCase):
                 "report_path": "/tmp/runner-ondemand-1.md",
                 "worker_result": {"status": "done"},
             },
-        ):
+        ) as event_mock:
             payload = dispatch_task.dispatch_runner(args)
 
         self.assertEqual(payload["runner_execution_mode"], "ondemand")
         self.assertTrue(payload["runner_execution"]["triggered"])
         self.assertTrue(payload["runner_execution"]["ok"])
         self.assertEqual(payload["wait"]["status"], "done")
+        event_mock.assert_called()
 
     def test_find_reusable_job_requires_same_command_not_same_description(self) -> None:
         with patch.object(

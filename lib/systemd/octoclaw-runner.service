@@ -1,5 +1,5 @@
 [Unit]
-Description=OctoClaw Runner Daemon
+Description=OctoClaw Legacy Runner Daemon (compat only)
 After=network-online.target openclaw.service
 Wants=network-online.target
 
@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=__RUN_USER__
 WorkingDirectory=__SKILL_ROOT__
+Environment=OCTOCLAW_ENABLE_LEGACY_LOOPS=1
 Environment=WORKSPACE=__WORKSPACE__
 Environment=RUNNER_POLL_INTERVAL_SECONDS=3
 Environment=RUNNER_HEARTBEAT_INTERVAL_SECONDS=10
@@ -22,4 +23,5 @@ RestartSec=3
 KillMode=control-group
 
 [Install]
+# Legacy opt-in only; not installed by default.
 WantedBy=multi-user.target

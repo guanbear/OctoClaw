@@ -100,6 +100,32 @@ def _run_task_state_upsert(task_id: str, **fields: Any) -> dict[str, Any]:
     }
 
 
+def _run_task_state_event(task_id: str, kind: str, message: str, *, event_json: dict[str, Any] | None = None) -> dict[str, Any]:
+    cmd = [
+        "python3",
+        TASK_STATE_UPDATE_PY,
+        "event",
+        "--id",
+        str(task_id),
+        "--kind",
+        str(kind),
+        "--message",
+        str(message),
+    ]
+    if isinstance(event_json, dict) and event_json:
+        cmd.extend(["--event-json", json.dumps(event_json, ensure_ascii=False)])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "cmd": cmd}
+    return {
+        "ok": result.returncode == 0,
+        "stdout": (result.stdout or "").strip(),
+        "stderr": (result.stderr or "").strip(),
+        "cmd": cmd,
+    }
+
+
 def _task_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -221,13 +247,23 @@ def execute_task_anchor_command(
             summary="Operator requested stop; task deferred",
             recovery_action="operator_stop_request",
         )
+        event_result = _run_task_state_event(
+            task_id,
+            "job_cancelled",
+            "operator requested stop",
+            event_json={
+                "action": "stop",
+                "native_status": str(native_result.get("status", "") or ""),
+                "session_stop_status": str(stop_result.get("status", "") or ""),
+            },
+        )
         ok = bool(native_result.get("ok")) or bool(stop_result.get("ok")) or bool(update_result.get("ok"))
         return {
             "ok": ok,
             "status": "ok" if ok else "error",
             "action": action,
             "task_id": task_id,
-            "data": {"native_result": native_result, "stop_result": stop_result, "update_result": update_result},
+            "data": {"native_result": native_result, "stop_result": stop_result, "update_result": update_result, "event_result": event_result},
             "text": f"Stop requested for {task_id}.",
         }
 
@@ -247,13 +283,24 @@ def execute_task_anchor_command(
             recovery_action="manual_retry_request",
             retry_count=retry_count,
         )
+        event_result = _run_task_state_event(
+            task_id,
+            "job_superseded",
+            "manual retry superseded previous run",
+            event_json={
+                "action": "retry",
+                "retry_count": retry_count,
+                "native_status": str(native_result.get("status", "") or ""),
+                "session_stop_status": str(stop_result.get("status", "") or ""),
+            },
+        )
         ok = bool(update_result.get("ok"))
         return {
             "ok": ok,
             "status": "ok" if ok else "error",
             "action": action,
             "task_id": task_id,
-            "data": {"native_result": native_result, "stop_result": stop_result, "update_result": update_result},
+            "data": {"native_result": native_result, "stop_result": stop_result, "update_result": update_result, "event_result": event_result},
             "text": f"Retry queued for {task_id}." if ok else f"Retry failed for {task_id}.",
         }
 
@@ -290,13 +337,23 @@ def execute_task_anchor_command(
             summary="Rejected by operator; task deferred",
             recovery_action="operator_rejected",
         )
+        event_result = _run_task_state_event(
+            task_id,
+            "job_cancelled",
+            "operator rejected task",
+            event_json={
+                "action": "reject",
+                "native_status": str(native_result.get("status", "") or ""),
+                "session_stop_status": str(message_result.get("status", "") or ""),
+            },
+        )
         ok = bool(native_result.get("ok")) or bool(message_result.get("ok")) or bool(update_result.get("ok"))
         return {
             "ok": ok,
             "status": "ok" if ok else "error",
             "action": action,
             "task_id": task_id,
-            "data": {"native_result": native_result, "message_result": message_result, "update_result": update_result},
+            "data": {"native_result": native_result, "message_result": message_result, "update_result": update_result, "event_result": event_result},
             "text": f"Rejected {task_id}.",
         }
 

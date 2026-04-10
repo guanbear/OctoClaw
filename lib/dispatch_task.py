@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Unified OctoClaw task dispatcher.
 
-- Ask octoclaw_route first
+- Consume a precomputed runtime policy decision from the gateway extension
 - Fast lightweight tasks -> persistent runner
-- Other tasks -> return structured spawn recommendation
+- Other tasks -> return a structured spawn recommendation
 """
 
 from __future__ import annotations
@@ -18,10 +18,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from octoclaw_policy import build_decision
 from octoclaw_spawn import build_spawn_spec
 from octopus_config import RUNNER_HEALTH_FILE, RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
+from runner_goal_contract import build_runner_goal_contract
+from runner_queue import recover_stale_running_jobs
 from runtime_protocol import build_capability_bound_failure, build_delegated_materialization, normalize_worker_result
+from runtime_snapshot import load_runner_health, load_runner_queue_counts
 from runner_playbooks import infer_runner_playbook
 from worker_taxonomy import (
     infer_model_band as taxonomy_infer_model_band,
@@ -37,6 +39,35 @@ RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
 TASK_STATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
 MAX_INLINE_CHARS = 1200
 RUNNER_STALE_SECONDS = 60
+RUNNER_POOL_DEFAULTS = {
+    "enabled": True,
+    "max_queue_size": 20,
+    "per_user_concurrency": 1,
+    "lease_timeout_seconds": 90,
+    "busy_strategy": "queue_or_progress",
+    "legacy_runner_fallback": True,
+}
+
+MULTI_STEP_POLICY_PRESETS = {
+    "planner": {
+        "worker_pool": "octoclaw-research",
+        "work_type": "research",
+        "phase": "inspect",
+        "profile": "research",
+        "model_band": "normal",
+        "selector_band": "standard",
+        "reason_code": "spawn_multi_planner_step",
+    },
+    "review": {
+        "worker_pool": "octoclaw-review",
+        "work_type": "review",
+        "phase": "verify",
+        "profile": "review",
+        "model_band": "strong",
+        "selector_band": "strong",
+        "reason_code": "spawn_multi_review_step",
+    },
+}
 
 
 def decision_route(decision: dict) -> dict:
@@ -68,6 +99,100 @@ def decision_metadata(decision: dict) -> dict:
     request = decision_request(decision)
     value = request.get("metadata", {})
     return value if isinstance(value, dict) else {}
+
+
+def ensure_nested_dict(root: dict, key: str) -> dict:
+    value = root.get(key, {})
+    if not isinstance(value, dict):
+        value = {}
+        root[key] = value
+    return value
+
+
+def legacy_policy_fallback_enabled() -> bool:
+    env_value = str(os.environ.get("OCTOCLAW_LEGACY_POLICY_FALLBACK", "") or "").strip().lower()
+    if env_value in {"1", "true", "yes", "on"}:
+        return True
+    runtime_policy = load_octopus_config().get("runtime_policy", {})
+    if not isinstance(runtime_policy, dict):
+        return False
+    features = runtime_policy.get("features", {})
+    if isinstance(features, dict) and "legacy_policy_fallback" in features:
+        return bool(features.get("legacy_policy_fallback"))
+    return False
+
+
+def build_legacy_policy_decision(task: str, command: str, metadata: dict | None = None, *, force_route: str = "") -> dict:
+    from octoclaw_policy import build_decision as legacy_build_decision  # parity-only fallback
+
+    return legacy_build_decision(task, command, metadata or {}, force_route=force_route)
+
+
+def build_dispatch_policy_required_failure(task: str, *, force_route: str = "") -> dict:
+    failure = build_capability_bound_failure(
+        "dispatch",
+        "policy_decision_required",
+        detail="dispatch_task live hot path now requires a precomputed runtime policy decision. Use octoclaw_dispatch from the gateway extension or pass --policy-json.",
+        missing_capabilities=["precomputed_policy_decision"],
+        fallback_permitted=False,
+    )
+    route = str(force_route or "").strip() or "direct"
+    return {
+        "route": route,
+        "executed": False,
+        "reason": "policy_decision_required",
+        "task": task,
+        "capability_failure": failure,
+        "materialization": build_delegated_materialization(
+            lane=route,
+            kind="dispatch_gate",
+            status="materialization_failed",
+            execution_contract="precomputed_policy_decision",
+            executed=False,
+            capability_failure=failure,
+        ),
+        "handoff": {
+            "kind": "plan",
+            "status": "failed",
+            "summary": "dispatch 缺少预计算 policy decision，未继续执行。",
+            "reply_text": "当前 dispatch 热路径要求先由 gateway extension 生成 runtime policy decision；这次没有拿到 policy_json，所以没有继续执行。",
+            "report_path": "",
+            "user_safe": True,
+        },
+        "policy_decision": {},
+        "legacy_policy_fallback_used": False,
+    }
+
+
+def synthesize_multi_step_decision(decision: dict, step_name: str) -> dict:
+    if step_name == "worker":
+        return clone_worker_step_decision(decision)
+    preset = MULTI_STEP_POLICY_PRESETS.get(step_name)
+    if not preset:
+        return clone_worker_step_decision(decision)
+    cloned = copy.deepcopy(decision if isinstance(decision, dict) else {})
+    route_meta = ensure_nested_dict(cloned, "route_decision")
+    model_meta = ensure_nested_dict(cloned, "model_policy")
+    route_meta["route"] = "spawn_single"
+    route_meta["system_preferred_route"] = "spawn_single"
+    route_meta["executor_type"] = "subagent"
+    route_meta["dispatch_required"] = True
+    route_meta["should_wait"] = False
+    route_meta["wait_timeout_seconds"] = 0
+    route_meta["worker_pool"] = str(preset.get("worker_pool", "") or "")
+    route_meta["work_type"] = str(preset.get("work_type", "") or "")
+    route_meta["phase"] = str(preset.get("phase", "") or "")
+    route_meta["protocol"] = "normal"
+    reason_codes = [str(preset.get("reason_code", "") or "").strip()]
+    existing_reason_codes = [str(item or "").strip() for item in route_meta.get("reason_codes", []) if str(item or "").strip()]
+    route_meta["reason_codes"] = [item for item in reason_codes + existing_reason_codes if item]
+    route_meta["reason"] = route_meta["reason_codes"][0] if route_meta["reason_codes"] else str(preset.get("reason_code", "") or "")
+    model_meta["profile"] = str(preset.get("profile", "") or "")
+    model_meta["model_band"] = str(preset.get("model_band", "") or "")
+    model_meta["selector_band"] = str(preset.get("selector_band", "") or "")
+    model_meta["selected_model"] = ""
+    cloned["summary"] = f"synthetic_{step_name}_decision -> {route_meta['worker_pool']} / profile={model_meta['profile']}"
+    return cloned
 
 
 def runner_playbook_hints(decision: dict) -> dict:
@@ -131,6 +256,7 @@ def apply_policy_fields(payload: dict, decision: dict) -> dict:
     payload["selector_band"] = payload.get("selector_band") or model_meta.get("selector_band", "")
     payload["skill_bundle"] = skill_meta.get("default_skill_bundle", [])
     payload["review_required"] = review_meta.get("required", False)
+    payload["legacy_policy_fallback_used"] = bool(decision.get("legacy_policy_fallback_used", False))
     if isinstance(decision.get("route_recommendation"), dict):
         payload["route_recommendation"] = dict(decision["route_recommendation"])
     if isinstance(decision.get("budget_recommendation"), dict):
@@ -223,6 +349,28 @@ def upsert_runtime_task(**fields) -> None:
             continue
         cmd.extend([f"--{key.replace('_', '-')}", text])
     subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def append_runtime_task_event(task_id: str, kind: str, message: str, *, event_json: dict | None = None) -> None:
+    normalized_task_id = str(task_id or "").strip()
+    normalized_kind = str(kind or "").strip()
+    normalized_message = str(message or "").strip()
+    if not normalized_task_id or not normalized_kind:
+        return
+    cmd = [
+        "python3",
+        TASK_STATE_PY,
+        "event",
+        "--id",
+        normalized_task_id,
+        "--kind",
+        normalized_kind,
+        "--message",
+        normalized_message or normalized_kind,
+    ]
+    if isinstance(event_json, dict) and event_json:
+        cmd.extend(["--event-json", json.dumps(event_json, ensure_ascii=False)])
+    subprocess.run(cmd, check=False, capture_output=True, text=True)
 
 
 def configured_spawn_backend() -> str:
@@ -804,6 +952,201 @@ def runner_health_is_healthy(stale_after_seconds: int = RUNNER_STALE_SECONDS) ->
     return age_seconds <= stale_after_seconds
 
 
+def runner_pool_settings() -> dict:
+    runtime_cfg = load_octopus_config().get("runtime_policy", {})
+    runtime_cfg = runtime_cfg if isinstance(runtime_cfg, dict) else {}
+    pool = runtime_cfg.get("runner_pool", {})
+    pool = pool if isinstance(pool, dict) else {}
+    features = runtime_cfg.get("features", {})
+    features = features if isinstance(features, dict) else {}
+    enabled = features.get("runner_pool_enabled")
+    legacy_fallback = features.get("legacy_runner_fallback")
+    return {
+        "enabled": bool(enabled if isinstance(enabled, bool) else pool.get("enabled", RUNNER_POOL_DEFAULTS["enabled"])),
+        "max_queue_size": max(1, int(pool.get("max_queue_size", RUNNER_POOL_DEFAULTS["max_queue_size"]) or RUNNER_POOL_DEFAULTS["max_queue_size"])),
+        "per_user_concurrency": max(0, int(pool.get("per_user_concurrency", RUNNER_POOL_DEFAULTS["per_user_concurrency"]) or RUNNER_POOL_DEFAULTS["per_user_concurrency"])),
+        "lease_timeout_seconds": max(1, int(pool.get("lease_timeout_seconds", RUNNER_POOL_DEFAULTS["lease_timeout_seconds"]) or RUNNER_POOL_DEFAULTS["lease_timeout_seconds"])),
+        "busy_strategy": str(pool.get("busy_strategy", RUNNER_POOL_DEFAULTS["busy_strategy"]) or RUNNER_POOL_DEFAULTS["busy_strategy"]),
+        "legacy_runner_fallback": bool(
+            legacy_fallback if isinstance(legacy_fallback, bool) else pool.get("legacy_runner_fallback", RUNNER_POOL_DEFAULTS["legacy_runner_fallback"])
+        ),
+    }
+
+
+def runner_queue_pressure_band(queue_counts: dict | None, max_queue_size: int) -> str:
+    counts = queue_counts if isinstance(queue_counts, dict) else {}
+    queued = max(0, int(counts.get("queued", 0) or 0))
+    running = max(0, int(counts.get("running", 0) or 0))
+    active = queued + running
+    capacity = max(1, int(max_queue_size or RUNNER_POOL_DEFAULTS["max_queue_size"]))
+    medium_threshold = max(1, (capacity + 1) // 2)
+    if active >= capacity or queued >= capacity:
+        return "high"
+    if active >= medium_threshold or queued >= medium_threshold:
+        return "medium"
+    if active >= 1 or queued >= 1:
+        return "low"
+    return "none"
+
+
+def load_runner_active_jobs() -> list[dict]:
+    raw = load_json(RUNNER_QUEUE_FILE)
+    jobs = raw.get("jobs", []) if isinstance(raw, dict) else []
+    active_jobs: list[dict] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        status = str(job.get("status", "") or "").strip().lower()
+        if status not in {"queued", "running"}:
+            continue
+        active_jobs.append(dict(job))
+    return active_jobs
+
+
+def sync_recovered_stale_runner_jobs(recovered: dict | None) -> None:
+    payload = recovered if isinstance(recovered, dict) else {}
+    jobs = payload.get("jobs", [])
+    if not isinstance(jobs, list) or not jobs:
+        return
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get("id", "") or "").strip()
+        if not job_id:
+            continue
+        worker_id = str(job.get("worker_id", "") or "").strip()
+        summary = f"Runner lease expired before completion · worker={worker_id or 'unknown'}"
+        cmd = [
+            "python3",
+            TASK_STATE_PY,
+            "failed",
+            "--id",
+            job_id,
+            "--summary",
+            summary,
+            "--blocked-reason",
+            "runner_lease_expired",
+            "--observability-health",
+            "degraded",
+        ]
+        subprocess.run(cmd, check=False, capture_output=True, text=True)
+
+
+def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> dict:
+    settings = runner_pool_settings()
+    try:
+        recovered = recover_stale_running_jobs(
+            lease_timeout_seconds=settings["lease_timeout_seconds"],
+            heartbeat_stale_seconds=RUNNER_STALE_SECONDS,
+        )
+    except OSError:
+        recovered = {"recovered_count": 0, "jobs": []}
+    sync_recovered_stale_runner_jobs(recovered)
+    queue_counts = load_runner_queue_counts()
+    active_jobs = load_runner_active_jobs()
+    health = load_runner_health(stale_after_seconds=RUNNER_STALE_SECONDS)
+    queue_pressure = runner_queue_pressure_band(queue_counts, settings["max_queue_size"])
+    queued = max(0, int(queue_counts.get("queued", 0) or 0))
+    running = max(0, int(queue_counts.get("running", 0) or 0))
+    active = queued + running
+    allow_ondemand = bool(settings.get("legacy_runner_fallback", True))
+    resolution = {
+        "runner_pool_enabled": bool(settings["enabled"]),
+        "max_queue_size": int(settings["max_queue_size"]),
+        "per_user_concurrency": int(settings["per_user_concurrency"]),
+        "lease_timeout_seconds": int(settings["lease_timeout_seconds"]),
+        "busy_strategy": str(settings["busy_strategy"]),
+        "legacy_runner_fallback": bool(settings["legacy_runner_fallback"]),
+        "queue_counts": {
+            "queued": queued,
+            "running": running,
+            "done": max(0, int(queue_counts.get("done", 0) or 0)),
+            "failed": max(0, int(queue_counts.get("failed", 0) or 0)),
+            "total": max(0, int(queue_counts.get("total", 0) or 0)),
+            "active": active,
+        },
+        "recovered_stale_running_jobs": int(recovered.get("recovered_count", 0) or 0),
+        "queue_pressure_band": queue_pressure,
+        "runner_health_snapshot": health if isinstance(health, dict) else {},
+        "dispatch_mode": "daemon",
+        "can_dispatch": True,
+        "block_reason": "",
+        "block_detail": "",
+        "fallback_permitted": False,
+    }
+    if not settings["enabled"]:
+        resolution["can_dispatch"] = False
+        resolution["dispatch_mode"] = "deferred"
+        resolution["block_reason"] = "runner_pool_disabled"
+        resolution["block_detail"] = "runner lane selected but runtime_policy.runner_pool is disabled, so no runner job was materialized."
+        return resolution
+    normalized_session_key = str(session_key or "").strip()
+    if settings["per_user_concurrency"] > 0 and normalized_session_key:
+        session_active = [
+            job for job in active_jobs
+            if str(job.get("session_key", "") or "").strip() == normalized_session_key
+        ]
+        resolution["session_active_jobs"] = [
+            {
+                "id": str(job.get("id", "") or ""),
+                "status": str(job.get("status", "") or ""),
+                "worker_id": str(job.get("worker_id", "") or ""),
+            }
+            for job in session_active
+        ]
+        if len(session_active) >= settings["per_user_concurrency"]:
+            resolution["can_dispatch"] = False
+            resolution["dispatch_mode"] = "deferred"
+            resolution["block_reason"] = "runner_per_user_concurrency_exceeded"
+            resolution["block_detail"] = (
+                f"session already has {len(session_active)} active runner job(s), reaching per_user_concurrency="
+                f"{settings['per_user_concurrency']}."
+            )
+            return resolution
+    if active >= settings["max_queue_size"]:
+        resolution["can_dispatch"] = False
+        resolution["dispatch_mode"] = "deferred"
+        resolution["block_reason"] = "runner_queue_full"
+        resolution["block_detail"] = (
+            f"runner queue is at capacity ({active}/{settings['max_queue_size']}); "
+            "dispatch is deferred until capacity becomes available."
+        )
+        return resolution
+    if not bool((health or {}).get("healthy")):
+        if allow_ondemand:
+            resolution["dispatch_mode"] = "ondemand"
+            resolution["fallback_permitted"] = True
+            return resolution
+        resolution["can_dispatch"] = False
+        resolution["dispatch_mode"] = "deferred"
+        resolution["block_reason"] = "runner_worker_unhealthy"
+        resolution["block_detail"] = (
+            f"runner heartbeat is unavailable or stale ({str((health or {}).get('reason', '') or 'unknown')}); "
+            "dispatch is deferred to avoid queuing work onto an unhealthy worker."
+        )
+        return resolution
+    return resolution
+
+
+def build_runner_gate_handoff(*, reason: str, detail: str, queue_pressure_band: str, dispatch_mode: str) -> dict:
+    labels = {
+        "runner_pool_disabled": "runner pool 已禁用",
+        "runner_queue_full": "runner 队列已满",
+        "runner_worker_unhealthy": "runner worker 不健康",
+        "runner_per_user_concurrency_exceeded": "当前会话 runner 并发已满",
+    }
+    summary = labels.get(reason, "runner 当前不可派发")
+    suffix = f"（queue={queue_pressure_band or 'unknown'} / mode={dispatch_mode or 'deferred'}）"
+    return {
+        "kind": "plan",
+        "status": "failed",
+        "summary": f"{summary}{suffix}",
+        "reply_text": f"这次任务还没真正派发到 runner。原因是：{detail}",
+        "report_path": "",
+        "user_safe": True,
+    }
+
+
 def run_runner_on_demand(job_id: str) -> dict:
     worker_id = f"runner-ondemand-{job_id or now_compact()}"
     env = {
@@ -830,6 +1173,43 @@ def run_runner_on_demand(job_id: str) -> dict:
     }
 
 
+def kick_runner_on_demand_background(job_id: str) -> dict:
+    worker_id = f"runner-bootstrap-{job_id or now_compact()}"
+    env = {
+        **os.environ,
+        "WORKSPACE": WORKSPACE,
+        "RUNNER_MAX_JOBS_PER_WORKER": "1",
+        "RUNNER_MAX_IDLE_SECONDS": "1",
+        "RUNNER_POLL_INTERVAL_SECONDS": "1",
+        "RUNNER_HEARTBEAT_INTERVAL_SECONDS": "1",
+        "RUNNER_WORKER_ID": worker_id,
+    }
+    try:
+        proc = subprocess.Popen(
+            ["bash", RUNNER_LOOP_SH],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+        return {
+            "triggered": True,
+            "worker_id": worker_id,
+            "pid": int(proc.pid or 0),
+            "ok": True,
+            "mode": "background_bootstrap",
+        }
+    except OSError as exc:
+        return {
+            "triggered": False,
+            "worker_id": worker_id,
+            "pid": 0,
+            "ok": False,
+            "mode": "background_bootstrap",
+            "error": str(exc),
+        }
+
+
 def dispatch_runner(args) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     identity = octoclaw_identity_fields(decision)
@@ -844,6 +1224,57 @@ def dispatch_runner(args) -> dict:
         command = command or str(playbook.get("command", "") or "")
         if not summary:
             summary = str(playbook.get("summary", "") or "")
+    goal_contract = build_runner_goal_contract(
+        task=args.task,
+        command=command,
+        summary=summary or args.task[:40],
+        timeout_seconds=args.timeout_seconds,
+        decision=decision,
+        playbook=playbook,
+        session_key=str(identity.get("session_key", "") or ""),
+        runner_job_id=args.id or "",
+        task_id=args.id or "",
+    )
+    runtime_resolution = runner_dispatch_runtime_resolution(wait=bool(args.wait), session_key=str(identity.get("session_key", "") or ""))
+    if not bool(runtime_resolution.get("can_dispatch")):
+        failure = build_capability_bound_failure(
+            "runner",
+            str(runtime_resolution.get("block_reason", "") or "runner_dispatch_blocked"),
+            detail=str(runtime_resolution.get("block_detail", "") or "runner dispatch blocked by runtime readiness gate."),
+            missing_capabilities=[
+                "runner_capacity"
+                if runtime_resolution.get("block_reason") == "runner_queue_full"
+                else ("runner_concurrency_slot" if runtime_resolution.get("block_reason") == "runner_per_user_concurrency_exceeded" else "runner_worker")
+            ],
+            fallback_permitted=bool(runtime_resolution.get("fallback_permitted", False)),
+        )
+        response = apply_policy_fields({
+            "route": "runner",
+            "executed": False,
+            "job": {},
+            "reason": str(runtime_resolution.get("block_reason", "") or "runner_dispatch_blocked"),
+            "runner_execution_mode": str(runtime_resolution.get("dispatch_mode", "") or "deferred"),
+            "goal_contract": goal_contract,
+            "runner_runtime_resolution": runtime_resolution,
+            "capability_failure": failure,
+            "materialization": build_runner_materialization(
+                execution_contract="inspect_report",
+                session_key=str(identity.get("session_key", "") or ""),
+                job_id=str(args.id or ""),
+                executed=False,
+                failure=failure,
+            ),
+        }, decision)
+        if playbook:
+            response["runner_plan"] = playbook
+            response["playbook"] = playbook
+        response["handoff"] = build_runner_gate_handoff(
+            reason=str(runtime_resolution.get("block_reason", "") or ""),
+            detail=str(runtime_resolution.get("block_detail", "") or ""),
+            queue_pressure_band=str(runtime_resolution.get("queue_pressure_band", "") or ""),
+            dispatch_mode=str(runtime_resolution.get("dispatch_mode", "") or ""),
+        )
+        return response
 
     dispatch_cmd = [
         "python3",
@@ -865,6 +1296,7 @@ def dispatch_runner(args) -> dict:
     ]
     if playbook:
         dispatch_cmd.extend(["--playbook-json", json.dumps(playbook, ensure_ascii=False)])
+    dispatch_cmd.extend(["--goal-contract-json", json.dumps(goal_contract, ensure_ascii=False)])
     if str(identity.get("session_key", "") or "").strip():
         dispatch_cmd.extend(["--session-key", str(identity["session_key"])])
     if str(identity.get("session_id", "") or "").strip():
@@ -879,12 +1311,26 @@ def dispatch_runner(args) -> dict:
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "runner dispatch failed")
     payload = json.loads(result.stdout.strip() or "{}")
+    if isinstance(payload, dict) and isinstance(payload.get("goal_contract"), dict):
+        goal_contract = dict(payload.get("goal_contract"))
+    elif isinstance(payload, dict):
+        payload_job_id = str(payload.get("id", "") or "")
+        if payload_job_id:
+            goal_contract["runner_job_id"] = payload_job_id
+            goal_contract["task_id"] = str(goal_contract.get("task_id", "") or payload_job_id)
+            binding = goal_contract.get("native_task_binding", {})
+            if not isinstance(binding, dict):
+                binding = {}
+            binding["task_id"] = str(binding.get("task_id", "") or goal_contract["task_id"])
+            goal_contract["native_task_binding"] = binding
     response = apply_policy_fields({
         "route": "runner",
         "executed": True,
         "job": payload,
         "reason": "lightweight_task",
-        "runner_execution_mode": "daemon",
+        "runner_execution_mode": str(runtime_resolution.get("dispatch_mode", "") or "daemon"),
+        "goal_contract": goal_contract,
+        "runner_runtime_resolution": runtime_resolution,
         "materialization": build_runner_materialization(
             execution_contract="inspect_report",
             session_key=str(identity.get("session_key", "") or ""),
@@ -895,9 +1341,32 @@ def dispatch_runner(args) -> dict:
     if playbook:
         response["runner_plan"] = playbook
         response["playbook"] = playbook
-    if args.wait and not runner_health_is_healthy():
+    if response.get("runner_execution_mode") == "ondemand":
         response["runner_execution_mode"] = "ondemand"
-        response["runner_execution"] = run_runner_on_demand(str(payload.get("id", "") or ""))
+        if args.wait:
+            response["runner_execution"] = run_runner_on_demand(str(payload.get("id", "") or ""))
+            append_runtime_task_event(
+                str(payload.get("id", "") or ""),
+                "progress_note",
+                "runner switched to on-demand worker",
+                event_json={
+                    "runner_job_id": str(payload.get("id", "") or ""),
+                    "execution_backend": "runner_queue",
+                    "progress_state": "ondemand",
+                },
+            )
+        else:
+            response["runner_execution"] = kick_runner_on_demand_background(str(payload.get("id", "") or ""))
+            append_runtime_task_event(
+                str(payload.get("id", "") or ""),
+                "progress_note",
+                "runner background worker bootstrapped",
+                event_json={
+                    "runner_job_id": str(payload.get("id", "") or ""),
+                    "execution_backend": "runner_queue",
+                    "progress_state": "background_bootstrap",
+                },
+            )
     if args.wait:
         wait_timeout = 1 if response.get("runner_execution_mode") == "ondemand" else args.wait_timeout_seconds
         response["wait"] = wait_for_runner_result(payload.get("id", ""), wait_timeout)
@@ -958,16 +1427,14 @@ def recommend_multi_spawn(args, task: str) -> dict:
         register=False,
         policy_decision=decision,
     )
-    planner_task = build_multi_step_task(task, "planner")
-    planner_decision = build_decision(planner_task, metadata=decision_metadata(decision), force_route="spawn_single")
+    planner_decision = synthesize_multi_step_decision(decision, "planner")
     worker_decision = clone_worker_step_decision(decision)
     plan = {
         "planner": compat_spawn_step_from_decision(planner_decision),
         "worker": compat_spawn_step_from_decision(worker_decision, fallback=primary_spawn),
     }
     if decision_review(decision).get("required", False):
-        review_task = build_multi_step_task(task, "review")
-        review_decision = build_decision(review_task, metadata=decision_metadata(decision), force_route="spawn_single")
+        review_decision = synthesize_multi_step_decision(decision, "review")
         plan["review"] = compat_spawn_step_from_decision(review_decision)
     execution = execute_multi_spawn_plan(args, task, plan, parent_task_id=str(primary_spawn.get("task_id", "") or f"octoclaw-team-{now_compact()}"))
     parent_runtime = multi_exec_backend if multi_exec_enabled else "plan"
@@ -1043,6 +1510,20 @@ def main():
 
     task = args.task.strip()
     decision = None
+    legacy_policy_fallback_used = False
+    forced_route = ""
+    if args.force_route != "auto":
+        forced_route = args.force_route
+    metadata: dict[str, object] = {}
+    if args.metadata_json:
+        try:
+            parsed = json.loads(args.metadata_json)
+            if isinstance(parsed, dict):
+                metadata.update(parsed)
+        except json.JSONDecodeError:
+            metadata = metadata
+    if args.session_key:
+        metadata["session_key"] = args.session_key
     if args.policy_json:
         try:
             parsed = json.loads(args.policy_json)
@@ -1051,20 +1532,14 @@ def main():
         except json.JSONDecodeError:
             decision = None
     if not isinstance(decision, dict):
-        forced_route = ""
-        if args.force_route != "auto":
-            forced_route = args.force_route
-        metadata: dict[str, object] = {}
-        if args.metadata_json:
-            try:
-                parsed = json.loads(args.metadata_json)
-                if isinstance(parsed, dict):
-                    metadata.update(parsed)
-            except json.JSONDecodeError:
-                metadata = metadata
-        if args.session_key:
-            metadata["session_key"] = args.session_key
-        decision = build_decision(task, args.command, metadata, force_route=forced_route)
+        if legacy_policy_fallback_enabled():
+            decision = build_legacy_policy_decision(task, args.command, metadata, force_route=forced_route)
+            legacy_policy_fallback_used = True
+        else:
+            payload = build_dispatch_policy_required_failure(task, force_route=forced_route)
+            print(json.dumps(payload, ensure_ascii=False))
+            return
+    decision["legacy_policy_fallback_used"] = legacy_policy_fallback_used
     args._policy_decision = decision
     route = decision_route(decision)
     model_meta = decision_model(decision)

@@ -59,6 +59,27 @@ class RuntimeSnapshotTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["queued"], 1)
         self.assertFalse(payload["workbench"]["optional_backend"])
 
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={"runtime_policy": {"runner_pool": {"worker_unhealthy_after_failures": 2}}})
+    @patch("lib.runtime_snapshot.load_json")
+    def test_load_runner_health_marks_failure_streak_unhealthy(self, mock_load_json, _mock_cfg) -> None:
+        mock_load_json.return_value = {
+            "worker_id": "runner-a",
+            "last_heartbeat_at": "2026-04-10T00:00:00+00:00",
+            "failure_streak": 2,
+            "last_job_status": "failed",
+        }
+        with patch("lib.runtime_snapshot.datetime") as mock_datetime:
+            from datetime import datetime, timezone
+
+            mock_datetime.now.return_value = datetime(2026, 4, 10, 0, 0, 30, tzinfo=timezone.utc)
+            mock_datetime.fromisoformat = datetime.fromisoformat
+            payload = runtime_snapshot.load_runner_health(stale_after_seconds=120)
+
+        self.assertTrue(payload["present"])
+        self.assertFalse(payload["healthy"])
+        self.assertEqual(payload["reason"], "failure_streak")
+        self.assertEqual(payload["failure_streak"], 2)
+
     @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
     def test_build_runtime_snapshot_normalizes_on_demand_aliases(self, _mock_cfg) -> None:
         payload = runtime_snapshot.build_runtime_snapshot(

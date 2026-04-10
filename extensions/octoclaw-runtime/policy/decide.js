@@ -11,6 +11,7 @@ import {
   ROUTE_STICKINESS_FILE,
   loadJson,
   loadOctoClawConfig,
+  resolveRuntimeFeatureFlags,
   saveJson,
 } from "./config.js";
 import { resolveModelAndThinking } from "./model.js";
@@ -492,9 +493,9 @@ function runtimeSwitchesSummary(policyCfg) {
   const switches = policyCfg?.switches && typeof policyCfg.switches === "object" ? policyCfg.switches : {};
   const routeStickiness = policyCfg?.route_stickiness && typeof policyCfg.route_stickiness === "object" ? policyCfg.route_stickiness : {};
   const policyRouter = policyCfg?.policy_router && typeof policyCfg.policy_router === "object" ? policyCfg.policy_router : {};
-  const features = policyCfg?.features && typeof policyCfg.features === "object" ? policyCfg.features : {};
-  const runnerPool = policyCfg?.runner_pool && typeof policyCfg.runner_pool === "object" ? policyCfg.runner_pool : {};
+  const features = resolveRuntimeFeatureFlags(policyCfg);
   return {
+    rollout_contract_version: String(features.rollout_contract_version || "octoclaw.runtime_flags/v1"),
     policy_enabled: Boolean("enabled" in (policyCfg || {}) ? policyCfg.enabled : true),
     hard_runner_only_enabled: Boolean("hard_runner_only" in switches ? switches.hard_runner_only : true),
     route_hint_required_enabled: Boolean("route_hint_required" in switches ? switches.route_hint_required : false),
@@ -505,12 +506,16 @@ function runtimeSwitchesSummary(policyCfg) {
     ack_followup_enabled: Boolean("ack_followup_enabled" in routeStickiness ? routeStickiness.ack_followup_enabled : true),
     policy_router_enabled: Boolean("enabled" in policyRouter ? policyRouter.enabled : true),
     policy_router_mode: String(policyRouter.mode || "model_first"),
-    policy_judge_live_enabled: Boolean("policy_judge_live" in features ? features.policy_judge_live : true),
-    cheap_judge_live_enabled: Boolean("cheap_judge_live" in features ? features.cheap_judge_live : false),
-    local_judge_live_enabled: Boolean("local_judge_live" in features ? features.local_judge_live : false),
-    runner_pool_enabled: Boolean("runner_pool_enabled" in features ? features.runner_pool_enabled : ("enabled" in runnerPool ? runnerPool.enabled : true)),
-    delivery_relay_enabled: Boolean("delivery_relay_enabled" in features ? features.delivery_relay_enabled : true),
-    patrol_loop_enabled: Boolean("patrol_loop_enabled" in features ? features.patrol_loop_enabled : false),
+    policy_judge_live_enabled: Boolean(features.policy_judge_live),
+    cheap_judge_live_enabled: Boolean(features.cheap_judge_live),
+    local_judge_live_enabled: Boolean(features.local_judge_live),
+    runner_pool_enabled: Boolean(features.runner_pool_enabled),
+    delivery_relay_enabled: Boolean(features.delivery_relay_enabled),
+    legacy_runner_fallback_enabled: Boolean(features.legacy_runner_fallback),
+    patrol_loop_enabled: Boolean(features.patrol_loop_enabled),
+    safe_mode_enabled: Boolean(features.safe_mode_enabled),
+    judge_lock: String(features.judge_lock || ""),
+    override_sources: Array.isArray(features.override_sources) ? [...features.override_sources] : [],
   };
 }
 
@@ -609,7 +614,7 @@ function stableId(prefix, parts = []) {
   return `${prefix}-${stableHash(parts.map((part) => String(part || "")).join("\u001f"))}`;
 }
 
-function firstEnabledPolicyJudge(candidates = {}, preferred = "main_grade_model") {
+function firstEnabledPolicyJudge(candidates = {}, preferred = "main_grade_model", rolloutFlags = {}) {
   const ordered = [
     String(preferred || "").trim(),
     "cheap_model",
@@ -619,6 +624,8 @@ function firstEnabledPolicyJudge(candidates = {}, preferred = "main_grade_model"
   for (const key of ordered) {
     const candidate = candidates?.[key];
     if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && Boolean("enabled" in candidate ? candidate.enabled : false)) {
+      if (key === "cheap_model" && !Boolean(rolloutFlags.cheap_judge_live)) continue;
+      if (key === "local_model" && !Boolean(rolloutFlags.local_judge_live)) continue;
       return { name: key, config: { ...candidate } };
     }
   }
@@ -634,7 +641,12 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
   const confidence = Number(intentPacket?.confidence || 0);
   const judgeOn = Array.isArray(cfg.judge_on) ? cfg.judge_on.map((item) => String(item || "").trim()).filter(Boolean) : ["undetermined"];
   const judgeEligible = Boolean(intentPacket?.judge?.eligible || judgeOn.includes(intentClass));
-  const selectedJudge = firstEnabledPolicyJudge(candidates, String(cfg.default_judge || "main_grade_model"));
+  const rolloutFlags = resolveRuntimeFeatureFlags(runtimeCfg);
+  const selectedJudge = firstEnabledPolicyJudge(
+    candidates,
+    String(rolloutFlags.judge_lock || cfg.default_judge || "main_grade_model"),
+    rolloutFlags,
+  );
   const judgeResult = options?.judgeResult && typeof options.judgeResult === "object" && !Array.isArray(options.judgeResult)
     ? options.judgeResult
     : {};

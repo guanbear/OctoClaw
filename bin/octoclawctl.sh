@@ -59,36 +59,37 @@ PATROL_PID_FILE="$WORKSPACE/tmp/octopus/patrol-loop.pid"
 print_usage() {
     cat <<'EOF'
 Usage:
-  bash bin/octoclawctl.sh <status|ps|up|down|restart|reload|patrol-once|observe-once|runner-status> [target]
+  bash bin/octoclawctl.sh <status|ps|observe-once|reconcile-once|repair-once|runner-status|runner-pool-status|up|down|restart|reload> [target]
 
 Observe commands:
   status         render the compact operator status view
   ps             print runtime process/supervisor state
   observe-once   print the read-only runtime observer snapshot once
+  reconcile-once run a single runtime reconcile/observe pass
+  repair-once    run a single repair-capable patrol pass
   runner-status  print runner queue/health details
+  runner-pool-status
+                 alias of runner-status
 
 Control commands:
-  up             start the selected runtime target
-  down           stop the selected runtime target
-  restart        restart the selected runtime target
-  reload         alias of restart for managed targets
-
-Supervise commands:
-  patrol-once    run a single patrol supervision pass
+  up             start the selected supported target
+  down           stop the selected supported target
+  restart        restart the selected supported target
+  reload         alias of restart for supported targets
 
 Targets (for up/down/restart/reload):
-  all       openclaw + runner + patrol (default for up/down/restart)
-  runtime   runner + patrol
+  all       openclaw + runner (default for up/down/restart)
+  runtime   runner only
   openclaw  main OpenClaw service only
   runner    OctoClaw runner only
-  patrol    OctoClaw patrol only
 
 Examples:
   bash bin/octoclawctl.sh status
   bash bin/octoclawctl.sh ps
   bash bin/octoclawctl.sh up runtime
   bash bin/octoclawctl.sh restart all
-  bash bin/octoclawctl.sh patrol-once
+  bash bin/octoclawctl.sh reconcile-once
+  bash bin/octoclawctl.sh repair-once
   bash bin/octoclawctl.sh observe-once
 
 Runtime env:
@@ -357,6 +358,14 @@ run_patrol_once() {
     "$PYTHON_BIN" "$PATROL_PY"
 }
 
+run_reconcile_once() {
+    run_patrol_once
+}
+
+run_repair_once() {
+    run_patrol_once
+}
+
 run_runner_status() {
     export WORKSPACE
     "$PYTHON_BIN" "$RUNTIME_OBSERVER_PY" --workspace "$WORKSPACE" --format runner
@@ -373,51 +382,30 @@ print_process_snapshot() {
     echo "supervisor_mode=$mode"
     echo "workspace=$WORKSPACE"
     echo "runner_mode=$RUNNER_MODE"
+    echo "patrol_default_mode=ondemand_reconcile_only"
     echo "openclaw_service=$(service_state "$OPENCLAW_SERVICE")"
     if [ "$RUNNER_MODE" = "ondemand" ]; then
         echo "runner_service=ondemand"
-        if [ "$mode" = "systemd" ]; then
-            echo "patrol_service=$(service_state "$PATROL_SERVICE")"
-        elif [ "$mode" = "tmux" ]; then
-            if tmux_available && tmux_session_exists; then
-                echo "tmux_session=$TMUX_SESSION_NAME"
-                echo "runner_window=ondemand"
-                echo "patrol_window=$([ "$(tmux_window_exists "$TMUX_PATROL_WINDOW_NAME"; echo $?)" -eq 0 ] && echo present || echo missing)"
-            else
-                echo "tmux_session=missing"
-                echo "runner_window=ondemand"
-                echo "patrol_window=missing"
-            fi
-        else
-            local patrol_pid
-            patrol_pid="$(read_pid_file "$PATROL_PID_FILE")"
-            echo "runner_pid="
-            echo "runner_running=ondemand"
-            echo "patrol_pid=${patrol_pid:-}"
-            echo "patrol_running=$([ -n "$patrol_pid" ] && pid_is_running "$patrol_pid" && echo true || echo false)"
-        fi
+        echo "runner_pid="
+        echo "runner_running=ondemand"
     elif [ "$mode" = "systemd" ]; then
         echo "runner_service=$(service_state "$RUNNER_SERVICE")"
-        echo "patrol_service=$(service_state "$PATROL_SERVICE")"
     elif [ "$mode" = "tmux" ]; then
         if tmux_available && tmux_session_exists; then
             echo "tmux_session=$TMUX_SESSION_NAME"
             echo "runner_window=$([ "$(tmux_window_exists "$TMUX_RUNNER_WINDOW_NAME"; echo $?)" -eq 0 ] && echo present || echo missing)"
-            echo "patrol_window=$([ "$(tmux_window_exists "$TMUX_PATROL_WINDOW_NAME"; echo $?)" -eq 0 ] && echo present || echo missing)"
         else
             echo "tmux_session=missing"
             echo "runner_window=missing"
-            echo "patrol_window=missing"
         fi
     else
-        local runner_pid patrol_pid
+        local runner_pid
         runner_pid="$(read_pid_file "$RUNNER_PID_FILE")"
-        patrol_pid="$(read_pid_file "$PATROL_PID_FILE")"
         echo "runner_pid=${runner_pid:-}"
         echo "runner_running=$([ -n "$runner_pid" ] && pid_is_running "$runner_pid" && echo true || echo false)"
-        echo "patrol_pid=${patrol_pid:-}"
-        echo "patrol_running=$([ -n "$patrol_pid" ] && pid_is_running "$patrol_pid" && echo true || echo false)"
     fi
+    echo "legacy_patrol_pid=$(read_pid_file "$PATROL_PID_FILE")"
+    echo "legacy_patrol_running=$([ -n "$(read_pid_file "$PATROL_PID_FILE")" ] && pid_is_running "$(read_pid_file "$PATROL_PID_FILE")" && echo true || echo false)"
     echo "runner_health_file=$RUNNER_HEALTH_FILE"
     echo "runner_health_present=$([ -f "$RUNNER_HEALTH_FILE" ] && echo true || echo false)"
 }
@@ -439,7 +427,6 @@ run_action() {
             ;;
         runtime)
             run_action "$action" runner
-            run_action "$action" patrol
             ;;
         openclaw)
             case "$action" in
@@ -456,11 +443,8 @@ run_action() {
             esac
             ;;
         patrol)
-            case "$action" in
-                up) start_patrol_runtime ;;
-                down) stop_patrol_runtime ;;
-                restart|reload) restart_patrol_runtime ;;
-            esac
+            echo "patrol target is deprecated; use reconcile-once or repair-once instead." >&2
+            exit 1
             ;;
         *)
             echo "unknown target: $target" >&2
@@ -484,13 +468,20 @@ case "$COMMAND" in
         run_action "$COMMAND" "$TARGET"
         run_status
         ;;
+    reconcile-once)
+        run_reconcile_once
+        ;;
+    repair-once)
+        run_repair_once
+        ;;
     patrol-once)
-        run_patrol_once
+        echo "patrol-once is deprecated; running repair-once instead." >&2
+        run_repair_once
         ;;
     observe-once)
         run_observer_once
         ;;
-    runner-status)
+    runner-status|runner-pool-status)
         run_runner_status
         ;;
     -h|--help|help)

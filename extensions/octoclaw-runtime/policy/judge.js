@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolveRuntimeFeatureFlags } from "./config.js";
 
 export const POLICY_JUDGE_RESULT_SCHEMA_VERSION = "octoclaw.policy_judge.result/v1";
 const VALID_ROUTES = new Set(["direct", "runner", "spawn_single", "spawn_multi"]);
@@ -37,7 +38,8 @@ export function selectPolicyJudge(runtimeCfg = {}) {
   const candidates = cfg.candidates && typeof cfg.candidates === "object" && !Array.isArray(cfg.candidates)
     ? cfg.candidates
     : {};
-  const defaultName = normalizeText(cfg.default_judge || "main_grade_model") || "main_grade_model";
+  const flags = resolveRuntimeFeatureFlags(runtimeCfg);
+  const defaultName = normalizeText(flags.judge_lock || cfg.default_judge || "main_grade_model") || "main_grade_model";
   const names = [
     defaultName,
     ...Object.keys(candidates).filter((name) => name !== defaultName),
@@ -47,6 +49,8 @@ export function selectPolicyJudge(runtimeCfg = {}) {
       ? candidates[name]
       : {};
     if (config.enabled === false) continue;
+    if (name === "cheap_model" && !flags.cheap_judge_live) continue;
+    if (name === "local_model" && !flags.local_judge_live) continue;
     return {
       name,
       config,
@@ -273,10 +277,8 @@ export async function invokePolicyJudge({
   cwd = process.cwd(),
 } = {}) {
   const cfg = routerConfig(runtimeCfg);
-  const features = runtimeCfg?.features && typeof runtimeCfg.features === "object" && !Array.isArray(runtimeCfg.features)
-    ? runtimeCfg.features
-    : {};
-  const liveEnabled = Boolean("policy_judge_live" in features ? features.policy_judge_live : true);
+  const flags = resolveRuntimeFeatureFlags(runtimeCfg);
+  const liveEnabled = Boolean(flags.policy_judge_live);
   const judge = selectPolicyJudge(runtimeCfg);
   const context = {
     selected: judge.name,

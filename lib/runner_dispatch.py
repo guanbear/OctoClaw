@@ -13,7 +13,9 @@ from typing import Any
 
 from openclaw_taskflow_adapter import register_taskflow_binding
 from octopus_config import RUNNER_QUEUE_FILE, WORKSPACE, load_json, runner_operator_surface
+from runner_goal_contract import build_runner_goal_contract
 from runtime_protocol import build_delegated_materialization
+from task_events import append_task_event
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 QUEUE_PY = os.path.join(SCRIPT_DIR, "runner_queue.py")
@@ -137,6 +139,7 @@ def runner_artifacts(
     playbook: dict | None = None,
     taskflow_binding: dict | None = None,
     materialization: dict | None = None,
+    goal_contract: dict | None = None,
 ) -> dict:
     surface = runner_operator_surface()
     payload = {
@@ -150,6 +153,8 @@ def runner_artifacts(
         payload["openclaw_taskflow"] = dict(taskflow_binding)
     if isinstance(materialization, dict) and materialization:
         payload["delegated_materialization"] = dict(materialization)
+    if isinstance(goal_contract, dict) and goal_contract:
+        payload["goal_contract"] = dict(goal_contract)
     return payload
 
 
@@ -161,6 +166,7 @@ def build_runner_task_seed(
     playbook: dict | None = None,
     materialization: dict | None = None,
     taskflow_binding: dict | None = None,
+    goal_contract: dict | None = None,
 ) -> dict[str, Any]:
     return {
         "id": job_id,
@@ -183,7 +189,7 @@ def build_runner_task_seed(
         "agent_id": args.agent_id or "",
         "agent_namespace": args.agent_namespace or "",
         "managed_by_octoclaw": args.managed_by_octoclaw or "",
-        "artifacts": runner_artifacts(playbook, taskflow_binding, materialization),
+        "artifacts": runner_artifacts(playbook, taskflow_binding, materialization, goal_contract),
     }
 
 
@@ -202,6 +208,7 @@ def main():
     parser.add_argument("--agent-namespace", dest="agent_namespace", default="")
     parser.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", default="")
     parser.add_argument("--playbook-json", dest="playbook_json", default="")
+    parser.add_argument("--goal-contract-json", dest="goal_contract_json", default="")
     args = parser.parse_args()
 
     job_id = args.id or f"runner-{now_compact()}"
@@ -218,6 +225,14 @@ def main():
                 playbook = parsed
         except json.JSONDecodeError:
             playbook = {}
+    goal_contract = {}
+    if str(args.goal_contract_json or "").strip():
+        try:
+            parsed = json.loads(args.goal_contract_json)
+            if isinstance(parsed, dict):
+                goal_contract = parsed
+        except json.JSONDecodeError:
+            goal_contract = {}
     materialization = build_runner_materialization(job_id, session_key=args.session_key or "")
     task_seed = build_runner_task_seed(
         job_id,
@@ -225,9 +240,31 @@ def main():
         model=model,
         playbook=playbook,
         materialization=materialization,
+        goal_contract=goal_contract,
     )
     taskflow_binding = register_taskflow_binding(task_seed)
-    artifacts = runner_artifacts(playbook, taskflow_binding, materialization)
+    goal_contract = build_runner_goal_contract(
+        task=args.task_description or args.command,
+        command=args.command,
+        summary=args.summary or job_id,
+        timeout_seconds=args.timeout_seconds,
+        playbook=playbook,
+        session_key=args.session_key or "",
+        runner_job_id=job_id,
+        task_id=job_id,
+        taskflow_binding=taskflow_binding,
+    ) if not goal_contract else build_runner_goal_contract(
+        task=str(goal_contract.get("goal", "") or args.task_description or args.command),
+        command=str(goal_contract.get("command", "") or args.command),
+        summary=str(goal_contract.get("summary_hint", "") or args.summary or job_id),
+        timeout_seconds=int(goal_contract.get("timeout_seconds", args.timeout_seconds) or args.timeout_seconds),
+        playbook=playbook,
+        session_key=str(goal_contract.get("session_key", "") or args.session_key or ""),
+        runner_job_id=job_id,
+        task_id=job_id,
+        taskflow_binding=taskflow_binding,
+    )
+    artifacts = runner_artifacts(playbook, taskflow_binding, materialization, goal_contract)
     subprocess.run(
         [
             "python3",
@@ -278,6 +315,46 @@ def main():
         stdout=subprocess.DEVNULL,
         check=True,
     )
+    append_task_event(
+        {
+            **task_seed,
+            "artifacts": artifacts,
+        },
+        "task_bound",
+        message="runner job bound to native taskflow",
+        extra={
+            "runner_job_id": job_id,
+            "execution_backend": "runner_queue",
+            "goal_contract": goal_contract,
+            "taskflow_binding": taskflow_binding,
+        },
+    )
+    append_task_event(
+        {
+            **task_seed,
+            "artifacts": artifacts,
+        },
+        "dispatch_started",
+        message="runner job queued for worker lease",
+        extra={
+            "runner_job_id": job_id,
+            "execution_backend": "runner_queue",
+            "progress_state": "queued",
+        },
+    )
+    append_task_event(
+        {
+            **task_seed,
+            "artifacts": artifacts,
+        },
+        "progress_note",
+        message="runner queued and waiting for available worker",
+        extra={
+            "runner_job_id": job_id,
+            "execution_backend": "runner_queue",
+            "progress_state": "queued",
+        },
+    )
 
     payload = run_json(
         [
@@ -311,6 +388,7 @@ def main():
     )
     if isinstance(payload, dict):
         payload.setdefault("artifacts", artifacts)
+        payload.setdefault("goal_contract", goal_contract)
         if taskflow_binding:
             payload.setdefault("openclaw_taskflow", dict(taskflow_binding))
             payload.setdefault("openclaw_taskflow_backend", str(taskflow_binding.get("backend", "") or ""))

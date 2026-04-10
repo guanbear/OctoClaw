@@ -1,7 +1,12 @@
 #!/bin/bash
-# runner-daemon.sh — 常驻飞鱼腿管理器
-# 启动: setsid bash runner-daemon.sh &
-# 停止: kill $(cat /workspace/tmp/octopus/runner-daemon.pid)
+# runner-daemon.sh — legacy wrapper
+# 默认架构下 runner 常驻只作为显式 opt-in 加速层；如需继续使用旧 daemon，
+# 必须显式设置 OCTOCLAW_ENABLE_LEGACY_LOOPS=1。
+
+if [[ "${OCTOCLAW_ENABLE_LEGACY_LOOPS:-}" != "1" ]]; then
+    echo "runner-daemon.sh is legacy-only. Use the gateway-managed runner pool or on-demand runner mode instead."
+    exit 0
+fi
 
 set -euo pipefail
 

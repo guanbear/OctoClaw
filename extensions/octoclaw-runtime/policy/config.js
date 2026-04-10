@@ -66,6 +66,26 @@ const RUNTIME_POLICY_MODE_PRESETS = {
   },
 };
 
+const FEATURE_FLAG_DEFAULTS = {
+  policy_judge_live: true,
+  cheap_judge_live: false,
+  local_judge_live: false,
+  runner_pool_enabled: true,
+  delivery_relay_enabled: true,
+  legacy_runner_fallback: true,
+  patrol_loop_enabled: false,
+};
+
+const FEATURE_FLAG_ENV_MAP = {
+  policy_judge_live: "OCTOCLAW_POLICY_JUDGE_LIVE",
+  cheap_judge_live: "OCTOCLAW_CHEAP_JUDGE_LIVE",
+  local_judge_live: "OCTOCLAW_LOCAL_JUDGE_LIVE",
+  runner_pool_enabled: "OCTOCLAW_RUNNER_POOL_ENABLED",
+  delivery_relay_enabled: "OCTOCLAW_DELIVERY_RELAY_ENABLED",
+  legacy_runner_fallback: "OCTOCLAW_LEGACY_RUNNER_FALLBACK",
+  patrol_loop_enabled: "OCTOCLAW_PATROL_LOOP_ENABLED",
+};
+
 function resolveRuntimePolicyMode(value) {
   const raw = String(value || "").trim().toLowerCase();
   const normalized = RUNTIME_POLICY_MODE_ALIASES[raw] || raw;
@@ -82,6 +102,63 @@ function normalizePath(value) {
   if (text === "~") return os.homedir();
   if (text.startsWith("~/")) return path.join(os.homedir(), text.slice(2));
   return path.resolve(text);
+}
+
+function parseOptionalBool(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return null;
+  if (["1", "true", "yes", "on"].includes(text)) return true;
+  if (["0", "false", "no", "off"].includes(text)) return false;
+  return null;
+}
+
+export function resolveRuntimeFeatureFlags(runtimePolicy = {}) {
+  const policy = runtimePolicy && typeof runtimePolicy === "object" && !Array.isArray(runtimePolicy)
+    ? runtimePolicy
+    : {};
+  const features = policy.features && typeof policy.features === "object" && !Array.isArray(policy.features)
+    ? policy.features
+    : {};
+  const runnerPool = policy.runner_pool && typeof policy.runner_pool === "object" && !Array.isArray(policy.runner_pool)
+    ? policy.runner_pool
+    : {};
+  const flags = {
+    ...FEATURE_FLAG_DEFAULTS,
+    policy_judge_live: Boolean("policy_judge_live" in features ? features.policy_judge_live : FEATURE_FLAG_DEFAULTS.policy_judge_live),
+    cheap_judge_live: Boolean("cheap_judge_live" in features ? features.cheap_judge_live : FEATURE_FLAG_DEFAULTS.cheap_judge_live),
+    local_judge_live: Boolean("local_judge_live" in features ? features.local_judge_live : FEATURE_FLAG_DEFAULTS.local_judge_live),
+    runner_pool_enabled: Boolean(
+      "runner_pool_enabled" in features
+        ? features.runner_pool_enabled
+        : ("enabled" in runnerPool ? runnerPool.enabled : FEATURE_FLAG_DEFAULTS.runner_pool_enabled)
+    ),
+    delivery_relay_enabled: Boolean("delivery_relay_enabled" in features ? features.delivery_relay_enabled : FEATURE_FLAG_DEFAULTS.delivery_relay_enabled),
+    legacy_runner_fallback: Boolean("legacy_runner_fallback" in features ? features.legacy_runner_fallback : FEATURE_FLAG_DEFAULTS.legacy_runner_fallback),
+    patrol_loop_enabled: Boolean("patrol_loop_enabled" in features ? features.patrol_loop_enabled : FEATURE_FLAG_DEFAULTS.patrol_loop_enabled),
+  };
+  const overrideSources = [];
+  const safeModeEnabled = parseOptionalBool(process.env.OCTOCLAW_RUNTIME_SAFE_MODE) === true;
+  if (safeModeEnabled) {
+    flags.cheap_judge_live = false;
+    flags.local_judge_live = false;
+    flags.runner_pool_enabled = false;
+    flags.legacy_runner_fallback = true;
+    flags.patrol_loop_enabled = false;
+    overrideSources.push("env:OCTOCLAW_RUNTIME_SAFE_MODE");
+  }
+  for (const [key, envName] of Object.entries(FEATURE_FLAG_ENV_MAP)) {
+    const parsed = parseOptionalBool(process.env[envName]);
+    if (parsed === null) continue;
+    flags[key] = parsed;
+    overrideSources.push(`env:${envName}`);
+  }
+  return {
+    rollout_contract_version: "octoclaw.runtime_flags/v1",
+    ...flags,
+    safe_mode_enabled: safeModeEnabled,
+    judge_lock: safeModeEnabled ? "main_grade_model" : "",
+    override_sources: overrideSources,
+  };
 }
 
 export function resolveWorkspace() {
@@ -337,10 +414,14 @@ export function loadOctoClawConfig() {
   const data = loadJson(CONFIG_FILE);
   if (data && typeof data === "object" && !Array.isArray(data)) {
     const merged = deepMerge(DEFAULT_CONFIG, data);
-    merged.runtime_policy = applyRuntimePolicyMode(merged.runtime_policy);
+    const runtimePolicy = applyRuntimePolicyMode(merged.runtime_policy);
+    runtimePolicy.features = resolveRuntimeFeatureFlags(runtimePolicy);
+    merged.runtime_policy = runtimePolicy;
     return merged;
   }
   const payload = cloneJson(DEFAULT_CONFIG);
-  payload.runtime_policy = applyRuntimePolicyMode(payload.runtime_policy);
+  const runtimePolicy = applyRuntimePolicyMode(payload.runtime_policy);
+  runtimePolicy.features = resolveRuntimeFeatureFlags(runtimePolicy);
+  payload.runtime_policy = runtimePolicy;
   return payload;
 }

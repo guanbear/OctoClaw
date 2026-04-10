@@ -102,6 +102,7 @@ def execute_runner_job(workspace: str) -> None:
     env = dict(os.environ)
     env["WORKSPACE"] = workspace
     env["RUNNER_MAX_JOBS_PER_WORKER"] = "1"
+    env["OCTOCLAW_ENABLE_LEGACY_LOOPS"] = "1"
     result = run_cmd(["bash", str(RUNNER_LOOP_SH)], env=env)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "runner loop failed")

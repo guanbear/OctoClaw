@@ -383,6 +383,21 @@ turn_id
 - fallback 不能重新引入“凭记忆回答事实”。
 - flag 状态必须写入 RouterDecision / ledger，方便复盘。
 
+当前实现补充：
+
+- feature flags 现在不是分散读取，而是通过统一 runtime snapshot 解析后下发到 JS/Python 热路径。
+- 支持环境变量 kill switch，优先级高于磁盘配置；其中 `OCTOCLAW_RUNTIME_SAFE_MODE=1` 会把系统切到更保守的止血姿态。
+- safe mode 不会把系统打回“任意凭记忆回答”，而是：
+  - 锁定 judge 到 `main_grade_model`
+  - 关闭 cheap/local judge live
+  - 关闭 runner pool live
+  - 保留 legacy runner fallback
+  - 保持 delivery relay 可单独受控
+- rollout flags 会进入：
+  - RouterDecision `runtime_switches`
+  - replay event `rolloutFlags`
+  这样后续看 `policy_resolved / policy_judged / route_validated` 时，可以直接知道当时是哪个 rollout 姿态。
+
 ### 3.7 ACK / Progress / Final 三段消息契约
 
 用户体验问题不能只靠“发消息”，必须区分消息语义。
@@ -634,6 +649,7 @@ Harness 不是事后分析，而是 router policy 上线门槛。
 - router golden
 - scope golden
 - ACK latency test
+- policy judge shadow report
 - runner pool timeout/crash test
 - ledger follow-up test
 - delivery failure compensation test
@@ -685,6 +701,20 @@ Runner 可以自主选择工具和 fallback，但必须返回：
 - 失败原因
 - 是否可安全告知用户
 
+当前已落地的最小 execution truth：
+
+- `runner goal contract` 进入 runner artifacts，作为执行边界与 native task 绑定摘要。
+- runner dispatch 入口先生成统一 `runner runtime resolution`，把 queue counts、health snapshot、dispatch mode 固化下来。
+- stale running job 在 runtime resolution 前会先尝试回收，并把 task-state 同步成 failed。
+- worker heartbeat 现在会记录 `failure_streak / last_job_status`，连续失败会转成不健康 worker。
+- runner 入队后写 `task_bound`。
+- runner 入队时补 `dispatch_started / progress_note`。
+- 缺少健康常驻 worker 时，dispatch 可以 bootstrap 一个后台 runner worker，而不是只能等外部 daemon。
+- worker 真正开始执行时写 `runner_started`。
+- task finalize 继续写 `result_ready`。
+- completion relay 成功/失败会回写 `delivery_sent` / `delivery_failed` task event。
+- `materialization_failed` 的 dispatch 不再登记 `delivery_pending`，避免“没派发成功却像在等 final”。
+
 ### 6.2 常驻 runner pool 用来降冷启动
 
 `spawn_single` 冷启动对轻任务太重。对于 release lookup、gateway/status、日志回读、轻量 probe 这类任务，常驻 runner pool 是合理的。
@@ -703,6 +733,16 @@ Runner 可以自主选择工具和 fallback，但必须返回：
 
 runner pool 的 scheduler 应该在 Node runtime extension 内，或由 gateway extension 启动/管理。  
 不再用独立 `runner-daemon.sh` + `runner_loop.sh` 作为默认主链路。
+
+在完整 scheduler 完成前，dispatch 入口至少要有一层最小 gate：
+
+- 先读 `runner_pool` config。
+- 先读 queue pressure / worker health。
+- 明确给出 `dispatch_mode=daemon|ondemand|deferred`。
+- 同一 session 命中 `per_user_concurrency` 时，直接返回结构化阻塞原因。
+- worker 连续失败达到阈值时，也要直接视为 unhealthy。
+- 如果允许 fallback 且没有健康常驻 worker，runtime 要能自己拉起一个后台 worker。
+- queue 满或 worker unhealthy 时，返回结构化 capability failure，而不是继续声称任务已经派发。
 
 ### 6.2.1 Runner pool backpressure
 
@@ -886,6 +926,23 @@ Python 保留：
 
 Python 不再作为实时路由真相源。
 
+当前已落地的收口（2026-04-10）：
+
+- `dispatch_task.py` 的 live hot path 已改成“默认必须携带预计算 `policy_json`”，不再静默调用 Python `octoclaw_policy.py`。
+- 如果确实要做兼容回退，必须显式打开 `runtime_policy.features.legacy_policy_fallback` 或 `OCTOCLAW_LEGACY_POLICY_FALLBACK=1`。
+- `spawn_multi` 的 planner/review step 已从主 `RouterDecision` 合成，不再额外通过 Python policy 派生子决策。
+- extension 内 `resolveToolPolicyContext`、`octoclaw_route`、`/octoroute` 已统一切到 Node `buildDecision(...)`，旧 `inferRoute(...)` 不再参与 live tool policy 语义。
+- `octoclaw_policy_decide` 仍保留，但角色已经收缩为 debug/parity helper。
+- `bin/octoclawctl.sh` 已改成以 `observe-once / reconcile-once / repair-once / runner-pool-status` 为主；`patrol` 不再是默认受支持 target。
+- `install.sh` 默认不再安装 patrol/runner loop、cron、systemd/tmux 常驻运行面，并会清理旧 cron/systemd 默认入口。
+- `patrol.py` 默认作为按需 reconcile/repair 工具；runner 自动重启只有显式开关下才允许。
+- `lib/patrol-loop.sh` / `lib/runner-daemon.sh` / `lib/runner_loop.sh` 已降级为 legacy wrapper 或 legacy loop，避免继续把旧 loop 生态当成推荐主链。
+- `lib/systemd/octoclaw-patrol.service` / `lib/systemd/octoclaw-runner.service` 也已降成 compat-only 模板，只用于显式 opt-in。
+- 新增本地统一 harness gate：`python3 lib/harness_gate.py --preset quick|full`，把 router golden、route parity、runtime policy、policy judge shadow report、dispatch/runner/runtime extension 等关键回归收成固定入口。
+- `eval_suite.py` 在调用 legacy `runner_loop.sh` 做评测时，已显式启用 compat 开关，避免评测链和运行时链对 legacy loop 的语义不一致。
+- 第一批 harness synthetics 已落地：ACK progress fallback、slow direct-lookup latency-ack、delivery compensation 幂等、runner backpressure gate，并纳入 `harness_gate.py` 的 preset。
+- `lib/policy_judge_shadow_report.py` 已落地，用于把 cheap/local shadow judge 与主决策按 `route/request_kind/scope/target/evidence_required` 做对照汇总。
+
 ### 7.3 要删除或降级
 
 - `octoclaw_route.py` / `octoclaw_policy.py` 作为 live parity 路由源：降级到测试/迁移。
@@ -937,6 +994,19 @@ Python 不再作为实时路由真相源。
 - direct tool、runner、spawn、delivery 全部写同一 ledger。
 - `怎么查的`、`任务怎么样` 只读 ledger。
 - ledger 缺失时明确说不知道，不允许模型补叙事。
+- 当前已落地的归一化 replay event：
+  - `policy_judged`
+  - `route_validated`
+  - `ack_sent`
+  - `tool_used`
+  - `decision_cache_hit`
+  - `decision_cache_miss`
+- grounding 已直接读取 judge / validation / cache / ack 事实，不再只看 `policy_resolved` 的大杂烩 payload。
+- task event / delivery relay 也已经并入 follow-up facts：
+  - `job_cancelled`
+  - `job_superseded`
+  - `completion_relay_sent / completion_relay_failed / user_notified`
+  - `delivery_observed / delivery_compensated / delivery_reconciled_delivered`
 
 ### Phase 6：删除旧 live route 旁路
 

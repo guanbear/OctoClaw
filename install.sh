@@ -102,7 +102,7 @@ EXTENSION_INSTALL_MODE="${EXTENSION_INSTALL_MODE:-rsync}"
 INSTALL_ACTION="install"
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
 SKIP_INSTALL_BODY="false"
-SKIP_CRON="${SKIP_CRON:-false}"
+SKIP_CRON="${SKIP_CRON:-true}"
 SKIP_MAIN_MODEL_SWITCH="${SKIP_MAIN_MODEL_SWITCH:-false}"
 MODE_PRESET="${MODE_PRESET:-}"
 MAIN_MODEL_OVERRIDE="${MAIN_MODEL_OVERRIDE:-}"
@@ -126,7 +126,7 @@ Options:
   --custom-model KEY=MODEL    Repeatable worker/profile model override
   --extension-install-mode MODE
                               Extension install mode: rsync|copy|symlink
-  --skip-cron                 Skip patrol/update cron reconciliation
+  --skip-cron                 Deprecated no-op; default install already skips patrol/update cron reconciliation
   --skip-main-model-switch    Skip main-session model switching
   -h, --help                  Show this help
 EOF
@@ -717,6 +717,7 @@ _install_systemd_units() {
         echo "ℹ️  当前环境未检测到 systemd，跳过 systemd 守护安装"
         return 1
     fi
+    echo "ℹ️  正在安装 legacy systemd compat units；默认部署不需要它们。"
 
     local template_dir="$SCRIPT_DIR/lib/systemd"
     local runner_template="$template_dir/octoclaw-runner.service"
@@ -793,6 +794,7 @@ _stop_runner_service() {
 _start_patrol_service() {
     local mode
     mode="$(_resolve_supervisor_mode)"
+    echo "ℹ️  patrol 常驻已属 legacy compat 路径。"
     if [ "$mode" = "systemd" ]; then
         _install_systemd_units || return 1
         _systemd_restart_unit_safely "$_SYSTEMD_PATROL_SERVICE"
@@ -899,6 +901,7 @@ _stop_patrol_loop() {
 _start_runner_daemon() {
     local daemon_script="$SCRIPT_DIR/lib/runner-daemon.sh"
     mkdir -p "$WORKSPACE/tmp/octopus"
+    echo "ℹ️  runner-daemon 已属 legacy compat 路径。"
 
     if [ "${RUNNER_ENABLED:-true}" != "true" ]; then
         echo "ℹ️  RUNNER_ENABLED=false，跳过 runner-daemon 启动"
@@ -1588,8 +1591,20 @@ EOF
     fi
 }
 
+disable_legacy_runtime_defaults() {
+    echo "🧹 收口旧默认运行面（不再默认安装 patrol/runner loop 或 cron）..."
+    _stop_patrol_service >/dev/null 2>&1 || true
+    _stop_runner_service >/dev/null 2>&1 || true
+    _remove_systemd_units >/dev/null 2>&1 || true
+    _delete_cron_by_name "octoclaw-patrol"
+    _delete_cron_by_name "octoclaw-probe"
+    _delete_cron_by_name "octoclaw-plan-sync"
+    _delete_cron_by_name "octoclaw-update-check"
+}
+
 if [ "${SKIP_CRON:-false}" = "true" ]; then
-    echo "ℹ️  已跳过巡逻 / 更新 cron 配置"
+    echo "ℹ️  默认不安装 patrol / runner loop 或 cron"
+    disable_legacy_runtime_defaults
 else
     install_patrol_cron
 fi
@@ -1663,7 +1678,7 @@ EOF
 }
 
 if [ "${SKIP_CRON:-false}" = "true" ]; then
-    echo "ℹ️  已跳过模型探测 cron 配置"
+    echo "ℹ️  默认不安装模型探测 cron"
 else
     install_probe_cron
 fi
@@ -1727,7 +1742,7 @@ EOF
 }
 
 if [ "${SKIP_CRON:-false}" = "true" ]; then
-    echo "ℹ️  已跳过计划同步 cron 配置"
+    echo "ℹ️  默认不安装计划同步 cron"
 else
     install_plan_sync_cron
 fi
@@ -1789,7 +1804,7 @@ EOF
 }
 
 if [ "${SKIP_CRON:-false}" = "true" ]; then
-    echo "ℹ️  已跳过夜间错误复盘计划配置"
+    echo "ℹ️  默认不安装夜间错误复盘计划"
 else
     install_error_review_schedule
 fi
@@ -2126,18 +2141,29 @@ echo "🎉 八爪鱼安装完成！"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ 工作目录已创建"
 echo "✅ 通知后端：${ACTIVE_NOTIFICATION_BACKEND}"
-if [ "${PATROL_MODE:-loop}" = "loop" ]; then
-    echo "✅ 巡逻模式：零 token loop（$(_resolve_supervisor_mode)，间隔 ${PATROL_INTERVAL}s）"
+if [ "${SKIP_CRON:-false}" = "true" ]; then
+    echo "✅ 默认运行面：gateway + 按需 runner"
+    echo "✅ patrol：按需 reconcile/repair，不常驻"
+    echo "✅ cron/systemd/tmux loop：默认不安装"
     if [ "${RUNNER_ENABLED:-true}" = "true" ]; then
-        echo "✅ 飞鱼腿模式：常驻 runner（$(_resolve_supervisor_mode) 托管）"
+        echo "ℹ️  runner：按需/可选常驻"
     else
-        echo "ℹ️  飞鱼腿模式：已禁用"
-    fi
-    if [ "$(_resolve_supervisor_mode)" = "tmux" ]; then
-        echo "✅ tmux 工作台：tmux attach -t ${TMUX_SESSION_NAME}"
+        echo "ℹ️  runner：已禁用"
     fi
 else
-    echo "✅ 巡逻模式：cron（每分钟触发，消耗 token）"
+    if [ "${PATROL_MODE:-loop}" = "loop" ]; then
+        echo "✅ 巡逻模式：legacy loop（$(_resolve_supervisor_mode)，间隔 ${PATROL_INTERVAL}s）"
+        if [ "${RUNNER_ENABLED:-true}" = "true" ]; then
+            echo "✅ 飞鱼腿模式：常驻 runner（$(_resolve_supervisor_mode) 托管）"
+        else
+            echo "ℹ️  飞鱼腿模式：已禁用"
+        fi
+        if [ "$(_resolve_supervisor_mode)" = "tmux" ]; then
+            echo "✅ tmux 工作台：tmux attach -t ${TMUX_SESSION_NAME}"
+        fi
+    else
+        echo "✅ 巡逻模式：legacy cron（每分钟触发，消耗 token）"
+    fi
 fi
 echo "✅ 调度规则已注入：$AGENTS_FILE"
 echo "✅ 调度模式：${MODE_LABEL}"

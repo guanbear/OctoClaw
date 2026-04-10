@@ -1,4 +1,13 @@
 #!/bin/bash
+# runner_loop.sh — legacy worker loop
+# 默认架构下 runner 不再依赖独立 shell loop；如需继续使用旧 loop，
+# 必须显式设置 OCTOCLAW_ENABLE_LEGACY_LOOPS=1。
+
+if [[ "${OCTOCLAW_ENABLE_LEGACY_LOOPS:-}" != "1" ]]; then
+  echo "runner_loop.sh is legacy-only. Use the gateway-managed runner pool or on-demand runner mode instead."
+  exit 0
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,12 +39,20 @@ last_job_epoch="$START_EPOCH"
 "$PYTHON_BIN" "$QUEUE_PY" ensure >/dev/null
 
 heartbeat() {
-  "$PYTHON_BIN" "$QUEUE_PY" heartbeat \
-    --worker-id "$WORKER_ID" \
-    --pid "$$" \
-    --job-id "${1:-}" \
-    --jobs-completed "$jobs_completed" \
-    --started-at "$STARTED_AT" >/dev/null
+  local job_id="${1:-}"
+  local job_status="${2:-}"
+  local cmd=(
+    "$PYTHON_BIN" "$QUEUE_PY" heartbeat
+    --worker-id "$WORKER_ID"
+    --pid "$$"
+    --job-id "$job_id"
+    --jobs-completed "$jobs_completed"
+    --started-at "$STARTED_AT"
+  )
+  if [[ -n "$job_status" ]]; then
+    cmd+=(--job-status "$job_status")
+  fi
+  "${cmd[@]}" >/dev/null
 }
 
 update_task_running() {
@@ -83,6 +100,30 @@ update_task_running() {
     cmd+=(--managed-by-octoclaw "$managed_by_octoclaw")
   fi
   "${cmd[@]}" >/dev/null
+}
+
+record_runner_started() {
+  local job_id="$1"
+  local worker_id="$2"
+  local payload
+  payload="$("$PYTHON_BIN" - "$job_id" "$worker_id" <<'PY'
+import json
+import sys
+
+job_id = sys.argv[1] if len(sys.argv) > 1 else ""
+worker_id = sys.argv[2] if len(sys.argv) > 2 else ""
+print(json.dumps({
+    "runner_job_id": job_id,
+    "worker_id": worker_id,
+    "execution_backend": "runner_queue",
+}))
+PY
+)"
+  "$PYTHON_BIN" "$TASK_STATE_PY" event \
+    --id "$job_id" \
+    --kind runner_started \
+    --message "runner started on ${worker_id}" \
+    --event-json "$payload" >/dev/null
 }
 
 finish_task() {
@@ -178,6 +219,7 @@ managed_by_octoclaw="$(decode_field "${job_fields[11]:-}")"
 
   heartbeat "$job_id"
   update_task_running "$job_id" "$model" "$summary" "$task_description" "$session_key" "$session_id" "$agent_id" "$agent_namespace" "$managed_by_octoclaw"
+  record_runner_started "$job_id" "$WORKER_ID"
 
   set +e
   (
@@ -400,7 +442,7 @@ EOF
 
   jobs_completed=$((jobs_completed + 1))
   last_job_epoch="$(date +%s)"
-  heartbeat ""
+  heartbeat "$job_id" "$result_status"
 
   if (( jobs_completed >= MAX_JOBS )); then
     recycle_runner "max_jobs_reached"

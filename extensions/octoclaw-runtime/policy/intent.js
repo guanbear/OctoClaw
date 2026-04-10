@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import path from "node:path";
 
 export const INTENT_PACKET_SCHEMA_VERSION = "octoclaw.intent_packet/v1";
 
@@ -199,6 +200,52 @@ export function buildTaskIndex(taskStatePath = "") {
   return index;
 }
 
+export function deriveTaskEventsPath(taskStatePath = "") {
+  const normalized = String(taskStatePath || "").trim();
+  if (!normalized) return "";
+  return path.join(path.dirname(normalized), "task-events.jsonl");
+}
+
+export function deriveDeliveryRelayPath(taskStatePath = "") {
+  const normalized = String(taskStatePath || "").trim();
+  if (!normalized) return "";
+  return path.join(path.dirname(normalized), "delivery-relay.jsonl");
+}
+
+export function buildTaskEventIndex(taskEventsPath = "") {
+  const events = readJsonl(taskEventsPath);
+  const index = new Map();
+  for (const event of events) {
+    const taskId = String(event?.task_id || "").trim();
+    if (!taskId) continue;
+    const current = index.get(taskId) || [];
+    current.push(event);
+    index.set(taskId, current);
+  }
+  return index;
+}
+
+export function buildDeliveryRelayIndex(deliveryRelayPath = "") {
+  const events = readJsonl(deliveryRelayPath);
+  const index = new Map();
+  for (const event of events) {
+    const sessionKey = String(event?.sessionKey || "").trim();
+    const taskId = String(event?.taskId || "").trim();
+    const runnerJobId = String(event?.runnerJobId || "").trim();
+    const keys = [
+      sessionKey ? `session:${sessionKey}` : "",
+      taskId ? `task:${taskId}` : "",
+      runnerJobId ? `runner:${runnerJobId}` : "",
+    ].filter(Boolean);
+    for (const key of keys) {
+      const current = index.get(key) || [];
+      current.push(event);
+      index.set(key, current);
+    }
+  }
+  return index;
+}
+
 export function groupedReplayTurns(events = []) {
   const ordered = [...events].sort((left, right) => parseTimestamp(left?.at) - parseTimestamp(right?.at));
   const activeBySession = new Map();
@@ -240,11 +287,17 @@ export function latestEvent(turn, eventName) {
   return null;
 }
 
-export function buildTurnFacts(turn, taskIndex) {
+export function buildTurnFacts(turn, taskIndex, taskEventIndex = new Map(), deliveryRelayIndex = new Map()) {
+  const policyResolved = latestEvent(turn, "policy_resolved");
+  const policyJudged = latestEvent(turn, "policy_judged");
+  const routeValidated = latestEvent(turn, "route_validated");
+  const ackEvent = latestEvent(turn, "ack_sent");
+  const cacheHitEvent = latestEvent(turn, "decision_cache_hit");
+  const cacheMissEvent = latestEvent(turn, "decision_cache_miss");
   const dispatch = latestEvent(turn, "dispatch_called");
   const agentEnd = latestEvent(turn, "agent_end");
   const directToolEvents = (Array.isArray(turn?.events) ? turn.events : []).filter(
-    (event) => String(event?.event || "").trim() === "direct_tool_called",
+    (event) => ["direct_tool_called", "tool_used"].includes(String(event?.event || "").trim()),
   );
   const materialization = dispatch?.materialization && typeof dispatch.materialization === "object"
     ? dispatch.materialization
@@ -277,9 +330,75 @@ export function buildTurnFacts(turn, taskIndex) {
   const workerResult = artifacts.worker_result && typeof artifacts.worker_result === "object" && !Array.isArray(artifacts.worker_result)
     ? artifacts.worker_result
     : {};
+  const taskEvents = taskRecordId ? (taskEventIndex.get(taskRecordId) || []) : [];
+  const latestTaskEvent = taskEvents.length > 0 ? (taskEvents.at(-1) || {}) : {};
+  const taskBoundEvent = [...taskEvents].reverse().find((event) => String(event?.kind || "").trim() === "task_bound") || {};
+  const runnerStartedEvent = [...taskEvents].reverse().find((event) => String(event?.kind || "").trim() === "runner_started") || {};
+  const dispositionEvent = [...taskEvents].reverse().find((event) => ["job_cancelled", "job_superseded"].includes(String(event?.kind || "").trim())) || {};
+  const deliveryEvent = [...taskEvents].reverse().find((event) => [
+    "delivery_sent",
+    "delivery_failed",
+    "completion_relay_sent",
+    "completion_relay_failed",
+    "completion_relay_resolution_failed",
+    "user_notified",
+  ].includes(String(event?.kind || "").trim())) || {};
+  const goalContract = artifacts.goal_contract && typeof artifacts.goal_contract === "object" && !Array.isArray(artifacts.goal_contract)
+    ? artifacts.goal_contract
+    : (taskBoundEvent?.goal_contract && typeof taskBoundEvent.goal_contract === "object" && !Array.isArray(taskBoundEvent.goal_contract)
+      ? taskBoundEvent.goal_contract
+      : {});
+  const nativeTaskBinding = artifacts.openclaw_taskflow && typeof artifacts.openclaw_taskflow === "object" && !Array.isArray(artifacts.openclaw_taskflow)
+    ? artifacts.openclaw_taskflow
+    : (taskBoundEvent?.taskflow_binding && typeof taskBoundEvent.taskflow_binding === "object" && !Array.isArray(taskBoundEvent.taskflow_binding)
+      ? taskBoundEvent.taskflow_binding
+      : {});
+  const routeOutcome = dispatch?.routeOutcome && typeof dispatch.routeOutcome === "object" && !Array.isArray(dispatch.routeOutcome)
+    ? dispatch.routeOutcome
+    : (agentEnd?.routeOutcome && typeof agentEnd.routeOutcome === "object" && !Array.isArray(agentEnd.routeOutcome)
+      ? agentEnd.routeOutcome
+      : (policyResolved?.routeOutcome && typeof policyResolved.routeOutcome === "object" && !Array.isArray(policyResolved.routeOutcome)
+        ? policyResolved.routeOutcome
+        : {}));
+  const runtimeResolution = dispatch?.runner_runtime_resolution && typeof dispatch.runner_runtime_resolution === "object" && !Array.isArray(dispatch.runner_runtime_resolution)
+    ? dispatch.runner_runtime_resolution
+    : {};
+  const runnerHealthSnapshot = routeOutcome?.runner_health_snapshot && typeof routeOutcome.runner_health_snapshot === "object" && !Array.isArray(routeOutcome.runner_health_snapshot)
+    ? routeOutcome.runner_health_snapshot
+    : (runtimeResolution?.runner_health_snapshot && typeof runtimeResolution.runner_health_snapshot === "object" && !Array.isArray(runtimeResolution.runner_health_snapshot)
+      ? runtimeResolution.runner_health_snapshot
+      : {});
+  const decisionCacheEvent = cacheHitEvent || cacheMissEvent || null;
+  const deliveryRelayEvents = Array.from(
+    new Set(
+      [
+        ...(taskId ? (deliveryRelayIndex.get(`task:${taskId}`) || []) : []),
+        ...(runnerJobId ? (deliveryRelayIndex.get(`runner:${runnerJobId}`) || []) : []),
+        ...((!taskId && !runnerJobId && turn?.sessionKey) ? (deliveryRelayIndex.get(`session:${String(turn.sessionKey || "").trim()}`) || []) : []),
+      ],
+    ),
+  ).sort((left, right) => parseTimestamp(left?.at) - parseTimestamp(right?.at));
+  const finalDeliveryRelayEvent = deliveryRelayEvents.length > 0 ? (deliveryRelayEvents.at(-1) || {}) : {};
   return {
+    policyJudgedSeen: Boolean(policyJudged),
+    policyJudgeSelected: String(policyJudged?.policyJudgeSelected || policyResolved?.policyJudgeSelected || "").trim(),
+    policyJudgeApplied: Boolean(policyJudged?.policyJudgeApplied ?? policyResolved?.policyJudgeApplied),
+    policyJudgeInvocationState: String(policyJudged?.policyJudgeInvocationState || policyResolved?.policyJudgeInvocationState || "").trim(),
+    policyJudgeConfidence: Number(policyJudged?.policyJudgeConfidence ?? policyResolved?.policyJudgeConfidence ?? 0),
+    routeValidatedSeen: Boolean(routeValidated),
+    routerDecisionValid: Boolean(routeValidated?.routerDecisionValid ?? policyResolved?.routerDecisionValid),
+    routerDecisionSource: String(routeValidated?.routerDecisionSource || policyResolved?.routerDecisionSource || "").trim(),
+    validationOutcome: String(routeValidated?.validationOutcome || "").trim(),
+    ackSeen: Boolean(ackEvent),
+    ackKind: String(ackEvent?.ackKind || "").trim(),
+    ackMode: String(ackEvent?.ackMode || "").trim(),
+    ackSent: Boolean(ackEvent?.ackSent),
+    ackReason: String(ackEvent?.reason || "").trim(),
+    decisionCacheState: String(decisionCacheEvent?.decisionCacheState || policyResolved?.decisionCacheState || "").trim(),
+    decisionCacheUsed: Boolean(decisionCacheEvent?.usedCachedPolicy ?? policyResolved?.usedCachedPolicy),
     dispatchSeen: Boolean(dispatch),
     dispatchExecuted: Boolean(dispatch?.executed),
+    dispatchMode: String(dispatch?.runnerExecutionMode || dispatch?.runner_execution_mode || runtimeResolution?.dispatch_mode || "").trim(),
     delegated: Boolean(agentEnd?.delegated || dispatch?.executed),
     delegationTool: String(agentEnd?.delegationTool || "").trim(),
     materializationStatus: String(materialization?.status || "").trim(),
@@ -287,6 +406,7 @@ export function buildTurnFacts(turn, taskIndex) {
     taskId,
     runnerJobId,
     capabilityFailure,
+    capabilityFailureDetail: String(capabilityFailure?.detail || "").trim(),
     taskRecordId,
     directTools: Array.from(
       new Set(
@@ -306,6 +426,21 @@ export function buildTurnFacts(turn, taskIndex) {
     currentTaskRoute: String(task?.route || "").trim(),
     currentTaskRuntime: String(task?.runtime || "").trim(),
     currentTaskReportPath: String(task?.report_path || artifacts.report_path || workerResult.report || "").trim(),
+    jobDispositionKind: String(dispositionEvent?.kind || "").trim(),
+    jobDispositionMessage: String(dispositionEvent?.message || "").trim(),
+    taskBoundSeen: Boolean(taskBoundEvent && Object.keys(taskBoundEvent).length > 0),
+    runnerStartedSeen: Boolean(runnerStartedEvent && Object.keys(runnerStartedEvent).length > 0),
+    latestTaskEventKind: String(latestTaskEvent?.kind || "").trim(),
+    latestTaskEventMessage: String(latestTaskEvent?.message || "").trim(),
+    deliveryEventKind: String(deliveryEvent?.kind || "").trim(),
+    finalDeliveryRelayEvent: String(finalDeliveryRelayEvent?.event || "").trim(),
+    finalDeliveryRelayState: String(finalDeliveryRelayEvent?.state || "").trim(),
+    goalExecutionContract: String(goalContract?.execution_contract || "").trim(),
+    goalAccessMode: String(goalContract?.access_mode || "").trim(),
+    nativeTaskBackend: String(nativeTaskBinding?.backend || goalContract?.native_task_binding?.backend || "").trim(),
+    queuePressureBand: String(routeOutcome?.queue_pressure_band || runtimeResolution?.queue_pressure_band || "").trim(),
+    runnerHealthReason: String(runnerHealthSnapshot?.reason || "").trim(),
+    runnerWorkerId: String(runnerHealthSnapshot?.worker_id || "").trim(),
     runnerPlanKind: String(runnerPlan.kind || "").trim(),
     runnerPlanSummary: String(runnerPlan.summary || "").trim(),
     delegatedProbeKind: String(probeSpec.kind || "").trim(),
@@ -503,7 +638,9 @@ export function buildIntentPacket({
 
   const turns = groupedReplayTurns(readJsonl(replayLogPath));
   const taskIndex = buildTaskIndex(taskStatePath);
-  const enrichedTurns = turns.map((turn) => ({ ...turn, facts: buildTurnFacts(turn, taskIndex) }));
+  const taskEventIndex = buildTaskEventIndex(deriveTaskEventsPath(taskStatePath));
+  const deliveryRelayIndex = buildDeliveryRelayIndex(deriveDeliveryRelayPath(taskStatePath));
+  const enrichedTurns = turns.map((turn) => ({ ...turn, facts: buildTurnFacts(turn, taskIndex, taskEventIndex, deliveryRelayIndex) }));
   const subjectTurn = selectSubjectTurn(enrichedTurns, promptText, sessionKeys);
   if (subjectTurn && looksLikeShortExecutionFollowup(promptText, subjectTurn)) {
     return buildExecutionFollowupPacket(promptText, subjectTurn);

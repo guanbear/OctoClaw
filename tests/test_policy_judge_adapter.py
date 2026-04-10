@@ -83,7 +83,7 @@ class PolicyJudgeAdapterTests(unittest.TestCase):
                 metadata: { session_key: "agent:main:slack:direct:u2" },
                 intentPacket: { intent_class: "undetermined", judge: { eligible: true } },
                 runtimeCfg: {
-                  features: { policy_judge_live: true },
+                  features: { policy_judge_live: true, cheap_judge_live: true },
                   policy_router: {
                     mode: "model_first",
                     timeout_ms: 1200,
@@ -104,6 +104,36 @@ class PolicyJudgeAdapterTests(unittest.TestCase):
 
         self.assertFalse(payload["invoked"])
         self.assertEqual(payload["invocation_state"], "openai_compatible_adapter_unavailable")
+
+    def test_safe_mode_forces_main_grade_judge_selection(self) -> None:
+        payload = run_judge_expression(
+            """judge.selectPolicyJudge({
+                features: {
+                  policy_judge_live: true,
+                  cheap_judge_live: true,
+                  local_judge_live: true
+                },
+                policy_router: {
+                  default_judge: "cheap_model",
+                  candidates: {
+                    main_grade_model: {
+                      enabled: true,
+                      provider: "stateless_ephemeral_judge",
+                      model: "main-grade"
+                    },
+                    cheap_model: {
+                      enabled: true,
+                      provider: "openai_compatible",
+                      model: "cheap-router"
+                    }
+                  }
+                }
+            })""",
+            env={"OCTOCLAW_RUNTIME_SAFE_MODE": "1"},
+        )
+
+        self.assertEqual(payload["name"], "main_grade_model")
+        self.assertEqual(payload["model"], "main-grade")
 
 
 if __name__ == "__main__":

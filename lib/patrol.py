@@ -3,7 +3,7 @@ from __future__ import annotations
 
 """
 八爪鱼巡逻脚本 patrol.py
-每5分钟由 octoclaw-patrol cron 触发，检查任务状态，有异常则发飞书告警。
+默认作为按需 reconcile/repair 工具运行，而不是常驻 runtime 主循环。
 
 ⚠️ 巡逻铁律：只读不写（task-state.json 超时标记除外）
   - 禁止修改任何代码文件（patrol.py、AGENTS.md 等）
@@ -121,7 +121,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
         selector_band_for_model_band,
     )
 
-# ⚠️ 注意：巡逻任务本身通过 cron 运行，不写入 task-state.json
+# ⚠️ 注意：巡逻任务本身是按需观察/修复工具，不写入 task-state.json
 # 因此不会在巡逻报告中出现自己。
 SYSTEM_LABELS = {'octoclaw-patrol', 'octoclaw-probe', 'ironclaw-heartbeat', 'ironclaw-probe'}
 # 内部查询任务 ID 前缀，过滤出面板和通知
@@ -575,6 +575,11 @@ def check_runner_health() -> dict:
 
 
 def maybe_restart_runner() -> bool:
+    if resolve_runner_mode() != "daemon":
+        return False
+    allow_restart = str(os.environ.get("OCTOCLAW_PATROL_ALLOW_RUNNER_RESTART", "") or "").strip().lower()
+    if allow_restart not in {"1", "true", "yes", "on"}:
+        return False
     daemon_script = os.path.join(os.path.dirname(__file__), "runner-daemon.sh")
     if not os.path.exists(daemon_script):
         return False
@@ -5148,9 +5153,9 @@ def main():
     force_mode = args.force
     
     if force_mode:
-        print("🐙 八爪鱼巡逻开始（强制模式）...")
+        print("🐙 八爪鱼 reconcile/repair 开始（强制模式）...")
     else:
-        print("🐙 八爪鱼巡逻开始...")
+        print("🐙 八爪鱼 reconcile/repair 开始...")
     observation = observe_runtime_state_once(WORKSPACE)
     runner_health = observation.get("runner_health", {}) if isinstance(observation.get("runner_health", {}), dict) else {}
     runner_mode = str(observation.get("runner_execution_mode", "") or "daemon").strip() or "daemon"
@@ -5174,6 +5179,8 @@ def main():
             restarted = maybe_restart_runner()
             if restarted:
                 print("  🔄 已触发 runner-daemon 自动重启")
+            elif resolve_runner_mode() == "daemon":
+                print("  ℹ️  runner 常驻自动重启默认关闭；如需启用请显式设置 OCTOCLAW_PATROL_ALLOW_RUNNER_RESTART=1")
             if _text_notify_enabled():
                 health = runner_health.get("health", {})
                 worker_id = health.get("worker_id", "unknown-runner")

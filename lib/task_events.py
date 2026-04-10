@@ -18,6 +18,12 @@ SESSION_THREAD_MAP_FILE = os.path.join(WORKSPACE, "tmp", "octopus", "session-thr
 TASK_EVENT_SCHEMA_VERSION = "octoclaw.task_event/v1"
 SESSION_THREAD_MAP_SCHEMA_VERSION = "octoclaw.session_thread_map/v1"
 EVENT_IMPORTANCE = {
+    "completion_relay_failed": "high",
+    "completion_relay_resolution_failed": "high",
+    "job_cancelled": "high",
+    "job_superseded": "high",
+    "delivery_failed": "high",
+    "delivery_sent": "high",
     "failed": "high",
     "task_failed": "high",
     "source_blocked": "high",
@@ -25,8 +31,11 @@ EVENT_IMPORTANCE = {
     "handoff_ready": "high",
     "user_notified": "high",
     "artifact_ready": "normal",
+    "completion_relay_sent": "normal",
+    "task_bound": "normal",
     "task_completed": "normal",
     "result_ready": "normal",
+    "runner_started": "normal",
     "task_started": "normal",
     "task_running": "normal",
     "checkpoint": "normal",

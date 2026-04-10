@@ -123,6 +123,13 @@ def add_bool_overrides(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sticky-ttl-minutes", dest="sticky_ttl_minutes", type=int)
     parser.add_argument("--apply-on-followup-only", dest="apply_on_followup_only", type=parse_bool)
     parser.add_argument("--route-language-packs", dest="route_language_packs", type=parse_csv_list)
+    parser.add_argument("--policy-judge-live", dest="policy_judge_live", type=parse_bool)
+    parser.add_argument("--cheap-judge-live", dest="cheap_judge_live", type=parse_bool)
+    parser.add_argument("--local-judge-live", dest="local_judge_live", type=parse_bool)
+    parser.add_argument("--runner-pool-enabled", dest="runner_pool_enabled", type=parse_bool)
+    parser.add_argument("--delivery-relay-enabled", dest="delivery_relay_enabled", type=parse_bool)
+    parser.add_argument("--legacy-runner-fallback", dest="legacy_runner_fallback", type=parse_bool)
+    parser.add_argument("--patrol-loop-enabled", dest="patrol_loop_enabled", type=parse_bool)
 
 
 def build_runtime_policy(args: argparse.Namespace) -> dict[str, Any]:
@@ -137,6 +144,7 @@ def build_runtime_policy(args: argparse.Namespace) -> dict[str, Any]:
     hooks = base.setdefault("hooks", {})
     route_stickiness = base.setdefault("route_stickiness", {})
     route_language_packs = base.setdefault("route_language_packs", {})
+    features = base.setdefault("features", {})
 
     for field in (
         "hard_runner_only",
@@ -168,6 +176,19 @@ def build_runtime_policy(args: argparse.Namespace) -> dict[str, Any]:
         route_stickiness["apply_on_followup_only"] = args.apply_on_followup_only
     if args.route_language_packs is not None:
         route_language_packs["enabled"] = args.route_language_packs
+
+    for field in (
+        "policy_judge_live",
+        "cheap_judge_live",
+        "local_judge_live",
+        "runner_pool_enabled",
+        "delivery_relay_enabled",
+        "legacy_runner_fallback",
+        "patrol_loop_enabled",
+    ):
+        value = getattr(args, field, None)
+        if value is not None:
+            features[field] = value
 
     return base
 

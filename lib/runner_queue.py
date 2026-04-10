@@ -23,6 +23,8 @@ from octopus_config import (
 TERMINAL_JOB_STATUSES = {"done", "failed"}
 TERMINAL_JOB_RETENTION_HOURS = 48
 MAX_TERMINAL_JOBS = 200
+DEFAULT_HEARTBEAT_STALE_SECONDS = 120
+DEFAULT_LEASE_TIMEOUT_SECONDS = 90
 
 
 def parse_json_arg(value: str) -> dict[str, Any]:
@@ -77,6 +79,85 @@ def parse_iso(value: str):
         return datetime.fromisoformat(value)
     except Exception:
         return None
+
+
+def _running_job_is_stale(
+    job: dict[str, Any],
+    *,
+    now: datetime,
+    health: dict[str, Any],
+    lease_timeout_seconds: int,
+    heartbeat_stale_seconds: int,
+) -> bool:
+    if not isinstance(job, dict) or str(job.get("status", "") or "").strip().lower() != "running":
+        return False
+    started = parse_iso(str(job.get("started_at", "") or ""))
+    if started and started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    worker_id = str(job.get("worker_id", "") or "").strip()
+    if started is None:
+        return True
+    age_seconds = max(0, int((now - started.astimezone(timezone.utc)).total_seconds()))
+    if age_seconds < max(1, int(lease_timeout_seconds or DEFAULT_LEASE_TIMEOUT_SECONDS)):
+        return False
+    health_worker_id = str(health.get("worker_id", "") or "").strip()
+    heartbeat = parse_iso(str(health.get("last_heartbeat_at", "") or ""))
+    heartbeat_fresh = False
+    if heartbeat is not None:
+        if heartbeat.tzinfo is None:
+            heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+        heartbeat_age = max(0, int((now - heartbeat.astimezone(timezone.utc)).total_seconds()))
+        heartbeat_fresh = heartbeat_age <= max(1, int(heartbeat_stale_seconds or DEFAULT_HEARTBEAT_STALE_SECONDS))
+    if not worker_id:
+        return True
+    if not health_worker_id:
+        return True
+    if worker_id != health_worker_id:
+        return True
+    return not heartbeat_fresh
+
+
+def recover_stale_running_jobs(
+    *,
+    lease_timeout_seconds: int = DEFAULT_LEASE_TIMEOUT_SECONDS,
+    heartbeat_stale_seconds: int = DEFAULT_HEARTBEAT_STALE_SECONDS,
+) -> dict[str, Any]:
+    health = load_json(RUNNER_HEALTH_FILE)
+    health = health if isinstance(health, dict) else {}
+    now = datetime.now(timezone.utc)
+
+    def mutate(state):
+        recovered: list[dict[str, Any]] = []
+        for job in state.get("jobs", []):
+            if not _running_job_is_stale(
+                job,
+                now=now,
+                health=health,
+                lease_timeout_seconds=lease_timeout_seconds,
+                heartbeat_stale_seconds=heartbeat_stale_seconds,
+            ):
+                continue
+            worker_id = str(job.get("worker_id", "") or "").strip()
+            job["status"] = "failed"
+            job["finished_at"] = now_iso()
+            job["exit_code"] = 124
+            job["summary"] = f"Runner lease expired before completion · worker={worker_id or 'unknown'}"
+            job["failure_reason"] = "runner_lease_expired"
+            recovered.append(
+                {
+                    "id": str(job.get("id", "") or ""),
+                    "worker_id": worker_id,
+                    "failure_reason": "runner_lease_expired",
+                }
+            )
+        return recovered
+
+    recovered = with_queue_lock(mutate)
+    return {
+        "recovered_count": len(recovered),
+        "jobs": recovered,
+        "health_worker_id": str(health.get("worker_id", "") or ""),
+    }
 
 
 def cleanup_result_artifacts(job: dict[str, Any]) -> None:
@@ -259,6 +340,18 @@ def cmd_complete(args):
 
 def cmd_heartbeat(args):
     ensure_parent(RUNNER_HEALTH_FILE)
+    existing = load_json(RUNNER_HEALTH_FILE)
+    existing = existing if isinstance(existing, dict) else {}
+    previous_worker_id = str(existing.get("worker_id", "") or "").strip()
+    same_worker = previous_worker_id and previous_worker_id == args.worker_id
+    base_failure_streak = int(existing.get("failure_streak", 0) or 0) if same_worker else 0
+    job_status = str(args.job_status or "").strip().lower()
+    failure_streak = base_failure_streak
+    if job_status == "failed":
+        failure_streak += 1
+    elif job_status == "done":
+        failure_streak = 0
+
     payload = {
         "worker_id": args.worker_id,
         "pid": args.pid,
@@ -266,7 +359,23 @@ def cmd_heartbeat(args):
         "jobs_completed": args.jobs_completed,
         "started_at": args.started_at or now_iso(),
         "last_heartbeat_at": now_iso(),
+        "failure_streak": failure_streak,
+        "last_job_status": job_status or str(existing.get("last_job_status", "") or ""),
+        "last_job_id": args.job_id or str(existing.get("last_job_id", "") or ""),
     }
+    if job_status == "failed":
+        payload["last_failure_at"] = now_iso()
+        if same_worker and str(existing.get("last_success_at", "") or "").strip():
+            payload["last_success_at"] = str(existing.get("last_success_at", "") or "")
+    elif job_status == "done":
+        payload["last_success_at"] = now_iso()
+        if same_worker and str(existing.get("last_failure_at", "") or "").strip():
+            payload["last_failure_at"] = str(existing.get("last_failure_at", "") or "")
+    else:
+        if same_worker and str(existing.get("last_failure_at", "") or "").strip():
+            payload["last_failure_at"] = str(existing.get("last_failure_at", "") or "")
+        if same_worker and str(existing.get("last_success_at", "") or "").strip():
+            payload["last_success_at"] = str(existing.get("last_success_at", "") or "")
     with open(RUNNER_HEALTH_FILE, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, ensure_ascii=False, indent=2)
     print(json.dumps(payload, ensure_ascii=False))
@@ -284,6 +393,18 @@ def cmd_status(_args):
         "health": health,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def cmd_reap_stale(args):
+    print(
+        json.dumps(
+            recover_stale_running_jobs(
+                lease_timeout_seconds=args.lease_timeout_seconds,
+                heartbeat_stale_seconds=args.heartbeat_stale_seconds,
+            ),
+            ensure_ascii=False,
+        )
+    )
 
 
 def main():
@@ -324,8 +445,13 @@ def main():
     p_heartbeat.add_argument("--job-id", default="")
     p_heartbeat.add_argument("--jobs-completed", dest="jobs_completed", type=int, default=0)
     p_heartbeat.add_argument("--started-at", dest="started_at", default="")
+    p_heartbeat.add_argument("--job-status", dest="job_status", choices=["done", "failed"], default="")
 
     sub.add_parser("status")
+
+    p_reap_stale = sub.add_parser("reap-stale")
+    p_reap_stale.add_argument("--lease-timeout-seconds", dest="lease_timeout_seconds", type=int, default=DEFAULT_LEASE_TIMEOUT_SECONDS)
+    p_reap_stale.add_argument("--heartbeat-stale-seconds", dest="heartbeat_stale_seconds", type=int, default=DEFAULT_HEARTBEAT_STALE_SECONDS)
 
     args = parser.parse_args()
     if args.command == "ensure":
@@ -340,6 +466,8 @@ def main():
         cmd_heartbeat(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "reap-stale":
+        cmd_reap_stale(args)
     else:
         parser.print_help()
         sys.exit(1)

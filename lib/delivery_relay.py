@@ -8,6 +8,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+try:
+    from task_events import append_task_event
+except ModuleNotFoundError:  # pragma: no cover
+    from lib.task_events import append_task_event
+
 
 TERMINAL_RELAY_EVENTS = {
     "delivery_observed",
@@ -27,6 +32,14 @@ def resolve_workspace() -> str:
 def resolve_delivery_relay_path(workspace: str = "") -> str:
     root = _text(workspace) or resolve_workspace()
     return str(Path(root) / "tmp" / "octopus" / "delivery-relay.jsonl")
+
+
+def resolve_task_events_path(workspace: str = "", relay_path: str = "") -> str:
+    relay = Path(_text(relay_path)) if _text(relay_path) else None
+    if relay:
+        return str(relay.with_name("task-events.jsonl"))
+    root = _text(workspace) or resolve_workspace()
+    return str(Path(root) / "tmp" / "octopus" / "task-events.jsonl")
 
 
 def load_delivery_events(pathname: str = "") -> list[dict[str, Any]]:
@@ -168,4 +181,17 @@ def record_task_completion_delivery_result(
         "state": "completion_relay_sent" if normalized_result.get("ok") else "completion_relay_failed",
     }
     event = append_delivery_event(event_type, payload, relay_path=relay_path)
+    append_task_event(
+        task,
+        "delivery_sent" if normalized_result.get("ok") else "delivery_failed",
+        message=_text(task.get("user_safe_summary")) or _text(task.get("summary")) or _text(normalized_result.get("error")),
+        extra={
+            "delivery_id": _text(event.get("deliveryId")),
+            "runner_job_id": runner_job_id,
+            "message_id": _text(event.get("messageId")),
+            "backend": _text(event.get("backend")),
+            "error": _text(event.get("error")),
+        },
+        path=resolve_task_events_path(relay_path=relay_path),
+    )
     return {"recorded": True, "event": event}

@@ -14,8 +14,9 @@ import {
   __conversationControlTest,
 } from "./conversation-control.js";
 import { buildDecision as buildPolicyDecision } from "./policy/decide.js";
-import { loadOctoClawConfig } from "./policy/config.js";
+import { loadOctoClawConfig, resolveRuntimeFeatureFlags } from "./policy/config.js";
 import { invokePolicyJudge } from "./policy/judge.js";
+import { buildRouteOutcome } from "./policy/outcome.js";
 import { inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,10 +68,17 @@ function resolveScript(...parts) {
 
 function resolveWorkspaceRoot() {
   const root = resolveOctoClawRoot();
-  const resolved = firstExistingPath(
+  const explicit = firstExistingPath(
     [
       WORKSPACE_ROOT_OVERRIDE,
       process.env.WORKSPACE,
+    ],
+  );
+  if (explicit) {
+    return explicit;
+  }
+  const resolved = firstExistingPath(
+    [
       root ? path.resolve(root, "..", "..", "..") : "",
       path.join(HOME_DIR, ".openclaw", "workspace"),
     ],
@@ -333,21 +341,32 @@ function scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, l
     return { scheduled: false, reason: "not_required" };
   }
   const promise = maybeSendEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, logger)
-    .then((result) => recordPolicyReplay(
-      "pre_dispatch_ack_attempted",
-      {
-        sessionKey: stateKey || String(metadata?.session_key || ""),
-        sessionId: String(ctx?.sessionId || ""),
-        route: String(decision?.route_decision?.route || ""),
-        taskClass: String(decision?.route_decision?.task_class || ""),
-        sent: Boolean(result?.sent),
-        reason: String(result?.reason || ""),
-        message: String(result?.message || ""),
-        mode: "eager_async",
-      },
-      logger,
-      decision,
-    ))
+    .then(async (result) => {
+      await recordPolicyReplay(
+        "pre_dispatch_ack_attempted",
+        {
+          sessionKey: stateKey || String(metadata?.session_key || ""),
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          taskClass: String(decision?.route_decision?.task_class || ""),
+          sent: Boolean(result?.sent),
+          reason: String(result?.reason || ""),
+          message: String(result?.message || ""),
+          mode: "eager_async",
+        },
+        logger,
+        decision,
+      );
+      await recordAckReplay({
+        decision,
+        stateKey,
+        ctx,
+        logger,
+        kind: "pre_dispatch",
+        phase: "eager_async",
+        result,
+      });
+    })
     .catch((err) => {
       logger?.warn?.(`octoclaw eager pre-dispatch ack scheduling failed: ${String(err)}`);
     });
@@ -464,6 +483,39 @@ function compactDispatchDetails(payload) {
 async function appendJsonl(pathname, payload) {
   await fs.mkdir(path.dirname(pathname), { recursive: true });
   await fs.appendFile(pathname, `${JSON.stringify(payload)}\n`, "utf8");
+}
+
+function deliveryRelayEventIsIdempotent(eventType = "") {
+  return new Set([
+    "delivery_pending",
+    "delivery_observed",
+    "delivery_compensated",
+    "delivery_reconciled_delivered",
+    "delivery_failed",
+    "delivery_retry_deferred",
+  ]).has(String(eventType || "").trim());
+}
+
+async function hasDeliveryRelayEvent(pathname, eventType, deliveryId) {
+  if (!deliveryRelayEventIsIdempotent(eventType) || !deliveryId) return false;
+  try {
+    const raw = await fs.readFile(pathname, "utf8");
+    const lines = raw.split("\n").filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const payload = JSON.parse(lines[index]);
+        if (String(payload?.deliveryId || "").trim() !== deliveryId) continue;
+        if (String(payload?.event || "").trim() === String(eventType || "").trim()) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 async function readJsonFile(pathname, fallback = {}) {
@@ -856,7 +908,7 @@ function resolveToolPolicyContext(ctx = {}, prompt = "") {
   if (direct.state && (!prompt || promptsEquivalent(prompt, direct.state.prompt || ""))) {
     return direct;
   }
-  const taskClass = String(inferRoute(prompt || "").task_class || "").trim();
+  const taskClass = String(buildDecision(prompt || "").route_decision?.task_class || "").trim();
   if (taskClass === "control_observer" || taskClass === "session_control") {
     return { key: "", state: null };
   }
@@ -1124,7 +1176,6 @@ function preHintAllowedTools(decision, routeHintTool) {
   const toolPolicy = decision?.tool_policy || {};
   const allowed = new Set([
     routeHintTool,
-    "octoclaw_policy_decide",
     "octoclaw_status",
     "octoclaw_task_action",
   ]);
@@ -1147,7 +1198,6 @@ function observerControlTools(decision, routeHintTool) {
   if (routeHintTool) {
     allowed.add(String(routeHintTool).trim());
   }
-  allowed.add("octoclaw_policy_decide");
   allowed.add("octoclaw_status");
   allowed.add("octoclaw_task_action");
   allowed.add("session_status");
@@ -1161,7 +1211,6 @@ function sessionControlTools(decision, routeHintTool) {
   if (routeHintTool) {
     allowed.add(String(routeHintTool).trim());
   }
-  allowed.add("octoclaw_policy_decide");
   allowed.add("octoclaw_status");
   allowed.add("session_status");
   return allowed;
@@ -1181,7 +1230,6 @@ function runnerWorkflowTools(decision, routeHintTool) {
   if (routeHintTool) {
     allowed.add(String(routeHintTool).trim());
   }
-  allowed.add("octoclaw_policy_decide");
   allowed.add("octoclaw_status");
   allowed.add("octoclaw_task_action");
   return allowed;
@@ -1321,6 +1369,23 @@ function runtimeSwitches(decision) {
   return decision?.runtime_switches || {};
 }
 
+function buildRolloutFlags(decision = {}) {
+  const switches = runtimeSwitches(decision);
+  return {
+    contractVersion: String(switches.rollout_contract_version || "octoclaw.runtime_flags/v1"),
+    policyJudgeLiveEnabled: Boolean(switches.policy_judge_live_enabled),
+    cheapJudgeLiveEnabled: Boolean(switches.cheap_judge_live_enabled),
+    localJudgeLiveEnabled: Boolean(switches.local_judge_live_enabled),
+    runnerPoolEnabled: Boolean(switches.runner_pool_enabled),
+    deliveryRelayEnabled: Boolean(switches.delivery_relay_enabled),
+    legacyRunnerFallbackEnabled: Boolean(switches.legacy_runner_fallback_enabled),
+    patrolLoopEnabled: Boolean(switches.patrol_loop_enabled),
+    safeModeEnabled: Boolean(switches.safe_mode_enabled),
+    judgeLock: String(switches.judge_lock || ""),
+    overrideSources: Array.isArray(switches.override_sources) ? switches.override_sources : [],
+  };
+}
+
 async function persistStickyLane(sessionKey, decision, logger, options = {}) {
   if (!runtimeSwitches(decision).sticky_lane_enabled) {
     return false;
@@ -1367,6 +1432,10 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
     return;
   }
   const correlation = decision?.correlation && typeof decision.correlation === "object" ? decision.correlation : {};
+  const routeOutcomeEvents = new Set(["policy_resolved", "dispatch_called", "agent_end"]);
+  const routeOutcome = decision && routeOutcomeEvents.has(String(eventType || "").trim())
+    ? buildRouteOutcome(eventType, decision, payload)
+    : null;
   try {
     await appendJsonl(resolveReplayLogPath(), {
       schema_version: "octoclaw.runtime_policy.replay_event/v1",
@@ -1377,6 +1446,8 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
       deliveryId: String(correlation.delivery_id || payload.deliveryId || ""),
       runnerJobId: String(correlation.runner_job_id || payload.runnerJobId || ""),
       taskId: String(correlation.task_id || payload.taskId || ""),
+      ...(decision ? { rolloutFlags: buildRolloutFlags(decision) } : {}),
+      ...(routeOutcome ? { routeOutcome } : {}),
       ...payload,
     });
   } catch (err) {
@@ -1384,8 +1455,148 @@ async function recordPolicyReplay(eventType, payload = {}, logger, decision = nu
   }
 }
 
+function buildPolicyResolvedReplayPayload({
+  decision = {},
+  stateKey = "",
+  ctx = {},
+  boundary = {},
+  metadata = {},
+  prompt = "",
+  routeHintSubmitted = false,
+  usedCachedPolicy = false,
+} = {}) {
+  return {
+    sessionKey: stateKey || "",
+    sessionId: String(ctx?.sessionId || ""),
+    trigger: String(ctx?.trigger || ""),
+    route: String(decision?.route_decision?.route || ""),
+    systemPreferredRoute: String(decision?.route_decision?.system_preferred_route || ""),
+    workerPool: String(decision?.route_decision?.worker_pool || ""),
+    taskClass: String(decision?.route_decision?.task_class || ""),
+    protectedLane: String(decision?.route_decision?.protected_lane || ""),
+    routeHintRequired: Boolean(decision?.route_hint_policy?.required),
+    routeHintSubmitted: Boolean(routeHintSubmitted),
+    stateGroundingRequired: Boolean(decision?.state_grounding?.required),
+    latencyAckRequired: Boolean(decision?.latency_ack?.required),
+    stickyApplied: Boolean(decision?.route_hint_policy?.sticky_applied),
+    ackFollowupCandidate: Boolean(decision?.route_hint_policy?.ack_followup_candidate),
+    ackFollowupApplied: Boolean(decision?.route_hint_policy?.ack_followup_applied),
+    routeRecommendationConflict: Boolean(decision?.route_recommendation?.arbitration?.required),
+    routeRecommendationStrategy: String(decision?.route_recommendation?.arbitration?.strategy || ""),
+    routeRecommendationConflictType: String(decision?.route_recommendation?.arbitration?.conflict_type || ""),
+    routeLanguagePacks: Array.isArray(decision?.route_language_packs) ? decision.route_language_packs : [],
+    sessionBoundaryStatus: String(boundary?.status || ""),
+    canonicalSessionKey: String(boundary?.canonicalSessionKey || stateKey || ""),
+    conversationControlKind: String(metadata?.conversation_control?.kind || ""),
+    conversationIntentClass: String(metadata?.intent_packet?.intent_class || metadata?.conversation_control?.intent_class || ""),
+    routerRequestKind: String(decision?.router_decision_v2?.request_kind || ""),
+    routerScope: String(decision?.router_decision_v2?.scope || ""),
+    routerTarget: String(decision?.router_decision_v2?.target || ""),
+    routerEvidenceRequired: Array.isArray(decision?.router_decision_v2?.evidence_required) ? decision.router_decision_v2.evidence_required : [],
+    routerDecisionSource: String(decision?.router_decision_v2?.decision_source || ""),
+    routerDecisionValid: Boolean(decision?.router_decision_v2?.validation?.passed),
+    policyJudgeSelected: String(decision?.policy_router?.judge?.selected || ""),
+    policyJudgeInvoked: Boolean(decision?.policy_router?.judge?.invoked),
+    policyJudgeApplied: Boolean(decision?.policy_router?.judge?.applied),
+    policyJudgeInvocationState: String(decision?.policy_router?.judge?.invocation_state || ""),
+    policyJudgeConfidence: Number(decision?.policy_router?.judge?.confidence || 0),
+    policyJudgeValidationProblems: Array.isArray(decision?.policy_router?.judge?.validation?.problems) ? decision.policy_router.judge.validation.problems : [],
+    policyJudgePromptVersion: String(decision?.policy_router?.judge?.prompt_version || ""),
+    policyJudgeSchemaVersion: String(decision?.policy_router?.judge?.schema_version || ""),
+    decisionCacheState: String(decision?.policy_router?.cache?.state || ""),
+    usedCachedPolicy: Boolean(usedCachedPolicy),
+    intentPacketConfidence: Number(metadata?.intent_packet?.confidence || 0),
+    intentPacketReasons: Array.isArray(metadata?.intent_packet?.reason_codes) ? metadata.intent_packet.reason_codes : [],
+    prompt: truncateText(prompt),
+  };
+}
+
+function buildPolicyJudgedReplayPayload(decision = {}) {
+  return {
+    route: String(decision?.route_decision?.route || ""),
+    taskClass: String(decision?.route_decision?.task_class || ""),
+    protectedLane: String(decision?.route_decision?.protected_lane || ""),
+    policyJudgeSelected: String(decision?.policy_router?.judge?.selected || ""),
+    policyJudgeInvoked: Boolean(decision?.policy_router?.judge?.invoked),
+    policyJudgeApplied: Boolean(decision?.policy_router?.judge?.applied),
+    policyJudgeInvocationState: String(decision?.policy_router?.judge?.invocation_state || ""),
+    policyJudgeRoute: String(decision?.policy_router?.judge?.route || ""),
+    policyJudgeConfidence: Number(decision?.policy_router?.judge?.confidence || 0),
+    policyJudgeValidationProblems: Array.isArray(decision?.policy_router?.judge?.validation?.problems) ? decision.policy_router.judge.validation.problems : [],
+    policyJudgePromptVersion: String(decision?.policy_router?.judge?.prompt_version || ""),
+    policyJudgeSchemaVersion: String(decision?.policy_router?.judge?.schema_version || ""),
+    validationOutcome: Boolean(decision?.policy_router?.judge?.validation?.passed) ? "passed" : "failed",
+  };
+}
+
+function buildRouteValidatedReplayPayload(decision = {}) {
+  const validation = decision?.router_decision_v2?.validation && typeof decision.router_decision_v2.validation === "object"
+    ? decision.router_decision_v2.validation
+    : {};
+  return {
+    route: String(decision?.route_decision?.route || ""),
+    systemPreferredRoute: String(decision?.route_decision?.system_preferred_route || ""),
+    workerPool: String(decision?.route_decision?.worker_pool || ""),
+    taskClass: String(decision?.route_decision?.task_class || ""),
+    protectedLane: String(decision?.route_decision?.protected_lane || ""),
+    routerRequestKind: String(decision?.router_decision_v2?.request_kind || ""),
+    routerScope: String(decision?.router_decision_v2?.scope || ""),
+    routerTarget: String(decision?.router_decision_v2?.target || ""),
+    routerEvidenceRequired: Array.isArray(decision?.router_decision_v2?.evidence_required) ? decision.router_decision_v2.evidence_required : [],
+    routerDecisionSource: String(decision?.router_decision_v2?.decision_source || ""),
+    routerDecisionValid: Boolean(validation?.passed),
+    validationOutcome: Boolean(validation?.passed) ? "passed" : "failed",
+    reason: Array.isArray(validation?.problems) && validation.problems.length > 0 ? String(validation.problems[0] || "") : "",
+  };
+}
+
+async function recordAckReplay({
+  decision = {},
+  stateKey = "",
+  ctx = {},
+  logger = null,
+  kind = "",
+  phase = "",
+  result = {},
+  toolName = "",
+} = {}) {
+  if (!kind) return;
+  const reason = String(result?.reason || "");
+  if (!Boolean(result?.attempted) && !Boolean(result?.sent) && !reason) return;
+  if (!Boolean(result?.attempted) && !Boolean(result?.sent) && reason === "not_required") return;
+  const sent = Boolean(result?.sent);
+  const fallbackUsed = Boolean(result?.fallback_used);
+  const ackMode = sent
+    ? (fallbackUsed ? "progress_update" : "channel_message")
+    : "not_sent";
+  await recordPolicyReplay(
+    "ack_sent",
+    {
+      sessionKey: stateKey || String(decision?.request?.session_key || ""),
+      sessionId: String(ctx?.sessionId || ""),
+      route: String(decision?.route_decision?.route || ""),
+      taskClass: String(decision?.route_decision?.task_class || ""),
+      protectedLane: String(decision?.route_decision?.protected_lane || ""),
+      phase: String(phase || ""),
+      toolName: String(toolName || ""),
+      ackKind: String(kind || ""),
+      ackMode,
+      ackSent: sent,
+      reason,
+      ackMessage: truncateText(result?.message || "", 400),
+    },
+    logger,
+    decision,
+  );
+}
+
 async function recordDeliveryRelayEvent(eventType, payload = {}, logger) {
   try {
+    const pathname = resolveDeliveryRelayPath();
+    const deliveryId = String(payload?.deliveryId || "").trim();
+    if (await hasDeliveryRelayEvent(pathname, eventType, deliveryId)) {
+      return;
+    }
     await appendJsonl(resolveDeliveryRelayPath(), {
       schema_version: "octoclaw.delivery_relay.event/v1",
       event: eventType,
@@ -1423,6 +1634,24 @@ function resolveDeliveryRelaySettings(runtimeCfg = {}) {
   };
 }
 
+function shouldRegisterPendingDelivery(decision = {}, payload = {}) {
+  const materialization = payload?.materialization && typeof payload.materialization === "object" ? payload.materialization : {};
+  const materializationStatus = String(materialization?.status || "").trim().toLowerCase();
+  const capabilityFailure = payload?.capability_failure && typeof payload.capability_failure === "object"
+    ? payload.capability_failure
+    : (materialization?.capability_failure && typeof materialization.capability_failure === "object" ? materialization.capability_failure : {});
+  const failureReason = String(capabilityFailure?.reason || "").trim();
+  const taskId = String(payload?.task_id || materialization?.task_id || "").trim();
+  const runnerJobId = String(payload?.job?.id || materialization?.runner_job_id || "").trim();
+  if (failureReason || materializationStatus === "materialization_failed") {
+    return { allowed: false, reason: "materialization_failed" };
+  }
+  if (!taskId && !runnerJobId) {
+    return { allowed: false, reason: "missing_execution_identity" };
+  }
+  return { allowed: true, reason: "ok" };
+}
+
 async function registerPendingDelivery({
   decision = {},
   payload = {},
@@ -1432,6 +1661,8 @@ async function registerPendingDelivery({
   logger = null,
 } = {}) {
   if (!deliveryRelayEnabled(decision)) return { registered: false, reason: "disabled" };
+  const registrationGate = shouldRegisterPendingDelivery(decision, payload);
+  if (!registrationGate.allowed) return { registered: false, reason: registrationGate.reason };
   const deliveryId = deliveryIdFor(decision, payload);
   const taskId = String(payload?.task_id || payload?.materialization?.task_id || "").trim();
   const runnerJobId = String(payload?.job?.id || payload?.materialization?.runner_job_id || "").trim();
@@ -1664,10 +1895,20 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   prunePolicyState();
   const stateKey = resolvePolicyStateKey(ctx);
   const existing = getPolicyStateForContext(ctx).state;
+  const boundary = detectSessionBoundary(ctx);
+  const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
+  if (!String(metadata.turn_id || "").trim()) {
+    metadata.turn_id = stableId("turn", [
+      stateKey,
+      metadata.session_key,
+      ctx?.sessionId,
+      ctx?.agentId,
+      prompt,
+    ]);
+  }
   const runtimeCfg = loadOctoClawConfig().runtime_policy || {};
-  const deliveryRelayLive = Boolean(runtimeCfg?.features && typeof runtimeCfg.features === "object" && !Array.isArray(runtimeCfg.features)
-    ? ("delivery_relay_enabled" in runtimeCfg.features ? runtimeCfg.features.delivery_relay_enabled : true)
-    : true);
+  const rolloutFlags = resolveRuntimeFeatureFlags(runtimeCfg);
+  const deliveryRelayLive = Boolean(rolloutFlags.delivery_relay_enabled);
   if (deliveryRelayLive) {
     const reconciled = await reconcilePendingDeliveriesForSession(stateKey || String(ctx?.sessionKey || "").trim(), cwd, logger, runtimeCfg);
     await recordDeliveryReconcileResults(reconciled, logger);
@@ -1688,21 +1929,47 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       });
     }
   }
+  const cacheMissReason = options.force
+    ? "force_refresh"
+    : existing?.decision
+      ? "prompt_mismatch"
+      : "no_existing_state";
   if (!options.force && existing?.decision && promptsEquivalent(existing?.prompt || "", prompt)) {
     existing.updatedAt = Date.now();
     setPolicyStateForContext(ctx, existing);
+    await recordPolicyReplay(
+      "policy_resolved",
+      buildPolicyResolvedReplayPayload({
+        decision: existing.decision,
+        stateKey,
+        ctx,
+        boundary,
+        metadata: existing?.decision?.request?.metadata && typeof existing.decision.request.metadata === "object"
+          ? existing.decision.request.metadata
+          : metadata,
+        prompt,
+        routeHintSubmitted: Boolean(existing?.routeHintSubmitted),
+        usedCachedPolicy: true,
+      }),
+      logger,
+      existing.decision,
+    );
+    await recordPolicyReplay(
+      "decision_cache_hit",
+      {
+        sessionKey: stateKey || "",
+        sessionId: String(ctx?.sessionId || ""),
+        route: String(existing?.decision?.route_decision?.route || ""),
+        taskClass: String(existing?.decision?.route_decision?.task_class || ""),
+        protectedLane: String(existing?.decision?.route_decision?.protected_lane || ""),
+        decisionCacheState: "hit",
+        usedCachedPolicy: true,
+        reason: "prompt_equivalent_state_reused",
+      },
+      logger,
+      existing.decision,
+    );
     return { stateKey, state: existing, decision: existing.decision };
-  }
-  const boundary = detectSessionBoundary(ctx);
-  const metadata = { ...buildPolicyMetadata(ctx), ...(options.metadata || {}) };
-  if (!String(metadata.turn_id || "").trim()) {
-    metadata.turn_id = stableId("turn", [
-      stateKey,
-      metadata.session_key,
-      ctx?.sessionId,
-      ctx?.agentId,
-      prompt,
-    ]);
   }
   const hintOptions = {
     prompt,
@@ -1757,48 +2024,50 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
     setPolicyStateForContext(ctx, nextState);
     await recordPolicyReplay(
       "policy_resolved",
+      buildPolicyResolvedReplayPayload({
+        decision,
+        stateKey,
+        ctx,
+        boundary,
+        metadata,
+        prompt,
+        routeHintSubmitted: Boolean(nextState.routeHintSubmitted),
+        usedCachedPolicy: false,
+      }),
+      logger,
+      decision,
+    );
+    await recordPolicyReplay(
+      "decision_cache_miss",
       {
         sessionKey: stateKey || "",
         sessionId: String(ctx?.sessionId || ""),
-        trigger: String(ctx?.trigger || ""),
         route: String(decision?.route_decision?.route || ""),
-        systemPreferredRoute: String(decision?.route_decision?.system_preferred_route || ""),
-        workerPool: String(decision?.route_decision?.worker_pool || ""),
         taskClass: String(decision?.route_decision?.task_class || ""),
         protectedLane: String(decision?.route_decision?.protected_lane || ""),
-        routeHintRequired: Boolean(decision?.route_hint_policy?.required),
-        routeHintSubmitted: Boolean(nextState.routeHintSubmitted),
-        stateGroundingRequired: Boolean(decision?.state_grounding?.required),
-        latencyAckRequired: Boolean(decision?.latency_ack?.required),
-        stickyApplied: Boolean(decision?.route_hint_policy?.sticky_applied),
-        ackFollowupCandidate: Boolean(decision?.route_hint_policy?.ack_followup_candidate),
-        ackFollowupApplied: Boolean(decision?.route_hint_policy?.ack_followup_applied),
-        routeRecommendationConflict: Boolean(decision?.route_recommendation?.arbitration?.required),
-        routeRecommendationStrategy: String(decision?.route_recommendation?.arbitration?.strategy || ""),
-        routeRecommendationConflictType: String(decision?.route_recommendation?.arbitration?.conflict_type || ""),
-        routeLanguagePacks: Array.isArray(decision?.route_language_packs) ? decision.route_language_packs : [],
-        sessionBoundaryStatus: String(boundary.status || ""),
-        canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || ""),
-        conversationControlKind: String(metadata?.conversation_control?.kind || ""),
-        conversationIntentClass: String(metadata?.intent_packet?.intent_class || metadata?.conversation_control?.intent_class || ""),
-        routerRequestKind: String(decision?.router_decision_v2?.request_kind || ""),
-        routerScope: String(decision?.router_decision_v2?.scope || ""),
-        routerTarget: String(decision?.router_decision_v2?.target || ""),
-        routerEvidenceRequired: Array.isArray(decision?.router_decision_v2?.evidence_required) ? decision.router_decision_v2.evidence_required : [],
-        routerDecisionSource: String(decision?.router_decision_v2?.decision_source || ""),
-        routerDecisionValid: Boolean(decision?.router_decision_v2?.validation?.passed),
-        policyJudgeSelected: String(decision?.policy_router?.judge?.selected || ""),
-        policyJudgeInvoked: Boolean(decision?.policy_router?.judge?.invoked),
-        policyJudgeApplied: Boolean(decision?.policy_router?.judge?.applied),
-        policyJudgeInvocationState: String(decision?.policy_router?.judge?.invocation_state || ""),
-        policyJudgeConfidence: Number(decision?.policy_router?.judge?.confidence || 0),
-        policyJudgeValidationProblems: Array.isArray(decision?.policy_router?.judge?.validation?.problems) ? decision.policy_router.judge.validation.problems : [],
-        policyJudgePromptVersion: String(decision?.policy_router?.judge?.prompt_version || ""),
-        policyJudgeSchemaVersion: String(decision?.policy_router?.judge?.schema_version || ""),
-        decisionCacheState: String(decision?.policy_router?.cache?.state || ""),
-        intentPacketConfidence: Number(metadata?.intent_packet?.confidence || 0),
-        intentPacketReasons: Array.isArray(metadata?.intent_packet?.reason_codes) ? metadata.intent_packet.reason_codes : [],
-        prompt: truncateText(prompt),
+        decisionCacheState: "miss",
+        usedCachedPolicy: false,
+        reason: cacheMissReason,
+      },
+      logger,
+      decision,
+    );
+    await recordPolicyReplay(
+      "policy_judged",
+      {
+        sessionKey: stateKey || "",
+        sessionId: String(ctx?.sessionId || ""),
+        ...buildPolicyJudgedReplayPayload(decision),
+      },
+      logger,
+      decision,
+    );
+    await recordPolicyReplay(
+      "route_validated",
+      {
+        sessionKey: stateKey || "",
+        sessionId: String(ctx?.sessionId || ""),
+        ...buildRouteValidatedReplayPayload(decision),
       },
       logger,
       decision,
@@ -2136,8 +2405,34 @@ const plugin = {
         ...current,
         directToolsSeen: Array.from(new Set([...(Array.isArray(current?.directToolsSeen) ? current.directToolsSeen : []), toolName])),
       }));
+      await recordAckReplay({
+        decision,
+        stateKey,
+        ctx,
+        logger: pi.logger,
+        kind: "latency",
+        phase: "direct_tool",
+        result: latencyAck,
+        toolName,
+      });
       await recordPolicyReplay(
         "direct_tool_called",
+        {
+          sessionKey: stateKey || "",
+          sessionId: String(ctx?.sessionId || ""),
+          route: String(decision?.route_decision?.route || ""),
+          taskClass: String(decision?.route_decision?.task_class || ""),
+          protectedLane: String(decision?.route_decision?.protected_lane || ""),
+          toolName,
+          latencyAckRequired: Boolean(decision?.latency_ack?.required),
+          latencyAckSent: Boolean(latencyAck?.sent),
+          latencyAckReason: String(latencyAck?.reason || ""),
+        },
+        pi.logger,
+        decision,
+      );
+      await recordPolicyReplay(
+        "tool_used",
         {
           sessionKey: stateKey || "",
           sessionId: String(ctx?.sessionId || ""),
@@ -2447,7 +2742,7 @@ const plugin = {
     {
       name: "octoclaw_policy_decide",
       label: "OctoClaw Policy Decide",
-      description: "Return the structured OctoClaw runtime policy decision object, including route, model/profile, skill bundle, review policy, and hook interface hints.",
+      description: "Debug/parity helper that returns the structured OctoClaw runtime policy decision object, including route, model/profile, skill bundle, review policy, and hook interface hints.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -2480,7 +2775,7 @@ const plugin = {
     {
       name: "octoclaw_route",
       label: "OctoClaw Route",
-      description: "Decide whether a task should be handled directly, by runner, or by one or more subagents.",
+      description: "Debug/parity helper that exposes the current Node-side route decision for a task.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -2491,9 +2786,12 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const payload = inferRoute(params.task, params.command || "");
+        const payload = buildDecision(params.task, {
+          command: params.command || "",
+          metadata: buildPolicyMetadata(ctx),
+        });
         return toolResponse(
-          `OctoClaw system preferred route: ${payload.system_preferred_route || payload.route} (confidence ${payload.confidence ?? "n/a"})`,
+          policySummaryText(payload),
           payload,
         );
       },
@@ -2558,6 +2856,15 @@ const plugin = {
         const policyDecisionJson = params.policyJson || (cachedDecision ? JSON.stringify(cachedDecision) : "");
         if (policyDecisionJson) args.push("--policy-json", policyDecisionJson);
         const ackResult = await ensurePreDispatchAck(cachedDecision, metadata, stateKey, state, ctx, _onUpdate, pi.logger);
+        await recordAckReplay({
+          decision: cachedDecision,
+          stateKey,
+          ctx,
+          logger: pi.logger,
+          kind: "pre_dispatch",
+          phase: "before_dispatch",
+          result: ackResult,
+        });
         const dispatchRoute = String(cachedDecision?.route_decision?.route || params.route || "").trim();
         const waitTimeoutSeconds = { runner: 12, spawn_single: 30, spawn_multi: 5, direct: 5 }[dispatchRoute] ?? 12;
         args.push("--wait", "--wait-timeout-seconds", String(waitTimeoutSeconds));
@@ -2622,6 +2929,10 @@ const plugin = {
             deliveryPendingRegistered: Boolean(deliveryRegistration?.registered),
             taskId: String(payload?.task_id || payload?.materialization?.task_id || ""),
             runnerJobId: String(payload?.job?.id || payload?.materialization?.runner_job_id || ""),
+            runnerExecutionMode: String(payload?.runner_execution_mode || ""),
+            runner_runtime_resolution: payload?.runner_runtime_resolution && typeof payload.runner_runtime_resolution === "object"
+              ? payload.runner_runtime_resolution
+              : {},
             routeRecommendationConflict: Boolean(authoritativeDecision?.route_recommendation?.arbitration?.required),
             routeRecommendationStrategy: String(authoritativeDecision?.route_recommendation?.arbitration?.strategy || ""),
             routeRecommendationConflictType: String(authoritativeDecision?.route_recommendation?.arbitration?.conflict_type || ""),
@@ -2807,7 +3118,7 @@ const plugin = {
 
   pi.registerCommand({
     name: "octoroute",
-    description: "Run OctoClaw route decision for a task",
+    description: "Show the current Node-side OctoClaw route decision for a task",
     acceptsArgs: true,
     handler: async (ctx) => {
       const task = String(ctx.args || "").trim();
@@ -2815,10 +3126,10 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octoroute <task>", "error");
         return;
       }
-      const payload = inferRoute(task);
+      const payload = buildDecision(task, { metadata: buildPolicyMetadata(ctx) });
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
-        ctx.ui.notify(`OctoClaw system preferred route: ${payload.system_preferred_route || payload.route}`);
+        ctx.ui.notify(policySummaryText(payload));
       }
     },
   });

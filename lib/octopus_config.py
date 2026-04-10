@@ -70,11 +70,79 @@ RUNTIME_POLICY_MODE_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
+FEATURE_FLAG_DEFAULTS: dict[str, bool] = {
+    "policy_judge_live": True,
+    "cheap_judge_live": False,
+    "local_judge_live": False,
+    "runner_pool_enabled": True,
+    "delivery_relay_enabled": True,
+    "legacy_runner_fallback": True,
+    "patrol_loop_enabled": False,
+}
+
+FEATURE_FLAG_ENV_MAP: dict[str, str] = {
+    "policy_judge_live": "OCTOCLAW_POLICY_JUDGE_LIVE",
+    "cheap_judge_live": "OCTOCLAW_CHEAP_JUDGE_LIVE",
+    "local_judge_live": "OCTOCLAW_LOCAL_JUDGE_LIVE",
+    "runner_pool_enabled": "OCTOCLAW_RUNNER_POOL_ENABLED",
+    "delivery_relay_enabled": "OCTOCLAW_DELIVERY_RELAY_ENABLED",
+    "legacy_runner_fallback": "OCTOCLAW_LEGACY_RUNNER_FALLBACK",
+    "patrol_loop_enabled": "OCTOCLAW_PATROL_LOOP_ENABLED",
+}
+
 
 def resolve_runtime_policy_mode(value: Any) -> str:
     raw = str(value or "").strip().lower()
     normalized = RUNTIME_POLICY_MODE_ALIASES.get(raw, raw)
     return normalized if normalized in RUNTIME_POLICY_MODE_PRESETS else "guided"
+
+
+def parse_optional_bool(value: Any) -> bool | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def resolve_runtime_feature_flags(runtime_policy: dict[str, Any] | None = None) -> dict[str, Any]:
+    policy = runtime_policy if isinstance(runtime_policy, dict) else {}
+    features = policy.get("features", {})
+    features = features if isinstance(features, dict) else {}
+    runner_pool = policy.get("runner_pool", {})
+    runner_pool = runner_pool if isinstance(runner_pool, dict) else {}
+    resolved: dict[str, Any] = {
+        "rollout_contract_version": "octoclaw.runtime_flags/v1",
+        "policy_judge_live": bool(features.get("policy_judge_live", FEATURE_FLAG_DEFAULTS["policy_judge_live"])),
+        "cheap_judge_live": bool(features.get("cheap_judge_live", FEATURE_FLAG_DEFAULTS["cheap_judge_live"])),
+        "local_judge_live": bool(features.get("local_judge_live", FEATURE_FLAG_DEFAULTS["local_judge_live"])),
+        "runner_pool_enabled": bool(features.get("runner_pool_enabled", runner_pool.get("enabled", FEATURE_FLAG_DEFAULTS["runner_pool_enabled"]))),
+        "delivery_relay_enabled": bool(features.get("delivery_relay_enabled", FEATURE_FLAG_DEFAULTS["delivery_relay_enabled"])),
+        "legacy_runner_fallback": bool(features.get("legacy_runner_fallback", FEATURE_FLAG_DEFAULTS["legacy_runner_fallback"])),
+        "patrol_loop_enabled": bool(features.get("patrol_loop_enabled", FEATURE_FLAG_DEFAULTS["patrol_loop_enabled"])),
+    }
+    override_sources: list[str] = []
+    safe_mode_enabled = parse_optional_bool(os.environ.get("OCTOCLAW_RUNTIME_SAFE_MODE")) is True
+    if safe_mode_enabled:
+        resolved["cheap_judge_live"] = False
+        resolved["local_judge_live"] = False
+        resolved["runner_pool_enabled"] = False
+        resolved["legacy_runner_fallback"] = True
+        resolved["patrol_loop_enabled"] = False
+        override_sources.append("env:OCTOCLAW_RUNTIME_SAFE_MODE")
+    for key, env_name in FEATURE_FLAG_ENV_MAP.items():
+        parsed = parse_optional_bool(os.environ.get(env_name))
+        if parsed is None:
+            continue
+        resolved[key] = parsed
+        override_sources.append(f"env:{env_name}")
+    resolved["safe_mode_enabled"] = safe_mode_enabled
+    resolved["judge_lock"] = "main_grade_model" if safe_mode_enabled else ""
+    resolved["override_sources"] = override_sources
+    return resolved
 
 
 def _normalize_path(path: str) -> str:
@@ -480,6 +548,10 @@ def load_octopus_config() -> dict[str, Any]:
         deep_merge(DEFAULT_CONFIG["runtime_policy"], RUNTIME_POLICY_MODE_PRESETS.get(mode, {})),
         dict(runtime_cfg, mode=mode),
     )
+    resolved_runtime = merged.get("runtime_policy", {})
+    resolved_runtime = resolved_runtime if isinstance(resolved_runtime, dict) else {}
+    resolved_runtime["features"] = resolve_runtime_feature_flags(resolved_runtime)
+    merged["runtime_policy"] = resolved_runtime
     return merged
 
 

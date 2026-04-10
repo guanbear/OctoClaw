@@ -112,6 +112,33 @@ class RuntimePolicyRolloutTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["route_language_packs"]["enabled"], ["zh", "en", "ja", "es"])
 
+    def test_render_policy_can_override_runtime_feature_flags(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(ROLLOUT_SCRIPT),
+                "render-policy",
+                "--preset",
+                "guided",
+                "--policy-judge-live",
+                "true",
+                "--cheap-judge-live",
+                "true",
+                "--runner-pool-enabled",
+                "false",
+                "--delivery-relay-enabled",
+                "false",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["features"]["policy_judge_live"])
+        self.assertTrue(payload["features"]["cheap_judge_live"])
+        self.assertFalse(payload["features"]["runner_pool_enabled"])
+        self.assertFalse(payload["features"]["delivery_relay_enabled"])
+
     def test_merge_and_cleanup_openclaw_plugin_config(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-plugin-rollout-test-") as tmpdir:
             config_path = Path(tmpdir) / "openclaw.json"

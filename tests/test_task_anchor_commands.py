@@ -109,25 +109,30 @@ class TaskAnchorCommandTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("/tmp/task-1-context.json", result["text"])
 
+    @patch("lib.task_anchor_commands._run_task_state_event")
     @patch("lib.task_anchor_commands._run_task_state_upsert")
     @patch("lib.task_anchor_commands.send_agent_message")
     @patch("lib.task_anchor_commands.cancel_native_taskflow")
-    def test_execute_stop_prefers_native_cancel_when_taskflow_binding_exists(self, mock_cancel, mock_send, mock_upsert) -> None:
+    def test_execute_stop_prefers_native_cancel_when_taskflow_binding_exists(self, mock_cancel, mock_send, mock_upsert, mock_event) -> None:
         mock_cancel.return_value = {"ok": True, "target_kind": "flow", "target_id": "flow-1"}
         mock_upsert.return_value = {"ok": True}
+        mock_event.return_value = {"ok": True}
         result = execute_task_anchor_command("stop task-1", state_file=self.state_file)
 
         self.assertTrue(result["ok"])
         mock_cancel.assert_called_once()
         mock_send.assert_not_called()
         self.assertEqual(mock_upsert.call_args[1]["status"], "deferred")
+        self.assertEqual(mock_event.call_args.args[1], "job_cancelled")
 
+    @patch("lib.task_anchor_commands._run_task_state_event")
     @patch("lib.task_anchor_commands._run_task_state_upsert")
     @patch("lib.task_anchor_commands.send_agent_message")
     @patch("lib.task_anchor_commands.cancel_native_taskflow")
-    def test_execute_retry_requeues_task_after_native_cancel(self, mock_cancel, mock_send, mock_upsert) -> None:
+    def test_execute_retry_requeues_task_after_native_cancel(self, mock_cancel, mock_send, mock_upsert, mock_event) -> None:
         mock_cancel.return_value = {"ok": True, "target_kind": "task", "target_id": "native-task-1"}
         mock_upsert.return_value = {"ok": True}
+        mock_event.return_value = {"ok": True}
         result = execute_task_anchor_command("retry task-1", state_file=self.state_file)
 
         self.assertTrue(result["ok"])
@@ -135,6 +140,7 @@ class TaskAnchorCommandTests(unittest.TestCase):
         mock_send.assert_not_called()
         self.assertEqual(mock_upsert.call_args[1]["status"], "queued")
         self.assertEqual(mock_upsert.call_args[1]["recovery_action"], "manual_retry_request")
+        self.assertEqual(mock_event.call_args.args[1], "job_superseded")
 
     @patch("lib.task_anchor_commands._run_task_state_upsert")
     @patch("lib.task_anchor_commands.send_agent_message")
@@ -147,18 +153,21 @@ class TaskAnchorCommandTests(unittest.TestCase):
         self.assertEqual(mock_upsert.call_args[1]["status"], "queued")
         self.assertIn("Approved", mock_send.call_args[0][1])
 
+    @patch("lib.task_anchor_commands._run_task_state_event")
     @patch("lib.task_anchor_commands._run_task_state_upsert")
     @patch("lib.task_anchor_commands.send_agent_message")
     @patch("lib.task_anchor_commands.cancel_native_taskflow")
-    def test_execute_reject_defers_task_and_prefers_native_cancel(self, mock_cancel, mock_send, mock_upsert) -> None:
+    def test_execute_reject_defers_task_and_prefers_native_cancel(self, mock_cancel, mock_send, mock_upsert, mock_event) -> None:
         mock_cancel.return_value = {"ok": True, "target_kind": "flow", "target_id": "flow-1"}
         mock_upsert.return_value = {"ok": True}
+        mock_event.return_value = {"ok": True}
         result = execute_task_anchor_command("reject task-1", state_file=self.state_file)
 
         self.assertTrue(result["ok"])
         mock_cancel.assert_called_once()
         mock_send.assert_not_called()
         self.assertEqual(mock_upsert.call_args[1]["status"], "deferred")
+        self.assertEqual(mock_event.call_args.args[1], "job_cancelled")
 
     def test_missing_task_returns_not_found(self) -> None:
         result = execute_task_anchor_command("details missing", state_file=self.state_file)

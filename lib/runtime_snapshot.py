@@ -221,9 +221,15 @@ def load_runner_health(*, stale_after_seconds: int = RUNNER_STALE_SECONDS) -> di
     health = load_json(RUNNER_HEALTH_FILE)
     if not isinstance(health, dict):
         return {"present": False, "healthy": False, "reason": "missing"}
+    runtime_cfg = load_octopus_config().get("runtime_policy", {})
+    runtime_cfg = runtime_cfg if isinstance(runtime_cfg, dict) else {}
+    runner_pool = runtime_cfg.get("runner_pool", {})
+    runner_pool = runner_pool if isinstance(runner_pool, dict) else {}
+    unhealthy_after_failures = max(0, int(runner_pool.get("worker_unhealthy_after_failures", 0) or 0))
     worker_id = str(health.get("worker_id", "") or "").strip()
     if not worker_id:
         return {"present": False, "healthy": False, "reason": "missing"}
+    failure_streak = max(0, int(health.get("failure_streak", 0) or 0))
     last = parse_iso(str(health.get("last_heartbeat_at", "") or ""))
     if last is None:
         return {
@@ -238,13 +244,20 @@ def load_runner_health(*, stale_after_seconds: int = RUNNER_STALE_SECONDS) -> di
         last = last.replace(tzinfo=timezone.utc)
     age_seconds = max(0, int((datetime.now(timezone.utc) - last.astimezone(timezone.utc)).total_seconds()))
     healthy = age_seconds <= stale_after_seconds
+    reason = "ok" if healthy else str(health.get("reason") or "stale")
+    if healthy and unhealthy_after_failures > 0 and failure_streak >= unhealthy_after_failures:
+        healthy = False
+        reason = "failure_streak"
     return {
         **health,
         "present": True,
         "healthy": healthy,
-        "reason": "ok" if healthy else str(health.get("reason") or "stale"),
+        "reason": reason,
         "age_seconds": age_seconds,
         "worker_id": worker_id,
+        "failure_streak": failure_streak,
+        "last_job_status": str(health.get("last_job_status", "") or "").strip(),
+        "last_job_id": str(health.get("last_job_id", "") or "").strip(),
         "health": health,
     }
 
@@ -303,6 +316,8 @@ def build_runtime_snapshot(
             "worker_id": str(runner.get("worker_id", "") or "").strip(),
             "job_id": str(runner.get("job_id", "") or "").strip(),
             "reason": str(runner.get("reason", "") or "").strip(),
+            "failure_streak": int(runner.get("failure_streak", 0) or 0),
+            "last_job_status": str(runner.get("last_job_status", "") or "").strip(),
             "mode": mode,
             "recovery_suggested": bool(mode != "ondemand" and runner_state != "healthy"),
         },

@@ -254,6 +254,15 @@ ACK timer
   - `job_timeout_seconds`
   - `worker_unhealthy_after_failures`
 - queue 满或 worker 不健康时，必须 progress/fallback，不静默吞任务。
+- dispatch 入口先做最小 `runner runtime resolution`：
+  - 统一读取 `runner_pool` config、queue counts、health snapshot
+  - 产出 `dispatch_mode=daemon|ondemand|deferred`
+  - `materialization_failed` 时不得登记 `delivery_pending`
+  - stale running job 会先尝试回收，并把 task-state 同步成 failed
+  - 同一 session 超过 `per_user_concurrency` 时不得继续派发
+  - worker 连续失败达到阈值后，health 要转成 `failure_streak` 不健康
+  - queue / ondemand 路径都要写统一 progress 事件
+  - 没有健康常驻 worker 但允许 fallback 时，dispatch 要能 bootstrap 一个后台 runner，而不是继续依赖外部 daemon
 
 验收：
 
@@ -261,7 +270,14 @@ ACK timer
 - runner worker busy 时能排队或使用另一个 worker。
 - worker 卡死不会导致 task 永远假 running。
 - `install.sh reconcile` 不再默认安装 runner systemd service 或 runner shell daemon。
+- queue full / worker unhealthy 会返回结构化 capability failure，而不是假装 `executed=true`。
+- session 并发超限会返回结构化 capability failure，而不是静默排队。
+- stale running recovery 后，queue 和 task-state 不再一边 `failed` 一边 `running`。
+- worker 连续失败后会进入 unhealthy 状态，新的 dispatch 不再继续压到同一 worker。
+- runner queued / ondemand 切换会留下可读 progress 事件，follow-up 不只能看到最终结果。
+- 在没有常驻健康 worker 时，runner lane 仍能通过 runtime bootstrap 的后台 worker 启动执行。
 - queue full / timeout / unhealthy 都有 ledger event 和用户可见结果或进度。
+- 最小 runner 执行契约必须落地到 artifacts：`goal_contract` 至少包含 goal、execution_contract、timeout、access_mode、native task binding。
 
 ### R6：Native Task-bound Runner Job
 
@@ -289,10 +305,26 @@ ACK timer
 - tmux session 死亡不会污染 task truth。
 - 默认 runner job 为 read-only。
 - 写操作/部署/删除/重启不能由轻 runner 静默执行。
+- 执行链至少能稳定写出 `task_bound -> runner_started -> result_ready -> delivery_sent|delivery_failed`。
 
 ### R7：Execution Ledger + Follow-up Grounding
 
 目的：解决 provenance 乱说。
+
+当前进度：
+
+- 已落地：
+  - replay 归一化事件 `policy_judged / route_validated / ack_sent / tool_used / decision_cache_hit / decision_cache_miss`
+  - follow-up grounding 已读取上述事件，并显式展示 judge / validation / cache / ack 事实
+  - `tool_used` 与既有 `direct_tool_called` 并行保留，避免历史日志失真
+  - task/disposition/final-delivery 已补齐到 follow-up 事实链：
+    - `job_cancelled`
+    - `job_superseded`
+    - `completion_relay_sent / completion_relay_failed / user_notified`
+    - `delivery_observed / delivery_compensated / delivery_reconciled_delivered`
+- 仍待继续：
+  - 更彻底的 “follow-up 只读 ledger” 收口
+  - delivery/final 的更多统一消息契约
 
 任务：
 
@@ -324,6 +356,24 @@ ACK timer
 ### R8：删除/降级旧 live route 旁路
 
 目的：减少屎山感和重复真相源。
+
+当前状态（2026-04-10）：
+
+- 已完成第一刀：
+  - `dispatch_task.py` 默认只接受 gateway extension 预计算的 `policy_json`，不再默认回落到 Python `octoclaw_policy.py`。
+  - Python policy fallback 现在只保留为显式兼容开关：`runtime_policy.features.legacy_policy_fallback` 或环境变量 `OCTOCLAW_LEGACY_POLICY_FALLBACK=1`。
+  - `spawn_multi` 的 planner/review step 改为从主 `RouterDecision` 合成，不再额外调用 Python policy 生成子 decision。
+  - extension 内 `resolveToolPolicyContext`、`octoclaw_route`、`/octoroute` 都已切到 Node `buildDecision(...)`，不再走旧 `inferRoute(...)` live 语义。
+  - `octoclaw_policy_decide` 仍保留，但已降级为 debug/parity helper，不再自动注入 live tool allowlist。
+- 已完成第二刀：
+  - `bin/octoclawctl.sh` 默认运维面已改成 `observe-once / reconcile-once / repair-once / runner-pool-status`，`patrol` 目标不再是默认受支持控制面。
+  - `install.sh` 默认不再安装 patrol/runner loop、cron、systemd/tmux 常驻链路；安装时会主动清理旧 `octoclaw-patrol / octoclaw-probe / octoclaw-plan-sync / octoclaw-update-check` 默认入口。
+  - `patrol.py` 默认收缩为按需 reconcile/repair；runner auto-restart 现在只有显式环境开关下才允许。
+  - `lib/patrol-loop.sh` / `lib/runner-daemon.sh` / `lib/runner_loop.sh` 已降成 legacy wrapper 或 legacy loop，默认不会继续作为推荐主链。
+  - `lib/systemd/octoclaw-patrol.service` / `lib/systemd/octoclaw-runner.service` 已改成 compat-only 模板，并显式要求 `OCTOCLAW_ENABLE_LEGACY_LOOPS=1`。
+- 当前结论：
+  - `octoclaw_route.py` / `octoclaw_policy.py` 已经退出 live 主链，只保留 parity/eval/migration 角色。
+  - 更深层 legacy 运维函数和安装分支目前已退出默认主链并转成 compat-only；如果后续继续瘦身，属于仓库清洁工作，不再是 live 主链阻塞。
 
 任务：
 
@@ -391,6 +441,20 @@ ACK timer
 - 加 runner backpressure synthetic test。
 - 每次 live 事故必须新增 fixture 或 postmortem item。
 
+当前状态（2026-04-10）：
+
+- 已落地 baseline：
+  - 新增本地统一入口 `python3 lib/harness_gate.py --preset quick|full`。
+  - `quick` preset 覆盖 router v2 golden、Python/JS route parity golden、runtime policy、harness synthetics、policy judge shadow report、replay schema、dispatch、runner runtime、runtime extension。
+  - `full` preset 在 `quick` 基础上继续覆盖 task anchor、delivery relay、runtime snapshot、replay summary/review/automation 等回归。
+  - `eval_suite.py` 在调用 legacy `runner_loop.sh` 做评测时，已显式打开 compat 开关，避免评测与运行时语义漂移。
+  - shadow judge comparison report 已落地：`python3 lib/policy_judge_shadow_report.py --shadow-fixture tests/fixtures/policy-judge-shadow-report-v1.json --format json`。
+  - slow direct-lookup latency-ack channel synthetic 已落地，并纳入 `tests.test_harness_synthetics`。
+  - 已补第一批 synthetic：ACK progress fallback、slow direct-lookup latency-ack、delivery compensation idempotency、runner backpressure gate。
+- 仍可继续增强：
+  - 更完整的 duplicate delivery / compensation / backpressure synthetic 汇总报告。
+  - runner pool crash/timeout、supersede/cancel 的专门 synthetic。
+
 验收：
 
 - router/scope/evidence golden 通过率达标。
@@ -414,6 +478,33 @@ ACK timer
 - flag 状态写入 RouterDecision 和 ledger。
 - 默认关闭 patrol loop。
 - runner pool 可快速关闭并 fallback。
+- 支持环境变量 kill switch / safe mode，在不改代码和不改磁盘配置的前提下快速止血。
+
+当前状态（2026-04-10）：
+
+- 已落地统一 runtime flags 解析：
+  - JS: `extensions/octoclaw-runtime/policy/config.js`
+  - Python: `lib/octopus_config.py`
+- `loadOctoClawConfig()` / `load_octopus_config()` 会把 config feature flags 和环境变量覆盖收敛成同一份 snapshot。
+- 已支持环境变量 kill switch：
+  - `OCTOCLAW_RUNTIME_SAFE_MODE`
+  - `OCTOCLAW_POLICY_JUDGE_LIVE`
+  - `OCTOCLAW_CHEAP_JUDGE_LIVE`
+  - `OCTOCLAW_LOCAL_JUDGE_LIVE`
+  - `OCTOCLAW_RUNNER_POOL_ENABLED`
+  - `OCTOCLAW_DELIVERY_RELAY_ENABLED`
+  - `OCTOCLAW_LEGACY_RUNNER_FALLBACK`
+  - `OCTOCLAW_PATROL_LOOP_ENABLED`
+- safe mode 会强制：
+  - cheap/local judge live 关闭
+  - runner pool 关闭
+  - legacy runner fallback 打开
+  - patrol loop 关闭
+  - judge lock 到 `main_grade_model`
+- rollout flags 已写入：
+  - RouterDecision `runtime_switches`
+  - replay ledger `rolloutFlags`
+- rollout CLI `lib/runtime_policy_rollout.py` 已支持直接渲染/写入这些 feature flags。
 
 验收：
 

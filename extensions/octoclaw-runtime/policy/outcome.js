@@ -41,6 +41,8 @@ function runnerHealthSnapshot(healthFile = RUNNER_HEALTH_FILE) {
     worker_id: workerId,
     last_heartbeat_at: heartbeat,
     reason,
+    failure_streak: Number(payload?.failure_streak || 0),
+    last_job_status: normalizedText(payload?.last_job_status),
   };
 }
 

@@ -1,11 +1,12 @@
 #!/bin/bash
-# patrol-loop.sh — 八爪鱼巡逻后台循环（零 token 开销）
-# 替代 openclaw cron 的 AI session 模式，直接执行 Python 脚本
-# 正常状态: 0 token | 异常状态: patrol.py 直接调飞书 API
-#
-# 启动: PATROL_INTERVAL=60 setsid bash patrol-loop.sh &
-# 停止: kill $(cat /workspace/tmp/octopus/patrol-loop.pid)
-# 间隔: 通过 PATROL_INTERVAL 环境变量控制（默认 60 秒）
+# patrol-loop.sh — legacy wrapper
+# 默认架构下 patrol 不再常驻；如需继续使用旧 loop，必须显式设置
+# OCTOCLAW_ENABLE_LEGACY_LOOPS=1。
+
+if [[ "${OCTOCLAW_ENABLE_LEGACY_LOOPS:-}" != "1" ]]; then
+    echo "patrol-loop.sh is legacy-only. Use bin/octoclawctl.sh reconcile-once or repair-once instead."
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null

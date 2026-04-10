@@ -52,7 +52,12 @@ def _normalize_decision(payload: dict) -> dict:
         runtime_switches.pop("local_judge_live_enabled", None)
         runtime_switches.pop("runner_pool_enabled", None)
         runtime_switches.pop("delivery_relay_enabled", None)
+        runtime_switches.pop("legacy_runner_fallback_enabled", None)
         runtime_switches.pop("patrol_loop_enabled", None)
+        runtime_switches.pop("rollout_contract_version", None)
+        runtime_switches.pop("safe_mode_enabled", None)
+        runtime_switches.pop("judge_lock", None)
+        runtime_switches.pop("override_sources", None)
     auto_router = normalized.get("auto_router")
     if isinstance(auto_router, dict):
         model_intel = auto_router.get("model_intel")

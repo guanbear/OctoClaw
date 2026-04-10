@@ -274,6 +274,10 @@ class TaskStateAnchorSeedTests(unittest.TestCase):
             self.assertEqual(lines[-1]["event"], "delivery_compensated")
             self.assertEqual(lines[-1]["deliveryId"], "delivery-task-4")
             self.assertEqual(lines[-1]["messageId"], "relay-4")
+            task_events_path = Path(tmpdir) / "tmp" / "octopus" / "task-events.jsonl"
+            events = [json.loads(line) for line in task_events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(events[-1]["kind"], "delivery_sent")
+            self.assertEqual(events[-1]["delivery_id"], "delivery-task-4")
 
 
 if __name__ == "__main__":

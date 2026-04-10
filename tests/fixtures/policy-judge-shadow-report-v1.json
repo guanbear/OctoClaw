@@ -1,0 +1,26 @@
+[
+  {
+    "task": "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
+    "judge": "cheap_local_shadow",
+    "shadow_result": {
+      "route": "runner",
+      "request_kind": "fresh_external_lookup",
+      "scope": "upstream_project",
+      "target": "openclaw",
+      "evidence_required": ["web_lookup", "execution_ledger"],
+      "confidence": 0.82
+    }
+  },
+  {
+    "task": "帮我改下代码并跑测试",
+    "judge": "cheap_local_shadow",
+    "shadow_result": {
+      "route": "runner",
+      "request_kind": "work_request",
+      "scope": "task_context",
+      "target": "current_workspace",
+      "evidence_required": ["workspace_state"],
+      "confidence": 0.61
+    }
+  }
+]

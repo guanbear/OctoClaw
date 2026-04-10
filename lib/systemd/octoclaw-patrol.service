@@ -1,5 +1,5 @@
 [Unit]
-Description=OctoClaw Patrol Loop
+Description=OctoClaw Legacy Patrol Loop (compat only)
 After=network-online.target openclaw.service
 Wants=network-online.target
 
@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=__RUN_USER__
 WorkingDirectory=__SKILL_ROOT__
+Environment=OCTOCLAW_ENABLE_LEGACY_LOOPS=1
 Environment=WORKSPACE=__WORKSPACE__
 Environment=PATROL_INTERVAL=60
 ExecStartPre=/bin/rm -f __WORKSPACE__/tmp/octopus/patrol-loop.pid
@@ -17,4 +18,5 @@ RestartSec=10
 KillMode=control-group
 
 [Install]
+# Legacy opt-in only; not installed by default.
 WantedBy=multi-user.target

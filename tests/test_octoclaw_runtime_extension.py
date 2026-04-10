@@ -529,6 +529,137 @@ Sender (untrusted metadata):
         self.assertTrue(payload["available"])
         self.assertIn("Direct tools used: web_fetch", payload["context"])
 
+    def test_conversation_grounding_surfaces_policy_judge_validation_cache_and_ack_facts(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-policy-facts-") as tmpdir:
+            workspace = Path(tmpdir)
+            replay_path = workspace / "tmp" / "octopus" / "runtime-policy-replay.jsonl"
+            replay_path.parent.mkdir(parents=True, exist_ok=True)
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-10T08:00:00Z",
+                                "sessionKey": "agent:main:slack:direct:u-policy-facts",
+                                "sessionId": "sess-policy-facts",
+                                "prompt": "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
+                                "route": "runner",
+                                "systemPreferredRoute": "runner",
+                                "workerPool": "octoclaw-runner",
+                                "taskClass": "fast_tool_check",
+                                "protectedLane": "",
+                                "decisionCacheState": "miss",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "decision_cache_miss",
+                                "at": "2026-04-10T08:00:00.100Z",
+                                "sessionKey": "agent:main:slack:direct:u-policy-facts",
+                                "sessionId": "sess-policy-facts",
+                                "route": "runner",
+                                "taskClass": "fast_tool_check",
+                                "decisionCacheState": "miss",
+                                "usedCachedPolicy": False,
+                                "reason": "no_existing_state",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_judged",
+                                "at": "2026-04-10T08:00:00.200Z",
+                                "sessionKey": "agent:main:slack:direct:u-policy-facts",
+                                "sessionId": "sess-policy-facts",
+                                "route": "runner",
+                                "taskClass": "fast_tool_check",
+                                "policyJudgeSelected": "main_grade_model",
+                                "policyJudgeInvoked": True,
+                                "policyJudgeApplied": True,
+                                "policyJudgeInvocationState": "completed_fixture",
+                                "policyJudgeRoute": "runner",
+                                "policyJudgeConfidence": 0.88,
+                                "policyJudgeValidationProblems": [],
+                                "policyJudgePromptVersion": "v1",
+                                "policyJudgeSchemaVersion": "octoclaw.policy_judge_result/v1",
+                                "validationOutcome": "passed",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "route_validated",
+                                "at": "2026-04-10T08:00:00.300Z",
+                                "sessionKey": "agent:main:slack:direct:u-policy-facts",
+                                "sessionId": "sess-policy-facts",
+                                "route": "runner",
+                                "systemPreferredRoute": "runner",
+                                "workerPool": "octoclaw-runner",
+                                "taskClass": "fast_tool_check",
+                                "protectedLane": "",
+                                "routerRequestKind": "fresh_external_lookup",
+                                "routerScope": "remote_upstream",
+                                "routerTarget": "upstream_service",
+                                "routerEvidenceRequired": ["web_lookup"],
+                                "routerDecisionSource": "policy_judge",
+                                "routerDecisionValid": True,
+                                "validationOutcome": "passed",
+                                "reason": "",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "ack_sent",
+                                "at": "2026-04-10T08:00:00.400Z",
+                                "sessionKey": "agent:main:slack:direct:u-policy-facts",
+                                "sessionId": "sess-policy-facts",
+                                "route": "runner",
+                                "taskClass": "fast_tool_check",
+                                "ackKind": "pre_dispatch",
+                                "ackMode": "channel_message",
+                                "ackSent": True,
+                                "reason": "channel_message_sent",
+                                "ackMessage": "好的，我去查一下。",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "tool_used",
+                                "at": "2026-04-10T08:00:01Z",
+                                "sessionKey": "agent:main:slack:direct:u-policy-facts",
+                                "sessionId": "sess-policy-facts",
+                                "route": "runner",
+                                "taskClass": "fast_tool_check",
+                                "toolName": "web_fetch",
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "你是怎么查的",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(workspace / "tmp" / "octopus" / "task-state.json"))},
+                    sessionKeys: ["agent:main:slack:direct:u-policy-facts"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertIn("Decision cache: miss", payload["context"])
+        self.assertIn("Policy judge: main_grade_model · completed_fixture · 0.88 · applied", payload["context"])
+        self.assertIn("Route validation: passed · policy_judge", payload["context"])
+        self.assertIn("Ack: pre_dispatch · channel_message · sent", payload["context"])
+        self.assertIn("Direct tools used: web_fetch", payload["context"])
+
     def test_conversation_grounding_recovers_runner_lookup_provenance_from_task_state(self) -> None:
         import tempfile
 
@@ -625,6 +756,290 @@ Sender (untrusted metadata):
         self.assertIn("Delegated workflow: upstream_release_lookup", payload["context"])
         self.assertIn("Delegated evidence source: github_api", payload["context"])
         self.assertIn("Delegated lookup project: openclaw", payload["context"])
+
+    def test_conversation_grounding_includes_task_event_execution_facts(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-task-events-") as tmpdir:
+            workspace = Path(tmpdir)
+            octopus_dir = workspace / "tmp" / "octopus"
+            octopus_dir.mkdir(parents=True, exist_ok=True)
+            replay_path = octopus_dir / "runtime-policy-replay.jsonl"
+            task_state_path = octopus_dir / "task-state.json"
+            task_events_path = octopus_dir / "task-events.jsonl"
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-10T07:00:00Z",
+                                "sessionKey": "agent:main:slack:direct:u-runner-events",
+                                "sessionId": "sess-u-runner-events",
+                                "prompt": "再查下openclaw 有没有新的发版",
+                                "route": "runner",
+                                "systemPreferredRoute": "runner",
+                                "workerPool": "octoclaw-runner",
+                                "taskClass": "fast_tool_check",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "dispatch_called",
+                                "at": "2026-04-10T07:00:01Z",
+                                "sessionKey": "agent:main:slack:direct:u-runner-events",
+                                "sessionId": "sess-u-runner-events",
+                                "route": "runner",
+                                "taskClass": "fast_tool_check",
+                                "executed": True,
+                                "runner_execution_mode": "ondemand",
+                                "runnerJobId": "runner-evt-1",
+                                "materialization": {
+                                    "status": "materialized",
+                                    "kind": "runner_playbook",
+                                    "runner_job_id": "runner-evt-1",
+                                },
+                                "routeOutcome": {
+                                    "schema_version": "octoclaw.route_outcome/v1",
+                                    "queue_pressure_band": "medium",
+                                    "runner_health_snapshot": {
+                                        "worker_id": "runner-a",
+                                        "reason": "ok",
+                                    },
+                                },
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            task_state_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "runner-evt-1",
+                                "status": "done",
+                                "summary": "最新 release 仍是 v2026.4.9",
+                                "executor": "runner",
+                                "route": "runner",
+                                "runtime": "runner",
+                                "artifacts": {
+                                    "goal_contract": {
+                                        "schema_version": "octoclaw.runner_goal_contract/v1",
+                                        "execution_contract": "inspect_report",
+                                        "access_mode": "read_only",
+                                        "native_task_binding": {
+                                            "backend": "mirror",
+                                        },
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            task_events_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.task_event/v1",
+                                "time": "2026-04-10T07:00:01Z",
+                                "kind": "task_bound",
+                                "task_id": "runner-evt-1",
+                                "session_key": "agent:main:slack:direct:u-runner-events",
+                                "goal_contract": {
+                                    "execution_contract": "inspect_report",
+                                    "access_mode": "read_only",
+                                },
+                                "taskflow_binding": {
+                                    "backend": "mirror",
+                                },
+                                "message": "runner job bound to native taskflow",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.task_event/v1",
+                                "time": "2026-04-10T07:00:02Z",
+                                "kind": "runner_started",
+                                "task_id": "runner-evt-1",
+                                "session_key": "agent:main:slack:direct:u-runner-events",
+                                "message": "runner started on worker-a",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.task_event/v1",
+                                "time": "2026-04-10T07:00:05Z",
+                                "kind": "delivery_sent",
+                                "task_id": "runner-evt-1",
+                                "session_key": "agent:main:slack:direct:u-runner-events",
+                                "message": "已发送给用户",
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "刚才那个任务怎样了",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(task_state_path))},
+                    sessionKeys: ["agent:main:slack:direct:u-runner-events"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertIn("Task bound: yes", payload["context"])
+        self.assertIn("Runner started: yes", payload["context"])
+        self.assertIn("Runner dispatch mode: ondemand", payload["context"])
+        self.assertIn("Goal contract: inspect_report · read_only", payload["context"])
+        self.assertIn("Native task binding: mirror", payload["context"])
+        self.assertIn("Runner queue pressure: medium", payload["context"])
+        self.assertIn("Runner health: runner-a · ok", payload["context"])
+        self.assertIn("Delivery state: delivery_sent", payload["context"])
+
+    def test_conversation_grounding_includes_job_disposition_and_final_delivery_facts(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-disposition-") as tmpdir:
+            workspace = Path(tmpdir)
+            octopus_dir = workspace / "tmp" / "octopus"
+            octopus_dir.mkdir(parents=True, exist_ok=True)
+            replay_path = octopus_dir / "runtime-policy-replay.jsonl"
+            task_state_path = octopus_dir / "task-state.json"
+            task_events_path = octopus_dir / "task-events.jsonl"
+            relay_path = octopus_dir / "delivery-relay.jsonl"
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-10T09:00:00Z",
+                                "sessionKey": "agent:main:slack:direct:u-disposition",
+                                "sessionId": "sess-u-disposition",
+                                "prompt": "调研 OpenClaw 最近 release 和 Memory 改动，给我 5 句话总结",
+                                "route": "spawn_single",
+                                "systemPreferredRoute": "spawn_single",
+                                "workerPool": "octoclaw-research",
+                                "taskClass": "focused_research",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "dispatch_called",
+                                "at": "2026-04-10T09:00:01Z",
+                                "sessionKey": "agent:main:slack:direct:u-disposition",
+                                "sessionId": "sess-u-disposition",
+                                "route": "spawn_single",
+                                "taskClass": "focused_research",
+                                "executed": True,
+                                "taskId": "research-disposition-1",
+                                "materialization": {
+                                    "status": "materialized",
+                                    "kind": "spawn_child_task",
+                                    "task_id": "research-disposition-1",
+                                },
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            task_state_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "research-disposition-1",
+                                "status": "deferred",
+                                "summary": "Manual retry requested by operator",
+                                "executor": "spawn_single",
+                                "route": "spawn_single",
+                                "runtime": "openclaw_task",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            task_events_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.task_event/v1",
+                                "time": "2026-04-10T09:00:02Z",
+                                "kind": "job_superseded",
+                                "task_id": "research-disposition-1",
+                                "session_key": "agent:main:slack:direct:u-disposition",
+                                "message": "manual retry superseded previous run",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.task_event/v1",
+                                "time": "2026-04-10T09:00:03Z",
+                                "kind": "completion_relay_sent",
+                                "task_id": "research-disposition-1",
+                                "session_key": "agent:main:slack:direct:u-disposition",
+                                "message": "结果已发送",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.task_event/v1",
+                                "time": "2026-04-10T09:00:04Z",
+                                "kind": "user_notified",
+                                "task_id": "research-disposition-1",
+                                "session_key": "agent:main:slack:direct:u-disposition",
+                                "message": "notification delivered",
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            relay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.delivery_relay.event/v1",
+                                "event": "delivery_observed",
+                                "at": "2026-04-10T09:00:05Z",
+                                "deliveryId": "delivery-disposition-1",
+                                "sessionKey": "agent:main:slack:direct:u-disposition",
+                                "taskId": "research-disposition-1",
+                                "state": "observed_assistant_final",
+                            }
+                        )
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "刚才那个任务怎样了",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(task_state_path))},
+                    sessionKeys: ["agent:main:slack:direct:u-disposition"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertIn("Job disposition: job_superseded · manual retry superseded previous run", payload["context"])
+        self.assertIn("Delivery state: user_notified", payload["context"])
+        self.assertIn("Final delivery: delivery_observed · observed_assistant_final", payload["context"])
 
     def test_conversation_grounding_recovers_task_progress_from_task_state(self) -> None:
         import tempfile
@@ -1461,6 +1876,84 @@ Sender (untrusted metadata):
         self.assertEqual(payload["routerRequestKind"], "surface_query")
         self.assertEqual(payload["routerScope"], "local_host")
 
+    def test_resolve_policy_records_normalized_replay_events_and_cache_hit(self) -> None:
+        import tempfile
+
+        fixture = {
+            "route": "spawn_single",
+            "request_kind": "work_request",
+            "scope": "task_context",
+            "target": "delegated_task",
+            "evidence_required": ["taskflow_state", "execution_ledger"],
+            "confidence": 0.93,
+            "reason_codes": ["semantic_work_request"],
+        }
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-events-") as tmpdir:
+            workspace = Path(tmpdir)
+            payload = run_runtime_helper(
+                """(async () => {
+                    const fs = await import('node:fs/promises');
+                    const ctx = {
+                      sessionKey: "agent:main:slack:direct:u-replay-events",
+                      sessionId: "sess-replay-events",
+                      trigger: "message",
+                      agentId: "agent:main:main"
+                    };
+                    __octoclawTest.__resetPolicyState?.();
+                    await __octoclawTest.resolvePolicyDecisionForContext(
+                      "这个是不是要换个更稳的做法",
+                      ctx,
+                      process.cwd(),
+                      null
+                    );
+                    await __octoclawTest.resolvePolicyDecisionForContext(
+                      "这个是不是要换个更稳的做法",
+                      ctx,
+                      process.cwd(),
+                      null
+                    );
+                    const replayPath = __octoclawTest.resolveReplayLogPath();
+                    const lines = (await fs.readFile(replayPath, 'utf8'))
+                      .trim()
+                      .split('\\n')
+                      .filter(Boolean)
+                      .map((line) => JSON.parse(line))
+                      .filter((item) => item.sessionKey === "agent:main:slack:direct:u-replay-events");
+                    return {
+                      events: lines.map((item) => item.event),
+                      firstResolved: lines.find((item) => item.event === "policy_resolved"),
+                      resolvedEvents: lines.filter((item) => item.event === "policy_resolved"),
+                      firstJudge: lines.find((item) => item.event === "policy_judged"),
+                      firstValidated: lines.find((item) => item.event === "route_validated"),
+                      firstMiss: lines.find((item) => item.event === "decision_cache_miss"),
+                      firstHit: lines.find((item) => item.event === "decision_cache_hit"),
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                    "OCTOCLAW_POLICY_JUDGE_RESULT_JSON": json.dumps(fixture),
+                },
+            )
+
+        self.assertIn("policy_resolved", payload["events"])
+        self.assertIn("policy_judged", payload["events"])
+        self.assertIn("route_validated", payload["events"])
+        self.assertIn("decision_cache_miss", payload["events"])
+        self.assertIn("decision_cache_hit", payload["events"])
+        self.assertGreaterEqual(len(payload["resolvedEvents"]), 2)
+        self.assertEqual(payload["firstResolved"]["route"], "spawn_single")
+        self.assertTrue(any(item["usedCachedPolicy"] is False for item in payload["resolvedEvents"]))
+        self.assertTrue(any(item["usedCachedPolicy"] is True for item in payload["resolvedEvents"]))
+        self.assertEqual(payload["firstResolved"]["rolloutFlags"]["contractVersion"], "octoclaw.runtime_flags/v1")
+        self.assertTrue(payload["firstResolved"]["rolloutFlags"]["policyJudgeLiveEnabled"])
+        self.assertEqual(payload["firstJudge"]["policyJudgeInvocationState"], "completed_fixture")
+        self.assertEqual(payload["firstJudge"]["rolloutFlags"]["contractVersion"], "octoclaw.runtime_flags/v1")
+        self.assertTrue(payload["firstValidated"]["routerDecisionValid"])
+        self.assertIn("runnerPoolEnabled", payload["firstValidated"]["rolloutFlags"])
+        self.assertEqual(payload["firstMiss"]["decisionCacheState"], "miss")
+        self.assertEqual(payload["firstHit"]["decisionCacheState"], "hit")
+
     def test_current_version_prompt_prefers_local_surface_lookup(self) -> None:
         payload = run_runtime_helper(
             """(async () => {
@@ -1615,6 +2108,58 @@ Sender (untrusted metadata):
         self.assertEqual(payload["lastEvent"]["taskId"], "task-123")
         self.assertTrue(payload["pendingDeliveryId"].startswith("delivery-"))
         self.assertEqual(payload["pendingDeliveryTaskId"], "task-123")
+
+    def test_register_pending_delivery_skips_materialization_failures(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-delivery-skip-") as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "tmp").mkdir(parents=True, exist_ok=True)
+            payload = run_runtime_helper(
+                """(async () => {
+                    const fs = await import('node:fs/promises');
+                    const ctx = {
+                      sessionKey: "agent:main:slack:direct:u-delivery-skip",
+                      sessionId: "sess-delivery-skip",
+                      trigger: "message",
+                      agentId: "agent:main:main"
+                    };
+                    __octoclawTest.__resetPolicyState?.();
+                    const decision = __octoclawTest.buildDecision("查一下 runner 状态");
+                    const result = await __octoclawTest.registerPendingDelivery({
+                      decision,
+                      payload: {
+                        route: "runner",
+                        executed: false,
+                        materialization: {
+                          task_id: "runner-blocked-1",
+                          status: "materialization_failed",
+                          capability_failure: { reason: "runner_queue_full" }
+                        }
+                      },
+                      summary: "runner 没有真正派发成功",
+                      sessionKey: ctx.sessionKey,
+                      stateKey: ctx.sessionKey,
+                      logger: null
+                    });
+                    const relayPath = __octoclawTest.resolveDeliveryRelayPath();
+                    let lines = [];
+                    try {
+                      lines = (await fs.readFile(relayPath, 'utf8')).trim().split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+                    } catch {}
+                    const state = __octoclawTest.resolveToolPolicyContext(ctx, "").state || {};
+                    return { result, lineCount: lines.length, pendingDeliveryId: state.pendingDeliveryId || "" };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                    "HOME": str(workspace),
+                },
+            )
+
+        self.assertFalse(payload["result"]["registered"])
+        self.assertEqual(payload["result"]["reason"], "materialization_failed")
+        self.assertEqual(payload["lineCount"], 0)
+        self.assertEqual(payload["pendingDeliveryId"], "")
 
     def test_record_observed_delivery_writes_observed_event(self) -> None:
         import tempfile

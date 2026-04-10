@@ -63,7 +63,7 @@ class ReplaySummaryTests(unittest.TestCase):
                 "1.0",
             )
         self.assertEqual(payload["source"]["format"], "json_array")
-        self.assertEqual(payload["events"]["total"], 6)
+        self.assertEqual(payload["events"]["total"], 13)
         self.assertEqual(payload["events"]["by_type"]["policy_resolved"], 1)
         self.assertEqual(payload["task_metrics"]["route_counts"], {"spawn_single": 1})
         self.assertEqual(payload["task_metrics"]["work_contract_counts"], {"deliverable_work": 1})
