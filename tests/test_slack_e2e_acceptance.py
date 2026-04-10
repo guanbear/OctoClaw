@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from lib.slack_e2e_acceptance import (
     choose_slack_session,
@@ -113,16 +113,19 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
         self.assertTrue(summary["final_seen"])
 
     @patch("lib.slack_e2e_acceptance.fetch_slack_messages")
-    @patch("lib.slack_e2e_acceptance.send_agent_message")
+    @patch("lib.slack_e2e_acceptance.launch_agent_turn")
     @patch("lib.slack_e2e_acceptance.resolve_channel_id_for_target")
     def test_run_scenario_reports_ok_with_messages(
         self,
         mock_channel,
-        mock_send,
+        mock_launch,
         mock_fetch,
     ) -> None:
         mock_channel.return_value = "D123"
-        mock_send.return_value = {"ok": True, "status": "accepted", "runId": "run-1"}
+        proc = MagicMock()
+        proc.communicate.return_value = ('{"payloads":[{"text":"done"}]}', "")
+        proc.returncode = 0
+        mock_launch.return_value = {"ok": True, "process": proc, "command": ["openclaw", "agent"]}
         steady = [{"ts": "100.500", "text": "好，我去看一下。"}, {"ts": "102.000", "text": "最新 release 仍是 v2026.4.9。"}]
         mock_fetch.side_effect = itertools.chain(
             [
@@ -163,6 +166,7 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["evaluation"]["message_count"], 2)
         self.assertEqual(result["messages"][0]["text"], "好，我去看一下。")
+        self.assertEqual(result["send_result"]["returncode"], 0)
 
 
 if __name__ == "__main__":

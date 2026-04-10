@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import time
 import urllib.parse
 import urllib.request
@@ -14,10 +16,8 @@ from typing import Any
 
 try:
     from octopus_config import MAIN_AGENT_SESSIONS_FILE
-    from session_ops import send_agent_message
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import MAIN_AGENT_SESSIONS_FILE
-    from lib.session_ops import send_agent_message
 
 
 DEFAULT_OPENCLAW_CONFIG = os.path.expanduser("~/.openclaw/openclaw.json")
@@ -53,6 +53,10 @@ def load_json(path: str) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def has_openclaw_cli() -> bool:
+    return shutil.which("openclaw") is not None
 
 
 def load_slack_config(config_path: str = DEFAULT_OPENCLAW_CONFIG) -> dict[str, Any]:
@@ -154,6 +158,44 @@ def resolve_channel_id_for_target(token: str, target: str, native_channel_id: st
         channel = response.get("channel", {}) if isinstance(response.get("channel"), dict) else {}
         return _text(channel.get("id"))
     return normalized
+
+
+def launch_agent_turn(
+    session: dict[str, Any],
+    prompt: str,
+    *,
+    timeout_s: int = 180,
+) -> dict[str, Any]:
+    if not has_openclaw_cli():
+        return {"ok": False, "error": "openclaw cli unavailable"}
+    session_id = _text(session.get("session_id"))
+    if not session_id:
+        return {"ok": False, "error": "missing session_id"}
+    cmd = [
+        "openclaw",
+        "agent",
+        "--session-id",
+        session_id,
+        "--message",
+        prompt,
+        "--deliver",
+        "--json",
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "command": cmd}
+    return {
+        "ok": True,
+        "process": proc,
+        "command": cmd,
+        "timeout_s": timeout_s,
+    }
 
 
 def fetch_slack_messages(
@@ -260,14 +302,15 @@ def run_scenario(
     )
     oldest = _text(baseline[-1].get("ts")) if baseline else ""
     started_at = time.time()
-    send_result = send_agent_message(_text(session.get("session_key")), prompt, timeout_seconds=0)
-    if not bool(send_result.get("ok", True)):
+    launched = launch_agent_turn(session, prompt)
+    if not bool(launched.get("ok")):
         return {
             "name": _text(scenario.get("name")),
             "ok": False,
-            "error": _text(send_result.get("error")) or "send_agent_message failed",
-            "send_result": send_result,
+            "error": _text(launched.get("error")) or "openclaw agent launch failed",
+            "send_result": launched,
         }
+    process = launched["process"]
     deadline = started_at + final_timeout_s
     messages: list[dict[str, Any]] = []
     last_new_at = started_at
@@ -285,6 +328,20 @@ def run_scenario(
         if messages and (time.time() - last_new_at) >= quiet_window_s:
             break
         time.sleep(max(0.2, float(poll_interval_s)))
+    process_info: dict[str, Any] = {
+        "command": launched.get("command", []),
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "timed_out": False,
+    }
+    try:
+        stdout, stderr = process.communicate(timeout=5)
+        process_info["returncode"] = process.returncode
+        process_info["stdout"] = _text(stdout)
+        process_info["stderr"] = _text(stderr)
+    except subprocess.TimeoutExpired:
+        process_info["timed_out"] = True
     evaluation = evaluate_messages(messages, started_at=started_at, ack_deadline_ms=ack_deadline_ms, final_timeout_s=final_timeout_s)
     transcript = [
         {
@@ -305,7 +362,7 @@ def run_scenario(
         "target": _text(session.get("target")),
         "channel_id": channel_id,
         "thread_id": _text(session.get("thread_id")),
-        "send_result": send_result,
+        "send_result": process_info,
         "evaluation": evaluation,
         "messages": transcript,
     }
