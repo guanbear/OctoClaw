@@ -1,8 +1,8 @@
 [
   {
-    "task": "你的controlui的访问地址是啥",
+    "task": "查系统负载",
     "expected": {
-      "route": "runner",
+      "route": "direct",
       "task_class": "fast_local_check",
       "work_contract": "inspect_report",
       "request_kind": "surface_query",
@@ -10,13 +10,33 @@
       "target": "local",
       "evidence_required": ["local_probe", "execution_ledger"],
       "ack_required": false,
-      "intent_class": "undetermined"
+      "latency_ack_required": false,
+      "intent_class": "local_surface_lookup",
+      "judge_eligible": false,
+      "policy_router_source": "deterministic_front_gate"
+    }
+  },
+  {
+    "task": "你的controlui的访问地址是啥",
+    "expected": {
+      "route": "direct",
+      "task_class": "fast_local_check",
+      "work_contract": "inspect_report",
+      "request_kind": "surface_query",
+      "scope": "local_host",
+      "target": "local",
+      "evidence_required": ["local_probe", "execution_ledger"],
+      "ack_required": false,
+      "latency_ack_required": false,
+      "intent_class": "local_surface_lookup",
+      "judge_eligible": false,
+      "policy_router_source": "deterministic_front_gate"
     }
   },
   {
     "task": "你现在啥版本",
     "expected": {
-      "route": "runner",
+      "route": "direct",
       "task_class": "fast_local_check",
       "work_contract": "inspect_report",
       "request_kind": "surface_query",
@@ -24,7 +44,10 @@
       "target": "local",
       "evidence_required": ["local_probe", "execution_ledger"],
       "ack_required": false,
-      "intent_class": "undetermined"
+      "latency_ack_required": false,
+      "intent_class": "local_surface_lookup",
+      "judge_eligible": false,
+      "policy_router_source": "deterministic_front_gate"
     }
   },
   {
@@ -38,6 +61,24 @@
       "target": "openclaw",
       "evidence_required": ["web_lookup", "execution_ledger"],
       "ack_required": true,
+      "latency_ack_required": false,
+      "intent_class": "fresh_live_lookup",
+      "judge_eligible": false,
+      "policy_router_source": "deterministic_front_gate"
+    }
+  },
+  {
+    "task": "查下 openclaw 备份工具怎么用",
+    "expected": {
+      "route": "direct",
+      "task_class": "direct_answer",
+      "work_contract": "answer_now",
+      "request_kind": "chat_or_explain",
+      "scope": "current_session",
+      "target": "current_session",
+      "evidence_required": ["none"],
+      "ack_required": false,
+      "latency_ack_required": true,
       "intent_class": "undetermined"
     }
   },

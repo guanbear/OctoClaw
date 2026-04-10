@@ -29,6 +29,7 @@ const payload = tasks.map((task) => {{
     policy_judge_tools: decision.policy_router.judge.tools,
     intent_class: decision.intent_packet.intent_class,
     judge_eligible: decision.intent_packet.judge.eligible,
+    latency_ack_required: decision.latency_ack.required,
     router_schema: decision.router_decision_v2.schema_version,
     request_kind: decision.router_decision_v2.request_kind,
     scope: decision.router_decision_v2.scope,
@@ -65,10 +66,13 @@ class RouterPolicyV2GoldensTests(unittest.TestCase):
                 self.assertEqual(decision["task_class"], expected["task_class"])
                 self.assertEqual(decision["work_contract"], expected["work_contract"])
                 self.assertEqual(decision["intent_class"], expected["intent_class"])
-                self.assertTrue(decision["judge_eligible"])
+                self.assertEqual(decision["judge_eligible"], expected.get("judge_eligible", True))
 
                 self.assertEqual(decision["policy_router_mode"], "model_first")
-                self.assertEqual(decision["policy_router_source"], "legacy_planner_until_stateless_judge_live")
+                self.assertEqual(
+                    decision["policy_router_source"],
+                    expected.get("policy_router_source", "legacy_planner_until_stateless_judge_live"),
+                )
                 self.assertEqual(decision["policy_judge_selected"], "main_grade_model")
                 self.assertFalse(decision["policy_judge_invoked"])
                 self.assertEqual(decision["policy_judge_tools"], "none")
@@ -79,6 +83,7 @@ class RouterPolicyV2GoldensTests(unittest.TestCase):
                 self.assertEqual(decision["target"], expected["target"])
                 self.assertEqual(decision["evidence_required"], expected["evidence_required"])
                 self.assertEqual(decision["ack_required"], expected["ack_required"])
+                self.assertEqual(decision["latency_ack_required"], expected.get("latency_ack_required", False))
                 self.assertTrue(decision["validation_passed"], decision["validation_problems"])
                 self.assertTrue(decision["turn_id"].startswith("turn-"))
                 self.assertTrue(decision["decision_id"].startswith("decision-"))

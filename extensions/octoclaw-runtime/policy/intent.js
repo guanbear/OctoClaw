@@ -39,8 +39,18 @@ const EXECUTION_REFERENCE_PATTERNS = [
 
 const OPERATOR_SURFACE_REGISTRY = [
   {
+    surface_id: "system_load",
+    lane_hint: "direct",
+    scope: "local_surface_lookup",
+    patterns: [
+      /(系统负载|机器负载|系统状态|cpu|内存|磁盘|load average|uptime|负载情况|资源占用)/iu,
+      /((看下|查下|查一下|看看|确认下|确认一下).*(系统|机器).*(负载|cpu|内存|磁盘|状态))/iu,
+      /\b(system load|machine load|cpu usage|memory usage|disk usage|load average|uptime|system status)\b/iu,
+    ],
+  },
+  {
     surface_id: "runtime_version",
-    lane_hint: "runner",
+    lane_hint: "direct",
     scope: "local_surface_lookup",
     patterns: [
       /(你现在啥版本|你现在是什么版本|你现在的版本是啥|现在啥版本|现在什么版本|当前.*版本|本机.*版本|openclaw.*版本|版本号)/iu,
@@ -49,7 +59,7 @@ const OPERATOR_SURFACE_REGISTRY = [
   },
   {
     surface_id: "control_ui",
-    lane_hint: "runner",
+    lane_hint: "direct",
     scope: "local_surface_lookup",
     patterns: [
       /(control\s*ui|controlui)/iu,
@@ -617,6 +627,41 @@ function buildExecutionFollowupPacket(promptText, subjectTurn) {
   });
 }
 
+function buildLocalSurfacePacket(promptText, operatorSurface, signals) {
+  const surfaceId = String(operatorSurface?.surface_id || "").trim();
+  const laneHint = String(operatorSurface?.lane_hint || "").trim() || "direct";
+  return baseIntentPacket(promptText, {
+    intent_class: INTENT_CLASSES.LOCAL_SURFACE_LOOKUP,
+    confidence: 0.94,
+    source: "deterministic_surface_registry",
+    reason_codes: [`operator_surface:${surfaceId || "local_surface"}`],
+    route_hint: laneHint === "direct" ? "direct" : "",
+    lane_hint: laneHint,
+    lookup_scope: "local_instance",
+    surface_id: surfaceId,
+    signals,
+    judge_eligible: false,
+    judge_reason: "stable_local_surface_classifier",
+  });
+}
+
+function buildFreshLookupPacket(promptText, signals) {
+  return baseIntentPacket(promptText, {
+    intent_class: INTENT_CLASSES.FRESH_LIVE_LOOKUP,
+    confidence: 0.9,
+    source: "deterministic_live_lookup_classifier",
+    reason_codes: ["stable_fresh_live_lookup"],
+    lane_hint: "runner",
+    lookup_scope: "upstream_project",
+    lookup_project: inferFreshLookupProject(promptText),
+    lookup_focus: inferFreshLookupFocus(promptText),
+    require_fresh_lookup: true,
+    signals,
+    judge_eligible: false,
+    judge_reason: "stable_fresh_lookup_classifier",
+  });
+}
+
 export function buildIntentPacket({
   prompt = "",
   replayLogPath = "",
@@ -635,6 +680,13 @@ export function buildIntentPacket({
     };
   }
   const signals = buildSignalPacket(promptText);
+  const operatorSurface = detectOperatorSurface(promptText);
+  if (operatorSurface) {
+    return buildLocalSurfacePacket(promptText, operatorSurface, signals);
+  }
+  if (isFreshLiveLookupPrompt(promptText)) {
+    return buildFreshLookupPacket(promptText, signals);
+  }
 
   const turns = groupedReplayTurns(readJsonl(replayLogPath));
   const taskIndex = buildTaskIndex(taskStatePath);
@@ -682,6 +734,30 @@ export function conversationControlFromIntentPacket(intentPacket = {}) {
       subject_route: String(subject.route || "").trim(),
       subject_task_class: String(subject.task_class || "").trim(),
       preferred_task_id: String(subject.preferred_task_id || "").trim(),
+    };
+  }
+
+  if (intentClass === INTENT_CLASSES.LOCAL_SURFACE_LOOKUP) {
+    return {
+      ...base,
+      route_hint: String(lane.route_hint || lane.lane_hint || "direct").trim() || "direct",
+      lane_hint: String(lane.lane_hint || "direct").trim() || "direct",
+      lookup_scope: String(lookup.scope || "local_instance").trim() || "local_instance",
+      surface_id: String(lookup.surface_id || "").trim(),
+      require_state_grounding: false,
+    };
+  }
+
+  if (intentClass === INTENT_CLASSES.FRESH_LIVE_LOOKUP) {
+    return {
+      ...base,
+      route_hint: String(lane.route_hint || lane.lane_hint || "runner").trim() || "runner",
+      lane_hint: String(lane.lane_hint || "runner").trim() || "runner",
+      lookup_scope: String(lookup.scope || "upstream_project").trim() || "upstream_project",
+      lookup_project: String(lookup.project || "").trim(),
+      lookup_focus: String(lookup.focus || "").trim(),
+      require_fresh_lookup: true,
+      require_state_grounding: false,
     };
   }
 

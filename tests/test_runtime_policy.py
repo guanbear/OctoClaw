@@ -265,7 +265,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["route"], "runner")
         self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
-        self.assertFalse(payload["request"]["metadata"])
+        self.assertIn("intent_packet", payload["request"]["metadata"])
         self.assertEqual(payload["route_recommendation"]["schema_version"], "octoclaw.route_recommendation/v1")
         self.assertTrue(payload["route_recommendation"]["arbitration"]["required"])
         self.assertEqual(payload["route_recommendation"]["arbitration"]["conflict_type"], "repo_activity_lookup")
@@ -299,7 +299,7 @@ class RuntimePolicyTests(unittest.TestCase):
 
     def test_current_version_prompt_prefers_local_surface_lookup(self) -> None:
         payload = self.run_policy("你现在啥版本")
-        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
         self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
         self.assertEqual(payload["features"]["lookup_scope"], "local_instance")
@@ -459,7 +459,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["worker_pool"], "octoclaw-runner")
         self.assertEqual(payload["route_decision"]["phase"], "inspect")
         self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
-        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
         self.assertFalse(payload["route_recommendation"]["bypass_delegated_optimization"])
 
     def test_policy_refreshes_model_health_feedback_when_enabled(self) -> None:

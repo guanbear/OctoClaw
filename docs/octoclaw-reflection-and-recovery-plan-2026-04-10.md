@@ -446,6 +446,8 @@
 - Python 继续做 replay / validation / eval / patrol / reports
 - 不再继续把 Python 作为 live 路由事实的一部分越接越深
 
+2026-04-11 进展：route/policy 的 Python 兼容入口已经改为调用 Node runtime extension，避免 JS/Python 双实现继续漂移。Python 仍保留为 compatibility/eval/report 工具层，不再作为 live route/policy 权威。
+
 ---
 
 ## 8. 这是不是意味着之前很多实现都白做了

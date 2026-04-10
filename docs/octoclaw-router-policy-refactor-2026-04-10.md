@@ -1,7 +1,7 @@
 # OctoClaw Router Policy Refactor Review Draft
 
 日期：2026-04-10  
-状态：review draft，先评审设计，未进入实现  
+状态：implementation in progress，R2/R4 的 live truth 收口已开始
 目标：快回复、低成本、少误判、执行事实可信、代码架构更简洁
 
 ---
@@ -234,6 +234,39 @@ Node 实现，极窄、快速、无模型。
 
 注意：`surface_mentions=["gateway"]` 不等于 `local_surface_lookup`。  
 它只是给 judge 的证据。
+
+#### 2026-04-11 implementation note
+
+为避免继续维护 JS/Python 双路由事实源，`lib/octoclaw_route.py` 与 `lib/octoclaw_policy.py` 已降级为 compatibility shim：Python API / CLI 仍保留，但实时 route/policy 结果通过 Node runtime extension 生成。
+
+新的 live source of truth 是：
+
+```text
+extensions/octoclaw-runtime/policy/intent.js
+extensions/octoclaw-runtime/policy/route.js
+extensions/octoclaw-runtime/policy/decide.js
+```
+
+Python 侧保留价值：
+
+- eval / replay / report
+- fixture harness
+- migration / repair tools
+- 兼容旧 CLI 调用
+
+Python 侧不再允许承担：
+
+- live route authority
+- live policy merge authority
+- 与 Node 并行维护一套“近似但不同”的 hard runner 语义
+
+当前仍允许的 deterministic front gate 只有稳定、低歧义、无副作用入口，例如：
+
+- `execution_followup`
+- `local_surface_lookup` 的 runtime version / Control UI / system load 等稳定 surface
+- `fresh_live_lookup` 的 OpenClaw/OctoClaw 上游 release/update 查询
+
+除此之外的自然语言仍应保持 `undetermined`，进入 stateless judge / safe fallback，而不是继续加关键词硬判。
 
 ### 3.2 Policy Judge
 

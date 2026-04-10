@@ -401,9 +401,16 @@ function mergePhase(route, basePhase, routeHint) {
   return String(routeHint.phase || "").trim() || basePhase;
 }
 
-function mergeWorkContract(baseWorkContract, route, stickyState = {}) {
+function mergeWorkContract(baseWorkContract, route, stickyState = {}, features = {}) {
   const stickyContract = String(stickyState.work_contract || "").trim();
   if (stickyState.applied && stickyContract && ["runner", "spawn_single", "spawn_multi"].includes(String(stickyState.route || "").trim())) return stickyContract;
+  if (
+    route === "direct"
+    && baseWorkContract === "inspect_report"
+    && Boolean(features.tool_observation_only)
+    && String(features.target_scope || "") === "local"
+    && String(features.lookup_scope || "") === "local_instance"
+  ) return "inspect_report";
   if (route === "direct") return "answer_now";
   if (route === "runner") return "inspect_report";
   if (route === "spawn_multi") return "coordinated_work";
@@ -662,7 +669,15 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
     mode: String(cfg.mode || "model_first"),
     deterministic_first: deterministicFirst,
     intent_packet: intentPacket && typeof intentPacket === "object" && !Array.isArray(intentPacket) ? { ...intentPacket } : {},
-    decision_source: judgeApplied ? "policy_judge" : "legacy_planner_until_stateless_judge_live",
+    decision_source: judgeApplied
+      ? "policy_judge"
+      : (
+        String(intentPacket?.source || "").startsWith("deterministic_")
+          && String(intentPacket?.intent_class || "").trim()
+          && String(intentPacket?.intent_class || "").trim() !== "undetermined"
+          ? "deterministic_front_gate"
+          : "legacy_planner_until_stateless_judge_live"
+      ),
     judge: {
       eligible: judgeEligible,
       invoked: Boolean(judgeResult.invoked),
@@ -762,6 +777,7 @@ function targetForDecision(features = {}, scope = "") {
 function evidenceForDecision(route, features = {}, taskClass = "") {
   if (taskClass === "control_observer") return ["execution_ledger", "taskflow_state"];
   if (features.fresh_live_lookup || features.bounded_repo_update_lookup || features.bounded_software_update_lookup) return ["web_lookup", "execution_ledger"];
+  if (route === "direct" && features.tool_observation_only && String(features.target_scope || "") === "local") return ["local_probe", "execution_ledger"];
   if (route === "runner" && String(features.target_scope || "") === "remote") return ["remote_probe", "execution_ledger"];
   if (route === "runner") return ["local_probe", "execution_ledger"];
   if (route === "direct") return ["none"];
@@ -1021,7 +1037,15 @@ function preDispatchAckPolicy(route, workType, phase, taskClass = "", features =
   const runnerLookupAck = Boolean(
     route === "runner"
     && taskClass !== "control_observer"
-    && Boolean(features.requires_external_lookup || features.bounded_external_inspect || features.bounded_repo_update_lookup || features.fresh_live_lookup)
+    && Boolean(
+      features.requires_external_lookup
+      || features.bounded_external_inspect
+      || features.bounded_repo_update_lookup
+      || features.fresh_live_lookup
+      || features.tool_observation_only
+      || features.explicit_local_probe
+      || ["local", "remote"].includes(String(features.target_scope || "").trim())
+    )
   );
   const required = (["spawn_single", "spawn_multi"].includes(route) || runnerLookupAck) && taskClass !== "control_observer";
   let text = "我先处理一下，稍后把结果告诉你。";
@@ -1064,11 +1088,13 @@ function latencyAckPolicy(route, taskClass, features = {}) {
     route === "direct"
     && taskClass !== "control_observer"
     && taskClass !== "session_control"
-    && Boolean(features.external_lookup_only || features.bounded_repo_update_lookup)
+    && Boolean(features.external_lookup_only || features.bounded_repo_update_lookup || features.local_product_help_lookup)
   );
   const text = !required
     ? ""
-    : (features.bounded_repo_update_lookup ? "我先看一下最新更新，马上给你结论。" : "我先查一下，马上给你结论。");
+    : (features.bounded_repo_update_lookup
+      ? "我先看一下最新更新，马上给你结论。"
+      : (features.local_product_help_lookup ? "我先查一下用法，马上给你结论。" : "我先查一下，马上给你结论。"));
   return {
     required,
     style: "brief_status",
@@ -1444,7 +1470,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const workType = mergeWorkType(route, baseWorkType, normalizedRouteHint);
   const basePhase = inferPhase(task, features, workType, route, normalizedMetadata);
   const phase = mergePhase(route, basePhase, normalizedRouteHint);
-  const workContract = mergeWorkContract(baseWorkContract, route, stickyResult.stickyState);
+  const workContract = mergeWorkContract(baseWorkContract, route, stickyResult.stickyState, features);
   const executorType = inferExecutorType(route);
   const protocol = inferProtocol(features, route, workType);
   const workerPool = inferWorkerPool(route, workType);

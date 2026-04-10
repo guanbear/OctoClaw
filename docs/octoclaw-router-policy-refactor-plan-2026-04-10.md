@@ -1,7 +1,7 @@
 # OctoClaw Router Policy Refactor Plan
 
 日期：2026-04-10  
-状态：review draft，等待设计确认后实施  
+状态：implementation in progress
 关联设计：[octoclaw-router-policy-refactor-2026-04-10.md](./octoclaw-router-policy-refactor-2026-04-10.md)
 
 ---
@@ -54,6 +54,24 @@ ACK timer
 ---
 
 ## 3. 阶段计划
+
+### 2026-04-11 收口记录
+
+本轮按“Node runtime 是 live source of truth”推进，已完成：
+
+- `lib/octoclaw_route.py` 不再维护 Python parity route，实现改为调用 Node runtime extension。
+- `lib/octoclaw_policy.py` 不再维护 Python parity policy merge，实现改为调用 Node runtime extension，同时保留 model health feedback side effect。
+- `hard_runner` 从自然语言最终裁判降级为极窄安全兜底；本地 stable surface 不再被 legacy hard gate 强制 runner。
+- `local_surface_lookup` 覆盖 runtime version / Control UI / system load，稳定低风险查询走 `direct + fast_local_check + local_probe evidence`。
+- `fresh_live_lookup` 覆盖 OpenClaw/OctoClaw release/update/Memory 查询，走 `runner + pre_dispatch_ack + web_lookup evidence`。
+- 产品用法类 direct 查询增加 latency ACK，避免“direct 但用户干等”。
+- `router-policy-goldens-v2.json` 增加 surface / fresh lookup / product help case，`harness_gate quick` 已覆盖。
+
+保留的过渡债：
+
+- Python shim 当前每次调用会 spawn Node；这是为了先消除双实现漂移。若后续频繁调用，需要做长驻 Node bridge 或彻底迁移调用方。
+- 旧 Python 大文件还在仓内，但不再作为 live route/policy 权威。
+- `legacy_planner_until_stateless_judge_live` 仍会出现在真正 `undetermined` 的 fallback 路径，后续 R3/R4 继续用 stateless judge 替换。
 
 ### R0：冻结现状与补 golden fixtures
 

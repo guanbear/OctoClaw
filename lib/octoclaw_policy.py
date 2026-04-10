@@ -1199,6 +1199,62 @@ def summarize_decision(decision: dict[str, Any]) -> str:
     return f"policy={route} -> {worker_pool} / {work_type}:{phase} / {model_band} / profile={profile}"
 
 
+_build_decision_legacy = build_decision
+
+
+def _build_decision_via_node(
+    task: str,
+    command: str = "",
+    metadata: dict[str, Any] | None = None,
+    force_route: str = "",
+    route_hint: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compatibility shim: Node runtime is the source of truth for policy decisions."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    config = load_octopus_config()
+    runtime_cfg = config.get("runtime_policy", {}) if isinstance(config, dict) else {}
+    refresh_model_health_feedback_if_stale(
+        feedback_cfg=(runtime_cfg.get("model_health_feedback", {}) if isinstance(runtime_cfg, dict) else {}),
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    extension_path = repo_root / "extensions" / "octoclaw-runtime" / "index.js"
+    script = f"""
+import {{ __octoclawTest }} from {json.dumps(str(extension_path))};
+const task = {json.dumps(task or "", ensure_ascii=False)};
+const options = {{
+  command: {json.dumps(command or "", ensure_ascii=False)},
+  metadata: {json.dumps(metadata or {}, ensure_ascii=False)},
+  forceRoute: {json.dumps(force_route or "", ensure_ascii=False)},
+  routeHint: {json.dumps(route_hint or {}, ensure_ascii=False)}
+}};
+const value = __octoclawTest.buildDecision(task, options);
+console.log(JSON.stringify(value));
+"""
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+        env={**os.environ},
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def build_decision(
+    task: str,
+    command: str = "",
+    metadata: dict[str, Any] | None = None,
+    force_route: str = "",
+    route_hint: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _build_decision_via_node(task, command, metadata, force_route, route_hint)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="OctoClaw runtime policy decision entry")
     parser.add_argument("--task", required=True)

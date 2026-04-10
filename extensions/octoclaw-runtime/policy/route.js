@@ -163,6 +163,11 @@ const SIMPLE_DIRECT_PATTERNS = {
   ru: [String.raw`(что такое|что значит|объясни|кратко опиши)`],
 };
 
+const PRODUCT_HELP_PATTERNS = {
+  zh: [String.raw`(怎么用|如何使用|用法|使用方法|命令怎么写|命令是什么|备份工具|备份命令|backup\s*(tool|command|usage)?)`],
+  en: [String.raw`\b(how to use|usage|backup tool|backup command|command usage|cli usage)\b`],
+};
+
 const LOCAL_STATE_PATTERNS = {
   zh: [String.raw`(这台机器|本机|服务器|机器上|当前机器|当前环境|本地环境|系统状态)`],
   en: [String.raw`\b(this machine|host|server|local env|current machine|system status)\b`],
@@ -303,6 +308,7 @@ const ROUTE_PATTERN_LIBRARY = {
   PARALLEL_PATTERNS,
   HIGH_RISK_PATTERNS,
   SIMPLE_DIRECT_PATTERNS,
+  PRODUCT_HELP_PATTERNS,
   LOCAL_STATE_PATTERNS,
   VERIFY_PATTERNS,
   IMPLEMENT_PATTERNS,
@@ -423,10 +429,14 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     ? intentSignals.surface_mentions.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
   const signalLocalSurfaceLookup = signalSurfaceMentions.length > 0;
-  const intentClass = String(conversationControl.intent_class || "").trim();
-  const conversationLookupScope = String(conversationControl.lookup_scope || "").trim();
-  const conversationLookupProject = String(conversationControl.lookup_project || "").trim();
-  const conversationLookupFocus = String(conversationControl.lookup_focus || "").trim();
+  const intentClass = String(conversationControl.intent_class || intentPacket.intent_class || "").trim();
+  const intentLookup = intentPacket?.lookup && typeof intentPacket.lookup === "object" && !Array.isArray(intentPacket.lookup)
+    ? intentPacket.lookup
+    : {};
+  const conversationLookupScope = String(conversationControl.lookup_scope || intentLookup.scope || "").trim();
+  const conversationLookupProject = String(conversationControl.lookup_project || intentLookup.project || "").trim();
+  const conversationLookupFocus = String(conversationControl.lookup_focus || intentLookup.focus || "").trim();
+  const conversationKind = String(conversationControl.kind || intentClass || "").trim();
   let explicitLocalProbe = Boolean(
     /\/[A-Za-z0-9._/\-]+/.test(rawTask)
       || /(?:最近|近)\s*\d{1,4}\s*行/u.test(rawTask)
@@ -444,6 +454,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const parallelHits = countMatches(text, resolveLanguagePatterns("PARALLEL_PATTERNS", enabledPacks));
   const highRiskHits = countMatches(text, resolveLanguagePatterns("HIGH_RISK_PATTERNS", enabledPacks));
   const simpleHits = countMatches(text, resolveLanguagePatterns("SIMPLE_DIRECT_PATTERNS", enabledPacks));
+  const productHelpHits = countMatches(text, resolveLanguagePatterns("PRODUCT_HELP_PATTERNS", enabledPacks));
   const localStateHits = countMatches(text, resolveLanguagePatterns("LOCAL_STATE_PATTERNS", enabledPacks));
   const verifyHits = countMatches(text, resolveLanguagePatterns("VERIFY_PATTERNS", enabledPacks));
   const implementHits = countMatches(text, resolveLanguagePatterns("IMPLEMENT_PATTERNS", enabledPacks));
@@ -462,7 +473,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const sessionControlHits = countMatches(text, resolveLanguagePatterns("SESSION_CONTROL_PATTERNS", enabledPacks));
   const modelBenchmarkHits = countMatches(text, resolveLanguagePatterns("MODEL_BENCHMARK_PATTERNS", enabledPacks));
   const modelReferenceHits = countModelReferenceHits(text);
-  const commandReadOnly = commandLooksReadOnly(normalizedCommand);
+  const taskCommandReadOnly = !normalizedCommand && commandLooksReadOnly(rawTask);
+  const commandReadOnly = commandLooksReadOnly(normalizedCommand) || taskCommandReadOnly;
   const explicitObserverCommand = Boolean(
     /^\s*(?:八爪鱼状态|八爪鱼队列|八爪鱼面板)\s*$/iu.test(rawTask)
       || /^\s*(?:queue|inbox)\s*$/iu.test(rawTask)
@@ -510,6 +522,13 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   );
   const freshLiveLookupCandidate = Boolean(
     intentClass === "fresh_live_lookup" || boundedRepoUpdateLookup
+  );
+  const localProductHelpLookup = Boolean(
+    productHelpHits > 0
+    && /(open\s*claw|openclaw|octo\s*claw|octoclaw)/iu.test(rawTask)
+    && !freshLiveLookupCandidate
+    && !boundedSoftwareUpdateLookup
+    && !repoActivityLookup
   );
   const resolvedLookupProject = conversationLookupProject || (
     (freshLiveLookupCandidate || runtimeVersionLookup) ? inferLookupProject(rawTask) : ""
@@ -602,7 +621,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate || taskProgressCandidate
   );
 
-  if (conversationControl.kind === "execution_followup" || conversationControl.kind === "task_followup") {
+  if (conversationKind === "execution_followup" || conversationKind === "task_followup") {
     workflowMetaCandidate = true;
     observerControlCandidate = true;
     effectiveResearchHits = 0;
@@ -611,7 +630,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     effectiveCodeHits = 0;
     effectiveWriteHits = 0;
     effectiveRunnerNegativeHits = 0;
-  } else if (conversationControl.kind === "local_surface_lookup" || signalLocalSurfaceLookup) {
+  } else if (conversationKind === "local_surface_lookup" || signalLocalSurfaceLookup) {
     explicitLocalProbe = true;
     effectiveLocalStateHits = Math.max(effectiveLocalStateHits, 1);
     effectiveRunnerReadOnlyIntentHits = Math.max(effectiveRunnerReadOnlyIntentHits, 1);
@@ -622,7 +641,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     effectiveCodeHits = 0;
     effectiveWriteHits = 0;
     effectiveRunnerNegativeHits = 0;
-  } else if (conversationControl.kind === "fresh_live_lookup") {
+  } else if (conversationKind === "fresh_live_lookup") {
     observerControlCandidate = false;
     workflowMetaCandidate = false;
     sessionControlCandidate = false;
@@ -657,13 +676,14 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   }
 
   let latencySensitivity = "normal";
-  if (effectiveLocalStateHits > 0 || normalizedCommand) latencySensitivity = "high";
+  if (effectiveLocalStateHits > 0 || normalizedCommand || taskCommandReadOnly) latencySensitivity = "high";
   else if (effectiveExternalLookupHits > 0 && effectiveResearchHits === 0 && effectiveCodeHits === 0) latencySensitivity = "normal";
 
   const observationSignal = Boolean(
     observerControlCandidate
       || modelBenchmarkCandidate
       || normalizedCommand
+      || taskCommandReadOnly
       || runnerHits > 0
       || effectiveLocalStateHits > 0
       || remoteTargetHits > 0
@@ -673,8 +693,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const features = {
     task_length: rawTask.length,
     route_language_packs: [...enabledPacks],
-    has_command: Boolean(normalizedCommand),
+    has_command: Boolean(normalizedCommand || taskCommandReadOnly),
     command_read_only: commandReadOnly,
+    task_command_read_only: taskCommandReadOnly,
     runner_hits: runnerHits,
     runner_read_only_intent_hits: effectiveRunnerReadOnlyIntentHits,
     runner_target_hits: effectiveRunnerTargetHits,
@@ -700,6 +721,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     parallel_hits: parallelHits,
     high_risk_hits: highRiskHits,
     simple_hits: simpleHits,
+    product_help_hits: productHelpHits,
+    local_product_help_lookup: localProductHelpLookup,
     local_state_hits: effectiveLocalStateHits,
     verify_hits: verifyHits,
     implement_hits: implementHits,
@@ -744,7 +767,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
       && effectiveResearchHits === 0
       && effectiveWriteHits === 0
     ),
-    target_scope: remoteTargetHits > 0 ? "remote" : (effectiveLocalStateHits > 0 ? "local" : "generic"),
+    target_scope: remoteTargetHits > 0 ? "remote" : ((effectiveLocalStateHits > 0 || taskCommandReadOnly) ? "local" : "generic"),
     lookup_scope: resolvedLookupScope || "generic",
     lookup_project: resolvedLookupProject,
     lookup_focus: resolvedLookupFocus,
@@ -949,17 +972,29 @@ function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workC
 
   if (contractKind === "inspect_report") {
     baseline.runner = { feasible: true, reasons: ["contract:inspect_report", "capability:runner_inspect"] };
-    const directEligible = !features.requires_tools
+    const localSurfaceDirectInspect = Boolean(
+      features.explicit_local_probe
+        && features.target_scope === "local"
+        && features.lookup_scope === "local_instance"
+        && !features.high_risk
+        && !features.requires_mutation
+        && !features.requires_code_work
+        && !features.requires_research
+        && !features.requires_external_lookup
+        && !features.parallelizable
+        && Number(features.estimated_steps || 0) <= 2
+    );
+    const directEligible = localSurfaceDirectInspect || (!features.requires_tools
       && !features.requires_external_lookup
       && !features.requires_research
       && !features.requires_code_work
       && !features.requires_writing
       && !features.fresh_live_lookup
       && Number(features.estimated_steps || 0) <= 1
-      && Number(features.task_length || 0) <= 80;
+      && Number(features.task_length || 0) <= 80);
     baseline.direct = {
       feasible: directEligible,
-      reasons: [directEligible ? "bounded_direct_inspect" : "inspect_prefers_workflow"],
+      reasons: [directEligible ? (localSurfaceDirectInspect ? "local_surface_direct_inspect" : "bounded_direct_inspect") : "inspect_prefers_workflow"],
     };
     const deepInspect = !features.bounded_external_inspect
       && !features.model_benchmark_candidate
@@ -1145,6 +1180,18 @@ function contractDrivenRouteBias(features, workContractHint) {
     } else if (features.bounded_external_inspect) {
       route = "runner";
       reasonCodes.push("prefer_runner_for_external_lookup_inspect");
+    } else if (
+      features.explicit_local_probe
+      && features.target_scope === "local"
+      && features.lookup_scope === "local_instance"
+      && !features.high_risk
+      && !features.requires_mutation
+      && !features.requires_code_work
+      && !features.parallelizable
+      && Number(features.estimated_steps || 0) <= 2
+    ) {
+      route = "direct";
+      reasonCodes.push("prefer_direct_for_local_surface_probe");
     } else if (features.explicit_local_probe || features.hard_runner_candidate) {
       route = "runner";
       reasonCodes.push("prefer_runner_for_explicit_probe");
@@ -1233,6 +1280,7 @@ function expectedCostBand(route, features) {
 function inferTaskClass(features, route) {
   if (route === "direct" && features.session_control_candidate) return "session_control";
   if (route === "direct" && features.observer_control_candidate) return "control_observer";
+  if (route === "direct" && features.tool_observation_only && features.target_scope === "local") return "fast_local_check";
   if (route === "direct" && features.bounded_repo_update_lookup) return "simple_lookup";
   if (route === "runner") {
     if (features.target_scope === "remote") return "fast_remote_check";
@@ -1311,12 +1359,10 @@ function hardGateRoute(features, runtimeCfg = null) {
   if (!Boolean("hard_runner_only" in switches ? switches.hard_runner_only : true)) {
     return { route: null, reasons: [] };
   }
-  if (features.hard_runner_candidate) {
+  const explicitReadOnlyCommand = Boolean(features.has_command && features.command_read_only);
+  if (features.hard_runner_candidate && explicitReadOnlyCommand) {
     const reasons = ["hard_runner_only"];
-    if (features.model_benchmark_candidate) reasons.push("model_benchmark_workflow");
-    if (features.command_read_only) reasons.push("read_only_command");
-    if (Number(features.runner_read_only_intent_hits || 0) > 0) reasons.push("read_only_runner_intent");
-    if (Number(features.runner_target_hits || 0) > 0) reasons.push("runner_target_detected");
+    reasons.push("explicit_read_only_command");
     if (features.target_scope === "remote") reasons.push("remote_read_only_probe");
     else if (features.target_scope === "local") reasons.push("local_read_only_probe");
     return { route: "runner", reasons };

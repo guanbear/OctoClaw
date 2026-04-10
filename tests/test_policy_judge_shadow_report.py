@@ -28,11 +28,11 @@ class PolicyJudgeShadowReportTests(unittest.TestCase):
         )
         payload = json.loads(result.stdout)
         self.assertEqual(payload["schema_version"], "octoclaw.policy_judge.shadow_report/v1")
-        self.assertEqual(payload["summary"]["total_cases"], 6)
+        self.assertEqual(payload["summary"]["total_cases"], 8)
         self.assertEqual(payload["summary"]["shadow_compared"], 2)
         self.assertEqual(payload["summary"]["shadow_matched"], 1)
         self.assertEqual(payload["summary"]["shadow_drifted"], 1)
-        self.assertEqual(payload["summary"]["missing_shadow_cases"], 4)
+        self.assertEqual(payload["summary"]["missing_shadow_cases"], 6)
         self.assertIn("route", payload["summary"]["drift_fields"])
         drifted = [item for item in payload["records"] if not item["matches_main"]]
         self.assertEqual(len(drifted), 1)

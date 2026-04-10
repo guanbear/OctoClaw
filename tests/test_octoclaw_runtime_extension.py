@@ -1509,10 +1509,10 @@ Sender (untrusted metadata):
         )
 
         self.assertEqual(payload["extracted"], "你的controlui的访问地址是啥")
-        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["route"], "direct")
         self.assertEqual(payload["taskClass"], "fast_local_check")
-        self.assertFalse(payload["allowDirectTools"])
-        self.assertEqual(payload["mustDelegateVia"], "octoclaw_dispatch")
+        self.assertTrue(payload["allowDirectTools"])
+        self.assertEqual(payload["mustDelegateVia"], "")
 
     def test_short_single_followup_uses_recent_execution_facts(self) -> None:
         import tempfile
@@ -1708,11 +1708,11 @@ Sender (untrusted metadata):
                 },
             )
 
-            self.assertFalse(payload["hints"]["available"])
-            self.assertEqual(payload["intentPacket"]["intent_class"], "undetermined")
+            self.assertTrue(payload["hints"]["available"])
+            self.assertEqual(payload["intentPacket"]["intent_class"], "fresh_live_lookup")
             self.assertEqual(payload["intentPacket"]["schema_version"], "octoclaw.intent_packet/v1")
             self.assertEqual(payload["intentPacket"]["signals"]["lookup_mentions"][0]["project"], "openclaw")
-            self.assertTrue(payload["intentPacket"]["judge"]["eligible"])
+            self.assertFalse(payload["intentPacket"]["judge"]["eligible"])
             self.assertEqual(payload["route"], "runner")
             self.assertEqual(payload["taskClass"], "fast_tool_check")
             self.assertEqual(payload["routerRequestKind"], "fresh_external_lookup")
@@ -1742,12 +1742,12 @@ Sender (untrusted metadata):
             })()"""
         )
 
-        self.assertEqual(payload["intentClass"], "undetermined")
-        self.assertEqual(payload["packetSource"], "deterministic_front_gate")
+        self.assertEqual(payload["intentClass"], "fresh_live_lookup")
+        self.assertEqual(payload["packetSource"], "deterministic_live_lookup_classifier")
         self.assertEqual(payload["lookupProject"], "openclaw")
         self.assertEqual(payload["route"], "runner")
         self.assertEqual(payload["policyRouterMode"], "model_first")
-        self.assertEqual(payload["policyRouterSource"], "legacy_planner_until_stateless_judge_live")
+        self.assertEqual(payload["policyRouterSource"], "deterministic_front_gate")
         self.assertEqual(payload["selectedJudge"], "main_grade_model")
         self.assertFalse(payload["judgeInvoked"])
         self.assertEqual(payload["judgeTools"], "none")
@@ -1868,8 +1868,8 @@ Sender (untrusted metadata):
             env={"OCTOCLAW_POLICY_JUDGE_RESULT_JSON": json.dumps(fixture)},
         )
 
-        self.assertEqual(payload["route"], "runner")
-        self.assertEqual(payload["policyRouterSource"], "legacy_planner_until_stateless_judge_live")
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["policyRouterSource"], "deterministic_front_gate")
         self.assertTrue(payload["judgeInvoked"])
         self.assertFalse(payload["judgeApplied"])
         self.assertIn("confidence_below_threshold", payload["judgeValidationProblems"])
@@ -1983,13 +1983,13 @@ Sender (untrusted metadata):
             })()"""
         )
 
-        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["route"], "direct")
         self.assertEqual(payload["taskClass"], "fast_local_check")
         self.assertEqual(payload["workContract"], "inspect_report")
-        self.assertEqual(payload["intentClass"], "undetermined")
+        self.assertEqual(payload["intentClass"], "local_surface_lookup")
         self.assertIn("runtime_version", payload["surfaceMentions"])
-        self.assertEqual(payload["conversationIntentClass"], "")
-        self.assertEqual(payload["conversationKind"], "")
+        self.assertEqual(payload["conversationIntentClass"], "local_surface_lookup")
+        self.assertEqual(payload["conversationKind"], "local_surface_lookup")
         self.assertEqual(payload["routerRequestKind"], "surface_query")
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
