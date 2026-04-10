@@ -1,13 +1,53 @@
 #!/usr/bin/env python3
 import json
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from lib import session_ops
 
 
 class SessionOpsMessageSendTests(unittest.TestCase):
+    @patch("lib.session_ops.has_openclaw_cli", return_value=True)
+    @patch("lib.session_ops.subprocess.run")
+    def test_gateway_call_uses_gateway_token_from_env(self, mock_run, _mock_cli) -> None:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json.dumps({"ok": True})
+        mock_run.return_value.stderr = ""
+
+        with patch.dict("os.environ", {"OPENCLAW_GATEWAY_TOKEN": "tok-1"}, clear=False):
+            result = session_ops.gateway_call("health", {"scope": "local"})
+
+        self.assertTrue(result["ok"])
+        args = mock_run.call_args[0][0]
+        self.assertIn("--token", args)
+        self.assertIn("tok-1", args)
+
+    @patch("lib.session_ops.has_openclaw_cli", return_value=True)
+    @patch("lib.session_ops.subprocess.run")
+    def test_gateway_call_uses_gateway_token_from_config_when_env_missing(self, mock_run, _mock_cli) -> None:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json.dumps({"ok": True})
+        mock_run.return_value.stderr = ""
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-gateway-token-") as tmpdir:
+            fake_home = Path(tmpdir)
+            cfg = fake_home / ".openclaw" / "openclaw.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(
+                json.dumps({"gateway": {"auth": {"mode": "token", "token": "tok-from-config"}}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"HOME": str(fake_home)}, clear=False):
+                result = session_ops.gateway_call("health", {"scope": "local"})
+
+        self.assertTrue(result["ok"])
+        args = mock_run.call_args[0][0]
+        self.assertIn("--token", args)
+        self.assertIn("tok-from-config", args)
+
     def test_resolve_message_target_from_slack_thread_session(self) -> None:
         result = session_ops.resolve_message_target_from_session_key("agent:main:slack:channel:C123:thread:1712345.000100")
         self.assertTrue(result["ok"])

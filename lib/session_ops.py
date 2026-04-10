@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 try:
@@ -20,6 +22,22 @@ def has_openclaw_cli() -> bool:
     return shutil.which("openclaw") is not None
 
 
+def _load_openclaw_gateway_token() -> str:
+    env_token = str(os.environ.get("OPENCLAW_GATEWAY_TOKEN", "") or "").strip()
+    if env_token:
+        return env_token
+    config_path = Path(os.path.expanduser("~/.openclaw/openclaw.json"))
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    gateway = payload.get("gateway", {}) if isinstance(payload.get("gateway"), dict) else {}
+    auth = gateway.get("auth", {}) if isinstance(gateway.get("auth"), dict) else {}
+    if str(auth.get("mode", "") or "").strip().lower() != "token":
+        return ""
+    return str(auth.get("token", "") or "").strip()
+
+
 def gateway_call(method: str, params: dict, timeout_ms: int = 10000) -> dict:
     """
     Call `openclaw gateway call` and parse JSON output.
@@ -27,19 +45,23 @@ def gateway_call(method: str, params: dict, timeout_ms: int = 10000) -> dict:
     """
     if not has_openclaw_cli():
         return {}
+    token = _load_openclaw_gateway_token()
+    cmd = [
+        "openclaw",
+        "gateway",
+        "call",
+        method,
+        "--params",
+        json.dumps(params, ensure_ascii=False),
+        "--json",
+        "--timeout",
+        str(timeout_ms),
+    ]
+    if token:
+        cmd.extend(["--token", token])
     try:
         result = subprocess.run(
-            [
-                "openclaw",
-                "gateway",
-                "call",
-                method,
-                "--params",
-                json.dumps(params, ensure_ascii=False),
-                "--json",
-                "--timeout",
-                str(timeout_ms),
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=max(3, int(timeout_ms / 1000) + 2),
