@@ -1,6 +1,7 @@
 # OctoClaw Runtime Slimming Plan（2026-04-12）
 
 > 用途：把当前短期最高优先级的三项 runtime 收口工作写成可直接实施的计划。  
+> 当前假设：只有一台 `macmini` 部署，不再为旧部署路径保留正式兼容层。  
 > 关联文档：
 > - [octoclaw-design-refresh-2026-04-12.md](./octoclaw-design-refresh-2026-04-12.md)
 > - [octoclaw-design-foundation.md](./octoclaw-design-foundation.md)
@@ -18,7 +19,7 @@
 
 1. `patrol` 角色收缩与依赖剥离
 2. `install.sh` / `octoclawctl.sh` 默认路径收瘦
-3. `compat-only` 与 `recommended path` 明确分层
+3. 删除 legacy loop / daemon / cron / systemd 路径，只保留单一推荐路径
 
 目标不是“再做一轮抽象整理”，而是让系统默认运行方式更简单、更真、更容易维护。
 
@@ -61,13 +62,11 @@
 - systemd patrol/runner
 - 老的 tmux 常驻托管链路
 
-### 2.3 `compat-only` 与 `recommended path` 明确分层
+### 2.3 删除 legacy 路径，只保留单一推荐路径
 
-这是把“还能用的旧路径”和“现在真正推荐的路径”分开。
+这一步不再做“兼容路径保留但不推荐”。
 
-#### recommended path
-
-真正推荐使用的默认主链：
+当前目标是只保留一个正式支持的运行方式：
 
 - gateway 常驻
 - Node runtime hot path
@@ -75,18 +74,16 @@
 - optional runner pool
 - `observe-once / reconcile-once / repair-once`
 
-#### compat-only path
-
-为了迁移、老环境或紧急应急而保留，但不再推荐、默认不启用、默认不安装、默认不作为验收目标的路径：
+以下旧路径不再保留为正式运行面：
 
 - `lib/patrol-loop.sh`
 - `lib/runner-daemon.sh`
 - `lib/runner_loop.sh`
 - cron patrol / cron probe
-- compat systemd service
-- legacy tmux loop hosting
+- systemd patrol/runner service
+- 以旧 loop 为核心的 tmux 托管链路
 
-这一步的目的，是让维护者不再把 compat 路径误当成推荐路径。
+这一步的目的，是彻底消除双重心智，不再让维护者猜“到底应该走哪条路”。
 
 ---
 
@@ -106,7 +103,7 @@
 
 1. 让系统默认运行面不依赖 patrol 常驻
 2. 让 patrol 只保留一次性工具职责
-3. 让 install/ctl/documentation 默认不再把 patrol 当推荐主链
+3. 让 install/ctl/documentation 完全不再把 patrol 当推荐主链
 4. 让剩余 patrol 代码只服务于：
    - reconcile
    - repair
@@ -178,7 +175,7 @@
    - observe
    - reconcile
    - repair
-   - legacy compat
+   - removable legacy leftovers
 
 ### 验收
 
@@ -201,10 +198,10 @@
 ### 任务
 
 1. `install.sh`
-   - 默认不安装 cron patrol / cron probe
-   - 默认不启 systemd patrol/runner
-   - 默认不启 runner-daemon / patrol-loop
-   - 对 legacy 入口改成显式 opt-in
+   - 删除 cron patrol / cron probe 的默认安装逻辑
+   - 删除 systemd patrol/runner 的默认安装逻辑
+   - 删除 runner-daemon / patrol-loop 的默认启动逻辑
+   - 对旧入口直接提示已废弃或删除
 2. `octoclawctl.sh`
    - 默认帮助和主要命令聚焦：
      - `status`
@@ -212,55 +209,54 @@
      - `reconcile-once`
      - `repair-once`
      - `runner-pool-status`
-   - 旧 patrol/daemon target 改成 deprecated/compat 文案
-3. 对 legacy 启动分支加显式警告：
-   - compat only
-   - not recommended
-   - not part of default production acceptance
+   - 删除 patrol/daemon 作为常驻控制目标的默认入口
+3. legacy 启动分支处理：
+   - 能删则删
+   - 暂时不能删则统一报废弃错误并指向唯一推荐路径
 
 ### 验收
 
 1. 新安装不再默认创建 patrol/runner 常驻链路
-2. `octoclawctl` 默认帮助优先展示推荐命令，不再把 patrol/daemon 伪装成主姿势
+2. `octoclawctl` 默认帮助只展示推荐主链
 3. operator 不看旧文档也能理解当前推荐主链
 
 ---
 
-## Phase C：compat-only 与 recommended path 分层落地
+## Phase C：删除 legacy 路径并收成单一路径
 
 ### 目标
 
-让代码、命令、安装、文档、验收全都用同一套分层说法。
+让代码、命令、安装、文档、验收全都只围绕单一推荐路径。
 
 ### 任务
 
-1. 文档分层
-   - 推荐路径单独写清
-   - compat 路径单独列出
-2. 命令分层
-   - 推荐命令默认展示
-   - compat 命令放到 legacy/advanced/help appendix
-3. 安装分层
+1. 文档统一
+   - 只保留推荐路径说明
+   - 删除“兼容怎么跑”的主文档叙事
+2. 命令统一
+   - 默认帮助只展示推荐命令
+   - legacy 命令移除或改为明确报废弃
+3. 安装统一
    - 默认只铺推荐路径
-   - compat 需要显式 flag/env opt-in
-4. 验收分层
-   - production acceptance 只要求推荐路径通过
-   - compat 路径最多做 smoke，不作为主 release gate
+   - 删除 legacy 安装分支
+4. 验收统一
+   - production acceptance 只针对推荐路径
+   - CI / acceptance 不再给 legacy 路径留同级门槛
 
 ### 验收
 
 1. 文档里能清楚回答“现在推荐怎么跑”
-2. 文档里也能清楚回答“旧链路还能不能用”
-3. CI / acceptance 不再把 compat 路径和推荐路径混为同一级上线门槛
+2. 安装和命令帮助不会再暗示第二条正式路径
+3. CI / acceptance 只围绕单一路径设门槛
 
 ---
 
 ## 6. 建议的具体落地顺序
 
-1. 先改文档和命令帮助，把推荐路径与 compat 路径说清
+1. 先改文档和命令帮助，把唯一推荐路径说清
 2. 再改 `install.sh` 默认行为
 3. 再改 `octoclawctl.sh` 默认帮助和 target 暴露
-4. 最后才收 patrol 内部剩余职责和 legacy 包袱
+4. 最后删 legacy loop/daemon/cron/systemd 路径，并收 patrol 内部剩余职责
 
 这样做的好处是：
 
@@ -277,10 +273,9 @@
 1. 默认安装后，不会自动铺 patrol/runner legacy loop
 2. 默认运维入口只围绕推荐主链
 3. patrol 不再是默认运行依赖
-4. compat 路径仍可保留，但默认不启用、不推荐、不作为主验收目标
+4. legacy loop / daemon / cron / systemd 路径不再是正式支持路径
 5. 维护者能用一句话说清：
    - 推荐怎么跑
-   - 兼容怎么跑
    - patrol 现在负责什么
 
 ---
@@ -288,13 +283,13 @@
 ## 8. 给实现者的约束
 
 1. 不要一上来重写 patrol 全文件
-2. 不要把 compat 删除到无法迁移老环境
-3. 不要引入新的并行 runtime
-4. 优先做默认行为和默认文案的收口
-5. 能删默认依赖就删默认依赖，不能删就先显式降级成 compat-only
+2. 不要引入新的并行 runtime
+3. 优先做默认行为和默认文案的收口
+4. 对 legacy 路径，能删就删；不能立刻删就先改成明确废弃
+5. 不为“保留兼容”继续扩散复杂度
 
 ---
 
 ## 9. 一句话实现指令
 
-> **目标不是“把 patrol 变得更强”，而是“让系统默认不需要 patrol，且让推荐路径与兼容路径彻底分开”。**
+> **目标不是“把 patrol 变得更强”，而是“让系统默认不需要 patrol，并把系统收成唯一推荐路径”。**

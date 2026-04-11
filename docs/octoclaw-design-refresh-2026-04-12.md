@@ -70,7 +70,7 @@
 
 - 设计已经明确 cheap/local judge 不应盲目上 live。
 - runtime 正在收缩为 Node-first hot path，Python 更多退回 offline/reporting。
-- patrol / runner shell loop / cron / systemd 已在设计上降成 compat-only。
+- patrol / runner shell loop / cron / systemd 已明确不应继续作为默认主链。
 
 仍未真正达成的点：
 
@@ -121,7 +121,7 @@
 
 这不一定意味着现在默认行为已经完全错误，但它至少说明：
 
-- 默认运行面与 compat 运行面还没有彻底分层
+- 默认运行面与旧运行面还没有彻底分离
 - 维护者仍然容易把 legacy 控制路径当成推荐路径
 
 ### 3.3 真实 Slack E2E 还不够“生产验收级”
@@ -165,12 +165,13 @@
 
 1. 把 patrol 从默认运行面彻底降成按需 reconcile/repair 工具
 2. 把 install/ctl 的默认路径收成 gateway + Node runtime extension + optional backend
-3. 把 compat 路径和推荐路径彻底分开
+3. 对单机 `macmini` 部署，直接删除 legacy loop / daemon / cron / systemd 路径，收成唯一推荐路径
 
 这里的关键不是“把 patrol 拆成更多小文件”本身，而是：
 
 - 是否继续让 patrol 成为默认依赖
 - 是否继续让 install/ctl 暗中维持旧 loop 心智
+- 是否继续为了不存在的迁移需求保留第二条正式运行路径
 
 ### 4.2 第二优先级：真正的生产级自动化 E2E 验收
 
@@ -357,7 +358,7 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
 
 1. patrol 角色收缩与依赖剥离
 2. install / octoclawctl 默认路径收瘦
-3. compat-only 与 recommended path 明确分层
+3. 删除 legacy loop / daemon / cron / systemd 路径，收成唯一推荐路径
 
 ### Phase B：真实生产验收与安全闭环
 
