@@ -62,6 +62,7 @@ def load_state(fp) -> dict[str, Any]:
 
 
 def save_state(fp, state: dict[str, Any]) -> None:
+    """Save queue state. Called within with_queue_lock (fcntl LOCK_EX held)."""
     state["jobs"] = prune_jobs(state.get("jobs", []))
     state["updated_at"] = now_iso()
     fp.seek(0)

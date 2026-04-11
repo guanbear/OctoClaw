@@ -282,7 +282,8 @@ def _auto_redispatch_enabled(config: dict[str, Any] | None = None) -> bool:
 
 def _openclaw_env() -> dict[str, str]:
     env = dict(os.environ)
-    path_parts = ["/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", "")]
+    extra_path = os.environ.get("OCTOCLAW_EXTRA_PATH", "/opt/homebrew/bin:/usr/local/bin")
+    path_parts = extra_path.split(":") + [env.get("PATH", "")]
     env["PATH"] = ":".join(part for part in path_parts if part)
     return env
 

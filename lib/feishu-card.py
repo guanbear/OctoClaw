@@ -21,7 +21,7 @@ status 取值:
 update 时可加 summary 字段:
   [{"tentacle":"修臂","emoji":"🔧","task":"修复bug","status":"done","summary":"已修复3处"}]
 
-init: 发送卡片并将 message_id + tasks 写入 /tmp/octopus-card-state.json
+init: 发送卡片并将 message_id + tasks 写入 FEISHU_CARD_STATE_FILE ({WORKSPACE}/tmp/octopus/feishu-card-state.json)
 status: 读取 state 文件，更新指定触手状态，更新飞书卡片，写回 state 文件
 """
 

@@ -99,6 +99,8 @@ def summarize_markdown(report: dict) -> str:
 
 
 def execute_runner_job(workspace: str) -> None:
+    if not RUNNER_LOOP_SH.exists():
+        raise RuntimeError("runner_loop.sh removed (R9): use gateway-managed runner pool")
     env = dict(os.environ)
     env["WORKSPACE"] = workspace
     env["RUNNER_MAX_JOBS_PER_WORKER"] = "1"

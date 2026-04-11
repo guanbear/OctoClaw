@@ -254,6 +254,10 @@ start_runner_runtime() {
                 return 0
             fi
             rm -f "$RUNNER_PID_FILE" "$RUNNER_HEALTH_FILE"
+            if [ ! -f "$RUNNER_DAEMON_SH" ]; then
+                echo "runner-daemon.sh removed (R9); use gateway-managed runner pool or on-demand mode"
+                return 1
+            fi
             background_spawn env \
                 WORKSPACE="$WORKSPACE" \
                 RUNNER_POLL_INTERVAL_SECONDS="$RUNNER_POLL_INTERVAL_SECONDS" \
@@ -317,6 +321,10 @@ start_patrol_runtime() {
                 return 0
             fi
             rm -f "$PATROL_PID_FILE"
+            if [ ! -f "$PATROL_LOOP_SH" ]; then
+                echo "patrol-loop.sh removed (R9); use reconcile-once or repair-once instead"
+                return 1
+            fi
             background_spawn env \
                 WORKSPACE="$WORKSPACE" \
                 PATROL_INTERVAL="$PATROL_INTERVAL" \

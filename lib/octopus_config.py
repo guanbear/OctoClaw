@@ -696,13 +696,22 @@ def spawn_operator_surface(
     return surface
 
 
+_notification_backend_cache: dict[str, str] = {}
+
+
 def get_notification_backend(config: dict[str, Any] | None = None) -> str:
+    key = str(config) if config else ""
+    if key in _notification_backend_cache:
+        return _notification_backend_cache[key]
     cfg = config or load_octopus_config()
     backend = str(cfg.get("notification", {}).get("backend", "auto") or "auto").lower()
     if backend != "auto":
+        _notification_backend_cache[key] = backend
         return backend
     if any(str(item.get("origin", "") or "") == "feishu" for item in load_session_descriptors()):
+        _notification_backend_cache[key] = "feishu"
         return "feishu"
+    _notification_backend_cache[key] = "none"
     return "none"
 
 

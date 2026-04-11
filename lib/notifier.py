@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from typing import Any
 
 try:
@@ -303,8 +304,20 @@ def send_task_notification(
             "error": "",
         }
 
+    max_retries = 2
+
+    def _retry(fn, *args, **kwargs):
+        for attempt in range(max_retries + 1):
+            try:
+                return fn(*args, **kwargs)
+            except Exception:
+                if attempt < max_retries:
+                    time.sleep(1 * (attempt + 1))
+                    continue
+                raise
+
     if resolved_backend == "feishu":
-        message_id = send_text(text, config=cfg, reply_to=reply_to)
+        message_id = _retry(send_text, text, config=cfg, reply_to=reply_to)
         if message_id:
             append_task_event(task, "anchor_sent", message=text, extra={"backend": resolved_backend, "message_id": message_id, "action": "send"})
         result = {
@@ -350,7 +363,8 @@ def send_task_notification(
     editable_backends = {"slack", "discord", "telegram"}
     message_id_value = str(existing_message_id or "").strip()
     if message_id_value and resolved_backend in editable_backends:
-        result = edit_channel_message(
+        result = _retry(
+            edit_channel_message,
             resolved_backend,
             str(route.get("target", "") or ""),
             message_id_value,
@@ -385,7 +399,8 @@ def send_task_notification(
             return result
 
     interactive_payload = interactive if resolved_backend in {"slack", "telegram", "discord", "msteams"} else None
-    result = send_channel_message(
+    result = _retry(
+        send_channel_message,
         resolved_backend,
         str(route.get("target", "") or ""),
         message,
