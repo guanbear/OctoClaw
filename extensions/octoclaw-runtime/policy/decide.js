@@ -604,6 +604,22 @@ function normalizePolicyJudgeResult(metadata = {}) {
     reason_codes: Array.isArray(result.reason_codes)
       ? result.reason_codes.map((item) => normalizedText(item)).filter(Boolean).slice(0, 12)
       : [],
+    timeout_budget_ms: Math.max(0, Number(result.timeout_budget_ms || 0)),
+    fallback_stage: normalizedText(result.fallback_stage),
+    final_judge_source: normalizedText(result.final_judge_source),
+    attempts: Array.isArray(result.attempts)
+      ? result.attempts.map((item) => {
+          const entry = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+          return {
+            selected: normalizedText(entry.selected),
+            provider: normalizedText(entry.provider),
+            model: normalizedText(entry.model),
+            invocation_state: normalizedText(entry.invocation_state),
+            timeout_budget_ms: Math.max(0, Number(entry.timeout_budget_ms || 0)),
+            fallback_stage: normalizedText(entry.fallback_stage),
+          };
+        }).filter((item) => item.selected || item.provider || item.model || item.invocation_state)
+      : [],
     raw: result.raw && typeof result.raw === "object" && !Array.isArray(result.raw) ? result.raw : {},
   };
 }
@@ -692,7 +708,9 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
     deterministic_first: deterministicFirst,
     intent_packet: intentPacket && typeof intentPacket === "object" && !Array.isArray(intentPacket) ? { ...intentPacket } : {},
     decision_source: judgeApplied
-      ? "policy_judge"
+      ? (judgeResult.fallback_stage && judgeResult.fallback_stage !== "primary"
+          ? "policy_judge_cascade_fallback"
+          : "policy_judge")
       : (
         String(intentPacket?.source || "").startsWith("deterministic_")
           && String(intentPacket?.intent_class || "").trim()
@@ -725,6 +743,10 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
       reason: String(intentPacket?.judge?.reason || "").trim(),
       applied: judgeApplied,
       confidence: Number(judgeResult.confidence || 0),
+      timeout_budget_ms: Number(judgeResult.timeout_budget_ms || cfg.timeout_ms || 1200),
+      fallback_stage: String(judgeResult.fallback_stage || ""),
+      final_judge_source: String(judgeResult.final_judge_source || ""),
+      attempts: Array.isArray(judgeResult.attempts) ? judgeResult.attempts.map((item) => ({ ...item })) : [],
       validation: judgeValidation,
       route: String(judgeResult.route || ""),
       request_kind: String(judgeResult.request_kind || ""),

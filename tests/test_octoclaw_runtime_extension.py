@@ -1867,6 +1867,70 @@ Sender (untrusted metadata):
         self.assertTrue(payload["routerValid"])
         self.assertIn("policy_judge_route_applied", payload["reasonCodes"])
 
+    def test_stateless_policy_judge_secondary_attempt_marks_cascade_source(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("帮我查下openclaw最新版有啥新特性", {
+                  metadata: {
+                    policy_judge_result: {
+                      route: "runner",
+                      request_kind: "fresh_external_lookup",
+                      scope: "upstream_project",
+                      target: "openclaw",
+                      evidence_required: ["web_lookup", "execution_ledger"],
+                      confidence: 0.91,
+                      reason_codes: ["cheap_fallback_success"],
+                      invoked: true,
+                      invocation_state: "completed",
+                      selected: "cheap_model",
+                      provider: "openai_compatible",
+                      model: "cheap-router",
+                      fallback_stage: "secondary",
+                      final_judge_source: "cheap_model",
+                      timeout_budget_ms: 1400,
+                      attempts: [
+                        {
+                          selected: "main_grade_model",
+                          provider: "stateless_ephemeral_judge",
+                          model: "openai/gpt-5.4",
+                          invocation_state: "timeout",
+                          timeout_budget_ms: 2000,
+                          fallback_stage: "primary"
+                        },
+                        {
+                          selected: "cheap_model",
+                          provider: "openai_compatible",
+                          model: "cheap-router",
+                          invocation_state: "completed",
+                          timeout_budget_ms: 1400,
+                          fallback_stage: "secondary"
+                        }
+                      ]
+                    }
+                  }
+                });
+                return {
+                  route: decision.route_decision.route,
+                  policyRouterSource: decision.policy_router.decision_source,
+                  judgeApplied: decision.policy_router.judge.applied,
+                  judgeFallbackStage: decision.policy_router.judge.fallback_stage,
+                  finalJudgeSource: decision.policy_router.judge.final_judge_source,
+                  judgeAttempts: decision.policy_router.judge.attempts || [],
+                  timeoutBudgetMs: decision.policy_router.judge.timeout_budget_ms
+                };
+            })()""",
+        )
+
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["policyRouterSource"], "policy_judge_cascade_fallback")
+        self.assertTrue(payload["judgeApplied"])
+        self.assertEqual(payload["judgeFallbackStage"], "secondary")
+        self.assertEqual(payload["finalJudgeSource"], "cheap_model")
+        self.assertEqual(len(payload["judgeAttempts"]), 2)
+        self.assertEqual(payload["judgeAttempts"][0]["selected"], "main_grade_model")
+        self.assertEqual(payload["judgeAttempts"][1]["selected"], "cheap_model")
+        self.assertEqual(payload["timeoutBudgetMs"], 1400)
+
     def test_stateless_policy_judge_low_confidence_falls_back_to_legacy_route(self) -> None:
         fixture = {
             "route": "direct",

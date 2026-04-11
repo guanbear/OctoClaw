@@ -25,6 +25,11 @@ function normalizeText(value) {
   return String(value || "").trim();
 }
 
+function normalizeChoice(value, allowed = new Set()) {
+  const text = normalizeText(value);
+  return allowed.has(text) ? text : "";
+}
+
 function envFlagEnabled(name) {
   return ["1", "true", "yes", "on"].includes(normalizeText(process.env[name]).toLowerCase());
 }
@@ -290,6 +295,46 @@ export function selectPolicyJudge(runtimeCfg = {}) {
   };
 }
 
+export function selectPolicyJudgeCandidates(runtimeCfg = {}) {
+  const cfg = routerConfig(runtimeCfg);
+  const candidates = cfg.candidates && typeof cfg.candidates === "object" && !Array.isArray(cfg.candidates)
+    ? cfg.candidates
+    : {};
+  const flags = resolveRuntimeFeatureFlags(runtimeCfg);
+  const preferred = normalizeText(flags.judge_lock || cfg.default_judge || "main_grade_model") || "main_grade_model";
+  const ordered = [
+    preferred,
+    "cheap_model",
+    "local_model",
+    "main_grade_model",
+  ].filter(Boolean);
+  const seen = new Set();
+  const selected = [];
+  for (const name of ordered) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const config = candidates[name] && typeof candidates[name] === "object" && !Array.isArray(candidates[name])
+      ? candidates[name]
+      : {};
+    if (config.enabled === false) continue;
+    if (name === "cheap_model" && !flags.cheap_judge_live) continue;
+    if (name === "local_model" && !flags.local_judge_live) continue;
+    selected.push({
+      name,
+      config,
+      provider: normalizeText(config.provider || name),
+      model: normalizeText(config.model || ""),
+    });
+  }
+  if (selected.length > 0) return selected;
+  return [{
+    name: preferred,
+    config: {},
+    provider: preferred,
+    model: "",
+  }];
+}
+
 export function buildPolicyJudgeRequest({
   task = "",
   metadata = {},
@@ -340,6 +385,19 @@ export function normalizePolicyJudgeResult(raw = {}, context = {}) {
     ? payload.evidence_required.map((item) => normalizeText(item)).filter(Boolean)
     : (normalizeText(payload.evidence_required) ? [normalizeText(payload.evidence_required)] : []);
   const confidence = Math.max(0, Math.min(1, Number(payload.confidence || 0)));
+  const attempts = Array.isArray(context.attempts || payload.attempts)
+    ? (context.attempts || payload.attempts).map((item) => {
+        const entry = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+        return {
+          selected: normalizeText(entry.selected),
+          provider: normalizeText(entry.provider),
+          model: normalizeText(entry.model),
+          invocation_state: normalizeText(entry.invocation_state),
+          timeout_budget_ms: Math.max(0, Number(entry.timeout_budget_ms || 0)),
+          fallback_stage: normalizeChoice(entry.fallback_stage, new Set(["primary", "secondary", "planner_fallback"])),
+        };
+      }).filter((item) => item.selected || item.provider || item.model || item.invocation_state)
+    : [];
   return {
     schema_version: POLICY_JUDGE_RESULT_SCHEMA_VERSION,
     selected: normalizeText(context.selected || payload.selected || ""),
@@ -356,8 +414,62 @@ export function normalizePolicyJudgeResult(raw = {}, context = {}) {
     reason_codes: Array.isArray(payload.reason_codes)
       ? payload.reason_codes.map((item) => normalizeText(item)).filter(Boolean).slice(0, 12)
       : [],
+    timeout_budget_ms: Math.max(0, Number(context.timeout_budget_ms || payload.timeout_budget_ms || 0)),
+    fallback_stage: normalizeChoice(context.fallback_stage || payload.fallback_stage || "", new Set(["primary", "secondary", "planner_fallback"])),
+    final_judge_source: normalizeChoice(
+      context.final_judge_source || payload.final_judge_source || "",
+      new Set(["main_grade_model", "cheap_model", "local_model", "planner_fallback"]),
+    ),
+    attempts,
     raw: payload,
   };
+}
+
+function judgeFailureEligibleForCascade(invocationState = "") {
+  const normalized = normalizeText(invocationState);
+  if (!normalized) return false;
+  if (["timeout", "error", "http_500", "http_502", "http_503", "http_504"].includes(normalized)) return true;
+  if (normalized.startsWith("http_5")) return true;
+  return [
+    "adapter_unavailable",
+    "openai_compatible_adapter_unavailable",
+    "codex_native_adapter_unavailable",
+    "codex_native_access_missing",
+    "codex_native_access_expired",
+    "codex_native_profile_missing",
+  ].includes(normalized);
+}
+
+function timeoutBudgetForJudge(judge, cfg = {}, stage = "primary") {
+  const explicit = Number(judge?.config?.timeout_ms || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.max(100, explicit);
+  const provider = normalizeText(judge?.provider || judge?.config?.provider || "");
+  const base = Number(cfg.timeout_ms || 1200);
+  if (stage === "primary") return Math.max(100, base > 0 ? base : 2000);
+  if (provider === "openai_compatible") return 1400;
+  return 700;
+}
+
+async function invokeSingleJudge(judge, request, context, runtimeCfg = {}) {
+  const command = normalizeText(
+    judge.config.command
+      || process.env.OCTOCLAW_POLICY_JUDGE_COMMAND
+      || "",
+  );
+  if (command) {
+    return invokeCommandJudge(command, request, context);
+  }
+  if (judge.provider === "stateless_ephemeral_judge") {
+    return invokeStatelessEphemeralJudge(judge, request, context, runtimeCfg);
+  }
+  if (judge.provider === "openai_compatible") {
+    return invokeOpenAiCompatibleJudge(judge, request, context);
+  }
+  return normalizePolicyJudgeResult({}, {
+    ...context,
+    invoked: false,
+    invocation_state: "adapter_unavailable",
+  });
 }
 
 function runJudgeCommand(command, request, { cwd = process.cwd(), timeoutMs = 1200 } = {}) {
@@ -637,13 +749,14 @@ export async function invokePolicyJudge({
   const cfg = routerConfig(runtimeCfg);
   const flags = resolveRuntimeFeatureFlags(runtimeCfg);
   const liveEnabled = Boolean(flags.policy_judge_live);
-  const judge = selectPolicyJudge(runtimeCfg);
+  const judges = selectPolicyJudgeCandidates(runtimeCfg);
+  const primaryJudge = judges[0];
   const context = {
-    selected: judge.name,
-    provider: judge.provider,
-    model: resolveStatelessEphemeralModel(judge, runtimeCfg),
+    selected: primaryJudge.name,
+    provider: primaryJudge.provider,
+    model: resolveStatelessEphemeralModel(primaryJudge, runtimeCfg),
     cwd,
-    timeoutMs: Math.max(100, Number(cfg.timeout_ms || judge.config.timeout_ms || 1200)),
+    timeoutMs: timeoutBudgetForJudge(primaryJudge, cfg, "primary"),
   };
   if (!liveEnabled || String(cfg.mode || "model_first") === "legacy_only") {
     return normalizePolicyJudgeResult({}, {
@@ -659,27 +772,77 @@ export async function invokePolicyJudge({
       ...context,
       invoked: true,
       invocation_state: "completed_fixture",
+      timeout_budget_ms: context.timeoutMs,
+      fallback_stage: "primary",
+      final_judge_source: primaryJudge.name || "main_grade_model",
+      attempts: [{
+        selected: primaryJudge.name,
+        provider: primaryJudge.provider,
+        model: context.model,
+        invocation_state: "completed_fixture",
+        timeout_budget_ms: context.timeoutMs,
+        fallback_stage: "primary",
+      }],
     });
   }
 
   const request = buildPolicyJudgeRequest({ task, metadata, intentPacket });
-  const command = normalizeText(
-    judge.config.command
-      || process.env.OCTOCLAW_POLICY_JUDGE_COMMAND
-      || "",
-  );
-  if (command) {
-    return invokeCommandJudge(command, request, context);
+  const attempts = [];
+  let finalResult = null;
+  for (let index = 0; index < judges.length; index += 1) {
+    const judge = judges[index];
+    const fallbackStage = index === 0 ? "primary" : "secondary";
+    const timeoutMs = timeoutBudgetForJudge(judge, cfg, fallbackStage);
+    const attemptContext = {
+      selected: judge.name,
+      provider: judge.provider,
+      model: resolveStatelessEphemeralModel(judge, runtimeCfg),
+      cwd,
+      timeoutMs,
+      timeout_budget_ms: timeoutMs,
+      fallback_stage: fallbackStage,
+    };
+    const result = await invokeSingleJudge(judge, request, attemptContext, runtimeCfg);
+    attempts.push({
+      selected: attemptContext.selected,
+      provider: attemptContext.provider,
+      model: attemptContext.model,
+      invocation_state: String(result.invocation_state || ""),
+      timeout_budget_ms: timeoutMs,
+      fallback_stage: fallbackStage,
+    });
+    if (normalizeText(result.invocation_state) === "completed") {
+      finalResult = normalizePolicyJudgeResult(result.raw || {}, {
+        ...attemptContext,
+        invoked: result.invoked,
+        invocation_state: result.invocation_state,
+        timeout_budget_ms: timeoutMs,
+        fallback_stage: fallbackStage,
+        final_judge_source: judge.name || (index === 0 ? "main_grade_model" : "cheap_model"),
+        attempts,
+      });
+      break;
+    }
+    finalResult = normalizePolicyJudgeResult(result.raw || {}, {
+      ...attemptContext,
+      invoked: result.invoked,
+      invocation_state: result.invocation_state,
+      timeout_budget_ms: timeoutMs,
+      fallback_stage: fallbackStage,
+      final_judge_source: judge.name || "",
+      attempts,
+    });
+    if (!judgeFailureEligibleForCascade(result.invocation_state) || index === judges.length - 1) {
+      break;
+    }
   }
-  if (judge.provider === "stateless_ephemeral_judge") {
-    return invokeStatelessEphemeralJudge(judge, request, context, runtimeCfg);
-  }
-  if (judge.provider === "openai_compatible") {
-    return invokeOpenAiCompatibleJudge(judge, request, context);
-  }
-  return normalizePolicyJudgeResult({}, {
+  return finalResult || normalizePolicyJudgeResult({}, {
     ...context,
     invoked: false,
     invocation_state: "adapter_unavailable",
+    timeout_budget_ms: context.timeoutMs,
+    fallback_stage: "planner_fallback",
+    final_judge_source: "planner_fallback",
+    attempts,
   });
 }

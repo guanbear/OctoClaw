@@ -104,7 +104,14 @@ class PolicyJudgeAdapterTests(unittest.TestCase):
         )
 
         self.assertFalse(payload["invoked"])
-        self.assertEqual(payload["invocation_state"], "openai_compatible_adapter_unavailable")
+        self.assertEqual(payload["invocation_state"], "adapter_unavailable")
+        self.assertEqual(payload["fallback_stage"], "secondary")
+        self.assertEqual(payload["final_judge_source"], "main_grade_model")
+        self.assertEqual(len(payload["attempts"]), 2)
+        self.assertEqual(payload["attempts"][0]["selected"], "cheap_model")
+        self.assertEqual(payload["attempts"][0]["invocation_state"], "openai_compatible_adapter_unavailable")
+        self.assertEqual(payload["attempts"][1]["selected"], "main_grade_model")
+        self.assertEqual(payload["attempts"][1]["invocation_state"], "adapter_unavailable")
 
     def test_stateless_ephemeral_judge_uses_codex_native_bridge_when_openai_compatible_credentials_are_missing(self) -> None:
         payload = run_judge_expression(
@@ -242,6 +249,78 @@ class PolicyJudgeAdapterTests(unittest.TestCase):
 
         self.assertEqual(payload["name"], "main_grade_model")
         self.assertEqual(payload["model"], "main-grade")
+
+    def test_policy_judge_cascades_to_cheap_model_after_primary_timeout(self) -> None:
+        payload = run_judge_expression(
+            """(async () => {
+                const calls = [];
+                globalThis.fetch = async (_url, init = {}) => {
+                  const body = JSON.parse(String(init.body || "{}"));
+                  calls.push(body.model);
+                  if (body.model === "main-grade-model") {
+                    throw new DOMException("timed out", "AbortError");
+                  }
+                  return new Response(JSON.stringify({
+                    choices: [{
+                      message: {
+                        content: JSON.stringify({
+                          route: "runner",
+                          request_kind: "fresh_external_lookup",
+                          scope: "upstream_project",
+                          target: "openclaw",
+                          evidence_required: ["web_lookup", "execution_ledger"],
+                          confidence: 0.89,
+                          reason_codes: ["cheap_fallback_success"]
+                        })
+                      }
+                    }]
+                  }), { status: 200, headers: { "content-type": "application/json" } });
+                };
+                return judge.invokePolicyJudge({
+                  task: "帮我查下 openclaw 最新版有啥新特性",
+                  metadata: { session_key: "agent:main:slack:direct:u-cascade" },
+                  intentPacket: { intent_class: "undetermined", judge: { eligible: true } },
+                  runtimeCfg: {
+                    features: { policy_judge_live: true, cheap_judge_live: true },
+                    policy_router: {
+                      mode: "model_first",
+                      timeout_ms: 2000,
+                      candidates: {
+                        main_grade_model: {
+                          enabled: true,
+                          provider: "openai_compatible",
+                          model: "main-grade-model",
+                          base_url: "https://judge.invalid/v1",
+                          api_key: "token"
+                        },
+                        cheap_model: {
+                          enabled: true,
+                          provider: "openai_compatible",
+                          model: "cheap-fallback-model",
+                          base_url: "https://judge.invalid/v1",
+                          api_key: "token"
+                        }
+                      }
+                    }
+                  }
+                });
+            })()""",
+            env={"OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK": "0"},
+        )
+
+        self.assertTrue(payload["invoked"])
+        self.assertEqual(payload["invocation_state"], "completed")
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["selected"], "cheap_model")
+        self.assertEqual(payload["fallback_stage"], "secondary")
+        self.assertEqual(payload["final_judge_source"], "cheap_model")
+        self.assertEqual(len(payload["attempts"]), 2)
+        self.assertEqual(payload["attempts"][0]["selected"], "main_grade_model")
+        self.assertEqual(payload["attempts"][0]["invocation_state"], "timeout")
+        self.assertEqual(payload["attempts"][1]["selected"], "cheap_model")
+        self.assertEqual(payload["attempts"][1]["invocation_state"], "completed")
+        self.assertEqual(payload["attempts"][0]["timeout_budget_ms"], 2000)
+        self.assertEqual(payload["attempts"][1]["timeout_budget_ms"], 1400)
 
 
 if __name__ == "__main__":
