@@ -91,6 +91,39 @@
   - OpenClaw release / Memory 更新
   - 任务追问
   - provenance follow-up
+- K1：policy judge cascade + SLA 已落地
+  - main_grade_model -> cheap/local -> planner fallback
+  - 分档超时预算
+  - fallback_stage / final_judge_source / attempts / timeout_budget_ms 记录
+- K2：scope boundary hardening 已落地
+  - local_instance lookup -> direct
+  - upstream_project lookup -> direct + latency_ack（runner unavailable 时显式 degraded）
+  - sticky route bypass for local_surface_lookup / fresh_live_lookup / execution_followup
+  - operator surface registry: service_health / backup_usage
+  - runner bootstrap 秒退检测 -> runner_bootstrap_failed -> capability_bound_failure
+- I1：canonical session boundary 已落地
+  - detectSessionBoundary 检测 contaminated_subagent_identity
+  - resolveAckDeliverySessionKey 过滤 subagent session
+  - buildPolicyMetadata 使用 canonical session key
+  - before_prompt_build 注入 contamination warning
+  - after_response 阻断 contaminated control_observer 回复
+- I2+I3：materialization contract 已收口
+  - delegated_materialization schema (lane/kind/status/execution_contract)
+  - capability_bound_failure schema
+  - runner / spawn_single / spawn_multi 统一产出 materialization facts
+  - executed=false 必带 capability_failure + explicit reason
+- J2：single semantic truth / dispatch decision source 已落地
+  - decision_source taxonomy: policy_judge / policy_judge_cascade_fallback / deterministic_front_gate / legacy_planner
+  - final_judge_source / fallback_stage / attempts 全链路记录
+  - replay/ledger 写入 routerDecisionSource
+- J3：delegated ACK at route commit 已落地
+  - pre_dispatch_ack + latency_ack 双通道
+  - shouldSendPreDispatchAck / shouldSendLatencyAck 守卫
+  - channel delivery + timeout + fallback to progress update
+- J4：final-answer execution guard 已落地
+  - ungrounded_tool_provenance_claim_blocked
+  - undelegated_route_response_blocked
+  - contaminated_control_observer_response_blocked
 - P5I：materialization contract 基本收口
   - 无 execution identity 时不再声称已委派
   - materialization failure 有显式原因
@@ -113,6 +146,10 @@
 
 ### 4.3 未达成
 
+- J1 burst message decomposition
+  - extractPromptText 已能拆出 burst 消息文本
+  - 但尚未实现"每条子消息独立走路由判定"的完整 decomposition
+  - 优先级最低，可作为后续增量
 - main-grade stateless judge live
   - 现在仍存在 `legacy_planner_until_stateless_judge_live`
 - cheap/local shadow -> partial live rollout
@@ -120,20 +157,25 @@
 - cost/latency/UX 的正式量化门槛
   - 例如 ACK p95、route decision p95、provenance correctness >= 98%
 - 完整 Slack / macmini 生产验收闭环
-  - 当前仍缺“真实 channel delivery + 真 runner task + 真 completion relay”的最终确认
+  - 当前仍缺"真实 channel delivery + 真 runner task + 真 completion relay"的最终确认
 
 ---
 
 ## 5. 当前结论
 
-结论不是“所有设计目标都已完成”，而是：
+本轮（K1+K2+I1+I2+I3+J2+J3+J4）完成后：
 
-- 本轮重构最关键的两个系统性问题已经有代码级收口：
-  - runner on-demand 假启动导致 queued 卡死
-  - 多类本机 / fresh / follow-up 请求掉回 legacy 直答
-- 当前本地自动化已经可以证明：
-  - 路由主链比之前更贴近设计目标
-  - runner 失败面不会再静默说谎
-  - completion relay / delivery reconcile 的关键 contract 在回归里可见
-- 还不能诚实宣称“设计文档所有验收标准都已达到”
-  - 尤其是 stateless judge live、线上 ACK p95、线上 completion relay 生产闭环，这三项仍需要下一轮真实环境验收
+- K1 judge cascade 已落地：main_grade -> cheap/local -> planner fallback，分档超时预算，全链路记录
+- K2 scope boundary 已落地：local_instance -> direct，upstream_project -> direct+latency_ack（不再静默 fallback），sticky bypass，operator surface 扩展，bootstrap 秒退检测
+- I1 session boundary 已落地：contamination 检测、canonical session 解析、subagent 过滤、before_prompt_build 注入、after_response 阻断
+- I2+I3 materialization contract 已收口：delegated_materialization schema、capability_bound_failure schema、runner/spawn 统一产出 facts
+- J2 decision source 已落地：decision_source taxonomy、final_judge_source、replay/ledger 记录
+- J3 delegated ACK 已落地：pre_dispatch_ack + latency_ack 双通道、channel delivery + timeout
+- J4 final-answer guard 已落地：ungrounded provenance blocking、delegation failure blocking
+
+本地自动化验证：`harness_gate quick` 152 tests OK。
+
+仍需后续继续：
+- J1 burst message decomposition（每条子消息独立路由）
+- stateless judge live 替换 legacy_planner
+- macmini 真实生产验收闭环
