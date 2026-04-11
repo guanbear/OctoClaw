@@ -271,8 +271,8 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
         self.assertEqual(payload["request"]["metadata"]["intent_packet"]["intent_class"], "fresh_live_lookup")
         self.assertEqual(payload["route_recommendation"]["schema_version"], "octoclaw.route_recommendation/v1")
-        self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
-        self.assertEqual(payload["route_recommendation"]["arbitration"]["conflict_type"], "")
+        self.assertTrue(payload["route_recommendation"]["arbitration"]["required"])
+        self.assertEqual(payload["route_recommendation"]["arbitration"]["conflict_type"], "repo_activity_lookup")
         self.assertEqual(payload["route_recommendation"]["recommended_route"], "direct")
         self.assertFalse(payload["pre_dispatch_ack"]["required"])
         self.assertTrue(payload["latency_ack"]["required"])
@@ -321,7 +321,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["route"], "direct")
         self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
         self.assertFalse(payload["route_hint_policy"]["sticky_applied"])
-        self.assertIn("prefer_direct_for_local_surface_probe", payload["route_decision"]["reason_codes"])
+        self.assertIn("route_sticky_exempt:local_surface_lookup", payload["route_hint_policy"]["merge_notes"])
 
     def test_service_health_prompt_prefers_local_surface_direct_probe(self) -> None:
         payload = self.run_policy("检查一下服务健康状态")
@@ -591,6 +591,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["route_decision"]["runner_materialization_available"])
         self.assertEqual(payload["route_decision"]["runner_playbook"], {})
         self.assertIn("prefer_direct_for_local_surface_probe", payload["route_decision"]["reason_codes"])
+
 
     def test_force_route_runner_does_not_override_safe_local_direct_probe(self) -> None:
         payload = build_decision("检查接口健康状态和响应头", "printf ok", {}, force_route="runner")
