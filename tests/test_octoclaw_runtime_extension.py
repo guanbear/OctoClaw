@@ -2223,6 +2223,40 @@ Sender (untrusted metadata):
         self.assertEqual(payload["routerScope"], "local_host")
         self.assertFalse(payload["preDispatchAckRequired"])
 
+    def test_burst_message_decomposition_classifies_each_sub_message(self) -> None:
+        payload = run_runtime_helper(
+            r"""__octoclawTest.__conversationControlTest.buildConversationIntentPacket({
+                prompt: "[Queued messages while agent was busy]\nSystem: slack:direct:U123: 我现在啥版本\nSystem: slack:direct:U123: openclaw有没有新的发版\nSystem: slack:direct:U123: 帮我跑个benchmark"
+            })"""
+        )
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(len(payload.get("burst_decomposition", [])), 3)
+        self.assertEqual(payload["burst_decomposition"][0]["intent_class"], "local_surface_lookup")
+        self.assertEqual(payload["burst_decomposition"][1]["intent_class"], "fresh_live_lookup")
+        self.assertEqual(payload["burst_decomposition"][2]["intent_class"], "undetermined")
+
+    def test_burst_message_primary_intent_uses_last_sub_message(self) -> None:
+        payload = run_runtime_helper(
+            r"""__octoclawTest.__conversationControlTest.buildConversationIntentPacket({
+                prompt: "[Queued messages while agent was busy]\nSystem: slack:direct:U123: 帮我跑个benchmark\nSystem: slack:direct:U123: openclaw有没有新的发版"
+            })"""
+        )
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["intent_class"], "fresh_live_lookup")
+        self.assertEqual(len(payload.get("burst_decomposition", [])), 2)
+
+    def test_single_message_has_no_burst_decomposition(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.__conversationControlTest.buildConversationIntentPacket({
+                prompt: "你现在啥版本"
+            })"""
+        )
+
+        self.assertTrue(payload["available"])
+        self.assertNotIn("burst_decomposition", payload)
+
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(
             """(() => {

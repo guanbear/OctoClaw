@@ -673,6 +673,35 @@ function buildFreshLookupPacket(promptText, signals) {
   });
 }
 
+function extractBurstSubPrompts(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw.startsWith("[Queued messages while agent was busy]")) return [];
+  const messages = [];
+  const lines = raw.split("\n");
+  for (const line of lines) {
+    if (!String(line || "").startsWith("System:")) continue;
+    const rawLine = String(line).replace(/^System:\s*/, "").trim();
+    const lastColon = rawLine.lastIndexOf(": ");
+    const message = String(lastColon >= 0 ? rawLine.slice(lastColon + 2) : rawLine).trim();
+    if (message) {
+      messages.push(message);
+    }
+  }
+  return messages;
+}
+
+function classifyBurstSubIntent(subPrompt = "") {
+  const text = String(subPrompt || "").trim();
+  if (!text) return { intent_class: "undetermined", confidence: 0 };
+  const surface = detectOperatorSurface(text);
+  if (surface) return { intent_class: INTENT_CLASSES.LOCAL_SURFACE_LOOKUP, confidence: 0.9, surface_id: surface.surface_id };
+  if (isFreshLiveLookupPrompt(text)) return { intent_class: INTENT_CLASSES.FRESH_LIVE_LOOKUP, confidence: 0.85 };
+  if (isProvenancePrompt(text) || isTaskProgressPrompt(text)) return { intent_class: INTENT_CLASSES.EXECUTION_FOLLOWUP, confidence: 0.85 };
+  const signals = buildSignalPacket(text);
+  if (signals.explicit_command) return { intent_class: INTENT_CLASSES.DELEGATED_WORK, confidence: 0.7 };
+  return { intent_class: INTENT_CLASSES.UNDETERMINED, confidence: 0.3 };
+}
+
 export function buildIntentPacket({
   prompt = "",
   replayLogPath = "",
@@ -690,33 +719,51 @@ export function buildIntentPacket({
       reason_codes: ["empty_prompt"],
     };
   }
-  const signals = buildSignalPacket(promptText);
-  const operatorSurface = detectOperatorSurface(promptText);
+
+  const burstSubPrompts = extractBurstSubPrompts(promptText);
+  const isBurst = burstSubPrompts.length > 1;
+
+  const signals = buildSignalPacket(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText);
+  const operatorSurface = detectOperatorSurface(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText);
   if (operatorSurface) {
-    return buildLocalSurfacePacket(promptText, operatorSurface, signals);
+    return {
+      ...buildLocalSurfacePacket(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, operatorSurface, signals),
+      ...(isBurst ? { burst_decomposition: burstSubPrompts.map((sub) => classifyBurstSubIntent(sub)) } : {}),
+    };
   }
-  if (isFreshLiveLookupPrompt(promptText)) {
-    return buildFreshLookupPacket(promptText, signals);
+  if (isFreshLiveLookupPrompt(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText)) {
+    return {
+      ...buildFreshLookupPacket(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, signals),
+      ...(isBurst ? { burst_decomposition: burstSubPrompts.map((sub) => classifyBurstSubIntent(sub)) } : {}),
+    };
   }
 
   const turns = groupedReplayTurns(readJsonl(replayLogPath));
   const taskIndex = buildTaskIndex(taskStatePath);
   const taskEventIndex = buildTaskEventIndex(deriveTaskEventsPath(taskStatePath));
-  const deliveryRelayIndex = buildDeliveryRelayIndex(deriveDeliveryRelayPath(taskStatePath));
+  const deliveryRelayIndex = buildDeliveryRelayIndex(deriveTaskEventsPath(taskStatePath));
   const enrichedTurns = turns.map((turn) => ({ ...turn, facts: buildTurnFacts(turn, taskIndex, taskEventIndex, deliveryRelayIndex) }));
-  const subjectTurn = selectSubjectTurn(enrichedTurns, promptText, sessionKeys);
-  if (subjectTurn && looksLikeShortExecutionFollowup(promptText, subjectTurn)) {
-    return buildExecutionFollowupPacket(promptText, subjectTurn);
+  const subjectTurn = selectSubjectTurn(enrichedTurns, isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, sessionKeys);
+  if (subjectTurn && looksLikeShortExecutionFollowup(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, subjectTurn)) {
+    return {
+      ...buildExecutionFollowupPacket(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, subjectTurn),
+      ...(isBurst ? { burst_decomposition: burstSubPrompts.map((sub) => classifyBurstSubIntent(sub)) } : {}),
+    };
   }
 
-  return baseIntentPacket(promptText, {
-    intent_class: INTENT_CLASSES.UNDETERMINED,
-    confidence: 0.3,
-    reason_codes: signals.explicit_command ? ["explicit_command_needs_router_decision"] : ["semantic_judge_required"],
-    signals,
-    judge_eligible: true,
-    judge_reason: signals.explicit_command ? "explicit_command_scope_validation" : "natural_language_semantic_scope_route_required",
-  });
+  const primaryPrompt = isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText;
+  const primarySignals = buildSignalPacket(primaryPrompt);
+  return {
+    ...baseIntentPacket(primaryPrompt, {
+      intent_class: INTENT_CLASSES.UNDETERMINED,
+      confidence: 0.3,
+      reason_codes: primarySignals.explicit_command ? ["explicit_command_needs_router_decision"] : ["semantic_judge_required"],
+      signals: primarySignals,
+      judge_eligible: true,
+      judge_reason: primarySignals.explicit_command ? "explicit_command_scope_validation" : "natural_language_semantic_scope_route_required",
+    }),
+    ...(isBurst ? { burst_decomposition: burstSubPrompts.map((sub) => classifyBurstSubIntent(sub)) } : {}),
+  };
 }
 
 export function conversationControlFromIntentPacket(intentPacket = {}) {
