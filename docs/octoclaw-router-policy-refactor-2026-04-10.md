@@ -268,6 +268,69 @@ Python 侧不再允许承担：
 
 除此之外的自然语言仍应保持 `undetermined`，进入 stateless judge / safe fallback，而不是继续加关键词硬判。
 
+这里要补一条更硬的边界，避免“规则和模型继续打架”：
+
+- front gate 可以输出 `intent hint`
+- 但不应在语义上与 policy judge 争夺最终主判权
+
+也就是说，当前 deterministic front gate 只能做两类事：
+
+1. **机器可确定的入口短路**
+   - 显式命令
+   - task id / runner id / known artifact id
+   - 明确 session/channel binding
+2. **低歧义 signal / hint**
+   - `execution_followup`
+   - `local_surface_lookup`
+   - `fresh_live_lookup`
+
+但这些 hint 不能再被下游各层重复解释成不同 route。
+
+特别是 lookup 类请求，需要显式区分：
+
+- `lookup_scope=local_instance`
+  - 例如当前 runtime version / Control UI / system load
+  - 可以 deterministic 地进入 `direct`
+- `lookup_scope=upstream_project`
+  - 例如 OpenClaw/OctoClaw 上游 release / update / changelog
+  - 目标态应进入 `runner/workflow-first`
+  - 只有在 runner 明确 unavailable 时，才允许显式 `degraded_direct_lookup`
+
+因此 `fresh_live_lookup` 本身不应再被理解成“默认 direct”。
+它应该只是一个 **front-gate hint**，后续仍要由 policy judge / validator 结合 scope、capability、delivery mode 决定最终 route。
+
+### 3.1.1 Single Semantic Truth
+
+当前不稳定的真正根因之一，是同一句自然语言仍可能在这些层里被重复解释：
+
+- front gate
+- policy judge
+- route/validator
+- dispatch
+- follow-up grounding
+
+正确目标态应该是：
+
+1. **自然语言语义只判一次**
+   - 由 stateless policy judge 为每个 work item 产出 `request_kind / scope / target / route / evidence_required`
+2. **下游不再重判语义**
+   - validator 只做一致性检查
+   - dispatch 只消费 sealed decision / explicit policy payload
+   - follow-up 只读 execution ledger
+3. **规则退到低层**
+   - signal extraction
+   - hard safety short-circuit
+   - schema validation
+   - capability gating
+
+只要这条边界没立住，就会继续出现：
+
+- front gate 说像 `fresh_live_lookup`
+- 某个 protected/control 子句又把整段吸成 `direct`
+- dispatch 再复用 cached decision，返回“适合直接处理”
+
+这不是模型 judge 本身不行，而是 **semantic authority 还没有单一化**。
+
 ### 3.2 Policy Judge
 
 默认使用 main-grade stateless policy judge；可选切到便宜模型或本地模型。
@@ -317,6 +380,44 @@ Python 侧不再允许承担：
 2. 便宜模型和本地模型先 shadow run，不影响真实路由。
 3. golden cases 达标后，再让便宜/本地模型接一部分低风险请求。
 4. 低置信或模型超时，回到 `main_grade_model` 或 safe fallback。
+
+当前 live 发现需要进一步修正的一点：
+
+- `model_first` 已经生效，但 judge reliability 还不够稳定
+- 相同 rollout 下，不同请求会分别落到：
+  - `policy_judge`
+  - `policy_judge_fallback`
+  - `policy_judge_unavailable_fallback`
+- 根因不是“又回到关键词分类”，而是主 judge 当前 timeout budget 过紧，且 judge timeout 后没有第二级 judge cascade
+
+因此目标态不应是“单 judge + planner fallback”，而应是：
+
+```text
+main_grade judge
+  -> cheap/local fallback judge
+  -> planner fallback
+```
+
+约束：
+
+- planner fallback 只作为最后一跳
+- judge fallback 之间只传播小上下文 request，不传播当前主会话完整 transcript
+- replay 必须明确记录每一跳 judge attempt，不能只保留最终 decision_source
+
+#### 3.2.1 Judge Cascade + SLA
+
+推荐默认值：
+
+- `main_grade_model.timeout_ms = 1800-2200`
+- `cheap_model.timeout_ms = 1200-1600`（仅当它也是远端 judge）
+- `local_model.timeout_ms = 500-800`
+- `planner fallback` 不再与 `judge timeout` 混成一个黑盒结果
+
+设计原则：
+
+1. 主 judge 负责准确率上限。
+2. fallback judge 负责在主 judge 短时不可用时保住 `model_first` 语义，而不是立刻退回旧 planner。
+3. planner fallback 只解决“两个 judge 都不可用”或“judge adapter 明确不可用”，不再承担主语义判定职责。
 
 成本策略：
 
@@ -501,6 +602,31 @@ UX deadline：
 - `work_request`
 - `ambiguous`
 
+### 4.1.1 work item 而不是整 turn 单一路由
+
+真实 IM 对话经常会在一个短 burst 内混入多种请求，例如：
+
+- `你好`
+- `你是啥模型`
+- `帮我查下 openclaw 最新版有啥新特性`
+
+如果系统仍然按“整 turn 只选一个总 route”处理，就会让 `control_observer` 一类 protected 请求把后面的 `runner/spawn` 工作请求一起吞掉。
+
+因此目标态必须从：
+
+- `one turn -> one route`
+
+切到：
+
+- `one turn -> one or more work items`
+- `each work item -> one semantic decision`
+
+约束：
+
+- `control_observer / session_control` 子句不能无条件覆盖同 burst 中的 `fresh_live_lookup / work_request`
+- work item 之间可以共享同一 `turn_id`，但必须有各自的 `decision_id`
+- delivery/ack 可以聚合，但 execution/materialization 必须按 work item 独立记账
+
 ### 4.2 scope
 
 这是之前最容易错的地方，必须显式化：
@@ -534,6 +660,27 @@ UX deadline：
 
 pre-dispatch ACK 不能阻塞主回复链路。prompt build 阶段只负责异步投递 eager ACK，并给 channel delivery 设置短超时；dispatch 工具阶段仍会执行 `ensurePreDispatchAck`，作为投递补偿与 progress fallback。这样 ACK 失败不会拖慢主 agent，同时执行链路仍保留可观测记录。
 
+但这里还需要再补一条：**delegated ACK 的语义应绑定 route commit，而不应只绑定 dispatch 工具本身。**
+
+也就是说：
+
+- 一旦某个 work item 的 final route 被确认成 `runner / spawn_single / spawn_multi`
+- 即使后续 materialization 还没完成
+- 系统也应该先发一句 route-consistent 的中性 ACK
+
+这样可以避免：
+
+- route 其实已经是 delegated
+- 但因为模型没有及时走到 `octoclaw_dispatch`
+- 用户完全收不到 ACK
+
+dispatch 工具内的 `ensurePreDispatchAck` 仍保留，但应降级为：
+
+- delivery 补偿
+- progress fallback
+
+而不是 delegated ACK 的唯一触发点。
+
 ### 4.6 stateless judge adapter
 
 policy judge 不是把模型调用硬塞进 `buildDecision()`，而是走独立 adapter：
@@ -551,6 +698,27 @@ judge 结果只有在以下条件同时满足时才能覆盖 legacy planner：
 - 没有 sticky lane 抢占
 
 否则必须显式回退到 legacy planner，并把 `judgeValidationProblems` 写进 replay。
+
+### 4.6.1 dispatch 不得重判自然语言
+
+一旦 `PolicyJudgeResult` / `RouterDecision v2` 已经通过 validator，后续 dispatch/spawn/runner 层应只消费：
+
+- `decision_id`
+- sealed `route / scope / target / work_contract / evidence_required`
+- explicit capability verdict
+
+不应再让 dispatch 依赖：
+
+- 当前 turn 的宽泛 cached decision
+- 相似 prompt 命中的旧 policy state
+- 手写 freeform task 文本再跑一轮语义分类
+
+否则会继续出现：
+
+- 顶层看起来是 `runner`
+- dispatch 却返回“适合主 agent 直接处理”
+
+这类现象本质上不是 route 错，而是 **dispatch decision source 错粒度**。
 
 ### 4.7 delivery relay
 

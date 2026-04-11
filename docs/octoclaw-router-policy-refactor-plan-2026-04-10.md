@@ -63,7 +63,10 @@ ACK timer
 - `lib/octoclaw_policy.py` 不再维护 Python parity policy merge，实现改为调用 Node runtime extension，同时保留 model health feedback side effect。
 - `hard_runner` 从自然语言最终裁判降级为极窄安全兜底；本地 stable surface 不再被 legacy hard gate 强制 runner。
 - `local_surface_lookup` 覆盖 runtime version / Control UI / system load，稳定低风险查询走 `direct + fast_local_check + local_probe evidence`。
-- `fresh_live_lookup` 覆盖 OpenClaw/OctoClaw release/update/Memory 查询；在 runner pool 未证明可用前走 `direct + latency_ack + web_lookup evidence`，避免继续制造 queued runner 任务。
+- `fresh_live_lookup` 当前仍覆盖 OpenClaw/OctoClaw release/update/Memory 查询；但这里需要进一步收紧：
+  - `lookup_scope=local_instance` 的稳定 surface 才允许 `direct + local_probe/fast_local_check`
+  - `lookup_scope=upstream_project` 的 release/update 查询应回到 `runner/workflow-first`
+  - 在 runner pool 未证明可用时，只允许显式 `degraded_direct_lookup`，并把 `degradation_reason`、`evidence_source`、`delivery_mode` 写进 execution ledger；不允许静默把上游查询长期当作普通 direct baseline
 - 产品用法类 direct 查询增加 latency ACK，避免“direct 但用户干等”。
 - on-demand runner bootstrap 显式打开内部 runner loop 允许位，并把“启动后秒退”收口成 `runner_bootstrap_failed`；不再留下静默 `queued` ghost 任务。
 - `router-policy-goldens-v2.json` 增加 surface / fresh lookup / product help case，`harness_gate quick` 已覆盖。
@@ -74,6 +77,36 @@ ACK timer
 - 旧 Python 大文件还在仓内，但不再作为 live route/policy 权威。
 - `legacy_planner_until_stateless_judge_live` 仍会出现在真正 `undetermined` 的 fallback 路径，后续 R3/R4 继续用 stateless judge 替换。
 - runtime snapshot / status 已开始显式报告 optional tmux workbench 是否存在、runner window 是否存在；如果 tmux 没启动，运维面应显示 `tmux_session_missing` / `tmux_runner_window_missing`，而不是让 runner queue 静默堆积。
+- `fresh_live_lookup -> direct` 只能视为短期止血，不是目标态。最终要收成：
+  - `local_instance lookup -> direct`
+  - `upstream_project lookup -> runner`
+  - `runner unavailable -> explicit degraded mode`
+- front gate / judge / dispatch / follow-up 仍存在“多次解释同一句话”的风险；后续需要把语义主判权收敛到单次 stateless judge，并让 downstream 只消费 sealed decision / execution ledger。
+- `policy_judge` 虽然已经 live，但 judge reliability 仍有明显缺口：
+  - 某些 `fresh_live_lookup` 请求可在 timeout budget 内由 main-grade judge 成功产出 `runner`
+  - 某些 `control_observer` / 短问句会直接 `timeout`
+  - judge 一旦超时，当前实现会直接掉回 planner fallback，而不是先尝试第二个 judge 候选
+  - 这会让同一轮真实聊天里混入 `policy_judge` 与 `policy_judge_fallback` 两种 decision source，继续放大 ACK、dispatch、final answer 的漂移
+
+因此，接下来的第一优先级不再只是“继续补路由 case”，而是先把 judge reliability 收稳：
+
+- **K1 Judge Cascade + SLA**
+  - `main_grade_model` 继续作为默认主 judge
+  - `cheap_model` / `local_model` 不再只 shadow；应升级为受控 fallback judge 候选
+  - 主 judge timeout budget 不应继续固定 1200ms，可按 adapter/provider 调整到更现实的 `1800-2200ms`
+  - 远端 fallback judge 不应再用过短预算；建议 `1200-1600ms`
+  - 本地 fallback judge 预算可更短；仅 `local_model` 这类本地 adapter 才适合 `500-800ms`
+  - 两级 judge 都失败后，才允许 planner fallback
+  - replay / ledger 必须显式记录：
+    - `judge_attempts`
+    - `judge_fallback_stage`
+    - `final_judge_source`
+    - `judge_timeout_budget_ms`
+- **K2 Scope Boundary Hardening**
+  - `lookup_scope=local_instance` 才允许稳定 `direct`
+  - `lookup_scope=upstream_project` 默认 `runner/workflow-first`
+  - runner 当前不可用时，只允许显式 `degraded_direct_lookup`
+  - 不允许再把 `upstream_project` 查询静默吃回普通 `direct`
 
 ### R0：冻结现状与补 golden fixtures
 
@@ -207,6 +240,49 @@ ACK timer
 - judge timeout 有 fallback，不阻塞 ACK。
 - 当前主会话上下文污染不会影响 judge 输入。
 - 不同 judge prompt/schema 版本的效果可在 shadow eval 中区分。
+
+### R3.2：Judge Cascade + SLA
+
+目的：避免 `model_first` 只在主 judge 成功时成立，主 judge 一超时就直接掉回旧 planner。
+
+任务：
+
+- 主 judge 继续使用 `main_grade_model`，但 timeout budget 不能继续固定死 1200ms。
+- 新增 judge cascade：
+  - 第 1 跳：`main_grade_model`
+  - 第 2 跳：`cheap_model` 或 `local_model`
+  - 第 3 跳：legacy planner fallback
+- fallback judge 只在主 judge：
+  - `timeout`
+  - `adapter_unavailable`
+  - `http_5xx`
+  - `codex_native_access_missing`
+  - `codex_native_access_expired`
+  等明确不可用场景下触发。
+- 低置信但有效 JSON 不直接进入第二个 judge；而是交给 validator / safe clarify。
+- replay / ledger 记录每次 judge attempt 的：
+  - `selected`
+  - `provider`
+  - `model`
+  - `invocation_state`
+  - `timeout_budget_ms`
+  - `fallback_stage`
+
+推荐预算：
+
+- `main_grade_model`: `1800-2200ms`
+- `cheap_model` 如果是远端 API: `1200-1600ms`
+- `local_model` 如果是真本地 adapter: `500-800ms`
+
+验收：
+
+- 主 judge timeout 时，不直接回退 planner，而是优先尝试第 2 个 judge 候选。
+- 两级 judge 都失败时，才进入 planner fallback。
+- `policy_router.decision_source` 能区分：
+  - `policy_judge`
+  - `policy_judge_cascade_fallback`
+  - `policy_judge_unavailable_fallback`
+- ACK 不被 judge cascade 拖慢；judge 失败仍不阻塞 ACK。
 
 ### R3.5：Decision cache
 

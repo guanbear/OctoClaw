@@ -140,6 +140,12 @@
   - `lookup_scope=local_instance`
   - `lookup_scope=upstream_project`
 - 这样 `你现在啥版本` 不会再和 `有没有新的发版` 共享同一个执行 playbook
+- 最终边界固定为：
+  - `local_instance lookup -> direct`
+  - `upstream_project lookup -> runner/workflow-first`
+  - `runner unavailable -> explicit degraded_direct_lookup`
+- `fresh_live_lookup` 不再直接等于 `direct`；它只是 front-gate hint，最终 route 仍由 stateless judge + validator 决定
+- front gate / route / dispatch / follow-up 不得继续各自重判同一句自然语言；语义主判权必须收敛到单次 judge
 
 ---
 
@@ -655,6 +661,22 @@ P5 不应该顺手混进这些题：
 
 - follow-up 仍可能按旧记忆回答，而不是按最新 execution facts 回答
 - direct slow lookup 没有稳定的快速 ack
+- burst 多消息仍可能被压成单一总 route
+- dispatch 仍可能复用错误粒度的 cached decision
+- `policy_judge` 已经是主路径，但当前只有单 judge；主 judge 超时会直接掉回 planner fallback，导致同一对话内 decision source 漂移
+
+在进入 `J1-J4` 之前，还需要一个更前置的 judge/route 稳定化步骤：
+
+0. **K1 Judge Cascade + SLA**
+   - 主 judge 不再以 1200ms 单点超时作为唯一 gate
+   - 新增 `main_grade_model -> cheap/local judge -> planner fallback` 的 cascade
+   - 远端 fallback judge 不再使用过短 budget；本地 fallback judge 才适合 `500-800ms`
+   - replay / ledger 明确记录 `judge_attempts / judge_fallback_stage / final_judge_source`
+1. **K2 scope boundary hardening**
+   - `local_instance lookup -> direct`
+   - `upstream_project lookup -> runner/workflow-first`
+   - runner 当前不可用时，只允许 `degraded_direct_lookup`
+   - 不允许 silent direct fallback 把 `upstream_project` 查询长期吞掉
 
 这条线固定分成四步：
 
@@ -669,6 +691,33 @@ P5 不应该顺手混进这些题：
    - direct lookup 也必须能先发轻量 ack
 4. acceptance/nightly coverage
    - 为 follow-up grounding 和 latency ack 建回归与验收矩阵
+
+但当前这四步还需要再明确成 4 个一次性整改点：
+
+1. **J1 work-item decomposition**
+   - 不再把一个 burst 内的多条消息粗暴压成单一路由
+   - `control_observer / session_control` 子句与 `fresh_live_lookup / delegated_work` 子句先拆成独立 work item
+2. **J2 single semantic truth**
+   - 语义只由 stateless judge 判一次
+   - front gate 只产出 signal / hint
+   - validator / dispatch / follow-up 不再重复判自然语言
+3. **J3 delegated ACK at route commit**
+   - delegated ACK 从 dispatch 副作用提升为 route commit 后的入口动作
+   - 不再要求模型先真的走到 `octoclaw_dispatch`
+4. **J4 final-answer execution guard**
+   - `dispatch_required=true` 但没有 `dispatch/materialization/handoff/capability_failure` 时，assistant 不能把结果说得像已经做完
+
+推荐顺序：
+
+1. `K1` judge cascade + SLA
+2. `K2` scope boundary hardening
+3. `I1` canonical session boundary
+4. `I2 + I3` materialization contract
+5. `J2` single semantic truth / dispatch decision source hardening
+6. `J3` delegated ACK at route commit
+7. `J4` final-answer execution guard
+8. `J1` burst message decomposition
+9. acceptance / nightly coverage
 
 ### 实施原则
 
