@@ -1426,7 +1426,7 @@ Sender (untrusted metadata):
         self.assertEqual(payload["helperText"], payload["ack"]["text"])
         self.assertTrue(payload["shouldSend"])
 
-    def test_bounded_github_update_lookup_prefers_direct_latency_ack(self) -> None:
+    def test_bounded_github_update_lookup_prefers_runner_pre_dispatch_ack(self) -> None:
         payload = run_runtime_helper(
             """(() => {
                 const decision = __octoclawTest.buildDecision("查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗");
@@ -1436,20 +1436,19 @@ Sender (untrusted metadata):
                   workContract: decision.route_decision.work_contract,
                   ack: decision.pre_dispatch_ack,
                   latencyAck: decision.latency_ack,
-                  shouldSendLatencyAck: __octoclawTest.shouldSendLatencyAck(decision, {}, { trigger: "message" }, "web_fetch")
+                  reasonCodes: decision.route_decision.reason_codes
                 };
             })()"""
         )
 
-        self.assertEqual(payload["route"], "direct")
-        self.assertEqual(payload["taskClass"], "simple_lookup")
-        self.assertEqual(payload["workContract"], "answer_now")
-        self.assertFalse(payload["ack"]["required"])
-        self.assertTrue(payload["latencyAck"]["required"])
-        self.assertIn("最新更新", payload["latencyAck"]["text"])
-        self.assertTrue(payload["shouldSendLatencyAck"])
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_tool_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertTrue(payload["ack"]["required"])
+        self.assertFalse(payload["latencyAck"]["required"])
+        self.assertIn("prefer_runner_for_fresh_live_lookup", payload["reasonCodes"])
 
-    def test_bounded_openclaw_update_lookup_uses_direct_latency_ack(self) -> None:
+    def test_bounded_openclaw_update_lookup_uses_runner_pre_dispatch_ack(self) -> None:
         payload = run_runtime_helper(
             """(() => {
                 const decision = __octoclawTest.buildDecision("你再看下 OpenClaw有啥更新 尤其是Memory方向");
@@ -1459,19 +1458,19 @@ Sender (untrusted metadata):
                   workContract: decision.route_decision.work_contract,
                   ack: decision.pre_dispatch_ack,
                   latencyAck: decision.latency_ack,
-                  shouldSend: __octoclawTest.shouldSendLatencyAck(decision, {}, { trigger: "message" }, "web_fetch")
+                  reasonCodes: decision.route_decision.reason_codes
                 };
             })()"""
         )
 
-        self.assertEqual(payload["route"], "direct")
-        self.assertEqual(payload["taskClass"], "simple_lookup")
-        self.assertEqual(payload["workContract"], "answer_now")
-        self.assertFalse(payload["ack"]["required"])
-        self.assertTrue(payload["latencyAck"]["required"])
-        self.assertTrue(payload["shouldSend"])
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_tool_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertTrue(payload["ack"]["required"])
+        self.assertFalse(payload["latencyAck"]["required"])
+        self.assertIn("prefer_runner_for_fresh_live_lookup", payload["reasonCodes"])
 
-    def test_wrapped_bounded_openclaw_update_lookup_keeps_direct_latency_ack(self) -> None:
+    def test_wrapped_bounded_openclaw_update_lookup_keeps_runner_pre_dispatch_ack(self) -> None:
         payload = run_runtime_helper(
             r"""(() => {
                 const prompt = __octoclawTest.extractPromptText({
@@ -1501,10 +1500,10 @@ Sender (untrusted metadata):
         )
 
         self.assertEqual(payload["extracted"], "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向")
-        self.assertEqual(payload["route"], "direct")
-        self.assertEqual(payload["taskClass"], "simple_lookup")
-        self.assertFalse(payload["ack"]["required"])
-        self.assertTrue(payload["latencyAck"]["required"])
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["taskClass"], "fast_tool_check")
+        self.assertTrue(payload["ack"]["required"])
+        self.assertFalse(payload["latencyAck"]["required"])
 
     def test_wrapped_controlui_prompt_does_not_accidentally_delegate(self) -> None:
         payload = run_runtime_helper(
@@ -1751,12 +1750,12 @@ Sender (untrusted metadata):
             self.assertEqual(payload["intentPacket"]["schema_version"], "octoclaw.intent_packet/v1")
             self.assertEqual(payload["intentPacket"]["signals"]["lookup_mentions"][0]["project"], "openclaw")
             self.assertFalse(payload["intentPacket"]["judge"]["eligible"])
-            self.assertEqual(payload["route"], "direct")
-            self.assertEqual(payload["taskClass"], "simple_lookup")
+            self.assertEqual(payload["route"], "runner")
+            self.assertEqual(payload["taskClass"], "fast_tool_check")
             self.assertEqual(payload["routerRequestKind"], "fresh_external_lookup")
             self.assertIn("web_lookup", payload["routerEvidenceRequired"])
-            self.assertFalse(payload["preDispatchAckRequired"])
-            self.assertTrue(payload["latencyAckRequired"])
+            self.assertTrue(payload["preDispatchAckRequired"])
+            self.assertFalse(payload["latencyAckRequired"])
 
     def test_policy_decision_carries_signal_packet_and_stateless_judge_contract(self) -> None:
         payload = run_runtime_helper(
@@ -1783,7 +1782,7 @@ Sender (untrusted metadata):
         self.assertEqual(payload["intentClass"], "fresh_live_lookup")
         self.assertEqual(payload["packetSource"], "deterministic_live_lookup_classifier")
         self.assertEqual(payload["lookupProject"], "openclaw")
-        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["route"], "runner")
         self.assertEqual(payload["policyRouterMode"], "model_first")
         self.assertEqual(payload["policyRouterSource"], "deterministic_front_gate")
         self.assertEqual(payload["selectedJudge"], "main_grade_model")

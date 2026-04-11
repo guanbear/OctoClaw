@@ -885,7 +885,7 @@ function inferWorkContractHint(features, route = "") {
   if (features.model_benchmark_candidate) return "inspect_report";
   if (features.session_control_candidate) return "answer_now";
   if (features.observer_control_candidate) return "answer_now";
-  if (features.fresh_live_lookup) return "answer_now";
+  if (features.fresh_live_lookup) return "inspect_report";
   if (features.bounded_external_inspect) return "inspect_report";
   if (directContractCandidate(features)) return "answer_now";
   if (coordinatedWorkCandidate(features)) return "coordinated_work";
@@ -1075,7 +1075,9 @@ function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workC
         : ["runner_materialization_missing", "inspect_report_runner_requires_registered_workflow"],
     };
     const localSurfaceDirectInspect = safeLocalSurfaceDirectInspect(features);
+    const freshLiveDegradedDirect = !runnerFeasible && features.fresh_live_lookup && !features.high_risk && !features.requires_mutation && !features.requires_code_work;
     const directEligible = localSurfaceDirectInspect
+      || freshLiveDegradedDirect
       || (!runnerFeasible && boundedDirectRunnerFallback(features))
       || (!features.requires_tools
       && !features.requires_external_lookup
@@ -1089,11 +1091,13 @@ function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workC
       feasible: directEligible,
       reasons: [directEligible
         ? (
-          localSurfaceDirectInspect
-            ? "local_surface_direct_inspect"
-            : (!runnerFeasible && boundedDirectRunnerFallback(features)
-              ? "runner_materialization_missing_direct_fallback"
-              : "bounded_direct_inspect")
+          freshLiveDegradedDirect
+            ? "degraded_direct_lookup_runner_unavailable"
+            : (localSurfaceDirectInspect
+              ? "local_surface_direct_inspect"
+              : (!runnerFeasible && boundedDirectRunnerFallback(features)
+                ? "runner_materialization_missing_direct_fallback"
+                : "bounded_direct_inspect"))
         )
         : "inspect_prefers_workflow"],
     };
@@ -1510,6 +1514,9 @@ export function inferRoute(task, command = "", metadata = {}) {
   if (feasibleRoute.route !== route) {
     route = feasibleRoute.route;
     reasonCodes.push(...feasibleRoute.reasonCodes);
+    if (features.fresh_live_lookup && route === "direct") {
+      reasonCodes.push("degraded_direct_lookup");
+    }
   }
   const feasibleLanes = feasibleLanesFromBaseline(laneFeasibility);
 

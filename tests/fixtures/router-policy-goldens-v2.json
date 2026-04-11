@@ -87,15 +87,15 @@
   {
     "task": "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
     "expected": {
-      "route": "direct",
-      "task_class": "simple_lookup",
-      "work_contract": "answer_now",
+      "route": "runner",
+      "task_class": "fast_tool_check",
+      "work_contract": "inspect_report",
       "request_kind": "fresh_external_lookup",
       "scope": "upstream_project",
       "target": "openclaw",
       "evidence_required": ["web_lookup", "execution_ledger"],
-      "ack_required": false,
-      "latency_ack_required": true,
+      "ack_required": true,
+      "latency_ack_required": false,
       "intent_class": "fresh_live_lookup",
       "judge_eligible": false,
       "policy_router_source": "deterministic_front_gate"

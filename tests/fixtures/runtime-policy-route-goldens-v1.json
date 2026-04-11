@@ -101,9 +101,9 @@
   {
     "task": "帮我查下openclaw 又有新版本了吗 有啥新特性",
     "expected": {
-      "system_preferred_route": "direct",
-      "task_class": "simple_lookup",
-      "work_contract_hint": "answer_now",
+      "system_preferred_route": "runner",
+      "task_class": "fast_tool_check",
+      "work_contract_hint": "inspect_report",
       "protected_lane": ""
     }
   }
