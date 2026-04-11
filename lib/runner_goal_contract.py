@@ -45,6 +45,8 @@ def build_runner_goal_contract(
     task_id: str = "",
     taskflow_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if not task and not command:
+        return {"error": "runner_goal_contract: task or command required"}
     route_meta = _route_meta(decision)
     model_meta = _model_meta(decision)
     playbook = playbook if isinstance(playbook, dict) else {}

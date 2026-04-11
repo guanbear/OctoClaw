@@ -121,7 +121,7 @@ def _retrieval_hints(
     }
 
 
-def normalize_result_status(value: str, default: str = "failed") -> str:
+def normalize_result_status(value: str, default: str = "unknown") -> str:
     text = str(value or "").strip().lower()
     if text in {"done", "success", "completed"}:
         return "done"

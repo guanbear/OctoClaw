@@ -2013,7 +2013,12 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       ? "prompt_mismatch"
       : "no_existing_state";
   if (!options.force && existing?.decision && promptsEquivalent(existing?.prompt || "", prompt)) {
+    const cached = { ...existing.decision };
+    if (cached.policy_router && typeof cached.policy_router === "object") {
+      cached.policy_router = { ...cached.policy_router, cache: { ...cached.policy_router.cache, hit: true, state: "hit" } };
+    }
     existing.updatedAt = Date.now();
+    existing.decision = cached;
     setPolicyStateForContext(ctx, existing);
     await recordPolicyReplay(
       "policy_resolved",
@@ -2392,12 +2397,38 @@ const plugin = {
   registerLifecycleHook("before_prompt_build", async (event, ctx) => {
     if (!isManagedAgentContext(ctx)) return;
     const prompt = extractPromptText(event);
+
+    // Racing ACK timer — fire neutral indicator if pipeline is slow
+    let timerAckFired = false;
+    let timerAckHandle = null;
+    const preStateKey = resolvePolicyStateKey(ctx);
+    const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
+    const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
+    if (preSessionKey) {
+      timerAckHandle = setTimeout(() => {
+        timerAckFired = true;
+        try {
+          runJsonScript(
+            "send_pre_dispatch_ack.py",
+            ["--session-key", preSessionKey, "--channel", String(preMetadata?.channel || ""), "--message", "…"],
+            ctx?.cwd || process.cwd(),
+            { timeoutMs: 2000 },
+          ).catch(() => {});
+        } catch {}
+      }, 600);
+    }
+
     const resolved = await resolvePolicyDecisionForContext(
       prompt,
       ctx,
       process.cwd(),
       pi.logger,
     );
+
+    if (timerAckHandle !== null) {
+      clearTimeout(timerAckHandle);
+    }
+
     const decision = resolved?.decision;
     const hookConfig = decision?.hook_interface?.before_prompt_build;
     if (!hookConfig?.enabled) return;
@@ -2405,7 +2436,9 @@ const plugin = {
     const state = resolved?.state || getPolicyStateForContext(ctx).state;
     const metadata = buildPolicyMetadata(ctx, { stateKey });
     await maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, pi.logger, "direct_lookup");
-    scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);
+    if (!timerAckFired) {
+      scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);
+    }
     const prependSystem = [];
     if (routeHintRequired(decision)) {
       prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);

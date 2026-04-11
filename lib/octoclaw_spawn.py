@@ -226,12 +226,16 @@ def compact_text(text: str, limit: int = 160) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def _sanitize_hint_value(value: str) -> str:
+    return "".join(c for c in str(value) if c not in ("\n", "\r", "\x00"))
+
+
 def inject_spawn_runtime_hints(prompt: str, *, profile: str, thinking: str, supports_profile: bool, supports_thinking: bool) -> str:
     hints: list[str] = []
     if profile and not supports_profile:
-        hints.append(f"- preferred_profile: {profile}")
+        hints.append(f"- preferred_profile: {_sanitize_hint_value(profile)}")
     if thinking and not supports_thinking:
-        hints.append(f"- reasoning_effort: {thinking}")
+        hints.append(f"- reasoning_effort: {_sanitize_hint_value(thinking)}")
     if not hints:
         return prompt
     block = ["【RUNTIME HINT】", *hints, ""]
@@ -2048,6 +2052,14 @@ def build_spawn_spec(
             executed = True
         except Exception as exc:
             execution_error = compact_text(str(exc), 220)
+            # Clean up wrapper and log files on spawn failure
+            for cleanup_key in ("wrapper_path", "stdout_path", "stderr_path"):
+                try:
+                    cleanup_path = str((spawn_execution or {}).get(cleanup_key, "") or "") if "spawn_execution" in dir() else ""
+                    if cleanup_path and os.path.exists(cleanup_path):
+                        os.remove(cleanup_path)
+                except OSError:
+                    pass
             base_artifacts["delegated_materialization"] = build_delegated_materialization(
                 lane=final_route,
                 kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",

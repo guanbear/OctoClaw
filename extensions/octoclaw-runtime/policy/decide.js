@@ -758,8 +758,8 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
     cache: {
       ttl_seconds: Number(cfg.cache_ttl_seconds || 120),
       key_basis: ["normalized_message", "session_binding", "target_binding", "recent_ledger_hash", "runtime_config_version"],
-      hit: false,
-      state: "not_checked",
+      hit: options?.cacheHit ?? false,
+      state: options?.cacheState ?? "not_checked",
     },
     fallback: {
       fail_closed_route: String(cfg.fail_closed_route || "runner"),

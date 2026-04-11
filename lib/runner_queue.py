@@ -377,7 +377,11 @@ def cmd_heartbeat(args):
         if same_worker and str(existing.get("last_success_at", "") or "").strip():
             payload["last_success_at"] = str(existing.get("last_success_at", "") or "")
     with open(RUNNER_HEALTH_FILE, "w", encoding="utf-8") as fp:
-        json.dump(payload, fp, ensure_ascii=False, indent=2)
+        fcntl.flock(fp, fcntl.LOCK_EX)
+        try:
+            json.dump(payload, fp, ensure_ascii=False, indent=2)
+        finally:
+            fcntl.flock(fp, fcntl.LOCK_UN)
     print(json.dumps(payload, ensure_ascii=False))
 
 

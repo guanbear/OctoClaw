@@ -547,7 +547,10 @@ def parse_iso(ts: str):
         return None
     try:
         ts = ts.replace("Z", "+00:00")
-        return datetime.fromisoformat(ts)
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
@@ -727,12 +730,13 @@ RUNNING_MIN_AGE_SECONDS = 60
 
 def classify_tasks(tasks: list) -> tuple:
     """
-    将任务分类，返回 (running, queued, pending_confirm, deferred, stuck)
+    将任务分类，返回 (running, queued, pending_confirm, deferred, stuck, recent_done)
     - running: status=running/dispatched 且运行超过60秒、且未超过15分钟
     - queued: status=queued（始终展示，不受60秒限制）
     - pending_confirm: status=pending_confirm（始终展示）
     - deferred: status=deferred（待定状态，不算失败）
     - stuck: status=running/dispatched 且 spawned_at 超过15分钟（可能卡死）
+    - recent_done: status=done/completed_no_result/expired/blocked_final/partial_final
     注意：running/dispatched 不足60秒的任务直接忽略，不展示也不计数。
     """
     running = []
@@ -740,6 +744,7 @@ def classify_tasks(tasks: list) -> tuple:
     pending_confirm = []
     deferred = []
     stuck = []
+    recent_done = []
 
     now = now_utc()
     fresh_status_by_id = {}
@@ -899,7 +904,13 @@ def classify_tasks(tasks: list) -> tuple:
             t["_age_minutes"] = round(age_minutes, 1)
             queued.append(t)
 
-    return running, queued, pending_confirm, deferred, stuck
+        elif status in ("done", "completed_no_result", "blocked_final", "partial_final"):
+            recent_done.append(t)
+
+        elif status == "expired":
+            recent_done.append(t)
+
+    return running, queued, pending_confirm, deferred, stuck, recent_done
 
 
 def get_active_subagent_sessions() -> list:
@@ -2381,7 +2392,7 @@ def check_task_transcript_errors(task: dict) -> str | None:
 
     # ── 检测模式 2：Validation failed 连续出现3次+ ──
     validation_count = content.count('Validation failed')
-    if validation_count >= 1:
+    if validation_count >= 3:
         return f"工具参数被截断（Validation failed 出现 {validation_count} 次，疑似 token 超限导致）"
 
     # ── 检测模式 3：顶层 error 字段含 token（精确匹配，避免误报）──
@@ -3784,7 +3795,7 @@ def calculate_timeout(task: dict) -> float:
 
 
 def calculate_hard_timeout(task: dict) -> float:
-    """硬超时阈值：软超时的 2 倍。"""
+    """硬超时 = 软超时 × 2（软超时本身已包含 1.5x-2x 安全系数）"""
     return calculate_timeout(task) * 2.0
 
 
@@ -4091,6 +4102,8 @@ def auto_redispatch_task(task: dict, reason: str, *, source: str) -> str | None:
         return new_task_id
 
     next_retry_count = int(task.get("retry_count", 0) or 0) + 1
+    # Increment ORIGINAL task's retry_count to prevent infinite retry loop
+    apply_task_updates(task_id, {"retry_count": next_retry_count})
     apply_task_updates(
         new_task_id,
         {
@@ -4347,8 +4360,8 @@ def kill_subagent(run_id: str) -> bool:
             if data.get("success") or data.get("killed") or resp.status_code == 204:
                 print(f"🔴 已终止 subagent: {run_id}")
                 return True
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"kill_subagent: failed for run_id={run_id}: {exc}", file=sys.stderr)
 
     # fallback：尝试 openclaw gateway kill（若 CLI 版本支持）
     try:
@@ -4360,8 +4373,8 @@ def kill_subagent(run_id: str) -> bool:
         if result.returncode == 0:
             print(f"🔴 已终止 subagent via CLI: {run_id}")
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"kill_subagent: CLI fallback failed for run_id={run_id}: {exc}", file=sys.stderr)
 
     # kill 不可用：告警后由用户手动处理
     print(f"⚠️  无法自动终止 subagent {run_id}：patrol 作为独立脚本无 kill 权限，请主 Agent 手动处理", file=sys.stderr)
@@ -5145,6 +5158,14 @@ def check_main_model_drift():
 
 
 def main():
+    try:
+        _main_inner()
+    except Exception as exc:
+        print(f"patrol fatal: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _main_inner():
     # 解析命令行参数
     parser = argparse.ArgumentParser(description="八爪鱼巡逻脚本")
     parser.add_argument("--force", action="store_true", 
@@ -5250,8 +5271,13 @@ def main():
     # ── 主模型漂移检测：重启后 modelOverride 丢失自动恢复 ──
     check_main_model_drift()
 
-    running, queued, pending_confirm, deferred, stuck = classify_tasks(tasks)
+    running, queued, pending_confirm, deferred, stuck, recent_done_from_classify = classify_tasks(tasks)
     recent_done = get_recent_done_tasks(tasks, force=force_mode)
+    if recent_done_from_classify:
+        existing_done_ids = {t.get("id") for t in recent_done}
+        for t in recent_done_from_classify:
+            if t.get("id") and t.get("id") not in existing_done_ids:
+                recent_done.append(t)
     detect_only = _patrol_detect_only()
 
     # ── 孤儿任务检测：running 但无活跃 session ──
@@ -5608,7 +5634,14 @@ def main():
             anchor_messages = notify_state.get("task_anchor_messages", {})
             completion_messages = notify_state.get("task_completion_messages", {})
             new_states = {t.get("id", ""): task_notification_state(t) for t in tasks if t.get("id")}
-            changes = []
+            save_notify_state(
+                {
+                    "task_ids": new_states,
+                    "task_anchor_messages": anchor_messages,
+                    "task_completion_messages": completion_messages,
+                    "updated_at": datetime.now().isoformat(),
+                }
+            )
             changed_tasks_for_anchor = []
             changed_tasks_for_completion = []
             for tid, new_status in new_states.items():

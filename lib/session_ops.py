@@ -64,16 +64,16 @@ def gateway_call(method: str, params: dict, timeout_ms: int = 10000) -> dict:
             cmd,
             capture_output=True,
             text=True,
-            timeout=max(3, int(timeout_ms / 1000) + 2),
+            timeout=max(3, timeout_ms / 1000),
         )
         if result.returncode != 0:
             return {"ok": False, "error": (result.stderr or result.stdout or "").strip()}
-        payload = json.loads(result.stdout or "{}")
-        if isinstance(payload, dict):
-            return payload
+        data = json.loads(result.stdout)
+        if not isinstance(data, dict):
+            return {"ok": False, "error": f"unexpected response type: {type(data).__name__}"}
+        return data
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
-    return {}
 
 
 def send_agent_message(session_key: str, message: str, timeout_seconds: int = 0) -> dict:
@@ -259,8 +259,8 @@ def resolve_message_target_from_session_key(session_key: str) -> dict:
     }
     try:
         register_session_binding(session_key, payload, source="session_resolve")
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"resolve_message_target: register_session_binding failed: {exc}", file=sys.stderr)
     return payload
 
 

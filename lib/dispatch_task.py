@@ -135,6 +135,8 @@ def legacy_policy_fallback_enabled() -> bool:
 
 
 def build_legacy_policy_decision(task: str, command: str, metadata: dict | None = None, *, force_route: str = "") -> dict:
+    import sys
+    print("DEPRECATED: octoclaw legacy Python policy fallback activated — remove in R10", file=sys.stderr)
     from octoclaw_policy import build_decision as legacy_build_decision  # DEPRECATED: parity-only fallback, remove in R8+1
 
     return legacy_build_decision(task, command, metadata or {}, force_route=force_route)
@@ -936,17 +938,26 @@ def wait_for_runner_result(job_id: str, timeout_seconds: int) -> dict:
     meta_path = os.path.join(RUNNER_RESULTS_DIR, f"{job_id}.json")
     while time.time() <= deadline:
         if os.path.exists(meta_path):
-            meta = load_json(meta_path)
+            try:
+                meta = load_json(meta_path)
+            except Exception:
+                meta = None
             if isinstance(meta, dict):
                 return _runner_result_payload(status="done", meta=meta, result_path=meta_path)
-        queue = load_json(RUNNER_QUEUE_FILE)
+        try:
+            queue = load_json(RUNNER_QUEUE_FILE)
+        except Exception:
+            queue = None
         if isinstance(queue, dict):
             jobs = queue.get("jobs", [])
             if isinstance(jobs, list):
                 job = next((item for item in jobs if item.get("id") == job_id), None)
                 if isinstance(job, dict) and job.get("status") == "failed":
                     result_path = str(job.get("result_path", "") or "")
-                    meta = load_json(result_path) if result_path else None
+                    try:
+                        meta = load_json(result_path) if result_path else None
+                    except Exception:
+                        meta = None
                     return _runner_result_payload(
                         status="failed",
                         meta=meta,
@@ -1049,7 +1060,9 @@ def sync_recovered_stale_runner_jobs(recovered: dict | None) -> None:
             "--observability-health",
             "degraded",
         ]
-        subprocess.run(cmd, check=False, capture_output=True, text=True)
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"sync_recovered_stale_runner_jobs: task-state-update failed for {job_id}: {result.stderr}", file=sys.stderr)
 
 
 def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> dict:
