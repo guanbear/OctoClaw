@@ -65,11 +65,18 @@ function splitModelRef(modelRef) {
   };
 }
 
+function terminalModelRef(modelRef) {
+  const normalized = normalizeText(modelRef);
+  if (!normalized) return "";
+  const parts = normalized.split("/").map((part) => normalizeText(part)).filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
 function isCodexNativeJudgeCandidate(modelRef) {
   const { provider, model } = splitModelRef(modelRef);
   const normalizedProvider = provider.toLowerCase();
-  const normalizedModel = model.toLowerCase();
-  if (!/^gpt-5([.-]|$)/u.test(normalizedModel || normalizedProvider.toLowerCase())) return false;
+  const normalizedModel = terminalModelRef(model || modelRef).toLowerCase();
+  if (!/^gpt-5([.-]|$)/u.test(normalizedModel)) return false;
   if (!normalizedProvider) return true;
   return ["openai", "openai-codex", "omniroute", "cx"].includes(normalizedProvider);
 }
@@ -134,7 +141,7 @@ function resolveCodexBaseUrl(judge) {
 }
 
 function buildCodexNativeJudgePayload(model, request) {
-  const resolvedModel = splitModelRef(model).model || normalizeText(model);
+  const resolvedModel = terminalModelRef(model) || splitModelRef(model).model || normalizeText(model);
   return {
     model: resolvedModel,
     store: false,

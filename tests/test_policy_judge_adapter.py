@@ -165,6 +165,54 @@ class PolicyJudgeAdapterTests(unittest.TestCase):
         self.assertEqual(payload["result"]["route"], "direct")
         self.assertEqual(payload["result"]["request_kind"], "chat_or_explain")
 
+    def test_stateless_ephemeral_judge_accepts_omniroute_wrapped_main_grade_model(self) -> None:
+        payload = run_judge_expression(
+            """(async () => {
+                const calls = [];
+                globalThis.fetch = async (url, init = {}) => {
+                  calls.push(JSON.parse(String(init.body || "{}")));
+                  const stream = new ReadableStream({
+                    start(controller) {
+                      const send = (obj) => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(obj)}\\n\\n`));
+                      send({ type: "response.output_text.delta", delta: "{\\"route\\":\\"direct\\",\\"request_kind\\":\\"ambiguous\\",\\"scope\\":\\"insufficient_context\\",\\"target\\":\\"none\\",\\"evidence_required\\":\\"none\\",\\"confidence\\":0.4,\\"reason_codes\\":[\\"ambiguous_referent\\"]}" });
+                      send({ type: "response.completed", response: { output: [{ content: [{ type: "output_text", text: "{\\"route\\":\\"direct\\",\\"request_kind\\":\\"ambiguous\\",\\"scope\\":\\"insufficient_context\\",\\"target\\":\\"none\\",\\"evidence_required\\":\\"none\\",\\"confidence\\":0.4,\\"reason_codes\\":[\\"ambiguous_referent\\"]}" }] }] } });
+                      controller.close();
+                    }
+                  });
+                  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+                };
+                const result = await judge.invokePolicyJudge({
+                  task: "这个是不是要换个更稳的做法",
+                  metadata: { session_key: "agent:main:slack:direct:u-codex-omni" },
+                  intentPacket: { intent_class: "undetermined", judge: { eligible: true } },
+                  runtimeCfg: {
+                    features: { policy_judge_live: true },
+                    policy_router: {
+                      mode: "model_first",
+                      timeout_ms: 1200,
+                      candidates: {
+                        main_grade_model: {
+                          enabled: true,
+                          provider: "stateless_ephemeral_judge",
+                          model: "omniroute/cx/gpt-5.4",
+                          tools: "none"
+                        }
+                      }
+                    }
+                  }
+                });
+                return { result, calls };
+            })()""",
+            env={
+                "OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK": "0",
+                "HOME": str(Path.home()),
+            },
+        )
+
+        self.assertEqual(payload["calls"][0]["model"], "gpt-5.4")
+        self.assertEqual(payload["result"]["invocation_state"], "completed")
+        self.assertEqual(payload["result"]["evidence_required"], ["none"])
+
     def test_safe_mode_forces_main_grade_judge_selection(self) -> None:
         payload = run_judge_expression(
             """judge.selectPolicyJudge({
