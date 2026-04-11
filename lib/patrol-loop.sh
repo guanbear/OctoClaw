@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED (2026-04-12, R9): patrol-loop.sh is legacy compat.
+# Patrol is now on-demand via `octoclawctl.sh restart patrol` or `patrol --force`.
+# This script will be removed in a future release. Do not add new dependencies.
 # patrol-loop.sh — legacy wrapper
 # 默认架构下 patrol 不再常驻；如需继续使用旧 loop，必须显式设置
 # OCTOCLAW_ENABLE_LEGACY_LOOPS=1。

@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED (2026-04-12, R9): runner-daemon.sh is legacy compat.
+# Runner uses on-demand bootstrap or runner_loop.sh. This daemon wrapper
+# will be removed in a future release. Do not add new dependencies.
 # runner-daemon.sh — legacy wrapper
 # 默认架构下 runner 常驻只作为显式 opt-in 加速层；如需继续使用旧 daemon，
 # 必须显式设置 OCTOCLAW_ENABLE_LEGACY_LOOPS=1。

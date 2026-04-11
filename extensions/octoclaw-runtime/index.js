@@ -25,6 +25,40 @@ const HOME_DIR = os.homedir();
 let OCTOCLAW_ROOT_OVERRIDE = "";
 let WORKSPACE_ROOT_OVERRIDE = "";
 
+// ── Session state persistence ──
+const SESSION_STATE_FILE = process.env.OCTOCLAW_SESSION_STATE_FILE || "";
+
+function _loadPersistedSessionState() {
+  if (!SESSION_STATE_FILE) return new Map();
+  try {
+    if (!fsSync.existsSync(SESSION_STATE_FILE)) return new Map();
+    const raw = fsSync.readFileSync(SESSION_STATE_FILE, "utf-8");
+    const obj = JSON.parse(raw);
+    return new Map(Object.entries(obj));
+  } catch {
+    return new Map();
+  }
+}
+
+function _persistSessionState(map) {
+  if (!SESSION_STATE_FILE) return;
+  try {
+    const dir = path.dirname(SESSION_STATE_FILE);
+    if (!fsSync.existsSync(dir)) fsSync.mkdirSync(dir, { recursive: true });
+    const obj = Object.fromEntries(map.entries());
+    fsSync.writeFileSync(SESSION_STATE_FILE, JSON.stringify(obj, null, 2), "utf-8");
+  } catch {
+    // Silent fail — persistence is best-effort
+  }
+}
+
+let _persistTimer;
+function _setSessionPolicyState(key, value) {
+  policyStateBySession.set(key, value);
+  clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => _persistSessionState(policyStateBySession), 2000);
+}
+
 function stableHash(value = "") {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 16);
 }
@@ -550,7 +584,7 @@ function truncateText(value, limit = 320) {
 }
 
 const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
-const policyStateBySession = new Map();
+const policyStateBySession = _loadPersistedSessionState();
 let policyStateLedgerMtimeMs = 0;
 const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
 const IM_SESSION_ORIGINS = new Set([
@@ -919,7 +953,7 @@ function resolveToolPolicyContext(ctx = {}, prompt = "") {
 
 function setPolicyStateForContext(ctx = {}, payload) {
   for (const key of resolvePolicyStateKeys(ctx)) {
-    policyStateBySession.set(key, payload);
+    _setSessionPolicyState(key, payload);
   }
   persistPolicyStateLedger();
 }
@@ -2130,7 +2164,7 @@ function updatePolicyState(stateKey, mutator) {
   if (!current) return null;
   const next = typeof mutator === "function" ? mutator(current) : { ...current, ...mutator };
   next.updatedAt = Date.now();
-  policyStateBySession.set(stateKey, next);
+  _setSessionPolicyState(stateKey, next);
   persistPolicyStateLedger();
   return next;
 }
@@ -3283,3 +3317,4 @@ export const __octoclawTest = {
     persistPolicyStateLedger();
   },
 };
+process.on("exit", () => _persistSessionState(policyStateBySession));

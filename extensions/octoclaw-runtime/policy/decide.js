@@ -723,7 +723,7 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
                   ? "policy_judge_fallback"
                   : "policy_judge_unavailable_fallback"
               )
-              : "legacy_planner_until_stateless_judge_live"
+              : "policy_judge_unavailable_fallback"
           )
       ),
     judge: {
@@ -759,7 +759,7 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
       ttl_seconds: Number(cfg.cache_ttl_seconds || 120),
       key_basis: ["normalized_message", "session_binding", "target_binding", "recent_ledger_hash", "runtime_config_version"],
       hit: false,
-      state: "not_checked_in_legacy_planner",
+      state: "not_checked",
     },
     fallback: {
       fail_closed_route: String(cfg.fail_closed_route || "runner"),
@@ -904,7 +904,7 @@ function buildRouterDecisionV2({
       retry_cap: Number(routeBudget?.retry_cap || 0),
     },
     confidence: Number(judge.confidence || policyRouter?.route_guard?.confidence || 0),
-    decision_source: String(policyRouter?.decision_source || "legacy_planner_until_stateless_judge_live"),
+    decision_source: String(policyRouter?.decision_source || "policy_judge_unavailable_fallback"),
     reason_codes: Array.isArray(policyRouter?.route_guard?.reason_codes) ? [...policyRouter.route_guard.reason_codes] : [],
     correlation: correlation && typeof correlation === "object" ? { ...correlation } : {},
     task_preview: normalizedText(task).slice(0, 240),

@@ -24,6 +24,7 @@ Output:
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import re
 from functools import lru_cache
@@ -32,6 +33,15 @@ from typing import Iterable
 from octopus_config import load_octopus_config
 from worker_taxonomy import infer_worker_pool as taxonomy_infer_worker_pool
 
+# ═══════════════════════════════════════════════════════════════
+# DEPRECATION NOTICE (2026-04-12, R8 cleanup)
+# This module's route scoring logic is superseded by the Node runtime
+# extension (extensions/octoclaw-runtime/). Only infer_route() is called
+# externally, and it delegates to _infer_route_via_node().
+# The functions below (lines ~1-1740) are Python parity code kept for
+# eval/replay compatibility. Do NOT add new callers.
+# Removal planned for R8+1 after full eval migration.
+# ═══════════════════════════════════════════════════════════════
 
 DEFAULT_ROUTE_LANGUAGE_PACKS = ("zh", "en")
 OPTIONAL_ROUTE_LANGUAGE_PACKS = ("ja", "ko", "es", "pt", "ru")
@@ -1739,7 +1749,7 @@ def infer_route(task: str, command: str = "", metadata: dict[str, Any] | None = 
 _infer_route_legacy = infer_route
 
 
-def _infer_route_via_node(task: str, command: str = "", metadata: dict | None = None) -> dict:
+def _infer_route_via_node_subprocess(task: str, command: str = "", metadata: dict | None = None) -> dict:
     """Compatibility shim: Node runtime is the source of truth for route policy."""
     import subprocess
     from pathlib import Path
@@ -1764,6 +1774,42 @@ console.log(JSON.stringify(value));
         check=True,
     )
     return json.loads(result.stdout)
+
+
+_node_bridge = None
+
+
+def _get_node_bridge():
+    global _node_bridge
+    if _node_bridge is not None and _node_bridge.is_alive():
+        return _node_bridge
+    from node_bridge import NodeBridge
+    from node_runtime import ensure_node_environment, resolve_node_bin
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parents[1]
+    bridge_script = repo_root / "extensions" / "octoclaw-runtime" / "bridge.js"
+    env = ensure_node_environment()
+    _node_bridge = NodeBridge(str(bridge_script), resolve_node_bin(), env)
+    _node_bridge.start()
+    return _node_bridge
+
+
+def _shutdown_bridge():
+    global _node_bridge
+    if _node_bridge is not None:
+        _node_bridge.stop()
+        _node_bridge = None
+
+
+atexit.register(_shutdown_bridge)
+
+
+def _infer_route_via_node(task: str, command: str = "", metadata: dict | None = None) -> dict:
+    try:
+        bridge = _get_node_bridge()
+        return bridge.call("inferRoute", task=task, command=command, metadata=metadata or {})
+    except Exception:
+        return _infer_route_via_node_subprocess(task, command, metadata)
 
 
 def infer_route(task: str, command: str = "", metadata: dict | None = None) -> dict:

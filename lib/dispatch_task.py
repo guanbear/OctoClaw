@@ -49,6 +49,17 @@ RUNNER_POOL_DEFAULTS = {
     "legacy_runner_fallback": True,
 }
 
+ROUTE_TIMEOUT_TIERS = {
+    "runner": 12,
+    "spawn_single": 45,
+    "spawn_multi": 120,
+    "direct": 5,
+}
+
+def route_timeout_seconds(route: str, default: int = 12) -> int:
+    """Return wait timeout based on route type."""
+    return ROUTE_TIMEOUT_TIERS.get(route, default)
+
 MULTI_STEP_POLICY_PRESETS = {
     "planner": {
         "worker_pool": "octoclaw-research",
@@ -124,7 +135,7 @@ def legacy_policy_fallback_enabled() -> bool:
 
 
 def build_legacy_policy_decision(task: str, command: str, metadata: dict | None = None, *, force_route: str = "") -> dict:
-    from octoclaw_policy import build_decision as legacy_build_decision  # parity-only fallback
+    from octoclaw_policy import build_decision as legacy_build_decision  # DEPRECATED: parity-only fallback, remove in R8+1
 
     return legacy_build_decision(task, command, metadata or {}, force_route=force_route)
 
@@ -1480,7 +1491,14 @@ def dispatch_runner(args) -> dict:
                 )
                 return response
     if args.wait:
-        wait_timeout = 1 if response.get("runner_execution_mode") == "ondemand" else args.wait_timeout_seconds
+        route = response.get("route", "")
+        explicit_timeout = args.wait_timeout_seconds
+        if explicit_timeout > 0:
+            wait_timeout = explicit_timeout
+        else:
+            wait_timeout = route_timeout_seconds(route)
+        if response.get("runner_execution_mode") == "ondemand":
+            wait_timeout = 1
         response["wait"] = wait_for_runner_result(payload.get("id", ""), wait_timeout)
     response["handoff"] = build_runner_handoff(args.task, response, response.get("wait"))
     return response
@@ -1617,7 +1635,7 @@ def main():
     parser.add_argument("--metadata-json", dest="metadata_json", default="")
     parser.add_argument("--policy-json", default="")
     parser.add_argument("--wait", action="store_true")
-    parser.add_argument("--wait-timeout-seconds", dest="wait_timeout_seconds", type=int, default=12)
+    parser.add_argument("--wait-timeout-seconds", dest="wait_timeout_seconds", type=int, default=0)
     args = parser.parse_args()
 
     task = args.task.strip()

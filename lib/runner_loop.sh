@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED (2026-04-12, R9): runner_loop.sh is legacy compat.
+# Runner pool is managed by the Node runtime extension via gateway.
+# This script will be removed in a future release. Do not add new dependencies.
 # runner_loop.sh — legacy worker loop
 # 默认架构下 runner 不再依赖独立 shell loop；如需继续使用旧 loop，
 # 必须显式设置 OCTOCLAW_ENABLE_LEGACY_LOOPS=1。

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK: "1"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run Quick Tests
+        run: python3 -B -m unittest tests.test_router_policy_v2_goldens tests.test_route_goldens tests.test_runtime_policy tests.test_harness_synthetics tests.test_policy_judge_shadow_report tests.test_runtime_policy_replay_schema tests.test_dispatch_task tests.test_runner_runtime tests.test_octoclaw_runtime_extension
+
+      - name: Run Full Tests
+        run: python3 lib/harness_gate.py --preset full

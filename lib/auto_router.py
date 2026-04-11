@@ -395,7 +395,7 @@ def main() -> None:
     metadata = json.loads(args.metadata_json) if args.metadata_json else {}
     route_hint = json.loads(args.route_hint_json) if args.route_hint_json else {}
     try:
-        from octoclaw_policy import build_decision
+        from octoclaw_policy import build_decision  # DEPRECATED: parity-only for CLI eval/replay, remove in R8+1
     except ModuleNotFoundError:  # pragma: no cover - package import path for tests
         from lib.octoclaw_policy import build_decision
     decision = build_decision(args.task, args.command, metadata, args.force_route, route_hint)

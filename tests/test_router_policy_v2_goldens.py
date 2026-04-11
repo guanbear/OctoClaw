@@ -72,7 +72,7 @@ class RouterPolicyV2GoldensTests(unittest.TestCase):
                 self.assertEqual(decision["policy_router_mode"], "model_first")
                 self.assertEqual(
                     decision["policy_router_source"],
-                    expected.get("policy_router_source", "legacy_planner_until_stateless_judge_live"),
+                    expected.get("policy_router_source", "policy_judge_unavailable_fallback"),
                 )
                 self.assertEqual(decision["policy_judge_selected"], "main_grade_model")
                 self.assertFalse(decision["policy_judge_invoked"])

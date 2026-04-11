@@ -35,6 +35,15 @@ from worker_taxonomy import (
     selector_band_for_model_band,
 )
 
+# ═══════════════════════════════════════════════════════════════
+# DEPRECATION NOTICE (2026-04-12, R8 cleanup)
+# This module's policy decision logic is superseded by the Node runtime
+# extension (extensions/octoclaw-runtime/). Only build_decision() is
+# called externally (by auto_router.py and dispatch_task.py).
+# The functions below (lines ~1-1308) are Python parity code kept for
+# eval/replay compatibility. Do NOT add new callers.
+# Removal planned for R8+1 after full eval migration.
+# ═══════════════════════════════════════════════════════════════
 
 SCHEMA_VERSION = "octoclaw.runtime_policy.decision/v1"
 VALID_FORCE_ROUTES = {"", "direct", "runner", "spawn_single", "spawn_multi"}
