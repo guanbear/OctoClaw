@@ -1,8 +1,8 @@
 # OctoClaw 执行计划
 
-> 状态：当前 canonical 执行计划（2026-04-07）  
+> 状态：当前 canonical 执行计划（2026-04-07），近期优先级刷新请同时参考 [`octoclaw-design-refresh-2026-04-12.md`](./octoclaw-design-refresh-2026-04-12.md)  
 > 优先级原则：**承认已完成的第一拍，在此基础上做收口和深化**  
-> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`octoclaw-design-refresh-2026-04-12.md`](./octoclaw-design-refresh-2026-04-12.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 

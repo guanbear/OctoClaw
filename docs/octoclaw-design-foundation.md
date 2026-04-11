@@ -1,8 +1,8 @@
 # OctoClaw 主设计底稿
 
-> 状态：当前 canonical 设计底稿（2026-04-07）  
+> 状态：当前 canonical 设计底稿（2026-04-07），优先级与近期主线请同时参考 [`octoclaw-design-refresh-2026-04-12.md`](./octoclaw-design-refresh-2026-04-12.md)  
 > 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
-> 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-design-refresh-2026-04-12.md`](./octoclaw-design-refresh-2026-04-12.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
 
 ---
 
