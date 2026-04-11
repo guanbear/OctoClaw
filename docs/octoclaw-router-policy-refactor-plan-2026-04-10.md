@@ -81,14 +81,14 @@ ACK timer
   - `local_instance lookup -> direct`
   - `upstream_project lookup -> runner`
   - `runner unavailable -> explicit degraded mode`
-- front gate / judge / dispatch / follow-up 仍存在“多次解释同一句话”的风险；后续需要把语义主判权收敛到单次 stateless judge，并让 downstream 只消费 sealed decision / execution ledger。
+- front gate / judge / dispatch / follow-up 仍存在"多次解释同一句话"的风险；后续需要把语义主判权收敛到单次 stateless judge，并让 downstream 只消费 sealed decision / execution ledger。
 - `policy_judge` 虽然已经 live，但 judge reliability 仍有明显缺口：
   - 某些 `fresh_live_lookup` 请求可在 timeout budget 内由 main-grade judge 成功产出 `runner`
   - 某些 `control_observer` / 短问句会直接 `timeout`
   - judge 一旦超时，当前实现会直接掉回 planner fallback，而不是先尝试第二个 judge 候选
   - 这会让同一轮真实聊天里混入 `policy_judge` 与 `policy_judge_fallback` 两种 decision source，继续放大 ACK、dispatch、final answer 的漂移
 
-因此，接下来的第一优先级不再只是“继续补路由 case”，而是先把 judge reliability 收稳：
+因此，接下来的第一优先级不再只是"继续补路由 case"，而是先把 judge reliability 收稳：
 
 - **K1 Judge Cascade + SLA**
   - `main_grade_model` 继续作为默认主 judge
