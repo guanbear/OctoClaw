@@ -28,15 +28,16 @@ class PolicyJudgeShadowReportTests(unittest.TestCase):
         )
         payload = json.loads(result.stdout)
         self.assertEqual(payload["schema_version"], "octoclaw.policy_judge.shadow_report/v1")
-        self.assertEqual(payload["summary"]["total_cases"], 8)
+        self.assertEqual(payload["summary"]["total_cases"], 10)
         self.assertEqual(payload["summary"]["shadow_compared"], 2)
-        self.assertEqual(payload["summary"]["shadow_matched"], 1)
-        self.assertEqual(payload["summary"]["shadow_drifted"], 1)
-        self.assertEqual(payload["summary"]["missing_shadow_cases"], 6)
+        self.assertEqual(payload["summary"]["shadow_matched"], 0)
+        self.assertEqual(payload["summary"]["shadow_drifted"], 2)
+        self.assertEqual(payload["summary"]["missing_shadow_cases"], 8)
         self.assertIn("route", payload["summary"]["drift_fields"])
         drifted = [item for item in payload["records"] if not item["matches_main"]]
-        self.assertEqual(len(drifted), 1)
-        self.assertEqual(drifted[0]["task"], "帮我改下代码并跑测试")
+        self.assertEqual(len(drifted), 2)
+        self.assertEqual(drifted[0]["task"], "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向")
+        self.assertEqual(drifted[1]["task"], "帮我改下代码并跑测试")
 
 
 if __name__ == "__main__":

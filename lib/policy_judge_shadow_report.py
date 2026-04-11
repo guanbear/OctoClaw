@@ -10,6 +10,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from node_runtime import ensure_node_environment, resolve_node_bin
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -75,10 +77,11 @@ const payload = tasks.map((task) => {{
 console.log(JSON.stringify(payload));
 """
     result = subprocess.run(
-        ["node", "--input-type=module", "-e", script],
+        [resolve_node_bin(), "--input-type=module", "-e", script],
         capture_output=True,
         text=True,
         cwd=str(PROJECT_DIR),
+        env=ensure_node_environment(),
         check=True,
     )
     data = json.loads(result.stdout)

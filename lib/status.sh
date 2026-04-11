@@ -291,7 +291,9 @@ else:
     if workbench_mode == "tmux" and tmux_session_name:
         runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
         patrol_window = str(workbench.get("tmux_patrol_window_name", "patrol") or "patrol").strip() or "patrol"
-        print(f"🧰 Optional workbench：tmux {tmux_session_name} · runner={runner_window} · patrol={patrol_window}")
+        workbench_snapshot = runtime_snapshot.get("workbench", {}) if isinstance(runtime_snapshot.get("workbench", {}), dict) else {}
+        tmux_health = "ok" if bool(workbench_snapshot.get("tmux_healthy")) else str(workbench_snapshot.get("tmux_reason", "") or "unknown")
+        print(f"🧰 Optional workbench：tmux {tmux_session_name} · runner={runner_window} · patrol={patrol_window} · {tmux_health}")
     print("━━━━━━━━━━━━━━━━━━━━")
 
 if fmt == "table":

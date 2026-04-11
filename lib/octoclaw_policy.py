@@ -1147,6 +1147,13 @@ def build_decision(
             "parallel_gain_band": str(route_meta.get("parallel_gain_band", "") or ""),
             "artifact_required": bool(route_meta.get("needs_artifact", False)),
             "durable_runtime_required": bool(route_meta.get("needs_durable_runtime", False)),
+            "runner_materialization_available": bool(route_meta.get("runner_materialization_available", False)),
+            "runner_materialization_kind": str(route_meta.get("runner_materialization_kind", "") or ""),
+            "runner_playbook": (
+                dict(route_meta.get("runner_playbook", {}))
+                if route == "runner" and isinstance(route_meta.get("runner_playbook", {}), dict)
+                else {}
+            ),
         },
         "budget_policy": route_budget,
         "model_policy": {
@@ -1222,6 +1229,7 @@ def _build_decision_via_node(
 
     repo_root = Path(__file__).resolve().parents[1]
     extension_path = repo_root / "extensions" / "octoclaw-runtime" / "index.js"
+    from node_runtime import ensure_node_environment, resolve_node_bin
     script = f"""
 import {{ __octoclawTest }} from {json.dumps(str(extension_path))};
 const task = {json.dumps(task or "", ensure_ascii=False)};
@@ -1231,15 +1239,15 @@ const options = {{
   forceRoute: {json.dumps(force_route or "", ensure_ascii=False)},
   routeHint: {json.dumps(route_hint or {}, ensure_ascii=False)}
 }};
-const value = __octoclawTest.buildDecision(task, options);
+const value = await __octoclawTest.resolveStatelessPolicyDecision(task, options);
 console.log(JSON.stringify(value));
 """
     result = subprocess.run(
-        ["node", "--input-type=module", "-e", script],
+        [resolve_node_bin(), "--input-type=module", "-e", script],
         capture_output=True,
         text=True,
         cwd=str(repo_root),
-        env={**os.environ},
+        env=ensure_node_environment(),
         check=True,
     )
     return json.loads(result.stdout)

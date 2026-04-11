@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -56,6 +58,48 @@ def normalize_runner_mode(value: str) -> str:
     if text == "daemon":
         return "daemon"
     return ""
+
+
+def probe_tmux_session(session_name: str, *, runner_window_name: str = "runner") -> dict[str, Any]:
+    session = str(session_name or "").strip()
+    window = str(runner_window_name or "runner").strip() or "runner"
+    if not session:
+        return {"required": False, "available": False, "healthy": False, "reason": "not_configured"}
+    tmux_bin = shutil.which("tmux")
+    if not tmux_bin:
+        return {"required": True, "available": False, "healthy": False, "reason": "tmux_missing", "session_name": session, "runner_window_name": window}
+    has_session = subprocess.run(
+        [tmux_bin, "has-session", "-t", session],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if has_session.returncode != 0:
+        return {
+            "required": True,
+            "available": True,
+            "healthy": False,
+            "reason": "tmux_session_missing",
+            "session_name": session,
+            "runner_window_name": window,
+        }
+    windows = subprocess.run(
+        [tmux_bin, "list-windows", "-t", session, "-F", "#{window_name}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    window_names = [line.strip() for line in str(windows.stdout or "").splitlines() if line.strip()]
+    window_present = window in window_names
+    return {
+        "required": True,
+        "available": True,
+        "healthy": window_present,
+        "reason": "ok" if window_present else "tmux_runner_window_missing",
+        "session_name": session,
+        "runner_window_name": window,
+        "windows": window_names[:20],
+    }
 
 
 def parse_iso(value: str) -> datetime | None:
@@ -302,7 +346,14 @@ def build_runtime_snapshot(
     workbench = workbench_config(load_octopus_config())
     workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
     workbench_session = str(workbench.get("tmux_session_name", "") or "").strip()
+    workbench_runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
     optional_workbench = bool(workbench_mode == "tmux" and workbench_session)
+    tmux_status = probe_tmux_session(workbench_session, runner_window_name=workbench_runner_window) if optional_workbench else {
+        "required": False,
+        "available": False,
+        "healthy": False,
+        "reason": "not_configured",
+    }
     return {
         "observed_at": datetime.now(timezone.utc).astimezone().isoformat(),
         "workspace": workspace,
@@ -350,6 +401,12 @@ def build_runtime_snapshot(
             "optional_backend": optional_workbench,
             "supervisor_mode": workbench_mode,
             "tmux_session_name": workbench_session if optional_workbench else "",
+            "tmux_runner_window_name": workbench_runner_window if optional_workbench else "",
+            "tmux_required": bool(tmux_status.get("required", False)),
+            "tmux_available": bool(tmux_status.get("available", False)),
+            "tmux_healthy": bool(tmux_status.get("healthy", False)),
+            "tmux_reason": str(tmux_status.get("reason", "") or "").strip(),
+            "tmux_windows": list(tmux_status.get("windows", []) or [])[:20],
         },
     }
 

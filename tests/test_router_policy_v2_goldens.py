@@ -9,14 +9,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTENSION_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "index.js"
 FIXTURES_PATH = REPO_ROOT / "tests" / "fixtures" / "router-policy-goldens-v2.json"
+TEST_ENV = {"OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK": "1"}
 
 
 def _run_node_decisions(tasks: list[str]) -> list[dict]:
     script = f"""
 import {{ __octoclawTest }} from {json.dumps(str(EXTENSION_PATH))};
 const tasks = {json.dumps(tasks, ensure_ascii=False)};
-const payload = tasks.map((task) => {{
-  const decision = __octoclawTest.buildDecision(task);
+const payload = await Promise.all(tasks.map(async (task) => {{
+  const decision = await __octoclawTest.resolveStatelessPolicyDecision(task);
   return {{
     task,
     route: decision.route_decision.route,
@@ -41,7 +42,7 @@ const payload = tasks.map((task) => {{
     turn_id: decision.correlation.turn_id,
     decision_id: decision.correlation.decision_id
   }};
-}});
+}}));
 console.log(JSON.stringify(payload));
 """
     result = subprocess.run(
@@ -49,7 +50,7 @@ console.log(JSON.stringify(payload));
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
-        env={**os.environ},
+        env={**os.environ, **TEST_ENV},
         check=True,
     )
     return json.loads(result.stdout)

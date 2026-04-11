@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTENSION_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "index.js"
 ROUTE_SCRIPT = REPO_ROOT / "lib" / "octoclaw_route.py"
 POLICY_SCRIPT = REPO_ROOT / "lib" / "octoclaw_policy.py"
+TEST_ENV = {"OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK": "1"}
 
 
 def _run_node_expression(expression: str, *, workspace: str) -> dict:
@@ -21,7 +22,7 @@ import {{ __octoclawTest }} from {json.dumps(str(EXTENSION_PATH))};
 const value = await ({expression});
 console.log(JSON.stringify(value));
 """
-    env = {**os.environ, "WORKSPACE": workspace}
+    env = {**os.environ, **TEST_ENV, "WORKSPACE": workspace}
     result = subprocess.run(
         ["node", "--input-type=module", "-e", script],
         capture_output=True,
@@ -89,7 +90,7 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
             json.dump(payload, fh)
 
     def _run_python_route(self, workspace: str, task: str, *, command: str = "") -> dict:
-        env = {**os.environ, "WORKSPACE": workspace}
+        env = {**os.environ, **TEST_ENV, "WORKSPACE": workspace}
         cmd = ["python3", str(ROUTE_SCRIPT), "--task", task]
         if command:
             cmd.extend(["--command", command])
@@ -106,7 +107,7 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
         force_route: str = "",
         route_hint: Optional[dict] = None,
     ) -> dict:
-        env = {**os.environ, "WORKSPACE": workspace}
+        env = {**os.environ, **TEST_ENV, "WORKSPACE": workspace}
         cmd = ["python3", str(POLICY_SCRIPT), "--task", task]
         if command:
             cmd.extend(["--command", command])
@@ -202,7 +203,7 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                     self._write_runtime_config(js_workspace, case["config"])
                     python_payload = self._run_python_route(py_workspace, case["task"])
                     js_payload = _run_node_expression(
-                        f"__octoclawTest.inferRoute({json.dumps(case['task'])})",
+                        f"__octoclawTest.inferRouteWithConversationContext({json.dumps(case['task'])})",
                         workspace=js_workspace,
                     )
                     self.assertEqual(js_payload, python_payload)
@@ -341,7 +342,7 @@ class RuntimePolicyJsParityTests(unittest.TestCase):
                         force_route=case.get("force_route", ""),
                     )
                     js_payload = _run_node_expression(
-                        "__octoclawTest.buildRawDecision("
+                        "await __octoclawTest.resolveStatelessPolicyDecision("
                         f"{json.dumps(case['task'])}, "
                         f"{json.dumps({'metadata': case.get('metadata', {}), 'routeHint': case.get('route_hint', {}), 'forceRoute': case.get('force_route', '')})}"
                         ")",

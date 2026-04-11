@@ -1741,9 +1741,9 @@ _infer_route_legacy = infer_route
 
 def _infer_route_via_node(task: str, command: str = "", metadata: dict | None = None) -> dict:
     """Compatibility shim: Node runtime is the source of truth for route policy."""
-    import os
     import subprocess
     from pathlib import Path
+    from node_runtime import ensure_node_environment, resolve_node_bin
 
     repo_root = Path(__file__).resolve().parents[1]
     extension_path = repo_root / "extensions" / "octoclaw-runtime" / "index.js"
@@ -1752,15 +1752,15 @@ import {{ __octoclawTest }} from {json.dumps(str(extension_path))};
 const task = {json.dumps(task or "", ensure_ascii=False)};
 const command = {json.dumps(command or "", ensure_ascii=False)};
 const metadata = {json.dumps(metadata or {}, ensure_ascii=False)};
-const value = __octoclawTest.inferRoute(task, command, metadata);
+const value = __octoclawTest.inferRouteWithConversationContext(task, command, metadata);
 console.log(JSON.stringify(value));
 """
     result = subprocess.run(
-        ["node", "--input-type=module", "-e", script],
+        [resolve_node_bin(), "--input-type=module", "-e", script],
         capture_output=True,
         text=True,
         cwd=str(repo_root),
-        env={**os.environ},
+        env=ensure_node_environment(),
         check=True,
     )
     return json.loads(result.stdout)

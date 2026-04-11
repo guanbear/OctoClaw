@@ -10,6 +10,7 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTENSION_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "index.js"
 POLICY_CONFIG_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "policy" / "config.js"
+TEST_ENV = {"OCTOCLAW_POLICY_JUDGE_DISABLE_NETWORK": "1"}
 
 
 def run_runtime_helper(expression: str, env: Optional[dict] = None) -> dict:
@@ -23,7 +24,7 @@ console.log(JSON.stringify(value));
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
-        env={**os.environ, **(env or {})},
+        env={**os.environ, **TEST_ENV, **(env or {})},
         check=True,
     )
     return json.loads(result.stdout)
@@ -40,7 +41,7 @@ console.log(JSON.stringify(value));
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
-        env={**os.environ, **(env or {})},
+        env={**os.environ, **TEST_ENV, **(env or {})},
         check=True,
     )
     return json.loads(result.stdout)
@@ -135,6 +136,17 @@ Sender (untrusted metadata):
         )
 
         self.assertEqual(payload, "你是怎么查的")
+
+    def test_extract_prompt_text_unwraps_codex_slack_e2e_wrapper(self) -> None:
+        payload = run_runtime_helper(
+            r"""__octoclawTest.extractPromptText({
+                prompt: `[codex-slack-e2e scenario=custom_1] 这是自动化验收消息。只基于本条里的用户问题作答，并正常回复到 Slack。
+
+当前用户问题：你的control ui访问地址是啥`
+            })"""
+        )
+
+        self.assertEqual(payload, "你的control ui访问地址是啥")
 
     def test_prefers_custom_im_session_key_over_generic_session_id(self) -> None:
         payload = run_runtime_helper(
@@ -1247,10 +1259,11 @@ Sender (untrusted metadata):
     def test_runner_workflow_tool_set_includes_dispatch_and_excludes_web_fetch(self) -> None:
         payload = run_runtime_helper(
             """(() => {
-                const decision = __octoclawTest.buildDecision("看下 8080 端口开了没");
+                const decision = __octoclawTest.buildDecision("检查一下 nginx error log 最近 80 行，然后总结问题");
                 return {
                   route: decision.route_decision.route,
                   workContract: decision.route_decision.work_contract,
+                  playbookKind: decision.route_decision.runner_playbook.kind || "",
                   tools: Array.from(__octoclawTest.runnerWorkflowTools(decision, "octoclaw_route_hint")).sort()
                 };
             })()"""
@@ -1258,13 +1271,14 @@ Sender (untrusted metadata):
 
         self.assertEqual(payload["route"], "runner")
         self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertEqual(payload["playbookKind"], "local_file_probe")
         self.assertIn("octoclaw_dispatch", payload["tools"])
         self.assertNotIn("web_fetch", payload["tools"])
 
     def test_runner_workflow_enforcement_blocks_generic_external_tools(self) -> None:
         payload = run_runtime_helper(
             """(() => {
-                const decision = __octoclawTest.buildDecision("看下 8080 端口开了没");
+                const decision = __octoclawTest.buildDecision("检查一下 nginx error log 最近 80 行，然后总结问题");
                 return {
                   blocked: __octoclawTest.workflowEnforcementRule(decision, "web_fetch", "octoclaw_route_hint"),
                   allowed: __octoclawTest.workflowEnforcementRule(decision, "octoclaw_dispatch", "octoclaw_route_hint")
@@ -1276,6 +1290,26 @@ Sender (untrusted metadata):
         self.assertEqual(payload["blocked"]["route"], "runner")
         self.assertIn("octoclaw_dispatch", payload["blocked"]["allowedTools"])
         self.assertFalse(payload["allowed"]["block"])
+
+    def test_probe_without_runner_materialization_falls_back_to_direct(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("看下 8080 端口开了没");
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  runnerMaterializationAvailable: Boolean(decision.route_decision.runner_materialization_available),
+                  runnerPlaybook: decision.route_decision.runner_playbook || {},
+                  reasonCodes: decision.route_decision.reason_codes
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "fast_local_check")
+        self.assertFalse(payload["runnerMaterializationAvailable"])
+        self.assertEqual(payload["runnerPlaybook"], {})
+        self.assertIn("prefer_direct_for_local_surface_probe", payload["reasonCodes"])
 
     def test_workflow_meta_question_stays_in_direct_control_lane(self) -> None:
         payload = run_runtime_helper(
@@ -1392,7 +1426,7 @@ Sender (untrusted metadata):
         self.assertEqual(payload["helperText"], payload["ack"]["text"])
         self.assertTrue(payload["shouldSend"])
 
-    def test_bounded_github_update_lookup_prefers_runner_pre_dispatch_ack(self) -> None:
+    def test_bounded_github_update_lookup_prefers_direct_latency_ack(self) -> None:
         payload = run_runtime_helper(
             """(() => {
                 const decision = __octoclawTest.buildDecision("查一下 OctoClaw 项目在 GitHub 上今天（2026-04-07）有更新吗");
@@ -1407,15 +1441,15 @@ Sender (untrusted metadata):
             })()"""
         )
 
-        self.assertEqual(payload["route"], "runner")
-        self.assertEqual(payload["taskClass"], "fast_tool_check")
-        self.assertEqual(payload["workContract"], "inspect_report")
-        self.assertTrue(payload["ack"]["required"])
-        self.assertIn("最新更新", payload["ack"]["text"])
-        self.assertFalse(payload["latencyAck"]["required"])
-        self.assertFalse(payload["shouldSendLatencyAck"])
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "simple_lookup")
+        self.assertEqual(payload["workContract"], "answer_now")
+        self.assertFalse(payload["ack"]["required"])
+        self.assertTrue(payload["latencyAck"]["required"])
+        self.assertIn("最新更新", payload["latencyAck"]["text"])
+        self.assertTrue(payload["shouldSendLatencyAck"])
 
-    def test_bounded_openclaw_update_lookup_uses_runner_pre_dispatch_ack(self) -> None:
+    def test_bounded_openclaw_update_lookup_uses_direct_latency_ack(self) -> None:
         payload = run_runtime_helper(
             """(() => {
                 const decision = __octoclawTest.buildDecision("你再看下 OpenClaw有啥更新 尤其是Memory方向");
@@ -1424,18 +1458,20 @@ Sender (untrusted metadata):
                   taskClass: decision.route_decision.task_class,
                   workContract: decision.route_decision.work_contract,
                   ack: decision.pre_dispatch_ack,
-                  shouldSend: __octoclawTest.shouldSendPreDispatchAck(decision, {}, { trigger: "message" })
+                  latencyAck: decision.latency_ack,
+                  shouldSend: __octoclawTest.shouldSendLatencyAck(decision, {}, { trigger: "message" }, "web_fetch")
                 };
             })()"""
         )
 
-        self.assertEqual(payload["route"], "runner")
-        self.assertEqual(payload["taskClass"], "fast_tool_check")
-        self.assertEqual(payload["workContract"], "inspect_report")
-        self.assertTrue(payload["ack"]["required"])
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "simple_lookup")
+        self.assertEqual(payload["workContract"], "answer_now")
+        self.assertFalse(payload["ack"]["required"])
+        self.assertTrue(payload["latencyAck"]["required"])
         self.assertTrue(payload["shouldSend"])
 
-    def test_wrapped_bounded_openclaw_update_lookup_keeps_runner_pre_dispatch_ack(self) -> None:
+    def test_wrapped_bounded_openclaw_update_lookup_keeps_direct_latency_ack(self) -> None:
         payload = run_runtime_helper(
             r"""(() => {
                 const prompt = __octoclawTest.extractPromptText({
@@ -1458,15 +1494,17 @@ Sender (untrusted metadata):
                   extracted: prompt,
                   route: decision.route_decision.route,
                   taskClass: decision.route_decision.task_class,
-                  ack: decision.pre_dispatch_ack
+                  ack: decision.pre_dispatch_ack,
+                  latencyAck: decision.latency_ack
                 };
             })()"""
         )
 
         self.assertEqual(payload["extracted"], "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向")
-        self.assertEqual(payload["route"], "runner")
-        self.assertEqual(payload["taskClass"], "fast_tool_check")
-        self.assertTrue(payload["ack"]["required"])
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "simple_lookup")
+        self.assertFalse(payload["ack"]["required"])
+        self.assertTrue(payload["latencyAck"]["required"])
 
     def test_wrapped_controlui_prompt_does_not_accidentally_delegate(self) -> None:
         payload = run_runtime_helper(
@@ -1713,12 +1751,12 @@ Sender (untrusted metadata):
             self.assertEqual(payload["intentPacket"]["schema_version"], "octoclaw.intent_packet/v1")
             self.assertEqual(payload["intentPacket"]["signals"]["lookup_mentions"][0]["project"], "openclaw")
             self.assertFalse(payload["intentPacket"]["judge"]["eligible"])
-            self.assertEqual(payload["route"], "runner")
-            self.assertEqual(payload["taskClass"], "fast_tool_check")
+            self.assertEqual(payload["route"], "direct")
+            self.assertEqual(payload["taskClass"], "simple_lookup")
             self.assertEqual(payload["routerRequestKind"], "fresh_external_lookup")
             self.assertIn("web_lookup", payload["routerEvidenceRequired"])
-            self.assertTrue(payload["preDispatchAckRequired"])
-            self.assertFalse(payload["latencyAckRequired"])
+            self.assertFalse(payload["preDispatchAckRequired"])
+            self.assertTrue(payload["latencyAckRequired"])
 
     def test_policy_decision_carries_signal_packet_and_stateless_judge_contract(self) -> None:
         payload = run_runtime_helper(
@@ -1745,7 +1783,7 @@ Sender (untrusted metadata):
         self.assertEqual(payload["intentClass"], "fresh_live_lookup")
         self.assertEqual(payload["packetSource"], "deterministic_live_lookup_classifier")
         self.assertEqual(payload["lookupProject"], "openclaw")
-        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["route"], "direct")
         self.assertEqual(payload["policyRouterMode"], "model_first")
         self.assertEqual(payload["policyRouterSource"], "deterministic_front_gate")
         self.assertEqual(payload["selectedJudge"], "main_grade_model")
@@ -1771,7 +1809,7 @@ Sender (untrusted metadata):
 
         self.assertEqual(payload["intentClass"], "undetermined")
         self.assertTrue(payload["judgeEligible"])
-        self.assertEqual(payload["invocationState"], "eligible_not_invoked_runtime_adapter_pending")
+        self.assertEqual(payload["invocationState"], "eligible_not_invoked")
         self.assertIn(payload["route"], ["direct", "runner", "spawn_single", "spawn_multi"])
 
     def test_stateless_policy_judge_result_overrides_legacy_route_when_valid(self) -> None:
@@ -1991,6 +2029,135 @@ Sender (untrusted metadata):
         self.assertEqual(payload["conversationIntentClass"], "local_surface_lookup")
         self.assertEqual(payload["conversationKind"], "local_surface_lookup")
         self.assertEqual(payload["routerRequestKind"], "surface_query")
+
+    def test_service_health_prompt_prefers_direct_local_surface_lookup(self) -> None:
+        payload = run_runtime_helper(
+            """(async () => {
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  "检查一下服务健康状态",
+                  {
+                    sessionKey: "agent:main:slack:direct:u-health",
+                    sessionId: "sess-health",
+                    trigger: "message",
+                    agentId: "agent:main:main"
+                  },
+                  process.cwd(),
+                  null
+                );
+                const decision = resolved?.decision || {};
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  workContract: decision.route_decision.work_contract,
+                  intentClass: decision.intent_packet?.intent_class || "",
+                  surfaceMentions: decision.intent_packet?.signals?.surface_mentions || [],
+                  conversationKind: decision.request.metadata?.conversation_control?.kind || "",
+                  routerRequestKind: decision.router_decision_v2?.request_kind || "",
+                  routerScope: decision.router_decision_v2?.scope || "",
+                  preDispatchAckRequired: Boolean(decision.pre_dispatch_ack?.required),
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "fast_local_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertEqual(payload["intentClass"], "local_surface_lookup")
+        self.assertIn("service_health", payload["surfaceMentions"])
+        self.assertEqual(payload["conversationKind"], "local_surface_lookup")
+        self.assertEqual(payload["routerRequestKind"], "surface_query")
+        self.assertEqual(payload["routerScope"], "local_host")
+        self.assertFalse(payload["preDispatchAckRequired"])
+
+    def test_local_surface_lookup_bypasses_sticky_runner_in_runtime_context(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-runtime-sticky-") as tmpdir:
+            workspace = Path(tmpdir)
+            sticky_dir = workspace / "tmp" / "octopus"
+            sticky_dir.mkdir(parents=True)
+            (sticky_dir / "route-stickiness.json").write_text(
+                json.dumps(
+                    {
+                        "agent:main:slack:direct:u-control": {
+                            "route": "runner",
+                            "work_type": "ops",
+                            "work_contract": "inspect_report",
+                            "updated_at": "2026-04-11T00:00:00Z",
+                            "applied_count": 0,
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                """(async () => {
+                    const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                      "你的control ui访问地址是啥",
+                      {
+                        sessionKey: "agent:main:slack:direct:u-control",
+                        sessionId: "sess-control-sticky",
+                        trigger: "message",
+                        agentId: "agent:main:main"
+                      },
+                      process.cwd(),
+                      null
+                    );
+                    const decision = resolved?.decision || {};
+                    return {
+                      route: decision.route_decision.route,
+                      taskClass: decision.route_decision.task_class,
+                      mergeNotes: decision.route_hint_policy?.merge_notes || []
+                    };
+                })()""",
+                env={
+                    "WORKSPACE": str(workspace),
+                },
+            )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "fast_local_check")
+        self.assertIn("route_sticky_exempt:local_surface_lookup", payload["mergeNotes"])
+
+    def test_backup_usage_prompt_prefers_direct_local_surface_lookup(self) -> None:
+        payload = run_runtime_helper(
+            """(async () => {
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  "查一下备份使用情况",
+                  {
+                    sessionKey: "agent:main:slack:direct:u-backup",
+                    sessionId: "sess-backup",
+                    trigger: "message",
+                    agentId: "agent:main:main"
+                  },
+                  process.cwd(),
+                  null
+                );
+                const decision = resolved?.decision || {};
+                return {
+                  route: decision.route_decision.route,
+                  taskClass: decision.route_decision.task_class,
+                  workContract: decision.route_decision.work_contract,
+                  intentClass: decision.intent_packet?.intent_class || "",
+                  surfaceMentions: decision.intent_packet?.signals?.surface_mentions || [],
+                  conversationKind: decision.request.metadata?.conversation_control?.kind || "",
+                  routerRequestKind: decision.router_decision_v2?.request_kind || "",
+                  routerScope: decision.router_decision_v2?.scope || "",
+                  preDispatchAckRequired: Boolean(decision.pre_dispatch_ack?.required),
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["taskClass"], "fast_local_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertEqual(payload["intentClass"], "local_surface_lookup")
+        self.assertIn("backup_usage", payload["surfaceMentions"])
+        self.assertEqual(payload["conversationKind"], "local_surface_lookup")
+        self.assertEqual(payload["routerRequestKind"], "surface_query")
+        self.assertEqual(payload["routerScope"], "local_host")
+        self.assertFalse(payload["preDispatchAckRequired"])
 
     def test_pre_dispatch_ack_helper_skips_direct_routes(self) -> None:
         payload = run_runtime_helper(

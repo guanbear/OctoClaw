@@ -63,8 +63,28 @@ const OPERATOR_SURFACE_REGISTRY = [
     scope: "local_surface_lookup",
     patterns: [
       /(control\s*ui|controlui)/iu,
-      /(gateway\s*(ui|status|web)?|网关界面|控制台|web\s*ui|web界面)/iu,
+      /(\bgateway\b\s+(ui|status|web)\b|网关(?:界面|状态)|控制台|web\s*ui|web界面)/iu,
       /((访问|入口|打开|查看).*(地址|url|界面)|(?:地址|url).*(control\s*ui|controlui|gateway|控制台))/iu,
+    ],
+  },
+  {
+    surface_id: "service_health",
+    lane_hint: "runner",
+    scope: "local_surface_lookup",
+    patterns: [
+      /(服务健康|健康状态|服务状态|服务可用性|系统健康状态|gateway状态|gateway health|health check)/iu,
+      /((检查|看下|查下|查一下|看看|确认下|确认一下).*(服务|gateway|系统).*(健康|状态|可用性))/iu,
+      /\b(service health|service status|system health|gateway status|gateway health)\b/iu,
+    ],
+  },
+  {
+    surface_id: "backup_usage",
+    lane_hint: "runner",
+    scope: "local_surface_lookup",
+    patterns: [
+      /(备份使用情况|备份状态|备份空间|备份占用|备份容量|backup usage|backup status|backup storage)/iu,
+      /((检查|看下|查下|查一下|看看|确认下|确认一下).*(备份).*(使用情况|状态|空间|占用|容量))/iu,
+      /\b(check|inspect|verify|show)\b.{0,12}\bbackup\b.{0,12}\b(status|usage|storage|space)\b/iu,
     ],
   },
 ];
@@ -72,18 +92,10 @@ const OPERATOR_SURFACE_REGISTRY = [
 const FRESH_LIVE_LOOKUP_PATTERNS = [
   /(查|查下|查一下|再查|再看|看下|看一下|看看|确认|确认下|确认一下).{0,16}(openclaw|octoclaw).{0,20}(更新|发版|release|版本|changelog|memory|dream)/iu,
   /(openclaw|octoclaw).{0,20}(有啥更新|有什么更新|有没有新的发版|有没有新发版|有没有新的release|有没有新release|最近.*更新|最新.*更新|最近.*发版|最近.*release|新版本)/iu,
+  /((openclaw|octoclaw).{0,48}(github|gitlab|repo|repository|项目|仓库).{0,48}(有更新吗|有没有更新|更新了什么|commit|release|tag|pr|issue|变更|今天|今日|最近)|((github|gitlab|repo|repository|项目|仓库).{0,48}(openclaw|octoclaw).{0,48}(有更新吗|有没有更新|更新了什么|commit|release|tag|pr|issue|变更|今天|今日|最近)))/iu,
   /\b(check|look up|see|verify|confirm)\b.{0,18}\b(openclaw|octoclaw)\b.{0,24}\b(update|updates|release|version|changelog|memory|dream)\b/iu,
+  /\b(openclaw|octoclaw)\b.{0,48}\b(github|gitlab|repo|repository)\b.{0,48}\b(update|updates|release|commit|tag|pr|issue|today|recent)\b/iu,
   /\b(openclaw|octoclaw)\b.{0,24}\b(new release|latest release|recent updates?|latest updates?|what'?s new|changelog)\b/iu,
-];
-
-const DELEGATED_WORK_PATTERNS = [
-  /(实现|落地|重构|修复|改代码|写代码|部署|提交|push|测试|回归|设计下.*再做|一口气完成|系统性修复)/iu,
-  /\b(implement|refactor|fix|patch|deploy|push|commit|test|regression|systematically fix)\b/iu,
-];
-
-const PLAIN_CHAT_PATTERNS = [
-  /(是什么|什么意思|怎么理解|简单说说|解释一下|为啥|为什么|目的是什么)/iu,
-  /\b(what is|what does|explain|why|meaning|purpose)\b/iu,
 ];
 
 const EXPLICIT_COMMAND_PATTERNS = [
@@ -158,6 +170,7 @@ export function isFreshLiveLookupPrompt(prompt = "") {
   if (!text) return false;
   if (isMetaPrompt(text) || isTaskProgressPrompt(text) || isProvenancePrompt(text)) return false;
   if (/(模型|model)/iu.test(text) && /(版本|version)/iu.test(text) && !/(openclaw|octoclaw)/iu.test(text)) return false;
+  if (/(改了啥|改了什么|都有啥提交|今天都有啥提交|提交明细|commit summary|release analysis|分析|总结|报告|写一版)/iu.test(text)) return false;
   return FRESH_LIVE_LOOKUP_PATTERNS.some((pattern) => pattern.test(text));
 }
 
@@ -601,8 +614,6 @@ export function buildSignalPacket(prompt = "") {
       focus: inferFreshLookupFocus(promptText),
       source_hint: "natural_language_live_lookup",
     }] : [],
-    work_shape_mentions: uniqueMatches(promptText, DELEGATED_WORK_PATTERNS, "delegated_work_shape"),
-    chat_shape_mentions: uniqueMatches(promptText, PLAIN_CHAT_PATTERNS, "plain_chat_shape"),
     needs_semantic_judge: true,
   };
 }

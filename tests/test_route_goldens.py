@@ -52,7 +52,7 @@ class RouteGoldensTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory(prefix="octoclaw-route-golden-py-") as py_workspace, tempfile.TemporaryDirectory(prefix="octoclaw-route-golden-js-") as js_workspace:
                     python_payload = self._run_python_route(py_workspace, task)
                     js_payload = _run_node_expression(
-                        f"__octoclawTest.inferRoute({json.dumps(task)})",
+                        f"__octoclawTest.inferRouteWithConversationContext({json.dumps(task)})",
                         workspace=js_workspace,
                     )
                 self.assertEqual(js_payload, python_payload)

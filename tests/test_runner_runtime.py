@@ -450,6 +450,66 @@ class RunnerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["budget_recommendation"]["output_budget"], "low")
         self.assertEqual(payload["execution_contract"]["route_class"], "delegated_runner")
 
+    def test_dispatch_runner_reuses_policy_embedded_runner_plan(self) -> None:
+        args = importlib.import_module("argparse").Namespace(
+            task="检查一下 nginx error log 最近 80 行，然后总结问题",
+            command="",
+            summary="",
+            cwd="/tmp",
+            timeout_seconds=30,
+            id="runner-policy-embedded-1",
+            model_band="fast",
+            wait=False,
+            wait_timeout_seconds=12,
+            _policy_decision={
+                "request": {"metadata": {}, "session_key": "agent:main:slack:direct:u998"},
+                "route_decision": {
+                    "route": "runner",
+                    "runner_playbook": {
+                        "kind": "local_file_probe",
+                        "summary": "查看 nginx error log 最近 80 行",
+                        "command": "tail -n 80 /var/log/nginx/error.log",
+                        "probe_spec": {
+                            "kind": "local_file_probe",
+                            "path": "/var/log/nginx/error.log",
+                            "mode": "tail",
+                            "line_count": 80,
+                        },
+                    },
+                },
+            },
+            _runner_playbook=None,
+        )
+
+        proc = type("Proc", (), {"returncode": 0, "stdout": json.dumps({"id": "runner-policy-embedded-1", "status": "queued"}), "stderr": ""})()
+        with patch.object(dispatch_task, "infer_runner_playbook", side_effect=AssertionError("should reuse policy decision playbook")), patch.object(
+            dispatch_task,
+            "runner_dispatch_runtime_resolution",
+            return_value={
+                "runner_pool_enabled": True,
+                "max_queue_size": 20,
+                "busy_strategy": "queue_or_progress",
+                "legacy_runner_fallback": True,
+                "queue_counts": {"queued": 0, "running": 0, "done": 0, "failed": 0, "total": 0, "active": 0},
+                "queue_pressure_band": "none",
+                "runner_health_snapshot": {"present": True, "healthy": True, "reason": "ok", "worker_id": "runner-a"},
+                "dispatch_mode": "daemon",
+                "can_dispatch": True,
+                "block_reason": "",
+                "block_detail": "",
+                "fallback_permitted": False,
+            },
+        ), patch.object(
+            dispatch_task.subprocess,
+            "run",
+            return_value=proc,
+        ):
+            payload = dispatch_task.dispatch_runner(args)
+
+        self.assertEqual(payload["job"]["id"], "runner-policy-embedded-1")
+        self.assertEqual(payload["runner_plan"]["kind"], "local_file_probe")
+        self.assertEqual(payload["playbook"]["command"], "tail -n 80 /var/log/nginx/error.log")
+
     def test_dispatch_runner_uses_on_demand_loop_when_waiting_without_healthy_runner(self) -> None:
         args = importlib.import_module("argparse").Namespace(
             task="检查一下 nginx error log 最近 80 行，然后总结问题",

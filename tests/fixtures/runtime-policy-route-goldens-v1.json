@@ -75,7 +75,7 @@
     "task": "检查一下 nginx error log 最近 80 行，然后总结问题",
     "expected": {
       "system_preferred_route": "runner",
-      "task_class": "fast_tool_check",
+      "task_class": "fast_local_check",
       "work_contract_hint": "inspect_report",
       "protected_lane": ""
     }
@@ -101,9 +101,9 @@
   {
     "task": "帮我查下openclaw 又有新版本了吗 有啥新特性",
     "expected": {
-      "system_preferred_route": "runner",
-      "task_class": "fast_tool_check",
-      "work_contract_hint": "inspect_report",
+      "system_preferred_route": "direct",
+      "task_class": "simple_lookup",
+      "work_contract_hint": "answer_now",
       "protected_lane": ""
     }
   }

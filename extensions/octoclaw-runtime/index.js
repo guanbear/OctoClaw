@@ -1095,8 +1095,20 @@ function unwrapImRelayPrompt(raw = "") {
   return "";
 }
 
+function unwrapCodexHarnessPrompt(raw = "") {
+  const text = String(raw || "").trim();
+  if (!text.startsWith("[codex-slack-e2e")) return "";
+  const match = text.match(/当前用户问题：([\s\S]+)$/u);
+  if (!match?.[1]) return "";
+  return String(match[1]).trim();
+}
+
 function extractPromptText(event = {}) {
   const prompt = String(event?.prompt || "").trim();
+  const harnessPrompt = unwrapCodexHarnessPrompt(prompt);
+  if (harnessPrompt) {
+    return harnessPrompt;
+  }
   if (prompt.startsWith("[Queued messages while agent was busy]")) {
     const busyMessages = prompt
       .split(/\r?\n/u)
@@ -1129,6 +1141,10 @@ function extractPromptText(event = {}) {
       continue;
     }
     const messageText = extractMessageText(message?.content);
+    const harnessText = unwrapCodexHarnessPrompt(messageText);
+    if (harnessText) {
+      return harnessText;
+    }
     const relayText = unwrapImRelayPrompt(messageText);
     if (relayText) {
       return relayText;
@@ -1880,9 +1896,37 @@ function enrichConversationControlMetadata(prompt, metadata = {}) {
   return nextMetadata;
 }
 
+function inferRouteWithConversationContext(task, command = "", metadata = {}) {
+  const nextMetadata = enrichConversationControlMetadata(task, metadata);
+  return inferRoute(task, command, nextMetadata);
+}
+
 function buildDecision(task, options = {}) {
   const metadata = enrichConversationControlMetadata(task, options?.metadata || {});
   return buildPolicyDecision(task, {
+    ...options,
+    metadata,
+  });
+}
+
+async function resolveStatelessPolicyDecision(task, options = {}) {
+  const prompt = String(task || "").trim();
+  const metadata = enrichConversationControlMetadata(prompt, options?.metadata || {});
+  const runtimeCfg = loadOctoClawConfig().runtime_policy || {};
+  const intentPacket = metadata?.intent_packet && typeof metadata.intent_packet === "object" ? metadata.intent_packet : {};
+  if (!metadata.policy_judge_result) {
+    const judgeResult = await invokePolicyJudge({
+      task: prompt,
+      metadata,
+      intentPacket,
+      runtimeCfg,
+      cwd: process.cwd(),
+    });
+    if (judgeResult && typeof judgeResult === "object" && Object.keys(judgeResult).length > 0) {
+      metadata.policy_judge_result = judgeResult;
+    }
+  }
+  return buildPolicyDecision(prompt, {
     ...options,
     metadata,
   });
@@ -2686,7 +2730,7 @@ const plugin = {
           reason: params.reason || "",
           source: "main_agent",
         };
-        const payload = buildDecision(task, {
+        const payload = await resolveStatelessPolicyDecision(task, {
           command: params.command || "",
           metadata,
           routeHint: routeHintPayload,
@@ -2760,7 +2804,7 @@ const plugin = {
         const metadata = { ...buildPolicyMetadata(ctx), ...parseObjectJson(params.metadataJson) };
         if (params.channel) metadata.channel = params.channel;
         if (params.sessionKey) metadata.session_key = params.sessionKey;
-        const payload = buildDecision(params.task, {
+        const payload = await resolveStatelessPolicyDecision(params.task, {
           command: params.command || "",
           metadata,
           forceRoute: params.forceRoute || "",
@@ -2786,7 +2830,7 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const payload = buildDecision(params.task, {
+        const payload = await resolveStatelessPolicyDecision(params.task, {
           command: params.command || "",
           metadata: buildPolicyMetadata(ctx),
         });
@@ -3126,7 +3170,7 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octoroute <task>", "error");
         return;
       }
-      const payload = buildDecision(task, { metadata: buildPolicyMetadata(ctx) });
+      const payload = await resolveStatelessPolicyDecision(task, { metadata: buildPolicyMetadata(ctx) });
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(policySummaryText(payload));
@@ -3144,7 +3188,7 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octopolicy <task>", "error");
         return;
       }
-      const payload = buildDecision(task);
+      const payload = await resolveStatelessPolicyDecision(task);
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(policySummaryText(payload));
@@ -3226,8 +3270,10 @@ export const __octoclawTest = {
   guardAssistantMessageForPolicyState,
   resolvePolicyDecisionForContext,
   inferRoute,
+  inferRouteWithConversationContext,
   buildRawDecision: buildPolicyDecision,
   buildDecision,
+  resolveStatelessPolicyDecision,
   buildConversationGrounding,
   buildDirectLookupGuard,
   __conversationControlTest,

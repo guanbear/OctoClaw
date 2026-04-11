@@ -51,17 +51,51 @@
     }
   },
   {
+    "task": "检查一下服务健康状态",
+    "expected": {
+      "route": "direct",
+      "task_class": "fast_local_check",
+      "work_contract": "inspect_report",
+      "request_kind": "surface_query",
+      "scope": "local_host",
+      "target": "local",
+      "evidence_required": ["local_probe", "execution_ledger"],
+      "ack_required": false,
+      "latency_ack_required": false,
+      "intent_class": "local_surface_lookup",
+      "judge_eligible": false,
+      "policy_router_source": "deterministic_front_gate"
+    }
+  },
+  {
+    "task": "查一下备份使用情况",
+    "expected": {
+      "route": "direct",
+      "task_class": "fast_local_check",
+      "work_contract": "inspect_report",
+      "request_kind": "surface_query",
+      "scope": "local_host",
+      "target": "local",
+      "evidence_required": ["local_probe", "execution_ledger"],
+      "ack_required": false,
+      "latency_ack_required": false,
+      "intent_class": "local_surface_lookup",
+      "judge_eligible": false,
+      "policy_router_source": "deterministic_front_gate"
+    }
+  },
+  {
     "task": "你再看下 OpenClaw 有啥更新，尤其是 Memory 方向",
     "expected": {
-      "route": "runner",
-      "task_class": "fast_tool_check",
-      "work_contract": "inspect_report",
+      "route": "direct",
+      "task_class": "simple_lookup",
+      "work_contract": "answer_now",
       "request_kind": "fresh_external_lookup",
       "scope": "upstream_project",
       "target": "openclaw",
       "evidence_required": ["web_lookup", "execution_ledger"],
-      "ack_required": true,
-      "latency_ack_required": false,
+      "ack_required": false,
+      "latency_ack_required": true,
       "intent_class": "fresh_live_lookup",
       "judge_eligible": false,
       "policy_router_source": "deterministic_front_gate"
@@ -79,7 +113,8 @@
       "evidence_required": ["none"],
       "ack_required": false,
       "latency_ack_required": true,
-      "intent_class": "undetermined"
+      "intent_class": "undetermined",
+      "policy_router_source": "policy_judge_unavailable_fallback"
     }
   },
   {
@@ -93,7 +128,8 @@
       "target": "delegated_task",
       "evidence_required": ["taskflow_state", "execution_ledger"],
       "ack_required": true,
-      "intent_class": "undetermined"
+      "intent_class": "undetermined",
+      "policy_router_source": "policy_judge_unavailable_fallback"
     }
   },
   {
@@ -107,7 +143,8 @@
       "target": "workspace",
       "evidence_required": ["taskflow_state", "execution_ledger"],
       "ack_required": true,
-      "intent_class": "undetermined"
+      "intent_class": "undetermined",
+      "policy_router_source": "policy_judge_unavailable_fallback"
     }
   },
   {
@@ -121,7 +158,8 @@
       "target": "current_session",
       "evidence_required": ["execution_ledger", "taskflow_state"],
       "ack_required": false,
-      "intent_class": "undetermined"
+      "intent_class": "undetermined",
+      "policy_router_source": "policy_judge_unavailable_fallback"
     }
   }
 ]

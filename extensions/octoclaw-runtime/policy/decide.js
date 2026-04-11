@@ -212,8 +212,30 @@ function markStickyLaneApplied(sessionKey, entry) {
   return existing;
 }
 
+function stickyExemptIntentClass(metadata = {}) {
+  const packet = metadata?.intent_packet && typeof metadata.intent_packet === "object" && !Array.isArray(metadata.intent_packet)
+    ? metadata.intent_packet
+    : {};
+  const conversation = metadata?.conversation_control && typeof metadata.conversation_control === "object" && !Array.isArray(metadata.conversation_control)
+    ? metadata.conversation_control
+    : {};
+  return String(packet.intent_class || conversation.intent_class || conversation.kind || "").trim();
+}
+
 function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, metadata, policyCfg, forcedRoute, laneFeasibility = {}) {
   if (forcedRoute || routeHint.route_hint) return { route: baseRoute, stickyState: {}, stickyReasons: [] };
+  const exemptIntentClass = stickyExemptIntentClass(metadata);
+  if (["local_surface_lookup", "fresh_live_lookup", "execution_followup"].includes(exemptIntentClass)) {
+    return {
+      route: baseRoute,
+      stickyState: {
+        route: "",
+        applied: false,
+        sticky_exempt_intent_class: exemptIntentClass,
+      },
+      stickyReasons: [`route_sticky_exempt:${exemptIntentClass}`],
+    };
+  }
   const sessionKey = String(metadata.session_key || "").trim();
   const sticky = loadRouteStickiness(policyCfg, sessionKey);
   if (!sticky || Object.keys(sticky).length === 0) return { route: baseRoute, stickyState: {}, stickyReasons: [] };
@@ -676,13 +698,21 @@ function buildPolicyRouterState(runtimeCfg = {}, intentPacket = {}, routeMeta = 
           && String(intentPacket?.intent_class || "").trim()
           && String(intentPacket?.intent_class || "").trim() !== "undetermined"
           ? "deterministic_front_gate"
-          : "legacy_planner_until_stateless_judge_live"
+          : (
+            judgeEligible
+              ? (
+                judgeResult.invoked
+                  ? "policy_judge_fallback"
+                  : "policy_judge_unavailable_fallback"
+              )
+              : "legacy_planner_until_stateless_judge_live"
+          )
       ),
     judge: {
       eligible: judgeEligible,
       invoked: Boolean(judgeResult.invoked),
       invocation_state: String(judgeResult.invocation_state || (judgeEligible && selectedJudge.name
-        ? "eligible_not_invoked_runtime_adapter_pending"
+        ? "eligible_not_invoked"
         : "not_needed_for_deterministic_path")),
       selected: String(judgeResult.selected || selectedJudge.name || ""),
       provider: String(judgeResult.provider || selectedJudge.config.provider || selectedJudge.name || ""),
@@ -1088,11 +1118,11 @@ function latencyAckPolicy(route, taskClass, features = {}) {
     route === "direct"
     && taskClass !== "control_observer"
     && taskClass !== "session_control"
-    && Boolean(features.external_lookup_only || features.bounded_repo_update_lookup || features.local_product_help_lookup)
+    && Boolean(features.external_lookup_only || features.bounded_repo_update_lookup || features.fresh_live_lookup || features.local_product_help_lookup)
   );
   const text = !required
     ? ""
-    : (features.bounded_repo_update_lookup
+    : (features.bounded_repo_update_lookup || features.fresh_live_lookup
       ? "我先看一下最新更新，马上给你结论。"
       : (features.local_product_help_lookup ? "我先查一下用法，马上给你结论。" : "我先查一下，马上给你结论。"));
   return {
@@ -1635,6 +1665,12 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       parallel_gain_band: String(routeMeta.parallel_gain_band || ""),
       artifact_required: Boolean(routeMeta.needs_artifact),
       durable_runtime_required: Boolean(routeMeta.needs_durable_runtime),
+      runner_materialization_available: Boolean(routeMeta.runner_materialization_available),
+      runner_materialization_kind: String(routeMeta.runner_materialization_kind || ""),
+      runner_playbook:
+        route === "runner" && routeMeta.runner_playbook && typeof routeMeta.runner_playbook === "object" && !Array.isArray(routeMeta.runner_playbook)
+          ? { ...routeMeta.runner_playbook }
+          : {},
     },
     budget_policy: routeBudget,
     model_policy: {

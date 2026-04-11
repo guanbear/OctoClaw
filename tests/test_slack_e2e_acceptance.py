@@ -129,7 +129,7 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
                     "stderr": "Gateway agent failed; falling back to embedded: Error: gateway closed (1008): pairing required",
                 }
             ),
-            "embedded_fallback",
+            "gateway_pairing_required",
         )
 
     @patch("lib.slack_e2e_acceptance.fetch_slack_messages")
@@ -264,7 +264,7 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
             )
         self.assertTrue(result["ok"])
         self.assertFalse(result["evaluation"]["ack_verifiable"])
-        self.assertEqual(result["delivery_mode"], "embedded_fallback")
+        self.assertEqual(result["delivery_mode"], "gateway_pairing_required")
 
 
 if __name__ == "__main__":

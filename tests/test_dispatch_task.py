@@ -19,6 +19,29 @@ dispatch_task = importlib.import_module("dispatch_task")
 
 
 class DispatchTaskTaxonomyTests(unittest.TestCase):
+    def test_run_runner_on_demand_enables_internal_legacy_loop_flag(self) -> None:
+        with patch.object(
+            dispatch_task.subprocess,
+            "run",
+            return_value=type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
+        ) as run_mock:
+            payload = dispatch_task.run_runner_on_demand("runner-ondemand-flag")
+
+        self.assertTrue(payload["triggered"])
+        self.assertTrue(payload["ok"])
+        env = run_mock.call_args.kwargs["env"]
+        self.assertEqual(env["OCTOCLAW_ENABLE_LEGACY_LOOPS"], "1")
+
+    def test_kick_runner_on_demand_background_detects_immediate_exit(self) -> None:
+        proc = type("Proc", (), {"pid": 4321, "poll": lambda self: 0})()
+        with patch.object(dispatch_task.subprocess, "Popen", return_value=proc):
+            payload = dispatch_task.kick_runner_on_demand_background("runner-bootstrap-exit")
+
+        self.assertFalse(payload["triggered"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["returncode"], 0)
+        self.assertIn("exited immediately", payload["error"])
+
     def test_dispatch_runner_includes_materialization_fact(self) -> None:
         decision = {
             "request": {"session_key": "agent:main:slack:direct:u1", "metadata": {}},
@@ -152,6 +175,70 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
         self.assertEqual(payload["runner_execution_mode"], "ondemand")
         self.assertTrue(payload["runner_execution"]["triggered"])
         self.assertEqual(payload["runner_runtime_resolution"]["runner_health_snapshot"]["reason"], "stale")
+
+    def test_dispatch_runner_marks_bootstrap_failure_as_materialization_failed(self) -> None:
+        decision = {
+            "request": {"session_key": "agent:main:slack:direct:u2c", "metadata": {}},
+            "route_decision": {"route": "runner"},
+        }
+        args = argparse.Namespace(
+            task="检查 gateway 状态",
+            command="openclaw status",
+            cwd="/tmp",
+            summary="check gateway status",
+            timeout_seconds=30,
+            id="runner-bootstrap-failed",
+            model_band="fast",
+            wait=False,
+            wait_timeout_seconds=12,
+            _policy_decision=decision,
+            _runner_playbook=None,
+        )
+
+        with patch.object(dispatch_task, "load_octopus_config", return_value={
+            "runtime_policy": {
+                "runner_pool": {"enabled": True, "max_queue_size": 4, "busy_strategy": "queue_or_progress"},
+                "features": {"runner_pool_enabled": True, "legacy_runner_fallback": True},
+            }
+        }), patch.object(dispatch_task, "load_runner_queue_counts", return_value={"queued": 0, "running": 0, "done": 0, "failed": 0, "total": 0}), patch.object(
+            dispatch_task,
+            "load_runner_health",
+            return_value={"present": True, "healthy": False, "reason": "stale", "worker_id": "runner-a", "age_seconds": 999, "health": {"worker_id": "runner-a"}},
+        ), patch.object(
+            dispatch_task.subprocess,
+            "run",
+            return_value=type("Result", (), {"returncode": 0, "stdout": "{\"id\":\"runner-bootstrap-failed\"}", "stderr": ""})(),
+        ), patch.object(
+            dispatch_task,
+            "kick_runner_on_demand_background",
+            return_value={
+                "triggered": False,
+                "worker_id": "runner-bootstrap-runner-bootstrap-failed",
+                "pid": 123,
+                "ok": False,
+                "mode": "background_bootstrap",
+                "returncode": 0,
+                "error": "runner bootstrap exited immediately with code 0",
+            },
+        ), patch.object(
+            dispatch_task,
+            "mark_runner_bootstrap_failed",
+        ) as mark_failed_mock, patch.object(
+            dispatch_task,
+            "append_runtime_task_event",
+        ) as event_mock:
+            payload = dispatch_task.dispatch_runner(args)
+
+        mark_failed_mock.assert_called_once()
+        self.assertFalse(payload["executed"])
+        self.assertEqual(payload["reason"], "runner_bootstrap_failed")
+        self.assertEqual(payload["capability_failure"]["reason"], "runner_bootstrap_failed")
+        self.assertEqual(payload["materialization"]["status"], "materialization_failed")
+        self.assertEqual(payload["handoff"]["status"], "failed")
+        self.assertEqual(payload["handoff"]["kind"], "plan")
+        self.assertEqual(payload["runner_execution_mode"], "ondemand")
+        self.assertFalse(payload["runner_execution"]["ok"])
+        event_mock.assert_called_once()
 
     def test_dispatch_runner_blocks_when_worker_unhealthy_without_fallback(self) -> None:
         decision = {

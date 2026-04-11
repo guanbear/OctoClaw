@@ -35,6 +35,7 @@ from worker_taxonomy import (
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNNER_DISPATCH_PY = os.path.join(SCRIPT_DIR, "runner_dispatch.py")
 RUNNER_LOOP_SH = os.path.join(SCRIPT_DIR, "runner_loop.sh")
+RUNNER_QUEUE_PY = os.path.join(SCRIPT_DIR, "runner_queue.py")
 RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
 TASK_STATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
 MAX_INLINE_CHARS = 1200
@@ -210,6 +211,14 @@ def runner_playbook_hints(decision: dict) -> dict:
         "lookup_focus": str(conversation.get("lookup_focus") or features.get("lookup_focus") or "").strip(),
         "target_scope": str(features.get("target_scope") or "").strip(),
     }
+
+
+def decision_runner_playbook(decision: dict) -> dict | None:
+    route_meta = decision_route(decision)
+    playbook = route_meta.get("runner_playbook", {})
+    if isinstance(playbook, dict) and playbook:
+        return copy.deepcopy(playbook)
+    return None
 
 
 def octoclaw_identity_fields(decision: dict) -> dict:
@@ -1134,6 +1143,7 @@ def build_runner_gate_handoff(*, reason: str, detail: str, queue_pressure_band: 
         "runner_queue_full": "runner 队列已满",
         "runner_worker_unhealthy": "runner worker 不健康",
         "runner_per_user_concurrency_exceeded": "当前会话 runner 并发已满",
+        "runner_bootstrap_failed": "runner 自举失败",
     }
     summary = labels.get(reason, "runner 当前不可派发")
     suffix = f"（queue={queue_pressure_band or 'unknown'} / mode={dispatch_mode or 'deferred'}）"
@@ -1152,6 +1162,7 @@ def run_runner_on_demand(job_id: str) -> dict:
     env = {
         **os.environ,
         "WORKSPACE": WORKSPACE,
+        "OCTOCLAW_ENABLE_LEGACY_LOOPS": "1",
         "RUNNER_MAX_JOBS_PER_WORKER": "1",
         "RUNNER_MAX_IDLE_SECONDS": "1",
         "RUNNER_POLL_INTERVAL_SECONDS": "1",
@@ -1178,6 +1189,7 @@ def kick_runner_on_demand_background(job_id: str) -> dict:
     env = {
         **os.environ,
         "WORKSPACE": WORKSPACE,
+        "OCTOCLAW_ENABLE_LEGACY_LOOPS": "1",
         "RUNNER_MAX_JOBS_PER_WORKER": "1",
         "RUNNER_MAX_IDLE_SECONDS": "1",
         "RUNNER_POLL_INTERVAL_SECONDS": "1",
@@ -1192,6 +1204,18 @@ def kick_runner_on_demand_background(job_id: str) -> dict:
             env=env,
             start_new_session=True,
         )
+        time.sleep(0.2)
+        returncode = proc.poll()
+        if returncode is not None:
+            return {
+                "triggered": False,
+                "worker_id": worker_id,
+                "pid": int(proc.pid or 0),
+                "ok": False,
+                "mode": "background_bootstrap",
+                "returncode": int(returncode),
+                "error": f"runner bootstrap exited immediately with code {int(returncode)}",
+            }
         return {
             "triggered": True,
             "worker_id": worker_id,
@@ -1210,12 +1234,55 @@ def kick_runner_on_demand_background(job_id: str) -> dict:
         }
 
 
+def mark_runner_bootstrap_failed(job_id: str, summary: str, failure_reason: str) -> None:
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        return
+    failure_summary = summary or f"Runner bootstrap failed · {normalized_job_id}"
+    subprocess.run(
+        [
+            "python3",
+            RUNNER_QUEUE_PY,
+            "complete",
+            "--id",
+            normalized_job_id,
+            "--status",
+            "failed",
+            "--summary",
+            failure_summary,
+            "--exit-code",
+            "125",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "python3",
+            TASK_STATE_PY,
+            "failed",
+            "--id",
+            normalized_job_id,
+            "--summary",
+            failure_summary,
+            "--blocked-reason",
+            failure_reason,
+            "--observability-health",
+            "degraded",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def dispatch_runner(args) -> dict:
     decision = getattr(args, "_policy_decision", {}) or {}
     identity = octoclaw_identity_fields(decision)
     playbook = getattr(args, "_runner_playbook", None)
     if not isinstance(playbook, dict) or not playbook:
-        playbook = None
+        playbook = decision_runner_playbook(decision)
     command = args.command
     summary = args.summary
     if not command and not playbook:
@@ -1357,16 +1424,61 @@ def dispatch_runner(args) -> dict:
             )
         else:
             response["runner_execution"] = kick_runner_on_demand_background(str(payload.get("id", "") or ""))
-            append_runtime_task_event(
-                str(payload.get("id", "") or ""),
-                "progress_note",
-                "runner background worker bootstrapped",
-                event_json={
-                    "runner_job_id": str(payload.get("id", "") or ""),
-                    "execution_backend": "runner_queue",
-                    "progress_state": "background_bootstrap",
-                },
-            )
+            if response["runner_execution"].get("ok"):
+                append_runtime_task_event(
+                    str(payload.get("id", "") or ""),
+                    "progress_note",
+                    "runner background worker bootstrapped",
+                    event_json={
+                        "runner_job_id": str(payload.get("id", "") or ""),
+                        "execution_backend": "runner_queue",
+                        "progress_state": "background_bootstrap",
+                    },
+                )
+            else:
+                job_id = str(payload.get("id", "") or "")
+                failure_reason = "runner_bootstrap_failed"
+                detail = str(response["runner_execution"].get("error", "") or "runner on-demand bootstrap failed before claiming the job.")
+                append_runtime_task_event(
+                    job_id,
+                    "progress_note",
+                    "runner background worker bootstrap failed",
+                    event_json={
+                        "runner_job_id": job_id,
+                        "execution_backend": "runner_queue",
+                        "progress_state": "bootstrap_failed",
+                        "error": detail,
+                    },
+                )
+                mark_runner_bootstrap_failed(
+                    job_id,
+                    f"Runner bootstrap failed · {detail}",
+                    failure_reason,
+                )
+                failure = build_capability_bound_failure(
+                    "runner",
+                    failure_reason,
+                    detail=detail,
+                    missing_capabilities=["runner_worker"],
+                    fallback_permitted=False,
+                )
+                response["executed"] = False
+                response["reason"] = failure_reason
+                response["capability_failure"] = failure
+                response["materialization"] = build_runner_materialization(
+                    execution_contract="inspect_report",
+                    session_key=str(identity.get("session_key", "") or ""),
+                    job_id=job_id,
+                    executed=False,
+                    failure=failure,
+                )
+                response["handoff"] = build_runner_gate_handoff(
+                    reason=failure_reason,
+                    detail=detail,
+                    queue_pressure_band=str(runtime_resolution.get("queue_pressure_band", "") or ""),
+                    dispatch_mode="deferred",
+                )
+                return response
     if args.wait:
         wait_timeout = 1 if response.get("runner_execution_mode") == "ondemand" else args.wait_timeout_seconds
         response["wait"] = wait_for_runner_result(payload.get("id", ""), wait_timeout)
@@ -1566,7 +1678,9 @@ def main():
         return
 
     if final_route == "runner":
-        playbook = infer_runner_playbook(task, runner_playbook_hints(decision)) if not args.command else None
+        playbook = decision_runner_playbook(decision)
+        if not args.command and not playbook:
+            playbook = infer_runner_playbook(task, runner_playbook_hints(decision))
         if not args.command and not playbook:
             failure = build_capability_bound_failure(
                 "runner",

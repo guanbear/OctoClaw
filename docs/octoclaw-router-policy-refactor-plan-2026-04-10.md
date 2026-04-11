@@ -63,8 +63,9 @@ ACK timer
 - `lib/octoclaw_policy.py` 不再维护 Python parity policy merge，实现改为调用 Node runtime extension，同时保留 model health feedback side effect。
 - `hard_runner` 从自然语言最终裁判降级为极窄安全兜底；本地 stable surface 不再被 legacy hard gate 强制 runner。
 - `local_surface_lookup` 覆盖 runtime version / Control UI / system load，稳定低风险查询走 `direct + fast_local_check + local_probe evidence`。
-- `fresh_live_lookup` 覆盖 OpenClaw/OctoClaw release/update/Memory 查询，走 `runner + pre_dispatch_ack + web_lookup evidence`。
+- `fresh_live_lookup` 覆盖 OpenClaw/OctoClaw release/update/Memory 查询；在 runner pool 未证明可用前走 `direct + latency_ack + web_lookup evidence`，避免继续制造 queued runner 任务。
 - 产品用法类 direct 查询增加 latency ACK，避免“direct 但用户干等”。
+- on-demand runner bootstrap 显式打开内部 runner loop 允许位，并把“启动后秒退”收口成 `runner_bootstrap_failed`；不再留下静默 `queued` ghost 任务。
 - `router-policy-goldens-v2.json` 增加 surface / fresh lookup / product help case，`harness_gate quick` 已覆盖。
 
 保留的过渡债：
@@ -72,6 +73,7 @@ ACK timer
 - Python shim 当前每次调用会 spawn Node；这是为了先消除双实现漂移。若后续频繁调用，需要做长驻 Node bridge 或彻底迁移调用方。
 - 旧 Python 大文件还在仓内，但不再作为 live route/policy 权威。
 - `legacy_planner_until_stateless_judge_live` 仍会出现在真正 `undetermined` 的 fallback 路径，后续 R3/R4 继续用 stateless judge 替换。
+- runtime snapshot / status 已开始显式报告 optional tmux workbench 是否存在、runner window 是否存在；如果 tmux 没启动，运维面应显示 `tmux_session_missing` / `tmux_runner_window_missing`，而不是让 runner queue 静默堆积。
 
 ### R0：冻结现状与补 golden fixtures
 

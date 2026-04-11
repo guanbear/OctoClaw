@@ -60,8 +60,7 @@ def _text(value: Any) -> str:
 def build_harness_prompt(scenario_name: str, prompt: str) -> str:
     return (
         f"[codex-slack-e2e scenario={_text(scenario_name) or 'unknown'}] "
-        "这是自动化验收消息。忽略之前未完成任务、历史 runner/playbook 失败和旧执行记忆；"
-        "只基于当前这条消息处理，并正常回复到 Slack。\n\n"
+        "这是自动化验收消息。只基于本条里的用户问题作答，并正常回复到 Slack。\n\n"
         f"当前用户问题：{_text(prompt)}"
     ).strip()
 
@@ -99,6 +98,19 @@ def build_exec_env() -> dict[str, str]:
     path_parts = [_text(env.get("PATH"))]
     path_parts.extend(COMMON_BIN_DIRS)
     env["PATH"] = ":".join(part for part in path_parts if part)
+    gateway_cfg = load_json(DEFAULT_OPENCLAW_CONFIG).get("gateway", {})
+    if isinstance(gateway_cfg, dict):
+        port = gateway_cfg.get("port", 18789)
+        bind = _text(gateway_cfg.get("bind")) or "127.0.0.1"
+        if bind == "loopback":
+            bind = "127.0.0.1"
+        auth = gateway_cfg.get("auth", {}) if isinstance(gateway_cfg.get("auth"), dict) else {}
+        token = _text(auth.get("token"))
+        mode = _text(gateway_cfg.get("mode")) or "local"
+        if mode == "local":
+            env.setdefault("OPENCLAW_GATEWAY_URL", f"ws://{bind}:{port}")
+        if token:
+            env.setdefault("OPENCLAW_GATEWAY_TOKEN", token)
     return env
 
 
@@ -365,6 +377,10 @@ def evaluate_messages(messages: list[dict[str, Any]], *, started_at: float, ack_
 
 def detect_delivery_mode(process_info: dict[str, Any]) -> str:
     stderr = _text(process_info.get("stderr"))
+    if "pairing required" in stderr:
+        return "gateway_pairing_required"
+    if "session file locked" in stderr:
+        return "embedded_session_locked"
     if "Gateway agent failed; falling back to embedded" in stderr:
         return "embedded_fallback"
     if process_info.get("returncode") == 0:
@@ -449,9 +465,17 @@ def run_scenario(
         process_info["stderr"] = _text(stderr)
     except subprocess.TimeoutExpired:
         process_info["timed_out"] = True
+        process.kill()
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except Exception:
+            stdout, stderr = "", ""
+        process_info["returncode"] = process.returncode
+        process_info["stdout"] = _text(stdout)
+        process_info["stderr"] = _text(stderr)
     delivery_mode = detect_delivery_mode(process_info)
     evaluation = evaluate_messages(messages, started_at=started_at, ack_deadline_ms=ack_deadline_ms, final_timeout_s=final_timeout_s)
-    evaluation["ack_verifiable"] = delivery_mode != "embedded_fallback"
+    evaluation["ack_verifiable"] = delivery_mode not in {"embedded_fallback", "gateway_pairing_required", "embedded_session_locked"}
     transcript = [
         {
             "ts": _text(item.get("ts")),

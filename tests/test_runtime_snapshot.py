@@ -16,8 +16,9 @@ from lib import runtime_snapshot
 
 
 class RuntimeSnapshotTests(unittest.TestCase):
+    @patch("lib.runtime_snapshot.probe_tmux_session", return_value={"required": True, "available": True, "healthy": True, "reason": "ok", "windows": ["runner"]})
     @patch("lib.runtime_snapshot.load_octopus_config", return_value={"workbench": {"supervisor_mode": "tmux", "tmux_session_name": "octoclaw-runtime"}})
-    def test_build_runtime_snapshot_separates_runner_lane_from_mode(self, _mock_cfg) -> None:
+    def test_build_runtime_snapshot_separates_runner_lane_from_mode(self, _mock_cfg, _mock_tmux) -> None:
         payload = runtime_snapshot.build_runtime_snapshot(
             workspace="/tmp/octoclaw",
             tasks=[
@@ -37,6 +38,20 @@ class RuntimeSnapshotTests(unittest.TestCase):
         self.assertEqual(payload["workbench"]["role"], "optional_workbench")
         self.assertTrue(payload["workbench"]["optional_backend"])
         self.assertEqual(payload["workbench"]["supervisor_mode"], "tmux")
+        self.assertTrue(payload["workbench"]["tmux_healthy"])
+
+    @patch("lib.runtime_snapshot.probe_tmux_session", return_value={"required": True, "available": True, "healthy": False, "reason": "tmux_session_missing", "windows": []})
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={"workbench": {"supervisor_mode": "tmux", "tmux_session_name": "octoclaw-runtime"}})
+    def test_build_runtime_snapshot_reports_missing_tmux_workbench(self, _mock_cfg, _mock_tmux) -> None:
+        payload = runtime_snapshot.build_runtime_snapshot(
+            workspace="/tmp/octoclaw",
+            runner_health={"present": False, "healthy": False, "reason": "missing"},
+            runner_execution_mode="ondemand",
+        )
+
+        self.assertTrue(payload["workbench"]["optional_backend"])
+        self.assertFalse(payload["workbench"]["tmux_healthy"])
+        self.assertEqual(payload["workbench"]["tmux_reason"], "tmux_session_missing")
 
     @patch("lib.runtime_snapshot.load_runtime_tasks", return_value=[{"id": "runner-1", "status": "queued", "source": "octoclaw"}])
     @patch("lib.runtime_snapshot.load_runner_health", return_value={"present": False, "healthy": False, "reason": "missing"})

@@ -1,4 +1,5 @@
 import { MODEL_POLICY_FILE, loadJson, loadOctoClawConfig } from "./config.js";
+import { inferRunnerPlaybook } from "./runner_playbooks.js";
 import { inferWorkerPool as taxonomyInferWorkerPool } from "./taxonomy.js";
 
 const DEFAULT_ROUTE_LANGUAGE_PACKS = ["zh", "en"];
@@ -428,7 +429,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const signalSurfaceMentions = Array.isArray(intentSignals.surface_mentions)
     ? intentSignals.surface_mentions.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
-  const signalLocalSurfaceLookup = signalSurfaceMentions.length > 0;
+  const intentPacketAvailable = Boolean(intentPacket && typeof intentPacket === "object" && !Array.isArray(intentPacket) && intentPacket.available !== false);
+  const signalLocalSurfaceLookup = !intentPacketAvailable && signalSurfaceMentions.length > 0;
   const intentClass = String(conversationControl.intent_class || intentPacket.intent_class || "").trim();
   const intentLookup = intentPacket?.lookup && typeof intentPacket.lookup === "object" && !Array.isArray(intentPacket.lookup)
     ? intentPacket.lookup
@@ -437,11 +439,15 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const conversationLookupProject = String(conversationControl.lookup_project || intentLookup.project || "").trim();
   const conversationLookupFocus = String(conversationControl.lookup_focus || intentLookup.focus || "").trim();
   const conversationKind = String(conversationControl.kind || intentClass || "").trim();
+  const explicitPortProbe = Boolean(
+    /\d{2,5}\s*(?:端口|port)/u.test(text)
+      || /\d{2,5}.{0,8}ポート/u.test(text),
+  );
   let explicitLocalProbe = Boolean(
     /\/[A-Za-z0-9._/\-]+/.test(rawTask)
       || /(?:最近|近)\s*\d{1,4}\s*行/u.test(rawTask)
       || /\btail\s+-n?\s*\d{1,4}\b/u.test(text)
-      || /\b\d{2,5}\s*(?:端口|port)\b/u.test(text),
+      || explicitPortProbe,
   );
 
   const runnerHits = countMatches(text, resolveLanguagePatterns("RUNNER_PATTERNS", enabledPacks));
@@ -485,6 +491,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   let sessionControlCandidate = Boolean(sessionControlHits > 0);
   const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate && !sessionControlCandidate);
   const runtimeVersionLookup = Boolean(
+    !intentPacketAvailable
+    && (
     signalSurfaceMentions.includes("runtime_version")
     || (
       !/(模型|model)/iu.test(text)
@@ -495,9 +503,12 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
       || /^\s*(?:你现在啥版本|你现在是什么版本|当前.*版本|what version are you|current version)\s*$/iu.test(rawTask)
       )
     )
+    )
   );
 
   const repoActivityLookup = Boolean(
+    !intentPacketAvailable
+    && (
     (
       /(github|gitlab|仓库|repo|repository|项目)/iu.test(text)
       && /(commit|release|tag|pr|mr|issue|更新|提交|改了啥|改了什么|变更)/iu.test(text)
@@ -507,11 +518,15 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
       /(项目|仓库)/iu.test(text)
       && /(提交|改了啥|改了什么|变更)/iu.test(text)
     )
+    )
   );
   const boundedSoftwareUpdateLookup = Boolean(
+    !intentPacketAvailable
+    && (
     /(openclaw|octoclaw)/iu.test(text)
-    && /(有啥更新|有什么更新|更新了什么|最近.*更新|最新.*更新|最新.*release|新版本|release|memory方向|特性|变化)/iu.test(text)
+    && /(有啥更新|有什么更新|更新了什么|最近.*更新|最新.*更新|最新.*release|新版本|release|新的?发版|最新发版|最近发版|memory方向|特性|变化)/iu.test(text)
     && !/(改了啥|改了什么|提交|commit|pr|issue|详细|分析|总结|报告|写一版|release analysis|commit summary|summari[sz]e)/iu.test(rawTask)
+    )
   );
   const boundedRepoUpdateLookup = Boolean(
     (repoActivityLookup || boundedSoftwareUpdateLookup)
@@ -520,9 +535,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     && summaryOutputHits === 0
     && writeHits === 0
   );
-  const freshLiveLookupCandidate = Boolean(
-    intentClass === "fresh_live_lookup" || boundedRepoUpdateLookup
-  );
+  const freshLiveLookupCandidate = Boolean(intentClass === "fresh_live_lookup" || boundedRepoUpdateLookup);
   const localProductHelpLookup = Boolean(
     productHelpHits > 0
     && /(open\s*claw|openclaw|octo\s*claw|octoclaw)/iu.test(rawTask)
@@ -536,8 +549,19 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const resolvedLookupFocus = conversationLookupFocus || (
     freshLiveLookupCandidate ? inferLookupFocus(rawTask) : ""
   );
+  const localSurfaceLookupCandidate = Boolean(
+    conversationKind === "local_surface_lookup"
+    || (
+      (signalLocalSurfaceLookup || runtimeVersionLookup)
+      && !freshLiveLookupCandidate
+      && !localProductHelpLookup
+      && productHelpHits === 0
+      && !workflowMetaCandidate
+      && !sessionControlCandidate
+    )
+  );
   const resolvedLookupScope = conversationLookupScope
-    || (freshLiveLookupCandidate ? "upstream_project" : ((runtimeVersionLookup || signalLocalSurfaceLookup) ? "local_instance" : ""));
+    || (freshLiveLookupCandidate ? "upstream_project" : (localSurfaceLookupCandidate ? "local_instance" : ""));
 
   let effectiveResearchHits = researchHits;
   let effectiveExternalLookupHits = externalLookupHits;
@@ -630,7 +654,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     effectiveCodeHits = 0;
     effectiveWriteHits = 0;
     effectiveRunnerNegativeHits = 0;
-  } else if (conversationKind === "local_surface_lookup" || signalLocalSurfaceLookup) {
+  } else if (conversationKind === "local_surface_lookup" || localSurfaceLookupCandidate) {
     explicitLocalProbe = true;
     effectiveLocalStateHits = Math.max(effectiveLocalStateHits, 1);
     effectiveRunnerReadOnlyIntentHits = Math.max(effectiveRunnerReadOnlyIntentHits, 1);
@@ -645,7 +669,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     observerControlCandidate = false;
     workflowMetaCandidate = false;
     sessionControlCandidate = false;
-    effectiveResearchHits = Math.max(effectiveResearchHits, 1);
+    effectiveResearchHits = 0;
     effectiveExternalLookupHits = Math.max(effectiveExternalLookupHits, 1);
     effectiveMutationHits = 0;
     effectiveCodeHits = 0;
@@ -766,9 +790,10 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
       && effectiveCodeHits === 0
       && effectiveResearchHits === 0
       && effectiveWriteHits === 0
+      && !freshLiveLookupCandidate
     ),
-    target_scope: remoteTargetHits > 0 ? "remote" : ((effectiveLocalStateHits > 0 || taskCommandReadOnly) ? "local" : "generic"),
-    lookup_scope: resolvedLookupScope || "generic",
+    target_scope: remoteTargetHits > 0 ? "remote" : ((effectiveLocalStateHits > 0 || taskCommandReadOnly || explicitLocalProbe) ? "local" : "generic"),
+    lookup_scope: resolvedLookupScope || ((explicitPortProbe && !freshLiveLookupCandidate) ? "local_instance" : "generic"),
     lookup_project: resolvedLookupProject,
     lookup_focus: resolvedLookupFocus,
     high_risk: highRiskHits > 0,
@@ -780,7 +805,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   };
 
   features.hard_runner_candidate = Boolean(
-    !observerControlCandidate
+    !features.fresh_live_lookup
+    && !features.bounded_repo_update_lookup
+    && !observerControlCandidate
     && effectiveRunnerNegativeHits === 0
     && !features.high_risk
     && !features.parallelizable
@@ -813,8 +840,7 @@ function directContractCandidate(features) {
   if (features.high_risk) return false;
   if (features.session_control_candidate) return true;
   if (features.observer_control_candidate) return true;
-  if (features.fresh_live_lookup) return false;
-  if (features.bounded_repo_update_lookup) return false;
+  if (features.fresh_live_lookup || features.bounded_repo_update_lookup) return true;
   if (features.requires_tools) return false;
   if (features.requires_mutation) return false;
   if (features.requires_code_work) return false;
@@ -859,7 +885,7 @@ function inferWorkContractHint(features, route = "") {
   if (features.model_benchmark_candidate) return "inspect_report";
   if (features.session_control_candidate) return "answer_now";
   if (features.observer_control_candidate) return "answer_now";
-  if (features.fresh_live_lookup) return "inspect_report";
+  if (features.fresh_live_lookup) return "answer_now";
   if (features.bounded_external_inspect) return "inspect_report";
   if (directContractCandidate(features)) return "answer_now";
   if (coordinatedWorkCandidate(features)) return "coordinated_work";
@@ -931,7 +957,68 @@ function inferCapabilityRequirements(features, contractKind = "", scopeHint = ""
   return [...new Set(requirements)];
 }
 
-function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workContractHint = "") {
+function buildRunnerPlaybookHints(features = {}) {
+  return {
+    lookup_scope: String(features.lookup_scope || "").trim(),
+    lookup_project: String(features.lookup_project || "").trim(),
+    lookup_focus: String(features.lookup_focus || "").trim(),
+    target_scope: String(features.target_scope || "").trim(),
+  };
+}
+
+function explicitRunnerCommandPlan(command = "") {
+  const normalized = String(command || "").trim();
+  if (!normalized) return null;
+  return {
+    kind: "explicit_command",
+    summary: "执行显式只读 runner 命令",
+    command: normalized,
+    probe_spec: {
+      kind: "explicit_command",
+    },
+    reason_codes: ["runner_explicit_command"],
+    confidence: 1,
+  };
+}
+
+function resolveRunnerMaterialization(task, command = "", features = {}) {
+  if (String(command || "").trim() && (features.command_read_only || features.task_command_read_only)) {
+    return explicitRunnerCommandPlan(command);
+  }
+  return inferRunnerPlaybook(task, buildRunnerPlaybookHints(features));
+}
+
+function boundedDirectRunnerFallback(features = {}) {
+  return Boolean(
+    features.tool_observation_only
+      && !features.high_risk
+      && !features.requires_mutation
+      && !features.requires_code_work
+      && !features.requires_research
+      && !features.requires_external_lookup
+      && !features.requires_writing
+      && !features.parallelizable
+      && Number(features.estimated_steps || 0) <= 1
+      && Number(features.task_length || 0) <= 120
+  );
+}
+
+function safeLocalSurfaceDirectInspect(features = {}) {
+  return Boolean(
+    features.explicit_local_probe
+      && features.target_scope === "local"
+      && features.lookup_scope === "local_instance"
+      && !features.high_risk
+      && !features.requires_mutation
+      && !features.requires_code_work
+      && !features.requires_research
+      && !features.requires_external_lookup
+      && !features.parallelizable
+      && Number(features.estimated_steps || 0) <= 2
+  );
+}
+
+function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workContractHint = "", runnerMaterialization = null) {
   const baseline = {
     direct: { feasible: false, reasons: [] },
     runner: { feasible: false, reasons: [] },
@@ -962,29 +1049,35 @@ function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workC
   }
 
   if (contractKind === "probe_measurement") {
-    baseline.runner = { feasible: true, reasons: ["contract:probe_measurement", "capability:runner_probe_or_snapshot"] };
+    const runnerFeasible = Boolean(runnerMaterialization);
+    baseline.runner = {
+      feasible: runnerFeasible,
+      reasons: runnerFeasible
+        ? ["contract:probe_measurement", "capability:runner_probe_or_snapshot"]
+        : ["runner_materialization_missing", "probe_measurement_requires_registered_runner_workflow"],
+    };
     baseline.direct.reasons.push("runner_workflow_required");
-    baseline.spawn_single.reasons.push("no_probe_measurement_capability");
+    baseline.spawn_single = {
+      feasible: !runnerFeasible,
+      reasons: [runnerFeasible ? "no_probe_measurement_capability" : "runner_materialization_missing_spawn_fallback"],
+    };
     baseline.spawn_multi.reasons.push("no_probe_measurement_capability");
     baseline.session_control.reasons.push("contract_mismatch");
     return baseline;
   }
 
   if (contractKind === "inspect_report") {
-    baseline.runner = { feasible: true, reasons: ["contract:inspect_report", "capability:runner_inspect"] };
-    const localSurfaceDirectInspect = Boolean(
-      features.explicit_local_probe
-        && features.target_scope === "local"
-        && features.lookup_scope === "local_instance"
-        && !features.high_risk
-        && !features.requires_mutation
-        && !features.requires_code_work
-        && !features.requires_research
-        && !features.requires_external_lookup
-        && !features.parallelizable
-        && Number(features.estimated_steps || 0) <= 2
-    );
-    const directEligible = localSurfaceDirectInspect || (!features.requires_tools
+    const runnerFeasible = Boolean(runnerMaterialization);
+    baseline.runner = {
+      feasible: runnerFeasible,
+      reasons: runnerFeasible
+        ? ["contract:inspect_report", "capability:runner_inspect"]
+        : ["runner_materialization_missing", "inspect_report_runner_requires_registered_workflow"],
+    };
+    const localSurfaceDirectInspect = safeLocalSurfaceDirectInspect(features);
+    const directEligible = localSurfaceDirectInspect
+      || (!runnerFeasible && boundedDirectRunnerFallback(features))
+      || (!features.requires_tools
       && !features.requires_external_lookup
       && !features.requires_research
       && !features.requires_code_work
@@ -994,7 +1087,15 @@ function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workC
       && Number(features.task_length || 0) <= 80);
     baseline.direct = {
       feasible: directEligible,
-      reasons: [directEligible ? (localSurfaceDirectInspect ? "local_surface_direct_inspect" : "bounded_direct_inspect") : "inspect_prefers_workflow"],
+      reasons: [directEligible
+        ? (
+          localSurfaceDirectInspect
+            ? "local_surface_direct_inspect"
+            : (!runnerFeasible && boundedDirectRunnerFallback(features)
+              ? "runner_materialization_missing_direct_fallback"
+              : "bounded_direct_inspect")
+        )
+        : "inspect_prefers_workflow"],
     };
     const deepInspect = !features.bounded_external_inspect
       && !features.model_benchmark_candidate
@@ -1012,8 +1113,12 @@ function buildLaneFeasibility(features, contractKind = "", scopeHint = "", workC
         || Number(features.estimated_steps || 0) > 2
       );
     baseline.spawn_single = {
-      feasible: deepInspect,
-      reasons: [deepInspect ? "deep_inspect_handoff" : "runner_playbook_preferred"],
+      feasible: deepInspect || (!runnerFeasible && !directEligible),
+      reasons: [
+        deepInspect
+          ? "deep_inspect_handoff"
+          : (!runnerFeasible && !directEligible ? "runner_materialization_missing_spawn_fallback" : "runner_playbook_preferred"),
+      ],
     };
     baseline.spawn_multi.reasons.push("inspect_report_not_parallel_default");
     baseline.session_control.reasons.push("contract_mismatch");
@@ -1110,7 +1215,7 @@ function contractDrivenRouteBias(features, workContractHint) {
       scores.spawn_single = 0.08;
       reasonCodes.push(features.workflow_meta_candidate ? "workflow_meta_control_contract" : "observer_control_contract");
     } else {
-      reasonCodes.push(features.external_lookup_only ? "direct_lookup_contract" : "direct_answer_contract");
+      reasonCodes.push((features.external_lookup_only || features.fresh_live_lookup) ? "direct_lookup_contract" : "direct_answer_contract");
     }
   } else if (workContractHint === "inspect_report") {
     scores.spawn_single = 0.72;
@@ -1181,14 +1286,7 @@ function contractDrivenRouteBias(features, workContractHint) {
       route = "runner";
       reasonCodes.push("prefer_runner_for_external_lookup_inspect");
     } else if (
-      features.explicit_local_probe
-      && features.target_scope === "local"
-      && features.lookup_scope === "local_instance"
-      && !features.high_risk
-      && !features.requires_mutation
-      && !features.requires_code_work
-      && !features.parallelizable
-      && Number(features.estimated_steps || 0) <= 2
+      safeLocalSurfaceDirectInspect(features)
     ) {
       route = "direct";
       reasonCodes.push("prefer_direct_for_local_surface_probe");
@@ -1281,6 +1379,8 @@ function inferTaskClass(features, route) {
   if (route === "direct" && features.session_control_candidate) return "session_control";
   if (route === "direct" && features.observer_control_candidate) return "control_observer";
   if (route === "direct" && features.tool_observation_only && features.target_scope === "local") return "fast_local_check";
+  if (route === "direct" && features.tool_observation_only) return "fast_tool_check";
+  if (route === "direct" && features.fresh_live_lookup) return "simple_lookup";
   if (route === "direct" && features.bounded_repo_update_lookup) return "simple_lookup";
   if (route === "runner") {
     if (features.target_scope === "remote") return "fast_remote_check";
@@ -1354,15 +1454,18 @@ function shouldRequestSemanticReview(features, scores, route, workContractHint) 
   return { needsSemanticReview: false, scoreMargin: margin, semanticReason: "" };
 }
 
-function hardGateRoute(features, runtimeCfg = null) {
+function hardGateRoute(features, runtimeCfg = null, runnerMaterialization = null) {
   const switches = runtimeCfg?.switches && typeof runtimeCfg.switches === "object" ? runtimeCfg.switches : {};
   if (!Boolean("hard_runner_only" in switches ? switches.hard_runner_only : true)) {
     return { route: null, reasons: [] };
   }
-  const explicitReadOnlyCommand = Boolean(features.has_command && features.command_read_only);
-  if (features.hard_runner_candidate && explicitReadOnlyCommand) {
+  if (safeLocalSurfaceDirectInspect(features)) {
+    return { route: null, reasons: [] };
+  }
+  if (features.hard_runner_candidate && runnerMaterialization) {
     const reasons = ["hard_runner_only"];
-    reasons.push("explicit_read_only_command");
+    if (runnerMaterialization.kind === "explicit_command") reasons.push("explicit_read_only_command");
+    else reasons.push("precomputed_runner_materialization");
     if (features.target_scope === "remote") reasons.push("remote_read_only_probe");
     else if (features.target_scope === "local") reasons.push("local_read_only_probe");
     return { route: "runner", reasons };
@@ -1374,7 +1477,8 @@ export function inferRoute(task, command = "", metadata = {}) {
   const runtimeCfg = loadOctoClawConfig().runtime_policy || {};
   const enabledPacks = normalizeEnabledLanguagePacks(runtimeCfg);
   const features = extractFeatures(task, command, runtimeCfg, metadata);
-  const { route: hardRoute, reasons: hardReasons } = hardGateRoute(features, runtimeCfg);
+  const runnerMaterialization = resolveRunnerMaterialization(task, command, features);
+  const { route: hardRoute, reasons: hardReasons } = hardGateRoute(features, runtimeCfg, runnerMaterialization);
 
   let route = hardRoute;
   let workContractHint = "";
@@ -1401,7 +1505,7 @@ export function inferRoute(task, command = "", metadata = {}) {
   const contractKind = inferContractKind(features, workContractHint);
   const scopeHint = inferScopeHint(features, contractKind, workContractHint);
   const capabilityRequirements = inferCapabilityRequirements(features, contractKind, scopeHint);
-  const laneFeasibility = buildLaneFeasibility(features, contractKind, scopeHint, workContractHint);
+  const laneFeasibility = buildLaneFeasibility(features, contractKind, scopeHint, workContractHint, runnerMaterialization);
   const feasibleRoute = chooseFeasibleRoute(route, scores, laneFeasibility);
   if (feasibleRoute.route !== route) {
     route = feasibleRoute.route;
@@ -1459,6 +1563,9 @@ export function inferRoute(task, command = "", metadata = {}) {
     semantic_review_reason: semantic.semanticReason,
     score_margin: semantic.scoreMargin,
     semantic_model_hint: semantic.needsSemanticReview ? chooseSemanticModelHint() : "",
+    runner_materialization_available: Boolean(runnerMaterialization),
+    runner_materialization_kind: String(runnerMaterialization?.kind || ""),
+    runner_playbook: runnerMaterialization ? { ...runnerMaterialization } : {},
     source: String(task || "").trim(),
   };
 }
