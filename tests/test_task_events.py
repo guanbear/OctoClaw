@@ -7,6 +7,7 @@ from pathlib import Path
 from lib.task_events import (
     SESSION_THREAD_MAP_SCHEMA_VERSION,
     TASK_EVENT_SCHEMA_VERSION,
+    _fallback_route_from_session_key,
     append_task_event,
     load_session_thread_map,
     load_task_events,
@@ -105,6 +106,21 @@ class TaskEventsTests(unittest.TestCase):
             self.assertEqual(resolved["target"], "channel:C123")
             self.assertEqual(resolved["thread_id"], "1712345.000100")
             self.assertEqual(resolved["last_message_id"], "m-1")
+
+    def test_fallback_route_uppercases_slack_user_id(self) -> None:
+        route = _fallback_route_from_session_key("agent:main:slack:default:direct:u0al9t5u89z")
+        self.assertEqual(route["origin"], "slack")
+        self.assertEqual(route["target"], "user:U0AL9T5U89Z")
+
+    def test_fallback_route_uppercases_slack_channel_id(self) -> None:
+        route = _fallback_route_from_session_key("agent:main:slack:channel:c1a2b3c4d")
+        self.assertEqual(route["origin"], "slack")
+        self.assertEqual(route["target"], "channel:C1A2B3C4D")
+
+    def test_fallback_route_does_not_uppercase_non_slack_ids(self) -> None:
+        route = _fallback_route_from_session_key("agent:main:discord:channel:123456")
+        self.assertEqual(route["origin"], "discord")
+        self.assertEqual(route["target"], "channel:123456")
 
 
 if __name__ == "__main__":

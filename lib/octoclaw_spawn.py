@@ -642,6 +642,51 @@ def finalize_native_spawn_result(
         return {"status": "failed", "summary": summary}
 
     if not result_payload:
+        # Degraded success: child exited 0 with readable text but no ---RESULT--- marker
+        if int(exit_code) == 0 and reply_preview and len(reply_preview.strip()) >= 10:
+            summary = compact_text(reply_preview, 180)
+            report_body = _render_native_result_report(task_id, {
+                "status": "done",
+                "summary": summary,
+                "user_safe_summary": summary,
+            }, summary=summary)
+            report_written = _write_native_report(report_path, report_body or summary)
+            subprocess.run(
+                ["python3", TASK_STATE_PY, "upsert", "--id", task_id,
+                 "--status", "done", "--summary", summary,
+                 "--route", route or "spawn_single", "--runtime", runtime or "subagent",
+                 "--worker-pool", worker_pool or "octoclaw-research",
+                 "--work-type", work_type or "research", "--phase", phase or "collect",
+                 "--protocol", protocol or "normal", "--profile", profile or "default",
+                 "--review-required", "true" if review_required else "false",
+                 "--report-path", report_written,
+                 "--user-safe-summary", summary] +
+                (["--model", model] if model else []) +
+                (["--model-band", model_band] if model_band else []),
+                check=False, capture_output=True, text=True,
+            )
+            artifacts_json = {
+                "worker_result": {
+                    "task_id": task_id, "status": "done",
+                    "summary": summary, "user_safe_summary": summary,
+                    "report": report_written, "artifacts": [], "files": [],
+                    "risks": [], "verification": [], "next_step": "none",
+                },
+                "degraded_result": True, "result_marker_found": False,
+            }
+            if report_written:
+                artifacts_json["report_path"] = report_written
+            done_command = [
+                "python3", TASK_STATE_PY, "done", "--id", task_id,
+                "--summary", summary, "--user-safe-summary", summary,
+                "--artifacts-json", json.dumps(artifacts_json, ensure_ascii=False),
+            ]
+            if report_written:
+                done_command.extend(["--report-path", report_written])
+            subprocess.run(done_command, check=False, capture_output=True, text=True)
+            return {"status": "done_degraded", "summary": summary, "report_path": report_written}
+
+        # Original failure path for truly empty output or non-zero exit
         summary = compact_text(reply_preview or stderr_tail or "native openclaw agent 未返回结构化 RESULT", 180)
         subprocess.run(
             ["python3", TASK_STATE_PY, "failed", "--id", task_id, "--summary", summary],
@@ -900,6 +945,7 @@ def resolve_python_bin() -> str:
 def resolve_openclaw_bin(config: dict[str, Any] | None = None) -> str:
     cfg = config if isinstance(config, dict) else spawn_execution_config()
     configured = str(cfg.get("openclaw_bin", "openclaw") or "openclaw").strip() or "openclaw"
+    env_openclaw_bin = str(os.environ.get("OPENCLAW_BIN", "") or "").strip()
     path = os.pathsep.join(
         part
         for part in [
@@ -909,7 +955,11 @@ def resolve_openclaw_bin(config: dict[str, Any] | None = None) -> str:
         ]
         if part
     )
-    candidates = [configured, "openclaw", "/opt/homebrew/bin/openclaw", "/usr/local/bin/openclaw"]
+    candidates = [
+        candidate
+        for candidate in [env_openclaw_bin, configured, "openclaw", "/opt/homebrew/bin/openclaw", "/usr/local/bin/openclaw"]
+        if str(candidate or "").strip()
+    ]
     for candidate in candidates:
         text = str(candidate or "").strip()
         if not text:
@@ -1028,6 +1078,7 @@ def execute_native_openclaw_spawn(
     env["OCTOCLAW_PYTHON_BIN"] = python_bin
     env["OCTOCLAW_DISABLE_RUNTIME_POLICY"] = "1"
     env["OPENCLAW_NO_RESPAWN"] = "1"
+    env["OPENCLAW_BIN"] = command[0] if command else openclaw_bin
     path_parts = ["/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", "")]
     env["PATH"] = ":".join(part for part in path_parts if part)
 
@@ -1385,6 +1436,7 @@ def build_task_prompt(
         skill_bundle=skill_bundle,
         expected_done=expected_done,
         summary_hint=summary_hint,
+        sealed_route=route if route in {"spawn_single", "spawn_multi"} else "",
     )
     result_payload = result_contract if isinstance(result_contract, dict) else build_result_contract(summary_hint, artifact_first=True)
     task_state_py = shlex.quote(TASK_STATE_PY)

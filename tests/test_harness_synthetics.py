@@ -48,7 +48,7 @@ class HarnessSyntheticTests(unittest.TestCase):
             (lib_dir / "send_pre_dispatch_ack.py").write_text(
                 """#!/usr/bin/env python3
 import json
-print(json.dumps({"ok": True, "sent": True, "message_id": "ack-1"}))
+print(json.dumps({"ok": True, "sent": True, "delivered": True, "message_id": "ack-1"}))
 """,
                 encoding="utf-8",
             )

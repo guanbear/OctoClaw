@@ -345,7 +345,7 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
       ctx?.cwd || process.cwd(),
       { timeoutMs },
     );
-    const sent = Boolean(payload?.sent || payload?.ok);
+    const sent = Boolean(payload?.delivered);
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
@@ -357,6 +357,8 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     return {
       attempted: true,
       sent,
+      delivered: Boolean(payload?.delivered),
+      error: String(payload?.error || ""),
       reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
       message,
       payload,
@@ -366,6 +368,8 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     return {
       attempted: true,
       sent: false,
+      delivered: false,
+      error: String(err),
       reason: String(err),
       message,
     };
@@ -392,6 +396,9 @@ function scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, l
           sessionId: String(ctx?.sessionId || ""),
           route: String(decision?.route_decision?.route || ""),
           taskClass: String(decision?.route_decision?.task_class || ""),
+          attempted: Boolean(result?.attempted),
+          delivered: Boolean(result?.delivered || result?.sent),
+          error: String(result?.error || ""),
           sent: Boolean(result?.sent),
           reason: String(result?.reason || ""),
           message: String(result?.message || ""),
@@ -448,7 +455,7 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
       ctx?.cwd || process.cwd(),
       { timeoutMs },
     );
-    const sent = Boolean(payload?.sent || payload?.ok);
+    const sent = Boolean(payload?.delivered);
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
@@ -460,6 +467,8 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
     return {
       attempted: true,
       sent,
+      delivered: Boolean(payload?.delivered),
+      error: String(payload?.error || ""),
       reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
       message,
       payload,
@@ -469,6 +478,8 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
     return {
       attempted: true,
       sent: false,
+      delivered: false,
+      error: String(err),
       reason: String(err),
       message,
     };
@@ -477,7 +488,7 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
 
 async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, onUpdate, logger) {
   const channelAttempt = await maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger);
-  if (channelAttempt.sent) {
+  if (channelAttempt.delivered) {
     return {
       ...channelAttempt,
       fallback_used: false,
@@ -494,7 +505,9 @@ async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, on
   const progressAttempt = await maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger);
   return {
     attempted: Boolean(channelAttempt.attempted || progressAttempt.attempted),
+    delivered: Boolean(channelAttempt.delivered || progressAttempt.sent),
     sent: Boolean(channelAttempt.sent || progressAttempt.sent),
+    error: channelAttempt.error || (progressAttempt.sent ? "" : "progress_update_failed"),
     reason: progressAttempt.sent ? progressAttempt.reason : channelAttempt.reason,
     message: progressAttempt.message || channelAttempt.message || "",
     payload: channelAttempt.payload,

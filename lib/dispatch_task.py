@@ -1688,6 +1688,23 @@ def main():
             metadata = metadata
     if args.session_key:
         metadata["session_key"] = args.session_key
+    inherited_session_key_from_policy = (
+        not metadata.get("session_key")
+        and args.policy_json
+    )
+    if inherited_session_key_from_policy:
+        try:
+            parsed_policy = json.loads(args.policy_json)
+            if isinstance(parsed_policy, dict):
+                inherited = str(
+                    (parsed_policy.get("request", {}) or {}).get("session_key", "")
+                    or ((parsed_policy.get("request", {}) or {}).get("metadata", {}) or {}).get("session_key", "")
+                    or parsed_policy.get("session_key", "")
+                ).strip()
+                if inherited:
+                    metadata["session_key"] = inherited
+        except (json.JSONDecodeError, AttributeError):
+            pass
     if args.policy_json:
         try:
             parsed = json.loads(args.policy_json)

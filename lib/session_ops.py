@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from task_events import register_session_binding, _strip_agent_prefix
+    from task_events import register_session_binding, resolve_session_binding, _strip_agent_prefix
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.task_events import register_session_binding, _strip_agent_prefix
+    from lib.task_events import register_session_binding, resolve_session_binding, _strip_agent_prefix
 
 
 def has_openclaw_cli() -> bool:
@@ -169,6 +169,24 @@ def _run_message_cli(cmd: list[str], *, timeout_seconds: int = 20, retry_attempt
     return {"ok": False, "status": "error", "error": last_error}
 
 
+def _normalize_slack_target(target: str) -> str:
+    """Uppercase Slack user/channel IDs so they match Slack API expectations.
+
+    Slack IDs are always uppercase in the API (U... for users, C... for channels,
+    D... for DMs, T... for workspaces).  Session keys arrive lowercase because
+    the OpenClaw gateway normalises keys to lowercase, so we must restore the
+    correct casing before constructing a target string.
+
+    Only the ID portion is uppercased — the prefix (``user:``, ``channel:``, etc.)
+    stays lowercase because the downstream ``openclaw message send`` CLI expects it
+    that way.
+    """
+    if ":" in target:
+        prefix, id_part = target.split(":", 1)
+        return f"{prefix}:{id_part.upper()}"
+    return target.upper()
+
+
 def resolve_message_target_from_session_key(session_key: str) -> dict:
     """
     Best-effort conversion from OpenClaw session keys to `openclaw message send`
@@ -185,21 +203,21 @@ def resolve_message_target_from_session_key(session_key: str) -> dict:
 
     if origin == "slack":
         if len(parts) >= 3 and parts[1] in {"dm", "direct", "user"}:
-            target = f"user:{parts[2]}"
+            target = _normalize_slack_target(f"user:{parts[2]}")
             if len(parts) >= 5 and parts[3] == "thread":
                 thread_id = parts[4]
         elif len(parts) >= 4 and parts[2] in {"dm", "direct", "user"}:
             # Handle slack:<env>:direct:<uid> format (e.g. slack:default:direct:u0al9t5u89z)
-            target = f"user:{parts[3]}"
+            target = _normalize_slack_target(f"user:{parts[3]}")
             if len(parts) >= 6 and parts[4] == "thread":
                 thread_id = parts[5]
         elif len(parts) >= 3 and parts[1] == "channel":
-            target = f"channel:{parts[2]}"
+            target = _normalize_slack_target(f"channel:{parts[2]}")
             if len(parts) >= 5 and parts[3] == "thread":
                 thread_id = parts[4]
         elif len(parts) >= 4 and parts[2] == "channel":
             # Handle slack:<env>:channel:<id> format
-            target = f"channel:{parts[3]}"
+            target = _normalize_slack_target(f"channel:{parts[3]}")
             if len(parts) >= 6 and parts[4] == "thread":
                 thread_id = parts[5]
     elif origin == "discord":
@@ -249,6 +267,8 @@ def resolve_message_target_from_session_key(session_key: str) -> dict:
             target = f"{parts[1]}:{parts[2]}"
         elif len(parts) >= 2:
             target = ":".join(parts[1: min(3, len(parts))])
+        if target and origin == "slack":
+            target = _normalize_slack_target(target)
 
     if not target:
         return {
@@ -265,6 +285,16 @@ def resolve_message_target_from_session_key(session_key: str) -> dict:
         "target": target,
         "thread_id": thread_id,
     }
+
+    if origin == "slack":
+        try:
+            stored = resolve_session_binding(session_key)
+            dm_channel_id = str(stored.get("dm_channel_id", "") or "").strip()
+            if dm_channel_id:
+                payload["target"] = f"dm:{dm_channel_id.upper()}"
+        except Exception:
+            pass
+
     try:
         register_session_binding(session_key, payload, source="session_resolve")
     except Exception as exc:

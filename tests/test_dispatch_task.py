@@ -409,6 +409,7 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
                 "phase": "implement",
                 "profile": "code",
                 "parent_id": "parent-1",
+                "session_key": "",
                 "register": True,
                 "execute": None,
                 "policy_decision": decision,

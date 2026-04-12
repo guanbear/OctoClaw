@@ -37,8 +37,11 @@ def main() -> None:
         print(json.dumps({
             "ok": False,
             "sent": False,
-            "session_key": args.session_key,
+            "attempted": False,
+            "delivered": False,
             "error": str((target or {}).get("error", "unresolvable session target")),
+            "target": str((target or {}).get("target") or ""),
+            "session_key": args.session_key,
         }, ensure_ascii=False))
         return
 
@@ -51,17 +54,19 @@ def main() -> None:
         timeout_seconds=12,
     )
     ok = bool(isinstance(response, dict) and response.get("ok"))
+    error_detail = "" if ok else str((response or {}).get("error", "message send failed"))
     payload = {
         "ok": ok,
-        "sent": ok,
+        "sent": ok,          # legacy alias; prefer 'delivered'
+        "attempted": True,    # always True if we reached the send step
+        "delivered": ok,      # True only if Slack API returned success
+        "error": error_detail,
         "channel": channel,
         "target": str(target.get("target") or ""),
         "thread_id": str(target.get("thread_id") or ""),
         "session_key": args.session_key,
         "response": response if isinstance(response, dict) else {},
     }
-    if not ok:
-        payload["error"] = str((response or {}).get("error", "message send failed"))
     print(json.dumps(payload, ensure_ascii=False))
 
 

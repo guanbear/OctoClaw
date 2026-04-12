@@ -81,6 +81,11 @@ def _strip_agent_prefix(session_key: str) -> str:
     return raw
 
 
+def _normalize_slack_id(raw: str) -> str:
+    """Uppercase Slack IDs — they arrive lowercase from gateway session keys."""
+    return raw.upper()
+
+
 def _fallback_route_from_session_key(session_key: str) -> dict[str, Any]:
     stripped = _strip_agent_prefix(session_key)
     parts = [part for part in stripped.split(":") if part != ""]
@@ -90,19 +95,23 @@ def _fallback_route_from_session_key(session_key: str) -> dict[str, Any]:
     target = ""
     thread_id = ""
     if len(parts) >= 3 and parts[1] in {"dm", "direct", "user"}:
-        target = f"user:{parts[2]}"
+        uid = _normalize_slack_id(parts[2]) if origin == "slack" else parts[2]
+        target = f"user:{uid}"
         if len(parts) >= 5 and parts[3] in {"thread", "topic"}:
             thread_id = parts[4]
     elif len(parts) >= 4 and parts[2] in {"dm", "direct", "user"}:
-        target = f"user:{parts[3]}"
+        uid = _normalize_slack_id(parts[3]) if origin == "slack" else parts[3]
+        target = f"user:{uid}"
         if len(parts) >= 6 and parts[4] in {"thread", "topic"}:
             thread_id = parts[5]
     elif len(parts) >= 3 and parts[1] in {"channel", "group", "room", "conversation", "space", "chat"}:
-        target = f"{parts[1]}:{parts[2]}"
+        cid = _normalize_slack_id(parts[2]) if origin == "slack" else parts[2]
+        target = f"{parts[1]}:{cid}"
         if len(parts) >= 5 and parts[3] in {"thread", "topic"}:
             thread_id = parts[4]
     elif len(parts) >= 4 and parts[2] in {"channel", "group", "room", "conversation", "space", "chat"}:
-        target = f"{parts[2]}:{parts[3]}"
+        cid = _normalize_slack_id(parts[3]) if origin == "slack" else parts[3]
+        target = f"{parts[2]}:{cid}"
         if len(parts) >= 6 and parts[4] in {"thread", "topic"}:
             thread_id = parts[5]
     elif len(parts) >= 3 and parts[1] in {"thread", "topic"}:

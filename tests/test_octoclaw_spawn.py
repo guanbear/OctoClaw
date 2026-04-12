@@ -459,6 +459,69 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("done", finish_cmd)
         self.assertIn("--artifacts-json", finish_cmd)
 
+    def test_finalize_native_spawn_result_degraded_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stdout_path = Path(tmpdir) / "degraded.stdout.log"
+            stderr_path = Path(tmpdir) / "degraded.stderr.log"
+            report_path = Path(tmpdir) / "degraded-report.md"
+            stdout_path.write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "result": {
+                            "payloads": [
+                                {"text": "搜索了这四个工具，没找到可靠的公开信息。可能需要进一步人工确认。"}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            stderr_path.write_text("", encoding="utf-8")
+            subprocess_calls = []
+
+            def _fake_run(cmd, *args, **kwargs):
+                subprocess_calls.append(cmd)
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+            with patch.object(octoclaw_spawn.subprocess, "run", side_effect=_fake_run):
+                result = octoclaw_spawn.finalize_native_spawn_result(
+                    task_id="research-degraded-1",
+                    stdout_path=str(stdout_path),
+                    stderr_path=str(stderr_path),
+                    report_path=str(report_path),
+                    exit_code=0,
+                    model="zhipu/glm-5.1",
+                    model_band="standard",
+                    route="spawn_single",
+                    runtime="subagent",
+                    worker_pool="octoclaw-research",
+                    work_type="research",
+                    phase="collect",
+                    protocol="normal",
+                    profile="default",
+                    review_required=False,
+                )
+
+            self.assertEqual(result["status"], "done_degraded")
+            self.assertIn("搜索了这四个工具", result["summary"])
+            self.assertEqual(result["report_path"], str(report_path))
+            self.assertTrue(report_path.exists())
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("搜索了这四个工具", report_text)
+            upsert_cmd = subprocess_calls[0]
+            done_cmd = subprocess_calls[1]
+            self.assertIn("upsert", upsert_cmd)
+            self.assertIn("--user-safe-summary", upsert_cmd)
+            self.assertIn("done", done_cmd)
+            self.assertIn("--user-safe-summary", done_cmd)
+            artifacts_json_str = done_cmd[done_cmd.index("--artifacts-json") + 1]
+            artifacts = json.loads(artifacts_json_str)
+            self.assertTrue(artifacts["degraded_result"])
+            self.assertFalse(artifacts["result_marker_found"])
+            self.assertEqual(artifacts["worker_result"]["status"], "done")
+
     def test_build_spawn_spec_backfills_child_session_facts_after_spawn(self) -> None:
         policy = {
             "route_decision": {

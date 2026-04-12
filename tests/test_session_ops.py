@@ -78,6 +78,29 @@ class SessionOpsMessageSendTests(unittest.TestCase):
         self.assertEqual(result["target"], "channel:C123")
         self.assertEqual(result["thread_id"], "1712345.000100")
 
+    def test_resolve_slack_uppercases_lowercase_user_id(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("agent:main:slack:default:direct:u0al9t5u89z")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "slack")
+        self.assertEqual(result["target"], "user:U0AL9T5U89Z")
+
+    def test_resolve_slack_uppercases_lowercase_channel_id(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("agent:main:slack:channel:c1a2b3c4d")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "slack")
+        self.assertEqual(result["target"], "channel:C1A2B3C4D")
+
+    def test_resolve_slack_dm_direct_format_uppercases(self) -> None:
+        result = session_ops.resolve_message_target_from_session_key("agent:main:slack:dm:uabcdef12")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["origin"], "slack")
+        self.assertEqual(result["target"], "user:UABCDEF12")
+
+    def test_normalize_slack_target_preserves_prefix(self) -> None:
+        self.assertEqual(session_ops._normalize_slack_target("user:u0al9t5u89z"), "user:U0AL9T5U89Z")
+        self.assertEqual(session_ops._normalize_slack_target("channel:c123"), "channel:C123")
+        self.assertEqual(session_ops._normalize_slack_target("nomatch"), "NOMATCH")
+
     def test_resolve_message_target_from_discord_thread_session(self) -> None:
         result = session_ops.resolve_message_target_from_session_key("agent:main:discord:channel:123:thread:456")
         self.assertTrue(result["ok"])

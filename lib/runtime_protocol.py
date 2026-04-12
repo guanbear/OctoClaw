@@ -172,6 +172,7 @@ def build_task_brief(
     budget_policy: dict[str, Any] | None = None,
     merge_contract: str = "",
     handoff_contract: str = "",
+    sealed_route: str = "",
 ) -> dict[str, Any]:
     constraints = [
         "开始前先写 running 状态",
@@ -230,6 +231,8 @@ def build_task_brief(
         "handoff_contract": str(handoff_contract or "").strip(),
         "skill_bundle": [str(item).strip() for item in (skill_bundle or []) if str(item).strip()],
         "expected_output": build_result_contract(summary_hint, artifact_first=True),
+        "source": "task_brief" if sealed_route else "",
+        "sealed_route": str(sealed_route or route or "").strip(),
     }
     return brief
 
