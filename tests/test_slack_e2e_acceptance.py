@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lib.slack_e2e_acceptance import (
+    build_exec_env,
     build_harness_prompt,
     choose_slack_session,
     detect_delivery_mode,
@@ -52,6 +53,13 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
             self.assertTrue(cfg["enabled"])
             self.assertEqual(cfg["bot_token"], "xoxb-test")
             self.assertEqual(cfg["group_policy"], "open")
+
+    @patch("lib.slack_e2e_acceptance.load_json")
+    def test_build_exec_env_reads_default_config_path(self, mock_load_json) -> None:
+        mock_load_json.return_value = {"gateway": {"bind": "127.0.0.1", "port": 18789, "auth": {"mode": "token", "token": "tok"}}}
+        env = build_exec_env()
+        self.assertEqual(env.get("OPENCLAW_GATEWAY_URL"), "ws://127.0.0.1:18789")
+        self.assertEqual(env.get("OPENCLAW_GATEWAY_TOKEN"), "tok")
 
     def test_choose_slack_session_prefers_threaded_direct_session(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-sessions-") as tmpdir:

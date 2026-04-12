@@ -188,7 +188,7 @@ def build_exec_env() -> dict[str, str]:
     path_parts = [_text(env.get("PATH"))]
     path_parts.extend(COMMON_BIN_DIRS)
     env["PATH"] = ":".join(part for part in path_parts if part)
-    gateway_cfg = load_json(DEFAULT_OPENCLAW_CONFIG).get("gateway", {})
+    gateway_cfg = load_json(default_openclaw_config_path()).get("gateway", {})
     if isinstance(gateway_cfg, dict):
         port = gateway_cfg.get("port", 18789)
         bind = _text(gateway_cfg.get("bind")) or "127.0.0.1"
