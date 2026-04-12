@@ -1722,6 +1722,10 @@ def main():
             return
     decision = merge_runtime_metadata_into_decision(decision, metadata, session_key=args.session_key)
     decision["legacy_policy_fallback_used"] = legacy_policy_fallback_used
+    if forced_route and forced_route != "auto":
+        if "route_decision" not in decision or not isinstance(decision.get("route_decision"), dict):
+            decision["route_decision"] = {}
+        decision["route_decision"]["route"] = forced_route
     args._policy_decision = decision
     route = decision_route(decision)
     model_meta = decision_model(decision)

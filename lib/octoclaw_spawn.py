@@ -995,6 +995,8 @@ def build_native_openclaw_command(
         prompt,
         "--json",
     ]
+    if model:
+        command.extend(["--model", model])
     if thinking and supports_thinking:
         command.extend(["--thinking", thinking])
     return command, session_key, session_id
