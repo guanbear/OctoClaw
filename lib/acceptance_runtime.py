@@ -58,13 +58,15 @@ def copy_if_exists(source: Path, target: Path) -> bool:
     return True
 
 
-def patch_slack_config(
+def patch_acceptance_config(
     payload: dict[str, Any],
     *,
     bot_token: str = "",
     app_token: str = "",
     group_policy: str = "",
     dm_policy: str = "",
+    gateway_port: int = 18790,
+    gateway_bind: str = "127.0.0.1",
 ) -> dict[str, Any]:
     result = dict(payload)
     channels = result.get("channels")
@@ -84,6 +86,13 @@ def patch_slack_config(
         slack["groupPolicy"] = group_policy
     if dm_policy:
         slack["dmPolicy"] = dm_policy
+
+    gateway = result.get("gateway")
+    if not isinstance(gateway, dict):
+        gateway = {}
+        result["gateway"] = gateway
+    gateway["port"] = int(gateway_port)
+    gateway["bind"] = _text(gateway_bind) or "127.0.0.1"
     return result
 
 
@@ -96,6 +105,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slack-app-token", default=_text(os.environ.get("OCTOCLAW_ACCEPTANCE_SLACK_APP_TOKEN")))
     parser.add_argument("--group-policy", default="open")
     parser.add_argument("--dm-policy", default="open")
+    parser.add_argument("--gateway-port", type=int, default=18790)
+    parser.add_argument("--gateway-bind", default="127.0.0.1")
     parser.add_argument("--skip-rollout", action="store_true")
     parser.add_argument("--output", default="")
     return parser.parse_args()
@@ -133,6 +144,8 @@ def bootstrap_acceptance_runtime(
     slack_app_token: str = "",
     group_policy: str = "open",
     dm_policy: str = "open",
+    gateway_port: int = 18790,
+    gateway_bind: str = "127.0.0.1",
     run_rollout_install: bool = True,
 ) -> dict[str, Any]:
     copied: list[str] = []
@@ -144,12 +157,14 @@ def bootstrap_acceptance_runtime(
     ensure_dir(target_home / "agents" / "main" / "agent")
 
     config_payload = load_json(source_config)
-    config_payload = patch_slack_config(
+    config_payload = patch_acceptance_config(
         config_payload,
         bot_token=slack_bot_token,
         app_token=slack_app_token,
         group_policy=group_policy,
         dm_policy=dm_policy,
+        gateway_port=gateway_port,
+        gateway_bind=gateway_bind,
     )
     write_json(target_config, config_payload)
     copied.append(str(target_config))
@@ -196,6 +211,8 @@ def main() -> int:
         slack_app_token=_text(args.slack_app_token),
         group_policy=_text(args.group_policy) or "open",
         dm_policy=_text(args.dm_policy) or "open",
+        gateway_port=int(args.gateway_port or 18790),
+        gateway_bind=_text(args.gateway_bind) or "127.0.0.1",
         run_rollout_install=not args.skip_rollout,
     )
     if args.output:

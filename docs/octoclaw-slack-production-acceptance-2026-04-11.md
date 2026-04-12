@@ -255,6 +255,7 @@ python3 lib/slack_e2e_acceptance.py \
   - `--workspace`
   - `--openclaw-home`
   这样 black-box 与 replay 都会落到同一套 acceptance runtime 参数上
+- 默认情况下，独立 acceptance runtime 会把 acceptance gateway 绑定到 `127.0.0.1:18790`，避免和生产 `18789` 冲突
 
 ---
 

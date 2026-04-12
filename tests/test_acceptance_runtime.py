@@ -59,6 +59,8 @@ class AcceptanceRuntimeTests(unittest.TestCase):
             target_config = json.loads((target_home / "openclaw.json").read_text(encoding="utf-8"))
             self.assertEqual(target_config["channels"]["slack"]["botToken"], "new-bot")
             self.assertEqual(target_config["channels"]["slack"]["appToken"], "new-app")
+            self.assertEqual(target_config["gateway"]["port"], 18790)
+            self.assertEqual(target_config["gateway"]["bind"], "127.0.0.1")
             self.assertTrue((target_home / "agents" / "main" / "agent" / "auth-profiles.json").exists())
             self.assertTrue((target_home / "agents" / "main" / "agent" / "models.json").exists())
             self.assertTrue((target_workspace / "tmp" / "octopus").exists())
