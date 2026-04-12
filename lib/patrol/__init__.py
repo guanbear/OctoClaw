@@ -5166,18 +5166,88 @@ def main():
         sys.exit(1)
 
 
-def _main_inner():
-    # 解析命令行参数
-    parser = argparse.ArgumentParser(description="八爪鱼巡逻脚本")
-    parser.add_argument("--force", action="store_true", 
-                        help="强制发送飞书卡片，无论状态是否变化，并展示待确认任务")
-    args = parser.parse_args()
-    force_mode = args.force
-    
-    if force_mode:
-        print("🐙 八爪鱼 reconcile/repair 开始（强制模式）...")
+def _cmd_observe_once():
+    print("🔍 observe-once: runtime snapshot...")
+    observation = observe_runtime_state_once(WORKSPACE)
+    runner_health = observation.get("runner_health", {}) if isinstance(observation.get("runner_health", {}), dict) else {}
+    runner_mode = str(observation.get("runner_execution_mode", "") or "ondemand").strip() or "ondemand"
+    if runner_mode == "ondemand":
+        if runner_health.get("present") and runner_health.get("healthy"):
+            print(f"  🏃 Runner on-demand active: {runner_health.get('health', {}).get('worker_id', '')}")
+        else:
+            print("  ℹ️  Runner on-demand mode (no daemon needed)")
+    elif runner_health.get("present"):
+        if runner_health.get("healthy"):
+            print(f"  🏃 Runner heartbeat OK: {runner_health.get('health', {}).get('worker_id', '')}")
+        else:
+            print(f"  ⚠️  Runner heartbeat unhealthy: {runner_health.get('reason')}")
     else:
-        print("🐙 八爪鱼 reconcile/repair 开始...")
+        print("  ℹ️  Runner not started")
+    tasks = observation.get("tasks", []) if isinstance(observation.get("tasks", []), list) else []
+    if not tasks:
+        print("✅ task-state empty, nothing to observe")
+        return
+    running, queued, pending_confirm, deferred, stuck, recent_done_from_classify = classify_tasks(tasks)
+    print(f"  📊 running={len(running)} queued={len(queued)} pending={len(pending_confirm)} deferred={len(deferred)} stuck={len(stuck)} done={len(recent_done_from_classify)}")
+    progress_hydrated = int(observation.get("progress_hydrated", 0) or 0)
+    results_hydrated = int(observation.get("results_hydrated", 0) or 0)
+    if progress_hydrated:
+        print(f"  🧭 progress signals recovered: {progress_hydrated}")
+    if results_hydrated:
+        print(f"  ✅ results recovered: {results_hydrated}")
+    recovered = observation.get("recovered", [])
+    if recovered:
+        print(f"  ♻️ recovered stale tasks: {len(recovered)}")
+
+
+def _cmd_reconcile_once():
+    print("🔄 reconcile-once: detect + bounded recovery...")
+    observation = observe_runtime_state_once(WORKSPACE)
+    tasks = observation.get("tasks", []) if isinstance(observation.get("tasks", []), list) else []
+    if not tasks:
+        print("✅ task-state empty, nothing to reconcile")
+        return
+    progress_hydrated = int(observation.get("progress_hydrated", 0) or 0)
+    results_hydrated = int(observation.get("results_hydrated", 0) or 0)
+    if progress_hydrated:
+        print(f"  🧭 progress recovered: {progress_hydrated}")
+    if results_hydrated:
+        print(f"  ✅ results recovered: {results_hydrated}")
+    heartbeat_reassigned = observation.get("heartbeat_reassigned", [])
+    if heartbeat_reassigned:
+        print(f"  💓 heartbeat recovered tasks: {len(heartbeat_reassigned)}")
+    recovered = observation.get("recovered", [])
+    if recovered:
+        print(f"  ♻️ recovered stale tasks: {len(recovered)}")
+    steered = attempt_task_steers(tasks)
+    if steered > 0:
+        print(f"  🧭 steered: {steered}")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
+    killed = check_and_kill_timed_out_tasks(tasks)
+    if killed:
+        print(f"  ⏱️ timed out: {len(killed)}")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
+    spawned = check_queued_tasks(tasks)
+    if spawned > 0:
+        print(f"  🚀 auto-spawned queued: {spawned}")
+        tasks = load_tasks()
+        tasks = annotate_tasks_with_session_state(tasks)
+        refresh_openclaw_taskflow_bindings(tasks)
+    running, queued, pending_confirm, deferred, stuck, recent_done = classify_tasks(tasks)
+    print(f"  📊 running={len(running)} queued={len(queued)} pending={len(pending_confirm)} deferred={len(deferred)} stuck={len(stuck)} done={len(recent_done)}")
+    active_sessions = get_active_subagent_sessions()
+    orphans = check_orphan_tasks(tasks, active_sessions)
+    if orphans:
+        print(f"  🔴 orphan tasks: {len(orphans)} (no auto-redispatch in reconcile-once)")
+
+
+def _cmd_repair_once():
+    force_mode = True
+    print("🔧 repair-once: detect + recovery + force...")
     observation = observe_runtime_state_once(WORKSPACE)
     runner_health = observation.get("runner_health", {}) if isinstance(observation.get("runner_health", {}), dict) else {}
     runner_mode = str(observation.get("runner_execution_mode", "") or "daemon").strip() or "daemon"
@@ -5810,6 +5880,30 @@ def _main_inner():
     except Exception as e:
         print(f"❌ 发送飞书卡片失败: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _main_inner():
+    parser = argparse.ArgumentParser(
+        description="OctoClaw runtime tool — one-shot observe / reconcile / repair",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("observe-once", help="Print runtime observer snapshot (read-only)")
+    sub.add_parser("reconcile-once", help="Single reconcile pass (detect + bounded recovery)")
+    sub.add_parser("repair-once", help="Single repair pass (detect + recovery + force)")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
+    if args.command == "observe-once":
+        _cmd_observe_once()
+    elif args.command == "reconcile-once":
+        _cmd_reconcile_once()
+    elif args.command == "repair-once":
+        _cmd_repair_once()
 
 
 if __name__ == "__main__":

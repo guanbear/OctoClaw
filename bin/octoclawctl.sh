@@ -45,56 +45,43 @@ esac
 
 OPENCLAW_SERVICE="${OPENCLAW_SERVICE:-openclaw.service}"
 RUNNER_SERVICE="${RUNNER_SERVICE:-octoclaw-runner.service}"
-PATROL_SERVICE="${PATROL_SERVICE:-octoclaw-patrol.service}"
 
-RUNNER_DAEMON_SH="$LIB_DIR/runner-daemon.sh"
-PATROL_LOOP_SH="$LIB_DIR/patrol-loop.sh"
-PATROL_PY="$LIB_DIR/patrol.py"
+PATROL_PKG="$LIB_DIR/patrol"
 RUNNER_QUEUE_PY="$LIB_DIR/runner_queue.py"
 STATUS_SH="$LIB_DIR/status.sh"
 RUNNER_HEALTH_FILE="$WORKSPACE/tmp/octopus/runner-health.json"
 RUNNER_PID_FILE="$WORKSPACE/tmp/octopus/runner-daemon.pid"
-PATROL_PID_FILE="$WORKSPACE/tmp/octopus/patrol-loop.pid"
 
 print_usage() {
     cat <<'EOF'
-Usage:
-  bash bin/octoclawctl.sh <status|ps|observe-once|reconcile-once|repair-once|runner-status|runner-pool-status|up|down|restart|reload> [target]
+OctoClaw Runtime Control (single macmini deployment)
 
-Observe commands:
-  status         render the compact operator status view
-  ps             print runtime process/supervisor state
-  observe-once   print the read-only runtime observer snapshot once
-  reconcile-once run a single runtime reconcile/observe pass
-  repair-once    run a single repair-capable patrol pass
-  runner-status  print runner queue/health details
-  runner-pool-status
-                 alias of runner-status
+Recommended commands:
+  status              render compact operator status view
+  observe-once        print runtime observer snapshot (read-only)
+  reconcile-once      single reconcile pass (detect + bounded recovery)
+  repair-once         single repair pass (detect + recovery + force)
+  runner-status       print runner queue/health details
 
-Control commands:
-  up             start the selected supported target
-  down           stop the selected supported target
-  restart        restart the selected supported target
-  reload         alias of restart for supported targets
+Gateway control:
+  up gateway          start OpenClaw gateway
+  down gateway        stop OpenClaw gateway
+  restart gateway     restart OpenClaw gateway
 
-Targets (for up/down/restart/reload):
-  all       openclaw + runner (default for up/down/restart)
-  runtime   runner only
-  openclaw  main OpenClaw service only
-  runner    OctoClaw runner only
+Runner pool:
+  up runner           start runner pool
+  down runner         stop runner pool
+  restart runner      restart runner pool
+  runner-status       print runner pool status
 
-Examples:
-  bash bin/octoclawctl.sh status
-  bash bin/octoclawctl.sh ps
-  bash bin/octoclawctl.sh up runtime
-  bash bin/octoclawctl.sh restart all
-  bash bin/octoclawctl.sh reconcile-once
-  bash bin/octoclawctl.sh repair-once
-  bash bin/octoclawctl.sh observe-once
+Recommended runtime path:
+  Gateway (always on) → Node runtime extension → native task/runner pool
+  Use observe-once / reconcile-once / repair-once for on-demand diagnostics.
+  No patrol loop or runner daemon is needed for normal operation.
 
 Runtime env:
-  RUNNER_MODE=ondemand  skip resident runner; dispatch will trigger one-shot runner passes when needed (default)
-  RUNNER_MODE=daemon    keep resident runner mode as opt-in acceleration
+  RUNNER_MODE=ondemand  on-demand runner (default, recommended)
+  RUNNER_MODE=daemon    resident runner mode (opt-in acceleration)
 EOF
 }
 
@@ -146,7 +133,7 @@ tmux_shell_quote() {
 }
 
 build_tmux_runner_command() {
-    printf 'cd %s && export WORKSPACE=%s RUNNER_POLL_INTERVAL_SECONDS=%s RUNNER_HEARTBEAT_INTERVAL_SECONDS=%s RUNNER_DEFAULT_TIMEOUT_SECONDS=%s RUNNER_MAX_AGE_MINUTES=%s RUNNER_MAX_IDLE_SECONDS=%s RUNNER_MAX_JOBS_PER_WORKER=%s && exec bash %s' \
+    printf 'cd %s && export WORKSPACE=%s RUNNER_POLL_INTERVAL_SECONDS=%s RUNNER_HEARTBEAT_INTERVAL_SECONDS=%s RUNNER_DEFAULT_TIMEOUT_SECONDS=%s RUNNER_MAX_AGE_MINUTES=%s RUNNER_MAX_IDLE_SECONDS=%s RUNNER_MAX_JOBS_PER_WORKER=%s && exec %s runner_loop' \
         "$(tmux_shell_quote "$SKILL_ROOT")" \
         "$(tmux_shell_quote "$WORKSPACE")" \
         "$(tmux_shell_quote "$RUNNER_POLL_INTERVAL_SECONDS")" \
@@ -155,15 +142,7 @@ build_tmux_runner_command() {
         "$(tmux_shell_quote "$RUNNER_MAX_AGE_MINUTES")" \
         "$(tmux_shell_quote "$RUNNER_MAX_IDLE_SECONDS")" \
         "$(tmux_shell_quote "$RUNNER_MAX_JOBS_PER_WORKER")" \
-        "$(tmux_shell_quote "$RUNNER_DAEMON_SH")"
-}
-
-build_tmux_patrol_command() {
-    printf 'cd %s && export WORKSPACE=%s PATROL_INTERVAL=%s && exec bash %s' \
-        "$(tmux_shell_quote "$SKILL_ROOT")" \
-        "$(tmux_shell_quote "$WORKSPACE")" \
-        "$(tmux_shell_quote "$PATROL_INTERVAL")" \
-        "$(tmux_shell_quote "$PATROL_LOOP_SH")"
+        "$(tmux_shell_quote "$PYTHON_BIN")"
 }
 
 tmux_start_window() {
@@ -254,10 +233,6 @@ start_runner_runtime() {
                 return 0
             fi
             rm -f "$RUNNER_PID_FILE" "$RUNNER_HEALTH_FILE"
-            if [ ! -f "$RUNNER_DAEMON_SH" ]; then
-                echo "runner-daemon.sh removed (R9); use gateway-managed runner pool or on-demand mode"
-                return 1
-            fi
             background_spawn env \
                 WORKSPACE="$WORKSPACE" \
                 RUNNER_POLL_INTERVAL_SECONDS="$RUNNER_POLL_INTERVAL_SECONDS" \
@@ -266,7 +241,7 @@ start_runner_runtime() {
                 RUNNER_MAX_AGE_MINUTES="$RUNNER_MAX_AGE_MINUTES" \
                 RUNNER_MAX_IDLE_SECONDS="$RUNNER_MAX_IDLE_SECONDS" \
                 RUNNER_MAX_JOBS_PER_WORKER="$RUNNER_MAX_JOBS_PER_WORKER" \
-                bash "$RUNNER_DAEMON_SH"
+                "$PYTHON_BIN" -m runner_queue runner_loop
             ;;
     esac
 }
@@ -303,75 +278,17 @@ restart_runner_runtime() {
     start_runner_runtime
 }
 
-start_patrol_runtime() {
-    local mode
-    mode="$(resolve_supervisor_mode)"
-    mkdir -p "$WORKSPACE/tmp/octopus"
-    case "$mode" in
-        systemd)
-            systemctl start "$PATROL_SERVICE"
-            ;;
-        tmux)
-            tmux_start_window "$TMUX_PATROL_WINDOW_NAME" "$(build_tmux_patrol_command)"
-            ;;
-        *)
-            local pid
-            pid="$(read_pid_file "$PATROL_PID_FILE")"
-            if pid_is_running "$pid"; then
-                return 0
-            fi
-            rm -f "$PATROL_PID_FILE"
-            if [ ! -f "$PATROL_LOOP_SH" ]; then
-                echo "patrol-loop.sh removed (R9); use reconcile-once or repair-once instead"
-                return 1
-            fi
-            background_spawn env \
-                WORKSPACE="$WORKSPACE" \
-                PATROL_INTERVAL="$PATROL_INTERVAL" \
-                bash "$PATROL_LOOP_SH"
-            ;;
-    esac
-}
-
-stop_patrol_runtime() {
-    local mode
-    mode="$(resolve_supervisor_mode)"
-    case "$mode" in
-        systemd)
-            systemctl stop "$PATROL_SERVICE" >/dev/null 2>&1 || true
-            rm -f "$PATROL_PID_FILE"
-            ;;
-        tmux)
-            tmux_stop_window "$TMUX_PATROL_WINDOW_NAME"
-            rm -f "$PATROL_PID_FILE"
-            ;;
-        *)
-            local pid
-            pid="$(read_pid_file "$PATROL_PID_FILE")"
-            if pid_is_running "$pid"; then
-                kill "$pid" >/dev/null 2>&1 || true
-            fi
-            rm -f "$PATROL_PID_FILE"
-            ;;
-    esac
-}
-
-restart_patrol_runtime() {
-    stop_patrol_runtime
-    start_patrol_runtime
-}
-
 run_patrol_once() {
     export WORKSPACE
-    "$PYTHON_BIN" "$PATROL_PY"
+    "$PYTHON_BIN" -m patrol "$@"
 }
 
 run_reconcile_once() {
-    run_patrol_once
+    run_patrol_once reconcile-once
 }
 
 run_repair_once() {
-    run_patrol_once
+    run_patrol_once repair-once
 }
 
 run_runner_status() {
@@ -412,8 +329,7 @@ print_process_snapshot() {
         echo "runner_pid=${runner_pid:-}"
         echo "runner_running=$([ -n "$runner_pid" ] && pid_is_running "$runner_pid" && echo true || echo false)"
     fi
-    echo "legacy_patrol_pid=$(read_pid_file "$PATROL_PID_FILE")"
-    echo "legacy_patrol_running=$([ -n "$(read_pid_file "$PATROL_PID_FILE")" ] && pid_is_running "$(read_pid_file "$PATROL_PID_FILE")" && echo true || echo false)"
+    echo "legacy_patrol_loop=removed"
     echo "runner_health_file=$RUNNER_HEALTH_FILE"
     echo "runner_health_present=$([ -f "$RUNNER_HEALTH_FILE" ] && echo true || echo false)"
 }
@@ -450,8 +366,9 @@ run_action() {
                 restart|reload) restart_runner_runtime ;;
             esac
             ;;
-        patrol)
-            echo "patrol target is deprecated; use reconcile-once or repair-once instead." >&2
+        patrol|patrol-loop)
+            echo "ERROR: patrol loop is no longer supported." >&2
+            echo "Use: octoclawctl observe-once | reconcile-once | repair-once" >&2
             exit 1
             ;;
         *)
@@ -483,8 +400,8 @@ case "$COMMAND" in
         run_repair_once
         ;;
     patrol-once)
-        echo "patrol-once is deprecated; running repair-once instead." >&2
-        run_repair_once
+        echo "patrol-once removed; use reconcile-once or repair-once." >&2
+        exit 1
         ;;
     observe-once)
         run_observer_once
