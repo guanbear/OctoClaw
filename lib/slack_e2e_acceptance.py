@@ -272,7 +272,7 @@ def choose_slack_session(
             continue
         if explicit_session_key and normalized["session_key"] != explicit_session_key:
             continue
-        if explicit_target and normalized["target"] != explicit_target:
+        if explicit_target and normalized["target"] and normalized["target"] != explicit_target and not explicit_session_key:
             continue
         if explicit_native_channel_id and normalized["native_channel_id"] and normalized["native_channel_id"] != explicit_native_channel_id:
             continue
@@ -285,6 +285,8 @@ def choose_slack_session(
         if explicit_thread_id and not normalized["thread_id"]:
             normalized["thread_id"] = explicit_thread_id
         if explicit_target and not normalized["target"]:
+            normalized["target"] = explicit_target
+        elif explicit_target and explicit_session_key:
             normalized["target"] = explicit_target
         if require_native_channel and not normalized["native_channel_id"]:
             continue

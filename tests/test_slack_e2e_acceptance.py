@@ -169,9 +169,11 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
             chosen = choose_slack_session(
                 str(path),
                 session_key="agent:main:slack:channel:acceptance",
+                target="channel:C0AS4DAPPU3",
                 native_channel_id="C0AS4DAPPU3",
             )
             self.assertEqual(chosen["session_key"], "agent:main:slack:channel:acceptance")
+            self.assertEqual(chosen["target"], "channel:C0AS4DAPPU3")
             self.assertEqual(chosen["native_channel_id"], "C0AS4DAPPU3")
 
     @patch("lib.slack_e2e_acceptance.slack_api_call")
