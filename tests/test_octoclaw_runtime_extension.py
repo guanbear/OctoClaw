@@ -309,6 +309,20 @@ Sender (untrusted metadata):
 
         self.assertFalse(payload)
 
+    def test_subagent_session_id_stays_unmanaged_even_without_subagent_session_key(self) -> None:
+        payload = run_runtime_helper(
+            """__octoclawTest.isManagedAgentContext({
+                sessionKey: "",
+                sessionId: "octoclaw-subagent-code-20260411082815989843",
+                agentId: "agent:main:main",
+                messageProvider: "slack",
+                channelId: "D123",
+                trigger: "message"
+            })"""
+        )
+
+        self.assertFalse(payload)
+
     def test_pre_hint_allows_octoclaw_control_tools_including_dispatch(self) -> None:
         payload = run_runtime_helper(
             """Array.from(__octoclawTest.preHintAllowedTools({

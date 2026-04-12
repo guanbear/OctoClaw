@@ -1949,7 +1949,7 @@ function isManagedAgentContext(ctx = {}) {
   const sessionKey = String(ctx.sessionKey || "");
   const sessionId = String(ctx.sessionId || "");
   const agentId = String(ctx.agentId || "");
-  if (/subagent/i.test(sessionKey) || /subagent/i.test(agentId)) {
+  if (/subagent/i.test(sessionKey) || /subagent/i.test(sessionId) || /subagent/i.test(agentId)) {
     return false;
   }
   const managedRefs = [parseSessionRoute(sessionKey), parseSessionRoute(sessionId)].filter(
