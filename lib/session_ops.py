@@ -197,10 +197,20 @@ def resolve_message_target_from_session_key(session_key: str) -> dict:
             target = f"user:{parts[2]}"
             if len(parts) >= 5 and parts[3] == "thread":
                 thread_id = parts[4]
+        elif len(parts) >= 4 and parts[2] in {"dm", "direct", "user"}:
+            # Handle slack:<env>:direct:<uid> format (e.g. slack:default:direct:u0al9t5u89z)
+            target = f"user:{parts[3]}"
+            if len(parts) >= 6 and parts[4] == "thread":
+                thread_id = parts[5]
         elif len(parts) >= 3 and parts[1] == "channel":
             target = f"channel:{parts[2]}"
             if len(parts) >= 5 and parts[3] == "thread":
                 thread_id = parts[4]
+        elif len(parts) >= 4 and parts[2] == "channel":
+            # Handle slack:<env>:channel:<id> format
+            target = f"channel:{parts[3]}"
+            if len(parts) >= 6 and parts[4] == "thread":
+                thread_id = parts[5]
     elif origin == "discord":
         if len(parts) >= 3 and parts[1] == "channel":
             target = f"channel:{parts[2]}"
