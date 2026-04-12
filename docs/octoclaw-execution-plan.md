@@ -661,7 +661,7 @@ P5 不应该顺手混进这些题：
 
 - follow-up 仍可能按旧记忆回答，而不是按最新 execution facts 回答
 - direct slow lookup 没有稳定的快速 ack
-- burst 多消息仍可能被压成单一总 route
+- single-turn compound request 与 burst 多消息仍可能被压成单一总 route
 - dispatch 仍可能复用错误粒度的 cached decision
 - `policy_judge` 已经是主路径，但当前只有单 judge；主 judge 超时会直接掉回 planner fallback，导致同一对话内 decision source 漂移
 
@@ -677,6 +677,14 @@ P5 不应该顺手混进这些题：
    - `upstream_project lookup -> runner/workflow-first`
    - runner 当前不可用时，只允许 `degraded_direct_lookup`
    - 不允许 silent direct fallback 把 `upstream_project` 查询长期吞掉
+
+当前 substrate 已经具备：
+
+- runner queue / worker health / queue pressure band
+- native task lineage / parent-child 聚合
+- `spawn_multi` 的 linear flow
+
+但 live path 还没有通用的 `depends_on + guard` planner / scheduler。也就是说，底座够了，但“单条长消息 -> 多 work item -> 依赖执行”这层还没有正式进入主链。
 
 这条线固定分成四步：
 
@@ -694,9 +702,9 @@ P5 不应该顺手混进这些题：
 
 但当前这四步还需要再明确成 4 个一次性整改点：
 
-1. **J1 work-item decomposition**
-   - 不再把一个 burst 内的多条消息粗暴压成单一路由
-   - `control_observer / session_control` 子句与 `fresh_live_lookup / delegated_work` 子句先拆成独立 work item
+1. **J1 work-item decomposition（burst + single-turn compound）**
+   - 不再把一个 burst 内的多条消息、也不再把一条长消息内的多子句请求粗暴压成单一路由
+   - `control_observer / session_control / local_surface_lookup` 子句与 `fresh_live_lookup / delegated_work` 子句先拆成独立 work item
 2. **J2 single semantic truth**
    - 语义只由 stateless judge 判一次
    - front gate 只产出 signal / hint
@@ -706,6 +714,10 @@ P5 不应该顺手混进这些题：
    - 不再要求模型先真的走到 `octoclaw_dispatch`
 4. **J4 final-answer execution guard**
    - `dispatch_required=true` 但没有 `dispatch/materialization/handoff/capability_failure` 时，assistant 不能把结果说得像已经做完
+5. **J5 dependency-aware compound planner**
+   - 模型负责输出结构化 work items：`intent_class / lane / goal / depends_on / guard`
+   - 代码只负责 validator / materializer / scheduler / final execution facts
+   - 现阶段复用现有 `direct + runner + spawn + native task lineage` 底座，不把“完整通用原生 DAG 已经 live”说早
 
 推荐顺序：
 
@@ -716,8 +728,9 @@ P5 不应该顺手混进这些题：
 5. `J2` single semantic truth / dispatch decision source hardening
 6. `J3` delegated ACK at route commit
 7. `J4` final-answer execution guard
-8. `J1` burst message decomposition
-9. acceptance / nightly coverage
+8. `J1` work-item decomposition（先从 burst + single-turn compound 起步）
+9. `J5` dependency-aware compound planner
+10. acceptance / nightly coverage
 
 ### 实施原则
 

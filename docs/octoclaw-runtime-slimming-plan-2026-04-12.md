@@ -11,9 +11,36 @@
 
 ---
 
+## 0. 当前状态
+
+本计划对应的三项 runtime slimming 工作，已经完成第一拍实现：
+
+1. `patrol` 已从默认常驻主链退成 one-shot 角色
+2. `install.sh` / `bin/octoclawctl.sh` 已切到单一推荐路径
+3. legacy loop / daemon / cron / systemd 路径已从正式支持面移除
+
+对应提交：
+
+- `e4be994` — `feat: runtime slimming — patrol one-shot, legacy paths removed, single recommended path`
+- `4168f83` — `fix: patrol repair-once 'changes' not initialized bug`
+
+需要额外说明的是：
+
+- 这表示“默认正式运行路径”已经切到单一路径
+- 不表示仓库里所有 legacy 词汇、operator helper、nightly cron 相关残余都已经完全消失
+- 后续更准确的目标是：默认运行面已经切换成功，残余符号与辅助脚本继续按需清理
+
+因此这份文档现在的角色不再是“待实现计划”，而是：
+
+- 记录这轮 runtime slimming 的设计决策
+- 作为后续验收与残余清理的基线
+- 明确为什么当前不继续重写整个 `patrol`
+
+---
+
 ## 1. 目标
 
-这轮不再继续扩 router 小功能，而是优先收掉默认运行面的复杂度。
+这轮最初的目标，是不再继续扩 router 小功能，而是优先收掉默认运行面的复杂度。
 
 本计划只做三件事：
 
@@ -22,6 +49,12 @@
 3. 删除 legacy loop / daemon / cron / systemd 路径，只保留单一推荐路径
 
 目标不是“再做一轮抽象整理”，而是让系统默认运行方式更简单、更真、更容易维护。
+
+当前这个目标已经完成第一拍；接下来更重要的是确认：
+
+- 默认运行面是否真的不再依赖旧 loop
+- `patrol` 剩余职责是否已经足够窄
+- install / ctl / docs / acceptance 是否都只围绕单一路径工作
 
 ---
 
@@ -155,15 +188,17 @@
 
 ---
 
-## 5. 实施分三阶段
+## 5. 第一拍实施记录
 
-## Phase A：让 patrol 退出默认主链
+以下三阶段已完成第一拍实现；现在更重要的是基于这份记录做残余验收和清理，而不是重新回到旧 runtime 路径。
+
+## Phase A（已完成）：让 patrol 退出默认主链
 
 ### 目标
 
 默认系统行为不再依赖 patrol 常驻。
 
-### 任务
+### 已完成内容
 
 1. 明确 patrol 唯一支持的主入口：
    - `observe-once`
@@ -177,7 +212,7 @@
    - repair
    - removable legacy leftovers
 
-### 验收
+### 后续验收重点
 
 1. 停掉 patrol loop 后：
    - ACK 仍正常
@@ -189,13 +224,13 @@
 
 ---
 
-## Phase B：收瘦 install / octoclawctl 默认路径
+## Phase B（已完成）：收瘦 install / octoclawctl 默认路径
 
 ### 目标
 
 安装和运维默认只暴露推荐主链。
 
-### 任务
+### 已完成内容
 
 1. `install.sh`
    - 删除 cron patrol / cron probe 的默认安装逻辑
@@ -214,7 +249,7 @@
    - 能删则删
    - 暂时不能删则统一报废弃错误并指向唯一推荐路径
 
-### 验收
+### 后续验收重点
 
 1. 新安装不再默认创建 patrol/runner 常驻链路
 2. `octoclawctl` 默认帮助只展示推荐主链
@@ -222,13 +257,13 @@
 
 ---
 
-## Phase C：删除 legacy 路径并收成单一路径
+## Phase C（已完成）：删除 legacy 路径并收成单一路径
 
 ### 目标
 
 让代码、命令、安装、文档、验收全都只围绕单一推荐路径。
 
-### 任务
+### 已完成内容
 
 1. 文档统一
    - 只保留推荐路径说明
@@ -243,7 +278,7 @@
    - production acceptance 只针对推荐路径
    - CI / acceptance 不再给 legacy 路径留同级门槛
 
-### 验收
+### 后续验收重点
 
 1. 文档里能清楚回答“现在推荐怎么跑”
 2. 安装和命令帮助不会再暗示第二条正式路径
@@ -251,7 +286,7 @@
 
 ---
 
-## 6. 建议的具体落地顺序
+## 6. 第一拍的实际落地顺序
 
 1. 先改文档和命令帮助，把唯一推荐路径说清
 2. 再改 `install.sh` 默认行为
@@ -266,7 +301,7 @@
 
 ---
 
-## 7. 验收标准
+## 7. 当前验收标准
 
 这三项完成后，至少要满足：
 
@@ -280,7 +315,18 @@
 
 ---
 
-## 8. 给实现者的约束
+## 8. 残余 follow-up
+
+第一拍完成后，短期还需要继续确认这几件事：
+
+1. `install.sh`、`bin/octoclawctl.sh` 里剩余的 runtime/auxiliary helper 是否已经和“唯一推荐路径”口径一致
+2. `patrol` 剩余职责是否真的只服务于 `observe-once / reconcile-once / repair-once`
+3. acceptance / operator docs / status surface 是否不再暗示 patrol loop、runner daemon、systemd/cron 是正式主链
+4. 如果仍保留少量非主链辅助脚本，文档必须明确它们属于辅助运维或 nightly 资产，而不是默认运行依赖
+
+---
+
+## 9. 给实现者的约束
 
 1. 不要一上来重写 patrol 全文件
 2. 不要引入新的并行 runtime
@@ -290,6 +336,6 @@
 
 ---
 
-## 9. 一句话实现指令
+## 10. 一句话实现指令
 
 > **目标不是“把 patrol 变得更强”，而是“让系统默认不需要 patrol，并把系统收成唯一推荐路径”。**

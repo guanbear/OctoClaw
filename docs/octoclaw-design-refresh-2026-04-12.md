@@ -97,15 +97,15 @@
 
 ### 3.1 patrol 仍然太重
 
-虽然最近已经从 `patrol.py` 迁成 `lib/patrol/__init__.py`，但当前代码现实仍然是：
+runtime slimming 第一拍已经落地，但 patrol 本体仍然很重。当前代码现实仍然是：
 
-- `lib/patrol/__init__.py` 仍有 `5816` 行
-- patrol 相关逻辑仍混有大量 legacy compat、修复、通知、分类、观察职责
+- `lib/patrol/__init__.py` 仍有 `5911` 行
+- patrol 相关逻辑仍混有修复、通知、分类、观察与部分 legacy 收尾职责
 
 这说明：
 
-- “patrol package 化”已经发生
-- 但“patrol 依赖真正从默认主链退出”还没有完全做到
+- “patrol 退出默认常驻主链”已经完成第一拍
+- 但“patrol 剩余职责已经足够窄、足够清晰”还没有完全收尾
 
 短期不一定要为了“拆文件而拆文件”立刻做一次大切分，但必须先收掉两件事：
 
@@ -114,15 +114,15 @@
 
 ### 3.2 install / ctl 的默认运行面还不够瘦
 
-当前代码里仍能看到较重的 legacy compat 面：
+runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但代码层仍能看到一些残余符号与辅助运维分支：
 
-- `install.sh` 仍保留 `patrol-loop`、`runner-daemon`、cron 注册、systemd 模板、tmux 托管分支
-- `bin/octoclawctl.sh` 仍保留大量 patrol/runner compat target
+- `install.sh` 已显式标注 legacy loop / daemon / cron / systemd 被移除，但仍保留少量 cron/nightly/辅助脚本相关逻辑
+- `bin/octoclawctl.sh` 的默认帮助已经切到单一推荐路径，但文件内部仍保留 systemd/tmux/shell 等控制分支和部分旧变量
 
-这不一定意味着现在默认行为已经完全错误，但它至少说明：
+这不表示默认路径切换失败，而是说明：
 
-- 默认运行面与旧运行面还没有彻底分离
-- 维护者仍然容易把 legacy 控制路径当成推荐路径
+- “默认推荐路径”已经切换成功
+- 但 install / ctl 的内部实现和 operator 心智还没有完全收成只围绕单一路径思考
 
 ### 3.3 真实 Slack E2E 还不够“生产验收级”
 
@@ -153,27 +153,83 @@
 
 这说明：在“更快/更省/更好”之外，**更可控** 仍然是短期主线的一部分。
 
+### 3.5 单条长消息的 compound request 还没有进入 live 主链
+
+当前系统已经具备一些重要底座：
+
+- queued burst 的基础 decomposition
+- runner queue / worker health / backpressure
+- native task lineage / parent-child 聚合
+- `spawn_multi` 的线性 flow
+
+但它还不能把一条单句自然语言稳定编译成多个带依赖关系的 work item。
+
+例如：
+
+> “早上好，你是啥模型，请帮我查下 openclaw 的最新版本。如果有新版本帮我更新下”
+
+目标态应该是：
+
+1. `direct`：问候与本地事实
+2. `runner`：远端 release 查询
+3. `guard`：比较本地与远端版本
+4. `spawn_single`：只有 guard 成立时才执行更新
+
+当前 live path 仍主要假设“一个 turn 选一个主 route”，busy burst 的拆分只是一个局部 baseline，不是目标态。
+
+这意味着下一阶段最核心的设计工作，不是再继续扩关键词规则，而是：
+
+- 让模型输出结构化 work items / `depends_on` / `guard`
+- 让代码只做 validator / materializer / scheduler / execution facts
+- 让 provenance/follow-up 只认最终 execution ledger
+
 ---
 
 ## 4. 哪些短期计划是“本来就该做，但现在还没做完”
 
-### 4.1 第一优先级：默认运行面收口
+### 4.1 第一优先级：runtime slimming 第一拍后的残余验收与收尾
 
-这条线是短期最值钱的技术债，优先级高于继续加 router 小功能。
+这条线今天已经完成第一拍实现，但还需要把“代码落了”真正变成“默认运行面已经稳定切换”。
 
-短期要完成的不是“再给 patrol 加能力”，而是：
+短期收尾重点是：
 
-1. 把 patrol 从默认运行面彻底降成按需 reconcile/repair 工具
-2. 把 install/ctl 的默认路径收成 gateway + Node runtime extension + optional backend
-3. 对单机 `macmini` 部署，直接删除 legacy loop / daemon / cron / systemd 路径，收成唯一推荐路径
+1. 确认 patrol 只剩 `observe-once / reconcile-once / repair-once`
+2. 确认 install / ctl / docs / acceptance 都只围绕单一路径描述
+3. 把残余的 runtime/auxiliary helper 区分清楚，不再让 operator 把它们误读成第二条正式主链
 
-这里的关键不是“把 patrol 拆成更多小文件”本身，而是：
+这里的关键不是继续扩 patrol，而是确认：
 
-- 是否继续让 patrol 成为默认依赖
-- 是否继续让 install/ctl 暗中维持旧 loop 心智
-- 是否继续为了不存在的迁移需求保留第二条正式运行路径
+- 默认运行面是否真的已经不依赖 patrol 常驻
+- install / ctl 是否真的不再暗中维持旧 loop 心智
+- 辅助脚本是否已经从“默认运行依赖”退成“可选运维资产”
 
-### 4.2 第二优先级：真正的生产级自动化 E2E 验收
+### 4.2 第二优先级：compound request 与 dependency-aware execution
+
+这是当前最核心、也最容易继续出“看起来像修好了，实际还会错”的功能缺口。
+
+短期要完成的不是继续补 route case，而是：
+
+1. 把单条长消息从“一个 turn 一个主 route”升级成“一个 turn 一个 work plan”
+2. 让模型输出结构化 work items：
+   - `intent_class`
+   - `lane`
+   - `goal`
+   - `depends_on`
+   - `guard`
+3. 让代码只做：
+   - validator
+   - materializer
+   - scheduler
+   - execution fact grounding
+4. 让 provenance/follow-up 只认最终 execution ledger，不再解释 route 中间态
+
+这里直接对应今天反复暴露的问题：
+
+- mixed-intent 单句会被压成一个主 route
+- delegated lane 没 materialize 也可能被说得像已经执行了
+- “你是怎么查的”还会选择性相信 route/judge 中间态
+
+### 4.3 第三优先级：真正的生产级自动化 E2E 验收
 
 这是目前最需要从“工具”升级成“系统”的一条线。
 
@@ -181,11 +237,12 @@
 
 1. 单独 Slack bot / 单独测试 workspace 或测试 channel
 2. 单独 acceptance agent/session，不复用主生产会话
-3. 覆盖完整 6 类核心句子
+3. 覆盖完整 6 类核心句子，再扩到 compound request / dependency 场景
 4. 不只统计 ACK/final timing，还要校验内容正确性：
    - provenance 是否真实
    - follow-up 是否绑到正确 execution ledger
    - delegated work 是否真的 materialize
+   - compound request 是否按依赖顺序执行
 5. 失败结果自动沉淀成：
    - fixture
    - acceptance report
@@ -193,7 +250,7 @@
 
 这里更接近 Anthropic 笔记里的 `eval + postmortem discipline`，而不是“写一个临时 smoke 脚本”。
 
-### 4.3 第三优先级：Slack/IM 安全与投递策略收口
+### 4.4 第四优先级：Slack/IM 安全与投递策略收口
 
 短期必须完成：
 
@@ -206,7 +263,7 @@
    - delegated work
 4. 让 acceptance harness 能把安全配置也一并检查
 
-### 4.4 第四优先级：把 GitHub CI/CD 变成真正的 rollout gate
+### 4.5 第五优先级：把 GitHub CI/CD 变成真正的 rollout gate
 
 仓库里已经有基础 CI：
 
@@ -240,7 +297,7 @@
 - 把验收结果沉淀成可追踪资产
 - 让 bad case 更快进入 fixture / replay / issue
 
-### 4.5 第五优先级：IM / display 产品化，而不是继续停留在 baseline
+### 4.6 第六优先级：IM / display 产品化，而不是继续停留在 baseline
 
 这条线不该再被当成“还没开始做”，但也不该压过核心 runtime/acceptance。
 
@@ -259,7 +316,7 @@
 - 把 capability matrix 变成用户感知到的一致产品行为
 - 把状态面从“很多命令/很多 surface”收成“按需出现的轻量操作面”
 
-### 4.6 需要后移的，不要抢到前面
+### 4.7 需要后移的，不要抢到前面
 
 以下内容值得做，但不应排到短期核心之前：
 
@@ -272,8 +329,9 @@
 这些都应建立在：
 
 1. K1 judge cascade 结构稳定
-2. 默认运行面收口
-3. 真实 Slack 生产验收闭环成立
+2. runtime slimming 第一拍验收闭环成立
+3. compound request / dependency-aware execution 基线成立
+4. 真实 Slack 生产验收闭环成立
 
 之后再推进。
 
@@ -346,33 +404,63 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
 - 如果核心主链还没用真实 Slack 验收闭环证明稳定
 - 提前切 cheap/local 或 cache，只会让问题更难诊断
 
+### 5.6 compound request 的正确定位
+
+更新后的定位应该是：
+
+1. 这不是“更聪明的 route classifier”，而是“结构化工作计划”
+2. 模型负责：
+   - work-item decomposition
+   - `lane`
+   - `depends_on`
+   - `guard`
+3. 代码负责：
+   - validator
+   - materializer
+   - scheduler
+   - final execution facts
+4. provenance/follow-up 只认最终事实，不再混用 intent / route / dispatch 中间态
+
+当前 busy burst decomposition 只是局部 baseline，不应被误当成这个目标已经实现。
+
 ---
 
 ## 6. 更新后的推荐阶段顺序
 
-### Phase A：默认运行面收口
+### Phase A：runtime slimming 第一拍验收与残余收尾
 
-目标：让系统“默认更小、更真、更少旁路”。
+目标：确认系统已经“默认更小、更真、更少旁路”。
 
 优先做：
 
-1. patrol 角色收缩与依赖剥离
-2. install / octoclawctl 默认路径收瘦
-3. 删除 legacy loop / daemon / cron / systemd 路径，收成唯一推荐路径
+1. 确认 patrol 只剩 one-shot 角色
+2. 清理 install / ctl / docs / acceptance 中残余的双路径心智
+3. 明确辅助脚本与默认运行面的边界
 
-### Phase B：真实生产验收与安全闭环
+### Phase B：compound request 与 dependency-aware execution
+
+目标：让单条长消息不再被压成一个主 route，而是稳定编译成带依赖的 work plan。
+
+优先做：
+
+1. model-planned work-item decomposition
+2. validator / materializer / scheduler contract
+3. `depends_on` / `guard` 执行顺序
+4. provenance / follow-up 只读 final execution facts
+
+### Phase C：真实生产验收与安全闭环
 
 目标：让“体验好”变成可测事实。
 
 优先做：
 
 1. dedicated Slack acceptance bot / channel / session
-2. 6 个核心句子全覆盖
+2. 6 个核心句子 + compound request 场景全覆盖
 3. provenance/follow-up 内容断言
 4. allowlist + tool exposure 收紧
 5. 自动沉淀 bad case 与 issue/backlog
 
-### Phase C：CI/CD rollout gate
+### Phase D：CI/CD rollout gate
 
 目标：把本地测试、nightly、acceptance、artifact 沉淀收成默认工程纪律。
 
@@ -383,7 +471,7 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
 3. acceptance/shadow/failure artifact upload
 4. issue/backlog integration
 
-### Phase D：IM / display 产品化
+### Phase E：IM / display 产品化
 
 目标：把 baseline capability 收成用户感知一致的产品行为。
 
@@ -393,7 +481,7 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
 2. per-IM capability-aware rendering
 3. anchor / update / final / fallback 统一语义
 
-### Phase E：K1 后续性能与成本深化
+### Phase F：K1 后续性能与成本深化
 
 目标：在稳定主链上继续降成本、降抖动。
 
@@ -403,9 +491,9 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
 2. cheap/local shadow ledger
 3. cheap/local partial rollout
 
-### Phase F：探索项
+### Phase G：探索项
 
-目标：只在前四阶段稳定后再扩。
+目标：只在前五阶段稳定后再扩。
 
 包括：
 
