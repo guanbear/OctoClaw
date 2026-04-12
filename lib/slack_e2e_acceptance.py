@@ -19,6 +19,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import MAIN_AGENT_SESSIONS_FILE
 
+try:
+    from session_ops import send_agent_message
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.session_ops import send_agent_message
+
 
 DEFAULT_OPENCLAW_CONFIG = os.path.expanduser("~/.openclaw/openclaw.json")
 COMMON_BIN_DIRS = [
@@ -49,8 +54,76 @@ SMOKE_SCENARIOS: list[dict[str, Any]] = [
         "prompt": "你的control ui访问地址是啥",
         "ack_deadline_ms": 1500,
         "final_timeout_s": 45,
+        "assertions": {
+            "final_must_include_any": ["127.0.0.1", "localhost", "http://", "https://"],
+        },
     },
 ]
+
+CORE_SCENARIOS: list[dict[str, Any]] = [
+    {
+        "name": "plain_chat",
+        "prompt": "在吗",
+        "ack_deadline_ms": 1000,
+        "final_timeout_s": 30,
+    },
+    *SMOKE_SCENARIOS[:1],
+    {
+        "name": "provenance_followup",
+        "prompt": "怎么查的",
+        "ack_deadline_ms": 1500,
+        "final_timeout_s": 45,
+        "assertions": {
+            "must_not_include_any": [
+                "route 判定",
+                "spawn_single",
+                "direct_answer",
+                "playbook",
+                "regex",
+                "route=",
+            ],
+        },
+    },
+    *SMOKE_SCENARIOS[2:3],
+    {
+        "name": "execution_followup",
+        "prompt": "刚才那个任务判定是啥",
+        "ack_deadline_ms": 1500,
+        "final_timeout_s": 45,
+        "assertions": {
+            "must_not_include_any": [
+                "route 判定",
+                "spawn_single",
+                "direct_answer",
+                "playbook",
+                "regex",
+                "route=",
+            ],
+        },
+    },
+    {
+        "name": "delegated_work",
+        "prompt": "帮我查一下最近 release，给我 5 句话总结",
+        "ack_deadline_ms": 1500,
+        "final_timeout_s": 120,
+    },
+]
+
+ACCEPTANCE_SCENARIOS: list[dict[str, Any]] = [
+    *CORE_SCENARIOS,
+    {
+        "name": "compound_request",
+        "prompt": "早上好，你是啥模型，请帮我查下 openclaw 的最新版本。如果有新版本帮我更新下",
+        "ack_deadline_ms": 1500,
+        "final_timeout_s": 180,
+    },
+]
+
+PRESET_SCENARIOS: dict[str, list[dict[str, Any]]] = {
+    "smoke": SMOKE_SCENARIOS,
+    "core6": CORE_SCENARIOS,
+    "acceptance": ACCEPTANCE_SCENARIOS,
+}
 
 
 def _text(value: Any) -> str:
@@ -118,11 +191,13 @@ def load_slack_config(config_path: str = DEFAULT_OPENCLAW_CONFIG) -> dict[str, A
     payload = load_json(config_path)
     channels = payload.get("channels", {}) if isinstance(payload.get("channels"), dict) else {}
     slack = channels.get("slack", {}) if isinstance(channels.get("slack"), dict) else {}
+    env_bot_token = _text(os.environ.get("OCTOCLAW_SLACK_BOT_TOKEN") or os.environ.get("OPENCLAW_SLACK_BOT_TOKEN"))
+    env_app_token = _text(os.environ.get("OCTOCLAW_SLACK_APP_TOKEN") or os.environ.get("OPENCLAW_SLACK_APP_TOKEN"))
     return {
         "config_path": config_path,
         "enabled": bool(slack.get("enabled")),
-        "bot_token": _text(slack.get("botToken")),
-        "app_token": _text(slack.get("appToken")),
+        "bot_token": env_bot_token or _text(slack.get("botToken")),
+        "app_token": env_app_token or _text(slack.get("appToken")),
         "group_policy": _text(slack.get("groupPolicy")),
         "dm_policy": _text(slack.get("dmPolicy")),
     }
@@ -157,6 +232,10 @@ def choose_slack_session(
     sessions_path: str = MAIN_AGENT_SESSIONS_FILE,
     *,
     session_key: str = "",
+    target: str = "",
+    native_channel_id: str = "",
+    thread_id: str = "",
+    chat_type: str = "",
     prefer_direct: bool = True,
     require_native_channel: bool = True,
 ) -> dict[str, Any]:
@@ -169,6 +248,14 @@ def choose_slack_session(
         if normalized["provider"] != "slack":
             continue
         if session_key and normalized["session_key"] != session_key:
+            continue
+        if target and normalized["target"] != target:
+            continue
+        if native_channel_id and normalized["native_channel_id"] != native_channel_id:
+            continue
+        if thread_id and normalized["thread_id"] != thread_id:
+            continue
+        if chat_type and normalized["chat_type"] != chat_type:
             continue
         if require_native_channel and not normalized["native_channel_id"]:
             continue
@@ -184,6 +271,61 @@ def choose_slack_session(
         reverse=True,
     )
     return entries[0]
+
+
+def get_scenarios_for_preset(preset: str) -> list[dict[str, Any]]:
+    rows = PRESET_SCENARIOS.get(_text(preset))
+    return [dict(item) for item in rows] if rows else [dict(item) for item in SMOKE_SCENARIOS]
+
+
+def inspect_replay_source(spec: str) -> dict[str, Any]:
+    raw = _text(spec)
+    if not raw:
+        return {"ok": False, "error": "empty replay source"}
+    if "=" in raw:
+        label, path_text = raw.split("=", 1)
+    else:
+        label, path_text = "", raw
+    label = _text(label) or Path(path_text).expanduser().name or "replay_source"
+    root = Path(path_text).expanduser()
+    if not root.exists():
+        return {"ok": False, "label": label, "path": str(root), "error": "path not found"}
+
+    def _find_file(base: Path, *candidates: str) -> str:
+        for candidate in candidates:
+            path = base / candidate
+            if path.exists():
+                return str(path)
+        return ""
+
+    sessions_index = ""
+    replay_log = ""
+    task_state = ""
+    session_file_count = 0
+    if root.is_dir():
+        sessions_index = _find_file(root, "sessions.json", "merged/sessions.json")
+        replay_log = _find_file(root, "runtime-policy-replay.jsonl", "merged/runtime-policy-replay.jsonl")
+        task_state = _find_file(root, "task-state.json", "merged/task-state.json")
+        session_candidates = list(root.rglob("session-*.json"))
+        session_file_count = len(session_candidates)
+    else:
+        file_name = root.name
+        if file_name == "sessions.json":
+            sessions_index = str(root)
+        elif file_name == "runtime-policy-replay.jsonl":
+            replay_log = str(root)
+        elif file_name == "task-state.json":
+            task_state = str(root)
+    return {
+        "ok": True,
+        "label": label,
+        "path": str(root),
+        "is_dir": root.is_dir(),
+        "sessions_index": sessions_index,
+        "replay_log": replay_log,
+        "task_state": task_state,
+        "session_file_count": session_file_count,
+    }
 
 
 def slack_api_call(token: str, method: str, params: dict[str, Any] | None = None, *, timeout: int = 15) -> dict[str, Any]:
@@ -221,6 +363,17 @@ def launch_agent_turn(
     *,
     timeout_s: int = 180,
 ) -> dict[str, Any]:
+    session_key = _text(session.get("session_key"))
+    if session_key and not _text(session.get("session_id")):
+        gateway_result = send_agent_message(session_key, prompt, timeout_seconds=0)
+        ok = bool(gateway_result.get("ok")) or _text(gateway_result.get("status")) in {"accepted", "queued"}
+        return {
+            "ok": ok,
+            "mode": "gateway_rpc",
+            "gateway_result": gateway_result,
+            "command": ["openclaw", "gateway", "call", "agent"],
+            "timeout_s": timeout_s,
+        }
     openclaw_bin = locate_openclaw_cli()
     if not openclaw_bin:
         return {"ok": False, "error": "openclaw cli unavailable"}
@@ -249,6 +402,7 @@ def launch_agent_turn(
         return {"ok": False, "error": str(exc), "command": cmd}
     return {
         "ok": True,
+        "mode": "cli",
         "process": proc,
         "command": cmd,
         "timeout_s": timeout_s,
@@ -376,6 +530,8 @@ def evaluate_messages(messages: list[dict[str, Any]], *, started_at: float, ack_
 
 
 def detect_delivery_mode(process_info: dict[str, Any]) -> str:
+    if _text(process_info.get("mode")) == "gateway_rpc":
+        return "gateway_rpc"
     stderr = _text(process_info.get("stderr"))
     if "pairing required" in stderr:
         return "gateway_pairing_required"
@@ -386,6 +542,39 @@ def detect_delivery_mode(process_info: dict[str, Any]) -> str:
     if process_info.get("returncode") == 0:
         return "gateway_or_session_deliver"
     return "unknown"
+
+
+def evaluate_content_assertions(messages: list[dict[str, Any]], scenario: dict[str, Any]) -> dict[str, Any]:
+    assertions = scenario.get("assertions", {}) if isinstance(scenario.get("assertions"), dict) else {}
+    if not assertions:
+        return {"passed": True, "checked": False, "failures": []}
+    transcript_text = "\n".join(message_text(item) for item in messages if message_text(item)).strip()
+    final_text = ""
+    for item in reversed(messages):
+        text = message_text(item)
+        if text:
+            final_text = text
+            break
+    transcript_lower = transcript_text.lower()
+    final_lower = final_text.lower()
+    failures: list[str] = []
+
+    must_include_any = assertions.get("must_include_any", [])
+    if must_include_any and not any(_text(token).lower() in transcript_lower for token in must_include_any):
+        failures.append("missing required transcript token")
+    final_must_include_any = assertions.get("final_must_include_any", [])
+    if final_must_include_any and not any(_text(token).lower() in final_lower for token in final_must_include_any):
+        failures.append("missing required final token")
+    must_not_include_any = assertions.get("must_not_include_any", [])
+    leaked = [_text(token) for token in must_not_include_any if _text(token).lower() in transcript_lower]
+    if leaked:
+        failures.append(f"unexpected internal tokens: {', '.join(leaked)}")
+    return {
+        "passed": not failures,
+        "checked": True,
+        "failures": failures,
+        "final_text": final_text,
+    }
 
 
 def run_scenario(
@@ -432,7 +621,6 @@ def run_scenario(
             "error": _text(launched.get("error")) or "openclaw agent launch failed",
             "send_result": launched,
         }
-    process = launched["process"]
     deadline = started_at + final_timeout_s
     messages: list[dict[str, Any]] = []
     last_new_at = started_at
@@ -457,25 +645,33 @@ def run_scenario(
         "stdout": "",
         "stderr": "",
         "timed_out": False,
+        "mode": _text(launched.get("mode")) or ("cli" if launched.get("process") is not None else ""),
     }
-    try:
-        stdout, stderr = process.communicate(timeout=5)
-        process_info["returncode"] = process.returncode
-        process_info["stdout"] = _text(stdout)
-        process_info["stderr"] = _text(stderr)
-    except subprocess.TimeoutExpired:
-        process_info["timed_out"] = True
-        process.kill()
+    if process_info["mode"] == "cli":
+        process = launched["process"]
         try:
             stdout, stderr = process.communicate(timeout=5)
-        except Exception:
-            stdout, stderr = "", ""
-        process_info["returncode"] = process.returncode
-        process_info["stdout"] = _text(stdout)
-        process_info["stderr"] = _text(stderr)
+            process_info["returncode"] = process.returncode
+            process_info["stdout"] = _text(stdout)
+            process_info["stderr"] = _text(stderr)
+        except subprocess.TimeoutExpired:
+            process_info["timed_out"] = True
+            process.kill()
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except Exception:
+                stdout, stderr = "", ""
+            process_info["returncode"] = process.returncode
+            process_info["stdout"] = _text(stdout)
+            process_info["stderr"] = _text(stderr)
+    else:
+        process_info["returncode"] = 0 if bool(launched.get("ok")) else 1
+        process_info["stdout"] = json.dumps(launched.get("gateway_result", {}), ensure_ascii=False)
     delivery_mode = detect_delivery_mode(process_info)
     evaluation = evaluate_messages(messages, started_at=started_at, ack_deadline_ms=ack_deadline_ms, final_timeout_s=final_timeout_s)
     evaluation["ack_verifiable"] = delivery_mode not in {"embedded_fallback", "gateway_pairing_required", "embedded_session_locked"}
+    content_assertions = evaluate_content_assertions(messages, scenario)
+    evaluation["content_assertions"] = content_assertions
     transcript = [
         {
             "ts": _text(item.get("ts")),
@@ -487,7 +683,12 @@ def run_scenario(
         }
         for item in messages
     ]
-    ok = bool(evaluation["final_seen"]) and bool(transcript) and (not evaluation["ack_verifiable"] or bool(evaluation["ack_seen"]))
+    ok = (
+        bool(evaluation["final_seen"])
+        and bool(transcript)
+        and (not evaluation["ack_verifiable"] or bool(evaluation["ack_seen"]))
+        and bool(content_assertions.get("passed", True))
+    )
     return {
         "name": scenario_name,
         "ok": ok,
@@ -510,9 +711,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--openclaw-config", default=DEFAULT_OPENCLAW_CONFIG)
     parser.add_argument("--sessions-path", default=MAIN_AGENT_SESSIONS_FILE)
     parser.add_argument("--session-key", default="", help="Explicit OpenClaw session key to drive.")
+    parser.add_argument("--target", default="", help="Explicit Slack target to match, e.g. channel:C123 or user:U123.")
+    parser.add_argument("--native-channel-id", default="", help="Explicit Slack native channel id to match.")
+    parser.add_argument("--thread-id", default="", help="Explicit Slack thread id to match.")
+    parser.add_argument("--chat-type", default="", choices=["", "direct", "channel"])
     parser.add_argument("--prefer-direct", action="store_true", default=True)
     parser.add_argument("--scenario", action="append", dest="scenarios", default=[], help="Override prompt scenario. Repeatable.")
-    parser.add_argument("--preset", choices=["smoke"], default="smoke")
+    parser.add_argument("--preset", choices=sorted(PRESET_SCENARIOS.keys()), default="smoke")
+    parser.add_argument("--replay-source", action="append", default=[], help="Optional label=path replay bundle or artifact path.")
     parser.add_argument("--output", default="", help="Optional path to write JSON report.")
     parser.add_argument("--poll-interval-s", type=float, default=1.0)
     parser.add_argument("--quiet-window-s", type=float, default=4.0)
@@ -528,13 +734,17 @@ def main() -> int:
     session = choose_slack_session(
         args.sessions_path,
         session_key=args.session_key,
+        target=args.target,
+        native_channel_id=args.native_channel_id,
+        thread_id=args.thread_id,
+        chat_type=args.chat_type,
         prefer_direct=bool(args.prefer_direct),
         require_native_channel=True,
     )
     if not session:
         print(json.dumps({"ok": False, "error": "no suitable slack session found"}, ensure_ascii=False, indent=2))
         return 2
-    scenarios = [{"name": f"custom_{idx+1}", "prompt": prompt} for idx, prompt in enumerate(args.scenarios)] or list(SMOKE_SCENARIOS)
+    scenarios = [{"name": f"custom_{idx+1}", "prompt": prompt} for idx, prompt in enumerate(args.scenarios)] or get_scenarios_for_preset(args.preset)
     results = [
         run_scenario(
             session,
@@ -547,7 +757,9 @@ def main() -> int:
     ]
     report = {
         "ok": all(bool(item.get("ok")) for item in results),
+        "preset": args.preset,
         "session": session,
+        "replay_sources": [inspect_replay_source(item) for item in args.replay_source],
         "results": results,
     }
     if args.output:

@@ -126,23 +126,24 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
 
 ### 3.3 真实 Slack E2E 还不够“生产验收级”
 
-`lib/slack_e2e_acceptance.py` 当前只有 3 个 smoke 场景：
+`lib/slack_e2e_acceptance.py` 已经不再只是 3 个 smoke case 的最小脚本。
 
-- `fresh_live_lookup`
-- `provenance_followup`
-- `local_surface_lookup`
+当前它已经支持：
 
-缺的正好是最影响真实体验的三类：
+- `smoke` / `core6` / `acceptance` 三档 preset
+- 显式绑定 `session_key / target / native_channel_id / thread_id`
+- 独立 acceptance bot/channel 的黑盒验收，不再只依赖“最近 Slack session”
+- 基础内容断言
+  - provenance 回答禁止泄露 `route 判定 / spawn_single / playbook` 等内部中间态
+  - `Control UI` 类回复要求带出地址形态
+- `replay_source` 描述骨架，允许把 macmini / VM 的真实 session bundle 挂进同一份报告
 
-- `plain_chat`
-- `execution_followup` 的任务判定问句
-- `delegated_work`
+但它还没有完全达到“生产级系统”：
 
-而且目前 harness 还没有自动验证：
-
-- provenance 回答内容是否真的匹配 ledger
-- 真实 fast ACK 是否符合目标
-- delegated work 的 pre_dispatch_ack / progress / final 三段链路是否完整
+- 真实 fast ACK 仍主要是时序观测，不是全链严格证明
+- delegated work 的 `pre_dispatch_ack / progress / final` 还需要更细的内容断言
+- macmini/VM 回放验收目前只是统一报告入口，还不是完整 replay scheduler
+- black-box 与 replay 两条线还没有完全收成一个 nightly / CI gate
 
 ### 3.4 安全收口还不能算完成
 
@@ -276,6 +277,15 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
    - fixture
    - acceptance report
    - 可选 issue / backlog item
+
+当前实现阶段可以拆成两条并行轨：
+
+1. `acceptance-blackbox`
+   - 独立 Slack bot / channel / session
+   - 核心句子 + compound request 黑盒验收
+2. `acceptance-replay`
+   - macmini / VM 的真实 session / replay / task-state bundle
+   - 用统一报告结构做回放校验与坏例沉淀
 
 这里更接近 Anthropic 笔记里的 `eval + postmortem discipline`，而不是“写一个临时 smoke 脚本”。
 

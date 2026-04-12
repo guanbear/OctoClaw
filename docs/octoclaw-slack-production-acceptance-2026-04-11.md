@@ -142,19 +142,52 @@
 3. `nc -vz github.com 443`
 4. 查看最近 gateway log 是否存在持续性 socket/ping 异常
 
-如果要做黑盒 Slack smoke，可直接运行：
+如果要做最小黑盒 smoke，可直接运行：
 
 ```bash
 python3 lib/slack_e2e_acceptance.py --preset smoke
 ```
 
+如果要跑完整 6 条核心句子，推荐：
+
+```bash
+python3 lib/slack_e2e_acceptance.py --preset core6
+```
+
+如果要在独立 acceptance bot / channel 上跑更完整的生产验收，可用：
+
+```bash
+python3 lib/slack_e2e_acceptance.py \
+  --preset acceptance \
+  --session-key '<acceptance-session-key>'
+```
+
+也可以不用“最近 session”策略，显式约束目标：
+
+```bash
+python3 lib/slack_e2e_acceptance.py \
+  --preset core6 \
+  --target 'channel:C12345678' \
+  --native-channel-id 'C12345678'
+```
+
 说明：
 
-- 脚本会优先从 `~/.openclaw/agents/main/sessions/sessions.json` 选择最近可用的 Slack session
+- 脚本现在支持显式绑定 `session_key / target / native_channel_id / thread_id`
+- 如果不显式传参，仍会从 `~/.openclaw/agents/main/sessions/sessions.json` 选择最近可用的 Slack session
 - 再通过 gateway `agent` 调用注入 prompt
 - 然后直接用 Slack Web API 拉回 thread/history，统计 ACK 与 final
+- `core6` 覆盖：
+  - `在吗`
+  - `你再看下 OpenClaw 有啥更新，尤其是 Memory 方向`
+  - `怎么查的`
+  - `Control UI 地址是啥`
+  - `刚才那个任务判定是啥`
+  - 一条明确 delegated work 请求
+- `acceptance` 在 `core6` 基础上再加入 compound request
 - 如果报告里出现 `delivery_mode=embedded_fallback`，则 `ack_verifiable=false` 是预期行为
 - 这说明当前是 CLI fallback 黑盒验收，只稳定验证 Slack 最终回流与 follow-up/provenance；真实“快 ACK”仍要靠用户入站或 gateway 直连链路验收
+- 现在还支持 `--replay-source label=/path/to/bundle`，可把 macmini / VM 的真实 session bundle 挂进同一份 acceptance 报告
 
 ---
 

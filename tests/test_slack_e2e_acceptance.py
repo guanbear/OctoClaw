@@ -11,7 +11,10 @@ from lib.slack_e2e_acceptance import (
     choose_slack_session,
     detect_delivery_mode,
     evaluate_messages,
+    evaluate_content_assertions,
     fetch_observed_messages,
+    get_scenarios_for_preset,
+    inspect_replay_source,
     load_slack_config,
     resolve_channel_id_for_target,
     run_scenario,
@@ -100,6 +103,41 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
             self.assertEqual(chosen["native_channel_id"], "D123")
             self.assertEqual(chosen["thread_id"], "1712345.000100")
 
+    def test_choose_slack_session_can_match_explicit_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-sessions-target-") as tmpdir:
+            path = Path(tmpdir) / "sessions.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "agent:main:acceptance": {
+                            "updatedAt": 10,
+                            "chatType": "channel",
+                            "origin": {
+                                "provider": "slack",
+                                "to": "channel:C_ACCEPT",
+                                "nativeChannelId": "C_ACCEPT",
+                            },
+                            "deliveryContext": {"channel": "slack", "to": "channel:C_ACCEPT"},
+                        },
+                        "agent:main:main": {
+                            "updatedAt": 30,
+                            "chatType": "direct",
+                            "origin": {
+                                "provider": "slack",
+                                "to": "user:U123",
+                                "nativeChannelId": "D123",
+                            },
+                            "deliveryContext": {"channel": "slack", "to": "user:U123"},
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            chosen = choose_slack_session(str(path), target="channel:C_ACCEPT")
+            self.assertEqual(chosen["session_key"], "agent:main:acceptance")
+            self.assertEqual(chosen["native_channel_id"], "C_ACCEPT")
+
     @patch("lib.slack_e2e_acceptance.slack_api_call")
     def test_resolve_channel_id_for_target_opens_dm(self, mock_call) -> None:
         mock_call.return_value = {"ok": True, "channel": {"id": "D456"}}
@@ -125,12 +163,16 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
         self.assertEqual(
             detect_delivery_mode(
                 {
+                    "mode": "cli",
                     "returncode": 0,
                     "stderr": "Gateway agent failed; falling back to embedded: Error: gateway closed (1008): pairing required",
                 }
             ),
             "gateway_pairing_required",
         )
+
+    def test_detect_delivery_mode_flags_gateway_rpc(self) -> None:
+        self.assertEqual(detect_delivery_mode({"mode": "gateway_rpc"}), "gateway_rpc")
 
     @patch("lib.slack_e2e_acceptance.fetch_slack_messages")
     def test_fetch_observed_messages_combines_root_and_thread(self, mock_fetch) -> None:
@@ -217,6 +259,7 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
         self.assertEqual(result["messages"][0]["delivery_scope"], "")
         self.assertEqual(result["send_result"]["returncode"], 0)
         self.assertIn("codex-slack-e2e", mock_launch.call_args[0][1])
+        self.assertTrue(result["evaluation"]["content_assertions"]["passed"])
 
     @patch("lib.slack_e2e_acceptance.fetch_observed_messages")
     @patch("lib.slack_e2e_acceptance.fetch_slack_messages")
@@ -265,6 +308,61 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertFalse(result["evaluation"]["ack_verifiable"])
         self.assertEqual(result["delivery_mode"], "gateway_pairing_required")
+
+    def test_get_scenarios_for_preset_core6_contains_required_cases(self) -> None:
+        names = [item["name"] for item in get_scenarios_for_preset("core6")]
+        self.assertEqual(
+            names,
+            [
+                "plain_chat",
+                "fresh_live_lookup",
+                "provenance_followup",
+                "local_surface_lookup",
+                "execution_followup",
+                "delegated_work",
+            ],
+        )
+
+    def test_get_scenarios_for_preset_acceptance_includes_compound(self) -> None:
+        names = [item["name"] for item in get_scenarios_for_preset("acceptance")]
+        self.assertIn("compound_request", names)
+
+    def test_evaluate_content_assertions_rejects_internal_route_leak(self) -> None:
+        result = evaluate_content_assertions(
+            [{"text": "route 判定 spawn_single，但实际没有派下去"}],
+            {
+                "assertions": {
+                    "must_not_include_any": ["route 判定", "spawn_single"],
+                }
+            },
+        )
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["checked"])
+
+    def test_evaluate_content_assertions_accepts_control_ui_address(self) -> None:
+        result = evaluate_content_assertions(
+            [{"text": "控制地址是 http://127.0.0.1:18789/"}],
+            {
+                "assertions": {
+                    "final_must_include_any": ["127.0.0.1", "localhost", "http://"],
+                }
+            },
+        )
+        self.assertTrue(result["passed"])
+
+    def test_inspect_replay_source_summarizes_directory_bundle(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-source-") as tmpdir:
+            root = Path(tmpdir)
+            (root / "merged").mkdir()
+            (root / "merged" / "sessions.json").write_text("{}", encoding="utf-8")
+            (root / "merged" / "runtime-policy-replay.jsonl").write_text("", encoding="utf-8")
+            (root / "merged" / "task-state.json").write_text("{}", encoding="utf-8")
+            (root / "session-test.json").write_text("{}", encoding="utf-8")
+            summary = inspect_replay_source(f"vm={root}")
+            self.assertTrue(summary["ok"])
+            self.assertEqual(summary["label"], "vm")
+            self.assertTrue(summary["sessions_index"].endswith("merged/sessions.json"))
+            self.assertEqual(summary["session_file_count"], 1)
 
 
 if __name__ == "__main__":

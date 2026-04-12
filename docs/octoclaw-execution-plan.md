@@ -741,6 +741,8 @@ P5 不应该顺手混进这些题：
 8. `J1` work-item decomposition（先从 burst + single-turn compound 起步）
 9. `J5` dependency-aware compound planner
 10. acceptance / nightly coverage
+   - black-box acceptance：独立 Slack bot / channel / acceptance session
+   - replay acceptance：macmini / VM session bundle / runtime replay / task-state
 
 ### 实施原则
 
