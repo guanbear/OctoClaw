@@ -138,6 +138,34 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
             self.assertEqual(chosen["session_key"], "agent:main:acceptance")
             self.assertEqual(chosen["native_channel_id"], "C_ACCEPT")
 
+    def test_choose_slack_session_allows_explicit_native_channel_for_legacy_session(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-sessions-legacy-") as tmpdir:
+            path = Path(tmpdir) / "sessions.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "agent:main:slack:channel:acceptance": {
+                            "updatedAt": 10,
+                            "chatType": "channel",
+                            "origin": {
+                                "provider": "slack",
+                                "to": "channel:acceptance",
+                            },
+                            "deliveryContext": {"channel": "slack"},
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            chosen = choose_slack_session(
+                str(path),
+                session_key="agent:main:slack:channel:acceptance",
+                native_channel_id="C0AS4DAPPU3",
+            )
+            self.assertEqual(chosen["session_key"], "agent:main:slack:channel:acceptance")
+            self.assertEqual(chosen["native_channel_id"], "C0AS4DAPPU3")
+
     @patch("lib.slack_e2e_acceptance.slack_api_call")
     def test_resolve_channel_id_for_target_opens_dm(self, mock_call) -> None:
         mock_call.return_value = {"ok": True, "channel": {"id": "D456"}}

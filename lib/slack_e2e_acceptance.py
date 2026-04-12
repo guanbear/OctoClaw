@@ -259,6 +259,10 @@ def choose_slack_session(
 ) -> dict[str, Any]:
     sessions_path = _text(sessions_path) or default_sessions_path() or MAIN_AGENT_SESSIONS_FILE
     sessions = load_main_sessions(sessions_path)
+    explicit_session_key = _text(session_key)
+    explicit_target = _text(target)
+    explicit_native_channel_id = _text(native_channel_id)
+    explicit_thread_id = _text(thread_id)
     entries = []
     for key, value in sessions.items():
         if not isinstance(value, dict):
@@ -266,16 +270,22 @@ def choose_slack_session(
         normalized = normalize_session_entry(str(key), value)
         if normalized["provider"] != "slack":
             continue
-        if session_key and normalized["session_key"] != session_key:
+        if explicit_session_key and normalized["session_key"] != explicit_session_key:
             continue
-        if target and normalized["target"] != target:
+        if explicit_target and normalized["target"] != explicit_target:
             continue
-        if native_channel_id and normalized["native_channel_id"] != native_channel_id:
+        if explicit_native_channel_id and normalized["native_channel_id"] and normalized["native_channel_id"] != explicit_native_channel_id:
             continue
-        if thread_id and normalized["thread_id"] != thread_id:
+        if explicit_thread_id and normalized["thread_id"] and normalized["thread_id"] != explicit_thread_id:
             continue
         if chat_type and normalized["chat_type"] != chat_type:
             continue
+        if explicit_native_channel_id and not normalized["native_channel_id"]:
+            normalized["native_channel_id"] = explicit_native_channel_id
+        if explicit_thread_id and not normalized["thread_id"]:
+            normalized["thread_id"] = explicit_thread_id
+        if explicit_target and not normalized["target"]:
+            normalized["target"] = explicit_target
         if require_native_channel and not normalized["native_channel_id"]:
             continue
         entries.append(normalized)
