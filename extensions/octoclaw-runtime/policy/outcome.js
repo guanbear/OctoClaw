@@ -101,6 +101,7 @@ export function buildRouteOutcome(eventType, decision = {}, payload = {}) {
       || (recommendedModel && resolvedModel && recommendedModel !== resolvedModel)
       || (recommendedRoute && resolvedRoute && recommendedRoute !== resolvedRoute)
     ),
+    fallback_reason: normalizedText(payload.fallbackReason || payload.fallback_reason || (recommendedRoute && resolvedRoute && recommendedRoute !== resolvedRoute ? `route_drift:${recommendedRoute}_to_${resolvedRoute}` : "")),
     runner_health_snapshot: runnerHealthSnapshot(),
     queue_pressure_band: queuePressureBand(),
     quota_pressure_band: quotaPressureBand(resolvedModel),

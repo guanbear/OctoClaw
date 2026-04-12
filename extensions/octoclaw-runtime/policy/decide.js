@@ -316,7 +316,7 @@ function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, meta
   if (baseRoute === stickyRoute) {
     return { route: baseRoute, stickyState, stickyReasons };
   }
-  return { route: stickyRoute, stickyState, stickyReasons };
+  return { route: baseRoute, stickyState: { ...stickyState, cross_lane_blocked: true }, stickyReasons: [`route_sticky_cross_lane_blocked:${baseRoute}_from_${stickyRoute}`, ...stickyReasons] };
 }
 
 function directAllowedFromHint(features) {

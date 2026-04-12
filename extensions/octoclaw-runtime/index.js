@@ -3137,7 +3137,9 @@ const plugin = {
         if (params.forceRoute) args.push("--force-route", params.forceRoute);
         let { key: stateKey, state } = resolveToolPolicyContext(ctx, params.task || "");
         const hadCachedDecision = Boolean(params.policyJson || state?.decision);
+        const managedSessionKey = String(state?.decision?.request?.session_key || buildPolicyMetadata(ctx).session_key || "").trim();
         let cachedDecision = state?.decision || parsePolicyDecisionJson(params.policyJson || "");
+        let freshDecisionSource = "";
         if (!cachedDecision) {
           const resolved = await resolvePolicyDecisionForContext(
             String(params.task || "").trim(),
@@ -3149,7 +3151,26 @@ const plugin = {
             stateKey = resolved.stateKey || stateKey;
             state = resolved.state || state;
             cachedDecision = resolved.decision;
+            freshDecisionSource = "fresh_context_resolve";
           }
+        }
+        // P0-1: fail closed — managed context without sealed decision cannot materialize delegated route
+        const resolvedRoute = String(cachedDecision?.route_decision?.route || params.forceRoute || "direct").trim();
+        const isDelegatedRoute = ["runner", "spawn_single", "spawn_multi"].includes(resolvedRoute);
+        if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
+          const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.substring(0, 40)}… requires cached/passed policy for delegated route=${resolvedRoute}; got fresh decision from freeform prompt (source=${freshDecisionSource}). This violates §4.6.1 (dispatch must not re-judge).`;
+          await recordPolicyReplay("sealed_decision_required", {
+            sessionKey: managedSessionKey,
+            sessionId: String(ctx?.sessionId || ""),
+            route: resolvedRoute,
+            freshDecisionSource,
+            hadCachedDecision: false,
+            policyJsonProvided: false,
+          }, pi.logger);
+          return toolResponse(
+            driftSummary,
+            { sealed_decision_required: true, route: resolvedRoute, error: "freeform_reroute_blocked" },
+          );
         }
         let metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || cachedDecision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
@@ -3230,6 +3251,11 @@ const plugin = {
             routeHintSubmitted: Boolean(state?.routeHintSubmitted || authoritativeDecision?.route_hint_policy?.submitted),
             executed: Boolean(payload?.executed),
             usedCachedPolicy: hadCachedDecision,
+            originalRoute: String(cachedDecision?.route_decision?.route || params.forceRoute || ""),
+            routeChanged: String(cachedDecision?.route_decision?.route || "") !== String(payload?.route || ""),
+            decisionSource: hadCachedDecision ? "cached" : (params.policyJson ? "policy_json" : freshDecisionSource || "fresh"),
+            routeOverrideSource: String(stickyResult?.stickyReasons?.[0] || ""),
+            fallbackReason: String(payload?.capability_failure?.reason || payload?.reason || ""),
             stickyPersisted,
             preDispatchAckRequired: Boolean(cachedDecision?.pre_dispatch_ack?.required),
             preDispatchAckAttempted: Boolean(ackResult?.attempted || ackResult?.sent),
@@ -3297,8 +3323,18 @@ const plugin = {
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
         const { key: existingStateKey, state: existingState } = resolveToolPolicyContext(ctx, params.task || "");
-        let metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || existingState?.decision?.request?.session_key || "" }) };
+        const parentDecision = existingState?.decision;
+        const parentRoute = String(parentDecision?.route_decision?.route || "").trim();
+        const parentSessionKey = String(parentDecision?.request?.session_key || "").trim();
+        if (parentDecision && parentRoute === "runner" && params.route === "spawn_single") {
+          return toolResponse(
+            `sealed_route_violation: parent route is runner, cannot reroute to spawn_single. This violates §4.6.1.`,
+            { sealed_route_violation: true, parent_route: "runner", attempted_route: "spawn_single", error: "freeform_reroute_blocked" },
+          );
+        }
+        let metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || parentSessionKey || existingState?.decision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
+        if (!metadata.session_key && parentSessionKey) metadata.session_key = parentSessionKey;
         if (params.metadataJson) {
           try {
             const parsed = JSON.parse(params.metadataJson);
