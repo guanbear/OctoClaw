@@ -773,12 +773,15 @@ def _should_sync_task_completion(record: dict, previous_status: str, completion_
         return False
     if str(record.get("delivered_at", "") or state_model.get("delivered_at", "") or "").strip():
         return False
-    if task_notification_state(record) not in {"done", "blocked_final", "partial_final"}:
+    if task_notification_state(record) not in {"done", "blocked_final", "partial_final", "failed"}:
         return False
     summary = str(record.get("user_safe_summary", "") or record.get("summary", "") or "").strip()
     report_path = str(record.get("report_path", "") or "").strip()
     artifacts = record.get("artifacts", {}) if isinstance(record.get("artifacts"), dict) else {}
-    if not summary and not str(artifacts.get("report_path", "") or report_path).strip():
+    has_deliverable = bool(summary) or bool(str(artifacts.get("report_path", "") or report_path).strip())
+    if not has_deliverable:
+        return False
+    if task_notification_state(record) == "failed" and not has_deliverable:
         return False
     previous_value = str(previous_status or "").strip().lower()
     current_value = str(record.get("status", "") or "").strip().lower()
@@ -1354,6 +1357,8 @@ def _finish(
                 existing["outcome_state"] = outcome_state
             if handoff_state:
                 existing["handoff_state"] = handoff_state
+            elif user_safe_summary and not str(existing.get("handoff_state", "") or "").strip():
+                existing["handoff_state"] = "user_safe_ready"
             if blocked_on:
                 existing["blocked_on"] = blocked_on
             if blocked_reason:
@@ -1393,6 +1398,8 @@ def _finish(
                 record["outcome_state"] = outcome_state
             if handoff_state:
                 record["handoff_state"] = handoff_state
+            elif user_safe_summary:
+                record["handoff_state"] = "user_safe_ready"
             if blocked_on:
                 record["blocked_on"] = blocked_on
             if blocked_reason:

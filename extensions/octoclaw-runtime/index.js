@@ -3219,6 +3219,8 @@ const plugin = {
             usedCachedPolicy: hadCachedDecision,
             stickyPersisted,
             preDispatchAckRequired: Boolean(cachedDecision?.pre_dispatch_ack?.required),
+            preDispatchAckAttempted: Boolean(ackResult?.attempted || ackResult?.sent),
+            preDispatchAckDelivered: Boolean(ackResult?.sent && !ackResult?.fallback_used && ackResult?.channel_attempt?.sent),
             preDispatchAckSent: Boolean(ackResult?.sent),
             preDispatchAckReason: String(ackResult?.reason || ""),
             preDispatchAckFallbackUsed: Boolean(ackResult?.fallback_used),
