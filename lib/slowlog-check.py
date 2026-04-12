@@ -34,7 +34,7 @@ def append_error(violation):
                 return  # 今天已记录，跳过
         with open(ERRORS_MD, 'a') as f:
             f.write(line + '\n')
-    except:
+    except Exception:
         pass
 
 def main():
@@ -45,7 +45,7 @@ def main():
             last_run = float(open(SLOWLOG_STATE).read().strip())
             if now_ts - last_run < 82800:  # 23小时内不重复跑
                 sys.exit(0)
-        except:
+        except Exception:
             pass
     
     # 找最近24小时最大的 session 文件
@@ -67,7 +67,7 @@ def main():
                     ts = datetime.fromisoformat(ts_str.replace('Z','+00:00')).timestamp()
                     if ts > cutoff:  # 只看最近24h
                         messages.append({'ts': ts, 'data': d})
-            except:
+            except Exception:
                 pass
     
     messages.sort(key=lambda x: x['ts'])

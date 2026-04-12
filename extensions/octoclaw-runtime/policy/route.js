@@ -376,6 +376,10 @@ export function normalizeEnabledLanguagePacks(runtimeCfg = null) {
 function resolveLanguagePatterns(name, enabledPacks) {
   const cacheKey = `${name}:${enabledPacks.join(",")}`;
   if (languagePatternCache.has(cacheKey)) return languagePatternCache.get(cacheKey);
+  if (languagePatternCache.size >= 128) {
+    const firstKey = languagePatternCache.keys().next().value;
+    languagePatternCache.delete(firstKey);
+  }
   const patternsByPack = ROUTE_PATTERN_LIBRARY[name] || {};
   const resolved = [...(patternsByPack.common || [])];
   for (const pack of enabledPacks) {

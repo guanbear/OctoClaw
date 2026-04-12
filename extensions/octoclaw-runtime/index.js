@@ -635,10 +635,14 @@ const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
 
 function prunePolicyState() {
   const now = Date.now();
+  const expiredKeys = [];
   for (const [key, value] of policyStateBySession.entries()) {
     if (!value || now - Number(value.updatedAt || value.createdAt || 0) > POLICY_STATE_TTL_MS) {
-      policyStateBySession.delete(key);
+      expiredKeys.push(key);
     }
+  }
+  for (const key of expiredKeys) {
+    policyStateBySession.delete(key);
   }
 }
 

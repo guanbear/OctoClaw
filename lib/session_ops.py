@@ -7,15 +7,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 try:
-    from task_events import register_session_binding
+    from task_events import register_session_binding, _strip_agent_prefix
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.task_events import register_session_binding
+    from lib.task_events import register_session_binding, _strip_agent_prefix
 
 
 def has_openclaw_cli() -> bool:
@@ -166,16 +167,6 @@ def _run_message_cli(cmd: list[str], *, timeout_seconds: int = 20, retry_attempt
             continue
         break
     return {"ok": False, "status": "error", "error": last_error}
-
-
-def _strip_agent_prefix(session_key: str) -> str:
-    raw = str(session_key or "").strip()
-    if not raw:
-        return ""
-    parts = raw.split(":")
-    if len(parts) >= 3 and parts[0] == "agent":
-        return ":".join(parts[2:])
-    return raw
 
 
 def resolve_message_target_from_session_key(session_key: str) -> dict:

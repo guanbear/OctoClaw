@@ -636,9 +636,9 @@ def artifact_entries_for_task(task: dict[str, Any]) -> list[dict[str, Any]]:
                 _text(child_id),
                 path=_text(result.get("report")),
                 preview=_text(result.get("summary")),
-            title_suffix=f" · {_text(child_id)}",
-            extra={"result_status": _text(result.get("status"))},
-        )
+                title_suffix=f" · {_text(child_id)}",
+                extra={"result_status": _text(result.get("status"))},
+            )
     budget_artifact = artifacts.get("budget") if isinstance(artifacts.get("budget"), dict) else {}
     if budget_artifact:
         add(

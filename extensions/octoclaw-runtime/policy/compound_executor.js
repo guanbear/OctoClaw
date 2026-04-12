@@ -165,6 +165,7 @@ export async function executeCompoundPlan(plan, decisions, context) {
       if (!decision) {
         itemEntry.status = "skipped";
         itemEntry.completed_at = Date.now();
+        workItemResults.set(itemId, { skipped: true });
         logger.info(`compound_executor: no decision for itemId "${itemId}", skipping`);
         continue;
       }
