@@ -4,10 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_REPO_URL="https://github.com/guanbear/OctoClaw.git"
 DEFAULT_REF="codex/release-v0.1.0"
-WORKSPACE="${WORKSPACE:-/workspace}"
+WORKSPACE="${WORKSPACE:-${HOME}/.openclaw/workspace}"
 CHECKOUT_DIR="${CHECKOUT_DIR:-$WORKSPACE/openclaw/repos/octoclaw}"
 INSTALL_DIR="${INSTALL_DIR:-$WORKSPACE/openclaw/skills/octopus}"
+OPENCLAW_HOME="${OPENCLAW_HOME:-${HOME}/.openclaw}"
 EXTENSION_INSTALL_MODE="${EXTENSION_INSTALL_MODE:-rsync}"
+SKIP_GATEWAY_RESTART="${SKIP_GATEWAY_RESTART:-false}"
 INSTALL_MODE="${INSTALL_MODE:-auto}"
 SOURCE_KIND="${SOURCE_KIND:-github}"
 REPO_URL="${REPO_URL:-}"
@@ -32,9 +34,10 @@ Options:
   --main-model MODEL
   --custom-model KEY=MODEL
   --extension-install-mode rsync|copy|symlink
-  --skip-cron
-  --skip-main-model-switch
-  -h, --help
+   --skip-cron
+   --skip-main-model-switch
+   --skip-gateway-restart
+   -h, --help
 
 Notes:
   - github is the default source and uses the official OctoClaw repo URL.
@@ -103,6 +106,51 @@ sync_checkout_to_install_dir() {
         --exclude '.DS_Store' \
         --exclude '__pycache__' \
         "$CHECKOUT_DIR"/ "$INSTALL_DIR"/
+}
+
+sync_extensions() {
+    local ext_source="$INSTALL_DIR/extensions/octoclaw-runtime"
+    local ext_target="${OPENCLAW_HOME}/extensions/octoclaw-runtime"
+    if [ ! -d "$ext_source" ]; then
+        echo "⚠️  extension source not found: $ext_source"
+        return 0
+    fi
+    mkdir -p "${OPENCLAW_HOME}/extensions"
+    case "${EXTENSION_INSTALL_MODE}" in
+        rsync)
+            rsync -a --delete \
+                --exclude '.git' \
+                --exclude '.DS_Store' \
+                --exclude '__pycache__' \
+                "$ext_source"/ "$ext_target"/
+            ;;
+        copy)
+            rm -rf "$ext_target"
+            cp -R "$ext_source" "$ext_target"
+            ;;
+        symlink)
+            rm -rf "$ext_target"
+            ln -s "$ext_source" "$ext_target"
+            ;;
+        *)
+            echo "❌ unknown extension install mode: $EXTENSION_INSTALL_MODE" >&2
+            return 1
+            ;;
+    esac
+    echo "✅ synced runtime extension → $ext_target"
+}
+
+restart_gateway() {
+    if [ "$SKIP_GATEWAY_RESTART" = "true" ]; then
+        echo "ℹ️  gateway restart skipped (--skip-gateway-restart)"
+        return 0
+    fi
+    if ! command -v openclaw >/dev/null 2>&1; then
+        echo "⚠️  openclaw CLI not found; skip gateway restart"
+        return 0
+    fi
+    echo "🔄 restarting openclaw gateway (extension files changed)..."
+    openclaw gateway restart 2>&1 || echo "⚠️  gateway restart failed (may need manual restart)"
 }
 
 write_source_manifest() {
@@ -202,6 +250,10 @@ while [ $# -gt 0 ]; do
             SKIP_MAIN_MODEL_SWITCH="true"
             shift
             ;;
+        --skip-gateway-restart)
+            SKIP_GATEWAY_RESTART="true"
+            shift
+            ;;
         -h|--help|help)
             print_usage
             exit 0
@@ -220,8 +272,10 @@ case "$COMMAND" in
     install|update)
         ensure_checkout "$REPO_URL"
         sync_checkout_to_install_dir
+        sync_extensions
         write_source_manifest "$REPO_URL" "$(git -C "$CHECKOUT_DIR" rev-parse HEAD)"
         run_reconcile
+        restart_gateway
         ;;
     check)
         local_commit=""

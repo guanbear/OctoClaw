@@ -190,24 +190,30 @@ service_state() {
 start_openclaw_service() {
     if systemd_available; then
         systemctl start "$OPENCLAW_SERVICE"
+    elif command -v openclaw >/dev/null 2>&1; then
+        openclaw gateway start 2>&1 || echo "⚠️  openclaw gateway start failed"
     else
-        echo "openclaw service requires systemd"
+        echo "❌ no systemd and no openclaw CLI; cannot start gateway"
     fi
 }
 
 stop_openclaw_service() {
     if systemd_available; then
         systemctl stop "$OPENCLAW_SERVICE" >/dev/null 2>&1 || true
+    elif command -v openclaw >/dev/null 2>&1; then
+        openclaw gateway stop 2>&1 || echo "⚠️  openclaw gateway stop failed"
     else
-        echo "openclaw service requires systemd"
+        echo "❌ no systemd and no openclaw CLI; cannot stop gateway"
     fi
 }
 
 restart_openclaw_service() {
     if systemd_available; then
         systemctl restart "$OPENCLAW_SERVICE"
+    elif command -v openclaw >/dev/null 2>&1; then
+        openclaw gateway restart 2>&1 || echo "⚠️  openclaw gateway restart failed"
     else
-        echo "openclaw service requires systemd"
+        echo "❌ no systemd and no openclaw CLI; cannot restart gateway"
     fi
 }
 
