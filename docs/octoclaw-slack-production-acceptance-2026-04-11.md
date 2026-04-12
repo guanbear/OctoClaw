@@ -158,6 +158,32 @@ python3 lib/slack_acceptance_suite.py \
   --replay-source vm=/path/to/vm-bundle
 ```
 
+如果还没准备好独立 acceptance runtime，先自举一套：
+
+```bash
+bash bin/bootstrap-acceptance-runtime.sh \
+  --target-workspace /path/to/acceptance-workspace \
+  --slack-bot-token "$OCTOCLAW_ACCEPTANCE_SLACK_BOT_TOKEN" \
+  --slack-app-token "$OCTOCLAW_ACCEPTANCE_SLACK_APP_TOKEN"
+```
+
+它会在 workspace 下生成隔离的：
+
+- acceptance `OPENCLAW_HOME`
+- acceptance `WORKSPACE`
+- acceptance `openclaw.json`
+- acceptance agent auth/model 基础文件副本
+
+然后 suite 就可以直接指向这套隔离 runtime：
+
+```bash
+python3 lib/slack_acceptance_suite.py \
+  --workspace /path/to/acceptance-workspace \
+  --openclaw-home /path/to/acceptance-workspace/tmp/octoclaw-acceptance-home \
+  --blackbox-preset acceptance \
+  --session-key '<acceptance-session-key>'
+```
+
 如果要跑完整 6 条核心句子，推荐：
 
 ```bash
@@ -186,6 +212,7 @@ python3 lib/slack_e2e_acceptance.py \
 - `slack_acceptance_suite.py` 现在是推荐入口：
   - black-box：独立 acceptance bot / channel / session
   - replay：macmini / VM 的 `sessions + runtime-policy-replay + task-state` bundle
+- `bootstrap-acceptance-runtime.sh` 用来在 workspace 下准备隔离 acceptance runtime
 - 脚本现在支持显式绑定 `session_key / target / native_channel_id / thread_id`
 - 如果不显式传参，仍会从 `~/.openclaw/agents/main/sessions/sessions.json` 选择最近可用的 Slack session
 - 再通过 gateway `agent` 调用注入 prompt

@@ -25,7 +25,6 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.session_ops import send_agent_message
 
 
-DEFAULT_OPENCLAW_CONFIG = os.path.expanduser("~/.openclaw/openclaw.json")
 COMMON_BIN_DIRS = [
     "/opt/homebrew/bin",
     "/usr/local/bin",
@@ -126,6 +125,24 @@ PRESET_SCENARIOS: dict[str, list[dict[str, Any]]] = {
 }
 
 
+def resolve_openclaw_home() -> Path:
+    configured = _text(os.environ.get("OPENCLAW_HOME"))
+    if configured:
+        return Path(os.path.expanduser(configured))
+    return Path(os.path.expanduser("~/.openclaw"))
+
+
+def default_openclaw_config_path() -> str:
+    return str(resolve_openclaw_home() / "openclaw.json")
+
+
+def default_sessions_path() -> str:
+    configured = _text(os.environ.get("OCTOCLAW_ACCEPTANCE_SESSIONS_PATH"))
+    if configured:
+        return configured
+    return str(resolve_openclaw_home() / "agents" / "main" / "sessions" / "sessions.json")
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -187,7 +204,8 @@ def build_exec_env() -> dict[str, str]:
     return env
 
 
-def load_slack_config(config_path: str = DEFAULT_OPENCLAW_CONFIG) -> dict[str, Any]:
+def load_slack_config(config_path: str = "") -> dict[str, Any]:
+    config_path = _text(config_path) or default_openclaw_config_path()
     payload = load_json(config_path)
     channels = payload.get("channels", {}) if isinstance(payload.get("channels"), dict) else {}
     slack = channels.get("slack", {}) if isinstance(channels.get("slack"), dict) else {}
@@ -229,7 +247,7 @@ def normalize_session_entry(session_key: str, raw: dict[str, Any]) -> dict[str, 
 
 
 def choose_slack_session(
-    sessions_path: str = MAIN_AGENT_SESSIONS_FILE,
+    sessions_path: str = "",
     *,
     session_key: str = "",
     target: str = "",
@@ -239,6 +257,7 @@ def choose_slack_session(
     prefer_direct: bool = True,
     require_native_channel: bool = True,
 ) -> dict[str, Any]:
+    sessions_path = _text(sessions_path) or default_sessions_path() or MAIN_AGENT_SESSIONS_FILE
     sessions = load_main_sessions(sessions_path)
     entries = []
     for key, value in sessions.items():
@@ -716,8 +735,8 @@ def run_scenario(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Slack E2E acceptance scenarios against a live OpenClaw session.")
-    parser.add_argument("--openclaw-config", default=DEFAULT_OPENCLAW_CONFIG)
-    parser.add_argument("--sessions-path", default=MAIN_AGENT_SESSIONS_FILE)
+    parser.add_argument("--openclaw-config", default=default_openclaw_config_path())
+    parser.add_argument("--sessions-path", default=default_sessions_path())
     parser.add_argument("--session-key", default="", help="Explicit OpenClaw session key to drive.")
     parser.add_argument("--target", default="", help="Explicit Slack target to match, e.g. channel:C123 or user:U123.")
     parser.add_argument("--native-channel-id", default="", help="Explicit Slack native channel id to match.")

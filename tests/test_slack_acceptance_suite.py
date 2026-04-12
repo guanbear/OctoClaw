@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from lib.slack_acceptance_suite import (
     build_env,
+    derive_runtime_paths,
     render_summary,
     run_blackbox_suite,
     run_replay_bundle,
@@ -19,6 +20,11 @@ class SlackAcceptanceSuiteTests(unittest.TestCase):
         self.assertEqual(env["WORKSPACE"], "/tmp/workspace")
         self.assertEqual(env["OPENCLAW_HOME"], "/tmp/openclaw-home")
         self.assertIn("/opt/homebrew/bin", env["PATH"])
+
+    def test_derive_runtime_paths_uses_openclaw_home_defaults(self) -> None:
+        derived = derive_runtime_paths(openclaw_home="/tmp/acceptance-home")
+        self.assertEqual(derived["openclaw_config"], "/tmp/acceptance-home/openclaw.json")
+        self.assertEqual(derived["sessions_path"], "/tmp/acceptance-home/agents/main/sessions/sessions.json")
 
     @patch("lib.slack_acceptance_suite.run_subprocess")
     def test_run_blackbox_suite_builds_explicit_target_command(self, mock_run) -> None:

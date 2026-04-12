@@ -63,6 +63,21 @@ def build_env(*, workspace: str = "", openclaw_home: str = "") -> dict[str, str]
     return env
 
 
+def derive_runtime_paths(*, openclaw_home: str = "", sessions_path: str = "", openclaw_config: str = "") -> dict[str, str]:
+    home = _text(openclaw_home)
+    resolved_sessions = _text(sessions_path)
+    resolved_config = _text(openclaw_config)
+    if home:
+        if not resolved_sessions:
+            resolved_sessions = str(Path(home) / "agents" / "main" / "sessions" / "sessions.json")
+        if not resolved_config:
+            resolved_config = str(Path(home) / "openclaw.json")
+    return {
+        "sessions_path": resolved_sessions,
+        "openclaw_config": resolved_config,
+    }
+
+
 def run_subprocess(cmd: list[str], *, env: dict[str, str]) -> dict[str, Any]:
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     return {
@@ -99,6 +114,7 @@ def run_blackbox_suite(
     openclaw_config: str = "",
 ) -> dict[str, Any]:
     report_path = output_dir / "blackbox-report.json"
+    derived = derive_runtime_paths(openclaw_home=_text(env.get("OPENCLAW_HOME")), sessions_path=sessions_path, openclaw_config=openclaw_config)
     cmd = [sys.executable, str(repo_root / "lib" / "slack_e2e_acceptance.py"), "--preset", preset, "--output", str(report_path)]
     if session_key:
         cmd.extend(["--session-key", session_key])
@@ -110,10 +126,10 @@ def run_blackbox_suite(
         cmd.extend(["--thread-id", thread_id])
     if chat_type:
         cmd.extend(["--chat-type", chat_type])
-    if sessions_path:
-        cmd.extend(["--sessions-path", sessions_path])
-    if openclaw_config:
-        cmd.extend(["--openclaw-config", openclaw_config])
+    if derived["sessions_path"]:
+        cmd.extend(["--sessions-path", derived["sessions_path"]])
+    if derived["openclaw_config"]:
+        cmd.extend(["--openclaw-config", derived["openclaw_config"]])
     result = run_subprocess(cmd, env=env)
     return {
         "mode": "blackbox",

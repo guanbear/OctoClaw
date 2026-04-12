@@ -22,11 +22,18 @@ def has_openclaw_cli() -> bool:
     return shutil.which("openclaw") is not None
 
 
+def resolve_openclaw_home() -> Path:
+    configured = str(os.environ.get("OPENCLAW_HOME", "") or "").strip()
+    if configured:
+        return Path(os.path.expanduser(configured))
+    return Path(os.path.expanduser("~/.openclaw"))
+
+
 def _load_openclaw_gateway_token() -> str:
     env_token = str(os.environ.get("OPENCLAW_GATEWAY_TOKEN", "") or "").strip()
     if env_token:
         return env_token
-    config_path = Path(os.path.expanduser("~/.openclaw/openclaw.json"))
+    config_path = resolve_openclaw_home() / "openclaw.json"
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
     except Exception:

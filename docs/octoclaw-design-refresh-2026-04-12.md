@@ -295,6 +295,10 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
   - 黑盒：调 `slack_e2e_acceptance.py`
   - 回放：消费 macmini / VM bundle，并串起 `reply_review_packet + replay_validation + failure_summary`
   - 统一产出 suite report / summary
+- `bin/bootstrap-acceptance-runtime.sh`
+  - 在 workspace 下自举隔离的 acceptance `OPENCLAW_HOME + WORKSPACE`
+  - 复制主 auth/model 基础文件，但把 Slack bot/app token 注入到 acceptance config
+  - 让 black-box 与 replay 可以落到同一套 acceptance runtime
 
 ### 4.4 第四优先级：Slack/IM 安全与投递策略收口
 
