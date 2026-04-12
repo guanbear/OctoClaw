@@ -8,7 +8,10 @@ from unittest.mock import patch
 from lib.slack_acceptance_suite import (
     build_env,
     derive_runtime_paths,
+    inspect_boundary_audit,
+    load_replay_events,
     render_summary,
+    resolve_runtime_replay_log,
     run_blackbox_suite,
     run_replay_bundle,
 )
@@ -25,6 +28,94 @@ class SlackAcceptanceSuiteTests(unittest.TestCase):
         derived = derive_runtime_paths(openclaw_home="/tmp/acceptance-home")
         self.assertEqual(derived["openclaw_config"], "/tmp/acceptance-home/openclaw.json")
         self.assertEqual(derived["sessions_path"], "/tmp/acceptance-home/agents/main/sessions/sessions.json")
+
+    def test_resolve_runtime_replay_log_uses_workspace(self) -> None:
+        self.assertTrue(
+            resolve_runtime_replay_log(workspace="/tmp/workspace").endswith(
+                "/tmp/workspace/tmp/octopus/runtime-policy-replay.jsonl"
+            )
+        )
+
+    def test_load_replay_events_reads_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-replay-events-") as tmpdir:
+            path = Path(tmpdir) / "runtime-policy-replay.jsonl"
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"event": "policy_resolved", "prompt": "hello"}, ensure_ascii=False),
+                        "{bad json}",
+                        json.dumps({"event": "agent_end"}, ensure_ascii=False),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            events = load_replay_events(str(path))
+            self.assertEqual(len(events), 2)
+            self.assertEqual(events[0]["event"], "policy_resolved")
+
+    def test_inspect_boundary_audit_rejects_contaminated_subagent_match(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-boundary-audit-") as tmpdir:
+            replay = Path(tmpdir) / "runtime-policy-replay.jsonl"
+            replay.write_text(
+                json.dumps(
+                    {
+                        "event": "policy_resolved",
+                        "prompt": "[codex-slack-e2e scenario=plain_chat] 自动化",
+                        "sessionBoundaryStatus": "contaminated_subagent_identity",
+                        "sessionKey": "octoclaw-subagent-code-1",
+                        "canonicalSessionKey": "agent:main:main",
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            audit = inspect_boundary_audit(
+                blackbox_report={"results": [{"name": "plain_chat"}]},
+                replay_log_path=str(replay),
+            )
+            self.assertFalse(audit["ok"])
+            self.assertTrue(audit["coverage_ok"])
+            self.assertEqual(audit["observed_count"], 1)
+            self.assertEqual(audit["results"][0]["name"], "plain_chat")
+            self.assertIn("contaminated_subagent_identity", audit["results"][0]["failures"])
+            self.assertIn("session_key_is_subagent", audit["results"][0]["failures"])
+
+    def test_inspect_boundary_audit_accepts_clean_canonical_session(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-boundary-audit-clean-") as tmpdir:
+            replay = Path(tmpdir) / "runtime-policy-replay.jsonl"
+            replay.write_text(
+                json.dumps(
+                    {
+                        "event": "policy_resolved",
+                        "prompt": "[codex-slack-e2e scenario=plain_chat] 自动化",
+                        "sessionBoundaryStatus": "clean",
+                        "sessionKey": "agent:main:main",
+                        "canonicalSessionKey": "agent:main:main",
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            audit = inspect_boundary_audit(
+                blackbox_report={"results": [{"name": "plain_chat"}]},
+                replay_log_path=str(replay),
+            )
+            self.assertTrue(audit["ok"])
+            self.assertTrue(audit["coverage_ok"])
+            self.assertTrue(audit["results"][0]["ok"])
+            self.assertTrue(audit["results"][0]["observed"])
+
+    def test_inspect_boundary_audit_reports_missing_policy_as_coverage_gap(self) -> None:
+        audit = inspect_boundary_audit(
+            blackbox_report={"results": [{"name": "plain_chat"}]},
+            replay_log_path="/tmp/does-not-exist",
+        )
+        self.assertTrue(audit["ok"])
+        self.assertFalse(audit["coverage_ok"])
+        self.assertEqual(audit["observed_count"], 0)
+        self.assertEqual(audit["total_count"], 1)
+        self.assertFalse(audit["results"][0]["observed"])
+        self.assertEqual(audit["results"][0]["failures"], ["policy_not_observed"])
 
     @patch("lib.slack_acceptance_suite.run_subprocess")
     def test_run_blackbox_suite_builds_explicit_target_command(self, mock_run) -> None:
@@ -106,6 +197,14 @@ class SlackAcceptanceSuiteTests(unittest.TestCase):
                     "report_path": "/tmp/out/blackbox-report.json",
                     "result": {"ok": True},
                     "report": {"ok": True, "results": [{}, {}]},
+                    "boundary_audit": {
+                        "ok": True,
+                        "coverage_ok": False,
+                        "observed_count": 1,
+                        "total_count": 2,
+                        "replay_log_path": "/tmp/workspace/tmp/octopus/runtime-policy-replay.jsonl",
+                        "results": [{"name": "plain_chat", "ok": True, "observed": True, "session_boundary_status": "clean", "failures": []}],
+                    },
                 },
                 "replay_runs": [
                     {
@@ -119,6 +218,8 @@ class SlackAcceptanceSuiteTests(unittest.TestCase):
             }
         )
         self.assertIn("## Black-box", text)
+        self.assertIn("## Session Boundary Audit", text)
+        self.assertIn("Coverage OK", text)
         self.assertIn("## Replay", text)
         self.assertIn("acceptance", text)
 

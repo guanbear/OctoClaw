@@ -99,6 +99,97 @@ def maybe_load_json(path: str) -> Any:
         return None
 
 
+def resolve_runtime_replay_log(*, workspace: str = "") -> str:
+    root = _text(workspace) or os.environ.get("WORKSPACE", "")
+    if not _text(root):
+        return ""
+    return str(Path(root).expanduser().resolve() / "tmp" / "octopus" / "runtime-policy-replay.jsonl")
+
+
+def load_replay_events(path: str) -> list[dict[str, Any]]:
+    candidate = Path(_text(path)).expanduser()
+    if not candidate.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    try:
+        for line in candidate.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                events.append(payload)
+    except Exception:
+        return []
+    return events
+
+
+def _scenario_tag(name: str) -> str:
+    return f"[codex-slack-e2e scenario={_text(name)}]"
+
+
+def _is_subagent_session_ref(value: Any) -> bool:
+    text = _text(value).lower()
+    if not text:
+        return False
+    return "octoclaw-subagent-" in text or ":subagent:" in text
+
+
+def inspect_boundary_audit(*, blackbox_report: dict[str, Any] | None, replay_log_path: str = "") -> dict[str, Any]:
+    report = blackbox_report if isinstance(blackbox_report, dict) else {}
+    results = report.get("results") if isinstance(report.get("results"), list) else []
+    replay_events = load_replay_events(replay_log_path)
+    policy_events = [item for item in replay_events if _text(item.get("event")) == "policy_resolved"]
+    audits: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        scenario_name = _text(result.get("name"))
+        tag = _scenario_tag(scenario_name)
+        matches = [item for item in policy_events if tag in _text(item.get("prompt"))]
+        match = matches[-1] if matches else {}
+        session_boundary_status = _text(match.get("sessionBoundaryStatus"))
+        session_key = _text(match.get("sessionKey"))
+        canonical_session_key = _text(match.get("canonicalSessionKey"))
+        failures: list[str] = []
+        if not match:
+            failures.append("policy_not_observed")
+        if session_boundary_status == "contaminated_subagent_identity":
+            failures.append("contaminated_subagent_identity")
+        if _is_subagent_session_ref(session_key):
+            failures.append("session_key_is_subagent")
+        if canonical_session_key and _is_subagent_session_ref(canonical_session_key):
+            failures.append("canonical_session_key_is_subagent")
+        observed = bool(match)
+        contamination_failures = [item for item in failures if item != "policy_not_observed"]
+        audits.append(
+            {
+                "name": scenario_name,
+                "ok": not contamination_failures,
+                "observed": observed,
+                "matched_event_count": len(matches),
+                "session_boundary_status": session_boundary_status,
+                "session_key": session_key,
+                "canonical_session_key": canonical_session_key,
+                "at": _text(match.get("at")),
+                "failures": failures,
+            }
+        )
+    observed_count = sum(1 for item in audits if item.get("observed"))
+    total_count = len(audits)
+    return {
+        "ok": all(bool(item.get("ok")) for item in audits) if audits else True,
+        "coverage_ok": observed_count == total_count if audits else True,
+        "observed_count": observed_count,
+        "total_count": total_count,
+        "replay_log_path": _text(replay_log_path),
+        "results": audits,
+    }
+
+
 def run_blackbox_suite(
     *,
     repo_root: Path,
@@ -287,6 +378,23 @@ def render_summary(report: dict[str, Any]) -> str:
                 "",
             ]
         )
+        boundary_audit = blackbox.get("boundary_audit") if isinstance(blackbox.get("boundary_audit"), dict) else {}
+        if boundary_audit:
+            lines.extend(
+                [
+                    "## Session Boundary Audit",
+                    "",
+                    f"- OK: `{bool(boundary_audit.get('ok'))}`",
+                    f"- Coverage OK: `{bool(boundary_audit.get('coverage_ok', True))}`",
+                    f"- Observed: `{boundary_audit.get('observed_count', 0)}/{boundary_audit.get('total_count', 0)}`",
+                    f"- Replay log: `{boundary_audit.get('replay_log_path', '')}`",
+                ]
+            )
+            for item in boundary_audit.get("results", []) if isinstance(boundary_audit.get("results"), list) else []:
+                lines.append(
+                    f"- `{item.get('name', '')}` ok=`{item.get('ok')}` observed=`{item.get('observed')}` boundary=`{item.get('session_boundary_status', '')}` failures=`{', '.join(item.get('failures', []))}`"
+                )
+            lines.append("")
     replay_runs = report.get("replay_runs") if isinstance(report.get("replay_runs"), list) else []
     if replay_runs:
         lines.extend(["## Replay", ""])
@@ -326,6 +434,11 @@ def main() -> int:
             sessions_path=args.sessions_path,
             openclaw_config=args.openclaw_config,
         )
+        if isinstance(blackbox, dict):
+            blackbox["boundary_audit"] = inspect_boundary_audit(
+                blackbox_report=blackbox.get("report") if isinstance(blackbox.get("report"), dict) else {},
+                replay_log_path=resolve_runtime_replay_log(workspace=workspace),
+            )
     if not args.skip_replay:
         replay_runs = [
             run_replay_bundle(
@@ -343,7 +456,12 @@ def main() -> int:
     blackbox_ok = True
     if blackbox:
         blackbox_report = blackbox.get("report") if isinstance(blackbox.get("report"), dict) else {}
-        blackbox_ok = bool(blackbox.get("result", {}).get("ok")) and bool(blackbox_report.get("ok", False))
+        boundary_audit = blackbox.get("boundary_audit") if isinstance(blackbox.get("boundary_audit"), dict) else {}
+        blackbox_ok = (
+            bool(blackbox.get("result", {}).get("ok"))
+            and bool(blackbox_report.get("ok", False))
+            and bool(boundary_audit.get("ok", True))
+        )
     replay_ok = all(bool(item.get("ok")) for item in replay_runs) if replay_runs else True
     report = {
         "ok": blackbox_ok and replay_ok,
