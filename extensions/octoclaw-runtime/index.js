@@ -3155,7 +3155,7 @@ const plugin = {
           }
         }
         // P0-1: fail closed — managed context without sealed decision cannot materialize delegated route
-        const resolvedRoute = String(cachedDecision?.route_decision?.route || params.forceRoute || "direct").trim();
+        const resolvedRoute = String(params.forceRoute || cachedDecision?.route_decision?.route || "direct").trim();
         const isDelegatedRoute = ["runner", "spawn_single", "spawn_multi"].includes(resolvedRoute);
         if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.substring(0, 40)}… requires cached/passed policy for delegated route=${resolvedRoute}; got fresh decision from freeform prompt (source=${freshDecisionSource}). This violates §4.6.1 (dispatch must not re-judge).`;

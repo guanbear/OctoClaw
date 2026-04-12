@@ -1659,7 +1659,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     policy_router: policyRouter,
     router_decision_v2: routerDecisionV2,
     route_decision: {
-      system_preferred_route: baseRoute,
+      system_preferred_route: route,
       route,
       work_contract: workContract,
       work_contract_hint: String(routeMeta.work_contract_hint || ""),
