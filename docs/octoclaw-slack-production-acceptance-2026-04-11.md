@@ -148,6 +148,16 @@
 python3 lib/slack_e2e_acceptance.py --preset smoke
 ```
 
+更推荐直接跑统一 suite：
+
+```bash
+python3 lib/slack_acceptance_suite.py \
+  --blackbox-preset acceptance \
+  --session-key '<acceptance-session-key>' \
+  --replay-source macmini=/path/to/macmini-bundle \
+  --replay-source vm=/path/to/vm-bundle
+```
+
 如果要跑完整 6 条核心句子，推荐：
 
 ```bash
@@ -173,6 +183,9 @@ python3 lib/slack_e2e_acceptance.py \
 
 说明：
 
+- `slack_acceptance_suite.py` 现在是推荐入口：
+  - black-box：独立 acceptance bot / channel / session
+  - replay：macmini / VM 的 `sessions + runtime-policy-replay + task-state` bundle
 - 脚本现在支持显式绑定 `session_key / target / native_channel_id / thread_id`
 - 如果不显式传参，仍会从 `~/.openclaw/agents/main/sessions/sessions.json` 选择最近可用的 Slack session
 - 再通过 gateway `agent` 调用注入 prompt
@@ -188,6 +201,10 @@ python3 lib/slack_e2e_acceptance.py \
 - 如果报告里出现 `delivery_mode=embedded_fallback`，则 `ack_verifiable=false` 是预期行为
 - 这说明当前是 CLI fallback 黑盒验收，只稳定验证 Slack 最终回流与 follow-up/provenance；真实“快 ACK”仍要靠用户入站或 gateway 直连链路验收
 - 现在还支持 `--replay-source label=/path/to/bundle`，可把 macmini / VM 的真实 session bundle 挂进同一份 acceptance 报告
+- 如需用独立 acceptance runtime，可通过 suite 传：
+  - `--workspace`
+  - `--openclaw-home`
+  这样 black-box 与 replay 都会落到同一套 acceptance runtime 参数上
 
 ---
 

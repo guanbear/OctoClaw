@@ -289,6 +289,13 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
 
 这里更接近 Anthropic 笔记里的 `eval + postmortem discipline`，而不是“写一个临时 smoke 脚本”。
 
+当前推荐入口已经不再是手工分别跑多个小脚本，而是：
+
+- `lib/slack_acceptance_suite.py`
+  - 黑盒：调 `slack_e2e_acceptance.py`
+  - 回放：消费 macmini / VM bundle，并串起 `reply_review_packet + replay_validation + failure_summary`
+  - 统一产出 suite report / summary
+
 ### 4.4 第四优先级：Slack/IM 安全与投递策略收口
 
 短期必须完成：

@@ -306,10 +306,17 @@ def inspect_replay_source(spec: str) -> dict[str, Any]:
         sessions_index = _find_file(root, "sessions.json", "merged/sessions.json")
         replay_log = _find_file(root, "runtime-policy-replay.jsonl", "merged/runtime-policy-replay.jsonl")
         task_state = _find_file(root, "task-state.json", "merged/task-state.json")
+        session_dir = ""
+        sessions_dir_candidate = root / "sessions"
+        if sessions_dir_candidate.exists():
+            session_dir = str(sessions_dir_candidate)
+        elif sessions_index.endswith("merged/sessions.json") and (root / "sessions").exists():
+            session_dir = str(root / "sessions")
         session_candidates = list(root.rglob("session-*.json"))
         session_file_count = len(session_candidates)
     else:
         file_name = root.name
+        session_dir = ""
         if file_name == "sessions.json":
             sessions_index = str(root)
         elif file_name == "runtime-policy-replay.jsonl":
@@ -322,6 +329,7 @@ def inspect_replay_source(spec: str) -> dict[str, Any]:
         "path": str(root),
         "is_dir": root.is_dir(),
         "sessions_index": sessions_index,
+        "session_dir": session_dir,
         "replay_log": replay_log,
         "task_state": task_state,
         "session_file_count": session_file_count,

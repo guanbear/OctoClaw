@@ -354,14 +354,16 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="octoclaw-replay-source-") as tmpdir:
             root = Path(tmpdir)
             (root / "merged").mkdir()
+            (root / "sessions" / "vm").mkdir(parents=True)
             (root / "merged" / "sessions.json").write_text("{}", encoding="utf-8")
             (root / "merged" / "runtime-policy-replay.jsonl").write_text("", encoding="utf-8")
             (root / "merged" / "task-state.json").write_text("{}", encoding="utf-8")
-            (root / "session-test.json").write_text("{}", encoding="utf-8")
+            (root / "sessions" / "vm" / "session-test.json").write_text("{}", encoding="utf-8")
             summary = inspect_replay_source(f"vm={root}")
             self.assertTrue(summary["ok"])
             self.assertEqual(summary["label"], "vm")
             self.assertTrue(summary["sessions_index"].endswith("merged/sessions.json"))
+            self.assertTrue(summary["session_dir"].endswith("sessions"))
             self.assertEqual(summary["session_file_count"], 1)
 
 
