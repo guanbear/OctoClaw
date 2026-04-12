@@ -686,6 +686,15 @@ P5 不应该顺手混进这些题：
 
 但 live path 还没有通用的 `depends_on + guard` planner / scheduler。也就是说，底座够了，但“单条长消息 -> 多 work item -> 依赖执行”这层还没有正式进入主链。
 
+这里同样必须明确：
+
+- planner 是按需升级路径，不是默认入口
+- 简单请求继续走 single-route fast path
+- 但“是否进入 planner”由模型统一判定，而不是额外规则 gate
+- 模型输出：
+  - `decision_mode = simple_route`
+  - 或 `decision_mode = compound_plan`
+
 这条线固定分成四步：
 
 1. route / task-class hardening
@@ -715,8 +724,9 @@ P5 不应该顺手混进这些题：
 4. **J4 final-answer execution guard**
    - `dispatch_required=true` 但没有 `dispatch/materialization/handoff/capability_failure` 时，assistant 不能把结果说得像已经做完
 5. **J5 dependency-aware compound planner**
-   - 模型负责输出结构化 work items：`intent_class / lane / goal / depends_on / guard`
+   - 模型负责输出 `decision_mode`，以及需要时的结构化 work items：`intent_class / lane / goal / depends_on / guard`
    - 代码只负责 validator / materializer / scheduler / final execution facts
+   - 不再用规则语义 gate 决定是否进入 planner
    - 现阶段复用现有 `direct + runner + spawn + native task lineage` 底座，不把“完整通用原生 DAG 已经 live”说早
 
 推荐顺序：

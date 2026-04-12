@@ -183,6 +183,18 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
 - 让代码只做 validator / materializer / scheduler / execution facts
 - 让 provenance/follow-up 只认最终 execution ledger
 
+但这里也必须明确：
+
+- planner 是 **按需升级路径**
+- 不是所有请求都默认进入 planner
+
+也就是说：
+
+- 单意图、无依赖、无条件、无多-lane 混合的简单请求，目标态仍应走 simple route
+- 但“是否进入 planner”，不再由规则 gate 判定，而由模型统一输出：
+  - `decision_mode = simple_route`
+  - 或 `decision_mode = compound_plan`
+
 ---
 
 ## 4. 哪些短期计划是“本来就该做，但现在还没做完”
@@ -222,6 +234,23 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
    - scheduler
    - execution fact grounding
 4. 让 provenance/follow-up 只认最终 execution ledger，不再解释 route 中间态
+
+同时要明确 simple / compound 的目标边界：
+
+1. `decision_mode = simple_route`
+   - 单一闲聊
+   - 单一本地查询
+   - 单一远端查询
+   - 单一 delegated work
+   - 单一 follow-up / provenance 问句
+   - 这类请求由模型直接给出单 route 决策
+2. `decision_mode = compound_plan`
+   - 一句里有多个动作目标
+   - 同时包含 `direct / runner / spawn` 候选
+   - 有条件关系：如果……就……
+   - 有顺序关系：先……再……
+   - 有依赖关系：查完 X 再做 Y
+   - 这类请求由模型输出结构化 work plan
 
 这里直接对应今天反复暴露的问题：
 
@@ -408,9 +437,10 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
 
 更新后的定位应该是：
 
-1. 这不是“更聪明的 route classifier”，而是“结构化工作计划”
+1. 这不是“更聪明的 route classifier”，而是“由模型统一决定 simple route 或 compound plan 的结构化工作计划”
 2. 模型负责：
-   - work-item decomposition
+   - `decision_mode`
+   - simple route 或 work-item decomposition
    - `lane`
    - `depends_on`
    - `guard`
@@ -420,8 +450,17 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
    - scheduler
    - final execution facts
 4. provenance/follow-up 只认最终事实，不再混用 intent / route / dispatch 中间态
+5. 代码不再用语义 gate 决定“是否进入 planner”，只保留执行与安全硬约束
 
 当前 busy burst decomposition 只是局部 baseline，不应被误当成这个目标已经实现。
+
+同时必须坚持：
+
+- planner 是 `on-demand upgrade`
+- simple request 继续走单 route
+- compound request 才进入 planner
+
+否则会直接损失速度、成本和稳定性，也违背“更快 / 更省”的主目标。
 
 ---
 
@@ -443,10 +482,11 @@ router / judge / materialization / delivery 这条核心架构已经基本成立
 
 优先做：
 
-1. model-planned work-item decomposition
-2. validator / materializer / scheduler contract
-3. `depends_on` / `guard` 执行顺序
-4. provenance / follow-up 只读 final execution facts
+1. 模型统一输出 `decision_mode = simple_route | compound_plan`
+2. model-planned work-item decomposition
+3. validator / materializer / scheduler contract
+4. `depends_on` / `guard` 执行顺序
+5. provenance / follow-up 只读 final execution facts
 
 ### Phase C：真实生产验收与安全闭环
 
