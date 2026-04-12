@@ -768,10 +768,13 @@ function loadSessionDescriptors() {
     const channelSessionKey = String(record.channelSessionKey || "").trim();
     const controlKey = channelSessionKey || key;
     const parsed = deriveSessionDescriptor(controlKey, record);
+    const sessionId = String(record.sessionId || "").trim();
     const next = {
       sessionKey: key,
       controlKey,
       channelSessionKey,
+      sessionId,
+      sessionFile: String(record.sessionFile || "").trim(),
       origin: String(parsed.origin || "").trim(),
       target: String(parsed.target || "").trim(),
       bindingKey: String(parsed.bindingKey || "").trim(),
@@ -783,6 +786,11 @@ function loadSessionDescriptors() {
       isSubagent: isSubagentSessionRef(key) || isSubagentSessionRef(record.agentId),
       isUserFacing: Boolean(parsed.looksLikeImSession),
     };
+    next.isContaminatedUserSession = Boolean(
+      next.isUserFacing
+        && !next.isSubagent
+        && isSubagentSessionRef(next.sessionId),
+    );
     const previous = descriptors.get(key);
     if (!previous || next.updatedSort >= Number(previous.updatedSort || 0)) {
       descriptors.set(key, next);
@@ -855,7 +863,9 @@ function resolveAckDeliverySessionKey(metadata = {}, stateKey = "", state = null
   const desiredThreadKey = String(metadata.session_thread_key || "").trim();
   const desiredBindingKey = String(metadata.session_binding_key || "").trim();
   const desiredOrigin = String(metadata.session_origin || "").trim().toLowerCase();
-  const candidates = loadSessionDescriptors().filter((entry) => entry.isUserFacing && !entry.isSubagent);
+  const candidates = loadSessionDescriptors().filter((entry) => (
+    entry.isUserFacing && !entry.isSubagent && !entry.isContaminatedUserSession
+  ));
 
   if (desiredThreadKey) {
     const match = candidates.find((entry) => entry.threadKey === desiredThreadKey);
@@ -880,6 +890,9 @@ function detectSessionBoundary(ctx = {}) {
   const parsedSessionId = parseSessionRoute(sessionId);
   const descriptorCanonical = resolveCanonicalSessionDescriptor(ctx);
   const subagentRefs = [sessionKey, sessionId, agentId].filter((item) => isSubagentSessionRef(item));
+  const registrySubagentRefs = descriptorCanonical?.isContaminatedUserSession && descriptorCanonical.sessionId
+    ? [descriptorCanonical.sessionId]
+    : [];
   const canonicalCandidates = [sessionKey, sessionId]
     .map((raw) => ({ raw: String(raw || "").trim(), parsed: parseSessionRoute(raw) }))
     .filter((item) => item.raw && !isSubagentSessionRef(item.raw));
@@ -897,7 +910,8 @@ function detectSessionBoundary(ctx = {}) {
     || canonicalCandidates[0]
     || null;
   const hasCanonicalUserSession = Boolean(canonicalUserSession);
-  const contaminatedBySubagent = hasCanonicalUserSession && subagentRefs.length > 0;
+  const contaminatedByRegistry = Boolean(descriptorCanonical?.isContaminatedUserSession);
+  const contaminatedBySubagent = hasCanonicalUserSession && (subagentRefs.length > 0 || contaminatedByRegistry);
   return {
     sessionKey,
     sessionId,
@@ -905,9 +919,11 @@ function detectSessionBoundary(ctx = {}) {
     hasCanonicalUserSession,
     contaminatedBySubagent,
     subagentRefs,
+    registrySubagentRefs,
     canonicalSessionKey: canonicalUserSession ? canonicalUserSession.raw : "",
     canonicalBindingKey: canonicalUserSession ? canonicalUserSession.parsed.bindingKey : "",
     canonicalThreadKey: canonicalUserSession ? canonicalUserSession.parsed.threadKey : "",
+    contaminatedByRegistry,
     status: contaminatedBySubagent ? "contaminated_subagent_identity" : "clean",
   };
 }

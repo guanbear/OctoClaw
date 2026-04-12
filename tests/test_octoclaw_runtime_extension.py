@@ -216,6 +216,53 @@ Sender (untrusted metadata):
         self.assertEqual(payload["status"], "contaminated_subagent_identity")
         self.assertEqual(payload["canonicalSessionKey"], "agent:main:main")
 
+    def test_detect_session_boundary_rejects_registry_subagent_session_id(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-session-registry-boundary-") as tmpdir:
+            home = Path(tmpdir)
+            sessions_dir = home / ".openclaw" / "agents" / "main" / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            (sessions_dir / "sessions.json").write_text(
+                json.dumps(
+                    {
+                        "agent:main:main": {
+                            "sessionId": "octoclaw-subagent-code-20260411082815989843",
+                            "updatedAt": 30,
+                            "chatType": "direct",
+                            "origin": {
+                                "provider": "slack",
+                                "to": "user:U123",
+                                "nativeChannelId": "D123",
+                            },
+                            "deliveryContext": {
+                                "channel": "slack",
+                                "to": "user:U123",
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                """__octoclawTest.detectSessionBoundary({
+                    sessionKey: "agent:main:main",
+                    agentId: "agent:main:main",
+                    messageProvider: "slack",
+                    channelId: "D123"
+                })""",
+                env={
+                    "HOME": str(home),
+                    "WORKSPACE": str(home / ".openclaw" / "workspace"),
+                },
+            )
+
+        self.assertEqual(payload["status"], "contaminated_subagent_identity")
+        self.assertEqual(payload["canonicalSessionKey"], "agent:main:main")
+        self.assertTrue(payload["contaminatedByRegistry"])
+        self.assertEqual(payload["registrySubagentRefs"], ["octoclaw-subagent-code-20260411082815989843"])
+
     def test_policy_state_persists_to_workspace_ledger(self) -> None:
         import tempfile
 
