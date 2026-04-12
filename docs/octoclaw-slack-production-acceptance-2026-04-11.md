@@ -184,6 +184,29 @@ python3 lib/slack_acceptance_suite.py \
   --session-key '<acceptance-session-key>'
 ```
 
+如果想把 bootstrap + suite 合成一个 live 入口，推荐直接用：
+
+```bash
+export OCTOCLAW_ACCEPTANCE_SLACK_BOT_TOKEN='...'
+export OCTOCLAW_ACCEPTANCE_SLACK_APP_TOKEN='...'
+
+bash bin/run-slack-acceptance-live.sh
+```
+
+第一次运行只会完成 bootstrap，并提示你：
+
+1. 在 `#octoclaw-acceptance` 发一条暖机消息
+2. 然后带 `--session-key` 或 `--target` 再跑一次
+
+例如：
+
+```bash
+bash bin/run-slack-acceptance-live.sh \
+  --session-key '<acceptance-session-key>' \
+  --replay-source macmini=/path/to/macmini-bundle \
+  --replay-source vm=/path/to/vm-bundle
+```
+
 如果要跑完整 6 条核心句子，推荐：
 
 ```bash
