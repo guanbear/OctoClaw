@@ -16,6 +16,7 @@ from lib.slack_e2e_acceptance import (
     fetch_observed_messages,
     get_scenarios_for_preset,
     inspect_replay_source,
+    launch_agent_turn,
     load_slack_config,
     resolve_channel_id_for_target,
     run_scenario,
@@ -211,6 +212,30 @@ class SlackE2EAcceptanceTests(unittest.TestCase):
 
     def test_detect_delivery_mode_flags_gateway_rpc(self) -> None:
         self.assertEqual(detect_delivery_mode({"mode": "gateway_rpc"}), "gateway_rpc")
+
+    @patch("lib.slack_e2e_acceptance.subprocess.Popen")
+    @patch("lib.slack_e2e_acceptance.locate_openclaw_cli", return_value="/opt/homebrew/bin/openclaw")
+    def test_launch_agent_turn_passes_explicit_reply_target_to_cli(self, _mock_bin, mock_popen) -> None:
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        result = launch_agent_turn(
+            {
+                "session_id": "sess-acceptance",
+                "session_key": "agent:main:slack:channel:acceptance",
+                "provider": "slack",
+                "target": "channel:C0AS4DAPPU3",
+                "account_id": "default",
+            },
+            "在吗",
+        )
+        self.assertTrue(result["ok"])
+        command = result["command"]
+        self.assertIn("--reply-channel", command)
+        self.assertIn("slack", command)
+        self.assertIn("--reply-to", command)
+        self.assertIn("channel:C0AS4DAPPU3", command)
+        self.assertIn("--reply-account", command)
+        self.assertIn("default", command)
 
     @patch("lib.slack_e2e_acceptance.fetch_slack_messages")
     def test_fetch_observed_messages_combines_root_and_thread(self, mock_fetch) -> None:

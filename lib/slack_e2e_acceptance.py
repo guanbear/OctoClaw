@@ -403,6 +403,9 @@ def launch_agent_turn(
     timeout_s: int = 180,
 ) -> dict[str, Any]:
     session_key = _text(session.get("session_key"))
+    provider = _text(session.get("provider"))
+    target = _text(session.get("target"))
+    account_id = _text(session.get("account_id"))
     if session_key and not _text(session.get("session_id")):
         gateway_result = send_agent_message(session_key, prompt, timeout_seconds=0)
         ok = bool(gateway_result.get("ok")) or _text(gateway_result.get("status")) in {"accepted", "queued"}
@@ -429,6 +432,10 @@ def launch_agent_turn(
         "--deliver",
         "--json",
     ]
+    if provider and target:
+        cmd.extend(["--reply-channel", provider, "--reply-to", target])
+    if account_id:
+        cmd.extend(["--reply-account", account_id])
     try:
         proc = subprocess.Popen(
             cmd,
