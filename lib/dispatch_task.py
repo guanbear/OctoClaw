@@ -113,6 +113,25 @@ def decision_metadata(decision: dict) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def merge_runtime_metadata_into_decision(decision: dict, metadata: dict | None = None, *, session_key: str = "") -> dict:
+    """Make CLI/tool materialization metadata authoritative for the live dispatch path."""
+    merged = copy.deepcopy(decision if isinstance(decision, dict) else {})
+    request = ensure_nested_dict(merged, "request")
+    request_metadata = request.get("metadata", {})
+    if not isinstance(request_metadata, dict):
+        request_metadata = {}
+    for key, value in (metadata or {}).items():
+        if key == "session_key" and not str(value or "").strip():
+            continue
+        request_metadata[key] = value
+    resolved_session_key = str(session_key or request_metadata.get("session_key", "") or request.get("session_key", "") or "").strip()
+    if resolved_session_key:
+        request["session_key"] = resolved_session_key
+        request_metadata["session_key"] = resolved_session_key
+    request["metadata"] = request_metadata
+    return merged
+
+
 def ensure_nested_dict(root: dict, key: str) -> dict:
     value = root.get(key, {})
     if not isinstance(value, dict):
@@ -1682,6 +1701,7 @@ def main():
             payload = build_dispatch_policy_required_failure(task, force_route=forced_route)
             print(json.dumps(payload, ensure_ascii=False))
             return
+    decision = merge_runtime_metadata_into_decision(decision, metadata, session_key=args.session_key)
     decision["legacy_policy_fallback_used"] = legacy_policy_fallback_used
     args._policy_decision = decision
     route = decision_route(decision)

@@ -2012,6 +2012,65 @@ function buildPolicyMetadata(ctx = {}, options = {}) {
   return metadata;
 }
 
+function isDispatchableUserSessionKey(raw) {
+  const value = String(raw || "").trim();
+  if (!value || isSubagentSessionRef(value)) return false;
+  const parsed = parseSessionRoute(value);
+  if (parsed.looksLikeImSession || parsed.isPrimaryMainSession) return true;
+  return /^agent:main:/i.test(value);
+}
+
+function applyUserMetadataOverrides(metadata = {}, overrides = {}) {
+  const next = metadata && typeof metadata === "object" ? { ...metadata } : {};
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+    return next;
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key === "session_key" && !String(value || "").trim()) {
+      continue;
+    }
+    next[key] = value;
+  }
+  return next;
+}
+
+function resolveDispatchSessionKey(ctx = {}, metadata = {}, options = {}) {
+  const state = options?.state && typeof options.state === "object" ? options.state : {};
+  const cachedDecision = options?.cachedDecision && typeof options.cachedDecision === "object" ? options.cachedDecision : {};
+  const boundary = detectSessionBoundary(ctx);
+  const candidates = [
+    metadata?.session_key,
+    options?.stateKey,
+    state?.canonicalSessionKey,
+    cachedDecision?.request?.session_key,
+    cachedDecision?.request?.metadata?.session_key,
+    boundary.canonicalSessionKey,
+    ctx?.sessionKey,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (isDispatchableUserSessionKey(value)) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function finalizeDispatchMetadata(ctx = {}, metadata = {}, options = {}) {
+  const next = metadata && typeof metadata === "object" ? { ...metadata } : {};
+  const sessionKey = resolveDispatchSessionKey(ctx, next, options);
+  if (sessionKey) {
+    next.session_key = sessionKey;
+    const parsed = parseSessionRoute(sessionKey);
+    if (parsed.origin && !next.session_origin) next.session_origin = parsed.origin;
+    if (parsed.target && !next.session_target) next.session_target = parsed.target;
+    if (parsed.threadId && !next.session_thread_id) next.session_thread_id = parsed.threadId;
+    if (parsed.threadKey && !next.session_thread_key) next.session_thread_key = parsed.threadKey;
+    if (parsed.bindingKey && !next.session_binding_key) next.session_binding_key = parsed.bindingKey;
+  }
+  return next;
+}
+
 function enrichConversationControlMetadata(prompt, metadata = {}) {
   const nextMetadata = metadata && typeof metadata === "object" ? { ...metadata } : {};
   if (nextMetadata?.conversation_control && nextMetadata?.intent_packet) return nextMetadata;
@@ -2990,9 +3049,10 @@ const plugin = {
         required: ["task"]
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-        const metadata = { ...buildPolicyMetadata(ctx), ...parseObjectJson(params.metadataJson) };
+        let metadata = applyUserMetadataOverrides(buildPolicyMetadata(ctx), parseObjectJson(params.metadataJson));
         if (params.channel) metadata.channel = params.channel;
         if (params.sessionKey) metadata.session_key = params.sessionKey;
+        metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey: String(params.sessionKey || "").trim() });
         const payload = await resolveStatelessPolicyDecision(params.task, {
           command: params.command || "",
           metadata,
@@ -3074,16 +3134,17 @@ const plugin = {
             cachedDecision = resolved.decision;
           }
         }
-        const metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || cachedDecision?.request?.session_key || "" }) };
+        let metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || cachedDecision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
         if (params.metadataJson) {
           try {
             const parsed = JSON.parse(params.metadataJson);
             if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              Object.assign(metadata, parsed);
+              metadata = applyUserMetadataOverrides(metadata, parsed);
             }
           } catch {}
         }
+        metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         const policyDecisionJson = params.policyJson || (cachedDecision ? JSON.stringify(cachedDecision) : "");
@@ -3217,16 +3278,21 @@ const plugin = {
         if (params.streamTo) args.push("--stream-to", params.streamTo);
         if (params.parentId) args.push("--parent-id", params.parentId);
         const { key: existingStateKey, state: existingState } = resolveToolPolicyContext(ctx, params.task || "");
-        const metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || existingState?.decision?.request?.session_key || "" }) };
+        let metadata = { ...buildPolicyMetadata(ctx, { stateKey: existingStateKey || existingState?.decision?.request?.session_key || "" }) };
         if (params.sessionKey) metadata.session_key = params.sessionKey;
         if (params.metadataJson) {
           try {
             const parsed = JSON.parse(params.metadataJson);
             if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              Object.assign(metadata, parsed);
+              metadata = applyUserMetadataOverrides(metadata, parsed);
             }
           } catch {}
         }
+        metadata = finalizeDispatchMetadata(ctx, metadata, {
+          stateKey: existingStateKey,
+          state: existingState,
+          cachedDecision: existingState?.decision,
+        });
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
@@ -3431,6 +3497,9 @@ export const __octoclawTest = {
   extractPromptText,
   isManagedAgentContext,
   buildPolicyMetadata,
+  applyUserMetadataOverrides,
+  resolveDispatchSessionKey,
+  finalizeDispatchMetadata,
   preHintAllowedTools,
   observerControlTools,
   sessionControlTools,

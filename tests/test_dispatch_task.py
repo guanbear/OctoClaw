@@ -19,6 +19,26 @@ dispatch_task = importlib.import_module("dispatch_task")
 
 
 class DispatchTaskTaxonomyTests(unittest.TestCase):
+    def test_merge_runtime_metadata_into_decision_makes_cli_session_authoritative(self) -> None:
+        decision = {
+            "request": {
+                "session_key": "",
+                "metadata": {"session_key": "", "channel": "slack"},
+            },
+            "route_decision": {"route": "runner"},
+        }
+
+        merged = dispatch_task.merge_runtime_metadata_into_decision(
+            decision,
+            {"session_key": "agent:main:slack:direct:u-main", "channel": "slack"},
+            session_key="agent:main:slack:direct:u-main",
+        )
+
+        self.assertEqual(merged["request"]["session_key"], "agent:main:slack:direct:u-main")
+        self.assertEqual(merged["request"]["metadata"]["session_key"], "agent:main:slack:direct:u-main")
+        self.assertEqual(merged["request"]["metadata"]["channel"], "slack")
+        self.assertEqual(decision["request"]["session_key"], "")
+
     def test_run_runner_on_demand_enables_internal_legacy_loop_flag(self) -> None:
         with patch.object(
             dispatch_task.subprocess,

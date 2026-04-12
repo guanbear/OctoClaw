@@ -441,6 +441,31 @@ Sender (untrusted metadata):
         self.assertEqual(payload["session_key"], "agent:main:slack:direct:u234")
         self.assertEqual(payload["session_origin"], "slack")
 
+    def test_dispatch_metadata_recovers_session_key_when_tool_passes_empty_override(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u-dispatch",
+                  sessionId: "sess-dispatch",
+                  trigger: "message",
+                  agentId: "agent:main:main"
+                };
+                const metadata = __octoclawTest.applyUserMetadataOverrides(
+                  __octoclawTest.buildPolicyMetadata(ctx),
+                  { session_key: "", channel: "slack" }
+                );
+                return __octoclawTest.finalizeDispatchMetadata(ctx, metadata, {
+                  stateKey: "",
+                  state: {},
+                  cachedDecision: { request: { session_key: "" } }
+                });
+            })()"""
+        )
+
+        self.assertEqual(payload["session_key"], "agent:main:slack:direct:u-dispatch")
+        self.assertEqual(payload["session_origin"], "slack")
+        self.assertEqual(payload["channel"], "slack")
+
     def test_ack_delivery_session_key_prefers_user_facing_thread_from_session_registry(self) -> None:
         import tempfile
 
