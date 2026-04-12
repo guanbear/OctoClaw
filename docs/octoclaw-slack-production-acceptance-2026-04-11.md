@@ -207,6 +207,23 @@ bash bin/run-slack-acceptance-live.sh \
   --replay-source vm=/path/to/vm-bundle
 ```
 
+如果当前目标是 `单 gateway` 验收，而不是独立 acceptance runtime，可直接复用当前运行中的 gateway / bot：
+
+```bash
+bash bin/run-slack-acceptance-live.sh \
+  --reuse-current-runtime \
+  --session-key '<acceptance-session-key>'
+```
+
+这条路径的含义是：
+
+- 只隔离 `acceptance channel / session`
+- 不启动第二个 gateway
+- 继续使用当前 runtime 里的 Slack bot 身份
+
+当前代码现实下，`单 gateway` 模式没有现成的“独立 acceptance agent + 独立长期记忆 namespace”开关；  
+所以它能稳定验证 ACK / runner / spawn / follow-up / replay，但长期记忆仍与主 runtime 共用，存在轻微污染风险。
+
 如果要跑完整 6 条核心句子，推荐：
 
 ```bash
@@ -256,6 +273,7 @@ python3 lib/slack_e2e_acceptance.py \
   - `--openclaw-home`
   这样 black-box 与 replay 都会落到同一套 acceptance runtime 参数上
 - 默认情况下，独立 acceptance runtime 会把 acceptance gateway 绑定到 `127.0.0.1:18790`，避免和生产 `18789` 冲突
+- 如果选择 `--reuse-current-runtime`，则不会启动独立 acceptance gateway
 
 ---
 

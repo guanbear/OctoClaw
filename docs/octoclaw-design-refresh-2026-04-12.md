@@ -265,8 +265,8 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
 
 建议目标：
 
-1. 单独 Slack bot / 单独测试 workspace 或测试 channel
-2. 单独 acceptance agent/session，不复用主生产会话
+1. 优先支持 `单 gateway + 单 bot + 单独测试 channel/session`
+2. 如果后续需要更强隔离，再升级到独立 acceptance runtime / bot
 3. 覆盖完整 6 类核心句子，再扩到 compound request / dependency 场景
 4. 不只统计 ACK/final timing，还要校验内容正确性：
    - provenance 是否真实
@@ -281,7 +281,8 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
 当前实现阶段可以拆成两条并行轨：
 
 1. `acceptance-blackbox`
-   - 独立 Slack bot / channel / session
+   - 当前现实默认是：单 gateway 下的独立 channel / session
+   - 如有必要再升级到独立 acceptance runtime / bot
    - 核心句子 + compound request 黑盒验收
 2. `acceptance-replay`
    - macmini / VM 的真实 session / replay / task-state bundle
@@ -299,6 +300,12 @@ runtime slimming 第一拍已经把正式推荐路径切成了单一路径，但
   - 在 workspace 下自举隔离的 acceptance `OPENCLAW_HOME + WORKSPACE`
   - 复制主 auth/model 基础文件，但把 Slack bot/app token 注入到 acceptance config
   - 让 black-box 与 replay 可以落到同一套 acceptance runtime
+
+当前代码现实需要特别注意：
+
+- `session/channel` 隔离是现成的，单 gateway 可用
+- 但 `单 gateway` 模式下没有现成的“独立 acceptance agent + 独立长期记忆 namespace”开关
+- 所以单 gateway 方案适合先把生产验收系统跑起来；如果后续要彻底避免长期记忆污染，再上独立 acceptance runtime
 
 ### 4.4 第四优先级：Slack/IM 安全与投递策略收口
 
