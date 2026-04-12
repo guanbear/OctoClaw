@@ -64,9 +64,9 @@ Recommended commands:
   runner-status       print runner queue/health details
 
 Gateway control:
-  up gateway          start OpenClaw gateway
-  down gateway        stop OpenClaw gateway
-  restart gateway     restart OpenClaw gateway
+  up openclaw          start OpenClaw gateway
+  down openclaw        stop OpenClaw gateway
+  restart openclaw     restart OpenClaw gateway
 
 Runner pool:
   up runner           start runner pool
