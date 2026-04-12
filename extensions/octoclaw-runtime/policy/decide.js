@@ -17,6 +17,7 @@ import {
 import { resolveModelAndThinking } from "./model.js";
 import { buildBudgetRecommendation, buildRouteRecommendation } from "./recommendation.js";
 import { inferRoute } from "./route.js";
+import { scheduleCompoundPlan, evaluateGuard } from "./compound_plan.js";
 import {
   inferWorkerPool as taxonomyInferWorkerPool,
   modelRoleForWorkerPool,
@@ -1728,4 +1729,73 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   decision.auto_router = buildAutoRouterPayload(decision);
   decision.hook_interface = hookInterface(runtimeCfg, decision);
   return decision;
+}
+
+export function buildCompoundDecisions(plan, task, { command = "", metadata = {} } = {}) {
+  if (!plan || typeof plan !== "object" || !Array.isArray(plan.work_items)) return [];
+  const normalizedMetadata = normalizeMetadata(metadata);
+  const scheduled = scheduleCompoundPlan(plan);
+  if (!scheduled.waves || scheduled.waves.length === 0) return [];
+
+  const workItemResults = new Map();
+  const decisions = [];
+
+  for (const wave of scheduled.waves) {
+    for (const itemId of wave) {
+      const item = scheduled.itemMap.get(itemId);
+      if (!item) continue;
+
+      const guardResult = evaluateGuard(item.guard, workItemResults);
+      if (!guardResult.passed) {
+        workItemResults.set(itemId, { skipped: true, guard_result: guardResult });
+        decisions.push({
+          item_id: itemId,
+          decision_mode: "compound_plan",
+          lane: String(item.lane || "direct"),
+          intent_class: String(item.intent_class || "undetermined"),
+          goal: String(item.goal || ""),
+          status: "skipped",
+          guard_result: guardResult,
+          fallback: String(item.fallback || "skip_silent"),
+          user_visible: Boolean(item.user_visible),
+          decision: null,
+        });
+        continue;
+      }
+
+      const itemTask = String(item.goal || task);
+      const routeMeta = inferRoute(itemTask, command, normalizedMetadata);
+      const route = String(item.lane || routeMeta.route || "direct");
+      const features = routeMeta.features || {};
+      const workType = inferWorkType(itemTask, features, route, normalizedMetadata);
+      const phase = inferPhase(itemTask, features, workType, route, normalizedMetadata);
+      const executorType = inferExecutorType(route);
+      const workerPool = inferWorkerPool(route, workType);
+
+      decisions.push({
+        item_id: itemId,
+        decision_mode: "compound_plan",
+        lane: route,
+        intent_class: String(item.intent_class || "undetermined"),
+        goal: itemTask,
+        status: "ready",
+        guard_result: guardResult,
+        fallback: String(item.fallback || "notify_user"),
+        user_visible: Boolean(item.user_visible),
+        depends_on: Array.isArray(item.depends_on) ? [...item.depends_on] : [],
+        decision: {
+          route,
+          work_type: workType,
+          phase,
+          executor_type: executorType,
+          worker_pool: workerPool,
+          confidence: Number(routeMeta.confidence || 0),
+        },
+      });
+
+      workItemResults.set(itemId, { ready: true, lane: route });
+    }
+  }
+
+  return decisions;
 }

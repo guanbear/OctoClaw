@@ -325,6 +325,9 @@ export function buildTurnFacts(turn, taskIndex, taskEventIndex = new Map(), deli
   const materialization = dispatch?.materialization && typeof dispatch.materialization === "object"
     ? dispatch.materialization
     : {};
+  const compoundPlanLedger = dispatch?.compound_plan_ledger && typeof dispatch.compound_plan_ledger === "object" && !Array.isArray(dispatch.compound_plan_ledger)
+    ? dispatch.compound_plan_ledger
+    : {};
   const capabilityFailure = dispatch?.capability_failure && typeof dispatch.capability_failure === "object"
     ? dispatch.capability_failure
     : (materialization?.capability_failure && typeof materialization.capability_failure === "object" ? materialization.capability_failure : {});
@@ -470,6 +473,8 @@ export function buildTurnFacts(turn, taskIndex, taskEventIndex = new Map(), deli
     delegatedProbeSource: String(probeSpec.source || "").trim(),
     delegatedProbeProject: String(probeSpec.project || "").trim(),
     delegatedProbeFocus: String(probeSpec.focus || "").trim(),
+    compoundPlanActive: Boolean(dispatch?.compound_plan_ledger && typeof dispatch.compound_plan_ledger === "object"),
+    compoundPlanLedger: compoundPlanLedger,
     task,
   };
 }
@@ -620,20 +625,39 @@ export function buildSignalPacket(prompt = "") {
 
 function buildExecutionFollowupPacket(promptText, subjectTurn) {
   const facts = subjectTurn?.facts || {};
+  const compoundPlanActive = Boolean(facts.compoundPlanActive);
+  const compoundLedger = compoundPlanActive ? (facts.compoundPlanLedger || {}) : {};
+
+  let provenanceTaskId = String(facts.taskId || "").trim();
+  let provenanceRunnerJobId = String(facts.runnerJobId || "").trim();
+  let provenanceRoute = String(subjectTurn?.route || "").trim();
+
+  if (compoundPlanActive) {
+    const ledgerEntries = Object.values(compoundLedger);
+    const activeEntry = ledgerEntries.find((entry) => entry && entry.status === "running")
+      || ledgerEntries.find((entry) => entry && entry.status === "completed");
+    if (activeEntry) {
+      provenanceTaskId = String(activeEntry.task_id || provenanceTaskId).trim();
+      provenanceRunnerJobId = String(activeEntry.runner_job_id || provenanceRunnerJobId).trim();
+    }
+    provenanceRoute = "compound_plan";
+  }
+
   return baseIntentPacket(promptText, {
     intent_class: INTENT_CLASSES.EXECUTION_FOLLOWUP,
     confidence: 0.92,
-    reason_codes: ["recent_execution_followup"],
+    reason_codes: compoundPlanActive ? ["recent_execution_followup", "compound_plan_active"] : ["recent_execution_followup"],
     route_hint: "direct",
     lane_hint: "control_observer",
     protected_lane: "control_observer",
     grounding_required: true,
+    compound_plan_active: compoundPlanActive,
     subject: {
       prompt: String(subjectTurn?.prompt || "").trim(),
-      route: String(subjectTurn?.route || "").trim(),
+      route: provenanceRoute,
       task_class: String(subjectTurn?.taskClass || "").trim(),
-      preferred_task_id: String(facts.taskId || "").trim(),
-      runner_job_id: String(facts.runnerJobId || "").trim(),
+      preferred_task_id: provenanceTaskId,
+      runner_job_id: provenanceRunnerJobId,
     },
   });
 }

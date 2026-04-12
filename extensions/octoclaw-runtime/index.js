@@ -16,6 +16,10 @@ import {
 import { buildDecision as buildPolicyDecision } from "./policy/decide.js";
 import { loadOctoClawConfig, resolveRuntimeFeatureFlags } from "./policy/config.js";
 import { invokePolicyJudge } from "./policy/judge.js";
+import { invokeCompoundPlanner } from "./policy/planner.js";
+import { scheduleCompoundPlan, evaluateGuard } from "./policy/compound_plan.js";
+import { buildCompoundDecisions } from "./policy/decide.js";
+import { executeCompoundPlan, ledgerToJSON } from "./policy/compound_executor.js";
 import { buildRouteOutcome } from "./policy/outcome.js";
 import { inferRoute } from "./policy/route.js";
 
@@ -2072,6 +2076,22 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   const conversationControl = metadata?.conversation_control || buildConversationControlHintsFromIntent(intentPacket);
   if (conversationControl?.available) {
     metadata.conversation_control = conversationControl;
+  }
+  const compoundPlannerResult = await invokeCompoundPlanner({
+    prompt,
+    intentPacket,
+    sessionContext: { sessionKey: stateKey, channel: metadata?.channel },
+    runtimeCfg,
+  });
+  if (compoundPlannerResult?.decision_mode === "compound_plan" && compoundPlannerResult.plan) {
+    metadata.compound_plan = compoundPlannerResult.plan;
+    const compoundDecisions = buildCompoundDecisions(compoundPlannerResult.plan, prompt, { command, metadata });
+    const compoundLedger = await executeCompoundPlan(compoundPlannerResult.plan, compoundDecisions, {
+      dispatchFn: async (decision) => ({ status: "dispatched", task_id: null, runner_job_id: null }),
+      materializeFn: async (decision, dispatchResult) => dispatchResult || {},
+      logger,
+    });
+    metadata.compound_plan_ledger = ledgerToJSON(compoundLedger);
   }
   const judgeResult = await invokePolicyJudge({
     task: prompt,
