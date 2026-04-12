@@ -5700,6 +5700,7 @@ def _cmd_repair_once():
 
         # ── 状态变化 DM 通知 ──
         try:
+            changes = []
             notify_state = load_notify_state()
             old_states = notify_state.get("task_ids", {})
             anchor_messages = notify_state.get("task_anchor_messages", {})
