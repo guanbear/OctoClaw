@@ -25,7 +25,6 @@ import { inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const HOME_DIR = os.homedir();
 let OCTOCLAW_ROOT_OVERRIDE = "";
 let WORKSPACE_ROOT_OVERRIDE = "";
 
@@ -87,12 +86,17 @@ function firstExistingPath(candidates, matcher = null) {
   return "";
 }
 
+function resolveHomeDir() {
+  return String(process.env.HOME || os.homedir() || "").trim() || os.homedir();
+}
+
 function resolveOctoClawRoot() {
+  const homeDir = resolveHomeDir();
   const resolved = firstExistingPath(
     [
       OCTOCLAW_ROOT_OVERRIDE,
       process.env.OCTOCLAW_ROOT,
-      path.join(HOME_DIR, ".openclaw", "workspace", "openclaw", "skills", "octopus"),
+      path.join(homeDir, ".openclaw", "workspace", "openclaw", "skills", "octopus"),
       path.resolve(__dirname, "..", ".."),
     ],
     (candidate) => fsSync.existsSync(path.join(candidate, "lib")),
@@ -106,6 +110,7 @@ function resolveScript(...parts) {
 
 function resolveWorkspaceRoot() {
   const root = resolveOctoClawRoot();
+  const homeDir = resolveHomeDir();
   const explicit = firstExistingPath(
     [
       WORKSPACE_ROOT_OVERRIDE,
@@ -118,7 +123,7 @@ function resolveWorkspaceRoot() {
   const resolved = firstExistingPath(
     [
       root ? path.resolve(root, "..", "..", "..") : "",
-      path.join(HOME_DIR, ".openclaw", "workspace"),
+      path.join(homeDir, ".openclaw", "workspace"),
     ],
     (candidate) => fsSync.existsSync(path.join(candidate, "tmp")),
   );
@@ -157,11 +162,11 @@ function resolvePolicyStateLedgerPath() {
 }
 
 function resolveRootSessionsPath() {
-  return path.join(HOME_DIR, ".openclaw", "sessions.json");
+  return path.join(resolveHomeDir(), ".openclaw", "sessions.json");
 }
 
 function resolveMainAgentSessionsPath() {
-  return path.join(HOME_DIR, ".openclaw", "agents", "main", "sessions", "sessions.json");
+  return path.join(resolveHomeDir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
 }
 
 function runCommand(command, args, options = {}) {
@@ -691,6 +696,60 @@ function parseSessionRoute(raw) {
   };
 }
 
+function deriveSessionDescriptor(controlKey, record = {}) {
+  const parsed = parseSessionRoute(controlKey);
+  const originRecord = record && typeof record.origin === "object" && !Array.isArray(record.origin) ? record.origin : {};
+  const deliveryRecord = record && typeof record.deliveryContext === "object" && !Array.isArray(record.deliveryContext) ? record.deliveryContext : {};
+  const metadataOrigin = String(
+    originRecord.provider
+      || originRecord.surface
+      || originRecord.channel
+      || deliveryRecord.channel
+      || "",
+  ).trim().toLowerCase();
+  const origin = String(
+    (parsed.looksLikeImSession && parsed.origin && IM_SESSION_ORIGINS.has(parsed.origin))
+      ? parsed.origin
+      : metadataOrigin
+        || parsed.origin
+      || "",
+  ).trim().toLowerCase();
+  const target = String(
+    parsed.target
+      || deliveryRecord.to
+      || originRecord.to
+      || "",
+  ).trim();
+  const threadId = String(
+    parsed.threadId
+      || deliveryRecord.threadId
+      || originRecord.threadId
+      || record.lastThreadId
+      || "",
+  ).trim();
+  const bindingKey = origin && target ? `${origin}:${target}` : "";
+  const threadKey = bindingKey ? `${bindingKey}:${threadId || "root"}` : "";
+  const looksLikeImSession = Boolean(
+    parsed.looksLikeImSession
+      || (origin && (target || IM_SESSION_ORIGINS.has(origin))),
+  );
+  return {
+    ...parsed,
+    origin,
+    target,
+    threadId,
+    bindingKey,
+    threadKey,
+    looksLikeImSession,
+    nativeChannelId: String(
+      originRecord.nativeChannelId
+        || deliveryRecord.nativeChannelId
+        || "",
+    ).trim(),
+    chatType: String(record.chatType || originRecord.chatType || "").trim(),
+  };
+}
+
 function parseUpdatedSortValue(value) {
   if (typeof value === "number") return value;
   const text = String(value || "").trim();
@@ -708,14 +767,18 @@ function loadSessionDescriptors() {
     const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const channelSessionKey = String(record.channelSessionKey || "").trim();
     const controlKey = channelSessionKey || key;
-    const parsed = parseSessionRoute(controlKey);
+    const parsed = deriveSessionDescriptor(controlKey, record);
     const next = {
       sessionKey: key,
       controlKey,
       channelSessionKey,
       origin: String(parsed.origin || "").trim(),
+      target: String(parsed.target || "").trim(),
       bindingKey: String(parsed.bindingKey || "").trim(),
       threadKey: String(parsed.threadKey || "").trim(),
+      threadId: String(parsed.threadId || "").trim(),
+      nativeChannelId: String(parsed.nativeChannelId || "").trim(),
+      chatType: String(parsed.chatType || "").trim(),
       updatedSort: parseUpdatedSortValue(record.updatedAt),
       isSubagent: isSubagentSessionRef(key) || isSubagentSessionRef(record.agentId),
       isUserFacing: Boolean(parsed.looksLikeImSession),
@@ -740,6 +803,27 @@ function loadSessionDescriptors() {
   return [...descriptors.values()].sort(
     (left, right) => Number(right.updatedSort || 0) - Number(left.updatedSort || 0),
   );
+}
+
+function resolveCanonicalSessionDescriptor(ctx = {}) {
+  const provider = String(ctx.messageProvider || "").trim().toLowerCase();
+  const channelId = String(ctx.channelId || "").trim();
+  const descriptors = loadSessionDescriptors().filter((entry) => entry.isUserFacing && !entry.isSubagent);
+  if (provider && channelId) {
+    const exact = descriptors.find(
+      (entry) => entry.origin === provider && entry.nativeChannelId === channelId && !entry.threadId,
+    );
+    if (exact) return exact;
+    const threaded = descriptors.find(
+      (entry) => entry.origin === provider && entry.nativeChannelId === channelId,
+    );
+    if (threaded) return threaded;
+  }
+  if (provider) {
+    const providerMatch = descriptors.find((entry) => entry.origin === provider && /^agent:main:main$/i.test(String(entry.controlKey || "").trim()));
+    if (providerMatch) return providerMatch;
+  }
+  return null;
 }
 
 function isSubagentSessionRef(raw) {
@@ -794,21 +878,26 @@ function detectSessionBoundary(ctx = {}) {
   const agentId = String(ctx.agentId || "").trim();
   const parsedSessionKey = parseSessionRoute(sessionKey);
   const parsedSessionId = parseSessionRoute(sessionId);
-  const hasCanonicalUserSession = Boolean(
-    parsedSessionKey.looksLikeImSession
-      || parsedSessionKey.isPrimaryMainSession
-      || parsedSessionId.looksLikeImSession
-      || parsedSessionId.isPrimaryMainSession,
-  );
+  const descriptorCanonical = resolveCanonicalSessionDescriptor(ctx);
   const subagentRefs = [sessionKey, sessionId, agentId].filter((item) => isSubagentSessionRef(item));
-  const contaminatedBySubagent = hasCanonicalUserSession && subagentRefs.length > 0;
   const canonicalCandidates = [sessionKey, sessionId]
     .map((raw) => ({ raw: String(raw || "").trim(), parsed: parseSessionRoute(raw) }))
     .filter((item) => item.raw && !isSubagentSessionRef(item.raw));
   const canonicalUserSession = canonicalCandidates.find((item) => item.parsed.looksLikeImSession)
     || canonicalCandidates.find((item) => item.parsed.isPrimaryMainSession)
+    || (descriptorCanonical
+      ? {
+        raw: String(descriptorCanonical.controlKey || "").trim(),
+        parsed: {
+          bindingKey: String(descriptorCanonical.bindingKey || "").trim(),
+          threadKey: String(descriptorCanonical.threadKey || "").trim(),
+        },
+      }
+      : null)
     || canonicalCandidates[0]
     || null;
+  const hasCanonicalUserSession = Boolean(canonicalUserSession);
+  const contaminatedBySubagent = hasCanonicalUserSession && subagentRefs.length > 0;
   return {
     sessionKey,
     sessionId,
@@ -1396,13 +1485,10 @@ function guardAssistantMessageForPolicyState(message = {}, state = {}) {
       message: replaceAssistantMessageText(message, delegationFailureReply(state)),
     };
   }
-  if (
-    String(state?.decision?.route_decision?.task_class || "").trim() === "control_observer"
-    && String(state?.sessionBoundary?.status || "").trim() === "contaminated_subagent_identity"
-  ) {
+  if (String(state?.sessionBoundary?.status || "").trim() === "contaminated_subagent_identity") {
     return {
       mode: "replace",
-      reason: "contaminated_control_observer_response_blocked",
+      reason: "contaminated_session_response_blocked",
       message: replaceAssistantMessageText(message, contaminationFallbackReply()),
     };
   }

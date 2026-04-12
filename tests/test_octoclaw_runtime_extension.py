@@ -171,6 +171,51 @@ Sender (untrusted metadata):
         self.assertEqual(payload["status"], "contaminated_subagent_identity")
         self.assertEqual(payload["canonicalSessionKey"], "slack:direct:U123")
 
+    def test_detect_session_boundary_recovers_canonical_main_session_from_sessions_metadata(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-session-boundary-") as tmpdir:
+            home = Path(tmpdir)
+            sessions_dir = home / ".openclaw" / "agents" / "main" / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            (sessions_dir / "sessions.json").write_text(
+                json.dumps(
+                    {
+                        "agent:main:main": {
+                            "updatedAt": 30,
+                            "chatType": "direct",
+                            "origin": {
+                                "provider": "slack",
+                                "to": "user:U123",
+                                "nativeChannelId": "D123",
+                            },
+                            "deliveryContext": {
+                                "channel": "slack",
+                                "to": "user:U123",
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                """__octoclawTest.detectSessionBoundary({
+                    sessionKey: "",
+                    sessionId: "octoclaw-subagent-research-1",
+                    agentId: "octoclaw-subagent-research-1",
+                    messageProvider: "slack",
+                    channelId: "D123"
+                })""",
+                env={
+                    "HOME": str(home),
+                    "WORKSPACE": str(home / ".openclaw" / "workspace"),
+                },
+            )
+
+        self.assertEqual(payload["status"], "contaminated_subagent_identity")
+        self.assertEqual(payload["canonicalSessionKey"], "agent:main:main")
+
     def test_policy_state_persists_to_workspace_ledger(self) -> None:
         import tempfile
 
@@ -2655,6 +2700,25 @@ Sender (untrusted metadata):
         )
 
         self.assertEqual(payload["mode"], "replace")
+        self.assertIn("子任务污染", json.dumps(payload["message"], ensure_ascii=False))
+        self.assertEqual(payload["reason"], "contaminated_session_response_blocked")
+
+    def test_guard_assistant_message_replaces_any_contaminated_reply(self) -> None:
+        payload = run_runtime_helper(
+            """(() => __octoclawTest.guardAssistantMessageForPolicyState(
+                { role: "assistant", content: "最新版本是 v2026.4.10，我已经帮你看过了。" },
+                {
+                  decision: {
+                    route_decision: { route: "direct", task_class: "simple_lookup" }
+                  },
+                  sessionBoundary: { status: "contaminated_subagent_identity" },
+                  delegated: false
+                }
+            ))()"""
+        )
+
+        self.assertEqual(payload["mode"], "replace")
+        self.assertEqual(payload["reason"], "contaminated_session_response_blocked")
         self.assertIn("子任务污染", json.dumps(payload["message"], ensure_ascii=False))
 
     def test_guard_assistant_message_blocks_ungrounded_tool_provenance_claim(self) -> None:
