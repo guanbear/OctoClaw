@@ -35,6 +35,7 @@
 - 记录这轮 runtime slimming 的设计决策
 - 作为后续验收与残余清理的基线
 - 明确为什么当前不继续重写整个 `patrol`
+- 记录 2026-04-13 Slack/macmini 复盘后对 ACK、runner、delivery、watchdog 的系统性收口要求
 
 ---
 
@@ -221,6 +222,211 @@
    - follow-up grounding 仍正常
 2. 默认文档和命令帮助不再要求开 patrol loop
 3. patrol 只作为按需工具出现，不再作为推荐常驻路径
+
+## 6. 2026-04-13 Runtime Follow-Up: Slack, Runner, And Lifecycle Truth
+
+### 6.1 Incident summary
+
+The 2026-04-13 Slack/macmini review showed that the high-level slimming
+direction is right, but the runtime still has multiple partially-overlapping
+control surfaces:
+
+- Slack channel ACKs are still tied too closely to dispatch.
+- Task anchors and operator buttons can leak into normal Slack DMs.
+- Runner is still materializing some requests as fixed playbooks when the
+  intended direction is an AI goal-runner.
+- `patrol` is no longer the default loop, but there is not yet an always-on
+  gateway watchdog that fully replaces its timeout/delivery reconciliation role.
+- OpenClaw native Task/Flow cannot be the sole lifecycle truth yet because the
+  current CLI does not provide a stable `openclaw tasks create` surface for
+  arbitrary OctoClaw jobs.
+
+These issues should be fixed as one runtime contract, not as case-by-case
+Slack patches.
+
+### 6.2 Channel-level ACK contract
+
+ACK must belong to the Slack/channel runtime, not to runner/spawn dispatch.
+
+Required behavior:
+
+```text
+Slack inbound
+  -> persist delivery target
+  -> start slow-ack timer
+  -> if no visible reply within 2-3s, send "received / checking"
+  -> if no final within 10-15s, send at most one progress update
+```
+
+This applies to `direct`, `runner`, and `spawn_single`. The pre-dispatch ACK is
+still useful, but it is only delegated-work progress, not the primary first
+response guarantee.
+
+Constraints:
+
+- ACK must not wait for active-memory, policy judge, dispatch, materialization,
+  or model generation.
+- ACK should be deterministic fixed text; do not spend model tokens on it.
+- ACK telemetry must distinguish attempted vs delivered:
+  - `ack_required`
+  - `ack_attempted`
+  - `ack_delivered`
+  - `ack_failure_reason`
+
+### 6.3 Slack delivery noise contract
+
+Normal Slack DM output should be product-facing:
+
+```text
+1. one ACK/progress message
+2. one final answer
+3. one concise failure/blocked message when needed
+```
+
+Task anchors, queue snapshots, and operator buttons are not normal user
+answers. `View`, `Queue`, `Retrieve`, `Timeline`, `Graph`, `Artifacts`, and
+`Explorer` are operator controls.
+
+Required changes:
+
+- Suppress operator buttons in ordinary Slack DMs by default.
+- If task anchors are enabled, update one message instead of sending a new
+  message for every lifecycle event.
+- If buttons are enabled in operator/debug mode, route `block_action` directly
+  to the task action handler. Do not send button clicks through the main agent
+  as normal user text.
+- Do not surface internal statements like "stickyResult is fixed" or "I am
+  testing dispatch" unless the user explicitly asks for debugging/provenance.
+
+### 6.4 Runner execution contract
+
+Runner should be a goal-driven lightweight executor. Fixed playbooks are
+allowed only as internal tools, not as the identity of runner itself.
+
+Default runner behavior:
+
+```text
+runner_goal(original_user_goal, compact_context, allowed_tools, budget)
+  -> choose strategy
+  -> optionally use a playbook
+  -> produce worker_result
+  -> run relevance_check against original_user_goal
+```
+
+Playbook use is allowed only when the playbook output is isomorphic to the
+original user goal:
+
+- "what version is installed?" -> `version_probe`
+- "what changed in OpenClaw 4.11, especially memory?" -> release/docs analysis,
+  not `version_probe`
+- "compare these tools" -> goal-runner or research lane, not a stale default
+  upstream release lookup
+
+Every runner result must include:
+
+```json
+{
+  "original_goal": "...",
+  "execution_strategy": "goal_runner|playbook_accelerated",
+  "playbook_kind": "none|version_probe|upstream_release_lookup|...",
+  "relevance_check": "passed|failed",
+  "relevance_reason": "..."
+}
+```
+
+If relevance fails, the task must not be marked `done` or `delivered`. It should
+fall back to goal-runner/direct synthesis or surface a concise blocked/failure
+message.
+
+### 6.5 Lifecycle truth without native task create
+
+The desired end-state is native Task/Flow truth, but that cannot be assumed
+until OpenClaw exposes a create/update/complete/fail API for arbitrary delegated
+jobs. Today, `openclaw tasks list` exists, but there is no stable
+`openclaw tasks create` command for OctoClaw to call.
+
+Therefore the interim invariant is:
+
+```text
+OctoClaw TaskLedger is the lifecycle truth for OctoClaw-owned work.
+OpenClaw native Task/Flow facts are optional bindings when available.
+```
+
+The TaskLedger is:
+
+- `task-events.jsonl`: append-only lifecycle events
+- `task-state.json`: projection/cache
+- `runner-queue.json`: runner worker implementation detail
+
+`runner-queue.json` must not be the user-visible truth source. Each queue
+transition must write an event:
+
+```text
+task_created
+task_queued
+task_claimed
+task_started
+heartbeat
+result_ready
+task_succeeded | task_failed | task_timed_out | task_cancelled
+handoff_ready
+delivery_sent | delivery_failed
+```
+
+When OpenClaw later provides a native create/update lifecycle API, this
+invariant can be changed to native Task/Flow truth and TaskLedger projection.
+
+### 6.6 Watchdog/reconciler replacing default patrol
+
+Do not restore the old patrol loop as the default runtime. Replace the missing
+timeout/delivery responsibilities with a small gateway-owned reconciler.
+
+The reconciler should run every 15-30 seconds and:
+
+- recover stale runner jobs using lease timeout and heartbeat facts
+- mark `task_timed_out` when expected completion is exceeded
+- mark failed/blocked when result relevance fails
+- retry delivery-only failures without rerunning the task
+- send final handoff when `handoff_ready` exists but `delivery_sent` is missing
+- record all changes in `task-events.jsonl`
+
+Retry policy must be cost-aware:
+
+1. fix projection/finalize/delivery without rerunning when possible
+2. retry same cheap lane once for transient tool/format failures
+3. switch playbook -> goal-runner before upgrading model
+4. upgrade to a strong model only for high-value tasks
+5. ask the user before repeated or expensive retries
+
+### 6.7 Runner residency decision
+
+The default runtime currently behaves like on-demand runner, even when an
+`octoclaw-runtime` tmux session exists. That is acceptable if documented and
+observed honestly.
+
+Choose one default:
+
+- on-demand runner + gateway reconciler
+- resident tmux runner pool + explicit health/status ownership
+
+Do not let status text imply a resident runner pool is healthy when no active
+runner worker is present. If on-demand is the default, the UI should say
+`runnerExecutionMode=ondemand`, and the only required always-on process is the
+OpenClaw gateway.
+
+### 6.8 Acceptance gates
+
+Add or keep fixtures for these non-negotiable cases:
+
+- A slow direct Slack query receives ACK within 2-3 seconds.
+- A runner query receives no more than one ACK and one final answer.
+- Operator buttons are absent in normal Slack DM mode.
+- Button click executes task action directly when operator mode is enabled.
+- "OpenClaw 4.11 memory/new features" cannot select `version_probe`.
+- A result that only says `OpenClaw 2026.4.11` fails relevance for a feature
+  analysis request.
+- A runner timeout writes `task_timed_out` without patrol loop.
+- `handoff_ready` without delivery is compensated by the gateway reconciler.
 
 ---
 

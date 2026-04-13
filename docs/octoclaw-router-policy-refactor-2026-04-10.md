@@ -991,7 +991,7 @@ RunnerGoalContract 必须携带安全与工具边界。
 低风险 runner 默认 `read_only`。  
 任何写操作、部署、删除、重启都必须走确认或 spawn/review lane，不能由轻 runner 静默执行。
 
-### 6.3 Native Task / TaskFlow 做 job 真相源
+### 6.3 Task lifecycle truth: native-first target, ledger-first until create APIs exist
 
 不建议把“常驻 runner worker 本身”建模成一个长期 native task。  
 否则一个 worker 一天处理 100 个 job，会让用户追问 task id、artifact、完成状态时全部混在一起。
@@ -1027,6 +1027,129 @@ Native Task / TaskFlow 负责：
 - delivery target
 
 Runner、spawn、tmux、daemon 都只是 backend，不是真相源。
+
+#### 6.3.1 Current implementation reality
+
+As of the 2026-04-13 macmini runtime review, OpenClaw CLI exposes `tasks list`
+and flow/list surfaces, but there is no stable `openclaw tasks create` command
+that OctoClaw can call to create an arbitrary runner/spawn lifecycle record.
+
+That means OctoClaw cannot honestly make OpenClaw native Task/Flow the only
+lifecycle truth yet. The current adapter is native-preferred but mirror-capable:
+
+- `openclaw_taskflow_adapter.py` can discover/list native tasks and flows.
+- It can bind to an already-visible native task/flow when a matching id/session
+  exists.
+- It can create managed flow bindings only where the helper/runtime supports
+  that path.
+- When native create is unavailable, it falls back to `mirror_only` or
+  `native_unavailable_fallback_mirror`.
+
+Observed macmini task-state at review time confirmed the mixed state:
+
+- most delegated records were `backend=mirror`, `native_binding_state=none`
+- a smaller set were `backend=managed`, `native_binding_state=bound`, with a
+  `flow_id` but no native task id
+
+So the short-term invariant must be:
+
+```text
+OctoClaw TaskLedger is lifecycle truth for OctoClaw-owned work.
+OpenClaw native Task/Flow facts are optional external substrate facts until
+OpenClaw provides a create/update/complete/fail API for arbitrary delegated jobs.
+```
+
+#### 6.3.2 Interim truth model
+
+Until native task creation exists, the runtime truth layering is:
+
+```text
+task-events.jsonl
+  append-only lifecycle ledger
+
+task-state.json
+  projection/cache for UI, status, handoff, and operator surfaces
+
+runner-queue.json
+  runner worker scheduling detail only
+
+OpenClaw tasks/flows
+  external facts and bindings when available
+```
+
+The read model must be derived in this order:
+
+1. terminal lifecycle events in `task-events.jsonl`
+2. current projection in `task-state.json`
+3. runner implementation facts in `runner-queue.json`
+4. native task/flow facts when a real binding exists
+
+`runner-queue.json` must not be treated as user-visible truth by itself. It can
+claim, run, and complete work, but each transition must write the corresponding
+TaskLedger event.
+
+#### 6.3.3 Required lifecycle events
+
+Every delegated job should produce a consistent event sequence:
+
+```text
+task_created
+task_queued
+task_claimed
+task_started
+heartbeat
+result_ready
+task_succeeded | task_failed | task_timed_out | task_cancelled
+handoff_ready
+delivery_sent | delivery_failed
+```
+
+The status projection is then deterministic:
+
+- `queued`: latest lifecycle event is created/queued/dispatch-started
+- `running`: latest lifecycle event is claimed/started/heartbeat
+- `succeeded`: latest terminal event is succeeded/completed
+- `failed`: latest terminal event is failed
+- `timed_out`: reconciler wrote `task_timed_out`
+- `delivered`: terminal success plus delivery event observed
+
+If task-state and runner-queue disagree, the event ledger wins. If a native
+task/flow exists and can be bound with a high-confidence id/session match, its
+facts can enrich the projection, but they must not erase OctoClaw lifecycle
+events.
+
+#### 6.3.4 Migration gate to native truth
+
+The target native-first design is still right, but it is gated on OpenClaw
+exposing an API/CLI surface equivalent to:
+
+```text
+tasks.create
+tasks.update
+tasks.complete
+tasks.fail
+tasks.event
+```
+
+or commands equivalent to:
+
+```bash
+openclaw tasks create --json ...
+openclaw tasks update <id> --status running
+openclaw tasks complete <id> --result ...
+openclaw tasks fail <id> --reason ...
+```
+
+Only after that exists should the default invariant change to:
+
+```text
+OpenClaw native Task/Flow is lifecycle truth.
+OctoClaw task-state is only projection.
+runner-queue is only worker scheduling.
+```
+
+Until then, any UI/status text that says "native truth" must be softened to
+"native-bound when available" or "OctoClaw ledger truth".
 
 ### 6.4 tmux 只做 optional supervisor
 
