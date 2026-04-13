@@ -669,6 +669,15 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["work_type"] = work_type
     normalized["phase"] = infer_phase(normalized, work_type)
     normalized["worker_pool"] = infer_worker_pool(normalized, work_type)
+    dispatch_routing = task.get("dispatch_routing")
+    if isinstance(dispatch_routing, dict):
+        normalized["dispatch_key"] = _normalized_str(dispatch_routing.get("dispatch_key")) or _normalized_str(normalized.get("dispatch_key"))
+        normalized["lane_key"] = _normalized_str(dispatch_routing.get("lane_key")) or _normalized_str(normalized.get("lane_key"))
+        normalized["capacity_group"] = _normalized_str(dispatch_routing.get("capacity_group")) or _normalized_str(normalized.get("capacity_group"))
+    else:
+        normalized["dispatch_key"] = _normalized_str(normalized.get("dispatch_key"))
+        normalized["lane_key"] = _normalized_str(normalized.get("lane_key"))
+        normalized["capacity_group"] = _normalized_str(normalized.get("capacity_group"))
     normalized["protocol"] = _normalized_str(normalized.get("protocol")) or "normal"
     normalized["profile"] = _normalized_str(normalized.get("profile"))
     normalized["review_required"] = _normalized_bool(normalized.get("review_required"))

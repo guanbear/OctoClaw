@@ -42,6 +42,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.openclaw_taskflow_adapter import enrich_task_record_with_taskflow
 
 STATE_FILE = TASK_STATE_FILE
+PROJECTION_SCHEMA_VERSION = "octoclaw.task_state.projection/v1"
 
 
 def _skip_native_enrichment() -> bool:
@@ -73,10 +74,22 @@ def save_state(fp, state: dict):
     """Truncate and rewrite the state file."""
     state["tasks"] = normalize_task_records(state.get("tasks", []))
     state["updated_at"] = now_iso()
+    state["projection_meta"] = {
+        "source": "taskledger_projection",
+        "version": PROJECTION_SCHEMA_VERSION,
+        "projected_at": now_iso(),
+    }
     fp.seek(0)
     fp.truncate()
     fp.write(json.dumps(state, ensure_ascii=False, indent=2))
     fp.flush()
+
+
+def is_projection(state) -> bool:
+    if not isinstance(state, dict):
+        return False
+    meta = state.get("projection_meta")
+    return isinstance(meta, dict) and meta.get("source") == "taskledger_projection"
 
 
 def cleanup_old(tasks: list) -> list:

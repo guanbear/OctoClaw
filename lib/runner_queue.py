@@ -20,11 +20,42 @@ from octopus_config import (
     load_json,
 )
 
+try:
+    from task_events import append_task_event
+except Exception:
+    append_task_event = None
+
 TERMINAL_JOB_STATUSES = {"done", "failed"}
 TERMINAL_JOB_RETENTION_HOURS = 48
 MAX_TERMINAL_JOBS = 200
 DEFAULT_HEARTBEAT_STALE_SECONDS = 120
 DEFAULT_LEASE_TIMEOUT_SECONDS = 90
+
+
+def _emit_job_event(job, kind, message):
+    if not isinstance(job, dict) or not job.get("id"):
+        return
+    try:
+        if append_task_event is not None:
+            append_task_event(job, kind, message=message or kind)
+    except Exception:
+        pass
+
+
+def queue_status_by_capacity_group(state):
+    jobs = state.get("jobs", []) if isinstance(state, dict) else []
+    groups = {}
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        cg = str(job.get("capacity_group", "") or "unknown").strip() or "unknown"
+        if cg not in groups:
+            groups[cg] = {"queued": 0, "running": 0, "done": 0, "failed": 0, "total": 0}
+        status = str(job.get("status", "") or "").strip().lower()
+        groups[cg]["total"] += 1
+        if status in groups[cg]:
+            groups[cg][status] += 1
+    return groups
 
 
 def parse_json_arg(value: str) -> dict[str, Any]:
@@ -154,6 +185,8 @@ def recover_stale_running_jobs(
         return recovered
 
     recovered = with_queue_lock(mutate)
+    for recovered_job in recovered:
+        _emit_job_event(recovered_job, "job_timed_out", "Runner job timed out (lease expired)")
     return {
         "recovered_count": len(recovered),
         "jobs": recovered,
@@ -299,6 +332,12 @@ def cmd_enqueue(args):
             "artifacts": artifacts,
         }
         _promote_taskflow_fields(job, artifacts)
+        if args.capacity_group:
+            job["capacity_group"] = args.capacity_group
+        if args.lane_key:
+            job["lane_key"] = args.lane_key
+        if args.dispatch_key:
+            job["dispatch_key"] = args.dispatch_key
         if existing:
             existing.update(job)
         else:
@@ -306,6 +345,7 @@ def cmd_enqueue(args):
         return job
 
     job = with_queue_lock(mutate)
+    _emit_job_event(job, "job_enqueued", "Runner job enqueued")
     print(json.dumps(job, ensure_ascii=False))
 
 
@@ -328,7 +368,9 @@ def cmd_claim(args):
                 return job
         return {}
 
-    print(json.dumps(with_queue_lock(mutate), ensure_ascii=False))
+    claimed_job = with_queue_lock(mutate)
+    _emit_job_event(claimed_job, "job_claimed", "Runner job claimed")
+    print(json.dumps(claimed_job, ensure_ascii=False))
 
 
 def cmd_complete(args):
@@ -345,7 +387,9 @@ def cmd_complete(args):
                 return job
         return {}
 
-    print(json.dumps(with_queue_lock(mutate), ensure_ascii=False))
+    completed_job = with_queue_lock(mutate)
+    _emit_job_event(completed_job, "job_completed" if args.status == "done" else "job_failed", f"Runner job {args.status}")
+    print(json.dumps(completed_job, ensure_ascii=False))
 
 
 def cmd_heartbeat(args):
@@ -460,6 +504,9 @@ def main():
     p_enqueue.add_argument("--agent-namespace", dest="agent_namespace", default="")
     p_enqueue.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", default="")
     p_enqueue.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
+    p_enqueue.add_argument("--capacity-group", default="")
+    p_enqueue.add_argument("--lane-key", default="")
+    p_enqueue.add_argument("--dispatch-key", default="")
 
     p_claim = sub.add_parser("claim")
     p_claim.add_argument("--worker-id", required=True)
