@@ -396,6 +396,16 @@ function cancelAckGuard(sessionKey) {
   ackGuardTimers.delete(sessionKey);
 }
 
+function cancelAckGuardForState(stateKey) {
+  if (!stateKey) return;
+  const state = policyStateBySession.get(stateKey);
+  const storedAckKey = state?.ackGuardKey;
+  if (storedAckKey) {
+    cancelAckGuard(storedAckKey);
+  }
+  cancelAckGuard(stateKey);
+}
+
 async function watchdogTick(logger) {
   const now = Date.now();
   if (now - _watchdogLastTick < WATCHDOG_DEBOUNCE_MS) return;
@@ -412,19 +422,23 @@ async function watchdogTick(logger) {
       const status = String(task?.status || "").trim().toLowerCase();
       const taskId = String(task?.id || "").trim();
       if (!taskId) continue;
-      const updatedAt = Number(task?.updated_at || task?.spawned_at || 0);
+      const updatedAt = parseUpdatedSortValue(task?.updated_at || task?.spawned_at || 0);
       if (!updatedAt) continue;
       const ageMin = (now - updatedAt) / 60_000;
       if (status === "queued" && ageMin > STALE_QUEUED_THRESHOLD_MIN) {
         staleCount++;
+        logger?.debug?.(`octoclaw watchdog: task_timeout task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
         continue;
       }
       if ((status === "running" || status === "dispatched") && ageMin > STUCK_THRESHOLD_MIN) {
         stuckCount++;
+        logger?.debug?.(`octoclaw watchdog: runner_stuck task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
         try {
           const scriptPath = path.join(cwd, "lib", "task-state-update.py");
           await runCommand("python3", [scriptPath, "archive-stale-dispatched", "--minutes", String(STUCK_THRESHOLD_MIN)], { cwd, timeoutMs: 10_000 });
-        } catch {}
+        } catch (e) {
+          logger?.warn?.(`octoclaw watchdog: reconciled_failed task=${taskId} error=${String(e)}`);
+        }
       }
     }
     if (staleCount > 0 || stuckCount > 0) {
@@ -2718,6 +2732,10 @@ const plugin = {
     const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
     if (preSessionKey) {
       startAckGuard(preSessionKey, ctx?.cwd || process.cwd());
+      const existingState = getPolicyStateForContext(ctx);
+      if (existingState.state) {
+        existingState.state.ackGuardKey = preSessionKey;
+      }
     }
 
     const resolved = await resolvePolicyDecisionForContext(
@@ -2992,7 +3010,7 @@ const plugin = {
     if (!isManagedAgentContext(ctx)) return;
     const { key: stateKey, state } = getPolicyStateForContext(ctx);
     if (!stateKey) return;
-    cancelAckGuard(stateKey);
+    cancelAckGuardForState(stateKey);
     await recordPolicyReplay(
       "agent_end",
       {
@@ -3044,7 +3062,7 @@ const plugin = {
       sessionKey: String(ctx?.sessionKey || "").trim(),
       agentId: String(ctx?.agentId || "").trim(),
     });
-    cancelAckGuard(stateKey);
+    cancelAckGuardForState(stateKey);
     if (!state) return;
     const guarded = guardAssistantMessageForPolicyState(event?.message || {}, state);
     const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : (event?.message || {});
