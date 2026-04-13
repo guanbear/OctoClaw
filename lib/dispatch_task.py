@@ -1337,7 +1337,7 @@ def dispatch_runner(args) -> dict:
     goal_contract = build_runner_goal_contract(
         task=args.task,
         command=command,
-        summary=summary or args.task[:40],
+        summary=args.task[:80] or summary,
         timeout_seconds=args.timeout_seconds,
         decision=decision,
         playbook=playbook,

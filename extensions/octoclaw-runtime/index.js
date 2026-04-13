@@ -406,7 +406,7 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
       error: String(result.error || ""),
       reason: result.reason,
       message,
-      payload,
+      channel_attempt: result,
     };
   } catch (err) {
     logger?.warn?.(`octoclaw pre-dispatch ack failed: ${String(err)}`);

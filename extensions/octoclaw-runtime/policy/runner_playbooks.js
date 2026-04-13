@@ -327,7 +327,8 @@ function buildUpstreamReleaseLookupPlan(task, hints = {}) {
 function buildVersionProbePlan(task, hints = {}) {
   const lowered = String(task || "").toLowerCase();
   if (hintedLookupScope(hints) === "upstream_project") return null;
-  if (containsAny(lowered, UPSTREAM_UPDATE_TOKENS) && (lowered.includes("openclaw") || lowered.includes("octoclaw"))) return null;
+  if (containsAny(lowered, UPSTREAM_UPDATE_TOKENS) && (lowered.includes("openclaw") || lower.includes("octoclaw"))) return null;
+  if (containsAny(lowered, ["分析", "总结", "对比", "研究", "analyze", "analysis", "compare", "research"])) return null;
   if (!containsAny(lowered, VERSION_QUERY_TOKENS)) return null;
   let targetTool = "";
   const aliases = {
@@ -577,5 +578,36 @@ export function inferRunnerPlaybook(task, hints = {}) {
     const plan = build();
     if (plan) return plan;
   }
-  return null;
+  return buildAiGoalPlan(task);
+}
+
+const AI_GOAL_TRIGGER_TOKENS = [
+  "分析", "总结", "对比", "比较", "调研", "研究",
+  "特性", "功能", "变化", "更新", "新特性", "新功能",
+  "memory", "记忆", "方向", "影响", "使用方式",
+  "相关", "重点", "内容", "详情", "文档",
+  "analyze", "analysis", "summary", "compare", "research",
+  "feature", "features", "changelog", "release notes",
+  "what's new", "what changed", "how to", "usage",
+];
+
+function buildAiGoalPlan(task) {
+  if (!task || !String(task).trim()) return null;
+  const lowered = String(task).toLowerCase();
+  const hasTrigger = AI_GOAL_TRIGGER_TOKENS.some((t) => lowered.includes(t));
+  if (!hasTrigger) return null;
+  const escapedGoal = String(task).replace(/'/g, "'\\''").replace(/"/g, '\\"');
+  const command = `openclaw agent --agent main --message '${escapedGoal}' --json --no-confirm 2>&1 | head -n 200`;
+  return {
+    kind: "ai_goal",
+    summary: String(task).substring(0, 80),
+    command,
+    probe_spec: {
+      kind: "ai_goal",
+      goal: String(task),
+      execution_mode: "ai_agent",
+    },
+    reason_codes: ["runner_playbook_ai_goal", "no_fixed_playbook_match"],
+    confidence: 0.85,
+  };
 }
