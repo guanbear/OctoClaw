@@ -338,7 +338,7 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
   try {
-    const timeoutMs = Math.max(500, Number(decision?.pre_dispatch_ack?.channel_timeout_ms || 1800));
+    const timeoutMs = Math.max(500, Number(decision?.pre_dispatch_ack?.channel_timeout_ms || 5000));
     const payload = await runJsonScript(
       "send_pre_dispatch_ack.py",
       ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
@@ -448,7 +448,7 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
   try {
-    const timeoutMs = Math.max(500, Number(decision?.latency_ack?.channel_timeout_ms || 1800));
+    const timeoutMs = Math.max(500, Number(decision?.latency_ack?.channel_timeout_ms || 5000));
     const payload = await runJsonScript(
       "send_pre_dispatch_ack.py",
       ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
@@ -2938,7 +2938,7 @@ const plugin = {
     clearPolicyStateForContext(ctx);
   }, 50);
 
-  registerLifecycleHook("before_message_write", async (event, ctx) => {
+  registerLifecycleHook("before_message_write", (event, ctx) => {
     const { key: stateKey, state } = getPolicyStateForContext({
       sessionKey: String(ctx?.sessionKey || "").trim(),
       agentId: String(ctx?.agentId || "").trim(),
@@ -2946,11 +2946,9 @@ const plugin = {
     if (!state) return;
     const guarded = guardAssistantMessageForPolicyState(event?.message || {}, state);
     const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : (event?.message || {});
-    try {
-      await recordObservedDeliveryFromMessage(visibleMessage, state, stateKey, pi.logger);
-    } catch (err) {
+    recordObservedDeliveryFromMessage(visibleMessage, state, stateKey, pi.logger).catch((err) => {
       pi.logger?.warn?.(`octoclaw delivery observe failed: ${String(err)}`);
-    }
+    });
     if (guarded.mode === "replace" && guarded.message) {
       return { message: guarded.message };
     }
@@ -3254,7 +3252,7 @@ const plugin = {
             originalRoute: String(cachedDecision?.route_decision?.route || params.forceRoute || ""),
             routeChanged: String(cachedDecision?.route_decision?.route || "") !== String(payload?.route || ""),
             decisionSource: hadCachedDecision ? "cached" : (params.policyJson ? "policy_json" : freshDecisionSource || "fresh"),
-            routeOverrideSource: String(stickyResult?.stickyReasons?.[0] || ""),
+            routeOverrideSource: String(stickyPersisted?.stickyReasons?.[0] || ""),
             fallbackReason: String(payload?.capability_failure?.reason || payload?.reason || ""),
             stickyPersisted,
             preDispatchAckRequired: Boolean(cachedDecision?.pre_dispatch_ack?.required),
