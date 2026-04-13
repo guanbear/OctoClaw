@@ -725,6 +725,9 @@ def finalize_native_spawn_result(
         str(result_payload.get("next_step", "") or result_payload.get("report", "") or result_payload.get("summary", "") or "").strip(),
         180,
     ) if status == "blocked" else ""
+    if status == "done_degraded":
+        user_safe_summary = ""
+        summary = f"[relevance_failed] runner output did not match original goal: {summary[:120]}"
     report_value = str(result_payload.get("report", "") or "").strip()
     report_written = ""
     if report_value and os.path.exists(report_value):
