@@ -926,7 +926,7 @@ def sync_terminal_transition(
             )
             args = [flow_id, state_json]
 
-        result = _run_runtime_helper(action, args, config=None, timeout_seconds=timeout_seconds)
+        result = _run_runtime_helper([action, *args], timeout_seconds=timeout_seconds)
         ok = bool(result.get("ok"))
         return {
             "synced": ok,
