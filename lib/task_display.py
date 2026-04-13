@@ -1194,7 +1194,7 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
     return "\n".join(lines)
 
 
-def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any]] | None = None, *, include_buttons: bool = True) -> dict[str, Any]:
+def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any]] | None = None, *, include_buttons: bool = False) -> dict[str, Any]:
     title = _text(anchor.get("title")) or _text(anchor.get("task_id"))
     emoji = _text(anchor.get("worker_pool_emoji")) or ":robot_face:"
     state = _text(anchor.get("state_label")) or _state_label(_text(anchor.get("state")))

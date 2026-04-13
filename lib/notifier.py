@@ -217,6 +217,10 @@ def _session_is_dm(session_key: str) -> bool:
     return False
 
 
+def should_allow_interactive(session_key: str) -> bool:
+    return not _session_is_dm(session_key)
+
+
 def build_task_notification_payload(
     task: dict[str, Any],
     *,
@@ -226,12 +230,12 @@ def build_task_notification_payload(
     cfg = config or load_octopus_config()
     resolved_backend = _resolve_task_backend(task, backend, cfg)
     session_key = str(task.get("session_key", "") or "").strip()
-    is_dm = _session_is_dm(session_key)
+    allow_interactive = should_allow_interactive(session_key)
 
     surface = build_operator_task_surface(task)
     anchor = surface.get("task_anchor", {}) if isinstance(surface.get("task_anchor"), dict) else {}
-    actions = [] if is_dm else (surface.get("task_actions", []) if isinstance(surface.get("task_actions"), list) else [])
-    interactive = {} if is_dm else (surface.get("interactive", {}) if isinstance(surface.get("interactive"), dict) else {})
+    actions = (surface.get("task_actions", []) if isinstance(surface.get("task_actions"), list) else []) if allow_interactive else []
+    interactive = (surface.get("interactive", {}) if isinstance(surface.get("interactive"), dict) else {}) if allow_interactive else {}
     text_fallback = str(surface.get("text_fallback", "") or "").strip()
 
     payload: dict[str, Any] = {
@@ -251,11 +255,11 @@ def build_task_notification_payload(
     }
 
     if resolved_backend == "slack":
-        payload["slack"] = render_task_anchor_slack(anchor, actions, include_buttons=not is_dm)
+        payload["slack"] = render_task_anchor_slack(anchor, actions, include_buttons=allow_interactive)
         payload["transport"] = {
             "kind": "slack",
             "supports_rich": True,
-            "supports_buttons": not is_dm,
+            "supports_buttons": allow_interactive,
             "fallback_kind": "text",
         }
     elif resolved_backend == "feishu":

@@ -606,7 +606,7 @@ class TaskDisplayTests(unittest.TestCase):
                 "model": "omniroute/cx/gpt-5.4",
             }
         )
-        payload = render_task_anchor_slack(anchor, actions)
+        payload = render_task_anchor_slack(anchor, actions, include_buttons=True)
 
         self.assertIn("text", payload)
         self.assertIn("blocks", payload)
