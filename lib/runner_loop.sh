@@ -158,7 +158,18 @@ while true; do
     last_heartbeat="$now_epoch"
   fi
 
-  job_json="$("$PYTHON_BIN" "$QUEUE_PY" claim --worker-id "$WORKER_ID")"
+  claim_args=("$PYTHON_BIN" "$QUEUE_PY" claim --worker-id "$WORKER_ID")
+  preferred_job_id="${RUNNER_PREFERRED_JOB_ID:-}"
+  if [[ -z "$preferred_job_id" && "$WORKER_ID" == runner-ondemand-* ]]; then
+    preferred_job_id="${WORKER_ID#runner-ondemand-}"
+  fi
+  if [[ -z "$preferred_job_id" && "$WORKER_ID" == runner-bootstrap-* ]]; then
+    preferred_job_id="${WORKER_ID#runner-bootstrap-}"
+  fi
+  if [[ -n "$preferred_job_id" ]]; then
+    claim_args+=(--job-id "$preferred_job_id")
+  fi
+  job_json="$("${claim_args[@]}")"
   if [[ "$job_json" == "{}" ]]; then
     if (( jobs_completed > 0 )) && (( MAX_IDLE_SECONDS > 0 )) && (( now_epoch - last_job_epoch >= MAX_IDLE_SECONDS )); then
       recycle_runner "max_idle_seconds_reached"

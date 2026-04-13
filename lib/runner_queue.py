@@ -310,7 +310,16 @@ def cmd_enqueue(args):
 
 
 def cmd_claim(args):
+    preferred_job_id = str(getattr(args, "job_id", "") or "").strip()
+
     def mutate(state):
+        if preferred_job_id:
+            for job in state["jobs"]:
+                if job.get("id") == preferred_job_id and job.get("status") == "queued":
+                    job["status"] = "running"
+                    job["worker_id"] = args.worker_id
+                    job["started_at"] = now_iso()
+                    return job
         for job in state["jobs"]:
             if job.get("status") == "queued":
                 job["status"] = "running"
@@ -386,6 +395,24 @@ def cmd_heartbeat(args):
     print(json.dumps(payload, ensure_ascii=False))
 
 
+def cmd_reap_queued(args):
+    max_age_hours = float(getattr(args, "max_age_hours", 2.0) or 2.0)
+    reason = str(getattr(args, "reason", "stale_queued_job") or "stale_queued_job").strip()
+    cutoff = (datetime.now(timezone.utc).astimezone() - timedelta(hours=max_age_hours)).isoformat()
+
+    def mutate(state):
+        reaped = []
+        for job in state["jobs"]:
+            if job.get("status") == "queued" and str(job.get("enqueued_at", "")) < cutoff:
+                job["status"] = "failed"
+                job["finished_at"] = now_iso()
+                job["summary"] = f"reaped: {reason}"
+                reaped.append(dict(job))
+        return {"reaped_count": len(reaped), "jobs": reaped}
+
+    print(json.dumps(with_queue_lock(mutate), ensure_ascii=False))
+
+
 def cmd_status(_args):
     raw = load_json(RUNNER_QUEUE_FILE) or {}
     health = load_json(RUNNER_HEALTH_FILE) or {}
@@ -436,6 +463,7 @@ def main():
 
     p_claim = sub.add_parser("claim")
     p_claim.add_argument("--worker-id", required=True)
+    p_claim.add_argument("--job-id", default="")
 
     p_complete = sub.add_parser("complete")
     p_complete.add_argument("--id", required=True)
@@ -458,6 +486,10 @@ def main():
     p_reap_stale.add_argument("--lease-timeout-seconds", dest="lease_timeout_seconds", type=int, default=DEFAULT_LEASE_TIMEOUT_SECONDS)
     p_reap_stale.add_argument("--heartbeat-stale-seconds", dest="heartbeat_stale_seconds", type=int, default=DEFAULT_HEARTBEAT_STALE_SECONDS)
 
+    p_reap_queued = sub.add_parser("reap-queued")
+    p_reap_queued.add_argument("--max-age-hours", dest="max_age_hours", type=float, default=2.0)
+    p_reap_queued.add_argument("--reason", default="stale_queued_job")
+
     args = parser.parse_args()
     if args.command == "ensure":
         cmd_ensure(args)
@@ -473,6 +505,8 @@ def main():
         cmd_status(args)
     elif args.command == "reap-stale":
         cmd_reap_stale(args)
+    elif args.command == "reap-queued":
+        cmd_reap_queued(args)
     else:
         parser.print_help()
         sys.exit(1)

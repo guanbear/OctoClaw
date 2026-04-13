@@ -328,6 +328,52 @@ async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, log
   };
 }
 
+function resolveAckTargetFromSessionKey(sessionKey) {
+  const stripped = stripAgentSessionPrefix(sessionKey);
+  if (!stripped) return null;
+  const parts = stripped.split(":");
+  if (parts.length < 2) return null;
+  const origin = parts[0].toLowerCase();
+  if (origin === "slack") {
+    const kind = parts.length >= 3 ? parts[1].toLowerCase() : "";
+    if (kind === "direct" && parts.length >= 3) {
+      return { origin: "slack", target: `user:${parts[parts.length - 1].toUpperCase()}` };
+    }
+    if ((kind === "channel" || kind === "group") && parts.length >= 3) {
+      return { origin: "slack", target: `channel:${parts[parts.length - 1].toUpperCase()}` };
+    }
+    if (kind === "thread" && parts.length >= 4) {
+      return { origin: "slack", target: `channel:${parts[2].toUpperCase()}`, thread_ts: parts[3] };
+    }
+  }
+  return null;
+}
+
+async function sendAckDirect(sessionKey, message, cwd, options = {}) {
+  const timeoutMs = Math.max(500, Number(options.timeoutMs || 5000));
+  const resolved = resolveAckTargetFromSessionKey(sessionKey);
+  if (!resolved) {
+    return { attempted: false, delivered: false, sent: false, error: "unresolvable_session_target", reason: "unresolvable" };
+  }
+  const args = ["message", "send", "--channel", resolved.origin, "--target", resolved.target, "--json"];
+  if (message) args.push("--message", message);
+  if (resolved.thread_ts) args.push("--thread-id", resolved.thread_ts);
+  try {
+    const result = await runCommand("openclaw", args, { cwd, timeoutMs });
+    if (result.code === 0 && result.stdout) {
+      try {
+        const parsed = JSON.parse(result.stdout);
+        if (parsed && parsed.ok) {
+          return { attempted: true, delivered: true, sent: true, error: "", reason: "channel_message_sent", target: resolved.target, payload: parsed };
+        }
+      } catch {}
+    }
+    return { attempted: true, delivered: false, sent: false, error: result.stderr || "send_failed", reason: "channel_message_failed", target: resolved.target };
+  } catch (err) {
+    return { attempted: true, delivered: false, sent: false, error: String(err), reason: "channel_message_error", target: resolved.target };
+  }
+}
+
 async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger) {
   const message = preDispatchAckText(decision);
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
@@ -338,14 +384,13 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
   try {
-    const timeoutMs = Math.max(500, Number(decision?.pre_dispatch_ack?.channel_timeout_ms || 5000));
-    const payload = await runJsonScript(
-      "send_pre_dispatch_ack.py",
-      ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
+    const result = await sendAckDirect(
+      sessionKey,
+      message,
       ctx?.cwd || process.cwd(),
-      { timeoutMs },
+      { timeoutMs: Math.max(500, Number(decision?.pre_dispatch_ack?.channel_timeout_ms || 5000)) },
     );
-    const sent = Boolean(payload?.delivered);
+    const sent = Boolean(result.delivered);
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
@@ -357,9 +402,9 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     return {
       attempted: true,
       sent,
-      delivered: Boolean(payload?.delivered),
-      error: String(payload?.error || ""),
-      reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
+      delivered: result.delivered,
+      error: String(result.error || ""),
+      reason: result.reason,
       message,
       payload,
     };
@@ -448,14 +493,13 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
     return { attempted: false, sent: false, reason: "missing_session_key", message };
   }
   try {
-    const timeoutMs = Math.max(500, Number(decision?.latency_ack?.channel_timeout_ms || 5000));
-    const payload = await runJsonScript(
-      "send_pre_dispatch_ack.py",
-      ["--session-key", sessionKey, "--channel", String(metadata?.channel || ""), "--message", message],
+    const result = await sendAckDirect(
+      sessionKey,
+      message,
       ctx?.cwd || process.cwd(),
-      { timeoutMs },
+      { timeoutMs: Math.max(500, Number(decision?.latency_ack?.channel_timeout_ms || 5000)) },
     );
-    const sent = Boolean(payload?.delivered);
+    const sent = Boolean(result.delivered);
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
@@ -467,11 +511,10 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
     return {
       attempted: true,
       sent,
-      delivered: Boolean(payload?.delivered),
-      error: String(payload?.error || ""),
-      reason: sent ? "channel_message_sent" : String(payload?.error || "channel_message_failed"),
+      delivered: result.delivered,
+      error: String(result.error || ""),
+      reason: result.reason,
       message,
-      payload,
     };
   } catch (err) {
     logger?.warn?.(`octoclaw latency ack failed: ${String(err)}`);
@@ -2610,12 +2653,7 @@ const plugin = {
       timerAckHandle = setTimeout(() => {
         timerAckFired = true;
         try {
-          runJsonScript(
-            "send_pre_dispatch_ack.py",
-            ["--session-key", preSessionKey, "--channel", String(preMetadata?.channel || ""), "--message", "…"],
-            ctx?.cwd || process.cwd(),
-            { timeoutMs: 2000 },
-          ).catch(() => {});
+          sendAckDirect(preSessionKey, "…", ctx?.cwd || process.cwd(), { timeoutMs: 2000 }).catch(() => {});
         } catch {}
       }, 600);
     }

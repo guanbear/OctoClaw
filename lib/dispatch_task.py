@@ -1396,7 +1396,7 @@ def dispatch_runner(args) -> dict:
         "--cwd",
         args.cwd,
         "--summary",
-        summary or args.task[:40],
+        args.task[:80] or summary,
         "--timeout-seconds",
         str(args.timeout_seconds),
         "--model-band",

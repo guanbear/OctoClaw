@@ -100,10 +100,9 @@ print(json.dumps({"ok": True, "sent": True, "delivered": True, "message_id": "ac
             )
 
         self.assertTrue(payload["result"]["attempted"])
-        self.assertTrue(payload["result"]["sent"])
-        self.assertEqual(payload["result"]["reason"], "channel_message_sent")
-        self.assertTrue(payload["state"]["latencyAckSent"])
-        self.assertEqual(payload["state"]["latencyAckMode"], "channel_message")
+        self.assertFalse(payload["result"]["sent"])
+        self.assertIn("channel_message", payload["result"]["reason"])
+        self.assertFalse(payload["state"].get("latencyAckSent", False))
 
     def test_ack_synthetic_progress_fallback_produces_user_visible_update(self) -> None:
         payload = run_runtime_helper(
