@@ -706,6 +706,22 @@ def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert
     return fallback
 
 
+def _is_dm_session(session_key: str) -> bool:
+    """Detect if a session key targets a DM (1:1) conversation."""
+    parts = [p for p in str(session_key or "").lower().split(":") if p]
+    if not parts:
+        return False
+    origin = parts[0]
+    if origin == "slack":
+        return len(parts) >= 2 and parts[1] in {"dm", "direct", "user"}
+    if origin == "discord":
+        return len(parts) >= 2 and parts[1] in {"dm", "direct", "user"}
+    return False
+
+
+_TERMINAL_ANCHOR_STATUSES = {"done", "failed", "blocked", "deferred"}
+
+
 def _should_sync_task_anchor(record: dict, previous_status: str, anchor_messages: dict) -> bool:
     task_id = str(record.get("id", "") or "").strip()
     session_key = str(record.get("session_key", "") or "").strip()
@@ -716,6 +732,11 @@ def _should_sync_task_anchor(record: dict, previous_status: str, anchor_messages
     if route == "direct":
         return False
     if status not in {"queued", "dispatched", "running", "blocked", "needs_approval", "done", "failed", "deferred"}:
+        return False
+    # DM dedup: only sync anchor for terminal states (done/failed/blocked/deferred).
+    # Intermediate states (queued/dispatched/running) are suppressed — the ack
+    # already confirms receipt and the final result will carry the outcome.
+    if _is_dm_session(session_key) and status not in _TERMINAL_ANCHOR_STATUSES:
         return False
     existing_anchor = anchor_messages.get(task_id, {}) if isinstance(anchor_messages.get(task_id), dict) else {}
     has_existing_message = bool(str(existing_anchor.get("message_id", "") or "").strip())

@@ -205,6 +205,18 @@ def _resolve_task_backend(task: dict[str, Any], requested_backend: str, cfg: dic
     return get_notification_backend(cfg)
 
 
+def _session_is_dm(session_key: str) -> bool:
+    parts = [p for p in str(session_key or "").lower().split(":") if p]
+    if not parts:
+        return False
+    origin = parts[0]
+    if origin == "slack":
+        return len(parts) >= 2 and parts[1] in {"dm", "direct", "user"}
+    if origin == "discord":
+        return len(parts) >= 2 and parts[1] in {"dm", "direct", "user"}
+    return False
+
+
 def build_task_notification_payload(
     task: dict[str, Any],
     *,
@@ -213,11 +225,13 @@ def build_task_notification_payload(
 ) -> dict[str, Any]:
     cfg = config or load_octopus_config()
     resolved_backend = _resolve_task_backend(task, backend, cfg)
+    session_key = str(task.get("session_key", "") or "").strip()
+    is_dm = _session_is_dm(session_key)
 
     surface = build_operator_task_surface(task)
     anchor = surface.get("task_anchor", {}) if isinstance(surface.get("task_anchor"), dict) else {}
-    actions = surface.get("task_actions", []) if isinstance(surface.get("task_actions"), list) else []
-    interactive = surface.get("interactive", {}) if isinstance(surface.get("interactive"), dict) else {}
+    actions = [] if is_dm else (surface.get("task_actions", []) if isinstance(surface.get("task_actions"), list) else [])
+    interactive = {} if is_dm else (surface.get("interactive", {}) if isinstance(surface.get("interactive"), dict) else {})
     text_fallback = str(surface.get("text_fallback", "") or "").strip()
 
     payload: dict[str, Any] = {
@@ -237,11 +251,11 @@ def build_task_notification_payload(
     }
 
     if resolved_backend == "slack":
-        payload["slack"] = render_task_anchor_slack(anchor, actions)
+        payload["slack"] = render_task_anchor_slack(anchor, actions, include_buttons=not is_dm)
         payload["transport"] = {
             "kind": "slack",
             "supports_rich": True,
-            "supports_buttons": True,
+            "supports_buttons": not is_dm,
             "fallback_kind": "text",
         }
     elif resolved_backend == "feishu":

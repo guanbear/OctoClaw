@@ -1194,7 +1194,7 @@ def render_task_anchor_text(anchor: dict[str, Any], actions: list[dict[str, Any]
     return "\n".join(lines)
 
 
-def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any]] | None = None, *, include_buttons: bool = True) -> dict[str, Any]:
     title = _text(anchor.get("title")) or _text(anchor.get("task_id"))
     emoji = _text(anchor.get("worker_pool_emoji")) or ":robot_face:"
     state = _text(anchor.get("state_label")) or _state_label(_text(anchor.get("state")))
@@ -1230,7 +1230,7 @@ def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any
         )
 
     enabled_actions = [item for item in (actions or []) if isinstance(item, dict) and bool(item.get("enabled", False))]
-    if enabled_actions:
+    if include_buttons and enabled_actions:
         elements: list[dict[str, Any]] = []
         for item in enabled_actions[:5]:
             label = _text(item.get("label")) or _text(item.get("kind")) or "Action"
@@ -1248,7 +1248,7 @@ def render_task_anchor_slack(anchor: dict[str, Any], actions: list[dict[str, Any
         if elements:
             blocks.append({"type": "actions", "elements": elements})
 
-    fallback = render_task_anchor_text(anchor, actions)
+    fallback = render_task_anchor_text(anchor, [] if not include_buttons else actions)
     return {
         "text": fallback,
         "blocks": blocks,
