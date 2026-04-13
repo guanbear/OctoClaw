@@ -311,6 +311,8 @@ def build_upstream_release_lookup_plan(task: str, hints: dict | None = None) -> 
     scope = hinted_lookup_scope(hints)
     project = hinted_lookup_project(hints)
     focus = hinted_lookup_focus(hints)
+    if hints and hints.get("requires_research"):
+        return None
     if scope != "upstream_project" and not contains_any(lowered, UPSTREAM_UPDATE_TOKENS):
         return None
     if not project:
@@ -344,6 +346,8 @@ def build_upstream_release_lookup_plan(task: str, hints: dict | None = None) -> 
 def build_version_probe_plan(task: str, hints: dict | None = None) -> dict | None:
     lowered = task.lower()
     if hinted_lookup_scope(hints) == "upstream_project":
+        return None
+    if hints and hints.get("requires_research"):
         return None
     if contains_any(lowered, UPSTREAM_UPDATE_TOKENS) and ("openclaw" in lowered or "octoclaw" in lowered):
         return None
@@ -585,7 +589,47 @@ def build_scheduler_health_plan(task: str) -> dict | None:
     return plan
 
 
+AI_GOAL_TRIGGER_TOKENS = [
+    "分析", "总结", "对比", "比较", "调研", "研究",
+    "特性", "功能", "变化", "更新", "新特性", "新功能",
+    "memory", "记忆", "方向", "影响", "使用方式",
+    "相关", "重点", "内容", "详情", "文档",
+    "analyze", "analysis", "summary", "compare", "research",
+    "feature", "features", "changelog", "release notes",
+    "what's new", "what changed", "how to", "usage",
+]
+
+
+def build_ai_goal_plan(task: str, hints: dict | None = None) -> dict | None:
+    if not task or not task.strip():
+        return None
+    hints = hints or {}
+    if not hints.get("requires_research") and not hints.get("bounded_software_update_lookup"):
+        lowered = task.lower()
+        if not any(t in lowered for t in AI_GOAL_TRIGGER_TOKENS):
+            return None
+    escaped_goal = task.replace("'", "'\\''").replace('"', '\\"')
+    command = f"openclaw agent --agent main --message '{escaped_goal}' --json --no-confirm 2>&1 | head -n 200"
+    return {
+        "kind": "ai_goal",
+        "summary": task[:80],
+        "command": command,
+        "probe_spec": {
+            "kind": "ai_goal",
+            "goal": task,
+            "execution_mode": "ai_agent",
+        },
+        "reason_codes": ["runner_playbook_ai_goal", "no_fixed_playbook_match"],
+        "confidence": 0.85,
+    }
+
+
 def infer_runner_playbook(task: str, hints: dict | None = None) -> dict | None:
+    hints = hints or {}
+    if hints.get("requires_research"):
+        goal_plan = build_ai_goal_plan(task, hints)
+        if goal_plan:
+            return goal_plan
     for builder in (
         build_model_telemetry_report_plan,
         build_upstream_release_lookup_plan,
@@ -595,8 +639,9 @@ def infer_runner_playbook(task: str, hints: dict | None = None) -> dict | None:
         build_scheduler_health_plan,
         build_service_log_file_probe_plan,
         build_service_health_plan,
+        build_ai_goal_plan,
     ):
-        plan = builder(task, hints) if builder in {build_upstream_release_lookup_plan, build_version_probe_plan} else builder(task)
+        plan = builder(task, hints) if builder in {build_upstream_release_lookup_plan, build_version_probe_plan, build_ai_goal_plan} else builder(task)
         if plan:
             return plan
-    return None
+    return build_ai_goal_plan(task, hints)

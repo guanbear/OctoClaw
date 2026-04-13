@@ -242,6 +242,10 @@ def runner_playbook_hints(decision: dict) -> dict:
         "lookup_project": str(conversation.get("lookup_project") or features.get("lookup_project") or "").strip(),
         "lookup_focus": str(conversation.get("lookup_focus") or features.get("lookup_focus") or "").strip(),
         "target_scope": str(features.get("target_scope") or "").strip(),
+        "requires_research": bool(features.get("requires_research")),
+        "runner_negative_hits": int(features.get("runner_negative_hits") or 0),
+        "summary_output_hits": int(features.get("summary_output_hits") or 0),
+        "bounded_software_update_lookup": bool(features.get("bounded_software_update_lookup")),
     }
 
 

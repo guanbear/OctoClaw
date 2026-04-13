@@ -967,6 +967,10 @@ function buildRunnerPlaybookHints(features = {}) {
     lookup_project: String(features.lookup_project || "").trim(),
     lookup_focus: String(features.lookup_focus || "").trim(),
     target_scope: String(features.target_scope || "").trim(),
+    requires_research: Boolean(features.requires_research),
+    runner_negative_hits: Number(features.runner_negative_hits || 0),
+    summary_output_hits: Number(features.summary_output_hits || 0),
+    bounded_software_update_lookup: Boolean(features.bounded_software_update_lookup),
   };
 }
 

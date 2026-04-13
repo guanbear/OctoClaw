@@ -301,6 +301,7 @@ function buildUpstreamReleaseLookupPlan(task, hints = {}) {
   const scope = hintedLookupScope(hints);
   let project = hintedLookupProject(hints);
   const focus = hintedLookupFocus(hints);
+  if (hints.requires_research) return null;
   if (scope !== "upstream_project" && !containsAny(lowered, UPSTREAM_UPDATE_TOKENS)) return null;
   if (!project) {
     if (lowered.includes("openclaw")) project = "openclaw";
@@ -327,8 +328,8 @@ function buildUpstreamReleaseLookupPlan(task, hints = {}) {
 function buildVersionProbePlan(task, hints = {}) {
   const lowered = String(task || "").toLowerCase();
   if (hintedLookupScope(hints) === "upstream_project") return null;
-  if (containsAny(lowered, UPSTREAM_UPDATE_TOKENS) && (lowered.includes("openclaw") || lower.includes("octoclaw"))) return null;
-  if (containsAny(lowered, ["分析", "总结", "对比", "研究", "analyze", "analysis", "compare", "research"])) return null;
+  if (hints.requires_research) return null;
+  if (containsAny(lowered, UPSTREAM_UPDATE_TOKENS) && (lowered.includes("openclaw") || lowered.includes("octoclaw"))) return null;
   if (!containsAny(lowered, VERSION_QUERY_TOKENS)) return null;
   let targetTool = "";
   const aliases = {
@@ -564,6 +565,10 @@ function buildSchedulerHealthPlan(task) {
 }
 
 export function inferRunnerPlaybook(task, hints = {}) {
+  if (hints.requires_research) {
+    const goalPlan = buildAiGoalPlan(task, hints);
+    if (goalPlan) return goalPlan;
+  }
   const builders = [
     () => buildModelTelemetryReportPlan(task),
     () => buildUpstreamReleaseLookupPlan(task, hints),
@@ -573,12 +578,13 @@ export function inferRunnerPlaybook(task, hints = {}) {
     () => buildSchedulerHealthPlan(task),
     () => buildServiceLogFileProbePlan(task),
     () => buildServiceHealthPlan(task),
+    () => buildAiGoalPlan(task, hints),
   ];
   for (const build of builders) {
     const plan = build();
     if (plan) return plan;
   }
-  return buildAiGoalPlan(task);
+  return buildAiGoalPlan(task, hints);
 }
 
 const AI_GOAL_TRIGGER_TOKENS = [
@@ -591,11 +597,12 @@ const AI_GOAL_TRIGGER_TOKENS = [
   "what's new", "what changed", "how to", "usage",
 ];
 
-function buildAiGoalPlan(task) {
+function buildAiGoalPlan(task, hints = {}) {
   if (!task || !String(task).trim()) return null;
-  const lowered = String(task).toLowerCase();
-  const hasTrigger = AI_GOAL_TRIGGER_TOKENS.some((t) => lowered.includes(t));
-  if (!hasTrigger) return null;
+  if (!hints.requires_research && !hints.bounded_software_update_lookup) {
+    const lowered = String(task).toLowerCase();
+    if (!AI_GOAL_TRIGGER_TOKENS.some((t) => lowered.includes(t))) return null;
+  }
   const escapedGoal = String(task).replace(/'/g, "'\\''").replace(/"/g, '\\"');
   const command = `openclaw agent --agent main --message '${escapedGoal}' --json --no-confirm 2>&1 | head -n 200`;
   return {
