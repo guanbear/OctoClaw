@@ -874,6 +874,276 @@ def register_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | 
     return binding
 
 
+def sync_terminal_transition(
+    task: dict[str, Any],
+    transition_type: str,
+    timeout_seconds: int = 15,
+) -> dict[str, Any]:
+    """Fire-and-forget native sync on terminal transitions.
+
+    Only activates when the task has a bound, managed native TaskFlow binding.
+    Calls the Node runtime helper to propagate finish/fail/cancel to the native flow.
+    Never blocks or raises — always returns a structured result dict.
+    """
+    error_result: dict[str, Any] = {"synced": False, "native_action": transition_type, "flow_id": "", "error": ""}
+    if not isinstance(task, dict):
+        error_result["error"] = "task is not a dict"
+        return error_result
+    tf = task.get("openclaw_taskflow")
+    if not isinstance(tf, dict):
+        error_result["error"] = "no openclaw_taskflow binding"
+        return error_result
+    if _normalized_str(tf.get("native_binding_state")) != "bound":
+        return error_result
+    if _normalized_str(tf.get("backend")) != "managed":
+        return error_result
+    if transition_type not in ("finished", "failed", "cancelled"):
+        error_result["error"] = f"unsupported transition_type: {transition_type}"
+        return error_result
+
+    flow_id = _normalized_str(tf.get("flow_id"))
+    if not flow_id:
+        error_result["error"] = "missing flow_id"
+        return error_result
+
+    try:
+        action_map = {
+            "finished": "finish-flow",
+            "failed": "fail-flow",
+            "cancelled": "cancel-flow",
+        }
+        action = action_map[transition_type]
+        if transition_type == "cancelled":
+            args = [flow_id]
+        else:
+            state_json = json.dumps(
+                {
+                    "octoclaw_task_id": _normalized_str(task.get("id")),
+                    "transition": transition_type,
+                    "timestamp": now_iso(),
+                },
+                ensure_ascii=False,
+            )
+            args = [flow_id, state_json]
+
+        result = _run_runtime_helper(action, args, config=None, timeout_seconds=timeout_seconds)
+        ok = bool(result.get("ok"))
+        return {
+            "synced": ok,
+            "native_action": transition_type,
+            "flow_id": flow_id,
+            "error": "" if ok else _normalized_str(result.get("error")) or "runtime helper returned non-ok",
+        }
+    except Exception as exc:
+        return {
+            "synced": False,
+            "native_action": transition_type,
+            "flow_id": flow_id,
+            "error": str(exc),
+        }
+
+
+def reconcile_native_bindings(
+    tasks: list[dict[str, Any]] | None = None,
+    workspace: str = "",
+    fix: bool = False,
+    timeout_seconds: int = 10,
+) -> dict[str, Any]:
+    """Compare native flow/task state with local projection and optionally sync.
+
+    For each bound+managed task, checks whether the local terminal state has
+    been propagated to the native substrate.  In report-only mode (fix=False)
+    drift is reported but not corrected.  With fix=True, terminal transitions
+    are synced to native via ``sync_terminal_transition()``.
+
+    Returns a structured summary dict with per-item results.
+    """
+    # --- a. Resolve task list ------------------------------------------------
+    if tasks is None:
+        try:
+            from read_projection import read_tasks as _read_tasks  # type: ignore[import]
+        except (ModuleNotFoundError, ImportError):
+            try:
+                from lib.read_projection import read_tasks as _read_tasks  # type: ignore[import,no-redef]
+            except (ModuleNotFoundError, ImportError):
+                _read_tasks = None  # type: ignore[assignment]
+        if _read_tasks is None:
+            return {
+                "checked_count": 0,
+                "synced_count": 0,
+                "drift_count": 0,
+                "error_count": 1,
+                "items": [],
+                "errors": ["read_tasks unavailable"],
+            }
+        try:
+            all_tasks = _read_tasks(workspace=workspace) or []
+        except Exception as exc:
+            return {
+                "checked_count": 0,
+                "synced_count": 0,
+                "drift_count": 0,
+                "error_count": 1,
+                "items": [],
+                "errors": [f"read_tasks failed: {exc}"],
+            }
+        tasks = [t for t in all_tasks if t.get("native_sync_eligible")]
+
+    if not tasks:
+        return {
+            "checked_count": 0,
+            "synced_count": 0,
+            "drift_count": 0,
+            "error_count": 0,
+            "items": [],
+            "errors": [],
+        }
+
+    # --- b+c. Process each bound+managed task --------------------------------
+    items: list[dict[str, Any]] = []
+    synced_count = 0
+    drift_count = 0
+    error_count = 0
+    errors: list[str] = []
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+
+        task_id = _normalized_str(task.get("id"))
+        tf = task.get("openclaw_taskflow")
+        if not isinstance(tf, dict):
+            tf = {}
+
+        flow_id = _normalized_str(tf.get("flow_id"))
+        local_status = _normalized_str(task.get("status")).lower()
+        local_lifecycle = _normalized_str(task.get("lifecycle_state")).lower()
+        native_sync_eligible = bool(task.get("native_sync_eligible"))
+
+        # Skip if no flow_id to act on
+        if not flow_id:
+            items.append({
+                "task_id": task_id,
+                "flow_id": "",
+                "local_status": local_status,
+                "local_lifecycle": local_lifecycle,
+                "native_sync_eligible": native_sync_eligible,
+                "action": "skip",
+                "result": "skipped_no_flow_id",
+            })
+            continue
+
+        # Determine if local task is terminal
+        is_terminal = (
+            local_lifecycle in ("finished", "cancelled")
+            or local_status in ("done", "failed", "blocked", "cancelled", "deferred")
+        )
+
+        # Check if native already synced (substrate_state is terminal)
+        substrate_state = _normalized_str(tf.get("substrate_state")).lower()
+        native_already_terminal = substrate_state in (
+            "finished", "cancelled", "done", "failed", "completed",
+        )
+
+        if not is_terminal:
+            # Local not terminal — cannot know native state without querying,
+            # so just report potential drift.
+            items.append({
+                "task_id": task_id,
+                "flow_id": flow_id,
+                "local_status": local_status,
+                "local_lifecycle": local_lifecycle,
+                "native_sync_eligible": native_sync_eligible,
+                "action": "report_drift",
+                "result": "potential_drift",
+            })
+            drift_count += 1
+            continue
+
+        if native_already_terminal:
+            # Already synced — no action needed
+            items.append({
+                "task_id": task_id,
+                "flow_id": flow_id,
+                "local_status": local_status,
+                "local_lifecycle": local_lifecycle,
+                "native_sync_eligible": native_sync_eligible,
+                "action": "skip",
+                "result": "already_synced",
+            })
+            continue
+
+        # Local terminal but native not yet synced
+        transition_type = "cancelled" if local_lifecycle == "cancelled" or local_status == "cancelled" else (
+            "failed" if local_status in ("failed", "blocked") else "finished"
+        )
+
+        if not fix:
+            items.append({
+                "task_id": task_id,
+                "flow_id": flow_id,
+                "local_status": local_status,
+                "local_lifecycle": local_lifecycle,
+                "native_sync_eligible": native_sync_eligible,
+                "action": "sync_terminal",
+                "result": "drift_detected",
+            })
+            drift_count += 1
+            continue
+
+        # fix=True — actually sync
+        try:
+            sync_result = sync_terminal_transition(
+                task, transition_type, timeout_seconds=timeout_seconds,
+            )
+            if sync_result.get("synced"):
+                items.append({
+                    "task_id": task_id,
+                    "flow_id": flow_id,
+                    "local_status": local_status,
+                    "local_lifecycle": local_lifecycle,
+                    "native_sync_eligible": native_sync_eligible,
+                    "action": "sync_terminal",
+                    "result": "synced",
+                })
+                synced_count += 1
+            else:
+                err_msg = _normalized_str(sync_result.get("error")) or "sync_failed"
+                items.append({
+                    "task_id": task_id,
+                    "flow_id": flow_id,
+                    "local_status": local_status,
+                    "local_lifecycle": local_lifecycle,
+                    "native_sync_eligible": native_sync_eligible,
+                    "action": "sync_terminal",
+                    "result": "sync_failed",
+                })
+                error_count += 1
+                errors.append(f"{task_id}: {err_msg}")
+        except Exception as exc:
+            items.append({
+                "task_id": task_id,
+                "flow_id": flow_id,
+                "local_status": local_status,
+                "local_lifecycle": local_lifecycle,
+                "native_sync_eligible": native_sync_eligible,
+                "action": "sync_terminal",
+                "result": "sync_failed",
+            })
+            error_count += 1
+            errors.append(f"{task_id}: {exc}")
+
+    # --- e. Return summary ---------------------------------------------------
+    return {
+        "checked_count": len(items),
+        "synced_count": synced_count,
+        "drift_count": drift_count,
+        "error_count": error_count,
+        "items": items,
+        "errors": errors,
+    }
+
+
 def enrich_task_record_with_taskflow(
     task: dict[str, Any],
     *,
@@ -917,6 +1187,10 @@ def enrich_task_record_with_taskflow(
     updated["openclaw_native_seen_at"] = _normalized_str(resolved.get("native_seen_at"))
     native_match_score = resolved.get("native_match_score")
     updated["openclaw_native_match_score"] = int(native_match_score or 0) if str(native_match_score or "").strip() else 0
+    updated["native_sync_eligible"] = (
+        str(resolved.get("native_binding_state", "")) == "bound"
+        and str(resolved.get("backend", "")) == "managed"
+    )
     try:
         os.makedirs(os.path.dirname(OPENCLAW_TASKFLOW_MIRROR_FILE), exist_ok=True)
         with open(OPENCLAW_TASKFLOW_MIRROR_FILE, "a+", encoding="utf-8") as fh:

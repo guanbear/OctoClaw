@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fcntl
 import json
 import os
 import re
@@ -19,7 +20,18 @@ import time
 from datetime import datetime, timezone
 
 from octoclaw_spawn import build_spawn_spec
-from octopus_config import RUNNER_HEALTH_FILE, RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
+from octopus_config import RUNNER_HEALTH_FILE, RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, TASK_STATE_FILE, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
+try:
+    from octopus_config import concurrency_policy as _load_concurrency_policy
+except ImportError:
+    _load_concurrency_policy = None
+
+try:
+    from dispatch_routing import generate_dispatch_key, normalize_dispatch_key, normalize_task_text_for_key
+except ImportError:
+    generate_dispatch_key = None
+    normalize_dispatch_key = None
+    normalize_task_text_for_key = None
 from runner_goal_contract import build_runner_goal_contract
 from runner_queue import recover_stale_running_jobs
 from runtime_protocol import build_capability_bound_failure, build_delegated_materialization, normalize_worker_result
@@ -370,6 +382,81 @@ def parse_iso(value: str):
         return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def check_dispatch_dedup(dispatch_key: str, workspace: str = "") -> dict | None:
+    """Check if an active task with the same dispatch_key already exists in task-state.json.
+
+    Returns dedup info dict if a non-terminal match is found, else None.
+    """
+    if normalize_dispatch_key is not None:
+        if not normalize_dispatch_key(dispatch_key):
+            return None
+    elif not dispatch_key or not isinstance(dispatch_key, str):
+        return None
+
+    state_file = os.path.join(workspace, "tmp", "octopus", "task-state.json") if workspace else TASK_STATE_FILE
+    if not os.path.isfile(state_file):
+        return None
+
+    dedup_window = 3600
+    if _load_concurrency_policy is not None:
+        try:
+            policy = _load_concurrency_policy()
+            if isinstance(policy, dict):
+                dedup_window = max(0, int(policy.get("dedup_window_seconds", 3600) or 3600))
+        except Exception:
+            pass
+
+    now_ts = time.time()
+    cutoff = now_ts - dedup_window
+
+    terminal_lifecycle = {"finished", "cancelled"}
+    terminal_status = {"done", "completed", "failed", "cancelled"}
+
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            try:
+                raw = f.read()
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+        tasks = data.get("tasks", [])
+        if not isinstance(tasks, list):
+            return None
+
+        for task_entry in tasks:
+            if not isinstance(task_entry, dict):
+                continue
+            task_dk = str(task_entry.get("dispatch_key", "") or "").strip()
+            if task_dk != dispatch_key:
+                continue
+            lifecycle = str(task_entry.get("lifecycle_state", "") or "").strip().lower()
+            status = str(task_entry.get("status", "") or "").strip().lower()
+            if lifecycle in terminal_lifecycle or status in terminal_status:
+                continue
+            created_at = str(
+                task_entry.get("created_at", "") or task_entry.get("dispatched_at", "") or task_entry.get("started_at", "") or ""
+            ).strip()
+            if created_at:
+                parsed = parse_iso(created_at)
+                if parsed is not None:
+                    created_ts = parsed.timestamp()
+                    if created_ts < cutoff:
+                        continue
+            return {
+                "dedup": True,
+                "existing_task_id": str(task_entry.get("id", "") or ""),
+                "existing_status": status,
+                "dispatch_key": dispatch_key,
+            }
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+    return None
 
 
 def task_title(task: str, limit: int = 72) -> str:
@@ -1748,6 +1835,31 @@ def main():
     route = decision_route(decision)
     model_meta = decision_model(decision)
     final_route = str(route.get("route", "direct") or "direct")
+
+    dispatch_key = ""
+    if generate_dispatch_key is not None and normalize_task_text_for_key is not None:
+        identity = octoclaw_identity_fields(decision)
+        dispatch_key = generate_dispatch_key(
+            parent_session_key=str(identity.get("session_key", "") or ""),
+            parent_turn_id=str(metadata.get("turn_id", "") or metadata.get("parent_turn_id", "") or ""),
+            normalized_task_text=normalize_task_text_for_key(task),
+            route=final_route,
+            worker_pool=str(route.get("worker_pool", "") or ""),
+            model_lane=str(model_meta.get("model_band", "") or ""),
+        )
+
+    if dispatch_key:
+        dedup_result = check_dispatch_dedup(dispatch_key, workspace=WORKSPACE)
+        if dedup_result and dedup_result.get("dedup"):
+            payload = apply_policy_fields({
+                "executed": False,
+                "dispatch_dedup_hit": True,
+                "existing_task_id": dedup_result["existing_task_id"],
+                "dispatch_key": dispatch_key,
+                "reason": f"dedup: active task {dedup_result['existing_task_id']} already has this dispatch_key",
+            }, decision)
+            print(json.dumps(payload, ensure_ascii=False))
+            return
 
     if final_route == "direct":
         payload = apply_policy_fields(

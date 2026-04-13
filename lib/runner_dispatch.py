@@ -17,6 +17,11 @@ from runner_goal_contract import build_runner_goal_contract
 from runtime_protocol import build_delegated_materialization
 from task_events import append_task_event
 
+try:
+    from dispatch_routing import normalize_dispatch_key
+except ImportError:
+    normalize_dispatch_key = None
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 QUEUE_PY = os.path.join(SCRIPT_DIR, "runner_queue.py")
 TASK_STATE_PY = os.path.join(SCRIPT_DIR, "task-state-update.py")
@@ -71,14 +76,20 @@ def recent_minutes(value: str) -> float | None:
     return max(0.0, (now - dt.astimezone(timezone.utc)).total_seconds() / 60.0)
 
 
-def find_reusable_job(command: str) -> dict | None:
+def find_reusable_job(command: str, dispatch_key: str = "") -> dict | None:
     queue = load_json(RUNNER_QUEUE_FILE)
     if not isinstance(queue, dict):
         return None
 
     command_key = normalize_text(command)
-    if not command_key:
+    if not command_key and not dispatch_key:
         return None
+
+    valid_dispatch_key = ""
+    if dispatch_key and normalize_dispatch_key is not None:
+        normalized = normalize_dispatch_key(dispatch_key)
+        if normalized:
+            valid_dispatch_key = normalized
 
     for job in queue.get("jobs", []):
         if not isinstance(job, dict):
@@ -91,6 +102,11 @@ def find_reusable_job(command: str) -> dict | None:
             age = recent_minutes(str(job.get("finished_at", "") or ""))
             if age is None or age > RECENT_DONE_REUSE_MINUTES:
                 continue
+
+        if valid_dispatch_key:
+            job_dk = str(job.get("dispatch_key", "") or "").strip()
+            if job_dk == valid_dispatch_key and status in ACTIVE_JOB_STATUSES:
+                return job
 
         same_command = normalize_text(str(job.get("command", "") or "")) == command_key
         if same_command:

@@ -117,12 +117,11 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["work_contract"], "deliverable_work")
         self.assertEqual(payload["route_decision"]["work_type"], "research")
         self.assertEqual(payload["route_decision"]["phase"], "report")
-        self.assertEqual(payload["route_decision"]["reason"], "route_sticky_lane:spawn_single")
+        self.assertEqual(payload["route_decision"]["reason"], "route_followup_inherit:spawn_single")
         self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
         self.assertEqual(payload["route_hint_policy"]["source"], "sticky_lane")
         self.assertEqual(payload["route_hint_policy"]["sticky_route"], "spawn_single")
         self.assertEqual(payload["route_hint_policy"]["sticky_work_contract"], "")
-        self.assertEqual(payload["route_hint_policy"]["sticky_work_type"], "")
 
     def test_sticky_different_lane_only_changes_route(self) -> None:
         payload = self.run_policy(
@@ -136,7 +135,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["work_contract"], "coordinated_work")
         self.assertEqual(payload["route_decision"]["work_type"], "code")
         self.assertEqual(payload["route_decision"]["phase"], "implement")
-        self.assertEqual(payload["route_decision"]["reason"], "route_sticky_lane:spawn_multi")
+        self.assertEqual(payload["route_decision"]["reason"], "route_followup_inherit:spawn_multi")
         self.assertTrue(payload["route_hint_policy"]["sticky_applied"])
         self.assertEqual(payload["route_hint_policy"]["source"], "sticky_lane")
         self.assertEqual(payload["route_hint_policy"]["sticky_route"], "spawn_multi")

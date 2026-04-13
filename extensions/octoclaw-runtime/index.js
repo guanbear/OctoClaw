@@ -428,6 +428,12 @@ async function watchdogTick(logger) {
       if (status === "queued" && ageMin > STALE_QUEUED_THRESHOLD_MIN) {
         staleCount++;
         logger?.debug?.(`octoclaw watchdog: task_timeout task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
+        try {
+          const scriptPath = path.join(cwd, "lib", "task-state-update.py");
+          await runCommand("python3", [scriptPath, "event", "--id", taskId, "--kind", "task_timed_out", "--event-json", JSON.stringify({ reason: "watchdog_queued_timeout", age_min: Math.round(ageMin), threshold_min: STALE_QUEUED_THRESHOLD_MIN })], { cwd, timeoutMs: 10_000 });
+        } catch (e) {
+          logger?.warn?.(`octoclaw watchdog: failed to write timed_out event for task=${taskId}: ${String(e)}`);
+        }
         continue;
       }
       if ((status === "running" || status === "dispatched") && ageMin > STUCK_THRESHOLD_MIN) {
@@ -2750,6 +2756,9 @@ const plugin = {
     if (!hookConfig?.enabled) return;
     const stateKey = String(resolved?.stateKey || resolvePolicyStateKey(ctx) || "").trim();
     const state = resolved?.state || getPolicyStateForContext(ctx).state;
+    if (state && preSessionKey) {
+      state.ackGuardKey = preSessionKey;
+    }
     const metadata = buildPolicyMetadata(ctx, { stateKey });
     await maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, pi.logger, "direct_lookup");
     scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);

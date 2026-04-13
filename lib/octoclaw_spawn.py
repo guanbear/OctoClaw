@@ -1933,7 +1933,7 @@ def build_spawn_spec(
     base_artifacts["delegated_materialization"] = build_delegated_materialization(
         lane=final_route,
         kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
-        status="materialized",
+        status="not_applicable",
         execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
         task_id=task_id,
         child_spec_id=task_id,
@@ -2075,7 +2075,7 @@ def build_spawn_spec(
             base_artifacts["delegated_materialization"] = build_delegated_materialization(
                 lane=final_route,
                 kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
-                status="materialization_failed",
+                status="materialized",
                 execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
                 task_id=task_id,
                 child_spec_id=task_id,
@@ -2139,7 +2139,7 @@ def build_spawn_spec(
             base_artifacts["delegated_materialization"] = build_delegated_materialization(
                 lane=final_route,
                 kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
-                status="materialized",
+                status="materialization_failed",
                 execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
                 task_id=task_id,
                 child_spec_id=task_id,
@@ -2179,10 +2179,17 @@ def build_spawn_spec(
             missing_capabilities=["spawn_backend_execution"],
             fallback_permitted=False,
         )
+    _plan_only = execute is False or (execute is None and not executed and not execution_error)
+    if _plan_only:
+        _final_mat_status = "not_applicable"
+    elif capability_failure:
+        _final_mat_status = "materialization_failed"
+    else:
+        _final_mat_status = "materialized"
     materialization = build_delegated_materialization(
         lane=final_route,
         kind="spawn_team_flow" if final_route == "spawn_multi" else "spawn_child_task",
-        status="materialization_failed" if capability_failure else "materialized",
+        status=_final_mat_status,
         execution_contract=str(route_decision.get("work_contract", route_decision.get("work_contract_hint", "")) or ""),
         task_id=task_id,
         child_spec_id=task_id,

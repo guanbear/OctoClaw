@@ -312,9 +312,12 @@ function applyStickyRoute(baseRoute, baseWorkContract, features, routeHint, meta
     ack_followup_applied: ackFollowupCandidate,
     work_contract: stickyContract,
   };
-  const stickyReasons = [ackFollowupCandidate ? `route_ack_followup_inherit:${stickyRoute}` : `route_sticky_lane:${stickyRoute}`];
+  const stickyReasons = [ackFollowupCandidate ? `route_ack_followup_inherit:${stickyRoute}` : followupCandidate ? `route_followup_inherit:${stickyRoute}` : `route_sticky_lane:${stickyRoute}`];
   if (baseRoute === stickyRoute) {
     return { route: baseRoute, stickyState, stickyReasons };
+  }
+  if (ackFollowupCandidate || followupCandidate) {
+    return { route: stickyRoute, stickyState, stickyReasons };
   }
   return { route: baseRoute, stickyState: { ...stickyState, cross_lane_blocked: true }, stickyReasons: [`route_sticky_cross_lane_blocked:${baseRoute}_from_${stickyRoute}`, ...stickyReasons] };
 }
@@ -1097,7 +1100,10 @@ function preDispatchAckPolicy(route, workType, phase, taskClass = "", features =
       || features.fresh_live_lookup
       || features.tool_observation_only
       || features.explicit_local_probe
+      || features.requires_research
+      || features.bounded_software_update_lookup
       || ["local", "remote"].includes(String(features.target_scope || "").trim())
+      || ["inspect_report", "focused_research"].includes(String(features.work_contract || "").trim())
     )
   );
   const required = (["spawn_single", "spawn_multi"].includes(route) || runnerLookupAck) && taskClass !== "control_observer";
@@ -1659,7 +1665,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     policy_router: policyRouter,
     router_decision_v2: routerDecisionV2,
     route_decision: {
-      system_preferred_route: route,
+      system_preferred_route: baseRoute,
       route,
       work_contract: workContract,
       work_contract_hint: String(routeMeta.work_contract_hint || ""),
@@ -1691,7 +1697,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       runner_materialization_available: Boolean(routeMeta.runner_materialization_available),
       runner_materialization_kind: String(routeMeta.runner_materialization_kind || ""),
       runner_playbook:
-        route === "runner" && routeMeta.runner_playbook && typeof routeMeta.runner_playbook === "object" && !Array.isArray(routeMeta.runner_playbook)
+        routeMeta.runner_playbook && typeof routeMeta.runner_playbook === "object" && !Array.isArray(routeMeta.runner_playbook)
           ? { ...routeMeta.runner_playbook }
           : {},
     },
