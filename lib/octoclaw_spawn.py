@@ -53,6 +53,7 @@ from worker_taxonomy import (
     selector_band_for_model_band,
 )
 
+_ANALYSIS_TOKENS = frozenset({"分析", "总结", "对比", "研究", "analyze", "analysis", "compare", "research"})
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
@@ -601,6 +602,15 @@ def _render_native_result_report(task_id: str, result_payload: dict, *, summary:
     return "\n".join(lines).strip()
 
 
+def _goal_implies_analysis(goal: str) -> bool:
+    lowered = str(goal or "").lower()
+    return any(t in lowered for t in _ANALYSIS_TOKENS)
+
+
+def _output_is_trivial(text: str, threshold: int = 50) -> bool:
+    return len(str(text or "").strip()) < threshold
+
+
 def finalize_native_spawn_result(
     *,
     task_id: str,
@@ -618,6 +628,8 @@ def finalize_native_spawn_result(
     protocol: str = "",
     profile: str = "",
     review_required: bool = False,
+    brief_goal: str = "",
+    probe_spec: dict | None = None,
 ) -> dict:
     stderr_tail = _read_log_tail(stderr_path, limit=240)
     stdout_payload = _load_native_stdout_payload(stdout_path)
@@ -697,6 +709,13 @@ def finalize_native_spawn_result(
         return {"status": "failed", "summary": summary}
 
     status = normalize_result_status(str(result_payload.get("status", "") or ""), default="failed")
+    if status == "done" and brief_goal and _goal_implies_analysis(brief_goal):
+        probe_kind = str((probe_spec or {}).get("kind", "") or "").strip()
+        summary_text = str(result_payload.get("summary", "") or reply_preview or "").strip()
+        if probe_kind == "version_probe" and _output_is_trivial(summary_text):
+            status = "done_degraded"
+        elif probe_kind == "ai_goal" and _output_is_trivial(summary_text, threshold=30):
+            status = "done_degraded"
     summary = compact_text(
         str(result_payload.get("summary", "") or result_payload.get("user_safe_summary", "") or reply_preview or "native spawn completed").strip(),
         180,

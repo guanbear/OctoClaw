@@ -374,6 +374,67 @@ async function sendAckDirect(sessionKey, message, cwd, options = {}) {
   }
 }
 
+function startAckGuard(sessionKey, cwd) {
+  if (!sessionKey || ackGuardTimers.has(sessionKey)) return;
+  const entry = { inboundTs: Date.now(), ackSent2s: false, ackSent15s: false, timer2s: null, timer15s: null };
+  entry.timer2s = setTimeout(() => {
+    entry.ackSent2s = true;
+    sendAckDirect(sessionKey, ACK_GUARD_2S_TEXT, cwd, { timeoutMs: 2000 }).catch(() => {});
+  }, 2000);
+  entry.timer15s = setTimeout(() => {
+    entry.ackSent15s = true;
+    sendAckDirect(sessionKey, ACK_GUARD_15S_TEXT, cwd, { timeoutMs: 2000 }).catch(() => {});
+  }, 15000);
+  ackGuardTimers.set(sessionKey, entry);
+}
+
+function cancelAckGuard(sessionKey) {
+  const entry = ackGuardTimers.get(sessionKey);
+  if (!entry) return;
+  if (entry.timer2s) clearTimeout(entry.timer2s);
+  if (entry.timer15s) clearTimeout(entry.timer15s);
+  ackGuardTimers.delete(sessionKey);
+}
+
+async function watchdogTick(logger) {
+  const now = Date.now();
+  if (now - _watchdogLastTick < WATCHDOG_DEBOUNCE_MS) return;
+  _watchdogLastTick = now;
+  try {
+    const taskStatePath = resolveTaskStatePath();
+    const cwd = resolveOctoClawRoot();
+    const taskState = await readJsonFile(taskStatePath);
+    const tasks = Array.isArray(taskState?.tasks) ? taskState.tasks : [];
+    if (tasks.length === 0) return;
+    let staleCount = 0;
+    let stuckCount = 0;
+    for (const task of tasks) {
+      const status = String(task?.status || "").trim().toLowerCase();
+      const taskId = String(task?.id || "").trim();
+      if (!taskId) continue;
+      const updatedAt = Number(task?.updated_at || task?.spawned_at || 0);
+      if (!updatedAt) continue;
+      const ageMin = (now - updatedAt) / 60_000;
+      if (status === "queued" && ageMin > STALE_QUEUED_THRESHOLD_MIN) {
+        staleCount++;
+        continue;
+      }
+      if ((status === "running" || status === "dispatched") && ageMin > STUCK_THRESHOLD_MIN) {
+        stuckCount++;
+        try {
+          const scriptPath = path.join(cwd, "lib", "task-state-update.py");
+          await runCommand("python3", [scriptPath, "archive-stale-dispatched", "--minutes", String(STUCK_THRESHOLD_MIN)], { cwd, timeoutMs: 10_000 });
+        } catch {}
+      }
+    }
+    if (staleCount > 0 || stuckCount > 0) {
+      logger?.debug?.(`octoclaw watchdog: stale_queued=${staleCount} stuck=${stuckCount}`);
+    }
+  } catch (err) {
+    logger?.warn?.(`octoclaw watchdog tick failed: ${String(err)}`);
+  }
+}
+
 async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger) {
   const message = preDispatchAckText(decision);
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
@@ -667,6 +728,15 @@ const IM_SESSION_ORIGINS = new Set([
 const USER_SESSION_KINDS = new Set(["dm", "direct", "user"]);
 const CHANNEL_SESSION_KINDS = new Set(["channel", "group", "room", "conversation", "space", "chat"]);
 const THREAD_SESSION_KINDS = new Set(["thread", "topic"]);
+const ackGuardTimers = new Map();
+const ACK_GUARD_2S_TEXT = "收到，我看一下";
+const ACK_GUARD_15S_TEXT = "还在处理，稍后给你结果";
+const WATCHDOG_INTERVAL_MS = 30_000;
+const WATCHDOG_DEBOUNCE_MS = 25_000;
+const STALE_QUEUED_THRESHOLD_MIN = 90;
+const STUCK_THRESHOLD_MIN = 15;
+let _watchdogInterval = null;
+let _watchdogLastTick = 0;
 const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
@@ -2643,19 +2713,11 @@ const plugin = {
     if (!isManagedAgentContext(ctx)) return;
     const prompt = extractPromptText(event);
 
-    // Racing ACK timer — fire neutral indicator if pipeline is slow
-    let timerAckFired = false;
-    let timerAckHandle = null;
     const preStateKey = resolvePolicyStateKey(ctx);
     const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
     const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
     if (preSessionKey) {
-      timerAckHandle = setTimeout(() => {
-        timerAckFired = true;
-        try {
-          sendAckDirect(preSessionKey, "…", ctx?.cwd || process.cwd(), { timeoutMs: 2000 }).catch(() => {});
-        } catch {}
-      }, 600);
+      startAckGuard(preSessionKey, ctx?.cwd || process.cwd());
     }
 
     const resolved = await resolvePolicyDecisionForContext(
@@ -2665,10 +2727,6 @@ const plugin = {
       pi.logger,
     );
 
-    if (timerAckHandle !== null) {
-      clearTimeout(timerAckHandle);
-    }
-
     const decision = resolved?.decision;
     const hookConfig = decision?.hook_interface?.before_prompt_build;
     if (!hookConfig?.enabled) return;
@@ -2676,9 +2734,7 @@ const plugin = {
     const state = resolved?.state || getPolicyStateForContext(ctx).state;
     const metadata = buildPolicyMetadata(ctx, { stateKey });
     await maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, pi.logger, "direct_lookup");
-    if (!timerAckFired) {
-      scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);
-    }
+    scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, pi.logger);
     const prependSystem = [];
     if (routeHintRequired(decision)) {
       prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
@@ -2936,6 +2992,7 @@ const plugin = {
     if (!isManagedAgentContext(ctx)) return;
     const { key: stateKey, state } = getPolicyStateForContext(ctx);
     if (!stateKey) return;
+    cancelAckGuard(stateKey);
     await recordPolicyReplay(
       "agent_end",
       {
@@ -2987,6 +3044,7 @@ const plugin = {
       sessionKey: String(ctx?.sessionKey || "").trim(),
       agentId: String(ctx?.agentId || "").trim(),
     });
+    cancelAckGuard(stateKey);
     if (!state) return;
     const guarded = guardAssistantMessageForPolicyState(event?.message || {}, state);
     const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : (event?.message || {});
@@ -2997,6 +3055,10 @@ const plugin = {
       return { message: guarded.message };
     }
   }, 120);
+
+  _watchdogInterval = setInterval(() => {
+    watchdogTick(pi.logger).catch(() => {});
+  }, WATCHDOG_INTERVAL_MS);
 
   pi.registerTool(
     {
@@ -3637,5 +3699,11 @@ export const __octoclawTest = {
     policyStateBySession.clear();
     persistPolicyStateLedger();
   },
+  startAckGuard,
+  cancelAckGuard,
+  watchdogTick,
 };
-process.on("exit", () => _persistSessionState(policyStateBySession));
+process.on("exit", () => {
+  if (_watchdogInterval) clearInterval(_watchdogInterval);
+  _persistSessionState(policyStateBySession);
+});
