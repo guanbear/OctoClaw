@@ -171,6 +171,11 @@ def runner_artifacts(
         payload["delegated_materialization"] = dict(materialization)
     if isinstance(goal_contract, dict) and goal_contract:
         payload["goal_contract"] = dict(goal_contract)
+    routing = {}
+    if isinstance(playbook, dict) and playbook.get("dispatch_routing"):
+        routing = dict(playbook["dispatch_routing"])
+    if routing:
+        payload["dispatch_routing"] = routing
     return payload
 
 
@@ -225,10 +230,13 @@ def main():
     parser.add_argument("--managed-by-octoclaw", dest="managed_by_octoclaw", default="")
     parser.add_argument("--playbook-json", dest="playbook_json", default="")
     parser.add_argument("--goal-contract-json", dest="goal_contract_json", default="")
+    parser.add_argument("--dispatch-key", dest="dispatch_key", default="")
+    parser.add_argument("--lane-key", dest="lane_key", default="")
+    parser.add_argument("--capacity-group", dest="capacity_group", default="")
     args = parser.parse_args()
 
     job_id = args.id or f"runner-{now_compact()}"
-    reusable = find_reusable_job(args.command)
+    reusable = find_reusable_job(args.command, dispatch_key=str(getattr(args, "dispatch_key", "") or ""))
     if reusable:
         print(json.dumps(reusable, ensure_ascii=False))
         return
@@ -327,6 +335,9 @@ def main():
             *(["--agent-id", args.agent_id] if args.agent_id else []),
             *(["--agent-namespace", args.agent_namespace] if args.agent_namespace else []),
             *(["--managed-by-octoclaw", args.managed_by_octoclaw] if args.managed_by_octoclaw else []),
+            *(["--dispatch-key", args.dispatch_key] if args.dispatch_key else []),
+            *(["--lane-key", args.lane_key] if args.lane_key else []),
+            *(["--capacity-group", args.capacity_group] if args.capacity_group else []),
         ],
         stdout=subprocess.DEVNULL,
         check=True,
@@ -399,6 +410,9 @@ def main():
             *(["--agent-id", args.agent_id] if args.agent_id else []),
             *(["--agent-namespace", args.agent_namespace] if args.agent_namespace else []),
             *(["--managed-by-octoclaw", args.managed_by_octoclaw] if args.managed_by_octoclaw else []),
+            *(["--dispatch-key", args.dispatch_key] if args.dispatch_key else []),
+            *(["--lane-key", args.lane_key] if args.lane_key else []),
+            *(["--capacity-group", args.capacity_group] if args.capacity_group else []),
             "--artifacts-json",
             json.dumps(artifacts, ensure_ascii=False),
         ]

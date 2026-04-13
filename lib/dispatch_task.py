@@ -27,11 +27,13 @@ except ImportError:
     _load_concurrency_policy = None
 
 try:
-    from dispatch_routing import generate_dispatch_key, normalize_dispatch_key, normalize_task_text_for_key
+    from dispatch_routing import generate_dispatch_key, generate_lane_key, normalize_dispatch_key, normalize_task_text_for_key, resolve_capacity_group
 except ImportError:
     generate_dispatch_key = None
+    generate_lane_key = None
     normalize_dispatch_key = None
     normalize_task_text_for_key = None
+    resolve_capacity_group = None
 from runner_goal_contract import build_runner_goal_contract
 from runner_queue import recover_stale_running_jobs
 from runtime_protocol import build_capability_bound_failure, build_delegated_materialization, normalize_worker_result
@@ -473,13 +475,24 @@ def compact_text(text: str, limit: int = 120) -> str:
     return value[: limit - 1].rstrip() + "…"
 
 
-def upsert_runtime_task(**fields) -> None:
+def upsert_runtime_task(
+    dispatch_key: str = "",
+    lane_key: str = "",
+    capacity_group: str = "",
+    **fields,
+) -> None:
     cmd = ["python3", TASK_STATE_PY, "upsert"]
     for key, value in fields.items():
         text = str(value or "").strip()
         if not text:
             continue
         cmd.extend([f"--{key.replace('_', '-')}", text])
+    if str(dispatch_key or "").strip():
+        cmd.extend(["--dispatch-key", str(dispatch_key).strip()])
+    if str(lane_key or "").strip():
+        cmd.extend(["--lane-key", str(lane_key).strip()])
+    if str(capacity_group or "").strip():
+        cmd.extend(["--capacity-group", str(capacity_group).strip()])
     subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=15)
 
 
@@ -1519,6 +1532,12 @@ def dispatch_runner(args) -> dict:
         dispatch_cmd.extend(["--agent-namespace", str(identity["agent_namespace"])])
     if str(identity.get("managed_by_octoclaw", "") or "").strip():
         dispatch_cmd.extend(["--managed-by-octoclaw", str(identity["managed_by_octoclaw"])])
+    if str(getattr(args, "_dispatch_key", "") or "").strip():
+        dispatch_cmd.extend(["--dispatch-key", str(args._dispatch_key)])
+    if str(getattr(args, "_lane_key", "") or "").strip():
+        dispatch_cmd.extend(["--lane-key", str(args._lane_key)])
+    if str(getattr(args, "_capacity_group", "") or "").strip():
+        dispatch_cmd.extend(["--capacity-group", str(args._capacity_group)])
     try:
         result = subprocess.run(dispatch_cmd, capture_output=True, text=True, check=False, timeout=30)
     except subprocess.TimeoutExpired as exc:
@@ -1673,6 +1692,9 @@ def recommend_spawn(args, task: str) -> dict:
         "handoff": spawn_spec["handoff"],
         "materialization": spawn_spec.get("materialization", {}),
         "spawn_spec": spawn_spec,
+        "dispatch_key": str(getattr(args, "_dispatch_key", "") or ""),
+        "lane_key": str(getattr(args, "_lane_key", "") or ""),
+        "capacity_group": str(getattr(args, "_capacity_group", "") or ""),
     }, decision)
 
 
@@ -1757,6 +1779,9 @@ def recommend_multi_spawn(args, task: str) -> dict:
         "capability_failure": capability_failure,
         "materialization": dict(primary_spawn.get("materialization", {})) if isinstance(primary_spawn.get("materialization"), dict) else {},
         "spawn_spec": primary_spawn,
+        "dispatch_key": str(getattr(args, "_dispatch_key", "") or ""),
+        "lane_key": str(getattr(args, "_lane_key", "") or ""),
+        "capacity_group": str(getattr(args, "_capacity_group", "") or ""),
     }, decision)
 
 
@@ -1773,6 +1798,7 @@ def main():
     parser.add_argument("--session-key", dest="session_key", default="")
     parser.add_argument("--metadata-json", dest="metadata_json", default="")
     parser.add_argument("--policy-json", default="")
+    parser.add_argument("--parent-turn-id", dest="parent_turn_id", default="")
     parser.add_argument("--wait", action="store_true")
     parser.add_argument("--wait-timeout-seconds", dest="wait_timeout_seconds", type=int, default=0)
     args = parser.parse_args()
@@ -1837,16 +1863,32 @@ def main():
     final_route = str(route.get("route", "direct") or "direct")
 
     dispatch_key = ""
+    lane_key = ""
+    capacity_group = ""
     if generate_dispatch_key is not None and normalize_task_text_for_key is not None:
         identity = octoclaw_identity_fields(decision)
         dispatch_key = generate_dispatch_key(
             parent_session_key=str(identity.get("session_key", "") or ""),
-            parent_turn_id=str(metadata.get("turn_id", "") or metadata.get("parent_turn_id", "") or ""),
+            parent_turn_id=str(metadata.get("turn_id", "") or metadata.get("parent_turn_id", "") or args.parent_turn_id or ""),
             normalized_task_text=normalize_task_text_for_key(task),
             route=final_route,
             worker_pool=str(route.get("worker_pool", "") or ""),
             model_lane=str(model_meta.get("model_band", "") or ""),
         )
+    try:
+        wp = str(route.get("worker_pool", "") or "")
+        sm = str(model_meta.get("selected_model", "") or "")
+        wt = str(route.get("work_type", "") or "")
+        mb = str(model_meta.get("model_band", "") or "")
+        if generate_lane_key is not None and resolve_capacity_group is not None:
+            lane_key = generate_lane_key(final_route, wp, resolve_capacity_group(final_route, wp))
+            capacity_group = resolve_capacity_group(final_route, wp, wt, mb)
+    except Exception:
+        lane_key = ""
+        capacity_group = ""
+    args._dispatch_key = dispatch_key
+    args._lane_key = lane_key
+    args._capacity_group = capacity_group
 
     if dispatch_key:
         dedup_result = check_dispatch_dedup(dispatch_key, workspace=WORKSPACE)
@@ -1856,6 +1898,8 @@ def main():
                 "dispatch_dedup_hit": True,
                 "existing_task_id": dedup_result["existing_task_id"],
                 "dispatch_key": dispatch_key,
+                "lane_key": lane_key,
+                "capacity_group": capacity_group,
                 "reason": f"dedup: active task {dedup_result['existing_task_id']} already has this dispatch_key",
             }, decision)
             print(json.dumps(payload, ensure_ascii=False))
