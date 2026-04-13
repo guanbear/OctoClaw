@@ -38,7 +38,7 @@ def expected_done_offset(timeout_seconds: int) -> str:
 
 
 def run_json(cmd: list[str]) -> dict:
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=15)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"command failed: {' '.join(cmd)}")
     text = result.stdout.strip() or "{}"
@@ -314,6 +314,7 @@ def main():
         ],
         stdout=subprocess.DEVNULL,
         check=True,
+        timeout=15,
     )
     append_task_event(
         {

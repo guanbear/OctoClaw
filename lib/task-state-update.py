@@ -44,6 +44,10 @@ except ModuleNotFoundError:  # pragma: no cover - package import path for tests
 STATE_FILE = TASK_STATE_FILE
 
 
+def _skip_native_enrichment() -> bool:
+    return os.environ.get("OCTOCLAW_SKIP_NATIVE_ENRICHMENT", "").strip() in {"1", "true", "yes"}
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat()
 
@@ -1012,7 +1016,6 @@ def cmd_upsert(args):
                 existing["executor"] = infer_executor(existing, args.executor or "")
             existing["updated_at"] = now_iso()
             normalized = normalize_task_record(existing)
-            normalized = normalize_task_record(enrich_task_record_with_taskflow(normalized))
             existing.clear()
             existing.update(normalized)
             current_record = dict(existing)
@@ -1116,12 +1119,26 @@ def cmd_upsert(args):
             record["executor"] = infer_executor(record, args.executor or "")
             tasks.append(record)
             current_record = normalize_task_record(record)
-            current_record = normalize_task_record(enrich_task_record_with_taskflow(current_record))
             tasks[-1] = dict(current_record)
 
         current_record, lineage_syncs = _lineage_sync_records(tasks, current_record or {})
         state["tasks"] = tasks
         save_state(fp, state)
+    if current_record and not _skip_native_enrichment():
+        try:
+            enriched = normalize_task_record(enrich_task_record_with_taskflow(dict(current_record)))
+            if enriched != current_record:
+                current_record = enriched
+                with open(STATE_FILE, "a+") as fp2:
+                    fcntl.flock(fp2, fcntl.LOCK_EX)
+                    state2 = load_state(fp2)
+                    for i, t in enumerate(state2.get("tasks", [])):
+                        if t.get("id") == args.id:
+                            state2["tasks"][i] = dict(current_record)
+                            break
+                    save_state(fp2, state2)
+        except Exception:
+            pass
     if current_record:
         _sync_runtime_coordination(current_record)
         sync_task(current_record, event_type="upsert", previous_status=previous_status)
@@ -1395,7 +1412,6 @@ def _finish(
             if observability_health:
                 existing["observability_health"] = observability_health
             normalized = normalize_task_record(existing)
-            normalized = normalize_task_record(enrich_task_record_with_taskflow(normalized))
             existing.clear()
             existing.update(normalized)
             current_record = dict(existing)
@@ -1437,13 +1453,27 @@ def _finish(
                 record["observability_health"] = observability_health
             tasks.append(record)
             current_record = normalize_task_record(record)
-            current_record = normalize_task_record(enrich_task_record_with_taskflow(current_record))
             tasks[-1] = dict(current_record)
 
         current_record, lineage_syncs = _lineage_sync_records(tasks, current_record or {})
         # Clean up old done/failed records
         state["tasks"] = cleanup_old(tasks)
         save_state(fp, state)
+    if current_record and not _skip_native_enrichment():
+        try:
+            enriched = normalize_task_record(enrich_task_record_with_taskflow(dict(current_record)))
+            if enriched != current_record:
+                current_record = enriched
+                with open(STATE_FILE, "a+") as fp2:
+                    fcntl.flock(fp2, fcntl.LOCK_EX)
+                    state2 = load_state(fp2)
+                    for i, t in enumerate(state2.get("tasks", [])):
+                        if t.get("id") == task_id:
+                            state2["tasks"][i] = dict(current_record)
+                            break
+                    save_state(fp2, state2)
+        except Exception:
+            pass
     if current_record:
         _sync_runtime_coordination(current_record)
         sync_task(current_record, event_type=status, previous_status=previous_status)

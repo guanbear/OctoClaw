@@ -387,16 +387,21 @@ def _native_lookup_payload(task: dict[str, Any]) -> dict[str, str]:
 def list_native_openclaw_tasks(config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not _native_binding_enabled(config) or not has_openclaw_cli(config):
         return []
-    result = subprocess.run(
-        [_openclaw_bin(config), "tasks", "list", "--json"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [_openclaw_bin(config), "tasks", "list", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, Exception):
+        return []
     if result.returncode != 0:
         return []
+    raw = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
-        payload = json.loads(result.stdout or "[]")
+        payload = json.loads(raw or "[]")
     except json.JSONDecodeError:
         return []
     if isinstance(payload, list):
@@ -412,16 +417,21 @@ def list_native_openclaw_tasks(config: dict[str, Any] | None = None) -> list[dic
 def list_native_openclaw_flows(config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not _native_binding_enabled(config) or not has_openclaw_cli(config):
         return []
-    result = subprocess.run(
-        [_openclaw_bin(config), "tasks", "flow", "list", "--json"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [_openclaw_bin(config), "tasks", "flow", "list", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, Exception):
+        return []
     if result.returncode != 0:
         return []
+    raw = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
-        payload = json.loads(result.stdout or "{}")
+        payload = json.loads(raw or "{}")
     except json.JSONDecodeError:
         return []
     if isinstance(payload, list):
@@ -627,10 +637,15 @@ def build_taskflow_binding(task: dict[str, Any], *, config: dict[str, Any] | Non
     if task_id or flow_id:
         binding_state = "mirrored_bound"
         native_binding_state = "bound"
+    if native_binding_state != "bound":
+        backend = "mirror"
     create_preference = "native_preferred" if route in {"spawn_single", "spawn_multi"} or _runner_wants_flow(config) else "mirror_only"
-    create_status = "native_bound" if native_binding_state == "bound" else (
-        "native_unavailable_fallback_mirror" if create_preference == "native_preferred" and not native_create_supported() else "mirror_only"
-    )
+    if native_binding_state == "bound" and flow_id:
+        create_status = "native_bound"
+    elif create_preference == "native_preferred" and not native_create_supported():
+        create_status = "native_unavailable_fallback_mirror"
+    else:
+        create_status = "mirror_only"
     return {
         "schema_version": TASKFLOW_LINK_SCHEMA_VERSION,
         "backend": backend,

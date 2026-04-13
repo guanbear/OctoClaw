@@ -389,7 +389,7 @@ def upsert_runtime_task(**fields) -> None:
         if not text:
             continue
         cmd.extend([f"--{key.replace('_', '-')}", text])
-    subprocess.run(cmd, check=False, capture_output=True, text=True)
+    subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=15)
 
 
 def append_runtime_task_event(task_id: str, kind: str, message: str, *, event_json: dict | None = None) -> None:
@@ -411,7 +411,7 @@ def append_runtime_task_event(task_id: str, kind: str, message: str, *, event_js
     ]
     if isinstance(event_json, dict) and event_json:
         cmd.extend(["--event-json", json.dumps(event_json, ensure_ascii=False)])
-    subprocess.run(cmd, check=False, capture_output=True, text=True)
+    subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=15)
 
 
 def configured_spawn_backend() -> str:
@@ -1212,13 +1212,24 @@ def run_runner_on_demand(job_id: str) -> dict:
         "RUNNER_HEARTBEAT_INTERVAL_SECONDS": "1",
         "RUNNER_WORKER_ID": worker_id,
     }
-    result = subprocess.run(
-        ["bash", RUNNER_LOOP_SH],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
+    runner_timeout = int(os.environ.get("OCTOCLAW_RUNNER_TIMEOUT_SECONDS", "120"))
+    try:
+        result = subprocess.run(
+            ["bash", RUNNER_LOOP_SH],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=runner_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "triggered": True,
+            "worker_id": worker_id,
+            "returncode": -1,
+            "ok": False,
+            "timeout": True,
+        }
     return {
         "triggered": True,
         "worker_id": worker_id,
@@ -1417,7 +1428,10 @@ def dispatch_runner(args) -> dict:
         dispatch_cmd.extend(["--agent-namespace", str(identity["agent_namespace"])])
     if str(identity.get("managed_by_octoclaw", "") or "").strip():
         dispatch_cmd.extend(["--managed-by-octoclaw", str(identity["managed_by_octoclaw"])])
-    result = subprocess.run(dispatch_cmd, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(dispatch_cmd, capture_output=True, text=True, check=False, timeout=30)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"runner dispatch timed out after 30s: {exc.cmd}") from exc
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "runner dispatch failed")
     payload = json.loads(result.stdout.strip() or "{}")
