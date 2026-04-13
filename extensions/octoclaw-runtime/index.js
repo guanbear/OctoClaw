@@ -1593,7 +1593,7 @@ async function persistStickyLane(sessionKey, decision, logger, options = {}) {
         : [],
     };
     await writeJsonFile(pathname, next);
-    return true;
+    return next[sessionKey];
   } catch (err) {
     logger?.warn?.(`octoclaw sticky lane persist failed: ${String(err)}`);
     return false;
@@ -3252,12 +3252,12 @@ const plugin = {
             originalRoute: String(cachedDecision?.route_decision?.route || params.forceRoute || ""),
             routeChanged: String(cachedDecision?.route_decision?.route || "") !== String(payload?.route || ""),
             decisionSource: hadCachedDecision ? "cached" : (params.policyJson ? "policy_json" : freshDecisionSource || "fresh"),
-            routeOverrideSource: String(stickyPersisted?.stickyReasons?.[0] || ""),
+            routeOverrideSource: String(stickyPersisted?.reason_codes?.[0] || stickyPersisted?.source || ""),
             fallbackReason: String(payload?.capability_failure?.reason || payload?.reason || ""),
             stickyPersisted,
             preDispatchAckRequired: Boolean(cachedDecision?.pre_dispatch_ack?.required),
-            preDispatchAckAttempted: Boolean(ackResult?.attempted || ackResult?.sent),
-            preDispatchAckDelivered: Boolean(ackResult?.sent && !ackResult?.fallback_used && ackResult?.channel_attempt?.sent),
+            preDispatchAckAttempted: Boolean(ackResult?.attempted),
+            preDispatchAckDelivered: Boolean(ackResult?.delivered),
             preDispatchAckSent: Boolean(ackResult?.sent),
             preDispatchAckReason: String(ackResult?.reason || ""),
             preDispatchAckFallbackUsed: Boolean(ackResult?.fallback_used),

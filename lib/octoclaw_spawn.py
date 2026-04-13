@@ -658,9 +658,9 @@ def finalize_native_spawn_result(
                  "--worker-pool", worker_pool or "octoclaw-research",
                  "--work-type", work_type or "research", "--phase", phase or "collect",
                  "--protocol", protocol or "normal", "--profile", profile or "default",
-                 "--review-required", "true" if review_required else "false",
-                 "--report-path", report_written,
-                 "--user-safe-summary", summary] +
+                  "--review-required", "true" if review_required else "false"] +
+                 (["--report-path", report_written] if report_written else []) +
+                 ["--user-safe-summary", summary] +
                 (["--model", model] if model else []) +
                 (["--model-band", model_band] if model_band else []),
                 check=False, capture_output=True, text=True,
@@ -1610,7 +1610,7 @@ def register_dispatched_task(
         cmd.extend(["--parent-id", parent_id])
     if artifacts_json:
         cmd.extend(["--artifacts-json", json.dumps(artifacts_json, ensure_ascii=False)])
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=False, capture_output=True, text=True)
 
 
 def register_failed_spawn_task(

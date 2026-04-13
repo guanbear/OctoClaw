@@ -389,7 +389,7 @@ def upsert_runtime_task(**fields) -> None:
         if not text:
             continue
         cmd.extend([f"--{key.replace('_', '-')}", text])
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=False, capture_output=True, text=True)
 
 
 def append_runtime_task_event(task_id: str, kind: str, message: str, *, event_json: dict | None = None) -> None:
