@@ -4,7 +4,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(MODULE_DIR, "../../..");
+const HOME_DIR = os.homedir();
+
+function resolveOctoClawRoot() {
+  const candidates = [
+    String(process.env.OCTOCLAW_ROOT || "").trim(),
+    path.join(HOME_DIR, ".openclaw", "workspace", "openclaw", "skills", "octopus"),
+    path.join(HOME_DIR, ".openclaw", "workspace", "openclaw", "repos", "octoclaw"),
+    path.resolve(MODULE_DIR, "../../.."),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(path.join(candidate, "lib"))) {
+      return candidate;
+    }
+  }
+  return path.resolve(MODULE_DIR, "../../..");
+}
+
+const REPO_ROOT = resolveOctoClawRoot();
 const MODEL_TELEMETRY_REPORT_PY = path.join(REPO_ROOT, "lib", "model_telemetry_report.py");
 const UPSTREAM_RELEASE_LOOKUP_MJS = path.join(REPO_ROOT, "lib", "upstream_release_lookup.mjs");
 
@@ -251,6 +268,7 @@ function buildSystemSummaryPlan(task) {
 function buildModelTelemetryReportPlan(task) {
   const lowered = String(task || "").toLowerCase();
   if (!containsAny(lowered, MODEL_BENCHMARK_HINTS)) return null;
+  if (!fs.existsSync(MODEL_TELEMETRY_REPORT_PY)) return null;
   const modelRefs = Array.from(new Set((String(task || "").match(MODEL_REFERENCE_PATTERN) || []).map((item) => item.toLowerCase())));
   if (modelRefs.length === 0) return null;
   const baseCommand = `python3 ${shellQuote(MODEL_TELEMETRY_REPORT_PY)} --task ${shellQuote(task)}`;
@@ -289,6 +307,7 @@ function buildUpstreamReleaseLookupPlan(task, hints = {}) {
     else if (lowered.includes("octoclaw")) project = "octoclaw";
   }
   if (!["openclaw", "octoclaw"].includes(project)) return null;
+  if (!fs.existsSync(UPSTREAM_RELEASE_LOOKUP_MJS)) return null;
   const effectiveFocus = focus || "latest_updates";
   return {
     kind: "upstream_release_lookup",

@@ -1982,6 +1982,10 @@ function isManagedAgentContext(ctx = {}) {
   const sessionKey = String(ctx.sessionKey || "");
   const sessionId = String(ctx.sessionId || "");
   const agentId = String(ctx.agentId || "");
+  // Filter active-memory internal sub-sessions (OpenClaw 4.11+)
+  if (sessionKey.includes(":active-memory:") || sessionId.startsWith("active-memory-")) {
+    return false;
+  }
   if (/subagent/i.test(sessionKey) || /subagent/i.test(sessionId) || /subagent/i.test(agentId)) {
     return false;
   }
@@ -2891,6 +2895,7 @@ const plugin = {
   });
 
   registerLifecycleHook("agent_end", async (_event, ctx) => {
+    if (!isManagedAgentContext(ctx)) return;
     const { key: stateKey, state } = getPolicyStateForContext(ctx);
     if (!stateKey) return;
     await recordPolicyReplay(
@@ -2939,6 +2944,7 @@ const plugin = {
   }, 50);
 
   registerLifecycleHook("before_message_write", (event, ctx) => {
+    if (!isManagedAgentContext(ctx)) return;
     const { key: stateKey, state } = getPolicyStateForContext({
       sessionKey: String(ctx?.sessionKey || "").trim(),
       agentId: String(ctx?.agentId || "").trim(),
