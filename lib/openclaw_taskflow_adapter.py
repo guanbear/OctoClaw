@@ -913,8 +913,15 @@ def sync_terminal_transition(
             "cancelled": "cancel-flow",
         }
         action = action_map[transition_type]
+        session_key = _normalized_str(tf.get("session_key") or task.get("session_key"))
+        revision = _normalized_int(tf.get("substrate_revision"))
         if transition_type == "cancelled":
-            args = [flow_id]
+            helper_args = [
+                action,
+                "--flow-id", flow_id,
+            ]
+            if session_key:
+                helper_args.extend(["--session-key", session_key])
         else:
             state_json = json.dumps(
                 {
@@ -924,9 +931,17 @@ def sync_terminal_transition(
                 },
                 ensure_ascii=False,
             )
-            args = [flow_id, state_json]
+            helper_args = [
+                action,
+                "--flow-id", flow_id,
+                "--state-json", state_json,
+            ]
+            if session_key:
+                helper_args.extend(["--session-key", session_key])
+            if revision:
+                helper_args.extend(["--expected-revision", str(revision)])
 
-        result = _run_runtime_helper([action, *args], timeout_seconds=timeout_seconds)
+        result = _run_runtime_helper(helper_args, timeout_seconds=timeout_seconds)
         ok = bool(result.get("ok"))
         return {
             "synced": ok,

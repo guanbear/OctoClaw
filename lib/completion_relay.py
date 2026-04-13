@@ -17,7 +17,31 @@ try:
 except ModuleNotFoundError:
     append_task_event = None  # type: ignore[assignment]
 
+try:
+    from openclaw_taskflow_adapter import sync_terminal_transition
+except ModuleNotFoundError:
+    sync_terminal_transition = None  # type: ignore[assignment]
+
 COMPLETION_RELAY_SCHEMA_VERSION = "octoclaw.completion_relay/v1"
+
+
+def _load_task_for_native_sync(task_id: str, workspace: str = "") -> dict | None:
+    try:
+        import json as _json, os as _os, fcntl
+        state_file = _os.path.join(workspace, "tmp", "octopus", "task-state.json") if workspace else ""
+        if not state_file or not _os.path.isfile(state_file):
+            return None
+        with open(state_file, "r") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            raw = f.read()
+            fcntl.flock(f, fcntl.LOCK_UN)
+        data = _json.loads(raw)
+        for t in data.get("tasks", []):
+            if isinstance(t, dict) and str(t.get("id", "") or "") == task_id:
+                return t
+    except Exception:
+        pass
+    return None
 
 
 def _text(value: Any) -> str:
@@ -188,11 +212,25 @@ def relay_task_completion(
             except Exception:
                 events_emitted = False
 
+        native_synced = False
+        if sync_terminal_transition is not None:
+            try:
+                transition_map = {"done": "finished", "failed": "failed", "cancelled": "cancelled"}
+                t_type = transition_map.get(status)
+                if t_type:
+                    real_task = _load_task_for_native_sync(tid, workspace)
+                    if real_task:
+                        sync_result = sync_terminal_transition(real_task, t_type)
+                        native_synced = bool(sync_result.get("synced"))
+            except Exception:
+                native_synced = False
+
         return {
             "ok": True,
             "task_id": tid,
             "status": status,
             "events_emitted": events_emitted,
+            "native_synced": native_synced,
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

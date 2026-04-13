@@ -37,9 +37,10 @@ from worker_taxonomy import (
 )
 from octopus_config import PATROL_NOTIFY_STATE_FILE, TASK_STATE_FILE
 try:
-    from openclaw_taskflow_adapter import enrich_task_record_with_taskflow
+    from openclaw_taskflow_adapter import enrich_task_record_with_taskflow, sync_terminal_transition
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.openclaw_taskflow_adapter import enrich_task_record_with_taskflow
+    from lib.openclaw_taskflow_adapter import sync_terminal_transition
 
 STATE_FILE = TASK_STATE_FILE
 PROJECTION_SCHEMA_VERSION = "octoclaw.task_state.projection/v1"
@@ -1357,6 +1358,23 @@ def cmd_checklist(args):
     print(f"[ok] checklist id={args.id}")
 
 
+def _fire_and_forget_native_sync(current_record, status):
+    """After local terminal state is saved, fire async native TaskFlow sync."""
+    terminal_map = {
+        "done": "finished",
+        "completed": "finished",
+        "failed": "failed",
+        "cancelled": "cancelled",
+    }
+    transition_type = terminal_map.get(str(status or "").strip().lower())
+    if not transition_type:
+        return
+    try:
+        sync_terminal_transition(current_record, transition_type)
+    except Exception:
+        pass
+
+
 def _finish(
     task_id: str,
     status: str,
@@ -1493,6 +1511,7 @@ def _finish(
         anchor_result = _sync_task_anchor(current_record, previous_status)
         _sync_task_completion_relay(current_record, previous_status, force=True)
         _log_task_transition(current_record, previous_status, anchor_result=anchor_result)
+        _fire_and_forget_native_sync(current_record, status)
     for record, record_previous_status in lineage_syncs:
         _sync_runtime_coordination(record)
         sync_task(record, event_type=_sync_event_type(record, record_previous_status), previous_status=record_previous_status)

@@ -2086,17 +2086,6 @@ def build_spawn_spec(
                 ((base_artifacts.get("operator_surface") or {}) if isinstance(base_artifacts.get("operator_surface"), dict) else {}).get("operator_hint", "")
                 or ""
             )
-            cmd = [
-                "python3",
-                TASK_STATE_PY,
-                "upsert",
-                "--id",
-                task_id,
-                "--artifacts-json",
-                json.dumps(base_artifacts, ensure_ascii=False),
-            ]
-            if agent_owner:
-                cmd.extend(["--owner", agent_owner])
             child_session_id = str((spawn_execution or {}).get("session_id", "") or "").strip()
             child_run_id = str((spawn_execution or {}).get("run_id", "") or "").strip()
             taskflow_binding = base_artifacts.get("openclaw_taskflow")
@@ -2108,6 +2097,17 @@ def build_spawn_spec(
                 taskflow_binding["run_id"] = child_run_id or str(taskflow_binding.get("run_id", "") or "")
                 taskflow_binding["task_id"] = str((spawn_execution or {}).get("native_task_id", "") or taskflow_binding.get("task_id", "") or "")
                 taskflow_binding["flow_id"] = str((spawn_execution or {}).get("native_flow_id", "") or taskflow_binding.get("flow_id", "") or "")
+            cmd = [
+                "python3",
+                TASK_STATE_PY,
+                "upsert",
+                "--id",
+                task_id,
+                "--artifacts-json",
+                json.dumps(base_artifacts, ensure_ascii=False),
+            ]
+            if agent_owner:
+                cmd.extend(["--owner", agent_owner])
             if child_session_id:
                 cmd.extend(["--session-id", child_session_id])
             if child_run_id:
