@@ -24,15 +24,16 @@ def build_route_recommendation(route_meta: dict[str, Any], resolved: dict[str, A
     reason_codes = [str(item or "") for item in list(route_meta.get("reason_codes", []) or [])]
     protected_lane = str(route_meta.get("protected_lane", "") or "").strip()
     repo_activity_hits = int(features.get("repo_activity_hits", 0) or 0)
+    fresh_live_lookup = bool(features.get("fresh_live_lookup"))
     semantic_reason = str(route_meta.get("semantic_review_reason", "") or "")
-    conflict_type = "repo_activity_lookup" if repo_activity_hits > 0 else semantic_reason
-    arbitration_required = False if protected_lane else bool(repo_activity_hits > 0 or route_meta.get("needs_semantic_review"))
+    conflict_type = "" if fresh_live_lookup else ("repo_activity_lookup" if repo_activity_hits > 0 else semantic_reason)
+    arbitration_required = False if (protected_lane or fresh_live_lookup) else bool(repo_activity_hits > 0 or route_meta.get("needs_semantic_review"))
     strategy = (
         "none"
-        if protected_lane
+        if (protected_lane or fresh_live_lookup)
         else ("rule_fallback" if repo_activity_hits > 0 else ("route_hint_or_future_tiny_judge" if route_meta.get("needs_semantic_review") else "none"))
     )
-    resolved_by = "protected_lane" if protected_lane else ("rule_fallback" if repo_activity_hits > 0 else "base_policy")
+    resolved_by = "protected_lane" if protected_lane else ("base_policy" if fresh_live_lookup else ("rule_fallback" if repo_activity_hits > 0 else "base_policy"))
     reason_code_count = len(reason_codes)
     truncated_reason_codes = reason_codes[:8]
     return {

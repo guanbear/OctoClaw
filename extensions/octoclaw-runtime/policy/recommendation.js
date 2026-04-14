@@ -69,18 +69,23 @@ export function buildRouteRecommendation(routeMeta = {}, resolved = {}) {
   const scores = routeMeta?.scores && typeof routeMeta.scores === "object" ? routeMeta.scores : {};
   const reasonCodes = Array.isArray(routeMeta?.reason_codes) ? routeMeta.reason_codes.map((item) => String(item || "")) : [];
   const protectedLane = String(routeMeta?.protected_lane || "").trim();
-  const conflictType = Number(features.repo_activity_hits || 0) > 0
-    ? "repo_activity_lookup"
-    : String(routeMeta?.semantic_review_reason || "").trim();
-  const arbitrationRequired = protectedLane
+  const freshLiveLookup = Boolean(features.fresh_live_lookup);
+  const conflictType = freshLiveLookup
+    ? ""
+    : (Number(features.repo_activity_hits || 0) > 0
+      ? "repo_activity_lookup"
+      : String(routeMeta?.semantic_review_reason || "").trim());
+  const arbitrationRequired = (protectedLane || freshLiveLookup)
     ? false
     : Boolean(Number(features.repo_activity_hits || 0) > 0 || routeMeta?.needs_semantic_review);
-  const strategy = protectedLane
+  const strategy = (protectedLane || freshLiveLookup)
     ? "none"
     : Number(features.repo_activity_hits || 0) > 0
     ? "rule_fallback"
     : (routeMeta?.needs_semantic_review ? "route_hint_or_future_tiny_judge" : "none");
-  const resolvedBy = protectedLane ? "protected_lane" : (Number(features.repo_activity_hits || 0) > 0 ? "rule_fallback" : "base_policy");
+  const resolvedBy = protectedLane
+    ? "protected_lane"
+    : (freshLiveLookup ? "base_policy" : (Number(features.repo_activity_hits || 0) > 0 ? "rule_fallback" : "base_policy"));
   const reasonCodeCount = reasonCodes.length;
   const truncatedReasonCodes = reasonCodes.slice(0, 8);
   return {
