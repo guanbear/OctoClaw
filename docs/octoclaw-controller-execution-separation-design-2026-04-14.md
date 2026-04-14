@@ -541,6 +541,12 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 - 当前系统并没有真正的 resident runner truth
 - 只是把“历史 on-demand worker 的健康状态”当成 resident runner 的健康状态使用
 
+默认设计要求：
+
+- runner **默认模式必须是 `resident`**
+- `ondemand` 只能作为 fallback mode，不得再作为默认或隐式常态
+- 任何 runtime / status / UI / replay / health surface 都必须把 `resident` 视为默认真相源
+
 设计要求：
 
 - 明确 runner mode：`resident` / `ondemand`
@@ -602,7 +608,7 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 1. ACK target canonical binding only
 2. ACK owner 唯一化（progress ACK / eager ACK / timer ACK 合并）
 3. CLI / helper capability negotiation
-4. resident runner truth 与 on-demand truth 分离
+4. resident runner truth 与 on-demand truth 分离（并把默认 mode 固定为 `resident`）
 
 ### P1
 
@@ -746,6 +752,7 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 目标：
 
 - 明确 resident vs ondemand，不再拿旧 on-demand heartbeat 充当 resident runner 健康状态
+- runner 默认运行方式固定为 `resident`
 
 主要文件：
 
@@ -762,9 +769,15 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 1. 增加明确的 runner mode state：
    - `resident`
    - `ondemand`
-2. resident runner 要有独立健康状态文件或 mode 标记
-3. queue 为空但 task-state queued 时，必须进入 `lost / timed_out / dispatch_failed` 之一
-4. 如果继续用 tmux resident 模式：
+2. `resident` 设为默认 mode：
+   - config 默认值
+   - runtime decision 默认值
+   - status / UI 默认展示
+   - docs / acceptance 默认假设
+3. `ondemand` 只能在 resident 不健康或显式 fallback 时出现
+4. resident runner 要有独立健康状态文件或 mode 标记
+5. queue 为空但 task-state queued 时，必须进入 `lost / timed_out / dispatch_failed` 之一
+6. 如果继续用 tmux resident 模式：
    - gateway restart 后自动恢复 worker
    - worker context reset per job
 
@@ -772,6 +785,7 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 
 - `queued` 任务不再无限增长 `task_timed_out`
 - 不再出现“runner_health_snapshot=ok，但实际没有可 claim worker”
+- 默认健康状态下，新的 runner task 不允许落到 `ondemand` 模式
 
 ### Workstream F：mirror / native binding truth
 
