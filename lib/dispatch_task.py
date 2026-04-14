@@ -606,12 +606,21 @@ def build_multi_parent_artifacts(plan: dict, steps: list[dict], backend: str, *,
         taskflow = parent_artifacts.get("openclaw_taskflow", {}) if isinstance(parent_artifacts.get("openclaw_taskflow", {}), dict) else {}
     if isinstance(taskflow, dict) and taskflow:
         artifacts["openclaw_taskflow"] = dict(taskflow)
+    replacement_chain = execution_chain_source(parent_spec)
+    if any(replacement_chain.values()):
+        artifacts["replacement_chain"] = replacement_chain
     delegated_materialization = (parent_spec or {}).get("materialization")
     if isinstance(delegated_materialization, dict) and delegated_materialization:
         artifacts["delegated_materialization"] = dict(delegated_materialization)
     capability_failure = (parent_spec or {}).get("capability_failure")
     if isinstance(capability_failure, dict) and capability_failure:
         artifacts["capability_failure"] = dict(capability_failure)
+    latest_truth = reconcile_latest_truth_packet(
+        (parent_spec or {}).get("latest_truth") if isinstance((parent_spec or {}).get("latest_truth"), dict) else None,
+        delegated_materialization if isinstance(delegated_materialization, dict) else None,
+    )
+    if latest_truth:
+        artifacts["latest_truth"] = latest_truth
     return artifacts
 
 
@@ -796,6 +805,11 @@ def build_spawn_materialization(
     task_id: str = "",
     executed: bool = False,
     failure: dict | None = None,
+    controller_execution_id: str = "",
+    supersedes: str = "",
+    superseded_by: str = "",
+    replacement_reason: str = "",
+    latest_truth: dict | None = None,
 ) -> dict:
     return build_delegated_materialization(
         lane=route,
@@ -807,7 +821,67 @@ def build_spawn_materialization(
         session_key=session_key,
         executed=executed,
         capability_failure=failure,
+        controller_execution_id=controller_execution_id,
+        supersedes=supersedes,
+        superseded_by=superseded_by,
+        replacement_reason=replacement_reason,
+        latest_truth=latest_truth,
     )
+
+
+def reconcile_latest_truth_packet(*payloads: dict | None) -> dict:
+    subject = ""
+    version = ""
+    release = ""
+    source = ""
+    published_at = ""
+    summary = ""
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        latest_truth = payload.get("latest_truth") if isinstance(payload.get("latest_truth"), dict) else payload
+        candidate_subject = str(latest_truth.get("subject", "") or latest_truth.get("project", "") or latest_truth.get("tool", "") or "").strip()
+        candidate_version = str(latest_truth.get("version", "") or latest_truth.get("latest_version", "") or "").strip()
+        candidate_release = str(latest_truth.get("release", "") or latest_truth.get("latest_release", "") or "").strip()
+        candidate_source = str(latest_truth.get("source", "") or latest_truth.get("kind", "") or "").strip()
+        candidate_published_at = str(latest_truth.get("published_at", "") or latest_truth.get("released_at", "") or "").strip()
+        candidate_summary = str(latest_truth.get("summary", "") or latest_truth.get("reply_text", "") or "").strip()
+        if candidate_subject and not subject:
+            subject = candidate_subject
+        if candidate_version:
+            version = candidate_version
+        if candidate_release:
+            release = candidate_release
+        if candidate_source:
+            source = candidate_source
+        if candidate_published_at:
+            published_at = candidate_published_at
+        if candidate_summary:
+            summary = candidate_summary
+    if not any([subject, version, release, source, published_at, summary]):
+        return {}
+    return {
+        "subject": subject,
+        "version": version,
+        "release": release,
+        "source": source,
+        "published_at": published_at,
+        "summary": summary,
+    }
+
+
+def execution_chain_source(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    artifacts = payload.get("artifacts", {}) if isinstance(payload.get("artifacts"), dict) else {}
+    replacement_chain = artifacts.get("replacement_chain", {}) if isinstance(artifacts.get("replacement_chain"), dict) else {}
+    delegated_materialization = payload.get("materialization", {}) if isinstance(payload.get("materialization"), dict) else {}
+    return {
+        "controller_execution_id": str(payload.get("controller_execution_id", "") or replacement_chain.get("controller_execution_id", "") or delegated_materialization.get("controller_execution_id", "") or "").strip(),
+        "supersedes": str(payload.get("supersedes", "") or replacement_chain.get("supersedes", "") or delegated_materialization.get("supersedes", "") or "").strip(),
+        "superseded_by": str(payload.get("superseded_by", "") or replacement_chain.get("superseded_by", "") or delegated_materialization.get("superseded_by", "") or "").strip(),
+        "replacement_reason": str(payload.get("replacement_reason", "") or replacement_chain.get("replacement_reason", "") or delegated_materialization.get("replacement_reason", "") or "").strip(),
+    }
 
 
 def build_runner_handoff(task: str, payload: dict, wait: dict | None) -> dict:
@@ -1770,7 +1844,16 @@ def recommend_multi_spawn(args, task: str) -> dict:
     materialization = dict(execution.get("materialization", {})) if isinstance(execution.get("materialization"), dict) and execution.get("materialization") else {}
     if materialization and not str(materialization.get("session_key", "") or "").strip():
         materialization["session_key"] = str(octoclaw_identity_fields(decision).get("session_key", "") or "")
+    chain = execution_chain_source(execution)
+    if materialization:
+        for key, value in chain.items():
+            if value and not str(materialization.get(key, "") or "").strip():
+                materialization[key] = value
+        latest_truth = reconcile_latest_truth_packet(materialization, execution)
+        if latest_truth:
+            materialization["latest_truth"] = latest_truth
     primary_spawn["capability_failure"] = capability_failure
+    primary_spawn.update(chain)
     primary_spawn["materialization"] = materialization if materialization else build_spawn_materialization(
         route="spawn_multi",
         execution_contract="coordinated_work",
@@ -1778,7 +1861,13 @@ def recommend_multi_spawn(args, task: str) -> dict:
         task_id=str(primary_spawn.get("task_id", "") or ""),
         executed=bool(execution.get("executed", False)),
         failure=capability_failure,
+        controller_execution_id=str(chain.get("controller_execution_id", "") or ""),
+        supersedes=str(chain.get("supersedes", "") or ""),
+        superseded_by=str(chain.get("superseded_by", "") or ""),
+        replacement_reason=str(chain.get("replacement_reason", "") or ""),
+        latest_truth=reconcile_latest_truth_packet(execution if isinstance(execution, dict) else None),
     )
+    primary_spawn["latest_truth"] = reconcile_latest_truth_packet(primary_spawn.get("materialization"), execution)
     register_multi_parent_task(
         task=task,
         parent_spec=primary_spawn,
@@ -1806,6 +1895,7 @@ def recommend_multi_spawn(args, task: str) -> dict:
         "steps": execution.get("steps", []),
         "capability_failure": capability_failure,
         "materialization": dict(primary_spawn.get("materialization", {})) if isinstance(primary_spawn.get("materialization"), dict) else {},
+        "latest_truth": reconcile_latest_truth_packet(primary_spawn.get("materialization"), execution),
         "spawn_spec": primary_spawn,
         "dispatch_key": str(getattr(args, "_dispatch_key", "") or ""),
         "lane_key": str(getattr(args, "_lane_key", "") or ""),

@@ -255,6 +255,38 @@ class RuntimeTaskRecordTests(unittest.TestCase):
         self.assertEqual(payload["openclaw_flow_kind"], "one_task")
         self.assertEqual(payload["artifacts"]["openclaw_taskflow"]["task_id"], "native-task-3")
 
+    def test_normalize_promotes_replacement_chain_and_latest_truth(self) -> None:
+        payload = normalize_task_record(
+            {
+                "id": "replacement-1",
+                "status": "done",
+                "summary": "replacement completed",
+                "route": "spawn_single",
+                "runtime": "subagent",
+                "worker_pool": "octoclaw-research",
+                "artifacts": {
+                    "delegated_materialization": {
+                        "controller_execution_id": "exec-1",
+                        "supersedes": "task-old",
+                        "superseded_by": "task-new",
+                        "replacement_reason": "resident_runner_restart",
+                        "latest_truth": {
+                            "subject": "openclaw",
+                            "version": "1.5.1",
+                            "source": "github_api",
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(payload["controller_execution_id"], "exec-1")
+        self.assertEqual(payload["supersedes"], "task-old")
+        self.assertEqual(payload["superseded_by"], "task-new")
+        self.assertEqual(payload["replacement_reason"], "resident_runner_restart")
+        self.assertEqual(payload["latest_truth"]["version"], "1.5.1")
+        self.assertEqual(payload["artifacts"]["replacement_chain"]["supersedes"], "task-old")
+
     def test_normalize_native_session_without_session_key_is_not_marked_degraded(self) -> None:
         payload = normalize_task_record(
             {

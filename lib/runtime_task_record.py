@@ -92,6 +92,49 @@ def _normalized_int(value: Any) -> int:
         return 0
 
 
+def _normalized_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _replacement_fields(task: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, str]:
+    source = {}
+    source.update(_normalized_dict(artifacts.get("replacement_chain")))
+    delegated = _normalized_dict(artifacts.get("delegated_materialization"))
+    source.update({
+        "controller_execution_id": delegated.get("controller_execution_id"),
+        "supersedes": delegated.get("supersedes"),
+        "superseded_by": delegated.get("superseded_by"),
+        "replacement_reason": delegated.get("replacement_reason"),
+    })
+    for key in ("controller_execution_id", "supersedes", "superseded_by", "replacement_reason"):
+        value = task.get(key)
+        if value not in (None, "", [], {}):
+            source[key] = value
+    return {
+        "controller_execution_id": _normalized_str(source.get("controller_execution_id")),
+        "supersedes": _normalized_str(source.get("supersedes")),
+        "superseded_by": _normalized_str(source.get("superseded_by")),
+        "replacement_reason": _normalized_str(source.get("replacement_reason")),
+    }
+
+
+def _latest_truth_payload(task: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, Any]:
+    explicit = _normalized_dict(task.get("latest_truth"))
+    artifact_payload = _normalized_dict(artifacts.get("latest_truth"))
+    delegated_payload = _normalized_dict(_normalized_dict(artifacts.get("delegated_materialization")).get("latest_truth"))
+    merged = {**artifact_payload, **delegated_payload, **explicit}
+    if not merged:
+        return {}
+    return {
+        "subject": _normalized_str(merged.get("subject")),
+        "version": _normalized_str(merged.get("version")),
+        "release": _normalized_str(merged.get("release")),
+        "source": _normalized_str(merged.get("source")),
+        "published_at": _normalized_str(merged.get("published_at")),
+        "summary": _normalized_str(merged.get("summary")),
+    }
+
+
 def _has_materialization_fact(payload: dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -719,6 +762,14 @@ def normalize_task_record(task: dict[str, Any]) -> dict[str, Any]:
     normalized["retry_count"] = int(retry_count or 0) if str(retry_count or "").strip() else 0
     normalized["expected_done_at"] = _normalized_str(normalized.get("expected_done_at"))
     artifacts = merge_artifacts(normalized)
+    replacement_fields = _replacement_fields(normalized, artifacts)
+    normalized.update(replacement_fields)
+    if any(replacement_fields.values()):
+        artifacts["replacement_chain"] = replacement_fields
+    latest_truth = _latest_truth_payload(normalized, artifacts)
+    normalized["latest_truth"] = latest_truth
+    if latest_truth:
+        artifacts["latest_truth"] = latest_truth
     if not normalized["report_path"]:
         normalized["report_path"] = _normalized_str(artifacts.get("report_path"))
     delegated_materialization = normalize_delegated_materialization(

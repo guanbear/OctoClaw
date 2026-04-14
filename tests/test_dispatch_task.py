@@ -548,6 +548,71 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
         self.assertEqual(result["capability_failure"]["reason"], "spawn_backend_unavailable")
         self.assertEqual(result["handoff"]["status"], "failed")
 
+    def test_reconcile_latest_truth_packet_prefers_single_latest_version(self) -> None:
+        packet = dispatch_task.reconcile_latest_truth_packet(
+            {"latest_truth": {"subject": "openclaw", "version": "1.5.0", "source": "local_cli"}},
+            {"latest_truth": {"subject": "openclaw", "version": "1.5.1", "release": "v1.5.1", "source": "github_api"}},
+        )
+
+        self.assertEqual(packet["subject"], "openclaw")
+        self.assertEqual(packet["version"], "1.5.1")
+        self.assertEqual(packet["release"], "v1.5.1")
+        self.assertEqual(packet["source"], "github_api")
+
+    def test_recommend_multi_spawn_propagates_execution_chain_and_latest_truth(self) -> None:
+        primary_decision = {
+            "route_decision": {
+                "route": "spawn_multi",
+                "worker_pool": "octoclaw-code",
+                "work_type": "code",
+                "phase": "implement",
+                "protocol": "normal",
+            },
+            "model_policy": {
+                "model_band": "heavy",
+                "selector_band": "heavy",
+                "selected_model": "model/primary",
+                "profile": "code",
+            },
+            "review_policy": {"required": False},
+        }
+        args = argparse.Namespace(model_band="", id="parent-2", _policy_decision=primary_decision)
+        primary_spawn = {
+            "task_id": "team-root",
+            "model": "model/primary",
+            "model_band": "heavy",
+            "selector_band": "heavy",
+            "profile": "code",
+            "worker_pool": "octoclaw-code",
+            "work_type": "code",
+            "phase": "implement",
+            "report_path": "/tmp/team-root.md",
+            "handoff": {"kind": "plan", "status": "planned", "reply_text": "", "summary": "", "report_path": "", "user_safe": True},
+        }
+        execution = {
+            "executed": False,
+            "steps": [],
+            "handoff": {"kind": "plan", "status": "planned", "reply_text": "", "summary": "", "report_path": "", "user_safe": True},
+            "controller_execution_id": "exec-parent-1",
+            "supersedes": "team-root-old",
+            "superseded_by": "team-root-new",
+            "replacement_reason": "replacement_success",
+            "latest_truth": {"subject": "openclaw", "version": "1.5.1", "source": "github_api"},
+            "materialization": {"latest_truth": {"subject": "openclaw", "version": "1.5.1", "source": "github_api"}},
+        }
+
+        with (
+            patch.object(dispatch_task, "build_spawn_spec", return_value=primary_spawn),
+            patch.object(dispatch_task, "execute_multi_spawn_plan", return_value=execution),
+            patch.object(dispatch_task, "register_multi_parent_task"),
+        ):
+            payload = dispatch_task.recommend_multi_spawn(args, "Fix and verify a failing workflow")
+
+        self.assertEqual(payload["materialization"]["controller_execution_id"], "exec-parent-1")
+        self.assertEqual(payload["materialization"]["supersedes"], "team-root-old")
+        self.assertEqual(payload["materialization"]["superseded_by"], "team-root-new")
+        self.assertEqual(payload["latest_truth"]["version"], "1.5.1")
+
     def test_main_requires_precomputed_policy_decision_by_default(self) -> None:
         stdout = io.StringIO()
         with (
