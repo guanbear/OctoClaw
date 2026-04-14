@@ -6,10 +6,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from lib import send_pre_dispatch_ack
 from lib import session_ops
 
 
 class SessionOpsMessageSendTests(unittest.TestCase):
+    @patch("lib.send_pre_dispatch_ack.send_channel_message")
+    @patch("lib.send_pre_dispatch_ack.resolve_session_binding", return_value={})
+    def test_pre_dispatch_ack_requires_canonical_binding(self, _mock_binding, mock_send) -> None:
+        result = send_pre_dispatch_ack._resolve_target("agent:main:slack:default:direct:u0al9t5u89z")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("canonical", result["error"])
+        mock_send.assert_not_called()
+
     @patch("lib.session_ops.has_openclaw_cli", return_value=True)
     @patch("lib.session_ops.subprocess.run")
     def test_gateway_call_uses_gateway_token_from_env(self, mock_run, _mock_cli) -> None:

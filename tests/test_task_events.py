@@ -14,6 +14,7 @@ from lib.task_events import (
     register_session_binding,
     resolve_session_binding,
     summarize_task_events,
+    task_event_payload,
     task_event_snapshot,
 )
 
@@ -121,6 +122,28 @@ class TaskEventsTests(unittest.TestCase):
         route = _fallback_route_from_session_key("agent:main:discord:channel:123456")
         self.assertEqual(route["origin"], "discord")
         self.assertEqual(route["target"], "channel:123456")
+
+    def test_task_event_payload_persists_ack_fields_from_task_and_extra(self) -> None:
+        payload = task_event_payload(
+            {
+                "id": "task-ack-1",
+                "session_key": "agent:main:slack:channel:C123:thread:1712345.000100",
+                "ack_owner": "timer_ack",
+                "ack_kind": "pre_dispatch",
+            },
+            "delivery_sent",
+            extra={
+                "ack_mode": "channel_message",
+                "ack_target_resolution_state": "resolved",
+                "ack_delivery_state": "skipped",
+            },
+        )
+
+        self.assertEqual(payload["ack_owner"], "timer_ack")
+        self.assertEqual(payload["ack_kind"], "pre_dispatch")
+        self.assertEqual(payload["ack_mode"], "channel_message")
+        self.assertEqual(payload["ack_target_resolution_state"], "resolved")
+        self.assertEqual(payload["ack_delivery_state"], "skipped")
 
 
 if __name__ == "__main__":

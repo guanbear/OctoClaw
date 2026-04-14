@@ -7,10 +7,10 @@ import argparse
 import json
 
 try:
-    from session_ops import resolve_message_target_from_session_key, send_channel_message
+    from session_ops import send_channel_message
     from task_events import resolve_session_binding
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
-    from lib.session_ops import resolve_message_target_from_session_key, send_channel_message
+    from lib.session_ops import send_channel_message
     from lib.task_events import resolve_session_binding
 
 
@@ -22,7 +22,11 @@ def _resolve_target(session_key: str) -> dict:
         thread_id = str(binding.get("thread_id") or "").strip()
         if origin and target:
             return {"ok": True, "origin": origin, "target": target, "thread_id": thread_id}
-    return resolve_message_target_from_session_key(session_key)
+    return {
+        "ok": False,
+        "error": "unresolvable canonical session target",
+        "session_key": session_key,
+    }
 
 
 def main() -> None:

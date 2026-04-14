@@ -71,6 +71,14 @@ def _append_unique(items: list[str], value: str) -> list[str]:
     return items
 
 
+def _first_non_empty(*values: Any) -> str:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
+    return ""
+
+
 def _strip_agent_prefix(session_key: str) -> str:
     raw = _text(session_key)
     if not raw:
@@ -327,6 +335,7 @@ def register_session_binding(
 
 def task_event_payload(task: dict[str, Any], kind: str, *, message: str = "", extra: dict[str, Any] | None = None) -> dict[str, Any]:
     raw_task = task if isinstance(task, dict) else {}
+    extra_payload = extra if isinstance(extra, dict) else {}
     payload = {
         "schema_version": TASK_EVENT_SCHEMA_VERSION,
         "time": now_iso(),
@@ -358,13 +367,21 @@ def task_event_payload(task: dict[str, Any], kind: str, *, message: str = "", ex
         "blocked_reason": _text(raw_task.get("blocked_reason")),
         "report_path": _text(raw_task.get("report_path")),
         "model": _text(raw_task.get("model")),
+        "ack_owner": _first_non_empty(extra_payload.get("ack_owner"), raw_task.get("ack_owner"), raw_task.get("ackOwner")),
+        "ack_kind": _first_non_empty(extra_payload.get("ack_kind"), raw_task.get("ack_kind")),
+        "ack_mode": _first_non_empty(extra_payload.get("ack_mode"), raw_task.get("ack_mode")),
+        "ack_target_resolution_state": _first_non_empty(
+            extra_payload.get("ack_target_resolution_state"),
+            raw_task.get("ack_target_resolution_state"),
+        ),
+        "ack_delivery_state": _first_non_empty(extra_payload.get("ack_delivery_state"), raw_task.get("ack_delivery_state")),
     }
-    binding = session_binding_from_route(payload["session_key"], extra.get("resolved_target") if isinstance(extra, dict) else None)
+    binding = session_binding_from_route(payload["session_key"], extra_payload.get("resolved_target"))
     payload["session_thread_key"] = _text(binding.get("thread_key"))
     payload["target"] = _text(binding.get("target"))
     payload["thread_id"] = _text(binding.get("thread_id"))
-    if isinstance(extra, dict):
-        payload.update({key: value for key, value in extra.items() if value not in (None, "")})
+    if extra_payload:
+        payload.update({key: value for key, value in extra_payload.items() if value not in (None, "")})
     return payload
 
 
