@@ -223,20 +223,48 @@ ACK 前移到 gateway / ingress：
 - timer 不依赖 active-memory
 - timer 不依赖 judge 完成
 
-推荐阈值：
+推荐阈值不应该是单一固定值，而应该按 lane 分级：
 
-- 300-500ms：开始计时
-- 800ms：若还无可见回复，发送 neutral ACK
+- `0ms`：记录 ingress start，启动 ACK timer
+- `1.2s`：如果最终 lane 是 `runner / spawn_single / spawn_multi`，且 아직没有可见回复，则发送第一条 ACK
+- `2.5s`：如果最终 lane 是 `direct` 且属于 `control_observer / session_control / local_surface_lookup`，且 아직没有可见回复，则发送第一条 ACK
+- `5s`：无论 lane 是什么，只要仍没有用户可见回复，必须有一条兜底 ACK 或 progress note
+
+解释：
+
+- `800ms` 作为统一阈值过于激进，容易把正常稍慢的 direct 回答也变成“每条都先 ACK”。
+- `runner / spawn` 的用户预期本来就是“要去后台查/派发”，因此 1-1.2s 就应该 ACK。
+- `direct` lane 尤其是状态类问题，2-3s 内给出 ACK 更符合 Slack 实际体感，也不会把系统做成“每条都抢着发 ACK”。
+- `5s` 应作为硬上限，不允许继续沉默。
 
 ### 7.2 ACK 类型
 
-只有三类：
+ACK 文案必须是**有限模板集**，不是自由生成，也不是每个 case 手写特判。
 
-- `brief_status`：`我先看一下，马上给你结论。`
-- `dispatch_status`：`我先派发处理，稍后给你结果。`
-- `state_lookup_status`：`我先看一下当前状态，马上回复你。`
+只允许以下模板：
 
-ACK 文案由 controller/ledger 状态决定，不由主 agent 自由生成。
+- `brief_status`
+  - `我先看一下，马上给你结论。`
+- `dispatch_status`
+  - `我先派发处理，稍后给你结果。`
+- `state_lookup_status`
+  - `我先看一下当前状态，马上回复你。`
+- `live_lookup_status`
+  - `我先看一下最新更新，马上给你结论。`
+
+选择规则：
+
+- `runner + fresh_live_lookup` -> `live_lookup_status`
+- `runner + generic inspect / spawn_*` -> `dispatch_status`
+- `direct + control_observer / session_control / local_surface_lookup` -> `state_lookup_status`
+- 其他 direct 慢回复 -> `brief_status`
+
+额外约束：
+
+- 同一 turn 最多只允许一个 **user-visible** ACK owner
+- `pre_dispatch ACK` 成功后，必须取消 2s / 15s guard timer
+- `timer ACK` 触发后，后续不允许再补一条语义重复的 eager ACK
+- 如果发送失败，允许写 ledger，但不允许再次生成第二种文案去“碰碰运气”
 
 ### 7.3 ACK target truth
 
@@ -247,6 +275,14 @@ ACK target 只能来自 canonical binding：
 - normalized `target/thread_id`
 
 不允许直接依赖不稳定的 session key 字符串切片。
+
+实现约束：
+
+- 统一由一处 resolver 负责：
+  - 输入：session key / session id / thread key / binding key
+  - 输出：`origin + target + thread_id`
+- 任何调用 `sendAckDirect`、`send_channel_message`、completion relay 的代码都必须走这一 resolver
+- 不允许再保留第二套“只会切 `slack:default:direct:*` 字符串”的 ACK 专用解析器
 
 ---
 
@@ -335,6 +371,49 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 
 主 agent 只接收已经收敛后的 failure packet。
 
+### 11.1 runner / spawn 超时与重试要求
+
+这部分必须显式设计，不能继续隐含在各种 shell loop、heartbeat、watchdog 里。
+
+#### runner
+
+- `dispatch_timeout`
+  - 含义：controller 启动 runner dispatch 后，在限定时间内没有拿到 task registration / queue evidence
+  - 动作：标记 `dispatch_failed`
+  - fallback：直接进入 `main_agent_handoff_packet` 或 `retry_once`
+
+- `queue_timeout`
+  - 含义：task 已进入 queued，但在 `queue_timeout_seconds` 内没有 claim
+  - 动作：标记 `task_timed_out`
+  - fallback：如果 resident runner 不健康 -> 切 `ondemand`; 否则按 retry budget 重排一次
+
+- `running_timeout`
+  - 含义：claim 成功后超过 `lease_timeout_seconds`
+  - 动作：标记 `runner_lease_expired`
+  - fallback：按 failure taxonomy 决定 `retry_runner` / `fallback_main`
+
+#### spawn_single / spawn_multi
+
+- `spawn_bootstrap_timeout`
+  - 含义：spawn command 已发出，但 child session / task registration 没有出现
+  - 动作：标记 `spawn_bootstrap_failed`
+  - fallback：直接回主 agent，不要无限等
+
+- `spawn_execution_timeout`
+  - 含义：child 已 running，但超过预算无 terminal result
+  - 动作：标记 `spawn_execution_timeout`
+  - fallback：生成主 agent correction packet，总结目前已知事实
+
+#### 统一原则
+
+- timeout 必须写 execution ledger
+- timeout 必须进入 lifecycle truth，而不是只打日志
+- timeout 不能只靠 watchdog 兜底；dispatch/controller 自身就要有 deadline
+- 主 agent 接到 fallback packet 后，应该知道：
+  - 卡在哪一阶段
+  - 已经尝试了哪些 fallback
+  - 现在建议怎么回复用户
+
 ---
 
 ## 12. 实施优先级
@@ -368,12 +447,24 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 - Slack DM 收到消息后 1s 内必须有可见 ACK 或直接答案
 - `ack_sent` 必须落 ledger
 - ACK target resolution failure 必须可观测
+- 同一 turn 不允许出现双 ACK 文案
+- replay 中必须能看到：
+  - `ack_owner`
+  - `ack_kind`
+  - `ack_mode`
+  - `ack_target_resolution_state`
+  - `ack_delivery_state`
 
 ### Runner / spawn
 
 - “已派发”必须有 dispatch evidence
 - runner queue / claim / running 必须连贯
 - spawn/native command 参数要做 capability probe，不允许再出现固定 flag mismatch
+- `queued` 超时、`running` 超时、`spawn bootstrap` 超时都必须进入 task lifecycle truth
+- 不允许出现：
+  - task-state 仍是 `queued`
+  - runner-queue 已空
+  - 但系统继续声称“任务已派发正常”
 
 ### Main agent
 
@@ -524,3 +615,239 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 1. 生产 acceptance 仪表盘
 2. ACK / dispatch / delivery latency 分段指标
 3. taskflow substrate 健康面板
+
+---
+
+## 17. 实施清单（给另一个 AI 的明确修改说明）
+
+本节不是方向描述，而是“应该改哪些文件、每个文件要承担什么修改”。
+
+### Workstream A：ACK ingress 与 target resolution
+
+目标：
+
+- ACK 不再依赖主 agent
+- ACK target 解析唯一化
+- 消除双 ACK
+
+主要文件：
+
+- [extensions/octoclaw-runtime/index.js](../extensions/octoclaw-runtime/index.js)
+- [lib/session_ops.py](../lib/session_ops.py)
+- [lib/task_events.py](../lib/task_events.py)
+- [tests/test_octoclaw_runtime_extension.py](../tests/test_octoclaw_runtime_extension.py)
+- [tests/test_session_ops.py](../tests/test_session_ops.py)
+
+必须修改：
+
+1. 删除或废弃 ACK 专用的第二套 Slack target 解析逻辑
+2. 将 `resolveAckTargetFromSessionKey` 改成 canonical binding first
+3. 给每个 turn 增加 `ack_owner`
+4. `scheduleEagerPreDispatchAck` 与 ACK guard 统一抢 owner：
+   - 一方成功后另一方必须取消
+5. replay 中明确写：
+   - `ack_owner`
+   - `ack_delivery_state`
+   - `ack_target_resolution_state`
+
+验收：
+
+- 对 `agent:main:slack:default:direct:u...` 能稳定解析成 `user:U...`
+- 同一 turn Slack 上只出现一条 ACK
+- replay 中不存在“ack_sent=true 且随后又有第二种 ackKind”的情况
+
+### Workstream B：front gate / intent packet
+
+目标：
+
+- 高置信中文状态类 / 新鲜查询类问题在 front gate 就进对的 lane
+
+主要文件：
+
+- [extensions/octoclaw-runtime/policy/intent.js](../extensions/octoclaw-runtime/policy/intent.js)
+- [extensions/octoclaw-runtime/policy/route.js](../extensions/octoclaw-runtime/policy/route.js)
+- [tests/test_octoclaw_runtime_extension.py](../tests/test_octoclaw_runtime_extension.py)
+- [tests/test_runtime_policy.py](../tests/test_runtime_policy.py)
+
+必须修改：
+
+1. `runtime_model` 作为 operator surface 注册
+2. 版本号 + 新特性 / release notes / 更新内容 类句式稳定进入 `fresh_live_lookup`
+3. `intent_packet.available` 不能因为空对象而短路 deterministic route features
+4. control-observer / local-surface / fresh-live-lookup 三者的优先级要清楚：
+   - 当前模型 / 当前版本 / 当前状态 -> local surface / control observer
+   - 版本特性 / 发布说明 / 上游更新 -> fresh live lookup
+
+验收：
+
+- `你现在到底是啥模型` -> `local_surface_lookup`
+- `帮我查下openclaw 4.12 的新特性` -> `fresh_live_lookup`
+- `你是怎么查的` / `刚才single成功了吗` -> `execution_followup`
+
+### Workstream C：judge-applied route 语义收敛
+
+目标：
+
+- 一旦最终 route 变成 runner/spawn，task semantic 也必须一起切过去
+
+主要文件：
+
+- [extensions/octoclaw-runtime/policy/decide.js](../extensions/octoclaw-runtime/policy/decide.js)
+- [lib/octoclaw_policy.py](../lib/octoclaw_policy.py)
+- [tests/test_octoclaw_runtime_extension.py](../tests/test_octoclaw_runtime_extension.py)
+
+必须修改：
+
+1. `policyJudgeApplyState` 成功后，如果 final route != base route：
+   - 同步覆盖 `task_class`
+   - `work_contract`
+   - `work_type`
+   - `phase`
+   - `worker_pool`
+2. `preDispatchAckPolicy` 不能再只看旧 taskClass
+3. `runner` lane 的 direct-answer 残留语义必须消失
+
+验收：
+
+- 不再出现 `route=runner` 但 `taskClass=direct_answer`
+- `fresh_external_lookup` 最终一定收敛成 `fast_tool_check + inspect_report`
+
+### Workstream D：runner / spawn capability negotiation
+
+目标：
+
+- controller 不再假设 helper / OpenClaw CLI 支持某个参数
+
+主要文件：
+
+- [lib/task-state-update.py](../lib/task-state-update.py)
+- [lib/dispatch_task.py](../lib/dispatch_task.py)
+- [lib/runner_dispatch.py](../lib/runner_dispatch.py)
+- [lib/octoclaw_spawn.py](../lib/octoclaw_spawn.py)
+- [tests/test_task_state_update.py](../tests/test_task_state_update.py)
+- [tests/test_dispatch_task.py](../tests/test_dispatch_task.py)
+- [tests/test_octoclaw_spawn.py](../tests/test_octoclaw_spawn.py)
+
+必须修改：
+
+1. `task-state-update.py upsert` 与 dispatch 协议字段对齐
+2. native spawn 只在 CLI 支持时传 `--model` / `--thinking`
+3. runner goal / runner playbook 使用的 OpenClaw CLI flag 必须 capability probe
+4. 任何 `unknown option ...` 都要进入 capability failure taxonomy，而不是静默失败
+
+验收：
+
+- 不再出现 `task-state-update.py 不认 --dispatch-key ...`
+- 不再出现 `unknown option '--model'`
+- 不再出现 `unknown option '--no-confirm'`
+
+### Workstream E：resident runner truth
+
+目标：
+
+- 明确 resident vs ondemand，不再拿旧 on-demand heartbeat 充当 resident runner 健康状态
+
+主要文件：
+
+- [lib/dispatch_task.py](../lib/dispatch_task.py)
+- [lib/runner_dispatch.py](../lib/runner_dispatch.py)
+- [lib/runner_queue.py](../lib/runner_queue.py)
+- [lib/runtime_snapshot.py](../lib/runtime_snapshot.py)
+- [lib/runner_loop.sh](../lib/runner_loop.sh)
+- [tests/test_dispatch_task.py](../tests/test_dispatch_task.py)
+- [tests/test_runner_runtime.py](../tests/test_runner_runtime.py)
+
+必须修改：
+
+1. 增加明确的 runner mode state：
+   - `resident`
+   - `ondemand`
+2. resident runner 要有独立健康状态文件或 mode 标记
+3. queue 为空但 task-state queued 时，必须进入 `lost / timed_out / dispatch_failed` 之一
+4. 如果继续用 tmux resident 模式：
+   - gateway restart 后自动恢复 worker
+   - worker context reset per job
+
+验收：
+
+- `queued` 任务不再无限增长 `task_timed_out`
+- 不再出现“runner_health_snapshot=ok，但实际没有可 claim worker”
+
+### Workstream F：mirror / native binding truth
+
+目标：
+
+- 不再把 `mirror-only` 当 `native-bound`
+
+主要文件：
+
+- [lib/openclaw_taskflow_adapter.py](../lib/openclaw_taskflow_adapter.py)
+- [lib/runtime_task_record.py](../lib/runtime_task_record.py)
+- [lib/runtime_snapshot.py](../lib/runtime_snapshot.py)
+- [lib/task-state-update.py](../lib/task-state-update.py)
+
+必须修改：
+
+1. binding_state 分层：
+   - `mirror_only`
+   - `mirror_with_match`
+   - `native_bound`
+2. UI / provenance / observer 只能消费真实 binding truth
+3. `task_id/flow_id` 为空时，不能展示成已经绑定原生 substrate
+
+验收：
+
+- `native_binding_state=none` 时，surface 文案必须明确是 mirror-only
+
+---
+
+## 18. 回归与上线验收（必须逐条执行）
+
+### 18.1 离线测试
+
+至少运行：
+
+```bash
+pytest tests/test_runtime_policy.py
+pytest tests/test_octoclaw_runtime_extension.py
+pytest tests/test_dispatch_task.py
+pytest tests/test_task_state_update.py
+pytest tests/test_octoclaw_spawn.py
+pytest tests/test_runner_runtime.py
+```
+
+### 18.2 运行目录验证
+
+必须确认安装目录中的真实运行文件已经同步：
+
+- `~/.openclaw/extensions/octoclaw-runtime`
+- `~/.openclaw/workspace/openclaw/skills/octopus`
+
+### 18.3 线上 Slack 验收句子
+
+至少用真实 DM 发送并观察：
+
+1. `你现在到底是啥模型`
+2. `你是怎么查的`
+3. `不是 刚才single成功了吗`
+4. `你用runner查下openclaw的新版本是啥 以及新特性 看看可以吗`
+
+验收期望：
+
+- 1s 内有 ACK 或直接答案
+- 第 4 条必须进入 runner
+- ACK 不允许双发
+- replay 中 ACK 必须可观测
+- dispatch 必须有 `dispatch_called`
+- runner 必须有 queue/claim/running/terminal 证据
+
+### 18.4 失败判据
+
+任一出现都算未通过：
+
+- `pre_dispatch_ack_attempted` 但 target resolution 仍失败
+- Slack 出现两条语义重复 ACK
+- `route=runner` 但无 `dispatch_called`
+- `dispatch_called` 后 queue 中无对应 job，task-state 却长期 `queued`
+- native-spawn stderr 再出现 `unknown option '--model'`
+- runner goal stderr 再出现 `unknown option '--no-confirm'`
