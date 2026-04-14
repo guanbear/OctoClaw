@@ -1143,17 +1143,33 @@ function stateGroundingPolicy(routeMeta, route, taskClass) {
 }
 
 function latencyAckPolicy(route, taskClass, features = {}) {
+  const directStateLookup = Boolean(
+    features.local_state_hits
+    || features.session_control_hits
+    || features.model_reference_hits
+    || features.runner_hits
+  );
   const required = (
     route === "direct"
     && taskClass !== "control_observer"
-    && taskClass !== "session_control"
-    && Boolean(features.external_lookup_only || features.bounded_repo_update_lookup || features.fresh_live_lookup || features.local_product_help_lookup)
+    && Boolean(
+      features.external_lookup_only
+      || features.bounded_repo_update_lookup
+      || features.fresh_live_lookup
+      || features.local_product_help_lookup
+      || taskClass === "session_control"
+      || (taskClass === "direct_answer" && directStateLookup)
+    )
   );
   const text = !required
     ? ""
-    : (features.bounded_repo_update_lookup || features.fresh_live_lookup
-      ? "我先看一下最新更新，马上给你结论。"
-      : (features.local_product_help_lookup ? "我先查一下用法，马上给你结论。" : "我先查一下，马上给你结论。"));
+    : (
+      taskClass === "session_control" || (taskClass === "direct_answer" && directStateLookup)
+        ? "我先看一下当前状态，马上回复你。"
+        : (features.bounded_repo_update_lookup || features.fresh_live_lookup
+          ? "我先看一下最新更新，马上给你结论。"
+          : (features.local_product_help_lookup ? "我先查一下用法，马上给你结论。" : "我先查一下，马上给你结论。"))
+    );
   return {
     required,
     style: "brief_status",

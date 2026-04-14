@@ -98,7 +98,11 @@ def has_auto_policy(policy: dict | None) -> bool:
 def policy_generation_marker(policy: dict | None) -> str:
     if not isinstance(policy, dict):
         return ""
-    return str(policy.get("generated_at", "") or "").strip()
+    main_model = str(policy.get("main_model", "") or "").strip()
+    worker_pools = policy.get("worker_pools", {}) if isinstance(policy.get("worker_pools", {}), dict) else {}
+    main_pool = str(worker_pools.get("octoclaw-main", "") or "").strip()
+    generated_at = str(policy.get("generated_at", "") or "").strip()
+    return "|".join(part for part in (generated_at, main_model, main_pool) if part)
 
 
 def selector_key(
@@ -257,6 +261,11 @@ def resolve_auto_policy_model(
     profiles = policy.get("profiles", {})
     worker_pool_phases = policy.get("worker_pool_phases", {})
     worker_pools = policy.get("worker_pools", {})
+    main_model = str(policy.get("main_model", "") or "").strip()
+    if route == "direct" and main_model:
+        return main_model
+    if worker_pool == "octoclaw-main" and main_model:
+        return main_model
     if profile and isinstance(profiles, dict):
         profile_model = profiles.get(profile)
         if isinstance(profile_model, str) and profile_model:
@@ -271,11 +280,6 @@ def resolve_auto_policy_model(
         pool_model = worker_pools.get(worker_pool)
         if isinstance(pool_model, str) and pool_model:
             return pool_model
-    main_model = str(policy.get("main_model", "") or "").strip()
-    if route == "direct" and main_model:
-        return main_model
-    if worker_pool == "octoclaw-main" and main_model:
-        return main_model
     if main_model:
         return main_model
     return None
@@ -335,6 +339,24 @@ def resolve_policy_health_fallback(selected_model: str, *, policy: dict | None =
             )
             return model_id
     return selected_model
+
+
+def should_bypass_policy_health_fallback(
+    selected_model: str,
+    *,
+    policy: dict | None = None,
+    route: str = "",
+    worker_pool: str = "",
+) -> bool:
+    if not isinstance(policy, dict):
+        return False
+    current_model = str(selected_model or "").strip()
+    if not current_model:
+        return False
+    expected_main = str(policy.get("main_model", "") or "").strip()
+    if not expected_main or current_model != expected_main:
+        return False
+    return str(route or "").strip() == "direct" or str(worker_pool or "").strip() == "octoclaw-main"
 
 
 def resolve_short_name(short_name: str, aliases_data: dict | None) -> str:
@@ -467,7 +489,12 @@ def main():
         if not full_path:
             full_path = resolve_short_name(fallback_short_name_for_selector_band(selector_band), aliases_data)
 
-    if auto_policy_active:
+    if auto_policy_active and not should_bypass_policy_health_fallback(
+        full_path,
+        policy=policy_data,
+        route=args.route,
+        worker_pool=args.worker_pool,
+    ):
         full_path = resolve_policy_health_fallback(full_path, policy=policy_data)
 
     # ── Step 4: 模型守卫降级检测 ─────────────────────────────────────────
@@ -528,7 +555,13 @@ def main():
                         profile=args.profile,
                         policy=policy_data,
                     ) or full_path
-                    band_full_path = resolve_policy_health_fallback(band_full_path, policy=policy_data)
+                    if not should_bypass_policy_health_fallback(
+                        band_full_path,
+                        policy=policy_data,
+                        route=args.route,
+                        worker_pool=args.worker_pool,
+                    ):
+                        band_full_path = resolve_policy_health_fallback(band_full_path, policy=policy_data)
                 else:
                     band_short = None
                     if mode == "custom":

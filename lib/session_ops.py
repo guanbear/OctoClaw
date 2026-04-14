@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from openclaw_paths import resolve_openclaw_config_dir, resolve_openclaw_config_path
     from task_events import register_session_binding, resolve_session_binding, _strip_agent_prefix
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.openclaw_paths import resolve_openclaw_config_dir, resolve_openclaw_config_path
     from lib.task_events import register_session_binding, resolve_session_binding, _strip_agent_prefix
 
 
@@ -24,17 +26,14 @@ def has_openclaw_cli() -> bool:
 
 
 def resolve_openclaw_home() -> Path:
-    configured = str(os.environ.get("OPENCLAW_HOME", "") or "").strip()
-    if configured:
-        return Path(os.path.expanduser(configured))
-    return Path(os.path.expanduser("~/.openclaw"))
+    return resolve_openclaw_config_dir()
 
 
 def _load_openclaw_gateway_token() -> str:
     env_token = str(os.environ.get("OPENCLAW_GATEWAY_TOKEN", "") or "").strip()
     if env_token:
         return env_token
-    config_path = resolve_openclaw_home() / "openclaw.json"
+    config_path = resolve_openclaw_config_path()
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
     except Exception:

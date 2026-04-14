@@ -27,6 +27,7 @@ from functools import lru_cache
 
 from learning_log import append_error_entry
 from context_pack import build_context_pack
+from openclaw_paths import resolve_openclaw_config_path
 from openclaw_taskflow_adapter import create_managed_taskflow_binding
 from octoclaw_route import infer_route
 from octopus_config import (
@@ -1208,7 +1209,7 @@ def derive_spawn_session_keys(team_name: str, agent_name: str) -> list[str]:
 
 
 def load_openclaw_gateway_options() -> tuple[int, str]:
-    config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+    config_path = str(resolve_openclaw_config_path())
     gateway_port = 3000
     gateway_token = ""
     try:

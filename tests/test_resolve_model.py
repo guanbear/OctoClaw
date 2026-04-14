@@ -44,6 +44,21 @@ class ResolveModelTests(unittest.TestCase):
             )
         self.assertEqual(result, "model/profile-writer")
 
+    def test_auto_policy_direct_route_prefers_main_model_over_profile(self) -> None:
+        policy = {
+            "main_model": "model/main",
+            "profiles": {
+                "research": "model/profile-research",
+            },
+        }
+        with patch.object(resolve_model, "load_json", return_value=policy):
+            result = resolve_model.resolve_auto_policy_model(
+                worker_pool="octoclaw-main",
+                route="direct",
+                profile="research",
+            )
+        self.assertEqual(result, "model/main")
+
     def test_auto_policy_worker_pool_phase_beats_pool_label_and_tier(self) -> None:
         policy = {
             "worker_pool_phases": {
@@ -86,6 +101,30 @@ class ResolveModelTests(unittest.TestCase):
                 route="direct",
             )
         self.assertEqual(result, "model/main")
+
+    def test_main_direct_model_bypasses_health_fallback(self) -> None:
+        policy = {
+            "main_model": "omniroute/cx/gpt-5.4",
+            "health": {
+                "models": {
+                    "omniroute/cx/gpt-5.4": {"state": "cooldown"},
+                    "minimax-portal/MiniMax-M2.7-highspeed": {"state": "healthy"},
+                }
+            },
+            "family_routing": {
+                "omniroute/cx/gpt-5.4": {
+                    "fallback_path": ["minimax-portal/MiniMax-M2.7-highspeed"],
+                }
+            },
+        }
+        self.assertTrue(
+            resolve_model.should_bypass_policy_health_fallback(
+                "omniroute/cx/gpt-5.4",
+                policy=policy,
+                route="direct",
+                worker_pool="octoclaw-main",
+            )
+        )
 
     def test_selector_aware_cache_does_not_fall_back_to_generic_selector_band(self) -> None:
         cache = {

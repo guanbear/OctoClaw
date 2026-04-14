@@ -461,12 +461,27 @@ class RuntimePolicyTests(unittest.TestCase):
         )
 
     def test_session_control_request_prefers_direct_protected_lane(self) -> None:
-        payload = self.run_policy("切换到 Mini Max M2.7")
+        payload = self.run_policy(
+            "切换到 Mini Max M2.7",
+            model_policy={
+                "generated_at": "2026-04-14T00:00:00Z",
+                "main_model": "omniroute/cx/gpt-5.4",
+                "profiles": {
+                    "research": "minimax-portal/MiniMax-M2.7-highspeed",
+                },
+                "worker_pools": {
+                    "octoclaw-main": "omniroute/cx/gpt-5.4",
+                },
+            },
+        )
         self.assertEqual(payload["route_decision"]["route"], "direct")
         self.assertEqual(payload["route_decision"]["task_class"], "session_control")
         self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
         self.assertEqual(payload["route_decision"]["protected_lane"], "session_control")
         self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertTrue(payload["latency_ack"]["required"])
+        self.assertIn("当前状态", payload["latency_ack"]["text"])
+        self.assertEqual(payload["model_policy"]["selected_model"], "omniroute/cx/gpt-5.4")
         self.assertFalse(payload["tool_policy"]["allow_direct_tools"])
         self.assertFalse(payload["tool_policy"]["control_observer_only"])
         self.assertTrue(payload["tool_policy"]["session_control_only"])

@@ -90,13 +90,35 @@ function resolveHomeDir() {
   return String(process.env.HOME || os.homedir() || "").trim() || os.homedir();
 }
 
-function resolveOctoClawRoot() {
+function resolveOpenClawConfigDir() {
   const homeDir = resolveHomeDir();
+  const explicitHome = String(process.env.OPENCLAW_HOME || "").trim();
+  const explicitCandidates = explicitHome
+    ? [explicitHome, path.join(explicitHome, ".openclaw")]
+    : [];
+  const resolved = firstExistingPath(
+    [
+      ...explicitCandidates,
+      path.join(homeDir, ".openclaw"),
+    ],
+    (candidate) => fsSync.existsSync(path.join(candidate, "openclaw.json")),
+  );
+  if (resolved) {
+    return resolved;
+  }
+  if (explicitHome) {
+    return path.resolve(explicitHome);
+  }
+  return path.join(homeDir, ".openclaw");
+}
+
+function resolveOctoClawRoot() {
+  const configDir = resolveOpenClawConfigDir();
   const resolved = firstExistingPath(
     [
       OCTOCLAW_ROOT_OVERRIDE,
       process.env.OCTOCLAW_ROOT,
-      path.join(homeDir, ".openclaw", "workspace", "openclaw", "skills", "octopus"),
+      path.join(configDir, "workspace", "openclaw", "skills", "octopus"),
       path.resolve(__dirname, "..", ".."),
     ],
     (candidate) => fsSync.existsSync(path.join(candidate, "lib")),
@@ -110,7 +132,7 @@ function resolveScript(...parts) {
 
 function resolveWorkspaceRoot() {
   const root = resolveOctoClawRoot();
-  const homeDir = resolveHomeDir();
+  const configDir = resolveOpenClawConfigDir();
   const explicit = firstExistingPath(
     [
       WORKSPACE_ROOT_OVERRIDE,
@@ -123,7 +145,7 @@ function resolveWorkspaceRoot() {
   const resolved = firstExistingPath(
     [
       root ? path.resolve(root, "..", "..", "..") : "",
-      path.join(homeDir, ".openclaw", "workspace"),
+      path.join(configDir, "workspace"),
     ],
     (candidate) => fsSync.existsSync(path.join(candidate, "tmp")),
   );
@@ -162,11 +184,11 @@ function resolvePolicyStateLedgerPath() {
 }
 
 function resolveRootSessionsPath() {
-  return path.join(resolveHomeDir(), ".openclaw", "sessions.json");
+  return path.join(resolveOpenClawConfigDir(), "sessions.json");
 }
 
 function resolveMainAgentSessionsPath() {
-  return path.join(resolveHomeDir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+  return path.join(resolveOpenClawConfigDir(), "agents", "main", "sessions", "sessions.json");
 }
 
 function runCommand(command, args, options = {}) {

@@ -855,14 +855,30 @@ def state_grounding_policy(route_meta: dict[str, Any], route: str, task_class: s
 
 
 def latency_ack_policy(route: str, task_class: str, features: dict[str, Any]) -> dict[str, Any]:
+    direct_state_lookup = bool(
+        features.get("local_state_hits")
+        or features.get("session_control_hits")
+        or features.get("model_reference_hits")
+        or features.get("runner_hits")
+    )
     required = (
         route == "direct"
-        and task_class not in {"control_observer", "session_control"}
-        and bool(features.get("external_lookup_only") or features.get("bounded_repo_update_lookup"))
+        and task_class != "control_observer"
+        and bool(
+            features.get("external_lookup_only")
+            or features.get("bounded_repo_update_lookup")
+            or features.get("fresh_live_lookup")
+            or features.get("local_product_help_lookup")
+            or (task_class == "session_control")
+            or (task_class == "direct_answer" and direct_state_lookup)
+        )
     )
     text = ""
     if required:
-        text = "我先看一下最新更新，马上给你结论。" if features.get("bounded_repo_update_lookup") else "我先查一下，马上给你结论。"
+        if task_class == "session_control" or (task_class == "direct_answer" and direct_state_lookup):
+            text = "我先看一下当前状态，马上回复你。"
+        else:
+            text = "我先看一下最新更新，马上给你结论。" if (features.get("bounded_repo_update_lookup") or features.get("fresh_live_lookup")) else ("我先查一下用法，马上给你结论。" if features.get("local_product_help_lookup") else "我先查一下，马上给你结论。")
     return {
         "required": required,
         "style": "brief_status",

@@ -62,6 +62,18 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
         self.assertEqual(payload["returncode"], 0)
         self.assertIn("exited immediately", payload["error"])
 
+    def test_kick_runner_on_demand_background_sets_preferred_job_env(self) -> None:
+        proc = type("Proc", (), {"pid": 4321, "poll": lambda self: None})()
+        with patch.object(dispatch_task.subprocess, "Popen", return_value=proc) as popen_mock, patch.object(
+            dispatch_task, "load_json", return_value={"jobs": [{"id": "runner-job-42", "status": "running"}]}
+        ):
+            payload = dispatch_task.kick_runner_on_demand_background("runner-job-42")
+
+        self.assertTrue(payload["ok"])
+        env = popen_mock.call_args.kwargs["env"]
+        self.assertEqual(env["RUNNER_PREFERRED_JOB_ID"], "runner-job-42")
+        self.assertEqual(env["RUNNER_MAX_IDLE_SECONDS"], "30")
+
     def test_dispatch_runner_includes_materialization_fact(self) -> None:
         decision = {
             "request": {"session_key": "agent:main:slack:direct:u1", "metadata": {}},

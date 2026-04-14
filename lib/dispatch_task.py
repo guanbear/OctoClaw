@@ -1349,10 +1349,11 @@ def kick_runner_on_demand_background(job_id: str) -> dict:
         "WORKSPACE": WORKSPACE,
         "OCTOCLAW_ENABLE_LEGACY_LOOPS": "1",
         "RUNNER_MAX_JOBS_PER_WORKER": "1",
-        "RUNNER_MAX_IDLE_SECONDS": "1",
+        "RUNNER_MAX_IDLE_SECONDS": "30",
         "RUNNER_POLL_INTERVAL_SECONDS": "1",
         "RUNNER_HEARTBEAT_INTERVAL_SECONDS": "1",
         "RUNNER_WORKER_ID": worker_id,
+        "RUNNER_PREFERRED_JOB_ID": str(job_id or ""),
     }
     try:
         proc = subprocess.Popen(
@@ -1374,12 +1375,39 @@ def kick_runner_on_demand_background(job_id: str) -> dict:
                 "returncode": int(returncode),
                 "error": f"runner bootstrap exited immediately with code {int(returncode)}",
             }
+        observed_status = ""
+        for _ in range(8):
+            queue = load_json(RUNNER_QUEUE_FILE)
+            jobs = queue.get("jobs", []) if isinstance(queue, dict) else []
+            for job in jobs:
+                if not isinstance(job, dict):
+                    continue
+                if str(job.get("id", "") or "").strip() != str(job_id or "").strip():
+                    continue
+                observed_status = str(job.get("status", "") or "").strip().lower()
+                break
+            if observed_status in {"running", "done", "failed"}:
+                break
+            if proc.poll() is not None:
+                returncode = int(proc.poll() or 0)
+                return {
+                    "triggered": False,
+                    "worker_id": worker_id,
+                    "pid": int(proc.pid or 0),
+                    "ok": False,
+                    "mode": "background_bootstrap",
+                    "returncode": returncode,
+                    "observed_status": observed_status,
+                    "error": f"runner bootstrap exited before claiming {job_id or 'job'}",
+                }
+            time.sleep(0.4)
         return {
             "triggered": True,
             "worker_id": worker_id,
             "pid": int(proc.pid or 0),
             "ok": True,
             "mode": "background_bootstrap",
+            "observed_status": observed_status,
         }
     except OSError as exc:
         return {

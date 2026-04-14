@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from model_health import resolve_model_health, selection_penalty_for_role
+from openclaw_paths import resolve_openclaw_config_path, resolve_openclaw_main_agent_dir
 from octopus_config import MODEL_BENCHMARKS_FILE, MODEL_CATALOG_FILE, MODEL_HEALTH_FILE, MODEL_INTEL_MODELS_DEV_FILE, MODEL_INTEL_MODELS_DEV_LAST_GOOD_FILE, MODEL_INTEL_OPENROUTER_CATALOG_FILE, MODEL_INTEL_OPENROUTER_CATALOG_LAST_GOOD_FILE, MODEL_INTEL_OPENROUTER_RANKINGS_FILE, MODEL_INTEL_OPENROUTER_RANKINGS_LAST_GOOD_FILE, MODEL_INTEL_SOURCE_STATUS_FILE, MODEL_PLAN_STATE_FILE, MODEL_POLICY_FILE, MODEL_SOURCES_FILE, MODEL_SPEED_FILE, WORKSPACE, load_json, load_octopus_config, save_json
 from model_plan_state import compute_plan_value_score, ensure_plan_state_file, get_plan_state_entry, preferred_fallback_model, should_fallback_due_to_plan
 from model_pricing import MODEL_PRICING_FILE, ensure_pricing_file, get_pricing_entry, infer_effective_cny_per_1m_tokens, load_pricing_file
@@ -128,12 +129,18 @@ PROVIDER_AUTH_EQUIVALENTS = {
     "minimax-portal": {"minimax-portal", "minimax"},
 }
 
-OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
-MAIN_AGENT_AUTH_PROFILES_PATH = Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
 COMMON_OPENCLAW_BIN_CANDIDATES = [
     "/opt/homebrew/bin/openclaw",
     "/usr/local/bin/openclaw",
 ]
+
+
+def openclaw_config_path() -> Path:
+    return resolve_openclaw_config_path()
+
+
+def main_agent_auth_profiles_path() -> Path:
+    return resolve_openclaw_main_agent_dir() / "auth-profiles.json"
 
 MODEL_INTEL_CATALOG_SCHEMA_VERSION = "octoclaw.model_intel.catalog/v1"
 MODEL_INTEL_SOURCE_STATUS_SCHEMA_VERSION = "octoclaw.model_intel.source_status/v1"
@@ -361,6 +368,22 @@ def load_models_from_openclaw() -> list[str]:
         else:
             ids = [str(key) for key in data.keys()]
     return [model_id for model_id in ids if not is_retired_model(model_id)]
+
+
+def load_openclaw_primary_model() -> str:
+    payload = load_json(str(openclaw_config_path()))
+    if not isinstance(payload, dict):
+        return ""
+    agents = payload.get("agents", {})
+    if not isinstance(agents, dict):
+        return ""
+    defaults = agents.get("defaults", {})
+    if not isinstance(defaults, dict):
+        return ""
+    model_cfg = defaults.get("model", {})
+    if not isinstance(model_cfg, dict):
+        return ""
+    return str(model_cfg.get("primary", "") or "").strip()
 
 
 def collect_candidate_model_ids(primary_ids: list[str], *sources: dict) -> list[str]:
@@ -1135,10 +1158,10 @@ def load_available_auth_providers() -> set[str]:
             if provider:
                 providers.add(provider)
 
-    agent_auth = load_json(str(MAIN_AGENT_AUTH_PROFILES_PATH))
+    agent_auth = load_json(str(main_agent_auth_profiles_path()))
     consume_profiles(agent_auth)
 
-    openclaw_cfg = load_json(str(OPENCLAW_CONFIG_PATH))
+    openclaw_cfg = load_json(str(openclaw_config_path()))
     if isinstance(openclaw_cfg, dict):
         auth_cfg = openclaw_cfg.get("auth", {})
         if isinstance(auth_cfg, dict):
@@ -1192,6 +1215,7 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
     all_models = [m for m in catalog.get("models", []) if m.get("available", True)]
     available_auth_providers = load_available_auth_providers()
     models = filter_models_for_available_auth(all_models, available_auth_providers)
+    configured_primary_model = load_openclaw_primary_model()
     if not models:
         policy = {
             "generated_at": now_iso(),
@@ -1451,6 +1475,19 @@ def compute_policy(catalog: dict, mode: str = "auto", config: dict | None = None
         "review": pick("review"),
     }
     main_model = pick("main")
+    if configured_primary_model:
+        preferred_main = next(
+            (
+                str(model.get("id", "") or "").strip()
+                for model in models
+                if str(model.get("id", "") or "").strip() == configured_primary_model
+            ),
+            "",
+        )
+        if preferred_main:
+            main_model = preferred_main
+            main_selection_meta["selected_model"] = preferred_main
+            main_selection_meta["selection_path"] = "configured_primary"
     main_selection_meta["selected_model"] = main_model
     worker_pools = {
         "octoclaw-runner": profiles["ops-fast"],

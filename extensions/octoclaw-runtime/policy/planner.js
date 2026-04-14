@@ -8,7 +8,20 @@ import { resolveModelAndThinking } from "./model.js";
 
 // ── Constants ──
 
-const OPENCLAW_MAIN_AGENT_DIR = path.join(os.homedir(), ".openclaw", "agents", "main", "agent");
+function resolveOpenClawConfigDir() {
+  const configured = String(process.env.OPENCLAW_HOME || "").trim();
+  const candidates = configured
+    ? [configured, path.join(configured, ".openclaw")]
+    : [path.join(os.homedir(), ".openclaw")];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(path.join(candidate, "openclaw.json"))) {
+      return candidate;
+    }
+  }
+  return configured || path.join(os.homedir(), ".openclaw");
+}
+
+const OPENCLAW_MAIN_AGENT_DIR = path.join(resolveOpenClawConfigDir(), "agents", "main", "agent");
 const OPENCLAW_AUTH_PROFILES_FILE = path.join(OPENCLAW_MAIN_AGENT_DIR, "auth-profiles.json");
 const OPENCLAW_MODELS_FILE = path.join(OPENCLAW_MAIN_AGENT_DIR, "models.json");
 const CODEX_NATIVE_PROVIDER = "openai-codex";

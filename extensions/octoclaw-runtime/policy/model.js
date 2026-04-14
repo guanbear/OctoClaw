@@ -48,7 +48,9 @@ export function resolveAutoPolicyModel(policy, { workerPool = "", phase = "", ro
   const profiles = policy.profiles;
   const workerPoolPhases = policy.worker_pool_phases;
   const workerPools = policy.worker_pools;
+  const mainModel = String(policy.main_model || "").trim();
 
+  if ((route === "direct" || workerPool === "octoclaw-main") && mainModel) return mainModel;
   if (profile && profiles && typeof profiles === "object" && !Array.isArray(profiles)) {
     const profileModel = profiles[profile];
     if (typeof profileModel === "string" && profileModel) return profileModel;
@@ -64,8 +66,6 @@ export function resolveAutoPolicyModel(policy, { workerPool = "", phase = "", ro
     const poolModel = workerPools[workerPool];
     if (typeof poolModel === "string" && poolModel) return poolModel;
   }
-  const mainModel = String(policy.main_model || "").trim();
-  if ((route === "direct" || workerPool === "octoclaw-main") && mainModel) return mainModel;
   return mainModel || null;
 }
 
@@ -138,6 +138,14 @@ export function resolvePolicyHealthFallback(selectedModel, { policy = null } = {
   return selectedModel;
 }
 
+export function shouldBypassPolicyHealthFallback(selectedModel, { policy = null, route = "", workerPool = "" } = {}) {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return false;
+  const currentModel = String(selectedModel || "").trim();
+  const mainModel = String(policy.main_model || "").trim();
+  if (!currentModel || !mainModel || currentModel !== mainModel) return false;
+  return route === "direct" || workerPool === "octoclaw-main";
+}
+
 function getCurrentMode() {
   const degData = loadJson(GLOBAL_DEG_FILE);
   if (degData && typeof degData === "object" && degData.active === true && degData.override_mode) {
@@ -185,7 +193,9 @@ export function resolveModelAndThinking(
   }
 
   if (autoPolicyActive && selectedModel) {
-    selectedModel = resolvePolicyHealthFallback(selectedModel, { policy: policyData });
+    if (!shouldBypassPolicyHealthFallback(selectedModel, { policy: policyData, route, workerPool })) {
+      selectedModel = resolvePolicyHealthFallback(selectedModel, { policy: policyData });
+    }
   }
 
   const guardData = loadJson(GUARD_FILE);

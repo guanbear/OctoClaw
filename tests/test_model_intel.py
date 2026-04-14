@@ -567,6 +567,59 @@ class ModelIntelTests(unittest.TestCase):
         self.assertEqual(policy["worker_pools"]["octoclaw-runner"], "minimax-portal/MiniMax-M2.7-highspeed")
         self.assertEqual(policy["health"]["available_auth_providers"], ["minimax-portal", "zai"])
 
+    def test_compute_policy_prefers_configured_primary_provider_variant(self) -> None:
+        catalog = {
+            "models": [
+                {
+                    "id": "openai-codex/gpt-5.4",
+                    "available": True,
+                    "configured": True,
+                    "provider": "openai-codex",
+                    "pricing": {"input": 24.0, "output": 96.0, "effective_cny_per_1m_tokens": 24.0},
+                    "scores": {"coding": 0.96, "reasoning": 0.96, "openclaw": 0.93, "writing": 0.89, "reliability": 0.92},
+                    "benchmark_scores": {"pinchbench": 0.86, "artificial_analysis_coding": 0.96, "claw_eval": 0.91, "openrouter_rankings": 0.89},
+                    "source_factors": {"pinchbench": 0.35, "artificial_analysis_coding": 0.30, "claw_eval": 0.40, "openrouter_rankings": 0.20},
+                    "speed": {"ttft_ms": 5200, "output_tps": 54},
+                    "size_class": "strong",
+                    "family": "gpt-5.4",
+                    "preferred_use": ["main"],
+                    "upgrade_path": [],
+                    "fallback_path": [],
+                    "source_refs": [],
+                },
+                {
+                    "id": "omniroute/cx/gpt-5.4",
+                    "available": True,
+                    "configured": True,
+                    "provider": "omniroute",
+                    "pricing": {"input": 24.0, "output": 96.0, "effective_cny_per_1m_tokens": 24.0},
+                    "scores": {"coding": 0.96, "reasoning": 0.96, "openclaw": 0.93, "writing": 0.89, "reliability": 0.92},
+                    "benchmark_scores": {"pinchbench": 0.86, "artificial_analysis_coding": 0.96, "claw_eval": 0.91, "openrouter_rankings": 0.89},
+                    "source_factors": {"pinchbench": 0.35, "artificial_analysis_coding": 0.30, "claw_eval": 0.40, "openrouter_rankings": 0.20},
+                    "speed": {"ttft_ms": 5200, "output_tps": 54},
+                    "size_class": "strong",
+                    "family": "gpt-5.4",
+                    "preferred_use": ["main"],
+                    "upgrade_path": [],
+                    "fallback_path": [],
+                    "source_refs": [],
+                },
+            ]
+        }
+        with patch.object(model_intel, "load_json", return_value={}), patch.object(
+            model_intel, "save_json", return_value=True
+        ), patch.object(model_intel, "load_octopus_config", return_value={}), patch.object(
+            model_intel, "load_available_auth_providers", return_value={"openai-codex"}
+        ), patch.object(model_intel, "load_openclaw_primary_model", return_value="omniroute/cx/gpt-5.4"), patch.object(
+            model_intel, "compute_plan_value_score", return_value=0.5
+        ), patch.object(model_intel, "should_fallback_due_to_plan", return_value=False), patch.object(
+            model_intel, "preferred_fallback_model", return_value=""
+        ):
+            policy = model_intel.compute_policy(catalog, mode="auto")
+
+        self.assertEqual(policy["main_model"], "omniroute/cx/gpt-5.4")
+        self.assertEqual(policy["worker_pools"]["octoclaw-main"], "omniroute/cx/gpt-5.4")
+
 
 if __name__ == "__main__":
     unittest.main()

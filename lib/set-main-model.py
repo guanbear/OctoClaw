@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 
+from openclaw_paths import resolve_openclaw_config_path
 from octopus_config import MODE_FILE, MODEL_POLICY_FILE, load_json, resolve_main_session_key
 
 
@@ -52,7 +52,7 @@ def set_session_model(model_path: str | None) -> bool:
     try:
         gateway_port = 3000
         gateway_token = ""
-        config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+        config_path = str(resolve_openclaw_config_path())
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
