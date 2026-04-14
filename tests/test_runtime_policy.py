@@ -309,6 +309,95 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertFalse(payload["latency_ack"]["required"])
         self.assertFalse(payload["state_grounding"]["required"])
 
+    def test_current_model_question_uses_direct_latency_ack(self) -> None:
+        payload = self.run_policy("你现在到底是啥模型")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
+        self.assertEqual(payload["request"]["metadata"]["intent_packet"]["intent_class"], "local_surface_lookup")
+        self.assertTrue(payload["latency_ack"]["required"])
+        self.assertIn("当前状态", payload["latency_ack"]["text"])
+
+    def test_policy_judge_runner_override_clears_direct_lane_semantics(self) -> None:
+        payload = self.run_policy(
+            "你现在是啥模型",
+            model_policy={
+                "generated_at": "2026-04-14T00:00:00Z",
+                "main_model": "omniroute/cx/gpt-5.4",
+                "worker_pools": {
+                    "octoclaw-runner": "omniroute/cx/gpt-5.4",
+                },
+                "worker_pool_phases": {
+                    "octoclaw-runner": {"inspect": "omniroute/cx/gpt-5.4"},
+                },
+            },
+        )
+        baseline = payload
+        self.assertEqual(baseline["route_decision"]["route"], "direct")
+        self.assertEqual(baseline["route_decision"]["task_class"], "fast_local_check")
+
+        overridden = self.run_policy(
+            "你现在是啥模型",
+            model_policy={
+                "generated_at": "2026-04-14T00:00:00Z",
+                "main_model": "omniroute/cx/gpt-5.4",
+                "worker_pools": {
+                    "octoclaw-runner": "omniroute/cx/gpt-5.4",
+                },
+                "worker_pool_phases": {
+                    "octoclaw-runner": {"inspect": "omniroute/cx/gpt-5.4"},
+                },
+            },
+        )
+        with tempfile.TemporaryDirectory(prefix="octoclaw-policy-test-") as workspace:
+            os.makedirs(Path(workspace) / "tmp" / "octopus", exist_ok=True)
+            self.write_model_policy(
+                workspace,
+                {
+                    "generated_at": "2026-04-14T00:00:00Z",
+                    "main_model": "omniroute/cx/gpt-5.4",
+                    "worker_pools": {"octoclaw-runner": "omniroute/cx/gpt-5.4"},
+                    "worker_pool_phases": {"octoclaw-runner": {"inspect": "omniroute/cx/gpt-5.4"}},
+                },
+            )
+            env = {**os.environ, **TEST_ENV, "WORKSPACE": workspace}
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(POLICY_SCRIPT),
+                    "--task",
+                    "你现在是啥模型",
+                    "--metadata-json",
+                    json.dumps(
+                        {
+                            "policy_judge_result": {
+                                "invoked": True,
+                                "route": "runner",
+                                "request_kind": "generic_lookup",
+                                "scope": "external",
+                                "evidence_required": ["replay"],
+                                "confidence": 0.95,
+                            }
+                        },
+                        ensure_ascii=False,
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+            overridden = json.loads(result.stdout)
+
+        self.assertEqual(overridden["route_decision"]["system_preferred_route"], "direct")
+        self.assertEqual(overridden["route_decision"]["route"], "runner")
+        self.assertEqual(overridden["route_decision"]["task_class"], "fast_tool_check")
+        self.assertEqual(overridden["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(overridden["route_decision"]["work_type"], "ops")
+        self.assertEqual(overridden["route_decision"]["phase"], "inspect")
+        self.assertEqual(overridden["route_decision"]["worker_pool"], "octoclaw-runner")
+        self.assertTrue(overridden["pre_dispatch_ack"]["required"])
+        self.assertFalse(overridden["latency_ack"]["required"])
+
     def test_local_surface_lookup_bypasses_sticky_runner_lane(self) -> None:
         payload = self.run_policy(
             "你的control ui访问地址是啥",
@@ -346,7 +435,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
         self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
         self.assertTrue(payload["state_grounding"]["required"])
-        self.assertFalse(payload["latency_ack"]["required"])
+        self.assertTrue(payload["latency_ack"]["required"])
 
     def test_workflow_meta_provenance_followup_prefers_grounded_direct_lane(self) -> None:
         payload = self.run_policy("你是怎么查的")
@@ -354,7 +443,7 @@ class RuntimePolicyTests(unittest.TestCase):
         self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
         self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
         self.assertTrue(payload["state_grounding"]["required"])
-        self.assertFalse(payload["latency_ack"]["required"])
+        self.assertTrue(payload["latency_ack"]["required"])
 
     def test_spawn_single_requires_pre_dispatch_ack(self) -> None:
         payload = self.run_policy("调研三个兼容方案并写一版简短建议")
@@ -405,26 +494,119 @@ class RuntimePolicyTests(unittest.TestCase):
     def test_current_model_question_prefers_direct_control_lane(self) -> None:
         payload = self.run_policy("你现在是啥模型")
         self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
-        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
-        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["request"]["metadata"]["intent_packet"]["intent_class"], "local_surface_lookup")
         self.assertFalse(payload["pre_dispatch_ack"]["required"])
-        self.assertTrue(payload["tool_policy"]["control_observer_only"])
-        self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
-        self.assertEqual(payload["route_recommendation"]["protected_lane"], "control_observer")
+        self.assertFalse(payload["tool_policy"]["control_observer_only"])
+        self.assertFalse(payload["route_recommendation"]["bypass_delegated_optimization"])
+        self.assertEqual(payload["route_recommendation"]["protected_lane"], "")
         self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
-        self.assertIn("workflow_meta_control_contract", payload["route_decision"]["reason_codes"])
+        self.assertIn("prefer_direct_for_local_surface_probe", payload["route_decision"]["reason_codes"])
 
     def test_exact_current_model_phrase_prefers_direct_control_lane(self) -> None:
         payload = self.run_policy("你是啥模型")
         self.assertEqual(payload["route_decision"]["route"], "direct")
-        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
-        self.assertEqual(payload["route_decision"]["work_contract"], "answer_now")
-        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_local_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["request"]["metadata"]["intent_packet"]["intent_class"], "local_surface_lookup")
         self.assertFalse(payload["pre_dispatch_ack"]["required"])
-        self.assertTrue(payload["tool_policy"]["control_observer_only"])
-        self.assertTrue(payload["route_recommendation"]["bypass_delegated_optimization"])
+        self.assertFalse(payload["tool_policy"]["control_observer_only"])
+        self.assertFalse(payload["route_recommendation"]["bypass_delegated_optimization"])
         self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
+
+    def test_release_notes_prompt_prefers_runner_fresh_live_lookup(self) -> None:
+        payload = self.run_policy("帮我查下openclaw 4.12 的新特性")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["request"]["metadata"]["intent_packet"]["intent_class"], "fresh_live_lookup")
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
+        self.assertFalse(payload["latency_ack"]["required"])
+
+    def test_policy_judge_same_route_runner_override_canonicalizes_semantics(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-policy-test-") as workspace:
+            os.makedirs(Path(workspace) / "tmp" / "octopus", exist_ok=True)
+            self.write_model_policy(
+                workspace,
+                {
+                    "generated_at": "2026-04-14T00:00:00Z",
+                    "main_model": "omniroute/cx/gpt-5.4",
+                    "worker_pools": {"octoclaw-runner": "omniroute/cx/gpt-5.4"},
+                    "worker_pool_phases": {"octoclaw-runner": {"inspect": "omniroute/cx/gpt-5.4"}},
+                },
+            )
+            env = {**os.environ, **TEST_ENV, "WORKSPACE": workspace}
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(POLICY_SCRIPT),
+                    "--task",
+                    "帮我查下openclaw 4.12 的新特性",
+                    "--metadata-json",
+                    json.dumps(
+                        {
+                            "policy_judge_result": {
+                                "invoked": True,
+                                "route": "runner",
+                                "request_kind": "fresh_external_lookup",
+                                "scope": "external",
+                                "evidence_required": ["web_lookup"],
+                                "confidence": 0.95,
+                            }
+                        },
+                        ensure_ascii=False,
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+            payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["route_decision"]["system_preferred_route"], "runner")
+        self.assertEqual(payload["route_decision"]["route"], "runner")
+        self.assertEqual(payload["route_decision"]["task_class"], "fast_tool_check")
+        self.assertEqual(payload["route_decision"]["work_contract"], "inspect_report")
+        self.assertEqual(payload["route_decision"]["work_type"], "ops")
+        self.assertEqual(payload["route_decision"]["phase"], "inspect")
+        self.assertTrue(payload["pre_dispatch_ack"]["required"])
+        self.assertIn("最新更新", payload["pre_dispatch_ack"]["text"])
+        self.assertFalse(payload["latency_ack"]["required"])
+
+    def test_provenance_prompt_prefers_execution_followup_without_replay_context(self) -> None:
+        payload = self.run_policy("你是怎么查的")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertEqual(payload["request"]["metadata"]["intent_packet"]["intent_class"], "execution_followup")
+        self.assertTrue(payload["state_grounding"]["required"])
+
+    def test_empty_intent_packet_does_not_suppress_deterministic_route_features(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-route-test-") as workspace:
+            os.makedirs(Path(workspace) / "tmp" / "octopus", exist_ok=True)
+            env = {**os.environ, **TEST_ENV, "WORKSPACE": workspace}
+            result = subprocess.run(
+                [
+                    "node",
+                    "--input-type=module",
+                    "-e",
+                    """
+import { extractFeatures } from './extensions/octoclaw-runtime/policy/route.js';
+const payload = extractFeatures('你现在到底是啥模型', '', null, { intent_packet: {} });
+console.log(JSON.stringify(payload));
+""",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(REPO_ROOT),
+                env=env,
+                check=True,
+            )
+            payload = json.loads(result.stdout)
+        self.assertTrue(payload["tool_observation_only"])
+        self.assertEqual(payload["lookup_scope"], "local_instance")
+        self.assertEqual(payload["target_scope"], "local")
 
     def test_workflow_provenance_question_prefers_direct_control_lane(self) -> None:
         payload = self.run_route("刚才的查询是子任务做的吗 是啥模型做的")

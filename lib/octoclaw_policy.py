@@ -49,6 +49,7 @@ SCHEMA_VERSION = "octoclaw.runtime_policy.decision/v1"
 VALID_FORCE_ROUTES = {"", "direct", "runner", "spawn_single", "spawn_multi"}
 VALID_ROUTE_HINT_ROUTES = {"", "direct", "spawn_single", "spawn_multi"}
 VALID_ROUTE_HINT_WORK_TYPES = {"", "ops", "research", "code", "review"}
+DIRECT_SEMANTIC_TASK_CLASSES = {"direct_answer", "fast_local_check", "control_observer", "session_control"}
 
 WRITER_PATTERNS = [
     r"\b(write|draft|doc|docs|readme|summary|report|memo|proposal|translate|translation)\b",
@@ -482,6 +483,17 @@ def merge_work_contract(base_work_contract: str, route: str, sticky_state: dict[
     return str(base_work_contract or "").strip()
 
 
+def canonical_delegated_task_class(route: str, current_task_class: str = "") -> str:
+    task_class = str(current_task_class or "").strip()
+    if route == "runner":
+        return "fast_tool_check"
+    if route in {"spawn_single", "spawn_multi"}:
+        if task_class and task_class not in DIRECT_SEMANTIC_TASK_CLASSES and task_class != "fast_tool_check":
+            return task_class
+        return "focused_research"
+    return task_class
+
+
 def build_route_hint_policy(
     route_meta: dict[str, Any],
     base_route: str,
@@ -860,22 +872,24 @@ def latency_ack_policy(route: str, task_class: str, features: dict[str, Any]) ->
         or features.get("session_control_hits")
         or features.get("model_reference_hits")
         or features.get("runner_hits")
+        or features.get("workflow_meta_hits")
+        or features.get("task_progress_hits")
     )
     required = (
         route == "direct"
-        and task_class != "control_observer"
         and bool(
             features.get("external_lookup_only")
             or features.get("bounded_repo_update_lookup")
             or features.get("fresh_live_lookup")
             or features.get("local_product_help_lookup")
             or (task_class == "session_control")
-            or (task_class == "direct_answer" and direct_state_lookup)
+            or (task_class == "control_observer")
+            or (task_class in {"direct_answer", "fast_local_check", "control_observer"} and direct_state_lookup)
         )
     )
     text = ""
     if required:
-        if task_class == "session_control" or (task_class == "direct_answer" and direct_state_lookup):
+        if task_class in {"session_control", "control_observer"} or (task_class in {"direct_answer", "fast_local_check"} and direct_state_lookup):
             text = "我先看一下当前状态，马上回复你。"
         else:
             text = "我先看一下最新更新，马上给你结论。" if (features.get("bounded_repo_update_lookup") or features.get("fresh_live_lookup")) else ("我先查一下用法，马上给你结论。" if features.get("local_product_help_lookup") else "我先查一下，马上给你结论。")
@@ -1104,7 +1118,7 @@ def build_decision(
     dispatch_required = route != "direct"
     should_wait = route == "runner"
     wait_timeout_seconds = int(route_meta.get("wait_timeout_seconds", 0) or 0) if should_wait else 0
-    task_class = str(route_meta.get("task_class", "") or "")
+    task_class = canonical_delegated_task_class(route, str(route_meta.get("task_class", "") or ""))
     route_budget = budget_policy(features, route, work_contract, protocol, needs_review)
     prompt_policy = prompt_contract(protocol, route, work_contract, needs_review)
     pre_dispatch_ack = pre_dispatch_ack_policy(route, work_type, phase, task_class, features)
