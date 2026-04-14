@@ -599,6 +599,76 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 - controller 负责默认 dispatch
 - 主 agent 只在纠偏条件触发时介入
 
+### 15.6 用户面与 operator 面仍未彻底分离
+
+现象：
+
+- DM 中仍出现 task card / operator surface / buttons
+- 例如：
+  - `OctoClaw task: ...`
+  - `View / Queue / Retrieve / Timeline / Graph`
+- 同一请求中还会多次输出 operator progress 文本
+
+说明：
+
+- controller / runtime 仍把内部运维面消息直接投递到用户面
+- 用户面和 operator 面没有隔离 contract
+
+设计要求：
+
+- DM / 用户会话默认只允许三类用户可见消息：
+  - ACK
+  - 最终答案
+  - 一条必要的简短 progress note
+- `task card / buttons / details / queue / retrieve / timeline / graph` 默认只能进入 operator surface
+- `operator_surface` 与 `user_surface` 必须是两个 schema，不允许一个 payload 同时承担两种角色
+
+### 15.7 原任务失败与补救任务成功被混成同一个“成功”
+
+现象：
+
+- 原始 dispatch 任务卡在 `queued`
+- 后续补救路径又创建了第二个任务
+- 最后系统把第二个任务的成功说成“这次 runner 成功了”
+
+说明：
+
+- controller 没有维护统一的 execution chain
+- retry / replacement / manual recovery 没有挂在同一个 controller execution id 下
+
+设计要求：
+
+- 每个用户请求必须有一个稳定的 `controller_execution_id`
+- 同一次用户请求下的所有 retry / replacement task 都挂到这个 execution id
+- task 之间必须显式记录：
+  - `supersedes`
+  - `superseded_by`
+  - `replacement_reason`
+- 对用户汇报时，必须区分：
+  - 原任务是否成功
+  - 是否存在补救任务
+  - 最终采用的是哪条结果
+
+### 15.8 latest truth reconciliation 缺失
+
+现象：
+
+- 同一次回答中既说“最新版是 2026.4.12”
+- 又补充“CHANGELOG 里还有 2026.4.14”
+
+说明：
+
+- controller 把多个信息源直接拼接给主 agent / compose 层
+- 没有先做“哪个版本才是 latest truth”的统一收敛
+
+设计要求：
+
+- 在进入用户可见 compose 之前，controller 必须先做 latest truth reconciliation
+- 如果存在多个候选 latest version：
+  - 先统一成一个 `latest_version_packet`
+  - 再允许生成用户答案
+- 不能把互相冲突的 latest candidates 同时直接暴露给用户
+
 ---
 
 ## 16. 基于生产观察的下一步优先级
@@ -609,6 +679,9 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 2. ACK owner 唯一化（progress ACK / eager ACK / timer ACK 合并）
 3. CLI / helper capability negotiation
 4. resident runner truth 与 on-demand truth 分离（并把默认 mode 固定为 `resident`）
+5. 用户面 / operator 面分离
+6. replacement / superseded execution chain
+7. latest truth reconciliation
 
 ### P1
 
@@ -813,6 +886,88 @@ fallback 不再由主 agent 自己“想怎么办”，而由 controller 的 fai
 
 - `native_binding_state=none` 时，surface 文案必须明确是 mirror-only
 
+### Workstream G：user surface / operator surface separation
+
+目标：
+
+- 用户面不再收到内部 task card / buttons / operator chatter
+
+主要文件：
+
+- [lib/notifier.py](../lib/notifier.py)
+- [lib/task_display.py](../lib/task_display.py)
+- [lib/task-state-update.py](../lib/task-state-update.py)
+- [extensions/octoclaw-runtime/index.js](../extensions/octoclaw-runtime/index.js)
+- [tests/test_notifier.py](../tests/test_notifier.py)
+- [tests/test_task_display.py](../tests/test_task_display.py)
+
+必须修改：
+
+1. 明确 `user_surface` 与 `operator_surface` 两套 payload contract
+2. DM 默认禁用 task card / buttons
+3. progress relay 在用户面只允许固定简短文本，不允许直接回放 operator surface
+4. completion relay 只能发送最终答案，不得夹带 task action buttons
+
+验收：
+
+- Slack DM 中不再出现 `View / Queue / Retrieve / Timeline / Graph`
+- 不再出现多条重复 `OctoClaw task: ...` 卡片
+
+### Workstream H：replacement / superseded execution chain
+
+目标：
+
+- 原任务失败、补救任务成功时，系统必须能表达“补救成功但原任务失败”，不能混成单个成功
+
+主要文件：
+
+- [lib/dispatch_task.py](../lib/dispatch_task.py)
+- [lib/runner_dispatch.py](../lib/runner_dispatch.py)
+- [lib/runtime_task_record.py](../lib/runtime_task_record.py)
+- [lib/task-state-update.py](../lib/task-state-update.py)
+- [lib/runtime_snapshot.py](../lib/runtime_snapshot.py)
+
+必须修改：
+
+1. 为每个用户请求引入 `controller_execution_id`
+2. retry / replacement task 记录 `supersedes` / `superseded_by`
+3. handoff / user summary 必须说明：
+   - 原任务状态
+   - 是否有 replacement
+   - 最终采用哪个 task 的结果
+
+验收：
+
+- 原任务卡 `queued`、补救任务 `done` 时，用户摘要不再写成“runner 成功了”
+- ledger 能回放完整 replacement chain
+
+### Workstream I：latest truth reconciliation
+
+目标：
+
+- latest version / latest release / latest changelog 在输出前必须统一成单一真相
+
+主要文件：
+
+- [lib/runner_goal_contract.py](../lib/runner_goal_contract.py)
+- [lib/runner_dispatch.py](../lib/runner_dispatch.py)
+- [lib/dispatch_task.py](../lib/dispatch_task.py)
+- [extensions/octoclaw-runtime/index.js](../extensions/octoclaw-runtime/index.js)
+
+必须修改：
+
+1. 对“版本号 + changelog + release notes”类任务增加统一结果包：
+   - `latest_version`
+   - `latest_source`
+   - `supporting_sources`
+2. compose 前必须先 reconcile latest truth
+3. 如果 source 冲突未解决，不允许直接下结论
+
+验收：
+
+- 同一次回答中不再出现 `latest=2026.4.12` 同时又说 `2026.4.14 刚发`
+- final answer 中 latest version 只能有一个
+
 ---
 
 ## 18. 回归与上线验收（必须逐条执行）
@@ -845,15 +1000,20 @@ pytest tests/test_runner_runtime.py
 2. `你是怎么查的`
 3. `不是 刚才single成功了吗`
 4. `你用runner查下openclaw的新版本是啥 以及新特性 看看可以吗`
+5. `再检查下openclaw 的新版本和新特性`
 
 验收期望：
 
 - 1s 内有 ACK 或直接答案
 - 第 4 条必须进入 runner
+- 第 5 条只允许一个用户面 ACK
 - ACK 不允许双发
 - replay 中 ACK 必须可观测
 - dispatch 必须有 `dispatch_called`
 - runner 必须有 queue/claim/running/terminal 证据
+- 用户面不出现 operator buttons / task cards
+- latest version 结论唯一
+- 如果补救任务接管，用户摘要必须显式说明 replacement
 
 ### 18.4 失败判据
 
@@ -861,7 +1021,10 @@ pytest tests/test_runner_runtime.py
 
 - `pre_dispatch_ack_attempted` 但 target resolution 仍失败
 - Slack 出现两条语义重复 ACK
+- Slack DM 出现 operator card / task buttons
 - `route=runner` 但无 `dispatch_called`
 - `dispatch_called` 后 queue 中无对应 job，task-state 却长期 `queued`
+- 原任务失败但补救任务成功时，用户答案仍把整体说成“原任务成功”
+- 同一次回答里 latest version 出现多个冲突值
 - native-spawn stderr 再出现 `unknown option '--model'`
 - runner goal stderr 再出现 `unknown option '--no-confirm'`
