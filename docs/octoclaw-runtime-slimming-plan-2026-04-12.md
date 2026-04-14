@@ -8,6 +8,7 @@
 > - [octoclaw-execution-plan.md](./octoclaw-execution-plan.md)
 > - [octoclaw-router-policy-refactor-plan-2026-04-10.md](./octoclaw-router-policy-refactor-plan-2026-04-10.md)
 > - [octoclaw-code-audit-2026-04-12.md](./octoclaw-code-audit-2026-04-12.md)
+> - [octoclaw-controller-execution-separation-design-2026-04-14.md](./octoclaw-controller-execution-separation-design-2026-04-14.md)
 
 ---
 
@@ -36,6 +37,14 @@
 - 作为后续验收与残余清理的基线
 - 明确为什么当前不继续重写整个 `patrol`
 - 记录 2026-04-13 Slack/macmini 复盘后对 ACK、runner、delivery、watchdog 的系统性收口要求
+- 作为 2026-04-14 controller / execution / answer plane 分层设计的运行面背景文档
+
+补充结论（2026-04-14）：
+
+- runtime slimming 的下一步重点不是继续删除 patrol 剩余符号，而是把 ACK、dispatch、execution ledger 的职责从主 agent 身上拆走。
+- 也就是说，runtime slimming 后半段不再是“删代码优先”，而是“让主 agent 不再承担控制面”。
+- 当前生产观察到的具体残留问题（ACK target resolution、runner capability negotiation、resident runner truth、mirror/native binding 幻觉）见：
+  - [octoclaw-controller-execution-separation-design-2026-04-14.md](./octoclaw-controller-execution-separation-design-2026-04-14.md)
 
 ---
 

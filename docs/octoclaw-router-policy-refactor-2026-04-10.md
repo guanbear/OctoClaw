@@ -111,6 +111,27 @@ Policy Judge 不是让当前 Slack 主会话自由发挥。
 - 可以回复：`你是想查当前 Slack 连接的 gateway，还是 macmini 本机？`
 - 或只做只读、低风险 probe，不能假装知道。
 
+### 2.5 Router / controller 不是要取代主 agent，而是要减少主 agent 的日常调度负担
+
+这次重构的目标不是“主 agent 完全退出”，而是：
+
+- controller 负责默认 ACK、默认路由、默认派发、默认重试
+- 主 agent 保留纠偏权
+
+纠偏触发条件包括：
+
+- judge 低置信
+- route 冲突
+- delegated result relevance failed
+- fallback exhausted
+- 用户显式追问“为什么这么判”“刚才怎么查的”“是不是派错了”
+
+因此后续设计必须保证：
+
+- controller 产出结构化 execution ledger
+- 主 agent 只读取清洗后的 ledger packet
+- 不再直接依赖脏 transcript / 被污染的 subagent session
+
 ---
 
 ## 3. 新 Router Pipeline
