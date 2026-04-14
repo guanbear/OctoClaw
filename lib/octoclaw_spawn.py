@@ -1001,12 +1001,30 @@ def build_native_openclaw_command(
     prompt: str,
     model: str,
     thinking: str,
-) -> tuple[list[str], str, str]:
+) -> tuple[list[str], str, str, dict]:
     cfg = spawn_execution_config()
     openclaw_bin = resolve_openclaw_bin(cfg)
     session_key = ""
     session_id = resolve_native_session_id(task_id)
+    supports_model = openclaw_agent_supports_option("--model", openclaw_bin=openclaw_bin)
     supports_thinking = openclaw_agent_supports_option("--thinking", openclaw_bin=openclaw_bin)
+    missing_capabilities: list[str] = []
+    unsupported_details: list[str] = []
+    if model and not supports_model:
+        missing_capabilities.append("openclaw_agent_model_flag")
+        unsupported_details.append("--model")
+    if thinking and not supports_thinking:
+        missing_capabilities.append("openclaw_agent_thinking_flag")
+        unsupported_details.append("--thinking")
+    capability_failure: dict[str, object] = {}
+    if missing_capabilities:
+        capability_failure = build_capability_bound_failure(
+            "spawn_single",
+            "openclaw_agent_option_unsupported",
+            detail="native OpenClaw agent does not support required option(s): " + ", ".join(unsupported_details),
+            missing_capabilities=missing_capabilities,
+            fallback_permitted=False,
+        )
     command = [
         openclaw_bin,
         "agent",
@@ -1018,11 +1036,11 @@ def build_native_openclaw_command(
         prompt,
         "--json",
     ]
-    if model:
+    if model and supports_model:
         command.extend(["--model", model])
     if thinking and supports_thinking:
         command.extend(["--thinking", thinking])
-    return command, session_key, session_id
+    return command, session_key, session_id, capability_failure
 
 
 def execute_native_openclaw_spawn(
@@ -1040,12 +1058,44 @@ def execute_native_openclaw_spawn(
     protocol: str = "",
     review_required: bool = False,
 ) -> dict:
-    command, child_session_key, child_session_id = build_native_openclaw_command(
+    command, child_session_key, child_session_id, capability_failure = build_native_openclaw_command(
         task_id=task_id,
         prompt=prompt,
         model=model,
         thinking=thinking,
     )
+    if capability_failure:
+        return {
+            "backend": "native",
+            "backend_name": "openclaw_agent",
+            "team_name": "",
+            "agent_name": "main",
+            "profile": profile_override,
+            "thinking": thinking,
+            "session_key": child_session_key,
+            "child_session_key": child_session_key,
+            "session_id": child_session_id,
+            "run_id": "",
+            "native_task_id": "",
+            "native_flow_id": "",
+            "model_override_applied": False,
+            "model_override_status": 0,
+            "model_override_error": str(capability_failure.get("detail", "") or ""),
+            "pid": 0,
+            "stdout_path": "",
+            "stderr_path": "",
+            "wrapper_path": "",
+            "command": command,
+            "payload": {
+                "sessionKey": child_session_key,
+                "sessionId": child_session_id,
+                "taskId": "",
+                "flowId": "",
+                "pid": 0,
+            },
+            "executed": False,
+            "capability_failure": capability_failure,
+        }
     openclaw_bin = command[0]
     if shutil.which(openclaw_bin) is None:
         raise RuntimeError(f"未找到 {openclaw_bin} 命令，无法执行 native OpenClaw spawn")
@@ -1146,6 +1196,8 @@ def execute_native_openclaw_spawn(
             "flowId": "",
             "pid": int(proc.pid),
         },
+        "executed": True,
+        "capability_failure": {},
     }
 
 
@@ -1206,6 +1258,16 @@ def derive_spawn_session_keys(team_name: str, agent_name: str) -> list[str]:
         if text and text not in candidates:
             candidates.append(text)
     return candidates
+
+
+def execution_chain_payload(source: dict | None = None) -> dict[str, str]:
+    payload = source if isinstance(source, dict) else {}
+    return {
+        "controller_execution_id": str(payload.get("controller_execution_id", "") or "").strip(),
+        "supersedes": str(payload.get("supersedes", "") or "").strip(),
+        "superseded_by": str(payload.get("superseded_by", "") or "").strip(),
+        "replacement_reason": compact_text(str(payload.get("replacement_reason", "") or ""), 240),
+    }
 
 
 def load_openclaw_gateway_options() -> tuple[int, str]:
@@ -1564,6 +1626,10 @@ def register_dispatched_task(
     managed_by_octoclaw: bool = True,
     deps: list[str] | None = None,
     artifacts_json: dict | None = None,
+    controller_execution_id: str = "",
+    supersedes: str = "",
+    superseded_by: str = "",
+    replacement_reason: str = "",
 ) -> None:
     cmd = [
         "python3",
@@ -1633,6 +1699,14 @@ def register_dispatched_task(
         cmd.extend(["--parent-id", parent_id])
     if artifacts_json:
         cmd.extend(["--artifacts-json", json.dumps(artifacts_json, ensure_ascii=False)])
+    if controller_execution_id:
+        cmd.extend(["--controller-execution-id", controller_execution_id])
+    if supersedes:
+        cmd.extend(["--supersedes", supersedes])
+    if superseded_by:
+        cmd.extend(["--superseded-by", superseded_by])
+    if replacement_reason:
+        cmd.extend(["--replacement-reason", replacement_reason])
     subprocess.run(cmd, check=False, capture_output=True, text=True)
 
 

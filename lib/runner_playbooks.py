@@ -609,7 +609,7 @@ def build_ai_goal_plan(task: str, hints: dict | None = None) -> dict | None:
         if not any(t in lowered for t in AI_GOAL_TRIGGER_TOKENS):
             return None
     escaped_goal = task.replace("'", "'\\''").replace('"', '\\"')
-    command = f"openclaw agent --agent main --message '{escaped_goal}' --json --no-confirm 2>&1 | head -n 200"
+    command = f"openclaw agent --agent main --message '{escaped_goal}' --json 2>&1 | head -n 200"
     return {
         "kind": "ai_goal",
         "summary": task[:80],

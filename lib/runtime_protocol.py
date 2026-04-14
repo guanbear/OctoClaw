@@ -326,6 +326,11 @@ def build_delegated_materialization(
     session_key: str = "",
     executed: bool | None = None,
     capability_failure: dict[str, Any] | None = None,
+    controller_execution_id: str = "",
+    supersedes: str = "",
+    superseded_by: str = "",
+    replacement_reason: str = "",
+    latest_truth: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "schema_version": DELEGATED_MATERIALIZATION_SCHEMA_VERSION,
@@ -339,6 +344,11 @@ def build_delegated_materialization(
         "session_key": str(session_key or "").strip(),
         "executed": bool(executed) if isinstance(executed, bool) else False,
         "capability_failure": capability_failure if isinstance(capability_failure, dict) else {},
+        "controller_execution_id": str(controller_execution_id or "").strip(),
+        "supersedes": str(supersedes or "").strip(),
+        "superseded_by": str(superseded_by or "").strip(),
+        "replacement_reason": _compact_text(str(replacement_reason or ""), 240),
+        "latest_truth": dict(latest_truth) if isinstance(latest_truth, dict) else {},
     }
     return payload
 
@@ -369,4 +379,9 @@ def normalize_delegated_materialization(
         "session_key": str(data.get("session_key", "") or "").strip(),
         "executed": bool(data.get("executed", False)),
         "capability_failure": failure if failure.get("reason") else {},
+        "controller_execution_id": str(data.get("controller_execution_id", "") or "").strip(),
+        "supersedes": str(data.get("supersedes", "") or "").strip(),
+        "superseded_by": str(data.get("superseded_by", "") or "").strip(),
+        "replacement_reason": _compact_text(str(data.get("replacement_reason", "") or ""), 240),
+        "latest_truth": dict(data.get("latest_truth", {})) if isinstance(data.get("latest_truth"), dict) else {},
     }

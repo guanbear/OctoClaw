@@ -281,6 +281,30 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertIn("/opt/homebrew/bin:/usr/local/bin", created["kwargs"]["env"]["PATH"])
         self.assertTrue(created["kwargs"]["start_new_session"])
 
+    def test_execute_native_openclaw_spawn_returns_capability_failure_for_unsupported_flags(self) -> None:
+        with (
+            patch.object(octoclaw_spawn, "spawn_execution_config", return_value={"openclaw_bin": "openclaw"}),
+            patch.object(octoclaw_spawn, "resolve_openclaw_bin", return_value="/opt/homebrew/bin/openclaw"),
+            patch.object(
+                octoclaw_spawn,
+                "openclaw_agent_supports_option",
+                side_effect=lambda option, **_: option not in {"--model", "--thinking"},
+            ),
+        ):
+            payload = octoclaw_spawn.execute_native_openclaw_spawn(
+                task_id="research-unsupported-1",
+                worker_pool="octoclaw-research",
+                model="zai/glm-4.7",
+                model_band="normal",
+                prompt="do the work",
+                thinking="medium",
+                route="spawn_single",
+            )
+
+        self.assertFalse(payload["executed"])
+        self.assertEqual(payload["capability_failure"]["reason"], "openclaw_agent_option_unsupported")
+        self.assertIn("--model", payload["capability_failure"]["detail"])
+
     def test_finalize_native_spawn_result_upserts_metadata_and_materializes_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             stdout_path = Path(tmpdir) / "stdout.log"
@@ -355,7 +379,7 @@ class OctoClawSpawnTests(unittest.TestCase):
             patch.object(octoclaw_spawn, "resolve_native_session_id", return_value="octoclaw-subagent-research-1"),
             patch.object(octoclaw_spawn, "openclaw_agent_supports_option", return_value=False),
         ):
-            command, session_key, session_id = octoclaw_spawn.build_native_openclaw_command(
+            command, session_key, session_id, capability_failure = octoclaw_spawn.build_native_openclaw_command(
                 task_id="research-1",
                 prompt="do the work",
                 model="omniroute/cx/gpt-5.4",
@@ -366,7 +390,9 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(session_id, "octoclaw-subagent-research-1")
         self.assertIn("--session-id", command)
         self.assertNotIn("--session-key", command)
+        self.assertNotIn("--model", command)
         self.assertNotIn("--thinking", command)
+        self.assertEqual(capability_failure["reason"], "openclaw_agent_option_unsupported")
         self.assertEqual(command[0], "/opt/homebrew/bin/openclaw")
 
     def test_resolve_openclaw_bin_prefers_homebrew_path_when_path_is_minimal(self) -> None:
