@@ -22,6 +22,14 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import LIB_DIR, OPENCLAW_TASKFLOW_MIRROR_FILE, load_octopus_config, openclaw_taskflow_config
 
+try:
+    from task_events import append_task_event
+except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    try:
+        from lib.task_events import append_task_event
+    except ModuleNotFoundError:
+        append_task_event = None  # type: ignore[assignment]
+
 
 TASKFLOW_LINK_SCHEMA_VERSION = "octoclaw.taskflow.link/v1"
 TASKFLOW_MIRROR_SCHEMA_VERSION = "octoclaw.taskflow.mirror/v1"
@@ -680,6 +688,34 @@ def _helper_available() -> bool:
     return os.path.exists(RUNTIME_HELPER) and bool(_node_bin())
 
 
+def _record_native_sync_event(
+    task: dict[str, Any],
+    transition_type: str,
+    flow_id: str,
+    *,
+    ok: bool,
+    result: dict[str, Any] | None = None,
+    error: str = "",
+) -> None:
+    if append_task_event is None:
+        return
+    helper_result = result if isinstance(result, dict) else {}
+    try:
+        append_task_event(
+            task,
+            "native_sync_succeeded" if ok else "native_sync_failed",
+            message=f"native TaskFlow {transition_type} sync {'succeeded' if ok else 'failed'}",
+            extra={
+                "native_action": transition_type,
+                "flow_id": flow_id,
+                "helper_status": _normalized_str(helper_result.get("status")),
+                "helper_error": _normalized_str(helper_result.get("error")) or error,
+            },
+        )
+    except Exception:
+        return
+
+
 def _run_runtime_helper(args: list[str], *, timeout_seconds: int = 20, config: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _helper_available():
         return {
@@ -943,6 +979,14 @@ def sync_terminal_transition(
 
         result = _run_runtime_helper(helper_args, timeout_seconds=timeout_seconds)
         ok = bool(result.get("ok"))
+        _record_native_sync_event(
+            task,
+            transition_type,
+            flow_id,
+            ok=ok,
+            result=result,
+            error="" if ok else _normalized_str(result.get("error")) or "runtime helper returned non-ok",
+        )
         return {
             "synced": ok,
             "native_action": transition_type,
@@ -950,6 +994,13 @@ def sync_terminal_transition(
             "error": "" if ok else _normalized_str(result.get("error")) or "runtime helper returned non-ok",
         }
     except Exception as exc:
+        _record_native_sync_event(
+            task,
+            transition_type,
+            flow_id,
+            ok=False,
+            error=str(exc),
+        )
         return {
             "synced": False,
             "native_action": transition_type,

@@ -125,5 +125,25 @@ class TestNoPositionalFlowId(unittest.TestCase):
         self.assertNotEqual(args[1], "flow-123")
 
 
+class TestNativeSyncEvents(unittest.TestCase):
+    @patch("openclaw_taskflow_adapter.append_task_event")
+    @patch("openclaw_taskflow_adapter._run_runtime_helper")
+    def test_success_event_is_recorded(self, mock_helper, mock_event):
+        mock_helper.return_value = {"ok": True, "status": "ok"}
+        sync_terminal_transition(BOUND_TASK, "finished")
+        mock_event.assert_called_once()
+        self.assertEqual(mock_event.call_args[0][1], "native_sync_succeeded")
+        self.assertEqual(mock_event.call_args.kwargs["extra"]["flow_id"], "flow-123")
+
+    @patch("openclaw_taskflow_adapter.append_task_event")
+    @patch("openclaw_taskflow_adapter._run_runtime_helper")
+    def test_failure_event_is_recorded(self, mock_helper, mock_event):
+        mock_helper.return_value = {"ok": False, "status": "timeout", "error": "helper timed out"}
+        sync_terminal_transition(BOUND_TASK, "failed")
+        mock_event.assert_called_once()
+        self.assertEqual(mock_event.call_args[0][1], "native_sync_failed")
+        self.assertEqual(mock_event.call_args.kwargs["extra"]["helper_error"], "helper timed out")
+
+
 if __name__ == "__main__":
     unittest.main()

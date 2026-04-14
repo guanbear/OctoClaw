@@ -279,6 +279,43 @@ class TaskStateAnchorSeedTests(unittest.TestCase):
             self.assertEqual(events[-1]["kind"], "delivery_sent")
             self.assertEqual(events[-1]["delivery_id"], "delivery-task-4")
 
+    def test_fire_and_forget_native_sync_spawns_detached_child(self) -> None:
+        task = {
+            "id": "task-native-1",
+            "status": "done",
+            "openclaw_taskflow": {
+                "native_binding_state": "bound",
+                "backend": "managed",
+                "flow_id": "flow-1",
+                "session_key": "sess-1",
+            },
+        }
+        with patch.object(task_state_update.subprocess, "Popen") as mock_popen:
+            task_state_update._fire_and_forget_native_sync(task, "done")
+
+        mock_popen.assert_called_once()
+        cmd = mock_popen.call_args[0][0]
+        self.assertIn("native-sync", cmd)
+        self.assertIn("--transition", cmd)
+        self.assertEqual(cmd[cmd.index("--transition") + 1], "finished")
+        self.assertIn("--task-json", cmd)
+        payload = json.loads(cmd[cmd.index("--task-json") + 1])
+        self.assertEqual(payload["id"], "task-native-1")
+        self.assertEqual(mock_popen.call_args.kwargs["stdout"], task_state_update.subprocess.DEVNULL)
+        self.assertTrue(mock_popen.call_args.kwargs["start_new_session"])
+
+    def test_fire_and_forget_native_sync_records_dispatch_failure(self) -> None:
+        task = {"id": "task-native-2", "status": "done"}
+        with (
+            patch.object(task_state_update.subprocess, "Popen", side_effect=OSError("spawn failed")),
+            patch.object(task_state_update, "append_task_event") as mock_event,
+        ):
+            task_state_update._fire_and_forget_native_sync(task, "done")
+
+        mock_event.assert_called_once()
+        self.assertEqual(mock_event.call_args[0][1], "native_sync_failed")
+        self.assertEqual(mock_event.call_args.kwargs["extra"]["native_action"], "finished")
+
 
 if __name__ == "__main__":
     unittest.main()

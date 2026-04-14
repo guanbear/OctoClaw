@@ -18,6 +18,12 @@ octoclaw_spawn = importlib.import_module("octoclaw_spawn")
 
 
 class OctoClawSpawnTests(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        route_patcher = patch.object(octoclaw_spawn, "infer_route", return_value={"route": "spawn_single"})
+        self.addCleanup(route_patcher.stop)
+        route_patcher.start()
+
     def test_derive_spawn_session_keys_prefers_clawteam_session(self) -> None:
         keys = octoclaw_spawn.derive_spawn_session_keys("octoclaw-validation", "octo-research-1")
         self.assertEqual(
@@ -263,7 +269,8 @@ class OctoClawSpawnTests(unittest.TestCase):
         self.assertEqual(payload["pid"], 43210)
         self.assertEqual(payload["session_key"], "")
         self.assertTrue(payload["session_id"].startswith("octoclaw-subagent-"))
-        self.assertNotIn("--model", payload["command"])
+        self.assertIn("--model", payload["command"])
+        self.assertIn("zai/glm-4.7", payload["command"])
         self.assertNotIn("--lane", payload["command"])
         self.assertNotIn("--session-key", payload["command"])
         self.assertTrue(payload["stdout_path"].endswith(".stdout.log"))

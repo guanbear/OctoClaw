@@ -10,6 +10,7 @@ import argparse
 import fcntl
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
 
@@ -1359,7 +1360,7 @@ def cmd_checklist(args):
 
 
 def _fire_and_forget_native_sync(current_record, status):
-    """After local terminal state is saved, fire async native TaskFlow sync."""
+    """After local terminal state is saved, dispatch native TaskFlow sync out of band."""
     terminal_map = {
         "done": "finished",
         "completed": "finished",
@@ -1370,9 +1371,38 @@ def _fire_and_forget_native_sync(current_record, status):
     if not transition_type:
         return
     try:
-        sync_terminal_transition(current_record, transition_type)
-    except Exception:
-        pass
+        subprocess.Popen(
+            [
+                sys.executable or "python3",
+                os.path.abspath(__file__),
+                "native-sync",
+                "--transition",
+                transition_type,
+                "--task-json",
+                json.dumps(current_record, ensure_ascii=False),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+            env=dict(os.environ),
+        )
+    except Exception as exc:
+        try:
+            append_task_event(
+                current_record,
+                "native_sync_failed",
+                message=f"native TaskFlow {transition_type} sync dispatch failed",
+                extra={"native_action": transition_type, "helper_error": str(exc)},
+            )
+        except Exception:
+            pass
+
+
+def cmd_native_sync(args):
+    task = args.task_json if isinstance(args.task_json, dict) else {}
+    result = sync_terminal_transition(task, args.transition)
+    print(json.dumps(result, ensure_ascii=False))
 
 
 def _finish(
@@ -1771,6 +1801,10 @@ def main():
     p_checklist.add_argument("--summary", default="")
     p_checklist.add_argument("--message", default="")
 
+    p_native_sync = sub.add_parser("native-sync")
+    p_native_sync.add_argument("--transition", required=True, choices=["finished", "failed", "cancelled"])
+    p_native_sync.add_argument("--task-json", dest="task_json", type=parse_json_arg, required=True)
+
     # list
     sub.add_parser("list")
 
@@ -1793,6 +1827,8 @@ def main():
         cmd_event(args)
     elif args.command == "checklist":
         cmd_checklist(args)
+    elif args.command == "native-sync":
+        cmd_native_sync(args)
     elif args.command == "list":
         cmd_list(args)
     elif args.command == "archive-stale-dispatched":
