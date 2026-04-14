@@ -1,4 +1,5 @@
 import { MODEL_POLICY_FILE, loadJson, loadOctoClawConfig } from "./config.js";
+import { detectOperatorSurface } from "./intent.js";
 import { inferRunnerPlaybook } from "./runner_playbooks.js";
 import { inferWorkerPool as taxonomyInferWorkerPool } from "./taxonomy.js";
 
@@ -270,6 +271,7 @@ const WORKFLOW_META_PATTERNS = {
   zh: [
     String.raw`(你是啥模型|你是什么模型|现在啥模型|当前啥模型|现在啥model|当前啥model)`,
     String.raw`(你现在是啥模型|你现在是什么模型|现在是啥模型|现在是什么模型|当前是啥模型|当前是什么模型|现在用的啥模型|现在用的什么模型|当前用的啥模型|当前用的什么模型)`,
+    String.raw`(你现在到底是啥模型|你现在到底是什么模型|现在到底是啥模型|现在到底是什么模型|当前到底是啥模型|当前到底是什么模型)`,
     String.raw`(主会话模型|策略主链|主链漂移|子任务模型|当前路由|现在走的是什么路由|这次走的是什么路由)`,
     String.raw`(刚才(那次|这个)?(查询|问题|任务)?是子任务做的吗|刚才(那次|这个)?(查询|问题|任务)?是不是子任务做的|是不是子任务做的|是不是主会话自己查的|是不是主agent自己查的)`,
     String.raw`(你是怎么查的|咋查的|如何查的|用什么查的|怎么查到的)`,
@@ -402,6 +404,12 @@ function normalizeConversationControlMetadata(metadata = {}) {
   return { ...raw };
 }
 
+function hasDeterministicIntentPacket(metadata = {}) {
+  const packet = metadata?.intent_packet;
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) return false;
+  return packet.available !== false;
+}
+
 function inferLookupProject(task = "") {
   const text = String(task || "").trim().toLowerCase();
   if (!text) return "";
@@ -430,11 +438,12 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   const intentSignals = intentPacket?.signals && typeof intentPacket.signals === "object" && !Array.isArray(intentPacket.signals)
     ? intentPacket.signals
     : {};
+  const rawOperatorSurface = detectOperatorSurface(rawTask);
   const signalSurfaceMentions = Array.isArray(intentSignals.surface_mentions)
     ? intentSignals.surface_mentions.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
-  const intentPacketAvailable = Boolean(intentPacket && typeof intentPacket === "object" && !Array.isArray(intentPacket) && intentPacket.available !== false);
-  const signalLocalSurfaceLookup = !intentPacketAvailable && signalSurfaceMentions.length > 0;
+  const intentPacketAvailable = hasDeterministicIntentPacket(metadata);
+  const signalLocalSurfaceLookup = !intentPacketAvailable && (signalSurfaceMentions.length > 0 || Boolean(rawOperatorSurface));
   const intentClass = String(conversationControl.intent_class || intentPacket.intent_class || "").trim();
   const intentLookup = intentPacket?.lookup && typeof intentPacket.lookup === "object" && !Array.isArray(intentPacket.lookup)
     ? intentPacket.lookup
@@ -494,10 +503,16 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   let workflowMetaCandidate = workflowMetaHits > 0;
   let sessionControlCandidate = Boolean(sessionControlHits > 0);
   const modelBenchmarkCandidate = Boolean(modelBenchmarkHits > 0 && modelReferenceHits > 0 && !workflowMetaCandidate && !sessionControlCandidate);
+  const executionFollowupCandidate = intentClass === "execution_followup";
+  const localSurfaceIntentCandidate = intentClass === "local_surface_lookup";
+  const freshLiveIntentCandidate = intentClass === "fresh_live_lookup";
   const runtimeVersionLookup = Boolean(
-    !intentPacketAvailable
+    !freshLiveIntentCandidate
+    && !executionFollowupCandidate
     && (
-    signalSurfaceMentions.includes("runtime_version")
+    localSurfaceIntentCandidate
+    || Boolean(rawOperatorSurface && ["runtime_version", "runtime_model"].includes(String(rawOperatorSurface.surface_id || "").trim()))
+    || signalSurfaceMentions.includes("runtime_version")
     || (
       !/(模型|model)/iu.test(text)
       && !/(新版本|更新|发版|release|changelog|新特性|特性|变化|memory|dream|what'?s new|latest|recent)/iu.test(text)
@@ -511,7 +526,8 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
   );
 
   const repoActivityLookup = Boolean(
-    !intentPacketAvailable
+    !localSurfaceIntentCandidate
+    && !executionFollowupCandidate
     && (
     (
       /(github|gitlab|仓库|repo|repository|项目)/iu.test(text)
@@ -525,12 +541,20 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     )
   );
   const boundedSoftwareUpdateLookup = Boolean(
-    !intentPacketAvailable
+    !localSurfaceIntentCandidate
+    && !executionFollowupCandidate
     && (
     /(openclaw|octoclaw)/iu.test(text)
     && /(有啥更新|有什么更新|更新了什么|最近.*更新|最新.*更新|最新.*release|新版本|release|新的?发版|最新发版|最近发版|memory方向|特性|变化)/iu.test(text)
     && !/(改了啥|改了什么|提交|commit|pr|issue|详细|分析|总结|报告|写一版|release analysis|commit summary|summari[sz]e)/iu.test(rawTask)
     )
+  );
+  const releaseNotesLookup = Boolean(
+    !localSurfaceIntentCandidate
+    && !executionFollowupCandidate
+    && /(openclaw|octoclaw)/iu.test(text)
+    && /((release\s*notes?)|(发布说明)|(新特性)|(更新内容)|(版本变化))/iu.test(rawTask)
+    && !/(改了啥|改了什么|都有啥提交|今天都有啥提交|提交明细|详细变更|分析|总结|报告|写一版|recommend|analysis|what changed|commit summary|summari[sz]e commits?)/iu.test(rawTask)
   );
   const boundedRepoUpdateLookup = Boolean(
     (repoActivityLookup || boundedSoftwareUpdateLookup)
@@ -539,7 +563,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     && summaryOutputHits === 0
     && writeHits === 0
   );
-  const freshLiveLookupCandidate = Boolean(intentClass === "fresh_live_lookup" || boundedRepoUpdateLookup);
+  const freshLiveLookupCandidate = Boolean(freshLiveIntentCandidate || releaseNotesLookup || boundedRepoUpdateLookup);
   const localProductHelpLookup = Boolean(
     productHelpHits > 0
     && /(open\s*claw|openclaw|octo\s*claw|octoclaw)/iu.test(rawTask)
@@ -554,7 +578,9 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     freshLiveLookupCandidate ? inferLookupFocus(rawTask) : ""
   );
   const localSurfaceLookupCandidate = Boolean(
-    conversationKind === "local_surface_lookup"
+    localSurfaceIntentCandidate
+    || conversationKind === "local_surface_lookup"
+    || Boolean(rawOperatorSurface)
     || (
       (signalLocalSurfaceLookup || runtimeVersionLookup)
       && !freshLiveLookupCandidate
@@ -649,7 +675,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     explicitObserverCommand || observerControlHits > 0 || workflowMetaCandidate || taskProgressCandidate
   );
 
-  if (conversationKind === "execution_followup" || conversationKind === "task_followup") {
+  if (executionFollowupCandidate || conversationKind === "execution_followup" || conversationKind === "task_followup") {
     workflowMetaCandidate = true;
     observerControlCandidate = true;
     effectiveResearchHits = 0;
@@ -658,7 +684,10 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     effectiveCodeHits = 0;
     effectiveWriteHits = 0;
     effectiveRunnerNegativeHits = 0;
-  } else if (conversationKind === "local_surface_lookup" || localSurfaceLookupCandidate) {
+  } else if (localSurfaceIntentCandidate || conversationKind === "local_surface_lookup" || localSurfaceLookupCandidate) {
+    observerControlCandidate = false;
+    workflowMetaCandidate = false;
+    sessionControlCandidate = false;
     explicitLocalProbe = true;
     effectiveLocalStateHits = Math.max(effectiveLocalStateHits, 1);
     effectiveRunnerReadOnlyIntentHits = Math.max(effectiveRunnerReadOnlyIntentHits, 1);
@@ -669,7 +698,7 @@ export function extractFeatures(task, command = "", runtimeCfg = null, metadata 
     effectiveCodeHits = 0;
     effectiveWriteHits = 0;
     effectiveRunnerNegativeHits = 0;
-  } else if (conversationKind === "fresh_live_lookup") {
+  } else if (freshLiveIntentCandidate || conversationKind === "fresh_live_lookup") {
     observerControlCandidate = false;
     workflowMetaCandidate = false;
     sessionControlCandidate = false;

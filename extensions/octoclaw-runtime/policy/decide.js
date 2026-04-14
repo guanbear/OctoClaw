@@ -655,10 +655,45 @@ function policyJudgeApplyState(result = {}, runtimeCfg = {}, forceRoute = "", st
   };
 }
 
+const DIRECT_SEMANTIC_TASK_CLASSES = new Set([
+  "direct_answer",
+  "fast_local_check",
+  "control_observer",
+  "session_control",
+]);
+
+function canonicalDelegatedTaskClass(route, currentTaskClass = "") {
+  const taskClass = normalizedText(currentTaskClass);
+  if (route === "runner") return "fast_tool_check";
+  if (["spawn_single", "spawn_multi"].includes(route)) {
+    if (taskClass && !DIRECT_SEMANTIC_TASK_CLASSES.has(taskClass) && taskClass !== "fast_tool_check") {
+      return taskClass;
+    }
+    return "focused_research";
+  }
+  return taskClass;
+}
+
+function canonicalDelegatedWorkType(route, currentWorkType = "") {
+  const workType = normalizedText(currentWorkType);
+  if (route === "runner") return "ops";
+  if (["code", "review", "research"].includes(workType)) return workType;
+  return "research";
+}
+
+function canonicalDelegatedPhase(route, workType, currentPhase = "") {
+  const phase = normalizedText(currentPhase);
+  if (route === "runner") return "inspect";
+  if (workType === "code") return phase || "implement";
+  if (workType === "review") return phase || "verify";
+  return phase || "collect";
+}
+
 function overrideRouteSemanticsFromJudge(
   route,
   { taskClass = "", workContract = "", workType = "", phase = "", protocol = "normal", workerPool = "" } = {},
   judgeResult = {},
+  _options = {},
 ) {
   const requestKind = normalizedText(judgeResult?.request_kind);
   if (route === "runner") {
@@ -674,21 +709,32 @@ function overrideRouteSemanticsFromJudge(
     }
     if (requestKind === "execution_followup") {
       return {
-        taskClass: "control_observer",
-        workContract: "answer_now",
-        workType: "research",
-        phase: "collect",
-        protocol,
+        taskClass: canonicalDelegatedTaskClass(route, "control_observer"),
+        workContract: "inspect_report",
+        workType: canonicalDelegatedWorkType(route, "research"),
+        phase: canonicalDelegatedPhase(route, "ops", "collect"),
+        protocol: "normal",
         workerPool: workerPool || "octoclaw-runner",
       };
     }
     return {
-      taskClass: taskClass || "focused_research",
-      workContract: workContract || "inspect_report",
-      workType: workType || "ops",
-      phase: phase || "inspect",
-      protocol,
+      taskClass: canonicalDelegatedTaskClass(route, taskClass),
+      workContract: "inspect_report",
+      workType: canonicalDelegatedWorkType(route, workType),
+      phase: canonicalDelegatedPhase(route, "ops", phase),
+      protocol: "normal",
       workerPool: workerPool || "octoclaw-runner",
+      };
+  }
+  if (["spawn_single", "spawn_multi"].includes(route)) {
+    const delegatedWorkType = canonicalDelegatedWorkType(route, workType);
+    return {
+      taskClass: canonicalDelegatedTaskClass(route, taskClass),
+      workContract: route === "spawn_multi" ? "coordinated_work" : "deliverable_work",
+      workType: delegatedWorkType,
+      phase: canonicalDelegatedPhase(route, delegatedWorkType, phase),
+      protocol,
+      workerPool: inferWorkerPool(route, delegatedWorkType),
     };
   }
   return { taskClass, workContract, workType, phase, protocol, workerPool };
@@ -1182,29 +1228,38 @@ function stateGroundingPolicy(routeMeta, route, taskClass) {
   };
 }
 
-function latencyAckPolicy(route, taskClass, features = {}) {
+function latencyAckPolicy(route, taskClass, features = {}, options = {}) {
+  const surfaceId = String(options?.surfaceId || "").trim();
   const directStateLookup = Boolean(
     features.local_state_hits
     || features.session_control_hits
     || features.model_reference_hits
     || features.runner_hits
+    || features.workflow_meta_hits
+    || features.task_progress_hits
+  );
+  const directLatencySurface = new Set(["runtime_model"]);
+  const controlObserverLike = Boolean(
+    taskClass === "session_control"
+    || taskClass === "control_observer"
+    || (taskClass === "direct_answer" && directStateLookup)
   );
   const required = (
     route === "direct"
-    && taskClass !== "control_observer"
     && Boolean(
       features.external_lookup_only
       || features.bounded_repo_update_lookup
       || features.fresh_live_lookup
       || features.local_product_help_lookup
-      || taskClass === "session_control"
-      || (taskClass === "direct_answer" && directStateLookup)
+      || controlObserverLike
+      || (taskClass === "fast_local_check" && directLatencySurface.has(surfaceId))
     )
   );
   const text = !required
     ? ""
     : (
-      taskClass === "session_control" || (taskClass === "direct_answer" && directStateLookup)
+      controlObserverLike
+      || (taskClass === "fast_local_check" && directLatencySurface.has(surfaceId))
         ? "我先看一下当前状态，马上回复你。"
         : (features.bounded_repo_update_lookup || features.fresh_live_lookup
           ? "我先看一下最新更新，马上给你结论。"
@@ -1596,6 +1651,7 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
       route,
       { taskClass, workContract, workType, phase, protocol, workerPool },
       policyJudgeResult,
+      { baseRoute },
     );
     taskClass = overridden.taskClass;
     workContract = overridden.workContract;
@@ -1657,7 +1713,9 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
     requestKind: normalizedText(policyJudgeResult?.request_kind),
   });
   const stateGrounding = stateGroundingPolicy(routeMeta, route, taskClass);
-  const latencyAck = latencyAckPolicy(route, taskClass, features);
+  const latencyAck = latencyAckPolicy(route, taskClass, features, {
+    surfaceId: normalizedText(intentPacket?.lookup?.surface_id),
+  });
   const routeRecommendation = buildRouteRecommendation(routeMeta, {
     route,
     worker_pool: workerPool,

@@ -58,6 +58,15 @@ const OPERATOR_SURFACE_REGISTRY = [
     ],
   },
   {
+    surface_id: "runtime_model",
+    lane_hint: "direct",
+    scope: "local_surface_lookup",
+    patterns: [
+      /(你是啥模型|你是什么模型|你现在是啥模型|你现在是什么模型|你现在到底是啥模型|你现在到底是什么模型|当前是啥模型|当前是什么模型|当前到底是啥模型|当前到底是什么模型|现在用的啥模型|现在用的什么模型)/iu,
+      /\b(what model are you using|what model are you on|current model|main session model|policy primary model)\b/iu,
+    ],
+  },
+  {
     surface_id: "control_ui",
     lane_hint: "direct",
     scope: "local_surface_lookup",
@@ -92,6 +101,8 @@ const OPERATOR_SURFACE_REGISTRY = [
 const FRESH_LIVE_LOOKUP_PATTERNS = [
   /(查|查下|查一下|再查|再看|看下|看一下|看看|确认|确认下|确认一下).{0,16}(openclaw|octoclaw).{0,20}(更新|发版|release|版本|changelog|memory|dream)/iu,
   /(openclaw|octoclaw).{0,20}(有啥更新|有什么更新|有没有新的发版|有没有新发版|有没有新的release|有没有新release|最近.*更新|最新.*更新|最近.*发版|最近.*release|新版本)/iu,
+  /(查|查下|查一下|帮我查下|帮我看下).{0,12}(openclaw|octoclaw).{0,20}(\d{1,4}(?:\.\d{1,4}){1,3}|v\d{1,4}(?:\.\d{1,4}){1,3}).{0,20}(新特性|特性|更新|release notes|release|版本变化|更新内容)/iu,
+  /(openclaw|octoclaw).{0,20}(\d{1,4}(?:\.\d{1,4}){1,3}|v\d{1,4}(?:\.\d{1,4}){1,3}).{0,20}(新特性|特性|更新|release notes|release|版本变化|更新内容)/iu,
   /((openclaw|octoclaw).{0,48}(github|gitlab|repo|repository|项目|仓库).{0,48}(有更新吗|有没有更新|更新了什么|commit|release|tag|pr|issue|变更|今天|今日|最近)|((github|gitlab|repo|repository|项目|仓库).{0,48}(openclaw|octoclaw).{0,48}(有更新吗|有没有更新|更新了什么|commit|release|tag|pr|issue|变更|今天|今日|最近)))/iu,
   /\b(check|look up|see|verify|confirm)\b.{0,18}\b(openclaw|octoclaw)\b.{0,24}\b(update|updates|release|version|changelog|memory|dream)\b/iu,
   /\b(openclaw|octoclaw)\b.{0,48}\b(github|gitlab|repo|repository)\b.{0,48}\b(update|updates|release|commit|tag|pr|issue|today|recent)\b/iu,
@@ -627,6 +638,7 @@ function buildExecutionFollowupPacket(promptText, subjectTurn) {
   const facts = subjectTurn?.facts || {};
   const compoundPlanActive = Boolean(facts.compoundPlanActive);
   const compoundLedger = compoundPlanActive ? (facts.compoundPlanLedger || {}) : {};
+  const hasSubjectTurn = Boolean(subjectTurn && typeof subjectTurn === "object");
 
   let provenanceTaskId = String(facts.taskId || "").trim();
   let provenanceRunnerJobId = String(facts.runnerJobId || "").trim();
@@ -646,7 +658,9 @@ function buildExecutionFollowupPacket(promptText, subjectTurn) {
   return baseIntentPacket(promptText, {
     intent_class: INTENT_CLASSES.EXECUTION_FOLLOWUP,
     confidence: 0.92,
-    reason_codes: compoundPlanActive ? ["recent_execution_followup", "compound_plan_active"] : ["recent_execution_followup"],
+    reason_codes: compoundPlanActive
+      ? ["recent_execution_followup", "compound_plan_active"]
+      : [hasSubjectTurn ? "recent_execution_followup" : "explicit_execution_followup"],
     route_hint: "direct",
     lane_hint: "control_observer",
     protected_lane: "control_observer",
@@ -768,14 +782,21 @@ export function buildIntentPacket({
   const deliveryRelayIndex = buildDeliveryRelayIndex(deriveTaskEventsPath(taskStatePath));
   const enrichedTurns = turns.map((turn) => ({ ...turn, facts: buildTurnFacts(turn, taskIndex, taskEventIndex, deliveryRelayIndex) }));
   const subjectTurn = selectSubjectTurn(enrichedTurns, isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, sessionKeys);
-  if (subjectTurn && looksLikeShortExecutionFollowup(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, subjectTurn)) {
+  const primaryPrompt = isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText;
+  if (subjectTurn && looksLikeShortExecutionFollowup(primaryPrompt, subjectTurn)) {
     return {
-      ...buildExecutionFollowupPacket(isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText, subjectTurn),
+      ...buildExecutionFollowupPacket(primaryPrompt, subjectTurn),
       ...(isBurst ? { burst_decomposition: burstSubPrompts.map((sub) => classifyBurstSubIntent(sub)) } : {}),
     };
   }
 
-  const primaryPrompt = isBurst ? burstSubPrompts[burstSubPrompts.length - 1] : promptText;
+  if (isProvenancePrompt(primaryPrompt) || isTaskProgressPrompt(primaryPrompt) || isMetaPrompt(primaryPrompt)) {
+    return {
+      ...buildExecutionFollowupPacket(primaryPrompt, subjectTurn),
+      ...(isBurst ? { burst_decomposition: burstSubPrompts.map((sub) => classifyBurstSubIntent(sub)) } : {}),
+    };
+  }
+
   const primarySignals = buildSignalPacket(primaryPrompt);
   return {
     ...baseIntentPacket(primaryPrompt, {
