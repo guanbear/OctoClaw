@@ -55,9 +55,13 @@ def normalize_runner_mode(value: str) -> str:
     text = str(value or "").strip().lower()
     if text in {"ondemand", "on_demand"}:
         return "ondemand"
-    if text == "daemon":
+    if text in {"daemon", "resident"}:
         return "daemon"
     return ""
+
+
+def default_runner_execution_mode(value: str = "") -> str:
+    return normalize_runner_mode(value) or "daemon"
 
 
 def probe_tmux_session(session_name: str, *, runner_window_name: str = "runner") -> dict[str, Any]:
@@ -337,12 +341,20 @@ def build_runtime_snapshot(
         + int(counts_by_status.get("deferred", 0) or 0)
     )
     runner = dict(runner_health or {})
-    mode = normalize_runner_mode(runner_execution_mode) or ("daemon" if runner.get("present", False) else "ondemand")
+    mode = default_runner_execution_mode(runner_execution_mode)
+    resident_state = "healthy"
     runner_state = "healthy"
     if not runner.get("present", False):
-        runner_state = "on-demand" if mode == "ondemand" else str(runner.get("reason", "missing") or "missing")
+        resident_state = str(runner.get("reason", "missing") or "missing")
+        runner_state = "on-demand" if mode == "ondemand" else resident_state
     elif not runner.get("healthy", False):
-        runner_state = str(runner.get("reason", "stale") or "stale")
+        resident_state = str(runner.get("reason", "stale") or "stale")
+        runner_state = resident_state
+    fallback_truth = {
+        "mode": "ondemand",
+        "eligible": bool(mode == "ondemand" or runner_state != "healthy"),
+        "state": "available" if mode == "ondemand" or runner_state != "healthy" else "idle",
+    }
     workbench = workbench_config(load_octopus_config())
     workbench_mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
     workbench_session = str(workbench.get("tmux_session_name", "") or "").strip()
@@ -370,6 +382,9 @@ def build_runtime_snapshot(
             "failure_streak": int(runner.get("failure_streak", 0) or 0),
             "last_job_status": str(runner.get("last_job_status", "") or "").strip(),
             "mode": mode,
+            "resident_mode": "daemon",
+            "resident_state": resident_state,
+            "fallback_truth": fallback_truth,
             "recovery_suggested": bool(mode != "ondemand" and runner_state != "healthy"),
         },
         "counts": {
@@ -414,7 +429,7 @@ def build_runtime_snapshot(
 def observe_runtime_snapshot(*, workspace: str = WORKSPACE) -> dict[str, Any]:
     tasks = load_runtime_tasks()
     runner_health = load_runner_health()
-    runner_execution_mode = normalize_runner_mode(resolve_runner_mode()) or "ondemand"
+    runner_execution_mode = default_runner_execution_mode(resolve_runner_mode())
     queue_counts = load_runner_queue_counts()
     task_events = load_recent_task_events()
     return build_runtime_snapshot(

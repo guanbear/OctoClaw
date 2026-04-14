@@ -31,6 +31,8 @@ class RuntimeSnapshotTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["runner"]["mode"], "daemon")
+        self.assertEqual(payload["runner"]["resident_mode"], "daemon")
+        self.assertEqual(payload["runner"]["resident_state"], "stale")
         self.assertEqual(payload["runner"]["state"], "stale")
         self.assertTrue(payload["runner"]["recovery_suggested"])
         self.assertEqual(payload["counts"]["active"], 2)
@@ -70,6 +72,8 @@ class RuntimeSnapshotTests(unittest.TestCase):
 
         self.assertEqual(payload["runner_execution_mode"], "ondemand")
         self.assertEqual(payload["runner"]["state"], "on-demand")
+        self.assertEqual(payload["runner"]["resident_state"], "missing")
+        self.assertEqual(payload["runner"]["fallback_truth"]["state"], "available")
         self.assertFalse(payload["runner"]["present"])
         self.assertEqual(payload["counts"]["queued"], 1)
         self.assertFalse(payload["workbench"]["optional_backend"])
@@ -106,6 +110,17 @@ class RuntimeSnapshotTests(unittest.TestCase):
         self.assertEqual(payload["runner"]["mode"], "ondemand")
         self.assertEqual(payload["runner"]["state"], "on-demand")
         self.assertFalse(payload["runner"]["recovery_suggested"])
+
+    @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
+    def test_build_runtime_snapshot_defaults_to_daemon_truth_when_mode_unspecified(self, _mock_cfg) -> None:
+        payload = runtime_snapshot.build_runtime_snapshot(
+            runner_health={"present": False, "healthy": False, "reason": "missing"},
+            runner_execution_mode="",
+        )
+
+        self.assertEqual(payload["runner_execution_mode"], "daemon")
+        self.assertEqual(payload["runner"]["resident_state"], "missing")
+        self.assertTrue(payload["runner"]["fallback_truth"]["eligible"])
 
     @patch("lib.runtime_snapshot.load_octopus_config", return_value={})
     def test_build_runtime_snapshot_does_not_suggest_recovery_for_ondemand_mode(self, _mock_cfg) -> None:

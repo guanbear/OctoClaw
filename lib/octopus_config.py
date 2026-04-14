@@ -206,7 +206,7 @@ def resolve_runner_mode(config: dict[str, Any] | None = None) -> str:
     if runtime_mode in {"daemon", "ondemand", "on_demand"}:
         return "ondemand" if runtime_mode in {"ondemand", "on_demand"} else "daemon"
 
-    return "ondemand"
+    return "daemon"
 
 
 def workspace_path(*parts: str) -> str:
