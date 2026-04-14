@@ -655,6 +655,45 @@ function policyJudgeApplyState(result = {}, runtimeCfg = {}, forceRoute = "", st
   };
 }
 
+function overrideRouteSemanticsFromJudge(
+  route,
+  { taskClass = "", workContract = "", workType = "", phase = "", protocol = "normal", workerPool = "" } = {},
+  judgeResult = {},
+) {
+  const requestKind = normalizedText(judgeResult?.request_kind);
+  if (route === "runner") {
+    if (requestKind === "fresh_external_lookup") {
+      return {
+        taskClass: "fast_tool_check",
+        workContract: "inspect_report",
+        workType: "ops",
+        phase: "inspect",
+        protocol: "normal",
+        workerPool: "octoclaw-runner",
+      };
+    }
+    if (requestKind === "execution_followup") {
+      return {
+        taskClass: "control_observer",
+        workContract: "answer_now",
+        workType: "research",
+        phase: "collect",
+        protocol,
+        workerPool: workerPool || "octoclaw-runner",
+      };
+    }
+    return {
+      taskClass: taskClass || "focused_research",
+      workContract: workContract || "inspect_report",
+      workType: workType || "ops",
+      phase: phase || "inspect",
+      protocol,
+      workerPool: workerPool || "octoclaw-runner",
+    };
+  }
+  return { taskClass, workContract, workType, phase, protocol, workerPool };
+}
+
 function stableHash(value = "") {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 16);
 }
@@ -1089,7 +1128,7 @@ function promptContract(protocol, route, workContract, needsReview) {
   };
 }
 
-function preDispatchAckPolicy(route, workType, phase, taskClass = "", features = {}) {
+function preDispatchAckPolicy(route, workType, phase, taskClass = "", features = {}, { workContract = "", requestKind = "" } = {}) {
   const runnerLookupAck = Boolean(
     route === "runner"
     && taskClass !== "control_observer"
@@ -1103,7 +1142,8 @@ function preDispatchAckPolicy(route, workType, phase, taskClass = "", features =
       || features.requires_research
       || features.bounded_software_update_lookup
       || ["local", "remote"].includes(String(features.target_scope || "").trim())
-      || ["inspect_report", "focused_research"].includes(String(features.work_contract || "").trim())
+      || ["inspect_report", "focused_research"].includes(String(workContract || features.work_contract || "").trim())
+      || requestKind === "fresh_external_lookup"
     )
   );
   const required = (["spawn_single", "spawn_multi"].includes(route) || runnerLookupAck) && taskClass !== "control_observer";
@@ -1542,14 +1582,28 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   }
 
   const baseWorkType = inferWorkType(task, features, route, normalizedMetadata);
-  const workType = mergeWorkType(route, baseWorkType, normalizedRouteHint);
+  let workType = mergeWorkType(route, baseWorkType, normalizedRouteHint);
   const basePhase = inferPhase(task, features, workType, route, normalizedMetadata);
-  const phase = mergePhase(route, basePhase, normalizedRouteHint);
-  const workContract = mergeWorkContract(baseWorkContract, route, stickyResult.stickyState, features);
+  let phase = mergePhase(route, basePhase, normalizedRouteHint);
+  let workContract = mergeWorkContract(baseWorkContract, route, stickyResult.stickyState, features);
   const executorType = inferExecutorType(route);
-  const protocol = inferProtocol(features, route, workType);
-  const workerPool = inferWorkerPool(route, workType);
+  let protocol = inferProtocol(features, route, workType);
+  let workerPool = inferWorkerPool(route, workType);
   const userProfile = inferUserFacingProfile(workType, phase, route);
+  let taskClass = String(routeMeta.task_class || "");
+  if (judgeApply.applied) {
+    const overridden = overrideRouteSemanticsFromJudge(
+      route,
+      { taskClass, workContract, workType, phase, protocol, workerPool },
+      policyJudgeResult,
+    );
+    taskClass = overridden.taskClass;
+    workContract = overridden.workContract;
+    workType = overridden.workType;
+    phase = overridden.phase;
+    protocol = overridden.protocol;
+    workerPool = overridden.workerPool;
+  }
   const modelBand = inferModelBand(features, route, workType, protocol);
   const selectorBand = selectorBandForModelBand(modelBand, { route });
   const modelSelectorRole = modelRoleForWorkerPool(workerPool, {
@@ -1596,10 +1650,12 @@ export function buildDecision(task, { command = "", metadata = {}, forceRoute = 
   const dispatchRequired = route !== "direct";
   const shouldWait = route === "runner";
   const waitTimeoutSeconds = shouldWait ? Number(routeMeta.wait_timeout_seconds || 0) : 0;
-  const taskClass = String(routeMeta.task_class || "");
   const routeBudget = budgetPolicy(features, route, workContract, protocol, needsReview);
   const promptPolicy = promptContract(protocol, route, workContract, needsReview);
-  const preDispatchAck = preDispatchAckPolicy(route, workType, phase, taskClass, features);
+  const preDispatchAck = preDispatchAckPolicy(route, workType, phase, taskClass, features, {
+    workContract,
+    requestKind: normalizedText(policyJudgeResult?.request_kind),
+  });
   const stateGrounding = stateGroundingPolicy(routeMeta, route, taskClass);
   const latencyAck = latencyAckPolicy(route, taskClass, features);
   const routeRecommendation = buildRouteRecommendation(routeMeta, {

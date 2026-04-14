@@ -2061,6 +2061,50 @@ Sender (untrusted metadata):
         self.assertEqual(payload["judgeAttempts"][1]["selected"], "cheap_model")
         self.assertEqual(payload["timeoutBudgetMs"], 1400)
 
+    def test_policy_judge_runner_route_overrides_direct_semantics_for_ack_and_contract(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision("帮我查下openclaw 4.12 的新特性", {
+                  metadata: {
+                    policy_judge_result: {
+                      route: "runner",
+                      request_kind: "fresh_external_lookup",
+                      scope: "external product/version release information",
+                      target: "openclaw 4.12 new features / release notes",
+                      evidence_required: ["web_lookup", "execution_ledger"],
+                      confidence: 0.89,
+                      reason_codes: ["user_requests_version_specific_new_features"],
+                      invoked: true,
+                      invocation_state: "completed_fixture",
+                      selected: "main_grade_model",
+                      provider: "stateless_ephemeral_judge",
+                      model: "openai/gpt-5.4"
+                    }
+                  }
+                });
+                return {
+                  route: decision.route_decision.route,
+                  systemPreferredRoute: decision.route_decision.system_preferred_route,
+                  taskClass: decision.route_decision.task_class,
+                  workContract: decision.route_decision.work_contract,
+                  workType: decision.route_decision.work_type,
+                  phase: decision.route_decision.phase,
+                  ack: decision.pre_dispatch_ack,
+                  reasonCodes: decision.route_decision.reason_codes
+                };
+            })()""",
+        )
+
+        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["systemPreferredRoute"], "direct")
+        self.assertEqual(payload["taskClass"], "fast_tool_check")
+        self.assertEqual(payload["workContract"], "inspect_report")
+        self.assertEqual(payload["workType"], "ops")
+        self.assertEqual(payload["phase"], "inspect")
+        self.assertTrue(payload["ack"]["required"])
+        self.assertIn("稍后把结果告诉你", payload["ack"]["text"])
+        self.assertIn("policy_judge_route_applied", payload["reasonCodes"])
+
     def test_stateless_policy_judge_low_confidence_falls_back_to_legacy_route(self) -> None:
         fixture = {
             "route": "direct",
