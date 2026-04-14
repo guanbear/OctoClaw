@@ -599,6 +599,13 @@ def reconcile_native_taskflow_binding(
             best_match = native_task
     if best_match and best_score >= NATIVE_BINDING_THRESHOLD:
         resolved = _apply_native_taskflow_facts(resolved, best_match, match_score=best_score, config=config)
+    elif best_match and best_score > 0:
+        resolved["binding_state"] = "mirrored_match_pending_bind"
+        resolved["native_binding_state"] = "matched_unbound"
+        resolved["native_status"] = _normalized_str(best_match.get("status") or resolved.get("native_status"))
+        resolved["native_runtime"] = _normalized_str(best_match.get("runtime") or resolved.get("native_runtime"))
+        resolved["native_seen_at"] = now_iso()
+        resolved["native_match_score"] = best_score
     elif lookup["native_task_id"] or lookup["native_flow_id"]:
         if not _normalized_str(resolved.get("sync_mode")):
             resolved["sync_mode"] = _default_sync_mode(config=config, binding=resolved)

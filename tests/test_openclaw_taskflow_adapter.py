@@ -102,6 +102,47 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertGreater(resolved["native_match_score"], 0)
         self.assertTrue(resolved["native_seen_at"])
 
+    def test_reconcile_spawn_single_binding_distinguishes_match_without_bind(self) -> None:
+        config = {
+            "openclaw_taskflow": {
+                "enabled": True,
+                "backend": "mirror",
+                "register_spawn_single_flows": True,
+                "native_binding_enabled": True,
+            }
+        }
+        task = {
+            "id": "spawn-match-1",
+            "route": "spawn_single",
+            "runtime": "subagent",
+            "status": "running",
+            "worker_pool": "octoclaw-research",
+            "summary": "research provider docs",
+            "task_description": "research provider docs",
+            "session_key": "agent:main:slack:channel:C123:thread:1",
+        }
+        native_tasks = [
+            {
+                "taskId": "native-task-match-1",
+                "runtime": "subagent",
+                "status": "queued",
+                "task": "research provider docs",
+            }
+        ]
+
+        binding = openclaw_taskflow_adapter.build_taskflow_binding(task, config=config)
+        resolved = openclaw_taskflow_adapter.reconcile_native_taskflow_binding(
+            task,
+            binding=binding,
+            native_tasks=native_tasks,
+            config=config,
+        )
+
+        self.assertEqual(resolved["binding_state"], "mirrored_match_pending_bind")
+        self.assertEqual(resolved["native_binding_state"], "matched_unbound")
+        self.assertEqual(resolved["native_status"], "queued")
+        self.assertGreater(resolved["native_match_score"], 0)
+
     def test_spawn_multi_binding_prefers_linear_flow_shape(self) -> None:
         config = {
             "openclaw_taskflow": {
