@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from lib.task_display import (
     build_operator_task_surface,
+    build_user_task_surface,
     build_task_actions,
     build_task_anchor,
     build_task_detail,
@@ -281,6 +282,28 @@ class TaskDisplayTests(unittest.TestCase):
         )
 
         self.assertEqual(anchor["substrate_summary"], "legacy mirror only")
+
+    def test_build_task_anchor_labels_match_without_bind_substrate(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "match-pending-1",
+                "worker_pool": "octoclaw-research",
+                "status": "queued",
+                "summary": "waiting for native bind",
+                "route": "spawn_single",
+                "openclaw_taskflow": {
+                    "backend": "mirror",
+                    "binding_state": "mirrored_match_pending_bind",
+                    "native_binding_state": "matched_unbound",
+                    "native_status": "queued",
+                    "task_id": "native-task-pending-1",
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertIn("mirror matched but not bound", anchor["substrate_summary"])
+        self.assertIn("matched but not bound", anchor["substrate_summary"])
 
     def test_build_task_detail_includes_checklist(self) -> None:
         detail = build_task_detail(
@@ -628,6 +651,21 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual(surface["interactive"]["blocks"][0]["type"], "text")
         self.assertEqual(surface["interactive"]["blocks"][-1]["type"], "buttons")
         self.assertIn("details code-1", [btn["value"] for btn in surface["interactive"]["blocks"][-1]["buttons"]])
+
+    def test_build_user_task_surface_omits_operator_actions(self) -> None:
+        surface = build_user_task_surface(
+            {
+                "id": "code-1",
+                "worker_pool": "octoclaw-code",
+                "status": "running",
+                "summary": "fix login 401 and add tests",
+                "route": "spawn_single",
+            }
+        )
+
+        self.assertEqual(surface["schema_version"], "octoclaw.user_task_surface/v1")
+        self.assertIn("fix login 401", surface["text"])
+        self.assertNotIn("Reply with:", surface["text"])
 
     def test_build_task_queue_view_groups_states(self) -> None:
         queue = build_task_queue_view(

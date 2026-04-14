@@ -105,6 +105,8 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
 
     if backend == "managed":
         substrate_label = "managed flow"
+    elif backend == "mirror" and native_state == "matched_unbound":
+        substrate_label = "mirror matched but not bound"
     elif backend == "mirror" and (
         flow_id
         or task_id
@@ -141,6 +143,8 @@ def _taskflow_substrate_summary(binding: dict[str, Any]) -> str:
         "bound": "bound",
         "mirrored_bound": "bound",
         "mirrored": "waiting for native bind",
+        "mirrored_match_pending_bind": "matched but not bound",
+        "matched_unbound": "matched but not bound",
     }.get(state_value, state_value.replace("_", " ") if state_value else "")
 
     parts = [substrate_label]
@@ -1142,6 +1146,22 @@ def build_operator_task_surface(task: dict[str, Any], *, now: datetime | None = 
         "task_actions": actions,
         "interactive": build_task_interactive_payload(normalized, anchor=anchor, actions=actions),
         "text_fallback": render_task_anchor_text(anchor, actions),
+    }
+
+
+def build_user_task_surface(task: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    normalized = _normalize_task(task)
+    anchor = build_task_anchor(normalized, now=now)
+    return {
+        "schema_version": "octoclaw.user_task_surface/v1",
+        "task_anchor": {
+            "task_id": _text(anchor.get("task_id")),
+            "title": _text(anchor.get("title")),
+            "state": _text(anchor.get("state_label") or anchor.get("state")),
+            "summary": _text(anchor.get("summary")),
+            "route": _text(anchor.get("route")),
+        },
+        "text": render_task_anchor_text(anchor, []),
     }
 
 

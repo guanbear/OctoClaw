@@ -23,9 +23,13 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "slack")
         self.assertEqual(payload["transport"]["kind"], "slack")
         self.assertTrue(payload["transport"]["supports_rich"])
-        self.assertTrue(payload["transport"]["supports_buttons"])
+        self.assertFalse(payload["transport"]["supports_buttons"])
         self.assertIn("slack", payload)
         self.assertIn("interactive", payload)
+        self.assertEqual(payload["operator_surface"], {})
+        self.assertEqual(payload["task_actions"], [])
+        self.assertEqual(payload["interactive"], {})
+        self.assertIn("user_surface", payload)
         self.assertIn("blocks", payload["slack"])
         self.assertEqual(payload["capability"]["level"], "L2")
         self.assertEqual(payload["surface_role"]["role"], "lightweight_ops")
@@ -60,7 +64,7 @@ class NotifierTaskPayloadTests(unittest.TestCase):
             },
         }
 
-        payload = build_task_notification_payload(task, backend="slack")
+        payload = build_task_notification_payload(task, backend="none")
 
         self.assertEqual(payload["operator_surface"]["schema_version"], "octoclaw.task_display/v1")
         self.assertEqual(payload["task_anchor"]["task_id"], "code-1")
@@ -90,7 +94,7 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertIn("fix login 401", args[2])
         self.assertEqual(mock_send.call_args[1]["thread_id"], "1712345.000100")
         self.assertIn("interactive", mock_send.call_args[1])
-        self.assertEqual(mock_send.call_args[1]["interactive"]["blocks"][-1]["type"], "buttons")
+        self.assertIsNone(mock_send.call_args[1]["interactive"])
         mock_register.assert_called_once()
         self.assertTrue(any(call.args[1] == "anchor_sent" for call in mock_event.call_args_list))
 

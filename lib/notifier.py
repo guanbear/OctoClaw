@@ -20,13 +20,13 @@ try:
     from octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
     from runtime_task_record import task_state_model
     from task_events import append_task_event, register_session_binding, resolve_session_binding
-    from task_display import build_operator_task_surface, render_task_anchor_slack
+    from task_display import build_operator_task_surface, build_user_task_surface, render_task_anchor_slack
     from session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
     from lib.octopus_config import get_notification_backend, infer_session_origin, load_octopus_config, notification_enabled
     from lib.runtime_task_record import task_state_model
     from lib.task_events import append_task_event, register_session_binding, resolve_session_binding
-    from lib.task_display import build_operator_task_surface, render_task_anchor_slack
+    from lib.task_display import build_operator_task_surface, build_user_task_surface, render_task_anchor_slack
     from lib.session_ops import edit_channel_message, resolve_message_target_from_session_key, send_channel_message
 
 FEISHU_CARD_SCRIPT = os.path.join(os.path.dirname(__file__), "feishu-card.py")
@@ -221,6 +221,13 @@ def should_allow_interactive(session_key: str) -> bool:
     return not _session_is_dm(session_key)
 
 
+def _is_user_facing_notification_context(session_key: str, backend: str) -> bool:
+    if str(backend or "").strip().lower() in {"slack", "discord", "telegram", "whatsapp", "wechat", "feishu", "signal", "msteams", "googlechat"}:
+        return True
+    normalized = str(session_key or "").strip().lower()
+    return bool(normalized and not normalized.startswith("agent:main:main"))
+
+
 def build_task_notification_payload(
     task: dict[str, Any],
     *,
@@ -231,12 +238,14 @@ def build_task_notification_payload(
     resolved_backend = _resolve_task_backend(task, backend, cfg)
     session_key = str(task.get("session_key", "") or "").strip()
     allow_interactive = should_allow_interactive(session_key)
+    user_facing = _is_user_facing_notification_context(session_key, resolved_backend)
 
     surface = build_operator_task_surface(task)
+    user_surface = build_user_task_surface(task)
     anchor = surface.get("task_anchor", {}) if isinstance(surface.get("task_anchor"), dict) else {}
-    actions = (surface.get("task_actions", []) if isinstance(surface.get("task_actions"), list) else []) if allow_interactive else []
-    interactive = (surface.get("interactive", {}) if isinstance(surface.get("interactive"), dict) else {}) if allow_interactive else {}
-    text_fallback = str(surface.get("text_fallback", "") or "").strip()
+    actions = (surface.get("task_actions", []) if isinstance(surface.get("task_actions"), list) else []) if allow_interactive and not user_facing else []
+    interactive = (surface.get("interactive", {}) if isinstance(surface.get("interactive"), dict) else {}) if allow_interactive and not user_facing else {}
+    text_fallback = str((user_surface if user_facing else surface).get("text", "") or surface.get("text_fallback", "") or "").strip()
 
     payload: dict[str, Any] = {
         "schema_version": "octoclaw.notification.task/v1",
@@ -244,7 +253,8 @@ def build_task_notification_payload(
         "text": text_fallback,
         "task_anchor": anchor,
         "task_actions": actions,
-        "operator_surface": surface,
+        "operator_surface": {} if user_facing else surface,
+        "user_surface": user_surface,
         "interactive": interactive,
         "capability": capability_for_surface(resolved_backend or "whatsapp"),
         "surface_role": ownership_for_surface("im"),
@@ -255,11 +265,11 @@ def build_task_notification_payload(
     }
 
     if resolved_backend == "slack":
-        payload["slack"] = render_task_anchor_slack(anchor, actions, include_buttons=allow_interactive)
+        payload["slack"] = render_task_anchor_slack(anchor, actions, include_buttons=allow_interactive and not user_facing)
         payload["transport"] = {
             "kind": "slack",
             "supports_rich": True,
-            "supports_buttons": allow_interactive,
+            "supports_buttons": allow_interactive and not user_facing,
             "fallback_kind": "text",
         }
     elif resolved_backend == "feishu":
@@ -416,7 +426,7 @@ def send_task_notification(
             )
             return result
 
-    interactive_payload = interactive if resolved_backend in {"slack", "telegram", "discord", "msteams"} else None
+    interactive_payload = interactive if resolved_backend in {"slack", "telegram", "discord", "msteams"} and interactive else None
     result = _retry(
         send_channel_message,
         resolved_backend,
