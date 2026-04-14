@@ -727,7 +727,11 @@ def _sync_event_type(record: dict, previous_status: str, fallback: str = "upsert
 
 def _is_dm_session(session_key: str) -> bool:
     """Detect if a session key targets a DM (1:1) conversation."""
-    parts = [p for p in str(session_key or "").lower().split(":") if p]
+    raw = str(session_key or "").lower().strip()
+    if raw.startswith("agent:"):
+        segments = [p for p in raw.split(":") if p]
+        raw = ":".join(segments[2:]) if len(segments) >= 3 else raw
+    parts = [p for p in raw.split(":") if p]
     if not parts:
         return False
     origin = parts[0]
@@ -968,6 +972,12 @@ def cmd_upsert(args):
                 existing["recovery_action"] = args.recovery_action
             if args.retry_count is not None:
                 existing["retry_count"] = args.retry_count
+            if args.dispatch_key:
+                existing["dispatch_key"] = args.dispatch_key
+            if args.lane_key:
+                existing["lane_key"] = args.lane_key
+            if args.capacity_group:
+                existing["capacity_group"] = args.capacity_group
             if args.owner:
                 existing["owner"] = args.owner
             if args.route:
@@ -1076,6 +1086,12 @@ def cmd_upsert(args):
                 record["recovery_action"] = args.recovery_action
             if args.retry_count is not None:
                 record["retry_count"] = args.retry_count
+            if args.dispatch_key:
+                record["dispatch_key"] = args.dispatch_key
+            if args.lane_key:
+                record["lane_key"] = args.lane_key
+            if args.capacity_group:
+                record["capacity_group"] = args.capacity_group
             if args.owner:
                 record["owner"] = args.owner
             if args.route:
@@ -1695,6 +1711,9 @@ def main():
     p_upsert.add_argument("--last-observed-at", dest="last_observed_at")
     p_upsert.add_argument("--recovery-action", dest="recovery_action")
     p_upsert.add_argument("--retry-count", dest="retry_count", type=int)
+    p_upsert.add_argument("--dispatch-key", dest="dispatch_key")
+    p_upsert.add_argument("--lane-key", dest="lane_key")
+    p_upsert.add_argument("--capacity-group", dest="capacity_group")
     p_upsert.add_argument("--executor", choices=["subagent", "runner", "team", "main"])
     p_upsert.add_argument("--owner")
     p_upsert.add_argument("--route")
@@ -1722,6 +1741,10 @@ def main():
     p_upsert.add_argument("--result-ready-at", dest="result_ready_at")
     p_upsert.add_argument("--handoff-ready-at", dest="handoff_ready_at")
     p_upsert.add_argument("--observability-health", dest="observability_health")
+    p_upsert.add_argument("--controller-execution-id", dest="controller_execution_id")
+    p_upsert.add_argument("--supersedes", dest="supersedes")
+    p_upsert.add_argument("--superseded-by", dest="superseded_by")
+    p_upsert.add_argument("--replacement-reason", dest="replacement_reason")
     p_upsert.add_argument("--artifacts-json", dest="artifacts_json", type=parse_json_arg, default={})
     p_upsert.add_argument("--checklist-json", dest="checklist_json", type=parse_json_arg, default={})
 

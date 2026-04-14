@@ -156,6 +156,46 @@ class TaskStateUpdateArchiveTests(unittest.TestCase):
             events = (workspace / "tmp" / "octopus" / "task-events.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertTrue(any('"kind": "checkpoint"' in line for line in events))
 
+    def test_upsert_accepts_dispatch_routing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            env = {**os.environ, "WORKSPACE": str(workspace)}
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "upsert",
+                    "--id",
+                    "runner-1",
+                    "--status",
+                    "queued",
+                    "--summary",
+                    "runner queued",
+                    "--route",
+                    "runner",
+                    "--runtime",
+                    "runner",
+                    "--worker-pool",
+                    "octoclaw-runner",
+                    "--dispatch-key",
+                    "abc123def4567890",
+                    "--lane-key",
+                    "runner:octoclaw-runner:lightweight",
+                    "--capacity-group",
+                    "lightweight",
+                ],
+                check=True,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            state = json.loads((workspace / "tmp" / "octopus" / "task-state.json").read_text(encoding="utf-8"))
+            task = state["tasks"][0]
+            self.assertEqual(task["dispatch_key"], "abc123def4567890")
+            self.assertEqual(task["lane_key"], "runner:octoclaw-runner:lightweight")
+            self.assertEqual(task["capacity_group"], "lightweight")
+
     def test_user_notified_event_marks_delivered_timestamp_and_clears_failed_notify_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
