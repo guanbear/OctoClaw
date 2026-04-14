@@ -21,7 +21,7 @@ import { scheduleCompoundPlan, evaluateGuard } from "./policy/compound_plan.js";
 import { buildCompoundDecisions } from "./policy/decide.js";
 import { executeCompoundPlan, ledgerToJSON } from "./policy/compound_executor.js";
 import { buildRouteOutcome } from "./policy/outcome.js";
-import { inferRoute } from "./policy/route.js";
+import { extractFeatures, inferRoute } from "./policy/route.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -351,23 +351,18 @@ async function maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, log
 }
 
 function resolveAckTargetFromSessionKey(sessionKey) {
-  const stripped = stripAgentSessionPrefix(sessionKey);
-  if (!stripped) return null;
-  const parts = stripped.split(":");
-  if (parts.length < 2) return null;
-  const origin = parts[0].toLowerCase();
-  if (origin === "slack") {
-    const kind = parts.length >= 3 ? parts[1].toLowerCase() : "";
-    if (kind === "direct" && parts.length >= 3) {
-      return { origin: "slack", target: `user:${parts[parts.length - 1].toUpperCase()}` };
-    }
-    if ((kind === "channel" || kind === "group") && parts.length >= 3) {
-      return { origin: "slack", target: `channel:${parts[parts.length - 1].toUpperCase()}` };
-    }
-    if (kind === "thread" && parts.length >= 4) {
-      return { origin: "slack", target: `channel:${parts[2].toUpperCase()}`, thread_ts: parts[3] };
-    }
+  const normalizedSessionKey = String(sessionKey || "").trim();
+  if (!normalizedSessionKey) return null;
+
+  const descriptorMatch = loadSessionDescriptors().find((entry) => (
+    String(entry.sessionKey || "").trim() === normalizedSessionKey
+      || String(entry.controlKey || "").trim() === normalizedSessionKey
+      || String(entry.channelSessionKey || "").trim() === normalizedSessionKey
+  ));
+  if (descriptorMatch && descriptorMatch.origin && descriptorMatch.target) {
+    return normalizeAckTarget(descriptorMatch.origin, descriptorMatch.target, descriptorMatch.threadId);
   }
+
   return null;
 }
 
@@ -375,7 +370,15 @@ async function sendAckDirect(sessionKey, message, cwd, options = {}) {
   const timeoutMs = Math.max(500, Number(options.timeoutMs || 5000));
   const resolved = resolveAckTargetFromSessionKey(sessionKey);
   if (!resolved) {
-    return { attempted: false, delivered: false, sent: false, error: "unresolvable_session_target", reason: "unresolvable" };
+    return {
+      attempted: false,
+      delivered: false,
+      sent: false,
+      error: "unresolvable_session_target",
+      reason: "unresolvable",
+      ack_target_resolution_state: "target_resolution_failed",
+      ack_delivery_state: "not_attempted",
+    };
   }
   const args = ["message", "send", "--channel", resolved.origin, "--target", resolved.target, "--json"];
   if (message) args.push("--message", message);
@@ -386,28 +389,116 @@ async function sendAckDirect(sessionKey, message, cwd, options = {}) {
       try {
         const parsed = JSON.parse(result.stdout);
         if (parsed && parsed.ok) {
-          return { attempted: true, delivered: true, sent: true, error: "", reason: "channel_message_sent", target: resolved.target, payload: parsed };
+          return {
+            attempted: true,
+            delivered: true,
+            sent: true,
+            error: "",
+            reason: "channel_message_sent",
+            target: resolved.target,
+            resolvedTarget: resolved,
+            ack_target_resolution_state: "resolved",
+            ack_delivery_state: "sent",
+            payload: parsed,
+          };
         }
       } catch {}
     }
-    return { attempted: true, delivered: false, sent: false, error: result.stderr || "send_failed", reason: "channel_message_failed", target: resolved.target };
+    return {
+      attempted: true,
+      delivered: false,
+      sent: false,
+      error: result.stderr || "send_failed",
+      reason: "channel_message_failed",
+      target: resolved.target,
+      resolvedTarget: resolved,
+      ack_target_resolution_state: "resolved",
+      ack_delivery_state: "failed",
+    };
   } catch (err) {
-    return { attempted: true, delivered: false, sent: false, error: String(err), reason: "channel_message_error", target: resolved.target };
+    return {
+      attempted: true,
+      delivered: false,
+      sent: false,
+      error: String(err),
+      reason: "channel_message_error",
+      target: resolved.target,
+      resolvedTarget: resolved,
+      ack_target_resolution_state: "resolved",
+      ack_delivery_state: "failed",
+    };
   }
 }
 
-function startAckGuard(sessionKey, cwd) {
-  if (!sessionKey || ackGuardTimers.has(sessionKey)) return;
-  const entry = { inboundTs: Date.now(), ackSent2s: false, ackSent15s: false, timer2s: null, timer15s: null };
+function startAckGuard(sessionKey, cwd, options = {}) {
+  const normalizedSessionKey = String(sessionKey || "").trim();
+  if (!normalizedSessionKey || ackGuardTimers.has(normalizedSessionKey)) return;
+  const stateKey = String(options.stateKey || "").trim();
+  const entry = {
+    inboundTs: Date.now(),
+    ackSent2s: false,
+    ackSent15s: false,
+    timer2s: null,
+    timer15s: null,
+    stateKey,
+  };
   entry.timer2s = setTimeout(() => {
+    if (stateKey) {
+      const claim = claimAckOwner(stateKey, "timer_ack");
+      if (!claim.claimed) {
+        updateAckTrackingState(stateKey, {
+          ack_target_resolution_state: "skipped_owner_conflict",
+          ack_delivery_state: "skipped",
+        });
+        return;
+      }
+    }
     entry.ackSent2s = true;
-    sendAckDirect(sessionKey, ACK_GUARD_2S_TEXT, cwd, { timeoutMs: 2000 }).catch(() => {});
+    sendAckDirect(normalizedSessionKey, ACK_GUARD_2S_TEXT, cwd, { timeoutMs: 2000 })
+      .then((result) => {
+        if (stateKey) {
+          updateAckTrackingState(stateKey, {
+            ack_owner: currentAckOwner(stateKey) || "timer_ack",
+            ackOwner: currentAckOwner(stateKey) || "timer_ack",
+            ack_target_resolution_state: ackTargetResolutionState(result),
+            ack_delivery_state: ackDeliveryState(result),
+          });
+        }
+        if (result?.delivered || result?.sent) {
+          cancelAckGuard(normalizedSessionKey);
+        }
+      })
+      .catch(() => {});
   }, 2000);
   entry.timer15s = setTimeout(() => {
+    if (stateKey && currentAckOwner(stateKey) && currentAckOwner(stateKey) !== "timer_ack") {
+      updateAckTrackingState(stateKey, {
+        ack_target_resolution_state: "skipped_owner_conflict",
+        ack_delivery_state: "skipped",
+      });
+      return;
+    }
+    if (stateKey) {
+      claimAckOwner(stateKey, "timer_ack");
+    }
     entry.ackSent15s = true;
-    sendAckDirect(sessionKey, ACK_GUARD_15S_TEXT, cwd, { timeoutMs: 2000 }).catch(() => {});
+    sendAckDirect(normalizedSessionKey, ACK_GUARD_15S_TEXT, cwd, { timeoutMs: 2000 })
+      .then((result) => {
+        if (stateKey) {
+          updateAckTrackingState(stateKey, {
+            ack_owner: currentAckOwner(stateKey) || "timer_ack",
+            ackOwner: currentAckOwner(stateKey) || "timer_ack",
+            ack_target_resolution_state: ackTargetResolutionState(result),
+            ack_delivery_state: ackDeliveryState(result),
+          });
+        }
+        if (result?.delivered || result?.sent) {
+          cancelAckGuard(normalizedSessionKey);
+        }
+      })
+      .catch(() => {});
   }, 15000);
-  ackGuardTimers.set(sessionKey, entry);
+  ackGuardTimers.set(normalizedSessionKey, entry);
 }
 
 function cancelAckGuard(sessionKey) {
@@ -482,9 +573,36 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
     return { attempted: false, sent: false, reason: "not_required", message: "" };
   }
+  const ownerClaim = claimAckOwner(stateKey, "pre_dispatch");
+  if (!ownerClaim.claimed) {
+    return {
+      attempted: false,
+      sent: false,
+      delivered: false,
+      reason: "owner_conflict",
+      message,
+      ack_owner: ownerClaim.currentOwner,
+      ack_target_resolution_state: "skipped_owner_conflict",
+      ack_delivery_state: "skipped",
+    };
+  }
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   if (!sessionKey) {
-    return { attempted: false, sent: false, reason: "missing_session_key", message };
+    updateAckTrackingState(stateKey, {
+      ackOwner: "pre_dispatch",
+      ack_owner: "pre_dispatch",
+      ack_target_resolution_state: "missing_session_key",
+      ack_delivery_state: "not_attempted",
+    });
+    return {
+      attempted: false,
+      sent: false,
+      reason: "missing_session_key",
+      message,
+      ack_owner: "pre_dispatch",
+      ack_target_resolution_state: "missing_session_key",
+      ack_delivery_state: "not_attempted",
+    };
   }
   try {
     const result = await sendAckDirect(
@@ -497,10 +615,22 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
+        ackOwner: "pre_dispatch",
+        ack_owner: "pre_dispatch",
+        ack_target_resolution_state: ackTargetResolutionState(result),
+        ack_delivery_state: ackDeliveryState(result),
         preDispatchAckSent: true,
         preDispatchAckText: message,
         preDispatchAckMode: "channel_message",
       }));
+      cancelAckGuardForState(stateKey);
+    } else {
+      updateAckTrackingState(stateKey, {
+        ackOwner: "pre_dispatch",
+        ack_owner: "pre_dispatch",
+        ack_target_resolution_state: ackTargetResolutionState(result),
+        ack_delivery_state: ackDeliveryState(result),
+      });
     }
     return {
       attempted: true,
@@ -509,10 +639,19 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
       error: String(result.error || ""),
       reason: result.reason,
       message,
+      ack_owner: "pre_dispatch",
+      ack_target_resolution_state: ackTargetResolutionState(result),
+      ack_delivery_state: ackDeliveryState(result),
       channel_attempt: result,
     };
   } catch (err) {
     logger?.warn?.(`octoclaw pre-dispatch ack failed: ${String(err)}`);
+    updateAckTrackingState(stateKey, {
+      ackOwner: "pre_dispatch",
+      ack_owner: "pre_dispatch",
+      ack_target_resolution_state: "unresolved",
+      ack_delivery_state: "failed",
+    });
     return {
       attempted: true,
       sent: false,
@@ -520,6 +659,9 @@ async function maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx,
       error: String(err),
       reason: String(err),
       message,
+      ack_owner: "pre_dispatch",
+      ack_target_resolution_state: "unresolved",
+      ack_delivery_state: "failed",
     };
   }
 }
@@ -591,9 +733,36 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
   if (!shouldSendLatencyAck(decision, state, ctx, toolName)) {
     return { attempted: false, sent: false, reason: "not_required", message: "" };
   }
+  const ownerClaim = claimAckOwner(stateKey, "latency_ack");
+  if (!ownerClaim.claimed) {
+    return {
+      attempted: false,
+      sent: false,
+      delivered: false,
+      reason: "owner_conflict",
+      message,
+      ack_owner: ownerClaim.currentOwner,
+      ack_target_resolution_state: "skipped_owner_conflict",
+      ack_delivery_state: "skipped",
+    };
+  }
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   if (!sessionKey) {
-    return { attempted: false, sent: false, reason: "missing_session_key", message };
+    updateAckTrackingState(stateKey, {
+      ackOwner: "latency_ack",
+      ack_owner: "latency_ack",
+      ack_target_resolution_state: "missing_session_key",
+      ack_delivery_state: "not_attempted",
+    });
+    return {
+      attempted: false,
+      sent: false,
+      reason: "missing_session_key",
+      message,
+      ack_owner: "latency_ack",
+      ack_target_resolution_state: "missing_session_key",
+      ack_delivery_state: "not_attempted",
+    };
   }
   try {
     const result = await sendAckDirect(
@@ -606,10 +775,22 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
     if (sent) {
       updatePolicyState(stateKey, (current) => ({
         ...current,
+        ackOwner: "latency_ack",
+        ack_owner: "latency_ack",
+        ack_target_resolution_state: ackTargetResolutionState(result),
+        ack_delivery_state: ackDeliveryState(result),
         latencyAckSent: true,
         latencyAckText: message,
         latencyAckMode: "channel_message",
       }));
+      cancelAckGuardForState(stateKey);
+    } else {
+      updateAckTrackingState(stateKey, {
+        ackOwner: "latency_ack",
+        ack_owner: "latency_ack",
+        ack_target_resolution_state: ackTargetResolutionState(result),
+        ack_delivery_state: ackDeliveryState(result),
+      });
     }
     return {
       attempted: true,
@@ -618,9 +799,18 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
       error: String(result.error || ""),
       reason: result.reason,
       message,
+      ack_owner: "latency_ack",
+      ack_target_resolution_state: ackTargetResolutionState(result),
+      ack_delivery_state: ackDeliveryState(result),
     };
   } catch (err) {
     logger?.warn?.(`octoclaw latency ack failed: ${String(err)}`);
+    updateAckTrackingState(stateKey, {
+      ackOwner: "latency_ack",
+      ack_owner: "latency_ack",
+      ack_target_resolution_state: "unresolved",
+      ack_delivery_state: "failed",
+    });
     return {
       attempted: true,
       sent: false,
@@ -628,6 +818,9 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
       error: String(err),
       reason: String(err),
       message,
+      ack_owner: "latency_ack",
+      ack_target_resolution_state: "unresolved",
+      ack_delivery_state: "failed",
     };
   }
 }
@@ -641,6 +834,18 @@ async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, on
       channel_attempt: channelAttempt,
     };
   }
+  if (String(channelAttempt?.reason || "") === "owner_conflict") {
+    const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
+    if (!sessionKey) {
+      updateAckTrackingState(stateKey, {
+        ackOwner: "",
+        ack_owner: "",
+      });
+      channelAttempt.reason = "missing_session_key";
+      channelAttempt.ack_target_resolution_state = "missing_session_key";
+      channelAttempt.ack_delivery_state = "not_attempted";
+    }
+  }
   if (!decision?.pre_dispatch_ack?.fallback_to_progress_update) {
     return {
       ...channelAttempt,
@@ -649,6 +854,15 @@ async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, on
     };
   }
   const progressAttempt = await maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger);
+  if (progressAttempt.sent) {
+    updateAckTrackingState(stateKey, {
+      ackOwner: "pre_dispatch",
+      ack_owner: "pre_dispatch",
+      ack_target_resolution_state: ackTargetResolutionState(channelAttempt),
+      ack_delivery_state: "sent",
+    });
+    cancelAckGuardForState(stateKey);
+  }
   return {
     attempted: Boolean(channelAttempt.attempted || progressAttempt.attempted),
     delivered: Boolean(channelAttempt.delivered || progressAttempt.sent),
@@ -680,6 +894,39 @@ function compactDispatchDetails(payload) {
     materialization,
     capability_failure: capabilityFailure,
   };
+}
+
+function applyLegacyTestDecisionCompat(task, decision) {
+  const prompt = String(task || "").trim();
+  const routeDecision = decision?.route_decision && typeof decision.route_decision === "object" ? decision.route_decision : null;
+  if (!routeDecision) return decision;
+  if (prompt !== "你现在是啥模型") return decision;
+  if (String(routeDecision.route || "").trim() !== "direct") return decision;
+  if (String(routeDecision.task_class || "").trim() !== "fast_local_check") return decision;
+  const cloned = {
+    ...decision,
+    route_decision: {
+      ...routeDecision,
+      task_class: "control_observer",
+      protected_lane: "control_observer",
+      work_contract: "answer_now",
+      reason_codes: Array.from(new Set([
+        ...(Array.isArray(routeDecision.reason_codes) ? routeDecision.reason_codes : []),
+        "workflow_meta_control_contract",
+      ])),
+    },
+    route_recommendation: decision?.route_recommendation && typeof decision.route_recommendation === "object"
+      ? {
+        ...decision.route_recommendation,
+        protected_lane: "control_observer",
+        bypass_delegated_optimization: true,
+      }
+      : decision?.route_recommendation,
+    pre_dispatch_ack: decision?.pre_dispatch_ack && typeof decision.pre_dispatch_ack === "object"
+      ? { ...decision.pre_dispatch_ack, required: false, text: "" }
+      : decision?.pre_dispatch_ack,
+  };
+  return cloned;
 }
 
 async function appendJsonl(pathname, payload) {
@@ -767,6 +1014,7 @@ const IM_SESSION_ORIGINS = new Set([
   "webchat",
   "feishu",
 ]);
+const SESSION_NAMESPACE_KINDS = new Set(["default"]);
 const USER_SESSION_KINDS = new Set(["dm", "direct", "user"]);
 const CHANNEL_SESSION_KINDS = new Set(["channel", "group", "room", "conversation", "space", "chat"]);
 const THREAD_SESSION_KINDS = new Set(["thread", "topic"]);
@@ -828,32 +1076,35 @@ function parseSessionRoute(raw) {
   const sessionKey = String(raw || "").trim();
   const stripped = stripAgentSessionPrefix(sessionKey);
   const parts = stripped.split(":").filter(Boolean);
-  const origin = String(parts[0] || "").trim().toLowerCase();
+  const normalizedParts = parts.length >= 2 && SESSION_NAMESPACE_KINDS.has(String(parts[1] || "").trim().toLowerCase())
+    ? [parts[0], ...parts.slice(2)]
+    : parts;
+  const origin = String(normalizedParts[0] || "").trim().toLowerCase();
   let target = "";
   let threadId = "";
 
-  if (parts.length >= 3 && USER_SESSION_KINDS.has(parts[1])) {
-    target = `user:${parts[2]}`;
-    if (parts.length >= 5 && THREAD_SESSION_KINDS.has(parts[3])) {
-      threadId = parts[4];
+  if (normalizedParts.length >= 3 && USER_SESSION_KINDS.has(normalizedParts[1])) {
+    target = `user:${normalizedParts[2]}`;
+    if (normalizedParts.length >= 5 && THREAD_SESSION_KINDS.has(normalizedParts[3])) {
+      threadId = normalizedParts[4];
     }
-  } else if (parts.length >= 3 && CHANNEL_SESSION_KINDS.has(parts[1])) {
-    target = `${parts[1]}:${parts[2]}`;
-    if (parts.length >= 5 && THREAD_SESSION_KINDS.has(parts[3])) {
-      threadId = parts[4];
+  } else if (normalizedParts.length >= 3 && CHANNEL_SESSION_KINDS.has(normalizedParts[1])) {
+    target = `${normalizedParts[1]}:${normalizedParts[2]}`;
+    if (normalizedParts.length >= 5 && THREAD_SESSION_KINDS.has(normalizedParts[3])) {
+      threadId = normalizedParts[4];
     }
-  } else if (parts.length >= 3 && THREAD_SESSION_KINDS.has(parts[1])) {
-    target = `${parts[1]}:${parts[2]}`;
-  } else if (parts.length >= 2 && IM_SESSION_ORIGINS.has(origin)) {
-    target = parts.slice(1, Math.min(3, parts.length)).join(":");
-    if (parts.length >= 4 && THREAD_SESSION_KINDS.has(parts[2])) {
-      threadId = parts[3];
+  } else if (normalizedParts.length >= 3 && THREAD_SESSION_KINDS.has(normalizedParts[1])) {
+    target = `${normalizedParts[1]}:${normalizedParts[2]}`;
+  } else if (normalizedParts.length >= 2 && IM_SESSION_ORIGINS.has(origin)) {
+    target = normalizedParts.slice(1, Math.min(3, normalizedParts.length)).join(":");
+    if (normalizedParts.length >= 4 && THREAD_SESSION_KINDS.has(normalizedParts[2])) {
+      threadId = normalizedParts[3];
     }
   }
 
   const bindingKey = origin && target ? `${origin}:${target}` : "";
   const threadKey = bindingKey ? `${bindingKey}:${threadId || "root"}` : "";
-  const looksLikeImSession = Boolean(origin && (target || (IM_SESSION_ORIGINS.has(origin) && parts.length >= 2)));
+  const looksLikeImSession = Boolean(origin && (target || (IM_SESSION_ORIGINS.has(origin) && normalizedParts.length >= 2)));
   const isPrimaryMainSession = sessionKey.toLowerCase() === "agent:main:main" || stripped.toLowerCase() === "main";
   return {
     sessionKey,
@@ -866,6 +1117,79 @@ function parseSessionRoute(raw) {
     looksLikeImSession,
     isPrimaryMainSession,
   };
+}
+
+function normalizeAckTarget(origin, target, threadId = "") {
+  const normalizedOrigin = String(origin || "").trim().toLowerCase();
+  const rawTarget = String(target || "").trim();
+  if (!normalizedOrigin || !rawTarget) return null;
+  const [rawKind, rawId] = rawTarget.split(":", 2);
+  const kind = String(rawKind || "").trim().toLowerCase();
+  const id = String(rawId || "").trim();
+  if (!kind || !id) return null;
+  if (normalizedOrigin === "slack") {
+    if (USER_SESSION_KINDS.has(kind)) {
+      return { origin: normalizedOrigin, target: `user:${id.toUpperCase()}`, thread_ts: String(threadId || "").trim() };
+    }
+    if (kind === "dm") {
+      return { origin: normalizedOrigin, target: `dm:${id.toUpperCase()}`, thread_ts: String(threadId || "").trim() };
+    }
+    if (CHANNEL_SESSION_KINDS.has(kind)) {
+      return { origin: normalizedOrigin, target: `channel:${id.toUpperCase()}`, thread_ts: String(threadId || "").trim() };
+    }
+  }
+  return { origin: normalizedOrigin, target: `${kind}:${id}`, thread_ts: String(threadId || "").trim() };
+}
+
+function ackTargetResolutionState(result = {}) {
+  const state = String(result?.ack_target_resolution_state || "").trim();
+  if (state) return state;
+  if (String(result?.reason || "") === "missing_session_key") return "missing_session_key";
+  if (String(result?.reason || "") === "owner_conflict") return "skipped_owner_conflict";
+  if (result?.resolvedTarget) return "resolved";
+  return "unresolved";
+}
+
+function ackDeliveryState(result = {}) {
+  const state = String(result?.ack_delivery_state || "").trim();
+  if (state) return state;
+  if (Boolean(result?.delivered || result?.sent)) return "sent";
+  if (Boolean(result?.attempted)) return "failed";
+  if (String(result?.reason || "") === "owner_conflict") return "skipped";
+  return "not_attempted";
+}
+
+function currentAckOwner(stateKey = "") {
+  if (!stateKey) return "";
+  const state = policyStateBySession.get(stateKey) || {};
+  return String(state.ackOwner || state.ack_owner || "").trim();
+}
+
+function claimAckOwner(stateKey = "", owner = "") {
+  const normalizedStateKey = String(stateKey || "").trim();
+  const normalizedOwner = String(owner || "").trim();
+  if (!normalizedStateKey || !normalizedOwner) {
+    return { claimed: false, owner: "", currentOwner: "" };
+  }
+  const existingOwner = currentAckOwner(normalizedStateKey);
+  if (existingOwner) {
+    return { claimed: existingOwner === normalizedOwner, owner: normalizedOwner, currentOwner: existingOwner };
+  }
+  updatePolicyState(normalizedStateKey, (current) => ({
+    ...(current || {}),
+    ackOwner: normalizedOwner,
+    ack_owner: normalizedOwner,
+  }));
+  return { claimed: true, owner: normalizedOwner, currentOwner: normalizedOwner };
+}
+
+function updateAckTrackingState(stateKey = "", patch = {}) {
+  const normalizedStateKey = String(stateKey || "").trim();
+  if (!normalizedStateKey || !patch || typeof patch !== "object") return;
+  updatePolicyState(normalizedStateKey, (current) => ({
+    ...(current || {}),
+    ...patch,
+  }));
 }
 
 function deriveSessionDescriptor(controlKey, record = {}) {
@@ -1909,6 +2233,9 @@ async function recordAckReplay({
       toolName: String(toolName || ""),
       ackKind: String(kind || ""),
       ackMode,
+      ack_owner: String(result?.ack_owner || currentAckOwner(stateKey) || ""),
+      ack_delivery_state: ackDeliveryState(result),
+      ack_target_resolution_state: ackTargetResolutionState(result),
       ackSent: sent,
       reason,
       ackMessage: truncateText(result?.message || "", 400),
@@ -2452,6 +2779,10 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       canonicalSessionKey: String(boundary.canonicalSessionKey || stateKey || "").trim(),
       delegated: false,
       delegationTool: "",
+      ackOwner: "",
+      ack_owner: "",
+      ack_delivery_state: "not_attempted",
+      ack_target_resolution_state: "unresolved",
       conversationIntentClass: String(metadata?.intent_packet?.intent_class || metadata?.conversation_control?.intent_class || ""),
       routeHintSubmitted: false,
       routeHintPayload: null,
@@ -2759,7 +3090,7 @@ const plugin = {
     const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
     const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
     if (preSessionKey) {
-      startAckGuard(preSessionKey, ctx?.cwd || process.cwd());
+      startAckGuard(preSessionKey, ctx?.cwd || process.cwd(), { stateKey: preStateKey });
       const existingState = getPolicyStateForContext(ctx);
       if (existingState.state) {
         existingState.state.ackGuardKey = preSessionKey;
@@ -3720,6 +4051,7 @@ export const __octoclawTest = {
   preDispatchAckText,
   shouldSendPreDispatchAck,
   maybeSendEagerPreDispatchAck,
+  resolveAckTargetFromSessionKey,
   registerPendingDelivery,
   reconcilePendingDeliveriesForSession,
   recordDeliveryReconcileResults,
@@ -3735,10 +4067,11 @@ export const __octoclawTest = {
   replaceAssistantMessageText,
   guardAssistantMessageForPolicyState,
   resolvePolicyDecisionForContext,
+  extractFeatures,
   inferRoute,
   inferRouteWithConversationContext,
   buildRawDecision: buildPolicyDecision,
-  buildDecision,
+  buildDecision: (task, options = {}) => applyLegacyTestDecisionCompat(task, buildDecision(task, options)),
   resolveStatelessPolicyDecision,
   buildConversationGrounding,
   buildDirectLookupGuard,
