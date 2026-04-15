@@ -170,6 +170,17 @@ tools/
 5. progress/final delivery protocol
 6. recovery hooks
 7. telemetry emission
+8. ingress/workflow orchestration split
+9. timeout/failure deadline checks
+
+实现口径：
+
+1. 不做独立 orchestrator daemon
+2. orchestration layer 统一落在 runtime core
+3. ingress orchestration 作为短命请求级逻辑实现
+4. workflow orchestration 作为 runtime core + plugin handler 组合实现
+5. reconcile/recovery 保持 optional worker 形态
+6. timeout 检测按 `queue/start/progress/runtime/delivery` 五类 deadline 拆开
 
 关键状态：
 
@@ -178,6 +189,8 @@ tools/
 3. `waiting_input`
 4. `backend_retry_scheduled`
 5. `delivery_pending`
+6. `stale`
+7. `timed_out`
 
 验收标准：
 

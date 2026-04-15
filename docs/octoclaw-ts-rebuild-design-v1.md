@@ -980,6 +980,285 @@ tools/
 2. 第 2 层必须是状态机和 contract 的家。
 3. 第 3 层不能再参与 live truth。
 
+### 9.1.1 v1 Orchestration Layer 的实现口径
+
+这里需要明确一个很容易误解的问题：
+
+> **OctoClaw v1 需要 orchestrator 这层职责，但不需要先做成一个独立常驻守护进程。**
+
+原因是：
+
+1. 当前系统真正缺的是“谁对调度负责”的清晰边界
+2. 不是“再多一个后台进程”
+3. 如果一上来就做独立 daemon，很容易重新引入第二套状态、第二套通信和第二套故障点
+
+这里的重点不是“做两个 orchestrator”，而是：
+
+> **做一个 orchestration layer，并把它分成两个作用域，再加一个可选补偿件。**
+
+也就是说：
+
+1. 不是两个独立系统
+2. 不是两套状态真相
+3. 不是两个 daemon
+4. 而是同一个 orchestration layer 里的两个入口和一个补偿 worker
+
+更准确的实现方式应该是三层：
+
+#### A. Ingress Orchestration（原 Request Orchestrator）
+
+按请求触发、短命执行。
+
+负责：
+
+1. 读取最小 thread/session facts
+2. 跑 `hard-boundary gate + judge_fast`
+3. 做 `reply / observe / delegate.single` 判断
+4. 发送 ACK
+5. 如果需要委派，则 materialize native task/flow
+
+它不是常驻 worker，而是 request-scoped orchestration。
+它的职责是 `decide + materialize`。
+
+#### B. Workflow Orchestration（原 Workflow Orchestrator）
+
+围绕 native task/flow 与 runtime events 持续推进。
+
+负责：
+
+1. 接收 checkpoint / result / artifact
+2. 更新 workflow state
+3. 推进 delivery / resume / recovery
+4. 驱动 `status / details / queue / timeline`
+
+它更像 runtime core + plugin handler 的组合，不是另起一个“永远跑着的大脑”。
+它的职责是 `advance + recover + deliver`。
+
+#### C. Reconcile / Recovery Worker
+
+这是唯一可以做成后台件的部分，但它是补偿层，不是主链。
+
+负责：
+
+1. 扫 stale task/flow
+2. 补 delivery
+3. 做 reconcile / repair
+4. 清理 projection / mirror
+
+它可以是：
+
+1. one-shot command
+2. cron job
+3. opt-in daemon
+
+但不能成为系统主调度前提。
+
+### 9.1.1.a 为什么不是“两个 orchestrator”
+
+这里再明确一次，避免后面实现时误读：
+
+1. `Ingress Orchestration` 处理“新消息该怎么办”
+2. `Workflow Orchestration` 处理“已开始的 task/flow 后续怎么推进到交付”
+
+它们的区别是作用域不同，不是系统边界不同。
+
+因此：
+
+1. 可以放在同一个 `packages/octoclaw-runtime-core`
+2. 可以共享同一套 contracts / state / telemetry
+3. 可以共用同一个 native task/flow truth
+4. 不需要拆成两个服务
+5. 不需要拆成两个产品
+
+如果硬把它们揉成一个概念，最后很容易重新回到 `route / dispatch / delivery / status` 全缠在一起的旧问题。
+
+### 9.1.2 为什么一开始没这么做
+
+这不是“以前想错了”，而更像是系统演进阶段不同。
+
+我认为主要有 4 个原因：
+
+1. 一开始目标更偏“先跑起来”
+   老版本更看重快响应、能派活，先用 LLM + 少量脚本把功能顶起来是最快路线。
+2. 当时复杂度还没完全暴露
+   delivery、checkpoint、recovery、IM surface、feedback loop、telemetry 这些后来才把“隐形 orchestrator”问题放大。
+3. OpenClaw 原生 substrate 当时没有现在这么适合直接收敛
+   尤其 create path、runtime seam、plugin-first 心智，是后来才逐渐清楚的。
+4. 早期缺的不是 orchestrator 概念，而是明确 ownership
+   其实当时已经存在一个“分散在 route/dispatch/patrol/delivery/status 里的隐形 orchestrator”，只是没有被显式定义。
+
+所以这次重构真正要补的不是“一个 daemon”，而是：
+
+> **把原来分散、隐形、多人共享的 orchestrator 职责，收成一个明确的 runtime core 角色。**
+
+### 9.1.3 v1 的最终判断
+
+因此，v1 我建议明确写死：
+
+1. 不引入独立 orchestrator daemon 作为架构前提
+2. orchestration layer 实现主要落在 `packages/octoclaw-runtime-core`
+3. `Ingress Orchestration` 和 `Workflow Orchestration` 是同一层里的两个作用域
+4. OpenClaw native task/flow 是执行真相
+5. `extensions/octoclaw-runtime` 负责接 runtime/plugin seam
+6. optional reconcile worker 只做补偿，不做主调度
+
+一句话：
+
+> **v1 需要 orchestrator layer，不需要 orchestrator daemon。**
+
+### 9.1.4 失败与超时如何及时发现
+
+这里还要补一个系统性问题：
+
+> **不做独立 orchestrator daemon，不等于不做 failure / timeout detection。**
+
+真正应该设计的是一套分层检测机制，而不是把“发现异常”全部寄托给一个常驻大进程。
+
+我建议 v1 至少同时具备这 4 类信号：
+
+1. **native task/flow terminal state**
+   如果 OpenClaw 原生 task/flow 已经进入 `failed / cancelled / completed`，这是第一优先级真相。
+2. **checkpoint / heartbeat 断流**
+   一段时间没有 checkpoint、heartbeat、progress event，就判定为 `stale` 候选。
+3. **delivery 未闭环**
+   task 已完成，但 `delivery_pending` 长时间未结束，说明交付链路出了问题。
+4. **backend/runtime error**
+   worker exit code、provider error、runtime exception、materialization failure 都必须进入统一 failure code。
+
+### 9.1.5 v1 的 timeout 不是一个值，而是一组 deadline
+
+很多系统会犯一个错误：只配一个总超时。
+
+但 OctoClaw 更合理的做法是按生命周期拆 deadline：
+
+1. `queue_deadline`
+   任务物化后多久还没开始执行，算排队超时。
+2. `start_deadline`
+   该启动时还没启动。
+3. `progress_deadline`
+   多久没有 checkpoint / progress / heartbeat。
+4. `runtime_deadline`
+   总执行时长超限。
+5. `delivery_deadline`
+   结果应该回传但迟迟没有交付。
+
+这样才能区分：
+
+1. 是卡在排队
+2. 是没真正启动
+3. 是执行中失联
+4. 是做完了但没送回来
+
+### 9.1.6 没有 daemon 时，谁来做检测
+
+我建议三层并存：
+
+#### A. Event-driven checks
+
+每次 request handler、workflow handler、task/flow event 进来时，都顺手检查相关 deadline。
+
+这是主链内检测。
+
+#### B. Read-time reconcile
+
+用户查看 `status / details / queue / timeline` 时，允许做轻量 reconcile-on-read。
+
+这能保证即使没有后台件，用户一问状态也能看到最新判断。
+
+#### C. Optional reconcile worker
+
+允许存在一个很轻的后台扫描器，周期性检查：
+
+1. stale task/flow
+2. delivery pending
+3. missing checkpoints
+4. 超时未闭环任务
+
+它可以是：
+
+1. one-shot command
+2. cron
+3. opt-in daemon
+
+但它是**时效性增强件**，不是**正确性前提件**。
+
+### 9.1.7 从开源借鉴里应该学什么
+
+#### ClawTeam
+
+ClawTeam 的长处在于：
+
+1. team/task board
+2. dependency chains
+3. inbox messaging
+4. git worktree isolation
+5. tmux dashboards / live monitoring
+
+它适合“很多并行 worker + 强人工观测”的场景。
+
+对 OctoClaw 的借鉴点是：
+
+1. 多 agent 时的 board / dependency / inbox 心智
+2. worktree 隔离避免文件冲突
+3. tmux 作为 operator workbench 的价值
+
+但不适合直接搬来的点是：
+
+1. 把 tmux 当系统前提
+2. 把 swarm runtime 当默认主链
+3. 让外部 runtime 反过来主导 policy truth
+
+#### DeerFlow
+
+DeerFlow 的长处在于：
+
+1. Coordinator / Planner / Reporter 角色清楚
+2. workflow graph 显式
+3. checkpoint persistence 明确
+4. state 可回放、可调试
+
+它适合重型 research / graph workflow。
+
+对 OctoClaw 的借鉴点是：
+
+1. 显式 checkpoint
+2. 显式 workflow state
+3. replay/debug 友好的执行图
+
+但不适合直接搬来的点是：
+
+1. 一上来就上重 workflow engine
+2. 让所有请求都进入 planner
+3. 把 v1 核心路径做得过重
+
+#### OMO / Oh My OpenAgent
+
+OMO 值得借的是：
+
+1. background tasks concurrency
+2. `staleTimeoutMs`
+3. lifecycle hooks
+4. delegate retry / background notification 这种轻量运行护栏
+
+这对 OctoClaw 的启发很直接：
+
+1. 我们也应该有 stale timeout
+2. 我们也应该有 delegate retry hook
+3. 我们也应该把后台补偿件做轻，而不是做成总控大脑
+
+### 9.1.8 最终结论
+
+所以系统性答案是：
+
+1. **需要 orchestrator layer**
+2. **需要 failure/timeout detection**
+3. **需要可选轻量后台 reconcile worker**
+4. **但不需要先做一个独立 orchestrator daemon**
+
+一句话：
+
+> **正确做法不是“一个大守护进程盯一切”，而是“native truth + deadline metadata + event-driven checks + optional reconcile worker”。**
+
 ## 9.2 请求主路径
 
 建议主路径：
