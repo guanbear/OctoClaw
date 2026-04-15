@@ -1980,6 +1980,28 @@ function contaminationFallbackReply() {
   return "这条追问命中了被子任务污染的会话上下文，我先按最新执行事实重绑后再回答，这次先不凭旧记忆下结论。";
 }
 
+function genericGreetingFallbackReply(state = {}) {
+  const route = String(state?.decision?.route_decision?.route || "").trim();
+  if (DELEGATED_ROUTE_NAMES.has(route) && !state?.delegated) {
+    return delegationFailureReply(state);
+  }
+  const taskClass = String(state?.decision?.route_decision?.task_class || "").trim();
+  if (taskClass === "session_control") {
+    return "收到，这条我按当前会话状态继续处理，不再插入泛泛问候。";
+  }
+  if (taskClass === "control_observer") {
+    return "我在，这条我按当前执行事实继续处理，不再复述无关内容。";
+  }
+  return "收到，我继续按当前任务处理。";
+}
+
+function looksLikeGenericGreeting(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw) return false;
+  return /^(你好[！!。.]?|您好[！!。.]?|嗨[！!。.]?|hello[!.]?|hi[!.]?)(\s*|$)/iu.test(raw)
+    || /(有什么需要帮忙的吗|有什么可以帮你的吗|how can i help|what can i help)/iu.test(raw);
+}
+
 function claimedDirectToolNames(text = "") {
   const raw = String(text || "");
   const normalized = raw.toLowerCase();
@@ -2041,6 +2063,14 @@ function guardAssistantMessageForPolicyState(message = {}, state = {}) {
       mode: "replace",
       reason: "contaminated_session_response_blocked",
       message: replaceAssistantMessageText(message, contaminationFallbackReply()),
+    };
+  }
+  const requestKind = String(state?.decision?.router_decision_v2?.request_kind || "").trim();
+  if (looksLikeGenericGreeting(replyText) && requestKind && requestKind !== "chat_or_explain") {
+    return {
+      mode: "replace",
+      reason: "generic_greeting_response_blocked",
+      message: replaceAssistantMessageText(message, genericGreetingFallbackReply(state)),
     };
   }
   const claimedTools = claimedDirectToolNames(replyText);

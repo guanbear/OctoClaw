@@ -3223,6 +3223,25 @@ Sender (untrusted metadata):
         self.assertEqual(payload["reason"], "contaminated_session_response_blocked")
         self.assertIn("子任务污染", json.dumps(payload["message"], ensure_ascii=False))
 
+    def test_guard_assistant_message_blocks_generic_greeting_for_non_chat_runner_turn(self) -> None:
+        payload = run_runtime_helper(
+            """(() => __octoclawTest.guardAssistantMessageForPolicyState(
+                { role: "assistant", content: "你好！有什么需要帮忙的吗？" },
+                {
+                  decision: {
+                    route_decision: { route: "direct", task_class: "direct_answer" },
+                    router_decision_v2: { request_kind: "fresh_external_lookup" }
+                  },
+                  conversationIntentClass: "fresh_live_lookup",
+                  delegated: false
+                }
+            ))()"""
+        )
+
+        self.assertEqual(payload["mode"], "replace")
+        self.assertEqual(payload["reason"], "generic_greeting_response_blocked")
+        self.assertIn("继续按当前任务处理", json.dumps(payload["message"], ensure_ascii=False))
+
     def test_guard_assistant_message_blocks_ungrounded_tool_provenance_claim(self) -> None:
         payload = run_runtime_helper(
             """(() => __octoclawTest.guardAssistantMessageForPolicyState(
