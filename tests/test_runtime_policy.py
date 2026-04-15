@@ -676,6 +676,21 @@ console.log(JSON.stringify(payload));
         self.assertFalse(payload["route_recommendation"]["arbitration"]["required"])
         self.assertIn("session_control_direct_contract", payload["route_decision"]["reason_codes"])
 
+    def test_short_decline_upgrade_stays_in_session_control_lane(self) -> None:
+        payload = self.run_policy("不升")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "session_control")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "session_control")
+        self.assertFalse(payload["pre_dispatch_ack"]["required"])
+        self.assertTrue(payload["latency_ack"]["required"])
+
+    def test_alive_followup_prefers_control_observer_lane(self) -> None:
+        payload = self.run_policy("活了吗")
+        self.assertEqual(payload["route_decision"]["route"], "direct")
+        self.assertEqual(payload["route_decision"]["task_class"], "control_observer")
+        self.assertEqual(payload["route_decision"]["protected_lane"], "control_observer")
+        self.assertTrue(payload["latency_ack"]["required"])
+
     def test_repo_commit_summary_query_prefers_spawn_single(self) -> None:
         payload = self.run_policy("你帮我查下 octoclaw项目 今天都有啥提交 改了啥")
         self.assertEqual(payload["route_decision"]["route"], "spawn_single")

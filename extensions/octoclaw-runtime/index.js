@@ -309,6 +309,7 @@ function shouldSendPreDispatchAck(decision, state = {}, ctx = {}) {
   if (!isDelegatedRoute(decision)) return false;
   if (!decision?.pre_dispatch_ack?.required) return false;
   if (state?.preDispatchAckSent) return false;
+  if (state?.preDispatchAckPending) return false;
   const trigger = String(ctx?.trigger || "").trim().toLowerCase();
   if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) return false;
   return Boolean(preDispatchAckText(decision));
@@ -677,8 +678,22 @@ function scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, l
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
     return { scheduled: false, reason: "not_required" };
   }
+  const ownerClaim = claimAckOwner(stateKey, "pre_dispatch");
+  if (!ownerClaim.claimed) {
+    return { scheduled: false, reason: "owner_conflict" };
+  }
+  updatePolicyState(stateKey, (current) => ({
+    ...current,
+    ackOwner: "pre_dispatch",
+    ack_owner: "pre_dispatch",
+    preDispatchAckPending: true,
+  }));
   const promise = maybeSendEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, logger)
     .then(async (result) => {
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        preDispatchAckPending: false,
+      }));
       await recordPolicyReplay(
         "pre_dispatch_ack_attempted",
         {
@@ -708,6 +723,10 @@ function scheduleEagerPreDispatchAck(decision, metadata, stateKey, state, ctx, l
       });
     })
     .catch((err) => {
+      updatePolicyState(stateKey, (current) => ({
+        ...current,
+        preDispatchAckPending: false,
+      }));
       logger?.warn?.(`octoclaw eager pre-dispatch ack scheduling failed: ${String(err)}`);
     });
   return {
@@ -826,6 +845,19 @@ async function maybeSendLatencyAck(decision, metadata, stateKey, state, ctx, log
 }
 
 async function ensurePreDispatchAck(decision, metadata, stateKey, state, ctx, onUpdate, logger) {
+  const liveState = stateKey ? (policyStateBySession.get(stateKey) || {}) : {};
+  if (liveState?.preDispatchAckPending && !liveState?.preDispatchAckSent) {
+    return {
+      attempted: false,
+      sent: false,
+      delivered: false,
+      reason: "pre_dispatch_inflight",
+      message: preDispatchAckText(decision),
+      ack_owner: currentAckOwner(stateKey) || "pre_dispatch",
+      ack_target_resolution_state: "resolved",
+      ack_delivery_state: "pending",
+    };
+  }
   const channelAttempt = await maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger);
   if (channelAttempt.delivered) {
     return {
@@ -2788,6 +2820,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
       routeHintPayload: null,
       blockedTools: [],
       preDispatchAckSent: false,
+      preDispatchAckPending: false,
       preDispatchAckText: "",
       latencyAckSent: false,
       latencyAckText: "",

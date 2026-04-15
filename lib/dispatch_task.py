@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 
 from octoclaw_spawn import build_spawn_spec
-from octopus_config import RUNNER_HEALTH_FILE, RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, TASK_STATE_FILE, WORKSPACE, load_json, load_octopus_config, spawn_operator_surface
+from octopus_config import RUNNER_HEALTH_FILE, RUNNER_QUEUE_FILE, RUNNER_RESULTS_DIR, SHARED_DIR, TASK_STATE_FILE, WORKSPACE, load_json, load_octopus_config, resolve_runner_mode, spawn_operator_surface, workbench_config
 try:
     from octopus_config import concurrency_policy as _load_concurrency_policy
 except ImportError:
@@ -37,7 +37,7 @@ except ImportError:
 from runner_goal_contract import build_runner_goal_contract
 from runner_queue import recover_stale_running_jobs
 from runtime_protocol import build_capability_bound_failure, build_delegated_materialization, normalize_worker_result
-from runtime_snapshot import load_runner_health, load_runner_queue_counts
+from runtime_snapshot import default_runner_execution_mode, load_runner_health, load_runner_queue_counts, probe_tmux_session
 from runner_playbooks import infer_runner_playbook
 from worker_taxonomy import (
     infer_model_band as taxonomy_infer_model_band,
@@ -48,6 +48,7 @@ from worker_taxonomy import (
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNNER_DISPATCH_PY = os.path.join(SCRIPT_DIR, "runner_dispatch.py")
+RUNNER_DAEMON_SH = os.path.join(SCRIPT_DIR, "runner-daemon.sh")
 RUNNER_LOOP_SH = os.path.join(SCRIPT_DIR, "runner_loop.sh")
 RUNNER_QUEUE_PY = os.path.join(SCRIPT_DIR, "runner_queue.py")
 RESOLVE_MODEL_PY = os.path.join(SCRIPT_DIR, "resolve-model.py")
@@ -62,6 +63,65 @@ RUNNER_POOL_DEFAULTS = {
     "busy_strategy": "queue_or_progress",
     "legacy_runner_fallback": True,
 }
+
+
+def runner_tmux_status(config: dict | None = None) -> dict:
+    cfg = config if isinstance(config, dict) else load_octopus_config()
+    workbench = workbench_config(cfg)
+    mode = str(workbench.get("supervisor_mode", "auto") or "auto").strip() or "auto"
+    session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+    window_name = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
+    if mode != "tmux" or not session_name:
+        return {
+            "required": False,
+            "available": False,
+            "healthy": False,
+            "reason": "not_configured",
+            "session_name": session_name,
+            "runner_window_name": window_name,
+        }
+    return probe_tmux_session(session_name, runner_window_name=window_name)
+
+
+def ensure_runner_daemon(config: dict | None = None) -> dict:
+    cfg = config if isinstance(config, dict) else load_octopus_config()
+    runner_mode = default_runner_execution_mode(resolve_runner_mode(cfg))
+    if runner_mode != "daemon":
+        return {"ok": False, "reason": "runner_mode_not_daemon", "runner_mode": runner_mode}
+    if not os.path.exists(RUNNER_DAEMON_SH):
+        return {"ok": False, "reason": "runner_daemon_script_missing", "runner_mode": runner_mode}
+    env = {
+        **os.environ,
+        "WORKSPACE": WORKSPACE,
+        "OCTOCLAW_WORKSPACE": WORKSPACE,
+        "OCTOCLAW_ENABLE_LEGACY_LOOPS": "1",
+    }
+    workbench = workbench_config(cfg)
+    session_name = str(workbench.get("tmux_session_name", "") or "").strip()
+    runner_window = str(workbench.get("tmux_runner_window_name", "runner") or "runner").strip() or "runner"
+    if session_name:
+        env["TMUX_SESSION_NAME"] = session_name
+    if runner_window:
+        env["TMUX_RUNNER_WINDOW_NAME"] = runner_window
+    try:
+        result = subprocess.run(
+            ["bash", RUNNER_DAEMON_SH],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "reason": "runner_daemon_timeout", "runner_mode": runner_mode}
+    return {
+        "ok": result.returncode == 0,
+        "reason": "ok" if result.returncode == 0 else "runner_daemon_failed",
+        "runner_mode": runner_mode,
+        "stdout": str(result.stdout or "").strip(),
+        "stderr": str(result.stderr or "").strip(),
+        "returncode": int(result.returncode or 0),
+    }
 
 ROUTE_TIMEOUT_TIERS = {
     "runner": 12,
@@ -1263,6 +1323,8 @@ def sync_recovered_stale_runner_jobs(recovered: dict | None) -> None:
 
 
 def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> dict:
+    cfg = load_octopus_config()
+    runner_mode = default_runner_execution_mode(resolve_runner_mode(cfg))
     settings = runner_pool_settings()
     try:
         recovered = recover_stale_running_jobs(
@@ -1275,6 +1337,7 @@ def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> 
     queue_counts = load_runner_queue_counts()
     active_jobs = load_runner_active_jobs()
     health = load_runner_health(stale_after_seconds=RUNNER_STALE_SECONDS)
+    tmux_status = runner_tmux_status(cfg)
     queue_pressure = runner_queue_pressure_band(queue_counts, settings["max_queue_size"])
     queued = max(0, int(queue_counts.get("queued", 0) or 0))
     running = max(0, int(queue_counts.get("running", 0) or 0))
@@ -1298,7 +1361,8 @@ def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> 
         "recovered_stale_running_jobs": int(recovered.get("recovered_count", 0) or 0),
         "queue_pressure_band": queue_pressure,
         "runner_health_snapshot": health if isinstance(health, dict) else {},
-        "dispatch_mode": "daemon",
+        "resident_runtime": tmux_status,
+        "dispatch_mode": runner_mode,
         "can_dispatch": True,
         "block_reason": "",
         "block_detail": "",
@@ -1342,6 +1406,55 @@ def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> 
             "dispatch is deferred until capacity becomes available."
         )
         return resolution
+    if runner_mode == "daemon":
+        tmux_required = bool(tmux_status.get("required"))
+        if not tmux_required:
+            if bool((health or {}).get("healthy")):
+                resolution["dispatch_mode"] = "daemon"
+                resolution["can_dispatch"] = True
+                resolution["fallback_permitted"] = False
+                return resolution
+            if allow_ondemand:
+                resolution["dispatch_mode"] = "ondemand"
+                resolution["fallback_permitted"] = True
+                return resolution
+            resolution["can_dispatch"] = False
+            resolution["dispatch_mode"] = "deferred"
+            resolution["block_reason"] = "runner_worker_unhealthy"
+            resolution["block_detail"] = (
+                f"runner heartbeat is unavailable or stale ({str((health or {}).get('reason', '') or 'unknown')}); "
+                "dispatch is deferred until a healthy runner is available."
+            )
+            return resolution
+        if tmux_required and not bool(tmux_status.get("healthy")):
+            bootstrap = ensure_runner_daemon(cfg)
+            resolution["resident_bootstrap"] = bootstrap
+            tmux_status = runner_tmux_status(cfg)
+            health = load_runner_health(stale_after_seconds=RUNNER_STALE_SECONDS)
+            resolution["resident_runtime"] = tmux_status
+            resolution["runner_health_snapshot"] = health if isinstance(health, dict) else {}
+        if bool(tmux_status.get("healthy")):
+            resolution["dispatch_mode"] = "daemon"
+            resolution["can_dispatch"] = True
+            resolution["fallback_permitted"] = False
+            return resolution
+        if allow_ondemand:
+            resolution["dispatch_mode"] = "ondemand"
+            resolution["fallback_permitted"] = True
+            resolution["block_reason"] = "runner_resident_unavailable"
+            resolution["block_detail"] = (
+                f"resident runner is unavailable ({str(tmux_status.get('reason', '') or 'unknown')}); "
+                "falling back to on-demand bootstrap."
+            )
+            return resolution
+        resolution["can_dispatch"] = False
+        resolution["dispatch_mode"] = "deferred"
+        resolution["block_reason"] = "runner_resident_unavailable"
+        resolution["block_detail"] = (
+            f"resident runner is unavailable ({str(tmux_status.get('reason', '') or 'unknown')}); "
+            "dispatch is deferred until the tmux runner session is healthy."
+        )
+        return resolution
     if not bool((health or {}).get("healthy")):
         if allow_ondemand:
             resolution["dispatch_mode"] = "ondemand"
@@ -1363,6 +1476,7 @@ def build_runner_gate_handoff(*, reason: str, detail: str, queue_pressure_band: 
         "runner_pool_disabled": "runner pool 已禁用",
         "runner_queue_full": "runner 队列已满",
         "runner_worker_unhealthy": "runner worker 不健康",
+        "runner_resident_unavailable": "runner 常驻执行面不可用",
         "runner_per_user_concurrency_exceeded": "当前会话 runner 并发已满",
         "runner_bootstrap_failed": "runner 自举失败",
     }

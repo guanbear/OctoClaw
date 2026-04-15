@@ -263,7 +263,7 @@ const OBSERVER_CONTROL_PATTERNS = {
 };
 
 const TASK_PROGRESS_PATTERNS = {
-  zh: [String.raw`(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗|(?:single|spawn|runner)\s*成功了吗|还在\s*queued\s*吗|还在排队吗|跑了没|跑起来了吗|完成了没)`],
+  zh: [String.raw`(好了吗|好了没|完了吗|完成了吗|处理完了吗|跑完了吗|还在跑吗|有进展吗|进度(?:怎么样|如何)?|任务(?:进度|状态)|现在(?:什么状态|到哪步了)|还没好吗|(?:single|spawn|runner)\s*成功了吗|还在\s*queued\s*吗|还在排队吗|跑了没|跑起来了吗|完成了没|活了吗|还活着吗|在吗)`],
   en: [String.raw`\b(is it done|done yet|finished yet|still running|any progress|task status|task progress|what(?:'s| is) the status|how(?:'s| is) it going|where are we at)\b`],
 };
 
@@ -291,6 +291,7 @@ const SESSION_CONTROL_PATTERNS = {
   zh: [
     String.raw`(切换|切到|换到|换成|改成|改到|切换模型|切模型|换模型).{0,32}(mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus|m2\.7|5\.1|4\.7)`,
     String.raw`(把(当前|现在)?模型(切到|换成|改成)).{0,32}(mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus|m2\.7|5\.1|4\.7)`,
+    String.raw`^(不升|先不升|先不升级|不用升|先这样|先这样吧)$`,
   ],
   en: [
     String.raw`\b(switch|change|set)\b.{0,32}\b(model|mini\s*max|minimax|glm|gpt|claude|qwen|kimi|deepseek|gemini|sonnet|opus)\b`,

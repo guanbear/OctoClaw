@@ -75,6 +75,16 @@ class NotifierTaskPayloadTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "slack")
         self.assertEqual(payload["transport"]["kind"], "slack")
 
+    def test_build_task_notification_payload_agent_wrapped_slack_dm_disables_buttons(self) -> None:
+        payload = build_task_notification_payload(
+            {**self.task, "session_key": "agent:main:slack:default:direct:u0al9t5u89z"},
+            backend="slack",
+        )
+
+        self.assertFalse(payload["transport"]["supports_buttons"])
+        self.assertEqual(payload["task_actions"], [])
+        self.assertEqual(payload["interactive"], {})
+
     @patch("lib.notifier.append_task_event")
     @patch("lib.notifier.register_session_binding")
     @patch("lib.notifier.resolve_session_binding")

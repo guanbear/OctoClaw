@@ -206,12 +206,20 @@ def _resolve_task_backend(task: dict[str, Any], requested_backend: str, cfg: dic
 
 
 def _session_is_dm(session_key: str) -> bool:
-    parts = [p for p in str(session_key or "").lower().split(":") if p]
+    raw = str(session_key or "").strip().lower()
+    if raw.startswith("agent:"):
+        parts = [p for p in raw.split(":")[2:] if p]
+    else:
+        parts = [p for p in raw.split(":") if p]
     if not parts:
         return False
     origin = parts[0]
     if origin == "slack":
-        return len(parts) >= 2 and parts[1] in {"dm", "direct", "user"}
+        return len(parts) >= 2 and parts[1] in {"dm", "direct", "user", "default"} and (
+            len(parts) < 3
+            or parts[2] in {"dm", "direct", "user"}
+            or (len(parts) >= 4 and parts[2] in {"channel", "group"} and parts[3].startswith("d"))
+        )
     if origin == "discord":
         return len(parts) >= 2 and parts[1] in {"dm", "direct", "user"}
     return False

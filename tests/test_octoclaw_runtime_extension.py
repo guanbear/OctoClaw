@@ -598,6 +598,49 @@ Sender (untrusted metadata):
         self.assertEqual(payload["ack_delivery_state"], "skipped")
         self.assertEqual(payload["ack_target_resolution_state"], "skipped_owner_conflict")
 
+    def test_ensure_pre_dispatch_ack_skips_when_eager_ack_is_inflight(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const ctx = {
+                  sessionKey: "agent:main:slack:direct:u790",
+                  sessionId: "sess-ack-pending",
+                  trigger: "message"
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const now = Date.now();
+                __octoclawTest.__setPolicyState?.(ctx, {
+                  prompt: "帮我查一下最新状态",
+                  decision: {
+                    route_decision: { route: "runner" },
+                    pre_dispatch_ack: { required: true, text: "我先派发处理，稍后给你结果。" }
+                  },
+                  ackOwner: "pre_dispatch",
+                  ack_owner: "pre_dispatch",
+                  preDispatchAckPending: true,
+                  preDispatchAckSent: false,
+                  createdAt: now,
+                  updatedAt: now
+                });
+                return __octoclawTest.ensurePreDispatchAck(
+                  {
+                    route_decision: { route: "runner" },
+                    pre_dispatch_ack: { required: true, text: "我先派发处理，稍后给你结果。" }
+                  },
+                  { session_key: "agent:main:slack:direct:u790" },
+                  "agent:main:slack:direct:u790",
+                  { ackOwner: "pre_dispatch", ack_owner: "pre_dispatch", preDispatchAckPending: true, preDispatchAckSent: false },
+                  ctx,
+                  null,
+                  null,
+                );
+            })()"""
+        )
+
+        self.assertFalse(payload["attempted"])
+        self.assertEqual(payload["reason"], "pre_dispatch_inflight")
+        self.assertEqual(payload["ack_owner"], "pre_dispatch")
+        self.assertEqual(payload["ack_delivery_state"], "pending")
+
     def test_tool_context_can_recover_recent_delegated_state_for_shell_like_followup(self) -> None:
         payload = run_runtime_helper(
             """(() => {

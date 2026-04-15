@@ -95,14 +95,45 @@ def probe_tmux_session(session_name: str, *, runner_window_name: str = "runner")
     )
     window_names = [line.strip() for line in str(windows.stdout or "").splitlines() if line.strip()]
     window_present = window in window_names
+    pane_state: dict[str, Any] = {}
+    if window_present:
+        panes = subprocess.run(
+            [tmux_bin, "list-panes", "-t", f"{session}:{window}", "-F", "#{pane_dead}\t#{pane_current_command}\t#{pane_title}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        pane_rows = []
+        for raw in str(panes.stdout or "").splitlines():
+            parts = raw.split("\t")
+            pane_rows.append(
+                {
+                    "dead": parts[0].strip() == "1" if len(parts) >= 1 else False,
+                    "command": parts[1].strip() if len(parts) >= 2 else "",
+                    "title": parts[2].strip() if len(parts) >= 3 else "",
+                }
+            )
+        live_panes = [row for row in pane_rows if not row.get("dead")]
+        pane_state = {
+            "panes": pane_rows[:4],
+            "live": bool(live_panes),
+            "command": str((live_panes[0] if live_panes else {}).get("command", "") or ""),
+            "title": str((live_panes[0] if live_panes else {}).get("title", "") or ""),
+        }
+    healthy = bool(window_present and pane_state.get("live", False))
     return {
         "required": True,
         "available": True,
-        "healthy": window_present,
-        "reason": "ok" if window_present else "tmux_runner_window_missing",
+        "healthy": healthy,
+        "reason": (
+            "ok"
+            if healthy
+            else ("tmux_runner_window_missing" if not window_present else "tmux_runner_pane_dead")
+        ),
         "session_name": session,
         "runner_window_name": window,
         "windows": window_names[:20],
+        "pane": pane_state,
     }
 
 
@@ -344,12 +375,6 @@ def build_runtime_snapshot(
     mode = default_runner_execution_mode(runner_execution_mode)
     resident_state = "healthy"
     runner_state = "healthy"
-    if not runner.get("present", False):
-        resident_state = str(runner.get("reason", "missing") or "missing")
-        runner_state = "on-demand" if mode == "ondemand" else resident_state
-    elif not runner.get("healthy", False):
-        resident_state = str(runner.get("reason", "stale") or "stale")
-        runner_state = resident_state
     fallback_truth = {
         "mode": "ondemand",
         "eligible": bool(mode == "ondemand" or runner_state != "healthy"),
@@ -365,6 +390,36 @@ def build_runtime_snapshot(
         "available": False,
         "healthy": False,
         "reason": "not_configured",
+    }
+    if mode == "daemon":
+        tmux_required = bool(tmux_status.get("required"))
+        if not tmux_required:
+            resident_state = str(runner.get("reason", "missing") or "missing")
+        elif not bool(tmux_status.get("healthy")):
+            resident_state = str(tmux_status.get("reason", "") or "").strip() or "missing"
+        elif runner.get("present", False) and not runner.get("healthy", False):
+            resident_state = str(runner.get("reason", "stale") or "stale")
+        else:
+            resident_state = "healthy"
+        if runner.get("present", False) and not runner.get("healthy", False):
+            runner_state = str(runner.get("reason", "") or resident_state or "stale").strip() or "stale"
+        elif (not tmux_required and bool(runner.get("healthy", False))) or bool(tmux_status.get("healthy")):
+            runner_state = "healthy"
+        elif not runner.get("present", False):
+            runner_state = resident_state
+        else:
+            runner_state = str(runner.get("reason", "") or resident_state or "stale").strip() or "stale"
+    else:
+        if not runner.get("present", False):
+            resident_state = str(runner.get("reason", "missing") or "missing")
+            runner_state = "on-demand"
+        elif not runner.get("healthy", False):
+            resident_state = str(runner.get("reason", "stale") or "stale")
+            runner_state = resident_state
+    fallback_truth = {
+        "mode": "ondemand",
+        "eligible": bool(mode == "ondemand" or runner_state != "healthy"),
+        "state": "available" if mode == "ondemand" or runner_state != "healthy" else "idle",
     }
     return {
         "observed_at": datetime.now(timezone.utc).astimezone().isoformat(),

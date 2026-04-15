@@ -208,6 +208,64 @@ class DispatchTaskTaxonomyTests(unittest.TestCase):
         self.assertTrue(payload["runner_execution"]["triggered"])
         self.assertEqual(payload["runner_runtime_resolution"]["runner_health_snapshot"]["reason"], "stale")
 
+    def test_runner_dispatch_runtime_resolution_bootstraps_resident_runner_when_tmux_missing(self) -> None:
+        with (
+            patch.object(dispatch_task, "load_octopus_config", return_value={
+                "runtime_policy": {
+                    "runner_pool": {"enabled": True, "max_queue_size": 4, "busy_strategy": "queue_or_progress"},
+                    "features": {"runner_pool_enabled": True, "legacy_runner_fallback": True},
+                },
+                "workbench": {
+                    "supervisor_mode": "tmux",
+                    "tmux_session_name": "octoclaw-runtime",
+                    "tmux_runner_window_name": "runner",
+                },
+            }),
+            patch.object(dispatch_task, "load_runner_queue_counts", return_value={"queued": 0, "running": 0, "done": 0, "failed": 0, "total": 0}),
+            patch.object(dispatch_task, "load_runner_active_jobs", return_value=[]),
+            patch.object(dispatch_task, "load_runner_health", return_value={"present": False, "healthy": False, "reason": "missing"}),
+            patch.object(dispatch_task, "runner_tmux_status", side_effect=[
+                {"required": True, "available": True, "healthy": False, "reason": "tmux_session_missing"},
+                {"required": True, "available": True, "healthy": True, "reason": "ok"},
+            ]),
+            patch.object(dispatch_task, "ensure_runner_daemon", return_value={"ok": True, "reason": "ok", "stdout": "started"}),
+        ):
+            payload = dispatch_task.runner_dispatch_runtime_resolution(wait=False, session_key="agent:main:slack:direct:u4")
+
+        self.assertTrue(payload["can_dispatch"])
+        self.assertEqual(payload["dispatch_mode"], "daemon")
+        self.assertEqual(payload["resident_runtime"]["reason"], "ok")
+        self.assertEqual(payload["resident_bootstrap"]["reason"], "ok")
+
+    def test_runner_dispatch_runtime_resolution_falls_back_to_ondemand_when_resident_unavailable(self) -> None:
+        with (
+            patch.object(dispatch_task, "load_octopus_config", return_value={
+                "runtime_policy": {
+                    "runner_pool": {"enabled": True, "max_queue_size": 4, "busy_strategy": "queue_or_progress"},
+                    "features": {"runner_pool_enabled": True, "legacy_runner_fallback": True},
+                },
+                "workbench": {
+                    "supervisor_mode": "tmux",
+                    "tmux_session_name": "octoclaw-runtime",
+                    "tmux_runner_window_name": "runner",
+                },
+            }),
+            patch.object(dispatch_task, "load_runner_queue_counts", return_value={"queued": 0, "running": 0, "done": 0, "failed": 0, "total": 0}),
+            patch.object(dispatch_task, "load_runner_active_jobs", return_value=[]),
+            patch.object(dispatch_task, "load_runner_health", return_value={"present": False, "healthy": False, "reason": "missing"}),
+            patch.object(dispatch_task, "runner_tmux_status", side_effect=[
+                {"required": True, "available": True, "healthy": False, "reason": "tmux_session_missing"},
+                {"required": True, "available": True, "healthy": False, "reason": "tmux_session_missing"},
+            ]),
+            patch.object(dispatch_task, "ensure_runner_daemon", return_value={"ok": False, "reason": "runner_daemon_failed"}),
+        ):
+            payload = dispatch_task.runner_dispatch_runtime_resolution(wait=False, session_key="agent:main:slack:direct:u4")
+
+        self.assertTrue(payload["can_dispatch"])
+        self.assertEqual(payload["dispatch_mode"], "ondemand")
+        self.assertTrue(payload["fallback_permitted"])
+        self.assertEqual(payload["block_reason"], "runner_resident_unavailable")
+
     def test_dispatch_runner_marks_bootstrap_failure_as_materialization_failed(self) -> None:
         decision = {
             "request": {"session_key": "agent:main:slack:direct:u2c", "metadata": {}},
