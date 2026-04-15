@@ -76,6 +76,30 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
             self.assertEqual(payload["workspaceRoot"], str(workspace_root))
             self.assertTrue(payload["pythonBin"].endswith("python3"))
 
+    def test_runtime_paths_do_not_walk_repo_root_up_to_users_tmp(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-runtime-home-") as tmpdir:
+            home = Path(tmpdir)
+            config_dir = home / ".openclaw"
+            workspace_root = config_dir / "workspace"
+            (workspace_root / "tmp").mkdir(parents=True)
+            (config_dir / "openclaw.json").write_text("{}", encoding="utf-8")
+            payload = run_runtime_helper(
+                """({
+                    workspaceRoot: __octoclawTest.resolveWorkspaceRoot()
+                })""",
+                env={
+                    "HOME": str(home),
+                    "OPENCLAW_HOME": str(config_dir),
+                    "OCTOCLAW_ROOT": "/Users/guanbear/workspace/OctoClaw",
+                    "WORKSPACE": "",
+                    "PATH": os.environ.get("PATH", ""),
+                },
+            )
+
+            self.assertEqual(payload["workspaceRoot"], str(workspace_root))
+
     def test_policy_config_prefers_managed_openclaw_workspace_layout(self) -> None:
         import tempfile
 

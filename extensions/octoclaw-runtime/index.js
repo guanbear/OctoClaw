@@ -142,10 +142,17 @@ function resolveWorkspaceRoot() {
   if (explicit) {
     return explicit;
   }
+  let inferredFromRoot = "";
+  const normalizedRoot = String(root || "").trim();
+  if (/[/\\]openclaw[/\\]skills[/\\]octopus$/.test(normalizedRoot)) {
+    inferredFromRoot = path.resolve(root, "..", "..", "..");
+  } else if (/[/\\]skills[/\\]octopus$/.test(normalizedRoot)) {
+    inferredFromRoot = path.resolve(root, "..", "..");
+  }
   const resolved = firstExistingPath(
     [
-      root ? path.resolve(root, "..", "..", "..") : "",
       path.join(configDir, "workspace"),
+      inferredFromRoot,
     ],
     (candidate) => fsSync.existsSync(path.join(candidate, "tmp")),
   );
