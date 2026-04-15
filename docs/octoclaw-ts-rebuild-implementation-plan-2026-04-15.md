@@ -92,6 +92,11 @@ tools/
 6. delivery envelope
 7. optimization telemetry
 8. status surface view model
+9. idempotency keys / delivery receipt
+10. task claim / lease metadata
+11. read_scope / write_scope / workspace_mode
+12. acceptance_criteria / task packet
+13. capability descriptor
 
 验收标准：
 
@@ -117,11 +122,11 @@ tools/
 3. `packages/octoclaw-policy/src/route`
 4. `packages/octoclaw-policy/src/model`
 5. `packages/octoclaw-policy/src/roles`
-6. `packages/octoclaw-policy/src/compound`
+6. `packages/octoclaw-policy/src/compound`（Phase 3 预留占位，不进 Phase 1 live path）
 
 必须实现：
 
-1. `reply / delegate.single / observe / delegate.compound` 基础决策
+1. `reply / delegate.single / observe` 基础决策
 2. hard-boundary gate
 3. `judge_fast` 接口与输出 schema
 4. preset role:
@@ -131,6 +136,9 @@ tools/
    - `worker_code`
    - `worker_review`
 5. budget/latency/worker 上限决策
+6. admission control / queue budget
+7. capability-aware route guard
+8. compound 只保留 future schema slot，不进入 Phase 1 route authority
 
 明确禁止：
 
@@ -172,6 +180,9 @@ tools/
 7. telemetry emission
 8. ingress/workflow orchestration split
 9. timeout/failure deadline checks
+10. idempotent task materialization
+11. claim / lease renewal and expiry
+12. delivery outbox / delivery receipt handling
 
 实现口径：
 
@@ -179,8 +190,11 @@ tools/
 2. orchestration layer 统一落在 runtime core
 3. ingress orchestration 作为短命请求级逻辑实现
 4. workflow orchestration 作为 runtime core + plugin handler 组合实现
-5. reconcile/recovery 保持 optional worker 形态
-6. timeout 检测按 `queue/start/progress/runtime/delivery` 五类 deadline 拆开
+5. reconcile/recovery 作为 orchestration layer 内的补偿子域实现
+6. 它可以暴露 optional worker 入口，但不是独立系统
+7. timeout 检测按 `queue/start/progress/runtime/delivery` 五类 deadline 拆开
+8. 每个 delegated task 只有一个有效 claim owner
+9. delivery side effect 必须经过 outbox/receipt
 
 关键状态：
 
@@ -240,14 +254,14 @@ tools/
 
 ## WS4：Delegation Plugin
 
-目标：把 worker brief、backend profile、single delegate、future compound helper 收成独立插件。
+目标：把 worker brief、backend profile、single delegate 收成独立插件，并为 future compound helper 预留边界。
 
 交付：
 
 1. `extensions/octoclaw-delegation/src/brief`
 2. `extensions/octoclaw-delegation/src/profiles`
 3. `extensions/octoclaw-delegation/src/materialize`
-4. `extensions/octoclaw-delegation/src/compound`
+4. `extensions/octoclaw-delegation/src/compound`（预留，不进 Phase 1）
 
 必须实现：
 
@@ -256,12 +270,16 @@ tools/
 3. backend selection interface
 4. single delegate materializer
 5. compound 占位接口
+6. write scope / workspace mode assignment
+7. conflict policy hook
 
 验收标准：
 
 1. worker 默认只拿最小上下文
 2. transcript 不直接全量传递
 3. 可按 preset role 选择工具权限、模型 profile、输出 contract
+4. delegated task 默认带 read/write scope
+5. overlapping write 默认不会并发踩同一工作区
 
 依赖：WS0、WS1、WS2、WS3
 
@@ -311,7 +329,6 @@ tools/
 2. `details`
 3. `queue`
 4. `timeline` 占位
-5. `graph` 占位
 
 最小字段：
 
@@ -324,12 +341,22 @@ tools/
 7. `queue_position`
 8. `model_summary`
 9. `cost_estimate`
+10. `claim_owner`
+11. `lease_state`
+12. `workspace_mode`
+13. `write_scope_summary`
 
 验收标准：
 
 1. Phase 1 就能出最小 operator surface
 2. Phase 2 起 `status/details/queue` 全读 substrate truth
 3. renderer 不再自己猜状态
+4. 能看出 task 是否被 claim、是否 stale、是否因冲突排队
+
+说明：
+
+1. `graph` / richer board 不进入 Phase 1
+2. 这些能力放到 Phase 3-4 的 richer status surface 再做
 
 依赖：WS0、WS2、WS3
 
@@ -385,12 +412,16 @@ tools/
 4. black-box IM acceptance
 5. replay fixtures
 6. telemetry baseline report
+7. duplicate request / duplicate delivery regression tests
+8. claim expiry / stale recovery tests
+9. write-scope conflict / queueing tests
 
 验收标准：
 
 1. CI 可以独立跑
 2. 能阻止明显回归
 3. 能输出成本/速度基线
+4. 能抓住重复派活、双 delivery、双执行这类稳定性回归
 
 依赖：WS0，随后逐步接 WS1-WS7
 

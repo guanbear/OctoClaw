@@ -65,7 +65,7 @@ OctoClaw 的核心目的不是“做一个更大的 agent 框架”，也不是�
 
 ## 2.1 最核心目标
 
-我认为 OctoClaw v2 的 P0 目标只有 4 个：
+我认为 OctoClaw v2 的 `R0` 目标只有 4 个：
 
 1. **Fast First Response**
    用户消息进入后，应先稳定给出 ACK / 首响，而不是让主模型卡在复杂决策链上。
@@ -80,7 +80,7 @@ OctoClaw 的核心目的不是“做一个更大的 agent 框架”，也不是�
 
 ## 2.2 非核心但重要的后续能力
 
-这些不是不重要，而是**不能先于 P0/P1 稳定性目标**：
+这些不是不重要，而是**不能先于 `R0/R1` 稳定性目标**：
 
 1. 自动选模型 / 动态模型学习
 2. harness 自进化 / policy self-tuning
@@ -124,13 +124,15 @@ OctoClaw 的核心目的不是“做一个更大的 agent 框架”，也不是�
 
 ## 2.4 未来能力应该如何排序
 
+这里建议用 `R0-R4` 表示**能力优先级**，避免和后文 `Phase 1-4` 的实施阶段混淆。
+
 建议排序：
 
-1. P0：快首响 + 单一路径 + 单一真相源 + 单 worker 稳定委派
-2. P1：compound request / dependency-aware flow
-3. P2：黑盒 acceptance + replay/eval 常态化
-4. P3：IM 展示、控制面、状态产品化
-5. P4：自动选模型、自进化 harness、重型 research profile
+1. `R0`：快首响 + 单一路径 + 单一真相源 + 单 worker 稳定委派
+2. `R1`：compound request / dependency-aware flow
+3. `R2`：黑盒 acceptance + replay/eval 常态化
+4. `R3`：IM 展示、控制面、状态产品化
+5. `R4`：自动选模型、自进化 harness、重型 research profile
 
 ---
 
@@ -980,6 +982,58 @@ tools/
 2. 第 2 层必须是状态机和 contract 的家。
 3. 第 3 层不能再参与 live truth。
 
+### 9.1.0.a 数据平面也要分层
+
+除了职责分层，v1 还应该明确区分 4 类数据平面。
+
+不然系统很容易重新滑回“每份 JSON 看起来都像真相”的老问题。
+
+#### A. Truth Plane
+
+唯一执行真相：
+
+1. OpenClaw native `task/flow`
+2. substrate event stream
+3. SQLite registry / state
+
+#### B. Projection Plane
+
+供展示和策略消费的派生视图：
+
+1. status/details/queue/timeline view model
+2. delivery projection
+3. policy metadata
+4. artifact index
+
+Projection 可以重建、可以修复，但不是执行真相。
+
+#### C. Artifact Plane
+
+供 agent 交接、review、replay 使用的任务工件：
+
+1. `TaskPacket`
+2. worker brief
+3. checkpoint packet
+4. result packet
+5. acceptance packet
+
+Artifact 是结构化 handoff，不是 live truth。
+
+#### D. Telemetry Plane
+
+供优化和门禁使用的测量数据：
+
+1. request/task/flow telemetry
+2. baseline reports
+3. replay metrics
+4. gate outcomes
+
+Telemetry 只能影响未来调优，不能反过来篡改当前执行真相。
+
+一句话：
+
+> **truth 负责“现在到底发生了什么”，projection 负责“怎么给人看”，artifact 负责“怎么交接”，telemetry 负责“以后怎么优化”。**
+
 ### 9.1.1 v1 Orchestration Layer 的实现口径
 
 这里需要明确一个很容易误解的问题：
@@ -994,14 +1048,14 @@ tools/
 
 这里的重点不是“做两个 orchestrator”，而是：
 
-> **做一个 orchestration layer，并把它分成两个作用域，再加一个可选补偿件。**
+> **做一个 orchestration layer，并把它分成两个主作用域和一个补偿子域。**
 
 也就是说：
 
 1. 不是两个独立系统
 2. 不是两套状态真相
 3. 不是两个 daemon
-4. 而是同一个 orchestration layer 里的两个入口和一个补偿 worker
+4. 而是同一个 orchestration layer 里的两个主入口和一个补偿子域
 
 更准确的实现方式应该是三层：
 
@@ -1034,9 +1088,9 @@ tools/
 它更像 runtime core + plugin handler 的组合，不是另起一个“永远跑着的大脑”。
 它的职责是 `advance + recover + deliver`。
 
-#### C. Reconcile / Recovery Worker
+#### C. Reconcile / Recovery（Orchestration 内的补偿子域）
 
-这是唯一可以做成后台件的部分，但它是补偿层，不是主链。
+它属于 orchestration layer，只是不走正常主链，而是负责异常补偿和最终一致性。
 
 负责：
 
@@ -1045,13 +1099,13 @@ tools/
 3. 做 reconcile / repair
 4. 清理 projection / mirror
 
-它可以是：
+它的运行入口可以是：
 
 1. one-shot command
 2. cron job
 3. opt-in daemon
 
-但不能成为系统主调度前提。
+但它在架构上不是第二套系统，也不能成为系统主调度前提。
 
 ### 9.1.1.a 为什么不是“两个 orchestrator”
 
@@ -1066,9 +1120,10 @@ tools/
 
 1. 可以放在同一个 `packages/octoclaw-runtime-core`
 2. 可以共享同一套 contracts / state / telemetry
-3. 可以共用同一个 native task/flow truth
-4. 不需要拆成两个服务
-5. 不需要拆成两个产品
+3. `reconcile/recovery` 也可以落在同一个 orchestration module tree
+4. 可以共用同一个 native task/flow truth
+5. 不需要拆成两个服务
+6. 不需要拆成两个产品
 
 如果硬把它们揉成一个概念，最后很容易重新回到 `route / dispatch / delivery / status` 全缠在一起的旧问题。
 
@@ -1100,7 +1155,8 @@ tools/
 3. `Ingress Orchestration` 和 `Workflow Orchestration` 是同一层里的两个作用域
 4. OpenClaw native task/flow 是执行真相
 5. `extensions/octoclaw-runtime` 负责接 runtime/plugin seam
-6. optional reconcile worker 只做补偿，不做主调度
+6. `reconcile/recovery` 作为 orchestration layer 内的补偿子域实现
+7. 它可以暴露 optional worker 入口，但不做主调度
 
 一句话：
 
@@ -1259,6 +1315,186 @@ OMO 值得借的是：
 
 > **正确做法不是“一个大守护进程盯一切”，而是“native truth + deadline metadata + event-driven checks + optional reconcile worker”。**
 
+### 9.1.9 还建议再补强的 6 个架构骨架
+
+在当前 v1 设计上，我认为还有 6 个值得尽早写死的结构性约束。
+
+它们不是换方向，而是避免后面重新长出稳定性债。
+
+#### A. 幂等键 + delivery outbox
+
+现在文档已经有 task/flow truth、delivery state、projection 的区分，但还应该更明确：
+
+1. ingress 请求要有 `request_idempotency_key`
+2. task materialization 要有 `task_spec_hash` / `task_idempotency_key`
+3. IM/update/final delivery 要有 `delivery_receipt_id`
+4. delivery 走 outbox，再由 adapter 发出并确认回执
+
+这样做的原因是：
+
+1. request retry 不会重复创建 task
+2. recover/reconcile 不会重复发 final delivery
+3. webhook / event retry 不会制造幽灵重复消息
+
+一句话：
+
+> **重试应该是幂等重放，不是重复副作用。**
+
+#### B. task claim / lease / ownership
+
+v1 已经写了 heartbeat 和 deadline，但还应该再加一层更明确的“谁在跑这个任务”语义。
+
+建议每个 delegated task 至少有：
+
+1. `claim_owner`
+2. `claim_token`
+3. `lease_expires_at`
+4. `last_heartbeat_at`
+5. `resume_generation`
+
+worker 只有拿到有效 claim 才能继续推进任务。
+
+lease 续约则跟 checkpoint / heartbeat 绑定。
+
+这样可以避免：
+
+1. retry 和原 worker 同时写
+2. reconcile 误把正在执行的任务重新拉起
+3. backend 切换时出现双执行
+
+一句话：
+
+> **deadline 负责判断“是不是卡住了”，claim/lease 负责判断“现在到底是谁拥有执行权”。**
+
+#### C. admission control / queue budget / backpressure
+
+当前设计已经有 profile、cost、latency、worker 上限，但还值得明确成 admission control。
+
+建议至少同时限制：
+
+1. lane 级并发
+2. provider / model 级并发
+3. thread/session 级并发
+4. write-scope 级串行约束
+
+也就是说，不是“能 delegate 就立刻派”，而是：
+
+1. 先 admission check
+2. 再 decide enqueue / defer / reject / downgrade
+
+这点很值得借鉴：
+
+1. GSD 的 wave execution 和文件冲突顺序化
+2. OMO 的 background concurrency / stale timeout 心智
+
+一句话：
+
+> **调度不是只有 route，还要有背压。**
+
+#### D. write scope / workspace mode / conflict policy
+
+你之前很担心文件冲突，这块我认为应该正式升成 contract，而不是运行时临场猜。
+
+建议 delegated task 默认带上：
+
+1. `read_scope`
+2. `write_scope`
+3. `workspace_mode`
+
+其中 `workspace_mode` 至少区分：
+
+1. `read_only`
+2. `shared_workspace`
+3. `isolated_worktree`
+
+冲突策略建议写死：
+
+1. `read_only` 可并发
+2. `shared_workspace` 的 overlapping write 默认串行
+3. `isolated_worktree` 可并发，但需要后续 merge/review
+
+这块最值得借鉴的是 ClawTeam 的 git worktree isolation。
+
+一句话：
+
+> **文件冲突不该靠模型“感觉一下”，而要靠 write-scope contract。**
+
+#### E. capability registry / route guard
+
+现在 model profile 已经固定了，但还建议加一层 capability registry。
+
+route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知道：
+
+1. 是否支持稳定 schema 输出
+2. 是否适合 judge / observe / code / review
+3. 是否支持需要的工具类型
+4. 是否允许高风险写操作
+5. 是否允许长任务 / 流式交付 / checkpoint
+
+这样 policy 在 route 时就能做 hard guard：
+
+1. judge lane 不能落到 schema 不稳的模型
+2. review lane 不能落到能力不够的 profile
+3. 某 backend 不支持当前 task contract 时，不进入 live path
+
+一句话：
+
+> **route 选的不是“模型名”，而是“满足 contract 的能力槽位”。**
+
+#### F. versioned handoff packet + acceptance contract
+
+当前 brief / artifact / delivery 已经设计得不错，但我建议再把 handoff 更明确成 versioned packet。
+
+建议每次 delegate 默认产出一个 `TaskPacket`，至少包含：
+
+1. `goal`
+2. `constraints`
+3. `expected_output`
+4. `acceptance_criteria`
+5. `artifact_refs`
+6. `read_scope`
+7. `write_scope`
+8. `delivery_contract`
+
+这样做的好处是：
+
+1. 主模型和 worker 都保持最小上下文
+2. 后续 replay/debug 更稳
+3. review/eval lane 能直接消费 acceptance contract
+4. 后面引入 fresh-context execution 更容易
+
+这块值得借鉴：
+
+1. Anthropic 对 structured handoff artifact 和逐步简化 harness 的思路
+2. GSD 的 fresh context per plan / verify against goals
+
+一句话：
+
+> **handoff 不该只是“再写一段 prompt”，而应该是类型化任务包。**
+
+### 9.1.10 我对优先级的建议
+
+这 6 条里，我建议优先级这样排：
+
+#### 必须进入 v1 / Phase 1-2 的
+
+1. 幂等键 + delivery outbox
+2. task claim / lease / ownership
+3. admission control / backpressure
+4. write scope / conflict policy
+
+#### 最好在 v1 结构上预留，但实现可稍后补强的
+
+1. capability registry / route guard
+2. versioned handoff packet + acceptance contract
+
+因为前 4 条更直接决定：
+
+1. 会不会重复派活
+2. 会不会双执行
+3. 会不会一拥而上把系统拖死
+4. 会不会在多任务时把工作区写乱
+
 ## 9.2 请求主路径
 
 建议主路径：
@@ -1268,7 +1504,6 @@ OMO 值得借的是：
 3. fast judge:
    - `reply`
    - `delegate.single`
-   - `delegate.compound`
    - `observe`
 4. if `delegate`:
    - send ACK immediately
@@ -1276,6 +1511,54 @@ OMO 值得借的是：
    - enqueue worker
 5. emit initial event
 6. workflow plane 接管
+
+这里再明确一次：
+
+1. `delegate.compound` 不属于 Phase 1 live path
+2. Phase 1 judge 只做 `reply / delegate.single / observe`
+3. compound judge 只作为 Phase 3 以后的扩展位保留
+
+### 9.2.0.a canonical 决策栈
+
+为了避免以后又把 `route / role / backend / model / workspace` 搅在一起，我建议把 live path 的决策顺序写死：
+
+1. `route`
+   - `reply`
+   - `delegate.single`
+   - `observe`
+2. `role`
+   - `main_reply`
+   - `observer_probe`
+   - `worker_research`
+   - `worker_code`
+   - `worker_review`
+3. `backend`
+   - `openclaw-native`
+   - `clawteam`（未来可选）
+   - `legacy-python`（迁移期）
+4. `workspace_mode`
+   - `read_only`
+   - `shared_workspace`
+   - `isolated_worktree`
+5. `model_profile`
+   - `observer_probe`
+   - `judge_fast`
+   - `direct_main`
+   - `worker_default`
+   - `worker_code_normal`
+   - `worker_code_deep`
+   - `worker_review`
+   - `worker_deep`
+
+也就是说：
+
+1. 先判断这次是什么路径
+2. 再决定由哪个角色承担
+3. 再决定落到哪个 backend
+4. 再决定工作区隔离策略
+5. 最后才把 role/profile 映射到具体模型
+
+这样后面的人实现时就不容易重新把这些概念揉成一团。
 
 这里我想补一个非常重要的约束：
 
@@ -1371,16 +1654,39 @@ progress delivery 和 final delivery 应该是不同协议：
 
 v1 不需要自动选模型，建议先写死。
 
-建议固定 4 类：
+这里还需要避免一个很常见的混淆：
+
+> **role、model profile、具体模型名不是同一层。**
+
+建议永远按下面 3 层理解：
+
+1. `role`
+   这次任务由谁承担，例如 `worker_code`、`worker_review`
+2. `model_profile`
+   这类角色默认吃哪种模型档位，例如 `worker_code_normal`
+3. `model_id`
+   最终具体落到哪个供应商/模型名，例如 `zhipu/GLM-5.1`
+
+因此，Phase 1 真正需要写死的是 `model_profile -> model_id` 映射。
+
+建议固定这些 profile：
 
 1. `judge_fast`
    用于 intent / route judge，要求便宜、快、格式稳定。
-2. `direct_main`
+2. `observer_probe`
+   用于快速探测、轻量观察和最小上下文检查。
+3. `direct_main`
    用于简单请求直接回答，要求速度快、质量够高。
-3. `worker_default`
+4. `worker_default`
    用于常规 delegated task。
-4. `worker_deep`
+5. `worker_code_normal`
+   用于普通代码改动、常规实现、一般修 bug。
+6. `worker_code_deep`
    用于复杂实现、架构设计、难调试任务。
+7. `worker_review`
+   用于验证/审查。
+8. `worker_deep`
+   用于后续 heavy profile / 高复杂度任务。
 
 v1 先把接口做对：
 
@@ -1413,7 +1719,7 @@ v1 先把接口做对：
 例如：
 
 1. `observer_probe` 更像现在的 runner/inspect lane，不一定需要 generic 子 agent 长思考
-2. `worker_code` 默认走代码工作池和更强模型
+2. `worker_code` 默认走代码专用 profile，需要时再升到 deep 档
 3. `worker_review` 默认走验证/审查 profile
 
 ### 9.5.0 当前拍板版固定映射（v1）
@@ -1425,9 +1731,10 @@ v1 先把接口做对：
 3. `direct_main` -> `zhipu/GLM-5.1`
 4. `worker_research` -> `zhipu/GLM-5.1`
 5. `worker_default` -> `zhipu/GLM-5.1`
-6. `worker_code` -> `omniroute/cx/gpt-5.4`
-7. `worker_review` -> `omniroute/cx/gpt-5.4`
-8. `worker_deep` -> `omniroute/cx/gpt-5.4`
+6. `worker_code_normal` -> `zhipu/GLM-5.1`
+7. `worker_code_deep` -> `omniroute/cx/gpt-5.4`
+8. `worker_review` -> `omniroute/cx/gpt-5.4`
+9. `worker_deep` -> `omniroute/cx/gpt-5.4`
 
 这套映射的含义是：
 
@@ -1435,7 +1742,7 @@ v1 先把接口做对：
 2. 中档模型负责主回答和常规 delegated work
 3. 贵模型只压在代码实现、审查、复杂深任务上
 
-其中 `worker_code` 当前直接拍板拆成两档：
+其中 `worker_code` 是逻辑角色家族，当前在 model profile 层直接拆成两档：
 
 1. `worker_code_normal` -> `zhipu/GLM-5.1`
 2. `worker_code_deep` -> `omniroute/cx/gpt-5.4`
@@ -1454,6 +1761,12 @@ v1 先把接口做对：
 2. 架构级改动
 3. 大重构
 4. 高风险代码 review
+
+默认建议再补一条：
+
+1. `worker_review` 在 v1 统一先上 `omniroute/cx/gpt-5.4`
+2. 不先拆 `worker_review_normal / worker_review_deep`
+3. 等 telemetry 证明 review 成本压力明显，再考虑补 normal 档
 
 ### 9.5.1 本地模型在 v1 的位置
 
@@ -1997,11 +2310,14 @@ OctoClaw 现在最需要的不是“更多能力”，而是一次**架构性减
 
 ### 13.2 仍待确认
 
-1. `worker_review` 是否也要拆成 normal/deep 两档，还是先统一上 `gpt-5.4`。
-2. `worker_research` 是否需要后续补一个 deep 档。
-3. `judge_fast` shadow lane 的本地模型候选名单何时正式定。
+1. `worker_research` 是否需要后续补一个 deep 档。
+2. `judge_fast` shadow lane 的本地模型候选名单何时正式定。
 
-如果这几个问题定下来，后面的正式稿会非常好收敛。
+当前默认建议已经是：
+
+1. `worker_review` 在 v1 统一先上 `gpt-5.4`
+2. `worker_research` 暂不补 deep 档，等 heavy/research profile 再扩
+3. 本地 `judge_fast` 先不指定具体模型名，以 Phase 2 后半的 benchmark/gate 结果决定
 
 ---
 
