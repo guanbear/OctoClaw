@@ -68,6 +68,23 @@ class OctopusConfigFeatureFlagTests(unittest.TestCase):
         self.assertIn("env:OCTOCLAW_RUNNER_POOL_ENABLED", features["override_sources"])
         self.assertIn("env:OCTOCLAW_DELIVERY_RELAY_ENABLED", features["override_sources"])
 
+    def test_resolve_workspace_ignores_suspicious_env_root_and_prefers_managed_workspace(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-config-workspace-") as tmpdir:
+            home = Path(tmpdir)
+            config_dir = home / ".openclaw"
+            managed_workspace = config_dir / "workspace"
+            managed_workspace.mkdir(parents=True, exist_ok=True)
+            (config_dir / "openclaw.json").write_text("{}", encoding="utf-8")
+            with patch.dict(os.environ, {"HOME": str(home), "OPENCLAW_HOME": str(config_dir), "WORKSPACE": "/Users"}, clear=False):
+                self.assertEqual(octopus_config.resolve_workspace(), str(managed_workspace.resolve()))
+
+    def test_resolve_workspace_keeps_valid_explicit_workspace(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="octoclaw-config-explicit-") as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            (workspace / "tmp").mkdir(parents=True, exist_ok=True)
+            with patch.dict(os.environ, {"WORKSPACE": str(workspace)}, clear=False):
+                self.assertEqual(octopus_config.resolve_workspace(), str(workspace.resolve()))
+
 
 if __name__ == "__main__":
     unittest.main()

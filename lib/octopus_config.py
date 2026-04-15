@@ -6,6 +6,10 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+try:
+    from openclaw_paths import resolve_openclaw_config_dir
+except ModuleNotFoundError:  # pragma: no cover
+    from lib.openclaw_paths import resolve_openclaw_config_dir
 
 DEFAULT_WORKSPACE = "/workspace"
 RUNTIME_POLICY_MODE_ALIASES = {
@@ -146,7 +150,7 @@ def resolve_runtime_feature_flags(runtime_policy: dict[str, Any] | None = None) 
 
 
 def _normalize_path(path: str) -> str:
-    return os.path.abspath(os.path.expanduser(str(path or "").strip()))
+    return os.path.realpath(os.path.abspath(os.path.expanduser(str(path or "").strip())))
 
 
 def resolve_skill_root() -> str:
@@ -171,6 +175,31 @@ def infer_workspace_from_skill_root(skill_root: str) -> str:
     return ""
 
 
+def _looks_like_workspace_root(candidate: str) -> bool:
+    normalized = _normalize_path(candidate)
+    if not normalized:
+        return False
+    if normalized == DEFAULT_WORKSPACE:
+        return True
+    if normalized in {"/", "/Users", "/private", "/var", "/tmp"}:
+        return False
+    marker_checks = [
+        os.path.join(normalized, "tmp"),
+        os.path.join(normalized, "openclaw"),
+        os.path.join(normalized, ".learnings"),
+    ]
+    if any(os.path.isdir(path) for path in marker_checks):
+        return True
+    compact = normalized.replace("\\", "/")
+    return compact.endswith("/.openclaw/workspace")
+
+
+def _managed_openclaw_workspace() -> str:
+    config_dir = resolve_openclaw_config_dir()
+    candidate = _normalize_path(os.path.join(str(config_dir), "workspace"))
+    return candidate if _looks_like_workspace_root(candidate) else ""
+
+
 SKILL_ROOT = resolve_skill_root()
 
 
@@ -178,15 +207,17 @@ def resolve_workspace() -> str:
     for env_name in ("WORKSPACE", "OCTOCLAW_WORKSPACE"):
         configured = str(os.environ.get(env_name, "") or "").strip()
         if configured:
-            return _normalize_path(configured)
+            normalized = _normalize_path(configured)
+            if _looks_like_workspace_root(normalized):
+                return normalized
 
     inferred = infer_workspace_from_skill_root(SKILL_ROOT)
     if inferred:
         return inferred
 
-    openclaw_workspace = os.path.expanduser("~/.openclaw/workspace")
-    if os.path.isdir(openclaw_workspace):
-        return _normalize_path(openclaw_workspace)
+    managed_workspace = _managed_openclaw_workspace()
+    if managed_workspace:
+        return managed_workspace
 
     return DEFAULT_WORKSPACE
 
