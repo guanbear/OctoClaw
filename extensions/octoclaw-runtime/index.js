@@ -126,8 +126,23 @@ function resolveOctoClawRoot() {
   return resolved || path.resolve(__dirname, "..", "..");
 }
 
+function resolveRuntimeOctoClawRoot() {
+  const configDir = resolveOpenClawConfigDir();
+  const resolved = firstExistingPath(
+    [
+      path.join(configDir, "workspace", "openclaw", "skills", "octopus"),
+      path.join(configDir, "workspace", "openclaw", "repos", "octoclaw"),
+      OCTOCLAW_ROOT_OVERRIDE,
+      process.env.OCTOCLAW_ROOT,
+      path.resolve(__dirname, "..", ".."),
+    ],
+    (candidate) => fsSync.existsSync(path.join(candidate, "lib")),
+  );
+  return resolved || resolveOctoClawRoot();
+}
+
 function resolveScript(...parts) {
-  return path.join(resolveOctoClawRoot(), "lib", ...parts);
+  return path.join(resolveRuntimeOctoClawRoot(), "lib", ...parts);
 }
 
 function resolveWorkspaceRoot() {
@@ -533,7 +548,7 @@ async function watchdogTick(logger) {
   _watchdogLastTick = now;
   try {
     const taskStatePath = resolveTaskStatePath();
-    const cwd = resolveOctoClawRoot();
+    const cwd = resolveRuntimeOctoClawRoot();
     const taskState = await readJsonFile(taskStatePath);
     const tasks = Array.isArray(taskState?.tasks) ? taskState.tasks : [];
     if (tasks.length === 0) return;
@@ -4083,7 +4098,9 @@ const plugin = {
 export default plugin;
 export const __octoclawTest = {
   resolveOctoClawRoot,
+  resolveRuntimeOctoClawRoot,
   resolveWorkspaceRoot,
+  resolveScript,
   resolvePythonBin,
   resolvePolicyStateLedgerPath,
   resolveReplayLogPath,
