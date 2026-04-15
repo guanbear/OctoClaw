@@ -8,7 +8,7 @@
 
 关联文档：
 
-1. `octoclaw-ts-rebuild-design-draft-2026-04-15.md`
+1. `octoclaw-ts-rebuild-design-v1.md`
 2. `octoclaw-harness-contract-inventory.md`
 3. `octoclaw-harness-ownership-map.md`
 4. `octoclaw-im-display-contract.md`
