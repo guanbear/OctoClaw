@@ -43,9 +43,13 @@ export function createOctoClawRuntimePlugin(options: OctoClawRuntimePluginOption
     createAdapter,
     judgeRoute: (input) => resolveRuntimePolicyDecision(input),
     bindWorkflow: (state) => {
-      const binding = createAdapter().bindSession(state.requestId || state.taskId);
-      const taskTruth = binding.runTask(state);
-      return {
+        const identity = state.identity ?? {
+          requestId: (state as unknown as { requestId?: string }).requestId || "",
+          taskId: (state as unknown as { taskId?: string }).taskId || "",
+        };
+        const binding = createAdapter().bindSession(identity.requestId || identity.taskId);
+        const taskTruth = binding.runTask(state);
+        return {
         taskId: taskTruth.taskId,
         flowId: taskTruth.flowId,
         status: taskTruth.substrateState,

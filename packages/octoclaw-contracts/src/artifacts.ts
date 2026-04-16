@@ -1,4 +1,11 @@
-import type { ContractEnvelope, IdempotencyMetadata, ScopeMetadata } from "./schemas.ts";
+import type {
+  ContractEnvelope,
+  ExecutionIdentity,
+  ExecutionProvenance,
+  IdempotencyMetadata,
+  LifecycleState,
+  ScopeMetadata,
+} from "./schemas.ts";
 import type { OwnershipMetadata, TaskIdentity } from "./events.ts";
 
 export type ArtifactSurface = "truth" | "projection" | "artifact" | "telemetry";
@@ -15,8 +22,19 @@ export interface ArtifactDescriptor extends ContractEnvelope, OwnershipMetadata,
 export interface TaskPacket extends ContractEnvelope, OwnershipMetadata, IdempotencyMetadata, ScopeMetadata, TaskIdentity {
   briefId: string;
   objective: string;
+  acceptanceCriteria: string[];
+  deliveryContract: {
+    mode: "reply" | "notify" | "silent";
+    target: string;
+  };
   allowedTools: string[];
   doneDefinition: string[];
+}
+
+export interface LifecycleArtifact extends ContractEnvelope, ExecutionIdentity, ExecutionProvenance, LifecycleState, OwnershipMetadata, IdempotencyMetadata, ScopeMetadata, TaskIdentity {
+  artifactId: string;
+  artifactKind: "execution_lifecycle";
+  summary: string;
 }
 
 export interface WorkerBrief extends ContractEnvelope, ScopeMetadata {

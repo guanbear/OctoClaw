@@ -106,22 +106,50 @@ export interface RuntimeTaskflowAdapter {
   bindSession: (sessionKey: string) => RuntimeTaskflowSessionBinding;
 }
 
+function workflowIdentity(workflow: RuntimeWorkflowState): RuntimeWorkflowState["identity"] {
+  return workflow.identity ?? {
+    requestId: (workflow as unknown as { requestId?: string }).requestId || "",
+    taskId: (workflow as unknown as { taskId?: string }).taskId || "",
+    flowId: (workflow as unknown as { flowId?: string }).flowId || "",
+    route: (workflow.taskMaterialization?.route || "delegate.single") as RuntimeWorkflowState["identity"]["route"],
+    authority: (workflow.taskMaterialization?.authority || "runtime_orchestrator") as RuntimeWorkflowState["identity"]["authority"],
+    backend: (workflow.taskMaterialization?.backend || "openclaw-native") as RuntimeWorkflowState["identity"]["backend"],
+    materializationIntent: (workflow.taskMaterialization?.materializationIntent || "spawn_single") as RuntimeWorkflowState["identity"]["materializationIntent"],
+  };
+}
+
+function workflowLifecycle(workflow: RuntimeWorkflowState): RuntimeWorkflowState["lifecycle"] {
+  return workflow.lifecycle ?? {
+    phase: workflow.workflowOrchestration === "running" ? "running" : "materialization_pending",
+    deliveryState: "not_started",
+    checkpointState: "none",
+  };
+}
+
 function stringifyStateJson(workflow: RuntimeWorkflowState): string {
+  const identity = workflowIdentity(workflow);
+  const lifecycle = workflowLifecycle(workflow);
   return JSON.stringify({
-    requestId: workflow.requestId,
-    taskId: workflow.taskId,
-    flowId: workflow.flowId,
+    requestId: identity.requestId,
+    taskId: identity.taskId,
+    flowId: identity.flowId,
+    route: identity.route,
+    authority: identity.authority,
+    materializationIntent: identity.materializationIntent,
     workflowOrchestration: workflow.workflowOrchestration,
     reconcileOrRecovery: workflow.reconcileOrRecovery,
+    lifecyclePhase: lifecycle.phase,
+    deliveryState: lifecycle.deliveryState,
   });
 }
 
 function buildGoal(workflow: RuntimeWorkflowState): string {
+  const identity = workflowIdentity(workflow);
   return String(
     workflow.taskMaterialization?.taskPacketRef
-      || workflow.requestId
-      || workflow.taskId
-      || workflow.flowId,
+      || identity.requestId
+      || identity.taskId
+      || identity.flowId,
   ).trim();
 }
 
@@ -146,6 +174,7 @@ function deriveTruthShape(
     managedDisposition: "managed" | "mirrored";
   },
 ) {
+  const identity = workflowIdentity(workflow);
   const scope = normalizeScope(workflow.scope);
   const claimOwner = workflow.claim?.claimOwner || workflow.taskMaterialization?.claimOwner || "runtime-core";
   const claimToken = workflow.claim?.claimToken || workflow.taskMaterialization?.claimToken || "";
@@ -156,7 +185,7 @@ function deriveTruthShape(
     ...buildContractEnvelope("truth", createdAt),
     kind: "truth" as const,
     sessionKey,
-    requestId: workflow.requestId,
+    requestId: identity.requestId,
     flowId,
     taskId,
     runtime: "openclaw-native" as const,
@@ -190,7 +219,7 @@ function deriveTruthShape(
   const artifact = {
     ...buildContractEnvelope("artifact", createdAt),
     kind: "artifact" as const,
-    taskPacketRef: workflow.taskMaterialization?.taskPacketRef || `${workflow.flowId}:${workflow.taskId}`,
+    taskPacketRef: workflow.taskMaterialization?.taskPacketRef || `${identity.flowId}:${identity.taskId}`,
     schemaPlanes: createNativeTruthArtifactKinds(),
   };
   const telemetry = {

@@ -119,6 +119,7 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertEqual(payload["runTask"]["substrateRevision"], 7)
         self.assertEqual(payload["runTask"]["ownership"]["claimOwner"], "owner-native-1")
         self.assertEqual(payload["runTask"]["scope"]["workspaceMode"], "shared_workspace")
+        self.assertEqual(payload["runTask"]["artifact"]["taskPacketRef"], "flow-native-1:task-native-1:claim-token-1")
         self.assertEqual(payload["bindWorkflow"]["taskId"], "native-task-77")
         self.assertEqual(payload["bindWorkflow"]["flowId"], "native-flow-42")
         self.assertEqual(payload["bindWorkflow"]["substrateState"], "running")
