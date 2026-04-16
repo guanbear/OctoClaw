@@ -286,6 +286,12 @@ bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh install
 bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh update
 bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh status
 
+# Local macmini lifecycle (clean uninstall + deploy from current tree + runtime control)
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh deploy
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh uninstall-clean
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh status
+bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh restart
+
 # Reconcile a local checked-out tree without prompts
 bash /workspace/openclaw/skills/octopus/install.sh reconcile --non-interactive --extension-install-mode rsync
 

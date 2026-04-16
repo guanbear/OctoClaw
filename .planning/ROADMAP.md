@@ -6,10 +6,10 @@ OctoClaw is being re-baselined around a TypeScript-first, harness-first architec
 
 ## Phases
 
-- [ ] **Phase 1: Rebuild Baseline Alignment** - Capture the TS rebuild design baseline and freeze the migration guardrails that all follow-up phases must obey.
+- [x] **Phase 1: Rebuild Baseline Alignment** - Capture the TS rebuild design baseline and freeze the migration guardrails that all follow-up phases must obey. (completed 2026-04-16)
 - [x] **Phase 2: Runtime Core and Safe Delegation** - Build the TS contracts, guarded policy core, runtime ownership model, and delegation safety primitives for `reply`, `delegate.single`, and `observe`. (completed 2026-04-16)
-- [ ] **Phase 3: Native Substrate and Operator Surfaces** - Converge execution and read paths on OpenClaw native task and flow truth, then restore status and IM surfaces on substrate-first projections.
-- [ ] **Phase 4: Eval Gates and Advanced Routing** - Turn preflight, golden, replay, and acceptance gates into the promotion path, then add advanced routing capabilities only after the core runtime is stable.
+- [x] **Phase 3: Native Substrate and Operator Surfaces** - Converge execution and read paths on OpenClaw native task and flow truth, then restore status and IM surfaces on substrate-first projections. (completed 2026-04-16)
+- [x] **Phase 4: Eval Gates and Advanced Routing** - Turn preflight, golden, replay, and acceptance gates into the promotion path, then add advanced routing capabilities only after the core runtime is stable. (completed 2026-04-16)
 
 ## Phase Details
 
@@ -24,7 +24,7 @@ OctoClaw is being re-baselined around a TypeScript-first, harness-first architec
 **Plans**: 1 plan
 
 Plans:
-- [ ] 01-01: Rebase roadmap and requirements onto the TS rebuild design
+- [x] 01-01: Rebase roadmap and requirements onto the TS rebuild design
 
 ### Phase 2: Runtime Core and Safe Delegation
 **Goal**: Deliver the first executable TS rebuild slice by defining shared contracts, guarded policy decisions, runtime ownership and delivery primitives, and safe delegation boundaries for the minimal live path.
@@ -71,7 +71,7 @@ Plans:
 Plans:
 - [x] 04-01-PLAN.md — Activate promotion-grade replay, delivery, harness, and acceptance gates
 - [x] 04-02-PLAN.md — Stabilize route-policy goldens, shadow drift reporting, and optimization telemetry contracts
-- [ ] 04-03-PLAN.md — Enable gated compound routing and auto-router consumption on validated contracts
+- [x] 04-03-PLAN.md — Enable gated compound routing and auto-router consumption on validated contracts
 
 ## Progress
 
@@ -80,7 +80,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Rebuild Baseline Alignment | 0/1 | Not started | - |
-| 2. Runtime Core and Safe Delegation | 4/4 | Complete   | 2026-04-16 |
-| 3. Native Substrate and Operator Surfaces | 0/3 | Not started | - |
-| 4. Eval Gates and Advanced Routing | 0/TBD | Not started | - |
+| 1. Rebuild Baseline Alignment | 1/1 | Complete | 2026-04-16 |
+| 2. Runtime Core and Safe Delegation | 4/4 | Complete | 2026-04-16 |
+| 3. Native Substrate and Operator Surfaces | 3/3 | Complete | 2026-04-16 |
+| 4. Eval Gates and Advanced Routing | 3/3 | Complete | 2026-04-16 |

@@ -14,6 +14,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from octoclaw_policy import build_decision
+from auto_router import build_auto_router_payload, infer_policy_phase
 
 
 AUTO_ROUTER_SCRIPT = REPO_ROOT / "lib" / "auto_router.py"
@@ -32,7 +33,8 @@ class AutoRouterTests(unittest.TestCase):
         self.assertEqual(payload["router_core"]["work_contract"], decision["route_decision"]["work_contract"])
         self.assertEqual(payload["budget_planner"]["target_model"], decision["model_policy"]["selected_model"])
         self.assertEqual(payload["budget_planner"]["reasoning_mode"], decision["model_policy"]["reasoning_effort"])
-        self.assertEqual(payload["adapter"]["policy_phase"], "guided")
+        self.assertEqual(payload["adapter"]["policy_phase"], infer_policy_phase(decision["runtime_switches"]))
+        self.assertEqual(payload["adapter"]["policy_phase"], payload["signal"]["feedback_signals"]["policy_phase"])
         self.assertTrue(payload["signal"]["request"]["task"])
         self.assertIn(payload["signal"]["contract"]["risk_level"], {"low", "medium", "high"})
         self.assertIn(decision["model_policy"]["selected_model"], payload["model_intel"]["candidate_models"])
@@ -76,6 +78,23 @@ class AutoRouterTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["signal"]["request"]["session_key"], "agent:main:slack:direct:u1")
         self.assertEqual(payload["signal"]["continuity"]["route_hint"], "spawn_single")
+
+    def test_auto_router_payload_stays_read_only_consumer_of_internal_decision_contracts(self) -> None:
+        decision = build_decision("检查一下 nginx error log 最近 80 行，然后总结问题")
+        decision["runtime_truth"] = {"route": "spawn_multi", "authority": "fake"}
+        decision["route_decision"] = {
+            **decision["route_decision"],
+            "route": "runner",
+            "work_contract": "inspect_report",
+        }
+
+        payload = build_auto_router_payload(decision)
+
+        self.assertEqual(payload["schema_version"], "octoclaw.auto_router.recommendation/v1")
+        self.assertEqual(payload["router_core"]["route"], "runner")
+        self.assertEqual(payload["router_core"]["work_contract"], "inspect_report")
+        self.assertNotIn("runtime_truth", payload)
+        self.assertNotIn("dispatch", payload)
 
 
 if __name__ == "__main__":

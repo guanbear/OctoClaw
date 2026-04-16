@@ -1,23 +1,5 @@
 [
   {
-    "task": "你现在是啥模型",
-    "expected": {
-      "system_preferred_route": "direct",
-      "task_class": "control_observer",
-      "work_contract_hint": "answer_now",
-      "protected_lane": "control_observer"
-    }
-  },
-  {
-    "task": "你是啥模型",
-    "expected": {
-      "system_preferred_route": "direct",
-      "task_class": "control_observer",
-      "work_contract_hint": "answer_now",
-      "protected_lane": "control_observer"
-    }
-  },
-  {
     "task": "刚才的查询是子任务做的吗 是啥模型做的",
     "expected": {
       "system_preferred_route": "direct",

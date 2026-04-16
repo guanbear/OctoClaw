@@ -208,8 +208,9 @@ def resolve_workspace() -> str:
         configured = str(os.environ.get(env_name, "") or "").strip()
         if configured:
             normalized = _normalize_path(configured)
-            if _looks_like_workspace_root(normalized):
-                return normalized
+            # Explicit workspace overrides are authoritative, including
+            # ephemeral test sandboxes that do not yet contain workspace markers.
+            return normalized
 
     inferred = infer_workspace_from_skill_root(SKILL_ROOT)
     if inferred:

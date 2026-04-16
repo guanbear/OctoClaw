@@ -459,7 +459,7 @@ async function sendAckDirect(sessionKey, message, cwd, options = {}) {
       delivered: false,
       sent: false,
       error: "unresolvable_session_target",
-      reason: "unresolvable",
+      reason: "channel_message_unresolvable",
       ack_target_resolution_state: "target_resolution_failed",
       ack_delivery_state: "not_attempted",
     };
@@ -1261,6 +1261,7 @@ function ackTargetResolutionState(result = {}) {
   if (state) return state;
   if (String(result?.reason || "") === "missing_session_key") return "missing_session_key";
   if (String(result?.reason || "") === "owner_conflict") return "skipped_owner_conflict";
+  if (String(result?.reason || "") === "channel_message_unresolvable") return "unresolved";
   if (result?.resolvedTarget) return "resolved";
   return "unresolved";
 }
@@ -2889,6 +2890,44 @@ function applyPhaseTwoLivePathPolicy(decision, metadata = {}, prompt = "") {
   return nextDecision;
 }
 
+function attachRuntimeTruthMetadata(decision, metadata = {}, prompt = "") {
+  const nextDecision = decision && typeof decision === "object" ? { ...decision } : {};
+  try {
+    metadata.runtime_truth = buildRuntimeTruthMetadata({
+      ...metadata,
+      requestId: metadata?.requestId || metadata?.request_id || stableId("runtime", [prompt, nextDecision?.route_decision?.route || "direct"]),
+      taskId: metadata?.taskId || metadata?.task_id || stableId("task", [prompt, nextDecision?.route_decision?.route || "direct"]),
+      flowId: metadata?.flowId || metadata?.flow_id || stableId("flow", [prompt, nextDecision?.route_decision?.route || "direct"]),
+      requiresDelegation: ["spawn_single", "spawn_multi", "runner"].includes(String(nextDecision?.route_decision?.route || "").trim()),
+      requiresObservation: String(nextDecision?.route_decision?.task_class || "").trim() === "control_observer",
+    });
+  } catch (error) {
+    metadata.runtime_truth = metadata?.runtime_truth && typeof metadata.runtime_truth === "object"
+      ? metadata.runtime_truth
+      : null;
+    metadata.runtime_truth_error = {
+      source: "buildRuntimeTruthMetadata",
+      message: String(error?.message || error || "runtime_truth_unavailable"),
+    };
+  }
+
+  if (metadata.runtime_truth) {
+    nextDecision.runtime_truth = metadata.runtime_truth;
+  }
+  if (metadata.runtime_truth_error) {
+    nextDecision.request = nextDecision.request && typeof nextDecision.request === "object"
+      ? {
+          ...nextDecision.request,
+          metadata: {
+            ...(nextDecision.request.metadata && typeof nextDecision.request.metadata === "object" ? nextDecision.request.metadata : {}),
+            runtime_truth_error: metadata.runtime_truth_error,
+          },
+        }
+      : nextDecision.request;
+  }
+  return nextDecision;
+}
+
 async function resolveStatelessPolicyDecision(task, options = {}) {
   const prompt = String(task || "").trim();
   const metadata = enrichConversationControlMetadata(prompt, options?.metadata || {});
@@ -3047,7 +3086,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
     metadata.policy_judge_result = judgeResult;
   }
   try {
-    const decision = applyPhaseTwoLivePathPolicy(buildDecision(prompt, { metadata }), metadata, prompt);
+    const decision = attachRuntimeTruthMetadata(buildDecision(prompt, { metadata }), metadata, prompt);
     const nextState = {
       prompt,
       decision,

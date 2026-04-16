@@ -7,8 +7,8 @@
 
 ### Rebuild Baseline
 
-- [ ] **BASE-01**: Planning and execution artifacts treat the 2026-04-15 TS rebuild design as the active product architecture baseline.
-- [ ] **BASE-02**: The rebuild explicitly forbids extending Python or oversized legacy JS live-path modules as the formal long-term architecture.
+- [x] **BASE-01**: Planning and execution artifacts treat the 2026-04-15 TS rebuild design as the active product architecture baseline.
+- [x] **BASE-02**: The rebuild explicitly forbids extending Python or oversized legacy JS live-path modules as the formal long-term architecture.
 
 ### Contracts and Policy
 
@@ -53,8 +53,8 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BASE-01 | Phase 1 | Pending |
-| BASE-02 | Phase 1 | Pending |
+| BASE-01 | Phase 1 | Complete |
+| BASE-02 | Phase 1 | Complete |
 | CTRT-01 | Phase 2 | Complete |
 | POL-01 | Phase 2 | Complete |
 | RT-01 | Phase 2 | Complete |

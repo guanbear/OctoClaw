@@ -1326,6 +1326,9 @@ def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> 
     cfg = load_octopus_config()
     runner_mode = default_runner_execution_mode(resolve_runner_mode(cfg))
     settings = runner_pool_settings()
+    runtime_policy = cfg.get("runtime_policy", {}) if isinstance(cfg, dict) else {}
+    runner_recovery = runtime_policy.get("runner_recovery", {}) if isinstance(runtime_policy, dict) else {}
+    sync_recovered = bool(runner_recovery.get("sync_task_state", False))
     try:
         recovered = recover_stale_running_jobs(
             lease_timeout_seconds=settings["lease_timeout_seconds"],
@@ -1333,7 +1336,8 @@ def runner_dispatch_runtime_resolution(*, wait: bool, session_key: str = "") -> 
         )
     except OSError:
         recovered = {"recovered_count": 0, "jobs": []}
-    sync_recovered_stale_runner_jobs(recovered)
+    if sync_recovered:
+        sync_recovered_stale_runner_jobs(recovered)
     queue_counts = load_runner_queue_counts()
     active_jobs = load_runner_active_jobs()
     health = load_runner_health(stale_after_seconds=RUNNER_STALE_SECONDS)

@@ -40,6 +40,7 @@ export function createExecutionLedger(plan) {
 
     items.set(id, {
       status: "pending",
+      execution_validation: null,
       materialization_facts: null,
       materialization_failed: false,
       result: null,
@@ -48,6 +49,7 @@ export function createExecutionLedger(plan) {
       started_at: null,
       completed_at: null,
       guard_result: null,
+      skip_reason: "",
     });
   }
 
@@ -107,8 +109,12 @@ export async function executeCompoundPlan(plan, decisions, context) {
   // Step c: Run lane validation — apply corrections to decisions
   const executionValidation = validateCompoundExecution(plan, laneFeasibility, runnerStatus);
   const laneCorrections = new Map();
+  const executionValidationById = new Map();
   if (executionValidation && Array.isArray(executionValidation.items)) {
     for (const correction of executionValidation.items) {
+      if (correction && correction.id) {
+        executionValidationById.set(correction.id, correction);
+      }
       if (correction && correction.id && correction.lane_corrected) {
         laneCorrections.set(correction.id, correction.lane_corrected);
       }
@@ -156,16 +162,42 @@ export async function executeCompoundPlan(plan, decisions, context) {
 
       // Get decision from decisions Map
       let decision = decisionsMap.get(itemId);
+      const executionCheck = executionValidationById.get(itemId) || null;
+      if (executionCheck) {
+        itemEntry.execution_validation = executionCheck;
+      }
+
+      if (executionCheck && Array.isArray(executionCheck.errors) && executionCheck.errors.length > 0) {
+        itemEntry.status = "failed";
+        itemEntry.materialization_failed = true;
+        itemEntry.skip_reason = executionCheck.errors.join("; ");
+        itemEntry.completed_at = Date.now();
+        workItemResults.set(itemId, {
+          failed: true,
+          execution_validation: executionCheck,
+        });
+        logger.warn(`compound_executor: validation failed for itemId "${itemId}": ${itemEntry.skip_reason}`);
+        continue;
+      }
 
       // Apply lane correction if present
       if (decision && laneCorrections.has(itemId)) {
-        decision = { ...decision, lane: laneCorrections.get(itemId) };
+        decision = {
+          ...decision,
+          lane: laneCorrections.get(itemId),
+          correction_reason: executionCheck?.correction_reason || "",
+        };
       }
 
       if (!decision) {
         itemEntry.status = "skipped";
+        itemEntry.skip_reason = "decision_missing";
         itemEntry.completed_at = Date.now();
-        workItemResults.set(itemId, { skipped: true });
+        workItemResults.set(itemId, {
+          skipped: true,
+          skip_reason: itemEntry.skip_reason,
+          execution_validation: executionCheck,
+        });
         logger.info(`compound_executor: no decision for itemId "${itemId}", skipping`);
         continue;
       }
@@ -178,8 +210,14 @@ export async function executeCompoundPlan(plan, decisions, context) {
       if (!guardResult.passed) {
         itemEntry.status = "skipped";
         itemEntry.guard_result = guardResult;
+        itemEntry.skip_reason = guardResult.reason;
         itemEntry.completed_at = Date.now();
-        workItemResults.set(itemId, { skipped: true, guard_result: guardResult });
+        workItemResults.set(itemId, {
+          skipped: true,
+          guard_result: guardResult,
+          skip_reason: itemEntry.skip_reason,
+          execution_validation: executionCheck,
+        });
         logger.info(`compound_executor: guard failed for itemId "${itemId}": ${guardResult.reason}`);
         continue;
       }
@@ -259,18 +297,20 @@ export function ledgerToJSON(ledger) {
         itemsObj[id] = entry;
         continue;
       }
-      itemsObj[id] = {
-        status: entry.status || "pending",
-        materialization_facts: entry.materialization_facts !== undefined ? entry.materialization_facts : null,
-        materialization_failed: Boolean(entry.materialization_failed),
-        result: entry.result !== undefined ? entry.result : null,
+        itemsObj[id] = {
+          status: entry.status || "pending",
+          execution_validation: entry.execution_validation !== undefined ? entry.execution_validation : null,
+          materialization_facts: entry.materialization_facts !== undefined ? entry.materialization_facts : null,
+          materialization_failed: Boolean(entry.materialization_failed),
+          result: entry.result !== undefined ? entry.result : null,
         task_id: entry.task_id !== undefined ? entry.task_id : null,
         runner_job_id: entry.runner_job_id !== undefined ? entry.runner_job_id : null,
-        started_at: entry.started_at !== undefined ? entry.started_at : null,
-        completed_at: entry.completed_at !== undefined ? entry.completed_at : null,
-        guard_result: entry.guard_result !== undefined ? entry.guard_result : null,
-      };
-    }
+          started_at: entry.started_at !== undefined ? entry.started_at : null,
+          completed_at: entry.completed_at !== undefined ? entry.completed_at : null,
+          guard_result: entry.guard_result !== undefined ? entry.guard_result : null,
+          skip_reason: entry.skip_reason !== undefined ? entry.skip_reason : "",
+        };
+      }
   }
 
   return {

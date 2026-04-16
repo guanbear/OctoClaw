@@ -662,6 +662,63 @@ class TestCompoundExecutor(unittest.TestCase):
         self.assertEqual(items.get("R", {}).get("status"), "failed")
         self.assertTrue(items.get("R", {}).get("materialization_failed"))
 
+    def test_execute_marks_invalid_spawn_item_failed_before_dispatch(self) -> None:
+        payload = _run_tdd_expression(
+            """(async () => {
+                const dispatchLog = [];
+                const plan = cp.normalizeCompoundPlan({
+                    decision_mode: "compound_plan",
+                    work_items: [
+                        { id: "S", lane: "spawn_single", intent_class: "plain_chat", goal: "invalid delegated lane" }
+                    ]
+                });
+                const decisions = [
+                    { item_id: "S", lane: "spawn_single", intent_class: "plain_chat", goal: "invalid delegated lane" }
+                ];
+                const ledger = await cexec.executeCompoundPlan(plan, decisions, {
+                    dispatchFn: async (d) => { dispatchLog.push(d.item_id); return { status: "completed" }; },
+                    materializeFn: async () => ({ status: "completed" }),
+                    logger: { info() {}, warn() {}, error() {} }
+                });
+                return { ledger: cexec.ledgerToJSON(ledger), dispatchLog };
+            })()"""
+        )
+        self._skip_if_tdd(payload)
+        items = payload.get("ledger", {}).get("items", {})
+        self.assertEqual(items.get("S", {}).get("status"), "failed")
+        self.assertTrue(items.get("S", {}).get("materialization_failed"))
+        self.assertIn("delegated_work", items.get("S", {}).get("skip_reason", ""))
+        self.assertEqual(payload.get("dispatchLog"), [])
+
+    def test_execute_applies_lane_correction_before_dispatch(self) -> None:
+        payload = _run_tdd_expression(
+            """(async () => {
+                const dispatchLog = [];
+                const plan = cp.normalizeCompoundPlan({
+                    decision_mode: "compound_plan",
+                    work_items: [
+                        { id: "R", lane: "runner", intent_class: "fresh_live_lookup", goal: "lookup data" }
+                    ]
+                });
+                const decisions = [
+                    { item_id: "R", lane: "runner", intent_class: "fresh_live_lookup", goal: "lookup data" }
+                ];
+                const ledger = await cexec.executeCompoundPlan(plan, decisions, {
+                    dispatchFn: async (d) => { dispatchLog.push({ item_id: d.item_id, lane: d.lane, correction_reason: d.correction_reason || "" }); return { status: "completed" }; },
+                    materializeFn: async () => ({ status: "completed", changed: false }),
+                    laneFeasibility: {},
+                    runnerStatus: { available: false },
+                    logger: { info() {}, warn() {}, error() {} }
+                });
+                return { ledger: cexec.ledgerToJSON(ledger), dispatchLog };
+            })()"""
+        )
+        self._skip_if_tdd(payload)
+        items = payload.get("ledger", {}).get("items", {})
+        self.assertEqual(items.get("R", {}).get("status"), "completed")
+        self.assertEqual(items.get("R", {}).get("execution_validation", {}).get("lane_corrected"), "direct")
+        self.assertEqual(payload.get("dispatchLog"), [{"item_id": "R", "lane": "direct", "correction_reason": "degraded_direct_lookup:runner_unavailable"}])
+
     def test_full_target_example(self) -> None:
         """The full target example: greeting + model query + version check + conditional update."""
         payload = _run_tdd_expression(
