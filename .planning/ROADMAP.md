@@ -7,7 +7,7 @@ OctoClaw is being re-baselined around a TypeScript-first, harness-first architec
 ## Phases
 
 - [ ] **Phase 1: Rebuild Baseline Alignment** - Capture the TS rebuild design baseline and freeze the migration guardrails that all follow-up phases must obey.
-- [ ] **Phase 2: Runtime Core and Safe Delegation** - Build the TS contracts, guarded policy core, runtime ownership model, and delegation safety primitives for `reply`, `delegate.single`, and `observe`.
+- [x] **Phase 2: Runtime Core and Safe Delegation** - Build the TS contracts, guarded policy core, runtime ownership model, and delegation safety primitives for `reply`, `delegate.single`, and `observe`. (completed 2026-04-16)
 - [ ] **Phase 3: Native Substrate and Operator Surfaces** - Converge execution and read paths on OpenClaw native task and flow truth, then restore status and IM surfaces on substrate-first projections.
 - [ ] **Phase 4: Eval Gates and Advanced Routing** - Turn preflight, golden, replay, and acceptance gates into the promotion path, then add advanced routing capabilities only after the core runtime is stable.
 
@@ -40,7 +40,7 @@ Plans:
 Plans:
 - [x] 02-01: Define TS contracts and guarded policy core
 - [x] 02-02: Build runtime ownership and safe delegation primitives
-- [ ] 02-03: Wire the shipped runtime path to the TS policy judge and gate compound routing
+- [x] 02-03: Wire the shipped runtime path to the TS policy judge and gate compound routing
 - [x] 02-04: Close runtime-core ownership and delegation metadata gaps
 
 ### Phase 3: Native Substrate and Operator Surfaces
@@ -77,6 +77,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Rebuild Baseline Alignment | 0/1 | Not started | - |
-| 2. Runtime Core and Safe Delegation | 0/2 | Planned | - |
+| 2. Runtime Core and Safe Delegation | 4/4 | Complete   | 2026-04-16 |
 | 3. Native Substrate and Operator Surfaces | 0/TBD | Not started | - |
 | 4. Eval Gates and Advanced Routing | 0/TBD | Not started | - |
