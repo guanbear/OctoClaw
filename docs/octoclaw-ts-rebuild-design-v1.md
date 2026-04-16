@@ -1048,7 +1048,9 @@ tools/
 3. Phase 1 不允许出现第二套路由器、第二套状态机、第二套 delivery path
 4. 不为未来功能先造空插件、空目录、空 registry，除非已经有明确消费者
 5. `advisor`、`threaded_subagents`、`auto-router` 前期只保留 contract，不抢 live path 逻辑
-6. 任何新 plugin 都必须回答 3 个问题：
+6. `skills`、`context files`、`memory` 前期只允许作为 artifact/projection/plugin 能力出现，不进入 live route authority
+7. IM / gateway / CLI 这些 surface adapter 只负责入口和展示，不拥有 session truth、不拥有 workflow truth
+8. 任何新 plugin 都必须回答 3 个问题：
    - 它是不是可以完全不安装？
    - 它是不是不安装也不影响 core 正确性？
    - 它是不是只通过 contracts 和 core 对话？
@@ -1278,6 +1280,8 @@ Anthropic 在 Managed Agents 里最核心的接口拆法，其实可以压缩成
 2. v1 就应该把 backend/tool/sandbox 当成可替换的 `hands`
 3. v1 就应该让 orchestration + model calls 站在 `brain` 一侧
 4. 但 v1 不需要实现“many brains / many hands”的全部运行时复杂度
+5. v1 就应该把 `thread summary / checkpoint summary / active context budget` 当成正式 contract，避免主模型上下文污染重新长出来
+6. v1 就应该把 gateway/IM continuity 设计成 `surface anchor -> thread/session binding`，而不是让每个 adapter 自己维护一套会话逻辑
 
 换句话说：
 
@@ -1752,17 +1756,18 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
 建议主路径：
 
 1. receive inbound message
-2. load minimal thread/session facts
-3. fast judge:
+2. resolve `surface_anchor -> thread/session` 绑定
+3. load minimal thread/session facts
+4. fast judge:
    - `reply`
    - `delegate.single`
    - `observe`
-4. if `delegate`:
+5. if `delegate`:
    - send ACK immediately
    - materialize native task/flow
    - enqueue worker
-5. emit initial event
-6. workflow plane 接管
+6. emit initial event
+7. workflow plane 接管
 
 这里再明确一次：
 
@@ -1984,6 +1989,14 @@ v2 应该采用：
 
 默认**不拿整段原始主会话**。
 
+另外我建议把“上下文洁癖”进一步写成硬约束：
+
+1. `judge_fast` 只读最小 route packet，不读整段 transcript
+2. `direct_main` 默认只读当前请求 + thread summary + 必要 artifact refs
+3. delegated worker 默认只读 `TaskPacket + checkpoint summary + artifact refs`
+4. 只有在 acceptance/recovery 真的需要时，才回退到 transcript excerpt
+5. 每条 lane 都应有明确 `active_context_budget`
+
 如果必须引用历史上下文，也应该优先按这个顺序：
 
 1. `task/thread summary`
@@ -2176,6 +2189,12 @@ v1 先把接口做对：
 这里最重要的一条是：
 
 > **自动选模型以后也不能只决定“换哪个模型”，而要决定“要不要 advisor、要不要子 agent、并发开多宽”。**
+
+同时还要补一条很现实的约束：
+
+1. multi-agent 的默认收益必须来自并发、隔离和质量提升，而不是“因为能多开 agent 所以多开”
+2. 任何 `advisor_assisted` / `threaded_subagents` 进入 live path，都必须先通过 `cost_per_success` 和 `final_delivery_latency` 的 harness gate
+3. 如果多 agent 只带来成本放大、不带来交付提升，就必须回退到 `solo_worker`
 
 ### 9.5.0.b advisor_policy 建议先做成固定字段
 
@@ -2619,6 +2638,7 @@ v1 先把接口做对：
 1. 这一阶段新增正式能力只写 TS
 2. 不再给对应 Python live-path 模块继续加功能
 3. 老模块最多只做 shim / fallback，直到被删掉
+4. 不提前做通用 skills engine / memory engine / rich gateway runtime
 
 这里“压掉 compound”的更准确含义是：
 
@@ -2652,6 +2672,7 @@ v1 先把接口做对：
 1. 后面不会重做 status surface 信息架构
 2. delegated work 的中间事件有自然落点
 3. Phase 3 做 compound / multi-agent 时能平滑扩展
+4. 但不代表 Phase 1 要一次性把 rich renderer / graph / cockpit 都做出来
 
 ### Phase 2：native task/flow integration
 
@@ -2662,6 +2683,8 @@ v1 先把接口做对：
 3. 让 Python dispatcher 退出热路径
 4. 让 telemetry 事件直接挂到 native substrate / event stream
 5. status/details/queue 全部读同一份 substrate-first truth
+6. surface anchor 与 thread/session binding 统一收口
+7. shared IM/gateway adapter contract 落地，但不要求所有渠道一次性齐备
 
 ### Phase 3：compound / controlled multi-agent
 

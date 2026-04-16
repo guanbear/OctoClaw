@@ -100,6 +100,9 @@ tools/
 14. session_thread / agent_instance metadata
 15. advice_packet / advisor_policy
 16. thread handoff / inbox message
+17. surface_anchor / session binding
+18. active_context_budget / summary snapshot metadata
+19. future `context_file` / `skill_ref` artifact kinds（仅 contract 预留，不要求 runtime 落地）
 
 验收标准：
 
@@ -188,6 +191,8 @@ tools/
 11. claim / lease renewal and expiry
 12. delivery outbox / delivery receipt handling
 13. thread-aware state aggregation 预留接口
+14. surface anchor -> thread/session binding
+15. summary snapshot / context budget hook
 
 实现口径：
 
@@ -201,6 +206,8 @@ tools/
 8. 每个 delegated task 只有一个有效 claim owner
 9. delivery side effect 必须经过 outbox/receipt
 10. future multi-agent 先按 one-level thread hierarchy 设计
+11. gateway/IM continuity 统一通过 thread/session binding 进入 runtime core
+12. `context_file` / `skill_ref` 只作为 artifact 引用流经 contracts，不在 Phase 1-2 演化成 memory runtime
 
 关键状态：
 
@@ -332,6 +339,11 @@ tools/
 4. `extensions/octoclaw-status-surface/src/actions`
 5. `tools/octoclawctl`
 
+说明：
+
+1. `renderers/rich` 在 Phase 1 可以只是最小占位，不要求先做 cockpit/graph
+2. Phase 1 的目标是把信息架构立住，不是把富展示一次做满
+
 最小 v1 必须有：
 
 1. `status`
@@ -394,12 +406,15 @@ tools/
 2. fallback rules
 3. surface capability matrix
 4. action rendering
+5. shared gateway/surface adapter contract
+6. surface anchor 到 thread/session 的统一绑定入口
 
 验收标准：
 
 1. IM 只是 adapter，不拥有真相
 2. channel 差异收在 adapter 层
 3. 共用统一 view model
+4. continuity 逻辑不散落在各 adapter 私有实现里
 
 依赖：WS0、WS6
 
@@ -488,7 +503,7 @@ tools/
 
 1. WS3 OpenClaw Runtime Adapter
 2. WS4 Delegation Plugin
-3. WS7 IM Adapters 基础对接
+3. WS7 IM Adapters shared contract + 一个 reference adapter
 
 目标：把 native task/flow 接上，替换正式 Python runtime 路径
 
@@ -497,14 +512,16 @@ tools/
 1. advisor 在 Phase 2 不是必做项
 2. 只允许保留 `advisor_policy` / `advice_packet` / consult adapter 这些骨架接口
 3. 是否灰度上线 advisor-assisted，取决于 Phase 1-2 的 telemetry / stability gate
+4. 不要求 Slack/Feishu/Telegram/Discord 一次性全部落地，先把 shared adapter boundary 做对
 
 ### Phase 3
 
 1. WS8 完整 replay/acceptance
 2. WS4 compound 占位升级
 3. WS6 richer status/details/queue
-4. advisor-assisted lane 灰度
-5. one-level threaded subagents skeleton
+4. WS7 渠道扩展
+5. advisor-assisted lane 灰度
+6. one-level threaded subagents skeleton
 
 目标：从 single delegate 扩到可控的 compound / controlled multi-agent，但不做自由 swarm
 
