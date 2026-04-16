@@ -1239,11 +1239,8 @@ function latencyAckPolicy(route, taskClass, features = {}, options = {}) {
     || features.task_progress_hits
   );
   const directLatencySurface = new Set(["runtime_model"]);
-  const controlObserverLike = Boolean(
-    taskClass === "session_control"
-    || taskClass === "control_observer"
-    || (taskClass === "direct_answer" && directStateLookup)
-  );
+  const controlObserverLike = Boolean(taskClass === "session_control" || (taskClass === "direct_answer" && directStateLookup));
+  const controlObserverNeedsLatencyAck = Boolean(taskClass === "control_observer" && directStateLookup);
   const required = (
     route === "direct"
     && Boolean(
@@ -1252,6 +1249,7 @@ function latencyAckPolicy(route, taskClass, features = {}, options = {}) {
       || features.fresh_live_lookup
       || features.local_product_help_lookup
       || controlObserverLike
+      || controlObserverNeedsLatencyAck
       || (taskClass === "fast_local_check" && directLatencySurface.has(surfaceId))
     )
   );
@@ -1259,6 +1257,7 @@ function latencyAckPolicy(route, taskClass, features = {}, options = {}) {
     ? ""
     : (
       controlObserverLike
+      || controlObserverNeedsLatencyAck
       || (taskClass === "fast_local_check" && directLatencySurface.has(surfaceId))
         ? "我先看一下当前状态，马上回复你。"
         : (features.bounded_repo_update_lookup || features.fresh_live_lookup
