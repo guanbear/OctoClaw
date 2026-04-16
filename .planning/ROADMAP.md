@@ -10,6 +10,7 @@ OctoClaw is being re-baselined around a TypeScript-first, harness-first architec
 - [x] **Phase 2: Runtime Core and Safe Delegation** - Build the TS contracts, guarded policy core, runtime ownership model, and delegation safety primitives for `reply`, `delegate.single`, and `observe`. (completed 2026-04-16)
 - [x] **Phase 3: Native Substrate and Operator Surfaces** - Converge execution and read paths on OpenClaw native task and flow truth, then restore status and IM surfaces on substrate-first projections. (completed 2026-04-16)
 - [x] **Phase 4: Eval Gates and Advanced Routing** - Turn preflight, golden, replay, and acceptance gates into the promotion path, then add advanced routing capabilities only after the core runtime is stable. (completed 2026-04-16)
+- [ ] **Phase 5: Execution Substrate Refactor** - Rebuild the live execution and workflow plane around TS runtime-core orchestration and OpenClaw native task/flow truth, removing Python/shell live-path authority. (planned)
 
 ## Phase Details
 
@@ -73,6 +74,20 @@ Plans:
 - [x] 04-02-PLAN.md — Stabilize route-policy goldens, shadow drift reporting, and optimization telemetry contracts
 - [x] 04-03-PLAN.md — Enable gated compound routing and auto-router consumption on validated contracts
 
+### Phase 5: Execution Substrate Refactor
+**Goal**: Complete the TS rebuild by replacing the remaining Python/shell execution substrate with a TS-native execution/workflow plane that matches the canonical 2026-04-15 design baseline.
+**Depends on**: Phase 4
+**Requirements**: [RT-02]
+**Success Criteria** (what must be TRUE):
+  1. The shipped runtime extension no longer depends on Python or shell scripts as formal authorities for live dispatch, spawn, runner lifecycle, or task-state writes.
+  2. OpenClaw native task/flow and TS lifecycle orchestration together own execution truth, while projection/artifact/telemetry remain separate planes.
+  3. Delegated live requests judged as runner/spawn materialize through TS-native runtime paths or fail closed without falling back to legacy script glue.
+**Plans**: 2 initial plans
+
+Plans:
+- [x] 05-01-PLAN.md — Define the canonical execution orchestrator and lifecycle contracts for the refactor
+- [ ] 05-02-PLAN.md — Replace live Python/sh execution authorities with TS-native runtime orchestration
+
 ## Progress
 
 **Execution Order:**
@@ -84,3 +99,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 2. Runtime Core and Safe Delegation | 4/4 | Complete | 2026-04-16 |
 | 3. Native Substrate and Operator Surfaces | 3/3 | Complete | 2026-04-16 |
 | 4. Eval Gates and Advanced Routing | 3/3 | Complete | 2026-04-16 |
+| 5. Execution Substrate Refactor | 0/1 | Planned | - |

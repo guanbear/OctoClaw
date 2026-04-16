@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: complete
-stopped_at: Completed 04-03-PLAN.md
-last_updated: "2026-04-16T15:10:00.000Z"
+status: executing
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-04-16T22:29:47.025Z"
 last_activity: 2026-04-16
 progress:
-  total_phases: 4
+  total_phases: 6
   completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
-  percent: 100
+  total_plans: 14
+  completed_plans: 13
+  percent: 93
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: `README.md` and canonical docs under `docs/`
 
 **Core value:** Cost-sensitive orchestration with a unified runtime-first execution path.
-**Current focus:** Milestone complete - verification and follow-up cleanup
+**Current focus:** Phase 5 - Execution Substrate Refactor planning
 
 ## Current Position
 
-Phase: 4 of 4 (Eval Gates and Advanced Routing)
-Plan: 3 of 3 in current phase
-Status: Complete — milestone ready for broader verification
+Phase: 5 of 5 (Execution Substrate Refactor)
+Plan: 1 of 1 in current phase
+Status: Ready to execute
 Last activity: 2026-04-16
 
-Progress: [██████████] 100%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [██████████] 100%
 | Phase 04 P01 | 2 min | 2 tasks | 5 files |
 | Phase 04 P02 | 13 min | 2 tasks | 7 files |
 | Phase 04 P03 | 1 pass | 2 tasks | 3 files |
+| Phase 05 P01 | 19 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,11 @@ Progress: [██████████] 100%
 - [Phase 04]: Replay evidence exposes recommendation conflicts and runtime-truth enrichment failures as side-band metadata instead of mutating authoritative truth payloads.
 - [Phase 04]: Compound execution now records validation, correction, and skip evidence on the ledger before dispatch so advanced routing degrades safely instead of silently widening authority.
 - [Phase 04]: Auto-router payload assertions follow runtime-switch-derived policy phase and remain read-only consumers of internal decision facts rather than runtime truth or dispatch authority.
+- 2026-04-16: Live delegated execution on macmini proved the route/policy stack can judge `spawn_single` correctly while still failing materialization through `octoclaw_spawn.py`, confirming the execution substrate refactor remains unfinished.
+- 2026-04-16: Treat the canonical TS rebuild design and implementation plan as authoritative proof that removing Python/sh from live dispatch/spawn/runner/task-state paths is a formal architecture requirement, not optional cleanup.
+- [Phase 05]: Execution/workflow state is now rooted in explicit identity, provenance, lifecycle, and checkpoint contracts instead of top-level script-era request/task/flow fields.
+- [Phase 05]: PolicyDecision remains the upstream execution authority, and runtime-core derives route authority and materialization intent from that typed policy output rather than preserving Python CLI payload shapes.
+- [Phase 05]: Native adapter truth payloads now read identity-backed runtime workflow state so truth/projection/artifact/telemetry stay separate while sharing one execution vocabulary.
 
 ### Pending Todos
 
@@ -112,6 +118,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T15:10:00.000Z
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-04-16T22:29:47.022Z
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None

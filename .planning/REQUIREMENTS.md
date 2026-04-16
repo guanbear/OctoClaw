@@ -18,7 +18,7 @@
 ### Runtime Ownership
 
 - [x] **RT-01**: The runtime core owns ACK, task materialization, deadline checks, outbox delivery, and single-owner execution semantics.
-- [ ] **RT-02**: Execution truth, projections, artifacts, and telemetry are treated as separate planes so optimization and display data cannot overwrite live truth.
+- [x] **RT-02**: Execution truth, projections, artifacts, and telemetry are treated as separate planes so optimization and display data cannot overwrite live truth, and Python/shell no longer remain formal live-path authorities for dispatch, spawn, runner lifecycle, or task-state writes.
 
 ### Delegation Safety
 
@@ -58,7 +58,7 @@
 | CTRT-01 | Phase 2 | Complete |
 | POL-01 | Phase 2 | Complete |
 | RT-01 | Phase 2 | Complete |
-| RT-02 | Phase 2 | Pending |
+| RT-02 | Phase 2 | Complete |
 | SAFE-01 | Phase 2 | Complete |
 | SAFE-02 | Phase 2 | Complete |
 | NATIVE-01 | Phase 3 | Complete |
