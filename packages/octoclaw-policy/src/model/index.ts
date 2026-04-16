@@ -1,5 +1,5 @@
-import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas";
-import type { PolicyRole } from "../roles";
+import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas.ts";
+import type { PolicyRole } from "../roles/index.ts";
 
 export type BackendTarget = "main" | "observer" | "worker";
 export type ModelProfile = "balanced" | "research" | "code" | "review" | "observe";

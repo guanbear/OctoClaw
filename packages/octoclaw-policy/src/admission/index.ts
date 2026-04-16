@@ -1,5 +1,5 @@
-import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas";
-import type { LiveRoute } from "../route";
+import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas.ts";
+import type { LiveRoute } from "../route/index.ts";
 
 export interface AdmissionInput {
   route: LiveRoute;

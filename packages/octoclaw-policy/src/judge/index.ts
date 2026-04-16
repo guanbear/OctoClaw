@@ -1,8 +1,8 @@
-import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas";
-import { evaluateAdmission, type AdmissionDecision } from "../admission";
-import { decideBackend, decideModelProfile, type BackendTarget, type ModelProfile } from "../model";
-import { decideRole, type PolicyRole } from "../roles";
-import { decideRoute, type LiveRoute } from "../route";
+import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas.ts";
+import { evaluateAdmission, type AdmissionDecision } from "../admission/index.ts";
+import { decideBackend, decideModelProfile, type BackendTarget, type ModelProfile } from "../model/index.ts";
+import { decideRole, type PolicyRole } from "../roles/index.ts";
+import { decideRoute, type LiveRoute } from "../route/index.ts";
 
 export interface PolicyJudgeInput {
   requestedRoute?: string;

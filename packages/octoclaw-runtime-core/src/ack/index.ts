@@ -1,5 +1,5 @@
-import type { DeliveryReceipt } from "../../octoclaw-contracts/src/deliveries";
-import { buildContractEnvelope } from "../../octoclaw-contracts/src/schemas";
+import type { DeliveryReceipt } from "../../../octoclaw-contracts/src/deliveries.ts";
+import { buildContractEnvelope } from "../../../octoclaw-contracts/src/schemas.ts";
 
 export interface AckRecord {
   ackId: string;

@@ -1,4 +1,4 @@
-import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas";
+import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas.ts";
 
 export const LIVE_PHASE_TWO_ROUTES = ["reply", "delegate.single", "observe"] as const;
 export type LiveRoute = (typeof LIVE_PHASE_TWO_ROUTES)[number];

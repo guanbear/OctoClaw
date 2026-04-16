@@ -1,4 +1,4 @@
-import type { DeliveryEnvelope, DeliveryReceipt } from "../../../octoclaw-contracts/src/deliveries";
+import type { DeliveryEnvelope, DeliveryReceipt } from "../../../octoclaw-contracts/src/deliveries.ts";
 
 export interface OutboxEntry {
   outboxId: string;

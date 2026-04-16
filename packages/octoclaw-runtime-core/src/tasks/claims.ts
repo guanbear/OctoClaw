@@ -1,4 +1,4 @@
-import type { OwnershipMetadata } from "../../../octoclaw-contracts/src/events";
+import type { OwnershipMetadata } from "../../../octoclaw-contracts/src/events.ts";
 
 export interface RuntimeClaim extends OwnershipMetadata {
   taskId: string;

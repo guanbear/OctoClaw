@@ -1,4 +1,4 @@
-import type { ContractEnvelope, IdempotencyMetadata, ScopeMetadata } from "./schemas";
+import type { ContractEnvelope, IdempotencyMetadata, ScopeMetadata } from "./schemas.ts";
 
 export interface OwnershipMetadata {
   claimOwner: string;

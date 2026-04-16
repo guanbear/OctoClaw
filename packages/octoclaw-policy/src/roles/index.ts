@@ -1,4 +1,4 @@
-import type { LiveRoute } from "../route";
+import type { LiveRoute } from "../route/index.ts";
 
 export type PolicyRole = "main_reply" | "observer_probe" | "worker_research" | "worker_code" | "worker_review";
 
