@@ -104,6 +104,53 @@ class TaskAnchorCommandTests(unittest.TestCase):
         self.assertIn("checkpoint", result["text"])
         self.assertIn("child_started", result["text"])
 
+    def test_details_and_timeline_json_expose_projection_backed_surface_fields(self) -> None:
+        with open(self.state_file, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "tasks": [
+                        {
+                            "id": "task-1",
+                            "worker_pool": "octoclaw-code",
+                            "status": "running",
+                            "summary": "fix login 401 and add tests",
+                            "route": "spawn_single",
+                            "claim_owner": "worker-alpha",
+                            "workspace_mode": "shared_workspace",
+                            "write_scope_summary": "repo:octoclaw/lib",
+                            "queue_position": 2,
+                            "artifacts": {
+                                "runtime_truth": {
+                                    "substrate": {
+                                        "state": "running",
+                                        "revision": 11,
+                                        "sync_mode": "managed",
+                                        "task_id": "native-task-11",
+                                        "flow_id": "flow-11",
+                                    },
+                                    "delivery_state": "user_safe_ready",
+                                }
+                            },
+                        }
+                    ]
+                },
+                fh,
+                ensure_ascii=False,
+            )
+
+        detail = execute_task_anchor_command("details task-1", state_file=self.state_file, output_format="json")
+        timeline = execute_task_anchor_command("timeline task-1", state_file=self.state_file, output_format="json")
+        queue = execute_task_anchor_command("queue", state_file=self.state_file, output_format="json")
+
+        self.assertTrue(detail["ok"])
+        self.assertEqual(detail["data"]["anchor"]["claim_owner"], "worker-alpha")
+        self.assertEqual(detail["data"]["anchor"]["workspace_mode"], "shared_workspace")
+        self.assertEqual(detail["data"]["anchor"]["substrate_revision"], 11)
+        self.assertEqual(timeline["data"]["projection"]["claim_owner"], "worker-alpha")
+        self.assertEqual(timeline["data"]["projection"]["workspace_mode"], "shared_workspace")
+        self.assertEqual(timeline["data"]["projection"]["substrate_revision"], 11)
+        self.assertEqual(queue["data"]["running"][0]["claim_owner"], "worker-alpha")
+
     def test_execute_explorer_returns_context_pack(self) -> None:
         result = execute_task_anchor_command("explorer task-1", state_file=self.state_file)
         self.assertTrue(result["ok"])

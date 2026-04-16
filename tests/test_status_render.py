@@ -316,6 +316,62 @@ class StatusRenderTests(unittest.TestCase):
         self.assertIn("details", rendered)
         self.assertIn("queue", rendered)
 
+    def test_substrate_summary_counts_projection_backed_states(self) -> None:
+        summary = summarize_taskflow_substrate(
+            [
+                {
+                    "id": "projection-managed",
+                    "worker_pool": "octoclaw-code",
+                    "status": "running",
+                    "route": "spawn_single",
+                    "claim_owner": "worker-alpha",
+                    "workspace_mode": "shared_workspace",
+                    "artifacts": {
+                        "runtime_truth": {
+                            "substrate": {
+                                "state": "running",
+                                "revision": 5,
+                                "sync_mode": "managed",
+                                "task_id": "native-task-5",
+                                "flow_id": "flow-5",
+                            },
+                            "delivery_state": "user_safe_ready",
+                        }
+                    },
+                },
+                {
+                    "id": "projection-delivered",
+                    "worker_pool": "octoclaw-review",
+                    "status": "done",
+                    "route": "spawn_single",
+                    "artifacts": {
+                        "runtime_truth": {
+                            "substrate": {
+                                "state": "completed",
+                                "revision": 8,
+                                "sync_mode": "managed",
+                                "task_id": "native-task-8",
+                                "flow_id": "flow-8",
+                            },
+                            "delivery_state": "delivered",
+                        }
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(summary["tracked"], 2)
+        self.assertEqual(summary["managed"], 2)
+        self.assertEqual(summary["native_active"], 1)
+        self.assertEqual(summary["handoff_ready"], 1)
+        self.assertEqual(summary["delivered"], 1)
+
+        rendered = render_taskflow_substrate_summary(summary)
+        self.assertIn("tracked 2", rendered)
+        self.assertIn("managed 2", rendered)
+        self.assertIn("native active 1", rendered)
+        self.assertIn("handoff ready/delivered 1/1", rendered)
+
     def test_compact_render_shows_empty_sections_when_idle(self) -> None:
         snapshot = build_status_snapshot([], now=self.now)
         rendered = render_status_text_compact(snapshot)
