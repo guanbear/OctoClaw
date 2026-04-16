@@ -10,6 +10,7 @@ from lib.task_display import (
     build_task_anchor,
     build_task_detail,
     build_task_queue_view,
+    build_task_timeline,
     render_task_anchor_slack,
     render_task_anchor_text,
 )
@@ -682,6 +683,76 @@ class TaskDisplayTests(unittest.TestCase):
         self.assertEqual([item["task_id"] for item in queue["queued"]], ["b"])
         self.assertEqual([item["task_id"] for item in queue["blocked"]], ["c"])
         self.assertEqual([item["task_id"] for item in queue["recently_completed"]], ["d"])
+
+    def test_build_task_anchor_exposes_shared_substrate_projection_fields(self) -> None:
+        anchor = build_task_anchor(
+            {
+                "id": "native-owned-1",
+                "worker_pool": "octoclaw-code",
+                "status": "queued",
+                "summary": "apply runtime patch",
+                "route": "spawn_single",
+                "queue_position": 3,
+                "claim_owner": "worker-alpha",
+                "workspace_mode": "shared_workspace",
+                "write_scope_summary": "repo:octoclaw/lib",
+                "artifacts": {
+                    "runtime_truth": {
+                        "substrate": {
+                            "state": "running",
+                            "revision": 14,
+                            "sync_mode": "managed",
+                            "task_id": "native-task-14",
+                            "flow_id": "flow-14",
+                        }
+                    }
+                },
+            },
+            now=self.now,
+        )
+
+        self.assertEqual(anchor["claim_owner"], "worker-alpha")
+        self.assertEqual(anchor["workspace_mode"], "shared_workspace")
+        self.assertEqual(anchor["write_scope_summary"], "repo:octoclaw/lib")
+        self.assertEqual(anchor["substrate_state"], "running")
+        self.assertEqual(anchor["substrate_revision"], 14)
+        self.assertEqual(anchor["queue_position"], 3)
+        self.assertIn("details", anchor["action_availability"])
+        self.assertNotIn("renderer_authored_truth", anchor)
+
+    def test_queue_and_timeline_share_projection_vocabulary(self) -> None:
+        task = {
+            "id": "native-owned-2",
+            "worker_pool": "octoclaw-research",
+            "status": "running",
+            "summary": "collect substrate facts",
+            "route": "spawn_single",
+            "queue_position": 1,
+            "claim_owner": "worker-beta",
+            "workspace_mode": "isolated",
+            "write_scope_summary": "notes/runtime",
+            "artifacts": {
+                "runtime_truth": {
+                    "substrate": {
+                        "state": "running",
+                        "revision": 21,
+                        "sync_mode": "managed",
+                        "task_id": "native-task-21",
+                        "flow_id": "flow-21",
+                    }
+                }
+            },
+        }
+
+        queue = build_task_queue_view([task], now=self.now)
+        timeline = build_task_timeline(task, all_tasks=[task], now=self.now)
+
+        self.assertEqual(queue["running"][0]["claim_owner"], "worker-beta")
+        self.assertEqual(queue["running"][0]["workspace_mode"], "isolated")
+        self.assertEqual(queue["running"][0]["substrate_revision"], 21)
+        self.assertEqual(timeline["projection"]["claim_owner"], "worker-beta")
+        self.assertEqual(timeline["projection"]["workspace_mode"], "isolated")
+        self.assertEqual(timeline["projection"]["substrate_revision"], 21)
 
     def test_final_blocked_task_surfaces_as_recent_completion(self) -> None:
         anchor = build_task_anchor(
