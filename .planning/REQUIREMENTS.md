@@ -28,7 +28,7 @@
 ### Native Runtime and Surfaces
 
 - [x] **NATIVE-01**: OpenClaw native task and flow APIs become the formal execution truth path instead of the Python taskflow adapter.
-- [ ] **SURF-01**: Status, details, queue, and timeline surfaces render substrate-first projections that expose ownership and workspace state.
+- [x] **SURF-01**: Status, details, queue, and timeline surfaces render substrate-first projections that expose ownership and workspace state.
 
 ### Eval and Routing Deepening
 
@@ -62,7 +62,7 @@
 | SAFE-01 | Phase 2 | Complete |
 | SAFE-02 | Phase 2 | Complete |
 | NATIVE-01 | Phase 3 | Complete |
-| SURF-01 | Phase 3 | Pending |
+| SURF-01 | Phase 3 | Complete |
 | EVAL-01 | Phase 4 | Pending |
 | AUTO-01 | Phase 4 | Pending |
 

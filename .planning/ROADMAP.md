@@ -55,7 +55,7 @@ Plans:
 
 Plans:
 - [x] 03-01: Cut over the formal runtime truth path to the TS-native OpenClaw adapter
-- [ ] 03-02: Build shared substrate projections and rebind operator surfaces
+- [x] 03-02: Build shared substrate projections and rebind operator surfaces
 - [ ] 03-03: Rebind IM and display surfaces to the shared projection contracts
 
 ### Phase 4: Eval Gates and Advanced Routing

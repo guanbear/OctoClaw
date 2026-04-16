@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-04-16T11:11:23.709Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-04-16T11:22:27.964Z"
 last_activity: 2026-04-16
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 7
-  completed_plans: 5
-  percent: 71
+  completed_plans: 6
+  percent: 86
 ---
 
 # Project State
@@ -56,6 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02 P04 | 5 min | 2 tasks | 17 files |
 | Phase 02 P03 | 1 min | 2 tasks | 3 files |
 | Phase 03 P01 | 8 min | 2 tasks | 8 files |
+| Phase 03 P02 | 4 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,8 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 02]: Recorded compound-plan requests as blocked or deferred metadata instead of executing them so the formal live path stays within Phase 2 authority.
 - [Phase 03]: The TS adapter now emits structured truth, projection, artifact, and telemetry payloads instead of placeholder bind/create/run returns.
 - [Phase 03]: The shipped runtime wrapper records TS plugin-derived runtime_truth metadata as the formal native truth authority instead of reconstructing a second truth model.
+- [Phase 03]: Centralized operator-surface truth shaping in `build_substrate_surface_projection()` instead of expanding per-renderer enrichment helpers, so queue, details, and timeline all consume the same contract. — One projection builder keeps status, details, queue, and timeline on the same substrate-first read model and prevents renderer-specific truth reconstruction.
+- [Phase 03]: Let status summaries treat projection-backed substrate task ids as tracked/native-bound evidence so operator reporting remains correct even when legacy `openclaw_taskflow` mirror fields are absent. — Projection-backed substrate ids and delivery state are now reliable shared read-model inputs, so status renderers should use them before falling back to legacy mirror-only fields.
 
 ### Pending Todos
 
@@ -93,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T11:11:17.608Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-04-16T11:21:46.282Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None
