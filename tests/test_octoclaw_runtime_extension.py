@@ -1510,6 +1510,146 @@ Sender (untrusted metadata):
         self.assertEqual(payload["facts"]["currentTaskStatus"], "completed")
         self.assertIn("Current task status: completed", payload["context"])
 
+    def test_conversation_grounding_uses_shared_projection_fields_for_followup_facts(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="octoclaw-grounding-shared-projection-") as tmpdir:
+            workspace = Path(tmpdir)
+            octopus_dir = workspace / "tmp" / "octopus"
+            octopus_dir.mkdir(parents=True, exist_ok=True)
+            replay_path = octopus_dir / "runtime-policy-replay.jsonl"
+            task_state_path = octopus_dir / "task-state.json"
+            task_events_path = octopus_dir / "task-events.jsonl"
+            replay_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "policy_resolved",
+                                "at": "2026-04-16T12:00:00Z",
+                                "sessionKey": "agent:main:slack:direct:u-shared-projection",
+                                "sessionId": "sess-u-shared-projection",
+                                "prompt": "帮我再看看刚才那个 runner 任务状态",
+                                "route": "runner",
+                                "systemPreferredRoute": "runner",
+                                "workerPool": "octoclaw-runner",
+                                "taskClass": "execution_followup",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "schema_version": "octoclaw.runtime_policy.replay_event/v1",
+                                "event": "dispatch_called",
+                                "at": "2026-04-16T12:00:01Z",
+                                "sessionKey": "agent:main:slack:direct:u-shared-projection",
+                                "sessionId": "sess-u-shared-projection",
+                                "route": "runner",
+                                "taskClass": "execution_followup",
+                                "executed": True,
+                                "taskId": "runner-shared-1",
+                                "runnerJobId": "runner-shared-1",
+                                "routeOutcome": {
+                                    "schema_version": "octoclaw.route_outcome/v1",
+                                    "queue_pressure_band": "low",
+                                    "runner_health_snapshot": {
+                                        "worker_id": "runner-shared",
+                                        "reason": "ok",
+                                    },
+                                },
+                                "materialization": {
+                                    "status": "materialized",
+                                    "kind": "runner_playbook",
+                                    "runner_job_id": "runner-shared-1",
+                                },
+                            }
+                        ),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            task_state_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "id": "runner-shared-1",
+                                "status": "running",
+                                "summary": "Inspect native runtime health",
+                                "executor": "runner",
+                                "route": "runner",
+                                "runtime": "openclaw_task",
+                                "worker_pool": "octoclaw-runner",
+                                "claim_owner": "operator:alice",
+                                "workspace_mode": "shared_workspace",
+                                "write_scope_summary": "workspace + docs/runtime.md",
+                                "queue_position": 1,
+                                "delivery_state": "delivery_sent",
+                                "openclaw_task_id": "native-task-shared-1",
+                                "openclaw_flow_id": "native-flow-shared-1",
+                                "openclaw_taskflow_substrate_state": "running",
+                                "openclaw_taskflow_substrate_revision": 11,
+                                "openclaw_taskflow_sync_mode": "managed",
+                                "artifacts": {
+                                    "runtime_truth": {
+                                        "claim_owner": "operator:alice",
+                                        "workspace_mode": "shared_workspace",
+                                        "write_scope_summary": "workspace + docs/runtime.md",
+                                        "delivery_state": "delivery_sent",
+                                        "substrate": {
+                                            "state": "running",
+                                            "revision": 11,
+                                            "task_id": "native-task-shared-1",
+                                            "flow_id": "native-flow-shared-1",
+                                            "sync_mode": "managed",
+                                        },
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            task_events_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "octoclaw.task_event/v1",
+                        "time": "2026-04-16T12:00:02Z",
+                        "kind": "delivery_sent",
+                        "task_id": "runner-shared-1",
+                        "session_key": "agent:main:slack:direct:u-shared-projection",
+                        "message": "projection-backed delivery sent",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = run_runtime_helper(
+                f"""__octoclawTest.buildConversationGrounding({{
+                    prompt: "刚才那个任务怎样了",
+                    replayLogPath: {json.dumps(str(replay_path))},
+                    taskStatePath: {json.dumps(str(task_state_path))},
+                    sessionKeys: ["agent:main:slack:direct:u-shared-projection"]
+                }})"""
+            )
+
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["facts"]["claimOwner"], "operator:alice")
+        self.assertEqual(payload["facts"]["workspaceMode"], "shared_workspace")
+        self.assertEqual(payload["facts"]["writeScopeSummary"], "workspace + docs/runtime.md")
+        self.assertEqual(payload["facts"]["substrateState"], "running")
+        self.assertEqual(payload["facts"]["substrateRevision"], 11)
+        self.assertEqual(payload["facts"]["queuePosition"], 1)
+        self.assertEqual(payload["facts"]["deliveryState"], "delivery_sent")
+        self.assertEqual(payload["facts"]["actionAvailability"], ["details", "queue", "timeline", "retrieve", "graph", "stop"])
+        self.assertIn("Claim owner: operator:alice", payload["context"])
+        self.assertIn("Workspace mode: shared_workspace", payload["context"])
+        self.assertIn("Write scope: workspace + docs/runtime.md", payload["context"])
+        self.assertIn("Substrate state: running · rev 11", payload["context"])
+        self.assertIn("Queue position: 1", payload["context"])
+        self.assertIn("Action availability: details, queue, timeline, retrieve, graph, stop", payload["context"])
+
     def test_tool_context_does_not_reuse_stale_session_state_for_different_prompt(self) -> None:
         payload = run_runtime_helper(
             """(() => {

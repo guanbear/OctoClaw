@@ -120,6 +120,20 @@ export function buildConversationGrounding({
   if (facts.runnerStartedSeen) lines.push("- Runner started: yes");
   if (facts.currentTaskStatus) lines.push(`- Current task status: ${facts.currentTaskStatus}`);
   if (facts.currentTaskSummary) lines.push(`- Current task summary: ${facts.currentTaskSummary}`);
+  if (facts.claimOwner) lines.push(`- Claim owner: ${facts.claimOwner}`);
+  if (facts.workspaceMode) lines.push(`- Workspace mode: ${facts.workspaceMode}`);
+  if (facts.writeScopeSummary) lines.push(`- Write scope: ${facts.writeScopeSummary}`);
+  if (facts.substrateState || Number.isFinite(facts.substrateRevision)) {
+    const substrateBits = [
+      facts.substrateState,
+      Number.isFinite(facts.substrateRevision) ? `rev ${facts.substrateRevision}` : "",
+    ].filter(Boolean);
+    lines.push(`- Substrate state: ${substrateBits.join(" · ")}`);
+  }
+  if (Number.isFinite(facts.queuePosition)) lines.push(`- Queue position: ${facts.queuePosition}`);
+  if ((facts.actionAvailability || []).length > 0) {
+    lines.push(`- Action availability: ${facts.actionAvailability.join(", ")}`);
+  }
   if (facts.goalExecutionContract) lines.push(`- Goal contract: ${facts.goalExecutionContract}${facts.goalAccessMode ? ` · ${facts.goalAccessMode}` : ""}`);
   if (facts.nativeTaskBackend) lines.push(`- Native task binding: ${facts.nativeTaskBackend}`);
   if (facts.queuePressureBand) lines.push(`- Runner queue pressure: ${facts.queuePressureBand}`);
@@ -130,6 +144,7 @@ export function buildConversationGrounding({
     lines.push(`- Job disposition: ${facts.jobDispositionKind}${facts.jobDispositionMessage ? ` · ${facts.jobDispositionMessage}` : ""}`);
   }
   if (facts.deliveryEventKind) lines.push(`- Delivery state: ${facts.deliveryEventKind}`);
+  else if (facts.deliveryState) lines.push(`- Delivery state: ${facts.deliveryState}`);
   if (facts.finalDeliveryRelayEvent) {
     const relayBits = [facts.finalDeliveryRelayEvent, facts.finalDeliveryRelayState].filter(Boolean);
     lines.push(`- Final delivery: ${relayBits.join(" · ")}`);

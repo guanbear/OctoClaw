@@ -234,6 +234,43 @@ export function buildTaskIndex(taskStatePath = "") {
   return index;
 }
 
+function projectionText(value = "") {
+  return String(value || "").trim();
+}
+
+function projectionInt(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildSharedProjectionFacts(task = {}) {
+  const record = task && typeof task === "object" ? task : {};
+  const artifacts = record.artifacts && typeof record.artifacts === "object" && !Array.isArray(record.artifacts)
+    ? record.artifacts
+    : {};
+  const runtimeTruth = artifacts.runtime_truth && typeof artifacts.runtime_truth === "object" && !Array.isArray(artifacts.runtime_truth)
+    ? artifacts.runtime_truth
+    : {};
+  const substrate = runtimeTruth.substrate && typeof runtimeTruth.substrate === "object" && !Array.isArray(runtimeTruth.substrate)
+    ? runtimeTruth.substrate
+    : {};
+  const state = projectionText(record.status).toLowerCase();
+  const actionAvailability = ["details", "queue", "timeline", "retrieve", "graph"];
+  if (["queued", "running", "blocked", "needs_approval"].includes(state)) actionAvailability.push("stop");
+  if (["failed", "deferred", "blocked"].includes(state)) actionAvailability.push("retry");
+  return {
+    claimOwner: projectionText(record.claim_owner || runtimeTruth.claim_owner || runtimeTruth.owner),
+    workspaceMode: projectionText(record.workspace_mode || runtimeTruth.workspace_mode),
+    writeScopeSummary: projectionText(record.write_scope_summary || runtimeTruth.write_scope_summary),
+    substrateState: projectionText(record.openclaw_taskflow_substrate_state || substrate.state || record.openclaw_native_status),
+    substrateRevision: projectionInt(record.openclaw_taskflow_substrate_revision ?? substrate.revision),
+    queuePosition: projectionInt(record.queue_position),
+    deliveryState: projectionText(record.delivery_state || runtimeTruth.delivery_state || record.handoff_state),
+    actionAvailability,
+  };
+}
+
 export function deriveTaskEventsPath(taskStatePath = "") {
   const normalized = String(taskStatePath || "").trim();
   if (!normalized) return "";
@@ -416,6 +453,7 @@ export function buildTurnFacts(turn, taskIndex, taskEventIndex = new Map(), deli
     ),
   ).sort((left, right) => parseTimestamp(left?.at) - parseTimestamp(right?.at));
   const finalDeliveryRelayEvent = deliveryRelayEvents.length > 0 ? (deliveryRelayEvents.at(-1) || {}) : {};
+  const sharedProjection = buildSharedProjectionFacts(task);
   return {
     policyJudgedSeen: Boolean(policyJudged),
     policyJudgeSelected: String(policyJudged?.policyJudgeSelected || policyResolved?.policyJudgeSelected || "").trim(),
@@ -484,6 +522,14 @@ export function buildTurnFacts(turn, taskIndex, taskEventIndex = new Map(), deli
     delegatedProbeSource: String(probeSpec.source || "").trim(),
     delegatedProbeProject: String(probeSpec.project || "").trim(),
     delegatedProbeFocus: String(probeSpec.focus || "").trim(),
+    claimOwner: sharedProjection.claimOwner,
+    workspaceMode: sharedProjection.workspaceMode,
+    writeScopeSummary: sharedProjection.writeScopeSummary,
+    substrateState: sharedProjection.substrateState,
+    substrateRevision: sharedProjection.substrateRevision,
+    queuePosition: sharedProjection.queuePosition,
+    deliveryState: sharedProjection.deliveryState,
+    actionAvailability: sharedProjection.actionAvailability,
     compoundPlanActive: Boolean(dispatch?.compound_plan_ledger && typeof dispatch.compound_plan_ledger === "object"),
     compoundPlanLedger: compoundPlanLedger,
     task,
