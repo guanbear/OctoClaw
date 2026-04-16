@@ -240,6 +240,113 @@ def derive_task_status_from_events(task: dict[str, Any], event_summary: dict[str
     return projection_status
 
 
+def _projection_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _projection_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_substrate_surface_projection(task: dict[str, Any]) -> dict[str, Any]:
+    """Build a shared substrate-first read model for operator surfaces."""
+    if not isinstance(task, dict):
+        return {}
+
+    artifacts = task.get("artifacts", {}) if isinstance(task.get("artifacts"), dict) else {}
+    runtime_truth = artifacts.get("runtime_truth", {}) if isinstance(artifacts.get("runtime_truth"), dict) else {}
+    substrate_truth = runtime_truth.get("substrate", {}) if isinstance(runtime_truth.get("substrate"), dict) else {}
+    taskflow = task.get("openclaw_taskflow", {}) if isinstance(task.get("openclaw_taskflow"), dict) else {}
+
+    substrate_state = (
+        _projection_text(task.get("openclaw_taskflow_substrate_state"))
+        or _projection_text(substrate_truth.get("state"))
+        or _projection_text(taskflow.get("substrate_state"))
+        or _projection_text(task.get("openclaw_native_status"))
+        or _projection_text(taskflow.get("native_status"))
+    )
+    explicit_revision = task.get("openclaw_taskflow_substrate_revision")
+    if explicit_revision not in (None, "", 0, "0"):
+        substrate_revision = _projection_int(explicit_revision)
+    else:
+        substrate_revision = _projection_int(substrate_truth.get("revision"))
+        if substrate_revision is None:
+            substrate_revision = _projection_int(taskflow.get("substrate_revision"))
+        if substrate_revision is None:
+            substrate_revision = _projection_int(explicit_revision)
+
+    sync_mode = (
+        _projection_text(task.get("openclaw_taskflow_sync_mode"))
+        or _projection_text(substrate_truth.get("sync_mode"))
+        or _projection_text(taskflow.get("sync_mode"))
+    )
+    claim_owner = (
+        _projection_text(task.get("claim_owner"))
+        or _projection_text(runtime_truth.get("claim_owner"))
+        or _projection_text(runtime_truth.get("owner"))
+        or _projection_text(task.get("owner"))
+    )
+    workspace_mode = (
+        _projection_text(task.get("workspace_mode"))
+        or _projection_text(runtime_truth.get("workspace_mode"))
+        or _projection_text(task.get("scope", {}).get("workspaceMode") if isinstance(task.get("scope"), dict) else "")
+    )
+    write_scope_summary = (
+        _projection_text(task.get("write_scope_summary"))
+        or _projection_text(runtime_truth.get("write_scope_summary"))
+        or _projection_text(task.get("scope", {}).get("writeScopeSummary") if isinstance(task.get("scope"), dict) else "")
+    )
+    queue_position = _projection_int(task.get("queue_position"))
+    delivery_state = (
+        _projection_text(task.get("handoff_state"))
+        or _projection_text(task.get("delivery_state"))
+        or _projection_text(runtime_truth.get("delivery_state"))
+    )
+    action_availability = [
+        "details",
+        "queue",
+        "timeline",
+        "retrieve",
+        "graph",
+    ]
+    status = _projection_text(task.get("status")).lower()
+    if status in {"queued", "running", "blocked", "needs_approval"}:
+        action_availability.append("stop")
+    if status in {"failed", "deferred", "blocked"}:
+        action_availability.append("retry")
+
+    return {
+        "task_id": _projection_text(task.get("id")),
+        "state": status,
+        "route": _projection_text(task.get("route")),
+        "worker_pool": _projection_text(task.get("worker_pool")),
+        "claim_owner": claim_owner,
+        "workspace_mode": workspace_mode,
+        "write_scope_summary": write_scope_summary,
+        "substrate_state": substrate_state,
+        "substrate_revision": substrate_revision,
+        "sync_mode": sync_mode,
+        "queue_position": queue_position,
+        "delivery_state": delivery_state,
+        "action_availability": action_availability,
+        "substrate_task_id": (
+            _projection_text(task.get("openclaw_task_id"))
+            or _projection_text(substrate_truth.get("task_id"))
+            or _projection_text(taskflow.get("task_id"))
+        ),
+        "substrate_flow_id": (
+            _projection_text(task.get("openclaw_flow_id"))
+            or _projection_text(substrate_truth.get("flow_id"))
+            or _projection_text(taskflow.get("flow_id"))
+        ),
+    }
+
+
 def annotate_tasks_with_event_facts(
     tasks: list[dict[str, Any]],
     *,

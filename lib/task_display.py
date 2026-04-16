@@ -8,10 +8,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
+    from runtime_snapshot import build_substrate_surface_projection
     from runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
     from runtime_coordination import resolve_task_artifacts
     from worker_taxonomy import role_display
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_snapshot import build_substrate_surface_projection
     from lib.runtime_task_record import task_is_recent_final, task_queue_bucket, task_state_model
     from lib.runtime_coordination import resolve_task_artifacts
     from lib.worker_taxonomy import role_display
@@ -656,6 +658,7 @@ def build_task_interactive_payload(
 
 def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     normalized = _normalize_task(task)
+    projection = build_substrate_surface_projection(normalized)
     state_model = task_state_model(normalized)
     lifecycle_state = _text(state_model.get("lifecycle_state"))
     outcome_state = _text(state_model.get("outcome_state"))
@@ -722,7 +725,11 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "openclaw_flow_runtime": _text(normalized.get("openclaw_flow_runtime") or taskflow.get("flow_runtime")),
         "openclaw_taskflow_sync_mode": _text(normalized.get("openclaw_taskflow_sync_mode") or taskflow.get("sync_mode")),
         "openclaw_taskflow_substrate_state": _text(normalized.get("openclaw_taskflow_substrate_state") or taskflow.get("substrate_state")),
-        "openclaw_taskflow_substrate_revision": _int_or_zero(normalized.get("openclaw_taskflow_substrate_revision") or taskflow.get("substrate_revision")),
+        "openclaw_taskflow_substrate_revision": (
+            _int_or_zero(normalized.get("openclaw_taskflow_substrate_revision"))
+            if normalized.get("openclaw_taskflow_substrate_revision") not in (None, "")
+            else _int_or_zero(taskflow.get("substrate_revision"))
+        ),
         "openclaw_native_binding_state": _text(taskflow.get("native_binding_state")),
         "openclaw_native_status": _text(normalized.get("openclaw_native_status") or taskflow.get("native_status")),
         "openclaw_native_runtime": _text(normalized.get("openclaw_native_runtime") or taskflow.get("native_runtime")),
@@ -741,7 +748,26 @@ def build_task_anchor(task: dict[str, Any], *, now: datetime | None = None) -> d
         "materialization_summary": _materialization_summary(materialization, capability_failure),
         "capability_failure_reason": _text(capability_failure.get("reason")),
         "capability_failure_detail": _text(capability_failure.get("detail")),
+        "claim_owner": _text(projection.get("claim_owner")),
+        "workspace_mode": _text(projection.get("workspace_mode")),
+        "write_scope_summary": _text(projection.get("write_scope_summary")),
+        "substrate_state": _text(projection.get("substrate_state")),
+        "substrate_revision": projection.get("substrate_revision"),
+        "delivery_state": _text(projection.get("delivery_state")),
+        "action_availability": [str(item).strip() for item in (projection.get("action_availability") or []) if str(item).strip()],
     }
+    if anchor["queue_position"] is None and isinstance(projection.get("queue_position"), int):
+        anchor["queue_position"] = projection.get("queue_position")
+    if not anchor["openclaw_taskflow_sync_mode"]:
+        anchor["openclaw_taskflow_sync_mode"] = _text(projection.get("sync_mode"))
+    if not anchor["openclaw_taskflow_substrate_state"]:
+        anchor["openclaw_taskflow_substrate_state"] = _text(projection.get("substrate_state"))
+    if anchor["openclaw_taskflow_substrate_revision"] is None and projection.get("substrate_revision") is not None:
+        anchor["openclaw_taskflow_substrate_revision"] = int(projection.get("substrate_revision"))
+    if not anchor["openclaw_task_id"]:
+        anchor["openclaw_task_id"] = _text(projection.get("substrate_task_id"))
+    if not anchor["openclaw_flow_id"]:
+        anchor["openclaw_flow_id"] = _text(projection.get("substrate_flow_id"))
     return anchor
 
 
@@ -1054,6 +1080,15 @@ def build_task_timeline(
     return {
         "task_id": _text(normalized.get("id")),
         "root_task_id": _text(graph.get("root_task_id")),
+        "projection": {
+            "claim_owner": _text(detail.get("anchor", {}).get("claim_owner")),
+            "workspace_mode": _text(detail.get("anchor", {}).get("workspace_mode")),
+            "write_scope_summary": _text(detail.get("anchor", {}).get("write_scope_summary")),
+            "substrate_state": _text(detail.get("anchor", {}).get("substrate_state")),
+            "substrate_revision": detail.get("anchor", {}).get("substrate_revision"),
+            "queue_position": detail.get("anchor", {}).get("queue_position"),
+            "action_availability": list(detail.get("anchor", {}).get("action_availability") or []),
+        },
         "events": events,
         "summary": {
             "event_count": len(events),
