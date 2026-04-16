@@ -178,6 +178,24 @@ export function markWorkflowFailed(state: RuntimeWorkflowState, failedAt = new D
   };
 }
 
+export function markWorkflowTimedOut(
+  state: RuntimeWorkflowState,
+  failedAt = new Date().toISOString(),
+  checkpointAt = failedAt,
+): RuntimeWorkflowState {
+  return {
+    ...markWorkflowCheckpointEmitted(state, checkpointAt),
+    workflowOrchestration: "failed",
+    lifecycle: {
+      ...state.lifecycle,
+      phase: "failed",
+      checkpointState: "emitted",
+      lastCheckpointAt: checkpointAt,
+      failedAt,
+    },
+  };
+}
+
 export function renewWorkflowHeartbeat(
   state: RuntimeWorkflowState,
   heartbeatAt = new Date().toISOString(),

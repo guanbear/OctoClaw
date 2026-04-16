@@ -124,3 +124,48 @@ class RuntimeCoreWorkflowContractTests(unittest.TestCase):
         self.assertEqual(payload["after"]["lastHeartbeatAt"], "2026-04-17T00:00:05.000Z")
         self.assertEqual(payload["taskMaterialization"]["claimToken"], payload["after"]["claimToken"])
         self.assertEqual(payload["execution"]["source"], "runtime_orchestrator")
+
+    def test_runtime_workflow_timeout_marks_failed_lifecycle_without_projection_rewrite(self) -> None:
+        payload = run_module_expression(
+            """(() => {
+                const state = workflow.startRuntimeWorkflow({
+                  requestId: 'req-timeout-1',
+                  taskId: 'task-timeout-1',
+                  flowId: 'flow-timeout-1',
+                  role: 'worker_research',
+                  decisionRef: 'decision:req-timeout-1',
+                  claimOwner: 'runtime-core',
+                  leaseDurationMs: 30000,
+                  deadlineBudget: { queueMs: 1000, startMs: 2000, progressMs: 3000, runtimeMs: 4000, deliveryMs: 5000 },
+                  scope: {
+                    readScope: [{ resource: 'docs', access: 'read' }],
+                    writeScope: [],
+                    workspaceMode: 'read_only_workspace',
+                    writeScopeSummary: 'none'
+                  },
+                  decision: {
+                    route: 'observe',
+                    role: 'worker_research',
+                    backend: 'observer',
+                    workspaceMode: 'read_only_workspace',
+                    modelProfile: 'worker_default',
+                    admission: { admitted: true, reason: 'ok', queuePressureBand: 'low' },
+                    decisionStack: ['route', 'role', 'backend', 'workspace_mode', 'model_profile'],
+                  },
+                });
+                const running = workflow.advanceWorkflowToRunning(state, 'runtime-core');
+                const timedOut = workflow.markWorkflowTimedOut(running, '2026-04-17T00:00:10.000Z', '2026-04-17T00:00:09.000Z');
+                return {
+                  orchestration: timedOut.workflowOrchestration,
+                  lifecycle: timedOut.lifecycle,
+                  checkpoints: timedOut.checkpoints,
+                  execution: timedOut.execution,
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["orchestration"], "failed")
+        self.assertEqual(payload["lifecycle"]["phase"], "failed")
+        self.assertEqual(payload["lifecycle"]["failedAt"], "2026-04-17T00:00:10.000Z")
+        self.assertEqual(payload["checkpoints"]["checkpointState"], "emitted")
+        self.assertEqual(payload["execution"]["source"], "runtime_orchestrator")
