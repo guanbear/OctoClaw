@@ -13,6 +13,7 @@ import { createAckLedger, type AckLedger } from "../ack/index.ts";
 import { createOutbox, type DeliveryOutbox } from "../delivery/outbox.ts";
 import { buildRuntimeDeadlines, type DeadlineBudgetInput, type RuntimeDeadlines } from "../tasks/deadlines.ts";
 import { canClaim, claimTask, renewClaimLease, type RuntimeClaim } from "../tasks/claims.ts";
+import { applyHeartbeat } from "../tasks/claims.ts";
 import type { PolicyDecision } from "../../../octoclaw-policy/src/judge/index.ts";
 
 export interface RuntimeTaskMaterialization {
@@ -174,6 +175,26 @@ export function markWorkflowFailed(state: RuntimeWorkflowState, failedAt = new D
       phase: "failed",
       failedAt,
     },
+  };
+}
+
+export function renewWorkflowHeartbeat(
+  state: RuntimeWorkflowState,
+  heartbeatAt = new Date().toISOString(),
+): RuntimeWorkflowState {
+  if (!state.claim) {
+    throw new Error("missing_claim");
+  }
+
+  const nextClaim = applyHeartbeat(state.claim, {
+    claimToken: state.claim.claimToken,
+    heartbeatAt,
+  });
+
+  return {
+    ...state,
+    claim: nextClaim,
+    taskMaterialization: refreshTaskMaterialization(state.taskMaterialization, nextClaim),
   };
 }
 

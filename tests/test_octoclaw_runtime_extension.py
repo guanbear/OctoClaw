@@ -48,6 +48,106 @@ console.log(JSON.stringify(value));
 
 
 class OctoClawRuntimeExtensionTests(unittest.TestCase):
+    def test_dispatch_runtime_path_materializes_runner_via_ts_runtime_without_python_authority(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const metadata = {
+                  session_key: 'agent:main:slack:direct:u-dispatch-ts',
+                  requestId: 'req-dispatch-ts-1',
+                  taskId: 'task-dispatch-ts-1',
+                  flowId: 'flow-dispatch-ts-1',
+                  helperInvoker: ({ action }) => {
+                    if (action === 'run-task') {
+                      return {
+                        ok: true,
+                        native_task_id: 'native-runner-task-22',
+                        flow_id: 'native-runner-flow-22',
+                        task: {
+                          taskId: 'native-runner-task-22',
+                          status: 'queued',
+                          syncMode: 'managed',
+                          state: 'running',
+                          revision: 22,
+                        },
+                      };
+                    }
+                    return {
+                      ok: true,
+                      flow_id: 'native-runner-flow-22',
+                      flow: {
+                        flowId: 'native-runner-flow-22',
+                        status: 'queued',
+                        revision: 12,
+                      },
+                    };
+                  },
+                };
+                const decision = __octoclawTest.applyPhaseTwoLivePathPolicy(
+                  __octoclawTest.buildRawDecision('collect queue diagnostics'),
+                  { ...metadata, requiresObservation: true, requested_route: 'observe', workType: 'research' },
+                  'collect queue diagnostics',
+                );
+                return __octoclawTest.buildTsRuntimeDispatchPayload('collect queue diagnostics', {
+                  command: 'octoclaw status',
+                  cwd: process.cwd(),
+                  decision,
+                  metadata,
+                  timeoutSeconds: 12,
+                });
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "runner")
+        self.assertTrue(payload["executed"])
+        self.assertEqual(payload["materialization"]["authority"], "ts-native-plugin")
+        self.assertEqual(payload["materialization"]["task_id"], "native-runner-task-22")
+        self.assertEqual(payload["materialization"]["flow_id"], "native-runner-flow-22")
+        self.assertEqual(payload["materialization"]["substrate_revision"], 22)
+        self.assertEqual(payload["runtime_truth"]["authority"], "ts-runtime-core")
+        self.assertEqual(payload["runtime_truth"]["workflow"]["workflowOrchestration"], "completed")
+        self.assertEqual(payload["runtime_truth"]["binding"]["runtime"], "openclaw-native")
+
+    def test_dispatch_runtime_path_fails_closed_with_ts_owned_error_when_native_materialization_fails(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const metadata = {
+                  requestId: 'req-dispatch-ts-fail-1',
+                  taskId: 'task-dispatch-ts-fail-1',
+                  flowId: 'flow-dispatch-ts-fail-1',
+                  helperInvoker: () => {
+                    throw new Error('native helper unavailable');
+                  },
+                };
+                const decision = __octoclawTest.applyPhaseTwoLivePathPolicy(
+                  __octoclawTest.buildRawDecision('delegate research task'),
+                  { ...metadata, requiresDelegation: true, requested_route: 'delegate.single', workType: 'research' },
+                  'delegate research task',
+                );
+                try {
+                  __octoclawTest.buildTsRuntimeDispatchPayload('delegate research task', {
+                    cwd: process.cwd(),
+                    decision,
+                    metadata,
+                    timeoutSeconds: 30,
+                  });
+                  return { ok: true };
+                } catch (error) {
+                  return {
+                    ok: false,
+                    message: String(error.message || error),
+                    payload: error.payload || null,
+                  };
+                }
+            })()"""
+        )
+
+        self.assertFalse(payload["ok"])
+        self.assertIn("ts_runtime_materialization_failed", payload["message"])
+        self.assertEqual(payload["payload"]["status"], "failed")
+        self.assertEqual(payload["payload"]["capability_failure"]["authority"], "ts-runtime-core")
+        self.assertEqual(payload["payload"]["capability_failure"]["route"], "spawn_single")
+        self.assertEqual(payload["payload"]["runtime_truth"]["workflow"]["workflowOrchestration"], "failed")
+
     def test_runtime_wrapper_exports_ts_native_truth_delegation_metadata(self) -> None:
         payload = run_runtime_helper(
             """(() => {

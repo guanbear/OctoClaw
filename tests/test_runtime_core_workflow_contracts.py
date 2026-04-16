@@ -80,3 +80,47 @@ class RuntimeCoreWorkflowContractTests(unittest.TestCase):
         self.assertEqual(payload["runningPhase"], "running")
         self.assertEqual(payload["checkpoints"]["checkpointState"], "emitted")
         self.assertTrue(payload["checkpoints"]["deliverableReady"])
+
+    def test_runtime_workflow_heartbeat_renews_claim_without_changing_truth_authority(self) -> None:
+        payload = run_module_expression(
+            """(() => {
+                const state = workflow.startRuntimeWorkflow({
+                  requestId: 'req-heartbeat-1',
+                  taskId: 'task-heartbeat-1',
+                  flowId: 'flow-heartbeat-1',
+                  role: 'worker_research',
+                  decisionRef: 'decision:req-heartbeat-1',
+                  claimOwner: 'runtime-core',
+                  leaseDurationMs: 30000,
+                  deadlineBudget: { queueMs: 1000, startMs: 2000, progressMs: 3000, runtimeMs: 4000, deliveryMs: 5000 },
+                  scope: {
+                    readScope: [{ resource: 'docs', access: 'read' }],
+                    writeScope: [],
+                    workspaceMode: 'read_only_workspace',
+                    writeScopeSummary: 'none'
+                  },
+                  decision: {
+                    route: 'observe',
+                    role: 'worker_research',
+                    backend: 'observer',
+                    workspaceMode: 'read_only_workspace',
+                    modelProfile: 'worker_default',
+                    admission: { admitted: true, reason: 'ok', queuePressureBand: 'low' },
+                    decisionStack: ['route', 'role', 'backend', 'workspace_mode', 'model_profile'],
+                  },
+                });
+                const running = workflow.advanceWorkflowToRunning(state, 'runtime-core');
+                const renewed = workflow.renewWorkflowHeartbeat(running, '2026-04-17T00:00:05.000Z');
+                return {
+                  before: running.claim,
+                  after: renewed.claim,
+                  taskMaterialization: renewed.taskMaterialization,
+                  execution: renewed.execution,
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["before"]["claimToken"], payload["after"]["claimToken"])
+        self.assertEqual(payload["after"]["lastHeartbeatAt"], "2026-04-17T00:00:05.000Z")
+        self.assertEqual(payload["taskMaterialization"]["claimToken"], payload["after"]["claimToken"])
+        self.assertEqual(payload["execution"]["source"], "runtime_orchestrator")

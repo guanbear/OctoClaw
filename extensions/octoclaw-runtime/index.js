@@ -14,6 +14,14 @@ import {
   __conversationControlTest,
 } from "./conversation-control.js";
 import { judgePolicy } from "../../packages/octoclaw-policy/src/judge/index.ts";
+import {
+  advanceWorkflowToRunning,
+  markWorkflowCompleted,
+  markWorkflowFailed,
+  startRuntimeWorkflow,
+  renewWorkflowHeartbeat,
+  markWorkflowCheckpointEmitted,
+} from "../../packages/octoclaw-runtime-core/src/workflow/index.ts";
 import { createOctoClawRuntimePlugin } from "./src/plugin.ts";
 import { buildDecision as buildPolicyDecision } from "./policy/decide.js";
 import { loadOctoClawConfig, resolveRuntimeFeatureFlags } from "./policy/config.js";
@@ -82,6 +90,233 @@ function buildRuntimeTruthMetadata(workflowOrMetadata = {}, options = {}) {
     pluginName: plugin.name,
     binding,
   };
+}
+
+function runtimeRouteDecision(decision = {}) {
+  return decision?.route_decision && typeof decision.route_decision === "object"
+    ? decision.route_decision
+    : {};
+}
+
+function runtimeExecutionIds(task, decision = {}, metadata = {}) {
+  const routeDecision = runtimeRouteDecision(decision);
+  const route = String(routeDecision.route || "direct").trim() || "direct";
+  const prompt = String(task || "").trim();
+  return {
+    requestId: String(metadata?.requestId || metadata?.request_id || stableId("runtime", [prompt, route])).trim(),
+    taskId: String(metadata?.taskId || metadata?.task_id || stableId("task", [prompt, route])).trim(),
+    flowId: String(metadata?.flowId || metadata?.flow_id || stableId("flow", [prompt, route])).trim(),
+  };
+}
+
+function buildWorkflowScope(metadata = {}) {
+  return {
+    readScope: Array.isArray(metadata?.readScope) ? metadata.readScope : [],
+    writeScope: Array.isArray(metadata?.writeScope) ? metadata.writeScope : [],
+    workspaceMode: normalizeWorkspaceMode(metadata?.workspaceMode || metadata?.workspace_mode || "shared_workspace"),
+    writeScopeSummary: String(metadata?.writeScopeSummary || metadata?.write_scope_summary || "").trim(),
+  };
+}
+
+function buildWorkflowDecision(task, decision = {}, metadata = {}) {
+  const routeDecision = runtimeRouteDecision(decision);
+  const route = String(routeDecision.route || "direct").trim() || "direct";
+  const workType = ["research", "code", "review"].includes(String(metadata?.workType || "").trim())
+    ? String(metadata.workType).trim()
+    : "research";
+  const tsDecision = decision?.ts_policy_judge?.decision && typeof decision.ts_policy_judge.decision === "object"
+    ? decision.ts_policy_judge.decision
+    : judgePolicy(buildPhaseTwoPolicyInput(task, {
+      ...metadata,
+      requested_route: route === "spawn_single" ? "delegate.single" : route === "runner" ? "observe" : route,
+      requiresDelegation: route === "spawn_single" || route === "spawn_multi",
+      requiresObservation: route === "runner",
+      workType,
+    }));
+  return {
+    route: route === "spawn_single" || route === "spawn_multi"
+      ? "delegate.single"
+      : route === "runner"
+        ? "observe"
+        : "reply",
+    role: tsDecision.role,
+    backend: tsDecision.backend,
+    workspaceMode: tsDecision.workspaceMode,
+    modelProfile: tsDecision.modelProfile,
+    admission: tsDecision.admission,
+    decisionStack: tsDecision.decisionStack,
+  };
+}
+
+function buildTsRuntimeDispatchPayload({
+  task,
+  command,
+  cwd,
+  decision,
+  metadata = {},
+  timeoutSeconds,
+  helperInvoker,
+}) {
+  const routeDecision = runtimeRouteDecision(decision);
+  const route = String(routeDecision.route || "direct").trim() || "direct";
+  if (!["direct", "runner", "spawn_single"].includes(route)) {
+    throw new Error(`unsupported_runtime_route:${route}`);
+  }
+
+  const nativeHelperInvoker = helperInvoker || metadata?.helperInvoker || null;
+  const workflowDecision = buildWorkflowDecision(task, decision, metadata);
+  if (workflowDecision.admission?.admitted === false || workflowDecision.admission?.admission === "deny") {
+    throw new Error(`dispatch_blocked:${workflowDecision.admission?.reason || "admission_denied"}`);
+  }
+
+  const executionIds = runtimeExecutionIds(task, decision, metadata);
+  const plugin = createOctoClawRuntimePlugin(nativeHelperInvoker ? { helperInvoker: nativeHelperInvoker } : {});
+  let workflow = startRuntimeWorkflow({
+    ...executionIds,
+    decision: workflowDecision,
+    role: workflowDecision.role,
+    decisionRef: String(metadata?.decisionRef || metadata?.decision_ref || `${executionIds.requestId}:${route}`).trim(),
+    provenanceSource: "runtime_orchestrator",
+    claimOwner: String(metadata?.claimOwner || metadata?.claim_owner || metadata?.controllerId || metadata?.controller_id || "octoclaw-runtime").trim() || "octoclaw-runtime",
+    leaseDurationMs: Number(metadata?.leaseDurationMs || metadata?.lease_duration_ms || 30_000),
+    deadlineBudget: {
+      queueMs: Number(metadata?.queueMs || metadata?.queue_ms || 1_000),
+      startMs: Number(metadata?.startMs || metadata?.start_ms || 2_000),
+      progressMs: Number(metadata?.progressMs || metadata?.progress_ms || Math.max(5_000, Number(timeoutSeconds || 0) * 1_000 || 30_000)),
+      runtimeMs: Number(metadata?.runtimeMs || metadata?.runtime_ms || Math.max(10_000, Number(timeoutSeconds || 0) * 1_000 || 60_000)),
+      deliveryMs: Number(metadata?.deliveryMs || metadata?.delivery_ms || 5_000),
+    },
+    scope: buildWorkflowScope(metadata),
+  });
+
+  const basePayload = {
+    route,
+    system_preferred_route: route,
+    worker_pool: String(routeDecision.worker_pool || decision?.model_policy?.worker_pool || "octoclaw-worker").trim(),
+    model: String(decision?.model_policy?.selected_model || decision?.model_policy?.profile || workflowDecision.modelProfile || "").trim(),
+    policy_decision: decision,
+    task_id: workflow.identity.taskId,
+    flow_id: workflow.identity.flowId,
+    runtime_truth: {
+      authority: "ts-runtime-core",
+      workflow,
+    },
+    orchestration: {
+      authority: "ts-runtime-core",
+      route,
+      provenance: workflow.execution,
+      lifecycle: workflow.lifecycle,
+      taskMaterialization: workflow.taskMaterialization,
+    },
+  };
+
+  if (route === "direct") {
+    workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
+    workflow = markWorkflowCompleted(workflow);
+    return {
+      ...basePayload,
+      executed: true,
+      status: "executed",
+      summary: `OctoClaw dispatch: direct (${workflow.execution.role})`,
+      handoff: {
+        kind: "direct",
+        summary: `Direct route selected; no delegated materialization required for ${truncateText(task, 80)}`,
+        user_safe: true,
+        reply_text: `Direct route selected; keep execution in the main session for: ${truncateText(task, 80)}`,
+      },
+      materialization: {
+        authority: "ts-runtime-core",
+        type: "direct_response",
+        task_id: workflow.identity.taskId,
+        flow_id: workflow.identity.flowId,
+      },
+      runtime_truth: {
+        authority: "ts-runtime-core",
+        workflow,
+      },
+      orchestration: {
+        ...basePayload.orchestration,
+        lifecycle: workflow.lifecycle,
+        taskMaterialization: workflow.taskMaterialization,
+      },
+    };
+  }
+
+  workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
+  workflow = renewWorkflowHeartbeat(workflow);
+  workflow = markWorkflowCheckpointEmitted(workflow);
+
+  try {
+    const binding = plugin.bindWorkflow(workflow);
+    workflow = markWorkflowCompleted(workflow);
+    return {
+      ...basePayload,
+      executed: route === "runner",
+      status: route === "runner" ? "executed" : "planned",
+      summary: `OctoClaw dispatch: ${route}${route === "runner" ? " (executed)" : " (planned)"}`,
+      handoff: {
+        kind: route === "runner" ? "runner" : "spawn",
+        summary: route === "runner"
+          ? `Runner materialized natively as ${binding.taskId}`
+          : `Delegated spawn materialized natively as ${binding.taskId}`,
+        user_safe: true,
+        reply_text: route === "runner"
+          ? `Runner execution started natively: ${binding.taskId}`
+          : `Delegated task registered natively: ${binding.taskId}`,
+      },
+      materialization: {
+        authority: "ts-native-plugin",
+        type: route,
+        task_id: binding.taskId,
+        flow_id: binding.flowId,
+        runtime: binding.runtime,
+        sync_mode: binding.syncMode,
+        substrate_state: binding.substrateState,
+        substrate_revision: binding.substrateRevision,
+        truth: binding.truth,
+        projection: binding.projection,
+      },
+      runtime_truth: {
+        authority: "ts-runtime-core",
+        workflow,
+        binding,
+      },
+      orchestration: {
+        ...basePayload.orchestration,
+        lifecycle: workflow.lifecycle,
+        taskMaterialization: workflow.taskMaterialization,
+      },
+      job: route === "runner"
+        ? {
+          id: binding.taskId,
+          session_key: String(metadata?.session_key || metadata?.sessionKey || "").trim(),
+        }
+        : undefined,
+    };
+  } catch (error) {
+    const failedWorkflow = markWorkflowFailed(workflow);
+    throw Object.assign(new Error(`ts_runtime_materialization_failed:${String(error?.message || error || "unknown_error")}`), {
+      payload: {
+        ...basePayload,
+        executed: false,
+        status: "failed",
+        capability_failure: {
+          authority: "ts-runtime-core",
+          route,
+          reason: String(error?.message || error || "native_materialization_failed"),
+        },
+        runtime_truth: {
+          authority: "ts-runtime-core",
+          workflow: failedWorkflow,
+        },
+        orchestration: {
+          ...basePayload.orchestration,
+          lifecycle: failedWorkflow.lifecycle,
+          taskMaterialization: failedWorkflow.taskMaterialization,
+        },
+      },
+    });
+  }
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1009,6 +1244,10 @@ function compactDispatchDetails(payload) {
     materialization,
     capability_failure: capabilityFailure,
   };
+}
+
+function buildTsRuntimeDispatchPayloadForTests(task, options = {}) {
+  return buildTsRuntimeDispatchPayload({ task, ...options });
 }
 
 function applyLegacyTestDecisionCompat(task, decision) {
@@ -4002,7 +4241,27 @@ const plugin = {
         const dispatchRoute = String(cachedDecision?.route_decision?.route || params.route || "").trim();
         const waitTimeoutSeconds = { runner: 12, spawn_single: 30, spawn_multi: 5, direct: 5 }[dispatchRoute] ?? 12;
         args.push("--wait", "--wait-timeout-seconds", String(waitTimeoutSeconds));
-        const payload = await runJsonScript("dispatch_task.py", args, ctx?.cwd || process.cwd());
+        const helperInvoker = cachedDecision?.request?.metadata?.helperInvoker
+          || metadata?.helperInvoker
+          || null;
+        let payload;
+        try {
+          payload = buildTsRuntimeDispatchPayload({
+            task: params.task,
+            command: params.command,
+            cwd: ctx?.cwd || process.cwd(),
+            decision: cachedDecision || {},
+            metadata,
+            timeoutSeconds: waitTimeoutSeconds,
+            helperInvoker,
+          });
+        } catch (error) {
+          if (error?.payload && typeof error.payload === "object") {
+            payload = error.payload;
+          } else {
+            throw error;
+          }
+        }
         const authoritativeDecision = payload?.policy_decision || cachedDecision || parsePolicyDecisionJson(params.policyJson || "");
         const replaySessionKey = String(
           stateKey
@@ -4396,6 +4655,7 @@ export const __octoclawTest = {
   buildConversationGrounding,
   buildDirectLookupGuard,
   buildRuntimeTruthMetadata,
+  buildTsRuntimeDispatchPayload: buildTsRuntimeDispatchPayloadForTests,
   applyPhaseTwoLivePathPolicy,
   buildPolicyResolvedReplayPayload,
   buildPolicyJudgedReplayPayload,
