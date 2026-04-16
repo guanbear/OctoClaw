@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +10,128 @@ from unittest.mock import patch
 from lib import openclaw_taskflow_adapter
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_PLUGIN_PATH = REPO_ROOT / "extensions" / "octoclaw-runtime" / "src" / "plugin.ts"
+
+
+def run_runtime_plugin_expression(expression: str) -> dict:
+    script = f"""
+import * as mod from {json.dumps(str(RUNTIME_PLUGIN_PATH))};
+const value = await ({expression});
+console.log(JSON.stringify(value));
+"""
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env={**os.environ},
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
 class OpenClawTaskflowAdapterTests(unittest.TestCase):
+    def test_ts_runtime_plugin_binding_exposes_native_truth_contract_fields(self) -> None:
+        payload = run_runtime_plugin_expression(
+            """(() => {
+                const plugin = mod.createOctoClawRuntimePlugin();
+                const workflow = {
+                  requestId: 'req-native-1',
+                  taskId: 'task-native-1',
+                  flowId: 'flow-native-1',
+                  ingressOrchestration: 'accepted',
+                  workflowOrchestration: 'planned',
+                  reconcileOrRecovery: 'idle',
+                  deadlines: {},
+                  claim: {
+                    claimOwner: 'owner-native-1',
+                    claimToken: 'claim-token-1',
+                    leaseDurationMs: 30000,
+                    leaseExpiresAt: '2026-04-16T00:00:00.000Z'
+                  },
+                  outbox: {},
+                  ackLedger: {},
+                  scope: {
+                    readScope: [{ resource: 'docs', access: 'read' }],
+                    writeScope: [{ resource: 'workspace', access: 'write' }],
+                    workspaceMode: 'shared_workspace',
+                    writeScopeSummary: 'workspace'
+                  },
+                  taskMaterialization: {
+                    requestId: 'req-native-1',
+                    taskId: 'task-native-1',
+                    flowId: 'flow-native-1',
+                    claimOwner: 'owner-native-1',
+                    claimToken: 'claim-token-1',
+                    leaseExpiresAt: '2026-04-16T00:00:00.000Z',
+                    taskPacketRef: 'flow-native-1:task-native-1:claim-token-1'
+                  }
+                };
+                const adapter = plugin.createAdapter();
+                const binding = adapter.bindSession('session-native-1');
+                return {
+                  createManaged: binding.createManaged(workflow),
+                  runTask: binding.runTask(workflow),
+                  bindWorkflow: plugin.bindWorkflow(workflow),
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["createManaged"]["flowId"], "flow-native-1")
+        self.assertEqual(payload["createManaged"]["controllerId"], "owner-native-1")
+        self.assertEqual(payload["createManaged"]["syncMode"], "managed")
+        self.assertEqual(payload["createManaged"]["substrateState"], "planned")
+        self.assertEqual(payload["createManaged"]["substrateRevision"], 0)
+        self.assertEqual(payload["createManaged"]["truth"]["kind"], "truth")
+        self.assertEqual(payload["createManaged"]["projection"]["kind"], "projection")
+        self.assertNotIn("telemetry", payload["createManaged"]["truth"])
+        self.assertEqual(payload["runTask"]["taskId"], "task-native-1")
+        self.assertEqual(payload["runTask"]["flowId"], "flow-native-1")
+        self.assertEqual(payload["runTask"]["runtime"], "openclaw-native")
+        self.assertEqual(payload["runTask"]["syncMode"], "managed")
+        self.assertEqual(payload["runTask"]["substrateState"], "planned")
+        self.assertEqual(payload["runTask"]["substrateRevision"], 0)
+        self.assertEqual(payload["runTask"]["ownership"]["claimOwner"], "owner-native-1")
+        self.assertEqual(payload["runTask"]["scope"]["workspaceMode"], "shared_workspace")
+        self.assertEqual(payload["bindWorkflow"]["truth"]["kind"], "truth")
+        self.assertEqual(payload["bindWorkflow"]["projection"]["kind"], "projection")
+
+    def test_ts_runtime_plugin_binding_preserves_truth_projection_artifact_and_telemetry_planes(self) -> None:
+        payload = run_runtime_plugin_expression(
+            """(() => ({
+                artifactKinds: mod.createNativeTruthArtifactKinds?.() ?? [],
+                adapterKinds: mod.createOctoClawRuntimePlugin().createAdapter().bindSession('session-native-planes').createManaged({
+                  requestId: 'req-native-planes',
+                  taskId: 'task-native-planes',
+                  flowId: 'flow-native-planes',
+                  ingressOrchestration: 'accepted',
+                  workflowOrchestration: 'planned',
+                  reconcileOrRecovery: 'idle',
+                  deadlines: {},
+                  claim: null,
+                  outbox: {},
+                  ackLedger: {},
+                  scope: { readScope: [], writeScope: [], workspaceMode: 'isolated_workspace' },
+                  taskMaterialization: {
+                    requestId: 'req-native-planes',
+                    taskId: 'task-native-planes',
+                    flowId: 'flow-native-planes',
+                    claimOwner: '',
+                    claimToken: '',
+                    leaseExpiresAt: '',
+                    taskPacketRef: 'flow-native-planes:task-native-planes:'
+                  }
+                })
+            }))()"""
+        )
+
+        self.assertEqual(payload["artifactKinds"], ["truth", "projection", "artifact", "telemetry"])
+        self.assertEqual(payload["adapterKinds"]["truth"]["kind"], "truth")
+        self.assertEqual(payload["adapterKinds"]["projection"]["kind"], "projection")
+        self.assertEqual(payload["adapterKinds"]["artifact"]["kind"], "artifact")
+        self.assertEqual(payload["adapterKinds"]["telemetry"]["kind"], "telemetry")
+
     def test_runner_binding_registers_mirror_entry(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-taskflow-") as td:
             mirror_path = Path(td) / "openclaw-taskflow-mirror.json"
