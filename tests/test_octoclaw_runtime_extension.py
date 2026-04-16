@@ -176,6 +176,94 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
         self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["substrateState"], "running")
         self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["truth"]["kind"], "truth")
 
+    def test_runtime_replay_payload_surfaces_recommendation_conflict_without_merging_runtime_truth(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const decision = __octoclawTest.buildDecision('帮我改下代码并跑测试');
+                const replay = __octoclawTest.buildPolicyResolvedReplayPayload?.(decision, {
+                  stateKey: 'session-1',
+                  ctx: { sessionId: 'session-1', trigger: 'message' },
+                  boundary: { status: 'open', canonicalSessionKey: 'session-1' },
+                  metadata: { runtime_truth: { authority: 'ts-native-adapter', binding: { taskId: 'native-1' } } },
+                  prompt: '帮我改下代码并跑测试',
+                  routeHintSubmitted: false,
+                  usedCachedPolicy: false,
+                }) ?? null;
+                return {
+                  replay,
+                  runtimeTruth: decision.runtime_truth || null,
+                };
+            })()"""
+        )
+
+        self.assertIsNotNone(payload["replay"])
+        self.assertIn("routeRecommendationConflict", payload["replay"])
+        self.assertIn("routeRecommendationStrategy", payload["replay"])
+        self.assertIn("routeRecommendationConflictType", payload["replay"])
+        self.assertNotIn("runtime_truth", payload["replay"])
+        self.assertIsNone(payload["runtimeTruth"])
+
+    def test_runtime_replay_dispatch_metadata_keeps_runtime_truth_separate_from_conflict_fields(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const authoritativeDecision = __octoclawTest.buildDecision('帮我改下代码并跑测试');
+                return {
+                  runtimeTruth: {
+                    authority: 'ts-native-adapter',
+                    binding: { taskId: 'task-7', substrateRevision: 7 },
+                  },
+                  replayMeta: {
+                    routeRecommendationConflict: Boolean(authoritativeDecision?.route_recommendation?.arbitration?.required),
+                    routeRecommendationStrategy: String(authoritativeDecision?.route_recommendation?.arbitration?.strategy || ''),
+                    routeRecommendationConflictType: String(authoritativeDecision?.route_recommendation?.arbitration?.conflict_type || ''),
+                  },
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["runtimeTruth"]["authority"], "ts-native-adapter")
+        self.assertEqual(payload["runtimeTruth"]["binding"]["taskId"], "task-7")
+        self.assertIn("routeRecommendationConflict", payload["replayMeta"])
+        self.assertIn("routeRecommendationStrategy", payload["replayMeta"])
+        self.assertIn("routeRecommendationConflictType", payload["replayMeta"])
+        self.assertNotIn("runtime_truth", payload["replayMeta"])
+
+    def test_runtime_policy_resolution_records_runtime_truth_failures_as_observational_metadata(self) -> None:
+        payload = run_runtime_helper(
+            """(async () => {
+                const ctx = {
+                  sessionKey: 'agent:main:slack:direct:u-runtime-truth-failure',
+                  sessionId: 'sess-runtime-truth-failure',
+                  trigger: 'message',
+                  agentId: 'agent:main:main'
+                };
+                __octoclawTest.__resetPolicyState?.();
+                const resolved = await __octoclawTest.resolvePolicyDecisionForContext(
+                  '这个是不是要换个更稳的做法',
+                  ctx,
+                  process.cwd(),
+                  null,
+                  {
+                    metadata: {
+                      helperInvoker: () => {
+                        throw new Error('helper unavailable for test');
+                      }
+                    }
+                  }
+                );
+                return {
+                  route: resolved?.decision?.route_decision?.route || '',
+                  runtimeTruth: resolved?.decision?.runtime_truth || null,
+                  runtimeTruthError: resolved?.decision?.request?.metadata?.runtime_truth_error || null,
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "direct")
+        self.assertIsNone(payload["runtimeTruth"])
+        self.assertEqual(payload["runtimeTruthError"]["source"], "buildRuntimeTruthMetadata")
+        self.assertIn("helper unavailable for test", payload["runtimeTruthError"]["message"])
+
     def test_runtime_paths_prefer_managed_openclaw_workspace_layout(self) -> None:
         import tempfile
 
