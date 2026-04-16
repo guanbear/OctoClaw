@@ -124,8 +124,12 @@ def summarize_route_outcomes(cases: list[CaseResult]) -> dict[str, object]:
     route_correct_cases = 0
     budget_correct_cases = 0
     delivery_correct_cases = 0
+    delivery_failure_cases = 0
     cases_with_outcome = 0
     fallback_taken_count = 0
+    unresolved_fallback_cases = 0
+    stale_recovery_count = 0
+    execution_contract_mismatch_cases = 0
     missing_outcome_cases: list[str] = []
     evidence: list[dict[str, object]] = []
 
@@ -155,6 +159,8 @@ def summarize_route_outcomes(cases: list[CaseResult]) -> dict[str, object]:
                 break
 
         route_correct = False
+        fallback_taken = False
+        stale_recovery = False
         if latest_outcome:
             cases_with_outcome += 1
             execution_contract = _first_non_empty(
@@ -180,12 +186,22 @@ def summarize_route_outcomes(cases: list[CaseResult]) -> dict[str, object]:
             route_correct = bool(execution_contract and resolved_execution_contract and execution_contract == resolved_execution_contract)
             if route_correct:
                 route_correct_cases += 1
-            if bool(
+            else:
+                execution_contract_mismatch_cases += 1
+            fallback_taken = bool(
                 latest_outcome.get("fallback_taken")
                 or (latest_event and latest_event.get("fallbackTaken"))
                 or (latest_event and latest_event.get("fallback_taken"))
-            ):
+            )
+            if fallback_taken:
                 fallback_taken_count += 1
+            stale_recovery = bool(
+                latest_outcome.get("stale_recovery")
+                or (latest_event and latest_event.get("staleRecovery"))
+                or (latest_event and latest_event.get("stale_recovery"))
+            )
+            if stale_recovery:
+                stale_recovery_count += 1
         else:
             missing_outcome_cases.append(case.prompt)
             execution_contract = ""
@@ -195,8 +211,13 @@ def summarize_route_outcomes(cases: list[CaseResult]) -> dict[str, object]:
         delivery_correct = not case.findings
         if delivery_correct:
             delivery_correct_cases += 1
+        else:
+            delivery_failure_cases += 1
         if budget_consistent is True:
             budget_correct_cases += 1
+        fallback_unresolved = bool(fallback_taken and (not delivery_correct or not route_correct or stale_recovery))
+        if fallback_unresolved:
+            unresolved_fallback_cases += 1
 
         evidence.append(
             {
@@ -208,11 +229,10 @@ def summarize_route_outcomes(cases: list[CaseResult]) -> dict[str, object]:
                 "route_correct": route_correct,
                 "budget_correct": budget_consistent,
                 "delivery_correct": delivery_correct,
-                "fallback_taken": bool(
-                    latest_outcome.get("fallback_taken")
-                    or (latest_event and latest_event.get("fallbackTaken"))
-                    or (latest_event and latest_event.get("fallback_taken"))
-                ),
+                "delivery_findings": list(case.findings),
+                "fallback_taken": fallback_taken,
+                "fallback_unresolved": fallback_unresolved,
+                "stale_recovery": stale_recovery,
                 "findings": list(case.findings),
             }
         )
@@ -229,8 +249,12 @@ def summarize_route_outcomes(cases: list[CaseResult]) -> dict[str, object]:
         "budget_correctness_rate": round(budget_correct_cases / total, 6) if total else 0.0,
         "delivery_correct_cases": delivery_correct_cases,
         "delivery_correctness_rate": round(delivery_correct_cases / total, 6) if total else 0.0,
+        "delivery_failure_cases": delivery_failure_cases,
         "fallback_taken_count": fallback_taken_count,
         "fallback_rate": round(fallback_taken_count / total, 6) if total else 0.0,
+        "unresolved_fallback_cases": unresolved_fallback_cases,
+        "stale_recovery_count": stale_recovery_count,
+        "execution_contract_mismatch_cases": execution_contract_mismatch_cases,
         "execution_contract_counts": dict(sorted(execution_contract_counts.items())),
         "route_class_counts": dict(sorted(route_class_counts.items())),
         "missing_outcome_prompts": missing_outcome_cases,
