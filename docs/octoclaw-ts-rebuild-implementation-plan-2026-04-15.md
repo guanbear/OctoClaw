@@ -97,6 +97,9 @@ tools/
 11. read_scope / write_scope / workspace_mode
 12. acceptance_criteria / task packet
 13. capability descriptor
+14. session_thread / agent_instance metadata
+15. advice_packet / advisor_policy
+16. thread handoff / inbox message
 
 验收标准：
 
@@ -139,6 +142,7 @@ tools/
 6. admission control / queue budget
 7. capability-aware route guard
 8. compound 只保留 future schema slot，不进入 Phase 1 route authority
+9. future coordination_mode / advisor_policy 预留接口
 
 明确禁止：
 
@@ -183,6 +187,7 @@ tools/
 10. idempotent task materialization
 11. claim / lease renewal and expiry
 12. delivery outbox / delivery receipt handling
+13. thread-aware state aggregation 预留接口
 
 实现口径：
 
@@ -195,6 +200,7 @@ tools/
 7. timeout 检测按 `queue/start/progress/runtime/delivery` 五类 deadline 拆开
 8. 每个 delegated task 只有一个有效 claim owner
 9. delivery side effect 必须经过 outbox/receipt
+10. future multi-agent 先按 one-level thread hierarchy 设计
 
 关键状态：
 
@@ -272,6 +278,8 @@ tools/
 5. compound 占位接口
 6. write scope / workspace mode assignment
 7. conflict policy hook
+8. future callable role registry
+9. future advisor consult adapter
 
 验收标准：
 
@@ -280,6 +288,7 @@ tools/
 3. 可按 preset role 选择工具权限、模型 profile、输出 contract
 4. delegated task 默认带 read/write scope
 5. overlapping write 默认不会并发踩同一工作区
+6. Phase 3 起可扩到 thread handoff / inbox / advice packet
 
 依赖：WS0、WS1、WS2、WS3
 
@@ -335,16 +344,20 @@ tools/
 1. `task_id`
 2. `state`
 3. `route`
-4. `worker_pool`
-5. `substrate_summary`
-6. `action_availability`
-7. `queue_position`
-8. `model_summary`
-9. `cost_estimate`
-10. `claim_owner`
-11. `lease_state`
-12. `workspace_mode`
-13. `write_scope_summary`
+4. `role`
+5. `coordination_mode`
+6. `backend_summary`
+7. `substrate_summary`
+8. `action_availability`
+9. `queue_position`
+10. `model_summary`
+11. `cost_estimate`
+12. `claim_owner`
+13. `lease_state`
+14. `workspace_mode`
+15. `write_scope_summary`
+16. `thread_count`
+17. `advisor_usage_summary`
 
 验收标准：
 
@@ -352,6 +365,7 @@ tools/
 2. Phase 2 起 `status/details/queue` 全读 substrate truth
 3. renderer 不再自己猜状态
 4. 能看出 task 是否被 claim、是否 stale、是否因冲突排队
+5. 为 Phase 3 的 child thread / advisor 预留展示字段
 
 说明：
 
@@ -478,11 +492,21 @@ tools/
 
 目标：把 native task/flow 接上，替换正式 Python runtime 路径
 
+说明：
+
+1. advisor 在 Phase 2 不是必做项
+2. 只允许保留 `advisor_policy` / `advice_packet` / consult adapter 这些骨架接口
+3. 是否灰度上线 advisor-assisted，取决于 Phase 1-2 的 telemetry / stability gate
+
 ### Phase 3
 
 1. WS8 完整 replay/acceptance
 2. WS4 compound 占位升级
 3. WS6 richer status/details/queue
+4. advisor-assisted lane 灰度
+5. one-level threaded subagents skeleton
+
+目标：从 single delegate 扩到可控的 compound / controlled multi-agent，但不做自由 swarm
 
 ### Phase 4
 
@@ -490,6 +514,7 @@ tools/
 2. 本地模型 provider slot
 3. heavy/research profile
 4. richer multi-agent board / cockpit
+5. advisor / subagent / model 一体化自动选择
 
 ---
 
