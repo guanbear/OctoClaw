@@ -4,6 +4,7 @@
 import unittest
 from unittest.mock import MagicMock, call, patch
 
+from lib.im_display_contract import substrate_display_contract
 from lib.im_thread import (
     _CLOSE_EVENTS,
     _EDITABLE_BACKENDS,
@@ -19,6 +20,7 @@ from lib.im_thread import (
     push_thread_event,
     update_thread,
 )
+from lib.task_display import build_operator_task_surface, build_user_task_surface
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +49,44 @@ def _ok_edit():
 
 def _fail_result(error="network error"):
     return {"ok": False, "error": error}
+
+
+def _projection_task(**kwargs):
+    base = {
+        "id": "task-projection-1",
+        "status": "running",
+        "summary": "Investigate native runtime status",
+        "route": "runner",
+        "worker_pool": "octoclaw-runner",
+        "claim_owner": "operator:alice",
+        "workspace_mode": "shared_workspace",
+        "write_scope_summary": "workspace + docs/runtime.md",
+        "queue_position": 2,
+        "handoff_state": "user_notified",
+        "openclaw_task_id": "native-task-1",
+        "openclaw_flow_id": "native-flow-1",
+        "openclaw_taskflow_substrate_state": "running",
+        "openclaw_taskflow_substrate_revision": 7,
+        "openclaw_taskflow_sync_mode": "managed",
+        "openclaw_taskflow_backend": "managed",
+        "artifacts": {
+            "runtime_truth": {
+                "claim_owner": "operator:alice",
+                "workspace_mode": "shared_workspace",
+                "write_scope_summary": "workspace + docs/runtime.md",
+                "delivery_state": "user_notified",
+                "substrate": {
+                    "state": "running",
+                    "revision": 7,
+                    "task_id": "native-task-1",
+                    "flow_id": "native-flow-1",
+                    "sync_mode": "managed",
+                },
+            }
+        },
+    }
+    base.update(kwargs)
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +503,61 @@ class ConstantTests(unittest.TestCase):
 
     def test_open_events_and_close_events_are_disjoint(self):
         self.assertEqual(_OPEN_EVENTS & _CLOSE_EVENTS, frozenset())
+
+
+class SharedProjectionContractTests(unittest.TestCase):
+    def test_substrate_display_contract_uses_shared_projection_vocabulary(self):
+        payload = substrate_display_contract()
+
+        self.assertIn("task_id", payload["required_fields"])
+        self.assertIn("state", payload["required_fields"])
+        self.assertIn("route", payload["required_fields"])
+        self.assertIn("worker_pool", payload["required_fields"])
+        self.assertIn("substrate_summary", payload["required_fields"])
+        self.assertIn("action_availability", payload["required_fields"])
+        self.assertIn("claim_owner", payload["optional_fields"])
+        self.assertIn("workspace_mode", payload["optional_fields"])
+        self.assertIn("write_scope_summary", payload["optional_fields"])
+        self.assertIn("substrate_state", payload["optional_fields"])
+        self.assertIn("substrate_revision", payload["optional_fields"])
+        self.assertIn("delivery_state", payload["optional_fields"])
+        self.assertIn("renderer_authored_truth", payload["forbidden_inferred_fields"])
+        self.assertIn("guessed_task_state", payload["forbidden_inferred_fields"])
+        self.assertIn("unconfirmed_delivery_state", payload["forbidden_inferred_fields"])
+
+    def test_operator_surface_anchor_reuses_projection_backed_fields(self):
+        surface = build_operator_task_surface(_projection_task())
+        anchor = surface["task_anchor"]
+
+        self.assertEqual(anchor["claim_owner"], "operator:alice")
+        self.assertEqual(anchor["workspace_mode"], "shared_workspace")
+        self.assertEqual(anchor["write_scope_summary"], "workspace + docs/runtime.md")
+        self.assertEqual(anchor["substrate_state"], "running")
+        self.assertEqual(anchor["substrate_revision"], 7)
+        self.assertEqual(anchor["delivery_state"], "user_notified")
+        self.assertIn("timeline", anchor["action_availability"])
+        self.assertNotIn("renderer_authored_truth", anchor)
+        self.assertNotIn("guessed_task_state", anchor)
+        self.assertNotIn("unconfirmed_delivery_state", anchor)
+
+    def test_user_surface_exposes_shared_projection_contract_without_inferred_truth_fields(self):
+        surface = build_user_task_surface(_projection_task())
+        anchor = surface["task_anchor"]
+        projection = surface.get("projection", {})
+
+        self.assertEqual(anchor["task_id"], "task-projection-1")
+        self.assertEqual(anchor["route"], "runner")
+        self.assertEqual(anchor["worker_pool"], "octoclaw-runner")
+        self.assertEqual(projection["claim_owner"], "operator:alice")
+        self.assertEqual(projection["workspace_mode"], "shared_workspace")
+        self.assertEqual(projection["write_scope_summary"], "workspace + docs/runtime.md")
+        self.assertEqual(projection["substrate_state"], "running")
+        self.assertEqual(projection["substrate_revision"], 7)
+        self.assertEqual(projection["delivery_state"], "user_notified")
+        self.assertIn("queue", projection["action_availability"])
+        self.assertNotIn("renderer_authored_truth", projection)
+        self.assertNotIn("guessed_task_state", projection)
+        self.assertNotIn("unconfirmed_delivery_state", projection)
 
 
 if __name__ == "__main__":

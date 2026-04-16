@@ -303,9 +303,9 @@ def build_substrate_surface_projection(task: dict[str, Any]) -> dict[str, Any]:
     )
     queue_position = _projection_int(task.get("queue_position"))
     delivery_state = (
-        _projection_text(task.get("handoff_state"))
-        or _projection_text(task.get("delivery_state"))
+        _projection_text(task.get("delivery_state"))
         or _projection_text(runtime_truth.get("delivery_state"))
+        or _projection_text(task.get("handoff_state"))
     )
     action_availability = [
         "details",

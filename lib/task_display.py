@@ -1195,6 +1195,17 @@ def build_user_task_surface(task: dict[str, Any], *, now: datetime | None = None
             "state": _text(anchor.get("state_label") or anchor.get("state")),
             "summary": _text(anchor.get("summary")),
             "route": _text(anchor.get("route")),
+            "worker_pool": _text(anchor.get("worker_pool")),
+        },
+        "projection": {
+            "claim_owner": _text(anchor.get("claim_owner")),
+            "workspace_mode": _text(anchor.get("workspace_mode")),
+            "write_scope_summary": _text(anchor.get("write_scope_summary")),
+            "substrate_state": _text(anchor.get("substrate_state")),
+            "substrate_revision": anchor.get("substrate_revision"),
+            "queue_position": anchor.get("queue_position"),
+            "delivery_state": _text(anchor.get("delivery_state")),
+            "action_availability": [str(item).strip() for item in (anchor.get("action_availability") or []) if str(item).strip()],
         },
         "text": render_task_anchor_text(anchor, []),
     }

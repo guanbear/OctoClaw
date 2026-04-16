@@ -187,7 +187,13 @@ SUBSTRATE_DISPLAY_CONTRACT = {
         "action_availability",
     ],
     "optional_fields": [
+        "claim_owner",
+        "workspace_mode",
+        "write_scope_summary",
+        "substrate_state",
+        "substrate_revision",
         "queue_position",
+        "delivery_state",
         "model_summary",
         "cost_estimate",
         "related_thread_artifacts",
