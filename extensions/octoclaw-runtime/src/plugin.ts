@@ -7,6 +7,11 @@ import {
   type RuntimeTaskflowTaskRecord,
 } from "./adapter/runtime-taskflow.ts";
 import { createNativeTruthArtifactKinds } from "../../../packages/octoclaw-contracts/src/artifacts.ts";
+import type { NativeHelperInvoker } from "./adapter/native-helper.ts";
+
+export interface OctoClawRuntimePluginOptions {
+  helperInvoker?: NativeHelperInvoker;
+}
 
 export interface OctoClawRuntimePlugin {
   name: "octoclaw-runtime-ts";
@@ -31,18 +36,19 @@ export function resolveRuntimePolicyDecision(input: PolicyJudgeInput): PolicyDec
   return judgePolicy(input);
 }
 
-export function createOctoClawRuntimePlugin(): OctoClawRuntimePlugin {
+export function createOctoClawRuntimePlugin(options: OctoClawRuntimePluginOptions = {}): OctoClawRuntimePlugin {
+  const createAdapter = (): RuntimeTaskflowAdapter => createRuntimeTaskflowAdapter(options.helperInvoker);
   return {
     name: "octoclaw-runtime-ts",
-    createAdapter: () => createRuntimeTaskflowAdapter(),
+    createAdapter,
     judgeRoute: (input) => resolveRuntimePolicyDecision(input),
     bindWorkflow: (state) => {
-      const binding = createRuntimeTaskflowAdapter().bindSession(state.requestId || state.taskId);
+      const binding = createAdapter().bindSession(state.requestId || state.taskId);
       const taskTruth = binding.runTask(state);
       return {
-        taskId: state.taskId,
-        flowId: state.flowId,
-        status: state.workflowOrchestration,
+        taskId: taskTruth.taskId,
+        flowId: taskTruth.flowId,
+        status: taskTruth.substrateState,
         runtime: "openclaw-native",
         syncMode: taskTruth.syncMode,
         substrateState: taskTruth.substrateState,

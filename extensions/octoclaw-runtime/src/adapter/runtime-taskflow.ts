@@ -5,6 +5,7 @@ import {
   type WorkspaceMode,
 } from "../../../../packages/octoclaw-contracts/src/schemas.ts";
 import { createNativeTruthArtifactKinds } from "../../../../packages/octoclaw-contracts/src/artifacts.ts";
+import { invokeNativeHelper, type NativeHelperInvoker } from "./native-helper.ts";
 
 export interface RuntimeNativeTruthPayload {
   kind: "truth";
@@ -105,6 +106,25 @@ export interface RuntimeTaskflowAdapter {
   bindSession: (sessionKey: string) => RuntimeTaskflowSessionBinding;
 }
 
+function stringifyStateJson(workflow: RuntimeWorkflowState): string {
+  return JSON.stringify({
+    requestId: workflow.requestId,
+    taskId: workflow.taskId,
+    flowId: workflow.flowId,
+    workflowOrchestration: workflow.workflowOrchestration,
+    reconcileOrRecovery: workflow.reconcileOrRecovery,
+  });
+}
+
+function buildGoal(workflow: RuntimeWorkflowState): string {
+  return String(
+    workflow.taskMaterialization?.taskPacketRef
+      || workflow.requestId
+      || workflow.taskId
+      || workflow.flowId,
+  ).trim();
+}
+
 function normalizeScope(scope: ScopeMetadata): ScopeMetadata {
   return {
     readScope: Array.isArray(scope?.readScope) ? scope.readScope : [],
@@ -114,27 +134,36 @@ function normalizeScope(scope: ScopeMetadata): ScopeMetadata {
   };
 }
 
-function deriveTruthShape(sessionKey: string, workflow: RuntimeWorkflowState) {
+function deriveTruthShape(
+  sessionKey: string,
+  workflow: RuntimeWorkflowState,
+  native: {
+    flowId: string;
+    taskId: string;
+    syncMode: "managed" | "mirrored";
+    substrateState: RuntimeWorkflowState["workflowOrchestration"];
+    substrateRevision: number;
+    managedDisposition: "managed" | "mirrored";
+  },
+) {
   const scope = normalizeScope(workflow.scope);
   const claimOwner = workflow.claim?.claimOwner || workflow.taskMaterialization?.claimOwner || "runtime-core";
   const claimToken = workflow.claim?.claimToken || workflow.taskMaterialization?.claimToken || "";
   const controllerId = claimOwner || "runtime-core";
-  const substrateRevision = 0;
-  const syncMode = "managed" as const;
-  const substrateState = workflow.workflowOrchestration;
+  const { flowId, taskId, syncMode, substrateState, substrateRevision, managedDisposition } = native;
   const createdAt = new Date().toISOString();
   const truth = {
     ...buildContractEnvelope("truth", createdAt),
     kind: "truth" as const,
     sessionKey,
     requestId: workflow.requestId,
-    flowId: workflow.flowId,
-    taskId: workflow.taskId,
+    flowId,
+    taskId,
     runtime: "openclaw-native" as const,
     syncMode,
     substrateState,
     substrateRevision,
-    managedDisposition: "managed" as const,
+    managedDisposition,
     ownership: {
       claimOwner,
       claimToken,
@@ -150,10 +179,10 @@ function deriveTruthShape(sessionKey: string, workflow: RuntimeWorkflowState) {
   const projection = {
     ...buildContractEnvelope("projection", createdAt),
     kind: "projection" as const,
-    status: workflow.workflowOrchestration,
+    status: substrateState,
     runtime: "openclaw-native" as const,
-    flowId: workflow.flowId,
-    taskId: workflow.taskId,
+    flowId,
+    taskId,
     substrateState,
     substrateRevision,
     workspaceMode: scope.workspaceMode,
@@ -177,9 +206,12 @@ function deriveTruthShape(sessionKey: string, workflow: RuntimeWorkflowState) {
     claimOwner,
     claimToken,
     controllerId,
+    flowId,
+    taskId,
     syncMode,
     substrateState,
     substrateRevision,
+    managedDisposition,
     truth,
     projection,
     artifact,
@@ -187,21 +219,38 @@ function deriveTruthShape(sessionKey: string, workflow: RuntimeWorkflowState) {
   };
 }
 
-export function createRuntimeTaskflowAdapter(): RuntimeTaskflowAdapter {
+export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker = invokeNativeHelper): RuntimeTaskflowAdapter {
   const createBinding = (sessionKey: string): RuntimeTaskflowSessionBinding => ({
     sessionKey,
     bindSession: (nextSessionKey: string) => createBinding(nextSessionKey),
     createManaged: (workflow) => {
-      const derived = deriveTruthShape(sessionKey, workflow);
+      const helperResult = helperInvoker({
+        action: "create-managed-flow",
+        args: {
+          session_key: sessionKey,
+          controller_id: workflow.claim?.claimOwner || workflow.taskMaterialization?.claimOwner || "runtime-core",
+          goal: buildGoal(workflow),
+          notify_policy: "silent",
+          state_json: stringifyStateJson(workflow),
+        },
+      });
+      const derived = deriveTruthShape(sessionKey, workflow, {
+        flowId: helperResult.flow.flowId,
+        taskId: workflow.taskId,
+        syncMode: "managed",
+        substrateState: helperResult.flow.status as RuntimeWorkflowState["workflowOrchestration"],
+        substrateRevision: helperResult.flow.revision,
+        managedDisposition: "managed",
+      });
       return {
-        flowId: workflow.flowId,
+        flowId: helperResult.flow.flowId,
         controllerId: derived.controllerId,
         managed: true,
         runtime: "openclaw-native",
         syncMode: derived.syncMode,
         substrateState: derived.substrateState,
         substrateRevision: derived.substrateRevision,
-        managedDisposition: "managed",
+        managedDisposition: derived.managedDisposition,
         ownership: {
           claimOwner: derived.claimOwner,
           claimToken: derived.claimToken,
@@ -215,10 +264,28 @@ export function createRuntimeTaskflowAdapter(): RuntimeTaskflowAdapter {
       };
     },
     runTask: (workflow) => {
-      const derived = deriveTruthShape(sessionKey, workflow);
+      const helperResult = helperInvoker({
+        action: "run-task",
+        args: {
+          session_key: sessionKey,
+          flow_id: workflow.flowId,
+          task: buildGoal(workflow),
+          status: "queued",
+          notify_policy: "silent",
+          progress_summary: String(workflow.workflowOrchestration || "").trim(),
+        },
+      });
+      const derived = deriveTruthShape(sessionKey, workflow, {
+        flowId: helperResult.flow_id,
+        taskId: helperResult.task.taskId,
+        syncMode: helperResult.task.syncMode,
+        substrateState: helperResult.task.state as RuntimeWorkflowState["workflowOrchestration"],
+        substrateRevision: helperResult.task.revision,
+        managedDisposition: helperResult.task.syncMode,
+      });
       return {
-        taskId: workflow.taskId,
-        flowId: workflow.flowId,
+        taskId: helperResult.task.taskId,
+        flowId: helperResult.flow_id,
         runtime: "openclaw-native",
         syncMode: derived.syncMode,
         substrateState: derived.substrateState,

@@ -130,7 +130,17 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         payload = run_runtime_plugin_expression(
             """(() => ({
                 artifactKinds: mod.createNativeTruthArtifactKinds?.() ?? [],
-                adapterKinds: mod.createOctoClawRuntimePlugin().createAdapter().bindSession('session-native-planes').createManaged({
+                adapterKinds: mod.createOctoClawRuntimePlugin({
+                  helperInvoker: () => ({
+                    ok: true,
+                    flow_id: 'native-flow-planes',
+                    flow: {
+                      flowId: 'native-flow-planes',
+                      status: 'queued',
+                      revision: 9,
+                    },
+                  }),
+                }).createAdapter().bindSession('session-native-planes').createManaged({
                   requestId: 'req-native-planes',
                   taskId: 'task-native-planes',
                   flowId: 'flow-native-planes',
