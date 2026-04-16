@@ -6,12 +6,18 @@
   "main": "index.js",
   "files": [
     "index.js",
+    "src/plugin.ts",
     "policy",
     "openclaw.plugin.json"
   ],
+  "exports": {
+    ".": "./index.js",
+    "./plugin": "./src/plugin.ts"
+  },
   "openclaw": {
     "extensions": [
-      "./index.js"
+      "./index.js",
+      "./src/plugin.ts"
     ]
   }
 }
