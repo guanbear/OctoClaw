@@ -2805,14 +2805,24 @@ function applyPhaseTwoLivePathPolicy(decision, metadata = {}, prompt = "") {
     live_path_phase: "phase2",
     allowed_routes: ["reply", "delegate.single", "observe"],
   };
-  metadata.runtime_truth = buildRuntimeTruthMetadata({
-    ...metadata,
-    requestId: metadata?.requestId || metadata?.request_id || stableId("runtime", [prompt, liveRoute]),
-    taskId: metadata?.taskId || metadata?.task_id || stableId("task", [prompt, liveRoute]),
-    flowId: metadata?.flowId || metadata?.flow_id || stableId("flow", [prompt, liveRoute]),
-    requiresDelegation: liveRoute === "delegate.single",
-    requiresObservation: liveRoute === "observe",
-  });
+  try {
+    metadata.runtime_truth = buildRuntimeTruthMetadata({
+      ...metadata,
+      requestId: metadata?.requestId || metadata?.request_id || stableId("runtime", [prompt, liveRoute]),
+      taskId: metadata?.taskId || metadata?.task_id || stableId("task", [prompt, liveRoute]),
+      flowId: metadata?.flowId || metadata?.flow_id || stableId("flow", [prompt, liveRoute]),
+      requiresDelegation: liveRoute === "delegate.single",
+      requiresObservation: liveRoute === "observe",
+    });
+  } catch (error) {
+    metadata.runtime_truth = metadata?.runtime_truth && typeof metadata.runtime_truth === "object"
+      ? metadata.runtime_truth
+      : null;
+    metadata.runtime_truth_error = {
+      source: "buildRuntimeTruthMetadata",
+      message: String(error?.message || error || "runtime_truth_unavailable"),
+    };
+  }
 
   if (blockedCompound) {
     metadata.compound_plan = compoundRequest || null;
@@ -2870,7 +2880,9 @@ function applyPhaseTwoLivePathPolicy(decision, metadata = {}, prompt = "") {
     delegate_first: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow",
   };
   nextDecision.ts_policy_judge = metadata.ts_policy_judge;
-  nextDecision.runtime_truth = metadata.runtime_truth;
+  if (metadata.runtime_truth) {
+    nextDecision.runtime_truth = metadata.runtime_truth;
+  }
   if (blockedCompound) {
     nextDecision.compound_plan_blocked = metadata.compound_plan_blocked;
   }
@@ -4346,6 +4358,9 @@ export const __octoclawTest = {
   buildDirectLookupGuard,
   buildRuntimeTruthMetadata,
   applyPhaseTwoLivePathPolicy,
+  buildPolicyResolvedReplayPayload,
+  buildPolicyJudgedReplayPayload,
+  buildRouteValidatedReplayPayload,
   __conversationControlTest,
   __setPolicyState: setPolicyStateForContext,
   __resetPolicyState: () => {

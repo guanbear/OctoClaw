@@ -1,0 +1,6 @@
+- 2026-04-16 — Task 2 broader runtime policy verification still exposes pre-existing route-policy expectation drift in `tests/test_octoclaw_runtime_extension.py`:
+  - `test_execution_followup_prompt_prefers_control_observer_without_replay_context`
+  - `test_resolve_policy_records_normalized_replay_events_and_cache_hit`
+  - `test_stateless_policy_judge_result_overrides_legacy_route_when_valid`
+  - Related policy-judge override expectations continue to reflect broader Phase 4 routing behavior outside the replay/shadow evidence instrumentation added in Plan 04-02.
+  - Targeted replay/shadow/runtime-wrapper assertions added for this plan pass and confirm recommendation conflict evidence stays observational and separate from `runtime_truth`.
