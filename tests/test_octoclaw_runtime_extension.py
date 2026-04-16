@@ -148,6 +148,146 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
         self.assertEqual(payload["payload"]["capability_failure"]["route"], "spawn_single")
         self.assertEqual(payload["payload"]["runtime_truth"]["workflow"]["workflowOrchestration"], "failed")
 
+    def test_spawn_runtime_path_materializes_spawn_single_via_ts_plugin_without_wrapper_script(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const metadata = {
+                  session_key: 'agent:main:slack:direct:u-spawn-ts',
+                  requestId: 'req-spawn-ts-1',
+                  taskId: 'task-spawn-ts-1',
+                  flowId: 'flow-spawn-ts-1',
+                  helperInvoker: ({ action }) => {
+                    if (action === 'run-task') {
+                      return {
+                        ok: true,
+                        native_task_id: 'native-spawn-task-31',
+                        flow_id: 'native-spawn-flow-31',
+                        task: {
+                          taskId: 'native-spawn-task-31',
+                          status: 'queued',
+                          syncMode: 'managed',
+                          state: 'running',
+                          revision: 31,
+                        },
+                      };
+                    }
+                    return {
+                      ok: true,
+                      flow_id: 'native-spawn-flow-31',
+                      flow: {
+                        flowId: 'native-spawn-flow-31',
+                        status: 'queued',
+                        revision: 11,
+                      },
+                    };
+                  },
+                };
+                return __octoclawTest.buildTsRuntimeSpawnPayload('delegate research task', {
+                  route: 'spawn_single',
+                  decision: {
+                    route_decision: { route: 'spawn_single', worker_pool: 'octoclaw-worker' },
+                    model_policy: { profile: 'worker_default' },
+                  },
+                  metadata,
+                });
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "spawn_single")
+        self.assertFalse(payload["executed"])
+        self.assertEqual(payload["materialization"]["authority"], "ts-native-plugin")
+        self.assertEqual(payload["materialization"]["task_id"], "native-spawn-task-31")
+        self.assertEqual(payload["materialization"]["flow_id"], "native-spawn-flow-31")
+        self.assertEqual(payload["materialization"]["sync_mode"], "managed")
+        self.assertEqual(payload["materialization"]["substrate_state"], "running")
+        self.assertEqual(payload["materialization"]["substrate_revision"], 31)
+
+    def test_spawn_runtime_path_materializes_spawn_multi_via_ts_adapter_with_flow_truth(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const metadata = {
+                  session_key: 'agent:main:slack:direct:u-spawn-multi-ts',
+                  requestId: 'req-spawn-multi-ts-1',
+                  taskId: 'task-spawn-multi-ts-1',
+                  flowId: 'flow-spawn-multi-ts-1',
+                  helperInvoker: ({ action }) => {
+                    if (action === 'create-managed-flow') {
+                      return {
+                        ok: true,
+                        flow_id: 'native-managed-flow-55',
+                        flow: {
+                          flowId: 'native-managed-flow-55',
+                          status: 'queued',
+                          revision: 55,
+                        },
+                      };
+                    }
+                    throw new Error(`unexpected action:${action}`);
+                  },
+                };
+                return __octoclawTest.buildTsRuntimeSpawnPayload('plan a multi-step refactor', {
+                  route: 'spawn_multi',
+                  decision: {
+                    route_decision: { route: 'spawn_multi', worker_pool: 'octoclaw-worker' },
+                    model_policy: { profile: 'worker_default' },
+                  },
+                  metadata,
+                });
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "spawn_multi")
+        self.assertEqual(payload["materialization"]["flow_id"], "native-managed-flow-55")
+        self.assertEqual(payload["materialization"]["sync_mode"], "managed")
+        self.assertEqual(payload["materialization"]["substrate_state"], "queued")
+        self.assertEqual(payload["materialization"]["substrate_revision"], 55)
+        self.assertEqual(payload["materialization"]["truth"]["kind"], "truth")
+        self.assertEqual(payload["materialization"]["projection"]["kind"], "projection")
+
+    def test_watchdog_tick_uses_ts_runtime_lifecycle_authority_without_task_state_update_script(self) -> None:
+        payload = run_runtime_helper(
+            """(async () => {
+                const originalNow = Date.now;
+                const baseNow = Date.parse('2026-04-17T00:30:00.000Z');
+                Date.now = () => baseNow;
+                const logs = [];
+                const logger = {
+                  debug: (message) => logs.push(String(message || '')),
+                  warn: (message) => logs.push(`warn:${String(message || '')}`),
+                };
+                const taskStatePath = __octoclawTest.resolveTaskStatePath();
+                await import('node:fs/promises').then((fs) => fs.mkdir(new URL('.', `file://${taskStatePath}`), { recursive: true }).catch(() => {}));
+                await import('node:fs/promises').then((fs) => fs.writeFile(taskStatePath, JSON.stringify({
+                  tasks: [
+                    {
+                      id: 'queued-timeout-1',
+                      status: 'queued',
+                      updated_at: '2026-04-16T21:00:00.000Z',
+                      flow_id: 'flow-timeout-1',
+                    },
+                    {
+                      id: 'runner-stuck-1',
+                      status: 'running',
+                      updated_at: '2026-04-17T00:00:00.000Z',
+                      flow_id: 'flow-runner-1',
+                      owner: 'runner-owner-1',
+                    }
+                  ]
+                }), 'utf8'));
+                try {
+                  await __octoclawTest.watchdogTick(logger);
+                } finally {
+                  Date.now = originalNow;
+                }
+                return { logs };
+            })()"""
+        )
+
+        joined = "\n".join(payload["logs"])
+        self.assertIn("watchdog lifecycle authority=ts-runtime-core task=queued-timeout-1", joined)
+        self.assertIn("watchdog runner authority=ts-runtime-core task=runner-stuck-1", joined)
+        self.assertNotIn("task-state-update.py", joined)
+
     def test_runtime_wrapper_exports_ts_native_truth_delegation_metadata(self) -> None:
         payload = run_runtime_helper(
             """(() => {

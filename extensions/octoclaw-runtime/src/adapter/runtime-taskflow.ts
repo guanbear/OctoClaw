@@ -253,6 +253,7 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
     sessionKey,
     bindSession: (nextSessionKey: string) => createBinding(nextSessionKey),
     createManaged: (workflow) => {
+      const identity = workflowIdentity(workflow);
       const helperResult = helperInvoker({
         action: "create-managed-flow",
         args: {
@@ -265,7 +266,7 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
       });
       const derived = deriveTruthShape(sessionKey, workflow, {
         flowId: helperResult.flow.flowId,
-        taskId: workflow.taskId,
+        taskId: identity.taskId,
         syncMode: "managed",
         substrateState: helperResult.flow.status as RuntimeWorkflowState["workflowOrchestration"],
         substrateRevision: helperResult.flow.revision,
@@ -293,11 +294,12 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
       };
     },
     runTask: (workflow) => {
+      const identity = workflowIdentity(workflow);
       const helperResult = helperInvoker({
         action: "run-task",
         args: {
           session_key: sessionKey,
-          flow_id: workflow.flowId,
+          flow_id: identity.flowId,
           task: buildGoal(workflow),
           status: "queued",
           notify_policy: "silent",

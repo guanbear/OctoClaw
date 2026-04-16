@@ -172,6 +172,80 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
         self.assertEqual(payload["adapterKinds"]["artifact"]["kind"], "artifact")
         self.assertEqual(payload["adapterKinds"]["telemetry"]["kind"], "telemetry")
 
+    def test_ts_runtime_plugin_binding_preserves_helper_derived_spawn_multi_flow_identity(self) -> None:
+        payload = run_runtime_plugin_expression(
+            """(() => {
+                const helperInvoker = ({ action }) => {
+                  if (action !== 'create-managed-flow') {
+                    throw new Error(`unexpected action:${action}`);
+                  }
+                  return {
+                    ok: true,
+                    flow_id: 'native-flow-helper-88',
+                    flow: {
+                      flowId: 'native-flow-helper-88',
+                      status: 'queued',
+                      revision: 88,
+                    },
+                  };
+                };
+                const plugin = mod.createOctoClawRuntimePlugin({ helperInvoker });
+                const workflow = {
+                  identity: {
+                    requestId: 'req-helper-88',
+                    taskId: 'task-helper-88',
+                    flowId: 'flow-helper-88',
+                    route: 'delegate.single',
+                    authority: 'runtime_orchestrator',
+                    backend: 'openclaw-native',
+                    materializationIntent: 'spawn_single',
+                  },
+                  execution: { source: 'runtime_orchestrator' },
+                  ingressOrchestration: 'accepted',
+                  workflowOrchestration: 'running',
+                  reconcileOrRecovery: 'idle',
+                  lifecycle: { phase: 'running', deliveryState: 'not_started', checkpointState: 'none' },
+                  deadlines: {},
+                  claim: {
+                    claimOwner: 'owner-helper-88',
+                    claimToken: 'claim-helper-88',
+                    leaseDurationMs: 30000,
+                    lastHeartbeatAt: '2026-04-17T00:00:00.000Z',
+                    leaseExpiresAt: '2026-04-17T00:00:30.000Z'
+                  },
+                  outbox: {},
+                  ackLedger: {},
+                  scope: {
+                    readScope: [{ resource: 'docs', access: 'read' }],
+                    writeScope: [{ resource: 'workspace', access: 'write' }],
+                    workspaceMode: 'shared_workspace',
+                    writeScopeSummary: 'workspace'
+                  },
+                  taskMaterialization: {
+                    requestId: 'req-helper-88',
+                    taskId: 'task-helper-88',
+                    flowId: 'flow-helper-88',
+                    route: 'delegate.single',
+                    authority: 'runtime_orchestrator',
+                    backend: 'openclaw-native',
+                    materializationIntent: 'spawn_single',
+                    claimOwner: 'owner-helper-88',
+                    claimToken: 'claim-helper-88',
+                    leaseExpiresAt: '2026-04-17T00:00:30.000Z',
+                    taskPacketRef: 'flow-helper-88:task-helper-88:claim-helper-88'
+                  }
+                };
+                return plugin.createAdapter().bindSession('session-helper-88').createManaged(workflow);
+            })()"""
+        )
+
+        self.assertEqual(payload["flowId"], "native-flow-helper-88")
+        self.assertEqual(payload["syncMode"], "managed")
+        self.assertEqual(payload["substrateState"], "queued")
+        self.assertEqual(payload["substrateRevision"], 88)
+        self.assertEqual(payload["truth"]["flowId"], "native-flow-helper-88")
+        self.assertEqual(payload["truth"]["taskId"], "task-helper-88")
+
     def test_runner_binding_registers_mirror_entry(self) -> None:
         with tempfile.TemporaryDirectory(prefix="octoclaw-taskflow-") as td:
             mirror_path = Path(td) / "openclaw-taskflow-mirror.json"

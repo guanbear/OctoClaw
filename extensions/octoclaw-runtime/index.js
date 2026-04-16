@@ -18,6 +18,7 @@ import {
   advanceWorkflowToRunning,
   markWorkflowCompleted,
   markWorkflowFailed,
+  markWorkflowTimedOut,
   startRuntimeWorkflow,
   renewWorkflowHeartbeat,
   markWorkflowCheckpointEmitted,
@@ -128,7 +129,11 @@ function buildWorkflowDecision(task, decision = {}, metadata = {}) {
     ? decision.ts_policy_judge.decision
     : judgePolicy(buildPhaseTwoPolicyInput(task, {
       ...metadata,
-      requested_route: route === "spawn_single" ? "delegate.single" : route === "runner" ? "observe" : route,
+      requested_route: route === "spawn_single" || route === "spawn_multi"
+        ? "delegate.single"
+        : route === "runner"
+          ? "observe"
+          : route,
       requiresDelegation: route === "spawn_single" || route === "spawn_multi",
       requiresObservation: route === "runner",
       workType,
@@ -317,6 +322,48 @@ function buildTsRuntimeDispatchPayload({
       },
     });
   }
+}
+
+function buildWatchdogWorkflow(task = {}, route = "runner") {
+  const taskId = String(task?.id || task?.task_id || task?.taskId || "runtime-watchdog-task").trim() || "runtime-watchdog-task";
+  const flowId = String(task?.flow_id || task?.flowId || taskId).trim() || taskId;
+  const requestId = String(task?.request_id || task?.requestId || taskId).trim() || taskId;
+  const claimOwner = String(task?.owner || task?.claim_owner || "runtime-watchdog").trim() || "runtime-watchdog";
+  const observeRoute = route === "runner";
+  const decision = {
+    route: observeRoute ? "observe" : "delegate.single",
+    role: "worker_research",
+    backend: observeRoute ? "observer" : "worker",
+    workspaceMode: normalizeWorkspaceMode(task?.workspace_mode || task?.workspaceMode || "shared_workspace"),
+    modelProfile: "worker_default",
+    admission: { admission: "allow", queueBudget: 1, reason: "watchdog_runtime_allowed" },
+    decisionStack: ["route", "role", "backend", "workspace_mode", "model_profile"],
+  };
+
+  return startRuntimeWorkflow({
+    requestId,
+    taskId,
+    flowId,
+    decision,
+    role: decision.role,
+    decisionRef: `${requestId}:${route}:watchdog`,
+    provenanceSource: "runtime_orchestrator",
+    claimOwner,
+    leaseDurationMs: 30_000,
+    deadlineBudget: {
+      queueMs: 1_000,
+      startMs: 2_000,
+      progressMs: 30_000,
+      runtimeMs: 60_000,
+      deliveryMs: 5_000,
+    },
+    scope: {
+      readScope: [],
+      writeScope: [],
+      workspaceMode: decision.workspaceMode,
+      writeScopeSummary: "",
+    },
+  });
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -861,8 +908,9 @@ async function watchdogTick(logger) {
         staleCount++;
         logger?.debug?.(`octoclaw watchdog: task_timeout task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
         try {
-          const scriptPath = path.join(cwd, "lib", "task-state-update.py");
-          await runCommand("python3", [scriptPath, "event", "--id", taskId, "--kind", "task_timed_out", "--event-json", JSON.stringify({ reason: "watchdog_queued_timeout", age_min: Math.round(ageMin), threshold_min: STALE_QUEUED_THRESHOLD_MIN })], { cwd, timeoutMs: 10_000 });
+          const workflow = buildWatchdogWorkflow(task, "spawn_single");
+          const timedOut = markWorkflowTimedOut(workflow, new Date().toISOString());
+          logger?.debug?.(`octoclaw watchdog lifecycle authority=ts-runtime-core task=${taskId} state=${timedOut.workflowOrchestration} failed_at=${timedOut.lifecycle.failedAt}`);
         } catch (e) {
           logger?.warn?.(`octoclaw watchdog: failed to write timed_out event for task=${taskId}: ${String(e)}`);
         }
@@ -872,8 +920,12 @@ async function watchdogTick(logger) {
         stuckCount++;
         logger?.debug?.(`octoclaw watchdog: runner_stuck task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
         try {
-          const scriptPath = path.join(cwd, "lib", "task-state-update.py");
-          await runCommand("python3", [scriptPath, "archive-stale-dispatched", "--minutes", String(STUCK_THRESHOLD_MIN)], { cwd, timeoutMs: 10_000 });
+          const workflow = advanceWorkflowToRunning(
+            buildWatchdogWorkflow(task, "runner"),
+            String(task?.owner || task?.claim_owner || "runtime-watchdog").trim() || "runtime-watchdog",
+          );
+          const renewed = renewWorkflowHeartbeat(workflow, new Date().toISOString());
+          logger?.debug?.(`octoclaw watchdog runner authority=ts-runtime-core task=${taskId} claim=${renewed.claim?.claimToken || ""} heartbeat_at=${renewed.claim?.lastHeartbeatAt || ""}`);
         } catch (e) {
           logger?.warn?.(`octoclaw watchdog: reconciled_failed task=${taskId} error=${String(e)}`);
         }
@@ -1248,6 +1300,173 @@ function compactDispatchDetails(payload) {
 
 function buildTsRuntimeDispatchPayloadForTests(task, options = {}) {
   return buildTsRuntimeDispatchPayload({ task, ...options });
+}
+
+function buildTsRuntimeSpawnPayloadForTests(task, options = {}) {
+  return buildTsRuntimeSpawnPayload({ task, ...options });
+}
+
+function buildTsRuntimeSpawnPayload({
+  task,
+  route = "spawn_single",
+  decision = {},
+  metadata = {},
+  helperInvoker,
+  execute = false,
+}) {
+  const normalizedRoute = String(route || runtimeRouteDecision(decision).route || "spawn_single").trim() || "spawn_single";
+  if (!["spawn_single", "spawn_multi"].includes(normalizedRoute)) {
+    throw new Error(`unsupported_spawn_route:${normalizedRoute}`);
+  }
+
+  const nativeHelperInvoker = helperInvoker || metadata?.helperInvoker || null;
+  const plugin = createOctoClawRuntimePlugin(nativeHelperInvoker ? { helperInvoker: nativeHelperInvoker } : {});
+  const executionIds = runtimeExecutionIds(task, {
+    route_decision: {
+      ...runtimeRouteDecision(decision),
+      route: normalizedRoute,
+    },
+  }, metadata);
+  const workflowDecision = buildWorkflowDecision(task, {
+    ...decision,
+    route_decision: {
+      ...runtimeRouteDecision(decision),
+      route: normalizedRoute,
+    },
+  }, {
+    ...metadata,
+    requiresDelegation: true,
+    requested_route: normalizedRoute === "spawn_multi" ? "delegate.single" : "delegate.single",
+  });
+
+  let workflow = startRuntimeWorkflow({
+    ...executionIds,
+    decision: workflowDecision,
+    role: workflowDecision.role,
+    decisionRef: String(metadata?.decisionRef || metadata?.decision_ref || `${executionIds.requestId}:${normalizedRoute}`).trim(),
+    provenanceSource: "runtime_orchestrator",
+    claimOwner: String(metadata?.claimOwner || metadata?.claim_owner || metadata?.controllerId || metadata?.controller_id || "octoclaw-runtime").trim() || "octoclaw-runtime",
+    leaseDurationMs: Number(metadata?.leaseDurationMs || metadata?.lease_duration_ms || 30_000),
+    deadlineBudget: {
+      queueMs: Number(metadata?.queueMs || metadata?.queue_ms || 1_000),
+      startMs: Number(metadata?.startMs || metadata?.start_ms || 2_000),
+      progressMs: Number(metadata?.progressMs || metadata?.progress_ms || 30_000),
+      runtimeMs: Number(metadata?.runtimeMs || metadata?.runtime_ms || 60_000),
+      deliveryMs: Number(metadata?.deliveryMs || metadata?.delivery_ms || 5_000),
+    },
+    scope: buildWorkflowScope(metadata),
+  });
+
+  workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
+  workflow = renewWorkflowHeartbeat(workflow);
+
+  const adapter = plugin.createAdapter().bindSession(String(metadata?.session_key || metadata?.sessionKey || executionIds.requestId).trim() || executionIds.requestId);
+  const basePayload = {
+    route: normalizedRoute,
+    worker_pool: String(runtimeRouteDecision(decision).worker_pool || decision?.model_policy?.worker_pool || "octoclaw-worker").trim(),
+    model: String(decision?.model_policy?.selected_model || decision?.model_policy?.profile || workflowDecision.modelProfile || "").trim(),
+    policy_decision: decision,
+  };
+
+  try {
+    if (normalizedRoute === "spawn_multi") {
+      const managed = adapter.createManaged(workflow);
+      if (execute) {
+        workflow = markWorkflowCheckpointEmitted(workflow);
+        workflow = markWorkflowCompleted(workflow);
+      }
+      return {
+        ...basePayload,
+        executed: Boolean(execute),
+        status: execute ? "executed" : "planned",
+        task_id: workflow.identity.taskId,
+        flow_id: managed.flowId,
+        summary: `OctoClaw spawn registered: ${managed.flowId}`,
+        handoff: {
+          kind: "spawn",
+          summary: `Delegated flow materialized natively as ${managed.flowId}`,
+          user_safe: true,
+          reply_text: `Delegated flow registered natively: ${managed.flowId}`,
+        },
+        materialization: {
+          authority: "ts-native-plugin",
+          type: "spawn_multi",
+          task_id: workflow.identity.taskId,
+          flow_id: managed.flowId,
+          runtime: managed.runtime,
+          sync_mode: managed.syncMode,
+          substrate_state: managed.substrateState,
+          substrate_revision: managed.substrateRevision,
+          truth: managed.truth,
+          projection: managed.projection,
+          artifact: managed.artifact,
+          telemetry: managed.telemetry,
+        },
+        runtime_truth: {
+          authority: "ts-runtime-core",
+          workflow: execute ? workflow : workflow,
+          binding: managed,
+        },
+      };
+    }
+
+    workflow = markWorkflowCheckpointEmitted(workflow);
+    const binding = plugin.bindWorkflow(workflow);
+    if (execute) {
+      workflow = markWorkflowCompleted(workflow);
+    }
+    return {
+      ...basePayload,
+      executed: Boolean(execute),
+      status: execute ? "executed" : "planned",
+      task_id: binding.taskId,
+      flow_id: binding.flowId,
+      summary: `OctoClaw spawn registered: ${binding.taskId}`,
+      handoff: {
+        kind: "spawn",
+        summary: `Delegated task materialized natively as ${binding.taskId}`,
+        user_safe: true,
+        reply_text: `Delegated task registered natively: ${binding.taskId}`,
+      },
+      materialization: {
+        authority: "ts-native-plugin",
+        type: "spawn_single",
+        task_id: binding.taskId,
+        flow_id: binding.flowId,
+        runtime: binding.runtime,
+        sync_mode: binding.syncMode,
+        substrate_state: binding.substrateState,
+        substrate_revision: binding.substrateRevision,
+        truth: binding.truth,
+        projection: binding.projection,
+      },
+      runtime_truth: {
+        authority: "ts-runtime-core",
+        workflow,
+        binding,
+      },
+    };
+  } catch (error) {
+    const failedWorkflow = markWorkflowFailed(workflow);
+    throw Object.assign(new Error(`ts_runtime_spawn_failed:${String(error?.message || error || "unknown_error")}`), {
+      payload: {
+        ...basePayload,
+        executed: false,
+        status: "failed",
+        task_id: failedWorkflow.identity.taskId,
+        flow_id: failedWorkflow.identity.flowId,
+        capability_failure: {
+          authority: "ts-runtime-core",
+          route: normalizedRoute,
+          reason: String(error?.message || error || "native_spawn_failed"),
+        },
+        runtime_truth: {
+          authority: "ts-runtime-core",
+          workflow: failedWorkflow,
+        },
+      },
+    });
+  }
 }
 
 function applyLegacyTestDecisionCompat(task, decision) {
@@ -4412,7 +4631,26 @@ const plugin = {
         if (metadata.session_key) args.push("--session-key", String(metadata.session_key));
         if (Object.keys(metadata).length > 0) args.push("--metadata-json", JSON.stringify(metadata));
         if (typeof params.execute === "boolean") args.push(params.execute ? "--execute" : "--no-execute");
-        const payload = await runJsonScript("octoclaw_spawn.py", args, ctx?.cwd || process.cwd());
+        const helperInvoker = existingState?.decision?.request?.metadata?.helperInvoker
+          || metadata?.helperInvoker
+          || null;
+        let payload;
+        try {
+          payload = buildTsRuntimeSpawnPayload({
+            task: params.task,
+            route: params.route || "spawn_single",
+            decision: existingState?.decision || {},
+            metadata,
+            helperInvoker,
+            execute: Boolean(params.execute),
+          });
+        } catch (error) {
+          if (error?.payload && typeof error.payload === "object") {
+            payload = error.payload;
+          } else {
+            throw error;
+          }
+        }
         const summary = await userFacingHandoff(
           payload,
           `OctoClaw spawn registered: ${payload.worker_pool || payload.route} / ${payload.model}`,
@@ -4577,7 +4815,21 @@ const plugin = {
         if (ctx.hasUI) ctx.ui.notify("Usage: /octospawn <task>", "error");
         return;
       }
-      const payload = await runJsonScript("octoclaw_spawn.py", ["--task", task, "--register"], ctx?.cwd || process.cwd());
+      let payload;
+      try {
+        payload = buildTsRuntimeSpawnPayload({
+          task,
+          route: "spawn_single",
+          decision: {},
+          metadata: buildPolicyMetadata(ctx),
+        });
+      } catch (error) {
+        if (error?.payload && typeof error.payload === "object") {
+          payload = error.payload;
+        } else {
+          throw error;
+        }
+      }
       if (ctx.hasUI) {
         ctx.ui.setEditorText(JSON.stringify(payload, null, 2));
         ctx.ui.notify(`OctoClaw spawn registered: ${payload.task_id}`);
@@ -4656,6 +4908,7 @@ export const __octoclawTest = {
   buildDirectLookupGuard,
   buildRuntimeTruthMetadata,
   buildTsRuntimeDispatchPayload: buildTsRuntimeDispatchPayloadForTests,
+  buildTsRuntimeSpawnPayload: buildTsRuntimeSpawnPayloadForTests,
   applyPhaseTwoLivePathPolicy,
   buildPolicyResolvedReplayPayload,
   buildPolicyJudgedReplayPayload,
