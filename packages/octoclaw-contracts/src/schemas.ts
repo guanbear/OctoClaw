@@ -4,6 +4,25 @@ export type SchemaVersion = typeof OCTOCLAW_CONTRACT_SCHEMA_VERSION;
 export type WorkspaceMode = "isolated_workspace" | "shared_workspace" | "read_only_workspace";
 export type ScopeAccessLevel = "none" | "read" | "write" | "admin";
 export type ArtifactKind = "truth" | "projection" | "artifact" | "telemetry";
+export type ExecutionRoute = "reply" | "delegate.single" | "observe";
+export type ExecutionAuthority = "main_session" | "runtime_orchestrator" | "native_runner" | "native_subagent";
+export type ExecutionBackend = "openclaw-native" | "clawteam" | "legacy-python";
+export type MaterializationIntent = "reply_inline" | "observe_probe" | "runner_task" | "spawn_single" | "spawn_multi";
+export type LifecyclePhase =
+  | "ingress_received"
+  | "ack_pending"
+  | "materialization_pending"
+  | "materialized"
+  | "running"
+  | "checkpoint_pending"
+  | "deliverable_ready"
+  | "delivery_pending"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "recovering";
+export type DeliveryState = "not_started" | "queued" | "sent" | "acknowledged" | "failed";
+export type ProvenanceSource = "direct_reply" | "runtime_orchestrator" | "runner_substrate" | "spawn_substrate" | "native_taskflow";
 
 export interface ScopeDescriptor {
   resource: string;
@@ -24,6 +43,36 @@ export interface IdempotencyMetadata {
   flowIdempotencyKey?: string;
 }
 
+export interface ExecutionIdentity {
+  requestId: string;
+  taskId: string;
+  flowId: string;
+  route: ExecutionRoute;
+  authority: ExecutionAuthority;
+  backend: ExecutionBackend;
+  materializationIntent: MaterializationIntent;
+}
+
+export interface ExecutionProvenance {
+  source: ProvenanceSource;
+  sourceRef: string;
+  decisionRef?: string;
+  materializedBy?: string;
+  checkpointRef?: string;
+}
+
+export interface LifecycleState {
+  phase: LifecyclePhase;
+  deliveryState: DeliveryState;
+  checkpointState: "none" | "pending" | "emitted" | "stale";
+  materializedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  blockedAt?: string;
+  lastCheckpointAt?: string;
+}
+
 export interface ContractEnvelope {
   schemaVersion: SchemaVersion;
   kind: ArtifactKind;
@@ -34,7 +83,7 @@ export interface RequestContext extends ContractEnvelope, ScopeMetadata, Idempot
   kind: "truth";
   requestId: string;
   sessionId?: string;
-  route: "reply" | "delegate.single" | "observe";
+  route: ExecutionRoute;
   role: string;
   backend: string;
   modelProfile: string;
@@ -43,7 +92,7 @@ export interface RequestContext extends ContractEnvelope, ScopeMetadata, Idempot
 export interface RouteDecisionContract extends ContractEnvelope, ScopeMetadata {
   kind: "projection";
   requestId: string;
-  route: "reply" | "delegate.single" | "observe";
+  route: ExecutionRoute;
   backend: string;
   modelProfile: string;
   reasonCodes: string[];
