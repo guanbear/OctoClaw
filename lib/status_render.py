@@ -7,8 +7,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
+    from runtime_snapshot import build_substrate_surface_projection
     from worker_taxonomy import is_runner_task, resolve_executor, resolve_model_band, resolve_worker_pool, role_display
 except ModuleNotFoundError:  # pragma: no cover - package import path for tests
+    from lib.runtime_snapshot import build_substrate_surface_projection
     from lib.worker_taxonomy import is_runner_task, resolve_executor, resolve_model_band, resolve_worker_pool, role_display
 
 try:
@@ -60,11 +62,22 @@ def summarize_taskflow_substrate(tasks: list[dict[str, Any]]) -> dict[str, int]:
     for task in tasks:
         if not isinstance(task, dict):
             continue
+        projection = build_substrate_surface_projection(task)
         binding_state = _taskflow_field(task, "taskflow_state") or _taskflow_field(task, "binding_state")
         native_binding = _taskflow_field(task, "native_binding_state")
         native_status = _taskflow_field(task, "native_status").lower()
         sync_mode = _taskflow_field(task, "taskflow_sync_mode")
         handoff_state = str(task.get("handoff_state", "") or "").strip().lower()
+        if not binding_state and projection.get("substrate_task_id"):
+            binding_state = "projection_bound"
+        if not native_binding and projection.get("substrate_task_id"):
+            native_binding = "bound"
+        if not native_status:
+            native_status = str(projection.get("substrate_state", "") or "").strip().lower()
+        if not sync_mode:
+            sync_mode = str(projection.get("sync_mode", "") or "").strip()
+        if not handoff_state:
+            handoff_state = str(projection.get("delivery_state", "") or "").strip().lower()
         task_event_summary = task.get("task_event_summary", {}) if isinstance(task.get("task_event_summary", {}), dict) else {}
         kind_counts = task_event_summary.get("kind_counts", {}) if isinstance(task_event_summary.get("kind_counts", {}), dict) else {}
         if binding_state:
