@@ -66,10 +66,12 @@ Plans:
   1. CI-grade gates can catch duplicate request or delivery bugs, stale ownership recovery failures, and write-scope conflict regressions.
   2. Optimization telemetry is available at request, task, and flow levels without becoming a live truth source.
   3. Auto-router and compound routing extensions consume stable runtime and evaluation contracts instead of bypassing them.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: Activate eval gates and shadow advanced routing hooks
+- [x] 04-01-PLAN.md — Activate promotion-grade replay, delivery, harness, and acceptance gates
+- [ ] 04-02-PLAN.md — Stabilize route-policy goldens, shadow drift reporting, and optimization telemetry contracts
+- [ ] 04-03-PLAN.md — Enable gated compound routing and auto-router consumption on validated contracts
 
 ## Progress
 

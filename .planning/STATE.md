@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-04-16T12:38:58.453Z"
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-04-16T13:24:38.514Z"
 last_activity: 2026-04-16
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 11
+  completed_plans: 9
+  percent: 82
 ---
 
 # Project State
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03 P02 | 4 min | 2 tasks | 6 files |
 | Phase 03 P03 | 10 min | 2 tasks | 9 files |
 | Phase 03 P04 | 5 min | 2 tasks | 6 files |
+| Phase 04 P01 | 2 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,8 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 03]: Shared projection facts are extracted in policy/intent.js and rendered in conversation-control.js so grounded follow-up answers cite one read model regardless of whether the user asks from IM or operator channels.
 - [Phase 03]: The TS adapter now shells out through one native-helper bridge and rejects malformed helper responses instead of fabricating native truth defaults.
 - [Phase 03]: Plugin and wrapper seams accept helper invoker injection so tests can assert native-backed truth delegation without introducing a second truth authority.
+- [Phase 04]: Replay validation remains an eval-only summary layer; promotion counters expose stale recovery, fallback, delivery, and contract mismatch evidence without changing runtime truth authority.
+- [Phase 04]: Harness preset JSON remains the gate selection contract, so Phase 4 promotion coverage is added by expanding quick and full preset module lists.
 
 ### Pending Todos
 
@@ -102,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T12:38:45.808Z
-Stopped at: Completed 03-04-PLAN.md
+Last session: 2026-04-16T13:24:38.511Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None

@@ -32,7 +32,7 @@
 
 ### Eval and Routing Deepening
 
-- [ ] **EVAL-01**: Preflight, golden, replay, and black-box acceptance gates detect duplicate request or delivery bugs, stale recovery failures, and write-scope conflict regressions.
+- [x] **EVAL-01**: Preflight, golden, replay, and black-box acceptance gates detect duplicate request or delivery bugs, stale recovery failures, and write-scope conflict regressions.
 - [ ] **AUTO-01**: Advanced routing and optimization features consume stable runtime and evaluation contracts in shadow or gated mode before taking live authority.
 
 ## v2 Requirements
@@ -63,7 +63,7 @@
 | SAFE-02 | Phase 2 | Complete |
 | NATIVE-01 | Phase 3 | Complete |
 | SURF-01 | Phase 3 | Complete |
-| EVAL-01 | Phase 4 | Pending |
+| EVAL-01 | Phase 4 | Complete |
 | AUTO-01 | Phase 4 | Pending |
 
 **Coverage:**
