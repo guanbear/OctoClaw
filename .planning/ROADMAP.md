@@ -70,7 +70,7 @@ Plans:
 
 Plans:
 - [x] 04-01-PLAN.md — Activate promotion-grade replay, delivery, harness, and acceptance gates
-- [ ] 04-02-PLAN.md — Stabilize route-policy goldens, shadow drift reporting, and optimization telemetry contracts
+- [x] 04-02-PLAN.md — Stabilize route-policy goldens, shadow drift reporting, and optimization telemetry contracts
 - [ ] 04-03-PLAN.md — Enable gated compound routing and auto-router consumption on validated contracts
 
 ## Progress
