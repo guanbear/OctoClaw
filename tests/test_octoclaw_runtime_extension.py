@@ -51,6 +51,31 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
     def test_runtime_wrapper_exports_ts_native_truth_delegation_metadata(self) -> None:
         payload = run_runtime_helper(
             """(() => {
+                const helperInvoker = ({ action }) => {
+                  if (action === 'run-task') {
+                    return {
+                      ok: true,
+                      native_task_id: 'native-task-runtime-7',
+                      flow_id: 'native-flow-runtime-7',
+                      task: {
+                        taskId: 'native-task-runtime-7',
+                        status: 'queued',
+                        syncMode: 'managed',
+                        state: 'running',
+                        revision: 7,
+                      },
+                    };
+                  }
+                  return {
+                    ok: true,
+                    flow_id: 'native-flow-runtime-7',
+                    flow: {
+                      flowId: 'native-flow-runtime-7',
+                      status: 'queued',
+                      revision: 4,
+                    },
+                  };
+                };
                 const workflow = {
                   requestId: 'req-runtime-native-1',
                   taskId: 'task-runtime-native-1',
@@ -83,17 +108,18 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
                     taskPacketRef: 'flow-runtime-native-1:task-runtime-native-1:claim-runtime-native-1'
                   }
                 };
-                return __octoclawTest.buildRuntimeTruthMetadata?.(workflow) ?? null;
+                return __octoclawTest.buildRuntimeTruthMetadata?.(workflow, { helperInvoker }) ?? null;
             })()"""
         )
 
         self.assertEqual(payload["authority"], "ts-native-adapter")
         self.assertEqual(payload["pluginName"], "octoclaw-runtime-ts")
-        self.assertEqual(payload["binding"]["flowId"], "flow-runtime-native-1")
-        self.assertEqual(payload["binding"]["taskId"], "task-runtime-native-1")
+        self.assertEqual(payload["binding"]["flowId"], "native-flow-runtime-7")
+        self.assertEqual(payload["binding"]["taskId"], "native-task-runtime-7")
         self.assertEqual(payload["binding"]["runtime"], "openclaw-native")
         self.assertEqual(payload["binding"]["syncMode"], "managed")
         self.assertEqual(payload["binding"]["substrateState"], "running")
+        self.assertEqual(payload["binding"]["substrateRevision"], 7)
         self.assertEqual(payload["binding"]["truth"]["kind"], "truth")
         self.assertEqual(payload["binding"]["projection"]["kind"], "projection")
 
@@ -103,7 +129,32 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
                 const metadata = {
                   requested_route: 'delegate.single',
                   requiresDelegation: true,
-                  workspaceMode: 'shared_workspace'
+                  workspaceMode: 'shared_workspace',
+                  helperInvoker: ({ action }) => {
+                    if (action === 'run-task') {
+                      return {
+                        ok: true,
+                        native_task_id: 'policy-native-task-7',
+                        flow_id: 'policy-native-flow-7',
+                        task: {
+                          taskId: 'policy-native-task-7',
+                          status: 'queued',
+                          syncMode: 'managed',
+                          state: 'running',
+                          revision: 7,
+                        },
+                      };
+                    }
+                    return {
+                      ok: true,
+                      flow_id: 'policy-native-flow-4',
+                      flow: {
+                        flowId: 'policy-native-flow-4',
+                        status: 'queued',
+                        revision: 4,
+                      },
+                    };
+                  }
                 };
                 const decision = __octoclawTest.buildDecision('research the runtime cutover', { metadata });
                 const applied = __octoclawTest.applyPhaseTwoLivePathPolicy?.(decision, metadata, 'research the runtime cutover') ?? decision;
@@ -119,6 +170,10 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
         self.assertEqual(payload["decisionRuntimeTruth"]["authority"], "ts-native-adapter")
         self.assertEqual(payload["runtimeTruth"]["pluginName"], "octoclaw-runtime-ts")
         self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["runtime"], "openclaw-native")
+        self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["flowId"], "policy-native-flow-7")
+        self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["taskId"], "policy-native-task-7")
+        self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["substrateRevision"], 7)
+        self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["substrateState"], "running")
         self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["truth"]["kind"], "truth")
 
     def test_runtime_paths_prefer_managed_openclaw_workspace_layout(self) -> None:

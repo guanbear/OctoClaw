@@ -35,7 +35,32 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
     def test_ts_runtime_plugin_binding_exposes_native_truth_contract_fields(self) -> None:
         payload = run_runtime_plugin_expression(
             """(() => {
-                const plugin = mod.createOctoClawRuntimePlugin();
+                const helperInvoker = ({ action }) => {
+                  if (action === 'create-managed-flow') {
+                    return {
+                      ok: true,
+                      flow_id: 'native-flow-42',
+                      flow: {
+                        flowId: 'native-flow-42',
+                        status: 'queued',
+                        revision: 4,
+                      },
+                    };
+                  }
+                  return {
+                    ok: true,
+                    native_task_id: 'native-task-77',
+                    flow_id: 'native-flow-42',
+                    task: {
+                      taskId: 'native-task-77',
+                      status: 'queued',
+                      syncMode: 'managed',
+                      state: 'running',
+                      revision: 7,
+                    },
+                  };
+                };
+                const plugin = mod.createOctoClawRuntimePlugin({ helperInvoker });
                 const workflow = {
                   requestId: 'req-native-1',
                   taskId: 'task-native-1',
@@ -78,22 +103,26 @@ class OpenClawTaskflowAdapterTests(unittest.TestCase):
             })()"""
         )
 
-        self.assertEqual(payload["createManaged"]["flowId"], "flow-native-1")
+        self.assertEqual(payload["createManaged"]["flowId"], "native-flow-42")
         self.assertEqual(payload["createManaged"]["controllerId"], "owner-native-1")
         self.assertEqual(payload["createManaged"]["syncMode"], "managed")
-        self.assertEqual(payload["createManaged"]["substrateState"], "planned")
-        self.assertEqual(payload["createManaged"]["substrateRevision"], 0)
+        self.assertEqual(payload["createManaged"]["substrateState"], "queued")
+        self.assertEqual(payload["createManaged"]["substrateRevision"], 4)
         self.assertEqual(payload["createManaged"]["truth"]["kind"], "truth")
         self.assertEqual(payload["createManaged"]["projection"]["kind"], "projection")
         self.assertNotIn("telemetry", payload["createManaged"]["truth"])
-        self.assertEqual(payload["runTask"]["taskId"], "task-native-1")
-        self.assertEqual(payload["runTask"]["flowId"], "flow-native-1")
+        self.assertEqual(payload["runTask"]["taskId"], "native-task-77")
+        self.assertEqual(payload["runTask"]["flowId"], "native-flow-42")
         self.assertEqual(payload["runTask"]["runtime"], "openclaw-native")
         self.assertEqual(payload["runTask"]["syncMode"], "managed")
-        self.assertEqual(payload["runTask"]["substrateState"], "planned")
-        self.assertEqual(payload["runTask"]["substrateRevision"], 0)
+        self.assertEqual(payload["runTask"]["substrateState"], "running")
+        self.assertEqual(payload["runTask"]["substrateRevision"], 7)
         self.assertEqual(payload["runTask"]["ownership"]["claimOwner"], "owner-native-1")
         self.assertEqual(payload["runTask"]["scope"]["workspaceMode"], "shared_workspace")
+        self.assertEqual(payload["bindWorkflow"]["taskId"], "native-task-77")
+        self.assertEqual(payload["bindWorkflow"]["flowId"], "native-flow-42")
+        self.assertEqual(payload["bindWorkflow"]["substrateState"], "running")
+        self.assertEqual(payload["bindWorkflow"]["substrateRevision"], 7)
         self.assertEqual(payload["bindWorkflow"]["truth"]["kind"], "truth")
         self.assertEqual(payload["bindWorkflow"]["projection"]["kind"], "projection")
 
