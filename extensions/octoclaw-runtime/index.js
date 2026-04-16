@@ -13,15 +13,20 @@ import {
   buildDirectLookupGuard,
   __conversationControlTest,
 } from "./conversation-control.js";
+import { judgePolicy } from "../../packages/octoclaw-policy/src/judge/index.ts";
 import { buildDecision as buildPolicyDecision } from "./policy/decide.js";
 import { loadOctoClawConfig, resolveRuntimeFeatureFlags } from "./policy/config.js";
 import { invokePolicyJudge } from "./policy/judge.js";
 import { invokeCompoundPlanner } from "./policy/planner.js";
-import { scheduleCompoundPlan, evaluateGuard } from "./policy/compound_plan.js";
-import { buildCompoundDecisions } from "./policy/decide.js";
-import { executeCompoundPlan, ledgerToJSON } from "./policy/compound_executor.js";
 import { buildRouteOutcome } from "./policy/outcome.js";
 import { extractFeatures, inferRoute } from "./policy/route.js";
+
+const PHASE_TWO_LIVE_ROUTES = new Set(["reply", "delegate.single", "observe"]);
+const PHASE_TWO_ROUTE_MAP = {
+  reply: "direct",
+  "delegate.single": "spawn_single",
+  observe: "runner",
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2695,6 +2700,118 @@ function buildDecision(task, options = {}) {
   });
 }
 
+function normalizeWorkspaceMode(value, fallback = "shared_workspace") {
+  const candidate = String(value || "").trim();
+  return ["isolated_workspace", "shared_workspace", "read_only_workspace"].includes(candidate)
+    ? candidate
+    : fallback;
+}
+
+function buildPhaseTwoPolicyInput(prompt, metadata = {}) {
+  const requestedRoute = String(
+    metadata?.requested_route
+      || metadata?.route
+      || metadata?.requestedRoute
+      || "",
+  ).trim();
+  const queueBudget = Number(metadata?.queueBudget ?? metadata?.queue_budget ?? 1);
+  const inflightCount = Number(metadata?.inflightCount ?? metadata?.inflight_count ?? 0);
+  const capabilitySatisfied = metadata?.capabilitySatisfied ?? metadata?.capability_satisfied;
+  const writeConflict = metadata?.writeConflict ?? metadata?.write_conflict;
+
+  return {
+    requestedRoute: requestedRoute || undefined,
+    workType: ["research", "code", "review"].includes(String(metadata?.workType || "").trim())
+      ? String(metadata.workType).trim()
+      : undefined,
+    hardBoundaryControl: Boolean(metadata?.conversation_control?.required || metadata?.hardBoundaryControl),
+    requiresObservation: Boolean(metadata?.requiresObservation || metadata?.conversation_control?.intent_class === "execution_followup"),
+    requiresDelegation: Boolean(metadata?.requiresDelegation),
+    workspaceMode: normalizeWorkspaceMode(metadata?.workspaceMode || metadata?.workspace_mode),
+    queueBudget: Number.isFinite(queueBudget) ? Math.max(queueBudget, 0) : 1,
+    inflightCount: Number.isFinite(inflightCount) ? Math.max(inflightCount, 0) : 0,
+    capabilitySatisfied: typeof capabilitySatisfied === "boolean" ? capabilitySatisfied : true,
+    writeConflict: typeof writeConflict === "boolean" ? writeConflict : false,
+  };
+}
+
+function applyPhaseTwoLivePathPolicy(decision, metadata = {}, prompt = "") {
+  const tsJudgeInput = buildPhaseTwoPolicyInput(prompt, metadata);
+  const tsPolicyDecision = judgePolicy(tsJudgeInput);
+  const liveRoute = String(tsPolicyDecision?.route || "").trim();
+  const mappedRoute = PHASE_TWO_ROUTE_MAP[liveRoute] || "direct";
+  const compoundRequest = metadata?.compound_plan;
+  const blockedCompound = Boolean(compoundRequest) || !PHASE_TWO_LIVE_ROUTES.has(String(metadata?.requested_route || metadata?.route || "").trim());
+
+  metadata.ts_policy_judge = {
+    input: tsJudgeInput,
+    decision: tsPolicyDecision,
+    live_path_phase: "phase2",
+    allowed_routes: ["reply", "delegate.single", "observe"],
+  };
+
+  if (blockedCompound) {
+    metadata.compound_plan = compoundRequest || null;
+    metadata.compound_plan_blocked = {
+      status: tsPolicyDecision.admission.admission === "allow" ? "blocked" : "deferred",
+      reason: tsPolicyDecision.admission.reason || "compound_route_not_available_on_phase2_live_path",
+      requestedRoute: String(metadata?.requested_route || metadata?.route || "delegate.compound").trim() || "delegate.compound",
+      enforcedLiveRoute: liveRoute,
+      executed: false,
+    };
+  }
+
+  const nextDecision = decision && typeof decision === "object" ? { ...decision } : {};
+  const priorRouteDecision = nextDecision.route_decision && typeof nextDecision.route_decision === "object"
+    ? nextDecision.route_decision
+    : {};
+  nextDecision.route_decision = {
+    ...priorRouteDecision,
+    route: mappedRoute,
+    system_preferred_route: mappedRoute,
+    worker_pool: tsPolicyDecision.backend === "main"
+      ? "octoclaw-main"
+      : tsPolicyDecision.backend === "observer"
+        ? "octoclaw-observer"
+        : "octoclaw-worker",
+    work_type: tsJudgeInput.workType || priorRouteDecision.work_type || "research",
+    phase: priorRouteDecision.phase || "execute",
+    protocol: priorRouteDecision.protocol || "normal",
+    task_class: liveRoute === "observe"
+      ? "control_observer"
+      : liveRoute === "delegate.single"
+        ? "delegated_single"
+        : (priorRouteDecision.task_class || "main_direct"),
+    protected_lane: liveRoute === "observe" ? "control_observer" : "",
+    dispatch_required: liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
+    reason: tsPolicyDecision.admission.reason,
+    reason_codes: Array.from(new Set([
+      ...(Array.isArray(priorRouteDecision.reason_codes) ? priorRouteDecision.reason_codes : []),
+      `ts_policy_route:${liveRoute}`,
+      `ts_policy_backend:${tsPolicyDecision.backend}`,
+      `ts_policy_profile:${tsPolicyDecision.modelProfile}`,
+      `ts_policy_admission:${tsPolicyDecision.admission.admission}`,
+      blockedCompound ? "compound_plan_blocked_phase2_live_path" : "",
+    ].filter(Boolean))),
+  };
+  nextDecision.model_policy = {
+    ...(nextDecision.model_policy && typeof nextDecision.model_policy === "object" ? nextDecision.model_policy : {}),
+    worker_pool: nextDecision.route_decision.worker_pool,
+    profile: tsPolicyDecision.modelProfile,
+  };
+  nextDecision.tool_policy = {
+    ...(nextDecision.tool_policy && typeof nextDecision.tool_policy === "object" ? nextDecision.tool_policy : {}),
+    must_delegate_via: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
+    allow_direct_tools: liveRoute === "reply",
+    delegate_first: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow",
+  };
+  nextDecision.ts_policy_judge = metadata.ts_policy_judge;
+  if (blockedCompound) {
+    nextDecision.compound_plan_blocked = metadata.compound_plan_blocked;
+  }
+  return nextDecision;
+}
+
 async function resolveStatelessPolicyDecision(task, options = {}) {
   const prompt = String(task || "").trim();
   const metadata = enrichConversationControlMetadata(prompt, options?.metadata || {});
@@ -2833,13 +2950,13 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
   });
   if (compoundPlannerResult?.decision_mode === "compound_plan" && compoundPlannerResult.plan) {
     metadata.compound_plan = compoundPlannerResult.plan;
-    const compoundDecisions = buildCompoundDecisions(compoundPlannerResult.plan, prompt, { command, metadata });
-    const compoundLedger = await executeCompoundPlan(compoundPlannerResult.plan, compoundDecisions, {
-      dispatchFn: async (decision) => ({ status: "dispatched", task_id: null, runner_job_id: null }),
-      materializeFn: async (decision, dispatchResult) => dispatchResult || {},
-      logger,
-    });
-    metadata.compound_plan_ledger = ledgerToJSON(compoundLedger);
+    metadata.compound_plan_blocked = {
+      status: "blocked",
+      reason: "compound_plan_not_available_on_phase2_live_path",
+      requestedRoute: "delegate.compound",
+      executed: false,
+      deferredUntilPhase: "03",
+    };
   }
   const judgeResult = await invokePolicyJudge({
     task: prompt,
@@ -2853,7 +2970,7 @@ async function resolvePolicyDecisionForContext(prompt, ctx, cwd, logger, options
     metadata.policy_judge_result = judgeResult;
   }
   try {
-    const decision = buildDecision(prompt, { metadata });
+    const decision = applyPhaseTwoLivePathPolicy(buildDecision(prompt, { metadata }), metadata, prompt);
     const nextState = {
       prompt,
       decision,
