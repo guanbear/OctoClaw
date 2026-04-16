@@ -35,11 +35,13 @@ Plans:
   2. Runtime contracts include idempotency, claim and lease ownership, delivery receipts, telemetry, and workspace scope metadata.
   3. The runtime core owns ACK, task materialization, deadlines, outbox delivery, and single-owner execution semantics.
   4. Delegated tasks carry read scope, write scope, and workspace mode so overlapping shared-workspace writes do not execute concurrently by default.
-**Plans**: 2 plans
+**Plans**: 4 plans
 
 Plans:
 - [x] 02-01: Define TS contracts and guarded policy core
 - [x] 02-02: Build runtime ownership and safe delegation primitives
+- [ ] 02-03: Wire the shipped runtime path to the TS policy judge and gate compound routing
+- [ ] 02-04: Close runtime-core ownership and delegation metadata gaps
 
 ### Phase 3: Native Substrate and Operator Surfaces
 **Goal**: Replace the formal Python runtime path with TypeScript runtime adapters that bind to OpenClaw native task and flow truth, then rebuild operator and IM surfaces on top of substrate-first projections.
