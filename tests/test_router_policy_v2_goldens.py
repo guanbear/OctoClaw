@@ -39,6 +39,14 @@ const payload = await Promise.all(tasks.map(async (task) => {{
     ack_required: decision.router_decision_v2.ack.required,
     validation_passed: decision.router_decision_v2.validation.passed,
     validation_problems: decision.router_decision_v2.validation.problems,
+    route_recommendation_schema: decision.route_recommendation.schema_version,
+    route_recommendation_route: decision.route_recommendation.recommended_route,
+    route_recommendation_work_contract: decision.route_recommendation.work_contract_hint,
+    route_recommendation_arbitration: decision.route_recommendation.arbitration,
+    route_recommendation_top_candidates: decision.route_recommendation.top_candidates,
+    budget_recommendation_schema: decision.budget_recommendation.schema_version,
+    budget_recommendation_consistency: decision.budget_recommendation.consistency,
+    auto_router_schema: decision.auto_router.schema_version,
     turn_id: decision.correlation.turn_id,
     decision_id: decision.correlation.decision_id
   }};
@@ -86,6 +94,18 @@ class RouterPolicyV2GoldensTests(unittest.TestCase):
                 self.assertEqual(decision["ack_required"], expected["ack_required"])
                 self.assertEqual(decision["latency_ack_required"], expected.get("latency_ack_required", False))
                 self.assertTrue(decision["validation_passed"], decision["validation_problems"])
+                self.assertEqual(decision["route_recommendation_schema"], "octoclaw.route_recommendation/v1")
+                self.assertEqual(decision["budget_recommendation_schema"], "octoclaw.budget_recommendation/v1")
+                self.assertEqual(decision["route_recommendation_route"], decision["route"])
+                self.assertEqual(decision["route_recommendation_work_contract"], expected["work_contract"])
+                self.assertIn("required", decision["route_recommendation_arbitration"])
+                self.assertIn("strategy", decision["route_recommendation_arbitration"])
+                self.assertIn("resolved_by", decision["route_recommendation_arbitration"])
+                self.assertIn("conflict_type", decision["route_recommendation_arbitration"])
+                self.assertIsInstance(decision["route_recommendation_top_candidates"], list)
+                self.assertIn("route_budget_consistent", decision["budget_recommendation_consistency"])
+                self.assertIn("route_matches_worker_budget", decision["budget_recommendation_consistency"])
+                self.assertTrue(str(decision["auto_router_schema"]).startswith("octoclaw.auto_router."))
                 self.assertTrue(decision["turn_id"].startswith("turn-"))
                 self.assertTrue(decision["decision_id"].startswith("decision-"))
 
