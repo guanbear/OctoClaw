@@ -64,6 +64,12 @@ class AcceptanceRuntimeTests(unittest.TestCase):
             self.assertTrue((target_home / "agents" / "main" / "agent" / "auth-profiles.json").exists())
             self.assertTrue((target_home / "agents" / "main" / "agent" / "models.json").exists())
             self.assertTrue((target_workspace / "tmp" / "octopus").exists())
+            self.assertTrue((target_home / "agents" / "main" / "sessions").exists())
+            self.assertIn(str(target_home / "openclaw.json"), result["copied_files"])
+            self.assertIn(str(target_home / "agents" / "main" / "agent" / "auth-profiles.json"), result["copied_files"])
+            self.assertIn(str(target_home / "agents" / "main" / "agent" / "models.json"), result["copied_files"])
+            self.assertTrue(str(result["target_openclaw_home"]).endswith("target-home"))
+            self.assertTrue(str(result["target_workspace"]).endswith("target-workspace"))
 
 
 if __name__ == "__main__":

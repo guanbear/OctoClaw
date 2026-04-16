@@ -21,7 +21,10 @@ class HarnessGateTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["preset"], "quick")
         self.assertIn("tests.test_router_policy_v2_goldens", payload["modules"])
+        self.assertIn("tests.test_route_goldens", payload["modules"])
         self.assertIn("tests.test_policy_judge_shadow_report", payload["modules"])
+        self.assertIn("tests.test_replay_validation", payload["modules"])
+        self.assertIn("tests.test_acceptance_runtime", payload["modules"])
         self.assertIn("tests.test_runner_runtime", payload["modules"])
         self.assertIn("tests.test_octoclaw_runtime_extension", payload["modules"])
 
@@ -36,6 +39,9 @@ class HarnessGateTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["preset"], "full")
         self.assertIn("tests.test_replay_automation", payload["modules"])
+        self.assertIn("tests.test_replay_validation", payload["modules"])
+        self.assertIn("tests.test_delivery_relay_reconcile", payload["modules"])
+        self.assertIn("tests.test_acceptance_runtime", payload["modules"])
         self.assertIn("tests.test_task_anchor_commands", payload["modules"])
         self.assertGreater(len(payload["modules"]), 7)
 
