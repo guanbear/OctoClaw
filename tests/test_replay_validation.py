@@ -131,17 +131,47 @@ class ReplayValidationTests(unittest.TestCase):
                 ],
                 findings=["empty_reply"],
             ),
+            CaseResult(
+                agent="a3",
+                session_id="s3",
+                prompt="stale recovery case",
+                return_code=0,
+                reply_text="ok",
+                stderr_tail="",
+                new_tasks=[],
+                replay_events=[
+                    {
+                        "event": "agent_end",
+                        "routeBudgetConsistent": True,
+                        "routeOutcome": {
+                            "execution_contract": "runner",
+                            "resolved_execution_contract": "runner",
+                            "route_class": "recovery",
+                            "fallback_taken": True,
+                        },
+                        "staleRecovery": True,
+                    }
+                ],
+                findings=["duplicate_delivery_pending"],
+            ),
         ]
         payload = summarize_route_outcomes(cases)
-        self.assertEqual(payload["cases_total"], 2)
-        self.assertEqual(payload["cases_with_outcome"], 2)
+        self.assertEqual(payload["cases_total"], 3)
+        self.assertEqual(payload["cases_with_outcome"], 3)
         self.assertTrue(payload["coverage_complete"])
-        self.assertEqual(payload["route_correct_cases"], 1)
-        self.assertEqual(payload["budget_correct_cases"], 1)
+        self.assertEqual(payload["route_correct_cases"], 2)
+        self.assertEqual(payload["budget_correct_cases"], 2)
         self.assertEqual(payload["delivery_correct_cases"], 1)
-        self.assertEqual(payload["fallback_taken_count"], 1)
-        self.assertEqual(payload["execution_contract_counts"]["runner"], 1)
+        self.assertEqual(payload["fallback_taken_count"], 2)
+        self.assertEqual(payload["stale_recovery_count"], 1)
+        self.assertEqual(payload["delivery_failure_cases"], 2)
+        self.assertEqual(payload["execution_contract_mismatch_cases"], 1)
+        self.assertEqual(payload["unresolved_fallback_cases"], 2)
+        self.assertEqual(payload["execution_contract_counts"]["runner"], 2)
         self.assertEqual(payload["execution_contract_counts"]["spawn_single"], 1)
+        self.assertEqual(payload["evidence"][1]["delivery_findings"], ["empty_reply"])
+        self.assertTrue(payload["evidence"][2]["stale_recovery"])
+        self.assertTrue(payload["evidence"][2]["fallback_unresolved"])
 
 
 if __name__ == "__main__":
