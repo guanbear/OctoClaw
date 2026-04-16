@@ -1,4 +1,4 @@
-import type { PolicyRole } from "../../../../packages/octoclaw-policy/src/roles";
+import type { PolicyRole } from "../../../../packages/octoclaw-policy/src/roles/index.ts";
 
 export interface DelegationProfile {
   id: PolicyRole;

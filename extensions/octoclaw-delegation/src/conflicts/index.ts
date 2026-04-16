@@ -1,4 +1,4 @@
-import type { WorkspaceMode } from "../../../../packages/octoclaw-contracts/src/schemas";
+import type { WorkspaceMode } from "../../../../packages/octoclaw-contracts/src/schemas.ts";
 
 export interface ConflictDecision {
   workspaceMode: WorkspaceMode;
