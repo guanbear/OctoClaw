@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-04-16T11:33:58.514Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-04-16T12:38:58.453Z"
 last_activity: 2026-04-16
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 8
+  completed_plans: 8
   percent: 100
 ---
 
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03 P01 | 8 min | 2 tasks | 8 files |
 | Phase 03 P02 | 4 min | 2 tasks | 6 files |
 | Phase 03 P03 | 10 min | 2 tasks | 9 files |
+| Phase 03 P04 | 5 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 03]: Let status summaries treat projection-backed substrate task ids as tracked/native-bound evidence so operator reporting remains correct even when legacy `openclaw_taskflow` mirror fields are absent. — Projection-backed substrate ids and delivery state are now reliable shared read-model inputs, so status renderers should use them before falling back to legacy mirror-only fields.
 - [Phase 03]: User-facing IM task surfaces now expose a projection block sourced from the same anchor/projection fields used by operator surfaces, avoiding a second IM-owned truth family.
 - [Phase 03]: Shared projection facts are extracted in policy/intent.js and rendered in conversation-control.js so grounded follow-up answers cite one read model regardless of whether the user asks from IM or operator channels.
+- [Phase 03]: The TS adapter now shells out through one native-helper bridge and rejects malformed helper responses instead of fabricating native truth defaults.
+- [Phase 03]: Plugin and wrapper seams accept helper invoker injection so tests can assert native-backed truth delegation without introducing a second truth authority.
 
 ### Pending Todos
 
@@ -99,6 +102,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T11:33:58.511Z
-Stopped at: Completed 03-03-PLAN.md
+Last session: 2026-04-16T12:38:45.808Z
+Stopped at: Completed 03-04-PLAN.md
 Resume file: None
