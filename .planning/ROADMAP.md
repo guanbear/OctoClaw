@@ -56,7 +56,7 @@ Plans:
 Plans:
 - [x] 03-01: Cut over the formal runtime truth path to the TS-native OpenClaw adapter
 - [x] 03-02: Build shared substrate projections and rebind operator surfaces
-- [ ] 03-03: Rebind IM and display surfaces to the shared projection contracts
+- [x] 03-03: Rebind IM and display surfaces to the shared projection contracts
 
 ### Phase 4: Eval Gates and Advanced Routing
 **Goal**: Put preflight, golden, replay, and black-box acceptance gates on the critical path, then add richer routing and optimization capabilities only after the rebuild core is measurable and safe.

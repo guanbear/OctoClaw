@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-04-16T11:22:27.964Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-04-16T11:33:58.514Z"
 last_activity: 2026-04-16
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 7
-  completed_plans: 6
-  percent: 86
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02 P03 | 1 min | 2 tasks | 3 files |
 | Phase 03 P01 | 8 min | 2 tasks | 8 files |
 | Phase 03 P02 | 4 min | 2 tasks | 6 files |
+| Phase 03 P03 | 10 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,8 @@ Progress: [░░░░░░░░░░] 0%
 - [Phase 03]: The shipped runtime wrapper records TS plugin-derived runtime_truth metadata as the formal native truth authority instead of reconstructing a second truth model.
 - [Phase 03]: Centralized operator-surface truth shaping in `build_substrate_surface_projection()` instead of expanding per-renderer enrichment helpers, so queue, details, and timeline all consume the same contract. — One projection builder keeps status, details, queue, and timeline on the same substrate-first read model and prevents renderer-specific truth reconstruction.
 - [Phase 03]: Let status summaries treat projection-backed substrate task ids as tracked/native-bound evidence so operator reporting remains correct even when legacy `openclaw_taskflow` mirror fields are absent. — Projection-backed substrate ids and delivery state are now reliable shared read-model inputs, so status renderers should use them before falling back to legacy mirror-only fields.
+- [Phase 03]: User-facing IM task surfaces now expose a projection block sourced from the same anchor/projection fields used by operator surfaces, avoiding a second IM-owned truth family.
+- [Phase 03]: Shared projection facts are extracted in policy/intent.js and rendered in conversation-control.js so grounded follow-up answers cite one read model regardless of whether the user asks from IM or operator channels.
 
 ### Pending Todos
 
@@ -96,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T11:21:46.282Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-04-16T11:33:58.511Z
+Stopped at: Completed 03-03-PLAN.md
 Resume file: None
