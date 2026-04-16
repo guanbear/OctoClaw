@@ -48,6 +48,79 @@ console.log(JSON.stringify(value));
 
 
 class OctoClawRuntimeExtensionTests(unittest.TestCase):
+    def test_runtime_wrapper_exports_ts_native_truth_delegation_metadata(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const workflow = {
+                  requestId: 'req-runtime-native-1',
+                  taskId: 'task-runtime-native-1',
+                  flowId: 'flow-runtime-native-1',
+                  ingressOrchestration: 'accepted',
+                  workflowOrchestration: 'running',
+                  reconcileOrRecovery: 'idle',
+                  deadlines: {},
+                  claim: {
+                    claimOwner: 'owner-runtime-native-1',
+                    claimToken: 'claim-runtime-native-1',
+                    leaseDurationMs: 30000,
+                    leaseExpiresAt: '2026-04-16T00:00:00.000Z'
+                  },
+                  outbox: {},
+                  ackLedger: {},
+                  scope: {
+                    readScope: [{ resource: 'docs', access: 'read' }],
+                    writeScope: [{ resource: 'workspace', access: 'write' }],
+                    workspaceMode: 'shared_workspace',
+                    writeScopeSummary: 'workspace'
+                  },
+                  taskMaterialization: {
+                    requestId: 'req-runtime-native-1',
+                    taskId: 'task-runtime-native-1',
+                    flowId: 'flow-runtime-native-1',
+                    claimOwner: 'owner-runtime-native-1',
+                    claimToken: 'claim-runtime-native-1',
+                    leaseExpiresAt: '2026-04-16T00:00:00.000Z',
+                    taskPacketRef: 'flow-runtime-native-1:task-runtime-native-1:claim-runtime-native-1'
+                  }
+                };
+                return __octoclawTest.buildRuntimeTruthMetadata?.(workflow) ?? null;
+            })()"""
+        )
+
+        self.assertEqual(payload["authority"], "ts-native-adapter")
+        self.assertEqual(payload["pluginName"], "octoclaw-runtime-ts")
+        self.assertEqual(payload["binding"]["flowId"], "flow-runtime-native-1")
+        self.assertEqual(payload["binding"]["taskId"], "task-runtime-native-1")
+        self.assertEqual(payload["binding"]["runtime"], "openclaw-native")
+        self.assertEqual(payload["binding"]["syncMode"], "managed")
+        self.assertEqual(payload["binding"]["substrateState"], "running")
+        self.assertEqual(payload["binding"]["truth"]["kind"], "truth")
+        self.assertEqual(payload["binding"]["projection"]["kind"], "projection")
+
+    def test_runtime_wrapper_records_ts_native_truth_on_policy_decision_metadata(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const metadata = {
+                  requested_route: 'delegate.single',
+                  requiresDelegation: true,
+                  workspaceMode: 'shared_workspace'
+                };
+                const decision = __octoclawTest.buildDecision('research the runtime cutover', { metadata });
+                const applied = __octoclawTest.applyPhaseTwoLivePathPolicy?.(decision, metadata, 'research the runtime cutover') ?? decision;
+                return {
+                  runtimeTruth: metadata.runtime_truth,
+                  decisionRuntimeTruth: applied.runtime_truth,
+                  blocked: applied.compound_plan_blocked || null
+                };
+            })()"""
+        )
+
+        self.assertEqual(payload["runtimeTruth"]["authority"], "ts-native-adapter")
+        self.assertEqual(payload["decisionRuntimeTruth"]["authority"], "ts-native-adapter")
+        self.assertEqual(payload["runtimeTruth"]["pluginName"], "octoclaw-runtime-ts")
+        self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["runtime"], "openclaw-native")
+        self.assertEqual(payload["decisionRuntimeTruth"]["binding"]["truth"]["kind"], "truth")
+
     def test_runtime_paths_prefer_managed_openclaw_workspace_layout(self) -> None:
         import tempfile
 

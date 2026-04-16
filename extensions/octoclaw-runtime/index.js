@@ -14,6 +14,7 @@ import {
   __conversationControlTest,
 } from "./conversation-control.js";
 import { judgePolicy } from "../../packages/octoclaw-policy/src/judge/index.ts";
+import { createOctoClawRuntimePlugin } from "./src/plugin.ts";
 import { buildDecision as buildPolicyDecision } from "./policy/decide.js";
 import { loadOctoClawConfig, resolveRuntimeFeatureFlags } from "./policy/config.js";
 import { invokePolicyJudge } from "./policy/judge.js";
@@ -27,6 +28,60 @@ const PHASE_TWO_ROUTE_MAP = {
   "delegate.single": "spawn_single",
   observe: "runner",
 };
+
+function buildRuntimeTruthWorkflowStub(metadata = {}) {
+  const workspaceMode = normalizeWorkspaceMode(metadata?.workspaceMode || metadata?.workspace_mode || "shared_workspace");
+  const taskId = String(metadata?.taskId || metadata?.task_id || metadata?.native_task_id || metadata?.requestId || metadata?.request_id || "runtime-task").trim() || "runtime-task";
+  const flowId = String(metadata?.flowId || metadata?.flow_id || metadata?.requestId || metadata?.request_id || "runtime-flow").trim() || "runtime-flow";
+  const requestId = String(metadata?.requestId || metadata?.request_id || taskId).trim() || taskId;
+  const claimOwner = String(metadata?.claimOwner || metadata?.claim_owner || metadata?.controllerId || metadata?.controller_id || "runtime-wrapper").trim() || "runtime-wrapper";
+  const claimToken = String(metadata?.claimToken || metadata?.claim_token || `${taskId}-claim`).trim() || `${taskId}-claim`;
+  return {
+    requestId,
+    taskId,
+    flowId,
+    ingressOrchestration: "accepted",
+    workflowOrchestration: metadata?.requiresObservation ? "waiting" : metadata?.requiresDelegation ? "planned" : "running",
+    reconcileOrRecovery: "idle",
+    deadlines: {},
+    claim: {
+      claimOwner,
+      claimToken,
+      leaseDurationMs: 30000,
+      leaseExpiresAt: new Date(Date.now() + 30000).toISOString(),
+    },
+    outbox: {},
+    ackLedger: {},
+    scope: {
+      readScope: Array.isArray(metadata?.readScope) ? metadata.readScope : [],
+      writeScope: Array.isArray(metadata?.writeScope) ? metadata.writeScope : [],
+      workspaceMode,
+      writeScopeSummary: String(metadata?.writeScopeSummary || metadata?.write_scope_summary || "").trim(),
+    },
+    taskMaterialization: {
+      requestId,
+      taskId,
+      flowId,
+      claimOwner,
+      claimToken,
+      leaseExpiresAt: new Date(Date.now() + 30000).toISOString(),
+      taskPacketRef: `${flowId}:${taskId}:${claimToken}`,
+    },
+  };
+}
+
+function buildRuntimeTruthMetadata(workflowOrMetadata = {}) {
+  const plugin = createOctoClawRuntimePlugin();
+  const workflow = workflowOrMetadata && typeof workflowOrMetadata === "object" && "taskMaterialization" in workflowOrMetadata
+    ? workflowOrMetadata
+    : buildRuntimeTruthWorkflowStub(workflowOrMetadata);
+  const binding = plugin.bindWorkflow(workflow);
+  return {
+    authority: "ts-native-adapter",
+    pluginName: plugin.name,
+    binding,
+  };
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2749,6 +2804,14 @@ function applyPhaseTwoLivePathPolicy(decision, metadata = {}, prompt = "") {
     live_path_phase: "phase2",
     allowed_routes: ["reply", "delegate.single", "observe"],
   };
+  metadata.runtime_truth = buildRuntimeTruthMetadata({
+    ...metadata,
+    requestId: metadata?.requestId || metadata?.request_id || stableId("runtime", [prompt, liveRoute]),
+    taskId: metadata?.taskId || metadata?.task_id || stableId("task", [prompt, liveRoute]),
+    flowId: metadata?.flowId || metadata?.flow_id || stableId("flow", [prompt, liveRoute]),
+    requiresDelegation: liveRoute === "delegate.single",
+    requiresObservation: liveRoute === "observe",
+  });
 
   if (blockedCompound) {
     metadata.compound_plan = compoundRequest || null;
@@ -2806,6 +2869,7 @@ function applyPhaseTwoLivePathPolicy(decision, metadata = {}, prompt = "") {
     delegate_first: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow",
   };
   nextDecision.ts_policy_judge = metadata.ts_policy_judge;
+  nextDecision.runtime_truth = metadata.runtime_truth;
   if (blockedCompound) {
     nextDecision.compound_plan_blocked = metadata.compound_plan_blocked;
   }
@@ -4279,6 +4343,8 @@ export const __octoclawTest = {
   resolveStatelessPolicyDecision,
   buildConversationGrounding,
   buildDirectLookupGuard,
+  buildRuntimeTruthMetadata,
+  applyPhaseTwoLivePathPolicy,
   __conversationControlTest,
   __setPolicyState: setPolicyStateForContext,
   __resetPolicyState: () => {
