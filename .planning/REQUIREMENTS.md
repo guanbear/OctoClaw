@@ -17,13 +17,13 @@
 
 ### Runtime Ownership
 
-- [ ] **RT-01**: The runtime core owns ACK, task materialization, deadline checks, outbox delivery, and single-owner execution semantics.
+- [x] **RT-01**: The runtime core owns ACK, task materialization, deadline checks, outbox delivery, and single-owner execution semantics.
 - [ ] **RT-02**: Execution truth, projections, artifacts, and telemetry are treated as separate planes so optimization and display data cannot overwrite live truth.
 
 ### Delegation Safety
 
-- [ ] **SAFE-01**: Delegated work carries idempotency keys, delivery receipts, claim and lease metadata, and backpressure-aware admission control.
-- [ ] **SAFE-02**: Delegated work carries read scope, write scope, and workspace mode, and overlapping shared-workspace writes are serialized by default.
+- [x] **SAFE-01**: Delegated work carries idempotency keys, delivery receipts, claim and lease metadata, and backpressure-aware admission control.
+- [x] **SAFE-02**: Delegated work carries read scope, write scope, and workspace mode, and overlapping shared-workspace writes are serialized by default.
 
 ### Native Runtime and Surfaces
 
@@ -57,10 +57,10 @@
 | BASE-02 | Phase 1 | Pending |
 | CTRT-01 | Phase 2 | Complete |
 | POL-01 | Phase 2 | Complete |
-| RT-01 | Phase 2 | Pending |
+| RT-01 | Phase 2 | Complete |
 | RT-02 | Phase 2 | Pending |
-| SAFE-01 | Phase 2 | Pending |
-| SAFE-02 | Phase 2 | Pending |
+| SAFE-01 | Phase 2 | Complete |
+| SAFE-02 | Phase 2 | Complete |
 | NATIVE-01 | Phase 3 | Pending |
 | SURF-01 | Phase 3 | Pending |
 | EVAL-01 | Phase 4 | Pending |

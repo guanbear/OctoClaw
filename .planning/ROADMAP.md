@@ -39,7 +39,7 @@ Plans:
 
 Plans:
 - [x] 02-01: Define TS contracts and guarded policy core
-- [ ] 02-02: Build runtime ownership and safe delegation primitives
+- [x] 02-02: Build runtime ownership and safe delegation primitives
 
 ### Phase 3: Native Substrate and Operator Surfaces
 **Goal**: Replace the formal Python runtime path with TypeScript runtime adapters that bind to OpenClaw native task and flow truth, then rebuild operator and IM surfaces on top of substrate-first projections.
