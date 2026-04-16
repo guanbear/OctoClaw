@@ -70,8 +70,9 @@ function buildRuntimeTruthWorkflowStub(metadata = {}) {
   };
 }
 
-function buildRuntimeTruthMetadata(workflowOrMetadata = {}) {
-  const plugin = createOctoClawRuntimePlugin();
+function buildRuntimeTruthMetadata(workflowOrMetadata = {}, options = {}) {
+  const helperInvoker = options?.helperInvoker || workflowOrMetadata?.helperInvoker;
+  const plugin = createOctoClawRuntimePlugin(helperInvoker ? { helperInvoker } : {});
   const workflow = workflowOrMetadata && typeof workflowOrMetadata === "object" && "taskMaterialization" in workflowOrMetadata
     ? workflowOrMetadata
     : buildRuntimeTruthWorkflowStub(workflowOrMetadata);
