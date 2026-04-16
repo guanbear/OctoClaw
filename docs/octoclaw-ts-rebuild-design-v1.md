@@ -454,6 +454,103 @@ OpenHarness 最值得借的方向是：
 1. live path 不要无边界地把所有知识和控制逻辑塞给模型。
 2. tool / skill / policy 都应该按需、显式、可审计地进入上下文。
 
+## 5.6 Hermes Agent：借长驻形态与技能沉淀，不借闭环自增殖
+
+Hermes Agent 现在热度很高，我看了它的公开 README 和相关页面后，认为它最值得借的不是“自我进化”口号，而是这几件更工程化的东西：
+
+1. long-running agent 的运行形态
+2. CLI + messaging gateway 的统一入口
+3. skills / context files / memory 的显式载体
+4. 可替换 terminal backends
+5. 对多 provider / 多模型切换的产品化包装
+
+对 OctoClaw 最有价值的借鉴点有 4 个：
+
+### 5.6.1 Agent lives beyond one terminal session
+
+Hermes 的一个强点是：它不是把 agent 绑定在某个 IDE 窗口里，而是把 agent 视为一个能跨 CLI、聊天平台、远程环境延续的实体。
+
+这对 OctoClaw 的启发是：
+
+1. `thread/session` 必须是一等对象
+2. session continuity 要靠 substrate truth + summaries + artifacts
+3. “主进程退出了”不应等于“任务身份消失了”
+
+但这里要注意：
+
+> **我们要借的是 continuity，不是把常驻进程重新变成架构前提。**
+
+### 5.6.2 Skills / context files 要做成显式工件
+
+Hermes 很强调 skills、context files、持久化记忆这些“可见载体”。
+
+这和 OctoClaw 当前方向是相容的，但要收敛成：
+
+1. `TaskPacket`
+2. `artifact refs`
+3. `summary / checkpoint`
+4. future skill / context file interface
+
+也就是：
+
+1. 经验沉淀成显式工件
+2. 工件可以复用、可审计、可回放
+3. 不能把“记忆”做成又一套不透明真相源
+
+### 5.6.3 多执行面是 backend 问题，不是 policy 真相
+
+Hermes 支持 local / Docker / SSH / Modal / Singularity / messaging gateway 等多执行面，这一点很强。
+
+对 OctoClaw 的启发是：
+
+1. `hands` 应该是可替换 backend
+2. runtime core 不该和某一种执行面焊死
+3. gateway / chat surface / remote environment 都应该是 adapter
+
+这和我们现在把：
+
+1. `backend`
+2. `workspace_mode`
+3. `coordination_mode`
+
+分开的方向是一致的。
+
+### 5.6.4 产品层的模型切换体验值得学，但路由权不能回到 UI
+
+Hermes 在“切 provider / 切 model 很顺滑”这件事上产品感很强。
+
+这对 OctoClaw 的启发是：
+
+1. model profile -> model id 映射应该产品化
+2. provider slots 应该是正式接口
+3. 后面 auto router 才能在不改主逻辑的情况下接进来
+
+但不能学的是：
+
+1. 让用户界面上的临时切模重新变成 live path 真相
+2. 让 provider 选择绕过 policy / gate / telemetry
+
+### 5.6.5 不该直接照搬的部分
+
+我不建议把 Hermes 下面这些东西直接搬进 OctoClaw v1/v2 主链：
+
+1. “built-in learning loop” 直接进 live hot path
+2. 自主创建/改写 skills 的闭环先进入默认运行面
+3. 持久 memory 直接参与 route authority
+4. 大而全的单 agent 产品面直接压进 core
+
+原因很简单：
+
+1. OctoClaw 当前最缺的是稳定执行骨架，不是更强的长期自进化
+2. learning loop 太早进主链，会显著增加不可解释状态
+3. memory / skill / self-improvement 如果先变成热路径依赖，很容易重新长出第二套隐形真相源
+
+所以对 OctoClaw 的最终结论是：
+
+1. 借 Hermes 的 long-running continuity、gateway、skill/context 工件化、backend 可替换性
+2. 不借 Hermes 的“自增殖学习闭环”进入 v1/v2 主路径
+3. 如果以后要做 skills / context files / memory，也应先作为 artifact / projection / optional plugin 演进
+
 ---
 
 ## 6. Harness Engineering 应该怎么落到 OctoClaw

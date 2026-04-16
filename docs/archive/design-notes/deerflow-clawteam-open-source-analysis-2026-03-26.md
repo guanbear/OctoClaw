@@ -1,4 +1,4 @@
-# DeerFlow / ClawTeam / HiClaw / LangGraph 方向分析 (2026-03-26)
+# DeerFlow / ClawTeam / HiClaw / LangGraph / Hermes 方向分析 (2026-03-26)
 
 ## 1. 先说结论
 
@@ -8,10 +8,11 @@
 2. **DeerFlow 不适合整套嵌进 OpenClaw 当主 runtime，但非常值得借执行哲学。**
 3. **LangGraph 仍有借鉴价值，但更适合借 graph semantics，不适合当前阶段再引入一套新的主 runtime 依赖。**
 4. **HiClaw 有借鉴点，但它更偏透明协作 + IM + 企业安全治理，不是当前 OctoClaw 的最优主线。**
+5. **Hermes 值得借 long-running continuity、gateway 和 skills/context 工件化，但不该把它的 learning loop 直接搬进 OctoClaw 主链。**
 
 一句话版：
 
-> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做工位和任务面，DeerFlow 提供重任务执行思想，LangGraph 做 graph 思想参考。**
+> **OpenClaw 做壳，OctoClaw 做脑，ClawTeam 做工位和任务面，DeerFlow 提供重任务执行思想，LangGraph 做 graph 思想参考，Hermes 提供 long-running continuity 与 gateway 产品面的参考。**
 
 ---
 
@@ -218,6 +219,101 @@ DeerFlow 本身已经是一个基于 LangGraph 的 opinionated harness。
 ---
 
 ## 6. 其他开源项目是否值得借
+
+## 6. Hermes：借 continuity / gateway / skills 工件化，不借 learning loop 进主链
+
+### 6.1 先说边界
+
+这里对 Hermes 的判断主要基于它的公开 README、文档入口和仓库结构。
+
+不是逐文件代码审计。
+
+所以更准确地说，这一节是**产品与架构思想借鉴**，不是 source-level verdict。
+
+### 6.2 Hermes 最值得借的 4 个点
+
+#### 1. agent continuity
+
+Hermes 的一个强项是：它不把 agent 绑定在单一终端里，而是把 agent 当作可以跨 CLI、chat gateway、远程环境延续的实体。
+
+这对 OctoClaw 的启发是：
+
+- `thread/session` 必须是一等对象
+- continuity 依赖 durable state / summaries / artifacts
+- “当前终端没了”不等于“任务身份没了”
+
+但这不等于：
+
+- 要把常驻 daemon 重新变成系统前提
+
+#### 2. gateway / multi-surface 产品化
+
+Hermes 对 CLI + gateway + messaging surfaces 的统一做得很强。
+
+这对 OctoClaw 的启发是：
+
+- CLI / IM / gateway 都应是 adapter
+- 交付协议和状态视图要共用同一套 contract
+- surface 差异不该回流到 runtime truth
+
+#### 3. skills / context files 的显式载体
+
+Hermes 很强调：
+
+- skills
+- context files
+- memory
+
+这些“显式工件”。
+
+这和 OctoClaw 的 `TaskPacket / artifact / summary / checkpoint` 路线是相容的。
+
+真正值得借的是：
+
+- 经验沉淀成显式载体
+- 载体可以复用、审计、回放
+
+不该直接借的是：
+
+- 让 memory / skill 直接参与 live route authority
+
+#### 4. backend 可替换
+
+Hermes 支持多 terminal backends、多 provider、多执行面。
+
+这对 OctoClaw 的启发是：
+
+- `hands` 应该是可替换 backend
+- runtime core 不该和某一执行面焊死
+- provider slots 应该是正式接口
+
+### 6.3 不该照搬的东西
+
+我不建议把 Hermes 下面这些东西直接搬进 OctoClaw v1/v2 主路径：
+
+- built-in learning loop 直接进 live hot path
+- 自主创建/改写 skills 的闭环先变成默认运行面
+- 持久 memory 直接参与 route authority
+- 大而全单 agent 产品面压进 core
+
+原因是：
+
+- OctoClaw 当前最缺的是稳定执行骨架，不是更强的长期自进化
+- learning loop 太早进主链，会显著增加不可解释状态
+- memory / skill / self-improvement 很容易重新长出第二套隐形真相源
+
+### 6.4 对 OctoClaw 的最终结论
+
+Hermes 的价值不在于“要不要照着做一个 Hermes”，而在于它强化了这些判断：
+
+- `thread/session` 作为一等对象是对的
+- `brain / hands / session` 解耦是对的
+- gateway / surface / backend 都应该是可替换层
+- skills / context / memory 如果以后做，应先作为 artifact / projection / optional plugin 演进
+
+一句话：
+
+> **Hermes 值得借 long-running continuity、gateway、skills/context 工件化和 backend 可替换性；不值得把自进化 learning loop 提前搬进 OctoClaw 主链。**
 
 下面按“对 OctoClaw 当前目标的价值”排序。
 
