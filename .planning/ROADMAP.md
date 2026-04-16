@@ -51,10 +51,12 @@ Plans:
   1. OpenClaw native task and flow state is the formal truth plane for execution status.
   2. Status, details, queue, and timeline surfaces read substrate-first projections instead of inferring truth from legacy JSON chains.
   3. IM adapters share the same projection contracts rather than owning their own truth model.
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: Implement native runtime adapter and substrate-first status MVP
+- [ ] 03-01: Cut over the formal runtime truth path to the TS-native OpenClaw adapter
+- [ ] 03-02: Build shared substrate projections and rebind operator surfaces
+- [ ] 03-03: Rebind IM and display surfaces to the shared projection contracts
 
 ### Phase 4: Eval Gates and Advanced Routing
 **Goal**: Put preflight, golden, replay, and black-box acceptance gates on the critical path, then add richer routing and optimization capabilities only after the rebuild core is measurable and safe.
@@ -78,5 +80,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 |-------|----------------|--------|-----------|
 | 1. Rebuild Baseline Alignment | 0/1 | Not started | - |
 | 2. Runtime Core and Safe Delegation | 4/4 | Complete   | 2026-04-16 |
-| 3. Native Substrate and Operator Surfaces | 0/TBD | Not started | - |
+| 3. Native Substrate and Operator Surfaces | 0/3 | Not started | - |
 | 4. Eval Gates and Advanced Routing | 0/TBD | Not started | - |
