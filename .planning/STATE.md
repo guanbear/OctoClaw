@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-04-16T22:29:47.025Z"
+status: verifying
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-04-16T22:56:08.542Z"
 last_activity: 2026-04-16
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 14
-  completed_plans: 13
+  total_plans: 15
+  completed_plans: 14
   percent: 93
 ---
 
@@ -27,7 +27,7 @@ See: `README.md` and canonical docs under `docs/`
 
 Phase: 5 of 5 (Execution Substrate Refactor)
 Plan: 1 of 1 in current phase
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-16
 
 Progress: [█████████░] 92%
@@ -63,6 +63,7 @@ Progress: [█████████░] 92%
 | Phase 04 P02 | 13 min | 2 tasks | 7 files |
 | Phase 04 P03 | 1 pass | 2 tasks | 3 files |
 | Phase 05 P01 | 19 min | 2 tasks | 6 files |
+| Phase 05 P02 | 55min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,9 @@ Progress: [█████████░] 92%
 - [Phase 05]: Execution/workflow state is now rooted in explicit identity, provenance, lifecycle, and checkpoint contracts instead of top-level script-era request/task/flow fields.
 - [Phase 05]: PolicyDecision remains the upstream execution authority, and runtime-core derives route authority and materialization intent from that typed policy output rather than preserving Python CLI payload shapes.
 - [Phase 05]: Native adapter truth payloads now read identity-backed runtime workflow state so truth/projection/artifact/telemetry stay separate while sharing one execution vocabulary.
+- [Phase 05]: Dispatch now starts runtime-core workflow state before direct, runner, or spawn materialization and returns TS-owned fail-closed payloads instead of Python wrapper errors.
+- [Phase 05]: Spawn materialization uses the plugin and adapter seam directly for both task and managed-flow creation, with helper-derived ids and substrate revision preserved in runtime truth.
+- [Phase 05]: Watchdog lifecycle handling now emits timeout and runner heartbeat transitions from runtime-core contracts rather than shelling out to task-state-update.py.
 
 ### Pending Todos
 
@@ -118,6 +122,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T22:29:47.022Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-04-16T22:56:08.539Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None

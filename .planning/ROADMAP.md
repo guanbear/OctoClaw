@@ -86,7 +86,7 @@ Plans:
 
 Plans:
 - [x] 05-01-PLAN.md — Define the canonical execution orchestrator and lifecycle contracts for the refactor
-- [ ] 05-02-PLAN.md — Replace live Python/sh execution authorities with TS-native runtime orchestration
+- [x] 05-02-PLAN.md — Replace live Python/sh execution authorities with TS-native runtime orchestration
 
 ## Progress
 
