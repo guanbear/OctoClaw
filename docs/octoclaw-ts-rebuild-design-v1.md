@@ -2337,6 +2337,64 @@ v1 先把接口做对：
 2. runner window / patrol window
 3. 但这是 operator surface，不是 execution truth
 
+### 9.6.4.a 默认不开 resident runner 时，policy/judge 应如何处理
+
+这里建议再明确一个实现口径：
+
+> **v1 默认假设“没有 resident runner”，这不是异常，而是标准起点。**
+
+因此 route/policy/judge 在主路径里不应该先问“runner 在不在”，而应该先做语义判断，再由 backend planner 落地。
+
+更具体地说：
+
+1. `reply`
+   - 直接走 `direct_main`
+   - 不依赖 runner
+2. `observe`
+   - 默认走 `observer_probe`
+   - 如果需要短探测任务，就物化一个 on-demand 短命 worker
+   - 不要求 resident runner 先健康
+3. `delegate.single`
+   - 默认直接 materialize native task/flow
+   - backend planner 选择 `openclaw-native + on-demand execution`
+   - 不因为没有 resident runner 就回退成主模型硬扛整条长任务
+
+也就是说，**fallback 不是“无 runner 时都改成 direct”**，而是：
+
+1. `reply` 保持 direct
+2. `observe` 保持 observe，只是落到 on-demand
+3. `delegate.single` 保持 delegate.single，只是落到 native substrate + on-demand worker
+
+真正需要回退的是 execution profile，不是 semantic route。
+
+如果发生 backend 不可用或 admission control 拒绝，则再按下面顺序降级：
+
+1. `delegate.single` -> `queued delegate.single`
+2. `queued delegate.single` -> `blocked / waiting capacity`
+3. 只有在任务本身被 small judge 判成“可直接短答”时，才允许改走 `reply`
+
+这条很重要，因为否则系统很容易重新长回：
+
+1. 语义决策被执行条件绑架
+2. 主模型被迫吞下本来该委派的长任务
+3. 首响和质量一起变差
+
+### 9.6.4.b runner 开启时的机制定位
+
+如果用户后面主动开启 resident runner，我建议把它明确成：
+
+1. 一个 **opt-in acceleration lane**
+2. 可以由 shell supervisor / systemd / hosted worker process 承载
+3. 允许挂 tmux workbench 便于人工观察
+4. 但 tmux 从头到尾都只是 operator workbench，不是 runner 必需机制
+
+因此文档里更准确的口径应该是：
+
+1. **runner 默认关闭**
+2. **开启 runner 是性能优化，不是功能前提**
+3. **tmux 是 runner 的可选观察面，不是 runner 的实现前提**
+4. **native task/flow + on-demand worker 才是默认执行心智**
+
 ### 9.6.5 tmux 的定位
 
 建议明确成一句话：
@@ -2512,6 +2570,17 @@ v1 先把接口做对：
 
 这比一上来做智能调优稳得多。
 
+而且后面如果真要做 harness 自学习 / policy self-tuning，也必须建立在这 4 步之上：
+
+1. 先有固定 lane baseline
+2. 再有 replay 对比
+3. 再有 gate 判定
+4. 最后才允许 shadow recommendation / policy promotion
+
+也就是说：
+
+> **自学习不是“模型自己越来越会”，而是 harness 基于真实回放和指标，逐步收紧策略。**
+
 ### 9.7.5 应该怎么定义“优化成功”
 
 不同 lane 的目标不一样，不能只看一个总分。
@@ -2523,6 +2592,7 @@ v1 先把接口做对：
 1. `ack_ms`
 2. `total_latency_ms`
 3. direct reply 成功率
+4. `cost_per_request`
 
 #### `delegate.single` lane
 
@@ -2532,6 +2602,7 @@ v1 先把接口做对：
 2. `first_progress_ms`
 3. `final_delivery_ms`
 4. `cost_per_success`
+5. queue overflow rate / fallback rate
 
 #### `compound` lane
 
@@ -2541,6 +2612,42 @@ v1 先把接口做对：
 2. 终态正确率
 3. 可恢复率
 4. 总成本上限
+
+这里再把“评估成功”的语气写得更硬一点：
+
+1. 快响应成功，不是只看感觉“挺快”，而是 reply lane 的 `ack_ms`、`total_latency_ms`、delegate lane 的 `first_progress_ms`、`final_delivery_ms` 相比基线没有退化
+2. 成本成功，不是只看单次便宜，而是 `cost_per_request`、`cost_per_success`、`actual_cost_usd` 在相同 acceptance 水平下优于基线
+3. 质量成功，不是只看模型换便宜了，而是 acceptance、replay、delivery correctness 没掉
+4. 任何“更快但更差”或“更便宜但回退率更高”的变化，都不算成功优化
+
+### 9.7.5.a 后续 harness 自进化应该怎么做
+
+如果后面要做 harness 自进化，我建议严格限定成下面这种闭环：
+
+1. 从 production telemetry 和 replay 中抽样
+2. 对比候选 policy / model bundle / advisor policy 的离线表现
+3. 先给 shadow recommendation，不直接改 live path
+4. 只有通过 gate 的 bundle 才允许 promotion
+5. promotion 后继续监控，失败就 rollback
+
+优化对象也要明确成执行包，而不是单个模型名：
+
+1. `route`
+2. `role`
+3. `coordination_mode`
+4. `backend`
+5. `workspace_mode`
+6. `model_profile`
+7. `advisor_policy`
+
+这样后面的“自进化”才会真的围绕：
+
+1. 成本
+2. 快响应
+3. 交付质量
+4. 稳定性
+
+而不是重新变成 prompt 魔改。
 
 ### 9.7.6 对插件化的含义
 

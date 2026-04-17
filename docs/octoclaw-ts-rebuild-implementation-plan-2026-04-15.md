@@ -146,6 +146,8 @@ tools/
 7. capability-aware route guard
 8. compound 只保留 future schema slot，不进入 Phase 1 route authority
 9. future coordination_mode / advisor_policy 预留接口
+10. resident runner absent 视为默认正常态，不作为 route 降级理由
+11. backend planner 只降 execution profile，不篡改 semantic route
 
 明确禁止：
 
@@ -193,6 +195,8 @@ tools/
 13. thread-aware state aggregation 预留接口
 14. surface anchor -> thread/session binding
 15. summary snapshot / context budget hook
+16. runner absent -> on-demand execution fallback
+17. backend unavailable / queue full -> queued or blocked delivery path
 
 实现口径：
 
@@ -208,6 +212,9 @@ tools/
 10. future multi-agent 先按 one-level thread hierarchy 设计
 11. gateway/IM continuity 统一通过 thread/session binding 进入 runtime core
 12. `context_file` / `skill_ref` 只作为 artifact 引用流经 contracts，不在 Phase 1-2 演化成 memory runtime
+13. resident runner 默认关闭；runtime 默认按 native task/flow + on-demand worker 实现
+14. `reply / observe / delegate.single` 的语义 route 不因 runner 缺席而改写
+15. 开启 resident runner 只代表 acceleration lane 可用，不代表 tmux 成为必需依赖
 
 关键状态：
 
@@ -316,6 +323,7 @@ tools/
 1. brief ACK template
 2. direct reply flow
 3. reply lane telemetry
+4. reply lane baseline report input
 
 验收标准：
 
@@ -444,6 +452,8 @@ tools/
 7. duplicate request / duplicate delivery regression tests
 8. claim expiry / stale recovery tests
 9. write-scope conflict / queueing tests
+10. reply lane / delegate lane baseline compare
+11. shadow recommendation / promotion gate scaffold
 
 验收标准：
 
@@ -451,6 +461,7 @@ tools/
 2. 能阻止明显回归
 3. 能输出成本/速度基线
 4. 能抓住重复派活、双 delivery、双执行这类稳定性回归
+5. 能判断“更快但更差”或“更便宜但更差”的优化无效
 
 依赖：WS0，随后逐步接 WS1-WS7
 
@@ -489,6 +500,7 @@ tools/
 1. WS0 Contract Foundation
 2. WS8 preflight/golden 最小门禁
 3. 旧模块到新包的 ownership map
+4. reply / delegate.single lane baseline 固定
 
 ### Phase 1
 
@@ -498,6 +510,12 @@ tools/
 4. WS6 Status Surface MVP
 
 目标：先跑通 `reply + delegate.single + observe`
+
+补充口径：
+
+1. `judge_fast` 默认固定映射到便宜快模型
+2. resident runner 缺席视为默认正常态
+3. 默认执行心智是 native task/flow + on-demand worker
 
 ### Phase 2
 
@@ -513,6 +531,7 @@ tools/
 2. 只允许保留 `advisor_policy` / `advice_packet` / consult adapter 这些骨架接口
 3. 是否灰度上线 advisor-assisted，取决于 Phase 1-2 的 telemetry / stability gate
 4. 不要求 Slack/Feishu/Telegram/Discord 一次性全部落地，先把 shared adapter boundary 做对
+5. 只有 resident runner 被证明能显著改善 queue / first_progress 指标时，才值得作为 opt-in acceleration 推广
 
 ### Phase 3
 
@@ -532,6 +551,7 @@ tools/
 3. heavy/research profile
 4. richer multi-agent board / cockpit
 5. advisor / subagent / model 一体化自动选择
+6. harness-driven policy tuning / recommendation promotion
 
 ---
 
