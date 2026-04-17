@@ -140,6 +140,23 @@ sync_extensions() {
     echo "✅ synced runtime extension → $ext_target"
 }
 
+sync_packages() {
+    local packages_source="$INSTALL_DIR/packages"
+    local packages_target="${OPENCLAW_HOME}/packages"
+    if [ ! -d "$packages_source" ]; then
+        echo "⚠️  shared packages source not found: $packages_source"
+        return 0
+    fi
+    mkdir -p "$packages_target"
+    rsync -a --delete \
+        --exclude '.git' \
+        --exclude '.DS_Store' \
+        --exclude '__pycache__' \
+        --exclude 'node_modules' \
+        "$packages_source/" "$packages_target/"
+    echo "✅ synced shared packages → $packages_target"
+}
+
 restart_gateway() {
     if [ "$SKIP_GATEWAY_RESTART" = "true" ]; then
         echo "ℹ️  gateway restart skipped (--skip-gateway-restart)"
@@ -273,6 +290,7 @@ case "$COMMAND" in
         ensure_checkout "$REPO_URL"
         sync_checkout_to_install_dir
         sync_extensions
+        sync_packages
         write_source_manifest "$REPO_URL" "$(git -C "$CHECKOUT_DIR" rev-parse HEAD)"
         run_reconcile
         restart_gateway

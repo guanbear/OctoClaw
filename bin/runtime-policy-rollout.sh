@@ -11,6 +11,8 @@ CONFIG_FILE="${OCTOCLAW_CONFIG_FILE:-${WORKSPACE}/tmp/octoclaw-config.json}"
 PRESET="${RUNTIME_POLICY_PRESET:-conservative}"
 EXT_SOURCE="${REPO_ROOT}/extensions/octoclaw-runtime"
 EXT_TARGET="${OPENCLAW_HOME}/extensions/octoclaw-runtime"
+PACKAGES_SOURCE="${REPO_ROOT}/packages"
+PACKAGES_TARGET="${OPENCLAW_HOME}/packages"
 DRY_RUN=false
 LINK_EXTENSION=true
 BACKUP_SUFFIX="$(date +%Y%m%d-%H%M%S)"
@@ -100,6 +102,18 @@ install_extension() {
     fi
     run_cmd cp -R "$EXT_SOURCE" "$EXT_TARGET"
     log "✅ 已安装 runtime extension 目录 → $EXT_TARGET"
+    if [ -d "$PACKAGES_SOURCE" ]; then
+        run_cmd mkdir -p "$PACKAGES_TARGET"
+        run_cmd rsync -a --delete \
+            --exclude '.git' \
+            --exclude '.DS_Store' \
+            --exclude '__pycache__' \
+            --exclude 'node_modules' \
+            "$PACKAGES_SOURCE/" "$PACKAGES_TARGET/"
+        log "✅ 已安装共享 packages → $PACKAGES_TARGET"
+    else
+        log "⚠️ 未找到共享 packages 源目录：$PACKAGES_SOURCE"
+    fi
 }
 
 remove_extension() {

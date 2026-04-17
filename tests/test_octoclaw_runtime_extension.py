@@ -97,7 +97,7 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
             })()"""
         )
 
-        self.assertEqual(payload["route"], "runner")
+        self.assertEqual(payload["route"], "observe")
         self.assertTrue(payload["executed"])
         self.assertEqual(payload["materialization"]["authority"], "ts-native-plugin")
         self.assertEqual(payload["materialization"]["task_id"], "native-runner-task-22")
@@ -145,7 +145,7 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
         self.assertIn("ts_runtime_materialization_failed", payload["message"])
         self.assertEqual(payload["payload"]["status"], "failed")
         self.assertEqual(payload["payload"]["capability_failure"]["authority"], "ts-runtime-core")
-        self.assertEqual(payload["payload"]["capability_failure"]["route"], "spawn_single")
+        self.assertEqual(payload["payload"]["capability_failure"]["route"], "delegate.single")
         self.assertEqual(payload["payload"]["runtime_truth"]["workflow"]["workflowOrchestration"], "failed")
 
     def test_spawn_runtime_path_materializes_spawn_single_via_ts_plugin_without_wrapper_script(self) -> None:
@@ -243,6 +243,142 @@ class OctoClawRuntimeExtensionTests(unittest.TestCase):
         self.assertEqual(payload["materialization"]["substrate_revision"], 55)
         self.assertEqual(payload["materialization"]["truth"]["kind"], "truth")
         self.assertEqual(payload["materialization"]["projection"]["kind"], "projection")
+
+    def test_dispatch_runtime_path_materializes_spawn_single_natively_without_wrapper_preflight_failure(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const metadata = {
+                  session_key: 'agent:main:slack:direct:u-dispatch-spawn-ts',
+                  requestId: 'req-dispatch-spawn-ts-1',
+                  taskId: 'task-dispatch-spawn-ts-1',
+                  flowId: 'flow-dispatch-spawn-ts-1',
+                  helperInvoker: ({ action }) => {
+                    if (action === 'run-task') {
+                      return {
+                        ok: true,
+                        native_task_id: 'native-dispatch-spawn-task-41',
+                        flow_id: 'native-dispatch-spawn-flow-41',
+                        task: {
+                          taskId: 'native-dispatch-spawn-task-41',
+                          status: 'queued',
+                          syncMode: 'managed',
+                          state: 'running',
+                          revision: 41,
+                        },
+                      };
+                    }
+                    return {
+                      ok: true,
+                      flow_id: 'native-dispatch-spawn-flow-41',
+                      flow: {
+                        flowId: 'native-dispatch-spawn-flow-41',
+                        status: 'queued',
+                        revision: 14,
+                      },
+                    };
+                  },
+                };
+                const decision = __octoclawTest.applyPhaseTwoLivePathPolicy(
+                  __octoclawTest.buildRawDecision('delegate deeper repo analysis'),
+                  { ...metadata, requiresDelegation: true, requested_route: 'delegate.single', workType: 'research' },
+                  'delegate deeper repo analysis',
+                );
+                return __octoclawTest.buildTsRuntimeDispatchPayload('delegate deeper repo analysis', {
+                  cwd: process.cwd(),
+                  decision,
+                  metadata,
+                  timeoutSeconds: 30,
+                });
+            })()"""
+        )
+
+        self.assertEqual(payload["route"], "delegate.single")
+        self.assertFalse(payload["executed"])
+        self.assertEqual(payload["materialization"]["authority"], "ts-native-plugin")
+        self.assertEqual(payload["materialization"]["task_id"], "native-dispatch-spawn-task-41")
+        self.assertEqual(payload["materialization"]["flow_id"], "native-dispatch-spawn-flow-41")
+        self.assertEqual(payload["runtime_truth"]["authority"], "ts-runtime-core")
+        self.assertEqual(payload["runtime_truth"]["binding"]["runtime"], "openclaw-native")
+        materialization_json = json.dumps(payload["materialization"], ensure_ascii=False)
+        self.assertNotIn("octoclaw_spawn.py", materialization_json)
+        self.assertNotIn("shell wrapper", materialization_json.lower())
+
+    def test_spawn_runtime_path_fails_closed_with_ts_owned_error_not_wrapper_script_failure(self) -> None:
+        payload = run_runtime_helper(
+            """(() => {
+                const metadata = {
+                  session_key: 'agent:main:slack:direct:u-spawn-fail-ts',
+                  requestId: 'req-spawn-fail-ts-1',
+                  taskId: 'task-spawn-fail-ts-1',
+                  flowId: 'flow-spawn-fail-ts-1',
+                  helperInvoker: () => {
+                    throw new Error('native taskflow bind refused request');
+                  },
+                };
+                try {
+                  __octoclawTest.buildTsRuntimeSpawnPayload('delegate repo audit', {
+                    route: 'spawn_single',
+                    decision: {
+                      route_decision: { route: 'spawn_single', worker_pool: 'octoclaw-worker' },
+                      model_policy: { profile: 'worker_default' },
+                    },
+                    metadata,
+                  });
+                  return { ok: true };
+                } catch (error) {
+                  return {
+                    ok: false,
+                    message: String(error.message || error),
+                    payload: error.payload || null,
+                  };
+                }
+            })()"""
+        )
+
+        self.assertFalse(payload["ok"])
+        self.assertIn("ts_runtime_spawn_failed", payload["message"])
+        self.assertNotIn("octoclaw_spawn.py", payload["message"])
+        self.assertNotIn("wrapper", payload["message"].lower())
+        self.assertEqual(payload["payload"]["status"], "failed")
+        self.assertEqual(payload["payload"]["capability_failure"]["authority"], "ts-runtime-core")
+        self.assertEqual(payload["payload"]["capability_failure"]["route"], "spawn_single")
+        self.assertEqual(payload["payload"]["capability_failure"]["reason"], "native taskflow bind refused request")
+        self.assertEqual(payload["payload"]["runtime_truth"]["workflow"]["workflowOrchestration"], "failed")
+
+    def test_runtime_code_paths_do_not_reference_legacy_live_execution_authorities(self) -> None:
+        banned_authorities = [
+            "dispatch_task.py",
+            "octoclaw_spawn.py",
+            "task-state-update.py",
+            "runner_loop.sh",
+            "runner_queue.py",
+        ]
+        runtime_roots = [
+            REPO_ROOT / "extensions" / "octoclaw-runtime",
+            REPO_ROOT / "packages" / "octoclaw-runtime-core",
+        ]
+        allowed_prefixes = [
+            REPO_ROOT / "extensions" / "octoclaw-runtime" / "ops",
+            REPO_ROOT / "extensions" / "octoclaw-runtime" / "scripts",
+        ]
+
+        violations = []
+        for root in runtime_roots:
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".md"}:
+                    continue
+                if any(path.is_relative_to(prefix) for prefix in allowed_prefixes):
+                    continue
+                content = path.read_text(encoding="utf-8")
+                for banned in banned_authorities:
+                    if banned in content:
+                        violations.append(f"{path.relative_to(REPO_ROOT)}::{banned}")
+
+        self.assertEqual(
+            violations,
+            [],
+            "live runtime code should not reference legacy Python/shell execution authorities",
+        )
 
     def test_watchdog_tick_uses_ts_runtime_lifecycle_authority_without_task_state_update_script(self) -> None:
         payload = run_runtime_helper(

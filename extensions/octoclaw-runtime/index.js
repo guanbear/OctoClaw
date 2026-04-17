@@ -38,6 +38,15 @@ const PHASE_TWO_ROUTE_MAP = {
   observe: "runner",
 };
 
+function normalizeLiveRoute(route, fallback = "reply") {
+  const normalized = String(route || "").trim();
+  if (normalized === "direct") return "reply";
+  if (normalized === "spawn_single" || normalized === "spawn_multi") return "delegate.single";
+  if (normalized === "runner") return "observe";
+  if (PHASE_TWO_LIVE_ROUTES.has(normalized)) return normalized;
+  return fallback;
+}
+
 function buildRuntimeTruthWorkflowStub(metadata = {}) {
   const workspaceMode = normalizeWorkspaceMode(metadata?.workspaceMode || metadata?.workspace_mode || "shared_workspace");
   const taskId = String(metadata?.taskId || metadata?.task_id || metadata?.native_task_id || metadata?.requestId || metadata?.request_id || "runtime-task").trim() || "runtime-task";
@@ -101,7 +110,7 @@ function runtimeRouteDecision(decision = {}) {
 
 function runtimeExecutionIds(task, decision = {}, metadata = {}) {
   const routeDecision = runtimeRouteDecision(decision);
-  const route = String(routeDecision.route || "direct").trim() || "direct";
+  const route = normalizeLiveRoute(routeDecision.route || metadata?.requested_route, "reply");
   const prompt = String(task || "").trim();
   return {
     requestId: String(metadata?.requestId || metadata?.request_id || stableId("runtime", [prompt, route])).trim(),
@@ -121,7 +130,7 @@ function buildWorkflowScope(metadata = {}) {
 
 function buildWorkflowDecision(task, decision = {}, metadata = {}) {
   const routeDecision = runtimeRouteDecision(decision);
-  const route = String(routeDecision.route || "direct").trim() || "direct";
+  const route = normalizeLiveRoute(routeDecision.route || metadata?.requested_route, "reply");
   const workType = ["research", "code", "review"].includes(String(metadata?.workType || "").trim())
     ? String(metadata.workType).trim()
     : "research";
@@ -129,21 +138,13 @@ function buildWorkflowDecision(task, decision = {}, metadata = {}) {
     ? decision.ts_policy_judge.decision
     : judgePolicy(buildPhaseTwoPolicyInput(task, {
       ...metadata,
-      requested_route: route === "spawn_single" || route === "spawn_multi"
-        ? "delegate.single"
-        : route === "runner"
-          ? "observe"
-          : route,
-      requiresDelegation: route === "spawn_single" || route === "spawn_multi",
-      requiresObservation: route === "runner",
+      requested_route: route,
+      requiresDelegation: route === "delegate.single",
+      requiresObservation: route === "observe",
       workType,
     }));
   return {
-    route: route === "spawn_single" || route === "spawn_multi"
-      ? "delegate.single"
-      : route === "runner"
-        ? "observe"
-        : "reply",
+    route,
     role: tsDecision.role,
     backend: tsDecision.backend,
     workspaceMode: tsDecision.workspaceMode,
@@ -163,8 +164,8 @@ function buildTsRuntimeDispatchPayload({
   helperInvoker,
 }) {
   const routeDecision = runtimeRouteDecision(decision);
-  const route = String(routeDecision.route || "direct").trim() || "direct";
-  if (!["direct", "runner", "spawn_single"].includes(route)) {
+  const route = normalizeLiveRoute(routeDecision.route || metadata?.requested_route, "reply");
+  if (!["reply", "observe", "delegate.single"].includes(route)) {
     throw new Error(`unsupported_runtime_route:${route}`);
   }
 
@@ -215,16 +216,16 @@ function buildTsRuntimeDispatchPayload({
     },
   };
 
-  if (route === "direct") {
+  if (route === "reply") {
     workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
     workflow = markWorkflowCompleted(workflow);
     return {
       ...basePayload,
       executed: true,
       status: "executed",
-      summary: `OctoClaw dispatch: direct (${workflow.execution.role})`,
+      summary: `OctoClaw dispatch: reply (${workflow.execution.role})`,
       handoff: {
-        kind: "direct",
+        kind: "reply",
         summary: `Direct route selected; no delegated materialization required for ${truncateText(task, 80)}`,
         user_safe: true,
         reply_text: `Direct route selected; keep execution in the main session for: ${truncateText(task, 80)}`,
@@ -256,17 +257,17 @@ function buildTsRuntimeDispatchPayload({
     workflow = markWorkflowCompleted(workflow);
     return {
       ...basePayload,
-      executed: route === "runner",
-      status: route === "runner" ? "executed" : "planned",
-      summary: `OctoClaw dispatch: ${route}${route === "runner" ? " (executed)" : " (planned)"}`,
+      executed: route === "observe",
+      status: route === "observe" ? "executed" : "planned",
+      summary: `OctoClaw dispatch: ${route}${route === "observe" ? " (executed)" : " (planned)"}`,
       handoff: {
-        kind: route === "runner" ? "runner" : "spawn",
-        summary: route === "runner"
-          ? `Runner materialized natively as ${binding.taskId}`
-          : `Delegated spawn materialized natively as ${binding.taskId}`,
+        kind: route === "observe" ? "observe" : "delegate",
+        summary: route === "observe"
+          ? `Observe workflow materialized natively as ${binding.taskId}`
+          : `Delegated task materialized natively as ${binding.taskId}`,
         user_safe: true,
-        reply_text: route === "runner"
-          ? `Runner execution started natively: ${binding.taskId}`
+        reply_text: route === "observe"
+          ? `Observe workflow started natively: ${binding.taskId}`
           : `Delegated task registered natively: ${binding.taskId}`,
       },
       materialization: {
@@ -291,7 +292,7 @@ function buildTsRuntimeDispatchPayload({
         lifecycle: workflow.lifecycle,
         taskMaterialization: workflow.taskMaterialization,
       },
-      job: route === "runner"
+      job: route === "observe"
         ? {
           id: binding.taskId,
           session_key: String(metadata?.session_key || metadata?.sessionKey || "").trim(),
@@ -324,12 +325,12 @@ function buildTsRuntimeDispatchPayload({
   }
 }
 
-function buildWatchdogWorkflow(task = {}, route = "runner") {
+function buildWatchdogWorkflow(task = {}, route = "observe") {
   const taskId = String(task?.id || task?.task_id || task?.taskId || "runtime-watchdog-task").trim() || "runtime-watchdog-task";
   const flowId = String(task?.flow_id || task?.flowId || taskId).trim() || taskId;
   const requestId = String(task?.request_id || task?.requestId || taskId).trim() || taskId;
   const claimOwner = String(task?.owner || task?.claim_owner || "runtime-watchdog").trim() || "runtime-watchdog";
-  const observeRoute = route === "runner";
+  const observeRoute = normalizeLiveRoute(route, "observe") === "observe";
   const decision = {
     route: observeRoute ? "observe" : "delegate.single",
     role: "worker_research",
@@ -2374,8 +2375,8 @@ function extractPromptText(event = {}) {
 }
 
 function delegatedStickyRoute(decision) {
-  const route = String(decision?.route_decision?.route || "").trim();
-  if (route === "spawn_single" || route === "spawn_multi") {
+  const route = normalizeLiveRoute(decision?.route_decision?.route, "");
+  if (route === "delegate.single") {
     return route;
   }
   return "";
@@ -2473,7 +2474,7 @@ function isSessionControlDecision(decision) {
 }
 
 function isRunnerDecision(decision) {
-  return String(decision?.route_decision?.route || "").trim() === "runner";
+  return normalizeLiveRoute(decision?.route_decision?.route, "") === "observe";
 }
 
 function assistantMessageRole(message = {}) {
@@ -2503,9 +2504,9 @@ function replaceAssistantMessageText(message = {}, text = "") {
 }
 
 function delegationFailureReply(state = {}) {
-  const route = String(state?.decision?.route_decision?.route || "").trim();
+  const route = normalizeLiveRoute(state?.decision?.route_decision?.route, "");
   const intentClass = String(state?.conversationIntentClass || conversationIntentClass(state?.decision) || "").trim();
-  if (route === "runner" && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)) {
+  if (route === "observe" && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)) {
     return "这次查询还没真正派发到执行链，所以我现在不能把结果说成已经查到。等拿到真实执行结果后我再回复。";
   }
   return "这次任务还没真正派发成功，所以我现在不能把它说成已经完成。等拿到真实执行结果后我再回复。";
@@ -3254,7 +3255,7 @@ function applyPhaseTwoLivePathPolicy(decision, metadata = {}, prompt = "") {
   const tsJudgeInput = buildPhaseTwoPolicyInput(prompt, metadata);
   const tsPolicyDecision = judgePolicy(tsJudgeInput);
   const liveRoute = String(tsPolicyDecision?.route || "").trim();
-  const mappedRoute = PHASE_TWO_ROUTE_MAP[liveRoute] || "direct";
+  const mappedRoute = liveRoute;
   const compoundRequest = metadata?.compound_plan;
   const blockedCompound = Boolean(compoundRequest) || !PHASE_TWO_LIVE_ROUTES.has(String(metadata?.requested_route || metadata?.route || "").trim());
 
@@ -3356,8 +3357,8 @@ function attachRuntimeTruthMetadata(decision, metadata = {}, prompt = "") {
       requestId: metadata?.requestId || metadata?.request_id || stableId("runtime", [prompt, nextDecision?.route_decision?.route || "direct"]),
       taskId: metadata?.taskId || metadata?.task_id || stableId("task", [prompt, nextDecision?.route_decision?.route || "direct"]),
       flowId: metadata?.flowId || metadata?.flow_id || stableId("flow", [prompt, nextDecision?.route_decision?.route || "direct"]),
-      requiresDelegation: ["spawn_single", "spawn_multi", "runner"].includes(String(nextDecision?.route_decision?.route || "").trim()),
-      requiresObservation: String(nextDecision?.route_decision?.task_class || "").trim() === "control_observer",
+      requiresDelegation: normalizeLiveRoute(nextDecision?.route_decision?.route, "") === "delegate.single",
+      requiresObservation: normalizeLiveRoute(nextDecision?.route_decision?.route, "") === "observe",
     });
   } catch (error) {
     metadata.runtime_truth = metadata?.runtime_truth && typeof metadata.runtime_truth === "object"

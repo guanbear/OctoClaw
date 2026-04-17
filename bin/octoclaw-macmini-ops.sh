@@ -9,6 +9,7 @@ MANAGED_WORKSPACE="${WORKSPACE:-${OPENCLAW_HOME}/workspace}"
 INSTALL_DIR="${INSTALL_DIR:-${MANAGED_WORKSPACE}/openclaw/skills/octopus}"
 CHECKOUT_DIR="${CHECKOUT_DIR:-${MANAGED_WORKSPACE}/openclaw/repos/octoclaw}"
 EXTENSION_DIR="${OPENCLAW_HOME}/extensions/octoclaw-runtime"
+PACKAGES_DIR="${OPENCLAW_HOME}/packages"
 DISABLED_EXTENSION_DIR="${OPENCLAW_HOME}/extensions-disabled/octoclaw-runtime"
 BACKUP_ROOT="${OPENCLAW_HOME}/backups/octoclaw-macmini-ops"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -90,6 +91,17 @@ sync_extension() {
     log "synced extension -> $EXTENSION_DIR"
 }
 
+sync_packages() {
+    mkdir -p "$PACKAGES_DIR"
+    rsync -a --delete \
+        --exclude '.git' \
+        --exclude '.DS_Store' \
+        --exclude '__pycache__' \
+        --exclude 'node_modules' \
+        "$INSTALL_DIR/packages/" "$PACKAGES_DIR/"
+    log "synced shared packages -> $PACKAGES_DIR"
+}
+
 run_reconcile() {
     WORKSPACE="$MANAGED_WORKSPACE" bash "$INSTALL_DIR/install.sh" reconcile --non-interactive --extension-install-mode rsync
 }
@@ -132,6 +144,7 @@ do_deploy() {
     log "==> deploying current working tree"
     sync_current_tree
     sync_extension
+    sync_packages
 
     log "==> reconciling managed install"
     run_reconcile
