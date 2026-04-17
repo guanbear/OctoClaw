@@ -8,6 +8,7 @@ export interface RouteInput {
   hardBoundaryControl?: boolean;
   requiresObservation?: boolean;
   requiresDelegation?: boolean;
+  capabilitySatisfied?: boolean;
   workspaceMode: WorkspaceMode;
 }
 
@@ -36,17 +37,21 @@ export function decideRoute(input: RouteInput): RouteDecision {
 
   if (input.hardBoundaryControl || input.requiresObservation) {
     return {
-      route: "observe",
+      route: input.capabilitySatisfied === false ? "reply" : "observe",
       workspaceMode: input.workspaceMode,
-      routeReason: "hard_boundary_or_probe",
+      routeReason: input.capabilitySatisfied === false
+        ? "capability_guard_fallback_reply"
+        : "hard_boundary_or_probe",
     };
   }
 
   if (input.requiresDelegation) {
     return {
-      route: "delegate.single",
+      route: input.capabilitySatisfied === false ? "reply" : "delegate.single",
       workspaceMode: input.workspaceMode,
-      routeReason: "deliverable_or_capability_bound_work",
+      routeReason: input.capabilitySatisfied === false
+        ? "capability_guard_fallback_reply"
+        : "deliverable_or_capability_bound_work",
     };
   }
 

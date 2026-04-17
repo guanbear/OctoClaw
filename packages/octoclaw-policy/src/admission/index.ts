@@ -1,4 +1,5 @@
 import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas.ts";
+import type { LatencyTarget } from "../caps/index.ts";
 import type { LiveRoute } from "../route/index.ts";
 
 export interface AdmissionInput {
@@ -8,26 +9,64 @@ export interface AdmissionInput {
   capabilitySatisfied: boolean;
   workspaceMode: WorkspaceMode;
   writeConflict: boolean;
+  maxWorkers?: number;
+  latencyTarget?: LatencyTarget;
 }
 
 export interface AdmissionDecision {
   admission: "allow" | "defer" | "reject";
   queueBudget: number;
+  maxWorkers?: number;
+  latencyTarget?: LatencyTarget;
   reason: string;
 }
 
 export function evaluateAdmission(input: AdmissionInput): AdmissionDecision {
   if (!input.capabilitySatisfied) {
-    return { admission: "reject", queueBudget: input.queueBudget, reason: "capability_guard_failed" };
+    return {
+      admission: "reject",
+      queueBudget: input.queueBudget,
+      maxWorkers: input.maxWorkers,
+      latencyTarget: input.latencyTarget,
+      reason: "capability_guard_failed",
+    };
+  }
+
+  if (typeof input.maxWorkers === "number" && input.maxWorkers <= 0 && input.route !== "reply") {
+    return {
+      admission: "reject",
+      queueBudget: input.queueBudget,
+      maxWorkers: input.maxWorkers,
+      latencyTarget: input.latencyTarget,
+      reason: "worker_cap_exhausted",
+    };
   }
 
   if (input.route === "delegate.single" && input.inflightCount >= input.queueBudget) {
-    return { admission: "defer", queueBudget: input.queueBudget, reason: "queueBudget_exhausted" };
+    return {
+      admission: "defer",
+      queueBudget: input.queueBudget,
+      maxWorkers: input.maxWorkers,
+      latencyTarget: input.latencyTarget,
+      reason: "queueBudget_exhausted",
+    };
   }
 
   if (input.route === "delegate.single" && input.workspaceMode === "shared_workspace" && input.writeConflict) {
-    return { admission: "defer", queueBudget: input.queueBudget, reason: "shared_workspace_write_conflict" };
+    return {
+      admission: "defer",
+      queueBudget: input.queueBudget,
+      maxWorkers: input.maxWorkers,
+      latencyTarget: input.latencyTarget,
+      reason: "shared_workspace_write_conflict",
+    };
   }
 
-  return { admission: "allow", queueBudget: input.queueBudget, reason: "admission_allowed" };
+  return {
+    admission: "allow",
+    queueBudget: input.queueBudget,
+    maxWorkers: input.maxWorkers,
+    latencyTarget: input.latencyTarget,
+    reason: "admission_allowed",
+  };
 }
