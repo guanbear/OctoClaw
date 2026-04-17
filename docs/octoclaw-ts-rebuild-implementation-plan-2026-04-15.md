@@ -148,11 +148,13 @@ tools/
 9. future coordination_mode / advisor_policy 预留接口
 10. resident runner absent 视为默认正常态，不作为 route 降级理由
 11. backend planner 只降 execution profile，不篡改 semantic route
+12. hard-boundary gate 只读取结构化硬信号，不读取自然语言正文做关键词判断
 
 明确禁止：
 
 1. 关键词匹配做语义路由
 2. 主模型承担 route authority
+3. hard-boundary gate 演化成 prompt pattern / regex 语义分类器
 
 验收标准：
 

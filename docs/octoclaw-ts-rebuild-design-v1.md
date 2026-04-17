@@ -1965,6 +1965,19 @@ v2 应该采用：
 
 这些语义判断默认都应交给 small judge。
 
+所以 `reply / delegate.single / observe` 这类主语义路由，默认不是规则判，也不是主回答模型自由发挥判，而是：
+
+1. **small judge model** 负责绝大多数语义判断
+2. **hard-boundary gate** 只处理无需深语义也必须稳定成立的硬边界
+3. **policy code** 负责把 judge 输出收口成可执行决策
+4. **workflow/runtime harness** 负责真正物化、排队、冲突控制和交付
+
+更直白地说：
+
+1. 不是 `rule-first`
+2. 不是 `main model decides all`
+3. 而是 **`judge-first + hard-boundary + policy/harness enforcement`**
+
 前门只保留这种“无需理解太多语义也应稳定成立”的信号：
 
 1. 用户点了 `retry` / `stop` / `approve`
@@ -1975,6 +1988,79 @@ v2 应该采用：
 所以更准确地说：
 
 > **不是 rule-first，而是 judge-first；规则只保留在硬边界处。**
+
+### 9.2.0.g hard-boundary gate 的允许范围与禁止范围
+
+为了防止后面实现时又悄悄滑回关键词路由，这里建议把 `hard-boundary gate` 的边界写死。
+
+#### 允许输入
+
+`hard-boundary gate` 默认只允许读取**结构化信号**，例如：
+
+1. UI action / command id
+2. `task_id` / `thread_id` / `anchor_id`
+3. session lifecycle state
+4. permission / tool / write-scope / risk flags
+5. queue state / lease state / backend availability
+
+一句话：
+
+> **gate 可以看结构化字段，但不应该读原始自然语言正文来猜意图。**
+
+#### 允许职责
+
+`hard-boundary gate` 只允许做下面这些事：
+
+1. 识别显式 control action
+2. 识别当前消息是否已绑定既有 task/thread
+3. 识别当前会话是否处于 recovery / waiting-input / approval-pending
+4. 识别是否触达明确权限/安全边界
+5. 识别是否因 queue/backpressure/write conflict/backend down 必须改走排队或 blocked 路径
+
+#### 明确禁止
+
+`hard-boundary gate` 明确禁止做这些事：
+
+1. 读取用户原文后，用关键词猜 `reply / delegate / observe`
+2. 用词表猜复杂度高低
+3. 用关键词猜 `code / research / review`
+4. 用关键词猜该用哪个模型
+5. 用 prompt pattern 或 regex 充当语义分类器
+
+只要实现里出现“从自然语言文本里抽关键词，再决定主语义 route”，就已经违反设计。
+
+#### 默认行为
+
+如果没有命中明确硬信号，`hard-boundary gate` 的默认行为应该是：
+
+1. `pass-through`
+2. 把请求交给 `small judge model`
+3. 再由 `policy code` 和 `workflow harness` 落地
+
+也就是说，gate 的职责是：
+
+1. **override / guard**
+2. 不是 **semantic classify**
+
+#### 关于误判
+
+`hard-boundary gate` 当然仍可能有 bug，但它的误判应该被限制在：
+
+1. 结构化状态映射错误
+2. 生命周期状态判断错误
+3. 权限/资源边界判断错误
+
+而不应该退化成：
+
+1. 语言理解误判
+2. 关键词词表失控
+3. prompt pattern 无限追加
+
+这也是为什么我建议把它的输入面收窄到结构化信号。
+
+一句话版：
+
+> **hard-boundary gate 是硬边界守卫，不是语义路由器；没有硬信号就直接放行给 small judge。**
 
 ## 9.3 worker brief 规范
 
