@@ -283,13 +283,24 @@ function deriveExecutionIdentity(decision: PolicyDecision, input: StartWorkflowI
       : decision.route === "observe"
         ? "native_runner"
         : "runtime_orchestrator",
-    backend: decision.backend,
+    backend: resolveExecutionBackend(decision.backend),
     materializationIntent: decision.route === "reply"
       ? "reply_inline"
       : decision.route === "observe"
         ? "observe_probe"
         : "spawn_single",
   };
+}
+
+function resolveExecutionBackend(backend: PolicyDecision["backend"]): ExecutionBackend {
+  switch (backend) {
+    case "main":
+    case "observer":
+    case "worker":
+      return "openclaw-native";
+    default:
+      return backend;
+  }
 }
 
 function createLifecycleState(phase: LifecyclePhase, deliveryState: DeliveryState): LifecycleState {
