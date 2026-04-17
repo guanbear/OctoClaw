@@ -1,8 +1,8 @@
-# OctoClaw TS 重构细化施工计划 v0
+# OctoClaw TS 重构细化施工计划 v1
 
 日期：2026-04-15
 
-状态：draft
+状态：final
 
 用途：这份文档不是讲方向，而是给执行者直接开工用。目标是把 OctoClaw v2 的 TS 重构拆成可并行、可验收、可交接的工作包，方便交给其他 AI 或协作者推进。
 
@@ -40,6 +40,34 @@
 3. 先做 `reply + delegate.single + observe`，后做 compound。
 4. 先把热路径跑稳，再做自动选模/自学习。
 5. 每个 work package 都要有明确输入、输出、依赖、验收标准。
+
+### 1.4 重写与抛弃原则
+
+1. 旧 Python/JS/shell 正式模块全部视为**参考实现**，不是增量演进底座。
+2. 新 TS 模块一旦建立对应 ownership，旧模块立即进入**只读参考态**，除非是生产阻断级别 bug，不再接受功能新增。
+3. 同一职责不允许长期双栈并行；允许短期 shim/fallback，但不允许两套 hot path 同时演进。
+4. `copy logic` 可以，`copy file / patch old file / 继续叠补丁` 不可以。
+5. 每个阶段都要显式回答：
+   - 哪些旧文件已经禁止继续改功能
+   - 哪些旧文件已经退出热路径
+   - 哪些旧文件可以直接归档或删除
+
+### 1.5 老文件的 4 种状态
+
+施工中所有 legacy 文件都应被标记为下面 4 种状态之一：
+
+1. `reference-only`
+   - 仅供读逻辑、摘 contract、对照行为
+   - 不再承接新需求
+2. `shim-only`
+   - 只做短期兼容或导流
+   - 不允许继续长逻辑
+3. `hot-path-removed`
+   - 已退出正式执行链路
+   - 可暂时留仓库观察/回溯
+4. `archive-or-delete`
+   - 已完成使命
+   - 可归档或直接删除
 
 ---
 
@@ -504,6 +532,12 @@ tools/
 3. 旧模块到新包的 ownership map
 4. reply / delegate.single lane baseline 固定
 
+这阶段对 legacy 的要求：
+
+1. 标出所有 hot-path legacy 文件的 owner replacement
+2. 把 legacy 文件全部标记成 `reference-only` 或 `shim-only`
+3. 从这一刻开始，不再接受“顺手在旧文件里补一个正式能力”
+
 ### Phase 1
 
 1. WS1 Policy Core
@@ -518,6 +552,19 @@ tools/
 1. `judge_fast` 默认固定映射到便宜快模型
 2. resident runner 缺席视为默认正常态
 3. 默认执行心智是 native task/flow + on-demand worker
+
+这阶段对 legacy 的要求：
+
+1. `extensions/octoclaw-runtime/policy/*.js`
+2. `extensions/octoclaw-runtime/index.js`
+3. `lib/octoclaw_policy.py`
+4. `lib/octoclaw_route.py`
+5. `lib/resolve-model.py`
+6. `lib/worker_taxonomy.py`
+7. `lib/task_display.py`
+8. `lib/status_render.py`
+
+这些文件进入 `reference-only`，不再承接新功能。
 
 ### Phase 2
 
@@ -535,6 +582,21 @@ tools/
 4. 不要求 Slack/Feishu/Telegram/Discord 一次性全部落地，先把 shared adapter boundary 做对
 5. 只有 resident runner 被证明能显著改善 queue / first_progress 指标时，才值得作为 opt-in acceleration 推广
 
+这阶段对 legacy 的要求：
+
+1. `lib/dispatch_task.py`
+2. `lib/openclaw_taskflow_adapter.py`
+3. `lib/openclaw_taskflow_runtime_helper.mjs`
+4. `lib/runtime_protocol.py`
+5. `lib/runtime_task_record.py`
+6. `lib/task-state-update.py`
+7. `lib/runner_loop.sh`
+8. `lib/runner_queue.py`
+9. `lib/runner_dispatch.py`
+10. `lib/runner_routing.py`
+
+这些文件应退出正式 hot path，最多保留 `shim-only`。
+
 ### Phase 3
 
 1. WS8 完整 replay/acceptance
@@ -546,6 +608,19 @@ tools/
 
 目标：从 single delegate 扩到可控的 compound / controlled multi-agent，但不做自由 swarm
 
+这阶段对 legacy 的要求：
+
+1. `lib/notifier.py`
+2. `lib/im_thread.py`
+3. `lib/task_display_cli.py`
+4. `bin/octoclawctl.sh`
+5. `lib/runtime_snapshot.py`
+6. `lib/runtime_observer.py`
+7. `lib/delivery_relay.py`
+8. `lib/delivery_relay_reconcile.py`
+
+这些文件应完成 `hot-path-removed`，只剩回溯价值。
+
 ### Phase 4
 
 1. WS9 Auto Router
@@ -555,23 +630,124 @@ tools/
 5. advisor / subagent / model 一体化自动选择
 6. harness-driven policy tuning / recommendation promotion
 
+这阶段对 legacy 的要求：
+
+1. 旧正式 runtime/policy/display/eval 文件全部进入 `archive-or-delete`
+2. 仓库中只保留测试脚本、运维脚本、一次性迁移脚本、临时分析脚本
+
 ---
 
-## 5. 旧模块到新模块映射表
+## 5. 旧模块重写与淘汰映射
 
-| 旧模块 | 新归属 | 处理方式 |
-| --- | --- | --- |
-| `extensions/octoclaw-runtime/index.js` | `extensions/octoclaw-runtime` + `packages/octoclaw-runtime-core` | 重写 |
-| `extensions/octoclaw-runtime/policy/*.js` | `packages/octoclaw-policy` | 重写 |
-| `lib/dispatch_task.py` | `packages/octoclaw-runtime-core` + `extensions/octoclaw-delegation` | 重写 |
-| `lib/openclaw_taskflow_adapter.py` | `extensions/octoclaw-runtime` | 重写 |
-| `lib/task_display.py` | `extensions/octoclaw-status-surface` | 重写 |
-| `lib/status_render.py` | `extensions/octoclaw-status-surface` | 重写 |
-| `lib/im_display_contract.py` | `packages/octoclaw-contracts` | 重写 |
-| `lib/worker_taxonomy.py` | `packages/octoclaw-policy/src/roles` | 重写 |
-| `lib/model-intel.py` | `packages/octoclaw-policy/src/model` / `extensions/octoclaw-auto-router` | 重写 |
-| `lib/budget.py` | `packages/octoclaw-policy` / telemetry path | 重写 |
-| `lib/eval_suite.py` | `packages/octoclaw-evals` | 重写 |
+### 5.1 必须重写、不能复用的正式模块
+
+下面这些文件只能作为逻辑参考，正式实现必须重写到 TS 新归属，不能继续在原文件上补丁演进。
+
+| 旧模块/模式 | 新归属 | 阶段要求 | 旧文件状态 |
+| --- | --- | --- | --- |
+| `extensions/octoclaw-runtime/index.js` | `extensions/octoclaw-runtime` + `packages/octoclaw-runtime-core` | Phase 1 起重写 | `reference-only` |
+| `extensions/octoclaw-runtime/policy/*.js` | `packages/octoclaw-policy` | Phase 1 起重写 | `reference-only` |
+| `extensions/octoclaw-runtime/bridge.js` | `extensions/octoclaw-runtime` | Phase 1-2 重写 | `reference-only` |
+| `extensions/octoclaw-runtime/conversation-control.js` | `packages/octoclaw-runtime-core` | Phase 1-2 重写 | `reference-only` |
+| `lib/octoclaw_policy.py` / `lib/octoclaw_route.py` | `packages/octoclaw-policy` | Phase 1 起重写 | `reference-only` |
+| `lib/dispatch_task.py` | `packages/octoclaw-runtime-core` + `extensions/octoclaw-delegation` | Phase 2 前必须替换 | `shim-only` 到 M3 |
+| `lib/openclaw_taskflow_adapter.py` | `extensions/octoclaw-runtime` | Phase 2 前必须替换 | `shim-only` 到 M3 |
+| `lib/openclaw_taskflow_runtime_helper.mjs` | `extensions/octoclaw-runtime` | Phase 2 前必须替换 | `shim-only` 到 M3 |
+| `lib/runtime_protocol.py` / `lib/runtime_task_record.py` | `packages/octoclaw-contracts` + `packages/octoclaw-runtime-core` | Phase 2 前必须替换 | `shim-only` 到 M3 |
+| `lib/task-state-update.py` | `packages/octoclaw-runtime-core/src/workflow` + `src/delivery` | Phase 2 前必须替换 | `shim-only` 到 M3 |
+| `lib/task_display.py` / `lib/status_render.py` | `extensions/octoclaw-status-surface` | Phase 1 起重写 | `reference-only` |
+| `lib/im_display_contract.py` | `packages/octoclaw-contracts` | Phase 1 起重写 | `reference-only` |
+| `lib/notifier.py` / `lib/im_thread.py` / `lib/task_display_cli.py` | `extensions/octoclaw-im-adapters` + `tools/octoclawctl` | Phase 2-3 重写 | `reference-only` |
+| `bin/octoclawctl.sh` | `tools/octoclawctl` | Phase 3 前替换 | `shim-only` 到 M3 |
+| `lib/worker_taxonomy.py` | `packages/octoclaw-policy/src/roles` | Phase 1 起重写 | `reference-only` |
+| `lib/model-intel.py` / `lib/model_health.py` / `lib/model_pricing.py` / `lib/budget.py` / `lib/resolve-model.py` | `packages/octoclaw-policy/src/model` + `extensions/octoclaw-auto-router` | Phase 1-4 按层重写 | `reference-only` |
+| `lib/eval_suite.py` / `lib/replay_validation.py` / `lib/replay_review.py` / `lib/replay_summary.py` / `lib/reply_review_packet.py` | `packages/octoclaw-evals` | Phase 0-3 重写 | `reference-only` |
+| `lib/nightly_reply_review.py` / `lib/nightly_failure_summary.py` / `lib/nightly_report_followup.py` | `packages/octoclaw-evals` + ops wrappers | Phase 3-4 重写 | `reference-only` |
+
+### 5.2 必须抛弃的 legacy 运行形态
+
+这些不是“先不优化”，而是要明确退出：
+
+1. `task-state.json` 继续作为执行真相源
+2. `task-events.jsonl + patrol + relay` 混合组成热路径真相
+3. resident runner / tmux / patrol 作为默认执行前提
+4. Python dispatch + JS policy + shell loop 长期并存
+5. status/display 自己重新推断真相
+
+### 5.3 可以保留但只做参考的旧文件组
+
+下面这些文件可以继续读逻辑、摘 contract、对照行为，但不该再新增正式能力：
+
+1. `lib/context_pack.py`
+2. `lib/session_resume.py`
+3. `lib/session_ops.py`
+4. `lib/runtime_snapshot.py`
+5. `lib/runtime_observer.py`
+6. `lib/route_recommendation.py`
+7. `lib/route_outcome.py`
+8. `lib/auto_router.py`
+9. `lib/auto-router-surface.mjs`
+10. `lib/model_telemetry_report.py`
+11. `lib/policy_judge_shadow_report.py`
+12. `lib/replay_automation.py`
+13. `lib/acceptance_runtime.py`
+14. `lib/slack_acceptance_suite.py`
+15. `lib/slack_e2e_acceptance.py`
+
+### 5.4 可以继续保留为测试/运维/一次性脚本的文件
+
+这类文件不属于正式产品代码，可以不急着 TS 化，但必须退出正式 runtime authority：
+
+1. `bin/bootstrap-acceptance-runtime.sh`
+2. `bin/replay-automation.sh`
+3. `bin/nightly-*.sh`
+4. `bin/runtime-policy-rollout.sh`
+5. `lib/eval_fixture_export.py`
+6. `lib/slowlog-check.py`
+7. `lib/sync-speed-metrics.py`
+8. `lib/model_health_backfill.py`
+9. `lib/model_health_quota_backfill.py`
+10. `lib/nightly_*`
+11. `lib/probe-models.sh`
+12. 一次性迁移或数据修复脚本
+
+### 5.5 老文件什么时候可以都舍弃
+
+这里建议按里程碑而不是按日期判断。
+
+#### 到 M2 为止
+
+1. legacy policy/display 文件全部进入 `reference-only`
+2. 旧文件不再承接新需求
+3. 允许少量生产阻断 bugfix，但只限 shim/fallback
+
+#### 到 M3 为止
+
+1. legacy dispatch/taskflow/runner/display/IM 文件全部退出正式 hot path
+2. 部署包不再依赖：
+   - `lib/dispatch_task.py`
+   - `lib/openclaw_taskflow_adapter.py`
+   - `lib/runner_loop.sh`
+   - `lib/runner_queue.py`
+   - `bin/octoclawctl.sh`
+3. 这些文件此时应处于 `hot-path-removed`
+
+#### 到 M4 为止
+
+1. 新 TS eval/harness gate 已经覆盖 acceptance/replay/baseline/reporting
+2. 新 TS runtime/policy/status/IM 链路已经连续通过 gate
+3. 所有旧正式模块都可以进入 `archive-or-delete`
+
+建议的最终口径是：
+
+> **当 M4 达成，且新 TS 链路连续通过至少 2 轮 acceptance/replay/gate 后，旧正式模块就不应继续留在主仓库热路径里。**
+
+到这个节点后，仓库里只应保留：
+
+1. 测试脚本
+2. 运维脚本
+3. 一次性迁移脚本
+4. 临时分析脚本
 
 ---
 
@@ -651,6 +827,8 @@ tools/
 5. 不把 tmux / daemon / patrol 当架构前提。
 6. 不绕过 contracts 自造 payload shape。
 7. 不让本地模型提前进默认热路径。
+8. 旧文件只允许做参考、shim 或紧急生产修复，不允许成为新能力落点。
+9. 一旦新 TS 模块接管 ownership，就要主动停止对应 legacy 文件的功能演进。
 
 ---
 
@@ -672,6 +850,7 @@ tools/
 2. small judge 可接
 3. single delegate 可 materialize
 4. telemetry 开始落地
+5. 旧 policy/display 文件不再承接功能开发
 
 ### M3：native task/flow convergence
 
@@ -680,6 +859,7 @@ tools/
 1. 正式链路不再依赖 Python taskflow adapter
 2. status/details/queue 读 substrate truth
 3. IM anchor 与 delivery 接通
+4. legacy dispatch/runner/display/IM 文件退出热路径
 
 ### M4：eval gate active
 
@@ -688,6 +868,7 @@ tools/
 1. preflight/golden/acceptance/replay 能跑
 2. 产出成本/速度基线
 3. 有 promotion/block gate
+4. 旧正式模块具备 archive-or-delete 条件
 
 ---
 
