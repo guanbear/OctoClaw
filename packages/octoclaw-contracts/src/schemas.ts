@@ -8,6 +8,7 @@ export type ExecutionRoute = "reply" | "delegate.single" | "observe";
 export type ExecutionAuthority = "main_session" | "runtime_orchestrator" | "native_runner" | "native_subagent";
 export type ExecutionBackend = "openclaw-native" | "clawteam" | "legacy-python";
 export type MaterializationIntent = "reply_inline" | "observe_probe" | "runner_task" | "spawn_single" | "spawn_multi";
+export type CapabilityLevel = "unsupported" | "limited" | "supported" | "preferred";
 export type LifecyclePhase =
   | "ingress_received"
   | "ack_pending"
@@ -37,6 +38,12 @@ export interface ScopeMetadata {
   writeScopeSummary?: string;
 }
 
+export interface AcceptanceCriterion {
+  id: string;
+  description: string;
+  required: boolean;
+}
+
 export interface IdempotencyMetadata {
   requestIdempotencyKey: string;
   taskIdempotencyKey?: string;
@@ -59,6 +66,14 @@ export interface ExecutionProvenance {
   decisionRef?: string;
   materializedBy?: string;
   checkpointRef?: string;
+}
+
+export interface CapabilityDescriptor {
+  capabilityId: string;
+  level: CapabilityLevel;
+  summary: string;
+  constraints?: string[];
+  notes?: string[];
 }
 
 export interface LifecycleState {

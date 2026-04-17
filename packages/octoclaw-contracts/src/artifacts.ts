@@ -1,4 +1,6 @@
 import type {
+  AcceptanceCriterion,
+  CapabilityDescriptor,
   ContractEnvelope,
   ExecutionIdentity,
   ExecutionProvenance,
@@ -22,13 +24,14 @@ export interface ArtifactDescriptor extends ContractEnvelope, OwnershipMetadata,
 export interface TaskPacket extends ContractEnvelope, OwnershipMetadata, IdempotencyMetadata, ScopeMetadata, TaskIdentity {
   briefId: string;
   objective: string;
-  acceptanceCriteria: string[];
+  acceptanceCriteria: AcceptanceCriterion[];
   deliveryContract: {
     mode: "reply" | "notify" | "silent";
     target: string;
   };
   allowedTools: string[];
   doneDefinition: string[];
+  capabilityRequirements?: CapabilityDescriptor[];
 }
 
 export interface LifecycleArtifact extends ContractEnvelope, ExecutionIdentity, ExecutionProvenance, LifecycleState, OwnershipMetadata, IdempotencyMetadata, ScopeMetadata, TaskIdentity {
@@ -44,6 +47,8 @@ export interface WorkerBrief extends ContractEnvelope, ScopeMetadata {
   modelProfile: string;
   objective: string;
   constraints: string[];
+  acceptanceCriteria?: AcceptanceCriterion[];
+  capabilityRequirements?: CapabilityDescriptor[];
 }
 
 export interface TruthArtifact<TTruth extends Record<string, unknown> = Record<string, unknown>> extends ContractEnvelope {

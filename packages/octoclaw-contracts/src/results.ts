@@ -1,0 +1,64 @@
+import type {
+  AcceptanceCriterion,
+  CapabilityDescriptor,
+  ContractEnvelope,
+  ExecutionIdentity,
+  ExecutionProvenance,
+  ScopeMetadata,
+} from "./schemas.ts";
+import type { OwnershipMetadata, TaskIdentity } from "./events.ts";
+
+export type WorkerResultStatus = "success" | "partial" | "blocked" | "failed";
+export type LeaseState = "active" | "expiring" | "expired" | "released";
+
+export interface CapabilityBoundFailure {
+  capabilityId: string;
+  reason: string;
+  detail?: string;
+  retryable?: boolean;
+}
+
+export interface WorkerResult extends ContractEnvelope, OwnershipMetadata, ScopeMetadata, TaskIdentity {
+  resultId: string;
+  status: WorkerResultStatus;
+  summary: string;
+  details?: string;
+  artifactRefs: string[];
+  acceptanceResults: Array<{
+    criterion: AcceptanceCriterion;
+    satisfied: boolean;
+    evidence?: string;
+  }>;
+  capabilityFailure?: CapabilityBoundFailure;
+}
+
+export interface DelegatedMaterialization extends ContractEnvelope, ExecutionIdentity, ExecutionProvenance, OwnershipMetadata, ScopeMetadata, TaskIdentity {
+  materializationId: string;
+  substrateState: string;
+  substrateRevision: number;
+  syncMode: "managed" | "mirrored";
+  delegatedAt: string;
+  capabilityRequirements?: CapabilityDescriptor[];
+}
+
+export interface StatusSurfaceViewModel extends ContractEnvelope {
+  taskId: string;
+  flowId: string;
+  state: string;
+  route: string;
+  workerPool: string;
+  substrateSummary: string;
+  actionAvailability: string[];
+  queuePosition?: number;
+  modelSummary?: string;
+  costEstimate?: string;
+  claimOwner?: string;
+  leaseState?: LeaseState;
+  workspaceMode?: string;
+  writeScopeSummary?: string;
+  timelinePreview?: Array<{
+    eventType: string;
+    eventAt: string;
+    summary: string;
+  }>;
+}
