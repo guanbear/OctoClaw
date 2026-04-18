@@ -9,8 +9,10 @@ function buildDecision(): PolicyDecision {
   return {
     route: "delegate.single",
     role: "worker_research",
-    backend: "worker",
-    workspaceMode: "isolated_workspace",
+    coordinationMode: "solo_worker",
+    backend: "openclaw-native",
+    executionProfile: "worker",
+    workspaceMode: "isolated_worktree",
     modelProfile: "worker_research",
     caps: {
       queueBudget: 3,
@@ -26,13 +28,13 @@ function buildDecision(): PolicyDecision {
       latencyTarget: "background",
       reason: "admission_allowed",
     },
-    decisionStack: ["route", "role", "backend", "workspace_mode", "model_profile", "caps"],
+    decisionStack: ["route", "role", "coordination_mode", "backend", "workspace_mode", "model_profile", "caps"],
   };
 }
 
 function buildScope(): ScopeMetadata {
   return {
-    workspaceMode: "isolated_workspace",
+    workspaceMode: "isolated_worktree",
     readScope: [],
     writeScope: [],
     writeScopeSummary: "",
@@ -119,11 +121,11 @@ describe("recovery hooks", () => {
     expect(assessed.timedOut).toBe(false);
   });
 
-  it("marks timed-out workflows as failed when recovery fires on deadlines", () => {
+  it("marks timed-out workflows as timed_out when recovery fires on deadlines", () => {
     const recovered = applyRecoveryHook(buildWorkflow(), new Date("2026-04-18T18:00:11.000Z"));
 
     expect(recovered.workflowOrchestration).toBe("failed");
-    expect(recovered.lifecycle.phase).toBe("failed");
+    expect(recovered.lifecycle.phase).toBe("timed_out");
     expect(recovered.lifecycle.failedAt).toBe("2026-04-18T18:00:11.000Z");
   });
 

@@ -42,7 +42,7 @@ function deadlinePhaseForWorkflow(state: RuntimeWorkflowState): RuntimeDeadlineP
     return "delivery";
   }
 
-  if (state.lifecycle.phase === "checkpoint_pending") {
+  if (state.lifecycle.phase === "checkpoint_pending" || state.lifecycle.phase === "checkpoint_emitted") {
     return "checkpoint";
   }
 

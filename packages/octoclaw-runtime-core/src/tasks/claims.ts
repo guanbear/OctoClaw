@@ -21,6 +21,7 @@ export function claimTask(taskId: string, claimOwner: string, leaseDurationMs: n
     claimToken: `${taskId}:${claimOwner}:${now.getTime()}`,
     lastHeartbeatAt: issuedAt,
     leaseExpiresAt: new Date(now.getTime() + leaseDurationMs).toISOString(),
+    resumeGeneration: 1,
     leaseDurationMs,
   };
 }

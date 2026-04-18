@@ -66,7 +66,7 @@ describe("normalizeRuntimeRequest", () => {
     expect(request.sessionKey).toBe("session-anonymous");
     expect(request.channel).toBe("direct");
     expect(request.scope).toEqual({
-      workspaceMode: "isolated_workspace",
+        workspaceMode: "isolated_worktree",
       readScope: [],
       writeScope: [],
       writeScopeSummary: "",

@@ -16,8 +16,10 @@ function buildDecision(): PolicyDecision {
   return {
     route: "delegate.single",
     role: "worker_research",
-    backend: "worker",
-    workspaceMode: "isolated_workspace",
+    coordinationMode: "solo_worker",
+    backend: "openclaw-native",
+    executionProfile: "worker",
+    workspaceMode: "isolated_worktree",
     modelProfile: "worker_research",
     caps: {
       queueBudget: 4,
@@ -33,13 +35,13 @@ function buildDecision(): PolicyDecision {
       latencyTarget: "background",
       reason: "admission_allowed",
     },
-    decisionStack: ["route", "role", "backend", "workspace_mode", "model_profile", "caps"],
+    decisionStack: ["route", "role", "coordination_mode", "backend", "workspace_mode", "model_profile", "caps"],
   };
 }
 
 function buildScope(): ScopeMetadata {
   return {
-    workspaceMode: "isolated_workspace",
+    workspaceMode: "isolated_worktree",
     readScope: [{ resource: "repo", access: "read" }],
     writeScope: [],
     writeScopeSummary: "",
@@ -102,7 +104,7 @@ describe("runtime workflow state machine", () => {
       lastCheckpointAt: "2026-04-18T15:00:10.000Z",
       deliverableReady: false,
     });
-    expect(checkpointed.lifecycle.phase).toBe("checkpoint_pending");
+    expect(checkpointed.lifecycle.phase).toBe("checkpoint_emitted");
   });
 
   it("marks deliverable readiness", () => {
@@ -129,7 +131,7 @@ describe("runtime workflow state machine", () => {
     expect(failed.lifecycle.failedAt).toBe("2026-04-18T15:00:31.000Z");
   });
 
-  it("marks timeout as failed with emitted checkpoint metadata", () => {
+  it("marks timeout as timed_out with emitted checkpoint metadata", () => {
     const timedOut = markWorkflowTimedOut(
       buildWorkflow(),
       "2026-04-18T15:00:32.000Z",
@@ -137,7 +139,7 @@ describe("runtime workflow state machine", () => {
     );
 
     expect(timedOut.workflowOrchestration).toBe("failed");
-    expect(timedOut.lifecycle.phase).toBe("failed");
+    expect(timedOut.lifecycle.phase).toBe("timed_out");
     expect(timedOut.lifecycle.checkpointState).toBe("emitted");
     expect(timedOut.lifecycle.lastCheckpointAt).toBe("2026-04-18T15:00:32.000Z");
     expect(timedOut.lifecycle.failedAt).toBe("2026-04-18T15:00:32.000Z");

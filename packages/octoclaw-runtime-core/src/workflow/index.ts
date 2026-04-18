@@ -8,6 +8,9 @@ import type {
   ScopeMetadata,
 } from "@octoclaw/contracts/schemas";
 import type { NormalizedRuntimeRequest } from "../requests/index.js";
+export * from "./execution-fallback.js";
+export * from "./summary-snapshot.js";
+export * from "./thread-aggregation.js";
 import { createAckLedger, type AckLedger } from "../ack/index.js";
 import { createOutbox, type DeliveryOutbox } from "../delivery/outbox.js";
 import {
@@ -40,6 +43,7 @@ export interface RuntimeLifecycleCheckpoint {
 
 export interface RuntimeExecutionRecord extends ExecutionIdentity, ExecutionProvenance {
   role: string;
+  coordinationMode: PolicyDecision["coordinationMode"];
   modelProfile: string;
   decisionRef: string;
   admission: PolicyDecision["admission"];
@@ -97,6 +101,7 @@ export function startRuntimeWorkflow(input: StartWorkflowInput): RuntimeWorkflow
       sourceRef: input.decisionRef || `${input.requestId}:${input.taskId}`,
       materializedBy: "packages/octoclaw-runtime-core/src/workflow/index.ts",
       role: input.role,
+      coordinationMode: input.decision.coordinationMode,
       modelProfile: input.decision.modelProfile,
       decisionRef: input.decisionRef || `${input.requestId}:${input.taskId}`,
       admission: input.decision.admission,
@@ -144,7 +149,7 @@ export function markWorkflowCheckpointEmitted(state: RuntimeWorkflowState, check
     },
     lifecycle: {
       ...state.lifecycle,
-      phase: "checkpoint_pending",
+      phase: "checkpoint_emitted",
       checkpointState: "emitted",
       lastCheckpointAt: checkpointAt,
     },
@@ -200,8 +205,8 @@ export function markWorkflowTimedOut(
     ...markWorkflowCheckpointEmitted(state, checkpointAt),
     workflowOrchestration: "failed",
     lifecycle: {
-      ...state.lifecycle,
-      phase: "failed",
+      ...markWorkflowCheckpointEmitted(state, checkpointAt).lifecycle,
+      phase: "timed_out",
       checkpointState: "emitted",
       lastCheckpointAt: checkpointAt,
       failedAt,
@@ -226,6 +231,48 @@ export function renewWorkflowHeartbeat(
     ...state,
     claim: nextTaskState.claim,
     taskMaterialization: nextTaskState.materialization,
+  };
+}
+
+export function markWorkflowWaitingInput(state: RuntimeWorkflowState, _reason?: string): RuntimeWorkflowState {
+  return {
+    ...state,
+    lifecycle: {
+      ...state.lifecycle,
+      phase: "waiting_input",
+    },
+  };
+}
+
+export function markWorkflowBackendRetryScheduled(state: RuntimeWorkflowState, _retryAt = new Date().toISOString()): RuntimeWorkflowState {
+  return {
+    ...state,
+    lifecycle: {
+      ...state.lifecycle,
+      phase: "backend_retry_scheduled",
+    },
+  };
+}
+
+export function markWorkflowDeliveryPending(state: RuntimeWorkflowState): RuntimeWorkflowState {
+  return {
+    ...state,
+    lifecycle: {
+      ...state.lifecycle,
+      phase: "delivery_pending",
+      deliveryState: "queued",
+    },
+  };
+}
+
+export function markWorkflowStale(state: RuntimeWorkflowState, _staleAt = new Date().toISOString()): RuntimeWorkflowState {
+  return {
+    ...state,
+    lifecycle: {
+      ...state.lifecycle,
+      phase: "stale",
+      checkpointState: "stale",
+    },
   };
 }
 
@@ -304,14 +351,7 @@ function deriveExecutionIdentity(decision: PolicyDecision, input: StartWorkflowI
 }
 
 function resolveExecutionBackend(backend: PolicyDecision["backend"]): ExecutionBackend {
-  switch (backend) {
-    case "main":
-    case "observer":
-    case "worker":
-      return "openclaw-native";
-    default:
-      return backend;
-  }
+  return backend;
 }
 
 function createLifecycleState(phase: LifecyclePhase, deliveryState: DeliveryState): LifecycleState {

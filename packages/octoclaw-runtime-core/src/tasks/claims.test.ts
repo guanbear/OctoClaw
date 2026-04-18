@@ -12,6 +12,7 @@ describe("task claims", () => {
       claimToken: "task-1:worker-a:1776513600000",
       lastHeartbeatAt: "2026-04-18T12:00:00.000Z",
       leaseExpiresAt: "2026-04-18T12:00:30.000Z",
+      resumeGeneration: 1,
       leaseDurationMs: 30_000,
     });
   });

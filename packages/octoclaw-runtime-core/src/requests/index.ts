@@ -1,5 +1,7 @@
 import { buildContractEnvelope, type ScopeMetadata } from "@octoclaw/contracts/schemas";
 
+export * from "./surface-binding.js";
+
 export interface RuntimeIngressRequestInput {
   prompt: string;
   sessionKey?: string;
@@ -53,7 +55,7 @@ function buildStableId(prefix: string, seed: string): string {
 
 function normalizeScope(input: RuntimeIngressRequestInput): ScopeMetadata {
   return {
-    workspaceMode: input.workspaceMode || "isolated_workspace",
+    workspaceMode: input.workspaceMode || "isolated_worktree",
     readScope: Array.isArray(input.readScope) ? input.readScope : [],
     writeScope: Array.isArray(input.writeScope) ? input.writeScope : [],
     writeScopeSummary: normalizeText(input.writeScopeSummary),

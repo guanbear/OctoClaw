@@ -10,8 +10,10 @@ function buildDecision(): PolicyDecision {
   return {
     route: "delegate.single",
     role: "worker_research",
-    backend: "worker",
-    workspaceMode: "isolated_workspace",
+    coordinationMode: "solo_worker",
+    backend: "openclaw-native",
+    executionProfile: "worker",
+    workspaceMode: "isolated_worktree",
     modelProfile: "worker_research",
     caps: {
       queueBudget: 6,
@@ -27,13 +29,13 @@ function buildDecision(): PolicyDecision {
       latencyTarget: "background",
       reason: "admission_allowed",
     },
-    decisionStack: ["route", "role", "backend", "workspace_mode", "model_profile", "caps"],
+    decisionStack: ["route", "role", "coordination_mode", "backend", "workspace_mode", "model_profile", "caps"],
   };
 }
 
 function buildScope(): ScopeMetadata {
   return {
-    workspaceMode: "isolated_workspace",
+    workspaceMode: "isolated_worktree",
     readScope: [{ resource: "repo", access: "read" }],
     writeScope: [],
     writeScopeSummary: "",
@@ -98,6 +100,11 @@ describe("runtime telemetry", () => {
 
     expect(telemetry.task).toMatchObject({
       telemetryId: "task:flow-1:task-1",
+      requestId: "req-1",
+      route: "delegate.single",
+      role: "worker_research",
+      coordinationMode: "solo_worker",
+      workspaceMode: "isolated_worktree",
       taskId: "task-1",
       flowId: "flow-1",
       queueBudget: 6,

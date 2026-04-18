@@ -67,6 +67,7 @@ function baseDeliveryEnvelope(
     claimToken,
     leaseExpiresAt,
     lastHeartbeatAt: workflow.claim?.lastHeartbeatAt || queuedAt,
+    resumeGeneration: workflow.claim?.resumeGeneration || 1,
     ...scope,
     taskId: workflow.identity.taskId,
     flowId: workflow.identity.flowId,
