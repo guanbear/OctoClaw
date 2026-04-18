@@ -74,7 +74,8 @@ OctoClaw 的核心目的不是“做一个更大的 agent 框架”，也不是�
 3. **Stable Delegation Lifecycle**
    委派任务必须有可追踪的开始、进度、阻塞、交付、失败、恢复。
 4. **Cost-Aware Model Use**
-   主链路用快模型/快配置，子任务按类别分层，用固定策略先把成本打下来。
+   真正需要快的是 `judge/ACK` 和主入口控制链，而不是强行把主回答 agent 压成最便宜模型。
+   `direct_main` 可以比 `judge_fast` 更强，先保证主回答质量；子任务再按复杂度和角色分层，用固定映射把成本打下来，后续再接自动选模。
 
 这 4 个里，前 3 个比“更智能”更重要。
 
@@ -242,7 +243,7 @@ OctoClaw 的核心目的不是“做一个更大的 agent 框架”，也不是�
 
 1. 这条请求属于什么类型
 2. 要不要委派
-3. 委派给单 worker 还是 compound flow
+3. 委派后是单 worker、advisor-assisted 还是 multi-agent
 4. 用哪个 backend 跑
 5. 用哪个模型
 
@@ -254,10 +255,12 @@ v2 应改成：
 2. `delegate`
 3. `observe`
 
-### workflow profile
+### coordination mode
 
-1. `single`
-2. `compound`
+1. `solo_worker`
+2. `advisor_assisted`
+3. `threaded_subagents`
+4. `compound`
 
 ### execution backend
 
@@ -268,9 +271,13 @@ v2 应改成：
 ### model profile
 
 1. `judge_fast`
-2. `direct_main`
-3. `worker_default`
-4. `worker_deep`
+2. `observer_probe`
+3. `direct_main`
+4. `worker_default`
+5. `worker_code_normal`
+6. `worker_code_deep`
+7. `worker_review`
+8. `worker_deep`
 
 这样组合关系会简单很多。
 
@@ -325,6 +332,37 @@ Anthropic 关于长流程 harness 的经验，和 OctoClaw 最近暴露的失败
 1. tool result 必须为后续模型和状态机消费而塑形。
 2. progress / result / artifact / delivery 都要有 schema。
 3. harness regression 需要黑盒 acceptance 和端态评估。
+
+### 4.1.5 Managed Agents / Advisor：借稳定接口，不绑死单家实现
+
+Anthropic 在 2026-04-16 可见的两条官方资料里，最值得借的不是“他们有托管能力”，而是两种接口思路：
+
+1. **Managed Agents 的 many brains / many hands / session-thread 接口**
+2. **Advisor tool 的 cheap executor + strong advisor 模式**
+
+第一条的启发是：
+
+1. brain 不该和 hands/sandbox/session 耦死
+2. 多 agent 时，thread 应该是上下文隔离的一等对象
+3. coordinator 和 subagent 应共享 flow truth，但不共享上下文窗口
+4. 一层 delegation 往往比递归 swarm 更稳
+
+第二条的启发是：
+
+1. 不是所有复杂任务都要起子 agent
+2. 很多场景更适合“执行模型 + 顾问模型”的中途咨询
+3. bulk token 可以继续跑在便宜/中档模型上
+4. 只有 plan / course correction / final review 才调用强模型
+
+对 OctoClaw 的结论是：
+
+1. **要提前为 multi-agent 设计 thread/agent/contracts**
+2. **也要提前为 advisor-assisted execution 设计 provider-agnostic 接口**
+3. **但不能把 Anthropic 的托管实现细节硬编码进 OctoClaw**
+
+换句话说：
+
+> **我们要借的是接口形态，而不是绑定某一家平台的运行时。**
 
 ## 4.2 不该误读 Anthropic 的地方
 
@@ -416,6 +454,103 @@ OpenHarness 最值得借的方向是：
 1. live path 不要无边界地把所有知识和控制逻辑塞给模型。
 2. tool / skill / policy 都应该按需、显式、可审计地进入上下文。
 
+## 5.6 Hermes Agent：借长驻形态与技能沉淀，不借闭环自增殖
+
+Hermes Agent 现在热度很高，我看了它的公开 README 和相关页面后，认为它最值得借的不是“自我进化”口号，而是这几件更工程化的东西：
+
+1. long-running agent 的运行形态
+2. CLI + messaging gateway 的统一入口
+3. skills / context files / memory 的显式载体
+4. 可替换 terminal backends
+5. 对多 provider / 多模型切换的产品化包装
+
+对 OctoClaw 最有价值的借鉴点有 4 个：
+
+### 5.6.1 Agent lives beyond one terminal session
+
+Hermes 的一个强点是：它不是把 agent 绑定在某个 IDE 窗口里，而是把 agent 视为一个能跨 CLI、聊天平台、远程环境延续的实体。
+
+这对 OctoClaw 的启发是：
+
+1. `thread/session` 必须是一等对象
+2. session continuity 要靠 substrate truth + summaries + artifacts
+3. “主进程退出了”不应等于“任务身份消失了”
+
+但这里要注意：
+
+> **我们要借的是 continuity，不是把常驻进程重新变成架构前提。**
+
+### 5.6.2 Skills / context files 要做成显式工件
+
+Hermes 很强调 skills、context files、持久化记忆这些“可见载体”。
+
+这和 OctoClaw 当前方向是相容的，但要收敛成：
+
+1. `TaskPacket`
+2. `artifact refs`
+3. `summary / checkpoint`
+4. future skill / context file interface
+
+也就是：
+
+1. 经验沉淀成显式工件
+2. 工件可以复用、可审计、可回放
+3. 不能把“记忆”做成又一套不透明真相源
+
+### 5.6.3 多执行面是 backend 问题，不是 policy 真相
+
+Hermes 支持 local / Docker / SSH / Modal / Singularity / messaging gateway 等多执行面，这一点很强。
+
+对 OctoClaw 的启发是：
+
+1. `hands` 应该是可替换 backend
+2. runtime core 不该和某一种执行面焊死
+3. gateway / chat surface / remote environment 都应该是 adapter
+
+这和我们现在把：
+
+1. `backend`
+2. `workspace_mode`
+3. `coordination_mode`
+
+分开的方向是一致的。
+
+### 5.6.4 产品层的模型切换体验值得学，但路由权不能回到 UI
+
+Hermes 在“切 provider / 切 model 很顺滑”这件事上产品感很强。
+
+这对 OctoClaw 的启发是：
+
+1. model profile -> model id 映射应该产品化
+2. provider slots 应该是正式接口
+3. 后面 auto router 才能在不改主逻辑的情况下接进来
+
+但不能学的是：
+
+1. 让用户界面上的临时切模重新变成 live path 真相
+2. 让 provider 选择绕过 policy / gate / telemetry
+
+### 5.6.5 不该直接照搬的部分
+
+我不建议把 Hermes 下面这些东西直接搬进 OctoClaw v1/v2 主链：
+
+1. “built-in learning loop” 直接进 live hot path
+2. 自主创建/改写 skills 的闭环先进入默认运行面
+3. 持久 memory 直接参与 route authority
+4. 大而全的单 agent 产品面直接压进 core
+
+原因很简单：
+
+1. OctoClaw 当前最缺的是稳定执行骨架，不是更强的长期自进化
+2. learning loop 太早进主链，会显著增加不可解释状态
+3. memory / skill / self-improvement 如果先变成热路径依赖，很容易重新长出第二套隐形真相源
+
+所以对 OctoClaw 的最终结论是：
+
+1. 借 Hermes 的 long-running continuity、gateway、skill/context 工件化、backend 可替换性
+2. 不借 Hermes 的“自增殖学习闭环”进入 v1/v2 主路径
+3. 如果以后要做 skills / context files / memory，也应先作为 artifact / projection / optional plugin 演进
+
 ---
 
 ## 6. Harness Engineering 应该怎么落到 OctoClaw
@@ -459,10 +594,12 @@ harness 负责：
 
 1. build worker brief
 2. assign backend + model profile
-3. start worker
-4. receive heartbeats / checkpoints / artifacts / result
-5. recover stale ownership / resume sessions
-6. deliver progress and final result
+3. assign coordination mode
+4. start worker / child thread / advisor consult
+5. receive heartbeats / checkpoints / artifacts / result
+6. manage thread handoff / inbox / resume
+7. recover stale ownership / resume sessions
+8. deliver progress and final result
 
 ### 6.2.3 Evaluation Harness
 
@@ -842,6 +979,33 @@ tools/
 3. runtime core 不和 IM/plugin 细节绑死
 4. eval 是一等包，不是边角脚本
 
+但这里要特别强调：
+
+> **这是逻辑目标骨架，不是要求 Phase 1 一次性把所有目录都实建出来。**
+
+更稳的做法是：
+
+1. 先把 `packages/octoclaw-contracts`
+2. `packages/octoclaw-policy`
+3. `packages/octoclaw-runtime-core`
+4. `extensions/octoclaw-runtime`
+5. `extensions/octoclaw-delegation`
+6. `extensions/octoclaw-status-surface`
+7. `packages/octoclaw-evals`
+
+作为最小可运行骨架。
+
+而下面这些可以晚点再真正落目录：
+
+1. `extensions/octoclaw-auto-router`
+2. `extensions/octoclaw-im-adapters`
+3. richer multi-agent board / cockpit
+4. advisor thread / heavy profile 扩展
+
+也就是说：
+
+> **先把 API 边界设计好，不等于先把所有插件都建出来。**
+
 ## 8.6 Plugin-first 原则
 
 这次重构建议明确采用：
@@ -874,6 +1038,26 @@ tools/
 3. OpenClaw 生态适配更自然
 4. 不同用户可以按需启用，不需要吃一整套复杂度
 5. 未来你要把某一块独立成公开插件，几乎不需要再大拆骨架
+
+### 8.6.a Anti-Bloat Guardrails
+
+为了防止“为了可扩展而先把系统做重”，我建议再把下面这些约束写死：
+
+1. core 不反向依赖 optional plugins
+2. 一个新抽象只有在它能消灭旧复杂度时才允许引入
+3. Phase 1 不允许出现第二套路由器、第二套状态机、第二套 delivery path
+4. 不为未来功能先造空插件、空目录、空 registry，除非已经有明确消费者
+5. `advisor`、`threaded_subagents`、`auto-router` 前期只保留 contract，不抢 live path 逻辑
+6. `skills`、`context files`、`memory` 前期只允许作为 artifact/projection/plugin 能力出现，不进入 live route authority
+7. IM / gateway / CLI 这些 surface adapter 只负责入口和展示，不拥有 session truth、不拥有 workflow truth
+8. 任何新 plugin 都必须回答 3 个问题：
+   - 它是不是可以完全不安装？
+   - 它是不是不安装也不影响 core 正确性？
+   - 它是不是只通过 contracts 和 core 对话？
+
+一句话：
+
+> **插件化是为了减核心，不是为了把未来复杂度提前搬进现在。**
 
 ## 8.7 建议的插件切分
 
@@ -1033,6 +1217,78 @@ Telemetry 只能影响未来调优，不能反过来篡改当前执行真相。
 一句话：
 
 > **truth 负责“现在到底发生了什么”，projection 负责“怎么给人看”，artifact 负责“怎么交接”，telemetry 负责“以后怎么优化”。**
+
+### 9.1.0.b 要借 brain / hands / session，但不要照搬外部运行时
+
+Anthropic 在 Managed Agents 里最核心的接口拆法，其实可以压缩成 3 个词：
+
+1. `brain`
+2. `hands`
+3. `session`
+
+对 OctoClaw 来说，这 3 个概念是值得借的，但要映射成我们自己的骨架：
+
+#### A. `brain`
+
+对应 OctoClaw 里的：
+
+1. policy plane
+2. orchestration layer
+3. model calls
+4. judge / advisor / coordinator logic
+
+也就是“谁负责想、谁负责决定下一步”。
+
+#### B. `hands`
+
+对应 OctoClaw 里的：
+
+1. sandbox / tool runtime
+2. backend adapters
+3. OpenClaw native task/flow execution
+4. 可选的 worktree / shell / MCP / provider tool surface
+
+也就是“谁负责实际动手”。
+
+#### C. `session`
+
+对应 OctoClaw 里的：
+
+1. thread event stream
+2. task/flow truth
+3. recoverable event log
+4. summaries / checkpoints / handoff history
+
+也就是“长流程上下文和可恢复记录放在哪里”。
+
+这里最重要的架构约束是：
+
+1. `brain` 不能和 `hands` 焊死
+2. `brain` 不能和 `session` 焊死
+3. `hands` 可以替换，但不篡改执行真相
+4. `session` 是可恢复的 durable context，不等于模型上下文窗口
+
+所以我们真正该借的是：
+
+> **thinking、acting、history 三者解耦。**
+
+而不是照搬 Anthropic 的托管式实现。
+
+### 9.1.0.c 这对 OctoClaw v1/v2 的直接含义
+
+1. v1 就应该把 `thread/session` 当成正式对象设计好
+2. v1 就应该把 backend/tool/sandbox 当成可替换的 `hands`
+3. v1 就应该让 orchestration + model calls 站在 `brain` 一侧
+4. 但 v1 不需要实现“many brains / many hands”的全部运行时复杂度
+5. v1 就应该把 `thread summary / checkpoint summary / active context budget` 当成正式 contract，避免主模型上下文污染重新长出来
+6. v1 就应该把 gateway/IM continuity 设计成 `surface anchor -> thread/session binding`，而不是让每个 adapter 自己维护一套会话逻辑
+
+换句话说：
+
+1. **接口要先对**
+2. **实现先从最小单 worker 开始**
+3. **advisor 先只保留 contract，不提前抢主链范围**
+4. **threaded subagents 先只按 one-level skeleton 设计**
 
 ### 9.1.1 v1 Orchestration Layer 的实现口径
 
@@ -1500,17 +1756,18 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
 建议主路径：
 
 1. receive inbound message
-2. load minimal thread/session facts
-3. fast judge:
+2. resolve `surface_anchor -> thread/session` 绑定
+3. load minimal thread/session facts
+4. fast judge:
    - `reply`
    - `delegate.single`
    - `observe`
-4. if `delegate`:
+5. if `delegate`:
    - send ACK immediately
    - materialize native task/flow
    - enqueue worker
-5. emit initial event
-6. workflow plane 接管
+6. emit initial event
+7. workflow plane 接管
 
 这里再明确一次：
 
@@ -1532,15 +1789,20 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
    - `worker_research`
    - `worker_code`
    - `worker_review`
-3. `backend`
+3. `coordination_mode`
+   - `solo_worker`
+   - `advisor_assisted`
+   - `threaded_subagents`
+   - `compound`
+4. `backend`
    - `openclaw-native`
    - `clawteam`（未来可选）
    - `legacy-python`（迁移期）
-4. `workspace_mode`
+5. `workspace_mode`
    - `read_only`
    - `shared_workspace`
    - `isolated_worktree`
-5. `model_profile`
+6. `model_profile`
    - `observer_probe`
    - `judge_fast`
    - `direct_main`
@@ -1554,11 +1816,117 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
 
 1. 先判断这次是什么路径
 2. 再决定由哪个角色承担
-3. 再决定落到哪个 backend
-4. 再决定工作区隔离策略
-5. 最后才把 role/profile 映射到具体模型
+3. 再决定协作方式是单 worker、advisor 还是子线程
+4. 再决定落到哪个 backend
+5. 再决定工作区隔离策略
+6. 最后才把 role/profile 映射到具体模型
 
 这样后面的人实现时就不容易重新把这些概念揉成一团。
+
+### 9.2.0.b multi-agent-ready 骨架现在就要留
+
+虽然 Phase 1 不做 compound / multi-agent live path，但骨架现在就要为它留接口。
+
+不然以后很容易出现第二次返工。
+
+我建议 v2 从一开始就把下面 4 个对象当成正式概念：
+
+1. `flow`
+   顶层父任务 / 父作业。
+2. `task`
+   可调度、可重试、可交付的执行单元。
+3. `thread`
+   一个 agent 的上下文隔离事件流。
+4. `agent_instance`
+   某次运行里的角色实例，绑定 role / toolset / model profile / workspace mode。
+
+它们的关系建议固定成：
+
+1. 一个 `flow` 下面可以有多个 `task`
+2. 一个 `task` 默认对应一个主 `thread`
+3. multi-agent 时，一个 coordinator `thread` 可以派生多个 child `thread`
+4. 每个 `thread` 都要有自己的 summary / checkpoints / terminal state
+
+这样做的好处是：
+
+1. 现在 single delegate 不需要推翻
+2. 以后加多 agent 只是把 `task -> thread` 从 1:1 放宽到 1:n
+3. status surface、telemetry、recovery 都不会重做数据模型
+
+### 9.2.0.c delegate 路径里未来会有 3 种协作形态
+
+我建议 OctoClaw 从架构上默认支持这 3 种协作形态，只是分阶段开启：
+
+1. `solo_worker`
+   一个 worker 自己做完，这是 Phase 1 默认形态。
+2. `advisor_assisted`
+   一个 worker 负责执行，但可中途咨询更强 advisor。
+3. `threaded_subagents`
+   coordinator 把工作拆给多个上下文隔离的 child agent / thread。
+
+这里最重要的一点是：
+
+> **advisor-assisted 和 threaded-subagents 不是一回事。**
+
+前者更像“一个执行者偶尔请教更强顾问”。
+后者更像“一个协调者把工作分给多个执行者”。
+
+### 9.2.0.d 什么时候该用 advisor，什么时候该用子 agent
+
+建议写死判断原则：
+
+#### 更适合 `advisor_assisted` 的场景
+
+1. 还是同一个主任务、同一个 deliverable
+2. 主要工作是机械执行，只有 plan / 纠偏 / final review 需要更强智能
+3. 不需要额外工具权限
+4. 不需要独立长时间运行的子任务
+
+#### 更适合 `threaded_subagents` 的场景
+
+1. 任务天然能拆成多个 well-scoped 子任务
+2. 不同子任务需要不同 role / toolset / workspace mode
+3. 需要并行推进来换时间
+4. 需要隔离上下文，避免 coordinator 被细节污染
+
+一句话：
+
+> **“需要更强脑子”不等于“需要起子 agent”。**
+
+### 9.2.0.e advisor 模式建议做成 provider-agnostic 接口
+
+我建议现在就把 advisor 定义成 OctoClaw 自己的抽象，而不是 Anthropic 特供逻辑。
+
+例如：
+
+1. `consult_advisor(task_packet, checkpoint_summary) -> advice_packet`
+
+这样未来可以有 2 种实现：
+
+1. **native advisor tool**
+   如果某 provider 原生支持 advisor，就直接用。
+2. **emulated advisor thread**
+   如果没有原生 advisor，就起一个 read-mostly 的 advisor thread / child agent 来模拟。
+
+这条很关键，因为 OctoClaw 不会永远只跑在 Anthropic 单家能力上。
+
+### 9.2.0.f advisor 的边界必须比子 agent 更严
+
+为了控成本和避免复杂度失控，我建议 advisor 默认有更严的 contract：
+
+1. advisor 不直接写文件
+2. advisor 不直接交付给最终用户
+3. advisor 不直接再 delegate
+4. advisor 默认只返回 `advice_packet`
+5. advisor 调用受 `max_uses`、预算桶、阶段 gating 约束
+
+它更像：
+
+1. 计划顾问
+2. 路线纠偏器
+3. 完成前审阅者
+
+而不是另一个全功能 worker。
 
 这里我想补一个非常重要的约束：
 
@@ -1597,6 +1965,19 @@ v2 应该采用：
 
 这些语义判断默认都应交给 small judge。
 
+所以 `reply / delegate.single / observe` 这类主语义路由，默认不是规则判，也不是主回答模型自由发挥判，而是：
+
+1. **small judge model** 负责绝大多数语义判断
+2. **hard-boundary gate** 只处理无需深语义也必须稳定成立的硬边界
+3. **policy code** 负责把 judge 输出收口成可执行决策
+4. **workflow/runtime harness** 负责真正物化、排队、冲突控制和交付
+
+更直白地说：
+
+1. 不是 `rule-first`
+2. 不是 `main model decides all`
+3. 而是 **`judge-first + hard-boundary + policy/harness enforcement`**
+
 前门只保留这种“无需理解太多语义也应稳定成立”的信号：
 
 1. 用户点了 `retry` / `stop` / `approve`
@@ -1607,6 +1988,79 @@ v2 应该采用：
 所以更准确地说：
 
 > **不是 rule-first，而是 judge-first；规则只保留在硬边界处。**
+
+### 9.2.0.g hard-boundary gate 的允许范围与禁止范围
+
+为了防止后面实现时又悄悄滑回关键词路由，这里建议把 `hard-boundary gate` 的边界写死。
+
+#### 允许输入
+
+`hard-boundary gate` 默认只允许读取**结构化信号**，例如：
+
+1. UI action / command id
+2. `task_id` / `thread_id` / `anchor_id`
+3. session lifecycle state
+4. permission / tool / write-scope / risk flags
+5. queue state / lease state / backend availability
+
+一句话：
+
+> **gate 可以看结构化字段，但不应该读原始自然语言正文来猜意图。**
+
+#### 允许职责
+
+`hard-boundary gate` 只允许做下面这些事：
+
+1. 识别显式 control action
+2. 识别当前消息是否已绑定既有 task/thread
+3. 识别当前会话是否处于 recovery / waiting-input / approval-pending
+4. 识别是否触达明确权限/安全边界
+5. 识别是否因 queue/backpressure/write conflict/backend down 必须改走排队或 blocked 路径
+
+#### 明确禁止
+
+`hard-boundary gate` 明确禁止做这些事：
+
+1. 读取用户原文后，用关键词猜 `reply / delegate / observe`
+2. 用词表猜复杂度高低
+3. 用关键词猜 `code / research / review`
+4. 用关键词猜该用哪个模型
+5. 用 prompt pattern 或 regex 充当语义分类器
+
+只要实现里出现“从自然语言文本里抽关键词，再决定主语义 route”，就已经违反设计。
+
+#### 默认行为
+
+如果没有命中明确硬信号，`hard-boundary gate` 的默认行为应该是：
+
+1. `pass-through`
+2. 把请求交给 `small judge model`
+3. 再由 `policy code` 和 `workflow harness` 落地
+
+也就是说，gate 的职责是：
+
+1. **override / guard**
+2. 不是 **semantic classify**
+
+#### 关于误判
+
+`hard-boundary gate` 当然仍可能有 bug，但它的误判应该被限制在：
+
+1. 结构化状态映射错误
+2. 生命周期状态判断错误
+3. 权限/资源边界判断错误
+
+而不应该退化成：
+
+1. 语言理解误判
+2. 关键词词表失控
+3. prompt pattern 无限追加
+
+这也是为什么我建议把它的输入面收窄到结构化信号。
+
+一句话版：
+
+> **hard-boundary gate 是硬边界守卫，不是语义路由器；没有硬信号就直接放行给 small judge。**
 
 ## 9.3 worker brief 规范
 
@@ -1620,6 +2074,14 @@ v2 应该采用：
 6. delivery contract
 
 默认**不拿整段原始主会话**。
+
+另外我建议把“上下文洁癖”进一步写成硬约束：
+
+1. `judge_fast` 只读最小 route packet，不读整段 transcript
+2. `direct_main` 默认只读当前请求 + thread summary + 必要 artifact refs
+3. delegated worker 默认只读 `TaskPacket + checkpoint summary + artifact refs`
+4. 只有在 acceptance/recovery 真的需要时，才回退到 transcript excerpt
+5. 每条 lane 都应有明确 `active_context_budget`
 
 如果必须引用历史上下文，也应该优先按这个顺序：
 
@@ -1690,8 +2152,8 @@ v1 不需要自动选模型，建议先写死。
 
 v1 先把接口做对：
 
-1. route 只选 `profile`
-2. profile 再映射到具体模型
+1. policy 先选 `route / role / coordination_mode / backend / workspace_mode / model_profile`
+2. `model_profile` 再映射到具体模型
 3. 具体模型名可以在配置里写死
 
 不要一上来做自动学习。
@@ -1739,8 +2201,9 @@ v1 先把接口做对：
 这套映射的含义是：
 
 1. 便宜快模型只负责 judge / probe / 很轻的观察类任务
-2. 中档模型负责主回答和常规 delegated work
-3. 贵模型只压在代码实现、审查、复杂深任务上
+2. 主回答 agent 不等于 judge agent；`direct_main` 可以更强，以保证主回答质量
+3. 中档模型优先承接主回答和常规 delegated work
+4. 贵模型只压在代码实现、审查、复杂深任务上
 
 其中 `worker_code` 是逻辑角色家族，当前在 model profile 层直接拆成两档：
 
@@ -1767,6 +2230,83 @@ v1 先把接口做对：
 1. `worker_review` 在 v1 统一先上 `omniroute/cx/gpt-5.4`
 2. 不先拆 `worker_review_normal / worker_review_deep`
 3. 等 telemetry 证明 review 成本压力明显，再考虑补 normal 档
+
+### 9.5.0.a multi-agent / advisor 的成本控制口径
+
+既然最终要支持 multi-agent，这里建议把成本控制再往前写死一点：
+
+1. auto router 后面不能只选 `model_id`
+2. 它最终应该选择一个**执行包**：
+   - `role`
+   - `coordination_mode`
+   - `backend`
+   - `workspace_mode`
+   - `model_profile`
+   - `advisor_policy`
+
+前期虽然这些都可以写死，但骨架上要留这个接口。
+
+我建议先按下面的固定策略理解：
+
+#### Phase 1
+
+1. `solo_worker` only
+2. 不开 advisor
+3. 不开 threaded subagents
+
+#### Phase 2
+
+1. 只保留 `advisor_policy` / `advice_packet` / consult adapter 骨架
+2. 可以做 shadow / benchmark / gate 验证
+3. 不把 `advisor_assisted` 放进默认 live path
+
+#### Phase 3 灰度
+
+1. 只给 `worker_code_normal` / `worker_research` 灰度开 `advisor_assisted`
+2. advisor 默认上 `omniroute/cx/gpt-5.4`
+3. executor 继续跑 `zhipu/GLM-5.1`
+
+#### Phase 3 后续扩展
+
+1. 打开 `threaded_subagents`
+2. 默认只做一层 delegation
+3. 先支持少数固定 callable role
+
+这里最重要的一条是：
+
+> **自动选模型以后也不能只决定“换哪个模型”，而要决定“要不要 advisor、要不要子 agent、并发开多宽”。**
+
+同时还要补一条很现实的约束：
+
+1. multi-agent 的默认收益必须来自并发、隔离和质量提升，而不是“因为能多开 agent 所以多开”
+2. 任何 `advisor_assisted` / `threaded_subagents` 进入 live path，都必须先通过 `cost_per_success` 和 `final_delivery_latency` 的 harness gate
+3. 如果多 agent 只带来成本放大、不带来交付提升，就必须回退到 `solo_worker`
+
+### 9.5.0.b advisor_policy 建议先做成固定字段
+
+为了跟 harness 和成本控制接上，我建议现在就把 `advisor_policy` 当成正式字段预留。
+
+至少包含：
+
+1. `enabled`
+2. `advisor_model_profile`
+3. `max_uses_per_task`
+4. `max_cost_usd`
+5. `allowed_stages`
+
+`allowed_stages` 建议默认只允许：
+
+1. `before_commit`
+2. `when_stuck`
+3. `before_done`
+
+也就是：
+
+1. 做方案前请教一次
+2. 卡住时请教一次
+3. 宣称完成前请教一次
+
+这和 Anthropic advisor tool 在 coding/agent tasks 上强调的早期规划、卡住纠偏、完成前复审思路是相符的，但我们保持 provider-agnostic。
 
 ### 9.5.1 本地模型在 v1 的位置
 
@@ -1883,6 +2423,64 @@ v1 先把接口做对：
 2. runner window / patrol window
 3. 但这是 operator surface，不是 execution truth
 
+### 9.6.4.a 默认不开 resident runner 时，policy/judge 应如何处理
+
+这里建议再明确一个实现口径：
+
+> **v1 默认假设“没有 resident runner”，这不是异常，而是标准起点。**
+
+因此 route/policy/judge 在主路径里不应该先问“runner 在不在”，而应该先做语义判断，再由 backend planner 落地。
+
+更具体地说：
+
+1. `reply`
+   - 直接走 `direct_main`
+   - 不依赖 runner
+2. `observe`
+   - 默认走 `observer_probe`
+   - 如果需要短探测任务，就物化一个 on-demand 短命 worker
+   - 不要求 resident runner 先健康
+3. `delegate.single`
+   - 默认直接 materialize native task/flow
+   - backend planner 选择 `openclaw-native + on-demand execution`
+   - 不因为没有 resident runner 就回退成主模型硬扛整条长任务
+
+也就是说，**fallback 不是“无 runner 时都改成 direct”**，而是：
+
+1. `reply` 保持 direct
+2. `observe` 保持 observe，只是落到 on-demand
+3. `delegate.single` 保持 delegate.single，只是落到 native substrate + on-demand worker
+
+真正需要回退的是 execution profile，不是 semantic route。
+
+如果发生 backend 不可用或 admission control 拒绝，则再按下面顺序降级：
+
+1. `delegate.single` -> `queued delegate.single`
+2. `queued delegate.single` -> `blocked / waiting capacity`
+3. 只有在任务本身被 small judge 判成“可直接短答”时，才允许改走 `reply`
+
+这条很重要，因为否则系统很容易重新长回：
+
+1. 语义决策被执行条件绑架
+2. 主模型被迫吞下本来该委派的长任务
+3. 首响和质量一起变差
+
+### 9.6.4.b runner 开启时的机制定位
+
+如果用户后面主动开启 resident runner，我建议把它明确成：
+
+1. 一个 **opt-in acceleration lane**
+2. 可以由 shell supervisor / systemd / hosted worker process 承载
+3. 允许挂 tmux workbench 便于人工观察
+4. 但 tmux 从头到尾都只是 operator workbench，不是 runner 必需机制
+
+因此文档里更准确的口径应该是：
+
+1. **runner 默认关闭**
+2. **开启 runner 是性能优化，不是功能前提**
+3. **tmux 是 runner 的可选观察面，不是 runner 的实现前提**
+4. **native task/flow + on-demand worker 才是默认执行心智**
+
 ### 9.6.5 tmux 的定位
 
 建议明确成一句话：
@@ -1972,28 +2570,30 @@ v1 先把接口做对：
 2. `task_id`
 3. `flow_id`
 4. `route`
-5. `workflow_profile`
-6. `backend`
-7. `model_profile`
-8. `model_id`
-9. `ack_ms`
-10. `route_decision_ms`
-11. `task_materialize_ms`
-12. `queue_wait_ms`
-13. `ttft_ms`
-14. `first_progress_ms`
-15. `final_delivery_ms`
-16. `total_latency_ms`
-17. `output_tps`
-18. `input_tokens`
-19. `output_tokens`
-20. `total_tokens`
-21. `estimated_cost_usd`
-22. `actual_cost_usd`
-23. `retry_count`
-24. `fallback_count`
-25. `failure_code`
-26. `terminal_state`
+5. `role`
+6. `coordination_mode`
+7. `backend`
+8. `workspace_mode`
+9. `model_profile`
+10. `model_id`
+11. `ack_ms`
+12. `route_decision_ms`
+13. `task_materialize_ms`
+14. `queue_wait_ms`
+15. `ttft_ms`
+16. `first_progress_ms`
+17. `final_delivery_ms`
+18. `total_latency_ms`
+19. `output_tps`
+20. `input_tokens`
+21. `output_tokens`
+22. `total_tokens`
+23. `estimated_cost_usd`
+24. `actual_cost_usd`
+25. `retry_count`
+26. `fallback_count`
+27. `failure_code`
+28. `terminal_state`
 
 其中我特别建议把延迟拆开看，而不是只看一个总耗时：
 
@@ -2056,6 +2656,17 @@ v1 先把接口做对：
 
 这比一上来做智能调优稳得多。
 
+而且后面如果真要做 harness 自学习 / policy self-tuning，也必须建立在这 4 步之上：
+
+1. 先有固定 lane baseline
+2. 再有 replay 对比
+3. 再有 gate 判定
+4. 最后才允许 shadow recommendation / policy promotion
+
+也就是说：
+
+> **自学习不是“模型自己越来越会”，而是 harness 基于真实回放和指标，逐步收紧策略。**
+
 ### 9.7.5 应该怎么定义“优化成功”
 
 不同 lane 的目标不一样，不能只看一个总分。
@@ -2067,6 +2678,7 @@ v1 先把接口做对：
 1. `ack_ms`
 2. `total_latency_ms`
 3. direct reply 成功率
+4. `cost_per_request`
 
 #### `delegate.single` lane
 
@@ -2076,6 +2688,7 @@ v1 先把接口做对：
 2. `first_progress_ms`
 3. `final_delivery_ms`
 4. `cost_per_success`
+5. queue overflow rate / fallback rate
 
 #### `compound` lane
 
@@ -2085,6 +2698,42 @@ v1 先把接口做对：
 2. 终态正确率
 3. 可恢复率
 4. 总成本上限
+
+这里再把“评估成功”的语气写得更硬一点：
+
+1. 快响应成功，不是只看感觉“挺快”，而是 reply lane 的 `ack_ms`、`total_latency_ms`、delegate lane 的 `first_progress_ms`、`final_delivery_ms` 相比基线没有退化
+2. 成本成功，不是只看单次便宜，而是 `cost_per_request`、`cost_per_success`、`actual_cost_usd` 在相同 acceptance 水平下优于基线
+3. 质量成功，不是只看模型换便宜了，而是 acceptance、replay、delivery correctness 没掉
+4. 任何“更快但更差”或“更便宜但回退率更高”的变化，都不算成功优化
+
+### 9.7.5.a 后续 harness 自进化应该怎么做
+
+如果后面要做 harness 自进化，我建议严格限定成下面这种闭环：
+
+1. 从 production telemetry 和 replay 中抽样
+2. 对比候选 policy / model bundle / advisor policy 的离线表现
+3. 先给 shadow recommendation，不直接改 live path
+4. 只有通过 gate 的 bundle 才允许 promotion
+5. promotion 后继续监控，失败就 rollback
+
+优化对象也要明确成执行包，而不是单个模型名：
+
+1. `route`
+2. `role`
+3. `coordination_mode`
+4. `backend`
+5. `workspace_mode`
+6. `model_profile`
+7. `advisor_policy`
+
+这样后面的“自进化”才会真的围绕：
+
+1. 成本
+2. 快响应
+3. 交付质量
+4. 稳定性
+
+而不是重新变成 prompt 魔改。
 
 ### 9.7.6 对插件化的含义
 
@@ -2182,6 +2831,7 @@ v1 先把接口做对：
 1. 这一阶段新增正式能力只写 TS
 2. 不再给对应 Python live-path 模块继续加功能
 3. 老模块最多只做 shim / fallback，直到被删掉
+4. 不提前做通用 skills engine / memory engine / rich gateway runtime
 
 这里“压掉 compound”的更准确含义是：
 
@@ -2215,6 +2865,7 @@ v1 先把接口做对：
 1. 后面不会重做 status surface 信息架构
 2. delegated work 的中间事件有自然落点
 3. Phase 3 做 compound / multi-agent 时能平滑扩展
+4. 但不代表 Phase 1 要一次性把 rich renderer / graph / cockpit 都做出来
 
 ### Phase 2：native task/flow integration
 
@@ -2225,8 +2876,10 @@ v1 先把接口做对：
 3. 让 Python dispatcher 退出热路径
 4. 让 telemetry 事件直接挂到 native substrate / event stream
 5. status/details/queue 全部读同一份 substrate-first truth
+6. surface anchor 与 thread/session binding 统一收口
+7. shared IM/gateway adapter contract 落地，但不要求所有渠道一次性齐备
 
-### Phase 3：compound flow
+### Phase 3：compound / controlled multi-agent
 
 目标：
 
@@ -2234,6 +2887,9 @@ v1 先把接口做对：
 2. plan validate / schedule
 3. dependency-aware flow delivery
 4. compound lane 成本/时延门禁
+5. one-level threaded subagents
+6. advisor-assisted lane 灰度上线
+7. child thread / inbox / handoff / summary contract 打通
 
 ### Phase 4：高级能力
 
@@ -2244,18 +2900,19 @@ v1 先把接口做对：
 3. richer IM/status surface
 4. auto model tuning
 5. telemetry 驱动的 auto router
+6. wider multi-agent board / cockpit
 
 ---
 
 ## 11. 最终建议：哪些必须现在拍板
 
-如果只挑几件必须尽快定下来的架构决策，我建议先拍板这 8 条：
+如果只挑几件必须尽快定下来的架构决策，我建议先拍板这 9 条：
 
 1. **主语言用 TypeScript，Node 基线对齐 OpenClaw 上游。**
 2. **OpenClaw 原生 task/flow 是执行真相源。**
 3. **`task-state.json` 退化为 projection / policy metadata，不再是执行主真相。**
 4. **ACK 独立于后续复杂决策链。**
-5. **route、backend、model profile 三者彻底解耦。**
+5. **route、role、coordination_mode、backend、workspace_mode、model_profile 六者彻底解耦。**
 6. **默认只做 `reply / delegate.single / observe`，compound 后置。**
 7. **正式产品代码全部 TS 重写；Python 只保留测试/运维/一次性脚本。**
 8. **成本优化和速度优化必须变成 request/task/flow 级可测指标。**
