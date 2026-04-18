@@ -134,6 +134,7 @@ tools/
 20. ack envelope / ack stage / ack lease metadata
 21. ack cooldown / burst-coalescing / suppress reason metadata
 22. pre-route soft-ack / user-input-active metadata
+23. ack idempotency key / outbox receipt metadata
 
 验收标准：
 
@@ -234,6 +235,7 @@ tools/
 19. reply soft-ack timer and stage-nudge timer
 20. ACK burst coalescing / cooldown / anchor-update preference
 21. pre-route soft-ack fallback when judge/route is slow
+22. ACK compare-and-set / insert-if-absent guard
 
 实现口径：
 
@@ -257,6 +259,7 @@ tools/
 18. 不允许 ACK controller 和主模型各自发一条短回复争抢首响
 19. ACK 介入应以 silence/state-change 为主，不以“每来一条用户消息都回一条”为原则
 20. 对 `delegate/observe` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
+21. 任何 ACK 副作用都不能只靠进程内布尔位去重，必须走 `ack_key + CAS + outbox/receipt`
 
 关键状态：
 
@@ -372,6 +375,7 @@ tools/
 8. fixed ACK template registry with channel-aware renderers
 9. agent-first quick-ack `request envelope + prompt policy injection seam` + runtime fallback
 10. pre-route soft-ack template and user-input-active suppress logic
+11. ack idempotency key builder + duplicate-send guard
 
 验收标准：
 
@@ -384,6 +388,7 @@ tools/
 7. ACK 采用固定模板池，不以自由生成文案为前提
 8. 主模型能抢首响时优先让主模型自己回；否则 runtime 能稳定接管
 9. judge/route 慢时也不会让用户长时间静默
+10. 多个 hook/middleware 重复触发同一 ACK 意图时，最终只会有一次真正发送
 
 依赖：WS0、WS1、WS2
 
@@ -510,6 +515,7 @@ tools/
 11. shadow recommendation / promotion gate scaffold
 12. ACK timing / suppression / duplicate-short-reply regression cases
 13. rapid multi-turn input / burst-coalescing regression cases
+14. duplicate hook trigger / repeated maybeSendLatencyAck regression cases
 
 验收标准：
 
@@ -520,6 +526,7 @@ tools/
 5. 能判断“更快但更差”或“更便宜但更差”的优化无效
 6. 能抓住 ACK 太慢、ACK 重复、ACK 抢占主回复 这类交互回归
 7. 能抓住“用户连续输入时 ACK 机械刷屏”的交互回归
+8. 能抓住 `before_prompt_build` / `before_tool_call` 这类双触发导致的重复 ACK 回归
 
 依赖：WS0，随后逐步接 WS1-WS7
 

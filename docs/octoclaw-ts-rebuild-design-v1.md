@@ -796,6 +796,51 @@ v1 默认建议：
 1. 不允许“脚本先回一句，我看看；主模型又回一句，我来查一下”
 2. ACK 和主模型共享同一个首响协调器
 
+但这里还要再补一个更底层的约束：
+
+> **不能只靠进程内布尔位防重，ACK 必须有真正的 exactly-once guard。**
+
+像你说的这种问题：
+
+1. `maybeSendLatencyAck` 在 `before_prompt_build` 被调一次
+2. 又在 `before_tool_call` 被调一次
+3. 两次之间如果只靠某个内存态 `latencyAckSent=true`
+4. 就很容易因为状态不同步、异步竞态、上下文重建而重复发送
+
+所以我建议 ACK 至少有这 3 层防重：
+
+1. **first-visible-response lease**
+   - 解决“谁先占首响位”
+2. **ack idempotency key**
+   - 解决“同一个 ACK 意图被调用两次”
+3. **delivery outbox / receipt**
+   - 解决“发送侧 effect 到底有没有真正落地”
+
+更具体地说：
+
+1. 每个 ACK 都要生成稳定的 `ack_key`
+2. `ack_key` 至少应绑定：
+   - `thread_id`
+   - `anchor_id`（如果有）
+   - `ack_stage`
+   - `route_phase`
+   - `message_turn_id` / `request_id`
+3. 发送前必须做一次 compare-and-set / insert-if-absent
+4. 如果同一个 `ack_key` 已存在，就直接 suppress
+5. 真正的发送副作用再通过 outbox/receipt 落账
+
+这样设计后：
+
+1. `before_prompt_build`
+2. `before_tool_call`
+3. `before_stream_start`
+
+这些 hook/middleware 就算都误触发同一个 ACK 意图，最终也只会有一次真正可见发送。
+
+一句话：
+
+> **ACK 去重不能只靠“记得别发两次”，必须靠幂等键和副作用账本。**
+
 这里的“合格首响”建议也要有个明确定义，避免主模型随便吐半句就占掉位子：
 
 1. 不是空洞 filler
