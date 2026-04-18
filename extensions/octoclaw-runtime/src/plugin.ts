@@ -1,14 +1,14 @@
-import type { RuntimeWorkflowState } from "../../../packages/octoclaw-runtime-core/src/workflow/index.ts";
-import { judgePolicy, type PolicyDecision, type PolicyJudgeInput } from "../../../packages/octoclaw-policy/src/judge/index.ts";
+import type { RuntimeWorkflowState } from "@octoclaw/runtime-core/workflow";
+import { judgePolicy, type PolicyDecision, type PolicyJudgeInput } from "@octoclaw/policy/judge";
 import {
   createRuntimeTaskflowAdapter,
   type RuntimeTaskflowAdapter,
   type RuntimeTaskflowManagedRecord,
   type RuntimeTaskflowTaskRecord,
-} from "./adapter/runtime-taskflow.ts";
-import { createRuntimeWebhookSurface, type RuntimeWebhookSurface } from "./adapter/webhook-surface.ts";
-import { createNativeTruthArtifactKinds } from "../../../packages/octoclaw-contracts/src/artifacts.ts";
-import type { NativeHelperInvoker } from "./adapter/native-helper.ts";
+} from "./adapter/runtime-taskflow.js";
+import { createRuntimeWebhookSurface, type RuntimeWebhookSurface } from "./adapter/webhook-surface.js";
+import { createNativeTruthArtifactKinds } from "@octoclaw/contracts/artifacts";
+import type { NativeHelperInvoker } from "./adapter/native-helper.js";
 
 export interface OctoClawRuntimePluginOptions {
   helperInvoker?: NativeHelperInvoker;

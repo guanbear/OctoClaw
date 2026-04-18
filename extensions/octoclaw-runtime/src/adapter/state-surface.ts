@@ -1,9 +1,9 @@
-import { buildContractEnvelope } from "../../../../packages/octoclaw-contracts/src/schemas.ts";
-import type { StatusSurfaceViewModel } from "../../../../packages/octoclaw-contracts/src/results.ts";
+import { buildContractEnvelope } from "@octoclaw/contracts/schemas";
+import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
 import type {
   RuntimeTaskflowManagedRecord,
   RuntimeTaskflowTaskRecord,
-} from "./runtime-taskflow.ts";
+} from "./runtime-taskflow.js";
 
 export type RuntimeStateSurfaceRecord = RuntimeTaskflowManagedRecord | RuntimeTaskflowTaskRecord;
 

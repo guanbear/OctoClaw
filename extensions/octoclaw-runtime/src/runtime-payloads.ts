@@ -9,14 +9,14 @@ import {
   markWorkflowFailed,
   renewWorkflowHeartbeat,
   startRuntimeWorkflow,
-} from "../../../packages/octoclaw-runtime-core/src/workflow/index.ts";
-import { normalizeRuntimeRequest } from "../../../packages/octoclaw-runtime-core/src/requests/index.ts";
-import type { ScopeDescriptor, ScopeMetadata } from "../../../packages/octoclaw-contracts/src/schemas.ts";
-import type { PolicyDecision } from "../../../packages/octoclaw-policy/src/judge/index.ts";
-import { createOctoClawRuntimePlugin } from "./plugin.ts";
-import type { NativeHelperInvoker } from "./adapter/native-helper.ts";
-import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "../../octoclaw-delegation/src/index.ts";
-import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "../../octoclaw-fast-reply/src/index.ts";
+} from "@octoclaw/runtime-core/workflow";
+import { normalizeRuntimeRequest } from "@octoclaw/runtime-core/requests";
+import type { ScopeDescriptor, ScopeMetadata } from "@octoclaw/contracts/schemas";
+import type { PolicyDecision } from "@octoclaw/policy/judge";
+import { createOctoClawRuntimePlugin } from "./plugin.js";
+import type { NativeHelperInvoker } from "./adapter/native-helper.js";
+import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "@octoclaw/delegation";
+import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "@octoclaw/fast-reply";
 
 type UnknownRecord = Record<string, unknown>;
 

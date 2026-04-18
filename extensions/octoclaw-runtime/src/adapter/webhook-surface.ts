@@ -1,21 +1,19 @@
-import type { RuntimeWorkflowState } from "../../../../packages/octoclaw-runtime-core/src/workflow/index.ts";
+import type { RuntimeWorkflowState } from "@octoclaw/runtime-core/workflow";
 import type {
   RuntimeTaskflowAdapter,
   RuntimeTaskflowManagedRecord,
   RuntimeTaskflowTaskRecord,
-} from "./runtime-taskflow.ts";
-import { createRuntimeTaskflowAdapter } from "./runtime-taskflow.ts";
-import type { NativeHelperInvoker } from "./native-helper.ts";
-import { resolveRuntimeConfig, type OctoClawRuntimeConfig } from "../config/index.ts";
+} from "./runtime-taskflow.js";
+import { createRuntimeTaskflowAdapter } from "./runtime-taskflow.js";
+import type { NativeHelperInvoker } from "./native-helper.js";
+import { resolveRuntimeConfig, type OctoClawRuntimeConfig } from "../config/index.js";
 import {
+  buildStateDetailsSurface,
+  buildStatusSurfaceView,
   type RuntimeStateDetailsSurface,
   type RuntimeStateSurfaceRecord,
-} from "./state-surface.ts";
-import type { StatusSurfaceViewModel } from "../../../../packages/octoclaw-contracts/src/results.ts";
-import {
-  buildDetailsSurface,
-  buildStatusSurface,
-} from "../../../octoclaw-status-surface/src/index.ts";
+} from "./state-surface.js";
+import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
 
 export interface WebhookCreateManagedInput {
   sessionKey: string;
@@ -189,7 +187,7 @@ export function createRuntimeWebhookSurface(
     },
     readManaged: normalizeManagedView,
     readTask: normalizeTaskView,
-    readStatusView: (record) => buildStatusSurface(asRuntimeStateSurfaceRecord(record)),
-    readDetailsView: (record) => buildDetailsSurface(asRuntimeStateSurfaceRecord(record)),
+    readStatusView: (record) => buildStatusSurfaceView(asRuntimeStateSurfaceRecord(record)),
+    readDetailsView: (record) => buildStateDetailsSurface(asRuntimeStateSurfaceRecord(record)),
   };
 }

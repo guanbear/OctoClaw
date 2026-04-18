@@ -1,11 +1,11 @@
-import type { RuntimeWorkflowState } from "../../../../packages/octoclaw-runtime-core/src/workflow/index.ts";
+import type { RuntimeWorkflowState } from "@octoclaw/runtime-core/workflow";
 import {
   buildContractEnvelope,
   type ScopeMetadata,
   type WorkspaceMode,
-} from "../../../../packages/octoclaw-contracts/src/schemas.ts";
-import { createNativeTruthArtifactKinds } from "../../../../packages/octoclaw-contracts/src/artifacts.ts";
-import { invokeNativeHelper, type NativeHelperInvoker } from "./native-helper.ts";
+} from "@octoclaw/contracts/schemas";
+import { createNativeTruthArtifactKinds } from "@octoclaw/contracts/artifacts";
+import { invokeNativeHelper, type NativeHelperInvoker } from "./native-helper.js";
 
 export interface RuntimeNativeTruthPayload {
   kind: "truth";
