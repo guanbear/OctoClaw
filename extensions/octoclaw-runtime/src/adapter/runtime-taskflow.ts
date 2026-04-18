@@ -100,6 +100,34 @@ export interface RuntimeTaskflowSessionBinding {
   bindSession: (sessionKey: string) => RuntimeTaskflowSessionBinding;
   createManaged: (workflow: RuntimeWorkflowState) => RuntimeTaskflowManagedRecord;
   runTask: (workflow: RuntimeWorkflowState) => RuntimeTaskflowTaskRecord;
+  cancelFlow: (flowId: string) => {
+    ok: boolean;
+    status: string;
+    flowId: string;
+    found: boolean;
+    cancelled: boolean;
+    reason: string;
+  };
+  readFlow: (flowId: string) => {
+    ok: boolean;
+    status: string;
+    flowId: string;
+    found: boolean;
+    substrateState: string | null;
+    substrateRevision: number | null;
+    currentStep?: string;
+  };
+  readTask: (flowId: string, taskId: string) => {
+    ok: boolean;
+    status: string;
+    flowId: string;
+    taskId: string;
+    found: boolean;
+    substrateState: string | null;
+    substrateRevision: number | null;
+    syncMode?: "managed" | "mirrored";
+    progressSummary?: string;
+  };
 }
 
 export interface RuntimeTaskflowAdapter {
@@ -331,6 +359,62 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
         projection: derived.projection,
         artifact: derived.artifact,
         telemetry: derived.telemetry,
+      };
+    },
+    cancelFlow: (flowId) => {
+      const helperResult = helperInvoker({
+        action: "cancel-flow",
+        args: {
+          session_key: sessionKey,
+          flow_id: flowId,
+        },
+      });
+      return {
+        ok: helperResult.ok,
+        status: helperResult.status,
+        flowId: helperResult.flow_id,
+        found: helperResult.found,
+        cancelled: helperResult.cancelled,
+        reason: helperResult.reason,
+      };
+    },
+    readFlow: (flowId) => {
+      const helperResult = helperInvoker({
+        action: "read-flow",
+        args: {
+          session_key: sessionKey,
+          flow_id: flowId,
+        },
+      });
+      return {
+        ok: helperResult.ok,
+        status: helperResult.status,
+        flowId: helperResult.flow_id,
+        found: helperResult.found,
+        substrateState: helperResult.flow?.status || null,
+        substrateRevision: helperResult.flow?.revision ?? null,
+        currentStep: helperResult.flow?.currentStep,
+      };
+    },
+    readTask: (flowId, taskId) => {
+      const helperResult = helperInvoker({
+        action: "read-task",
+        args: {
+          session_key: sessionKey,
+          flow_id: flowId,
+          task_id: taskId,
+        },
+      });
+      return {
+        ok: helperResult.ok,
+        status: helperResult.status,
+        flowId: helperResult.flow_id,
+        taskId: helperResult.task_id,
+        found: helperResult.found,
+        substrateState: helperResult.task?.state || helperResult.task?.status || null,
+        substrateRevision: helperResult.task?.revision ?? null,
+        syncMode: helperResult.task?.syncMode,
+        progressSummary: helperResult.task?.progressSummary,
       };
     },
   });

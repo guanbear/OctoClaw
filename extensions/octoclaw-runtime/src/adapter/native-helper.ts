@@ -25,7 +25,7 @@ function resolveSpawnSync(): SpawnSync {
 
 const spawnSync = resolveSpawnSync();
 
-export type NativeHelperAction = "create-managed-flow" | "run-task";
+export type NativeHelperAction = "create-managed-flow" | "run-task" | "cancel-flow" | "read-flow" | "read-task";
 
 export interface NativeHelperInvokeArgs {
   action: NativeHelperAction;
@@ -39,6 +39,21 @@ export interface NativeManagedFlowHelperInvokeArgs {
 
 export interface NativeRunTaskHelperInvokeArgs {
   action: "run-task";
+  args: Record<string, string>;
+}
+
+export interface NativeCancelFlowHelperInvokeArgs {
+  action: "cancel-flow";
+  args: Record<string, string>;
+}
+
+export interface NativeReadFlowHelperInvokeArgs {
+  action: "read-flow";
+  args: Record<string, string>;
+}
+
+export interface NativeReadTaskHelperInvokeArgs {
+  action: "read-task";
   args: Record<string, string>;
 }
 
@@ -65,9 +80,50 @@ export interface NativeRunTaskHelperResult {
   };
 }
 
+export interface NativeCancelFlowHelperResult {
+  ok: boolean;
+  status: string;
+  flow_id: string;
+  found: boolean;
+  cancelled: boolean;
+  reason: string;
+}
+
+export interface NativeReadFlowHelperResult {
+  ok: boolean;
+  status: string;
+  flow_id: string;
+  found: boolean;
+  flow: {
+    flowId: string;
+    status: string;
+    revision: number;
+    currentStep?: string;
+  } | null;
+}
+
+export interface NativeReadTaskHelperResult {
+  ok: boolean;
+  status: string;
+  flow_id: string;
+  task_id: string;
+  found: boolean;
+  task: {
+    taskId: string;
+    status: string;
+    revision: number;
+    syncMode?: "managed" | "mirrored";
+    state?: string;
+    progressSummary?: string;
+  } | null;
+}
+
 export interface NativeHelperInvoker {
   (input: NativeManagedFlowHelperInvokeArgs): NativeManagedFlowHelperResult;
   (input: NativeRunTaskHelperInvokeArgs): NativeRunTaskHelperResult;
+  (input: NativeCancelFlowHelperInvokeArgs): NativeCancelFlowHelperResult;
+  (input: NativeReadFlowHelperInvokeArgs): NativeReadFlowHelperResult;
+  (input: NativeReadTaskHelperInvokeArgs): NativeReadTaskHelperResult;
 }
 
 const REPO_ROOT = new URL("../../../../", import.meta.url).pathname;
@@ -139,9 +195,62 @@ function normalizeRunTaskResult(payload: any): NativeRunTaskHelperResult {
   };
 }
 
+function normalizeCancelFlowResult(payload: any): NativeCancelFlowHelperResult {
+  return {
+    ok: payload?.ok === true,
+    status: ensureString(payload?.status || "not_cancelled", "status"),
+    flow_id: ensureString(payload?.flow_id, "flow_id"),
+    found: payload?.found === true,
+    cancelled: payload?.cancelled === true,
+    reason: String(payload?.reason || "").trim(),
+  };
+}
+
+function normalizeReadFlowResult(payload: any): NativeReadFlowHelperResult {
+  return {
+    ok: payload?.ok === true,
+    status: ensureString(payload?.status || "not_found", "status"),
+    flow_id: ensureString(payload?.flow_id, "flow_id"),
+    found: payload?.found === true,
+    flow: payload?.flow
+      ? {
+          flowId: ensureString(payload.flow.flowId || payload.flow_id, "flow.flowId"),
+          status: ensureString(payload.flow.status, "flow.status"),
+          revision: ensureNumber(payload.flow.revision, "flow.revision"),
+          currentStep: String(payload.flow.currentStep || "").trim() || undefined,
+        }
+      : null,
+  };
+}
+
+function normalizeReadTaskResult(payload: any): NativeReadTaskHelperResult {
+  return {
+    ok: payload?.ok === true,
+    status: ensureString(payload?.status || "not_found", "status"),
+    flow_id: ensureString(payload?.flow_id, "flow_id"),
+    task_id: ensureString(payload?.task_id, "task_id"),
+    found: payload?.found === true,
+    task: payload?.task
+      ? {
+          taskId: ensureString(payload.task.taskId || payload.task_id, "task.taskId"),
+          status: ensureString(payload.task.status, "task.status"),
+          revision: ensureNumber(payload.task.revision, "task.revision"),
+          syncMode: payload.task.syncMode === "managed" || payload.task.syncMode === "mirrored"
+            ? payload.task.syncMode
+            : undefined,
+          state: String(payload.task.state || "").trim() || undefined,
+          progressSummary: String(payload.task.progressSummary || "").trim() || undefined,
+        }
+      : null,
+  };
+}
+
 export function invokeNativeHelper(input: NativeManagedFlowHelperInvokeArgs): NativeManagedFlowHelperResult;
 export function invokeNativeHelper(input: NativeRunTaskHelperInvokeArgs): NativeRunTaskHelperResult;
-export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): NativeManagedFlowHelperResult | NativeRunTaskHelperResult {
+export function invokeNativeHelper(input: NativeCancelFlowHelperInvokeArgs): NativeCancelFlowHelperResult;
+export function invokeNativeHelper(input: NativeReadFlowHelperInvokeArgs): NativeReadFlowHelperResult;
+export function invokeNativeHelper(input: NativeReadTaskHelperInvokeArgs): NativeReadTaskHelperResult;
+export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): NativeManagedFlowHelperResult | NativeRunTaskHelperResult | NativeCancelFlowHelperResult | NativeReadFlowHelperResult | NativeReadTaskHelperResult {
   const result = spawnSync("node", buildCliArgs(action, args), {
     cwd: REPO_ROOT,
     encoding: "utf8",
@@ -161,6 +270,15 @@ export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): Na
   }
   if (action === "create-managed-flow") {
     return normalizeManagedFlowResult(payload);
+  }
+  if (action === "cancel-flow") {
+    return normalizeCancelFlowResult(payload);
+  }
+  if (action === "read-flow") {
+    return normalizeReadFlowResult(payload);
+  }
+  if (action === "read-task") {
+    return normalizeReadTaskResult(payload);
   }
   return normalizeRunTaskResult(payload);
 }
