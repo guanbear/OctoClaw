@@ -1,6 +1,6 @@
-import type { WorkspaceMode } from "../../../octoclaw-contracts/src/schemas.ts";
-import type { LatencyTarget } from "../caps/index.ts";
-import type { LiveRoute } from "../route/index.ts";
+import type { WorkspaceMode } from "@octoclaw/contracts/schemas";
+import type { LatencyTarget } from "../caps/index.js";
+import type { LiveRoute } from "../route/index.js";
 
 export interface AdmissionInput {
   route: LiveRoute;

@@ -1,4 +1,4 @@
-import type { PolicyRole } from "../roles/index.ts";
+import type { PolicyRole } from "../roles/index.js";
 
 export type LatencyTarget = "interactive" | "background";
 export type WorkerPool = "octoclaw-main" | "octoclaw-observer" | "octoclaw-research" | "octoclaw-code" | "octoclaw-review";
