@@ -5,6 +5,7 @@ import {
 import {
   cancelAckGuardForState,
   maybeSendLatencyAck,
+  notifyUserMessage,
   scheduleEagerPreDispatchAck,
   startAckGuard,
   watchdogTick,
@@ -251,11 +252,7 @@ export const plugin = {
       const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
 
       if (preSessionKey) {
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey: preStateKey });
-        const existingState = getPolicyStateForContext(ctx);
-        if (existingState.state) {
-          existingState.state.ackGuardKey = preSessionKey;
-        }
+        notifyUserMessage(preSessionKey, preStateKey);
       }
 
       const resolved = await resolvePolicyDecisionForContext(
@@ -270,9 +267,14 @@ export const plugin = {
       if (!hookConfig.enabled) return;
       const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
       const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
-      if (state && preSessionKey) {
-        state.ackGuardKey = preSessionKey;
+
+      if (preSessionKey) {
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision });
+        if (state) {
+          state.ackGuardKey = preSessionKey;
+        }
       }
+
       const metadata = buildPolicyMetadata(ctx, { stateKey });
       await maybeSendLatencyAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, "direct_lookup");
       scheduleEagerPreDispatchAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {});
@@ -599,7 +601,6 @@ export const plugin = {
         sessionKey: stringValue(ctx.sessionKey),
         agentId: stringValue(ctx.agentId),
       });
-      cancelAckGuardForState(stateKey);
       if (!state) return;
       const guarded = guardAssistantMessageForPolicyState(asRecord(event.message), asRecord(state));
       const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : asRecord(event.message);

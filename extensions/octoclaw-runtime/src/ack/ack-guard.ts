@@ -3,15 +3,48 @@ import {
   resolveTaskStatePath,
   resolveWorkspaceRoot,
 } from "../resolve/env.js";
+import {
+  AckStage,
+  ackStageText,
+  selectAckTemplate,
+  type TemplateSelectionInputs,
+} from "./ack-templates.js";
+import {
+  buildAckKey,
+  checkAndSet,
+  recordDelivery,
+  tryClaimLease,
+} from "./ack-dedupe.js";
+import {
+  getBurstState,
+  recordAckSent,
+  recordMessage,
+  shouldSuppressAck,
+} from "./ack-burst.js";
+import {
+  AckRoutePhase,
+  DEFAULT_ACK_TIMING_CONFIG,
+  cancelAckTimers,
+  createAckTimers,
+  markMainModelFirstToken as markMainModelFirstTokenInTiming,
+  ackTimerStateForKey,
+} from "./ack-timing.js";
 
-export const ACK_GUARD_2S_TEXT = "收到，我看一下";
-export const ACK_GUARD_15S_TEXT = "还在处理，稍后给你结果";
+const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
+
+function ackDebug(message: string): void {
+  if (ACK_DEBUG) {
+    console.log(`[octoclaw-ack] ${message}`);
+  }
+}
+
 export const WATCHDOG_INTERVAL_MS = 30_000;
 export const WATCHDOG_DEBOUNCE_MS = 25_000;
 export const STALE_QUEUED_THRESHOLD_MIN = 90;
 export const STUCK_THRESHOLD_MIN = 15;
 
 const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
+const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect", "probe", "scan"]);
 const IM_SESSION_ORIGINS = new Set([
   "slack",
   "discord",
@@ -28,6 +61,8 @@ const SESSION_NAMESPACE_KINDS = new Set(["default"]);
 const USER_SESSION_KINDS = new Set(["dm", "direct", "user"]);
 const CHANNEL_SESSION_KINDS = new Set(["channel", "group", "room", "conversation", "space", "chat"]);
 const THREAD_SESSION_KINDS = new Set(["thread", "topic"]);
+const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tier3DeadlineMs + 5_000;
+const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tier3DeadlineMs + 5_000;
 
 type UnknownRecord = Record<string, unknown>;
 type AckOwner = "" | "pre_dispatch" | "latency_ack" | "timer_ack";
@@ -82,15 +117,6 @@ interface AckClaimResult {
   currentOwner: string;
 }
 
-interface AckGuardEntry {
-  inboundTs: number;
-  ackSent2s: boolean;
-  ackSent15s: boolean;
-  timer2s: ReturnType<typeof setTimeout> | null;
-  timer15s: ReturnType<typeof setTimeout> | null;
-  stateKey: string;
-}
-
 interface TaskStateTask extends UnknownRecord {
   id?: unknown;
   status?: unknown;
@@ -102,7 +128,27 @@ interface TaskStateFile extends UnknownRecord {
   tasks?: unknown;
 }
 
-const ackGuardTimers = new Map<string, AckGuardEntry>();
+interface AckAttemptParams {
+  sessionKey: string;
+  stateKey: string;
+  ackOwner: AckOwner;
+  ackStage: AckStage;
+  routePhase: AckRoutePhase;
+  message: string;
+  metadata?: UnknownRecord;
+  state?: UnknownRecord;
+  ctx?: AckContext;
+  logger?: AckLogger;
+  timeoutMs?: number;
+  ownerTag: string;
+  skipOwnerClaim?: boolean;
+  markPreDispatchSent?: boolean;
+  markLatencySent?: boolean;
+  markMode?: string;
+  messageTurnId?: string;
+  stageHint?: string;
+}
+
 const ackStateByStateKey = new Map<string, AckTrackingState>();
 let watchdogLastTick = 0;
 
@@ -116,6 +162,10 @@ function asString(value: unknown): string {
 
 function asBoolean(value: unknown): boolean {
   return value === true;
+}
+
+function asNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function stripAgentSessionPrefix(raw: string): string {
@@ -240,6 +290,147 @@ function tryClaimAckOwner(stateKey: string, owner: AckOwner): AckClaimResult {
   return { claimed: false, currentOwner };
 }
 
+function ackLeaseKey(stateKey: string): string {
+  const normalized = asString(stateKey);
+  return normalized ? `ack-lease:${normalized}` : "";
+}
+
+function ensureAckTurnTimestamp(stateKey: string): number {
+  const normalizedStateKey = asString(stateKey);
+  if (!normalizedStateKey) {
+    return Date.now();
+  }
+  const existing = asNumber(ackState(normalizedStateKey)._ackTurnTs);
+  if (existing > 0) {
+    return existing;
+  }
+  const created = Date.now();
+  updateTrackingState(normalizedStateKey, { _ackTurnTs: created });
+  return created;
+}
+
+function stageFromRoutePhase(routePhase: AckRoutePhase): AckStage {
+  switch (routePhase) {
+    case "delegate":
+      return AckStage.DelegateStarted;
+    case "observe":
+      return AckStage.ObserveStarted;
+    case "reply":
+      return AckStage.ReplySoftAck;
+    case "pre_route":
+    default:
+      return AckStage.PreRouteSoftAck;
+  }
+}
+
+function normalizeAckStage(value: string): AckStage {
+  switch (asString(value)) {
+    case AckStage.PreRouteSoftAck:
+      return AckStage.PreRouteSoftAck;
+    case AckStage.DelegateStarted:
+      return AckStage.DelegateStarted;
+    case AckStage.ObserveStarted:
+      return AckStage.ObserveStarted;
+    case AckStage.ReplySoftAck:
+      return AckStage.ReplySoftAck;
+    case AckStage.Queued:
+      return AckStage.Queued;
+    case AckStage.Blocked:
+      return AckStage.Blocked;
+    case AckStage.ProgressNudge:
+    case "progress_nudge_explicit_stage":
+      return AckStage.ProgressNudge;
+    default:
+      return AckStage.ProgressNudge;
+  }
+}
+
+function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecord = {}): AckRoutePhase {
+  const explicit = asString(options.routePhase || options.route_phase).toLowerCase();
+  if (explicit === "delegate" || explicit === "observe" || explicit === "reply" || explicit === "pre_route") {
+    return explicit;
+  }
+
+  const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
+  const route = asString(options.route || routeDecision.route).toLowerCase();
+  if (DELEGATED_ROUTE_NAMES.has(route)) {
+    return "delegate";
+  }
+  if (OBSERVE_ROUTE_NAMES.has(route)) {
+    return "observe";
+  }
+  if (route === "direct" || route === "reply") {
+    return "reply";
+  }
+  return "pre_route";
+}
+
+function threadKeyFromSessionKey(sessionKey: string, stateKey = ""): string {
+  const parsed = parseSessionRoute(sessionKey);
+  return asString(parsed.threadId || parsed.target || stateKey);
+}
+
+function applyTemplateVars(text: string, vars: Record<string, string>): string {
+  return text.replace(/\{([^{}]+)\}/g, (match, key: string) => {
+    const value = vars[key];
+    return value === undefined ? match : value;
+  });
+}
+
+function templateMessageForStage(
+  stage: AckStage,
+  inputs: TemplateSelectionInputs,
+  vars: Record<string, string> = {},
+): string {
+  const selected = selectAckTemplate(stage, inputs);
+  if (selected?.text) {
+    return applyTemplateVars(selected.text, vars);
+  }
+  return ackStageText(stage, vars);
+}
+
+function buildTemplateInputs(
+  state: UnknownRecord,
+  ctx: AckContext,
+  routePhase: AckRoutePhase,
+  threadKey: string,
+  stageHint = "",
+): TemplateSelectionInputs {
+  const channelSupportsUpdate = isRecord(state.channel)
+    ? state.channel.supportsUpdate !== false
+    : state.channelSupportsUpdate !== false;
+  return {
+    route: routePhase,
+    queueState: asString(state.queueState || state.queue_state),
+    blockedReason: asString(state.blockedReason || state.blocked_reason),
+    channelCapability: channelSupportsUpdate ? "update" : "text_only",
+    burstState: getBurstState(threadKey),
+    anchorExists: Boolean(asString(state.anchorId || state.anchor_id || state.pendingDeliveryId)),
+    userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
+    stageHint: stageHint || asString(state.stageHint || state.stage_hint),
+  };
+}
+
+function buildSuppressContext(state: UnknownRecord, ctx: AckContext, routePhase: AckRoutePhase): {
+  mainModelStartedOutput?: boolean;
+  anchorExists?: boolean;
+  channelSupportsUpdate?: boolean;
+  userInputActive?: boolean;
+  routePhase?: string;
+} {
+  const channel = isRecord(state.channel) ? state.channel : {};
+  const supportsUpdate = channel.supportsUpdate;
+  return {
+    mainModelStartedOutput: asBoolean(state.mainModelStartedOutput) || asBoolean(state.mainModelFirstTokenSeen),
+    anchorExists: Boolean(asString(state.anchorId || state.anchor_id || state.pendingDeliveryId)),
+    channelSupportsUpdate: typeof supportsUpdate === "boolean"
+      ? supportsUpdate
+      : (typeof state.channelSupportsUpdate === "boolean" ? state.channelSupportsUpdate as boolean : undefined),
+    userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
+    routePhase,
+  };
+}
+
 async function sendAckDirectDetailed(
   sessionKey: string,
   message: string,
@@ -347,14 +538,142 @@ function parseUpdatedSortValue(value: unknown): number {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
+async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string } | null> {
+  const normalizedStateKey = asString(params.stateKey);
+  const normalizedSessionKey = asString(params.sessionKey);
+  const effectiveState = isRecord(params.state) ? params.state : {};
+  const effectiveCtx = params.ctx ?? {};
+  const routePhase = params.routePhase;
+  const threadKey = threadKeyFromSessionKey(normalizedSessionKey, normalizedStateKey);
+  const ackTarget = resolveAckTargetFromSessionKey(normalizedSessionKey);
+  const messageTurnId = asString(params.messageTurnId) || `${normalizedStateKey}:${ensureAckTurnTimestamp(normalizedStateKey)}`;
+  const ackKey = buildAckKey({
+    threadId: ackTarget.threadId || threadKey,
+    anchorId: asString(effectiveState.anchorId || effectiveState.anchor_id),
+    ackStage: params.ackStage,
+    routePhase,
+    messageTurnId,
+  });
+
+  const suppress = shouldSuppressAck(
+    threadKey,
+    params.ackStage,
+    routePhase,
+    buildSuppressContext(effectiveState, effectiveCtx, routePhase),
+  );
+  if (suppress.suppressed) {
+    ackDebug(`attemptAckSend: suppressed reason=${suppress.reason} threadKey=${threadKey} stage=${params.ackStage}`);
+    updateTrackingState(normalizedStateKey, {
+      ackKey,
+      ack_target_resolution_state: `suppressed_${suppress.reason}`,
+      ack_delivery_state: "skipped",
+    });
+    return params.ackOwner === "latency_ack" ? null : null;
+  }
+
+  const idempotency = checkAndSet(ackKey, params.ownerTag);
+  if (!idempotency.allowed) {
+    ackDebug(`attemptAckSend: duplicate ackKey=${ackKey} existing=${idempotency.existingOwner}`);
+    updateTrackingState(normalizedStateKey, {
+      ackOwner: params.ackOwner,
+      ack_owner: params.ackOwner,
+      ackKey,
+      ack_target_resolution_state: "skipped_duplicate",
+      ack_delivery_state: "skipped",
+    });
+    return null;
+  }
+
+  const ownerClaim = params.skipOwnerClaim ? { claimed: true, currentOwner: params.ackOwner } : tryClaimAckOwner(normalizedStateKey, params.ackOwner);
+  if (!ownerClaim.claimed) {
+    ackDebug(`attemptAckSend: owner_conflict owner=${ownerClaim.currentOwner} ackOwner=${params.ackOwner}`);
+    updateTrackingState(normalizedStateKey, {
+      ack_owner: ownerClaim.currentOwner,
+      ack_target_resolution_state: "skipped_owner_conflict",
+      ack_delivery_state: "skipped",
+    });
+    return params.ackOwner === "latency_ack" ? { sent: false, reason: "owner_conflict" } : null;
+  }
+
+  const lease = tryClaimLease(ackLeaseKey(normalizedStateKey), "ack_controller", ACK_CONTROLLER_LEASE_MS);
+  if (!lease.claimed || lease.owner !== "ack_controller") {
+    updateTrackingState(normalizedStateKey, {
+      ackOwner: params.ackOwner,
+      ack_owner: params.ackOwner,
+      ackKey,
+      ack_target_resolution_state: `skipped_lease_${lease.owner || "unknown"}`,
+      ack_delivery_state: "skipped",
+    });
+    return params.ackOwner === "latency_ack" ? { sent: false, reason: "lease_conflict" } : null;
+  }
+
+  if (!normalizedSessionKey) {
+    ackDebug(`attemptAckSend: missing_session_key stateKey=${normalizedStateKey}`);
+    updateTrackingState(normalizedStateKey, {
+      ackOwner: params.ackOwner,
+      ack_owner: params.ackOwner,
+      ackKey,
+      ack_target_resolution_state: "missing_session_key",
+      ack_delivery_state: "not_attempted",
+    });
+    return params.ackOwner === "latency_ack" ? { sent: false, reason: "missing_session_key" } : null;
+  }
+
+    ackDebug(`attemptAckSend: sending sessionKey=${normalizedSessionKey} stage=${params.ackStage} message="${params.message.substring(0, 30)}"`);
+  const result = await sendAckDirectDetailed(
+    normalizedSessionKey,
+    params.message,
+    asString(effectiveCtx.cwd) || process.cwd(),
+    { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)) },
+  );
+
+  recordDelivery(ackKey, {
+    ackKey,
+    sent: Boolean(result.delivered || result.sent),
+    deliveredAt: Date.now(),
+    target: result.target,
+    threadId: result.threadId || ackTarget.threadId || threadKey,
+    error: result.error || undefined,
+  });
+
+  updateTrackingState(normalizedStateKey, {
+    ackOwner: params.ackOwner,
+    ack_owner: params.ackOwner,
+    ackKey,
+    ack_target_resolution_state: ackTargetResolutionState(result),
+    ack_delivery_state: ackDeliveryState(result),
+    ...(params.markPreDispatchSent
+      ? {
+          preDispatchAckSent: Boolean(result.delivered || result.sent),
+          preDispatchAckPending: false,
+          preDispatchAckText: params.message,
+          preDispatchAckMode: params.markMode || "channel_message",
+        }
+      : {}),
+    ...(params.markLatencySent
+      ? {
+          latencyAckSent: Boolean(result.delivered || result.sent),
+          latencyAckText: params.message,
+          latencyAckMode: params.markMode || "channel_message",
+        }
+      : {}),
+  });
+
+  if (result.delivered || result.sent) {
+    ackDebug(`attemptAckSend: sent=true stage=${params.ackStage} target=${result.target}`);
+    recordAckSent(threadKey, params.ackStage, routePhase);
+    cancelAckGuardForState(normalizedStateKey);
+    return { sent: true, reason: result.reason };
+  }
+
+  return { sent: false, reason: result.reason };
+}
 export function preDispatchAckText(decision: UnknownRecord): string {
-  const ack = isRecord(decision.pre_dispatch_ack) ? decision.pre_dispatch_ack : {};
-  return asString(ack.text);
+  return ackStageText(stageFromRoutePhase(resolveRoutePhase(decision)));
 }
 
-export function latencyAckText(decision: UnknownRecord): string {
-  const ack = isRecord(decision.latency_ack) ? decision.latency_ack : {};
-  return asString(ack.text);
+export function latencyAckText(_decision: UnknownRecord): string {
+  return ackStageText(AckStage.ReplySoftAck);
 }
 
 export function shouldSendPreDispatchAck(
@@ -426,93 +745,77 @@ export async function sendAckDirect(
 
 export function startAckGuard(sessionKey: string, cwd: string, options: UnknownRecord = {}): void {
   const normalizedSessionKey = asString(sessionKey);
-  if (!normalizedSessionKey || ackGuardTimers.has(normalizedSessionKey)) {
+  if (!normalizedSessionKey) {
     return;
   }
-  const stateKey = asString(options.stateKey);
-  const entry: AckGuardEntry = {
-    inboundTs: Date.now(),
-    ackSent2s: false,
-    ackSent15s: false,
-    timer2s: null,
-    timer15s: null,
+
+  const stateKey = asString(options.stateKey || normalizedSessionKey);
+  const decision = isRecord(options.decision) ? options.decision : {};
+  const state = isRecord(options.state) ? options.state : {};
+  const ctx = isRecord(options.ctx) ? options.ctx as AckContext : { cwd };
+  const logger = isRecord(options.logger) ? options.logger as AckLogger : {};
+  const routePhase = resolveRoutePhase(decision, options);
+  const inboundTs = Date.now();
+
+  updateTrackingState(stateKey, {
+    ackGuardKey: normalizedSessionKey,
+    ackOwner: "",
+    ack_owner: "",
+    _ackTurnTs: ensureAckTurnTimestamp(stateKey),
+  });
+
+  createAckTimers({
     stateKey,
-  };
-
-  if (stateKey) {
-    updateTrackingState(stateKey, { ackGuardKey: normalizedSessionKey });
-  }
-
-  entry.timer2s = setTimeout(() => {
-    if (stateKey) {
-      const claim = tryClaimAckOwner(stateKey, "timer_ack");
-      if (!claim.claimed) {
-        updateTrackingState(stateKey, {
-          ack_target_resolution_state: "skipped_owner_conflict",
-          ack_delivery_state: "skipped",
-        });
+    sessionKey: normalizedSessionKey,
+    routePhase,
+    inboundTs,
+    onTierFire: (result) => {
+      const currentState = ackTimerStateForKey(stateKey);
+      if (!currentState || currentState.cancelled) {
         return;
       }
-    }
-    entry.ackSent2s = true;
-    void sendAckDirectDetailed(normalizedSessionKey, ACK_GUARD_2S_TEXT, cwd, { timeoutMs: 2000 }).then((result) => {
-      if (stateKey) {
-        updateTrackingState(stateKey, {
-          ackOwner: currentAckOwner(stateKey) || "timer_ack",
-          ack_owner: currentAckOwner(stateKey) || "timer_ack",
-          ack_target_resolution_state: ackTargetResolutionState(result),
-          ack_delivery_state: ackDeliveryState(result),
-        });
+      cancelAckTimers(stateKey);
+      ackDebug(`tier${result.tier} fired stage=${result.stage} routePhase=${result.routePhase} sessionKey=${normalizedSessionKey} stateKey=${stateKey}`);
+      const ackStage = normalizeAckStage(result.stage);
+      const threadKey = threadKeyFromSessionKey(normalizedSessionKey, stateKey);
+      const templateInputs = buildTemplateInputs(
+        state,
+        ctx,
+        result.routePhase,
+        threadKey,
+        result.tier >= 3 ? `tier${result.tier}` : "",
+      );
+      const message = templateMessageForStage(
+        ackStage,
+        templateInputs,
+        result.tier >= 3 ? { stage_hint: templateInputs.stageHint || `tier${result.tier}` } : {},
+      );
+      if (!message) {
+        return;
       }
-      if (result.delivered || result.sent) {
-        cancelAckGuard(normalizedSessionKey);
-      }
-    }).catch(() => undefined);
-  }, 2000);
-
-  entry.timer15s = setTimeout(() => {
-    if (stateKey && currentAckOwner(stateKey) && currentAckOwner(stateKey) !== "timer_ack") {
-      updateTrackingState(stateKey, {
-        ack_target_resolution_state: "skipped_owner_conflict",
-        ack_delivery_state: "skipped",
+      void attemptAckSend({
+        sessionKey: normalizedSessionKey,
+        stateKey,
+        ackOwner: "timer_ack",
+        ackStage,
+        routePhase: result.routePhase,
+        message,
+        state,
+        ctx: { ...ctx, cwd },
+        logger,
+        timeoutMs: 2_000,
+        ownerTag: "ack_controller",
+        messageTurnId: `${stateKey}:${inboundTs}`,
+        stageHint: templateInputs.stageHint,
+      }).catch((error) => {
+        logger.warn?.(`octoclaw timed ack failed: ${String(error)}`);
       });
-      return;
-    }
-    if (stateKey) {
-      tryClaimAckOwner(stateKey, "timer_ack");
-    }
-    entry.ackSent15s = true;
-    void sendAckDirectDetailed(normalizedSessionKey, ACK_GUARD_15S_TEXT, cwd, { timeoutMs: 2000 }).then((result) => {
-      if (stateKey) {
-        updateTrackingState(stateKey, {
-          ackOwner: currentAckOwner(stateKey) || "timer_ack",
-          ack_owner: currentAckOwner(stateKey) || "timer_ack",
-          ack_target_resolution_state: ackTargetResolutionState(result),
-          ack_delivery_state: ackDeliveryState(result),
-        });
-      }
-      if (result.delivered || result.sent) {
-        cancelAckGuard(normalizedSessionKey);
-      }
-    }).catch(() => undefined);
-  }, 15000);
-
-  ackGuardTimers.set(normalizedSessionKey, entry);
+    },
+  });
 }
 
 export function cancelAckGuard(sessionKey: string): void {
-  const normalizedSessionKey = asString(sessionKey);
-  const entry = ackGuardTimers.get(normalizedSessionKey);
-  if (!entry) {
-    return;
-  }
-  if (entry.timer2s) {
-    clearTimeout(entry.timer2s);
-  }
-  if (entry.timer15s) {
-    clearTimeout(entry.timer15s);
-  }
-  ackGuardTimers.delete(normalizedSessionKey);
+  cancelAckTimers(asString(sessionKey));
 }
 
 export function cancelAckGuardForState(stateKey: string): void {
@@ -526,6 +829,10 @@ export function cancelAckGuardForState(stateKey: string): void {
     cancelAckGuard(storedAckKey);
   }
   cancelAckGuard(normalizedStateKey);
+  updateTrackingState(normalizedStateKey, {
+    ackOwner: "",
+    ack_owner: "",
+  });
 }
 
 export function currentAckOwner(stateKey: string): string {
@@ -549,17 +856,7 @@ export async function maybeSendPreDispatchAck(
   ctx: AckContext,
   logger: AckLogger,
 ): Promise<void> {
-  const message = preDispatchAckText(decision);
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
-    return;
-  }
-  const ownerClaim = tryClaimAckOwner(stateKey, "pre_dispatch");
-  if (!ownerClaim.claimed) {
-    updateTrackingState(stateKey, {
-      ack_owner: ownerClaim.currentOwner,
-      ack_target_resolution_state: "skipped_owner_conflict",
-      ack_delivery_state: "skipped",
-    });
     return;
   }
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
@@ -569,34 +866,36 @@ export async function maybeSendPreDispatchAck(
       ack_owner: "pre_dispatch",
       ack_target_resolution_state: "missing_session_key",
       ack_delivery_state: "not_attempted",
+      preDispatchAckPending: false,
     });
     return;
   }
   try {
     const preDispatchAck = isRecord(decision.pre_dispatch_ack) ? decision.pre_dispatch_ack : {};
-    const result = await sendAckDirectDetailed(sessionKey, message, asString(ctx.cwd) || process.cwd(), {
-      timeoutMs: Math.max(500, Number(preDispatchAck.channel_timeout_ms || 5000)),
-    });
-    if (result.delivered) {
-      updateTrackingState(stateKey, {
-        ackOwner: "pre_dispatch",
-        ack_owner: "pre_dispatch",
-        ack_target_resolution_state: ackTargetResolutionState(result),
-        ack_delivery_state: ackDeliveryState(result),
-        preDispatchAckSent: true,
-        preDispatchAckText: message,
-        preDispatchAckMode: "channel_message",
-        preDispatchAckPending: false,
-      });
-      cancelAckGuardForState(stateKey);
+    const routePhase = resolveRoutePhase(decision, { routePhase: "delegate" });
+    const threadKey = threadKeyFromSessionKey(sessionKey, stateKey);
+    const message = templateMessageForStage(
+      stageFromRoutePhase(routePhase),
+      buildTemplateInputs(state, ctx, routePhase, threadKey),
+    );
+    if (!message) {
       return;
     }
-    updateTrackingState(stateKey, {
+    await attemptAckSend({
+      sessionKey,
+      stateKey,
       ackOwner: "pre_dispatch",
-      ack_owner: "pre_dispatch",
-      ack_target_resolution_state: ackTargetResolutionState(result),
-      ack_delivery_state: ackDeliveryState(result),
-      preDispatchAckPending: false,
+      ackStage: stageFromRoutePhase(routePhase),
+      routePhase,
+      message,
+      metadata,
+      state,
+      ctx,
+      logger,
+      timeoutMs: Math.max(500, Number(preDispatchAck.channel_timeout_ms || 5000)),
+      ownerTag: "pre_dispatch",
+      markPreDispatchSent: true,
+      markMode: "channel_message",
     });
   } catch (error) {
     logger.warn?.(`octoclaw pre-dispatch ack failed: ${String(error)}`);
@@ -619,10 +918,6 @@ export function scheduleEagerPreDispatchAck(
   logger: AckLogger,
 ): void {
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
-    return;
-  }
-  const ownerClaim = tryClaimAckOwner(stateKey, "pre_dispatch");
-  if (!ownerClaim.claimed) {
     return;
   }
   updateTrackingState(stateKey, {
@@ -674,18 +969,8 @@ export async function maybeSendLatencyAck(
   logger: AckLogger,
   toolName: string,
 ): Promise<{ sent: boolean; reason: string } | null> {
-  const message = latencyAckText(decision);
   if (!shouldSendLatencyAck(decision, state, ctx, toolName)) {
     return null;
-  }
-  const ownerClaim = tryClaimAckOwner(stateKey, "latency_ack");
-  if (!ownerClaim.claimed) {
-    updateTrackingState(stateKey, {
-      ack_owner: ownerClaim.currentOwner,
-      ack_target_resolution_state: "skipped_owner_conflict",
-      ack_delivery_state: "skipped",
-    });
-    return { sent: false, reason: "owner_conflict" };
   }
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   if (!sessionKey) {
@@ -699,29 +984,25 @@ export async function maybeSendLatencyAck(
   }
   try {
     const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
-    const result = await sendAckDirectDetailed(sessionKey, message, asString(ctx.cwd) || process.cwd(), {
-      timeoutMs: Math.max(500, Number(latencyAck.channel_timeout_ms || 5000)),
-    });
-    if (result.delivered) {
-      updateTrackingState(stateKey, {
-        ackOwner: "latency_ack",
-        ack_owner: "latency_ack",
-        ack_target_resolution_state: ackTargetResolutionState(result),
-        ack_delivery_state: ackDeliveryState(result),
-        latencyAckSent: true,
-        latencyAckText: message,
-        latencyAckMode: "channel_message",
-      });
-      cancelAckGuardForState(stateKey);
-      return { sent: true, reason: result.reason };
-    }
-    updateTrackingState(stateKey, {
+    const message = ackStageText(AckStage.ReplySoftAck);
+    const result = await attemptAckSend({
+      sessionKey,
+      stateKey,
       ackOwner: "latency_ack",
-      ack_owner: "latency_ack",
-      ack_target_resolution_state: ackTargetResolutionState(result),
-      ack_delivery_state: ackDeliveryState(result),
+      ackStage: AckStage.ReplySoftAck,
+      routePhase: "reply",
+      message,
+      metadata,
+      state,
+      ctx,
+      logger,
+      timeoutMs: Math.max(500, Number(latencyAck.channel_timeout_ms || 5000)),
+      ownerTag: "latency_ack",
+      markLatencySent: true,
+      markMode: "channel_message",
+      messageTurnId: `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`,
     });
-    return { sent: false, reason: result.reason };
+    return result;
   } catch (error) {
     logger.warn?.(`octoclaw latency ack failed: ${String(error)}`);
     updateTrackingState(stateKey, {
@@ -767,6 +1048,24 @@ export async function ensurePreDispatchAck(
     });
     cancelAckGuardForState(stateKey);
   }
+}
+
+export function markMainModelFirstToken(stateKey: string): void {
+  const normalizedStateKey = asString(stateKey);
+  if (!normalizedStateKey) {
+    return;
+  }
+  markMainModelFirstTokenInTiming(normalizedStateKey);
+  tryClaimLease(ackLeaseKey(normalizedStateKey), "main_model", MAIN_MODEL_LEASE_MS);
+  updateTrackingState(normalizedStateKey, { mainModelFirstTokenSeen: true, mainModelStartedOutput: true });
+}
+
+export function notifyUserMessage(sessionKey: string, stateKey: string): void {
+  const threadKey = threadKeyFromSessionKey(sessionKey, stateKey);
+  if (!threadKey) {
+    return;
+  }
+  recordMessage(threadKey);
 }
 
 export async function watchdogTick(logger: unknown): Promise<void> {
