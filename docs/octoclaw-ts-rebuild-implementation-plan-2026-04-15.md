@@ -367,6 +367,7 @@ tools/
 6. main-first-token suppression hook
 7. cooldown / burst-coalescing / edit-in-place policy
 8. fixed ACK template registry with channel-aware renderers
+9. agent-first quick-ack `request envelope + prompt policy injection seam` + runtime fallback
 
 验收标准：
 
@@ -377,6 +378,7 @@ tools/
 5. ACK 不依赖昂贵模型
 6. 连续输入场景下不会条条都机械 ACK
 7. ACK 采用固定模板池，不以自由生成文案为前提
+8. 主模型能抢首响时优先让主模型自己回；否则 runtime 能稳定接管
 
 依赖：WS0、WS1、WS2
 
