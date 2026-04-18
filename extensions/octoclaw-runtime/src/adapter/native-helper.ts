@@ -1,11 +1,44 @@
-import { spawnSync } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+declare const process: {
+  getBuiltinModule?: (name: string) => unknown;
+};
+
+type SpawnSync = (
+  command: string,
+  args?: string[],
+  options?: {
+    cwd?: string;
+    encoding?: string;
+  },
+) => {
+  stdout?: string;
+  stderr?: string;
+  error?: Error;
+};
+
+function resolveSpawnSync(): SpawnSync {
+  const childProcessModule = process.getBuiltinModule?.("child_process") as { spawnSync?: SpawnSync } | undefined;
+  if (!childProcessModule?.spawnSync) {
+    throw new Error("native helper invocation failed: child_process builtin unavailable");
+  }
+  return childProcessModule.spawnSync;
+}
+
+const spawnSync = resolveSpawnSync();
 
 export type NativeHelperAction = "create-managed-flow" | "run-task";
 
 export interface NativeHelperInvokeArgs {
   action: NativeHelperAction;
+  args: Record<string, string>;
+}
+
+export interface NativeManagedFlowHelperInvokeArgs {
+  action: "create-managed-flow";
+  args: Record<string, string>;
+}
+
+export interface NativeRunTaskHelperInvokeArgs {
+  action: "run-task";
   args: Record<string, string>;
 }
 
@@ -32,14 +65,13 @@ export interface NativeRunTaskHelperResult {
   };
 }
 
-export type NativeHelperInvoker = (
-  input: NativeHelperInvokeArgs,
-) => NativeManagedFlowHelperResult | NativeRunTaskHelperResult;
+export interface NativeHelperInvoker {
+  (input: NativeManagedFlowHelperInvokeArgs): NativeManagedFlowHelperResult;
+  (input: NativeRunTaskHelperInvokeArgs): NativeRunTaskHelperResult;
+}
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, "../../../../");
-const HELPER_PATH = path.join(REPO_ROOT, "lib", "openclaw_taskflow_runtime_helper.mjs");
+const REPO_ROOT = new URL("../../../../", import.meta.url).pathname;
+const HELPER_PATH = new URL("../../../../lib/openclaw_taskflow_runtime_helper.mjs", import.meta.url).pathname;
 
 function buildCliArgs(action: NativeHelperAction, args: Record<string, string>): string[] {
   const cliArgs = [HELPER_PATH, action];
@@ -107,7 +139,9 @@ function normalizeRunTaskResult(payload: any): NativeRunTaskHelperResult {
   };
 }
 
-export const invokeNativeHelper: NativeHelperInvoker = ({ action, args }) => {
+export function invokeNativeHelper(input: NativeManagedFlowHelperInvokeArgs): NativeManagedFlowHelperResult;
+export function invokeNativeHelper(input: NativeRunTaskHelperInvokeArgs): NativeRunTaskHelperResult;
+export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): NativeManagedFlowHelperResult | NativeRunTaskHelperResult {
   const result = spawnSync("node", buildCliArgs(action, args), {
     cwd: REPO_ROOT,
     encoding: "utf8",
@@ -129,4 +163,4 @@ export const invokeNativeHelper: NativeHelperInvoker = ({ action, args }) => {
     return normalizeManagedFlowResult(payload);
   }
   return normalizeRunTaskResult(payload);
-};
+}

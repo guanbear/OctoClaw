@@ -1,11 +1,16 @@
 import {
   advanceWorkflowToRunning,
+  buildWorkflowFinalDelivery,
+  buildWorkflowProgressDelivery,
+  emitWorkflowTelemetry,
+  enqueueWorkflowDelivery,
   markWorkflowCheckpointEmitted,
   markWorkflowCompleted,
   markWorkflowFailed,
   renewWorkflowHeartbeat,
   startRuntimeWorkflow,
 } from "../../../packages/octoclaw-runtime-core/src/workflow/index.ts";
+import { normalizeRuntimeRequest } from "../../../packages/octoclaw-runtime-core/src/requests/index.ts";
 import type { ScopeDescriptor, ScopeMetadata } from "../../../packages/octoclaw-contracts/src/schemas.ts";
 import type { PolicyDecision } from "../../../packages/octoclaw-policy/src/judge/index.ts";
 import { createOctoClawRuntimePlugin } from "./plugin.ts";
@@ -135,6 +140,20 @@ export function buildTsRuntimeDispatchPayload(
   });
 
   const modelPolicy = asRecord(decision.model_policy);
+  const normalizedRequest = normalizeRuntimeRequest({
+    prompt: readString(input.task),
+    sessionKey: readString(metadata.session_key ?? metadata.sessionKey, executionIds.requestId),
+    channel: readString(metadata.channel, "direct"),
+    requestId: executionIds.requestId,
+    taskId: executionIds.taskId,
+    flowId: executionIds.flowId,
+    idempotencyKey: readString(metadata.idempotencyKey ?? metadata.idempotency_key, executionIds.requestId),
+    workspaceMode: metadata.workspaceMode as ScopeMetadata["workspaceMode"] | undefined,
+    readScope: normalizeScopeMetadata(helpers.buildWorkflowScope(metadata)).readScope,
+    writeScope: normalizeScopeMetadata(helpers.buildWorkflowScope(metadata)).writeScope,
+    writeScopeSummary: normalizeScopeMetadata(helpers.buildWorkflowScope(metadata)).writeScopeSummary,
+    metadata,
+  });
   const basePayload = {
     route,
     system_preferred_route: route,
@@ -154,6 +173,7 @@ export function buildTsRuntimeDispatchPayload(
       lifecycle: workflow.lifecycle,
       taskMaterialization: workflow.taskMaterialization,
     },
+    telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
   };
 
   if (route === "reply") {
@@ -191,10 +211,24 @@ export function buildTsRuntimeDispatchPayload(
   workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
   workflow = renewWorkflowHeartbeat(workflow);
   workflow = markWorkflowCheckpointEmitted(workflow);
+  const progressDelivery = buildWorkflowProgressDelivery(workflow, {
+    channel: readString(metadata.channel, "direct"),
+    summary: `Workflow checkpoint emitted for ${workflow.identity.taskId}`,
+    artifactRefs: [workflow.taskMaterialization.taskPacketRef],
+  });
+  workflow = enqueueWorkflowDelivery(workflow, progressDelivery);
 
   try {
     const binding = plugin.bindWorkflow(workflow);
     workflow = markWorkflowCompleted(workflow);
+    const finalDelivery = buildWorkflowFinalDelivery(workflow, {
+      channel: readString(metadata.channel, "direct"),
+      summary: route === "observe"
+        ? `Observe workflow materialized natively as ${binding.taskId}`
+        : `Delegated task materialized natively as ${binding.taskId}`,
+      artifactRefs: [binding.taskId, binding.flowId],
+    });
+    workflow = enqueueWorkflowDelivery(workflow, finalDelivery);
     return {
       ...basePayload,
       executed: route === "observe",
@@ -231,6 +265,11 @@ export function buildTsRuntimeDispatchPayload(
         ...basePayload.orchestration,
         lifecycle: workflow.lifecycle,
         taskMaterialization: workflow.taskMaterialization,
+      },
+      telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
+      deliveries: {
+        progress: progressDelivery,
+        final: finalDelivery,
       },
       job: route === "observe"
         ? {
@@ -336,11 +375,26 @@ export function buildTsRuntimeSpawnPayload(
     readString(metadata.session_key ?? metadata.sessionKey, executionIds.requestId),
   );
   const modelPolicy = asRecord(decision.model_policy);
+  const normalizedRequest = normalizeRuntimeRequest({
+    prompt: readString(input.task),
+    sessionKey: readString(metadata.session_key ?? metadata.sessionKey, executionIds.requestId),
+    channel: readString(metadata.channel, "direct"),
+    requestId: executionIds.requestId,
+    taskId: executionIds.taskId,
+    flowId: executionIds.flowId,
+    idempotencyKey: readString(metadata.idempotencyKey ?? metadata.idempotency_key, executionIds.requestId),
+    workspaceMode: metadata.workspaceMode as ScopeMetadata["workspaceMode"] | undefined,
+    readScope: normalizeScopeMetadata(helpers.buildWorkflowScope(metadata)).readScope,
+    writeScope: normalizeScopeMetadata(helpers.buildWorkflowScope(metadata)).writeScope,
+    writeScopeSummary: normalizeScopeMetadata(helpers.buildWorkflowScope(metadata)).writeScopeSummary,
+    metadata,
+  });
   const basePayload = {
     route: normalizedRoute,
     worker_pool: readString(helpers.runtimeRouteDecision(decision).worker_pool ?? modelPolicy.worker_pool, "octoclaw-worker"),
     model: readString(modelPolicy.selected_model ?? modelPolicy.profile ?? workflowDecision.modelProfile),
     policy_decision: decision,
+    telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
   };
 
   try {
@@ -348,7 +402,19 @@ export function buildTsRuntimeSpawnPayload(
       const managed = adapter.createManaged(workflow);
       if (input.execute) {
         workflow = markWorkflowCheckpointEmitted(workflow);
+        const progressDelivery = buildWorkflowProgressDelivery(workflow, {
+          channel: readString(metadata.channel, "direct"),
+          summary: `Spawn flow checkpoint emitted for ${workflow.identity.taskId}`,
+          artifactRefs: [workflow.taskMaterialization.taskPacketRef],
+        });
+        workflow = enqueueWorkflowDelivery(workflow, progressDelivery);
         workflow = markWorkflowCompleted(workflow);
+        const finalDelivery = buildWorkflowFinalDelivery(workflow, {
+          channel: readString(metadata.channel, "direct"),
+          summary: `Delegated flow materialized natively as ${managed.flowId}`,
+          artifactRefs: [managed.flowId],
+        });
+        workflow = enqueueWorkflowDelivery(workflow, finalDelivery);
       }
       return {
         ...basePayload,
@@ -382,14 +448,27 @@ export function buildTsRuntimeSpawnPayload(
           workflow,
           binding: managed,
         },
+        telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
       };
     }
 
     workflow = markWorkflowCheckpointEmitted(workflow);
+    const progressDelivery = buildWorkflowProgressDelivery(workflow, {
+      channel: readString(metadata.channel, "direct"),
+      summary: `Spawn task checkpoint emitted for ${workflow.identity.taskId}`,
+      artifactRefs: [workflow.taskMaterialization.taskPacketRef],
+    });
+    workflow = enqueueWorkflowDelivery(workflow, progressDelivery);
     const binding = plugin.bindWorkflow(workflow);
     if (input.execute) {
       workflow = markWorkflowCompleted(workflow);
     }
+    const finalDelivery = buildWorkflowFinalDelivery(workflow, {
+      channel: readString(metadata.channel, "direct"),
+      summary: `Delegated task materialized natively as ${binding.taskId}`,
+      artifactRefs: [binding.taskId, binding.flowId],
+    });
+    workflow = enqueueWorkflowDelivery(workflow, finalDelivery);
     return {
       ...basePayload,
       executed: Boolean(input.execute),
@@ -419,6 +498,11 @@ export function buildTsRuntimeSpawnPayload(
         authority: "ts-runtime-core",
         workflow,
         binding,
+      },
+      telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
+      deliveries: {
+        progress: progressDelivery,
+        final: finalDelivery,
       },
     };
   } catch (error) {
