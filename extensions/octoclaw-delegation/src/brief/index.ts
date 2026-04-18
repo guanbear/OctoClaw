@@ -1,13 +1,18 @@
 import type { PolicyRole } from "../../../../packages/octoclaw-policy/src/roles/index.ts";
+import { resolveDelegationProfile } from "../profiles/index.ts";
 
 export interface WorkerBriefTemplate {
   role: PolicyRole;
   objective: string;
   constraints: string[];
   doneDefinition: string[];
+  modelProfile: string;
+  allowedTools: string[];
+  outputContract: string;
 }
 
 export function buildWorkerBrief(role: PolicyRole, objective: string): WorkerBriefTemplate {
+  const profile = resolveDelegationProfile(role);
   return {
     role,
     objective,
@@ -21,5 +26,8 @@ export function buildWorkerBrief(role: PolicyRole, objective: string): WorkerBri
       "Report completion with the delegated delivery receipt and ownership context intact.",
       "Attach artifacts instead of mutating undeclared workspace paths.",
     ],
+    modelProfile: profile.modelProfile,
+    allowedTools: profile.allowedTools,
+    outputContract: profile.outputContract,
   };
 }

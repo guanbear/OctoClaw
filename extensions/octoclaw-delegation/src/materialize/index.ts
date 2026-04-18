@@ -2,6 +2,10 @@ import type { ScopeDescriptor, WorkspaceMode } from "../../../../packages/octocl
 import { evaluateAdmission, type AdmissionDecision } from "../../../../packages/octoclaw-policy/src/admission/index.ts";
 import type { PolicyRole } from "../../../../packages/octoclaw-policy/src/roles/index.ts";
 import { buildWorkerBrief } from "../brief/index.ts";
+import { decideConflictPolicy, type ConflictDecision } from "../conflicts/index.ts";
+import { selectDelegationBackend } from "../profiles/index.ts";
+export type { CompoundDelegationPlaceholder } from "../compound/index.ts";
+export { buildCompoundDelegationPlaceholder } from "../compound/index.ts";
 
 export interface DelegatedMaterialization {
   requestId: string;
@@ -18,7 +22,12 @@ export interface DelegatedMaterialization {
   writeScope: ScopeDescriptor[];
   workspaceMode: WorkspaceMode;
   writeScopeSummary: string;
+  backend: "openclaw-native" | "clawteam";
+  modelProfile: string;
+  allowedTools: string[];
+  outputContract: string;
   admission: AdmissionDecision;
+  conflict: ConflictDecision;
   brief: ReturnType<typeof buildWorkerBrief>;
 }
 
@@ -44,6 +53,8 @@ export function materializeDelegatedWork(input: {
   const now = new Date();
   const claimToken = `${input.taskId}:${input.claimOwner}:${now.getTime()}`;
   const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs).toISOString();
+  const backendSelection = selectDelegationBackend(input.role);
+  const conflict = decideConflictPolicy(input.workspaceMode, input.writeConflict);
   const admission = evaluateAdmission({
     route: "delegate.single",
     queueBudget: input.queueBudget,
@@ -68,7 +79,12 @@ export function materializeDelegatedWork(input: {
     writeScope: input.writeScope,
     workspaceMode: input.workspaceMode,
     writeScopeSummary: input.writeScope.map((scope) => scope.resource).join(", ") || "read_only",
+    backend: backendSelection.backend,
+    modelProfile: backendSelection.profile.modelProfile,
+    allowedTools: backendSelection.profile.allowedTools,
+    outputContract: backendSelection.profile.outputContract,
     admission,
+    conflict,
     brief: buildWorkerBrief(input.role, input.objective),
   };
 }
