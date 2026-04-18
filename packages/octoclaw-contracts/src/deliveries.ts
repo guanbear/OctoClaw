@@ -1,5 +1,5 @@
-import type { ContractEnvelope, IdempotencyMetadata, ScopeMetadata } from "./schemas.ts";
-import type { OwnershipMetadata, TaskIdentity } from "./events.ts";
+import type { ContractEnvelope, IdempotencyMetadata, ScopeMetadata } from "./schemas.js";
+import type { OwnershipMetadata, TaskIdentity } from "./events.js";
 
 export type DeliveryStatus = "queued" | "sent" | "acknowledged" | "failed";
 

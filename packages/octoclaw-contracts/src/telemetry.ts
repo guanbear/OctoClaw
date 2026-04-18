@@ -1,5 +1,5 @@
-import type { ContractEnvelope, ScopeMetadata } from "./schemas.ts";
-import type { TaskIdentity } from "./events.ts";
+import type { ContractEnvelope, ScopeMetadata } from "./schemas.js";
+import type { TaskIdentity } from "./events.js";
 
 export interface QueueDeadlineTelemetry {
   queueDeadlineAt?: string;

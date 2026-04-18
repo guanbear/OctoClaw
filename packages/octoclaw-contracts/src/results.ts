@@ -5,8 +5,8 @@ import type {
   ExecutionIdentity,
   ExecutionProvenance,
   ScopeMetadata,
-} from "./schemas.ts";
-import type { OwnershipMetadata, TaskIdentity } from "./events.ts";
+} from "./schemas.js";
+import type { OwnershipMetadata, TaskIdentity } from "./events.js";
 
 export type WorkerResultStatus = "success" | "partial" | "blocked" | "failed";
 export type LeaseState = "active" | "expiring" | "expired" | "released";

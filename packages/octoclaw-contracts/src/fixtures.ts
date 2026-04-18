@@ -1,8 +1,8 @@
-import { buildContractEnvelope } from "./schemas.ts";
-import type { AcceptanceCriterion, CapabilityDescriptor, ScopeMetadata } from "./schemas.ts";
-import type { DeliveryEnvelope } from "./deliveries.ts";
-import type { OwnershipMetadata, TaskIdentity } from "./events.ts";
-import type { StatusSurfaceViewModel, WorkerResult } from "./results.ts";
+import { buildContractEnvelope } from "./schemas.js";
+import type { AcceptanceCriterion, CapabilityDescriptor, ScopeMetadata } from "./schemas.js";
+import type { DeliveryEnvelope } from "./deliveries.js";
+import type { OwnershipMetadata, TaskIdentity } from "./events.js";
+import type { StatusSurfaceViewModel, WorkerResult } from "./results.js";
 
 const FIXTURE_SCOPE: ScopeMetadata = {
   readScope: [{ resource: "docs", access: "read" }],

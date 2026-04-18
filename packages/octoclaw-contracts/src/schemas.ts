@@ -9,6 +9,48 @@ export type ExecutionAuthority = "main_session" | "runtime_orchestrator" | "nati
 export type ExecutionBackend = "openclaw-native" | "clawteam" | "legacy-python";
 export type MaterializationIntent = "reply_inline" | "observe_probe" | "runner_task" | "spawn_single" | "spawn_multi";
 export type CapabilityLevel = "unsupported" | "limited" | "supported" | "preferred";
+// Model profiles from design doc section 9.5.0
+export type ModelProfile =
+  | "judge_fast"
+  | "observer_probe"
+  | "direct_main"
+  | "worker_default"
+  | "worker_research"
+  | "worker_code_normal"
+  | "worker_code_deep"
+  | "worker_review"
+  | "worker_deep";
+
+export type ConcreteModelId = string;
+
+export interface ModelProfileMapping {
+  profile: ModelProfile;
+  modelId: ConcreteModelId;
+}
+
+// Hard boundary signals from design doc section 9.2
+export type HardBoundarySignal =
+  | "explicit_control_action"
+  | "existing_task_binding"
+  | "recovery_session"
+  | "permission_boundary"
+  | "dangerous_write";
+
+export type CheckpointEventType =
+  | "checkpoint_emitted"
+  | "deliverable_ready"
+  | "waiting_input"
+  | "backend_retry_scheduled"
+  | "delivery_pending"
+  | "stale";
+
+export interface HardBoundaryCheckResult {
+  triggered: boolean;
+  signal: HardBoundarySignal | null;
+  routeOverride?: string;
+  reason: string;
+}
+
 export type LifecyclePhase =
   | "ingress_received"
   | "ack_pending"
@@ -101,7 +143,7 @@ export interface RequestContext extends ContractEnvelope, ScopeMetadata, Idempot
   route: ExecutionRoute;
   role: string;
   backend: string;
-  modelProfile: string;
+  modelProfile: ModelProfile;
 }
 
 export interface RouteDecisionContract extends ContractEnvelope, ScopeMetadata {
@@ -109,7 +151,7 @@ export interface RouteDecisionContract extends ContractEnvelope, ScopeMetadata {
   requestId: string;
   route: ExecutionRoute;
   backend: string;
-  modelProfile: string;
+  modelProfile: ModelProfile;
   reasonCodes: string[];
 }
 

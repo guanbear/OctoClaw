@@ -7,8 +7,8 @@ import type {
   IdempotencyMetadata,
   LifecycleState,
   ScopeMetadata,
-} from "./schemas.ts";
-import type { OwnershipMetadata, TaskIdentity } from "./events.ts";
+} from "./schemas.js";
+import type { OwnershipMetadata, TaskIdentity } from "./events.js";
 
 export type ArtifactSurface = "truth" | "projection" | "artifact" | "telemetry";
 
