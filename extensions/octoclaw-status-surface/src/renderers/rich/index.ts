@@ -1,6 +1,6 @@
-import type { StatusSurfaceViewModel } from "../../../../../packages/octoclaw-contracts/src/results.ts";
-import type { DetailsSurfaceProjection, QueueSurfaceProjection } from "../../read-model/index.ts";
-import type { RuntimeTimelinePlaceholder } from "../../view-model/index.ts";
+import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
+import type { DetailsSurfaceProjection, QueueSurfaceProjection } from "../../read-model/index.js";
+import type { RuntimeTimelinePlaceholder } from "../../view-model/index.js";
 
 export function renderStatusRich(view: StatusSurfaceViewModel) {
   return {

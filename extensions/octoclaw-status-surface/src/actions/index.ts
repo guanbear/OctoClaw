@@ -1,10 +1,10 @@
-import type { RuntimeStateSurfaceRecord } from "../../../octoclaw-runtime/src/adapter/state-surface.ts";
+import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
 import {
   buildDetailsSurface,
   buildQueueSurface,
   buildStatusSurface,
   buildTimelinePlaceholder,
-} from "../view-model/index.ts";
+} from "../view-model/index.js";
 
 export type StatusSurfaceAction = "status" | "details" | "queue" | "timeline";
 

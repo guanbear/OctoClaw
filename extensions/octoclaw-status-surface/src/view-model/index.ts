@@ -1,13 +1,13 @@
-import type { StatusSurfaceViewModel } from "../../../../packages/octoclaw-contracts/src/results.ts";
+import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
 import {
   type RuntimeStateDetailsSurface,
   type RuntimeStateSurfaceRecord,
-} from "../../../octoclaw-runtime/src/adapter/state-surface.ts";
+} from "@octoclaw/runtime/state-surface";
 import {
   buildDetailsProjection,
   buildQueueProjection,
   buildStatusProjection,
-} from "../read-model/index.ts";
+} from "../read-model/index.js";
 
 export interface RuntimeQueueSurface {
   taskId: string;

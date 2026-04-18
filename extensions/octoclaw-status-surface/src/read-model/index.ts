@@ -1,6 +1,6 @@
-import type { StatusSurfaceViewModel } from "../../../../packages/octoclaw-contracts/src/results.ts";
-import type { RuntimeStateSurfaceRecord } from "../../../octoclaw-runtime/src/adapter/state-surface.ts";
-import type { RuntimeStateDetailsSurface } from "../../../octoclaw-runtime/src/adapter/state-surface.ts";
+import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
+import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
+import type { RuntimeStateDetailsSurface } from "@octoclaw/runtime/state-surface";
 
 export interface StatusSurfaceProjectionInput {
   record: RuntimeStateSurfaceRecord;

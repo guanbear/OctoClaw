@@ -1,7 +1,7 @@
-import type { RuntimeStateSurfaceRecord } from "../../../octoclaw-runtime/src/adapter/state-surface.ts";
-import { executeStatusSurfaceAction, type StatusSurfaceAction } from "../actions/index.ts";
-import { renderDetailsText, renderQueueText, renderStatusText, renderTimelineText } from "../renderers/text/index.ts";
-import { renderDetailsRich, renderQueueRich, renderStatusRich, renderTimelineRich } from "../renderers/rich/index.ts";
+import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
+import { executeStatusSurfaceAction, type StatusSurfaceAction } from "../actions/index.js";
+import { renderDetailsText, renderQueueText, renderStatusText, renderTimelineText } from "../renderers/text/index.js";
+import { renderDetailsRich, renderQueueRich, renderStatusRich, renderTimelineRich } from "../renderers/rich/index.js";
 
 export type StatusSurfaceFormat = "text" | "rich";
 
