@@ -6,6 +6,14 @@ export interface RuntimeDeadlines {
   deliveryDeadline: string;
 }
 
+export type RuntimeDeadlineField = keyof RuntimeDeadlines;
+export type RuntimeDeadlinePhase =
+  | "pre_start"
+  | "running"
+  | "checkpoint"
+  | "delivery"
+  | "terminal";
+
 export interface DeadlineBudgetInput {
   queuedAt?: string;
   queueMs: number;
@@ -36,13 +44,44 @@ export function hasDeadlineExpired(deadline: string, now = new Date()): boolean 
   return new Date(deadline).getTime() <= now.getTime();
 }
 
-export function nextDeadlineToEnforce(deadlines: RuntimeDeadlines, now = new Date()): keyof RuntimeDeadlines | null {
-  const ordered: Array<keyof RuntimeDeadlines> = [
+export function enforceableDeadlinesForPhase(phase: RuntimeDeadlinePhase): RuntimeDeadlineField[] {
+  switch (phase) {
+    case "pre_start":
+      return ["queueDeadline", "startDeadline"];
+    case "running":
+    case "checkpoint":
+      return ["progressDeadline", "runtimeDeadline"];
+    case "delivery":
+      return ["deliveryDeadline"];
+    case "terminal":
+      return [];
+  }
+}
+
+export function nextDeadlineToEnforce(
+  deadlines: RuntimeDeadlines,
+  now = new Date(),
+  enforceableFields: RuntimeDeadlineField[] = [
     "queueDeadline",
     "startDeadline",
     "progressDeadline",
     "runtimeDeadline",
     "deliveryDeadline",
-  ];
-  return ordered.find((name) => !hasDeadlineExpired(deadlines[name], now)) ?? null;
+  ],
+): RuntimeDeadlineField | null {
+  return enforceableFields.find((name) => hasDeadlineExpired(deadlines[name], now)) ?? null;
+}
+
+export function nextUpcomingDeadline(
+  deadlines: RuntimeDeadlines,
+  now = new Date(),
+  enforceableFields: RuntimeDeadlineField[] = [
+    "queueDeadline",
+    "startDeadline",
+    "progressDeadline",
+    "runtimeDeadline",
+    "deliveryDeadline",
+  ],
+): RuntimeDeadlineField | null {
+  return enforceableFields.find((name) => !hasDeadlineExpired(deadlines[name], now)) ?? null;
 }

@@ -1,34 +1,36 @@
 import type {
   DeliveryState,
-  ExecutionAuthority,
   ExecutionBackend,
   ExecutionIdentity,
   ExecutionProvenance,
   LifecyclePhase,
   LifecycleState,
-  MaterializationIntent,
   ScopeMetadata,
 } from "../../../octoclaw-contracts/src/schemas.ts";
+import type { NormalizedRuntimeRequest } from "../requests/index.ts";
 import { createAckLedger, type AckLedger } from "../ack/index.ts";
 import { createOutbox, type DeliveryOutbox } from "../delivery/outbox.ts";
-import { buildRuntimeDeadlines, type DeadlineBudgetInput, type RuntimeDeadlines } from "../tasks/deadlines.ts";
-import { canClaim, claimTask, renewClaimLease, type RuntimeClaim } from "../tasks/claims.ts";
-import { applyHeartbeat } from "../tasks/claims.ts";
+import {
+  buildFinalDelivery,
+  buildProgressDelivery,
+  enqueueStructuredDelivery,
+  type RuntimeDeliveryInput,
+  type RuntimeStructuredDelivery,
+} from "../delivery/protocol.ts";
+import { emitRuntimeTelemetry, type RuntimeTelemetryBundle } from "../telemetry/index.ts";
+import {
+  buildRuntimeTaskInterface,
+  renewTaskInterfaceHeartbeat,
+  resolveTaskClaimOwner,
+  type DeadlineBudgetInput,
+  type RuntimeClaim,
+  type RuntimeDeadlines,
+  type RuntimeTaskInterfaceState,
+  type RuntimeTaskMaterializationPacket,
+} from "../tasks/index.ts";
 import type { PolicyDecision } from "../../../octoclaw-policy/src/judge/index.ts";
 
-export interface RuntimeTaskMaterialization {
-  requestId: string;
-  taskId: string;
-  flowId: string;
-  route: ExecutionIdentity["route"];
-  authority: ExecutionAuthority;
-  backend: ExecutionBackend;
-  materializationIntent: MaterializationIntent;
-  claimOwner: string;
-  claimToken: string;
-  leaseExpiresAt: string;
-  taskPacketRef: string;
-}
+export type RuntimeTaskMaterialization = RuntimeTaskMaterializationPacket;
 
 export interface RuntimeLifecycleCheckpoint {
   checkpointState: LifecycleState["checkpointState"];
@@ -74,8 +76,19 @@ export interface StartWorkflowInput {
 }
 
 export function startRuntimeWorkflow(input: StartWorkflowInput): RuntimeWorkflowState {
-  const claim = claimTask(input.taskId, input.claimOwner, input.leaseDurationMs);
   const identity = deriveExecutionIdentity(input.decision, input);
+  const taskInterface = buildRuntimeTaskInterface({
+    requestId: input.requestId,
+    taskId: input.taskId,
+    flowId: input.flowId,
+    requestIdempotencyKey: input.requestId,
+    taskIdempotencyKey: input.taskId,
+    flowIdempotencyKey: input.flowId,
+    claimOwner: input.claimOwner,
+    leaseDurationMs: input.leaseDurationMs,
+    identity,
+    deadlineBudget: input.deadlineBudget,
+  });
   return {
     identity,
     execution: {
@@ -97,17 +110,17 @@ export function startRuntimeWorkflow(input: StartWorkflowInput): RuntimeWorkflow
       lastCheckpointAt: null,
       deliverableReady: false,
     },
-    deadlines: buildRuntimeDeadlines(input.deadlineBudget),
-    claim,
+    deadlines: taskInterface.deadlines,
+    claim: taskInterface.claim,
     outbox: createOutbox(),
     ackLedger: createAckLedger(),
     scope: input.scope,
-    taskMaterialization: materializeRuntimeTaskPacket(input, claim, identity),
+    taskMaterialization: taskInterface.materialization,
   };
 }
 
 export function advanceWorkflowToRunning(state: RuntimeWorkflowState, nextClaimOwner: string): RuntimeWorkflowState {
-  const nextClaim = resolveNextClaim(state, nextClaimOwner);
+  const nextTaskState = resolveTaskClaimOwner(runtimeTaskStateFromWorkflow(state), nextClaimOwner);
   return {
     ...state,
     workflowOrchestration: "running",
@@ -116,8 +129,8 @@ export function advanceWorkflowToRunning(state: RuntimeWorkflowState, nextClaimO
       phase: "running",
       startedAt: state.lifecycle.startedAt || new Date().toISOString(),
     },
-    claim: nextClaim,
-    taskMaterialization: refreshTaskMaterialization(state.taskMaterialization, nextClaim),
+    claim: nextTaskState.claim,
+    taskMaterialization: nextTaskState.materialization,
   };
 }
 
@@ -204,61 +217,16 @@ export function renewWorkflowHeartbeat(
     throw new Error("missing_claim");
   }
 
-  const nextClaim = applyHeartbeat(state.claim, {
+  const nextTaskState = renewTaskInterfaceHeartbeat(runtimeTaskStateFromWorkflow(state), {
     claimToken: state.claim.claimToken,
     heartbeatAt,
   });
 
   return {
     ...state,
-    claim: nextClaim,
-    taskMaterialization: refreshTaskMaterialization(state.taskMaterialization, nextClaim),
+    claim: nextTaskState.claim,
+    taskMaterialization: nextTaskState.materialization,
   };
-}
-
-function materializeRuntimeTaskPacket(
-  input: StartWorkflowInput,
-  claim: RuntimeClaim,
-  identity: ExecutionIdentity,
-): RuntimeTaskMaterialization {
-  return {
-    requestId: input.requestId,
-    taskId: input.taskId,
-    flowId: input.flowId,
-    route: identity.route,
-    authority: identity.authority,
-    backend: identity.backend,
-    materializationIntent: identity.materializationIntent,
-    claimOwner: claim.claimOwner,
-    claimToken: claim.claimToken,
-    leaseExpiresAt: claim.leaseExpiresAt,
-    taskPacketRef: `${input.flowId}:${input.taskId}:${claim.claimToken}`,
-  };
-}
-
-function refreshTaskMaterialization(
-  taskMaterialization: RuntimeTaskMaterialization,
-  claim: RuntimeClaim,
-): RuntimeTaskMaterialization {
-  return {
-    ...taskMaterialization,
-    claimOwner: claim.claimOwner,
-    claimToken: claim.claimToken,
-    leaseExpiresAt: claim.leaseExpiresAt,
-    taskPacketRef: `${taskMaterialization.flowId}:${taskMaterialization.taskId}:${claim.claimToken}`,
-  };
-}
-
-function resolveNextClaim(state: RuntimeWorkflowState, nextClaimOwner: string): RuntimeClaim {
-  if (state.claim && state.claim.claimOwner === nextClaimOwner) {
-    return renewClaimLease(state.claim);
-  }
-
-  if (!canClaim(state.claim)) {
-    throw new Error("claim_owner_conflict");
-  }
-
-  return claimTask(state.identity.taskId, nextClaimOwner, state.claim?.leaseDurationMs ?? 30_000);
 }
 
 export function markWorkflowForRecovery(state: RuntimeWorkflowState): RuntimeWorkflowState {
@@ -270,6 +238,49 @@ export function markWorkflowForRecovery(state: RuntimeWorkflowState): RuntimeWor
       phase: "recovering",
     },
   };
+}
+
+function runtimeTaskStateFromWorkflow(state: RuntimeWorkflowState): RuntimeTaskInterfaceState {
+  if (!state.claim) {
+    throw new Error("missing_claim");
+  }
+
+  return {
+    claim: state.claim,
+    deadlines: state.deadlines,
+    materialization: state.taskMaterialization,
+  };
+}
+
+export function buildWorkflowProgressDelivery(
+  state: RuntimeWorkflowState,
+  input: RuntimeDeliveryInput,
+): RuntimeStructuredDelivery {
+  return buildProgressDelivery(state, input);
+}
+
+export function buildWorkflowFinalDelivery(
+  state: RuntimeWorkflowState,
+  input: RuntimeDeliveryInput,
+): RuntimeStructuredDelivery {
+  return buildFinalDelivery(state, input);
+}
+
+export function enqueueWorkflowDelivery(
+  state: RuntimeWorkflowState,
+  delivery: RuntimeStructuredDelivery,
+): RuntimeWorkflowState {
+  return {
+    ...state,
+    outbox: enqueueStructuredDelivery(state.outbox, delivery),
+  };
+}
+
+export function emitWorkflowTelemetry(
+  request: NormalizedRuntimeRequest,
+  state: RuntimeWorkflowState,
+): RuntimeTelemetryBundle {
+  return emitRuntimeTelemetry(request, state, runtimeTaskStateFromWorkflow(state));
 }
 
 function deriveExecutionIdentity(decision: PolicyDecision, input: StartWorkflowInput): ExecutionIdentity {
