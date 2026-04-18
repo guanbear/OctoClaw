@@ -135,11 +135,15 @@ function parseSessionRoute(raw: string): ParsedSessionRoute {
     : parts;
   const origin = asString(normalizedParts[0]).toLowerCase();
 
+  // Slack user/channel IDs are case-sensitive (uppercase). Preserve original case
+  // for Slack targets since OpenClaw normalizes session keys to lowercase.
+  const slackOrigin = origin === "slack";
+
   let target = "";
   let threadId = "";
 
   if (normalizedParts.length >= 3 && USER_SESSION_KINDS.has(asString(normalizedParts[1]).toLowerCase())) {
-    target = asString(normalizedParts[2]);
+    target = slackOrigin ? asString(normalizedParts[2]).toUpperCase() : asString(normalizedParts[2]);
     if (normalizedParts.length >= 5 && THREAD_SESSION_KINDS.has(asString(normalizedParts[3]).toLowerCase())) {
       threadId = asString(normalizedParts[4]);
     }
