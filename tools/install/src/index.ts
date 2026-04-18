@@ -13,6 +13,7 @@ import { stdin, stdout, stderr, argv, env, cwd, exit } from "node:process";
 // @ts-ignore missing Node type package in this workspace
 import { promisify } from "node:util";
 import os from "node:os";
+// @ts-ignore missing Node type package in this workspace
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ConcreteModelId, ModelProfile, ModelProfileMapping } from "@octoclaw/contracts/schemas";
@@ -418,7 +419,10 @@ async function moveDirectoryToBackup(targetPath: string): Promise<void> {
   if (!(await isDirectory(targetPath)) || (await isSymbolicLink(targetPath))) {
     return;
   }
-  await renameAsync(targetPath, `${targetPath}.bak.${timestampForBackup()}`);
+  const backupDir = path.join(path.dirname(targetPath), "..", "backups");
+  await mkdir(backupDir, { recursive: true });
+  const backupName = `${path.basename(targetPath)}.bak.${timestampForBackup()}`;
+  await renameAsync(targetPath, path.join(backupDir, backupName));
 }
 
 function timestampForBackup(): string {
@@ -494,17 +498,17 @@ async function setupDeploySymlinks(openclawHome: string): Promise<void> {
 }
 
 async function cleanupOldBackups(openclawHome: string, keepCount = 3): Promise<void> {
-  const extensionsRoot = path.join(openclawHome, "extensions");
-  if (!(await isDirectory(extensionsRoot))) {
+  const backupDir = path.join(openclawHome, "backups");
+  if (!(await isDirectory(backupDir))) {
     return;
   }
 
   for (const extensionName of DEPLOY_EXTENSION_NAMES) {
     const backupPrefix = `${extensionName}.bak.`;
-    const entries = await readdir(extensionsRoot, { withFileTypes: true });
+    const entries = await readdir(backupDir, { withFileTypes: true });
     const backups = entries
       .filter((entry) => entry.name.startsWith(backupPrefix))
-      .map((entry) => path.join(extensionsRoot, entry.name))
+      .map((entry) => path.join(backupDir, entry.name))
       .sort();
 
     if (backups.length <= keepCount) {

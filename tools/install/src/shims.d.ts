@@ -54,6 +54,7 @@ declare module "node:path" {
     join(...paths: string[]): string;
     resolve(...paths: string[]): string;
     dirname(target: string): string;
+    basename(target: string): string;
     isAbsolute(target: string): boolean;
   };
   export default path;
