@@ -1,0 +1,828 @@
+import type { ScopeMetadata, WorkspaceMode } from "@octoclaw/contracts/schemas";
+import type { NativeHelperInvoker } from "../adapter/native-helper.js";
+import { createOctoClawRuntimePlugin } from "../plugin.js";
+import type { PolicyDecision, PolicyJudgeInput } from "@octoclaw/policy/judge";
+import { judgePolicy } from "@octoclaw/policy/judge";
+import {
+  advanceWorkflowToRunning,
+  markWorkflowCheckpointEmitted,
+  markWorkflowCompleted,
+  markWorkflowFailed,
+  markWorkflowTimedOut,
+  renewWorkflowHeartbeat,
+  startRuntimeWorkflow,
+  type RuntimeWorkflowState,
+} from "@octoclaw/runtime-core/workflow";
+import type { PolicyRole } from "@octoclaw/policy/roles";
+import type { ExecutionProfileTarget } from "@octoclaw/policy/model";
+import type { LiveRoute } from "@octoclaw/policy/route";
+import type { WorkerPool } from "@octoclaw/policy/caps";
+import {
+  buildTsRuntimeDispatchPayload as buildRuntimeDispatchPayload,
+  buildTsRuntimeSpawnPayload as buildRuntimeSpawnPayload,
+} from "../runtime-payloads.js";
+import { stableId, truncateText } from "./env.js";
+import {
+  buildPolicyMetadata,
+  enrichConversationControlMetadata,
+  isManagedAgentContext,
+  promptsEquivalent,
+  resolvePolicyStateKey,
+  unwrapQueuedBusyPrompt,
+} from "./session.js";
+import { policyState } from "../state/policy-state.js";
+import {
+  buildPolicyJudgedReplayPayload,
+  buildPolicyResolvedReplayPayload,
+  buildRouteValidatedReplayPayload,
+  compactPolicyPrompt,
+  isDelegatedRoute,
+  recordPolicyReplay,
+  routeHintRequired,
+} from "../replay/replay-logger.js";
+
+type UnknownRecord = Record<string, unknown>;
+type LoggerLike = { warn?: (message: string) => void } | null | undefined;
+type ManagedContext = Record<string, unknown>;
+type PolicyContextState = UnknownRecord & {
+  prompt?: string;
+  decision?: UnknownRecord;
+  sessionBoundary?: { status: string; reason: string };
+  canonicalSessionKey?: string;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+const PHASE_TWO_LIVE_ROUTES = new Set<LiveRoute>(["reply", "delegate.single", "observe"]);
+const PHASE_TWO_ROUTE_MAP: Record<LiveRoute, "direct" | "spawn_single" | "runner"> = {
+  reply: "direct",
+  "delegate.single": "spawn_single",
+  observe: "runner",
+};
+
+interface DispatchLikeInput {
+  task: unknown;
+  command?: string;
+  cwd?: string;
+  decision?: UnknownRecord;
+  metadata?: UnknownRecord;
+  timeoutSeconds?: number;
+  helperInvoker?: NativeHelperInvoker | null;
+}
+
+interface SpawnLikeInput {
+  task: unknown;
+  route?: string;
+  decision?: UnknownRecord;
+  metadata?: UnknownRecord;
+  helperInvoker?: NativeHelperInvoker | null;
+  execute?: boolean;
+}
+
+interface PhaseTwoPolicyInput extends PolicyJudgeInput {
+  workType?: "research" | "code" | "review";
+}
+
+interface ExtractPromptEvent {
+  prompt?: unknown;
+  raw?: unknown;
+  messages?: unknown;
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): UnknownRecord {
+  return isRecord(value) ? value : {};
+}
+
+function asString(value: unknown, fallback = ""): string {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => asString(item)).filter(Boolean)
+    : [];
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (isRecord(part) && typeof part.text === "string") return String(part.text);
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (isRecord(content) && typeof content.text === "string") {
+    return String(content.text).trim();
+  }
+  return "";
+}
+
+function unwrapImRelayPrompt(raw: string): string {
+  const text = asString(raw);
+  if (!text) return "";
+  const hasRelayMetadata = /Conversation info \(untrusted metadata\):/u.test(text)
+    || /Sender \(untrusted metadata\):/u.test(text);
+  if (!hasRelayMetadata) return "";
+  const afterSender = text.replace(/^.*?Sender \(untrusted metadata\):\s*```[\s\S]*?```\s*/u, "").trim();
+  if (afterSender && !/^System:/u.test(afterSender)) return afterSender;
+  const afterConversation = text.replace(/^.*?Conversation info \(untrusted metadata\):\s*```[\s\S]*?```\s*/u, "").trim();
+  if (afterConversation && !/^System:/u.test(afterConversation)) return afterConversation;
+  const firstLine = text.split(/\r?\n/u, 1)[0] || "";
+  const systemMatch = firstLine.match(/^System:\s*\[[^\]]+\]\s*[^:]+:\s*(.+)$/u);
+  return asString(systemMatch?.[1]);
+}
+
+function unwrapCodexHarnessPrompt(raw: string): string {
+  const text = asString(raw);
+  if (!text.startsWith("[codex-slack-e2e")) return "";
+  const match = text.match(/当前用户问题：([\s\S]+)$/u);
+  return asString(match?.[1]);
+}
+
+export function extractPromptText(event: ExtractPromptEvent): string {
+  const prompt = asString(event.prompt ?? event.raw);
+  const harnessPrompt = unwrapCodexHarnessPrompt(prompt);
+  if (harnessPrompt) return harnessPrompt;
+  const relayPrompt = unwrapImRelayPrompt(prompt);
+  if (relayPrompt) return relayPrompt;
+  const unwrappedPrompt = unwrapQueuedBusyPrompt(prompt);
+  if (unwrappedPrompt && unwrappedPrompt !== prompt) return unwrappedPrompt;
+  if (prompt) return prompt;
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isRecord(message) || asString(message.role).toLowerCase() !== "user") continue;
+    const text = extractMessageText(message.content);
+    const harnessText = unwrapCodexHarnessPrompt(text);
+    if (harnessText) return harnessText;
+    const relayText = unwrapImRelayPrompt(text);
+    if (relayText) return relayText;
+    const unwrapped = unwrapQueuedBusyPrompt(text);
+    if (unwrapped && unwrapped !== text) return unwrapped;
+    if (text) return text;
+  }
+  return "";
+}
+
+function normalizeWorkspaceMode(value: unknown, fallback: WorkspaceMode = "shared_workspace"): WorkspaceMode {
+  const candidate = asString(value);
+  return candidate === "isolated_worktree" || candidate === "shared_workspace" || candidate === "read_only"
+    ? candidate
+    : fallback;
+}
+
+function normalizeLiveRoute(route: unknown, fallback: string = "reply"): LiveRoute {
+  const normalized = asString(route);
+  const fallbackRoute = fallback === "reply" || fallback === "delegate.single" || fallback === "observe"
+    ? fallback
+    : "reply";
+  if (normalized === "direct") return "reply";
+  if (normalized === "spawn_single" || normalized === "spawn_multi") return "delegate.single";
+  if (normalized === "runner") return "observe";
+  if (normalized === "reply" || normalized === "delegate.single" || normalized === "observe") return normalized;
+  return fallbackRoute;
+}
+
+function runtimeRouteDecision(decision?: UnknownRecord): UnknownRecord {
+  return asRecord(decision?.route_decision);
+}
+
+function buildWorkflowScope(metadata: UnknownRecord = {}): ScopeMetadata {
+  return {
+    readScope: Array.isArray(metadata.readScope) ? metadata.readScope as ScopeMetadata["readScope"] : [],
+    writeScope: Array.isArray(metadata.writeScope) ? metadata.writeScope as ScopeMetadata["writeScope"] : [],
+    workspaceMode: normalizeWorkspaceMode(metadata.workspaceMode ?? metadata.workspace_mode ?? "shared_workspace"),
+    writeScopeSummary: asString(metadata.writeScopeSummary ?? metadata.write_scope_summary),
+  };
+}
+
+function buildRuntimeTruthWorkflowStub(metadata: UnknownRecord = {}): RuntimeWorkflowState {
+  const workspaceMode = normalizeWorkspaceMode(metadata.workspaceMode ?? metadata.workspace_mode ?? "shared_workspace");
+  const taskId = asString(
+    metadata.taskId ?? metadata.task_id ?? metadata.native_task_id ?? metadata.requestId ?? metadata.request_id,
+    "runtime-task",
+  );
+  const flowId = asString(metadata.flowId ?? metadata.flow_id ?? metadata.requestId ?? metadata.request_id, "runtime-flow");
+  const requestId = asString(metadata.requestId ?? metadata.request_id ?? taskId, taskId);
+  const claimOwner = asString(
+    metadata.claimOwner ?? metadata.claim_owner ?? metadata.controllerId ?? metadata.controller_id,
+    "runtime-wrapper",
+  );
+  const leaseDurationMs = 30_000;
+  const decidedRoute: LiveRoute = asBoolean(metadata.requiresObservation)
+    ? "observe"
+    : asBoolean(metadata.requiresDelegation)
+      ? "delegate.single"
+      : "reply";
+  const decision: PolicyDecision = {
+    route: decidedRoute,
+    role: asBoolean(metadata.requiresObservation)
+      ? "observer_probe"
+      : asBoolean(metadata.requiresDelegation)
+        ? "worker_research"
+        : "main_reply",
+    coordinationMode: decidedRoute === "delegate.single" ? "solo_worker" : undefined,
+    backend: "openclaw-native",
+    executionProfile: asBoolean(metadata.requiresObservation)
+      ? "observer"
+      : asBoolean(metadata.requiresDelegation)
+        ? "worker"
+        : "main",
+    workspaceMode,
+    modelProfile: asBoolean(metadata.requiresObservation)
+      ? "observer_probe"
+      : asBoolean(metadata.requiresDelegation)
+        ? "worker_research"
+        : "direct_main",
+    caps: {
+      queueBudget: 1,
+      maxWorkers: asBoolean(metadata.requiresDelegation) ? 1 : 0,
+      latencyTarget: asBoolean(metadata.requiresDelegation) || asBoolean(metadata.requiresObservation) ? "background" : "interactive",
+      workerPool: asBoolean(metadata.requiresObservation)
+        ? "octoclaw-observer"
+        : asBoolean(metadata.requiresDelegation)
+          ? "octoclaw-research"
+          : "octoclaw-main",
+      capReason: "runtime_truth_stub",
+    },
+    admission: {
+      admission: "allow",
+      queueBudget: 1,
+      maxWorkers: asBoolean(metadata.requiresDelegation) ? 1 : 0,
+      latencyTarget: asBoolean(metadata.requiresDelegation) || asBoolean(metadata.requiresObservation) ? "background" : "interactive",
+      reason: "runtime_truth_stub",
+    },
+    decisionStack: ["route", "role", "coordination_mode", "backend", "workspace_mode", "model_profile", "caps"],
+  };
+
+  let workflow = startRuntimeWorkflow({
+    requestId,
+    taskId,
+    flowId,
+    decision,
+    role: decision.role,
+    decisionRef: `${requestId}:${taskId}:runtime_truth_stub`,
+    provenanceSource: "runtime_orchestrator",
+    claimOwner,
+    leaseDurationMs,
+    deadlineBudget: {
+      queueMs: 1_000,
+      startMs: 2_000,
+      progressMs: 30_000,
+      runtimeMs: 60_000,
+      deliveryMs: 5_000,
+    },
+    scope: {
+      readScope: Array.isArray(metadata.readScope) ? metadata.readScope as ScopeMetadata["readScope"] : [],
+      writeScope: Array.isArray(metadata.writeScope) ? metadata.writeScope as ScopeMetadata["writeScope"] : [],
+      workspaceMode,
+      writeScopeSummary: asString(metadata.writeScopeSummary ?? metadata.write_scope_summary),
+    },
+  });
+
+  if (asBoolean(metadata.requiresObservation)) {
+    return workflow;
+  }
+  workflow = advanceWorkflowToRunning(workflow, claimOwner);
+  workflow = renewWorkflowHeartbeat(workflow);
+  if (asBoolean(metadata.requiresDelegation)) {
+    workflow = markWorkflowCheckpointEmitted(workflow);
+  }
+  return asBoolean(metadata.runtimeTimedOut)
+    ? markWorkflowTimedOut(workflow)
+    : asBoolean(metadata.runtimeFailed)
+      ? markWorkflowFailed(workflow)
+      : markWorkflowCompleted(workflow);
+}
+
+function buildRuntimeTruthMetadata(workflowOrMetadata: UnknownRecord = {}, options: { helperInvoker?: NativeHelperInvoker | null } = {}) {
+  const helperInvoker = options.helperInvoker ?? (workflowOrMetadata.helperInvoker as NativeHelperInvoker | undefined) ?? undefined;
+  const plugin = createOctoClawRuntimePlugin(helperInvoker ? { helperInvoker } : {});
+  const workflow = isRecord(workflowOrMetadata.taskMaterialization)
+    ? workflowOrMetadata as unknown as RuntimeWorkflowState
+    : buildRuntimeTruthWorkflowStub(workflowOrMetadata);
+  return {
+    authority: "ts-native-adapter",
+    pluginName: plugin.name,
+    binding: plugin.bindWorkflow(workflow),
+  };
+}
+
+function buildRuntimeExecutionIds(task: unknown, decision?: UnknownRecord, metadata?: UnknownRecord) {
+  const routeDecision = runtimeRouteDecision(decision);
+  const route = normalizeLiveRoute(routeDecision.route ?? asRecord(metadata).requested_route, "reply");
+  const prompt = asString(task);
+  return {
+    requestId: asString(asRecord(metadata).requestId ?? asRecord(metadata).request_id, stableId("runtime", [prompt, route])),
+    taskId: asString(asRecord(metadata).taskId ?? asRecord(metadata).task_id, stableId("task", [prompt, route])),
+    flowId: asString(asRecord(metadata).flowId ?? asRecord(metadata).flow_id, stableId("flow", [prompt, route])),
+  };
+}
+
+function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {}): PhaseTwoPolicyInput {
+  const requestedRoute = asString(metadata.requested_route ?? metadata.route ?? metadata.requestedRoute);
+  const queueBudget = Number(metadata.queueBudget ?? metadata.queue_budget ?? 1);
+  const inflightCount = Number(metadata.inflightCount ?? metadata.inflight_count ?? 0);
+  const capabilitySatisfied = metadata.capabilitySatisfied ?? metadata.capability_satisfied;
+  const writeConflict = metadata.writeConflict ?? metadata.write_conflict;
+  const workType = asString(metadata.workType);
+
+  return {
+    requestedRoute: requestedRoute || undefined,
+    workType: workType === "research" || workType === "code" || workType === "review" ? workType : undefined,
+    hardBoundaryControl: Boolean(asRecord(metadata.conversation_control).required || metadata.hardBoundaryControl),
+    requiresObservation: Boolean(metadata.requiresObservation || asRecord(metadata.conversation_control).intent_class === "execution_followup"),
+    requiresDelegation: Boolean(metadata.requiresDelegation),
+    workspaceMode: normalizeWorkspaceMode(metadata.workspaceMode ?? metadata.workspace_mode),
+    queueBudget: Number.isFinite(queueBudget) ? Math.max(queueBudget, 0) : 1,
+    inflightCount: Number.isFinite(inflightCount) ? Math.max(inflightCount, 0) : 0,
+    capabilitySatisfied: typeof capabilitySatisfied === "boolean" ? capabilitySatisfied : true,
+    writeConflict: typeof writeConflict === "boolean" ? writeConflict : false,
+  };
+}
+
+export function buildDecision(task: unknown, optionsOrDecision: { metadata?: UnknownRecord } | UnknownRecord = {}, metadataArg?: UnknownRecord): PolicyDecision {
+  const options = metadataArg === undefined
+    ? (isRecord(optionsOrDecision) && ("metadata" in optionsOrDecision)
+        ? optionsOrDecision as { metadata?: UnknownRecord }
+        : { metadata: asRecord(optionsOrDecision) })
+    : { metadata: metadataArg };
+  const metadata = enrichConversationControlMetadata(asString(task), asRecord(options.metadata));
+  return judgePolicy(buildPhaseTwoPolicyInput(asString(task), metadata));
+}
+
+function workflowRoleForRoute(route: LiveRoute, taskClass = ""): PolicyRole {
+  if (route === "observe") return "observer_probe";
+  if (route === "reply") return "main_reply";
+  if (taskClass === "code") return "worker_code";
+  if (taskClass === "review") return "worker_review";
+  return "worker_research";
+}
+
+function workerPoolForDecision(executionProfile: ExecutionProfileTarget, role: PolicyRole): WorkerPool {
+  if (executionProfile === "main") return "octoclaw-main";
+  if (executionProfile === "observer") return "octoclaw-observer";
+  if (role === "worker_code") return "octoclaw-code";
+  if (role === "worker_review") return "octoclaw-review";
+  return "octoclaw-research";
+}
+
+function hookInterfaceForRoute(liveRoute: LiveRoute, admission = "allow") {
+  const delegated = liveRoute === "delegate.single" && admission === "allow";
+  const observe = liveRoute === "observe" && admission === "allow";
+  return {
+    before_model_resolve: {
+      enabled: true,
+      route: liveRoute,
+      mode: delegated ? "delegate_first" : observe ? "observe" : "direct",
+    },
+    before_prompt_build: {
+      enabled: true,
+      route: liveRoute,
+      include_compact_policy_prompt: delegated || observe,
+    },
+    before_tool_call: {
+      enabled: true,
+      route: liveRoute,
+      delegate_required: delegated,
+      observe_only: observe,
+    },
+    agent_end: {
+      enabled: true,
+      route: liveRoute,
+      reconcile_delegated_result: delegated || observe,
+    },
+  };
+}
+
+function readStickyStateDecision(metadata: UnknownRecord): UnknownRecord {
+  const stateKey = asString(metadata.session_key);
+  if (!stateKey) return {};
+  return asRecord(policyState.get(stateKey)?.decision);
+}
+
+function liveRouteNeedsHint(liveRoute: LiveRoute, metadata: UnknownRecord): boolean {
+  return liveRoute === "delegate.single"
+    && !Boolean(metadata.route_hint)
+    && !Boolean(metadata.requested_route)
+    && !Boolean(metadata.route);
+}
+
+export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: UnknownRecord = {}, prompt = ""): UnknownRecord {
+  const tsJudgeInput = buildPhaseTwoPolicyInput(prompt, metadata);
+  const tsPolicyDecision = judgePolicy(tsJudgeInput);
+  let liveRoute = normalizeLiveRoute(tsPolicyDecision.route, "reply");
+  const priorDecision = asRecord(decision);
+  const priorRouteDecision = asRecord(priorDecision.route_decision);
+  const stickyDecision = readStickyStateDecision(metadata);
+  const stickyRouteDecision = asRecord(stickyDecision.route_decision);
+  const routeHint = asString(metadata.route_hint ?? metadata.requested_route ?? metadata.route);
+  const normalizedRequestedLiveRoute = normalizeLiveRoute(routeHint || priorRouteDecision.route || stickyRouteDecision.route, liveRoute);
+  const routeHintSubmitted = Boolean(routeHint);
+  const stickyEligible = !routeHintSubmitted && isDelegatedRoute(stickyDecision) && promptsEquivalent(asString(policyState.get(asString(metadata.session_key))?.prompt), prompt);
+
+  if (stickyEligible) {
+    liveRoute = normalizeLiveRoute(stickyRouteDecision.route, liveRoute);
+  } else if (routeHintSubmitted) {
+    liveRoute = normalizedRequestedLiveRoute;
+  }
+
+  const mappedRoute = PHASE_TWO_ROUTE_MAP[liveRoute];
+  const blockedCompound = Boolean(metadata.compound_plan)
+    || !PHASE_TWO_LIVE_ROUTES.has(normalizeLiveRoute(metadata.requested_route ?? metadata.route, "reply"));
+
+  metadata.ts_policy_judge = {
+    input: tsJudgeInput,
+    decision: tsPolicyDecision,
+    live_path_phase: "phase2",
+    allowed_routes: ["reply", "delegate.single", "observe"],
+  };
+
+  try {
+    metadata.runtime_truth = buildRuntimeTruthMetadata({
+      ...metadata,
+      requestId: metadata.requestId ?? metadata.request_id ?? stableId("runtime", [prompt, liveRoute]),
+      taskId: metadata.taskId ?? metadata.task_id ?? stableId("task", [prompt, liveRoute]),
+      flowId: metadata.flowId ?? metadata.flow_id ?? stableId("flow", [prompt, liveRoute]),
+      requiresDelegation: liveRoute === "delegate.single",
+      requiresObservation: liveRoute === "observe",
+    });
+  } catch (error) {
+    metadata.runtime_truth = isRecord(metadata.runtime_truth) ? metadata.runtime_truth : null;
+    metadata.runtime_truth_error = {
+      source: "buildRuntimeTruthMetadata",
+      message: String(error instanceof Error ? error.message : error || "runtime_truth_unavailable"),
+    };
+  }
+
+  if (blockedCompound) {
+    metadata.compound_plan = metadata.compound_plan ?? null;
+    metadata.compound_plan_blocked = {
+      status: tsPolicyDecision.admission.admission === "allow" ? "blocked" : "deferred",
+      reason: tsPolicyDecision.admission.reason || "compound_route_not_available_on_phase2_live_path",
+      requestedRoute: asString(metadata.requested_route ?? metadata.route, "delegate.compound"),
+      enforcedLiveRoute: liveRoute,
+      executed: false,
+    };
+  }
+
+  const role = workflowRoleForRoute(liveRoute, tsJudgeInput.workType || asString(priorRouteDecision.work_type, "research"));
+  const workerPool = workerPoolForDecision(tsPolicyDecision.executionProfile, role);
+  const routeHintPolicyRequired = liveRouteNeedsHint(liveRoute, metadata);
+  const ackFollowupCandidate = stickyEligible && liveRoute === "delegate.single";
+  const nextDecision: UnknownRecord = { ...priorDecision };
+
+  nextDecision.summary = nextDecision.summary || `policy=${mappedRoute} -> ${workerPool}`;
+  nextDecision.request = {
+    ...asRecord(nextDecision.request),
+    task: asString(asRecord(nextDecision.request).task, prompt),
+    session_key: asString(asRecord(nextDecision.request).session_key, asString(metadata.session_key)),
+    metadata: {
+      ...asRecord(asRecord(nextDecision.request).metadata),
+      ...metadata,
+    },
+  };
+  nextDecision.route_decision = {
+    ...priorRouteDecision,
+    route: mappedRoute,
+    system_preferred_route: mappedRoute,
+    worker_pool: workerPool,
+    work_type: tsJudgeInput.workType || asString(priorRouteDecision.work_type, "research"),
+    phase: asString(priorRouteDecision.phase, "execute"),
+    protocol: asString(priorRouteDecision.protocol, "normal"),
+    task_class: liveRoute === "observe"
+      ? "control_observer"
+      : liveRoute === "delegate.single"
+        ? "delegated_single"
+        : asString(priorRouteDecision.task_class, "main_direct"),
+    protected_lane: liveRoute === "observe" ? "control_observer" : "",
+    dispatch_required: liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
+    reason: tsPolicyDecision.admission.reason,
+    reason_codes: Array.from(new Set([
+      ...asStringArray(priorRouteDecision.reason_codes),
+      `ts_policy_route:${liveRoute}`,
+      `ts_policy_backend:${tsPolicyDecision.backend}`,
+      `ts_policy_execution_profile:${tsPolicyDecision.executionProfile}`,
+      `ts_policy_profile:${tsPolicyDecision.modelProfile}`,
+      `ts_policy_admission:${tsPolicyDecision.admission.admission}`,
+      blockedCompound ? "compound_plan_blocked_phase2_live_path" : "",
+      stickyEligible ? "sticky_route_applied" : "",
+      routeHintSubmitted ? "route_hint_applied" : "",
+    ].filter(Boolean))),
+  };
+  nextDecision.model_policy = {
+    ...asRecord(nextDecision.model_policy),
+    worker_pool: workerPool,
+    profile: tsPolicyDecision.modelProfile,
+    selected_model: asString(asRecord(nextDecision.model_policy).selected_model, tsPolicyDecision.modelProfile),
+  };
+  nextDecision.hook_interface = hookInterfaceForRoute(liveRoute, tsPolicyDecision.admission.admission);
+  nextDecision.route_hint_policy = {
+    required: routeHintPolicyRequired,
+    submitted: routeHintSubmitted,
+    sticky_applied: stickyEligible,
+    ack_followup_candidate: ackFollowupCandidate,
+    ack_followup_applied: false,
+  };
+  nextDecision.pre_dispatch_ack = {
+    required: liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
+    text: asString(asRecord(nextDecision.pre_dispatch_ack).text, "收到，我看一下"),
+    fallback_to_progress_update: true,
+  };
+  nextDecision.review_policy = {
+    ...asRecord(nextDecision.review_policy),
+    required: liveRoute === "delegate.single",
+  };
+  nextDecision.state_grounding = {
+    required: liveRoute !== "reply",
+    source: liveRoute === "reply" ? "none" : "policy_state",
+  };
+  nextDecision.latency_ack = {
+    required: liveRoute === "reply",
+    text: asString(asRecord(nextDecision.latency_ack).text),
+  };
+  nextDecision.tool_policy = {
+    ...asRecord(nextDecision.tool_policy),
+    must_delegate_via: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
+    allow_direct_tools: liveRoute === "reply",
+    delegate_first: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow",
+    allowed_control_tools: liveRoute === "reply"
+      ? []
+      : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+  };
+  nextDecision.router_decision_v2 = {
+    ...asRecord(nextDecision.router_decision_v2),
+    request_kind: liveRoute === "reply" ? "reply" : "delegated_task",
+  };
+  nextDecision.ts_policy_judge = metadata.ts_policy_judge;
+  if (metadata.runtime_truth) {
+    nextDecision.runtime_truth = metadata.runtime_truth;
+  }
+  if (blockedCompound) {
+    nextDecision.compound_plan_blocked = metadata.compound_plan_blocked;
+  }
+  return nextDecision;
+}
+
+function attachRuntimeTruthMetadata(decision: UnknownRecord, metadata: UnknownRecord = {}, prompt = ""): UnknownRecord {
+  const nextDecision = { ...asRecord(decision) };
+  try {
+    metadata.runtime_truth = buildRuntimeTruthMetadata({
+      ...metadata,
+      requestId: metadata.requestId ?? metadata.request_id ?? stableId("runtime", [prompt, asString(asRecord(nextDecision.route_decision).route, "direct")]),
+      taskId: metadata.taskId ?? metadata.task_id ?? stableId("task", [prompt, asString(asRecord(nextDecision.route_decision).route, "direct")]),
+      flowId: metadata.flowId ?? metadata.flow_id ?? stableId("flow", [prompt, asString(asRecord(nextDecision.route_decision).route, "direct")]),
+      requiresDelegation: normalizeLiveRoute(asRecord(nextDecision.route_decision).route, "reply") === "delegate.single",
+      requiresObservation: normalizeLiveRoute(asRecord(nextDecision.route_decision).route, "reply") === "observe",
+    });
+  } catch (error) {
+    metadata.runtime_truth = isRecord(metadata.runtime_truth) ? metadata.runtime_truth : null;
+    metadata.runtime_truth_error = {
+      source: "buildRuntimeTruthMetadata",
+      message: String(error instanceof Error ? error.message : error || "runtime_truth_unavailable"),
+    };
+  }
+
+  if (metadata.runtime_truth) {
+    nextDecision.runtime_truth = metadata.runtime_truth;
+  }
+  if (metadata.runtime_truth_error) {
+    nextDecision.request = isRecord(nextDecision.request)
+      ? {
+          ...nextDecision.request,
+          metadata: {
+            ...asRecord(asRecord(nextDecision.request).metadata),
+            runtime_truth_error: metadata.runtime_truth_error,
+          },
+        }
+      : nextDecision.request;
+  }
+  return nextDecision;
+}
+
+export async function resolveStatelessPolicyDecision(task: string, options: UnknownRecord = {}): Promise<UnknownRecord> {
+  const prompt = asString(task);
+  const metadata = enrichConversationControlMetadata(prompt, asRecord(options.metadata));
+  const decision = buildDecision(prompt, { metadata });
+  const seeded: UnknownRecord = {
+    summary: `policy=${PHASE_TWO_ROUTE_MAP[decision.route]} -> ${workerPoolForDecision(decision.executionProfile, decision.role)}`,
+    request: {
+      task: prompt,
+      session_key: asString(metadata.session_key),
+      metadata,
+    },
+    route_decision: {
+      route: PHASE_TWO_ROUTE_MAP[decision.route],
+      system_preferred_route: PHASE_TWO_ROUTE_MAP[decision.route],
+      worker_pool: workerPoolForDecision(decision.executionProfile, decision.role),
+      task_class: decision.route === "observe"
+        ? "control_observer"
+        : decision.route === "delegate.single"
+          ? "delegated_single"
+          : "main_direct",
+      work_type: asString(metadata.workType, "research"),
+      phase: "execute",
+      protocol: decision.route === "reply" ? "normal" : "delegated",
+    },
+    model_policy: {
+      profile: decision.modelProfile,
+      selected_model: asString(metadata.model, decision.modelProfile),
+      worker_pool: workerPoolForDecision(decision.executionProfile, decision.role),
+    },
+    review_policy: {
+      required: decision.route === "delegate.single",
+    },
+    router_decision_v2: {
+      request_kind: decision.route === "reply" ? "reply" : "delegated_task",
+    },
+  };
+
+  return applyPhaseTwoLivePathPolicy(seeded, metadata, prompt);
+}
+
+export async function resolvePolicyDecisionForContext(
+  promptOrEvent: unknown,
+  ctx: ManagedContext,
+  _cwd: string,
+  logger?: LoggerLike,
+): Promise<{ decision: UnknownRecord; stateKey: string; state: PolicyContextState } | null> {
+  const prompt = typeof promptOrEvent === "string"
+    ? asString(promptOrEvent)
+    : extractPromptText(asRecord(promptOrEvent) as ExtractPromptEvent);
+  if (!prompt || !isManagedAgentContext(ctx)) {
+    return null;
+  }
+
+  policyState.prune();
+  const stateKey = resolvePolicyStateKey(ctx);
+  const existing = policyState.resolveForContext(ctx).state as PolicyContextState | null;
+  const metadata = buildPolicyMetadata(ctx, { stateKey });
+
+  if (existing?.decision && promptsEquivalent(asString(existing.prompt), prompt)) {
+    const cached = { ...asRecord(existing.decision) };
+    policyState.set(stateKey, {
+      ...existing,
+      sessionBoundary: existing.sessionBoundary
+        ? {
+            status: asString(existing.sessionBoundary.status),
+            reason: asString(existing.sessionBoundary.reason),
+          }
+        : undefined,
+      updatedAt: Date.now(),
+      decision: cached,
+    });
+    return { decision: cached, stateKey, state: { ...existing, decision: cached, updatedAt: Date.now() } };
+  }
+
+  try {
+    const rawDecision = await resolveStatelessPolicyDecision(prompt, { metadata });
+    const decision = attachRuntimeTruthMetadata(rawDecision, metadata, prompt);
+    const nextState: PolicyContextState = {
+      prompt,
+      decision,
+      createdAt: Number(existing?.createdAt ?? Date.now()),
+      updatedAt: Date.now(),
+      canonicalSessionKey: asString(stateKey),
+      sessionBoundary: {
+        status: asString(metadata.session_boundary_status),
+        reason: asString(metadata.session_boundary_reason),
+      },
+      routeHintSubmitted: Boolean(asRecord(decision.route_hint_policy).submitted),
+      routeHintPayload: null,
+      blockedTools: asStringArray(asRecord(decision.tool_policy).blocked_patterns),
+      preDispatchAckSent: false,
+      preDispatchAckPending: Boolean(asRecord(decision.pre_dispatch_ack).required),
+      preDispatchAckText: asString(asRecord(decision.pre_dispatch_ack).text),
+      latencyAckSent: false,
+      latencyAckText: asString(asRecord(decision.latency_ack).text),
+      delegated: isDelegatedRoute(decision),
+      delegationTool: asString(asRecord(decision.tool_policy).must_delegate_via),
+    };
+
+    policyState.set(stateKey, nextState);
+
+    await recordPolicyReplay(
+      "policy_resolved",
+      buildPolicyResolvedReplayPayload({
+        decision,
+        stateKey,
+        ctx,
+        boundary: { canonicalSessionKey: stateKey, status: asString(metadata.session_boundary_status), reason: asString(metadata.session_boundary_reason) },
+        metadata,
+        prompt,
+        routeHintSubmitted: Boolean(nextState.routeHintSubmitted),
+        usedCachedPolicy: false,
+      }),
+      logger,
+      decision,
+    );
+    await recordPolicyReplay(
+      "policy_judged",
+      {
+        sessionKey: stateKey,
+        sessionId: asString(ctx.sessionId),
+        ...buildPolicyJudgedReplayPayload(decision),
+      },
+      logger,
+      decision,
+    );
+    await recordPolicyReplay(
+      "route_validated",
+      {
+        sessionKey: stateKey,
+        sessionId: asString(ctx.sessionId),
+        ...buildRouteValidatedReplayPayload(decision),
+      },
+      logger,
+      decision,
+    );
+    return { decision, stateKey, state: nextState };
+  } catch (error) {
+    logger?.warn?.(`octoclaw runtime policy resolve failed: ${String(error instanceof Error ? error.message : error)}`);
+    return null;
+  }
+}
+
+export function buildTsRuntimeDispatchPayload(input: DispatchLikeInput): UnknownRecord {
+  return buildRuntimeDispatchPayload(input, {
+    runtimeRouteDecision,
+    normalizeLiveRoute,
+    runtimeExecutionIds: buildRuntimeExecutionIds,
+    buildWorkflowDecision: (task, decision, metadata) => {
+      const routeDecision = runtimeRouteDecision(decision);
+      const route = normalizeLiveRoute(routeDecision.route ?? asRecord(metadata).requested_route, "reply");
+      const tsPolicyJudge = asRecord(asRecord(decision).ts_policy_judge);
+      const tsDecision = isRecord(tsPolicyJudge.decision)
+        ? tsPolicyJudge.decision as unknown as PolicyDecision
+        : buildDecision(task, {
+            metadata: {
+              ...asRecord(metadata),
+              requested_route: route,
+              requiresDelegation: route === "delegate.single",
+              requiresObservation: route === "observe",
+            },
+          });
+      return tsDecision;
+    },
+    buildWorkflowScope,
+    truncateText,
+  }) as UnknownRecord;
+}
+
+export function buildTsRuntimeSpawnPayload(input: SpawnLikeInput): UnknownRecord {
+  return buildRuntimeSpawnPayload(input, {
+    runtimeRouteDecision,
+    normalizeLiveRoute,
+    runtimeExecutionIds: buildRuntimeExecutionIds,
+    buildWorkflowDecision: (task, decision, metadata) => {
+      const routeDecision = runtimeRouteDecision(decision);
+      const route = normalizeLiveRoute(routeDecision.route ?? asRecord(metadata).requested_route, "reply");
+      const tsPolicyJudge = asRecord(asRecord(decision).ts_policy_judge);
+      const tsDecision = isRecord(tsPolicyJudge.decision)
+        ? tsPolicyJudge.decision as unknown as PolicyDecision
+        : buildDecision(task, {
+            metadata: {
+              ...asRecord(metadata),
+              requested_route: route,
+              requiresDelegation: route === "delegate.single",
+              requiresObservation: route === "observe",
+            },
+          });
+      return tsDecision;
+    },
+    buildWorkflowScope,
+    truncateText,
+  }) as UnknownRecord;
+}
+
+export function routeDecisionSummary(decision: UnknownRecord): string {
+  const routeDecision = runtimeRouteDecision(decision);
+  return [
+    `route=${asString(routeDecision.route, "direct")}`,
+    `worker_pool=${asString(routeDecision.worker_pool, "octoclaw-main")}`,
+    `phase=${asString(routeDecision.phase)}`,
+    `task=${truncateText(asString(asRecord(decision.request).task), 80)}`,
+    compactPolicyPrompt(decision),
+    routeHintRequired(decision) ? "route_hint=required" : "route_hint=optional",
+  ].filter(Boolean).join(" | ");
+}
+
+export function supportedPolicyRoutes(): string[] {
+  return ["direct", "runner", "spawn_single"];
+}

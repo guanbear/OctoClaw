@@ -26,7 +26,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
     scope: {
       readScope: [{ resource: "repo:src", access: "read" }],
       writeScope: [{ resource: "repo:src", access: "write" }],
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
       writeScopeSummary: "repo:src",
     },
     truth: {
@@ -48,7 +48,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
         controllerId: "controller-1",
       },
       scope: {
-        workspaceMode: "isolated_workspace",
+        workspaceMode: "isolated_worktree",
         readScopeCount: 1,
         writeScopeCount: 1,
         writeScopeSummary: "repo:src",
@@ -64,7 +64,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
       taskId: "task-123",
       substrateState: "running",
       substrateRevision: 5,
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
     },
     artifact: {
       schemaVersion: "octoclaw.artifact/v1",
@@ -123,6 +123,7 @@ describe("rich renderer", () => {
       flowId: "flow-456",
       summary: "timeline placeholder for task-123",
       available: true,
+      events: [],
     });
   });
 

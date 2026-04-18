@@ -1,29 +1,4 @@
-declare const process: {
-  getBuiltinModule?: (name: string) => unknown;
-};
-
-type SpawnSync = (
-  command: string,
-  args?: string[],
-  options?: {
-    cwd?: string;
-    encoding?: string;
-  },
-) => {
-  stdout?: string;
-  stderr?: string;
-  error?: Error;
-};
-
-function resolveSpawnSync(): SpawnSync {
-  const childProcessModule = process.getBuiltinModule?.("child_process") as { spawnSync?: SpawnSync } | undefined;
-  if (!childProcessModule?.spawnSync) {
-    throw new Error("native helper invocation failed: child_process builtin unavailable");
-  }
-  return childProcessModule.spawnSync;
-}
-
-const spawnSync = resolveSpawnSync();
+import { createTaskFlowBridge } from "./taskflow-bridge.js";
 
 export type NativeHelperAction = "create-managed-flow" | "run-task" | "cancel-flow" | "read-flow" | "read-task";
 
@@ -126,16 +101,21 @@ export interface NativeHelperInvoker {
   (input: NativeReadTaskHelperInvokeArgs): NativeReadTaskHelperResult;
 }
 
-const REPO_ROOT = new URL("../../../../", import.meta.url).pathname;
-const HELPER_PATH = new URL("../../../../lib/openclaw_taskflow_runtime_helper.mjs", import.meta.url).pathname;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _cachedBridge: any = null;
+let _bridgeInitPromise: Promise<any> | null = null;
 
-function buildCliArgs(action: NativeHelperAction, args: Record<string, string>): string[] {
-  const cliArgs = [HELPER_PATH, action];
-  for (const [key, value] of Object.entries(args)) {
-    if (value === "") continue;
-    cliArgs.push(`--${key}`.replace(/_/g, "-"), value);
+function getCachedBridge(): any {
+  if (_cachedBridge) return _cachedBridge;
+  throw new Error("native helper bridge not initialized — call initNativeHelperBridge() first");
+}
+
+export async function initNativeHelperBridge(): Promise<void> {
+  if (_cachedBridge) return;
+  if (!_bridgeInitPromise) {
+    _bridgeInitPromise = createTaskFlowBridge();
   }
-  return cliArgs;
+  _cachedBridge = await _bridgeInitPromise;
 }
 
 function failClosed(message: string): never {
@@ -251,22 +231,60 @@ export function invokeNativeHelper(input: NativeCancelFlowHelperInvokeArgs): Nat
 export function invokeNativeHelper(input: NativeReadFlowHelperInvokeArgs): NativeReadFlowHelperResult;
 export function invokeNativeHelper(input: NativeReadTaskHelperInvokeArgs): NativeReadTaskHelperResult;
 export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): NativeManagedFlowHelperResult | NativeRunTaskHelperResult | NativeCancelFlowHelperResult | NativeReadFlowHelperResult | NativeReadTaskHelperResult {
-  const result = spawnSync("node", buildCliArgs(action, args), {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-  });
-  if (result.error) {
-    failClosed(result.error.message);
-  }
-  const stdout = String(result.stdout || "").trim();
-  if (!stdout) {
-    failClosed(result.stderr || "empty stdout");
-  }
   let payload: any;
   try {
-    payload = JSON.parse(stdout);
-  } catch {
-    failClosed(`invalid JSON: ${stdout}`);
+    if (action === "create-managed-flow") {
+      payload = getCachedBridge().createManagedFlow({
+        sessionKey: args.session_key || "",
+        controllerId: args.controller_id || "",
+        goal: args.goal || "",
+        status: args.status,
+        currentStep: args.current_step,
+        notifyPolicy: args.notify_policy,
+        stateJson: args.state_json,
+        waitJson: args.wait_json,
+        cancelRequestedAt: args.cancel_requested_at,
+        createdAt: args.created_at,
+        updatedAt: args.updated_at,
+        endedAt: args.ended_at,
+        openclawBin: args.openclaw_bin,
+      });
+    } else if (action === "cancel-flow") {
+      payload = getCachedBridge().cancelFlow({
+        sessionKey: args.session_key || "",
+        flowId: args.flow_id || "",
+        openclawBin: args.openclaw_bin,
+      });
+    } else if (action === "read-flow") {
+      payload = getCachedBridge().readFlow({
+        sessionKey: args.session_key || "",
+        flowId: args.flow_id || "",
+        openclawBin: args.openclaw_bin,
+      });
+    } else if (action === "read-task") {
+      payload = getCachedBridge().readTask({
+        sessionKey: args.session_key || "",
+        flowId: args.flow_id || "",
+        taskId: args.task_id || "",
+        openclawBin: args.openclaw_bin,
+      });
+    } else {
+      payload = getCachedBridge().runTask({
+        sessionKey: args.session_key || "",
+        flowId: args.flow_id || "",
+        task: args.task || "",
+        runtime: args.runtime,
+        label: args.label,
+        runId: args.run_id,
+        childSessionKey: args.child_session_key,
+        status: args.status,
+        notifyPolicy: args.notify_policy,
+        progressSummary: args.progress_summary,
+        openclawBin: args.openclaw_bin,
+      });
+    }
+  } catch (error) {
+    failClosed(error instanceof Error ? error.message : String(error || "unknown error"));
   }
   if (action === "create-managed-flow") {
     return normalizeManagedFlowResult(payload);

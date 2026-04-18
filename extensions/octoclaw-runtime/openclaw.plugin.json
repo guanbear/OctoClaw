@@ -1,16 +1,27 @@
 {
   "id": "octoclaw-runtime",
+  "name": "OctoClaw Runtime",
+  "description": "Runtime policy hooks, dispatch tools, and replay logging for OctoClaw",
+  "version": "0.3.0",
+  "main": "./dist/extension-entry.js",
+  "extensions": [
+    "./dist/extension-entry.js",
+    "./dist/plugin.js",
+    "./dist/adapter/webhook-surface.js"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "octoclawRoot": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "description": "Override OCTOCLAW_ROOT path"
       },
       "workspaceRoot": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "description": "Override WORKSPACE_ROOT path"
       }
     }
   }

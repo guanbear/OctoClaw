@@ -27,18 +27,28 @@ function substrateSummary(record: RuntimeStateSurfaceRecord): string {
 }
 
 export function buildStatusSurfaceView(record: RuntimeStateSurfaceRecord): StatusSurfaceViewModel {
+  const route = record.truth.requestId ? "delegate.single" : "reply";
   return {
     ...buildContractEnvelope("projection"),
     taskId: record.truth.taskId,
     flowId: record.truth.flowId,
     state: record.substrateState,
-    route: record.truth.requestId ? "delegate.single" : "reply",
+    route,
+    role: route === "reply" ? "main_reply" : "worker_research",
+    coordinationMode: route === "delegate.single" ? "solo_worker" : "",
+    backendSummary: "openclaw-native",
     workerPool: "octoclaw-runtime",
     substrateSummary: substrateSummary(record),
-    actionAvailability: ["status", "details", "queue"],
+    actionAvailability: ["status", "details", "queue", "timeline"],
+    queuePosition: 0,
+    modelSummary: "unreported",
+    costEstimate: "unreported",
     claimOwner: record.ownership.claimOwner,
+    leaseState: "active",
     workspaceMode: record.scope.workspaceMode,
-    writeScopeSummary: record.scope.writeScopeSummary,
+    writeScopeSummary: record.scope.writeScopeSummary || "none",
+    threadCount: 1,
+    advisorUsageSummary: "none",
   };
 }
 

@@ -23,7 +23,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
     scope: {
       readScope: [{ resource: "repo:src", access: "read" }],
       writeScope: [{ resource: "repo:src", access: "write" }],
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
       writeScopeSummary: "repo:src",
     },
     truth: {
@@ -45,7 +45,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
         controllerId: "controller-1",
       },
       scope: {
-        workspaceMode: "isolated_workspace",
+        workspaceMode: "isolated_worktree",
         readScopeCount: 1,
         writeScopeCount: 1,
         writeScopeSummary: "repo:src",
@@ -61,7 +61,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
       taskId: "task-123",
       substrateState: "running",
       substrateRevision: 7,
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
     },
     artifact: {
       schemaVersion: "octoclaw.artifact/v1",
@@ -82,7 +82,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
 }
 
 describe("view-model", () => {
-  it("buildStatusSurface produces all 13 minimum WS6 fields", () => {
+  it("buildStatusSurface produces all required minimum fields", () => {
     const view = buildStatusSurface(createRecord());
 
     expect(view.taskId).toBe("task-123");
@@ -91,17 +91,15 @@ describe("view-model", () => {
     expect(view.workerPool).toBe("octoclaw-worker");
     expect(view.substrateSummary).toBe("openclaw-native managed running");
     expect(view.actionAvailability).toEqual(["status", "details", "queue", "timeline"]);
-    expect(Object.prototype.hasOwnProperty.call(view, "queuePosition")).toBe(true);
-    expect(view.queuePosition).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(view, "modelSummary")).toBe(true);
-    expect(view.modelSummary).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(view, "costEstimate")).toBe(true);
-    expect(view.costEstimate).toBeUndefined();
+    expect(view.queuePosition).toBe(0);
+    expect(view.modelSummary).toBe("unreported");
+    expect(view.costEstimate).toBe("unreported");
     expect(view.claimOwner).toBe("worker-alpha");
-    expect(Object.prototype.hasOwnProperty.call(view, "leaseState")).toBe(true);
-    expect(view.leaseState).toBeUndefined();
-    expect(view.workspaceMode).toBe("isolated_workspace");
+    expect(view.leaseState).toBe("active");
+    expect(view.workspaceMode).toBe("isolated_worktree");
     expect(view.writeScopeSummary).toBe("repo:src");
+    expect(view.threadCount).toBe(1);
+    expect(view.advisorUsageSummary).toBe("none");
   });
 
   it("buildQueueSurface produces RuntimeQueueSurface", () => {
@@ -127,6 +125,7 @@ describe("view-model", () => {
     expect(timeline.taskId).toBe("task-123");
     expect(timeline.flowId).toBe("flow-456");
     expect(timeline.summary).toBe("timeline placeholder for task-123");
+    expect(timeline.events).toEqual([]);
   });
 
   it("buildDetailsSurface produces RuntimeStateDetailsSurface", () => {
@@ -139,7 +138,7 @@ describe("view-model", () => {
     expect(details.runtime).toBe("openclaw-native");
     expect(details.syncMode).toBe("managed");
     expect(details.claimOwner).toBe("worker-alpha");
-    expect(details.workspaceMode).toBe("isolated_workspace");
+    expect(details.workspaceMode).toBe("isolated_worktree");
     expect(details.writeScopeSummary).toBe("repo:src");
     expect(details.summary).toBe("openclaw-native managed running");
   });

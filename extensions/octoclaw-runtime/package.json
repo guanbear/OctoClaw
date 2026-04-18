@@ -7,11 +7,6 @@
   "types": "src/index.ts",
   "files": [
     "dist",
-    "index.js",
-    "src/adapter/state-surface.ts",
-    "policy",
-    "bridge.js",
-    "conversation-control.js",
     "openclaw.plugin.json"
   ],
   "exports": {
@@ -20,7 +15,12 @@
     "./config": { "types": "./src/config/index.ts", "default": "./dist/config/index.js" },
     "./webhook-surface": { "types": "./src/adapter/webhook-surface.ts", "default": "./dist/adapter/webhook-surface.js" },
     "./state-surface": { "types": "./src/adapter/state-surface.ts", "default": "./dist/adapter/state-surface.js" },
-    "./runtime-payloads": { "types": "./src/runtime-payloads.ts", "default": "./dist/runtime-payloads.js" }
+    "./runtime-payloads": { "types": "./src/runtime-payloads.ts", "default": "./dist/runtime-payloads.js" },
+    "./bridge": { "types": "./src/bridge.ts", "default": "./dist/bridge.js" },
+    "./extension-entry": { "types": "./src/extension-entry.ts", "default": "./dist/extension-entry.js" },
+    "./conversation-grounding": { "types": "./src/conversation-grounding.ts", "default": "./dist/conversation-grounding.js" },
+    "./policy-resolver": { "types": "./src/resolve/policy-resolver.ts", "default": "./dist/resolve/policy-resolver.js" },
+    "./tools": { "types": "./src/tools/registration.ts", "default": "./dist/tools/registration.js" }
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*",
@@ -36,9 +36,9 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.js",
-      "./src/plugin.ts",
-      "./src/adapter/webhook-surface.ts"
+      "./dist/extension-entry.js",
+      "./dist/plugin.js",
+      "./dist/adapter/webhook-surface.js"
     ]
   }
 }

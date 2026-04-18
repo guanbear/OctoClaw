@@ -14,6 +14,8 @@ describe("delegation public API", () => {
       "DELEGATION_PROFILES",
       "buildCompoundDelegationPlaceholder",
       "buildWorkerBrief",
+      "createDelegationRoleRegistry",
+      "createNoOpAdvisorAdapter",
       "decideConflictPolicy",
       "materializeDelegatedWork",
       "resolveDelegationProfile",

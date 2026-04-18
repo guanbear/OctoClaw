@@ -23,6 +23,11 @@ export interface RuntimeTimelinePlaceholder {
   flowId: string;
   available: true;
   summary: string;
+  events: Array<{
+    timestamp: string;
+    phase: string;
+    summary: string;
+  }>;
 }
 
 export function buildQueueSurface(
@@ -33,11 +38,22 @@ export function buildQueueSurface(
 }
 
 export function buildTimelinePlaceholder(record: RuntimeStateSurfaceRecord): RuntimeTimelinePlaceholder {
+  const statusView = buildStatusProjection({ record });
+  const events = Array.isArray(statusView.timelinePreview)
+    ? statusView.timelinePreview.map((entry) => ({
+        timestamp: String(entry.eventAt ?? "").trim(),
+        phase: String(entry.eventType ?? "").trim(),
+        summary: String(entry.summary ?? "").trim(),
+      })).filter((entry) => entry.timestamp || entry.phase || entry.summary)
+    : [];
   return {
     taskId: record.truth.taskId,
     flowId: record.truth.flowId,
     available: true,
-    summary: `timeline placeholder for ${record.truth.taskId}`,
+    summary: events.length > 0
+      ? `${events.length} timeline event${events.length === 1 ? "" : "s"} available for ${record.truth.taskId}`
+      : `timeline placeholder for ${record.truth.taskId}`,
+    events,
   };
 }
 

@@ -65,3 +65,6 @@ export function selectDelegationBackend(role: PolicyRole): {
     profile,
   };
 }
+
+export * from "./role-registry.js";
+export * from "./advisor.js";

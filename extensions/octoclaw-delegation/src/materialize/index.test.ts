@@ -22,7 +22,7 @@ describe("materializeDelegatedWork", () => {
       taskId: "task-1",
       flowId: "flow-1",
       role: "worker_code" as const,
-      objective: JSON.stringify({
+      goal: JSON.stringify({
         goal: "Implement the change",
         constraints: ["stay in scope"],
         expected_output: "worker_result",
@@ -99,7 +99,7 @@ describe("materializeDelegatedWork", () => {
     const materialized = materializeDelegatedWork(buildInput());
 
     expect(materialized.brief.role).toBe("worker_code");
-    expect(materialized.brief.objective).toContain("expected_output");
+    expect(materialized.brief.goal).toContain("expected_output");
     expect(materialized.claimToken).toBe("task-1:worker-7:1776499200000");
     expect(materialized.leaseExpiresAt).toBe("2026-04-18T08:01:00.000Z");
   });

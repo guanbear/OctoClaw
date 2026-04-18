@@ -1,3 +1,4 @@
+import { buildContractEnvelope } from "@octoclaw/contracts/schemas";
 import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
 import type { RuntimeStateDetailsSurface } from "@octoclaw/runtime/state-surface";
@@ -53,29 +54,36 @@ function defaultWorkerPool(record: RuntimeStateSurfaceRecord): string {
 }
 
 function defaultActionAvailability(record: RuntimeStateSurfaceRecord): string[] {
-  return record.substrateState === "planned"
-    ? ["status", "details", "queue", "timeline"]
-    : ["status", "details", "queue", "timeline"];
+  if (record.substrateState === "planned") return ["status", "details"];
+  return ["status", "details", "queue", "timeline"];
 }
 
 export function buildStatusProjection(input: StatusSurfaceProjectionInput): StatusSurfaceViewModel {
   const { record } = input;
+  const route = input.route || defaultRoute(record);
   return {
+    ...buildContractEnvelope("projection"),
     taskId: record.truth.taskId,
     flowId: record.truth.flowId,
     state: record.substrateState,
-    route: input.route || defaultRoute(record),
+    route,
+    role: route === "reply" ? "main_reply" : "worker_research",
+    coordinationMode: route === "delegate.single" ? "solo_worker" : "",
+    backendSummary: record.runtime,
     workerPool: input.workerPool || defaultWorkerPool(record),
     substrateSummary: substrateSummary(record),
     actionAvailability: input.actionAvailability || defaultActionAvailability(record),
-    queuePosition: input.queuePosition,
-    modelSummary: input.modelSummary,
-    costEstimate: input.costEstimate,
+    queuePosition: input.queuePosition ?? 0,
+    modelSummary: input.modelSummary || "unreported",
+    costEstimate: input.costEstimate || "unreported",
     claimOwner: record.ownership.claimOwner,
-    leaseState: input.leaseState,
+    leaseState: (input.leaseState as StatusSurfaceViewModel["leaseState"]) || "active",
     workspaceMode: record.scope.workspaceMode,
-    writeScopeSummary: record.scope.writeScopeSummary,
-  } as StatusSurfaceViewModel;
+    writeScopeSummary: record.scope.writeScopeSummary || "none",
+    threadCount: 1,
+    advisorUsageSummary: "none",
+    timelinePreview: [],
+  };
 }
 
 export function buildQueueProjection(input: StatusSurfaceProjectionInput): QueueSurfaceProjection {

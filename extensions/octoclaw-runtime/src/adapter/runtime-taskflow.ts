@@ -185,7 +185,7 @@ function normalizeScope(scope: ScopeMetadata): ScopeMetadata {
   return {
     readScope: Array.isArray(scope?.readScope) ? scope.readScope : [],
     writeScope: Array.isArray(scope?.writeScope) ? scope.writeScope : [],
-    workspaceMode: scope?.workspaceMode || "isolated_workspace",
+    workspaceMode: scope?.workspaceMode || "isolated_worktree",
     writeScopeSummary: scope?.writeScopeSummary,
   };
 }

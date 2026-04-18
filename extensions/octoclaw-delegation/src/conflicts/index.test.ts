@@ -3,7 +3,7 @@ import { decideConflictPolicy } from "./index.js";
 
 describe("decideConflictPolicy", () => {
   it("allows parallel work for read_only workspace mode", () => {
-    const decision = decideConflictPolicy("read_only_workspace", false);
+    const decision = decideConflictPolicy("read_only", false);
 
     expect(decision.policy).toBe("allow");
     expect(decision.reason).toContain("read-only workspace");
@@ -28,7 +28,7 @@ describe("decideConflictPolicy", () => {
   });
 
   it("allows isolated workspace work with merge-safe note", () => {
-    const decision = decideConflictPolicy("isolated_workspace", true);
+    const decision = decideConflictPolicy("isolated_worktree", true);
 
     expect(decision.policy).toBe("allow");
     expect(decision.reason).toContain("isolated");

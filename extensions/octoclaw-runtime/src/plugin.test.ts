@@ -14,8 +14,10 @@ function buildDecision(): PolicyDecision {
   return {
     route: "delegate.single",
     role: "worker_research",
-    backend: "worker",
-    workspaceMode: "isolated_workspace",
+    coordinationMode: "solo_worker",
+    backend: "openclaw-native",
+    executionProfile: "worker",
+    workspaceMode: "isolated_worktree",
     modelProfile: "worker_research",
     caps: {
       queueBudget: 4,
@@ -31,13 +33,13 @@ function buildDecision(): PolicyDecision {
       latencyTarget: "background",
       reason: "admission_allowed",
     },
-    decisionStack: ["route", "role", "backend", "workspace_mode", "model_profile", "caps"],
+    decisionStack: ["route", "role", "coordination_mode", "backend", "workspace_mode", "model_profile", "caps"],
   };
 }
 
 function buildScope(): ScopeMetadata {
   return {
-    workspaceMode: "isolated_workspace",
+    workspaceMode: "isolated_worktree",
     readScope: [{ resource: "repo", access: "read" }],
     writeScope: [],
     writeScopeSummary: "",
@@ -149,7 +151,7 @@ describe("octoclaw runtime plugin", () => {
     const input: PolicyJudgeInput = {
       requestedRoute: "delegate.single",
       workType: "research",
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
       queueBudget: 3,
       inflightCount: 0,
       capabilitySatisfied: true,

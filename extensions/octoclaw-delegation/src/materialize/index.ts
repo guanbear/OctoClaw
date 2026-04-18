@@ -36,7 +36,7 @@ export function materializeDelegatedWork(input: {
   taskId: string;
   flowId: string;
   role: PolicyRole;
-  objective: string;
+  goal: string;
   requestIdempotencyKey: string;
   deliveryId: string;
   deliveryReceiptId: string;
@@ -85,6 +85,6 @@ export function materializeDelegatedWork(input: {
     outputContract: backendSelection.profile.outputContract,
     admission,
     conflict,
-    brief: buildWorkerBrief(input.role, input.objective),
+    brief: buildWorkerBrief(input.role, input.goal),
   };
 }

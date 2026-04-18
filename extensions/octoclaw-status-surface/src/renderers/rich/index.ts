@@ -45,5 +45,6 @@ export function renderTimelineRich(view: RuntimeTimelinePlaceholder) {
     flowId: view.flowId,
     summary: view.summary,
     available: view.available,
+    events: view.events,
   };
 }

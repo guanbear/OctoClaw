@@ -22,7 +22,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
     scope: {
       readScope: [{ resource: "repo:src", access: "read" }],
       writeScope: [{ resource: "repo:src", access: "write" }],
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
       writeScopeSummary: "repo:src",
     },
     truth: {
@@ -44,7 +44,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
         controllerId: "controller-1",
       },
       scope: {
-        workspaceMode: "isolated_workspace",
+        workspaceMode: "isolated_worktree",
         readScopeCount: 1,
         writeScopeCount: 1,
         writeScopeSummary: "repo:src",
@@ -60,7 +60,7 @@ function createRecord(): RuntimeStateSurfaceRecord {
       taskId: "task-123",
       substrateState: "planned",
       substrateRevision: 9,
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
     },
     artifact: {
       schemaVersion: "octoclaw.artifact/v1",
@@ -91,8 +91,14 @@ describe("read-model", () => {
     expect(status.workerPool).toBe("octoclaw-worker");
     expect(status.substrateSummary).toBe("openclaw-native managed planned");
     expect(status.claimOwner).toBe("worker-beta");
-    expect(status.workspaceMode).toBe("isolated_workspace");
+    expect(status.queuePosition).toBe(0);
+    expect(status.modelSummary).toBe("unreported");
+    expect(status.costEstimate).toBe("unreported");
+    expect(status.leaseState).toBe("active");
+    expect(status.workspaceMode).toBe("isolated_worktree");
     expect(status.writeScopeSummary).toBe("repo:src");
+    expect(status.threadCount).toBe(1);
+    expect(status.advisorUsageSummary).toBe("none");
   });
 
   it("buildQueueProjection includes isStale and conflictQueued flags", () => {

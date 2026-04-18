@@ -433,7 +433,7 @@ export function buildTsRuntimeSpawnPayload(
     taskId: workflow.identity.taskId,
     flowId: workflow.identity.flowId,
     role: workflowDecision.role,
-    objective: readString(input.task),
+    goal: readString(input.task),
     requestIdempotencyKey: normalizedRequest.idempotencyKey,
     deliveryId: `delivery:${workflow.identity.flowId}:${workflow.identity.taskId}`,
     deliveryReceiptId: `receipt:${workflow.identity.flowId}:${workflow.identity.taskId}`,

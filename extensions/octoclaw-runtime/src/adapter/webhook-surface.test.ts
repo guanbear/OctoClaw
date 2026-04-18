@@ -14,7 +14,9 @@ function buildDecision(): PolicyDecision {
   return {
     route: "delegate.single",
     role: "worker_research",
-    backend: "worker",
+    coordinationMode: "solo_worker",
+    backend: "openclaw-native",
+    executionProfile: "worker",
     workspaceMode: "shared_workspace",
     modelProfile: "worker_research",
     caps: {
@@ -31,7 +33,7 @@ function buildDecision(): PolicyDecision {
       latencyTarget: "background",
       reason: "admission_allowed",
     },
-    decisionStack: ["route", "role", "backend", "workspace_mode", "model_profile", "caps"],
+    decisionStack: ["route", "role", "coordination_mode", "backend", "workspace_mode", "model_profile", "caps"],
   };
 }
 
