@@ -1,4 +1,4 @@
-import type { PolicyRole } from "../../../../packages/octoclaw-policy/src/roles/index.ts";
+import type { PolicyRole } from "@octoclaw/policy/roles";
 
 export type DelegationRole = "worker_research" | "worker_code" | "worker_review";
 

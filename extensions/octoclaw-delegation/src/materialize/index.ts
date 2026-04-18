@@ -1,11 +1,11 @@
-import type { ScopeDescriptor, WorkspaceMode } from "../../../../packages/octoclaw-contracts/src/schemas.ts";
-import { evaluateAdmission, type AdmissionDecision } from "../../../../packages/octoclaw-policy/src/admission/index.ts";
-import type { PolicyRole } from "../../../../packages/octoclaw-policy/src/roles/index.ts";
-import { buildWorkerBrief } from "../brief/index.ts";
-import { decideConflictPolicy, type ConflictDecision } from "../conflicts/index.ts";
-import { selectDelegationBackend } from "../profiles/index.ts";
-export type { CompoundDelegationPlaceholder } from "../compound/index.ts";
-export { buildCompoundDelegationPlaceholder } from "../compound/index.ts";
+import type { ScopeDescriptor, WorkspaceMode } from "@octoclaw/contracts/schemas";
+import { evaluateAdmission, type AdmissionDecision } from "@octoclaw/policy/admission";
+import type { PolicyRole } from "@octoclaw/policy/roles";
+import { buildWorkerBrief } from "../brief/index.js";
+import { decideConflictPolicy, type ConflictDecision } from "../conflicts/index.js";
+import { selectDelegationBackend } from "../profiles/index.js";
+export type { CompoundDelegationPlaceholder } from "../compound/index.js";
+export { buildCompoundDelegationPlaceholder } from "../compound/index.js";
 
 export interface DelegatedMaterialization {
   requestId: string;

@@ -1,5 +1,5 @@
-import type { PolicyRole } from "../../../../packages/octoclaw-policy/src/roles/index.ts";
-import { resolveDelegationProfile } from "../profiles/index.ts";
+import type { PolicyRole } from "@octoclaw/policy/roles";
+import { resolveDelegationProfile } from "../profiles/index.js";
 
 export interface WorkerBriefTemplate {
   role: PolicyRole;
