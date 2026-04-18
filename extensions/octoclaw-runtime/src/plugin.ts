@@ -6,6 +6,7 @@ import {
   type RuntimeTaskflowManagedRecord,
   type RuntimeTaskflowTaskRecord,
 } from "./adapter/runtime-taskflow.ts";
+import { createRuntimeWebhookSurface, type RuntimeWebhookSurface } from "./adapter/webhook-surface.ts";
 import { createNativeTruthArtifactKinds } from "../../../packages/octoclaw-contracts/src/artifacts.ts";
 import type { NativeHelperInvoker } from "./adapter/native-helper.ts";
 
@@ -16,6 +17,7 @@ export interface OctoClawRuntimePluginOptions {
 export interface OctoClawRuntimePlugin {
   name: "octoclaw-runtime-ts";
   createAdapter: () => RuntimeTaskflowAdapter;
+  createWebhookSurface: () => RuntimeWebhookSurface;
   bindWorkflow: (state: RuntimeWorkflowState) => {
     taskId: string;
     flowId: string;
@@ -38,9 +40,11 @@ export function resolveRuntimePolicyDecision(input: PolicyJudgeInput): PolicyDec
 
 export function createOctoClawRuntimePlugin(options: OctoClawRuntimePluginOptions = {}): OctoClawRuntimePlugin {
   const createAdapter = (): RuntimeTaskflowAdapter => createRuntimeTaskflowAdapter(options.helperInvoker);
+  const createWebhook = (): RuntimeWebhookSurface => createRuntimeWebhookSurface({ helperInvoker: options.helperInvoker, adapter: createAdapter() });
   return {
     name: "octoclaw-runtime-ts",
     createAdapter,
+    createWebhookSurface: createWebhook,
     judgeRoute: (input) => resolveRuntimePolicyDecision(input),
     bindWorkflow: (state) => {
         const identity = state.identity ?? {

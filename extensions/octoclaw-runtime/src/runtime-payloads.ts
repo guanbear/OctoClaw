@@ -15,6 +15,8 @@ import type { ScopeDescriptor, ScopeMetadata } from "../../../packages/octoclaw-
 import type { PolicyDecision } from "../../../packages/octoclaw-policy/src/judge/index.ts";
 import { createOctoClawRuntimePlugin } from "./plugin.ts";
 import type { NativeHelperInvoker } from "./adapter/native-helper.ts";
+import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "../../octoclaw-delegation/src/index.ts";
+import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "../../octoclaw-fast-reply/src/index.ts";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -177,24 +179,54 @@ export function buildTsRuntimeDispatchPayload(
   };
 
   if (route === "reply") {
+    const routeDecisionStartedAt = Date.now();
+    const directContext = buildDirectReplyContext({
+      userText: readString(input.task),
+      sessionSummary: readString(metadata.sessionSummary ?? metadata.session_summary),
+      route,
+      requestKind: readString(metadata.requestKind ?? metadata.request_kind),
+      directToolsSeen: Array.isArray(metadata.directToolsSeen) ? metadata.directToolsSeen as string[] : [],
+    });
+    const ackPayload = buildFastReplyAck(
+      "latency",
+      {
+        required: Boolean(metadata.latency_ack_required ?? metadata.latencyAckRequired),
+        text: readString(metadata.latency_ack_text ?? metadata.latencyAckText),
+      },
+      {
+        routeDecisionStartedAt,
+        ackSentAt: typeof metadata.ackSentAt === "number"
+          ? metadata.ackSentAt as number
+          : readString(metadata.latency_ack_text ?? metadata.latencyAckText) ? routeDecisionStartedAt : undefined,
+      },
+    );
     workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
     workflow = markWorkflowCompleted(workflow);
+    const directReply = buildDirectReply(
+      directContext,
+      `Direct route selected; keep execution in the main session for: ${helpers.truncateText(input.task, 80)}`,
+      {
+        routeDecisionStartedAt,
+        ackSentAt: ackPayload.metrics.ack_ms !== undefined ? routeDecisionStartedAt + ackPayload.metrics.ack_ms : undefined,
+        replyCompletedAt: Date.now(),
+      },
+    );
     return {
       ...basePayload,
       executed: true,
       status: "executed",
       summary: `OctoClaw dispatch: reply (${workflow.execution.role})`,
-      handoff: {
-        kind: "reply",
-        summary: `Direct route selected; no delegated materialization required for ${helpers.truncateText(input.task, 80)}`,
-        user_safe: true,
-        reply_text: `Direct route selected; keep execution in the main session for: ${helpers.truncateText(input.task, 80)}`,
-      },
+      handoff: directReply.handoff,
       materialization: {
         authority: "ts-runtime-core",
         type: "direct_response",
         task_id: workflow.identity.taskId,
         flow_id: workflow.identity.flowId,
+      },
+      fast_reply: {
+        context: directContext,
+        ack: ackPayload,
+        direct: directReply,
       },
       runtime_truth: {
         authority: "ts-runtime-core",
@@ -396,6 +428,26 @@ export function buildTsRuntimeSpawnPayload(
     policy_decision: decision,
     telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
   };
+  const delegatedMaterialization = materializeDelegatedWork({
+    requestId: workflow.identity.requestId,
+    taskId: workflow.identity.taskId,
+    flowId: workflow.identity.flowId,
+    role: workflowDecision.role,
+    objective: readString(input.task),
+    requestIdempotencyKey: normalizedRequest.idempotencyKey,
+    deliveryId: `delivery:${workflow.identity.flowId}:${workflow.identity.taskId}`,
+    deliveryReceiptId: `receipt:${workflow.identity.flowId}:${workflow.identity.taskId}`,
+    claimOwner: workflow.claim?.claimOwner || workflow.taskMaterialization.claimOwner,
+    leaseDurationMs: workflow.claim?.leaseDurationMs || 30_000,
+    queueBudget: workflow.execution.admission.queueBudget,
+    inflightCount: Number(metadata.inflightCount ?? metadata.inflight_count ?? 0),
+    capabilitySatisfied: workflow.execution.admission.reason !== "capability_guard_failed",
+    writeConflict: Boolean(metadata.writeConflict ?? metadata.write_conflict),
+    readScope: workflow.scope.readScope,
+    writeScope: workflow.scope.writeScope,
+    workspaceMode: workflow.scope.workspaceMode,
+  });
+  const compoundPlaceholder = buildCompoundDelegationPlaceholder();
 
   try {
     if (normalizedRoute === "spawn_multi") {
@@ -442,6 +494,8 @@ export function buildTsRuntimeSpawnPayload(
           projection: managed.projection,
           artifact: managed.artifact,
           telemetry: managed.telemetry,
+          delegation: delegatedMaterialization,
+          compound: compoundPlaceholder,
         },
         runtime_truth: {
           authority: "ts-runtime-core",
@@ -493,6 +547,8 @@ export function buildTsRuntimeSpawnPayload(
         substrate_revision: binding.substrateRevision,
         truth: binding.truth,
         projection: binding.projection,
+        delegation: delegatedMaterialization,
+        compound: compoundPlaceholder,
       },
       runtime_truth: {
         authority: "ts-runtime-core",

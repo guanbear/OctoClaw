@@ -7,17 +7,24 @@
   "files": [
     "index.js",
     "src/plugin.ts",
+    "src/config/index.ts",
+    "src/adapter/webhook-surface.ts",
+    "src/adapter/state-surface.ts",
     "policy",
     "openclaw.plugin.json"
   ],
   "exports": {
     ".": "./index.js",
-    "./plugin": "./src/plugin.ts"
+    "./plugin": "./src/plugin.ts",
+    "./config": "./src/config/index.ts",
+    "./webhook-surface": "./src/adapter/webhook-surface.ts",
+    "./state-surface": "./src/adapter/state-surface.ts"
   },
   "openclaw": {
     "extensions": [
       "./index.js",
-      "./src/plugin.ts"
+      "./src/plugin.ts",
+      "./src/adapter/webhook-surface.ts"
     ]
   }
 }
