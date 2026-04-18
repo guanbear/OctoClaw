@@ -320,15 +320,9 @@ async function sendAckDirectDetailed(
 
 async function readTaskStateFile(): Promise<TaskStateFile> {
   try {
-    const result = await runCommand(
-      "python3",
-      ["-c", "import pathlib,sys; sys.stdout.write(pathlib.Path(sys.argv[1]).read_text())", resolveTaskStatePath()],
-      { cwd: resolveWorkspaceRoot(), timeoutMs: 5000 },
-    );
-    if (result.code !== 0 || !result.stdout) {
-      return {};
-    }
-    return JSON.parse(result.stdout) as TaskStateFile;
+    const fs = await import("node:fs");
+    const content = fs.default.readFileSync(resolveTaskStatePath(), "utf-8");
+    return JSON.parse(content) as TaskStateFile;
   } catch {
     return {};
   }

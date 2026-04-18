@@ -26,10 +26,6 @@ export const envOverrides = {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 export function stableHash(value: string): string {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 16);
 }
@@ -124,10 +120,6 @@ export function resolveRuntimeOctoClawRoot(): string {
   return resolved || resolveOctoClawRoot();
 }
 
-export function resolveScript(...parts: string[]): string {
-  return path.join(resolveRuntimeOctoClawRoot(), "lib", ...parts);
-}
-
 export function resolveWorkspaceRoot(): string {
   const root = resolveOctoClawRoot();
   const configDir = resolveOpenClawConfigDir();
@@ -157,15 +149,6 @@ export function resolveWorkspaceRoot(): string {
   );
 
   return resolved || process.env.WORKSPACE || "/workspace";
-}
-
-export function resolvePythonBin(): string {
-  const resolved = firstExistingPath([
-    process.env.OCTOCLAW_PYTHON_BIN || "",
-    "/opt/homebrew/bin/python3",
-    "/usr/local/bin/python3",
-  ]);
-  return resolved || "python3";
 }
 
 export function resolveReplayLogPath(): string {
@@ -208,7 +191,6 @@ export async function runCommand(
         ...process.env,
         WORKSPACE: resolveWorkspaceRoot(),
         OCTOCLAW_ROOT: resolveOctoClawRoot(),
-        OCTOCLAW_PYTHON_BIN: resolvePythonBin(),
         ...(options.env || {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -270,36 +252,6 @@ export async function runCommand(
       });
     });
   });
-}
-
-export async function runJsonScript(
-  scriptName: string,
-  args: string[],
-  cwd?: string,
-  options: RunCommandOptions = {},
-): Promise<Record<string, unknown>> {
-  const result = await runCommand(resolvePythonBin(), [resolveScript(scriptName), ...args], { cwd, ...options });
-  if (result.code !== 0) {
-    throw new Error(result.stderr || `${scriptName} failed`);
-  }
-
-  try {
-    const parsed: unknown = JSON.parse(result.stdout || "{}");
-    if (!isRecord(parsed)) {
-      throw new Error("json_not_object");
-    }
-    return parsed;
-  } catch {
-    throw new Error(`${scriptName} returned invalid JSON: ${result.stdout}`);
-  }
-}
-
-export async function runStatus(format: string, cwd?: string): Promise<string> {
-  const result = await runCommand("bash", [resolveScript("status.sh"), "--format", format], { cwd });
-  if (result.code !== 0) {
-    throw new Error(result.stderr || "status.sh failed");
-  }
-  return result.stdout;
 }
 
 export function truncateText(value: unknown, limit: number = 320): string {

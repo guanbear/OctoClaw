@@ -3,8 +3,6 @@ import path from "node:path";
 import {
   resolveDeliveryRelayPath,
   resolveReplayLogPath,
-  resolveTaskStatePath,
-  runJsonScript,
   stableId,
   truncateText,
 } from "../resolve/env.js";
@@ -512,30 +510,38 @@ export async function reconcilePendingDeliveriesForSession(
   logger?: unknown,
   runtimeCfg?: Record<string, unknown>,
 ): Promise<void> {
+  void cwd;
+  void runtimeCfg;
   const normalizedSessionKey = String(sessionKey || "").trim();
   if (!normalizedSessionKey) {
     return;
   }
-  const relaySettings = resolveDeliveryRelaySettings(runtimeCfg);
   try {
-    const result = await runJsonScript(
-      "delivery_relay_reconcile.py",
-      [
-        "--relay-path",
-        resolveDeliveryRelayPath(),
-        "--task-state",
-        resolveTaskStatePath(),
-        "--session-key",
-        normalizedSessionKey,
-        "--retry-cooldown-seconds",
-        String(relaySettings.retry_cooldown_seconds ?? 30),
-      ],
-      cwd,
-      { timeoutMs: 4000 },
-    );
-    await recordDeliveryReconcileResults(result, logger);
+    const relayPath = resolveDeliveryRelayPath();
+    const content = fsSync.readFileSync(relayPath, "utf-8");
+    const lines = content.split("\n").filter(Boolean);
+    const items = lines
+      .map((line: string): unknown => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(
+        (entry: unknown): entry is Record<string, unknown> => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+            return false;
+          }
+          return String((entry as Record<string, unknown>).session_key ?? "") === normalizedSessionKey;
+        },
+      );
+    await recordDeliveryReconcileResults({ items, session_key: normalizedSessionKey }, logger);
   } catch (err) {
-    (logger as LoggerLike)?.warn?.(`octoclaw delivery reconcile failed: ${String(err)}`);
+    const relayPath = resolveDeliveryRelayPath();
+    if (fsSync.existsSync(relayPath)) {
+      (logger as LoggerLike)?.warn?.(`octoclaw delivery reconcile failed: ${String(err)}`);
+    }
   }
 }
 
@@ -723,7 +729,6 @@ export function claimedDirectToolNames(text: string): string[] {
     "web.run",
     "exec",
     "shell",
-    "bash",
     "curl",
     "openclaw",
     "github api",
@@ -737,7 +742,7 @@ export function looksLikeToolProvenanceClaim(text: string): boolean {
   const raw = String(text || "");
   if (claimedDirectToolNames(raw).length === 0) return false;
   return /(我|这次|刚才|实际|确实|已经|子任务|runner|主\s*agent).{0,40}(用|用了|调用|跑|执行|查|抓|fetch|拿到|返回)/iu.test(raw)
-    || /\b(i|this run|that run|actually|used|called|ran|fetched|queried)\b.{0,50}\b(web_fetch|web_search|web\.run|exec|shell|bash|curl|openclaw|github api)\b/iu.test(raw)
+    || /\b(i|this run|that run|actually|used|called|ran|fetched|queried)\b.{0,50}\b(web_fetch|web_search|web\.run|exec|shell|curl|openclaw|github api)\b/iu.test(raw)
     || /direct tools used.{0,80}(实际|actually|used|web_fetch|web_search|exec|unavailable)/iu.test(raw);
 }
 
