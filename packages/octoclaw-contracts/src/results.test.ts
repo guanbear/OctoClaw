@@ -10,6 +10,7 @@ describe("results", () => {
       claimToken: "claim-1",
       leaseExpiresAt: "2026-04-18T00:01:00.000Z",
       lastHeartbeatAt: "2026-04-18T00:00:00.000Z",
+      resumeGeneration: 1,
       readScope: [{ resource: "docs", access: "read" }],
       writeScope: [{ resource: "workspace", access: "write" }],
       workspaceMode: "shared_workspace",
@@ -30,13 +31,16 @@ describe("results", () => {
     expect(result.acceptanceResults).toHaveLength(1);
   });
 
-  it("supports status surface with all 13 minimum ws6 fields", () => {
+  it("supports status surface with all required minimum fields", () => {
     const viewModel: StatusSurfaceViewModel = {
       ...buildContractEnvelope("projection", "2026-04-18T00:00:00.000Z"),
       taskId: "task-1",
       flowId: "flow-1",
       state: "running",
       route: "delegate.single",
+      role: "worker_research",
+      coordinationMode: "solo_worker",
+      backendSummary: "openclaw-native worker",
       workerPool: "octoclaw-worker",
       substrateSummary: "running",
       actionAvailability: ["status", "details"],
@@ -47,6 +51,8 @@ describe("results", () => {
       leaseState: "active",
       workspaceMode: "shared_workspace",
       writeScopeSummary: "workspace",
+      threadCount: 1,
+      advisorUsageSummary: "none",
     };
 
     expect(viewModel.taskId).toBeTruthy();
@@ -62,6 +68,9 @@ describe("results", () => {
     expect(viewModel.claimOwner).toBeTruthy();
     expect(viewModel.leaseState).toBeTruthy();
     expect(viewModel.workspaceMode).toBeTruthy();
+    expect(viewModel.writeScopeSummary).toBeTruthy();
+    expect(viewModel.threadCount).toBeTypeOf("number");
+    expect(viewModel.advisorUsageSummary).toBeTruthy();
   });
 
   it("includes delegated materialization sync mode and substrate revision", () => {
@@ -80,6 +89,7 @@ describe("results", () => {
       claimToken: "claim-1",
       leaseExpiresAt: "2026-04-18T00:01:00.000Z",
       lastHeartbeatAt: "2026-04-18T00:00:00.000Z",
+      resumeGeneration: 1,
       readScope: [{ resource: "docs", access: "read" }],
       writeScope: [{ resource: "workspace", access: "write" }],
       workspaceMode: "shared_workspace",

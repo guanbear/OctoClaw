@@ -24,7 +24,7 @@ describe("fixtures", () => {
     expect(fixture.requestIdempotencyKey).toBeTruthy();
   });
 
-  it("provides a status surface fixture with required ws6 fields", () => {
+  it("provides a status surface fixture with all required minimum fields", () => {
     const fixture: StatusSurfaceViewModel = STATUS_SURFACE_FIXTURE;
 
     expect(fixture.taskId).toBeTruthy();
@@ -40,5 +40,8 @@ describe("fixtures", () => {
     expect(fixture.claimOwner).toBeTruthy();
     expect(fixture.leaseState).toBeTruthy();
     expect(fixture.workspaceMode).toBeTruthy();
+    expect(fixture.writeScopeSummary).toBeTruthy();
+    expect(fixture.threadCount).toBeTypeOf("number");
+    expect(fixture.advisorUsageSummary).toBeTruthy();
   });
 });

@@ -9,9 +9,9 @@ import {
 
 describe("schemas", () => {
   it("accepts valid workspace modes", () => {
-    expect(isWorkspaceMode("isolated_workspace")).toBe(true);
+    expect(isWorkspaceMode("isolated_worktree")).toBe(true);
     expect(isWorkspaceMode("shared_workspace")).toBe(true);
-    expect(isWorkspaceMode("read_only_workspace")).toBe(true);
+    expect(isWorkspaceMode("read_only")).toBe(true);
   });
 
   it("rejects invalid workspace modes", () => {

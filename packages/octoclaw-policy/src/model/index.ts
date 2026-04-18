@@ -1,13 +1,18 @@
-import type { ConcreteModelId, ModelProfile, ModelProfileMapping, WorkspaceMode } from "@octoclaw/contracts/schemas";
+import type { BackendType, ConcreteModelId, ModelProfile, ModelProfileMapping, WorkspaceMode } from "@octoclaw/contracts/schemas";
 import type { PolicyRole } from "../roles/index.js";
 
 export type { ModelProfile } from "@octoclaw/contracts/schemas";
 
-export type BackendTarget = "main" | "observer" | "worker";
+export type ExecutionProfileTarget = "main" | "observer" | "worker";
 
 export interface BackendDecision {
-  backend: BackendTarget;
+  backend: BackendType;
   backendReason: string;
+}
+
+export interface ExecutionProfileDecision {
+  executionProfile: ExecutionProfileTarget;
+  executionProfileReason: string;
 }
 
 export interface ModelSelection {
@@ -36,14 +41,21 @@ export function resolveModelId(profile: ModelProfile): ConcreteModelId {
   return V1_MODEL_PROFILE_MAP[profile];
 }
 
-export function decideBackend(role: PolicyRole): BackendDecision {
+export function decideExecutionProfile(role: PolicyRole): ExecutionProfileDecision {
   if (role === "main_reply") {
-    return { backend: "main", backendReason: "main_reply_stays_on_main_backend" };
+    return { executionProfile: "main", executionProfileReason: "main_reply_stays_on_main_execution_profile" };
   }
   if (role === "observer_probe") {
-    return { backend: "observer", backendReason: "observer_probe_uses_observer_backend" };
+    return { executionProfile: "observer", executionProfileReason: "observer_probe_uses_observer_execution_profile" };
   }
-  return { backend: "worker", backendReason: "delegated_roles_use_worker_backend" };
+  return { executionProfile: "worker", executionProfileReason: "delegated_roles_use_worker_execution_profile" };
+}
+
+export function decideBackend(_role: PolicyRole): BackendDecision {
+  return {
+    backend: "openclaw-native",
+    backendReason: "phase1_routes_all_use_openclaw_native_backend",
+  };
 }
 
 export function decideModelProfile(role: PolicyRole, workspaceMode: WorkspaceMode): ModelSelection {

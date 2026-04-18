@@ -5,6 +5,7 @@ export interface OwnershipMetadata {
   claimToken: string;
   leaseExpiresAt: string;
   lastHeartbeatAt: string;
+  resumeGeneration: number;
 }
 
 export interface TaskIdentity {
@@ -30,5 +31,6 @@ export function isOwnershipMetadata(value: Partial<OwnershipMetadata>): value is
   return typeof value.claimOwner === "string"
     && typeof value.claimToken === "string"
     && typeof value.leaseExpiresAt === "string"
-    && typeof value.lastHeartbeatAt === "string";
+    && typeof value.lastHeartbeatAt === "string"
+    && typeof value.resumeGeneration === "number";
 }

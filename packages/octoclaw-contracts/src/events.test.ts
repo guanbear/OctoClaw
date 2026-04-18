@@ -9,6 +9,7 @@ describe("events", () => {
       claimToken: "claim-1",
       leaseExpiresAt: "2026-04-18T00:01:00.000Z",
       lastHeartbeatAt: "2026-04-18T00:00:00.000Z",
+      resumeGeneration: 1,
     })).toBe(true);
 
     expect(isOwnershipMetadata({
@@ -25,6 +26,7 @@ describe("events", () => {
       claimToken: "claim-1",
       leaseExpiresAt: "2026-04-18T00:01:00.000Z",
       lastHeartbeatAt: "2026-04-18T00:00:00.000Z",
+      resumeGeneration: 1,
       requestIdempotencyKey: "request-1",
       taskIdempotencyKey: "task-1",
       flowIdempotencyKey: "flow-1",
@@ -49,6 +51,7 @@ describe("events", () => {
       claimToken: "claim-1",
       leaseExpiresAt: "2026-04-18T00:01:00.000Z",
       lastHeartbeatAt: "2026-04-18T00:00:00.000Z",
+      resumeGeneration: 1,
       requestIdempotencyKey: "request-1",
       taskIdempotencyKey: "task-1",
       flowIdempotencyKey: "flow-1",

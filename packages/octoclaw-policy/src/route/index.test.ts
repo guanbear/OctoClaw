@@ -14,10 +14,10 @@ describe("route policy", () => {
     expect(decideRoute({
       requiresDelegation: true,
       capabilitySatisfied: true,
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
     })).toEqual({
       route: "delegate.single",
-      workspaceMode: "isolated_workspace",
+      workspaceMode: "isolated_worktree",
       routeReason: "deliverable_or_capability_bound_work",
     });
   });
@@ -26,10 +26,10 @@ describe("route policy", () => {
     expect(decideRoute({
       requiresObservation: true,
       capabilitySatisfied: true,
-      workspaceMode: "read_only_workspace",
+      workspaceMode: "read_only",
     })).toEqual({
       route: "observe",
-      workspaceMode: "read_only_workspace",
+      workspaceMode: "read_only",
       routeReason: "hard_boundary_or_probe",
     });
   });

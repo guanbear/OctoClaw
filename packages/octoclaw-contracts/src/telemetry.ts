@@ -11,9 +11,31 @@ export interface QueueDeadlineTelemetry {
 
 export interface OptimizationTelemetry extends ContractEnvelope, ScopeMetadata, TaskIdentity, QueueDeadlineTelemetry {
   telemetryId: string;
+  requestId: string;
+  route: string;
+  role: string;
+  coordinationMode?: string;
+  modelId?: string;
   queueBudget: number;
   concurrencyBudget: number;
   capabilityBudget: string[];
+  ackMs?: number;
+  routeDecisionMs?: number;
+  taskMaterializeMs?: number;
+  queueWaitMs?: number;
+  ttftMs?: number;
+  firstProgressMs?: number;
+  finalDeliveryMs?: number;
+  totalLatencyMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  estimatedCostUsd?: number;
+  actualCostUsd?: number;
+  retryCount?: number;
+  fallbackCount?: number;
+  failureCode?: string;
+  terminalState?: string;
   routeLatencyMs?: number;
   modelProfile: string;
   backend: string;

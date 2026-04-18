@@ -46,16 +46,21 @@ export interface StatusSurfaceViewModel extends ContractEnvelope {
   flowId: string;
   state: string;
   route: string;
+  role: string;
+  coordinationMode: string;
+  backendSummary: string;
   workerPool: string;
   substrateSummary: string;
   actionAvailability: string[];
-  queuePosition?: number;
-  modelSummary?: string;
-  costEstimate?: string;
-  claimOwner?: string;
-  leaseState?: LeaseState;
-  workspaceMode?: string;
-  writeScopeSummary?: string;
+  queuePosition: number;
+  modelSummary: string;
+  costEstimate: string;
+  claimOwner: string;
+  leaseState: LeaseState;
+  workspaceMode: string;
+  writeScopeSummary: string;
+  threadCount: number;
+  advisorUsageSummary: string;
   timelinePreview?: Array<{
     eventType: string;
     eventAt: string;

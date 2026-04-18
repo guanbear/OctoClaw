@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideModelProfile, resolveModelId, V1_MODEL_PROFILE_MAP } from "./index.js";
+import { decideBackend, decideExecutionProfile, decideModelProfile, resolveModelId, V1_MODEL_PROFILE_MAP } from "./index.js";
 
 describe("model policy", () => {
   it("maps all 9 profiles correctly", () => {
@@ -23,7 +23,13 @@ describe("model policy", () => {
   });
 
   it("chooses code profile by workspace mode", () => {
-    expect(decideModelProfile("worker_code", "isolated_workspace").modelProfile).toBe("worker_code_normal");
+    expect(decideModelProfile("worker_code", "isolated_worktree").modelProfile).toBe("worker_code_normal");
     expect(decideModelProfile("worker_code", "shared_workspace").modelProfile).toBe("worker_code_deep");
+  });
+
+  it("separates backend from execution profile", () => {
+    expect(decideBackend("main_reply").backend).toBe("openclaw-native");
+    expect(decideExecutionProfile("observer_probe").executionProfile).toBe("observer");
+    expect(decideExecutionProfile("worker_research").executionProfile).toBe("worker");
   });
 });

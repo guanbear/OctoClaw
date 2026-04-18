@@ -16,6 +16,7 @@ const FIXTURE_OWNERSHIP: OwnershipMetadata = {
   claimToken: "claim-fixture-1",
   leaseExpiresAt: "2026-04-15T00:00:30.000Z",
   lastHeartbeatAt: "2026-04-15T00:00:00.000Z",
+  resumeGeneration: 1,
 };
 
 const FIXTURE_IDENTITY: TaskIdentity = {
@@ -83,6 +84,9 @@ export const STATUS_SURFACE_FIXTURE: StatusSurfaceViewModel = {
   flowId: "flow-fixture-1",
   state: "running",
   route: "delegate.single",
+  role: "worker_research",
+  coordinationMode: "solo_worker",
+  backendSummary: "openclaw-native worker",
   workerPool: "octoclaw-worker",
   substrateSummary: "Native taskflow task is running with an active lease.",
   actionAvailability: ["status", "details", "queue"],
@@ -93,6 +97,8 @@ export const STATUS_SURFACE_FIXTURE: StatusSurfaceViewModel = {
   leaseState: "active",
   workspaceMode: "shared_workspace",
   writeScopeSummary: "workspace",
+  threadCount: 1,
+  advisorUsageSummary: "none",
   timelinePreview: [
     {
       eventType: "checkpoint_emitted",

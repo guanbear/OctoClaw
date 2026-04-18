@@ -15,12 +15,14 @@ describe("judge policy", () => {
 
     expect(decision.route).toBe("delegate.single");
     expect(decision.role).toBe("worker_code");
-    expect(decision.backend).toBe("worker");
+    expect(decision.backend).toBe("openclaw-native");
+    expect(decision.executionProfile).toBe("worker");
     expect(decision.workspaceMode).toBe("shared_workspace");
     expect(decision.modelProfile).toBe("worker_code_deep");
     expect(decision.decisionStack).toEqual([
       "route",
       "role",
+      "coordination_mode",
       "backend",
       "workspace_mode",
       "model_profile",
@@ -32,7 +34,7 @@ describe("judge policy", () => {
     const result = judgeFast({
       intent: { surfaceBound: true },
       requiresObservation: true,
-      workspaceMode: "read_only_workspace",
+      workspaceMode: "read_only",
       queueBudget: 1,
       inflightCount: 0,
       capabilitySatisfied: true,
@@ -42,7 +44,9 @@ describe("judge policy", () => {
     expect(result.intent.intentClass).toBe("local_surface_lookup");
     expect(result.decision.route).toBe("observe");
     expect(result.decision.role).toBe("observer_probe");
-    expect(result.decision.backend).toBe("observer");
+    expect(result.decision.backend).toBe("openclaw-native");
+    expect(result.decision.executionProfile).toBe("observer");
+    expect(result.decision.coordinationMode).toBeUndefined();
     expect(result.decision.modelProfile).toBe("observer_probe");
   });
 });

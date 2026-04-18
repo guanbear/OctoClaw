@@ -1,12 +1,13 @@
 export const OCTOCLAW_CONTRACT_SCHEMA_VERSION = "octoclaw.contracts/v1" as const;
 
 export type SchemaVersion = typeof OCTOCLAW_CONTRACT_SCHEMA_VERSION;
-export type WorkspaceMode = "isolated_workspace" | "shared_workspace" | "read_only_workspace";
+export type WorkspaceMode = "read_only" | "shared_workspace" | "isolated_worktree";
 export type ScopeAccessLevel = "none" | "read" | "write" | "admin";
 export type ArtifactKind = "truth" | "projection" | "artifact" | "telemetry";
 export type ExecutionRoute = "reply" | "delegate.single" | "observe";
 export type ExecutionAuthority = "main_session" | "runtime_orchestrator" | "native_runner" | "native_subagent";
-export type ExecutionBackend = "openclaw-native" | "clawteam" | "legacy-python";
+export type BackendType = "openclaw-native" | "clawteam" | "legacy-python";
+export type ExecutionBackend = BackendType;
 export type MaterializationIntent = "reply_inline" | "observe_probe" | "runner_task" | "spawn_single" | "spawn_multi";
 export type CapabilityLevel = "unsupported" | "limited" | "supported" | "preferred";
 // Model profiles from design doc section 9.5.0
@@ -57,11 +58,16 @@ export type LifecyclePhase =
   | "materialization_pending"
   | "materialized"
   | "running"
+  | "waiting_input"
   | "checkpoint_pending"
+  | "checkpoint_emitted"
   | "deliverable_ready"
   | "delivery_pending"
+  | "backend_retry_scheduled"
+  | "stale"
   | "completed"
   | "failed"
+  | "timed_out"
   | "blocked"
   | "recovering";
 export type DeliveryState = "not_started" | "queued" | "sent" | "acknowledged" | "failed";
@@ -98,7 +104,7 @@ export interface ExecutionIdentity {
   flowId: string;
   route: ExecutionRoute;
   authority: ExecutionAuthority;
-  backend: ExecutionBackend;
+  backend: BackendType;
   materializationIntent: MaterializationIntent;
 }
 
@@ -142,7 +148,7 @@ export interface RequestContext extends ContractEnvelope, ScopeMetadata, Idempot
   sessionId?: string;
   route: ExecutionRoute;
   role: string;
-  backend: string;
+  backend: BackendType;
   modelProfile: ModelProfile;
 }
 
@@ -150,7 +156,7 @@ export interface RouteDecisionContract extends ContractEnvelope, ScopeMetadata {
   kind: "projection";
   requestId: string;
   route: ExecutionRoute;
-  backend: string;
+  backend: BackendType;
   modelProfile: ModelProfile;
   reasonCodes: string[];
 }
@@ -171,7 +177,7 @@ export function withSchemaVersion<T extends Record<string, unknown>>(payload: T)
 }
 
 export function isWorkspaceMode(value: string): value is WorkspaceMode {
-  return ["isolated_workspace", "shared_workspace", "read_only_workspace"].includes(value);
+  return ["read_only", "shared_workspace", "isolated_worktree"].includes(value);
 }
 
 export function validateScopeMetadata(value: Partial<ScopeMetadata>): value is ScopeMetadata {
