@@ -10,7 +10,7 @@ OctoClaw is being re-baselined around a TypeScript-first, harness-first architec
 - [x] **Phase 2: Runtime Core and Safe Delegation** - Build the TS contracts, guarded policy core, runtime ownership model, and delegation safety primitives for `reply`, `delegate.single`, and `observe`. (completed 2026-04-16)
 - [x] **Phase 3: Native Substrate and Operator Surfaces** - Converge execution and read paths on OpenClaw native task and flow truth, then restore status and IM surfaces on substrate-first projections. (completed 2026-04-16)
 - [x] **Phase 4: Eval Gates and Advanced Routing** - Turn preflight, golden, replay, and acceptance gates into the promotion path, then add advanced routing capabilities only after the core runtime is stable. (completed 2026-04-16)
-- [ ] **Phase 5: Execution Substrate Refactor** - Rebuild the live execution and workflow plane around TS runtime-core orchestration and OpenClaw native task/flow truth, removing Python/shell live-path authority. (planned)
+- [x] **Phase 5: Execution Substrate Refactor** - Rebuild the live execution and workflow plane around TS runtime-core orchestration and OpenClaw native task/flow truth, removing Python/shell live-path authority. (completed 2026-04-17)
 
 ## Phase Details
 
@@ -82,16 +82,21 @@ Plans:
   1. The shipped runtime extension no longer depends on Python or shell scripts as formal authorities for live dispatch, spawn, runner lifecycle, or task-state writes.
   2. OpenClaw native task/flow and TS lifecycle orchestration together own execution truth, while projection/artifact/telemetry remain separate planes.
   3. Delegated live requests judged as runner/spawn materialize through TS-native runtime paths or fail closed without falling back to legacy script glue.
-**Plans**: 2 initial plans
+**Plans**: 2 plans
 
 Plans:
 - [x] 05-01-PLAN.md — Define the canonical execution orchestrator and lifecycle contracts for the refactor
 - [x] 05-02-PLAN.md — Replace live Python/sh execution authorities with TS-native runtime orchestration
 
+**Completion Notes:**
+  1. 05-01 established the canonical execution identity, provenance, lifecycle, checkpoint, and packet contracts in shared contracts and runtime-core.
+  2. 05-02 cut the shipped runtime extension over to TS-native dispatch, spawn, watchdog, and runner lifecycle authority.
+  3. Task 3 verification is recorded in `tests/test_octoclaw_runtime_extension.py`, `tests/test_openclaw_taskflow_adapter.py`, and `tests/test_runtime_core_workflow_contracts.py`, including structural proof that shipped runtime code no longer references `dispatch_task.py`, `octoclaw_spawn.py`, `task-state-update.py`, `runner_loop.sh`, or `runner_queue.py` as live authorities.
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -99,4 +104,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 2. Runtime Core and Safe Delegation | 4/4 | Complete | 2026-04-16 |
 | 3. Native Substrate and Operator Surfaces | 3/3 | Complete | 2026-04-16 |
 | 4. Eval Gates and Advanced Routing | 3/3 | Complete | 2026-04-16 |
-| 5. Execution Substrate Refactor | 0/1 | Planned | - |
+| 5. Execution Substrate Refactor | 2/2 | Complete | 2026-04-17 |

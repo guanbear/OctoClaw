@@ -86,7 +86,14 @@ importers:
         specifier: workspace:*
         version: link:../octoclaw-policy
 
-  tools/install: {}
+  tools/install:
+    dependencies:
+      '@octoclaw/contracts':
+        specifier: workspace:*
+        version: link:../../packages/octoclaw-contracts
+      '@octoclaw/policy':
+        specifier: workspace:*
+        version: link:../../packages/octoclaw-policy
 
   tools/manage: {}
 
