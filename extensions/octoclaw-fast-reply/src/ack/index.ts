@@ -1,4 +1,4 @@
-import { computeFastReplyMetrics, type FastReplyMetrics, type FastReplyTiming } from "../instrumentation/index.ts";
+import { computeFastReplyMetrics, type FastReplyMetrics, type FastReplyTiming } from "../instrumentation/index.js";
 
 export interface FastReplyAckDecision {
   required: boolean;

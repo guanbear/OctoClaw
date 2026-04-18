@@ -1,3 +1,3 @@
-export * from "./ack/index.ts";
-export * from "./direct/index.ts";
-export * from "./instrumentation/index.ts";
+export * from "./ack/index.js";
+export * from "./direct/index.js";
+export * from "./instrumentation/index.js";
