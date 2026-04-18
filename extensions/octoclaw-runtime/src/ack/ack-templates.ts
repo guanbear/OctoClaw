@@ -61,134 +61,64 @@ export const ACK_TEMPLATE_POOL: Map<AckStage, AckTemplateEntry[]> = new Map([
   [
     AckStage.PreRouteSoftAck,
     [
-      buildTemplateEntry(
-        AckStage.PreRouteSoftAck,
-        "已收到，正在判断处理方式",
-        "已收到，正在判断处理方式",
-        "优先短提示；后续被稳定 route 覆盖",
-        ["聊天渠道优先"],
-      ),
-      buildTemplateEntry(
-        AckStage.PreRouteSoftAck,
-        "收到，稍等",
-        "简短安抚",
-        "优先短提示；后续被稳定 route 覆盖",
-        ["聊天渠道优先"],
-      ),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "收到，看下怎么处理", "自然确认", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "收到，稍等", "简短安抚", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "看到了", "最短确认", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "嗯，稍等我看看", "口语化", "优先短提示", ["聊天渠道优先"]),
     ],
   ],
   [
     AckStage.DelegateStarted,
     [
-      buildTemplateEntry(
-        AckStage.DelegateStarted,
-        "已接单，开始处理",
-        "已接单，开始处理",
-        "优先新发或创建 anchor",
-        ["全渠道"],
-      ),
-      buildTemplateEntry(
-        AckStage.DelegateStarted,
-        "收到，正在处理",
-        "简短确认已进入处理",
-        "优先新发或创建 anchor",
-        ["全渠道"],
-      ),
+      buildTemplateEntry(AckStage.DelegateStarted, "收到，开始处理", "自然确认", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.DelegateStarted, "好的，我来处理", "口语化", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.DelegateStarted, "着手处理中", "简洁", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.DelegateStarted, "了解了，正在跟进", "正式", "优先新发", ["全渠道"]),
     ],
   ],
   [
     AckStage.ObserveStarted,
     [
-      buildTemplateEntry(
-        AckStage.ObserveStarted,
-        "已开始检查",
-        "已开始检查",
-        "可新发，也可轻量提示",
-        ["全渠道"],
-      ),
-      buildTemplateEntry(
-        AckStage.ObserveStarted,
-        "已开始探测",
-        "已开始探测",
-        "可新发，也可轻量提示",
-        ["全渠道"],
-      ),
+      buildTemplateEntry(AckStage.ObserveStarted, "正在查看", "简洁", "可新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.ObserveStarted, "看下情况", "口语化", "可新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.ObserveStarted, "在查了", "最短", "可新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.ObserveStarted, "检查中", "中性", "可新发", ["全渠道"]),
     ],
   ],
   [
     AckStage.ReplySoftAck,
     [
-      buildTemplateEntry(
-        AckStage.ReplySoftAck,
-        "已收到，正在组织回复",
-        "已收到，正在组织回复",
-        "优先短提示；后续由正式回复覆盖",
-        ["聊天渠道优先"],
-      ),
-      buildTemplateEntry(
-        AckStage.ReplySoftAck,
-        "收到，稍等",
-        "简短安抚",
-        "优先短提示；后续由正式回复覆盖",
-        ["聊天渠道优先"],
-      ),
+      buildTemplateEntry(AckStage.ReplySoftAck, "收到，想一下", "自然思考", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "收到，稍等", "简短安抚", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "看到了，我回你", "口语化", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "嗯，稍等", "最短", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "好的，马上回", "积极", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "在写了", "轻松", "优先短提示", ["聊天渠道优先"]),
     ],
   ],
   [
     AckStage.Queued,
     [
-      buildTemplateEntry(
-        AckStage.Queued,
-        "已接单，正在等待处理容量",
-        "已接单，但在等待容量",
-        "优先更新已有 anchor",
-        ["全渠道"],
-      ),
-      buildTemplateEntry(
-        AckStage.Queued,
-        "已收到，排队中",
-        "简短提示排队中",
-        "优先更新已有 anchor",
-        ["全渠道"],
-      ),
+      buildTemplateEntry(AckStage.Queued, "排队中，稍等一下", "自然", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.Queued, "收到了，前面还有任务在跑", "具体说明", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.Queued, "等一下，马上到你", "口语化", "优先更新", ["全渠道"]),
     ],
   ],
   [
     AckStage.Blocked,
     [
-      buildTemplateEntry(
-        AckStage.Blocked,
-        "处理受阻：{reason}",
-        "当前卡在具体阻塞原因上",
-        "优先新发明确说明",
-        ["全渠道"],
-      ),
-      buildTemplateEntry(
-        AckStage.Blocked,
-        "当前需要额外信息才能继续",
-        "说明需要额外信息",
-        "优先新发明确说明",
-        ["全渠道"],
-      ),
+      buildTemplateEntry(AckStage.Blocked, "处理受阻：{reason}", "带原因", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.Blocked, "卡了一下，需要多点信息才能继续", "口语化", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.Blocked, "遇到点问题，我处理一下", "积极", "优先新发", ["全渠道"]),
     ],
   ],
   [
     AckStage.ProgressNudge,
     [
-      buildTemplateEntry(
-        AckStage.ProgressNudge,
-        "还在处理中，当前阶段：{stage_hint}",
-        "说明仍在处理并带当前阶段",
-        "优先更新已有 anchor",
-        ["支持 update 的渠道优先"],
-      ),
-      buildTemplateEntry(
-        AckStage.ProgressNudge,
-        "仍在处理，请稍候",
-        "简短提示仍在处理",
-        "优先更新已有 anchor",
-        ["支持 update 的渠道优先"],
-      ),
+      buildTemplateEntry(AckStage.ProgressNudge, "还在处理，当前：{stage_hint}", "带阶段", "优先更新", ["支持 update 的渠道优先"]),
+      buildTemplateEntry(AckStage.ProgressNudge, "还没好，再等等", "简短", "优先更新", ["支持 update 的渠道优先"]),
+      buildTemplateEntry(AckStage.ProgressNudge, "还在跑，稍等", "口语化", "优先更新", ["支持 update 的渠道优先"]),
+      buildTemplateEntry(AckStage.ProgressNudge, "快好了", "积极", "优先更新", ["支持 update 的渠道优先"]),
     ],
   ],
 ]);
@@ -268,6 +198,10 @@ export function selectAckTemplate(stage: AckStage, inputs: TemplateSelectionInpu
 }
 
 export function ackStageText(stage: AckStage, vars?: Record<string, string>): string {
-  const entry = ACK_TEMPLATE_POOL.get(stage)?.[0];
-  return entry ? interpolateTemplate(entry.text, vars) : "";
+  const entries = ACK_TEMPLATE_POOL.get(stage);
+  if (!entries || entries.length === 0) {
+    return "";
+  }
+  const entry = entries[Math.floor(Math.random() * entries.length)];
+  return interpolateTemplate(entry.text, vars);
 }
