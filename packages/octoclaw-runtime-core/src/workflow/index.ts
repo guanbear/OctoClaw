@@ -6,18 +6,18 @@ import type {
   LifecyclePhase,
   LifecycleState,
   ScopeMetadata,
-} from "../../../octoclaw-contracts/src/schemas.ts";
-import type { NormalizedRuntimeRequest } from "../requests/index.ts";
-import { createAckLedger, type AckLedger } from "../ack/index.ts";
-import { createOutbox, type DeliveryOutbox } from "../delivery/outbox.ts";
+} from "@octoclaw/contracts/schemas";
+import type { NormalizedRuntimeRequest } from "../requests/index.js";
+import { createAckLedger, type AckLedger } from "../ack/index.js";
+import { createOutbox, type DeliveryOutbox } from "../delivery/outbox.js";
 import {
   buildFinalDelivery,
   buildProgressDelivery,
   enqueueStructuredDelivery,
   type RuntimeDeliveryInput,
   type RuntimeStructuredDelivery,
-} from "../delivery/protocol.ts";
-import { emitRuntimeTelemetry, type RuntimeTelemetryBundle } from "../telemetry/index.ts";
+} from "../delivery/protocol.js";
+import { emitRuntimeTelemetry, type RuntimeTelemetryBundle } from "../telemetry/index.js";
 import {
   buildRuntimeTaskInterface,
   renewTaskInterfaceHeartbeat,
@@ -27,8 +27,8 @@ import {
   type RuntimeDeadlines,
   type RuntimeTaskInterfaceState,
   type RuntimeTaskMaterializationPacket,
-} from "../tasks/index.ts";
-import type { PolicyDecision } from "../../../octoclaw-policy/src/judge/index.ts";
+} from "../tasks/index.js";
+import type { PolicyDecision } from "@octoclaw/policy/judge";
 
 export type RuntimeTaskMaterialization = RuntimeTaskMaterializationPacket;
 

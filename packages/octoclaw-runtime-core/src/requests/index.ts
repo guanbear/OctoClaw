@@ -1,4 +1,4 @@
-import { buildContractEnvelope, type ScopeMetadata } from "../../../octoclaw-contracts/src/schemas.ts";
+import { buildContractEnvelope, type ScopeMetadata } from "@octoclaw/contracts/schemas";
 
 export interface RuntimeIngressRequestInput {
   prompt: string;

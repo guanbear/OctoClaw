@@ -1,7 +1,7 @@
-import type { DeliveryEnvelope } from "../../../octoclaw-contracts/src/deliveries.ts";
-import { buildContractEnvelope, type ScopeMetadata } from "../../../octoclaw-contracts/src/schemas.ts";
-import type { RuntimeWorkflowState } from "../workflow/index.ts";
-import { enqueueDelivery, type DeliveryOutbox } from "./outbox.ts";
+import type { DeliveryEnvelope } from "@octoclaw/contracts/deliveries";
+import { buildContractEnvelope, type ScopeMetadata } from "@octoclaw/contracts/schemas";
+import type { RuntimeWorkflowState } from "../workflow/index.js";
+import { enqueueDelivery, type DeliveryOutbox } from "./outbox.js";
 
 export type RuntimeDeliveryProtocolKind = "progress" | "final";
 

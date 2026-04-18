@@ -1,7 +1,7 @@
 import type {
   ExecutionIdentity,
   MaterializationIntent,
-} from "../../../octoclaw-contracts/src/schemas.ts";
+} from "@octoclaw/contracts/schemas";
 import {
   applyHeartbeat,
   canClaim,
@@ -9,14 +9,14 @@ import {
   renewClaimLease,
   type ClaimHeartbeat,
   type RuntimeClaim,
-} from "./claims.ts";
+} from "./claims.js";
 import {
   buildRuntimeDeadlines,
   hasDeadlineExpired,
   nextDeadlineToEnforce,
   type DeadlineBudgetInput,
   type RuntimeDeadlines,
-} from "./deadlines.ts";
+} from "./deadlines.js";
 
 export interface RuntimeTaskMaterializationPacket {
   requestId: string;

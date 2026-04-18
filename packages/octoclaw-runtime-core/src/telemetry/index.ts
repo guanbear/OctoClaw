@@ -1,11 +1,11 @@
 import {
   type OptimizationTelemetry,
   type PolicyTelemetry,
-} from "../../../octoclaw-contracts/src/telemetry.ts";
-import { buildContractEnvelope } from "../../../octoclaw-contracts/src/schemas.ts";
-import type { NormalizedRuntimeRequest } from "../requests/index.ts";
-import type { RuntimeTaskInterfaceState } from "../tasks/index.ts";
-import type { RuntimeWorkflowState } from "../workflow/index.ts";
+} from "@octoclaw/contracts/telemetry";
+import { buildContractEnvelope } from "@octoclaw/contracts/schemas";
+import type { NormalizedRuntimeRequest } from "../requests/index.js";
+import type { RuntimeTaskInterfaceState } from "../tasks/index.js";
+import type { RuntimeWorkflowState } from "../workflow/index.js";
 
 export interface RuntimeTelemetryBundle {
   request: PolicyTelemetry;

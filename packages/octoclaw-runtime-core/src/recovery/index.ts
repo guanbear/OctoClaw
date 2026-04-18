@@ -1,12 +1,12 @@
-import type { RuntimeWorkflowState } from "../workflow/index.ts";
-import { markWorkflowForRecovery, markWorkflowTimedOut } from "../workflow/index.ts";
-import { canClaim } from "../tasks/claims.ts";
+import type { RuntimeWorkflowState } from "../workflow/index.js";
+import { markWorkflowForRecovery, markWorkflowTimedOut } from "../workflow/index.js";
+import { canClaim } from "../tasks/claims.js";
 import {
   enforceableDeadlinesForPhase,
   nextDeadlineToEnforce,
   type RuntimeDeadlines,
   type RuntimeDeadlinePhase,
-} from "../tasks/deadlines.ts";
+} from "../tasks/deadlines.js";
 
 export type RecoveryTrigger =
   | "claim_conflict"
