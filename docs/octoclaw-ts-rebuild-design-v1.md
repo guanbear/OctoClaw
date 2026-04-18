@@ -742,6 +742,78 @@ v1 不建议追求“每次都写得很灵动”，而建议固定几类 ACK：
 
 这些都应优先模板化，而不是让模型自由生成。
 
+#### G.1 ACK 不能每条都回：需要自适应节流与合并
+
+这里要特别防止一种很糟的产品感：
+
+> **用户连续输入 3-5 条补充消息，系统每条都机械回一个 ACK。**
+
+这会让体感非常假，也会稀释真正有价值的进展反馈。
+
+所以我建议 ACK controller 默认带一套 **adaptive ACK policy**：
+
+1. **burst coalescing**
+   - 如果用户在短窗口内连续输入多条消息，把它们视为同一波输入
+   - 默认合并成一次 ACK，而不是条条回复
+2. **cooldown window**
+   - 同一 thread/anchor 在刚发过 ACK 后，短时间内不再重复发同类 ACK
+3. **anchor-first update**
+   - 如果渠道支持 edit/update，优先更新现有 ACK/status anchor
+   - 不优先新发一条消息
+4. **state-change only**
+   - 只有状态真的变化了，才值得发新的 ACK / nudge
+   - 比如 `queued -> started`、`started -> waiting_input`
+5. **silence-driven intervene**
+   - ACK 介入的核心依据应是“用户侧静默过久”
+   - 不是“又来了一条消息，所以我也回一条”
+
+也就是说：
+
+1. 用户连续追问时，系统更应该合并上下文
+2. 然后给一个更准确的 ACK/update
+3. 而不是每条补充都触发一个模板回执
+
+#### G.2 ACK 是否需要“按需更智能”
+
+需要，但建议是分层的：
+
+1. **第 0 层：纯模板**
+   - 默认安全底座
+2. **第 1 层：模板选择更智能**
+   - 根据 route / queue / stage / burst state 选更合适模板
+3. **第 2 层：小快模型轻润色**
+   - 只在预算内做非常轻的 wording adjustment
+4. **第 3 层：主模型自然首响**
+   - 仅当主模型本身已经准备好输出时发生
+
+真正该“更智能”的，不是把 ACK 写得更花，而是：
+
+1. 知道什么时候该回
+2. 知道什么时候不该回
+3. 知道该复用旧 anchor 还是发新消息
+
+#### G.3 ACK 的抑制条件
+
+建议 ACK controller 至少支持下面这些 suppress 规则：
+
+1. 最近刚有可见 ACK，且状态未变化
+2. 主模型已经开始正式输出
+3. 当前用户消息属于同一 burst，只是补充细节
+4. 已有 status anchor 可更新，不需要再发新短消息
+5. 当前渠道不适合频繁刷短状态
+
+#### G.4 从行为心理学看，ACK 的目标不是“多回”，而是“降不确定性”
+
+这里最重要的不是 ACK 频率，而是：
+
+1. 在用户开始不安前给出确定感
+2. 在长静默时给出进展
+3. 在连续互动时避免打断和刷屏
+
+所以更准确的产品原则是：
+
+> **ACK 的目标不是制造存在感，而是降低不确定性。**
+
 #### H. ACK 成功标准
 
 ACK 设计成功，不是“看起来会说话”，而是同时满足：
@@ -760,6 +832,9 @@ ACK 设计成功，不是“看起来会说话”，而是同时满足：
 4. `double_short_reply_rate`
 5. `reply_soft_ack_rate`
 6. `post_ack_final_delivery_ms`
+7. `ack_suppressed_rate`
+8. `ack_burst_coalesced_rate`
+9. `ack_update_vs_new_message_ratio`
 
 ### 6.3.2 交接靠 artifact，不靠 transcript
 
