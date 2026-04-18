@@ -133,6 +133,7 @@ tools/
 19. future `context_file` / `skill_ref` artifact kinds（仅 contract 预留，不要求 runtime 落地）
 20. ack envelope / ack stage / ack lease metadata
 21. ack cooldown / burst-coalescing / suppress reason metadata
+22. pre-route soft-ack / user-input-active metadata
 
 验收标准：
 
@@ -232,6 +233,7 @@ tools/
 18. first-visible-response lease / ACK suppression
 19. reply soft-ack timer and stage-nudge timer
 20. ACK burst coalescing / cooldown / anchor-update preference
+21. pre-route soft-ack fallback when judge/route is slow
 
 实现口径：
 
@@ -254,6 +256,7 @@ tools/
 17. direct path 优先让主模型抢首响；超过 ACK deadline 再由 runtime 旁路 soft-ack
 18. 不允许 ACK controller 和主模型各自发一条短回复争抢首响
 19. ACK 介入应以 silence/state-change 为主，不以“每来一条用户消息都回一条”为原则
+20. 对 `delegate/observe` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
 
 关键状态：
 
@@ -368,6 +371,7 @@ tools/
 7. cooldown / burst-coalescing / edit-in-place policy
 8. fixed ACK template registry with channel-aware renderers
 9. agent-first quick-ack `request envelope + prompt policy injection seam` + runtime fallback
+10. pre-route soft-ack template and user-input-active suppress logic
 
 验收标准：
 
@@ -379,6 +383,7 @@ tools/
 6. 连续输入场景下不会条条都机械 ACK
 7. ACK 采用固定模板池，不以自由生成文案为前提
 8. 主模型能抢首响时优先让主模型自己回；否则 runtime 能稳定接管
+9. judge/route 慢时也不会让用户长时间静默
 
 依赖：WS0、WS1、WS2
 
