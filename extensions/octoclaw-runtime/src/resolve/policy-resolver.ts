@@ -555,7 +555,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   };
   nextDecision.latency_ack = {
     required: liveRoute === "reply",
-    text: asString(asRecord(nextDecision.latency_ack).text),
+    text: asString(asRecord(nextDecision.latency_ack).text) || "收到，处理中…",
   };
   nextDecision.tool_policy = {
     ...asRecord(nextDecision.tool_policy),
