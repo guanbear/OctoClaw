@@ -624,6 +624,143 @@ harness 负责：
 2. ACK 由模板生成，不等模型生成自然语言。
 3. direct reply 才进入主模型快速作答链路。
 
+这里再把 ACK 的实现口径写得更完整：
+
+#### A. ACK 默认由 runtime ACK controller 负责
+
+1. ACK 的**默认所有权**不在主 agent，而在 `runtime ACK controller`
+2. 它属于 `packages/octoclaw-runtime-core/src/ack`
+3. 它的职责是保证“首个可见反馈”在可控时间内发生
+4. 它不负责最终结论，只负责首响、阶段提示和去重协调
+
+一句话：
+
+> **ACK 首先是运行时交互保障，不是主模型临场发挥。**
+
+#### B. ACK 是否需要 LLM
+
+v1 默认建议：
+
+1. **首个 ACK 不依赖 LLM**
+2. 默认走 code-generated template
+3. 可以根据 route / backend / queue / risk / stage 选择不同模板
+4. 但不等待模型生成自然语言才发 ACK
+
+后续如果要做更细腻的 ACK，可以允许：
+
+1. small fast model 在极短预算内做 template selection 或一行轻量改写
+2. 但它必须是 optional enhancement
+3. 任何时候只要 fast model 超时，立即回退到纯模板 ACK
+
+也就是说：
+
+> **LLM 可以增强 ACK，但不能成为 ACK 的前提。**
+
+#### C. ACK 介入节奏
+
+从行为心理学和交互体验看，我建议把节奏写成：
+
+1. **0-1s**
+   - 如果 route 已明确是 `delegate.single` 或 `observe` 的长任务路径，尽量在这一段给出首个 ACK
+2. **1-3s**
+   - 如果是 `reply` 路径，优先让主模型自己首响
+   - 但如果到 `~3s` 还没有首 token / 首段输出，就由 ACK controller 介入一个 soft ACK
+3. **6-8s**
+   - 如果仍没有首 token、首进展或阶段事件，给出阶段性状态提示
+4. **10-12s**
+   - 如果还是长静默，应给出明确的当前阶段、剩余步骤或可打断入口
+
+所以：
+
+1. `5s` 可以作为“静默过久”的危险线
+2. 但不适合作为首个 ACK 的目标线
+3. v1 更稳的目标应该是：**不让用户连续静默超过 3s**
+
+#### D. direct 路径和 delegate 路径的差异
+
+1. `delegate.single`
+   - route 一旦确定，立即由 runtime 发 code-generated ACK
+   - 不等主模型
+2. `observe`
+   - 如果是短探测，也优先快速 ACK 或最小状态提示
+3. `reply`
+   - 优先让 `direct_main` 自己首响
+   - 只有在主模型首 token 慢时，才由 ACK controller 旁路接入
+
+这意味着：
+
+> **理想情况当然是主 agent 自己快速首响；但系统不能把这件事赌给主模型。**
+
+#### E. 如何避免出现两次短回复
+
+这是 ACK 设计里非常重要的一条。
+
+我建议引入一个统一的 **first-visible-response lease**：
+
+1. 谁先拿到 lease，谁就占用首个可见响应位
+2. 如果主模型在 ACK deadline 前先吐出首 token，就取消 ACK
+3. 如果 ACK controller 先发出 ACK，主模型后续不能再发第二条“我在看/我来处理”式短回复
+4. 后续主模型只能：
+   - 继续输出正式结果
+   - 或更新同一个 anchor/message（如果渠道支持 edit/update）
+
+所以：
+
+1. 不允许“脚本先回一句，我看看；主模型又回一句，我来查一下”
+2. ACK 和主模型共享同一个首响协调器
+
+#### F. 首 token 慢时怎么介入
+
+如果是 `reply` 路径，但主模型 TTFT 慢，建议这样处理：
+
+1. 先给主模型一个很短的首响窗口
+2. 如果窗口内没有首 token，则 ACK controller 发一个 soft ACK
+3. soft ACK 要比 delegate ACK 更轻，不要误导成已经进入长后台任务
+4. 一旦主模型开始输出，后续转入正式回答链
+
+也就是说，ACK controller 是：
+
+1. 首响保险丝
+2. 不是主模型替身
+
+#### G. ACK 文案分层建议
+
+v1 不建议追求“每次都写得很灵动”，而建议固定几类 ACK：
+
+1. `delegate_started`
+   - 已接单，开始处理
+2. `observe_started`
+   - 已开始检查/探测
+3. `reply_soft_ack`
+   - 已收到，正在组织回复
+4. `queued`
+   - 已接单，但在排队/等待容量
+5. `blocked`
+   - 已识别阻塞原因，需要等待输入/权限/容量
+6. `progress_nudge`
+   - 还在处理，当前阶段是什么
+
+这些都应优先模板化，而不是让模型自由生成。
+
+#### H. ACK 成功标准
+
+ACK 设计成功，不是“看起来会说话”，而是同时满足：
+
+1. 用户侧静默时间明显缩短
+2. 不制造双短回复
+3. 不把主模型 context 搞脏
+4. 不依赖昂贵模型
+5. 不让 ACK 本身成为新的慢点
+
+可衡量指标至少包括：
+
+1. `ack_ms`
+2. `ack_suppressed_by_main_count`
+3. `ack_fallback_template_count`
+4. `double_short_reply_rate`
+5. `reply_soft_ack_rate`
+6. `post_ack_final_delivery_ms`
+
 ### 6.3.2 交接靠 artifact，不靠 transcript
 
 每个 delegated task 至少输出：

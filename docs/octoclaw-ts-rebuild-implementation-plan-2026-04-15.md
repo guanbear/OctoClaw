@@ -131,6 +131,7 @@ tools/
 17. surface_anchor / session binding
 18. active_context_budget / summary snapshot metadata
 19. future `context_file` / `skill_ref` artifact kinds（仅 contract 预留，不要求 runtime 落地）
+20. ack envelope / ack stage / ack lease metadata
 
 验收标准：
 
@@ -227,6 +228,8 @@ tools/
 15. summary snapshot / context budget hook
 16. runner absent -> on-demand execution fallback
 17. backend unavailable / queue full -> queued or blocked delivery path
+18. first-visible-response lease / ACK suppression
+19. reply soft-ack timer and stage-nudge timer
 
 实现口径：
 
@@ -245,6 +248,9 @@ tools/
 13. resident runner 默认关闭；runtime 默认按 native task/flow + on-demand worker 实现
 14. `reply / observe / delegate.single` 的语义 route 不因 runner 缺席而改写
 15. 开启 resident runner 只代表 acceleration lane 可用，不代表 tmux 成为必需依赖
+16. ACK 默认由 runtime controller 发出，不默认依赖主模型
+17. direct path 优先让主模型抢首响；超过 ACK deadline 再由 runtime 旁路 soft-ack
+18. 不允许 ACK controller 和主模型各自发一条短回复争抢首响
 
 关键状态：
 
@@ -354,12 +360,16 @@ tools/
 2. direct reply flow
 3. reply lane telemetry
 4. reply lane baseline report input
+5. soft-ack / stage-nudge template set
+6. main-first-token suppression hook
 
 验收标准：
 
 1. direct path 上下文最小化
 2. 能测 `ack_ms`、`total_latency_ms`
 3. 不污染 delegation runtime
+4. double short reply rate 可观测且接近 0
+5. ACK 不依赖昂贵模型
 
 依赖：WS0、WS1、WS2
 
@@ -484,6 +494,7 @@ tools/
 9. write-scope conflict / queueing tests
 10. reply lane / delegate lane baseline compare
 11. shadow recommendation / promotion gate scaffold
+12. ACK timing / suppression / duplicate-short-reply regression cases
 
 验收标准：
 
@@ -492,6 +503,7 @@ tools/
 3. 能输出成本/速度基线
 4. 能抓住重复派活、双 delivery、双执行这类稳定性回归
 5. 能判断“更快但更差”或“更便宜但更差”的优化无效
+6. 能抓住 ACK 太慢、ACK 重复、ACK 抢占主回复 这类交互回归
 
 依赖：WS0，随后逐步接 WS1-WS7
 
@@ -552,6 +564,7 @@ tools/
 1. `judge_fast` 默认固定映射到便宜快模型
 2. resident runner 缺席视为默认正常态
 3. 默认执行心智是 native task/flow + on-demand worker
+4. ACK 默认由 runtime controller 负责；主模型能抢首响时优先让主模型自己回
 
 这阶段对 legacy 的要求：
 
