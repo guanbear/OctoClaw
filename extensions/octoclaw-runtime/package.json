@@ -36,9 +36,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./dist/extension-entry.js",
-      "./dist/plugin.js",
-      "./dist/adapter/webhook-surface.js"
+      "./dist/extension-entry.js"
     ]
   }
 }

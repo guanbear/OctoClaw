@@ -212,6 +212,7 @@ export const plugin = {
     const registerLifecycleHook = (hookName: string, handler: HookHandler, priority = 180): boolean => {
       if (typeof pi.on === "function") {
         pi.on(hookName, handler, { priority });
+        pi.logger?.debug?.(`octoclaw hook registered via pi.on: ${hookName} (priority=${priority})`);
         return true;
       }
       if (typeof pi.registerHook === "function") {
