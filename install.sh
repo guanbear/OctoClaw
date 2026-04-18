@@ -116,6 +116,8 @@ SKIP_MAIN_MODEL_SWITCH="${SKIP_MAIN_MODEL_SWITCH:-false}"
 MODE_PRESET="${MODE_PRESET:-}"
 MAIN_MODEL_OVERRIDE="${MAIN_MODEL_OVERRIDE:-}"
 CUSTOM_MODEL_OVERRIDES=()
+RUN_INITIAL_MODEL_PROBE="${RUN_INITIAL_MODEL_PROBE:-auto}"
+INTERACTIVE_INSTALL="${INTERACTIVE_INSTALL:-auto}"
 
 print_usage() {
     cat <<'EOF'
@@ -123,7 +125,7 @@ Usage:
   bash install.sh [install|reconcile|inject-only|extension-only] [options]
 
 Actions:
-  install             Interactive install (default)
+  install             Install with auto-safe defaults (interactive only when appropriate)
   reconcile           Non-interactive local reconcile/install
   inject-only         Only inject AGENTS.md rules
   extension-only      Only install/update the runtime extension
@@ -134,9 +136,11 @@ Options:
   --main-model MODEL          Override the main model in custom mode
   --custom-model KEY=MODEL    Repeatable worker/profile model override
   --extension-install-mode MODE
-                              Extension install mode: rsync|copy|symlink
+                               Extension install mode: rsync|copy|symlink
+  --interactive               Force interactive model selection prompts
   --skip-cron                 Deprecated no-op; default install already skips patrol/update cron reconciliation
   --skip-main-model-switch    Skip main-session model switching
+  --run-initial-model-probe   Run the first model probe during install
   -h, --help                  Show this help
 EOF
 }
@@ -167,12 +171,20 @@ while [ $# -gt 0 ]; do
             EXTENSION_INSTALL_MODE="${2:-rsync}"
             shift 2
             ;;
+        --interactive)
+            INTERACTIVE_INSTALL="true"
+            shift
+            ;;
         --skip-cron)
             SKIP_CRON="true"
             shift
             ;;
         --skip-main-model-switch)
             SKIP_MAIN_MODEL_SWITCH="true"
+            shift
+            ;;
+        --run-initial-model-probe)
+            RUN_INITIAL_MODEL_PROBE="true"
             shift
             ;;
         -h|--help|help)
@@ -199,6 +211,32 @@ case "$INSTALL_ACTION" in
         SKIP_INSTALL_BODY="true"
         ;;
 esac
+
+if [ "$INTERACTIVE_INSTALL" = "auto" ]; then
+    if [ -t 0 ] && [ -t 1 ] && [ "${CI:-false}" != "true" ]; then
+        INTERACTIVE_INSTALL="true"
+    else
+        INTERACTIVE_INSTALL="false"
+    fi
+fi
+
+if [ "$RUN_INITIAL_MODEL_PROBE" = "auto" ]; then
+    if [ "$NON_INTERACTIVE" = "true" ] || [ "$INTERACTIVE_INSTALL" != "true" ]; then
+        RUN_INITIAL_MODEL_PROBE="false"
+    else
+        RUN_INITIAL_MODEL_PROBE="true"
+    fi
+fi
+
+if [ "$INTERACTIVE_INSTALL" != "true" ]; then
+    NON_INTERACTIVE="true"
+    if [ -z "$MODE_PRESET" ]; then
+        MODE_PRESET="auto"
+    fi
+    if [ -z "${SKIP_MAIN_MODEL_SWITCH:-}" ] || [ "$SKIP_MAIN_MODEL_SWITCH" = "false" ]; then
+        SKIP_MAIN_MODEL_SWITCH="true"
+    fi
+fi
 
 # REMOVED: legacy slimming (2026-04-12) — cron helper functions deleted
 # _get_gateway_url, _get_gateway_token, _openclaw_cron_list,
@@ -808,13 +846,21 @@ EOF
 
 disable_legacy_runtime_defaults() {
     echo "🧹 收口旧默认运行面（不再默认安装 patrol/runner loop 或 cron）..."
-    _stop_patrol_service >/dev/null 2>&1 || true
-    _stop_runner_service >/dev/null 2>&1 || true
-    _remove_systemd_units >/dev/null 2>&1 || true
-    _delete_cron_by_name "octoclaw-patrol"
-    _delete_cron_by_name "octoclaw-probe"
-    _delete_cron_by_name "octoclaw-plan-sync"
-    _delete_cron_by_name "octoclaw-update-check"
+    if [ "$(type -t _stop_patrol_service 2>/dev/null || true)" = "function" ]; then
+        _stop_patrol_service >/dev/null 2>&1 || true
+    fi
+    if [ "$(type -t _stop_runner_service 2>/dev/null || true)" = "function" ]; then
+        _stop_runner_service >/dev/null 2>&1 || true
+    fi
+    if [ "$(type -t _remove_systemd_units 2>/dev/null || true)" = "function" ]; then
+        _remove_systemd_units >/dev/null 2>&1 || true
+    fi
+    if [ "$(type -t _delete_cron_by_name 2>/dev/null || true)" = "function" ]; then
+        _delete_cron_by_name "octoclaw-patrol"
+        _delete_cron_by_name "octoclaw-probe"
+        _delete_cron_by_name "octoclaw-plan-sync"
+        _delete_cron_by_name "octoclaw-update-check"
+    fi
 }
 
 if [ "${SKIP_CRON:-false}" = "true" ]; then
@@ -1025,7 +1071,7 @@ else
 fi
 
 # 5. 首次模型延迟探测
-if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
+if [[ "$RUN_INITIAL_MODEL_PROBE" = "true" && ! -f "/tmp/ironclaw-model-latency.json" ]]; then
     echo ""
     echo "🔍 正在探测模型延迟（首次安装）..."
     if [ -f "$WORKSPACE/openclaw/skills/ironclaw/bin/ironclaw" ]; then
@@ -1037,6 +1083,8 @@ if [[ ! -f "/tmp/ironclaw-model-latency.json" ]]; then
             echo "⚠️  未检测到铁甲虾，跳过模型延迟探测（将由 octoclaw-probe cron 每15分钟自动探测）"
         fi
     fi
+elif [[ "$RUN_INITIAL_MODEL_PROBE" != "true" ]]; then
+    echo "ℹ️  已跳过首次模型延迟探测（可用 --run-initial-model-probe 显式开启）"
 fi
 
 # 按角色分类写入别名文件
