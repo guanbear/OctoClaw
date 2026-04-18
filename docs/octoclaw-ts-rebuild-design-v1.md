@@ -620,9 +620,442 @@ harness 负责：
 
 建议：
 
-1. route 一旦落到 `delegate`，立即发送 code-generated ACK。
-2. ACK 由模板生成，不等模型生成自然语言。
-3. direct reply 才进入主模型快速作答链路。
+1. route 一旦明确落到需要长处理的路径，必须保证首个可见反馈不再长时间静默。
+2. ACK 默认由模板生成，不等模型生成自然语言。
+3. `reply` 路径优先让主模型快速作答；`delegate/observe` 路径优先保证稳定首响。
+
+这里再把 ACK 的实现口径写得更完整：
+
+#### A. ACK 默认由 runtime ACK controller 负责
+
+1. ACK 的**默认所有权**不在主 agent，而在 `runtime ACK controller`
+2. 它属于 `packages/octoclaw-runtime-core/src/ack`
+3. 它的职责是保证“首个可见反馈”在可控时间内发生
+4. 它不负责最终结论，只负责首响、阶段提示和去重协调
+
+一句话：
+
+> **ACK 首先是运行时交互保障，不是主模型临场发挥。**
+
+但这里再补一个更理想的优先级：
+
+> **最理想的首响，仍然是主 agent 自己快速回；runtime ACK controller 是兜底层，不是默认想抢主角。**
+
+所以更准确的实现心智应该是：
+
+1. 先通过 `agent.md` / system injection / route packet 明确提示主模型优先给出快速首响
+2. 如果主模型在窗口内给出**合格首响**，runtime 不再单独发 ACK
+3. 如果主模型没有及时给出合格首响，runtime ACK controller 再旁路介入
+
+也就是说：
+
+1. **主模型优先**
+2. **运行时兜底**
+3. **永远不要把用户体验赌在主模型一定会快上**
+
+这里的“注入”不建议被实现和命名成某个具体 hack。
+
+更稳定的架构口径应该是：
+
+> **通过 `request envelope + prompt policy injection seam` 引导主模型优先快速首响。**
+
+也就是说：
+
+1. 可以由 prompt builder 实现
+2. 可以由 model middleware 实现
+3. 可以由 runtime adapter 在调用前拼装
+4. 也可以由某个 pre-model hook 实现
+
+但在设计层，不应该把它绑定成“只能靠某个 hook 注入”。
+
+真正重要的是这条 seam 的语义：
+
+1. 当前 route 是什么
+2. 当前是否允许主模型抢首响
+3. 当前静默预算是多少
+4. 什么样的短首响才算合格
+5. 什么时候 runtime 会接管 ACK
+
+#### B. ACK 是否需要 LLM
+
+v1 默认建议：
+
+1. **首个 ACK 不依赖 LLM**
+2. 默认走 code-generated template
+3. 可以根据 route / backend / queue / risk / stage 选择不同模板
+4. 但不等待模型生成自然语言才发 ACK
+
+后续如果要做更细腻的 ACK，可以允许：
+
+1. small fast model 在极短预算内做 template selection 或一行轻量改写
+2. 但它必须是 optional enhancement
+3. 任何时候只要 fast model 超时，立即回退到纯模板 ACK
+
+也就是说：
+
+> **LLM 可以增强 ACK，但不能成为 ACK 的前提。**
+
+这里再区分两件事：
+
+1. **用注入去引导主模型先快回**
+2. **让远端模型专门生成 ACK**
+
+前者我认为是值得做的，后者不应该成为前提。
+
+也就是说：
+
+1. 可以通过 `agent.md` / injected policy 提醒主模型：
+   - 如果你能在极短时间内先给一句合格首响，就先回
+   - 不要一上来闷头长思考
+2. 但不能为了 ACK 再专门调用一次远端模型，等它生成后才回
+
+所以这里的边界是：
+
+> **可以“引导主模型快 ACK”，但不能“依赖另一次模型调用来产出 ACK”。**
+
+#### C. ACK 介入节奏
+
+从行为心理学和交互体验看，我建议把节奏写成：
+
+1. **0-1s**
+   - 如果 route 已明确是 `delegate.single` 或 `observe` 的长任务路径，尽量在这一段给出首个 ACK
+   - 但如果用户仍处于 burst 输入中，优先等待一个很短的输入静默窗口再发
+2. **1-3s**
+   - 如果是 `reply` 路径，优先让主模型自己首响
+   - 但如果到 `~3s` 还没有首 token / 首段输出，就由 ACK controller 介入一个 soft ACK
+   - 如果 route 到这时仍未稳定，也要允许一个更中性的 pre-route soft ACK 先兜底
+3. **6-8s**
+   - 如果仍没有首 token、首进展或阶段事件，给出阶段性状态提示
+4. **10-12s**
+   - 如果还是长静默，应给出明确的当前阶段、剩余步骤或可打断入口
+
+所以：
+
+1. `5s` 可以作为“静默过久”的危险线
+2. 但不适合作为首个 ACK 的目标线
+3. v1 更稳的目标应该是：**不让用户连续静默超过 3s**
+
+这里再补一个关键前提：
+
+> **ACK 的对象是“静默”，不是“正在连续输入的用户”。**
+
+如果用户还在 1-2 秒内连续补充消息，ACK controller 更应该：
+
+1. 先做 burst 合并
+2. 等一个很短的输入静默窗口
+3. 再决定是否发 ACK / update
+
+而不是在用户还在打字时硬插一条短回复。
+
+#### C.1 route/judge 本身慢时怎么办
+
+这里要补一个之前容易漏掉的点：
+
+> **如果 route/judge 自己还没稳定，但用户已经快要感到静默过久，也需要兜底。**
+
+所以 ACK controller 至少要支持一个 **pre-route soft ACK**：
+
+1. 它只表达“已收到，正在判断处理方式”
+2. 不表达已经进入 `reply / delegate / observe` 中的哪一条
+3. 一旦 route 稳定，再转成对应模板或直接进入正式输出
+
+这类 ACK 必须比 `delegate_started` 更中性，避免误导。
+
+#### D. direct 路径和 delegate 路径的差异
+
+1. `delegate.single`
+   - v1 默认以 runtime code-generated ACK 为主
+   - 只在主模型已经热启动、且不会拖慢首响时，才允许它抢先给一句合格首响
+   - 否则不要为了等主模型而推迟 delegate ACK
+2. `observe`
+   - 如果是短探测，也以最小状态提示优先
+   - 可允许 observer lane 抢先给首响，但不应拖慢首响兜底
+3. `reply`
+   - 优先让 `direct_main` 自己首响
+   - 只有在主模型首 token 慢时，才由 ACK controller 旁路接入
+
+这意味着：
+
+> **理想情况当然是主 agent 自己快速首响；但系统不能把这件事赌给主模型。**
+
+#### E. 如何避免出现两次短回复
+
+这是 ACK 设计里非常重要的一条。
+
+我建议引入一个统一的 **first-visible-response lease**：
+
+1. 谁先拿到 lease，谁就占用首个可见响应位
+2. 如果主模型在 ACK deadline 前先吐出首 token，就取消 ACK
+3. 如果 ACK controller 先发出 ACK，主模型后续不能再发第二条“我在看/我来处理”式短回复
+4. 后续主模型只能：
+   - 继续输出正式结果
+   - 或更新同一个 anchor/message（如果渠道支持 edit/update）
+
+所以：
+
+1. 不允许“脚本先回一句，我看看；主模型又回一句，我来查一下”
+2. ACK 和主模型共享同一个首响协调器
+
+但这里还要再补一个更底层的约束：
+
+> **不能只靠进程内布尔位防重，ACK 必须有真正的 exactly-once guard。**
+
+像你说的这种问题：
+
+1. `maybeSendLatencyAck` 在 `before_prompt_build` 被调一次
+2. 又在 `before_tool_call` 被调一次
+3. 两次之间如果只靠某个内存态 `latencyAckSent=true`
+4. 就很容易因为状态不同步、异步竞态、上下文重建而重复发送
+
+所以我建议 ACK 至少有这 3 层防重：
+
+1. **first-visible-response lease**
+   - 解决“谁先占首响位”
+2. **ack idempotency key**
+   - 解决“同一个 ACK 意图被调用两次”
+3. **delivery outbox / receipt**
+   - 解决“发送侧 effect 到底有没有真正落地”
+
+更具体地说：
+
+1. 每个 ACK 都要生成稳定的 `ack_key`
+2. `ack_key` 至少应绑定：
+   - `thread_id`
+   - `anchor_id`（如果有）
+   - `ack_stage`
+   - `route_phase`
+   - `message_turn_id` / `request_id`
+3. 发送前必须做一次 compare-and-set / insert-if-absent
+4. 如果同一个 `ack_key` 已存在，就直接 suppress
+5. 真正的发送副作用再通过 outbox/receipt 落账
+
+这样设计后：
+
+1. `before_prompt_build`
+2. `before_tool_call`
+3. `before_stream_start`
+
+这些 hook/middleware 就算都误触发同一个 ACK 意图，最终也只会有一次真正可见发送。
+
+一句话：
+
+> **ACK 去重不能只靠“记得别发两次”，必须靠幂等键和副作用账本。**
+
+这里的“合格首响”建议也要有个明确定义，避免主模型随便吐半句就占掉位子：
+
+1. 不是空洞 filler
+2. 不是重复用户原话
+3. 不冒充已经完成理解的结论
+4. 长度足够短，但能传达“已收到/已开始/当前阶段”
+
+如果主模型只吐出低质量 filler，也不应视为拿到了最终首响位，runtime 仍可按策略补一个更稳定的 ACK/update。
+
+#### F. 首 token 慢时怎么介入
+
+如果是 `reply` 路径，但主模型 TTFT 慢，建议这样处理：
+
+1. 先给主模型一个很短的首响窗口
+2. 如果窗口内没有首 token，则 ACK controller 发一个 soft ACK
+3. soft ACK 要比 delegate ACK 更轻，不要误导成已经进入长后台任务
+4. 一旦主模型开始输出，后续转入正式回答链
+
+也就是说，ACK controller 是：
+
+1. 首响保险丝
+2. 不是主模型替身
+
+而对 `delegate.single / observe` 路径，也建议类似：
+
+1. 先给主模型一个极短“抢首响”窗口
+2. 窗口内如果它已经发出合格首响，则 runtime 抑制独立 ACK
+3. 否则 runtime 立即接管首个 ACK
+
+所以这套机制不是“程序 ACK vs 主模型 ACK 二选一”，而是：
+
+> **主模型优先首响，运行时负责 deadline、去重和保底。**
+
+#### G. ACK 文案分层建议
+
+v1 不建议追求“每次都写得很灵动”，而建议固定几类 ACK：
+
+1. `delegate_started`
+   - 已接单，开始处理
+2. `observe_started`
+   - 已开始检查/探测
+3. `reply_soft_ack`
+   - 已收到，正在组织回复
+4. `queued`
+   - 已接单，但在排队/等待容量
+5. `blocked`
+   - 已识别阻塞原因，需要等待输入/权限/容量
+6. `progress_nudge`
+   - 还在处理，当前阶段是什么
+7. `pre_route_soft_ack`
+   - 已收到，正在判断处理方式
+
+这些都应优先模板化，而不是让模型自由生成。
+
+更具体地说，v1 不是“只有一个固定模板”，而是：
+
+> **固定一个小模板池，再由 runtime 按状态选模板。**
+
+建议最小模板池如下：
+
+| 模板 key | 触发条件 | 文案方向 | 默认动作 | 适合渠道 |
+| --- | --- | --- | --- | --- |
+| `pre_route_soft_ack` | route/judge 还未稳定，但静默预算将耗尽 | 已收到，正在判断处理方式 | 优先短提示；后续被稳定 route 覆盖 | 聊天渠道优先 |
+| `delegate_started` | 已判定 `delegate.single` 且成功物化 | 已接单，开始处理 | 优先新发或创建 anchor | 全渠道 |
+| `observe_started` | 已判定 `observe` 且需要短探测/后台观察 | 已开始检查/探测 | 可新发，也可轻量提示 | 全渠道 |
+| `reply_soft_ack` | `reply` 路径主模型首 token 超时 | 已收到，正在组织回复 | 优先短提示；后续由正式回复覆盖 | 聊天渠道优先 |
+| `queued` | admission control / queue budget 命中 | 已接单，但在等待容量 | 优先更新已有 anchor | 全渠道 |
+| `blocked` | 缺权限/缺输入/风险边界阻断 | 当前卡在什么条件上 | 优先新发明确说明 | 全渠道 |
+| `progress_nudge` | 6-8s 仍无可见进展，但 task 还在推进 | 还在处理，当前阶段是什么 | 优先更新已有 anchor | 支持 update 的渠道优先 |
+
+v1 默认先不要无限扩模板种类。更稳的做法是：
+
+1. 先把这 6 类模板做稳
+2. 每类允许 1-3 个轻微 wording variant
+3. 但 variant 也应是固定文案池，不是自由生成
+
+#### G.0.a 模板选择应该依据什么
+
+模板选择默认由 runtime 根据结构化状态做，不靠语言生成。
+
+优先输入：
+
+1. `route`
+2. `ack_stage`
+3. `queue_state`
+4. `blocked_reason`
+5. `channel_capability`
+6. `burst_state`
+7. `anchor_exists`
+8. `user_input_active`
+
+所以正确心智是：
+
+1. 先确定状态
+2. 再选模板 key
+3. 最后选是否新发、更新还是抑制
+
+而不是：
+
+1. 先让模型理解一遍
+2. 再即兴写一条 ACK
+
+#### G.0.b 模板是否允许按渠道不同
+
+允许，但建议只在 presentation 层差异化，不在语义层分叉。
+
+也就是：
+
+1. 语义模板 key 统一
+2. 不同渠道可以有不同 renderer
+3. Slack/飞书这类支持 update 的渠道，优先 edit/update
+4. 纯文本渠道可以直接发简版文案
+
+这样可以避免：
+
+1. 语义模板和渠道模板混成一团
+2. 每个渠道自己重新发明一套 ACK 语义
+
+#### G.1 ACK 不能每条都回：需要自适应节流与合并
+
+这里要特别防止一种很糟的产品感：
+
+> **用户连续输入 3-5 条补充消息，系统每条都机械回一个 ACK。**
+
+这会让体感非常假，也会稀释真正有价值的进展反馈。
+
+所以我建议 ACK controller 默认带一套 **adaptive ACK policy**：
+
+1. **burst coalescing**
+   - 如果用户在短窗口内连续输入多条消息，把它们视为同一波输入
+   - 默认合并成一次 ACK，而不是条条回复
+   - 只在检测到输入短暂停止时才真正发 ACK
+2. **cooldown window**
+   - 同一 thread/anchor 在刚发过 ACK 后，短时间内不再重复发同类 ACK
+3. **anchor-first update**
+   - 如果渠道支持 edit/update，优先更新现有 ACK/status anchor
+   - 不优先新发一条消息
+4. **state-change only**
+   - 只有状态真的变化了，才值得发新的 ACK / nudge
+   - 比如 `queued -> started`、`started -> waiting_input`
+5. **silence-driven intervene**
+   - ACK 介入的核心依据应是“用户侧静默过久”
+   - 不是“又来了一条消息，所以我也回一条”
+
+也就是说：
+
+1. 用户连续追问时，系统更应该合并上下文
+2. 然后给一个更准确的 ACK/update
+3. 而不是每条补充都触发一个模板回执
+
+#### G.2 ACK 是否需要“按需更智能”
+
+需要，但建议是分层的：
+
+1. **第 0 层：纯模板**
+   - 默认安全底座
+2. **第 1 层：模板选择更智能**
+   - 根据 route / queue / stage / burst state 选更合适模板
+3. **第 2 层：小快模型轻润色**
+   - 只在预算内做非常轻的 wording adjustment
+4. **第 3 层：主模型自然首响**
+   - 仅当主模型本身已经准备好输出时发生
+
+真正该“更智能”的，不是把 ACK 写得更花，而是：
+
+1. 知道什么时候该回
+2. 知道什么时候不该回
+3. 知道该复用旧 anchor 还是发新消息
+
+#### G.3 ACK 的抑制条件
+
+建议 ACK controller 至少支持下面这些 suppress 规则：
+
+1. 最近刚有可见 ACK，且状态未变化
+2. 主模型已经开始正式输出
+3. 当前用户消息属于同一 burst，只是补充细节
+4. 已有 status anchor 可更新，不需要再发新短消息
+5. 当前渠道不适合频繁刷短状态
+6. 用户仍处于活跃连续输入中，尚未进入短静默窗口
+
+#### G.4 从行为心理学看，ACK 的目标不是“多回”，而是“降不确定性”
+
+这里最重要的不是 ACK 频率，而是：
+
+1. 在用户开始不安前给出确定感
+2. 在长静默时给出进展
+3. 在连续互动时避免打断和刷屏
+
+所以更准确的产品原则是：
+
+> **ACK 的目标不是制造存在感，而是降低不确定性。**
+
+#### H. ACK 成功标准
+
+ACK 设计成功，不是“看起来会说话”，而是同时满足：
+
+1. 用户侧静默时间明显缩短
+2. 不制造双短回复
+3. 不把主模型 context 搞脏
+4. 不依赖昂贵模型
+5. 不让 ACK 本身成为新的慢点
+6. 不在用户连续输入时机械打断
+7. 不在 route 未确认时冒充已理解并给出具体处理方案
+
+可衡量指标至少包括：
+
+1. `ack_ms`
+2. `ack_suppressed_by_main_count`
+3. `ack_fallback_template_count`
+4. `double_short_reply_rate`
+5. `reply_soft_ack_rate`
+6. `post_ack_final_delivery_ms`
+7. `ack_suppressed_rate`
+8. `ack_burst_coalesced_rate`
+9. `ack_update_vs_new_message_ratio`
 
 ### 6.3.2 交接靠 artifact，不靠 transcript
 

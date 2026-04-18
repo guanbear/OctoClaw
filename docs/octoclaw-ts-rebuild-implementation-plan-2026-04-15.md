@@ -131,6 +131,10 @@ tools/
 17. surface_anchor / session binding
 18. active_context_budget / summary snapshot metadata
 19. future `context_file` / `skill_ref` artifact kinds（仅 contract 预留，不要求 runtime 落地）
+20. ack envelope / ack stage / ack lease metadata
+21. ack cooldown / burst-coalescing / suppress reason metadata
+22. pre-route soft-ack / user-input-active metadata
+23. ack idempotency key / outbox receipt metadata
 
 验收标准：
 
@@ -227,6 +231,11 @@ tools/
 15. summary snapshot / context budget hook
 16. runner absent -> on-demand execution fallback
 17. backend unavailable / queue full -> queued or blocked delivery path
+18. first-visible-response lease / ACK suppression
+19. reply soft-ack timer and stage-nudge timer
+20. ACK burst coalescing / cooldown / anchor-update preference
+21. pre-route soft-ack fallback when judge/route is slow
+22. ACK compare-and-set / insert-if-absent guard
 
 实现口径：
 
@@ -245,6 +254,12 @@ tools/
 13. resident runner 默认关闭；runtime 默认按 native task/flow + on-demand worker 实现
 14. `reply / observe / delegate.single` 的语义 route 不因 runner 缺席而改写
 15. 开启 resident runner 只代表 acceleration lane 可用，不代表 tmux 成为必需依赖
+16. ACK 默认由 runtime controller 发出，不默认依赖主模型
+17. direct path 优先让主模型抢首响；超过 ACK deadline 再由 runtime 旁路 soft-ack
+18. 不允许 ACK controller 和主模型各自发一条短回复争抢首响
+19. ACK 介入应以 silence/state-change 为主，不以“每来一条用户消息都回一条”为原则
+20. 对 `delegate/observe` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
+21. 任何 ACK 副作用都不能只靠进程内布尔位去重，必须走 `ack_key + CAS + outbox/receipt`
 
 关键状态：
 
@@ -354,12 +369,26 @@ tools/
 2. direct reply flow
 3. reply lane telemetry
 4. reply lane baseline report input
+5. soft-ack / stage-nudge template set
+6. main-first-token suppression hook
+7. cooldown / burst-coalescing / edit-in-place policy
+8. fixed ACK template registry with channel-aware renderers
+9. agent-first quick-ack `request envelope + prompt policy injection seam` + runtime fallback
+10. pre-route soft-ack template and user-input-active suppress logic
+11. ack idempotency key builder + duplicate-send guard
 
 验收标准：
 
 1. direct path 上下文最小化
 2. 能测 `ack_ms`、`total_latency_ms`
 3. 不污染 delegation runtime
+4. double short reply rate 可观测且接近 0
+5. ACK 不依赖昂贵模型
+6. 连续输入场景下不会条条都机械 ACK
+7. ACK 采用固定模板池，不以自由生成文案为前提
+8. 主模型能抢首响时优先让主模型自己回；否则 runtime 能稳定接管
+9. judge/route 慢时也不会让用户长时间静默
+10. 多个 hook/middleware 重复触发同一 ACK 意图时，最终只会有一次真正发送
 
 依赖：WS0、WS1、WS2
 
@@ -484,6 +513,9 @@ tools/
 9. write-scope conflict / queueing tests
 10. reply lane / delegate lane baseline compare
 11. shadow recommendation / promotion gate scaffold
+12. ACK timing / suppression / duplicate-short-reply regression cases
+13. rapid multi-turn input / burst-coalescing regression cases
+14. duplicate hook trigger / repeated maybeSendLatencyAck regression cases
 
 验收标准：
 
@@ -492,6 +524,9 @@ tools/
 3. 能输出成本/速度基线
 4. 能抓住重复派活、双 delivery、双执行这类稳定性回归
 5. 能判断“更快但更差”或“更便宜但更差”的优化无效
+6. 能抓住 ACK 太慢、ACK 重复、ACK 抢占主回复 这类交互回归
+7. 能抓住“用户连续输入时 ACK 机械刷屏”的交互回归
+8. 能抓住 `before_prompt_build` / `before_tool_call` 这类双触发导致的重复 ACK 回归
 
 依赖：WS0，随后逐步接 WS1-WS7
 
@@ -552,6 +587,7 @@ tools/
 1. `judge_fast` 默认固定映射到便宜快模型
 2. resident runner 缺席视为默认正常态
 3. 默认执行心智是 native task/flow + on-demand worker
+4. ACK 默认由 runtime controller 负责；主模型能抢首响时优先让主模型自己回
 
 这阶段对 legacy 的要求：
 
