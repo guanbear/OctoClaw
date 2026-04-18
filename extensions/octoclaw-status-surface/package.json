@@ -1,0 +1,27 @@
+{
+  "name": "@octoclaw/status-surface",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": { "types": "./src/index.ts", "default": "./dist/index.js" },
+    "./view-model": { "types": "./src/view-model/index.ts", "default": "./dist/view-model/index.js" },
+    "./read-model": { "types": "./src/read-model/index.ts", "default": "./dist/read-model/index.js" },
+    "./renderers/text": { "types": "./src/renderers/text/index.ts", "default": "./dist/renderers/text/index.js" },
+    "./renderers/rich": { "types": "./src/renderers/rich/index.ts", "default": "./dist/renderers/rich/index.js" },
+    "./actions": { "types": "./src/actions/index.ts", "default": "./dist/actions/index.js" },
+    "./operator": { "types": "./src/operator/index.ts", "default": "./dist/operator/index.js" }
+  },
+  "dependencies": {
+    "@octoclaw/contracts": "workspace:*",
+    "@octoclaw/runtime": "workspace:*",
+    "@octoclaw/runtime-core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "check": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "files": ["dist"]
+}

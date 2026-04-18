@@ -1,0 +1,20 @@
+{
+  "name": "octoclaw-monorepo",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "build": "pnpm -r --stream run build",
+    "check": "pnpm -r --stream run check",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "pnpm -r --stream run clean"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.0",
+    "vitest": "^3.2.1"
+  }
+}

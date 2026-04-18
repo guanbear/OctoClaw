@@ -1,0 +1,28 @@
+{
+  "name": "@octoclaw/policy",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/route/index.js",
+  "types": "dist/route/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/route/index.d.ts", "default": "./dist/route/index.js" },
+    "./intent": { "types": "./dist/intent/index.d.ts", "default": "./dist/intent/index.js" },
+    "./judge": { "types": "./dist/judge/index.d.ts", "default": "./dist/judge/index.js" },
+    "./route": { "types": "./dist/route/index.d.ts", "default": "./dist/route/index.js" },
+    "./model": { "types": "./dist/model/index.d.ts", "default": "./dist/model/index.js" },
+    "./gate": { "types": "./dist/gate/index.d.ts", "default": "./dist/gate/index.js" },
+    "./roles": { "types": "./dist/roles/index.d.ts", "default": "./dist/roles/index.js" },
+    "./compound": { "types": "./dist/compound/index.d.ts", "default": "./dist/compound/index.js" },
+    "./admission": { "types": "./dist/admission/index.d.ts", "default": "./dist/admission/index.js" },
+    "./caps": { "types": "./dist/caps/index.d.ts", "default": "./dist/caps/index.js" }
+  },
+  "dependencies": {
+    "@octoclaw/contracts": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "check": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "files": ["dist"]
+}

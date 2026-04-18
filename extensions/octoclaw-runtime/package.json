@@ -1,24 +1,38 @@
 {
-  "name": "octoclaw-runtime",
+  "name": "@octoclaw/runtime",
   "version": "0.1.0",
   "description": "OpenClaw extension tools for OctoClaw routing, dispatch, and status",
   "type": "module",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
   "files": [
+    "dist",
     "index.js",
-    "src/plugin.ts",
-    "src/config/index.ts",
-    "src/adapter/webhook-surface.ts",
     "src/adapter/state-surface.ts",
     "policy",
+    "bridge.js",
+    "conversation-control.js",
     "openclaw.plugin.json"
   ],
   "exports": {
-    ".": "./index.js",
-    "./plugin": "./src/plugin.ts",
-    "./config": "./src/config/index.ts",
-    "./webhook-surface": "./src/adapter/webhook-surface.ts",
-    "./state-surface": "./src/adapter/state-surface.ts"
+    ".": { "types": "./src/index.ts", "default": "./dist/index.js" },
+    "./plugin": { "types": "./src/plugin.ts", "default": "./dist/plugin.js" },
+    "./config": { "types": "./src/config/index.ts", "default": "./dist/config/index.js" },
+    "./webhook-surface": { "types": "./src/adapter/webhook-surface.ts", "default": "./dist/adapter/webhook-surface.js" },
+    "./state-surface": { "types": "./src/adapter/state-surface.ts", "default": "./dist/adapter/state-surface.js" },
+    "./runtime-payloads": { "types": "./src/runtime-payloads.ts", "default": "./dist/runtime-payloads.js" }
+  },
+  "dependencies": {
+    "@octoclaw/contracts": "workspace:*",
+    "@octoclaw/delegation": "workspace:*",
+    "@octoclaw/fast-reply": "workspace:*",
+    "@octoclaw/policy": "workspace:*",
+    "@octoclaw/runtime-core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "check": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
   },
   "openclaw": {
     "extensions": [

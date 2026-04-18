@@ -1,0 +1,23 @@
+{
+  "name": "@octoclaw/octoclawctl",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/cli.js",
+  "types": "src/cli.ts",
+  "bin": {
+    "octoclawctl": "./dist/cli.js"
+  },
+  "exports": {
+    ".": { "types": "./src/cli.ts", "default": "./dist/cli.js" }
+  },
+  "dependencies": {
+    "@octoclaw/runtime": "workspace:*",
+    "@octoclaw/status-surface": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "check": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "files": ["dist"]
+}

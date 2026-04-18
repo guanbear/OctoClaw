@@ -1,0 +1,23 @@
+{
+  "name": "@octoclaw/contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/schemas.js",
+  "types": "dist/schemas.d.ts",
+  "exports": {
+    ".": { "types": "./dist/schemas.d.ts", "default": "./dist/schemas.js" },
+    "./events": { "types": "./dist/events.d.ts", "default": "./dist/events.js" },
+    "./artifacts": { "types": "./dist/artifacts.d.ts", "default": "./dist/artifacts.js" },
+    "./results": { "types": "./dist/results.d.ts", "default": "./dist/results.js" },
+    "./deliveries": { "types": "./dist/deliveries.d.ts", "default": "./dist/deliveries.js" },
+    "./telemetry": { "types": "./dist/telemetry.d.ts", "default": "./dist/telemetry.js" },
+    "./schemas": { "types": "./dist/schemas.d.ts", "default": "./dist/schemas.js" },
+    "./fixtures": { "types": "./dist/fixtures.d.ts", "default": "./dist/fixtures.js" }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "check": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "files": ["dist"]
+}

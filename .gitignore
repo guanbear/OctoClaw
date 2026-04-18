@@ -6,6 +6,12 @@
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# TypeScript / Node
+node_modules/
+dist/
+*.tsbuildinfo
 
 # Local editor / OS files
 .DS_Store

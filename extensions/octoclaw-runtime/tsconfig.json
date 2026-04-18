@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/octoclaw-contracts" },
+    { "path": "../../packages/octoclaw-policy" },
+    { "path": "../../packages/octoclaw-runtime-core" },
+    { "path": "../octoclaw-delegation" },
+    { "path": "../octoclaw-fast-reply" }
+  ]
+}
