@@ -139,7 +139,7 @@ function parseSessionRoute(raw: string): ParsedSessionRoute {
   let threadId = "";
 
   if (normalizedParts.length >= 3 && USER_SESSION_KINDS.has(asString(normalizedParts[1]).toLowerCase())) {
-    target = `user:${asString(normalizedParts[2])}`;
+    target = asString(normalizedParts[2]);
     if (normalizedParts.length >= 5 && THREAD_SESSION_KINDS.has(asString(normalizedParts[3]).toLowerCase())) {
       threadId = asString(normalizedParts[4]);
     }

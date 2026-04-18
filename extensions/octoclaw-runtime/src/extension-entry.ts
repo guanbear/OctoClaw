@@ -249,6 +249,7 @@ export const plugin = {
       const preStateKey = resolvePolicyStateKey(ctx);
       const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
       const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
+
       if (preSessionKey) {
         startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey: preStateKey });
         const existingState = getPolicyStateForContext(ctx);
