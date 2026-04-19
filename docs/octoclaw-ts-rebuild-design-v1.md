@@ -2970,6 +2970,57 @@ v1 先把接口做对：
 2. 中等难度但会跑一段时间、且便宜模型能扛住的任务，才更适合 runner
 3. 高难或高质量要求任务，即使很长，也可能应该继续走更强的非-runner lane
 
+这里还需要把“谁来做这个判断”说清楚，避免后面又把 responsibility 压错地方：
+
+1. **不是主 agent 最终拍板**
+2. **也不是让 `judge_fast` 一个人承担全部 backend 决策**
+3. 更合理的是三段式：
+   - `judge_fast` 给出粗粒度任务档位
+   - `backend planner` 结合系统信号做最终 runner/native 判定
+   - `main_reply` / worker 只负责后续执行与交付，不承担 route/backend authority
+
+具体建议如下：
+
+1. `judge_fast` 负责：
+   - `semantic route`
+   - `role`
+   - `complexity_band`（粗粒度）
+   - `expected_duration_band`（粗粒度）
+   - `quality_bar`
+   - `risk_flags`
+2. `backend planner` 负责：
+   - 读取 judge 的 band 信号
+   - 结合 runner health / queue pressure / workspace compatibility / model eligibility
+   - 决定 `native + on-demand` 还是 runner
+3. `main_reply` 不负责：
+   - 最终 route authority
+   - 最终 runner eligibility 判定
+   - 直接决定 backend
+
+这样设计的原因是：
+
+1. 如果全交给 `judge_fast`，小模型确实可能把复杂度或预期时长看错
+2. 但如果改成让主 agent 来判，又会把主 agent 拉进更重的控制心智
+3. 主 agent 一旦承担 backend/dispatch authority，就更容易吃更多上下文、更多状态、更多 token
+4. 这会直接损伤首响速度、成本控制和上下文洁癖
+
+所以更稳的口径应该是：
+
+1. `judge_fast` 只负责**粗判**
+2. `backend planner` 负责**收口**
+3. 主 agent 最多只在后续执行中通过 plan/checkpoint 间接暴露“任务比预想更难/更长”，供 reconcile 或后续优化使用
+
+也就是说，v1 不应该设计成：
+
+1. “主 agent 先读很多上下文，再决定要不要走 runner”
+2. “judge_fast 一次性决定 route + model + backend + duration 精细值”
+
+而应该设计成：
+
+1. 小 judge 给 band
+2. 代码 planner 读系统状态做最终 backend 判定
+3. 后续 harness 再根据真实 telemetry 去校正 judge band 和 planner policy
+
 也就是说，backend planner 的默认心智应该是：
 
 1. 先假设不用 runner 也能正常跑
