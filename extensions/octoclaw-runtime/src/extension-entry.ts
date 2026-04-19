@@ -271,8 +271,15 @@ export const plugin = {
       let inboundMessageTs = "";
       if (preSessionKey) {
         const inbound = asRecord(ctx.inboundMessage);
+        const ev = asRecord(ctx.event);
+        const hookEvent = asRecord(event);
         if (inbound && Object.keys(inbound).length > 0) inboundMessageTs = stringValue(inbound.ts || inbound.messageTs || inbound.messageId);
-        else { const ev = asRecord(ctx.event); if (ev && Object.keys(ev).length > 0) inboundMessageTs = stringValue(ev.ts || ev.messageTs || ev.messageId); }
+        else if (ev && Object.keys(ev).length > 0) inboundMessageTs = stringValue(ev.ts || ev.messageTs || ev.messageId);
+        if (!inboundMessageTs && hookEvent) {
+          const promptText = extractPromptText(hookEvent);
+          const msgIdMatch = promptText.match(/"message_id"\s*:\s*"(\d+\.\d+)"/);
+          if (msgIdMatch) inboundMessageTs = msgIdMatch[1];
+        }
         startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId: inboundMessageTs });
         if (state) {
           state.ackGuardKey = preSessionKey;
