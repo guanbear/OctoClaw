@@ -184,6 +184,7 @@ tools/
 13. backend planner 默认从 `openclaw-native + on-demand execution` 出发，而不是从 runner 出发
 14. `observe` 与 `delegate.single` 都允许在明确 execution gain 成立时升级到 runner
 15. runner 选择必须由可解释 policy 信号驱动，不得由语义关键词或 prompt 猜测驱动
+16. expected duration 可作为 runner 升级信号之一，但不能脱离 complexity / quality bar / runner model eligibility 单独使用
 
 明确禁止：
 
@@ -352,6 +353,10 @@ tools/
    - runner health
    - queue pressure
    - expected first-progress gain
+   - expected duration band
+   - complexity band
+   - quality bar
+   - runner model eligibility
    - workspace compatibility
    - operator attach requirement
 
@@ -365,6 +370,7 @@ tools/
 6. Phase 3 起可扩到 thread handoff / inbox / advice packet
 7. 同一类 `observe` / `delegate.single` 请求在 runner 缺席时仍可稳定落到 native + on-demand
 8. backend selection 决策可解释，不出现“因为 route 像 runner 任务所以走 runner”这类黑箱逻辑
+9. 不出现“因为任务长，所以默认走便宜 runner”这类单因子误判
 
 依赖：WS0、WS1、WS2、WS3
 

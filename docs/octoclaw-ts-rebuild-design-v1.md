@@ -2942,6 +2942,33 @@ v1 先把接口做对：
 4. 任务需要 operator attach / workbench 可视化观察
 5. 任务 read/write scope 与当前 runner lane 的 workspace policy 相容
 6. 成本与延迟预算支持使用该 acceleration backend
+7. 任务复杂度与质量要求仍落在当前 runner model profile 的能力边界内
+
+如果前期 runner lane 固定使用便宜模型，这里还应再加一条明确口径：
+
+1. `runner` 可以参考任务难度和预期完成时间决定是否升级
+2. 但“预计会跑很久”本身并不足以成为 runner 选择理由
+3. 只有当任务 **既** 有 execution gain，**又** 没有超出 runner 模型能力边界时，runner 才是合格候选
+
+因此 backend planner 更合理的判断顺序是：
+
+1. 先判断 semantic route
+2. 再判断任务档位：
+   - complexity band
+   - expected duration
+   - checkpoint intensity
+   - quality bar
+3. 再判断 runner eligibility：
+   - runner model 是否够用
+   - queue/health 是否允许
+   - workspace / write scope 是否兼容
+4. 最后才决定是 `native + on-demand` 还是 resident runner
+
+这意味着：
+
+1. 简短任务即使不难，也未必值得为 runner 升级
+2. 中等难度但会跑一段时间、且便宜模型能扛住的任务，才更适合 runner
+3. 高难或高质量要求任务，即使很长，也可能应该继续走更强的非-runner lane
 
 也就是说，backend planner 的默认心智应该是：
 
