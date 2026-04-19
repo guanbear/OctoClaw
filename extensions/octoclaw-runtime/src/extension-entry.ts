@@ -269,7 +269,11 @@ export const plugin = {
       const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
 
       if (preSessionKey) {
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision });
+        let replyToMessageId = "";
+        const inbound = asRecord(ctx.inboundMessage);
+        if (inbound && Object.keys(inbound).length > 0) replyToMessageId = stringValue(inbound.ts || inbound.messageTs || inbound.messageId);
+        else { const ev = asRecord(ctx.event); if (ev && Object.keys(ev).length > 0) replyToMessageId = stringValue(ev.ts || ev.messageTs || ev.messageId); }
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId });
         if (state) {
           state.ackGuardKey = preSessionKey;
         }

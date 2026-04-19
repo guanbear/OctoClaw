@@ -3,6 +3,7 @@ import {
   resolveTaskStatePath,
   resolveWorkspaceRoot,
 } from "../resolve/env.js";
+import { getAdapterForSession } from "../im/index.js";
 import {
   AckStage,
   ackStageText,
@@ -147,6 +148,7 @@ interface AckAttemptParams {
   markMode?: string;
   messageTurnId?: string;
   stageHint?: string;
+  replyToMessageId?: string;
 }
 
 const ackStateByStateKey = new Map<string, AckTrackingState>();
@@ -453,6 +455,29 @@ async function sendAckDirectDetailed(
     };
   }
 
+  const adapter = getAdapterForSession(sessionKey);
+  if (adapter) {
+    const replyToMessageId = asString(options.replyToMessageId);
+    const result = await adapter.send({
+      sessionKey,
+      message,
+      replyToMessageId: replyToMessageId || undefined,
+      timeoutMs: Math.max(500, Number(options.timeoutMs || 5000)),
+      cwd: asString(cwd) || resolveWorkspaceRoot(),
+    });
+    return {
+      attempted: true,
+      delivered: result.delivered,
+      sent: result.sent,
+      error: result.error || "",
+      reason: result.sent ? "channel_message_sent" : "channel_message_failed",
+      ack_target_resolution_state: "resolved",
+      ack_delivery_state: result.sent ? "sent" : "failed",
+      target: adapter.resolveTarget(sessionKey).target,
+      threadId: result.threadTs || "",
+    };
+  }
+
   const timeoutMs = Math.max(500, Number(options.timeoutMs || 5000));
   const args = ["message", "send", "--channel", parsed.origin, "--target", resolved.target, "--json"];
   if (message) {
@@ -624,7 +649,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     normalizedSessionKey,
     params.message,
     asString(effectiveCtx.cwd) || process.cwd(),
-    { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)) },
+    { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
   );
 
   recordDelivery(ackKey, {
@@ -755,6 +780,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
   const ctx = isRecord(options.ctx) ? options.ctx as AckContext : { cwd };
   const logger = isRecord(options.logger) ? options.logger as AckLogger : {};
   const routePhase = resolveRoutePhase(decision, options);
+  const replyToMessageId = asString(options.replyToMessageId);
   const inboundTs = Date.now();
 
   updateTrackingState(stateKey, {
@@ -807,6 +833,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         ownerTag: "ack_controller",
         messageTurnId: `${stateKey}:${inboundTs}`,
         stageHint: templateInputs.stageHint,
+        replyToMessageId,
       }).catch((error) => {
         logger.warn?.(`octoclaw timed ack failed: ${String(error)}`);
       });
@@ -1001,6 +1028,7 @@ export async function maybeSendLatencyAck(
       markLatencySent: true,
       markMode: "channel_message",
       messageTurnId: `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`,
+      replyToMessageId: isRecord(metadata) ? asString(metadata.message_id) : "",
     });
     return result;
   } catch (error) {
