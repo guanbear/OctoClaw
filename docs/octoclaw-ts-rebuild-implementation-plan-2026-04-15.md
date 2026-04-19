@@ -181,12 +181,16 @@ tools/
 10. resident runner absent 视为默认正常态，不作为 route 降级理由
 11. backend planner 只降 execution profile，不篡改 semantic route
 12. hard-boundary gate 只读取结构化硬信号，不读取自然语言正文做关键词判断
+13. backend planner 默认从 `openclaw-native + on-demand execution` 出发，而不是从 runner 出发
+14. `observe` 与 `delegate.single` 都允许在明确 execution gain 成立时升级到 runner
+15. runner 选择必须由可解释 policy 信号驱动，不得由语义关键词或 prompt 猜测驱动
 
 明确禁止：
 
 1. 关键词匹配做语义路由
 2. 主模型承担 route authority
 3. hard-boundary gate 演化成 prompt pattern / regex 语义分类器
+4. 先判“走不走 runner”，再反推 semantic route
 
 验收标准：
 
@@ -339,6 +343,17 @@ tools/
 7. conflict policy hook
 8. future callable role registry
 9. future advisor consult adapter
+10. backend planner explainability fields:
+   - `backend_candidate`
+   - `backend_reason`
+   - `expected_gain`
+   - `fallback_path`
+11. runner upgrade policy inputs:
+   - runner health
+   - queue pressure
+   - expected first-progress gain
+   - workspace compatibility
+   - operator attach requirement
 
 验收标准：
 
@@ -348,6 +363,8 @@ tools/
 4. delegated task 默认带 read/write scope
 5. overlapping write 默认不会并发踩同一工作区
 6. Phase 3 起可扩到 thread handoff / inbox / advice packet
+7. 同一类 `observe` / `delegate.single` 请求在 runner 缺席时仍可稳定落到 native + on-demand
+8. backend selection 决策可解释，不出现“因为 route 像 runner 任务所以走 runner”这类黑箱逻辑
 
 依赖：WS0、WS1、WS2、WS3
 

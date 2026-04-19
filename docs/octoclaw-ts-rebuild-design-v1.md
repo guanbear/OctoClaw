@@ -2886,6 +2886,27 @@ v1 先把接口做对：
 
 真正需要回退的是 execution profile，不是 semantic route。
 
+这里还需要再说清一个很容易混淆的点：
+
+1. `observe` 不是 runner 的别名，也不是 local backend 的别名
+2. `observe` 是一种 semantic route，表示“先看、先查、先探测”
+3. `runner / openclaw-native / on-demand / tmux workbench` 都属于 execution/backend 层
+4. 因此 `observe` 和 `delegate.single` **都可能**在某些执行条件下落到 runner
+5. 反过来，runner 也不天然只服务某一种 route
+
+换句话说：
+
+1. `reply / observe / delegate.single` 回答的是“这次请求本质上是什么”
+2. `backend` 回答的是“这次已经判定好的请求该怎么跑”
+
+所以 v1 不应该再出现这种心智：
+
+1. “是 observe 就一定走 runner”
+2. “是 single delegate 才能走 runner”
+3. “先决定走不走 runner，再反推 semantic route”
+
+这三种都会让系统重新长回旧的 route/backend 缠绕结构。
+
 如果发生 backend 不可用或 admission control 拒绝，则再按下面顺序降级：
 
 1. `delegate.single` -> `queued delegate.single`
@@ -2906,6 +2927,34 @@ v1 先把接口做对：
 2. 可以由 shell supervisor / systemd / hosted worker process 承载
 3. 允许挂 tmux workbench 便于人工观察
 4. 但 tmux 从头到尾都只是 operator workbench，不是 runner 必需机制
+
+更进一步说，backend planner 默认应该这样工作：
+
+1. 默认 backend 起点是 `openclaw-native + on-demand execution`
+2. backend planner 只在“明确有收益”时升级到 resident runner
+3. 这个收益必须来自可解释信号，而不是语义猜测
+
+这些可解释信号至少包括：
+
+1. resident runner 当前可用且健康
+2. 当前 queue / admission control 状态允许加速 lane 接单
+3. 任务需要较长执行、持续会话或更低 `first_progress_ms`
+4. 任务需要 operator attach / workbench 可视化观察
+5. 任务 read/write scope 与当前 runner lane 的 workspace policy 相容
+6. 成本与延迟预算支持使用该 acceleration backend
+
+也就是说，backend planner 的默认心智应该是：
+
+1. 先假设不用 runner 也能正常跑
+2. 再判断“用 runner 是否明显更好”
+3. 而不是先问“这条请求能不能走 runner”
+
+这同样适用于：
+
+1. `observe` 的短探测任务
+2. `delegate.single` 的常规子任务
+
+两者都可以因为 execution gain 走 runner，也都可以因为默认稳态继续走 `native + on-demand`。
 
 因此文档里更准确的口径应该是：
 
