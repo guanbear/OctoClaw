@@ -179,14 +179,24 @@ tools/
 8. compound 只保留 future schema slot，不进入 Phase 1 route authority
 9. future coordination_mode / advisor_policy 预留接口
 10. resident runner absent 视为默认正常态，不作为 route 降级理由
-11. backend planner 只降 execution profile，不篡改 semantic route
+11. v1 默认由 `execution materializer` 物化 `native task/flow + on-demand execution`
 12. hard-boundary gate 只读取结构化硬信号，不读取自然语言正文做关键词判断
+13. `judge_fast` 只输出粗粒度 band 与 risk signals，不直接拥有最终 backend authority
+14. `main_reply` / worker 不承担 route/backend authority，避免主 agent 控制面过重
+15. v1 live path 默认只保留一个 judge
+16. `judge_strong` / `route_adjudicator` 只作为 optional shadow/offline lane，不进入默认热路径
+17. v1 live path 允许完全不实现 runner；runner 可后置为 future optional backend
+18. continuation / slot-filling / active-task continuation 场景默认不重复触发完整 judge，优先复用 `active_intent + pending_slots + binding`
 
 明确禁止：
 
 1. 关键词匹配做语义路由
 2. 主模型承担 route authority
 3. hard-boundary gate 演化成 prompt pattern / regex 语义分类器
+4. 先判“走不走 runner”，再反推 semantic route
+5. 让主 agent 读取更多上下文后再充当 runner dispatch judge
+6. 把 `judge_strong` 变成每条请求都走的第二层默认模型调用
+7. 在 continuation/slot-filling 场景里对每个 turn 都重新做完整 judge
 
 验收标准：
 
@@ -339,6 +349,69 @@ tools/
 7. conflict policy hook
 8. future callable role registry
 9. future advisor consult adapter
+10. `judge_fast` output schema 至少包含：
+   - `semantic_route`
+   - `role`
+   - `complexity_band`
+   - `expected_duration_band`
+   - `quality_bar`
+   - `risk_flags`
+   - `delegate_reason_codes`
+   - `route_confidence`
+11. v1 `execution materializer` 至少处理：
+   - task/flow materialization
+   - admission / queue gate
+   - write-scope gate
+   - spawn profile binding
+   - model profile binding
+12. optional `judge_strong` output schema 复用 `judge_fast` 主字段，并额外包含：
+   - `adjudication_reason`
+   - `override_recommendation`
+   - `confidence_delta`
+13. `judge_strong` 在 v1 默认只用于 shadow/replay/offline，不承担 live latency 关键路径
+14. judge input context packet 分为 4 层：
+   - core turn layer
+   - continuation state layer
+   - binding/control layer
+   - minimal evidence layer
+15. core turn layer 至少包含：
+   - `current_turn`
+   - `turn_metadata`
+   - `thread_summary`
+16. continuation state layer 至少包含：
+   - `active_intent`
+   - `intent_status`
+   - `last_agent_act`
+   - `pending_slots`
+   - `open_question`
+17. binding/control layer 至少包含：
+   - `anchor_or_task_binding`
+   - `surface_context`
+   - `lifecycle_flags`
+18. minimal evidence layer 默认为空，仅在 summary/state 不足时附：
+   - `recent_excerpt`
+   - `artifact_refs`
+19. judge implementation 禁止退化成“只看最后一句”的分类器；continuation case 必须通过 context packet 正确识别
+20. judge packet 构建原则：
+   - `summary_first`
+   - `state_over_prose`
+   - `excerpt_last`
+   - `bounded_size`
+21. route packet 需显式传给主 agent：
+   - `route_recommendation`
+   - `role_recommendation`
+   - `complexity_band`
+   - `expected_duration_band`
+   - `delegate_reason_codes`
+   - `suggested_spawn_profile`
+22. main agent 如不同意 judge，必须走 objection protocol：
+   - `route_objection`
+   - `objection_reason`
+   - `requested_route`
+   - `confidence`
+23. orchestration 不允许接受 silent override；有 objection 时应按 policy 接受或记录到 shadow adjudication
+24. delegated task 必须带 `complexity_band` / `spawn_profile`
+25. v1 live judge 当前固定为 `omniroute/cx/gpt-5.4-mini`（关闭推理）
 
 验收标准：
 
@@ -348,6 +421,15 @@ tools/
 4. delegated task 默认带 read/write scope
 5. overlapping write 默认不会并发踩同一工作区
 6. Phase 3 起可扩到 thread handoff / inbox / advice packet
+7. 同一类 `observe` / `delegate.single` 请求在 runner 缺席时仍可稳定落到 native + on-demand
+8. backend selection 决策可解释，不出现“因为 route 像 runner 任务所以走 runner”这类黑箱逻辑
+9. 不出现“因为任务长，所以默认走便宜 runner”这类单因子误判
+10. 不出现“为了判 runner 再把主 agent 拉进更重上下文和控制逻辑”这类架构回退
+11. `judge_strong` 不进入常规热路径，只保留 shadow/offline 角色
+12. continuation/slot-filling 场景下，judge 不会因为只看最后一句而误把同一任务判成新请求
+13. continuation/slot-filling/active-task continuation 场景不会对每个 turn 都重做完整 judge
+14. 主 agent 不会在没有 objection record 的情况下悄悄改掉 judge 推荐 route
+15. judge context packet 在 replay 中可复用，便于校正 summary/state/excerpt 哪一层出了问题
 
 依赖：WS0、WS1、WS2、WS3
 
@@ -359,81 +441,9 @@ tools/
 
 交付：
 
-1. `extensions/octoclaw-runtime/src/ack`
-2. `extensions/octoclaw-runtime/src/im`
-3. `extensions/octoclaw-runtime/src/extension-entry.ts`
-
-### ACK 系统架构（2026-04-19 更新）
-
-ACK 系统包含两条独立路径，按路由模式分工：
-
-#### 路径 1：Latency ACK（`before_prompt_build` / `before_tool_call`）
-
-- **触发条件**：agent 正在用工具处理（`toolName` 非 `octoclaw_*`），且 policy decision 中 `latency_ack.required=true`
-- **作用**：当 agent 在用工具但还没输出文字时，发一条"收到"级别的 ACK
-- **线程回复**：从 prompt text 中 regex 提取 Slack message_id，通过 `--reply-to` 回到用户消息线程
-- **去重**：成功后立即 `cancelAckGuard`，取消同 session 的 timer ACK
-
-#### 路径 2：Timer ACK（仅 direct/reply 模式）
-
-- **触发条件**：只在 `routePhase=reply`（direct 模式）时启动，delegated/observe/pre_route 不触发
-- **作用**：监控工具调用时长，超时后按递进档位提醒用户
-- **不抢首回复**：timer 不负责"还没回复"的提示，那是 latency ACK 的职责
-
-**Timer 档位（翻倍递进）：**
-
-| 档位 | 延迟 | Stage | 话术方向 |
-|------|------|-------|----------|
-| tier0 | `firstTierMs`（默认 60s） | `tool_still_working` | 安慰：还在处理中 |
-| tier1 | `firstTierMs × 2`（120s） | `tool_ask_continue` | 询问：要继续等吗？ |
-| tier2 | `firstTierMs × 4`（240s） | `tool_suggest_stop` | 建议：建议停掉 |
-
-- 每档独立触发，不互斥（tier0 发完不会取消 tier1/tier2）
-- `firstTierMs` 和 `tierCount` 可通过 `openclaw.json` 的 `plugins.entries.octoclaw-runtime.config` 配置
-
-#### 去重机制
-
-- `buildAckKey` = `ack:{threadId}:{anchorId}:{routePhase}:{messageTurnId}`
-- Timer ACK 和 Latency ACK 共享同一个 `turnTs`（`ensureAckTurnTimestamp`），确保 `messageTurnId` 一致
-- `checkAndSet` CAS 保证同一 key 只发一次
-
-#### 线程回复（Slack）
-
-- `inboundMessageTs` 从 prompt text regex `/"message_id"\s*:\s*"(\d+\.\d+)"/` 提取（hook context 不携带 ts）
-- 通过 `SlackAdapter.send({ replyToMessageId })` → `openclaw message send --reply-to`
-- 有 fallback：`--reply-to` 失败时退回无线程发送
-
-#### 模板池
-
-每种 stage 有 3-5 条随机话术：
-
-| Stage | 示例话术 |
-|-------|----------|
-| `ReplySoftAck` | 收到想一下 / 看到了我回你 / 好的我看看 |
-| `ToolStillWorking` | 还在处理中快了 / 还在跑别急 / 在干活了马上好 |
-| `ToolAskContinue` | 已经处理挺久了要继续等吗 / 跑的时间有点长了要不要我先停了 |
-| `ToolSuggestStop` | 可能卡住了建议我先停掉这个任务 / 处理太久了大概率遇到问题 |
-| `PreRouteSoftAck` | 收到看下怎么处理 / 稍等我瞅瞅 |
-| `DelegateStarted` | 收到开始处理 / 在跑了 |
-| `ObserveStarted` | 正在查看 / 看下情况 |
-| `ProgressNudge` | 还在处理当前xxx / 还没好再等等 |
-
-#### 配置
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "octoclaw-runtime": {
-        "config": {
-          "ackTimerFirstTierMs": 60000,
-          "ackTimerTierCount": 3
-        }
-      }
-    }
-  }
-}
-```
+1. `extensions/octoclaw-fast-reply/src/ack`
+2. `extensions/octoclaw-fast-reply/src/direct`
+3. `extensions/octoclaw-fast-reply/src/instrumentation`
 
 必须实现：
 
@@ -461,9 +471,6 @@ ACK 系统包含两条独立路径，按路由模式分工：
 8. 主模型能抢首响时优先让主模型自己回；否则 runtime 能稳定接管
 9. judge/route 慢时也不会让用户长时间静默
 10. 多个 hook/middleware 重复触发同一 ACK 意图时，最终只会有一次真正发送
-11. Timer ACK 只在 direct 模式触发，不与 latency ACK 重复发送
-12. ACK 回复在 Slack 线程内（`--reply-to`），不到顶级
-13. Timer 档位翻倍递进，首档超时可配置
 
 依赖：WS0、WS1、WS2
 

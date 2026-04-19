@@ -2525,6 +2525,222 @@ v2 应该采用：
 
 而不是反过来。
 
+这里还要再明确一点：
+
+1. `judge_fast` / `judge_strong` 不能被实现成“只看最后一句话的分类器”
+2. 但也不应该直接吞整段原始会话
+3. 更合理的是吃一个 **judge context packet**
+
+这个 packet 在 continuation 场景下，至少应包含：
+
+1. `current_turn`
+2. `thread_summary`
+3. `active_intent`
+4. `last_agent_act`
+5. `pending_slots`
+6. `anchor/task binding`
+7. 必要时附一个很短的 `recent_excerpt`
+
+但为了真正可实现，我建议把它设计成一个分层 contract，而不是一串散字段。
+
+#### judge context packet 分层设计
+
+##### A. Core turn layer
+
+这层是每次 judge 都必须有的最小输入：
+
+1. `current_turn`
+   - 当前用户这一次输入
+   - 这是 judge 唯一必须看的原始自然语言
+2. `turn_metadata`
+   - 当前消息来源、channel、时间戳、是否编辑/补发
+   - 作用是避免把重复消息、渠道差异、补发消息误判成新意图
+3. `thread_summary`
+   - 对当前 thread 到目前为止的压缩摘要
+   - 作用是让 judge 知道“这段对话大体在干什么”
+
+原因：
+
+1. `current_turn` 决定这次新增了什么
+2. `thread_summary` 决定这次输入放在什么大背景里理解
+3. 这层解决的是“不是纯最后一句，也不是整段 transcript”这个基本矛盾
+
+##### B. Continuation state layer
+
+这层是减少误判最关键的一层，用来表达“当前会话还没完的事情”：
+
+1. `active_intent`
+   - 当前线程里正在进行的主意图
+   - 例如 `write_script`、`debug_issue`、`status_check`
+2. `intent_status`
+   - 当前意图所处状态
+   - 例如 `collecting_info`、`executing`、`waiting_input`、`delivering`
+3. `last_agent_act`
+   - 上一次系统明确做了什么
+   - 例如“请求补齐语言/输入输出”“已开始执行 delegated task”“已给出初步结论”
+4. `pending_slots`
+   - 当前还缺哪些关键信息
+   - 例如 `language/task/environment/output_format`
+5. `open_question`
+   - 上一轮 agent 明确向用户追问的问题
+
+原因：
+
+1. judge 真正常误判的，不是完全陌生的新句子
+2. 而是 continuation / slot-filling / 接上文补充
+3. 这层字段的作用，就是把“当前还没收尾的对话状态”显式交给 judge，而不是让模型自己从长对话里猜
+
+##### C. Binding and control layer
+
+这层告诉 judge：当前输入是不是已经挂在某个已有对象下，不该当新任务处理。
+
+1. `anchor_or_task_binding`
+   - 当前消息是否绑定到某个 task/thread/anchor
+2. `surface_context`
+   - 来自哪个 surface
+   - 例如 `chat`, `details`, `queue`, `task_reply`
+3. `lifecycle_flags`
+   - 当前是否处于 `waiting_input`、`recovery`、`approval_pending`、`delivery_pending`
+
+原因：
+
+1. 很多误判本质上不是语义理解错，而是忽略了“这条消息其实已经在某个执行对象下面”
+2. 这层字段能显著减少把回复 task、补充参数、approve/retry 误判成全新请求
+
+##### D. Minimal evidence layer
+
+这层是可选层，默认不带，只有 summary 和 state 不足时才补一点点原文证据。
+
+1. `recent_excerpt`
+   - 最近 1-3 轮最相关的原文摘录
+   - 不是完整 transcript
+2. `artifact_refs`
+   - 若当前 turn 明显引用已有 artifact/task result，可带短引用
+
+原因：
+
+1. 有些边界 case，只靠 summary/state 还不够
+2. 但直接把全量 transcript 喂进去会让上下文迅速变脏
+3. 所以应该只补“最少证据”，不是回灌整段历史
+
+#### judge context packet 的推荐 shape
+
+更推荐把它组织成类似这样的结构：
+
+```json
+{
+  "current_turn": "...",
+  "turn_metadata": {
+    "channel": "chat",
+    "edited": false
+  },
+  "thread_summary": "...",
+  "continuation_state": {
+    "active_intent": "write_script",
+    "intent_status": "collecting_info",
+    "last_agent_act": "asked_for_language_and_io",
+    "pending_slots": ["language", "task", "environment"],
+    "open_question": "请补充语言、输入输出和运行环境"
+  },
+  "binding_state": {
+    "anchor_or_task_binding": null,
+    "surface_context": "chat",
+    "lifecycle_flags": []
+  },
+  "recent_excerpt": [
+    "帮我写个脚本",
+    "Python吧 获取5个国家的时间"
+  ]
+}
+```
+
+#### 为什么要这么设计
+
+核心原因有 5 个：
+
+1. **防最后一句误判**
+   continuation 场景不能只靠最后一句判断
+2. **防全量 transcript 污染**
+   judge 需要上下文，但不该背整段历史
+3. **把 continuation 变成结构化状态问题**
+   比起“模型猜上下文”，更稳的是“系统把未完成状态显式提供出来”
+4. **降低 live judge 延迟**
+   packet 结构小、字段固定，比长 prompt 更稳
+5. **便于 harness 回放和校正**
+   以后 replay 时可以直接回放同一个 packet，看 judge 到底哪一层信息不足
+
+#### 构建原则
+
+为了保证 judge packet 不会越长越脏，建议再写死 4 条构建原则：
+
+1. summary first
+   - 优先用 `thread_summary / continuation_state`
+   - 不优先原始 transcript
+2. state over prose
+   - 能结构化表达的，就不要丢给 judge 自己读自然语言猜
+3. excerpt last
+   - 只有 summary/state 不足时，才补短 excerpt
+4. bounded size
+   - packet 必须有 token/field budget
+   - 超预算先压缩，再裁剪，再丢 excerpt
+
+例如像下面这种对话：
+
+1. 用户先说“帮我写个脚本”
+2. 系统追问语言/输入输出
+3. 用户再说“Python吧 获取5个国家的时间”
+
+如果 judge 只看最后一句，就很容易误判成一个新的碎片请求。  
+而如果 judge packet 里带了：
+
+1. 当前活跃意图是 `write_script`
+2. 上一条 agent act 是“补齐脚本槽位”
+3. `pending_slots.language/task` 尚未补齐
+
+那么 judge 才能正确理解：
+
+1. 这不是新任务
+2. 这是在继续填写前一个未完成意图
+3. `Python` 是 language slot
+4. “获取 5 个国家的时间” 是 task intent
+
+所以更准确的设计口径应该是：
+
+1. `judge_fast` 看的是**压缩的判定上下文**
+2. `judge_strong` 看的是**稍大一点但仍受预算约束的判定上下文**
+3. 两者都不是“最后一句分类器”
+4. 两者也都不是“全量 transcript 推理器”
+
+另外，单 judge 方案下还应明确：
+
+1. 不是每个 turn 都应该重新 judge
+2. continuation / slot-filling / active task continuation 场景，应尽量复用已有 `active_intent + pending_slots + binding`
+3. 只有出现真正的新意图、新 anchor、冲突状态或生命周期切换时，才值得重新触发完整 judge
+
+这样做的核心目的不是“省一次模型调用”而已，而是：
+
+1. 降低 live judge 总延迟
+2. 降低误判率
+3. 避免把补槽位对话反复当新任务分类
+4. 更符合“快响应 + 低成本 + 稳定 continuation”目标
+
+这也意味着：
+
+1. 系统应该有 durable memory
+2. 但 durable memory 不等于主 agent 每次都要吃全部历史
+3. 主 agent 默认知道“发生了什么”，应主要通过：
+   - `thread summary`
+   - `checkpoint summary`
+   - `artifact refs`
+   - `structured state snapshot`
+4. 而不是通过回灌完整 transcript、完整 worker log、完整调度细节
+
+因此更准确的口径是：
+
+1. memory 主要属于 system-level context
+2. `main_reply` 只消费经过压缩和裁剪后的 working context
+3. 这样既能保留“知道做了哪些事”的能力，又能保持主 agent 上下文干净、首响快、token 低
+
 ## 9.4 delivery 规范
 
 progress delivery 和 final delivery 应该是不同协议：
@@ -2621,7 +2837,7 @@ v1 先把接口做对：
 
 基于当前讨论，v1 先固定成这套：
 
-1. `judge_fast` -> `minimax-portal/MiniMax-M2.7`
+1. `judge_fast` -> `omniroute/cx/gpt-5.4-mini`（关闭推理）
 2. `observer_probe` -> `minimax-portal/MiniMax-M2.7`
 3. `direct_main` -> `zhipu/GLM-5.1`
 4. `worker_research` -> `zhipu/GLM-5.1`
@@ -2633,10 +2849,16 @@ v1 先把接口做对：
 
 这套映射的含义是：
 
-1. 便宜快模型只负责 judge / probe / 很轻的观察类任务
+1. 单 live judge 先用响应更稳的 `gpt-5.4-mini`（关闭推理）承担 coarse routing / continuation 判断
 2. 主回答 agent 不等于 judge agent；`direct_main` 可以更强，以保证主回答质量
 3. 中档模型优先承接主回答和常规 delegated work
 4. 贵模型只压在代码实现、审查、复杂深任务上
+
+这里的现实考虑是：
+
+1. 如果当前远端非推理 judge 已经接近数秒延迟，v1 就不该再叠第二层在线 judge
+2. 与其增加 `judge_strong` 热路径，不如先把 live judge 压成单层，并减少重判次数
+3. continuation / slot-filling / active-intent 复用，比增加第二次在线判定更重要
 
 其中 `worker_code` 是逻辑角色家族，当前在 model profile 层直接拆成两档：
 
@@ -2862,7 +3084,7 @@ v1 先把接口做对：
 
 > **v1 默认假设“没有 resident runner”，这不是异常，而是标准起点。**
 
-因此 route/policy/judge 在主路径里不应该先问“runner 在不在”，而应该先做语义判断，再由 backend planner 落地。
+因此 route/policy/judge 在主路径里不应该先问“runner 在不在”，而应该先做语义判断，再由执行层落地。
 
 更具体地说：
 
@@ -2875,7 +3097,7 @@ v1 先把接口做对：
    - 不要求 resident runner 先健康
 3. `delegate.single`
    - 默认直接 materialize native task/flow
-   - backend planner 选择 `openclaw-native + on-demand execution`
+   - execution materializer 默认落到 `openclaw-native + on-demand execution`
    - 不因为没有 resident runner 就回退成主模型硬扛整条长任务
 
 也就是说，**fallback 不是“无 runner 时都改成 direct”**，而是：
@@ -2885,6 +3107,27 @@ v1 先把接口做对：
 3. `delegate.single` 保持 delegate.single，只是落到 native substrate + on-demand worker
 
 真正需要回退的是 execution profile，不是 semantic route。
+
+这里还需要再说清一个很容易混淆的点：
+
+1. `observe` 不是 runner 的别名，也不是 local backend 的别名
+2. `observe` 是一种 semantic route，表示“先看、先查、先探测”
+3. `runner / openclaw-native / on-demand / tmux workbench` 都属于 execution/backend 层
+4. 因此 `observe` 和 `delegate.single` **都可能**在某些执行条件下落到 runner
+5. 反过来，runner 也不天然只服务某一种 route
+
+换句话说：
+
+1. `reply / observe / delegate.single` 回答的是“这次请求本质上是什么”
+2. `backend` 回答的是“这次已经判定好的请求该怎么跑”
+
+所以 v1 不应该再出现这种心智：
+
+1. “是 observe 就一定走 runner”
+2. “是 single delegate 才能走 runner”
+3. “先决定走不走 runner，再反推 semantic route”
+
+这三种都会让系统重新长回旧的 route/backend 缠绕结构。
 
 如果发生 backend 不可用或 admission control 拒绝，则再按下面顺序降级：
 
@@ -2907,12 +3150,270 @@ v1 先把接口做对：
 3. 允许挂 tmux workbench 便于人工观察
 4. 但 tmux 从头到尾都只是 operator workbench，不是 runner 必需机制
 
+如果 v1 live path 默认不实现 runner，那么这里其实不必保留一个很重的独立 `backend planner` 概念。
+
+更准确地说，v1 更需要的是一个：
+
+1. **execution materializer**
+2. 负责把 judge 的 route/role/profile 决策物化成 `native task/flow + on-demand execution`
+3. 同时做 admission / write-scope / queue 这些硬约束
+4. 而不是在多个 backend 之间做复杂在线选择
+
+也就是说：
+
+1. v1 没有 runner 时，`backend planner` 可以收缩成很薄的一层 materializer
+2. 只有 future optional backend 真重新进入 live path 时，才值得把它重新扩成独立 planner
+
+在这个前提下，v1 的执行默认心智更像：
+
+1. judge 决定 `reply / observe / delegate.single`
+2. execution materializer 决定如何物化 native execution
+3. 不做多 backend 竞争
+
+如果 future 重新引入 runner，再谈更完整的 backend planning。
+
+更进一步说，future backend planner 默认应该这样工作：
+
+1. 默认 backend 起点是 `openclaw-native + on-demand execution`
+2. backend planner 只在“明确有收益”时升级到 resident runner
+3. 这个收益必须来自可解释信号，而不是语义猜测
+
+这些可解释信号至少包括：
+
+1. resident runner 当前可用且健康
+2. 当前 queue / admission control 状态允许加速 lane 接单
+3. 任务需要较长执行、持续会话或更低 `first_progress_ms`
+4. 任务需要 operator attach / workbench 可视化观察
+5. 任务 read/write scope 与当前 runner lane 的 workspace policy 相容
+6. 成本与延迟预算支持使用该 acceleration backend
+7. 任务复杂度与质量要求仍落在当前 runner model profile 的能力边界内
+
+如果前期 runner lane 固定使用便宜模型，这里还应再加一条明确口径：
+
+1. `runner` 可以参考任务难度和预期完成时间决定是否升级
+2. 但“预计会跑很久”本身并不足以成为 runner 选择理由
+3. 只有当任务 **既** 有 execution gain，**又** 没有超出 runner 模型能力边界时，runner 才是合格候选
+
+因此 future backend planner 更合理的判断顺序是：
+
+1. 先判断 semantic route
+2. 再判断任务档位：
+   - complexity band
+   - expected duration
+   - checkpoint intensity
+   - quality bar
+3. 再判断 runner eligibility：
+   - runner model 是否够用
+   - queue/health 是否允许
+   - workspace / write scope 是否兼容
+4. 最后才决定是 `native + on-demand` 还是 resident runner
+
+这意味着：
+
+1. 简短任务即使不难，也未必值得为 runner 升级
+2. 中等难度但会跑一段时间、且便宜模型能扛住的任务，才更适合 runner
+3. 高难或高质量要求任务，即使很长，也可能应该继续走更强的非-runner lane
+
+这里还需要把“谁来做这个判断”说清楚，避免后面又把 responsibility 压错地方：
+
+1. **不是主 agent 最终拍板**
+2. **也不是让 `judge_fast` 一个人承担全部 backend 决策**
+3. 在 v1 无 runner 形态下，更合理的是两段式：
+   - `judge_fast` 给出粗粒度任务档位
+   - `execution materializer` 负责物化 native execution
+4. 如果 future backend 重新进入 live path，再升级成三段式：
+   - `judge_fast` 给出粗粒度任务档位
+   - `backend planner` 结合系统信号做最终 backend 判定
+   - `main_reply` / worker 只负责后续执行与交付，不承担 route/backend authority
+
+如果后面发现只靠单 judge 仍有少量高代价边界 case，还应保留一个：
+
+1. **optional `judge_strong` / `route_adjudicator`**
+2. 默认不进入 v1 热路径
+3. v1 更适合作为 shadow / replay / offline adjudication lane
+4. 只在 future 少量不确定、高代价、边界模糊 case 才考虑在线升级调用
+
+它的作用不是替代主 agent，而是做独立仲裁：
+
+1. 不直接执行任务
+2. 不长期持有完整主会话
+3. 不拥有 delivery authority
+4. 只输出更稳的 route/backend recommendation
+
+更合适的触发条件是：
+
+1. `judge_fast.confidence` 过低
+2. `complexity_band` 与 `quality_bar` 落在高代价边界区
+3. `native + on-demand` 与 runner 的 expected gain 接近，且误判代价高
+4. 任务被标记为高风险写入 / 高质量交付
+5. harness 已经识别某类任务在 `judge_fast` 上误判率偏高
+
+因此当前更稳的总口径更像：
+
+1. v1 live path：`judge_fast -> execution materializer -> execution`
+2. v1 shadow/offline：`judge_fast -> optional judge_strong -> replay/adjudication`
+3. future multi-backend path：`judge_fast -> optional judge_strong -> backend planner -> execution`
+4. 主 agent 始终不承担 route/backend authority
+
+具体建议如下：
+
+1. `judge_fast` 负责：
+   - `semantic route`
+   - `role`
+   - `complexity_band`（粗粒度）
+   - `expected_duration_band`（粗粒度）
+   - `quality_bar`
+   - `risk_flags`
+   - `delegate_reason_codes`
+   - `route_confidence`
+2. `execution materializer` 在 v1 负责：
+   - 读取 judge 的 route/role/band 信号
+   - 物化 `native task/flow + on-demand execution`
+   - 做 admission / queue / write-scope 等硬约束
+3. future `backend planner` 才负责：
+   - 读取 judge 的 band 信号
+   - 结合 runner health / queue pressure / workspace compatibility / model eligibility
+   - 决定 `native + on-demand` 还是 runner
+4. `main_reply` 不负责：
+   - 最终 route authority
+   - 最终 runner eligibility 判定
+   - 直接决定 backend
+
+这样设计的原因是：
+
+1. 如果全交给 `judge_fast`，小模型确实可能把复杂度或预期时长看错
+2. 但如果改成让主 agent 来判，又会把主 agent 拉进更重的控制心智
+3. 主 agent 一旦承担 backend/dispatch authority，就更容易吃更多上下文、更多状态、更多 token
+4. 这会直接损伤首响速度、成本控制和上下文洁癖
+
+但这不意味着主 agent 要被蒙在鼓里。
+
+更好的做法不是“劝它听 judge”，而是给它一个明确的 route packet，让它知道：
+
+1. judge 推荐了什么
+2. 推荐理由是什么
+3. 如果它不同意，允许怎样表态
+4. 它不能直接悄悄推翻哪些东西
+
+#### 主 agent 的 override / objection 协议
+
+当前如果主 agent 对 judge 有一定主导权，我建议 v2 起改成：
+
+1. 主 agent **可以 objection**
+2. 主 agent **不能 silent override**
+3. 主 agent **不能直接拿回 route/backend authority**
+
+更具体地说：
+
+1. judge / orchestration 会把这些字段显式传给主 agent：
+   - `route_recommendation`
+   - `role_recommendation`
+   - `complexity_band`
+   - `expected_duration_band`
+   - `delegate_reason_codes`
+   - `suggested_spawn_profile`
+2. 如果主 agent 不同意，它必须显式返回：
+   - `route_objection`
+   - `objection_reason`
+   - `requested_route`
+   - `confidence`
+3. orchestration 收到 objection 后，不能直接放任主 agent 自行改路由，而应：
+   - 在低风险 case 下按 policy 接受
+   - 或送去 `judge_strong` / route adjudicator 仲裁
+
+也就是说，“要求主 agent 说明为什么不听 judge”这件事是有用的，  
+但更好的做法是把它产品化成 **objection protocol**，而不是只靠 prompt 文案约束。
+
+#### 是否要告诉主 agent 为什么委派
+
+我认为 **要**，而且应该结构化地告诉。
+
+这不是为了“说服”它，而是为了让它理解当前系统目标，减少它本能地什么都想自己做：
+
+1. 保持主回答上下文干净
+2. 保持首响更快
+3. 把长任务移出主链
+4. 给子任务匹配更合适、更便宜或更强的模型档位
+5. 让 status/checkpoint/delivery 更稳定
+
+因此 `delegate_reason_codes` 建议至少覆盖：
+
+1. `context_hygiene`
+2. `fast_first_response`
+3. `background_execution`
+4. `cost_tiering`
+5. `specialized_tools`
+6. `quality_isolation`
+
+这样主 agent 拿到的不是一段空泛 prompt，而是“系统为什么推荐委派”的结构化理由。
+
+#### spawn 的复杂度和模型映射
+
+spawn/delegate 出去的任务，应该明确带复杂度档位，而不是只带一句自然语言。
+
+v1 我建议至少固定这几类：
+
+1. `simple`
+2. `normal`
+3. `deep`
+
+再映射到静态 profile：
+
+1. `simple`
+   - 默认只用于轻观察、轻 research、轻变换类任务
+   - 可落到便宜快模型 lane
+2. `normal`
+   - 默认落到 `GLM-5.1`
+3. `deep`
+   - 默认落到 `gpt-5.4`
+
+这里要保守一点：
+
+1. “简单任务 -> MiniMax” 这个映射对 `judge/probe/observe/simple transform` 更合理
+2. 对真正写文件、复杂代码实现的 delegated task，v1 不建议轻易降到 MiniMax
+3. 也就是说，`simple` 不等于“所有 spawn 都能用最便宜模型”，还要受 role 和风险边界约束
+
+所以更稳的口径应该是：
+
+1. `judge_fast` 只负责**粗判**
+2. `execution materializer` 在 v1 负责**物化与硬约束收口**
+3. `judge_strong` 在 v1 只做 shadow/offline 独立仲裁
+4. future 多 backend 时，再引入更完整的 `backend planner`
+5. 主 agent 最多只在后续执行中通过 plan/checkpoint 间接暴露“任务比预想更难/更长”，供 reconcile 或后续优化使用
+
+也就是说，v1 不应该设计成：
+
+1. “主 agent 先读很多上下文，再决定要不要走 runner”
+2. “judge_fast 一次性决定 route + model + backend + duration 精细值”
+
+而应该设计成：
+
+1. 小 judge 给 band
+2. v1 execution materializer 直接物化 native execution
+3. optional `judge_strong` 先不进热路径，只做 shadow/offline
+4. 后续 harness 再根据真实 telemetry 去校正 judge band 和 policy
+
+也就是说，backend planner 的默认心智应该是：
+
+1. 先假设不用 runner 也能正常跑
+2. 再判断“用 runner 是否明显更好”
+3. 而不是先问“这条请求能不能走 runner”
+
+这同样适用于：
+
+1. `observe` 的短探测任务
+2. `delegate.single` 的常规子任务
+
+两者都可以因为 execution gain 走 runner，也都可以因为默认稳态继续走 `native + on-demand`。
+
 因此文档里更准确的口径应该是：
 
 1. **runner 默认关闭**
 2. **开启 runner 是性能优化，不是功能前提**
 3. **tmux 是 runner 的可选观察面，不是 runner 的实现前提**
 4. **native task/flow + on-demand worker 才是默认执行心智**
+5. **v1 live path 不必实现 runner；runner 可后置为 future optional backend**
+6. **v1 live path 默认只保留一个 judge；`judge_strong` 不进入在线热路径**
 
 ### 9.6.5 tmux 的定位
 
