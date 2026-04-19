@@ -124,6 +124,14 @@ const DEPLOY_PACKAGE_NAMES = [
   "octoclaw-status-surface",
 ];
 
+type DeploySourceKind = "packages" | "extensions";
+
+interface DeployPackageSource {
+  name: string;
+  kind: DeploySourceKind;
+  sourceRoot: string;
+}
+
 const DEPLOY_EXTENSION_NAMES = [EXTENSION_NAME];
 const lstatAsync = promisify(lstatSync);
 const readlinkAsync = promisify(readlinkSync);
@@ -365,6 +373,85 @@ async function copyFileIfPresent(sourceFile: string, targetFile: string): Promis
   await copyFile(sourceFile, targetFile);
 }
 
+function packageNameToWorkspaceDir(name: string): string {
+  return name;
+}
+
+export function deploySourceCandidatesForPackage(octoclawRoot: string, packageName: string): Array<{ kind: DeploySourceKind; root: string }> {
+  return [
+    { kind: "packages", root: path.join(octoclawRoot, "packages", packageNameToWorkspaceDir(packageName)) },
+    { kind: "extensions", root: path.join(octoclawRoot, "extensions", packageNameToWorkspaceDir(packageName)) },
+  ];
+}
+
+async function resolveDeployPackageSource(octoclawRoot: string, packageName: string): Promise<DeployPackageSource | null> {
+  const candidateRoots = deploySourceCandidatesForPackage(octoclawRoot, packageName);
+
+  for (const candidate of candidateRoots) {
+    const packageJson = path.join(candidate.root, "package.json");
+    const distDir = path.join(candidate.root, "dist");
+    if ((await pathExists(packageJson)) && (await isDirectory(distDir))) {
+      return {
+        name: packageName,
+        kind: candidate.kind,
+        sourceRoot: candidate.root,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function deployPackageDirectory(sourceRoot: string, targetDir: string): Promise<void> {
+  const distDir = path.join(sourceRoot, "dist");
+  const packageJson = path.join(sourceRoot, "package.json");
+
+  await rm(targetDir, { recursive: true, force: true });
+  await mkdir(targetDir, { recursive: true });
+  await cp(distDir, path.join(targetDir, "dist"), { recursive: true, force: true });
+  await copyFileIfPresent(packageJson, path.join(targetDir, "package.json"));
+}
+
+async function validateDeployedPackageGraph(openclawHome: string): Promise<void> {
+  for (const packageName of DEPLOY_PACKAGE_NAMES) {
+    const deployedRoot = path.join(openclawHome, "packages", packageName);
+    const packageJsonPath = path.join(deployedRoot, "package.json");
+    const distDir = path.join(deployedRoot, "dist");
+
+    if (!(await pathExists(packageJsonPath))) {
+      throw new Error(`Deployed package missing package.json: ${packageJsonPath}`);
+    }
+    if (!(await isDirectory(distDir))) {
+      throw new Error(`Deployed package missing dist directory: ${distDir}`);
+    }
+  }
+}
+
+async function validateDeployedExtensionLoad(openclawHome: string): Promise<void> {
+  const extensionRoot = path.join(openclawHome, "extensions", EXTENSION_NAME);
+  const pluginManifestPath = path.join(extensionRoot, "openclaw.plugin.json");
+  const pluginManifest = await readJsonFile<{ main?: string; extensions?: string[] }>(pluginManifestPath);
+  if (!pluginManifest) {
+    throw new Error(`Unable to read deployed plugin manifest: ${pluginManifestPath}`);
+  }
+
+  const mainEntry = pluginManifest.main || pluginManifest.extensions?.[0];
+  if (!mainEntry) {
+    throw new Error(`Deployed plugin manifest does not declare a main entry: ${pluginManifestPath}`);
+  }
+
+  const entryPath = path.join(extensionRoot, mainEntry.replace(/^\.\//, ""));
+  if (!(await pathExists(entryPath))) {
+    throw new Error(`Deployed plugin entrypoint missing: ${entryPath}`);
+  }
+
+  try {
+    await import(new URL(`file://${entryPath}`).href);
+  } catch (error) {
+    throw new Error(`Deployed plugin entrypoint failed to load: ${entryPath}\n${String(error)}`);
+  }
+}
+
 async function buildMonorepo(octoclawRoot: string): Promise<void> {
   const result = await runCommand("pnpm", ["-r", "run", "build"], { cwd: octoclawRoot, stdio: "inherit" });
   if (result.exitCode !== 0) {
@@ -389,29 +476,17 @@ export async function deployExtensions(octoclawRoot: string, openclawHome: strin
 }
 
 export async function deployPackages(octoclawRoot: string, openclawHome: string): Promise<void> {
-  const packagesRoot = path.join(octoclawRoot, "packages");
   const targetPackagesRoot = path.join(openclawHome, "packages");
   await ensureDirectory(targetPackagesRoot);
 
-  const entries = await readdir(packagesRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
+  for (const packageName of DEPLOY_PACKAGE_NAMES) {
+    const source = await resolveDeployPackageSource(octoclawRoot, packageName);
+    if (!source) {
+      throw new Error(`Deploy package source not found or not built: ${packageName}`);
     }
 
-    const packageRoot = path.join(packagesRoot, entry.name);
-    const distDir = path.join(packageRoot, "dist");
-    const packageJson = path.join(packageRoot, "package.json");
-
-    if (!(await isDirectory(distDir)) || !(await pathExists(packageJson))) {
-      continue;
-    }
-
-    const targetDir = path.join(targetPackagesRoot, entry.name);
-    await rm(targetDir, { recursive: true, force: true });
-    await mkdir(targetDir, { recursive: true });
-    await cp(distDir, path.join(targetDir, "dist"), { recursive: true, force: true });
-    await copyFileIfPresent(packageJson, path.join(targetDir, "package.json"));
+    const targetDir = path.join(targetPackagesRoot, packageName);
+    await deployPackageDirectory(source.sourceRoot, targetDir);
   }
 }
 
@@ -536,13 +611,21 @@ async function restartGateway(openclawHome: string): Promise<void> {
   }
 
   const logContent = await readFile(gatewayLogPath, "utf8");
-  const recentLines = logContent.trimEnd().split(/\r?\n/).slice(-5).join("\n");
+  const recentLines = logContent.trimEnd().split(/\r?\n/).slice(-20).join("\n");
+  const errorLogPath = path.join(openclawHome, "logs", "gateway.err.log");
+  const errorContent = (await pathExists(errorLogPath)) ? await readFile(errorLogPath, "utf8") : "";
+  const recentErrorLines = errorContent.trimEnd().split(/\r?\n/).slice(-50).join("\n");
+
+  if (recentErrorLines.includes(`${EXTENSION_NAME} failed to load`)) {
+    throw new Error(`Gateway restarted but ${EXTENSION_NAME} failed to load. Check ${errorLogPath}`);
+  }
+
   if (recentLines.includes(EXTENSION_NAME)) {
     stdout.write(`✅ ${EXTENSION_NAME} plugin loaded successfully\n`);
     return;
   }
 
-  stdout.write(`⚠️  Check gateway log: ${gatewayLogPath}\n`);
+  throw new Error(`Gateway restarted but ${EXTENSION_NAME} did not appear in recent log lines. Check ${gatewayLogPath}`);
 }
 
 export async function deploy(options: DeployOptions): Promise<number> {
@@ -557,6 +640,8 @@ export async function deploy(options: DeployOptions): Promise<number> {
   await deployPackages(paths.octoclawRoot, paths.openclawHome);
   await deployExtensions(paths.octoclawRoot, paths.openclawHome);
   await setupDeploySymlinks(paths.openclawHome);
+  await validateDeployedPackageGraph(paths.openclawHome);
+  await validateDeployedExtensionLoad(paths.openclawHome);
   await cleanupOldBackups(paths.openclawHome, 3);
 
   if (options.restart) {
@@ -605,22 +690,17 @@ async function reconcileExtension(octoclawRoot: string, openclawHome: string): P
 }
 
 async function reconcilePackages(octoclawRoot: string, openclawHome: string): Promise<void> {
-  const sourcePackagesRoot = path.join(octoclawRoot, "packages");
-  const sourceEntries = await readdir(sourcePackagesRoot, { withFileTypes: true });
   let needsDeploy = false;
 
-  for (const entry of sourceEntries) {
-    if (!entry.isDirectory()) {
-      continue;
+  for (const packageName of DEPLOY_PACKAGE_NAMES) {
+    const source = await resolveDeployPackageSource(octoclawRoot, packageName);
+    if (!source) {
+      throw new Error(`Reconcile failed, deploy package source missing: ${packageName}`);
     }
-    const sourcePackageRoot = path.join(sourcePackagesRoot, entry.name);
-    const sourceDist = path.join(sourcePackageRoot, "dist");
-    if (!(await isDirectory(sourceDist))) {
-      continue;
-    }
-    const targetDir = path.join(openclawHome, "packages", entry.name);
+    const targetDir = path.join(openclawHome, "packages", packageName);
     const targetPackageJson = path.join(targetDir, "package.json");
-    if (!(await isDirectory(targetDir)) || !(await pathExists(targetPackageJson))) {
+    const targetDist = path.join(targetDir, "dist");
+    if (!(await isDirectory(targetDir)) || !(await isDirectory(targetDist)) || !(await pathExists(targetPackageJson))) {
       needsDeploy = true;
       break;
     }
@@ -645,6 +725,9 @@ async function verifyRequiredFiles(paths: ResolvedPaths): Promise<void> {
       throw new Error(`Verification failed, required file missing: ${checkPath}`);
     }
   }
+
+  await validateDeployedPackageGraph(paths.openclawHome);
+  await validateDeployedExtensionLoad(paths.openclawHome);
 }
 
 export async function install(options: InstallOptions): Promise<number> {
