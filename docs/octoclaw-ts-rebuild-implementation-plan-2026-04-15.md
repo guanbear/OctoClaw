@@ -359,9 +359,81 @@ tools/
 
 交付：
 
-1. `extensions/octoclaw-fast-reply/src/ack`
-2. `extensions/octoclaw-fast-reply/src/direct`
-3. `extensions/octoclaw-fast-reply/src/instrumentation`
+1. `extensions/octoclaw-runtime/src/ack`
+2. `extensions/octoclaw-runtime/src/im`
+3. `extensions/octoclaw-runtime/src/extension-entry.ts`
+
+### ACK 系统架构（2026-04-19 更新）
+
+ACK 系统包含两条独立路径，按路由模式分工：
+
+#### 路径 1：Latency ACK（`before_prompt_build` / `before_tool_call`）
+
+- **触发条件**：agent 正在用工具处理（`toolName` 非 `octoclaw_*`），且 policy decision 中 `latency_ack.required=true`
+- **作用**：当 agent 在用工具但还没输出文字时，发一条"收到"级别的 ACK
+- **线程回复**：从 prompt text 中 regex 提取 Slack message_id，通过 `--reply-to` 回到用户消息线程
+- **去重**：成功后立即 `cancelAckGuard`，取消同 session 的 timer ACK
+
+#### 路径 2：Timer ACK（仅 direct/reply 模式）
+
+- **触发条件**：只在 `routePhase=reply`（direct 模式）时启动，delegated/observe/pre_route 不触发
+- **作用**：监控工具调用时长，超时后按递进档位提醒用户
+- **不抢首回复**：timer 不负责"还没回复"的提示，那是 latency ACK 的职责
+
+**Timer 档位（翻倍递进）：**
+
+| 档位 | 延迟 | Stage | 话术方向 |
+|------|------|-------|----------|
+| tier0 | `firstTierMs`（默认 60s） | `tool_still_working` | 安慰：还在处理中 |
+| tier1 | `firstTierMs × 2`（120s） | `tool_ask_continue` | 询问：要继续等吗？ |
+| tier2 | `firstTierMs × 4`（240s） | `tool_suggest_stop` | 建议：建议停掉 |
+
+- 每档独立触发，不互斥（tier0 发完不会取消 tier1/tier2）
+- `firstTierMs` 和 `tierCount` 可通过 `openclaw.json` 的 `plugins.entries.octoclaw-runtime.config` 配置
+
+#### 去重机制
+
+- `buildAckKey` = `ack:{threadId}:{anchorId}:{routePhase}:{messageTurnId}`
+- Timer ACK 和 Latency ACK 共享同一个 `turnTs`（`ensureAckTurnTimestamp`），确保 `messageTurnId` 一致
+- `checkAndSet` CAS 保证同一 key 只发一次
+
+#### 线程回复（Slack）
+
+- `inboundMessageTs` 从 prompt text regex `/"message_id"\s*:\s*"(\d+\.\d+)"/` 提取（hook context 不携带 ts）
+- 通过 `SlackAdapter.send({ replyToMessageId })` → `openclaw message send --reply-to`
+- 有 fallback：`--reply-to` 失败时退回无线程发送
+
+#### 模板池
+
+每种 stage 有 3-5 条随机话术：
+
+| Stage | 示例话术 |
+|-------|----------|
+| `ReplySoftAck` | 收到想一下 / 看到了我回你 / 好的我看看 |
+| `ToolStillWorking` | 还在处理中快了 / 还在跑别急 / 在干活了马上好 |
+| `ToolAskContinue` | 已经处理挺久了要继续等吗 / 跑的时间有点长了要不要我先停了 |
+| `ToolSuggestStop` | 可能卡住了建议我先停掉这个任务 / 处理太久了大概率遇到问题 |
+| `PreRouteSoftAck` | 收到看下怎么处理 / 稍等我瞅瞅 |
+| `DelegateStarted` | 收到开始处理 / 在跑了 |
+| `ObserveStarted` | 正在查看 / 看下情况 |
+| `ProgressNudge` | 还在处理当前xxx / 还没好再等等 |
+
+#### 配置
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "octoclaw-runtime": {
+        "config": {
+          "ackTimerFirstTierMs": 60000,
+          "ackTimerTierCount": 3
+        }
+      }
+    }
+  }
+}
+```
 
 必须实现：
 
@@ -389,6 +461,9 @@ tools/
 8. 主模型能抢首响时优先让主模型自己回；否则 runtime 能稳定接管
 9. judge/route 慢时也不会让用户长时间静默
 10. 多个 hook/middleware 重复触发同一 ACK 意图时，最终只会有一次真正发送
+11. Timer ACK 只在 direct 模式触发，不与 latency ACK 重复发送
+12. ACK 回复在 Slack 线程内（`--reply-to`），不到顶级
+13. Timer 档位翻倍递进，首档超时可配置
 
 依赖：WS0、WS1、WS2
 
