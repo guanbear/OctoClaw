@@ -372,6 +372,8 @@ tools/
    - `expected_duration_band`
    - `quality_bar`
    - `risk_flags`
+   - `delegate_reason_codes`
+   - `route_confidence`
 13. `backend planner` 必须基于 judge band + runtime signals 做最终 backend 决策，而不是直接信任主 agent 自报
 14. optional `judge_strong` output schema 复用 `judge_fast` 主字段，并额外包含：
    - `adjudication_reason`
@@ -390,6 +392,20 @@ tools/
    - `pending_slots`
    - `anchor_or_task_binding`
 17. judge implementation 禁止退化成“只看最后一句”的分类器；continuation case 必须通过 context packet 正确识别
+18. route packet 需显式传给主 agent：
+   - `route_recommendation`
+   - `role_recommendation`
+   - `complexity_band`
+   - `expected_duration_band`
+   - `delegate_reason_codes`
+   - `suggested_spawn_profile`
+19. main agent 如不同意 judge，必须走 objection protocol：
+   - `route_objection`
+   - `objection_reason`
+   - `requested_route`
+   - `confidence`
+20. orchestration 不允许接受 silent override；有 objection 时应按 policy 接受或送 `judge_strong`
+21. delegated task 必须带 `complexity_band` / `spawn_profile`
 
 验收标准：
 
@@ -405,6 +421,7 @@ tools/
 10. 不出现“为了判 runner 再把主 agent 拉进更重上下文和控制逻辑”这类架构回退
 11. `judge_strong` 不进入常规热路径，只有边界 case 才触发
 12. continuation/slot-filling 场景下，judge 不会因为只看最后一句而误把同一任务判成新请求
+13. 主 agent 不会在没有 objection record 的情况下悄悄改掉 judge 推荐 route
 
 依赖：WS0、WS1、WS2、WS3
 

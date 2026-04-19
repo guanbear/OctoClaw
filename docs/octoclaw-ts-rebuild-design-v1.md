@@ -3075,6 +3075,8 @@ v1 先把接口做对：
    - `expected_duration_band`（粗粒度）
    - `quality_bar`
    - `risk_flags`
+   - `delegate_reason_codes`
+   - `route_confidence`
 2. `backend planner` 负责：
    - 读取 judge 的 band 信号
    - 结合 runner health / queue pressure / workspace compatibility / model eligibility
@@ -3090,6 +3092,93 @@ v1 先把接口做对：
 2. 但如果改成让主 agent 来判，又会把主 agent 拉进更重的控制心智
 3. 主 agent 一旦承担 backend/dispatch authority，就更容易吃更多上下文、更多状态、更多 token
 4. 这会直接损伤首响速度、成本控制和上下文洁癖
+
+但这不意味着主 agent 要被蒙在鼓里。
+
+更好的做法不是“劝它听 judge”，而是给它一个明确的 route packet，让它知道：
+
+1. judge 推荐了什么
+2. 推荐理由是什么
+3. 如果它不同意，允许怎样表态
+4. 它不能直接悄悄推翻哪些东西
+
+#### 主 agent 的 override / objection 协议
+
+当前如果主 agent 对 judge 有一定主导权，我建议 v2 起改成：
+
+1. 主 agent **可以 objection**
+2. 主 agent **不能 silent override**
+3. 主 agent **不能直接拿回 route/backend authority**
+
+更具体地说：
+
+1. judge / orchestration 会把这些字段显式传给主 agent：
+   - `route_recommendation`
+   - `role_recommendation`
+   - `complexity_band`
+   - `expected_duration_band`
+   - `delegate_reason_codes`
+   - `suggested_spawn_profile`
+2. 如果主 agent 不同意，它必须显式返回：
+   - `route_objection`
+   - `objection_reason`
+   - `requested_route`
+   - `confidence`
+3. orchestration 收到 objection 后，不能直接放任主 agent 自行改路由，而应：
+   - 在低风险 case 下按 policy 接受
+   - 或送去 `judge_strong` / route adjudicator 仲裁
+
+也就是说，“要求主 agent 说明为什么不听 judge”这件事是有用的，  
+但更好的做法是把它产品化成 **objection protocol**，而不是只靠 prompt 文案约束。
+
+#### 是否要告诉主 agent 为什么委派
+
+我认为 **要**，而且应该结构化地告诉。
+
+这不是为了“说服”它，而是为了让它理解当前系统目标，减少它本能地什么都想自己做：
+
+1. 保持主回答上下文干净
+2. 保持首响更快
+3. 把长任务移出主链
+4. 给子任务匹配更合适、更便宜或更强的模型档位
+5. 让 status/checkpoint/delivery 更稳定
+
+因此 `delegate_reason_codes` 建议至少覆盖：
+
+1. `context_hygiene`
+2. `fast_first_response`
+3. `background_execution`
+4. `cost_tiering`
+5. `specialized_tools`
+6. `quality_isolation`
+
+这样主 agent 拿到的不是一段空泛 prompt，而是“系统为什么推荐委派”的结构化理由。
+
+#### spawn 的复杂度和模型映射
+
+spawn/delegate 出去的任务，应该明确带复杂度档位，而不是只带一句自然语言。
+
+v1 我建议至少固定这几类：
+
+1. `simple`
+2. `normal`
+3. `deep`
+
+再映射到静态 profile：
+
+1. `simple`
+   - 默认只用于轻观察、轻 research、轻变换类任务
+   - 可落到便宜快模型 lane
+2. `normal`
+   - 默认落到 `GLM-5.1`
+3. `deep`
+   - 默认落到 `gpt-5.4`
+
+这里要保守一点：
+
+1. “简单任务 -> MiniMax” 这个映射对 `judge/probe/observe/simple transform` 更合理
+2. 对真正写文件、复杂代码实现的 delegated task，v1 不建议轻易降到 MiniMax
+3. 也就是说，`simple` 不等于“所有 spawn 都能用最便宜模型”，还要受 role 和风险边界约束
 
 所以更稳的口径应该是：
 
