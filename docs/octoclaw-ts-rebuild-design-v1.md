@@ -2568,6 +2568,19 @@ v2 应该采用：
 3. 两者都不是“最后一句分类器”
 4. 两者也都不是“全量 transcript 推理器”
 
+另外，单 judge 方案下还应明确：
+
+1. 不是每个 turn 都应该重新 judge
+2. continuation / slot-filling / active task continuation 场景，应尽量复用已有 `active_intent + pending_slots + binding`
+3. 只有出现真正的新意图、新 anchor、冲突状态或生命周期切换时，才值得重新触发完整 judge
+
+这样做的核心目的不是“省一次模型调用”而已，而是：
+
+1. 降低 live judge 总延迟
+2. 降低误判率
+3. 避免把补槽位对话反复当新任务分类
+4. 更符合“快响应 + 低成本 + 稳定 continuation”目标
+
 这也意味着：
 
 1. 系统应该有 durable memory
@@ -2681,7 +2694,7 @@ v1 先把接口做对：
 
 基于当前讨论，v1 先固定成这套：
 
-1. `judge_fast` -> `minimax-portal/MiniMax-M2.7`
+1. `judge_fast` -> `omniroute/cx/gpt-5.4-mini`（关闭推理）
 2. `observer_probe` -> `minimax-portal/MiniMax-M2.7`
 3. `direct_main` -> `zhipu/GLM-5.1`
 4. `worker_research` -> `zhipu/GLM-5.1`
@@ -2693,10 +2706,16 @@ v1 先把接口做对：
 
 这套映射的含义是：
 
-1. 便宜快模型只负责 judge / probe / 很轻的观察类任务
+1. 单 live judge 先用响应更稳的 `gpt-5.4-mini`（关闭推理）承担 coarse routing / continuation 判断
 2. 主回答 agent 不等于 judge agent；`direct_main` 可以更强，以保证主回答质量
 3. 中档模型优先承接主回答和常规 delegated work
 4. 贵模型只压在代码实现、审查、复杂深任务上
+
+这里的现实考虑是：
+
+1. 如果当前远端非推理 judge 已经接近数秒延迟，v1 就不该再叠第二层在线 judge
+2. 与其增加 `judge_strong` 热路径，不如先把 live judge 压成单层，并减少重判次数
+3. continuation / slot-filling / active-intent 复用，比增加第二次在线判定更重要
 
 其中 `worker_code` 是逻辑角色家族，当前在 model profile 层直接拆成两档：
 
@@ -2922,7 +2941,7 @@ v1 先把接口做对：
 
 > **v1 默认假设“没有 resident runner”，这不是异常，而是标准起点。**
 
-因此 route/policy/judge 在主路径里不应该先问“runner 在不在”，而应该先做语义判断，再由 backend planner 落地。
+因此 route/policy/judge 在主路径里不应该先问“runner 在不在”，而应该先做语义判断，再由执行层落地。
 
 更具体地说：
 
@@ -2935,7 +2954,7 @@ v1 先把接口做对：
    - 不要求 resident runner 先健康
 3. `delegate.single`
    - 默认直接 materialize native task/flow
-   - backend planner 选择 `openclaw-native + on-demand execution`
+   - execution materializer 默认落到 `openclaw-native + on-demand execution`
    - 不因为没有 resident runner 就回退成主模型硬扛整条长任务
 
 也就是说，**fallback 不是“无 runner 时都改成 direct”**，而是：
@@ -2988,7 +3007,29 @@ v1 先把接口做对：
 3. 允许挂 tmux workbench 便于人工观察
 4. 但 tmux 从头到尾都只是 operator workbench，不是 runner 必需机制
 
-更进一步说，backend planner 默认应该这样工作：
+如果 v1 live path 默认不实现 runner，那么这里其实不必保留一个很重的独立 `backend planner` 概念。
+
+更准确地说，v1 更需要的是一个：
+
+1. **execution materializer**
+2. 负责把 judge 的 route/role/profile 决策物化成 `native task/flow + on-demand execution`
+3. 同时做 admission / write-scope / queue 这些硬约束
+4. 而不是在多个 backend 之间做复杂在线选择
+
+也就是说：
+
+1. v1 没有 runner 时，`backend planner` 可以收缩成很薄的一层 materializer
+2. 只有 future optional backend 真重新进入 live path 时，才值得把它重新扩成独立 planner
+
+在这个前提下，v1 的执行默认心智更像：
+
+1. judge 决定 `reply / observe / delegate.single`
+2. execution materializer 决定如何物化 native execution
+3. 不做多 backend 竞争
+
+如果 future 重新引入 runner，再谈更完整的 backend planning。
+
+更进一步说，future backend planner 默认应该这样工作：
 
 1. 默认 backend 起点是 `openclaw-native + on-demand execution`
 2. backend planner 只在“明确有收益”时升级到 resident runner
@@ -3010,7 +3051,7 @@ v1 先把接口做对：
 2. 但“预计会跑很久”本身并不足以成为 runner 选择理由
 3. 只有当任务 **既** 有 execution gain，**又** 没有超出 runner 模型能力边界时，runner 才是合格候选
 
-因此 backend planner 更合理的判断顺序是：
+因此 future backend planner 更合理的判断顺序是：
 
 1. 先判断 semantic route
 2. 再判断任务档位：
@@ -3034,16 +3075,20 @@ v1 先把接口做对：
 
 1. **不是主 agent 最终拍板**
 2. **也不是让 `judge_fast` 一个人承担全部 backend 决策**
-3. 更合理的是三段式：
+3. 在 v1 无 runner 形态下，更合理的是两段式：
    - `judge_fast` 给出粗粒度任务档位
-   - `backend planner` 结合系统信号做最终 runner/native 判定
+   - `execution materializer` 负责物化 native execution
+4. 如果 future backend 重新进入 live path，再升级成三段式：
+   - `judge_fast` 给出粗粒度任务档位
+   - `backend planner` 结合系统信号做最终 backend 判定
    - `main_reply` / worker 只负责后续执行与交付，不承担 route/backend authority
 
-如果后面发现只靠 `judge_fast + backend planner` 仍有少量高代价边界 case，还应保留一个：
+如果后面发现只靠单 judge 仍有少量高代价边界 case，还应保留一个：
 
 1. **optional `judge_strong` / `route_adjudicator`**
-2. 默认不进入热路径
-3. 只在少量不确定、高代价、边界模糊 case 才升级调用
+2. 默认不进入 v1 热路径
+3. v1 更适合作为 shadow / replay / offline adjudication lane
+4. 只在 future 少量不确定、高代价、边界模糊 case 才考虑在线升级调用
 
 它的作用不是替代主 agent，而是做独立仲裁：
 
@@ -3060,11 +3105,12 @@ v1 先把接口做对：
 4. 任务被标记为高风险写入 / 高质量交付
 5. harness 已经识别某类任务在 `judge_fast` 上误判率偏高
 
-因此 v1/v2 的总口径更像：
+因此当前更稳的总口径更像：
 
-1. 常态：`judge_fast -> backend planner -> execution`
-2. 少量边界 case：`judge_fast -> optional judge_strong -> backend planner -> execution`
-3. 主 agent 始终不承担 route/backend authority
+1. v1 live path：`judge_fast -> execution materializer -> execution`
+2. v1 shadow/offline：`judge_fast -> optional judge_strong -> replay/adjudication`
+3. future multi-backend path：`judge_fast -> optional judge_strong -> backend planner -> execution`
+4. 主 agent 始终不承担 route/backend authority
 
 具体建议如下：
 
@@ -3077,11 +3123,15 @@ v1 先把接口做对：
    - `risk_flags`
    - `delegate_reason_codes`
    - `route_confidence`
-2. `backend planner` 负责：
+2. `execution materializer` 在 v1 负责：
+   - 读取 judge 的 route/role/band 信号
+   - 物化 `native task/flow + on-demand execution`
+   - 做 admission / queue / write-scope 等硬约束
+3. future `backend planner` 才负责：
    - 读取 judge 的 band 信号
    - 结合 runner health / queue pressure / workspace compatibility / model eligibility
    - 决定 `native + on-demand` 还是 runner
-3. `main_reply` 不负责：
+4. `main_reply` 不负责：
    - 最终 route authority
    - 最终 runner eligibility 判定
    - 直接决定 backend
@@ -3183,9 +3233,10 @@ v1 我建议至少固定这几类：
 所以更稳的口径应该是：
 
 1. `judge_fast` 只负责**粗判**
-2. `backend planner` 负责**收口**
-3. `judge_strong` 只在边界 case 做独立仲裁
-4. 主 agent 最多只在后续执行中通过 plan/checkpoint 间接暴露“任务比预想更难/更长”，供 reconcile 或后续优化使用
+2. `execution materializer` 在 v1 负责**物化与硬约束收口**
+3. `judge_strong` 在 v1 只做 shadow/offline 独立仲裁
+4. future 多 backend 时，再引入更完整的 `backend planner`
+5. 主 agent 最多只在后续执行中通过 plan/checkpoint 间接暴露“任务比预想更难/更长”，供 reconcile 或后续优化使用
 
 也就是说，v1 不应该设计成：
 
@@ -3195,9 +3246,9 @@ v1 我建议至少固定这几类：
 而应该设计成：
 
 1. 小 judge 给 band
-2. optional `judge_strong` 只在不确定 case 才升级
-3. 代码 planner 读系统状态做最终 backend 判定
-4. 后续 harness 再根据真实 telemetry 去校正 judge band 和 planner policy
+2. v1 execution materializer 直接物化 native execution
+3. optional `judge_strong` 先不进热路径，只做 shadow/offline
+4. 后续 harness 再根据真实 telemetry 去校正 judge band 和 policy
 
 也就是说，backend planner 的默认心智应该是：
 
@@ -3219,6 +3270,7 @@ v1 我建议至少固定这几类：
 3. **tmux 是 runner 的可选观察面，不是 runner 的实现前提**
 4. **native task/flow + on-demand worker 才是默认执行心智**
 5. **v1 live path 不必实现 runner；runner 可后置为 future optional backend**
+6. **v1 live path 默认只保留一个 judge；`judge_strong` 不进入在线热路径**
 
 ### 9.6.5 tmux 的定位
 

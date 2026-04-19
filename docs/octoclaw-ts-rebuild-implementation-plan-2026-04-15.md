@@ -179,16 +179,14 @@ tools/
 8. compound 只保留 future schema slot，不进入 Phase 1 route authority
 9. future coordination_mode / advisor_policy 预留接口
 10. resident runner absent 视为默认正常态，不作为 route 降级理由
-11. backend planner 只降 execution profile，不篡改 semantic route
+11. v1 默认由 `execution materializer` 物化 `native task/flow + on-demand execution`
 12. hard-boundary gate 只读取结构化硬信号，不读取自然语言正文做关键词判断
-13. backend planner 默认从 `openclaw-native + on-demand execution` 出发，而不是从 runner 出发
-14. `observe` 与 `delegate.single` 都允许在明确 execution gain 成立时升级到 runner
-15. runner 选择必须由可解释 policy 信号驱动，不得由语义关键词或 prompt 猜测驱动
-16. expected duration 可作为 runner 升级信号之一，但不能脱离 complexity / quality bar / runner model eligibility 单独使用
-17. `judge_fast` 只输出粗粒度 band 与 risk signals，不直接拥有最终 backend authority
-18. `main_reply` / worker 不承担 route/backend authority，避免主 agent 控制面过重
-19. `judge_strong` / `route_adjudicator` 只作为 optional uncertainty escalation lane，不进入默认热路径
-20. v1 live path 允许完全不实现 runner；runner 可后置为 future optional backend
+13. `judge_fast` 只输出粗粒度 band 与 risk signals，不直接拥有最终 backend authority
+14. `main_reply` / worker 不承担 route/backend authority，避免主 agent 控制面过重
+15. v1 live path 默认只保留一个 judge
+16. `judge_strong` / `route_adjudicator` 只作为 optional shadow/offline lane，不进入默认热路径
+17. v1 live path 允许完全不实现 runner；runner 可后置为 future optional backend
+18. continuation / slot-filling / active-task continuation 场景默认不重复触发完整 judge，优先复用 `active_intent + pending_slots + binding`
 
 明确禁止：
 
@@ -198,6 +196,7 @@ tools/
 4. 先判“走不走 runner”，再反推 semantic route
 5. 让主 agent 读取更多上下文后再充当 runner dispatch judge
 6. 把 `judge_strong` 变成每条请求都走的第二层默认模型调用
+7. 在 continuation/slot-filling 场景里对每个 turn 都重新做完整 judge
 
 验收标准：
 
@@ -350,22 +349,7 @@ tools/
 7. conflict policy hook
 8. future callable role registry
 9. future advisor consult adapter
-10. backend planner explainability fields:
-   - `backend_candidate`
-   - `backend_reason`
-   - `expected_gain`
-   - `fallback_path`
-11. runner upgrade policy inputs:
-   - runner health
-   - queue pressure
-   - expected first-progress gain
-   - expected duration band
-   - complexity band
-   - quality bar
-   - runner model eligibility
-   - workspace compatibility
-   - operator attach requirement
-12. `judge_fast` output schema 至少包含：
+10. `judge_fast` output schema 至少包含：
    - `semantic_route`
    - `role`
    - `complexity_band`
@@ -374,38 +358,40 @@ tools/
    - `risk_flags`
    - `delegate_reason_codes`
    - `route_confidence`
-13. `backend planner` 必须基于 judge band + runtime signals 做最终 backend 决策，而不是直接信任主 agent 自报
-14. optional `judge_strong` output schema 复用 `judge_fast` 主字段，并额外包含：
+11. v1 `execution materializer` 至少处理：
+   - task/flow materialization
+   - admission / queue gate
+   - write-scope gate
+   - spawn profile binding
+   - model profile binding
+12. optional `judge_strong` output schema 复用 `judge_fast` 主字段，并额外包含：
    - `adjudication_reason`
    - `override_recommendation`
    - `confidence_delta`
-15. `judge_strong` 触发条件至少包括：
-   - low confidence
-   - high-cost boundary case
-   - runner/native expected gain 接近
-   - high-risk write or high-quality delivery
-16. judge input context packet 至少包含：
+13. `judge_strong` 在 v1 默认只用于 shadow/replay/offline，不承担 live latency 关键路径
+14. judge input context packet 至少包含：
    - `current_turn`
    - `thread_summary`
    - `active_intent`
    - `last_agent_act`
    - `pending_slots`
    - `anchor_or_task_binding`
-17. judge implementation 禁止退化成“只看最后一句”的分类器；continuation case 必须通过 context packet 正确识别
-18. route packet 需显式传给主 agent：
+15. judge implementation 禁止退化成“只看最后一句”的分类器；continuation case 必须通过 context packet 正确识别
+16. route packet 需显式传给主 agent：
    - `route_recommendation`
    - `role_recommendation`
    - `complexity_band`
    - `expected_duration_band`
    - `delegate_reason_codes`
    - `suggested_spawn_profile`
-19. main agent 如不同意 judge，必须走 objection protocol：
+17. main agent 如不同意 judge，必须走 objection protocol：
    - `route_objection`
    - `objection_reason`
    - `requested_route`
    - `confidence`
-20. orchestration 不允许接受 silent override；有 objection 时应按 policy 接受或送 `judge_strong`
-21. delegated task 必须带 `complexity_band` / `spawn_profile`
+18. orchestration 不允许接受 silent override；有 objection 时应按 policy 接受或记录到 shadow adjudication
+19. delegated task 必须带 `complexity_band` / `spawn_profile`
+20. v1 live judge 当前固定为 `omniroute/cx/gpt-5.4-mini`（关闭推理）
 
 验收标准：
 
@@ -419,9 +405,10 @@ tools/
 8. backend selection 决策可解释，不出现“因为 route 像 runner 任务所以走 runner”这类黑箱逻辑
 9. 不出现“因为任务长，所以默认走便宜 runner”这类单因子误判
 10. 不出现“为了判 runner 再把主 agent 拉进更重上下文和控制逻辑”这类架构回退
-11. `judge_strong` 不进入常规热路径，只有边界 case 才触发
+11. `judge_strong` 不进入常规热路径，只保留 shadow/offline 角色
 12. continuation/slot-filling 场景下，judge 不会因为只看最后一句而误把同一任务判成新请求
-13. 主 agent 不会在没有 objection record 的情况下悄悄改掉 judge 推荐 route
+13. continuation/slot-filling/active-task continuation 场景不会对每个 turn 都重做完整 judge
+14. 主 agent 不会在没有 objection record 的情况下悄悄改掉 judge 推荐 route
 
 依赖：WS0、WS1、WS2、WS3
 
