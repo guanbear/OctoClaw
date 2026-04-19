@@ -1,10 +1,8 @@
 export type AckRoutePhase = "delegate" | "observe" | "reply" | "pre_route" | "unknown";
 
 export interface AckTimingConfig {
-  tier0DelayMs: number;
-  tier1DeadlineMs: number;
-  tier2DeadlineMs: number;
-  tier3DeadlineMs: number;
+  firstTierMs: number;
+  tierCount: number;
 }
 
 export interface AckTimerState {
@@ -39,10 +37,8 @@ export interface CreateAckTimersParams {
 }
 
 export const DEFAULT_ACK_TIMING_CONFIG: AckTimingConfig = {
-  tier0DelayMs: 500,
-  tier1DeadlineMs: 3000,
-  tier2DeadlineMs: 7000,
-  tier3DeadlineMs: 11000,
+  firstTierMs: 60_000,
+  tierCount: 3,
 };
 
 const ackTimersByStateKey = new Map<string, AckTimerState>();
@@ -54,10 +50,8 @@ function normalizeKey(value: string): string {
 
 function resolveConfig(config?: Partial<AckTimingConfig>): AckTimingConfig {
   return {
-    tier0DelayMs: config?.tier0DelayMs ?? DEFAULT_ACK_TIMING_CONFIG.tier0DelayMs,
-    tier1DeadlineMs: config?.tier1DeadlineMs ?? DEFAULT_ACK_TIMING_CONFIG.tier1DeadlineMs,
-    tier2DeadlineMs: config?.tier2DeadlineMs ?? DEFAULT_ACK_TIMING_CONFIG.tier2DeadlineMs,
-    tier3DeadlineMs: config?.tier3DeadlineMs ?? DEFAULT_ACK_TIMING_CONFIG.tier3DeadlineMs,
+    firstTierMs: config?.firstTierMs ?? DEFAULT_ACK_TIMING_CONFIG.firstTierMs,
+    tierCount: config?.tierCount ?? DEFAULT_ACK_TIMING_CONFIG.tierCount,
   };
 }
 
@@ -106,43 +100,17 @@ function cancelState(state: AckTimerState): void {
   unregisterState(state);
 }
 
-function stageForTier0(routePhase: AckRoutePhase): string {
-  switch (routePhase) {
-    case "delegate":
-      return "delegate_started";
-    case "observe":
-      return "observe_started";
-    case "pre_route":
-      return "pre_route_soft_ack";
-    default:
-      return "soft_ack";
-  }
-}
-
-function stageForTier(tier: number, routePhase: AckRoutePhase): string {
-  if (tier === 0) {
-    return stageForTier0(routePhase);
-  }
-  if (tier === 1) {
-    return "reply_soft_ack";
-  }
-  if (tier === 2) {
-    return "progress_nudge";
-  }
-  return "progress_nudge_explicit_stage";
+function stageForTier(tier: number, _routePhase: AckRoutePhase): string {
+  if (tier === 0) return "tool_still_working";
+  if (tier === 1) return "tool_ask_continue";
+  return "tool_suggest_stop";
 }
 
 function shouldScheduleTier(routePhase: AckRoutePhase, tier: number): boolean {
-  if (routePhase === "delegate" || routePhase === "observe") {
-    return tier === 0 || tier === 2 || tier === 3;
+  if (routePhase !== "reply") {
+    return false;
   }
-  if (routePhase === "reply") {
-    return tier === 1 || tier === 2 || tier === 3;
-  }
-  if (routePhase === "pre_route") {
-    return tier === 0 || tier === 2;
-  }
-  return false;
+  return tier === 0 || tier === 1 || tier === 2;
 }
 
 function fireTier(
@@ -210,28 +178,13 @@ export function createAckTimers(params: CreateAckTimersParams): AckTimerState {
     cancelled: false,
   };
 
-  if (shouldScheduleTier(state.routePhase, 0)) {
-    state.tier0Timer = setTimeout(() => {
-      fireTier(state, 0, params.onTierFire);
-    }, config.tier0DelayMs);
-  }
-
-  if (shouldScheduleTier(state.routePhase, 1)) {
-    state.tier1Timer = setTimeout(() => {
-      fireTier(state, 1, params.onTierFire);
-    }, config.tier1DeadlineMs);
-  }
-
-  if (shouldScheduleTier(state.routePhase, 2)) {
-    state.tier2Timer = setTimeout(() => {
-      fireTier(state, 2, params.onTierFire);
-    }, config.tier2DeadlineMs);
-  }
-
-  if (shouldScheduleTier(state.routePhase, 3)) {
-    state.tier3Timer = setTimeout(() => {
-      fireTier(state, 3, params.onTierFire);
-    }, config.tier3DeadlineMs);
+  for (let tier = 0; tier < config.tierCount && tier <= 3; tier++) {
+    if (!shouldScheduleTier(state.routePhase, tier)) continue;
+    const delayMs = config.firstTierMs * Math.pow(2, tier);
+    const timerRef = tier === 0 ? "tier0Timer" : tier === 1 ? "tier1Timer" : tier === 2 ? "tier2Timer" : "tier3Timer";
+    state[timerRef] = setTimeout(() => {
+      fireTier(state, tier as 0 | 1 | 2 | 3, params.onTierFire);
+    }, delayMs);
   }
 
   ackTimersByStateKey.set(stateKey, state);

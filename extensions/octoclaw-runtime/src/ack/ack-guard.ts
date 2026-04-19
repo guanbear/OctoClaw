@@ -62,8 +62,8 @@ const SESSION_NAMESPACE_KINDS = new Set(["default"]);
 const USER_SESSION_KINDS = new Set(["dm", "direct", "user"]);
 const CHANNEL_SESSION_KINDS = new Set(["channel", "group", "room", "conversation", "space", "chat"]);
 const THREAD_SESSION_KINDS = new Set(["thread", "topic"]);
-const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tier3DeadlineMs + 5_000;
-const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tier3DeadlineMs + 5_000;
+const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.firstTierMs * Math.pow(2, DEFAULT_ACK_TIMING_CONFIG.tierCount) + 5_000;
+const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.firstTierMs * Math.pow(2, DEFAULT_ACK_TIMING_CONFIG.tierCount) + 5_000;
 
 type UnknownRecord = Record<string, unknown>;
 type AckOwner = "" | "pre_dispatch" | "latency_ack" | "timer_ack";
@@ -342,6 +342,14 @@ function normalizeAckStage(value: string): AckStage {
     case AckStage.ProgressNudge:
     case "progress_nudge_explicit_stage":
       return AckStage.ProgressNudge;
+    case AckStage.ToolStillWorking:
+      return AckStage.ToolStillWorking;
+    case AckStage.ToolComplexTask:
+      return AckStage.ToolComplexTask;
+    case AckStage.ToolAskContinue:
+      return AckStage.ToolAskContinue;
+    case AckStage.ToolSuggestStop:
+      return AckStage.ToolSuggestStop;
     default:
       return AckStage.ProgressNudge;
   }
@@ -687,7 +695,9 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   if (result.delivered || result.sent) {
     ackDebug(`attemptAckSend: sent=true stage=${params.ackStage} target=${result.target}`);
     recordAckSent(threadKey, params.ackStage, routePhase);
-    cancelAckGuardForState(normalizedStateKey);
+    if (params.ackOwner !== "timer_ack") {
+      cancelAckGuardForState(normalizedStateKey);
+    }
     return { sent: true, reason: result.reason };
   }
 
@@ -781,26 +791,26 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
   const logger = isRecord(options.logger) ? options.logger as AckLogger : {};
   const routePhase = resolveRoutePhase(decision, options);
   const replyToMessageId = asString(options.replyToMessageId);
-  const inboundTs = Date.now();
+  const turnTs = ensureAckTurnTimestamp(stateKey);
 
   updateTrackingState(stateKey, {
     ackGuardKey: normalizedSessionKey,
     ackOwner: "",
     ack_owner: "",
-    _ackTurnTs: ensureAckTurnTimestamp(stateKey),
+    _ackTurnTs: turnTs,
   });
 
   createAckTimers({
     stateKey,
     sessionKey: normalizedSessionKey,
     routePhase,
-    inboundTs,
+    inboundTs: turnTs,
+    config: isRecord(options.ackTimingConfig) ? options.ackTimingConfig as Partial<import("./ack-timing.js").AckTimingConfig> : undefined,
     onTierFire: (result) => {
       const currentState = ackTimerStateForKey(stateKey);
       if (!currentState || currentState.cancelled) {
         return;
       }
-      cancelAckTimers(stateKey);
       ackDebug(`tier${result.tier} fired stage=${result.stage} routePhase=${result.routePhase} sessionKey=${normalizedSessionKey} stateKey=${stateKey}`);
       const ackStage = normalizeAckStage(result.stage);
       const threadKey = threadKeyFromSessionKey(normalizedSessionKey, stateKey);
@@ -831,7 +841,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         logger,
         timeoutMs: 2_000,
         ownerTag: "ack_controller",
-        messageTurnId: `${stateKey}:${inboundTs}`,
+        messageTurnId: `${stateKey}:${turnTs}`,
         stageHint: templateInputs.stageHint,
         replyToMessageId,
       }).catch((error) => {

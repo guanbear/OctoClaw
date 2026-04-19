@@ -6,6 +6,10 @@ export enum AckStage {
   Queued = "queued",
   Blocked = "blocked",
   ProgressNudge = "progress_nudge",
+  ToolStillWorking = "tool_still_working",
+  ToolComplexTask = "tool_complex_task",
+  ToolAskContinue = "tool_ask_continue",
+  ToolSuggestStop = "tool_suggest_stop",
 }
 
 export interface AckTemplateEntry {
@@ -132,6 +136,41 @@ export const ACK_TEMPLATE_POOL: Map<AckStage, AckTemplateEntry[]> = new Map([
       buildTemplateEntry(AckStage.ProgressNudge, "快好了", "积极", "优先更新", ["支持 update 的渠道优先"]),
     ],
   ],
+  [
+    AckStage.ToolStillWorking,
+    [
+      buildTemplateEntry(AckStage.ToolStillWorking, "还在处理中，快了", "安慰", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolStillWorking, "还在跑，别急", "口语安慰", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolStillWorking, "处理中，稍等一下", "中性", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolStillWorking, "在干活了，马上好", "积极", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolStillWorking, "还在弄，别走开", "轻松", "优先更新", ["全渠道"]),
+    ],
+  ],
+  [
+    AckStage.ToolComplexTask,
+    [
+      buildTemplateEntry(AckStage.ToolComplexTask, "这个任务有点复杂，需要多一点时间", "说明情况", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolComplexTask, "任务比预期复杂，再等等", "口语", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolComplexTask, "内容比较多，还在处理", "中性", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolComplexTask, "比较复杂，多给我一点时间", "请求理解", "优先更新", ["全渠道"]),
+    ],
+  ],
+  [
+    AckStage.ToolAskContinue,
+    [
+      buildTemplateEntry(AckStage.ToolAskContinue, "已经处理挺久了，要继续等吗？", "询问", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolAskContinue, "跑的时间有点长了，要不要我先停了？", "口语询问", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolAskContinue, "处理超时了，需要我继续还是停掉？", "直接选择", "优先更新", ["全渠道"]),
+    ],
+  ],
+  [
+    AckStage.ToolSuggestStop,
+    [
+      buildTemplateEntry(AckStage.ToolSuggestStop, "可能卡住了，建议我先停掉这个任务", "建议停止", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolSuggestStop, "处理太久了，大概率遇到问题，建议停掉", "明确建议", "优先更新", ["全渠道"]),
+      buildTemplateEntry(AckStage.ToolSuggestStop, "严重超时，建议放弃当前操作重新来", "强烈建议", "优先更新", ["全渠道"]),
+    ],
+  ],
 ]);
 
 function randomFrom<T>(arr: T[]): T {
@@ -196,6 +235,11 @@ export function selectAckTemplate(stage: AckStage, inputs: TemplateSelectionInpu
       return selectBlockedTemplate(entries, inputs);
     case AckStage.ProgressNudge:
       return selectProgressNudgeTemplate(entries, inputs);
+    case AckStage.ToolStillWorking:
+    case AckStage.ToolComplexTask:
+    case AckStage.ToolAskContinue:
+    case AckStage.ToolSuggestStop:
+      return randomFrom(entries);
     default:
       return entries[0] ?? null;
   }

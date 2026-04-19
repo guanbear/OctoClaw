@@ -3,10 +3,10 @@ import {
   buildDirectLookupGuard,
 } from "./conversation-grounding.js";
 import {
+  cancelAckGuard,
   cancelAckGuardForState,
   maybeSendLatencyAck,
   notifyUserMessage,
-  scheduleEagerPreDispatchAck,
   startAckGuard,
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
@@ -205,6 +205,8 @@ export const plugin = {
   register(pi: PluginInterface): void {
     envOverrides.octoclawRoot = stringValue(pi.pluginConfig?.octoclawRoot);
     envOverrides.workspaceRoot = stringValue(pi.pluginConfig?.workspaceRoot);
+    const ackTimerFirstTierMs = Number(pi.pluginConfig?.ackTimerFirstTierMs) || 60_000;
+    const ackTimerTierCount = Math.min(6, Math.max(1, Number(pi.pluginConfig?.ackTimerTierCount) || 3));
 
     // Fire-and-forget bridge init — lazy-loads openclaw runtime binding
     // If runtime unavailable, getCachedBridge() returns unavailable bridge (fail-closed)
@@ -268,8 +270,11 @@ export const plugin = {
       const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
       const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
 
+      // Extract inbound Slack message_id at top level so ALL ACK paths (timer + latency) can use it.
+      // The hook context (ctx) does NOT carry ts/messageTs/messageId — they are only embedded in
+      // the prompt text as JSON metadata.  Without this, every ACK falls back to top-level delivery.
       let inboundMessageTs = "";
-      if (preSessionKey) {
+      {
         const inbound = asRecord(ctx.inboundMessage);
         const ev = asRecord(ctx.event);
         const hookEvent = asRecord(event);
@@ -280,15 +285,27 @@ export const plugin = {
           const msgIdMatch = promptText.match(/"message_id"\s*:\s*"(\d+\.\d+)"/);
           if (msgIdMatch) inboundMessageTs = msgIdMatch[1];
         }
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId: inboundMessageTs });
-        if (state) {
-          state.ackGuardKey = preSessionKey;
+      }
+
+      if (preSessionKey) {
+        console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId: inboundMessageTs, ackTimingConfig: { firstTierMs: ackTimerFirstTierMs, tierCount: ackTimerTierCount } });
+      }
+      if (state) {
+        state.ackGuardKey = preSessionKey || "";
+        if (inboundMessageTs) {
+          state.inboundMessageTs = inboundMessageTs;
         }
       }
 
       const metadata = buildPolicyMetadata(ctx, { stateKey });
-      await maybeSendLatencyAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, "direct_lookup");
-      scheduleEagerPreDispatchAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, inboundMessageTs);
+      if (inboundMessageTs && !stringValue(metadata.message_id)) {
+        metadata.message_id = inboundMessageTs;
+      }
+      const latencyResult = await maybeSendLatencyAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, "direct_lookup");
+      if (latencyResult?.sent) {
+        cancelAckGuard(preSessionKey);
+      }
 
       const prependSystem: string[] = [];
       if (routeHintRequired(decision)) {
@@ -358,6 +375,10 @@ export const plugin = {
       const allowedObserverTools = observerControlTools(decision, routeHintTool);
       const allowedSessionTools = sessionControlTools(decision, routeHintTool);
       const metadata = buildPolicyMetadata(ctx, { stateKey });
+      const storedInboundTs = stringValue(state?.inboundMessageTs);
+      if (storedInboundTs && !stringValue(metadata.message_id)) {
+        metadata.message_id = storedInboundTs;
+      }
 
       if (
         stringValue(asRecord(decision.route_decision).route) === "direct"

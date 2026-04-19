@@ -115,7 +115,7 @@ export function currentLeaseOwner(leaseKey: string): AckLeaseOwner | null {
 }
 
 export function buildAckKey(parts: AckKeyParts): string {
-  return `ack:${parts.threadId}:${parts.anchorId ?? "none"}:${parts.ackStage}:${parts.routePhase}:${parts.messageTurnId}`;
+  return `ack:${parts.threadId}:${parts.anchorId ?? "none"}:${parts.routePhase}:${parts.messageTurnId}`;
 }
 
 export function checkAndSet(
