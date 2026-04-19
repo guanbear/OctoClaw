@@ -94,6 +94,24 @@ function readNumber(value: unknown, fallback: number): number {
   return Number.isFinite(normalized) ? normalized : fallback;
 }
 
+function canonicalizePolicyDecision(decision: UnknownRecord, route: string): UnknownRecord {
+  const nextDecision = { ...decision };
+  const routeDecision = asRecord(decision.route_decision);
+  nextDecision.route_decision = {
+    ...routeDecision,
+    route,
+    system_preferred_route: readString(routeDecision.system_preferred_route, route),
+    task_class: route === "observe"
+      ? "control_observer"
+      : route === "delegate.single"
+        ? "delegated_single"
+        : readString(routeDecision.task_class, "main_direct"),
+    protected_lane: route === "observe" ? "control_observer" : readString(routeDecision.protected_lane),
+    dispatch_required: route !== "reply" && routeDecision.dispatch_required !== false,
+  };
+  return nextDecision;
+}
+
 export function buildTsRuntimeDispatchPayload(
   input: DispatchPayloadInput,
   helpers: RuntimePayloadHelpers,
@@ -106,8 +124,9 @@ export function buildTsRuntimeDispatchPayload(
     throw new Error(`unsupported_runtime_route:${route}`);
   }
 
+  const canonicalDecision = canonicalizePolicyDecision(decision, route);
   const nativeHelperInvoker = input.helperInvoker ?? readHelperInvoker(metadata.helperInvoker);
-  const workflowDecision = helpers.buildWorkflowDecision(input.task, decision, metadata);
+  const workflowDecision = helpers.buildWorkflowDecision(input.task, canonicalDecision, metadata);
   if (workflowDecision.admission?.admission === "reject") {
     throw new Error(`dispatch_blocked:${workflowDecision.admission?.reason || "admission_denied"}`);
   }
@@ -161,7 +180,7 @@ export function buildTsRuntimeDispatchPayload(
     system_preferred_route: route,
     worker_pool: readString(routeDecision.worker_pool ?? modelPolicy.worker_pool, "octoclaw-worker"),
     model: readString(modelPolicy.selected_model ?? modelPolicy.profile ?? workflowDecision.modelProfile),
-    policy_decision: decision,
+    policy_decision: canonicalDecision,
     task_id: workflow.identity.taskId,
     flow_id: workflow.identity.flowId,
     runtime_truth: {
@@ -343,13 +362,15 @@ export function buildTsRuntimeSpawnPayload(
 ) {
   const decision = asRecord(input.decision);
   const metadata = asRecord(input.metadata);
-  const normalizedRoute = readString(
+  const normalizedRoute = helpers.normalizeLiveRoute(
     input.route ?? helpers.runtimeRouteDecision(decision).route,
-    "spawn_single",
+    "delegate.single",
   );
-  if (!["spawn_single", "spawn_multi"].includes(normalizedRoute)) {
+  if (normalizedRoute !== "delegate.single") {
     throw new Error(`unsupported_spawn_route:${normalizedRoute}`);
   }
+
+  const canonicalDecision = canonicalizePolicyDecision(decision, normalizedRoute);
 
   const nativeHelperInvoker = input.helperInvoker ?? readHelperInvoker(metadata.helperInvoker);
   const plugin = createOctoClawRuntimePlugin(buildPluginOptions(nativeHelperInvoker));
@@ -366,9 +387,9 @@ export function buildTsRuntimeSpawnPayload(
   const workflowDecision = helpers.buildWorkflowDecision(
     input.task,
     {
-      ...decision,
+      ...canonicalDecision,
       route_decision: {
-        ...helpers.runtimeRouteDecision(decision),
+        ...helpers.runtimeRouteDecision(canonicalDecision),
         route: normalizedRoute,
       },
     },
@@ -403,9 +424,6 @@ export function buildTsRuntimeSpawnPayload(
   workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
   workflow = renewWorkflowHeartbeat(workflow);
 
-  const adapter = plugin.createAdapter().bindSession(
-    readString(metadata.session_key ?? metadata.sessionKey, executionIds.requestId),
-  );
   const modelPolicy = asRecord(decision.model_policy);
   const normalizedRequest = normalizeRuntimeRequest({
     prompt: readString(input.task),
@@ -425,7 +443,7 @@ export function buildTsRuntimeSpawnPayload(
     route: normalizedRoute,
     worker_pool: readString(helpers.runtimeRouteDecision(decision).worker_pool ?? modelPolicy.worker_pool, "octoclaw-worker"),
     model: readString(modelPolicy.selected_model ?? modelPolicy.profile ?? workflowDecision.modelProfile),
-    policy_decision: decision,
+    policy_decision: canonicalDecision,
     telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
   };
   const delegatedMaterialization = materializeDelegatedWork({
@@ -450,62 +468,6 @@ export function buildTsRuntimeSpawnPayload(
   const compoundPlaceholder = buildCompoundDelegationPlaceholder();
 
   try {
-    if (normalizedRoute === "spawn_multi") {
-      const managed = adapter.createManaged(workflow);
-      if (input.execute) {
-        workflow = markWorkflowCheckpointEmitted(workflow);
-        const progressDelivery = buildWorkflowProgressDelivery(workflow, {
-          channel: readString(metadata.channel, "direct"),
-          summary: `Spawn flow checkpoint emitted for ${workflow.identity.taskId}`,
-          artifactRefs: [workflow.taskMaterialization.taskPacketRef],
-        });
-        workflow = enqueueWorkflowDelivery(workflow, progressDelivery);
-        workflow = markWorkflowCompleted(workflow);
-        const finalDelivery = buildWorkflowFinalDelivery(workflow, {
-          channel: readString(metadata.channel, "direct"),
-          summary: `Delegated flow materialized natively as ${managed.flowId}`,
-          artifactRefs: [managed.flowId],
-        });
-        workflow = enqueueWorkflowDelivery(workflow, finalDelivery);
-      }
-      return {
-        ...basePayload,
-        executed: Boolean(input.execute),
-        status: input.execute ? "executed" : "planned",
-        task_id: workflow.identity.taskId,
-        flow_id: managed.flowId,
-        summary: `OctoClaw spawn registered: ${managed.flowId}`,
-        handoff: {
-          kind: "spawn",
-          summary: `Delegated flow materialized natively as ${managed.flowId}`,
-          user_safe: true,
-          reply_text: `Delegated flow registered natively: ${managed.flowId}`,
-        },
-        materialization: {
-          authority: "ts-native-plugin",
-          type: "spawn_multi",
-          task_id: workflow.identity.taskId,
-          flow_id: managed.flowId,
-          runtime: managed.runtime,
-          sync_mode: managed.syncMode,
-          substrate_state: managed.substrateState,
-          substrate_revision: managed.substrateRevision,
-          truth: managed.truth,
-          projection: managed.projection,
-          artifact: managed.artifact,
-          telemetry: managed.telemetry,
-          delegation: delegatedMaterialization,
-          compound: compoundPlaceholder,
-        },
-        runtime_truth: {
-          authority: "ts-runtime-core",
-          workflow,
-          binding: managed,
-        },
-        telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
-      };
-    }
-
     workflow = markWorkflowCheckpointEmitted(workflow);
     const progressDelivery = buildWorkflowProgressDelivery(workflow, {
       channel: readString(metadata.channel, "direct"),
@@ -538,7 +500,7 @@ export function buildTsRuntimeSpawnPayload(
       },
       materialization: {
         authority: "ts-native-plugin",
-        type: "spawn_single",
+          type: "delegate.single",
         task_id: binding.taskId,
         flow_id: binding.flowId,
         runtime: binding.runtime,

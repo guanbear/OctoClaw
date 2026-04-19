@@ -118,7 +118,7 @@ const FRESH_LIVE_LOOKUP_PATTERNS = [
 const OPERATOR_SURFACE_REGISTRY = [
   {
     surface_id: "system_load",
-    lane_hint: "direct",
+    lane_hint: "reply",
     scope: "local_surface_lookup",
     patterns: [
       /(系统负载|机器负载|系统状态|cpu|内存|磁盘|load average|uptime|负载情况|资源占用)/iu,
@@ -127,7 +127,7 @@ const OPERATOR_SURFACE_REGISTRY = [
   },
   {
     surface_id: "runtime_version",
-    lane_hint: "direct",
+    lane_hint: "reply",
     scope: "local_surface_lookup",
     patterns: [
       /(你现在啥版本|现在什么版本|当前.*版本|openclaw.*版本|版本号)/iu,
@@ -136,7 +136,7 @@ const OPERATOR_SURFACE_REGISTRY = [
   },
   {
     surface_id: "runtime_model",
-    lane_hint: "direct",
+    lane_hint: "reply",
     scope: "local_surface_lookup",
     patterns: [
       /(你是啥模型|你是什么模型|当前是啥模型|现在用的啥模型)/iu,
@@ -145,7 +145,7 @@ const OPERATOR_SURFACE_REGISTRY = [
   },
   {
     surface_id: "service_health",
-    lane_hint: "runner",
+    lane_hint: "observe",
     scope: "local_surface_lookup",
     patterns: [
       /(服务健康|健康状态|服务状态|gateway状态|gateway health|health check)/iu,
@@ -636,7 +636,7 @@ function selectSubjectTurn(turns: ReplayTurn[], prompt = "", sessionKeys: string
   if (isTaskProgressPrompt(prompt)) {
     const delegatedTurns = nonMetaTurns.filter((turn) => {
       const facts = turn.facts;
-      return Boolean(facts && (facts.dispatchSeen || facts.taskId || facts.runnerJobId || ["runner", "spawn_single", "spawn_multi"].includes(turn.route)));
+        return Boolean(facts && (facts.dispatchSeen || facts.taskId || facts.runnerJobId || ["observe", "delegate.single", "spawn_multi"].includes(turn.route)));
     });
     if (delegatedTurns.length > 0) {
       return delegatedTurns[delegatedTurns.length - 1] || null;
@@ -744,7 +744,7 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
   if (intentClass === "execution_followup") {
     return {
       ...base,
-      route_hint: "direct",
+      route_hint: "observe",
       lane_hint: "control_observer",
       protected_lane: "control_observer",
       require_state_grounding: true,
@@ -753,8 +753,8 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
   if (intentClass === "local_surface_lookup") {
     return {
       ...base,
-      route_hint: "direct",
-      lane_hint: "direct",
+      route_hint: "reply",
+      lane_hint: "reply",
       lookup_scope: "local_instance",
       require_state_grounding: false,
     };
@@ -762,8 +762,8 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
   if (intentClass === "fresh_live_lookup") {
     return {
       ...base,
-      route_hint: "runner",
-      lane_hint: "runner",
+      route_hint: "observe",
+      lane_hint: "observe",
       lookup_scope: "upstream_project",
       lookup_project: inferFreshLookupProject(""),
       lookup_focus: inferFreshLookupFocus(""),

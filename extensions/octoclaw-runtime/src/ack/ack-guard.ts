@@ -44,7 +44,7 @@ export const WATCHDOG_DEBOUNCE_MS = 25_000;
 export const STALE_QUEUED_THRESHOLD_MIN = 90;
 export const STUCK_THRESHOLD_MIN = 15;
 
-const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
+const DELEGATED_ROUTE_NAMES = new Set(["delegate.single"]);
 const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect", "probe", "scan"]);
 const IM_SESSION_ORIGINS = new Set([
   "slack",
@@ -369,7 +369,7 @@ function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecord = {})
   if (OBSERVE_ROUTE_NAMES.has(route)) {
     return "observe";
   }
-  if (route === "direct" || route === "reply") {
+  if (route === "reply" || route === "direct") {
     return "reply";
   }
   return "pre_route";
@@ -1025,7 +1025,8 @@ export async function maybeSendLatencyAck(
   }
   try {
     const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
-    const message = ackStageText(AckStage.ReplySoftAck);
+    const judgeAckText = asString(decision._judge_ack_text);
+    const message = judgeAckText || ackStageText(AckStage.ReplySoftAck);
     const result = await attemptAckSend({
       sessionKey,
       stateKey,
@@ -1151,5 +1152,31 @@ export async function watchdogTick(logger: unknown): Promise<void> {
     }
   } catch (error) {
     sink.warn?.(`octoclaw watchdog tick failed: ${String(error)}`);
+  }
+}
+
+export async function sendReactionAck(
+  sessionKey: string,
+  messageId: string,
+  emoji = "ok_hand",
+): Promise<boolean> {
+  const adapter = getAdapterForSession(sessionKey);
+  if (!adapter) {
+    return false;
+  }
+  if (typeof adapter.react !== "function") {
+    return false;
+  }
+  try {
+    const result = await adapter.react({ sessionKey, messageId, emoji });
+    if (result.ok) {
+      ackDebug(`reaction ack sent: emoji=${emoji} messageId=${messageId}`);
+      return true;
+    }
+    ackDebug(`reaction ack failed: ${result.error}`);
+    return false;
+  } catch (err) {
+    ackDebug(`reaction ack error: ${String(err)}`);
+    return false;
   }
 }

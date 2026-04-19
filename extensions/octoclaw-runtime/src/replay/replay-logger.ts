@@ -17,7 +17,7 @@ interface PolicyStateApiLike {
   update: (stateKey: string, mutator: (current: UnknownRecord) => UnknownRecord) => void;
 }
 
-const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
+const DELEGATED_ROUTE_NAMES = new Set(["delegate.single"]);
 const policyStateApi = policyState as unknown as PolicyStateApiLike;
 
 interface FsPromisesLike {
@@ -878,7 +878,7 @@ export function workflowEnforcementRule(
   const toolPolicy = asRecord(decision.tool_policy);
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   const allowedTools = runnerWorkflowTools(decision, routeHintTool);
-  const workflowRequired = route === "runner" || DELEGATED_ROUTE_NAMES.has(route);
+  const workflowRequired = route === "observe" || DELEGATED_ROUTE_NAMES.has(route);
   if (!workflowRequired) {
     return { block: false, route, delegateTool, allowedTools: [...allowedTools] };
   }
@@ -912,7 +912,7 @@ export function compactPolicyPrompt(decision: Record<string, unknown>): string {
   const blocked = asStringArray(toolPolicy.blocked_patterns).slice(0, 8);
   const allowedControls = asStringArray(toolPolicy.allowed_control_tools).slice(0, 8);
   const parts = [
-    `route=${String(routeDecision.route ?? "direct")}`,
+    `route=${String(routeDecision.route ?? "reply")}`,
     `worker_pool=${String(routeDecision.worker_pool ?? "octoclaw-main")}`,
     `task_class=${String(routeDecision.task_class ?? "")}`,
     `request_kind=${String(routerDecision.request_kind ?? "")}`,
@@ -932,7 +932,7 @@ export function policySummaryText(payload: Record<string, unknown>): string {
   const routeDecision = asRecord(payload.route_decision);
   const modelPolicy = asRecord(payload.model_policy);
   const reviewPolicy = asRecord(payload.review_policy);
-  const route = String(routeDecision.route ?? "direct");
+  const route = String(routeDecision.route ?? "reply");
   const workerPool = String(routeDecision.worker_pool ?? "octoclaw-main");
   const profile = String(modelPolicy.profile ?? "");
   const model = String(modelPolicy.selected_model ?? "");

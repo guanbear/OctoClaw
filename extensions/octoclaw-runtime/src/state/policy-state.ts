@@ -5,7 +5,7 @@ import { resolvePolicyStateLedgerPath } from "../resolve/env.js";
 export const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
 const PERSIST_DEBOUNCE_MS = 2_000;
 const RECENT_DELEGATED_MAX_AGE_MS = 2 * 60 * 1000;
-const DELEGATED_ROUTE_NAMES = new Set(["runner", "spawn_single", "spawn_multi"]);
+const DELEGATED_ROUTE_NAMES = new Set(["delegate.single"]);
 
 export interface PolicyStateEntry {
   decision?: Record<string, unknown>;
