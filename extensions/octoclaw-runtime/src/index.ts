@@ -6,6 +6,7 @@ export * from "./runtime-payloads.js";
 export * from "./bridge.js";
 export * from "./conversation-grounding.js";
 export * from "./resolve/env.js";
+export * from "./resolve/judge-context-packet.js";
 export * from "./resolve/session.js";
 export {
   extractPromptText,
