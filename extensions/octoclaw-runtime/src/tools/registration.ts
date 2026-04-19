@@ -231,7 +231,7 @@ function setPolicyStateForContext(ctx: UnknownRecord, entry: UnknownRecord, expl
 
 function delegatedStickyRoute(decision: UnknownRecord): boolean {
   const route = asString(asRecord(decision.route_decision).route);
-  return route === "runner" || route === "spawn_single" || route === "spawn_multi";
+  return route === "delegate.single";
 }
 
 async function persistStickyLane(sessionKey: string, payload: UnknownRecord, logger: unknown, source: string): Promise<Record<string, unknown>> {
@@ -303,8 +303,12 @@ export function getToolRegistrations(): ToolRegistration[] {
         properties: {
           task: { type: "string", description: "Optional task override. Defaults to the current prompt for this session." },
           command: { type: "string", description: "Optional shell command context." },
-          routeHint: { type: "string", enum: ["direct", "spawn_single", "spawn_multi"] },
+          routeHint: { type: "string", enum: ["reply", "delegate.single", "observe"] },
+          routeObjection: { type: "boolean", description: "Set true if you disagree with the recommended route" },
+          objectionReason: { type: "string", description: "Required if routeObjection is true. Why you disagree." },
+          requestedRoute: { type: "string", enum: ["reply", "delegate.single", "observe"], description: "The route you want instead. Required if routeObjection is true." },
           workType: { type: "string", enum: ["ops", "research", "code", "review"] },
+          budgetBand: { type: "string", enum: ["low", "medium", "high"], description: "Override task complexity. low=fast/cheap model, medium=standard model, high=capable model." },
           phase: { type: "string", description: "Optional phase hint such as inspect, implement, collect, report, verify." },
           reviewRequired: { type: "boolean", description: "Whether review should be required after merge." },
           confidence: { type: "number", description: "Confidence from 0 to 1." },
@@ -319,12 +323,22 @@ export function getToolRegistrations(): ToolRegistration[] {
         if (!task) {
           return { error: "octoclaw_route_hint requires task context" };
         }
+        const routeObjection = params.routeObjection === true;
+        if (routeObjection && !asString(params.objectionReason)) {
+          return { error: "octoclaw_route_hint requires objectionReason when routeObjection is true" };
+        }
+        if (routeObjection && !asString(params.requestedRoute)) {
+          return { error: "octoclaw_route_hint requires requestedRoute when routeObjection is true" };
+        }
         const existingDecision = nestedRecord(existing, "decision");
         const existingRequest = nestedRecord(existingDecision, "request");
         const metadata = buildPolicyMetadata(ctx, { stateKey: existingStateKey || asString(existingRequest.session_key) });
         const replaySessionKey = asString(existingStateKey || metadata.session_key || existingRequest.session_key);
         const routeHintPayload = {
           route_hint: asString(params.routeHint),
+          route_objection: routeObjection,
+          objection_reason: asString(params.objectionReason),
+          requested_route: asString(params.requestedRoute),
           work_type: asString(params.workType),
           phase: asString(params.phase),
           review_required: params.reviewRequired === true,
@@ -337,6 +351,28 @@ export function getToolRegistrations(): ToolRegistration[] {
           metadata,
           routeHint: routeHintPayload,
         });
+        if (asString(params.budgetBand)) {
+          payload._judge_budget_band = asString(params.budgetBand);
+        }
+        const judgeSucceeded = asRecord(payload)._judge_succeeded === true;
+        const judgeRoute = asString(asRecord(payload)._judge_route || asRecord(asRecord(payload).route_decision).judge_route || asRecord(asRecord(payload).route_decision).system_preferred_route);
+        if (routeObjection) {
+          await recordPolicyReplay(
+            "route_hint_objection",
+            {
+              route_objection: true,
+              objection_reason: truncateText(params.objectionReason, 180),
+              requested_route: asString(params.requestedRoute),
+              judge_route: judgeRoute,
+              session_key: replaySessionKey,
+              tool_name: "route_hint",
+              objection_accepted: !judgeSucceeded,
+              judge_succeeded: judgeSucceeded,
+            },
+            toolLogger(ctx),
+            payload,
+          );
+        }
         const stickyPersisted = await persistStickyLane(replaySessionKey, payload, toolLogger(ctx), "route_hint");
         setPolicyStateForContext(ctx, {
           ...(existing ?? {}),
@@ -361,6 +397,9 @@ export function getToolRegistrations(): ToolRegistration[] {
             reviewRequired: params.reviewRequired === true,
             confidence: asNumber(params.confidence) ?? 0,
             reason: truncateText(params.reason, 180),
+            routeObjection,
+            objectionReason: truncateText(params.objectionReason, 180),
+            requestedRoute: asString(params.requestedRoute),
             systemPreferredRoute: asString(asRecord(payload.route_decision).system_preferred_route),
             finalRoute: asString(asRecord(payload.route_decision).route),
             workerPool: asString(asRecord(payload.route_decision).worker_pool),
@@ -369,9 +408,15 @@ export function getToolRegistrations(): ToolRegistration[] {
           toolLogger(ctx),
           payload,
         );
-        const nextSummary = asString(asRecord(payload.route_decision).route) === "direct"
-          ? "route_hint merged: final route is direct. You may answer directly."
-          : `route_hint merged: final route is ${asString(asRecord(payload.route_decision).route, "spawn_single")}. Next call octoclaw_dispatch.`;
+        const objectionMessage = routeObjection
+          ? (judgeSucceeded
+              ? "judge already decided, objection recorded for shadow adjudication"
+              : "objection accepted, using your route")
+          : "";
+        const nextSummaryBase = asString(asRecord(payload.route_decision).route) === "reply"
+          ? "route_hint merged: final route is reply. You may answer directly."
+          : `route_hint merged: final route is ${asString(asRecord(payload.route_decision).route, "delegate.single")}. Next call octoclaw_dispatch.`;
+        const nextSummary = objectionMessage ? `${objectionMessage}; ${nextSummaryBase}` : nextSummaryBase;
         return toolResponse(nextSummary, payload);
       },
     },
@@ -387,7 +432,7 @@ export function getToolRegistrations(): ToolRegistration[] {
           command: { type: "string", description: "Optional shell command if one already exists." },
           channel: { type: "string", description: "Optional transport/origin hint such as slack, wechat, webchat, or any other IM identifier." },
           sessionKey: { type: "string", description: "Optional main session key." },
-          forceRoute: { type: "string", enum: ["direct", "runner", "spawn_single", "spawn_multi"] },
+          forceRoute: { type: "string", enum: ["reply", "delegate.single", "observe"] },
           metadataJson: { type: "string", description: "Optional JSON object with extra routing metadata." },
         },
         required: ["task"],
@@ -435,15 +480,17 @@ export function getToolRegistrations(): ToolRegistration[] {
     {
       name: "octoclaw_dispatch",
       label: "OctoClaw Dispatch",
-      description: "Run OctoClaw dispatch so lightweight tasks use runner and larger tasks return a subagent execution plan.",
+      description: "Run OctoClaw dispatch so reply/observe/delegated work follows the runtime policy plan.",
       params: {
         type: "object",
         additionalProperties: false,
         properties: {
           task: { type: "string", description: "The task to dispatch." },
-          command: { type: "string", description: "Optional shell command for runner tasks." },
+          command: { type: "string", description: "Optional shell command context for the routed task." },
           cwd: { type: "string", description: "Optional working directory override." },
-          forceRoute: { type: "string", enum: ["auto", "direct", "runner", "spawn_single", "spawn_multi"] },
+          forceRoute: { type: "string", enum: ["auto", "reply", "delegate.single", "observe"] },
+          complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observe, normal=GLM-5.1, deep=gpt-5.4" },
+          expectedSeconds: { type: "number", description: "Main agent's estimate of how long this task should take. Used as timeout baseline." },
           timeoutSeconds: { type: "number", description: "Runner timeout in seconds." },
           sessionKey: { type: "string", description: "Optional session key override." },
           metadataJson: { type: "string", description: "Optional JSON object with extra session metadata." },
@@ -466,8 +513,8 @@ export function getToolRegistrations(): ToolRegistration[] {
           freshDecisionSource = "fresh_context_resolve";
         }
         const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || buildPolicyMetadata(ctx).session_key);
-        const resolvedRoute = asString(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "direct");
-        const isDelegatedRoute = ["runner", "spawn_single", "spawn_multi"].includes(resolvedRoute);
+        const resolvedRoute = asString(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
+        const isDelegatedRoute = resolvedRoute === "delegate.single";
         if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires cached/passed policy for delegated route=${resolvedRoute}; got fresh decision from freeform prompt (source=${freshDecisionSource}). This violates §4.6.1 (dispatch must not re-judge).`;
           await recordPolicyReplay("sealed_decision_required", {
@@ -484,6 +531,38 @@ export function getToolRegistrations(): ToolRegistration[] {
         if (asString(params.sessionKey)) metadata.session_key = asString(params.sessionKey);
         metadata = applyUserMetadataOverrides(metadata, parseObjectJson(params.metadataJson));
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
+
+        const complexityBand = asString(params.complexityBand || asRecord(cachedDecision)._judge_complexity_band || asRecord(asRecord(cachedDecision).route_decision)._judge_complexity_band);
+        const budgetBand = asString(asRecord(cachedDecision._judge_budget_band ?? asRecord(cachedDecision.route_decision)._judge_budget_band));
+        const complexityModelMap: Record<string, string> = {
+          simple: "minimax-portal/MiniMax-M2.7-highspeed",
+          medium: "zhipu/GLM-5.1",
+          normal: "zhipu/GLM-5.1",
+          deep: "omniroute/cx/gpt-5.4",
+        };
+        const budgetModelMap: Record<string, string> = {
+          high: "cliproxyapi/gpt-5.4",
+          medium: "zhipu/GLM-5.1",
+          low: "minimax-portal/MiniMax-M2.7-highspeed",
+        };
+        const selectedModel = complexityBand && complexityModelMap[complexityBand]
+          ? complexityModelMap[complexityBand]
+          : budgetBand && budgetModelMap[budgetBand]
+            ? budgetModelMap[budgetBand]
+            : "";
+        if (complexityBand) {
+          metadata.complexity_band = complexityBand;
+        }
+        if (selectedModel) {
+          metadata.model = selectedModel;
+        }
+
+        const expectedSeconds = asNumber(params.expectedSeconds) || 0;
+        if (expectedSeconds > 0) {
+          metadata.expected_seconds = expectedSeconds;
+          metadata.expected_at = Date.now() + expectedSeconds * 1000;
+        }
+
         const ackResult = await ensurePreDispatchAck(
           cachedDecision,
           metadata,
@@ -545,6 +624,9 @@ export function getToolRegistrations(): ToolRegistration[] {
           `OctoClaw dispatch: ${asString(payload.route)}${payload.executed === true ? " (executed)" : " (planned)"}`,
           ctxCwd(ctx),
         );
+        const delegateReasonCodes = Array.isArray(asRecord(authoritativeDecision)._delegate_reason_codes)
+          ? (asRecord(authoritativeDecision)._delegate_reason_codes as unknown[]).map((value) => asString(value)).filter(Boolean)
+          : [];
         await registerPendingDelivery({
           decision: authoritativeDecision,
           payload,
@@ -575,6 +657,8 @@ export function getToolRegistrations(): ToolRegistration[] {
             routeChanged: asString(asRecord(cachedDecision.route_decision).route) !== asString(payload.route),
             decisionSource: hadCachedDecision ? "cached" : (params.policyJson ? "policy_json" : freshDecisionSource || "fresh"),
             stickyPersisted,
+            complexityBand,
+            delegateReasonCodes,
             sessionBoundaryStatus: asString(sessionBoundary.status),
             canonicalSessionKey: asString(sessionBoundary.canonicalSessionKey || replaySessionKey),
           },
@@ -603,8 +687,9 @@ export function getToolRegistrations(): ToolRegistration[] {
         additionalProperties: false,
         properties: {
           task: { type: "string", description: "The task to run in a subagent." },
-          route: { type: "string", enum: ["spawn_single", "spawn_multi"] },
+          route: { type: "string", enum: ["delegate.single"] },
           model: { type: "string", description: "Optional model override." },
+          complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observe, normal=GLM-5.1, deep=gpt-5.4" },
           runtime: { type: "string", enum: ["subagent", "acp"] },
           streamTo: { type: "string", description: "Only valid when runtime=acp." },
           parentId: { type: "string", description: "Optional parent task id." },
@@ -620,10 +705,10 @@ export function getToolRegistrations(): ToolRegistration[] {
         const parentDecision = asRecord(existingState?.decision);
         const parentRoute = asString(asRecord(parentDecision.route_decision).route);
         const parentSessionKey = asString(asRecord(parentDecision.request).session_key);
-        if (Object.keys(parentDecision).length > 0 && parentRoute === "runner" && asString(params.route) === "spawn_single") {
+        if (Object.keys(parentDecision).length > 0 && parentRoute === "observe" && asString(params.route) === "delegate.single") {
           return toolResponse(
-            "sealed_route_violation: parent route is runner, cannot reroute to spawn_single. This violates §4.6.1.",
-            { sealed_route_violation: true, parent_route: "runner", attempted_route: "spawn_single", error: "freeform_reroute_blocked" },
+            "sealed_route_violation: parent route is observe, cannot reroute to delegate.single. This violates §4.6.1.",
+            { sealed_route_violation: true, parent_route: "observe", attempted_route: "delegate.single", error: "freeform_reroute_blocked" },
           );
         }
         const existingDecision = nestedRecord(existingState, "decision");
@@ -637,15 +722,31 @@ export function getToolRegistrations(): ToolRegistration[] {
           state: existingState,
           cachedDecision: existingState?.decision,
         });
+        const complexityBand = asString(params.complexityBand || asRecord(existingState?.decision)._judge_complexity_band || asRecord(asRecord(existingState?.decision).route_decision)._judge_complexity_band);
+        const budgetBand = asString(asRecord(existingState?.decision)._judge_budget_band || asRecord(asRecord(existingState?.decision).route_decision)._judge_budget_band);
+        const complexityModelMap: Record<string, string> = {
+          simple: "minimax-portal/MiniMax-M2.7-highspeed",
+          normal: "zhipu/GLM-5.1",
+          deep: "omniroute/cx/gpt-5.4",
+        };
+        const budgetModelMap: Record<string, string> = {
+          high: "cliproxyapi/gpt-5.4",
+          medium: "zhipu/GLM-5.1",
+          low: "minimax-portal/MiniMax-M2.7-highspeed",
+        };
+        const resolvedModel = asString(params.model) || (complexityBand && complexityModelMap[complexityBand]) || (budgetBand && budgetModelMap[budgetBand]) || "";
+        if (complexityBand) {
+          metadata.complexity_band = complexityBand;
+        }
         let payload: UnknownRecord;
         try {
           payload = buildTsRuntimeSpawnPayload({
             task: asString(params.task),
-            route: asString(params.route, "spawn_single"),
+            route: asString(params.route, "delegate.single"),
             decision: existingState?.decision as UnknownRecord | undefined,
             metadata: {
               ...metadata,
-              model: asString(params.model),
+              model: resolvedModel,
               runtime: asString(params.runtime),
               stream_to: asString(params.streamTo),
               parent_id: asString(params.parentId),
@@ -698,7 +799,7 @@ export function getToolRegistrations(): ToolRegistration[] {
     {
       name: "octoclaw_status",
       label: "OctoClaw Status",
-      description: "Show current OctoClaw runner and task state. Default to task anchors; use compact/table/lanes only when the user explicitly asks for those legacy views.",
+      description: "Show current OctoClaw task state. Default to task anchors; use compact/table/lanes only when the user explicitly asks for those legacy views.",
       params: {
         type: "object",
         additionalProperties: false,
@@ -800,7 +901,7 @@ export function getCommandRegistrations(): CommandRegistration[] {
         try {
           payload = buildTsRuntimeSpawnPayload({
             task,
-            route: "spawn_single",
+            route: "delegate.single",
             decision: {},
             metadata: buildPolicyMetadata(ctx),
           });

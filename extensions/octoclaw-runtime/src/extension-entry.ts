@@ -7,6 +7,7 @@ import {
   cancelAckGuardForState,
   maybeSendLatencyAck,
   notifyUserMessage,
+  sendReactionAck,
   startAckGuard,
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
@@ -17,9 +18,11 @@ import {
   isManagedAgentContext,
   resolveAckDeliverySessionKey,
   resolvePolicyStateKey,
+  resolvePolicyStateKeys,
 } from "./resolve/session.js";
 import { resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
 import { envOverrides, resolveReplayLogPath, resolveTaskStatePath } from "./resolve/env.js";
+import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
 import {
   compactPolicyPrompt,
@@ -65,12 +68,25 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
   "Do not hand-write session or subagent spawning commands.",
+  "If the judge recommended delegation, it provided structured reason codes (e.g. context_hygiene, fast_first_response, background_execution, cost_tiering, specialized_tools, quality_isolation).",
+  "",
+  "Why delegate instead of doing it yourself:",
+  "- Sub-agents run in isolated context — your conversation stays clean and responsive for the user.",
+  "- Complex tasks get capable models; simple tasks get fast, cheap models — better latency and lower cost.",
+  "- The user gets faster replies because you stay available while sub-agents work in parallel.",
+  "- Delegating keeps your context window fresh for the next user message.",
 ].join("\n");
 
+const LATENCY_ACK_DELAY_MS = 4000;
+const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
-  "For non-hard-runner requests, submit a structured route hint before answering or dispatching.",
-  "Use octoclaw_route_hint to state whether this should be direct, spawn_single, or spawn_multi.",
-  "After route_hint merge: direct may answer directly; delegated routes must go through octoclaw_dispatch.",
+  "For non-hard-observe requests, submit a structured route hint before answering or dispatching.",
+  "Use octoclaw_route_hint to state whether this should be reply, delegate.single, or observe.",
+  "After route_hint merge: reply may answer directly; delegated routes must go through octoclaw_dispatch.",
+  "",
+  "Prefer delegation for multi-step tasks (writing code, research, analysis, file changes).",
+  "Handle directly only for simple Q&A, greetings, or quick clarifications.",
 ].join("\n");
 
 const OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT = [
@@ -208,6 +224,20 @@ export const plugin = {
     const ackTimerFirstTierMs = Number(pi.pluginConfig?.ackTimerFirstTierMs) || 60_000;
     const ackTimerTierCount = Math.min(6, Math.max(1, Number(pi.pluginConfig?.ackTimerTierCount) || 3));
 
+    const judgeFastFromPlugin = (pi.pluginConfig?.judgeFast && typeof pi.pluginConfig.judgeFast === "object" && !Array.isArray(pi.pluginConfig.judgeFast)) ? pi.pluginConfig.judgeFast as Record<string, unknown> : {};
+    const judgeFastFromEnv = (() => {
+      const json = process.env.OCTOCLAW_JUDGE_FAST?.trim();
+      if (!json) return {};
+      try { const p = JSON.parse(json); return (typeof p === "object" && p && !Array.isArray(p)) ? p as Record<string, unknown> : {}; } catch { return {}; }
+    })();
+    const judgeFastRaw = (Object.keys(judgeFastFromPlugin).length > 0) ? judgeFastFromPlugin : judgeFastFromEnv;
+
+    if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+      console.log(`[octoclaw-judge] pluginKeys=${Object.keys(judgeFastFromPlugin).length} envKeys=${Object.keys(judgeFastFromEnv).length} rawKeys=${Object.keys(judgeFastRaw).length} envVar="${process.env.OCTOCLAW_JUDGE_FAST?.slice(0, 50) ?? "(none)"}" modelId="${(judgeFastRaw as Record<string, unknown>).modelId ?? "(none)"}"`);
+    }
+
+    const delegationEnabled = pi.pluginConfig?.delegationEnabled !== false && process.env.OCTOCLAW_DELEGATION_ENABLED !== "false";
+
     // Fire-and-forget bridge init — lazy-loads openclaw runtime binding
     // If runtime unavailable, getCachedBridge() returns unavailable bridge (fail-closed)
     initNativeHelperBridge().catch(() => { /* bridge will use unavailable fallback */ });
@@ -238,7 +268,7 @@ export const plugin = {
       const hookConfig = asRecord(decision.hook_interface).before_model_resolve;
       const resolvedHookConfig = asRecord(hookConfig);
       if (!resolvedHookConfig.enabled) return;
-      if (stringValue(asRecord(decision.route_decision).route || "direct") !== "direct") return;
+      if (stringValue(asRecord(decision.route_decision).route || "reply") !== "reply") return;
       const modelOverride = stringValue(resolvedHookConfig.selected_model);
       if (!modelOverride) return;
       pi.logger?.debug?.(`octoclaw before_model_resolve modelOverride=${modelOverride}`);
@@ -251,28 +281,22 @@ export const plugin = {
 
       const preStateKey = resolvePolicyStateKey(ctx);
       const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
+      const sessionKeys = resolvePolicyStateKeys(ctx);
+      preMetadata.judge_replay_log_path = resolveReplayLogPath();
+      preMetadata.judge_task_state_path = resolveTaskStatePath();
+      preMetadata.judge_session_keys = sessionKeys;
+      preMetadata.judge_context_packet = buildLiveJudgeContextPacket({
+        prompt,
+        metadata: preMetadata,
+      });
+      preMetadata._judgeFastConfig = judgeFastRaw;
+      preMetadata._delegationEnabled = delegationEnabled;
       const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
 
       if (preSessionKey) {
         notifyUserMessage(preSessionKey, preStateKey);
       }
 
-      const resolved = await resolvePolicyDecisionForContext(
-        prompt,
-        ctx,
-        process.cwd(),
-        pi.logger,
-      );
-
-      const decision = asRecord(resolved?.decision);
-      const hookConfig = asRecord(asRecord(decision.hook_interface).before_prompt_build);
-      if (!hookConfig.enabled) return;
-      const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
-      const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
-
-      // Extract inbound Slack message_id at top level so ALL ACK paths (timer + latency) can use it.
-      // The hook context (ctx) does NOT carry ts/messageTs/messageId — they are only embedded in
-      // the prompt text as JSON metadata.  Without this, every ACK falls back to top-level delivery.
       let inboundMessageTs = "";
       {
         const inbound = asRecord(ctx.inboundMessage);
@@ -287,8 +311,57 @@ export const plugin = {
         }
       }
 
+      const judgeAckEnabled = Boolean(judgeFastRaw.judgeAckEnabled);
+      const ackReactionEmoji = stringValue(judgeFastRaw.ackReactionEmoji);
+
+      if (ackReactionEmoji && preSessionKey && inboundMessageTs) {
+        sendReactionAck(preSessionKey, inboundMessageTs, ackReactionEmoji).catch(() => {});
+      }
+
+      // When judgeAckEnabled=false: start latency timer BEFORE judge (4s from message arrival, fast ACK).
+      // When judgeAckEnabled=true: start latency timer AFTER judge (so ack_text is available).
+      const pendingDecision: { value: UnknownRecord | null } = { value: null };
+
+      const startLatencyAckTimer = (timerStateKey: string) => {
+        const existingTimer = pendingLatencyAckTimers.get(timerStateKey);
+        if (existingTimer) clearTimeout(existingTimer);
+        const timer = setTimeout(async () => {
+          pendingLatencyAckTimers.delete(timerStateKey);
+          const currentDecision = pendingDecision.value ?? {};
+          const latencyMetadata = buildPolicyMetadata(ctx, { stateKey: timerStateKey });
+          if (inboundMessageTs && !stringValue(latencyMetadata.message_id)) {
+            latencyMetadata.message_id = inboundMessageTs;
+          }
+          const latencyResult = await maybeSendLatencyAck(currentDecision, latencyMetadata, timerStateKey, getPolicyStateForContext(ctx).state ?? {}, ctx, pi.logger ?? {}, "direct_lookup");
+          if (latencyResult?.sent) {
+            cancelAckGuard(preSessionKey);
+          }
+        }, LATENCY_ACK_DELAY_MS);
+        pendingLatencyAckTimers.set(timerStateKey, timer);
+      };
+
+      if (!judgeAckEnabled && !ackReactionEmoji) {
+        startLatencyAckTimer(preStateKey);
+      }
+
+      const resolved = await resolvePolicyDecisionForContext(
+        prompt,
+        ctx,
+        process.cwd(),
+        pi.logger,
+      );
+      pendingDecision.value = asRecord(resolved?.decision);
+
+      const decision = asRecord(resolved?.decision);
+      const hookConfig = asRecord(asRecord(decision.hook_interface).before_prompt_build);
+      if (!hookConfig.enabled) return;
+      const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
+      const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
+
       if (preSessionKey) {
-        console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
+        if (process.env.OCTOCLAW_ACK_DEBUG) {
+          console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
+        }
         startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId: inboundMessageTs, ackTimingConfig: { firstTierMs: ackTimerFirstTierMs, tierCount: ackTimerTierCount } });
       }
       if (state) {
@@ -302,20 +375,32 @@ export const plugin = {
       if (inboundMessageTs && !stringValue(metadata.message_id)) {
         metadata.message_id = inboundMessageTs;
       }
-      const latencyResult = await maybeSendLatencyAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, "direct_lookup");
-      if (latencyResult?.sent) {
-        cancelAckGuard(preSessionKey);
+
+      if (judgeAckEnabled && !ackReactionEmoji) {
+        startLatencyAckTimer(stateKey);
       }
 
       const prependSystem: string[] = [];
+      const judgeSucceeded = Boolean(decision._judge_succeeded);
+      const decisionDelegationEnabled = Boolean(decision._delegation_enabled ?? true);
+
       if (routeHintRequired(decision)) {
         prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
       }
+
+      if (decisionDelegationEnabled && !judgeSucceeded) {
+        prependSystem.push([
+          "OctoClaw delegation is available for this run.",
+          "You can decide whether to handle this request directly or delegate to a sub-agent via octoclaw_dispatch.",
+          "Use octoclaw_route_hint to indicate your routing preference (reply, delegate.single, or observe).",
+        ].join("\n"));
+      }
+
       if (isDelegatedRoute(decision)) {
         prependSystem.push(OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
       }
       const route = stringValue(asRecord(decision.route_decision).route);
-      const isSpawnRoute = route === "spawn_single" || route === "spawn_multi";
+      const isSpawnRoute = route === "delegate.single";
       const reviewRequired = Boolean(asRecord(decision.review_policy).required);
       if (isSpawnRoute && reviewRequired) {
         prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
@@ -381,7 +466,7 @@ export const plugin = {
       }
 
       if (
-        stringValue(asRecord(decision.route_decision).route) === "direct"
+        stringValue(asRecord(decision.route_decision).route) === "reply"
         && !isControlObserverDecision(decision)
         && !isSessionControlDecision(decision)
         && toolName
@@ -556,7 +641,7 @@ export const plugin = {
       }));
       const workflowRoute = stringValue(workflowRule.route || asRecord(decision.route_decision).route);
       await recordPolicyReplay(
-        workflowRoute === "runner" ? "tool_blocked_runner_policy" : "tool_blocked_delegation_policy",
+        workflowRoute === "observe" ? "tool_blocked_runner_policy" : "tool_blocked_delegation_policy",
         {
           sessionKey: stateKey || "",
           sessionId: stringValue(ctx.sessionId),
@@ -569,9 +654,9 @@ export const plugin = {
       );
       return {
         block: true,
-        blockReason: workflowRoute === "runner"
-          ? `OctoClaw runtime policy route=runner requires the runner workflow. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed workflow tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`
-          : `OctoClaw runtime policy route=${stringValue(asRecord(decision.route_decision).route || "direct")} requires delegation. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed control tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`,
+          blockReason: workflowRoute === "observe"
+            ? `OctoClaw runtime policy route=observe requires the observe workflow. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed workflow tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`
+            : `OctoClaw runtime policy route=${stringValue(asRecord(decision.route_decision).route || "reply")} requires delegation. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed control tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`,
       };
     });
 
@@ -579,6 +664,11 @@ export const plugin = {
       if (!isManagedAgentContext(ctx)) return;
       const { key: stateKey, state } = getPolicyStateForContext(ctx);
       if (!stateKey) return;
+      const pendingTimer = pendingLatencyAckTimers.get(stateKey);
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingLatencyAckTimers.delete(stateKey);
+      }
       cancelAckGuardForState(stateKey);
       await recordPolicyReplay(
         "agent_end",

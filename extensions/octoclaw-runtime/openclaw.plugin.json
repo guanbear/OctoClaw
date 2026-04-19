@@ -20,6 +20,70 @@
         "type": "string",
         "minLength": 1,
         "description": "Override WORKSPACE_ROOT path"
+      },
+      "ackTimerFirstTierMs": {
+        "type": "number",
+        "minimum": 10000,
+        "description": "ACK timer first tier timeout in milliseconds (default 60000)"
+      },
+      "ackTimerTierCount": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 6,
+        "description": "ACK timer tier count (default 3, max 6)"
+      },
+      "delegationEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable delegation/runner routing. When false, all requests go direct (reply)"
+      },
+      "judgeFast": {
+        "type": "object",
+        "description": "LLM semantic routing judge configuration",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "shadowMode": {
+            "type": "boolean",
+            "default": false
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "baseUrl": {
+            "type": "string",
+            "minLength": 1
+          },
+          "apiKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeoutMs": {
+            "type": "number",
+            "minimum": 500,
+            "default": 3000
+          },
+          "timeoutLocalMs": {
+            "type": "number",
+            "minimum": 300,
+            "default": 800
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.6
+          },
+          "local": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": ["modelId", "baseUrl", "apiKey"],
+        "additionalProperties": false
       }
     }
   }

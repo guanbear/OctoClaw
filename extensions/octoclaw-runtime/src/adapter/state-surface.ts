@@ -27,14 +27,15 @@ function substrateSummary(record: RuntimeStateSurfaceRecord): string {
 }
 
 export function buildStatusSurfaceView(record: RuntimeStateSurfaceRecord): StatusSurfaceViewModel {
-  const route = record.truth.requestId ? "delegate.single" : "reply";
+  const route = (record as RuntimeStateSurfaceRecord & { identity?: { route?: string } }).identity?.route
+    || (record.truth.requestId ? "delegate.single" : "reply");
   return {
     ...buildContractEnvelope("projection"),
     taskId: record.truth.taskId,
     flowId: record.truth.flowId,
     state: record.substrateState,
     route,
-    role: route === "reply" ? "main_reply" : "worker_research",
+    role: route === "observe" ? "observer_probe" : route === "reply" ? "main_reply" : "worker_research",
     coordinationMode: route === "delegate.single" ? "solo_worker" : "",
     backendSummary: "openclaw-native",
     workerPool: "octoclaw-runtime",
