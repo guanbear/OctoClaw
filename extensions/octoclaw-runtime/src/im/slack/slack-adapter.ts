@@ -84,6 +84,44 @@ export class SlackAdapter {
     }
   }
 
+  async react(params: {
+    sessionKey: string;
+    messageId: string;
+    emoji: string;
+    timeoutMs?: number;
+    cwd?: string;
+  }): Promise<{ ok: boolean; error?: string }> {
+    const { sessionKey, messageId, emoji, timeoutMs = 5000, cwd } = params;
+    const target = this.resolveTarget(sessionKey);
+    if (!target.target || !messageId) {
+      return { ok: false, error: "missing_target_or_message_id" };
+    }
+
+    const args = [
+      "message", "react",
+      "--channel", "slack",
+      "--target", target.target,
+      "--message-id", messageId,
+      "--emoji", emoji,
+      "--json",
+    ];
+
+    try {
+      const result = await runCommand("openclaw", args, {
+        cwd: cwd || resolveWorkspaceRoot(),
+        timeoutMs: Math.max(500, timeoutMs),
+      });
+      if (result.code === 0) {
+        this.ackDebug(`react ok: emoji=${emoji} messageId=${messageId}`);
+        return { ok: true };
+      }
+      this.ackDebug(`react failed: code=${result.code} stderr=${String(result.stderr).slice(0, 100)}`);
+      return { ok: false, error: String(result.stderr || "react_failed").slice(0, 200) };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
   async send(params: {
     sessionKey: string;
     message: string;
@@ -113,12 +151,8 @@ export class SlackAdapter {
         this.ackDebug("send succeeded (threaded)");
         return threadedResult;
       }
-      this.ackDebug(`threaded attempt failed: ${threadedResult.error}, retrying without --reply-to`);
-      const fallbackResult = await this.executeSend(target, params.message, timeoutMs, params.cwd);
-      if (fallbackResult.sent) {
-        this.ackDebug("send succeeded (top-level fallback)");
-      }
-      return fallbackResult;
+      this.ackDebug(`threaded attempt failed: ${threadedResult.error} — NOT retrying without --reply-to to avoid double delivery`);
+      return threadedResult;
     }
 
     // No replyToMessageId — also try session-key-derived threadTs if present
@@ -160,28 +194,40 @@ export class SlackAdapter {
         timeoutMs,
       });
 
-      if (result.code === 0 && result.stdout) {
-        try {
-          const parsedResult = asSlackCommandResult(JSON.parse(result.stdout));
-          if (parsedResult.ok === true) {
-            const messageId = stringValue(parsedResult.message?.ts || parsedResult.ts);
-            const threadTs = stringValue(parsedResult.message?.thread_ts || parsedResult.thread_ts || target.threadTs);
+      if (result.code === 0) {
+        if (result.stdout) {
+          try {
+            const parsedResult = asSlackCommandResult(JSON.parse(result.stdout));
+            if (parsedResult.ok === true) {
+              const messageId = stringValue(parsedResult.message?.ts || parsedResult.ts);
+              const threadTs = stringValue(parsedResult.message?.thread_ts || parsedResult.thread_ts || target.threadTs);
+              return {
+                sent: true,
+                delivered: true,
+                ...(messageId ? { messageId } : {}),
+                ...(threadTs ? { threadTs } : {}),
+              };
+            }
+
+            return {
+              sent: false,
+              delivered: false,
+              error: stringValue(parsedResult.error) || "send_failed",
+            };
+          } catch {
+            // stdout is not valid JSON but exit code 0 — treat as success
+            // to avoid double delivery on retry (stderr may contain debug logs)
             return {
               sent: true,
               delivered: true,
-              ...(messageId ? { messageId } : {}),
-              ...(threadTs ? { threadTs } : {}),
             };
           }
-
-          return {
-            sent: false,
-            delivered: false,
-            error: stringValue(parsedResult.error) || result.stderr || "send_failed",
-          };
-        } catch {
-          // ignore malformed json and fall through to command failure shape
         }
+        // exit code 0 but no stdout — treat as likely success to avoid double delivery
+        return {
+          sent: true,
+          delivered: true,
+        };
       }
 
       return {
