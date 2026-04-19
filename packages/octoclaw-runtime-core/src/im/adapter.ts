@@ -92,9 +92,35 @@ export function normalizeChannelUserId(userId: string, channel: IMChannel): stri
   if (channel === "slack") {
     return userId.toUpperCase();
   }
-
+  if (channel === "wechat" || channel === "feishu") {
+    let id = userId.trim();
+    if (id.startsWith("user:")) {
+      id = id.slice(5);
+    }
+    return id;
+  }
   return userId;
 }
+
+export const WECHAT_CAPABILITIES: IMCapabilityMatrix = {
+  canUpdateMessage: false,
+  canStreamNative: false,
+  canReplyInThread: false,
+  canTypingIndicator: false,
+  messageIdFormat: "message_id",
+  userIdCaseSensitive: false,
+  maxMessageLength: 2048,
+};
+
+export const FEISHU_CAPABILITIES: IMCapabilityMatrix = {
+  canUpdateMessage: false,
+  canStreamNative: false,
+  canReplyInThread: true,
+  canTypingIndicator: false,
+  messageIdFormat: "message_id",
+  userIdCaseSensitive: false,
+  maxMessageLength: 40000,
+};
 
 /** Check if a channel supports threading */
 export function channelSupportsThreading(channel: IMChannel): boolean {
