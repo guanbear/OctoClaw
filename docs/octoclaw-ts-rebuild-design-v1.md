@@ -2525,6 +2525,23 @@ v2 应该采用：
 
 而不是反过来。
 
+这也意味着：
+
+1. 系统应该有 durable memory
+2. 但 durable memory 不等于主 agent 每次都要吃全部历史
+3. 主 agent 默认知道“发生了什么”，应主要通过：
+   - `thread summary`
+   - `checkpoint summary`
+   - `artifact refs`
+   - `structured state snapshot`
+4. 而不是通过回灌完整 transcript、完整 worker log、完整调度细节
+
+因此更准确的口径是：
+
+1. memory 主要属于 system-level context
+2. `main_reply` 只消费经过压缩和裁剪后的 working context
+3. 这样既能保留“知道做了哪些事”的能力，又能保持主 agent 上下文干净、首响快、token 低
+
 ## 9.4 delivery 规范
 
 progress delivery 和 final delivery 应该是不同协议：
@@ -2979,6 +2996,33 @@ v1 先把接口做对：
    - `backend planner` 结合系统信号做最终 runner/native 判定
    - `main_reply` / worker 只负责后续执行与交付，不承担 route/backend authority
 
+如果后面发现只靠 `judge_fast + backend planner` 仍有少量高代价边界 case，还应保留一个：
+
+1. **optional `judge_strong` / `route_adjudicator`**
+2. 默认不进入热路径
+3. 只在少量不确定、高代价、边界模糊 case 才升级调用
+
+它的作用不是替代主 agent，而是做独立仲裁：
+
+1. 不直接执行任务
+2. 不长期持有完整主会话
+3. 不拥有 delivery authority
+4. 只输出更稳的 route/backend recommendation
+
+更合适的触发条件是：
+
+1. `judge_fast.confidence` 过低
+2. `complexity_band` 与 `quality_bar` 落在高代价边界区
+3. `native + on-demand` 与 runner 的 expected gain 接近，且误判代价高
+4. 任务被标记为高风险写入 / 高质量交付
+5. harness 已经识别某类任务在 `judge_fast` 上误判率偏高
+
+因此 v1/v2 的总口径更像：
+
+1. 常态：`judge_fast -> backend planner -> execution`
+2. 少量边界 case：`judge_fast -> optional judge_strong -> backend planner -> execution`
+3. 主 agent 始终不承担 route/backend authority
+
 具体建议如下：
 
 1. `judge_fast` 负责：
@@ -3008,7 +3052,8 @@ v1 先把接口做对：
 
 1. `judge_fast` 只负责**粗判**
 2. `backend planner` 负责**收口**
-3. 主 agent 最多只在后续执行中通过 plan/checkpoint 间接暴露“任务比预想更难/更长”，供 reconcile 或后续优化使用
+3. `judge_strong` 只在边界 case 做独立仲裁
+4. 主 agent 最多只在后续执行中通过 plan/checkpoint 间接暴露“任务比预想更难/更长”，供 reconcile 或后续优化使用
 
 也就是说，v1 不应该设计成：
 
@@ -3018,8 +3063,9 @@ v1 先把接口做对：
 而应该设计成：
 
 1. 小 judge 给 band
-2. 代码 planner 读系统状态做最终 backend 判定
-3. 后续 harness 再根据真实 telemetry 去校正 judge band 和 planner policy
+2. optional `judge_strong` 只在不确定 case 才升级
+3. 代码 planner 读系统状态做最终 backend 判定
+4. 后续 harness 再根据真实 telemetry 去校正 judge band 和 planner policy
 
 也就是说，backend planner 的默认心智应该是：
 
@@ -3040,6 +3086,7 @@ v1 先把接口做对：
 2. **开启 runner 是性能优化，不是功能前提**
 3. **tmux 是 runner 的可选观察面，不是 runner 的实现前提**
 4. **native task/flow + on-demand worker 才是默认执行心智**
+5. **v1 live path 不必实现 runner；runner 可后置为 future optional backend**
 
 ### 9.6.5 tmux 的定位
 

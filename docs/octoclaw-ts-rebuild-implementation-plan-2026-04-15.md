@@ -187,6 +187,8 @@ tools/
 16. expected duration 可作为 runner 升级信号之一，但不能脱离 complexity / quality bar / runner model eligibility 单独使用
 17. `judge_fast` 只输出粗粒度 band 与 risk signals，不直接拥有最终 backend authority
 18. `main_reply` / worker 不承担 route/backend authority，避免主 agent 控制面过重
+19. `judge_strong` / `route_adjudicator` 只作为 optional uncertainty escalation lane，不进入默认热路径
+20. v1 live path 允许完全不实现 runner；runner 可后置为 future optional backend
 
 明确禁止：
 
@@ -195,6 +197,7 @@ tools/
 3. hard-boundary gate 演化成 prompt pattern / regex 语义分类器
 4. 先判“走不走 runner”，再反推 semantic route
 5. 让主 agent 读取更多上下文后再充当 runner dispatch judge
+6. 把 `judge_strong` 变成每条请求都走的第二层默认模型调用
 
 验收标准：
 
@@ -370,6 +373,15 @@ tools/
    - `quality_bar`
    - `risk_flags`
 13. `backend planner` 必须基于 judge band + runtime signals 做最终 backend 决策，而不是直接信任主 agent 自报
+14. optional `judge_strong` output schema 复用 `judge_fast` 主字段，并额外包含：
+   - `adjudication_reason`
+   - `override_recommendation`
+   - `confidence_delta`
+15. `judge_strong` 触发条件至少包括：
+   - low confidence
+   - high-cost boundary case
+   - runner/native expected gain 接近
+   - high-risk write or high-quality delivery
 
 验收标准：
 
@@ -383,6 +395,7 @@ tools/
 8. backend selection 决策可解释，不出现“因为 route 像 runner 任务所以走 runner”这类黑箱逻辑
 9. 不出现“因为任务长，所以默认走便宜 runner”这类单因子误判
 10. 不出现“为了判 runner 再把主 agent 拉进更重上下文和控制逻辑”这类架构回退
+11. `judge_strong` 不进入常规热路径，只有边界 case 才触发
 
 依赖：WS0、WS1、WS2、WS3
 
