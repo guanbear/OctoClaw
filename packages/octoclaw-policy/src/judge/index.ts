@@ -103,3 +103,10 @@ export function judgeFast(input: JudgeFastInput): JudgeFastOutput {
 }
 
 export type { IntentClass };
+export type {
+  JudgeBindingControlLayer,
+  JudgeContextPacket,
+  JudgeContinuationStateLayer,
+  JudgeCoreTurnLayer,
+  JudgeMinimalEvidenceLayer,
+} from "./judge-schema.js";
