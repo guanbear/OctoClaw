@@ -2525,6 +2525,49 @@ v2 应该采用：
 
 而不是反过来。
 
+这里还要再明确一点：
+
+1. `judge_fast` / `judge_strong` 不能被实现成“只看最后一句话的分类器”
+2. 但也不应该直接吞整段原始会话
+3. 更合理的是吃一个 **judge context packet**
+
+这个 packet 在 continuation 场景下，至少应包含：
+
+1. `current_turn`
+2. `thread_summary`
+3. `active_intent`
+4. `last_agent_act`
+5. `pending_slots`
+6. `anchor/task binding`
+7. 必要时附一个很短的 `recent_excerpt`
+
+例如像下面这种对话：
+
+1. 用户先说“帮我写个脚本”
+2. 系统追问语言/输入输出
+3. 用户再说“Python吧 获取5个国家的时间”
+
+如果 judge 只看最后一句，就很容易误判成一个新的碎片请求。  
+而如果 judge packet 里带了：
+
+1. 当前活跃意图是 `write_script`
+2. 上一条 agent act 是“补齐脚本槽位”
+3. `pending_slots.language/task` 尚未补齐
+
+那么 judge 才能正确理解：
+
+1. 这不是新任务
+2. 这是在继续填写前一个未完成意图
+3. `Python` 是 language slot
+4. “获取 5 个国家的时间” 是 task intent
+
+所以更准确的设计口径应该是：
+
+1. `judge_fast` 看的是**压缩的判定上下文**
+2. `judge_strong` 看的是**稍大一点但仍受预算约束的判定上下文**
+3. 两者都不是“最后一句分类器”
+4. 两者也都不是“全量 transcript 推理器”
+
 这也意味着：
 
 1. 系统应该有 durable memory

@@ -382,6 +382,14 @@ tools/
    - high-cost boundary case
    - runner/native expected gain 接近
    - high-risk write or high-quality delivery
+16. judge input context packet 至少包含：
+   - `current_turn`
+   - `thread_summary`
+   - `active_intent`
+   - `last_agent_act`
+   - `pending_slots`
+   - `anchor_or_task_binding`
+17. judge implementation 禁止退化成“只看最后一句”的分类器；continuation case 必须通过 context packet 正确识别
 
 验收标准：
 
@@ -396,6 +404,7 @@ tools/
 9. 不出现“因为任务长，所以默认走便宜 runner”这类单因子误判
 10. 不出现“为了判 runner 再把主 agent 拉进更重上下文和控制逻辑”这类架构回退
 11. `judge_strong` 不进入常规热路径，只有边界 case 才触发
+12. continuation/slot-filling 场景下，judge 不会因为只看最后一句而误把同一任务判成新请求
 
 依赖：WS0、WS1、WS2、WS3
 
