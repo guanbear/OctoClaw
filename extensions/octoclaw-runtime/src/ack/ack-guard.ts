@@ -882,6 +882,7 @@ export async function maybeSendPreDispatchAck(
   state: UnknownRecord,
   ctx: AckContext,
   logger: AckLogger,
+  replyToMessageId?: string,
 ): Promise<void> {
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
     return;
@@ -908,6 +909,7 @@ export async function maybeSendPreDispatchAck(
     if (!message) {
       return;
     }
+    const inboundTs = asString(replyToMessageId || metadata.message_id);
     await attemptAckSend({
       sessionKey,
       stateKey,
@@ -923,6 +925,7 @@ export async function maybeSendPreDispatchAck(
       ownerTag: "pre_dispatch",
       markPreDispatchSent: true,
       markMode: "channel_message",
+      replyToMessageId: inboundTs,
     });
   } catch (error) {
     logger.warn?.(`octoclaw pre-dispatch ack failed: ${String(error)}`);
@@ -943,6 +946,7 @@ export function scheduleEagerPreDispatchAck(
   state: UnknownRecord,
   ctx: AckContext,
   logger: AckLogger,
+  replyToMessageId?: string,
 ): void {
   if (!shouldSendPreDispatchAck(decision, state, ctx)) {
     return;
@@ -953,7 +957,7 @@ export function scheduleEagerPreDispatchAck(
     preDispatchAckPending: true,
   });
   setTimeout(() => {
-    void maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger);
+    void maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger, replyToMessageId);
   }, 0);
 }
 

@@ -101,10 +101,13 @@ export class SlackAdapter {
     }
 
     const timeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
-    const wantThread = !!(params.replyToMessageId && this.shouldUseThread());
-    this.ackDebug(`replyToMessageId=${params.replyToMessageId ?? ""} shouldUseThread=${this.shouldUseThread()} wantThread=${wantThread}`);
 
-    if (wantThread) {
+    // When replyToMessageId is provided, always try --reply-to first so the ACK
+    // lands in the user's thread.  This is independent of the replyToMode config
+    // (which controls the general request flow).  For ACKs specifically, we want
+    // every reply to thread under the user's inbound message.
+    if (params.replyToMessageId) {
+      this.ackDebug(`replyToMessageId=${params.replyToMessageId} — attempting threaded send`);
       const threadedResult = await this.executeSend(target, params.message, timeoutMs, params.cwd, params.replyToMessageId);
       if (threadedResult.sent) {
         this.ackDebug("send succeeded (threaded)");
@@ -118,9 +121,14 @@ export class SlackAdapter {
       return fallbackResult;
     }
 
+    // No replyToMessageId — also try session-key-derived threadTs if present
+    if (target.threadTs) {
+      this.ackDebug(`no replyToMessageId but threadTs=${target.threadTs} — sending with --thread-id`);
+    }
+
     const result = await this.executeSend(target, params.message, timeoutMs, params.cwd);
     if (result.sent) {
-      this.ackDebug("send succeeded (no thread requested)");
+      this.ackDebug("send succeeded (no reply-to, top-level or thread-id)");
     }
     return result;
   }

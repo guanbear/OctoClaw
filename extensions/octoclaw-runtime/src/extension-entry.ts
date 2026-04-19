@@ -268,12 +268,12 @@ export const plugin = {
       const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
       const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
 
+      let inboundMessageTs = "";
       if (preSessionKey) {
-        let replyToMessageId = "";
         const inbound = asRecord(ctx.inboundMessage);
-        if (inbound && Object.keys(inbound).length > 0) replyToMessageId = stringValue(inbound.ts || inbound.messageTs || inbound.messageId);
-        else { const ev = asRecord(ctx.event); if (ev && Object.keys(ev).length > 0) replyToMessageId = stringValue(ev.ts || ev.messageTs || ev.messageId); }
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId });
+        if (inbound && Object.keys(inbound).length > 0) inboundMessageTs = stringValue(inbound.ts || inbound.messageTs || inbound.messageId);
+        else { const ev = asRecord(ctx.event); if (ev && Object.keys(ev).length > 0) inboundMessageTs = stringValue(ev.ts || ev.messageTs || ev.messageId); }
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId: inboundMessageTs });
         if (state) {
           state.ackGuardKey = preSessionKey;
         }
@@ -281,7 +281,7 @@ export const plugin = {
 
       const metadata = buildPolicyMetadata(ctx, { stateKey });
       await maybeSendLatencyAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, "direct_lookup");
-      scheduleEagerPreDispatchAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {});
+      scheduleEagerPreDispatchAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, inboundMessageTs);
 
       const prependSystem: string[] = [];
       if (routeHintRequired(decision)) {

@@ -61,6 +61,10 @@ export const ACK_TEMPLATE_POOL: Map<AckStage, AckTemplateEntry[]> = new Map([
       buildTemplateEntry(AckStage.PreRouteSoftAck, "收到，稍等", "简短安抚", "优先短提示", ["聊天渠道优先"]),
       buildTemplateEntry(AckStage.PreRouteSoftAck, "看到了", "最短确认", "优先短提示", ["聊天渠道优先"]),
       buildTemplateEntry(AckStage.PreRouteSoftAck, "嗯，稍等我看看", "口语化", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "来了", "极简", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "稍等我瞅瞅", "随意", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "我看下", "简短", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.PreRouteSoftAck, "马上看", "积极", "优先短提示", ["聊天渠道优先"]),
     ],
   ],
   [
@@ -70,6 +74,9 @@ export const ACK_TEMPLATE_POOL: Map<AckStage, AckTemplateEntry[]> = new Map([
       buildTemplateEntry(AckStage.DelegateStarted, "好的，我来处理", "口语化", "优先新发", ["全渠道"]),
       buildTemplateEntry(AckStage.DelegateStarted, "着手处理中", "简洁", "优先新发", ["全渠道"]),
       buildTemplateEntry(AckStage.DelegateStarted, "了解了，正在跟进", "正式", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.DelegateStarted, "好嘞，搞起来", "轻松", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.DelegateStarted, "在跑了", "简短", "优先新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.DelegateStarted, "这就去", "积极", "优先新发", ["全渠道"]),
     ],
   ],
   [
@@ -79,6 +86,8 @@ export const ACK_TEMPLATE_POOL: Map<AckStage, AckTemplateEntry[]> = new Map([
       buildTemplateEntry(AckStage.ObserveStarted, "看下情况", "口语化", "可新发", ["全渠道"]),
       buildTemplateEntry(AckStage.ObserveStarted, "在查了", "最短", "可新发", ["全渠道"]),
       buildTemplateEntry(AckStage.ObserveStarted, "检查中", "中性", "可新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.ObserveStarted, "扫一眼", "随意", "可新发", ["全渠道"]),
+      buildTemplateEntry(AckStage.ObserveStarted, "看下", "极简", "可新发", ["全渠道"]),
     ],
   ],
   [
@@ -90,6 +99,12 @@ export const ACK_TEMPLATE_POOL: Map<AckStage, AckTemplateEntry[]> = new Map([
       buildTemplateEntry(AckStage.ReplySoftAck, "嗯，稍等", "最短", "优先短提示", ["聊天渠道优先"]),
       buildTemplateEntry(AckStage.ReplySoftAck, "好的，马上回", "积极", "优先短提示", ["聊天渠道优先"]),
       buildTemplateEntry(AckStage.ReplySoftAck, "在写了", "轻松", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "来了，我组织一下", "自然", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "看到", "极简", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "等我一下", "口语", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "马上", "简洁积极", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "在想，稍等", "说明状态", "优先短提示", ["聊天渠道优先"]),
+      buildTemplateEntry(AckStage.ReplySoftAck, "好的我看看", "随和", "优先短提示", ["聊天渠道优先"]),
     ],
   ],
   [
