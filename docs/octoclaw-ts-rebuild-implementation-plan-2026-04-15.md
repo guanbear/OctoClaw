@@ -369,29 +369,49 @@ tools/
    - `override_recommendation`
    - `confidence_delta`
 13. `judge_strong` 在 v1 默认只用于 shadow/replay/offline，不承担 live latency 关键路径
-14. judge input context packet 至少包含：
+14. judge input context packet 分为 4 层：
+   - core turn layer
+   - continuation state layer
+   - binding/control layer
+   - minimal evidence layer
+15. core turn layer 至少包含：
    - `current_turn`
+   - `turn_metadata`
    - `thread_summary`
+16. continuation state layer 至少包含：
    - `active_intent`
+   - `intent_status`
    - `last_agent_act`
    - `pending_slots`
+   - `open_question`
+17. binding/control layer 至少包含：
    - `anchor_or_task_binding`
-15. judge implementation 禁止退化成“只看最后一句”的分类器；continuation case 必须通过 context packet 正确识别
-16. route packet 需显式传给主 agent：
+   - `surface_context`
+   - `lifecycle_flags`
+18. minimal evidence layer 默认为空，仅在 summary/state 不足时附：
+   - `recent_excerpt`
+   - `artifact_refs`
+19. judge implementation 禁止退化成“只看最后一句”的分类器；continuation case 必须通过 context packet 正确识别
+20. judge packet 构建原则：
+   - `summary_first`
+   - `state_over_prose`
+   - `excerpt_last`
+   - `bounded_size`
+21. route packet 需显式传给主 agent：
    - `route_recommendation`
    - `role_recommendation`
    - `complexity_band`
    - `expected_duration_band`
    - `delegate_reason_codes`
    - `suggested_spawn_profile`
-17. main agent 如不同意 judge，必须走 objection protocol：
+22. main agent 如不同意 judge，必须走 objection protocol：
    - `route_objection`
    - `objection_reason`
    - `requested_route`
    - `confidence`
-18. orchestration 不允许接受 silent override；有 objection 时应按 policy 接受或记录到 shadow adjudication
-19. delegated task 必须带 `complexity_band` / `spawn_profile`
-20. v1 live judge 当前固定为 `omniroute/cx/gpt-5.4-mini`（关闭推理）
+23. orchestration 不允许接受 silent override；有 objection 时应按 policy 接受或记录到 shadow adjudication
+24. delegated task 必须带 `complexity_band` / `spawn_profile`
+25. v1 live judge 当前固定为 `omniroute/cx/gpt-5.4-mini`（关闭推理）
 
 验收标准：
 
@@ -409,6 +429,7 @@ tools/
 12. continuation/slot-filling 场景下，judge 不会因为只看最后一句而误把同一任务判成新请求
 13. continuation/slot-filling/active-task continuation 场景不会对每个 turn 都重做完整 judge
 14. 主 agent 不会在没有 objection record 的情况下悄悄改掉 judge 推荐 route
+15. judge context packet 在 replay 中可复用，便于校正 summary/state/excerpt 哪一层出了问题
 
 依赖：WS0、WS1、WS2、WS3
 

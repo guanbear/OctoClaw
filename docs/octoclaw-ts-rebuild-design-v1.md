@@ -2541,6 +2541,149 @@ v2 应该采用：
 6. `anchor/task binding`
 7. 必要时附一个很短的 `recent_excerpt`
 
+但为了真正可实现，我建议把它设计成一个分层 contract，而不是一串散字段。
+
+#### judge context packet 分层设计
+
+##### A. Core turn layer
+
+这层是每次 judge 都必须有的最小输入：
+
+1. `current_turn`
+   - 当前用户这一次输入
+   - 这是 judge 唯一必须看的原始自然语言
+2. `turn_metadata`
+   - 当前消息来源、channel、时间戳、是否编辑/补发
+   - 作用是避免把重复消息、渠道差异、补发消息误判成新意图
+3. `thread_summary`
+   - 对当前 thread 到目前为止的压缩摘要
+   - 作用是让 judge 知道“这段对话大体在干什么”
+
+原因：
+
+1. `current_turn` 决定这次新增了什么
+2. `thread_summary` 决定这次输入放在什么大背景里理解
+3. 这层解决的是“不是纯最后一句，也不是整段 transcript”这个基本矛盾
+
+##### B. Continuation state layer
+
+这层是减少误判最关键的一层，用来表达“当前会话还没完的事情”：
+
+1. `active_intent`
+   - 当前线程里正在进行的主意图
+   - 例如 `write_script`、`debug_issue`、`status_check`
+2. `intent_status`
+   - 当前意图所处状态
+   - 例如 `collecting_info`、`executing`、`waiting_input`、`delivering`
+3. `last_agent_act`
+   - 上一次系统明确做了什么
+   - 例如“请求补齐语言/输入输出”“已开始执行 delegated task”“已给出初步结论”
+4. `pending_slots`
+   - 当前还缺哪些关键信息
+   - 例如 `language/task/environment/output_format`
+5. `open_question`
+   - 上一轮 agent 明确向用户追问的问题
+
+原因：
+
+1. judge 真正常误判的，不是完全陌生的新句子
+2. 而是 continuation / slot-filling / 接上文补充
+3. 这层字段的作用，就是把“当前还没收尾的对话状态”显式交给 judge，而不是让模型自己从长对话里猜
+
+##### C. Binding and control layer
+
+这层告诉 judge：当前输入是不是已经挂在某个已有对象下，不该当新任务处理。
+
+1. `anchor_or_task_binding`
+   - 当前消息是否绑定到某个 task/thread/anchor
+2. `surface_context`
+   - 来自哪个 surface
+   - 例如 `chat`, `details`, `queue`, `task_reply`
+3. `lifecycle_flags`
+   - 当前是否处于 `waiting_input`、`recovery`、`approval_pending`、`delivery_pending`
+
+原因：
+
+1. 很多误判本质上不是语义理解错，而是忽略了“这条消息其实已经在某个执行对象下面”
+2. 这层字段能显著减少把回复 task、补充参数、approve/retry 误判成全新请求
+
+##### D. Minimal evidence layer
+
+这层是可选层，默认不带，只有 summary 和 state 不足时才补一点点原文证据。
+
+1. `recent_excerpt`
+   - 最近 1-3 轮最相关的原文摘录
+   - 不是完整 transcript
+2. `artifact_refs`
+   - 若当前 turn 明显引用已有 artifact/task result，可带短引用
+
+原因：
+
+1. 有些边界 case，只靠 summary/state 还不够
+2. 但直接把全量 transcript 喂进去会让上下文迅速变脏
+3. 所以应该只补“最少证据”，不是回灌整段历史
+
+#### judge context packet 的推荐 shape
+
+更推荐把它组织成类似这样的结构：
+
+```json
+{
+  "current_turn": "...",
+  "turn_metadata": {
+    "channel": "chat",
+    "edited": false
+  },
+  "thread_summary": "...",
+  "continuation_state": {
+    "active_intent": "write_script",
+    "intent_status": "collecting_info",
+    "last_agent_act": "asked_for_language_and_io",
+    "pending_slots": ["language", "task", "environment"],
+    "open_question": "请补充语言、输入输出和运行环境"
+  },
+  "binding_state": {
+    "anchor_or_task_binding": null,
+    "surface_context": "chat",
+    "lifecycle_flags": []
+  },
+  "recent_excerpt": [
+    "帮我写个脚本",
+    "Python吧 获取5个国家的时间"
+  ]
+}
+```
+
+#### 为什么要这么设计
+
+核心原因有 5 个：
+
+1. **防最后一句误判**
+   continuation 场景不能只靠最后一句判断
+2. **防全量 transcript 污染**
+   judge 需要上下文，但不该背整段历史
+3. **把 continuation 变成结构化状态问题**
+   比起“模型猜上下文”，更稳的是“系统把未完成状态显式提供出来”
+4. **降低 live judge 延迟**
+   packet 结构小、字段固定，比长 prompt 更稳
+5. **便于 harness 回放和校正**
+   以后 replay 时可以直接回放同一个 packet，看 judge 到底哪一层信息不足
+
+#### 构建原则
+
+为了保证 judge packet 不会越长越脏，建议再写死 4 条构建原则：
+
+1. summary first
+   - 优先用 `thread_summary / continuation_state`
+   - 不优先原始 transcript
+2. state over prose
+   - 能结构化表达的，就不要丢给 judge 自己读自然语言猜
+3. excerpt last
+   - 只有 summary/state 不足时，才补短 excerpt
+4. bounded size
+   - packet 必须有 token/field budget
+   - 超预算先压缩，再裁剪，再丢 excerpt
+
 例如像下面这种对话：
 
 1. 用户先说“帮我写个脚本”
