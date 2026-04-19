@@ -13,7 +13,7 @@ describe("buildWorkerBrief", () => {
     const brief = buildWorkerBrief("worker_code", goal);
 
     expect(brief.role).toBe("worker_code");
-    expect(brief.modelProfile).toBe("code");
+    expect(brief.modelProfile).toBe("worker_code_normal");
     expect(brief.allowedTools).toEqual(["read", "edit", "write", "bash", "lsp"]);
     expect(brief.outputContract).toBe("worker_result");
   });
@@ -22,7 +22,7 @@ describe("buildWorkerBrief", () => {
     const brief = buildWorkerBrief("worker_research", goal);
 
     expect(brief.role).toBe("worker_research");
-    expect(brief.modelProfile).toBe("research");
+    expect(brief.modelProfile).toBe("worker_research");
     expect(brief.allowedTools).toEqual(["search", "read", "webfetch"]);
     expect(brief.outputContract).toBe("worker_result");
   });
@@ -31,7 +31,7 @@ describe("buildWorkerBrief", () => {
     const brief = buildWorkerBrief("worker_review", goal);
 
     expect(brief.role).toBe("worker_review");
-    expect(brief.modelProfile).toBe("review");
+    expect(brief.modelProfile).toBe("worker_review");
     expect(brief.allowedTools).toEqual(["read", "grep", "lsp"]);
     expect(brief.outputContract).toBe("review_result");
   });

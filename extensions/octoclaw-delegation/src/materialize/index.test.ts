@@ -61,7 +61,7 @@ describe("materializeDelegatedWork", () => {
       claimOwner: "worker-7",
       workspaceMode: "shared_workspace",
       backend: "openclaw-native",
-      modelProfile: "code",
+      modelProfile: "worker_code_normal",
       allowedTools: ["read", "edit", "write", "bash", "lsp"],
       outputContract: "worker_result",
     });

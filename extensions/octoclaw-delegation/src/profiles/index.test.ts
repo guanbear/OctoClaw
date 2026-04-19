@@ -32,8 +32,8 @@ describe("delegation profiles", () => {
   });
 
   it("maps each delegation role to the expected model profile", () => {
-    expect(resolveDelegationProfile("worker_code").modelProfile).toBe("code");
-    expect(resolveDelegationProfile("worker_research").modelProfile).toBe("research");
-    expect(resolveDelegationProfile("worker_review").modelProfile).toBe("review");
+    expect(resolveDelegationProfile("worker_code").modelProfile).toBe("worker_code_normal");
+    expect(resolveDelegationProfile("worker_research").modelProfile).toBe("worker_research");
+    expect(resolveDelegationProfile("worker_review").modelProfile).toBe("worker_review");
   });
 });
