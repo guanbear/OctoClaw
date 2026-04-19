@@ -37,10 +37,6 @@ function interpolateTemplate(text: string, vars?: Record<string, string>): strin
   });
 }
 
-function normalizeValue(value: string | undefined): string {
-  return String(value ?? "").trim().toLowerCase();
-}
-
 function buildTemplateEntry(
   stage: AckStage,
   text: string,
@@ -123,52 +119,45 @@ export const ACK_TEMPLATE_POOL: Map<AckStage, AckTemplateEntry[]> = new Map([
   ],
 ]);
 
-function prefersShortForm(inputs: TemplateSelectionInputs): boolean {
-  return inputs.channelCapability === "text_only"
-    || inputs.burstState === "active"
-    || inputs.userInputActive === true;
+function randomFrom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function selectPreRouteSoftAckTemplate(entries: AckTemplateEntry[], inputs: TemplateSelectionInputs): AckTemplateEntry {
-  return prefersShortForm(inputs) ? (entries[1] ?? entries[0]) : entries[0];
+function selectPreRouteSoftAckTemplate(entries: AckTemplateEntry[], _inputs: TemplateSelectionInputs): AckTemplateEntry {
+  return randomFrom(entries);
 }
 
-function selectDelegateStartedTemplate(entries: AckTemplateEntry[], inputs: TemplateSelectionInputs): AckTemplateEntry {
-  if (prefersShortForm(inputs) && !inputs.anchorExists) {
-    return entries[1] ?? entries[0];
-  }
-  return entries[0];
+function selectDelegateStartedTemplate(entries: AckTemplateEntry[], _inputs: TemplateSelectionInputs): AckTemplateEntry {
+  return randomFrom(entries);
 }
 
-function selectObserveStartedTemplate(entries: AckTemplateEntry[], inputs: TemplateSelectionInputs): AckTemplateEntry {
-  const route = normalizeValue(inputs.route);
-  if (route.includes("probe") || route.includes("detect") || route.includes("scan")) {
-    return entries[1] ?? entries[0];
-  }
-  return entries[0];
+function selectObserveStartedTemplate(entries: AckTemplateEntry[], _inputs: TemplateSelectionInputs): AckTemplateEntry {
+  return randomFrom(entries);
 }
 
-function selectReplySoftAckTemplate(entries: AckTemplateEntry[], inputs: TemplateSelectionInputs): AckTemplateEntry {
-  return prefersShortForm(inputs) ? (entries[1] ?? entries[0]) : entries[0];
+function selectReplySoftAckTemplate(entries: AckTemplateEntry[], _inputs: TemplateSelectionInputs): AckTemplateEntry {
+  return randomFrom(entries);
 }
 
-function selectQueuedTemplate(entries: AckTemplateEntry[], inputs: TemplateSelectionInputs): AckTemplateEntry {
-  const queueState = normalizeValue(inputs.queueState);
-  if (prefersShortForm(inputs) || queueState === "queued" || queueState === "waiting") {
-    return entries[1] ?? entries[0];
-  }
-  return entries[0];
+function selectQueuedTemplate(entries: AckTemplateEntry[], _inputs: TemplateSelectionInputs): AckTemplateEntry {
+  return randomFrom(entries);
 }
 
 function selectBlockedTemplate(entries: AckTemplateEntry[], inputs: TemplateSelectionInputs): AckTemplateEntry {
-  return inputs.blockedReason ? entries[0] : (entries[1] ?? entries[0]);
+  if (inputs.blockedReason) {
+    const withReason = entries.filter((e) => e.text.includes("{reason}"));
+    return withReason.length > 0 ? randomFrom(withReason) : randomFrom(entries);
+  }
+  const withoutReason = entries.filter((e) => !e.text.includes("{reason}"));
+  return withoutReason.length > 0 ? randomFrom(withoutReason) : randomFrom(entries);
 }
 
 function selectProgressNudgeTemplate(entries: AckTemplateEntry[], inputs: TemplateSelectionInputs): AckTemplateEntry {
   if (inputs.stageHint && (inputs.anchorExists || inputs.channelCapability === "update")) {
-    return entries[0];
+    const withHint = entries.filter((e) => e.text.includes("{stage_hint}"));
+    return withHint.length > 0 ? randomFrom(withHint) : randomFrom(entries);
   }
-  return entries[1] ?? entries[0];
+  return randomFrom(entries);
 }
 
 export function selectAckTemplate(stage: AckStage, inputs: TemplateSelectionInputs): AckTemplateEntry | null {

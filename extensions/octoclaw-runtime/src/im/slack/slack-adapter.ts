@@ -78,6 +78,12 @@ export class SlackAdapter {
     };
   }
 
+  private ackDebug(msg: string): void {
+    if (process.env.OCTOCLAW_ACK_DEBUG === "1") {
+      console.error(`[ack-thread] ${msg}`);
+    }
+  }
+
   async send(params: {
     sessionKey: string;
     message: string;
@@ -95,23 +101,54 @@ export class SlackAdapter {
     }
 
     const timeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
+    const wantThread = !!(params.replyToMessageId && this.shouldUseThread());
+    this.ackDebug(`replyToMessageId=${params.replyToMessageId ?? ""} shouldUseThread=${this.shouldUseThread()} wantThread=${wantThread}`);
+
+    if (wantThread) {
+      const threadedResult = await this.executeSend(target, params.message, timeoutMs, params.cwd, params.replyToMessageId);
+      if (threadedResult.sent) {
+        this.ackDebug("send succeeded (threaded)");
+        return threadedResult;
+      }
+      this.ackDebug(`threaded attempt failed: ${threadedResult.error}, retrying without --reply-to`);
+      const fallbackResult = await this.executeSend(target, params.message, timeoutMs, params.cwd);
+      if (fallbackResult.sent) {
+        this.ackDebug("send succeeded (top-level fallback)");
+      }
+      return fallbackResult;
+    }
+
+    const result = await this.executeSend(target, params.message, timeoutMs, params.cwd);
+    if (result.sent) {
+      this.ackDebug("send succeeded (no thread requested)");
+    }
+    return result;
+  }
+
+  private async executeSend(
+    target: SlackDeliveryTarget,
+    message: string,
+    timeoutMs: number,
+    cwd?: string,
+    replyToMessageId?: string,
+  ): Promise<SlackSendResult> {
     const args = ["message", "send", "--channel", "slack", "--target", target.target, "--json"];
 
-    if (params.message) {
-      args.push("--message", params.message);
+    if (message) {
+      args.push("--message", message);
     }
 
     if (target.threadTs) {
       args.push("--thread-id", target.threadTs);
     }
 
-    if (params.replyToMessageId && this.shouldUseThread()) {
-      args.push("--reply-to", params.replyToMessageId);
+    if (replyToMessageId) {
+      args.push("--reply-to", replyToMessageId);
     }
 
     try {
       const result = await runCommand("openclaw", args, {
-        cwd: stringValue(params.cwd) || resolveWorkspaceRoot(),
+        cwd: stringValue(cwd) || resolveWorkspaceRoot(),
         timeoutMs,
       });
 
