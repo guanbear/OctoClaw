@@ -596,6 +596,21 @@ async function cleanupOldBackups(openclawHome: string, keepCount = 3): Promise<v
   }
 }
 
+async function syncJudgeFastEnv(openclawHome: string): Promise<void> {
+  const configPath = path.join(openclawHome, "judge-fast.json");
+  if (!(await pathExists(configPath))) return;
+  try {
+    const raw = await readFile(configPath, "utf8");
+    const config = JSON.parse(raw);
+    const json = JSON.stringify(config);
+    await runCommand("launchctl", ["setenv", "OCTOCLAW_JUDGE_FAST", json], { stdio: "pipe" });
+    await runCommand("launchctl", ["setenv", "OCTOCLAW_DELEGATION_ENABLED", "true"], { stdio: "pipe" });
+    stdout.write(`✅ Judge config synced: model=${config.modelId ?? "?"}\n`);
+  } catch (e) {
+    stdout.write(`⚠️  judge-fast.json parse failed: ${String(e)}\n`);
+  }
+}
+
 async function restartGateway(openclawHome: string): Promise<void> {
   const restartResult = await runCommand("openclaw", ["gateway", "restart"], { stdio: "pipe" });
   if (restartResult.exitCode !== 0) {
@@ -643,6 +658,7 @@ export async function deploy(options: DeployOptions): Promise<number> {
   await validateDeployedPackageGraph(paths.openclawHome);
   await validateDeployedExtensionLoad(paths.openclawHome);
   await cleanupOldBackups(paths.openclawHome, 3);
+  await syncJudgeFastEnv(paths.openclawHome);
 
   if (options.restart) {
     await restartGateway(paths.openclawHome);

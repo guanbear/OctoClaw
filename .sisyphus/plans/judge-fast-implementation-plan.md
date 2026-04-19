@@ -240,8 +240,8 @@ if (judgeConfig.shadowMode) {
       "octoclaw-runtime": {
         "config": {
           "judgeFast": {
-            "enabled": false,
-            "shadowMode": true,
+            "enabled": true,
+            "shadowMode": false,
             "modelId": "cliproxyapi/gpt-5.4",
             "baseUrl": "http://localhost:8317/v1",
             "apiKey": "sk-local-cliproxyapi",
@@ -255,9 +255,12 @@ if (judgeConfig.shadowMode) {
 }
 ```
 
-- `enabled: false` — 完全跳过 LLM judge，走纯规则（当前行为，默认值）
-- `enabled: true, shadowMode: true` — 调 judge 但不使用结果，只写 replay log
-- `enabled: true, shadowMode: false` — judge 结果参与路由决策
+- `enabled: true`（默认）— judge 作为模块化能力默认开启，提供语义路由
+- `enabled: false` — 关闭 judge，所有请求走 direct（当前纯规则行为）
+- `enabled: true, shadowMode: true` — 调 judge 但不使用结果，只写 replay log（观测期使用）
+- `enabled: true, shadowMode: false`（默认）— judge 结果参与路由决策
+
+**模块化设计**：judge 是 `packages/octoclaw-policy` 内的独立模块（`judge/` 目录），通过配置开关控制。关闭时零开销——不调 HTTP、不读配置、不走任何 judge 代码路径。插件入口 `extension-entry.ts` 在 `register()` 时读取配置，决定是否传入 judge config。
 
 ### 3.6 可观测性（Oracle 建议）
 

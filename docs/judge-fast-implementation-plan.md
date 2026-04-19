@@ -1,8 +1,8 @@
 # judge_fast 实现计划
 
-> 状态：实现计划 v2（2026-04-19，经 Oracle + Momus 审核修订）
+> 状态：实现计划 v3（2026-04-19，三层架构实现完成）
 > 关联设计：`octoclaw-ts-rebuild-design-v1.md` §9.2.0, `octoclaw-router-policy-refactor-2026-04-10.md` §2.3, §3.2
-> 目标：在 OctoClaw TS rebuild 中实现 LLM-based semantic judge，替换纯规则路由
+> 目标：在 OctoClaw TS rebuild 中实现三层语义路由架构（delegation 开关 → judge → 主 agent 兜底）
 
 ---
 
@@ -94,10 +94,12 @@ Phase 1 只做一层 judge + fallback，不做 multi-tier cascade。
 
 ### 2.5 模型
 
-v1 设计指定 `judge_fast → minimax-portal/MiniMax-M2.7`，但当前 omniroute 不可用。
-实际可用选项：
-- `cliproxyapi/gpt-5.4`（localhost:8317）— 当前 direct_main 也在用
-- 或配置为任何 OpenAI-compatible endpoint
+v1 阶段 judge 用**静态配置模型**（通过 plugin config 指定），初期推荐：
+- `minimax-portal/MiniMax-M2.7-highspeed` — 便宜、快、适合分类任务
+- 备选 `cliproxyapi/gpt-5.4`（localhost:8317）— 当前可用
+
+后期演进：judge 模型由 **auto-router 自动选择**（基于 telemetry 和 benchmark gate），不再静态配置。
+auto-router 选出的快模型（可能是本地模型或最便宜达标的云端模型）直接作为 judge 的模型来源。
 
 模型通过 `~/.openclaw/openclaw.json` plugin config 可配置（见 §3.5）。
 
@@ -240,8 +242,8 @@ if (judgeConfig.shadowMode) {
       "octoclaw-runtime": {
         "config": {
           "judgeFast": {
-            "enabled": false,
-            "shadowMode": true,
+            "enabled": true,
+            "shadowMode": false,
             "modelId": "cliproxyapi/gpt-5.4",
             "baseUrl": "http://localhost:8317/v1",
             "apiKey": "sk-local-cliproxyapi",
@@ -255,9 +257,12 @@ if (judgeConfig.shadowMode) {
 }
 ```
 
-- `enabled: false` — 完全跳过 LLM judge，走纯规则（当前行为，默认值）
-- `enabled: true, shadowMode: true` — 调 judge 但不使用结果，只写 replay log
-- `enabled: true, shadowMode: false` — judge 结果参与路由决策
+- `enabled: true`（默认）— judge 作为模块化能力默认开启，提供语义路由
+- `enabled: false` — 关闭 judge，所有请求走 direct（当前纯规则行为）
+- `enabled: true, shadowMode: true` — 调 judge 但不使用结果，只写 replay log（观测期使用）
+- `enabled: true, shadowMode: false`（默认）— judge 结果参与路由决策
+
+**模块化设计**：judge 是 `packages/octoclaw-policy` 内的独立模块（`judge/` 目录），通过配置开关控制。关闭时零开销——不调 HTTP、不读配置、不走任何 judge 代码路径。插件入口 `extension-entry.ts` 在 `register()` 时读取配置，决定是否传入 judge config。
 
 ### 3.6 可观测性（Oracle 建议）
 
@@ -359,3 +364,83 @@ if (judgeConfig.shadowMode) {
 |---|------|----------|
 | 12 | replay log 包含 judge 字段 | `grep judge_ replay.log` → 出现 `judge_latency_ms`、`judge_route`、`judge_override` 等 |
 | 13 | judge latency 可追踪 | replay log 中 `judge_latency_ms` 有实际数值 |
+
+---
+
+## 7. v3 架构更新（三层路由）
+
+### 7.1 三层决策链
+
+```
+Layer 1: delegation 开关 (pluginConfig.delegationEnabled)
+  ↓ OFF → force reply (direct), 跳过 judge 和 route_hint
+  ↓ ON
+Layer 2: judge (pluginConfig.judgeFast)
+  ↓ 成功 → 使用 judge 路由结果, 跳过 route_hint_required
+  ↓ 失败/超时/关闭
+Layer 3: 主 agent 兜底
+  → route_hint_required = true
+  → 注入 system prompt 告知可委派
+  → 主 agent 调 octoclaw_route_hint 自主判定 direct/spawn_single/observe
+  → 最终安全兜底: reply (direct)
+```
+
+### 7.2 实现状态（已完成）
+
+| 组件 | 文件 | 状态 |
+|------|------|------|
+| Schema | `judge-schema.ts` | ✅ 含 `local`/`timeoutLocalMs`/`timeoutMs` |
+| Prompt | `judge-prompt.ts` | ✅ 已去掉 few-shot（Oracle 建议） |
+| LLM adapter | `llm-judge.ts` | ✅ local/remote 双阈值超时 |
+| Policy resolver | `policy-resolver.ts` | ✅ 三层集成 + `_judge_succeeded` + `_route_hint_required` |
+| Extension entry | `extension-entry.ts` | ✅ delegation 开关 + 动态 route_hint + agent 委派感知 prompt |
+
+### 7.3 关键实现细节
+
+**delegation 开关**：`pluginConfig.delegationEnabled`（默认 true）。关闭时所有请求走 direct，不调 judge，不要求 route_hint。
+
+**judge 成功标记**：`_judge_succeeded = true` 传入下游 decision，`applyPhaseTwoLivePathPolicy` 据此设置 `route_hint_required = false`。
+
+**主 agent 兜底**：当 delegation 开启但 judge 未成功时，注入 system prompt 告知主 agent 有委派能力，引导其调 `octoclaw_route_hint` 自主判定。
+
+**route_hint_required 动态化**：
+- judge 成功 → `route_hint_required = false`（judge 已决策）
+- judge 失败/超时/关闭 → `route_hint_required = true`（主 agent 需要决策）
+
+**Runner 判定**：Runner（observe 路由）通过 delegation 开关控制。开关开启时，judge 和主 agent 都可以判定走 runner。关闭时 runner 不可达。
+
+### 7.4 超时策略（基于 TTFT 研究）
+
+| 路径 | 超时 | 依据 |
+|------|------|------|
+| local（本地推理） | 800ms | 纯推理延迟，网络 ≈ 0 |
+| remote（API 调用） | 1500ms | GPT-4o-mini P50 ~484ms，GLM-4.7-Flash P50 ~750ms，尾部留余量 |
+
+### 7.5 配置示例
+
+```json
+{
+  "delegationEnabled": true,
+  "judgeFast": {
+    "enabled": true,
+    "local": false,
+    "shadowMode": false,
+    "timeoutMs": 1500,
+    "timeoutLocalMs": 800,
+    "minConfidence": 0.6,
+    "modelId": "glm-4.1-flash",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "apiKey": "<zhipu-api-key>"
+  }
+}
+```
+
+### 7.6 Oracle v2 审核建议（已实施）
+
+1. ✅ 同步 800ms 可接受 — local 路径用 800ms，remote 用 1500ms
+2. ✅ 主 agent route_hint 兜底 — `_route_hint_required` 动态化
+3. ✅ route_hint_required 动态化 — judge 成功时跳过
+4. ✅ 去掉 few-shot — 减少上下文负担，加速 judge 响应
+5. ✅ reply 安全兜底 — 所有失败路径最终落入 reply (direct)
+6. ✅ delegation 独立开关 — 与 judge 解耦
+7. ✅ runner 纳入判定 — delegation 开启时 observe 路径可达
