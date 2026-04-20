@@ -209,6 +209,19 @@ describe("runtime taskflow adapter", () => {
     expectPlaneSeparation(record);
   });
 
+  it("runTask uses managedFlowId when createManaged was called first", () => {
+    const helper = buildHelperInvoker();
+    const workflow = buildWorkflow();
+    const binding = createRuntimeTaskflowAdapter(helper.invoker).bindSession("session-chain");
+    binding.createManaged(workflow);
+    binding.runTask(workflow);
+
+    expect(helper.calls).toHaveLength(2);
+    expect(helper.calls[0].action).toBe("create-managed-flow");
+    expect(helper.calls[1].action).toBe("run-task");
+    expect(helper.calls[1].args.flow_id).toBe("flow-managed");
+  });
+
   it("cancelFlow returns ok found cancelled result", () => {
     const result = createRuntimeTaskflowAdapter(buildHelperInvoker().invoker)
       .bindSession("session-3")

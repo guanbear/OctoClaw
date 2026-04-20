@@ -181,6 +181,7 @@ describe("octoclaw runtime plugin", () => {
     expect(helper.calls.length).toBe(2);
     expect(helper.calls[0].action).toBe("create-managed-flow");
     expect(helper.calls[1].action).toBe("run-task");
+    expect(helper.calls[1].args.flow_id).toBe("flow-plugin-managed");
   });
 
   it("createAdapter returns valid adapter", () => {
