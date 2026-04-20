@@ -157,20 +157,18 @@ function normalizeRunTaskResult(payload: any): NativeRunTaskHelperResult {
   if (payload?.ok !== true) {
     failClosed(payload?.error || payload?.status || "run-task returned non-ok response");
   }
-  const syncMode = ensureString(payload.task?.syncMode, "task.syncMode");
-  if (syncMode !== "managed" && syncMode !== "mirrored") {
-    failClosed(`invalid task.syncMode: ${syncMode}`);
-  }
+  const rawSyncMode = String(payload.task?.syncMode || "").trim();
+  const syncMode = rawSyncMode === "managed" || rawSyncMode === "mirrored" ? rawSyncMode : "managed";
   return {
     ok: true,
     native_task_id: ensureString(payload.native_task_id || payload.task?.taskId, "native_task_id"),
     flow_id: ensureString(payload.flow_id, "flow_id"),
     task: {
       taskId: ensureString(payload.task?.taskId || payload.native_task_id, "task.taskId"),
-      status: ensureString(payload.task?.status, "task.status"),
+      status: ensureString(payload.task?.status || "queued", "task.status"),
       syncMode,
-      state: ensureString(payload.task?.state, "task.state"),
-      revision: ensureNumber(payload.task?.revision, "task.revision"),
+      state: String(payload.task?.state || payload.task?.status || "queued").trim(),
+      revision: payload.task?.revision != null ? ensureNumber(payload.task?.revision, "task.revision") : 0,
     },
   };
 }
