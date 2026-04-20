@@ -7,13 +7,16 @@ import { judgePolicy, decideCoordinationMode } from "@octoclaw/policy/judge";
 import { decideRole } from "@octoclaw/policy/roles";
 import { decideBackend, decideExecutionProfile, decideModelProfile } from "@octoclaw/policy/model";
 import {
+  resolveDualJudgeConfig,
   resolveJudgeConfig,
   buildJudgeInput,
   buildLiveJudgeContextPacket,
   callLlmJudge,
+  callRemoteJudge,
   isActionableJudgeResult,
   judgeResultToRouteOverride,
   lastJudgeFailureClass,
+  shouldEscalate,
 } from "./llm-judge.js";
 import {
   advanceWorkflowToRunning,
@@ -884,7 +887,29 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let judgeRouteConfidence: number | undefined;
   let delegateReasonCodes: string[] = [];
 
-  const judgeConfig = resolveJudgeConfig(asRecord(asRecord(options.metadata)._judgeFastConfig));
+  let dualJudgeConfig = resolveDualJudgeConfig(asRecord(options.metadata));
+  if (!dualJudgeConfig) {
+    const fallbackLocal = resolveJudgeConfig(asRecord(asRecord(options.metadata)._judgeFastConfig));
+    if (fallbackLocal) {
+      dualJudgeConfig = {
+        local: fallbackLocal,
+        remote: {
+          enabled: false,
+          modelId: "",
+          baseUrl: "",
+          apiKey: "",
+          timeoutMs: 8000,
+          shadowMode: true,
+        },
+        escalation: {
+          minConfidence: fallbackLocal.minConfidence,
+          alwaysEscalateRiskFlags: [],
+          maxLatencyMs: 4000,
+        },
+      };
+    }
+  }
+  const judgeConfig = dualJudgeConfig?.local ?? resolveJudgeConfig(asRecord(asRecord(options.metadata)._judgeFastConfig));
   if (process.env.OCTOCLAW_JUDGE_DEBUG) {
     console.log(`[octoclaw-judge] resolveStateless: judgeConfig=${judgeConfig ? "present" : "null"} enabled=${judgeConfig?.enabled} delegation=${asBoolean(asRecord(options.metadata)._delegationEnabled, true)}`);
   }
@@ -911,13 +936,30 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       if (process.env.OCTOCLAW_JUDGE_DEBUG) {
         console.log(`[octoclaw-judge] calling LLM judge... model=${judgeConfig.modelId} timeout=${judgeConfig.local ? judgeConfig.timeoutLocalMs : judgeConfig.timeoutMs}ms`);
       }
-      const judgeResult = await callLlmJudge(judgeInput, judgeConfig);
+      let judgeResult = await callLlmJudge(judgeInput, judgeConfig);
       if (judgeResult === null && lastJudgeFailureClass) {
         metadata._judge_failure_class = lastJudgeFailureClass;
       }
       const judgeLatencyMs = Date.now() - judgeStart;
       if (process.env.OCTOCLAW_JUDGE_DEBUG) {
         console.log(`[octoclaw-judge] judge done: ${judgeLatencyMs}ms result=${judgeResult ? `route=${judgeResult.route} conf=${judgeResult.confidence} ack="${judgeResult.ackText?.slice(0, 30)}"` : "null(timeout)"}`);
+      }
+
+      let remoteJudgeResult = null;
+      let escalationReason = null;
+      const localJudgeRoute = judgeResult?.route ?? null;
+      const localJudgeConfidence = judgeResult?.confidence ?? null;
+      if (judgeResult && dualJudgeConfig) {
+        escalationReason = shouldEscalate(judgeResult, dualJudgeConfig.escalation, {
+          ...metadata,
+          task: prompt,
+        });
+        if (escalationReason && dualJudgeConfig.remote.enabled) {
+          remoteJudgeResult = await callRemoteJudge(judgeInput, judgeResult, escalationReason, dualJudgeConfig);
+          if (remoteJudgeResult && !dualJudgeConfig.remote.shadowMode && remoteJudgeResult.override_recommendation === "override_local") {
+            judgeResult = remoteJudgeResult;
+          }
+        }
       }
 
       judgeAckText = judgeConfig.judgeAckEnabled
@@ -929,11 +971,20 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         judge_parse_failure: false,
         judge_route: judgeResult?.route ?? null,
         judge_confidence: judgeResult?.confidence ?? null,
+        local_judge_route: localJudgeRoute,
+        local_judge_confidence: localJudgeConfidence,
+        final_judge_route: judgeResult?.route ?? null,
+        final_judge_confidence: judgeResult?.confidence ?? null,
         judge_abstain: judgeResult?.route === "undetermined",
         judge_ack_text: judgeAckText,
         rule_route: decision.route,
         judge_override: false,
         judge_mode: judgeConfig.shadowMode ? "shadow" : "active",
+        remote_override_applied: remoteJudgeResult !== null && !Boolean(dualJudgeConfig?.remote.shadowMode) && remoteJudgeResult.override_recommendation === "override_local",
+        judge_escalation_reason: escalationReason,
+        remote_judge_enabled: Boolean(dualJudgeConfig?.remote.enabled),
+        remote_judge_shadow_mode: Boolean(dualJudgeConfig?.remote.shadowMode),
+        remote_judge_result: remoteJudgeResult,
       };
 
       if (isActionableJudgeResult(judgeResult, judgeConfig.minConfidence)) {
@@ -1072,6 +1123,15 @@ export async function resolvePolicyDecisionForContext(
       const parsed = JSON.parse(judgeEnvJson);
       if (typeof parsed === "object" && parsed && !Array.isArray(parsed)) {
         metadata._judgeFastConfig = parsed as Record<string, unknown>;
+      }
+    } catch { /* ignore */ }
+  }
+  const remoteJudgeEnvJson = process.env.OCTOCLAW_JUDGE_REMOTE?.trim();
+  if (remoteJudgeEnvJson && !metadata._remoteJudgeConfig) {
+    try {
+      const parsed = JSON.parse(remoteJudgeEnvJson);
+      if (typeof parsed === "object" && parsed && !Array.isArray(parsed)) {
+        metadata._remoteJudgeConfig = parsed as Record<string, unknown>;
       }
     } catch { /* ignore */ }
   }
