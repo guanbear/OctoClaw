@@ -18,6 +18,8 @@ import type {
 } from "@octoclaw/contracts/schemas";
 import { buildContractEnvelope } from "@octoclaw/contracts/schemas";
 
+export * from "./query.js";
+
 function now(): string {
   return new Date().toISOString();
 }

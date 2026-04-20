@@ -1,4 +1,5 @@
 import type { ScopeMetadata, WorkspaceMode } from "@octoclaw/contracts/schemas";
+import type { DelegateAttempt, DelegateTask } from "@octoclaw/contracts/delegate";
 import type { NativeHelperInvoker } from "../adapter/native-helper.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import type { PolicyDecision, PolicyJudgeInput } from "@octoclaw/policy/judge";
@@ -105,6 +106,20 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function asRecord(value: unknown): UnknownRecord {
   return isRecord(value) ? value : {};
+}
+
+function isDelegateTask(value: unknown): value is DelegateTask {
+  return isRecord(value)
+    && typeof value.delegateTaskId === "string"
+    && typeof value.status === "string"
+    && typeof value.currentAttemptId !== "undefined";
+}
+
+function isDelegateAttempt(value: unknown): value is DelegateAttempt {
+  return isRecord(value)
+    && typeof value.attemptId === "string"
+    && typeof value.delegateTaskId === "string"
+    && typeof value.status === "string";
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -258,6 +273,18 @@ function normalizeWorkspaceMode(value: unknown, fallback: WorkspaceMode = "share
 
 function runtimeRouteDecision(decision?: UnknownRecord): UnknownRecord {
   return asRecord(decision?.route_decision);
+}
+
+function buildDelegateTaskContext(delegateTask: DelegateTask | null | undefined, currentAttempt: DelegateAttempt | null | undefined): UnknownRecord | undefined {
+  if (!delegateTask) {
+    return undefined;
+  }
+
+  return {
+    delegateTaskId: delegateTask.delegateTaskId,
+    currentAttemptId: currentAttempt?.attemptId ?? delegateTask.currentAttemptId,
+    taskStatus: delegateTask.status,
+  };
 }
 
 function buildWorkflowScope(metadata: UnknownRecord = {}): ScopeMetadata {
@@ -680,6 +707,14 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   nextDecision._route_hint_required = routeHintPolicyRequired;
   if (metadata.runtime_truth) {
     nextDecision.runtime_truth = metadata.runtime_truth;
+    const delegateRuntimeTruth = asRecord(metadata.runtime_truth);
+    const delegateTaskContext = buildDelegateTaskContext(
+      isDelegateTask(delegateRuntimeTruth.delegateTask) ? delegateRuntimeTruth.delegateTask : null,
+      isDelegateAttempt(delegateRuntimeTruth.delegateAttempt) ? delegateRuntimeTruth.delegateAttempt : null,
+    );
+    if (delegateTaskContext) {
+      nextDecision.delegateTaskContext = delegateTaskContext;
+    }
   }
   if (blockedCompound) {
     nextDecision.compound_plan_blocked = metadata.compound_plan_blocked;
@@ -708,6 +743,14 @@ function attachRuntimeTruthMetadata(decision: UnknownRecord, metadata: UnknownRe
 
   if (metadata.runtime_truth) {
     nextDecision.runtime_truth = metadata.runtime_truth;
+    const delegateRuntimeTruth = asRecord(metadata.runtime_truth);
+    const delegateTaskContext = buildDelegateTaskContext(
+      isDelegateTask(delegateRuntimeTruth.delegateTask) ? delegateRuntimeTruth.delegateTask : null,
+      isDelegateAttempt(delegateRuntimeTruth.delegateAttempt) ? delegateRuntimeTruth.delegateAttempt : null,
+    );
+    if (delegateTaskContext) {
+      nextDecision.delegateTaskContext = delegateTaskContext;
+    }
   }
   if (metadata.runtime_truth_error) {
     nextDecision.request = isRecord(nextDecision.request)
@@ -985,6 +1028,7 @@ export async function resolvePolicyDecisionForContext(
   const stateKey = resolvePolicyStateKey(ctx);
   const existing = policyState.resolveForContext(ctx).state as PolicyContextState | null;
   const metadata = buildPolicyMetadata(ctx, { stateKey });
+  const existingDelegateTaskContext = asRecord(existing?.delegateTaskContext);
 
   // Inject judge/delegation config from env vars (bypasses plugin config schema validation)
   const judgeEnvJson = process.env.OCTOCLAW_JUDGE_FAST?.trim();
@@ -1039,7 +1083,16 @@ export async function resolvePolicyDecisionForContext(
       latencyAckText: asString(asRecord(decision.latency_ack).text),
       delegated: isDelegatedRoute(decision),
       delegationTool: asString(asRecord(decision.tool_policy).must_delegate_via),
+      delegateTaskContext: Object.keys(asRecord(decision.delegateTaskContext)).length > 0
+        ? asRecord(decision.delegateTaskContext)
+        : Object.keys(existingDelegateTaskContext).length > 0
+          ? existingDelegateTaskContext
+          : undefined,
     };
+
+    if (nextState.delegateTaskContext && Object.keys(asRecord(decision.delegateTaskContext)).length === 0) {
+      decision.delegateTaskContext = nextState.delegateTaskContext;
+    }
 
     policyState.set(stateKey, nextState);
 

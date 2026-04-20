@@ -451,6 +451,7 @@ export class PolicyStateStore {
 export interface PolicyStateStoreApi {
   get: (stateKey: string) => PolicyStateEntry | undefined;
   getState: (stateKey: string) => PolicyStateEntry | undefined;
+  entries: () => Array<{ key: string; state: PolicyStateEntry }>;
   set: (stateKey: string, entry: PolicyStateEntry) => void;
   setState: (stateKey: string, entry: PolicyStateEntry) => void;
   clear: (stateKey: string) => void;
@@ -473,6 +474,11 @@ export function createPolicyStateStore(sessionStateFile?: string): PolicyStateSt
   return {
     get: (stateKey) => store.get(stateKey),
     getState: (stateKey) => store.get(stateKey),
+    entries: () => {
+      store.prune();
+      return Array.from((store as unknown as { entries: Map<string, PolicyStateEntry> }).entries.entries())
+        .map(([key, state]) => ({ key, state: { ...state } }));
+    },
     set: (stateKey, entry) => store.set(stateKey, entry),
     setState: (stateKey, entry) => store.set(stateKey, entry),
     clear: (stateKey) => store.clear(stateKey),

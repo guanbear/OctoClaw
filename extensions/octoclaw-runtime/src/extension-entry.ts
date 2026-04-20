@@ -3,6 +3,16 @@ import {
   buildDirectLookupGuard,
 } from "./conversation-grounding.js";
 import {
+  buildStatusQueryPacket,
+} from "@octoclaw/runtime-core/delegate";
+import type {
+  DelegateAttempt,
+  DelegateProgressEvent,
+  DelegateTask,
+  NativeTaskBinding,
+  StatusQueryPacket,
+} from "@octoclaw/contracts/delegate";
+import {
   cancelAckGuard,
   cancelAckGuardForState,
   maybeSendLatencyAck,
@@ -157,6 +167,70 @@ function extractPromptText(event: UnknownRecord): string {
     }
   }
   return "";
+}
+
+function isDelegateTask(value: unknown): value is DelegateTask {
+  return Boolean(value)
+    && typeof value === "object"
+    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string"
+    && typeof (value as { status?: unknown }).status === "string";
+}
+
+function isDelegateAttempt(value: unknown): value is DelegateAttempt {
+  return Boolean(value)
+    && typeof value === "object"
+    && typeof (value as { attemptId?: unknown }).attemptId === "string"
+    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string";
+}
+
+function isNativeTaskBinding(value: unknown): value is NativeTaskBinding {
+  return Boolean(value)
+    && typeof value === "object"
+    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string"
+    && typeof (value as { attemptId?: unknown }).attemptId === "string"
+    && typeof (value as { nativeTaskId?: unknown }).nativeTaskId === "string";
+}
+
+function isDelegateProgressEvent(value: unknown): value is DelegateProgressEvent {
+  return Boolean(value)
+    && typeof value === "object"
+    && typeof (value as { delegateTaskId?: unknown }).delegateTaskId === "string"
+    && typeof (value as { attemptId?: unknown }).attemptId === "string"
+    && typeof (value as { eventAt?: unknown }).eventAt === "string"
+    && typeof (value as { summary?: unknown }).summary === "string";
+}
+
+function collectDelegateProgressEvents(state: PolicyStateEntry): DelegateProgressEvent[] {
+  const events = Array.isArray(state.delegateProgressEvents) ? state.delegateProgressEvents : [];
+  return events.filter(isDelegateProgressEvent);
+}
+
+export function queryDelegateStatus(delegateTaskId: string): StatusQueryPacket | null {
+  const targetId = stringValue(delegateTaskId);
+  if (!targetId) {
+    return null;
+  }
+
+  for (const { state } of policyState.entries()) {
+    const decision = asRecord(state.decision);
+    const runtimeTruth = asRecord(decision.runtime_truth);
+    const delegateTaskCandidate = runtimeTruth.delegateTask;
+    if (!isDelegateTask(delegateTaskCandidate) || delegateTaskCandidate.delegateTaskId !== targetId) {
+      continue;
+    }
+
+    const currentAttemptCandidate = runtimeTruth.delegateAttempt;
+    const nativeBindingCandidate = runtimeTruth.nativeTaskBinding;
+    return buildStatusQueryPacket({
+      delegateTask: delegateTaskCandidate,
+      currentAttempt: isDelegateAttempt(currentAttemptCandidate) ? currentAttemptCandidate : null,
+      nativeBinding: isNativeTaskBinding(nativeBindingCandidate) ? nativeBindingCandidate : null,
+      progressEvents: collectDelegateProgressEvents(state).filter((event) => event.delegateTaskId === targetId),
+      recoveryInfo: isDelegateAttempt(currentAttemptCandidate) ? currentAttemptCandidate.recoveryInfo ?? null : null,
+    });
+  }
+
+  return null;
 }
 
 function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: PolicyStateEntry | null } {
