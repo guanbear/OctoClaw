@@ -161,8 +161,9 @@ describe("octoclaw runtime plugin", () => {
     expect(plugin.judgeRoute(input)).toEqual(judgePolicy(input));
   });
 
-  it("bindWorkflow returns task and substrate binding details", () => {
-    const plugin = createOctoClawRuntimePlugin({ helperInvoker: buildHelperInvoker().invoker });
+  it("bindWorkflow creates managed flow then runs task", () => {
+    const helper = buildHelperInvoker();
+    const plugin = createOctoClawRuntimePlugin({ helperInvoker: helper.invoker });
     const binding = plugin.bindWorkflow(buildWorkflow());
 
     expect(binding).toMatchObject({
@@ -176,6 +177,10 @@ describe("octoclaw runtime plugin", () => {
     });
     expect(binding.truth.taskId).toBe("task-plugin-native");
     expect(binding.projection.taskId).toBe("task-plugin-native");
+
+    expect(helper.calls.length).toBe(2);
+    expect(helper.calls[0].action).toBe("create-managed-flow");
+    expect(helper.calls[1].action).toBe("run-task");
   });
 
   it("createAdapter returns valid adapter", () => {

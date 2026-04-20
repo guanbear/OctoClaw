@@ -52,6 +52,7 @@ export function createOctoClawRuntimePlugin(options: OctoClawRuntimePluginOption
           taskId: (state as unknown as { taskId?: string }).taskId || "",
         };
         const binding = createAdapter().bindSession(identity.requestId || identity.taskId);
+        binding.createManaged(state);
         const taskTruth = binding.runTask(state);
         return {
         taskId: taskTruth.taskId,
