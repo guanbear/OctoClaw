@@ -576,6 +576,103 @@ Borrowing:
 - explicit ordering / validation / state boundaries
 - avoid assuming models alone will keep related tasks coordinated
 
+### 11.4 Status visualization and operator surface
+
+The source projects we studied do not share one universal UI, but they do share a strong pattern:
+
+> **agent systems become unmanageable when runtime truth exists but is not projected into a stable operator-facing status surface.**
+
+The most relevant borrowings are:
+
+#### A. ClawTeam: board / task status / owner visibility
+
+ClawTeam explicitly exposes:
+
+- `team status`
+- `task list`
+- `board show`
+- task owner / task status / blocked state / in-progress counts
+
+See for example:
+
+- [cli/commands.py](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/clawteam/cli/commands.py#L516)
+- [cli/commands.py](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/clawteam/cli/commands.py#L884)
+- [cli/commands.py](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/clawteam/cli/commands.py#L1147)
+- [templates/hedge-fund.toml](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/clawteam/templates/hedge-fund.toml#L16)
+
+Borrowing:
+
+1. operator surfaces should not be "developer only"
+2. queue / blocked / owner / in-progress counts should be first-class
+3. a board/list mental model is useful, even before a rich UI exists
+
+#### B. Hermes: background status, delivery tracking, notifications
+
+Hermes release notes show several status-surface ideas that matter a lot:
+
+- full session id in `/status`
+- delivery failure tracking in job status
+- notification when background processes complete
+- shared thread sessions and subagent linkage
+
+See:
+
+- [RELEASE_v0.8.0.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/hermes-agent/RELEASE_v0.8.0.md#L91)
+- [RELEASE_v0.8.0.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/hermes-agent/RELEASE_v0.8.0.md#L118)
+- [RELEASE_v0.8.0.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/hermes-agent/RELEASE_v0.8.0.md#L202)
+- [RELEASE_v0.8.0.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/hermes-agent/RELEASE_v0.8.0.md#L216)
+
+Borrowing:
+
+1. status is not only pull-based; it should also support proactive completion/failure notification
+2. status should include session linkage and delivery outcome, not only task state
+3. background tasks need explicit user-visible completion semantics
+
+#### C. Oh My OpenAgent: background session states and stale/runtime health
+
+Oh My OpenAgent is valuable less for a polished UI and more for runtime-facing status classification:
+
+- background task concurrency
+- session status classification
+- retry / resume logic
+- stale timeout / background recovery hooks
+
+See:
+
+- [docs/reference/configuration.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/oh-my-openagent/docs/reference/configuration.md#L282)
+- [spawner.ts](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/oh-my-openagent/src/features/background-agent/spawner.ts#L140)
+- [spawner.ts](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/oh-my-openagent/src/features/background-agent/spawner.ts#L218)
+- [session-status-classifier.ts](/Users/guanzhicheng/Documents/Playground/openclaw-projects/_source_refs/oh-my-openagent/src/features/background-agent/session-status-classifier.ts#L1)
+
+Borrowing:
+
+1. status surfaces should expose whether work is running, retrying, stale, resumable, or backgrounded
+2. timeouts and stale detection belong in the visible state model, not only internal logs
+3. "background but alive" and "background but stale" must be visibly different
+
+#### D. DeerFlow: evented progression over final-state-only thinking
+
+From DeerFlow, the strongest lesson is still:
+
+- progression should be evented
+- checkpoint / deliverable-ready matters
+- transcript is not status truth
+
+Borrowing:
+
+1. timeline should be a first-class surface, not a debug-only afterthought
+2. "checkpoint emitted" and "deliverable ready" are status facts, not just internal implementation details
+3. future UI should be able to replay task progression from structured events
+
+### 11.5 Design consequence
+
+For OctoClaw, these borrowings imply:
+
+1. `status/details/queue/timeline/attempts` should be formal product surfaces
+2. user surface, main-agent query surface, and operator surface should all project from the same runtime truth
+3. future richer UI should reuse the same view model rather than inventing another task truth
+4. child status visibility is a first-class requirement even for single delegate, not just for future multi-agent
+
 ---
 
 ## 12. What this means for single delegate right now
@@ -593,6 +690,7 @@ The design consequence for v1 is very concrete.
 7. explicit recovery taxonomy
 8. explicit resume packet to main thread
 9. explicit status/timeline projection
+10. explicit attempts/operator view model
 
 ### 12.2 Success must mean more than "worker exited 0"
 

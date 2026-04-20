@@ -1538,6 +1538,9 @@ tools/
 1. progress rendering
 2. task/flow status surfaces
 3. multi-agent board / timeline / operator views
+4. delegate task / attempt detail views
+5. main-agent status query projection
+6. future richer UI / cockpit / board schema
 
 ### `octoclaw-im-adapters`
 
@@ -3344,6 +3347,213 @@ v1 推荐默认采用：
 1. child 不直接承担“对用户讲状态”的产品职责
 2. main agent 也不需要自己轮询 child 原始日志
 3. 真正的用户可见状态推送，应该建立在 runtime truth 之上
+
+#### 9.3.g.5.a delegated status surface：子 agent 状态怎么统一可视化
+
+这里要明确一件事：
+
+> **子 agent 状态可视化不是 future multi-agent 才需要；single delegate 从第一天就需要。**
+
+因为即使只有一个 child，产品上也已经会遇到这些问题：
+
+1. operator 想知道 child 到底卡在哪一步
+2. main agent 想知道现在是该继续等、该补问、还是该提示用户
+3. 用户想知道“已经开始了吗”“是不是超时了”“有没有阶段进展”
+4. 后面如果从 single delegate 升到 multi-agent，不应该重做整套状态面
+
+所以 status surface 应该从 v1 就收成**统一 projection 层**，而不是零散的：
+
+1. worker 私有日志
+2. main agent 心里记住的状态
+3. IM 临时提示
+4. operator 单独看的内部 JSON
+
+更合理的设计是：
+
+1. `native flow/task` 提供执行真相
+2. `delegate task / attempt` 提供产品层与恢复层 identity
+3. `octoclaw-status-surface` 负责把它们投影成一致的可见状态
+
+也就是说：
+
+> **status surface 不是日志 viewer，而是 runtime truth 的产品化投影。**
+
+##### 9.3.g.5.a.1 至少要有哪几种视图
+
+我建议 v1 就把下面 6 种视图正式立住：
+
+1. `status`
+   - 线程级 / task 级摘要
+   - 当前 route、当前主状态、最近进展
+2. `details`
+   - 当前 delegate task 的完整详情
+   - attempt lineage、native 绑定、最新 checkpoint
+3. `queue`
+   - 当前排队、claim、capacity、stale、blocked 原因
+4. `timeline`
+   - `accepted -> started -> checkpoint -> recovering -> completed/failed` 事件流
+5. `attempts`
+   - 同一 delegated task 下的历史 attempts 列表
+   - 哪次是初次执行、哪次是 retry、哪次是 stronger-profile retry
+6. `artifacts`
+   - 最近 checkpoint summary、result packet、关键 artifact refs
+
+future richer UI 再在这套之上扩：
+
+1. child board
+2. DAG/graph
+3. cockpit
+4. multi-agent swimlane
+
+##### 9.3.g.5.a.2 每个 delegated task 最少要投影哪些字段
+
+我建议每个 delegated task 至少要投影：
+
+1. `delegate_task_id`
+2. `current_attempt_id`
+3. `native_flow_id`
+4. `native_task_id`
+5. `route`
+6. `delegate_role`
+7. `coordination_mode`
+8. `complexity`
+9. `task_state`
+10. `attempt_state`
+11. `queue_state`
+12. `claim_owner`
+13. `lease_state`
+14. `started_at`
+15. `last_progress_at`
+16. `last_checkpoint_summary`
+17. `blocked_reason`
+18. `recovery_state`
+19. `retry_count`
+20. `model_profile`
+21. `backend_summary`
+22. `workspace_mode`
+23. `write_scope_summary`
+24. `scope`
+25. `delegate_reason_codes`
+26. `action_availability`
+
+这些字段是 v1 operator surface 的最小骨架，不是 Phase 4 才该补的增强项。
+
+##### 9.3.g.5.a.3 attempt 级状态为什么必须单独可见
+
+如果只看 task 级状态，用户和 operator 会同时失真。
+
+因为同一个 delegated task 下面可能已经经历：
+
+1. 初次 attempt 超时
+2. 第二次 attempt 补上下文重试
+3. 第三次 attempt 升更强模型
+
+这时候 task 级仍然可能只是：
+
+1. `running`
+2. `needs_recovery`
+3. `completed`
+
+但真正值钱的信息在 attempt 级：
+
+1. 哪次 attempt 失败
+2. 为什么失败
+3. 当前活跃 attempt 是哪一个
+4. 旧 attempt 是否已经 `superseded`
+
+所以 `details` 面和 future UI 一定要能看到：
+
+1. `task summary`
+2. `current attempt`
+3. `prior attempts`
+4. `attempt -> native task` 的映射
+
+##### 9.3.g.5.a.4 main agent 应该怎么“查 child 状态”
+
+main agent 不该：
+
+1. 直接读 child 原始日志
+2. 直接把 child transcript 拉回主线程
+3. 自己到处 reconcile 多份状态 JSON
+
+更稳的方式是：
+
+1. main agent 只通过 `status query packet` 查统一 projection
+2. 返回的是：
+   - `task_state`
+   - `attempt_state`
+   - `progress summary`
+   - `blocked/recovery reason`
+   - `next expected step`
+3. main agent 再基于这份结构化状态决定：
+   - 回答用户当前进展
+   - 补问
+   - 或等待后台恢复
+
+也就是说：
+
+> **main agent 查询 child 状态时，看的是 status surface 的结构化投影，不是 child 的原始工作材料。**
+
+##### 9.3.g.5.a.5 用户面和 operator 面不该完全相同
+
+我建议明确分成 3 层：
+
+1. `user surface`
+   - 简洁、低噪音
+   - 只暴露 `accepted/started/progress/blocked/recovering/completed/failed`
+2. `main-agent surface`
+   - 给主 agent 的结构化查询面
+   - 包含 `reply` / `clarify` 决策需要的最小状态字段
+3. `operator surface`
+   - 完整 details/queue/timeline/attempt lineage/native ids
+
+这样：
+
+1. 用户不会被过多内部实现噪音干扰
+2. main agent 不会被大日志污染
+3. operator 仍然能真正 debug
+
+##### 9.3.g.5.a.6 v1 就应该支持哪些命令/面板
+
+我建议把 status surface 从第一版就收成：
+
+1. `status`
+2. `details`
+3. `queue`
+4. `timeline`
+5. `attempts`
+
+也就是说，至少要有一个命令/面板能做到：
+
+> **把当前 delegated task 的所有 child/attempt 状态、最新进展、当前卡点、恢复情况，一次看清楚。**
+
+future UI 再在同一份 view model 上做：
+
+1. board
+2. grouped queue
+3. multi-agent swimlane
+4. dependency graph
+
+##### 9.3.g.5.a.7 从开源项目里最该借哪些状态面心智
+
+结合我们已经借鉴过的源码和文档，我建议 status surface 重点吸收：
+
+1. **ClawTeam**
+   - `board show` / task status / owner / blocked / completed 这些 operator-first 视角
+   - 启发是：**不只是“任务有没有完成”，还要能一眼看到队列、所有者、阻塞态**
+2. **Hermes**
+   - `/status`、background completion notification、delivery failure tracking、full session id persistence
+   - 启发是：**状态不只是查看，还要能主动通知、能追踪 delivery 成败**
+3. **Oh My OpenAgent**
+   - background session / resume / concurrency / stale timeout / hook-based recovery
+   - 启发是：**状态面必须能表达“正在后台执行、可恢复、可超时、可重试”**
+4. **DeerFlow**
+   - checkpoint / deliverable-ready / evented progression
+   - 启发是：**timeline 必须是正式对象，不要只看 terminal state**
+
+一句话：
+
+> **status surface 的目标不是“看日志”，而是把 delegated runtime truth 做成能同时服务用户、main agent、operator、未来 UI 的统一状态面。**
 
 #### 9.3.g.6 单 worker 超时怎么判
 

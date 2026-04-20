@@ -570,6 +570,7 @@ tools/
 2. `details`
 3. `queue`
 4. `timeline` 占位
+5. `attempts`
 
 最小字段：
 
@@ -590,6 +591,15 @@ tools/
 15. `write_scope_summary`
 16. `thread_count`
 17. `advisor_usage_summary`
+18. `current_attempt_id`
+19. `attempt_state`
+20. `last_progress_at`
+21. `last_checkpoint_summary`
+22. `blocked_reason`
+23. `recovery_state`
+24. `retry_count`
+25. `native_flow_id`
+26. `native_task_id`
 
 验收标准：
 
@@ -597,12 +607,28 @@ tools/
 2. Phase 2 起 `status/details/queue` 全读 substrate truth
 3. renderer 不再自己猜状态
 4. 能看出 task 是否被 claim、是否 stale、是否因冲突排队
-5. 为 Phase 3 的 child thread / advisor 预留展示字段
+5. 能看出 delegated task 的当前活跃 attempt、历史 attempts、是否在 recovery
+6. main agent 有统一的 status query view，而不是直接看 child 原始日志
+7. 为 Phase 3 的 child thread / advisor 预留展示字段
 
 说明：
 
 1. `graph` / richer board 不进入 Phase 1
 2. 这些能力放到 Phase 3-4 的 richer status surface 再做
+3. v1 的 `timeline` 与 `attempts` 虽然可以先做 text-first，但 view model 必须一次定对，避免 future UI 重做信息架构
+
+WS6 还应显式补上这些交付：
+
+1. `status query packet` contract
+   - 供 main agent 查询 delegated task / child 状态
+2. `delegate timeline view model`
+   - 统一投影 `accepted/started/checkpoint/recovering/completed/failed/timed_out`
+3. `attempt lineage view model`
+   - 同一 task 下 attempt 列表、活跃 attempt、superseded attempt
+4. `push classification`
+   - 哪些事件推用户面、哪些只推 operator 面、哪些只保留内部 timeline
+5. `future UI schema`
+   - board/swimlane/cockpit 预留字段，但不要求 Phase 1 实做
 
 依赖：WS0、WS2、WS3
 
