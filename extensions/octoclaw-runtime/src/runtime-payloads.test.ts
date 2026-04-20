@@ -5,7 +5,7 @@ import type { NativeHelperInvoker } from "./adapter/native-helper.js";
 
 function buildDecision(): PolicyDecision {
   return {
-    route: "delegate.single",
+    route: "delegate",
     role: "worker_research",
     coordinationMode: "solo_worker",
     backend: "openclaw-native",
@@ -73,7 +73,7 @@ describe("buildTsRuntimeDispatchPayload", () => {
 
     const decisionRecord = {
       route_decision: {
-        route: "delegate.single",
+        route: "delegate",
         worker_pool: "octoclaw-research",
       },
       model_policy: {
@@ -110,14 +110,14 @@ describe("buildTsRuntimeDispatchPayload", () => {
       },
     );
 
-    if (payload.route !== "delegate.single") {
+    if (payload.route !== "delegate") {
       throw new Error(`unexpected_route:${payload.route}`);
     }
     if (!("delegateTaskId" in payload) || !("attemptId" in payload)) {
       throw new Error("missing_delegate_binding");
     }
 
-    expect(payload.route).toBe("delegate.single");
+    expect(payload.route).toBe("delegate");
     expect(payload.materialization).toMatchObject({
       task_id: "task-plugin-native",
       flow_id: "flow-plugin-run",

@@ -28,15 +28,16 @@ function substrateSummary(record: RuntimeStateSurfaceRecord): string {
 
 export function buildStatusSurfaceView(record: RuntimeStateSurfaceRecord): StatusSurfaceViewModel {
   const route = (record as RuntimeStateSurfaceRecord & { identity?: { route?: string } }).identity?.route
-    || (record.truth.requestId ? "delegate.single" : "reply");
+    || (record.truth.requestId ? "delegate" : "reply");
+  const taskClass = String((record.projection as { task_class?: string } | undefined)?.task_class ?? "").trim();
   return {
     ...buildContractEnvelope("projection"),
     taskId: record.truth.taskId,
     flowId: record.truth.flowId,
     state: record.substrateState,
     route,
-    role: route === "observe" ? "observer_probe" : route === "reply" ? "main_reply" : "worker_research",
-    coordinationMode: route === "delegate.single" ? "solo_worker" : "",
+    role: taskClass === "control_observer" ? "observer_probe" : route === "reply" ? "main_reply" : "worker_research",
+    coordinationMode: route === "delegate" ? "solo_worker" : "",
     backendSummary: "openclaw-native",
     workerPool: "octoclaw-runtime",
     substrateSummary: substrateSummary(record),

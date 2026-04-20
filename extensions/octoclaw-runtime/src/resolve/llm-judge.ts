@@ -252,9 +252,9 @@ export async function callLlmJudge(
   }
 }
 
-export function judgeResultToRouteOverride(result: JudgeOutput): "reply" | "delegate.single" | "observe" | null {
+export function judgeResultToRouteOverride(result: JudgeOutput): "reply" | "delegate" | null {
   const route = result.route;
-  if (route === "reply" || route === "delegate.single" || route === "observe") {
+  if (route === "reply" || route === "delegate") {
     return route;
   }
   return null;

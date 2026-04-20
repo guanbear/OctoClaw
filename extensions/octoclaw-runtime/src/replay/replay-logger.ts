@@ -9,6 +9,7 @@ import {
 import {
   DELEGATED_ROUTE_NAMES,
   isDelegatedRoute as isDelegatedRouteName,
+  isObserveMode,
   normalizeLiveRoute,
 } from "../resolve/route-helpers.js";
 import { ackDeliveryState, ackTargetResolutionState } from "../resolve/session.js";
@@ -672,7 +673,11 @@ export function delegationFailureReply(state: Record<string, unknown>): { mode: 
   const decision = asRecord(state.decision);
   const route = normalizeLiveRoute(asRecord(decision.route_decision).route, "reply");
   const intentClass = String(state.conversationIntentClass ?? conversationIntentClass(decision) ?? "").trim();
-  const text = route === "observe" && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)
+  const observe = route === "delegate" && isObserveMode(
+    String(asRecord(decision.route_decision).judge_role ?? asRecord(decision).role ?? "").trim(),
+    String(asRecord(decision).executionProfile ?? "").trim(),
+  );
+  const text = observe && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)
     ? "这次查询还没真正派发到执行链，所以我现在不能把结果说成已经查到。等拿到真实执行结果后我再回复。"
     : "这次任务还没真正派发成功，所以我现在不能把它说成已经完成。等拿到真实执行结果后我再回复。";
   return { mode: "replace", message: { role: "assistant", content: [{ type: "text", text }] } };
@@ -861,7 +866,11 @@ export function isSessionControlDecision(decision: Record<string, unknown>): boo
 }
 
 export function isRunnerDecision(decision: Record<string, unknown>): boolean {
-  return normalizeLiveRoute(asRecord(decision.route_decision).route, "reply") === "observe";
+  return normalizeLiveRoute(asRecord(decision.route_decision).route, "reply") === "delegate"
+    && isObserveMode(
+      String(asRecord(decision.route_decision).judge_role ?? asRecord(decision).role ?? "").trim(),
+      String(asRecord(decision).executionProfile ?? "").trim(),
+    );
 }
 
 export function workflowEnforcementRule(
@@ -873,7 +882,7 @@ export function workflowEnforcementRule(
   const toolPolicy = asRecord(decision.tool_policy);
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   const allowedTools = runnerWorkflowTools(decision, routeHintTool);
-  const workflowRequired = route === "observe" || DELEGATED_ROUTE_NAMES.has(route);
+  const workflowRequired = DELEGATED_ROUTE_NAMES.has(route);
   if (!workflowRequired) {
     return { block: false, route, delegateTool, allowedTools: [...allowedTools] };
   }

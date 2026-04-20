@@ -12,7 +12,7 @@ interface HelperRecorder {
 
 function buildDecision(): PolicyDecision {
   return {
-    route: "delegate.single",
+    route: "delegate",
     role: "worker_research",
     coordinationMode: "solo_worker",
     backend: "openclaw-native",
@@ -149,7 +149,7 @@ describe("octoclaw runtime plugin", () => {
   it("judgeRoute delegates to judgePolicy", () => {
     const plugin = createOctoClawRuntimePlugin({ helperInvoker: buildHelperInvoker().invoker });
     const input: PolicyJudgeInput = {
-      requestedRoute: "delegate.single",
+      requestedRoute: "delegate",
       workType: "research",
       workspaceMode: "isolated_worktree",
       queueBudget: 3,

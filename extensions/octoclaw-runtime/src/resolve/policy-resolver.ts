@@ -31,6 +31,7 @@ import type { LiveRoute } from "@octoclaw/policy/route";
 import type { WorkerPool } from "@octoclaw/policy/caps";
 import {
   LIVE_ROUTE_NAMES,
+  isObserveMode,
   normalizeLiveRoute,
 } from "./route-helpers.js";
 import {
@@ -135,6 +136,24 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => asString(item)).filter(Boolean)
     : [];
+}
+
+function inferObserveMode(metadata: UnknownRecord = {}): boolean {
+  return asBoolean(metadata.requiresObservation)
+    || isObserveMode(
+      asString(metadata.role ?? metadata.judge_role),
+      asString(metadata.executionProfile ?? metadata.execution_profile),
+    )
+    || (asString(metadata.coordinationMode ?? metadata.coordination_mode) === "solo_worker"
+      && asString(metadata.role ?? metadata.judge_role) === "observer_probe");
+}
+
+function observeFlagsForRoute(route: LiveRoute, role?: string, executionProfile?: string) {
+  const observe = route === "delegate" && isObserveMode(role, executionProfile);
+  return {
+    requiresDelegation: route === "delegate" && !observe,
+    requiresObservation: observe,
+  };
 }
 
 function coerceDelegateReasonCodes(value: unknown): string[] {
@@ -309,27 +328,26 @@ function buildRuntimeTruthWorkflowStub(metadata: UnknownRecord = {}): RuntimeWor
     "runtime-wrapper",
   );
   const leaseDurationMs = 30_000;
-  const decidedRoute: LiveRoute = asBoolean(metadata.requiresObservation)
-    ? "observe"
-    : asBoolean(metadata.requiresDelegation)
-      ? "delegate.single"
-      : "reply";
+  const observeMode = inferObserveMode(metadata);
+  const decidedRoute: LiveRoute = observeMode || asBoolean(metadata.requiresDelegation)
+    ? "delegate"
+    : "reply";
   const decision: PolicyDecision = {
     route: decidedRoute,
-    role: asBoolean(metadata.requiresObservation)
+    role: observeMode
       ? "observer_probe"
       : asBoolean(metadata.requiresDelegation)
         ? "worker_research"
         : "main_reply",
-    coordinationMode: decidedRoute === "delegate.single" ? "solo_worker" : undefined,
+    coordinationMode: decidedRoute === "delegate" ? "solo_worker" : undefined,
     backend: "openclaw-native",
-    executionProfile: asBoolean(metadata.requiresObservation)
+    executionProfile: observeMode
       ? "observer"
       : asBoolean(metadata.requiresDelegation)
         ? "worker"
         : "main",
     workspaceMode,
-    modelProfile: asBoolean(metadata.requiresObservation)
+    modelProfile: observeMode
       ? "observer_probe"
       : asBoolean(metadata.requiresDelegation)
         ? "worker_research"
@@ -337,8 +355,8 @@ function buildRuntimeTruthWorkflowStub(metadata: UnknownRecord = {}): RuntimeWor
     caps: {
       queueBudget: 1,
       maxWorkers: asBoolean(metadata.requiresDelegation) ? 1 : 0,
-      latencyTarget: asBoolean(metadata.requiresDelegation) || asBoolean(metadata.requiresObservation) ? "background" : "interactive",
-      workerPool: asBoolean(metadata.requiresObservation)
+      latencyTarget: asBoolean(metadata.requiresDelegation) || observeMode ? "background" : "interactive",
+      workerPool: observeMode
         ? "octoclaw-observer"
         : asBoolean(metadata.requiresDelegation)
           ? "octoclaw-research"
@@ -349,7 +367,7 @@ function buildRuntimeTruthWorkflowStub(metadata: UnknownRecord = {}): RuntimeWor
       admission: "allow",
       queueBudget: 1,
       maxWorkers: asBoolean(metadata.requiresDelegation) ? 1 : 0,
-      latencyTarget: asBoolean(metadata.requiresDelegation) || asBoolean(metadata.requiresObservation) ? "background" : "interactive",
+      latencyTarget: asBoolean(metadata.requiresDelegation) || observeMode ? "background" : "interactive",
       reason: "runtime_truth_stub",
     },
     decisionStack: ["route", "role", "coordination_mode", "backend", "workspace_mode", "model_profile", "caps"],
@@ -380,7 +398,7 @@ function buildRuntimeTruthWorkflowStub(metadata: UnknownRecord = {}): RuntimeWor
     },
   });
 
-  if (asBoolean(metadata.requiresObservation)) {
+  if (observeMode) {
     return workflow;
   }
   workflow = advanceWorkflowToRunning(workflow, claimOwner);
@@ -452,8 +470,8 @@ export function buildDecision(task: unknown, optionsOrDecision: { metadata?: Unk
 }
 
 function workflowRoleForRoute(route: LiveRoute, taskClass = ""): PolicyRole {
-  if (route === "observe") return "observer_probe";
   if (route === "reply") return "main_reply";
+  if (taskClass === "control_observer") return "observer_probe";
   if (taskClass === "code") return "worker_code";
   if (taskClass === "review") return "worker_review";
   return "worker_research";
@@ -467,9 +485,9 @@ function workerPoolForDecision(executionProfile: ExecutionProfileTarget, role: P
   return "octoclaw-research";
 }
 
-function hookInterfaceForRoute(liveRoute: LiveRoute, admission = "allow") {
-  const delegated = liveRoute === "delegate.single" && admission === "allow";
-  const observe = liveRoute === "observe" && admission === "allow";
+function hookInterfaceForRoute(liveRoute: LiveRoute, role: PolicyRole, executionProfile: ExecutionProfileTarget, admission = "allow") {
+  const delegated = liveRoute === "delegate" && admission === "allow";
+  const observe = isObserveMode(role, executionProfile) && admission === "allow";
   return {
     before_model_resolve: {
       enabled: true,
@@ -502,7 +520,7 @@ function readStickyStateDecision(metadata: UnknownRecord): UnknownRecord {
 }
 
 function liveRouteNeedsHint(liveRoute: LiveRoute, metadata: UnknownRecord): boolean {
-  return liveRoute === "delegate.single"
+  return liveRoute === "delegate"
     && !Boolean(metadata.route_hint)
     && !Boolean(metadata.requested_route)
     && !Boolean(metadata.route);
@@ -549,17 +567,21 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     input: tsJudgeInput,
     decision: tsPolicyDecision,
     live_path_phase: "phase2",
-    allowed_routes: ["reply", "delegate.single", "observe"],
+    allowed_routes: ["reply", "delegate"],
   };
 
   try {
+    const runtimeTruthFlags = observeFlagsForRoute(liveRoute, tsPolicyDecision.role, tsPolicyDecision.executionProfile);
     metadata.runtime_truth = buildRuntimeTruthMetadata({
       ...metadata,
       requestId: metadata.requestId ?? metadata.request_id ?? stableId("runtime", [prompt, liveRoute]),
       taskId: metadata.taskId ?? metadata.task_id ?? stableId("task", [prompt, liveRoute]),
       flowId: metadata.flowId ?? metadata.flow_id ?? stableId("flow", [prompt, liveRoute]),
-      requiresDelegation: liveRoute === "delegate.single",
-      requiresObservation: liveRoute === "observe",
+      role: tsPolicyDecision.role,
+      executionProfile: tsPolicyDecision.executionProfile,
+      coordinationMode: tsPolicyDecision.coordinationMode,
+      requiresDelegation: runtimeTruthFlags.requiresDelegation,
+      requiresObservation: runtimeTruthFlags.requiresObservation,
     });
   } catch (error) {
     metadata.runtime_truth = isRecord(metadata.runtime_truth) ? metadata.runtime_truth : null;
@@ -589,10 +611,11 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     ? decideModelProfile(authoritativeRole, tsPolicyDecision.workspaceMode).modelProfile
     : tsPolicyDecision.modelProfile;
   const workerPool = workerPoolForDecision(authoritativeExecutionProfile, authoritativeRole);
+  const observeMode = isObserveMode(authoritativeRole, authoritativeExecutionProfile);
   const routeHintPolicyRequired = (!judgeSucceeded && liveRouteNeedsHint(liveRoute, metadata))
     || (judgeSucceeded && liveRoute !== "reply");
 
-  const ackFollowupCandidate = stickyEligible && liveRoute === "delegate.single";
+  const ackFollowupCandidate = stickyEligible && liveRoute === "delegate";
   const nextDecision: UnknownRecord = { ...priorDecision };
 
   nextDecision.summary = nextDecision.summary || `policy=${liveRoute} -> ${workerPool}`;
@@ -615,12 +638,12 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     work_type: tsJudgeInput.workType || asString(priorRouteDecision.work_type, "research"),
     phase: asString(priorRouteDecision.phase, "execute"),
     protocol: asString(priorRouteDecision.protocol, "normal"),
-    task_class: liveRoute === "observe"
+    task_class: observeMode
       ? "control_observer"
-      : liveRoute === "delegate.single"
+      : liveRoute === "delegate"
         ? "delegated_single"
         : asString(priorRouteDecision.task_class, "main_direct"),
-    protected_lane: liveRoute === "observe" ? "control_observer" : "",
+    protected_lane: observeMode ? "control_observer" : "",
     dispatch_required: liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
     reason: tsPolicyDecision.admission.reason,
     complexity_band: coerceComplexityBand(priorDecision._judge_complexity_band),
@@ -649,7 +672,12 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     profile: authoritativeModelProfile,
     selected_model: asString(asRecord(nextDecision.model_policy).selected_model, authoritativeModelProfile),
   };
-  nextDecision.hook_interface = hookInterfaceForRoute(liveRoute, tsPolicyDecision.admission.admission);
+  nextDecision.hook_interface = hookInterfaceForRoute(
+    liveRoute,
+    authoritativeRole,
+    authoritativeExecutionProfile,
+    tsPolicyDecision.admission.admission,
+  );
   nextDecision.route_hint_policy = {
     required: routeHintPolicyRequired,
     submitted: routeHintSubmitted,
@@ -670,7 +698,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   };
   nextDecision.review_policy = {
     ...asRecord(nextDecision.review_policy),
-    required: liveRoute === "delegate.single",
+    required: liveRoute === "delegate",
   };
   nextDecision.state_grounding = {
     required: liveRoute !== "reply",
@@ -682,9 +710,9 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   };
   nextDecision.tool_policy = {
     ...asRecord(nextDecision.tool_policy),
-    must_delegate_via: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
+    must_delegate_via: liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
     allow_direct_tools: liveRoute === "reply",
-    delegate_first: liveRoute === "delegate.single" && tsPolicyDecision.admission.admission === "allow",
+    delegate_first: liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow",
     allowed_control_tools: liveRoute === "reply"
       ? []
       : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
@@ -725,13 +753,20 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
 function attachRuntimeTruthMetadata(decision: UnknownRecord, metadata: UnknownRecord = {}, prompt = ""): UnknownRecord {
   const nextDecision = { ...asRecord(decision) };
   try {
+    const route = normalizeLiveRoute(asRecord(nextDecision.route_decision).route, "reply");
+    const role = asString(asRecord(nextDecision.route_decision).judge_role, asString(asRecord(nextDecision).role));
+    const executionProfile = role === "observer_probe" ? "observer" : route === "reply" ? "main" : "worker";
+    const runtimeTruthFlags = observeFlagsForRoute(route, role, executionProfile);
     metadata.runtime_truth = buildRuntimeTruthMetadata({
       ...metadata,
       requestId: metadata.requestId ?? metadata.request_id ?? stableId("runtime", [prompt, asString(asRecord(nextDecision.route_decision).route, "reply")]),
       taskId: metadata.taskId ?? metadata.task_id ?? stableId("task", [prompt, asString(asRecord(nextDecision.route_decision).route, "reply")]),
       flowId: metadata.flowId ?? metadata.flow_id ?? stableId("flow", [prompt, asString(asRecord(nextDecision.route_decision).route, "reply")]),
-      requiresDelegation: normalizeLiveRoute(asRecord(nextDecision.route_decision).route, "reply") === "delegate.single",
-      requiresObservation: normalizeLiveRoute(asRecord(nextDecision.route_decision).route, "reply") === "observe",
+      role,
+      executionProfile,
+      coordinationMode: runtimeTruthFlags.requiresObservation || runtimeTruthFlags.requiresDelegation ? "solo_worker" : undefined,
+      requiresDelegation: runtimeTruthFlags.requiresDelegation,
+      requiresObservation: runtimeTruthFlags.requiresObservation,
     });
   } catch (error) {
     metadata.runtime_truth = isRecord(metadata.runtime_truth) ? metadata.runtime_truth : null;
@@ -941,9 +976,9 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       judge_route: judgeRouteOverride ? normalizeLiveRoute(judgeRouteOverride, finalDecision.route) : undefined,
       judge_role: judgeRole,
       worker_pool: workerPoolForDecision(finalDecision.executionProfile, finalDecision.role),
-      task_class: finalDecision.route === "observe"
+      task_class: isObserveMode(finalDecision.role, finalDecision.executionProfile)
         ? "control_observer"
-        : finalDecision.route === "delegate.single"
+        : finalDecision.route === "delegate"
           ? "delegated_single"
           : "main_direct",
       work_type: asString(metadata.workType, "research"),
@@ -962,7 +997,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       worker_pool: workerPoolForDecision(finalDecision.executionProfile, finalDecision.role),
     },
     review_policy: {
-      required: finalDecision.route === "delegate.single",
+      required: finalDecision.route === "delegate",
     },
     router_decision_v2: {
       request_kind: finalDecision.route === "reply" ? "reply" : "delegated_task",
@@ -1153,8 +1188,11 @@ export function buildTsRuntimeDispatchPayload(input: DispatchLikeInput): Unknown
             metadata: {
               ...asRecord(metadata),
               requested_route: route,
-              requiresDelegation: route === "delegate.single",
-              requiresObservation: route === "observe",
+              ...observeFlagsForRoute(
+                route,
+                asString(asRecord(decision).role),
+                asString(asRecord(decision).executionProfile),
+              ),
             },
           });
       return tsDecision;
@@ -1179,8 +1217,11 @@ export function buildTsRuntimeSpawnPayload(input: SpawnLikeInput): UnknownRecord
             metadata: {
               ...asRecord(metadata),
               requested_route: route,
-              requiresDelegation: route === "delegate.single",
-              requiresObservation: route === "observe",
+              ...observeFlagsForRoute(
+                route,
+                asString(asRecord(decision).role),
+                asString(asRecord(decision).executionProfile),
+              ),
             },
           });
       return tsDecision;
@@ -1203,5 +1244,5 @@ export function routeDecisionSummary(decision: UnknownRecord): string {
 }
 
 export function supportedPolicyRoutes(): string[] {
-  return ["reply", "delegate.single", "observe"];
+  return ["reply", "delegate"];
 }

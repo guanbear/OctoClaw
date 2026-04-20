@@ -62,7 +62,7 @@ export function materializeDelegatedWork(input: {
   const backendSelection = selectDelegationBackend(input.role);
   const conflict = decideConflictPolicy(input.workspaceMode, input.writeConflict);
   const admission = evaluateAdmission({
-    route: "delegate.single",
+    route: "delegate",
     queueBudget: input.queueBudget,
     inflightCount: input.inflightCount,
     capabilitySatisfied: input.capabilitySatisfied,

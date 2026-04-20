@@ -22,6 +22,7 @@ import { createOctoClawRuntimePlugin } from "./plugin.js";
 import type { NativeHelperInvoker } from "./adapter/native-helper.js";
 import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "@octoclaw/delegation";
 import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "@octoclaw/fast-reply";
+import { isObserveMode } from "./resolve/route-helpers.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -113,16 +114,19 @@ function resolveDelegateCoordinationMode(decision: PolicyDecision): DelegateCoor
 function canonicalizePolicyDecision(decision: UnknownRecord, route: string): UnknownRecord {
   const nextDecision = { ...decision };
   const routeDecision = asRecord(decision.route_decision);
+  const role = readString(routeDecision.role, readString(nextDecision.role));
+  const executionProfile = readString(routeDecision.execution_profile, readString(nextDecision.executionProfile));
+  const observe = isObserveMode(role, executionProfile);
   nextDecision.route_decision = {
     ...routeDecision,
     route,
     system_preferred_route: readString(routeDecision.system_preferred_route, route),
-    task_class: route === "observe"
+    task_class: observe
       ? "control_observer"
-      : route === "delegate.single"
+      : route === "delegate"
         ? "delegated_single"
         : readString(routeDecision.task_class, "main_direct"),
-    protected_lane: route === "observe" ? "control_observer" : readString(routeDecision.protected_lane),
+    protected_lane: observe ? "control_observer" : readString(routeDecision.protected_lane),
     dispatch_required: route !== "reply" && routeDecision.dispatch_required !== false,
   };
   return nextDecision;
@@ -136,7 +140,7 @@ export function buildTsRuntimeDispatchPayload(
   const metadata = asRecord(input.metadata);
   const routeDecision = helpers.runtimeRouteDecision(decision);
   const route = helpers.normalizeLiveRoute(routeDecision.route ?? metadata.requested_route, "reply");
-  if (!["reply", "observe", "delegate.single"].includes(route)) {
+  if (!["reply", "delegate"].includes(route)) {
     throw new Error(`unsupported_runtime_route:${route}`);
   }
 
@@ -287,7 +291,7 @@ export function buildTsRuntimeDispatchPayload(
 
   try {
     const binding = plugin.bindWorkflow(workflow);
-    const delegateAttemptBinding = route === "delegate.single"
+    const delegateAttemptBinding = route === "delegate"
       ? startDelegateAttempt(createDelegateTask({
         sessionId: normalizedRequest.sessionKey,
         role: workflow.execution.role,
@@ -304,9 +308,10 @@ export function buildTsRuntimeDispatchPayload(
       })
       : null;
     workflow = markWorkflowCompleted(workflow);
+    const observe = isObserveMode(workflow.execution.role, workflowDecision.executionProfile);
     const finalDelivery = buildWorkflowFinalDelivery(workflow, {
       channel: readString(metadata.channel, "direct"),
-      summary: route === "observe"
+      summary: observe
         ? `Observe workflow materialized natively as ${binding.taskId}`
         : `Delegated task materialized natively as ${binding.taskId}`,
       artifactRefs: [binding.taskId, binding.flowId],
@@ -314,16 +319,16 @@ export function buildTsRuntimeDispatchPayload(
     workflow = enqueueWorkflowDelivery(workflow, finalDelivery);
     return {
       ...basePayload,
-      executed: route === "observe",
-      status: route === "observe" ? "executed" : "planned",
-      summary: `OctoClaw dispatch: ${route}${route === "observe" ? " (executed)" : " (planned)"}`,
+      executed: observe,
+      status: observe ? "executed" : "planned",
+      summary: `OctoClaw dispatch: ${route}${observe ? " (executed)" : " (planned)"}`,
       handoff: {
-        kind: route === "observe" ? "observe" : "delegate",
-        summary: route === "observe"
+        kind: observe ? "observe" : "delegate",
+        summary: observe
           ? `Observe workflow materialized natively as ${binding.taskId}`
           : `Delegated task materialized natively as ${binding.taskId}`,
         user_safe: true,
-        reply_text: route === "observe"
+        reply_text: observe
           ? `Observe workflow started natively: ${binding.taskId}`
           : `Delegated task registered natively: ${binding.taskId}`,
       },
@@ -360,7 +365,7 @@ export function buildTsRuntimeDispatchPayload(
         progress: progressDelivery,
         final: finalDelivery,
       },
-      job: route === "observe"
+      job: observe
         ? {
           id: binding.taskId,
           session_key: readString(metadata.session_key ?? metadata.sessionKey),
@@ -404,9 +409,9 @@ export function buildTsRuntimeSpawnPayload(
   const metadata = asRecord(input.metadata);
   const normalizedRoute = helpers.normalizeLiveRoute(
     input.route ?? helpers.runtimeRouteDecision(decision).route,
-    "delegate.single",
+    "delegate",
   );
-  if (normalizedRoute !== "delegate.single") {
+  if (normalizedRoute !== "delegate") {
     throw new Error(`unsupported_spawn_route:${normalizedRoute}`);
   }
 
@@ -436,7 +441,7 @@ export function buildTsRuntimeSpawnPayload(
     {
       ...metadata,
       requiresDelegation: true,
-      requested_route: "delegate.single",
+      requested_route: "delegate",
     },
   );
 
@@ -556,7 +561,7 @@ export function buildTsRuntimeSpawnPayload(
       },
       materialization: {
         authority: "ts-native-plugin",
-          type: "delegate.single",
+        type: "delegate",
         task_id: binding.taskId,
         flow_id: binding.flowId,
         delegateTaskId: delegateAttemptBinding.task.delegateTaskId,
