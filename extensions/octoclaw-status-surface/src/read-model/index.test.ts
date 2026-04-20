@@ -173,7 +173,7 @@ describe("read-model", () => {
     expect(status.taskId).toBe("task-123");
     expect(status.flowId).toBe("flow-456");
     expect(status.state).toBe("planned");
-    expect(status.route).toBe("delegate.single");
+    expect(status.route).toBe("delegate");
     expect(status.workerPool).toBe("octoclaw-worker");
     expect(status.substrateSummary).toBe("openclaw-native managed planned");
     expect(status.claimOwner).toBe("worker-beta");
@@ -225,7 +225,7 @@ describe("read-model", () => {
   it("buildStatusProjection remains backward compatible without delegate task", () => {
     const status = buildStatusProjection({ record: createRecord() });
 
-    expect(status.route).toBe("delegate.single");
+    expect(status.route).toBe("delegate");
     expect(status.role).toBe("worker_research");
     expect(status.coordinationMode).toBe("solo_worker");
     expect(status.timelinePreview).toEqual([]);

@@ -115,7 +115,7 @@ describe("view-model", () => {
 
     expect(view.taskId).toBe("task-123");
     expect(view.state).toBe("running");
-    expect(view.route).toBe("delegate.single");
+    expect(view.route).toBe("delegate");
     expect(view.workerPool).toBe("octoclaw-worker");
     expect(view.substrateSummary).toBe("openclaw-native managed running");
     expect(view.actionAvailability).toEqual(["status", "details", "queue", "timeline"]);

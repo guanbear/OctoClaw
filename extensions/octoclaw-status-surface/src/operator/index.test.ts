@@ -97,7 +97,7 @@ describe("operator", () => {
       kind: "status_card",
       title: "task-123",
       state: "running",
-      route: "delegate.single",
+      route: "delegate",
     });
   });
 });

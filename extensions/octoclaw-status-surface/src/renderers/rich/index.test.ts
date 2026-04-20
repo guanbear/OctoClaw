@@ -96,7 +96,7 @@ describe("rich renderer", () => {
       kind: "status_card",
       title: "task-123",
       state: "running",
-      route: "delegate.single",
+      route: "delegate",
       workerPool: "octoclaw-worker",
       substrateSummary: "openclaw-native managed running",
     });

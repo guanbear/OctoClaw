@@ -67,7 +67,7 @@ function defaultRoute(record: RuntimeStateSurfaceRecord, delegateTask?: Delegate
   if (delegateTask) return delegateTask.route;
   const identityRoute = (record as RuntimeStateSurfaceRecord & { identity?: { route?: string } }).identity?.route;
   if (typeof identityRoute === "string" && identityRoute.trim()) return identityRoute;
-  return typeof record.truth.requestId === "string" && record.truth.requestId ? "delegate.single" : "reply";
+  return typeof record.truth.requestId === "string" && record.truth.requestId ? "delegate" : "reply";
 }
 
 function isTaskStale(delegateTask?: DelegateTask, fallback = false): boolean {
@@ -106,7 +106,7 @@ export function buildStatusProjection(input: StatusSurfaceProjectionInput): Stat
     state: delegateAttempt?.status || record.substrateState,
     route,
     role: delegateTask?.role || (route === "reply" ? "main_reply" : "worker_research"),
-    coordinationMode: delegateTask?.coordinationMode || (route === "delegate.single" ? "solo_worker" : ""),
+    coordinationMode: delegateTask?.coordinationMode || (route === "delegate" ? "solo_worker" : ""),
     backendSummary: record.runtime,
     workerPool: input.workerPool || defaultWorkerPool(record),
     substrateSummary: delegateSubstrateSummary(input),
