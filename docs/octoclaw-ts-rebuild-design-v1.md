@@ -1926,6 +1926,10 @@ Anthropic 在 Managed Agents 里最核心的接口拆法，其实可以压缩成
 
 ### 9.1.7 从开源借鉴里应该学什么
 
+更详细的源码级借鉴收口，见：
+
+- [octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md)
+
 #### ClawTeam
 
 ClawTeam 的长处在于：
