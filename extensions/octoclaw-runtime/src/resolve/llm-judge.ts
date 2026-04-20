@@ -1,20 +1,32 @@
 import {
+  ESCALATION_DEFAULTS,
   JUDGE_INPUT_CAPS,
   JUDGE_FAST_DEFAULTS,
-  isValidJudgeOutput,
+  REMOTE_JUDGE_DEFAULTS,
   isActionableJudgeResult,
+  isRemoteJudgeOutput,
+  isValidJudgeOutput,
+  type DualJudgeConfig,
+  type EscalationReason,
   type JudgeFastConfig,
   type JudgeInput,
   type JudgeOutput,
+  type RemoteJudgeOutput,
 } from "@octoclaw/policy/judge-schema";
 import type { JudgeContextPacket } from "@octoclaw/policy/judge";
-import { buildJudgeSystemPrompt, buildJudgeUserPrompt } from "@octoclaw/policy/judge-prompt";
-import { buildJudgeContextPacket } from "./judge-context-packet.js";
+import {
+  buildJudgeSystemPrompt,
+  buildJudgeUserPrompt,
+  buildRemoteJudgeSystemPrompt,
+  buildRemoteJudgeUserPrompt,
+} from "@octoclaw/policy/judge-prompt";
+import { buildExpandedPacket, buildJudgeContextPacket } from "./judge-context-packet.js";
 
 export { isValidJudgeOutput, isActionableJudgeResult };
-export type { JudgeFastConfig, JudgeInput, JudgeOutput };
+export type { DualJudgeConfig, EscalationReason, JudgeFastConfig, JudgeInput, JudgeOutput, RemoteJudgeOutput };
 
 type JudgeConfig = JudgeFastConfig;
+type RemoteJudgeConfig = DualJudgeConfig["remote"];
 
 export type JudgeFailureClass = "timeout" | "http_error" | "invalid_json" | "unknown";
 
@@ -34,6 +46,42 @@ function classifyJudgeError(error: unknown): JudgeFailureClass {
     return "http_error";
   }
   return "unknown";
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value.map((item) => String(item ?? "").trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
+  const ackTextRaw = parsed.ackText ?? parsed.ack_text ?? null;
+  return {
+    route: parsed.route as JudgeOutput["route"],
+    confidence: parsed.confidence as number,
+    abstainReason: (parsed.abstainReason ?? parsed.abstain_reason ?? null) as string | null,
+    ackText: typeof ackTextRaw === "string" ? ackTextRaw : null,
+    role: (parsed.role ?? null) as JudgeOutput["role"],
+    complexityBand: (parsed.complexityBand ?? parsed.complexity_band) as JudgeOutput["complexityBand"],
+    expectedDurationBand: (parsed.expectedDurationBand ?? parsed.expected_duration_band) as JudgeOutput["expectedDurationBand"],
+    qualityBar: (parsed.qualityBar ?? parsed.quality_bar) as JudgeOutput["qualityBar"],
+    riskFlags: asStringArray(parsed.riskFlags ?? parsed.risk_flags),
+    delegateReasonCodes: asStringArray(parsed.delegateReasonCodes ?? parsed.delegate_reason_codes) as JudgeOutput["delegateReasonCodes"],
+    routeConfidence: typeof (parsed.routeConfidence ?? parsed.route_confidence) === "number"
+      ? (parsed.routeConfidence ?? parsed.route_confidence) as number
+      : undefined,
+    requestKind: (parsed.requestKind ?? parsed.request_kind) as string | undefined,
+    scope: parsed.scope as string | undefined,
+    target: parsed.target as string | undefined,
+    budgetBand: (parsed.budgetBand ?? parsed.budget_band) as JudgeOutput["budgetBand"],
+    reasonCodes: (parsed.reasonCodes ?? parsed.reason_codes) as string[] | undefined,
+    evidenceRequired: (parsed.evidenceRequired ?? parsed.evidence_required) as boolean | undefined,
+    ackRequired: (parsed.ackRequired ?? parsed.ack_required) as boolean | undefined,
+  };
 }
 
 export function resolveJudgeConfig(raw: Record<string, unknown>): JudgeConfig | null {
@@ -61,6 +109,77 @@ export function resolveJudgeConfig(raw: Record<string, unknown>): JudgeConfig | 
     local: isLocal,
     judgeAckEnabled: raw.judgeAckEnabled !== undefined ? Boolean(raw.judgeAckEnabled) : isLocal,
   };
+}
+
+function resolveRemoteJudgeConfig(raw: Record<string, unknown>): RemoteJudgeConfig {
+  const modelId = String(raw.modelId ?? REMOTE_JUDGE_DEFAULTS.modelId);
+  const baseUrl = String(raw.baseUrl ?? "").replace(/\/+$/, "");
+  const apiKey = String(raw.apiKey ?? "");
+
+  return {
+    enabled: raw.enabled === true && Boolean(modelId) && Boolean(baseUrl),
+    modelId,
+    baseUrl,
+    apiKey,
+    timeoutMs: Math.max(500, Number(raw.timeoutMs ?? REMOTE_JUDGE_DEFAULTS.timeoutMs)),
+    shadowMode: Boolean(raw.shadowMode ?? REMOTE_JUDGE_DEFAULTS.shadowMode),
+  };
+}
+
+export function resolveDualJudgeConfig(raw: Record<string, unknown>): DualJudgeConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const dualRaw = asObject(raw._dualJudgeConfig);
+  if (Object.keys(dualRaw).length > 0) {
+    const local = resolveJudgeConfig(asObject(dualRaw.local));
+    if (!local) return null;
+    return {
+      local,
+      remote: resolveRemoteJudgeConfig(asObject(dualRaw.remote)),
+      escalation: {
+        minConfidence: Math.min(1, Math.max(0, Number(asObject(dualRaw.escalation).minConfidence ?? ESCALATION_DEFAULTS.minConfidence))),
+        alwaysEscalateRiskFlags: asStringArray(asObject(dualRaw.escalation).alwaysEscalateRiskFlags) ?? [...ESCALATION_DEFAULTS.alwaysEscalateRiskFlags],
+        maxLatencyMs: Math.max(500, Number(asObject(dualRaw.escalation).maxLatencyMs ?? ESCALATION_DEFAULTS.maxLatencyMs)),
+      },
+    };
+  }
+
+  const local = resolveJudgeConfig(asObject(raw._judgeFastConfig));
+  if (!local) return null;
+
+  const remoteRaw = asObject(raw._remoteJudgeConfig);
+  return {
+    local,
+    remote: resolveRemoteJudgeConfig(remoteRaw),
+    escalation: {
+      minConfidence: Math.min(1, Math.max(0, Number(remoteRaw.minConfidence ?? local.minConfidence ?? ESCALATION_DEFAULTS.minConfidence))),
+      alwaysEscalateRiskFlags: asStringArray(remoteRaw.alwaysEscalateRiskFlags) ?? [...ESCALATION_DEFAULTS.alwaysEscalateRiskFlags],
+      maxLatencyMs: Math.max(500, Number(remoteRaw.maxLatencyMs ?? ESCALATION_DEFAULTS.maxLatencyMs)),
+    },
+  };
+}
+
+export function resolveDualJudgeConfigFromEnv(): DualJudgeConfig | null {
+  const localJson = process.env.OCTOCLAW_JUDGE_FAST?.trim();
+  const remoteJson = process.env.OCTOCLAW_JUDGE_REMOTE?.trim();
+  const payload: Record<string, unknown> = {};
+
+  if (localJson) {
+    try {
+      payload._judgeFastConfig = JSON.parse(localJson);
+    } catch {
+      return null;
+    }
+  }
+  if (remoteJson) {
+    try {
+      payload._remoteJudgeConfig = JSON.parse(remoteJson);
+    } catch {
+      return null;
+    }
+  }
+
+  return resolveDualJudgeConfig(payload);
 }
 
 export function buildJudgeInput(
@@ -117,14 +236,16 @@ export function buildLiveJudgeContextPacket(options: {
   });
 }
 
-function asStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const normalized = value.map((item) => String(item ?? "").trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : undefined;
+interface OpenAICompatOptions {
+  modelId: string;
+  baseUrl: string;
+  apiKey: string;
+  maxTokens: number;
+  includeResponseFormat: boolean;
 }
 
-async function callOpenAICompat(
-  config: JudgeConfig,
+async function postOpenAICompat(
+  options: OpenAICompatOptions,
   systemPrompt: string,
   userPrompt: string,
   signal: AbortSignal,
@@ -134,30 +255,32 @@ async function callOpenAICompat(
     { role: "user", content: userPrompt },
   ];
 
-  const body = JSON.stringify({
-    model: config.modelId,
+  const payload: Record<string, unknown> = {
+    model: options.modelId,
     messages,
     temperature: 0,
-    max_tokens: 128,
-    response_format: { type: "json_object" },
+    max_tokens: options.maxTokens,
     reasoning_effort: "none",
-  });
+  };
 
-  const url = `${config.baseUrl}/chat/completions`;
+  if (options.includeResponseFormat) {
+    payload.response_format = { type: "json_object" };
+  }
 
-  const response = await fetch(url, {
+  const response = await fetch(`${options.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${config.apiKey}`,
+      "Authorization": `Bearer ${options.apiKey}`,
       "x-octoclaw-internal": "judge",
     },
-    body,
+    body: JSON.stringify(payload),
     signal,
   });
 
   if (!response.ok) {
-    throw new Error(`judge HTTP ${response.status}: ${await response.text().catch(() => "unknown")}`);
+    const errorText = await response.text().catch(() => "unknown");
+    throw new Error(`judge HTTP ${response.status}: ${errorText}`);
   }
 
   const json = await response.json() as Record<string, unknown>;
@@ -167,11 +290,52 @@ async function callOpenAICompat(
   }
   const choices = json.choices as Array<Record<string, unknown>> | undefined;
   const message = choices?.[0]?.message as Record<string, unknown> | undefined;
-  let content = message?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    return "";
+  const content = message?.content;
+  return typeof content === "string" && content.trim() ? content : "";
+}
+
+async function callOpenAICompat(
+  config: Pick<JudgeFastConfig, "modelId" | "baseUrl" | "apiKey">,
+  systemPrompt: string,
+  userPrompt: string,
+  signal: AbortSignal,
+  maxTokens: number,
+): Promise<string> {
+  try {
+    return await postOpenAICompat({
+      modelId: config.modelId,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      maxTokens,
+      includeResponseFormat: true,
+    }, systemPrompt, userPrompt, signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    const isResponseFormatError =
+      message.includes("response_format")
+      || message.includes("json_object")
+      || message.includes("parse error")
+      || message.includes("unsupported")
+      || message.includes("unknown field")
+      || message.includes("invalid request")
+      || message.includes("unmarshal")
+      || message.includes("json schema")
+      || message.includes("'response_format'")
+      || (message.includes("400") && message.includes("format"));
+    if (!isResponseFormatError) {
+      throw error;
+    }
+    if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+      console.log("[octoclaw-judge] response_format not supported, retrying without");
+    }
+    return postOpenAICompat({
+      modelId: config.modelId,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      maxTokens,
+      includeResponseFormat: false,
+    }, systemPrompt, userPrompt, signal);
   }
-  return content;
 }
 
 function extractJson(text: string): unknown {
@@ -202,14 +366,17 @@ export async function callLlmJudge(
   const timer = setTimeout(() => controller.abort(), effectiveTimeout);
 
   try {
-    const systemPrompt = buildJudgeSystemPrompt();
-    const userPrompt = buildJudgeUserPrompt(input);
-
-    const raw = await callOpenAICompat(config, systemPrompt, userPrompt, controller.signal);
+    const raw = await callOpenAICompat(
+      config,
+      buildJudgeSystemPrompt(),
+      buildJudgeUserPrompt(input),
+      controller.signal,
+      128,
+    );
     if (process.env.OCTOCLAW_JUDGE_DEBUG) {
       console.log(`[octoclaw-judge] raw response length=${raw.length} preview="${raw.slice(0, 200)}"`);
     }
-    let parsed = extractJson(raw) as Record<string, unknown> | null;
+    const parsed = extractJson(raw) as Record<string, unknown> | null;
 
     if (!parsed || !isValidJudgeOutput(parsed)) {
       lastJudgeFailureClass = "invalid_json";
@@ -217,31 +384,99 @@ export async function callLlmJudge(
       return null;
     }
 
-    // Normalize snake_case fields from LLM output to camelCase
-    const ackTextRaw = parsed.ackText ?? parsed.ack_text ?? null;
-    const result: JudgeOutput = {
-      route: parsed.route as JudgeOutput["route"],
-      confidence: parsed.confidence as number,
-      abstainReason: (parsed.abstainReason ?? parsed.abstain_reason ?? null) as string | null,
-      ackText: typeof ackTextRaw === "string" ? ackTextRaw : null,
-      role: (parsed.role ?? null) as JudgeOutput["role"],
-      complexityBand: (parsed.complexityBand ?? parsed.complexity_band) as JudgeOutput["complexityBand"],
-      expectedDurationBand: (parsed.expectedDurationBand ?? parsed.expected_duration_band) as JudgeOutput["expectedDurationBand"],
-      qualityBar: (parsed.qualityBar ?? parsed.quality_bar) as JudgeOutput["qualityBar"],
-      riskFlags: asStringArray(parsed.riskFlags ?? parsed.risk_flags),
-      delegateReasonCodes: asStringArray(parsed.delegateReasonCodes ?? parsed.delegate_reason_codes) as JudgeOutput["delegateReasonCodes"],
-      routeConfidence: typeof (parsed.routeConfidence ?? parsed.route_confidence) === "number"
-        ? (parsed.routeConfidence ?? parsed.route_confidence) as number
-        : undefined,
-      requestKind: parsed.requestKind ?? parsed.request_kind as string | undefined,
-      scope: parsed.scope as string | undefined,
-      target: parsed.target as string | undefined,
-      budgetBand: (parsed.budgetBand ?? parsed.budget_band) as JudgeOutput["budgetBand"],
-      reasonCodes: parsed.reasonCodes ?? parsed.reason_codes as string[] | undefined,
-      evidenceRequired: parsed.evidenceRequired ?? parsed.evidence_required as boolean | undefined,
-      ackRequired: parsed.ackRequired ?? parsed.ack_required as boolean | undefined,
+    return coerceJudgeOutput(parsed);
+  } catch (error) {
+    lastJudgeFailureClass = classifyJudgeError(error);
+    warnJudgeFailure(error);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function shouldEscalate(
+  localResult: JudgeOutput,
+  escalation: DualJudgeConfig["escalation"],
+  metadata: Record<string, unknown>,
+): EscalationReason | null {
+  if (localResult.confidence < escalation.minConfidence) return "low_confidence";
+  if ((localResult.riskFlags ?? []).some((flag) => escalation.alwaysEscalateRiskFlags.includes(flag))) return "high_risk_write";
+
+  const turnLength = String(metadata.task ?? metadata.prompt ?? metadata.current_turn ?? "").trim().length;
+  if (turnLength <= 6 && localResult.route === "delegate") return "short_turn_context_dependent";
+
+  const activeIntents = Array.isArray(metadata.active_intents) ? metadata.active_intents.filter(Boolean) : [];
+  const bindingConflicts = Array.isArray(metadata.binding_conflicts) ? metadata.binding_conflicts.filter(Boolean) : [];
+  if (activeIntents.length > 1 || bindingConflicts.length > 0) return "multiple_active_intents";
+
+  if (String(localResult.scope ?? "").trim().toLowerCase() === "unknown" && metadata.canSafelyClarify !== true) {
+    return "scope_unknown";
+  }
+
+  if (localResult.role === "observer_probe" && localResult.complexityBand === "deep") return "unstable_classification";
+
+  if (metadata.validator_conflict === true || metadata.validator_hard_conflict === true) return "validator_conflict";
+
+  return null;
+}
+
+export async function callRemoteJudge(
+  input: JudgeInput,
+  localResult: JudgeOutput,
+  escalationReason: EscalationReason,
+  config: DualJudgeConfig,
+): Promise<RemoteJudgeOutput | null> {
+  if (!config.remote.enabled) return null;
+
+  lastJudgeFailureClass = null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.min(config.remote.timeoutMs, config.escalation.maxLatencyMs));
+
+  try {
+    const basePacket = input.contextPacket;
+    const expandedPacket = basePacket
+      ? buildExpandedPacket(basePacket, localResult, escalationReason)
+      : undefined;
+    const remoteInput: JudgeInput = {
+      ...input,
+      contextPacket: input.contextPacket,
     };
 
+    const raw = await callOpenAICompat(
+      {
+        modelId: config.remote.modelId,
+        baseUrl: config.remote.baseUrl,
+        apiKey: config.remote.apiKey,
+      },
+      buildRemoteJudgeSystemPrompt(),
+      buildRemoteJudgeUserPrompt(remoteInput, localResult, escalationReason, expandedPacket),
+      controller.signal,
+      128,
+    );
+
+    const parsed = extractJson(raw) as Record<string, unknown> | null;
+    if (!parsed || !isRemoteJudgeOutput(parsed)) {
+      lastJudgeFailureClass = "invalid_json";
+      warnJudgeFailure(new Error("remote judge returned invalid JSON"));
+      return null;
+    }
+
+    const result = coerceJudgeOutput(parsed) as RemoteJudgeOutput;
+    result.adjudication_reason = typeof parsed.adjudication_reason === "string"
+      ? parsed.adjudication_reason
+      : typeof parsed.adjudicationReason === "string"
+        ? parsed.adjudicationReason
+        : undefined;
+    result.override_recommendation = parsed.override_recommendation === "accept_local" || parsed.override_recommendation === "override_local"
+      ? parsed.override_recommendation
+      : parsed.overrideRecommendation === "accept_local" || parsed.overrideRecommendation === "override_local"
+        ? parsed.overrideRecommendation as RemoteJudgeOutput["override_recommendation"]
+        : undefined;
+    result.confidence_delta = typeof parsed.confidence_delta === "number"
+      ? parsed.confidence_delta
+      : typeof parsed.confidenceDelta === "number"
+        ? parsed.confidenceDelta
+        : result.confidence - localResult.confidence;
     return result;
   } catch (error) {
     lastJudgeFailureClass = classifyJudgeError(error);
