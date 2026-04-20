@@ -30,6 +30,10 @@ import {
   markMainModelFirstToken as markMainModelFirstTokenInTiming,
   ackTimerStateForKey,
 } from "./ack-timing.js";
+import {
+  DELEGATED_ROUTE_NAMES,
+  isDelegatedRoute as isDelegatedRouteName,
+} from "../resolve/route-helpers.js";
 
 const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
 
@@ -44,7 +48,6 @@ export const WATCHDOG_DEBOUNCE_MS = 25_000;
 export const STALE_QUEUED_THRESHOLD_MIN = 90;
 export const STUCK_THRESHOLD_MIN = 15;
 
-const DELEGATED_ROUTE_NAMES = new Set(["delegate.single"]);
 const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect", "probe", "scan"]);
 const IM_SESSION_ORIGINS = new Set([
   "slack",
@@ -226,7 +229,7 @@ function parseSessionRoute(raw: string): ParsedSessionRoute {
 function isDelegatedRoute(decision: UnknownRecord): boolean {
   const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
   const route = asString(routeDecision.route).toLowerCase();
-  return DELEGATED_ROUTE_NAMES.has(route);
+  return isDelegatedRouteName(route);
 }
 
 function ackState(stateKey: string): AckTrackingState {

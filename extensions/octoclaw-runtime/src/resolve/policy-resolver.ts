@@ -12,6 +12,7 @@ import {
   callLlmJudge,
   isActionableJudgeResult,
   judgeResultToRouteOverride,
+  lastJudgeFailureClass,
 } from "./llm-judge.js";
 import {
   advanceWorkflowToRunning,
@@ -27,6 +28,10 @@ import type { PolicyRole } from "@octoclaw/policy/roles";
 import type { ExecutionProfileTarget } from "@octoclaw/policy/model";
 import type { LiveRoute } from "@octoclaw/policy/route";
 import type { WorkerPool } from "@octoclaw/policy/caps";
+import {
+  LIVE_ROUTE_NAMES,
+  normalizeLiveRoute,
+} from "./route-helpers.js";
 import {
   buildTsRuntimeDispatchPayload as buildRuntimeDispatchPayload,
   buildTsRuntimeSpawnPayload as buildRuntimeSpawnPayload,
@@ -63,7 +68,7 @@ type PolicyContextState = UnknownRecord & {
   updatedAt?: number;
 };
 
-const PHASE_TWO_LIVE_ROUTES = new Set<LiveRoute>(["reply", "delegate.single", "observe"]);
+const PHASE_TWO_LIVE_ROUTES = LIVE_ROUTE_NAMES;
 
 interface DispatchLikeInput {
   task: unknown;
@@ -249,18 +254,6 @@ function normalizeWorkspaceMode(value: unknown, fallback: WorkspaceMode = "share
   return candidate === "isolated_worktree" || candidate === "shared_workspace" || candidate === "read_only"
     ? candidate
     : fallback;
-}
-
-function normalizeLiveRoute(route: unknown, fallback: string = "reply"): LiveRoute {
-  const normalized = asString(route);
-  const fallbackRoute = fallback === "reply" || fallback === "delegate.single" || fallback === "observe"
-    ? fallback
-    : "reply";
-  if (normalized === "direct") return "reply";
-  if (normalized === "spawn_single" || normalized === "spawn_multi") return "delegate.single";
-  if (normalized === "runner") return "observe";
-  if (normalized === "reply" || normalized === "delegate.single" || normalized === "observe") return normalized;
-  return fallbackRoute;
 }
 
 function runtimeRouteDecision(decision?: UnknownRecord): UnknownRecord {
@@ -745,7 +738,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     }
     if (routeHint.route_objection === true) {
       metadata.objection_reason = asString(routeHint.objection_reason);
-      metadata.objection_requested_route = normalizeLiveRoute(routeHint.requested_route, asString(metadata.requested_route, "reply"));
+      metadata.objection_requested_route = normalizeLiveRoute(
+        routeHint.requested_route,
+        normalizeLiveRoute(metadata.requested_route, "reply"),
+      );
     }
     if (asString(routeHint.work_type)) metadata.workType = asString(routeHint.work_type);
     if (asString(routeHint.phase)) metadata.phase = asString(routeHint.phase);
@@ -838,6 +834,9 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         console.log(`[octoclaw-judge] calling LLM judge... model=${judgeConfig.modelId} timeout=${judgeConfig.local ? judgeConfig.timeoutLocalMs : judgeConfig.timeoutMs}ms`);
       }
       const judgeResult = await callLlmJudge(judgeInput, judgeConfig);
+      if (judgeResult === null && lastJudgeFailureClass) {
+        metadata._judge_failure_class = lastJudgeFailureClass;
+      }
       const judgeLatencyMs = Date.now() - judgeStart;
       if (process.env.OCTOCLAW_JUDGE_DEBUG) {
         console.log(`[octoclaw-judge] judge done: ${judgeLatencyMs}ms result=${judgeResult ? `route=${judgeResult.route} conf=${judgeResult.confidence} ack="${judgeResult.ackText?.slice(0, 30)}"` : "null(timeout)"}`);
@@ -939,6 +938,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _route_hint_required: routeHintRequired,
     _judge_ack_text: judgeAckText,
     _judge_shadow_log: judgeShadowLog,
+    _judge_failure_class: asString(metadata._judge_failure_class) || undefined,
   };
 
   return applyPhaseTwoLivePathPolicy(seeded, metadata, prompt);
@@ -1088,7 +1088,7 @@ export async function resolvePolicyDecisionForContext(
 export function buildTsRuntimeDispatchPayload(input: DispatchLikeInput): UnknownRecord {
   return buildRuntimeDispatchPayload(input, {
     runtimeRouteDecision,
-    normalizeLiveRoute,
+    normalizeLiveRoute: (route, fallback = "reply") => normalizeLiveRoute(route, normalizeLiveRoute(fallback, "reply")),
     runtimeExecutionIds: buildRuntimeExecutionIds,
     buildWorkflowDecision: (task, decision, metadata) => {
       const routeDecision = runtimeRouteDecision(decision);
@@ -1114,7 +1114,7 @@ export function buildTsRuntimeDispatchPayload(input: DispatchLikeInput): Unknown
 export function buildTsRuntimeSpawnPayload(input: SpawnLikeInput): UnknownRecord {
   return buildRuntimeSpawnPayload(input, {
     runtimeRouteDecision,
-    normalizeLiveRoute,
+    normalizeLiveRoute: (route, fallback = "reply") => normalizeLiveRoute(route, normalizeLiveRoute(fallback, "reply")),
     runtimeExecutionIds: buildRuntimeExecutionIds,
     buildWorkflowDecision: (task, decision, metadata) => {
       const routeDecision = runtimeRouteDecision(decision);

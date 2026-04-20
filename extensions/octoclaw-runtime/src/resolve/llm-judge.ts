@@ -16,6 +16,26 @@ export type { JudgeFastConfig, JudgeInput, JudgeOutput };
 
 type JudgeConfig = JudgeFastConfig;
 
+export type JudgeFailureClass = "timeout" | "http_error" | "invalid_json" | "unknown";
+
+export let lastJudgeFailureClass: JudgeFailureClass | null = null;
+
+function warnJudgeFailure(error: unknown): void {
+  if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+    console.warn(`[octoclaw-judge] judge failed: class=${error instanceof Error ? error.constructor.name : "unknown"} message=${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function classifyJudgeError(error: unknown): JudgeFailureClass {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "timeout";
+  }
+  if (error instanceof Error && /^judge HTTP \d+:/u.test(error.message)) {
+    return "http_error";
+  }
+  return "unknown";
+}
+
 export function resolveJudgeConfig(raw: Record<string, unknown>): JudgeConfig | null {
   if (!raw || typeof raw !== "object") return null;
 
@@ -84,12 +104,16 @@ export function buildLiveJudgeContextPacket(options: {
     .map((value) => String(value ?? "").trim())
     .filter(Boolean);
 
+  const judgeConfig = metadata._judgeFastConfig as Record<string, unknown> | undefined;
+  const isLocal = Boolean(judgeConfig?.local);
+
   return buildJudgeContextPacket({
     prompt: options.prompt,
     metadata,
     replayLogPath: String(metadata.judge_replay_log_path ?? metadata.replay_log_path ?? ""),
     taskStatePath: String(metadata.judge_task_state_path ?? metadata.task_state_path ?? ""),
     sessionKeys,
+    local: isLocal,
   });
 }
 
@@ -172,6 +196,7 @@ export async function callLlmJudge(
   input: JudgeInput,
   config: JudgeConfig,
 ): Promise<JudgeOutput | null> {
+  lastJudgeFailureClass = null;
   const effectiveTimeout = config.local ? config.timeoutLocalMs : config.timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), effectiveTimeout);
@@ -187,6 +212,8 @@ export async function callLlmJudge(
     let parsed = extractJson(raw) as Record<string, unknown> | null;
 
     if (!parsed || !isValidJudgeOutput(parsed)) {
+      lastJudgeFailureClass = "invalid_json";
+      warnJudgeFailure(new Error("judge returned invalid JSON"));
       return null;
     }
 
@@ -216,7 +243,9 @@ export async function callLlmJudge(
     };
 
     return result;
-  } catch {
+  } catch (error) {
+    lastJudgeFailureClass = classifyJudgeError(error);
+    warnJudgeFailure(error);
     return null;
   } finally {
     clearTimeout(timer);

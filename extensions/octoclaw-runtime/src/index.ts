@@ -7,6 +7,12 @@ export * from "./bridge.js";
 export * from "./conversation-grounding.js";
 export * from "./resolve/env.js";
 export * from "./resolve/judge-context-packet.js";
+export {
+  DELEGATED_ROUTE_NAMES,
+  LIVE_ROUTE_NAMES,
+  normalizeLiveRoute,
+  isDelegatedRoute as isDelegatedRouteName,
+} from "./resolve/route-helpers.js";
 export * from "./resolve/session.js";
 export {
   extractPromptText,

@@ -63,6 +63,7 @@ export interface JudgeContextPacketOptions {
   taskStatePath?: string;
   sessionKeys?: string[];
   metadata?: Record<string, unknown>;
+  local?: boolean;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -375,10 +376,19 @@ export function buildJudgeContextPacket(options: JudgeContextPacketOptions): Jud
       }
     : undefined;
 
-  return enforcePacketBudget({
+  const packet: JudgeContextPacket = {
     core,
     continuation,
     binding,
     ...(evidence ? { evidence } : {}),
-  });
+  };
+
+  if (!options.local) {
+    delete packet.evidence;
+    if (packet.core.thread_summary && packet.core.thread_summary.length > 50) {
+      packet.core.thread_summary = packet.core.thread_summary.slice(0, 47) + "...";
+    }
+  }
+
+  return enforcePacketBudget(packet);
 }

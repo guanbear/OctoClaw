@@ -6,6 +6,11 @@ import {
   stableId,
   truncateText,
 } from "../resolve/env.js";
+import {
+  DELEGATED_ROUTE_NAMES,
+  isDelegatedRoute as isDelegatedRouteName,
+  normalizeLiveRoute,
+} from "../resolve/route-helpers.js";
 import { ackDeliveryState, ackTargetResolutionState } from "../resolve/session.js";
 import { policyState } from "../state/policy-state.js";
 
@@ -17,7 +22,6 @@ interface PolicyStateApiLike {
   update: (stateKey: string, mutator: (current: UnknownRecord) => UnknownRecord) => void;
 }
 
-const DELEGATED_ROUTE_NAMES = new Set(["delegate.single"]);
 const policyStateApi = policyState as unknown as PolicyStateApiLike;
 
 interface FsPromisesLike {
@@ -40,15 +44,6 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
     : [];
-}
-
-function normalizeLiveRoute(route: unknown, fallback = "reply"): string {
-  const normalized = String(route ?? "").trim();
-  if (normalized === "direct") return "reply";
-  if (normalized === "spawn_single" || normalized === "spawn_multi") return "delegate.single";
-  if (normalized === "runner") return "observe";
-  if (["reply", "delegate.single", "observe"].includes(normalized)) return normalized;
-  return fallback;
 }
 
 function conversationIntentClass(decision: UnknownRecord): string {
@@ -675,7 +670,7 @@ export function replaceAssistantMessageText(message: Record<string, unknown>, te
 
 export function delegationFailureReply(state: Record<string, unknown>): { mode: string; message: Record<string, unknown> } {
   const decision = asRecord(state.decision);
-  const route = normalizeLiveRoute(asRecord(decision.route_decision).route, "");
+  const route = normalizeLiveRoute(asRecord(decision.route_decision).route, "reply");
   const intentClass = String(state.conversationIntentClass ?? conversationIntentClass(decision) ?? "").trim();
   const text = route === "observe" && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)
     ? "这次查询还没真正派发到执行链，所以我现在不能把结果说成已经查到。等拿到真实执行结果后我再回复。"
@@ -866,7 +861,7 @@ export function isSessionControlDecision(decision: Record<string, unknown>): boo
 }
 
 export function isRunnerDecision(decision: Record<string, unknown>): boolean {
-  return normalizeLiveRoute(asRecord(decision.route_decision).route, "") === "observe";
+  return normalizeLiveRoute(asRecord(decision.route_decision).route, "reply") === "observe";
 }
 
 export function workflowEnforcementRule(
@@ -889,7 +884,7 @@ export function workflowEnforcementRule(
 }
 
 export function isDelegatedRoute(decision: Record<string, unknown>): boolean {
-  return DELEGATED_ROUTE_NAMES.has(String(asRecord(decision.route_decision).route ?? ""));
+  return isDelegatedRouteName(String(asRecord(decision.route_decision).route ?? ""));
 }
 
 export function routeHintRequired(decision: Record<string, unknown>): boolean {

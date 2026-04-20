@@ -80,6 +80,15 @@
           "local": {
             "type": "boolean",
             "default": false
+          },
+          "judgeAckEnabled": {
+            "type": "boolean",
+            "description": "Use judge-generated ack_text. Local default true, remote default false."
+          },
+          "ackReactionEmoji": {
+            "type": "string",
+            "description": "Emoji name to react with on message receipt (e.g. 'ok_hand'). Empty to disable.",
+            "default": ""
           }
         },
         "required": ["modelId", "baseUrl", "apiKey"],
