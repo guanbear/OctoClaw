@@ -12,10 +12,6 @@ export function decideRole(route: LiveRoute, workType = "research"): RoleDecisio
     return { role: "main_reply", roleReason: "reply_route_uses_main_reply" };
   }
 
-  if (route === "observe") {
-    return { role: "observer_probe", roleReason: "observe_route_uses_probe_role" };
-  }
-
   if (workType === "code") {
     return { role: "worker_code", roleReason: "delegate_single_code_role" };
   }

@@ -4,7 +4,7 @@ import { evaluateAdmission } from "./index.js";
 describe("admission policy", () => {
   it("rejects when capability is not satisfied", () => {
     expect(evaluateAdmission({
-      route: "delegate.single",
+      route: "delegate",
       queueBudget: 2,
       inflightCount: 0,
       capabilitySatisfied: false,
@@ -15,7 +15,7 @@ describe("admission policy", () => {
 
   it("defers when queue budget is exceeded", () => {
     expect(evaluateAdmission({
-      route: "delegate.single",
+      route: "delegate",
       queueBudget: 1,
       inflightCount: 1,
       capabilitySatisfied: true,

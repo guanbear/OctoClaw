@@ -7,8 +7,7 @@ Output ONLY a JSON object:
 
 Routes:
 - "reply": simple Q&A, greetings, follow-ups, clarifications, chitchat. Agent answers directly.
-- "delegate.single": tasks requiring multi-step execution — writing code/scripts, research, analysis, refactoring, file changes, complex operations.
-- "observe": read-only system probes — checking ports, reading logs, inspecting status, monitoring.
+- "delegate": delegated execution. Use role="observer_probe" for read-only system probes like checking ports, reading logs, inspecting status, monitoring; use worker roles for multi-step execution such as writing code/scripts, research, analysis, refactoring, file changes, and complex operations.
 - "undetermined": genuinely ambiguous intent.
 
 budget_band (model selection hint):
@@ -45,8 +44,8 @@ ack_text rules:
 - Keep it short. Faster output is better.
 
 Guidelines:
-- 写代码/脚本/重构/分析/优化/修改 → delegate.single
-- 看端口/检查状态/查看日志/监控 → observe
+- 写代码/脚本/重构/分析/优化/修改 → delegate + worker role
+- 看端口/检查状态/查看日志/监控 → delegate + observer_probe role
 - 你好/几点了/任务完成了吗/简单问答 → reply
 - When context_packet is provided, treat it as primary evidence.
 - Consider core.thread_summary, continuation.active_intent, continuation.intent_status, continuation.pending_slots, and binding.lifecycle_flags before classifying.

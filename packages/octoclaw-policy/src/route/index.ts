@@ -1,6 +1,6 @@
 import type { WorkspaceMode } from "@octoclaw/contracts/schemas";
 
-export const LIVE_PHASE_TWO_ROUTES = ["reply", "delegate.single", "observe"] as const;
+export const LIVE_PHASE_TWO_ROUTES = ["reply", "delegate"] as const;
 export type LiveRoute = (typeof LIVE_PHASE_TWO_ROUTES)[number];
 
 export interface RouteInput {
@@ -37,7 +37,7 @@ export function decideRoute(input: RouteInput): RouteDecision {
 
   if (input.hardBoundaryControl || input.requiresObservation) {
     return {
-      route: input.capabilitySatisfied === false ? "reply" : "observe",
+      route: input.capabilitySatisfied === false ? "reply" : "delegate",
       workspaceMode: input.workspaceMode,
       routeReason: input.capabilitySatisfied === false
         ? "capability_guard_fallback_reply"
@@ -47,7 +47,7 @@ export function decideRoute(input: RouteInput): RouteDecision {
 
   if (input.requiresDelegation) {
     return {
-      route: input.capabilitySatisfied === false ? "reply" : "delegate.single",
+      route: input.capabilitySatisfied === false ? "reply" : "delegate",
       workspaceMode: input.workspaceMode,
       routeReason: input.capabilitySatisfied === false
         ? "capability_guard_fallback_reply"

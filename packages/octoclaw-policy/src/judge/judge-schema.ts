@@ -6,7 +6,7 @@
  */
 
 /** Route values the judge is allowed to return. */
-export type JudgeRoute = "reply" | "delegate.single" | "observe" | "undetermined";
+export type JudgeRoute = "reply" | "delegate" | "undetermined";
 
 /** Budget band hint for downstream model-profile selection. */
 export type JudgeBudgetBand = "low" | "medium" | "high";
@@ -163,7 +163,7 @@ export const JUDGE_FAST_DEFAULTS: Omit<JudgeFastConfig, "modelId" | "baseUrl" | 
 export function isValidJudgeOutput(value: unknown): value is JudgeOutput {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
-  if (!["reply", "delegate.single", "observe", "undetermined"].includes(obj.route as string)) return false;
+  if (!["reply", "delegate", "undetermined"].includes(obj.route as string)) return false;
   if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) return false;
   return true;
 }

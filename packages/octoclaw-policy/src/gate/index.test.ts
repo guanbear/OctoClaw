@@ -14,7 +14,7 @@ describe("hard boundary gate", () => {
     expect(checkHardBoundary({ existingTaskBinding: "task-123" })).toEqual({
       triggered: true,
       signal: "existing_task_binding",
-      routeOverride: "observe",
+      routeOverride: "delegate",
       reason: "bound to existing task task-123",
     });
   });
@@ -23,7 +23,7 @@ describe("hard boundary gate", () => {
     expect(checkHardBoundary({ isRecoverySession: true })).toEqual({
       triggered: true,
       signal: "recovery_session",
-      routeOverride: "observe",
+      routeOverride: "delegate",
       reason: "recovery session detected",
     });
   });

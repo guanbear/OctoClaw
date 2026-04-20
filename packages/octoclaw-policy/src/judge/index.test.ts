@@ -13,7 +13,7 @@ describe("judge policy", () => {
       writeConflict: false,
     });
 
-    expect(decision.route).toBe("delegate.single");
+    expect(decision.route).toBe("delegate");
     expect(decision.role).toBe("worker_code");
     expect(decision.backend).toBe("openclaw-native");
     expect(decision.executionProfile).toBe("worker");
@@ -42,7 +42,7 @@ describe("judge policy", () => {
     });
 
     expect(result.intent.intentClass).toBe("local_surface_lookup");
-    expect(result.decision.route).toBe("observe");
+    expect(result.decision.route).toBe("delegate");
     expect(result.decision.role).toBe("observer_probe");
     expect(result.decision.backend).toBe("openclaw-native");
     expect(result.decision.executionProfile).toBe("observer");

@@ -26,8 +26,8 @@ export interface JudgeFastInput extends PolicyJudgeInput {
 
 export type CoordinationMode = "solo_worker" | "advisor_assisted" | "threaded_subagents" | "compound";
 
-export function decideCoordinationMode(route: LiveRoute, _role: PolicyRole): CoordinationMode | undefined {
-  if (route === "delegate.single") return "solo_worker";
+export function decideCoordinationMode(route: LiveRoute, role: PolicyRole): CoordinationMode | undefined {
+  if (route === "delegate" && role !== "observer_probe") return "solo_worker";
   return undefined;
 }
 
@@ -59,7 +59,9 @@ export function judgePolicy(input: PolicyJudgeInput): PolicyDecision {
     capabilitySatisfied: input.capabilitySatisfied,
     workspaceMode: input.workspaceMode,
   });
-  const role = decideRole(route.route, input.workType);
+  const role = input.requiresObservation
+    ? { role: "observer_probe" as const, roleReason: "requires_observation_uses_probe_role" }
+    : decideRole(route.route, input.workType);
   const coordinationMode = decideCoordinationMode(route.route, role.role);
   const backend = decideBackend(role.role);
   const executionProfile = decideExecutionProfile(role.role);

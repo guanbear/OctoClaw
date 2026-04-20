@@ -16,19 +16,19 @@ describe("route policy", () => {
       capabilitySatisfied: true,
       workspaceMode: "isolated_worktree",
     })).toEqual({
-      route: "delegate.single",
+      route: "delegate",
       workspaceMode: "isolated_worktree",
       routeReason: "deliverable_or_capability_bound_work",
     });
   });
 
-  it("chooses observe for observation work", () => {
+  it("chooses delegate for observation work", () => {
     expect(decideRoute({
       requiresObservation: true,
       capabilitySatisfied: true,
       workspaceMode: "read_only",
     })).toEqual({
-      route: "observe",
+      route: "delegate",
       workspaceMode: "read_only",
       routeReason: "hard_boundary_or_probe",
     });

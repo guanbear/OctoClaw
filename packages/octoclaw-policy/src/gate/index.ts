@@ -16,7 +16,7 @@ export function checkHardBoundary(input: HardBoundaryInput): HardBoundaryCheckRe
     return {
       triggered: true,
       signal: "existing_task_binding",
-      routeOverride: "observe",
+      routeOverride: "delegate",
       reason: `bound to existing task ${input.existingTaskBinding}`,
     };
   }
@@ -24,7 +24,7 @@ export function checkHardBoundary(input: HardBoundaryInput): HardBoundaryCheckRe
     return {
       triggered: true,
       signal: "recovery_session",
-      routeOverride: "observe",
+      routeOverride: "delegate",
       reason: "recovery session detected",
     };
   }

@@ -42,7 +42,7 @@ export function evaluateAdmission(input: AdmissionInput): AdmissionDecision {
     };
   }
 
-  if (input.route === "delegate.single" && input.inflightCount >= input.queueBudget) {
+  if (input.route === "delegate" && input.inflightCount >= input.queueBudget) {
     return {
       admission: "defer",
       queueBudget: input.queueBudget,
@@ -52,7 +52,7 @@ export function evaluateAdmission(input: AdmissionInput): AdmissionDecision {
     };
   }
 
-  if (input.route === "delegate.single" && input.workspaceMode === "shared_workspace" && input.writeConflict) {
+  if (input.route === "delegate" && input.workspaceMode === "shared_workspace" && input.writeConflict) {
     return {
       admission: "defer",
       queueBudget: input.queueBudget,
