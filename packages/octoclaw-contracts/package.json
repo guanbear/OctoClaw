@@ -12,7 +12,8 @@
     "./deliveries": { "types": "./dist/deliveries.d.ts", "default": "./dist/deliveries.js" },
     "./telemetry": { "types": "./dist/telemetry.d.ts", "default": "./dist/telemetry.js" },
     "./schemas": { "types": "./dist/schemas.d.ts", "default": "./dist/schemas.js" },
-    "./fixtures": { "types": "./dist/fixtures.d.ts", "default": "./dist/fixtures.js" }
+    "./fixtures": { "types": "./dist/fixtures.d.ts", "default": "./dist/fixtures.js" },
+    "./delegate": { "types": "./dist/delegate.d.ts", "default": "./dist/delegate.js" }
   },
   "scripts": {
     "build": "tsc --build",

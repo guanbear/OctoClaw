@@ -1,4 +1,4 @@
-import type { ContractEnvelope, ScopeMetadata } from "./schemas.js";
+import type { ContractEnvelope, ExecutionRoute, ScopeMetadata } from "./schemas.js";
 import type { TaskIdentity } from "./events.js";
 
 export interface QueueDeadlineTelemetry {
@@ -44,7 +44,7 @@ export interface OptimizationTelemetry extends ContractEnvelope, ScopeMetadata, 
 export interface PolicyTelemetry extends ContractEnvelope, ScopeMetadata {
   telemetryId: string;
   requestId: string;
-  selectedRoute: "reply" | "delegate.single" | "observe";
+  selectedRoute: ExecutionRoute;
   selectedRole: string;
   backend: string;
   modelProfile: string;

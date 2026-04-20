@@ -4,11 +4,17 @@ export type SchemaVersion = typeof OCTOCLAW_CONTRACT_SCHEMA_VERSION;
 export type WorkspaceMode = "read_only" | "shared_workspace" | "isolated_worktree";
 export type ScopeAccessLevel = "none" | "read" | "write" | "admin";
 export type ArtifactKind = "truth" | "projection" | "artifact" | "telemetry";
-export type ExecutionRoute = "reply" | "delegate.single" | "observe";
+export type ExecutionRoute = "reply" | "delegate" | "delegate.single" | "observe";
+export type CanonicalRoute = "reply" | "delegate";
 export type ExecutionAuthority = "main_session" | "runtime_orchestrator" | "native_runner" | "native_subagent";
 export type BackendType = "openclaw-native" | "clawteam" | "legacy-python";
 export type ExecutionBackend = BackendType;
 export type MaterializationIntent = "reply_inline" | "observe_probe" | "runner_task" | "spawn_single" | "spawn_multi";
+
+export type CoordinationMode =
+  | "solo_worker"
+  | "advisor_assisted"
+  | "multi_agent_controlled";
 export type CapabilityLevel = "unsupported" | "limited" | "supported" | "preferred";
 // Model profiles from design doc section 9.5.0
 export type ModelProfile =
