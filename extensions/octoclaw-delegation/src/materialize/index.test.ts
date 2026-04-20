@@ -69,6 +69,18 @@ describe("materializeDelegatedWork", () => {
     expect(materialized.writeScope).toEqual(buildInput().writeScope);
   });
 
+  it("passes through delegate attempt metadata when provided", () => {
+    const materialized = materializeDelegatedWork(buildInput({
+      delegateTaskId: "delegate-task:session-1:1",
+      attemptId: "delegate-task:session-1:1:attempt:1",
+      attemptGeneration: 1,
+    }));
+
+    expect(materialized.delegateTaskId).toBe("delegate-task:session-1:1");
+    expect(materialized.attemptId).toBe("delegate-task:session-1:1:attempt:1");
+    expect(materialized.attemptGeneration).toBe(1);
+  });
+
   it("evaluates admission inline", () => {
     const materialized = materializeDelegatedWork(buildInput({ capabilitySatisfied: false }));
 

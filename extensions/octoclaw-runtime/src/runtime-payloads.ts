@@ -10,7 +10,12 @@ import {
   renewWorkflowHeartbeat,
   startRuntimeWorkflow,
 } from "@octoclaw/runtime-core/workflow";
+import {
+  createDelegateTask,
+  startDelegateAttempt,
+} from "@octoclaw/runtime-core/delegate";
 import { normalizeRuntimeRequest } from "@octoclaw/runtime-core/requests";
+import type { CoordinationMode as DelegateCoordinationMode } from "@octoclaw/contracts/delegate";
 import type { ScopeDescriptor, ScopeMetadata } from "@octoclaw/contracts/schemas";
 import type { PolicyDecision } from "@octoclaw/policy/judge";
 import { createOctoClawRuntimePlugin } from "./plugin.js";
@@ -92,6 +97,17 @@ function readString(value: unknown, fallback = ""): string {
 function readNumber(value: unknown, fallback: number): number {
   const normalized = Number(value);
   return Number.isFinite(normalized) ? normalized : fallback;
+}
+
+function resolveDelegateCoordinationMode(decision: PolicyDecision): DelegateCoordinationMode {
+  switch (decision.coordinationMode) {
+    case "solo_worker":
+      return "solo_worker";
+    case "advisor_assisted":
+      return "advisor_assisted";
+    default:
+      return "multi_agent_controlled";
+  }
 }
 
 function canonicalizePolicyDecision(decision: UnknownRecord, route: string): UnknownRecord {
@@ -271,6 +287,22 @@ export function buildTsRuntimeDispatchPayload(
 
   try {
     const binding = plugin.bindWorkflow(workflow);
+    const delegateAttemptBinding = route === "delegate.single"
+      ? startDelegateAttempt(createDelegateTask({
+        sessionId: normalizedRequest.sessionKey,
+        role: workflow.execution.role,
+        coordinationMode: resolveDelegateCoordinationMode(workflowDecision),
+        goal: readString(input.task),
+        scope: workflow.scope,
+      }), {
+        nativeFlowId: binding.flowId,
+        nativeTaskId: binding.taskId,
+        claimOwner: workflow.claim?.claimOwner || workflow.taskMaterialization.claimOwner,
+        modelProfile: workflow.execution.modelProfile as PolicyDecision["modelProfile"],
+        backend: workflow.identity.backend,
+        workspaceMode: workflow.scope.workspaceMode,
+      })
+      : null;
     workflow = markWorkflowCompleted(workflow);
     const finalDelivery = buildWorkflowFinalDelivery(workflow, {
       channel: readString(metadata.channel, "direct"),
@@ -300,6 +332,9 @@ export function buildTsRuntimeDispatchPayload(
         type: route,
         task_id: binding.taskId,
         flow_id: binding.flowId,
+        delegateTaskId: delegateAttemptBinding?.task.delegateTaskId,
+        attemptId: delegateAttemptBinding?.attempt.attemptId,
+        attemptGeneration: delegateAttemptBinding?.attempt.attemptGeneration,
         runtime: binding.runtime,
         sync_mode: binding.syncMode,
         substrate_state: binding.substrateState,
@@ -311,6 +346,9 @@ export function buildTsRuntimeDispatchPayload(
         authority: "ts-runtime-core",
         workflow,
         binding,
+        delegateTask: delegateAttemptBinding?.task,
+        delegateAttempt: delegateAttemptBinding?.attempt,
+        nativeTaskBinding: delegateAttemptBinding?.binding,
       },
       orchestration: {
         ...basePayload.orchestration,
@@ -328,6 +366,8 @@ export function buildTsRuntimeDispatchPayload(
           session_key: readString(metadata.session_key ?? metadata.sessionKey),
         }
         : undefined,
+      delegateTaskId: delegateAttemptBinding?.task.delegateTaskId,
+      attemptId: delegateAttemptBinding?.attempt.attemptId,
     };
   } catch (error) {
     const failedWorkflow = markWorkflowFailed(workflow);
@@ -476,6 +516,20 @@ export function buildTsRuntimeSpawnPayload(
     });
     workflow = enqueueWorkflowDelivery(workflow, progressDelivery);
     const binding = plugin.bindWorkflow(workflow);
+    const delegateAttemptBinding = startDelegateAttempt(createDelegateTask({
+      sessionId: normalizedRequest.sessionKey,
+      role: workflow.execution.role,
+      coordinationMode: resolveDelegateCoordinationMode(workflowDecision),
+      goal: readString(input.task),
+      scope: workflow.scope,
+    }), {
+      nativeFlowId: binding.flowId,
+      nativeTaskId: binding.taskId,
+      claimOwner: workflow.claim?.claimOwner || workflow.taskMaterialization.claimOwner,
+      modelProfile: workflow.execution.modelProfile as PolicyDecision["modelProfile"],
+      backend: workflow.identity.backend,
+      workspaceMode: workflow.scope.workspaceMode,
+    });
     if (input.execute) {
       workflow = markWorkflowCompleted(workflow);
     }
@@ -492,6 +546,8 @@ export function buildTsRuntimeSpawnPayload(
       task_id: binding.taskId,
       flow_id: binding.flowId,
       summary: `OctoClaw spawn registered: ${binding.taskId}`,
+      delegateTaskId: delegateAttemptBinding.task.delegateTaskId,
+      attemptId: delegateAttemptBinding.attempt.attemptId,
       handoff: {
         kind: "spawn",
         summary: `Delegated task materialized natively as ${binding.taskId}`,
@@ -503,19 +559,30 @@ export function buildTsRuntimeSpawnPayload(
           type: "delegate.single",
         task_id: binding.taskId,
         flow_id: binding.flowId,
+        delegateTaskId: delegateAttemptBinding.task.delegateTaskId,
+        attemptId: delegateAttemptBinding.attempt.attemptId,
+        attemptGeneration: delegateAttemptBinding.attempt.attemptGeneration,
         runtime: binding.runtime,
         sync_mode: binding.syncMode,
         substrate_state: binding.substrateState,
         substrate_revision: binding.substrateRevision,
         truth: binding.truth,
         projection: binding.projection,
-        delegation: delegatedMaterialization,
+        delegation: {
+          ...delegatedMaterialization,
+          delegateTaskId: delegateAttemptBinding.task.delegateTaskId,
+          attemptId: delegateAttemptBinding.attempt.attemptId,
+          attemptGeneration: delegateAttemptBinding.attempt.attemptGeneration,
+        },
         compound: compoundPlaceholder,
       },
       runtime_truth: {
         authority: "ts-runtime-core",
         workflow,
         binding,
+        delegateTask: delegateAttemptBinding.task,
+        delegateAttempt: delegateAttemptBinding.attempt,
+        nativeTaskBinding: delegateAttemptBinding.binding,
       },
       telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
       deliveries: {

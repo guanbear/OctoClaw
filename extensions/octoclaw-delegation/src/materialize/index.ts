@@ -11,6 +11,9 @@ export interface DelegatedMaterialization {
   requestId: string;
   taskId: string;
   flowId: string;
+  delegateTaskId?: string;
+  attemptId?: string;
+  attemptGeneration?: number;
   role: PolicyRole;
   requestIdempotencyKey: string;
   deliveryId: string;
@@ -35,6 +38,9 @@ export function materializeDelegatedWork(input: {
   requestId: string;
   taskId: string;
   flowId: string;
+  delegateTaskId?: string;
+  attemptId?: string;
+  attemptGeneration?: number;
   role: PolicyRole;
   goal: string;
   requestIdempotencyKey: string;
@@ -68,6 +74,9 @@ export function materializeDelegatedWork(input: {
     requestId: input.requestId,
     taskId: input.taskId,
     flowId: input.flowId,
+    delegateTaskId: input.delegateTaskId,
+    attemptId: input.attemptId,
+    attemptGeneration: input.attemptGeneration,
     role: input.role,
     requestIdempotencyKey: input.requestIdempotencyKey,
     deliveryId: input.deliveryId,

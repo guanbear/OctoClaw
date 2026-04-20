@@ -7,6 +7,7 @@
   "exports": {
     ".": { "types": "./dist/workflow/index.d.ts", "default": "./dist/workflow/index.js" },
     "./ack": { "types": "./dist/ack/index.d.ts", "default": "./dist/ack/index.js" },
+    "./delegate": { "types": "./dist/delegate/index.d.ts", "default": "./dist/delegate/index.js" },
     "./requests": { "types": "./dist/requests/index.d.ts", "default": "./dist/requests/index.js" },
     "./tasks": { "types": "./dist/tasks/index.d.ts", "default": "./dist/tasks/index.js" },
     "./workflow": { "types": "./dist/workflow/index.d.ts", "default": "./dist/workflow/index.js" },
