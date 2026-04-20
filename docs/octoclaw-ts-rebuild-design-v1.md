@@ -3111,6 +3111,63 @@ v2 应该采用：
 
 如果这些在 single delegate 阶段没有设计好，后面 multi-agent 只会把问题放大。
 
+#### 9.3.g.0 single delegate 必须显式绑定到 OpenClaw native task/flow
+
+这里不能只停留在“OctoClaw 有 delegated task”这个产品层抽象上。
+
+结合我们自己之前的借鉴文档和 OpenClaw native flow task 迁移结论，更稳的口径应该是：
+
+> **OctoClaw 的 delegated task / attempt 是产品层与策略层对象，但执行真相必须绑定到 OpenClaw native task/flow。**
+
+也就是说：
+
+1. `delegate task`
+   - 回答“这件用户可理解的委派工作是什么”
+2. `delegate attempt`
+   - 回答“这件委派工作当前第几次执行尝试”
+3. `native task/flow`
+   - 回答“OpenClaw runtime 里真正被创建、推进、终止的执行对象是什么”
+
+这个分层，和我们在这些借鉴文档里的结论是一致的：
+
+1. [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/archive/design-notes/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
+   - 已明确 `OpenClaw → OctoClaw policy → OpenClaw native flow_task → workers`
+   - 并强调 richer event stream、ownership lock、session resume 在 flow task 之后要改成“消费原生 truth + OctoClaw 适配”
+2. [octoclaw-review-and-action-plan-v1-2026-04-02.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/archive/design-notes/octoclaw-review-and-action-plan-v1-2026-04-02.md)
+   - 已明确 `task-state.json` 不再是执行真相，而是策略元数据存储
+   - 并明确 delegated event stream、ownership/recovery、session resume 的实现路径要改成 native flow task 优先
+3. [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/archive/design-notes/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+   - 强调 explicit event stream、artifact readiness、liveness truth、state distinct from transcript
+   - 这正支持 delegated task 作为产品对象、native task 作为执行真相、timeline/status 作为投影
+
+因此 v1 最稳的 contract 应该是：
+
+1. 每个 `delegate task` 默认绑定一个 `native flow`
+2. 在 `coordination_mode=solo_worker` 时，这个 flow 默认只包含一个主要 `native task`
+3. 每次 `delegate attempt` 必须有：
+   - `delegate_task_id`
+   - `attempt_id`
+   - `native_flow_id`
+   - `native_task_id`（如适用）
+   - `claim_owner`
+   - `resume_generation`
+4. 所有：
+   - `running / failed / cancelled / completed`
+   - checkpoint / result / artifact / delivery
+   的执行真相，优先读 native task/flow substrate
+5. OctoClaw 自己维护的是：
+   - route / role / complexity / scope
+   - delegate_reason_codes
+   - attempt lineage
+   - user-facing handoff / recovery / status projection
+
+这样做的好处是：
+
+1. 不会重造第二套 task 真相源
+2. repeated retry / resume / timeout 能和 OpenClaw native state 对齐
+3. 后面从 single delegate 升到 multi-agent 时，也只是把“一个 flow 下一个 task”扩成“一个 flow 下多个 child tasks”
+4. IM/status/details/timeline 也能统一消费同一份 substrate-first truth
+
 #### 9.3.g.1 v1 应把 delegated execution 拆成 `task` 和 `attempt`
 
 建议至少区分：
@@ -3133,6 +3190,67 @@ v2 应该采用：
 
 1. 不会因为重试就把同一件事显示成很多互不相关的 task
 2. status surface / recovery / telemetry 可以同时看到“任务级”和“尝试级”的真相
+
+这里再往前一步写死：
+
+1. `delegate task` 是 OctoClaw 产品对象
+2. `delegate attempt` 是 OctoClaw 恢复/重试对象
+3. `native flow/task` 是 OpenClaw substrate 对象
+
+三者必须可追溯映射，而不是相互替代。
+
+#### 9.3.g.1.a single delegate 与 native flow 的推荐绑定关系
+
+v1 推荐默认采用：
+
+1. `route=delegate`
+2. `coordination_mode=solo_worker`
+3. materialize 1 个 `native flow`
+4. flow 下默认 1 个主 `native task`
+5. 该 `native task` 对应当前活跃 `delegate attempt`
+
+如果发生 retry / stronger-profile retry / reroute：
+
+1. 可以替换为新的 attempt
+2. 可以选择：
+   - 在同一 `delegate task` 下追加新的 `native task`
+   - 或在新的 `native flow` 上重建 attempt
+3. 但无论哪种实现，用户面都应继续视为同一件 `delegate task`
+
+这里实现上可以有不同策略，但 contract 应保持一致：
+
+1. task 级 identity 稳定
+2. attempt 级 identity 可变
+3. native execution identity 以 substrate 为准
+
+#### 9.3.g.1.b 哪些状态是 native truth，哪些是 OctoClaw projection
+
+建议明确分层：
+
+##### native truth
+
+1. flow/task created
+2. running / completed / failed / cancelled
+3. checkpoint / heartbeat / progress
+4. result / artifact emission
+5. backend-level terminal reason
+
+##### OctoClaw projection
+
+1. `needs_recovery`
+2. `waiting_resume`
+3. `recovering`
+4. `blocked_waiting_input`
+5. `delivery_pending`
+6. `superseded`
+7. user-facing status copy
+8. main-thread resume packet
+
+这条边界非常重要：
+
+> **native substrate 负责执行终态，OctoClaw 负责把执行终态翻译成用户可理解的恢复/交付状态。**
+
+这和 DeerFlow 的 event/state/artifact 分离、ClawTeam 的 liveness truth 分离，以及 OpenClaw flow task 迁移文档里的方向是统一的。
 
 #### 9.3.g.2 single delegate 的最小状态机
 
@@ -3283,6 +3401,9 @@ v2 应该采用：
 4. **Bernstein**
    - deterministic scheduling、git worktree isolation、verification before landing
    - 启发是：**成功判定应包含验证，而不只是 worker 自报完成**
+5. **OMO / Oh My OpenAgent**
+   - background concurrency、`staleTimeoutMs`、provider/model concurrency gate、hook-based retry/notification
+   - 启发是：**即使是 single delegate，也应显式建 stale timeout、background notification、provider/model 并发门禁**
 
 一句话：
 

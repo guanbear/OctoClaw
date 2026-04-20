@@ -274,6 +274,8 @@ tools/
 26. delegated task / attempt 双层状态模型
 27. delegate timeline events (`accepted/started/checkpoint/recovering/completed/failed/timed_out`)
 28. operator/user status push path from runtime truth rather than raw child logs
+29. delegate task / attempt <-> native flow/task binding contract
+30. native terminal state + OctoClaw projection state split
 
 实现口径：
 
@@ -311,6 +313,8 @@ tools/
 26. delegated success 必须经过 attempt success + acceptance/delivery 闭环，不能只看 child 退出码
 27. repeated single delegate 必须通过 `task -> attempt` lineage 表达，不能把每次重试伪装成新 task
 28. delegated user-facing progress 统一从 runtime truth / timeline 投影，不直接消费 child 私有日志
+29. delegated task 是产品层对象，native flow/task 是执行真相；两者必须显式绑定而不是二选一
+30. `running/completed/failed/cancelled/checkpoint/result` 优先来自 native task/flow，`recovering/waiting_resume/delivery_pending` 由 OctoClaw projection 生成
 
 关键状态：
 
@@ -325,6 +329,8 @@ tools/
 9. `waiting_resume`
 10. `recovering`
 11. `superseded`
+12. `native_running`
+13. `native_completed`
 
 验收标准：
 
@@ -334,6 +340,7 @@ tools/
 4. telemetry 能记录 request/task/flow
 5. 同一 delegated task 的重试 lineage 可追踪
 6. status/details/queue/timeline 能区分 `running / recovering / waiting_input / timed_out`
+7. delegated task / attempt 与 native flow/task id 映射可追踪
 
 依赖：WS0、WS1
 
