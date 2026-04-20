@@ -268,6 +268,12 @@ tools/
 20. ACK burst coalescing / cooldown / anchor-update preference
 21. pre-route soft-ack fallback when judge/route is slow
 22. ACK compare-and-set / insert-if-absent guard
+23. delegated failure taxonomy + recovery decision hook
+24. child failure packet -> recovery packet -> main-thread resume packet conversion
+25. same-role retry / stronger-profile retry / re-route / clarify 这 4 类恢复出口
+26. delegated task / attempt 双层状态模型
+27. delegate timeline events (`accepted/started/checkpoint/recovering/completed/failed/timed_out`)
+28. operator/user status push path from runtime truth rather than raw child logs
 
 实现口径：
 
@@ -292,6 +298,19 @@ tools/
 19. ACK 介入应以 silence/state-change 为主，不以“每来一条用户消息都回一条”为原则
 20. 对 `delegate` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
 21. 任何 ACK 副作用都不能只靠进程内布尔位去重，必须走 `ack_key + CAS + outbox/receipt`
+22. child 失败后的下一步由 orchestration/recovery 判，不由 child 或主 agent 自己决定
+23. recovery 默认先区分：
+   - `infra_failure`
+   - `context_insufficient`
+   - `model_capability_insufficient`
+   - `route_or_role_mismatch`
+   - `needs_user_input`
+   - `deliverable_failed_validation`
+24. 只有 `needs_user_input` / scope 不明 / route 回退到 `reply` 时，才回 main thread clarify
+25. 纯 infra retry 与 same-role stronger-profile retry 默认不回 main thread
+26. delegated success 必须经过 attempt success + acceptance/delivery 闭环，不能只看 child 退出码
+27. repeated single delegate 必须通过 `task -> attempt` lineage 表达，不能把每次重试伪装成新 task
+28. delegated user-facing progress 统一从 runtime truth / timeline 投影，不直接消费 child 私有日志
 
 关键状态：
 
@@ -302,6 +321,10 @@ tools/
 5. `delivery_pending`
 6. `stale`
 7. `timed_out`
+8. `needs_recovery`
+9. `waiting_resume`
+10. `recovering`
+11. `superseded`
 
 验收标准：
 
@@ -309,6 +332,8 @@ tools/
 2. ACK 不依赖复杂后续链
 3. delivery 有结构化输出
 4. telemetry 能记录 request/task/flow
+5. 同一 delegated task 的重试 lineage 可追踪
+6. status/details/queue/timeline 能区分 `running / recovering / waiting_input / timed_out`
 
 依赖：WS0、WS1
 

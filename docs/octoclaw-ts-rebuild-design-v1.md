@@ -2419,6 +2419,53 @@ future multi-agent 里，并行/排队不应交给主 agent，也不应交给 ju
 1. judge 负责“像不像需要 multi-agent”
 2. scheduler 负责“怎么排、能不能并行、何时必须排队”
 
+这里还要再补一个关键收口：
+
+> **不能把并行/排队完全写死成纯规则，也不能把它完全放给模型自由决定。**
+
+更合理的是三段式：
+
+1. judge 先输出：
+   - `coordination_mode_hint`
+   - `parallelism_hint`
+   - `dependency_hint`
+   - `confidence`
+2. scheduler 再结合结构化现实信号收口：
+   - `depends_on`
+   - `write_scope`
+   - `workspace_mode`
+   - `cost_budget`
+   - `queue_pressure`
+3. 最终物化成：
+   - 并行 child tasks
+   - 串行 child tasks
+   - 或回退到 `solo_worker`
+
+也就是说：
+
+1. 模型能力要用来判断“这活像不像值得拆”
+2. 但真正的并行许可仍由 scheduler 根据依赖、冲突、预算来定
+
+##### 9.2.0.e.2.a 相关开源项目给出的启发
+
+从公开实现看，这条路其实比较一致：
+
+1. **ClawTeam-OpenClaw**
+   - 强调 `--blocked-by` 依赖链、auto-unblock、task wait、spawn retry/backoff、idempotency keys、worktree isolation
+   - 启发是：**并行来自显式依赖图和隔离，不来自模型自由 swarm**
+2. **open-multi-agent**
+   - 强调 coordinator 先分解成 task DAG，再让独立任务并行，并把失败级联给依赖任务
+   - 启发是：**模型负责 decomposition，runtime 负责 DAG 执行与 failure cascade**
+3. **GSD / Get Shit Done**
+   - 虽然更偏 spec/context framework，但核心启发是 phase / plan / validate / revise 的收口，不让 agent 无边界自循环
+   - 启发是：**重试与修订也应该有阶段边界和 gate，不应无限自由再试**
+
+因此我建议 OctoClaw 的 multi-agent 也保持这个原则：
+
+1. 让模型参与“值不值得拆”“大致怎么拆”
+2. 让 scheduler 决定“能不能并行”“何时阻塞”“何时回退”
+3. 不做纯规则，也不做纯黑箱
+
 ##### 9.2.0.e.3 v1 到 multi-agent 的演进路线
 
 我建议路线固定成：
@@ -2726,6 +2773,566 @@ v2 应该采用：
 4. 必要的 transcript excerpt
 
 而不是反过来。
+
+### 9.3.a delegated worker context：子 agent 如何拿到“合适而不是全部”的上下文
+
+这里必须明确一个现实问题：
+
+> **judge 判对了需要委派，不等于 child worker 就天然有足够上下文。**
+
+子 agent 最常见的失败，不是模型笨，而是：
+
+1. 没拿到足够的任务背景
+2. 没拿到当前已经完成到哪一步
+3. 不知道主线程已经问过什么、澄清过什么
+4. 不知道当前到底在本地 scope、远端 scope，还是某个具体 task binding 下继续
+
+因此 delegated worker 的输入，不能只是“一段自然语言 brief”，而应该是一个**最小但够用的 handoff packet**。
+
+#### 9.3.a.1 v1 child worker 的最小 handoff 组成
+
+我建议 delegated worker 默认至少拿：
+
+1. `TaskPacket`
+   - task goal
+   - expected output
+   - acceptance criteria
+   - role
+   - complexity
+   - scope
+2. `checkpoint_summary`
+   - 到当前为止已经做了什么
+   - 已知结论和中间结果是什么
+   - 当前还缺什么
+3. `artifact_refs`
+   - 之前已经产出的结构化工件
+   - 例如已有 analysis、已有 status snapshot、已有 file refs
+4. `task/thread summary`
+   - 简短背景
+5. `delegate_reason_codes`
+   - 为什么此时要委派，而不是主线程自己做
+6. `runtime_limits`
+   - budget、deadline、workspace/write-scope、tool allowance
+
+也就是说：
+
+1. child worker 不该默认吃整段主会话
+2. 也不该只吃一句“帮我做 X”
+3. 而应吃一个类型化 handoff packet
+
+#### 9.3.a.2 child worker 默认不应该拿什么
+
+默认不拿：
+
+1. 全量 transcript
+2. 全量工具输出
+3. 全量 worker log
+4. 所有历史 task 的原始详情
+
+只有在这些场景才允许按需追加：
+
+1. acceptance / recovery 明确失败，且判断为“关键信息缺失”
+2. 当前任务明显依赖某段历史原文措辞
+3. replay / debug 明确需要定位 handoff 丢失点
+
+#### 9.3.a.3 child 如何知道主线程已经做到哪里
+
+这里最关键的是：
+
+> **child 不需要知道主线程“所有细节”，但必须知道主线程“当前阶段”。**
+
+所以 handoff 至少应显式携带：
+
+1. `current_stage`
+   - 例如 `collecting_info / executing / waiting_input / reviewing`
+2. `last_agent_act`
+3. `pending_slots`
+4. `open_decision`
+
+这样 child 至少知道：
+
+1. 现在是在接一个新执行
+2. 还是在继续一个已有任务
+3. 还是在接手一个已经失败/阻塞后的恢复尝试
+
+### 9.3.b delegated failure taxonomy：子 agent 失败不是一类失败
+
+如果不把 delegated failure 分类，后面 recovery 很容易退化成：
+
+1. 一律重试
+2. 一律换更强模型
+3. 一律丢回 main agent
+
+这三种都不对。
+
+我建议 v1 至少把 delegated failure 正式分成这些类：
+
+#### A. `infra_failure`
+
+例如：
+
+1. backend unavailable
+2. tool invocation failed before real work started
+3. workspace bootstrap failed
+4. network / provider transient failure
+
+这类问题通常不说明 route 判错，也不说明上下文不够。
+
+#### B. `context_insufficient`
+
+例如：
+
+1. child 明确缺关键信息
+2. handoff packet 缺必要背景
+3. task binding / scope / target 不够明确
+4. child 无法安全继续，但不是因为模型能力不足
+
+这类问题说明：
+
+1. 可能不是要换更强模型
+2. 而是应该先补 handoff context 或补问用户
+
+#### C. `model_capability_insufficient`
+
+例如：
+
+1. child 能看懂任务，但完成质量明显不够
+2. role 对了，但当前模型档位太弱
+3. 常见于 `simple -> normal`、`normal -> deep` 的升级边界
+
+这类问题说明：
+
+1. route 未必错
+2. role 也未必错
+3. 更像是该升 profile / 升模型重做
+
+#### D. `route_or_role_mismatch`
+
+例如：
+
+1. 看起来根本不该 delegate
+2. 本该是 `reply.clarify` 却过早委派
+3. role 选成了 `observer`，其实需要 `code`
+4. role 选成了 `research`，其实需要 `review`
+
+这类问题说明：
+
+1. 需要回到 orchestration 重新判
+2. 而不是让当前 child 死撑
+
+#### E. `needs_user_input`
+
+例如：
+
+1. child 发现缺 scope、缺 target、缺 language、缺 environment
+2. 再做下去只能猜
+
+这类问题的正确出口通常不是“继续重试 child”，而是：
+
+1. 回主线程
+2. 由 main agent 以 `reply_mode=clarify` 向用户补问
+
+#### F. `deliverable_failed_validation`
+
+例如：
+
+1. child 产出了结果
+2. 但 acceptance / validation / review 没过
+
+这类问题说明：
+
+1. 任务不是没做
+2. 而是结果需要 revision、review、re-run 或 stronger model
+
+### 9.3.c recovery ownership：失败后到底谁来决定下一步
+
+最重要的约束是：
+
+> **失败后下一步不应由 child 自己决定，也不应由 main agent 自己拍脑袋决定。**
+
+更合理的是：
+
+1. child 只上报结构化 failure packet
+2. orchestration / recovery 根据 failure class 决定下一步
+3. main agent 只负责用户面沟通和必要 clarify
+
+#### 9.3.c.1 child failure packet 最小字段
+
+建议 child 失败时至少回：
+
+1. `failure_class`
+2. `failure_reason`
+3. `needs_more_context`
+4. `suggested_role`
+5. `suggested_complexity`
+6. `retry_safe`
+7. `checkpoint_summary`
+8. `artifact_refs`
+
+这样 recovery 才能判断：
+
+1. 是原地重试
+2. 是补上下文重试
+3. 是换更强模型重做
+4. 还是回 main agent 补问用户
+
+### 9.3.d delegated retry policy：失败后是补上下文、升模型，还是回主线程
+
+我建议 v1 明确写死下面这条 recovery policy：
+
+#### 9.3.d.1 `infra_failure`
+
+优先：
+
+1. 同 role、同 profile 的短重试
+2. 或重新 bootstrap 一个新 child instance
+
+不优先：
+
+1. 直接回 main agent
+2. 直接升更强模型
+
+#### 9.3.d.2 `context_insufficient`
+
+优先：
+
+1. 补充 handoff packet
+2. 加强 `checkpoint_summary / artifact_refs / scope / binding`
+3. 如仍缺用户输入，则回 main thread 走 `reply_mode=clarify`
+
+不优先：
+
+1. 不做“盲目换更强模型”
+
+#### 9.3.d.3 `model_capability_insufficient`
+
+优先：
+
+1. role 不变
+2. complexity/profile 升级
+3. 用更强模型重新 materialize child attempt
+
+例如：
+
+1. `code.simple -> code.normal`
+2. `code.normal -> code.deep`
+3. `research.normal -> research.deep`
+
+#### 9.3.d.4 `route_or_role_mismatch`
+
+优先：
+
+1. 回 orchestration 重新判 route / role
+2. 如应回主线程，则 main agent 接管用户沟通
+3. 如应换 role，则重新 materialize 新 child
+
+#### 9.3.d.5 `needs_user_input`
+
+优先：
+
+1. 暂停 delegated attempt
+2. main thread 发 clarify
+3. 用户补齐后，再决定是 resume 原 child 还是新建 child
+
+#### 9.3.d.6 `deliverable_failed_validation`
+
+优先：
+
+1. 如果只是质量不够，走 same-role stronger-profile retry
+2. 如果是方向性错误，回 role/route adjudication
+3. 如果需要用户选择，回 main thread clarify
+
+### 9.3.e 何时回 main agent，何时不回
+
+不是所有失败都该回 main agent。
+
+更稳的规则是：
+
+#### 应回 main agent
+
+1. 需要用户输入
+2. 需要 scope clarification
+3. 需要解释为什么当前任务 blocked / partial
+4. route 明显应该回到 `reply`
+
+#### 不必回 main agent
+
+1. 纯 infra retry
+2. 同 role 下的 profile 升级重试
+3. 纯 child replacement
+
+也就是说，main agent 负责的是：
+
+1. 用户沟通
+2. clarify
+3. blocked / partial / changed-plan 的对外说明
+
+不是所有技术失败的内部调度器。
+
+### 9.3.f main agent 怎么“知道发生了什么”而不被 child 细节淹没
+
+这也是你刚问的关键点。
+
+最稳的口径应该是：
+
+> **main agent 不需要知道 child 的全部原始过程，但必须知道 child 的阶段性摘要、失败类型和下一步建议。**
+
+所以 child 返回主线程时，建议只回：
+
+1. `checkpoint_summary`
+2. `failure_class`
+3. `recovery_recommendation`
+4. `artifact_refs`
+
+而不是：
+
+1. 全量日志
+2. 全量工具输出
+3. 全量中间推理
+
+一句话：
+
+1. child 向 orchestration 汇报原始结构化结果
+2. orchestration 向 main agent 交付压缩后的 resume packet
+3. main agent 再决定如何对用户说
+
+### 9.3.g single delegate lifecycle：单 worker 也必须有完整状态机
+
+这里要特别强调：
+
+> **future multi-agent 不是状态设计的起点，single delegate 才是。**
+
+即使 v1 只做 `route=delegate + coordination_mode=solo_worker`，也已经会遇到：
+
+1. 同一线程里多次委派 child
+2. child 中途失败、超时、恢复、换模型重做
+3. 用户追问“到哪了”“为什么卡住”“是不是完成了”
+4. IM / status surface 需要及时推送进度
+
+如果这些在 single delegate 阶段没有设计好，后面 multi-agent 只会把问题放大。
+
+#### 9.3.g.1 v1 应把 delegated execution 拆成 `task` 和 `attempt`
+
+建议至少区分：
+
+1. `delegate task`
+   - 表示“这次委派工作本身”
+2. `delegate attempt`
+   - 表示某一次具体执行尝试
+
+这样一个 `delegate task` 下面可以有：
+
+1. 第一次 child attempt
+2. infra retry attempt
+3. stronger-profile retry attempt
+4. reroute 后的新 attempt
+
+但对用户和主线程来说，它们仍然属于同一件委派工作。
+
+这有两个直接好处：
+
+1. 不会因为重试就把同一件事显示成很多互不相关的 task
+2. status surface / recovery / telemetry 可以同时看到“任务级”和“尝试级”的真相
+
+#### 9.3.g.2 single delegate 的最小状态机
+
+我建议 v1 至少把 delegated task 的状态正式收成：
+
+1. `accepted`
+2. `queued`
+3. `starting`
+4. `running`
+5. `waiting_input`
+6. `validating`
+7. `delivery_pending`
+8. `completed`
+9. `failed`
+10. `timed_out`
+11. `needs_recovery`
+12. `superseded`
+
+这里：
+
+1. `running` 只是“child 在跑”，不是“成功”
+2. `completed` 必须是 deliverable / acceptance / delivery 已闭环
+3. `failed` 与 `timed_out` 是 terminal attempt state，不一定是 terminal task state
+4. `needs_recovery` 表示这件 delegated task 还没结束，只是下一步必须走 recovery
+5. `superseded` 表示旧 attempt 已被新的恢复尝试替代
+
+#### 9.3.g.3 delegated success 不能只看 child 退出码
+
+这里也必须写死：
+
+> **单 child 成功退出，不等于 delegated task 成功。**
+
+我建议 delegated success 至少同时满足：
+
+1. child attempt 进入成功终态
+2. deliverable 通过最小 validation / acceptance
+3. delivery 或 artifact handoff 已完成
+4. 当前 delegate task 没有未解决的 blocked / waiting_input
+
+也就是说：
+
+1. `process exited 0` 只是 attempt 成功信号
+2. task 真正成功，要看 acceptance + delivery 是否闭环
+
+这点和 DeerFlow 的显式事件/中间状态思路一致，也和 Bernstein 这类“verification before landing”心智一致：**终态不应只看 worker 自报完成。**
+
+#### 9.3.g.4 delegated progress 怎么及时推送
+
+对于单 worker，用户最在意的其实不是“有没有多 agent”，而是：
+
+1. 是不是开始了
+2. 现在卡没卡
+3. 有没有阶段性进展
+4. 什么时候真的完成
+
+所以我建议 delegated task 默认至少推这些事件：
+
+1. `delegate.accepted`
+2. `delegate.started`
+3. `delegate.first_progress`
+4. `delegate.checkpoint`
+5. `delegate.blocked`
+6. `delegate.recovering`
+7. `delegate.deliverable_ready`
+8. `delegate.completed`
+9. `delegate.failed`
+10. `delegate.timed_out`
+
+并且这些事件要进入统一 timeline/status surface，而不是只留在 worker 私有日志里。
+
+这样：
+
+1. IM/status surface 能及时看到推进
+2. read-time reconcile 能把最新状态读出来
+3. recovery 也能基于同一份 progression truth 做判断
+
+#### 9.3.g.5 谁负责把状态及时推到用户面
+
+这里也不要混淆：
+
+1. child 负责发 checkpoint / artifact / failure packet
+2. orchestration 负责把它们转成统一 task/flow 事件
+3. delivery / status surface 负责决定哪些事件需要推给用户、哪些只留 operator 面
+
+也就是说：
+
+1. child 不直接承担“对用户讲状态”的产品职责
+2. main agent 也不需要自己轮询 child 原始日志
+3. 真正的用户可见状态推送，应该建立在 runtime truth 之上
+
+#### 9.3.g.6 单 worker 超时怎么判
+
+前面已经定义了 `queue/start/progress/runtime/delivery` 五类 deadline，这里要再落到 single delegate 上。
+
+对单 worker，最有价值的是：
+
+1. `start_deadline`
+   - 已接受但迟迟没真正启动
+2. `progress_deadline`
+   - 启动后长时间没有 heartbeat/checkpoint
+3. `runtime_deadline`
+   - 总执行明显超限
+4. `delivery_deadline`
+   - 已出结果但迟迟没回到主线程/用户面
+
+而且 timeout 也不应直接等价于 task 失败。
+
+更稳的做法是：
+
+1. timeout 先把 attempt 送进 `timed_out`
+2. task 进入 `needs_recovery`
+3. recovery 再决定：
+   - retry
+   - stronger-profile retry
+   - clarify
+   - 或 terminal fail
+
+#### 9.3.g.7 同一线程里多次 single delegate 怎么避免主线程越来越脏
+
+建议原则是：
+
+1. 每次 delegated task 都单独产出 `checkpoint_summary`
+2. 主线程默认只保留：
+   - 当前活跃 delegated task 摘要
+   - 最近一个已完成 delegated task 的压缩结果
+   - 必要 artifact refs
+3. 更老的 delegated attempts 不直接回灌主线程 prompt，只保留在 timeline / artifact / replay 层
+
+也就是说：
+
+1. main agent 知道“发生过什么”
+2. 但不需要背所有 child 过程细节
+3. 这样 single delegate 多次发生时，主线程仍然保持干净
+
+#### 9.3.g.8 从借鉴项目里对 single delegate 应学什么
+
+结合现有借鉴项目，我建议 single delegate 先吸收这些心智：
+
+1. **ClawTeam / ClawTeam-OpenClaw**
+   - task lock、spawn retry/backoff、依赖阻塞、会话隔离
+   - 启发是：**attempt 与 ownership 要明确，retry 要幂等**
+2. **DeerFlow**
+   - 中间事件、checkpoint、artifact-first progression
+   - 启发是：**不要只看最终状态，要把中间推进做成正式 truth**
+3. **open-multi-agent**
+   - coordinator 先分 DAG，独立任务并行，失败对依赖任务级联
+   - 启发是：**即使 future multi 由 DAG 驱动，single delegate 也应该先有 attempt lineage 与 failure cascade 心智**
+4. **Bernstein**
+   - deterministic scheduling、git worktree isolation、verification before landing
+   - 启发是：**成功判定应包含验证，而不只是 worker 自报完成**
+
+一句话：
+
+> **single delegate 的状态、超时、重试、resume 设计，本质上就是 future multi-agent 的最小子集。**
+
+### 9.3.h 单 worker 重试后，到底回 main agent 还是继续后台恢复
+
+这里再补一个更产品化的问题：
+
+> **不是每次 child 失败都要把问题丢回 main agent；很多恢复应该在后台完成。**
+
+我建议写死下面这条口径：
+
+#### 应继续后台恢复
+
+1. infra retry
+2. same-role stronger-profile retry
+3. same task 下补充 artifact / checkpoint 后的 resume
+
+这些都应继续留在 delegated task 内完成，并通过状态事件向用户面表达“正在恢复”。
+
+#### 应回 main agent
+
+1. 用户必须补信息
+2. scope / target 无法自动确定
+3. 路由应回退到 `reply`
+4. 需要主线程解释 changed plan / partial failure
+
+这样主 agent 才不会变成所有 child 失败的兜底执行器。
+
+#### 9.3.h.1 recovery 的用户面表达
+
+用户面至少需要能区分：
+
+1. `running`
+2. `blocked_waiting_input`
+3. `recovering`
+4. `completed`
+5. `failed`
+
+这样即使后台发生 retry/换模型，用户看到的也是：
+
+1. 任务还在继续
+2. 当前是在恢复中
+3. 还是确实已经失败，需要你介入
+
+而不是：
+
+1. 莫名其妙又新建一个 task
+2. 或完全静默
 
 这里还要再明确一点：
 
