@@ -111,4 +111,8 @@ export type {
   JudgeContinuationStateLayer,
   JudgeCoreTurnLayer,
   JudgeMinimalEvidenceLayer,
+  RemoteJudgeExpandedPacket,
+  RemoteJudgeOutput,
+  EscalationReason,
+  DualJudgeConfig,
 } from "./judge-schema.js";

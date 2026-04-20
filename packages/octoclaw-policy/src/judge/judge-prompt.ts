@@ -1,4 +1,4 @@
-import { JUDGE_INPUT_CAPS, type JudgeInput } from "./judge-schema.js";
+import { JUDGE_INPUT_CAPS, type JudgeInput, type JudgeOutput, type RemoteJudgeExpandedPacket } from "./judge-schema.js";
 
 const SYSTEM_PROMPT = `You are OctoClaw route classifier. Classify the user message and generate a natural acknowledgment.
 
@@ -71,6 +71,48 @@ export function buildJudgeUserPrompt(input: JudgeInput): string {
   if (input.availableActions.length > 0) parts.push(`Available actions: ${input.availableActions.join(", ")}`);
   if (input.availableTargets.length > 0) parts.push(`Available targets: ${input.availableTargets.join(", ")}`);
   if (input.contextPacket) parts.push(`Context packet JSON: ${JSON.stringify(input.contextPacket)}`);
+
+  return parts.join("\n");
+}
+
+const REMOTE_SYSTEM_PROMPT = `You are OctoClaw remote route adjudicator. Review the local judge candidate and decide whether to accept or override it.
+
+Output ONLY a JSON object:
+{"route":"<route>","confidence":<number>,"abstain_reason":<null or string>,"ack_text":"<ack>","role":"<role>","complexity_band":"<band>","expected_duration_band":"<band>","quality_bar":"<bar>","risk_flags":["..."],"delegate_reason_codes":["..."],"route_confidence":<number>,"override_recommendation":"accept_local|override_local","adjudication_reason":"<reason>","confidence_delta":<number>}
+
+You are reviewing a LOCAL candidate decision plus an escalation reason.
+- Preserve the same route taxonomy and field meanings as the local judge.
+- override_recommendation="accept_local" when the local result is good enough.
+- override_recommendation="override_local" only when the local result is materially unsafe or wrong.
+- adjudication_reason should be brief and concrete.
+- Keep ack_text concise Chinese, 5-15 chars max.
+- Output ONLY JSON.`;
+
+export function buildRemoteJudgeSystemPrompt(): string {
+  return REMOTE_SYSTEM_PROMPT;
+}
+
+export function buildRemoteJudgeUserPrompt(
+  input: JudgeInput,
+  localResult: JudgeOutput,
+  escalationReason: string,
+  expandedPacket?: RemoteJudgeExpandedPacket,
+): string {
+  const cappedMessage = input.userMessage.slice(0, JUDGE_INPUT_CAPS.userMessage);
+  const cappedLedger = (input.recentLedgerSummary ?? "").slice(0, JUDGE_INPUT_CAPS.recentLedgerSummary);
+
+  const parts: string[] = [
+    `User message: ${cappedMessage}`,
+    `Escalation reason: ${escalationReason}`,
+    `Local candidate JSON: ${JSON.stringify(localResult)}`,
+  ];
+
+  if (input.sessionBinding) parts.push(`Session: ${input.sessionBinding}`);
+  if (cappedLedger) parts.push(`Recent context: ${cappedLedger}`);
+  if (input.availableActions.length > 0) parts.push(`Available actions: ${input.availableActions.join(", ")}`);
+  if (input.availableTargets.length > 0) parts.push(`Available targets: ${input.availableTargets.join(", ")}`);
+  if (expandedPacket) parts.push(`Expanded context JSON: ${JSON.stringify(expandedPacket)}`);
+  else if (input.contextPacket) parts.push(`Context packet JSON: ${JSON.stringify(input.contextPacket)}`);
 
   return parts.join("\n");
 }
