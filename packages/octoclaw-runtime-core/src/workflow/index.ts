@@ -338,13 +338,13 @@ function deriveExecutionIdentity(decision: PolicyDecision, input: StartWorkflowI
     route: decision.route,
     authority: decision.route === "reply"
       ? "main_session"
-      : decision.route === "observe"
+      : decision.executionProfile === "observer"
         ? "native_runner"
         : "runtime_orchestrator",
     backend: resolveExecutionBackend(decision.backend),
     materializationIntent: decision.route === "reply"
       ? "reply_inline"
-      : decision.route === "observe"
+      : decision.executionProfile === "observer"
         ? "observe_probe"
         : "spawn_single",
   };

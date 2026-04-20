@@ -8,7 +8,7 @@ import { startRuntimeWorkflow } from "../workflow/index.js";
 
 function buildDecision(): PolicyDecision {
   return {
-    route: "delegate.single",
+    route: "delegate",
     role: "worker_research",
     coordinationMode: "solo_worker",
     backend: "openclaw-native",
@@ -91,7 +91,7 @@ describe("runtime telemetry", () => {
     expect(telemetry.request).toMatchObject({
       telemetryId: "policy:req-1",
       requestId: "req-1",
-      selectedRoute: "delegate.single",
+      selectedRoute: "delegate",
       selectedRole: "worker_research",
       backend: "openclaw-native",
       modelProfile: "worker_research",
@@ -101,7 +101,7 @@ describe("runtime telemetry", () => {
     expect(telemetry.task).toMatchObject({
       telemetryId: "task:flow-1:task-1",
       requestId: "req-1",
-      route: "delegate.single",
+      route: "delegate",
       role: "worker_research",
       coordinationMode: "solo_worker",
       workspaceMode: "isolated_worktree",

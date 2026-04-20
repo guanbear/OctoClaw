@@ -14,7 +14,7 @@ import {
 
 function buildDecision(): PolicyDecision {
   return {
-    route: "delegate.single",
+    route: "delegate",
     role: "worker_research",
     coordinationMode: "solo_worker",
     backend: "openclaw-native",
