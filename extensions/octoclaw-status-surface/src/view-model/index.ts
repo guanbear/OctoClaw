@@ -1,4 +1,5 @@
 import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
+import type { DelegateProgressEvent } from "@octoclaw/contracts/delegate";
 import {
   type RuntimeStateDetailsSurface,
   type RuntimeStateSurfaceRecord,
@@ -37,9 +38,12 @@ export function buildQueueSurface(
   return buildQueueProjection({ record, queuePosition });
 }
 
-export function buildTimelinePlaceholder(record: RuntimeStateSurfaceRecord): RuntimeTimelinePlaceholder {
-  const statusView = buildStatusProjection({ record });
-  const events = Array.isArray(statusView.timelinePreview)
+export function buildTimelinePlaceholder(
+  record: RuntimeStateSurfaceRecord,
+  progressEvents?: DelegateProgressEvent[],
+): RuntimeTimelinePlaceholder {
+  const statusView = buildStatusProjection({ record, progressEvents });
+  const timelineEvents = Array.isArray(statusView.timelinePreview)
     ? statusView.timelinePreview.map((entry) => ({
         timestamp: String(entry.eventAt ?? "").trim(),
         phase: String(entry.eventType ?? "").trim(),
@@ -50,10 +54,10 @@ export function buildTimelinePlaceholder(record: RuntimeStateSurfaceRecord): Run
     taskId: record.truth.taskId,
     flowId: record.truth.flowId,
     available: true,
-    summary: events.length > 0
-      ? `${events.length} timeline event${events.length === 1 ? "" : "s"} available for ${record.truth.taskId}`
+    summary: timelineEvents.length > 0
+      ? `${timelineEvents.length} timeline event${timelineEvents.length === 1 ? "" : "s"} available for ${record.truth.taskId}`
       : `timeline placeholder for ${record.truth.taskId}`,
-    events,
+    events: timelineEvents,
   };
 }
 

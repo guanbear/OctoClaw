@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { DelegateProgressEvent } from "@octoclaw/contracts/delegate";
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
 import {
   buildDetailsSurface,
@@ -81,6 +82,33 @@ function createRecord(): RuntimeStateSurfaceRecord {
   };
 }
 
+function createProgressEvents(): DelegateProgressEvent[] {
+  return [
+    {
+      schemaVersion: "octoclaw.contracts/v1",
+      createdAt: "2026-04-18T00:02:00.000Z",
+      kind: "artifact",
+      eventId: "evt-1",
+      delegateTaskId: "delegate-task-1",
+      attemptId: "attempt-1",
+      eventType: "checkpoint",
+      eventAt: "2026-04-18T00:02:00.000Z",
+      summary: "Fetched repository state",
+    },
+    {
+      schemaVersion: "octoclaw.contracts/v1",
+      createdAt: "2026-04-18T00:03:00.000Z",
+      kind: "artifact",
+      eventId: "evt-2",
+      delegateTaskId: "delegate-task-1",
+      attemptId: "attempt-1",
+      eventType: "deliverable_ready",
+      eventAt: "2026-04-18T00:03:00.000Z",
+      summary: "Prepared operator summary",
+    },
+  ];
+}
+
 describe("view-model", () => {
   it("buildStatusSurface produces all required minimum fields", () => {
     const view = buildStatusSurface(createRecord());
@@ -126,6 +154,25 @@ describe("view-model", () => {
     expect(timeline.flowId).toBe("flow-456");
     expect(timeline.summary).toBe("timeline placeholder for task-123");
     expect(timeline.events).toEqual([]);
+  });
+
+  it("buildTimelinePlaceholder projects delegate progress events", () => {
+    const timeline = buildTimelinePlaceholder(createRecord(), createProgressEvents());
+
+    expect(timeline.available).toBe(true);
+    expect(timeline.summary).toBe("2 timeline events available for task-123");
+    expect(timeline.events).toEqual([
+      {
+        timestamp: "2026-04-18T00:02:00.000Z",
+        phase: "checkpoint",
+        summary: "Fetched repository state",
+      },
+      {
+        timestamp: "2026-04-18T00:03:00.000Z",
+        phase: "deliverable_ready",
+        summary: "Prepared operator summary",
+      },
+    ]);
   });
 
   it("buildDetailsSurface produces RuntimeStateDetailsSurface", () => {
