@@ -17,7 +17,7 @@ describe("schemas", () => {
   it("rejects invalid workspace modes", () => {
     expect(isWorkspaceMode("shared")).toBe(false);
     expect(isWorkspaceMode("workspace")).toBe(false);
-    expect(isWorkspaceMode("delegate.single")).toBe(false);
+    expect(isWorkspaceMode("delegate")).toBe(false);
   });
 
   it("validates scope metadata", () => {
