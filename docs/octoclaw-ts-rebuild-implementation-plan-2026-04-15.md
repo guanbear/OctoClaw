@@ -32,12 +32,16 @@
 3. 主模型默认只吃最小上下文
 4. artifact-first / state-first / event-first
 5. telemetry 必须从第一阶段开始进入链路
+6. 顶层 semantic route 默认只保留 `reply` 与 `delegate.single`
+7. `observe` 不再作为顶层 route，而是收成：
+   - `reply` 下的状态读取型处理
+   - 或 `delegate.single(role=observer)`
 
 ### 1.3 施工原则
 
 1. 先定 contract，再写模块。
 2. 先建最小可运行骨架，再扩能力。
-3. 先做 `reply + delegate.single + observe`，后做 compound。
+3. 先做 `reply + delegate.single`，后做 compound / multi-agent。
 4. 先把热路径跑稳，再做自动选模/自学习。
 5. 每个 work package 都要有明确输入、输出、依赖、验收标准。
 
@@ -164,9 +168,9 @@ tools/
 
 必须实现：
 
-1. `reply / delegate.single / observe` 基础决策
+1. `reply / delegate.single` 顶层基础决策
 2. hard-boundary gate
-3. `judge_fast` 接口与输出 schema
+3. local judge / remote judge 接口与输出 schema
 4. preset role:
    - `main_reply`
    - `observer_probe`
@@ -184,9 +188,21 @@ tools/
 13. `judge_fast` 只输出粗粒度 band 与 risk signals，不直接拥有最终 backend authority
 14. `main_reply` / worker 不承担 route/backend authority，避免主 agent 控制面过重
 15. v1 live path 默认只保留一个 judge
-16. `judge_strong` / `route_adjudicator` 只作为 optional shadow/offline lane，不进入默认热路径
+16. local judge 作为默认热路径 authority；remote judge 只做 optional escalation / adjudication，不进入默认热路径
 17. v1 live path 允许完全不实现 runner；runner 可后置为 future optional backend
 18. continuation / slot-filling / active-task continuation 场景默认不重复触发完整 judge，优先复用 `active_intent + pending_slots + binding`
+19. main agent 与 judge 共用一份 canonical `decision policy spec`，但主 agent 不拥有 route authority
+20. `AGENTS.md` 注入只负责 main agent 行为约束与 objection protocol，不负责语义路由
+21. canonical `decision policy spec` 至少覆盖：
+   - `route`
+   - `reply_mode`
+   - `delegate_role`
+   - `complexity`
+   - `scope`
+   - `tool_need_hint`
+   - `duration_hint`
+   - `reason_codes`
+22. local judge 与 remote judge 共享同源 policy spec，但使用不同上下文深度与 prompt view
 
 明确禁止：
 
@@ -197,6 +213,7 @@ tools/
 5. 让主 agent 读取更多上下文后再充当 runner dispatch judge
 6. 把 `judge_strong` 变成每条请求都走的第二层默认模型调用
 7. 在 continuation/slot-filling 场景里对每个 turn 都重新做完整 judge
+8. 再把 `observe` 独立长成第三个顶层 route
 
 验收标准：
 
@@ -262,13 +279,13 @@ tools/
 11. gateway/IM continuity 统一通过 thread/session binding 进入 runtime core
 12. `context_file` / `skill_ref` 只作为 artifact 引用流经 contracts，不在 Phase 1-2 演化成 memory runtime
 13. resident runner 默认关闭；runtime 默认按 native task/flow + on-demand worker 实现
-14. `reply / observe / delegate.single` 的语义 route 不因 runner 缺席而改写
+14. `reply / delegate.single` 的语义 route 不因 runner 缺席而改写；状态读取型 `reply` 与 `delegate.single(role=observer)` 都可稳定落到 native + on-demand
 15. 开启 resident runner 只代表 acceleration lane 可用，不代表 tmux 成为必需依赖
 16. ACK 默认由 runtime controller 发出，不默认依赖主模型
 17. direct path 优先让主模型抢首响；超过 ACK deadline 再由 runtime 旁路 soft-ack
 18. 不允许 ACK controller 和主模型各自发一条短回复争抢首响
 19. ACK 介入应以 silence/state-change 为主，不以“每来一条用户消息都回一条”为原则
-20. 对 `delegate/observe` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
+20. 对 `delegate.single` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
 21. 任何 ACK 副作用都不能只靠进程内布尔位去重，必须走 `ack_key + CAS + outbox/receipt`
 
 关键状态：
@@ -283,7 +300,7 @@ tools/
 
 验收标准：
 
-1. `reply + delegate.single + observe` 能跑通最小 happy path
+1. `reply + delegate.single` 能跑通最小 happy path
 2. ACK 不依赖复杂后续链
 3. delivery 有结构化输出
 4. telemetry 能记录 request/task/flow
@@ -350,31 +367,47 @@ tools/
 8. future callable role registry
 9. future advisor consult adapter
 10. `judge_fast` output schema 至少包含：
-   - `semantic_route`
-   - `role`
-   - `complexity_band`
-   - `expected_duration_band`
-   - `quality_bar`
-   - `risk_flags`
+   - `route`
+   - `reply_mode`
+   - `delegate_role`
+   - `complexity`
+   - `scope`
+   - `tool_need_hint`
+   - `duration_hint`
    - `delegate_reason_codes`
-   - `route_confidence`
-11. v1 `execution materializer` 至少处理：
+   - `confidence`
+11. local judge 的输入默认为 `small judge context packet`，至少包含：
+   - `current_turn`
+   - `thread_summary`
+   - `active_intent`
+   - `last_agent_act`
+   - `pending_slots`
+   - `open_decision`
+   - `anchor_or_task_binding`
+   - `scope_hint`
+   - `recent_excerpt`
+12. remote judge 的输入默认为 `expanded judge context packet`，在 small packet 基础上额外包含：
+   - `candidate_decision_from_local`
+   - `escalation_reason`
+   - `optional_task_snapshot`
+   - `optional_system_state_summary`
+13. v1 `execution materializer` 至少处理：
    - task/flow materialization
    - admission / queue gate
    - write-scope gate
    - spawn profile binding
    - model profile binding
-12. optional `judge_strong` output schema 复用 `judge_fast` 主字段，并额外包含：
+14. remote judge 输出 schema 复用 local judge 主字段，并额外包含：
    - `adjudication_reason`
    - `override_recommendation`
    - `confidence_delta`
-13. `judge_strong` 在 v1 默认只用于 shadow/replay/offline，不承担 live latency 关键路径
-14. judge input context packet 分为 4 层：
+15. remote judge 在 v1 默认只用于 escalation/replay/offline，不承担常规 live latency 热路径
+16. judge input context packet 分为 4 层：
    - core turn layer
    - continuation state layer
    - binding/control layer
    - minimal evidence layer
-15. core turn layer 至少包含：
+17. core turn layer 至少包含：
    - `current_turn`
    - `turn_metadata`
    - `thread_summary`
@@ -421,7 +454,7 @@ tools/
 4. delegated task 默认带 read/write scope
 5. overlapping write 默认不会并发踩同一工作区
 6. Phase 3 起可扩到 thread handoff / inbox / advice packet
-7. 同一类 `observe` / `delegate.single` 请求在 runner 缺席时仍可稳定落到 native + on-demand
+7. 状态读取型 `reply` 与 `delegate.single(role=observer)` 在 runner 缺席时仍可稳定落到 native + on-demand
 8. backend selection 决策可解释，不出现“因为 route 像 runner 任务所以走 runner”这类黑箱逻辑
 9. 不出现“因为任务长，所以默认走便宜 runner”这类单因子误判
 10. 不出现“为了判 runner 再把主 agent 拉进更重上下文和控制逻辑”这类架构回退
@@ -647,7 +680,7 @@ tools/
 1. WS0 Contract Foundation
 2. WS8 preflight/golden 最小门禁
 3. 旧模块到新包的 ownership map
-4. reply / delegate.single lane baseline 固定
+4. `reply / delegate.single` lane baseline 固定
 
 这阶段对 legacy 的要求：
 
@@ -662,14 +695,15 @@ tools/
 3. WS5 Fast Reply
 4. WS6 Status Surface MVP
 
-目标：先跑通 `reply + delegate.single + observe`
+目标：先跑通 `reply + delegate.single`
 
 补充口径：
 
-1. `judge_fast` 默认固定映射到便宜快模型
-2. resident runner 缺席视为默认正常态
-3. 默认执行心智是 native task/flow + on-demand worker
-4. ACK 默认由 runtime controller 负责；主模型能抢首响时优先让主模型自己回
+1. 本地 judge 默认固定映射到 `Qwen3-0.6B`
+2. 远端 judge 默认固定映射到 `omniroute/cx/gpt-5.4-mini`（关闭推理），但只做 escalation / adjudication
+3. resident runner 缺席视为默认正常态
+4. 默认执行心智是 native task/flow + on-demand worker
+5. ACK 默认由 runtime controller 负责；主模型能抢首响时优先让主模型自己回
 
 这阶段对 legacy 的要求：
 
@@ -944,7 +978,7 @@ tools/
 4. 不引入第二套执行真相源。
 5. 不把 tmux / daemon / patrol 当架构前提。
 6. 不绕过 contracts 自造 payload shape。
-7. 不让本地模型提前进默认热路径。
+7. 不让本地模型绕过 canonical policy spec、validator 和 replay gate 直接自由接管路由权。
 8. 旧文件只允许做参考、shim 或紧急生产修复，不允许成为新能力落点。
 9. 一旦新 TS 模块接管 ownership，就要主动停止对应 legacy 文件的功能演进。
 
@@ -960,15 +994,16 @@ tools/
 2. contracts 可编译
 3. policy core 有最小测试
 
-### M2：reply/observe/delegate.single live
+### M2：reply/delegate.single live
 
 完成标准：
 
 1. ACK 独立
-2. small judge 可接
-3. single delegate 可 materialize
-4. telemetry 开始落地
-5. 旧 policy/display 文件不再承接功能开发
+2. local judge 可接
+3. remote judge escalation lane 可接
+4. single delegate 可 materialize
+5. telemetry 开始落地
+6. 旧 policy/display 文件不再承接功能开发
 
 ### M3：native task/flow convergence
 
