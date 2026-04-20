@@ -252,7 +252,7 @@ v2 应改成：
 ### 语义 route
 
 1. `reply`
-2. `delegate.single`
+2. `delegate`
 
 ### coordination mode
 
@@ -622,7 +622,7 @@ harness 负责：
 
 1. route 一旦明确落到需要长处理的路径，必须保证首个可见反馈不再长时间静默。
 2. ACK 默认由模板生成，不等模型生成自然语言。
-3. `reply` 路径优先让主模型快速作答；`delegate.single` 路径优先保证稳定首响。
+3. `reply` 路径优先让主模型快速作答；`delegate` 路径优先保证稳定首响。
 
 这里再把 ACK 的实现口径写得更完整：
 
@@ -718,7 +718,7 @@ v1 默认建议：
 从行为心理学和交互体验看，我建议把节奏写成：
 
 1. **0-1s**
-   - 如果 route 已明确是 `delegate.single` 的长任务路径，尽量在这一段给出首个 ACK
+   - 如果 route 已明确是 `delegate` 的长任务路径，尽量在这一段给出首个 ACK
    - 但如果用户仍处于 burst 输入中，优先等待一个很短的输入静默窗口再发
 2. **1-3s**
    - 如果是 `reply` 路径，优先让主模型自己首响
@@ -756,14 +756,14 @@ v1 默认建议：
 所以 ACK controller 至少要支持一个 **pre-route soft ACK**：
 
 1. 它只表达“已收到，正在判断处理方式”
-2. 不表达已经进入 `reply` 或 `delegate.single` 中的哪一条
+2. 不表达已经进入 `reply` 或 `delegate` 中的哪一条
 3. 一旦 route 稳定，再转成对应模板或直接进入正式输出
 
 这类 ACK 必须比 `delegate_started` 更中性，避免误导。
 
 #### D. direct 路径和 delegate 路径的差异
 
-1. `delegate.single`
+1. `delegate`
    - v1 默认以 runtime code-generated ACK 为主
    - 只在主模型已经热启动、且不会拖慢首响时，才允许它抢先给一句合格首响
    - 否则不要为了等主模型而推迟 delegate ACK
@@ -861,7 +861,7 @@ v1 默认建议：
 1. 首响保险丝
 2. 不是主模型替身
 
-而对 `delegate.single` 路径，也建议类似：
+而对 `delegate` 路径，也建议类似：
 
 1. 先给主模型一个极短“抢首响”窗口
 2. 窗口内如果它已经发出合格首响，则 runtime 抑制独立 ACK
@@ -901,8 +901,8 @@ v1 不建议追求“每次都写得很灵动”，而建议固定几类 ACK：
 | 模板 key | 触发条件 | 文案方向 | 默认动作 | 适合渠道 |
 | --- | --- | --- | --- | --- |
 | `pre_route_soft_ack` | route/judge 还未稳定，但静默预算将耗尽 | 已收到，正在判断处理方式 | 优先短提示；后续被稳定 route 覆盖 | 聊天渠道优先 |
-| `delegate_started` | 已判定 `delegate.single` 且成功物化 | 已接单，开始处理 | 优先新发或创建 anchor | 全渠道 |
-| `observer_started` | 已判定 `delegate.single(role=observer)` 且需要短探测/后台观察 | 已开始检查/探测 | 可新发，也可轻量提示 | 全渠道 |
+| `delegate_started` | 已判定 `delegate` 且成功物化 | 已接单，开始处理 | 优先新发或创建 anchor | 全渠道 |
+| `observer_started` | 已判定 `delegate(role=observer, coordination_mode=solo_worker)` 且需要短探测/后台观察 | 已开始检查/探测 | 可新发，也可轻量提示 | 全渠道 |
 | `reply_soft_ack` | `reply` 路径主模型首 token 超时 | 已收到，正在组织回复 | 优先短提示；后续由正式回复覆盖 | 聊天渠道优先 |
 | `queued` | admission control / queue budget 命中 | 已接单，但在等待容量 | 优先更新已有 anchor | 全渠道 |
 | `blocked` | 缺权限/缺输入/风险边界阻断 | 当前卡在什么条件上 | 优先新发明确说明 | 全渠道 |
@@ -1753,7 +1753,7 @@ Anthropic 在 Managed Agents 里最核心的接口拆法，其实可以压缩成
 
 1. 读取最小 thread/session facts
 2. 跑 `hard-boundary gate + judge_fast`
-3. 做 `reply / delegate.single` 判断
+3. 做 `reply / delegate` 判断
 4. 发送 ACK
 5. 如果需要委派，则 materialize native task/flow
 
@@ -2190,7 +2190,7 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
 3. load minimal thread/session facts
 4. fast judge:
    - `reply`
-   - `delegate.single`
+   - `delegate`
 5. if `delegate`:
    - send ACK immediately
    - materialize native task/flow
@@ -2201,22 +2201,22 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
 这里再明确一次：
 
 1. `delegate.compound` 不属于 Phase 1 live path
-2. Phase 1 judge 顶层只做 `reply / delegate.single`
+2. Phase 1 judge 顶层只做 `reply / delegate`
 3. compound judge 只作为 Phase 3 以后的扩展位保留
 
-### 9.2.0 refined v1 route model：顶层只保留 `reply | delegate.single`
+### 9.2.0 refined v1 route model：顶层只保留 `reply | delegate`
 
 这一轮设计收口后，我建议把 v1 顶层 semantic route 正式收成：
 
 1. `reply`
-2. `delegate.single`
+2. `delegate`
 
 这里有两个容易混淆的点，建议明确写死：
 
 1. `clarify` 不是顶层 route，而是 `reply` 的一种处理模式
 2. `observe` 也不再作为顶层 route，而是降成：
    - `reply` 下的 system-state-assisted answer
-   - 或 `delegate.single(role=observer)`
+   - 或 `delegate(role=observer, coordination_mode=solo_worker)`
 
 这样做的原因是：
 
@@ -2231,7 +2231,7 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
    - 主 agent 要尽量少背执行上下文和调度心智
 3. 避免把执行细节错误提升为 semantic route
    - “先查状态再答”更像 `reply` 的一种实现方式
-   - “真的去探测/读环境/跑 probe”更像 `delegate.single(observer)`
+   - “真的去探测/读环境/跑 probe”更像 `delegate(role=observer, coordination_mode=solo_worker)`
 
 因此，v1 的推荐解释是：
 
@@ -2239,7 +2239,7 @@ route 不该只知道“哪个模型便宜、哪个模型贵”，还应该知�
    - 主链可以现在回答
    - 或主链现在应该先补问
    - 或系统已有 truth/state 可快速读取并组织回答
-2. `delegate.single`
+2. `delegate`
    - 需要创建一个新的执行工作单元
    - 由单个 child worker / subagent 承担
 
@@ -2270,7 +2270,7 @@ v1 里仍然保留“观察/探测”能力，但不建议再暴露成顶层 rou
    - 系统先读取 truth/state，主 agent 只负责快速包装回复
 2. **需要真实 probe / inspect / environment check**
    - 例如查本机环境、查日志、跑轻量命令、做真实探测
-   - 这时走 `delegate.single(role=observer)`
+   - 这时走 `delegate(role=observer, coordination_mode=solo_worker)`
 
 这条很关键，因为它把：
 
@@ -2285,7 +2285,7 @@ v1 里仍然保留“观察/探测”能力，但不建议再暴露成顶层 rou
 
 1. `route`
    - `reply`
-   - `delegate.single`
+   - `delegate`
 2. `reply_mode`
    - `answer`
    - `clarify`
@@ -2325,13 +2325,126 @@ v1 里仍然保留“观察/探测”能力，但不建议再暴露成顶层 rou
 3. 如果派出去，再判断 `delegate_role`
 4. 再落 coordination / backend / workspace / model
 
+#### 9.2.0.d 为什么不把 `single / multi` 放在顶层 route
+
+如果未来一定会上 multi-agent，我更建议顶层 route 只保留：
+
+1. `reply`
+2. `delegate`
+
+而把 “single / multi / advisor” 下沉到 `coordination_mode`。
+
+理由是：
+
+1. `single` / `multi` 更像**如何委派**
+2. 不是**是否委派**
+
+所以更稳的组合是：
+
+1. `route = reply | delegate`
+2. `coordination_mode = solo_worker | advisor_assisted | multi_agent_controlled`
+
+这意味着：
+
+1. v1 默认只实现 `route=delegate + coordination_mode=solo_worker`
+2. v2/v3 以后如果要上 multi-agent，不需要再推翻顶层 route，只要扩 `coordination_mode`
+
+一句话：
+
+> **顶层回答“回还是派”，下层再回答“怎么派”。**
+
+#### 9.2.0.e future multi-agent 应如何扩展
+
+如果后面要支持多 agent，我建议完全建立在 `route = delegate` 之上扩展，而不是再新增一个顶层 route。
+
+更稳的形态是：
+
+1. `route = delegate`
+2. `coordination_mode = solo_worker | advisor_assisted | multi_agent_controlled`
+
+其中：
+
+1. `solo_worker`
+   - v1 默认唯一 live path
+   - 等价于今天常说的“single delegate”
+2. `advisor_assisted`
+   - 仍是一个主 worker 执行
+   - 中途可 consult advisor
+   - 但不是多 child worker 编排
+3. `multi_agent_controlled`
+   - 一个 coordinator 负责编排多个 child worker
+   - child worker 有明确 role / scope / dependency / budget
+   - 只做受控 one-level hierarchy，不做自由 swarm
+
+##### 9.2.0.e.1 multi-agent 的最小实现骨架
+
+future `multi_agent_controlled` 建议最少包含：
+
+1. 一个 parent flow
+2. 一个 coordinator task
+3. 多个 child task
+4. `depends_on` 图
+5. child thread / inbox / handoff summary
+6. scheduler 级的并发与冲突控制
+
+换句话说，多 agent 不应该是：
+
+1. 主 agent 随手起几个子 agent
+2. 子 agent 再自由套娃 delegate
+3. 谁都能改路由、谁都能抢 authority
+
+而应该是：
+
+1. judge 只给出 `coordination_mode_hint`
+2. planner / scheduler 把它物化成 parent-child graph
+3. child worker 只执行各自的 bounded brief
+
+##### 9.2.0.e.2 并行还是排队由谁判
+
+future multi-agent 里，并行/排队不应交给主 agent，也不应交给 judge 直接拍板。
+
+更合理的是由 scheduler 根据这些结构化信号决定：
+
+1. `depends_on`
+2. `read_scope`
+3. `write_scope`
+4. `workspace_mode`
+5. `cost_budget`
+6. `max_parallelism`
+7. `queue_pressure`
+8. `runner/backend availability`
+
+因此：
+
+1. judge 负责“像不像需要 multi-agent”
+2. scheduler 负责“怎么排、能不能并行、何时必须排队”
+
+##### 9.2.0.e.3 v1 到 multi-agent 的演进路线
+
+我建议路线固定成：
+
+1. Phase 1-2
+   - `route = delegate`
+   - `coordination_mode = solo_worker`
+2. Phase 3
+   - 保留 `advisor_assisted`
+   - 灰度 `multi_agent_controlled`
+3. Phase 4
+   - richer board / cockpit / scheduler telemetry
+   - 更完整的 auto-router / cost optimizer
+
+这样后面就不会出现：
+
+1. 为了 future multi 先把顶层 route 做复杂
+2. 或者 future multi 上线时又要推翻 `reply / delegate` 主抽象
+
 ### 9.2.0.d canonical stack superseded
 
 上面的 refined stack 已经替代这里更早的 `reply / observe / delegate.single` 版本。
 
 v1 实作时应以新顺序为准：
 
-1. `route = reply | delegate.single`
+1. `route = reply | delegate`
 2. `reply_mode`
 3. `delegate_role`
 4. `coordination_mode`
@@ -2487,7 +2600,7 @@ v2 应该采用：
 
 这些语义判断默认都应交给 small judge。
 
-所以 v1 顶层 `reply / delegate.single` 这类主语义路由，默认不是规则判，也不是主回答模型自由发挥判，而是：
+所以 v1 顶层 `reply / delegate` 这类主语义路由，默认不是规则判，也不是主回答模型自由发挥判，而是：
 
 1. **small judge model** 负责绝大多数语义判断
 2. **hard-boundary gate** 只处理无需深语义也必须稳定成立的硬边界
@@ -2856,15 +2969,16 @@ v2 应该采用：
 
 local judge 负责输出结构化粗判结果：
 
-1. `route = reply | delegate.single`
+1. `route = reply | delegate`
 2. `reply_mode = answer | clarify | null`
 3. `delegate_role = observer | default | code | research | review | null`
-4. `complexity = simple | normal | deep | null`
-5. `scope = local | remote | both | unknown`
-6. `tool_need_hint = none | maybe | required`
-7. `duration_hint = short | medium | long`
-8. `confidence`
-9. `reason_codes`
+4. `coordination_mode_hint = solo_worker | advisor_assisted | multi_agent_controlled | null`
+5. `complexity = simple | normal | deep | null`
+6. `scope = local | remote | both | unknown`
+7. `tool_need_hint = none | maybe | required`
+8. `duration_hint = short | medium | long`
+9. `confidence`
+10. `reason_codes`
 
 这里要强调两点：
 
@@ -2873,7 +2987,7 @@ local judge 负责输出结构化粗判结果：
 
 local judge 回答的是：
 
-> **“从当前上下文和语义上看，这更像是主链现在就能处理，还是更像需要创建新的执行工作单元。”**
+> **“从当前上下文和语义上看，这更像是主链现在就能处理，还是更像需要创建新的执行工作单元；如果要委派，更像 single 还是 future multi。”**
 
 #### 9.3.a.2 remote judge 的职责
 
@@ -3014,7 +3128,7 @@ judge 和 main agent 不能各用一套“自己理解的规则”。
 
 1. `route`
    - `reply`
-   - `delegate.single`
+   - `delegate`
 2. `reply_mode`
    - `answer`
    - `clarify`
@@ -3024,11 +3138,15 @@ judge 和 main agent 不能各用一套“自己理解的规则”。
    - `code`
    - `research`
    - `review`
-4. `complexity`
+4. `coordination_mode_hint`
+   - `solo_worker`
+   - `advisor_assisted`
+   - `multi_agent_controlled`
+5. `complexity`
    - `simple`
    - `normal`
    - `deep`
-5. `scope`
+6. `scope`
    - `local`
    - `remote`
    - `both`
@@ -3046,14 +3164,36 @@ judge 和 main agent 不能各用一套“自己理解的规则”。
 4. 不需要新的工作区访问、环境探测、命令执行、文件写入
 5. 即使需要一点状态，也能靠现成 truth/summary/artifact refs 快速组织回复
 
-##### `delegate.single`
+##### `delegate`
 
-满足下面条件时，应倾向 `delegate.single`：
+满足下面条件时，应倾向 `delegate`：
 
 1. 需要创建新的执行工作单元
 2. 需要工作区访问、环境探测、命令执行、文件读写、日志读取、验证或较长处理过程
 3. 任务值得从主 agent 上下文中剥离，用独立 child worker 完成
 4. 任务适合用不同 role / model profile 来做成本和质量分层
+
+##### `coordination_mode_hint`
+
+满足下面条件时应倾向 `solo_worker`：
+
+1. 一个 worker 就能完成
+2. 没有明显可并行拆分的独立子任务
+3. 子任务之间没有必要做依赖编排
+
+满足下面条件时才应倾向 `multi_agent_controlled`：
+
+1. 任务天然能拆成多个 well-scoped 子任务
+2. 子任务之间的依赖关系可表达
+3. 存在明显并行收益
+4. write scope / workspace conflict 可被 scheduler 安全管理
+5. 单 worker 会明显拖慢交付或污染上下文
+
+v1 默认口径：
+
+1. judge 可以保留 `multi_agent_controlled` 的 schema slot
+2. 但 live path 只放行 `solo_worker`
+3. `multi_agent_controlled` 先只进入 replay / shadow / future Phase 3
 
 ##### `reply_mode = clarify`
 
@@ -3180,7 +3320,7 @@ duration_hint:
 2. fast first visible response 优先
 3. 能直接回答就回答；信息不足就短 clarifying question
 4. 默认不把长执行、工具探测、工作区操作吞进主线程
-5. 收到 `delegate.single` 推荐时默认配合
+5. 收到 `delegate` 推荐时默认配合
 6. 如果不同意，只能走 objection protocol，不能 silent override
 7. 默认优先吃 summary / artifact refs / structured state，而不是长 transcript
 
@@ -3578,7 +3718,7 @@ v1 先把接口做对：
 1. `reply`
    - 直接走 `direct_main`
    - 不依赖 runner
-2. `delegate.single`
+2. `delegate`
    - 默认直接 materialize native task/flow
    - execution materializer 默认落到 `openclaw-native + on-demand execution`
    - 不因为没有 resident runner 就回退成主模型硬扛整条长任务
@@ -3586,7 +3726,7 @@ v1 先把接口做对：
 也就是说，**fallback 不是“无 runner 时都改成 direct”**，而是：
 
 1. `reply` 保持 direct
-2. `delegate.single` 保持 delegate.single，只是落到 native substrate + on-demand worker
+2. `delegate` 保持 delegate，只是落到 native substrate + on-demand worker
 
 真正需要回退的是 execution profile，不是 semantic route。
 
@@ -3595,14 +3735,14 @@ v1 先把接口做对：
 1. `observer` 不是 runner 的别名，也不是 local backend 的别名
 2. “先看、先查、先探测”在 refined v1 里不再作为顶层 route，而是：
    - `reply` 下的 state-assisted answer
-   - 或 `delegate.single(role=observer)`
+   - 或 `delegate(role=observer, coordination_mode=solo_worker)`
 3. `runner / openclaw-native / on-demand / tmux workbench` 都属于 execution/backend 层
-4. 因此 `delegate.single(observer)` 和其他 `delegate.single(role=...)` 一样，都可能在某些执行条件下落到 runner
+4. 因此 `delegate(role=observer, coordination_mode=solo_worker)` 和其他 `delegate(role=..., coordination_mode=solo_worker)` 一样，都可能在某些执行条件下落到 runner
 5. 反过来，runner 也不天然只服务某一种 role
 
 换句话说：
 
-1. `reply / delegate.single` 回答的是“这次请求本质上是什么”
+1. `reply / delegate` 回答的是“这次请求本质上是什么”
 2. `delegate_role=observer` 回答的是“委派出去后，这个 child worker 属于哪一类”
 3. `backend` 回答的是“这次已经判定好的请求该怎么跑”
 
@@ -3616,8 +3756,8 @@ v1 先把接口做对：
 
 如果发生 backend 不可用或 admission control 拒绝，则再按下面顺序降级：
 
-1. `delegate.single` -> `queued delegate.single`
-2. `queued delegate.single` -> `blocked / waiting capacity`
+1. `delegate` -> `queued delegate`
+2. `queued delegate` -> `blocked / waiting capacity`
 3. 只有在任务本身被 small judge 判成“可直接短答”时，才允许改走 `reply`
 
 这条很重要，因为否则系统很容易重新长回：
@@ -3651,7 +3791,7 @@ v1 先把接口做对：
 
 在这个前提下，v1 的执行默认心智更像：
 
-1. judge 决定 `reply / delegate.single`
+1. judge 决定 `reply / delegate`
 2. execution materializer 决定如何物化 native execution
 3. 不做多 backend 竞争
 
@@ -3886,8 +4026,8 @@ v1 我建议至少固定这几类：
 
 这同样适用于：
 
-1. `observe` 的短探测任务
-2. `delegate.single` 的常规子任务
+1. `delegate(role=observer, coordination_mode=solo_worker)` 的短探测任务
+2. `delegate` 的常规子任务
 
 两者都可以因为 execution gain 走 runner，也都可以因为默认稳态继续走 `native + on-demand`。
 
@@ -4099,7 +4239,7 @@ v1 我建议至少固定这几类：
 3. direct reply 成功率
 4. `cost_per_request`
 
-#### `delegate.single` lane
+#### `delegate` lane
 
 优先指标：
 
@@ -4237,7 +4377,7 @@ v1 我建议至少固定这几类：
 
 1. TS policy core
 2. TS runtime adapter
-3. `reply + delegate.single`
+3. `reply + delegate`
 4. 独立 ACK
 5. 打通 request/task/flow 级 telemetry 采集
 6. 固定 worker profile / preset role
@@ -4332,7 +4472,7 @@ v1 我建议至少固定这几类：
 3. **`task-state.json` 退化为 projection / policy metadata，不再是执行主真相。**
 4. **ACK 独立于后续复杂决策链。**
 5. **route、role、coordination_mode、backend、workspace_mode、model_profile 六者彻底解耦。**
-6. **默认只做 `reply / delegate.single`，`observe` 降成 `reply` 内的状态读取型处理或 `delegate.single(role=observer)`；compound 后置。**
+6. **默认只做 `reply / delegate`，`observe` 降成 `reply` 内的状态读取型处理或 `delegate(role=observer, coordination_mode=solo_worker)`；compound 后置。**
 7. **正式产品代码全部 TS 重写；Python 只保留测试/运维/一次性脚本。**
 8. **成本优化和速度优化必须变成 request/task/flow 级可测指标。**
 9. **先搭 harness 骨架、telemetry contract 和 gate，再逐步迁移功能。**

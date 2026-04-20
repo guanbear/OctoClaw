@@ -32,16 +32,16 @@
 3. 主模型默认只吃最小上下文
 4. artifact-first / state-first / event-first
 5. telemetry 必须从第一阶段开始进入链路
-6. 顶层 semantic route 默认只保留 `reply` 与 `delegate.single`
+6. 顶层 semantic route 默认只保留 `reply` 与 `delegate`
 7. `observe` 不再作为顶层 route，而是收成：
    - `reply` 下的状态读取型处理
-   - 或 `delegate.single(role=observer)`
+   - 或 `delegate(role=observer, coordination_mode=solo_worker)`
 
 ### 1.3 施工原则
 
 1. 先定 contract，再写模块。
 2. 先建最小可运行骨架，再扩能力。
-3. 先做 `reply + delegate.single`，后做 compound / multi-agent。
+3. 先做 `reply + delegate`，后做 compound / multi-agent。
 4. 先把热路径跑稳，再做自动选模/自学习。
 5. 每个 work package 都要有明确输入、输出、依赖、验收标准。
 
@@ -168,7 +168,7 @@ tools/
 
 必须实现：
 
-1. `reply / delegate.single` 顶层基础决策
+1. `reply / delegate` 顶层基础决策
 2. hard-boundary gate
 3. local judge / remote judge 接口与输出 schema
 4. preset role:
@@ -197,12 +197,17 @@ tools/
    - `route`
    - `reply_mode`
    - `delegate_role`
+   - `coordination_mode_hint`
    - `complexity`
    - `scope`
    - `tool_need_hint`
    - `duration_hint`
    - `reason_codes`
 22. local judge 与 remote judge 共享同源 policy spec，但使用不同上下文深度与 prompt view
+23. 配置层统一 judge 命名：
+   - `local_judge`
+   - `remote_judge`
+   - 不再长期保留 `judge_fast` / `judge_strong` / `judge_local` / `judge_remote` 多套散名并存
 
 明确禁止：
 
@@ -279,13 +284,13 @@ tools/
 11. gateway/IM continuity 统一通过 thread/session binding 进入 runtime core
 12. `context_file` / `skill_ref` 只作为 artifact 引用流经 contracts，不在 Phase 1-2 演化成 memory runtime
 13. resident runner 默认关闭；runtime 默认按 native task/flow + on-demand worker 实现
-14. `reply / delegate.single` 的语义 route 不因 runner 缺席而改写；状态读取型 `reply` 与 `delegate.single(role=observer)` 都可稳定落到 native + on-demand
+14. `reply / delegate` 的语义 route 不因 runner 缺席而改写；状态读取型 `reply` 与 `delegate(role=observer, coordination_mode=solo_worker)` 都可稳定落到 native + on-demand
 15. 开启 resident runner 只代表 acceleration lane 可用，不代表 tmux 成为必需依赖
 16. ACK 默认由 runtime controller 发出，不默认依赖主模型
 17. direct path 优先让主模型抢首响；超过 ACK deadline 再由 runtime 旁路 soft-ack
 18. 不允许 ACK controller 和主模型各自发一条短回复争抢首响
 19. ACK 介入应以 silence/state-change 为主，不以“每来一条用户消息都回一条”为原则
-20. 对 `delegate.single` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
+20. 对 `delegate` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
 21. 任何 ACK 副作用都不能只靠进程内布尔位去重，必须走 `ack_key + CAS + outbox/receipt`
 
 关键状态：
@@ -300,7 +305,7 @@ tools/
 
 验收标准：
 
-1. `reply + delegate.single` 能跑通最小 happy path
+1. `reply + delegate` 能跑通最小 happy path
 2. ACK 不依赖复杂后续链
 3. delivery 有结构化输出
 4. telemetry 能记录 request/task/flow
@@ -370,6 +375,7 @@ tools/
    - `route`
    - `reply_mode`
    - `delegate_role`
+   - `coordination_mode_hint`
    - `complexity`
    - `scope`
    - `tool_need_hint`
@@ -454,7 +460,7 @@ tools/
 4. delegated task 默认带 read/write scope
 5. overlapping write 默认不会并发踩同一工作区
 6. Phase 3 起可扩到 thread handoff / inbox / advice packet
-7. 状态读取型 `reply` 与 `delegate.single(role=observer)` 在 runner 缺席时仍可稳定落到 native + on-demand
+7. 状态读取型 `reply` 与 `delegate(role=observer, coordination_mode=solo_worker)` 在 runner 缺席时仍可稳定落到 native + on-demand
 8. backend selection 决策可解释，不出现“因为 route 像 runner 任务所以走 runner”这类黑箱逻辑
 9. 不出现“因为任务长，所以默认走便宜 runner”这类单因子误判
 10. 不出现“为了判 runner 再把主 agent 拉进更重上下文和控制逻辑”这类架构回退
@@ -680,7 +686,7 @@ tools/
 1. WS0 Contract Foundation
 2. WS8 preflight/golden 最小门禁
 3. 旧模块到新包的 ownership map
-4. `reply / delegate.single` lane baseline 固定
+4. `reply / delegate` lane baseline 固定
 
 这阶段对 legacy 的要求：
 
@@ -695,7 +701,7 @@ tools/
 3. WS5 Fast Reply
 4. WS6 Status Surface MVP
 
-目标：先跑通 `reply + delegate.single`
+目标：先跑通 `reply + delegate`
 
 补充口径：
 
@@ -994,7 +1000,7 @@ tools/
 2. contracts 可编译
 3. policy core 有最小测试
 
-### M2：reply/delegate.single live
+### M2：reply/delegate live
 
 完成标准：
 
