@@ -1,9 +1,10 @@
 export type AckRoutePhase = "delegate" | "observe" | "reply" | "pre_route" | "unknown";
 
 export interface AckTimingConfig {
-  firstTierMs: number;
-  tierCount: number;
+  tierDelaysMs: [number, number, number, number];
 }
+
+export const DEFAULT_TIER_DELAYS_MS: [number, number, number, number] = [18_000, 45_000, 120_000, 0];
 
 export interface AckTimerState {
   stateKey: string;
@@ -37,8 +38,7 @@ export interface CreateAckTimersParams {
 }
 
 export const DEFAULT_ACK_TIMING_CONFIG: AckTimingConfig = {
-  firstTierMs: 60_000,
-  tierCount: 3,
+  tierDelaysMs: DEFAULT_TIER_DELAYS_MS,
 };
 
 const ackTimersByStateKey = new Map<string, AckTimerState>();
@@ -50,8 +50,7 @@ function normalizeKey(value: string): string {
 
 function resolveConfig(config?: Partial<AckTimingConfig>): AckTimingConfig {
   return {
-    firstTierMs: config?.firstTierMs ?? DEFAULT_ACK_TIMING_CONFIG.firstTierMs,
-    tierCount: config?.tierCount ?? DEFAULT_ACK_TIMING_CONFIG.tierCount,
+    tierDelaysMs: config?.tierDelaysMs ?? DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs,
   };
 }
 
@@ -106,7 +105,7 @@ function stageForTier(tier: number, _routePhase: AckRoutePhase): string {
   return "tool_suggest_stop";
 }
 
-function shouldScheduleTier(routePhase: AckRoutePhase, tier: number): boolean {
+export function shouldScheduleTier(routePhase: AckRoutePhase, tier: number): boolean {
   if (routePhase !== "reply") {
     return false;
   }
@@ -178,9 +177,9 @@ export function createAckTimers(params: CreateAckTimersParams): AckTimerState {
     cancelled: false,
   };
 
-  for (let tier = 0; tier < config.tierCount && tier <= 3; tier++) {
-    if (!shouldScheduleTier(state.routePhase, tier)) continue;
-    const delayMs = config.firstTierMs * Math.pow(2, tier);
+  for (let tier = 0; tier <= 3; tier++) {
+    const delayMs = config.tierDelaysMs[tier];
+    if (!delayMs || !shouldScheduleTier(state.routePhase, tier)) continue;
     const timerRef = tier === 0 ? "tier0Timer" : tier === 1 ? "tier1Timer" : tier === 2 ? "tier2Timer" : "tier3Timer";
     state[timerRef] = setTimeout(() => {
       fireTier(state, tier as 0 | 1 | 2 | 3, params.onTierFire);

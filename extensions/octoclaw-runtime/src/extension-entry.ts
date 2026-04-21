@@ -87,7 +87,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "- Delegating keeps your context window fresh for the next user message.",
 ].join("\n");
 
-const LATENCY_ACK_DELAY_MS = 4000;
+const LATENCY_ACK_DELAY_MS = 5000;
 const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
@@ -295,8 +295,6 @@ export const plugin = {
   register(pi: PluginInterface): void {
     envOverrides.octoclawRoot = stringValue(pi.pluginConfig?.octoclawRoot);
     envOverrides.workspaceRoot = stringValue(pi.pluginConfig?.workspaceRoot);
-    const ackTimerFirstTierMs = Number(pi.pluginConfig?.ackTimerFirstTierMs) || 60_000;
-    const ackTimerTierCount = Math.min(6, Math.max(1, Number(pi.pluginConfig?.ackTimerTierCount) || 3));
 
     const judgeFastFromPlugin = (pi.pluginConfig?.judgeFast && typeof pi.pluginConfig.judgeFast === "object" && !Array.isArray(pi.pluginConfig.judgeFast)) ? pi.pluginConfig.judgeFast as Record<string, unknown> : {};
     const judgeFastFromEnv = (() => {
@@ -458,7 +456,7 @@ export const plugin = {
         if (process.env.OCTOCLAW_ACK_DEBUG) {
           console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
         }
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision: effectiveDecision, replyToMessageId: inboundMessageTs, ackTimingConfig: { firstTierMs: ackTimerFirstTierMs, tierCount: ackTimerTierCount } });
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision: effectiveDecision, replyToMessageId: inboundMessageTs });
       }
       if (effectiveState) {
         effectiveState.ackGuardKey = preSessionKey || "";

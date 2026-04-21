@@ -31,6 +31,17 @@ export interface SuppressContext {
   routePhase?: string;
 }
 
+export interface AckGateState {
+  tool_active?: boolean;
+  delegated_running?: boolean;
+  blocked?: boolean;
+  final_response_streaming?: boolean;
+  delivery_pending?: boolean;
+  delivered?: boolean;
+  native_state?: string;
+  formal_reply_visible?: boolean;
+}
+
 export interface SuppressDecision {
   suppressed: boolean;
   reason: string;
@@ -270,12 +281,26 @@ export function shouldSuppressAck(
   ackStage: string,
   routePhase: string,
   context: SuppressContext = {},
+  gate: AckGateState = {},
 ): SuppressDecision {
   const normalizedThreadKey = asThreadKey(threadKey);
   const normalizedAckStage = ackStage.trim();
   const normalizedRoutePhase = routePhase.trim() || context.routePhase?.trim() || "";
   const silence = checkSilence(normalizedThreadKey);
   const window = normalizedThreadKey ? burstWindows.get(normalizedThreadKey) : undefined;
+
+  if (gate.delivered) {
+    return { suppressed: true, reason: "delivered" };
+  }
+  if (gate.final_response_streaming) {
+    return { suppressed: true, reason: "final_response_streaming" };
+  }
+  if (gate.delivery_pending) {
+    return { suppressed: true, reason: "delivery_pending" };
+  }
+  if (gate.formal_reply_visible) {
+    return { suppressed: true, reason: "formal_reply_visible" };
+  }
 
   if (
     normalizedThreadKey
@@ -305,6 +330,12 @@ export function shouldSuppressAck(
 
   if (context.userInputActive === true || silence.isSilent === false) {
     return { suppressed: true, reason: "user_input_still_active" };
+  }
+
+  const eligible = gate.tool_active || gate.blocked
+    || (gate.native_state === "blocked");
+  if (!eligible && (gate.tool_active !== undefined || gate.blocked !== undefined)) {
+    return { suppressed: true, reason: "not_ack_eligible_no_active_work" };
   }
 
   return { suppressed: false, reason: "allow" };
