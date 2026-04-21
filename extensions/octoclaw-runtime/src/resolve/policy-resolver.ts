@@ -1528,24 +1528,33 @@ export function buildTsRuntimeDispatchPayload(input: DispatchLikeInput): Unknown
     runtimeRouteDecision,
     normalizeLiveRoute: (route, fallback = "reply") => normalizeLiveRoute(route, normalizeLiveRoute(fallback, "reply")),
     runtimeExecutionIds: buildRuntimeExecutionIds,
-    buildWorkflowDecision: (task, decision, metadata) => {
-      const routeDecision = runtimeRouteDecision(decision);
-      const route = normalizeLiveRoute(routeDecision.route ?? asRecord(metadata).requested_route, "reply");
-      const tsPolicyJudge = asRecord(asRecord(decision).ts_policy_judge);
-      const tsDecision = isRecord(tsPolicyJudge.decision)
-        ? tsPolicyJudge.decision as unknown as PolicyDecision
-        : buildDecision(task, {
-            metadata: {
-              ...asRecord(metadata),
-              requested_route: route,
-              ...observeFlagsForRoute(
-                route,
-                asString(asRecord(decision).role),
-                asString(asRecord(decision).executionProfile),
-              ),
-            },
-          });
-      return tsDecision;
+    buildWorkflowDecision: (_task, decision, _metadata) => {
+      const prior = asRecord(decision);
+      const judgeSucceeded = asBoolean(prior._judge_succeeded, false);
+      const judgeRoute = asString(prior._judge_route);
+      const routeDecisionRoute = asString(asRecord(prior.route_decision).route);
+
+      const fallback: LiveRoute = routeDecisionRoute === "reply" || routeDecisionRoute === "delegate" ? routeDecisionRoute : "delegate";
+      const authoritativeRoute: LiveRoute = judgeSucceeded && judgeRoute
+        ? normalizeLiveRoute(judgeRoute, fallback)
+        : normalizeLiveRoute(routeDecisionRoute, "delegate");
+
+      const observeFlags = observeFlagsForRoute(
+        authoritativeRoute,
+        asString(prior._judge_role),
+        asString(prior.executionProfile),
+      );
+
+      return rebuildDecisionWithRoute(
+        buildDecision("", {
+          metadata: {
+            requested_route: authoritativeRoute,
+            ...observeFlags,
+          },
+        }),
+        authoritativeRoute,
+        coerceJudgeRole(prior._judge_role) ?? undefined,
+      );
     },
     buildWorkflowScope,
     truncateText,
@@ -1557,24 +1566,33 @@ export function buildTsRuntimeSpawnPayload(input: SpawnLikeInput): UnknownRecord
     runtimeRouteDecision,
     normalizeLiveRoute: (route, fallback = "reply") => normalizeLiveRoute(route, normalizeLiveRoute(fallback, "reply")),
     runtimeExecutionIds: buildRuntimeExecutionIds,
-    buildWorkflowDecision: (task, decision, metadata) => {
-      const routeDecision = runtimeRouteDecision(decision);
-      const route = normalizeLiveRoute(routeDecision.route ?? asRecord(metadata).requested_route, "reply");
-      const tsPolicyJudge = asRecord(asRecord(decision).ts_policy_judge);
-      const tsDecision = isRecord(tsPolicyJudge.decision)
-        ? tsPolicyJudge.decision as unknown as PolicyDecision
-        : buildDecision(task, {
-            metadata: {
-              ...asRecord(metadata),
-              requested_route: route,
-              ...observeFlagsForRoute(
-                route,
-                asString(asRecord(decision).role),
-                asString(asRecord(decision).executionProfile),
-              ),
-            },
-          });
-      return tsDecision;
+    buildWorkflowDecision: (_task, decision, _metadata) => {
+      const prior = asRecord(decision);
+      const judgeSucceeded = asBoolean(prior._judge_succeeded, false);
+      const judgeRoute = asString(prior._judge_route);
+      const routeDecisionRoute = asString(asRecord(prior.route_decision).route);
+
+      const fallback: LiveRoute = routeDecisionRoute === "reply" || routeDecisionRoute === "delegate" ? routeDecisionRoute : "delegate";
+      const authoritativeRoute: LiveRoute = judgeSucceeded && judgeRoute
+        ? normalizeLiveRoute(judgeRoute, fallback)
+        : normalizeLiveRoute(routeDecisionRoute, "delegate");
+
+      const observeFlags = observeFlagsForRoute(
+        authoritativeRoute,
+        asString(prior._judge_role),
+        asString(prior.executionProfile),
+      );
+
+      return rebuildDecisionWithRoute(
+        buildDecision("", {
+          metadata: {
+            requested_route: authoritativeRoute,
+            ...observeFlags,
+          },
+        }),
+        authoritativeRoute,
+        coerceJudgeRole(prior._judge_role) ?? undefined,
+      );
     },
     buildWorkflowScope,
     truncateText,
