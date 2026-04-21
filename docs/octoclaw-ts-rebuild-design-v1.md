@@ -621,7 +621,7 @@ harness 负责：
 建议：
 
 1. route 一旦明确落到需要长处理的路径，必须保证首个可见反馈不再长时间静默。
-2. ACK 默认由模板生成，不等模型生成自然语言。
+2. 首个可见 ACK 默认由 runtime 负责，不等 ack writer 生成自然语言。
 3. `reply` 路径优先让主模型快速作答；`delegate` 路径优先保证稳定首响。
 
 这里再把 ACK 的实现口径写得更完整：
@@ -680,38 +680,64 @@ harness 负责：
 
 v1 默认建议：
 
-1. **首个 ACK 不依赖 LLM**
-2. 默认走 code-generated template
-3. 可以根据 route / backend / queue / risk / stage 选择不同模板
-4. 但不等待模型生成自然语言才发 ACK
+1. **首个可见 ACK 不依赖第二次模型调用**
+2. runtime 仍保留 code-generated fallback template / reaction / stage token
+3. 但 v1 可以允许一个**延迟触发、可取消、低优先级**的本地 `ack_writer`
+4. `ack_writer` 只在“主链仍静默、且正式 reply/delegate 结果还没发出”时才需要触发
 
-后续如果要做更细腻的 ACK，可以允许：
+这里要把两个概念明确拆开：
 
-1. small fast model 在极短预算内做 template selection 或一行轻量改写
-2. 但它必须是 optional enhancement
-3. 任何时候只要 fast model 超时，立即回退到纯模板 ACK
+1. `route_judge`
+   - 负责 `reply | delegate` 等结构化判定
+   - 属于热路径 authority
+2. `ack_writer`
+   - 只负责写一句短 ACK / nudge / progress 文案
+   - 不参与 route / role / complexity 决策
+   - 属于可选增强，不是 route authority
+
+如果后续要做更细腻的 ACK，推荐口径不是“让 judge 顺手写 ack_text”，而是：
+
+1. 保留 `ACK0` 作为 runtime first-visible response 能力
+2. 再允许一个异步的 `ACK1` writer lane 作为补充
+3. `ACK1` 可以复用同一个本地小模型，但必须是低优先级、延迟触发、可取消
+
+这里的 `ACK0 / ACK1` 不是说每次都要发两条消息，而是两个能力层：
+
+1. `ACK0`
+   - 解决“不要让用户长时间静默”
+   - 必须不依赖第二次模型调用
+2. `ACK1`
+   - 解决“如果仍在静默，能不能给一句更自然、更具体的状态文案”
+   - 只有在首响仍未产生时才需要
 
 也就是说：
 
-> **LLM 可以增强 ACK，但不能成为 ACK 的前提。**
+> **LLM 可以增强 ACK，但不能成为首个可见 ACK 的前提。**
 
 这里再区分两件事：
 
 1. **用注入去引导主模型先快回**
-2. **让远端模型专门生成 ACK**
+2. **让一个延迟触发的本地 `ack_writer` 生成 ACK 文案**
 
-前者我认为是值得做的，后者不应该成为前提。
+前者我认为是值得做的，后者也可以做，但必须满足：
+
+1. 不阻塞首响
+2. 默认只用本地小模型
+3. 仅在静默超过阈值时触发
+4. 一旦正式 reply / delegate update 已发出，就立即取消
 
 也就是说：
 
 1. 可以通过 `agent.md` / injected policy 提醒主模型：
    - 如果你能在极短时间内先给一句合格首响，就先回
    - 不要一上来闷头长思考
-2. 但不能为了 ACK 再专门调用一次远端模型，等它生成后才回
+2. 可以在后台用同一个本地 Qwen 服务再排一个 `ack_writer` job
+3. 但不能为了等这次文案生成而推迟首个可见反馈
+4. 默认也不值得为 ACK 单独调用远端 judge
 
 所以这里的边界是：
 
-> **可以“引导主模型快 ACK”，但不能“依赖另一次模型调用来产出 ACK”。**
+> **可以“引导主模型快 ACK”，也可以“异步调用本地 ack writer 做更自然的补充”，但不能把首响建立在第二次模型调用之上。**
 
 #### C. ACK 介入节奏
 
@@ -724,6 +750,7 @@ v1 默认建议：
    - 如果是 `reply` 路径，优先让主模型自己首响
    - 但如果到 `~3s` 还没有首 token / 首段输出，就由 ACK controller 介入一个 soft ACK
    - 如果 route 到这时仍未稳定，也要允许一个更中性的 pre-route soft ACK 先兜底
+   - 如果 soft ACK 已经发出，且到 `~3-5s` 仍未出现正式 reply / delegate update，可触发低优先级 `ack_writer`
 3. **6-8s**
    - 如果仍没有首 token、首进展或阶段事件，给出阶段性状态提示
 4. **10-12s**
@@ -760,6 +787,43 @@ v1 默认建议：
 3. 一旦 route 稳定，再转成对应模板或直接进入正式输出
 
 这类 ACK 必须比 `delegate_started` 更中性，避免误导。
+
+#### C.2 复用同一个本地模型做 `route_judge` 与 `ack_writer`
+
+如果 v1 采用单个本地 Qwen 服务，推荐把它复用成两个**不同优先级的 job 类型**，而不是两个共享 authority 的 judge：
+
+1. `route_judge`
+   - 高优先级
+   - 热路径
+   - 决定 route / mode / role / complexity / scope
+2. `ack_writer`
+   - 低优先级
+   - 延迟触发
+   - 只负责在仍然静默时生成一条简短 ACK / nudge 文案
+
+Mac mini 这类机器上更稳的实现不是“两个 job 真并发抢同一个小模型”，而是：
+
+1. 同一个本地模型服务
+2. 一个带 priority 的队列
+3. `route_judge` 抢高优先级
+4. `ack_writer` 只有在 `route_judge` 已完成、且静默超过阈值时才入队
+5. 如果正式 reply / delegate status 已发出，`ack_writer` 直接取消
+
+也就是说：
+
+> **可以复用同一个本地小模型，但 `route_judge` 和 `ack_writer` 必须是两个不同职责、不同优先级、不同可取消语义的 job。**
+
+`ack_writer` 的输入也必须比 judge 更小，推荐只看：
+
+1. `current_turn`
+2. `route`
+3. `reply_mode`
+4. `delegate_role`
+5. `scope`
+6. `status_phase`
+7. `reason_codes`
+
+它不应再看完整 judge packet，也不应重新参与 route 判断。
 
 #### D. direct 路径和 delegate 路径的差异
 
@@ -3902,6 +3966,18 @@ future UI 再在同一份 view model 上做：
 2. system validator/materializer 做硬约束收口
 3. 远端 judge 只在必要时做仲裁
 
+这里再补一层容易混淆但很重要的设计：
+
+1. `local_judge`
+   - judge authority
+   - 负责 route 等结构化判定
+2. `ack_writer`
+   - 不是 judge authority
+   - 只是本地小模型复用出来的一条低优先级文案增强 lane
+3. `remote_judge`
+   - adjudication authority
+   - 只在 escalation 时介入
+
 更具体地说：
 
 1. v1 默认目标不是“两个 judge 都经常被调用”
@@ -3931,6 +4007,12 @@ local judge 回答的是：
 
 > **“从当前上下文和语义上看，这更像是主链现在就能处理，还是更像需要创建新的执行工作单元；如果要委派，更像 single 还是 future multi。”**
 
+这里明确排除：
+
+1. local judge 不负责产出用户可见 ACK 文案
+2. local judge 不应在主判输出里顺带返回 `ack_text`
+3. 如果后续要做自然语言 ACK，应交给单独的 `ack_writer` lane
+
 #### 9.3.a.2 remote judge 的职责
 
 remote judge 默认不是第二层常驻热路径，而是：
@@ -3950,6 +4032,35 @@ remote judge 默认不是第二层常驻热路径，而是：
 
 1. 每个请求都要走的第二次默认调用
 2. 主 agent 的隐藏替身
+
+#### 9.3.a.2.a optional local `ack_writer` lane
+
+如果 v1 希望避免固定模板 ACK 过于机械，可以在本地小模型上加一条可选的 `ack_writer` lane。
+
+它的定位是：
+
+1. optional enhancement
+2. non-authoritative
+3. delayed and cancelable
+4. low-priority local generation only
+
+它的推荐触发条件是：
+
+1. `ACK0` 已经触发或首响仍未出现
+2. `route_judge` 已经完成
+3. 当前仍未有正式 `reply` 或 `delegate` status update
+4. 静默窗口已超过阈值
+
+它的输出只应是：
+
+1. 一句短 ACK / nudge
+2. 不改变 route
+3. 不改变 delegate role / complexity
+4. 不参与 escalation
+
+所以更准确的实现口径是：
+
+> **v1 可以是“一个本地 judge + 一个本地 ack writer + 一个远端 adjudicator”，但只有前者和后者拥有判定 authority。**
 
 #### 9.3.a.3 v1 推荐模型映射
 
@@ -4064,6 +4175,26 @@ judge 和 main agent 不能各用一套“自己理解的规则”。
 
 > **让 judge 和主 agent 按同一套制度办案。**
 
+这里再补一个很关键的工程口径：
+
+1. canonical `decision policy spec` 是**规则真相源**
+2. judge 实际仍然使用 prompt
+3. 但 prompt 不应再手写成一大坨散乱业务规则
+4. 而应通过 `policy spec -> prompt view` 的渲染层生成
+
+也就是说：
+
+1. `policy spec`
+   - 标签、rubric、schema、reason codes、escalation rules
+2. `judge prompt view`
+   - 给本地 judge 或远端 judge 的裁剪表达
+3. `judge context packet`
+   - 当前 case 的上下文材料
+
+一句话：
+
+> **judge 仍然需要 prompt，但 prompt 应该是 policy spec 的渲染结果，而不是独立演化的第二套隐式规则。**
+
 #### 9.3.c.2 最小 decision policy spec（v1）
 
 建议 v1 至少固定下面这些标签：
@@ -4161,6 +4292,9 @@ v1 默认口径：
    - judge 怎么判
    - route / mode / role / complexity / scope 的正式 contract
    - reason codes 和 escalation 标准
+3. `ack writer policy view`
+   - 只约束 ACK 文案可以说什么、不能说什么
+   - 不拥有 route authority
 
 一句话：
 
@@ -4218,6 +4352,25 @@ duration_hint:
     - medium
     - long
 ```
+
+在实现层建议再正式拆成 3 个渲染视图：
+
+1. `local_judge_prompt_view`
+   - 给本地 Qwen
+   - 强调闭集标签、简短 rubric、结构化输出
+2. `remote_judge_prompt_view`
+   - 给远端仲裁 judge
+   - 复用同源 policy spec，但允许更完整的 adjudication 指令
+3. `ack_writer_prompt_view`
+   - 给本地 ACK writer
+   - 只允许基于既有结构化结果写一句短文案
+   - 不允许改 route / role / complexity
+
+这样：
+
+1. 规则源只有一份
+2. judge 与 main agent 不会各用一套隐式规则
+3. `ack_writer` 也不会绕过 route authority 重新自由发挥
 
 在这个结构上，再补：
 

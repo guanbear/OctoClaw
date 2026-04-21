@@ -208,6 +208,12 @@ tools/
    - `local_judge`
    - `remote_judge`
    - 不再长期保留 `judge_fast` / `judge_strong` / `judge_local` / `judge_remote` 多套散名并存
+24. 如需更自然 ACK，允许新增 `ack_writer` lane，但它不属于 route authority
+25. `ack_writer` 与 `local_judge` 可复用同一个本地模型服务，但必须使用独立 job type、独立 prompt view、独立优先级
+26. `decision policy spec` 必须通过 prompt builder 渲染成：
+   - `local_judge_prompt_view`
+   - `remote_judge_prompt_view`
+   - `ack_writer_prompt_view`
 
 明确禁止：
 
@@ -300,8 +306,12 @@ tools/
 19. ACK 介入应以 silence/state-change 为主，不以“每来一条用户消息都回一条”为原则
 20. 对 `delegate` 路径，v1 仍以 runtime ACK 为主；主模型抢首响只作为不拖慢首响的优化
 21. 任何 ACK 副作用都不能只靠进程内布尔位去重，必须走 `ack_key + CAS + outbox/receipt`
-22. child 失败后的下一步由 orchestration/recovery 判，不由 child 或主 agent 自己决定
-23. recovery 默认先区分：
+22. 允许一个延迟触发、低优先级、可取消的 `ack_writer` lane，用于在持续静默时生成更自然的 ACK / nudge
+23. `ack_writer` 不得阻塞 `local_judge` 与首个可见 ACK
+24. `ack_writer` 默认只使用本地模型，不为 ACK 单独调用远端 judge
+25. `local_judge` 与 `ack_writer` 共用同一模型服务时，必须使用 priority queue 或同等机制，保证 `route_judge` 永远高于 `ack_writer`
+26. child 失败后的下一步由 orchestration/recovery 判，不由 child 或主 agent 自己决定
+27. recovery 默认先区分：
    - `infra_failure`
    - `context_insufficient`
    - `model_capability_insufficient`
@@ -440,7 +450,20 @@ tools/
    - `override_recommendation`
    - `confidence_delta`
 15. remote judge 在 v1 默认只用于 escalation/replay/offline，不承担常规 live latency 热路径
-16. judge input context packet 分为 4 层：
+16. `ack_writer` 输入默认不复用完整 judge packet，而是使用更小的 `ack writer packet`，至少包含：
+   - `current_turn`
+   - `route`
+   - `reply_mode`
+   - `delegate_role`
+   - `scope`
+   - `status_phase`
+   - `reason_codes`
+17. `ack_writer` 输出 schema 至少包含：
+   - `ack_text`
+   - `tone`
+   - `suppression_hint`
+18. `ack_writer` 不允许输出 route / role / complexity override
+19. judge input context packet 分为 4 层：
    - core turn layer
    - continuation state layer
    - binding/control layer
@@ -525,10 +548,12 @@ tools/
 5. soft-ack / stage-nudge template set
 6. main-first-token suppression hook
 7. cooldown / burst-coalescing / edit-in-place policy
-8. fixed ACK template registry with channel-aware renderers
+8. fallback ACK template registry with channel-aware renderers
 9. agent-first quick-ack `request envelope + prompt policy injection seam` + runtime fallback
 10. pre-route soft-ack template and user-input-active suppress logic
 11. ack idempotency key builder + duplicate-send guard
+12. optional low-priority `ack_writer` lane with delayed trigger / cancellation / suppression
+13. shared-model priority queue between `local_judge` and `ack_writer`
 
 验收标准：
 
@@ -538,10 +563,11 @@ tools/
 4. double short reply rate 可观测且接近 0
 5. ACK 不依赖昂贵模型
 6. 连续输入场景下不会条条都机械 ACK
-7. ACK 采用固定模板池，不以自由生成文案为前提
+7. 首个可见 ACK 采用 runtime fallback，不以自由生成文案为前提；若启用 `ack_writer`，它只作为延迟增强而非替代
 8. 主模型能抢首响时优先让主模型自己回；否则 runtime 能稳定接管
 9. judge/route 慢时也不会让用户长时间静默
 10. 多个 hook/middleware 重复触发同一 ACK 意图时，最终只会有一次真正发送
+11. 若启用 `ack_writer`，它也不会阻塞首响，也不会与 `local_judge` 争抢高优先级热路径
 
 依赖：WS0、WS1、WS2
 
@@ -768,6 +794,7 @@ WS6 还应显式补上这些交付：
 3. resident runner 缺席视为默认正常态
 4. 默认执行心智是 native task/flow + on-demand worker
 5. ACK 默认由 runtime controller 负责；主模型能抢首响时优先让主模型自己回
+6. 如启用 `ack_writer`，默认与 `local_judge` 共用本地模型服务，但作为低优先级异步 lane 运行
 
 这阶段对 legacy 的要求：
 
