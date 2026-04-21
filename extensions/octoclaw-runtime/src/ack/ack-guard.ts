@@ -34,6 +34,11 @@ import {
   DELEGATED_ROUTE_NAMES,
   isDelegatedRoute as isDelegatedRouteName,
 } from "../resolve/route-helpers.js";
+import {
+  parseSessionRoute as canonicalParseSessionRoute,
+  resolveAckDeliverySessionKey as canonicalResolveAckDeliverySessionKey,
+} from "../resolve/session.js";
+import type { AckGateState } from "./ack-burst.js";
 
 const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
 
@@ -49,24 +54,8 @@ export const STALE_QUEUED_THRESHOLD_MIN = 90;
 export const STUCK_THRESHOLD_MIN = 15;
 
 const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect", "probe", "scan"]);
-const IM_SESSION_ORIGINS = new Set([
-  "slack",
-  "discord",
-  "telegram",
-  "whatsapp",
-  "signal",
-  "msteams",
-  "googlechat",
-  "wechat",
-  "webchat",
-  "feishu",
-]);
-const SESSION_NAMESPACE_KINDS = new Set(["default"]);
-const USER_SESSION_KINDS = new Set(["dm", "direct", "user"]);
-const CHANNEL_SESSION_KINDS = new Set(["channel", "group", "room", "conversation", "space", "chat"]);
-const THREAD_SESSION_KINDS = new Set(["thread", "topic"]);
-const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.firstTierMs * Math.pow(2, DEFAULT_ACK_TIMING_CONFIG.tierCount) + 5_000;
-const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.firstTierMs * Math.pow(2, DEFAULT_ACK_TIMING_CONFIG.tierCount) + 5_000;
+const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
+const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 
 type UnknownRecord = Record<string, unknown>;
 type AckOwner = "" | "pre_dispatch" | "latency_ack" | "timer_ack";
@@ -95,13 +84,6 @@ export interface AckTrackingState extends UnknownRecord {
 export interface AckTarget {
   target: string;
   threadId: string;
-}
-
-interface ParsedSessionRoute {
-  origin: string;
-  target: string;
-  threadId: string;
-  looksLikeImSession: boolean;
 }
 
 interface AckSendResult {
@@ -173,59 +155,6 @@ function asNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function stripAgentSessionPrefix(raw: string): string {
-  const value = asString(raw);
-  const parts = value.split(":");
-  if (parts.length >= 3 && parts[0] === "agent") {
-    return parts.slice(2).join(":");
-  }
-  return value;
-}
-
-function parseSessionRoute(raw: string): ParsedSessionRoute {
-  const stripped = stripAgentSessionPrefix(raw);
-  const parts = stripped.split(":").filter(Boolean);
-  const normalizedParts = parts.length >= 2 && SESSION_NAMESPACE_KINDS.has(asString(parts[1]).toLowerCase())
-    ? [parts[0], ...parts.slice(2)]
-    : parts;
-  const origin = asString(normalizedParts[0]).toLowerCase();
-
-  // Slack user/channel IDs are case-sensitive (uppercase). Preserve original case
-  // for Slack targets since OpenClaw normalizes session keys to lowercase.
-  const slackOrigin = origin === "slack";
-
-  let target = "";
-  let threadId = "";
-
-  if (normalizedParts.length >= 3 && USER_SESSION_KINDS.has(asString(normalizedParts[1]).toLowerCase())) {
-    target = slackOrigin ? asString(normalizedParts[2]).toUpperCase() : asString(normalizedParts[2]);
-    if (normalizedParts.length >= 5 && THREAD_SESSION_KINDS.has(asString(normalizedParts[3]).toLowerCase())) {
-      threadId = asString(normalizedParts[4]);
-    }
-  } else if (normalizedParts.length >= 3 && CHANNEL_SESSION_KINDS.has(asString(normalizedParts[1]).toLowerCase())) {
-    target = `${asString(normalizedParts[1]).toLowerCase()}:${asString(normalizedParts[2])}`;
-    if (normalizedParts.length >= 5 && THREAD_SESSION_KINDS.has(asString(normalizedParts[3]).toLowerCase())) {
-      threadId = asString(normalizedParts[4]);
-    }
-  } else if (normalizedParts.length >= 2 && IM_SESSION_ORIGINS.has(origin)) {
-    const targetKind = asString(normalizedParts[1]).toLowerCase();
-    const targetId = asString(normalizedParts[2]);
-    if (targetKind && targetId) {
-      target = `${USER_SESSION_KINDS.has(targetKind) ? "user" : targetKind}:${targetId}`;
-    }
-    if (normalizedParts.length >= 4 && THREAD_SESSION_KINDS.has(asString(normalizedParts[2]).toLowerCase())) {
-      threadId = asString(normalizedParts[3]);
-    }
-  }
-
-  return {
-    origin,
-    target,
-    threadId,
-    looksLikeImSession: Boolean(origin && IM_SESSION_ORIGINS.has(origin) && target),
-  };
-}
-
 function isDelegatedRoute(decision: UnknownRecord): boolean {
   const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
   const route = asString(routeDecision.route).toLowerCase();
@@ -243,22 +172,7 @@ function resolveAckDeliverySessionKey(
   state: UnknownRecord,
   ctx: AckContext,
 ): string {
-  const candidates = [
-    metadata.session_key,
-    state.canonicalSessionKey,
-    stateKey,
-    ctx.sessionKey,
-    ctx.sessionId,
-  ]
-    .map(asString)
-    .filter(Boolean);
-
-  for (const candidate of candidates) {
-    if (parseSessionRoute(candidate).looksLikeImSession) {
-      return candidate;
-    }
-  }
-  return "";
+  return canonicalResolveAckDeliverySessionKey(metadata, stateKey, isRecord(state) ? state : null, ctx);
 }
 
 function ackTargetResolutionState(result: AckSendResult): string {
@@ -358,7 +272,7 @@ function normalizeAckStage(value: string): AckStage {
   }
 }
 
-function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecord = {}): AckRoutePhase {
+export function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecord = {}): AckRoutePhase {
   const explicit = asString(options.routePhase || options.route_phase).toLowerCase();
   if (explicit === "delegate" || explicit === "observe" || explicit === "reply" || explicit === "pre_route") {
     return explicit;
@@ -378,8 +292,10 @@ function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecord = {})
   return "pre_route";
 }
 
-function threadKeyFromSessionKey(sessionKey: string, stateKey = ""): string {
-  const parsed = parseSessionRoute(sessionKey);
+export function threadKeyFromSessionKey(sessionKey: string, stateKey = ""): string {
+  const parsed = canonicalParseSessionRoute(sessionKey);
+  if (parsed.threadKey) return parsed.threadKey;
+  if (parsed.bindingKey) return `${parsed.bindingKey}:${parsed.threadId || "root"}`;
   return asString(parsed.threadId || parsed.target || stateKey);
 }
 
@@ -444,13 +360,26 @@ function buildSuppressContext(state: UnknownRecord, ctx: AckContext, routePhase:
   };
 }
 
+function buildAckGateState(state: UnknownRecord, _ctx: AckContext): AckGateState {
+  return {
+    tool_active: asBoolean(state.tool_active),
+    delegated_running: asBoolean(state.delegated_running),
+    blocked: asBoolean(state.blocked) || asString(state.native_state) === "blocked",
+    final_response_streaming: asBoolean(state.final_response_streaming) || asBoolean(state.mainModelFirstTokenSeen) || asBoolean(state.mainModelStartedOutput),
+    delivery_pending: asBoolean(state.delivery_pending),
+    delivered: asBoolean(state.delivered),
+    native_state: asString(state.native_state),
+    formal_reply_visible: asBoolean(state.formal_reply_visible),
+  };
+}
+
 async function sendAckDirectDetailed(
   sessionKey: string,
   message: string,
   cwd?: string,
   options: UnknownRecord = {},
 ): Promise<AckSendResult> {
-  const parsed = parseSessionRoute(sessionKey);
+  const parsed = canonicalParseSessionRoute(sessionKey);
   const resolved = resolveAckTargetFromSessionKey(sessionKey);
   if (!parsed.origin || !resolved.target) {
     return {
@@ -643,6 +572,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     params.ackStage,
     routePhase,
     buildSuppressContext(effectiveState, effectiveCtx, routePhase),
+    buildAckGateState(effectiveState, effectiveCtx),
   );
   if (suppress.suppressed) {
     ackDebug(`attemptAckSend: suppressed reason=${suppress.reason} threadKey=${threadKey} stage=${params.ackStage}`);
@@ -811,7 +741,7 @@ export function shouldSendLatencyAck(
 }
 
 export function resolveAckTargetFromSessionKey(sessionKey: string): AckTarget {
-  const parsed = parseSessionRoute(sessionKey);
+  const parsed = canonicalParseSessionRoute(sessionKey);
   return {
     target: parsed.target,
     threadId: parsed.threadId,
