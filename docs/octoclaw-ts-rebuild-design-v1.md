@@ -4237,6 +4237,17 @@ judge 和 main agent 不能各用一套“自己理解的规则”。
 4. 不需要新的工作区访问、环境探测、命令执行、文件写入
 5. 即使需要一点状态，也能靠现成 truth/summary/artifact refs 快速组织回复
 
+这里再补一条很重要的**反偏置口径**：
+
+1. “这是个问句”本身**不是**判成 `reply` 的理由
+2. 只要回答它需要新的真实探测、最新状态读取、环境查询、版本比对、远端事实拉取、工作区检查，就不应因为“看起来像问答”而直接落成 `reply.answer`
+3. 如果缺的是 scope/target/slot，应优先 `reply_mode = clarify`
+4. 如果缺的是执行动作本身，应优先 `delegate`
+
+一句话：
+
+> **问句不等于 `reply`；只有“主链现在就能安全作答”的问句才是 `reply.answer`。**
+
 ##### `delegate`
 
 满足下面条件时，应倾向 `delegate`：
@@ -4245,6 +4256,18 @@ judge 和 main agent 不能各用一套“自己理解的规则”。
 2. 需要工作区访问、环境探测、命令执行、文件读写、日志读取、验证或较长处理过程
 3. 任务值得从主 agent 上下文中剥离，用独立 child worker 完成
 4. 任务适合用不同 role / model profile 来做成本和质量分层
+
+这里建议再把最容易被误判成 `reply` 的情况写死成 delegation-positive signals：
+
+1. 请求要求**最新**、**当前**、**本机**、**远端**、**release**、**版本对比**、**状态核实**这类 fresh state lookup
+2. 请求需要真实 probe，而不是基于已有 truth/summary 直接转述
+3. `tool_need_hint = required`
+4. `duration_hint = medium | long`
+5. 主线程如果硬答，只能靠猜或靠把执行塞进主链
+
+一句话：
+
+> **凡是需要“去查一下 / 去看一下 / 去核实一下真实状态”才能答的，默认就应更强烈地偏向 `delegate`。**
 
 ##### `coordination_mode_hint`
 
@@ -4275,6 +4298,12 @@ v1 默认口径：
 1. 当前信息不足，不能安全直接回答
 2. 当前也不适合直接启动 delegated execution
 3. 最合理下一步是让用户补 scope / target / slot
+4. `scope = unknown` 且不能安全 `both`
+5. 当前如果硬答，只能靠猜 scope 或猜 target
+
+也就是说：
+
+> **不确定时优先 `clarify`，而不是把模糊 case 硬压成 `reply.answer`。**
 
 #### 9.3.c.4 AGENTS.md 与 policy spec 的职责分工
 
@@ -4312,7 +4341,7 @@ version: v1
 route:
   labels:
     - reply
-    - delegate.single
+    - delegate
 
 reply_mode:
   labels:
@@ -4351,6 +4380,36 @@ duration_hint:
     - short
     - medium
     - long
+
+decision_rubric:
+  reply:
+    description: >
+      The main thread can safely answer now, or ask a clarification question now,
+      without creating a new execution work unit.
+    anti_bias_rules:
+      - question_form_alone_is_not_enough
+      - if fresh state lookup is required, do_not_default_to_reply_answer
+      - if scope is unknown, prefer clarify over reply_answer
+  delegate:
+    description: >
+      A new execution work unit should be created because the request requires
+      real lookup, probing, workspace access, tool use, verification, or longer processing.
+    strong_positive_signals:
+      - fresh_state_lookup
+      - local_or_remote_version_check
+      - environment_probe
+      - workspace_inspection
+      - command_execution
+      - tool_need_required
+      - duration_medium_or_long
+  clarify:
+    description: >
+      The system should ask a short clarification question instead of guessing.
+    strong_positive_signals:
+      - scope_unknown
+      - target_unknown
+      - critical_slot_missing
+      - conflicting_active_intent
 ```
 
 在实现层建议再正式拆成 3 个渲染视图：
