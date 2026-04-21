@@ -94,6 +94,8 @@ function renderLocalJudgeInstructions(): string {
     "- You CANNOT execute, run, or perform any task the user asked.",
     "- You CANNOT produce anything except the JSON routing decision below.",
     "- If the user asks to write code/run commands/analyze logs/check status → that PROVES route=delegate.",
+    "- confidence field is REQUIRED. Set 0.7 for routine decisions, 0.9 for obvious ones, 0.5 for uncertain ones.",
+    "- scope, tool_need_hint, duration_hint fields are REQUIRED. Never omit them.",
     "- Your ONLY job: classify the user's intent into route + metadata fields.",
     "- Any output that is not a JSON object with route/confidence/scope/... fields is INVALID.",
     "",

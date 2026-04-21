@@ -105,15 +105,15 @@ export const VALIDATOR_DEFAULT_RULES = [
 ] as const;
 
 export const JudgeOutputSchema = {
-  route: "reply | delegate",
+  route: "reply | delegate (REQUIRED)",
+  confidence: "0.0-1.0 float (REQUIRED, your certainty about this routing decision)",
   reply_mode: "answer | clarify | null",
   delegate_role: "observer | default | code | research | review | null",
   coordination_mode_hint: "solo_worker | advisor_assisted | multi_agent_controlled | null",
   complexity: "simple | normal | deep | null",
-  scope: "local | remote | both | unknown",
-  tool_need_hint: "none | maybe | required",
-  duration_hint: "short | medium | long",
-  confidence: 0.0,
+  scope: "local | remote | both | unknown (REQUIRED)",
+  tool_need_hint: "none | maybe | required (REQUIRED)",
+  duration_hint: "short | medium | long (REQUIRED)",
   reason_codes: [] as string[],
 } as const;
 
