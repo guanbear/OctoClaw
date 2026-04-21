@@ -6,6 +6,12 @@
 
 用途：这份文档从总设计稿里拆出 judge、ACK、policy spec 的正式细化口径，方便实现与评审，不再要求执行者从 `design-v1` 的大段正文里自己拼规则。
 
+关联小 spec：
+
+1. [octoclaw-ack-state-source-matrix-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ack-state-source-matrix-2026-04-21.md)
+2. [octoclaw-ack-decision-truth-table-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ack-decision-truth-table-2026-04-21.md)
+3. [octoclaw-ack-thread-delivery-spec-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ack-thread-delivery-spec-2026-04-21.md)
+
 ## 1. 目标
 
 这份 spec 只回答 5 件事：

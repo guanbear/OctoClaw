@@ -26,6 +26,9 @@
 1. 本文仍是总设计稿
 2. judge / ACK / policy 细化口径已拆到：
    - [octoclaw-judge-ack-policy-spec-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-judge-ack-policy-spec-2026-04-21.md)
+   - [octoclaw-ack-state-source-matrix-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ack-state-source-matrix-2026-04-21.md)
+   - [octoclaw-ack-decision-truth-table-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ack-decision-truth-table-2026-04-21.md)
+   - [octoclaw-ack-thread-delivery-spec-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ack-thread-delivery-spec-2026-04-21.md)
 3. 给其他 AI / 协作者直接开工的实现交接稿已拆到：
    - [octoclaw-judge-ack-implementation-handoff-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-judge-ack-implementation-handoff-2026-04-21.md)
 

@@ -1,0 +1,109 @@
+# OctoClaw ACK Decision Truth Table
+
+日期：2026-04-21
+
+状态：v1 working spec
+
+用途：把 ACK Phase 1 的决策从“原则描述”进一步收成一张实现可直接对照的真值表，避免实现时各自理解。
+
+## 1. 目标
+
+这份表只回答一件事：
+
+> 到了 ACK 检查点之后，系统到底该 `send_ack0`、`enqueue_ack_writer`、`suppress_ack` 还是 `cancel_ack_writer`。
+
+timer 只是“到点检查”的时钟，不是“到点就直接发 ACK”的命令。
+
+## 2. 输入字段
+
+最小输入：
+
+1. `silence_elapsed`
+2. `ack_already_sent`
+3. `tool_active`
+4. `delegated_running`
+5. `blocked`
+6. `final_response_streaming`
+7. `delivery_pending`
+8. `delivered`
+9. `formal_reply_visible`
+10. `delegate_update_visible`
+
+## 3. 输出动作
+
+1. `send_ack0`
+2. `enqueue_ack_writer`
+3. `suppress_ack`
+4. `cancel_ack_writer`
+5. `no_action`
+
+## 4. 总优先级
+
+ACK 决策优先级固定为：
+
+1. `delivered`
+2. `final_response_streaming`
+3. `delivery_pending`
+4. `formal_reply_visible / delegate_update_visible`
+5. `tool_active / delegated_running / blocked`
+6. `silence_elapsed`
+
+也就是说，只要进入“最终答复已开始/待投递/已送达”这组状态，ACK 一律不该继续发。
+
+## 5. 真值表
+
+| 条件 | 动作 | 说明 |
+| --- | --- | --- |
+| `delivered == true` | `suppress_ack + cancel_ack_writer` | 已经交付，ACK 完全结束 |
+| `final_response_streaming == true` | `suppress_ack + cancel_ack_writer` | 最终答复已开始流出，不能再插 ACK |
+| `delivery_pending == true` | `suppress_ack + cancel_ack_writer` | 结果已在发送路径上，不再补 ACK |
+| `formal_reply_visible == true` | `suppress_ack + cancel_ack_writer` | 用户已看到正式主回复 |
+| `delegate_update_visible == true` 且用户已有可见进展 | `suppress_ack` | 已有可见 delegate 进展，无需补 ACK |
+| `silence_elapsed == false` | `no_action` | 还没到检查窗口 |
+| `silence_elapsed == true` 且 `tool_active || delegated_running || blocked` 且 `ack_already_sent == false` | `send_ack0` | 满足 Phase 1 ACK eligible |
+| `ack0 已发出` 且仍静默 且 `tool_active || delegated_running || blocked` | `enqueue_ack_writer` | 允许低优先级补更自然 nudge |
+| `ack_writer 已排队` 且出现 `final_response_streaming || delivery_pending || delivered || formal_reply_visible` | `cancel_ack_writer` | 一旦正式输出出现，立即取消 |
+| `silence_elapsed == true` 但没有 `tool_active / delegated_running / blocked` | `suppress_ack` | 不再按纯超时盲发 ACK |
+
+## 6. 推荐伪代码
+
+```ts
+if (delivered || final_response_streaming || delivery_pending) {
+  return suppress_and_cancel;
+}
+
+if (formal_reply_visible || delegate_update_visible) {
+  return suppress_and_cancel;
+}
+
+if (!silence_elapsed) {
+  return no_action;
+}
+
+if (!(tool_active || delegated_running || blocked)) {
+  return suppress;
+}
+
+if (!ack_already_sent) {
+  return send_ack0;
+}
+
+return enqueue_ack_writer;
+```
+
+## 7. 实现注意事项
+
+1. `delegate_update_visible` 只指用户已看到的正式进展，不包括内部 checkpoint
+2. `formal_reply_visible` 必须由真正的用户可见主回复驱动，不包括 reaction 或软 ACK
+3. `enqueue_ack_writer` 必须是低优先级、可取消
+4. `send_ack0` 不应再次触发 route judge
+
+## 8. Phase 1 不解决的事
+
+1. 不尝试预测“再过 300ms 就答完”
+2. 不尝试用模型判断“现在像不像在总结最后答案”
+3. 不把 ACK writer 当作第二个 route authority
+
+## 9. 一句话总结
+
+> ACK Phase 1 的真值表本质上是：先看“是不是已经进入最终输出阶段”，再看“是不是还真的在执行”，最后才看 silence timer。

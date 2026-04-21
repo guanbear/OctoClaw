@@ -14,6 +14,9 @@
 4. `octoclaw-im-display-contract.md`
 5. `octoclaw-judge-ack-policy-spec-2026-04-21.md`
 6. `octoclaw-judge-ack-implementation-handoff-2026-04-21.md`
+7. `octoclaw-ack-state-source-matrix-2026-04-21.md`
+8. `octoclaw-ack-decision-truth-table-2026-04-21.md`
+9. `octoclaw-ack-thread-delivery-spec-2026-04-21.md`
 
 ---
 
