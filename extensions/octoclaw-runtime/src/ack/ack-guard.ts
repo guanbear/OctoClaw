@@ -503,6 +503,46 @@ function parseUpdatedSortValue(value: unknown): number {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
+async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, newStatus: string, sink: AckLogger): Promise<boolean> {
+  const sessionKey = asString((task as UnknownRecord).session_key);
+  const flowId = asString((task as UnknownRecord).flow_id);
+  if (!sessionKey || !flowId) {
+    sink.debug?.(`octoclaw watchdog: skip transition task=${taskId} missing session_key or flow_id`);
+    return false;
+  }
+  try {
+    const { invokeNativeHelper } = await import("../adapter/native-helper.js");
+    const result = invokeNativeHelper({ action: "read-task", args: { session_key: sessionKey, flow_id: flowId, task_id: taskId } });
+    if (!result?.found) {
+      sink.debug?.(`octoclaw watchdog: skip transition task=${taskId} not found in runtime`);
+      return false;
+    }
+    const taskRead = result as unknown as { task?: { state?: string; status?: string } };
+    const currentState = asString(taskRead.task?.state || taskRead.task?.status);
+    if (currentState === "completed" || currentState === "failed" || currentState === "timed_out") {
+      return false;
+    }
+    const failResult = invokeNativeHelper({
+      action: "fail-flow" as const,
+      args: {
+        session_key: sessionKey,
+        flow_id: flowId,
+        blocked_task_id: taskId,
+        blocked_summary: `watchdog timeout: task ${taskId} stuck in ${currentState} after threshold`,
+      },
+    }) as unknown as { ok?: boolean; status?: string };
+    if (failResult.ok) {
+      sink.debug?.(`octoclaw watchdog: transitioned task=${taskId} to ${newStatus}`);
+      return true;
+    }
+    sink.debug?.(`octoclaw watchdog: failed to transition task=${taskId}: ${asString(failResult.status)}`);
+    return false;
+  } catch (err) {
+    sink.debug?.(`octoclaw watchdog: error transitioning task=${taskId}: ${String(err)}`);
+    return false;
+  }
+}
+
 function normalizeAckComparableText(value: unknown): string {
   return asString(value)
     .toLowerCase()
@@ -1110,6 +1150,7 @@ export async function watchdogTick(logger: unknown): Promise<void> {
 
     let staleCount = 0;
     let stuckCount = 0;
+    let transitionedCount = 0;
     for (const task of tasks) {
       const taskId = asString(task.id);
       const status = asString(task.status).toLowerCase();
@@ -1121,16 +1162,20 @@ export async function watchdogTick(logger: unknown): Promise<void> {
       if (status === "queued" && ageMin > STALE_QUEUED_THRESHOLD_MIN) {
         staleCount += 1;
         sink.debug?.(`octoclaw watchdog: task_timeout task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
+        const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
+        if (transitioned) transitionedCount += 1;
         continue;
       }
       if ((status === "running" || status === "dispatched") && ageMin > STUCK_THRESHOLD_MIN) {
         stuckCount += 1;
         sink.debug?.(`octoclaw watchdog: runner_stuck task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
+        const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
+        if (transitioned) transitionedCount += 1;
       }
     }
 
-    if (staleCount > 0 || stuckCount > 0) {
-      sink.debug?.(`octoclaw watchdog: stale_queued=${staleCount} stuck=${stuckCount}`);
+    if (staleCount > 0 || stuckCount > 0 || transitionedCount > 0) {
+      sink.debug?.(`octoclaw watchdog: stale_queued=${staleCount} stuck=${stuckCount} transitioned=${transitionedCount}`);
     }
   } catch (error) {
     sink.warn?.(`octoclaw watchdog tick failed: ${String(error)}`);

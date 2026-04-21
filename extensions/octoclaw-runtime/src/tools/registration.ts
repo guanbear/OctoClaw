@@ -36,8 +36,56 @@ import {
 import { policyState } from "../state/policy-state.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import { normalizeLiveRoute } from "../resolve/route-helpers.js";
+import fsSync from "node:fs";
+
+interface FsSyncLike {
+  readFileSync(pathname: string, encoding: string): string;
+  writeFileSync(pathname: string, data: string, encoding: string): void;
+}
+
+const fsSyncLike = fsSync as unknown as FsSyncLike;
 
 type UnknownRecord = Record<string, unknown>;
+type NullRecord = UnknownRecord | null;
+
+function findRuntimeTaskInPolicyState(taskId: string): { sessionKey: string; flowId: string } | null {
+  for (const { state } of policyState.entries()) {
+    const decision = asRecord(state?.decision);
+    const runtimeTruth = asRecord(decision.runtime_truth);
+    const binding = asRecord(runtimeTruth.binding);
+    const delegateTask = asRecord(runtimeTruth.delegateTask);
+    const candidateTaskId = asString(binding.taskId || delegateTask.delegateTaskId);
+    const candidateFlowId = asString(binding.flowId);
+    const sessionKey = asString(runtimeTruth.sessionKey || asRecord(decision.request).session_key);
+    if (candidateTaskId === taskId && candidateFlowId && sessionKey) {
+      return { sessionKey, flowId: candidateFlowId };
+    }
+  }
+  return null;
+}
+
+async function upsertTaskStateCache(record: RuntimeTaskStateRecord): Promise<void> {
+  try {
+    const taskPath = resolveTaskStatePath();
+    let existing: { tasks?: unknown[] } = { tasks: [] };
+    try {
+      const content = fsSyncLike.readFileSync(taskPath, "utf-8");
+      existing = JSON.parse(content) as { tasks?: unknown[] };
+    } catch { /* file doesn't exist yet */ }
+    const tasks = Array.isArray(existing.tasks) ? existing.tasks as RuntimeTaskStateRecord[] : [];
+    const idx = tasks.findIndex((t) => asString(t.id) === asString(record.id));
+    const entry: RuntimeTaskStateRecord = {
+      ...record,
+      updated_at: record.updated_at || new Date().toISOString(),
+    };
+    if (idx >= 0) {
+      tasks[idx] = entry;
+    } else {
+      tasks.unshift(entry);
+    }
+    fsSyncLike.writeFileSync(taskPath, JSON.stringify({ tasks }, null, 2), "utf-8");
+  } catch { /* best effort cache write */ }
+}
 
 export interface ToolRegistration {
   name: string;
@@ -219,7 +267,42 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
   const { action, taskId } = parseTaskAction(rawText);
   const normalizedAction = action || "details";
   const tasks = sortTaskStateRecords(await readRuntimeTaskState());
-  const record = (taskId ? tasks.find((entry) => asString(entry.id) === taskId) : tasks[0]) || null;
+  let record = (taskId ? tasks.find((entry) => asString(entry.id) === taskId) : tasks[0]) || null;
+  let liveRead: NullRecord = null;
+  let liveSessionKey = "";
+  let liveFlowId = "";
+
+  if (!record && taskId) {
+    try {
+      const plugin = createOctoClawRuntimePlugin();
+      const adapter = plugin.createAdapter();
+      const runtimeRecord = findRuntimeTaskInPolicyState(taskId);
+      if (runtimeRecord) {
+        liveSessionKey = asString(runtimeRecord.sessionKey);
+        liveFlowId = asString(runtimeRecord.flowId);
+        if (liveSessionKey && liveFlowId) {
+          const binding = adapter.bindSession(liveSessionKey);
+          const taskRead = binding.readTask(liveFlowId, taskId);
+          if (taskRead?.found) {
+            liveRead = taskRead;
+            record = {
+              id: taskId,
+              flow_id: liveFlowId,
+              session_key: liveSessionKey,
+              route: "delegate",
+              status: taskRead.substrateState || "unknown",
+              summary: asString(taskRead.progressSummary),
+              role: "",
+              worker_pool: "",
+            } as RuntimeTaskStateRecord;
+          }
+        }
+      }
+    } catch {
+      // runtime query failed — fall through to not-found
+    }
+  }
+
   if (!record) {
     const payload = {
       mode: "native_runtime",
@@ -235,17 +318,19 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
     };
   }
   const plugin = createOctoClawRuntimePlugin();
-  const liveRead = asString(record.session_key) && asString(record.flow_id)
-    ? plugin.createAdapter().bindSession(asString(record.session_key)).readTask(asString(record.flow_id), asString(record.id))
-    : null;
+  if (!liveRead) {
+    liveRead = asString(record.session_key) && asString(record.flow_id)
+      ? plugin.createAdapter().bindSession(asString(record.session_key)).readTask(asString(record.flow_id), asString(record.id))
+      : null;
+  }
   const replayEvents = await readRuntimeReplayTimeline(asString(record.id));
   const artifacts = asRecord(record.artifacts);
   const payload: UnknownRecord = {
     mode: "native_runtime",
     action: normalizedAction,
     taskId: asString(record.id),
-    flowId: asString(record.flow_id),
-    sessionKey: asString(record.session_key),
+    flowId: asString(record.flow_id || liveFlowId),
+    sessionKey: asString(record.session_key || liveSessionKey),
     route: normalizeLiveRoute(record.route, "delegate"),
     role: asString(record.role, asString(asRecord(artifacts.runtime_truth).role)),
     status: asString(liveRead?.substrateState || record.status),
@@ -289,14 +374,41 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
 async function buildNativeStatusOutput(format: string): Promise<string> {
   const normalizedFormat = format || "anchors";
   const tasks = sortTaskStateRecords(await readRuntimeTaskState());
+  const taskIdsFromCache = new Set(tasks.map((entry) => asString(entry.id)));
+  const runtimeTasks: { taskId: string; status: string; route: string; summary: string; updatedAt: string }[] = [];
+  for (const { state } of policyState.entries()) {
+    const decision = asRecord(state?.decision);
+    const runtimeTruth = asRecord(decision.runtime_truth);
+    const binding = asRecord(runtimeTruth.binding);
+    const taskId = asString(binding.taskId);
+    if (taskId && !taskIdsFromCache.has(taskId)) {
+      runtimeTasks.push({
+        taskId,
+        status: asString(binding.substrateState || binding.status || "unknown"),
+        route: "delegate",
+        summary: "",
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }
+  const allTasks = [
+    ...tasks.map((task) => ({
+      taskId: asString(task.id),
+      status: asString(task.status),
+      route: normalizeLiveRoute(task.route, "delegate"),
+      summary: asString(task.summary),
+      updatedAt: asString(task.updated_at),
+    })),
+    ...runtimeTasks,
+  ];
   const lines = [
     `OctoClaw native runtime status (${normalizedFormat})`,
-    `Active records: ${tasks.length}`,
+    `Active records: ${allTasks.length}`,
   ];
-  for (const task of tasks.slice(0, normalizedFormat === "anchors" ? 10 : 25)) {
-    lines.push(`- ${asString(task.id)} | ${asString(task.status)} | ${normalizeLiveRoute(task.route, "delegate")} | ${asString(task.summary)}`);
+  for (const task of allTasks.slice(0, normalizedFormat === "anchors" ? 10 : 25)) {
+    lines.push(`- ${task.taskId} | ${task.status} | ${task.route} | ${task.summary}`);
   }
-  if (tasks.length === 0) {
+  if (allTasks.length === 0) {
     lines.push("No runtime task state is currently available.");
   }
   return lines.join("\n");
@@ -823,6 +935,22 @@ export function getToolRegistrations(): ToolRegistration[] {
           delegated: delegatedStickyRoute(authoritativeDecision),
           updatedAt: Date.now(),
         }, stateKey);
+        const materialization = asRecord(payload.materialization);
+        if (asString(materialization.task_id)) {
+          await upsertTaskStateCache({
+            id: materialization.task_id,
+            flow_id: asString(materialization.flow_id),
+            session_key: replaySessionKey,
+            route: asString(payload.route),
+            status: asString(materialization.substrate_state || "running"),
+            summary: asString(payload.summary),
+            role: asString(asRecord(asRecord(authoritativeDecision.route_decision).task_class || {}).role),
+            worker_pool: asString(asRecord(authoritativeDecision.route_decision).worker_pool),
+            spawned_at: new Date().toISOString(),
+            started_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          } as RuntimeTaskStateRecord);
+        }
         return toolResponse(summary, compactDispatchDetails(payload));
       },
     },

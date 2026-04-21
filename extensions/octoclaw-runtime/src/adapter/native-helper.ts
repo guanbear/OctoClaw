@@ -1,6 +1,6 @@
 import { createTaskFlowBridge } from "./taskflow-bridge.js";
 
-export type NativeHelperAction = "create-managed-flow" | "run-task" | "cancel-flow" | "read-flow" | "read-task";
+export type NativeHelperAction = "create-managed-flow" | "run-task" | "cancel-flow" | "read-flow" | "read-task" | "fail-flow";
 
 export interface NativeHelperInvokeArgs {
   action: NativeHelperAction;
@@ -30,6 +30,18 @@ export interface NativeReadFlowHelperInvokeArgs {
 export interface NativeReadTaskHelperInvokeArgs {
   action: "read-task";
   args: Record<string, string>;
+}
+
+export interface NativeFailFlowHelperInvokeArgs {
+  action: "fail-flow";
+  args: Record<string, string>;
+}
+
+export interface NativeFailFlowHelperResult {
+  ok: boolean;
+  status: string;
+  flow_id: string;
+  revision: number;
 }
 
 export interface NativeManagedFlowHelperResult {
@@ -99,6 +111,7 @@ export interface NativeHelperInvoker {
   (input: NativeCancelFlowHelperInvokeArgs): NativeCancelFlowHelperResult;
   (input: NativeReadFlowHelperInvokeArgs): NativeReadFlowHelperResult;
   (input: NativeReadTaskHelperInvokeArgs): NativeReadTaskHelperResult;
+  (input: NativeFailFlowHelperInvokeArgs): NativeFailFlowHelperResult;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -223,12 +236,22 @@ function normalizeReadTaskResult(payload: any): NativeReadTaskHelperResult {
   };
 }
 
+function normalizeFailFlowResult(payload: any): NativeFailFlowHelperResult {
+  return {
+    ok: payload?.ok === true,
+    status: ensureString(payload?.status || "not_applied", "status"),
+    flow_id: ensureString(payload?.flow_id, "flow_id"),
+    revision: payload?.revision != null ? ensureNumber(payload.revision, "revision") : 0,
+  };
+}
+
 export function invokeNativeHelper(input: NativeManagedFlowHelperInvokeArgs): NativeManagedFlowHelperResult;
 export function invokeNativeHelper(input: NativeRunTaskHelperInvokeArgs): NativeRunTaskHelperResult;
 export function invokeNativeHelper(input: NativeCancelFlowHelperInvokeArgs): NativeCancelFlowHelperResult;
 export function invokeNativeHelper(input: NativeReadFlowHelperInvokeArgs): NativeReadFlowHelperResult;
 export function invokeNativeHelper(input: NativeReadTaskHelperInvokeArgs): NativeReadTaskHelperResult;
-export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): NativeManagedFlowHelperResult | NativeRunTaskHelperResult | NativeCancelFlowHelperResult | NativeReadFlowHelperResult | NativeReadTaskHelperResult {
+export function invokeNativeHelper(input: NativeFailFlowHelperInvokeArgs): NativeFailFlowHelperResult;
+export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): NativeManagedFlowHelperResult | NativeRunTaskHelperResult | NativeCancelFlowHelperResult | NativeReadFlowHelperResult | NativeReadTaskHelperResult | NativeFailFlowHelperResult {
   let payload: any;
   try {
     if (action === "create-managed-flow") {
@@ -266,6 +289,15 @@ export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): Na
         taskId: args.task_id || "",
         openclawBin: args.openclaw_bin,
       });
+    } else if (action === "fail-flow") {
+      payload = getCachedBridge().failFlow({
+        sessionKey: args.session_key || "",
+        flowId: args.flow_id || "",
+        expectedRevision: args.expected_revision ? Number(args.expected_revision) : 0,
+        stateJson: args.state_json,
+        blockedTaskId: args.blocked_task_id || "",
+        blockedSummary: args.blocked_summary || "",
+      });
     } else {
       payload = getCachedBridge().runTask({
         sessionKey: args.session_key || "",
@@ -295,6 +327,9 @@ export function invokeNativeHelper({ action, args }: NativeHelperInvokeArgs): Na
   }
   if (action === "read-task") {
     return normalizeReadTaskResult(payload);
+  }
+  if (action === "fail-flow") {
+    return normalizeFailFlowResult(payload);
   }
   return normalizeRunTaskResult(payload);
 }

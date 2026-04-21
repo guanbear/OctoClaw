@@ -327,13 +327,17 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
       runTask: (workflow) => {
         const identity = workflowIdentity(workflow);
         const flowId = managedFlowId || identity.flowId;
+        const goal = buildGoal(workflow);
+        const initialStatus = (workflow.workflowOrchestration === "completed" || workflow.workflowOrchestration === "failed")
+          ? workflow.workflowOrchestration
+          : "running";
         const helperResult = helperInvoker({
           action: "run-task",
           args: {
             session_key: sessionKey,
             flow_id: flowId,
-            task: buildGoal(workflow),
-            status: "queued",
+            task: goal,
+            status: initialStatus,
             notify_policy: "silent",
             progress_summary: String(workflow.workflowOrchestration || "").trim(),
           },
