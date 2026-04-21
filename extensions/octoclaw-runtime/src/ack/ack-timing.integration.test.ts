@@ -4,7 +4,6 @@ import {
   cancelAckTimers,
   cancelAllAckTimers,
   ackTimerStateForKey,
-  shouldScheduleTier,
   DEFAULT_TIER_DELAYS_MS,
   type AckTimerResult,
 } from "./ack-timing.js";

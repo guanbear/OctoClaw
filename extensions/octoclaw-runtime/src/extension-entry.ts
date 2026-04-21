@@ -19,6 +19,7 @@ import {
   notifyUserMessage,
   sendReactionAck,
   startAckGuard,
+  updateAckTrackingState,
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
@@ -384,15 +385,15 @@ export const plugin = {
         }
       }
 
-      const judgeAckEnabled = Boolean(judgeFastRaw.judgeAckEnabled);
       const ackReactionEmoji = stringValue(judgeFastRaw.ackReactionEmoji);
 
       if (ackReactionEmoji && preSessionKey && inboundMessageTs) {
         sendReactionAck(preSessionKey, inboundMessageTs, ackReactionEmoji).catch(() => {});
       }
 
-      // When judgeAckEnabled=false: start latency timer BEFORE judge (4s from message arrival, fast ACK).
-      // When judgeAckEnabled=true: start latency timer AFTER judge (so ack_text is available).
+      // When judgeAckEnabled=false: start latency timer BEFORE judge (fast ACK).
+      // When judgeAckEnabled=true: ALSO start latency timer BEFORE judge so ACK0 fires at 5s from message arrival.
+      // Judge ack_text can override the message if it returns before deadline.
       const pendingDecision: { value: UnknownRecord | null } = { value: null };
 
       const startLatencyAckTimer = (timerStateKey: string) => {
@@ -413,7 +414,7 @@ export const plugin = {
         pendingLatencyAckTimers.set(timerStateKey, timer);
       };
 
-      if (!judgeAckEnabled && !ackReactionEmoji) {
+      if (!ackReactionEmoji) {
         startLatencyAckTimer(preStateKey);
       }
 
@@ -459,10 +460,6 @@ export const plugin = {
       const metadata = buildPolicyMetadata(ctx, { stateKey });
       if (inboundMessageTs && !stringValue(metadata.message_id)) {
         metadata.message_id = inboundMessageTs;
-      }
-
-      if (judgeAckEnabled && !ackReactionEmoji) {
-        startLatencyAckTimer(stateKey);
       }
 
       const prependSystem: string[] = [];
@@ -570,6 +567,7 @@ export const plugin = {
         && toolName
         && !toolName.startsWith("octoclaw_")
       ) {
+        updateAckTrackingState(stateKey, { tool_active: true });
         const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, toolName);
         updatePolicyState(stateKey, (current) => ({
           ...current,
@@ -727,6 +725,7 @@ export const plugin = {
           delegated: true,
           delegationTool: toolName,
         }));
+        updateAckTrackingState(stateKey, { delegated_running: true, tool_active: false });
         return;
       }
       if (!workflowRule.block) {
@@ -769,6 +768,10 @@ export const plugin = {
         pendingLatencyAckTimers.delete(stateKey);
       }
       cancelAckGuardForState(stateKey);
+      updateAckTrackingState(stateKey, {
+        tool_active: false,
+        final_response_streaming: false,
+      });
       await recordPolicyReplay(
         "agent_end",
         {
@@ -823,8 +826,18 @@ export const plugin = {
         agentId: stringValue(ctx.agentId),
       });
       if (!state) return;
+      updateAckTrackingState(stateKey, { final_response_streaming: true });
       const guarded = guardAssistantMessageForPolicyState(asRecord(event.message), asRecord(state));
       const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : asRecord(event.message);
+      const role = String(asRecord(event.message).role ?? "").trim();
+      const contentText = typeof asRecord(visibleMessage).content === "string"
+        ? asRecord(visibleMessage).content
+        : Array.isArray(asRecord(visibleMessage).content)
+          ? (asRecord(visibleMessage).content as unknown[]).map((c) => String(asRecord(c).text ?? "")).join("")
+          : String(asRecord(visibleMessage).content ?? "");
+      if (role === "assistant" && contentText) {
+        updateAckTrackingState(stateKey, { formal_reply_visible: true });
+      }
       void recordObservedDeliveryFromMessage(visibleMessage, asRecord(state), stateKey, pi.logger).catch((err) => {
         pi.logger?.warn?.(`octoclaw delivery observe failed: ${String(err)}`);
       });

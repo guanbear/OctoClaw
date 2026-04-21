@@ -806,7 +806,6 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
 
   const stateKey = asString(options.stateKey || normalizedSessionKey);
   const decision = isRecord(options.decision) ? options.decision : {};
-  const state = isRecord(options.state) ? options.state : {};
   const ctx = isRecord(options.ctx) ? options.ctx as AckContext : { cwd };
   const logger = isRecord(options.logger) ? options.logger as AckLogger : {};
   const routePhase = resolveRoutePhase(decision, options);
@@ -832,10 +831,11 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         return;
       }
       ackDebug(`tier${result.tier} fired stage=${result.stage} routePhase=${result.routePhase} sessionKey=${normalizedSessionKey} stateKey=${stateKey}`);
+      const liveTrackingState = ackState(stateKey);
       const ackStage = normalizeAckStage(result.stage);
       const threadKey = threadKeyFromSessionKey(normalizedSessionKey, stateKey);
       const templateInputs = buildTemplateInputs(
-        state,
+        liveTrackingState,
         ctx,
         result.routePhase,
         threadKey,
@@ -856,7 +856,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         ackStage,
         routePhase: result.routePhase,
         message,
-        state,
+        state: liveTrackingState,
         ctx: { ...ctx, cwd },
         logger,
         timeoutMs: 2_000,
@@ -1049,6 +1049,7 @@ export async function maybeSendLatencyAck(
     const message = judgeAckText && !shouldSuppressJudgeAckEcho(judgeAckText, metadata)
       ? judgeAckText
       : ackStageText(AckStage.ReplySoftAck);
+    const liveTrackingState = { ...state, ...ackState(stateKey) };
     const result = await attemptAckSend({
       sessionKey,
       stateKey,
@@ -1057,7 +1058,7 @@ export async function maybeSendLatencyAck(
       routePhase: "reply",
       message,
       metadata,
-      state,
+      state: liveTrackingState,
       ctx,
       logger,
       timeoutMs: Math.max(500, Number(latencyAck.channel_timeout_ms || 5000)),

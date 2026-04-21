@@ -13,6 +13,7 @@ import {
   normalizeLiveRoute,
 } from "../resolve/route-helpers.js";
 import { ackDeliveryState, ackTargetResolutionState } from "../resolve/session.js";
+import { updateAckTrackingState } from "../ack/ack-guard.js";
 import { policyState } from "../state/policy-state.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -497,6 +498,7 @@ export async function registerPendingDelivery(options: Record<string, unknown>):
       pendingDeliveryRunnerJobId: runnerJobId,
       deliveryObserved: false,
     }));
+    updateAckTrackingState(stateKey, { delivery_pending: true, delegated_running: false });
   }
 }
 
@@ -641,6 +643,7 @@ export async function recordObservedDeliveryFromMessage(
     deliveryObserved: true,
     deliveredAt: Date.now(),
   }));
+  updateAckTrackingState(stateKey, { delivery_pending: false, delivered: true });
 }
 
 export function assistantMessageRole(message: Record<string, unknown>): string {
