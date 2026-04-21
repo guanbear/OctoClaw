@@ -69,6 +69,76 @@ v1 只保留一个热路径 authority judge，再加一个可选本地文案增�
 4. 正式输出已出现
    - 立即取消 `ack_writer`
 
+### 3.4 ACK Phase 1：状态门控，而不是纯超时
+
+v1 不应继续把 ACK 理解成“到了某个时间点就发一句安抚话”。
+
+更稳的 Phase 1 目标是：
+
+1. 只有系统**真的还处于工具执行 / 委派执行 / blocked** 状态时，ACK 才有资格发送
+2. 一旦系统已经进入**最终答复流**或**最终交付待发送**阶段，就必须 suppress ACK
+3. 不追求“精确预测 300ms 后马上答完”，而是先把“明显不该发 ACK 的时机”排掉
+
+#### 3.4.1 Phase 1 可依赖的状态来源
+
+Phase 1 必须优先消费 OpenClaw substrate / native taskflow truth，再叠加 OctoClaw runtime hook 信号。
+
+建议分成两类：
+
+1. OpenClaw / native truth 可直接提供的状态
+   - `queued`
+   - `running`
+   - `blocked`
+   - `completed`
+   - `failed`
+   - `cancelled`
+   - `checkpoint_seen`
+   - `result_ready`
+2. OctoClaw runtime hook / streaming 层补充的状态
+   - `tool_active`
+   - `delegated_running`
+   - `final_response_streaming`
+   - `delivery_pending`
+   - `delivered`
+
+#### 3.4.2 Phase 1 ACK eligibility gate
+
+ACK 不应只由 wall-clock timer 决定。
+
+更合理的是：
+
+1. timer 只负责“到点后允许检查”
+2. 是否真正发送 ACK，要看当前是否仍满足 `ack_eligible`
+
+推荐 gate：
+
+```yaml
+ack_phase1_gate:
+  ack_eligible_when_any:
+    - tool_active
+    - delegated_running
+    - blocked
+  ack_suppress_when_any:
+    - final_response_streaming
+    - delivery_pending
+    - delivered
+```
+
+#### 3.4.3 Phase 1 关键现实约束
+
+Phase 1 可以稳定做到：
+
+1. 真在工具执行 / 检索 / 子任务运行时才 ACK
+2. 一旦最终答复开始流出，立刻 suppress ACK
+3. 一旦最终交付已经进入待发送阶段，不再补 ACK
+
+Phase 1 不要求稳定做到：
+
+1. 在还没有 first token 前，精确预测“马上几百毫秒内就会答完”
+2. 通过模型主观推断“应该快好了”来 suppress ACK
+
+这条边界必须写清楚，避免实现时又把 ACK 做回“猜测式魔法”。
+
 ## 4. 复用同一个本地模型的方式
 
 v1 可以复用同一个本地 Qwen 服务，但必须按 job type 分开：
@@ -335,6 +405,31 @@ validator_default_rules:
   "reason_codes": []
 }
 ```
+
+### 12.4 ACK phase gate packet
+
+ACK controller 在 Phase 1 不需要再次调用 judge，只需要消费一个很小的状态包：
+
+```json
+{
+  "state_key": "",
+  "route": "reply | delegate",
+  "native_state": "queued | running | blocked | completed | failed | cancelled",
+  "checkpoint_seen": false,
+  "result_ready": false,
+  "tool_active": false,
+  "delegated_running": false,
+  "final_response_streaming": false,
+  "delivery_pending": false,
+  "delivered": false
+}
+```
+
+这个 packet 的设计原则是：
+
+1. 优先取 substrate truth
+2. 只补最少量 runtime streaming 信号
+3. 不让 ACK controller 自己去猜“是不是快答完了”
 
 ## 13. main agent 与 AGENTS.md
 

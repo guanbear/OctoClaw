@@ -221,6 +221,11 @@ tools/
    - `local_judge_prompt_view`
    - `remote_judge_prompt_view`
    - `ack_writer_prompt_view`
+28. ACK Phase 1 必须先接入 substrate/runtime 状态门控，不允许继续只按 wall-clock timeout 直接发送 ACK
+29. ACK eligibility 至少消费：
+   - native `queued / running / blocked / completed / failed / cancelled`
+   - `checkpoint_seen / result_ready`
+   - runtime `tool_active / delegated_running / final_response_streaming / delivery_pending / delivered`
 
 明确禁止：
 
@@ -281,9 +286,12 @@ tools/
 20. ACK burst coalescing / cooldown / anchor-update preference
 21. pre-route soft-ack fallback when judge/route is slow
 22. ACK compare-and-set / insert-if-absent guard
-23. delegated failure taxonomy + recovery decision hook
-24. child failure packet -> recovery packet -> main-thread resume packet conversion
-25. same-role retry / stronger-profile retry / re-route / clarify 这 4 类恢复出口
+23. ACK Phase 1 state gate：到点后只检查，不直接发送；必须看 agent/runtime 当前阶段
+24. `final_response_streaming / delivery_pending / delivered` 进入 suppress 集
+25. `tool_active / delegated_running / blocked` 进入 ACK eligible 集
+26. delegated failure taxonomy + recovery decision hook
+27. child failure packet -> recovery packet -> main-thread resume packet conversion
+28. same-role retry / stronger-profile retry / re-route / clarify 这 4 类恢复出口
 26. delegated task / attempt 双层状态模型
 27. delegate timeline events (`accepted/started/checkpoint/recovering/completed/failed/timed_out`)
 28. operator/user status push path from runtime truth rather than raw child logs

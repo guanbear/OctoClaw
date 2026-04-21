@@ -4504,6 +4504,61 @@ validator_default_rules:
    - 只允许基于既有结构化结果写一句短文案
    - 不允许改 route / role / complexity
 
+#### 9.3.c.4.a.1 ACK Phase 1：基于原生状态的门控
+
+ACK 的第一版不应继续只按 wall-clock timeout 直接触发。
+
+更稳的目标是：
+
+1. 只有在系统**真的还在工具执行 / 委派执行 / blocked** 时，ACK 才 eligible
+2. 一旦系统进入**最终答复流**或**最终交付待发送**阶段，ACK 必须 suppress
+3. 不追求在还没出 token 前精确预测“马上就会答完”
+
+这意味着 ACK Phase 1 必须消费两类状态：
+
+1. OpenClaw substrate / native taskflow truth
+   - `queued`
+   - `running`
+   - `blocked`
+   - `completed`
+   - `failed`
+   - `cancelled`
+   - `checkpoint_seen`
+   - `result_ready`
+2. OctoClaw runtime hook / streaming 信号
+   - `tool_active`
+   - `delegated_running`
+   - `final_response_streaming`
+   - `delivery_pending`
+   - `delivered`
+
+推荐 gate：
+
+```yaml
+ack_phase1_gate:
+  ack_eligible_when_any:
+    - tool_active
+    - delegated_running
+    - blocked
+  ack_suppress_when_any:
+    - final_response_streaming
+    - delivery_pending
+    - delivered
+```
+
+这里 timer 只负责“到点后允许检查”，而不是“到点就直接发 ACK”。
+
+这样第一版就能稳定做到：
+
+1. 真在检索/调工具/跑子任务时才发 ACK
+2. 一旦最终答复开始流出，立即 suppress ACK
+3. 一旦最终交付已进入待发送阶段，不再补 ACK
+
+但这版**不承诺**稳定做到：
+
+1. 在还没出 first token 之前，精确预测“几百毫秒后马上答完”
+2. 仅靠模型主观推断“感觉快好了”来 suppress ACK
+
 这样：
 
 1. 规则源只有一份
