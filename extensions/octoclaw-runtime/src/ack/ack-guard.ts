@@ -1,8 +1,16 @@
+import fsSync from "node:fs";
 import {
   runCommand,
   resolveTaskStatePath,
   resolveWorkspaceRoot,
 } from "../resolve/env.js";
+
+interface FsSyncLike {
+  readFileSync(pathname: string, encoding: string): string;
+  writeFileSync(pathname: string, data: string, encoding: string): void;
+}
+
+const fsSyncLike = fsSync as unknown as FsSyncLike;
 import { getAdapterForSession } from "../im/index.js";
 import {
   AckStage,
@@ -533,6 +541,7 @@ async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, 
     }) as unknown as { ok?: boolean; status?: string };
     if (failResult.ok) {
       sink.debug?.(`octoclaw watchdog: transitioned task=${taskId} to ${newStatus}`);
+      updateTaskStateCache(taskId, { status: newStatus, updated_at: new Date().toISOString() });
       return true;
     }
     sink.debug?.(`octoclaw watchdog: failed to transition task=${taskId}: ${asString(failResult.status)}`);
@@ -541,6 +550,22 @@ async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, 
     sink.debug?.(`octoclaw watchdog: error transitioning task=${taskId}: ${String(err)}`);
     return false;
   }
+}
+
+function updateTaskStateCache(taskId: string, patch: Record<string, unknown>): void {
+  try {
+    const taskPath = resolveTaskStatePath();
+    let existing: { tasks?: unknown[] } = { tasks: [] };
+    try {
+      existing = JSON.parse(fsSyncLike.readFileSync(taskPath, "utf-8")) as { tasks?: unknown[] };
+    } catch { /* no file */ }
+    const tasks = Array.isArray(existing.tasks) ? existing.tasks as TaskStateTask[] : [];
+    const idx = tasks.findIndex((t) => asString(t.id) === taskId);
+    if (idx >= 0) {
+      tasks[idx] = { ...tasks[idx], ...patch };
+      fsSyncLike.writeFileSync(taskPath, JSON.stringify({ tasks }, null, 2), "utf-8");
+    }
+  } catch { /* best effort */ }
 }
 
 function normalizeAckComparableText(value: unknown): string {
@@ -806,6 +831,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
 
   const stateKey = asString(options.stateKey || normalizedSessionKey);
   const decision = isRecord(options.decision) ? options.decision : {};
+  const baseState = isRecord(options.state) ? options.state : {};
   const ctx = isRecord(options.ctx) ? options.ctx as AckContext : { cwd };
   const logger = isRecord(options.logger) ? options.logger as AckLogger : {};
   const routePhase = resolveRoutePhase(decision, options);
@@ -831,7 +857,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         return;
       }
       ackDebug(`tier${result.tier} fired stage=${result.stage} routePhase=${result.routePhase} sessionKey=${normalizedSessionKey} stateKey=${stateKey}`);
-      const liveTrackingState = ackState(stateKey);
+      const liveTrackingState = { ...baseState, ...ackState(stateKey) };
       const ackStage = normalizeAckStage(result.stage);
       const threadKey = threadKeyFromSessionKey(normalizedSessionKey, stateKey);
       const templateInputs = buildTemplateInputs(

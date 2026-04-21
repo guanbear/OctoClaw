@@ -826,16 +826,20 @@ export const plugin = {
         agentId: stringValue(ctx.agentId),
       });
       if (!state) return;
-      updateAckTrackingState(stateKey, { final_response_streaming: true });
+      updateAckTrackingState(stateKey, { final_response_streaming: true, tool_active: false });
       const guarded = guardAssistantMessageForPolicyState(asRecord(event.message), asRecord(state));
       const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : asRecord(event.message);
       const role = String(asRecord(event.message).role ?? "").trim();
-      const contentText = typeof asRecord(visibleMessage).content === "string"
-        ? asRecord(visibleMessage).content
+      const contentText: string = typeof asRecord(visibleMessage).content === "string"
+        ? String(asRecord(visibleMessage).content)
         : Array.isArray(asRecord(visibleMessage).content)
           ? (asRecord(visibleMessage).content as unknown[]).map((c) => String(asRecord(c).text ?? "")).join("")
           : String(asRecord(visibleMessage).content ?? "");
-      if (role === "assistant" && contentText) {
+      const isLikelyAck = contentText.length < 30 && (
+        contentText.includes("收到") || contentText.includes("正在") || contentText.includes("处理中")
+        || contentText.includes("working") || contentText.includes("checking") || contentText.includes("looking")
+      );
+      if (role === "assistant" && contentText && !isLikelyAck) {
         updateAckTrackingState(stateKey, { formal_reply_visible: true });
       }
       void recordObservedDeliveryFromMessage(visibleMessage, asRecord(state), stateKey, pi.logger).catch((err) => {

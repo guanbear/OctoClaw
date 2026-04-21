@@ -1545,8 +1545,9 @@ export function buildTsRuntimeDispatchPayload(input: DispatchLikeInput): Unknown
         asString(prior.executionProfile),
       );
 
+      const taskSignal = asString(prior._judge_task_text || _task || "");
       return rebuildDecisionWithRoute(
-        buildDecision("", {
+        buildDecision(taskSignal, {
           metadata: {
             requested_route: authoritativeRoute,
             ...observeFlags,
@@ -1583,8 +1584,9 @@ export function buildTsRuntimeSpawnPayload(input: SpawnLikeInput): UnknownRecord
         asString(prior.executionProfile),
       );
 
+      const taskSignal = asString(prior._judge_task_text || _task || "");
       return rebuildDecisionWithRoute(
-        buildDecision("", {
+        buildDecision(taskSignal, {
           metadata: {
             requested_route: authoritativeRoute,
             ...observeFlags,

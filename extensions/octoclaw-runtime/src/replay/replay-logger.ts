@@ -773,7 +773,11 @@ export function sanitizeDelegationReasoning(text: string): string {
   for (const pattern of DELEGATION_REASONING_PATTERNS) {
     result = result.replace(pattern, "");
   }
-  return result.replace(/\n{3,}/g, "\n\n").trim();
+  result = result.replace(/\n{3,}/g, "\n\n").trim();
+  if (!result) {
+    return "收到，正在处理。";
+  }
+  return result;
 }
 
 export function guardAssistantMessageForPolicyState(
