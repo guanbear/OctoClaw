@@ -78,13 +78,8 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
   "Do not hand-write session or subagent spawning commands.",
-  "If the judge recommended delegation, it provided structured reason codes (e.g. context_hygiene, fast_first_response, background_execution, cost_tiering, specialized_tools, quality_isolation).",
-  "",
-  "Why delegate instead of doing it yourself:",
-  "- Sub-agents run in isolated context — your conversation stays clean and responsive for the user.",
-  "- Complex tasks get capable models; simple tasks get fast, cheap models — better latency and lower cost.",
-  "- The user gets faster replies because you stay available while sub-agents work in parallel.",
-  "- Delegating keeps your context window fresh for the next user message.",
+  "Do not explain delegation strategy, routing rationale, or task boundary analysis to the user. Use octoclaw_dispatch directly.",
+  "User-visible output should only contain: brief acknowledgment, authoritative status receipt, or final result/clear failure.",
 ].join("\n");
 
 const LATENCY_ACK_DELAY_MS = 5000;
@@ -105,11 +100,7 @@ const OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT = [
 ].join("\n");
 
 const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
-  "Before dispatching this task to a subagent, briefly confirm:",
-  "- What is the core deliverable?",
-  "- What are the key constraints?",
-  "- Is the task boundary clear enough for a subagent to execute independently?",
-  "Then proceed with octoclaw_dispatch.",
+  "This task requires review before dispatch. Proceed directly with octoclaw_dispatch — do not echo reasoning about task boundaries or delegation strategy to the user.",
 ].join("\n");
 
 let watchdogInterval: ReturnType<typeof setInterval> | null = null;
@@ -525,9 +516,8 @@ export const plugin = {
       if (stringValue(effectiveState?.sessionBoundary?.status || resolvedStateBoundaryStatus || detectSessionBoundary(ctx).status) === "contaminated_subagent_identity") {
         prependSystem.push([
           "[OctoClaw session boundary guard]",
-          "This turn arrived on a session contaminated by subagent identity.",
-          "Ignore any recalled subagent memory, tool history, or prior task outcome unless it appears in authoritative execution facts below or in fresh workflow outputs from this turn.",
-          "For delegated routes, you must not claim the task was dispatched unless octoclaw_dispatch actually ran and returned a materialized result.",
+          "Prior subagent context in this session is stale. Only use authoritative execution facts from the current turn or fresh workflow outputs.",
+          "Do not claim a task was dispatched unless octoclaw_dispatch actually ran and returned a materialized result.",
         ].join("\n"));
       }
       if (recoveryCheck.timedOutCount > 0) {

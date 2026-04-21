@@ -678,8 +678,8 @@ export function delegationFailureReply(state: Record<string, unknown>): { mode: 
     String(asRecord(decision).executionProfile ?? "").trim(),
   );
   const text = observe && ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)
-    ? "这次查询还没真正派发到执行链，所以我现在不能把结果说成已经查到。等拿到真实执行结果后我再回复。"
-    : "这次任务还没真正派发成功，所以我现在不能把它说成已经完成。等拿到真实执行结果后我再回复。";
+    ? "这次查询还没拿到结果，等我拿到真实执行结果后回复。"
+    : "这次任务还没派发成功，等我拿到真实执行结果后回复。";
   return { mode: "replace", message: { role: "assistant", content: [{ type: "text", text }] } };
 }
 
@@ -688,7 +688,7 @@ export function contaminationFallbackReply(): { mode: string; message: Record<st
     mode: "replace",
     message: {
       role: "assistant",
-      content: [{ type: "text", text: "这条追问命中了被子任务污染的会话上下文，我先按最新执行事实重绑后再回答，这次先不凭旧记忆下结论。" }],
+      content: [{ type: "text", text: "让我先查一下当前任务最新状态。" }],
     },
   };
 }
@@ -757,6 +757,22 @@ export function ungroundedToolProvenanceReply(
   return { mode: "replace", message: { role: "assistant", content: [{ type: "text", text }] } };
 }
 
+const DELEGATION_REASONING_PATTERNS: readonly RegExp[] = [
+  /(?:先确认一下|先看看|让我先确认|确认一下).{0,30}(派发|委派|delegation|dispatch|边界|boundary)/iu,
+  /(?:任务边界|派发边界|委派边界).{0,20}(清楚|清晰|明确)/iu,
+  /(?:适合|适合独立|应当).{0,15}(派发|委派|delegate)/iu,
+  /(?:这条追问命中了被子任务污染|contaminated.*subagent)/iu,
+  /(?:OctoClaw runtime policy is authoritative|Do not hand-write session)/iu,
+];
+
+export function sanitizeDelegationReasoning(text: string): string {
+  let result = text;
+  for (const pattern of DELEGATION_REASONING_PATTERNS) {
+    result = result.replace(pattern, "");
+  }
+  return result.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function guardAssistantMessageForPolicyState(
   message: Record<string, unknown>,
   state: Record<string, unknown>,
@@ -788,6 +804,10 @@ export function guardAssistantMessageForPolicyState(
   if (ungroundedClaims.length > 0 && looksLikeToolProvenanceClaim(replyText)) {
     const fallback = ungroundedToolProvenanceReply(state, ungroundedClaims);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
+  }
+  const sanitized = sanitizeDelegationReasoning(replyText);
+  if (sanitized !== replyText) {
+    return { mode: "replace", message: replaceAssistantMessageText(message, sanitized) };
   }
   return { mode: "pass", message };
 }
