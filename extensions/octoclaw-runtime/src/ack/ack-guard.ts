@@ -574,6 +574,53 @@ function parseUpdatedSortValue(value: unknown): number {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
+function normalizeAckComparableText(value: unknown): string {
+  return asString(value)
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function lcsLength(left: string, right: string): number {
+  if (!left || !right) return 0;
+  const previous = new Array<number>(right.length + 1).fill(0);
+  const current = new Array<number>(right.length + 1).fill(0);
+  for (let i = 1; i <= left.length; i += 1) {
+    current[0] = 0;
+    for (let j = 1; j <= right.length; j += 1) {
+      current[j] = left[i - 1] === right[j - 1]
+        ? previous[j - 1] + 1
+        : Math.max(previous[j], current[j - 1]);
+    }
+    for (let j = 0; j <= right.length; j += 1) previous[j] = current[j];
+  }
+  return previous[right.length] || 0;
+}
+
+function metadataUserMessage(metadata: UnknownRecord): string {
+  for (const candidate of [
+    metadata.user_message,
+    metadata.userMessage,
+    metadata.message_text,
+    metadata.messageText,
+    metadata.current_turn,
+    metadata.prompt,
+    metadata.task,
+  ]) {
+    const text = asString(candidate);
+    if (text) return text;
+  }
+  return "";
+}
+
+function shouldSuppressJudgeAckEcho(judgeAckText: string, metadata: UnknownRecord): boolean {
+  const normalizedAck = normalizeAckComparableText(judgeAckText);
+  const normalizedUserMessage = normalizeAckComparableText(metadataUserMessage(metadata));
+  if (!normalizedAck || !normalizedUserMessage) return false;
+  if (normalizedUserMessage.includes(normalizedAck)) return true;
+  const overlap = lcsLength(normalizedAck, normalizedUserMessage) / Math.max(1, Math.min(normalizedAck.length, normalizedUserMessage.length));
+  return overlap > 0.6;
+}
+
 async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string } | null> {
   const normalizedStateKey = asString(params.stateKey);
   const normalizedSessionKey = asString(params.sessionKey);
@@ -1029,7 +1076,9 @@ export async function maybeSendLatencyAck(
   try {
     const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
     const judgeAckText = asString(decision._judge_ack_text);
-    const message = judgeAckText || ackStageText(AckStage.ReplySoftAck);
+    const message = judgeAckText && !shouldSuppressJudgeAckEcho(judgeAckText, metadata)
+      ? judgeAckText
+      : ackStageText(AckStage.ReplySoftAck);
     const result = await attemptAckSend({
       sessionKey,
       stateKey,

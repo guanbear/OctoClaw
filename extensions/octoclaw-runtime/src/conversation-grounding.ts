@@ -7,6 +7,7 @@ import {
   type IntentHints,
   type IntentPacket,
 } from "@octoclaw/policy/intent";
+import { normalizeLiveRoute } from "./resolve/route-helpers.js";
 
 interface FsSyncLike {
   readFileSync(pathname: string, encoding: string): string;
@@ -636,7 +637,7 @@ function selectSubjectTurn(turns: ReplayTurn[], prompt = "", sessionKeys: string
   if (isTaskProgressPrompt(prompt)) {
     const delegatedTurns = nonMetaTurns.filter((turn) => {
       const facts = turn.facts;
-        return Boolean(facts && (facts.dispatchSeen || facts.taskId || facts.runnerJobId || ["observe", "delegate.single", "spawn_multi"].includes(turn.route)));
+        return Boolean(facts && (facts.dispatchSeen || facts.taskId || facts.runnerJobId || normalizeLiveRoute(turn.route, "reply") === "delegate" || turn.route === "spawn_multi"));
     });
     if (delegatedTurns.length > 0) {
       return delegatedTurns[delegatedTurns.length - 1] || null;
@@ -744,8 +745,8 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
   if (intentClass === "execution_followup") {
     return {
       ...base,
-      route_hint: "observe",
-      lane_hint: "control_observer",
+        route_hint: "delegate",
+        lane_hint: "control_observer",
       protected_lane: "control_observer",
       require_state_grounding: true,
     };
@@ -762,8 +763,8 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
   if (intentClass === "fresh_live_lookup") {
     return {
       ...base,
-      route_hint: "observe",
-      lane_hint: "observe",
+        route_hint: "delegate",
+        lane_hint: "observe",
       lookup_scope: "upstream_project",
       lookup_project: inferFreshLookupProject(""),
       lookup_focus: inferFreshLookupFocus(""),

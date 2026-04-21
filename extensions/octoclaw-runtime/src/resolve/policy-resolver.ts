@@ -425,7 +425,7 @@ function buildRuntimeTruthMetadata(workflowOrMetadata: UnknownRecord = {}, optio
   return {
     authority: "ts-native-adapter",
     pluginName: plugin.name,
-    binding: plugin.bindWorkflow(workflow),
+    binding: plugin.readBinding(workflow),
   };
 }
 

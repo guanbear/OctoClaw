@@ -30,13 +30,20 @@ export function buildStatusSurfaceView(record: RuntimeStateSurfaceRecord): Statu
   const route = (record as RuntimeStateSurfaceRecord & { identity?: { route?: string } }).identity?.route
     || (record.truth.requestId ? "delegate" : "reply");
   const taskClass = String((record.projection as { task_class?: string } | undefined)?.task_class ?? "").trim();
+  const role = (record as RuntimeStateSurfaceRecord & {
+    identity?: { role?: string };
+    execution?: { role?: string };
+  }).identity?.role
+    || (record as RuntimeStateSurfaceRecord & { execution?: { role?: string } }).execution?.role
+    || String((record.projection as { role?: string } | undefined)?.role ?? "").trim()
+    || (taskClass === "control_observer" ? "observer_probe" : route === "reply" ? "main_reply" : "worker_research");
   return {
     ...buildContractEnvelope("projection"),
     taskId: record.truth.taskId,
     flowId: record.truth.flowId,
     state: record.substrateState,
     route,
-    role: taskClass === "control_observer" ? "observer_probe" : route === "reply" ? "main_reply" : "worker_research",
+    role,
     coordinationMode: route === "delegate" ? "solo_worker" : "",
     backendSummary: "openclaw-native",
     workerPool: "octoclaw-runtime",

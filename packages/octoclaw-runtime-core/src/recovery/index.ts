@@ -33,6 +33,9 @@ const DEADLINE_TRIGGER_MAP: Record<keyof RuntimeDeadlines, RecoveryTrigger> = {
   deliveryDeadline: "delivery_deadline_exceeded",
 };
 
+// Recovery hooks are implemented here, but the main runtime loop has not yet
+// wired deadline/recovery enforcement into the primary execution cycle.
+
 function deadlinePhaseForWorkflow(state: RuntimeWorkflowState): RuntimeDeadlinePhase {
   if (state.lifecycle.phase === "completed" || state.lifecycle.phase === "failed") {
     return "terminal";

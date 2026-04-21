@@ -83,7 +83,7 @@ export const STATUS_SURFACE_FIXTURE: StatusSurfaceViewModel = {
   taskId: "task-fixture-1",
   flowId: "flow-fixture-1",
   state: "running",
-  route: "delegate.single",
+  route: "delegate",
   role: "worker_research",
   coordinationMode: "solo_worker",
   backendSummary: "openclaw-native worker",

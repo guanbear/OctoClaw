@@ -142,6 +142,7 @@ describe("octoclaw runtime plugin", () => {
     expect(plugin.name).toBe("octoclaw-runtime-ts");
     expect(typeof plugin.createAdapter).toBe("function");
     expect(typeof plugin.createWebhookSurface).toBe("function");
+    expect(typeof plugin.readBinding).toBe("function");
     expect(typeof plugin.bindWorkflow).toBe("function");
     expect(typeof plugin.judgeRoute).toBe("function");
   });
@@ -182,6 +183,24 @@ describe("octoclaw runtime plugin", () => {
     expect(helper.calls[0].action).toBe("create-managed-flow");
     expect(helper.calls[1].action).toBe("run-task");
     expect(helper.calls[1].args.flow_id).toBe("flow-plugin-managed");
+  });
+
+  it("readBinding reads state without materializing a task", () => {
+    const helper = buildHelperInvoker();
+    const plugin = createOctoClawRuntimePlugin({ helperInvoker: helper.invoker });
+    const binding = plugin.readBinding(buildWorkflow());
+
+    expect(binding).toMatchObject({
+      taskId: "task-plugin",
+      flowId: "flow-plugin",
+      status: "running",
+      runtime: "openclaw-native",
+      syncMode: "managed",
+      substrateState: "running",
+    });
+    expect(helper.calls.length).toBe(2);
+    expect(helper.calls[0].action).toBe("read-flow");
+    expect(helper.calls[1].action).toBe("read-task");
   });
 
   it("createAdapter returns valid adapter", () => {

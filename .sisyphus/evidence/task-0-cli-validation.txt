@@ -1,0 +1,39 @@
+=== T0: OpenClaw CLI Channel Validation ===
+
+1. wechat channel:
+   Command: openclaw message send --channel wechat --target __test__ --message "probe" --json
+   Result: Error: Unknown channel: wechat
+   Verdict: NOT SUPPORTED via openclaw message send CLI
+
+2. feishu channel:
+   Command: openclaw message send --channel feishu --target __test__ --message "probe" --json
+   Result: Error: Unknown target "__test__" for Feishu. Hint: <chatId|user:openId|chat:chatId>
+   Verdict: SUPPORTED — expects target in format: chatId, user:openId, or chat:chatId
+
+3. Supported channels (from --help):
+   feishu, googlechat, nostr, msteams, mattermost, nextcloud-talk, matrix,
+   bluebubbles, line, zalo, zalouser, synology-chat, tlon, discord, imessage,
+   irc, qqbot, signal, slack, telegram, twitch, whatsapp
+   NOTE: wechat is NOT in the list
+
+4. Installed extensions:
+   extensions, octoclaw-delegation, octoclaw-fast-reply, octoclaw-runtime,
+   octoclaw-status-surface, openclaw-weixin
+   
+5. openclaw-weixin plugin:
+   Located at ~/.openclaw/extensions/openclaw-weixin/
+   This is a separate extension — NOT a channel for openclaw message send.
+   WeChat messages must go through the openclaw-weixin plugin directly.
+
+6. Channel config (openclaw.json):
+   Only slack configured with: enabled=true, mode=socket, streaming.mode=partial,
+   streaming.nativeTransport=true, replyToMode=first
+
+7. Feishu target format:
+   - chatId (direct chat ID)
+   - user:openId (user's open_id prefixed with user:)
+   - chat:chatId (group chat ID prefixed with chat:)
+
+CONCLUSION:
+- WeChat: Must use openclaw-weixin plugin API directly (not openclaw message send)
+- Feishu: Can use openclaw message send --channel feishu --target <chatId|user:openId|chat:chatId>

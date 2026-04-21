@@ -92,7 +92,7 @@ const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "For non-hard-observe requests, submit a structured route hint before answering or dispatching.",
-  "Use octoclaw_route_hint to state whether this should be reply, delegate.single, or observe.",
+  "Use octoclaw_route_hint to state whether this should be reply or delegate. Read-only observation is delegate with observer role.",
   "After route_hint merge: reply may answer directly; delegated routes must go through octoclaw_dispatch.",
   "",
   "Prefer delegation for multi-step tasks (writing code, research, analysis, file changes).",
@@ -476,7 +476,7 @@ export const plugin = {
         prependSystem.push([
           "OctoClaw delegation is available for this run.",
           "You can decide whether to handle this request directly or delegate to a sub-agent via octoclaw_dispatch.",
-          "Use octoclaw_route_hint to indicate your routing preference (reply, delegate.single, or observe).",
+          "Use octoclaw_route_hint to indicate your routing preference (reply or delegate). Read-only observation is delegate with observer role.",
         ].join("\n"));
       }
 
@@ -484,7 +484,7 @@ export const plugin = {
         prependSystem.push(OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
       }
       const route = stringValue(asRecord(decision.route_decision).route);
-      const isSpawnRoute = route === "delegate.single";
+      const isSpawnRoute = route === "delegate";
       const reviewRequired = Boolean(asRecord(decision.review_policy).required);
       if (isSpawnRoute && reviewRequired) {
         prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
@@ -724,8 +724,9 @@ export const plugin = {
         blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
       }));
       const workflowRoute = stringValue(workflowRule.route || asRecord(decision.route_decision).route);
+      const observerOnly = Boolean(asRecord(asRecord(decision.hook_interface).before_tool_call).observe_only);
       await recordPolicyReplay(
-        workflowRoute === "observe" ? "tool_blocked_runner_policy" : "tool_blocked_delegation_policy",
+        observerOnly ? "tool_blocked_runner_policy" : "tool_blocked_delegation_policy",
         {
           sessionKey: stateKey || "",
           sessionId: stringValue(ctx.sessionId),
@@ -738,8 +739,8 @@ export const plugin = {
       );
       return {
         block: true,
-          blockReason: workflowRoute === "observe"
-            ? `OctoClaw runtime policy route=observe requires the observe workflow. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed workflow tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`
+          blockReason: observerOnly
+            ? `OctoClaw runtime policy route=delegate with role=observer_probe requires the observe workflow. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed workflow tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`
             : `OctoClaw runtime policy route=${stringValue(asRecord(decision.route_decision).route || "reply")} requires delegation. Use ${workflowRule.delegateTool || "octoclaw_dispatch"} first. Allowed control tools: ${workflowRule.allowedTools.join(", ") || "octoclaw_dispatch"}.`,
       };
     });

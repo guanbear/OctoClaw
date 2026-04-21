@@ -139,7 +139,7 @@ function workflowIdentity(workflow: RuntimeWorkflowState): RuntimeWorkflowState[
     requestId: (workflow as unknown as { requestId?: string }).requestId || "",
     taskId: (workflow as unknown as { taskId?: string }).taskId || "",
     flowId: (workflow as unknown as { flowId?: string }).flowId || "",
-    route: (workflow.taskMaterialization?.route || "delegate.single") as RuntimeWorkflowState["identity"]["route"],
+    route: (workflow.taskMaterialization?.route || "delegate") as RuntimeWorkflowState["identity"]["route"],
     authority: (workflow.taskMaterialization?.authority || "runtime_orchestrator") as RuntimeWorkflowState["identity"]["authority"],
     backend: (workflow.taskMaterialization?.backend || "openclaw-native") as RuntimeWorkflowState["identity"]["backend"],
     materializationIntent: (workflow.taskMaterialization?.materializationIntent || "spawn_single") as RuntimeWorkflowState["identity"]["materializationIntent"],

@@ -442,7 +442,7 @@ export async function callLlmJudge(
     // Normalize route aliases from small models that may output action names instead of canonical routes
     if (parsed && typeof parsed.route === "string") {
       const r = parsed.route as string;
-      if (r === "spawn_work" || r === "spawn_single" || r === "spawn_multi" || r === "delegate.single") {
+      if (r === "spawn_work" || r === "spawn_single" || r === "spawn_multi" || r === "delegate.single" || r === "observe") {
         parsed.route = "delegate";
       }
     }
@@ -532,7 +532,7 @@ export async function callRemoteJudge(
 
     if (parsed && typeof parsed.route === "string") {
       const r = parsed.route as string;
-      if (r === "spawn_work" || r === "spawn_single" || r === "spawn_multi" || r === "delegate.single") {
+      if (r === "spawn_work" || r === "spawn_single" || r === "spawn_multi" || r === "delegate.single" || r === "observe") {
         parsed.route = "delegate";
       }
     }

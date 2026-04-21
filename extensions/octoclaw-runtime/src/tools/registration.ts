@@ -9,6 +9,8 @@ import {
   resolveStatelessPolicyDecision,
 } from "../resolve/policy-resolver.js";
 import {
+  resolveReplayLogPath,
+  resolveTaskStatePath,
   stableId,
   truncateText,
 } from "../resolve/env.js";
@@ -31,6 +33,8 @@ import {
   registerPendingDelivery,
 } from "../replay/replay-logger.js";
 import { policyState } from "../state/policy-state.js";
+import { createOctoClawRuntimePlugin } from "../plugin.js";
+import { normalizeLiveRoute } from "../resolve/route-helpers.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -128,35 +132,173 @@ function parseTaskAction(rawText: string): { action: string; taskId: string } {
   };
 }
 
-function buildNativeTaskActionPayload(rawText: string, format: "text" | "json"): { summary: string; payload: UnknownRecord } {
+interface RuntimeTaskStateRecord extends UnknownRecord {
+  id?: unknown;
+  status?: unknown;
+  summary?: unknown;
+  route?: unknown;
+  role?: unknown;
+  session_key?: unknown;
+  flow_id?: unknown;
+  worker_pool?: unknown;
+  updated_at?: unknown;
+  started_at?: unknown;
+  completed_at?: unknown;
+  spawned_at?: unknown;
+  report_path?: unknown;
+  artifacts?: unknown;
+}
+
+async function readRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
+  try {
+    const fs = await import("node:fs");
+    const content = fs.default.readFileSync(resolveTaskStatePath(), "utf-8");
+    const parsed = JSON.parse(content) as { tasks?: unknown };
+    return Array.isArray(parsed.tasks) ? parsed.tasks.filter(isRecord) as RuntimeTaskStateRecord[] : [];
+  } catch {
+    return [];
+  }
+}
+
+async function readRuntimeReplayTimeline(taskId: string): Promise<UnknownRecord[]> {
+  if (!taskId) return [];
+  try {
+    const fs = await import("node:fs");
+    const content = fs.default.readFileSync(resolveReplayLogPath(), "utf-8");
+    return content
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as UnknownRecord;
+        } catch {
+          return {};
+        }
+      })
+      .filter((entry) => asString(entry.taskId || entry.task_id || asRecord(entry.materialization).task_id) === taskId)
+      .slice(-20);
+  } catch {
+    return [];
+  }
+}
+
+function sortTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskStateRecord[] {
+  return [...tasks].sort((left, right) => {
+    const leftAt = Date.parse(asString(left.updated_at || left.completed_at || left.started_at || left.spawned_at)) || 0;
+    const rightAt = Date.parse(asString(right.updated_at || right.completed_at || right.started_at || right.spawned_at)) || 0;
+    return rightAt - leftAt;
+  });
+}
+
+function buildTaskActionTimeline(record: RuntimeTaskStateRecord, liveRead: UnknownRecord, replayEvents: UnknownRecord[]): UnknownRecord[] {
+  const timeline: UnknownRecord[] = [];
+  const pushIfPresent = (eventType: string, eventAt: unknown, summary: string) => {
+    const at = asString(eventAt);
+    if (at) timeline.push({ eventType, eventAt: at, summary });
+  };
+  pushIfPresent("spawned", record.spawned_at, "Task was spawned");
+  pushIfPresent("started", record.started_at, "Task started execution");
+  pushIfPresent("updated", record.updated_at, asString(record.summary || liveRead.progressSummary || record.status, "Task updated"));
+  pushIfPresent("completed", record.completed_at, "Task completed");
+  for (const event of replayEvents) {
+    const eventType = asString(event.event || event.kind);
+    const eventAt = asString(event.at || event.timestamp || event.createdAt);
+    if (eventType && eventAt) {
+      timeline.push({
+        eventType,
+        eventAt,
+        summary: asString(event.summary || event.message || event.reason || eventType),
+      });
+    }
+  }
+  return timeline.sort((left, right) => Date.parse(asString(left.eventAt)) - Date.parse(asString(right.eventAt)));
+}
+
+async function buildNativeTaskActionPayload(rawText: string, format: "text" | "json"): Promise<{ summary: string; payload: UnknownRecord }> {
   const { action, taskId } = parseTaskAction(rawText);
   const normalizedAction = action || "details";
-  const target = taskId || "current-task";
-  const summary = [
-    `OctoClaw native runtime accepted task action '${normalizedAction}' for ${target}.`,
-    "Use the native status/task surfaces to inspect details, queue state, artifacts, or approval flow.",
-  ].join(" ");
+  const tasks = sortTaskStateRecords(await readRuntimeTaskState());
+  const record = (taskId ? tasks.find((entry) => asString(entry.id) === taskId) : tasks[0]) || null;
+  if (!record) {
+    const payload = {
+      mode: "native_runtime",
+      action: normalizedAction,
+      taskId: taskId || undefined,
+      format,
+      found: false,
+      summary: taskId ? `Task ${taskId} not found.` : "No OctoClaw task state is available.",
+    };
+    return {
+      summary: format === "json" ? JSON.stringify(payload, null, 2) : payload.summary,
+      payload,
+    };
+  }
+  const plugin = createOctoClawRuntimePlugin();
+  const liveRead = asString(record.session_key) && asString(record.flow_id)
+    ? plugin.createAdapter().bindSession(asString(record.session_key)).readTask(asString(record.flow_id), asString(record.id))
+    : null;
+  const replayEvents = await readRuntimeReplayTimeline(asString(record.id));
+  const artifacts = asRecord(record.artifacts);
   const payload: UnknownRecord = {
     mode: "native_runtime",
     action: normalizedAction,
-    taskId: taskId || undefined,
+    taskId: asString(record.id),
+    flowId: asString(record.flow_id),
+    sessionKey: asString(record.session_key),
+    route: normalizeLiveRoute(record.route, "delegate"),
+    role: asString(record.role, asString(asRecord(artifacts.runtime_truth).role)),
+    status: asString(liveRead?.substrateState || record.status),
+    progress: asString(liveRead?.progressSummary || record.summary),
+    summary: asString(record.summary, asString(liveRead?.progressSummary || record.status)),
+    workerPool: asString(record.worker_pool),
+    syncMode: asString(liveRead?.syncMode),
+    substrateRevision: liveRead?.substrateRevision,
+    timeline: buildTaskActionTimeline(record, liveRead ?? {}, replayEvents),
+    artifacts,
+    reportPath: asString(record.report_path || artifacts.report_path),
+    found: true,
     format,
-    accepted: true,
-    summary,
   };
-  return {
-    summary: format === "text" ? summary : JSON.stringify(payload, null, 2),
-    payload,
-  };
+  if (normalizedAction === "queue") {
+    payload.queue = tasks.map((entry, index) => ({
+      position: index + 1,
+      taskId: asString(entry.id),
+      status: asString(entry.status),
+      route: normalizeLiveRoute(entry.route, "delegate"),
+      role: asString(entry.role),
+      summary: asString(entry.summary),
+      updatedAt: asString(entry.updated_at),
+    }));
+  }
+  const summary = format === "json"
+    ? JSON.stringify(payload, null, 2)
+    : [
+        `Task: ${asString(payload.taskId)}`,
+        `Status: ${asString(payload.status) || "unknown"}`,
+        asString(payload.progress) ? `Progress: ${asString(payload.progress)}` : "",
+        asString(payload.flowId) ? `Flow: ${asString(payload.flowId)}` : "",
+        Array.isArray(payload.timeline) && payload.timeline.length > 0
+          ? `Timeline:\n${(payload.timeline as UnknownRecord[]).map((event) => `- ${asString(event.eventAt)} ${asString(event.eventType)}: ${asString(event.summary)}`).join("\n")}`
+          : "",
+        Object.keys(artifacts).length > 0 ? `Artifacts: ${Object.keys(artifacts).join(", ")}` : "",
+      ].filter(Boolean).join("\n");
+  return { summary, payload };
 }
 
-function buildNativeStatusOutput(format: string): string {
+async function buildNativeStatusOutput(format: string): Promise<string> {
   const normalizedFormat = format || "anchors";
-  return [
+  const tasks = sortTaskStateRecords(await readRuntimeTaskState());
+  const lines = [
     `OctoClaw native runtime status (${normalizedFormat})`,
-    "Legacy shell status renderers are removed from tool registration.",
-    "Use the native status surface / read-model pipeline for queue, details, timeline, and anchor views.",
-  ].join("\n");
+    `Active records: ${tasks.length}`,
+  ];
+  for (const task of tasks.slice(0, normalizedFormat === "anchors" ? 10 : 25)) {
+    lines.push(`- ${asString(task.id)} | ${asString(task.status)} | ${normalizeLiveRoute(task.route, "delegate")} | ${asString(task.summary)}`);
+  }
+  if (tasks.length === 0) {
+    lines.push("No runtime task state is currently available.");
+  }
+  return lines.join("\n");
 }
 
 function handoffText(payload: Record<string, unknown>, fallback: string): string {
@@ -231,7 +373,7 @@ function setPolicyStateForContext(ctx: UnknownRecord, entry: UnknownRecord, expl
 
 function delegatedStickyRoute(decision: UnknownRecord): boolean {
   const route = asString(asRecord(decision.route_decision).route);
-  return route === "delegate.single";
+  return route === "delegate";
 }
 
 async function persistStickyLane(sessionKey: string, payload: UnknownRecord, logger: unknown, source: string): Promise<Record<string, unknown>> {
@@ -303,10 +445,10 @@ export function getToolRegistrations(): ToolRegistration[] {
         properties: {
           task: { type: "string", description: "Optional task override. Defaults to the current prompt for this session." },
           command: { type: "string", description: "Optional shell command context." },
-          routeHint: { type: "string", enum: ["reply", "delegate.single", "observe"] },
+          routeHint: { type: "string", enum: ["reply", "delegate"] },
           routeObjection: { type: "boolean", description: "Set true if you disagree with the recommended route" },
           objectionReason: { type: "string", description: "Required if routeObjection is true. Why you disagree." },
-          requestedRoute: { type: "string", enum: ["reply", "delegate.single", "observe"], description: "The route you want instead. Required if routeObjection is true." },
+          requestedRoute: { type: "string", enum: ["reply", "delegate"], description: "The route you want instead. Required if routeObjection is true." },
           workType: { type: "string", enum: ["ops", "research", "code", "review"] },
           budgetBand: { type: "string", enum: ["low", "medium", "high"], description: "Override task complexity. low=fast/cheap model, medium=standard model, high=capable model." },
           phase: { type: "string", description: "Optional phase hint such as inspect, implement, collect, report, verify." },
@@ -416,7 +558,7 @@ export function getToolRegistrations(): ToolRegistration[] {
           : "";
         const nextSummaryBase = asString(asRecord(payload.route_decision).route) === "reply"
           ? "route_hint merged: final route is reply. You may answer directly."
-          : `route_hint merged: final route is ${asString(asRecord(payload.route_decision).route, "delegate.single")}. Next call octoclaw_dispatch.`;
+          : `route_hint merged: final route is ${asString(asRecord(payload.route_decision).route, "delegate")}. Next call octoclaw_dispatch.`;
         const nextSummary = objectionMessage ? `${objectionMessage}; ${nextSummaryBase}` : nextSummaryBase;
         return toolResponse(nextSummary, payload);
       },
@@ -433,7 +575,7 @@ export function getToolRegistrations(): ToolRegistration[] {
           command: { type: "string", description: "Optional shell command if one already exists." },
           channel: { type: "string", description: "Optional transport/origin hint such as slack, wechat, webchat, or any other IM identifier." },
           sessionKey: { type: "string", description: "Optional main session key." },
-          forceRoute: { type: "string", enum: ["reply", "delegate.single", "observe"] },
+          forceRoute: { type: "string", enum: ["reply", "delegate"] },
           metadataJson: { type: "string", description: "Optional JSON object with extra routing metadata." },
         },
         required: ["task"],
@@ -481,7 +623,7 @@ export function getToolRegistrations(): ToolRegistration[] {
     {
       name: "octoclaw_dispatch",
       label: "OctoClaw Dispatch",
-      description: "Run OctoClaw dispatch so reply/observe/delegated work follows the runtime policy plan.",
+      description: "Run OctoClaw dispatch so reply or delegated work follows the runtime policy plan. Read-only observation uses delegate + observer role.",
       params: {
         type: "object",
         additionalProperties: false,
@@ -489,8 +631,8 @@ export function getToolRegistrations(): ToolRegistration[] {
           task: { type: "string", description: "The task to dispatch." },
           command: { type: "string", description: "Optional shell command context for the routed task." },
           cwd: { type: "string", description: "Optional working directory override." },
-          forceRoute: { type: "string", enum: ["auto", "reply", "delegate.single", "observe"] },
-          complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observe, normal=GLM-5.1, deep=gpt-5.4" },
+          forceRoute: { type: "string", enum: ["auto", "reply", "delegate"] },
+          complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observer work, normal=GLM-5.1, deep=gpt-5.4" },
           expectedSeconds: { type: "number", description: "Main agent's estimate of how long this task should take. Used as timeout baseline." },
           timeoutSeconds: { type: "number", description: "Runner timeout in seconds." },
           sessionKey: { type: "string", description: "Optional session key override." },
@@ -515,7 +657,7 @@ export function getToolRegistrations(): ToolRegistration[] {
         }
         const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || buildPolicyMetadata(ctx).session_key);
         const resolvedRoute = asString(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
-        const isDelegatedRoute = resolvedRoute === "delegate.single";
+        const isDelegatedRoute = resolvedRoute === "delegate";
         if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires cached/passed policy for delegated route=${resolvedRoute}; got fresh decision from freeform prompt (source=${freshDecisionSource}). This violates §4.6.1 (dispatch must not re-judge).`;
           await recordPolicyReplay("sealed_decision_required", {
@@ -688,9 +830,9 @@ export function getToolRegistrations(): ToolRegistration[] {
         additionalProperties: false,
         properties: {
           task: { type: "string", description: "The task to run in a subagent." },
-          route: { type: "string", enum: ["delegate.single"] },
+          route: { type: "string", enum: ["delegate"] },
           model: { type: "string", description: "Optional model override." },
-          complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observe, normal=GLM-5.1, deep=gpt-5.4" },
+          complexityBand: { type: "string", enum: ["simple", "normal", "deep"], description: "Task complexity band. simple=light research/observer work, normal=GLM-5.1, deep=gpt-5.4" },
           runtime: { type: "string", enum: ["subagent", "acp"] },
           streamTo: { type: "string", description: "Only valid when runtime=acp." },
           parentId: { type: "string", description: "Optional parent task id." },
@@ -706,10 +848,10 @@ export function getToolRegistrations(): ToolRegistration[] {
         const parentDecision = asRecord(existingState?.decision);
         const parentRoute = asString(asRecord(parentDecision.route_decision).route);
         const parentSessionKey = asString(asRecord(parentDecision.request).session_key);
-        if (Object.keys(parentDecision).length > 0 && parentRoute === "observe" && asString(params.route) === "delegate.single") {
+        if (Object.keys(parentDecision).length > 0 && parentRoute === "delegate" && asString(asRecord(parentDecision.route_decision).judge_role) === "observer_probe" && asString(params.route) === "delegate") {
           return toolResponse(
-            "sealed_route_violation: parent route is observe, cannot reroute to delegate.single. This violates §4.6.1.",
-            { sealed_route_violation: true, parent_route: "observe", attempted_route: "delegate.single", error: "freeform_reroute_blocked" },
+            "sealed_route_violation: parent route is delegate with observer role, cannot reroute this observer workflow. This violates §4.6.1.",
+            { sealed_route_violation: true, parent_route: "delegate", parent_role: "observer_probe", attempted_route: "delegate", error: "freeform_reroute_blocked" },
           );
         }
         const existingDecision = nestedRecord(existingState, "decision");
@@ -743,7 +885,7 @@ export function getToolRegistrations(): ToolRegistration[] {
         try {
           payload = buildTsRuntimeSpawnPayload({
             task: asString(params.task),
-            route: asString(params.route, "delegate.single"),
+            route: asString(params.route, "delegate"),
             decision: existingState?.decision as UnknownRecord | undefined,
             metadata: {
               ...metadata,
@@ -810,7 +952,7 @@ export function getToolRegistrations(): ToolRegistration[] {
       },
       execute: async (params) => {
         const format = asString(params.format, "anchors");
-        const output = buildNativeStatusOutput(format);
+        const output = await buildNativeStatusOutput(format);
         return statusToolResponse(output, format);
       },
     },
@@ -843,7 +985,7 @@ export function getCommandRegistrations(): CommandRegistration[] {
       acceptsArgs: true,
       handler: async (ctx) => {
         const format = asString(ctx.args, "anchors");
-        const output = buildNativeStatusOutput(format);
+        const output = await buildNativeStatusOutput(format);
         const ui = ctxUi(ctx);
         if (hasUi(ctx)) {
           ui.notify?.(`OctoClaw status (${format})`);
@@ -902,7 +1044,7 @@ export function getCommandRegistrations(): CommandRegistration[] {
         try {
           payload = buildTsRuntimeSpawnPayload({
             task,
-            route: "delegate.single",
+              route: "delegate",
             decision: {},
             metadata: buildPolicyMetadata(ctx),
           });

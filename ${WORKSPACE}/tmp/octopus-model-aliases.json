@@ -1,0 +1,7 @@
+{
+  "fast": "minimax-portal/MiniMax-M2.7-highspeed",
+  "normal": "zhipu/GLM-5.1",
+  "strong": "omniroute/cx/gpt-5.4",
+  "heavy": "omniroute/cx/gpt-5.4",
+  "updated_at": "2026-04-18T03:27:28.165538Z"
+}

@@ -6,6 +6,7 @@ export const DELEGATED_ROUTE_NAMES = new Set<string>(["delegate"]);
 export function normalizeLiveRoute(route: unknown, fallback: LiveRoute): LiveRoute {
   const normalized = String(route ?? "").trim();
   if (normalized === "direct") return "reply";
+  if (normalized === "delegate.single" || normalized === "observe") return "delegate";
   if (normalized === "spawn_single" || normalized === "spawn_multi") return "delegate";
   if (normalized === "runner") return "delegate";
   if (LIVE_ROUTE_NAMES.has(normalized as LiveRoute)) return normalized as LiveRoute;
