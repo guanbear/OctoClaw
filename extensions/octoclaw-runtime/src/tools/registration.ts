@@ -408,10 +408,11 @@ export function getToolRegistrations(): ToolRegistration[] {
           toolLogger(ctx),
           payload,
         );
+        const finalRoute = asString(asRecord(payload.route_decision).route);
         const objectionMessage = routeObjection
-          ? (judgeSucceeded
-              ? "judge already decided, objection recorded for shadow adjudication"
-              : "objection accepted, using your route")
+          ? (finalRoute === asString(params.requestedRoute)
+              ? "objection accepted, using your route"
+              : "objection escalated to remote adjudication; using judge recommendation")
           : "";
         const nextSummaryBase = asString(asRecord(payload.route_decision).route) === "reply"
           ? "route_hint merged: final route is reply. You may answer directly."

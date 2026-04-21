@@ -545,8 +545,10 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   const objectionSubmitted = asBoolean(metadata.route_objection, false);
   const objectionRequestedRoute = normalizeLiveRoute(metadata.objection_requested_route ?? metadata.requested_route ?? routeHint, normalizedRequestedLiveRoute);
   const objectionReason = asString(metadata.objection_reason);
+  const mainAgentDisagreesWithJudge = objectionSubmitted && judgeSucceeded
+    && normalizeLiveRoute(objectionRequestedRoute, "reply") !== normalizeLiveRoute(judgeRoute, "reply");
   const objectionAccepted = objectionSubmitted && !judgeSucceeded;
-  const objectionShadowed = objectionSubmitted && judgeSucceeded;
+  const objectionEscalated = mainAgentDisagreesWithJudge;
   const stickyEligible = !routeHintSubmitted && isDelegatedRoute(stickyDecision) && promptsEquivalent(asString(policyState.get(asString(metadata.session_key))?.prompt), prompt);
 
   if (stickyEligible) {
@@ -557,9 +559,18 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     liveRoute = normalizedRequestedLiveRoute;
   }
 
-  if (judgeSucceeded) {
+  if (judgeSucceeded && !objectionEscalated) {
     if (judgeRoute && PHASE_TWO_LIVE_ROUTES.has(normalizeLiveRoute(judgeRoute, "reply"))) {
       liveRoute = normalizeLiveRoute(judgeRoute, liveRoute);
+    }
+  }
+
+  if (objectionEscalated) {
+    const remoteAdjudicated = asBoolean(priorDecision._remote_judge_overrode_local, false);
+    if (remoteAdjudicated) {
+      liveRoute = normalizeLiveRoute(judgeRoute, liveRoute);
+    } else {
+      liveRoute = objectionRequestedRoute;
     }
   }
 
@@ -666,7 +677,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
       stickyEligible ? "sticky_route_applied" : "",
       routeHintSubmitted ? "route_hint_applied" : "",
       objectionAccepted ? "route_objection_accepted" : "",
-      objectionShadowed ? "route_objection_shadowed" : "",
+      objectionEscalated ? "route_objection_escalated" : "",
     ].filter(Boolean))),
   };
   nextDecision.model_policy = {
@@ -691,7 +702,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     objection_reason: objectionReason,
     objection_requested_route: objectionSubmitted ? objectionRequestedRoute : "",
     objection_accepted: objectionAccepted,
-    objection_shadowed: objectionShadowed,
+    objection_escalated: objectionEscalated,
     judge_route: judgeRoute,
   };
   nextDecision.pre_dispatch_ack = {
@@ -886,6 +897,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let judgeRiskFlags: string[] = [];
   let judgeRouteConfidence: number | undefined;
   let delegateReasonCodes: string[] = [];
+  let remoteJudgeOverrideApplied = false;
 
   let dualJudgeConfig = resolveDualJudgeConfig(asRecord(options.metadata));
   if (!dualJudgeConfig) {
@@ -958,6 +970,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           remoteJudgeResult = await callRemoteJudge(judgeInput, judgeResult, escalationReason, dualJudgeConfig);
           if (remoteJudgeResult && !dualJudgeConfig.remote.shadowMode && remoteJudgeResult.override_recommendation === "override_local") {
             judgeResult = remoteJudgeResult;
+            remoteJudgeOverrideApplied = true;
           }
         }
       }
@@ -1056,6 +1069,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _delegation_enabled: true,
     _judge_succeeded: judgeSucceeded,
     _judge_route: judgeRouteOverride ?? null,
+    _remote_judge_overrode_local: remoteJudgeOverrideApplied,
     _judge_role: judgeRole,
     _judge_budget_band: judgeBudgetBand,
     _judge_complexity_band: judgeComplexityBand,

@@ -95,7 +95,8 @@ export type EscalationReason =
   | "scope_unknown"
   | "high_risk_write"
   | "unstable_classification"
-  | "validator_conflict";
+  | "validator_conflict"
+  | "main_agent_judge_disagreement";
 
 /** Minimal config the runtime extension reads from pluginConfig. */
 export interface JudgeFastConfig {

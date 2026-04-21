@@ -486,6 +486,11 @@ export function shouldEscalate(
 
   if (metadata.validator_conflict === true || metadata.validator_hard_conflict === true) return "validator_conflict";
 
+  const routeHint = String(metadata.route_hint ?? metadata.requested_route ?? "").trim();
+  if (routeHint && (routeHint === "reply" || routeHint === "delegate") && routeHint !== localResult.route) {
+    return "main_agent_judge_disagreement";
+  }
+
   return null;
 }
 
