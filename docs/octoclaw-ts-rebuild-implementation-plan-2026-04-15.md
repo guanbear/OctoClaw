@@ -204,13 +204,18 @@ tools/
    - `duration_hint`
    - `reason_codes`
 22. local judge 与 remote judge 共享同源 policy spec，但使用不同上下文深度与 prompt view
-23. 配置层统一 judge 命名：
+23. canonical `decision policy spec` 必须内置至少 4 条 iron laws：
+   - 新工具调用默认委派
+   - 预计超过 1 分钟默认委派
+   - scope 不明优先 clarify
+   - 只有真正属于主线程直接回复的动作才允许留在 main thread
+24. 配置层统一 judge 命名：
    - `local_judge`
    - `remote_judge`
    - 不再长期保留 `judge_fast` / `judge_strong` / `judge_local` / `judge_remote` 多套散名并存
-24. 如需更自然 ACK，允许新增 `ack_writer` lane，但它不属于 route authority
-25. `ack_writer` 与 `local_judge` 可复用同一个本地模型服务，但必须使用独立 job type、独立 prompt view、独立优先级
-26. `decision policy spec` 必须通过 prompt builder 渲染成：
+25. 如需更自然 ACK，允许新增 `ack_writer` lane，但它不属于 route authority
+26. `ack_writer` 与 `local_judge` 可复用同一个本地模型服务，但必须使用独立 job type、独立 prompt view、独立优先级
+27. `decision policy spec` 必须通过 prompt builder 渲染成：
    - `local_judge_prompt_view`
    - `remote_judge_prompt_view`
    - `ack_writer_prompt_view`
@@ -310,8 +315,12 @@ tools/
 23. `ack_writer` 不得阻塞 `local_judge` 与首个可见 ACK
 24. `ack_writer` 默认只使用本地模型，不为 ACK 单独调用远端 judge
 25. `local_judge` 与 `ack_writer` 共用同一模型服务时，必须使用 priority queue 或同等机制，保证 `route_judge` 永远高于 `ack_writer`
-26. child 失败后的下一步由 orchestration/recovery 判，不由 child 或主 agent 自己决定
-27. recovery 默认先区分：
+26. validator/materializer 默认必须执行：
+   - `tool_need_hint == required` -> prefer `delegate`
+   - `duration_hint == long` -> prefer `delegate`
+   - `tool_need_hint == required && scope == unknown` -> `reply_mode = clarify` before `delegate`
+27. child 失败后的下一步由 orchestration/recovery 判，不由 child 或主 agent 自己决定
+28. recovery 默认先区分：
    - `infra_failure`
    - `context_insufficient`
    - `model_capability_insufficient`
@@ -424,7 +433,8 @@ tools/
    - `duration_hint`
    - `delegate_reason_codes`
    - `confidence`
-11. local judge 的输入默认为 `small judge context packet`，至少包含：
+11. `tool_need_hint` 与 `duration_hint` 不是装饰字段，必须进入 validator 的默认 route 收口
+12. local judge 的输入默认为 `small judge context packet`，至少包含：
    - `current_turn`
    - `thread_summary`
    - `active_intent`
@@ -434,23 +444,23 @@ tools/
    - `anchor_or_task_binding`
    - `scope_hint`
    - `recent_excerpt`
-12. remote judge 的输入默认为 `expanded judge context packet`，在 small packet 基础上额外包含：
+13. remote judge 的输入默认为 `expanded judge context packet`，在 small packet 基础上额外包含：
    - `candidate_decision_from_local`
    - `escalation_reason`
    - `optional_task_snapshot`
    - `optional_system_state_summary`
-13. v1 `execution materializer` 至少处理：
+14. v1 `execution materializer` 至少处理：
    - task/flow materialization
    - admission / queue gate
    - write-scope gate
    - spawn profile binding
    - model profile binding
-14. remote judge 输出 schema 复用 local judge 主字段，并额外包含：
+15. remote judge 输出 schema 复用 local judge 主字段，并额外包含：
    - `adjudication_reason`
    - `override_recommendation`
    - `confidence_delta`
-15. remote judge 在 v1 默认只用于 escalation/replay/offline，不承担常规 live latency 热路径
-16. `ack_writer` 输入默认不复用完整 judge packet，而是使用更小的 `ack writer packet`，至少包含：
+16. remote judge 在 v1 默认只用于 escalation/replay/offline，不承担常规 live latency 热路径
+17. `ack_writer` 输入默认不复用完整 judge packet，而是使用更小的 `ack writer packet`，至少包含：
    - `current_turn`
    - `route`
    - `reply_mode`
@@ -458,12 +468,12 @@ tools/
    - `scope`
    - `status_phase`
    - `reason_codes`
-17. `ack_writer` 输出 schema 至少包含：
+18. `ack_writer` 输出 schema 至少包含：
    - `ack_text`
    - `tone`
    - `suppression_hint`
-18. `ack_writer` 不允许输出 route / role / complexity override
-19. judge input context packet 分为 4 层：
+19. `ack_writer` 不允许输出 route / role / complexity override
+20. judge input context packet 分为 4 层：
    - core turn layer
    - continuation state layer
    - binding/control layer

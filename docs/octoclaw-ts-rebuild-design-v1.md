@@ -4227,6 +4227,33 @@ judge 和 main agent 不能各用一套“自己理解的规则”。
 
 #### 9.3.c.3 顶层判定 rubric（v1）
 
+##### 铁律原则（v1）
+
+为避免 judge 长期漂向 `reply`，v1 应再写死一条高优先级 policy iron law：
+
+1. **凡是预计需要新的工具调用，默认委派给子 agent 执行**
+2. **凡是预计运行超过 1 分钟，默认委派给子 agent 执行**
+3. 只有在下面情况之一成立时，才允许不按这条铁律走：
+   - 该动作本身就是 main-thread reply 的组成部分，且必须由主 agent 直接完成
+   - 所需“工具”只是读取现成 runtime truth / summary / artifact refs，不构成新的执行工作单元
+   - 当前真正缺的是 scope / target / slot，最合理下一步是 `reply_mode = clarify`
+
+这条铁律的目的不是重新回到关键词规则，而是把最核心的产品边界写死：
+
+> **主 agent 负责快回复；新工具调用和长执行默认交给 delegated child。**
+
+更准确地说，judge 不需要精确预测“57 秒还是 83 秒”，而只需要做粗粒度判定：
+
+1. 是否明显超过主线程快回复预算
+2. 是否需要新的工具/命令/探测/环境读取
+3. 是否值得把执行上下文剥离到 child worker
+
+所以在 policy spec 里，`tool_need_hint` 与 `duration_hint` 不是装饰字段，而是默认收口到：
+
+1. `tool_need_hint = required` -> 强烈偏向 `delegate`
+2. `duration_hint = long` -> 强烈偏向 `delegate`
+3. 两者同时出现时 -> 默认 `delegate`
+
 ##### `reply`
 
 满足下面条件时，应倾向 `reply`：
@@ -4305,6 +4332,22 @@ v1 默认口径：
 
 > **不确定时优先 `clarify`，而不是把模糊 case 硬压成 `reply.answer`。**
 
+##### tool / duration 到 route 的默认收口
+
+为防止实现时把 `tool_need_hint` / `duration_hint` 做成“只是参考，不真正影响 route”，建议再写死默认收口规则：
+
+1. `tool_need_hint = required`
+   - 默认把 route 收口到 `delegate`
+2. `duration_hint = long`
+   - 默认把 route 收口到 `delegate`
+3. `tool_need_hint = required` 且 `scope = unknown`
+   - 先走 `reply_mode = clarify`
+   - 明确 scope 后再启动 `delegate`
+4. `tool_need_hint = none` 且 `duration_hint = short`
+   - 才更适合保留在 `reply`
+
+也就是说，judge 的职责是给出粗粒度语义信号；真正避免“该委派却被判 reply”的关键，是系统把这两条铁律正式收口进 validator / materializer。
+
 #### 9.3.c.4 AGENTS.md 与 policy spec 的职责分工
 
 `AGENTS.md` 注入仍然值得保留，但职责必须收窄。
@@ -4381,6 +4424,23 @@ duration_hint:
     - medium
     - long
 
+iron_laws:
+  - id: delegate_on_required_tooling
+    rule: >
+      If new tooling, probing, command execution, workspace access, or environment lookup
+      is required, default to delegate rather than reply.
+  - id: delegate_on_long_running_work
+    rule: >
+      If the work is likely to exceed one minute or clearly exceed main-thread fast-response budget,
+      default to delegate rather than reply.
+  - id: clarify_before_guessing_scope
+    rule: >
+      If scope or target is unclear, prefer clarify rather than guessing and executing in the wrong place.
+  - id: main_thread_exception_only
+    rule: >
+      Only keep work on the main thread when direct reply is truly part of the user-facing response
+      and no new execution work unit is needed.
+
 decision_rubric:
   reply:
     description: >
@@ -4402,6 +4462,7 @@ decision_rubric:
       - command_execution
       - tool_need_required
       - duration_medium_or_long
+      - likely_exceeds_one_minute
   clarify:
     description: >
       The system should ask a short clarification question instead of guessing.
@@ -4410,6 +4471,16 @@ decision_rubric:
       - target_unknown
       - critical_slot_missing
       - conflicting_active_intent
+
+validator_default_rules:
+  - if: "tool_need_hint == required"
+    then: "prefer delegate"
+  - if: "duration_hint == long"
+    then: "prefer delegate"
+  - if: "tool_need_hint == required && scope == unknown"
+    then: "reply_mode = clarify before delegate"
+  - if: "tool_need_hint == none && duration_hint == short"
+    then: "reply remains eligible"
 ```
 
 在实现层建议再正式拆成 3 个渲染视图：
