@@ -12,6 +12,8 @@
 2. `octoclaw-harness-contract-inventory.md`
 3. `octoclaw-harness-ownership-map.md`
 4. `octoclaw-im-display-contract.md`
+5. `octoclaw-judge-ack-policy-spec-2026-04-21.md`
+6. `octoclaw-judge-ack-implementation-handoff-2026-04-21.md`
 
 ---
 

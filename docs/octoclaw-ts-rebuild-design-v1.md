@@ -21,6 +21,14 @@
 
 > OctoClaw 接下来不应该继续在旧架构上打补丁，而应该围绕“快首响、稳委派、稳交付、低成本”四个目标，做一次以 TypeScript 为主、以 harness 为核心、以 OpenClaw 原生 task/flow 为执行真相源的重构。
 
+补充说明：
+
+1. 本文仍是总设计稿
+2. judge / ACK / policy 细化口径已拆到：
+   - [octoclaw-judge-ack-policy-spec-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-judge-ack-policy-spec-2026-04-21.md)
+3. 给其他 AI / 协作者直接开工的实现交接稿已拆到：
+   - [octoclaw-judge-ack-implementation-handoff-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-judge-ack-implementation-handoff-2026-04-21.md)
+
 ---
 
 ## 1. 执行摘要
