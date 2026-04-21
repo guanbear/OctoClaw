@@ -19,15 +19,15 @@ timer 只是“到点检查”的时钟，不是“到点就直接发 ACK”的�
 最小输入：
 
 1. `silence_elapsed`
+2. `route`
 2. `ack_already_sent`
 3. `tool_active`
-4. `delegated_running`
-5. `blocked`
-6. `final_response_streaming`
-7. `delivery_pending`
-8. `delivered`
-9. `formal_reply_visible`
-10. `delegate_update_visible`
+4. `blocked`
+5. `final_response_streaming`
+6. `delivery_pending`
+7. `delivered`
+8. `formal_reply_visible`
+9. `delegate_update_visible`
 
 ## 3. 输出动作
 
@@ -54,22 +54,27 @@ ACK 决策优先级固定为：
 
 | 条件 | 动作 | 说明 |
 | --- | --- | --- |
+| `route != reply` | `suppress_ack` | v1 Phase 1 默认不把 reply-style ACK 用在 delegate 路径 |
 | `delivered == true` | `suppress_ack + cancel_ack_writer` | 已经交付，ACK 完全结束 |
 | `final_response_streaming == true` | `suppress_ack + cancel_ack_writer` | 最终答复已开始流出，不能再插 ACK |
 | `delivery_pending == true` | `suppress_ack + cancel_ack_writer` | 结果已在发送路径上，不再补 ACK |
 | `formal_reply_visible == true` | `suppress_ack + cancel_ack_writer` | 用户已看到正式主回复 |
 | `delegate_update_visible == true` 且用户已有可见进展 | `suppress_ack` | 已有可见 delegate 进展，无需补 ACK |
 | `silence_elapsed == false` | `no_action` | 还没到检查窗口 |
-| `silence_elapsed == true` 且 `tool_active || delegated_running || blocked` 且 `ack_already_sent == false` | `send_ack0` | 满足 Phase 1 ACK eligible |
-| `ack0 已发出` 且仍静默 且 `tool_active || delegated_running || blocked` | `enqueue_ack_writer` | 允许低优先级补更自然 nudge |
+| `silence_elapsed == true` 且 `tool_active || blocked` 且 `ack_already_sent == false` | `send_ack0` | 满足 Phase 1 ACK eligible |
+| `ack0 已发出` 且仍静默 且 `tool_active || blocked` | `enqueue_ack_writer` | 允许低优先级补更自然 nudge |
 | `ack_writer 已排队` 且出现 `final_response_streaming || delivery_pending || delivered || formal_reply_visible` | `cancel_ack_writer` | 一旦正式输出出现，立即取消 |
-| `silence_elapsed == true` 但没有 `tool_active / delegated_running / blocked` | `suppress_ack` | 不再按纯超时盲发 ACK |
+| `silence_elapsed == true` 但没有 `tool_active / blocked` | `suppress_ack` | 不再按纯超时盲发 ACK |
 
 ## 6. 推荐伪代码
 
 ```ts
 if (delivered || final_response_streaming || delivery_pending) {
   return suppress_and_cancel;
+}
+
+if (route !== "reply") {
+  return suppress;
 }
 
 if (formal_reply_visible || delegate_update_visible) {
@@ -80,7 +85,7 @@ if (!silence_elapsed) {
   return no_action;
 }
 
-if (!(tool_active || delegated_running || blocked)) {
+if (!(tool_active || blocked)) {
   return suppress;
 }
 

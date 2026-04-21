@@ -226,9 +226,15 @@ tools/
    - `ack_writer_prompt_view`
 28. ACK Phase 1 必须先接入 substrate/runtime 状态门控，不允许继续只按 wall-clock timeout 直接发送 ACK
 29. ACK eligibility 至少消费：
-   - native `queued / running / blocked / completed / failed / cancelled`
+   - native `blocked / completed / failed / cancelled`
    - `checkpoint_seen / result_ready`
-   - runtime `tool_active / delegated_running / final_response_streaming / delivery_pending / delivered`
+   - runtime `tool_active / final_response_streaming / delivery_pending / delivered`
+30. 当前 v1 默认把 ACK Phase 1 收口到 `reply` 路径；delegate 路径优先走 pre-dispatch confirmation 与 status surface
+31. 当前推荐默认时间窗：
+   - `latency_ack = 5s`
+   - `tier1 = 18s`
+   - `tier2 = 45s`
+   - `tier3 = 120s`
 
 明确禁止：
 
@@ -291,7 +297,7 @@ tools/
 22. ACK compare-and-set / insert-if-absent guard
 23. ACK Phase 1 state gate：到点后只检查，不直接发送；必须看 agent/runtime 当前阶段
 24. `final_response_streaming / delivery_pending / delivered` 进入 suppress 集
-25. `tool_active / delegated_running / blocked` 进入 ACK eligible 集
+25. `tool_active / blocked` 进入 ACK eligible 集
 26. delegated failure taxonomy + recovery decision hook
 27. child failure packet -> recovery packet -> main-thread resume packet conversion
 28. same-role retry / stronger-profile retry / re-route / clarify 这 4 类恢复出口

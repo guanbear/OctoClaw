@@ -65,15 +65,33 @@ v1 只保留一个热路径 authority judge，再加一个可选本地文案增�
 
 ### 3.3 推荐触发时序
 
-1. `0-1s`
+当前 v1 推荐把 ACK Phase 1 默认收成 **reply 路径专用**，并采用下面这组初始时序：
+
+1. `latency_ack = 5s`
+2. `tier1 = 18s`
+3. `tier2 = 45s`
+4. `tier3 = 120s`
+
+推荐时序解释：
+
+1. `0-5s`
    - 优先等主模型自己首响
-   - 若已明确是长 `delegate` 路径，则优先保证有可见 ACK
-2. `~3s`
-   - 若仍无首响，则 runtime 发 `ACK0`
-3. `~3-5s`
-   - 若 `route_judge` 已完成，且仍无正式 reply / delegate update，则低优先级触发 `ack_writer`
-4. 正式输出已出现
+   - 不因为轻微思考延迟就过早插 ACK
+2. `~5s`
+   - 到达 `latency_ack` 检查点
+   - 若仍无正式输出，且 Phase 1 gate 允许，则 runtime 发 `ACK0`
+3. `~18s`
+   - 到达 `tier1`
+   - 若仍静默且仍处于 ACK eligible 状态，则允许第一次更明确的“还在处理”提示
+4. `~45s`
+   - 到达 `tier2`
+   - 若仍静默，则进入长一点的处理中提示
+5. `~120s`
+   - 到达 `tier3`
+   - 若仍静默，则允许转成“是否继续等待/是否先给阶段结果”的话术
+6. 正式输出已出现
    - 立即取消 `ack_writer`
+   - 后续 tiered ACK 也必须 suppress
 
 ### 3.4 ACK Phase 1：状态门控，而不是纯超时
 
@@ -120,9 +138,10 @@ ACK 不应只由 wall-clock timer 决定。
 
 ```yaml
 ack_phase1_gate:
+  route_scope:
+    - reply_only_in_v1
   ack_eligible_when_any:
     - tool_active
-    - delegated_running
     - blocked
   ack_suppress_when_any:
     - final_response_streaming
@@ -134,7 +153,7 @@ ack_phase1_gate:
 
 Phase 1 可以稳定做到：
 
-1. 真在工具执行 / 检索 / 子任务运行时才 ACK
+1. 真在 reply 路径工具执行 / blocked 时才 ACK
 2. 一旦最终答复开始流出，立刻 suppress ACK
 3. 一旦最终交付已经进入待发送阶段，不再补 ACK
 

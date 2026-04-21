@@ -4517,6 +4517,16 @@ ACK 的第一版不应继续只按 wall-clock timeout 直接触发。
 2. 一旦系统进入**最终答复流**或**最终交付待发送**阶段，ACK 必须 suppress
 3. 不追求在还没出 token 前精确预测“马上就会答完”
 
+当前 v1 默认进一步收口为：
+
+1. ACK Phase 1 先只服务 `reply` 路径
+2. `delegate` 路径优先依赖 pre-dispatch confirmation、status surface、timeline 和 recovery surfacing
+3. 当前推荐默认时序：
+   - `latency_ack = 5s`
+   - `tier1 = 18s`
+   - `tier2 = 45s`
+   - `tier3 = 120s`
+
 这意味着 ACK Phase 1 必须消费两类状态：
 
 1. OpenClaw substrate / native taskflow truth
@@ -4539,9 +4549,10 @@ ACK 的第一版不应继续只按 wall-clock timeout 直接触发。
 
 ```yaml
 ack_phase1_gate:
+  route_scope:
+    - reply_only_in_v1
   ack_eligible_when_any:
     - tool_active
-    - delegated_running
     - blocked
   ack_suppress_when_any:
     - final_response_streaming
@@ -4553,7 +4564,7 @@ ack_phase1_gate:
 
 这样第一版就能稳定做到：
 
-1. 真在检索/调工具/跑子任务时才发 ACK
+1. 真在 reply 路径检索/调工具/blocked 时才发 ACK
 2. 一旦最终答复开始流出，立即 suppress ACK
 3. 一旦最终交付已进入待发送阶段，不再补 ACK
 
