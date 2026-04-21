@@ -1225,7 +1225,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         local_judge_confidence: localJudgeConfidence,
         final_judge_route: judgeResult?.route ?? null,
         final_judge_confidence: judgeResult?.confidence ?? null,
-        judge_abstain: judgeResult?.route === "undetermined",
+        judge_abstain: Boolean(judgeResult?.abstainReason),
         judge_ack_text: judgeAckText,
         rule_route: decision.route,
         judge_override: false,
@@ -1254,6 +1254,45 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         judgeRiskFlags = asStringArray(judgeResult.riskFlags);
         judgeRouteConfidence = coerceRouteConfidence(judgeResult.routeConfidence);
         delegateReasonCodes = coerceDelegateReasonCodes(judgeResult.delegateReasonCodes);
+
+        // ── Validator default rules (spec §11) ──
+        // tool_need_hint / duration_hint must influence route, not just be telemetry.
+        const toolNeedHint = judgeResult.toolNeedHint ?? judgeResult.tool_need_hint;
+        const durationHint = judgeResult.durationHint ?? judgeResult.duration_hint;
+        const judgeScope = judgeResult.scope;
+        const validatorOverrideReasons: string[] = [];
+
+        if (toolNeedHint === "required" && judgeRouteOverride === "reply") {
+          if (judgeScope === "unknown") {
+            // tool_need_hint==required && scope==unknown → clarify before delegate
+            judgeRouteOverride = "delegate";
+            judgeSucceeded = true;
+            validatorOverrideReasons.push("validator:tool_need_required+scope_unknown→delegate(reply_mode=clarify)");
+          } else {
+            // tool_need_hint==required → prefer delegate
+            judgeRouteOverride = "delegate";
+            judgeSucceeded = true;
+            validatorOverrideReasons.push("validator:tool_need_required→delegate");
+          }
+        } else if (durationHint === "long" && judgeRouteOverride === "reply") {
+          // duration_hint==long → prefer delegate
+          judgeRouteOverride = "delegate";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push("validator:duration_long→delegate");
+        }
+        // tool_need_hint==none && duration_hint==short → reply remains eligible (no override needed)
+
+        if (validatorOverrideReasons.length > 0 && !judgeConfig.shadowMode) {
+          judgeShadowLog.validator_override = true;
+          judgeShadowLog.validator_override_reasons = validatorOverrideReasons;
+          judgeShadowLog.validator_tool_need_hint = toolNeedHint ?? null;
+          judgeShadowLog.validator_duration_hint = durationHint ?? null;
+          judgeShadowLog.validator_scope = judgeScope ?? null;
+          judgeShadowLog.final_judge_route = judgeRouteOverride;
+          if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+            console.log(`[octoclaw-judge] validator override: ${validatorOverrideReasons.join(", ")}`);
+          }
+        }
       }
     }
   }
