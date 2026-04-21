@@ -6,7 +6,25 @@
  */
 
 /** Route values the judge is allowed to return. */
-export type JudgeRoute = "reply" | "delegate" | "undetermined";
+export type JudgeRoute = "reply" | "delegate";
+
+/** Reply-mode hint for direct responses. */
+export type ReplyMode = "answer" | "clarify";
+
+/** Delegate role contract from the canonical policy spec. */
+export type DelegateRole = "observer" | "default" | "code" | "research" | "review";
+
+/** Coordination mode hint from the canonical policy spec. */
+export type CoordinationModeHint = "solo_worker" | "advisor_assisted" | "multi_agent_controlled";
+
+/** Scope hint from the canonical policy spec. */
+export type JudgeScope = "local" | "remote" | "both" | "unknown";
+
+/** Tool-need hint from the canonical policy spec. */
+export type ToolNeedHint = "none" | "maybe" | "required";
+
+/** Duration hint from the canonical policy spec. */
+export type DurationHint = "short" | "medium" | "long";
 
 /** Budget band hint for downstream model-profile selection. */
 export type JudgeBudgetBand = "low" | "medium" | "high";
@@ -135,6 +153,21 @@ export interface JudgeOutput {
   abstainReason: string | null;
   ackText: string | null;
 
+  // Canonical policy-spec fields
+  reply_mode?: ReplyMode | null;
+  delegate_role?: DelegateRole | null;
+  coordination_mode_hint?: CoordinationModeHint | null;
+  tool_need_hint?: ToolNeedHint;
+  duration_hint?: DurationHint;
+  replyMode?: ReplyMode | null;
+  delegateRole?: DelegateRole | null;
+  coordinationModeHint?: CoordinationModeHint | null;
+  complexity?: SpawnComplexityBand | null;
+  scope?: JudgeScope;
+  toolNeedHint?: ToolNeedHint | null;
+  durationHint?: DurationHint | null;
+  reasonCodes?: string[];
+
   // Design §9.3 extended fields
   role?: "main_reply" | "observer_probe" | "worker_research" | "worker_code" | "worker_review";
   complexityBand?: SpawnComplexityBand;
@@ -146,10 +179,8 @@ export interface JudgeOutput {
 
   // Legacy replay fields
   requestKind?: string;
-  scope?: string;
   target?: string;
   budgetBand?: JudgeBudgetBand;
-  reasonCodes?: string[];
   evidenceRequired?: boolean;
   ackRequired?: boolean;
 }
@@ -161,7 +192,14 @@ export interface RemoteJudgeExpandedPacket {
   /** The local judge's candidate decision */
   candidate_decision_from_local: {
     route: JudgeRoute;
+    reply_mode?: ReplyMode | null;
+    delegate_role?: DelegateRole | null;
+    coordination_mode_hint?: CoordinationModeHint | null;
     confidence: number;
+    complexity?: SpawnComplexityBand | null;
+    scope?: JudgeScope | null;
+    tool_need_hint?: ToolNeedHint | null;
+    duration_hint?: DurationHint | null;
     role?: string;
     complexityBand?: SpawnComplexityBand;
     riskFlags?: string[];
@@ -233,7 +271,7 @@ export const ESCALATION_DEFAULTS = {
 export function isValidJudgeOutput(value: unknown): value is JudgeOutput {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
-  if (!["reply", "delegate", "undetermined"].includes(obj.route as string)) return false;
+  if (!["reply", "delegate"].includes(obj.route as string)) return false;
   if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) return false;
   return true;
 }
@@ -253,7 +291,6 @@ export function isRemoteJudgeOutput(value: unknown): value is RemoteJudgeOutput 
 /** Check if a judge output should be used (not abstained, high enough confidence). */
 export function isActionableJudgeResult(result: JudgeOutput | null, minConfidence: number): result is JudgeOutput {
   if (!result) return false;
-  if (result.route === "undetermined") return false;
   if (result.confidence < minConfidence) return false;
   return true;
 }
