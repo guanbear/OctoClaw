@@ -242,6 +242,53 @@ interface OpenAICompatOptions {
   apiKey: string;
   maxTokens: number;
   includeResponseFormat: boolean;
+  useOllamaNative?: boolean;
+}
+
+function isOllamaEndpoint(baseUrl: string): boolean {
+  return baseUrl.includes(":11434") || baseUrl.includes("localhost:11434") || baseUrl.includes("127.0.0.1:11434");
+}
+
+async function postOllamaNative(
+  options: OpenAICompatOptions,
+  systemPrompt: string,
+  userPrompt: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const body = JSON.stringify({
+    model: options.modelId,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    stream: false,
+    think: false,
+    format: "json",
+  });
+
+  const url = options.baseUrl.replace(/\/v1$/, "").replace(/\/+$/, "") + "/api/chat";
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    signal,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "unknown");
+    throw new Error(`judge HTTP ${response.status}: ${errorText}`);
+  }
+
+  const json = await response.json() as Record<string, unknown>;
+  if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+    const evalCount = json.eval_count as number | undefined;
+    const promptEvalCount = json.prompt_eval_count as number | undefined;
+    console.log(`[octoclaw-judge] Ollama native response tokens: prompt=${promptEvalCount ?? "?"} completion=${evalCount ?? "?"}`);
+  }
+  const message = json.message as Record<string, unknown> | undefined;
+  const content = message?.content;
+  return typeof content === "string" && content.trim() ? content : "";
 }
 
 async function postOpenAICompat(
@@ -301,6 +348,20 @@ async function callOpenAICompat(
   signal: AbortSignal,
   maxTokens: number,
 ): Promise<string> {
+  if (isOllamaEndpoint(config.baseUrl)) {
+    if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+      console.log(`[octoclaw-judge] using Ollama native API (think:false)`);
+    }
+    return postOllamaNative({
+      modelId: config.modelId,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      maxTokens,
+      includeResponseFormat: false,
+      useOllamaNative: true,
+    }, systemPrompt, userPrompt, signal);
+  }
+
   try {
     return await postOpenAICompat({
       modelId: config.modelId,
@@ -377,6 +438,14 @@ export async function callLlmJudge(
       console.log(`[octoclaw-judge] raw response length=${raw.length} preview="${raw.slice(0, 200)}"`);
     }
     const parsed = extractJson(raw) as Record<string, unknown> | null;
+
+    // Normalize route aliases from small models that may output action names instead of canonical routes
+    if (parsed && typeof parsed.route === "string") {
+      const r = parsed.route as string;
+      if (r === "spawn_work" || r === "spawn_single" || r === "spawn_multi" || r === "delegate.single") {
+        parsed.route = "delegate";
+      }
+    }
 
     if (!parsed || !isValidJudgeOutput(parsed)) {
       lastJudgeFailureClass = "invalid_json";
@@ -455,6 +524,14 @@ export async function callRemoteJudge(
     );
 
     const parsed = extractJson(raw) as Record<string, unknown> | null;
+
+    if (parsed && typeof parsed.route === "string") {
+      const r = parsed.route as string;
+      if (r === "spawn_work" || r === "spawn_single" || r === "spawn_multi" || r === "delegate.single") {
+        parsed.route = "delegate";
+      }
+    }
+
     if (!parsed || !isRemoteJudgeOutput(parsed)) {
       lastJudgeFailureClass = "invalid_json";
       warnJudgeFailure(new Error("remote judge returned invalid JSON"));

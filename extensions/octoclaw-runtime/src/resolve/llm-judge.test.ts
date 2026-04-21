@@ -13,9 +13,9 @@ import { resolveStatelessPolicyDecision } from "./policy-resolver.js";
 const localJudgeConfig = {
   enabled: true,
   shadowMode: false,
-  modelId: "qwen3-judge:0.6b-q4km",
-  baseUrl: "http://127.0.0.1:11434/v1",
-  apiKey: "ollama",
+  modelId: "test-local-judge",
+  baseUrl: "http://localhost:19999/v1",
+  apiKey: "test-key",
   timeoutMs: 1500,
   timeoutLocalMs: 800,
   minConfidence: 0.6,
