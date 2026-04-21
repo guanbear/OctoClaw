@@ -799,54 +799,37 @@ export function buildConversationGrounding(options: {
     return noGrounding("no_recent_subject_turn");
   }
   const facts = subjectTurn.facts;
+  const taskRecord = facts.taskId ? taskIndex.get(facts.taskId) : null;
   const lines = [
-    "[OctoClaw grounded follow-up]",
-    "Answer only from these execution facts. Do not guess from memory.",
-    `- Subject prompt: ${stringValue(subjectTurn.prompt) || "(unknown)"}`,
-    `- Route decision: ${stringValue(subjectTurn.route) || "(unknown)"}`,
+    "[OctoClaw task status]",
+    `task_id: ${facts.taskId || "(unknown)"}`,
+    `status: ${facts.currentTaskStatus || facts.materializationStatus || "unknown"}`,
   ];
-  if (subjectTurn.taskClass) lines.push(`- Task class: ${subjectTurn.taskClass}`);
-  if (subjectTurn.protectedLane) lines.push(`- Protected lane: ${subjectTurn.protectedLane}`);
-  if (facts.ackSeen) {
-    lines.push(`- Ack: ${[facts.ackKind, facts.ackMode, facts.ackSent ? "sent" : "not_sent"].filter(Boolean).join(" · ")}`);
-    if (facts.ackReason) lines.push(`- Ack reason: ${facts.ackReason}`);
+  if (facts.taskId && facts.dispatchSeen) lines.push(`route: ${stringValue(subjectTurn.route) || "delegate"}`);
+  if (taskRecord) {
+    const workerPool = stringValue(taskRecord.worker_pool);
+    if (workerPool) lines.push(`worker_pool: ${workerPool}`);
+    const model = stringValue((taskRecord as JsonRecord).model || taskRecord.role);
+    if (model) lines.push(`model: ${model}`);
+    const createdAt = stringValue(taskRecord.spawned_at || taskRecord.started_at);
+    if (createdAt) lines.push(`created_at: ${createdAt}`);
+    const lastEventAt = stringValue(taskRecord.updated_at || taskRecord.completed_at);
+    if (lastEventAt) lines.push(`last_event_at: ${lastEventAt}`);
   }
-  lines.push(`- Dispatch called: ${facts.dispatchSeen ? "yes" : "no"}`);
-  lines.push(`- Dispatch executed: ${facts.dispatchExecuted ? "yes" : "no"}`);
-  lines.push(`- Delegated: ${facts.delegated ? "yes" : "no"}`);
-  if (facts.delegationTool) lines.push(`- Delegation tool: ${facts.delegationTool}`);
-  if (facts.materializationStatus) lines.push(`- Materialization: ${facts.executionKind || "delegated"} · ${facts.materializationStatus}`);
-  if (facts.directTools.length > 0) lines.push(`- Direct tools used: ${facts.directTools.join(", ")}`);
-  else if (isProvenancePrompt(prompt)) lines.push("- Direct tools used: unavailable in main session");
-  if (facts.runnerPlanKind) lines.push(`- Delegated workflow: ${facts.runnerPlanKind}`);
-  if (facts.runnerPlanSummary) lines.push(`- Delegated workflow summary: ${facts.runnerPlanSummary}`);
-  if (facts.delegatedProbeKind) lines.push(`- Delegated probe: ${facts.delegatedProbeKind}`);
-  if (facts.delegatedProbeSource) lines.push(`- Delegated evidence source: ${facts.delegatedProbeSource}`);
-  if (facts.delegatedProbeProject) lines.push(`- Delegated lookup project: ${facts.delegatedProbeProject}`);
-  if (facts.delegatedProbeFocus) lines.push(`- Delegated lookup focus: ${facts.delegatedProbeFocus}`);
-  if (facts.dispatchMode) lines.push(`- Runner dispatch mode: ${facts.dispatchMode}`);
-  if (facts.runnerJobId) lines.push(`- Runner job id: ${facts.runnerJobId}`);
-  if (facts.taskId) lines.push(`- Task id: ${facts.taskId}`);
-  if (facts.taskBoundSeen) lines.push("- Task bound: yes");
-  if (facts.runnerStartedSeen) lines.push("- Runner started: yes");
-  if (facts.currentTaskStatus) lines.push(`- Current task status: ${facts.currentTaskStatus}`);
-  if (facts.currentTaskSummary) lines.push(`- Current task summary: ${facts.currentTaskSummary}`);
-  if (facts.claimOwner) lines.push(`- Claim owner: ${facts.claimOwner}`);
-  if (facts.workspaceMode) lines.push(`- Workspace mode: ${facts.workspaceMode}`);
-  if (facts.writeScopeSummary) lines.push(`- Write scope: ${facts.writeScopeSummary}`);
-  if (facts.substrateState || facts.substrateRevision !== null) {
-    lines.push(`- Substrate state: ${[facts.substrateState, facts.substrateRevision !== null ? `rev ${facts.substrateRevision}` : ""].filter(Boolean).join(" · ")}`);
+  if (facts.currentTaskSummary) lines.push(`progress: ${facts.currentTaskSummary}`);
+  const isTerminal = facts.currentTaskStatus === "completed" || facts.currentTaskStatus === "failed" || facts.currentTaskStatus === "timed_out";
+  if (isTerminal) {
+    lines.push(`terminal_summary: ${facts.currentTaskSummary || facts.materializationStatus || "unknown"}`);
   }
-  if (facts.queuePosition !== null) lines.push(`- Queue position: ${facts.queuePosition}`);
-  if (facts.actionAvailability.length > 0) lines.push(`- Action availability: ${facts.actionAvailability.join(", ")}`);
-  if (facts.deliveryEventKind) lines.push(`- Delivery state: ${facts.deliveryEventKind}`);
-  else if (facts.finalDeliveryRelayEvent) lines.push(`- Final delivery: ${[facts.finalDeliveryRelayEvent, facts.finalDeliveryRelayState].filter(Boolean).join(" · ")}`);
-  if (facts.latestTaskEventKind) lines.push(`- Latest task event: ${facts.latestTaskEventKind}${facts.latestTaskEventMessage ? ` · ${facts.latestTaskEventMessage}` : ""}`);
-  if (Object.keys(facts.capabilityFailure).length > 0) {
-    lines.push(`- Capability failure: ${stringValue(facts.capabilityFailure.reason || facts.capabilityFailure.code || "unknown")}`);
-    if (facts.capabilityFailureDetail) lines.push(`- Capability failure detail: ${facts.capabilityFailureDetail}`);
+  if (facts.substrateState) lines.push(`substrate: ${facts.substrateState}${facts.substrateRevision !== null ? ` rev=${facts.substrateRevision}` : ""}`);
+  if (facts.deliveryEventKind) lines.push(`delivery: ${facts.deliveryEventKind}`);
+  if (facts.capabilityFailure && Object.keys(facts.capabilityFailure).length > 0) {
+    lines.push(`error: ${stringValue(facts.capabilityFailure.reason || facts.capabilityFailure.code || "unknown")}`);
   }
-  lines.push("If the user asks how it was checked, only mention tools listed above. If the fact is unavailable, say so plainly.");
+  if (facts.currentTaskStatus === "failed" || facts.currentTaskStatus === "timed_out") {
+    lines.push(`retryable: ${facts.capabilityFailure?.retryable === true ? "true" : "check with octoclaw_task_action retry"}`);
+  }
+  lines.push("Answer from these facts only. Do not guess from memory.");
 
   return {
     available: true,
