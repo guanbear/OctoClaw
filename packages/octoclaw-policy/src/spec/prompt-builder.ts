@@ -89,8 +89,16 @@ function renderCriticalRules(): string {
 
 function renderLocalJudgeInstructions(): string {
   return [
+    "## ⛔ HARD CONSTRAINTS — VIOLATION = INVALID OUTPUT",
+    "- You CANNOT write code, scripts, commands, or any executable content.",
+    "- You CANNOT execute, run, or perform any task the user asked.",
+    "- You CANNOT produce anything except the JSON routing decision below.",
+    "- If the user asks to write code/run commands/analyze logs/check status → that PROVES route=delegate.",
+    "- Your ONLY job: classify the user's intent into route + metadata fields.",
+    "- Any output that is not a JSON object with route/confidence/scope/... fields is INVALID.",
+    "",
     "## Local judge instructions",
-    "- You are the hot-path authority for route selection.",
+    "- You are the hot-path authority for route selection ONLY.",
     "- Top-level route options are ONLY \"reply\" or \"delegate\".",
     "- Do not invent other route labels.",
     "- If route=reply, set reply_mode to \"answer\" or \"clarify\".",
