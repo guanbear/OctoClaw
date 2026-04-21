@@ -28,6 +28,16 @@ import {
   startRuntimeWorkflow,
   type RuntimeWorkflowState,
 } from "@octoclaw/runtime-core/workflow";
+import {
+  advanceAttemptStatus,
+  projectTaskStatus,
+} from "@octoclaw/runtime-core/delegate";
+import {
+  applyRecoveryHook,
+  assessRecoveryNeed,
+  type RecoveryAssessment,
+} from "@octoclaw/runtime-core/recovery";
+import type { RecoveryInfo, TimeoutCategory } from "@octoclaw/contracts/delegate";
 import type { PolicyRole } from "@octoclaw/policy/roles";
 import type { ExecutionProfileTarget } from "@octoclaw/policy/model";
 import type { LiveRoute } from "@octoclaw/policy/route";
@@ -416,16 +426,243 @@ function buildRuntimeTruthWorkflowStub(metadata: UnknownRecord = {}): RuntimeWor
       : markWorkflowCompleted(workflow);
 }
 
-function buildRuntimeTruthMetadata(workflowOrMetadata: UnknownRecord = {}, options: { helperInvoker?: NativeHelperInvoker | null } = {}) {
+function isTerminalWorkflowPhase(phase: unknown): boolean {
+  const value = asString(phase);
+  return value === "completed" || value === "failed" || value === "timed_out";
+}
+
+function isTerminalDelegateStatus(status: unknown): boolean {
+  const value = asString(status);
+  return value === "completed"
+    || value === "failed"
+    || value === "timed_out"
+    || value === "cancelled";
+}
+
+function timeoutCategoryForTrigger(trigger: RecoveryAssessment["trigger"]): TimeoutCategory | undefined {
+  switch (trigger) {
+    case "queue_deadline_exceeded":
+      return "queue_timeout";
+    case "start_deadline_exceeded":
+      return "start_timeout";
+    case "progress_deadline_exceeded":
+      return "progress_timeout";
+    case "runtime_deadline_exceeded":
+      return "runtime_timeout";
+    case "delivery_deadline_exceeded":
+      return "delivery_timeout";
+    default:
+      return undefined;
+  }
+}
+
+function recoveryInfoFromAssessment(assessment: RecoveryAssessment): RecoveryInfo {
+  return {
+    category: assessment.timedOut ? "timeout" : assessment.trigger === "lease_expired" ? "stale_claim" : "transient_error",
+    reason: assessment.reason,
+    retryEligible: !assessment.timedOut,
+    maxRetries: assessment.timedOut ? 0 : 1,
+    timeoutCategory: timeoutCategoryForTrigger(assessment.trigger),
+  };
+}
+
+function applyRecoveryAssessmentToRuntimeTruth(
+  runtimeTruth: UnknownRecord,
+  workflow: RuntimeWorkflowState,
+  assessment: RecoveryAssessment,
+  binding: ReturnType<ReturnType<typeof createOctoClawRuntimePlugin>["readBinding"]>,
+): UnknownRecord {
+  const nextRuntimeTruth: UnknownRecord = {
+    ...runtimeTruth,
+    workflow,
+    binding,
+    recovery: {
+      required: assessment.required,
+      trigger: assessment.trigger,
+      timedOut: assessment.timedOut,
+      deadlineField: assessment.deadlineField,
+      reason: assessment.reason,
+      checkedAt: new Date().toISOString(),
+      status: assessment.required ? "applied" : "healthy",
+    },
+  };
+
+  const delegateTask = isDelegateTask(runtimeTruth.delegateTask) ? runtimeTruth.delegateTask : null;
+  const delegateAttempt = isDelegateAttempt(runtimeTruth.delegateAttempt) ? runtimeTruth.delegateAttempt : null;
+  if (!delegateTask || !delegateAttempt || !assessment.required) {
+    return nextRuntimeTruth;
+  }
+
+  const recoveryInfo = recoveryInfoFromAssessment(assessment);
+  const nextAttemptStatus = assessment.timedOut ? "timed_out" : "recovering";
+  const nextAttempt = advanceAttemptStatus(delegateAttempt, nextAttemptStatus, {
+    failureReason: assessment.timedOut ? assessment.reason : delegateAttempt.failureReason,
+    recoveryInfo,
+  });
+  const nextTask = {
+    ...delegateTask,
+    status: projectTaskStatus(nextAttempt.status),
+    updatedAt: new Date().toISOString(),
+    lastEventAt: new Date().toISOString(),
+    currentAttemptId: nextAttempt.attemptId,
+  };
+
+  nextRuntimeTruth.delegateAttempt = nextAttempt;
+  nextRuntimeTruth.delegateTask = nextTask;
+  nextRuntimeTruth.nativeTaskBinding = delegateAttempt.nativeBinding ?? runtimeTruth.nativeTaskBinding ?? null;
+  return nextRuntimeTruth;
+}
+
+function buildRecoveredRuntimeTruth(
+  workflowOrMetadata: UnknownRecord = {},
+  options: { helperInvoker?: NativeHelperInvoker | null; now?: Date } = {},
+): { workflow: RuntimeWorkflowState; binding: ReturnType<ReturnType<typeof createOctoClawRuntimePlugin>["readBinding"]>; recovery: UnknownRecord } {
   const helperInvoker = options.helperInvoker ?? (workflowOrMetadata.helperInvoker as NativeHelperInvoker | undefined) ?? undefined;
   const plugin = createOctoClawRuntimePlugin(helperInvoker ? { helperInvoker } : {});
   const workflow = isRecord(workflowOrMetadata.taskMaterialization)
     ? workflowOrMetadata as unknown as RuntimeWorkflowState
     : buildRuntimeTruthWorkflowStub(workflowOrMetadata);
+  const now = options.now ?? new Date();
+  const assessment = assessRecoveryNeed(workflow, now);
+  const recoveredWorkflow = assessment.required ? applyRecoveryHook(workflow, now) : workflow;
+  const binding = plugin.readBinding(recoveredWorkflow);
+  return {
+    workflow: recoveredWorkflow,
+    binding,
+    recovery: {
+      required: assessment.required,
+      trigger: assessment.trigger,
+      timedOut: assessment.timedOut,
+      deadlineField: assessment.deadlineField,
+      reason: assessment.reason,
+      checkedAt: now.toISOString(),
+      status: assessment.required ? "applied" : "healthy",
+    },
+  };
+}
+
+function buildRuntimeTruthMetadata(workflowOrMetadata: UnknownRecord = {}, options: { helperInvoker?: NativeHelperInvoker | null } = {}) {
+  const { workflow, binding, recovery } = buildRecoveredRuntimeTruth(workflowOrMetadata, options);
   return {
     authority: "ts-native-adapter",
-    pluginName: plugin.name,
-    binding: plugin.readBinding(workflow),
+    pluginName: "octoclaw-runtime-ts",
+    workflow,
+    binding,
+    recovery,
+  };
+}
+
+function refreshRecoveryForStateEntry(
+  key: string,
+  state: PolicyContextState,
+  now = new Date(),
+): { updated: boolean; timedOut: boolean; summary: UnknownRecord | null } {
+  const decision = asRecord(state.decision);
+  const runtimeTruth = asRecord(decision.runtime_truth);
+  const workflowCandidate = runtimeTruth.workflow;
+  if (!isRecord(workflowCandidate) || isTerminalWorkflowPhase(asRecord(workflowCandidate.lifecycle).phase)) {
+    return { updated: false, timedOut: false, summary: null };
+  }
+
+  const delegateTask = isDelegateTask(runtimeTruth.delegateTask) ? runtimeTruth.delegateTask : null;
+  const delegateAttempt = isDelegateAttempt(runtimeTruth.delegateAttempt) ? runtimeTruth.delegateAttempt : null;
+  if (delegateTask && isTerminalDelegateStatus(delegateTask.status)) {
+    return { updated: false, timedOut: false, summary: null };
+  }
+  if (delegateAttempt && isTerminalDelegateStatus(delegateAttempt.status)) {
+    return { updated: false, timedOut: false, summary: null };
+  }
+
+  const workflow = workflowCandidate as unknown as RuntimeWorkflowState;
+  const assessment = assessRecoveryNeed(workflow, now);
+  if (!assessment.required) {
+    return { updated: false, timedOut: false, summary: null };
+  }
+
+  const helperInvoker = typeof state.helperInvoker === "function" ? state.helperInvoker as NativeHelperInvoker : null;
+  const plugin = createOctoClawRuntimePlugin(helperInvoker ? { helperInvoker } : {});
+  const recoveredWorkflow = applyRecoveryHook(workflow, now);
+  const binding = plugin.readBinding(recoveredWorkflow);
+  const nextRuntimeTruth = applyRecoveryAssessmentToRuntimeTruth(runtimeTruth, recoveredWorkflow, assessment, binding);
+  const nextDecision: UnknownRecord = {
+    ...decision,
+    runtime_truth: nextRuntimeTruth,
+  };
+  const nextDelegateTaskContext = buildDelegateTaskContext(
+    isDelegateTask(nextRuntimeTruth.delegateTask) ? nextRuntimeTruth.delegateTask : null,
+    isDelegateAttempt(nextRuntimeTruth.delegateAttempt) ? nextRuntimeTruth.delegateAttempt : null,
+  );
+  if (nextDelegateTaskContext) {
+    nextDecision.delegateTaskContext = nextDelegateTaskContext;
+  }
+
+  policyState.set(key, {
+    ...state,
+    decision: nextDecision,
+    delegateTaskContext: nextDelegateTaskContext,
+    updatedAt: Date.now(),
+  });
+
+  return {
+    updated: true,
+    timedOut: assessment.timedOut,
+    summary: {
+      stateKey: key,
+      taskId: asString(binding.taskId),
+      flowId: asString(binding.flowId),
+      delegateTaskId: delegateTask?.delegateTaskId ?? null,
+      attemptId: delegateAttempt?.attemptId ?? null,
+      trigger: assessment.trigger,
+      timedOut: assessment.timedOut,
+      reason: assessment.reason,
+      deadlineField: assessment.deadlineField,
+      checkedAt: now.toISOString(),
+    },
+  };
+}
+
+export function checkActiveTaskRecovery(options: { taskId?: string; now?: Date } = {}): {
+  checkedAt: string;
+  updatedCount: number;
+  timedOutCount: number;
+  recoveries: UnknownRecord[];
+} {
+  const now = options.now ?? new Date();
+  const targetTaskId = asString(options.taskId);
+  const recoveries: UnknownRecord[] = [];
+  let updatedCount = 0;
+  let timedOutCount = 0;
+
+  for (const { key, state } of policyState.entries()) {
+    const decision = asRecord(state.decision);
+    const runtimeTruth = asRecord(decision.runtime_truth);
+    if (targetTaskId) {
+      const binding = asRecord(runtimeTruth.binding);
+      const delegateTask = asRecord(runtimeTruth.delegateTask);
+      const matches = asString(binding.taskId) === targetTaskId
+        || asString(binding.flowId) === targetTaskId
+        || asString(delegateTask.delegateTaskId) === targetTaskId;
+      if (!matches) {
+        continue;
+      }
+    }
+
+    const result = refreshRecoveryForStateEntry(key, state as PolicyContextState, now);
+    if (!result.updated || !result.summary) {
+      continue;
+    }
+    updatedCount += 1;
+    if (result.timedOut) {
+      timedOutCount += 1;
+    }
+    recoveries.push(result.summary);
+  }
+
+  return {
+    checkedAt: now.toISOString(),
+    updatedCount,
+    timedOutCount,
+    recoveries,
   };
 }
 

@@ -30,7 +30,7 @@ import {
   resolvePolicyStateKey,
   resolvePolicyStateKeys,
 } from "./resolve/session.js";
-import { resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
+import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
 import { envOverrides, resolveReplayLogPath, resolveTaskStatePath } from "./resolve/env.js";
 import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
@@ -441,17 +441,29 @@ export const plugin = {
       if (!hookConfig.enabled) return;
       const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
       const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
+      const recoveryCheck = isDelegatedRoute(decision)
+        ? checkActiveTaskRecovery({
+            taskId: stringValue(asRecord(asRecord(decision.runtime_truth).binding).taskId),
+          })
+        : { checkedAt: "", updatedCount: 0, timedOutCount: 0, recoveries: [] as UnknownRecord[] };
+      const activeRecoveryState = recoveryCheck.updatedCount > 0 && stateKey
+        ? getPolicyStateForContext({ ...ctx, canonicalSessionKey: stateKey }).state
+        : state;
+      const effectiveState = activeRecoveryState ?? state;
+      const effectiveDecision = recoveryCheck.updatedCount > 0
+        ? asRecord(effectiveState?.decision)
+        : decision;
 
       if (preSessionKey) {
         if (process.env.OCTOCLAW_ACK_DEBUG) {
           console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
         }
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision, replyToMessageId: inboundMessageTs, ackTimingConfig: { firstTierMs: ackTimerFirstTierMs, tierCount: ackTimerTierCount } });
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision: effectiveDecision, replyToMessageId: inboundMessageTs, ackTimingConfig: { firstTierMs: ackTimerFirstTierMs, tierCount: ackTimerTierCount } });
       }
-      if (state) {
-        state.ackGuardKey = preSessionKey || "";
+      if (effectiveState) {
+        effectiveState.ackGuardKey = preSessionKey || "";
         if (inboundMessageTs) {
-          state.inboundMessageTs = inboundMessageTs;
+          effectiveState.inboundMessageTs = inboundMessageTs;
         }
       }
 
@@ -465,10 +477,10 @@ export const plugin = {
       }
 
       const prependSystem: string[] = [];
-      const judgeSucceeded = Boolean(decision._judge_succeeded);
-      const decisionDelegationEnabled = Boolean(decision._delegation_enabled ?? true);
+      const judgeSucceeded = Boolean(effectiveDecision._judge_succeeded);
+      const decisionDelegationEnabled = Boolean(effectiveDecision._delegation_enabled ?? true);
 
-      if (routeHintRequired(decision)) {
+      if (routeHintRequired(effectiveDecision)) {
         prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
       }
 
@@ -480,20 +492,20 @@ export const plugin = {
         ].join("\n"));
       }
 
-      if (isDelegatedRoute(decision)) {
+      if (isDelegatedRoute(effectiveDecision)) {
         prependSystem.push(OCTOCLAW_DELEGATION_SYSTEM_CONTEXT);
       }
-      const route = stringValue(asRecord(decision.route_decision).route);
+      const route = stringValue(asRecord(effectiveDecision.route_decision).route);
       const isSpawnRoute = route === "delegate";
-      const reviewRequired = Boolean(asRecord(decision.review_policy).required);
+      const reviewRequired = Boolean(asRecord(effectiveDecision.review_policy).required);
       if (isSpawnRoute && reviewRequired) {
         prependSystem.push(OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT);
       }
-      const lookupGuard = buildDirectLookupGuard(decision);
+      const lookupGuard = buildDirectLookupGuard(effectiveDecision);
       if (lookupGuard) {
         prependSystem.push(lookupGuard);
       }
-      if (asRecord(decision.state_grounding).required) {
+      if (asRecord(effectiveDecision.state_grounding).required) {
         const grounding = buildConversationGrounding({
           prompt,
           replayLogPath: resolveReplayLogPath(),
@@ -501,7 +513,7 @@ export const plugin = {
           sessionKeys: [
             stateKey,
             stringValue((metadata as { session_key?: unknown }).session_key),
-            stringValue(state?.canonicalSessionKey),
+            stringValue(effectiveState?.canonicalSessionKey),
             stringValue(ctx.sessionKey),
           ].filter(Boolean),
         });
@@ -512,7 +524,7 @@ export const plugin = {
       const resolvedStateBoundaryStatus = stringValue(
         asRecord((resolved?.state as UnknownRecord | undefined)?.sessionBoundary).status,
       );
-      if (stringValue(state?.sessionBoundary?.status || resolvedStateBoundaryStatus || detectSessionBoundary(ctx).status) === "contaminated_subagent_identity") {
+      if (stringValue(effectiveState?.sessionBoundary?.status || resolvedStateBoundaryStatus || detectSessionBoundary(ctx).status) === "contaminated_subagent_identity") {
         prependSystem.push([
           "[OctoClaw session boundary guard]",
           "This turn arrived on a session contaminated by subagent identity.",
@@ -520,11 +532,25 @@ export const plugin = {
           "For delegated routes, you must not claim the task was dispatched unless octoclaw_dispatch actually ran and returned a materialized result.",
         ].join("\n"));
       }
+      if (recoveryCheck.timedOutCount > 0) {
+        const timedOutLines = recoveryCheck.recoveries
+          .filter((entry) => asRecord(entry).timedOut === true)
+          .map((entry) => {
+            const item = asRecord(entry);
+            return `- ${stringValue(item.delegateTaskId || item.taskId || item.flowId)}: ${stringValue(item.reason || item.trigger || "timed_out")}`;
+          });
+        prependSystem.push([
+          "[OctoClaw recovery notice]",
+          "One or more delegated tasks timed out during this event check.",
+          "Treat those delegated runs as timed out/requiring recovery and avoid claiming they are still healthy.",
+          timedOutLines.length > 0 ? `Timed out tasks:\n${timedOutLines.join("\n")}` : "",
+        ].filter(Boolean).join("\n"));
+      }
       prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
       if (prependSystem.length === 0) return;
       return {
         prependSystemContext: prependSystem.join("\n\n"),
-        prependContext: compactPolicyPrompt(decision),
+        prependContext: compactPolicyPrompt(effectiveDecision),
       };
     });
 

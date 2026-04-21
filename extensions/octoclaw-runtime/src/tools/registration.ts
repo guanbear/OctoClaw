@@ -6,6 +6,7 @@ import {
   applyPhaseTwoLivePathPolicy,
   buildTsRuntimeDispatchPayload,
   buildTsRuntimeSpawnPayload,
+  checkActiveTaskRecovery,
   resolveStatelessPolicyDecision,
 } from "../resolve/policy-resolver.js";
 import {
@@ -430,6 +431,10 @@ function readHelperInvoker(...values: unknown[]): NativeHelperInvoker | null {
 
 async function executeTaskAnchorCommand(rawText: string, format: string, cwd: string): Promise<{ summary: string; payload: UnknownRecord }> {
   void cwd;
+  const parsed = parseTaskAction(rawText);
+  if ((parsed.action || "details") === "details" && parsed.taskId) {
+    checkActiveTaskRecovery({ taskId: parsed.taskId });
+  }
   return buildNativeTaskActionPayload(rawText, normalizeTaskActionFormat(format));
 }
 
@@ -952,6 +957,7 @@ export function getToolRegistrations(): ToolRegistration[] {
       },
       execute: async (params) => {
         const format = asString(params.format, "anchors");
+        checkActiveTaskRecovery();
         const output = await buildNativeStatusOutput(format);
         return statusToolResponse(output, format);
       },
