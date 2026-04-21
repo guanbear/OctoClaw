@@ -62,7 +62,11 @@ function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
   const ackTextRaw = parsed.ackText ?? parsed.ack_text ?? null;
   return {
     route: parsed.route as JudgeOutput["route"],
-    confidence: parsed.confidence as number,
+    confidence: typeof parsed.confidence === "number" && parsed.confidence > 0
+      ? parsed.confidence
+      : typeof parsed.routeConfidence === "number" && parsed.routeConfidence > 0
+        ? parsed.routeConfidence
+        : 0.7,
     abstainReason: (parsed.abstainReason ?? parsed.abstain_reason ?? null) as string | null,
     ackText: typeof ackTextRaw === "string" ? ackTextRaw : null,
     replyMode: (parsed.replyMode ?? parsed.reply_mode ?? null) as JudgeOutput["replyMode"],
