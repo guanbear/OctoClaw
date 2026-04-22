@@ -678,19 +678,27 @@ function buildRuntimeExecutionIds(task: unknown, decision?: UnknownRecord, metad
 }
 
 function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {}): PhaseTwoPolicyInput {
-  const requestedRoute = asString(metadata.requested_route ?? metadata.route ?? metadata.requestedRoute);
+  const conversationControl = asRecord(metadata.conversation_control);
+  const conversationLaneHint = asString(conversationControl.lane_hint);
+  const requestedRoute = asString(
+    metadata.requested_route ?? metadata.route ?? metadata.requestedRoute ?? conversationControl.route_hint,
+  );
   const queueBudget = Number(metadata.queueBudget ?? metadata.queue_budget ?? 1);
   const inflightCount = Number(metadata.inflightCount ?? metadata.inflight_count ?? 0);
   const capabilitySatisfied = metadata.capabilitySatisfied ?? metadata.capability_satisfied;
   const writeConflict = metadata.writeConflict ?? metadata.write_conflict;
   const workType = asString(metadata.workType);
+  const forcedObserve = conversationLaneHint === "observe" || conversationLaneHint === "control_observer";
+  const forcedDelegate = asString(conversationControl.route_hint) === "delegate"
+    || asBoolean(conversationControl.require_fresh_lookup)
+    || forcedObserve;
 
   return {
     requestedRoute: requestedRoute || undefined,
     workType: workType === "research" || workType === "code" || workType === "review" ? workType : undefined,
-    hardBoundaryControl: Boolean(asRecord(metadata.conversation_control).required || metadata.hardBoundaryControl),
-    requiresObservation: Boolean(metadata.requiresObservation || asRecord(metadata.conversation_control).intent_class === "execution_followup"),
-    requiresDelegation: Boolean(metadata.requiresDelegation),
+    hardBoundaryControl: Boolean(conversationControl.required || metadata.hardBoundaryControl),
+    requiresObservation: Boolean(metadata.requiresObservation || conversationControl.intent_class === "execution_followup" || forcedObserve),
+    requiresDelegation: Boolean(metadata.requiresDelegation || forcedDelegate),
     workspaceMode: normalizeWorkspaceMode(metadata.workspaceMode ?? metadata.workspace_mode),
     queueBudget: Number.isFinite(queueBudget) ? Math.max(queueBudget, 0) : 1,
     inflightCount: Number.isFinite(inflightCount) ? Math.max(inflightCount, 0) : 0,
@@ -1261,6 +1269,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         const durationHint = judgeResult.durationHint ?? judgeResult.duration_hint;
         const judgeScope = judgeResult.scope;
         const validatorOverrideReasons: string[] = [];
+        const conversationControl = asRecord(metadata.conversation_control);
+        const intentPacket = asRecord(metadata.intent_packet);
+        const intentClass = asString(intentPacket.intent_class || intentPacket.intentClass || conversationControl.intent_class);
+        const conversationRouteHint = asString(conversationControl.route_hint);
 
         if (toolNeedHint === "required" && judgeRouteOverride === "reply") {
           if (judgeScope === "unknown") {
@@ -1279,6 +1291,14 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push("validator:duration_long→delegate");
+        } else if (conversationRouteHint === "delegate" && judgeRouteOverride === "reply") {
+          judgeRouteOverride = "delegate";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push("validator:conversation_control_route_hint_delegate→delegate");
+        } else if ((intentClass === "execution_followup" || intentClass === "fresh_live_lookup") && judgeRouteOverride === "reply") {
+          judgeRouteOverride = "delegate";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);
         }
         // tool_need_hint==none && duration_hint==short → reply remains eligible (no override needed)
 

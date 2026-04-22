@@ -38,6 +38,8 @@ function renderRouteDefinitions(): string {
     "- 'Explain what this TypeScript type means' -> likely reply + reply_mode=answer.",
     "- 'Which version is installed on this machine?' -> delegate, because this is a fresh environment lookup.",
     "- 'Check repo status and summarize' -> delegate, because this requires workspace inspection.",
+    "- 'Was that written by you or by a sub-agent?' -> delegate, because this asks for execution provenance rather than a conversational answer.",
+    "- 'Check that delegated task status again' -> delegate, because this is a fresh execution-truth lookup.",
     "- 'Do you mean package A or package B?' when target is unclear -> reply + reply_mode=clarify.",
     "- 'Run tests, inspect failures, and fix them' -> delegate, because this is a new execution work unit and likely long-running.",
   ].join("\n");
@@ -84,6 +86,7 @@ function renderCriticalRules(): string {
     "- Expected >1min → delegate. 预计超过1分钟默认委派.",
     "- Scope unknown → clarify. scope不明优先clarify.",
     "- check version/status/environment → delegate. 查版本/查状态/查环境 → delegate.",
+    "- execution truth/provenance follow-up → delegate. 查执行事实/查是谁做的/查子任务状态 → delegate.",
   ].join("\n");
 }
 
@@ -94,6 +97,7 @@ function renderLocalJudgeInstructions(): string {
     "- You CANNOT execute, run, or perform any task the user asked.",
     "- You CANNOT produce anything except the JSON routing decision below.",
     "- If the user asks to write code/run commands/analyze logs/check status → that PROVES route=delegate.",
+    "- If the user asks who handled prior work, whether it was delegated, or to refresh task/runtime status → that PROVES route=delegate.",
     "- confidence field is REQUIRED. Set 0.7 for routine decisions, 0.9 for obvious ones, 0.5 for uncertain ones.",
     "- scope, tool_need_hint, duration_hint fields are REQUIRED. Never omit them.",
     "- Your ONLY job: classify the user's intent into route + metadata fields.",

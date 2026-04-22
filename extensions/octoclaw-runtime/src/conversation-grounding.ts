@@ -23,6 +23,11 @@ export interface ConversationIntentPacket extends IntentPacket {
   schema_version: string;
   source: string;
   reason_codes: string[];
+  surface_id?: string;
+  lane_hint?: string;
+  lookup_scope?: string;
+  require_fresh_lookup?: boolean;
+  require_state_grounding?: boolean;
 }
 
 export interface ConversationControlHints {
@@ -722,6 +727,11 @@ export function buildConversationIntentPacket(options: {
     schema_version: INTENT_PACKET_SCHEMA_VERSION,
     source,
     reason_codes: reasonCodes,
+    surface_id: surface?.surface_id,
+    lane_hint: surface?.lane_hint,
+    lookup_scope: surface?.scope,
+    require_fresh_lookup: Boolean(surface),
+    require_state_grounding: Boolean(surface && surface.lane_hint !== "reply"),
   };
 }
 
@@ -736,6 +746,9 @@ export function buildConversationControlHints(options: {
 
 export function buildConversationControlHintsFromIntent(intentPacket: Partial<ConversationIntentPacket> = {}): ConversationControlHints {
   const intentClass = stringValue(intentPacket.intent_class || intentPacket.intentClass);
+  const surfaceId = stringValue(intentPacket.surface_id);
+  const packetLaneHint = stringValue(intentPacket.lane_hint);
+  const packetLookupScope = stringValue(intentPacket.lookup_scope);
   const base: ConversationControlHints = {
     available: true,
     kind: intentClass,
@@ -752,12 +765,26 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
     };
   }
   if (intentClass === "local_surface_lookup") {
+    const shouldDelegateObservedSurface = new Set(["system_load", "runtime_version", "runtime_model", "service_health"]).has(surfaceId);
+    if (shouldDelegateObservedSurface) {
+      return {
+        ...base,
+        route_hint: "delegate",
+        lane_hint: packetLaneHint === "reply" ? "observe" : (packetLaneHint || "observe"),
+        protected_lane: "control_observer",
+        lookup_scope: packetLookupScope || "local_instance",
+        require_fresh_lookup: true,
+        require_state_grounding: true,
+        surface_id: surfaceId,
+      };
+    }
     return {
       ...base,
       route_hint: "reply",
       lane_hint: "reply",
-      lookup_scope: "local_instance",
+      lookup_scope: packetLookupScope || "local_instance",
       require_state_grounding: false,
+      surface_id: surfaceId,
     };
   }
   if (intentClass === "fresh_live_lookup") {
@@ -770,6 +797,7 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
       lookup_focus: inferFreshLookupFocus(""),
       require_fresh_lookup: true,
       require_state_grounding: false,
+      surface_id: surfaceId,
     };
   }
   return {

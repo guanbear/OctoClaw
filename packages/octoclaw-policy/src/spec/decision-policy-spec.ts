@@ -76,6 +76,11 @@ export const ANTI_REPLY_BIAS_RULES = [
     rule: "Any real probe, environment read, workspace inspection, or command execution should default toward delegate.",
   },
   {
+    id: "execution_truth_and_provenance_delegate",
+    rule:
+      "Execution truth follow-up such as task status, who handled it, whether it was delegated, or what actually ran should default toward delegate.",
+  },
+  {
     id: "scope_unknown_clarify",
     rule: "If scope is unknown, prefer clarify.",
   },
