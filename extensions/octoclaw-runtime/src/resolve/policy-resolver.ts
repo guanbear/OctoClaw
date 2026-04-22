@@ -682,7 +682,7 @@ function buildRuntimeExecutionIds(task: unknown, decision?: UnknownRecord, metad
 function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {}): PhaseTwoPolicyInput {
   const conversationControl = asRecord(metadata.conversation_control);
   const conversationLaneHint = asString(conversationControl.lane_hint);
-  const requestedRoute = asString(
+  const rawRequestedRoute = asString(
     metadata.requested_route ?? metadata.route ?? metadata.requestedRoute ?? conversationControl.route_hint,
   );
   const queueBudget = Number(metadata.queueBudget ?? metadata.queue_budget ?? 1);
@@ -694,6 +694,9 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
   const forcedDelegate = asString(conversationControl.route_hint) === "delegate"
     || asBoolean(conversationControl.require_fresh_lookup)
     || forcedObserve;
+  const requestedRoute = forcedDelegate && normalizeLiveRoute(rawRequestedRoute, "reply") === "reply"
+    ? asString(conversationControl.route_hint, "delegate")
+    : rawRequestedRoute;
 
   return {
     requestedRoute: requestedRoute || undefined,
@@ -1069,8 +1072,17 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   if (Object.keys(routeHint).length > 0) {
     const routeHintRoute = asString(routeHint.route_hint ?? routeHint.routeHint);
     if (routeHintRoute) {
-      metadata.route_hint = normalizeLiveRoute(routeHintRoute, "reply");
-      metadata.requested_route = metadata.route_hint;
+      const normalizedRouteHint = normalizeLiveRoute(routeHintRoute, "reply");
+      const conversationControl = asRecord(metadata.conversation_control);
+      const guardedDelegate = asString(conversationControl.route_hint) === "delegate"
+        || asBoolean(conversationControl.require_fresh_lookup)
+        || asBoolean(conversationControl.require_state_grounding)
+        || ["execution_followup", "fresh_live_lookup"].includes(asString(conversationControl.intent_class));
+
+      metadata.route_hint = normalizedRouteHint;
+      metadata.requested_route = guardedDelegate && normalizedRouteHint === "reply"
+        ? asString(conversationControl.route_hint, "delegate")
+        : normalizedRouteHint;
     }
     if (typeof routeHint.route_objection === "boolean") {
       metadata.route_objection = routeHint.route_objection;

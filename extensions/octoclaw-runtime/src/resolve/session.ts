@@ -5,6 +5,7 @@ import {
   resolveTaskStatePath,
   stableId,
 } from "./env.js";
+import { buildConversationControlHintsFromIntent } from "../conversation-grounding.js";
 import fsSync from "node:fs";
 
 export const IM_SESSION_ORIGINS = new Set([
@@ -145,6 +146,15 @@ function buildConversationIntentPacketCompat(options: UnknownRecord = {}): Unkno
 function buildConversationControlHintsFromIntentCompat(intentPacket: UnknownRecord = {}): UnknownRecord {
   if (recordValue(intentPacket).available === false) {
     return { available: false };
+  }
+
+  const projected = recordValue(buildConversationControlHintsFromIntent(intentPacket));
+  if (projected.available) {
+    return {
+      ...projected,
+      source: "session_resolver_fallback",
+      subject_prompt: stringValue(intentPacket.prompt),
+    };
   }
 
   return {
@@ -736,7 +746,22 @@ export function finalizeDispatchMetadata(
 
 export function enrichConversationControlMetadata(prompt: string, metadata: UnknownRecord): UnknownRecord {
   const nextMetadata = isRecord(metadata) ? { ...metadata } : {};
-  if (nextMetadata.conversation_control && nextMetadata.intent_packet) {
+  const existingConversationControl = isRecord(nextMetadata.conversation_control)
+    ? nextMetadata.conversation_control
+    : null;
+  const existingIntentPacket = isRecord(nextMetadata.intent_packet) ? nextMetadata.intent_packet : null;
+  const existingConversationControlSufficient = Boolean(
+    existingConversationControl
+    && (
+      stringValue(existingConversationControl.route_hint)
+      || stringValue(existingConversationControl.intent_class)
+      || stringValue(existingConversationControl.lane_hint)
+      || typeof existingConversationControl.require_fresh_lookup === "boolean"
+      || typeof existingConversationControl.require_state_grounding === "boolean"
+      || stringValue(existingConversationControl.protected_lane)
+    ),
+  );
+  if (existingConversationControlSufficient && existingIntentPacket) {
     return nextMetadata;
   }
 
@@ -751,16 +776,28 @@ export function enrichConversationControlMetadata(prompt: string, metadata: Unkn
     ].filter((value): value is string => Boolean(stringValue(value))),
   };
 
-  const existingIntentPacket = isRecord(nextMetadata.intent_packet) ? nextMetadata.intent_packet : null;
   const intentPacket = existingIntentPacket || buildConversationIntentPacketCompat(hintOptions);
   if (recordValue(intentPacket).available !== false) {
     nextMetadata.intent_packet = intentPacket;
   }
 
-  const existingConversationControl = isRecord(nextMetadata.conversation_control)
-    ? nextMetadata.conversation_control
-    : null;
-  const conversationControl = existingConversationControl || buildConversationControlHintsFromIntentCompat(intentPacket);
+  const projectedConversationControl = buildConversationControlHintsFromIntentCompat(intentPacket);
+  const conversationControl = existingConversationControl
+    ? {
+        ...projectedConversationControl,
+        ...existingConversationControl,
+        route_hint: stringValue(existingConversationControl.route_hint || projectedConversationControl.route_hint),
+        intent_class: stringValue(existingConversationControl.intent_class || projectedConversationControl.intent_class),
+        lane_hint: stringValue(existingConversationControl.lane_hint || projectedConversationControl.lane_hint),
+        protected_lane: stringValue(existingConversationControl.protected_lane || projectedConversationControl.protected_lane),
+        require_fresh_lookup: typeof existingConversationControl.require_fresh_lookup === "boolean"
+          ? existingConversationControl.require_fresh_lookup
+          : projectedConversationControl.require_fresh_lookup,
+        require_state_grounding: typeof existingConversationControl.require_state_grounding === "boolean"
+          ? existingConversationControl.require_state_grounding
+          : projectedConversationControl.require_state_grounding,
+      }
+    : projectedConversationControl;
   if (recordValue(conversationControl).available) {
     nextMetadata.conversation_control = conversationControl;
   }
