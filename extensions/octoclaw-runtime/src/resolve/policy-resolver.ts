@@ -797,7 +797,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   const judgeRoute = asString(priorDecision._judge_route);
   const stickyDecision = readStickyStateDecision(metadata);
   const stickyRouteDecision = asRecord(stickyDecision.route_decision);
-  const routeHint = asString(metadata.route_hint ?? metadata.requested_route ?? metadata.route);
+  const routeHint = asString(metadata.requested_route ?? metadata.route_hint ?? metadata.route);
   const normalizedRequestedLiveRoute = normalizeLiveRoute(routeHint || priorRouteDecision.route || stickyRouteDecision.route, liveRoute);
   const routeHintSubmitted = Boolean(routeHint);
   const objectionSubmitted = asBoolean(metadata.route_objection, false);
