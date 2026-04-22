@@ -510,13 +510,6 @@ function compactDispatchDetails(payload: UnknownRecord): UnknownRecord {
     model: asString(payload.model),
     task_id: asString(payload.task_id ?? asRecord(payload.materialization).task_id),
     flow_id: asString(payload.flow_id ?? asRecord(payload.materialization).flow_id),
-    materialization: asRecord(payload.materialization),
-    policy_decision: asRecord(payload.policy_decision),
-    telemetry: asRecord(payload.telemetry),
-    runtime_truth: asRecord(payload.runtime_truth),
-    orchestration: asRecord(payload.orchestration),
-    handoff: asRecord(payload.handoff),
-    capability_failure: asRecord(payload.capability_failure),
   };
 }
 

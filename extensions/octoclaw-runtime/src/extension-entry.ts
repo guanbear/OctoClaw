@@ -85,6 +85,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
 
 const LATENCY_ACK_DELAY_MS = 5000;
 const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const lastGroundedPromptByStateKey = new Map<string, string>();
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "For non-hard-observe requests, submit a structured route hint before answering or dispatching.",
@@ -532,10 +533,17 @@ export const plugin = {
         ].filter(Boolean).join("\n"));
       }
       prependSystem.push(OCTOCLAW_TASK_ACTION_SYSTEM_CONTEXT);
-      if (prependSystem.length === 0) return;
+      const contextPayload = compactPolicyPrompt(effectiveDecision);
+      const promptKey = prompt || "";
+      const hasDedupKey = Boolean(stateKey);
+      const shouldInjectPrependContext = !hasDedupKey || lastGroundedPromptByStateKey.get(stateKey) !== promptKey;
+      if (hasDedupKey && shouldInjectPrependContext) {
+        lastGroundedPromptByStateKey.set(stateKey, promptKey);
+      }
+      if (prependSystem.length === 0 && !shouldInjectPrependContext) return;
       return {
-        prependSystemContext: prependSystem.join("\n\n"),
-        prependContext: compactPolicyPrompt(effectiveDecision),
+        prependSystemContext: prependSystem.length > 0 ? prependSystem.join("\n\n") : undefined,
+        prependContext: shouldInjectPrependContext ? contextPayload : undefined,
       };
     });
 
@@ -762,6 +770,7 @@ export const plugin = {
       if (!isManagedAgentContext(ctx)) return;
       const { key: stateKey, state } = getPolicyStateForContext(ctx);
       if (!stateKey) return;
+      lastGroundedPromptByStateKey.delete(stateKey);
       const pendingTimer = pendingLatencyAckTimers.get(stateKey);
       if (pendingTimer) {
         clearTimeout(pendingTimer);
