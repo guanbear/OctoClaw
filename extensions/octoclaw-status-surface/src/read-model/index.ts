@@ -58,8 +58,60 @@ export interface DetailsSurfaceProjection extends RuntimeStateDetailsSurface {
   actionAvailability: string[];
 }
 
+function isNativeTerminalState(value: unknown): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "completed"
+    || normalized === "failed"
+    || normalized === "cancelled"
+    || normalized === "canceled"
+    || normalized === "timed_out"
+    || normalized === "timed-out";
+}
+
+function mapTerminalSubstrateToAttemptStatus(value: unknown): string | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "completed") return "completed";
+  if (normalized === "failed") return "failed";
+  if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
+  if (normalized === "timed_out" || normalized === "timed-out") return "timed_out";
+  return undefined;
+}
+
+function mapTerminalSubstrateToTaskStatus(value: unknown): string | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "completed") return "completed";
+  if (normalized === "failed") return "failed";
+  if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
+  if (normalized === "timed_out" || normalized === "timed-out") return "timed_out";
+  return undefined;
+}
+
+function resolveDisplayState(input: StatusSurfaceProjectionInput): string {
+  const substrateState = input.record.substrateState;
+  if (isNativeTerminalState(substrateState)) {
+    return mapTerminalSubstrateToAttemptStatus(substrateState) || substrateState;
+  }
+  return input.delegateAttempt?.status || substrateState;
+}
+
+function resolveAttemptStatus(input: StatusSurfaceProjectionInput): string | undefined {
+  const substrateState = input.record.substrateState;
+  if (isNativeTerminalState(substrateState)) {
+    return mapTerminalSubstrateToAttemptStatus(substrateState);
+  }
+  return input.delegateAttempt?.status;
+}
+
+function resolveTaskStatus(input: StatusSurfaceProjectionInput): string | undefined {
+  const substrateState = input.record.substrateState;
+  if (isNativeTerminalState(substrateState)) {
+    return mapTerminalSubstrateToTaskStatus(substrateState);
+  }
+  return input.delegateTask?.status;
+}
+
 function delegateSubstrateSummary(input: StatusSurfaceProjectionInput): string {
-  const attemptStatus = input.delegateAttempt?.status;
+  const attemptStatus = resolveAttemptStatus(input);
   return `${input.record.runtime} ${input.record.syncMode} ${attemptStatus || input.record.substrateState}`.trim();
 }
 
@@ -73,6 +125,13 @@ function defaultRoute(record: RuntimeStateSurfaceRecord, delegateTask?: Delegate
 function isTaskStale(delegateTask?: DelegateTask, fallback = false): boolean {
   if (!delegateTask) return fallback;
   return ["failed", "timed_out", "recovering", "cancelled"].includes(delegateTask.status);
+}
+
+function resolveStaleState(input: StatusSurfaceProjectionInput): boolean {
+  if (isNativeTerminalState(input.record.substrateState)) {
+    return false;
+  }
+  return isTaskStale(input.delegateTask, Boolean(input.isStale));
 }
 
 function buildTimelinePreview(progressEvents?: DelegateProgressEvent[]): StatusSurfaceViewModel["timelinePreview"] {
@@ -97,13 +156,13 @@ function defaultActionAvailability(record: RuntimeStateSurfaceRecord): string[] 
 }
 
 export function buildStatusProjection(input: StatusSurfaceProjectionInput): StatusSurfaceViewModel {
-  const { record, delegateAttempt, delegateTask, nativeBinding, progressEvents } = input;
+  const { record, delegateTask, nativeBinding, progressEvents } = input;
   const route = input.route || defaultRoute(record, delegateTask);
   return {
     ...buildContractEnvelope("projection"),
     taskId: nativeBinding?.nativeTaskId || record.truth.taskId,
     flowId: nativeBinding?.nativeFlowId || record.truth.flowId,
-    state: delegateAttempt?.status || record.substrateState,
+    state: resolveDisplayState(input),
     route,
     role: delegateTask?.role || (route === "reply" ? "main_reply" : "worker_research"),
     coordinationMode: delegateTask?.coordinationMode || (route === "delegate" ? "solo_worker" : ""),
@@ -131,14 +190,14 @@ export function buildQueueProjection(input: StatusSurfaceProjectionInput): Queue
     flowId: nativeBinding?.nativeFlowId || record.truth.flowId,
     delegateTaskId: delegateTask?.delegateTaskId || nativeBinding?.delegateTaskId,
     attemptId: delegateAttempt?.attemptId || nativeBinding?.attemptId,
-    attemptStatus: delegateAttempt?.status,
-    taskStatus: delegateTask?.status,
+    attemptStatus: resolveAttemptStatus(input),
+    taskStatus: resolveTaskStatus(input),
     queuePosition: input.queuePosition,
     workerPool: input.workerPool || defaultWorkerPool(record),
     substrateSummary: delegateSubstrateSummary(input),
     claimOwner: record.ownership.claimOwner,
     leaseState: input.leaseState,
-    isStale: isTaskStale(delegateTask, Boolean(input.isStale)),
+    isStale: resolveStaleState(input),
     conflictQueued: Boolean(input.conflictQueued),
   };
 }
@@ -161,14 +220,14 @@ export function buildDetailsProjection(input: StatusSurfaceProjectionInput): Det
     delegateTaskId: delegateTask?.delegateTaskId || nativeBinding?.delegateTaskId,
     attemptId: delegateAttempt?.attemptId || nativeBinding?.attemptId,
     attemptGeneration: delegateAttempt?.attemptGeneration,
-    attemptStatus: delegateAttempt?.status,
+    attemptStatus: resolveAttemptStatus(input),
     totalAttempts: delegateTask?.totalAttempts,
-    taskStatus: delegateTask?.status,
+    taskStatus: resolveTaskStatus(input),
     leaseState: input.leaseState,
     modelSummary: input.modelSummary,
     costEstimate: input.costEstimate,
     queuePosition: input.queuePosition,
-    isStale: isTaskStale(delegateTask, Boolean(input.isStale)),
+    isStale: resolveStaleState(input),
     conflictQueued: Boolean(input.conflictQueued),
     actionAvailability: input.actionAvailability || defaultActionAvailability(record),
   };

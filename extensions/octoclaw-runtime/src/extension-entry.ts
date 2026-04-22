@@ -35,6 +35,8 @@ import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./reso
 import { envOverrides, resolveReplayLogPath, resolveTaskStatePath } from "./resolve/env.js";
 import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
+import type { DetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime.js";
+import { createHostDetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime-host.js";
 import {
   compactPolicyPrompt,
   guardAssistantMessageForPolicyState,
@@ -73,6 +75,7 @@ export interface PluginInterface {
   registerHook?(event: string, handler: HookHandler, options?: Record<string, unknown>): void;
   registerTool?(definition: Record<string, unknown>): void;
   registerCommand?(definition: Record<string, unknown>): void;
+  registerDetachedTaskRuntime?(runtime: DetachedTaskLifecycleRuntime): void;
 }
 
 const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
@@ -316,6 +319,16 @@ export const plugin = {
     // Fire-and-forget bridge init — lazy-loads openclaw runtime binding
     // If runtime unavailable, getCachedBridge() returns unavailable bridge (fail-closed)
     initNativeHelperBridge().catch(() => { /* bridge will use unavailable fallback */ });
+    if (typeof pi.registerDetachedTaskRuntime === "function") {
+      void createHostDetachedTaskLifecycleRuntime()
+        .then((runtime) => {
+          pi.registerDetachedTaskRuntime?.(runtime);
+          pi.logger?.debug?.("octoclaw detached task runtime registered");
+        })
+        .catch((error) => {
+          pi.logger?.warn?.(`octoclaw detached task runtime unavailable: ${String(error)}`);
+        });
+    }
 
     const registerLifecycleHook = (hookName: string, handler: HookHandler, priority = 180): boolean => {
       if (typeof pi.on === "function") {

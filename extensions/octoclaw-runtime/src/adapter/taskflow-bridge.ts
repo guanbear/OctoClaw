@@ -251,6 +251,18 @@ async function loadCreatePluginRuntime(openclawBin?: string): Promise<CreatePlug
   return createPluginRuntime as CreatePluginRuntime;
 }
 
+export async function loadOpenClawDistModule(
+  relativePath: string,
+  openclawBin?: string,
+): Promise<Record<string, unknown>> {
+  const packageRoot = resolvePackageRoot(openclawBin);
+  const modulePath = path.join(packageRoot, "dist", relativePath);
+  if (!fs.existsSync(modulePath)) {
+    throw new Error(`Missing OpenClaw dist module: ${modulePath}`);
+  }
+  return await import(pathToFileURL(modulePath).href) as Record<string, unknown>;
+}
+
 function requireBoundSession(runtime: PluginRuntime, sessionKey: string): PluginRuntimeTaskFlowBoundSession {
   const bindSession = runtime.taskFlow?.bindSession;
   if (typeof bindSession !== "function") {

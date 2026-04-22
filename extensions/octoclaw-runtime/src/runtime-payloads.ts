@@ -307,16 +307,18 @@ export function buildTsRuntimeDispatchPayload(
         workspaceMode: workflow.scope.workspaceMode,
       })
       : null;
-    workflow = markWorkflowCompleted(workflow);
     const observe = isObserveMode(workflow.execution.role, workflowDecision.executionProfile);
-    const finalDelivery = buildWorkflowFinalDelivery(workflow, {
-      channel: readString(metadata.channel, "direct"),
-      summary: observe
-        ? `Observe workflow materialized natively as ${binding.taskId}`
-        : `Delegated task materialized natively as ${binding.taskId}`,
-      artifactRefs: [binding.taskId, binding.flowId],
-    });
-    workflow = enqueueWorkflowDelivery(workflow, finalDelivery);
+    const finalDelivery = observe
+      ? buildWorkflowFinalDelivery(workflow, {
+        channel: readString(metadata.channel, "direct"),
+        summary: `Observe workflow materialized natively as ${binding.taskId}`,
+        artifactRefs: [binding.taskId, binding.flowId],
+      })
+      : null;
+    if (finalDelivery) {
+      workflow = markWorkflowCompleted(workflow);
+      workflow = enqueueWorkflowDelivery(workflow, finalDelivery);
+    }
     return {
       ...basePayload,
       executed: observe,
@@ -363,7 +365,7 @@ export function buildTsRuntimeDispatchPayload(
       telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
       deliveries: {
         progress: progressDelivery,
-        final: finalDelivery,
+        final: finalDelivery ?? undefined,
       },
       job: observe
         ? {

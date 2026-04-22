@@ -86,6 +86,21 @@ function createRecord(): RuntimeStateSurfaceRecord {
   };
 }
 
+function createCompletedRecord(): RuntimeStateSurfaceRecord {
+  return {
+    ...createRecord(),
+    substrateState: "completed",
+    truth: {
+      ...createRecord().truth,
+      substrateState: "completed",
+    },
+    projection: {
+      ...createRecord().projection,
+      substrateState: "completed",
+    },
+  };
+}
+
 function createDelegateTask(): DelegateTask {
   return {
     schemaVersion: "octoclaw.contracts/v1",
@@ -222,6 +237,19 @@ describe("read-model", () => {
     ]);
   });
 
+  it("buildStatusProjection prefers terminal native truth over stale running attempt state", () => {
+    const nativeBinding = createNativeBinding();
+    const status = buildStatusProjection({
+      record: createCompletedRecord(),
+      delegateTask: createDelegateTask(),
+      delegateAttempt: createDelegateAttempt(nativeBinding),
+      nativeBinding,
+    });
+
+    expect(status.state).toBe("completed");
+    expect(status.substrateSummary).toBe("openclaw-native managed completed");
+  });
+
   it("buildStatusProjection remains backward compatible without delegate task", () => {
     const status = buildStatusProjection({ record: createRecord() });
 
@@ -263,6 +291,23 @@ describe("read-model", () => {
     expect(queue.attemptId).toBe("attempt-1");
     expect(queue.substrateSummary).toBe("openclaw-native managed running");
     expect(queue.isStale).toBe(true);
+  });
+
+  it("buildQueueProjection prefers terminal native truth and clears stale fallback", () => {
+    const queue = buildQueueProjection({
+      record: createCompletedRecord(),
+      delegateTask: {
+        ...createDelegateTask(),
+        status: "recovering",
+      },
+      delegateAttempt: createDelegateAttempt(createNativeBinding()),
+      isStale: true,
+    });
+
+    expect(queue.attemptStatus).toBe("completed");
+    expect(queue.taskStatus).toBe("completed");
+    expect(queue.substrateSummary).toBe("openclaw-native managed completed");
+    expect(queue.isStale).toBe(false);
   });
 
   it("buildDetailsProjection includes all substrate fields", () => {
@@ -317,6 +362,24 @@ describe("read-model", () => {
     expect(details.totalAttempts).toBe(3);
     expect(details.taskStatus).toBe("active");
     expect(details.summary).toBe("openclaw-native managed running");
+  });
+
+  it("buildDetailsProjection prefers terminal native truth for task and attempt status", () => {
+    const details = buildDetailsProjection({
+      record: createCompletedRecord(),
+      delegateTask: {
+        ...createDelegateTask(),
+        status: "active",
+      },
+      delegateAttempt: createDelegateAttempt(createNativeBinding()),
+      nativeBinding: createNativeBinding(),
+      isStale: true,
+    });
+
+    expect(details.attemptStatus).toBe("completed");
+    expect(details.taskStatus).toBe("completed");
+    expect(details.summary).toBe("openclaw-native managed completed");
+    expect(details.isStale).toBe(false);
   });
 
   it('substrateSummary format is "<runtime> <syncMode> <substrateState>"', () => {

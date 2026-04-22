@@ -560,13 +560,19 @@ function refreshRecoveryForStateEntry(
 ): { updated: boolean; timedOut: boolean; summary: UnknownRecord | null } {
   const decision = asRecord(state.decision);
   const runtimeTruth = asRecord(decision.runtime_truth);
-  const workflowCandidate = runtimeTruth.workflow;
-  if (!isRecord(workflowCandidate) || isTerminalWorkflowPhase(asRecord(workflowCandidate.lifecycle).phase)) {
-    return { updated: false, timedOut: false, summary: null };
-  }
-
   const delegateTask = isDelegateTask(runtimeTruth.delegateTask) ? runtimeTruth.delegateTask : null;
   const delegateAttempt = isDelegateAttempt(runtimeTruth.delegateAttempt) ? runtimeTruth.delegateAttempt : null;
+  const workflowCandidate = runtimeTruth.workflow;
+  const hasActiveDelegate = Boolean(
+    (delegateTask && !isTerminalDelegateStatus(delegateTask.status))
+    || (delegateAttempt && !isTerminalDelegateStatus(delegateAttempt.status)),
+  );
+  if (!isRecord(workflowCandidate)) {
+    return { updated: false, timedOut: false, summary: null };
+  }
+  if (isTerminalWorkflowPhase(asRecord(workflowCandidate.lifecycle).phase) && !hasActiveDelegate) {
+    return { updated: false, timedOut: false, summary: null };
+  }
   if (delegateTask && isTerminalDelegateStatus(delegateTask.status)) {
     return { updated: false, timedOut: false, summary: null };
   }
@@ -574,7 +580,20 @@ function refreshRecoveryForStateEntry(
     return { updated: false, timedOut: false, summary: null };
   }
 
-  const workflow = workflowCandidate as unknown as RuntimeWorkflowState;
+  const baseWorkflow = workflowCandidate as unknown as RuntimeWorkflowState;
+  const recoveryPhase: RuntimeWorkflowState["lifecycle"]["phase"] = delegateAttempt?.status === "running"
+    ? "running"
+    : "checkpoint_pending";
+  const workflow = isTerminalWorkflowPhase(asRecord(workflowCandidate.lifecycle).phase) && hasActiveDelegate
+    ? {
+      ...baseWorkflow,
+      lifecycle: {
+        ...baseWorkflow.lifecycle,
+        phase: recoveryPhase,
+        completedAt: undefined,
+      },
+    }
+    : baseWorkflow;
   const assessment = assessRecoveryNeed(workflow, now);
   if (!assessment.required) {
     return { updated: false, timedOut: false, summary: null };
@@ -640,8 +659,14 @@ export function checkActiveTaskRecovery(options: { taskId?: string; now?: Date }
     if (targetTaskId) {
       const binding = asRecord(runtimeTruth.binding);
       const delegateTask = asRecord(runtimeTruth.delegateTask);
+      const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+      const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
       const matches = asString(binding.taskId) === targetTaskId
         || asString(binding.flowId) === targetTaskId
+        || asString(asRecord(delegateAttempt.nativeBinding).nativeTaskId) === targetTaskId
+        || asString(asRecord(delegateAttempt.nativeBinding).nativeFlowId) === targetTaskId
+        || asString(nativeTaskBinding.nativeTaskId) === targetTaskId
+        || asString(nativeTaskBinding.nativeFlowId) === targetTaskId
         || asString(delegateTask.delegateTaskId) === targetTaskId;
       if (!matches) {
         continue;

@@ -52,16 +52,38 @@ const fsSyncLike = fsSync as unknown as FsSyncLike;
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
+function taskIdsFromRuntimeTruth(runtimeTruth: UnknownRecord): string[] {
+  const binding = asRecord(runtimeTruth.binding);
+  const delegateTask = asRecord(runtimeTruth.delegateTask);
+  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+  return [
+    binding.taskId,
+    delegateTask.delegateTaskId,
+    asRecord(delegateAttempt.nativeBinding).nativeTaskId,
+    nativeTaskBinding.nativeTaskId,
+  ].map((value) => asString(value)).filter(Boolean);
+}
+
+function flowIdsFromRuntimeTruth(runtimeTruth: UnknownRecord): string[] {
+  const binding = asRecord(runtimeTruth.binding);
+  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+  return [
+    binding.flowId,
+    asRecord(delegateAttempt.nativeBinding).nativeFlowId,
+    nativeTaskBinding.nativeFlowId,
+  ].map((value) => asString(value)).filter(Boolean);
+}
+
 function findRuntimeTaskInPolicyState(taskId: string): { sessionKey: string; flowId: string } | null {
   for (const { state } of policyState.entries()) {
     const decision = asRecord(state?.decision);
     const runtimeTruth = asRecord(decision.runtime_truth);
-    const binding = asRecord(runtimeTruth.binding);
-    const delegateTask = asRecord(runtimeTruth.delegateTask);
-    const candidateTaskId = asString(binding.taskId || delegateTask.delegateTaskId);
-    const candidateFlowId = asString(binding.flowId);
+    const candidateTaskIds = taskIdsFromRuntimeTruth(runtimeTruth);
+    const candidateFlowId = flowIdsFromRuntimeTruth(runtimeTruth)[0] || "";
     const sessionKey = asString(runtimeTruth.sessionKey || asRecord(decision.request).session_key);
-    if (candidateTaskId === taskId && candidateFlowId && sessionKey) {
+    if (candidateTaskIds.includes(taskId) && candidateFlowId && sessionKey) {
       return { sessionKey, flowId: candidateFlowId };
     }
   }
@@ -383,14 +405,31 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
   for (const { state } of policyState.entries()) {
     const decision = asRecord(state?.decision);
     const runtimeTruth = asRecord(decision.runtime_truth);
+    const taskIds = taskIdsFromRuntimeTruth(runtimeTruth);
     const binding = asRecord(runtimeTruth.binding);
-    const taskId = asString(binding.taskId);
-    if (taskId && !taskIdsFromCache.has(taskId)) {
+    const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+    const status = asString(
+      delegateAttempt.status
+      || binding.substrateState
+      || binding.status
+      || asRecord(runtimeTruth.recovery).status
+      || "unknown",
+    );
+    const summary = asString(
+      delegateAttempt.failureReason
+      || delegateAttempt.status
+      || asRecord(runtimeTruth.recovery).reason
+      || "",
+    );
+    for (const taskId of taskIds) {
+      if (!taskId || taskIdsFromCache.has(taskId)) {
+        continue;
+      }
       runtimeTasks.push({
         taskId,
-        status: asString(binding.substrateState || binding.status || "unknown"),
+        status,
         route: "delegate",
-        summary: "",
+        summary,
         updatedAt: new Date().toISOString(),
       });
     }
@@ -936,18 +975,22 @@ export function getToolRegistrations(): ToolRegistration[] {
         }, stateKey);
         const materialization = asRecord(payload.materialization);
         if (asString(materialization.task_id)) {
+          const substrateState = asString(materialization.substrate_state, payload.executed === true ? "running" : "queued");
+          const startedAt = substrateState === "queued" || substrateState === "planned"
+            ? ""
+            : new Date().toISOString();
           await upsertTaskStateCache({
             id: materialization.task_id,
             flow_id: asString(materialization.flow_id),
             session_key: replaySessionKey,
             route: asString(payload.route),
-            status: asString(materialization.substrate_state || "running"),
-            summary: asString(payload.summary),
+            status: substrateState,
+            summary: asString(asRecord(payload.handoff).summary || payload.summary),
             role: asString(asRecord(authoritativeDecision.route_decision).task_class),
             worker_pool: asString(asRecord(authoritativeDecision.route_decision).worker_pool),
             model: selectedModel || asString(metadata.model),
             spawned_at: new Date().toISOString(),
-            started_at: new Date().toISOString(),
+            started_at: startedAt || undefined,
             updated_at: new Date().toISOString(),
           } as RuntimeTaskStateRecord);
         }

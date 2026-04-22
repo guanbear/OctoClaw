@@ -128,6 +128,11 @@ describe("buildTsRuntimeDispatchPayload", () => {
     expect(payload.delegateTaskId).toBe("delegate-task:session-77:1776769200000");
     expect(payload.attemptId).toBe("delegate-task:session-77:1776769200000:attempt:1");
     expect(payload.runtime_truth).toMatchObject({
+      workflow: {
+        lifecycle: {
+          phase: "checkpoint_emitted",
+        },
+      },
       delegateTask: {
         delegateTaskId: "delegate-task:session-77:1776769200000",
       },
@@ -143,5 +148,9 @@ describe("buildTsRuntimeDispatchPayload", () => {
         nativeTaskId: "task-plugin-native",
       },
     });
+    expect(payload.deliveries).toMatchObject({
+      progress: expect.any(Object),
+    });
+    expect(payload.deliveries?.final).toBeUndefined();
   });
 });
