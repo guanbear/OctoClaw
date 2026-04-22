@@ -705,6 +705,9 @@ export function resolveDispatchSessionKey(
 ): string {
   const safe = ctx ?? {};
   const state = recordValue(options.state);
+  const stateDecision = recordValue(state.decision);
+  const stateRequest = recordValue(stateDecision.request);
+  const stateRequestMetadata = recordValue(stateRequest.metadata);
   const cachedDecision = recordValue(options.cachedDecision);
   const cachedRequest = recordValue(cachedDecision.request);
   const cachedRequestMetadata = recordValue(cachedRequest.metadata);
@@ -714,6 +717,8 @@ export function resolveDispatchSessionKey(
     metadata.session_key,
     options.stateKey,
     state.canonicalSessionKey,
+    stateRequest.session_key,
+    stateRequestMetadata.session_key,
     cachedRequest.session_key,
     cachedRequestMetadata.session_key,
     boundary.canonicalSessionKey,

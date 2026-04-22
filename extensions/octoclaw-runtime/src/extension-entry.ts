@@ -120,6 +120,44 @@ function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+export function resolveDelegationCapability(options: {
+  pluginConfig?: Record<string, unknown>;
+  env?: Record<string, string | undefined>;
+  registerDetachedTaskRuntime?: PluginInterface["registerDetachedTaskRuntime"];
+}): {
+  requested: boolean;
+  hostSupported: boolean;
+  enabled: boolean;
+  reason: "" | "host_missing_detached_runtime" | "disabled_by_config";
+} {
+  const pluginConfig = options.pluginConfig ?? {};
+  const env = options.env ?? {};
+  const requested = pluginConfig.delegationEnabled !== false && env.OCTOCLAW_DELEGATION_ENABLED !== "false";
+  const hostSupported = typeof options.registerDetachedTaskRuntime === "function";
+  if (!requested) {
+    return {
+      requested: false,
+      hostSupported,
+      enabled: false,
+      reason: "disabled_by_config",
+    };
+  }
+  if (!hostSupported) {
+    return {
+      requested: true,
+      hostSupported: false,
+      enabled: false,
+      reason: "host_missing_detached_runtime",
+    };
+  }
+  return {
+    requested: true,
+    hostSupported: true,
+    enabled: true,
+    reason: "",
+  };
+}
+
 function extractMessageText(content: unknown): string {
   if (typeof content === "string") {
     return content.trim();
@@ -313,12 +351,22 @@ export const plugin = {
       console.log(`[octoclaw-judge] pluginKeys=${Object.keys(judgeFastFromPlugin).length} envKeys=${Object.keys(judgeFastFromEnv).length} rawKeys=${Object.keys(judgeFastRaw).length} envVar="${process.env.OCTOCLAW_JUDGE_FAST?.slice(0, 50) ?? "(none)"}" modelId="${(judgeFastRaw as Record<string, unknown>).modelId ?? "(none)"}"`);
     }
 
-    const delegationEnabled = pi.pluginConfig?.delegationEnabled !== false && process.env.OCTOCLAW_DELEGATION_ENABLED !== "false";
+    const delegationCapability = resolveDelegationCapability({
+      pluginConfig: asRecord(pi.pluginConfig),
+      env: process.env as Record<string, string | undefined>,
+      registerDetachedTaskRuntime: pi.registerDetachedTaskRuntime,
+    });
+    const delegationEnabled = delegationCapability.enabled;
+    if (delegationCapability.reason === "host_missing_detached_runtime") {
+      pi.logger?.warn?.(
+        "octoclaw delegation disabled: host is missing registerDetachedTaskRuntime; delegate routes will fail closed to reply until detached runtime support is available",
+      );
+    }
 
     // Fire-and-forget bridge init — lazy-loads openclaw runtime binding
     // If runtime unavailable, getCachedBridge() returns unavailable bridge (fail-closed)
     initNativeHelperBridge().catch(() => { /* bridge will use unavailable fallback */ });
-    if (typeof pi.registerDetachedTaskRuntime === "function") {
+    if (delegationCapability.hostSupported) {
       void createHostDetachedTaskLifecycleRuntime()
         .then((runtime) => {
           pi.registerDetachedTaskRuntime?.(runtime);

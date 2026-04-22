@@ -230,6 +230,65 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(replaySessionKey).toBe("agent:main:slack:default:direct:u0al9t5u89z");
   });
 
+  it("recovers the real user session from cached state request metadata during dispatch", () => {
+    const replaySessionKey = selectReplaySessionKeyForDispatch(
+      {
+        sessionKey: "",
+        sessionId: "",
+        agentId: "main",
+      },
+      {
+        session_key: "policy-2084244bc8270d8a",
+      },
+      "policy-2084244bc8270d8a",
+      {
+        decision: {
+          request: {
+            session_key: "agent:main:slack:default:direct:u0al9t5u89z",
+            metadata: {
+              session_key: "agent:main:slack:default:direct:u0al9t5u89z",
+            },
+          },
+        },
+      },
+      {},
+      {},
+    );
+
+    expect(replaySessionKey).toBe("agent:main:slack:default:direct:u0al9t5u89z");
+  });
+
+  it("tool policy context can fall back to recent delegated state for follow-up prompts", () => {
+    const store = new PolicyStateStore({
+      sessionStateFile: "/tmp/octoclaw-policy-state-regression-round4-followup.json",
+      ttlMs: 60_000,
+      persistDebounceMs: 60_000,
+    });
+    store.set("agent:main:slack:default:direct:u0al9t5u89z", {
+      prompt: "查下 openclaw 4.22 的新特性",
+      decision: {
+        request: {
+          session_key: "agent:main:slack:default:direct:u0al9t5u89z",
+          metadata: {
+            session_key: "agent:main:slack:default:direct:u0al9t5u89z",
+          },
+        },
+        route_decision: {
+          route: "delegate",
+          system_preferred_route: "delegate",
+          dispatch_required: true,
+        },
+      },
+      delegated: true,
+    });
+
+    const resolved = store.getToolPolicyContext({}, "用户追问先前委派任务“查下 openclaw 4.22 的新特性”的当前进展，并需要基于当前回合的权威执行事实回复状态。");
+    expect(resolved.key).toBe("agent:main:slack:default:direct:u0al9t5u89z");
+    expect((resolved.state?.decision as { request?: { session_key?: string } })?.request?.session_key).toBe(
+      "agent:main:slack:default:direct:u0al9t5u89z",
+    );
+  });
+
   it("does not replace a direct reply that was explicitly executed after delegate intent", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "收到，正在查。" }] },

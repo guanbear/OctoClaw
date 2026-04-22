@@ -529,7 +529,7 @@ async function userFacingHandoff(payload: Record<string, unknown>, fallback: str
 }
 
 function resolveToolPolicyContext(ctx: UnknownRecord, prompt = ""): { key: string; state: UnknownRecord | null } {
-  const fromStore = asRecord(policyState.resolveForContext(ctx));
+  const fromStore = asRecord(policyState.getToolPolicyContext(ctx, prompt));
   const contextKey = asString(fromStore.key);
   const contextState = isRecord(fromStore.state) ? fromStore.state : null;
   if (contextKey || contextState) {
