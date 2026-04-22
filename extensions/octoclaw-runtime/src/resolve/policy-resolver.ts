@@ -43,6 +43,8 @@ import type { ExecutionProfileTarget } from "@octoclaw/policy/model";
 import type { LiveRoute } from "@octoclaw/policy/route";
 import type { WorkerPool } from "@octoclaw/policy/caps";
 import {
+  authoritativeDecisionRoute,
+  canonicalizeDecisionForPolicyState,
   LIVE_ROUTE_NAMES,
   isObserveMode,
   normalizeLiveRoute,
@@ -1467,7 +1469,9 @@ export async function resolvePolicyDecisionForContext(
 
   try {
     const rawDecision = await resolveStatelessPolicyDecision(prompt, { metadata });
-    const decision = attachRuntimeTruthMetadata(rawDecision, metadata, prompt);
+    const decision = canonicalizeDecisionForPolicyState(
+      attachRuntimeTruthMetadata(rawDecision, metadata, prompt),
+    );
     const nextState: PolicyContextState = {
       prompt,
       decision,
@@ -1486,7 +1490,7 @@ export async function resolvePolicyDecisionForContext(
       preDispatchAckText: asString(asRecord(decision.pre_dispatch_ack).text),
       latencyAckSent: false,
       latencyAckText: asString(asRecord(decision.latency_ack).text),
-      delegated: isDelegatedRoute(decision),
+      delegated: authoritativeDecisionRoute(decision, "reply") === "delegate",
       delegationTool: asString(asRecord(decision.tool_policy).must_delegate_via),
       delegateTaskContext: Object.keys(asRecord(decision.delegateTaskContext)).length > 0
         ? asRecord(decision.delegateTaskContext)
@@ -1622,7 +1626,7 @@ export function buildTsRuntimeSpawnPayload(input: SpawnLikeInput): UnknownRecord
 }
 
 export function routeDecisionSummary(decision: UnknownRecord): string {
-  const routeDecision = runtimeRouteDecision(decision);
+  const routeDecision = runtimeRouteDecision(canonicalizeDecisionForPolicyState(decision));
   return [
     `route=${asString(routeDecision.route, "reply")}`,
     `worker_pool=${asString(routeDecision.worker_pool, "octoclaw-main")}`,

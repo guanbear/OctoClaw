@@ -7,6 +7,8 @@ import {
   truncateText,
 } from "../resolve/env.js";
 import {
+  authoritativeDecisionRoute,
+  canonicalizeDecisionForPolicyState,
   DELEGATED_ROUTE_NAMES,
   isDelegatedRoute as isDelegatedRouteName,
   isObserveMode,
@@ -673,8 +675,8 @@ export function replaceAssistantMessageText(message: Record<string, unknown>, te
 }
 
 export function delegationFailureReply(state: Record<string, unknown>): { mode: string; message: Record<string, unknown> } {
-  const decision = asRecord(state.decision);
-  const route = normalizeLiveRoute(asRecord(decision.route_decision).route, "reply");
+  const decision = canonicalizeDecisionForPolicyState(asRecord(state.decision));
+  const route = authoritativeDecisionRoute(decision, "reply");
   const intentClass = String(state.conversationIntentClass ?? conversationIntentClass(decision) ?? "").trim();
   const observe = route === "delegate" && isObserveMode(
     String(asRecord(decision.route_decision).judge_role ?? asRecord(decision).role ?? "").trim(),
@@ -920,7 +922,7 @@ export function workflowEnforcementRule(
 }
 
 export function isDelegatedRoute(decision: Record<string, unknown>): boolean {
-  return isDelegatedRouteName(String(asRecord(decision.route_decision).route ?? ""));
+  return isDelegatedRouteName(authoritativeDecisionRoute(decision, "reply"));
 }
 
 export function routeHintRequired(decision: Record<string, unknown>): boolean {
@@ -935,11 +937,12 @@ export function shouldRetainPolicyStateOnAgentEnd(state: Record<string, unknown>
 }
 
 export function compactPolicyPrompt(decision: Record<string, unknown>): string {
-  const routeDecision = asRecord(decision.route_decision);
-  const routerDecision = asRecord(decision.router_decision_v2);
-  const policyRouter = asRecord(decision.policy_router);
+  const canonicalDecision = canonicalizeDecisionForPolicyState(decision);
+  const routeDecision = asRecord(canonicalDecision.route_decision);
+  const routerDecision = asRecord(canonicalDecision.router_decision_v2);
+  const policyRouter = asRecord(canonicalDecision.policy_router);
   const judge = asRecord(policyRouter.judge);
-  const toolPolicy = asRecord(decision.tool_policy);
+  const toolPolicy = asRecord(canonicalDecision.tool_policy);
   const blocked = asStringArray(toolPolicy.blocked_patterns).slice(0, 8);
   const allowedControls = asStringArray(toolPolicy.allowed_control_tools).slice(0, 8);
   const parts = [

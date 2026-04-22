@@ -1,8 +1,14 @@
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import {
+  delegationFailureReply,
+  guardAssistantMessageForPolicyState,
   sanitizeDelegationReasoning,
 } from "./replay/replay-logger.js";
+import {
+  authoritativeDecisionRoute,
+  canonicalizeDecisionForPolicyState,
+} from "./resolve/route-helpers.js";
 import {
   shouldSuppressAck,
   recordMessage,
@@ -75,6 +81,65 @@ describe("regression round 4: scenario 2 — sanitizer strips reasoning patterns
     const input = "第一行\n\n\n\n\n第二行";
     const result = sanitizeDelegationReasoning(input);
     expect(result).toBe("第一行\n\n第二行");
+  });
+});
+
+describe("regression round 4: scenario 2b — delegated state normalization", () => {
+  it("canonicalizes mixed delegate state to delegate route", () => {
+    const canonical = canonicalizeDecisionForPolicyState({
+      route: "delegate",
+      request_kind: "delegated_task",
+      must_delegate_via: "octoclaw_dispatch",
+      route_decision: {
+        route: "reply",
+        system_preferred_route: "reply",
+        dispatch_required: false,
+        task_class: "main_direct",
+      },
+      tool_policy: {},
+      router_decision_v2: {},
+    });
+
+    expect(authoritativeDecisionRoute(canonical, "reply")).toBe("delegate");
+    expect((canonical.route_decision as { route: string }).route).toBe("delegate");
+    expect((canonical.route_decision as { dispatch_required: boolean }).dispatch_required).toBe(true);
+    expect((canonical.tool_policy as { must_delegate_via: string }).must_delegate_via).toBe("octoclaw_dispatch");
+    expect((canonical.router_decision_v2 as { request_kind: string }).request_kind).toBe("delegated_task");
+  });
+
+  it("replaces leaked direct reply when delegated task was not dispatched", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "我来写。收到，我看一下。可以，给你一个通用版：" }] },
+      {
+        delegated: false,
+        decision: {
+          route: "delegate",
+          request_kind: "delegated_task",
+          must_delegate_via: "octoclaw_dispatch",
+          route_decision: {
+            route: "reply",
+            system_preferred_route: "reply",
+            dispatch_required: false,
+            task_class: "main_direct",
+          },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    const text = (guarded.message as { content: Array<{ text: string }> }).content[0]?.text || "";
+    expect(text).toContain("还没派发成功");
+    expect(text).not.toContain("通用版");
+    expect(text).toBe(
+      (delegationFailureReply({
+        delegated: false,
+        decision: {
+          route: "delegate",
+          route_decision: { route: "reply" },
+          must_delegate_via: "octoclaw_dispatch",
+        },
+      }).message as { content: Array<{ text: string }> }).content[0]?.text || "",
+    );
   });
 });
 

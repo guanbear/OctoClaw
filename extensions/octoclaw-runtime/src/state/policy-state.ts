@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { resolvePolicyStateLedgerPath } from "../resolve/env.js";
-import { isDelegatedRoute } from "../resolve/route-helpers.js";
+import { authoritativeDecisionRoute, canonicalizeDecisionForPolicyState, isDelegatedRoute } from "../resolve/route-helpers.js";
 
 export const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
 const PERSIST_DEBOUNCE_MS = 2_000;
@@ -64,6 +64,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cloneEntry(entry: PolicyStateEntry): PolicyStateEntry {
   return { ...entry };
+}
+
+function normalizeEntry(entry: PolicyStateEntry): PolicyStateEntry {
+  const next = { ...entry };
+  if (isRecord(next.decision)) {
+    next.decision = canonicalizeDecisionForPolicyState(next.decision);
+    next.delegated = authoritativeDecisionRoute(next.decision, "reply") === "delegate";
+  }
+  return next;
 }
 
 function normalizePrompt(prompt: string): string {
@@ -199,7 +208,7 @@ export class PolicyStateStore {
     const now = Date.now();
     const previous = this.entries.get(key);
     const next: PolicyStateEntry = {
-      ...cloneEntry(entry),
+      ...normalizeEntry(cloneEntry(entry)),
       createdAt: entry.createdAt ?? previous?.createdAt ?? now,
       updatedAt: now,
     };
@@ -395,7 +404,7 @@ export class PolicyStateStore {
         if (updatedAt && now - updatedAt > this.ttlMs) {
           continue;
         }
-        this.entries.set(key, cloneEntry(entry));
+        this.entries.set(key, normalizeEntry(cloneEntry(entry)));
       }
     } catch {
       this.entries.clear();

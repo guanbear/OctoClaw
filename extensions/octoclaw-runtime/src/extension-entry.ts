@@ -80,6 +80,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
   "Do not hand-write session or subagent spawning commands.",
   "Do not explain delegation strategy, routing rationale, or task boundary analysis to the user. Use octoclaw_dispatch directly.",
+  "Do not emit user-visible coordinator chatter such as '我来写'、'收到，我看一下'、'我先确认一下派发边界'. Runtime ACK handles that.",
   "User-visible output should only contain: brief acknowledgment, authoritative status receipt, or final result/clear failure.",
 ].join("\n");
 

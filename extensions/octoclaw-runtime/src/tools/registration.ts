@@ -35,7 +35,11 @@ import {
 } from "../replay/replay-logger.js";
 import { policyState } from "../state/policy-state.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
-import { normalizeLiveRoute } from "../resolve/route-helpers.js";
+import {
+  authoritativeDecisionRoute,
+  canonicalizeDecisionForPolicyState,
+  normalizeLiveRoute,
+} from "../resolve/route-helpers.js";
 import fsSync from "node:fs";
 
 interface FsSyncLike {
@@ -479,14 +483,16 @@ function resolveToolPolicyContext(ctx: UnknownRecord, prompt = ""): { key: strin
 function setPolicyStateForContext(ctx: UnknownRecord, entry: UnknownRecord, explicitKey = ""): string {
   const stateKey = asString(explicitKey || resolvePolicyStateKey(ctx));
   if (stateKey) {
-    policyState.set(stateKey, entry);
+    const normalized = isRecord(entry) && isRecord(entry.decision)
+      ? { ...entry, decision: canonicalizeDecisionForPolicyState(entry.decision) }
+      : entry;
+    policyState.set(stateKey, normalized);
   }
   return stateKey;
 }
 
 function delegatedStickyRoute(decision: UnknownRecord): boolean {
-  const route = asString(asRecord(decision.route_decision).route);
-  return route === "delegate";
+  return authoritativeDecisionRoute(decision, "reply") === "delegate";
 }
 
 async function persistStickyLane(sessionKey: string, payload: UnknownRecord, logger: unknown, source: string): Promise<Record<string, unknown>> {

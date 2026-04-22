@@ -39,6 +39,7 @@ import {
   ackTimerStateForKey,
 } from "./ack-timing.js";
 import {
+  authoritativeDecisionRoute,
   DELEGATED_ROUTE_NAMES,
   isDelegatedRoute as isDelegatedRouteName,
 } from "../resolve/route-helpers.js";
@@ -287,7 +288,7 @@ export function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecor
   }
 
   const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
-  const route = asString(options.route || routeDecision.route).toLowerCase();
+  const route = asString(options.route || routeDecision.route || authoritativeDecisionRoute(decision, "reply")).toLowerCase();
   if (DELEGATED_ROUTE_NAMES.has(route)) {
     return "delegate";
   }
