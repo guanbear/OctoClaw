@@ -153,4 +153,57 @@ describe("buildTsRuntimeDispatchPayload", () => {
     });
     expect(payload.deliveries?.final).toBeUndefined();
   });
+
+  it("prefers sealed requested_route over stale decision route", () => {
+    const payload = buildTsRuntimeDispatchPayload(
+      {
+        task: "查下 openclaw 4.22 的新特性",
+        decision: {
+          route_decision: {
+            route: "reply",
+            worker_pool: "octoclaw-worker",
+          },
+          model_policy: {
+            selected_model: "direct_main",
+          },
+        },
+        metadata: {
+          requested_route: "delegate",
+          session_key: "session-88",
+          channel: "slack",
+          workspaceMode: "isolated_worktree",
+        },
+        helperInvoker: buildHelperInvoker(),
+      },
+      {
+        runtimeRouteDecision: (decision) => (decision?.route_decision as Record<string, unknown>) || {},
+        normalizeLiveRoute: (route, fallback = "reply") => typeof route === "string" ? route : fallback,
+        runtimeExecutionIds: () => ({
+          requestId: "req-runtime-2",
+          taskId: "task-runtime-2",
+          flowId: "flow-runtime-2",
+        }),
+        buildWorkflowDecision: () => buildDecision(),
+        buildWorkflowScope: () => ({
+          workspaceMode: "isolated_worktree",
+          readScope: [{ resource: "repo", access: "read" }],
+          writeScope: [],
+          writeScopeSummary: "",
+        }),
+        truncateText: (value, maxLength = 80) => String(value).slice(0, maxLength),
+      },
+    );
+
+    expect(payload.route).toBe("delegate");
+    expect(payload.policy_decision).toMatchObject({
+      route_decision: {
+        route: "delegate",
+        dispatch_required: true,
+      },
+    });
+    expect(payload.materialization).toMatchObject({
+      type: "delegate",
+      task_id: "task-plugin-native",
+    });
+  });
 });

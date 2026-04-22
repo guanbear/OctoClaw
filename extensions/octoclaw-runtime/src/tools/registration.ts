@@ -162,6 +162,17 @@ function parsePolicyDecisionJson(value: unknown): UnknownRecord | null {
   return Object.keys(parsed).length > 0 ? parsed : null;
 }
 
+export function selectDispatchPolicyDecision(
+  stateDecision: unknown,
+  policyJsonDecision: unknown,
+): UnknownRecord | null {
+  const explicit = parsePolicyDecisionJson(policyJsonDecision);
+  if (explicit) {
+    return explicit;
+  }
+  return isRecord(stateDecision) ? stateDecision : null;
+}
+
 function toolLogger(ctx: UnknownRecord): UnknownRecord {
   return asRecord(ctx.logger);
 }
@@ -796,7 +807,7 @@ export function getToolRegistrations(): ToolRegistration[] {
         const ctx = _rawCtx ?? {};
         let { key: stateKey, state } = resolveToolPolicyContext(ctx, asString(params.task));
         const hadCachedDecision = Boolean(params.policyJson || state?.decision);
-        let cachedDecision = (isRecord(state?.decision) ? state?.decision : null) ?? parsePolicyDecisionJson(params.policyJson);
+        let cachedDecision = selectDispatchPolicyDecision(state?.decision, params.policyJson);
         let freshDecisionSource = "";
         if (!cachedDecision) {
           cachedDecision = await resolveStatelessPolicyDecision(asString(params.task), {
@@ -825,6 +836,7 @@ export function getToolRegistrations(): ToolRegistration[] {
         if (asString(params.sessionKey)) metadata.session_key = asString(params.sessionKey);
         metadata = applyUserMetadataOverrides(metadata, parseObjectJson(params.metadataJson));
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
+        metadata.requested_route = normalizeLiveRoute(resolvedRoute, "reply");
 
         const complexityBand = asString(params.complexityBand || asRecord(cachedDecision)._judge_complexity_band || asRecord(asRecord(cachedDecision).route_decision)._judge_complexity_band);
         const budgetBand = asString(asRecord(cachedDecision._judge_budget_band ?? asRecord(cachedDecision.route_decision)._judge_budget_band));
@@ -948,7 +960,10 @@ export function getToolRegistrations(): ToolRegistration[] {
           ...(state ?? {}),
           prompt: asString(params.task),
           decision: authoritativeDecision,
-          delegated: delegatedStickyRoute(authoritativeDecision),
+          delegated: asString(payload.route) === "delegate",
+          dispatchRoute: asString(payload.route),
+          dispatchStatus: asString(payload.status),
+          dispatchExecuted: payload.executed === true,
           updatedAt: Date.now(),
         }, stateKey);
         const materialization = asRecord(payload.materialization);

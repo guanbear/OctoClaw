@@ -793,7 +793,9 @@ export function guardAssistantMessageForPolicyState(
   if (!replyText) {
     return { mode: "pass", message };
   }
-  if (isDelegatedRoute(asRecord(state.decision)) && !state.delegated) {
+  const dispatchRoute = String(state.dispatchRoute ?? state.dispatch_route ?? "").trim();
+  const dispatchExecuted = state.dispatchExecuted === true || state.dispatch_executed === true;
+  if (isDelegatedRoute(asRecord(state.decision)) && !state.delegated && !(dispatchRoute === "reply" && dispatchExecuted)) {
     const fallback = delegationFailureReply(state);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }

@@ -23,6 +23,7 @@ import {
   cancelAllAckTimers,
   type AckTimerResult,
 } from "./ack/ack-timing.js";
+import { selectDispatchPolicyDecision } from "./tools/registration.js";
 
 
 describe("regression round 4: scenario 1 — sanitizer empty fallback", () => {
@@ -165,6 +166,64 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     });
 
     expect(store.get("state-key")?.delegated).toBe(false);
+  });
+
+  it("prefers explicit policyJson over stale state decision during dispatch", () => {
+    const selected = selectDispatchPolicyDecision(
+      {
+        route: "reply",
+        route_decision: {
+          route: "reply",
+          system_preferred_route: "reply",
+        },
+      },
+      JSON.stringify({
+        route: "delegate",
+        route_decision: {
+          route: "delegate",
+          system_preferred_route: "delegate",
+          dispatch_required: true,
+        },
+        tool_policy: {
+          must_delegate_via: "octoclaw_dispatch",
+        },
+      }),
+    );
+
+    expect(selected).toMatchObject({
+      route_decision: {
+        route: "delegate",
+        system_preferred_route: "delegate",
+        dispatch_required: true,
+      },
+      tool_policy: {
+        must_delegate_via: "octoclaw_dispatch",
+      },
+    });
+  });
+
+  it("does not replace a direct reply that was explicitly executed after delegate intent", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "收到，正在查。" }] },
+      {
+        delegated: false,
+        dispatchRoute: "reply",
+        dispatchExecuted: true,
+        decision: {
+          route: "delegate",
+          route_decision: {
+            route: "delegate",
+            system_preferred_route: "delegate",
+            dispatch_required: true,
+          },
+          tool_policy: {
+            must_delegate_via: "octoclaw_dispatch",
+          },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
   });
 });
 

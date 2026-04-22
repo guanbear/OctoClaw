@@ -139,7 +139,7 @@ export function buildTsRuntimeDispatchPayload(
   const decision = asRecord(input.decision);
   const metadata = asRecord(input.metadata);
   const routeDecision = helpers.runtimeRouteDecision(decision);
-  const route = helpers.normalizeLiveRoute(routeDecision.route ?? metadata.requested_route, "reply");
+  const route = helpers.normalizeLiveRoute(metadata.requested_route ?? routeDecision.route, "reply");
   if (!["reply", "delegate"].includes(route)) {
     throw new Error(`unsupported_runtime_route:${route}`);
   }

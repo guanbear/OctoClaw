@@ -97,6 +97,32 @@ while another says:
 
 This is the primary cause of the observed contradiction.
 
+## 3.1b Sealed route intent is not preserved strongly enough between `route_hint` and `dispatch`
+
+Live replay from `2026-04-23 06:25-06:27` showed another concrete regression:
+
+1. judge and `octoclaw_route_hint` both converged on `route = delegate`
+2. `octoclaw_dispatch` was then called with:
+   - `forceRoute = delegate`
+   - explicit `policyJson` whose `route_decision.route = delegate`
+3. but dispatch still materialized as:
+   - `route = reply`
+   - `status = executed`
+   - `Direct route selected; keep execution in the main session`
+
+This means the runtime still allowed a stale route source to override the current sealed decision.
+
+In practice, the regression came from two architectural gaps:
+
+1. `dispatch` did not always prefer the explicit `policyJson` passed from the current `route_hint` turn over older in-memory/state-store decisions
+2. runtime payload construction did not treat sealed `requested_route` as higher priority than stale `decision.route_decision.route`
+
+So even after earlier delegation-runtime fixes, a later tool-chain step could still silently downgrade:
+
+1. `delegate -> reply`
+
+That is why this class of bug can appear to be "already fixed" while still reproducing: the earlier fixes closed lifecycle/status gaps, but not the route-sealing gap between policy merge and dispatch materialization.
+
 ## 3.2 Registration path and execution path are not fully wired together
 
 The runtime can materialize a delegated row, but the child execution lifecycle is not consistently advancing through:
