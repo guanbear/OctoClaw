@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 // @ts-ignore missing Node type package in this workspace
 import { readFileSync } from "node:fs";
 // @ts-ignore missing Node type package in this workspace
-import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
 // @ts-ignore missing Node type package in this workspace
 import os from "node:os";
 // @ts-ignore missing Node type package in this workspace
@@ -48,11 +48,12 @@ interface ParsedArgs {
   repoUrl?: string;
   branch?: string;
   openclawHome?: string;
+  restart: boolean;
   help: boolean;
 }
 
 interface DeployStatus {
-  runtimeExtensionPresent: boolean;
+  expectedExtensions: string[];
   missingExtensions: string[];
   expectedPackages: string[];
   missingPackages: string[];
@@ -81,6 +82,18 @@ interface ChildProcessLike {
 
 const MANIFEST_FILENAME = "octoclaw-source-manifest.json";
 const RUNTIME_EXTENSION_NAME = "octoclaw-runtime";
+const DEPLOY_PACKAGE_NAMES = [
+  "octoclaw-contracts",
+  "octoclaw-policy",
+  "octoclaw-runtime-core",
+  "octoclaw-delegation",
+  "octoclaw-fast-reply",
+  "octoclaw-status-surface",
+];
+const DEPLOY_EXTENSION_NAMES = [
+  RUNTIME_EXTENSION_NAME,
+];
+const NODE_MODULES_SCOPE = "@octoclaw";
 
 export const DEFAULT_REPO_URL = "https://github.com/guanbear/OctoClaw.git";
 export const DEFAULT_REF = "release/0.3.0-ts-rebuild";
@@ -95,6 +108,7 @@ function printUsage(): void {
       "  --repo-url URL       Git repository URL",
       "  --branch NAME        Branch to install/update (alias: --ref)",
       "  --openclaw-home DIR  OpenClaw home directory (default: ~/.openclaw)",
+      "  --restart            Restart OpenClaw gateway and node after install/update",
       "  -h, --help           Show this help",
     ].join("\n") + "\n",
   );
@@ -104,8 +118,31 @@ function resolveOpenClawHome(openclawHome?: string): string {
   return path.resolve(openclawHome ?? process.env.OPENCLAW_HOME ?? path.join(os.homedir(), ".openclaw"));
 }
 
+function readOpenClawConfig(openclawHome: string): Record<string, unknown> | null {
+  try {
+    const raw = JSON.parse(readFileSync(path.join(openclawHome, "openclaw.json"), "utf8")) as unknown;
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function readWorkspaceRootFromConfig(openclawHome: string): string | null {
+  const config = readOpenClawConfig(openclawHome);
+  const agents = config?.agents;
+  if (!agents || typeof agents !== "object" || Array.isArray(agents)) return null;
+  const defaults = (agents as Record<string, unknown>).defaults;
+  if (!defaults || typeof defaults !== "object" || Array.isArray(defaults)) return null;
+  const workspace = (defaults as Record<string, unknown>).workspace;
+  return typeof workspace === "string" && workspace.trim().length > 0 ? path.resolve(workspace) : null;
+}
+
 function resolveOctoclawRoot(openclawHome: string): string {
-  return path.join(openclawHome, "repos", "octoclaw");
+  const workspaceRoot = readWorkspaceRootFromConfig(openclawHome);
+  if (workspaceRoot) {
+    return path.join(workspaceRoot, "openclaw", "repos", "octoclaw");
+  }
+  return path.join(openclawHome, "workspace", "openclaw", "repos", "octoclaw");
 }
 
 function manifestPath(openclawHome: string): string {
@@ -114,6 +151,20 @@ function manifestPath(openclawHome: string): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function buildCommandEnv(baseEnv: Record<string, string | undefined>): Record<string, string | undefined> {
+  const pathEntries = [
+    path.join(os.homedir(), ".local", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    baseEnv.PATH ?? "",
+  ].filter((value) => value.length > 0);
+
+  return {
+    ...baseEnv,
+    PATH: pathEntries.join(":"),
+  };
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -149,7 +200,7 @@ async function runCommand(command: string, args: string[], options: RunCommandOp
     const child = spawn(command, args, {
       cwd,
       stdio: captureStdout ? ["inherit", "pipe", "pipe"] : "inherit",
-      env: process.env,
+      env: buildCommandEnv(process.env),
     }) as ChildProcessLike;
 
     let stdout = "";
@@ -236,38 +287,81 @@ async function buildWorkspace(octoclawRoot: string): Promise<void> {
 }
 
 async function syncRuntimeExtension(octoclawRoot: string, openclawHome: string): Promise<void> {
-  const sourceDir = path.join(octoclawRoot, "extensions", RUNTIME_EXTENSION_NAME);
-  const targetDir = path.join(openclawHome, "extensions", RUNTIME_EXTENSION_NAME);
+  await syncExtensions(octoclawRoot, openclawHome);
+}
 
-  if (!(await pathExists(sourceDir))) {
-    throw new Error(`Runtime extension source not found: ${sourceDir}`);
+interface DeploySource {
+  kind: "packages" | "extensions";
+  sourceRoot: string;
+}
+
+async function resolveDeploySource(octoclawRoot: string, unitName: string): Promise<DeploySource | null> {
+  const candidates: DeploySource[] = [
+    { kind: "packages", sourceRoot: path.join(octoclawRoot, "packages", unitName) },
+    { kind: "extensions", sourceRoot: path.join(octoclawRoot, "extensions", unitName) },
+  ];
+
+  for (const candidate of candidates) {
+    const packageJson = path.join(candidate.sourceRoot, "package.json");
+    const distDir = path.join(candidate.sourceRoot, "dist");
+    if ((await pathExists(packageJson)) && (await pathExists(distDir))) {
+      return candidate;
+    }
   }
 
+  return null;
+}
+
+async function syncDeployUnit(sourceDir: string, targetDir: string): Promise<void> {
   await ensureDirectory(path.dirname(targetDir));
   await runCommand(
     "rsync",
     [
       "-a",
       "--delete",
+      "--prune-empty-dirs",
+      "--include",
+      "package.json",
+      "--include",
+      "openclaw.plugin.json",
+      "--include",
+      "README.md",
+      "--include",
+      "LICENSE*",
+      "--include",
+      "dist/***",
       "--exclude",
-      ".git",
-      "--exclude",
-      ".DS_Store",
-      "--exclude",
-      "__pycache__",
-      "--exclude",
-      "node_modules",
+      "*",
       `${sourceDir}/`,
       `${targetDir}/`,
     ],
-    { cwd: octoclawRoot },
+    { cwd: sourceDir },
   );
 }
 
+async function syncExtensions(octoclawRoot: string, openclawHome: string): Promise<void> {
+  const extensionsTargetDir = path.join(openclawHome, "extensions");
+  await ensureDirectory(extensionsTargetDir);
+
+  const existingExtensions = await listDirectories(extensionsTargetDir, (name) => name.startsWith("octoclaw-"));
+  for (const existingExtension of existingExtensions) {
+    if (!DEPLOY_EXTENSION_NAMES.includes(existingExtension)) {
+      await rm(path.join(extensionsTargetDir, existingExtension), { recursive: true, force: true });
+    }
+  }
+
+  for (const extensionName of DEPLOY_EXTENSION_NAMES) {
+    const source = await resolveDeploySource(octoclawRoot, extensionName);
+    if (!source || source.kind !== "extensions") {
+      throw new Error(`Runtime extension source not found or not built: ${extensionName}`);
+    }
+    await syncDeployUnit(source.sourceRoot, path.join(extensionsTargetDir, extensionName));
+  }
+}
+
 async function syncPackages(octoclawRoot: string, openclawHome: string): Promise<string[]> {
-  const packagesSourceDir = path.join(octoclawRoot, "packages");
   const packagesTargetDir = path.join(openclawHome, "packages");
-  const packageNames = await listDirectories(packagesSourceDir, (name) => name.startsWith("octoclaw-"));
+  const packageNames = [...DEPLOY_PACKAGE_NAMES];
 
   await ensureDirectory(packagesTargetDir);
 
@@ -279,47 +373,47 @@ async function syncPackages(octoclawRoot: string, openclawHome: string): Promise
   }
 
   for (const packageName of packageNames) {
-    const sourceDir = path.join(packagesSourceDir, packageName);
-    const targetDir = path.join(packagesTargetDir, packageName);
-    await runCommand(
-      "rsync",
-      [
-        "-a",
-        "--delete",
-        "--prune-empty-dirs",
-        "--include",
-        "package.json",
-        "--include",
-        "README.md",
-        "--include",
-        "LICENSE*",
-        "--include",
-        "dist/***",
-        "--exclude",
-        "*",
-        `${sourceDir}/`,
-        `${targetDir}/`,
-      ],
-      { cwd: octoclawRoot },
-    );
+    const source = await resolveDeploySource(octoclawRoot, packageName);
+    if (!source) {
+      throw new Error(`Deploy package source not found or not built: ${packageName}`);
+    }
+    await syncDeployUnit(source.sourceRoot, path.join(packagesTargetDir, packageName));
   }
 
   return packageNames;
 }
 
 async function getExpectedPackageNames(octoclawRoot: string): Promise<string[]> {
-  return await listDirectories(path.join(octoclawRoot, "packages"), (name) => name.startsWith("octoclaw-"));
+  const names: string[] = [];
+  for (const packageName of DEPLOY_PACKAGE_NAMES) {
+    const source = await resolveDeploySource(octoclawRoot, packageName);
+    if (source) {
+      names.push(packageName);
+    }
+  }
+  return names;
+}
+
+async function getExpectedExtensionNames(octoclawRoot: string): Promise<string[]> {
+  const names: string[] = [];
+  for (const extensionName of DEPLOY_EXTENSION_NAMES) {
+    const source = await resolveDeploySource(octoclawRoot, extensionName);
+    if (source?.kind === "extensions") {
+      names.push(extensionName);
+    }
+  }
+  return names;
 }
 
 async function collectDeployStatus(openclawHome: string, octoclawRoot?: string): Promise<DeployStatus> {
-  const runtimeExtensionPath = path.join(openclawHome, "extensions", RUNTIME_EXTENSION_NAME);
-  const runtimeExtensionPresent = await pathExists(runtimeExtensionPath);
-
   let expectedPackages: string[] = [];
+  let expectedExtensions: string[] = [];
   if (octoclawRoot && (await pathExists(path.join(octoclawRoot, "packages")))) {
     expectedPackages = await getExpectedPackageNames(octoclawRoot);
+    expectedExtensions = await getExpectedExtensionNames(octoclawRoot);
   } else {
-    expectedPackages = await listDirectories(path.join(openclawHome, "packages"), (name) => name.startsWith("octoclaw-"));
+    expectedPackages = [...DEPLOY_PACKAGE_NAMES];
+    expectedExtensions = [...DEPLOY_EXTENSION_NAMES];
   }
 
   const missingPackages: string[] = [];
@@ -332,9 +426,19 @@ async function collectDeployStatus(openclawHome: string, octoclawRoot?: string):
     }
   }
 
+  const missingExtensions: string[] = [];
+  for (const extensionName of expectedExtensions) {
+    const extensionDir = path.join(openclawHome, "extensions", extensionName);
+    const packageJsonPath = path.join(extensionDir, "package.json");
+    const distPath = path.join(extensionDir, "dist");
+    if (!(await pathExists(packageJsonPath)) || !(await pathExists(distPath))) {
+      missingExtensions.push(extensionName);
+    }
+  }
+
   return {
-    runtimeExtensionPresent,
-    missingExtensions: runtimeExtensionPresent ? [] : [RUNTIME_EXTENSION_NAME],
+    expectedExtensions,
+    missingExtensions,
     expectedPackages,
     missingPackages,
   };
@@ -342,9 +446,9 @@ async function collectDeployStatus(openclawHome: string, octoclawRoot?: string):
 
 async function reconcileDeployment(openclawHome: string, octoclawRoot: string): Promise<void> {
   const deployStatus = await collectDeployStatus(openclawHome, octoclawRoot);
-  if (!deployStatus.runtimeExtensionPresent || deployStatus.missingPackages.length > 0) {
+  if (deployStatus.missingExtensions.length > 0 || deployStatus.missingPackages.length > 0) {
     const fragments = [
-      deployStatus.runtimeExtensionPresent ? null : `missing extension: ${RUNTIME_EXTENSION_NAME}`,
+      deployStatus.missingExtensions.length > 0 ? `missing extensions: ${deployStatus.missingExtensions.join(", ")}` : null,
       deployStatus.missingPackages.length > 0
         ? `missing packages: ${deployStatus.missingPackages.join(", ")}`
         : null,
@@ -356,6 +460,7 @@ async function reconcileDeployment(openclawHome: string, octoclawRoot: string): 
 function parseArgs(args: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     command: args[0] ?? "status",
+    restart: false,
     help: false,
   };
 
@@ -375,6 +480,10 @@ function parseArgs(args: string[]): ParsedArgs {
       case "--openclaw-home":
         parsed.openclawHome = args[index + 1];
         index += 2;
+        break;
+      case "--restart":
+        parsed.restart = true;
+        index += 1;
         break;
       case "-h":
       case "--help":
@@ -401,7 +510,7 @@ export function resolveManageConfig(
   const repoUrl = env.OCTOCLAW_REPO_URL ?? DEFAULT_REPO_URL;
   const ref = args[1] ?? env.OCTOCLAW_REF ?? DEFAULT_REF;
   const openclawHome = path.resolve(env.OPENCLAW_HOME ?? path.join(env.HOME ?? os.homedir(), ".openclaw"));
-  const installDir = path.resolve(env.OCTOCLAW_INSTALL_DIR ?? path.join(openclawHome, "repos", "octoclaw"));
+  const installDir = path.resolve(env.OCTOCLAW_INSTALL_DIR ?? resolveOctoclawRoot(openclawHome));
 
   return {
     repoUrl,
@@ -461,10 +570,152 @@ export async function writeSourceManifest(openclawHome: string, manifest: Source
   await writeFile(sourceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
+async function ensureSymlink(linkPath: string, targetPath: string): Promise<void> {
+  await ensureDirectory(path.dirname(linkPath));
+  try {
+    const entry = await lstat(linkPath);
+    if (entry.isSymbolicLink()) {
+      const existingTarget = await readlink(linkPath);
+      const resolvedTarget = path.resolve(path.dirname(linkPath), existingTarget);
+      if (resolvedTarget === targetPath) {
+        return;
+      }
+    }
+    await rm(linkPath, { recursive: true, force: true });
+  } catch {
+    // intentionally empty
+  }
+  await symlink(targetPath, linkPath, "dir");
+}
+
+async function resolveOpenClawBinary(openclawHome: string): Promise<string> {
+  const candidates = [
+    process.env.OPENCLAW_BIN,
+    path.join(os.homedir(), ".local", "bin", "openclaw"),
+    path.join(openclawHome, "bin", "openclaw"),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "openclaw";
+}
+
+async function resolveInstalledNodeModulesRoot(openclawHome: string): Promise<string | null> {
+  const binary = await resolveOpenClawBinary(openclawHome);
+  if (binary === "openclaw") {
+    return null;
+  }
+
+  const candidates = new Set<string>([
+    path.join(os.homedir(), ".local", "lib", "node_modules"),
+    "/opt/homebrew/lib/node_modules",
+    "/usr/local/lib/node_modules",
+  ]);
+
+  const resolvedBinaryPaths = [path.resolve(binary)];
+  try {
+    resolvedBinaryPaths.push(path.resolve(path.dirname(binary), await readlink(binary)));
+  } catch {
+    // intentionally empty
+  }
+
+  for (const resolvedBinaryPath of resolvedBinaryPaths) {
+    const normalizedBinaryPath = resolvedBinaryPath.replace(/\\/g, "/");
+    const nodeModulesMarker = "/node_modules/";
+    const markerIndex = normalizedBinaryPath.lastIndexOf(nodeModulesMarker);
+    if (markerIndex >= 0) {
+      candidates.add(normalizedBinaryPath.slice(0, markerIndex + nodeModulesMarker.length - 1));
+    }
+
+    candidates.add(path.join(path.dirname(path.dirname(resolvedBinaryPath)), "node_modules"));
+    candidates.add(path.join(path.dirname(path.dirname(path.dirname(resolvedBinaryPath))), "node_modules"));
+    candidates.add(path.join(path.dirname(path.dirname(resolvedBinaryPath)), "lib", "node_modules"));
+  }
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function linkOctoclawPackageGraph(targetRoot: string, openclawHome: string, includeExtension = false): Promise<void> {
+  const scopeRoot = path.join(targetRoot, NODE_MODULES_SCOPE);
+  await ensureDirectory(scopeRoot);
+
+  for (const packageName of DEPLOY_PACKAGE_NAMES) {
+    const aliasName = packageName.replace(/^octoclaw-/, "");
+    await ensureSymlink(path.join(scopeRoot, aliasName), path.join(openclawHome, "packages", packageName));
+  }
+
+  if (includeExtension) {
+    for (const extensionName of DEPLOY_EXTENSION_NAMES) {
+      const aliasName = extensionName.replace(/^octoclaw-/, "");
+      await ensureSymlink(path.join(scopeRoot, aliasName), path.join(openclawHome, "extensions", extensionName));
+    }
+  }
+}
+
+async function setupDeploySymlinks(openclawHome: string): Promise<void> {
+  await linkOctoclawPackageGraph(path.join(openclawHome, "extensions", RUNTIME_EXTENSION_NAME, "node_modules"), openclawHome, false);
+  await linkOctoclawPackageGraph(path.join(openclawHome, "node_modules"), openclawHome, true);
+
+  const installedNodeModulesRoot = await resolveInstalledNodeModulesRoot(openclawHome);
+  if (installedNodeModulesRoot) {
+    await linkOctoclawPackageGraph(installedNodeModulesRoot, openclawHome, true);
+  }
+}
+
+async function validateRuntimeExtensionLoad(openclawHome: string): Promise<void> {
+  const extensionRoot = path.join(openclawHome, "extensions", RUNTIME_EXTENSION_NAME);
+  const manifestPathname = path.join(extensionRoot, "openclaw.plugin.json");
+  const manifestRaw = JSON.parse(await readFile(manifestPathname, "utf8")) as Record<string, unknown>;
+  const mainEntry = typeof manifestRaw.main === "string"
+    ? manifestRaw.main
+    : Array.isArray(manifestRaw.extensions) && typeof manifestRaw.extensions[0] === "string"
+      ? manifestRaw.extensions[0]
+      : "";
+
+  if (!mainEntry) {
+    throw new Error(`Deployed plugin manifest missing main entry: ${manifestPathname}`);
+  }
+
+  const entryPath = path.join(extensionRoot, mainEntry.replace(/^\.\//, ""));
+  await import(pathToFileURL(entryPath).href);
+}
+
+async function restartService(openclawHome: string, service: "gateway" | "node"): Promise<void> {
+  const binary = await resolveOpenClawBinary(openclawHome);
+  try {
+    await runCommand(binary, [service, "restart"]);
+    return;
+  } catch (error) {
+    if (os.platform() !== "darwin") {
+      throw error;
+    }
+  }
+
+  const uid = await runCommand("id", ["-u"], { captureStdout: true });
+  const label = service === "gateway" ? "ai.openclaw.gateway" : "ai.openclaw.node";
+  await runCommand("launchctl", ["kickstart", "-k", `gui/${uid}/${label}`]);
+}
+
+async function restartOpenClawServices(openclawHome: string): Promise<void> {
+  await restartService(openclawHome, "gateway");
+  await restartService(openclawHome, "node");
+}
+
 export async function installFromSource(options: {
   repoUrl?: string;
   branch?: string;
   openclawHome?: string;
+  restart?: boolean;
 }): Promise<number> {
   const openclawHome = resolveOpenClawHome(options.openclawHome);
   const octoclawRoot = resolveOctoclawRoot(openclawHome);
@@ -475,6 +726,8 @@ export async function installFromSource(options: {
   await buildWorkspace(octoclawRoot);
   await syncRuntimeExtension(octoclawRoot, openclawHome);
   await syncPackages(octoclawRoot, openclawHome);
+  await setupDeploySymlinks(openclawHome);
+  await validateRuntimeExtensionLoad(openclawHome);
 
   const manifest: SourceManifest = {
     type: "git",
@@ -485,12 +738,15 @@ export async function installFromSource(options: {
   };
   await writeSourceManifest(openclawHome, manifest);
   await reconcileDeployment(openclawHome, octoclawRoot);
+  if (options.restart) {
+    await restartOpenClawServices(openclawHome);
+  }
 
   process.stdout.write(`Installed OctoClaw from source at ${manifest.commit} (${branch})\n`);
   return 0;
 }
 
-export async function updateFromSource(options: { openclawHome?: string }): Promise<number> {
+export async function updateFromSource(options: { openclawHome?: string; restart?: boolean }): Promise<number> {
   const openclawHome = resolveOpenClawHome(options.openclawHome);
   const manifest = readSourceManifest(openclawHome);
   const octoclawRoot = manifest?.octoclawRoot ?? resolveOctoclawRoot(openclawHome);
@@ -506,6 +762,8 @@ export async function updateFromSource(options: { openclawHome?: string }): Prom
   await buildWorkspace(octoclawRoot);
   await syncRuntimeExtension(octoclawRoot, openclawHome);
   await syncPackages(octoclawRoot, openclawHome);
+  await setupDeploySymlinks(openclawHome);
+  await validateRuntimeExtensionLoad(openclawHome);
 
   const nextManifest: SourceManifest = {
     type: "git",
@@ -516,6 +774,9 @@ export async function updateFromSource(options: { openclawHome?: string }): Prom
   };
   await writeSourceManifest(openclawHome, nextManifest);
   await reconcileDeployment(openclawHome, octoclawRoot);
+  if (options.restart) {
+    await restartOpenClawServices(openclawHome);
+  }
 
   process.stdout.write(`Updated OctoClaw source install to ${nextManifest.commit} (${branch})\n`);
   return 0;
@@ -570,7 +831,7 @@ export async function showStatus(options: { openclawHome?: string }): Promise<nu
       `branch=${manifest.branch}`,
       `installed_at=${manifest.installedAt}`,
       `octoclaw_root=${manifest.octoclawRoot}`,
-      `runtime_extension_present=${String(deployStatus.runtimeExtensionPresent)}`,
+      `expected_extensions=${deployStatus.expectedExtensions.join(",")}`,
       `expected_packages=${deployStatus.expectedPackages.join(",")}`,
       `missing_extensions=${deployStatus.missingExtensions.join(",")}`,
       `missing_packages=${deployStatus.missingPackages.join(",")}`,
@@ -582,11 +843,13 @@ export async function showStatus(options: { openclawHome?: string }): Promise<nu
 
 export async function uninstall(options: { openclawHome?: string }): Promise<number> {
   const openclawHome = resolveOpenClawHome(options.openclawHome);
-  const runtimeExtensionPath = path.join(openclawHome, "extensions", RUNTIME_EXTENSION_NAME);
   const packagesDir = path.join(openclawHome, "packages");
+  const extensionsDir = path.join(openclawHome, "extensions");
   const sourceManifestPath = manifestPath(openclawHome);
 
-  await rm(runtimeExtensionPath, { recursive: true, force: true });
+  for (const extensionName of DEPLOY_EXTENSION_NAMES) {
+    await rm(path.join(extensionsDir, extensionName), { recursive: true, force: true });
+  }
 
   const installedPackages = await listDirectories(packagesDir, (name) => name.startsWith("octoclaw-"));
   for (const packageName of installedPackages) {
@@ -594,7 +857,7 @@ export async function uninstall(options: { openclawHome?: string }): Promise<num
   }
 
   await rm(sourceManifestPath, { force: true });
-  process.stdout.write("Uninstalled deployed OctoClaw runtime extension, packages, and source manifest\n");
+  process.stdout.write("Uninstalled deployed OctoClaw extensions, packages, and source manifest\n");
   return 0;
 }
 
@@ -612,9 +875,10 @@ export async function manage(args: string[]): Promise<number> {
           repoUrl: parsed.repoUrl,
           branch: parsed.branch,
           openclawHome: parsed.openclawHome,
+          restart: parsed.restart,
         });
       case "update":
-        return await updateFromSource({ openclawHome: parsed.openclawHome });
+        return await updateFromSource({ openclawHome: parsed.openclawHome, restart: parsed.restart });
       case "check":
         return await checkForUpdates({ openclawHome: parsed.openclawHome });
       case "status":

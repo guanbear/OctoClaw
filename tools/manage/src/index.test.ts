@@ -13,18 +13,18 @@ describe("manage tool", () => {
     expect(config).toEqual({
       repoUrl: "https://github.com/guanbear/OctoClaw.git",
       ref: "release/0.3.0-ts-rebuild",
-      installDir: "/Users/tester/.openclaw/repos/octoclaw",
+      installDir: "/Users/tester/.openclaw/workspace/openclaw/repos/octoclaw",
       openclawHome: "/Users/tester/.openclaw",
     });
   });
 
   it("buildStatusOutput", () => {
     const status = buildStatusOutput({
-      repoUrl: "https://github.com/guanbear/OctoClaw.git",
-      ref: "release/0.3.0-ts-rebuild",
-      installDir: "/Users/tester/.openclaw/repos/octoclaw",
-      openclawHome: "/Users/tester/.openclaw",
-    });
+        repoUrl: "https://github.com/guanbear/OctoClaw.git",
+        ref: "release/0.3.0-ts-rebuild",
+        installDir: "/Users/tester/.openclaw/workspace/openclaw/repos/octoclaw",
+        openclawHome: "/Users/tester/.openclaw",
+      });
 
     expect(status).toEqual({
       ref: "release/0.3.0-ts-rebuild",

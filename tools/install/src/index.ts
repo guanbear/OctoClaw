@@ -22,6 +22,7 @@ import { V1_MODEL_PROFILE_MAP } from "@octoclaw/policy/model";
 const CONFIG_FILE_NAME = "octoclaw-config.json";
 const MODEL_CONFIG_FILE_NAME = "octoclaw-model-config.json";
 const AGENTS_FILE_NAME = "AGENTS.md";
+const SOURCE_MANIFEST_FILE_NAME = "octoclaw-source-manifest.json";
 const OCTOCLAW_RULES_VERSION = "v1.7.0";
 const RULE_BLOCK_START = `<!-- octoclaw:core-rules ${OCTOCLAW_RULES_VERSION} -->`;
 const RULE_BLOCK_END = "<!-- /octoclaw:core-rules -->";
@@ -107,6 +108,14 @@ export interface DeployOptions {
   restart?: boolean;
 }
 
+interface SourceManifest {
+  type: "git";
+  commit: string;
+  branch: string;
+  installedAt: string;
+  octoclawRoot: string;
+}
+
 interface ResolvedPaths {
   octoclawRoot: string;
   workspaceRoot: string;
@@ -157,6 +166,20 @@ function resolveAbsolute(targetPath: string): string {
   return path.resolve(resolveHomePath(targetPath));
 }
 
+function buildCommandEnv(baseEnv: Record<string, string | undefined>): Record<string, string | undefined> {
+  const pathEntries = [
+    path.join(os.homedir(), ".local", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    baseEnv.PATH ?? "",
+  ].filter((value) => value.length > 0);
+
+  return {
+    ...baseEnv,
+    PATH: pathEntries.join(":"),
+  };
+}
+
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await access(targetPath);
@@ -186,6 +209,25 @@ async function readJsonFile<T>(filePath: string): Promise<T | null> {
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await ensureParentDirectory(filePath);
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function readGitStdout(cwdPath: string, args: string[]): Promise<string> {
+  const result = await runCommand("git", args, { cwd: cwdPath, stdio: "pipe" });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim() || `git ${args.join(" ")} failed`);
+  }
+  return result.stdout.trim();
+}
+
+async function writeSourceManifest(openclawHome: string, octoclawRoot: string): Promise<void> {
+  const manifest: SourceManifest = {
+    type: "git",
+    commit: await readGitStdout(octoclawRoot, ["rev-parse", "HEAD"]),
+    branch: await readGitStdout(octoclawRoot, ["branch", "--show-current"]),
+    installedAt: nowIso(),
+    octoclawRoot,
+  };
+  await writeJsonFile(path.join(openclawHome, SOURCE_MANIFEST_FILE_NAME), manifest);
 }
 
 function toSortedMappings(map: Record<ModelProfile, ConcreteModelId>): ModelProfileMapping[] {
@@ -540,8 +582,30 @@ async function resolveOpenclawNodeModulesRoot(): Promise<string | null> {
     resolvedBinaryPath = openclawBinaryPath;
   }
 
-  const candidateNodeModules = path.join(path.dirname(path.dirname(resolvedBinaryPath)), "node_modules");
-  return (await isDirectory(candidateNodeModules)) ? candidateNodeModules : null;
+  const candidates = new Set<string>([
+    path.join(os.homedir(), ".local", "lib", "node_modules"),
+    "/opt/homebrew/lib/node_modules",
+    "/usr/local/lib/node_modules",
+  ]);
+
+  const normalizedBinaryPath = resolvedBinaryPath.replace(/\\/g, "/");
+  const nodeModulesMarker = "/node_modules/";
+  const markerIndex = normalizedBinaryPath.lastIndexOf(nodeModulesMarker);
+  if (markerIndex >= 0) {
+    candidates.add(normalizedBinaryPath.slice(0, markerIndex + nodeModulesMarker.length - 1));
+  }
+
+  candidates.add(path.join(path.dirname(path.dirname(resolvedBinaryPath)), "node_modules"));
+  candidates.add(path.join(path.dirname(path.dirname(path.dirname(resolvedBinaryPath))), "node_modules"));
+  candidates.add(path.join(path.dirname(path.dirname(resolvedBinaryPath)), "lib", "node_modules"));
+
+  for (const candidateNodeModules of candidates) {
+    if (await isDirectory(candidateNodeModules)) {
+      return candidateNodeModules;
+    }
+  }
+
+  return null;
 }
 
 async function linkOctoclawModules(linkRoot: string, openclawHome: string, includeExtension: boolean): Promise<void> {
@@ -611,36 +675,57 @@ async function syncJudgeFastEnv(openclawHome: string): Promise<void> {
   }
 }
 
-async function restartGateway(openclawHome: string): Promise<void> {
-  const restartResult = await runCommand("openclaw", ["gateway", "restart"], { stdio: "pipe" });
+async function restartService(openclawHome: string, service: "gateway" | "node"): Promise<void> {
+  const restartResult = await runCommand("openclaw", [service, "restart"], { stdio: "pipe" });
   if (restartResult.exitCode !== 0) {
-    stderr.write(restartResult.stderr || restartResult.stdout);
-    return;
+    const unameResult = await runCommand("uname", ["-s"], { stdio: "pipe" });
+    if (unameResult.exitCode !== 0 || unameResult.stdout.trim() !== "Darwin") {
+      stderr.write(restartResult.stderr || restartResult.stdout);
+      throw new Error(`Failed to restart OpenClaw ${service}.`);
+    }
+
+    const uidResult = await runCommand("id", ["-u"], { stdio: "pipe" });
+    if (uidResult.exitCode !== 0 || uidResult.stdout.trim().length === 0) {
+      stderr.write(restartResult.stderr || restartResult.stdout);
+      throw new Error(`Failed to restart OpenClaw ${service}.`);
+    }
+
+    const label = service === "gateway" ? "ai.openclaw.gateway" : "ai.openclaw.node";
+    const kickstartResult = await runCommand("launchctl", ["kickstart", "-k", `gui/${uidResult.stdout.trim()}/${label}`], { stdio: "pipe" });
+    if (kickstartResult.exitCode !== 0) {
+      stderr.write(kickstartResult.stderr || kickstartResult.stdout);
+      throw new Error(`Failed to restart OpenClaw ${service}.`);
+    }
   }
 
   await new Promise((resolve) => setTimeout(resolve, 4000));
-  const gatewayLogPath = path.join(openclawHome, "logs", "gateway.log");
-  if (!(await pathExists(gatewayLogPath))) {
-    stdout.write("⚠️  Check gateway log manually; log file not found yet.\n");
+  const logPath = path.join(openclawHome, "logs", `${service}.log`);
+  if (!(await pathExists(logPath))) {
+    stdout.write(`⚠️  Check ${service} log manually; log file not found yet.\n`);
     return;
   }
 
-  const logContent = await readFile(gatewayLogPath, "utf8");
+  const logContent = await readFile(logPath, "utf8");
   const recentLines = logContent.trimEnd().split(/\r?\n/).slice(-20).join("\n");
-  const errorLogPath = path.join(openclawHome, "logs", "gateway.err.log");
+  const errorLogPath = path.join(openclawHome, "logs", `${service}.err.log`);
   const errorContent = (await pathExists(errorLogPath)) ? await readFile(errorLogPath, "utf8") : "";
   const recentErrorLines = errorContent.trimEnd().split(/\r?\n/).slice(-50).join("\n");
 
   if (recentErrorLines.includes(`${EXTENSION_NAME} failed to load`)) {
-    throw new Error(`Gateway restarted but ${EXTENSION_NAME} failed to load. Check ${errorLogPath}`);
+    throw new Error(`${service} restarted but ${EXTENSION_NAME} failed to load. Check ${errorLogPath}`);
   }
 
   if (recentLines.includes(EXTENSION_NAME)) {
-    stdout.write(`✅ ${EXTENSION_NAME} plugin loaded successfully\n`);
+    stdout.write(`✅ ${service}: ${EXTENSION_NAME} plugin loaded successfully\n`);
     return;
   }
 
-  throw new Error(`Gateway restarted but ${EXTENSION_NAME} did not appear in recent log lines. Check ${gatewayLogPath}`);
+  throw new Error(`${service} restarted but ${EXTENSION_NAME} did not appear in recent log lines. Check ${logPath}`);
+}
+
+async function restartOpenClawServices(openclawHome: string): Promise<void> {
+  await restartService(openclawHome, "gateway");
+  await restartService(openclawHome, "node");
 }
 
 export async function deploy(options: DeployOptions): Promise<number> {
@@ -659,9 +744,10 @@ export async function deploy(options: DeployOptions): Promise<number> {
   await validateDeployedExtensionLoad(paths.openclawHome);
   await cleanupOldBackups(paths.openclawHome, 3);
   await syncJudgeFastEnv(paths.openclawHome);
+  await writeSourceManifest(paths.openclawHome, paths.octoclawRoot);
 
   if (options.restart) {
-    await restartGateway(paths.openclawHome);
+    await restartOpenClawServices(paths.openclawHome);
   }
 
   return 0;
@@ -804,7 +890,7 @@ function runCommand(command: string, args: string[], options: RunCommandOptions 
     const child = spawn(command, args, {
       cwd: options.cwd,
       stdio: options.stdio === "inherit" ? "inherit" : "pipe",
-      env,
+      env: buildCommandEnv(env),
     });
 
     let commandStdout = "";
@@ -846,7 +932,7 @@ interface ParsedCli {
 }
 
 function printUsage(): void {
-  stdout.write(`Usage:\n  octoclaw-install <command> [options]\n\nCommands:\n  install [--auto] [--workspace PATH] [--openclaw-home PATH] [--octoclaw-root PATH]\n  reconcile [--workspace PATH] [--openclaw-home PATH] [--octoclaw-root PATH]\n  deploy [--workspace PATH] [--openclaw-home PATH] [--octoclaw-root PATH] [--skip-build] [--restart]\n  config [--workspace PATH]\n  model [--auto] [--workspace PATH]\n\nOptions:\n  --auto                 Use V1_MODEL_PROFILE_MAP without prompts\n  --workspace PATH       Override workspace root (default: ~/.octoclaw)\n  --openclaw-home PATH   Override OpenClaw home (default: ~/.openclaw or OPENCLAW_HOME)\n  --octoclaw-root PATH   Override OctoClaw repo root\n  --skip-build           Skip pnpm -r run build\n  --restart              Restart OpenClaw gateway after deploy\n  -h, --help             Show this help\n`);
+  stdout.write(`Usage:\n  octoclaw-install <command> [options]\n\nCommands:\n  install [--auto] [--workspace PATH] [--openclaw-home PATH] [--octoclaw-root PATH]\n  reconcile [--workspace PATH] [--openclaw-home PATH] [--octoclaw-root PATH]\n  deploy [--workspace PATH] [--openclaw-home PATH] [--octoclaw-root PATH] [--skip-build] [--restart]\n  config [--workspace PATH]\n  model [--auto] [--workspace PATH]\n\nOptions:\n  --auto                 Use V1_MODEL_PROFILE_MAP without prompts\n  --workspace PATH       Override workspace root (default: ~/.octoclaw)\n  --openclaw-home PATH   Override OpenClaw home (default: ~/.openclaw or OPENCLAW_HOME)\n  --octoclaw-root PATH   Override OctoClaw repo root\n  --skip-build           Skip pnpm -r run build\n  --restart              Restart OpenClaw gateway and node after deploy\n  -h, --help             Show this help\n`);
 }
 
 function parseCliArguments(inputArgv: string[]): ParsedCli {
