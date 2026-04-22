@@ -685,6 +685,10 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
   const rawRequestedRoute = asString(
     metadata.requested_route ?? metadata.route ?? metadata.requestedRoute ?? conversationControl.route_hint,
   );
+  const objectionRequestedRoute = normalizeLiveRoute(
+    metadata.objection_requested_route,
+    normalizeLiveRoute(rawRequestedRoute, "reply"),
+  );
   const queueBudget = Number(metadata.queueBudget ?? metadata.queue_budget ?? 1);
   const inflightCount = Number(metadata.inflightCount ?? metadata.inflight_count ?? 0);
   const capabilitySatisfied = metadata.capabilitySatisfied ?? metadata.capability_satisfied;
@@ -694,7 +698,11 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
   const forcedDelegate = asString(conversationControl.route_hint) === "delegate"
     || asBoolean(conversationControl.require_fresh_lookup)
     || forcedObserve;
-  const requestedRoute = forcedDelegate && normalizeLiveRoute(rawRequestedRoute, "reply") === "reply"
+  const explicitReplyObjection = asBoolean(metadata.route_objection)
+    && objectionRequestedRoute === "reply";
+  const requestedRoute = forcedDelegate
+    && normalizeLiveRoute(rawRequestedRoute, "reply") === "reply"
+    && !explicitReplyObjection
     ? asString(conversationControl.route_hint, "delegate")
     : rawRequestedRoute;
 
@@ -1074,13 +1082,19 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     if (routeHintRoute) {
       const normalizedRouteHint = normalizeLiveRoute(routeHintRoute, "reply");
       const conversationControl = asRecord(metadata.conversation_control);
+      const objectionRequestedRoute = normalizeLiveRoute(
+        routeHint.requested_route,
+        normalizedRouteHint,
+      );
       const guardedDelegate = asString(conversationControl.route_hint) === "delegate"
         || asBoolean(conversationControl.require_fresh_lookup)
         || asBoolean(conversationControl.require_state_grounding)
         || ["execution_followup", "fresh_live_lookup"].includes(asString(conversationControl.intent_class));
+      const explicitReplyObjection = routeHint.route_objection === true && objectionRequestedRoute === "reply";
 
       metadata.route_hint = normalizedRouteHint;
       metadata.requested_route = guardedDelegate && normalizedRouteHint === "reply"
+        && !explicitReplyObjection
         ? asString(conversationControl.route_hint, "delegate")
         : normalizedRouteHint;
     }

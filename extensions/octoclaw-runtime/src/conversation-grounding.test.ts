@@ -110,4 +110,32 @@ describe("conversation grounding route projection", () => {
     expect((decision.request as { metadata: { requested_route: string } }).metadata.requested_route).toBe("delegate");
     expect((decision.request as { metadata: { route_hint: string } }).metadata.route_hint).toBe("reply");
   });
+
+  it("allows explicit route objection to override default fresh live lookup delegation", async () => {
+    const decision = await resolveStatelessPolicyDecision("openclaw 4.21 有啥新特性", {
+      metadata: {
+        conversation_control: {
+          available: true,
+          intent_class: "fresh_live_lookup",
+          route_hint: "delegate",
+          lane_hint: "observe",
+          require_fresh_lookup: true,
+        },
+      },
+      routeHint: {
+        route_hint: "reply",
+        route_objection: true,
+        objection_reason: "I already have the verified release notes in current context and do not need a fresh fetch.",
+        requested_route: "reply",
+        work_type: "research",
+        confidence: 0.82,
+      },
+    });
+
+    expect((decision.route_decision as { route: string }).route).toBe("reply");
+    expect((decision.route_hint_policy as { objection_submitted: boolean }).objection_submitted).toBe(true);
+    expect((decision.route_hint_policy as { objection_accepted: boolean }).objection_accepted).toBe(true);
+    expect((decision.request as { metadata: { requested_route: string } }).metadata.requested_route).toBe("reply");
+    expect((decision.request as { metadata: { objection_requested_route: string } }).metadata.objection_requested_route).toBe("reply");
+  });
 });
