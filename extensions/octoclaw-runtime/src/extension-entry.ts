@@ -89,6 +89,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
 const LATENCY_ACK_DELAY_MS = 3500;
 const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastGroundedPromptByStateKey = new Map<string, string>();
+let warnedMissingDetachedRuntime = false;
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "For non-hard-observe requests, submit a structured route hint before answering or dispatching.",
@@ -357,7 +358,8 @@ export const plugin = {
       registerDetachedTaskRuntime: pi.registerDetachedTaskRuntime,
     });
     const delegationEnabled = delegationCapability.enabled;
-    if (delegationCapability.reason === "host_missing_detached_runtime") {
+    if (delegationCapability.reason === "host_missing_detached_runtime" && !warnedMissingDetachedRuntime) {
+      warnedMissingDetachedRuntime = true;
       pi.logger?.warn?.(
         "octoclaw delegation disabled: host is missing registerDetachedTaskRuntime; delegate routes will fail closed to reply until detached runtime support is available",
       );
