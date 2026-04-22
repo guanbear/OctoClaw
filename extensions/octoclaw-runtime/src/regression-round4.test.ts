@@ -9,6 +9,7 @@ import {
   authoritativeDecisionRoute,
   canonicalizeDecisionForPolicyState,
 } from "./resolve/route-helpers.js";
+import { PolicyStateStore } from "./state/policy-state.js";
 import {
   shouldSuppressAck,
   recordMessage,
@@ -140,6 +141,30 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
         },
       }).message as { content: Array<{ text: string }> }).content[0]?.text || "",
     );
+  });
+
+  it("does not mark delegated=true before dispatch actually happens", () => {
+    const store = new PolicyStateStore({
+      sessionStateFile: "/tmp/octoclaw-policy-state-regression-round4.json",
+      ttlMs: 60_000,
+      persistDebounceMs: 60_000,
+    });
+    store.set("state-key", {
+      prompt: "查下 openclaw 4.22 的新特性",
+      delegated: false,
+      decision: {
+        route: "delegate",
+        request_kind: "delegated_task",
+        must_delegate_via: "octoclaw_dispatch",
+        route_decision: {
+          route: "delegate",
+          system_preferred_route: "delegate",
+          dispatch_required: true,
+        },
+      },
+    });
+
+    expect(store.get("state-key")?.delegated).toBe(false);
   });
 });
 

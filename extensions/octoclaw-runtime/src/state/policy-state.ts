@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { resolvePolicyStateLedgerPath } from "../resolve/env.js";
-import { authoritativeDecisionRoute, canonicalizeDecisionForPolicyState, isDelegatedRoute } from "../resolve/route-helpers.js";
+import { canonicalizeDecisionForPolicyState, isDelegatedRoute } from "../resolve/route-helpers.js";
 
 export const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
 const PERSIST_DEBOUNCE_MS = 2_000;
@@ -70,8 +70,8 @@ function normalizeEntry(entry: PolicyStateEntry): PolicyStateEntry {
   const next = { ...entry };
   if (isRecord(next.decision)) {
     next.decision = canonicalizeDecisionForPolicyState(next.decision);
-    next.delegated = authoritativeDecisionRoute(next.decision, "reply") === "delegate";
   }
+  next.delegated = next.delegated === true;
   return next;
 }
 

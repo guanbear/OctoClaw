@@ -1516,7 +1516,7 @@ export async function resolvePolicyDecisionForContext(
       preDispatchAckText: asString(asRecord(decision.pre_dispatch_ack).text),
       latencyAckSent: false,
       latencyAckText: asString(asRecord(decision.latency_ack).text),
-      delegated: authoritativeDecisionRoute(decision, "reply") === "delegate",
+      delegated: false,
       delegationTool: asString(asRecord(decision.tool_policy).must_delegate_via),
       delegateTaskContext: Object.keys(asRecord(decision.delegateTaskContext)).length > 0
         ? asRecord(decision.delegateTaskContext)
