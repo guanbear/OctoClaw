@@ -913,6 +913,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
 
   const ackFollowupCandidate = stickyEligible && liveRoute === "delegate";
   const nextDecision: UnknownRecord = { ...priorDecision };
+  delete nextDecision.pre_dispatch_ack;
 
   nextDecision.summary = nextDecision.summary || `policy=${liveRoute} -> ${workerPool}`;
   nextDecision.request = {
@@ -986,11 +987,6 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     objection_accepted: objectionAccepted,
     objection_escalated: objectionEscalated,
     judge_route: judgeRoute,
-  };
-  nextDecision.pre_dispatch_ack = {
-    required: liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
-    text: asString(asRecord(nextDecision.pre_dispatch_ack).text, "收到，我看一下"),
-    fallback_to_progress_update: true,
   };
   nextDecision.review_policy = {
     ...asRecord(nextDecision.review_policy),
@@ -1535,9 +1531,6 @@ export async function resolvePolicyDecisionForContext(
       routeHintSubmitted: Boolean(asRecord(decision.route_hint_policy).submitted),
       routeHintPayload: null,
       blockedTools: asStringArray(asRecord(decision.tool_policy).blocked_patterns),
-      preDispatchAckSent: false,
-      preDispatchAckPending: Boolean(asRecord(decision.pre_dispatch_ack).required),
-      preDispatchAckText: asString(asRecord(decision.pre_dispatch_ack).text),
       latencyAckSent: false,
       latencyAckText: asString(asRecord(decision.latency_ack).text),
       delegated: false,

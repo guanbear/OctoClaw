@@ -17,7 +17,6 @@ import {
   cancelAckGuardForState,
   maybeSendLatencyAck,
   notifyUserMessage,
-  sendReactionAck,
   startAckGuard,
   updateAckTrackingState,
   watchdogTick,
@@ -400,12 +399,6 @@ export const plugin = {
         }
       }
 
-      const ackReactionEmoji = stringValue(judgeFastRaw.ackReactionEmoji);
-
-      if (ackReactionEmoji && preSessionKey && inboundMessageTs) {
-        sendReactionAck(preSessionKey, inboundMessageTs, ackReactionEmoji).catch(() => {});
-      }
-
       // When judgeAckEnabled=false: start latency timer BEFORE judge (fast ACK).
       // When judgeAckEnabled=true: ALSO start latency timer BEFORE judge so ACK0 fires at 5s from message arrival.
       // Judge ack_text can override the message if it returns before deadline.
@@ -429,9 +422,7 @@ export const plugin = {
         pendingLatencyAckTimers.set(timerStateKey, timer);
       };
 
-      if (!ackReactionEmoji) {
-        startLatencyAckTimer(preStateKey);
-      }
+      startLatencyAckTimer(preStateKey);
 
       const resolved = await resolvePolicyDecisionForContext(
         prompt,

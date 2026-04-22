@@ -67,7 +67,7 @@ const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_0
 const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 
 type UnknownRecord = Record<string, unknown>;
-type AckOwner = "" | "pre_dispatch" | "latency_ack" | "timer_ack";
+type AckOwner = "" | "latency_ack" | "timer_ack";
 
 export interface AckContext extends UnknownRecord {
   trigger?: unknown;
@@ -85,8 +85,6 @@ export interface AckTrackingState extends UnknownRecord {
   ackOwner?: unknown;
   ack_owner?: unknown;
   ackGuardKey?: unknown;
-  preDispatchAckSent?: unknown;
-  preDispatchAckPending?: unknown;
   latencyAckSent?: unknown;
 }
 
@@ -137,7 +135,6 @@ interface AckAttemptParams {
   timeoutMs?: number;
   ownerTag: string;
   skipOwnerClaim?: boolean;
-  markPreDispatchSent?: boolean;
   markLatencySent?: boolean;
   markMode?: string;
   messageTurnId?: string;
@@ -235,20 +232,6 @@ function ensureAckTurnTimestamp(stateKey: string): number {
   const created = Date.now();
   updateTrackingState(normalizedStateKey, { _ackTurnTs: created });
   return created;
-}
-
-function stageFromRoutePhase(routePhase: AckRoutePhase): AckStage {
-  switch (routePhase) {
-    case "delegate":
-      return AckStage.DelegateStarted;
-    case "observe":
-      return AckStage.ObserveStarted;
-    case "reply":
-      return AckStage.ReplySoftAck;
-    case "pre_route":
-    default:
-      return AckStage.PreRouteSoftAck;
-  }
 }
 
 function normalizeAckStage(value: string): AckStage {
@@ -721,14 +704,6 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     ackKey,
     ack_target_resolution_state: ackTargetResolutionState(result),
     ack_delivery_state: ackDeliveryState(result),
-    ...(params.markPreDispatchSent
-      ? {
-          preDispatchAckSent: Boolean(result.delivered || result.sent),
-          preDispatchAckPending: false,
-          preDispatchAckText: params.message,
-          preDispatchAckMode: params.markMode || "channel_message",
-        }
-      : {}),
     ...(params.markLatencySent
       ? {
           latencyAckSent: Boolean(result.delivered || result.sent),
@@ -749,34 +724,8 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
 
   return { sent: false, reason: result.reason };
 }
-export function preDispatchAckText(decision: UnknownRecord): string {
-  return ackStageText(stageFromRoutePhase(resolveRoutePhase(decision)));
-}
-
 export function latencyAckText(_decision: UnknownRecord): string {
   return ackStageText(AckStage.ReplySoftAck);
-}
-
-export function shouldSendPreDispatchAck(
-  decision: UnknownRecord,
-  state: UnknownRecord = {},
-  ctx: AckContext = {},
-): boolean {
-  if (!isDelegatedRoute(decision)) {
-    return false;
-  }
-  const preDispatchAck = isRecord(decision.pre_dispatch_ack) ? decision.pre_dispatch_ack : {};
-  if (!asBoolean(preDispatchAck.required)) {
-    return false;
-  }
-  if (asBoolean(state.preDispatchAckSent) || asBoolean(state.preDispatchAckPending)) {
-    return false;
-  }
-  const trigger = asString(ctx.trigger).toLowerCase();
-  if (trigger && ["heartbeat", "cron", "memory"].includes(trigger)) {
-    return false;
-  }
-  return Boolean(preDispatchAckText(decision));
 }
 
 export function shouldSendLatencyAck(
@@ -932,122 +881,6 @@ export function updateAckTrackingState(stateKey: string, patch: UnknownRecord): 
   updateTrackingState(stateKey, patch);
 }
 
-export async function maybeSendPreDispatchAck(
-  decision: UnknownRecord,
-  metadata: UnknownRecord,
-  stateKey: string,
-  state: UnknownRecord,
-  ctx: AckContext,
-  logger: AckLogger,
-  replyToMessageId?: string,
-): Promise<void> {
-  if (!shouldSendPreDispatchAck(decision, state, ctx)) {
-    return;
-  }
-  const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
-  if (!sessionKey) {
-    updateTrackingState(stateKey, {
-      ackOwner: "pre_dispatch",
-      ack_owner: "pre_dispatch",
-      ack_target_resolution_state: "missing_session_key",
-      ack_delivery_state: "not_attempted",
-      preDispatchAckPending: false,
-    });
-    return;
-  }
-  try {
-    const preDispatchAck = isRecord(decision.pre_dispatch_ack) ? decision.pre_dispatch_ack : {};
-    const routePhase = resolveRoutePhase(decision, { routePhase: "delegate" });
-    const threadKey = threadKeyFromSessionKey(sessionKey, stateKey);
-    const message = templateMessageForStage(
-      stageFromRoutePhase(routePhase),
-      buildTemplateInputs(state, ctx, routePhase, threadKey),
-    );
-    if (!message) {
-      return;
-    }
-    const inboundTs = asString(replyToMessageId || metadata.message_id);
-    await attemptAckSend({
-      sessionKey,
-      stateKey,
-      ackOwner: "pre_dispatch",
-      ackStage: stageFromRoutePhase(routePhase),
-      routePhase,
-      message,
-      metadata,
-      state,
-      ctx,
-      logger,
-      timeoutMs: Math.max(500, Number(preDispatchAck.channel_timeout_ms || 5000)),
-      ownerTag: "pre_dispatch",
-      markPreDispatchSent: true,
-      markMode: "channel_message",
-      replyToMessageId: inboundTs,
-    });
-  } catch (error) {
-    logger.warn?.(`octoclaw pre-dispatch ack failed: ${String(error)}`);
-    updateTrackingState(stateKey, {
-      ackOwner: "pre_dispatch",
-      ack_owner: "pre_dispatch",
-      ack_target_resolution_state: "unresolved",
-      ack_delivery_state: "failed",
-      preDispatchAckPending: false,
-    });
-  }
-}
-
-export function scheduleEagerPreDispatchAck(
-  decision: UnknownRecord,
-  metadata: UnknownRecord,
-  stateKey: string,
-  state: UnknownRecord,
-  ctx: AckContext,
-  logger: AckLogger,
-  replyToMessageId?: string,
-): void {
-  if (!shouldSendPreDispatchAck(decision, state, ctx)) {
-    return;
-  }
-  updateTrackingState(stateKey, {
-    ackOwner: "pre_dispatch",
-    ack_owner: "pre_dispatch",
-    preDispatchAckPending: true,
-  });
-  setTimeout(() => {
-    void maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger, replyToMessageId);
-  }, 0);
-}
-
-export async function maybeEmitPreDispatchAckProgress(
-  onUpdate: unknown,
-  decision: UnknownRecord,
-  stateKey: string,
-  logger: AckLogger,
-): Promise<void> {
-  const message = preDispatchAckText(decision);
-  if (typeof onUpdate !== "function" || !message) {
-    return;
-  }
-  const sender = onUpdate as (payload: unknown) => Promise<unknown> | unknown;
-  const candidates: unknown[] = [
-    { content: [{ type: "text", text: message }] },
-    message,
-  ];
-  for (const payload of candidates) {
-    try {
-      await sender(payload);
-      updateTrackingState(stateKey, {
-        preDispatchAckSent: true,
-        preDispatchAckText: message,
-        preDispatchAckMode: "progress_update",
-      });
-      return;
-    } catch (error) {
-      logger.warn?.(`octoclaw pre-dispatch progress ack failed: ${String(error)}`);
-    }
-  }
-}
-
 export async function maybeSendLatencyAck(
   decision: UnknownRecord,
   metadata: UnknownRecord,
@@ -1105,41 +938,6 @@ export async function maybeSendLatencyAck(
       ack_delivery_state: "failed",
     });
     return { sent: false, reason: String(error) };
-  }
-}
-
-export async function ensurePreDispatchAck(
-  decision: UnknownRecord,
-  metadata: UnknownRecord,
-  stateKey: string,
-  state: UnknownRecord,
-  ctx: AckContext,
-  onUpdate: unknown,
-  logger: AckLogger,
-): Promise<void> {
-  const liveState = ackState(stateKey);
-  if (asBoolean(liveState.preDispatchAckPending) && !asBoolean(liveState.preDispatchAckSent)) {
-    return;
-  }
-
-  await maybeSendPreDispatchAck(decision, metadata, stateKey, state, ctx, logger);
-
-  const preDispatchAck = isRecord(decision.pre_dispatch_ack) ? decision.pre_dispatch_ack : {};
-  if (!asBoolean(preDispatchAck.fallback_to_progress_update)) {
-    return;
-  }
-  if (asBoolean(ackState(stateKey).preDispatchAckSent)) {
-    return;
-  }
-
-  await maybeEmitPreDispatchAckProgress(onUpdate, decision, stateKey, logger);
-  if (asBoolean(ackState(stateKey).preDispatchAckSent)) {
-    updateTrackingState(stateKey, {
-      ackOwner: "pre_dispatch",
-      ack_owner: "pre_dispatch",
-      ack_delivery_state: "sent",
-    });
-    cancelAckGuardForState(stateKey);
   }
 }
 
@@ -1207,31 +1005,5 @@ export async function watchdogTick(logger: unknown): Promise<void> {
     }
   } catch (error) {
     sink.warn?.(`octoclaw watchdog tick failed: ${String(error)}`);
-  }
-}
-
-export async function sendReactionAck(
-  sessionKey: string,
-  messageId: string,
-  emoji = "ok_hand",
-): Promise<boolean> {
-  const adapter = getAdapterForSession(sessionKey);
-  if (!adapter) {
-    return false;
-  }
-  if (typeof adapter.react !== "function") {
-    return false;
-  }
-  try {
-    const result = await adapter.react({ sessionKey, messageId, emoji });
-    if (result.ok) {
-      ackDebug(`reaction ack sent: emoji=${emoji} messageId=${messageId}`);
-      return true;
-    }
-    ackDebug(`reaction ack failed: ${result.error}`);
-    return false;
-  } catch (err) {
-    ackDebug(`reaction ack error: ${String(err)}`);
-    return false;
   }
 }

@@ -70,12 +70,12 @@ export function canonicalizeDecisionForPolicyState(decision: unknown): UnknownRe
     return {};
   }
 
+  const { pre_dispatch_ack: _legacyPreDispatchAck, ...currentSansPreDispatchAck } = current;
   const route = authoritativeDecisionRoute(current, "reply");
   const routeDecision = asRecord(current.route_decision);
   const toolPolicy = asRecord(current.tool_policy);
   const routerDecision = asRecord(current.router_decision_v2);
   const latencyAck = asRecord(current.latency_ack);
-  const preDispatchAck = asRecord(current.pre_dispatch_ack);
   const stateGrounding = asRecord(current.state_grounding);
   const currentTaskClass = asString(routeDecision.task_class);
   const nextTaskClass = route === "delegate"
@@ -83,7 +83,7 @@ export function canonicalizeDecisionForPolicyState(decision: unknown): UnknownRe
     : (currentTaskClass || "main_direct");
 
   return {
-    ...current,
+    ...currentSansPreDispatchAck,
     route,
     route_decision: {
       ...routeDecision,
@@ -109,10 +109,6 @@ export function canonicalizeDecisionForPolicyState(decision: unknown): UnknownRe
     latency_ack: {
       ...latencyAck,
       required: route === "reply" && latencyAck.required !== false,
-    },
-    pre_dispatch_ack: {
-      ...preDispatchAck,
-      required: route === "delegate",
     },
     state_grounding: {
       ...stateGrounding,

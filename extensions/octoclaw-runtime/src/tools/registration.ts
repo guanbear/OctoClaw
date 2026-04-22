@@ -1,7 +1,4 @@
 import {
-  ensurePreDispatchAck,
-} from "../ack/ack-guard.js";
-import {
   buildDecision,
   applyPhaseTwoLivePathPolicy,
   buildTsRuntimeDispatchPayload,
@@ -28,7 +25,6 @@ import {
 } from "../resolve/session.js";
 import {
   policySummaryText,
-  recordAckReplay,
   recordDispatchLifecycleReplayEvents,
   recordPolicyReplay,
   registerPendingDelivery,
@@ -861,24 +857,6 @@ export function getToolRegistrations(): ToolRegistration[] {
           metadata.expected_at = Date.now() + expectedSeconds * 1000;
         }
 
-        const ackResult = await ensurePreDispatchAck(
-          cachedDecision,
-          metadata,
-          stateKey,
-          state ?? {},
-          ctx,
-          ctx.onUpdate,
-          toolLogger(ctx),
-        );
-        await recordAckReplay({
-          decision: cachedDecision,
-          stateKey,
-          ctx,
-          logger: toolLogger(ctx),
-          kind: "pre_dispatch",
-          phase: "before_dispatch",
-          result: ackResult,
-        });
         let payload: UnknownRecord;
         try {
           payload = buildTsRuntimeDispatchPayload({

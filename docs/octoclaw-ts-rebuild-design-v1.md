@@ -761,7 +761,7 @@ v1 默认建议：
    - 如果是 `reply` 路径，优先让主模型自己首响
    - 但如果到 `~3s` 还没有首 token / 首段输出，就由 ACK controller 介入一个 soft ACK
    - 如果 route 到这时仍未稳定，也要允许一个更中性的 pre-route soft ACK 先兜底
-   - 如果 soft ACK 已经发出，且到 `~3-5s` 仍未出现正式 reply / delegate update，可触发低优先级 `ack_writer`
+   - 如果 soft ACK 已经发出，且到 `~3-5s` 仍未出现正式 reply / 可见进展，可触发低优先级 `ack_writer`
 3. **6-8s**
    - 如果仍没有首 token、首进展或阶段事件，给出阶段性状态提示
 4. **10-12s**
@@ -3953,12 +3953,46 @@ future UI 再在同一份 view model 上做：
    - `artifact refs`
    - `structured state snapshot`
 4. 而不是通过回灌完整 transcript、完整 worker log、完整调度细节
+5. 尤其在 delegated follow-up 场景，主 agent 默认只应消费最小 `delegate status packet`
+6. 这个 packet 至少应包含：
+   - `task_id`
+   - `status`
+   - `attempt_status`
+   - `worker_pool`
+   - `model_profile`
+   - `created_at`
+   - `last_event_at`
+   - `progress_summary`
+   - `terminal_summary`
+   - `error`
+   - `retryable`
+7. 不能再把完整 `[Thread history - for context]` 连同旧 assistant 委派话术、旧 task id、旧状态说明整段回灌给主 agent
+8. 否则会同时破坏：
+   - 主 agent 上下文清洁度
+   - follow-up 判断稳定性
+   - token/延迟预算
+   - “主 agent 少心智、快回复”的设计目标
 
 因此更准确的口径是：
 
 1. memory 主要属于 system-level context
 2. `main_reply` 只消费经过压缩和裁剪后的 working context
 3. 这样既能保留“知道做了哪些事”的能力，又能保持主 agent 上下文干净、首响快、token 低
+
+这里再补一个对用户体验很关键的边界：
+
+1. 主 agent 可以知道“为什么这次应该委派”
+2. 但这类 orchestration reasoning 默认属于内部结构化状态，而不是用户可见文案
+3. 类似“先确认一下我这边的派发边界”“任务边界很清楚，适合独立派发执行”这种中间判断，应记录到：
+   - `route_decision`
+   - `dispatch metadata`
+   - `replay / telemetry`
+4. 用户线程里默认只保留：
+   - 极短 ACK
+   - 权威状态回执
+   - 最终结果
+   - 明确失败/超时说明
+5. 这样才能避免内部委派 reasoning 自己回流进后续 thread history，再反过来污染主 agent
 
 ### 9.3.a refined v1 judge architecture：本地小 judge + 远端仲裁 judge
 
@@ -4520,8 +4554,9 @@ ACK 的第一版不应继续只按 wall-clock timeout 直接触发。
 当前 v1 默认进一步收口为：
 
 1. ACK Phase 1 先只服务 `reply` 路径
-2. `delegate` 路径优先依赖 pre-dispatch confirmation、status surface、timeline 和 recovery surfacing
-3. 当前推荐默认时序：
+2. `delegate` 路径优先依赖 status surface、timeline 和 recovery surfacing，不再依赖 pre-dispatch ACK
+3. reaction ACK 已在代码层硬禁用，避免旧配置残留干扰首个文字 ACK
+4. 当前推荐默认时序：
    - `latency_ack = 5s`
    - `tier1 = 18s`
    - `tier2 = 45s`
@@ -5778,6 +5813,25 @@ v1 我建议至少固定这几类：
 7. **正式产品代码全部 TS 重写；Python 只保留测试/运维/一次性脚本。**
 8. **成本优化和速度优化必须变成 request/task/flow 级可测指标。**
 9. **先搭 harness 骨架、telemetry contract 和 gate，再逐步迁移功能。**
+
+对第 2、3 条，再补一个这次线上验证后必须明确写死的收口约束：
+
+1. `octoclaw_dispatch`、`octoclaw_status`、`octoclaw_task_action details` 必须最终落到同一套 authority state
+2. 如果 authority source 已经记录了某个 delegated task，查询面绝不能再返回 `Task ... not found`
+3. `task-state.json` 若继续保留，只能作为 projection / cache，不能与 authority source 长期分裂演进
+4. delegated task 至少要打通：
+   - `registered/planned`
+   - `queued`
+   - `running`
+   - `completed | failed | timed_out`
+   - `delivery`
+5. failure / timeout / retry 必须物化到主线程可查询的 authority state，而不是只存在于内存或推理层
+6. delegated follow-up 默认应通过“thread -> active delegate binding -> delegate status packet”完成 grounding，而不是把完整 thread history 回灌给主 agent
+7. 若当前实现与这些约束不一致，应视为 live-path gap，而不是“可以接受的临时行为”
+
+这次线上 gap 与收口要求，单独整理在：
+
+1. `docs/octoclaw-delegate-runtime-gap-closure-2026-04-22.md`
 
 ---
 
