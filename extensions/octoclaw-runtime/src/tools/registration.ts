@@ -21,6 +21,7 @@ import {
   detectSessionBoundary,
   finalizeDispatchMetadata,
   isManagedAgentContext,
+  resolveDispatchSessionKey,
   resolvePolicyStateKey,
 } from "../resolve/session.js";
 import {
@@ -171,6 +172,24 @@ export function selectDispatchPolicyDecision(
     return explicit;
   }
   return isRecord(stateDecision) ? stateDecision : null;
+}
+
+export function selectReplaySessionKeyForDispatch(
+  ctx: UnknownRecord,
+  metadata: UnknownRecord,
+  stateKey: string,
+  state: UnknownRecord | null,
+  decision: UnknownRecord,
+  payload: UnknownRecord,
+): string {
+  return asString(
+    resolveDispatchSessionKey(ctx, metadata, { stateKey, state, cachedDecision: decision })
+    || metadata.session_key
+    || asRecord(decision.request).session_key
+    || asRecord(payload.job).session_key
+    || payload.session_key
+    || stateKey,
+  );
 }
 
 function toolLogger(ctx: UnknownRecord): UnknownRecord {
@@ -636,8 +655,9 @@ export function getToolRegistrations(): ToolRegistration[] {
         }
         const existingDecision = nestedRecord(existing, "decision");
         const existingRequest = nestedRecord(existingDecision, "request");
-        const metadata = buildPolicyMetadata(ctx, { stateKey: existingStateKey || asString(existingRequest.session_key) });
-        const replaySessionKey = asString(existingStateKey || metadata.session_key || existingRequest.session_key);
+        let metadata = buildPolicyMetadata(ctx, { stateKey: existingStateKey || asString(existingRequest.session_key) });
+        metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey: existingStateKey, state: existing, cachedDecision: existingDecision });
+        const replaySessionKey = asString(metadata.session_key || existingRequest.session_key || existingStateKey);
         const routeHintPayload = {
           route_hint: asString(params.routeHint),
           route_objection: routeObjection,
@@ -678,7 +698,7 @@ export function getToolRegistrations(): ToolRegistration[] {
           );
         }
         const stickyPersisted = await persistStickyLane(replaySessionKey, payload, toolLogger(ctx), "route_hint");
-        setPolicyStateForContext(ctx, {
+        const nextState = {
           ...(existing ?? {}),
           prompt: task,
           decision: payload,
@@ -689,7 +709,11 @@ export function getToolRegistrations(): ToolRegistration[] {
           blockedTools: Array.isArray(existing?.blockedTools) ? existing?.blockedTools : [],
           routeHintSubmitted: true,
           routeHintPayload,
-        }, existingStateKey || replaySessionKey);
+        };
+        setPolicyStateForContext(ctx, nextState, replaySessionKey || existingStateKey);
+        if (existingStateKey && replaySessionKey && existingStateKey !== replaySessionKey) {
+          setPolicyStateForContext(ctx, nextState, existingStateKey);
+        }
         await recordPolicyReplay(
           "route_hint_submitted",
           {
@@ -888,12 +912,13 @@ export function getToolRegistrations(): ToolRegistration[] {
           }
         }
         const authoritativeDecision = asRecord(payload.policy_decision ?? cachedDecision);
-        const replaySessionKey = asString(
-          stateKey
-          || metadata.session_key
-          || asRecord(authoritativeDecision.request).session_key
-          || asRecord(payload.job).session_key
-          || payload.session_key,
+        const replaySessionKey = selectReplaySessionKeyForDispatch(
+          ctx,
+          metadata,
+          stateKey,
+          state,
+          authoritativeDecision,
+          payload,
         );
         const stickyDecision = delegatedStickyRoute(authoritativeDecision)
           ? authoritativeDecision
@@ -956,7 +981,7 @@ export function getToolRegistrations(): ToolRegistration[] {
         if (!stateKey) {
           stateKey = asString(metadata.session_key, stableId("policy", [asString(params.task), asString(ctx.sessionId)]));
         }
-        setPolicyStateForContext(ctx, {
+        const nextState = {
           ...(state ?? {}),
           prompt: asString(params.task),
           decision: authoritativeDecision,
@@ -965,7 +990,11 @@ export function getToolRegistrations(): ToolRegistration[] {
           dispatchStatus: asString(payload.status),
           dispatchExecuted: payload.executed === true,
           updatedAt: Date.now(),
-        }, stateKey);
+        };
+        setPolicyStateForContext(ctx, nextState, replaySessionKey || stateKey);
+        if (stateKey && replaySessionKey && stateKey !== replaySessionKey) {
+          setPolicyStateForContext(ctx, nextState, stateKey);
+        }
         const materialization = asRecord(payload.materialization);
         if (asString(materialization.task_id)) {
           const substrateState = asString(materialization.substrate_state, payload.executed === true ? "running" : "queued");

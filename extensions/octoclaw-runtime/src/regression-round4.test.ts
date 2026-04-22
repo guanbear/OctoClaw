@@ -23,7 +23,8 @@ import {
   cancelAllAckTimers,
   type AckTimerResult,
 } from "./ack/ack-timing.js";
-import { selectDispatchPolicyDecision } from "./tools/registration.js";
+import { latencyAckStage, shouldSendLatencyAck } from "./ack/ack-guard.js";
+import { selectDispatchPolicyDecision, selectReplaySessionKeyForDispatch } from "./tools/registration.js";
 
 
 describe("regression round 4: scenario 1 — sanitizer empty fallback", () => {
@@ -202,6 +203,33 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     });
   });
 
+  it("prefers the real user session over policy cache key for dispatch replay binding", () => {
+    const replaySessionKey = selectReplaySessionKeyForDispatch(
+      {
+        sessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+        sessionId: "main-session-id",
+        agentId: "main",
+      },
+      {
+        session_key: "agent:main:slack:default:direct:u0al9t5u89z",
+        session_origin: "slack",
+        session_binding_key: "slack:user:u0al9t5u89z",
+      },
+      "policy-2084244bc8270d8a",
+      {
+        canonicalSessionKey: "agent:main:slack:default:direct:u0al9t5u89z",
+      },
+      {
+        request: {
+          session_key: "agent:main:slack:default:direct:u0al9t5u89z",
+        },
+      },
+      {},
+    );
+
+    expect(replaySessionKey).toBe("agent:main:slack:default:direct:u0al9t5u89z");
+  });
+
   it("does not replace a direct reply that was explicitly executed after delegate intent", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "收到，正在查。" }] },
@@ -272,6 +300,32 @@ describe("regression round 4: scenario 3 — ACK gate eligible: tool_active/bloc
     const result = shouldSuppressAck(threadKey, "tool_still_working", "reply", {}, gate);
     expect(result.suppressed).toBe(true);
     expect(result.reason).toBe("not_ack_eligible_no_active_work");
+  });
+});
+
+describe("regression round 4: scenario 3b — latency ack routing", () => {
+  it("allows latency ack for delegated work when required", () => {
+    expect(shouldSendLatencyAck(
+      {
+        route_decision: {
+          route: "delegate",
+        },
+        latency_ack: {
+          required: true,
+        },
+      },
+      {},
+      { trigger: "user" },
+      "direct_lookup",
+    )).toBe(true);
+  });
+
+  it("uses delegate_started copy for delegated latency ack", () => {
+    expect(latencyAckStage({
+      route_decision: {
+        route: "delegate",
+      },
+    })).toBe("delegate_started");
   });
 });
 

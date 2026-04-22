@@ -631,7 +631,14 @@ export function buildPolicyMetadata(ctx: UnknownRecord, options: { stateKey?: st
   const safe = ctx ?? {};
   const metadata: UnknownRecord = {};
   const boundary = detectSessionBoundary(safe);
-  const stableSessionKey = stringValue(options.stateKey || boundary.canonicalSessionKey || resolvePolicyStateKey(safe) || "");
+  const requestedStateKey = stringValue(options.stateKey);
+  const stableSessionKey = stringValue(
+    (requestedStateKey && isDispatchableUserSessionKey(requestedStateKey) ? requestedStateKey : "")
+    || boundary.canonicalSessionKey
+    || resolvePolicyStateKey(safe)
+    || requestedStateKey
+    || "",
+  );
   const stableSession = parseSessionRoute(stableSessionKey);
 
   if (safe.channelId) metadata.channel = safe.channelId;

@@ -86,7 +86,7 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "User-visible output should only contain: brief acknowledgment, authoritative status receipt, or final result/clear failure.",
 ].join("\n");
 
-const LATENCY_ACK_DELAY_MS = 5000;
+const LATENCY_ACK_DELAY_MS = 3500;
 const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastGroundedPromptByStateKey = new Map<string, string>();
 

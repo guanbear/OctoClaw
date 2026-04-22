@@ -41,7 +41,6 @@ import {
 import {
   authoritativeDecisionRoute,
   DELEGATED_ROUTE_NAMES,
-  isDelegatedRoute as isDelegatedRouteName,
 } from "../resolve/route-helpers.js";
 import {
   parseSessionRoute as canonicalParseSessionRoute,
@@ -159,12 +158,6 @@ function asBoolean(value: unknown): boolean {
 
 function asNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function isDelegatedRoute(decision: UnknownRecord): boolean {
-  const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
-  const route = asString(routeDecision.route).toLowerCase();
-  return isDelegatedRouteName(route);
 }
 
 function ackState(stateKey: string): AckTrackingState {
@@ -725,7 +718,18 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   return { sent: false, reason: result.reason };
 }
 export function latencyAckText(_decision: UnknownRecord): string {
-  return ackStageText(AckStage.ReplySoftAck);
+  return ackStageText(latencyAckStage(_decision));
+}
+
+export function latencyAckStage(decision: UnknownRecord): AckStage {
+  const routePhase = resolveRoutePhase(decision);
+  if (routePhase === "observe") {
+    return AckStage.ObserveStarted;
+  }
+  if (routePhase === "delegate") {
+    return AckStage.DelegateStarted;
+  }
+  return AckStage.ReplySoftAck;
 }
 
 export function shouldSendLatencyAck(
@@ -734,9 +738,6 @@ export function shouldSendLatencyAck(
   ctx: AckContext = {},
   toolName = "",
 ): boolean {
-  if (isDelegatedRoute(decision)) {
-    return false;
-  }
   const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
   if (!asBoolean(latencyAck.required)) {
     return false;
@@ -906,16 +907,18 @@ export async function maybeSendLatencyAck(
   try {
     const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
     const judgeAckText = asString(decision._judge_ack_text);
+    const ackStage = latencyAckStage(decision);
+    const routePhase = resolveRoutePhase(decision);
     const message = judgeAckText && !shouldSuppressJudgeAckEcho(judgeAckText, metadata)
       ? judgeAckText
-      : ackStageText(AckStage.ReplySoftAck);
+      : ackStageText(ackStage);
     const liveTrackingState = { ...state, ...ackState(stateKey) };
     const result = await attemptAckSend({
       sessionKey,
       stateKey,
       ackOwner: "latency_ack",
-      ackStage: AckStage.ReplySoftAck,
-      routePhase: "reply",
+      ackStage,
+      routePhase,
       message,
       metadata,
       state: liveTrackingState,
