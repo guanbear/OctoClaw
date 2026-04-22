@@ -43,7 +43,6 @@ import type { ExecutionProfileTarget } from "@octoclaw/policy/model";
 import type { LiveRoute } from "@octoclaw/policy/route";
 import type { WorkerPool } from "@octoclaw/policy/caps";
 import {
-  authoritativeDecisionRoute,
   canonicalizeDecisionForPolicyState,
   LIVE_ROUTE_NAMES,
   isObserveMode,
