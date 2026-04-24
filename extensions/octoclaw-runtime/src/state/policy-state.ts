@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import { resolvePolicyStateLedgerPath } from "../resolve/env.js";
 import { canonicalizeDecisionForPolicyState, isDelegatedRoute } from "../resolve/route-helpers.js";
 
@@ -9,6 +10,7 @@ const RECENT_DELEGATED_MAX_AGE_MS = 2 * 60 * 1000;
 
 export interface PolicyStateEntry {
   decision?: Record<string, unknown>;
+  routeSeal?: RouteSeal;
   routeHintSubmitted?: boolean;
   directToolsSeen?: string[];
   blockedTools?: string[];

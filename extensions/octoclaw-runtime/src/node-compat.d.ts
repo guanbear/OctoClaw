@@ -67,6 +67,8 @@ declare module "node:fs" {
   interface FsModule {
     existsSync(path: string): boolean;
     accessSync(path: string, mode?: number): void;
+    mkdirSync(path: string, options?: { recursive?: boolean }): void;
+    writeFileSync(path: string, data: string, encoding?: string): void;
     realpathSync(path: string): string;
     statSync(path: string): StatsLike;
     readFileSync(path: string, encoding: string): string;

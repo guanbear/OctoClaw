@@ -1,0 +1,232 @@
+import { createTaskFlowBridge, type TaskFlowBridge } from "../adapter/taskflow-bridge.js";
+import type {
+  BoundTaskFlowPort,
+  CancelFlowResult,
+  CreateManagedFlowInput,
+  FlowMutationInput,
+  FlowMutationResult,
+  JsonRecord,
+  ManagedFlowRecord,
+  NativeFlowRecord,
+  NativeTaskRunResult,
+  NativeTaskSummary,
+  RunNativeTaskInput,
+  TaskFlowPort,
+} from "./taskflow-port.js";
+
+type BridgeFactory = (openclawBin?: string) => Promise<TaskFlowBridge>;
+
+export interface BoundDistTaskFlowPort extends BoundTaskFlowPort {
+  createManagedAsync(input: CreateManagedFlowInput): Promise<ManagedFlowRecord>;
+  runTaskAsync(input: RunNativeTaskInput): Promise<NativeTaskRunResult>;
+  getAsync(flowId: string): Promise<NativeFlowRecord | null>;
+  getTaskSummaryAsync(flowId: string, taskId: string): Promise<NativeTaskSummary | null>;
+  setWaitingAsync(input: FlowMutationInput): Promise<FlowMutationResult>;
+  finishAsync(input: FlowMutationInput): Promise<FlowMutationResult>;
+  failAsync(input: FlowMutationInput): Promise<FlowMutationResult>;
+}
+
+export interface OpenClawDistTaskFlowPortOptions {
+  openclawBin?: string;
+  bridgeFactory?: BridgeFactory;
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): JsonRecord {
+  return isRecord(value) ? value : {};
+}
+
+function stringField(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function isTaskSummary(value: NativeTaskSummary | null): value is NativeTaskSummary {
+  return value !== null;
+}
+
+function encodeJson(value: unknown): string | undefined {
+  return value === undefined ? undefined : JSON.stringify(value);
+}
+
+function toFlowRecord(value: unknown, fallbackFlowId = ""): NativeFlowRecord | null {
+  if (!isRecord(value)) return null;
+  const flow = isRecord(value.flow) ? value.flow : value;
+  const flowId = stringField(flow.flowId ?? value.flowId ?? value.flow_id ?? fallbackFlowId);
+  if (!flowId) return null;
+  return {
+    ...flow,
+    flowId,
+    status: typeof flow.status === "string" ? flow.status : undefined,
+    state: typeof flow.state === "string" ? flow.state : undefined,
+    revision: numberField(flow.revision),
+    tasks: Array.isArray(flow.tasks) ? flow.tasks.map(toTaskSummary).filter(isTaskSummary) : undefined,
+  };
+}
+
+function toTaskSummary(value: unknown): NativeTaskSummary | null {
+  if (!isRecord(value)) return null;
+  const taskId = stringField(value.taskId ?? value.task_id);
+  if (!taskId) return null;
+  return {
+    ...value,
+    taskId,
+    flowId: typeof value.flowId === "string" ? value.flowId : undefined,
+    status: typeof value.status === "string" ? value.status : undefined,
+    state: typeof value.state === "string" ? value.state : undefined,
+    revision: numberField(value.revision),
+    progressSummary: typeof value.progressSummary === "string" ? value.progressSummary : undefined,
+  };
+}
+
+function toManagedFlowRecord(value: unknown): ManagedFlowRecord {
+  const flow = toFlowRecord(value);
+  if (!flow) {
+    throw new Error("OpenClaw dist taskFlow bridge did not return a flowId");
+  }
+  return flow;
+}
+
+function toTaskRunResult(value: unknown, flowId: string): NativeTaskRunResult {
+  const record = asRecord(value);
+  const task = toTaskSummary(record.task);
+  const taskId = stringField(record.native_task_id ?? record.taskId ?? record.task_id ?? task?.taskId);
+  return {
+    ...record,
+    created: record.ok === true || record.created === true,
+    flowId: stringField(record.flow_id ?? record.flowId ?? flowId),
+    taskId,
+    task,
+    reason: typeof record.reason === "string" ? record.reason : undefined,
+  };
+}
+
+function toMutationResult(value: unknown, flowId: string): FlowMutationResult {
+  const record = asRecord(value);
+  return {
+    ...record,
+    applied: record.ok === true || record.applied === true,
+    flowId: stringField(record.flow_id ?? record.flowId ?? flowId),
+    status: stringField(record.status) || (record.ok === true ? "ok" : "not_applied"),
+    revision: numberField(record.revision),
+    flow: toFlowRecord(record.flow, flowId),
+  };
+}
+
+function toCancelResult(value: unknown, flowId: string): CancelFlowResult {
+  const record = asRecord(value);
+  return {
+    ...record,
+    cancelled: record.cancelled === true,
+    flowId: stringField(record.flow_id ?? record.flowId ?? flowId),
+    found: typeof record.found === "boolean" ? record.found : undefined,
+    reason: typeof record.reason === "string" ? record.reason : undefined,
+  };
+}
+
+export class OpenClawDistTaskFlowPort implements TaskFlowPort {
+  private readonly bridgePromise: Promise<TaskFlowBridge>;
+
+  constructor(options: OpenClawDistTaskFlowPortOptions = {}) {
+    const factory = options.bridgeFactory ?? createTaskFlowBridge;
+    this.bridgePromise = factory(options.openclawBin);
+  }
+
+  bindSession(input: { sessionKey: string; requesterOrigin?: unknown }): BoundDistTaskFlowPort {
+    const bridgePromise = this.bridgePromise;
+    const sessionKey = input.sessionKey;
+    let lastFlow: NativeFlowRecord | null = null;
+    return {
+      createManaged: () => {
+        throw new Error("OpenClawDistTaskFlowPort.createManaged is async-only through createManagedAsync");
+      },
+      runTask: () => {
+        throw new Error("OpenClawDistTaskFlowPort.runTask is async-only through runTaskAsync");
+      },
+      get: (flowId) => lastFlow?.flowId === flowId ? lastFlow : null,
+      resolve: (token) => lastFlow?.flowId === token ? lastFlow : null,
+      getTaskSummary: (flowId) => lastFlow?.flowId === flowId && Array.isArray(lastFlow.tasks) ? lastFlow.tasks[0] ?? null : null,
+      setWaiting: () => {
+        throw new Error("OpenClawDistTaskFlowPort.setWaiting is async-only through setWaitingAsync");
+      },
+      finish: () => {
+        throw new Error("OpenClawDistTaskFlowPort.finish is async-only through finishAsync");
+      },
+      fail: () => {
+        throw new Error("OpenClawDistTaskFlowPort.fail is async-only through failAsync");
+      },
+      cancel: async (cancelInput) => {
+        const bridge = await bridgePromise;
+        return toCancelResult(bridge.cancelFlow({ sessionKey, flowId: cancelInput.flowId }), cancelInput.flowId);
+      },
+      async createManagedAsync(createInput: CreateManagedFlowInput): Promise<ManagedFlowRecord> {
+        const bridge = await bridgePromise;
+        const record = toManagedFlowRecord(bridge.createManagedFlow({
+          sessionKey,
+          controllerId: createInput.controllerId,
+          goal: createInput.goal,
+          status: createInput.status,
+          currentStep: createInput.currentStep,
+          notifyPolicy: createInput.notifyPolicy,
+        }));
+        lastFlow = record;
+        return record;
+      },
+      async runTaskAsync(runInput: RunNativeTaskInput): Promise<NativeTaskRunResult> {
+        const bridge = await bridgePromise;
+        return toTaskRunResult(bridge.runTask({ sessionKey, ...runInput }), runInput.flowId);
+      },
+      async getAsync(flowId: string): Promise<NativeFlowRecord | null> {
+        const bridge = await bridgePromise;
+        const flow = toFlowRecord(bridge.readFlow({ sessionKey, flowId }), flowId);
+        lastFlow = flow;
+        return flow;
+      },
+      async getTaskSummaryAsync(flowId: string, taskId: string): Promise<NativeTaskSummary | null> {
+        const bridge = await bridgePromise;
+        return toTaskSummary(asRecord(bridge.readTask({ sessionKey, flowId, taskId })).task);
+      },
+      async setWaitingAsync(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
+        const bridge = await bridgePromise;
+        return toMutationResult(bridge.setWaiting({
+          sessionKey,
+          flowId: mutationInput.flowId,
+          expectedRevision: mutationInput.expectedRevision === undefined ? undefined : String(mutationInput.expectedRevision),
+          currentStep: mutationInput.currentStep,
+          stateJson: encodeJson(mutationInput.stateJson),
+          waitJson: encodeJson(mutationInput.waitJson),
+        }), mutationInput.flowId);
+      },
+      async finishAsync(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
+        const bridge = await bridgePromise;
+        return toMutationResult(bridge.finishFlow({
+          sessionKey,
+          flowId: mutationInput.flowId,
+          expectedRevision: mutationInput.expectedRevision === undefined ? undefined : String(mutationInput.expectedRevision),
+          stateJson: encodeJson(mutationInput.stateJson),
+        }), mutationInput.flowId);
+      },
+      async failAsync(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
+        const bridge = await bridgePromise;
+        return toMutationResult(bridge.failFlow({
+          sessionKey,
+          flowId: mutationInput.flowId,
+          expectedRevision: mutationInput.expectedRevision === undefined ? undefined : String(mutationInput.expectedRevision),
+          stateJson: encodeJson(mutationInput.stateJson),
+          blockedTaskId: mutationInput.blockedTaskId,
+          blockedSummary: mutationInput.blockedSummary,
+        }), mutationInput.flowId);
+      },
+    };
+  }
+}
+
+export function createOpenClawDistTaskFlowPort(options: OpenClawDistTaskFlowPortOptions = {}): TaskFlowPort {
+  return new OpenClawDistTaskFlowPort(options);
+}
