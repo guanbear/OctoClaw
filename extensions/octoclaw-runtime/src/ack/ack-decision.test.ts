@@ -77,6 +77,31 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.action).toBe("suppress");
   });
 
+  it("considers delegatedRunning as active work eligible for ACK0", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 3_000,
+      mainModelActive: false,
+      toolActive: false,
+      delegatedRunning: true,
+      reactionAckSupported: false,
+      reactionAckEnabled: false,
+    }));
+
+    expect(decision.action).not.toBe("no_action");
+    expect(decision.action).toBe("send_text_ack0");
+  });
+
+  it("still suppresses ACK on delegate route even when delegated is running", () => {
+    const decision = decideAckAction(packet({
+      route: "delegate",
+      nowMs: 3_000,
+      delegatedRunning: true,
+      mainModelActive: true,
+    }));
+
+    expect(decision.action).toBe("suppress");
+  });
+
   it("keeps template selection stable for same thread binding, turn, and stage", () => {
     const input = {
       stage: "ack0" as const,

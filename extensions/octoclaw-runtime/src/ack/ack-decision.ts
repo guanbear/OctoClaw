@@ -56,7 +56,7 @@ function ack0Sent(packet: AckDecisionPacket): boolean {
 }
 
 function workIsActive(packet: AckDecisionPacket): boolean {
-  return packet.mainModelActive || packet.toolActive || packet.blocked;
+  return packet.mainModelActive || packet.toolActive || packet.delegatedRunning || packet.blocked;
 }
 
 export function decideAckAction(packet: AckDecisionPacket): AckDecision {

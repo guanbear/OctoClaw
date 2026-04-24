@@ -1,9 +1,11 @@
-// @ts-expect-error Vitest runs in Node, but this repo does not install Node type definitions.
+// @ts-ignore Vitest runs this config in Node; this repo intentionally does not install @types/node.
 import path from "node:path";
+// @ts-ignore Vitest runs this config in Node; this repo intentionally does not install @types/node.
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-const root = new URL(".", import.meta.url);
-const sourcePath = (relativePath: string) => path.resolve(root.pathname, relativePath);
+// Vitest resolves workspace imports directly to source for build-free tests; TypeScript NodeNext checks still rely on built package exports.
+const sourcePath = (relativePath: string) => path.resolve(fileURLToPath(new URL(".", import.meta.url)), relativePath);
 
 export default defineConfig({
   resolve: {

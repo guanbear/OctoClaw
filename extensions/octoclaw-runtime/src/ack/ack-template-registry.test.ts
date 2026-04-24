@@ -4,6 +4,7 @@ import {
   getAllAckTemplatesForStage,
   type AckTemplateRegistry,
   type AckTemplateStage,
+  type AckTemplateEntry,
 } from "./ack-template-registry.js";
 
 function baseInput(overrides: Partial<Parameters<AckTemplateRegistry["selectTemplate"]>[0]> = {}) {
@@ -88,6 +89,26 @@ describe("ack-template-registry", () => {
     }
   });
 
+  it("handles semanticKey filtering when no semantic-keyed templates exist", () => {
+    const registry = createAckTemplateRegistry();
+    const selected = registry.selectTemplate(baseInput({ semanticKey: "intent.lookup.docs" }));
+
+    expect(selected.stage).toBe("ack0");
+    expect(selected.modality).toBe("text");
+    expect(selected.text.length).toBeGreaterThan(0);
+  });
+
+  it("has at least two ACK0 text templates for every taskClass", () => {
+    const taskClasses: Array<"lookup" | "coding" | "review" | "writing" | "status" | "long_running" | "unknown"> = [
+      "lookup", "coding", "review", "writing", "status", "long_running", "unknown",
+    ];
+    const textTemplates = getAllAckTemplatesForStage("ack0").filter((template) => template.channel === "chat" && template.modality === "text");
+
+    for (const taskClass of taskClasses) {
+      expect(textTemplates.filter((template) => template.taskClass === taskClass).length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
   it("falls back through new dimensions when exact templates are absent", () => {
     const registry = createAckTemplateRegistry();
     const selected = registry.selectTemplate(baseInput({
@@ -132,5 +153,22 @@ describe("ack-template-registry", () => {
       const selected = registry.selectTemplate(baseInput({ stage, modality: "text" }));
       expect(selected.text.length).toBeGreaterThan(0);
     }
+  });
+
+  it("falls back to unkeyed templates when semanticKey has no exact match", () => {
+    const custom: AckTemplateEntry[] = [
+      { key: "custom-a", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "lookup", modality: "text", semanticKey: "intent.lookup.docs", text: "收到，查资料。" },
+      { key: "custom-b", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "lookup", modality: "text", semanticKey: "intent.lookup.code", text: "收到，查代码。" },
+      { key: "custom-fallback", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "lookup", modality: "text", text: "收到，在看。" },
+      { key: "custom-reaction", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "unknown", modality: "reaction", text: "" },
+    ];
+    const registry = createAckTemplateRegistry(custom);
+
+    const withUnknownKey = registry.selectTemplate(baseInput({ taskClass: "lookup", semanticKey: "intent.lookup.missing" }));
+    expect(withUnknownKey.key).toBe("custom-fallback");
+    expect(withUnknownKey.semanticKey).toBeUndefined();
+
+    const withExactKey = registry.selectTemplate(baseInput({ taskClass: "lookup", semanticKey: "intent.lookup.docs" }));
+    expect(withExactKey.key).toBe("custom-a");
   });
 });
