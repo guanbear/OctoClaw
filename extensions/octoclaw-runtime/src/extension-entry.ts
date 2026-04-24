@@ -128,8 +128,13 @@ function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
   const lines = receipts.map((r, i) => {
     const parts = [`Turn ${i + 1}: route=${r.route}`];
     if (r.delegated) {
-      parts.push(`delegated=true, worker=${r.workerPool ?? "unknown"}, task_id=${r.delegateTaskId ?? "unknown"}`);
+      parts.push(`delegated=true, dispatch_executed=${r.dispatchExecuted}`);
+      if (r.nativeTaskId) parts.push(`native_task_id=${r.nativeTaskId}`);
+      if (r.nativeFlowId) parts.push(`native_flow_id=${r.nativeFlowId}`);
+      parts.push(`worker=${r.workerPool ?? "unknown"}, task_id=${r.delegateTaskId ?? "unknown"}`);
     }
+    if (r.resultMaterialized) parts.push(`result_materialized=true`);
+    if (r.deliveryStatus) parts.push(`delivery_status=${r.deliveryStatus}`);
     if (r.toolsUsed.length > 0) {
       parts.push(`tools=[${r.toolsUsed.join(", ")}]`);
     }
@@ -144,13 +149,9 @@ function collectRecentExecutionReceipts(currentSessionKey: string | null = null,
     .map(({ state, key }) => ({ state, key }))
     .filter(({ state }) => {
       if (!state?.decision) return false;
-      if (currentSessionKey) {
-        const stateSession = stringValue(state.canonicalSessionKey);
-        if (stateSession && stateSession !== currentSessionKey) {
-          return Number(state.updatedAt || 0) > Date.now() - 30 * 60 * 1000;
-        }
-      }
-      return true;
+      if (!currentSessionKey) return false;
+      const stateSession = stringValue(state.canonicalSessionKey);
+      return stateSession === currentSessionKey;
     })
     .sort((left, right) => Number(right.state.updatedAt || right.state.createdAt || 0) - Number(left.state.updatedAt || left.state.createdAt || 0))
     .slice(0, limit)

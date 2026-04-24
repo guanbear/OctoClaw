@@ -80,6 +80,11 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.worker_pool).toBe("octoclaw-research");
     expect(result.task_id).toBeTruthy();
     expect(result.delegation_method).toBe("octoclaw_dispatch");
+    expect(result.dispatch_executed).toBeDefined();
+    expect(result.native_task_id).toBeDefined();
+    expect(result.native_flow_id).toBeDefined();
+    expect(result.result_materialized).toBeDefined();
+    expect(result.delivery_status).toBeDefined();
   });
 
   it("returns structured ok:false on failure", async () => {

@@ -58,4 +58,36 @@ describe("TurnExecutionReceipt", () => {
     const receipt = buildTurnExecutionReceipt(state as any, 1000);
     expect(receipt.delegated).toBe(true);
   });
+
+  it("includes dispatch_executed from state", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: { delegateTaskId: "dt-100", taskStatus: "running" },
+      decision: {
+        route_decision: { route: "delegate", worker_pool: "octoclaw-worker" },
+      },
+    };
+    const receipt = buildTurnExecutionReceipt(state as any, 3000);
+    expect(receipt.dispatchExecuted).toBe(true);
+    expect(receipt.resultMaterialized).toBe(false);
+  });
+
+  it("includes native task/flow IDs from runtime truth", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: true,
+      delegateTaskContext: { delegateTaskId: "dt-200", taskStatus: "completed" },
+      decision: {
+        route_decision: { route: "delegate" },
+        runtime_truth: {
+          nativeTaskBinding: { nativeTaskId: "native-task-xyz", nativeFlowId: "native-flow-abc" },
+        },
+      },
+    };
+    const receipt = buildTurnExecutionReceipt(state as any, 5000);
+    expect(receipt.nativeTaskId).toBe("native-task-xyz");
+    expect(receipt.nativeFlowId).toBe("native-flow-abc");
+  });
 });

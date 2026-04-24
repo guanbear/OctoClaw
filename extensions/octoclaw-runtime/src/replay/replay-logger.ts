@@ -26,6 +26,7 @@ type PolicyContextState = UnknownRecord & {
   decision?: UnknownRecord;
   delegateTaskContext?: unknown;
   delegated?: boolean;
+  dispatchExecuted?: boolean;
   directToolsSeen?: unknown;
   toolsUsed?: unknown;
 };
@@ -43,12 +44,22 @@ export interface TurnExecutionReceipt {
   route: string;
   /** Whether delegation actually happened (verified via dispatch ledger) */
   delegated: boolean;
+  /** Whether octoclaw_dispatch actually executed (not just planned) */
+  dispatchExecuted: boolean;
   /** Delegate task ID if delegated */
   delegateTaskId: string | null;
+  /** Native taskflow task ID (from taskflow port / plugin binding) */
+  nativeTaskId: string | null;
+  /** Native taskflow flow ID */
+  nativeFlowId: string | null;
   /** Worker pool that handled execution */
   workerPool: string | null;
   /** Tools that were actually called (verified, not claimed) */
   toolsUsed: string[];
+  /** Whether a result was materialized (artifact/output produced) */
+  resultMaterialized: boolean;
+  /** Delivery status for the delegated result */
+  deliveryStatus: string | null;
   /** Duration in ms */
   durationMs: number;
   /** Outcome */
@@ -101,20 +112,40 @@ export function buildTurnExecutionReceipt(
   const runtimeTruth = asRecord(decision.runtime_truth);
   const delegateTask = asRecord(runtimeTruth.delegateTask);
   const binding = asRecord(runtimeTruth.binding);
+  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
   const status = asString(delegateCtx.taskStatus ?? delegateCtx.status);
   const hasDelegateIdentity = Boolean(
     asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateTask.delegateTaskId ?? binding.taskId),
   );
   const routeWasDelegate = asString(routeDecision.route) === "delegate";
   const delegated = state.delegated === true || (routeWasDelegate && hasDelegateIdentity);
+  const nativeTaskId = asString(
+    nativeTaskBinding.nativeTaskId ?? nativeAttemptBinding.nativeTaskId ?? binding.taskId,
+  );
+  const nativeFlowId = asString(
+    nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId ?? binding.flowId,
+  );
+  const dispatchExecuted = state.dispatchExecuted === true || decision.dispatchExecuted === true;
+  const delivery = asRecord(decision.delivery);
+  const resultMaterialized = Boolean(asString(delivery.artifact_path) || asString(delivery.result_path));
+  const deliveryStatus = asString(
+    delivery.status ?? delivery.delivery_status ?? decision.delivery_status,
+  );
   return {
     turnId: asString(state.canonicalSessionKey, `turn-${Date.now()}`) ?? `turn-${Date.now()}`,
     sessionKey: asString(state.canonicalSessionKey) ?? "",
     route: asString(routeDecision.route, "reply") ?? "reply",
     delegated,
+    dispatchExecuted,
     delegateTaskId: asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateCtx.task_id),
+    nativeTaskId,
+    nativeFlowId,
     workerPool: asString(routeDecision.worker_pool),
     toolsUsed: asStringArray(state.toolsUsed ?? state.directToolsSeen ?? []),
+    resultMaterialized,
+    deliveryStatus,
     durationMs,
     outcome: delegated
       ? (status === "completed" ? "completed" : status === "failed" ? "failed" : status === "timeout" || status === "timed_out" ? "timeout" : "unknown")

@@ -645,6 +645,11 @@ function dispatchHonestySuccess(params: {
   workerPool: string;
   taskId: string;
   taskClass: string;
+  dispatchExecuted?: boolean;
+  nativeTaskId?: string | null;
+  nativeFlowId?: string | null;
+  resultMaterialized?: boolean;
+  deliveryStatus?: string | null;
 }): Record<string, unknown> {
   return toolResponse(JSON.stringify({
     ok: true,
@@ -653,6 +658,11 @@ function dispatchHonestySuccess(params: {
     task_id: params.taskId,
     task_class: params.taskClass,
     delegation_method: "octoclaw_dispatch",
+    dispatch_executed: params.dispatchExecuted === true,
+    native_task_id: params.nativeTaskId ?? null,
+    native_flow_id: params.nativeFlowId ?? null,
+    result_materialized: params.resultMaterialized === true,
+    delivery_status: params.deliveryStatus ?? null,
   }), {
     ok: true,
     route: params.route,
@@ -660,6 +670,11 @@ function dispatchHonestySuccess(params: {
     task_id: params.taskId,
     task_class: params.taskClass,
     delegation_method: "octoclaw_dispatch",
+    dispatch_executed: params.dispatchExecuted === true,
+    native_task_id: params.nativeTaskId ?? null,
+    native_flow_id: params.nativeFlowId ?? null,
+    result_materialized: params.resultMaterialized === true,
+    delivery_status: params.deliveryStatus ?? null,
   });
 }
 
@@ -1212,11 +1227,20 @@ export function getToolRegistrations(): ToolRegistration[] {
         const workerPool = asString(finalDecisionRoute.worker_pool || payload.worker_pool);
         const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
         const taskClass = asString(finalDecisionRoute.task_class || finalDecisionRoute.judge_role || finalDecisionRoute.role);
+        const runtimeTruth = asRecord(authoritativeDecision.runtime_truth);
+        const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+        const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+        const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
         return dispatchHonestySuccess({
           route: finalRoute,
           workerPool,
           taskId: delegateTaskId,
           taskClass,
+          dispatchExecuted: payload.executed === true,
+          nativeTaskId: asString(nativeTaskBinding.nativeTaskId ?? nativeAttemptBinding.nativeTaskId),
+          nativeFlowId: asString(nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId),
+          resultMaterialized: Boolean(asString(materialization.task_id)),
+          deliveryStatus: asString(materialization.substrate_state),
         });
       },
     },

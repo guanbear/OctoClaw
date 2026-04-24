@@ -85,18 +85,15 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.reason).toBe("no valid thread target for ACK delivery");
   });
 
-  it("sends ACK when a valid session target makes hasValidThreadTarget true without message_id", () => {
-    // buildDecisionPacket is responsible for setting hasValidThreadTarget=true
-    // when resolveAckTargetFromSessionKey(sessionKey) finds a target even if no message_id exists.
+  it("session target alone does not count as valid thread target", () => {
     const decision = decideAckAction(packet({
       nowMs: 1_000,
-      hasValidThreadTarget: true,
+      hasValidThreadTarget: false,
       reactionAckSupported: true,
       reactionAckEnabled: true,
     }));
 
-    expect(decision.action).toBe("send_reaction_ack");
-    expect(decision.ackStage).toBe("ack0");
+    expect(decision.action).toBe("suppress");
   });
 
   it("suppresses ACK when neither a session target nor message_id makes hasValidThreadTarget true", () => {

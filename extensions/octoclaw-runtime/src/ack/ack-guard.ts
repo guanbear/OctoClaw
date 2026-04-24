@@ -383,7 +383,6 @@ export function buildDecisionPacket(
   stateKey: string,
   state: UnknownRecord = {},
   routePhase: AckRoutePhase = "unknown",
-  sessionKey = "",
 ): AckDecisionPacket {
   const normalizedStateKey = asString(stateKey);
   const tracking = ackState(normalizedStateKey);
@@ -392,7 +391,6 @@ export function buildDecisionPacket(
   const inboundAtMs = asNumber(merged.inboundAtMs || merged.inbound_at_ms || merged._ackTurnTs) || timerState?.inboundTs || Date.now();
   const nowMs = asNumber(merged.nowMs || merged.now_ms) || Date.now();
   const hasMessageTarget = Boolean(asString(merged.inboundMessageTs || merged.message_id || merged.replyToMessageId));
-  const hasSessionTarget = Boolean(asString(resolveAckTargetFromSessionKey(sessionKey).target));
 
   return {
     route: normalizeDecisionRoute(routePhase),
@@ -408,7 +406,7 @@ export function buildDecisionPacket(
     toolActive: asBoolean(merged.toolActive) || asBoolean(merged.tool_active),
     delegatedRunning: asBoolean(merged.delegatedRunning) || asBoolean(merged.delegated_running),
     blocked: asBoolean(merged.blocked) || asString(merged.native_state) === "blocked",
-    hasValidThreadTarget: hasMessageTarget || hasSessionTarget,
+    hasValidThreadTarget: hasMessageTarget,
     reactionAckSupported: asBoolean(merged.reactionAckSupported),
     reactionAckEnabled: asBoolean(merged.reactionAckEnabled),
     reactionAckSent: asBoolean(merged.reactionAckSent),
@@ -1068,7 +1066,7 @@ export async function maybeSendLatencyAck(
     toolActive: asBoolean(state.toolActive) || asBoolean(state.tool_active) || Boolean(asString(toolName)),
   };
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
-  const decisionPacket = buildDecisionPacket(stateKey, preDecisionState, routePhase, sessionKey);
+  const decisionPacket = buildDecisionPacket(stateKey, preDecisionState, routePhase);
   const ackDecision = decideAckAction(decisionPacket);
   if (ackDecision.action === "cancel_ack_writer") {
     cancelAckGuardForState(stateKey);
