@@ -31,6 +31,17 @@
    - [octoclaw-ack-thread-delivery-spec-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ack-thread-delivery-spec-2026-04-21.md)
 3. 给其他 AI / 协作者直接开工的实现交接稿已拆到：
    - [octoclaw-judge-ack-implementation-handoff-2026-04-21.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-judge-ack-implementation-handoff-2026-04-21.md)
+4. `release/0.3.0-ts-rebuild` 当前实现与本文的 gap closure 施工方案已拆到：
+   - [octoclaw-ts-rebuild-gap-closure-implementation-plan-2026-04-24.md](https://github.com/guanbear/OctoClaw/blob/release/0.3.0-ts-rebuild/docs/octoclaw-ts-rebuild-gap-closure-implementation-plan-2026-04-24.md)
+
+2026-04-24 落地修正：
+
+1. 顶层 route 继续固定为 `reply | delegate`；`runner / spawn / direct / observe` 只允许作为 backend、role、compat 或历史归因字段，不得重新成为 route authority。
+2. OpenClaw native task/flow 必须成为 `dispatch/status/details` 的同一个执行真相源；`task-state.json` 只能作为 projection/cache/policy metadata。
+3. ACK 首可见反馈不再固定等 5s；允许 `reaction_ack` 与 `text_ack0` 二选一。默认建议：reaction 约 1s，text ACK0 约 3s，5s 只作为保守上限。
+4. ACK0 可以在 `main_model_active && !first_token_seen` 的 reply 路径触发，不再只限定为 `tool_active / blocked`。但一旦 first token、正式回复、delivery pending 或 delivered 出现，必须 suppress/cancel。
+5. ACK 文案使用 stage/channel/tone scoped template registry，并用稳定 hash 选择模板；不使用无边界随机万能模板池。
+6. 子 agent 派发必须改成 packet/artifact-first：worker 输入 `DelegateHandoffPacket`，worker 输出 `WorkerResultPacket`，follow-up 注入 `DelegateStatusPacket`，默认不回灌完整 thread transcript、worker log 或内部 route/delegation rationale。
 
 ---
 

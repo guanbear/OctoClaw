@@ -264,7 +264,12 @@ export function resolveRoutePhase(decision: UnknownRecord, options: UnknownRecor
   }
 
   const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
-  const route = asString(options.route || routeDecision.route || authoritativeDecisionRoute(decision, "reply")).toLowerCase();
+  const explicitRoute = asString(options.route || routeDecision.route);
+  if (!explicitRoute && Object.keys(decision).length === 0) {
+    return "pre_route";
+  }
+
+  const route = asString(explicitRoute || authoritativeDecisionRoute(decision, "reply")).toLowerCase();
   if (DELEGATED_ROUTE_NAMES.has(route)) {
     return "delegate";
   }

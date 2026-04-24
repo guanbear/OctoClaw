@@ -17,6 +17,7 @@
 7. `octoclaw-ack-state-source-matrix-2026-04-21.md`
 8. `octoclaw-ack-decision-truth-table-2026-04-21.md`
 9. `octoclaw-ack-thread-delivery-spec-2026-04-21.md`
+10. `octoclaw-ts-rebuild-gap-closure-implementation-plan-2026-04-24.md`
 
 ---
 
@@ -77,6 +78,20 @@
 4. `archive-or-delete`
    - 已完成使命
    - 可归档或直接删除
+
+### 1.6 当前 release 分支整改顺序
+
+`release/0.3.0-ts-rebuild` 当前实现已进入 gap closure 阶段。后续执行 AI 应优先按
+`octoclaw-ts-rebuild-gap-closure-implementation-plan-2026-04-24.md` 施工，而不是从本文重新自由拆任务。
+
+优先顺序：
+
+1. route sealing：保证当前 turn 的 `reply | delegate` 决策不被旧 state、runner/spawn/direct/observe 兼容字段或 regex grounding 覆盖。
+2. OpenClaw `TaskFlowPort`：主路径使用 plugin runtime `taskFlow` 注入，dist bundle 扫描桥只保留 fallback。
+3. ACK 简化：首 ACK 支持 reaction/text 二选一，主 agent 无首 token 时也可快速安抚；正式输出出现则 suppress/cancel。
+4. 派发上下文治理：worker 输入/输出/follow-up 全部改成 compact packet + artifact refs，禁止默认回灌完整 transcript 和 worker log。
+5. status/details 同源：dispatch 返回的 native task/flow id 必须能被 details/status 解析。
+6. 大文件拆分：先测试锁行为，再拆 `policy-resolver.ts`、`tools/registration.ts` 和 ACK gate。
 
 ---
 

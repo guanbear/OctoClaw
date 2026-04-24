@@ -65,31 +65,41 @@ v1 只保留一个热路径 authority judge，再加一个可选本地文案增�
 
 ### 3.3 推荐触发时序
 
-当前 v1 推荐把 ACK Phase 1 默认收成 **reply 路径专用**，并采用下面这组初始时序：
+当前 v1 推荐把 ACK Phase 1 默认收成 **reply 路径专用**。2026-04-24 修正后，首个可见 ACK 不再固定等 5s，而是拆成两个互斥 modality：
 
-1. `latency_ack = 5s`
-2. `tier1 = 18s`
-3. `tier2 = 45s`
-4. `tier3 = 120s`
+1. `reaction_ack = 800ms - 1200ms`
+   - channel 支持 reaction / emoji ack 且配置允许时使用
+   - 算作 ACK0
+   - 发送后不再发送 `text_ack0`
+2. `text_ack0 = 2500ms - 3500ms`
+   - channel 不支持 reaction、reaction 不可靠、或场景偏正式时使用
+   - 算作 ACK0
+3. `ack0_hard_ceiling = 5s`
+   - 只是保守上限，不是默认等待时间
+4. `tier1 = 18s`
+5. `tier2 = 45s`
+6. `tier3 = 120s`
 
 推荐时序解释：
 
-1. `0-5s`
+1. `0-800ms`
    - 优先等主模型自己首响
-   - 不因为轻微思考延迟就过早插 ACK
-2. `~5s`
-   - 到达 `latency_ack` 检查点
-   - 若仍无正式输出，且 Phase 1 gate 允许，则 runtime 发 `ACK0`
-3. `~18s`
+   - 避免主模型本可很快出字时被 ACK 抢占
+2. `~1s`
+   - 若仍无 first token，且 channel 支持 reaction ACK，则 runtime 可发 `reaction_ack`
+   - `reaction_ack` 与 `text_ack0` 对同一 turn 二选一
+3. `~3s`
+   - 若仍无 first token，且未发 reaction ACK，Phase 1 gate 允许，则 runtime 发 `text_ack0`
+4. `~18s`
    - 到达 `tier1`
    - 若仍静默且仍处于 ACK eligible 状态，则允许第一次更明确的“还在处理”提示
-4. `~45s`
+5. `~45s`
    - 到达 `tier2`
    - 若仍静默，则进入长一点的处理中提示
-5. `~120s`
+6. `~120s`
    - 到达 `tier3`
    - 若仍静默，则允许转成“是否继续等待/是否先给阶段结果”的话术
-6. 正式输出已出现
+7. 正式输出已出现
    - 立即取消 `ack_writer`
    - 后续 tiered ACK 也必须 suppress
 
@@ -99,7 +109,7 @@ v1 不应继续把 ACK 理解成“到了某个时间点就发一句安抚话”
 
 更稳的 Phase 1 目标是：
 
-1. 只有系统**真的还处于工具执行 / 委派执行 / blocked** 状态时，ACK 才有资格发送
+1. 只有系统**真的还处于主模型生成未首字 / 工具执行 / 委派执行 / blocked** 状态时，ACK 才有资格发送
 2. 一旦系统已经进入**最终答复流**或**最终交付待发送**阶段，就必须 suppress ACK
 3. 不追求“精确预测 300ms 后马上答完”，而是先把“明显不该发 ACK 的时机”排掉
 
@@ -119,6 +129,8 @@ Phase 1 必须优先消费 OpenClaw substrate / native taskflow truth，再叠�
    - `checkpoint_seen`
    - `result_ready`
 2. OctoClaw runtime hook / streaming 层补充的状态
+   - `main_model_active`
+   - `first_token_seen`
    - `tool_active`
    - `delegated_running`
    - `final_response_streaming`
@@ -141,9 +153,11 @@ ack_phase1_gate:
   route_scope:
     - reply_only_in_v1
   ack_eligible_when_any:
+    - main_model_active_without_first_token
     - tool_active
     - blocked
   ack_suppress_when_any:
+    - first_token_seen
     - final_response_streaming
     - delivery_pending
     - delivered
@@ -153,7 +167,7 @@ ack_phase1_gate:
 
 Phase 1 可以稳定做到：
 
-1. 真在 reply 路径工具执行 / blocked 时才 ACK
+1. 真在 reply 路径主模型已接手但无 first token、工具执行、或 blocked 时才 ACK
 2. 一旦最终答复开始流出，立刻 suppress ACK
 3. 一旦最终交付已经进入待发送阶段，不再补 ACK
 
