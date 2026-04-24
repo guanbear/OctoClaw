@@ -42,6 +42,9 @@
 4. ACK0 可以在 `main_model_active && !first_token_seen` 的 reply 路径触发，不再只限定为 `tool_active / blocked`。但一旦 first token、正式回复、delivery pending 或 delivered 出现，必须 suppress/cancel。
 5. ACK 文案使用 stage/channel/tone scoped template registry，并用稳定 hash 选择模板；不使用无边界随机万能模板池。
 6. 子 agent 派发必须改成 packet/artifact-first：worker 输入 `DelegateHandoffPacket`，worker 输出 `WorkerResultPacket`，follow-up 注入 `DelegateStatusPacket`，默认不回灌完整 thread transcript、worker log 或内部 route/delegation rationale。
+7. 旧文档中的 `direct / runner / spawn_single / spawn_multi / observe` 统一按 gap closure 文档的翻译表理解；这些词是历史 execution contract / backend / role 词汇，不再覆盖新的顶层 route。
+8. runner pool / tmux workbench 可作为 opt-in acceleration backend 保留，但必须依附 OpenClaw native task/flow truth，不得重新成为 route authority、truth source 或默认常驻依赖。
+9. Auto Router 的可抽离边界仍是 recommendation kernel / model-intel / eval；runtime policy adapter、delegated execution、status/details、IM/display 不进入 auto-router package。
 
 ---
 
@@ -2017,7 +2020,7 @@ Anthropic 在 Managed Agents 里最核心的接口拆法，其实可以压缩成
 
 更详细的源码级借鉴收口，见：
 
-- [octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md)
+- [octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md](./octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md)
 
 #### ClawTeam
 
@@ -3223,13 +3226,13 @@ v2 应该采用：
 
 这个分层，和我们在这些借鉴文档里的结论是一致的：
 
-1. [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/archive/design-notes/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
+1. [octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md](./archive/design-notes/octoclaw-anthropic-agent-engineering-notes-v1-2026-03-30.md)
    - 已明确 `OpenClaw → OctoClaw policy → OpenClaw native flow_task → workers`
    - 并强调 richer event stream、ownership lock、session resume 在 flow task 之后要改成“消费原生 truth + OctoClaw 适配”
-2. [octoclaw-review-and-action-plan-v1-2026-04-02.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/archive/design-notes/octoclaw-review-and-action-plan-v1-2026-04-02.md)
+2. [octoclaw-review-and-action-plan-v1-2026-04-02.md](./archive/design-notes/octoclaw-review-and-action-plan-v1-2026-04-02.md)
    - 已明确 `task-state.json` 不再是执行真相，而是策略元数据存储
    - 并明确 delegated event stream、ownership/recovery、session resume 的实现路径要改成 native flow task 优先
-3. [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/archive/design-notes/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
+3. [octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md](./archive/design-notes/octoclaw-clawteam-deerflow-source-notes-v1-2026-03-29.md)
    - 强调 explicit event stream、artifact readiness、liveness truth、state distinct from transcript
    - 这正支持 delegated task 作为产品对象、native task 作为执行真相、timeline/status 作为投影
 

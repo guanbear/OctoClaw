@@ -62,6 +62,39 @@ OpenClaw 参考基线：`v2026.4.21`
 4. 不用关键词规则重新接管 route
 5. 不把 OpenClaw native flow/task 直接暴露成用户产品语义
 
+### 2.3 与旧设计 / 借鉴文档的关系
+
+本方案复核并吸收了这些旧设计与借鉴文档：
+
+1. `octoclaw-router-policy-refactor-2026-04-10.md`
+   - 保留：stateless judge、小上下文、信号抽取不做最终 route、ACK 不等模型、execution ledger
+   - 修正：旧文档中的 `direct / runner / spawn_single / spawn_multi` 是历史 execution contract 词汇，不再作为顶层 route
+2. `octoclaw-runtime-slimming-plan-2026-04-12.md`
+   - 保留：默认运行面不依赖 patrol/runner daemon，legacy loop 退成 one-shot/compat
+   - 修正：runner pool 可作为 opt-in acceleration backend，但不能恢复成默认 truth source
+3. `octoclaw-transition-cleanup-design.md`
+   - 保留：durable policy state、substrate-only read path、legacy mirror shrink、optional backend true detach
+   - 修正：RouteSeal 不应只存在进程内 Map；必须进入 TTL-bound durable policy state 或等价 ledger
+4. `octoclaw-auto-router-boundary-map.md`
+   - 保留：router/recommendation kernel 可以抽离
+   - 修正：runtime policy adapter、delegated lane execution、status/details、IM/display 仍留在 OctoClaw runtime，不放进 auto-router package
+5. `octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md`
+   - 保留：OpenClaw task/flow truth、ClawTeam 的 ownership/session/worktree、DeerFlow 的 event/artifact/state-vs-transcript、Hermes 的 parent-child session/timeout、open-multi-agent 的 scheduler-enforced parallelism
+   - 修正：这些能力都落在 runtime/recovery/status/context 层，不进入顶层 route 词汇
+
+旧 route 词汇统一翻译表：
+
+| 旧词汇 | 新解释 |
+| --- | --- |
+| `direct` | `route=reply` |
+| `runner` | `route=delegate` 下的 optional acceleration backend |
+| `spawn_single` | `route=delegate, coordination_mode=solo_worker` |
+| `spawn_multi` | `route=delegate, coordination_mode=multi_agent_controlled` |
+| `observe` | `reply` 下状态读取，或 `delegate(role=observer)` |
+| `tmux` | optional operator/workbench/backend，不是真相源 |
+
+执行 AI 读取旧文档时，必须按这张表做语义翻译，不得把旧词汇恢复为新的顶层 route。
+
 ---
 
 ## 3. 推荐落地顺序
@@ -138,6 +171,18 @@ export interface RouteSeal {
 3. backend availability 反推 route
 4. regex/keyword 直接生成 route
 
+### 4.3.1 持久化规则
+
+RouteSeal 不允许只放在进程内 Map。
+
+最低要求：
+
+1. route seal 写入 session/thread-scoped durable policy state，或写入可查询 ledger/event artifact
+2. 必须带 `turnId / threadBindingKey / stateGeneration / inputHash`
+3. TTL 过期或 turnId 不匹配时不得复用
+4. dispatch/status/details 只能消费 current route seal 或同一 turn 的 persisted seal
+5. legacy compatibility state 只能作为 recovery hint，不能覆盖 current seal
+
 ### 4.4 代码落点
 
 建议新增/调整：
@@ -179,6 +224,8 @@ OpenClaw `v2026.4.21` 已提供正式 runtime seam：
 2. bound runtime 支持 `createManaged/get/list/findLatest/resolve/getTaskSummary`
 3. bound runtime 支持 `setWaiting/resume/finish/fail/requestCancel/cancel/runTask`
 
+本 port 必须保持 thin-port 形态。它只是把 OctoClaw delegate/task/status 投影接到 OpenClaw runtime seam，不是第二套 task runtime，也不是对 OpenClaw task internals 的重新封装。
+
 ### 5.2 新增 port
 
 建议在 `extensions/octoclaw-runtime/src/ports/taskflow-port.ts` 新增：
@@ -214,6 +261,13 @@ export interface BoundTaskFlowPort {
 2. `OpenClawDistTaskFlowPort`
    - 包装现有 `taskflow-bridge.ts`
    - 仅用于本地测试、旧安装兼容、OpenClaw runtime API 不可用时 fallback
+
+若同时存在 detached runtime wrapper 和 TaskFlowPort：
+
+1. TaskFlowPort 负责 flow/task creation、lookup、mutation
+2. detached runtime wrapper 只负责 OpenClaw detached lifecycle ownership seam
+3. 二者都不得引入第二套 truth store
+4. 无 flow ownership metadata 时应返回 structured `not_found/fallback_to_core`，而不是伪造状态
 
 ### 5.4 session/thread binding
 
@@ -311,6 +365,13 @@ ack_timing:
   tier2_ms: 45000
   tier3_ms: 120000
 ```
+
+与旧 router 文档中 `500ms - 800ms` 中性 ACK 的关系：
+
+1. 旧值仍可作为 channel-specific fast text ACK profile
+2. 默认 text ACK0 先取 `2500ms - 3500ms`，目的是降低和主模型首 token 争抢、双短回复的概率
+3. 如果线上 p95 首 token 明显超过 2s，且 channel 不支持 reaction，可把 `text_ack0_ms` 调低到 `800ms - 1500ms`
+4. 调低必须同时观测 `double_short_reply_rate` 与 `ack_suppressed_after_first_token`
 
 ### 6.3 表情 ACK 是否需要
 
@@ -888,6 +949,16 @@ export interface DelegateLookupResult {
 4. 子任务完整报告默认注入主上下文：删
 5. 旧 thread history 默认注入 follow-up：删
 
+不能误删的东西：
+
+1. runner pool / tmux workbench 的 opt-in backend 文档与 capability seam
+2. OpenClaw native task/flow binding、delivery、cancel、maintenance seam
+3. artifact index、context pack、worker result 等 artifact-first surfaces
+4. replay/eval/golden fixtures
+5. one-shot observe/reconcile/repair 兼容工具
+
+这些不是默认 route/truth source，但仍是 runtime、operator、eval 或 fallback 能力。
+
 ---
 
 ## 10. 最小验收矩阵
@@ -929,16 +1000,45 @@ export interface DelegateLookupResult {
 ## 11. 给执行 AI 的任务话术
 
 ```text
-你在 /Users/guan/Documents/New project/OctoClaw-release-0.3.0-ts-rebuild 工作。
-请按 docs/octoclaw-ts-rebuild-gap-closure-implementation-plan-2026-04-24.md 执行整改。
+你在 OctoClaw 仓库工作，目标分支是 release/0.3.0-ts-rebuild。
+请先切出自己的工作分支，再按 docs/octoclaw-ts-rebuild-gap-closure-implementation-plan-2026-04-24.md 执行整改。
+
+先读这些文档，不要只看聊天摘要：
+1. docs/octoclaw-ts-rebuild-gap-closure-implementation-plan-2026-04-24.md
+2. docs/octoclaw-ts-rebuild-design-v1.md
+3. docs/octoclaw-ts-rebuild-implementation-plan-2026-04-15.md
+4. docs/octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md
+5. docs/octoclaw-delegate-runtime-gap-closure-2026-04-22.md
+6. docs/octoclaw-harness-contract-inventory.md
+7. docs/octoclaw-harness-ownership-map.md
+8. docs/octoclaw-router-policy-refactor-2026-04-10.md
+9. docs/octoclaw-transition-cleanup-design.md
+10. docs/octoclaw-auto-router-boundary-map.md
+
+如果旧文档出现 direct/runner/spawn_single/spawn_multi/observe，请按 gap closure 文档的旧 route 翻译表理解：
+direct -> reply；
+runner -> delegate 下的 optional acceleration backend；
+spawn_single -> delegate + solo_worker；
+spawn_multi -> delegate + multi_agent_controlled；
+observe -> reply 状态读取或 delegate(role=observer)。
+不要把这些旧词恢复成顶层 route。
 
 先做 WP1-WP4，不要一次性重写全部：
 1. 加 RouteSeal contract 和 resolveCurrentRouteSeal，保证当前 turn 的 delegate 不会被旧 state 降成 reply。
-2. 加 TaskFlowPort，主路径使用 OpenClaw plugin runtime taskFlow 注入；现有 dist scanning bridge 只能 fallback。
+2. 加 TaskFlowPort，主路径使用 OpenClaw plugin runtime taskFlow 注入；现有 dist scanning bridge 只能 fallback。参考 OpenClaw v2026.4.21 的 plugin runtime taskFlow API。
 3. 简化 ACK：新增 decideAckAction，支持 reaction ACK 和 text ACK0 二选一，主 agent 无首 token 时可快速安抚。
-4. 加 DelegateHandoffPacket / WorkerResultPacket / DelegateStatusPacket，禁止默认注入完整 transcript、worker log 和 route/delegation rationale。
+4. 加 DelegateHandoffPacket / WorkerResultPacket / DelegateStatusPacket，复用 artifact-first / brief-result-artifact 设计，禁止默认注入完整 transcript、worker log 和 route/delegation rationale。
 
-每一步都先补测试，再改实现。保持顶层 route 只有 reply | delegate。不要新增 Python。不要把 runner 恢复成 route。完成后跑：
+关键约束：
+- 顶层 route 只能是 reply | delegate。
+- RouteSeal 必须持久化到 durable policy state 或等价 ledger，不要只放内存 Map。
+- runner pool/tmux 可以保留为 opt-in backend/capability，但不能成为 route authority 或 truth source。
+- Auto Router 只产出 recommendation；runtime policy adapter、delegated execution、status/details 不要抽进 auto-router package。
+- 派发污染治理必须落到 typed artifacts、compact packets、context budget 和 artifact-open gate，不要靠 prompt 说“少注入点”。
+- 不要新增 Python 热路径。
+- 不要把 keyword/rule 前置路由恢复成 authority。
+
+每一步都先补测试，再改实现。完成后跑：
 pnpm run check
 pnpm test
 ```
