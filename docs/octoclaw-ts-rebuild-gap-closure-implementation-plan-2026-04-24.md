@@ -450,6 +450,53 @@ export type AckDecisionAction =
 
 ## 7. WP4：派发上下文污染治理
 
+### 7.0 来源与边界
+
+本 WP 不是新造一套 context 协议，而是把已有设计里的 `artifact-first / brief-result-artifact` 口径落到 TS rebuild：
+
+1. `octoclaw-harness-contract-inventory.md`
+   - 已定义 canonical `brief / result / artifact / event / eval outcome`
+   - 明确 `artifact` 包含 report、context pack、worker result、OpenClaw taskflow、operator surface
+2. `octoclaw-harness-ownership-map.md`
+   - runtime harness 负责 compact brief/context packets、dispatch、task substrate、state normalization
+   - workflow harness 负责 bounded and artifact-first execution
+3. `docs/archive/design-notes/octoclaw-product-design-v2-2026-03-27.md`
+   - 明确 `artifact-first, event-first, state-first`
+   - 长结果、日志、diff、研究材料优先落 artifact
+   - 主链路不默认吞下完整 transcript
+   - 每类 route 维护 context budget
+4. `octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md`
+   - child workers should receive typed handoff packets, not full transcripts
+   - status/timeline/progress push should come from runtime truth plus projection, not raw child logs
+5. `octoclaw-delegate-runtime-gap-closure-2026-04-22.md`
+   - follow-up grounding 必须使用 minimal delegate status packet
+   - main-agent working context 默认由 thread summary、checkpoint summary、structured task/delegate packet、artifact refs 组成
+
+现有 TS contracts 也已有可复用基础：
+
+1. `packages/octoclaw-contracts/src/artifacts.ts`
+   - `ArtifactDescriptor`
+   - `TaskPacket`
+   - `WorkerBrief`
+   - `ThreadHandoffPacket`
+   - `ActiveContextBudget`
+   - `SummarySnapshotMetadata`
+2. `packages/octoclaw-contracts/src/delegate.ts`
+   - `DelegateTask`
+   - `DelegateAttempt`
+   - `DelegateProgressEvent`
+   - `ResumePacket`
+   - `StatusQueryPacket`
+   - `ArtifactRef`
+
+因此本 WP 的实现原则是：
+
+1. 优先复用/扩展这些 contract
+2. 新增字段必须能映射到 `brief/result/artifact/event` 其中之一
+3. 不新增第二套 artifact store
+4. 不把 artifact refs 降级成普通字符串列表后失去 lineage
+5. 不让完整 transcript 成为 artifact-first 的替代品
+
 ### 7.1 问题定义
 
 “派发更污染上下文”不是 delegation 的必然结果，而是当前 delivery/context 协议的问题：
@@ -464,7 +511,7 @@ export type AckDecisionAction =
 
 ### 7.2 新 contract
 
-建议新增：
+建议新增或扩展：
 
 1. `DelegateHandoffPacket`
 2. `WorkerResultPacket`
@@ -475,12 +522,112 @@ export type AckDecisionAction =
 落点：
 
 1. `packages/octoclaw-contracts/src/delegate-context.ts`
+   - 只放当前 contracts 缺失的 context-specific shape
+   - 能复用 `TaskPacket / WorkerBrief / ThreadHandoffPacket / ActiveContextBudget / ArtifactRef` 的字段不要重写
 2. `extensions/octoclaw-runtime/src/context/delegate-packets.ts`
+   - 负责从 native truth + OctoClaw projection + artifact index 组装 packet
 3. `extensions/octoclaw-runtime/src/context/context-budget.ts`
+   - 负责 token/cost/pollution 预算与 telemetry
+4. `extensions/octoclaw-runtime/src/artifacts/delegate-artifacts.ts`
+   - 负责写入/读取 worker report、context pack、operator payload 等 artifact
+   - 不应替代 OpenClaw native task/flow truth
+
+### 7.2.1 Artifact-first 数据流
+
+默认数据流：
+
+```text
+user turn
+  -> RouteSeal
+  -> DelegateHandoffPacket / TaskPacket
+  -> worker
+  -> WorkerResultPacket
+  -> artifact writer writes full report/log/context pack
+  -> WorkerResultPacket stores artifact refs
+  -> DelegateStatusPacket injects compact state + artifact refs
+  -> main agent reads artifacts only on demand
+```
+
+artifact 类型建议：
+
+1. `worker_report`
+   - 完整研究报告、代码审计报告、长解释
+2. `worker_log_excerpt`
+   - 必要日志摘录，默认截断
+3. `context_pack`
+   - worker 看到的 compact context，不含完整 transcript
+4. `diff_or_patch`
+   - 代码变更、patch、文件列表
+5. `verification_evidence`
+   - 测试输出摘要、命令、关键结果
+6. `operator_surface`
+   - 给 status/details/UI 展示的可读摘要
+
+artifact ref 不应只是裸字符串，执行层内部应尽量使用 typed ref：
+
+```ts
+export interface DelegateArtifactRef {
+  artifactId: string;
+  artifactKind:
+    | "worker_report"
+    | "worker_log_excerpt"
+    | "context_pack"
+    | "diff_or_patch"
+    | "verification_evidence"
+    | "operator_surface";
+  uri?: string;
+  title?: string;
+  summary?: string;
+  tokenEstimate?: number;
+  createdAt: string;
+}
+```
+
+主 agent 默认只拿：
+
+1. `summary`
+2. `keyFindings`
+3. `status`
+4. `artifactRefs[].title`
+5. `artifactRefs[].summary`
+6. 必要时才读取 `artifactRefs[].uri`
+
+### 7.2.2 Context budget 分层
+
+派发污染治理要有硬预算，而不是只靠 prompt 约束。
+
+建议默认预算：
+
+```yaml
+context_budget:
+  worker_handoff_max_tokens: 1800
+  worker_result_packet_max_tokens: 900
+  main_resume_packet_max_tokens: 700
+  artifact_summary_max_tokens: 250
+  raw_transcript_default: false
+  raw_worker_log_default: false
+```
+
+预算优先级复用既有 `ActiveContextBudget.priorityOrder`：
+
+1. `task_summary`
+2. `artifact_refs`
+3. `structured_state`
+4. `transcript_excerpt`
+
+只有当前三层不足以完成任务时，才允许加入 `transcript_excerpt`，并且必须记录原因：
+
+```ts
+contextEscalationReason:
+  | "summary_insufficient"
+  | "artifact_ref_insufficient"
+  | "user_asked_for_exact_prior_wording"
+  | "debugging_context_pack";
+```
 
 ### 7.3 DelegateHandoffPacket
 
-worker 输入只允许这个结构，不允许直接塞完整 transcript：
+worker 输入只允许这个结构或其兼容的 `TaskPacket / WorkerBrief` 投影，不允许直接塞完整 transcript：
 
 ```ts
 export interface DelegateHandoffPacket {
@@ -503,7 +650,7 @@ export interface DelegateHandoffPacket {
   };
   threadSummary?: string;
   relevantExcerpts?: string[];
-  artifactRefs: string[];
+  artifactRefs: DelegateArtifactRef[];
   forbiddenContent: string[];
 }
 ```
@@ -546,8 +693,10 @@ export interface WorkerResultPacket {
 
 1. `summary` 默认不超过 800 字
 2. `keyFindings` 默认不超过 7 条
-3. 完整报告写 artifact，不注入主会话
-4. 主 agent 只有需要生成最终答案时才按 artifact ref 读取细节
+3. 完整报告写 `worker_report` artifact，不注入主会话
+4. 日志写 `worker_log_excerpt` artifact，默认只保留摘要
+5. 验证证据写 `verification_evidence` artifact
+6. 主 agent 只有需要生成最终答案时才按 artifact ref 读取细节
 
 ### 7.5 DelegateStatusPacket
 
@@ -617,6 +766,19 @@ export interface ContextBudgetReport {
 4. 删除 worker chain-of-thought / execution log
 5. 超预算时只保留 status + artifact refs
 
+### 7.7.1 Artifact 读取门
+
+新增 `shouldOpenArtifactForMainAgent(request)`：
+
+默认返回 false，只有下面情况返回 true：
+
+1. 用户要求看完整报告/证据/日志
+2. 主 agent 需要生成最终 user-facing answer 且 result packet 摘要不足
+3. recovery/debug 需要判断失败原因
+4. reviewer/verifier lane 明确需要检查证据
+
+每次打开 artifact 都必须更新 `ContextBudgetReport.artifactReopenCount`。
+
 ### 7.8 测试
 
 必须覆盖：
@@ -627,6 +789,8 @@ export interface ContextBudgetReport {
 4. 内部 orchestration wording 不进入 user-visible reply
 5. artifact ref 可按需读取完整报告
 6. telemetry 记录 parent context added tokens
+7. full report 被写为 `worker_report` artifact，而不是进入 main resume packet
+8. context escalation 到 transcript excerpt 时必须有 `contextEscalationReason`
 
 ---
 
@@ -778,4 +942,3 @@ export interface DelegateLookupResult {
 pnpm run check
 pnpm test
 ```
-
