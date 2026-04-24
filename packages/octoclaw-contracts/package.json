@@ -13,7 +13,10 @@
     "./telemetry": { "types": "./dist/telemetry.d.ts", "default": "./dist/telemetry.js" },
     "./schemas": { "types": "./dist/schemas.d.ts", "default": "./dist/schemas.js" },
     "./fixtures": { "types": "./dist/fixtures.d.ts", "default": "./dist/fixtures.js" },
-    "./delegate": { "types": "./dist/delegate.d.ts", "default": "./dist/delegate.js" }
+    "./delegate": { "types": "./dist/delegate.d.ts", "default": "./dist/delegate.js" },
+    "./delegate-context": { "types": "./dist/delegate-context.d.ts", "default": "./dist/delegate-context.js" },
+    "./route-seal": { "types": "./dist/route-seal.d.ts", "default": "./dist/route-seal.js" },
+    "./thread-binding": { "types": "./dist/thread-binding.d.ts", "default": "./dist/thread-binding.js" }
   },
   "scripts": {
     "build": "tsc --build",
