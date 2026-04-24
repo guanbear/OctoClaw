@@ -17,12 +17,14 @@ import {
 import { normalizeRuntimeRequest } from "@octoclaw/runtime-core/requests";
 import type { CoordinationMode as DelegateCoordinationMode } from "@octoclaw/contracts/delegate";
 import type { ScopeDescriptor, ScopeMetadata } from "@octoclaw/contracts/schemas";
+import type { DelegateHandoffPacket } from "@octoclaw/contracts/delegate-context";
 import type { PolicyDecision } from "@octoclaw/policy/judge";
 import { createOctoClawRuntimePlugin } from "./plugin.js";
 import type { NativeHelperInvoker } from "./adapter/native-helper.js";
 import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "@octoclaw/delegation";
 import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "@octoclaw/fast-reply";
 import { isObserveMode } from "./resolve/route-helpers.js";
+import { buildDelegateHandoffPacket } from "./context/delegate-packets.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -109,6 +111,26 @@ function resolveDelegateCoordinationMode(decision: PolicyDecision): DelegateCoor
     default:
       return "multi_agent_controlled";
   }
+}
+
+function scopeResources(scope: ScopeDescriptor[]): string[] {
+  return scope.map((item) => item.resource).filter(Boolean);
+}
+
+function handoffWorkspaceMode(mode: ScopeMetadata["workspaceMode"]): DelegateHandoffPacket["workspaceMode"] {
+  return mode === "read_only" ? "read_only" : "write_allowed";
+}
+
+function handoffRole(role: string): DelegateHandoffPacket["role"] {
+  if (role.includes("observer")) return "observer";
+  if (role.includes("code")) return "code";
+  if (role.includes("research")) return "research";
+  if (role.includes("review")) return "review";
+  return "default";
+}
+
+function threadBindingKey(sessionKey: string, delegateTaskId: string): string {
+  return `${sessionKey}:${delegateTaskId}`;
 }
 
 function canonicalizePolicyDecision(decision: UnknownRecord, route: string): UnknownRecord {
@@ -307,6 +329,25 @@ export function buildTsRuntimeDispatchPayload(
         workspaceMode: workflow.scope.workspaceMode,
       })
       : null;
+    const handoffPacket = delegateAttemptBinding
+      ? buildDelegateHandoffPacket({
+        delegateTaskId: delegateAttemptBinding.task.delegateTaskId,
+        attemptId: delegateAttemptBinding.attempt.attemptId,
+        threadBindingKey: threadBindingKey(normalizedRequest.sessionKey, delegateAttemptBinding.task.delegateTaskId),
+        currentUserAsk: normalizedRequest.prompt,
+        taskBrief: delegateAttemptBinding.task.goal,
+        acceptanceCriteria: [],
+        readScope: scopeResources(workflow.scope.readScope),
+        writeScope: scopeResources(workflow.scope.writeScope),
+        workspaceMode: handoffWorkspaceMode(workflow.scope.workspaceMode),
+        role: handoffRole(workflow.execution.role),
+        modelProfile: workflow.execution.modelProfile,
+        maxInputTokens: 1800,
+        maxSummaryTokens: 500,
+        artifactRefs: [],
+        forbiddenContent: [],
+      })
+      : undefined;
     const observe = isObserveMode(workflow.execution.role, workflowDecision.executionProfile);
     const finalDelivery = observe
       ? buildWorkflowFinalDelivery(workflow, {
@@ -348,6 +389,7 @@ export function buildTsRuntimeDispatchPayload(
         substrate_revision: binding.substrateRevision,
         truth: binding.truth,
         projection: binding.projection,
+        delegation: handoffPacket ? { handoff: handoffPacket } : undefined,
       },
       runtime_truth: {
         authority: "ts-runtime-core",
@@ -537,6 +579,23 @@ export function buildTsRuntimeSpawnPayload(
       backend: workflow.identity.backend,
       workspaceMode: workflow.scope.workspaceMode,
     });
+    const handoffPacket = buildDelegateHandoffPacket({
+      delegateTaskId: delegateAttemptBinding.task.delegateTaskId,
+      attemptId: delegateAttemptBinding.attempt.attemptId,
+      threadBindingKey: threadBindingKey(normalizedRequest.sessionKey, delegateAttemptBinding.task.delegateTaskId),
+      currentUserAsk: normalizedRequest.prompt,
+      taskBrief: delegateAttemptBinding.task.goal,
+      acceptanceCriteria: [],
+      readScope: scopeResources(workflow.scope.readScope),
+      writeScope: scopeResources(workflow.scope.writeScope),
+      workspaceMode: handoffWorkspaceMode(workflow.scope.workspaceMode),
+      role: handoffRole(workflow.execution.role),
+      modelProfile: workflow.execution.modelProfile,
+      maxInputTokens: 1800,
+      maxSummaryTokens: 500,
+      artifactRefs: [],
+      forbiddenContent: [],
+    });
     if (input.execute) {
       workflow = markWorkflowCompleted(workflow);
     }
@@ -580,6 +639,7 @@ export function buildTsRuntimeSpawnPayload(
           delegateTaskId: delegateAttemptBinding.task.delegateTaskId,
           attemptId: delegateAttemptBinding.attempt.attemptId,
           attemptGeneration: delegateAttemptBinding.attempt.attemptGeneration,
+          handoff: handoffPacket,
         },
         compound: compoundPlaceholder,
       },

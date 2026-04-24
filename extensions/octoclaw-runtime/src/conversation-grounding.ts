@@ -8,6 +8,9 @@ import {
   type IntentPacket,
 } from "@octoclaw/policy/intent";
 import { normalizeLiveRoute } from "./resolve/route-helpers.js";
+import { buildDelegateStatusPacket } from "./context/delegate-packets.js";
+import { sanitizeMainContextInjection } from "./context/context-budget.js";
+import type { DelegateStatusPacket } from "@octoclaw/contracts/delegate-context";
 
 interface FsSyncLike {
   readFileSync(pathname: string, encoding: string): string;
@@ -540,6 +543,72 @@ function projectionInt(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function normalizeDelegateStatus(value: string): DelegateStatusPacket["status"] {
+  switch (normalizeText(value)) {
+    case "planned":
+    case "pending":
+      return "planned";
+    case "queued":
+      return "queued";
+    case "running":
+    case "in_progress":
+      return "running";
+    case "completed":
+    case "done":
+    case "success":
+    case "succeeded":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "timed_out":
+    case "timeout":
+      return "timed_out";
+    case "blocked":
+      return "blocked";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
+    default:
+      return "planned";
+  }
+}
+
+function sanitizedStatusPacket(value: unknown): DelegateStatusPacket {
+  const sanitized = sanitizeMainContextInjection(value);
+  return isRecord(sanitized) ? sanitized as unknown as DelegateStatusPacket : value as DelegateStatusPacket;
+}
+
+function renderDelegateStatusContext(packet: DelegateStatusPacket, extras: {
+  route?: string;
+  workerPool?: string;
+  substrate?: string;
+  delivery?: string;
+} = {}): string {
+  const lines = [
+    "[OctoClaw task status]",
+    `schema: ${packet.schemaVersion}`,
+    `task_id: ${packet.delegateTaskId || "(unknown)"}`,
+    `status: ${packet.status || "unknown"}`,
+  ];
+  if (extras.route) lines.push(`route: ${extras.route}`);
+  if (extras.workerPool) lines.push(`worker_pool: ${extras.workerPool}`);
+  if (packet.modelProfile) lines.push(`model: ${packet.modelProfile}`);
+  if (packet.createdAt) lines.push(`created_at: ${packet.createdAt}`);
+  if (packet.lastEventAt) lines.push(`last_event_at: ${packet.lastEventAt}`);
+  if (packet.progressSummary) lines.push(`progress: ${packet.progressSummary}`);
+  if (packet.terminalSummary) lines.push(`terminal_summary: ${packet.terminalSummary}`);
+  if (extras.substrate) lines.push(`substrate: ${extras.substrate}`);
+  if (extras.delivery) lines.push(`delivery: ${extras.delivery}`);
+  if (packet.error) lines.push(`error: ${packet.error}`);
+  if (["failed", "timed_out", "blocked"].includes(packet.status)) {
+    lines.push(`retryable: ${packet.retryable ? "true" : "check with octoclaw_task_action retry"}`);
+  }
+  if (packet.artifactRefs.length > 0) lines.push(`artifacts: ${packet.artifactRefs.join(", ")}`);
+  lines.push("Answer from these facts only. Do not guess from memory.");
+  return lines.join("\n");
+}
+
 function buildTurnFacts(
   turn: ReplayTurn,
   taskIndex: Map<string, JsonRecord>,
@@ -828,37 +897,40 @@ export function buildConversationGrounding(options: {
   }
   const facts = subjectTurn.facts;
   const taskRecord = facts.taskId ? taskIndex.get(facts.taskId) : null;
-  const lines = [
-    "[OctoClaw task status]",
-    `task_id: ${facts.taskId || "(unknown)"}`,
-    `status: ${facts.currentTaskStatus || facts.materializationStatus || "unknown"}`,
-  ];
-  if (facts.taskId && facts.dispatchSeen) lines.push(`route: ${stringValue(subjectTurn.route) || "delegate"}`);
-  if (taskRecord) {
-    const workerPool = stringValue(taskRecord.worker_pool);
-    if (workerPool) lines.push(`worker_pool: ${workerPool}`);
-    const model = stringValue((taskRecord as JsonRecord).model || taskRecord.role);
-    if (model) lines.push(`model: ${model}`);
-    const createdAt = stringValue(taskRecord.spawned_at || taskRecord.started_at);
-    if (createdAt) lines.push(`created_at: ${createdAt}`);
-    const lastEventAt = stringValue(taskRecord.updated_at || taskRecord.completed_at);
-    if (lastEventAt) lines.push(`last_event_at: ${lastEventAt}`);
-  }
-  if (facts.currentTaskSummary) lines.push(`progress: ${facts.currentTaskSummary}`);
+  const workerPool = taskRecord ? stringValue(taskRecord.worker_pool) : "";
+  const modelProfile = taskRecord
+    ? stringValue((taskRecord as JsonRecord).model || taskRecord.role)
+    : "";
+  const createdAt = taskRecord ? stringValue(taskRecord.spawned_at || taskRecord.started_at) : "";
+  const lastEventAt = taskRecord ? stringValue(taskRecord.updated_at || taskRecord.completed_at) : "";
   const isTerminal = facts.currentTaskStatus === "completed" || facts.currentTaskStatus === "failed" || facts.currentTaskStatus === "timed_out";
-  if (isTerminal) {
-    lines.push(`terminal_summary: ${facts.currentTaskSummary || facts.materializationStatus || "unknown"}`);
-  }
-  if (facts.substrateState) lines.push(`substrate: ${facts.substrateState}${facts.substrateRevision !== null ? ` rev=${facts.substrateRevision}` : ""}`);
-  if (facts.deliveryEventKind) lines.push(`delivery: ${facts.deliveryEventKind}`);
-  if (facts.capabilityFailure && Object.keys(facts.capabilityFailure).length > 0) {
-    lines.push(`error: ${stringValue(facts.capabilityFailure.reason || facts.capabilityFailure.code || "unknown")}`);
-  }
-  if (facts.currentTaskStatus === "failed" || facts.currentTaskStatus === "timed_out") {
-    lines.push(`retryable: ${facts.capabilityFailure?.retryable === true ? "true" : "check with octoclaw_task_action retry"}`);
-  }
-  lines.push("Answer from these facts only. Do not guess from memory.");
-
+  const statusPacket = buildDelegateStatusPacket({
+    threadBindingKey: stringValue(subjectTurn.sessionKey),
+    delegateTaskId: facts.taskId || facts.runnerJobId || "(unknown)",
+    nativeFlowId: stringValue((taskRecord as JsonRecord | null)?.flow_id || (taskRecord as JsonRecord | null)?.flowId),
+    nativeTaskId: facts.taskId || facts.runnerJobId || "(unknown)",
+    status: normalizeDelegateStatus(facts.currentTaskStatus || facts.materializationStatus),
+    attemptStatus: facts.latestTaskEventKind || facts.materializationStatus || null,
+    role: stringValue((taskRecord as JsonRecord | null)?.role || subjectTurn.protectedLane || "delegate"),
+    modelProfile: modelProfile || "unknown",
+    createdAt: createdAt || undefined,
+    lastEventAt: lastEventAt || undefined,
+    progressSummary: facts.currentTaskSummary,
+    terminalSummary: isTerminal ? (facts.currentTaskSummary || facts.materializationStatus || "unknown") : "",
+    error: facts.capabilityFailure && Object.keys(facts.capabilityFailure).length > 0
+      ? stringValue(facts.capabilityFailure.reason || facts.capabilityFailure.code || "unknown")
+      : "",
+    retryable: facts.capabilityFailure?.retryable === true,
+    artifactRefs: [],
+  });
+  const substrate = facts.substrateState ? `${facts.substrateState}${facts.substrateRevision !== null ? ` rev=${facts.substrateRevision}` : ""}` : "";
+  const sanitized = sanitizedStatusPacket(statusPacket);
+  const context = renderDelegateStatusContext(sanitized, {
+    route: facts.taskId && facts.dispatchSeen ? stringValue(subjectTurn.route) || "delegate" : "",
+    workerPool,
+    substrate,
+    delivery: facts.deliveryEventKind,
+  });
   return {
     available: true,
     subjectPrompt: stringValue(subjectTurn.prompt),
@@ -866,7 +938,7 @@ export function buildConversationGrounding(options: {
     taskClass: stringValue(subjectTurn.taskClass),
     protectedLane: stringValue(subjectTurn.protectedLane),
     facts,
-    context: lines.join("\n"),
+    context,
   };
 }
 

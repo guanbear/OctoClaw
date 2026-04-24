@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
+  buildConversationGrounding,
   buildConversationControlHintsFromIntent,
   buildConversationIntentPacket,
 } from "./conversation-grounding.js";
@@ -24,6 +28,85 @@ describe("conversation grounding route projection", () => {
     expect(control.lane_hint).toBe("observe");
     expect(control.require_fresh_lookup).toBe(true);
     expect(control.require_state_grounding).toBe(true);
+  });
+
+  it("renders sanitized DelegateStatusPacket facts without raw thread history", () => {
+    const dir = path.join("/tmp", `octoclaw-grounding-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const replayLogPath = path.join(dir, "runtime-policy-replay.jsonl");
+    const taskStatePath = path.join(dir, "task-state.json");
+    const taskEventsPath = path.join(dir, "task-events.jsonl");
+
+    fs.writeFileSync(replayLogPath, [
+      JSON.stringify({
+        event: "policy_resolved",
+        sessionKey: "session-grounding",
+        sessionId: "session-grounding",
+        at: "2026-04-22T10:00:00.000Z",
+        prompt: "check release notes",
+        route: "delegate",
+        taskClass: "delegated_single",
+        protectedLane: "worker_research",
+      }),
+      JSON.stringify({
+        event: "dispatch_called",
+        sessionKey: "session-grounding",
+        sessionId: "session-grounding",
+        at: "2026-04-22T10:00:01.000Z",
+        executed: false,
+        taskId: "task-grounding-1",
+        materialization: {
+          task_id: "task-grounding-1",
+          status: "running",
+        },
+      }),
+      JSON.stringify({
+        event: "policy_resolved",
+        sessionKey: "session-grounding",
+        sessionId: "session-grounding",
+        at: "2026-04-22T10:05:00.000Z",
+        prompt: "task status",
+        route: "reply",
+      }),
+    ].join("\n"));
+    fs.writeFileSync(taskStatePath, JSON.stringify({
+      tasks: [{
+        id: "task-grounding-1",
+        status: "running",
+        summary: "User-visible: release lookup is still running. [Thread history - for context] secret transcript internal route rationale: hidden",
+        worker_pool: "octoclaw-research",
+        model: "worker_research",
+        role: "worker_research",
+        spawned_at: "2026-04-22T10:00:01.000Z",
+        updated_at: "2026-04-22T10:01:00.000Z",
+        openclaw_taskflow_substrate_state: "running",
+        openclaw_taskflow_substrate_revision: 3,
+      }],
+    }));
+    fs.writeFileSync(taskEventsPath, JSON.stringify({
+      task_id: "task-grounding-1",
+      kind: "delivery_sent",
+      message: "progress delivered",
+      at: "2026-04-22T10:01:30.000Z",
+    }));
+
+    const grounding = buildConversationGrounding({
+      prompt: "task status",
+      replayLogPath,
+      taskStatePath,
+      sessionKeys: ["session-grounding"],
+    });
+
+    expect(grounding.available).toBe(true);
+    expect(grounding.context).toContain("schema: octoclaw.delegate_status.v1");
+    expect(grounding.context).toContain("task_id: task-grounding-1");
+    expect(grounding.context).toContain("status: running");
+    expect(grounding.context).toContain("worker_pool: octoclaw-research");
+    expect(grounding.context).toContain("model: worker_research");
+    expect(grounding.context).toContain("progress: User-visible: release lookup is still running.");
+    expect(grounding.context).not.toContain("internal route rationale");
+    expect(grounding.context).not.toContain("secret transcript");
+    expect(grounding.context).not.toContain("[Thread history]");
   });
 
   it("turns delegated follow-up control hints into delegate observer policy", () => {

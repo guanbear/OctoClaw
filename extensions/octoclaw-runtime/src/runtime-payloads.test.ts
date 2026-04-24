@@ -124,7 +124,25 @@ describe("buildTsRuntimeDispatchPayload", () => {
       delegateTaskId: "delegate-task:session-77:1776769200000",
       attemptId: "delegate-task:session-77:1776769200000:attempt:1",
       attemptGeneration: 1,
+      delegation: {
+        handoff: {
+          schemaVersion: "octoclaw.delegate_handoff.v1",
+          delegateTaskId: "delegate-task:session-77:1776769200000",
+          attemptId: "delegate-task:session-77:1776769200000:attempt:1",
+          threadBindingKey: "session-77:delegate-task:session-77:1776769200000",
+          currentUserAsk: "Investigate delegate runtime binding",
+          contextBudget: {
+            maxInputTokens: 1800,
+            maxSummaryTokens: 500,
+            allowRawTranscript: false,
+          },
+        },
+      },
     });
+    expect(payload.materialization.delegation?.handoff.contextBudget.allowRawTranscript).toBe(false);
+    expect(payload.materialization.delegation?.handoff.contextBudget.maxInputTokens).toBeLessThanOrEqual(1800);
+    expect(JSON.stringify(payload.materialization.delegation?.handoff)).not.toContain("[Thread history]");
+    expect(JSON.stringify(payload.materialization.delegation?.handoff)).not.toContain("full transcript");
     expect(payload.delegateTaskId).toBe("delegate-task:session-77:1776769200000");
     expect(payload.attemptId).toBe("delegate-task:session-77:1776769200000:attempt:1");
     expect(payload.runtime_truth).toMatchObject({
