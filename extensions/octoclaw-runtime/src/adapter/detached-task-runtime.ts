@@ -1,4 +1,4 @@
-import type { TaskFlowBridge } from "./taskflow-bridge.js";
+import type { TaskFlowPort } from "../ports/taskflow-port.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -154,18 +154,12 @@ export interface DetachedTaskRegistryCore {
 export interface CreateDetachedTaskLifecycleRuntimeOptions {
   taskExecutor: DetachedTaskExecutorCore;
   taskRegistry: DetachedTaskRegistryCore;
-  bridgeFactory: () => Promise<TaskFlowBridge>;
+  taskFlowPortFactory: () => Promise<TaskFlowPort>;
   now?: () => number;
 }
 
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : {};
 }
 
 function isTerminalSubstrateState(value: unknown): boolean {
@@ -180,7 +174,7 @@ function isTerminalSubstrateState(value: unknown): boolean {
     || normalized === "lost";
 }
 
-function resolveBridgeError(error: unknown): string {
+function resolveTaskFlowError(error: unknown): string {
   return error instanceof Error ? error.message : String(error || "unknown detached runtime error");
 }
 
@@ -231,9 +225,9 @@ export function createDetachedTaskLifecycleRuntime(
         };
       }
 
-      let bridge: TaskFlowBridge;
+      let taskFlowPort: TaskFlowPort;
       try {
-        bridge = await options.bridgeFactory();
+        taskFlowPort = await options.taskFlowPortFactory();
       } catch {
         return {
           found: false,
@@ -242,8 +236,9 @@ export function createDetachedTaskLifecycleRuntime(
       }
 
       try {
-        const result = bridge.cancelFlow({ sessionKey, flowId });
-        const cancelled = result.cancelled === true || result.ok === true;
+        const bound = taskFlowPort.bindSession({ sessionKey });
+        const result = await bound.cancel({ flowId });
+        const cancelled = result.cancelled === true;
         if (!cancelled) {
           if (result.found === false) {
             return {
@@ -273,7 +268,7 @@ export function createDetachedTaskLifecycleRuntime(
         return {
           found: true,
           cancelled: false,
-          reason: resolveBridgeError(error),
+          reason: resolveTaskFlowError(error),
           task,
         };
       }
@@ -286,21 +281,22 @@ export function createDetachedTaskLifecycleRuntime(
         return { recovered: false };
       }
 
-      let bridge: TaskFlowBridge;
+      let taskFlowPort: TaskFlowPort;
       try {
-        bridge = await options.bridgeFactory();
+        taskFlowPort = await options.taskFlowPortFactory();
       } catch {
         return { recovered: false };
       }
 
       try {
-        const taskState = asRecord(bridge.readTask({ sessionKey, flowId, taskId }));
-        if (taskState.found === true && !isTerminalSubstrateState(taskState.status || asRecord(taskState.task).status)) {
+        const bound = taskFlowPort.bindSession({ sessionKey });
+        const taskState = await bound.getTaskSummary(flowId);
+        if (taskState?.taskId === taskId && !isTerminalSubstrateState(taskState.status || taskState.state)) {
           return { recovered: true };
         }
 
-        const flowState = asRecord(bridge.readFlow({ sessionKey, flowId }));
-        if (flowState.found === true && !isTerminalSubstrateState(flowState.status || asRecord(flowState.flow).status)) {
+        const flowState = await bound.get(flowId);
+        if (flowState && !isTerminalSubstrateState(flowState.status || flowState.state)) {
           return { recovered: true };
         }
       } catch {

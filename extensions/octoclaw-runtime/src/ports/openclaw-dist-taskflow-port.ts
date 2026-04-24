@@ -16,15 +16,7 @@ import type {
 
 type BridgeFactory = (openclawBin?: string) => Promise<TaskFlowBridge>;
 
-export interface BoundDistTaskFlowPort extends BoundTaskFlowPort {
-  createManagedAsync(input: CreateManagedFlowInput): Promise<ManagedFlowRecord>;
-  runTaskAsync(input: RunNativeTaskInput): Promise<NativeTaskRunResult>;
-  getAsync(flowId: string): Promise<NativeFlowRecord | null>;
-  getTaskSummaryAsync(flowId: string, taskId: string): Promise<NativeTaskSummary | null>;
-  setWaitingAsync(input: FlowMutationInput): Promise<FlowMutationResult>;
-  finishAsync(input: FlowMutationInput): Promise<FlowMutationResult>;
-  failAsync(input: FlowMutationInput): Promise<FlowMutationResult>;
-}
+export type BoundDistTaskFlowPort = BoundTaskFlowPort;
 
 export interface OpenClawDistTaskFlowPortOptions {
   openclawBin?: string;
@@ -141,31 +133,9 @@ export class OpenClawDistTaskFlowPort implements TaskFlowPort {
   bindSession(input: { sessionKey: string; requesterOrigin?: unknown }): BoundDistTaskFlowPort {
     const bridgePromise = this.bridgePromise;
     const sessionKey = input.sessionKey;
-    let lastFlow: NativeFlowRecord | null = null;
+      let lastFlow: NativeFlowRecord | null = null;
     return {
-      createManaged: () => {
-        throw new Error("OpenClawDistTaskFlowPort.createManaged is async-only through createManagedAsync");
-      },
-      runTask: () => {
-        throw new Error("OpenClawDistTaskFlowPort.runTask is async-only through runTaskAsync");
-      },
-      get: (flowId) => lastFlow?.flowId === flowId ? lastFlow : null,
-      resolve: (token) => lastFlow?.flowId === token ? lastFlow : null,
-      getTaskSummary: (flowId) => lastFlow?.flowId === flowId && Array.isArray(lastFlow.tasks) ? lastFlow.tasks[0] ?? null : null,
-      setWaiting: () => {
-        throw new Error("OpenClawDistTaskFlowPort.setWaiting is async-only through setWaitingAsync");
-      },
-      finish: () => {
-        throw new Error("OpenClawDistTaskFlowPort.finish is async-only through finishAsync");
-      },
-      fail: () => {
-        throw new Error("OpenClawDistTaskFlowPort.fail is async-only through failAsync");
-      },
-      cancel: async (cancelInput) => {
-        const bridge = await bridgePromise;
-        return toCancelResult(bridge.cancelFlow({ sessionKey, flowId: cancelInput.flowId }), cancelInput.flowId);
-      },
-      async createManagedAsync(createInput: CreateManagedFlowInput): Promise<ManagedFlowRecord> {
+      async createManaged(createInput: CreateManagedFlowInput): Promise<ManagedFlowRecord> {
         const bridge = await bridgePromise;
         const record = toManagedFlowRecord(bridge.createManagedFlow({
           sessionKey,
@@ -178,21 +148,27 @@ export class OpenClawDistTaskFlowPort implements TaskFlowPort {
         lastFlow = record;
         return record;
       },
-      async runTaskAsync(runInput: RunNativeTaskInput): Promise<NativeTaskRunResult> {
+      async runTask(runInput: RunNativeTaskInput): Promise<NativeTaskRunResult> {
         const bridge = await bridgePromise;
         return toTaskRunResult(bridge.runTask({ sessionKey, ...runInput }), runInput.flowId);
       },
-      async getAsync(flowId: string): Promise<NativeFlowRecord | null> {
+      async get(flowId: string): Promise<NativeFlowRecord | null> {
         const bridge = await bridgePromise;
         const flow = toFlowRecord(bridge.readFlow({ sessionKey, flowId }), flowId);
         lastFlow = flow;
         return flow;
       },
-      async getTaskSummaryAsync(flowId: string, taskId: string): Promise<NativeTaskSummary | null> {
-        const bridge = await bridgePromise;
-        return toTaskSummary(asRecord(bridge.readTask({ sessionKey, flowId, taskId })).task);
+      async resolve(token: string): Promise<NativeFlowRecord | null> {
+        if (lastFlow?.flowId === token) return lastFlow;
+        return this.get(token);
       },
-      async setWaitingAsync(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
+      async getTaskSummary(flowId: string): Promise<NativeTaskSummary | null> {
+        const bridge = await bridgePromise;
+        const flow = toFlowRecord(bridge.readFlow({ sessionKey, flowId }), flowId);
+        lastFlow = flow;
+        return flow?.tasks?.[0] ?? null;
+      },
+      async setWaiting(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
         const bridge = await bridgePromise;
         return toMutationResult(bridge.setWaiting({
           sessionKey,
@@ -203,7 +179,7 @@ export class OpenClawDistTaskFlowPort implements TaskFlowPort {
           waitJson: encodeJson(mutationInput.waitJson),
         }), mutationInput.flowId);
       },
-      async finishAsync(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
+      async finish(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
         const bridge = await bridgePromise;
         return toMutationResult(bridge.finishFlow({
           sessionKey,
@@ -212,7 +188,7 @@ export class OpenClawDistTaskFlowPort implements TaskFlowPort {
           stateJson: encodeJson(mutationInput.stateJson),
         }), mutationInput.flowId);
       },
-      async failAsync(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
+      async fail(mutationInput: FlowMutationInput): Promise<FlowMutationResult> {
         const bridge = await bridgePromise;
         return toMutationResult(bridge.failFlow({
           sessionKey,
@@ -222,6 +198,10 @@ export class OpenClawDistTaskFlowPort implements TaskFlowPort {
           blockedTaskId: mutationInput.blockedTaskId,
           blockedSummary: mutationInput.blockedSummary,
         }), mutationInput.flowId);
+      },
+      async cancel(cancelInput) {
+        const bridge = await bridgePromise;
+        return toCancelResult(bridge.cancelFlow({ sessionKey, flowId: cancelInput.flowId }), cancelInput.flowId);
       },
     };
   }

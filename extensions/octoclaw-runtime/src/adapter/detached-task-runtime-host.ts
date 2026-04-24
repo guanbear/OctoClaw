@@ -1,5 +1,6 @@
 import { createDetachedTaskLifecycleRuntime, type DetachedTaskExecutorCore, type DetachedTaskRegistryCore, type DetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
-import { createTaskFlowBridge, loadOpenClawDistModule } from "./taskflow-bridge.js";
+import { createOpenClawDistTaskFlowPort } from "../ports/openclaw-dist-taskflow-port.js";
+import { loadOpenClawDistModule } from "./taskflow-bridge.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -55,7 +56,7 @@ export function createHostDetachedTaskLifecycleRuntime(): Promise<DetachedTaskLi
     createDetachedTaskLifecycleRuntime({
       taskExecutor,
       taskRegistry,
-      bridgeFactory: () => createTaskFlowBridge(),
+      taskFlowPortFactory: async () => createOpenClawDistTaskFlowPort(),
     }),
   );
   return detachedRuntimePromise;

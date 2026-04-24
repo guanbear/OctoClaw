@@ -1,18 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDetachedTaskLifecycleRuntime, type DetachedRunningTaskCreateParams, type DetachedTaskCancelParams, type DetachedTaskCompleteParams, type DetachedTaskCreateParams, type DetachedTaskDeliveryStatusParams, type DetachedTaskFailParams, type DetachedTaskProgressParams, type DetachedTaskRecord, type DetachedTaskRegistryCore, type DetachedTaskStartParams } from "./detached-task-runtime.js";
-import type { TaskFlowBridge } from "./taskflow-bridge.js";
+import type { BoundTaskFlowPort, TaskFlowPort } from "../ports/taskflow-port.js";
 
-function createBridgeStub(overrides: Partial<TaskFlowBridge> = {}): TaskFlowBridge {
-  return {
-    createManagedFlow: () => ({ ok: true }),
-    runTask: () => ({ ok: true }),
-    readFlow: () => ({ ok: true, found: false, status: "not_found" }),
-    readTask: () => ({ ok: true, found: false, status: "not_found" }),
-    setWaiting: () => ({ ok: true }),
-    finishFlow: () => ({ ok: true }),
-    failFlow: () => ({ ok: true }),
-    cancelFlow: () => ({ ok: false, found: false, cancelled: false, status: "not_found", reason: "" }),
+function createTaskFlowPortStub(overrides: Partial<BoundTaskFlowPort> = {}): TaskFlowPort {
+  const bound: BoundTaskFlowPort = {
+    createManaged: async () => ({ flowId: "flow-stub" }),
+    runTask: async () => ({ created: true, flowId: "flow-stub", taskId: "task-stub" }),
+    get: async () => null,
+    resolve: async () => null,
+    getTaskSummary: async () => null,
+    setWaiting: async (input) => ({ applied: true, flowId: input.flowId, status: "ok" }),
+    finish: async (input) => ({ applied: true, flowId: input.flowId, status: "ok" }),
+    fail: async (input) => ({ applied: true, flowId: input.flowId, status: "ok" }),
+    cancel: async (input) => ({ flowId: input.flowId, found: false, cancelled: false, reason: "" }),
     ...overrides,
+  };
+  return {
+    bindSession: () => bound,
   };
 }
 
@@ -59,7 +63,7 @@ describe("detached task lifecycle runtime", () => {
     const runtime = createDetachedTaskLifecycleRuntime({
       taskExecutor,
       taskRegistry,
-      bridgeFactory: async () => createBridgeStub(),
+      taskFlowPortFactory: async () => createTaskFlowPortStub(),
     });
 
     expect(runtime.createQueuedTaskRun({ runtime: "subagent", task: "queue" })).toBe(queuedTask);
@@ -108,12 +112,11 @@ describe("detached task lifecycle runtime", () => {
         markTaskTerminalById,
         maybeDeliverTaskTerminalUpdate: maybeDeliver,
       },
-      bridgeFactory: async () => createBridgeStub({
-        cancelFlow: () => ({
-          ok: true,
+      taskFlowPortFactory: async () => createTaskFlowPortStub({
+        cancel: async (input) => ({
+          flowId: input.flowId,
           found: true,
           cancelled: true,
-          status: "cancelled",
           reason: "",
         }),
       }),
@@ -162,7 +165,7 @@ describe("detached task lifecycle runtime", () => {
         }),
         markTaskTerminalById: () => null,
       },
-      bridgeFactory: async () => createBridgeStub(),
+      taskFlowPortFactory: async () => createTaskFlowPortStub(),
     });
 
     await expect(runtime.cancelDetachedTaskRunById({ cfg: {}, taskId: "task-plain" })).resolves.toEqual({
@@ -186,13 +189,11 @@ describe("detached task lifecycle runtime", () => {
         getTaskById: () => null,
         markTaskTerminalById: () => null,
       },
-      bridgeFactory: async () => createBridgeStub({
-        readTask: () => ({
-          ok: true,
-          found: true,
+      taskFlowPortFactory: async () => createTaskFlowPortStub({
+        getTaskSummary: async () => ({
+          taskId: "task-live",
           status: "running",
-          flow: { flowId: "flow-live", status: "running", revision: 2 },
-          task: { taskId: "task-live", status: "running", revision: 3 },
+          revision: 3,
         }),
       }),
     });

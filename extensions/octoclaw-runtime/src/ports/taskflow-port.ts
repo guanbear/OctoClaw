@@ -5,14 +5,14 @@ export interface TaskFlowPort {
 }
 
 export interface BoundTaskFlowPort {
-  createManaged(input: CreateManagedFlowInput): ManagedFlowRecord;
-  runTask(input: RunNativeTaskInput): NativeTaskRunResult;
-  get(flowId: string): NativeFlowRecord | null;
-  resolve(token: string): NativeFlowRecord | null;
-  getTaskSummary(flowId: string): NativeTaskSummary | null;
-  setWaiting(input: FlowMutationInput): FlowMutationResult;
-  finish(input: FlowMutationInput): FlowMutationResult;
-  fail(input: FlowMutationInput): FlowMutationResult;
+  createManaged(input: CreateManagedFlowInput): Promise<ManagedFlowRecord>;
+  runTask(input: RunNativeTaskInput): Promise<NativeTaskRunResult>;
+  get(flowId: string): Promise<NativeFlowRecord | null>;
+  resolve(token: string): Promise<NativeFlowRecord | null>;
+  getTaskSummary(flowId: string): Promise<NativeTaskSummary | null>;
+  setWaiting(input: FlowMutationInput): Promise<FlowMutationResult>;
+  finish(input: FlowMutationInput): Promise<FlowMutationResult>;
+  fail(input: FlowMutationInput): Promise<FlowMutationResult>;
   cancel(input: CancelFlowInput): Promise<CancelFlowResult>;
 }
 

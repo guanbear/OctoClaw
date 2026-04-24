@@ -4,7 +4,7 @@ import { OpenClawDistTaskFlowPort, type BoundDistTaskFlowPort } from "./openclaw
 import { createOpenClawRuntimeTaskFlowPort, type OpenClawRuntimeTaskFlowApiContainer } from "./openclaw-runtime-taskflow-port.js";
 
 describe("TaskFlowPort adapters", () => {
-  it("fake api.runtime.taskFlow injection does not trigger dist scan", () => {
+  it("fake api.runtime.taskFlow injection does not trigger dist scan", async () => {
     const calls: string[] = [];
     const api: OpenClawRuntimeTaskFlowApiContainer = {
       runtime: {
@@ -26,7 +26,7 @@ describe("TaskFlowPort adapters", () => {
     };
 
     const bound = createOpenClawRuntimeTaskFlowPort(api).bindSession({ sessionKey: "session-runtime" });
-    const managed = bound.createManaged({ controllerId: "controller", goal: "goal" });
+    const managed = await bound.createManaged({ controllerId: "controller", goal: "goal" });
 
     expect(managed.flowId).toBe("flow-runtime");
     expect(calls).toEqual(["bind:session-runtime"]);
@@ -37,9 +37,9 @@ describe("TaskFlowPort adapters", () => {
     const bound: BoundDistTaskFlowPort = new OpenClawDistTaskFlowPort({ bridgeFactory: async () => bridge })
       .bindSession({ sessionKey: "session-dist" });
 
-    const flow = await bound.createManagedAsync({ controllerId: "controller", goal: "goal" });
-    const run = await bound.runTaskAsync({ flowId: flow.flowId, task: "do work", status: "queued" });
-    const details = await bound.getTaskSummaryAsync(flow.flowId, run.taskId);
+    const flow = await bound.createManaged({ controllerId: "controller", goal: "goal" });
+    const run = await bound.runTask({ flowId: flow.flowId, task: "do work", status: "queued" });
+    const details = await bound.getTaskSummary(flow.flowId);
 
     expect(run.taskId).toBe("task-1");
     expect(details?.taskId).toBe("task-1");
@@ -51,17 +51,17 @@ describe("TaskFlowPort adapters", () => {
     const bound: BoundDistTaskFlowPort = new OpenClawDistTaskFlowPort({ bridgeFactory: async () => bridge })
       .bindSession({ sessionKey: "session-dist" });
 
-    const flow = await bound.createManagedAsync({ controllerId: "controller", goal: "goal", status: "running" });
-    const run = await bound.runTaskAsync({ flowId: flow.flowId, task: "do work", status: "running" });
-    const status = await bound.getAsync(flow.flowId);
-    const details = await bound.getTaskSummaryAsync(flow.flowId, run.taskId);
+    const flow = await bound.createManaged({ controllerId: "controller", goal: "goal", status: "running" });
+    await bound.runTask({ flowId: flow.flowId, task: "do work", status: "running" });
+    const status = await bound.get(flow.flowId);
+    const details = await bound.getTaskSummary(flow.flowId);
 
     expect(status?.status).toBe("running");
     expect(details?.state).toBe("running");
     expect(details?.revision).toBe(status?.revision);
   });
 
-  it("native status maps to OctoClaw projection", () => {
+  it("native status maps to OctoClaw projection", async () => {
     const api: OpenClawRuntimeTaskFlowApiContainer = {
       runtime: {
         taskFlow: {
@@ -79,8 +79,8 @@ describe("TaskFlowPort adapters", () => {
     };
 
     const bound = createOpenClawRuntimeTaskFlowPort(api).bindSession({ sessionKey: "session-runtime" });
-    const flow = bound.get("flow-wait");
-    const waiting = bound.setWaiting({ flowId: "flow-wait", expectedRevision: 8 });
+    const flow = await bound.get("flow-wait");
+    const waiting = await bound.setWaiting({ flowId: "flow-wait", expectedRevision: 8 });
     const projection = flow?.state ?? flow?.status ?? null;
 
     expect(projection).toBe("waiting");

@@ -140,18 +140,18 @@ export class OpenClawRuntimeTaskFlowPort implements TaskFlowPort {
   bindSession(input: { sessionKey: string; requesterOrigin?: unknown }): BoundTaskFlowPort {
     const bound = this.api.runtime.taskFlow.bindSession(input);
     return {
-      createManaged: (createInput) => toManagedFlowRecord(bound.createManaged(createInput)),
-      runTask: (runInput) => toTaskRunResult(bound.runTask(runInput), runInput.flowId),
-      get: (flowId) => {
+      createManaged: async (createInput) => toManagedFlowRecord(await Promise.resolve(bound.createManaged(createInput))),
+      runTask: async (runInput) => toTaskRunResult(await Promise.resolve(bound.runTask(runInput)), runInput.flowId),
+      get: async (flowId) => {
         const flow = typeof bound.getFlow === "function" ? bound.getFlow({ flowId }) : bound.get?.(flowId);
-        return toFlowRecord(flow, flowId);
+        return toFlowRecord(await Promise.resolve(flow), flowId);
       },
-      resolve: (token) => typeof bound.resolve === "function" ? toFlowRecord(bound.resolve(token)) : null,
-      getTaskSummary: (flowId) => typeof bound.getTaskSummary === "function" ? toTaskSummary(bound.getTaskSummary(flowId)) : null,
-      setWaiting: (mutationInput) => toMutationResult(bound.setWaiting(mutationInput), mutationInput.flowId),
-      finish: (mutationInput) => toMutationResult(bound.finish(mutationInput), mutationInput.flowId),
-      fail: (mutationInput) => toMutationResult(bound.fail(mutationInput), mutationInput.flowId),
-      cancel: async (cancelInput) => toCancelResult(await bound.cancel(cancelInput), cancelInput.flowId),
+      resolve: async (token) => typeof bound.resolve === "function" ? toFlowRecord(await Promise.resolve(bound.resolve(token))) : null,
+      getTaskSummary: async (flowId) => typeof bound.getTaskSummary === "function" ? toTaskSummary(await Promise.resolve(bound.getTaskSummary(flowId))) : null,
+      setWaiting: async (mutationInput) => toMutationResult(await Promise.resolve(bound.setWaiting(mutationInput)), mutationInput.flowId),
+      finish: async (mutationInput) => toMutationResult(await Promise.resolve(bound.finish(mutationInput)), mutationInput.flowId),
+      fail: async (mutationInput) => toMutationResult(await Promise.resolve(bound.fail(mutationInput)), mutationInput.flowId),
+      cancel: async (cancelInput) => toCancelResult(await Promise.resolve(bound.cancel(cancelInput)), cancelInput.flowId),
     };
   }
 }
