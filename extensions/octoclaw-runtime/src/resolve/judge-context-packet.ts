@@ -15,6 +15,7 @@ import { readJsonl } from "../conversation-grounding.js";
 import { extractPromptText } from "./policy-resolver.js";
 import { detectSessionBoundary } from "./session.js";
 import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
+import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -113,6 +114,17 @@ function readJsonFile(pathname: string): JsonRecord {
 
 function normalizeSessionKeys(sessionKeys: string[] | undefined): string[] {
   return Array.from(new Set((sessionKeys || []).map(stringValue).filter(Boolean)));
+}
+
+function currentTurnId(metadata: Record<string, unknown>): string | undefined {
+  const normalized = stringValue(
+    metadata.turnId
+      ?? metadata.turn_id
+      ?? metadata.messageTurnId
+      ?? metadata.message_turn_id
+      ?? metadata.message_id,
+  );
+  return normalized || undefined;
 }
 
 function buildReplayTurns(replayLogPath: string, sessionKeys: string[]): ReplayTurn[] {
@@ -380,10 +392,14 @@ export function buildJudgeContextPacket(options: JudgeContextPacketOptions): Jud
       }
     : undefined;
 
+  // Build execution coverage layer from recent receipts
+  const execution = buildExecutionCoverageLayer(sessionKeys, currentTurnId(metadata));
+
   const packet: JudgeContextPacket = {
     core,
     continuation,
     binding,
+    execution,
     ...(evidence ? { evidence } : {}),
   };
 

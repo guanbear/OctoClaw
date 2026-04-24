@@ -81,6 +81,36 @@ export interface JudgeBindingControlLayer {
   lifecycle_flags?: string[];
 }
 
+export interface JudgeMemoryLayer {
+  coverage?: "none" | "partial" | "strong";
+  freshness_risk?: "low" | "high";
+  source?: Array<"bootstrap" | "memory_search" | "active_memory">;
+  supports_direct_reply?: boolean;
+  supports_fresh_lookup?: boolean;
+  evidence_summary?: string;
+  conflict?: boolean;
+}
+
+export interface JudgeExecutionLayer {
+  coverage?: "none" | "current_turn" | "recent_turn" | "thread";
+  freshness?: "current" | "recent" | "stale";
+  supports_provenance_reply?: boolean;
+  supports_status_reply?: boolean;
+  requires_control_plane_refresh?: boolean;
+  last_route?: "reply" | "delegate" | "unknown";
+  last_reply_mode?: "answer" | "clarify" | null;
+  last_delegate_role?: "observer" | "default" | "code" | "research" | "review" | null;
+  tools_used?: string[];
+  dispatch_executed?: boolean;
+  spawn_executed?: boolean;
+  native_task_id?: string;
+  native_flow_id?: string;
+  result_materialized?: boolean;
+  delivery_status?: "none" | "pending" | "delivered" | "failed";
+  evidence_summary?: string;
+  conflict?: boolean;
+}
+
 /** Layer D: Minimal evidence — only when summary+state are insufficient. */
 export interface JudgeMinimalEvidenceLayer {
   /** Last 1-3 most relevant raw turns (not full transcript) */
@@ -102,6 +132,8 @@ export interface JudgeContextPacket {
   core: JudgeCoreTurnLayer;
   continuation?: JudgeContinuationStateLayer;
   binding?: JudgeBindingControlLayer;
+  memory?: JudgeMemoryLayer;
+  execution?: JudgeExecutionLayer;
   evidence?: JudgeMinimalEvidenceLayer;
 }
 

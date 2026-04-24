@@ -76,9 +76,9 @@ export const ANTI_REPLY_BIAS_RULES = [
     rule: "Any real probe, environment read, workspace inspection, or command execution should default toward delegate.",
   },
   {
-    id: "execution_truth_and_provenance_delegate",
+    id: "execution_truth_and_provenance_coverage_check",
     rule:
-      "Execution truth follow-up such as task status, who handled it, whether it was delegated, or what actually ran should default toward delegate.",
+      "Provenance/status follow-up (who did it, was it delegated, what ran, task status) defaults to reply.answer when execution.supports_provenance_reply=true. Only delegate for fresh external lookup, new probing, new command execution, or >1min work. If execution coverage is missing, reply with 'no verifiable record' and at most allow control-plane tools (status/task-action), never spawn.",
   },
   {
     id: "scope_unknown_clarify",
@@ -106,6 +106,18 @@ export const VALIDATOR_DEFAULT_RULES = [
   {
     if: "tool_need_hint == none && duration_hint == short",
     then: "reply remains eligible",
+  },
+  {
+    if: "execution.supports_provenance_reply == true",
+    then: "route=reply, reply_mode=answer, do NOT dispatch or spawn",
+  },
+  {
+    if: "execution.supports_status_reply == true",
+    then: "route=reply, reply_mode=answer",
+  },
+  {
+    if: "execution.requires_control_plane_refresh == true",
+    then: "route=reply, allow status/task-action control tools, do NOT spawn",
   },
 ] as const;
 

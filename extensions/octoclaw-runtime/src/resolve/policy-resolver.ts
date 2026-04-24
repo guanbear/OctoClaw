@@ -73,6 +73,7 @@ import {
   routeHintRequired,
 } from "../replay/replay-logger.js";
 import { resolveCurrentRouteSeal, validateRouteSeal } from "./route-seal.js";
+import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 
 type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
@@ -989,6 +990,8 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     : tsPolicyDecision.modelProfile;
   const workerPool = workerPoolForDecision(authoritativeExecutionProfile, authoritativeRole);
   const observeMode = isObserveMode(authoritativeRole, authoritativeExecutionProfile);
+  const executionLayer = asRecord(metadata.execution_layer ?? metadata._execution_coverage ?? priorDecision.execution_layer ?? priorDecision._execution_coverage);
+  const requiresControlPlaneRefresh = asBoolean(executionLayer.requires_control_plane_refresh);
   const routeHintPolicyRequired = (!judgeSucceeded && liveRouteNeedsHint(liveRoute, metadata))
     || (judgeSucceeded && liveRoute !== "reply");
 
@@ -1022,7 +1025,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
         ? "delegated_single"
         : asString(priorRouteDecision.task_class, "main_direct"),
     protected_lane: observeMode ? "control_observer" : "",
-    dispatch_required: liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
+    dispatch_required: !requiresControlPlaneRefresh && liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
     reason: tsPolicyDecision.admission.reason,
     complexity_band: coerceComplexityBand(priorDecision._judge_complexity_band),
     expected_duration_band: coerceExpectedDurationBand(priorDecision._judge_expected_duration_band),
@@ -1094,12 +1097,15 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   };
   nextDecision.tool_policy = {
     ...asRecord(nextDecision.tool_policy),
-    must_delegate_via: liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
+    must_delegate_via: !requiresControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
     allow_direct_tools: liveRoute === "reply",
-    delegate_first: liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow",
-    allowed_control_tools: liveRoute === "reply"
-      ? []
+    delegate_first: !requiresControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow",
+    allowed_control_tools: requiresControlPlaneRefresh
+      ? ["octoclaw_status", "octoclaw_task_action"]
+      : liveRoute === "reply"
+        ? []
       : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+    block_tool_patterns: requiresControlPlaneRefresh ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
   };
   nextDecision.router_decision_v2 = {
     ...asRecord(nextDecision.router_decision_v2),
@@ -1183,6 +1189,36 @@ function attachRuntimeTruthMetadata(decision: UnknownRecord, metadata: UnknownRe
       : nextDecision.request;
   }
   return nextDecision;
+}
+
+function buildPolicyResolvedExecutionTelemetry(decision: UnknownRecord): UnknownRecord {
+  const executionLayer = asRecord(decision.execution_layer ?? decision._execution_coverage);
+  const routeDecision = asRecord(decision.route_decision);
+  const route = normalizeLiveRoute(routeDecision.route ?? decision.route, "reply");
+  const executionSupportsProvenanceReply = asBoolean(executionLayer.supports_provenance_reply);
+  const executionSupportsStatusReply = asBoolean(executionLayer.supports_status_reply);
+  const executionRequiresControlPlaneRefresh = asBoolean(executionLayer.requires_control_plane_refresh);
+
+  return {
+    executionCoverage: executionLayer,
+    executionFreshness: asString(executionLayer.freshness),
+    executionSupportsProvenanceReply,
+    executionSupportsStatusReply,
+    executionRequiresControlPlaneRefresh,
+    lastRoute: asString(executionLayer.last_route),
+    lastToolsUsed: asStringArray(executionLayer.tools_used),
+    dispatchExecuted: asBoolean(executionLayer.dispatch_executed),
+    spawnExecuted: asBoolean(executionLayer.spawn_executed),
+    nativeTaskId: asString(executionLayer.native_task_id) || null,
+    nativeFlowId: asString(executionLayer.native_flow_id) || null,
+    resultMaterialized: asBoolean(executionLayer.result_materialized),
+    deliveryStatus: asString(executionLayer.delivery_status) || null,
+    executionCoverageConflict: route === "delegate" && (
+      executionSupportsProvenanceReply
+      || executionSupportsStatusReply
+      || executionRequiresControlPlaneRefresh
+    ),
+  };
 }
 
 export async function resolveStatelessPolicyDecision(task: string, options: UnknownRecord = {}): Promise<UnknownRecord> {
@@ -1312,6 +1348,18 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     console.log(`[octoclaw-judge] resolveStateless: judgeConfig=${judgeConfig ? "present" : "null"} enabled=${judgeConfig?.enabled} delegation=${asBoolean(asRecord(options.metadata)._delegationEnabled, true)}`);
   }
   if (judgeConfig) {
+    // Build execution coverage layer (design §4b)
+    const executionLayer = buildExecutionCoverageLayer(asString(metadata.session_key));
+    metadata._execution_coverage = executionLayer;
+    metadata.execution_layer = executionLayer;
+
+    if (!Array.isArray(metadata.judge_session_keys) && !Array.isArray(metadata.session_keys)) {
+      const sessionKey = asString(metadata.session_key);
+      if (sessionKey) {
+        metadata.judge_session_keys = [sessionKey];
+      }
+    }
+
     const contextPacket = buildLiveJudgeContextPacket({ prompt, metadata });
     if (contextPacket) {
       metadata.judge_context_packet = contextPacket;
@@ -1441,7 +1489,28 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         const intentClass = asString(intentPacket.intent_class || intentPacket.intentClass || conversationControl.intent_class);
         const conversationRouteHint = asString(conversationControl.route_hint);
 
-        if (toolNeedHint === "required" && judgeRouteOverride === "reply") {
+        const executionCoverage = asRecord(metadata.execution_layer ?? metadata._execution_coverage);
+        const executionCoverageOverride = asBoolean(executionCoverage.supports_provenance_reply)
+          || asBoolean(executionCoverage.supports_status_reply);
+        const requiresControlPlaneRefresh = asBoolean(executionCoverage.requires_control_plane_refresh);
+
+        if (executionCoverageOverride) {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push("validator:execution_coverage_override→reply");
+          if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+            console.log(`[octoclaw-judge] execution coverage override: supports_provenance_reply=${asBoolean(executionCoverage.supports_provenance_reply)} supports_status_reply=${asBoolean(executionCoverage.supports_status_reply)}, forcing reply`);
+          }
+        } else if (requiresControlPlaneRefresh) {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push("validator:execution_requires_control_plane_refresh→reply");
+          if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+            console.log(`[octoclaw-judge] execution coverage override: requires_control_plane_refresh=true, forcing reply/control-plane refresh`);
+          }
+        }
+
+        if (!executionCoverageOverride && !requiresControlPlaneRefresh && toolNeedHint === "required" && judgeRouteOverride === "reply") {
           if (judgeScope === "unknown") {
             // tool_need_hint==required && scope==unknown → clarify before delegate
             judgeRouteOverride = "delegate";
@@ -1552,6 +1621,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _route_hint_required: routeHintRequired,
     _judge_ack_text: judgeAckText,
     _judge_shadow_log: judgeShadowLog,
+    _execution_coverage: asRecord(metadata.execution_layer ?? metadata._execution_coverage),
+    _execution_supports_provenance_reply: asBoolean(asRecord(metadata.execution_layer ?? metadata._execution_coverage)?.supports_provenance_reply),
+    _execution_supports_status_reply: asBoolean(asRecord(metadata.execution_layer ?? metadata._execution_coverage)?.supports_status_reply),
+    _execution_coverage_level: asString(asRecord(metadata.execution_layer ?? metadata._execution_coverage)?.coverage),
     _judge_failure_class: asString(metadata._judge_failure_class) || undefined,
   };
 
@@ -1696,6 +1769,7 @@ export async function resolvePolicyDecisionForContext(
       "policy_resolved",
       buildPolicyResolvedReplayPayload({
         decision,
+        ...buildPolicyResolvedExecutionTelemetry(decision),
         stateKey,
         ctx,
         boundary: { canonicalSessionKey: stateKey, status: asString(metadata.session_boundary_status), reason: asString(metadata.session_boundary_reason) },

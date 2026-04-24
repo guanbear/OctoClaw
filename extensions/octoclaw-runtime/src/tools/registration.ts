@@ -146,6 +146,10 @@ function asString(value: unknown, fallback = ""): string {
   return text || fallback;
 }
 
+function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function asNumber(value: unknown): number | undefined {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
@@ -1268,6 +1272,47 @@ export function getToolRegistrations(): ToolRegistration[] {
       execute: async (params, _rawCtx) => {
         const ctx = _rawCtx ?? {};
         const { key: existingStateKey, state: existingState } = resolveToolPolicyContext(ctx, asString(params.task));
+        // Guard: provenance/status-only follow-up must not spawn (design §4b)
+        const existingDecisionForCoverage = asRecord(existingState?.decision);
+        const decisionForCoverage = asRecord(existingDecisionForCoverage);
+        const routeDecisionForCoverage = asRecord(decisionForCoverage.route_decision);
+        const executionCoverage = asRecord(
+          decisionForCoverage._execution_coverage ?? routeDecisionForCoverage._execution_coverage,
+        );
+        if (asBoolean(executionCoverage.supports_provenance_reply)) {
+          return toolResponse(JSON.stringify({
+            ok: false,
+            error: "Spawn blocked: provenance answerable from execution coverage (supports_provenance_reply=true)",
+            provenance_blocked: true,
+          }));
+        }
+        if (asBoolean(executionCoverage.supports_status_reply)) {
+          return toolResponse(JSON.stringify({
+            ok: false,
+            error: "Spawn blocked: status answerable from execution coverage (supports_status_reply=true)",
+            status_blocked: true,
+          }));
+        }
+        if (asBoolean(executionCoverage.requires_control_plane_refresh)) {
+          return toolResponse(JSON.stringify({
+            ok: false,
+            error: "Spawn blocked: control plane refresh needed (requires_control_plane_refresh=true), use octoclaw_status instead",
+            control_plane_refresh_blocked: true,
+          }));
+        }
+        const taskTextForCoverageGuard = asString(params.task).toLowerCase();
+        const hasSupportedExecutionReply = Object.entries(executionCoverage)
+          .some(([key, value]) => key.startsWith("supports_") && asBoolean(value));
+        const coverageLevel = asString(executionCoverage.coverage_level).toLowerCase();
+        const executionTruthMissing = Object.keys(executionCoverage).length === 0 || !coverageLevel || coverageLevel === "none";
+        const provenanceStatusQueryPattern = /\b(who|status|delegated|handled|ran)\b|\bdid you\b|\bsub-?agent\b|\blook up\b/;
+        if (!hasSupportedExecutionReply && executionTruthMissing && provenanceStatusQueryPattern.test(taskTextForCoverageGuard)) {
+          return toolResponse(JSON.stringify({
+            ok: false,
+            error: "Spawn blocked: provenance/status query with no execution truth — answer 'no verifiable record' directly",
+            missing_execution_truth_blocked: true,
+          }));
+        }
         const parentDecision = asRecord(existingState?.decision);
         const parentRoute = asString(asRecord(parentDecision.route_decision).route);
         const parentSessionKey = asString(asRecord(parentDecision.request).session_key);
