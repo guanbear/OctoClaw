@@ -15,9 +15,18 @@ import { getAdapterForSession } from "../im/index.js";
 import {
   AckStage,
   ackStageText,
-  selectAckTemplate,
+  selectAckTemplate as selectLegacyAckTemplate,
   type TemplateSelectionInputs,
 } from "./ack-templates.js";
+import {
+  decideAckAction,
+  type AckDecision,
+  type AckDecisionPacket,
+} from "./ack-decision.js";
+import {
+  selectAckTemplate,
+  type AckTemplateStage,
+} from "./ack-template-registry.js";
 import {
   buildAckKey,
   checkAndSet,
@@ -28,7 +37,6 @@ import {
   getBurstState,
   recordAckSent,
   recordMessage,
-  shouldSuppressAck,
 } from "./ack-burst.js";
 import {
   AckRoutePhase,
@@ -46,7 +54,6 @@ import {
   parseSessionRoute as canonicalParseSessionRoute,
   resolveAckDeliverySessionKey as canonicalResolveAckDeliverySessionKey,
 } from "../resolve/session.js";
-import type { AckGateState } from "./ack-burst.js";
 
 const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
 
@@ -85,6 +92,10 @@ export interface AckTrackingState extends UnknownRecord {
   ack_owner?: unknown;
   ackGuardKey?: unknown;
   latencyAckSent?: unknown;
+  reactionAckSent?: boolean;
+  reactionAckSupported?: boolean;
+  reactionAckEnabled?: boolean;
+  channelTone?: "chat" | "work" | "cli" | "unknown";
 }
 
 export interface AckTarget {
@@ -139,6 +150,7 @@ interface AckAttemptParams {
   messageTurnId?: string;
   stageHint?: string;
   replyToMessageId?: string;
+  decision?: AckDecision;
 }
 
 const ackStateByStateKey = new Map<string, AckTrackingState>();
@@ -301,11 +313,101 @@ function templateMessageForStage(
   inputs: TemplateSelectionInputs,
   vars: Record<string, string> = {},
 ): string {
-  const selected = selectAckTemplate(stage, inputs);
+  const selected = selectLegacyAckTemplate(stage, inputs);
   if (selected?.text) {
     return applyTemplateVars(selected.text, vars);
   }
   return ackStageText(stage, vars);
+}
+
+function normalizeDecisionRoute(routePhase: AckRoutePhase): AckDecisionPacket["route"] {
+  if (routePhase === "reply" || routePhase === "pre_route") {
+    return routePhase;
+  }
+  if (routePhase === "delegate") {
+    return "delegate";
+  }
+  return "unknown";
+}
+
+function normalizeChannelTone(value: unknown): AckDecisionPacket["channelTone"] {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === "chat" || normalized === "work" || normalized === "cli") {
+    return normalized;
+  }
+  return "unknown";
+}
+
+function buildTemplateRegistryMessage(
+  stage: AckTemplateStage,
+  packet: AckDecisionPacket,
+  stateKey: string,
+  state: UnknownRecord,
+  sessionKey = "",
+): string {
+  const turnId = asString(state.turnId || state.turn_id || state.messageTurnId || state.message_turn_id)
+    || `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`;
+  const recentKeys = Array.isArray(state.recentAckTemplateKeys)
+    ? state.recentAckTemplateKeys.map((entry) => asString(entry)).filter(Boolean)
+    : [];
+  const template = selectAckTemplate({
+    stage,
+    channel: packet.channelTone ?? "unknown",
+    tone: "neutral",
+    threadBindingKey: asString(state.threadBindingKey || state.thread_binding_key)
+      || threadKeyFromSessionKey(sessionKey, stateKey),
+    turnId,
+    recentKeys,
+  });
+  updateTrackingState(stateKey, {
+    lastAckTemplateKey: template.key,
+    recentAckTemplateKeys: [template.key, ...recentKeys].slice(0, 5),
+  });
+  return template.text;
+}
+
+function ackTemplateStageFromDecision(decision: AckDecision, fallback: AckTemplateStage): AckTemplateStage {
+  const stage = decision.ackStage;
+  if (stage === "ack0" || stage === "tier1" || stage === "tier2" || stage === "tier3") {
+    return stage;
+  }
+  return fallback;
+}
+
+export function buildDecisionPacket(
+  stateKey: string,
+  state: UnknownRecord = {},
+  routePhase: AckRoutePhase = "unknown",
+): AckDecisionPacket {
+  const normalizedStateKey = asString(stateKey);
+  const tracking = ackState(normalizedStateKey);
+  const merged = { ...state, ...tracking };
+  const timerState = ackTimerStateForKey(normalizedStateKey);
+  const inboundAtMs = asNumber(merged.inboundAtMs || merged.inbound_at_ms || merged._ackTurnTs) || timerState?.inboundTs || Date.now();
+  const nowMs = asNumber(merged.nowMs || merged.now_ms) || Date.now();
+
+  return {
+    route: normalizeDecisionRoute(routePhase),
+    nowMs,
+    inboundAtMs,
+    firstTokenSeen: asBoolean(merged.firstTokenSeen) || asBoolean(merged.mainModelFirstTokenSeen) || asBoolean(merged.mainModelStartedOutput),
+    formalReplyVisible: asBoolean(merged.formalReplyVisible) || asBoolean(merged.formal_reply_visible),
+    deliveryPending: asBoolean(merged.deliveryPending) || asBoolean(merged.delivery_pending),
+    delivered: asBoolean(merged.delivered),
+    userInputActive: asBoolean(merged.userInputActive) || asBoolean(merged.user_input_active),
+    mainModelActive: asBoolean(merged.mainModelActive) || asBoolean(merged.main_model_active) || asBoolean(merged.final_response_streaming),
+    toolActive: asBoolean(merged.toolActive) || asBoolean(merged.tool_active),
+    delegatedRunning: asBoolean(merged.delegatedRunning) || asBoolean(merged.delegated_running),
+    blocked: asBoolean(merged.blocked) || asString(merged.native_state) === "blocked",
+    reactionAckSupported: asBoolean(merged.reactionAckSupported),
+    reactionAckEnabled: asBoolean(merged.reactionAckEnabled),
+    reactionAckSent: asBoolean(merged.reactionAckSent),
+    textAck0Sent: asBoolean(merged.textAck0Sent) || asBoolean(merged.latencyAckSent),
+    tier1Sent: asBoolean(merged.tier1Sent) || Boolean(timerState?.tier1Fired),
+    tier2Sent: asBoolean(merged.tier2Sent) || Boolean(timerState?.tier2Fired),
+    ackWriterQueued: asBoolean(merged.ackWriterQueued) || asBoolean(merged.ack_writer_queued),
+    channelTone: normalizeChannelTone(merged.channelTone || merged.channel_tone),
+  };
 }
 
 function buildTemplateInputs(
@@ -327,39 +429,6 @@ function buildTemplateInputs(
     anchorExists: Boolean(asString(state.anchorId || state.anchor_id || state.pendingDeliveryId)),
     userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
     stageHint: stageHint || asString(state.stageHint || state.stage_hint),
-  };
-}
-
-function buildSuppressContext(state: UnknownRecord, ctx: AckContext, routePhase: AckRoutePhase): {
-  mainModelStartedOutput?: boolean;
-  anchorExists?: boolean;
-  channelSupportsUpdate?: boolean;
-  userInputActive?: boolean;
-  routePhase?: string;
-} {
-  const channel = isRecord(state.channel) ? state.channel : {};
-  const supportsUpdate = channel.supportsUpdate;
-  return {
-    mainModelStartedOutput: asBoolean(state.mainModelStartedOutput) || asBoolean(state.mainModelFirstTokenSeen),
-    anchorExists: Boolean(asString(state.anchorId || state.anchor_id || state.pendingDeliveryId)),
-    channelSupportsUpdate: typeof supportsUpdate === "boolean"
-      ? supportsUpdate
-      : (typeof state.channelSupportsUpdate === "boolean" ? state.channelSupportsUpdate as boolean : undefined),
-    userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
-    routePhase,
-  };
-}
-
-function buildAckGateState(state: UnknownRecord, _ctx: AckContext): AckGateState {
-  return {
-    tool_active: asBoolean(state.tool_active),
-    delegated_running: asBoolean(state.delegated_running),
-    blocked: asBoolean(state.blocked) || asString(state.native_state) === "blocked",
-    final_response_streaming: asBoolean(state.final_response_streaming) || asBoolean(state.mainModelFirstTokenSeen) || asBoolean(state.mainModelStartedOutput),
-    delivery_pending: asBoolean(state.delivery_pending),
-    delivered: asBoolean(state.delivered),
-    native_state: asString(state.native_state),
-    formal_reply_visible: asBoolean(state.formal_reply_visible),
   };
 }
 
@@ -466,6 +535,63 @@ async function sendAckDirectDetailed(
       threadId: resolved.threadId,
     };
   }
+}
+
+async function sendReactionAckDetailed(
+  sessionKey: string,
+  messageId: string,
+  cwd?: string,
+  options: UnknownRecord = {},
+): Promise<AckSendResult> {
+  const parsed = canonicalParseSessionRoute(sessionKey);
+  const resolved = resolveAckTargetFromSessionKey(sessionKey);
+  if (!parsed.origin || !resolved.target || !messageId) {
+    return {
+      attempted: false,
+      delivered: false,
+      sent: false,
+      error: "unresolvable_reaction_target",
+      reason: "reaction_unresolvable",
+      ack_target_resolution_state: "target_resolution_failed",
+      ack_delivery_state: "not_attempted",
+      target: "",
+      threadId: "",
+    };
+  }
+
+  const adapter = getAdapterForSession(sessionKey);
+  if (adapter) {
+    const result = await adapter.react({
+      sessionKey,
+      messageId,
+      emoji: asString(options.emoji) || "eyes",
+      timeoutMs: Math.max(500, Number(options.timeoutMs || 5000)),
+      cwd: asString(cwd) || resolveWorkspaceRoot(),
+    });
+    return {
+      attempted: true,
+      delivered: result.ok,
+      sent: result.ok,
+      error: result.error || "",
+      reason: result.ok ? "reaction_ack_sent" : "reaction_ack_failed",
+      ack_target_resolution_state: "resolved",
+      ack_delivery_state: result.ok ? "sent" : "failed",
+      target: adapter.resolveTarget(sessionKey).target,
+      threadId: resolved.threadId,
+    };
+  }
+
+  return {
+    attempted: false,
+    delivered: false,
+    sent: false,
+    error: "reaction_adapter_unavailable",
+    reason: "reaction_ack_unavailable",
+    ack_target_resolution_state: "resolved",
+    ack_delivery_state: "not_attempted",
+    target: resolved.target,
+    threadId: resolved.threadId,
+  };
 }
 
 async function readTaskStateFile(): Promise<TaskStateFile> {
@@ -614,21 +740,27 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     messageTurnId,
   });
 
-  const suppress = shouldSuppressAck(
-    threadKey,
-    params.ackStage,
-    routePhase,
-    buildSuppressContext(effectiveState, effectiveCtx, routePhase),
-    buildAckGateState(effectiveState, effectiveCtx),
-  );
-  if (suppress.suppressed) {
-    ackDebug(`attemptAckSend: suppressed reason=${suppress.reason} threadKey=${threadKey} stage=${params.ackStage}`);
+  const packet = buildDecisionPacket(normalizedStateKey, effectiveState, routePhase);
+  const decision = params.decision ?? decideAckAction(packet);
+  if (decision.action === "suppress" || decision.action === "no_action" || decision.action === "enqueue_ack_writer") {
+    ackDebug(`attemptAckSend: skipped action=${decision.action} reason=${decision.reason} threadKey=${threadKey} stage=${params.ackStage}`);
     updateTrackingState(normalizedStateKey, {
       ackKey,
-      ack_target_resolution_state: `suppressed_${suppress.reason}`,
+      ack_target_resolution_state: `${decision.action}_${decision.reason}`,
       ack_delivery_state: "skipped",
     });
-    return params.ackOwner === "latency_ack" ? null : null;
+    return null;
+  }
+  if (decision.action === "cancel_ack_writer") {
+    cancelAckGuardForState(normalizedStateKey);
+    updateTrackingState(normalizedStateKey, {
+      ackKey,
+      ackWriterQueued: false,
+      ack_writer_queued: false,
+      ack_target_resolution_state: `cancelled_${decision.reason}`,
+      ack_delivery_state: "skipped",
+    });
+    return null;
   }
 
   const idempotency = checkAndSet(ackKey, params.ownerTag);
@@ -679,13 +811,31 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     return params.ackOwner === "latency_ack" ? { sent: false, reason: "missing_session_key" } : null;
   }
 
-    ackDebug(`attemptAckSend: sending sessionKey=${normalizedSessionKey} stage=${params.ackStage} message="${params.message.substring(0, 30)}"`);
-  const result = await sendAckDirectDetailed(
-    normalizedSessionKey,
-    params.message,
-    asString(effectiveCtx.cwd) || process.cwd(),
-    { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
-  );
+  const message = decision.modality === "text" && decision.ackStage
+    ? buildTemplateRegistryMessage(
+        ackTemplateStageFromDecision(decision, "ack0"),
+        packet,
+        normalizedStateKey,
+        effectiveState,
+        normalizedSessionKey,
+      )
+    : params.message;
+  const isReactionAck = decision.action === "send_reaction_ack";
+
+  ackDebug(`attemptAckSend: sending sessionKey=${normalizedSessionKey} stage=${params.ackStage} action=${decision.action} message="${message.substring(0, 30)}"`);
+  const result = isReactionAck
+    ? await sendReactionAckDetailed(
+        normalizedSessionKey,
+        asString(params.replyToMessageId || effectiveState.message_id || effectiveState.messageId),
+        asString(effectiveCtx.cwd) || process.cwd(),
+        { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), emoji: effectiveState.reactionAckEmoji || effectiveState.reaction_ack_emoji },
+      )
+    : await sendAckDirectDetailed(
+        normalizedSessionKey,
+        message,
+        asString(effectiveCtx.cwd) || process.cwd(),
+        { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
+      );
 
   recordDelivery(ackKey, {
     ackKey,
@@ -705,10 +855,14 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     ...(params.markLatencySent
       ? {
           latencyAckSent: Boolean(result.delivered || result.sent),
-          latencyAckText: params.message,
-          latencyAckMode: params.markMode || "channel_message",
+          latencyAckText: message,
+          latencyAckMode: isReactionAck ? "reaction" : params.markMode || "channel_message",
         }
       : {}),
+    ...(isReactionAck ? { reactionAckSent: Boolean(result.delivered || result.sent) } : {}),
+    ...(decision.action === "send_text_ack0" ? { textAck0Sent: Boolean(result.delivered || result.sent) } : {}),
+    ...(decision.ackStage === "tier1" ? { tier1Sent: Boolean(result.delivered || result.sent) } : {}),
+    ...(decision.ackStage === "tier2" ? { tier2Sent: Boolean(result.delivered || result.sent) } : {}),
   });
 
   if (result.delivered || result.sent) {
@@ -722,8 +876,14 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
 
   return { sent: false, reason: result.reason };
 }
-export function latencyAckText(_decision: UnknownRecord): string {
-  return ackStageText(latencyAckStage(_decision));
+export function latencyAckText(
+  decision: UnknownRecord,
+  packet: AckDecisionPacket = buildDecisionPacket("", {}, resolveRoutePhase(decision)),
+  stateKey = "",
+  state: UnknownRecord = {},
+  sessionKey = "",
+): string {
+  return buildTemplateRegistryMessage("ack0", packet, stateKey, state, sessionKey);
 }
 
 export function latencyAckStage(decision: UnknownRecord): AckStage {
@@ -775,6 +935,25 @@ export async function sendAckDirect(
   cwd?: string,
   options: UnknownRecord = {},
 ): Promise<boolean> {
+  const stateKey = asString(options.stateKey || options.state_key);
+  const routePhase = asString(options.routePhase || options.route_phase) as AckRoutePhase;
+  if (stateKey && routePhase) {
+    const result = await attemptAckSend({
+      sessionKey,
+      stateKey,
+      ackOwner: asString(options.ackOwner || options.ack_owner) as AckOwner || "latency_ack",
+      ackStage: normalizeAckStage(asString(options.ackStage || options.ack_stage) || AckStage.ReplySoftAck),
+      routePhase,
+      message,
+      state: isRecord(options.state) ? options.state : ackState(stateKey),
+      ctx: { cwd, ...(isRecord(options.ctx) ? options.ctx : {}) },
+      timeoutMs: Math.max(500, Number(options.timeoutMs || 5000)),
+      ownerTag: asString(options.ownerTag || options.owner_tag) || "direct_ack",
+      skipOwnerClaim: asBoolean(options.skipOwnerClaim),
+      replyToMessageId: asString(options.replyToMessageId),
+    });
+    return Boolean(result?.sent);
+  }
   const result = await sendAckDirectDetailed(sessionKey, message, cwd, options);
   return Boolean(result.delivered || result.sent);
 }
@@ -799,6 +978,10 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
     ackOwner: "",
     ack_owner: "",
     _ackTurnTs: turnTs,
+    reactionAckSent: asBoolean(baseState.reactionAckSent),
+    reactionAckSupported: asBoolean(baseState.reactionAckSupported),
+    reactionAckEnabled: asBoolean(baseState.reactionAckEnabled),
+    channelTone: normalizeChannelTone(baseState.channelTone || baseState.channel_tone),
   });
 
   createAckTimers({
@@ -828,7 +1011,14 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         templateInputs,
         result.tier >= 3 ? { stage_hint: templateInputs.stageHint || `tier${result.tier}` } : {},
       );
-      if (!message) {
+      const packet = buildDecisionPacket(stateKey, liveTrackingState, result.routePhase);
+      const ackDecision = decideAckAction(packet);
+      if (ackDecision.action === "cancel_ack_writer") {
+        cancelAckGuardForState(stateKey);
+        updateTrackingState(stateKey, { ackWriterQueued: false, ack_writer_queued: false });
+        return;
+      }
+      if (!message || !ackDecision.action.startsWith("send_")) {
         return;
       }
       void attemptAckSend({
@@ -846,6 +1036,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         messageTurnId: `${stateKey}:${turnTs}`,
         stageHint: templateInputs.stageHint,
         replyToMessageId,
+        decision: ackDecision,
       }).catch((error) => {
         logger.warn?.(`octoclaw timed ack failed: ${String(error)}`);
       });
@@ -899,6 +1090,26 @@ export async function maybeSendLatencyAck(
   if (!shouldSendLatencyAck(decision, state, ctx, toolName)) {
     return null;
   }
+  const routePhase = resolveRoutePhase(decision);
+  const preDecisionState = {
+    ...state,
+    userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
+    toolActive: asBoolean(state.toolActive) || asBoolean(state.tool_active) || Boolean(asString(toolName)),
+  };
+  const decisionPacket = buildDecisionPacket(stateKey, preDecisionState, routePhase);
+  const ackDecision = decideAckAction(decisionPacket);
+  if (ackDecision.action === "cancel_ack_writer") {
+    cancelAckGuardForState(stateKey);
+    updateTrackingState(stateKey, { ackWriterQueued: false, ack_writer_queued: false });
+    return null;
+  }
+  if (!ackDecision.action.startsWith("send_")) {
+    updateTrackingState(stateKey, {
+      ack_target_resolution_state: `${ackDecision.action}_${ackDecision.reason}`,
+      ack_delivery_state: "skipped",
+    });
+    return null;
+  }
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   if (!sessionKey) {
     updateTrackingState(stateKey, {
@@ -913,11 +1124,10 @@ export async function maybeSendLatencyAck(
     const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
     const judgeAckText = asString(decision._judge_ack_text);
     const ackStage = latencyAckStage(decision);
-    const routePhase = resolveRoutePhase(decision);
     const message = judgeAckText && !shouldSuppressJudgeAckEcho(judgeAckText, metadata)
       ? judgeAckText
       : ackStageText(ackStage);
-    const liveTrackingState = { ...state, ...ackState(stateKey) };
+    const liveTrackingState = { ...preDecisionState, ...ackState(stateKey) };
     const result = await attemptAckSend({
       sessionKey,
       stateKey,
@@ -935,6 +1145,7 @@ export async function maybeSendLatencyAck(
       markMode: "channel_message",
       messageTurnId: `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`,
       replyToMessageId: isRecord(metadata) ? asString(metadata.message_id) : "",
+      decision: ackDecision,
     });
     return result;
   } catch (error) {
@@ -956,6 +1167,7 @@ export function markMainModelFirstToken(stateKey: string): void {
   }
   markMainModelFirstTokenInTiming(normalizedStateKey);
   tryClaimLease(ackLeaseKey(normalizedStateKey), "main_model", MAIN_MODEL_LEASE_MS);
+  cancelAckGuardForState(normalizedStateKey);
   updateTrackingState(normalizedStateKey, { mainModelFirstTokenSeen: true, mainModelStartedOutput: true });
 }
 

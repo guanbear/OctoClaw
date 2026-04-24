@@ -1,9 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildDecisionPacket,
+  markMainModelFirstToken,
+  maybeSendLatencyAck,
   resolveAckTargetFromSessionKey,
   resolveRoutePhase,
+  sendAckDirect,
+  startAckGuard,
   threadKeyFromSessionKey as threadKeyFn,
+  updateAckTrackingState,
 } from "./ack-guard.js";
+import { ackTimerStateForKey, cancelAllAckTimers } from "./ack-timing.js";
+
+const adapter = {
+  send: vi.fn(),
+  react: vi.fn(),
+  resolveTarget: vi.fn(),
+};
+
+vi.mock("../im/index.js", () => ({
+  getAdapterForSession: () => adapter,
+}));
+
+afterEach(() => {
+  vi.useRealTimers();
+  cancelAllAckTimers();
+  vi.clearAllMocks();
+  adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
+});
 
 describe("ack-guard: canonical resolver integration", () => {
   describe("resolveAckTargetFromSessionKey", () => {
@@ -91,5 +115,124 @@ describe("ack-guard: canonical resolver integration", () => {
       const threadKey = threadKeyFn(key, "fallback-state-key");
       expect(threadKey).toBe("fallback-state-key");
     });
+  });
+});
+
+describe("ack-guard: decideAckAction runtime wiring", () => {
+  it("attemptAckSend suppresses sends when decideAckAction returns suppress", async () => {
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "123" });
+    updateAckTrackingState("suppress-state", {
+      _ackTurnTs: Date.now() - 4_000,
+      mainModelActive: true,
+      delivered: true,
+      reactionAckSupported: false,
+      reactionAckEnabled: false,
+    });
+
+    const result = await sendAckDirect("x:slack:default:channel:C123ABC", "should not send", process.cwd(), {
+      stateKey: "suppress-state",
+      routePhase: "reply",
+    });
+
+    expect(result).toBe(false);
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("gates tier fire when decideAckAction returns no_action", async () => {
+    vi.useFakeTimers();
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "123" });
+
+    startAckGuard("x:slack:default:channel:C123ABC", process.cwd(), {
+      stateKey: "tier-no-action",
+      decision: { route_decision: { route: "reply" } },
+      state: {
+        mainModelActive: false,
+        toolActive: false,
+        reactionAckSupported: false,
+        reactionAckEnabled: false,
+      },
+      ackTimingConfig: { tierDelaysMs: [1, 0, 0, 0] },
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("sends reaction ACK when decideAckAction returns send_reaction_ack", async () => {
+    adapter.react.mockResolvedValue({ ok: true });
+    const stateKey = `reaction-state-${Date.now()}`;
+    updateAckTrackingState(stateKey, {
+      _ackTurnTs: Date.now() - 1_500,
+      mainModelActive: true,
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+      channelTone: "chat",
+    });
+
+    const result = await sendAckDirect("slack:default:channel:C123ABC", "", process.cwd(), {
+      stateKey,
+      routePhase: "reply",
+      ownerTag: stateKey,
+      replyToMessageId: "111.222",
+    });
+
+    expect(result).toBe(true);
+    expect(adapter.react).toHaveBeenCalledWith(expect.objectContaining({ messageId: "111.222", emoji: "eyes" }));
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("uses template registry for text ACK0 instead of legacy ackStageText", async () => {
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "123" });
+    const stateKey = `text-template-state-${Date.now()}`;
+    updateAckTrackingState(stateKey, {
+      _ackTurnTs: Date.now() - 4_000,
+      mainModelActive: true,
+      reactionAckSupported: false,
+      reactionAckEnabled: false,
+      channelTone: "unknown",
+    });
+
+    const result = await sendAckDirect("slack:default:channel:C123ABC", "legacy text", process.cwd(), {
+      stateKey,
+      routePhase: "reply",
+      ownerTag: stateKey,
+      replyToMessageId: "111.222",
+    });
+
+    expect(result).toBe(true);
+    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({ message: "收到，处理中。" }));
+  });
+
+  it("first token arrival cancels pending ACK", () => {
+    vi.useFakeTimers();
+    startAckGuard("x:slack:default:channel:C123ABC", process.cwd(), {
+      stateKey: "first-token-state",
+      decision: { route_decision: { route: "reply" } },
+      ackTimingConfig: { tierDelaysMs: [1_000, 0, 0, 0] },
+    });
+
+    expect(ackTimerStateForKey("first-token-state")).not.toBeNull();
+    markMainModelFirstToken("first-token-state");
+
+    expect(ackTimerStateForKey("first-token-state")).toBeNull();
+    expect(buildDecisionPacket("first-token-state", {}, "reply").firstTokenSeen).toBe(true);
+  });
+
+  it("maybeSendLatencyAck applies decideAckAction as authoritative final gate", async () => {
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "123" });
+
+    const result = await maybeSendLatencyAck(
+      { latency_ack: { required: true }, route_decision: { route: "reply" } },
+      { session_key: "x:slack:default:channel:C123ABC", message_id: "111.222" },
+      "latency-gated-state",
+      { delivered: true, mainModelActive: true, reactionAckSupported: false, reactionAckEnabled: false },
+      {},
+      {},
+      "lookup",
+    );
+
+    expect(result).toBeNull();
+    expect(adapter.send).not.toHaveBeenCalled();
   });
 });
