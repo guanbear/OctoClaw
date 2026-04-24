@@ -37,6 +37,8 @@ import {
   canonicalizeDecisionForPolicyState,
   normalizeLiveRoute,
 } from "../resolve/route-helpers.js";
+import { validateRouteSeal } from "../resolve/route-seal.js";
+import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import fsSync from "node:fs";
 
 interface FsSyncLike {
@@ -161,6 +163,43 @@ function parseObjectJson(value: unknown): UnknownRecord {
 function parsePolicyDecisionJson(value: unknown): UnknownRecord | null {
   const parsed = parseObjectJson(value);
   return Object.keys(parsed).length > 0 ? parsed : null;
+}
+
+function isRouteSealCandidate(value: unknown): value is RouteSeal {
+  const record = asRecord(value);
+  return Object.keys(record).length > 0
+    && (record.route === "reply" || record.route === "delegate")
+    && typeof record.turnId === "string"
+    && typeof record.threadBindingKey === "string"
+    && typeof record.createdAt === "string";
+}
+
+function routeSealTurnId(metadata: UnknownRecord, fallback = ""): string {
+  return asString(metadata.turnId ?? metadata.turn_id, fallback);
+}
+
+function routeSealThreadBindingKey(metadata: UnknownRecord, fallback = ""): string {
+  return asString(metadata.threadBindingKey ?? metadata.thread_binding_key)
+    || asString(metadata.session_binding_key)
+    || asString(metadata.session_thread_key)
+    || asString(metadata.session_key)
+    || fallback;
+}
+
+export function validCachedRouteSeal(state: UnknownRecord | null, decision: UnknownRecord, metadata: UnknownRecord): RouteSeal | null {
+  const stateRecord = asRecord(state);
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const candidate = isRouteSealCandidate(stateRecord.routeSeal)
+    ? stateRecord.routeSeal
+    : isRouteSealCandidate(decision.routeSeal)
+      ? decision.routeSeal
+      : isRouteSealCandidate(requestMetadata.routeSeal)
+        ? requestMetadata.routeSeal
+        : null;
+  if (!candidate) return null;
+  const turnId = routeSealTurnId(metadata, candidate.turnId);
+  const threadBindingKey = routeSealThreadBindingKey(metadata, candidate.threadBindingKey);
+  return validateRouteSeal(candidate, turnId, threadBindingKey) ? candidate : null;
 }
 
 export function selectDispatchPolicyDecision(
@@ -841,9 +880,11 @@ export function getToolRegistrations(): ToolRegistration[] {
           });
           freshDecisionSource = "fresh_context_resolve";
         }
-        const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || buildPolicyMetadata(ctx).session_key);
-        const resolvedRoute = asString(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
+        const initialMetadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || asString(asRecord(cachedDecision.request).session_key) }) };
+        const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
+        const resolvedRoute = normalizeLiveRoute(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
         const isDelegatedRoute = resolvedRoute === "delegate";
+        const cachedRouteSeal = validCachedRouteSeal(state, cachedDecision, initialMetadata);
         if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires cached/passed policy for delegated route=${resolvedRoute}; got fresh decision from freeform prompt (source=${freshDecisionSource}). This violates §4.6.1 (dispatch must not re-judge).`;
           await recordPolicyReplay("sealed_decision_required", {
@@ -856,7 +897,19 @@ export function getToolRegistrations(): ToolRegistration[] {
           }, toolLogger(ctx));
           return toolResponse(driftSummary, { sealed_decision_required: true, route: resolvedRoute, error: "freeform_reroute_blocked" });
         }
-        let metadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || asString(asRecord(cachedDecision.request).session_key) }) };
+        if (cachedRouteSeal && resolvedRoute !== cachedRouteSeal.route) {
+          const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires sealed route=${cachedRouteSeal.route}; got dispatch route=${resolvedRoute}. This violates §4.6.1 (dispatch must not re-route after seal).`;
+          await recordPolicyReplay("sealed_decision_required", {
+            sessionKey: managedSessionKey,
+            sessionId: asString(ctx.sessionId),
+            route: resolvedRoute,
+            sealedRoute: cachedRouteSeal.route,
+            hadCachedDecision,
+            policyJsonProvided: Boolean(params.policyJson),
+          }, toolLogger(ctx), cachedDecision);
+          return toolResponse(driftSummary, { sealed_decision_required: true, route: resolvedRoute, sealedRoute: cachedRouteSeal.route, error: "freeform_reroute_blocked" });
+        }
+        let metadata = initialMetadata;
         if (asString(params.sessionKey)) metadata.session_key = asString(params.sessionKey);
         metadata = applyUserMetadataOverrides(metadata, parseObjectJson(params.metadataJson));
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });

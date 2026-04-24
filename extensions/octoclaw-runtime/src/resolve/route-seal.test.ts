@@ -7,6 +7,9 @@ import {
   resolveCurrentRouteSeal,
   validateRouteSeal,
 } from "./route-seal.js";
+import { resolvePolicyDecisionForContext } from "./policy-resolver.js";
+import { policyState } from "../state/policy-state.js";
+import { validCachedRouteSeal } from "../tools/registration.js";
 
 function seal(overrides: Partial<RouteSeal> = {}): RouteSeal {
   return {
@@ -92,6 +95,30 @@ describe("route-seal resolver", () => {
     expect(result.reasonCodes).toEqual(["answer_current_turn"]);
   });
 
+  it("normalizes legacy runner route_decision route to delegate", () => {
+    const result = resolveCurrentRouteSeal({
+      requestId: "req-runner",
+      turnId: "turn-runner",
+      threadBindingKey: "thread-runner",
+      policyJson: { route_decision: { route: "runner" } },
+    });
+
+    expect(result.route).toBe("delegate");
+    expect(result.source).toBe("local_judge");
+  });
+
+  it("normalizes legacy spawn_single route_decision route to delegate", () => {
+    const result = resolveCurrentRouteSeal({
+      requestId: "req-spawn-single",
+      turnId: "turn-spawn-single",
+      threadBindingKey: "thread-spawn-single",
+      policyJson: { route_decision: { route: "spawn_single" } },
+    });
+
+    expect(result.route).toBe("delegate");
+    expect(result.source).toBe("local_judge");
+  });
+
   it("rejects stale route seal with mismatched turnId", () => {
     const stale = seal({ turnId: "old-turn", route: "delegate" });
     const result = resolveCurrentRouteSeal({
@@ -104,5 +131,42 @@ describe("route-seal resolver", () => {
     expect(validateRouteSeal(stale, "turn-4", "thread-1")).toBe(false);
     expect(result.route).toBe("reply");
     expect(result.source).toBe("safe_fallback");
+  });
+
+  it("stamps routeSeal in policy state during policy resolver integration", async () => {
+    const ctx = {
+      sessionKey: "agent:main:slack:default:direct:u-route-seal",
+      sessionId: "session-route-seal",
+      agentId: "main",
+      messageId: "message-route-seal",
+    };
+    policyState.clear(ctx.sessionKey);
+
+    const result = await resolvePolicyDecisionForContext("Summarize this simple question", ctx, "/tmp");
+    const stampedRouteSeal = result?.state.routeSeal as RouteSeal | undefined;
+
+    expect(stampedRouteSeal).toMatchObject({
+      route: "reply",
+      turnId: stampedRouteSeal?.turnId,
+      threadBindingKey: "slack:user:u-route-seal",
+    });
+    expect(policyState.get(ctx.sessionKey)?.routeSeal?.route).toBe("reply");
+    expect((result?.decision.routeSeal as RouteSeal | undefined)?.route).toBe("reply");
+  });
+
+  it("detects sealed delegate route when freeform dispatch attempts reply override", () => {
+    const routeSeal = seal({ route: "delegate" });
+    const decision = {
+      route_decision: { route: "delegate" },
+      request: { metadata: { routeSeal } },
+    };
+    const validSeal = validCachedRouteSeal(
+      { routeSeal },
+      decision,
+      { turn_id: "turn-1", session_key: "thread-1" },
+    );
+
+    expect(validSeal?.route).toBe("delegate");
+    expect("reply").not.toBe(validSeal?.route);
   });
 });

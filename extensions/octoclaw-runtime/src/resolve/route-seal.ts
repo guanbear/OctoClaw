@@ -131,7 +131,7 @@ export function resolveCurrentRouteSeal(input: ResolveCurrentRouteSealInput): Ro
 
   const localJudge = input.localJudgeOutput ?? (isRecord(policyJson.local_judge) ? policyJson.local_judge : {});
   const routeDecision = isRecord(policyJson.route_decision) ? policyJson.route_decision : {};
-  const judgeRoute = canonicalLiveRoute(localJudge.route) ?? canonicalLiveRoute(routeDecision.route);
+  const judgeRoute = normalizeToLiveRoute(asString(localJudge.route)) ?? normalizeToLiveRoute(asString(routeDecision.route));
   if (judgeRoute) {
     return createRouteSeal(input, judgeRoute, "local_judge", Object.keys(localJudge).length > 0 ? localJudge : routeDecision);
   }

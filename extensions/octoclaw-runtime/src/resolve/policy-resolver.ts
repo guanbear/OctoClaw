@@ -41,6 +41,7 @@ import type { RecoveryInfo, TimeoutCategory } from "@octoclaw/contracts/delegate
 import type { PolicyRole } from "@octoclaw/policy/roles";
 import type { ExecutionProfileTarget } from "@octoclaw/policy/model";
 import type { LiveRoute } from "@octoclaw/policy/route";
+import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import type { WorkerPool } from "@octoclaw/policy/caps";
 import {
   canonicalizeDecisionForPolicyState,
@@ -71,6 +72,7 @@ import {
   recordPolicyReplay,
   routeHintRequired,
 } from "../replay/replay-logger.js";
+import { resolveCurrentRouteSeal, validateRouteSeal } from "./route-seal.js";
 
 type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
@@ -811,6 +813,78 @@ function liveRouteNeedsHint(liveRoute: LiveRoute, metadata: UnknownRecord): bool
     && !Boolean(metadata.route);
 }
 
+function routeSealThreadBindingKey(metadata: UnknownRecord, fallback = ""): string {
+  return asString(metadata.threadBindingKey ?? metadata.thread_binding_key)
+    || asString(metadata.session_binding_key)
+    || asString(metadata.session_thread_key)
+    || asString(metadata.session_key)
+    || fallback;
+}
+
+function routeSealTurnId(metadata: UnknownRecord, fallback = ""): string {
+  return asString(metadata.turnId ?? metadata.turn_id) || fallback;
+}
+
+function isRouteSealCandidate(value: unknown): value is RouteSeal {
+  const record = asRecord(value);
+  return Object.keys(record).length > 0
+    && (record.route === "reply" || record.route === "delegate")
+    && typeof record.turnId === "string"
+    && typeof record.threadBindingKey === "string"
+    && typeof record.createdAt === "string";
+}
+
+function validCurrentRouteSeal(decision: UnknownRecord, metadata: UnknownRecord): RouteSeal | null {
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const candidate = isRouteSealCandidate(metadata.routeSeal)
+    ? metadata.routeSeal
+    : isRouteSealCandidate(requestMetadata.routeSeal)
+      ? requestMetadata.routeSeal
+      : isRouteSealCandidate(decision.routeSeal)
+        ? decision.routeSeal
+        : null;
+  if (!candidate) return null;
+  const turnId = routeSealTurnId(metadata, candidate.turnId);
+  const threadBindingKey = routeSealThreadBindingKey(metadata, candidate.threadBindingKey);
+  return validateRouteSeal(candidate, turnId, threadBindingKey) ? candidate : null;
+}
+
+function savedRouteSeal(value: unknown): RouteSeal | null {
+  return isRouteSealCandidate(value) ? value : null;
+}
+
+function stampRouteSealForPolicyState(input: {
+  prompt: string;
+  stateKey: string;
+  metadata: UnknownRecord;
+  decision: UnknownRecord;
+  savedRouteSeal?: RouteSeal | null;
+}): RouteSeal {
+  const turnId = routeSealTurnId(input.metadata, stableId("turn", [input.stateKey, input.prompt]));
+  const threadBindingKey = routeSealThreadBindingKey(input.metadata, input.stateKey);
+  const routeSeal = resolveCurrentRouteSeal({
+    requestId: asString(input.metadata.requestId ?? input.metadata.request_id ?? input.metadata.message_id, stableId("request", [input.stateKey, input.prompt])),
+    turnId,
+    threadBindingKey,
+    policyJson: input.decision,
+    localJudgeOutput: input.decision,
+    savedRouteSeal: input.savedRouteSeal ?? null,
+    inputHash: stableId("input", [input.stateKey, input.prompt]),
+    stateGeneration: Number(input.decision.stateGeneration ?? 0),
+  });
+  input.decision.routeSeal = routeSeal;
+  const request = asRecord(input.decision.request);
+  input.decision.request = {
+    ...request,
+    metadata: {
+      ...asRecord(request.metadata),
+      routeSeal,
+    },
+  };
+  input.metadata.routeSeal = routeSeal;
+  return routeSeal;
+}
+
 export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: UnknownRecord = {}, prompt = ""): UnknownRecord {
   const tsJudgeInput = buildPhaseTwoPolicyInput(prompt, metadata);
   const tsPolicyDecision = judgePolicy(tsJudgeInput);
@@ -847,12 +921,19 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     }
   }
 
+  const currentRouteSeal = validCurrentRouteSeal(priorDecision, metadata);
+  if (currentRouteSeal) {
+    liveRoute = currentRouteSeal.route;
+  }
+
   if (objectionEscalated) {
-    const remoteAdjudicated = asBoolean(priorDecision._remote_judge_overrode_local, false);
-    if (remoteAdjudicated) {
-      liveRoute = normalizeLiveRoute(judgeRoute, liveRoute);
-    } else {
-      liveRoute = objectionRequestedRoute;
+    if (!currentRouteSeal) {
+      const remoteAdjudicated = asBoolean(priorDecision._remote_judge_overrode_local, false);
+      if (remoteAdjudicated) {
+        liveRoute = normalizeLiveRoute(judgeRoute, liveRoute);
+      } else {
+        liveRoute = objectionRequestedRoute;
+      }
     }
   }
 
@@ -961,6 +1042,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
       routeHintSubmitted ? "route_hint_applied" : "",
       objectionAccepted ? "route_objection_accepted" : "",
       objectionEscalated ? "route_objection_escalated" : "",
+      currentRouteSeal ? "route_seal_applied" : "",
     ].filter(Boolean))),
   };
   nextDecision.model_policy = {
@@ -988,6 +1070,16 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     objection_escalated: objectionEscalated,
     judge_route: judgeRoute,
   };
+  if (currentRouteSeal) {
+    nextDecision.routeSeal = currentRouteSeal;
+    nextDecision.request = {
+      ...asRecord(nextDecision.request),
+      metadata: {
+        ...asRecord(asRecord(nextDecision.request).metadata),
+        routeSeal: currentRouteSeal,
+      },
+    };
+  }
   nextDecision.review_policy = {
     ...asRecord(nextDecision.review_policy),
     required: liveRoute === "delegate",
@@ -1499,6 +1591,13 @@ export async function resolvePolicyDecisionForContext(
 
   if (existing?.decision && promptsEquivalent(asString(existing.prompt), prompt)) {
     const cached = { ...asRecord(existing.decision) };
+    const routeSeal = stampRouteSealForPolicyState({
+      prompt,
+      stateKey,
+      metadata,
+      decision: cached,
+      savedRouteSeal: savedRouteSeal(existing.routeSeal),
+    });
     policyState.set(stateKey, {
       ...existing,
       sessionBoundary: existing.sessionBoundary
@@ -1509,8 +1608,9 @@ export async function resolvePolicyDecisionForContext(
         : undefined,
       updatedAt: Date.now(),
       decision: cached,
+      routeSeal,
     });
-    return { decision: cached, stateKey, state: { ...existing, decision: cached, updatedAt: Date.now() } };
+    return { decision: cached, stateKey, state: { ...existing, decision: cached, routeSeal, updatedAt: Date.now() } };
   }
 
   try {
@@ -1541,6 +1641,15 @@ export async function resolvePolicyDecisionForContext(
           ? existingDelegateTaskContext
           : undefined,
     };
+
+    const routeSeal = stampRouteSealForPolicyState({
+      prompt,
+      stateKey,
+      metadata,
+      decision,
+      savedRouteSeal: savedRouteSeal(existing?.routeSeal),
+    });
+    nextState.routeSeal = routeSeal;
 
     if (nextState.delegateTaskContext && Object.keys(asRecord(decision.delegateTaskContext)).length === 0) {
       decision.delegateTaskContext = nextState.delegateTaskContext;
