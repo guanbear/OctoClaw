@@ -881,8 +881,10 @@ export function buildConversationGrounding(options: {
   replayLogPath?: string;
   taskStatePath?: string;
   sessionKeys?: string[];
+  recentExecutionFacts?: string;
 } = {}): { available: boolean; reason?: string; context?: string; subjectPrompt?: string; route?: string; taskClass?: string; protectedLane?: string; facts?: TurnFacts } {
   const prompt = stringValue(options.prompt);
+  const recentExecutionFacts = stringValue(options.recentExecutionFacts);
   const turns = groupedReplayTurns(readJsonl(stringValue(options.replayLogPath)));
   const taskIndex = buildTaskIndex(stringValue(options.taskStatePath));
   const taskEventIndex = buildTaskEventIndex(deriveTaskEventsPath(stringValue(options.taskStatePath)));
@@ -931,6 +933,7 @@ export function buildConversationGrounding(options: {
     substrate,
     delivery: facts.deliveryEventKind,
   });
+  const groundingSections = recentExecutionFacts ? [recentExecutionFacts, context] : [context];
   return {
     available: true,
     subjectPrompt: stringValue(subjectTurn.prompt),
@@ -938,7 +941,7 @@ export function buildConversationGrounding(options: {
     taskClass: stringValue(subjectTurn.taskClass),
     protectedLane: stringValue(subjectTurn.protectedLane),
     facts,
-    context,
+    context: groundingSections.join("\n\n"),
   };
 }
 

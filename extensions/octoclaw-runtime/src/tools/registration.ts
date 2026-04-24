@@ -38,6 +38,8 @@ import {
   normalizeLiveRoute,
 } from "../resolve/route-helpers.js";
 import { validateRouteSeal } from "../resolve/route-seal.js";
+import { createOpenClawDistTaskFlowPort } from "../ports/openclaw-dist-taskflow-port.js";
+import { checkTaskflowCapability } from "../ports/taskflow-port.js";
 import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import fsSync from "node:fs";
 
@@ -211,6 +213,21 @@ export function selectDispatchPolicyDecision(
     return explicit;
   }
   return isRecord(stateDecision) ? stateDecision : null;
+}
+
+function selectRouteSealState(ctx: UnknownRecord, stateKey: string, state: UnknownRecord | null): UnknownRecord | null {
+  if (state) {
+    return state;
+  }
+  for (const rawKey of [stateKey, ctx.canonicalSessionKey, ctx.sessionKey, ctx.sessionId]) {
+    const key = asString(rawKey);
+    if (!key) continue;
+    const candidate = policyState.get(key);
+    if (candidate) {
+      return candidate as UnknownRecord;
+    }
+  }
+  return null;
 }
 
 export function selectReplaySessionKeyForDispatch(
@@ -623,6 +640,53 @@ function compactDispatchDetails(payload: UnknownRecord): UnknownRecord {
   };
 }
 
+function dispatchHonestySuccess(params: {
+  route: string;
+  workerPool: string;
+  taskId: string;
+  taskClass: string;
+}): Record<string, unknown> {
+  return toolResponse(JSON.stringify({
+    ok: true,
+    route: params.route,
+    worker_pool: params.workerPool,
+    task_id: params.taskId,
+    task_class: params.taskClass,
+    delegation_method: "octoclaw_dispatch",
+  }), {
+    ok: true,
+    route: params.route,
+    worker_pool: params.workerPool,
+    task_id: params.taskId,
+    task_class: params.taskClass,
+    delegation_method: "octoclaw_dispatch",
+  });
+}
+
+function dispatchHonestyFailure(params: {
+  route?: string | null;
+  error: string;
+  sealMismatch?: boolean;
+  retryable?: boolean;
+  terminal?: boolean;
+}): Record<string, unknown> {
+  return toolResponse(JSON.stringify({
+    ok: false,
+    route: params.route ?? null,
+    error: params.error,
+    seal_mismatch: params.sealMismatch === true,
+    retryable: params.retryable === true,
+    terminal: params.terminal === true,
+  }), {
+    ok: false,
+    route: params.route ?? null,
+    error: params.error,
+    seal_mismatch: params.sealMismatch === true,
+    retryable: params.retryable === true,
+    terminal: params.terminal === true,
+  });
+}
+
 function ctxCwd(ctx: UnknownRecord): string {
   return asString(ctx.cwd, process.cwd());
 }
@@ -880,11 +944,29 @@ export function getToolRegistrations(): ToolRegistration[] {
           });
           freshDecisionSource = "fresh_context_resolve";
         }
-        const initialMetadata = { ...buildPolicyMetadata(ctx, { stateKey: stateKey || asString(asRecord(cachedDecision.request).session_key) }) };
+        const initialMetadata = applyUserMetadataOverrides(
+          {
+            ...buildPolicyMetadata(ctx, { stateKey: stateKey || asString(asRecord(cachedDecision.request).session_key) }),
+            ...(asString(params.sessionKey) ? { session_key: asString(params.sessionKey) } : {}),
+          },
+          parseObjectJson(params.metadataJson),
+        );
         const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
         const resolvedRoute = normalizeLiveRoute(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
         const isDelegatedRoute = resolvedRoute === "delegate";
-        const cachedRouteSeal = validCachedRouteSeal(state, cachedDecision, initialMetadata);
+        const recordDispatchTerminalFailure = async (errorMessage: string, options: { sealMismatch?: boolean; route?: string | null } = {}) => {
+          await recordPolicyReplay("dispatch_terminal_failure", {
+            sessionKey: managedSessionKey,
+            sessionId: asString(ctx.sessionId),
+            route: options.route ?? resolvedRoute,
+            error: errorMessage,
+            sealMismatch: options.sealMismatch === true,
+            retryable: false,
+            terminal: true,
+          }, toolLogger(ctx));
+        };
+        const routeSealState = selectRouteSealState(ctx, stateKey, state);
+        const cachedRouteSeal = validCachedRouteSeal(routeSealState, cachedDecision, initialMetadata);
         if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires cached/passed policy for delegated route=${resolvedRoute}; got fresh decision from freeform prompt (source=${freshDecisionSource}). This violates §4.6.1 (dispatch must not re-judge).`;
           await recordPolicyReplay("sealed_decision_required", {
@@ -895,7 +977,14 @@ export function getToolRegistrations(): ToolRegistration[] {
             hadCachedDecision: false,
             policyJsonProvided: false,
           }, toolLogger(ctx));
-          return toolResponse(driftSummary, { sealed_decision_required: true, route: resolvedRoute, error: "freeform_reroute_blocked" });
+          await recordDispatchTerminalFailure(driftSummary);
+          return dispatchHonestyFailure({
+            route: resolvedRoute,
+            error: driftSummary,
+            sealMismatch: false,
+            retryable: false,
+            terminal: true,
+          });
         }
         if (cachedRouteSeal && resolvedRoute !== cachedRouteSeal.route) {
           const driftSummary = `sealed_decision_required: managed session ${managedSessionKey.slice(0, 40)}… requires sealed route=${cachedRouteSeal.route}; got dispatch route=${resolvedRoute}. This violates §4.6.1 (dispatch must not re-route after seal).`;
@@ -907,11 +996,16 @@ export function getToolRegistrations(): ToolRegistration[] {
             hadCachedDecision,
             policyJsonProvided: Boolean(params.policyJson),
           }, toolLogger(ctx), cachedDecision);
-          return toolResponse(driftSummary, { sealed_decision_required: true, route: resolvedRoute, sealedRoute: cachedRouteSeal.route, error: "freeform_reroute_blocked" });
+          await recordDispatchTerminalFailure(driftSummary, { sealMismatch: true });
+          return dispatchHonestyFailure({
+            route: resolvedRoute,
+            error: driftSummary,
+            sealMismatch: true,
+            retryable: false,
+            terminal: true,
+          });
         }
         let metadata = initialMetadata;
-        if (asString(params.sessionKey)) metadata.session_key = asString(params.sessionKey);
-        metadata = applyUserMetadataOverrides(metadata, parseObjectJson(params.metadataJson));
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
         metadata.requested_route = normalizeLiveRoute(resolvedRoute, "reply");
 
@@ -946,6 +1040,34 @@ export function getToolRegistrations(): ToolRegistration[] {
           metadata.expected_at = Date.now() + expectedSeconds * 1000;
         }
 
+        const helperInvoker = readHelperInvoker(asRecord(metadata).helperInvoker, ctx.helperInvoker);
+
+        if (isDelegatedRoute) {
+          // Preflight checks the execution backend that dispatch will use. The helperInvoker path
+          // is a native execution path, so only probe the dist taskflow port when dispatch will use it.
+          if (!helperInvoker) {
+            const taskflowCheck = await checkTaskflowCapability(createOpenClawDistTaskFlowPort());
+            if (!taskflowCheck.available) {
+              const errorMessage = `taskflow_unavailable: ${taskflowCheck.reason || "unknown_error"}`;
+              await recordPolicyReplay("dispatch_capability_failure", {
+                sessionKey: managedSessionKey,
+                sessionId: asString(ctx.sessionId),
+                route: resolvedRoute,
+                error: errorMessage,
+                retryable: false,
+                terminal: true,
+              }, toolLogger(ctx));
+              await recordDispatchTerminalFailure(errorMessage);
+              return dispatchHonestyFailure({
+                route: resolvedRoute,
+                error: errorMessage,
+                retryable: false,
+                terminal: true,
+              });
+            }
+          }
+        }
+
         let payload: UnknownRecord;
         try {
           payload = buildTsRuntimeDispatchPayload({
@@ -955,14 +1077,28 @@ export function getToolRegistrations(): ToolRegistration[] {
             decision: cachedDecision,
             metadata,
             timeoutSeconds: asNumber(params.timeoutSeconds) ?? undefined,
-            helperInvoker: readHelperInvoker(asRecord(metadata).helperInvoker, ctx.helperInvoker),
+            helperInvoker,
           });
         } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
           const candidate = asRecord(error);
           payload = isRecord(candidate.payload) ? asRecord(candidate.payload) : {};
           if (Object.keys(payload).length === 0) {
-            return { error: error instanceof Error ? error.message : String(error) };
+            await recordDispatchTerminalFailure(errorMessage);
+            return dispatchHonestyFailure({
+              route: resolvedRoute,
+              error: errorMessage,
+              sealMismatch: false,
+              retryable: true,
+            });
           }
+          await recordDispatchTerminalFailure(errorMessage, { route: asString(payload.route, resolvedRoute) });
+          return dispatchHonestyFailure({
+            route: asString(payload.route, resolvedRoute),
+            error: errorMessage,
+            sealMismatch: false,
+            retryable: true,
+          });
         }
         const authoritativeDecision = asRecord(payload.policy_decision ?? cachedDecision);
         const replaySessionKey = selectReplaySessionKeyForDispatch(
@@ -1069,7 +1205,19 @@ export function getToolRegistrations(): ToolRegistration[] {
             updated_at: new Date().toISOString(),
           } as RuntimeTaskStateRecord);
         }
-        return toolResponse(summary, compactDispatchDetails(payload));
+        void summary;
+        void compactDispatchDetails;
+        const finalRoute = normalizeLiveRoute(payload.route, resolvedRoute);
+        const finalDecisionRoute = asRecord(authoritativeDecision.route_decision);
+        const workerPool = asString(finalDecisionRoute.worker_pool || payload.worker_pool);
+        const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
+        const taskClass = asString(finalDecisionRoute.task_class || finalDecisionRoute.judge_role || finalDecisionRoute.role);
+        return dispatchHonestySuccess({
+          route: finalRoute,
+          workerPool,
+          taskId: delegateTaskId,
+          taskClass,
+        });
       },
     },
     {

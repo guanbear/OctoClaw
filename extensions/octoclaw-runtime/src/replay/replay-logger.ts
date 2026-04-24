@@ -21,6 +21,42 @@ import { policyState } from "../state/policy-state.js";
 type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
 
+type PolicyContextState = UnknownRecord & {
+  canonicalSessionKey?: string;
+  decision?: UnknownRecord;
+  delegateTaskContext?: unknown;
+  delegated?: boolean;
+  directToolsSeen?: unknown;
+  toolsUsed?: unknown;
+};
+
+/**
+ * Structured receipt of what execution happened in a turn.
+ * This is the PRIMARY provenance source — not regex, not model claims.
+ */
+export interface TurnExecutionReceipt {
+  /** Unique turn ID */
+  turnId: string;
+  /** Session key */
+  sessionKey: string;
+  /** Route that was used */
+  route: string;
+  /** Whether delegation actually happened (verified via dispatch ledger) */
+  delegated: boolean;
+  /** Delegate task ID if delegated */
+  delegateTaskId: string | null;
+  /** Worker pool that handled execution */
+  workerPool: string | null;
+  /** Tools that were actually called (verified, not claimed) */
+  toolsUsed: string[];
+  /** Duration in ms */
+  durationMs: number;
+  /** Outcome */
+  outcome: "completed" | "failed" | "timeout" | "unknown";
+  /** Timestamp */
+  completedAt: number;
+}
+
 interface PolicyStateApiLike {
   get: (stateKey: string) => UnknownRecord | undefined;
   update: (stateKey: string, mutator: (current: UnknownRecord) => UnknownRecord) => void;
@@ -48,6 +84,43 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
     : [];
+}
+
+function asString(value: unknown, fallback: string | null = null): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized || fallback;
+}
+
+export function buildTurnExecutionReceipt(
+  state: PolicyContextState,
+  durationMs: number,
+): TurnExecutionReceipt {
+  const decision = asRecord(state.decision);
+  const routeDecision = asRecord(decision.route_decision);
+  const delegateCtx = asRecord(state.delegateTaskContext);
+  const runtimeTruth = asRecord(decision.runtime_truth);
+  const delegateTask = asRecord(runtimeTruth.delegateTask);
+  const binding = asRecord(runtimeTruth.binding);
+  const status = asString(delegateCtx.taskStatus ?? delegateCtx.status);
+  const hasDelegateIdentity = Boolean(
+    asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateTask.delegateTaskId ?? binding.taskId),
+  );
+  const routeWasDelegate = asString(routeDecision.route) === "delegate";
+  const delegated = state.delegated === true || (routeWasDelegate && hasDelegateIdentity);
+  return {
+    turnId: asString(state.canonicalSessionKey, `turn-${Date.now()}`) ?? `turn-${Date.now()}`,
+    sessionKey: asString(state.canonicalSessionKey) ?? "",
+    route: asString(routeDecision.route, "reply") ?? "reply",
+    delegated,
+    delegateTaskId: asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateCtx.task_id),
+    workerPool: asString(routeDecision.worker_pool),
+    toolsUsed: asStringArray(state.toolsUsed ?? state.directToolsSeen ?? []),
+    durationMs,
+    outcome: delegated
+      ? (status === "completed" ? "completed" : status === "failed" ? "failed" : status === "timeout" || status === "timed_out" ? "timeout" : "unknown")
+      : "completed",
+    completedAt: Date.now(),
+  };
 }
 
 function conversationIntentClass(decision: UnknownRecord): string {
@@ -819,6 +892,18 @@ export function guardAssistantMessageForPolicyState(
   const sanitized = sanitizeDelegationReasoning(replyText);
   if (sanitized !== replyText) {
     return { mode: "replace", message: replaceAssistantMessageText(message, sanitized) };
+  }
+  if (!state.delegated && !state.delegateTaskContext) {
+    const dispatchClaimPatterns = [
+      /(?:已经|已|刚)?(?:派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?agent|worker|任务|task)/i,
+      /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?agent|worker)/i,
+      /(?:已|已经)?(?:交给|分配给|指派给|派给).*(?:处理|执行|完成)/i,
+    ];
+    for (const pattern of dispatchClaimPatterns) {
+      if (pattern.test(replyText)) {
+        return { mode: "replace", message: replaceAssistantMessageText(message, "我正在处理中，请稍等。") };
+      }
+    }
   }
   return { mode: "pass", message };
 }

@@ -53,6 +53,8 @@ import {
   sessionControlTools,
   shouldRetainPolicyStateOnAgentEnd,
   stringifyParamsForPolicy,
+  buildTurnExecutionReceipt,
+  type TurnExecutionReceipt,
   workflowEnforcementRule,
 } from "./replay/replay-logger.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
@@ -119,6 +121,44 @@ function asRecord(value: unknown): UnknownRecord {
 
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
+  if (receipts.length === 0) return "";
+  const lines = receipts.map((r, i) => {
+    const parts = [`Turn ${i + 1}: route=${r.route}`];
+    if (r.delegated) {
+      parts.push(`delegated=true, worker=${r.workerPool ?? "unknown"}, task_id=${r.delegateTaskId ?? "unknown"}`);
+    }
+    if (r.toolsUsed.length > 0) {
+      parts.push(`tools=[${r.toolsUsed.join(", ")}]`);
+    }
+    parts.push(`outcome=${r.outcome}, duration=${r.durationMs}ms`);
+    return parts.join(", ");
+  });
+  return `[RecentExecutionFacts]\n${lines.join("\n")}\n[/RecentExecutionFacts]`;
+}
+
+function collectRecentExecutionReceipts(currentSessionKey: string | null = null, limit = 3): TurnExecutionReceipt[] {
+  return policyState.entries()
+    .map(({ state, key }) => ({ state, key }))
+    .filter(({ state }) => {
+      if (!state?.decision) return false;
+      if (currentSessionKey) {
+        const stateSession = stringValue(state.canonicalSessionKey);
+        if (stateSession && stateSession !== currentSessionKey) {
+          return Number(state.updatedAt || 0) > Date.now() - 30 * 60 * 1000;
+        }
+      }
+      return true;
+    })
+    .sort((left, right) => Number(right.state.updatedAt || right.state.createdAt || 0) - Number(left.state.updatedAt || left.state.createdAt || 0))
+    .slice(0, limit)
+    .reverse()
+    .map(({ state }) => buildTurnExecutionReceipt(
+      state as Parameters<typeof buildTurnExecutionReceipt>[0],
+      Math.max(0, Number(state.updatedAt || 0) - Number(state.createdAt || state.updatedAt || 0)),
+    ));
 }
 
 export function resolveDelegationCapability(options: {
@@ -305,9 +345,32 @@ function toOpenClawToolDefinition(definition: Record<string, unknown>): Record<s
       ctx: Record<string, unknown>,
     ) => {
       const execute = definition.execute as ((params: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<Record<string, unknown>>);
-      return execute(params, ctx);
+      const result = await execute(params, ctx);
+      if (definition.name === "octoclaw_dispatch") {
+        logDispatchOutcome(result, asRecord(ctx).logger as LoggerLike | undefined);
+      }
+      return result;
     },
   };
+}
+
+function logDispatchOutcome(dispatchResult: unknown, logger?: LoggerLike): void {
+  if (!dispatchResult) return;
+  try {
+    const resultRecord = asRecord(dispatchResult);
+    const candidate = typeof dispatchResult === "string"
+      ? dispatchResult
+      : typeof resultRecord.text === "string"
+        ? resultRecord.text
+        : dispatchResult;
+    const parsed = typeof candidate === "string" ? JSON.parse(candidate) : candidate;
+    const parsedRecord = asRecord(parsed);
+    if (parsedRecord.ok) {
+      logger?.info?.(`[octoclaw] dispatch succeeded: route=${stringValue(parsedRecord.route)} worker=${stringValue(parsedRecord.worker_pool)} task_id=${stringValue(parsedRecord.task_id)}`);
+    } else if (Object.prototype.hasOwnProperty.call(parsedRecord, "ok")) {
+      logger?.warn?.(`[octoclaw] dispatch failed: error=${stringValue(parsedRecord.error)} seal_mismatch=${Boolean(parsedRecord.seal_mismatch)} retryable=${Boolean(parsedRecord.retryable)}`);
+    }
+  } catch { /* not JSON, legacy format */ }
 }
 
 function toOpenClawCommandDefinition(definition: Record<string, unknown>): Record<string, unknown> {
@@ -422,6 +485,7 @@ export const plugin = {
       preMetadata.judge_replay_log_path = resolveReplayLogPath();
       preMetadata.judge_task_state_path = resolveTaskStatePath();
       preMetadata.judge_session_keys = sessionKeys;
+      preMetadata.recent_execution_facts = buildRecentExecutionFacts(collectRecentExecutionReceipts(preStateKey));
       preMetadata.judge_context_packet = buildLiveJudgeContextPacket({
         prompt,
         metadata: preMetadata,
@@ -548,6 +612,7 @@ export const plugin = {
         prependSystem.push(lookupGuard);
       }
       if (asRecord(effectiveDecision.state_grounding).required) {
+        const executionFacts = buildRecentExecutionFacts(collectRecentExecutionReceipts(stateKey));
         const grounding = buildConversationGrounding({
           prompt,
           replayLogPath: resolveReplayLogPath(),
@@ -558,6 +623,7 @@ export const plugin = {
             stringValue(effectiveState?.canonicalSessionKey),
             stringValue(ctx.sessionKey),
           ].filter(Boolean),
+          recentExecutionFacts: executionFacts,
         });
         if (grounding?.context) {
           prependSystem.push(grounding.context);

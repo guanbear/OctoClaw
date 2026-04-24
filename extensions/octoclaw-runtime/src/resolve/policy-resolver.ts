@@ -1283,6 +1283,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let judgeRouteConfidence: number | undefined;
   let delegateReasonCodes: string[] = [];
   let remoteJudgeOverrideApplied = false;
+  let deterministicFallbackApplied = false;
 
   let dualJudgeConfig = resolveDualJudgeConfig(asRecord(options.metadata));
   if (!dualJudgeConfig) {
@@ -1385,6 +1386,32 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         remote_judge_result: remoteJudgeResult,
       };
 
+      // Deterministic hard-boundary fallback when judge timed out
+      if (judgeResult === null) {
+        const conversationControl = asRecord(metadata.conversation_control);
+        const intentClass = asString(conversationControl.intent_class);
+        const intentRequiresDelegation = ["fresh_live_lookup", "execution_followup"].includes(intentClass)
+          || asBoolean(conversationControl.require_fresh_lookup)
+          || asBoolean(conversationControl.require_state_grounding);
+        const toolNeedHint = asString(metadata.tool_need_hint);
+        const durationHint = asString(metadata.duration_hint);
+        const hardBoundarySignals = [
+          intentRequiresDelegation,
+          toolNeedHint === "required",
+          durationHint === "long",
+          asString(conversationControl.route_hint) === "delegate",
+        ];
+        if (hardBoundarySignals.some(Boolean)) {
+          // Deterministic hard-boundary: high-risk task must not default to reply
+          judgeRouteOverride = "delegate";
+          judgeSucceeded = true;
+          deterministicFallbackApplied = true;
+          judgeShadowLog = judgeShadowLog ?? {};
+          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route"][i] : null).filter(Boolean).join("+")}`;
+          judgeShadowLog.final_judge_route = "delegate";
+        }
+      }
+
       if (isActionableJudgeResult(judgeResult, judgeConfig.minConfidence)) {
         const routeStr = judgeResultToRouteOverride(judgeResult);
         if (routeStr) {
@@ -1463,6 +1490,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     ? rebuildDecisionWithRoute(decision, judgeRouteOverride, judgeRole)
     : decision;
 
+  if (finalDecision.route === "delegate") {
+    metadata._taskflow_preflight_required = true;
+  }
+
   const seeded: UnknownRecord = {
     summary: `policy=${finalDecision.route} -> ${workerPoolForDecision(finalDecision.executionProfile, finalDecision.role)}`,
     request: {
@@ -1484,6 +1515,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       work_type: asString(metadata.workType, "research"),
       phase: "execute",
       protocol: finalDecision.route === "reply" ? "normal" : "delegated",
+      route_source: deterministicFallbackApplied ? "fallback" : (judgeSucceeded ? "judge" : (judgeShadowLog?.fallback_reason ? "fallback" : "rule")),
+      judge_timeout: judgeShadowLog?.judge_timeout ?? false,
+      fallback_reason: judgeShadowLog?.fallback_reason ?? null,
+      final_judge_source: deterministicFallbackApplied ? "timeout_fallback" : (judgeSucceeded ? (remoteJudgeOverrideApplied ? "remote" : "local") : (judgeShadowLog?.judge_timeout ? "timeout" : "no_judge")),
       complexity_band: judgeComplexityBand,
       expected_duration_band: judgeExpectedDurationBand,
       quality_bar: judgeQualityBar,

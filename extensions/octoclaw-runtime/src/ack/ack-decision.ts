@@ -12,6 +12,7 @@ export interface AckDecisionPacket {
   toolActive: boolean;
   delegatedRunning: boolean;
   blocked: boolean;
+  hasValidThreadTarget: boolean;
   reactionAckSupported: boolean;
   reactionAckEnabled: boolean;
   reactionAckSent: boolean;
@@ -90,6 +91,13 @@ export function decideAckAction(packet: AckDecisionPacket): AckDecision {
     return {
       action: "suppress",
       reason: "reply-style ACKs are only emitted on reply route",
+    };
+  }
+
+  if (!packet.hasValidThreadTarget) {
+    return {
+      action: "suppress",
+      reason: "no valid thread target for ACK delivery",
     };
   }
 

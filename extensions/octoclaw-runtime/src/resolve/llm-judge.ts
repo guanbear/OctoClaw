@@ -236,7 +236,7 @@ export function buildLiveJudgeContextPacket(options: {
   const judgeConfig = metadata._judgeFastConfig as Record<string, unknown> | undefined;
   const isLocal = Boolean(judgeConfig?.local);
 
-  return buildJudgeContextPacket({
+  const contextPacket = buildJudgeContextPacket({
     prompt: options.prompt,
     metadata,
     replayLogPath: String(metadata.judge_replay_log_path ?? metadata.replay_log_path ?? ""),
@@ -244,6 +244,10 @@ export function buildLiveJudgeContextPacket(options: {
     sessionKeys,
     local: isLocal,
   });
+  if (metadata.recent_execution_facts) {
+    (contextPacket as JudgeContextPacket & { recent_execution?: unknown }).recent_execution = metadata.recent_execution_facts;
+  }
+  return contextPacket;
 }
 
 interface OpenAICompatOptions {

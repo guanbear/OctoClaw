@@ -17,6 +17,7 @@ function packet(overrides: Partial<AckDecisionPacket> = {}): AckDecisionPacket {
     toolActive: false,
     delegatedRunning: false,
     blocked: false,
+    hasValidThreadTarget: true,
     reactionAckSupported: true,
     reactionAckEnabled: true,
     reactionAckSent: false,
@@ -77,6 +78,53 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.action).toBe("suppress");
   });
 
+  it("suppresses ACK when no valid thread target exists", () => {
+    const decision = decideAckAction(packet({ nowMs: 1_000, hasValidThreadTarget: false }));
+
+    expect(decision.action).toBe("suppress");
+    expect(decision.reason).toBe("no valid thread target for ACK delivery");
+  });
+
+  it("sends ACK when a valid session target makes hasValidThreadTarget true without message_id", () => {
+    // buildDecisionPacket is responsible for setting hasValidThreadTarget=true
+    // when resolveAckTargetFromSessionKey(sessionKey) finds a target even if no message_id exists.
+    const decision = decideAckAction(packet({
+      nowMs: 1_000,
+      hasValidThreadTarget: true,
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+    }));
+
+    expect(decision.action).toBe("send_reaction_ack");
+    expect(decision.ackStage).toBe("ack0");
+  });
+
+  it("suppresses ACK when neither a session target nor message_id makes hasValidThreadTarget true", () => {
+    // buildDecisionPacket should leave hasValidThreadTarget=false when both message and session targets are missing.
+    const decision = decideAckAction(packet({
+      nowMs: 3_000,
+      hasValidThreadTarget: false,
+      reactionAckSupported: false,
+      reactionAckEnabled: false,
+    }));
+
+    expect(decision.action).toBe("suppress");
+    expect(decision.reason).toBe("no valid thread target for ACK delivery");
+  });
+
+  it("sends reaction ACK with valid thread target at 1s", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 1_000,
+      hasValidThreadTarget: true,
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+    }));
+
+    expect(decision.action).toBe("send_reaction_ack");
+    expect(decision.ackStage).toBe("ack0");
+    expect(decision.modality).toBe("reaction");
+  });
+
   it("considers delegatedRunning as active work eligible for ACK0", () => {
     const decision = decideAckAction(packet({
       nowMs: 3_000,
@@ -97,6 +145,21 @@ describe("ack-decision: decideAckAction", () => {
       nowMs: 3_000,
       delegatedRunning: true,
       mainModelActive: true,
+    }));
+
+    expect(decision.action).toBe("suppress");
+  });
+
+  it("suppresses delegate route even with delegatedRunning and a valid thread target", () => {
+    const decision = decideAckAction(packet({
+      route: "delegate",
+      nowMs: 3_000,
+      delegatedRunning: true,
+      mainModelActive: false,
+      toolActive: false,
+      hasValidThreadTarget: true,
+      reactionAckSupported: false,
+      reactionAckEnabled: false,
     }));
 
     expect(decision.action).toBe("suppress");
