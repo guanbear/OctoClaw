@@ -9,6 +9,7 @@ function packet(overrides: Partial<AckDecisionPacket> = {}): AckDecisionPacket {
     inboundAtMs: 0,
     firstTokenSeen: false,
     formalReplyVisible: false,
+    finalResponseStreaming: false,
     deliveryPending: false,
     delivered: false,
     userInputActive: false,
@@ -81,11 +82,48 @@ describe("ack-decision: decideAckAction", () => {
       stage: "ack0" as const,
       channel: "chat" as const,
       tone: "neutral" as const,
+      taskClass: "unknown" as const,
+      modality: "text" as const,
       threadBindingKey: "slack:channel:C123",
       turnId: "turn-1",
       recentKeys: [],
     };
 
     expect(selectAckTemplate(input)).toEqual(selectAckTemplate(input));
+  });
+
+  it("suppresses at highest priority when final response is streaming", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 3_000,
+      finalResponseStreaming: true,
+      mainModelActive: true,
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+    }));
+
+    expect(decision.action).toBe("suppress");
+    expect(decision.reason).toContain("final response streaming");
+  });
+
+  it("cancels queued ack writer when final response starts streaming", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 3_000,
+      finalResponseStreaming: true,
+      ackWriterQueued: true,
+    }));
+
+    expect(decision.action).toBe("cancel_ack_writer");
+  });
+
+  it("never returns enqueue_ack_writer action", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 200_000,
+      reactionAckSent: true,
+      tier1Sent: true,
+      tier2Sent: true,
+      mainModelActive: true,
+    }));
+
+    expect(decision.action).not.toBe("enqueue_ack_writer");
   });
 });

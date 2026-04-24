@@ -25,6 +25,7 @@ import {
 } from "./ack-decision.js";
 import {
   selectAckTemplate,
+  type AckTemplateTaskClass,
   type AckTemplateStage,
 } from "./ack-template-registry.js";
 import {
@@ -344,6 +345,7 @@ function buildTemplateRegistryMessage(
   stateKey: string,
   state: UnknownRecord,
   sessionKey = "",
+  decision?: AckDecision,
 ): string {
   const turnId = asString(state.turnId || state.turn_id || state.messageTurnId || state.message_turn_id)
     || `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`;
@@ -354,6 +356,9 @@ function buildTemplateRegistryMessage(
     stage,
     channel: packet.channelTone ?? "unknown",
     tone: "neutral",
+    taskClass: asString(state.taskClass || state.task_class || "unknown") as AckTemplateTaskClass,
+    modality: decision?.modality ?? "text",
+    semanticKey: asString(state.semanticKey || state.semantic_key) || undefined,
     threadBindingKey: asString(state.threadBindingKey || state.thread_binding_key)
       || threadKeyFromSessionKey(sessionKey, stateKey),
     turnId,
@@ -394,6 +399,7 @@ export function buildDecisionPacket(
     formalReplyVisible: asBoolean(merged.formalReplyVisible) || asBoolean(merged.formal_reply_visible),
     deliveryPending: asBoolean(merged.deliveryPending) || asBoolean(merged.delivery_pending),
     delivered: asBoolean(merged.delivered),
+    finalResponseStreaming: asBoolean(merged.finalResponseStreaming || merged.final_response_streaming),
     userInputActive: asBoolean(merged.userInputActive) || asBoolean(merged.user_input_active),
     mainModelActive: asBoolean(merged.mainModelActive) || asBoolean(merged.main_model_active) || asBoolean(merged.final_response_streaming),
     toolActive: asBoolean(merged.toolActive) || asBoolean(merged.tool_active),
@@ -676,53 +682,6 @@ function updateTaskStateCache(taskId: string, patch: Record<string, unknown>): v
   } catch { /* best effort */ }
 }
 
-function normalizeAckComparableText(value: unknown): string {
-  return asString(value)
-    .toLowerCase()
-    .replace(/[\s\p{P}\p{S}]+/gu, "");
-}
-
-function lcsLength(left: string, right: string): number {
-  if (!left || !right) return 0;
-  const previous = new Array<number>(right.length + 1).fill(0);
-  const current = new Array<number>(right.length + 1).fill(0);
-  for (let i = 1; i <= left.length; i += 1) {
-    current[0] = 0;
-    for (let j = 1; j <= right.length; j += 1) {
-      current[j] = left[i - 1] === right[j - 1]
-        ? previous[j - 1] + 1
-        : Math.max(previous[j], current[j - 1]);
-    }
-    for (let j = 0; j <= right.length; j += 1) previous[j] = current[j];
-  }
-  return previous[right.length] || 0;
-}
-
-function metadataUserMessage(metadata: UnknownRecord): string {
-  for (const candidate of [
-    metadata.user_message,
-    metadata.userMessage,
-    metadata.message_text,
-    metadata.messageText,
-    metadata.current_turn,
-    metadata.prompt,
-    metadata.task,
-  ]) {
-    const text = asString(candidate);
-    if (text) return text;
-  }
-  return "";
-}
-
-function shouldSuppressJudgeAckEcho(judgeAckText: string, metadata: UnknownRecord): boolean {
-  const normalizedAck = normalizeAckComparableText(judgeAckText);
-  const normalizedUserMessage = normalizeAckComparableText(metadataUserMessage(metadata));
-  if (!normalizedAck || !normalizedUserMessage) return false;
-  if (normalizedUserMessage.includes(normalizedAck)) return true;
-  const overlap = lcsLength(normalizedAck, normalizedUserMessage) / Math.max(1, Math.min(normalizedAck.length, normalizedUserMessage.length));
-  return overlap > 0.6;
-}
-
 async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string } | null> {
   const normalizedStateKey = asString(params.stateKey);
   const normalizedSessionKey = asString(params.sessionKey);
@@ -742,7 +701,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
 
   const packet = buildDecisionPacket(normalizedStateKey, effectiveState, routePhase);
   const decision = params.decision ?? decideAckAction(packet);
-  if (decision.action === "suppress" || decision.action === "no_action" || decision.action === "enqueue_ack_writer") {
+  if (decision.action === "suppress" || decision.action === "no_action") {
     ackDebug(`attemptAckSend: skipped action=${decision.action} reason=${decision.reason} threadKey=${threadKey} stage=${params.ackStage}`);
     updateTrackingState(normalizedStateKey, {
       ackKey,
@@ -818,6 +777,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
         normalizedStateKey,
         effectiveState,
         normalizedSessionKey,
+        decision,
       )
     : params.message;
   const isReactionAck = decision.action === "send_reaction_ack";
@@ -1122,11 +1082,8 @@ export async function maybeSendLatencyAck(
   }
   try {
     const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
-    const judgeAckText = asString(decision._judge_ack_text);
     const ackStage = latencyAckStage(decision);
-    const message = judgeAckText && !shouldSuppressJudgeAckEcho(judgeAckText, metadata)
-      ? judgeAckText
-      : ackStageText(ackStage);
+    const message = ackStageText(ackStage);
     const liveTrackingState = { ...preDecisionState, ...ackState(stateKey) };
     const result = await attemptAckSend({
       sessionKey,

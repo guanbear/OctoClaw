@@ -1,12 +1,19 @@
 export type AckTemplateStage = "ack0" | "tier1" | "tier2" | "tier3";
 export type AckTemplateChannel = "chat" | "work" | "cli" | "unknown";
 export type AckTemplateTone = "neutral" | "warm" | "terse";
+export type AckTemplateTaskClass =
+  | "lookup" | "coding" | "review" | "writing"
+  | "status" | "long_running" | "unknown";
+export type AckTemplateModality = "reaction" | "text" | "unknown";
 
 export interface AckTemplateEntry {
   key: string;
   stage: AckTemplateStage;
   channel: AckTemplateChannel;
   tone: AckTemplateTone;
+  taskClass: AckTemplateTaskClass;
+  modality: AckTemplateModality;
+  semanticKey?: string;
   text: string;
 }
 
@@ -15,6 +22,9 @@ export interface AckTemplateRegistry {
     stage: AckTemplateStage;
     channel: AckTemplateChannel;
     tone: AckTemplateTone;
+    taskClass: AckTemplateTaskClass;
+    modality: AckTemplateModality;
+    semanticKey?: string;
     threadBindingKey: string;
     turnId: string;
     recentKeys: string[];
@@ -23,18 +33,24 @@ export interface AckTemplateRegistry {
 }
 
 const ack0Templates: AckTemplateEntry[] = [
-  { key: "ack0-chat-neutral-1", stage: "ack0", channel: "chat", tone: "neutral", text: "收到，我在处理。" },
-  { key: "ack0-chat-neutral-2", stage: "ack0", channel: "chat", tone: "neutral", text: "收到，正在看。" },
-  { key: "ack0-chat-neutral-3", stage: "ack0", channel: "chat", tone: "neutral", text: "我看一下，马上继续。" },
-  { key: "ack0-chat-neutral-4", stage: "ack0", channel: "chat", tone: "neutral", text: "在处理了，稍等我一下。" },
-  { key: "ack0-chat-neutral-5", stage: "ack0", channel: "chat", tone: "neutral", text: "收到，我这边继续推进。" },
-  { key: "ack0-unknown-neutral-1", stage: "ack0", channel: "unknown", tone: "neutral", text: "收到，处理中。" },
+  { key: "ack0-chat-neutral-lookup-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "lookup", modality: "text", text: "收到，在看。" },
+  { key: "ack0-chat-neutral-lookup-2", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "lookup", modality: "text", text: "收到。" },
+  { key: "ack0-chat-neutral-coding-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "coding", modality: "text", text: "收到，在看。" },
+  { key: "ack0-chat-neutral-coding-2", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "coding", modality: "text", text: "收到。" },
+  { key: "ack0-chat-neutral-review-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "review", modality: "text", text: "收到，在看。" },
+  { key: "ack0-chat-neutral-writing-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "writing", modality: "text", text: "收到，在写。" },
+  { key: "ack0-chat-neutral-status-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "status", modality: "text", text: "收到，在看。" },
+  { key: "ack0-chat-neutral-long_running-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "long_running", modality: "text", text: "收到，处理中。" },
+  { key: "ack0-chat-neutral-unknown-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "unknown", modality: "text", text: "收到。" },
+  { key: "ack0-unknown-neutral-unknown-1", stage: "ack0", channel: "unknown", tone: "neutral", taskClass: "unknown", modality: "text", text: "收到。" },
+  { key: "ack0-chat-neutral-unknown-reaction-1", stage: "ack0", channel: "chat", tone: "neutral", taskClass: "unknown", modality: "reaction", text: "" },
+  { key: "ack0-unknown-neutral-unknown-reaction-1", stage: "ack0", channel: "unknown", tone: "neutral", taskClass: "unknown", modality: "reaction", text: "" },
 ];
 
 const tierTemplates: AckTemplateEntry[] = [
-  { key: "tier1-unknown-neutral-1", stage: "tier1", channel: "unknown", tone: "neutral", text: "还在处理，稍等一下。" },
-  { key: "tier2-unknown-neutral-1", stage: "tier2", channel: "unknown", tone: "neutral", text: "还需要一点时间，我继续跟进。" },
-  { key: "tier3-unknown-neutral-1", stage: "tier3", channel: "unknown", tone: "neutral", text: "处理时间较长，我整理一下当前进展。" },
+  { key: "tier1-unknown-neutral-unknown-1", stage: "tier1", channel: "unknown", tone: "neutral", taskClass: "unknown", modality: "text", text: "还在处理，稍等。" },
+  { key: "tier2-unknown-neutral-unknown-1", stage: "tier2", channel: "unknown", tone: "neutral", taskClass: "unknown", modality: "text", text: "还需要一点时间。" },
+  { key: "tier3-unknown-neutral-unknown-1", stage: "tier3", channel: "unknown", tone: "neutral", taskClass: "unknown", modality: "text", text: "处理时间较长，整理中。" },
 ];
 
 const defaultTemplates: AckTemplateEntry[] = [...ack0Templates, ...tierTemplates];
@@ -78,14 +94,16 @@ export function createAckTemplateRegistry(templates: AckTemplateEntry[] = defaul
       }
 
       const scopedPools = [
-        stageEntries.filter((entry) => entry.channel === input.channel && entry.tone === input.tone),
-        stageEntries.filter((entry) => entry.channel === input.channel && entry.tone === "neutral"),
-        stageEntries.filter((entry) => entry.channel === "unknown" && entry.tone === input.tone),
-        stageEntries.filter((entry) => entry.channel === "unknown" && entry.tone === "neutral"),
-        stageEntries,
+        stageEntries.filter((entry) => entry.channel === input.channel && entry.tone === input.tone && entry.taskClass === input.taskClass && entry.modality === input.modality),
+        stageEntries.filter((entry) => entry.channel === input.channel && entry.tone === input.tone && entry.taskClass === input.taskClass && entry.modality === input.modality),
+        stageEntries.filter((entry) => entry.channel === input.channel && entry.tone === input.tone && entry.modality === input.modality),
+        stageEntries.filter((entry) => entry.channel === "unknown" && entry.tone === "neutral" && entry.modality === input.modality),
+        stageEntries.filter((entry) => entry.modality === input.modality),
+        stageEntries.filter((entry) => entry.channel === "unknown" && entry.tone === "neutral" && entry.text.length > 0),
+        stageEntries.filter((entry) => entry.text.length > 0),
       ];
       const pool = scopedPools.find((candidatePool) => candidatePool.length > 0) ?? stageEntries;
-      const hashInput = `${input.threadBindingKey}:${input.turnId}:${input.stage}`;
+      const hashInput = `${input.threadBindingKey}:${input.turnId}:${input.stage}:${input.semanticKey ?? input.taskClass}`;
 
       return selectFromPool(pool, hashInput, input.recentKeys);
     },

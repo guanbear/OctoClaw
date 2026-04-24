@@ -86,8 +86,7 @@ export function normalizeToLiveRoute(raw: string): LiveRoute | null {
   if (normalized === "runner" || normalized === "spawn_single" || normalized === "spawn_multi" || normalized === "observe") {
     return "delegate";
   }
-  if (normalized === "reply" || normalized === "delegate") return normalized;
-  return null;
+  return canonicalLiveRoute(normalized);
 }
 
 export function validateRouteSeal(seal: RouteSeal, turnId: string, threadBindingKey: string): boolean {
@@ -103,28 +102,31 @@ export function resolveCurrentRouteSeal(input: ResolveCurrentRouteSealInput): Ro
   const policyJson = input.policyJson ?? {};
   const policyRouteSeal = policyJson.routeSeal;
   if (isRecord(policyRouteSeal)) {
-    const candidate: RouteSeal = {
-      schemaVersion: ROUTE_SEAL_SCHEMA_VERSION,
-      requestId: asString(policyRouteSeal.requestId),
-      turnId: asString(policyRouteSeal.turnId),
-      threadBindingKey: asString(policyRouteSeal.threadBindingKey),
-      route: canonicalLiveRoute(policyRouteSeal.route) ?? "reply",
-      source: routeSealSource(policyRouteSeal.source),
-      reasonCodes: reasonCodesFrom(policyRouteSeal.reasonCodes, "explicit_current_policy"),
-      createdAt: asString(policyRouteSeal.createdAt),
-      inputHash: asString(policyRouteSeal.inputHash),
-      stateGeneration: asNumber(policyRouteSeal.stateGeneration) ?? 0,
-      ...(canonicalLiveRoute(policyRouteSeal.route) === "reply" && (policyRouteSeal.replyMode === "answer" || policyRouteSeal.replyMode === "clarify")
-        ? { replyMode: policyRouteSeal.replyMode }
-        : {}),
-      ...(asNumber(policyRouteSeal.confidence) === undefined ? {} : { confidence: asNumber(policyRouteSeal.confidence) }),
-    };
-    if (validateRouteSeal(candidate, input.turnId, input.threadBindingKey)) {
-      return candidate;
+    const candidateRoute = normalizeToLiveRoute(asString(policyRouteSeal.route));
+    if (candidateRoute !== null) {
+      const candidate: RouteSeal = {
+        schemaVersion: ROUTE_SEAL_SCHEMA_VERSION,
+        requestId: asString(policyRouteSeal.requestId),
+        turnId: asString(policyRouteSeal.turnId),
+        threadBindingKey: asString(policyRouteSeal.threadBindingKey),
+        route: candidateRoute,
+        source: routeSealSource(policyRouteSeal.source),
+        reasonCodes: reasonCodesFrom(policyRouteSeal.reasonCodes, "explicit_current_policy"),
+        createdAt: asString(policyRouteSeal.createdAt),
+        inputHash: asString(policyRouteSeal.inputHash),
+        stateGeneration: asNumber(policyRouteSeal.stateGeneration) ?? 0,
+        ...(candidateRoute === "reply" && (policyRouteSeal.replyMode === "answer" || policyRouteSeal.replyMode === "clarify")
+          ? { replyMode: policyRouteSeal.replyMode }
+          : {}),
+        ...(asNumber(policyRouteSeal.confidence) === undefined ? {} : { confidence: asNumber(policyRouteSeal.confidence) }),
+      };
+      if (validateRouteSeal(candidate, input.turnId, input.threadBindingKey)) {
+        return candidate;
+      }
     }
   }
 
-  const explicitRoute = canonicalLiveRoute(policyJson.requested_route) ?? canonicalLiveRoute(policyJson.forceRoute);
+  const explicitRoute = normalizeToLiveRoute(asString(policyJson.requested_route)) ?? normalizeToLiveRoute(asString(policyJson.forceRoute));
   if (explicitRoute) {
     return createRouteSeal(input, explicitRoute, "explicit_current_policy", policyJson);
   }

@@ -201,7 +201,7 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     });
 
     expect(result).toBe(true);
-    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({ message: "收到，处理中。" }));
+    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/^.{1,20}$/) }));
   });
 
   it("first token arrival cancels pending ACK", () => {

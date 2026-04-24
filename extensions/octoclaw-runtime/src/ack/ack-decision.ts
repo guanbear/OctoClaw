@@ -4,6 +4,7 @@ export interface AckDecisionPacket {
   inboundAtMs: number;
   firstTokenSeen: boolean;
   formalReplyVisible: boolean;
+  finalResponseStreaming: boolean;
   deliveryPending: boolean;
   delivered: boolean;
   userInputActive: boolean;
@@ -25,7 +26,6 @@ export type AckDecisionAction =
   | "send_reaction_ack"
   | "send_text_ack0"
   | "send_tier_nudge"
-  | "enqueue_ack_writer"
   | "cancel_ack_writer"
   | "suppress"
   | "no_action";
@@ -60,6 +60,13 @@ function workIsActive(packet: AckDecisionPacket): boolean {
 }
 
 export function decideAckAction(packet: AckDecisionPacket): AckDecision {
+  // HIGHEST PRIORITY: suppress when final response is actively streaming
+  if (packet.finalResponseStreaming) {
+    return packet.ackWriterQueued
+      ? { action: "cancel_ack_writer", reason: "final response streaming supersedes all ACK" }
+      : { action: "suppress", reason: "final response streaming supersedes all ACK" };
+  }
+
   if (packet.delivered || packet.formalReplyVisible || packet.deliveryPending || packet.firstTokenSeen) {
     return packet.ackWriterQueued
       ? {
@@ -110,18 +117,13 @@ export function decideAckAction(packet: AckDecisionPacket): AckDecision {
   }
 
   if (hasAck0 && elapsed >= ACK_TIMING.tier3_ms) {
-    return packet.ackWriterQueued
-      ? {
-          action: "no_action",
-          reason: "ACK writer already queued for extended silence",
-        }
-      : {
-          action: "enqueue_ack_writer",
-          reason: "extended silence after tier ACKs should be handled by ACK writer",
-          ackStage: "tier3",
-          modality: "text",
-          templateKey: "tier3",
-        };
+    return {
+      action: "no_action",
+      reason: "extended silence after tier ACKs, no ack_writer available",
+      ackStage: "tier3",
+      modality: "text",
+      templateKey: "tier3",
+    };
   }
 
   if (hasAck0) {

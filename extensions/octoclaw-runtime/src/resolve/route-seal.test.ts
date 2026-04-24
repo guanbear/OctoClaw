@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ROUTE_SEAL_SCHEMA_VERSION, type RouteSeal } from "@octoclaw/contracts/route-seal";
+import { ROUTE_SEAL_SCHEMA_VERSION, type LiveRoute, type RouteSeal } from "@octoclaw/contracts/route-seal";
 
 import {
   normalizeToLiveRoute,
@@ -59,13 +59,20 @@ describe("route-seal resolver", () => {
     expect(result.source).toBe("explicit_current_policy");
   });
 
-  it("normalizes legacy vocab for compat but never stores it as top-level route", () => {
+  it("normalizes legacy route vocab in forceRoute to correct LiveRoute", () => {
     expect(normalizeToLiveRoute("runner")).toBe("delegate");
     expect(normalizeToLiveRoute("spawn_single")).toBe("delegate");
     expect(normalizeToLiveRoute("observe")).toBe("delegate");
     expect(normalizeToLiveRoute("direct")).toBe("reply");
 
-    for (const legacyRoute of ["runner", "spawn_single", "observe", "direct"]) {
+    const cases: Array<[string, LiveRoute]> = [
+      ["runner", "delegate"],
+      ["spawn_single", "delegate"],
+      ["spawn_multi", "delegate"],
+      ["observe", "delegate"],
+      ["direct", "reply"],
+    ];
+    for (const [legacyRoute, expected] of cases) {
       const result = resolveCurrentRouteSeal({
         requestId: `req-${legacyRoute}`,
         turnId: `turn-${legacyRoute}`,
@@ -73,9 +80,46 @@ describe("route-seal resolver", () => {
         policyJson: { forceRoute: legacyRoute },
       });
 
-      expect(result.route).toBe("reply");
-      expect(result.source).toBe("safe_fallback");
+      expect(result.route).toBe(expected);
+      expect(result.source).toBe("explicit_current_policy");
     }
+  });
+
+  it("rejects completely unrecognized routes and falls through to safe_fallback", () => {
+    const result = resolveCurrentRouteSeal({
+      requestId: "req-unknown",
+      turnId: "turn-unknown",
+      threadBindingKey: "thread-unknown",
+      policyJson: { forceRoute: "nonsense_route_value" },
+    });
+
+    expect(result.route).toBe("reply");
+    expect(result.source).toBe("safe_fallback");
+  });
+
+  it("normalizes legacy route in stored policyJson.routeSeal", () => {
+    const result = resolveCurrentRouteSeal({
+      requestId: "req-stored-runner",
+      turnId: "turn-stored",
+      threadBindingKey: "thread-stored",
+      policyJson: {
+        routeSeal: {
+          schemaVersion: ROUTE_SEAL_SCHEMA_VERSION,
+          requestId: "req-stored-runner",
+          turnId: "turn-stored",
+          threadBindingKey: "thread-stored",
+          route: "runner",
+          source: "local_judge",
+          reasonCodes: ["test"],
+          createdAt: new Date().toISOString(),
+          inputHash: "hash-1",
+          stateGeneration: 1,
+        },
+      },
+    });
+
+    expect(result.route).toBe("delegate");
+    expect(result.source).toBe("local_judge");
   });
 
   it("does not let regex grounding terms override judge route", () => {
