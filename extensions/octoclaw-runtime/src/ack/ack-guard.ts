@@ -704,7 +704,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     messageTurnId,
   });
 
-  const packet = buildDecisionPacket(normalizedStateKey, effectiveState, routePhase, normalizedSessionKey);
+  const packet = buildDecisionPacket(normalizedStateKey, effectiveState, routePhase);
   const decision = params.decision ?? decideAckAction(packet);
   if (decision.action === "suppress" || decision.action === "no_action") {
     ackDebug(`attemptAckSend: skipped action=${decision.action} reason=${decision.reason} threadKey=${threadKey} stage=${params.ackStage}`);
@@ -980,7 +980,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         templateInputs,
         result.tier >= 3 ? { stage_hint: templateInputs.stageHint || `tier${result.tier}` } : {},
       );
-      const packet = buildDecisionPacket(stateKey, liveTrackingState, result.routePhase, normalizedSessionKey);
+      const packet = buildDecisionPacket(stateKey, liveTrackingState, result.routePhase);
       const ackDecision = decideAckAction(packet);
       if (ackDecision.action === "cancel_ack_writer") {
         cancelAckGuardForState(stateKey);
