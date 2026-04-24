@@ -36,6 +36,7 @@ OpenClaw 参考基线：`v2026.4.21`
 3. ACK 逻辑过重，但对“主 agent 慢、无首回应”的体验目标不够直接
 4. 子 agent 派发结果和旧 thread history 仍可能污染主 agent 上下文
 5. 大文件职责混杂，后续修改风险高
+6. judge context 仍缺少 `execution coverage`，导致 provenance/status follow-up 被误判成新委派
 
 ---
 
@@ -99,14 +100,15 @@ OpenClaw 参考基线：`v2026.4.21`
 
 ## 3. 推荐落地顺序
 
-按下面 6 个 work package 做。不要一次性大重构。
+按下面 7 个 work package 做。不要一次性大重构。
 
 1. WP1：route sealing 与 keyword/rule 去权威化
-2. WP2：OpenClaw `TaskFlowPort` 与 truth-source 收敛
-3. WP3：ACK 简化与首回应体验修正
-4. WP4：派发上下文污染治理
-5. WP5：状态面/details/status 同源查询
-6. WP6：大文件拆分与冗余清理
+2. WP1b：judge context coverage，补 `memory + execution truth` 双层覆盖
+3. WP2：OpenClaw `TaskFlowPort` 与 truth-source 收敛
+4. WP3：ACK 简化与首回应体验修正
+5. WP4：派发上下文污染治理
+6. WP5：状态面/details/status 同源查询
+7. WP6：大文件拆分与冗余清理
 
 每个 WP 都要先加测试，再改实现。
 
@@ -209,6 +211,321 @@ RouteSeal 不允许只放在进程内 Map。
 pnpm --filter @octoclaw/policy test
 pnpm --filter octoclaw-runtime test -- route
 ```
+
+---
+
+## 4b. WP1b：Judge Context Coverage
+
+### 4b.1 目标
+
+修掉这类问题：
+
+1. 用户问“你是自己查的还是子 agent 查的”，judge 默认判 `delegate`
+2. 系统为了回答 provenance，又派发一个新子 agent 去查“是不是子 agent”
+3. 主 agent 已有 execution receipt，但 judge 看不到，于是误判
+4. memory/active-memory 有背景信息，但 execution truth 没建模，导致“记忆”和“执行事实”混用
+
+核心原则：
+
+> provenance/status follow-up 不是默认新工作。它优先是读取已有 execution truth。
+
+### 4b.2 新增 packet 层
+
+在现有 `JudgeContextPacket` 中新增两层：
+
+```ts
+export interface JudgeMemoryLayer {
+  coverage?: "none" | "partial" | "strong";
+  freshness_risk?: "low" | "high";
+  source?: Array<"bootstrap" | "memory_search" | "active_memory">;
+  supports_direct_reply?: boolean;
+  supports_fresh_lookup?: boolean;
+  evidence_summary?: string;
+  conflict?: boolean;
+}
+
+export interface JudgeExecutionLayer {
+  coverage?: "none" | "current_turn" | "recent_turn" | "thread";
+  freshness?: "current" | "recent" | "stale";
+  supports_provenance_reply?: boolean;
+  supports_status_reply?: boolean;
+  requires_control_plane_refresh?: boolean;
+  last_route?: "reply" | "delegate" | "unknown";
+  last_reply_mode?: "answer" | "clarify" | null;
+  last_delegate_role?: "observer" | "default" | "code" | "research" | "review" | null;
+  tools_used?: string[];
+  dispatch_executed?: boolean;
+  spawn_executed?: boolean;
+  native_task_id?: string;
+  native_flow_id?: string;
+  result_materialized?: boolean;
+  delivery_status?: "none" | "pending" | "delivered" | "failed";
+  evidence_summary?: string;
+  conflict?: boolean;
+}
+```
+
+`memory` 只回答“已有记忆是否足够支撑直接回复”。`execution` 只回答“已有执行事实是否足够回答 provenance/status”。
+
+### 4b.3 判断规则
+
+必须写进 policy spec / prompt builder / validator：
+
+1. `execution.supports_provenance_reply=true`
+   - route 必须保持 `reply`
+   - reply_mode 为 `answer`
+   - 不允许 `octoclaw_dispatch`
+   - 不允许 `octoclaw_spawn`
+2. `execution.supports_status_reply=true`
+   - route 保持 `reply`
+   - 直接基于 receipt/status snapshot 回答
+3. `execution.requires_control_plane_refresh=true`
+   - 允许 `octoclaw_status` / `octoclaw_task_action`
+   - 仍不得 spawn 子 agent
+4. 只有新外部查询、新 workspace inspection、新命令执行、长任务，才按铁律进入 `delegate`
+5. memory 与 execution 冲突时，execution wins
+
+旧规则必须删除或改写：
+
+```text
+execution truth/provenance follow-up -> delegate
+```
+
+替换为：
+
+```text
+provenance follow-up with sufficient execution coverage -> reply.answer
+status follow-up with sufficient execution coverage -> reply.answer
+status follow-up requiring lightweight control-plane refresh -> reply + status/task-action control tool
+new probe/work/tool execution/>1min -> delegate
+```
+
+### 4b.4 代码落点
+
+建议新增/调整：
+
+1. `extensions/octoclaw-runtime/src/resolve/judge-context-packet.ts`
+   - 给 packet 加 `memory` / `execution`
+2. `extensions/octoclaw-runtime/src/resolve/execution-coverage-precheck.ts`
+   - 从 `TurnExecutionReceipt` / `RecentExecutionFacts` / route seal / tool receipt / delivery receipt 组装 `JudgeExecutionLayer`
+3. `extensions/octoclaw-runtime/src/resolve/memory-coverage-precheck.ts`
+   - 只聚合已有 active-memory/bootstrap signal，不主动查 memory tool
+4. `extensions/octoclaw-runtime/src/resolve/policy-resolver.ts`
+   - judge 前按顺序跑 `execution coverage -> memory coverage -> buildJudgeContextPacket`
+5. `packages/octoclaw-policy/src/spec/decision-policy-spec.ts`
+   - 改 anti-reply-bias 中 provenance 默认 delegate 的规则
+6. `packages/octoclaw-policy/src/spec/prompt-builder.ts`
+   - prompt view 中加入 execution coverage 例外
+7. `extensions/octoclaw-runtime/src/tools/registration.ts`
+   - 防御：provenance/status-only route 不得调用 `octoclaw_spawn`
+
+### 4b.5 非目标
+
+1. 不用关键词词表接管 provenance intent
+2. 不让 memory 证明执行来源
+3. 不让 active-memory 改 route
+4. 不为了 provenance 启动子 agent
+5. 不把完整 thread transcript 回灌给 judge
+
+### 4b.6 测试
+
+必须覆盖：
+
+1. 上一轮 `route=reply + tools_used=[web_fetch]`，用户问“你是自己查的还是子 agent 查的”
+   - 期望 `route=reply`
+   - 不调用 `octoclaw_dispatch`
+   - 不调用 `octoclaw_spawn`
+2. 上一轮 `route=delegate + dispatch_executed=true + spawn_executed=true + result_materialized=true`，用户问“谁做的”
+   - 期望基于 receipt 回答子 agent
+3. 上一轮 `dispatch_executed=true + spawn_executed=false`，用户问“派发成功了吗”
+   - 期望回答已登记但未执行/未产出
+4. execution coverage 缺失，用户问 provenance
+   - 期望快速回答无可验证记录
+   - 最多允许 status/task-action
+   - 不允许 spawn
+5. `memory.coverage=strong` 但 `execution.dispatch_executed=false`
+   - 期望 execution wins
+
+验收命令：
+
+```bash
+pnpm --filter @octoclaw/policy test
+pnpm --filter octoclaw-runtime test -- judge-context execution-coverage provenance
+```
+
+### 4b.7 给执行者的解释说明
+
+这一节是为了防止实现做偏。这里修的不是“再加几个 provenance 关键词”，也不是“让 memory 压过 judge”。
+
+真正的问题是：
+
+1. judge 当前只知道用户问了一个看似需要查证的问题
+2. 但 judge 不知道系统手里已经有 execution receipt
+3. 于是它把“读取已有执行事实”误判成“创建一个新执行单元”
+4. 最后出现荒诞链路：为了回答“是不是子 agent 做的”，又派了一个子 agent 去查
+
+正确心智模型：
+
+1. 用户问“刚才是谁做的”
+2. 系统先看 execution coverage
+3. 如果 receipt 已能证明：
+   - 上一轮是主 agent 直接回复
+   - 上一轮用了哪些工具
+   - 有没有 dispatch
+   - 有没有 spawn
+   - 有没有 worker result
+4. 那这就是一个 `reply.answer`
+5. 不需要也不允许创建新的 delegated work unit
+
+错误心智模型：
+
+1. 用户问“谁做的”
+2. 这是执行事实问题
+3. 执行事实要查
+4. 查就要 delegate
+5. 于是 spawn 子 agent
+
+上面第 4 步是错的。这里的“查”如果只是读取当前 runtime 已有 receipt/status snapshot，不是新工作。
+
+### 4b.8 正确与错误例子
+
+例子 A：上一轮主会话直接查网页。
+
+已有 execution layer：
+
+```json
+{
+  "coverage": "recent_turn",
+  "supports_provenance_reply": true,
+  "last_route": "reply",
+  "tools_used": ["web_fetch"],
+  "dispatch_executed": false,
+  "spawn_executed": false,
+  "result_materialized": false,
+  "delivery_status": "delivered"
+}
+```
+
+用户问：
+
+```text
+你是自己查的还是子 agent 查的
+```
+
+正确：
+
+```json
+{
+  "route": "reply",
+  "reply_mode": "answer",
+  "reason_codes": ["execution_coverage_supports_provenance_reply"]
+}
+```
+
+用户可见答案应类似：
+
+```text
+这条能确认是主会话自己查的：上一轮记录里是 reply 路径，直接用了 web_fetch，没有 delegated task / subagent result 记录。
+```
+
+错误：
+
+```json
+{
+  "route": "delegate",
+  "delegate_role": "observer"
+}
+```
+
+也错误：
+
+```text
+我派个子 agent 去查一下刚才是不是子 agent 查的。
+```
+
+例子 B：上一轮只登记 dispatch，没有真正 spawn。
+
+已有 execution layer：
+
+```json
+{
+  "coverage": "recent_turn",
+  "supports_provenance_reply": true,
+  "last_route": "delegate",
+  "dispatch_executed": true,
+  "spawn_executed": false,
+  "native_task_id": "task-123",
+  "result_materialized": false,
+  "delivery_status": "none"
+}
+```
+
+用户问：
+
+```text
+派发成功了吗
+```
+
+正确答案应区分：
+
+```text
+只能确认已经登记了委派任务 task-123，但没有看到子 agent 真正启动或产出结果的 receipt，所以不能说派发执行成功。
+```
+
+不要说：
+
+```text
+已经派发成功，等结果。
+```
+
+也不要为了补这个事实再 spawn。
+
+例子 C：用户问新的外部事实。
+
+用户问：
+
+```text
+帮我查 OpenClaw 4.22 最新特性
+```
+
+即使 memory 里有之前版本摘要，也不能把它当 fresh truth。正确仍是：
+
+```json
+{
+  "route": "delegate",
+  "delegate_role": "research",
+  "reason_codes": ["fresh_lookup_requires_new_work"]
+}
+```
+
+### 4b.9 实现边界再确认
+
+请按这个边界做：
+
+1. 可以新增 `execution-coverage-precheck.ts`
+2. 可以新增 `memory-coverage-precheck.ts`
+3. 可以扩展 `judge-context-packet.ts`
+4. 可以改 `decision-policy-spec.ts` / `prompt-builder.ts`
+5. 可以加 tool guard，阻止 provenance/status-only case 调用 spawn
+6. 不要新增一套 router
+7. 不要把正则 pattern 当 authority
+8. 不要让主 agent 自己 silent override
+9. 不要让 active-memory 直接改 route
+10. 不要为了 provenance 查询启动新的 worker
+
+最低实现可以先只覆盖已有 receipt：
+
+1. 读取最近一轮 `TurnExecutionReceipt`
+2. 读取 `RecentExecutionFacts`
+3. 把 route/tools/dispatch/spawn/task/result/delivery 投到 execution layer
+4. local judge 消费这个 layer
+5. prompt/policy 明确 execution coverage 足够时 provenance -> reply
+
+暂时做不到完整 native task/flow 查询也可以，但必须保证：
+
+1. 有 receipt 时不误委派
+2. 没 receipt 时不胡说
+3. 没 receipt 时也不 spawn
 
 ---
 
@@ -970,6 +1287,14 @@ export interface DelegateLookupResult {
 3. `observe` 不作为顶层 route
 4. runner 缺席不改变 route
 5. main agent objection 有记录，否则不得 silent override
+
+### 10.1b Judge context coverage
+
+1. provenance follow-up with execution receipt -> `reply.answer`
+2. provenance follow-up must not call `octoclaw_dispatch`
+3. provenance follow-up must not call `octoclaw_spawn`
+4. memory strong cannot prove execution source
+5. execution truth wins when memory and execution disagree
 
 ### 10.2 Native task/flow
 

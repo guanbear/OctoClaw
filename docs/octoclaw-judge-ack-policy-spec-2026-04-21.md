@@ -353,6 +353,16 @@ v1 应明确写死：
 4. scope 不明优先 `clarify`
 5. 不允许靠猜 scope / guess target 把 case 硬压成 `reply.answer`
 
+但这里必须有一个强例外：
+
+1. provenance/status follow-up 不等于新工作
+2. 如果 judge context packet 的 `execution.supports_provenance_reply=true`，应判 `reply.answer`
+3. 如果 `execution.supports_status_reply=true`，应判 `reply.answer`
+4. 如果只需要刷新 control-plane task/status，允许 `reply` 路径使用 status/task-action control tool
+5. 不允许为了回答“刚才是谁做的/是不是子 agent 做的”再启动 `octoclaw_dispatch` 或 `octoclaw_spawn`
+
+这条不是放宽 reply，而是防止把 execution receipt 读取误判成新 delegated work unit。
+
 ## 10. rubric
 
 ### 10.1 `reply`
@@ -416,6 +426,29 @@ validator_default_rules:
   "open_decision": "",
   "anchor_or_task_binding": null,
   "scope_hint": "unknown",
+  "memory": {
+    "coverage": "none | partial | strong",
+    "freshness_risk": "low | high",
+    "supports_direct_reply": false,
+    "supports_fresh_lookup": false,
+    "evidence_summary": ""
+  },
+  "execution": {
+    "coverage": "none | current_turn | recent_turn | thread",
+    "freshness": "current | recent | stale",
+    "supports_provenance_reply": false,
+    "supports_status_reply": false,
+    "requires_control_plane_refresh": false,
+    "last_route": "reply | delegate | unknown",
+    "tools_used": [],
+    "dispatch_executed": false,
+    "spawn_executed": false,
+    "native_task_id": "",
+    "native_flow_id": "",
+    "result_materialized": false,
+    "delivery_status": "none | pending | delivered | failed",
+    "evidence_summary": ""
+  },
   "recent_excerpt": []
 }
 ```
@@ -428,6 +461,33 @@ validator_default_rules:
 2. `escalation_reason`
 3. `optional_task_snapshot`
 4. `optional_system_state_summary`
+5. `optional_execution_receipt_excerpt`
+
+### 12.2.1 context coverage 权威规则
+
+judge 必须按下面顺序理解 packet：
+
+1. `execution` layer 只负责执行事实：route、工具、dispatch、spawn、native task/flow、delivery、result materialization
+2. `memory` layer 只负责历史背景：偏好、稳定事实、之前设计决定、active-memory summary
+3. provenance/status 追问优先看 `execution`
+4. memory 不能证明执行来源
+5. memory 与 execution 冲突时，execution wins
+
+典型规则：
+
+```yaml
+coverage_rules:
+  - if: "execution.supports_provenance_reply == true"
+    then: "route=reply, reply_mode=answer"
+  - if: "execution.supports_status_reply == true"
+    then: "route=reply, reply_mode=answer"
+  - if: "execution.requires_control_plane_refresh == true"
+    then: "route=reply, allow status/task-action control tool, do not spawn"
+  - if: "memory.coverage == strong && memory.freshness_risk == low"
+    then: "reply remains eligible, but not automatic"
+  - if: "fresh external lookup or real probe or command execution or >1min"
+    then: "prefer delegate"
+```
 
 ### 12.3 ack writer packet
 

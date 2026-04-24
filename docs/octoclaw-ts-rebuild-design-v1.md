@@ -3944,6 +3944,715 @@ future UI 再在同一份 view model 上做：
 3. 两者都不是“最后一句分类器”
 4. 两者也都不是“全量 transcript 推理器”
 
+#### judge context packet 还必须显式表达 memory coverage，而不是让 judge 猜
+
+这里要补一个容易被忽略、但在 OpenClaw 现状里非常关键的事实：
+
+1. 主线程实际能拿到的“记忆”并不只有一种
+2. 但 judge 当前默认并不知道这些记忆层到底有没有覆盖当前问题
+3. 如果不显式建模，就会出现：
+   - 明明 memory 已经够回答
+   - judge 还是按“看起来像要查/要做事”去委派
+
+当前至少存在 3 类 memory 面：
+
+1. bootstrap / startup memory
+   - 例如 `MEMORY.md`、`memory/*.md`、近期 daily memory 片段
+   - 它们可能作为 workspace/bootstrap context 注入主线程
+2. memory-core recall tools
+   - 主 agent 可通过 `memory_search` / `memory_get` 主动检索
+   - 这是一条显式 recall 能力，不只是被动上下文
+3. active-memory projection
+   - `active-memory` 会在 `before_prompt_build` 阶段先跑一个 memory-only recall 流程
+   - 再把压缩摘要作为 supplemental context 塞回主 prompt
+
+真正的冲突点不在于“有没有 memory”，而在于：
+
+1. 主 agent 最终回答时，可能已经吃到了 bootstrap memory / active-memory summary / recall tool 结果
+2. 但热路径 judge 在判 `reply | delegate` 时，往往并不知道这些 memory 是否已足够覆盖
+3. 于是 route 和真实可回答能力之间会发生错位
+
+所以 v1 必须把 memory 的边界写清楚：
+
+1. memory **不直接拥有 route authority**
+2. active-memory **不直接拥有 route authority**
+3. memory 也**不能成为第二套隐藏真相源**
+4. 但 memory 必须通过一个很薄的 **memory coverage precheck** 转成 judge 可消费的结构化信号
+
+也就是说：
+
+> **memory 不负责拍板 route；memory precheck 只负责告诉 judge：当前 memory 是否足以支持 direct reply。**
+
+#### memory coverage precheck 的职责边界
+
+这个 precheck 不应该升级成一个新的“大脑”。
+
+它只回答下面这些非常收口的问题：
+
+1. 当前是否存在与用户问题高度相关的 memory 支撑
+2. 这些支撑来自哪一层
+3. 覆盖强度如何
+4. 新鲜度风险如何
+5. 是否足以让 `reply` 继续保持 eligible
+
+它**不负责**：
+
+1. 最终决定 `reply | delegate`
+2. 代替 judge 推理复杂度、角色、模型档位
+3. 生成用户答案
+4. 绕过“fresh lookup / real probe / tool execution / >1 minute”这些委派铁律
+
+#### 推荐的 memory coverage packet
+
+推荐把这层信号显式收成：
+
+```json
+{
+  "memory_coverage": "none | partial | strong",
+  "memory_freshness_risk": "low | high",
+  "memory_source": ["bootstrap", "memory_search", "active_memory"],
+  "memory_supports_direct_reply": true,
+  "memory_supports_fresh_lookup": false,
+  "memory_evidence_summary": "very short normalized recall summary",
+  "memory_conflict": false
+}
+```
+
+字段语义建议固定为：
+
+1. `memory_coverage`
+   - `none`
+     - 基本没有相关记忆命中
+   - `partial`
+     - 有相关记忆，但不够独立支撑最终回答
+   - `strong`
+     - 记忆内容已经足以支撑一次低风险 direct reply
+2. `memory_freshness_risk`
+   - `low`
+     - 内容主要是偏好、历史决策、之前已完成工作、相对稳定的会话背景
+   - `high`
+     - 内容可能过时，或用户问题天然依赖“最新状态/当前环境/外部真相”
+3. `memory_source`
+   - 说明覆盖来自：
+     - `bootstrap`
+     - `memory_search`
+     - `active_memory`
+4. `memory_supports_direct_reply`
+   - 表示“如果没有别的硬边界，仅从记忆覆盖看，reply 仍可成立”
+5. `memory_supports_fresh_lookup`
+   - 几乎总应为 `false`
+   - 因为 memory 可以支持“回忆型回答”，但不能冒充“实时查证”
+6. `memory_evidence_summary`
+   - 只允许极短摘要
+   - 不能把完整 recall transcript、完整 memory 结果整段回灌给 judge
+7. `memory_conflict`
+   - 表示不同 memory 层之间出现冲突，或 recall 与当前 active task truth 冲突
+
+#### route 与 memory precheck 的关系
+
+推荐把判定关系写死成下面这几条：
+
+1. `memory_coverage=strong` 且 `memory_freshness_risk=low`
+   - `reply` 继续保持 eligible
+   - 但不是自动 override 成 `reply`
+2. `memory_coverage=partial`
+   - 只作为“reply 可以继续考虑”的弱正信号
+   - 最终仍由 judge 结合 task type / complexity / duration / tool need 决定
+3. `memory_coverage=none`
+   - 不提供额外帮助
+   - 正常走 judge
+4. 即使 `memory_coverage=strong`
+   - 只要用户要求：
+     - 最新信息
+     - 当前机器/当前环境状态
+     - 实时版本/日志/服务状态
+     - 真正的工具调用/执行/写入
+     - 预计超过 1 分钟
+   - 仍然不能因为 memory 命中就取消委派
+
+换句话说：
+
+> **memory 只能让 reply 更有把握，不能把“需要 fresh truth / tool execution / long-running”的任务洗白成 reply。**
+
+#### active-memory 的特殊边界
+
+`active-memory` 要单独写清楚，因为它最容易长成一条“隐形热路径”。
+
+推荐 v1 明确以下原则：
+
+1. active-memory 是 **projection/plugin enhancement**
+2. 它不是 route authority
+3. 它也不是 session truth authority
+4. 它产出的只是一个可选 memory summary signal
+
+原因很简单：
+
+1. active-memory 运行在 `before_prompt_build`
+2. 它会起自己的 memory-only 子流程
+3. 它可能在主线程 prompt 里追加 supplemental context
+4. 如果这条链不被显式收口，就会形成：
+   - judge 不知道它做了什么
+   - 主 agent 却吃到了它的结果
+   - 最终 route / answer 出现不对称
+
+因此 v1 必须要求：
+
+1. active-memory 的子 session / trigger 继续与主线程 session truth 隔离
+2. active-memory 不得把自己的完整 transcript / reasoning 回灌给主线程
+3. active-memory 只能输出：
+   - `memory_coverage`
+   - `memory_freshness_risk`
+   - `memory_source += active_memory`
+   - `memory_evidence_summary`
+4. 如果 active-memory 超时、空结果或 unavailable
+   - 只能退化成 `memory_coverage=none`
+   - 不能阻塞主 judge
+
+也就是说：
+
+> **active-memory 可以帮助 judge 和主 agent 更知道“有没有可用记忆”，但不能变成一条绕过 judge 的暗路。**
+
+#### judge context packet 应新增一层 memory layer
+
+因此更完整的 judge context packet 推荐 shape 应该变成：
+
+```json
+{
+  "core": {},
+  "continuation": {},
+  "binding": {},
+  "memory": {
+    "coverage": "none | partial | strong",
+    "freshness_risk": "low | high",
+    "source": ["bootstrap", "memory_search", "active_memory"],
+    "supports_direct_reply": true,
+    "supports_fresh_lookup": false,
+    "evidence_summary": "..."
+  },
+  "evidence": {}
+}
+```
+
+这里的关键不是“多一层字段”，而是把一个之前隐含在系统里的问题显式化：
+
+1. judge 不再靠猜“主线程也许记得”
+2. 主 agent 不再靠吃到 active-memory 后自己偷改心证
+3. replay/harness 可以直接回看：
+   - 这次是不是 memory 明明够，judge 却还误委派
+   - 还是 memory 根本不够，只是主 agent 凭 bootstrap 片段自信过头
+
+#### 实现顺序建议
+
+为了避免把 memory 链做成新的复杂源，我建议 v1 按这个顺序落地：
+
+1. 先实现 `memory coverage precheck`
+   - 只产出结构化 packet
+   - 不产出用户答案
+2. 把 `memory layer` 并入 `judge context packet`
+3. 让 local judge / remote judge 共用这层 packet
+4. 最后再让主 agent 在 objection protocol 中可引用这层结构化结果
+
+不要一上来就做：
+
+1. “主 agent 先查 memory，再自己决定要不要无视 judge”
+2. “active-memory 有结果就直接压过 delegate”
+3. “memory 自己变成一个 route planner”
+
+这些都会重新长出第二套隐形 authority。
+
+#### 实现细节建议
+
+如果要把上面这套设计真的落到当前 TS 重构代码里，推荐按下面这个实现边界收口。
+
+##### A. 放在什么位置做
+
+推荐把 `memory coverage precheck` 放在 **judge 调用之前、judge context packet 构建之前**。
+
+更具体地说，当前链路建议保持成：
+
+1. `conversation grounding`
+2. `continuation route reuse` 判定
+3. `memory coverage precheck`
+4. `buildJudgeContextPacket`
+5. `buildJudgeInput`
+6. `callLlmJudge`
+7. validator override / route commit
+
+原因：
+
+1. precheck 的职责是给 judge 提供结构化 signal
+2. 它不应该晚到主 agent prompt 阶段才出现
+3. 也不应该晚到主 agent 已经开始回答后才补救
+
+结合当前代码结构，最合适的落点是：
+
+1. [extensions/octoclaw-runtime/src/resolve/policy-resolver.ts](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/extensions/octoclaw-runtime/src/resolve/policy-resolver.ts)
+   - 在 `buildLiveJudgeContextPacket(...)` / `buildJudgeInput(...)` 之前先跑 precheck
+2. [extensions/octoclaw-runtime/src/resolve/judge-context-packet.ts](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/extensions/octoclaw-runtime/src/resolve/judge-context-packet.ts)
+   - 把 precheck 结果编进 packet 的 `memory` layer
+3. [extensions/octoclaw-runtime/src/resolve/llm-judge.ts](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/extensions/octoclaw-runtime/src/resolve/llm-judge.ts)
+   - `JudgeInput` 继续只吃一个 `contextPacket`
+   - 不要再额外挂一套独立 memory prompt
+
+##### B. 建议新增的 TS contract
+
+建议不要把 memory precheck 结果塞成散落 metadata key，而是正式收成一个独立类型。
+
+推荐最小 shape：
+
+```ts
+export interface MemoryCoveragePacket {
+  coverage: "none" | "partial" | "strong";
+  freshnessRisk: "low" | "high";
+  source: Array<"bootstrap" | "memory_search" | "active_memory">;
+  supportsDirectReply: boolean;
+  supportsFreshLookup: boolean;
+  evidenceSummary?: string;
+  conflict: boolean;
+  status: "ok" | "timeout" | "unavailable" | "skipped";
+  latencyMs: number;
+}
+```
+
+然后把 `JudgeContextPacket` 扩成：
+
+```ts
+export interface JudgeMemoryLayer {
+  coverage?: "none" | "partial" | "strong";
+  freshness_risk?: "low" | "high";
+  source?: Array<"bootstrap" | "memory_search" | "active_memory">;
+  supports_direct_reply?: boolean;
+  supports_fresh_lookup?: boolean;
+  evidence_summary?: string;
+  conflict?: boolean;
+}
+```
+
+并在 packet 顶层增加：
+
+```ts
+memory?: JudgeMemoryLayer;
+```
+
+这里建议：
+
+1. runtime 内部类型可用 camelCase
+2. judge packet 对外 shape 维持 snake_case / stable schema
+3. replay 里两套都记，但都来自同一个 packet 源，不要双写逻辑
+
+##### C. precheck 自身怎么实现
+
+v1 不建议把 precheck 做成“再跑一个小 LLM”。
+
+更稳的方案是一个**轻量 adapter 聚合器**，只读已有 memory 信号，不产生新推理热路径：
+
+1. `bootstrap adapter`
+   - 看当前 turn 是否已带入 startup/bootstrap memory 线索
+   - 只给 very weak / partial signal
+   - 不能单靠它给出 `strong`
+2. `active-memory adapter`
+   - 读取 active-memory 已经注入的 summary 或状态行
+   - 若有明确 recall summary，可给 `partial`，强相关时给 `strong`
+3. `memory-search availability adapter`
+   - 只判断“当前宿主是否有 memory_search 能力、当前 session 是否允许”
+   - 不主动执行 tool
+   - 它更像 eligibility signal，不直接给 coverage
+
+也就是说 v1 precheck 默认更像：
+
+1. `read existing memory signals`
+2. `normalize into MemoryCoveragePacket`
+3. `feed judge`
+
+而不是：
+
+1. 再主动发起一次新的 memory tool 调用
+2. 再跑一次新的 memory-only LLM
+3. 再把 recall transcript 回灌
+
+这样做的原因是：
+
+1. 热路径更稳
+2. 更便于控制延迟
+3. 不会把 judge 前链路越拉越长
+4. 不会和 active-memory 再起双重 recall
+
+##### D. v1 的信号来源顺序
+
+推荐按下面的优先级合并：
+
+1. `active-memory` 现成 summary
+2. 已有 runtime metadata 中的 recall/status signal
+3. bootstrap/startup memory presence
+4. 没有任何信号时，返回 `coverage=none`
+
+不要在 v1 做：
+
+1. 主动调用 `memory_search`
+2. 主动调用 `memory_get`
+3. 主动读取一堆 memory 文件再本地总结
+
+这些更适合后续扩展成 `memory_precheck_strong`，而不是默认热路径。
+
+##### E. latency budget 怎么配
+
+`memory coverage precheck` 必须有独立预算，而且默认要比 local judge 更短。
+
+推荐：
+
+1. `memory_precheck_budget_ms = 80 ~ 150ms`
+2. 如果在预算内拿不到现成信号：
+   - 直接退化成 `status=timeout`
+   - `coverage=none`
+3. precheck timeout **不允许**阻塞 judge
+4. precheck unavailable **不允许**触发 remote judge
+
+这条边界要写死：
+
+> **memory precheck 是 reply 侧的弱增强，不是新的升级门。**
+
+##### F. 怎么从 active-memory 取数
+
+当前 active-memory 在 `before_prompt_build` 会把 summary 注入主 prompt。
+
+v1 更合理的接法不是去解析整段 prompt，而是要求 active-memory 同时写一个**结构化 metadata seam**，例如：
+
+```ts
+metadata.active_memory_signal = {
+  summary: "...",
+  status: "ok" | "empty" | "timeout" | "unavailable",
+  elapsedMs: 42,
+};
+```
+
+然后 precheck 只消费这个 seam。
+
+这样有几个好处：
+
+1. 不需要脆弱地反解析 `<active_memory_plugin>...</active_memory_plugin>`
+2. 不依赖 prompt builder 拼接顺序
+3. judge、replay、主 agent objection 都能共享同一份结构化来源
+
+##### G. 怎么避免和主 agent 冲突
+
+主 agent 也许能因为 `MEMORY.md` 或 active-memory summary 觉得“我知道答案了”，但这不能让它绕过 judge。
+
+推荐实现口径：
+
+1. 主 agent 可读取 `memory coverage packet`
+2. 但只能把它当作 objection 的证据
+3. 不能把“我觉得 memory 够了”当成 silent override 的理由
+
+也就是说，主 agent 如果想改判，只能显式提出：
+
+1. `requested_route=reply`
+2. `objection_reason=memory_coverage_strong_low_freshness_risk`
+3. `confidence=...`
+
+最后仍由系统按 objection protocol 收口。
+
+##### H. replay / telemetry 要补什么
+
+为了后面能排查“为什么又误委派/误直回”，推荐至少记录这些字段：
+
+```json
+{
+  "memoryPrecheckStatus": "ok|timeout|unavailable|skipped",
+  "memoryCoverage": "none|partial|strong",
+  "memoryFreshnessRisk": "low|high",
+  "memorySource": ["bootstrap", "active_memory"],
+  "memorySupportsDirectReply": true,
+  "memoryConflict": false,
+  "memoryPrecheckLatencyMs": 37
+}
+```
+
+最重要的是让 replay 能回答这两个问题：
+
+1. 这次 judge 是在 `memory strong` 的情况下仍委派了吗
+2. 还是根本没有 memory signal，只是我们事后误以为“它应该知道”
+
+##### I. harness 测试最低覆盖
+
+至少要补 4 组回归：
+
+1. `memory strong + low freshness risk`
+   - 例如稳定偏好/历史决定类问题
+   - judge 仍允许 `reply`
+2. `memory strong + high freshness risk`
+   - 例如“OpenClaw 4.22 有啥新特性”
+   - 不能因为 memory 命中而压过 `delegate/fresh lookup`
+3. `active-memory available but precheck timeout`
+   - 必须 fail-open 到正常 judge
+   - 不能卡热路径
+4. `active-memory summary present, main agent wants reply, judge wants delegate`
+   - 只能走 objection protocol
+   - 不能 silent override
+
+再加一组 continuation case 最好：
+
+5. 前文已补槽位/已形成 active intent，且 memory 只提供背景，不应把 continuation 误判成新 delegate
+
+##### J. v1 不做什么
+
+为了控复杂度，建议这期明确不做：
+
+1. memory precheck 主动调用 memory tools
+2. memory precheck 自己跑独立本地 LLM
+3. active-memory 结果直接改 route
+4. 主 agent 基于 memory 自主绕过 judge
+5. 把完整 `MEMORY.md` / recall transcript 直接塞进 judge packet
+
+这 5 件事只要开一个口子，后面就很容易重新长出“第二套路由系统”。
+
+#### judge context packet 也必须显式表达 execution coverage
+
+`memory coverage` 解决的是“过去记住的稳定背景是否足够回答”。它不能证明“刚才到底是谁查的、谁写的、有没有子 agent、dispatch 有没有真正执行”。
+
+这类问题必须单独建模成 **execution coverage layer**：
+
+1. 它不是 memory
+2. 它不是 thread transcript
+3. 它不是主 agent 的口头自述
+4. 它来自当前 turn / recent turn 的 execution receipt、route seal、tool receipt、native task/flow、delivery ledger
+
+因此，像下面这些追问：
+
+1. “你是自己查的还是子 agent 查的”
+2. “刚才是谁做的”
+3. “你刚才怎么查的”
+4. “有没有真的派发”
+5. “那个任务现在是什么状态”
+
+不能再笼统写成 “execution truth/provenance follow-up -> delegate”。这会把一个本来可以从 execution receipt 直接回答的问题，错误变成新的一次 delegated work unit。
+
+更准确的规则是：
+
+1. `provenance_about_recent_turn`
+   - 如果 execution coverage 足够，`reply` 直接回答
+   - 不允许 `octoclaw_dispatch`
+   - 不允许 `octoclaw_spawn`
+2. `task_status_needs_control_plane_refresh`
+   - 如果已有 status snapshot 足够，`reply` 直接回答
+   - 如果需要刷新 native task/flow，允许 control-plane tool，例如 `octoclaw_status` / `octoclaw_task_action`
+   - 仍不应 spawn 子 agent
+3. `new_external_or_workspace_probe`
+   - 这才按原铁律进入 `delegate`
+
+也就是说：
+
+> **provenance 追问默认不是新工作；它默认是读取 execution truth。只有缺少 truth surface 时，才允许轻量 control-plane probe；仍不能派子 agent 去证明“是不是子 agent 做的”。**
+
+#### execution coverage packet 推荐 shape
+
+推荐在 judge context packet 中加入：
+
+```json
+{
+  "execution": {
+    "coverage": "none | current_turn | recent_turn | thread",
+    "freshness": "current | recent | stale",
+    "supports_provenance_reply": true,
+    "supports_status_reply": true,
+    "requires_control_plane_refresh": false,
+    "last_route": "reply | delegate | unknown",
+    "last_reply_mode": "answer | clarify | null",
+    "last_delegate_role": "observer | default | code | research | review | null",
+    "tools_used": ["web_fetch"],
+    "dispatch_executed": false,
+    "spawn_executed": false,
+    "native_task_id": "",
+    "native_flow_id": "",
+    "result_materialized": false,
+    "delivery_status": "none | pending | delivered | failed",
+    "evidence_summary": "previous answer used main-session web_fetch; no delegated task result was materialized",
+    "conflict": false
+  }
+}
+```
+
+字段语义：
+
+1. `coverage`
+   - `none`: 没有可用 execution truth
+   - `current_turn`: 当前 turn 内事实足够
+   - `recent_turn`: 最近一次 assistant turn 的事实足够
+   - `thread`: thread 级别可追溯事实足够
+2. `supports_provenance_reply`
+   - 表示可以直接回答“谁查的/谁做的/是否子 agent”
+3. `supports_status_reply`
+   - 表示可以直接回答“当前状态/是否完成/是否派发”
+4. `requires_control_plane_refresh`
+   - 表示已有 packet 不够，但可以通过 status/task action 轻量刷新
+5. `dispatch_executed` / `spawn_executed`
+   - 区分“登记了 delegated task”与“真正启动了子 agent”
+6. `result_materialized`
+   - 表示是否已有可交付 worker result / artifact / delivery result
+7. `conflict`
+   - 表示 receipt、native task、projection、thread transcript 之间出现冲突
+
+#### memory layer 与 execution layer 的权威关系
+
+这两层都属于 `context coverage precheck`，但权威范围不同：
+
+1. `memory` 只负责稳定背景、偏好、历史设计决定、已知上下文
+2. `execution` 只负责当前/最近执行事实、工具调用、dispatch/spawn/task/flow/delivery
+3. provenance/status 类追问优先看 `execution`
+4. `memory` 不能证明执行来源
+5. 如果 `memory` 与 `execution` 冲突，`execution` wins
+
+例子：
+
+```json
+{
+  "memory": {
+    "coverage": "strong",
+    "freshness_risk": "low",
+    "supports_direct_reply": true,
+    "evidence_summary": "user prefers delegation for tool-heavy work"
+  },
+  "execution": {
+    "coverage": "recent_turn",
+    "supports_provenance_reply": true,
+    "last_route": "reply",
+    "tools_used": ["web_fetch"],
+    "dispatch_executed": false,
+    "spawn_executed": false,
+    "evidence_summary": "last answer fetched HN/Google in main session; no child task produced a result"
+  }
+}
+```
+
+这个 case 的正确 route 是：
+
+```json
+{
+  "route": "reply",
+  "reply_mode": "answer",
+  "reason_codes": ["execution_coverage_supports_provenance_reply"]
+}
+```
+
+不是：
+
+```json
+{
+  "route": "delegate",
+  "delegate_role": "observer"
+}
+```
+
+#### context coverage precheck 的统一顺序
+
+最终 judge 前链路建议调整为：
+
+1. `conversation grounding`
+2. `continuation route reuse`
+3. `execution coverage precheck`
+4. `memory coverage precheck`
+5. `buildJudgeContextPacket`
+6. `call local judge`
+7. validator / objection / remote judge
+8. route seal commit
+
+`execution coverage precheck` 要放在 `memory coverage precheck` 前面，原因是：
+
+1. provenance/status 追问通常要先看最近执行事实
+2. memory 只能提供背景，不能覆盖 execution truth
+3. 如果 execution packet 已能直接回答，judge 应该看到这个强信号
+
+#### execution coverage precheck 的实现边界
+
+v1 只读已有事实，不启动新 agent：
+
+1. 读取当前 / 最近 turn 的 `TurnExecutionReceipt`
+2. 读取同 thread 的 `RecentExecutionFacts`
+3. 读取 route seal / tool receipts / delivery receipt
+4. 如存在 native task id，读取已有 task projection
+5. 只在必要时标记 `requires_control_plane_refresh=true`
+
+v1 不做：
+
+1. 不调用 `octoclaw_dispatch`
+2. 不调用 `octoclaw_spawn`
+3. 不启动 `sessions_spawn`
+4. 不把完整 transcript 重新塞给 judge
+5. 不靠正则词表判断“是不是 provenance”
+
+识别 provenance/status 追问可以用模型 judge 结合 packet 判断；系统只提供结构化事实和少量 intent hints。这里的核心不是补一堆“谁查的/谁做的”关键词，而是让 judge 看到：
+
+1. 最近一轮是否有可验证 execution receipt
+2. 这个 receipt 是否足以回答 provenance
+3. 如果足够，route=reply 是合法且优先的
+
+#### policy spec 必须修正的铁律
+
+旧规则：
+
+```text
+execution truth/provenance follow-up -> delegate
+```
+
+必须拆成：
+
+```text
+provenance/status follow-up with sufficient execution coverage -> reply.answer
+status follow-up requiring lightweight control-plane refresh -> reply with allowed status/task-action control tool
+new probe/work requiring tools, workspace inspection, external lookup, command execution, or >1min -> delegate
+```
+
+这样不会削弱“需要工具/超过 1 分钟默认委派”的铁律，因为 provenance 追问不是让系统做新工作，而是读取已有 receipt。
+
+#### replay / telemetry 必须补的字段
+
+为了后面能解释误判，replay 至少记录：
+
+```json
+{
+  "executionCoverage": "none|current_turn|recent_turn|thread",
+  "executionFreshness": "current|recent|stale",
+  "executionSupportsProvenanceReply": true,
+  "executionSupportsStatusReply": true,
+  "executionRequiresControlPlaneRefresh": false,
+  "lastRoute": "reply",
+  "lastToolsUsed": ["web_fetch"],
+  "dispatchExecuted": false,
+  "spawnExecuted": false,
+  "nativeTaskId": "",
+  "nativeFlowId": "",
+  "resultMaterialized": false,
+  "deliveryStatus": "delivered",
+  "executionCoverageConflict": false
+}
+```
+
+这样回放时能直接回答：
+
+1. judge 是不是在已有 execution truth 的情况下仍误委派
+2. main agent 是否声称派发但没有 dispatch/spawn receipt
+3. status/details 是否与 native task/flow 冲突
+4. memory 是否错误覆盖了 execution truth
+
+#### harness 最低覆盖
+
+新增回归用例：
+
+1. 上一轮 `route=reply + tools_used=[web_fetch]`
+   - 用户问“你是自己查的还是子 agent 查的”
+   - 期望 `route=reply`
+   - 不允许调用 `octoclaw_dispatch` / `octoclaw_spawn`
+2. 上一轮 `route=delegate + dispatch_executed=true + spawn_executed=true + result_materialized=true`
+   - 用户问“谁做的”
+   - 期望基于 receipt 回答子 agent
+3. 上一轮 `dispatch_executed=true` 但 `spawn_executed=false`
+   - 用户问“派发成功了吗”
+   - 期望回答“已登记但未实际执行/未产出”，不得说完成
+4. execution coverage 缺失
+   - 用户问 provenance
+   - 期望快速回答“没有可验证执行记录”，最多允许 control-plane status，不允许 spawn
+5. memory strong 但 execution says `dispatch_executed=false`
+   - 期望 execution wins
+
 另外，单 judge 方案下还应明确：
 
 1. 不是每个 turn 都应该重新 judge
