@@ -307,6 +307,33 @@ describe("Phase C acceptance: cost/speed baseline report", () => {
     });
   });
 
+  it("marks missing actual cost as unknown or partial instead of silently zero", () => {
+    const unknownReport = buildCostSpeedBaselineReport([
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:delegate-1", route: "delegate", terminalState: "completed" }),
+    ]);
+
+    expect(lane(unknownReport, "delegate")).toMatchObject({
+      actualCostStatus: "unknown",
+      missingActualCostCount: 1,
+      actualCostUsd: undefined,
+      costPerRequest: undefined,
+      costPerSuccess: undefined,
+    });
+
+    const partialReport = buildCostSpeedBaselineReport([
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:delegate-1", route: "delegate", actualCostUsd: 0.03, terminalState: "completed" }),
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:delegate-2", route: "delegate", terminalState: "completed" }),
+    ]);
+
+    expect(lane(partialReport, "delegate")).toMatchObject({
+      actualCostStatus: "partial",
+      missingActualCostCount: 1,
+      actualCostUsd: 0.03,
+      costPerRequest: undefined,
+      costPerSuccess: undefined,
+    });
+  });
+
   it("aggregates fallback_count, retry_count across lane", () => {
     const report = buildCostSpeedBaselineReport([
       buildOptimizationTelemetry({ telemetryId: "task:flow-1:delegate-1", route: "delegate", fallbackCount: 1, retryCount: 2 }),
@@ -327,18 +354,19 @@ describe("Phase C acceptance: cost/speed baseline report", () => {
     expect(lane(report, "reply").terminalStates).toEqual({ completed: 2, failed: 1, blocked: 1 });
   });
 
-  it("computes parent_context_tokens_added and result_packet_tokens summaries", () => {
+  it("computes parent_context_tokens_added, result_packet_tokens, and artifact_reopen_count summaries", () => {
     const report = buildCostSpeedBaselineReport([
-      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-1", parentContextTokensAdded: 5, resultPacketTokens: 50 }),
-      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-2", parentContextTokensAdded: 10, resultPacketTokens: 100 }),
-      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-3", parentContextTokensAdded: 15, resultPacketTokens: 150 }),
-      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-4", parentContextTokensAdded: 20, resultPacketTokens: 200 }),
-      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-5", parentContextTokensAdded: 25, resultPacketTokens: 250 }),
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-1", parentContextTokensAdded: 5, resultPacketTokens: 50, artifactReopenCount: 1 }),
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-2", parentContextTokensAdded: 10, resultPacketTokens: 100, artifactReopenCount: 2 }),
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-3", parentContextTokensAdded: 15, resultPacketTokens: 150, artifactReopenCount: 3 }),
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-4", parentContextTokensAdded: 20, resultPacketTokens: 200, artifactReopenCount: 4 }),
+      buildOptimizationTelemetry({ telemetryId: "task:flow-1:reply-5", parentContextTokensAdded: 25, resultPacketTokens: 250, artifactReopenCount: 5 }),
     ]);
 
     expect(lane(report, "reply")).toMatchObject({
       parentContextTokensAdded: { p50: 15, p95: 25, p99: 25 },
       resultPacketTokens: { p50: 150, p95: 250, p99: 250 },
+      artifactReopenCount: { p50: 3, p95: 5, p99: 5 },
     });
   });
 

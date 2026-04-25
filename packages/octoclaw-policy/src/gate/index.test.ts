@@ -56,13 +56,15 @@ describe("hard boundary gate", () => {
 describe("candidate cost/speed gate", () => {
   it("passes only when latency, cost, replay, acceptance, context, fallback, and timeout do not regress", () => {
     expect(compareCandidateGate({
-      baseline: { latencyMs: 1000, costUsd: 0.1, parentContextTokensAdded: 100, fallbackCount: 1, timeoutCount: 0 },
+      baseline: { latencyMs: 1000, costUsd: 0.1, parentContextTokensAdded: 100, resultPacketTokens: 200, artifactReopenCount: 2, fallbackCount: 1, timeoutCount: 0 },
       candidate: {
         latencyMs: 900,
         costUsd: 0.08,
         acceptancePassed: true,
         replayPassed: true,
         parentContextTokensAdded: 80,
+        resultPacketTokens: 150,
+        artifactReopenCount: 1,
         fallbackCount: 1,
         timeoutCount: 0,
       },
@@ -112,6 +114,8 @@ describe("Phase C acceptance: gate report baseline vs candidate", () => {
     latencyMs: 1000,
     costUsd: 0.1,
     parentContextTokensAdded: 100,
+    resultPacketTokens: 200,
+    artifactReopenCount: 2,
     fallbackCount: 1,
     timeoutCount: 1,
   };
@@ -122,6 +126,8 @@ describe("Phase C acceptance: gate report baseline vs candidate", () => {
     acceptancePassed: true,
     replayPassed: true,
     parentContextTokensAdded: 100,
+    resultPacketTokens: 180,
+    artifactReopenCount: 2,
     fallbackCount: 1,
     timeoutCount: 1,
   };
@@ -192,15 +198,31 @@ describe("Phase C acceptance: gate report baseline vs candidate", () => {
     expect(compareCandidateGate({ baseline, candidate: { ...passingCandidate, replayPassed: undefined } }).replay).toBe("unknown");
   });
 
-  it("context pollution comparison", () => {
+  it("context pollution comparison covers parent, result packet, and artifact reopen metrics", () => {
     expect(compareCandidateGate({
       baseline,
-      candidate: { ...passingCandidate, parentContextTokensAdded: 100 },
+      candidate: { ...passingCandidate, parentContextTokensAdded: 100, resultPacketTokens: 200, artifactReopenCount: 2 },
     }).contextPollution).toBe("pass");
     expect(compareCandidateGate({
       baseline,
       candidate: { ...passingCandidate, parentContextTokensAdded: 99 },
     }).contextPollution).toBe("pass");
+    expect(compareCandidateGate({
+      baseline,
+      candidate: { ...passingCandidate, parentContextTokensAdded: 101 },
+    }).contextPollution).toBe("fail");
+    expect(compareCandidateGate({
+      baseline,
+      candidate: { ...passingCandidate, resultPacketTokens: 201 },
+    }).contextPollution).toBe("fail");
+    expect(compareCandidateGate({
+      baseline,
+      candidate: { ...passingCandidate, artifactReopenCount: 3 },
+    }).contextPollution).toBe("fail");
+    expect(compareCandidateGate({
+      baseline,
+      candidate: { ...passingCandidate, artifactReopenCount: undefined },
+    }).contextPollution).toBe("unknown");
   });
 
   it("fallback count comparison", () => {

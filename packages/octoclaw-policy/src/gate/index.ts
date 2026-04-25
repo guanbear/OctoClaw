@@ -45,6 +45,8 @@ export interface CandidateGateMetrics {
   acceptancePassed?: boolean;
   replayPassed?: boolean;
   parentContextTokensAdded?: number;
+  resultPacketTokens?: number;
+  artifactReopenCount?: number;
   fallbackCount?: number;
   timeoutCount?: number;
 }
@@ -72,16 +74,27 @@ function booleanGate(value: boolean | undefined): GateCheckResult {
   return value ? "pass" : "fail";
 }
 
+function combineGateResults(results: GateCheckResult[]): GateCheckResult {
+  if (results.includes("fail")) return "fail";
+  if (results.includes("unknown")) return "unknown";
+  return "pass";
+}
+
 export function compareCandidateGate(input: {
   baseline: CandidateGateMetrics;
   candidate: CandidateGateMetrics;
 }): CandidateGateReport {
+  const contextPollution = combineGateResults([
+    compareLowerOrEqual(input.candidate.parentContextTokensAdded, input.baseline.parentContextTokensAdded),
+    compareLowerOrEqual(input.candidate.resultPacketTokens, input.baseline.resultPacketTokens),
+    compareLowerOrEqual(input.candidate.artifactReopenCount, input.baseline.artifactReopenCount),
+  ]);
   const checks = {
     latency: compareLowerOrEqual(input.candidate.latencyMs, input.baseline.latencyMs),
     cost: compareLowerOrEqual(input.candidate.costUsd, input.baseline.costUsd),
     acceptance: booleanGate(input.candidate.acceptancePassed),
     replay: booleanGate(input.candidate.replayPassed),
-    contextPollution: compareLowerOrEqual(input.candidate.parentContextTokensAdded, input.baseline.parentContextTokensAdded),
+    contextPollution,
     fallback: compareLowerOrEqual(input.candidate.fallbackCount, input.baseline.fallbackCount),
     timeout: compareLowerOrEqual(input.candidate.timeoutCount, input.baseline.timeoutCount),
   };

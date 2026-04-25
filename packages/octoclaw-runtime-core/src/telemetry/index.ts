@@ -21,6 +21,8 @@ export interface MetricSummary {
   p99?: number;
 }
 
+export type MetricCompleteness = "known" | "partial" | "unknown";
+
 export interface CostSpeedLaneReport {
   lane: TelemetryLane;
   requestCount: number;
@@ -32,8 +34,12 @@ export interface CostSpeedLaneReport {
   firstProgressMs: MetricSummary;
   finalDeliveryMs: MetricSummary;
   totalLatencyMs: MetricSummary;
-  estimatedCostUsd: number;
-  actualCostUsd: number;
+  estimatedCostUsd?: number;
+  actualCostUsd?: number;
+  estimatedCostStatus: MetricCompleteness;
+  actualCostStatus: MetricCompleteness;
+  missingEstimatedCostCount: number;
+  missingActualCostCount: number;
   costPerRequest?: number;
   costPerSuccess?: number;
   fallbackCount: number;
@@ -41,6 +47,7 @@ export interface CostSpeedLaneReport {
   terminalStates: Record<string, number>;
   parentContextTokensAdded: MetricSummary;
   resultPacketTokens: MetricSummary;
+  artifactReopenCount: MetricSummary;
 }
 
 export interface CostSpeedBaselineReport {
@@ -136,6 +143,19 @@ function metric(values: Array<number | undefined>): MetricSummary {
   };
 }
 
+function metricCompleteness(values: Array<number | undefined>): MetricCompleteness {
+  if (values.length === 0) return "unknown";
+  const knownCount = values.filter((value) => typeof value === "number" && Number.isFinite(value)).length;
+  if (knownCount === 0) return "unknown";
+  return knownCount === values.length ? "known" : "partial";
+}
+
+function metricSum(values: Array<number | undefined>): number | undefined {
+  const clean = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (clean.length === 0) return undefined;
+  return clean.reduce((sum, value) => sum + value, 0);
+}
+
 function laneForTelemetry(item: OptimizationTelemetry): TelemetryLane {
   if (String(item.telemetryId).startsWith("flow:")) return "flow";
   return item.route === "reply" ? "reply" : "delegate";
@@ -154,9 +174,14 @@ export function buildCostSpeedBaselineReport(
 
   for (const lane of ["reply", "delegate", "flow"] as const) {
     const items = telemetry.filter((item) => laneForTelemetry(item) === lane);
-    const successCount = items.filter(isSuccess).length;
-    const estimatedCostUsd = items.reduce((sum, item) => sum + (item.estimatedCostUsd ?? 0), 0);
-    const actualCostUsd = items.reduce((sum, item) => sum + (item.actualCostUsd ?? 0), 0);
+    const successItems = items.filter(isSuccess);
+    const successCount = successItems.length;
+    const estimatedCostValues = items.map((item) => item.estimatedCostUsd);
+    const actualCostValues = items.map((item) => item.actualCostUsd);
+    const estimatedCostUsd = metricSum(estimatedCostValues);
+    const actualCostUsd = metricSum(actualCostValues);
+    const estimatedCostStatus = metricCompleteness(estimatedCostValues);
+    const actualCostStatus = metricCompleteness(actualCostValues);
     const terminalStates = items.reduce<Record<string, number>>((acc, item) => {
       const key = String(item.terminalState ?? "unknown");
       acc[key] = (acc[key] ?? 0) + 1;
@@ -176,13 +201,18 @@ export function buildCostSpeedBaselineReport(
       totalLatencyMs: metric(items.map((item) => item.totalLatencyMs)),
       estimatedCostUsd,
       actualCostUsd,
-      costPerRequest: items.length > 0 ? actualCostUsd / items.length : undefined,
-      costPerSuccess: successCount > 0 ? actualCostUsd / successCount : undefined,
+      estimatedCostStatus,
+      actualCostStatus,
+      missingEstimatedCostCount: estimatedCostValues.filter((value) => typeof value !== "number" || !Number.isFinite(value)).length,
+      missingActualCostCount: actualCostValues.filter((value) => typeof value !== "number" || !Number.isFinite(value)).length,
+      costPerRequest: items.length > 0 && actualCostStatus === "known" && actualCostUsd !== undefined ? actualCostUsd / items.length : undefined,
+      costPerSuccess: successCount > 0 && actualCostStatus === "known" && actualCostUsd !== undefined ? actualCostUsd / successCount : undefined,
       fallbackCount: items.reduce((sum, item) => sum + (item.fallbackCount ?? 0), 0),
       retryCount: items.reduce((sum, item) => sum + (item.retryCount ?? 0), 0),
       terminalStates,
       parentContextTokensAdded: metric(items.map((item) => item.parentContextTokensAdded)),
       resultPacketTokens: metric(items.map((item) => item.resultPacketTokens)),
+      artifactReopenCount: metric(items.map((item) => item.artifactReopenCount)),
     });
   }
 
