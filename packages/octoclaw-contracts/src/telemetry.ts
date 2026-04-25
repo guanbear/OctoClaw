@@ -32,6 +32,9 @@ export interface OptimizationTelemetry extends ContractEnvelope, ScopeMetadata, 
   totalTokens?: number;
   estimatedCostUsd?: number;
   actualCostUsd?: number;
+  parentContextTokensAdded?: number;
+  resultPacketTokens?: number;
+  artifactReopenCount?: number;
   retryCount?: number;
   fallbackCount?: number;
   failureCode?: string;

@@ -54,6 +54,23 @@ export interface ContextCoverageSnapshot {
   authority: CoverageAuthority;
 }
 
+export interface ExecutionCoveragePacket {
+  packetId: string;
+  requestId?: string;
+  turnId?: string;
+  sessionKey: string;
+  coverage: ContextCoverageSnapshot;
+  route: WorkRoute;
+  replyMode?: "answer" | "clarify";
+  dispatchExecuted: boolean;
+  spawnExecuted: boolean;
+  resultMaterialized: boolean;
+  nativeBinding?: NativeBindingRef;
+  evidenceRefs: string[];
+  evidenceSummary?: string;
+  createdAt: string;
+}
+
 // ── Coverage layers (mirrors @octoclaw/policy/judge-schema but lives in contracts for portability) ──
 
 export interface JudgeExecutionLayer {
@@ -194,6 +211,7 @@ export interface NativeBindingRef {
   taskId?: string;
   nativeTaskId?: string;
   runId?: string;
+  childRunId?: string;
   childSessionKey?: string;
   syncMode: "managed" | "task_mirrored";
   status: NativeFlowStatus;
@@ -332,7 +350,17 @@ export interface WorkContractTelemetry {
   resultMaterialized?: boolean;
   deliveryStatus?: string;
   decisionSource?: WorkDecisionSource;
+  ackMs?: number;
+  routeDecisionMs?: number;
+  taskMaterializeMs?: number;
+  queueWaitMs?: number;
+  firstProgressMs?: number;
+  finalDeliveryMs?: number;
+  estimatedCostUsd?: number;
+  actualCostUsd?: number;
   parentContextTokensAdded?: number;
+  resultPacketTokens?: number;
+  artifactReopenCount?: number;
 }
 
 // ── Work contract ──

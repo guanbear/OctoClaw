@@ -332,3 +332,143 @@ describe("acceptance: thread provenance follow-up end-to-end", () => {
     expect(layer.evidence_summary).toContain("delegated path");
   });
 });
+
+describe("Phase A acceptance: provenance/status follow-up does not spawn", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    clearPolicyState();
+  });
+
+  afterEach(() => {
+    clearPolicyState();
+    vi.useRealTimers();
+  });
+
+  it("怎么查的 with sufficient execution coverage → reply, no spawn", () => {
+    const rootKey = "agent:main:slack:default:direct:U55555";
+    seedAt(rootKey, Date.now() - 3_000, {
+      createdAt: Date.now() - 8_000,
+      decision: { route_decision: { route: "reply" } },
+      canonicalSessionKey: rootKey,
+      toolsUsed: ["web_fetch"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+
+    const layer = buildExecutionCoverageLayer([rootKey]);
+
+    // Acceptance: coverage sufficient → route must be reply, not delegate
+    expect(layer.supports_provenance_reply).toBe(true);
+    expect(layer.last_route).toBe("reply");
+    expect(layer.tools_used).toContain("web_fetch");
+    expect(layer.dispatch_executed).toBe(false);
+    expect(layer.spawn_executed).toBe(false);
+
+    // The spawn guard must NOT block when provenance is supported
+    const decision = {
+      _execution_coverage: layer,
+      request: {
+        metadata: {
+          conversation_control: { intent_class: "execution_followup" },
+        },
+      },
+    };
+    expect(spawnGuardBlocks(decision as any)).toBe(false);
+  });
+
+  it("刚才那个任务判定是啥 with delegate receipt → status reply, no new spawn", () => {
+    const rootKey = "agent:main:slack:default:direct:U66666";
+    seedAt(rootKey, Date.now() - 10_000, {
+      createdAt: Date.now() - 30_000,
+      decision: {
+        route_decision: { route: "delegate", worker_pool: "octoclaw-worker" },
+      },
+      canonicalSessionKey: rootKey,
+      toolsUsed: [],
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: {
+        delegateTaskId: "task-judge-001",
+        taskStatus: "completed",
+      },
+    });
+
+    const layer = buildExecutionCoverageLayer([rootKey]);
+
+    expect(layer.supports_provenance_reply).toBe(true);
+    expect(layer.supports_status_reply).toBe(true);
+    expect(layer.dispatch_executed).toBe(true);
+    expect(layer.evidence_summary).toContain("delegated");
+
+    const decision = {
+      _execution_coverage: layer,
+      request: {
+        metadata: {
+          conversation_control: { intent_class: "execution_followup" },
+        },
+      },
+    };
+    expect(spawnGuardBlocks(decision as any)).toBe(false);
+  });
+
+  it("dispatchExecuted=true spawnExecuted=false → honest status, provenance supported", () => {
+    const rootKey = "agent:main:slack:default:direct:U77777";
+    seedAt(rootKey, Date.now() - 5_000, {
+      createdAt: Date.now() - 15_000,
+      decision: {
+        route_decision: { route: "delegate" },
+      },
+      canonicalSessionKey: rootKey,
+      toolsUsed: [],
+      delegated: true,
+      dispatchExecuted: true,
+    });
+
+    const layer = buildExecutionCoverageLayer([rootKey]);
+
+    // Key acceptance: dispatch registered but no spawn evidence
+    expect(layer.dispatch_executed).toBe(true);
+    expect(layer.spawn_executed).toBe(false);
+    // Provenance should still be supported (we CAN answer "what happened")
+    expect(layer.supports_provenance_reply).toBe(true);
+  });
+
+  it("execution coverage missing → spawn guard blocks execution_followup", () => {
+    const layer = buildExecutionCoverageLayer(["nonexistent-session"]);
+
+    expect(layer.coverage).toBe("none");
+    expect(layer.supports_provenance_reply).toBe(false);
+
+    const decision = {
+      _execution_coverage: layer,
+      request: {
+        metadata: {
+          conversation_control: { intent_class: "execution_followup" },
+        },
+      },
+    };
+    expect(spawnGuardBlocks(decision as any)).toBe(true);
+  });
+
+  it("memory strong but execution says no dispatch → execution wins", () => {
+    // This test validates execution wins over memory
+    const rootKey = "agent:main:slack:default:direct:U88888";
+    seedAt(rootKey, Date.now() - 5_000, {
+      createdAt: Date.now() - 10_000,
+      decision: { route_decision: { route: "reply" } },
+      canonicalSessionKey: rootKey,
+      toolsUsed: [],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+
+    const layer = buildExecutionCoverageLayer([rootKey]);
+
+    // Execution truth: no dispatch, no spawn
+    expect(layer.dispatch_executed).toBe(false);
+    expect(layer.spawn_executed).toBe(false);
+    // Even if memory "remembers" differently, execution layer tells the truth
+    expect(layer.last_route).toBe("reply");
+  });
+});

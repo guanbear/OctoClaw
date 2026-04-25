@@ -167,3 +167,159 @@ describe("TurnExecutionReceipt", () => {
     expect(receipt.completedAt).toBe(completedAt);
   });
 });
+
+describe("Phase A acceptance: honest status when TaskFlow created but no TaskRun", () => {
+  it("flow exists but no TaskRun/session evidence → dispatchExecuted=true, spawnExecuted=false", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: { delegateTaskId: "dt-flow-only", taskStatus: "running" },
+      decision: {
+        route_decision: { route: "delegate" },
+        runtime_truth: {
+          nativeTaskBinding: {
+            nativeFlowId: "flow-exists-123",
+            nativeTaskId: null,  // No TaskRun created
+            revision: 1,
+            expectedRevision: 0,
+          },
+        },
+      },
+      toolsUsed: [],
+    };
+
+    const receipt = buildTurnExecutionReceipt(state as any, 3000);
+
+    // TaskFlow created but no actual child execution
+    expect(receipt.dispatchExecuted).toBe(true);
+    expect(receipt.spawnExecuted).toBe(false);
+    expect(receipt.nativeFlowId).toBe("flow-exists-123");
+    expect(receipt.nativeTaskId).toBeNull();
+    expect(receipt.resultMaterialized).toBe(false);
+  });
+
+  it("honest receipt: registered but not executed", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: false,
+      dispatchExecuted: true,
+      delegateTaskContext: null,
+      decision: {
+        route_decision: { route: "delegate" },
+        runtime_truth: {
+          nativeTaskBinding: {
+            nativeFlowId: "flow-registered",
+            nativeTaskId: null,
+          },
+        },
+      },
+    };
+
+    const receipt = buildTurnExecutionReceipt(state as any, 1000);
+
+    expect(receipt.dispatchExecuted).toBe(true);
+    expect(receipt.spawnExecuted).toBe(false);
+    // Must NOT claim completion
+    expect(receipt.resultMaterialized).toBe(false);
+    expect(receipt.deliveryStatus).toBeNull();
+  });
+
+  it("parent-visible receipt does not contain full child transcript", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: {
+        delegateTaskId: "dt-with-child",
+        taskStatus: "completed",
+      },
+      decision: {
+        work_contract: {
+          forbiddenContent: [
+            "full_transcript",
+            "internal_route_rationale",
+            "delegation_rationale",
+            "worker_chain_of_thought",
+            "raw_execution_log",
+          ],
+        },
+        route_decision: { route: "delegate" },
+        runtime_truth: {
+          nativeTaskBinding: {
+            nativeFlowId: "flow-child",
+            nativeTaskId: "task-child",
+            childSessionKey: "child-key-1",
+            childSessionId: "child-sess-1",
+          },
+        },
+        delivery: { result_packet_tokens: 200 },
+        telemetry: {
+          parentContextTokensAdded: 150,
+          artifactReopenCount: 0,
+        },
+      },
+    };
+
+    const receipt = buildTurnExecutionReceipt(state as any, 5000);
+
+    // Child session identity is recorded (for continuity)
+    expect(receipt.childSessionKey).toBe("child-key-1");
+    expect(receipt.childSessionId).toBe("child-sess-1");
+    // But context pollution is bounded
+    expect(receipt.parentContextTokensAdded).toBe(150);
+    expect(receipt.resultPacketTokens).toBe(200);
+    expect(receipt.artifactReopenCount).toBe(0);
+  });
+
+  it("telemetry records request/task/flow cost and speed indicators", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: true,
+      dispatchExecuted: true,
+      decision: {
+        route_decision: { route: "delegate" },
+        runtime_truth: {
+          nativeTaskBinding: {
+            nativeFlowId: "flow-tel",
+            nativeTaskId: "task-tel",
+            revision: 3,
+            expectedRevision: 2,
+          },
+          nativeFlowMutation: "createManaged",
+          nativeFlowMutationApplied: true,
+        },
+        execution_layer: {
+          coverage: "current_turn",
+          supports_provenance_reply: true,
+          supports_status_reply: false,
+        },
+        memory_layer: { coverage: "partial" },
+        context_coverage: { authority: "execution_wins" },
+        telemetry: {
+          parentContextTokensAdded: 300,
+        },
+        delivery: { result_packet_tokens: 150 },
+      },
+      delegateTaskContext: { delegateTaskId: "dt-tel", taskStatus: "running" },
+    };
+
+    const receipt = buildTurnExecutionReceipt(state as any, 2500);
+
+    // Flow telemetry
+    expect(receipt.nativeFlowRevision).toBe(3);
+    expect(receipt.nativeFlowExpectedRevision).toBe(2);
+    expect(receipt.nativeFlowMutation).toBe("createManaged");
+    expect(receipt.nativeFlowMutationApplied).toBe(true);
+
+    // Coverage telemetry
+    expect(receipt.executionCoverage).toBe("current_turn");
+    expect(receipt.executionSupportsProvenanceReply).toBe(true);
+    expect(receipt.memoryCoverage).toBe("partial");
+    expect(receipt.authority).toBe("execution_wins");
+
+    // Cost/pollution telemetry
+    expect(receipt.parentContextTokensAdded).toBe(300);
+    expect(receipt.resultPacketTokens).toBe(150);
+  });
+});
