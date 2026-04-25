@@ -119,6 +119,9 @@ describe("native taskflow adapter", () => {
     expect(result.binding.revision).toBe(5);
     expect(result.binding.expectedRevision).toBe(5);
     expect(result.binding.status).toBe("running");
+    expect(result.binding.ownerKey).toBe("wc-1");
+    expect(result.binding.controllerId).toBe("octoclaw.delegate");
+    expect(result.binding.stateRef).toBe(buildCompactStateJson(ref));
   });
 
   it("revision_conflict with null refresh falls back to stale binding", async () => {

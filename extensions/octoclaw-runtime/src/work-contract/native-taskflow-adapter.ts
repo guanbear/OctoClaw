@@ -189,7 +189,10 @@ async function mutateBinding(
         if (refreshed) {
           return {
             binding: {
-              ...refreshed,
+              ...binding,
+              revision: refreshed.revision,
+              expectedRevision: refreshed.expectedRevision,
+              status: refreshed.status,
               lastMutation,
               lastMutationApplied: false,
               lastMutationError: "revision_conflict",
