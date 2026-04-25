@@ -68,6 +68,7 @@ import {
   buildPolicyJudgedReplayPayload,
   buildPolicyResolvedReplayPayload,
   buildRouteValidatedReplayPayload,
+  buildTurnExecutionReceipt,
   compactPolicyPrompt,
   isDelegatedRoute,
   recordPolicyReplay,
@@ -392,10 +393,24 @@ function attachWorkContractToPolicyDecision(input: {
     decisionSeal,
   );
   saveWorkContract(contract);
+  const existingEntry = policyState.get(input.stateKey);
+  const completedAt = existingEntry?.updatedAt || existingEntry?.createdAt || Date.now();
+  const receipt = buildTurnExecutionReceipt(
+    {
+      canonicalSessionKey: input.stateKey,
+      decision: input.decision,
+      delegated: false,
+      dispatchExecuted: false,
+      toolsUsed: [],
+    },
+    0,
+    typeof completedAt === "number" ? completedAt : Date.now(),
+  );
   policyState.update(input.stateKey, (entry) => ({
     ...entry,
     workContractId: contract.workContractId,
     latestStatus: contract.status,
+    latestExecutionReceipt: receipt,
   }));
   input.decision.work_contract = compactWorkContractView(contract);
   input.decision.workContractId = contract.workContractId;

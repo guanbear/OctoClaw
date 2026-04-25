@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { ContextCoverageSnapshot } from "@octoclaw/contracts/work-contract";
 import path from "node:path";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./builders.js";
-import { loadWorkContract, saveWorkContract } from "./store.js";
+import { loadWorkContract, resolveWorkContractLedgerPath, saveWorkContract } from "./store.js";
 
 const mockFs = vi.hoisted(() => ({
   files: new Map<string, string>(),
@@ -45,7 +45,7 @@ describe("work contract store", () => {
   it("saveWorkContract + loadWorkContract round-trips", () => {
     const contract = buildContract("session-1", "write tests");
 
-    saveWorkContract(contract, ledgerPath);
+    expect(saveWorkContract(contract, ledgerPath)).toBe(true);
 
     const loaded = loadWorkContract(contract.workContractId, ledgerPath);
     expect(loaded?.workContractId).toBe(contract.workContractId);
@@ -67,10 +67,36 @@ describe("work contract store", () => {
   it("saveWorkContract creates directory if needed", () => {
     const contract = buildContract("session-3", "create directory");
 
-    saveWorkContract(contract, ledgerPath);
+    expect(saveWorkContract(contract, ledgerPath)).toBe(true);
 
     expect(mockFs.mkdirSync).toHaveBeenCalledWith(path.dirname(ledgerPath), { recursive: true });
     expect(mockFs.files.has(ledgerPath)).toBe(true);
+  });
+
+  it("returns false when ledger write fails", () => {
+    const contract = buildContract("session-4", "write fails");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFs.writeFileSync.mockImplementationOnce(() => {
+      throw new Error("not writable");
+    });
+
+    expect(saveWorkContract(contract, ledgerPath)).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("octoclaw work contract ledger write failed"));
+  });
+
+  it("respects OCTOCLAW_WORK_CONTRACT_LEDGER_PATH env override", () => {
+    const originalEnv = process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
+    process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH = "/custom/path/contracts.json";
+
+    try {
+      expect(resolveWorkContractLedgerPath()).toBe("/custom/path/contracts.json");
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
+      } else {
+        process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH = originalEnv;
+      }
+    }
   });
 });
 

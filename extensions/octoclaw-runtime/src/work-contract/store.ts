@@ -14,6 +14,7 @@ interface FsSyncLike {
   mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
   readFileSync(pathname: string, encoding: string): string;
   writeFileSync(pathname: string, data: string, encoding: string): void;
+  accessSync(pathname: string, mode?: number): void;
 }
 
 const fs = fsSync as unknown as FsSyncLike;
@@ -27,10 +28,36 @@ function emptyLedger(): WorkContractLedger {
 }
 
 export function resolveWorkContractLedgerPath(): string {
-  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "work-contracts.json");
+  const explicitPath = String(process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH || "").trim();
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  const workspacePath = path.join(resolveWorkspaceRoot(), "tmp", "octopus", "work-contracts.json");
+  const workspaceDir = path.dirname(workspacePath);
+  try {
+    if (fs.existsSync(workspaceDir) || isDirCreatable(workspaceDir)) {
+      return workspacePath;
+    }
+  } catch {
+    // Fall through to cwd fallback.
+  }
+
+  return path.join(process.cwd(), "tmp", "octopus", "work-contracts.json");
 }
 
-export function saveWorkContract(contract: WorkContract, ledgerPath?: string): void {
+function isDirCreatable(dirPath: string): boolean {
+  try {
+    const parent = path.dirname(dirPath);
+    if (!fs.existsSync(parent)) return false;
+    fs.accessSync(parent, (fsSync.constants as { W_OK?: number } | undefined)?.W_OK ?? 2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function saveWorkContract(contract: WorkContract, ledgerPath?: string): boolean {
   const targetPath = ledgerPath || resolveWorkContractLedgerPath();
   const directory = path.dirname(targetPath);
 
@@ -50,10 +77,16 @@ export function saveWorkContract(contract: WorkContract, ledgerPath?: string): v
   ledger.contracts[contract.workContractId] = { ...contract, updatedAt: new Date().toISOString() };
   ledger.updated_at = new Date().toISOString();
 
-  if (!fs.existsSync(directory)) {
-    fs.mkdirSync(directory, { recursive: true });
+  try {
+    if (!fs.existsSync(directory)) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    fs.writeFileSync(targetPath, JSON.stringify(ledger, null, 2), "utf-8");
+    return true;
+  } catch (err) {
+    console.warn?.(`octoclaw work contract ledger write failed: ${String(err)}`);
+    return false;
   }
-  fs.writeFileSync(targetPath, JSON.stringify(ledger, null, 2), "utf-8");
 }
 
 export function loadWorkContract(workContractId: string, ledgerPath?: string): WorkContract | null {

@@ -610,11 +610,12 @@ describe("policy resolver WorkContract integration", () => {
       },
     );
 
-    policyState.set(stateKey, {
+    policyState.update(stateKey, (entry) => ({
+      ...entry,
       decision: result,
       canonicalSessionKey: stateKey,
       workContractId: typeof result.workContractId === "string" ? result.workContractId : undefined,
-    });
+    }));
 
     expect(result.workContractId).toEqual(expect.stringMatching(/^wc-/u));
     expect(result.work_contract).toMatchObject({
@@ -622,6 +623,12 @@ describe("policy resolver WorkContract integration", () => {
       route: routeDecisionOf(result).route,
       status: "sealed",
     });
-    expect(policyState.get(stateKey)?.workContractId).toBe(result.workContractId);
+    const entry = policyState.get(stateKey);
+    expect(entry?.workContractId).toBe(result.workContractId);
+    expect(entry?.latestExecutionReceipt).toBeDefined();
+    expect(entry?.latestExecutionReceipt?.sessionKey).toBe(stateKey);
+    expect(entry?.latestExecutionReceipt?.route).toBeDefined();
+    expect(entry?.latestExecutionReceipt?.dispatchExecuted).toBe(false);
+    expect(entry?.latestExecutionReceipt?.delegated).toBe(false);
   });
 });
