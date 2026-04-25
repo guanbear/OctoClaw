@@ -37,8 +37,69 @@ export const V1_MODEL_PROFILE_MAPPINGS: ModelProfileMapping[] = Object.entries(V
   ([profile, modelId]) => ({ profile: profile as ModelProfile, modelId }),
 );
 
+export const BASELINE_MODEL_PROFILE_MAP: Record<ModelProfile, ConcreteModelId> = { ...V1_MODEL_PROFILE_MAP };
+
+export interface ShadowModelRecommendationInput {
+  liveProfile: ModelProfile;
+  lane: "reply" | "delegate" | "flow";
+  qualityRisk?: "low" | "medium" | "high";
+}
+
+export interface ShadowModelRecommendation {
+  mode: "shadow";
+  liveProfile: ModelProfile;
+  liveModelId: ConcreteModelId;
+  recommendedProfile: ModelProfile;
+  recommendedModelId: ConcreteModelId;
+  promotionAllowed: false;
+  rollbackTarget: ModelProfile;
+  reason: string;
+}
+
+export interface ShadowPromotionDecision {
+  promotionAllowed: boolean;
+  rollbackTarget: ModelProfile;
+  reason: string;
+}
+
 export function resolveModelId(profile: ModelProfile): ConcreteModelId {
   return V1_MODEL_PROFILE_MAP[profile];
+}
+
+export function recommendModelProfileShadow(input: ShadowModelRecommendationInput): ShadowModelRecommendation {
+  const recommendedProfile: ModelProfile = input.qualityRisk === "low" && input.lane === "reply"
+    ? "judge_fast"
+    : input.liveProfile;
+  return {
+    mode: "shadow",
+    liveProfile: input.liveProfile,
+    liveModelId: resolveModelId(input.liveProfile),
+    recommendedProfile,
+    recommendedModelId: resolveModelId(recommendedProfile),
+    promotionAllowed: false,
+    rollbackTarget: input.liveProfile,
+    reason: recommendedProfile === input.liveProfile
+      ? "shadow_keeps_live_profile_until_gate_pass"
+      : "shadow_recommends_lower_cost_reply_profile_without_live_change",
+  };
+}
+
+export function evaluateShadowPromotion(input: {
+  recommendation: ShadowModelRecommendation;
+  gateOverall: "pass" | "fail" | "unknown";
+}): ShadowPromotionDecision {
+  if (input.gateOverall !== "pass") {
+    return {
+      promotionAllowed: false,
+      rollbackTarget: input.recommendation.rollbackTarget,
+      reason: `gate_${input.gateOverall}_blocks_promotion`,
+    };
+  }
+  return {
+    promotionAllowed: true,
+    rollbackTarget: input.recommendation.rollbackTarget,
+    reason: "gate_pass_allows_manual_promotion",
+  };
 }
 
 export function decideExecutionProfile(role: PolicyRole): ExecutionProfileDecision {

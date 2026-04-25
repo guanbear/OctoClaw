@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-const mockRunCommand = vi.hoisted(() => vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })));
+type MockRunCommand = (command: string, args: string[], options: unknown) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+const mockRunCommand = vi.hoisted<MockRunCommand>(() => async () => ({ code: 0, stdout: "", stderr: "" }));
 vi.mock("../../resolve/env.js", () => ({
   runCommand: (...args: unknown[]) => mockRunCommand(...(args as [string, string[], unknown])),
   resolveWorkspaceRoot: () => "/workspace",

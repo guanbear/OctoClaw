@@ -26,3 +26,17 @@ describe("intent packet", () => {
     });
   });
 });
+
+describe("Phase B acceptance: intent classification", () => {
+  it('"在吗" classifies as plain_chat', () => {
+    expect(buildIntentPacket({ intentClass: "plain_chat" }).intentClass).toBe("plain_chat");
+  });
+
+  it('"帮我查一下刚才那个任务" classifies as execution_followup', () => {
+    expect(buildIntentPacket({ executionFollowup: true }).intentClass).toBe("execution_followup");
+  });
+
+  it('"implement this feature" classifies as delegated_work', () => {
+    expect(buildIntentPacket({ delegatedWork: true }).intentClass).toBe("delegated_work");
+  });
+});

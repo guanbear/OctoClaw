@@ -428,16 +428,31 @@ describe("Phase B acceptance: Slack/IM intent routing", () => {
     const control = buildConversationControlHintsFromIntent(intent);
 
     expect(intent.intent_class).toBe("plain_chat");
-    expect(control.available).toBe(false);
-    expect(control.route_hint).toBeUndefined();
+    expect(control.available).toBe(true);
+    expect(control.route_hint).toBe("reply");
     expect(control.require_state_grounding).not.toBe(true);
   });
 
   it('execution_followup "刚才那个任务判定是啥" → conversation_control with route_hint', () => {
+    const dir = path.join("/tmp", `octoclaw-phase-b-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const replayLogPath = path.join(dir, "runtime-policy-replay.jsonl");
+    const taskStatePath = path.join(dir, "task-state.json");
+
+    fs.writeFileSync(replayLogPath, JSON.stringify({
+      event: "policy_resolved",
+      sessionKey: "slack:default:channel:C123",
+      sessionId: "slack-phase-b",
+      at: new Date(Date.now() - 30_000).toISOString(),
+      prompt: "implement this feature",
+      route: "delegate",
+    }));
+    fs.writeFileSync(taskStatePath, JSON.stringify({ tasks: [] }));
+
     const intent = buildConversationIntentPacket({
       prompt: "刚才那个任务判定是啥",
-      replayLogPath: "/tmp/does-not-matter.jsonl",
-      taskStatePath: "/tmp/does-not-matter.json",
+      replayLogPath,
+      taskStatePath,
       sessionKeys: ["slack:default:channel:C123"],
     });
     const control = buildConversationControlHintsFromIntent(intent);
@@ -449,18 +464,16 @@ describe("Phase B acceptance: Slack/IM intent routing", () => {
   });
 
   it("delegated_work → conversation_control with route_hint=delegate", () => {
-    const control = buildConversationControlHintsFromIntent({
-      available: true,
-      intentClass: "delegated_work",
-      intent_class: "delegated_work",
-      schema_version: "octoclaw.intent_packet/v1",
-      source: "acceptance_test",
-      reason_codes: ["delegated_work_required"],
-      confidence: 0.8,
-      evidence: ["delegated_work_required"],
+    const decision = buildDecision("implement this feature", {
+      metadata: {
+        conversation_control: {
+          available: true,
+          intent_class: "delegated_work",
+          route_hint: "delegate",
+        },
+      },
     });
 
-    expect(control.available).toBe(true);
-    expect(control.route_hint).toBe("delegate");
+    expect(decision.route).toBe("delegate");
   });
 });

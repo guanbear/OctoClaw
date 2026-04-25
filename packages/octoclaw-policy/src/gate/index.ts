@@ -36,3 +36,57 @@ export function checkHardBoundary(input: HardBoundaryInput): HardBoundaryCheckRe
   }
   return { triggered: false, signal: null, reason: "no hard boundary signal" };
 }
+
+export type GateCheckResult = "pass" | "fail" | "unknown";
+
+export interface CandidateGateMetrics {
+  latencyMs?: number;
+  costUsd?: number;
+  acceptancePassed?: boolean;
+  replayPassed?: boolean;
+  parentContextTokensAdded?: number;
+  fallbackCount?: number;
+  timeoutCount?: number;
+}
+
+export interface CandidateGateReport {
+  latency: GateCheckResult;
+  cost: GateCheckResult;
+  acceptance: GateCheckResult;
+  replay: GateCheckResult;
+  contextPollution: GateCheckResult;
+  fallback: GateCheckResult;
+  timeout: GateCheckResult;
+  overall: GateCheckResult;
+  unknownIsPass: false;
+  reasons: string[];
+}
+
+function compareLowerOrEqual(candidate: number | undefined, baseline: number | undefined): GateCheckResult {
+  if (candidate === undefined || baseline === undefined) return "unknown";
+  return candidate <= baseline ? "pass" : "fail";
+}
+
+function booleanGate(value: boolean | undefined): GateCheckResult {
+  if (value === undefined) return "unknown";
+  return value ? "pass" : "fail";
+}
+
+export function compareCandidateGate(input: {
+  baseline: CandidateGateMetrics;
+  candidate: CandidateGateMetrics;
+}): CandidateGateReport {
+  const checks = {
+    latency: compareLowerOrEqual(input.candidate.latencyMs, input.baseline.latencyMs),
+    cost: compareLowerOrEqual(input.candidate.costUsd, input.baseline.costUsd),
+    acceptance: booleanGate(input.candidate.acceptancePassed),
+    replay: booleanGate(input.candidate.replayPassed),
+    contextPollution: compareLowerOrEqual(input.candidate.parentContextTokensAdded, input.baseline.parentContextTokensAdded),
+    fallback: compareLowerOrEqual(input.candidate.fallbackCount, input.baseline.fallbackCount),
+    timeout: compareLowerOrEqual(input.candidate.timeoutCount, input.baseline.timeoutCount),
+  };
+  const values = Object.values(checks);
+  const overall: GateCheckResult = values.includes("fail") ? "fail" : values.includes("unknown") ? "unknown" : "pass";
+  const reasons = Object.entries(checks).map(([key, value]) => `${key}:${value}`);
+  return { ...checks, overall, unknownIsPass: false, reasons };
+}
