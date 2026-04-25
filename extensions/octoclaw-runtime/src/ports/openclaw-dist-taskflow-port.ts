@@ -144,6 +144,8 @@ export class OpenClawDistTaskFlowPort implements TaskFlowPort {
           status: createInput.status,
           currentStep: createInput.currentStep,
           notifyPolicy: createInput.notifyPolicy,
+          stateJson: encodeJson(createInput.stateJson),
+          waitJson: encodeJson(createInput.waitJson),
         }));
         lastFlow = record;
         return record;

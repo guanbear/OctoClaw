@@ -526,4 +526,58 @@ describe("execution coverage override intent guard", () => {
       route: "reply",
     });
   });
+
+  it("local_surface_lookup (runtime_version) with require_state_grounding still delegates", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你现在啥版本",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "local_surface_lookup",
+            surface_id: "runtime_version",
+            route_hint: "delegate",
+            lane_hint: "observe",
+            require_state_grounding: true,
+            require_fresh_lookup: true,
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+    });
+  });
+
+  it("local_surface_lookup timeout fallback with require_state_grounding still delegates", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      new DOMException("timeout", "AbortError"),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你现在啥版本",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "local_surface_lookup",
+            surface_id: "runtime_version",
+            route_hint: "delegate",
+            lane_hint: "observe",
+            require_state_grounding: true,
+            require_fresh_lookup: true,
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+    });
+  });
 });

@@ -375,4 +375,16 @@ describe("WorkContract coverage acceptance", () => {
     expect(layer.native_task_id).toBeUndefined();
     expect(layer.native_flow_id).toBe("flow-created-only");
   });
+
+  it("buildJudgeContextPacket includes memory coverage layer", async () => {
+    const { buildJudgeContextPacket } = await import("./judge-context-packet.js");
+    const packet = buildJudgeContextPacket({
+      prompt: "test",
+      sessionKeys: ["agent:main:test"],
+      metadata: {},
+    });
+    expect(packet.memory).toBeDefined();
+    expect(packet.memory?.coverage).toBe("none");
+    expect(packet.execution).toBeDefined();
+  });
 });

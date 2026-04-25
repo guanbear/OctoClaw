@@ -16,6 +16,7 @@ import { extractPromptText } from "./policy-resolver.js";
 import { detectSessionBoundary } from "./session.js";
 import { policyState, type PolicyStateEntry } from "../state/policy-state.js";
 import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
+import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -394,11 +395,13 @@ export function buildJudgeContextPacket(options: JudgeContextPacketOptions): Jud
 
   // Build execution coverage layer from recent receipts
   const execution = buildExecutionCoverageLayer(sessionKeys, currentTurnId(metadata));
+  const memory = buildMemoryCoverageLayer();
 
   const packet: JudgeContextPacket = {
     core,
     continuation,
     binding,
+    memory,
     execution,
     ...(evidence ? { evidence } : {}),
   };

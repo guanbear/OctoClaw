@@ -24,6 +24,9 @@ export interface PolicyStateEntry {
   deliveryObserved?: boolean;
   canonicalSessionKey?: string;
   sessionBoundary?: { status: string; reason: string };
+  workContractId?: string;
+  latestStatus?: import("@octoclaw/contracts/work-contract").WorkContractStatus;
+  latestExecutionReceipt?: import("../replay/replay-logger.js").TurnExecutionReceipt;
   updatedAt?: number;
   createdAt?: number;
   [key: string]: unknown;

@@ -61,6 +61,36 @@ describe("TaskFlowPort adapters", () => {
     expect(details?.revision).toBe(status?.revision);
   });
 
+  it("createManaged passes stateJson and waitJson to bridge", async () => {
+    let capturedStateJson: unknown;
+    let capturedWaitJson: unknown;
+    const port = new OpenClawDistTaskFlowPort({
+      bridgeFactory: async () => ({
+        createManagedFlow: (input) => {
+          capturedStateJson = input.stateJson;
+          capturedWaitJson = input.waitJson;
+          return { ok: true, status: "ok", flow_id: "flow-1", flow: { flowId: "flow-1", status: "queued", revision: 1 } };
+        },
+        runTask: () => ({ ok: true, status: "ok", flow_id: "flow-1", native_task_id: "task-1", task: { taskId: "task-1", status: "queued", state: "queued", revision: 1 } }),
+        readFlow: () => ({ ok: true, status: "ok", flow_id: "flow-1", found: true, flow: { flowId: "flow-1", status: "queued", revision: 1 } }),
+        readTask: () => ({ ok: false, status: "not_found", flow_id: "flow-1", task_id: "task-1", found: false, task: null }),
+        setWaiting: (input) => ({ ok: true, status: "ok", flow_id: input.flowId, revision: 2 }),
+        finishFlow: (input) => ({ ok: true, status: "ok", flow_id: input.flowId, revision: 2 }),
+        failFlow: (input) => ({ ok: true, status: "ok", flow_id: input.flowId, revision: 2 }),
+        cancelFlow: (input) => ({ ok: true, status: "ok", flow_id: input.flowId, found: true, cancelled: true }),
+      }),
+    });
+    const bound = port.bindSession({ sessionKey: "test" });
+    await bound.createManaged({
+      controllerId: "octoclaw.delegate",
+      goal: "test",
+      stateJson: { kind: "octoclaw_delegate_ref", workContractId: "wc-1" },
+      waitJson: { kind: "worker_result" },
+    });
+    expect(capturedStateJson).toBe('{"kind":"octoclaw_delegate_ref","workContractId":"wc-1"}');
+    expect(capturedWaitJson).toBe('{"kind":"worker_result"}');
+  });
+
   it("native status maps to OctoClaw projection", async () => {
     const api: OpenClawRuntimeTaskFlowApiContainer = {
       runtime: {

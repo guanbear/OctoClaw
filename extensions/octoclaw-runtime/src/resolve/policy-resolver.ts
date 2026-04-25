@@ -1460,7 +1460,6 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           || asBoolean(timeoutExecutionLayer.supports_status_reply);
         const timeoutRequiresRefresh = asBoolean(timeoutExecutionLayer.requires_control_plane_refresh);
         const timeoutIsFollowup = intentClass === "execution_followup"
-          || asBoolean(conversationControl.require_state_grounding)
           || asBoolean(conversationControl.provenance_followup)
           || asBoolean(conversationControl.status_followup);
         const isFollowupNoCoverage = intentClass === "execution_followup"
@@ -1526,7 +1525,6 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         const requiresControlPlaneRefresh = asBoolean(executionCoverage.requires_control_plane_refresh);
 
         const isExecutionOrStatusFollowup = intentClass === "execution_followup"
-          || asBoolean(conversationControl.require_state_grounding)
           || asBoolean(conversationControl.provenance_followup)
           || asBoolean(conversationControl.status_followup);
 

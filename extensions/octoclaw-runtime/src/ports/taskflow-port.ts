@@ -25,6 +25,8 @@ export interface CreateManagedFlowInput extends JsonRecord {
   status?: string;
   currentStep?: string;
   notifyPolicy?: string;
+  stateJson?: unknown;
+  waitJson?: unknown;
 }
 
 export interface RunNativeTaskInput extends JsonRecord {
