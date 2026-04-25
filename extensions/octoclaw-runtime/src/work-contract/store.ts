@@ -103,6 +103,18 @@ export function loadWorkContract(workContractId: string, ledgerPath?: string): W
   }
 }
 
+export function updateWorkContract(
+  workContractId: string,
+  mutator: (contract: WorkContract) => WorkContract,
+  ledgerPath?: string,
+): WorkContract | null {
+  const contract = loadWorkContract(workContractId, ledgerPath);
+  if (!contract) return null;
+  const mutated = mutator(contract);
+  const saved = saveWorkContract(mutated, ledgerPath);
+  return saved ? mutated : null;
+}
+
 export function listWorkContractsBySession(sessionKey: string, ledgerPath?: string): WorkContract[] {
   const targetPath = ledgerPath || resolveWorkContractLedgerPath();
   if (!fs.existsSync(targetPath)) return [];

@@ -44,6 +44,7 @@ import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { loadWorkContract } from "../work-contract/store.js";
+import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
 import fsSync from "node:fs";
 
 interface FsSyncLike {
@@ -1231,6 +1232,13 @@ export function getToolRegistrations(): ToolRegistration[] {
             });
           }
           await recordDispatchTerminalFailure(errorMessage, { route: asString(payload.route, resolvedRoute) });
+          if (dispatchWorkContract) {
+            materializeWorkContractFailure({
+              workContractId: dispatchWorkContract.workContractId,
+              errorMessage,
+              nativeBinding: dispatchWorkContract.delegate?.nativeBinding ?? undefined,
+            });
+          }
           return dispatchHonestyFailure({
             route: asString(payload.route, resolvedRoute),
             error: errorMessage,
@@ -1355,6 +1363,37 @@ export function getToolRegistrations(): ToolRegistration[] {
         const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
         const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
         const nativeBinding = dispatchWorkContract?.delegate?.nativeBinding;
+        if (dispatchWorkContract) {
+          const materialization = asRecord(payload.materialization);
+          const runtimeTruth = asRecord(payload.runtime_truth);
+          const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+          const substrateState = asString(materialization.substrate_state, payload.executed === true ? "running" : "queued");
+          const nativeTaskId = asString(nativeTaskBinding.nativeTaskId);
+          const nativeFlowId = asString(nativeTaskBinding.nativeFlowId);
+          const childSessionKey = nativeBinding?.childSessionKey ?? dispatchWorkContract.continuity.preferredChildSessionKey ?? undefined;
+          materializeWorkContractSuccess({
+            workContractId: dispatchWorkContract.workContractId,
+            nativeBinding: nativeBinding ?? {
+              flowId: asString(materialization.flow_id, "unknown"),
+              ownerKey: dispatchWorkContract.workContractId,
+              controllerId: "octoclaw.delegate",
+              revision: 1,
+              expectedRevision: 1,
+              syncMode: "managed",
+              status: "queued",
+              nativeTaskId,
+              nativeFlowId,
+              childSessionKey,
+            },
+            delegateTaskId: asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id),
+            attemptId: asString(payload.attemptId || materialization.attemptId),
+            nativeTaskId,
+            nativeFlowId,
+            childSessionKey,
+            substrateState,
+            spawnExecuted: false,
+          });
+        }
         return dispatchHonestySuccess({
           route: finalRoute,
           workerPool,
