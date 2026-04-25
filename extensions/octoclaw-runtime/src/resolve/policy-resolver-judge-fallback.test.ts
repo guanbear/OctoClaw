@@ -581,3 +581,47 @@ describe("execution coverage override intent guard", () => {
     });
   });
 });
+
+describe("policy resolver WorkContract integration", () => {
+  const stateKey = "agent:main:work-contract-integration";
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    policyState.clear(stateKey);
+  });
+
+  afterEach(() => {
+    policyState.clear(stateKey);
+  });
+
+  it("attaches WorkContract refs to returned decision and policy state", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(judgeResponse("delegate", 0.85));
+
+    const result = await resolveStatelessPolicyDecision(
+      "帮我检查一下状态",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: stateKey,
+          conversation_control: {
+            intent_class: "fresh_live_lookup",
+          },
+        },
+      },
+    );
+
+    policyState.set(stateKey, {
+      decision: result,
+      canonicalSessionKey: stateKey,
+      workContractId: typeof result.workContractId === "string" ? result.workContractId : undefined,
+    });
+
+    expect(result.workContractId).toEqual(expect.stringMatching(/^wc-/u));
+    expect(result.work_contract).toMatchObject({
+      workContractId: result.workContractId,
+      route: routeDecisionOf(result).route,
+      status: "sealed",
+    });
+    expect(policyState.get(stateKey)?.workContractId).toBe(result.workContractId);
+  });
+});

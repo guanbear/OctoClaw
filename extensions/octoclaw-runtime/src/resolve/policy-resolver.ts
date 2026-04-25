@@ -1,5 +1,6 @@
 import type { ScopeMetadata, WorkspaceMode } from "@octoclaw/contracts/schemas";
 import type { DelegateAttempt, DelegateTask } from "@octoclaw/contracts/delegate";
+import type { ContextCoverageSnapshot, IntentClass, WorkDecisionSource } from "@octoclaw/contracts/work-contract";
 import type { NativeHelperInvoker } from "../adapter/native-helper.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import type { PolicyDecision, PolicyJudgeInput } from "@octoclaw/policy/judge";
@@ -73,7 +74,11 @@ import {
   routeHintRequired,
 } from "../replay/replay-logger.js";
 import { resolveCurrentRouteSeal, validateRouteSeal } from "./route-seal.js";
+import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
+import { saveWorkContract } from "../work-contract/store.js";
+import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
+import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
 
 type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
@@ -309,6 +314,91 @@ function normalizeWorkspaceMode(value: unknown, fallback: WorkspaceMode = "share
 
 function runtimeRouteDecision(decision?: UnknownRecord): UnknownRecord {
   return asRecord(decision?.route_decision);
+}
+
+function authoritativeDecisionRoute(decision: UnknownRecord): LiveRoute {
+  return normalizeLiveRoute(asRecord(decision.route_decision).route ?? decision.route, "reply");
+}
+
+function workDecisionSourceFromPolicy(value: unknown): WorkDecisionSource {
+  const source = asString(value, "local_judge");
+  switch (source) {
+    case "continuation":
+    case "execution_coverage":
+    case "memory_coverage":
+    case "local_judge":
+    case "remote_judge":
+    case "validator":
+    case "main_agent_route_hint":
+    case "policy_rule":
+      return source;
+    case "remote":
+      return "remote_judge";
+    case "timeout_fallback":
+    case "timeout":
+    case "no_judge":
+    case "rule":
+      return "policy_rule";
+    default:
+      return "local_judge";
+  }
+}
+
+function intentClassFromPolicy(value: unknown): IntentClass {
+  const intentClass = asString(value, "undetermined");
+  return intentClass === "plain_chat"
+    || intentClass === "runtime_read_model"
+    || intentClass === "execution_followup"
+    || intentClass === "local_surface_lookup"
+    || intentClass === "fresh_live_lookup"
+    || intentClass === "delegated_work"
+    || intentClass === "undetermined"
+    ? intentClass
+    : "undetermined";
+}
+
+function attachWorkContractToPolicyDecision(input: {
+  stateKey: string;
+  prompt: string;
+  metadata: UnknownRecord;
+  decision: UnknownRecord;
+  routeSeal?: RouteSeal | null;
+}): void {
+  const executionLayer = buildExecutionCoverageLayer([input.stateKey]);
+  const memoryLayer = buildMemoryCoverageLayer();
+  const hasConflict = Boolean((executionLayer.coverage && executionLayer.coverage !== "none") && (memoryLayer.coverage && memoryLayer.coverage !== "none"));
+  const coverageSnapshot: ContextCoverageSnapshot = {
+    precheckOrder: ["conversation_grounding", "continuation_route_reuse", "execution_coverage", "memory_coverage", "build_judge_context_packet", "local_judge", "validator_or_remote", "route_seal_commit"],
+    execution: executionLayer,
+    memory: memoryLayer,
+    conflict: hasConflict,
+    authority: hasConflict ? "execution_wins" : executionLayer.coverage && executionLayer.coverage !== "none" ? "execution_wins" : memoryLayer.coverage && memoryLayer.coverage !== "none" ? "memory_only" : "none",
+  };
+  const route = authoritativeDecisionRoute(input.decision);
+  const decisionSeal = buildWorkDecisionSeal(
+    workDecisionSourceFromPolicy(input.decision._judge_source || asRecord(input.decision.route_decision).final_judge_source || "local_judge"),
+    route === "delegate" ? "delegate" : "reply",
+    asStringArray(asRecord(input.decision.route_decision).reason_codes),
+    {
+      confidence: typeof input.decision.judge_confidence === "number" ? input.decision.judge_confidence : undefined,
+      routeSealId: asString(asRecord(input.routeSeal).routeSealId) || undefined,
+    },
+  );
+  const contract = buildWorkContractFromPolicy(
+    input.stateKey,
+    input.prompt,
+    intentClassFromPolicy(input.decision.intent_class || asRecord(input.metadata.conversation_control).intent_class || "undetermined"),
+    coverageSnapshot,
+    decisionSeal,
+  );
+  saveWorkContract(contract);
+  policyState.update(input.stateKey, (entry) => ({
+    ...entry,
+    workContractId: contract.workContractId,
+    latestStatus: contract.status,
+  }));
+  input.decision.work_contract = compactWorkContractView(contract);
+  input.decision.workContractId = contract.workContractId;
 }
 
 function buildDelegateTaskContext(delegateTask: DelegateTask | null | undefined, currentAttempt: DelegateAttempt | null | undefined): UnknownRecord | undefined {
@@ -1671,7 +1761,18 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _judge_failure_class: asString(metadata._judge_failure_class) || undefined,
   };
 
-  return applyPhaseTwoLivePathPolicy(seeded, metadata, prompt);
+  const resolvedDecision = applyPhaseTwoLivePathPolicy(seeded, metadata, prompt);
+  const stateKey = asString(metadata.session_key);
+  if (stateKey) {
+    attachWorkContractToPolicyDecision({
+      stateKey,
+      prompt,
+      metadata,
+      decision: resolvedDecision,
+      routeSeal: savedRouteSeal(resolvedDecision.routeSeal),
+    });
+  }
+  return resolvedDecision;
 }
 
 function rebuildDecisionWithRoute(base: PolicyDecision, liveRoute: string, roleOverride?: PolicyRole): PolicyDecision {
@@ -1807,6 +1908,11 @@ export async function resolvePolicyDecisionForContext(
     }
 
     policyState.set(stateKey, nextState);
+
+    // Build WorkContract from this policy decision
+    attachWorkContractToPolicyDecision({ stateKey, prompt, metadata, decision, routeSeal });
+    nextState.workContractId = asString(decision.workContractId);
+    nextState.latestStatus = "sealed";
 
     await recordPolicyReplay(
       "policy_resolved",

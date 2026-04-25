@@ -161,6 +161,43 @@ describe("native taskflow adapter", () => {
     expect(result?.status).toBe("running");
   });
 
+  it("refreshNativeBinding with baseBinding preserves identity fields", async () => {
+    const port = createMockPort({
+      get: vi.fn().mockResolvedValue({ flowId: "flow-1", status: "running", revision: 9, currentStep: "await_worker" }),
+    });
+
+    const baseBinding = buildBinding({
+      flowId: "flow-1",
+      ownerKey: "wc-identity",
+      controllerId: "custom.controller",
+      revision: 5,
+      expectedRevision: 5,
+      taskId: "task-abc",
+      runId: "run-123",
+      childSessionKey: "session-child-1",
+      stateRef: "state-ref-xyz",
+      waitRef: "wait-ref-abc",
+      requesterOriginRef: "origin-xyz",
+    });
+
+    const result = await refreshNativeBinding(port, "flow-1", baseBinding);
+
+    expect(result).not.toBeNull();
+    expect(result?.flowId).toBe("flow-1");
+    expect(result?.revision).toBe(9);
+    expect(result?.expectedRevision).toBe(9);
+    expect(result?.status).toBe("running");
+    expect(result?.currentStep).toBe("await_worker");
+    expect(result?.ownerKey).toBe("wc-identity");
+    expect(result?.controllerId).toBe("custom.controller");
+    expect(result?.taskId).toBe("task-abc");
+    expect(result?.runId).toBe("run-123");
+    expect(result?.childSessionKey).toBe("session-child-1");
+    expect(result?.stateRef).toBe("state-ref-xyz");
+    expect(result?.waitRef).toBe("wait-ref-abc");
+    expect(result?.requesterOriginRef).toBe("origin-xyz");
+  });
+
   it("mutation returns not_found when flow is missing", async () => {
     const port = createMockPort({
       finish: vi.fn().mockResolvedValue({ applied: false, flowId: "flow-missing", status: "not_found", error: "not_found" }),

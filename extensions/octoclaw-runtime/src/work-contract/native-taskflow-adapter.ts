@@ -127,16 +127,30 @@ export async function failWorkFlow(
 export async function refreshNativeBinding(
   port: BoundTaskFlowPort,
   flowId: string,
+  baseBinding?: NativeBindingRef,
 ): Promise<NativeBindingRef | null> {
   const flow = await port.get(flowId);
   if (!flow) return null;
   const revision = typeof flow.revision === "number" ? flow.revision : 0;
+  const refreshedStatus = normalizeStatus(flow.status);
+  const refreshedStep = typeof (flow as Record<string, unknown>).currentStep === "string"
+    ? (flow as Record<string, unknown>).currentStep as string
+    : undefined;
+  if (baseBinding) {
+    return {
+      ...baseBinding,
+      revision,
+      expectedRevision: revision,
+      status: refreshedStatus,
+      currentStep: refreshedStep ?? baseBinding.currentStep,
+    };
+  }
   return buildBinding({
     flowId: flow.flowId,
     ownerKey: flow.flowId,
     controllerId: "octoclaw.delegate",
     revision,
-    status: normalizeStatus(flow.status),
+    status: refreshedStatus,
   });
 }
 
@@ -185,14 +199,11 @@ async function mutateBinding(
       // On revision_conflict, attempt to refresh the binding from the current flow
       // so the caller gets an up-to-date projection rather than a stale one.
       if (errorKind === "revision_conflict" && port) {
-        const refreshed = await refreshNativeBinding(port, binding.flowId);
+        const refreshed = await refreshNativeBinding(port, binding.flowId, binding);
         if (refreshed) {
           return {
             binding: {
-              ...binding,
-              revision: refreshed.revision,
-              expectedRevision: refreshed.expectedRevision,
-              status: refreshed.status,
+              ...refreshed,
               lastMutation,
               lastMutationApplied: false,
               lastMutationError: "revision_conflict",
