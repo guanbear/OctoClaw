@@ -1349,7 +1349,13 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   }
   if (judgeConfig) {
     // Build execution coverage layer (design §4b)
-    const executionLayer = buildExecutionCoverageLayer(asString(metadata.session_key));
+    const sessionKeys = Array.isArray(metadata.judge_session_keys) && metadata.judge_session_keys.length > 0
+      ? metadata.judge_session_keys as string[]
+      : Array.isArray(metadata.session_keys) && metadata.session_keys.length > 0
+        ? metadata.session_keys as string[]
+        : [asString(metadata.session_key)].filter(Boolean);
+    const excludeTurnId = asString(metadata.current_turn_id);
+    const executionLayer = buildExecutionCoverageLayer(sessionKeys, excludeTurnId || undefined);
     metadata._execution_coverage = executionLayer;
     metadata.execution_layer = executionLayer;
 
@@ -1449,7 +1455,18 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           durationHint === "long",
           asString(conversationControl.route_hint) === "delegate",
         ];
-        if (hardBoundarySignals.some(Boolean)) {
+        const timeoutExecutionLayer = asRecord(metadata.execution_layer ?? metadata._execution_coverage);
+        const timeoutExecutionOverride = asBoolean(timeoutExecutionLayer.supports_provenance_reply)
+          || asBoolean(timeoutExecutionLayer.supports_status_reply);
+        const timeoutRequiresRefresh = asBoolean(timeoutExecutionLayer.requires_control_plane_refresh);
+        if (timeoutExecutionOverride || timeoutRequiresRefresh) {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          deterministicFallbackApplied = true;
+          judgeShadowLog = judgeShadowLog ?? {};
+          judgeShadowLog.fallback_reason = `timeout_execution_coverage_override:${timeoutExecutionOverride ? "provenance/status_reply" : "control_plane_refresh"}`;
+          judgeShadowLog.final_judge_route = "reply";
+        } else if (hardBoundarySignals.some(Boolean)) {
           // Deterministic hard-boundary: high-risk task must not default to reply
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;

@@ -1303,7 +1303,7 @@ export function getToolRegistrations(): ToolRegistration[] {
         const taskTextForCoverageGuard = asString(params.task).toLowerCase();
         const hasSupportedExecutionReply = Object.entries(executionCoverage)
           .some(([key, value]) => key.startsWith("supports_") && asBoolean(value));
-        const coverageLevel = asString(executionCoverage.coverage_level).toLowerCase();
+        const coverageLevel = asString(executionCoverage.coverage ?? executionCoverage.coverage_level).toLowerCase();
         const executionTruthMissing = Object.keys(executionCoverage).length === 0 || !coverageLevel || coverageLevel === "none";
         const provenanceStatusQueryPattern = /\b(who|status|delegated|handled|ran)\b|\bdid you\b|\bsub-?agent\b|\blook up\b/;
         if (!hasSupportedExecutionReply && executionTruthMissing && provenanceStatusQueryPattern.test(taskTextForCoverageGuard)) {
