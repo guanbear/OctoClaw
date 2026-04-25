@@ -474,6 +474,8 @@ function sortTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskState
 }
 
 const STATUS_STALE_AFTER_MS = 5 * 60 * 1000;
+const STATUS_PANEL_STALE_VISIBLE_MS = 30 * 60 * 1000;
+const STATUS_PANEL_TERMINAL_VISIBLE_MS = 24 * 60 * 60 * 1000;
 
 function timestampMs(value: unknown): number | null {
   const parsed = Date.parse(asString(value));
@@ -560,6 +562,30 @@ function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()
   if (rawStatus === "running") return { status: "running", reason: "fresh_running_with_required_evidence" };
   if (rawStatus === "queued" || rawStatus === "planned") return { status: "queued", reason: "queued_or_planned" };
   return { status: rawStatus || "unknown", reason: "raw_status_projection" };
+}
+
+function statusPanelRelevantMs(task: RuntimeStatusTaskView): number | null {
+  return timestampMs(task.completedAt)
+    ?? timestampMs(task.updatedAt)
+    ?? timestampMs(task.delegatedAt)
+    ?? timestampMs(task.startedAt);
+}
+
+function statusPanelRetentionMs(task: RuntimeStatusTaskView): number | null {
+  if (["failed", "completed", "canceled"].includes(task.status)) return STATUS_PANEL_TERMINAL_VISIBLE_MS;
+  if (["timed_out", "blocked"].includes(task.status)) return STATUS_PANEL_STALE_VISIBLE_MS;
+  return null;
+}
+
+function isStatusPanelExpired(task: RuntimeStatusTaskView, nowMs = Date.now()): boolean {
+  const retentionMs = statusPanelRetentionMs(task);
+  if (retentionMs === null) return false;
+  const relevantMs = statusPanelRelevantMs(task);
+  return relevantMs !== null && nowMs - relevantMs >= retentionMs;
+}
+
+function shouldIncludeExpiredStatus(format: string): boolean {
+  return ["table", "lanes"].includes(format);
 }
 
 function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date.now()): RuntimeStatusTaskView {
@@ -778,22 +804,36 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
     ...tasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
     ...runtimeTasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
   ];
-  const counts = allTasks.reduce<Record<string, number>>((acc, task) => {
+  const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
+  const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
+  const hiddenExpiredCount = allTasks.length - visibleTasks.length;
+  const counts = visibleTasks.reduce<Record<string, number>>((acc, task) => {
     acc[task.status] = (acc[task.status] ?? 0) + 1;
     return acc;
   }, {});
-  const countSummary = Object.entries(counts)
+  const allCounts = allTasks.reduce<Record<string, number>>((acc, task) => {
+    acc[task.status] = (acc[task.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const summarizeCounts = (source: Record<string, number>) => Object.entries(source)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([status, count]) => `${status}=${count}`)
     .join(", ");
+  const countSummary = summarizeCounts(counts);
+  const allCountSummary = summarizeCounts(allCounts);
   const lines = [
     `OctoClaw native runtime status (${normalizedFormat})`,
-    `Active records: ${allTasks.length}`,
+    `Visible records: ${visibleTasks.length}`,
+    `Total records: ${allTasks.length}`,
+    hiddenExpiredCount > 0 && !includeExpired
+      ? `Expired hidden: ${hiddenExpiredCount} (TTL: timed_out/blocked ${formatElapsed(STATUS_PANEL_STALE_VISIBLE_MS)}, terminal ${formatElapsed(STATUS_PANEL_TERMINAL_VISIBLE_MS)}; ask for table/lanes to inspect history)`
+      : `Expired hidden: ${hiddenExpiredCount}`,
     countSummary ? `Projected counts: ${countSummary}` : "Projected counts: none",
+    hiddenExpiredCount > 0 && !includeExpired && allCountSummary ? `All projected counts: ${allCountSummary}` : "",
     "Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend | child_session/run | reason | summary",
-  ];
+  ].filter(Boolean);
   const limit = normalizedFormat === "anchors" ? 10 : 25;
-  for (const task of allTasks.slice(0, limit)) {
+  for (const task of visibleTasks.slice(0, limit)) {
     const childRef = [task.childSessionKey, task.runId].filter(Boolean).join("/") || "none";
     lines.push([
       `- ${task.taskId}`,

@@ -171,15 +171,21 @@ describe("octoclaw_dispatch honesty", () => {
       }],
     }), "utf-8");
 
-    const response = await statusTool().execute({ format: "anchors" }, {});
-    const rawOutput = String((response.json as Record<string, unknown>).raw_output);
+    const tableResponse = await statusTool().execute({ format: "table" }, {});
+    const tableOutput = String((tableResponse.json as Record<string, unknown>).raw_output);
 
-    expect(rawOutput).toContain("Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend");
-    expect(rawOutput).toContain("task-status-panel-1 | timed_out(running) | delegate");
-    expect(rawOutput).toContain("model=zhipu/GLM-5.1");
-    expect(rawOutput).toContain("backend=octoclaw-research");
-    expect(rawOutput).toContain("delegated_at=2026-04-25T00:00:00.000Z");
-    expect(rawOutput).toContain("reason=stale_status_no_progress>5m");
+    expect(tableOutput).toContain("Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend");
+    expect(tableOutput).toContain("task-status-panel-1 | timed_out(running) | delegate");
+    expect(tableOutput).toContain("model=zhipu/GLM-5.1");
+    expect(tableOutput).toContain("backend=octoclaw-research");
+    expect(tableOutput).toContain("delegated_at=2026-04-25T00:00:00.000Z");
+    expect(tableOutput).toContain("reason=stale_status_no_progress>5m");
+
+    const anchorsResponse = await statusTool().execute({ format: "anchors" }, {});
+    const anchorsOutput = String((anchorsResponse.json as Record<string, unknown>).raw_output);
+    expect(anchorsOutput).toContain("Visible records: 0");
+    expect(anchorsOutput).toContain("Expired hidden: 1");
+    expect(anchorsOutput).not.toContain("task-status-panel-1 | timed_out(running) | delegate");
   });
 
   it("returns structured ok:true on success", async () => {
