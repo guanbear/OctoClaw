@@ -400,11 +400,36 @@ interface RuntimeTaskStateRecord extends UnknownRecord {
   flow_id?: unknown;
   worker_pool?: unknown;
   updated_at?: unknown;
+  created_at?: unknown;
   started_at?: unknown;
   completed_at?: unknown;
+  failed_at?: unknown;
   spawned_at?: unknown;
   report_path?: unknown;
+  model?: unknown;
+  model_profile?: unknown;
+  backend?: unknown;
   artifacts?: unknown;
+}
+
+interface RuntimeStatusTaskView {
+  taskId: string;
+  status: string;
+  rawStatus: string;
+  route: string;
+  summary: string;
+  updatedAt: string;
+  delegatedAt: string;
+  startedAt: string;
+  completedAt: string;
+  elapsedMs: number | null;
+  elapsedText: string;
+  model: string;
+  backend: string;
+  workerPool: string;
+  childSessionKey: string;
+  runId: string;
+  statusReason: string;
 }
 
 async function readRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
@@ -446,6 +471,130 @@ function sortTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskState
     const rightAt = Date.parse(asString(right.updated_at || right.completed_at || right.started_at || right.spawned_at)) || 0;
     return rightAt - leftAt;
   });
+}
+
+const STATUS_STALE_AFTER_MS = 5 * 60 * 1000;
+
+function timestampMs(value: unknown): number | null {
+  const parsed = Date.parse(asString(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatElapsed(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return "unknown";
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${seconds % 60 ? `${seconds % 60}s` : ""}`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 48) return `${hours}h${remainingMinutes ? `${remainingMinutes}m` : ""}`;
+  const days = Math.floor(hours / 24);
+  return `${days}d${hours % 24 ? `${hours % 24}h` : ""}`;
+}
+
+function firstTimestamp(...values: unknown[]): string {
+  for (const value of values) {
+    const text = asString(value);
+    if (timestampMs(text) !== null) return text;
+  }
+  return "";
+}
+
+function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvidence: boolean; hasSpawnEvidence: boolean; childSessionKey: string; runId: string } {
+  const artifacts = asRecord(record.artifacts);
+  const runtimeTruth = asRecord(artifacts.runtime_truth);
+  const evidence = asRecord(runtimeTruth.evidence);
+  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const continuity = asRecord(runtimeTruth.childSessionContinuity || runtimeTruth.continuity);
+  const childSessionKey = optionalString(
+    record.childSessionKey,
+    record.child_session_key,
+    delegateAttempt.childSessionKey,
+    continuity.childSessionKey,
+    evidence.childSessionKey,
+  ) ?? "";
+  const runId = optionalString(
+    record.runId,
+    record.run_id,
+    record.childRunId,
+    record.child_run_id,
+    delegateAttempt.runId,
+    delegateAttempt.childRunId,
+    continuity.runId,
+    evidence.childRunId,
+    evidence.runId,
+  ) ?? "";
+  const hasDispatchEvidence = asBoolean(record.dispatchExecuted)
+    || asBoolean(record.dispatch_executed)
+    || asBoolean(evidence.dispatchExecuted)
+    || asBoolean(evidence.dispatch_executed)
+    || Boolean(asString(record.flow_id));
+  const hasSpawnEvidence = asBoolean(record.spawnExecuted)
+    || asBoolean(record.spawn_executed)
+    || asBoolean(evidence.spawnExecuted)
+    || asBoolean(evidence.spawn_executed)
+    || Boolean(runId);
+  return { hasDispatchEvidence, hasSpawnEvidence, childSessionKey, runId };
+}
+
+function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()): { status: string; reason: string } {
+  const rawStatus = asString(record.status, "unknown");
+  if (["failed", "completed", "done", "succeeded", "cancelled", "canceled", "blocked", "timed_out"].includes(rawStatus)) {
+    return { status: rawStatus === "done" || rawStatus === "succeeded" ? "completed" : rawStatus === "cancelled" ? "canceled" : rawStatus, reason: "terminal_or_explicit_status" };
+  }
+
+  const route = normalizeLiveRoute(record.route, "delegate");
+  const evidence = runtimeStatusEvidence(record);
+  const updatedMs = timestampMs(record.updated_at || record.started_at || record.spawned_at);
+  const isStale = updatedMs !== null && nowMs - updatedMs >= STATUS_STALE_AFTER_MS;
+  if ((rawStatus === "running" || rawStatus === "queued" || rawStatus === "materializing") && isStale) {
+    return { status: "timed_out", reason: `stale_status_no_progress>${formatElapsed(STATUS_STALE_AFTER_MS)}` };
+  }
+
+  if (route === "delegate") {
+    if (!evidence.hasDispatchEvidence) return { status: "registered", reason: "no_dispatch_evidence" };
+    if (!evidence.hasSpawnEvidence) return { status: "queued", reason: "dispatch_materialized_but_no_spawn_evidence" };
+  }
+
+  if (rawStatus === "running") return { status: "running", reason: "fresh_running_with_required_evidence" };
+  if (rawStatus === "queued" || rawStatus === "planned") return { status: "queued", reason: "queued_or_planned" };
+  return { status: rawStatus || "unknown", reason: "raw_status_projection" };
+}
+
+function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date.now()): RuntimeStatusTaskView {
+  const artifacts = asRecord(record.artifacts);
+  const runtimeTruth = asRecord(artifacts.runtime_truth);
+  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const binding = asRecord(runtimeTruth.binding);
+  const evidence = runtimeStatusEvidence(record);
+  const startedAt = firstTimestamp(record.started_at, record.spawned_at, record.created_at, record.updated_at);
+  const delegatedAt = firstTimestamp(record.spawned_at, record.started_at, record.created_at, record.updated_at);
+  const completedAt = firstTimestamp(record.completed_at, record.failed_at, delegateAttempt.completedAt, delegateAttempt.failedAt);
+  const startMs = timestampMs(startedAt);
+  const endMs = timestampMs(completedAt) ?? nowMs;
+  const elapsedMs = startMs === null ? null : Math.max(0, endMs - startMs);
+  const projected = projectRuntimeStatus(record, nowMs);
+  const workerPool = optionalString(record.worker_pool, binding.workerPool, delegateAttempt.workerPool) ?? "unknown";
+  return {
+    taskId: asString(record.id),
+    status: projected.status,
+    rawStatus: asString(record.status, "unknown"),
+    route: normalizeLiveRoute(record.route, "delegate"),
+    summary: asString(record.summary),
+    updatedAt: asString(record.updated_at),
+    delegatedAt,
+    startedAt,
+    completedAt,
+    elapsedMs,
+    elapsedText: formatElapsed(elapsedMs),
+    model: optionalString(record.model, record.model_profile, delegateAttempt.model, runtimeTruth.model, asRecord(runtimeTruth.model_policy).selected_model) ?? "unknown",
+    backend: optionalString(record.backend, workerPool, binding.controllerId, runtimeTruth.backend) ?? "unknown",
+    workerPool,
+    childSessionKey: evidence.childSessionKey,
+    runId: evidence.runId,
+    statusReason: projected.reason,
+  };
 }
 
 function buildTaskActionTimeline(record: RuntimeTaskStateRecord, liveRead: UnknownRecord, replayEvents: UnknownRecord[]): UnknownRecord[] {
@@ -582,26 +731,28 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
 
 async function buildNativeStatusOutput(format: string): Promise<string> {
   const normalizedFormat = format || "anchors";
+  const nowMs = Date.now();
   const tasks = sortTaskStateRecords(await readRuntimeTaskState());
   const taskIdsFromCache = new Set(tasks.map((entry) => asString(entry.id)));
-  const runtimeTasks: { taskId: string; status: string; route: string; summary: string; updatedAt: string }[] = [];
+  const runtimeTasks: RuntimeTaskStateRecord[] = [];
   for (const { state } of policyState.entries()) {
     const decision = asRecord(state?.decision);
     const runtimeTruth = asRecord(decision.runtime_truth);
     const taskIds = taskIdsFromRuntimeTruth(runtimeTruth);
     const binding = asRecord(runtimeTruth.binding);
     const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+    const recovery = asRecord(runtimeTruth.recovery);
     const status = asString(
       delegateAttempt.status
       || binding.substrateState
       || binding.status
-      || asRecord(runtimeTruth.recovery).status
+      || recovery.status
       || "unknown",
     );
     const summary = asString(
       delegateAttempt.failureReason
       || delegateAttempt.status
-      || asRecord(runtimeTruth.recovery).reason
+      || recovery.reason
       || "",
     );
     for (const taskId of taskIds) {
@@ -609,30 +760,53 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
         continue;
       }
       runtimeTasks.push({
-        taskId,
+        id: taskId,
         status,
         route: "delegate",
         summary,
-        updatedAt: new Date().toISOString(),
+        updated_at: new Date(nowMs).toISOString(),
+        started_at: delegateAttempt.startedAt || binding.startedAt || state?.updatedAt,
+        completed_at: delegateAttempt.completedAt || delegateAttempt.failedAt,
+        worker_pool: delegateAttempt.workerPool || binding.workerPool,
+        model: delegateAttempt.model || runtimeTruth.model,
+        backend: binding.controllerId || runtimeTruth.backend,
+        artifacts: { runtime_truth: runtimeTruth },
       });
     }
   }
   const allTasks = [
-    ...tasks.map((task) => ({
-      taskId: asString(task.id),
-      status: asString(task.status),
-      route: normalizeLiveRoute(task.route, "delegate"),
-      summary: asString(task.summary),
-      updatedAt: asString(task.updated_at),
-    })),
-    ...runtimeTasks,
+    ...tasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
+    ...runtimeTasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
   ];
+  const counts = allTasks.reduce<Record<string, number>>((acc, task) => {
+    acc[task.status] = (acc[task.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const countSummary = Object.entries(counts)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([status, count]) => `${status}=${count}`)
+    .join(", ");
   const lines = [
     `OctoClaw native runtime status (${normalizedFormat})`,
     `Active records: ${allTasks.length}`,
+    countSummary ? `Projected counts: ${countSummary}` : "Projected counts: none",
+    "Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend | child_session/run | reason | summary",
   ];
-  for (const task of allTasks.slice(0, normalizedFormat === "anchors" ? 10 : 25)) {
-    lines.push(`- ${task.taskId} | ${task.status} | ${task.route} | ${task.summary}`);
+  const limit = normalizedFormat === "anchors" ? 10 : 25;
+  for (const task of allTasks.slice(0, limit)) {
+    const childRef = [task.childSessionKey, task.runId].filter(Boolean).join("/") || "none";
+    lines.push([
+      `- ${task.taskId}`,
+      `${task.status}(${task.rawStatus})`,
+      task.route,
+      `elapsed=${task.elapsedText}`,
+      `delegated_at=${task.delegatedAt || "unknown"}`,
+      `model=${task.model}`,
+      `backend=${task.backend}`,
+      `child=${childRef}`,
+      `reason=${task.statusReason}`,
+      task.summary,
+    ].join(" | "));
   }
   if (allTasks.length === 0) {
     lines.push("No runtime task state is currently available.");

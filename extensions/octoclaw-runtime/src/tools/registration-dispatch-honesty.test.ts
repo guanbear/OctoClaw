@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROUTE_SEAL_SCHEMA_VERSION, type RouteSeal } from "@octoclaw/contracts/route-seal";
 import type { ContextCoverageSnapshot, CoverageAuthority, IntentClass, WorkContract, WorkRoute } from "@octoclaw/contracts/work-contract";
 import type { NativeHelperInvoker } from "../adapter/native-helper.js";
+import { envOverrides } from "../resolve/env.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
 import { policyState } from "../state/policy-state.js";
@@ -21,6 +22,12 @@ const osModule = os as unknown as { tmpdir(): string };
 function dispatchTool() {
   const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_dispatch");
   if (!tool) throw new Error("octoclaw_dispatch tool not registered");
+  return tool;
+}
+
+function statusTool() {
+  const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_status");
+  if (!tool) throw new Error("octoclaw_status tool not registered");
   return tool;
 }
 
@@ -136,10 +143,43 @@ async function executeDispatch(params: Record<string, unknown>, ctx: Record<stri
 describe("octoclaw_dispatch honesty", () => {
   afterEach(() => {
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
+    envOverrides.workspaceRoot = "";
     for (const dir of tempLedgerPaths.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
     vi.restoreAllMocks();
+  });
+
+  it("status panel projects stale running tasks with elapsed/model/backend fields", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-panel-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+    const stateDir = path.join(dir, "tmp", "octopus");
+    fsSync.mkdirSync(stateDir, { recursive: true });
+    fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      tasks: [{
+        id: "task-status-panel-1",
+        status: "running",
+        route: "delegate",
+        summary: "Delegated task materialized natively",
+        updated_at: "2026-04-25T00:00:00.000Z",
+        started_at: "2026-04-25T00:00:00.000Z",
+        spawned_at: "2026-04-25T00:00:00.000Z",
+        model: "zhipu/GLM-5.1",
+        worker_pool: "octoclaw-research",
+        flow_id: "flow-status-panel-1",
+      }],
+    }), "utf-8");
+
+    const response = await statusTool().execute({ format: "anchors" }, {});
+    const rawOutput = String((response.json as Record<string, unknown>).raw_output);
+
+    expect(rawOutput).toContain("Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend");
+    expect(rawOutput).toContain("task-status-panel-1 | timed_out(running) | delegate");
+    expect(rawOutput).toContain("model=zhipu/GLM-5.1");
+    expect(rawOutput).toContain("backend=octoclaw-research");
+    expect(rawOutput).toContain("delegated_at=2026-04-25T00:00:00.000Z");
+    expect(rawOutput).toContain("reason=stale_status_no_progress>5m");
   });
 
   it("returns structured ok:true on success", async () => {
