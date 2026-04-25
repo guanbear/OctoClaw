@@ -40,8 +40,10 @@ import {
 import { validateRouteSeal } from "../resolve/route-seal.js";
 import { createOpenClawDistTaskFlowPort } from "../ports/openclaw-dist-taskflow-port.js";
 import { checkTaskflowCapability } from "../ports/taskflow-port.js";
-import { loadWorkContract } from "../work-contract/store.js";
 import type { RouteSeal } from "@octoclaw/contracts/route-seal";
+import type { WorkContract } from "@octoclaw/contracts/work-contract";
+import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
+import { loadWorkContract } from "../work-contract/store.js";
 import fsSync from "node:fs";
 
 interface FsSyncLike {
@@ -218,6 +220,66 @@ export function selectDispatchPolicyDecision(
     return explicit;
   }
   return isRecord(stateDecision) ? stateDecision : null;
+}
+
+function selectDispatchWorkContractId(params: UnknownRecord, decision: UnknownRecord | null): string {
+  const decisionRecord = asRecord(decision);
+  return asString(params.workContractId)
+    || asString(decisionRecord.workContractId)
+    || asString(asRecord(decisionRecord.work_contract).workContractId);
+}
+
+function decisionFromWorkContract(contract: WorkContract, baseDecision: UnknownRecord | null): UnknownRecord {
+  const base = asRecord(baseDecision);
+  const routeDecision = asRecord(base.route_decision);
+  const toolPolicy = asRecord(base.tool_policy);
+  const routerDecision = asRecord(base.router_decision_v2);
+  const request = asRecord(base.request);
+  const route = contract.route;
+  return canonicalizeDecisionForPolicyState({
+    ...base,
+    route,
+    workContractId: contract.workContractId,
+    work_contract: compactWorkContractView(contract),
+    request: {
+      ...request,
+      session_key: asString(request.session_key, contract.sessionKey),
+    },
+    route_decision: {
+      ...routeDecision,
+      route,
+      system_preferred_route: route,
+      task_class: route === "delegate"
+        ? asString(routeDecision.task_class, contract.delegate?.role || "delegated_single")
+        : asString(routeDecision.task_class, "main_direct"),
+      dispatch_required: route === "delegate",
+      reason_codes: Array.isArray(routeDecision.reason_codes)
+        ? routeDecision.reason_codes
+        : contract.decision.reasonCodes,
+    },
+    tool_policy: {
+      ...toolPolicy,
+      must_delegate_via: route === "delegate" ? asString(toolPolicy.must_delegate_via, "octoclaw_dispatch") : "",
+      delegate_first: route === "delegate",
+    },
+    router_decision_v2: {
+      ...routerDecision,
+      request_kind: route === "delegate" ? "delegated_task" : asString(routerDecision.request_kind, "reply"),
+    },
+  });
+}
+
+function validateDispatchWorkContract(contract: WorkContract | null, workContractId: string): { ok: true; contract: WorkContract } | { ok: false; route: string; error: string } {
+  if (!contract) {
+    return { ok: false, route: "delegate", error: `work_contract_not_found:${workContractId}` };
+  }
+  if (contract.status !== "sealed") {
+    return { ok: false, route: contract.route, error: `work_contract_not_sealed:${workContractId}:${contract.status}` };
+  }
+  if (contract.route !== "delegate") {
+    return { ok: false, route: contract.route, error: `work_contract_route_not_dispatchable:${workContractId}:${contract.route}` };
+  }
+  return { ok: true, contract };
 }
 
 function selectRouteSealState(ctx: UnknownRecord, stateKey: string, state: UnknownRecord | null): UnknownRecord | null {
@@ -651,6 +713,10 @@ function dispatchHonestySuccess(params: {
   taskId: string;
   taskClass: string;
   workContractId?: string | null;
+  delegateTaskId?: string | null;
+  attemptId?: string | null;
+  childSessionKey?: string | null;
+  childSessionId?: string | null;
   dispatchExecuted?: boolean;
   nativeTaskId?: string | null;
   nativeFlowId?: string | null;
@@ -663,7 +729,11 @@ function dispatchHonestySuccess(params: {
     worker_pool: params.workerPool,
     task_id: params.taskId,
     task_class: params.taskClass,
-    work_contract_id: params.workContractId ?? null,
+    work_contract_id: asString(params.workContractId) || null,
+    delegate_task_id: asString(params.delegateTaskId) || null,
+    attempt_id: asString(params.attemptId) || null,
+    child_session_key: asString(params.childSessionKey) || null,
+    child_session_id: asString(params.childSessionId) || null,
     delegation_method: "octoclaw_dispatch",
     dispatch_executed: params.dispatchExecuted === true,
     native_task_id: params.nativeTaskId ?? null,
@@ -676,7 +746,11 @@ function dispatchHonestySuccess(params: {
     worker_pool: params.workerPool,
     task_id: params.taskId,
     task_class: params.taskClass,
-    work_contract_id: params.workContractId ?? null,
+    work_contract_id: asString(params.workContractId) || null,
+    delegate_task_id: asString(params.delegateTaskId) || null,
+    attempt_id: asString(params.attemptId) || null,
+    child_session_key: asString(params.childSessionKey) || null,
+    child_session_id: asString(params.childSessionId) || null,
     delegation_method: "octoclaw_dispatch",
     dispatch_executed: params.dispatchExecuted === true,
     native_task_id: params.nativeTaskId ?? null,
@@ -950,9 +1024,9 @@ export function getToolRegistrations(): ToolRegistration[] {
           sessionKey: { type: "string", description: "Optional session key override." },
           metadataJson: { type: "string", description: "Optional JSON object with extra session metadata." },
           policyJson: { type: "string", description: "Optional precomputed runtime policy decision JSON." },
-          workContractId: { type: "string", description: "WorkContract ID. When provided, dispatch loads the sealed contract and uses its route directly, skipping re-judge." },
-          delegateTaskId: { type: "string", description: "Optional delegate task ID for continuation dispatch." },
-          continuationMode: { type: "string", enum: ["new", "resume_preferred", "new_attempt"], description: "Continuation mode. Defaults to 'new'." },
+          workContractId: { type: "string", description: "Optional sealed WorkContract id to dispatch without re-judging." },
+          delegateTaskId: { type: "string", description: "Optional delegate task id for continuation-aware dispatch." },
+          continuationMode: { type: "string", enum: ["resume_preferred", "status_only", "new_attempt"], description: "Optional continuation hint for WorkContract dispatch." },
         },
         required: ["task"],
       },
@@ -961,14 +1035,25 @@ export function getToolRegistrations(): ToolRegistration[] {
         let { key: stateKey, state } = resolveToolPolicyContext(ctx, asString(params.task));
         let hadCachedDecision = Boolean(params.policyJson || state?.decision);
         let cachedDecision = selectDispatchPolicyDecision(state?.decision, params.policyJson);
-        let freshDecisionSource = "";
-        if (!cachedDecision && asString(params.workContractId)) {
-          cachedDecision = {
-            workContractId: asString(params.workContractId),
-            request: {},
-            route_decision: { route: "delegate", system_preferred_route: "delegate" },
-          };
+        let dispatchWorkContract: WorkContract | null = null;
+        let workContractDispatchError: { route: string; error: string } | null = null;
+        const requestedWorkContractId = selectDispatchWorkContractId(asRecord(params), cachedDecision);
+        if (requestedWorkContractId) {
+          const validation = validateDispatchWorkContract(loadWorkContract(requestedWorkContractId), requestedWorkContractId);
+          if (validation.ok) {
+            dispatchWorkContract = validation.contract;
+            cachedDecision = decisionFromWorkContract(dispatchWorkContract, cachedDecision);
+            hadCachedDecision = true;
+          } else {
+            workContractDispatchError = { route: validation.route, error: validation.error };
+            cachedDecision = cachedDecision ?? {
+              request: { session_key: stateKey || asString(params.sessionKey) },
+              route_decision: { route: validation.route },
+              workContractId: requestedWorkContractId,
+            };
+          }
         }
+        let freshDecisionSource = "";
         if (!cachedDecision) {
           cachedDecision = await resolveStatelessPolicyDecision(asString(params.task), {
             command: asString(params.command),
@@ -985,7 +1070,8 @@ export function getToolRegistrations(): ToolRegistration[] {
           parseObjectJson(params.metadataJson),
         );
         const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
-        let resolvedRoute = normalizeLiveRoute(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
+        const resolvedRoute = normalizeLiveRoute(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
+        const isDelegatedRoute = resolvedRoute === "delegate";
         const recordDispatchTerminalFailure = async (errorMessage: string, options: { sealMismatch?: boolean; route?: string | null } = {}) => {
           await recordPolicyReplay("dispatch_terminal_failure", {
             sessionKey: managedSessionKey,
@@ -997,76 +1083,16 @@ export function getToolRegistrations(): ToolRegistration[] {
             terminal: true,
           }, toolLogger(ctx));
         };
-        // WP4: WorkContract-based dispatch validation. A sealed WorkContract is
-        // authoritative and must win over legacy policyJson route_decision data.
-        const workContractIdFromParam = asString(params.workContractId);
-        const workContractIdFromDecision = asString(cachedDecision?.workContractId ?? asRecord(cachedDecision?.work_contract).workContractId);
-        const resolvedWorkContractId = workContractIdFromParam || workContractIdFromDecision;
-        let workContractLoaded: import("@octoclaw/contracts/work-contract").WorkContract | null = null;
-
-        if (resolvedWorkContractId) {
-          workContractLoaded = loadWorkContract(resolvedWorkContractId);
-
-          if (!workContractLoaded) {
-            await recordDispatchTerminalFailure("work_contract_not_found", { route: resolvedRoute });
-            return dispatchHonestyFailure({
-              route: resolvedRoute,
-              error: "work_contract_not_found",
-              retryable: false,
-              terminal: true,
-            });
-          }
-
-          if (workContractLoaded.status !== "sealed") {
-            await recordDispatchTerminalFailure(`work_contract_not_sealed:${workContractLoaded.status}`, { route: resolvedRoute });
-            return dispatchHonestyFailure({
-              route: resolvedRoute,
-              error: `work_contract_not_sealed:${workContractLoaded.status}`,
-              retryable: workContractLoaded.status === "draft",
-              terminal: false,
-            });
-          }
-
-          if (workContractLoaded.route !== "delegate") {
-            await recordDispatchTerminalFailure(`work_contract_route_not_delegate:${workContractLoaded.route}`, { route: workContractLoaded.route });
-            return dispatchHonestyFailure({
-              route: workContractLoaded.route,
-              error: `work_contract_route_not_delegate:${workContractLoaded.route}`,
-              retryable: false,
-              terminal: true,
-            });
-          }
-
-          // Authoritative route from sealed WorkContract — do NOT re-judge.
-          resolvedRoute = workContractLoaded.route;
-          hadCachedDecision = true;
-          initialMetadata.workContractId = workContractLoaded.workContractId;
-          if (workContractLoaded.delegate?.delegateTaskId) {
-            initialMetadata.delegateTaskId = workContractLoaded.delegate.delegateTaskId;
-          }
-          if (workContractLoaded.delegate?.nativeBinding?.flowId) {
-            initialMetadata.nativeFlowId = workContractLoaded.delegate.nativeBinding.flowId;
-          }
-          initialMetadata.continuationMode = asString(params.continuationMode) || workContractLoaded.continuity.continuationMode || "new";
-          cachedDecision = {
-            ...cachedDecision,
-            workContractId: workContractLoaded.workContractId,
-            work_contract: asRecord(cachedDecision.work_contract).workContractId
-              ? cachedDecision.work_contract
-              : { workContractId: workContractLoaded.workContractId },
-            request: {
-              ...asRecord(cachedDecision.request),
-              session_key: asString(asRecord(cachedDecision.request).session_key || workContractLoaded.sessionKey),
-            },
-            route_decision: {
-              ...asRecord(cachedDecision.route_decision),
-              route: workContractLoaded.route,
-              system_preferred_route: workContractLoaded.route,
-              task_class: asString(asRecord(cachedDecision.route_decision).task_class || workContractLoaded.delegate?.role),
-            },
-          };
+        if (workContractDispatchError) {
+          await recordDispatchTerminalFailure(workContractDispatchError.error, { route: workContractDispatchError.route });
+          return dispatchHonestyFailure({
+            route: workContractDispatchError.route,
+            error: workContractDispatchError.error,
+            sealMismatch: false,
+            retryable: false,
+            terminal: true,
+          });
         }
-        const isDelegatedRoute = resolvedRoute === "delegate";
         const routeSealState = selectRouteSealState(ctx, stateKey, state);
         const cachedRouteSeal = validCachedRouteSeal(routeSealState, cachedDecision, initialMetadata);
         if (!hadCachedDecision && isDelegatedRoute && managedSessionKey && !params.policyJson) {
@@ -1110,6 +1136,16 @@ export function getToolRegistrations(): ToolRegistration[] {
         let metadata = initialMetadata;
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey, state, cachedDecision });
         metadata.requested_route = normalizeLiveRoute(resolvedRoute, "reply");
+        if (dispatchWorkContract) {
+          metadata.workContractId = dispatchWorkContract.workContractId;
+          metadata.work_contract_id = dispatchWorkContract.workContractId;
+          metadata.continuationMode = asString(params.continuationMode, dispatchWorkContract.continuity.continuationMode);
+          metadata.continuation_mode = asString(params.continuationMode, dispatchWorkContract.continuity.continuationMode);
+        }
+        if (asString(params.delegateTaskId)) {
+          metadata.delegateTaskId = asString(params.delegateTaskId);
+          metadata.delegate_task_id = asString(params.delegateTaskId);
+        }
 
         const complexityBand = asString(params.complexityBand || asRecord(cachedDecision)._judge_complexity_band || asRecord(asRecord(cachedDecision).route_decision)._judge_complexity_band);
         const budgetBand = asString(asRecord(cachedDecision._judge_budget_band ?? asRecord(cachedDecision.route_decision)._judge_budget_band));
@@ -1318,15 +1354,20 @@ export function getToolRegistrations(): ToolRegistration[] {
         const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
         const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
         const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
+        const nativeBinding = dispatchWorkContract?.delegate?.nativeBinding;
         return dispatchHonestySuccess({
           route: finalRoute,
           workerPool,
           taskId: delegateTaskId,
           taskClass,
+          workContractId: dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId),
+          delegateTaskId,
+          attemptId: asString(payload.attemptId || materialization.attemptId),
+          childSessionKey: nativeBinding?.childSessionKey ?? dispatchWorkContract?.continuity.preferredChildSessionKey ?? null,
+          childSessionId: dispatchWorkContract?.continuity.preferredChildSessionId ?? null,
           dispatchExecuted: payload.executed === true,
           nativeTaskId: asString(nativeTaskBinding.nativeTaskId ?? nativeAttemptBinding.nativeTaskId),
           nativeFlowId: asString(nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId),
-          workContractId: resolvedWorkContractId || null,
           resultMaterialized: Boolean(asString(materialization.task_id)),
           deliveryStatus: asString(materialization.substrate_state),
         });
