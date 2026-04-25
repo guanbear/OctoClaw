@@ -367,6 +367,7 @@ function attachWorkContractToPolicyDecision(input: {
 }): void {
   const executionLayer = buildExecutionCoverageLayer([input.stateKey]);
   const memoryLayer = buildMemoryCoverageLayer();
+  input.metadata._memory_coverage = memoryLayer;
   const hasConflict = Boolean((executionLayer.coverage && executionLayer.coverage !== "none") && (memoryLayer.coverage && memoryLayer.coverage !== "none"));
   const coverageSnapshot: ContextCoverageSnapshot = {
     precheckOrder: ["conversation_grounding", "continuation_route_reuse", "execution_coverage", "memory_coverage", "build_judge_context_packet", "local_judge", "validator_or_remote", "route_seal_commit"],
@@ -1934,6 +1935,12 @@ export async function resolvePolicyDecisionForContext(
       buildPolicyResolvedReplayPayload({
         decision,
         ...buildPolicyResolvedExecutionTelemetry(decision),
+        workContractId: decision.workContractId,
+        workContractRoute: asRecord(decision.work_contract).route,
+        decisionSource: asRecord(decision.work_contract).decisionSource,
+        memoryCoverage: asRecord(metadata._memory_coverage).coverage,
+        memoryFreshnessRisk: asRecord(metadata._memory_coverage).freshness_risk,
+        parentContextTokensAdded: 0,
         stateKey,
         ctx,
         boundary: { canonicalSessionKey: stateKey, status: asString(metadata.session_boundary_status), reason: asString(metadata.session_boundary_reason) },

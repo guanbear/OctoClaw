@@ -4,6 +4,10 @@ import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
 import type { WorkContract, NativeBindingRef, ContextCoverageSnapshot, CoverageAuthority } from "@octoclaw/contracts/work-contract";
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
+import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
+import { buildPolicyResolvedReplayPayload } from "../replay/replay-logger.js";
+import { authoritativeDecisionRoute, canonicalizeDecisionForPolicyState } from "./route-helpers.js";
+import { resolveStatelessPolicyDecision } from "./policy-resolver.js";
 import type { PolicyStateEntry } from "../state/policy-state.js";
 import { policyState } from "../state/policy-state.js";
 
@@ -386,5 +390,168 @@ describe("WorkContract coverage acceptance", () => {
     expect(packet.memory).toBeDefined();
     expect(packet.memory?.coverage).toBe("none");
     expect(packet.execution).toBeDefined();
+  });
+});
+
+describe("WP3 acceptance", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    clearPolicyState();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    clearPolicyState();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("authoritativeDecisionRoute prefers WorkContract route over legacy", () => {
+    const decision = {
+      route_decision: { route: "reply" },
+      work_contract: { route: "delegate" },
+    };
+
+    expect(authoritativeDecisionRoute(decision)).toBe("delegate");
+  });
+
+  it("legacy route fields match WorkContract route after canonicalize", () => {
+    const decision = canonicalizeDecisionForPolicyState({
+      work_contract: { route: "delegate" },
+      route_decision: { route: "reply" },
+      router_decision_v2: { request_kind: "reply" },
+      tool_policy: { delegate_first: false },
+    });
+
+    expect((decision.route_decision as Record<string, unknown>).route).toBe("delegate");
+    expect((decision.router_decision_v2 as Record<string, unknown>).request_kind).toBe("delegated_task");
+    expect((decision.tool_policy as Record<string, unknown>).delegate_first).toBe(true);
+  });
+
+  it("WorkContract telemetry includes memoryCoverage and decisionSource", () => {
+    const execution = buildExecutionCoverageLayer(["missing"]);
+    const memory: JudgeMemoryLayer = {
+      ...buildMemoryCoverageLayer(),
+      coverage: "strong",
+      freshness_risk: "low",
+    };
+    const coverage = buildCoverageSnapshot(execution, memory);
+    const seal = buildWorkDecisionSeal("local_judge", "reply", ["test_reason"]);
+
+    const contract = buildWorkContractFromPolicy(
+      "agent:main:wp3-telemetry",
+      "hello",
+      "plain_chat",
+      coverage,
+      seal,
+    );
+
+    expect(contract.telemetry.memoryCoverage).toBeDefined();
+    expect(contract.telemetry.memoryCoverage).toBe("strong");
+    expect(contract.telemetry.decisionSource).toBe(seal.source);
+    expect(contract.telemetry.parentContextTokensAdded).toBe(0);
+  });
+
+  it("replay payload includes workContractId and decisionSource", () => {
+    const payload = buildPolicyResolvedReplayPayload({
+      decision: {
+        route_decision: { route: "reply" },
+        work_contract: { route: "reply", decisionSource: "local_judge" },
+      },
+      workContractId: "wc-wp3-replay",
+      decisionSource: "local_judge",
+    });
+
+    expect(payload.workContractId).toBe("wc-wp3-replay");
+    expect(payload.decisionSource).toBe("local_judge");
+  });
+
+  it("delegate decision still dispatches route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              route: "delegate",
+              confidence: 0.9,
+              abstain_reason: null,
+              ack_text: "收到",
+            }),
+          },
+        }],
+      }),
+    } as Response);
+
+    const decision = await resolveStatelessPolicyDecision("请检查当前服务健康状态", {
+      metadata: {
+        _judgeFastConfig: {
+          enabled: true,
+          shadowMode: false,
+          modelId: "test-local-judge",
+          baseUrl: "http://localhost:19999/v1",
+          apiKey: "test-key",
+          timeoutMs: 1500,
+          timeoutLocalMs: 800,
+          minConfidence: 0.6,
+          local: true,
+          judgeAckEnabled: true,
+        },
+        session_key: "agent:main:wp3-delegate",
+        conversation_control: {
+          intent_class: "fresh_live_lookup",
+          route_hint: "delegate",
+          require_fresh_lookup: true,
+        },
+      },
+    });
+
+    expect((decision.route_decision as Record<string, unknown>).route).toBe("delegate");
+    expect((decision.work_contract as Record<string, unknown>).route).toBe("delegate");
+    expect((decision.work_contract as Record<string, unknown>).nextAction).toBe("dispatch");
+  });
+
+  it("reply decision still answers route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              route: "reply",
+              confidence: 0.9,
+              abstain_reason: null,
+              ack_text: "收到",
+            }),
+          },
+        }],
+      }),
+    } as Response);
+
+    const decision = await resolveStatelessPolicyDecision("hello", {
+      metadata: {
+        _judgeFastConfig: {
+          enabled: true,
+          shadowMode: false,
+          modelId: "test-local-judge",
+          baseUrl: "http://localhost:19999/v1",
+          apiKey: "test-key",
+          timeoutMs: 1500,
+          timeoutLocalMs: 800,
+          minConfidence: 0.6,
+          local: true,
+          judgeAckEnabled: true,
+        },
+        session_key: "agent:main:wp3-reply",
+        conversation_control: {
+          intent_class: "plain_chat",
+          route_hint: "reply",
+        },
+      },
+    });
+
+    expect((decision.route_decision as Record<string, unknown>).route).toBe("reply");
+    expect((decision.work_contract as Record<string, unknown>).route).toBe("reply");
   });
 });

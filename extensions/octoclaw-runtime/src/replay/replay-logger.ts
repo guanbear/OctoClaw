@@ -334,6 +334,12 @@ export function buildPolicyResolvedReplayPayload(options: Record<string, unknown
     resultMaterialized: Boolean(options.resultMaterialized),
     deliveryStatus: String(options.deliveryStatus ?? ""),
     executionCoverageConflict: Boolean(options.executionCoverageConflict),
+    workContractId: String(options.workContractId ?? asRecord(decision).workContractId ?? ""),
+    workContractRoute: String(options.workContractRoute ?? asRecord(asRecord(decision).work_contract).route ?? ""),
+    decisionSource: String(options.decisionSource ?? asRecord(asRecord(decision).work_contract).decisionSource ?? ""),
+    memoryCoverage: String(options.memoryCoverage ?? ""),
+    memoryFreshnessRisk: String(options.memoryFreshnessRisk ?? ""),
+    parentContextTokensAdded: Number(options.parentContextTokensAdded ?? 0),
     prompt: truncateText(options.prompt),
   };
 }

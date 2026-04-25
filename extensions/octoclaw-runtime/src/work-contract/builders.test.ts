@@ -79,7 +79,14 @@ describe("work contract builders", () => {
     });
     expect(contract.telemetry).toEqual({
       executionCoverage: "current_turn",
+      executionSupportsProvenanceReply: true,
+      executionSupportsStatusReply: false,
+      executionRequiresControlPlaneRefresh: false,
+      memoryCoverage: "strong",
+      memoryFreshnessRisk: undefined,
       authority: "execution_wins",
+      decisionSource: "memory_coverage",
+      parentContextTokensAdded: 0,
     });
     expect(contract.createdAt).toBe(now.toISOString());
     expect(contract.updatedAt).toBe(now.toISOString());

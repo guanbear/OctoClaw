@@ -46,6 +46,13 @@ function decisionSignalsDelegate(decision: UnknownRecord): boolean {
 
 export function authoritativeDecisionRoute(decision: unknown, fallback: LiveRoute = "reply"): LiveRoute {
   const record = asRecord(decision);
+  // Prefer sealed WorkContract route when present and valid (WP3)
+  const workContract = asRecord(record.work_contract);
+  const workContractRoute = asString(workContract.route);
+  if (workContractRoute === "reply" || workContractRoute === "delegate") {
+    return workContractRoute as LiveRoute;
+  }
+
   if (decisionSignalsDelegate(record)) {
     return "delegate";
   }

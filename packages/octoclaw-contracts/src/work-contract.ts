@@ -331,6 +331,7 @@ export interface WorkContractTelemetry {
   childRunId?: string;
   resultMaterialized?: boolean;
   deliveryStatus?: string;
+  decisionSource?: WorkDecisionSource;
   parentContextTokensAdded?: number;
 }
 
@@ -405,6 +406,6 @@ export function compactWorkContractView(contract: WorkContract): CompactWorkCont
     delegateTaskId: contract.delegate?.delegateTaskId,
     nativeFlowId: contract.delegate?.nativeBinding?.flowId,
     childSessionKey: contract.delegate?.nativeBinding?.childSessionKey,
-    nextAction: contract.delegate?.nextAction,
+    nextAction: contract.delegate?.nextAction ?? contract.mainContext.nextAction,
   };
 }
