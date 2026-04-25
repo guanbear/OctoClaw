@@ -469,7 +469,9 @@ async function readActiveRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
     const fs = await import("node:fs");
     const content = fs.default.readFileSync(resolveTaskStatePath(), "utf-8");
     const parsed = JSON.parse(content) as { tasks?: unknown };
-    return Array.isArray(parsed.tasks) ? parsed.tasks.filter(isRecord) as RuntimeTaskStateRecord[] : [];
+    return Array.isArray(parsed.tasks)
+      ? (parsed.tasks.filter(isRecord) as RuntimeTaskStateRecord[]).filter((task) => !isSyntheticTestTaskState(task))
+      : [];
   } catch {
     return [];
   }
@@ -478,7 +480,8 @@ async function readActiveRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
 async function readRuntimeTaskState(options: { includeArchive?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
   const activeTasks = await readActiveRuntimeTaskState();
   if (!options.includeArchive) return activeTasks;
-  const archivedTasks = readArchivedTaskState().filter(isRecord) as RuntimeTaskStateRecord[];
+  const archivedTasks = (readArchivedTaskState().filter(isRecord) as RuntimeTaskStateRecord[])
+    .filter((task) => !isSyntheticTestTaskState(task));
   return dedupeTaskStateRecords([...activeTasks, ...archivedTasks]);
 }
 

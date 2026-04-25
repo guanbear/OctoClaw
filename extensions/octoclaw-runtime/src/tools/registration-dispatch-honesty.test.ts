@@ -151,6 +151,31 @@ describe("octoclaw_dispatch honesty", () => {
     vi.restoreAllMocks();
   });
 
+  it("filters leaked synthetic test tasks from status history", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-synthetic-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+    const stateDir = path.join(dir, "tmp", "octopus");
+    fsSync.mkdirSync(stateDir, { recursive: true });
+    fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      tasks: [{
+        id: "task-honesty",
+        flow_id: "flow-honesty",
+        session_key: "session-dispatch-honesty-leak",
+        status: "running",
+        route: "delegate",
+        summary: "Delegated task materialized natively as task-honesty",
+        updated_at: "2026-04-25T00:00:00.000Z",
+      }],
+    }), "utf-8");
+
+    const response = await statusTool().execute({ format: "table" }, {});
+    const output = String((response.json as Record<string, unknown>).raw_output);
+
+    expect(output).not.toContain("task-honesty");
+    expect(output).not.toContain("flow-honesty");
+  });
+
   it("does not project runtime truth stubs as completed tasks without execution evidence", async () => {
     const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-stub-"));
     tempLedgerPaths.push(dir);
