@@ -166,6 +166,16 @@ const OPERATOR_SURFACE_REGISTRY = [
       /\b(service health|service status|system health|gateway status|gateway health)\b/iu,
     ],
   },
+  {
+    surface_id: "octoclaw_task_status_panel",
+    lane_hint: "reply",
+    scope: "local_status_surface",
+    patterns: [
+      /(八爪鱼|octoclaw)?.{0,8}(任务状态|任务面板|状态面板|任务看板|状态看板)/iu,
+      /(哪个任务还在跑|哪些任务还在跑|还有什么任务在跑|还在跑的任务|任务.*(?:跑了多久|用的哪个模型|成功还是失败|结果在哪))/iu,
+      /\b(octoclaw\s+)?(task status|status panel|task panel|running tasks|what tasks are running|where is the result)\b/iu,
+    ],
+  },
 ];
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -869,6 +879,19 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
     };
   }
   if (intentClass === "local_surface_lookup") {
+    if (surfaceId === "octoclaw_task_status_panel") {
+      return {
+        ...base,
+        route_hint: "reply",
+        lane_hint: "status_surface",
+        protected_lane: "control_observer",
+        lookup_scope: packetLookupScope || "local_status_surface",
+        require_fresh_lookup: true,
+        require_state_grounding: true,
+        status_followup: true,
+        surface_id: surfaceId,
+      };
+    }
     const shouldDelegateObservedSurface = new Set(["system_load", "runtime_version", "runtime_model", "service_health"]).has(surfaceId);
     if (shouldDelegateObservedSurface) {
       return {

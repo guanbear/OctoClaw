@@ -470,6 +470,29 @@ nightly review 不负责“自动写一堆废话”，只负责三件事：
 
 ---
 
+## 十二点五、📊 Slack 状态面板话术
+
+当 Slack / IM 用户问以下状态类话术时，这是 **OctoClaw 状态面板 skill**，只读取状态投影，不创建新任务、不 spawn：
+
+- `八爪鱼状态`
+- `任务状态`
+- `任务面板`
+- `状态面板`
+- `哪个任务还在跑？`
+- `跑了多久，用的哪个模型？`
+- `成功还是失败？结果在哪？`
+- `show task status` / `status panel` / `running tasks`
+
+执行规则：
+
+1. 优先调用 `octoclaw_status`，默认 `format=anchors`；用户明确要表格/泳道时再用 `table` / `lanes`。
+2. 用户点名某个任务或问“详情/结果/队列”时，调用 `octoclaw_task_action` 的 `details` / `queue` / `artifacts`。
+3. 禁止把这类话术当成新 delegated work；禁止调用 `octoclaw_dispatch`、`sessions_spawn` 或任何 spawn 包装器。
+4. 回答必须来自 TaskStatusProjection / Native TaskFlow / WorkContract / delivery truth，不读取 raw child transcript。
+5. 如果没有可验证状态，明确说“当前没有可验证任务状态”，最多建议用户发起新任务，不要编造状态。
+
+---
+
 ## 十三、🔧 常用命令
 
 ```bash

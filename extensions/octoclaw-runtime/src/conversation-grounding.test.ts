@@ -31,6 +31,51 @@ describe("conversation grounding route projection", () => {
     expect(control.require_state_grounding).toBe(true);
   });
 
+  it("projects task status panel phrases to reply-only status surface tools", async () => {
+    const intent = buildConversationIntentPacket({
+      prompt: "哪个任务还在跑？跑了多久，用的哪个模型，结果在哪？",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: ["slack:default:channel:C123"],
+    });
+
+    expect(intent.intent_class).toBe("local_surface_lookup");
+    expect(intent.surface_id).toBe("octoclaw_task_status_panel");
+    expect(intent.lookup_scope).toBe("local_status_surface");
+
+    const control = buildConversationControlHintsFromIntent(intent);
+    expect(control).toMatchObject({
+      route_hint: "reply",
+      lane_hint: "status_surface",
+      protected_lane: "control_observer",
+      require_fresh_lookup: true,
+      require_state_grounding: true,
+      status_followup: true,
+      surface_id: "octoclaw_task_status_panel",
+    });
+
+    const decision = await resolveStatelessPolicyDecision("显示 OctoClaw 状态面板", {
+      metadata: {
+        session_key: "slack:default:channel:C123",
+        conversation_control: control,
+        intent_packet: intent,
+      },
+    });
+
+    const decisionRecord = decision as Record<string, unknown>;
+    const routeDecision = decisionRecord.route_decision as Record<string, unknown>;
+    const toolPolicy = decisionRecord.tool_policy as Record<string, unknown>;
+    const stateGrounding = decisionRecord.state_grounding as Record<string, unknown>;
+
+    expect(routeDecision.route).toBe("reply");
+    expect(toolPolicy.allowed_control_tools).toEqual(["octoclaw_status", "octoclaw_task_action"]);
+    expect(toolPolicy.block_tool_patterns).toEqual(["octoclaw_dispatch", "spawn"]);
+    expect(stateGrounding).toMatchObject({
+      required: true,
+      source: "control_plane_status",
+    });
+  });
+
   it("renders sanitized DelegateStatusPacket facts without raw thread history", () => {
     const dir = path.join("/tmp", `octoclaw-grounding-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     fs.mkdirSync(dir, { recursive: true });

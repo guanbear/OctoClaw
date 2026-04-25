@@ -376,10 +376,13 @@ function attachWorkContractToPolicyDecision(input: {
     conflict: hasConflict,
     authority: hasConflict ? "execution_wins" : executionLayer.coverage && executionLayer.coverage !== "none" ? "execution_wins" : memoryLayer.coverage && memoryLayer.coverage !== "none" ? "memory_only" : "none",
   };
-  const intentClass = intentClassFromPolicy(input.decision.intent_class || asRecord(input.metadata.conversation_control).intent_class || "undetermined");
+  const conversationControl = asRecord(input.metadata.conversation_control);
+  const intentClass = intentClassFromPolicy(input.decision.intent_class || conversationControl.intent_class || "undetermined");
+  const statusSurfaceControlAllowed = asBoolean(conversationControl.status_followup)
+    || asString(conversationControl.surface_id) === "octoclaw_task_status_panel";
   const isExecutionFollowup = intentClass === "execution_followup"
-    || asBoolean(asRecord(input.metadata.conversation_control).provenance_followup)
-    || asBoolean(asRecord(input.metadata.conversation_control).status_followup);
+    || asBoolean(conversationControl.provenance_followup)
+    || statusSurfaceControlAllowed;
   const executionSupportsReply = asBoolean(executionLayer.supports_provenance_reply)
     || asBoolean(executionLayer.supports_status_reply)
     || asBoolean(executionLayer.requires_control_plane_refresh);
@@ -416,8 +419,8 @@ function attachWorkContractToPolicyDecision(input: {
   const replyContract: ReplyContract | undefined = workRoute === "reply"
     ? {
         replyMode: decisionSource === "execution_coverage" ? "answer" : "answer",
-        grounding: asBoolean(executionLayer.requires_control_plane_refresh) ? "control_plane_status" : executionSupportsReply ? "execution_receipt" : "none",
-        allowedTools: asBoolean(executionLayer.requires_control_plane_refresh) ? ["octoclaw_status", "octoclaw_task_action"] : [],
+        grounding: (asBoolean(executionLayer.requires_control_plane_refresh) || statusSurfaceControlAllowed) ? "control_plane_status" : executionSupportsReply ? "execution_receipt" : "none",
+        allowedTools: (asBoolean(executionLayer.requires_control_plane_refresh) || statusSurfaceControlAllowed) ? ["octoclaw_status", "octoclaw_task_action"] : [],
         forbiddenTools: ["octoclaw_dispatch", "spawn"],
         evidenceRefs: executionCoveragePacket.evidenceRefs,
       }
@@ -1177,6 +1180,8 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   } catch {
   }
   const requiresControlPlaneRefresh = asBoolean(executionLayer.requires_control_plane_refresh);
+  const statusSurfaceControlAllowed = asBoolean(conversationControl.status_followup)
+    || asString(conversationControl.surface_id) === "octoclaw_task_status_panel";
   const routeHintPolicyRequired = (!judgeSucceeded && liveRouteNeedsHint(liveRoute, metadata))
     || (judgeSucceeded && liveRoute !== "reply");
 
@@ -1273,8 +1278,8 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     required: liveRoute === "delegate",
   };
   nextDecision.state_grounding = {
-    required: liveRoute !== "reply",
-    source: liveRoute === "reply" ? "none" : "policy_state",
+    required: statusSurfaceControlAllowed || liveRoute !== "reply",
+    source: statusSurfaceControlAllowed ? "control_plane_status" : liveRoute === "reply" ? "none" : "policy_state",
   };
   nextDecision.latency_ack = {
     required: liveRoute === "reply",
@@ -1285,12 +1290,12 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     must_delegate_via: !requiresControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
     allow_direct_tools: liveRoute === "reply",
     delegate_first: !requiresControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow",
-    allowed_control_tools: requiresControlPlaneRefresh
+    allowed_control_tools: (requiresControlPlaneRefresh || statusSurfaceControlAllowed)
       ? ["octoclaw_status", "octoclaw_task_action"]
       : liveRoute === "reply"
         ? []
       : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
-    block_tool_patterns: requiresControlPlaneRefresh ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
+    block_tool_patterns: (requiresControlPlaneRefresh || statusSurfaceControlAllowed) ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
   };
   nextDecision.router_decision_v2 = {
     ...asRecord(nextDecision.router_decision_v2),
