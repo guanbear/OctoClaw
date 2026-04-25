@@ -64,6 +64,10 @@ export interface NativeRunTaskHelperResult {
     syncMode: "managed" | "mirrored";
     state: string;
     revision: number;
+    runId?: string;
+    childRunId?: string;
+    childSessionKey?: string;
+    childSessionId?: string;
   };
 }
 
@@ -182,6 +186,10 @@ function normalizeRunTaskResult(payload: any): NativeRunTaskHelperResult {
       syncMode,
       state: String(payload.task?.state || payload.task?.status || "queued").trim(),
       revision: payload.task?.revision != null ? ensureNumber(payload.task?.revision, "task.revision") : 0,
+      runId: String(payload.task?.runId || payload.task?.run_id || payload.run_id || "").trim(),
+      childRunId: String(payload.task?.childRunId || payload.task?.child_run_id || payload.child_run_id || "").trim(),
+      childSessionKey: String(payload.task?.childSessionKey || payload.task?.child_session_key || payload.child_session_key || "").trim(),
+      childSessionId: String(payload.task?.childSessionId || payload.task?.child_session_id || payload.child_session_id || "").trim(),
     },
   };
 }

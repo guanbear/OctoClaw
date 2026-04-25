@@ -148,7 +148,7 @@ describe("buildTsRuntimeDispatchPayload", () => {
     expect(payload.runtime_truth).toMatchObject({
       workflow: {
         lifecycle: {
-          phase: "checkpoint_emitted",
+          phase: "materialization_pending",
         },
       },
       delegateTask: {
@@ -167,7 +167,7 @@ describe("buildTsRuntimeDispatchPayload", () => {
       },
     });
     expect(payload.deliveries).toMatchObject({
-      progress: expect.any(Object),
+      progress: undefined,
     });
     expect(payload.deliveries?.final).toBeUndefined();
   });

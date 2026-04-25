@@ -225,6 +225,57 @@ describe("Phase A acceptance: honest status when TaskFlow created but no TaskRun
     expect(receipt.deliveryStatus).toBeNull();
   });
 
+  it("does not infer spawn from WorkContract continuity alone", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: { delegateTaskId: "dt-continuity-only", taskStatus: "running" },
+      decision: {
+        route_decision: { route: "delegate" },
+        work_contract: {
+          workContractId: "wc-continuity-only",
+          childSessionKey: "previous-child-key",
+          childRunId: "previous-run-id",
+        },
+        runtime_truth: {
+          nativeTaskBinding: { nativeFlowId: "flow-continuity-only", nativeTaskId: "task-continuity-only" },
+        },
+      },
+    };
+
+    const receipt = buildTurnExecutionReceipt(state as any, 1000);
+
+    expect(receipt.childSessionKey).toBe("previous-child-key");
+    expect(receipt.spawnExecuted).toBe(false);
+  });
+
+  it("infers spawn from current child run/session evidence when boolean is absent", () => {
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: { delegateTaskId: "dt-current-spawn", taskStatus: "running" },
+      decision: {
+        route_decision: { route: "delegate" },
+        runtime_truth: {
+          nativeTaskBinding: {
+            nativeFlowId: "flow-current-spawn",
+            nativeTaskId: "task-current-spawn",
+            childRunId: "child-run-current",
+            childSessionId: "child-session-current",
+          },
+        },
+      },
+    };
+
+    const receipt = buildTurnExecutionReceipt(state as any, 1000);
+
+    expect(receipt.spawnExecuted).toBe(true);
+    expect(receipt.childRunId).toBe("child-run-current");
+    expect(receipt.childSessionId).toBe("child-session-current");
+  });
+
   it("parent-visible receipt does not contain full child transcript", () => {
     const state = {
       canonicalSessionKey: "test-session",

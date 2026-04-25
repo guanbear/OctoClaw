@@ -74,6 +74,10 @@ export interface RuntimeTaskflowManagedRecord {
   projection: RuntimeProjectionPayload & { schemaVersion: string; createdAt: string };
   artifact: RuntimeArtifactPayload & { schemaVersion: string; createdAt: string };
   telemetry: RuntimeTelemetryPayload & { schemaVersion: string; createdAt: string };
+  runId?: string;
+  childRunId?: string;
+  childSessionKey?: string;
+  childSessionId?: string;
 }
 
 export interface RuntimeTaskflowTaskRecord {
@@ -93,6 +97,10 @@ export interface RuntimeTaskflowTaskRecord {
   projection: RuntimeProjectionPayload & { schemaVersion: string; createdAt: string };
   artifact: RuntimeArtifactPayload & { schemaVersion: string; createdAt: string };
   telemetry: RuntimeTelemetryPayload & { schemaVersion: string; createdAt: string };
+  runId?: string;
+  childRunId?: string;
+  childSessionKey?: string;
+  childSessionId?: string;
 }
 
 export interface RuntimeTaskflowSessionBinding {
@@ -330,7 +338,9 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
         const goal = buildGoal(workflow);
         const initialStatus = (workflow.workflowOrchestration === "completed" || workflow.workflowOrchestration === "failed")
           ? workflow.workflowOrchestration
-          : "running";
+          : workflow.workflowOrchestration === "running"
+            ? "running"
+            : "queued";
         const helperResult = helperInvoker({
           action: "run-task",
           args: {
@@ -367,6 +377,10 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
         projection: derived.projection,
         artifact: derived.artifact,
         telemetry: derived.telemetry,
+        runId: helperResult.task.runId,
+        childRunId: helperResult.task.childRunId,
+        childSessionKey: helperResult.task.childSessionKey,
+        childSessionId: helperResult.task.childSessionId,
       };
     },
     cancelFlow: (flowId) => {

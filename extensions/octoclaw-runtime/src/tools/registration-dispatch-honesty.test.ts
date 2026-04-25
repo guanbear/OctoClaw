@@ -65,7 +65,44 @@ function successfulHelper(): NativeHelperInvoker {
       return { ok: true, flow_id: "flow-honesty", flow: { flowId: "flow-honesty", status: "planned", revision: 1 } };
     }
     if (input.action === "run-task") {
-      return { ok: true, native_task_id: "task-honesty", flow_id: "flow-honesty", task: { taskId: "task-honesty", status: "queued", state: "running", revision: 1 } };
+      return { ok: true, native_task_id: "task-honesty", flow_id: "flow-honesty", task: { taskId: "task-honesty", status: "queued", state: "queued", revision: 1 } };
+    }
+    throw new Error(`unsupported_action:${input.action}`);
+  }) as NativeHelperInvoker;
+}
+
+function spawnedHelper(): NativeHelperInvoker {
+  return ((input) => {
+    if (input.action === "create-managed-flow") {
+      return { ok: true, flow_id: "flow-spawned", flow: { flowId: "flow-spawned", status: "planned", revision: 1 } };
+    }
+    if (input.action === "run-task") {
+      return {
+        ok: true,
+        native_task_id: "task-spawned",
+        flow_id: "flow-spawned",
+        task: {
+          taskId: "task-spawned",
+          status: "running",
+          state: "running",
+          revision: 1,
+          runId: "run-spawned",
+          childSessionKey: "child-session-spawned",
+          childSessionId: "child-session-id-spawned",
+        },
+      };
+    }
+    throw new Error(`unsupported_action:${input.action}`);
+  }) as NativeHelperInvoker;
+}
+
+function materializedNoSpawnHelper(): NativeHelperInvoker {
+  return ((input) => {
+    if (input.action === "create-managed-flow") {
+      return { ok: true, flow_id: "flow-no-spawn", flow: { flowId: "flow-no-spawn", status: "planned", revision: 1 } };
+    }
+    if (input.action === "run-task") {
+      return { ok: true, native_task_id: "task-no-spawn", flow_id: "flow-no-spawn", task: { taskId: "task-no-spawn", status: "queued", state: "queued", revision: 1 } };
     }
     throw new Error(`unsupported_action:${input.action}`);
   }) as NativeHelperInvoker;
@@ -244,13 +281,41 @@ describe("octoclaw_dispatch honesty", () => {
     expect(anchorsOutput).not.toContain("task-status-panel-1 | timed_out(running) | delegate");
   });
 
-  it("returns structured ok:true on success", async () => {
+  it("does not project explicit spawnExecuted=false plus continuity key as running", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-continuity-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+    const stateDir = path.join(dir, "tmp", "octopus");
+    fsSync.mkdirSync(stateDir, { recursive: true });
+    fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      tasks: [{
+        id: "task-continuity-no-spawn",
+        status: "running",
+        route: "delegate",
+        summary: "Old child session key should not prove current spawn",
+        updated_at: new Date().toISOString(),
+        flow_id: "flow-continuity-no-spawn",
+        dispatchExecuted: true,
+        spawnExecuted: false,
+        childSessionKey: "prior-child-key",
+      }],
+    }), "utf-8");
+
+    const tableResponse = await statusTool().execute({ format: "table" }, {});
+    const tableOutput = String((tableResponse.json as Record<string, unknown>).raw_output);
+
+    expect(tableOutput).toContain("task-continuity-no-spawn | queued(running) | delegate");
+    expect(tableOutput).toContain("reason=dispatch_materialized_but_no_spawn_evidence");
+    expect(tableOutput).not.toContain("task-continuity-no-spawn | running(running)");
+  });
+
+  it("returns structured ok:true only when spawn evidence exists", async () => {
     const result = await executeDispatch({
       task: "Investigate runtime dispatch honesty",
       policyJson: JSON.stringify(delegateDecision()),
     }, {
-      helperInvoker: successfulHelper(),
-      sessionId: "session-dispatch-honesty-test",
+      helperInvoker: spawnedHelper(),
+      sessionId: "session-dispatch-spawned-test",
     });
 
     expect(result.ok).toBe(true);
@@ -258,11 +323,56 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.worker_pool).toBe("octoclaw-research");
     expect(result.task_id).toBeTruthy();
     expect(result.delegation_method).toBe("octoclaw_dispatch");
-    expect(result.dispatch_executed).toBeDefined();
+    expect(result.materialized).toBe(true);
+    expect(result.execution_state).toBe("spawn_confirmed");
+    expect(result.dispatch_executed).toBe(true);
+    expect(result.spawn_executed).toBe(true);
+    expect(result.child_session_key).toBe("child-session-spawned");
     expect(result.native_task_id).toBeDefined();
     expect(result.native_flow_id).toBeDefined();
     expect(result.result_materialized).toBeDefined();
     expect(result.delivery_status).toBeDefined();
+  });
+
+  it("does not project materialized-only delegate as spawned or running", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-no-spawn-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+
+    const result = await executeDispatch({
+      task: "Materialize without child session evidence",
+      policyJson: JSON.stringify({
+        ...delegateDecision(),
+        request: { session_key: "session-no-spawn-runtime" },
+      }),
+    }, {
+      helperInvoker: materializedNoSpawnHelper(),
+      sessionId: "session-no-spawn-test",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.materialized).toBe(true);
+    expect(result.execution_state).toBe("materialized_no_spawn");
+    expect(result.dispatch_executed).toBe(true);
+    expect(result.spawn_executed).toBe(false);
+
+    const taskStatePath = path.join(dir, "tmp", "octopus", "task-state.json");
+    const taskState = JSON.parse(fsSync.readFileSync(taskStatePath, "utf-8")) as { tasks: Array<Record<string, unknown>> };
+    expect(taskState.tasks[0].status).toBe("queued");
+    expect(taskState.tasks[0].materialized_at).toBeTruthy();
+    expect(taskState.tasks[0].spawned_at).toBeUndefined();
+    expect(taskState.tasks[0].started_at).toBeUndefined();
+    expect(taskState.tasks[0].spawnExecuted).toBe(false);
+
+    const details = await getToolRegistrations()
+      .find((registration) => registration.name === "octoclaw_task_action")!
+      .execute({ action: "details", taskId: "task-no-spawn", format: "json" }, {});
+    const payload = details.json as Record<string, unknown>;
+    expect(payload.status).toBe("queued");
+    expect(payload.statusReason).toBe("dispatch_materialized_but_no_spawn_evidence");
+    expect(JSON.stringify(payload.timeline)).toContain("materialized");
+    expect(JSON.stringify(payload.timeline)).not.toContain("spawned");
   });
 
   it("returns structured ok:false on failure", async () => {
@@ -370,28 +480,94 @@ describe("octoclaw_dispatch honesty", () => {
       sessionId: "session-work-contract-dispatch",
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.route).toBe("delegate");
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.retryable).toBe(true);
+    expect(result.materialized).toBe(true);
+    expect(result.execution_state).toBe("materialized_no_spawn");
     expect(result.work_contract_id).toBe(contract.workContractId);
     expect(result.delegate_task_id).toBeTruthy();
     expect(result.native_task_id).toBe("task-honesty");
     expect(result.native_flow_id).toBe("flow-honesty");
+    expect(result.dispatch_executed).toBe(true);
+    expect(result.spawn_executed).toBe(false);
     const taskStatePath = path.join(envOverrides.workspaceRoot, "tmp", "octopus", "task-state.json");
     expect(fsSync.existsSync(taskStatePath)).toBe(false);
     expect(result.result_materialized).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
 
     const reloaded = loadWorkContract(contract.workContractId);
-    expect(reloaded?.status).toBe("queued");
+    expect(reloaded?.status).toBe("planned");
     expect(reloaded?.delegate?.nativeBinding?.flowId).toBe("flow-honesty");
     expect(reloaded?.delegate?.nativeBinding?.nativeTaskId).toBe("task-honesty");
-    expect(reloaded?.delegate?.nativeBinding?.status).toBe("running");
+    expect(reloaded?.delegate?.nativeBinding?.status).toBe("queued");
     expect(reloaded?.telemetry.dispatchExecuted).toBe(true);
     expect(reloaded?.telemetry.spawnExecuted).toBe(false);
     expect(reloaded?.telemetry.nativeTaskId).toBe("task-honesty");
     expect(reloaded?.telemetry.nativeFlowId).toBe("flow-honesty");
     expect(reloaded?.telemetry.resultMaterialized).toBe(false);
     expect(reloaded?.telemetry.deliveryStatus).toBe("none");
+  });
+
+  it("does not treat prior WorkContract continuity as current spawn evidence", async () => {
+    useTempWorkContractLedger();
+    const contract = seedWorkContract();
+    saveWorkContract({
+      ...contract,
+      continuity: {
+        ...contract.continuity,
+        preferredChildSessionKey: "prior-child-key",
+        preferredChildSessionId: "prior-provider-session",
+        preferredRunId: "prior-run-id",
+      },
+      delegate: {
+        delegateTaskId: "prior-delegate-task",
+        currentAttemptId: "prior-attempt",
+        role: "research",
+        coordinationMode: "solo_worker",
+        acceptanceCriteria: [],
+        scope: { read: [], write: [], workspaceMode: "read_only", scopeFingerprint: "prior" },
+        modelProfile: "worker_research",
+        nativeBinding: {
+          flowId: "prior-flow",
+          nativeFlowId: "prior-flow",
+          ownerKey: "prior-delegate-task",
+          controllerId: "octoclaw.delegate",
+          revision: 3,
+          expectedRevision: 3,
+          taskId: "prior-task",
+          nativeTaskId: "prior-task",
+          runId: "prior-run-id",
+          childRunId: "prior-child-run",
+          childSessionKey: "prior-child-key",
+          syncMode: "managed",
+          status: "running",
+        },
+        childSessions: [],
+        artifactRefs: [],
+        nextAction: "dispatch",
+      },
+    } as WorkContract);
+
+    const result = await executeDispatch({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+    }, {
+      helperInvoker: materializedNoSpawnHelper(),
+      sessionId: "session-work-contract-prior-continuity",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.execution_state).toBe("materialized_no_spawn");
+    expect(result.dispatch_executed).toBe(true);
+    expect(result.spawn_executed).toBe(false);
+
+    const reloaded = loadWorkContract(contract.workContractId);
+    expect(reloaded?.delegate?.nativeBinding?.runId).toBe("prior-run-id");
+    expect(reloaded?.delegate?.nativeBinding?.childSessionKey).toBe("prior-child-key");
+    expect(reloaded?.telemetry.spawnExecuted).toBe(false);
   });
 
   it("marks sealed WorkContract failed when native materialization returns a payload failure", async () => {
@@ -463,8 +639,11 @@ describe("octoclaw_dispatch honesty", () => {
       sessionId: "session-legacy-policy-json",
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.route).toBe("delegate");
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.materialized).toBe(true);
+    expect(result.spawn_executed).toBe(false);
     expect(result.work_contract_id).toBeNull();
     expect(fsSync.existsSync(ledgerPath)).toBe(false);
   });
@@ -486,8 +665,9 @@ describe("octoclaw_dispatch honesty", () => {
       sessionId: "session-contract-wins",
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.route).toBe("delegate");
+    expect(result.error).toBe("spawn_not_confirmed");
     expect(result.work_contract_id).toBe(contract.workContractId);
   });
 });

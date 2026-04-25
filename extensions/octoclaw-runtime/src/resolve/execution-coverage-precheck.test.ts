@@ -434,6 +434,28 @@ describe("Phase A acceptance: provenance/status follow-up does not spawn", () =>
     expect(layer.supports_provenance_reply).toBe(true);
   });
 
+  it("does not promote prior continuity into spawnExecuted coverage", () => {
+    const rootKey = "agent:main:slack:default:direct:U77778";
+    seedAt(rootKey, Date.now() - 5_000, {
+      createdAt: Date.now() - 15_000,
+      decision: {
+        route_decision: { route: "delegate" },
+        work_contract: { childSessionKey: "prior-child-key", childRunId: "prior-run-id" },
+        runtime_truth: { nativeTaskBinding: { nativeFlowId: "flow-continuity-only" } },
+      },
+      canonicalSessionKey: rootKey,
+      delegated: true,
+      dispatchExecuted: true,
+    });
+
+    const layer = buildExecutionCoverageLayer([rootKey]);
+
+    expect(layer.dispatch_executed).toBe(true);
+    expect(layer.spawn_executed).toBe(false);
+    expect(layer.evidence_summary).toContain("spawn not confirmed");
+    expect(layer.requires_control_plane_refresh).toBe(true);
+  });
+
   it("execution coverage missing → spawn guard blocks execution_followup", () => {
     const layer = buildExecutionCoverageLayer(["nonexistent-session"]);
 

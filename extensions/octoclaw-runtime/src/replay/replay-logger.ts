@@ -136,6 +136,31 @@ function asBoolean(value: unknown): boolean {
   return value === true;
 }
 
+function explicitBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function hasExplicitTrue(values: unknown[]): boolean {
+  return values.some((value) => explicitBoolean(value) === true);
+}
+
+function hasExplicitFalse(values: unknown[]): boolean {
+  return values.some((value) => explicitBoolean(value) === false);
+}
+
+function hasCurrentSpawnEvidence(...records: UnknownRecord[]): boolean {
+  return records.some((record) => Boolean(asString(
+    record.runId
+      ?? record.run_id
+      ?? record.childRunId
+      ?? record.child_run_id
+      ?? record.childSessionId
+      ?? record.child_session_id
+      ?? record.childSessionKey
+      ?? record.child_session_key,
+  )));
+}
+
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -172,6 +197,7 @@ export function buildTurnExecutionReceipt(
   const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
   const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
   const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
+  const evidence = asRecord(runtimeTruth.evidence);
   const status = asString(delegateCtx.taskStatus ?? delegateCtx.status);
   const hasDelegateIdentity = Boolean(
     asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateTask.delegateTaskId ?? binding.taskId),
@@ -185,11 +211,25 @@ export function buildTurnExecutionReceipt(
     nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId ?? binding.flowId,
   );
   const dispatchExecuted = state.dispatchExecuted === true || decision.dispatchExecuted === true;
-  const spawnExecuted = asBoolean(state.spawnExecuted)
-    || asBoolean(decision.spawnExecuted)
-    || asBoolean(executionLayer.spawn_executed)
-    || asBoolean(runtimeTruth.spawnExecuted)
-    || asBoolean(delegateAttempt.spawnExecuted);
+  const spawnSignals = [
+    state.spawnExecuted,
+    state.spawn_executed,
+    decision.spawnExecuted,
+    decision.spawn_executed,
+    executionLayer.spawn_executed,
+    runtimeTruth.spawnExecuted,
+    runtimeTruth.spawn_executed,
+    delegateAttempt.spawnExecuted,
+    delegateAttempt.spawn_executed,
+    nativeTaskBinding.spawnExecuted,
+    nativeTaskBinding.spawn_executed,
+    nativeAttemptBinding.spawnExecuted,
+    nativeAttemptBinding.spawn_executed,
+    evidence.spawnExecuted,
+    evidence.spawn_executed,
+  ];
+  const spawnExecuted = hasExplicitTrue(spawnSignals)
+    || hasCurrentSpawnEvidence(nativeTaskBinding, nativeAttemptBinding, delegateAttempt, evidence, binding);
   const delivery = asRecord(decision.delivery);
   const resultMaterialized = Boolean(asString(delivery.artifact_path) || asString(delivery.result_path));
   const deliveryStatus = asString(
@@ -199,24 +239,47 @@ export function buildTurnExecutionReceipt(
     workContract.childSessionKey
       ?? binding.childSessionKey
       ?? nativeTaskBinding.childSessionKey
+      ?? nativeTaskBinding.child_session_key
       ?? nativeAttemptBinding.childSessionKey
-      ?? delegateAttempt.childSessionKey,
+      ?? nativeAttemptBinding.child_session_key
+      ?? delegateAttempt.childSessionKey
+      ?? delegateAttempt.child_session_key
+      ?? evidence.childSessionKey
+      ?? evidence.child_session_key,
   );
   const childSessionId = asString(
     workContract.childSessionId
       ?? binding.childSessionId
       ?? nativeTaskBinding.childSessionId
+      ?? nativeTaskBinding.child_session_id
       ?? nativeAttemptBinding.childSessionId
-      ?? delegateAttempt.childSessionId,
+      ?? nativeAttemptBinding.child_session_id
+      ?? delegateAttempt.childSessionId
+      ?? delegateAttempt.child_session_id
+      ?? evidence.childSessionId
+      ?? evidence.child_session_id,
   );
   const childRunId = asString(
     workContract.childRunId
       ?? binding.childRunId
       ?? binding.runId
+      ?? binding.run_id
       ?? nativeTaskBinding.childRunId
+      ?? nativeTaskBinding.child_run_id
+      ?? nativeTaskBinding.runId
+      ?? nativeTaskBinding.run_id
       ?? nativeAttemptBinding.childRunId
+      ?? nativeAttemptBinding.child_run_id
       ?? nativeAttemptBinding.runId
-      ?? delegateAttempt.childRunId,
+      ?? nativeAttemptBinding.run_id
+      ?? delegateAttempt.childRunId
+      ?? delegateAttempt.child_run_id
+      ?? delegateAttempt.runId
+      ?? delegateAttempt.run_id
+      ?? evidence.childRunId
+      ?? evidence.child_run_id
+      ?? evidence.runId
+      ?? evidence.run_id,
   );
   const executionCoverage = asString(
     telemetry.executionCoverage
@@ -701,12 +764,72 @@ function shouldRegisterPendingDeliveryGate(payload: Record<string, unknown>): { 
   const failureReason = String(capabilityFailure.reason ?? "").trim();
   const taskId = String(payload.task_id ?? materialization.task_id ?? "").trim();
   const runnerJobId = String(asRecord(payload.job).id ?? materialization.runner_job_id ?? "").trim();
+  const route = String(payload.route ?? materialization.type ?? "").trim();
+  const runtimeTruth = asRecord(payload.runtime_truth);
+  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
+  const evidence = asRecord(runtimeTruth.evidence);
+  const spawnSignals = [
+    payload.spawn_executed,
+    payload.spawnExecuted,
+    nativeTaskBinding.spawnExecuted,
+    nativeTaskBinding.spawn_executed,
+    delegateAttempt.spawnExecuted,
+    delegateAttempt.spawn_executed,
+    nativeAttemptBinding.spawnExecuted,
+    nativeAttemptBinding.spawn_executed,
+    evidence.spawnExecuted,
+    evidence.spawn_executed,
+  ];
+  const hasStrongRunEvidence = Boolean(
+    asString(nativeTaskBinding.runId)
+    || asString(nativeTaskBinding.run_id)
+    || asString(nativeTaskBinding.childRunId)
+    || asString(nativeTaskBinding.child_run_id)
+    || asString(nativeTaskBinding.childSessionId)
+    || asString(nativeTaskBinding.child_session_id)
+    || asString(delegateAttempt.runId)
+    || asString(delegateAttempt.run_id)
+    || asString(delegateAttempt.childRunId)
+    || asString(delegateAttempt.child_run_id)
+    || asString(delegateAttempt.childSessionId)
+    || asString(delegateAttempt.child_session_id)
+    || asString(nativeAttemptBinding.runId)
+    || asString(nativeAttemptBinding.run_id)
+    || asString(nativeAttemptBinding.childRunId)
+    || asString(nativeAttemptBinding.child_run_id)
+    || asString(nativeAttemptBinding.childSessionId)
+    || asString(nativeAttemptBinding.child_session_id)
+    || asString(evidence.runId)
+    || asString(evidence.run_id)
+    || asString(evidence.childRunId)
+    || asString(evidence.child_run_id)
+    || asString(evidence.childSessionId)
+    || asString(evidence.child_session_id)
+  );
+  const hasCurrentChildSessionKey = Boolean(
+    asString(nativeTaskBinding.childSessionKey)
+    || asString(nativeTaskBinding.child_session_key)
+    || asString(delegateAttempt.childSessionKey)
+    || asString(delegateAttempt.child_session_key)
+    || asString(nativeAttemptBinding.childSessionKey)
+    || asString(nativeAttemptBinding.child_session_key)
+    || asString(evidence.childSessionKey)
+    || asString(evidence.child_session_key)
+  );
+  const hasSpawnEvidence = hasExplicitTrue(spawnSignals)
+    || hasStrongRunEvidence
+    || (!hasExplicitFalse(spawnSignals) && hasCurrentChildSessionKey);
 
   if (failureReason || materializationStatus === "materialization_failed") {
     return { allowed: false, reason: "materialization_failed" };
   }
   if (!taskId && !runnerJobId) {
     return { allowed: false, reason: "missing_execution_identity" };
+  }
+  if (route === "delegate" && !runnerJobId && !hasSpawnEvidence) {
+    return { allowed: false, reason: "spawn_not_confirmed" };
   }
   return { allowed: true, reason: "ok" };
 }

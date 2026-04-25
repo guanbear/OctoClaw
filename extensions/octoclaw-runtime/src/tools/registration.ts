@@ -51,8 +51,10 @@ import { loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
 import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import fsSync from "node:fs";
+import path from "node:path";
 
 interface FsSyncLike {
+  mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
   readFileSync(pathname: string, encoding: string): string;
   writeFileSync(pathname: string, data: string, encoding: string): void;
 }
@@ -119,6 +121,7 @@ async function upsertTaskStateCache(record: RuntimeTaskStateRecord): Promise<voi
   try {
     if (isSyntheticTestTaskState(record)) return;
     const taskPath = resolveTaskStatePath();
+    fsSyncLike.mkdirSync(path.dirname(taskPath), { recursive: true });
     let existing: { tasks?: unknown[] } = { tasks: [] };
     try {
       const content = fsSyncLike.readFileSync(taskPath, "utf-8");
@@ -173,6 +176,18 @@ function asString(value: unknown, fallback = ""): string {
 
 function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function explicitBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function hasExplicitTrue(values: unknown[]): boolean {
+  return values.some((value) => explicitBoolean(value) === true);
+}
+
+function hasExplicitFalse(values: unknown[]): boolean {
+  return values.some((value) => explicitBoolean(value) === false);
 }
 
 function asNumber(value: unknown): number | undefined {
@@ -425,6 +440,7 @@ interface RuntimeTaskStateRecord extends UnknownRecord {
   completed_at?: unknown;
   failed_at?: unknown;
   spawned_at?: unknown;
+  materialized_at?: unknown;
   report_path?: unknown;
   model?: unknown;
   model_profile?: unknown;
@@ -564,6 +580,7 @@ function runtimeTruthHasProjectionEvidence(runtimeTruth: UnknownRecord, state: U
   const delegateTask = asRecord(runtimeTruth.delegateTask);
   const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
   const nativeBinding = asRecord(delegateAttempt.nativeBinding);
+  const runtimeBinding = asRecord(runtimeTruth.binding);
   const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
   const continuity = asRecord(runtimeTruth.childSessionContinuity || runtimeTruth.continuity);
   return asBoolean(state.dispatchExecuted)
@@ -574,6 +591,8 @@ function runtimeTruthHasProjectionEvidence(runtimeTruth: UnknownRecord, state: U
     || asBoolean(state.result_materialized)
     || asBoolean(evidence.dispatchExecuted)
     || asBoolean(evidence.dispatch_executed)
+    || asBoolean(runtimeBinding.spawnExecuted)
+    || asBoolean(runtimeBinding.spawn_executed)
     || asBoolean(evidence.spawnExecuted)
     || asBoolean(evidence.spawn_executed)
     || asBoolean(evidence.resultMaterialized)
@@ -607,10 +626,25 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
     record.childRunId,
     record.child_run_id,
     delegateAttempt.runId,
+    delegateAttempt.run_id,
     delegateAttempt.childRunId,
+    delegateAttempt.child_run_id,
     continuity.runId,
+    continuity.run_id,
     evidence.childRunId,
+    evidence.child_run_id,
     evidence.runId,
+    evidence.run_id,
+  ) ?? "";
+  const childSessionId = optionalString(
+    record.childSessionId,
+    record.child_session_id,
+    delegateAttempt.childSessionId,
+    delegateAttempt.child_session_id,
+    continuity.childSessionId,
+    continuity.child_session_id,
+    evidence.childSessionId,
+    evidence.child_session_id,
   ) ?? "";
   const hasDispatchEvidence = asBoolean(record.dispatchExecuted)
     || asBoolean(record.dispatch_executed)
@@ -620,14 +654,17 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
     || asBoolean(delegateAttempt.dispatch_executed)
     || Boolean(asString(nativeBinding.nativeFlowId || nativeTaskBinding.nativeFlowId))
     || Boolean(asString(record.flow_id));
-  const hasSpawnEvidence = asBoolean(record.spawnExecuted)
-    || asBoolean(record.spawn_executed)
-    || asBoolean(evidence.spawnExecuted)
-    || asBoolean(evidence.spawn_executed)
-    || asBoolean(delegateAttempt.spawnExecuted)
-    || asBoolean(delegateAttempt.spawn_executed)
-    || Boolean(runId)
-    || Boolean(childSessionKey);
+  const spawnSignals = [
+    record.spawnExecuted,
+    record.spawn_executed,
+    evidence.spawnExecuted,
+    evidence.spawn_executed,
+    delegateAttempt.spawnExecuted,
+    delegateAttempt.spawn_executed,
+  ];
+  const hasSpawnEvidence = hasExplicitTrue(spawnSignals)
+    || Boolean(runId || childSessionId)
+    || (!hasExplicitFalse(spawnSignals) && Boolean(childSessionKey));
   const resultMaterialized = asBoolean(record.resultMaterialized)
     || asBoolean(record.result_materialized)
     || asBoolean(evidence.resultMaterialized)
@@ -638,6 +675,83 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
     || asBoolean(delivery.result_materialized)
     || Boolean(asString(record.report_path || delivery.artifact_path || delivery.result_path));
   return { hasDispatchEvidence, hasSpawnEvidence, resultMaterialized, childSessionKey, runId };
+}
+
+function dispatchSpawnEvidence(input: {
+  payloadRuntimeTruth?: UnknownRecord;
+  payloadNativeTaskBinding?: UnknownRecord;
+  payloadDelegateAttempt?: UnknownRecord;
+  payloadNativeAttemptBinding?: UnknownRecord;
+  nativeBinding?: NativeBindingRef | null;
+}): { spawnExecuted: boolean; runId: string; childRunId: string; childSessionKey: string; childSessionId: string } {
+  const runtimeTruth = input.payloadRuntimeTruth ?? {};
+  const evidence = asRecord(runtimeTruth.evidence);
+  const runtimeBinding = asRecord(runtimeTruth.binding);
+  const nativeTaskBinding = input.payloadNativeTaskBinding ?? {};
+  const delegateAttempt = input.payloadDelegateAttempt ?? {};
+  const nativeAttemptBinding = input.payloadNativeAttemptBinding ?? {};
+  const runId = optionalString(
+    nativeTaskBinding.runId,
+    nativeTaskBinding.run_id,
+    delegateAttempt.runId,
+    delegateAttempt.run_id,
+    nativeAttemptBinding.runId,
+    nativeAttemptBinding.run_id,
+    runtimeBinding.runId,
+    runtimeBinding.run_id,
+    evidence.runId,
+    evidence.run_id,
+  ) ?? "";
+  const childRunId = optionalString(
+    nativeTaskBinding.childRunId,
+    nativeTaskBinding.child_run_id,
+    delegateAttempt.childRunId,
+    delegateAttempt.child_run_id,
+    nativeAttemptBinding.childRunId,
+    nativeAttemptBinding.child_run_id,
+    runtimeBinding.childRunId,
+    runtimeBinding.child_run_id,
+    evidence.childRunId,
+    evidence.child_run_id,
+  ) ?? "";
+  const childSessionKey = optionalString(
+    nativeTaskBinding.childSessionKey,
+    nativeTaskBinding.child_session_key,
+    delegateAttempt.childSessionKey,
+    delegateAttempt.child_session_key,
+    nativeAttemptBinding.childSessionKey,
+    nativeAttemptBinding.child_session_key,
+    runtimeBinding.childSessionKey,
+    runtimeBinding.child_session_key,
+    evidence.childSessionKey,
+    evidence.child_session_key,
+  ) ?? "";
+  const childSessionId = optionalString(
+    nativeTaskBinding.childSessionId,
+    nativeTaskBinding.child_session_id,
+    delegateAttempt.childSessionId,
+    delegateAttempt.child_session_id,
+    runtimeBinding.childSessionId,
+    runtimeBinding.child_session_id,
+    evidence.childSessionId,
+    evidence.child_session_id,
+  ) ?? "";
+  const spawnSignals = [
+    nativeTaskBinding.spawnExecuted,
+    nativeTaskBinding.spawn_executed,
+    delegateAttempt.spawnExecuted,
+    delegateAttempt.spawn_executed,
+    nativeAttemptBinding.spawnExecuted,
+    nativeAttemptBinding.spawn_executed,
+    runtimeBinding.spawnExecuted,
+    runtimeBinding.spawn_executed,
+    evidence.spawnExecuted,
+    evidence.spawn_executed,
+  ];
+  const spawnExecuted = hasExplicitTrue(spawnSignals)
+    || Boolean(runId || childRunId || childSessionId)
+    || (!hasExplicitFalse(spawnSignals) && Boolean(childSessionKey));
+  return { spawnExecuted, runId, childRunId, childSessionKey, childSessionId };
 }
 
 function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()): { status: string; reason: string } {
@@ -702,10 +816,11 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
   const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
   const binding = asRecord(runtimeTruth.binding);
   const evidence = runtimeStatusEvidence(record);
-  const startedAt = firstTimestamp(record.started_at, record.spawned_at, record.created_at, record.updated_at);
-  const delegatedAt = firstTimestamp(record.spawned_at, record.started_at, record.created_at, record.updated_at);
+  const materializedAt = firstTimestamp(record.materialized_at, record.created_at, record.spawned_at, record.started_at, record.updated_at);
+  const startedAt = evidence.hasSpawnEvidence ? firstTimestamp(record.started_at, record.spawned_at, materializedAt) : "";
+  const delegatedAt = firstTimestamp(record.spawned_at, record.started_at, materializedAt, record.updated_at);
   const completedAt = firstTimestamp(record.completed_at, record.failed_at, delegateAttempt.completedAt, delegateAttempt.failedAt);
-  const startMs = timestampMs(startedAt);
+  const startMs = timestampMs(startedAt || delegatedAt);
   const endMs = timestampMs(completedAt) ?? nowMs;
   const elapsedMs = startMs === null ? null : Math.max(0, endMs - startMs);
   const projected = projectRuntimeStatus(record, nowMs);
@@ -737,8 +852,12 @@ function buildTaskActionTimeline(record: RuntimeTaskStateRecord, liveRead: Unkno
     const at = asString(eventAt);
     if (at) timeline.push({ eventType, eventAt: at, summary });
   };
-  pushIfPresent("spawned", record.spawned_at, "Task was spawned");
-  pushIfPresent("started", record.started_at, "Task started execution");
+  const evidence = runtimeStatusEvidence(record);
+  pushIfPresent("materialized", record.materialized_at || record.created_at, "Task was materialized in Native TaskFlow");
+  if (evidence.hasSpawnEvidence) {
+    pushIfPresent("spawned", record.spawned_at, "Task was spawned");
+    pushIfPresent("started", record.started_at, "Task started execution");
+  }
   pushIfPresent("updated", record.updated_at, asString(record.summary || liveRead.progressSummary || record.status, "Task updated"));
   pushIfPresent("completed", record.completed_at, "Task completed");
   for (const event of replayEvents) {
@@ -812,12 +931,17 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
   }
   const plugin = createOctoClawRuntimePlugin();
   if (!liveRead) {
-    liveRead = asString(record.session_key) && asString(record.flow_id)
-      ? plugin.createAdapter().bindSession(asString(record.session_key)).readTask(asString(record.flow_id), asString(record.id))
-      : null;
+    try {
+      liveRead = asString(record.session_key) && asString(record.flow_id)
+        ? plugin.createAdapter().bindSession(asString(record.session_key)).readTask(asString(record.flow_id), asString(record.id))
+        : null;
+    } catch {
+      liveRead = null;
+    }
   }
   const replayEvents = await readRuntimeReplayTimeline(asString(record.id));
   const artifacts = asRecord(record.artifacts);
+  const projected = projectRuntimeStatus(record);
   const payload: UnknownRecord = {
     mode: "native_runtime",
     action: normalizedAction,
@@ -826,7 +950,9 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
     sessionKey: asString(record.session_key || liveSessionKey),
     route: normalizeLiveRoute(record.route, "delegate"),
     role: asString(record.role, asString(asRecord(artifacts.runtime_truth).role)),
-    status: asString(liveRead?.substrateState || record.status),
+    status: projected.status,
+    rawStatus: asString(liveRead?.substrateState || record.status),
+    statusReason: projected.reason,
     progress: asString(liveRead?.progressSummary || record.summary),
     summary: asString(record.summary, asString(liveRead?.progressSummary || record.status)),
     workerPool: asString(record.worker_pool),
@@ -1087,12 +1213,15 @@ function dispatchHonestySuccess(params: {
   childSessionKey?: string | null;
   childSessionId?: string | null;
   dispatchExecuted?: boolean;
+  spawnExecuted?: boolean;
+  materialized?: boolean;
+  executionState?: string;
   nativeTaskId?: string | null;
   nativeFlowId?: string | null;
   resultMaterialized?: boolean;
   deliveryStatus?: string | null;
 }): Record<string, unknown> {
-  return toolResponse(JSON.stringify({
+  const body = {
     ok: true,
     route: params.route,
     worker_pool: params.workerPool,
@@ -1104,29 +1233,16 @@ function dispatchHonestySuccess(params: {
     child_session_key: asString(params.childSessionKey) || null,
     child_session_id: asString(params.childSessionId) || null,
     delegation_method: "octoclaw_dispatch",
+    materialized: params.materialized === true,
+    execution_state: asString(params.executionState) || (params.spawnExecuted === true ? "spawn_confirmed" : "unknown"),
     dispatch_executed: params.dispatchExecuted === true,
+    spawn_executed: params.spawnExecuted === true,
     native_task_id: params.nativeTaskId ?? null,
     native_flow_id: params.nativeFlowId ?? null,
     result_materialized: params.resultMaterialized === true,
     delivery_status: params.deliveryStatus ?? null,
-  }), {
-    ok: true,
-    route: params.route,
-    worker_pool: params.workerPool,
-    task_id: params.taskId,
-    task_class: params.taskClass,
-    work_contract_id: asString(params.workContractId) || null,
-    delegate_task_id: asString(params.delegateTaskId) || null,
-    attempt_id: asString(params.attemptId) || null,
-    child_session_key: asString(params.childSessionKey) || null,
-    child_session_id: asString(params.childSessionId) || null,
-    delegation_method: "octoclaw_dispatch",
-    dispatch_executed: params.dispatchExecuted === true,
-    native_task_id: params.nativeTaskId ?? null,
-    native_flow_id: params.nativeFlowId ?? null,
-    result_materialized: params.resultMaterialized === true,
-    delivery_status: params.deliveryStatus ?? null,
-  });
+  };
+  return toolResponse(JSON.stringify(body), body);
 }
 
 function dispatchHonestyFailure(params: {
@@ -1135,22 +1251,18 @@ function dispatchHonestyFailure(params: {
   sealMismatch?: boolean;
   retryable?: boolean;
   terminal?: boolean;
+  details?: Record<string, unknown>;
 }): Record<string, unknown> {
-  return toolResponse(JSON.stringify({
+  const body = {
     ok: false,
     route: params.route ?? null,
     error: params.error,
     seal_mismatch: params.sealMismatch === true,
     retryable: params.retryable === true,
     terminal: params.terminal === true,
-  }), {
-    ok: false,
-    route: params.route ?? null,
-    error: params.error,
-    seal_mismatch: params.sealMismatch === true,
-    retryable: params.retryable === true,
-    terminal: params.terminal === true,
-  });
+    ...(params.details ?? {}),
+  };
+  return toolResponse(JSON.stringify(body), body);
 }
 
 function ctxCwd(ctx: UnknownRecord): string {
@@ -1726,26 +1838,6 @@ export function getToolRegistrations(): ToolRegistration[] {
           materialization.flow_id,
           payload.flow_id,
         );
-        if (asString(materialization.task_id)) {
-          const substrateState = asString(materialization.substrate_state, payload.executed === true ? "running" : "queued");
-          const startedAt = substrateState === "queued" || substrateState === "planned"
-            ? ""
-            : new Date().toISOString();
-          await upsertTaskStateCache({
-            id: materialization.task_id,
-            flow_id: asString(materialization.flow_id),
-            session_key: replaySessionKey,
-            route: asString(payload.route),
-            status: substrateState,
-            summary: asString(asRecord(payload.handoff).summary || payload.summary),
-            role: asString(asRecord(authoritativeDecision.route_decision).task_class),
-            worker_pool: asString(asRecord(authoritativeDecision.route_decision).worker_pool),
-            model: selectedModel || asString(metadata.model),
-            spawned_at: new Date().toISOString(),
-            started_at: startedAt || undefined,
-            updated_at: new Date().toISOString(),
-          } as RuntimeTaskStateRecord);
-        }
         void summary;
         void compactDispatchDetails;
         const finalRoute = normalizeLiveRoute(payload.route, resolvedRoute);
@@ -1754,9 +1846,55 @@ export function getToolRegistrations(): ToolRegistration[] {
         const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
         const taskClass = asString(finalDecisionRoute.task_class || finalDecisionRoute.judge_role || finalDecisionRoute.role);
         const nativeBinding = dispatchWorkContract?.delegate?.nativeBinding;
+        const spawnEvidence = dispatchSpawnEvidence({
+          payloadRuntimeTruth,
+          payloadNativeTaskBinding,
+          payloadDelegateAttempt,
+          payloadNativeAttemptBinding,
+          nativeBinding,
+        });
+        const materialized = Boolean(asString(materialization.task_id) || materializedNativeTaskId || materializedNativeFlowId);
+        const dispatchExecuted = materialized;
+        const executionState = finalRoute === "delegate"
+          ? spawnEvidence.spawnExecuted
+            ? "spawn_confirmed"
+            : materialized
+              ? "materialized_no_spawn"
+              : "not_materialized"
+          : payload.executed === true ? "executed" : "planned";
+        const materializedAt = new Date().toISOString();
+        const projectedSubstrateState = spawnEvidence.spawnExecuted
+          ? asString(materialization.substrate_state, "running")
+          : "queued";
+        const childSessionKey = spawnEvidence.childSessionKey || nativeBinding?.childSessionKey || dispatchWorkContract?.continuity.preferredChildSessionKey || undefined;
+        if (asString(materialization.task_id)) {
+          await upsertTaskStateCache({
+            id: materialization.task_id,
+            flow_id: asString(materialization.flow_id),
+            session_key: replaySessionKey,
+            route: asString(payload.route),
+            status: projectedSubstrateState,
+            summary: spawnEvidence.spawnExecuted
+              ? asString(asRecord(payload.handoff).summary || payload.summary)
+              : "TaskFlow materialized; child session spawn not confirmed",
+            role: asString(asRecord(authoritativeDecision.route_decision).task_class),
+            worker_pool: workerPool,
+            model: selectedModel || asString(metadata.model),
+            materialized_at: materializedAt,
+            spawned_at: spawnEvidence.spawnExecuted ? materializedAt : undefined,
+            started_at: spawnEvidence.spawnExecuted ? materializedAt : undefined,
+            updated_at: materializedAt,
+            dispatchExecuted,
+            spawnExecuted: spawnEvidence.spawnExecuted,
+            childSessionKey: childSessionKey || undefined,
+            child_session_key: childSessionKey || undefined,
+            runId: spawnEvidence.runId || undefined,
+            run_id: spawnEvidence.runId || undefined,
+            childRunId: spawnEvidence.childRunId || undefined,
+            child_run_id: spawnEvidence.childRunId || undefined,
+          } as RuntimeTaskStateRecord);
+        }
         if (dispatchWorkContract) {
-          const substrateState = asString(materialization.substrate_state, payload.executed === true ? "running" : "queued");
-          const childSessionKey = nativeBinding?.childSessionKey ?? dispatchWorkContract.continuity.preferredChildSessionKey ?? undefined;
           const revision = asNumber(materialization.substrate_revision) ?? nativeBinding?.revision ?? 1;
           const nextNativeBinding: NativeBindingRef = {
             ...(nativeBinding ?? {}),
@@ -1768,10 +1906,11 @@ export function getToolRegistrations(): ToolRegistration[] {
             expectedRevision: revision,
             taskId: materializedNativeTaskId ?? nativeBinding?.taskId,
             nativeTaskId: materializedNativeTaskId ?? nativeBinding?.nativeTaskId,
-            runId: optionalString(payloadNativeTaskBinding.runId, payloadDelegateAttempt.runId, nativeBinding?.runId),
+            runId: spawnEvidence.runId || nativeBinding?.runId,
+            childRunId: spawnEvidence.childRunId || nativeBinding?.childRunId,
             childSessionKey,
             syncMode: nativeBinding?.syncMode ?? "managed",
-            status: nativeFlowStatusFromSubstrate(substrateState),
+            status: nativeFlowStatusFromSubstrate(projectedSubstrateState),
             lastMutation: nativeBinding?.lastMutation ?? "createManaged",
             lastMutationApplied: true,
           };
@@ -1783,10 +1922,58 @@ export function getToolRegistrations(): ToolRegistration[] {
             nativeTaskId: materializedNativeTaskId,
             nativeFlowId: materializedNativeFlowId,
             childSessionKey,
-            substrateState,
-            spawnExecuted: false,
+            childSessionId: spawnEvidence.childSessionId || undefined,
+            runId: spawnEvidence.runId || undefined,
+            substrateState: projectedSubstrateState,
+            spawnExecuted: spawnEvidence.spawnExecuted,
             resultMaterialized: false,
             deliveryStatus: "none",
+          });
+        }
+        const statePatch = {
+          dispatchExecuted,
+          spawnExecuted: spawnEvidence.spawnExecuted,
+          dispatchStatus: executionState,
+          executionState,
+          latestAnomalyNotice: finalRoute === "delegate" && materialized && !spawnEvidence.spawnExecuted
+            ? {
+              kind: "spawn_not_confirmed",
+              severity: "error",
+              taskId: delegateTaskId,
+              nativeTaskId: materializedNativeTaskId ?? null,
+              nativeFlowId: materializedNativeFlowId ?? null,
+              workContractId: (dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId)) || null,
+              message: "Native TaskFlow was materialized, but no child session/run evidence confirmed subagent start.",
+              createdAt: materializedAt,
+            }
+            : undefined,
+          updatedAt: Date.now(),
+        };
+        setPolicyStateForContext(ctx, { ...nextState, ...statePatch }, replaySessionKey || stateKey);
+        if (stateKey && replaySessionKey && stateKey !== replaySessionKey) {
+          setPolicyStateForContext(ctx, { ...nextState, ...statePatch }, stateKey);
+        }
+        if (finalRoute === "delegate" && materialized && !spawnEvidence.spawnExecuted) {
+          return dispatchHonestyFailure({
+            route: finalRoute,
+            error: "spawn_not_confirmed",
+            retryable: true,
+            terminal: false,
+            details: {
+              materialized: true,
+              execution_state: executionState,
+              delegation_method: "octoclaw_dispatch",
+              work_contract_id: (dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId)) || null,
+              delegate_task_id: delegateTaskId || null,
+              attempt_id: asString(payload.attemptId || materialization.attemptId) || null,
+              dispatch_executed: dispatchExecuted,
+              spawn_executed: false,
+              native_task_id: materializedNativeTaskId ?? null,
+              native_flow_id: materializedNativeFlowId ?? null,
+              result_materialized: false,
+              delivery_status: null,
+              user_message: "已登记到 Native TaskFlow，但没有子会话/runId 证据，不能视为已启动子 agent；请重试派发或改为主会话直接处理。",
+            },
           });
         }
         return dispatchHonestySuccess({
@@ -1797,9 +1984,12 @@ export function getToolRegistrations(): ToolRegistration[] {
           workContractId: dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId),
           delegateTaskId,
           attemptId: asString(payload.attemptId || materialization.attemptId),
-          childSessionKey: nativeBinding?.childSessionKey ?? dispatchWorkContract?.continuity.preferredChildSessionKey ?? null,
-          childSessionId: dispatchWorkContract?.continuity.preferredChildSessionId ?? null,
-          dispatchExecuted: payload.executed === true,
+          childSessionKey: childSessionKey ?? null,
+          childSessionId: (spawnEvidence.childSessionId || dispatchWorkContract?.continuity.preferredChildSessionId) ?? null,
+          materialized,
+          executionState,
+          dispatchExecuted,
+          spawnExecuted: spawnEvidence.spawnExecuted,
           nativeTaskId: materializedNativeTaskId,
           nativeFlowId: materializedNativeFlowId,
           resultMaterialized: false,

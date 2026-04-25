@@ -51,8 +51,12 @@ function attachExplicitSpawnReceipt(
     delegateAttempt.spawnExecuted,
     delegateAttempt.spawn_executed,
   ];
-  const spawnExecuted = candidates.map(explicitBoolean).find((value) => value !== undefined);
-  return spawnExecuted === undefined ? receipt : { ...receipt, spawnExecuted };
+  const explicitValues = candidates.map(explicitBoolean).filter((value) => value !== undefined);
+  if (explicitValues.some((value) => value === true)) return { ...receipt, spawnExecuted: true };
+  if (explicitValues.some((value) => value === false) && receipt.spawnExecuted !== true) {
+    return { ...receipt, spawnExecuted: false };
+  }
+  return receipt;
 }
 
 function noneExecutionLayer(): JudgeExecutionLayer {
@@ -218,6 +222,11 @@ export function buildExecutionCoverageLayer(
   }
   if (receipt!.dispatchExecuted) {
     parts.push("dispatch was executed");
+  }
+  if (receipt!.dispatchExecuted && explicitBoolean(receipt!.spawnExecuted) !== true) {
+    parts.push("spawn not confirmed");
+  } else if (explicitBoolean(receipt!.spawnExecuted) === true) {
+    parts.push("spawn was confirmed");
   }
   if (receipt!.nativeTaskId) {
     parts.push(`native_task=${receipt!.nativeTaskId}`);

@@ -162,6 +162,10 @@ export function createOctoClawRuntimePlugin(options: OctoClawRuntimePluginOption
         substrateRevision: taskTruth.substrateRevision,
         truth: taskTruth.truth,
         projection: taskTruth.projection,
+        runId: taskTruth.runId,
+        childRunId: taskTruth.childRunId,
+        childSessionKey: taskTruth.childSessionKey,
+        childSessionId: taskTruth.childSessionId,
       };
     },
   };

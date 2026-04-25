@@ -171,7 +171,7 @@ function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
   const lines = receipts.map((r, i) => {
     const parts = [`Turn ${i + 1}: route=${r.route}`];
     if (r.delegated) {
-      parts.push(`delegated=true, dispatch_executed=${r.dispatchExecuted}`);
+      parts.push(`delegated=true, dispatch_executed=${r.dispatchExecuted}, spawn_executed=${r.spawnExecuted}`);
       if (r.nativeTaskId) parts.push(`native_task_id=${r.nativeTaskId}`);
       if (r.nativeFlowId) parts.push(`native_flow_id=${r.nativeFlowId}`);
       parts.push(`worker=${r.workerPool ?? "unknown"}, task_id=${r.delegateTaskId ?? "unknown"}`);
@@ -683,6 +683,16 @@ export const plugin = {
           "Prior subagent context in this session is stale. Only use authoritative execution facts from the current turn or fresh workflow outputs.",
           "Do not claim a task was dispatched unless octoclaw_dispatch actually ran and returned a materialized result.",
         ].join("\n"));
+      }
+      const anomalyNotice = asRecord(effectiveState?.latestAnomalyNotice);
+      if (stringValue(anomalyNotice.kind)) {
+        prependSystem.push([
+          "[OctoClaw execution anomaly notice]",
+          `kind=${stringValue(anomalyNotice.kind)}, severity=${stringValue(anomalyNotice.severity || "warning")}`,
+          stringValue(anomalyNotice.message),
+          `task=${stringValue(anomalyNotice.taskId || anomalyNotice.nativeTaskId || "unknown")}, flow=${stringValue(anomalyNotice.nativeFlowId || "unknown")}`,
+          "Do not claim the delegated sub-agent is running unless spawnExecuted=true or child session/run evidence exists.",
+        ].filter(Boolean).join("\n"));
       }
       if (recoveryCheck.timedOutCount > 0) {
         const timedOutLines = recoveryCheck.recoveries

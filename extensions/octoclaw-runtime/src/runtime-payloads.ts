@@ -301,15 +301,22 @@ export function buildTsRuntimeDispatchPayload(
     };
   }
 
-  workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
-  workflow = renewWorkflowHeartbeat(workflow);
-  workflow = markWorkflowCheckpointEmitted(workflow);
-  const progressDelivery = buildWorkflowProgressDelivery(workflow, {
-    channel: readString(metadata.channel, "direct"),
-    summary: `Workflow checkpoint emitted for ${workflow.identity.taskId}`,
-    artifactRefs: [workflow.taskMaterialization.taskPacketRef],
-  });
-  workflow = enqueueWorkflowDelivery(workflow, progressDelivery);
+  const observe = isObserveMode(workflow.execution.role, workflowDecision.executionProfile);
+  if (observe) {
+    workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
+    workflow = renewWorkflowHeartbeat(workflow);
+    workflow = markWorkflowCheckpointEmitted(workflow);
+  }
+  const progressDelivery = observe
+    ? buildWorkflowProgressDelivery(workflow, {
+      channel: readString(metadata.channel, "direct"),
+      summary: `Workflow checkpoint emitted for ${workflow.identity.taskId}`,
+      artifactRefs: [workflow.taskMaterialization.taskPacketRef],
+    })
+    : null;
+  if (progressDelivery) {
+    workflow = enqueueWorkflowDelivery(workflow, progressDelivery);
+  }
 
   try {
     const binding = plugin.bindWorkflow(workflow);
@@ -348,7 +355,6 @@ export function buildTsRuntimeDispatchPayload(
         forbiddenContent: [],
       })
       : undefined;
-    const observe = isObserveMode(workflow.execution.role, workflowDecision.executionProfile);
     const finalDelivery = observe
       ? buildWorkflowFinalDelivery(workflow, {
         channel: readString(metadata.channel, "direct"),
@@ -406,7 +412,7 @@ export function buildTsRuntimeDispatchPayload(
       },
       telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
       deliveries: {
-        progress: progressDelivery,
+        progress: progressDelivery ?? undefined,
         final: finalDelivery ?? undefined,
       },
       job: observe
