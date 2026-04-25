@@ -180,4 +180,155 @@ describe("structured intent spawn guard", () => {
 
     expect(spawnGuardBlocks(decision)).toBe(false);
   });
+
+  it("blocks Chinese provenance query with missing coverage", () => {
+    const decision = {
+      _execution_coverage: { coverage: "none", supports_provenance_reply: false },
+      request: {
+        metadata: {
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    } satisfies Parameters<typeof spawnGuardBlocks>[0];
+
+    expect(spawnGuardBlocks(decision)).toBe(true);
+  });
+
+  it("does not block execution_followup when provenance is supported", () => {
+    const decision = {
+      _execution_coverage: { coverage: "current_turn", supports_provenance_reply: true },
+      request: {
+        metadata: {
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    } satisfies Parameters<typeof spawnGuardBlocks>[0];
+
+    expect(spawnGuardBlocks(decision)).toBe(false);
+  });
+});
+
+describe("acceptance: thread provenance follow-up end-to-end", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    clearPolicyState();
+  });
+
+  afterEach(() => {
+    clearPolicyState();
+    vi.useRealTimers();
+  });
+
+  it("simulates: fresh lookup in root DM, thread asks provenance → reply, no spawn", () => {
+    const rootKey = "agent:main:slack:default:direct:U12345";
+    const threadKey = `${rootKey}:thread:1745580000.123456`;
+
+    seedAt(rootKey, Date.now() - 5_000, {
+      createdAt: Date.now() - 10_000,
+      decision: {
+        route_decision: { route: "reply" },
+      },
+      canonicalSessionKey: rootKey,
+      toolsUsed: ["web_fetch"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+
+    const layer = buildExecutionCoverageLayer([threadKey]);
+
+    expect(layer.coverage).toBe("current_turn");
+    expect(layer.freshness).toBe("current");
+    expect(layer.supports_provenance_reply).toBe(true);
+    expect(layer.last_route).toBe("reply");
+    expect(layer.tools_used).toContain("web_fetch");
+    expect(layer.dispatch_executed).toBe(false);
+    expect(layer.spawn_executed).toBe(false);
+    expect(layer.result_materialized).toBe(false);
+
+    expect(layer.evidence_summary).toContain("web_fetch");
+    expect(layer.evidence_summary).toContain("main-session path");
+  });
+
+  it("simulates: 1-hour-old root receipt, thread follow-up → thread/stale coverage", () => {
+    const rootKey = "agent:main:slack:default:direct:U12345";
+    const threadKey = `${rootKey}:thread:1745580000.654321`;
+
+    seedAt(rootKey, Date.now() - 3_600_000, {
+      createdAt: Date.now() - 3_601_000,
+      decision: {
+        route_decision: { route: "reply" },
+      },
+      canonicalSessionKey: rootKey,
+      toolsUsed: ["web_fetch"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+
+    const dateNow = vi.spyOn(Date, "now");
+    dateNow
+      .mockReturnValueOnce(now.getTime())
+      .mockReturnValueOnce(now.getTime() - 3_600_000 + 1);
+
+    const layer = buildExecutionCoverageLayer([threadKey]);
+    dateNow.mockRestore();
+
+    expect(layer.coverage).toBe("thread");
+    expect(layer.freshness).toBe("stale");
+    expect(layer.supports_provenance_reply).toBe(true);
+    expect(layer.dispatch_executed).toBe(false);
+    expect(layer.spawn_executed).toBe(false);
+  });
+
+  it("simulates: no prior receipt at all → coverage none, spawn guard blocks execution_followup", () => {
+    const threadKey = "agent:main:slack:default:direct:U99999:thread:9999";
+
+    const layer = buildExecutionCoverageLayer([threadKey]);
+
+    expect(layer.coverage).toBe("none");
+    expect(layer.supports_provenance_reply).toBe(false);
+
+    const spawnDecision = {
+      _execution_coverage: layer,
+      request: {
+        metadata: {
+          conversation_control: { intent_class: "execution_followup" },
+        },
+      },
+    };
+
+    expect(spawnGuardBlocks(spawnDecision)).toBe(true);
+  });
+
+  it("simulates: delegated root turn, thread follow-up → status supported, no new spawn", () => {
+    const rootKey = "agent:main:slack:default:direct:U88888";
+    const threadKey = `${rootKey}:thread:8888`;
+
+    seedAt(rootKey, Date.now() - 30_000, {
+      createdAt: Date.now() - 60_000,
+      decision: {
+        route_decision: { route: "delegate", worker_pool: "octoclaw-worker" },
+      },
+      canonicalSessionKey: rootKey,
+      toolsUsed: [],
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: {
+        delegateTaskId: "task-delegated-001",
+        taskStatus: "completed",
+      },
+    });
+
+    const layer = buildExecutionCoverageLayer([threadKey]);
+
+    expect(layer.coverage).not.toBe("none");
+    expect(layer.supports_provenance_reply).toBe(true);
+    expect(layer.supports_status_reply).toBe(true);
+    expect(layer.dispatch_executed).toBe(true);
+    expect(layer.evidence_summary).toContain("delegated path");
+  });
 });
