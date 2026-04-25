@@ -394,6 +394,8 @@ function attachWorkContractToPolicyDecision(input: {
     decisionSeal,
   );
   saveWorkContract(contract);
+  input.decision.work_contract = compactWorkContractView(contract);
+  input.decision.workContractId = contract.workContractId;
   const existingEntry = policyState.get(input.stateKey);
   const completedAt = existingEntry?.updatedAt || existingEntry?.createdAt || Date.now();
   const receipt = buildTurnExecutionReceipt(
@@ -402,6 +404,7 @@ function attachWorkContractToPolicyDecision(input: {
       decision: input.decision,
       delegated: false,
       dispatchExecuted: false,
+      workContractId: contract.workContractId,
       toolsUsed: [],
     },
     0,
@@ -413,8 +416,6 @@ function attachWorkContractToPolicyDecision(input: {
     latestStatus: contract.status,
     latestExecutionReceipt: receipt,
   }));
-  input.decision.work_contract = compactWorkContractView(contract);
-  input.decision.workContractId = contract.workContractId;
 }
 
 function buildDelegateTaskContext(delegateTask: DelegateTask | null | undefined, currentAttempt: DelegateAttempt | null | undefined): UnknownRecord | undefined {

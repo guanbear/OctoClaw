@@ -27,8 +27,10 @@ type PolicyContextState = UnknownRecord & {
   delegateTaskContext?: unknown;
   delegated?: boolean;
   dispatchExecuted?: boolean;
+  spawnExecuted?: boolean;
   directToolsSeen?: unknown;
   toolsUsed?: unknown;
+  workContractId?: unknown;
 };
 
 /**
@@ -46,12 +48,32 @@ export interface TurnExecutionReceipt {
   delegated: boolean;
   /** Whether octoclaw_dispatch actually executed (not just planned) */
   dispatchExecuted: boolean;
+  /** Whether a child session/task run actually spawned (not just TaskFlow created) */
+  spawnExecuted: boolean;
+  /** WorkContract id when this turn has a sealed contract */
+  workContractId: string | null;
   /** Delegate task ID if delegated */
   delegateTaskId: string | null;
   /** Native taskflow task ID (from taskflow port / plugin binding) */
   nativeTaskId: string | null;
   /** Native taskflow flow ID */
   nativeFlowId: string | null;
+  /** Child session continuity key */
+  childSessionKey: string | null;
+  /** Provider child session id */
+  childSessionId: string | null;
+  /** Child run id when distinct from provider session id */
+  childRunId: string | null;
+  /** Native TaskFlow revision observed by the turn */
+  nativeFlowRevision: number | null;
+  /** Native TaskFlow expected revision used for mutation */
+  nativeFlowExpectedRevision: number | null;
+  /** Native mutation attempted */
+  nativeFlowMutation: string | null;
+  /** Whether native mutation was applied */
+  nativeFlowMutationApplied: boolean | null;
+  /** Native mutation error, if any */
+  nativeFlowMutationError: string | null;
   /** Worker pool that handled execution */
   workerPool: string | null;
   /** Tools that were actually called (verified, not claimed) */
@@ -66,6 +88,19 @@ export interface TurnExecutionReceipt {
   outcome: "completed" | "failed" | "timeout" | "unknown";
   /** Timestamp */
   completedAt: number;
+  /** Execution coverage telemetry */
+  executionCoverage: string | null;
+  executionSupportsProvenanceReply: boolean;
+  executionSupportsStatusReply: boolean;
+  executionRequiresControlPlaneRefresh: boolean;
+  /** Memory coverage telemetry */
+  memoryCoverage: string | null;
+  /** Authority relationship between execution and memory */
+  authority: string | null;
+  /** Parent context pollution telemetry */
+  parentContextTokensAdded: number;
+  resultPacketTokens: number;
+  artifactReopenCount: number;
 }
 
 interface PolicyStateApiLike {
@@ -97,6 +132,22 @@ function asStringArray(value: unknown): string[] {
     : [];
 }
 
+function asBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const text = String(value ?? "").trim();
+  if (!text || !/^-?\d+(\.\d+)?$/.test(text)) {
+    return null;
+  }
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function asString(value: unknown, fallback: string | null = null): string | null {
   const normalized = String(value ?? "").trim();
   return normalized || fallback;
@@ -111,6 +162,11 @@ export function buildTurnExecutionReceipt(
   const routeDecision = asRecord(decision.route_decision);
   const delegateCtx = asRecord(state.delegateTaskContext);
   const runtimeTruth = asRecord(decision.runtime_truth);
+  const workContract = asRecord(decision.work_contract);
+  const executionLayer = asRecord(decision.execution_layer ?? decision._execution_coverage);
+  const memoryLayer = asRecord(decision.memory_layer ?? decision._memory_coverage);
+  const coverageSnapshot = asRecord(decision.context_coverage ?? decision.coverage);
+  const telemetry = asRecord(decision.telemetry ?? workContract.telemetry);
   const delegateTask = asRecord(runtimeTruth.delegateTask);
   const binding = asRecord(runtimeTruth.binding);
   const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
@@ -129,10 +185,48 @@ export function buildTurnExecutionReceipt(
     nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId ?? binding.flowId,
   );
   const dispatchExecuted = state.dispatchExecuted === true || decision.dispatchExecuted === true;
+  const spawnExecuted = asBoolean(state.spawnExecuted)
+    || asBoolean(decision.spawnExecuted)
+    || asBoolean(executionLayer.spawn_executed)
+    || asBoolean(runtimeTruth.spawnExecuted)
+    || asBoolean(delegateAttempt.spawnExecuted);
   const delivery = asRecord(decision.delivery);
   const resultMaterialized = Boolean(asString(delivery.artifact_path) || asString(delivery.result_path));
   const deliveryStatus = asString(
     delivery.status ?? delivery.delivery_status ?? decision.delivery_status,
+  );
+  const childSessionKey = asString(
+    workContract.childSessionKey
+      ?? binding.childSessionKey
+      ?? nativeTaskBinding.childSessionKey
+      ?? nativeAttemptBinding.childSessionKey
+      ?? delegateAttempt.childSessionKey,
+  );
+  const childSessionId = asString(
+    workContract.childSessionId
+      ?? binding.childSessionId
+      ?? nativeTaskBinding.childSessionId
+      ?? nativeAttemptBinding.childSessionId
+      ?? delegateAttempt.childSessionId,
+  );
+  const childRunId = asString(
+    workContract.childRunId
+      ?? binding.childRunId
+      ?? binding.runId
+      ?? nativeTaskBinding.childRunId
+      ?? nativeAttemptBinding.childRunId
+      ?? nativeAttemptBinding.runId
+      ?? delegateAttempt.childRunId,
+  );
+  const executionCoverage = asString(
+    telemetry.executionCoverage
+      ?? executionLayer.coverage
+      ?? asRecord(coverageSnapshot.execution).coverage,
+  );
+  const memoryCoverage = asString(
+    telemetry.memoryCoverage
+      ?? memoryLayer.coverage
+      ?? asRecord(coverageSnapshot.memory).coverage,
   );
   return {
     turnId: asString(state.canonicalSessionKey) || `turn-${completedAt ?? Date.now()}`,
@@ -140,9 +234,37 @@ export function buildTurnExecutionReceipt(
     route: asString(routeDecision.route, "reply") ?? "reply",
     delegated,
     dispatchExecuted,
+    spawnExecuted,
+    workContractId: asString(state.workContractId ?? decision.workContractId ?? workContract.workContractId),
     delegateTaskId: asString(delegateCtx.delegateTaskId ?? delegateCtx.taskId ?? delegateCtx.task_id),
     nativeTaskId,
     nativeFlowId,
+    childSessionKey,
+    childSessionId,
+    childRunId,
+    nativeFlowRevision: asNumber(
+      telemetry.nativeFlowRevision
+        ?? nativeTaskBinding.nativeFlowRevision
+        ?? nativeTaskBinding.revision
+        ?? nativeAttemptBinding.nativeFlowRevision
+        ?? nativeAttemptBinding.revision
+        ?? binding.revision,
+    ),
+    nativeFlowExpectedRevision: asNumber(
+      telemetry.nativeFlowExpectedRevision
+        ?? nativeTaskBinding.nativeFlowExpectedRevision
+        ?? nativeTaskBinding.expectedRevision
+        ?? nativeAttemptBinding.nativeFlowExpectedRevision
+        ?? nativeAttemptBinding.expectedRevision
+        ?? binding.expectedRevision,
+    ),
+    nativeFlowMutation: asString(telemetry.nativeFlowMutation ?? runtimeTruth.nativeFlowMutation),
+    nativeFlowMutationApplied: (
+      telemetry.nativeFlowMutationApplied !== undefined || runtimeTruth.nativeFlowMutationApplied !== undefined
+        ? asBoolean(telemetry.nativeFlowMutationApplied ?? runtimeTruth.nativeFlowMutationApplied)
+        : null
+    ),
+    nativeFlowMutationError: asString(telemetry.nativeFlowMutationError ?? runtimeTruth.nativeFlowMutationError),
     workerPool: asString(routeDecision.worker_pool),
     toolsUsed: asStringArray(state.toolsUsed ?? state.directToolsSeen ?? []),
     resultMaterialized,
@@ -152,6 +274,15 @@ export function buildTurnExecutionReceipt(
       ? (status === "completed" ? "completed" : status === "failed" ? "failed" : status === "timeout" || status === "timed_out" ? "timeout" : "unknown")
       : "completed",
     completedAt: completedAt ?? Date.now(),
+    executionCoverage,
+    executionSupportsProvenanceReply: asBoolean(telemetry.executionSupportsProvenanceReply ?? executionLayer.supports_provenance_reply),
+    executionSupportsStatusReply: asBoolean(telemetry.executionSupportsStatusReply ?? executionLayer.supports_status_reply),
+    executionRequiresControlPlaneRefresh: asBoolean(telemetry.executionRequiresControlPlaneRefresh ?? executionLayer.requires_control_plane_refresh),
+    memoryCoverage,
+    authority: asString(telemetry.authority ?? coverageSnapshot.authority),
+    parentContextTokensAdded: asNumber(telemetry.parentContextTokensAdded ?? decision.parentContextTokensAdded) ?? 0,
+    resultPacketTokens: asNumber(telemetry.resultPacketTokens ?? delivery.resultPacketTokens ?? delivery.result_packet_tokens) ?? 0,
+    artifactReopenCount: asNumber(telemetry.artifactReopenCount ?? state.artifactReopenCount) ?? 0,
   };
 }
 
