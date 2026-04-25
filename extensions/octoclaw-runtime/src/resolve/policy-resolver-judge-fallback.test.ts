@@ -413,4 +413,117 @@ describe("execution coverage override intent guard", () => {
       route: "delegate",
     });
   });
+
+  it("execution_followup + no coverage + judge=delegate → forced reply (hard rule)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("execution_followup + no coverage + judge=reply + tool_need_hint=required → forced reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              route: "reply",
+              confidence: 0.85,
+              abstain_reason: null,
+              ack_text: "收到",
+              tool_need_hint: "required",
+            }),
+          },
+        }],
+      }),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("execution_followup + no coverage + conversation route_hint=delegate → forced reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+            route_hint: "delegate",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("execution_followup + no coverage + duration=long → forced reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              route: "reply",
+              confidence: 0.85,
+              abstain_reason: null,
+              ack_text: "收到",
+              duration_hint: "long",
+            }),
+          },
+        }],
+      }),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
 });

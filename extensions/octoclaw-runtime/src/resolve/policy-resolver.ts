@@ -1548,6 +1548,14 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           if (process.env.OCTOCLAW_JUDGE_DEBUG) {
             console.log(`[octoclaw-judge] execution coverage override: requires_control_plane_refresh=true intent=${intentClass}, forcing reply/control-plane refresh`);
           }
+        } else if (isExecutionOrStatusFollowup) {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          executionOverrideApplied = true;
+          validatorOverrideReasons.push("validator:execution_followup_no_coverage→reply(no_verifiable_record)");
+          if (process.env.OCTOCLAW_JUDGE_DEBUG) {
+            console.log(`[octoclaw-judge] execution followup no coverage: intent=${intentClass}, forcing reply (no_verifiable_record)`);
+          }
         }
 
         if (!executionOverrideApplied && toolNeedHint === "required" && judgeRouteOverride === "reply") {
@@ -1568,16 +1576,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push("validator:conversation_control_route_hint_delegate→delegate");
-        } else if (!executionOverrideApplied && (intentClass === "execution_followup" || intentClass === "fresh_live_lookup") && judgeRouteOverride === "reply") {
-          if (intentClass === "execution_followup") {
-            judgeRouteOverride = "reply";
-            judgeSucceeded = true;
-            validatorOverrideReasons.push("validator:execution_followup_no_coverage→reply(no_verifiable_record)");
-          } else {
-            judgeRouteOverride = "delegate";
-            judgeSucceeded = true;
-            validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);
-          }
+        } else if (!executionOverrideApplied && intentClass === "fresh_live_lookup" && judgeRouteOverride === "reply") {
+          judgeRouteOverride = "delegate";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);
         }
         // tool_need_hint==none && duration_hint==short → reply remains eligible (no override needed)
 

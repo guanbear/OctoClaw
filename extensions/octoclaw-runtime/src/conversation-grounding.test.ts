@@ -336,7 +336,7 @@ describe("Chinese provenance prompt intent classification", () => {
     expect(intent.intent_class).not.toBe("execution_followup");
   });
 
-  it("provenance without history → undetermined (no prior turn to follow up on)", () => {
+  it("provenance without history → execution_followup with provenance_followup=true", () => {
     const intent = buildConversationIntentPacket({
       prompt: "你是自己查的还是子agent查的",
       replayLogPath: "/tmp/does-not-matter.jsonl",
@@ -344,6 +344,12 @@ describe("Chinese provenance prompt intent classification", () => {
       sessionKeys: ["test-session"],
     });
 
-    expect(intent.intent_class).toBe("undetermined");
+    expect(intent.intent_class).toBe("execution_followup");
+    expect(intent.provenance_followup).toBe(true);
+    expect(intent.reason_codes).toContain("provenance_followup_no_history");
+
+    const control = buildConversationControlHintsFromIntent(intent);
+    expect(control.provenance_followup).toBe(true);
+    expect(control.require_state_grounding).toBe(true);
   });
 });

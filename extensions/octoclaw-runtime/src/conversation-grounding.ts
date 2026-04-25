@@ -31,6 +31,7 @@ export interface ConversationIntentPacket extends IntentPacket {
   lookup_scope?: string;
   require_fresh_lookup?: boolean;
   require_state_grounding?: boolean;
+  provenance_followup?: boolean;
 }
 
 export interface ConversationControlHints {
@@ -43,6 +44,8 @@ export interface ConversationControlHints {
   protected_lane?: string;
   require_state_grounding?: boolean;
   require_fresh_lookup?: boolean;
+  provenance_followup?: boolean;
+  status_followup?: boolean;
   lookup_scope?: string;
   lookup_project?: string;
   lookup_focus?: string;
@@ -774,6 +777,7 @@ export function buildConversationIntentPacket(options: {
   let hints: IntentHints = {};
   let source = "deterministic_front_gate";
   let reasonCodes = ["semantic_judge_required"];
+  let isProvenanceOnly = false;
   if (surface) {
     hints = { surfaceBound: true };
     source = "deterministic_surface_registry";
@@ -786,6 +790,13 @@ export function buildConversationIntentPacket(options: {
     hints = { executionFollowup: true };
     source = "deterministic_followup_grounding";
     reasonCodes = ["recent_execution_followup"];
+    isProvenanceOnly = isProvenancePrompt(prompt) && !isMetaPrompt(prompt) && !isTaskProgressPrompt(prompt) && !promptsEquivalent(prompt, subjectTurn.prompt);
+  } else if (!subjectTurn && isProvenancePrompt(prompt)) {
+    // Provenance prompt without history — still execution_followup (no verifiable record)
+    hints = { executionFollowup: true };
+    source = "deterministic_provenance_no_history";
+    reasonCodes = ["provenance_followup_no_history"];
+    isProvenanceOnly = true;
   }
 
   const packet = buildIntentPacket(hints);
@@ -801,6 +812,7 @@ export function buildConversationIntentPacket(options: {
     lookup_scope: surface?.scope,
     require_fresh_lookup: Boolean(surface),
     require_state_grounding: Boolean(surface && surface.lane_hint !== "reply"),
+    provenance_followup: isProvenanceOnly,
   };
 }
 
@@ -831,6 +843,7 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
         lane_hint: "control_observer",
       protected_lane: "control_observer",
       require_state_grounding: true,
+      provenance_followup: Boolean(intentPacket.provenance_followup),
     };
   }
   if (intentClass === "local_surface_lookup") {
