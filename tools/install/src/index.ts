@@ -23,7 +23,7 @@ const CONFIG_FILE_NAME = "octoclaw-config.json";
 const MODEL_CONFIG_FILE_NAME = "octoclaw-model-config.json";
 const AGENTS_FILE_NAME = "AGENTS.md";
 const SOURCE_MANIFEST_FILE_NAME = "octoclaw-source-manifest.json";
-const OCTOCLAW_RULES_VERSION = "v1.7.0";
+const OCTOCLAW_RULES_VERSION = "v1.8.0";
 const RULE_BLOCK_START = `<!-- octoclaw:core-rules ${OCTOCLAW_RULES_VERSION} -->`;
 const RULE_BLOCK_END = "<!-- /octoclaw:core-rules -->";
 const DEFAULT_WORKSPACE_DIRNAME = ".octoclaw";
@@ -37,30 +37,40 @@ const AGENTS_RULES_BODY = `${RULE_BLOCK_START}
 
 ### Core guardrails
 
-- Prefer OctoClaw-native routing and runtime tools when they are available.
-- Use direct replies only for low-risk, low-context tasks that can be completed cleanly in one turn.
-- Route tool-heavy, long-running, multi-step, or code-changing work through delegated runtime paths.
+- First respond with text; do not start a turn with a tool call.
+- Use OctoClaw runtime tools when available: \`octoclaw_route_hint\`, \`octoclaw_dispatch\`, \`octoclaw_status\`.
+- The live routing surface is \`reply\` or \`delegate\`; legacy \`direct\` means \`reply\`, and legacy \`runner/spawn_single/spawn_multi/observe\` normalize to \`delegate\`.
+- Do not make ClawTeam, tmux, or multi-agent execution the default live path.
 - Keep same-file writes serialized and respect upstream task dependencies.
-- When delegated work returns an artifact or report path, inspect the artifact before presenting the final answer.
 
-### Routing defaults
+### Routing and judge
 
-- Treat \`direct\` as an allowlist, not the universal default.
-- Prefer runtime status surfaces as the source of truth for delegated work.
-- Preserve complete status output when the operator explicitly asks for status.
-- Avoid bypassing the runtime once routing has selected a delegated path.
+- Reply directly only for low-risk, low-context, single-turn work that needs no fresh tools or long execution.
+- Delegate work that needs tools, fresh lookup, local inspection, long execution, code changes, high context, or separate execution evidence.
+- Route/status/provenance follow-ups must use the current runtime state, route seal, WorkContract, ExecutionCoveragePacket, or status surface; do not rerun \`octoclaw_route\` without the original \`session_key/message_id\` to explain an existing decision.
+- Treat \`route_source=judge\` as an accepted local/remote judge decision, \`route_source=rule\` as deterministic policy/no actionable judge, and \`route_source=fallback\` as deterministic safety fallback.
+- If ExecutionCoverage is sufficient for a status/provenance question, answer in \`reply\`; do not create a new delegated task.
+
+### Runtime truth
+
+- Native TaskFlow is execution lifecycle truth.
+- WorkContract is semantic/delegation/handoff/continuity truth; it does not prove execution by itself.
+- TaskFlow created is not spawn evidence. \`spawnExecuted=true\` requires current TaskRun/session/process evidence.
+- \`task-state.json\`, status panels, ACKs, display text, and grounding packets are projections/caches, not execution truth.
+- \`dispatchExecuted=true\` and \`spawnExecuted=false\` means materialized/queued, not running.
+
+### Delegated continuity
+
+- Continue child work through \`childSessionKey\`, \`childSessionId\`, \`runId\`, and artifact refs only.
+- Never inject a full child transcript into the parent context.
+- If delegated work returns an artifact or report path, inspect the artifact before presenting the final answer.
+- If dispatch/spawn fails, record the failure, surface it honestly, and only fall back to reply when the answer can be produced without pretending delegation succeeded.
 
 ### Model policy
 
 - Resolve worker models from policy-first profile mapping.
 - Use stronger profiles for deep code and review work.
 - Keep custom overrides in workspace model config rather than ad-hoc prompt changes.
-
-### Runtime discipline
-
-- Persist task lifecycle state before and after delegated execution.
-- Favor artifact-first outputs for large results.
-- Reconcile missing runtime files rather than assuming manual fixes.
 ${RULE_BLOCK_END}`;
 
 export interface InstallConfigFile {
@@ -745,6 +755,7 @@ export async function deploy(options: DeployOptions): Promise<number> {
   await cleanupOldBackups(paths.openclawHome, 3);
   await syncJudgeFastEnv(paths.openclawHome);
   await writeSourceManifest(paths.openclawHome, paths.octoclawRoot);
+  await injectRuntimeInstructions(paths);
 
   if (options.restart) {
     await restartOpenClawServices(paths.openclawHome);
@@ -762,12 +773,19 @@ function upsertRuleBlock(content: string): string {
   return `${base}${AGENTS_RULES_BODY}\n`;
 }
 
-export async function injectAgentsMd(openclawHome: string): Promise<void> {
-  const agentsFile = path.join(openclawHome, AGENTS_FILE_NAME);
+export async function injectAgentsMd(targetRoot: string): Promise<void> {
+  const agentsFile = path.join(targetRoot, AGENTS_FILE_NAME);
   const existing = (await pathExists(agentsFile)) ? await readFile(agentsFile, "utf8") : "";
   const nextContent = upsertRuleBlock(existing);
   await ensureParentDirectory(agentsFile);
   await writeFile(agentsFile, nextContent, "utf8");
+}
+
+async function injectRuntimeInstructions(paths: ResolvedPaths): Promise<void> {
+  await injectAgentsMd(paths.openclawHome);
+  if (paths.workspaceRoot !== paths.openclawHome) {
+    await injectAgentsMd(paths.workspaceRoot);
+  }
 }
 
 async function ensureModelConfig(workspaceRoot: string): Promise<void> {
@@ -818,6 +836,7 @@ async function verifyRequiredFiles(paths: ResolvedPaths): Promise<void> {
     path.join(paths.workspaceRoot, CONFIG_FILE_NAME),
     path.join(paths.workspaceRoot, MODEL_CONFIG_FILE_NAME),
     path.join(paths.openclawHome, AGENTS_FILE_NAME),
+    path.join(paths.workspaceRoot, AGENTS_FILE_NAME),
     path.join(paths.openclawHome, "extensions", EXTENSION_NAME, "openclaw.plugin.json"),
     path.join(paths.openclawHome, "extensions", EXTENSION_NAME, "package.json"),
   ];
@@ -846,7 +865,7 @@ export async function install(options: InstallOptions): Promise<number> {
 
   await deployExtensions(paths.octoclawRoot, paths.openclawHome);
   await deployPackages(paths.octoclawRoot, paths.openclawHome);
-  await injectAgentsMd(paths.openclawHome);
+  await injectRuntimeInstructions(paths);
   await verifyRequiredFiles(paths);
 
   stdout.write(`${formatInstallSummary(createInstallConfig(paths), true)}\n`);
@@ -867,7 +886,7 @@ export async function reconcile(options: ReconcileOptions): Promise<number> {
 
   await reconcileExtension(paths.octoclawRoot, paths.openclawHome);
   await reconcilePackages(paths.octoclawRoot, paths.openclawHome);
-  await injectAgentsMd(paths.openclawHome);
+  await injectRuntimeInstructions(paths);
   await verifyRequiredFiles(paths);
 
   stdout.write(`${formatInstallSummary(createInstallConfig(paths), true)}\n`);
