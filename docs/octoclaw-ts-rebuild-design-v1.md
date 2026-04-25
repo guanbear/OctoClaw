@@ -4717,6 +4717,61 @@ new probe/work requiring tools, workspace inspection, external lookup, command e
    - 明确失败/超时说明
 5. 这样才能避免内部委派 reasoning 自己回流进后续 thread history，再反过来污染主 agent
 
+#### 2026-04-25 补充：WorkContract-centered delegation 是主收口 contract
+
+新增配套文档：
+
+1. `docs/octoclaw-work-contract-centered-delegation-design-2026-04-25.md`
+2. `docs/octoclaw-work-contract-implementation-plan-2026-04-25.md`
+
+这两份文档不是新开一套平行架构，而是把本主设计里已经确定的几条线收成一个足够朴素的主 contract：
+
+1. Native TaskFlow / TaskRun / session registry 继续是 execution truth
+2. `WorkContract` 成为 semantic / delegation / handoff / continuity truth
+3. `ExecutionCoveragePacket` 成为 provenance/status follow-up 的证据入口
+4. artifact index 成为 worker result / verification / patch / report 的 durable content truth
+5. ACK / status / display / grounding 只做 projection，不再自己推断 route 或 execution truth
+
+因此，后续实现里不要再把这些字段当成并列机制各自长大：
+
+1. `route_decision`
+2. `router_decision_v2`
+3. `tool_policy`
+4. `runtime_truth`
+5. `task-state.json`
+6. ACK guard state
+7. conversation grounding snapshot
+8. dispatch metadata
+
+它们的目标形态应是：
+
+```text
+WorkContract
+  -> legacy PolicyDecision / route_decision / tool_policy projection
+  -> MainContextPacket projection
+  -> DelegateHandoffPacket projection
+  -> DelegateStatusPacket projection
+  -> ACK/status/display projection
+
+Native TaskFlow / TaskRun / session registry
+  -> ExecutionCoveragePacket
+  -> TurnExecutionReceipt
+  -> WorkContract.nativeBinding / childSessions refs
+```
+
+最重要的边界：
+
+1. `WorkContract.route=reply` 时，`octoclaw_dispatch` 必须拒绝
+2. provenance/status follow-up 若 execution coverage 足够，必须 `reply.answer`
+3. 新工作才进入 `delegate`
+4. `octoclaw_dispatch(workContractId)` 只能消费 sealed WorkContract，不应重新 judge
+5. WorkContract 不替代 Native TaskFlow；它只引用 `flowId/taskId/runId/childSessionKey`
+6. OpenClaw 4.21 的 TaskFlow mutation 必须遵守 `flowId + expectedRevision`
+7. `TaskFlow created` 不等于 `spawnExecuted`; spawn 必须来自 TaskRun/session/process evidence
+8. 子 agent continuity 借鉴 OMO，但 OctoClaw parent-visible handle 应以 `workContractId + delegateTaskId + childSessionKey` 为主，provider `childSessionId` 只是可选 runtime continuity
+
+这条设计线的收益是“少机制，不是少能力”：主 agent 能通过 compact projection 知道全貌，但不会吃完整 worker transcript、完整 route rationale、完整 raw log。
+
 ### 9.3.a refined v1 judge architecture：本地小 judge + 远端仲裁 judge
 
 基于当前目标，我建议把 v1 judge 正式设计成两层，但只有一层默认热路径 authority：
@@ -6114,6 +6169,8 @@ v1 我建议至少固定这几类：
 2. CI / container / managed gateway 会变复杂
 3. Windows / hosted 场景会天然掉队
 
+同理，ClawTeam 不应在 v1/Phase 2 成为核心执行路径。它可以保留为 future optional backend / operator workbench，但不能绕过 WorkContract、Native TaskFlow revision guard、TaskRun/session evidence，也不能成为 `spawnExecuted` 的唯一证明来源。
+
 ### 9.6.6 我对 runner 的最终建议
 
 因此我建议：
@@ -6491,12 +6548,13 @@ v1 我建议至少固定这几类：
 目标：
 
 1. 用 OpenClaw 原生 task/flow 做执行真相
-2. 打通 progress / result / delivery
-3. 让 Python dispatcher 退出热路径
-4. 让 telemetry 事件直接挂到 native substrate / event stream
-5. status/details/queue 全部读同一份 substrate-first truth
-6. surface anchor 与 thread/session binding 统一收口
-7. shared IM/gateway adapter contract 落地，但不要求所有渠道一次性齐备
+2. 引入 WorkContract 作为 semantic/delegation/handoff/continuity truth
+3. 打通 progress / result / delivery
+4. 让 Python dispatcher 退出热路径
+5. 让 telemetry 事件直接挂到 native substrate / event stream
+6. status/details/queue 全部读同一份 substrate-first truth
+7. surface anchor 与 thread/session binding 统一收口
+8. shared IM/gateway adapter contract 落地，但不要求所有渠道一次性齐备
 
 ### Phase 3：compound / controlled multi-agent
 
@@ -6525,7 +6583,7 @@ v1 我建议至少固定这几类：
 
 ## 11. 最终建议：哪些必须现在拍板
 
-如果只挑几件必须尽快定下来的架构决策，我建议先拍板这 9 条：
+如果只挑几件必须尽快定下来的架构决策，我建议先拍板这 10 条：
 
 1. **主语言用 TypeScript，Node 基线对齐 OpenClaw 上游。**
 2. **OpenClaw 原生 task/flow 是执行真相源。**
@@ -6536,6 +6594,7 @@ v1 我建议至少固定这几类：
 7. **正式产品代码全部 TS 重写；Python 只保留测试/运维/一次性脚本。**
 8. **成本优化和速度优化必须变成 request/task/flow 级可测指标。**
 9. **先搭 harness 骨架、telemetry contract 和 gate，再逐步迁移功能。**
+10. **WorkContract 是 semantic/delegation/handoff/continuity 主 contract；其它 route/status/ACK/display 字段必须逐步退成 projection。**
 
 对第 2、3 条，再补一个这次线上验证后必须明确写死的收口约束：
 
