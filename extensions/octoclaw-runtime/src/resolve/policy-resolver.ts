@@ -1,6 +1,6 @@
 import type { ScopeMetadata, WorkspaceMode } from "@octoclaw/contracts/schemas";
 import type { DelegateAttempt, DelegateTask } from "@octoclaw/contracts/delegate";
-import type { ContextCoverageSnapshot, IntentClass, WorkDecisionSource } from "@octoclaw/contracts/work-contract";
+import type { ContextCoverageSnapshot, ExecutionCoveragePacket, IntentClass, ReplyContract, WorkDecisionSource } from "@octoclaw/contracts/work-contract";
 import type { NativeHelperInvoker } from "../adapter/native-helper.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import type { PolicyDecision, PolicyJudgeInput } from "@octoclaw/policy/judge";
@@ -376,22 +376,59 @@ function attachWorkContractToPolicyDecision(input: {
     conflict: hasConflict,
     authority: hasConflict ? "execution_wins" : executionLayer.coverage && executionLayer.coverage !== "none" ? "execution_wins" : memoryLayer.coverage && memoryLayer.coverage !== "none" ? "memory_only" : "none",
   };
-  const route = authoritativeDecisionRoute(input.decision);
+  const intentClass = intentClassFromPolicy(input.decision.intent_class || asRecord(input.metadata.conversation_control).intent_class || "undetermined");
+  const isExecutionFollowup = intentClass === "execution_followup"
+    || asBoolean(asRecord(input.metadata.conversation_control).provenance_followup)
+    || asBoolean(asRecord(input.metadata.conversation_control).status_followup);
+  const executionSupportsReply = asBoolean(executionLayer.supports_provenance_reply)
+    || asBoolean(executionLayer.supports_status_reply)
+    || asBoolean(executionLayer.requires_control_plane_refresh);
+  const executionCoveragePacket: ExecutionCoveragePacket = {
+    packetId: stableId("execution-coverage", [input.stateKey, input.prompt, String(Date.now())]),
+    turnId: stableId("turn", [input.stateKey, input.prompt]),
+    sessionKey: input.stateKey,
+    coverage: coverageSnapshot,
+    route: isExecutionFollowup && executionSupportsReply ? "reply" : authoritativeDecisionRoute(input.decision) === "delegate" ? "delegate" : "reply",
+    replyMode: isExecutionFollowup && executionSupportsReply ? "answer" : undefined,
+    dispatchExecuted: asBoolean(executionLayer.dispatch_executed),
+    spawnExecuted: asBoolean(executionLayer.spawn_executed),
+    resultMaterialized: asBoolean(executionLayer.result_materialized),
+    evidenceRefs: asString(executionLayer.evidence_summary) ? [asString(executionLayer.evidence_summary)] : [],
+    evidenceSummary: asString(executionLayer.evidence_summary) || undefined,
+    createdAt: new Date().toISOString(),
+  };
+  input.metadata._execution_coverage_packet = executionCoveragePacket;
+  input.decision._execution_coverage_packet = executionCoveragePacket;
+  const workRoute = executionCoveragePacket.route;
+  const decisionSource = isExecutionFollowup && executionSupportsReply
+    ? "execution_coverage"
+    : workDecisionSourceFromPolicy(input.decision._judge_source || asRecord(input.decision.route_decision).final_judge_source || "local_judge");
   const decisionSeal = buildWorkDecisionSeal(
-    workDecisionSourceFromPolicy(input.decision._judge_source || asRecord(input.decision.route_decision).final_judge_source || "local_judge"),
-    route === "delegate" ? "delegate" : "reply",
+    decisionSource,
+    workRoute,
     asStringArray(asRecord(input.decision.route_decision).reason_codes),
     {
+      replyMode: decisionSource === "execution_coverage" ? "answer" : undefined,
       confidence: typeof input.decision.judge_confidence === "number" ? input.decision.judge_confidence : undefined,
       routeSealId: asString(asRecord(input.routeSeal).routeSealId) || undefined,
     },
   );
+  const replyContract: ReplyContract | undefined = workRoute === "reply"
+    ? {
+        replyMode: decisionSource === "execution_coverage" ? "answer" : "answer",
+        grounding: asBoolean(executionLayer.requires_control_plane_refresh) ? "control_plane_status" : executionSupportsReply ? "execution_receipt" : "none",
+        allowedTools: asBoolean(executionLayer.requires_control_plane_refresh) ? ["octoclaw_status", "octoclaw_task_action"] : [],
+        forbiddenTools: ["octoclaw_dispatch", "spawn"],
+        evidenceRefs: executionCoveragePacket.evidenceRefs,
+      }
+    : undefined;
   const contract = buildWorkContractFromPolicy(
     input.stateKey,
     input.prompt,
-    intentClassFromPolicy(input.decision.intent_class || asRecord(input.metadata.conversation_control).intent_class || "undetermined"),
+    intentClass,
     coverageSnapshot,
     decisionSeal,
+    { reply: replyContract },
   );
   saveWorkContract(contract);
   input.decision.work_contract = compactWorkContractView(contract);
@@ -1087,17 +1124,58 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     };
   }
 
+  let executionLayer = asRecord(metadata.execution_layer ?? metadata._execution_coverage ?? priorDecision.execution_layer ?? priorDecision._execution_coverage);
+  if (!asString(executionLayer.coverage)) {
+    const sessionKeys = Array.isArray(metadata.judge_session_keys) && metadata.judge_session_keys.length > 0
+      ? metadata.judge_session_keys as string[]
+      : Array.isArray(metadata.session_keys) && metadata.session_keys.length > 0
+        ? metadata.session_keys as string[]
+        : [asString(metadata.session_key)].filter(Boolean);
+    executionLayer = buildExecutionCoverageLayer(sessionKeys, asString(metadata.current_turn_id) || undefined) as UnknownRecord;
+    metadata._execution_coverage = executionLayer;
+    metadata.execution_layer = executionLayer;
+  }
+  const conversationControl = asRecord(metadata.conversation_control);
+  const intentPacket = asRecord(metadata.intent_packet);
+  const intentClass = asString(intentPacket.intent_class || intentPacket.intentClass || conversationControl.intent_class);
+  const isExecutionOrStatusFollowup = intentClass === "execution_followup"
+    || asBoolean(conversationControl.provenance_followup)
+    || asBoolean(conversationControl.status_followup);
+  const executionCoverageSupportsReply = asBoolean(executionLayer.supports_provenance_reply)
+    || asBoolean(executionLayer.supports_status_reply);
+  if (isExecutionOrStatusFollowup && executionCoverageSupportsReply) {
+    liveRoute = "reply";
+  }
+
   const role = workflowRoleForRoute(liveRoute, tsJudgeInput.workType || asString(priorRouteDecision.work_type, "research"));
-  const authoritativeRole = judgeSucceeded ? coerceJudgeRole(priorDecision._judge_role) ?? role : role;
-  const authoritativeExecutionProfile = judgeSucceeded
+  const authoritativeRole = judgeSucceeded && liveRoute !== "reply" ? coerceJudgeRole(priorDecision._judge_role) ?? role : role;
+  const authoritativeExecutionProfile = judgeSucceeded && liveRoute !== "reply"
     ? decideExecutionProfile(authoritativeRole).executionProfile
-    : tsPolicyDecision.executionProfile;
-  const authoritativeModelProfile = judgeSucceeded
+    : liveRoute === "reply"
+      ? "main"
+      : tsPolicyDecision.executionProfile;
+  const authoritativeModelProfile = judgeSucceeded && liveRoute !== "reply"
     ? decideModelProfile(authoritativeRole, tsPolicyDecision.workspaceMode).modelProfile
-    : tsPolicyDecision.modelProfile;
+    : liveRoute === "reply"
+      ? "direct_main"
+      : tsPolicyDecision.modelProfile;
   const workerPool = workerPoolForDecision(authoritativeExecutionProfile, authoritativeRole);
   const observeMode = isObserveMode(authoritativeRole, authoritativeExecutionProfile);
-  const executionLayer = asRecord(metadata.execution_layer ?? metadata._execution_coverage ?? priorDecision.execution_layer ?? priorDecision._execution_coverage);
+  try {
+    const runtimeTruthFlags = observeFlagsForRoute(liveRoute, authoritativeRole, authoritativeExecutionProfile);
+    metadata.runtime_truth = buildRuntimeTruthMetadata({
+      ...metadata,
+      requestId: metadata.requestId ?? metadata.request_id ?? stableId("runtime", [prompt, liveRoute]),
+      taskId: metadata.taskId ?? metadata.task_id ?? stableId("task", [prompt, liveRoute]),
+      flowId: metadata.flowId ?? metadata.flow_id ?? stableId("flow", [prompt, liveRoute]),
+      role: authoritativeRole,
+      executionProfile: authoritativeExecutionProfile,
+      coordinationMode: liveRoute === "delegate" ? tsPolicyDecision.coordinationMode : undefined,
+      requiresDelegation: runtimeTruthFlags.requiresDelegation,
+      requiresObservation: runtimeTruthFlags.requiresObservation,
+    });
+  } catch {
+  }
   const requiresControlPlaneRefresh = asBoolean(executionLayer.requires_control_plane_refresh);
   const routeHintPolicyRequired = (!judgeSucceeded && liveRouteNeedsHint(liveRoute, metadata))
     || (judgeSucceeded && liveRoute !== "reply");
@@ -1216,6 +1294,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   };
   nextDecision.router_decision_v2 = {
     ...asRecord(nextDecision.router_decision_v2),
+    compatibility_view: true,
     request_kind: liveRoute === "reply" ? "reply" : "delegated_task",
   };
   nextDecision.ts_policy_judge = metadata.ts_policy_judge;
@@ -1402,7 +1481,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         worker_pool: "octoclaw-main",
       },
       review_policy: { required: false },
-      router_decision_v2: { request_kind: "reply" },
+      router_decision_v2: { compatibility_view: true, request_kind: "reply" },
       _delegation_enabled: false,
       _judge_succeeded: false,
       _judge_route: null,
@@ -1754,6 +1833,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       required: finalDecision.route === "delegate",
     },
     router_decision_v2: {
+      compatibility_view: true,
       request_kind: finalDecision.route === "reply" ? "reply" : "delegated_task",
     },
     _delegation_enabled: true,

@@ -56,6 +56,14 @@ export interface ShadowModelRecommendation {
   reason: string;
 }
 
+export interface ShadowRecommendationComparison {
+  recommendation: ShadowModelRecommendation;
+  actualProfile: ModelProfile;
+  actualModelId: ConcreteModelId;
+  matchedRecommendation: boolean;
+  livePathChanged: false;
+}
+
 export interface ShadowPromotionDecision {
   promotionAllowed: boolean;
   rollbackTarget: ModelProfile;
@@ -99,6 +107,19 @@ export function evaluateShadowPromotion(input: {
     promotionAllowed: true,
     rollbackTarget: input.recommendation.rollbackTarget,
     reason: "gate_pass_allows_manual_promotion",
+  };
+}
+
+export function compareShadowRecommendationToActual(input: {
+  recommendation: ShadowModelRecommendation;
+  actualProfile: ModelProfile;
+}): ShadowRecommendationComparison {
+  return {
+    recommendation: input.recommendation,
+    actualProfile: input.actualProfile,
+    actualModelId: resolveModelId(input.actualProfile),
+    matchedRecommendation: input.actualProfile === input.recommendation.recommendedProfile,
+    livePathChanged: false,
   };
 }
 

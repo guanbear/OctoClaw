@@ -106,8 +106,8 @@ describe("work contract materializer", () => {
     expect(result!.telemetry.spawnExecuted).toBe(false);
     expect(result!.telemetry.nativeTaskId).toBe("native-task-wp5");
     expect(result!.telemetry.nativeFlowId).toBe("flow-wp5-1");
-    expect(result!.telemetry.resultMaterialized).toBe(true);
-    expect(result!.telemetry.deliveryStatus).toBe("queued");
+    expect(result!.telemetry.resultMaterialized).toBe(false);
+    expect(result!.telemetry.deliveryStatus).toBe("none");
     expect(result!.telemetry.childSessionKey).toBe("child-session-wp5");
     expect(result!.mainContext.visibleIds.delegateTaskId).toBe("delegate-wp5-1");
     expect(result!.mainContext.visibleIds.nativeTaskId).toBe("native-task-wp5");
@@ -118,7 +118,28 @@ describe("work contract materializer", () => {
     expect(reloaded?.delegate?.delegateTaskId).toBe("delegate-wp5-1");
   });
 
-  it("maps substrate state running to contract status running", () => {
+  it("only marks resultMaterialized when an explicit result packet/artifact is supplied", () => {
+    const contract = seedSealedContract();
+
+    const result = materializeWorkContractSuccess({
+      workContractId: contract.workContractId,
+      ledgerPath,
+      nativeBinding,
+      delegateTaskId: "delegate-wp5-1",
+      attemptId: "attempt-wp5-1",
+      nativeTaskId: "native-task-wp5",
+      nativeFlowId: "flow-wp5-1",
+      substrateState: "succeeded",
+      spawnExecuted: true,
+      resultMaterialized: true,
+      deliveryStatus: "pending",
+    });
+
+    expect(result!.telemetry.resultMaterialized).toBe(true);
+    expect(result!.telemetry.deliveryStatus).toBe("pending");
+  });
+
+  it("does not map substrate running to running without TaskRun/session evidence", () => {
     const contract = seedSealedContract("session-running", "Running task");
 
     const result = materializeWorkContractSuccess({
@@ -132,11 +153,11 @@ describe("work contract materializer", () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.status).toBe("running");
-    expect(result!.mainContext.nextAction).toBe("wait");
+    expect(result!.status).toBe("queued");
+    expect(result!.mainContext.nextAction).toBe("dispatch");
   });
 
-  it("maps substrate state completed to contract status completed", () => {
+  it("does not map substrate completed to completed without result materialization", () => {
     const contract = seedSealedContract("session-completed", "Completed task");
 
     const result = materializeWorkContractSuccess({
@@ -147,6 +168,26 @@ describe("work contract materializer", () => {
       attemptId: "attempt-completed",
       substrateState: "completed",
       spawnExecuted: false,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.status).toBe("queued");
+    expect(result!.mainContext.nextAction).toBe("dispatch");
+  });
+
+  it("maps substrate state completed to contract status completed with explicit result materialization", () => {
+    const contract = seedSealedContract("session-completed-materialized", "Completed task with result");
+
+    const result = materializeWorkContractSuccess({
+      workContractId: contract.workContractId,
+      ledgerPath,
+      nativeBinding: { ...nativeBinding, status: "succeeded" },
+      delegateTaskId: "delegate-completed-materialized",
+      attemptId: "attempt-completed-materialized",
+      substrateState: "completed",
+      spawnExecuted: true,
+      resultMaterialized: true,
+      deliveryStatus: "pending",
     });
 
     expect(result).not.toBeNull();
@@ -257,7 +298,7 @@ describe("work contract materializer", () => {
     expect(result).not.toBeNull();
     expect(result!.telemetry.dispatchExecuted).toBe(true);
     expect(result!.telemetry.spawnExecuted).toBe(false);
-    expect(result!.status).toBe("running");
+    expect(result!.status).toBe("queued");
   });
 });
 

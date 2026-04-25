@@ -274,11 +274,11 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.delegate_task_id).toBeTruthy();
     expect(result.native_task_id).toBe("task-honesty");
     expect(result.native_flow_id).toBe("flow-honesty");
-    expect(result.result_materialized).toBe(true);
+    expect(result.result_materialized).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
 
     const reloaded = loadWorkContract(contract.workContractId);
-    expect(reloaded?.status).toBe("running");
+    expect(reloaded?.status).toBe("queued");
     expect(reloaded?.delegate?.nativeBinding?.flowId).toBe("flow-honesty");
     expect(reloaded?.delegate?.nativeBinding?.nativeTaskId).toBe("task-honesty");
     expect(reloaded?.delegate?.nativeBinding?.status).toBe("running");
@@ -286,6 +286,8 @@ describe("octoclaw_dispatch honesty", () => {
     expect(reloaded?.telemetry.spawnExecuted).toBe(false);
     expect(reloaded?.telemetry.nativeTaskId).toBe("task-honesty");
     expect(reloaded?.telemetry.nativeFlowId).toBe("flow-honesty");
+    expect(reloaded?.telemetry.resultMaterialized).toBe(false);
+    expect(reloaded?.telemetry.deliveryStatus).toBe("none");
   });
 
   it("marks sealed WorkContract failed when native materialization returns a payload failure", async () => {

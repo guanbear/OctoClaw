@@ -1450,6 +1450,8 @@ export function getToolRegistrations(): ToolRegistration[] {
             childSessionKey,
             substrateState,
             spawnExecuted: false,
+            resultMaterialized: false,
+            deliveryStatus: "none",
           });
         }
         return dispatchHonestySuccess({
@@ -1465,8 +1467,8 @@ export function getToolRegistrations(): ToolRegistration[] {
           dispatchExecuted: payload.executed === true,
           nativeTaskId: materializedNativeTaskId,
           nativeFlowId: materializedNativeFlowId,
-          resultMaterialized: Boolean(asString(materialization.task_id)),
-          deliveryStatus: asString(materialization.substrate_state),
+          resultMaterialized: false,
+          deliveryStatus: null,
         });
       },
     },

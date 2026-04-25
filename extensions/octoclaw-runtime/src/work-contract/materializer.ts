@@ -19,6 +19,8 @@ export interface MaterializationSuccessInput {
   childSessionKey?: string;
   substrateState?: string;
   spawnExecuted: boolean;
+  resultMaterialized?: boolean;
+  deliveryStatus?: string;
   childSessionId?: string;
   runId?: string;
   providerSessionBinding?: { provider: string; sessionId?: string; runtimeSessionName?: string; sessionFile?: string };
@@ -56,6 +58,12 @@ function mapSubstrateToContractStatus(substrate: string | undefined): WorkContra
   }
 }
 
+function materializedStatus(input: MaterializationSuccessInput, mappedStatus: WorkContractStatus): WorkContractStatus {
+  if (mappedStatus === "running" && !input.spawnExecuted) return "queued";
+  if (mappedStatus === "completed" && !input.resultMaterialized) return input.spawnExecuted ? "running" : "queued";
+  return mappedStatus;
+}
+
 function ensureDelegate(contract: WorkContract, overrides: Partial<DelegateContract> = {}): DelegateContract {
   if (contract.delegate) {
     return { ...contract.delegate, ...overrides };
@@ -77,7 +85,7 @@ function ensureDelegate(contract: WorkContract, overrides: Partial<DelegateContr
 }
 
 export function materializeWorkContractSuccess(input: MaterializationSuccessInput): WorkContract | null {
-  const mappedStatus = mapSubstrateToContractStatus(input.substrateState);
+  const mappedStatus = materializedStatus(input, mapSubstrateToContractStatus(input.substrateState));
 
   const result = updateWorkContract(
     input.workContractId,
@@ -100,8 +108,8 @@ export function materializeWorkContractSuccess(input: MaterializationSuccessInpu
         nativeFlowMutation: input.nativeBinding.lastMutation,
         nativeFlowMutationApplied: input.nativeBinding.lastMutationApplied,
         nativeFlowMutationError: input.nativeBinding.lastMutationError,
-        resultMaterialized: Boolean(input.nativeTaskId || input.nativeBinding.nativeTaskId || input.nativeBinding.taskId),
-        deliveryStatus: input.substrateState ?? "none",
+        resultMaterialized: input.resultMaterialized === true,
+        deliveryStatus: input.deliveryStatus ?? "none",
         childSessionKey: input.childSessionKey ?? input.nativeBinding.childSessionKey,
       };
 
@@ -116,7 +124,7 @@ export function materializeWorkContractSuccess(input: MaterializationSuccessInpu
           nativeFlowId: input.nativeFlowId || input.nativeBinding.nativeFlowId || input.nativeBinding.flowId,
           childSessionKey: input.childSessionKey ?? input.nativeBinding.childSessionKey,
         },
-        nextAction: mappedStatus === "running" ? "wait" : mappedStatus === "completed" ? "deliver" : "dispatch",
+        nextAction: mappedStatus === "running" ? "wait" : mappedStatus === "completed" && input.resultMaterialized ? "deliver" : "dispatch",
       };
 
       const continuity = {

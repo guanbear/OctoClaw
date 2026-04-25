@@ -5,6 +5,7 @@ import {
   decideExecutionProfile,
   decideModelProfile,
   evaluateShadowPromotion,
+  compareShadowRecommendationToActual,
   recommendModelProfileShadow,
   resolveModelId,
   type ShadowModelRecommendation,
@@ -77,6 +78,18 @@ describe("model policy", () => {
       rollbackTarget: "direct_main",
       reason: "gate_pass_allows_manual_promotion",
     });
+  });
+
+  it("compares shadow recommendation with actual live result without changing live path", () => {
+    const recommendation = recommendModelProfileShadow({ liveProfile: "direct_main", lane: "reply", qualityRisk: "low" });
+    const comparison = compareShadowRecommendationToActual({ recommendation, actualProfile: "direct_main" });
+
+    expect(comparison).toMatchObject({
+      actualProfile: "direct_main",
+      matchedRecommendation: false,
+      livePathChanged: false,
+    });
+    expect(comparison.actualModelId).toBe(resolveModelId("direct_main"));
   });
 });
 

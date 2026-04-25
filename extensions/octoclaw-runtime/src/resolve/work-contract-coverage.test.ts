@@ -563,4 +563,48 @@ describe("WP3 acceptance", () => {
     expect((decision.route_decision as Record<string, unknown>).route).toBe("reply");
     expect((decision.work_contract as Record<string, unknown>).route).toBe("reply");
   });
+
+  it("status/provenance follow-up with execution coverage seals WorkContract from execution_coverage as reply.answer", async () => {
+    const stateKey = "agent:main:wp3-followup-covered";
+    seedAt(stateKey, Date.now() - 5_000, {
+      decision: { route_decision: { route: "delegate", worker_pool: "octoclaw-worker" } },
+      canonicalSessionKey: stateKey,
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: false,
+      delegateTaskContext: { delegateTaskId: "delegate-covered", taskStatus: "running" },
+    });
+
+    const decision = await resolveStatelessPolicyDecision("刚才那个任务判定是啥", {
+      metadata: {
+        _judgeFastConfig: {
+          enabled: false,
+          shadowMode: true,
+          modelId: "test-local-judge",
+          baseUrl: "",
+          apiKey: "",
+          timeoutMs: 1,
+        },
+        session_key: stateKey,
+        conversation_control: {
+          intent_class: "execution_followup",
+          status_followup: true,
+        },
+      },
+    });
+
+    expect((decision.route_decision as Record<string, unknown>).route).toBe("reply");
+    expect(decision.work_contract).toMatchObject({
+      route: "reply",
+      decisionSource: "execution_coverage",
+      replyMode: "answer",
+    });
+    expect(decision._execution_coverage_packet).toMatchObject({
+      route: "reply",
+      replyMode: "answer",
+      dispatchExecuted: true,
+      spawnExecuted: false,
+    });
+    expect((decision.router_decision_v2 as Record<string, unknown>).compatibility_view).toBe(true);
+  });
 });
