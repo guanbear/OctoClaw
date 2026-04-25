@@ -1459,7 +1459,11 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         const timeoutExecutionOverride = asBoolean(timeoutExecutionLayer.supports_provenance_reply)
           || asBoolean(timeoutExecutionLayer.supports_status_reply);
         const timeoutRequiresRefresh = asBoolean(timeoutExecutionLayer.requires_control_plane_refresh);
-        if (timeoutExecutionOverride || timeoutRequiresRefresh) {
+        const timeoutIsFollowup = intentClass === "execution_followup"
+          || asBoolean(conversationControl.require_state_grounding)
+          || asBoolean(conversationControl.provenance_followup)
+          || asBoolean(conversationControl.status_followup);
+        if ((timeoutExecutionOverride || timeoutRequiresRefresh) && timeoutIsFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
           deterministicFallbackApplied = true;
@@ -1511,44 +1515,50 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           || asBoolean(executionCoverage.supports_status_reply);
         const requiresControlPlaneRefresh = asBoolean(executionCoverage.requires_control_plane_refresh);
 
-        if (executionCoverageOverride) {
+        const isExecutionOrStatusFollowup = intentClass === "execution_followup"
+          || asBoolean(conversationControl.require_state_grounding)
+          || asBoolean(conversationControl.provenance_followup)
+          || asBoolean(conversationControl.status_followup);
+
+        let executionOverrideApplied = false;
+
+        if (executionCoverageOverride && isExecutionOrStatusFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
-          validatorOverrideReasons.push("validator:execution_coverage_override→reply");
+          executionOverrideApplied = true;
+          validatorOverrideReasons.push("validator:execution_coverage_override→reply(intent_guard)");
           if (process.env.OCTOCLAW_JUDGE_DEBUG) {
-            console.log(`[octoclaw-judge] execution coverage override: supports_provenance_reply=${asBoolean(executionCoverage.supports_provenance_reply)} supports_status_reply=${asBoolean(executionCoverage.supports_status_reply)}, forcing reply`);
+            console.log(`[octoclaw-judge] execution coverage override: supports_provenance_reply=${asBoolean(executionCoverage.supports_provenance_reply)} supports_status_reply=${asBoolean(executionCoverage.supports_status_reply)} intent=${intentClass}, forcing reply`);
           }
-        } else if (requiresControlPlaneRefresh) {
+        } else if (requiresControlPlaneRefresh && isExecutionOrStatusFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
-          validatorOverrideReasons.push("validator:execution_requires_control_plane_refresh→reply");
+          executionOverrideApplied = true;
+          validatorOverrideReasons.push("validator:execution_requires_control_plane_refresh→reply(intent_guard)");
           if (process.env.OCTOCLAW_JUDGE_DEBUG) {
-            console.log(`[octoclaw-judge] execution coverage override: requires_control_plane_refresh=true, forcing reply/control-plane refresh`);
+            console.log(`[octoclaw-judge] execution coverage override: requires_control_plane_refresh=true intent=${intentClass}, forcing reply/control-plane refresh`);
           }
         }
 
-        if (!executionCoverageOverride && !requiresControlPlaneRefresh && toolNeedHint === "required" && judgeRouteOverride === "reply") {
+        if (!executionOverrideApplied && toolNeedHint === "required" && judgeRouteOverride === "reply") {
           if (judgeScope === "unknown") {
-            // tool_need_hint==required && scope==unknown → clarify before delegate
             judgeRouteOverride = "delegate";
             judgeSucceeded = true;
             validatorOverrideReasons.push("validator:tool_need_required+scope_unknown→delegate(reply_mode=clarify)");
           } else {
-            // tool_need_hint==required → prefer delegate
             judgeRouteOverride = "delegate";
             judgeSucceeded = true;
             validatorOverrideReasons.push("validator:tool_need_required→delegate");
           }
-        } else if (durationHint === "long" && judgeRouteOverride === "reply") {
-          // duration_hint==long → prefer delegate
+        } else if (!executionOverrideApplied && durationHint === "long" && judgeRouteOverride === "reply") {
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push("validator:duration_long→delegate");
-        } else if (conversationRouteHint === "delegate" && judgeRouteOverride === "reply") {
+        } else if (!executionOverrideApplied && conversationRouteHint === "delegate" && judgeRouteOverride === "reply") {
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push("validator:conversation_control_route_hint_delegate→delegate");
-        } else if ((intentClass === "execution_followup" || intentClass === "fresh_live_lookup") && judgeRouteOverride === "reply") {
+        } else if (!executionOverrideApplied && (intentClass === "execution_followup" || intentClass === "fresh_live_lookup") && judgeRouteOverride === "reply") {
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);

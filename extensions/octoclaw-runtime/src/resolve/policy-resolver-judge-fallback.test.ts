@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveStatelessPolicyDecision } from "./policy-resolver.js";
+import { policyState } from "../state/policy-state.js";
 
 const localJudgeConfig = {
   enabled: true,
@@ -140,6 +141,185 @@ describe("policy resolver judge timeout fallback", () => {
       route: "delegate",
       judge_timeout: true,
       fallback_reason: "deterministic_hard_boundary:tool_need",
+    });
+  });
+});
+
+describe("execution coverage override intent guard", () => {
+  const testKeys = [
+    "intent-guard-test-session",
+    "intent-guard-followup-session",
+    "intent-guard-timeout-new-task",
+    "intent-guard-timeout-followup",
+  ];
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    for (const key of testKeys) policyState.clear(key);
+  });
+
+  afterEach(() => {
+    for (const key of testKeys) policyState.clear(key);
+  });
+
+  it("does NOT force reply for new task when prior receipt exists but intent is NOT follow-up", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.85),
+    );
+
+    const priorKey = "intent-guard-test-session";
+    policyState.set(priorKey, {
+      decision: {
+        route_decision: { route: "reply" },
+      },
+      canonicalSessionKey: priorKey,
+      toolsUsed: ["web_fetch"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+
+    const decision = await resolveStatelessPolicyDecision(
+      "帮我写个Python脚本转换CSV到JSON",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: priorKey,
+          judge_session_keys: [priorKey],
+          conversation_control: {
+            intent_class: "undetermined",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "judge",
+    });
+  });
+
+  it("forces reply for execution_followup when prior receipt exists", async () => {
+    vi.useFakeTimers();
+    const priorKey = "intent-guard-followup-session";
+
+    vi.setSystemTime(Date.now() - 5_000);
+    policyState.set(priorKey, {
+      decision: {
+        route_decision: { route: "reply" },
+      },
+      canonicalSessionKey: priorKey,
+      toolsUsed: ["web_fetch"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+    vi.setSystemTime(Date.now() + 5_000);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: priorKey,
+          judge_session_keys: [priorKey],
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    );
+
+    vi.useRealTimers();
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("does NOT force reply on timeout for new task when prior receipt exists", async () => {
+    vi.useFakeTimers();
+    const priorKey = "intent-guard-timeout-new-task";
+
+    vi.setSystemTime(Date.now() - 5_000);
+    policyState.set(priorKey, {
+      decision: {
+        route_decision: { route: "reply" },
+      },
+      canonicalSessionKey: priorKey,
+      toolsUsed: ["web_fetch"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+    vi.setSystemTime(Date.now() + 5_000);
+
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      new DOMException("timeout", "AbortError"),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "帮我写个Python脚本转换CSV到JSON",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: priorKey,
+          judge_session_keys: [priorKey],
+          tool_need_hint: "required",
+          conversation_control: {
+            intent_class: "undetermined",
+          },
+        },
+      },
+    );
+
+    vi.useRealTimers();
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "fallback",
+      judge_timeout: true,
+    });
+  });
+
+  it("forces reply on timeout for execution_followup when prior receipt exists", async () => {
+    vi.useFakeTimers();
+    const priorKey = "intent-guard-timeout-followup";
+
+    vi.setSystemTime(Date.now() - 5_000);
+    policyState.set(priorKey, {
+      decision: {
+        route_decision: { route: "reply" },
+      },
+      canonicalSessionKey: priorKey,
+      toolsUsed: ["web_fetch"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+    vi.setSystemTime(Date.now() + 5_000);
+
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      new DOMException("timeout", "AbortError"),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: priorKey,
+          judge_session_keys: [priorKey],
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    );
+
+    vi.useRealTimers();
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "fallback",
+      judge_timeout: true,
     });
   });
 });
