@@ -21,6 +21,7 @@ export default defineConfig({
       { find: "@octoclaw/contracts/schemas", replacement: sourcePath("packages/octoclaw-contracts/src/schemas.ts") },
       { find: "@octoclaw/contracts/telemetry", replacement: sourcePath("packages/octoclaw-contracts/src/telemetry.ts") },
       { find: "@octoclaw/contracts/thread-binding", replacement: sourcePath("packages/octoclaw-contracts/src/thread-binding.ts") },
+      { find: "@octoclaw/contracts/work-contract", replacement: sourcePath("packages/octoclaw-contracts/src/work-contract.ts") },
       { find: "@octoclaw/contracts", replacement: sourcePath("packages/octoclaw-contracts/src/schemas.ts") },
       { find: "@octoclaw/policy/admission", replacement: sourcePath("packages/octoclaw-policy/src/admission/index.ts") },
       { find: "@octoclaw/policy/caps", replacement: sourcePath("packages/octoclaw-policy/src/caps/index.ts") },

@@ -1444,7 +1444,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       if (judgeResult === null) {
         const conversationControl = asRecord(metadata.conversation_control);
         const intentClass = asString(conversationControl.intent_class);
-        const intentRequiresDelegation = ["fresh_live_lookup", "execution_followup"].includes(intentClass)
+        const intentRequiresDelegation = intentClass === "fresh_live_lookup"
           || asBoolean(conversationControl.require_fresh_lookup)
           || asBoolean(conversationControl.require_state_grounding);
         const toolNeedHint = asString(metadata.tool_need_hint);
@@ -1463,12 +1463,22 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           || asBoolean(conversationControl.require_state_grounding)
           || asBoolean(conversationControl.provenance_followup)
           || asBoolean(conversationControl.status_followup);
+        const isFollowupNoCoverage = intentClass === "execution_followup"
+          && !timeoutExecutionOverride
+          && !timeoutRequiresRefresh;
         if ((timeoutExecutionOverride || timeoutRequiresRefresh) && timeoutIsFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
           deterministicFallbackApplied = true;
           judgeShadowLog = judgeShadowLog ?? {};
           judgeShadowLog.fallback_reason = `timeout_execution_coverage_override:${timeoutExecutionOverride ? "provenance/status_reply" : "control_plane_refresh"}`;
+          judgeShadowLog.final_judge_route = "reply";
+        } else if (isFollowupNoCoverage) {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          deterministicFallbackApplied = true;
+          judgeShadowLog = judgeShadowLog ?? {};
+          judgeShadowLog.fallback_reason = "timeout_execution_followup_no_coverage→reply(no_verifiable_record)";
           judgeShadowLog.final_judge_route = "reply";
         } else if (hardBoundarySignals.some(Boolean)) {
           // Deterministic hard-boundary: high-risk task must not default to reply
@@ -1559,9 +1569,15 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeSucceeded = true;
           validatorOverrideReasons.push("validator:conversation_control_route_hint_delegate→delegate");
         } else if (!executionOverrideApplied && (intentClass === "execution_followup" || intentClass === "fresh_live_lookup") && judgeRouteOverride === "reply") {
-          judgeRouteOverride = "delegate";
-          judgeSucceeded = true;
-          validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);
+          if (intentClass === "execution_followup") {
+            judgeRouteOverride = "reply";
+            judgeSucceeded = true;
+            validatorOverrideReasons.push("validator:execution_followup_no_coverage→reply(no_verifiable_record)");
+          } else {
+            judgeRouteOverride = "delegate";
+            judgeSucceeded = true;
+            validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);
+          }
         }
         // tool_need_hint==none && duration_hint==short → reply remains eligible (no override needed)
 

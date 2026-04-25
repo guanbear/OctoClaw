@@ -322,4 +322,95 @@ describe("execution coverage override intent guard", () => {
       judge_timeout: true,
     });
   });
+
+  it("case A: execution_followup + no coverage + judge=reply → stays reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("case B: execution_followup + no coverage + judge timeout → forced reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      new DOMException("timeout", "AbortError"),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "你是自己查的还是子agent查的",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "fallback",
+      judge_timeout: true,
+    });
+  });
+
+  it("case C: new task + no coverage + tool_need=required → delegate", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "帮我写个Python脚本转换CSV到JSON",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          tool_need_hint: "required",
+          conversation_control: {
+            intent_class: "undetermined",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+    });
+  });
+
+  it("case D: fresh_live_lookup + no coverage → delegate", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "查一下 OpenClaw 4.22 新特性",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "fresh_live_lookup",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+    });
+  });
 });

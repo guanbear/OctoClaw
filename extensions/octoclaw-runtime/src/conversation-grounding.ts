@@ -112,8 +112,8 @@ const META_PROMPT_PATTERNS = [
   /\b(how did you check|how was this checked|was this runner|was this spawn(?:_single)?|did the single succeed)\b/iu,
 ];
 const PROVENANCE_PROMPT_PATTERNS = [
-  /(谁查的|谁做的|谁处理的|谁执行的|是不是子任务做的|是不是主agent自己查的)/iu,
-  /\b(who handled this|who answered this|was this delegated|was this a subtask)\b/iu,
+  /(谁查的|谁做的|谁处理的|谁执行的|是不是子任务做的|是不是主agent自己查的|自己查的还是|自己做的还是)/iu,
+  /\b(who handled this|who answered this|was this delegated|was this a subtask|did you look that up yourself|did you do it yourself)\b/iu,
 ];
 const TASK_PROGRESS_PROMPT_PATTERNS = [
   /((?:single|spawn|runner)\s*成功了吗|任务怎样了|任务怎么样了|现在什么状态|还在\s*queued\s*吗|还在排队吗)/iu,

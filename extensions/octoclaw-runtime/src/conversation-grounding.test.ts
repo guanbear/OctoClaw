@@ -222,3 +222,128 @@ describe("conversation grounding route projection", () => {
     expect((decision.request as { metadata: { objection_requested_route: string } }).metadata.objection_requested_route).toBe("reply");
   });
 });
+
+describe("Chinese provenance prompt intent classification", () => {
+  it("classifies provenance follow-up with prior replay history as execution_followup", () => {
+    const dir = path.join("/tmp", `octoclaw-provenance-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const replayLogPath = path.join(dir, "runtime-policy-replay.jsonl");
+    const taskStatePath = path.join(dir, "task-state.json");
+
+    fs.writeFileSync(replayLogPath, [
+      JSON.stringify({
+        event: "policy_resolved",
+        sessionKey: "test-session",
+        sessionId: "test-session",
+        at: new Date(Date.now() - 30_000).toISOString(),
+        prompt: "查一下 guanzhicheng.com 的 SSL 证书到期时间",
+        route: "reply",
+        taskClass: "main_direct",
+      }),
+      JSON.stringify({
+        event: "tool_used",
+        sessionKey: "test-session",
+        sessionId: "test-session",
+        at: new Date(Date.now() - 25_000).toISOString(),
+        toolName: "web_fetch",
+      }),
+      JSON.stringify({
+        event: "agent_end",
+        sessionKey: "test-session",
+        sessionId: "test-session",
+        at: new Date(Date.now() - 20_000).toISOString(),
+        directToolsSeen: ["web_fetch"],
+        delegated: false,
+      }),
+    ].join("\n"));
+    fs.writeFileSync(taskStatePath, JSON.stringify({ tasks: [] }));
+
+    const intent = buildConversationIntentPacket({
+      prompt: "你是自己查的还是子agent查的",
+      replayLogPath,
+      taskStatePath,
+      sessionKeys: ["test-session"],
+    });
+
+    expect(intent.intent_class).toBe("execution_followup");
+    expect(intent.reason_codes).toContain("recent_execution_followup");
+  });
+
+  it("classifies '谁查的' with history as execution_followup", () => {
+    const dir = path.join("/tmp", `octoclaw-provenance-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const replayLogPath = path.join(dir, "runtime-policy-replay.jsonl");
+    const taskStatePath = path.join(dir, "task-state.json");
+
+    fs.writeFileSync(replayLogPath, [
+      JSON.stringify({
+        event: "policy_resolved",
+        sessionKey: "test-session",
+        sessionId: "test-session",
+        at: new Date(Date.now() - 60_000).toISOString(),
+        prompt: "查一下 redis 连接状态",
+        route: "reply",
+      }),
+    ].join("\n"));
+    fs.writeFileSync(taskStatePath, JSON.stringify({ tasks: [] }));
+
+    const intent = buildConversationIntentPacket({
+      prompt: "谁查的",
+      replayLogPath,
+      taskStatePath,
+      sessionKeys: ["test-session"],
+    });
+
+    expect(intent.intent_class).toBe("execution_followup");
+  });
+
+  it("classifies '你是怎么查到的' with history as execution_followup", () => {
+    const dir = path.join("/tmp", `octoclaw-provenance-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const replayLogPath = path.join(dir, "runtime-policy-replay.jsonl");
+    const taskStatePath = path.join(dir, "task-state.json");
+
+    fs.writeFileSync(replayLogPath, [
+      JSON.stringify({
+        event: "policy_resolved",
+        sessionKey: "test-session",
+        sessionId: "test-session",
+        at: new Date(Date.now() - 30_000).toISOString(),
+        prompt: "查一下 nginx 配置",
+        route: "reply",
+      }),
+    ].join("\n"));
+    fs.writeFileSync(taskStatePath, JSON.stringify({ tasks: [] }));
+
+    const intent = buildConversationIntentPacket({
+      prompt: "你是怎么查到的",
+      replayLogPath,
+      taskStatePath,
+      sessionKeys: ["test-session"],
+    });
+
+    expect(intent.intent_class).toBe("execution_followup");
+  });
+
+  it("does NOT classify '帮我写个Python脚本' as execution_followup", () => {
+    const intent = buildConversationIntentPacket({
+      prompt: "帮我写个Python脚本转换CSV到JSON",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: ["test-session"],
+    });
+
+    expect(intent.intent_class).not.toBe("execution_followup");
+  });
+
+  it("provenance without history → undetermined (no prior turn to follow up on)", () => {
+    const intent = buildConversationIntentPacket({
+      prompt: "你是自己查的还是子agent查的",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: ["test-session"],
+    });
+
+    expect(intent.intent_class).toBe("undetermined");
+  });
+});
