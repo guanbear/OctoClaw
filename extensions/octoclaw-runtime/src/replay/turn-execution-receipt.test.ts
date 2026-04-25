@@ -90,4 +90,17 @@ describe("TurnExecutionReceipt", () => {
     expect(receipt.nativeTaskId).toBe("native-task-xyz");
     expect(receipt.nativeFlowId).toBe("native-flow-abc");
   });
+
+  it("uses explicit completedAt timestamp when provided", () => {
+    const completedAt = Date.now() - 60 * 60_000;
+    const state = {
+      canonicalSessionKey: "test-session",
+      delegated: false,
+      decision: { route_decision: { route: "reply" } },
+    };
+
+    const receipt = buildTurnExecutionReceipt(state as any, 1000, completedAt);
+
+    expect(receipt.completedAt).toBe(completedAt);
+  });
 });

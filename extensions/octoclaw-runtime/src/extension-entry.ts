@@ -159,6 +159,7 @@ function collectRecentExecutionReceipts(currentSessionKey: string | null = null,
     .map(({ state }) => buildTurnExecutionReceipt(
       state as Parameters<typeof buildTurnExecutionReceipt>[0],
       Math.max(0, Number(state.updatedAt || 0) - Number(state.createdAt || state.updatedAt || 0)),
+      Number(state.updatedAt || state.createdAt || Date.now()) || undefined,
     ));
 }
 

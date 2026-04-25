@@ -105,6 +105,7 @@ function asString(value: unknown, fallback: string | null = null): string | null
 export function buildTurnExecutionReceipt(
   state: PolicyContextState,
   durationMs: number,
+  completedAt?: number,
 ): TurnExecutionReceipt {
   const decision = asRecord(state.decision);
   const routeDecision = asRecord(decision.route_decision);
@@ -134,7 +135,7 @@ export function buildTurnExecutionReceipt(
     delivery.status ?? delivery.delivery_status ?? decision.delivery_status,
   );
   return {
-    turnId: asString(state.canonicalSessionKey, `turn-${Date.now()}`) ?? `turn-${Date.now()}`,
+    turnId: asString(state.canonicalSessionKey) || `turn-${completedAt ?? Date.now()}`,
     sessionKey: asString(state.canonicalSessionKey) ?? "",
     route: asString(routeDecision.route, "reply") ?? "reply",
     delegated,
@@ -150,7 +151,7 @@ export function buildTurnExecutionReceipt(
     outcome: delegated
       ? (status === "completed" ? "completed" : status === "failed" ? "failed" : status === "timeout" || status === "timed_out" ? "timeout" : "unknown")
       : "completed",
-    completedAt: Date.now(),
+    completedAt: completedAt ?? Date.now(),
   };
 }
 

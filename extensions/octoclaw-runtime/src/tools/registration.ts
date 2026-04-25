@@ -1279,6 +1279,10 @@ export function getToolRegistrations(): ToolRegistration[] {
         const executionCoverage = asRecord(
           decisionForCoverage._execution_coverage ?? routeDecisionForCoverage._execution_coverage,
         );
+        const parentRequest = asRecord(asRecord(existingDecisionForCoverage).request);
+        const parentMetadata = asRecord(parentRequest.metadata);
+        const parentConversationControl = asRecord(parentMetadata.conversation_control);
+        const parentIntentClass = asString(parentConversationControl.intent_class);
         if (asBoolean(executionCoverage.supports_provenance_reply)) {
           return toolResponse(JSON.stringify({
             ok: false,
@@ -1300,17 +1304,17 @@ export function getToolRegistrations(): ToolRegistration[] {
             control_plane_refresh_blocked: true,
           }));
         }
-        const taskTextForCoverageGuard = asString(params.task).toLowerCase();
         const hasSupportedExecutionReply = Object.entries(executionCoverage)
           .some(([key, value]) => key.startsWith("supports_") && asBoolean(value));
         const coverageLevel = asString(executionCoverage.coverage ?? executionCoverage.coverage_level).toLowerCase();
         const executionTruthMissing = Object.keys(executionCoverage).length === 0 || !coverageLevel || coverageLevel === "none";
-        const provenanceStatusQueryPattern = /\b(who|status|delegated|handled|ran)\b|\bdid you\b|\bsub-?agent\b|\blook up\b/;
-        if (!hasSupportedExecutionReply && executionTruthMissing && provenanceStatusQueryPattern.test(taskTextForCoverageGuard)) {
+        const isExecutionFollowup = parentIntentClass === "execution_followup";
+        if (!hasSupportedExecutionReply && executionTruthMissing && isExecutionFollowup) {
           return toolResponse(JSON.stringify({
             ok: false,
-            error: "Spawn blocked: provenance/status query with no execution truth — answer 'no verifiable record' directly",
+            error: "Spawn blocked: execution follow-up query with no execution truth — answer 'no verifiable record' directly",
             missing_execution_truth_blocked: true,
+            intent_class: parentIntentClass,
           }));
         }
         const parentDecision = asRecord(existingState?.decision);

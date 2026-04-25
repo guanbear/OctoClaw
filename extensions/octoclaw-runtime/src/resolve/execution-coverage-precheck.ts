@@ -1,6 +1,7 @@
 import type { JudgeExecutionLayer } from "@octoclaw/policy/judge";
 import { type TurnExecutionReceipt, buildTurnExecutionReceipt } from "../replay/replay-logger.js";
 import { policyState } from "../state/policy-state.js";
+import { parseSessionRoute } from "./session.js";
 
 type JsonRecord = Record<string, unknown>;
 type TurnExecutionReceiptWithSpawn = TurnExecutionReceipt & { spawnExecuted?: unknown };
@@ -73,6 +74,34 @@ function normalizeSessionKeys(sessionKeys: string[] | string | null): string[] {
   return Array.from(new Set(raw.map((key) => String(key || "").trim()).filter(Boolean)));
 }
 
+function rootSessionKey(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+
+  const parts = value.split(":");
+  const threadMarker = parts.findIndex((part) => {
+    const normalized = part.toLowerCase();
+    return normalized === "thread" || normalized === "topic";
+  });
+  return threadMarker > 0 ? parts.slice(0, threadMarker).join(":") : value;
+}
+
+function deriveSessionAliases(sessionKeys: string[]): Set<string> {
+  const aliases = new Set<string>();
+
+  for (const key of normalizeSessionKeys(sessionKeys)) {
+    aliases.add(key);
+
+    const rootKey = rootSessionKey(key);
+    if (rootKey) aliases.add(rootKey);
+
+    const parsed = parseSessionRoute(key);
+    if (parsed.bindingKey) aliases.add(parsed.bindingKey);
+  }
+
+  return aliases;
+}
+
 /**
  * Collect the most recent TurnExecutionReceipt for the given session key.
  * Strict session isolation — only same canonicalSessionKey.
@@ -82,7 +111,7 @@ function collectLatestReceipt(
   excludeTurnId: string | undefined,
   decisionStartedAt: number,
 ): TurnExecutionReceiptWithSpawn | null {
-  const sessionKeySet = new Set(sessionKeys.map((key) => String(key || "").trim()).filter(Boolean));
+  const sessionKeySet = deriveSessionAliases(sessionKeys);
   if (sessionKeySet.size === 0) return null;
 
   let best: TurnExecutionReceiptWithSpawn | null = null;
@@ -91,7 +120,11 @@ function collectLatestReceipt(
   for (const { state } of policyState.entries()) {
     if (!isRecord(state?.decision)) continue;
     const stateSession = asString(state.canonicalSessionKey);
-    if (!stateSession || !sessionKeySet.has(stateSession)) continue;
+    const stateBinding = asString(state.session_binding_key);
+    if (
+      (!stateSession || !sessionKeySet.has(stateSession))
+      && (!stateBinding || !sessionKeySet.has(stateBinding))
+    ) continue;
 
     if (excludeTurnId && entryTurnId(state) === excludeTurnId) continue;
 
@@ -100,7 +133,7 @@ function collectLatestReceipt(
     if (updatedAt > bestUpdatedAt) {
       bestUpdatedAt = updatedAt;
       best = attachExplicitSpawnReceipt(
-        buildTurnExecutionReceipt(state, Math.max(0, updatedAt - Number(state.createdAt || updatedAt))),
+        buildTurnExecutionReceipt(state, Math.max(0, updatedAt - Number(state.createdAt || updatedAt)), updatedAt || undefined),
         state,
       );
     }
