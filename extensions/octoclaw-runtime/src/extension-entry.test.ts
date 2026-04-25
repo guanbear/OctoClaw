@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveDelegationCapability } from "./extension-entry.js";
+import { buildPromptContextProjection, resolveDelegationCapability } from "./extension-entry.js";
 
 describe("resolveDelegationCapability", () => {
   it("fails closed when delegation is requested but host detached runtime support is missing", () => {
@@ -45,5 +45,28 @@ describe("resolveDelegationCapability", () => {
       enabled: false,
       reason: "disabled_by_config",
     });
+  });
+});
+
+
+describe("buildPromptContextProjection", () => {
+  it("keeps route policy projections out of user prependContext", () => {
+    const projected = buildPromptContextProjection({
+      prependSystem: ["Use status tools for status questions."],
+      contextPayload: "route=delegate | worker_pool=octoclaw-research | allowed_control_tools=octoclaw_status",
+      shouldInjectPolicyProjection: true,
+    });
+
+    expect(projected?.prependContext).toBeUndefined();
+    expect(projected?.prependSystemContext).toContain("[OctoClaw policy projection]");
+    expect(projected?.prependSystemContext).toContain("route=delegate");
+  });
+
+  it("returns undefined when there is nothing to inject", () => {
+    expect(buildPromptContextProjection({
+      prependSystem: [],
+      contextPayload: "",
+      shouldInjectPolicyProjection: false,
+    })).toBeUndefined();
   });
 });

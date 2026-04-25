@@ -130,6 +130,26 @@ function runTaskStateRetention(logger?: LoggerLike): void {
   }
 }
 
+
+export function buildPromptContextProjection(input: {
+  prependSystem: string[];
+  contextPayload: string;
+  shouldInjectPolicyProjection: boolean;
+}): { prependSystemContext?: string; prependContext?: string } | undefined {
+  const systemContext = [...input.prependSystem];
+  if (input.shouldInjectPolicyProjection && input.contextPayload) {
+    systemContext.push([
+      "[OctoClaw policy projection]",
+      input.contextPayload,
+      "[/OctoClaw policy projection]",
+    ].join("\n"));
+  }
+  if (systemContext.length === 0) return undefined;
+  return {
+    prependSystemContext: systemContext.join("\n\n"),
+  };
+}
+
 function asRecord(value: unknown): UnknownRecord {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as UnknownRecord
@@ -686,11 +706,11 @@ export const plugin = {
       if (hasDedupKey && shouldInjectPrependContext) {
         lastGroundedPromptByStateKey.set(stateKey, promptKey);
       }
-      if (prependSystem.length === 0 && !shouldInjectPrependContext) return;
-      return {
-        prependSystemContext: prependSystem.length > 0 ? prependSystem.join("\n\n") : undefined,
-        prependContext: shouldInjectPrependContext ? contextPayload : undefined,
-      };
+      return buildPromptContextProjection({
+        prependSystem,
+        contextPayload,
+        shouldInjectPolicyProjection: shouldInjectPrependContext,
+      });
     });
 
     registerLifecycleHook("before_tool_call", async (event, ctx) => {
