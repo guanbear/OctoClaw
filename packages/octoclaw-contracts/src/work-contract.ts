@@ -388,6 +388,8 @@ export interface CompactWorkContractView {
   nativeFlowId?: string;
   childSessionKey?: string;
   nextAction?: string;
+  allowedTools?: string[];
+  forbiddenTools?: string[];
 }
 
 /**
@@ -407,5 +409,7 @@ export function compactWorkContractView(contract: WorkContract): CompactWorkCont
     nativeFlowId: contract.delegate?.nativeBinding?.flowId,
     childSessionKey: contract.delegate?.nativeBinding?.childSessionKey,
     nextAction: contract.delegate?.nextAction ?? contract.mainContext.nextAction,
+    allowedTools: contract.reply?.allowedTools,
+    forbiddenTools: contract.reply?.forbiddenTools,
   };
 }

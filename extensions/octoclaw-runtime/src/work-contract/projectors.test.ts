@@ -63,6 +63,26 @@ describe("work contract projectors", () => {
       artifactRefs: ["artifact-1"],
     });
   });
+
+  it("projectMainContextPacket sanitizes parent-visible content", () => {
+    const contract = buildWorkContractFromPolicy(
+      "session-3",
+      "Check projected context",
+      "delegated_work",
+      coverage,
+      buildWorkDecisionSeal("local_judge", "delegate", ["worker_running"]),
+      { delegate },
+    );
+    contract.mainContext.summary = "raw route rationale: internal\nUser-visible: compact";
+    (contract.mainContext as unknown as Record<string, unknown>).childTranscript = "full child transcript";
+
+    const rendered = JSON.stringify(projectMainContextPacket(contract));
+
+    expect(rendered).not.toContain("raw route rationale");
+    expect(rendered).not.toContain("full child transcript");
+    expect(rendered).toContain("User-visible: compact");
+    expect(rendered).toContain(contract.workContractId);
+  });
 });
 
 const coverage: ContextCoverageSnapshot = {

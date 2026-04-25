@@ -58,6 +58,29 @@ describe("context budget utilities", () => {
     expect(rendered).toContain("User-visible: hello");
   });
 
+  it("removes parent-visible raw transcript and route rationale keys", () => {
+    const sanitized = sanitizeMainContextInjection({
+      summary: "User-visible: compact status",
+      full_transcript: "private thread",
+      childTranscript: "worker raw transcript",
+      rawRouteRationale: "internal router notes",
+      raw_execution_log: "tool stdout",
+      nested: {
+        worker_chain_of_thought: "hidden",
+        message: "raw route rationale: internal\nUser-visible: ok",
+      },
+    });
+    const rendered = JSON.stringify(sanitized);
+
+    expect(rendered).not.toContain("private thread");
+    expect(rendered).not.toContain("worker raw transcript");
+    expect(rendered).not.toContain("internal router notes");
+    expect(rendered).not.toContain("tool stdout");
+    expect(rendered).not.toContain("hidden");
+    expect(rendered).not.toContain("raw route rationale");
+    expect(rendered).toContain("User-visible: ok");
+  });
+
   it("over-budget sanitized packet keeps only status and artifact refs", () => {
     const sanitized = sanitizeMainContextInjection({
       schemaVersion: "octoclaw.main_resume.v1",

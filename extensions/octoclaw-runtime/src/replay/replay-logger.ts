@@ -984,6 +984,7 @@ export function buildRolloutFlags(decision?: Record<string, unknown>): Record<st
 
 export function preHintAllowedTools(decision: Record<string, unknown>, routeHintTool: string): Set<string> {
   const toolPolicy = asRecord(decision.tool_policy);
+  const workContract = asRecord(decision.work_contract);
   const allowed = new Set([routeHintTool, "octoclaw_status", "octoclaw_task_action"].filter(Boolean));
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   if (delegateTool) {
@@ -992,36 +993,51 @@ export function preHintAllowedTools(decision: Record<string, unknown>, routeHint
   for (const toolName of asStringArray(toolPolicy.allowed_control_tools)) {
     allowed.add(toolName);
   }
+  for (const toolName of asStringArray(workContract.allowedTools ?? workContract.allowed_tools)) {
+    allowed.add(toolName);
+  }
   return allowed;
 }
 
 export function observerControlTools(decision: Record<string, unknown>, routeHintTool: string): Set<string> {
   const toolPolicy = asRecord(decision.tool_policy);
+  const workContract = asRecord(decision.work_contract);
   const allowed = new Set(asStringArray(toolPolicy.observer_control_tools));
   if (routeHintTool) allowed.add(String(routeHintTool).trim());
   allowed.add("octoclaw_status");
   allowed.add("octoclaw_task_action");
   allowed.add("session_status");
+  for (const toolName of asStringArray(workContract.allowedTools ?? workContract.allowed_tools)) {
+    allowed.add(toolName);
+  }
   return allowed;
 }
 
 export function sessionControlTools(decision: Record<string, unknown>, routeHintTool: string): Set<string> {
   const toolPolicy = asRecord(decision.tool_policy);
+  const workContract = asRecord(decision.work_contract);
   const allowed = new Set(asStringArray(toolPolicy.session_control_tools));
   if (routeHintTool) allowed.add(String(routeHintTool).trim());
   allowed.add("octoclaw_status");
   allowed.add("session_status");
+  for (const toolName of asStringArray(workContract.allowedTools ?? workContract.allowed_tools)) {
+    allowed.add(toolName);
+  }
   return allowed;
 }
 
 export function runnerWorkflowTools(decision: Record<string, unknown>, routeHintTool: string): Set<string> {
   const toolPolicy = asRecord(decision.tool_policy);
+  const workContract = asRecord(decision.work_contract);
   const allowed = new Set(asStringArray(toolPolicy.allowed_control_tools));
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   if (delegateTool) allowed.add(delegateTool);
   if (routeHintTool) allowed.add(String(routeHintTool).trim());
   allowed.add("octoclaw_status");
   allowed.add("octoclaw_task_action");
+  for (const toolName of asStringArray(workContract.allowedTools ?? workContract.allowed_tools)) {
+    allowed.add(toolName);
+  }
   return allowed;
 }
 
@@ -1048,8 +1064,13 @@ export function workflowEnforcementRule(
 ): { block: boolean; delegateTool?: string; allowedTools: string[]; route?: string } {
   const route = String(asRecord(decision.route_decision).route ?? "").trim();
   const toolPolicy = asRecord(decision.tool_policy);
+  const workContract = asRecord(decision.work_contract);
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   const allowedTools = runnerWorkflowTools(decision, routeHintTool);
+  const forbiddenTools = new Set(asStringArray(workContract.forbiddenTools ?? workContract.forbidden_tools));
+  if (forbiddenTools.has(toolName)) {
+    return { block: true, route, delegateTool, allowedTools: [...allowedTools] };
+  }
   const workflowRequired = DELEGATED_ROUTE_NAMES.has(route);
   if (!workflowRequired) {
     return { block: false, route, delegateTool, allowedTools: [...allowedTools] };

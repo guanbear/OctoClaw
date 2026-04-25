@@ -2,6 +2,7 @@ import type {
   MainContextPacket,
   WorkContract,
 } from "@octoclaw/contracts/work-contract";
+import { sanitizeMainContextInjection } from "../context/context-budget.js";
 import { buildContinuationHandle } from "./continuity.js";
 
 export function projectMainContextPacket(contract: WorkContract): MainContextPacket {
@@ -11,7 +12,7 @@ export function projectMainContextPacket(contract: WorkContract): MainContextPac
     ? { handle: continuationHandle, preferredMode, text: "resume_dont_restart" as const }
     : contract.mainContext.continuationHint;
 
-  return {
+  const packet: MainContextPacket = {
     summary: contract.mainContext.summary,
     statusLine: contract.mainContext.statusLine,
     visibleIds: {
@@ -31,6 +32,8 @@ export function projectMainContextPacket(contract: WorkContract): MainContextPac
     tokenBudget: contract.mainContext.tokenBudget,
     forbiddenContent: contract.mainContext.forbiddenContent,
   };
+
+  return sanitizeMainContextInjection(packet) as MainContextPacket;
 }
 
 export interface DelegateStatusProjection {
@@ -44,7 +47,7 @@ export interface DelegateStatusProjection {
 }
 
 export function projectDelegateStatusPacket(contract: WorkContract): DelegateStatusProjection {
-  return {
+  const packet: DelegateStatusProjection = {
     workContractId: contract.workContractId,
     delegateTaskId: contract.delegate?.delegateTaskId,
     status: contract.status,
@@ -53,4 +56,6 @@ export function projectDelegateStatusPacket(contract: WorkContract): DelegateSta
     nativeFlowId: contract.delegate?.nativeBinding?.flowId,
     artifactRefs: (contract.delegate?.artifactRefs || []).map((ref) => ref.artifactId),
   };
+
+  return sanitizeMainContextInjection(packet) as DelegateStatusProjection;
 }

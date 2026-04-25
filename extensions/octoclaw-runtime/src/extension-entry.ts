@@ -123,6 +123,12 @@ function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => stringValue(item)).filter(Boolean)
+    : [];
+}
+
 function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
   if (receipts.length === 0) return "";
   const lines = receipts.map((r, i) => {
@@ -824,6 +830,26 @@ export const plugin = {
       }
 
       const toolPolicy = asRecord(decision.tool_policy);
+      const workContractProjection = asRecord(decision.work_contract);
+      const forbiddenContractTools = new Set(stringArray(workContractProjection.forbiddenTools || workContractProjection.forbidden_tools));
+      if (forbiddenContractTools.has(toolName)) {
+        await recordPolicyReplay(
+          "tool_blocked_work_contract_forbidden",
+          {
+            sessionKey: stateKey || "",
+            sessionId: stringValue(ctx.sessionId),
+            route: stringValue(workContractProjection.route || asRecord(decision.route_decision).route),
+            toolName,
+            workContractId: stringValue(workContractProjection.workContractId || workContractProjection.work_contract_id),
+          },
+          pi.logger,
+          decision,
+        );
+        return {
+          block: true,
+          blockReason: `OctoClaw WorkContract forbids ${toolName} for this turn.`,
+        };
+      }
       const blockedPatterns = Array.isArray(toolPolicy.block_tool_patterns)
         ? toolPolicy.block_tool_patterns.map((item) => stringValue(item)).filter(Boolean)
         : [];

@@ -94,6 +94,25 @@ describe("ack-guard: canonical resolver integration", () => {
       const result = resolveRoutePhase({}, { routePhase: "delegate" });
       expect(result).toBe("delegate");
     });
+
+    it("does not infer ACK route from judge or router raw fields", () => {
+      const result = resolveRoutePhase({
+        _judge_route: "delegate",
+        router_decision_v2: { request_kind: "delegated_task" },
+      });
+
+      expect(result).toBe("pre_route");
+    });
+
+    it("uses WorkContract projection for ACK route phase", () => {
+      const result = resolveRoutePhase({
+        _judge_route: "reply",
+        router_decision_v2: { request_kind: "reply" },
+        work_contract: { workContractId: "wc-1", route: "delegate" },
+      });
+
+      expect(result).toBe("delegate");
+    });
   });
 
   describe("threadKeyFromSessionKey uses canonical threadKey", () => {

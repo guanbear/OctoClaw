@@ -36,14 +36,42 @@ function estimateTokens(value: unknown): number {
 function removeForbiddenText(text: string): string {
   return text
     .replace(/\[Thread history - for context\][\s\S]*?(?=(User-visible:|$))/gi, "")
+    .replace(/full[_ -]?transcript:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
+    .replace(/child[_ -]?transcript:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
+    .replace(/raw[_ -]?thread[_ -]?history:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
     .replace(/internal route\/delegation rationale:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
     .replace(/internal route rationale:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
+    .replace(/raw route rationale:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
     .replace(/delegation rationale:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
     .replace(/contamination guard(?: text)?:[\s\S]*?(?=(User-visible:|\n|$))/gi, "")
     .replace(/worker chain-of-thought:[\s\S]*?(?=(User-visible:|$))/gi, "")
+    .replace(/worker_chain_of_thought:[\s\S]*?(?=(User-visible:|$))/gi, "")
     .replace(/execution log:[\s\S]*?(?=(User-visible:|$))/gi, "")
+    .replace(/raw_execution_log:[\s\S]*?(?=(User-visible:|$))/gi, "")
     .trim();
 }
+
+const FORBIDDEN_CONTEXT_KEYS = new Set([
+  "chainOfThought",
+  "childTranscript",
+  "child_transcript",
+  "contaminationGuard",
+  "contamination_guard_text",
+  "executionLog",
+  "fullTranscript",
+  "full_transcript",
+  "internalRationale",
+  "internal_route_rationale",
+  "rawExecutionLog",
+  "raw_execution_log",
+  "rawRouteRationale",
+  "rawThreadHistory",
+  "raw_thread_history",
+  "routeRationale",
+  "threadHistory",
+  "workerChainOfThought",
+  "worker_chain_of_thought",
+]);
 
 function compactPacket(packet: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -90,7 +118,7 @@ export function sanitizeMainContextInjection<TPacket>(packet: TPacket): TPacket 
     if (value && typeof value === "object") {
       const output: Record<string, unknown> = {};
       for (const [key, nested] of Object.entries(value)) {
-        if (["chainOfThought", "executionLog", "internalRationale", "contaminationGuard"].includes(key)) {
+        if (FORBIDDEN_CONTEXT_KEYS.has(key)) {
           continue;
         }
         output[key] = visit(nested);
