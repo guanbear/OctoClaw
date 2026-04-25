@@ -143,11 +143,42 @@ async function executeDispatch(params: Record<string, unknown>, ctx: Record<stri
 describe("octoclaw_dispatch honesty", () => {
   afterEach(() => {
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
+    policyState.clear("session-runtime-stub-without-evidence");
     envOverrides.workspaceRoot = "";
     for (const dir of tempLedgerPaths.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
     vi.restoreAllMocks();
+  });
+
+  it("does not project runtime truth stubs as completed tasks without execution evidence", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-stub-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+    policyState.set("session-runtime-stub-without-evidence", {
+      prompt: "stub should not become a fake task",
+      delegated: false,
+      decision: {
+        request: { session_key: "session-runtime-stub-without-evidence" },
+        route_decision: { route: "delegate", worker_pool: "octoclaw-research" },
+        runtime_truth: {
+          binding: {
+            taskId: "task-runtime-stub-no-evidence",
+            flowId: "flow-runtime-stub-no-evidence",
+            status: "completed",
+            substrateState: "completed",
+          },
+          recovery: { status: "healthy", reason: "workflow_healthy" },
+        },
+      },
+    });
+
+    const response = await statusTool().execute({ format: "table" }, {});
+    const output = String((response.json as Record<string, unknown>).raw_output);
+
+    expect(output).not.toContain("task-runtime-stub-no-evidence");
+    expect(output).not.toContain("completed(completed) | delegate | elapsed=0s");
+    expect(output).not.toContain("workflow_healthy");
   });
 
   it("status panel projects stale running tasks with elapsed/model/backend fields", async () => {

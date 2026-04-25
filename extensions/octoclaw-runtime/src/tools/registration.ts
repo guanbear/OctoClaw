@@ -90,6 +90,9 @@ function findRuntimeTaskInPolicyState(taskId: string): { sessionKey: string; flo
   for (const { state } of policyState.entries()) {
     const decision = asRecord(state?.decision);
     const runtimeTruth = asRecord(decision.runtime_truth);
+    if (!runtimeTruthHasProjectionEvidence(runtimeTruth, asRecord(state))) {
+      continue;
+    }
     const candidateTaskIds = taskIdsFromRuntimeTruth(runtimeTruth);
     const candidateFlowId = flowIdsFromRuntimeTruth(runtimeTruth)[0] || "";
     const sessionKey = asString(runtimeTruth.sessionKey || asRecord(decision.request).session_key);
@@ -553,11 +556,40 @@ function firstTimestamp(...values: unknown[]): string {
   return "";
 }
 
-function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvidence: boolean; hasSpawnEvidence: boolean; childSessionKey: string; runId: string } {
+function runtimeTruthHasProjectionEvidence(runtimeTruth: UnknownRecord, state: UnknownRecord = {}): boolean {
+  const evidence = asRecord(runtimeTruth.evidence);
+  const delegateTask = asRecord(runtimeTruth.delegateTask);
+  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const nativeBinding = asRecord(delegateAttempt.nativeBinding);
+  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+  const continuity = asRecord(runtimeTruth.childSessionContinuity || runtimeTruth.continuity);
+  return asBoolean(state.dispatchExecuted)
+    || asBoolean(state.dispatch_executed)
+    || asBoolean(state.spawnExecuted)
+    || asBoolean(state.spawn_executed)
+    || asBoolean(state.resultMaterialized)
+    || asBoolean(state.result_materialized)
+    || asBoolean(evidence.dispatchExecuted)
+    || asBoolean(evidence.dispatch_executed)
+    || asBoolean(evidence.spawnExecuted)
+    || asBoolean(evidence.spawn_executed)
+    || asBoolean(evidence.resultMaterialized)
+    || asBoolean(evidence.result_materialized)
+    || Boolean(asString(delegateTask.delegateTaskId))
+    || Boolean(asString(delegateAttempt.attemptId || delegateAttempt.status))
+    || Boolean(asString(nativeBinding.nativeTaskId || nativeBinding.nativeFlowId || nativeBinding.runId))
+    || Boolean(asString(nativeTaskBinding.nativeTaskId || nativeTaskBinding.nativeFlowId || nativeTaskBinding.runId))
+    || Boolean(asString(continuity.childSessionKey || continuity.runId));
+}
+
+function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvidence: boolean; hasSpawnEvidence: boolean; resultMaterialized: boolean; childSessionKey: string; runId: string } {
   const artifacts = asRecord(record.artifacts);
   const runtimeTruth = asRecord(artifacts.runtime_truth);
   const evidence = asRecord(runtimeTruth.evidence);
   const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
+  const nativeBinding = asRecord(delegateAttempt.nativeBinding);
+  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
+  const delivery = asRecord(runtimeTruth.delivery || runtimeTruth.resultDelivery);
   const continuity = asRecord(runtimeTruth.childSessionContinuity || runtimeTruth.continuity);
   const childSessionKey = optionalString(
     record.childSessionKey,
@@ -581,23 +613,37 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
     || asBoolean(record.dispatch_executed)
     || asBoolean(evidence.dispatchExecuted)
     || asBoolean(evidence.dispatch_executed)
+    || asBoolean(delegateAttempt.dispatchExecuted)
+    || asBoolean(delegateAttempt.dispatch_executed)
+    || Boolean(asString(nativeBinding.nativeFlowId || nativeTaskBinding.nativeFlowId))
     || Boolean(asString(record.flow_id));
   const hasSpawnEvidence = asBoolean(record.spawnExecuted)
     || asBoolean(record.spawn_executed)
     || asBoolean(evidence.spawnExecuted)
     || asBoolean(evidence.spawn_executed)
-    || Boolean(runId);
-  return { hasDispatchEvidence, hasSpawnEvidence, childSessionKey, runId };
+    || asBoolean(delegateAttempt.spawnExecuted)
+    || asBoolean(delegateAttempt.spawn_executed)
+    || Boolean(runId)
+    || Boolean(childSessionKey);
+  const resultMaterialized = asBoolean(record.resultMaterialized)
+    || asBoolean(record.result_materialized)
+    || asBoolean(evidence.resultMaterialized)
+    || asBoolean(evidence.result_materialized)
+    || asBoolean(runtimeTruth.resultMaterialized)
+    || asBoolean(runtimeTruth.result_materialized)
+    || asBoolean(delivery.resultMaterialized)
+    || asBoolean(delivery.result_materialized)
+    || Boolean(asString(record.report_path || delivery.artifact_path || delivery.result_path));
+  return { hasDispatchEvidence, hasSpawnEvidence, resultMaterialized, childSessionKey, runId };
 }
 
 function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()): { status: string; reason: string } {
   const rawStatus = asString(record.status, "unknown");
-  if (["failed", "completed", "done", "succeeded", "cancelled", "canceled", "blocked", "timed_out"].includes(rawStatus)) {
-    return { status: rawStatus === "done" || rawStatus === "succeeded" ? "completed" : rawStatus === "cancelled" ? "canceled" : rawStatus, reason: "terminal_or_explicit_status" };
-  }
-
   const route = normalizeLiveRoute(record.route, "delegate");
   const evidence = runtimeStatusEvidence(record);
+  const terminalStatus = ["failed", "completed", "done", "succeeded", "cancelled", "canceled", "blocked", "timed_out"].includes(rawStatus)
+    ? rawStatus === "done" || rawStatus === "succeeded" ? "completed" : rawStatus === "cancelled" ? "canceled" : rawStatus
+    : "";
   const updatedMs = timestampMs(record.updated_at || record.started_at || record.spawned_at);
   const isStale = updatedMs !== null && nowMs - updatedMs >= STATUS_STALE_AFTER_MS;
   if ((rawStatus === "running" || rawStatus === "queued" || rawStatus === "materializing") && isStale) {
@@ -606,7 +652,16 @@ function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()
 
   if (route === "delegate") {
     if (!evidence.hasDispatchEvidence) return { status: "registered", reason: "no_dispatch_evidence" };
-    if (!evidence.hasSpawnEvidence) return { status: "queued", reason: "dispatch_materialized_but_no_spawn_evidence" };
+    if (!evidence.hasSpawnEvidence && !["failed", "canceled", "blocked", "timed_out"].includes(terminalStatus)) {
+      return { status: "queued", reason: "dispatch_materialized_but_no_spawn_evidence" };
+    }
+    if (terminalStatus === "completed" && !evidence.resultMaterialized) {
+      return { status: "deliverable_ready", reason: "terminal_completed_without_result_materialized" };
+    }
+  }
+
+  if (terminalStatus) {
+    return { status: terminalStatus, reason: "terminal_or_explicit_status" };
   }
 
   if (rawStatus === "running") return { status: "running", reason: "fresh_running_with_required_evidence" };
@@ -817,7 +872,11 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
   for (const { state } of policyState.entries()) {
     const decision = asRecord(state?.decision);
     const runtimeTruth = asRecord(decision.runtime_truth);
+    if (!runtimeTruthHasProjectionEvidence(runtimeTruth, asRecord(state))) {
+      continue;
+    }
     const taskIds = taskIdsFromRuntimeTruth(runtimeTruth);
+    const flowId = flowIdsFromRuntimeTruth(runtimeTruth)[0] || "";
     const binding = asRecord(runtimeTruth.binding);
     const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
     const recovery = asRecord(runtimeTruth.recovery);
@@ -840,6 +899,7 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
       }
       runtimeTasks.push({
         id: taskId,
+        flow_id: flowId,
         status,
         route: "delegate",
         summary,
@@ -849,6 +909,9 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
         worker_pool: delegateAttempt.workerPool || binding.workerPool,
         model: delegateAttempt.model || runtimeTruth.model,
         backend: binding.controllerId || runtimeTruth.backend,
+        dispatchExecuted: state?.dispatchExecuted === true || state?.dispatch_executed === true,
+        spawnExecuted: state?.spawnExecuted === true || state?.spawn_executed === true,
+        resultMaterialized: state?.resultMaterialized === true || state?.result_materialized === true,
         artifacts: { runtime_truth: runtimeTruth },
       });
     }
