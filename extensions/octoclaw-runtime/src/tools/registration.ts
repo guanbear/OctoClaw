@@ -100,8 +100,21 @@ function findRuntimeTaskInPolicyState(taskId: string): { sessionKey: string; flo
   return null;
 }
 
+function isSyntheticTestTaskState(record: RuntimeTaskStateRecord): boolean {
+  const id = asString(record.id);
+  const flowId = asString(record.flow_id);
+  const sessionKey = asString(record.session_key);
+  const summary = asString(record.summary);
+  return id === "task-honesty"
+    || flowId === "flow-honesty"
+    || sessionKey.startsWith("session-dispatch-honesty")
+    || sessionKey === "session-contract-wins"
+    || summary.includes("Dispatch from sealed WorkContract");
+}
+
 async function upsertTaskStateCache(record: RuntimeTaskStateRecord): Promise<void> {
   try {
+    if (isSyntheticTestTaskState(record)) return;
     const taskPath = resolveTaskStatePath();
     let existing: { tasks?: unknown[] } = { tasks: [] };
     try {

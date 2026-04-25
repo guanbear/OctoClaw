@@ -320,6 +320,8 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.delegate_task_id).toBeTruthy();
     expect(result.native_task_id).toBe("task-honesty");
     expect(result.native_flow_id).toBe("flow-honesty");
+    const taskStatePath = path.join(envOverrides.workspaceRoot, "tmp", "octopus", "task-state.json");
+    expect(fsSync.existsSync(taskStatePath)).toBe(false);
     expect(result.result_materialized).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
 
