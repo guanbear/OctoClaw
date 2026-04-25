@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 import { ROUTE_SEAL_SCHEMA_VERSION, type RouteSeal } from "@octoclaw/contracts/route-seal";
+import { WORK_CONTRACT_SCHEMA_VERSION, type WorkContract } from "@octoclaw/contracts/work-contract";
 import type { NativeHelperInvoker } from "../adapter/native-helper.js";
 import { policyState } from "../state/policy-state.js";
+import { saveWorkContract } from "../work-contract/store.js";
 import { getToolRegistrations } from "./registration.js";
 
 function dispatchTool() {
@@ -57,6 +60,93 @@ function failingHelper(): NativeHelperInvoker {
     }
     throw new Error("no worker available");
   }) as NativeHelperInvoker;
+}
+
+function workContract(overrides: Partial<WorkContract> = {}): WorkContract {
+  const now = "2026-04-25T00:00:00.000Z";
+  const base: WorkContract = {
+    schemaVersion: WORK_CONTRACT_SCHEMA_VERSION,
+    workContractId: "wc-dispatch-sealed",
+    turnId: "turn-wc-1",
+    sessionKey: "session-wc-dispatch",
+    userAsk: "Investigate sealed work contract dispatch",
+    intentClass: "delegated_work",
+    route: "delegate",
+    status: "sealed",
+    coverage: {
+      precheckOrder: [
+        "conversation_grounding",
+        "continuation_route_reuse",
+        "execution_coverage",
+        "memory_coverage",
+        "build_judge_context_packet",
+        "local_judge",
+        "validator_or_remote",
+        "route_seal_commit",
+      ],
+      execution: { coverage: "none" },
+      memory: { coverage: "none" },
+      conflict: false,
+      authority: "none",
+    },
+    decision: {
+      source: "local_judge",
+      route: "delegate",
+      delegateRole: "research",
+      confidence: 0.9,
+      reasonCodes: ["test"],
+      sealedAt: now,
+    },
+    delegate: {
+      delegateTaskId: "delegate-wc-1",
+      currentAttemptId: null,
+      role: "research",
+      coordinationMode: "solo_worker",
+      acceptanceCriteria: ["report result"],
+      scope: {
+        read: [],
+        write: [],
+        workspaceMode: "read_only",
+        scopeFingerprint: "scope-wc-1",
+      },
+      modelProfile: "worker_research",
+      nativeBinding: {
+        flowId: "flow-wc-1",
+        ownerKey: "session-wc-dispatch",
+        controllerId: "octoclaw.delegate",
+        revision: 1,
+        expectedRevision: 1,
+        syncMode: "managed",
+        status: "queued",
+      },
+      childSessions: [],
+      artifactRefs: [],
+      nextAction: "dispatch",
+    },
+    continuity: {
+      threadBindingKey: "thread-wc-1",
+      parentSessionKey: "session-wc-dispatch",
+      continuationMode: "resume_preferred",
+      delegateTaskId: "delegate-wc-1",
+    },
+    mainContext: {
+      summary: "sealed work contract test",
+      statusLine: "ready",
+      visibleIds: { workContractId: "wc-dispatch-sealed", delegateTaskId: "delegate-wc-1" },
+      artifactRefs: [],
+      nextAction: "dispatch",
+      tokenBudget: { maxResumeTokens: 700, maxArtifactSummaryTokens: 250 },
+      forbiddenContent: [],
+    },
+    telemetry: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+  return { ...base, ...overrides };
+}
+
+function useTempWorkContractLedger(testName: string) {
+  process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH = path.join("/tmp", `octoclaw-wc-${testName}-${Date.now()}.json`);
 }
 
 async function executeDispatch(params: Record<string, unknown>, ctx: Record<string, unknown> = {}) {
@@ -177,5 +267,114 @@ describe("octoclaw_dispatch honesty", () => {
     for (const result of results) {
       expect(Object.prototype.hasOwnProperty.call(result, "ok")).toBe(true);
     }
+  });
+});
+
+describe("WP4: sealed WorkContract dispatch", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
+    for (const { key } of policyState.entries()) policyState.clear(key);
+  });
+
+  it("dispatch with workContractId uses sealed delegate route without re-judge", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-25T00:00:00.000Z"));
+    useTempWorkContractLedger("sealed-delegate");
+    const contract = workContract({ workContractId: "wc-sealed-delegate" });
+    expect(saveWorkContract(contract)).toBe(true);
+
+    const result = await executeDispatch({
+      task: "Dispatch sealed delegate contract",
+      workContractId: contract.workContractId,
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-wc-sealed-delegate-test",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.work_contract_id).toBe(contract.workContractId);
+  });
+
+  it("dispatch rejects sealed reply WorkContract", async () => {
+    useTempWorkContractLedger("sealed-reply");
+    const contract = workContract({
+      workContractId: "wc-sealed-reply",
+      route: "reply",
+      decision: { ...workContract().decision, route: "reply", replyMode: "answer" },
+      delegate: undefined,
+    });
+    expect(saveWorkContract(contract)).toBe(true);
+
+    const result = await executeDispatch({
+      task: "Dispatch sealed reply contract",
+      workContractId: contract.workContractId,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toContain("work_contract_route_not_delegate");
+  });
+
+  it("dispatch rejects missing WorkContract", async () => {
+    useTempWorkContractLedger("missing");
+
+    const result = await executeDispatch({
+      task: "Dispatch missing contract",
+      workContractId: "wc-does-not-exist",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toContain("work_contract_not_found");
+  });
+
+  it("dispatch rejects non-sealed WorkContract", async () => {
+    useTempWorkContractLedger("draft");
+    const contract = workContract({ workContractId: "wc-draft", status: "draft" });
+    expect(saveWorkContract(contract)).toBe(true);
+
+    const result = await executeDispatch({
+      task: "Dispatch draft contract",
+      workContractId: contract.workContractId,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toContain("work_contract_not_sealed");
+  });
+
+  it("legacy policyJson without workContractId still passes compatibility path", async () => {
+    const result = await executeDispatch({
+      task: "Legacy policy json still dispatches",
+      policyJson: JSON.stringify(delegateDecision()),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-wc-legacy-policy-test",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("delegate");
+  });
+
+  it("policyJson with embedded workContractId loads sealed WorkContract route", async () => {
+    useTempWorkContractLedger("embedded");
+    const contract = workContract({ workContractId: "wc-embedded" });
+    expect(saveWorkContract(contract)).toBe(true);
+    const conflictingDecision = {
+      ...delegateDecision("reply"),
+      workContractId: contract.workContractId,
+      work_contract: { workContractId: contract.workContractId },
+    };
+
+    const result = await executeDispatch({
+      task: "Embedded contract overrides legacy route",
+      policyJson: JSON.stringify(conflictingDecision),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-wc-embedded-test",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.route).toBe("delegate");
+    expect(result.work_contract_id).toBe(contract.workContractId);
   });
 });
