@@ -2,8 +2,15 @@ import type {
   MainContextPacket,
   WorkContract,
 } from "@octoclaw/contracts/work-contract";
+import { buildContinuationHandle } from "./continuity.js";
 
 export function projectMainContextPacket(contract: WorkContract): MainContextPacket {
+  const continuationHandle = buildContinuationHandle(contract);
+  const preferredMode = contract.continuity.continuationMode;
+  const continuationHint = continuationHandle && preferredMode === "resume_preferred"
+    ? { handle: continuationHandle, preferredMode, text: "resume_dont_restart" as const }
+    : contract.mainContext.continuationHint;
+
   return {
     summary: contract.mainContext.summary,
     statusLine: contract.mainContext.statusLine,
@@ -13,10 +20,12 @@ export function projectMainContextPacket(contract: WorkContract): MainContextPac
       attemptId: contract.delegate?.currentAttemptId ?? undefined,
       nativeFlowId: contract.delegate?.nativeBinding?.flowId,
       nativeTaskId: contract.delegate?.nativeBinding?.nativeTaskId,
-      childSessionKey: contract.delegate?.nativeBinding?.childSessionKey,
-      childSessionId: contract.delegate?.nativeBinding?.runId,
+      childSessionKey: contract.delegate?.nativeBinding?.childSessionKey
+        ?? contract.continuity.preferredChildSessionKey,
+      childSessionId: contract.continuity.preferredChildSessionId
+        ?? contract.delegate?.nativeBinding?.runId,
     },
-    continuationHint: contract.mainContext.continuationHint,
+    continuationHint,
     artifactRefs: contract.mainContext.artifactRefs,
     nextAction: contract.mainContext.nextAction,
     tokenBudget: contract.mainContext.tokenBudget,

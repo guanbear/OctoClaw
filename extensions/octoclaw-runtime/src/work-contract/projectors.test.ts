@@ -28,7 +28,11 @@ describe("work contract projectors", () => {
         childSessionKey: "child-session-key-1",
         childSessionId: "run-1",
       },
-      continuationHint: undefined,
+      continuationHint: {
+        handle: `resume_dont_restart: workContractId=${contract.workContractId}, delegateTaskId=delegate-1, childSessionKey=child-session-key-1`,
+        preferredMode: "resume_preferred",
+        text: "resume_dont_restart",
+      },
       artifactRefs: [],
       nextAction: "dispatch",
       tokenBudget: {

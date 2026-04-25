@@ -6,6 +6,7 @@ import type {
   WorkContractTelemetry,
 } from "@octoclaw/contracts/work-contract";
 import { updateWorkContract } from "./store.js";
+import { markChildSessionPreferred } from "./continuity.js";
 
 export interface MaterializationSuccessInput {
   workContractId: string;
@@ -18,6 +19,11 @@ export interface MaterializationSuccessInput {
   childSessionKey?: string;
   substrateState?: string;
   spawnExecuted: boolean;
+  childSessionId?: string;
+  runId?: string;
+  providerSessionBinding?: { provider: string; sessionId?: string; runtimeSessionName?: string; sessionFile?: string };
+  expectsCompletionMessage?: boolean;
+  directThreadDelivery?: boolean;
 }
 
 export interface MaterializationFailureInput {
@@ -73,7 +79,7 @@ function ensureDelegate(contract: WorkContract, overrides: Partial<DelegateContr
 export function materializeWorkContractSuccess(input: MaterializationSuccessInput): WorkContract | null {
   const mappedStatus = mapSubstrateToContractStatus(input.substrateState);
 
-  return updateWorkContract(
+  const result = updateWorkContract(
     input.workContractId,
     (contract) => {
       const now = new Date().toISOString();
@@ -131,6 +137,29 @@ export function materializeWorkContractSuccess(input: MaterializationSuccessInpu
     },
     input.ledgerPath,
   );
+
+  if (result && input.childSessionKey) {
+    const marked = markChildSessionPreferred({
+      workContractId: input.workContractId,
+      ledgerPath: input.ledgerPath,
+      childSessionKey: input.childSessionKey,
+      delegateTaskId: input.delegateTaskId,
+      attemptId: input.attemptId,
+      agentRole: result.delegate?.role ?? "default",
+      modelProfile: result.delegate?.modelProfile ?? "",
+      parentSessionKey: result.sessionKey,
+      threadBindingKey: result.continuity.threadBindingKey,
+      scopeFingerprint: result.delegate?.scope.scopeFingerprint ?? "",
+      childSessionId: input.childSessionId,
+      runId: input.runId,
+      providerSessionBinding: input.providerSessionBinding,
+      expectsCompletionMessage: input.expectsCompletionMessage,
+      directThreadDelivery: input.directThreadDelivery,
+    });
+    return marked ?? result;
+  }
+
+  return result;
 }
 
 export function materializeWorkContractFailure(input: MaterializationFailureInput): WorkContract | null {

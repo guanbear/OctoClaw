@@ -45,6 +45,7 @@ import type { NativeBindingRef, NativeFlowStatus, WorkContract } from "@octoclaw
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
+import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import fsSync from "node:fs";
 
 interface FsSyncLike {
@@ -1172,8 +1173,19 @@ export function getToolRegistrations(): ToolRegistration[] {
         if (dispatchWorkContract) {
           metadata.workContractId = dispatchWorkContract.workContractId;
           metadata.work_contract_id = dispatchWorkContract.workContractId;
-          metadata.continuationMode = asString(params.continuationMode, dispatchWorkContract.continuity.continuationMode);
-          metadata.continuation_mode = asString(params.continuationMode, dispatchWorkContract.continuity.continuationMode);
+          const continuationMode = asString(params.continuationMode, dispatchWorkContract.continuity.continuationMode);
+          metadata.continuationMode = continuationMode;
+          metadata.continuation_mode = continuationMode;
+          if (continuationMode === "resume_preferred") {
+            const preferred = selectPreferredChildSession(dispatchWorkContract, "resume_preferred");
+            if (preferred.selected) {
+              metadata.child_session_key = preferred.selected.childSessionKey;
+              metadata.childSessionKey = preferred.selected.childSessionKey;
+              if (preferred.selected.childSessionId) {
+                metadata.child_session_id = preferred.selected.childSessionId;
+              }
+            }
+          }
         }
         if (asString(params.delegateTaskId)) {
           metadata.delegateTaskId = asString(params.delegateTaskId);

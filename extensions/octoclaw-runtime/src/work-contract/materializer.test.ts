@@ -89,7 +89,19 @@ describe("work contract materializer", () => {
     expect(result!.status).toBe("planned");
     expect(result!.delegate?.delegateTaskId).toBe("delegate-wp5-1");
     expect(result!.delegate?.currentAttemptId).toBe("attempt-wp5-1");
-    expect(result!.delegate?.nativeBinding).toBe(nativeBinding);
+    expect(result!.delegate?.nativeBinding).toStrictEqual(expect.objectContaining({
+      flowId: "flow-wp5-1",
+      ownerKey: "wc-wp5",
+      controllerId: "octoclaw.delegate",
+      revision: 1,
+      expectedRevision: 1,
+      nativeTaskId: "native-task-wp5",
+      nativeFlowId: "flow-wp5-1",
+      syncMode: "managed",
+      status: "queued",
+      lastMutation: "createManaged",
+      lastMutationApplied: true,
+    }));
     expect(result!.telemetry.dispatchExecuted).toBe(true);
     expect(result!.telemetry.spawnExecuted).toBe(false);
     expect(result!.telemetry.nativeTaskId).toBe("native-task-wp5");
