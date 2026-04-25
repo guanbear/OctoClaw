@@ -16,9 +16,10 @@ This plan is written for an implementation AI. Keep changes incremental. Do not 
 6. Legacy `route_decision`, `router_decision_v2`, and `tool_policy` stay during migration as generated compatibility views.
 7. Main-agent context must pass the existing context-budget/sanitizer boundary.
 8. OpenClaw TaskFlow mutations must use `flowId + expectedRevision`; do not invent a parallel resume/claim mechanism as the primary guard.
-9. TaskFlow creation is not proof of child execution. `spawnExecuted` must come from TaskRun/session/process evidence.
-10. Store compact refs in native `stateJson`/`waitJson`, not full WorkContract, transcript, or route rationale.
-11. Use OpenClaw 4.21 source semantics. In particular, persistent/thread-bound children may not announce completion through the parent path; read lifecycle/status from TaskRun/session evidence.
+9. TaskFlow creation is not proof of child execution. `spawnExecuted` must come from current TaskRun/session/process evidence, not from stored continuity refs.
+10. Prior `childSessionKey` / `runId` / `nativeBinding` continuity is a resume hint and status ref only; it must never prove that a new dispatch actually spawned.
+11. Store compact refs in native `stateJson`/`waitJson`, not full WorkContract, transcript, or route rationale.
+12. Use OpenClaw 4.21 source semantics. In particular, persistent/thread-bound children may not announce completion through the parent path; read lifecycle/status from TaskRun/session evidence.
 
 ## WP0. Baseline audit and failing tests
 
@@ -53,6 +54,10 @@ Create failing tests that describe the intended behavior before changing runtime
    - expect no second dispatch/spawn is attempted in the same turn
 7. Flow exists but no child TaskRun/session evidence exists
    - expect `dispatchExecuted=true`, `spawnExecuted=false`, and honest status
+8. WorkContract has prior continuity refs but the current materialization returns no child run/session evidence
+   - expect `spawnExecuted=false`
+   - expect status projection `queued` / `materialized_no_spawn`, not `running`
+   - expect delivery relay is not registered as a deliverable child result
 
 ### Acceptance
 
@@ -401,8 +406,11 @@ Make runtime materialization a WorkContract state transition.
 7. Keep `runtime_truth` payload for compatibility but treat it as execution snapshot.
 8. Record `TurnExecutionReceipt` separately:
    - TaskFlow created/resumed -> `dispatchExecuted=true`
-   - child TaskRun/session/process actually started -> `spawnExecuted=true`
+   - child TaskRun/session/process actually started in the current attempt -> `spawnExecuted=true`
+   - current attempt lacks run/session/process evidence -> `spawnExecuted=false`, even if an older continuity handle exists
    - result packet/artifact materialized -> `resultMaterialized=true`
+9. Block pending delivery relay registration when a delegate payload has no current spawn evidence.
+10. Preserve prior continuity handles for resume/status display, but never use them to mark the new attempt running.
 
 ### Acceptance
 
@@ -497,6 +505,8 @@ Make parent-visible state projection-only.
 1. ACK does not inspect `_judge_*` to infer route.
 2. Status/provenance follow-up does not spawn.
 3. Full thread history is never injected for delegated follow-up.
+4. `spawnExecuted=false` plus stored continuity refs projects as queued/materialized, not running.
+5. Status/provenance replies explicitly say "spawn not confirmed" when dispatch materialized but current spawn evidence is missing.
 
 ## WP8. Telemetry and harness
 

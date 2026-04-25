@@ -165,7 +165,8 @@ Important current modules:
 | Concern | Authoritative source | Not authoritative |
 | --- | --- | --- |
 | Execution lifecycle | OpenClaw Native TaskFlow | WorkContract alone, ACK text, chat history |
-| Spawn/execution proof | TaskRun/session/process evidence | TaskFlow creation alone |
+| Dispatch/materialization proof | Native TaskFlow materialization / TaskRecord evidence | route choice, ACK text, WorkContract status alone |
+| Spawn/execution proof | Current TaskRun/session/process evidence | TaskFlow creation alone, prior WorkContract continuity, prior child session refs |
 | Semantic decision | WorkContract | ad hoc `_judge_*`, legacy route fields |
 | Provenance/status follow-up | ExecutionCoveragePacket | memory-only match, transcript guess |
 | Durable result content | Artifact index/result packet | parent context dump |
@@ -259,7 +260,15 @@ Projection rules:
 2. Never include full raw transcript by default.
 3. Never infer "running" from TaskFlow creation alone.
 4. Never let UI-local state override runtime truth.
-5. Every projection should include enough refs for retrieval, not enough bulk to pollute parent context.
+5. Never promote stored continuity refs (`preferredChildSessionKey`, prior `runId`, prior `nativeBinding`) into current-turn `spawnExecuted=true`.
+6. Every projection should include enough refs for retrieval, not enough bulk to pollute parent context.
+
+Implementation note, 2026-04-26:
+
+- `dispatchExecuted=true` means Native TaskFlow was materialized or a dispatch mutation was applied.
+- `spawnExecuted=true` requires current dispatch evidence: `runId`, `childRunId`, `childSessionId`, current `childSessionKey`, or an explicit spawn boolean from runtime evidence.
+- A prior WorkContract continuity handle remains a resume hint only. It may be shown in status, but it must not make a new materialized task appear running.
+- If materialization succeeds but no spawn evidence is present, the projected state is `queued/materialized_no_spawn`, delivery relay registration is blocked, and the parent-visible coverage summary must say spawn was not confirmed.
 
 ## 7. End-to-End Runtime Flow
 
