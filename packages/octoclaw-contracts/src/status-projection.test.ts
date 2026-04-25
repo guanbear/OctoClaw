@@ -139,7 +139,17 @@ describe("TaskStatusProjection", () => {
     });
 
     expect(projection).toMatchObject({
+      schemaVersion: "octoclaw.task_status_projection/v1",
+      requestId: "turn-1",
+      flowId: "flow-1",
+      taskId: "delegate-1",
+      parentThreadKey: "thread-1",
+      title: "implement status truth",
+      summary: "sealed",
       taskSummary: "implement status truth",
+      route: "delegate",
+      role: "code",
+      coordinationMode: "solo_worker",
       elapsedMs: 120_000,
       modelProfile: "code-fast",
       backend: "octoclaw.delegate",
@@ -151,6 +161,10 @@ describe("TaskStatusProjection", () => {
       childRunId: "child-run-1",
     });
     expect(projection.artifactRefs).toEqual([{ artifactId: "artifact-1", artifactKind: "worker_report" }]);
+    expect(projection.artifactRefIds).toEqual(["artifact-1"]);
+    expect(projection.nativeFlowRevision).toBe(3);
+    expect(projection.nativeFlowExpectedRevision).toBe(3);
+    expect(projection.actions).toContain("open");
   });
 
   it("projects stale heartbeat as timed_out and final materialization as deliverable_ready/completed", () => {
@@ -173,7 +187,11 @@ describe("MultiTaskStatusProjection", () => {
       { contract: contract({ workContractId: "wc-2", telemetry: { dispatchExecuted: true } }) },
     ], "2026-04-25T00:03:00.000Z");
 
+    expect(projection.schemaVersion).toBe("octoclaw.multi_task_status_projection/v1");
     expect(projection.generatedAt).toBe("2026-04-25T00:03:00.000Z");
+    expect(projection.scope).toBe("thread");
+    expect(projection.activeCount).toBe(1);
+    expect(projection.threadKey).toBe("thread-1");
     expect(projection.counts.registered).toBe(1);
     expect(projection.counts.queued).toBe(1);
   });
@@ -262,6 +280,28 @@ describe("Phase B acceptance: status no-lie rules", () => {
     })).toBe("timed_out");
   });
 
+  it("does not treat WorkContract updatedAt as execution progress evidence", () => {
+    expect(projectionStatus({
+      contract: contract({
+        status: "running",
+        telemetry: { dispatchExecuted: true, spawnExecuted: true },
+        updatedAt: "2026-04-25T00:09:59.000Z",
+      }),
+      now,
+      staleAfterMs,
+    })).toBe("running");
+
+    expect(buildTaskStatusProjection({
+      contract: contract({
+        status: "running",
+        telemetry: { dispatchExecuted: true, spawnExecuted: true },
+        updatedAt: "2026-04-25T00:09:59.000Z",
+      }),
+      now,
+      staleAfterMs,
+    }).statusReason).toBe("spawn_evidence_without_progress_timestamp");
+  });
+
   it("projects final results awaiting delivery as deliverable_ready", () => {
     expect(projectionStatus({
       contract: contract({
@@ -329,7 +369,7 @@ describe("Phase B acceptance: status no-lie rules", () => {
       deliveryAcknowledged: true,
       finalResultExists: true,
       now,
-    })).toBe("cancelled");
+    })).toBe("canceled");
   });
 
   it("does not regress from running to queued after spawn evidence is added", () => {

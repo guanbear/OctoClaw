@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DelegateProgressEvent } from "@octoclaw/contracts/delegate";
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
+import type { WorkContract } from "@octoclaw/contracts/work-contract";
+import { buildTaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import { buildStatusProjection } from "../read-model/index.js";
 import {
   buildDetailsSurface,
@@ -110,6 +112,96 @@ function createProgressEvents(): DelegateProgressEvent[] {
   ];
 }
 
+function createTaskStatusProjection() {
+  const contract: WorkContract = {
+    schemaVersion: "octoclaw.work_contract.v1",
+    workContractId: "wc-1",
+    turnId: "req-789",
+    sessionKey: "session-1",
+    userAsk: "status task",
+    intentClass: "delegated_work",
+    route: "delegate",
+    status: "running",
+    coverage: {
+      precheckOrder: [
+        "conversation_grounding",
+        "continuation_route_reuse",
+        "execution_coverage",
+        "memory_coverage",
+        "build_judge_context_packet",
+        "local_judge",
+        "validator_or_remote",
+        "route_seal_commit",
+      ],
+      execution: { coverage: "thread" },
+      memory: { coverage: "partial" },
+      conflict: false,
+      authority: "execution_wins",
+    },
+    decision: { source: "local_judge", route: "delegate", reasonCodes: ["test"], sealedAt: "2026-04-18T00:00:00.000Z" },
+    delegate: {
+      delegateTaskId: "delegate-1",
+      currentAttemptId: "attempt-1",
+      role: "code",
+      coordinationMode: "solo_worker",
+      acceptanceCriteria: [],
+      scope: { read: [], write: [], workspaceMode: "write_allowed", scopeFingerprint: "scope" },
+      modelProfile: "worker_code_normal",
+      nativeBinding: {
+        flowId: "flow-456",
+        ownerKey: "wc-1",
+        controllerId: "openclaw-native",
+        revision: 7,
+        expectedRevision: 7,
+        nativeTaskId: "task-123",
+        runId: "run-1",
+        childRunId: "child-run-1",
+        childSessionKey: "child-key-1",
+        syncMode: "managed",
+        status: "running",
+      },
+      childSessions: [],
+      artifactRefs: [{ artifactId: "artifact-1", artifactKind: "worker_report", createdAt: "2026-04-18T00:03:00.000Z" }],
+      nextAction: "deliver",
+    },
+    continuity: {
+      threadBindingKey: "thread-1",
+      parentSessionKey: "session-1",
+      preferredChildSessionKey: "child-key-1",
+      preferredChildSessionId: "provider-session-1",
+      preferredRunId: "run-1",
+      continuationMode: "status_only",
+    },
+    mainContext: {
+      summary: "status task",
+      statusLine: "delivery pending",
+      visibleIds: { workContractId: "wc-1" },
+      artifactRefs: ["artifact-1"],
+      nextAction: "deliver",
+      tokenBudget: { maxResumeTokens: 700, maxArtifactSummaryTokens: 250 },
+      forbiddenContent: ["full_transcript"],
+    },
+    telemetry: {
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      deliveryStatus: "pending",
+      estimatedCostUsd: 0.01,
+      actualCostUsd: 0.02,
+    },
+    createdAt: "2026-04-18T00:00:00.000Z",
+    updatedAt: "2026-04-18T00:02:00.000Z",
+  };
+
+  return buildTaskStatusProjection({
+    contract,
+    now: "2026-04-18T00:00:12.345Z",
+    deliveryAcknowledged: false,
+    failureCode: "delivery_pending",
+    failureMessage: "delivery pending",
+  });
+}
+
 describe("view-model", () => {
   it("buildStatusSurface produces all required minimum fields", () => {
     const view = buildStatusSurface(createRecord());
@@ -134,27 +226,7 @@ describe("view-model", () => {
   it("buildStatusProjection exposes TaskStatusProjection continuity and cost fields", () => {
     const view = buildStatusProjection({
       record: createRecord(),
-      taskStatusProjection: {
-        workContractId: "wc-1",
-        taskSummary: "status task",
-        elapsedMs: 12_345,
-        modelProfile: "worker_code_normal",
-        backend: "openclaw-native",
-        status: "deliverable_ready",
-        success: false,
-        failureCode: "delivery_pending",
-        failureMessage: "delivery pending",
-        estimatedCostUsd: 0.01,
-        actualCostUsd: 0.02,
-        artifactRefs: [{ artifactId: "artifact-1", artifactKind: "worker_report" }],
-        childSessionKey: "child-key-1",
-        childSessionId: "provider-session-1",
-        runId: "run-1",
-        childRunId: "child-run-1",
-        dispatchExecuted: true,
-        spawnExecuted: true,
-        resultMaterialized: true,
-      },
+      taskStatusProjection: createTaskStatusProjection(),
     });
 
     expect(view.state).toBe("deliverable_ready");
