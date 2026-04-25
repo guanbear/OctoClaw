@@ -61,6 +61,17 @@ export interface StatusSurfaceViewModel extends ContractEnvelope {
   writeScopeSummary: string;
   threadCount: number;
   advisorUsageSummary: string;
+  elapsedMs?: number;
+  success?: boolean;
+  failureCode?: string;
+  failureMessage?: string;
+  estimatedCostUsd?: number;
+  actualCostUsd?: number;
+  artifactRefs?: string[];
+  childSessionKey?: string;
+  childSessionId?: string;
+  runId?: string;
+  childRunId?: string;
   timelinePreview?: Array<{
     eventType: string;
     eventAt: string;

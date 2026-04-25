@@ -92,7 +92,7 @@ function projectStatus(input: TaskStatusProjectionInput): ProjectedTaskStatus {
   const now = timestampMs(input.now) ?? Date.now();
   const heartbeat = timestampMs(input.heartbeatAt ?? contract.updatedAt);
   const staleAfterMs = input.staleAfterMs ?? 5 * 60 * 1000;
-  if (heartbeat !== undefined && now - heartbeat > staleAfterMs) return "timed_out";
+  if (heartbeat !== undefined && now - heartbeat >= staleAfterMs) return "timed_out";
   if (contract.status === "blocked") return "blocked";
   return "running";
 }

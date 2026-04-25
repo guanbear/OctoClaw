@@ -1,0 +1,91 @@
+import { describe, expect, it, vi } from "vitest";
+
+const mockRunCommand = vi.hoisted(() => vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })));
+vi.mock("../../resolve/env.js", () => ({
+  runCommand: (...args: unknown[]) => mockRunCommand(...(args as [string, string[], unknown])),
+  resolveWorkspaceRoot: () => "/workspace",
+}));
+
+import {
+  SlackAdapter,
+  auditSlackFacingToolExposure,
+  isSlackTargetAllowed,
+} from "./slack-adapter.js";
+
+describe("SlackAdapter", () => {
+  it("resolveTarget parses Slack channel+thread session keys", () => {
+    const adapter = new SlackAdapter();
+
+    expect(adapter.resolveTarget("slack:default:channel:C123abc:thread:171.22")).toEqual({
+      channel: "slack",
+      target: "C123ABC",
+      threadTs: "171.22",
+    });
+  });
+
+  it("resolveTarget parses Slack DM session keys", () => {
+    const adapter = new SlackAdapter();
+
+    expect(adapter.resolveTarget("agent:main:slack:default:dm:u123abc")).toEqual({
+      channel: "slack",
+      target: "U123ABC",
+    });
+  });
+
+  it("resolveTarget returns empty target for non-Slack keys", () => {
+    const adapter = new SlackAdapter();
+
+    expect(adapter.resolveTarget("agent:main:main")).toEqual({
+      channel: "slack",
+      target: "",
+    });
+  });
+
+  it("normalizeUserId strips user: prefix and uppercases", () => {
+    const adapter = new SlackAdapter();
+
+    expect(adapter.normalizeUserId("user:u123abc")).toBe("U123ABC");
+  });
+
+  it("extractMessageTs reads ts/messageTs/messageId", () => {
+    const adapter = new SlackAdapter();
+
+    expect(adapter.extractMessageTs({ ts: "111.222" })).toBe("111.222");
+    expect(adapter.extractMessageTs({ messageTs: "333.444" })).toBe("333.444");
+    expect(adapter.extractMessageTs({ messageId: "555.666" })).toBe("555.666");
+  });
+
+  it("shouldUseThread respects replyToMode config", () => {
+    expect(new SlackAdapter({ replyToMode: "off" }).shouldUseThread()).toBe(false);
+    expect(new SlackAdapter({ replyToMode: "first" }).shouldUseThread()).toBe(true);
+    expect(new SlackAdapter({ replyToMode: "all" }).shouldUseThread()).toBe(true);
+  });
+
+  it("isStreamingAvailable checks nativeTransport and streamingMode", () => {
+    expect(new SlackAdapter({ nativeTransport: true, streamingMode: "partial" }).isStreamingAvailable()).toBe(true);
+    expect(new SlackAdapter({ nativeTransport: false, streamingMode: "partial" }).isStreamingAvailable()).toBe(false);
+    expect(new SlackAdapter({ nativeTransport: true, streamingMode: "off" }).isStreamingAvailable()).toBe(false);
+  });
+});
+
+describe("Slack adapter acceptance", () => {
+  it("enforces groupPolicy allowlist for Slack channel/group delivery", () => {
+    expect(isSlackTargetAllowed("slack:default:dm:U123", { allowDms: true })).toBe(true);
+    expect(isSlackTargetAllowed("slack:default:dm:U123", { allowDms: false })).toBe(false);
+    expect(isSlackTargetAllowed("slack:default:channel:C_ALLOWED", { allowlist: ["C_ALLOWED"] })).toBe(true);
+    expect(isSlackTargetAllowed("slack:default:channel:C_BLOCKED", { allowlist: ["C_ALLOWED"] })).toBe(false);
+  });
+
+  it("audits Slack-facing tool exposure to safe message operations only", () => {
+    expect(auditSlackFacingToolExposure(["message.send", "message.react"])).toEqual({
+      allowed: true,
+      exposedTools: ["message.send", "message.react"],
+      blockedTools: [],
+    });
+    expect(auditSlackFacingToolExposure(["message.send", "shell.exec"])).toEqual({
+      allowed: false,
+      exposedTools: ["message.send", "shell.exec"],
+      blockedTools: ["shell.exec"],
+    });
+  });
+});

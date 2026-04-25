@@ -583,3 +583,188 @@ const coverage: ContextCoverageSnapshot = {
   conflict: false,
   authority: "none",
 };
+
+describe("Phase B acceptance: child session continuity invariants", () => {
+  let ledgerPath: string;
+
+  beforeEach(() => {
+    mockFs.files.clear();
+    mockFs.directories.clear();
+    mockFs.existsSync.mockClear();
+    mockFs.mkdirSync.mockClear();
+    mockFs.readFileSync.mockClear();
+    mockFs.writeFileSync.mockClear();
+    ledgerPath = path.join("/tmp", "octoclaw-phase-b-test", "work-contracts.json");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const phaseBNativeBinding: NativeBindingRef = {
+    flowId: "flow-phase-b",
+    ownerKey: "wc-phase-b",
+    controllerId: "octoclaw.delegate",
+    revision: 1,
+    expectedRevision: 1,
+    syncMode: "managed",
+    status: "running",
+    childSessionKey: "child-key-phase-b",
+  };
+
+  function buildPhaseBContract(overrides: {
+    sessionKey?: string;
+    userAsk?: string;
+    delegate?: DelegateContract;
+  } = {}): ReturnType<typeof buildWorkContractFromPolicy> {
+    const delegate: DelegateContract = overrides.delegate ?? {
+      delegateTaskId: "delegate-phase-b",
+      currentAttemptId: "attempt-phase-b-1",
+      role: "code",
+      coordinationMode: "solo_worker",
+      acceptanceCriteria: ["phase b acceptance passes"],
+      scope: { read: ["src"], write: ["src/work-contract"], workspaceMode: "write_allowed", scopeFingerprint: "scope-phase-b" },
+      modelProfile: "coding",
+      nativeBinding: phaseBNativeBinding,
+      childSessions: [],
+      artifactRefs: [],
+      nextAction: "wait",
+    };
+    return buildWorkContractFromPolicy(
+      overrides.sessionKey ?? "session-phase-b",
+      overrides.userAsk ?? "Implement Phase B continuity acceptance",
+      "delegated_work",
+      coverage,
+      buildWorkDecisionSeal("local_judge", "delegate", ["phase_b_acceptance"]),
+      { delegate },
+    );
+  }
+
+  function saveAndMarkPreferred(
+    contract: ReturnType<typeof buildWorkContractFromPolicy>,
+    overrides: Partial<Parameters<typeof markChildSessionPreferred>[0]> = {},
+  ): ReturnType<typeof markChildSessionPreferred> {
+    saveWorkContract(contract, ledgerPath);
+    return markChildSessionPreferred({
+      workContractId: contract.workContractId,
+      ledgerPath,
+      childSessionKey: "child-key-phase-b",
+      delegateTaskId: "delegate-phase-b",
+      attemptId: "attempt-phase-b-1",
+      agentRole: "code",
+      modelProfile: "coding",
+      parentSessionKey: contract.sessionKey,
+      threadBindingKey: contract.continuity.threadBindingKey,
+      scopeFingerprint: "scope-phase-b",
+      ...overrides,
+    });
+  }
+
+  it("saves childSessionKey, childSessionId, and runId to WorkContract", () => {
+    const contract = buildPhaseBContract();
+
+    const marked = saveAndMarkPreferred(contract, {
+      childSessionKey: "child-key-phase-b-saved",
+      childSessionId: "provider-session-phase-b",
+      runId: "run-phase-b",
+    });
+
+    expect(marked).not.toBeNull();
+    const child = marked!.delegate?.childSessions[0];
+    expect(child?.childSessionKey).toBe("child-key-phase-b-saved");
+    expect(child?.childSessionId).toBe("provider-session-phase-b");
+    expect(child?.runId).toBe("run-phase-b");
+    expect(marked!.continuity.preferredChildSessionKey).toBe("child-key-phase-b-saved");
+    expect(marked!.continuity.preferredChildSessionId).toBe("provider-session-phase-b");
+    expect(marked!.continuity.preferredRunId).toBe("run-phase-b");
+  });
+
+  it("same-task follow-up uses resume_preferred", () => {
+    const contract = buildPhaseBContract();
+    const marked = saveAndMarkPreferred(contract);
+
+    const result = selectPreferredChildSession(marked!, "resume_preferred");
+
+    expect(result.selected).not.toBeNull();
+    expect(result.selected!.delegateTaskId).toBe("delegate-phase-b");
+    expect(result.selected!.childSessionKey).toBe("child-key-phase-b");
+    expect(result.reason).toBe("preferred_child_session_found");
+  });
+
+  it("new intent with a different delegateTaskId does not reuse old session", () => {
+    const oldChild: ChildSessionContinuity = {
+      childSessionKey: "child-key-old-intent",
+      delegateTaskId: "delegate-old-intent",
+      firstAttemptId: "attempt-old-1",
+      latestAttemptId: "attempt-old-1",
+      agentRole: "code",
+      modelProfile: "coding",
+      parentSessionKey: "session-phase-b",
+      threadBindingKey: "thread-phase-b",
+      scopeFingerprint: "scope-phase-b",
+      status: "running",
+      reuseState: "preferred",
+    };
+    const contract = buildPhaseBContract({
+      userAsk: "Start a new Phase B intent",
+      delegate: {
+        delegateTaskId: "delegate-new-intent",
+        currentAttemptId: "attempt-new-1",
+        role: "code",
+        coordinationMode: "solo_worker",
+        acceptanceCriteria: ["new intent should not resume old child"],
+        scope: { read: ["src"], write: ["src/work-contract"], workspaceMode: "write_allowed", scopeFingerprint: "scope-phase-b" },
+        modelProfile: "coding",
+        nativeBinding: phaseBNativeBinding,
+        childSessions: [oldChild],
+        artifactRefs: [],
+        nextAction: "dispatch",
+      },
+    });
+
+    const result = selectPreferredChildSession(contract, "resume_preferred");
+
+    expect(result.selected).toBeNull();
+    expect(result.reason).toBe("no_reusable_child_session");
+  });
+
+  it("buildContinuationHandle does not include child transcript content in parent context", () => {
+    const contract = buildPhaseBContract();
+    const marked = saveAndMarkPreferred(contract, {
+      childSessionKey: "child-key-compact-handle",
+      childSessionId: "provider-session-compact",
+    });
+    marked!.mainContext.summary = "Child said SECRET_TRANSCRIPT_CONTENT and raw execution details";
+
+    const handle = buildContinuationHandle(marked!);
+
+    expect(handle).toContain("resume_dont_restart:");
+    expect(handle).toContain(`workContractId=${marked!.workContractId}`);
+    expect(handle).toContain("delegateTaskId=delegate-phase-b");
+    expect(handle).toContain("childSessionKey=child-key-compact-handle");
+    expect(handle).toContain("childSessionId=provider-session-compact");
+    expect(handle).not.toContain("SECRET_TRANSCRIPT_CONTENT");
+    expect(handle).not.toContain("raw execution details");
+    expect(handle!.length).toBeLessThan(300);
+  });
+
+  it("retired session is never selected for reuse", () => {
+    const contract = buildPhaseBContract();
+    const marked = saveAndMarkPreferred(contract, {
+      childSessionKey: "child-key-retired-phase-b",
+    });
+    expect(marked).not.toBeNull();
+
+    const retired = markChildSessionRetired({
+      workContractId: contract.workContractId,
+      ledgerPath,
+      childSessionKey: "child-key-retired-phase-b",
+      reason: "superseded",
+    });
+    const result = selectPreferredChildSession(retired!, "resume_preferred");
+
+    expect(retired).not.toBeNull();
+    expect(result.selected).toBeNull();
+    expect(result.reason).toBe("no_reusable_child_session");
+  });
+});

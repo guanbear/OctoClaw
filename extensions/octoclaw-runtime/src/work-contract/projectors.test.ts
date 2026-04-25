@@ -141,3 +141,122 @@ const delegate: DelegateContract = {
   ],
   nextAction: "wait",
 };
+
+describe("Phase B acceptance: TaskStatusProjection field completeness", () => {
+  it("projectMainContextPacket includes all required visible IDs", () => {
+    const contract = buildPhaseBProjectionContract();
+
+    const packet = projectMainContextPacket(contract);
+
+    expect(packet.visibleIds.workContractId).toBe(contract.workContractId);
+    expect(packet.visibleIds.delegateTaskId).toBe("delegate-phase-b");
+    expect(packet.visibleIds.attemptId).toBe("attempt-phase-b-1");
+    expect(packet.visibleIds.nativeFlowId).toBe("flow-phase-b");
+    expect(packet.visibleIds.childSessionKey).toBe("child-key-phase-b");
+    expect(packet.visibleIds.childSessionId).toBe("provider-session-phase-b");
+  });
+
+  it("projectDelegateStatusPacket includes status, role, nextAction, nativeFlowId, and artifactRefs", () => {
+    const contract = buildPhaseBProjectionContract();
+
+    const packet = projectDelegateStatusPacket(contract);
+
+    expect(packet).toEqual({
+      workContractId: contract.workContractId,
+      delegateTaskId: "delegate-phase-b",
+      status: "running",
+      role: "research",
+      nextAction: "open_artifact",
+      nativeFlowId: "flow-phase-b",
+      artifactRefs: ["artifact-phase-b-1", "artifact-phase-b-2"],
+    });
+  });
+
+  it("projectMainContextPacket passes through context sanitizer", () => {
+    const contract = buildPhaseBProjectionContract();
+    contract.mainContext.summary = "raw route rationale: hidden\nVisible Phase B summary";
+    (contract.mainContext as unknown as Record<string, unknown>).childTranscript = "full transcript should not project";
+
+    const rendered = JSON.stringify(projectMainContextPacket(contract));
+
+    expect(rendered).not.toContain("raw route rationale");
+    expect(rendered).not.toContain("full transcript should not project");
+    expect(rendered).toContain("Visible Phase B summary");
+  });
+
+  it("projectMainContextPacket includes continuation hint with resume_preferred", () => {
+    const contract = buildPhaseBProjectionContract();
+
+    const packet = projectMainContextPacket(contract);
+
+    expect(packet.continuationHint).toEqual({
+      handle: `resume_dont_restart: workContractId=${contract.workContractId}, delegateTaskId=delegate-phase-b, childSessionKey=child-key-phase-b, childSessionId=provider-session-phase-b`,
+      preferredMode: "resume_preferred",
+      text: "resume_dont_restart",
+    });
+  });
+});
+
+function buildPhaseBProjectionContract(): ReturnType<typeof buildWorkContractFromPolicy> {
+  const contract = buildWorkContractFromPolicy(
+    "session-phase-b",
+    "Continue Phase B delegated implementation",
+    "execution_followup",
+    coverage,
+    buildWorkDecisionSeal("continuation", "delegate", ["same_delegate_task"]),
+    { status: "running", delegate: phaseBDelegate },
+  );
+
+  return {
+    ...contract,
+    continuity: {
+      ...contract.continuity,
+      preferredChildSessionKey: "child-key-phase-b",
+      preferredChildSessionId: "provider-session-phase-b",
+      preferredRunId: "run-phase-b",
+      continuationMode: "resume_preferred",
+      delegateTaskId: "delegate-phase-b",
+    },
+  };
+}
+
+const phaseBDelegate: DelegateContract = {
+  delegateTaskId: "delegate-phase-b",
+  currentAttemptId: "attempt-phase-b-1",
+  role: "research",
+  coordinationMode: "solo_worker",
+  acceptanceCriteria: ["project all Phase B task status fields"],
+  scope: {
+    read: ["extensions/octoclaw-runtime/src/work-contract"],
+    write: ["extensions/octoclaw-runtime/src/work-contract"],
+    workspaceMode: "write_allowed",
+    scopeFingerprint: "scope-phase-b",
+  },
+  modelProfile: "research",
+  nativeBinding: {
+    flowId: "flow-phase-b",
+    ownerKey: "wc-phase-b",
+    controllerId: "octoclaw.delegate",
+    revision: 3,
+    expectedRevision: 3,
+    nativeTaskId: "native-task-phase-b",
+    runId: "run-phase-b",
+    childSessionKey: "child-key-phase-b",
+    syncMode: "managed",
+    status: "running",
+  },
+  childSessions: [],
+  artifactRefs: [
+    {
+      artifactId: "artifact-phase-b-1",
+      artifactKind: "worker_report",
+      createdAt: "2026-04-25T12:10:00.000Z",
+    },
+    {
+      artifactId: "artifact-phase-b-2",
+      artifactKind: "worker_report",
+      createdAt: "2026-04-25T12:11:00.000Z",
+    },
+  ],
+  nextAction: "open_artifact",
+};

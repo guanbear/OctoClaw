@@ -399,4 +399,68 @@ describe("Chinese provenance prompt intent classification", () => {
     expect(control.provenance_followup).toBe(true);
     expect(control.require_state_grounding).toBe(true);
   });
+
+  it("classifies Slack plain chat 在吗 as plain_chat without state grounding", () => {
+    const intent = buildConversationIntentPacket({
+      prompt: "在吗",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: ["slack:default:dm:U123"],
+    });
+
+    expect(intent.intent_class).toBe("plain_chat");
+    expect(intent.reason_codes).toContain("plain_chat_short_greeting");
+
+    const control = buildConversationControlHintsFromIntent(intent);
+    expect(control.require_state_grounding).toBe(false);
+    expect(control.route_hint).toBe("reply");
+  });
+});
+
+describe("Phase B acceptance: Slack/IM intent routing", () => {
+  it('plain_chat "在吗" → conversation_control available=false (no spawn, just reply)', () => {
+    const intent = buildConversationIntentPacket({
+      prompt: "在吗",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: ["slack:default:dm:U123"],
+    });
+    const control = buildConversationControlHintsFromIntent(intent);
+
+    expect(intent.intent_class).toBe("plain_chat");
+    expect(control.available).toBe(false);
+    expect(control.route_hint).toBeUndefined();
+    expect(control.require_state_grounding).not.toBe(true);
+  });
+
+  it('execution_followup "刚才那个任务判定是啥" → conversation_control with route_hint', () => {
+    const intent = buildConversationIntentPacket({
+      prompt: "刚才那个任务判定是啥",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: ["slack:default:channel:C123"],
+    });
+    const control = buildConversationControlHintsFromIntent(intent);
+
+    expect(intent.intent_class).toBe("execution_followup");
+    expect(control.available).toBe(true);
+    expect(control.route_hint).toBe("delegate");
+    expect(control.lane_hint).toBe("control_observer");
+  });
+
+  it("delegated_work → conversation_control with route_hint=delegate", () => {
+    const control = buildConversationControlHintsFromIntent({
+      available: true,
+      intentClass: "delegated_work",
+      intent_class: "delegated_work",
+      schema_version: "octoclaw.intent_packet/v1",
+      source: "acceptance_test",
+      reason_codes: ["delegated_work_required"],
+      confidence: 0.8,
+      evidence: ["delegated_work_required"],
+    });
+
+    expect(control.available).toBe(true);
+    expect(control.route_hint).toBe("delegate");
+  });
 });

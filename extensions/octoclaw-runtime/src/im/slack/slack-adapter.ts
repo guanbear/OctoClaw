@@ -32,6 +32,17 @@ export interface SlackAdapterConfig {
   nativeTransport: boolean;
 }
 
+export interface SlackGroupPolicy {
+  allowDms?: boolean;
+  allowlist?: string[];
+}
+
+export interface SlackToolExposureAudit {
+  allowed: boolean;
+  exposedTools: string[];
+  blockedTools: string[];
+}
+
 const DEFAULT_SLACK_CONFIG: SlackAdapterConfig = {
   replyToMode: "off",
   streamingMode: "partial",
@@ -48,6 +59,13 @@ export const SLACK_CAPABILITIES = {
   maxMessageLength: 40000,
 };
 
+const SLACK_SAFE_TOOL_ALLOWLIST = new Set([
+  "message.send",
+  "message.update",
+  "message.react",
+  "message.typing",
+]);
+
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -59,6 +77,33 @@ function asSlackCommandResult(value: unknown): SlackCommandResult {
   return value as SlackCommandResult;
 }
 
+function parseSlackSessionKey(sessionKey: string): { kind: string; target: string; threadTs: string } {
+  const parts = sessionKey.split(":").map((part) => part.trim());
+  const slackIndex = parts.findIndex((part) => part.toLowerCase() === "slack");
+  if (slackIndex < 0) return { kind: "", target: "", threadTs: "" };
+  const kindIndex = slackIndex + 2;
+  const kind = stringValue(parts[kindIndex]).toLowerCase();
+  const target = stringValue(parts[kindIndex + 1]);
+  const threadTs = stringValue(parts[kindIndex + 2]).toLowerCase() === "thread"
+    ? stringValue(parts[kindIndex + 3])
+    : "";
+  return { kind, target, threadTs };
+}
+
+export function isSlackTargetAllowed(sessionKey: string, policy: SlackGroupPolicy = {}): boolean {
+  const parsed = parseSlackSessionKey(sessionKey);
+  if (!parsed.kind || !parsed.target) return false;
+  if (parsed.kind === "dm" || parsed.kind === "direct") return policy.allowDms !== false;
+  const allowlist = new Set((policy.allowlist ?? []).map((item) => item.trim().toUpperCase()).filter(Boolean));
+  return allowlist.has(parsed.target.toUpperCase());
+}
+
+export function auditSlackFacingToolExposure(tools: string[]): SlackToolExposureAudit {
+  const exposedTools = tools.map((tool) => tool.trim()).filter(Boolean);
+  const blockedTools = exposedTools.filter((tool) => !SLACK_SAFE_TOOL_ALLOWLIST.has(tool));
+  return { allowed: blockedTools.length === 0, exposedTools, blockedTools };
+}
+
 export class SlackAdapter {
   readonly channel = "slack" as const;
   readonly config: SlackAdapterConfig;
@@ -68,9 +113,9 @@ export class SlackAdapter {
   }
 
   resolveTarget(sessionKey: string): SlackDeliveryTarget {
-    const parts = sessionKey.split(":");
-    const userId = this.normalizeUserId(parts[5] || "");
-    const threadTs = stringValue(parts[7]);
+    const parsed = parseSlackSessionKey(sessionKey);
+    const userId = this.normalizeUserId(parsed.target);
+    const threadTs = parsed.threadTs;
     return {
       channel: "slack",
       target: userId,

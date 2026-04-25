@@ -178,3 +178,173 @@ describe("MultiTaskStatusProjection", () => {
     expect(projection.counts.queued).toBe(1);
   });
 });
+
+describe("Phase B acceptance: status no-lie rules", () => {
+  const now = "2026-04-25T00:10:00.000Z";
+  const staleAfterMs = 5 * 60 * 1000;
+  const nativeBinding = {
+    flowId: "flow-1",
+    ownerKey: "wc-1",
+    controllerId: "octoclaw.delegate",
+    revision: 1,
+    expectedRevision: 1,
+    syncMode: "managed",
+    status: "queued",
+  } as const;
+
+  function projectionStatus(input: Parameters<typeof buildTaskStatusProjection>[0]) {
+    return buildTaskStatusProjection(input).status;
+  }
+
+  it("projects draft flow without dispatch evidence as registered or materializing", () => {
+    expect(projectionStatus({
+      contract: contract({ status: "draft", telemetry: {} }),
+      now,
+    })).toBe("registered");
+
+    expect(projectionStatus({
+      contract: contract({
+        status: "draft",
+        delegate: { ...contract().delegate!, nativeBinding },
+        telemetry: {},
+      }),
+      now,
+    })).toBe("materializing");
+  });
+
+  it("projects dispatched but unspawned work as queued even with a native binding", () => {
+    expect(projectionStatus({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: false } }),
+      now,
+    })).toBe("queued");
+
+    expect(projectionStatus({
+      contract: contract({
+        delegate: { ...contract().delegate!, nativeBinding },
+        telemetry: { dispatchExecuted: true, spawnExecuted: false },
+      }),
+      now,
+    })).toBe("queued");
+  });
+
+  it("projects spawned work with fresh heartbeat or running contract status as running", () => {
+    expect(projectionStatus({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: true } }),
+      heartbeatAt: "2026-04-25T00:09:00.000Z",
+      now,
+      staleAfterMs,
+    })).toBe("running");
+
+    expect(projectionStatus({
+      contract: contract({
+        status: "running",
+        telemetry: { dispatchExecuted: true, spawnExecuted: true },
+      }),
+      heartbeatAt: now,
+      now,
+      staleAfterMs,
+    })).toBe("running");
+  });
+
+  it("projects stale heartbeat as timed_out including the exact stale boundary", () => {
+    expect(projectionStatus({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: true } }),
+      heartbeatAt: "2026-04-25T00:04:59.999Z",
+      now,
+      staleAfterMs,
+    })).toBe("timed_out");
+
+    expect(projectionStatus({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: true } }),
+      heartbeatAt: "2026-04-25T00:05:00.000Z",
+      now,
+      staleAfterMs,
+    })).toBe("timed_out");
+  });
+
+  it("projects final results awaiting delivery as deliverable_ready", () => {
+    expect(projectionStatus({
+      contract: contract({
+        telemetry: {
+          dispatchExecuted: true,
+          spawnExecuted: true,
+          resultMaterialized: true,
+          deliveryStatus: "pending",
+        },
+      }),
+      deliveryAcknowledged: false,
+      now,
+    })).toBe("deliverable_ready");
+
+    expect(projectionStatus({
+      contract: contract({ telemetry: { dispatchExecuted: true, spawnExecuted: true } }),
+      finalResultExists: true,
+      now,
+    })).toBe("deliverable_ready");
+  });
+
+  it("projects acknowledged materialized results as completed", () => {
+    expect(projectionStatus({
+      contract: contract({
+        telemetry: {
+          dispatchExecuted: true,
+          spawnExecuted: true,
+          resultMaterialized: true,
+          deliveryStatus: "pending",
+        },
+      }),
+      deliveryAcknowledged: true,
+      now,
+    })).toBe("completed");
+  });
+
+  it("respects terminal failed and cancelled contract statuses over other evidence", () => {
+    expect(projectionStatus({
+      contract: contract({
+        status: "failed",
+        delegate: { ...contract().delegate!, nativeBinding },
+        telemetry: {
+          dispatchExecuted: true,
+          spawnExecuted: true,
+          resultMaterialized: true,
+          deliveryStatus: "pending",
+        },
+      }),
+      deliveryAcknowledged: true,
+      finalResultExists: true,
+      now,
+    })).toBe("failed");
+
+    expect(projectionStatus({
+      contract: contract({
+        status: "cancelled",
+        delegate: { ...contract().delegate!, nativeBinding },
+        telemetry: {
+          dispatchExecuted: true,
+          spawnExecuted: true,
+          resultMaterialized: true,
+          deliveryStatus: "pending",
+        },
+      }),
+      deliveryAcknowledged: true,
+      finalResultExists: true,
+      now,
+    })).toBe("cancelled");
+  });
+
+  it("does not regress from running to queued after spawn evidence is added", () => {
+    const dispatched = contract({ telemetry: { dispatchExecuted: true, spawnExecuted: false } });
+    expect(projectionStatus({ contract: dispatched, now })).toBe("queued");
+
+    const spawned = contract({
+      ...dispatched,
+      telemetry: { ...dispatched.telemetry, spawnExecuted: true },
+    });
+    expect(projectionStatus({
+      contract: spawned,
+      heartbeatAt: "2026-04-25T00:09:30.000Z",
+      now,
+      staleAfterMs,
+    })).toBe("running");
+  });
+});

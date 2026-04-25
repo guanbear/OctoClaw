@@ -6,6 +6,7 @@ import type {
   NativeTaskBinding,
 } from "@octoclaw/contracts/delegate";
 import type { StatusSurfaceViewModel } from "@octoclaw/contracts/results";
+import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
 import type { RuntimeStateDetailsSurface } from "@octoclaw/runtime/state-surface";
 
@@ -21,6 +22,7 @@ export interface StatusSurfaceProjectionInput {
   actionAvailability?: string[];
   modelSummary?: string;
   costEstimate?: string;
+  taskStatusProjection?: TaskStatusProjection;
   leaseState?: string;
   isStale?: boolean;
   conflictQueued?: boolean;
@@ -155,14 +157,21 @@ function defaultActionAvailability(record: RuntimeStateSurfaceRecord): string[] 
   return ["status", "details", "queue", "timeline"];
 }
 
+function costEstimateText(projection?: TaskStatusProjection): string {
+  if (!projection) return "unreported";
+  if (projection.actualCostUsd !== undefined) return `$${projection.actualCostUsd.toFixed(4)} actual`;
+  if (projection.estimatedCostUsd !== undefined) return `$${projection.estimatedCostUsd.toFixed(4)} estimated`;
+  return "unreported";
+}
+
 export function buildStatusProjection(input: StatusSurfaceProjectionInput): StatusSurfaceViewModel {
-  const { record, delegateTask, nativeBinding, progressEvents } = input;
+  const { record, delegateTask, nativeBinding, progressEvents, taskStatusProjection } = input;
   const route = input.route || defaultRoute(record, delegateTask);
   return {
     ...buildContractEnvelope("projection"),
     taskId: nativeBinding?.nativeTaskId || record.truth.taskId,
     flowId: nativeBinding?.nativeFlowId || record.truth.flowId,
-    state: resolveDisplayState(input),
+    state: taskStatusProjection?.status || resolveDisplayState(input),
     route,
     role: delegateTask?.role || (route === "reply" ? "main_reply" : "worker_research"),
     coordinationMode: delegateTask?.coordinationMode || (route === "delegate" ? "solo_worker" : ""),
@@ -171,14 +180,25 @@ export function buildStatusProjection(input: StatusSurfaceProjectionInput): Stat
     substrateSummary: delegateSubstrateSummary(input),
     actionAvailability: input.actionAvailability || defaultActionAvailability(record),
     queuePosition: input.queuePosition ?? 0,
-    modelSummary: input.modelSummary || "unreported",
-    costEstimate: input.costEstimate || "unreported",
+    modelSummary: input.modelSummary || taskStatusProjection?.modelProfile || "unreported",
+    costEstimate: input.costEstimate || costEstimateText(taskStatusProjection),
     claimOwner: record.ownership.claimOwner,
     leaseState: (input.leaseState as StatusSurfaceViewModel["leaseState"]) || "active",
     workspaceMode: record.scope.workspaceMode,
     writeScopeSummary: record.scope.writeScopeSummary || "none",
     threadCount: 1,
     advisorUsageSummary: "none",
+    elapsedMs: taskStatusProjection?.elapsedMs,
+    success: taskStatusProjection?.success,
+    failureCode: taskStatusProjection?.failureCode,
+    failureMessage: taskStatusProjection?.failureMessage,
+    estimatedCostUsd: taskStatusProjection?.estimatedCostUsd,
+    actualCostUsd: taskStatusProjection?.actualCostUsd,
+    artifactRefs: taskStatusProjection?.artifactRefs.map((ref) => ref.artifactId),
+    childSessionKey: taskStatusProjection?.childSessionKey,
+    childSessionId: taskStatusProjection?.childSessionId,
+    runId: taskStatusProjection?.runId,
+    childRunId: taskStatusProjection?.childRunId,
     timelinePreview: buildTimelinePreview(progressEvents),
   };
 }

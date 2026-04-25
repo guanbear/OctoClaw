@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DelegateProgressEvent } from "@octoclaw/contracts/delegate";
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
+import { buildStatusProjection } from "../read-model/index.js";
 import {
   buildDetailsSurface,
   buildQueueSurface,
@@ -128,6 +129,42 @@ describe("view-model", () => {
     expect(view.writeScopeSummary).toBe("repo:src");
     expect(view.threadCount).toBe(1);
     expect(view.advisorUsageSummary).toBe("none");
+  });
+
+  it("buildStatusProjection exposes TaskStatusProjection continuity and cost fields", () => {
+    const view = buildStatusProjection({
+      record: createRecord(),
+      taskStatusProjection: {
+        workContractId: "wc-1",
+        taskSummary: "status task",
+        elapsedMs: 12_345,
+        modelProfile: "worker_code_normal",
+        backend: "openclaw-native",
+        status: "deliverable_ready",
+        success: false,
+        failureCode: "delivery_pending",
+        failureMessage: "delivery pending",
+        estimatedCostUsd: 0.01,
+        actualCostUsd: 0.02,
+        artifactRefs: [{ artifactId: "artifact-1", artifactKind: "worker_report" }],
+        childSessionKey: "child-key-1",
+        childSessionId: "provider-session-1",
+        runId: "run-1",
+        childRunId: "child-run-1",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: true,
+      },
+    });
+
+    expect(view.state).toBe("deliverable_ready");
+    expect(view.elapsedMs).toBe(12_345);
+    expect(view.modelSummary).toBe("worker_code_normal");
+    expect(view.costEstimate).toBe("$0.0200 actual");
+    expect(view.failureCode).toBe("delivery_pending");
+    expect(view.artifactRefs).toEqual(["artifact-1"]);
+    expect(view.childSessionKey).toBe("child-key-1");
+    expect(view.runId).toBe("run-1");
   });
 
   it("buildQueueSurface produces RuntimeQueueSurface", () => {

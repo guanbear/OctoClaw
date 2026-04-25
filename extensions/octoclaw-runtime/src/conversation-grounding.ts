@@ -121,6 +121,9 @@ const TASK_PROGRESS_PROMPT_PATTERNS = [
   /((?:single|spawn|runner)\s*成功了吗|任务怎样了|任务怎么样了|现在什么状态|还在\s*queued\s*吗|还在排队吗)/iu,
   /\b(single succeeded|spawn succeeded|runner succeeded|task status|still queued|still running)\b/iu,
 ];
+const PLAIN_CHAT_PROMPT_PATTERNS = [
+  /^(在吗|在不在|你好|您好|嗨|哈喽|hello|hi|hey)[？?!.。！\s]*$/iu,
+];
 const FRESH_LIVE_LOOKUP_PATTERNS = [
   /(查|查下|查一下|再查|再看|看下|看一下|看看|确认|确认下|确认一下).{0,16}(openclaw|octoclaw).{0,20}(更新|发版|release|版本|changelog|memory|dream)/iu,
   /(openclaw|octoclaw).{0,20}(有啥更新|有什么更新|有没有新的发版|有没有新发版|有没有新的release|有没有新release|最近.*更新|最新.*更新|最近.*发版|最近.*release|新版本)/iu,
@@ -369,6 +372,11 @@ function isMetaPrompt(prompt = ""): boolean {
 function isTaskProgressPrompt(prompt = ""): boolean {
   const text = stringValue(prompt);
   return TASK_PROGRESS_PROMPT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function isPlainChatPrompt(prompt = ""): boolean {
+  const text = stringValue(prompt);
+  return PLAIN_CHAT_PROMPT_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 function isProvenancePrompt(prompt = ""): boolean {
@@ -779,7 +787,11 @@ export function buildConversationIntentPacket(options: {
   let isProvenanceOnly = false;
   const explicitFollowup = Boolean(subjectTurn && (isMetaPrompt(prompt) || isTaskProgressPrompt(prompt) || isProvenancePrompt(prompt)));
   const similarityFallbackFollowup = Boolean(subjectTurn && !explicitFollowup && promptsEquivalent(prompt, subjectTurn.prompt));
-  if (surface) {
+  if (isPlainChatPrompt(prompt)) {
+    hints = { intentClass: "plain_chat" };
+    source = "deterministic_plain_chat_classifier";
+    reasonCodes = ["plain_chat_short_greeting"];
+  } else if (surface) {
     hints = { surfaceBound: true };
     source = "deterministic_surface_registry";
     reasonCodes = [`operator_surface:${surface.surface_id}`];
@@ -845,6 +857,15 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
       protected_lane: "control_observer",
       require_state_grounding: true,
       provenance_followup: Boolean(intentPacket.provenance_followup),
+    };
+  }
+  if (intentClass === "plain_chat") {
+    return {
+      ...base,
+      route_hint: "reply",
+      lane_hint: "reply",
+      require_state_grounding: false,
+      require_fresh_lookup: false,
     };
   }
   if (intentClass === "local_surface_lookup") {

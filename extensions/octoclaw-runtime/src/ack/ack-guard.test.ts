@@ -255,3 +255,39 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     expect(adapter.send).not.toHaveBeenCalled();
   });
 });
+
+describe("Phase B acceptance: ACK reads WorkContract/status/native/delivery not _judge_*", () => {
+  it("resolveRoutePhase ignores _judge_route field", () => {
+    const result = resolveRoutePhase({ _judge_route: "delegate" });
+
+    expect(result).toBe("pre_route");
+  });
+
+  it("resolveRoutePhase uses WorkContract route", () => {
+    const result = resolveRoutePhase({ work_contract: { route: "delegate" } });
+
+    expect(result).toBe("delegate");
+  });
+
+  it("resolveRoutePhase ignores router_decision_v2", () => {
+    const result = resolveRoutePhase({ router_decision_v2: { request_kind: "delegated_task" } });
+
+    expect(result).toBe("pre_route");
+  });
+
+  it("ACK decision packet does not include judge internals", () => {
+    const packet = buildDecisionPacket("phase-b-decision-packet", {
+      _judge_route: "delegate",
+      _judge_reason: "internal only",
+      router_decision_v2: { request_kind: "delegated_task" },
+      delivered: true,
+      inboundMessageTs: "111.222",
+    }, "reply");
+
+    const serialized = JSON.stringify(packet);
+    expect(serialized).not.toContain("_judge_");
+    expect(serialized).not.toContain("router_decision_v2");
+    expect(packet.route).toBe("reply");
+    expect(packet.delivered).toBe(true);
+  });
+});

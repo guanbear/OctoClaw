@@ -127,3 +127,111 @@ describe("delegate packet builders", () => {
     })).toThrow("context_escalation_reason_required");
   });
 });
+
+describe("Phase B acceptance: parent-visible packet sanitization", () => {
+  it("DelegateHandoffPacket has allowRawTranscript: false", () => {
+    const packet = buildDelegateHandoffPacket({
+      delegateTaskId: "delegate-1",
+      attemptId: "attempt-1",
+      threadBindingKey: "thread-1",
+      currentUserAsk: "Check status",
+      taskBrief: "Check delegated status",
+      modelProfile: "worker_research",
+    });
+
+    expect(packet.contextBudget.allowRawTranscript).toBe(false);
+  });
+
+  it("DelegateHandoffPacket forbids full_transcript in forbiddenContent", () => {
+    const packet = buildDelegateHandoffPacket({
+      delegateTaskId: "delegate-1",
+      attemptId: "attempt-1",
+      threadBindingKey: "thread-1",
+      currentUserAsk: "Check status",
+      taskBrief: "Check delegated status",
+      modelProfile: "worker_research",
+    });
+
+    expect(packet.forbiddenContent).toContain("full_transcript");
+  });
+
+  it("DelegateStatusPacket does NOT contain thread summary", () => {
+    const packet = buildDelegateStatusPacket({
+      threadBindingKey: "thread-1",
+      delegateTaskId: "delegate-1",
+      nativeFlowId: "flow-1",
+      nativeTaskId: "task-1",
+      status: "running",
+      role: "research",
+      modelProfile: "worker_research",
+      progressSummary: "Still running",
+    });
+
+    expect(JSON.stringify(packet)).not.toContain("threadSummary");
+    expect(Object.prototype.hasOwnProperty.call(packet, "threadSummary")).toBe(false);
+  });
+
+  it("WorkerResultPacket does NOT contain full report body", () => {
+    const packet = buildWorkerResultPacket({
+      delegateTaskId: "delegate-1",
+      attemptId: "attempt-1",
+      status: "completed",
+      summary: "Done; full report is available as an artifact.",
+      keyFindings: ["Compact finding"],
+      artifactRefs: ["worker_report:delegate-1:1"],
+    });
+
+    expect(packet).toEqual({
+      schemaVersion: "octoclaw.worker_result.v1",
+      delegateTaskId: "delegate-1",
+      attemptId: "attempt-1",
+      status: "completed",
+      summary: "Done; full report is available as an artifact.",
+      keyFindings: ["Compact finding"],
+      changedFiles: [],
+      testsRun: [],
+      artifactRefs: ["worker_report:delegate-1:1"],
+      blockers: [],
+      confidence: "medium",
+      metrics: {},
+    });
+    expect(JSON.stringify(packet)).not.toContain("full report body");
+  });
+
+  it("Context escalation requires explicit reason", () => {
+    expect(() => buildDelegateHandoffPacket({
+      delegateTaskId: "delegate-1",
+      attemptId: "attempt-1",
+      threadBindingKey: "thread-1",
+      currentUserAsk: "Need exact quote",
+      taskBrief: "Inspect prior wording",
+      modelProfile: "worker_research",
+      relevantExcerpts: ["exact phrase"],
+    })).toThrow("context_escalation_reason_required");
+  });
+
+  it("sanitizeMainContextInjection strips child transcript keys", () => {
+    const clean = sanitizeMainContextInjection({
+      message: "User-visible: done.",
+      childTranscript: "raw child transcript",
+      nested: { child_transcript: "raw nested transcript", summary: "kept" },
+    });
+
+    expect(JSON.stringify(clean)).not.toContain("childTranscript");
+    expect(JSON.stringify(clean)).not.toContain("child_transcript");
+    expect(JSON.stringify(clean)).not.toContain("raw child transcript");
+    expect(JSON.stringify(clean)).toContain("kept");
+  });
+
+  it("sanitizeMainContextInjection strips internal rationale", () => {
+    const clean = sanitizeMainContextInjection({
+      message: "User-visible: done.",
+      internal_route_rationale: "spawn worker because hidden policy",
+      nested: { internal_route_rationale: "nested hidden rationale", summary: "kept" },
+    });
+
+    expect(JSON.stringify(clean)).not.toContain("internal_route_rationale");
+    expect(JSON.stringify(clean)).not.toContain("hidden policy");
+    expect(JSON.stringify(clean)).toContain("kept");
+  });
+});
