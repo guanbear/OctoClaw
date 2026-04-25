@@ -548,6 +548,17 @@ pnpm --filter octoclaw-runtime test -- replay telemetry coverage
 
 Reduce duplicate mechanisms after WorkContract path is stable.
 
+### Migration status
+
+- `WorkContract` is the semantic/delegation truth for new code paths.
+- Native TaskFlow remains the lifecycle/execution truth.
+- `route_decision`, `router_decision_v2`, and `tool_policy` are retained as compatibility views for legacy hooks, replay, and acceptance tests; they must not become new scheduling truth.
+- `router_decision_v2.compatibility_view = true` marks generated router fields as legacy projection.
+- ACK reads explicit route phase, WorkContract projection, or `route_decision.route`; it must not infer route from `_judge_*` or `router_decision_v2`.
+- Grounding/status follow-up uses replay/task-state adapters only to produce compact `DelegateStatusPacket`/execution facts. It must not infer delegated execution from route labels alone.
+- Prompt similarity is fallback-only for non-explicit follow-up recovery; explicit provenance/status/meta prompts are handled by deterministic intent patterns first.
+- Parent-visible context remains compact projection only: `MainContextPacket`, `DelegateStatusPacket`, `ExecutionCoveragePacket`, artifact refs, and telemetry summaries.
+
 ### Tasks
 
 1. Mark legacy `router_decision_v2` as compatibility view.

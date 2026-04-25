@@ -7,6 +7,7 @@ import {
   buildConversationGrounding,
   buildConversationControlHintsFromIntent,
   buildConversationIntentPacket,
+  buildDirectLookupGuard,
 } from "./conversation-grounding.js";
 import { buildDecision, resolveStatelessPolicyDecision } from "./resolve/policy-resolver.js";
 import { enrichConversationControlMetadata } from "./resolve/session.js";
@@ -334,6 +335,52 @@ describe("Chinese provenance prompt intent classification", () => {
     });
 
     expect(intent.intent_class).not.toBe("execution_followup");
+  });
+
+  it("uses prompt similarity only as fallback for non-explicit follow-up prompts", () => {
+    const dir = path.join("/tmp", `octoclaw-similarity-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const replayLogPath = path.join(dir, "runtime-policy-replay.jsonl");
+    const taskStatePath = path.join(dir, "task-state.json");
+
+    fs.writeFileSync(replayLogPath, [
+      JSON.stringify({
+        event: "policy_resolved",
+        sessionKey: "test-session",
+        sessionId: "test-session",
+        at: new Date(Date.now() - 30_000).toISOString(),
+        prompt: "查一下 nginx 配置",
+        route: "reply",
+      }),
+    ].join("\n"));
+    fs.writeFileSync(taskStatePath, JSON.stringify({ tasks: [] }));
+
+    const intent = buildConversationIntentPacket({
+      prompt: "[Queued messages while agent was busy]\nSystem: 12:00: 查一下 nginx 配置",
+      replayLogPath,
+      taskStatePath,
+      sessionKeys: ["test-session"],
+    });
+
+    expect(intent.intent_class).toBe("execution_followup");
+    expect(intent.reason_codes).toContain("recent_execution_followup_similarity_fallback");
+  });
+
+  it("does not use router_decision_v2 evidence_required as grounding route signal", () => {
+    const guard = buildDirectLookupGuard({
+      latency_ack: { required: false },
+      router_decision_v2: {
+        compatibility_view: true,
+        evidence_required: ["web_lookup"],
+      },
+      request: {
+        metadata: {
+          intent_packet: { intent_class: "plain_chat" },
+        },
+      },
+    });
+
+    expect(guard).toBe("");
   });
 
   it("provenance without history → execution_followup with provenance_followup=true", () => {

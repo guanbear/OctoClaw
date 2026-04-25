@@ -7,7 +7,6 @@ import {
   type IntentHints,
   type IntentPacket,
 } from "@octoclaw/policy/intent";
-import { normalizeLiveRoute } from "./resolve/route-helpers.js";
 import { buildDelegateStatusPacket } from "./context/delegate-packets.js";
 import { sanitizeMainContextInjection } from "./context/context-budget.js";
 import type { DelegateStatusPacket } from "@octoclaw/contracts/delegate-context";
@@ -714,7 +713,7 @@ function selectSubjectTurn(turns: ReplayTurn[], prompt = "", sessionKeys: string
   if (isTaskProgressPrompt(prompt)) {
     const delegatedTurns = nonMetaTurns.filter((turn) => {
       const facts = turn.facts;
-        return Boolean(facts && (facts.dispatchSeen || facts.taskId || facts.runnerJobId || normalizeLiveRoute(turn.route, "reply") === "delegate" || turn.route === "spawn_multi"));
+      return Boolean(facts && (facts.dispatchSeen || facts.taskId || facts.runnerJobId));
     });
     if (delegatedTurns.length > 0) {
       return delegatedTurns[delegatedTurns.length - 1] || null;
@@ -723,7 +722,7 @@ function selectSubjectTurn(turns: ReplayTurn[], prompt = "", sessionKeys: string
   if (isProvenancePrompt(prompt)) {
     const factualTurns = nonMetaTurns.filter((turn) => {
       const facts = turn.facts;
-      return Boolean(facts && (facts.dispatchSeen || facts.directTools.length > 0 || turn.route));
+      return Boolean(facts && (facts.dispatchSeen || facts.directTools.length > 0));
     });
     if (factualTurns.length > 0) {
       return factualTurns[factualTurns.length - 1] || null;
@@ -778,6 +777,8 @@ export function buildConversationIntentPacket(options: {
   let source = "deterministic_front_gate";
   let reasonCodes = ["semantic_judge_required"];
   let isProvenanceOnly = false;
+  const explicitFollowup = Boolean(subjectTurn && (isMetaPrompt(prompt) || isTaskProgressPrompt(prompt) || isProvenancePrompt(prompt)));
+  const similarityFallbackFollowup = Boolean(subjectTurn && !explicitFollowup && promptsEquivalent(prompt, subjectTurn.prompt));
   if (surface) {
     hints = { surfaceBound: true };
     source = "deterministic_surface_registry";
@@ -786,11 +787,11 @@ export function buildConversationIntentPacket(options: {
     hints = { requiresFreshLookup: true };
     source = "deterministic_live_lookup_classifier";
     reasonCodes = ["stable_fresh_live_lookup"];
-  } else if (subjectTurn && (isMetaPrompt(prompt) || isTaskProgressPrompt(prompt) || isProvenancePrompt(prompt) || promptsEquivalent(prompt, subjectTurn.prompt))) {
+  } else if (explicitFollowup || similarityFallbackFollowup) {
     hints = { executionFollowup: true };
     source = "deterministic_followup_grounding";
-    reasonCodes = ["recent_execution_followup"];
-    isProvenanceOnly = isProvenancePrompt(prompt) && !isMetaPrompt(prompt) && !isTaskProgressPrompt(prompt) && !promptsEquivalent(prompt, subjectTurn.prompt);
+    reasonCodes = similarityFallbackFollowup ? ["recent_execution_followup_similarity_fallback"] : ["recent_execution_followup"];
+    isProvenanceOnly = isProvenancePrompt(prompt) && !isMetaPrompt(prompt) && !isTaskProgressPrompt(prompt);
   } else if (!subjectTurn && isProvenancePrompt(prompt)) {
     // Provenance prompt without history — still execution_followup (no verifiable record)
     hints = { executionFollowup: true };
@@ -962,12 +963,9 @@ export function buildDirectLookupGuard(decision: JsonRecord = {}): string {
   const request = isRecord(decision.request) ? decision.request : {};
   const metadata = isRecord(request.metadata) ? request.metadata : {};
   const intentPacket = isRecord(metadata.intent_packet) ? metadata.intent_packet : {};
-  const routerDecision = isRecord(decision.router_decision_v2) ? decision.router_decision_v2 : {};
   const latencyAck = isRecord(decision.latency_ack) ? decision.latency_ack : {};
   const intentClass = stringValue(intentPacket.intent_class || intentPacket.intentClass);
-  const evidenceRequired = Array.isArray(routerDecision.evidence_required) ? routerDecision.evidence_required.map((item) => stringValue(item)) : [];
-  const guardedIntent = ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass)
-    || evidenceRequired.some((item) => ["web_lookup", "local_probe", "remote_probe"].includes(item));
+  const guardedIntent = ["fresh_live_lookup", "local_surface_lookup"].includes(intentClass);
   if (!Boolean(latencyAck.required) && !guardedIntent) {
     return "";
   }

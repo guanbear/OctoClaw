@@ -32,7 +32,6 @@ export function isDelegatedRoute(route: unknown): boolean {
 function decisionSignalsDelegate(decision: UnknownRecord): boolean {
   const routeDecision = asRecord(decision.route_decision);
   const toolPolicy = asRecord(decision.tool_policy);
-  const routerDecision = asRecord(decision.router_decision_v2);
 
   return normalizeLiveRoute(asString(decision.route), "reply") === "delegate"
     || normalizeLiveRoute(asString(routeDecision.route), "reply") === "delegate"
@@ -40,8 +39,7 @@ function decisionSignalsDelegate(decision: UnknownRecord): boolean {
     || normalizeLiveRoute(asString(routeDecision.judge_route ?? decision._judge_route), "reply") === "delegate"
     || asString(toolPolicy.must_delegate_via ?? decision.must_delegate_via).length > 0
     || toolPolicy.delegate_first === true
-    || routeDecision.dispatch_required === true
-    || asString(routerDecision.request_kind ?? decision.request_kind) === "delegated_task";
+    || routeDecision.dispatch_required === true;
 }
 
 export function authoritativeDecisionRoute(decision: unknown, fallback: LiveRoute = "reply"): LiveRoute {
@@ -111,6 +109,7 @@ export function canonicalizeDecisionForPolicyState(decision: unknown): UnknownRe
     },
     router_decision_v2: {
       ...routerDecision,
+      compatibility_view: true,
       request_kind: route === "delegate" ? "delegated_task" : asString(routerDecision.request_kind) || "reply",
     },
     latency_ack: {

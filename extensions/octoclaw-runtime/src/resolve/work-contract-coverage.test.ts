@@ -429,6 +429,15 @@ describe("WP3 acceptance", () => {
     expect((decision.tool_policy as Record<string, unknown>).delegate_first).toBe(true);
   });
 
+  it("does not infer authoritative route from router_decision_v2 alone", () => {
+    const decision = {
+      router_decision_v2: { request_kind: "delegated_task" },
+      route_decision: { route: "reply" },
+    };
+
+    expect(authoritativeDecisionRoute(decision, "reply")).toBe("reply");
+  });
+
   it("WorkContract telemetry includes memoryCoverage and decisionSource", () => {
     const execution = buildExecutionCoverageLayer(["missing"]);
     const memory: JudgeMemoryLayer = {
