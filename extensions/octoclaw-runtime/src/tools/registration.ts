@@ -41,7 +41,7 @@ import { validateRouteSeal } from "../resolve/route-seal.js";
 import { createOpenClawDistTaskFlowPort } from "../ports/openclaw-dist-taskflow-port.js";
 import { checkTaskflowCapability } from "../ports/taskflow-port.js";
 import type { RouteSeal } from "@octoclaw/contracts/route-seal";
-import type { WorkContract } from "@octoclaw/contracts/work-contract";
+import type { NativeBindingRef, NativeFlowStatus, WorkContract } from "@octoclaw/contracts/work-contract";
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
@@ -157,6 +157,14 @@ function asBoolean(value: unknown, fallback = false): boolean {
 function asNumber(value: unknown): number | undefined {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function optionalString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const text = asString(value);
+    if (text) return text;
+  }
+  return undefined;
 }
 
 function parseObjectJson(value: unknown): UnknownRecord {
@@ -281,6 +289,30 @@ function validateDispatchWorkContract(contract: WorkContract | null, workContrac
     return { ok: false, route: contract.route, error: `work_contract_route_not_dispatchable:${workContractId}:${contract.route}` };
   }
   return { ok: true, contract };
+}
+
+function nativeFlowStatusFromSubstrate(substrate: string): NativeFlowStatus {
+  switch (substrate) {
+    case "running":
+      return "running";
+    case "blocked":
+      return "blocked";
+    case "completed":
+    case "succeeded":
+      return "succeeded";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "lost":
+      return "lost";
+    case "waiting":
+      return "waiting";
+    case "queued":
+    case "planned":
+    default:
+      return "queued";
+  }
 }
 
 function selectRouteSealState(ctx: UnknownRecord, stateKey: string, state: UnknownRecord | null): UnknownRecord | null {
@@ -1331,6 +1363,22 @@ export function getToolRegistrations(): ToolRegistration[] {
           setPolicyStateForContext(ctx, nextState, stateKey);
         }
         const materialization = asRecord(payload.materialization);
+        const payloadRuntimeTruth = asRecord(payload.runtime_truth);
+        const payloadNativeTaskBinding = asRecord(payloadRuntimeTruth.nativeTaskBinding);
+        const payloadDelegateAttempt = asRecord(payloadRuntimeTruth.delegateAttempt);
+        const payloadNativeAttemptBinding = asRecord(payloadDelegateAttempt.nativeBinding);
+        const materializedNativeTaskId = optionalString(
+          payloadNativeTaskBinding.nativeTaskId,
+          payloadNativeAttemptBinding.nativeTaskId,
+          materialization.task_id,
+          payload.task_id,
+        );
+        const materializedNativeFlowId = optionalString(
+          payloadNativeTaskBinding.nativeFlowId,
+          payloadNativeAttemptBinding.nativeFlowId,
+          materialization.flow_id,
+          payload.flow_id,
+        );
         if (asString(materialization.task_id)) {
           const substrateState = asString(materialization.substrate_state, payload.executed === true ? "running" : "queued");
           const startedAt = substrateState === "queued" || substrateState === "planned"
@@ -1358,37 +1406,35 @@ export function getToolRegistrations(): ToolRegistration[] {
         const workerPool = asString(finalDecisionRoute.worker_pool || payload.worker_pool);
         const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
         const taskClass = asString(finalDecisionRoute.task_class || finalDecisionRoute.judge_role || finalDecisionRoute.role);
-        const runtimeTruth = asRecord(authoritativeDecision.runtime_truth);
-        const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
-        const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
-        const nativeAttemptBinding = asRecord(delegateAttempt.nativeBinding);
         const nativeBinding = dispatchWorkContract?.delegate?.nativeBinding;
         if (dispatchWorkContract) {
-          const materialization = asRecord(payload.materialization);
-          const runtimeTruth = asRecord(payload.runtime_truth);
-          const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
           const substrateState = asString(materialization.substrate_state, payload.executed === true ? "running" : "queued");
-          const nativeTaskId = asString(nativeTaskBinding.nativeTaskId);
-          const nativeFlowId = asString(nativeTaskBinding.nativeFlowId);
           const childSessionKey = nativeBinding?.childSessionKey ?? dispatchWorkContract.continuity.preferredChildSessionKey ?? undefined;
+          const revision = asNumber(materialization.substrate_revision) ?? nativeBinding?.revision ?? 1;
+          const nextNativeBinding: NativeBindingRef = {
+            ...(nativeBinding ?? {}),
+            flowId: materializedNativeFlowId ?? nativeBinding?.flowId ?? asString(materialization.flow_id, "unknown"),
+            nativeFlowId: materializedNativeFlowId ?? nativeBinding?.nativeFlowId,
+            ownerKey: nativeBinding?.ownerKey ?? dispatchWorkContract.delegate?.delegateTaskId ?? dispatchWorkContract.workContractId,
+            controllerId: nativeBinding?.controllerId ?? "octoclaw.delegate",
+            revision,
+            expectedRevision: revision,
+            taskId: materializedNativeTaskId ?? nativeBinding?.taskId,
+            nativeTaskId: materializedNativeTaskId ?? nativeBinding?.nativeTaskId,
+            runId: optionalString(payloadNativeTaskBinding.runId, payloadDelegateAttempt.runId, nativeBinding?.runId),
+            childSessionKey,
+            syncMode: nativeBinding?.syncMode ?? "managed",
+            status: nativeFlowStatusFromSubstrate(substrateState),
+            lastMutation: nativeBinding?.lastMutation ?? "createManaged",
+            lastMutationApplied: true,
+          };
           materializeWorkContractSuccess({
             workContractId: dispatchWorkContract.workContractId,
-            nativeBinding: nativeBinding ?? {
-              flowId: asString(materialization.flow_id, "unknown"),
-              ownerKey: dispatchWorkContract.workContractId,
-              controllerId: "octoclaw.delegate",
-              revision: 1,
-              expectedRevision: 1,
-              syncMode: "managed",
-              status: "queued",
-              nativeTaskId,
-              nativeFlowId,
-              childSessionKey,
-            },
+            nativeBinding: nextNativeBinding,
             delegateTaskId: asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id),
             attemptId: asString(payload.attemptId || materialization.attemptId),
-            nativeTaskId,
-            nativeFlowId,
+            nativeTaskId: materializedNativeTaskId,
+            nativeFlowId: materializedNativeFlowId,
             childSessionKey,
             substrateState,
             spawnExecuted: false,
@@ -1405,8 +1451,8 @@ export function getToolRegistrations(): ToolRegistration[] {
           childSessionKey: nativeBinding?.childSessionKey ?? dispatchWorkContract?.continuity.preferredChildSessionKey ?? null,
           childSessionId: dispatchWorkContract?.continuity.preferredChildSessionId ?? null,
           dispatchExecuted: payload.executed === true,
-          nativeTaskId: asString(nativeTaskBinding.nativeTaskId ?? nativeAttemptBinding.nativeTaskId),
-          nativeFlowId: asString(nativeTaskBinding.nativeFlowId ?? nativeAttemptBinding.nativeFlowId),
+          nativeTaskId: materializedNativeTaskId,
+          nativeFlowId: materializedNativeFlowId,
           resultMaterialized: Boolean(asString(materialization.task_id)),
           deliveryStatus: asString(materialization.substrate_state),
         });

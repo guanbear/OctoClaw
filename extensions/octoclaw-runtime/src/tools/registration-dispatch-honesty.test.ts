@@ -10,7 +10,7 @@ import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js
 import { policyState } from "../state/policy-state.js";
 import { getToolRegistrations } from "./registration.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
-import { saveWorkContract } from "../work-contract/store.js";
+import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
 
 const fs = fsSync as unknown as {
   mkdtempSync(pathname: string): string;
@@ -272,7 +272,43 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.route).toBe("delegate");
     expect(result.work_contract_id).toBe(contract.workContractId);
     expect(result.delegate_task_id).toBeTruthy();
+    expect(result.native_task_id).toBe("task-honesty");
+    expect(result.native_flow_id).toBe("flow-honesty");
+    expect(result.result_materialized).toBe(true);
     expect(fetchSpy).not.toHaveBeenCalled();
+
+    const reloaded = loadWorkContract(contract.workContractId);
+    expect(reloaded?.status).toBe("running");
+    expect(reloaded?.delegate?.nativeBinding?.flowId).toBe("flow-honesty");
+    expect(reloaded?.delegate?.nativeBinding?.nativeTaskId).toBe("task-honesty");
+    expect(reloaded?.delegate?.nativeBinding?.status).toBe("running");
+    expect(reloaded?.telemetry.dispatchExecuted).toBe(true);
+    expect(reloaded?.telemetry.spawnExecuted).toBe(false);
+    expect(reloaded?.telemetry.nativeTaskId).toBe("task-honesty");
+    expect(reloaded?.telemetry.nativeFlowId).toBe("flow-honesty");
+  });
+
+  it("marks sealed WorkContract failed when native materialization returns a payload failure", async () => {
+    useTempWorkContractLedger();
+    const contract = seedWorkContract({ userAsk: "contract failure is materialized" });
+
+    const result = await executeDispatch({
+      task: contract.userAsk,
+      workContractId: contract.workContractId,
+    }, {
+      helperInvoker: failingHelper(),
+      sessionId: "session-work-contract-failure",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toContain("ts_runtime_materialization_failed");
+
+    const reloaded = loadWorkContract(contract.workContractId);
+    expect(reloaded?.status).toBe("failed");
+    expect(reloaded?.delegate?.nextAction).toBe("retry");
+    expect(reloaded?.delegate?.blocker).toContain("ts_runtime_materialization_failed");
+    expect(reloaded?.telemetry.resultMaterialized).toBe(false);
+    expect(reloaded?.telemetry.deliveryStatus).toBe("failed");
   });
 
   it("rejects a sealed reply WorkContract dispatch", async () => {
@@ -312,6 +348,7 @@ describe("octoclaw_dispatch honesty", () => {
   });
 
   it("keeps legacy policyJson compatibility without a WorkContract id", async () => {
+    const ledgerPath = useTempWorkContractLedger();
     const result = await executeDispatch({
       task: "legacy compatibility path",
       policyJson: JSON.stringify(delegateDecision()),
@@ -323,6 +360,7 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.ok).toBe(true);
     expect(result.route).toBe("delegate");
     expect(result.work_contract_id).toBeNull();
+    expect(fsSync.existsSync(ledgerPath)).toBe(false);
   });
 
   it("uses sealed WorkContract route over conflicting legacy policyJson", async () => {
