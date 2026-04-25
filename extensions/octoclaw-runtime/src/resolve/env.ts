@@ -163,6 +163,14 @@ export function resolveTaskStatePath(): string {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "task-state.json");
 }
 
+export function resolveTaskStateArchivePath(): string {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "task-state.archive.jsonl");
+}
+
+export function resolveTaskStateRetentionPath(): string {
+  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "task-state-retention.json");
+}
+
 export function resolveRouteStickinessPath(): string {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "route-stickiness.json");
 }

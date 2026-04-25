@@ -175,6 +175,7 @@ describe("octoclaw_dispatch honesty", () => {
     const tableOutput = String((tableResponse.json as Record<string, unknown>).raw_output);
 
     expect(tableOutput).toContain("Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend");
+    expect(tableOutput).toContain("Retention: archived=1, archive_deleted=0");
     expect(tableOutput).toContain("task-status-panel-1 | timed_out(running) | delegate");
     expect(tableOutput).toContain("model=zhipu/GLM-5.1");
     expect(tableOutput).toContain("backend=octoclaw-research");
@@ -184,7 +185,7 @@ describe("octoclaw_dispatch honesty", () => {
     const anchorsResponse = await statusTool().execute({ format: "anchors" }, {});
     const anchorsOutput = String((anchorsResponse.json as Record<string, unknown>).raw_output);
     expect(anchorsOutput).toContain("Visible records: 0");
-    expect(anchorsOutput).toContain("Expired hidden: 1");
+    expect(anchorsOutput).toContain("Expired hidden: 0");
     expect(anchorsOutput).not.toContain("task-status-panel-1 | timed_out(running) | delegate");
   });
 

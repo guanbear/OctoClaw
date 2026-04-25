@@ -13,6 +13,10 @@ import {
   truncateText,
 } from "../resolve/env.js";
 import {
+  pruneTaskStateCache,
+  readArchivedTaskState,
+} from "../state/task-state-retention.js";
+import {
   type NativeHelperInvoker,
 } from "../adapter/native-helper.js";
 import {
@@ -432,7 +436,19 @@ interface RuntimeStatusTaskView {
   statusReason: string;
 }
 
-async function readRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
+function dedupeTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskStateRecord[] {
+  const seen = new Set<string>();
+  const deduped: RuntimeTaskStateRecord[] = [];
+  for (const task of tasks) {
+    const id = asString(task.id);
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    deduped.push(task);
+  }
+  return deduped;
+}
+
+async function readActiveRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
   try {
     const fs = await import("node:fs");
     const content = fs.default.readFileSync(resolveTaskStatePath(), "utf-8");
@@ -440,6 +456,27 @@ async function readRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
     return Array.isArray(parsed.tasks) ? parsed.tasks.filter(isRecord) as RuntimeTaskStateRecord[] : [];
   } catch {
     return [];
+  }
+}
+
+async function readRuntimeTaskState(options: { includeArchive?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
+  const activeTasks = await readActiveRuntimeTaskState();
+  if (!options.includeArchive) return activeTasks;
+  const archivedTasks = readArchivedTaskState().filter(isRecord) as RuntimeTaskStateRecord[];
+  return dedupeTaskStateRecords([...activeTasks, ...archivedTasks]);
+}
+
+function pruneRuntimeTaskStateCache(): { archived: number; deletedArchiveEntries: number; skipped: boolean; reason: string } {
+  try {
+    const result = pruneTaskStateCache();
+    return {
+      archived: result.archived,
+      deletedArchiveEntries: result.deletedArchiveEntries ?? 0,
+      skipped: result.skipped,
+      reason: result.reason || "",
+    };
+  } catch {
+    return { archived: 0, deletedArchiveEntries: 0, skipped: true, reason: "retention_failed" };
   }
 }
 
@@ -474,7 +511,7 @@ function sortTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskState
 }
 
 const STATUS_STALE_AFTER_MS = 5 * 60 * 1000;
-const STATUS_PANEL_STALE_VISIBLE_MS = 30 * 60 * 1000;
+const STATUS_PANEL_STALE_VISIBLE_MS = 60 * 60 * 1000;
 const STATUS_PANEL_TERMINAL_VISIBLE_MS = 24 * 60 * 60 * 1000;
 
 function timestampMs(value: unknown): number | null {
@@ -650,7 +687,8 @@ function buildTaskActionTimeline(record: RuntimeTaskStateRecord, liveRead: Unkno
 async function buildNativeTaskActionPayload(rawText: string, format: "text" | "json"): Promise<{ summary: string; payload: UnknownRecord }> {
   const { action, taskId } = parseTaskAction(rawText);
   const normalizedAction = action || "details";
-  const tasks = sortTaskStateRecords(await readRuntimeTaskState());
+  pruneRuntimeTaskStateCache();
+  const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: Boolean(taskId) }));
   let record = (taskId ? tasks.find((entry) => asString(entry.id) === taskId) : tasks[0]) || null;
   let liveRead: NullRecord = null;
   let liveSessionKey = "";
@@ -758,7 +796,9 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
 async function buildNativeStatusOutput(format: string): Promise<string> {
   const normalizedFormat = format || "anchors";
   const nowMs = Date.now();
-  const tasks = sortTaskStateRecords(await readRuntimeTaskState());
+  const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
+  const retention = pruneRuntimeTaskStateCache();
+  const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: includeExpired }));
   const taskIdsFromCache = new Set(tasks.map((entry) => asString(entry.id)));
   const runtimeTasks: RuntimeTaskStateRecord[] = [];
   for (const { state } of policyState.entries()) {
@@ -804,7 +844,6 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
     ...tasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
     ...runtimeTasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
   ];
-  const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
   const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
   const hiddenExpiredCount = allTasks.length - visibleTasks.length;
   const counts = visibleTasks.reduce<Record<string, number>>((acc, task) => {
@@ -825,6 +864,9 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
     `OctoClaw native runtime status (${normalizedFormat})`,
     `Visible records: ${visibleTasks.length}`,
     `Total records: ${allTasks.length}`,
+    retention.archived > 0 || retention.deletedArchiveEntries > 0
+      ? `Retention: archived=${retention.archived}, archive_deleted=${retention.deletedArchiveEntries}`
+      : retention.skipped && retention.reason ? `Retention: ${retention.reason}` : "",
     hiddenExpiredCount > 0 && !includeExpired
       ? `Expired hidden: ${hiddenExpiredCount} (TTL: timed_out/blocked ${formatElapsed(STATUS_PANEL_STALE_VISIBLE_MS)}, terminal ${formatElapsed(STATUS_PANEL_TERMINAL_VISIBLE_MS)}; ask for table/lanes to inspect history)`
       : `Expired hidden: ${hiddenExpiredCount}`,

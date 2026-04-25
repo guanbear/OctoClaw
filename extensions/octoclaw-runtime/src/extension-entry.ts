@@ -32,6 +32,10 @@ import {
 } from "./resolve/session.js";
 import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
 import { envOverrides, resolveReplayLogPath, resolveTaskStatePath } from "./resolve/env.js";
+import {
+  DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS,
+  pruneTaskStateCache,
+} from "./state/task-state-retention.js";
 import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
 import type { DetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime.js";
@@ -112,6 +116,19 @@ const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
 ].join("\n");
 
 let watchdogInterval: ReturnType<typeof setInterval> | null = null;
+let taskStateRetentionInterval: ReturnType<typeof setInterval> | null = null;
+
+
+function runTaskStateRetention(logger?: LoggerLike): void {
+  try {
+    const result = pruneTaskStateCache();
+    if (result.archived > 0 || (result.deletedArchiveEntries ?? 0) > 0) {
+      logger?.debug?.(`octoclaw task-state retention archived=${result.archived} archive_deleted=${result.deletedArchiveEntries ?? 0}`);
+    }
+  } catch (error) {
+    logger?.warn?.(`octoclaw task-state retention failed: ${String(error)}`);
+  }
+}
 
 function asRecord(value: unknown): UnknownRecord {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1014,6 +1031,14 @@ export const plugin = {
     watchdogInterval = setInterval(() => {
       void watchdogTick(pi.logger).catch(() => undefined);
     }, WATCHDOG_INTERVAL_MS);
+
+    if (taskStateRetentionInterval) {
+      clearInterval(taskStateRetentionInterval);
+    }
+    runTaskStateRetention(pi.logger);
+    taskStateRetentionInterval = setInterval(() => {
+      runTaskStateRetention(pi.logger);
+    }, DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS);
 
     if (typeof pi.registerTool === "function") {
       for (const tool of getToolRegistrations()) {
