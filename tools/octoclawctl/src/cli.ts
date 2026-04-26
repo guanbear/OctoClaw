@@ -11,11 +11,13 @@ import {
   runStatusSurfaceOperator,
   type StatusSurfaceAction,
 } from "@octoclaw/status-surface";
+import { generateNightlyReport, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
 
 type LegacyCliFormat = "text" | "json";
 type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "json";
 type ServiceName = "openclaw" | "runner";
 type RunnerMode = "ondemand" | "daemon";
+type NightlyFormat = "markdown" | "json";
 type CliCommand =
   | "status"
   | "details"
@@ -27,7 +29,8 @@ type CliCommand =
   | "restart"
   | "patrol"
   | "reconcile"
-  | "repair";
+  | "repair"
+  | "nightly";
 type JsonRecord = Record<string, unknown>;
 
 declare const process: {
@@ -63,6 +66,9 @@ interface ParsedCliArgs {
   model: boolean;
   drift: boolean;
   once: boolean;
+  input?: string;
+  outputDir?: string;
+  nightlyFormat: NightlyFormat;
 }
 
 interface CliIo {
@@ -808,6 +814,10 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let model = false;
   let drift = false;
   let once = false;
+  let input: string | undefined;
+  let outputDir: string | undefined;
+  let nightlyFormat: NightlyFormat = "markdown";
+  let rawFormat: string | undefined;
   const positionals: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -817,16 +827,12 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       continue;
     }
     if (argument === "--format") {
-      const nextValue = argv[index + 1];
-      format = parseEnumValue(nextValue, STATUS_FORMATS, "format");
-      legacyFormat = format === "json" ? "json" : "text";
+      rawFormat = argv[index + 1];
       index += 1;
       continue;
     }
     if (argument.startsWith("--format=")) {
-      const [, rawFormat] = argument.split("=", 2);
-      format = parseEnumValue(rawFormat, STATUS_FORMATS, "format");
-      legacyFormat = format === "json" ? "json" : "text";
+      [, rawFormat] = argument.split("=", 2);
       continue;
     }
     if (argument === "--task-id") {
@@ -880,6 +886,24 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       once = true;
       continue;
     }
+    if (argument === "--input") {
+      input = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--input=")) {
+      [, input] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--output-dir") {
+      outputDir = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--output-dir=")) {
+      [, outputDir] = argument.split("=", 2);
+      continue;
+    }
     if (argument.startsWith("--")) {
       throw new Error(`Unknown option: ${argument}`);
     }
@@ -892,11 +916,33 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair`);
+  if (command && !["status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
+  }
+
+  if (rawFormat !== undefined) {
+    const NIGHTLY_FORMATS: readonly string[] = ["markdown", "json"];
+    if (command === "nightly") {
+      if (!NIGHTLY_FORMATS.includes(rawFormat)) {
+        throw new Error(`Unknown format: ${rawFormat}. Expected one of: markdown, json`);
+      }
+      nightlyFormat = rawFormat as NightlyFormat;
+    } else {
+      format = parseEnumValue(rawFormat, STATUS_FORMATS, "format");
+      legacyFormat = format === "json" ? "json" : "text";
+    }
+  }
+
+  if (command === "nightly") {
+    if (!input) {
+      throw new Error("nightly command requires --input <replay.jsonl>");
+    }
+    if (!outputDir) {
+      throw new Error("nightly command requires --output-dir <dir>");
+    }
   }
 
   return {
@@ -911,6 +957,9 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     model,
     drift,
     once,
+    input,
+    outputDir,
+    nightlyFormat,
   };
 }
 
@@ -941,6 +990,7 @@ export function printUsage(): string {
     "  octoclawctl patrol [--once]",
     "  octoclawctl reconcile",
     "  octoclawctl repair",
+    "  octoclawctl nightly --input <replay.jsonl> --output-dir <dir> [--format markdown|json]",
     "",
     "Compatibility:",
     "  status/details/queue/timeline keep existing status-surface behavior when runtime env vars are present.",
@@ -1103,6 +1153,44 @@ function renderServiceState(state: ServiceState): string {
   ].filter(Boolean).join("\n");
 }
 
+async function runNightlyCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const inputPath = parsed.input!;
+  const outputDirPath = parsed.outputDir!;
+  const format = parsed.nightlyFormat;
+
+  const content = await fs.readFile(inputPath, "utf8");
+  const lines = content.split(/\r?\n/u);
+  const rawEvents: unknown[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      rawEvents.push(JSON.parse(line));
+    } catch {
+      throw new Error(`Nightly harness: malformed JSON at line ${i + 1}: ${line.slice(0, 80)}`);
+    }
+  }
+
+  validateReplayEvents(rawEvents);
+  const report = generateNightlyReport(rawEvents);
+
+  await ensureDir(outputDirPath);
+  const dateStr = report.inputDateRange.latest
+    ? new Date(report.inputDateRange.latest).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
+  const jsonPath = path.join(outputDirPath, `${dateStr}.json`);
+  const mdPath = path.join(outputDirPath, `${dateStr}.md`);
+
+  await fs.writeFile(jsonPath, JSON.stringify(report, null, 2), "utf8");
+  await fs.writeFile(mdPath, renderMarkdownReport(report), "utf8");
+
+  if (format === "json") {
+    return JSON.stringify(report, null, 2);
+  }
+  return `Written: ${jsonPath}\nWritten: ${mdPath}`;
+}
+
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
   const snapshot = await loadStatusSnapshot(env);
   switch (parsed.command) {
@@ -1179,6 +1267,8 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
       return runOperationalCommand("reconcile", env, true);
     case "repair":
       return runOperationalCommand("repair", env, true);
+    case "nightly":
+      return runNightlyCommand(parsed, env);
     default:
       throw new Error(`Unknown action: ${parsed.command ?? "(missing)"}`);
   }
@@ -1199,7 +1289,7 @@ export async function main(
       return 0;
     }
     if (!parsed.command) {
-      io.stderr("Unknown action: (missing). Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair");
+      io.stderr("Unknown action: (missing). Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly");
       return 1;
     }
 

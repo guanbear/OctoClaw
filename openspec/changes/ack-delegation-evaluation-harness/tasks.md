@@ -25,10 +25,13 @@
 
 ## D3 Nightly Evaluation Harness
 
-- [ ] Define replay input schema for route/judge/ACK/delegation cases.
-- [ ] Produce nightly route-quality metrics and examples.
-- [ ] Include false delegate, false reply, unclear, ACK timing, and delivery failure lanes.
-- [ ] Output report only; no live policy mutation.
+- [x] Define replay input schema for route/judge/ACK/delegation cases.
+- [x] Produce nightly route-quality metrics and examples.
+- [x] Include false delegate, false reply, unclear, ACK timing, and delivery failure lanes.
+- [x] Output report only; no live policy mutation.
+- [x] Sanitize samples — no raw child transcript in output.
+- [x] Fail closed on malformed input; unknown never counts as pass.
+- [x] Test route quality, ACK metrics, delegation health, sanitizer, report rendering, no-auto-promote.
 
 ## D4 Real Slack Acceptance Harness
 

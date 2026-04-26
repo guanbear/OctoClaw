@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
 import {
   main,
@@ -106,5 +109,188 @@ describe("octoclawctl cli", () => {
 
     expect(exitCode).toBe(0);
     expect(capture.stdout.length).toBeGreaterThan(0);
+  });
+
+  it("parses nightly command with required args", () => {
+    const parsed = parseCliArgs(["nightly", "--input", "/tmp/replay.jsonl", "--output-dir", "/tmp/reports"]);
+    expect(parsed.command).toBe("nightly");
+    expect(parsed.input).toBe("/tmp/replay.jsonl");
+    expect(parsed.outputDir).toBe("/tmp/reports");
+    expect(parsed.nightlyFormat).toBe("markdown");
+  });
+
+  it("parses nightly command with --format json", () => {
+    const parsed = parseCliArgs(["nightly", "--input", "in.jsonl", "--output-dir", "out/", "--format", "json"]);
+    expect(parsed.command).toBe("nightly");
+    expect(parsed.nightlyFormat).toBe("json");
+  });
+
+  it("nightly requires --input", () => {
+    expect(() => parseCliArgs(["nightly", "--output-dir", "/tmp"])).toThrow("--input");
+  });
+
+  it("nightly requires --output-dir", () => {
+    expect(() => parseCliArgs(["nightly", "--input", "in.jsonl"])).toThrow("--output-dir");
+  });
+
+  it("nightly accepts --format markdown explicitly", () => {
+    const parsed = parseCliArgs(["nightly", "--input", "in.jsonl", "--output-dir", "out/", "--format", "markdown"]);
+    expect(parsed.nightlyFormat).toBe("markdown");
+  });
+
+  it("nightly rejects --format compact", () => {
+    expect(() => parseCliArgs(["nightly", "--input", "in.jsonl", "--output-dir", "out/", "--format", "compact"])).toThrow("Unknown format: compact");
+  });
+
+  it("nightly rejects --format table", () => {
+    expect(() => parseCliArgs(["nightly", "--input", "in.jsonl", "--output-dir", "out/", "--format", "table"])).toThrow("Unknown format: table");
+  });
+
+  it("nightly rejects --format lanes", () => {
+    expect(() => parseCliArgs(["nightly", "--input", "in.jsonl", "--output-dir", "out/", "--format", "lanes"])).toThrow("Unknown format: lanes");
+  });
+
+  it("nightly rejects --format anchors", () => {
+    expect(() => parseCliArgs(["nightly", "--input", "in.jsonl", "--output-dir", "out/", "--format", "anchors"])).toThrow("Unknown format: anchors");
+  });
+
+  it("non-nightly commands still accept --format compact", () => {
+    const parsed = parseCliArgs(["status", "--format", "compact"]);
+    expect(parsed.format).toBe("compact");
+  });
+
+  it("non-nightly commands still accept --format json", () => {
+    const parsed = parseCliArgs(["status", "--format", "json"]);
+    expect(parsed.format).toBe("json");
+  });
+
+  it("non-nightly commands reject --format markdown", () => {
+    expect(() => parseCliArgs(["status", "--format", "markdown"])).toThrow("Unknown format: markdown");
+  });
+});
+
+describe("octoclawctl nightly integration", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join(os.homedir(), ".octoclawctl-test-tmp");
+    tmpDir = path.join(base, `test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reads JSONL, writes .json and .md reports, prints paths", async () => {
+    const inputPath = path.join(tmpDir, "replay.jsonl");
+    const outputDirPath = path.join(tmpDir, "reports");
+    const event = { schema_version: "octoclaw.runtime_policy.replay_event/v1", event: "policy_resolved", at: "2026-04-26T10:00:00.000Z", route: "delegate", confidence: 0.9, routerDecisionValid: true };
+    await fs.writeFile(inputPath, JSON.stringify(event), "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly", "--input", inputPath, "--output-dir", outputDirPath],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(capture.stdout[0]).toContain("Written:");
+    expect(capture.stdout[0]).toContain(".json");
+    expect(capture.stdout[0]).toContain(".md");
+
+    const entries = await fs.readdir(outputDirPath, { withFileTypes: true });
+    const fileNames = entries.filter((e) => e.isFile()).map((e) => e.name);
+    expect(fileNames.some((f: string) => f.endsWith(".json"))).toBe(true);
+    expect(fileNames.some((f: string) => f.endsWith(".md"))).toBe(true);
+  });
+
+  it("outputs JSON when --format json", async () => {
+    const inputPath = path.join(tmpDir, "replay.jsonl");
+    const outputDirPath = path.join(tmpDir, "reports");
+    const event = { schema_version: "octoclaw.runtime_policy.replay_event/v1", event: "policy_resolved", at: "2026-04-26T10:00:00.000Z", route: "delegate", confidence: 0.9, routerDecisionValid: true };
+    await fs.writeFile(inputPath, JSON.stringify(event), "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly", "--input", inputPath, "--output-dir", outputDirPath, "--format", "json"],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(0);
+    const report = JSON.parse(capture.stdout[0]);
+    expect(report.reportId).toContain("nightly:");
+    expect(report.lanes).toHaveLength(5);
+  });
+
+  it("fails on malformed JSONL events", async () => {
+    const inputPath = path.join(tmpDir, "replay.jsonl");
+    const outputDirPath = path.join(tmpDir, "reports");
+    await fs.writeFile(inputPath, '{"bad":true}\n', "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly", "--input", inputPath, "--output-dir", outputDirPath],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(capture.stderr[0]).toContain("index 0");
+  });
+
+  it("fails on malformed JSON line with line number", async () => {
+    const inputPath = path.join(tmpDir, "replay.jsonl");
+    const outputDirPath = path.join(tmpDir, "reports");
+    const e1 = { schema_version: "octoclaw.runtime_policy.replay_event/v1", event: "policy_resolved", at: "2026-04-26T10:00:00.000Z", route: "delegate", confidence: 0.9, routerDecisionValid: true };
+    await fs.writeFile(inputPath, `${JSON.stringify(e1)}\n{bad json here\n`, "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly", "--input", inputPath, "--output-dir", outputDirPath],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(capture.stderr[0]).toContain("line 2");
+  });
+
+  it("fails on malformed JSON at first line", async () => {
+    const inputPath = path.join(tmpDir, "replay.jsonl");
+    const outputDirPath = path.join(tmpDir, "reports");
+    await fs.writeFile(inputPath, "not json at all\n", "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly", "--input", inputPath, "--output-dir", outputDirPath],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(capture.stderr[0]).toContain("line 1");
+  });
+
+  it("handles multi-line JSONL input", async () => {
+    const inputPath = path.join(tmpDir, "replay.jsonl");
+    const outputDirPath = path.join(tmpDir, "reports");
+    const e1 = { schema_version: "octoclaw.runtime_policy.replay_event/v1", event: "policy_resolved", at: "2026-04-26T10:00:00.000Z", route: "delegate", routerDecisionValid: true, confidence: 0.9 };
+    const e2 = { schema_version: "octoclaw.runtime_policy.replay_event/v1", event: "delivery_observed", at: "2026-04-26T10:01:00.000Z" };
+    await fs.writeFile(inputPath, `${JSON.stringify(e1)}\n${JSON.stringify(e2)}\n`, "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly", "--input", inputPath, "--output-dir", outputDirPath],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(0);
+    const jsonPath = path.join(outputDirPath, "2026-04-26.json");
+    const report = JSON.parse(await fs.readFile(jsonPath, "utf8"));
+    expect(report.inputEventCount).toBe(2);
   });
 });
