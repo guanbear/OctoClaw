@@ -69,3 +69,16 @@ OctoClaw SHALL only promote route/judge/model policy recommendations when the ga
 - WHEN any required metric is missing or unknown
 - THEN gate result SHALL be `unknown`
 - AND SHALL NOT be treated as pass.
+
+#### Scenario: baseline vs candidate comparison
+
+- WHEN a calibration gate command is run with baseline and candidate report files
+- THEN the gate SHALL compare latency, cost, acceptance, no-lie, context pollution, and fallback/timeout dimensions
+- AND SHALL produce `pass` only when no dimension regresses and no dimension is unknown
+- AND SHALL include an explicit baseline rollback target or baseline report ID when gate passes.
+
+#### Scenario: pure gate function
+
+- WHEN the gate comparison function is invoked
+- THEN it SHALL NOT perform I/O, API calls, or state mutation
+- AND SHALL NOT change live model/rule policy automatically.

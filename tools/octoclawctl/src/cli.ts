@@ -13,7 +13,9 @@ import {
 } from "@octoclaw/status-surface";
 import { generateNightlyReport, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
 import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
+import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
+import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 
 type LegacyCliFormat = "text" | "json";
@@ -22,6 +24,7 @@ type ServiceName = "openclaw" | "runner";
 type RunnerMode = "ondemand" | "daemon";
 type NightlyFormat = "markdown" | "json";
 type CliCommand =
+  | "calibration-gate"
   | "status"
   | "details"
   | "queue"
@@ -71,8 +74,11 @@ interface ParsedCliArgs {
   drift: boolean;
   once: boolean;
   input?: string;
+  baseline?: string;
+  candidate?: string;
   outputDir?: string;
   nightlyFormat: NightlyFormat;
+  calibrationFormat: "markdown" | "json";
   config?: string;
   slackAcceptanceFormat: SlackAcceptanceFormat;
 }
@@ -821,8 +827,11 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let drift = false;
   let once = false;
   let input: string | undefined;
+  let baseline: string | undefined;
+  let candidate: string | undefined;
   let outputDir: string | undefined;
   let nightlyFormat: NightlyFormat = "markdown";
+  let calibrationFormat: "markdown" | "json" = "markdown";
   let config: string | undefined;
   let slackAcceptanceFormat: SlackAcceptanceFormat = "markdown";
   let rawFormat: string | undefined;
@@ -903,6 +912,24 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       [, input] = argument.split("=", 2);
       continue;
     }
+    if (argument === "--baseline") {
+      baseline = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--baseline=")) {
+      [, baseline] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--candidate") {
+      candidate = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--candidate=")) {
+      [, candidate] = argument.split("=", 2);
+      continue;
+    }
     if (argument === "--output-dir") {
       outputDir = argv[index + 1];
       index += 1;
@@ -933,8 +960,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "slack-acceptance"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance`);
+  if (command && !["calibration-gate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "slack-acceptance"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
@@ -942,12 +969,13 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
 
   if (rawFormat !== undefined) {
     const MARKDOWN_JSON_FORMATS: readonly string[] = ["markdown", "json"];
-    if (command === "nightly" || command === "slack-acceptance") {
+    if (command === "nightly" || command === "slack-acceptance" || command === "calibration-gate") {
       if (!MARKDOWN_JSON_FORMATS.includes(rawFormat)) {
         throw new Error(`Unknown format: ${rawFormat}. Expected one of: markdown, json`);
       }
       if (command === "nightly") nightlyFormat = rawFormat as NightlyFormat;
-      else slackAcceptanceFormat = rawFormat as SlackAcceptanceFormat;
+      if (command === "slack-acceptance") slackAcceptanceFormat = rawFormat as SlackAcceptanceFormat;
+      if (command === "calibration-gate") calibrationFormat = rawFormat as "markdown" | "json";
     } else {
       format = parseEnumValue(rawFormat, STATUS_FORMATS, "format");
       legacyFormat = format === "json" ? "json" : "text";
@@ -972,6 +1000,18 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
   }
 
+  if (command === "calibration-gate") {
+    if (!baseline) {
+      throw new Error("calibration-gate command requires --baseline <report.json>");
+    }
+    if (!candidate) {
+      throw new Error("calibration-gate command requires --candidate <report.json>");
+    }
+    if (!outputDir) {
+      throw new Error("calibration-gate command requires --output-dir <dir>");
+    }
+  }
+
   return {
     command,
     format,
@@ -985,8 +1025,11 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     drift,
     once,
     input,
+    baseline,
+    candidate,
     outputDir,
     nightlyFormat,
+    calibrationFormat,
     config,
     slackAcceptanceFormat,
   };
@@ -1021,6 +1064,7 @@ export function printUsage(): string {
     "  octoclawctl repair",
     "  octoclawctl nightly --input <replay.jsonl> --output-dir <dir> [--format markdown|json]",
     "  octoclawctl slack-acceptance --config <acceptance.json> --output-dir <dir> [--format markdown|json]",
+    "  octoclawctl calibration-gate --baseline <report.json> --candidate <report.json> --output-dir <dir> [--format markdown|json]",
     "",
     "Compatibility:",
     "  status/details/queue/timeline keep existing status-surface behavior when runtime env vars are present.",
@@ -1244,6 +1288,46 @@ async function runSlackAcceptanceCliCommand(parsed: ParsedCliArgs, env: Record<s
   return `Written: ${jsonPath}\nWritten: ${mdPath}\nGate: ${report.overallGate} pass=${report.pass} fail=${report.fail}`;
 }
 
+async function runCalibrationGateCliCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const baselinePath = parsed.baseline!;
+  const candidatePath = parsed.candidate!;
+  const outputDirPath = parsed.outputDir!;
+  const format = parsed.calibrationFormat;
+
+  const [baselineRaw, candidateRaw] = await Promise.all([
+    fs.readFile(baselinePath, "utf8"),
+    fs.readFile(candidatePath, "utf8"),
+  ]);
+
+  let baseline: CalibrationInputFile;
+  let candidate: CalibrationInputFile;
+  try {
+    baseline = normalizeCalibrationInputFile(JSON.parse(baselineRaw)) as CalibrationInputFile;
+  } catch {
+    throw new Error(`Calibration gate: malformed baseline JSON: ${baselinePath}`);
+  }
+  try {
+    candidate = normalizeCalibrationInputFile(JSON.parse(candidateRaw)) as CalibrationInputFile;
+  } catch {
+    throw new Error(`Calibration gate: malformed candidate JSON: ${candidatePath}`);
+  }
+
+  const report = runCalibrationGate(baseline, candidate);
+
+  await ensureDir(outputDirPath);
+  const dateStr = new Date().toISOString().slice(0, 19).replace(/[T:]/gu, "-");
+  const jsonPath = path.join(outputDirPath, `calibration-${dateStr}.json`);
+  const mdPath = path.join(outputDirPath, `calibration-${dateStr}.md`);
+
+  await fs.writeFile(jsonPath, JSON.stringify(report, null, 2), "utf8");
+  await fs.writeFile(mdPath, renderCalibrationMarkdown(report), "utf8");
+
+  if (format === "json") {
+    return JSON.stringify(report, null, 2);
+  }
+  return `Written: ${jsonPath}\nWritten: ${mdPath}\nGate: ${report.overallGate}`;
+}
+
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
   const snapshot = await loadStatusSnapshot(env);
   switch (parsed.command) {
@@ -1324,6 +1408,8 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
       return runNightlyCommand(parsed, env);
     case "slack-acceptance":
       return runSlackAcceptanceCliCommand(parsed, env);
+    case "calibration-gate":
+      return runCalibrationGateCliCommand(parsed, env);
     default:
       throw new Error(`Unknown action: ${parsed.command ?? "(missing)"}`);
   }
@@ -1344,7 +1430,7 @@ export async function main(
       return 0;
     }
     if (!parsed.command) {
-      io.stderr("Unknown action: (missing). Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance");
+      io.stderr("Unknown action: (missing). Expected one of: calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance");
       return 1;
     }
 

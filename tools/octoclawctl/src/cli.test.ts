@@ -199,6 +199,53 @@ describe("octoclawctl cli", () => {
   });
 });
 
+describe("calibration-gate CLI parsing", () => {
+  it("parses calibration-gate with all required args", () => {
+    const result = parseCliArgs(["calibration-gate", "--baseline", "b.json", "--candidate", "c.json", "--output-dir", "/tmp/out"]);
+    expect(result.command).toBe("calibration-gate");
+    expect(result.baseline).toBe("b.json");
+    expect(result.candidate).toBe("c.json");
+    expect(result.outputDir).toBe("/tmp/out");
+    expect(result.calibrationFormat).toBe("markdown");
+  });
+
+  it("parses calibration-gate with --format json", () => {
+    const result = parseCliArgs(["calibration-gate", "--baseline", "b.json", "--candidate", "c.json", "--output-dir", "/tmp/out", "--format", "json"]);
+    expect(result.calibrationFormat).toBe("json");
+  });
+
+  it("parses calibration-gate with --format markdown", () => {
+    const result = parseCliArgs(["calibration-gate", "--baseline", "b.json", "--candidate", "c.json", "--output-dir", "/tmp/out", "--format", "markdown"]);
+    expect(result.calibrationFormat).toBe("markdown");
+  });
+
+  it("rejects --format compact for calibration-gate", () => {
+    expect(() => parseCliArgs(["calibration-gate", "--baseline", "b.json", "--candidate", "c.json", "--output-dir", "/tmp/out", "--format", "compact"]))
+      .toThrow("Unknown format: compact");
+  });
+
+  it("requires --baseline", () => {
+    expect(() => parseCliArgs(["calibration-gate", "--candidate", "c.json", "--output-dir", "/tmp/out"]))
+      .toThrow("calibration-gate command requires --baseline");
+  });
+
+  it("requires --candidate", () => {
+    expect(() => parseCliArgs(["calibration-gate", "--baseline", "b.json", "--output-dir", "/tmp/out"]))
+      .toThrow("calibration-gate command requires --candidate");
+  });
+
+  it("requires --output-dir", () => {
+    expect(() => parseCliArgs(["calibration-gate", "--baseline", "b.json", "--candidate", "c.json"]))
+      .toThrow("calibration-gate command requires --output-dir");
+  });
+
+  it("supports --baseline= and --candidate= equals syntax", () => {
+    const result = parseCliArgs(["calibration-gate", "--baseline=b.json", "--candidate=c.json", "--output-dir=/tmp/out"]);
+    expect(result.baseline).toBe("b.json");
+    expect(result.candidate).toBe("c.json");
+  });
+});
+
 describe("octoclawctl nightly integration", () => {
   let tmpDir: string;
 

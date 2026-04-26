@@ -53,7 +53,16 @@
 
 ## D5 Calibration Gate
 
-- [ ] Compare baseline vs candidate route/judge/model recommendations.
-- [ ] Gate latency, cost, quality, acceptance, context pollution, fallback, and timeout metrics.
-- [ ] Treat `unknown` as not pass.
-- [ ] Emit recommendation and rollback target only; no online self-tuning.
+- [x] Compare baseline vs candidate route/judge/model recommendations.
+- [x] Gate latency, cost, quality, acceptance, context pollution, fallback, and timeout metrics.
+- [x] Treat `unknown` as not pass.
+- [x] Emit recommendation and rollback target only; no online self-tuning.
+- [x] CLI: `octoclawctl calibration-gate --baseline <json> --candidate <json> --output-dir <dir> [--format markdown|json]`.
+- [x] Input reads D3 nightly report AND D4 slack acceptance report; missing metrics → unknown, not pass.
+- [x] CLI normalizes raw D3/D4 reports and aggregate wrapper inputs.
+- [x] 6 calibration dimensions: latency, cost, acceptance, noLie, contextPollution, fallbackTimeout.
+- [x] Cost dimension uses explicit `metrics.costUsd`; missing cost stays unknown, not pass.
+- [x] Rollback target = explicit baseline rollback target or baseline report ID when gate passes; null otherwise.
+- [x] Pure gate function — no I/O, no API calls, no config mutation, no live promotion.
+- [x] Save sanitized JSON + Markdown report artifacts.
+- [x] 27 calibration tests + 8 CLI parse tests. 94 test files, 889 tests passing. Build clean.
