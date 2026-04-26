@@ -12,6 +12,9 @@ import {
   type StatusSurfaceAction,
 } from "@octoclaw/status-surface";
 import { generateNightlyReport, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
+import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
+import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
+import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 
 type LegacyCliFormat = "text" | "json";
 type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "json";
@@ -30,7 +33,8 @@ type CliCommand =
   | "patrol"
   | "reconcile"
   | "repair"
-  | "nightly";
+  | "nightly"
+  | "slack-acceptance";
 type JsonRecord = Record<string, unknown>;
 
 declare const process: {
@@ -69,6 +73,8 @@ interface ParsedCliArgs {
   input?: string;
   outputDir?: string;
   nightlyFormat: NightlyFormat;
+  config?: string;
+  slackAcceptanceFormat: SlackAcceptanceFormat;
 }
 
 interface CliIo {
@@ -817,6 +823,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let input: string | undefined;
   let outputDir: string | undefined;
   let nightlyFormat: NightlyFormat = "markdown";
+  let config: string | undefined;
+  let slackAcceptanceFormat: SlackAcceptanceFormat = "markdown";
   let rawFormat: string | undefined;
   const positionals: string[] = [];
 
@@ -904,6 +912,15 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       [, outputDir] = argument.split("=", 2);
       continue;
     }
+    if (argument === "--config") {
+      config = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--config=")) {
+      [, config] = argument.split("=", 2);
+      continue;
+    }
     if (argument.startsWith("--")) {
       throw new Error(`Unknown option: ${argument}`);
     }
@@ -916,20 +933,21 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly`);
+  if (command && !["status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "slack-acceptance"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
   }
 
   if (rawFormat !== undefined) {
-    const NIGHTLY_FORMATS: readonly string[] = ["markdown", "json"];
-    if (command === "nightly") {
-      if (!NIGHTLY_FORMATS.includes(rawFormat)) {
+    const MARKDOWN_JSON_FORMATS: readonly string[] = ["markdown", "json"];
+    if (command === "nightly" || command === "slack-acceptance") {
+      if (!MARKDOWN_JSON_FORMATS.includes(rawFormat)) {
         throw new Error(`Unknown format: ${rawFormat}. Expected one of: markdown, json`);
       }
-      nightlyFormat = rawFormat as NightlyFormat;
+      if (command === "nightly") nightlyFormat = rawFormat as NightlyFormat;
+      else slackAcceptanceFormat = rawFormat as SlackAcceptanceFormat;
     } else {
       format = parseEnumValue(rawFormat, STATUS_FORMATS, "format");
       legacyFormat = format === "json" ? "json" : "text";
@@ -942,6 +960,15 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
     if (!outputDir) {
       throw new Error("nightly command requires --output-dir <dir>");
+    }
+  }
+
+  if (command === "slack-acceptance") {
+    if (!config) {
+      throw new Error("slack-acceptance command requires --config <acceptance.json>");
+    }
+    if (!outputDir) {
+      throw new Error("slack-acceptance command requires --output-dir <dir>");
     }
   }
 
@@ -960,6 +987,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     input,
     outputDir,
     nightlyFormat,
+    config,
+    slackAcceptanceFormat,
   };
 }
 
@@ -991,6 +1020,7 @@ export function printUsage(): string {
     "  octoclawctl reconcile",
     "  octoclawctl repair",
     "  octoclawctl nightly --input <replay.jsonl> --output-dir <dir> [--format markdown|json]",
+    "  octoclawctl slack-acceptance --config <acceptance.json> --output-dir <dir> [--format markdown|json]",
     "",
     "Compatibility:",
     "  status/details/queue/timeline keep existing status-surface behavior when runtime env vars are present.",
@@ -1191,6 +1221,29 @@ async function runNightlyCommand(parsed: ParsedCliArgs, _env: Record<string, str
   return `Written: ${jsonPath}\nWritten: ${mdPath}`;
 }
 
+async function runSlackAcceptanceCliCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
+  const configPath = parsed.config!;
+  const outputDirPath = parsed.outputDir!;
+  const format = parsed.slackAcceptanceFormat;
+
+  const resolvedConfig = await loadSlackAcceptanceConfig(configPath, env);
+  const client = new SlackWebApiAcceptanceClient(resolvedConfig.botToken);
+  const report = await runSlackAcceptanceHarness(client, resolvedConfig);
+
+  await ensureDir(outputDirPath);
+  const dateStr = new Date().toISOString().slice(0, 19).replace(/[T:]/gu, "-");
+  const jsonPath = path.join(outputDirPath, `slack-acceptance-${dateStr}.json`);
+  const mdPath = path.join(outputDirPath, `slack-acceptance-${dateStr}.md`);
+
+  await fs.writeFile(jsonPath, JSON.stringify(report, null, 2), "utf8");
+  await fs.writeFile(mdPath, renderSlackAcceptanceMarkdown(report), "utf8");
+
+  if (format === "json") {
+    return JSON.stringify(report, null, 2);
+  }
+  return `Written: ${jsonPath}\nWritten: ${mdPath}\nGate: ${report.overallGate} pass=${report.pass} fail=${report.fail}`;
+}
+
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
   const snapshot = await loadStatusSnapshot(env);
   switch (parsed.command) {
@@ -1269,6 +1322,8 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
       return runOperationalCommand("repair", env, true);
     case "nightly":
       return runNightlyCommand(parsed, env);
+    case "slack-acceptance":
+      return runSlackAcceptanceCliCommand(parsed, env);
     default:
       throw new Error(`Unknown action: ${parsed.command ?? "(missing)"}`);
   }
@@ -1289,7 +1344,7 @@ export async function main(
       return 0;
     }
     if (!parsed.command) {
-      io.stderr("Unknown action: (missing). Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly");
+      io.stderr("Unknown action: (missing). Expected one of: status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance");
       return 1;
     }
 

@@ -1,0 +1,468 @@
+import fs from "node:fs/promises";
+import type {
+  AcceptanceGate,
+  AssertionResult,
+  SlackAcceptanceCaseConfig,
+  SlackAcceptanceCaseKind,
+  SlackAcceptanceCaseResult,
+  SlackAcceptanceClient,
+  SlackAcceptanceConfig,
+  SlackAcceptanceReport,
+  SlackAcceptanceResolvedConfig,
+  SlackMessageRecord,
+  SlackToolExposureAuditResult,
+} from "./types.js";
+import { sanitizeForArtifact } from "./sanitize.js";
+
+const SAFE_SLACK_TOOLS = new Set(["message.send", "message.update", "message.react", "message.typing"]);
+
+const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
+  {
+    kind: "plain_chat",
+    prompt: "在吗",
+    ackRequired: false,
+    finalRequired: true,
+    noSpawnExpected: true,
+    expectFinal: ["在", "可以", "你好", "状态正常"],
+  },
+  {
+    kind: "fresh_lookup",
+    prompt: "请查一下 OpenClaw 4.21 最近一次发布说明，简要回答。",
+    ackRequired: true,
+    finalRequired: true,
+    expectAck: ["查", "准备", "开始", "派发", "处理"],
+    expectFinalAll: ["OpenClaw", "4\\.21"],
+  },
+  {
+    kind: "delegated_work",
+    prompt: "请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。",
+    ackRequired: true,
+    finalRequired: true,
+    expectAck: ["委派", "子", "派发", "准备"],
+    expectFinalAll: ["任务", "状态", "字段"],
+  },
+  {
+    kind: "status_panel",
+    prompt: "显示任务状态面板：哪些任务还在跑、跑了多久、用的哪个模型、结果在哪？",
+    ackRequired: false,
+    finalRequired: true,
+    noSpawnExpected: true,
+    expectFinalAll: ["任务|task", "状态|status|running|queued|completed", "模型|model|profile", "耗时|运行|elapsed", "结果|artifact|位置|在哪"],
+  },
+  {
+    kind: "provenance_followup",
+    prompt: "刚才那个任务判定是啥，怎么查的？",
+    ackRequired: false,
+    finalRequired: true,
+    noSpawnExpected: true,
+    expectFinalAll: ["判定|route", "证据|coverage|WorkContract"],
+  },
+  {
+    kind: "route_objection_correction",
+    prompt: "这个不用委派，直接回答就行。请纠正刚才的判定。",
+    ackRequired: false,
+    finalRequired: true,
+    noSpawnExpected: true,
+    expectFinal: ["直接", "纠正", "不委派", "已改"],
+  },
+  {
+    kind: "no_lie_materialized_no_spawn",
+    prompt: "显示 no-lie fixture：已物化但没有 spawn evidence 的任务现在应该显示什么状态？",
+    ackRequired: false,
+    finalRequired: true,
+    noSpawnExpected: true,
+    requiresFixture: true,
+    fixtureKey: "materializedNoSpawn",
+    expectFinal: ["queued", "materialized", "尚未实际执行", "未实际执行", "不显示 running"],
+    rejectFinal: ["正在运行"],
+  },
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function asPositiveNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function normalizeCase(caseConfig: SlackAcceptanceCaseConfig, index: number): SlackAcceptanceCaseConfig {
+  return {
+    id: caseConfig.id || `${caseConfig.kind}-${index + 1}`,
+    enabled: caseConfig.enabled !== false,
+    ...caseConfig,
+  };
+}
+
+function validateKnownCaseKind(kind: string): asserts kind is SlackAcceptanceCaseKind {
+  const known = new Set(DEFAULT_CASES.map((item) => item.kind));
+  if (!known.has(kind as SlackAcceptanceCaseKind)) {
+    throw new Error(`Slack acceptance config uses unknown case kind: ${kind}`);
+  }
+}
+
+export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, string | undefined>): SlackAcceptanceResolvedConfig {
+  if (!isRecord(raw)) {
+    throw new Error("Slack acceptance config must be a JSON object");
+  }
+  const config = raw as SlackAcceptanceConfig;
+  const botTokenEnv = asString(config.botTokenEnv);
+  if (!botTokenEnv) {
+    throw new Error("Slack acceptance requires botTokenEnv; inline tokens are not accepted");
+  }
+  const botToken = asString(env[botTokenEnv]);
+  if (!botToken) {
+    throw new Error(`Slack acceptance token env is not set: ${botTokenEnv}`);
+  }
+  const sessionKey = asString(config.sessionKey);
+  if (!sessionKey) {
+    throw new Error("Slack acceptance requires sessionKey");
+  }
+  const target = isRecord(config.target) ? config.target : undefined;
+  const channel = asString(target?.channel);
+  const user = asString(target?.user);
+  if (!channel) {
+    throw new Error("Slack acceptance requires target.channel; no production DM default is allowed");
+  }
+  if ((sessionKey.includes(":dm:") || sessionKey.includes(":direct:") || user) && target?.allowDm !== true) {
+    throw new Error("Slack acceptance DM/direct target requires target.allowDm=true");
+  }
+  if (asString(config.outputLabel).toLowerCase().includes("prod") && target?.allowProductionTarget !== true) {
+    throw new Error("Slack acceptance production-labeled targets require target.allowProductionTarget=true");
+  }
+  const cases = (config.cases && config.cases.length > 0 ? config.cases : DEFAULT_CASES).map((item, index) => {
+    validateKnownCaseKind(String(item.kind));
+    return normalizeCase(item, index);
+  });
+  return {
+    botToken,
+    botTokenEnv,
+    sessionKey,
+    target: {
+      channel,
+      user: user || undefined,
+      threadTs: asString(target?.threadTs) || undefined,
+      allowDm: target?.allowDm === true,
+      allowProductionTarget: target?.allowProductionTarget === true,
+    },
+    outputLabel: asString(config.outputLabel) || "acceptance",
+    cases,
+    replayPath: asString(config.replayPath) || undefined,
+    exposedTools: Array.isArray(config.exposedTools) ? config.exposedTools.map((tool) => asString(tool)).filter(Boolean) : [],
+    ackTimeoutMs: asPositiveNumber(config.ackTimeoutMs, 30_000),
+    finalTimeoutMs: asPositiveNumber(config.finalTimeoutMs, 180_000),
+    pollIntervalMs: asPositiveNumber(config.pollIntervalMs, 2_000),
+    maxTranscriptMessages: Math.max(10, asPositiveNumber(config.maxTranscriptMessages, 50)),
+    fixtures: isRecord(config.fixtures) ? config.fixtures as Record<string, string | boolean | number> : {},
+  };
+}
+
+export async function loadSlackAcceptanceConfig(filePath: string, env: Record<string, string | undefined>): Promise<SlackAcceptanceResolvedConfig> {
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch {
+    throw new Error(`Slack acceptance config file not found: ${filePath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error("Slack acceptance config is not valid JSON");
+  }
+  return parseSlackAcceptanceConfig(parsed, env);
+}
+
+export function auditSlackTools(exposedTools: string[]): SlackToolExposureAuditResult {
+  const normalized = exposedTools.map((tool) => tool.trim()).filter(Boolean);
+  const blockedTools = normalized.filter((tool) => !SAFE_SLACK_TOOLS.has(tool));
+  return {
+    status: blockedTools.length > 0 ? "fail" : "pass",
+    exposedTools: normalized,
+    blockedTools,
+  };
+}
+
+function compilePatterns(patterns: string[] | undefined): RegExp[] {
+  return (patterns ?? []).map((pattern) => new RegExp(pattern, "iu"));
+}
+
+function assertText(
+  messages: SlackMessageRecord[],
+  expectedAny: string[] | undefined,
+  expectedAll: string[] | undefined,
+  rejected: string[] | undefined,
+  required: boolean,
+): AssertionResult {
+  const rejectPatterns = compilePatterns(rejected);
+  const expectedAnyPatterns = compilePatterns(expectedAny);
+  const expectedAllPatterns = compilePatterns(expectedAll);
+  const transcriptText = messages.map((message) => message.text).join("\n");
+  const rejectedMessage = messages.find((message) => rejectPatterns.some((pattern) => pattern.test(message.text)));
+  if (rejectedMessage) {
+    return { status: "fail", reason: "matched rejected content", matchedText: rejectedMessage.text };
+  }
+  if (expectedAllPatterns.length > 0) {
+    const missing = expectedAllPatterns.filter((pattern) => !pattern.test(transcriptText));
+    if (missing.length > 0) {
+      return required
+        ? { status: "fail", reason: "required expected content missing" }
+        : { status: "unknown", reason: "optional expected content not observed" };
+    }
+  }
+  if (expectedAnyPatterns.length > 0) {
+    const matched = messages.find((message) => expectedAnyPatterns.some((pattern) => pattern.test(message.text)));
+    if (!matched) {
+      return required
+        ? { status: "fail", reason: "required expected content missing" }
+        : { status: "unknown", reason: "optional expected content not observed" };
+    }
+    return { status: "pass", reason: "matched expected content", matchedText: matched.text };
+  }
+  if (expectedAllPatterns.length > 0) {
+    return { status: "pass", reason: "matched all expected content", matchedText: transcriptText.slice(0, 500) };
+  }
+  if (!required) return { status: "skipped", reason: "assertion not required" };
+  const first = messages.find((message) => message.text.trim());
+  return first ? { status: "pass", reason: "non-empty reply observed", matchedText: first.text } : { status: "fail", reason: "required reply missing" };
+}
+
+function eventHasSpawn(event: Record<string, unknown>): boolean {
+  const transitionKind = asString(event.transitionKind);
+  const eventName = asString(event.event);
+  const finalRoute = asString(event.finalRoute || event.route);
+  return event.spawnExecuted === true
+    || transitionKind === "spawn_started"
+    || eventName.toLowerCase().includes("spawn")
+    || (finalRoute === "delegate" && event.executed === true);
+}
+
+async function checkNoSpawn(replayPath: string | undefined, sinceIso: string | undefined, sessionKey: string, expected: boolean): Promise<AssertionResult> {
+  if (!expected) return { status: "skipped", reason: "no-spawn assertion not required" };
+  if (!replayPath) return { status: "unknown", reason: "replayPath not configured; cannot prove no spawn" };
+  if (!sinceIso) return { status: "unknown", reason: "prompt send time missing" };
+  let content: string;
+  try {
+    content = await fs.readFile(replayPath, "utf8");
+  } catch {
+    return { status: "unknown", reason: `replayPath not readable: ${replayPath}` };
+  }
+  const since = Date.parse(sinceIso);
+  const spawned: Record<string, unknown>[] = [];
+  const lines = content.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed) continue;
+    let event: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!isRecord(parsed)) {
+        return { status: "unknown", reason: `malformed replay JSONL at line ${index + 1}` };
+      }
+      event = parsed;
+    } catch {
+      return { status: "unknown", reason: `malformed replay JSONL at line ${index + 1}` };
+    }
+    const at = Date.parse(asString(event.at));
+    const eventSessionKey = asString(event.sessionKey || event.session_key);
+    if (Number.isFinite(at) && at >= since && (!eventSessionKey || eventSessionKey === sessionKey) && eventHasSpawn(event)) {
+      spawned.push(event);
+    }
+  }
+  if (spawned.length > 0) {
+    return { status: "fail", reason: `spawn evidence observed: ${spawned.length}` };
+  }
+  return { status: "pass", reason: "no spawn evidence observed in replay" };
+}
+
+function caseGate(ack: AssertionResult, final: AssertionResult, noSpawn: AssertionResult, errors: string[]): AcceptanceGate {
+  if (errors.length > 0 || [ack, final, noSpawn].some((result) => result.status === "fail")) return "fail";
+  if ([ack, final, noSpawn].some((result) => result.status === "unknown")) return "unknown";
+  return "pass";
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function tsToMillis(ts: string | undefined): number | undefined {
+  if (!ts) return undefined;
+  const normalized = ts.includes(".") ? Number(ts) * 1000 : Date.parse(ts);
+  return Number.isFinite(normalized) ? normalized : undefined;
+}
+
+function shouldStopPolling(assertion: AssertionResult): boolean {
+  if (assertion.status === "pass" || assertion.status === "skipped") return true;
+  if (assertion.status === "fail") return !assertion.reason.includes("missing");
+  return false;
+}
+
+async function collectRepliesUntil(params: {
+  client: SlackAcceptanceClient;
+  channel: string;
+  threadTs: string;
+  promptTs: string;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  limit: number;
+  expectedAny?: string[];
+  expectedAll?: string[];
+  rejected?: string[];
+  required: boolean;
+}): Promise<{ replies: SlackMessageRecord[]; assertion: AssertionResult }> {
+  const start = Date.now();
+  let latest: SlackMessageRecord[] = [];
+  let assertion = assertText(latest, params.expectedAny, params.expectedAll, params.rejected, params.required);
+  while (Date.now() - start <= params.timeoutMs) {
+    latest = (await params.client.fetchReplies({
+      channel: params.channel,
+      threadTs: params.threadTs,
+      oldestTs: params.promptTs,
+      limit: params.limit,
+    })).filter((message) => message.ts !== params.promptTs);
+    assertion = assertText(latest, params.expectedAny, params.expectedAll, params.rejected, params.required);
+    if (shouldStopPolling(assertion)) return { replies: latest, assertion };
+    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+  }
+  return { replies: latest, assertion };
+}
+
+async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceResolvedConfig, caseConfig: SlackAcceptanceCaseConfig): Promise<SlackAcceptanceCaseResult> {
+  const id = caseConfig.id || caseConfig.kind;
+  const prompt = caseConfig.prompt || DEFAULT_CASES.find((item) => item.kind === caseConfig.kind)?.prompt || caseConfig.kind;
+  const errors: string[] = [];
+  if (caseConfig.enabled === false) {
+    return {
+      id,
+      kind: caseConfig.kind,
+      prompt,
+      status: "unknown",
+      ack: { status: "skipped", reason: "case disabled" },
+      final: { status: "skipped", reason: "case disabled" },
+      noSpawn: { status: "skipped", reason: "case disabled" },
+      transcript: [],
+      errors: [],
+    };
+  }
+  if (caseConfig.requiresFixture && !config.fixtures[caseConfig.fixtureKey || caseConfig.kind]) {
+    return {
+      id,
+      kind: caseConfig.kind,
+      prompt,
+      status: "unknown",
+      ack: { status: "skipped", reason: "fixture missing" },
+      final: { status: "unknown", reason: "fixture missing" },
+      noSpawn: { status: "unknown", reason: "fixture missing" },
+      transcript: [],
+      errors: [],
+    };
+  }
+
+  const sentIso = nowIso();
+  const posted = await client.postMessage({ channel: config.target.channel, text: prompt, threadTs: config.target.threadTs });
+  if (!posted.ok || !posted.ts) {
+    return {
+      id,
+      kind: caseConfig.kind,
+      prompt,
+      status: "fail",
+      sentAt: sentIso,
+      ack: { status: "fail", reason: posted.error || "post failed" },
+      final: { status: "fail", reason: posted.error || "post failed" },
+      noSpawn: { status: "unknown", reason: "post failed" },
+      transcript: [],
+      errors: [posted.error || "post failed"],
+    };
+  }
+  const threadTs = posted.threadTs || posted.ts;
+  const ackTimeoutMs = asPositiveNumber(caseConfig.ackTimeoutMs, config.ackTimeoutMs);
+  const finalTimeoutMs = asPositiveNumber(caseConfig.finalTimeoutMs, config.finalTimeoutMs);
+  const pollIntervalMs = asPositiveNumber(caseConfig.pollIntervalMs, config.pollIntervalMs);
+  const ackCollection = await collectRepliesUntil({
+    client,
+    channel: posted.channel,
+    threadTs,
+    promptTs: posted.ts,
+    timeoutMs: ackTimeoutMs,
+    pollIntervalMs,
+    limit: config.maxTranscriptMessages,
+    expectedAny: caseConfig.expectAck,
+    expectedAll: caseConfig.expectAckAll,
+    rejected: caseConfig.rejectAck,
+    required: caseConfig.ackRequired === true,
+  });
+  const ackReplies = ackCollection.replies;
+  const ack = ackCollection.assertion;
+  const finalCollection = await collectRepliesUntil({
+    client,
+    channel: posted.channel,
+    threadTs,
+    promptTs: posted.ts,
+    timeoutMs: finalTimeoutMs,
+    pollIntervalMs,
+    limit: config.maxTranscriptMessages,
+    expectedAny: caseConfig.expectFinal,
+    expectedAll: caseConfig.expectFinalAll,
+    rejected: caseConfig.rejectFinal,
+    required: caseConfig.finalRequired !== false,
+  });
+  const allReplies = finalCollection.replies;
+  const final = finalCollection.assertion;
+  const noSpawn = await checkNoSpawn(config.replayPath, sentIso, config.sessionKey, caseConfig.noSpawnExpected === true);
+  const ackAt = tsToMillis(ackReplies[0]?.ts);
+  const finalAt = tsToMillis(allReplies[allReplies.length - 1]?.ts);
+  const promptAt = tsToMillis(posted.ts);
+  return {
+    id,
+    kind: caseConfig.kind,
+    prompt,
+    status: caseGate(ack, final, noSpawn, errors),
+    sentAt: sentIso,
+    threadTs,
+    ackMs: ackAt && promptAt ? Math.max(0, Math.round(ackAt - promptAt)) : undefined,
+    finalMs: finalAt && promptAt ? Math.max(0, Math.round(finalAt - promptAt)) : undefined,
+    ack,
+    final,
+    noSpawn,
+    transcript: allReplies.slice(-config.maxTranscriptMessages),
+    errors,
+  };
+}
+
+function overallGate(cases: SlackAcceptanceCaseResult[], audit: SlackToolExposureAuditResult): AcceptanceGate {
+  if (audit.status === "fail" || cases.some((item) => item.status === "fail")) return "fail";
+  if (cases.length === 0 || cases.some((item) => item.status === "unknown") || audit.status === "unknown") return "unknown";
+  return "pass";
+}
+
+export async function runSlackAcceptanceHarness(client: SlackAcceptanceClient, config: SlackAcceptanceResolvedConfig): Promise<SlackAcceptanceReport> {
+  const results: SlackAcceptanceCaseResult[] = [];
+  for (const caseConfig of config.cases) {
+    results.push(await runCase(client, config, caseConfig));
+  }
+  const audit = auditSlackTools(config.exposedTools);
+  const report: SlackAcceptanceReport = {
+    schemaVersion: "octoclaw.slack_acceptance.report/v1",
+    reportId: `slack-acceptance:${config.outputLabel}:${Date.now()}`,
+    generatedAt: nowIso(),
+    sessionKey: config.sessionKey,
+    target: {
+      channel: config.target.channel,
+      threadTs: config.target.threadTs,
+      user: config.target.user,
+    },
+    overallGate: overallGate(results, audit),
+    total: results.length,
+    pass: results.filter((item) => item.status === "pass").length,
+    fail: results.filter((item) => item.status === "fail").length,
+    unknown: results.filter((item) => item.status === "unknown").length,
+    skipped: results.filter((item) => item.ack.status === "skipped" && item.final.status === "skipped").length,
+    toolExposureAudit: audit,
+    cases: results,
+  };
+  return sanitizeForArtifact(report) as SlackAcceptanceReport;
+}

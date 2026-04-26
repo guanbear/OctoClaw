@@ -1,0 +1,543 @@
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type {
+  SlackAcceptanceClient,
+  SlackAcceptanceConfig,
+  SlackMessageRecord,
+  SlackPostMessageResult,
+} from "./types.js";
+import {
+  parseSlackAcceptanceConfig,
+  auditSlackTools,
+  runSlackAcceptanceHarness,
+} from "./harness.js";
+import { redactSecret, sanitizeForArtifact } from "./sanitize.js";
+import { renderSlackAcceptanceMarkdown } from "./report.js";
+import { SlackWebApiAcceptanceClient } from "./client.js";
+
+function validConfig(overrides: Partial<SlackAcceptanceConfig> = {}): SlackAcceptanceConfig {
+  return {
+    botTokenEnv: "SLACK_BOT_TOKEN",
+    sessionKey: "slack:channel:C_ACC_TEST:thread:123",
+    target: { channel: "C_ACC_TEST" },
+    ...overrides,
+  } as SlackAcceptanceConfig;
+}
+
+function validEnv(overrides: Record<string, string> = {}): Record<string, string> {
+  return {
+    SLACK_BOT_TOKEN: "xoxb-test-token-12345",
+    ...overrides,
+  };
+}
+
+function createMockClient(replies: SlackMessageRecord[] = []): SlackAcceptanceClient {
+  return {
+    async postMessage(params: { channel: string; text: string; threadTs?: string }): Promise<SlackPostMessageResult> {
+      return {
+        ok: true,
+        ts: "1234567890.000001",
+        threadTs: params.threadTs || "1234567890.000001",
+        channel: params.channel,
+      };
+    },
+    async fetchReplies(): Promise<SlackMessageRecord[]> {
+      return replies;
+    },
+  };
+}
+
+function createMockClientWithPostError(error: string): SlackAcceptanceClient {
+  return {
+    async postMessage(): Promise<SlackPostMessageResult> {
+      return { ok: false, ts: "", channel: "C_ACC_TEST", error };
+    },
+    async fetchReplies(): Promise<SlackMessageRecord[]> {
+      return [];
+    },
+  };
+}
+
+function createMockClientSequence(replyBatches: SlackMessageRecord[][]): SlackAcceptanceClient {
+  let fetchCount = 0;
+  return {
+    async postMessage(params: { channel: string; text: string; threadTs?: string }): Promise<SlackPostMessageResult> {
+      return {
+        ok: true,
+        ts: "1234567890.000001",
+        threadTs: params.threadTs || "1234567890.000001",
+        channel: params.channel,
+      };
+    },
+    async fetchReplies(): Promise<SlackMessageRecord[]> {
+      const batch = replyBatches[Math.min(fetchCount, replyBatches.length - 1)] ?? [];
+      fetchCount += 1;
+      return batch;
+    },
+  };
+}
+
+
+describe("parseSlackAcceptanceConfig — fail closed", () => {
+  it("requires botTokenEnv", () => {
+    expect(() => parseSlackAcceptanceConfig({ sessionKey: "s", target: { channel: "C" } }, validEnv())).toThrow("botTokenEnv");
+  });
+
+  it("rejects inline tokens (botTokenEnv must resolve from env)", () => {
+    expect(() => parseSlackAcceptanceConfig(validConfig(), {})).toThrow("token env is not set");
+  });
+
+  it("requires sessionKey", () => {
+    expect(() => parseSlackAcceptanceConfig({ botTokenEnv: "SLACK_BOT_TOKEN", target: { channel: "C" } }, validEnv())).toThrow("sessionKey");
+  });
+
+  it("requires target.channel", () => {
+    expect(() => parseSlackAcceptanceConfig(validConfig({ target: {} }), validEnv())).toThrow("target.channel");
+  });
+
+  it("rejects DM target without allowDm=true", () => {
+    expect(() => parseSlackAcceptanceConfig(validConfig({
+      sessionKey: "slack:dm:U123",
+      target: { channel: "D_DIRECT", user: "U123" },
+    }), validEnv())).toThrow("allowDm");
+  });
+
+  it("accepts DM target with allowDm=true", () => {
+    const config = parseSlackAcceptanceConfig(validConfig({
+      sessionKey: "slack:dm:U123",
+      target: { channel: "D_DIRECT", user: "U123", allowDm: true },
+    }), validEnv());
+    expect(config.target.channel).toBe("D_DIRECT");
+  });
+
+  it("rejects production-labeled target without allowProductionTarget", () => {
+    expect(() => parseSlackAcceptanceConfig(validConfig({
+      outputLabel: "prod-acceptance",
+    }), validEnv())).toThrow("allowProductionTarget");
+  });
+
+  it("accepts production target with allowProductionTarget=true", () => {
+    const config = parseSlackAcceptanceConfig(validConfig({
+      outputLabel: "prod-acceptance",
+      target: { channel: "C_PROD", allowProductionTarget: true },
+    }), validEnv());
+    expect(config.outputLabel).toBe("prod-acceptance");
+  });
+
+  it("rejects non-object config", () => {
+    expect(() => parseSlackAcceptanceConfig("bad", validEnv())).toThrow("JSON object");
+  });
+
+  it("rejects unknown case kind", () => {
+    const badConfig = {
+      botTokenEnv: "SLACK_BOT_TOKEN",
+      sessionKey: "slack:channel:C_ACC_TEST:thread:123",
+      target: { channel: "C_ACC_TEST" },
+      cases: [{ kind: "unknown_kind" }],
+    };
+    expect(() => parseSlackAcceptanceConfig(badConfig, validEnv())).toThrow("unknown case kind");
+  });
+
+  it("fills defaults for timeout/poll/max", () => {
+    const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
+    expect(config.ackTimeoutMs).toBe(30_000);
+    expect(config.finalTimeoutMs).toBe(180_000);
+    expect(config.pollIntervalMs).toBe(2_000);
+    expect(config.maxTranscriptMessages).toBe(50);
+  });
+
+  it("uses provided cases when specified", () => {
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "custom" }],
+    }), validEnv());
+    expect(config.cases).toHaveLength(1);
+    expect(config.cases[0].prompt).toBe("custom");
+  });
+
+  it("uses default 7 cases when no cases specified", () => {
+    const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
+    expect(config.cases).toHaveLength(7);
+  });
+});
+
+
+describe("auditSlackTools", () => {
+  it("passes for safe tools only", () => {
+    const result = auditSlackTools(["message.send", "message.update", "message.react", "message.typing"]);
+    expect(result.status).toBe("pass");
+    expect(result.blockedTools).toEqual([]);
+  });
+
+  it("fails for unsafe tools", () => {
+    const result = auditSlackTools(["message.send", "files.upload", "admin.conversations.delete"]);
+    expect(result.status).toBe("fail");
+    expect(result.blockedTools).toContain("files.upload");
+    expect(result.blockedTools).toContain("admin.conversations.delete");
+  });
+
+  it("passes for empty tool list", () => {
+    const result = auditSlackTools([]);
+    expect(result.status).toBe("pass");
+  });
+});
+
+
+describe("secret redaction", () => {
+  it("redacts short secrets completely", () => {
+    expect(redactSecret("abc")).toBe("[REDACTED]");
+  });
+
+  it("redacts long secrets with first/last 3 chars", () => {
+    expect(redactSecret("xoxb-1234567890-abcdef")).toBe("xox…def");
+  });
+
+  it("handles empty string", () => {
+    expect(redactSecret("")).toBe("");
+  });
+});
+
+
+describe("sanitizeForArtifact", () => {
+  it("strips secret keys", () => {
+    const result = sanitizeForArtifact({ token: "xoxb-secret", data: "keep" }) as Record<string, unknown>;
+    expect(result.token).toBe("[REDACTED]");
+    expect(result.data).toBe("keep");
+  });
+
+  it("strips transcript keys", () => {
+    const result = sanitizeForArtifact({ rawTranscript: "leaked", workerChainOfThought: "leaked", ok: true }) as Record<string, unknown>;
+    expect(result.rawTranscript).toBe("[STRIPPED]");
+    expect(result.workerChainOfThought).toBe("[STRIPPED]");
+    expect(result.ok).toBe(true);
+  });
+
+  it("recursively sanitizes nested objects", () => {
+    const result = sanitizeForArtifact({
+      level1: {
+        token: "secret-in-nested",
+        childTranscript: "leaked",
+        value: 42,
+      },
+    }) as Record<string, unknown>;
+    const nested = result.level1 as Record<string, unknown>;
+    expect(nested.token).toBe("[REDACTED]");
+    expect(nested.childTranscript).toBe("[STRIPPED]");
+    expect(nested.value).toBe(42);
+  });
+
+  it("sanitizes arrays", () => {
+    const result = sanitizeForArtifact([{ token: "s1" }, { token: "s2" }]) as Record<string, unknown>[];
+    expect(result[0].token).toBe("[REDACTED]");
+    expect(result[1].token).toBe("[REDACTED]");
+  });
+
+  it("strips keys containing 'token' or 'secret' case-insensitively", () => {
+    const result = sanitizeForArtifact({ BotToken: "t", MySecretKey: "s", safe: "ok" }) as Record<string, unknown>;
+    expect(result.BotToken).toBe("[REDACTED]");
+    expect(result.MySecretKey).toBe("[REDACTED]");
+    expect(result.safe).toBe("ok");
+  });
+});
+
+
+describe("content assertions via runSlackAcceptanceHarness", () => {
+  it("passes plain_chat when non-empty reply observed", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的，状态正常" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, noSpawnExpected: true, expectFinal: ["在", "状态"] }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+    expect(plainCase.final.status).toBe("pass");
+    expect(plainCase.ackMs).toBeDefined();
+    expect(plainCase.finalMs).toBeDefined();
+  });
+
+  it("waits for final content instead of judging the first ACK as final", async () => {
+    const client = createMockClientSequence([
+      [{ ts: "1234567890.000002", text: "收到，开始查" }],
+      [{ ts: "1234567890.000002", text: "收到，开始查" }],
+      [{ ts: "1234567890.000002", text: "收到，开始查" }, { ts: "1234567890.000003", text: "OpenClaw 4.21 摘要" }],
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "fresh_lookup", prompt: "test", ackRequired: true, finalRequired: true, expectAck: ["开始"], expectFinal: ["OpenClaw", "4.21"] }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const lookupCase = report.cases.find((c) => c.kind === "fresh_lookup")!;
+    expect(lookupCase.ack.status).toBe("pass");
+    expect(lookupCase.final.status).toBe("pass");
+    expect(lookupCase.transcript).toHaveLength(2);
+  });
+
+  it("fails when required expected content is missing", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "unrelated reply" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "fresh_lookup", prompt: "test", ackRequired: true, finalRequired: true, expectAck: ["查"], expectFinal: ["OpenClaw", "4.21"] }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const lookupCase = report.cases.find((c) => c.kind === "fresh_lookup")!;
+    expect(lookupCase.final.status).toBe("fail");
+  });
+
+  it("fails when rejected content appears in reply", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "任务正在运行中" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "no_lie_materialized_no_spawn", prompt: "test", finalRequired: true, noSpawnExpected: true, requiresFixture: true, fixtureKey: "materializedNoSpawn", expectFinal: ["queued"], rejectFinal: ["正在运行"] }],
+      fixtures: { materializedNoSpawn: true },
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const noLieCase = report.cases.find((c) => c.kind === "no_lie_materialized_no_spawn")!;
+    expect(noLieCase.final.status).toBe("fail");
+    expect(noLieCase.final.reason).toContain("rejected");
+  });
+
+  it("fails case when postMessage fails", async () => {
+    const client = createMockClientWithPostError("channel_not_found");
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "test", finalRequired: true }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(report.cases[0].status).toBe("fail");
+    expect(report.cases[0].errors).toContain("channel_not_found");
+  });
+
+  it("skips disabled cases", async () => {
+    const client = createMockClient();
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "test", enabled: false }],
+    }), validEnv());
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(report.cases[0].status).toBe("unknown");
+    expect(report.cases[0].ack.status).toBe("skipped");
+  });
+
+  it("skips fixture-required case when fixture missing", async () => {
+    const client = createMockClient();
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "no_lie_materialized_no_spawn", prompt: "test", requiresFixture: true, fixtureKey: "materializedNoSpawn" }],
+    }), validEnv());
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(report.cases[0].status).toBe("unknown");
+    expect(report.cases[0].ack.status).toBe("skipped");
+  });
+
+  it("passes fixture-required case when fixture present", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "状态为 queued，materialized 尚未实际执行" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "no_lie_materialized_no_spawn", prompt: "test", requiresFixture: true, fixtureKey: "materializedNoSpawn", finalRequired: true, expectFinal: ["queued", "materialized"] }],
+      fixtures: { materializedNoSpawn: true },
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(report.cases[0].final.status).toBe("pass");
+  });
+});
+
+
+describe("no-spawn replay assertion", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join(os.homedir(), ".octoclawctl-nospawn-test");
+    tmpDir = path.join(base, `test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("passes when replay shows no spawn after prompt", async () => {
+    const replayPath = path.join(tmpDir, "replay.jsonl");
+    const event = { at: "2020-01-01T00:00:00.000Z", event: "policy_resolved", route: "reply", sessionKey: "slack:channel:C_ACC_TEST:thread:123" };
+    await fs.writeFile(replayPath, JSON.stringify(event), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "状态正常" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, noSpawnExpected: true }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+    expect(plainCase.noSpawn.status).toBe("pass");
+  });
+
+  it("fails when replay shows spawn after prompt", async () => {
+    const replayPath = path.join(tmpDir, "replay.jsonl");
+    const noSpawnEvent = { at: "2020-01-01T00:00:00.000Z", event: "policy_resolved", route: "reply" };
+    const spawnEvent = { at: "2099-12-31T23:59:59.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey: "slack:channel:C_ACC_TEST:thread:123" };
+    await fs.writeFile(replayPath, `${JSON.stringify(noSpawnEvent)}\n${JSON.stringify(spawnEvent)}\n`, "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, noSpawnExpected: true }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+    expect(plainCase.noSpawn.status).toBe("fail");
+    expect(plainCase.noSpawn.reason).toContain("spawn evidence");
+  });
+
+  it("returns unknown when replayPath not configured", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, noSpawnExpected: true }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+    expect(plainCase.noSpawn.status).toBe("unknown");
+  });
+
+  it("treats malformed JSONL lines in replay as unknown, not pass", async () => {
+    const replayPath = path.join(tmpDir, "replay.jsonl");
+    await fs.writeFile(replayPath, "not json\n{bad\n", "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, noSpawnExpected: true }],
+      replayPath,
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const plainCase = report.cases.find((c) => c.kind === "plain_chat")!;
+    expect(plainCase.noSpawn.status).toBe("unknown");
+    expect(plainCase.noSpawn.reason).toContain("malformed replay JSONL");
+  });
+});
+
+
+describe("overall gate", () => {
+  it("returns fail when any case fails", async () => {
+    const client = createMockClientWithPostError("fail");
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "test", finalRequired: true }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(report.overallGate).toBe("fail");
+  });
+
+  it("returns fail when tool audit fails", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "reply" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "test", finalRequired: true }],
+      exposedTools: ["message.send", "files.upload"],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(report.overallGate).toBe("fail");
+    expect(report.toolExposureAudit.blockedTools).toContain("files.upload");
+  });
+
+  it("returns pass when all cases pass and tools are safe", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的，状态正常" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, expectFinal: ["在"] }],
+      exposedTools: ["message.send"],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(report.overallGate).toBe("pass");
+    expect(report.pass).toBe(1);
+    expect(report.fail).toBe(0);
+  });
+});
+
+
+describe("report rendering", () => {
+  it("renders valid markdown report", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const md = renderSlackAcceptanceMarkdown(report);
+    expect(md).toContain("# Slack Acceptance Report");
+    expect(md).toContain("plain_chat");
+    expect(md).toContain("Tool Exposure");
+    expect(md).toContain(report.reportId);
+  });
+
+  it("report is JSON-serializable after sanitization", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.000002", text: "在的" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const serialized = JSON.parse(JSON.stringify(report));
+    expect(serialized.schemaVersion).toBe("octoclaw.slack_acceptance.report/v1");
+    expect(serialized.cases).toHaveLength(1);
+  });
+});
+
+
+describe("SlackWebApiAcceptanceClient", () => {
+  it("has postMessage and fetchReplies methods", () => {
+    const client = new SlackWebApiAcceptanceClient("xoxb-test");
+    expect(typeof client.postMessage).toBe("function");
+    expect(typeof client.fetchReplies).toBe("function");
+  });
+});
+
+
+describe("loadSlackAcceptanceConfig file errors", () => {
+  it("throws on missing file", async () => {
+    await expect(
+      (await import("./harness.js")).loadSlackAcceptanceConfig("/nonexistent/path.json", validEnv()),
+    ).rejects.toThrow("not found");
+  });
+});

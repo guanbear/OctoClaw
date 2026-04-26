@@ -36,6 +36,30 @@ OctoClaw SHALL emit execution transition notifications from real lifecycle evide
 - THEN status SHALL be `deliverable_ready`
 - AND notification SHALL expose artifact refs when available.
 
+
+### Requirement: Real Slack Acceptance Harness
+
+OctoClaw SHALL provide an explicit-config Slack acceptance harness that tests real Slack/IM behavior without using production DM defaults.
+
+#### Scenario: missing or unsafe target config
+
+- WHEN the acceptance command is run without a config, token env var, or target channel
+- OR WHEN a DM/direct target is configured without explicit allowlist approval
+- THEN the harness SHALL fail closed before sending test messages.
+
+#### Scenario: status or provenance acceptance
+
+- WHEN status, provenance, or no-lie fixture cases are executed
+- THEN the harness SHALL verify final content assertions
+- AND SHALL use replay evidence to check that no new spawn occurred when no-spawn is expected
+- AND malformed or missing replay evidence SHALL be `unknown`, not `pass`.
+
+#### Scenario: acceptance artifacts
+
+- WHEN the harness writes reports
+- THEN it SHALL write sanitized JSON and Markdown artifacts
+- AND SHALL redact secrets and strip raw child transcripts, worker chain-of-thought, and execution logs.
+
 ### Requirement: Calibration Gate
 
 OctoClaw SHALL only promote route/judge/model policy recommendations when the gate result is `pass`.

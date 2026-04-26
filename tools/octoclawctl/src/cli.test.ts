@@ -167,6 +167,36 @@ describe("octoclawctl cli", () => {
   it("non-nightly commands reject --format markdown", () => {
     expect(() => parseCliArgs(["status", "--format", "markdown"])).toThrow("Unknown format: markdown");
   });
+
+  it("parses slack-acceptance command with required args", () => {
+    const parsed = parseCliArgs(["slack-acceptance", "--config", "acceptance.json", "--output-dir", "/tmp/reports"]);
+    expect(parsed.command).toBe("slack-acceptance");
+    expect(parsed.config).toBe("acceptance.json");
+    expect(parsed.outputDir).toBe("/tmp/reports");
+    expect(parsed.slackAcceptanceFormat).toBe("markdown");
+  });
+
+  it("slack-acceptance accepts --format json", () => {
+    const parsed = parseCliArgs(["slack-acceptance", "--config", "cfg.json", "--output-dir", "out/", "--format", "json"]);
+    expect(parsed.slackAcceptanceFormat).toBe("json");
+  });
+
+  it("slack-acceptance accepts --format markdown", () => {
+    const parsed = parseCliArgs(["slack-acceptance", "--config", "cfg.json", "--output-dir", "out/", "--format", "markdown"]);
+    expect(parsed.slackAcceptanceFormat).toBe("markdown");
+  });
+
+  it("slack-acceptance rejects --format compact", () => {
+    expect(() => parseCliArgs(["slack-acceptance", "--config", "cfg.json", "--output-dir", "out/", "--format", "compact"])).toThrow("Unknown format: compact");
+  });
+
+  it("slack-acceptance requires --config", () => {
+    expect(() => parseCliArgs(["slack-acceptance", "--output-dir", "/tmp"])).toThrow("--config");
+  });
+
+  it("slack-acceptance requires --output-dir", () => {
+    expect(() => parseCliArgs(["slack-acceptance", "--config", "cfg.json"])).toThrow("--output-dir");
+  });
 });
 
 describe("octoclawctl nightly integration", () => {

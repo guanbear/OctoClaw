@@ -35,10 +35,21 @@
 
 ## D4 Real Slack Acceptance Harness
 
-- [ ] Locate or define explicit test bot/session config.
-- [ ] Fail closed when config is missing.
-- [ ] Test plain chat, delegated work, ledger follow-up, status reply, provenance guard, and Slack tool exposure audit.
-- [ ] Keep test bot separate from production live path.
+- [x] Locate or define explicit test bot/session config.
+- [x] Fail closed when config is missing.
+- [x] Test plain chat, delegated work, ledger follow-up, status reply, provenance guard, and Slack tool exposure audit.
+- [x] Keep test bot separate from production live path.
+- [x] Add CLI: `octoclawctl slack-acceptance --config <json> --output-dir <dir> [--format markdown|json]`.
+- [x] Explicit Slack test bot/session config; missing config/token/target fails closed.
+- [x] 7 cases: plain_chat, fresh_lookup, delegated_work, status_panel, provenance_followup, route_objection_correction, no_lie_materialized_no_spawn.
+- [x] Pull Slack thread replies, measure ACK/final timing, content assertions.
+- [x] Status/provenance/no-lie support replayPath no-spawn assertion.
+- [x] Save sanitized JSON + Markdown artifacts; no secrets, no raw child transcript.
+- [x] Slack-facing tool exposure audit: only message.send/update/react/typing allowed.
+- [x] Mock Slack client tests, missing config fail closed, secret redaction, content assertion, no-spawn replay tests.
+- [x] Document D4 CLI/config/safety usage.
+- [x] Add OpenSpec requirement for real Slack acceptance harness.
+- [x] 93 test files, 854 tests passing. Build clean.
 
 ## D5 Calibration Gate
 
