@@ -66,3 +66,18 @@
 - [x] Pure gate function — no I/O, no API calls, no config mutation, no live promotion.
 - [x] Save sanitized JSON + Markdown report artifacts.
 - [x] 27 calibration tests + 8 CLI parse tests. 94 test files, 889 tests passing. Build clean.
+
+## D6 Nightly Evaluation Scheduler
+
+- [x] CLI: `octoclawctl nightly-eval run --config <json> --output-dir <dir> [--format markdown|json]`.
+- [x] Orchestrates D3 nightly, D4 slack acceptance (optional), D5 calibration gate (optional) in one run.
+- [x] Config must specify replayPath; slackAcceptanceConfig/baseline/candidate optional.
+- [x] Aggregate report with per-step pass/fail/unknown/skipped status, overall gate, recommendation.
+- [x] Unknown never equals pass; all-skipped yields unknown.
+- [x] Sanitized aggregate artifacts (JSON + Markdown) with secret redaction and transcript stripping.
+- [x] Mac LaunchAgent support: `install-launchagent`, `uninstall-launchagent`, `print-plist`.
+- [x] LaunchAgent is opt-in, requires explicit config path and output dir.
+- [x] LaunchAgent runs `octoclawctl nightly-eval run` on schedule, stdout/stderr log to configurable dir.
+- [x] No OpenClaw runtime cron/loop; external scheduling only.
+- [x] No live policy mutation, no promotion, no default multi-agent.
+- [x] 24 nightly-eval tests + 15 CLI parse tests. 95 test files, 928 tests passing. Build clean.

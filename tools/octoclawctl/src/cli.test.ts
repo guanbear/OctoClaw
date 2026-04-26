@@ -246,6 +246,149 @@ describe("calibration-gate CLI parsing", () => {
   });
 });
 
+describe("nightly-eval CLI parsing", () => {
+  it("parses nightly-eval run with all required args", () => {
+    const result = parseCliArgs(["nightly-eval", "run", "--config", "eval.json", "--output-dir", "/tmp/out"]);
+    expect(result.command).toBe("nightly-eval");
+    expect(result.nightlyEvalSubcommand).toBe("run");
+    expect(result.config).toBe("eval.json");
+    expect(result.outputDir).toBe("/tmp/out");
+    expect(result.calibrationFormat).toBe("markdown");
+  });
+
+  it("parses nightly-eval run with --format json", () => {
+    const result = parseCliArgs(["nightly-eval", "run", "--config", "eval.json", "--output-dir", "/tmp/out", "--format", "json"]);
+    expect(result.nightlyEvalSubcommand).toBe("run");
+    expect(result.calibrationFormat).toBe("json");
+  });
+
+  it("parses nightly-eval install-launchagent with --schedule-hour", () => {
+    const result = parseCliArgs(["nightly-eval", "install-launchagent", "--config", "eval.json", "--output-dir", "/tmp/out", "--schedule-hour", "3"]);
+    expect(result.nightlyEvalSubcommand).toBe("install-launchagent");
+    expect(result.scheduleHour).toBe(3);
+  });
+
+  it("parses nightly-eval install-launchagent with --log-dir", () => {
+    const result = parseCliArgs(["nightly-eval", "install-launchagent", "--config", "eval.json", "--output-dir", "/tmp/out", "--log-dir", "/tmp/logs"]);
+    expect(result.nightlyEvalSubcommand).toBe("install-launchagent");
+    expect(result.logDir).toBe("/tmp/logs");
+  });
+
+  it("parses nightly-eval uninstall-launchagent", () => {
+    const result = parseCliArgs(["nightly-eval", "uninstall-launchagent"]);
+    expect(result.command).toBe("nightly-eval");
+    expect(result.nightlyEvalSubcommand).toBe("uninstall-launchagent");
+  });
+
+  it("parses nightly-eval print-plist", () => {
+    const result = parseCliArgs(["nightly-eval", "print-plist", "--config", "eval.json", "--output-dir", "/tmp/out"]);
+    expect(result.nightlyEvalSubcommand).toBe("print-plist");
+    expect(result.config).toBe("eval.json");
+    expect(result.outputDir).toBe("/tmp/out");
+  });
+
+  it("requires subcommand", () => {
+    expect(() => parseCliArgs(["nightly-eval"]))
+      .toThrow("nightly-eval requires a subcommand");
+  });
+
+  it("rejects invalid subcommand", () => {
+    expect(() => parseCliArgs(["nightly-eval", "bad"]))
+      .toThrow("Unknown nightly-eval subcommand");
+  });
+
+  it("run requires --config", () => {
+    expect(() => parseCliArgs(["nightly-eval", "run", "--output-dir", "/tmp/out"]))
+      .toThrow("nightly-eval run requires --config");
+  });
+
+  it("run requires --output-dir", () => {
+    expect(() => parseCliArgs(["nightly-eval", "run", "--config", "eval.json"]))
+      .toThrow("nightly-eval run requires --output-dir");
+  });
+
+  it("install-launchagent requires --config", () => {
+    expect(() => parseCliArgs(["nightly-eval", "install-launchagent", "--output-dir", "/tmp/out"]))
+      .toThrow("nightly-eval install-launchagent requires --config");
+  });
+
+  it("install-launchagent requires --output-dir", () => {
+    expect(() => parseCliArgs(["nightly-eval", "install-launchagent", "--config", "eval.json"]))
+      .toThrow("nightly-eval install-launchagent requires --output-dir");
+  });
+
+  it("rejects --schedule-hour out of range", () => {
+    expect(() => parseCliArgs(["nightly-eval", "install-launchagent", "--config", "eval.json", "--output-dir", "/tmp/out", "--schedule-hour", "25"]))
+      .toThrow("Invalid --schedule-hour");
+  });
+
+  it("supports --schedule-hour= equals syntax", () => {
+    const result = parseCliArgs(["nightly-eval", "print-plist", "--config", "eval.json", "--output-dir", "/tmp/out", "--schedule-hour=4"]);
+    expect(result.scheduleHour).toBe(4);
+  });
+
+  it("default schedule hour when not specified", () => {
+    const result = parseCliArgs(["nightly-eval", "install-launchagent", "--config", "eval.json", "--output-dir", "/tmp/out"]);
+    expect(result.scheduleHour).toBeUndefined();
+  });
+});
+
+
+
+describe("octoclawctl nightly-eval integration", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join(os.homedir(), ".octoclawctl-test-tmp");
+    tmpDir = path.join(base, `nightly-eval-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(tmpDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates output directory and timestamped aggregate artifacts", async () => {
+    const replayPath = path.join(tmpDir, "replay.jsonl");
+    const configPath = path.join(tmpDir, "nightly-eval.json");
+    const outputDirPath = path.join(tmpDir, "nested", "reports");
+    const event = { schema_version: "octoclaw.runtime_policy.replay_event/v1", event: "policy_resolved", at: "2026-04-26T10:00:00.000Z", route: "reply", confidence: 0.9, routerDecisionValid: true };
+    await fs.writeFile(replayPath, `${JSON.stringify(event)}\n`, "utf8");
+    await fs.writeFile(configPath, JSON.stringify({ replayPath }), "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly-eval", "run", "--config", configPath, "--output-dir", outputDirPath],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(capture.stdout[0]).toContain("Gate:");
+    const entries = await fs.readdir(outputDirPath, { withFileTypes: true });
+    const fileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+    expect(fileNames.some((fileName) => /-nightly-eval\.json$/u.test(fileName))).toBe(true);
+    expect(fileNames.some((fileName) => /-nightly-eval\.md$/u.test(fileName))).toBe(true);
+    expect(fileNames.some((fileName) => /-nightly\.json$/u.test(fileName))).toBe(true);
+  });
+
+  it("fails closed on malformed nightly-eval config", async () => {
+    const configPath = path.join(tmpDir, "bad.json");
+    const outputDirPath = path.join(tmpDir, "reports");
+    await fs.writeFile(configPath, JSON.stringify({ baseline: "only-baseline.json" }), "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(
+      ["nightly-eval", "run", "--config", configPath, "--output-dir", outputDirPath],
+      {},
+      capture.io,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(capture.stderr[0]).toContain("Nightly eval: malformed config JSON");
+  });
+});
+
 describe("octoclawctl nightly integration", () => {
   let tmpDir: string;
 

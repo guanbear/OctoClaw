@@ -14,9 +14,11 @@ import {
 import { generateNightlyReport, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
 import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
 import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
+import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour } from "./nightly-eval/index.js";
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
+import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
 
 type LegacyCliFormat = "text" | "json";
 type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "json";
@@ -37,6 +39,7 @@ type CliCommand =
   | "reconcile"
   | "repair"
   | "nightly"
+  | "nightly-eval"
   | "slack-acceptance";
 type JsonRecord = Record<string, unknown>;
 
@@ -80,6 +83,9 @@ interface ParsedCliArgs {
   nightlyFormat: NightlyFormat;
   calibrationFormat: "markdown" | "json";
   config?: string;
+  scheduleHour?: number;
+  logDir?: string;
+  nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist";
   slackAcceptanceFormat: SlackAcceptanceFormat;
 }
 
@@ -218,6 +224,10 @@ function pad(value: string, width: number): string {
 
 function parseJsonText(text: string): unknown {
   return JSON.parse(text) as unknown;
+}
+
+function resolvePath(filePath: string): string {
+  return filePath.startsWith("/") ? filePath : path.join(process.cwd(), filePath);
 }
 
 async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {
@@ -833,6 +843,9 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let nightlyFormat: NightlyFormat = "markdown";
   let calibrationFormat: "markdown" | "json" = "markdown";
   let config: string | undefined;
+  let scheduleHour: number | undefined;
+  let logDir: string | undefined;
+  let nightlyEvalSubcommand: ParsedCliArgs["nightlyEvalSubcommand"];
   let slackAcceptanceFormat: SlackAcceptanceFormat = "markdown";
   let rawFormat: string | undefined;
   const positionals: string[] = [];
@@ -948,6 +961,25 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       [, config] = argument.split("=", 2);
       continue;
     }
+    if (argument === "--schedule-hour") {
+      scheduleHour = Number.parseInt(argv[index + 1] ?? "", 10);
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--schedule-hour=")) {
+      const [, rawHour] = argument.split("=", 2);
+      scheduleHour = Number.parseInt(rawHour ?? "", 10);
+      continue;
+    }
+    if (argument === "--log-dir") {
+      logDir = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--log-dir=")) {
+      [, logDir] = argument.split("=", 2);
+      continue;
+    }
     if (argument.startsWith("--")) {
       throw new Error(`Unknown option: ${argument}`);
     }
@@ -957,11 +989,19 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (positionals.length > 0) {
     command = positionals[0] as CliCommand;
   }
+  if (command === "nightly-eval" && positionals[1]) {
+    const sub = positionals[1];
+    const validSubs = ["run", "install-launchagent", "uninstall-launchagent", "print-plist"];
+    if (!validSubs.includes(sub)) {
+      throw new Error(`Unknown nightly-eval subcommand: ${sub}. Expected one of: ${validSubs.join(", ")}`);
+    }
+    nightlyEvalSubcommand = sub as ParsedCliArgs["nightlyEvalSubcommand"];
+  }
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["calibration-gate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "slack-acceptance"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance`);
+  if (command && !["calibration-gate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "slack-acceptance"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
@@ -969,11 +1009,12 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
 
   if (rawFormat !== undefined) {
     const MARKDOWN_JSON_FORMATS: readonly string[] = ["markdown", "json"];
-    if (command === "nightly" || command === "slack-acceptance" || command === "calibration-gate") {
+    if (command === "nightly" || command === "nightly-eval" || command === "slack-acceptance" || command === "calibration-gate") {
       if (!MARKDOWN_JSON_FORMATS.includes(rawFormat)) {
         throw new Error(`Unknown format: ${rawFormat}. Expected one of: markdown, json`);
       }
       if (command === "nightly") nightlyFormat = rawFormat as NightlyFormat;
+      if (command === "nightly-eval") calibrationFormat = rawFormat as "markdown" | "json";
       if (command === "slack-acceptance") slackAcceptanceFormat = rawFormat as SlackAcceptanceFormat;
       if (command === "calibration-gate") calibrationFormat = rawFormat as "markdown" | "json";
     } else {
@@ -1012,6 +1053,23 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     }
   }
 
+  if (command === "nightly-eval") {
+    if (!nightlyEvalSubcommand) {
+      throw new Error("nightly-eval requires a subcommand: run, install-launchagent, uninstall-launchagent, print-plist");
+    }
+    if (nightlyEvalSubcommand === "run" || nightlyEvalSubcommand === "install-launchagent" || nightlyEvalSubcommand === "print-plist") {
+      if (!config) {
+        throw new Error(`nightly-eval ${nightlyEvalSubcommand} requires --config <eval-config.json>`);
+      }
+      if (!outputDir) {
+        throw new Error(`nightly-eval ${nightlyEvalSubcommand} requires --output-dir <dir>`);
+      }
+    }
+    if (scheduleHour !== undefined && (!Number.isFinite(scheduleHour) || scheduleHour < 0 || scheduleHour > 23)) {
+      throw new Error("Invalid --schedule-hour: must be 0-23");
+    }
+  }
+
   return {
     command,
     format,
@@ -1031,6 +1089,9 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     nightlyFormat,
     calibrationFormat,
     config,
+    scheduleHour,
+    logDir,
+    nightlyEvalSubcommand,
     slackAcceptanceFormat,
   };
 }
@@ -1063,6 +1124,10 @@ export function printUsage(): string {
     "  octoclawctl reconcile",
     "  octoclawctl repair",
     "  octoclawctl nightly --input <replay.jsonl> --output-dir <dir> [--format markdown|json]",
+    "  octoclawctl nightly-eval run --config <eval-config.json> --output-dir <dir> [--format markdown|json]",
+    "  octoclawctl nightly-eval install-launchagent --config <eval-config.json> --output-dir <dir> [--schedule-hour 2] [--log-dir <dir>]",
+    "  octoclawctl nightly-eval uninstall-launchagent",
+    "  octoclawctl nightly-eval print-plist --config <eval-config.json> --output-dir <dir> [--schedule-hour 2]",
     "  octoclawctl slack-acceptance --config <acceptance.json> --output-dir <dir> [--format markdown|json]",
     "  octoclawctl calibration-gate --baseline <report.json> --candidate <report.json> --output-dir <dir> [--format markdown|json]",
     "",
@@ -1328,6 +1393,133 @@ async function runCalibrationGateCliCommand(parsed: ParsedCliArgs, _env: Record<
   return `Written: ${jsonPath}\nWritten: ${mdPath}\nGate: ${report.overallGate}`;
 }
 
+async function runNightlyEvalCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
+  const configPath = parsed.config!;
+  const outputDirPath = parsed.outputDir!;
+  const format = parsed.calibrationFormat;
+
+  const configRaw = await fs.readFile(configPath, "utf8");
+  await ensureDir(outputDirPath);
+  let evalConfig: NightlyEvalConfig;
+  try {
+    evalConfig = parseNightlyEvalConfig(JSON.parse(configRaw));
+  } catch {
+    throw new Error(`Nightly eval: malformed config JSON: ${configPath}`);
+  }
+
+  const report = await runNightlyEval({
+    config: evalConfig,
+    outputDir: outputDirPath,
+    env,
+    nightlyRunner: async (replayPath: string) => {
+      const content = await fs.readFile(replayPath, "utf8");
+      const lines = content.split(/\r?\n/u);
+      const rawEvents: unknown[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          rawEvents.push(JSON.parse(line));
+        } catch {
+          throw new Error(`Nightly eval: malformed JSON at line ${i + 1}`);
+        }
+      }
+      validateReplayEvents(rawEvents);
+      return generateNightlyReport(rawEvents);
+    },
+    slackRunner: evalConfig.slackAcceptanceConfig ? async (configPath: string, runnerEnv: Record<string, string | undefined>) => {
+      const resolved = await loadSlackAcceptanceConfig(configPath, runnerEnv);
+      const client = new SlackWebApiAcceptanceClient(resolved.botToken);
+      return runSlackAcceptanceHarness(client, resolved);
+    } : undefined,
+    calibrationRunner: (evalConfig.baseline && evalConfig.candidate) ? async (baselinePath: string, candidatePath: string) => {
+      const [blRaw, clRaw] = await Promise.all([
+        fs.readFile(baselinePath, "utf8"),
+        fs.readFile(candidatePath, "utf8"),
+      ]);
+      return runCalibrationGate(
+        normalizeCalibrationInputFile(JSON.parse(blRaw)),
+        normalizeCalibrationInputFile(JSON.parse(clRaw)),
+      );
+    } : undefined,
+    fileWriter: async (filePath: string, content: string) => {
+      await fs.writeFile(filePath, content, "utf8");
+    },
+  });
+
+  if (format === "json") {
+    return JSON.stringify(sanitizeAggregateReport(report), null, 2);
+  }
+  renderNightlyEvalMarkdown(report);
+  return `Written: ${outputDirPath}\nGate: ${report.overallGate}\nNightly: ${report.steps.nightly.status}\nSlack: ${report.steps.slackAcceptance.status}\nCalibration: ${report.steps.calibration.status}`;
+}
+
+async function runNightlyEvalLaunchAgentCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const label = defaultLabel();
+  const plistPath = defaultPlistPath();
+
+  if (parsed.nightlyEvalSubcommand === "uninstall-launchagent") {
+    try {
+      const { spawn } = await import("node:child_process");
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn("launchctl", ["unload", plistPath], { stdio: ["ignore", "pipe", "pipe"] });
+        child.on("error", reject);
+        child.on("close", () => resolve());
+      });
+    } catch {
+      // tolerate — may not be loaded
+    }
+    try {
+      await fs.rm(plistPath, { force: true });
+    } catch {
+      // tolerate — may not exist
+    }
+    return `Uninstalled LaunchAgent: ${label}`;
+  }
+
+  const configPath = resolvePath(parsed.config!);
+  const outputDirPath = resolvePath(parsed.outputDir!);
+  const hour = parsed.scheduleHour ?? 2;
+
+  validateScheduleHour(hour);
+
+  const programPath = process.argv[1] ?? "octoclawctl";
+  const logDir = parsed.logDir ?? path.join(path.dirname(plistPath), "..", "Logs", "octoclaw");
+  const resolvedLogDir = resolvePath(logDir);
+
+  const launchConfig: LaunchAgentConfig = {
+    label,
+    programPath: resolvePath(programPath),
+    configPath,
+    outputDir: outputDirPath,
+    scheduleHour: hour,
+    logDir: resolvedLogDir,
+  };
+
+  if (parsed.nightlyEvalSubcommand === "print-plist") {
+    return generateLaunchAgentPlist(launchConfig);
+  }
+
+  if (parsed.nightlyEvalSubcommand === "install-launchagent") {
+    const plist = generateLaunchAgentPlist(launchConfig);
+    await ensureDir(path.dirname(plistPath));
+    await ensureDir(resolvedLogDir);
+    await fs.writeFile(plistPath, plist, "utf8");
+    const { spawn } = await import("node:child_process");
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("launchctl", ["load", plistPath], { stdio: ["ignore", "pipe", "pipe"] });
+      child.on("error", reject);
+      child.on("close", (code: number | null) => {
+        if (code === 0) resolve();
+        else reject(new Error(`launchctl load failed with code ${code}`));
+      });
+    });
+    return `Installed LaunchAgent: ${label}\nPlist: ${plistPath}\nSchedule: daily at ${String(hour).padStart(2, "0")}:00\nLogs: ${resolvedLogDir}`;
+  }
+
+  throw new Error(`Unknown nightly-eval subcommand: ${parsed.nightlyEvalSubcommand}`);
+}
+
 async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): Promise<string> {
   const snapshot = await loadStatusSnapshot(env);
   switch (parsed.command) {
@@ -1406,6 +1598,11 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
       return runOperationalCommand("repair", env, true);
     case "nightly":
       return runNightlyCommand(parsed, env);
+    case "nightly-eval":
+      if (parsed.nightlyEvalSubcommand === "run") {
+        return runNightlyEvalCommand(parsed, env);
+      }
+      return runNightlyEvalLaunchAgentCommand(parsed, env);
     case "slack-acceptance":
       return runSlackAcceptanceCliCommand(parsed, env);
     case "calibration-gate":

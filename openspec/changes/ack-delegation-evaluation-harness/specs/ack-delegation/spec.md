@@ -82,3 +82,32 @@ OctoClaw SHALL only promote route/judge/model policy recommendations when the ga
 - WHEN the gate comparison function is invoked
 - THEN it SHALL NOT perform I/O, API calls, or state mutation
 - AND SHALL NOT change live model/rule policy automatically.
+
+### Requirement: Nightly Evaluation Scheduler
+
+OctoClaw SHALL provide a report-only nightly evaluation scheduler that orchestrates D3/D4/D5 evaluation steps.
+
+#### Scenario: missing config
+
+- WHEN the nightly-eval command is run without a config file or output directory
+- THEN it SHALL fail closed before executing any evaluation step.
+
+#### Scenario: aggregate report
+
+- WHEN the nightly-eval run completes
+- THEN it SHALL produce an aggregate report with per-step status, overall gate, and recommendation
+- AND SHALL treat `unknown` as not pass
+- AND SHALL sanitize all artifacts — no secrets, no raw child transcripts.
+
+#### Scenario: LaunchAgent opt-in
+
+- WHEN the install-launchagent command is run
+- THEN it SHALL create a Mac LaunchAgent plist that runs nightly-eval on schedule
+- AND SHALL require explicit config path and output directory
+- AND SHALL NOT run at load or keep alive.
+
+#### Scenario: no live mutation
+
+- WHEN the nightly evaluation scheduler runs
+- THEN it SHALL NOT modify live policy, config, or route rules
+- AND SHALL NOT enable multi-agent or online self-tuning.
