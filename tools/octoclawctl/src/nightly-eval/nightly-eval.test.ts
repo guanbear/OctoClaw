@@ -180,7 +180,8 @@ describe("launch agent plist", () => {
     expect(plist).toContain("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     expect(plist).toContain("<plist version=\"1.0\">");
     expect(plist).toContain("ai.octoclaw.nightly-eval");
-    expect(plist).toContain("/usr/local/bin/octoclawctl");
+    expect(plist).toContain("/usr/local/bin/node");
+    expect(plist).toContain("/usr/local/lib/octoclawctl/dist/cli.js");
     expect(plist).toContain("StartCalendarInterval");
     expect(plist).toContain("/tmp/logs/nightly-eval-stdout.log");
     expect(plist).toContain("/tmp/logs/nightly-eval-stderr.log");
@@ -193,6 +194,8 @@ describe("launch agent plist", () => {
 
   it("generateLaunchAgentPlist arguments include config and output-dir", () => {
     const plist = generateLaunchAgentPlist(makeLaunchAgentConfig());
+    expect(plist).toContain("<string>/usr/local/bin/node</string>");
+    expect(plist).toContain("<string>/usr/local/lib/octoclawctl/dist/cli.js</string>");
     expect(plist).toContain("<string>nightly-eval</string>");
     expect(plist).toContain("<string>run</string>");
     expect(plist).toContain("<string>--config</string>");
@@ -348,7 +351,8 @@ function makeAggregateReport(): NightlyEvalAggregateReport {
 function makeLaunchAgentConfig(overrides: Partial<LaunchAgentConfig> = {}): LaunchAgentConfig {
   return {
     label: "ai.octoclaw.nightly-eval",
-    programPath: "/usr/local/bin/octoclawctl",
+    nodePath: "/usr/local/bin/node",
+    cliPath: "/usr/local/lib/octoclawctl/dist/cli.js",
     configPath: "/tmp/nightly-eval.json",
     outputDir: "/tmp/out",
     scheduleHour: 2,

@@ -46,7 +46,8 @@ export interface NightlyEvalAggregateReport {
 
 export interface LaunchAgentConfig {
   label: string;          // e.g. "ai.octoclaw.nightly-eval"
-  programPath: string;    // absolute path to octoclawctl binary
+  nodePath: string;       // absolute path to node executable
+  cliPath: string;        // absolute path to octoclawctl CLI JS entry
   configPath: string;     // absolute path to nightly-eval config JSON
   outputDir: string;      // absolute path to output directory
   scheduleHour: number;   // 0-23, default 2

@@ -1483,13 +1483,15 @@ async function runNightlyEvalLaunchAgentCommand(parsed: ParsedCliArgs, _env: Rec
 
   validateScheduleHour(hour);
 
-  const programPath = process.argv[1] ?? "octoclawctl";
+  const nodePath = process.argv[0] ?? "node";
+  const cliPath = process.argv[1] ?? "octoclawctl";
   const logDir = parsed.logDir ?? path.join(path.dirname(plistPath), "..", "Logs", "octoclaw");
   const resolvedLogDir = resolvePath(logDir);
 
   const launchConfig: LaunchAgentConfig = {
     label,
-    programPath: resolvePath(programPath),
+    nodePath: resolvePath(nodePath),
+    cliPath: resolvePath(cliPath),
     configPath,
     outputDir: outputDirPath,
     scheduleHour: hour,

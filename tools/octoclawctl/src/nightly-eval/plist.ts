@@ -5,7 +5,7 @@ export function generateLaunchAgentPlist(config: LaunchAgentConfig): string {
   validateScheduleHour(config.scheduleHour);
   const stdoutPath = `${config.logDir}/nightly-eval-stdout.log`;
   const stderrPath = `${config.logDir}/nightly-eval-stderr.log`;
-  const args = [config.programPath, "nightly-eval", "run", "--config", config.configPath, "--output-dir", config.outputDir];
+  const args = [config.nodePath, config.cliPath, "nightly-eval", "run", "--config", config.configPath, "--output-dir", config.outputDir];
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
