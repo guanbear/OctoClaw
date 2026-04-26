@@ -230,6 +230,15 @@ function resolvePath(filePath: string): string {
   return filePath.startsWith("/") ? filePath : path.join(process.cwd(), filePath);
 }
 
+function resolveStableNodePath(invokedNodePath: string): string {
+  for (const candidate of ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]) {
+    if (fsSync.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return invokedNodePath;
+}
+
 async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {
   try {
     const content = await fs.readFile(filePath, "utf8");
@@ -1483,7 +1492,7 @@ async function runNightlyEvalLaunchAgentCommand(parsed: ParsedCliArgs, _env: Rec
 
   validateScheduleHour(hour);
 
-  const nodePath = process.argv[0] ?? "node";
+  const nodePath = resolveStableNodePath(process.argv[0] ?? "node");
   const cliPath = process.argv[1] ?? "octoclawctl";
   const logDir = parsed.logDir ?? path.join(path.dirname(plistPath), "..", "Logs", "octoclaw");
   const resolvedLogDir = resolvePath(logDir);
