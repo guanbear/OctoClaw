@@ -287,6 +287,13 @@ describe("nightly-eval CLI parsing", () => {
     expect(result.outputDir).toBe("/tmp/out");
   });
 
+  it("parses nightly-eval deliver-slack", () => {
+    const result = parseCliArgs(["nightly-eval", "deliver-slack", "--config", "slack.json", "--output-dir", "/tmp/reports"]);
+    expect(result.nightlyEvalSubcommand).toBe("deliver-slack");
+    expect(result.config).toBe("slack.json");
+    expect(result.outputDir).toBe("/tmp/reports");
+  });
+
   it("requires subcommand", () => {
     expect(() => parseCliArgs(["nightly-eval"]))
       .toThrow("nightly-eval requires a subcommand");
@@ -300,6 +307,16 @@ describe("nightly-eval CLI parsing", () => {
   it("run requires --config", () => {
     expect(() => parseCliArgs(["nightly-eval", "run", "--output-dir", "/tmp/out"]))
       .toThrow("nightly-eval run requires --config");
+  });
+
+  it("deliver-slack requires --config", () => {
+    expect(() => parseCliArgs(["nightly-eval", "deliver-slack", "--output-dir", "/tmp/reports"]))
+      .toThrow("nightly-eval deliver-slack requires --config");
+  });
+
+  it("deliver-slack requires --output-dir", () => {
+    expect(() => parseCliArgs(["nightly-eval", "deliver-slack", "--config", "slack.json"]))
+      .toThrow("nightly-eval deliver-slack requires --output-dir");
   });
 
   it("run requires --output-dir", () => {

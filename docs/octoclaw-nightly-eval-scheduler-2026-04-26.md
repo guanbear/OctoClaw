@@ -129,3 +129,23 @@ Unloads and removes the plist. Tolerates missing or already-unloaded agents.
 - **Fail closed**: Missing config, malformed JSON, or missing required fields fail before any evaluation runs
 - **Secret redaction**: All artifacts strip tokens, passwords, and API keys
 - **Transcript stripping**: No raw child transcripts, worker CoT, or execution logs in artifacts
+
+## Slack Delivery
+
+`octoclawctl nightly-eval deliver-slack` sends a compact report-only summary of the latest `*-nightly-eval.json` artifact to the Slack target defined by a Slack acceptance config.
+
+```bash
+octoclawctl nightly-eval deliver-slack \
+  --config /Users/guanbear/.openclaw/octoclaw-slack-acceptance-config.json \
+  --output-dir /Users/guanbear/.openclaw/reports/nightly-eval
+```
+
+Delivery behavior:
+
+- Reads the newest timestamped `*-nightly-eval.json` from the report directory.
+- Uses `botTokenEnv` from the Slack acceptance config; inline tokens are not accepted.
+- Sends only a compact sanitized summary: overall gate, step statuses, highlights, and local report path.
+- Does not send raw transcripts, worker chain-of-thought, secrets, or execution logs.
+- Does not mutate live policy, promote recommendations, or trigger self-tuning.
+
+For scheduled delivery, keep the token in a local `600` permission env file and invoke `nightly-eval deliver-slack` after `nightly-eval run` from the LaunchAgent wrapper.

@@ -11,7 +11,7 @@ import {
   sanitizeAggregateReport,
 } from "./runner.js";
 import { generateLaunchAgentPlist, validateScheduleHour } from "./plist.js";
-import { renderNightlyEvalMarkdown } from "./report.js";
+import { renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary } from "./report.js";
 
 describe("nightly eval config", () => {
   it("parseNightlyEvalConfig requires replayPath", () => {
@@ -232,6 +232,20 @@ describe("markdown and recommendations", () => {
     expect(computeEvalRecommendationStatus("pass")).toBe("recommend_only");
     expect(computeEvalRecommendationStatus("fail")).toBe("blocked");
     expect(computeEvalRecommendationStatus("unknown")).toBe("unknown");
+  });
+
+  it("slack summary contains gate and report path without transcript details", () => {
+    const report = makeAggregateReport();
+    report.steps.slackAcceptance.report = {
+      ...makeSlackAcceptanceReport("fail"),
+      cases: [{ ...makeSlackAcceptanceReport("fail").cases[0], transcript: [{ ts: "1", text: "raw child transcript leak" }] }],
+    };
+    const summary = renderNightlyEvalSlackSummary(report, "/tmp/report.json");
+    expect(summary).toContain("OctoClaw Nightly Eval");
+    expect(summary).toContain("Overall: ✅ pass");
+    expect(summary).toContain("Slack acceptance: pass");
+    expect(summary).toContain("Report: /tmp/report.json");
+    expect(summary).not.toContain("raw child transcript leak");
   });
 });
 
