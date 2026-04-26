@@ -705,6 +705,15 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   });
 
   const packet = buildDecisionPacket(normalizedStateKey, effectiveState, routePhase);
+  // Suppress reply ACK0 if route-commit ACK already sent for this turn.
+  if (asBoolean(effectiveState.routeCommitAckSent || effectiveState.route_commit_ack_sent) && routePhase === "reply") {
+    ackDebug(`attemptAckSend: route-commit ACK satisfied ACK0 for reply route stateKey=${normalizedStateKey}`);
+    updateTrackingState(normalizedStateKey, {
+      ack_target_resolution_state: "suppressed_by_route_commit_ack",
+      ack_delivery_state: "skipped",
+    });
+    return null;
+  }
   const decision = params.decision ?? decideAckAction(packet);
   if (decision.action === "suppress" || decision.action === "no_action") {
     ackDebug(`attemptAckSend: skipped action=${decision.action} reason=${decision.reason} threadKey=${threadKey} stage=${params.ackStage}`);

@@ -22,6 +22,7 @@ import {
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
+import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import {
   buildPolicyMetadata,
   detectSessionBoundary,
@@ -608,6 +609,28 @@ export const plugin = {
       const effectiveDecision = recoveryCheck.updatedCount > 0
         ? asRecord(effectiveState?.decision)
         : decision;
+
+      // D1: Route Commit ACK — send truthful ACK projection after route seal, before dispatch.
+      try {
+        const routeCommitResult = await sendRouteCommitAck({
+          sessionKey: preSessionKey || stringValue(ctx.sessionKey) || "",
+          stateKey: stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || ""),
+          decision: effectiveDecision ?? {},
+          state: effectiveState ?? {},
+          replyToMessageId: inboundMessageTs,
+          cwd: stringValue(ctx.cwd) || process.cwd(),
+          logger: pi.logger,
+        });
+        if (routeCommitResult.sent && effectiveState) {
+          effectiveState.routeCommitAckSent = true;
+          effectiveState.route_commit_ack_sent = true;
+          effectiveState.routeCommitAckId = routeCommitResult.routeCommitId;
+        }
+      } catch (routeCommitErr) {
+        if (pi.logger?.warn) {
+          pi.logger.warn(`octoclaw route-commit-ack error: ${String(routeCommitErr)}`);
+        }
+      }
 
       if (preSessionKey) {
         if (process.env.OCTOCLAW_ACK_DEBUG) {
