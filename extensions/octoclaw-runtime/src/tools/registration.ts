@@ -50,6 +50,7 @@ import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
 import { selectPreferredChildSession } from "../work-contract/continuity.js";
+import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import fsSync from "node:fs";
 import path from "node:path";
 
@@ -1295,6 +1296,52 @@ async function executeTaskAnchorCommand(rawText: string, format: string, cwd: st
   return buildNativeTaskActionPayload(rawText, normalizeTaskActionFormat(format));
 }
 
+function buildMinimalProjection(params: {
+  taskId: string;
+  status: string;
+  dispatchExecuted: boolean;
+  spawnExecuted: boolean;
+  resultMaterialized: boolean;
+  modelId?: string;
+  backend?: string;
+  artifactRefIds?: string[];
+  childSessionKey?: string;
+  runId?: string;
+  childRunId?: string;
+  latestAnomalyNotice?: Record<string, unknown>;
+}): import("@octoclaw/contracts/status-projection").TaskStatusProjection {
+  return {
+    schemaVersion: "octoclaw.task_status_projection/v1" as const,
+    projectionId: `exec_transition_${params.taskId}_${Date.now()}`,
+    generatedAt: new Date().toISOString(),
+    requestId: "",
+    flowId: "",
+    taskId: params.taskId,
+    title: "",
+    summary: "",
+    taskSummary: "",
+    route: "delegate" as const,
+    role: "",
+    backend: params.backend ?? "octoclaw.delegate",
+    modelProfile: "",
+    modelId: params.modelId,
+    status: params.status as any,
+    success: false,
+    createdAt: new Date().toISOString(),
+    dispatchExecuted: params.dispatchExecuted,
+    spawnExecuted: params.spawnExecuted,
+    resultMaterialized: params.resultMaterialized,
+    elapsedMs: 0,
+    artifactRefs: [],
+    artifactRefIds: params.artifactRefIds ?? [],
+    childSessionKey: params.childSessionKey,
+    runId: params.runId,
+    childRunId: params.childRunId,
+    actions: [],
+    latestAnomalyNotice: params.latestAnomalyNotice as any,
+  };
+}
+
 export function getToolRegistrations(): ToolRegistration[] {
   return [
     {
@@ -1731,6 +1778,22 @@ export function getToolRegistrations(): ToolRegistration[] {
               nativeBinding: dispatchWorkContract.delegate?.nativeBinding ?? undefined,
             });
           }
+          try {
+            void emitExecutionTransitionNotification({
+              transitionKind: "spawn_failed",
+              projection: buildMinimalProjection({
+                taskId: asString(payload.delegateTaskId || payload.task_id || dispatchWorkContract?.workContractId || ""),
+                status: "failed",
+                dispatchExecuted: true,
+                spawnExecuted: false,
+                resultMaterialized: false,
+              }),
+              attemptId: asString(payload.attemptId || ""),
+              workContractId: dispatchWorkContract?.workContractId ?? "",
+              sessionKey: stateKey,
+              stateKey,
+            });
+          } catch (_) { }
           return dispatchHonestyFailure({
             route: asString(payload.route, resolvedRoute),
             error: errorMessage,
@@ -1954,6 +2017,50 @@ export function getToolRegistrations(): ToolRegistration[] {
         if (stateKey && replaySessionKey && stateKey !== replaySessionKey) {
           setPolicyStateForContext(ctx, { ...nextState, ...statePatch }, stateKey);
         }
+        try {
+          const baseProjection = buildMinimalProjection({
+            taskId: delegateTaskId,
+            status: spawnEvidence.spawnExecuted ? "running" : "queued",
+            dispatchExecuted,
+            spawnExecuted: spawnEvidence.spawnExecuted,
+            resultMaterialized: false,
+            modelId: selectedModel || asString(metadata.model),
+            backend: "octoclaw.delegate",
+            childSessionKey,
+            runId: spawnEvidence.runId,
+            childRunId: spawnEvidence.childRunId,
+            latestAnomalyNotice: statePatch.latestAnomalyNotice,
+          });
+          const attemptId = asString(payload.attemptId || materialization.attemptId);
+          const workContractId = dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId);
+          const notifyParams = {
+            projection: baseProjection,
+            attemptId,
+            workContractId: workContractId || "",
+            sessionKey: replaySessionKey || stateKey,
+            stateKey: replaySessionKey || stateKey,
+            decision: authoritativeDecision as Record<string, unknown>,
+            replyToMessageId: asString(metadata.inboundMessageTs || metadata.replyToMessageId) || undefined,
+            occurredAt: materializedAt,
+          };
+          if (materialized) {
+            void emitExecutionTransitionNotification({
+              ...notifyParams,
+              transitionKind: "dispatch_materialized",
+            });
+            if (spawnEvidence.spawnExecuted) {
+              void emitExecutionTransitionNotification({
+                ...notifyParams,
+                transitionKind: "spawn_started",
+              });
+            } else {
+              void emitExecutionTransitionNotification({
+                ...notifyParams,
+                transitionKind: "materialized_no_spawn",
+              });
+            }
+          }
+        } catch (_) { }
         if (finalRoute === "delegate" && materialized && !spawnEvidence.spawnExecuted) {
           return dispatchHonestyFailure({
             route: finalRoute,

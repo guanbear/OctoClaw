@@ -103,6 +103,17 @@ export interface JudgeMemoryLayer {
   conflict?: boolean;
 }
 
+export interface AnomalyNotice {
+  kind: string;
+  severity: string;
+  taskId: string;
+  message: string;
+  createdAt: string;
+  nativeTaskId?: string;
+  nativeFlowId?: string;
+  workContractId?: string;
+}
+
 // ── Decision seal ──
 
 export type WorkDecisionSource =

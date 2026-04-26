@@ -6,6 +6,11 @@ import {
   stableId,
   truncateText,
 } from "../resolve/env.js";
+import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
+import {
+  detectExecutionTransition,
+  emitExecutionTransitionNotification,
+} from "../ack/execution-transition-notifier.js";
 import {
   authoritativeDecisionRoute,
   canonicalizeDecisionForPolicyState,
@@ -407,6 +412,114 @@ function buildRouteOutcome(eventType: string, decision: UnknownRecord, payload: 
     delegated: Boolean(payload.delegated),
     executed: Boolean(payload.executed),
   };
+}
+
+function buildMinimalProjectionForDelivery(record: UnknownRecord, sessionKey: string): TaskStatusProjection {
+  const generatedAt = new Date().toISOString();
+  const deliveryId = asString(record.deliveryId) ?? "";
+  const taskId = asString(record.taskId ?? record.task_id ?? deliveryId, deliveryId) ?? deliveryId;
+  const runnerJobId = asString(record.runnerJobId ?? record.runner_job_id);
+  const summary = asString(record.summary ?? record.error, "") ?? "";
+  return {
+    schemaVersion: "octoclaw.task_status_projection/v1" as const,
+    projectionId: `delivery:${deliveryId || taskId}:${generatedAt}`,
+    generatedAt,
+    requestId: "",
+    flowId: runnerJobId ?? "",
+    taskId,
+    parentThreadKey: sessionKey || undefined,
+    title: summary,
+    summary,
+    taskSummary: summary,
+    route: "delegate" as const,
+    role: "default",
+    backend: "octoclaw.delivery_relay",
+    modelProfile: "",
+    status: "failed",
+    statusReason: "delivery_failed",
+    success: false,
+    failureCode: "delivery_failed",
+    failureMessage: asString(record.error) ?? undefined,
+    createdAt: generatedAt,
+    failedAt: generatedAt,
+    elapsedMs: 0,
+    dispatchExecuted: true,
+    spawnExecuted: true,
+    resultMaterialized: true,
+    artifactRefs: [],
+    artifactRefIds: [],
+    actions: ["details", "copy_ref", "retry"],
+  };
+}
+
+function buildMinimalProjectionForReceipt(receipt: TurnExecutionReceipt): TaskStatusProjection {
+  const generatedAt = new Date(receipt.completedAt || Date.now()).toISOString();
+  const taskId = receipt.delegateTaskId ?? receipt.nativeTaskId ?? receipt.turnId;
+  const summary = receipt.resultMaterialized ? "Task result is ready for delivery." : "";
+  return {
+    schemaVersion: "octoclaw.task_status_projection/v1" as const,
+    projectionId: `receipt:${receipt.turnId}:${generatedAt}`,
+    generatedAt,
+    requestId: receipt.turnId,
+    flowId: receipt.nativeFlowId ?? receipt.workContractId ?? "",
+    taskId,
+    workContractId: receipt.workContractId ?? undefined,
+    parentThreadKey: receipt.sessionKey || undefined,
+    title: summary,
+    summary,
+    taskSummary: summary,
+    route: receipt.delegated ? "delegate" as const : "reply" as const,
+    role: receipt.delegated ? "default" : "main",
+    backend: receipt.workerPool ?? "octoclaw.delegate",
+    modelProfile: "",
+    status: receipt.resultMaterialized ? "deliverable_ready" : "running",
+    statusReason: receipt.resultMaterialized ? "final_result_exists_delivery_pending" : "execution_receipt",
+    success: false,
+    createdAt: generatedAt,
+    completedAt: receipt.outcome === "completed" ? generatedAt : undefined,
+    elapsedMs: Math.max(0, receipt.durationMs),
+    dispatchExecuted: receipt.dispatchExecuted,
+    spawnExecuted: receipt.spawnExecuted,
+    resultMaterialized: receipt.resultMaterialized,
+    nativeFlowRevision: receipt.nativeFlowRevision ?? undefined,
+    nativeFlowExpectedRevision: receipt.nativeFlowExpectedRevision ?? undefined,
+    childSessionKey: receipt.childSessionKey ?? undefined,
+    childSessionId: receipt.childSessionId ?? undefined,
+    runId: receipt.childRunId ?? undefined,
+    childRunId: receipt.childRunId ?? undefined,
+    artifactRefs: [],
+    artifactRefIds: [],
+    actions: ["details", "copy_ref", "open"],
+  };
+}
+
+export function emitResultReadyIfTransition(params: {
+  previousReceipt: TurnExecutionReceipt | null;
+  currentReceipt: TurnExecutionReceipt;
+  stateKey?: string;
+  replyToMessageId?: string;
+  cwd?: string;
+  logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
+}): void {
+  // Side-effect helper for receipt consumers (for example extension-entry.ts agent_end
+  // or before_message_write hooks). Keep buildTurnExecutionReceipt pure.
+  const transition = detectExecutionTransition(params.previousReceipt, params.currentReceipt);
+  if (transition !== "result_ready") {
+    return;
+  }
+  try {
+    void emitExecutionTransitionNotification({
+      transitionKind: "result_ready",
+      projection: buildMinimalProjectionForReceipt(params.currentReceipt),
+      attemptId: String(params.currentReceipt.delegateTaskId ?? params.currentReceipt.nativeTaskId ?? params.currentReceipt.turnId),
+      workContractId: params.currentReceipt.workContractId ?? "",
+      sessionKey: params.currentReceipt.sessionKey,
+      stateKey: params.stateKey ?? params.currentReceipt.sessionKey,
+      replyToMessageId: params.replyToMessageId,
+      cwd: params.cwd,
+      logger: params.logger,
+    });
+  } catch (_) { /* fire-and-forget */ }
 }
 
 export async function appendJsonl(pathname: string, payload: Record<string, unknown>): Promise<void> {
@@ -881,6 +994,46 @@ export async function registerPendingDelivery(options: Record<string, unknown>):
     }));
     updateAckTrackingState(stateKey, { delivery_pending: true, delegated_running: false });
   }
+
+  const executed = Boolean(payload.executed);
+  if (taskId && executed) {
+    try {
+      void emitExecutionTransitionNotification({
+        transitionKind: "result_ready",
+        projection: {
+          schemaVersion: "octoclaw.task_status_projection/v1" as const,
+          projectionId: `exec_transition_${taskId}_${Date.now()}`,
+          generatedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          requestId: "",
+          flowId: asString(materialization.flow_id) ?? "",
+          taskId,
+          title: "",
+          summary: truncateText(summary, 500),
+          taskSummary: "",
+          route: "delegate" as const,
+          role: "",
+          backend: "octoclaw.delegate",
+          modelProfile: "",
+          status: "deliverable_ready",
+          statusReason: "final_result_exists_delivery_pending",
+          success: false,
+          dispatchExecuted: true,
+          spawnExecuted: true,
+          resultMaterialized: true,
+          elapsedMs: 0,
+          artifactRefs: [],
+          artifactRefIds: [],
+          actions: [],
+        },
+        attemptId: taskId,
+        workContractId: asString(payload.work_contract_id ?? decision.workContractId ?? "") ?? "",
+        sessionKey: replaySessionKey,
+        stateKey,
+        logger: logger as { debug?: (msg: string) => void; warn?: (msg: string) => void },
+      });
+    } catch (_) {}
+  }
 }
 
 export async function reconcilePendingDeliveriesForSession(
@@ -960,6 +1113,17 @@ export async function recordDeliveryReconcileResults(result: Record<string, unkn
         state: "completion_relay_failed",
         error: String(record.error ?? ""),
       }, logger);
+      const sessionKey = String(result.session_key ?? "");
+      try {
+        void emitExecutionTransitionNotification({
+          transitionKind: "delivery_failed",
+          projection: buildMinimalProjectionForDelivery({ ...record, deliveryId }, sessionKey),
+          attemptId: String(record.taskId ?? deliveryId),
+          workContractId: "",
+          sessionKey: sessionKey,
+          stateKey: sessionKey,
+        });
+      } catch (_) { /* fire-and-forget */ }
     } else if (status === "retry_deferred") {
       await recordDeliveryRelayEvent("delivery_retry_deferred", {
         deliveryId,

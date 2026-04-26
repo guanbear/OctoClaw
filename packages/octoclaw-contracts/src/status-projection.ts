@@ -1,4 +1,4 @@
-import type { DelegateArtifactRef, NativeBindingRef, WorkContract } from "./work-contract.js";
+import type { AnomalyNotice, DelegateArtifactRef, NativeBindingRef, WorkContract } from "./work-contract.js";
 
 export const TASK_STATUS_PROJECTION_SCHEMA_VERSION = "octoclaw.task_status_projection/v1" as const;
 export const MULTI_TASK_STATUS_PROJECTION_SCHEMA_VERSION = "octoclaw.multi_task_status_projection/v1" as const;
@@ -107,6 +107,7 @@ export interface TaskStatusProjection {
   totalTokens?: number;
   actions: TaskProjectionAction[];
   nativeBinding?: NativeBindingRef;
+  latestAnomalyNotice?: AnomalyNotice;
 }
 
 export interface MultiTaskStatusProjection {

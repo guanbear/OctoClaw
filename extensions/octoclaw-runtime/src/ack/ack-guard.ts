@@ -54,6 +54,7 @@ import {
   parseSessionRoute as canonicalParseSessionRoute,
   resolveAckDeliverySessionKey as canonicalResolveAckDeliverySessionKey,
 } from "../resolve/session.js";
+import { emitExecutionTransitionNotification } from "./execution-transition-notifier.js";
 
 const ACK_DEBUG = Boolean(process.env.OCTOCLAW_ACK_DEBUG);
 
@@ -627,6 +628,40 @@ function parseUpdatedSortValue(value: unknown): number {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
+function buildMinimalProjectionFromTaskState(
+  task: TaskStateTask,
+  status: string,
+): import("@octoclaw/contracts/status-projection").TaskStatusProjection {
+  const t = task as UnknownRecord;
+  const generatedAt = new Date().toISOString();
+  return {
+    schemaVersion: "octoclaw.task_status_projection/v1" as const,
+    projectionId: `exec_transition_${asString(t.id)}_${Date.now()}`,
+    generatedAt,
+    requestId: "",
+    flowId: asString(t.flow_id),
+    taskId: asString(t.id),
+    title: "",
+    summary: "",
+    taskSummary: "",
+    route: "delegate" as const,
+    role: "",
+    backend: "octoclaw.delegate",
+    modelProfile: "",
+    status: status as import("@octoclaw/contracts/status-projection").TaskProjectionStatus,
+    success: false,
+    createdAt: asString(t.created_at) || asString(t.spawned_at) || generatedAt,
+    dispatchExecuted: asBoolean(t.dispatchExecuted) || asBoolean(t.dispatch_executed),
+    spawnExecuted: asBoolean(t.spawnExecuted) || asBoolean(t.spawn_executed),
+    resultMaterialized: asBoolean(t.resultMaterialized) || asBoolean(t.result_materialized),
+    latestAnomalyNotice: (isRecord(t.latestAnomalyNotice) ? t.latestAnomalyNotice : isRecord(t.latest_anomaly_notice) ? t.latest_anomaly_notice : undefined) as import("@octoclaw/contracts/work-contract").AnomalyNotice | undefined,
+    elapsedMs: 0,
+    artifactRefs: [],
+    artifactRefIds: [],
+    actions: [],
+  };
+}
+
 async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, newStatus: string, sink: AckLogger): Promise<boolean> {
   const sessionKey = asString((task as UnknownRecord).session_key);
   const flowId = asString((task as UnknownRecord).flow_id);
@@ -657,7 +692,29 @@ async function watchdogTransitionStaleTask(taskId: string, task: TaskStateTask, 
     }) as unknown as { ok?: boolean; status?: string };
     if (failResult.ok) {
       sink.debug?.(`octoclaw watchdog: transitioned task=${taskId} to ${newStatus}`);
-      updateTaskStateCache(taskId, { status: newStatus, updated_at: new Date().toISOString() });
+      updateTaskStateCache(taskId, {
+        status: newStatus,
+        updated_at: new Date().toISOString(),
+        latestAnomalyNotice: {
+          kind: "watchdog_timeout",
+          severity: "error",
+          taskId,
+          message: `Watchdog transitioned task to ${newStatus}`,
+          createdAt: new Date().toISOString(),
+          nativeTaskId: asString((task as UnknownRecord).native_task_id),
+          nativeFlowId: asString((task as UnknownRecord).flow_id),
+        },
+      });
+      try {
+        void emitExecutionTransitionNotification({
+          transitionKind: "timed_out",
+          projection: buildMinimalProjectionFromTaskState(task, newStatus),
+          attemptId: taskId,
+          workContractId: "",
+          sessionKey,
+          stateKey: sessionKey,
+        });
+      } catch (_) {}
       return true;
     }
     sink.debug?.(`octoclaw watchdog: failed to transition task=${taskId}: ${asString(failResult.status)}`);
@@ -1186,6 +1243,26 @@ export async function watchdogTick(logger: unknown): Promise<void> {
       if (status === "queued" && ageMin > STALE_QUEUED_THRESHOLD_MIN) {
         staleCount += 1;
         sink.debug?.(`octoclaw watchdog: task_timeout task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
+        try {
+          const sessionKey = asString((task as UnknownRecord).session_key);
+          updateTaskStateCache(taskId, {
+            latestAnomalyNotice: {
+              kind: "queued_stale",
+              severity: "warning",
+              taskId,
+              message: `Task queued for ${ageMin.toFixed(0)} minutes exceeds ${STALE_QUEUED_THRESHOLD_MIN} minute threshold`,
+              createdAt: new Date().toISOString(),
+            },
+          });
+          void emitExecutionTransitionNotification({
+            transitionKind: "queued_stale",
+            projection: buildMinimalProjectionFromTaskState(task, "queued"),
+            attemptId: taskId,
+            workContractId: "",
+            sessionKey,
+            stateKey: sessionKey,
+          });
+        } catch (_) {}
         const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
         if (transitioned) transitionedCount += 1;
         continue;
@@ -1193,6 +1270,26 @@ export async function watchdogTick(logger: unknown): Promise<void> {
       if ((status === "running" || status === "dispatched") && ageMin > STUCK_THRESHOLD_MIN) {
         stuckCount += 1;
         sink.debug?.(`octoclaw watchdog: runner_stuck task=${taskId} status=${status} age_min=${ageMin.toFixed(1)}`);
+        try {
+          const sessionKey = asString((task as UnknownRecord).session_key);
+          updateTaskStateCache(taskId, {
+            latestAnomalyNotice: {
+              kind: "heartbeat_stale",
+              severity: "warning",
+              taskId,
+              message: `Task stuck in ${status} for ${ageMin.toFixed(0)} minutes exceeds ${STUCK_THRESHOLD_MIN} minute threshold`,
+              createdAt: new Date().toISOString(),
+            },
+          });
+          void emitExecutionTransitionNotification({
+            transitionKind: "heartbeat_stale",
+            projection: buildMinimalProjectionFromTaskState(task, status),
+            attemptId: taskId,
+            workContractId: "",
+            sessionKey,
+            stateKey: sessionKey,
+          });
+        } catch (_) {}
         const transitioned = await watchdogTransitionStaleTask(taskId, task, "timed_out", sink);
         if (transitioned) transitionedCount += 1;
       }
