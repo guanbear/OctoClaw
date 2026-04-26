@@ -1361,6 +1361,8 @@ export function getToolRegistrations(): ToolRegistration[] {
         }
         const judgeSucceeded = asRecord(payload)._judge_succeeded === true;
         const judgeRoute = asString(asRecord(payload)._judge_route || asRecord(asRecord(payload).route_decision).judge_route || asRecord(asRecord(payload).route_decision).system_preferred_route);
+        const finalRoute = asString(asRecord(payload.route_decision).route);
+        const objectionAccepted = routeObjection && finalRoute === asString(params.requestedRoute);
         if (routeObjection) {
           await recordPolicyReplay(
             "route_hint_objection",
@@ -1371,7 +1373,7 @@ export function getToolRegistrations(): ToolRegistration[] {
               judge_route: judgeRoute,
               session_key: replaySessionKey,
               tool_name: "route_hint",
-              objection_accepted: !judgeSucceeded,
+              objection_accepted: objectionAccepted,
               judge_succeeded: judgeSucceeded,
             },
             toolLogger(ctx),
@@ -1417,7 +1419,6 @@ export function getToolRegistrations(): ToolRegistration[] {
           toolLogger(ctx),
           payload,
         );
-        const finalRoute = asString(asRecord(payload.route_decision).route);
         const objectionMessage = routeObjection
           ? (finalRoute === asString(params.requestedRoute)
               ? "objection accepted, using your route"

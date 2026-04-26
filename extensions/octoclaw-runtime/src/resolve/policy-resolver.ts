@@ -179,6 +179,32 @@ function observeFlagsForRoute(route: LiveRoute, role?: string, executionProfile?
   };
 }
 
+const TRUSTED_ROUTE_REQUEST_SOURCES = new Set([
+  "system",
+  "runtime",
+  "route_seal",
+  "work_contract",
+  "execution_coverage",
+  "trusted_tool",
+  "policy",
+  "force_route",
+]);
+
+function routeRequestSource(metadata: UnknownRecord): string {
+  return asString(
+    metadata.route_request_source
+      ?? metadata.route_hint_source
+      ?? asRecord(metadata.route_hint_payload).source,
+  );
+}
+
+function isTrustedRouteRequest(metadata: UnknownRecord): boolean {
+  if (asBoolean(metadata.route_request_trusted)) return true;
+  const source = routeRequestSource(metadata);
+  if (source) return TRUSTED_ROUTE_REQUEST_SOURCES.has(source);
+  return Boolean(metadata.requested_route || metadata.requestedRoute || metadata.route);
+}
+
 function coerceDelegateReasonCodes(value: unknown): string[] {
   const allowed = new Set([
     "context_hygiene",
@@ -856,12 +882,15 @@ function buildRuntimeExecutionIds(task: unknown, decision?: UnknownRecord, metad
 function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {}): PhaseTwoPolicyInput {
   const conversationControl = asRecord(metadata.conversation_control);
   const conversationLaneHint = asString(conversationControl.lane_hint);
-  const rawRequestedRoute = asString(
-    metadata.requested_route ?? metadata.route ?? metadata.requestedRoute ?? conversationControl.route_hint,
-  );
+  const conversationRouteHint = asString(conversationControl.route_hint);
+  const trustedRouteRequest = isTrustedRouteRequest(metadata);
+  const rawMetadataRequestedRoute = asString(metadata.requested_route ?? metadata.route ?? metadata.requestedRoute);
+  const rawRequestedRoute = trustedRouteRequest
+    ? asString(rawMetadataRequestedRoute || conversationRouteHint)
+    : conversationRouteHint;
   const objectionRequestedRoute = normalizeLiveRoute(
     metadata.objection_requested_route,
-    normalizeLiveRoute(rawRequestedRoute, "reply"),
+    normalizeLiveRoute(rawMetadataRequestedRoute || rawRequestedRoute, "reply"),
   );
   const queueBudget = Number(metadata.queueBudget ?? metadata.queue_budget ?? 1);
   const inflightCount = Number(metadata.inflightCount ?? metadata.inflight_count ?? 0);
@@ -869,22 +898,27 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
   const writeConflict = metadata.writeConflict ?? metadata.write_conflict;
   const workType = asString(metadata.workType);
   const forcedObserve = conversationLaneHint === "observe" || conversationLaneHint === "control_observer";
-  const forcedDelegate = asString(conversationControl.route_hint) === "delegate"
+  const isExecutionOrStatusFollowup = conversationControl.intent_class === "execution_followup"
+    || asBoolean(conversationControl.provenance_followup)
+    || asBoolean(conversationControl.status_followup);
+  const forcedDelegate = !isExecutionOrStatusFollowup && (conversationRouteHint === "delegate"
     || asBoolean(conversationControl.require_fresh_lookup)
-    || forcedObserve;
-  const explicitReplyObjection = asBoolean(metadata.route_objection)
-    && objectionRequestedRoute === "reply";
-  const requestedRoute = forcedDelegate
-    && normalizeLiveRoute(rawRequestedRoute, "reply") === "reply"
-    && !explicitReplyObjection
-    ? asString(conversationControl.route_hint, "delegate")
-    : rawRequestedRoute;
+    || forcedObserve);
+  const explicitRouteObjection = asBoolean(metadata.route_objection);
+  const explicitReplyObjection = explicitRouteObjection && objectionRequestedRoute === "reply";
+  const requestedRoute = explicitRouteObjection
+    ? objectionRequestedRoute
+    : forcedDelegate
+      && normalizeLiveRoute(rawRequestedRoute, "reply") === "reply"
+      && !explicitReplyObjection
+      ? asString(conversationRouteHint, "delegate")
+      : rawRequestedRoute;
 
   return {
     requestedRoute: requestedRoute || undefined,
     workType: workType === "research" || workType === "code" || workType === "review" ? workType : undefined,
     hardBoundaryControl: Boolean(conversationControl.required || metadata.hardBoundaryControl),
-    requiresObservation: Boolean(metadata.requiresObservation || conversationControl.intent_class === "execution_followup" || forcedObserve),
+    requiresObservation: Boolean(metadata.requiresObservation || forcedObserve),
     requiresDelegation: Boolean(metadata.requiresDelegation || forcedDelegate),
     workspaceMode: normalizeWorkspaceMode(metadata.workspaceMode ?? metadata.workspace_mode),
     queueBudget: Number.isFinite(queueBudget) ? Math.max(queueBudget, 0) : 1,
@@ -1043,9 +1077,12 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   const judgeRoute = asString(priorDecision._judge_route);
   const stickyDecision = readStickyStateDecision(metadata);
   const stickyRouteDecision = asRecord(stickyDecision.route_decision);
-  const routeHint = asString(metadata.requested_route ?? metadata.route_hint ?? metadata.route);
-  const normalizedRequestedLiveRoute = normalizeLiveRoute(routeHint || priorRouteDecision.route || stickyRouteDecision.route, liveRoute);
-  const routeHintSubmitted = Boolean(routeHint);
+  const routeHint = asString(metadata.route_hint ?? metadata.requested_route ?? metadata.route);
+  const routeRequest = asString(metadata.requested_route ?? metadata.route);
+  const trustedRouteRequest = isTrustedRouteRequest(metadata);
+  const normalizedRequestedLiveRoute = normalizeLiveRoute(routeRequest || (trustedRouteRequest ? routeHint : "") || priorRouteDecision.route || stickyRouteDecision.route, liveRoute);
+  const routeHintSubmitted = Boolean(routeHint || routeRequest);
+  const routeRequestCanOverride = trustedRouteRequest || asBoolean(metadata.route_objection, false);
   const objectionSubmitted = asBoolean(metadata.route_objection, false);
   const objectionRequestedRoute = normalizeLiveRoute(metadata.objection_requested_route ?? metadata.requested_route ?? routeHint, normalizedRequestedLiveRoute);
   const objectionReason = asString(metadata.objection_reason);
@@ -1059,7 +1096,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     liveRoute = normalizeLiveRoute(stickyRouteDecision.route, liveRoute);
   } else if (objectionAccepted) {
     liveRoute = objectionRequestedRoute;
-  } else if (routeHintSubmitted && !judgeSucceeded) {
+  } else if (routeHintSubmitted && !judgeSucceeded && routeRequestCanOverride) {
     liveRoute = normalizedRequestedLiveRoute;
   }
 
@@ -1256,6 +1293,9 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     sticky_applied: stickyEligible,
     ack_followup_candidate: ackFollowupCandidate,
     ack_followup_applied: false,
+    source: routeRequestSource(metadata) || (routeHintSubmitted ? "advisory" : ""),
+    trusted: trustedRouteRequest,
+    advisory_only: routeHintSubmitted && !trustedRouteRequest && !objectionSubmitted,
     objection_submitted: objectionSubmitted,
     objection_reason: objectionReason,
     objection_requested_route: objectionSubmitted ? objectionRequestedRoute : "",
@@ -1421,21 +1461,37 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     if (routeHintRoute) {
       const normalizedRouteHint = normalizeLiveRoute(routeHintRoute, "reply");
       const conversationControl = asRecord(metadata.conversation_control);
+      const routeHintSource = asString(routeHint.source, "main_agent");
+      const routeHintTrusted = asBoolean(routeHint.trusted) || TRUSTED_ROUTE_REQUEST_SOURCES.has(routeHintSource);
       const objectionRequestedRoute = normalizeLiveRoute(
         routeHint.requested_route,
         normalizedRouteHint,
       );
-      const guardedDelegate = asString(conversationControl.route_hint) === "delegate"
+      const isExecutionOrStatusFollowup = asString(conversationControl.intent_class) === "execution_followup"
+        || asBoolean(conversationControl.provenance_followup)
+        || asBoolean(conversationControl.status_followup);
+      const guardedDelegate = !isExecutionOrStatusFollowup && (asString(conversationControl.route_hint) === "delegate"
         || asBoolean(conversationControl.require_fresh_lookup)
         || asBoolean(conversationControl.require_state_grounding)
-        || ["execution_followup", "fresh_live_lookup"].includes(asString(conversationControl.intent_class));
-      const explicitReplyObjection = routeHint.route_objection === true && objectionRequestedRoute === "reply";
+        || asString(conversationControl.intent_class) === "fresh_live_lookup");
+      const explicitObjection = routeHint.route_objection === true;
+      const explicitReplyObjection = explicitObjection && objectionRequestedRoute === "reply";
 
       metadata.route_hint = normalizedRouteHint;
-      metadata.requested_route = guardedDelegate && normalizedRouteHint === "reply"
-        && !explicitReplyObjection
-        ? asString(conversationControl.route_hint, "delegate")
-        : normalizedRouteHint;
+      metadata.route_hint_source = routeHintSource;
+      metadata.route_request_source = routeHintSource;
+      metadata.route_request_trusted = routeHintTrusted;
+      if (explicitObjection) {
+        metadata.requested_route = objectionRequestedRoute;
+      } else if (guardedDelegate && normalizedRouteHint === "reply" && !explicitReplyObjection) {
+        metadata.requested_route = asString(conversationControl.route_hint, "delegate");
+        metadata.route_request_source = "system";
+        metadata.route_request_trusted = true;
+      } else if (routeHintTrusted) {
+        metadata.requested_route = normalizedRouteHint;
+      } else {
+        delete metadata.requested_route;
+      }
     }
     if (typeof routeHint.route_objection === "boolean") {
       metadata.route_objection = routeHint.route_objection;
@@ -1457,6 +1513,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   const forcedRoute = asString(options.forceRoute);
   if (forcedRoute) {
     metadata.requested_route = normalizeLiveRoute(forcedRoute, "reply");
+    metadata.route_request_source = "force_route";
+    metadata.route_request_trusted = true;
   }
   const decision = buildDecision(prompt, { metadata });
 

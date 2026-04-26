@@ -267,6 +267,37 @@ describe("conversation grounding route projection", () => {
     expect((decision.request as { metadata: { requested_route: string } }).metadata.requested_route).toBe("reply");
     expect((decision.request as { metadata: { objection_requested_route: string } }).metadata.objection_requested_route).toBe("reply");
   });
+
+
+  it("treats main-agent route hints as advisory unless trusted or objecting", async () => {
+    const decision = await resolveStatelessPolicyDecision("在吗", {
+      routeHint: {
+        route_hint: "delegate",
+        requested_route: "delegate",
+        source: "main_agent",
+        confidence: 0.4,
+      },
+    });
+
+    expect((decision.route_decision as { route: string }).route).toBe("reply");
+    expect((decision.route_hint_policy as { advisory_only: boolean }).advisory_only).toBe(true);
+    expect((decision.route_hint_policy as { trusted: boolean }).trusted).toBe(false);
+  });
+
+  it("allows trusted route requests to force the baseline route", async () => {
+    const decision = await resolveStatelessPolicyDecision("在吗", {
+      routeHint: {
+        route_hint: "delegate",
+        requested_route: "delegate",
+        source: "trusted_tool",
+        confidence: 1,
+      },
+    });
+
+    expect((decision.route_decision as { route: string }).route).toBe("delegate");
+    expect((decision.route_hint_policy as { trusted: boolean }).trusted).toBe(true);
+    expect((decision.route_hint_policy as { source: string }).source).toBe("trusted_tool");
+  });
 });
 
 describe("Chinese provenance prompt intent classification", () => {

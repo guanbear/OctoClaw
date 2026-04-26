@@ -48,6 +48,8 @@ const AGENTS_RULES_BODY = `${RULE_BLOCK_START}
 - Reply directly only for low-risk, low-context, single-turn work that needs no fresh tools or long execution.
 - Delegate work that needs tools, fresh lookup, local inspection, long execution, code changes, high context, or separate execution evidence.
 - Route/status/provenance follow-ups must use the current runtime state, route seal, WorkContract, ExecutionCoveragePacket, or status surface; do not rerun \`octoclaw_route\` without the original \`session_key/message_id\` to explain an existing decision.
+- Main-agent route hints are advisory unless they come from a trusted runtime source or are submitted as an explicit route objection with a reason.
+- If the judge route is clearly wrong, submit \`octoclaw_route_hint\` with \`routeObjection=true\`, \`requestedRoute\`, and \`objectionReason\`; do not silently bypass the runtime.
 - Treat \`route_source=judge\` as an accepted local/remote judge decision, \`route_source=rule\` as deterministic policy/no actionable judge, and \`route_source=fallback\` as deterministic safety fallback.
 - If ExecutionCoverage is sufficient for a status/provenance question, answer in \`reply\`; do not create a new delegated task.
 
