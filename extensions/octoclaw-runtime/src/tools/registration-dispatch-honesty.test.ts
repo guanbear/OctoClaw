@@ -290,10 +290,12 @@ describe("octoclaw_dispatch honesty", () => {
     const tableOutput = String((tableResponse.json as Record<string, unknown>).raw_output);
 
     expect(tableOutput).toContain("Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend");
+    expect(tableOutput).toContain("result_location/artifact_refs");
     expect(tableOutput).toContain("Retention: archived=1, archive_deleted=0");
     expect(tableOutput).toContain("task-status-panel-1 | timed_out(running) | delegate");
     expect(tableOutput).toContain("model=zhipu/GLM-5.1");
     expect(tableOutput).toContain("backend=octoclaw-research");
+    expect(tableOutput).toContain("result=none");
     expect(tableOutput).toContain("delegated_at=2026-04-25T00:00:00.000Z");
     expect(tableOutput).toContain("reason=stale_status_no_progress>5m");
 

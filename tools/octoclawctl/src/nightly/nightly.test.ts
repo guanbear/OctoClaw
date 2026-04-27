@@ -9,6 +9,7 @@ import {
   computeOverallGate,
   computeRecommendationStatus,
   generateNightlyReport,
+  filterNightlyReplayEvents,
   validateReplayEvents,
   percentile,
   sanitizeSample,
@@ -548,6 +549,23 @@ describe("percentile", () => {
   it("computes P50", () => expect(percentile([10, 20, 30, 40, 50], 50)).toBe(30));
 });
 
+
+
+  it("filters nightly replay to the configured recent non-synthetic window", () => {
+    const events = [
+      routeCommitAck({ at: "2026-04-26T00:00:00.000Z", sessionKey: "slack:channel:C_REAL:thread:old", routeCommitId: "wc-old" }),
+      routeCommitAck({ at: "2026-04-27T05:48:18.441Z", sessionKey: "bogus-no-colon", turnId: "turn-789", routeCommitId: "wc-123" }),
+      routeCommitAck({ at: "2026-04-27T06:00:00.000Z", sessionKey: "slack:channel:C_REAL:thread:new", routeCommitId: "wc-new" }),
+    ];
+
+    const filtered = filterNightlyReplayEvents(events, { now: "2026-04-27T07:00:00.000Z", lookbackHours: 24 });
+    const report = generateNightlyReport(filtered.events, filtered.metadata);
+
+    expect(filtered.events.map((event) => event.routeCommitId)).toEqual(["wc-new"]);
+    expect(report.rawInputEventCount).toBe(3);
+    expect(report.filteredEventCount).toBe(1);
+    expect(report.filter?.cutoffAt).toBe("2026-04-26T07:00:00.000Z");
+  });
 
 describe("validateReplayEvents", () => {
   it("passes for well-formed events", () => {

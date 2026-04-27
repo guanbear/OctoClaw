@@ -33,12 +33,16 @@ describe("nightly eval config", () => {
   it("parseNightlyEvalConfig accepts full config", () => {
     const config = parseNightlyEvalConfig({
       replayPath: "/tmp/replay.jsonl",
+      lookbackHours: 12,
+      excludeSynthetic: false,
       slackAcceptanceConfig: "/tmp/slack.json",
       baseline: "/tmp/baseline.json",
       candidate: "/tmp/candidate.json",
     });
     expect(config).toEqual({
       replayPath: "/tmp/replay.jsonl",
+      lookbackHours: 12,
+      excludeSynthetic: false,
       slackAcceptanceConfig: "/tmp/slack.json",
       baseline: "/tmp/baseline.json",
       candidate: "/tmp/candidate.json",
@@ -87,7 +91,7 @@ describe("nightly eval runner", () => {
       fileWriter: async () => undefined,
     });
 
-    expect(nightlyRunner).toHaveBeenCalledWith("/tmp/replay.jsonl");
+    expect(nightlyRunner).toHaveBeenCalledWith("/tmp/replay.jsonl", { lookbackHours: undefined, excludeSynthetic: undefined });
     expect(slackRunner).not.toHaveBeenCalled();
     expect(calibrationRunner).not.toHaveBeenCalled();
     expect(report.steps.nightly.status).toBe("pass");

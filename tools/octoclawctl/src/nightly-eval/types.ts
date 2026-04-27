@@ -7,6 +7,9 @@ import type { GateCheckResult, RecommendationStatus } from "../calibration/types
 export interface NightlyEvalConfig {
   // D3 nightly: required
   replayPath: string;
+  // D3 replay filter: nightly-eval defaults to a 24h recent window.
+  lookbackHours?: number;
+  excludeSynthetic?: boolean;
   // D4 slack acceptance: optional
   slackAcceptanceConfig?: string;
   // D5 calibration gate: optional (both required if either present)
@@ -30,6 +33,8 @@ export interface NightlyEvalAggregateReport {
   generatedAt: string;
   config: {
     replayPath: string;
+    lookbackHours?: number;
+    excludeSynthetic?: boolean;
     slackAcceptanceEnabled: boolean;
     calibrationEnabled: boolean;
   };

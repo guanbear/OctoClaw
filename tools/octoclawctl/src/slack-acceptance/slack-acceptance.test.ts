@@ -293,6 +293,25 @@ describe("content assertions via runSlackAcceptanceHarness", () => {
     expect(lookupCase.transcript).toHaveLength(2);
   });
 
+
+  it("allows a fast final reply to satisfy required ACK", async () => {
+    const client = createMockClient([
+      { ts: "1234567890.020001", text: "OpenClaw 4.21 摘要" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{ kind: "fresh_lookup", prompt: "test", ackRequired: true, finalRequired: true, expectAck: ["开始"], expectFinal: ["OpenClaw", "4.21"] }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const lookupCase = report.cases.find((c) => c.kind === "fresh_lookup")!;
+    expect(lookupCase.ack.status).toBe("pass");
+    expect(lookupCase.ack.reason).toContain("fast final");
+    expect(lookupCase.final.status).toBe("pass");
+    expect(lookupCase.status).toBe("pass");
+  });
+
   it("fails when required expected content is missing", async () => {
     const client = createMockClient([
       { ts: "1234567890.000002", text: "unrelated reply" },

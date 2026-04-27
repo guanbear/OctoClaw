@@ -475,6 +475,7 @@ interface RuntimeStatusTaskView {
   childSessionKey: string;
   runId: string;
   statusReason: string;
+  resultLocation: string;
 }
 
 function dedupeTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskStateRecord[] {
@@ -835,6 +836,17 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
   const elapsedMs = startMs === null ? null : Math.max(0, endMs - startMs);
   const projected = projectRuntimeStatus(record, nowMs);
   const workerPool = optionalString(record.worker_pool, binding.workerPool, delegateAttempt.workerPool) ?? "unknown";
+  const artifactRefs = Array.isArray(record.artifact_refs) ? record.artifact_refs.map(String).filter(Boolean) : [];
+  const compactPacket = asRecord(record.compact_parent_packet);
+  const compactArtifactRefs = Array.isArray(compactPacket.artifactRefIds) ? compactPacket.artifactRefIds.map(String).filter(Boolean) : [];
+  const resultLocation = optionalString(
+    record.report_path,
+    artifacts.report_path,
+    artifacts.result_path,
+    artifacts.output_path,
+    artifactRefs.length > 0 ? `artifact_refs=${artifactRefs.join(",")}` : undefined,
+    compactArtifactRefs.length > 0 ? `artifact_refs=${compactArtifactRefs.join(",")}` : undefined,
+  ) ?? "none";
   return {
     taskId: asString(record.id),
     status: projected.status,
@@ -853,6 +865,7 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
     childSessionKey: evidence.childSessionKey,
     runId: evidence.runId,
     statusReason: projected.reason,
+    resultLocation,
   };
 }
 
@@ -1090,7 +1103,7 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
       : `Expired hidden: ${hiddenExpiredCount}`,
     countSummary ? `Projected counts: ${countSummary}` : "Projected counts: none",
     hiddenExpiredCount > 0 && !includeExpired && allCountSummary ? `All projected counts: ${allCountSummary}` : "",
-    "Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend | child_session/run | reason | summary",
+    "Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend | child_session/run | result_location/artifact_refs | reason | summary",
   ].filter(Boolean);
   const limit = normalizedFormat === "anchors" ? 10 : 25;
   for (const task of visibleTasks.slice(0, limit)) {
@@ -1104,6 +1117,7 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
       `model=${task.model}`,
       `backend=${task.backend}`,
       `child=${childRef}`,
+      `result=${task.resultLocation}`,
       `reason=${task.statusReason}`,
       task.summary,
     ].join(" | "));

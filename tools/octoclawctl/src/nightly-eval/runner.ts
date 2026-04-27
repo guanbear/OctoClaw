@@ -1,4 +1,4 @@
-import type { NightlyReport } from "../nightly/types.js";
+import type { NightlyReport, NightlyReplayFilterOptions } from "../nightly/types.js";
 import { renderMarkdownReport } from "../nightly/report.js";
 import type { SlackAcceptanceReport } from "../slack-acceptance/types.js";
 import { renderSlackAcceptanceMarkdown } from "../slack-acceptance/report.js";
@@ -14,7 +14,7 @@ export interface RunNightlyEvalParams {
   config: NightlyEvalConfig;
   outputDir: string;
   env: Record<string, string | undefined>;
-  nightlyRunner: (replayPath: string) => Promise<NightlyReport>;
+  nightlyRunner: (replayPath: string, filter: NightlyReplayFilterOptions) => Promise<NightlyReport>;
   slackRunner?: (configPath: string, env: Record<string, string | undefined>) => Promise<SlackAcceptanceReport>;
   calibrationRunner?: (baselinePath: string, candidatePath: string) => Promise<CalibrationGateReport>;
   fileWriter?: (path: string, content: string) => Promise<void>;
@@ -37,6 +37,19 @@ export function parseNightlyEvalConfig(raw: unknown): NightlyEvalConfig {
   }
 
   const config: NightlyEvalConfig = { replayPath };
+  if (raw.lookbackHours !== undefined) {
+    const lookbackHours = Number(raw.lookbackHours);
+    if (!Number.isFinite(lookbackHours) || lookbackHours <= 0) {
+      throw new Error("lookbackHours must be a positive number");
+    }
+    config.lookbackHours = lookbackHours;
+  }
+  if (raw.excludeSynthetic !== undefined) {
+    if (typeof raw.excludeSynthetic !== "boolean") {
+      throw new Error("excludeSynthetic must be a boolean");
+    }
+    config.excludeSynthetic = raw.excludeSynthetic;
+  }
   if (raw.slackAcceptanceConfig !== undefined) {
     if (!nonEmptyString(raw.slackAcceptanceConfig)) {
       throw new Error("slackAcceptanceConfig must be a non-empty string");
@@ -108,7 +121,10 @@ export async function runNightlyEval(params: RunNightlyEvalParams): Promise<Nigh
     "nightly",
     `${params.outputDir}/${artifactPrefix}-nightly.json`,
     `${params.outputDir}/${artifactPrefix}-nightly.md`,
-    () => params.nightlyRunner(params.config.replayPath),
+    () => params.nightlyRunner(params.config.replayPath, {
+      lookbackHours: params.config.lookbackHours,
+      excludeSynthetic: params.config.excludeSynthetic,
+    }),
     renderMarkdownReport,
     writer,
   );
@@ -155,6 +171,8 @@ export async function runNightlyEval(params: RunNightlyEvalParams): Promise<Nigh
     generatedAt,
     config: {
       replayPath: params.config.replayPath,
+      lookbackHours: params.config.lookbackHours,
+      excludeSynthetic: params.config.excludeSynthetic,
       slackAcceptanceEnabled: params.config.slackAcceptanceConfig !== undefined,
       calibrationEnabled: params.config.baseline !== undefined && params.config.candidate !== undefined,
     },

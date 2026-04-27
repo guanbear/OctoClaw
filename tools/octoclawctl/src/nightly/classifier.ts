@@ -12,6 +12,9 @@ import type {
   NightlyReport,
   RecommendationStatus,
   GateResult,
+  NightlyReplayFilterOptions,
+  NightlyReplayFilterResult,
+  NightlyReplayFilterMetadata,
 } from "./types.js";
 
 const MAX_SAMPLES_PER_LANE = 20;
@@ -24,6 +27,93 @@ const FORBIDDEN_SAMPLE_KEYS = new Set([
   "workerChainOfThought",
   "executionLog",
 ]);
+
+
+export const DEFAULT_NIGHTLY_LOOKBACK_HOURS = 24;
+
+function normalizeFilterNowMs(now: NightlyReplayFilterOptions["now"]): number {
+  if (now instanceof Date) return now.getTime();
+  if (typeof now === "number") return now;
+  if (typeof now === "string") return Date.parse(now);
+  return Date.now();
+}
+
+function containsSyntheticMarker(value: unknown): boolean {
+  const text = String(value ?? "").trim();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return lower === "bogus-no-colon"
+    || lower === "plain-success"
+    || lower === "agent:main:main"
+    || lower === "slack:channel:c1"
+    || lower === "agent:main:slack:channel:c1"
+    || lower === "slack:default:channel:c123abc"
+    || lower === "slack:channel:c1:thread:1700000000.000100"
+    || lower === "session-no-spawn-test"
+    || lower === "session-work-contract-dispatch"
+    || lower === "session-legacy-policy-json"
+    || lower === "turn-789"
+    || lower === "wc-123"
+    || lower === "task-honesty"
+    || lower === "flow-honesty"
+    || lower === "task-delivery-failed"
+    || lower === "task-no-target"
+    || lower.startsWith("session-dispatch-honesty")
+    || lower === "session-dispatch-spawned-test"
+    || lower === "session-work-contract-prior-continuity"
+    || lower === "session-contract-wins"
+    || lower.includes(":session-dispatch-spawned-test:")
+    || lower.includes(":plain-success:")
+    || lower.includes(":session-no-spawn-test:")
+    || lower.includes(":session-work-contract-dispatch:")
+    || lower.includes(":session-legacy-policy-json:");
+}
+
+function isSyntheticReplayEvent(event: ReplayEvent): boolean {
+  if (event.synthetic === true || event.test === true || event.fixture === true) return true;
+  const compact = event.compactParentPacket;
+  if (!event.sessionKey && event.sent === false && event.skipped === true) return true;
+  return [
+    event.sessionKey,
+    event.sessionId,
+    event.turnId,
+    event.taskId,
+    event.workContractId,
+    event.routeCommitId,
+    event.ackKey,
+    compact?.taskId,
+    compact?.childSessionKey,
+    compact?.runId,
+  ].some(containsSyntheticMarker);
+}
+
+export function filterNightlyReplayEvents(
+  events: ReplayEvent[],
+  options: NightlyReplayFilterOptions = {},
+): NightlyReplayFilterResult {
+  validateReplayEvents(events);
+  const lookbackHours = Number.isFinite(options.lookbackHours) && Number(options.lookbackHours) > 0
+    ? Number(options.lookbackHours)
+    : DEFAULT_NIGHTLY_LOOKBACK_HOURS;
+  const excludeSynthetic = options.excludeSynthetic !== false;
+  const nowMs = normalizeFilterNowMs(options.now);
+  const cutoffMs = Number.isFinite(nowMs) ? nowMs - lookbackHours * 60 * 60 * 1000 : null;
+  const filtered = events.filter((event) => {
+    if (excludeSynthetic && isSyntheticReplayEvent(event)) return false;
+    if (cutoffMs === null) return true;
+    const timestamp = eventTimeMs(event);
+    return timestamp !== null && timestamp >= cutoffMs && timestamp <= nowMs + 60_000;
+  });
+  const metadata: NightlyReplayFilterMetadata = {
+    enabled: true,
+    lookbackHours,
+    excludeSynthetic,
+    cutoffAt: cutoffMs === null ? null : new Date(cutoffMs).toISOString(),
+    rawInputEventCount: events.length,
+    filteredEventCount: filtered.length,
+  };
+  return { events: filtered, metadata };
+}
 
 const TRANSITION_KINDS: readonly ExecutionTransitionKind[] = [
   "dispatch_materialized",
@@ -605,7 +695,7 @@ export function validateReplayEvents(events: unknown[]): asserts events is Repla
   }
 }
 
-export function generateNightlyReport(events: ReplayEvent[]): NightlyReport {
+export function generateNightlyReport(events: ReplayEvent[], filter?: NightlyReplayFilterMetadata): NightlyReport {
   validateReplayEvents(events);
 
   const timestamps = events.map((e) => Date.parse(e.at));
@@ -627,6 +717,7 @@ export function generateNightlyReport(events: ReplayEvent[]): NightlyReport {
     reportId: `nightly:${latest ?? new Date().toISOString()}`,
     generatedAt: new Date().toISOString(),
     inputEventCount: events.length,
+    ...(filter ? { rawInputEventCount: filter.rawInputEventCount, filteredEventCount: filter.filteredEventCount, filter } : {}),
     inputDateRange: { earliest, latest },
     lanes,
     overallGate,

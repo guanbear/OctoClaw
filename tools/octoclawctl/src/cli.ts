@@ -11,7 +11,7 @@ import {
   runStatusSurfaceOperator,
   type StatusSurfaceAction,
 } from "@octoclaw/status-surface";
-import { generateNightlyReport, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
+import { generateNightlyReport, filterNightlyReplayEvents, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
 import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
 import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
 import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour } from "./nightly-eval/index.js";
@@ -1329,7 +1329,7 @@ async function runNightlyCommand(parsed: ParsedCliArgs, _env: Record<string, str
   }
 
   validateReplayEvents(rawEvents);
-  const report = generateNightlyReport(rawEvents);
+  const report = generateNightlyReport(rawEvents as import("./nightly/index.js").ReplayEvent[]);
 
   await ensureDir(outputDirPath);
   const dateStr = report.inputDateRange.latest
@@ -1429,7 +1429,7 @@ async function runNightlyEvalCommand(parsed: ParsedCliArgs, env: Record<string, 
     config: evalConfig,
     outputDir: outputDirPath,
     env,
-    nightlyRunner: async (replayPath: string) => {
+    nightlyRunner: async (replayPath: string, filterOptions) => {
       const content = await fs.readFile(replayPath, "utf8");
       const lines = content.split(/\r?\n/u);
       const rawEvents: unknown[] = [];
@@ -1443,7 +1443,8 @@ async function runNightlyEvalCommand(parsed: ParsedCliArgs, env: Record<string, 
         }
       }
       validateReplayEvents(rawEvents);
-      return generateNightlyReport(rawEvents);
+      const filter = filterNightlyReplayEvents(rawEvents as import("./nightly/index.js").ReplayEvent[], filterOptions);
+      return generateNightlyReport(filter.events, filter.metadata);
     },
     slackRunner: evalConfig.slackAcceptanceConfig ? async (configPath: string, runnerEnv: Record<string, string | undefined>) => {
       const resolved = await loadSlackAcceptanceConfig(configPath, runnerEnv);

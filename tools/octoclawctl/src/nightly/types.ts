@@ -286,10 +286,33 @@ export type EvaluationLaneResult =
   | DelegationHealthLane
   | DeliveryLane;
 
+export interface NightlyReplayFilterMetadata {
+  enabled: boolean;
+  lookbackHours: number | null;
+  excludeSynthetic: boolean;
+  cutoffAt: string | null;
+  rawInputEventCount: number;
+  filteredEventCount: number;
+}
+
+export interface NightlyReplayFilterOptions {
+  lookbackHours?: number;
+  excludeSynthetic?: boolean;
+  now?: string | number | Date;
+}
+
+export interface NightlyReplayFilterResult {
+  events: ReplayEvent[];
+  metadata: NightlyReplayFilterMetadata;
+}
+
 export interface NightlyReport {
   reportId: string;
   generatedAt: string;
   inputEventCount: number;
+  rawInputEventCount?: number;
+  filteredEventCount?: number;
+  filter?: NightlyReplayFilterMetadata;
   inputDateRange: { earliest: string | null; latest: string | null };
   lanes: EvaluationLaneResult[];
   overallGate: GateResult;

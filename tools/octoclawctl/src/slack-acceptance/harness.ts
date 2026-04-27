@@ -296,6 +296,27 @@ function caseGate(ack: AssertionResult, final: AssertionResult, noSpawn: Asserti
   return "pass";
 }
 
+function fastFinalSatisfiesAck(
+  ack: AssertionResult,
+  final: AssertionResult,
+  replies: SlackMessageRecord[],
+  promptTs: string | undefined,
+  ackTimeoutMs: number,
+): AssertionResult {
+  if (ack.status !== "fail" || final.status !== "pass") return ack;
+  if (!ack.reason.includes("required expected content missing") && !ack.reason.includes("required reply missing")) return ack;
+  const promptAt = tsToMillis(promptTs);
+  if (!promptAt) return ack;
+  const finalReply = replies.find((message) => message.text.trim() && tsToMillis(message.ts) !== undefined);
+  const finalAt = tsToMillis(finalReply?.ts);
+  if (!finalAt || Math.max(0, finalAt - promptAt) > ackTimeoutMs) return ack;
+  return {
+    status: "pass",
+    reason: "fast final reply arrived before ACK deadline",
+    matchedText: finalReply?.text,
+  };
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -545,19 +566,25 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   const final = finalCollection.assertion;
   const noSpawn = await checkNoSpawn(config.replayPath, sentIso, config.sessionKey, caseConfig.noSpawnExpected === true);
   progress.push(progressEvent(caseStartMs, "nospawn_assertion_completed", noSpawn.reason));
-  const ackAt = tsToMillis(ackReplies[0]?.ts);
+  const effectiveAck = caseConfig.ackRequired === true
+    ? fastFinalSatisfiesAck(ack, final, allReplies, posted.ts, ackTimeoutMs)
+    : ack;
+  if (effectiveAck !== ack) {
+    progress.push(progressEvent(caseStartMs, "ack_satisfied_by_fast_final", effectiveAck.reason));
+  }
+  const ackAt = tsToMillis(ackReplies[0]?.ts) ?? tsToMillis(allReplies.find((message) => message.text.trim())?.ts);
   const finalAt = tsToMillis(allReplies[allReplies.length - 1]?.ts);
   const promptAt = tsToMillis(posted.ts);
   return finish({
     id,
     kind: caseConfig.kind,
     prompt,
-    status: caseGate(ack, final, noSpawn, errors),
+    status: caseGate(effectiveAck, final, noSpawn, errors),
     sentAt: sentIso,
     threadTs,
     ackMs: ackAt && promptAt ? Math.max(0, Math.round(ackAt - promptAt)) : undefined,
     finalMs: finalAt && promptAt ? Math.max(0, Math.round(finalAt - promptAt)) : undefined,
-    ack,
+    ack: effectiveAck,
     final,
     noSpawn,
     transcript: allReplies.slice(-config.maxTranscriptMessages),
