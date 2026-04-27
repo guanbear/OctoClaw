@@ -241,35 +241,40 @@ export class SlackAdapter {
         timeoutMs,
       });
 
-      if (result.code === 0) {
-        if (result.stdout) {
-          try {
-            const parsedResult = asSlackCommandResult(JSON.parse(result.stdout));
-            if (parsedResult.ok === true) {
-              const messageId = stringValue(parsedResult.message?.ts || parsedResult.ts);
-              const threadTs = stringValue(parsedResult.message?.thread_ts || parsedResult.thread_ts || target.threadTs);
-              return {
-                sent: true,
-                delivered: true,
-                ...(messageId ? { messageId } : {}),
-                ...(threadTs ? { threadTs } : {}),
-              };
-            }
+      if (result.stdout) {
+        try {
+          const parsedResult = asSlackCommandResult(JSON.parse(result.stdout));
+          if (parsedResult.ok === true) {
+            const messageId = stringValue(parsedResult.message?.ts || parsedResult.ts);
+            const threadTs = stringValue(parsedResult.message?.thread_ts || parsedResult.thread_ts || target.threadTs);
+            return {
+              sent: true,
+              delivered: true,
+              ...(messageId ? { messageId } : {}),
+              ...(threadTs ? { threadTs } : {}),
+            };
+          }
 
+          if (result.code === 0) {
             return {
               sent: false,
               delivered: false,
               error: stringValue(parsedResult.error) || "send_failed",
             };
-          } catch {
-            // stdout is not valid JSON but exit code 0 — treat as success
-            // to avoid double delivery on retry (stderr may contain debug logs)
+          }
+        } catch {
+          // stdout is not valid JSON but exit code 0 — treat as success
+          // to avoid double delivery on retry (stderr may contain debug logs)
+          if (result.code === 0) {
             return {
               sent: true,
               delivered: true,
             };
           }
         }
+      }
+
+      if (result.code === 0) {
         // exit code 0 but no stdout — treat as likely success to avoid double delivery
         return {
           sent: true,

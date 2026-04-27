@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 type MockRunCommand = (command: string, args: string[], options: unknown) => Promise<{ code: number; stdout: string; stderr: string }>;
 
-const mockRunCommand = vi.hoisted<MockRunCommand>(() => async () => ({ code: 0, stdout: "", stderr: "" }));
+let mockRunCommand = vi.hoisted<MockRunCommand>(() => async () => ({ code: 0, stdout: "", stderr: "" }));
 vi.mock("../../resolve/env.js", () => ({
   runCommand: (...args: unknown[]) => mockRunCommand(...(args as [string, string[], unknown])),
   resolveWorkspaceRoot: () => "/workspace",
@@ -55,6 +55,28 @@ describe("SlackAdapter", () => {
     expect(adapter.extractMessageTs({ ts: "111.222" })).toBe("111.222");
     expect(adapter.extractMessageTs({ messageTs: "333.444" })).toBe("333.444");
     expect(adapter.extractMessageTs({ messageId: "555.666" })).toBe("555.666");
+  });
+
+  it("treats stdout ok as delivered even when stderr logs make command nonzero", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async () => ({
+      code: 1,
+      stdout: JSON.stringify({ ok: true, ts: "1700000000.000200", thread_ts: "1700000000.000100" }),
+      stderr: "[octoclaw-judge] noisy stderr",
+    });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "ack",
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result).toEqual({
+      sent: true,
+      delivered: true,
+      messageId: "1700000000.000200",
+      threadTs: "1700000000.000100",
+    });
   });
 
   it("shouldUseThread respects replyToMode config", () => {
