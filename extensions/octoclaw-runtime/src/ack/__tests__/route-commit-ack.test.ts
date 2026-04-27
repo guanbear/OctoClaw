@@ -29,7 +29,7 @@ function decision(overrides: Record<string, unknown> = {}): Record<string, unkno
   return {
     route_decision: { route: "delegate", route_source: "judge" },
     work_contract: { workContractId: "wc-123", turnId: "turn-789" },
-    routeSeal: { routeSealId: "rs-456", turnId: "turn-789", threadBindingKey: "thread-binding" },
+    routeSeal: { requestId: "req-seal-456", turnId: "turn-789", threadBindingKey: "thread-binding", route: "delegate", source: "local_judge", reasonCodes: ["local_judge"], createdAt: new Date().toISOString(), inputHash: "", stateGeneration: 0, schemaVersion: "octoclaw.route_seal.v1" },
     ...overrides,
   };
 }
@@ -91,7 +91,7 @@ describe("route commit ACK", () => {
 
     expect(result?.routeCommitId).toBe("wc-123");
     expect(result?.route).toBe("delegate");
-    expect(result?.routeSealId).toBe("rs-456");
+    expect(result?.routeSealId).toBe("req-seal-456");
   });
 
   it("returns null when route commit packet fields are missing", () => {
@@ -362,7 +362,7 @@ describe("route commit ACK", () => {
       "route_commit_ack",
       expect.objectContaining({
         routeCommitId: "wc-123",
-        routeSealId: "rs-456",
+        routeSealId: "req-seal-456",
         route: "delegate",
         ackKey: expect.stringContaining("wc-123"),
         ack_target_resolution_state: "resolved",

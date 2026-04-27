@@ -115,7 +115,7 @@ function buildRouteCommitAckPacketInternal(
   const routeSeal = readRecord(decision.routeSeal);
 
   const routeCommitId = asString(workContract.workContractId);
-  const routeSealId = asString(routeSeal.routeSealId || decision.route_seal_id);
+  const routeSealId = asString(routeSeal.routeSealId || decision.route_seal_id || routeSeal.requestId);
   if (!routeCommitId || !routeSealId) {
     return null;
   }

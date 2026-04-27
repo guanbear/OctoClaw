@@ -22,6 +22,7 @@ import {
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
+import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import {
   buildPolicyMetadata,
@@ -32,7 +33,7 @@ import {
   resolvePolicyStateKeys,
 } from "./resolve/session.js";
 import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
-import { envOverrides, resolveReplayLogPath, resolveTaskStatePath } from "./resolve/env.js";
+import { envOverrides, resolveReplayLogPath, resolveTaskStatePath, resolveWorkspaceRoot } from "./resolve/env.js";
 import {
   DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS,
   pruneTaskStateCache,
@@ -755,8 +756,8 @@ export const plugin = {
 
       const toolName = stringValue(event.toolName || ctx.toolName);
       const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
-      const routeHintIsRequired = Boolean(hookConfig.route_hint_required);
-      const delegationEnforcementEnabled = Boolean(hookConfig.delegation_enforcement);
+      const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
+      const delegationEnforcementEnabled = Boolean(hookConfig.delegate_required || hookConfig.delegation_enforcement);
       const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted);
       const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
       const allowedObserverTools = observerControlTools(decision, routeHintTool);
@@ -1042,6 +1043,59 @@ export const plugin = {
         );
       }
       if (shouldRetainPolicyStateOnAgentEnd(asRecord(state))) {
+        const formalReplyVisible = Boolean(state?.formal_reply_visible);
+        let noticeDeliveryState = "not_attempted";
+        const deliverySessionKey = stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey || stateKey);
+        updateAckTrackingState(stateKey, { delegate_without_dispatch: true });
+        updatePolicyState(stateKey, (current) => ({
+          ...(current ?? {}),
+          delegate_without_dispatch: true,
+          dispatchExecuted: false,
+          spawnExecuted: false,
+        }));
+        if (!formalReplyVisible) {
+          try {
+            const noticeResult = await sendDelegateWithoutDispatchNotice({
+              sessionKey: deliverySessionKey,
+              stateKey,
+              decision: asRecord(state?.decision),
+              state: asRecord(state),
+              replyToMessageId: stringValue(ctx.inboundMessageTs || state?.inboundMessageTs),
+              cwd: resolveWorkspaceRoot(),
+              logger: pi.logger,
+            });
+            noticeDeliveryState = noticeResult.sent ? "sent" : (noticeResult.skipped ? "skipped" : "failed");
+          } catch (err) {
+            pi.logger?.warn?.(`delegate_without_dispatch notice failed: ${String(err)}`);
+            noticeDeliveryState = "error";
+          }
+        } else {
+          noticeDeliveryState = "suppressed_reply_visible";
+        }
+
+        const workContract = asRecord(asRecord(state?.decision).work_contract);
+        const routeSeal = asRecord(asRecord(state?.decision).routeSeal);
+        await recordPolicyReplay(
+          "delegate_without_dispatch",
+          {
+            sessionKey: stateKey,
+            sessionId: stringValue(ctx.sessionId),
+            route: stringValue(asRecord(state?.decision).route_decision && asRecord(asRecord(state?.decision).route_decision).route),
+            systemPreferredRoute: stringValue(asRecord(asRecord(state?.decision).route_decision).system_preferred_route),
+            workerPool: stringValue(asRecord(asRecord(state?.decision).route_decision).worker_pool),
+            taskClass: stringValue(asRecord(asRecord(state?.decision).route_decision).task_class),
+            delegated: false,
+            delegationTool: "",
+            dispatchExecuted: false,
+            spawnExecuted: false,
+            delegate_without_dispatch: true,
+            notificationDeliveryState: noticeDeliveryState,
+            routeCommitId: stringValue(workContract.workContractId),
+            routeSealId: stringValue(routeSeal.routeSealId || routeSeal.requestId),
+          },
+          pi.logger,
+          state?.decision as Record<string, unknown> | null,
+        );
         return;
       }
       clearPolicyStateForContext(ctx);
@@ -1069,6 +1123,7 @@ export const plugin = {
       );
       if (role === "assistant" && contentText && !isLikelyAck) {
         updateAckTrackingState(stateKey, { formal_reply_visible: true });
+        updatePolicyState(stateKey, (current) => ({ ...(current ?? {}), formal_reply_visible: true }));
       }
       void recordObservedDeliveryFromMessage(visibleMessage, asRecord(state), stateKey, pi.logger).catch((err) => {
         pi.logger?.warn?.(`octoclaw delivery observe failed: ${String(err)}`);
