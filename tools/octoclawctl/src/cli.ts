@@ -1354,7 +1354,7 @@ async function runSlackAcceptanceCliCommand(parsed: ParsedCliArgs, env: Record<s
   const format = parsed.slackAcceptanceFormat;
 
   const resolvedConfig = await loadSlackAcceptanceConfig(configPath, env);
-  const client = new SlackWebApiAcceptanceClient(resolvedConfig.botToken, { postToken: resolvedConfig.userToken });
+  const client = new SlackWebApiAcceptanceClient(resolvedConfig.botToken, { postToken: resolvedConfig.userToken, requestTimeoutMs: resolvedConfig.requestTimeoutMs });
   const report = await runSlackAcceptanceHarness(client, resolvedConfig);
 
   await ensureDir(outputDirPath);

@@ -1,6 +1,6 @@
 import type { SlackAcceptanceClient, SlackMessageRecord, SlackPostMessageResult } from "./types.js";
 
-declare const fetch: (input: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
+declare const fetch: (input: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{
   ok: boolean;
   status: number;
   json(): Promise<unknown>;
@@ -51,18 +51,44 @@ function normalizeMessage(message: SlackApiMessage): SlackMessageRecord {
   };
 }
 
+
+function timeoutError(label: string, timeoutMs: number): Error {
+  return new Error(`${label}_timeout_after_${timeoutMs}ms`);
+}
+
+async function fetchWithTimeout(input: string, init: { method?: string; headers?: Record<string, string>; body?: string }, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw timeoutError("slack_request", timeoutMs);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class SlackWebApiAcceptanceClient implements SlackAcceptanceClient {
-  constructor(private readonly token: string, private readonly options: { postToken?: string } = {}) {}
+  constructor(private readonly token: string, private readonly options: { postToken?: string; requestTimeoutMs?: number } = {}) {}
+
+  private get requestTimeoutMs(): number {
+    return this.options.requestTimeoutMs && Number.isFinite(this.options.requestTimeoutMs) && this.options.requestTimeoutMs > 0
+      ? this.options.requestTimeoutMs
+      : 15_000;
+  }
 
   async postMessage(params: { channel: string; text: string; threadTs?: string }): Promise<SlackPostMessageResult> {
-    const response = await fetch("https://slack.com/api/chat.postMessage", {
+    const response = await fetchWithTimeout("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.options.postToken || this.token}`,
         "content-type": "application/json; charset=utf-8",
       },
       body: JSON.stringify({ channel: params.channel, text: params.text, thread_ts: params.threadTs }),
-    });
+    }, this.requestTimeoutMs);
     const body = await this.parseJson<SlackPostResponse>(response);
     if (!response.ok || body.ok !== true) {
       return {
@@ -85,10 +111,10 @@ export class SlackWebApiAcceptanceClient implements SlackAcceptanceClient {
       limit: String(params.limit ?? 50),
       inclusive: "true",
     });
-    const response = await fetch(`https://slack.com/api/conversations.replies?${query}`, {
+    const response = await fetchWithTimeout(`https://slack.com/api/conversations.replies?${query}`, {
       method: "GET",
       headers: { authorization: `Bearer ${this.token}` },
-    });
+    }, this.requestTimeoutMs);
     const body = await this.parseJson<SlackRepliesResponse>(response);
     if (!response.ok || body.ok !== true) {
       throw new Error(asString(body.error) || `slack_http_${response.status}`);

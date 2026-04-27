@@ -579,3 +579,48 @@ describe("loadSlackAcceptanceConfig file errors", () => {
     ).rejects.toThrow("not found");
   });
 });
+
+describe("timeout and progress diagnostics", () => {
+  it("fills bounded request and total timeout defaults", () => {
+    const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
+    expect(config.requestTimeoutMs).toBe(15_000);
+    expect(config.totalTimeoutMs).toBe(600_000);
+  });
+
+  it("fails closed when postMessage never resolves", async () => {
+    const client: SlackAcceptanceClient = {
+      postMessage: async () => new Promise<SlackPostMessageResult>(() => {}),
+      fetchReplies: async () => [],
+    };
+    const config = parseSlackAcceptanceConfig(validConfig({
+      requestTimeoutMs: 20,
+      totalTimeoutMs: 200,
+      cases: [{ kind: "plain_chat", prompt: "test", finalRequired: true }],
+    }), validEnv());
+
+    const report = await runSlackAcceptanceHarness(client, config);
+
+    expect(report.overallGate).toBe("fail");
+    expect(report.cases[0].status).toBe("fail");
+    expect(report.cases[0].errors.join("\n")).toContain("post_message_timeout");
+    expect(report.cases[0].progress?.some((event) => event.event === "prompt_send_failed")).toBe(true);
+  });
+
+  it("records fetch timeout progress without treating unknown evidence as pass", async () => {
+    const client: SlackAcceptanceClient = {
+      postMessage: async (params) => ({ ok: true, ts: "1234567890.000001", threadTs: params.threadTs || "1234567890.000001", channel: params.channel }),
+      fetchReplies: async () => new Promise<SlackMessageRecord[]>(() => {}),
+    };
+    const config = parseSlackAcceptanceConfig(validConfig({
+      requestTimeoutMs: 20,
+      totalTimeoutMs: 300,
+      cases: [{ kind: "plain_chat", prompt: "test", ackRequired: false, finalRequired: true }],
+    }), validEnv());
+
+    const report = await runSlackAcceptanceHarness(client, config);
+
+    expect(report.overallGate).toBe("fail");
+    expect(report.cases[0].final.status).toBe("fail");
+    expect(report.cases[0].progress?.some((event) => event.event === "final_fetch_failed")).toBe(true);
+  });
+});

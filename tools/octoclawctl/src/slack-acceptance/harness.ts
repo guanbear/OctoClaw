@@ -9,7 +9,9 @@ import type {
   SlackAcceptanceConfig,
   SlackAcceptanceReport,
   SlackAcceptanceResolvedConfig,
+  SlackAcceptanceProgressEvent,
   SlackMessageRecord,
+  SlackPostMessageResult,
   SlackToolExposureAuditResult,
 } from "./types.js";
 import { sanitizeForArtifact } from "./sanitize.js";
@@ -164,6 +166,8 @@ export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, str
     finalTimeoutMs: asPositiveNumber(config.finalTimeoutMs, 180_000),
     pollIntervalMs: asPositiveNumber(config.pollIntervalMs, 2_000),
     maxTranscriptMessages: Math.max(10, asPositiveNumber(config.maxTranscriptMessages, 50)),
+    requestTimeoutMs: asPositiveNumber(config.requestTimeoutMs, 15_000),
+    totalTimeoutMs: asPositiveNumber(config.totalTimeoutMs, 10 * 60_000),
     fixtures: isRecord(config.fixtures) ? config.fixtures as Record<string, string | boolean | number> : {},
   };
 }
@@ -308,42 +312,124 @@ function shouldStopPolling(assertion: AssertionResult): boolean {
   return false;
 }
 
+async function withPromiseTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}_timeout_after_${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function elapsedMs(startMs: number): number {
+  return Math.max(0, Date.now() - startMs);
+}
+
+function progressEvent(startMs: number, event: string, detail?: string): SlackAcceptanceProgressEvent {
+  return { at: nowIso(), event, elapsedMs: elapsedMs(startMs), detail };
+}
+
+function timeoutAdjustedAssertion(assertion: AssertionResult, required: boolean, timeoutMs: number): AssertionResult {
+  if (assertion.status === "pass" || assertion.status === "skipped") return assertion;
+  const status = required ? "fail" : "unknown";
+  return { status, reason: `${assertion.reason}; timed out after ${timeoutMs}ms` };
+}
+
 async function collectRepliesUntil(params: {
   client: SlackAcceptanceClient;
   channel: string;
   threadTs: string;
   promptTs: string;
   timeoutMs: number;
+  requestTimeoutMs: number;
   pollIntervalMs: number;
   limit: number;
   expectedAny?: string[];
   expectedAll?: string[];
   rejected?: string[];
   required: boolean;
-}): Promise<{ replies: SlackMessageRecord[]; assertion: AssertionResult }> {
+  phase: "ack" | "final";
+  caseStartMs: number;
+  progress: SlackAcceptanceProgressEvent[];
+}): Promise<{ replies: SlackMessageRecord[]; assertion: AssertionResult; errors: string[] }> {
   const start = Date.now();
+  const errors: string[] = [];
   let latest: SlackMessageRecord[] = [];
+  let firstReplySeen = false;
   let assertion = assertText(latest, params.expectedAny, params.expectedAll, params.rejected, params.required);
+  params.progress.push(progressEvent(params.caseStartMs, `${params.phase}_poll_started`, `timeout_ms=${params.timeoutMs}`));
   while (Date.now() - start <= params.timeoutMs) {
-    latest = (await params.client.fetchReplies({
-      channel: params.channel,
-      threadTs: params.threadTs,
-      oldestTs: params.promptTs,
-      limit: params.limit,
-    })).filter((message) => message.ts !== params.promptTs);
+    try {
+      latest = (await withPromiseTimeout(params.client.fetchReplies({
+        channel: params.channel,
+        threadTs: params.threadTs,
+        oldestTs: params.promptTs,
+        limit: params.limit,
+      }), params.requestTimeoutMs, `${params.phase}_fetch_replies`)).filter((message) => message.ts !== params.promptTs);
+    } catch (error) {
+      const reason = `${params.phase} fetch failed: ${errorMessage(error)}`;
+      errors.push(reason);
+      params.progress.push(progressEvent(params.caseStartMs, `${params.phase}_fetch_failed`, reason));
+      return {
+        replies: latest,
+        assertion: { status: params.required ? "fail" : "unknown", reason },
+        errors,
+      };
+    }
+    if (!firstReplySeen && latest.some((message) => message.text.trim())) {
+      firstReplySeen = true;
+      params.progress.push(progressEvent(params.caseStartMs, "first_reply_seen", `${params.phase}; replies=${latest.length}`));
+    }
     assertion = assertText(latest, params.expectedAny, params.expectedAll, params.rejected, params.required);
-    if (shouldStopPolling(assertion)) return { replies: latest, assertion };
+    if (shouldStopPolling(assertion)) {
+      params.progress.push(progressEvent(params.caseStartMs, `${params.phase}_assertion_${assertion.status}`, assertion.reason));
+      return { replies: latest, assertion, errors };
+    }
     await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
   }
-  return { replies: latest, assertion };
+  const timedOut = timeoutAdjustedAssertion(assertion, params.required, params.timeoutMs);
+  params.progress.push(progressEvent(params.caseStartMs, `${params.phase}_timed_out`, timedOut.reason));
+  return { replies: latest, assertion: timedOut, errors };
+}
+
+function notRunCaseResult(caseConfig: SlackAcceptanceCaseConfig, reason: string): SlackAcceptanceCaseResult {
+  const prompt = caseConfig.prompt || DEFAULT_CASES.find((item) => item.kind === caseConfig.kind)?.prompt || caseConfig.kind;
+  return {
+    id: caseConfig.id || caseConfig.kind,
+    kind: caseConfig.kind,
+    prompt,
+    status: "fail",
+    ack: { status: "fail", reason },
+    final: { status: "fail", reason },
+    noSpawn: { status: "unknown", reason },
+    transcript: [],
+    errors: [reason],
+    elapsedMs: 0,
+    progress: [{ at: nowIso(), event: "case_not_run", elapsedMs: 0, detail: reason }],
+  };
 }
 
 async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceResolvedConfig, caseConfig: SlackAcceptanceCaseConfig): Promise<SlackAcceptanceCaseResult> {
+  const caseStartMs = Date.now();
+  const progress: SlackAcceptanceProgressEvent[] = [progressEvent(caseStartMs, "case_started", caseConfig.kind)];
   const id = caseConfig.id || caseConfig.kind;
   const prompt = caseConfig.prompt || DEFAULT_CASES.find((item) => item.kind === caseConfig.kind)?.prompt || caseConfig.kind;
   const errors: string[] = [];
+  const finish = (result: Omit<SlackAcceptanceCaseResult, "elapsedMs" | "progress">): SlackAcceptanceCaseResult => ({
+    ...result,
+    elapsedMs: elapsedMs(caseStartMs),
+    progress,
+  });
   if (caseConfig.enabled === false) {
-    return {
+    progress.push(progressEvent(caseStartMs, "case_disabled"));
+    return finish({
       id,
       kind: caseConfig.kind,
       prompt,
@@ -353,10 +439,11 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       noSpawn: { status: "skipped", reason: "case disabled" },
       transcript: [],
       errors: [],
-    };
+    });
   }
   if (caseConfig.requiresFixture && !config.fixtures[caseConfig.fixtureKey || caseConfig.kind]) {
-    return {
+    progress.push(progressEvent(caseStartMs, "fixture_missing", caseConfig.fixtureKey || caseConfig.kind));
+    return finish({
       id,
       kind: caseConfig.kind,
       prompt,
@@ -366,24 +453,51 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       noSpawn: { status: "unknown", reason: "fixture missing" },
       transcript: [],
       errors: [],
-    };
+    });
   }
 
   const sentIso = nowIso();
-  const posted = await client.postMessage({ channel: config.target.channel, text: prompt, threadTs: config.target.threadTs });
-  if (!posted.ok || !posted.ts) {
-    return {
+  let posted: SlackPostMessageResult;
+  try {
+    progress.push(progressEvent(caseStartMs, "prompt_send_started"));
+    posted = await withPromiseTimeout(
+      client.postMessage({ channel: config.target.channel, text: prompt, threadTs: config.target.threadTs }),
+      config.requestTimeoutMs,
+      "post_message",
+    );
+    progress.push(progressEvent(caseStartMs, "prompt_send_completed", posted.ok ? posted.ts : posted.error));
+  } catch (error) {
+    const reason = `post failed: ${errorMessage(error)}`;
+    errors.push(reason);
+    progress.push(progressEvent(caseStartMs, "prompt_send_failed", reason));
+    return finish({
       id,
       kind: caseConfig.kind,
       prompt,
       status: "fail",
       sentAt: sentIso,
-      ack: { status: "fail", reason: posted.error || "post failed" },
-      final: { status: "fail", reason: posted.error || "post failed" },
+      ack: { status: "fail", reason },
+      final: { status: "fail", reason },
       noSpawn: { status: "unknown", reason: "post failed" },
       transcript: [],
-      errors: [posted.error || "post failed"],
-    };
+      errors,
+    });
+  }
+  if (!posted.ok || !posted.ts) {
+    const reason = posted.error || "post failed";
+    errors.push(reason);
+    return finish({
+      id,
+      kind: caseConfig.kind,
+      prompt,
+      status: "fail",
+      sentAt: sentIso,
+      ack: { status: "fail", reason },
+      final: { status: "fail", reason },
+      noSpawn: { status: "unknown", reason: "post failed" },
+      transcript: [],
+      errors,
+    });
   }
   const threadTs = posted.threadTs || posted.ts;
   const ackTimeoutMs = asPositiveNumber(caseConfig.ackTimeoutMs, config.ackTimeoutMs);
@@ -395,13 +509,18 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     threadTs,
     promptTs: posted.ts,
     timeoutMs: ackTimeoutMs,
+    requestTimeoutMs: config.requestTimeoutMs,
     pollIntervalMs,
     limit: config.maxTranscriptMessages,
     expectedAny: caseConfig.expectAck,
     expectedAll: caseConfig.expectAckAll,
     rejected: caseConfig.rejectAck,
     required: caseConfig.ackRequired === true,
+    phase: "ack",
+    caseStartMs,
+    progress,
   });
+  errors.push(...ackCollection.errors);
   const ackReplies = ackCollection.replies;
   const ack = ackCollection.assertion;
   const finalCollection = await collectRepliesUntil({
@@ -410,20 +529,26 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     threadTs,
     promptTs: posted.ts,
     timeoutMs: finalTimeoutMs,
+    requestTimeoutMs: config.requestTimeoutMs,
     pollIntervalMs,
     limit: config.maxTranscriptMessages,
     expectedAny: caseConfig.expectFinal,
     expectedAll: caseConfig.expectFinalAll,
     rejected: caseConfig.rejectFinal,
     required: caseConfig.finalRequired !== false,
+    phase: "final",
+    caseStartMs,
+    progress,
   });
+  errors.push(...finalCollection.errors);
   const allReplies = finalCollection.replies;
   const final = finalCollection.assertion;
   const noSpawn = await checkNoSpawn(config.replayPath, sentIso, config.sessionKey, caseConfig.noSpawnExpected === true);
+  progress.push(progressEvent(caseStartMs, "nospawn_assertion_completed", noSpawn.reason));
   const ackAt = tsToMillis(ackReplies[0]?.ts);
   const finalAt = tsToMillis(allReplies[allReplies.length - 1]?.ts);
   const promptAt = tsToMillis(posted.ts);
-  return {
+  return finish({
     id,
     kind: caseConfig.kind,
     prompt,
@@ -437,7 +562,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     noSpawn,
     transcript: allReplies.slice(-config.maxTranscriptMessages),
     errors,
-  };
+  });
 }
 
 function overallGate(cases: SlackAcceptanceCaseResult[], audit: SlackToolExposureAuditResult): AcceptanceGate {
@@ -448,8 +573,18 @@ function overallGate(cases: SlackAcceptanceCaseResult[], audit: SlackToolExposur
 
 export async function runSlackAcceptanceHarness(client: SlackAcceptanceClient, config: SlackAcceptanceResolvedConfig): Promise<SlackAcceptanceReport> {
   const results: SlackAcceptanceCaseResult[] = [];
+  const runStartMs = Date.now();
   for (const caseConfig of config.cases) {
-    results.push(await runCase(client, config, caseConfig));
+    const remainingMs = config.totalTimeoutMs - elapsedMs(runStartMs);
+    if (remainingMs <= 0) {
+      results.push(notRunCaseResult(caseConfig, `slack acceptance total timeout after ${config.totalTimeoutMs}ms`));
+      continue;
+    }
+    try {
+      results.push(await withPromiseTimeout(runCase(client, config, caseConfig), remainingMs, "slack_acceptance_case"));
+    } catch (error) {
+      results.push(notRunCaseResult(caseConfig, `case aborted by total timeout: ${errorMessage(error)}`));
+    }
   }
   const audit = auditSlackTools(config.exposedTools);
   const report: SlackAcceptanceReport = {

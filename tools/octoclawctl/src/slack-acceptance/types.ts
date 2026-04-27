@@ -53,6 +53,8 @@ export interface SlackAcceptanceConfig {
   finalTimeoutMs?: number;
   pollIntervalMs?: number;
   maxTranscriptMessages?: number;
+  requestTimeoutMs?: number;
+  totalTimeoutMs?: number;
   fixtures?: Record<string, string | boolean | number>;
 }
 
@@ -71,6 +73,8 @@ export interface SlackAcceptanceResolvedConfig {
   finalTimeoutMs: number;
   pollIntervalMs: number;
   maxTranscriptMessages: number;
+  requestTimeoutMs: number;
+  totalTimeoutMs: number;
   fixtures: Record<string, string | boolean | number>;
 }
 
@@ -101,6 +105,13 @@ export interface AssertionResult {
   matchedText?: string;
 }
 
+export interface SlackAcceptanceProgressEvent {
+  at: string;
+  event: string;
+  elapsedMs: number;
+  detail?: string;
+}
+
 export interface SlackAcceptanceCaseResult {
   id: string;
   kind: SlackAcceptanceCaseKind;
@@ -115,6 +126,8 @@ export interface SlackAcceptanceCaseResult {
   noSpawn: AssertionResult;
   transcript: SlackMessageRecord[];
   errors: string[];
+  elapsedMs?: number;
+  progress?: SlackAcceptanceProgressEvent[];
 }
 
 export interface SlackToolExposureAuditResult {

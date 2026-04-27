@@ -71,15 +71,14 @@ describe("policy resolver judge timeout fallback", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "delegate",
-      route_source: "fallback",
-      judge_timeout: true,
-      fallback_reason: "deterministic_hard_boundary:intent",
-      final_judge_source: "timeout_fallback",
+      route_source: "rule",
+      judge_timeout: false,
+      final_judge_source: "policy_rule",
     });
     expect(decision._judge_shadow_log).toMatchObject({
-      judge_timeout: true,
-      fallback_reason: "deterministic_hard_boundary:intent",
-      final_judge_route: "delegate",
+      judge_skipped: true,
+      judge_skip_reason: "rule:fresh_lookup_prompt→delegate",
+      judge_route: "delegate",
     });
   });
 
@@ -392,6 +391,7 @@ describe("execution coverage override intent guard", () => {
       route: "reply",
       route_source: "fallback",
       judge_timeout: true,
+      final_judge_source: "timeout_fallback",
     });
   });
 
@@ -438,6 +438,7 @@ describe("execution coverage override intent guard", () => {
       route: "reply",
       route_source: "fallback",
       judge_timeout: true,
+      final_judge_source: "timeout_fallback",
     });
   });
 
@@ -786,6 +787,8 @@ describe("policy resolver WorkContract integration", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "reply",
+      route_source: "rule",
+      final_judge_source: "policy_rule",
     });
   });
 
@@ -809,6 +812,8 @@ describe("policy resolver WorkContract integration", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "reply",
+      route_source: "rule",
+      final_judge_source: "policy_rule",
     });
   });
 
@@ -829,6 +834,8 @@ describe("policy resolver WorkContract integration", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "delegate",
+      route_source: "rule",
+      final_judge_source: "policy_rule",
     });
   });
 
@@ -849,8 +856,9 @@ describe("policy resolver WorkContract integration", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "reply",
-      route_source: "fallback",
-      judge_timeout: true,
+      route_source: "rule",
+      judge_timeout: false,
+      final_judge_source: "policy_rule",
     });
   });
 });

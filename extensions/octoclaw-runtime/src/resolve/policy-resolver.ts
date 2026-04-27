@@ -1111,6 +1111,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   const priorDecision = asRecord(decision);
   const priorRouteDecision = asRecord(priorDecision.route_decision);
   const judgeSucceeded = asBoolean(priorDecision._judge_succeeded, false);
+  const deterministicRuleApplied = asBoolean(priorDecision._deterministic_rule_applied, false);
   const judgeRoute = asString(priorDecision._judge_route);
   const stickyDecision = readStickyStateDecision(metadata);
   const stickyRouteDecision = asRecord(stickyDecision.route_decision);
@@ -1137,7 +1138,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     liveRoute = normalizedRequestedLiveRoute;
   }
 
-  if (judgeSucceeded && !objectionEscalated) {
+  if ((judgeSucceeded || deterministicRuleApplied) && !objectionEscalated && !objectionSubmitted) {
     if (judgeRoute && PHASE_TWO_LIVE_ROUTES.has(normalizeLiveRoute(judgeRoute, "reply"))) {
       liveRoute = normalizeLiveRoute(judgeRoute, liveRoute);
     }
@@ -1606,6 +1607,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let delegateReasonCodes: string[] = [];
   let remoteJudgeOverrideApplied = false;
   let deterministicFallbackApplied = false;
+  let deterministicRuleApplied = false;
+  let deterministicRuleReason: string | null = null;
 
   let dualJudgeConfig = resolveDualJudgeConfig(asRecord(options.metadata));
   if (!dualJudgeConfig) {
@@ -1658,7 +1661,22 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     }
 
     const continuationRoute = selectContinuationRoute(metadata);
-    if (continuationRoute) {
+    const deterministicStatusRoute = statusProvenanceFromPrompt(prompt) ? "reply" : null;
+    const deterministicFreshRoute = !deterministicStatusRoute && freshLookupFromPrompt(prompt) ? "delegate" : null;
+    if (deterministicStatusRoute || deterministicFreshRoute) {
+      judgeRouteOverride = deterministicStatusRoute ?? deterministicFreshRoute;
+      deterministicRuleApplied = true;
+      deterministicRuleReason = deterministicStatusRoute
+        ? "rule:status_provenance_prompt→reply"
+        : "rule:fresh_lookup_prompt→delegate";
+      judgeShadowLog = {
+        judge_skipped: true,
+        judge_skip_reason: deterministicRuleReason,
+        judge_route: judgeRouteOverride,
+        rule_route: judgeRouteOverride,
+        judge_mode: "deterministic_rule",
+      };
+    } else if (continuationRoute) {
       judgeRouteOverride = continuationRoute;
       judgeSucceeded = true;
       judgeShadowLog = {
@@ -1907,7 +1925,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     }
   }
 
-  const routeHintRequired = !judgeSucceeded;
+  const routeHintRequired = !(judgeSucceeded || deterministicRuleApplied);
 
   const finalDecision = judgeRouteOverride
     ? rebuildDecisionWithRoute(decision, judgeRouteOverride, judgeRole)
@@ -1926,7 +1944,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     },
     route_decision: {
       route: finalDecision.route,
-      system_preferred_route: judgeSucceeded ? finalDecision.route : decision.route,
+      system_preferred_route: (judgeSucceeded || deterministicRuleApplied) ? finalDecision.route : decision.route,
       judge_route: judgeRouteOverride ? normalizeLiveRoute(judgeRouteOverride, finalDecision.route) : undefined,
       judge_role: judgeRole,
       worker_pool: workerPoolForDecision(finalDecision.executionProfile, finalDecision.role),
@@ -1938,10 +1956,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       work_type: asString(metadata.workType, "research"),
       phase: "execute",
       protocol: finalDecision.route === "reply" ? "normal" : "delegated",
-      route_source: deterministicFallbackApplied ? "fallback" : (judgeSucceeded ? "judge" : (judgeShadowLog?.fallback_reason ? "fallback" : "rule")),
+      route_source: deterministicFallbackApplied ? "fallback" : (deterministicRuleApplied ? "rule" : (judgeSucceeded ? "judge" : (judgeShadowLog?.fallback_reason ? "fallback" : "rule"))),
       judge_timeout: judgeShadowLog?.judge_timeout ?? false,
       fallback_reason: judgeShadowLog?.fallback_reason ?? null,
-      final_judge_source: deterministicFallbackApplied ? "timeout_fallback" : (judgeSucceeded ? (remoteJudgeOverrideApplied ? "remote" : "local") : (judgeShadowLog?.judge_timeout ? "timeout" : "no_judge")),
+      final_judge_source: deterministicRuleApplied ? "policy_rule" : (deterministicFallbackApplied ? "timeout_fallback" : (judgeSucceeded ? (remoteJudgeOverrideApplied ? "remote" : "local") : (judgeShadowLog?.judge_timeout ? "timeout" : "no_judge"))),
       complexity_band: judgeComplexityBand,
       expected_duration_band: judgeExpectedDurationBand,
       quality_bar: judgeQualityBar,
@@ -1965,6 +1983,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _judge_succeeded: judgeSucceeded,
     _judge_route: judgeRouteOverride ?? null,
     _remote_judge_overrode_local: remoteJudgeOverrideApplied,
+    _deterministic_rule_applied: deterministicRuleApplied,
+    _deterministic_rule_reason: deterministicRuleReason,
     _judge_role: judgeRole,
     _judge_budget_band: judgeBudgetBand,
     _judge_complexity_band: judgeComplexityBand,

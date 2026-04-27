@@ -71,3 +71,13 @@ Status/provenance/no-lie cases are expected not to spawn. When `replayPath` is c
 - Allowed Slack-facing tools are limited to `message.send`, `message.update`, `message.react`, and `message.typing`; any other exposed tool fails the audit.
 - Reports recursively redact token/secret fields and strip raw transcript, child transcript, worker chain-of-thought, and execution log fields.
 - The harness stores Slack acceptance transcript snippets as artifacts, but never injects them into parent context.
+
+## 2026-04-27 Production-Safety Update
+
+The real Slack acceptance harness is fail-closed and bounded:
+
+- `requestTimeoutMs` bounds each Slack/OpenClaw send or reply-fetch operation. A hung Slack API call becomes a case failure/unknown result instead of blocking the whole run.
+- `totalTimeoutMs` bounds the full acceptance run. Cases that cannot start before the deadline are recorded as failed `case_not_run` entries.
+- Every case report includes sanitized progress diagnostics such as `case_started`, `prompt_send_completed`, `first_reply_seen`, `final_timed_out`, and fetch/post failure events.
+- Unknown evidence is never promoted to pass; missing replay/provenance evidence remains `unknown` or `fail` depending on whether the assertion is required.
+- The harness remains evaluation-only: it does not mutate live policy, promote calibration recommendations, enable multi-agent, or inject raw child transcripts into artifacts.
