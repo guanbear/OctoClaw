@@ -371,41 +371,24 @@ function workDecisionSourceFromPolicy(value: unknown): WorkDecisionSource {
   }
 }
 
-function explicitDelegateRequestFromPrompt(prompt: string): boolean {
-  const text = asString(prompt).toLowerCase();
-  if (!text) return false;
-  if (/(?:不要|别|无需|不需要|no need to|do not|don't).{0,16}(?:委派|派发|分派|指派|delegate|dispatch|sub-?agent|worker)/iu.test(text)) {
-    return false;
+function trustedConversationControl(metadata: UnknownRecord): UnknownRecord {
+  const conversationControl = asRecord(metadata.conversation_control);
+  if (Object.keys(conversationControl).length === 0) return {};
+  const source = asString(conversationControl.source);
+  const intentSource = asString(asRecord(metadata.intent_packet).source);
+  if (!source || source === "session_resolver_fallback" || source.startsWith("deterministic_")) return {};
+  if (intentSource.startsWith("deterministic_") && source !== "explicit_conversation_control") return {};
+  return conversationControl;
+}
+
+function structuredIntentClass(metadata: UnknownRecord): string {
+  const control = trustedConversationControl(metadata);
+  const intentPacket = asRecord(metadata.intent_packet);
+  const intentSource = asString(intentPacket.source);
+  if (intentSource && !intentSource.startsWith("deterministic_")) {
+    return asString(intentPacket.intent_class || intentPacket.intentClass || control.intent_class);
   }
-  return /(?:请|帮我|需要|直接|please|use|run)?.{0,12}(?:委派|派发|分派|指派).{0,18}(?:子\s*agent|agent|worker|任务)/iu.test(text)
-    || /(?:子\s*agent|sub-?agent|worker).{0,18}(?:调研|调查|执行|处理|跑|做|查|研究|research|investigate|handle|run)/iu.test(text)
-    || /\bdelegate\b.{0,24}\b(?:sub-?agent|worker|task|research|investigation)\b/iu.test(text)
-    || /\b(?:sub-?agent|worker)\b.{0,24}\b(?:delegate|dispatch|research|investigate|handle|run)\b/iu.test(text);
-}
-
-function freshLookupFromPrompt(prompt: string): boolean {
-  const text = asString(prompt);
-  if (!text) return false;
-  const negated = /(?:不要|别|无需|不需要|不用|no need|do not|don't).{0,20}(?:查|搜索|查找|看|检查|lookup|search|check|find)/iu.test(text);
-  if (negated) return false;
-  const hasLookupVerb = /(?:查一下|帮我查|请查|搜索|查找|检索|搜|查|check|lookup|search|find\s+out|look\s+up|look\s+into)/iu.test(text);
-  if (!hasLookupVerb) return false;
-  return /(?:最新|发布说明|版本|当前|远端|remote|release|changelog|version|latest|current|公告|更新|upgrade|更新说明|特性|新特性|OpenClaw)/iu.test(text)
-    || /release\s+(?:note|comparison|compare|changelog)/iu.test(text);
-}
-
-function statusProvenanceFromPrompt(prompt: string): boolean {
-  const text = asString(prompt);
-  if (!text) return false;
-  if (/(?:不要|别|无需|不需要|不用|no need|do not|don't).{0,20}(?:显示|展示|查看|看|告诉我|show|display|tell)/iu.test(text)) return false;
-  if (freshLookupFromPrompt(text)) return false;
-  const hasStatusPanel = /(?:显示|展示|查看|看看|打开|弹出|给出|列出|show|display|open|list|render).{0,12}(?:任务状态面板|状态面板|状态板|任务面板|status\s*panel|task\s*status)/iu.test(text);
-  if (hasStatusPanel) return true;
-  const hasStatusQuery = /(?:显示|展示|查看|看看|告诉我|看看|问一下|说一下|列出|show|display|tell|list).{0,20}(?:任务|刚才|之前的|上次的|那个|task).{0,12}(?:状态|进度|模型|耗时|花费|成本|结果位置|输出在哪|跑到哪了|完没|完成没|status|progress|model|cost|result)/iu.test(text);
-  if (hasStatusQuery) return true;
-  const hasProvenanceQuery = /(?:刚才|之前的|上次|那个|the|that).{0,12}(?:任务|判定|判决|路由|决策|为什么|为什么委派|证据|理由|route|decision|why|evidence|judgment|判定是啥|判定是)/iu.test(text);
-  if (hasProvenanceQuery) return true;
-  return /(?:判定|证据|路由决策|route\s*decision).{0,12}(?:在哪|是什么|是啥|告诉我|tell|show|what)/iu.test(text);
+  return asString(control.intent_class);
 }
 
 function intentClassFromPolicy(value: unknown): IntentClass {
@@ -917,7 +900,7 @@ function buildRuntimeExecutionIds(task: unknown, decision?: UnknownRecord, metad
 }
 
 function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {}): PhaseTwoPolicyInput {
-  const conversationControl = asRecord(metadata.conversation_control);
+  const conversationControl = trustedConversationControl(metadata);
   const conversationLaneHint = asString(conversationControl.lane_hint);
   const conversationRouteHint = asString(conversationControl.route_hint);
   const trustedRouteRequest = isTrustedRouteRequest(metadata);
@@ -965,14 +948,21 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
   };
 }
 
+function normalizePolicyPrompt(task: unknown): string {
+  const rawPrompt = asString(task);
+  const unwrappedPrompt = unwrapQueuedBusyPrompt(rawPrompt);
+  return unwrappedPrompt || rawPrompt;
+}
+
 export function buildDecision(task: unknown, optionsOrDecision: { metadata?: UnknownRecord } | UnknownRecord = {}, metadataArg?: UnknownRecord): PolicyDecision {
   const options = metadataArg === undefined
     ? (isRecord(optionsOrDecision) && ("metadata" in optionsOrDecision)
         ? optionsOrDecision as { metadata?: UnknownRecord }
         : { metadata: asRecord(optionsOrDecision) })
     : { metadata: metadataArg };
-  const metadata = enrichConversationControlMetadata(asString(task), asRecord(options.metadata));
-  return judgePolicy(buildPhaseTwoPolicyInput(asString(task), metadata));
+  const prompt = normalizePolicyPrompt(task);
+  const metadata = enrichConversationControlMetadata(prompt, asRecord(options.metadata));
+  return judgePolicy(buildPhaseTwoPolicyInput(prompt, metadata));
 }
 
 function workflowRoleForRoute(route: LiveRoute, taskClass = ""): PolicyRole {
@@ -1213,9 +1203,8 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     metadata._execution_coverage = executionLayer;
     metadata.execution_layer = executionLayer;
   }
-  const conversationControl = asRecord(metadata.conversation_control);
-  const intentPacket = asRecord(metadata.intent_packet);
-  const intentClass = asString(intentPacket.intent_class || intentPacket.intentClass || conversationControl.intent_class);
+  const conversationControl = trustedConversationControl(metadata);
+  const intentClass = structuredIntentClass(metadata);
   const isExecutionOrStatusFollowup = intentClass === "execution_followup"
     || asBoolean(conversationControl.provenance_followup)
     || asBoolean(conversationControl.status_followup);
@@ -1491,14 +1480,14 @@ function buildPolicyResolvedExecutionTelemetry(decision: UnknownRecord): Unknown
 }
 
 export async function resolveStatelessPolicyDecision(task: string, options: UnknownRecord = {}): Promise<UnknownRecord> {
-  const prompt = asString(task);
+  const prompt = normalizePolicyPrompt(task);
   const metadata = enrichConversationControlMetadata(prompt, asRecord(options.metadata));
   const routeHint = asRecord(options.routeHint);
   if (Object.keys(routeHint).length > 0) {
     const routeHintRoute = asString(routeHint.route_hint ?? routeHint.routeHint);
     if (routeHintRoute) {
       const normalizedRouteHint = normalizeLiveRoute(routeHintRoute, "reply");
-      const conversationControl = asRecord(metadata.conversation_control);
+      const conversationControl = trustedConversationControl(metadata);
       const routeHintSource = asString(routeHint.source, "main_agent");
       const routeHintTrusted = asBoolean(routeHint.trusted) || TRUSTED_ROUTE_REQUEST_SOURCES.has(routeHintSource);
       const objectionRequestedRoute = normalizeLiveRoute(
@@ -1661,22 +1650,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     }
 
     const continuationRoute = selectContinuationRoute(metadata);
-    const deterministicStatusRoute = statusProvenanceFromPrompt(prompt) ? "reply" : null;
-    const deterministicFreshRoute = !deterministicStatusRoute && freshLookupFromPrompt(prompt) ? "delegate" : null;
-    if (deterministicStatusRoute || deterministicFreshRoute) {
-      judgeRouteOverride = deterministicStatusRoute ?? deterministicFreshRoute;
-      deterministicRuleApplied = true;
-      deterministicRuleReason = deterministicStatusRoute
-        ? "rule:status_provenance_prompt→reply"
-        : "rule:fresh_lookup_prompt→delegate";
-      judgeShadowLog = {
-        judge_skipped: true,
-        judge_skip_reason: deterministicRuleReason,
-        judge_route: judgeRouteOverride,
-        rule_route: judgeRouteOverride,
-        judge_mode: "deterministic_rule",
-      };
-    } else if (continuationRoute) {
+    if (continuationRoute) {
       judgeRouteOverride = continuationRoute;
       judgeSucceeded = true;
       judgeShadowLog = {
@@ -1746,28 +1720,22 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
 
       // Deterministic hard-boundary fallback when judge timed out
       if (judgeResult === null) {
-        const conversationControl = asRecord(metadata.conversation_control);
-        const intentClass = asString(conversationControl.intent_class);
+        const conversationControl = trustedConversationControl(metadata);
+        const intentClass = structuredIntentClass(metadata);
         const intentRequiresDelegation = intentClass === "fresh_live_lookup"
           || intentClass === "delegated_work"
           || asBoolean(conversationControl.require_fresh_lookup)
           || asBoolean(conversationControl.require_state_grounding);
-        const explicitDelegationRequest = /(?:请|帮我|给我|让我)?(?:委派|派|分派|指派).*(?:子?\s*agent|sub\s*agent|worker|子任务)/iu.test(prompt)
-          || /\b(?:delegate|dispatch|spawn)\b.*(?:sub.?agent|worker|task)/i.test(prompt);
-        const explicitDelegateRequest = explicitDelegateRequestFromPrompt(prompt)
-          || explicitDelegationRequest
-          || asBoolean(conversationControl.explicit_delegate_request)
-          || asString(conversationControl.intent_class) === "delegated_work";
+        const explicitDelegateRequest = asBoolean(conversationControl.explicit_delegate_request)
+          || intentClass === "delegated_work";
         const toolNeedHint = asString(metadata.tool_need_hint);
         const durationHint = asString(metadata.duration_hint);
-        const promptFreshLookup = freshLookupFromPrompt(prompt);
         const hardBoundarySignals = [
           intentRequiresDelegation,
           toolNeedHint === "required",
           durationHint === "long",
           asString(conversationControl.route_hint) === "delegate",
           explicitDelegateRequest,
-          promptFreshLookup && !intentRequiresDelegation,
         ];
         const timeoutExecutionLayer = asRecord(metadata.execution_layer ?? metadata._execution_coverage);
         const timeoutExecutionOverride = asBoolean(timeoutExecutionLayer.supports_provenance_reply)
@@ -1793,20 +1761,13 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeShadowLog = judgeShadowLog ?? {};
           judgeShadowLog.fallback_reason = "timeout_execution_followup_no_coverage→reply(no_verifiable_record)";
           judgeShadowLog.final_judge_route = "reply";
-        } else if (statusProvenanceFromPrompt(prompt)) {
-          judgeRouteOverride = "reply";
-          judgeSucceeded = true;
-          deterministicFallbackApplied = true;
-          judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = "timeout_status_provenance_prompt→reply";
-          judgeShadowLog.final_judge_route = "reply";
         } else if (hardBoundarySignals.some(Boolean)) {
           // Deterministic hard-boundary: high-risk task must not default to reply
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           deterministicFallbackApplied = true;
           judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate", "fresh_lookup"][i] : null).filter(Boolean).join("+")}`;
+          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate"][i] : null).filter(Boolean).join("+")}`;
           judgeShadowLog.final_judge_route = "delegate";
         }
       }
@@ -1835,9 +1796,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         const durationHint = judgeResult.durationHint ?? judgeResult.duration_hint;
         const judgeScope = judgeResult.scope;
         const validatorOverrideReasons: string[] = [];
-        const conversationControl = asRecord(metadata.conversation_control);
-        const intentPacket = asRecord(metadata.intent_packet);
-        const intentClass = asString(intentPacket.intent_class || intentPacket.intentClass || conversationControl.intent_class);
+        const conversationControl = trustedConversationControl(metadata);
+        const intentClass = structuredIntentClass(metadata);
         const conversationRouteHint = asString(conversationControl.route_hint);
 
         const executionCoverage = asRecord(metadata.execution_layer ?? metadata._execution_coverage);
@@ -1899,14 +1859,6 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);
-        } else if (!executionOverrideApplied && intentClass !== "execution_followup" && freshLookupFromPrompt(prompt) && judgeRouteOverride === "reply") {
-          judgeRouteOverride = "delegate";
-          judgeSucceeded = true;
-          validatorOverrideReasons.push("validator:fresh_lookup_prompt→delegate");
-        } else if (!executionOverrideApplied && statusProvenanceFromPrompt(prompt) && judgeRouteOverride === "delegate") {
-          judgeRouteOverride = "reply";
-          judgeSucceeded = true;
-          validatorOverrideReasons.push("validator:status_provenance_prompt→reply");
         }
         // tool_need_hint==none && duration_hint==short → reply remains eligible (no override needed)
 
@@ -2048,7 +2000,7 @@ export async function resolvePolicyDecisionForContext(
   logger?: LoggerLike,
 ): Promise<{ decision: UnknownRecord; stateKey: string; state: PolicyContextState } | null> {
   const prompt = typeof promptOrEvent === "string"
-    ? asString(promptOrEvent)
+    ? normalizePolicyPrompt(promptOrEvent)
     : extractPromptText(asRecord(promptOrEvent) as ExtractPromptEvent);
   if (!prompt || !isManagedAgentContext(ctx)) {
     return null;

@@ -30,6 +30,7 @@ import {
   isManagedAgentContext,
   resolveAckDeliverySessionKey,
   resolvePolicyStateKey,
+  unwrapQueuedBusyPrompt,
   resolvePolicyStateKeys,
 } from "./resolve/session.js";
 import { checkActiveTaskRecovery, resolvePolicyDecisionForContext } from "./resolve/policy-resolver.js";
@@ -272,7 +273,8 @@ function extractMessageText(content: unknown): string {
 function extractPromptText(event: UnknownRecord): string {
   const prompt = stringValue(event.prompt);
   if (prompt) {
-    return prompt;
+    const unwrapped = unwrapQueuedBusyPrompt(prompt);
+    return unwrapped || prompt;
   }
   const messages = Array.isArray(event.messages) ? event.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -285,7 +287,8 @@ function extractPromptText(event: UnknownRecord): string {
     }
     const text = extractMessageText((message as UnknownRecord).content);
     if (text) {
-      return text;
+      const unwrapped = unwrapQueuedBusyPrompt(text);
+      return unwrapped || text;
     }
   }
   return "";

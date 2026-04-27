@@ -774,6 +774,11 @@ export function enrichConversationControlMetadata(prompt: string, metadata: Unkn
     ),
   );
   if (existingConversationControlSufficient && existingIntentPacket) {
+    const explicitConversationControl = existingConversationControl ?? {};
+    nextMetadata.conversation_control = {
+      ...explicitConversationControl,
+      source: stringValue(explicitConversationControl.source || "explicit_conversation_control"),
+    };
     return nextMetadata;
   }
 
@@ -798,6 +803,7 @@ export function enrichConversationControlMetadata(prompt: string, metadata: Unkn
     ? {
         ...projectedConversationControl,
         ...existingConversationControl,
+        source: stringValue(existingConversationControl.source || "explicit_conversation_control"),
         route_hint: stringValue(existingConversationControl.route_hint || projectedConversationControl.route_hint),
         intent_class: stringValue(existingConversationControl.intent_class || projectedConversationControl.intent_class),
         lane_hint: stringValue(existingConversationControl.lane_hint || projectedConversationControl.lane_hint),

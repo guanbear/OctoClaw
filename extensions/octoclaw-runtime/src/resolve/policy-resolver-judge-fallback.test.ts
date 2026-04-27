@@ -56,13 +56,14 @@ describe("policy resolver judge timeout fallback", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes local judge timeout with fresh lookup to delegate", async () => {
+  it("routes structured fresh lookup to delegate when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("查一下最新状态", {
       metadata: {
         _judgeFastConfig: localJudgeConfig,
         conversation_control: {
+          source: "explicit_conversation_control",
           intent_class: "fresh_live_lookup",
           require_fresh_lookup: true,
         },
@@ -71,18 +72,14 @@ describe("policy resolver judge timeout fallback", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "delegate",
-      route_source: "rule",
-      judge_timeout: false,
-      final_judge_source: "policy_rule",
+      route_source: "fallback",
+      judge_timeout: true,
+      final_judge_source: "timeout_fallback",
     });
-    expect(decision._judge_shadow_log).toMatchObject({
-      judge_skipped: true,
-      judge_skip_reason: "rule:fresh_lookup_prompt→delegate",
-      judge_route: "delegate",
-    });
+    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("intent");
   });
 
-  it("routes Chinese explicit delegation request to delegate when judge times out", async () => {
+  it("does not route Chinese delegation wording without structured signal when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。", {
@@ -92,15 +89,14 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "fallback",
+      route: "reply",
+      route_source: "rule",
       judge_timeout: true,
-      final_judge_source: "timeout_fallback",
+      final_judge_source: "timeout",
     });
-    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate");
   });
 
-  it("routes English explicit delegation request to delegate when judge times out", async () => {
+  it("does not route English delegation wording without structured signal when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("delegate this to a sub-agent", {
@@ -110,15 +106,14 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "fallback",
+      route: "reply",
+      route_source: "rule",
       judge_timeout: true,
-      final_judge_source: "timeout_fallback",
+      final_judge_source: "timeout",
     });
-    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate");
   });
 
-  it("routes compact Chinese subagent delegation request to delegate when judge times out", async () => {
+  it("does not route compact Chinese subagent wording without structured signal when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("帮我派一个子agent来调研", {
@@ -128,12 +123,11 @@ describe("policy resolver judge timeout fallback", () => {
     });
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "fallback",
+      route: "reply",
+      route_source: "rule",
       judge_timeout: true,
-      final_judge_source: "timeout_fallback",
+      final_judge_source: "timeout",
     });
-    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate");
   });
 
   it("keeps local judge timeout for simple chat on reply", async () => {
@@ -705,7 +699,7 @@ describe("policy resolver WorkContract integration", () => {
     expect(entry?.latestExecutionReceipt?.delegated).toBe(false);
   });
 
-  it("validator overrides judge reply to delegate for OpenClaw release lookup prompt", async () => {
+  it("prompt-only live lookup follows judge without regex validator authority", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("reply", 0.88),
     );
@@ -721,8 +715,87 @@ describe("policy resolver WorkContract integration", () => {
     );
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
+      route: "reply",
+      route_source: "judge",
+      final_judge_source: "local",
     });
+  });
+
+  it("structured live lookup can override judge reply to delegate", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "请查一下 OpenClaw 4.21 最近一次发布说明",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            source: "explicit_conversation_control",
+            intent_class: "fresh_live_lookup",
+            route_hint: "delegate",
+            require_fresh_lookup: true,
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "judge",
+      final_judge_source: "local",
+    });
+  });
+
+  it("deterministic session fallback control cannot override judge reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "openclaw 4.21 有啥新特性",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            source: "session_resolver_fallback",
+            intent_class: "fresh_live_lookup",
+            route_hint: "delegate",
+            require_fresh_lookup: true,
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "judge",
+      final_judge_source: "local",
+    });
+  });
+
+  it("queued busy wrapper is unwrapped before policy resolution", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.90),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "[Queued messages while agent was busy]\nSystem: 22:51: guanbear: 你好",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "judge",
+      final_judge_source: "local",
+    });
+    expect((decision.request as { task: string }).task).toBe("你好");
   });
 
   it("simple chat prompt stays reply when judge returns reply", async () => {
@@ -745,7 +818,7 @@ describe("policy resolver WorkContract integration", () => {
     });
   });
 
-  it("execution followup with coverage stays reply despite lookup verb", async () => {
+  it("structured execution followup with coverage stays reply despite lookup wording", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("reply", 0.85),
     );
@@ -756,6 +829,7 @@ describe("policy resolver WorkContract integration", () => {
         metadata: {
           _judgeFastConfig: localJudgeConfig,
           conversation_control: {
+            source: "explicit_conversation_control",
             intent_class: "execution_followup",
           },
           execution_layer: {
@@ -770,7 +844,7 @@ describe("policy resolver WorkContract integration", () => {
     });
   });
 
-  it("validator overrides judge delegate to reply for status panel prompt", async () => {
+  it("prompt-only status panel follows judge without regex validator authority", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("delegate", 0.88),
     );
@@ -786,13 +860,41 @@ describe("policy resolver WorkContract integration", () => {
     );
 
     expect(routeDecisionOf(decision)).toMatchObject({
-      route: "reply",
-      route_source: "rule",
-      final_judge_source: "policy_rule",
+      route: "delegate",
+      route_source: "judge",
+      final_judge_source: "local",
     });
   });
 
-  it("validator overrides judge delegate to reply for provenance query with execution coverage", async () => {
+  it("structured status panel overrides judge delegate to reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "显示任务状态面板，包含模型、耗时、结果位置",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            source: "explicit_conversation_control",
+            intent_class: "local_surface_lookup",
+            route_hint: "reply",
+            status_followup: true,
+            surface_id: "octoclaw_task_status_panel",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "judge",
+      final_judge_source: "local",
+    });
+  });
+
+  it("structured provenance query with execution coverage overrides judge delegate to reply", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("delegate", 0.88),
     );
@@ -802,7 +904,11 @@ describe("policy resolver WorkContract integration", () => {
       {
         metadata: {
           _judgeFastConfig: localJudgeConfig,
-          conversation_control: {},
+          conversation_control: {
+            source: "explicit_conversation_control",
+            intent_class: "execution_followup",
+            provenance_followup: true,
+          },
           execution_layer: {
             supports_provenance_reply: true,
           },
@@ -812,34 +918,12 @@ describe("policy resolver WorkContract integration", () => {
 
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "reply",
-      route_source: "rule",
-      final_judge_source: "policy_rule",
+      route_source: "judge",
+      final_judge_source: "local",
     });
   });
 
-  it("fresh lookup prompt still delegates despite statusProvenanceFromPrompt", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      judgeResponse("reply", 0.85),
-    );
-
-    const decision = await resolveStatelessPolicyDecision(
-      "请查一下 OpenClaw 4.21 最近一次发布说明",
-      {
-        metadata: {
-          _judgeFastConfig: localJudgeConfig,
-          conversation_control: {},
-        },
-      },
-    );
-
-    expect(routeDecisionOf(decision)).toMatchObject({
-      route: "delegate",
-      route_source: "rule",
-      final_judge_source: "policy_rule",
-    });
-  });
-
-  it("timeout with status panel prompt forces reply", async () => {
+  it("timeout with prompt-only status panel uses baseline reply without keyword force", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
       new DOMException("timeout", "AbortError"),
     );
@@ -857,8 +941,8 @@ describe("policy resolver WorkContract integration", () => {
     expect(routeDecisionOf(decision)).toMatchObject({
       route: "reply",
       route_source: "rule",
-      judge_timeout: false,
-      final_judge_source: "policy_rule",
+      judge_timeout: true,
+      final_judge_source: "timeout",
     });
   });
 });
