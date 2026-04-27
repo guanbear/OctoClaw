@@ -553,10 +553,10 @@ export const plugin = {
         const hookEvent = asRecord(event);
         if (inbound && Object.keys(inbound).length > 0) inboundMessageTs = stringValue(inbound.ts || inbound.messageTs || inbound.messageId);
         else if (ev && Object.keys(ev).length > 0) inboundMessageTs = stringValue(ev.ts || ev.messageTs || ev.messageId);
-        if (!inboundMessageTs && hookEvent) {
-          const promptText = extractPromptText(hookEvent);
-          const msgIdMatch = promptText.match(/"message_id"\s*:\s*"(\d+\.\d+)"/);
-          if (msgIdMatch) inboundMessageTs = msgIdMatch[1];
+        if (!inboundMessageTs) {
+          const promptText = [prompt, extractPromptText(hookEvent)].filter(Boolean).join("\n");
+          const msgIdMatch = promptText.match(/"(?:reply_to_id|message_id|ts)"\s*:\s*"([^"\n]+)"/u);
+          if (msgIdMatch) inboundMessageTs = stringValue(msgIdMatch[1]);
         }
       }
 

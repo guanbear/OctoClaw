@@ -371,6 +371,18 @@ function workDecisionSourceFromPolicy(value: unknown): WorkDecisionSource {
   }
 }
 
+function explicitDelegateRequestFromPrompt(prompt: string): boolean {
+  const text = asString(prompt).toLowerCase();
+  if (!text) return false;
+  if (/(?:不要|别|无需|不需要|no need to|do not|don't).{0,16}(?:委派|派发|分派|指派|delegate|dispatch|sub-?agent|worker)/iu.test(text)) {
+    return false;
+  }
+  return /(?:请|帮我|需要|直接|please|use|run)?.{0,12}(?:委派|派发|分派|指派).{0,18}(?:子\s*agent|agent|worker|任务)/iu.test(text)
+    || /(?:子\s*agent|sub-?agent|worker).{0,18}(?:调研|调查|执行|处理|跑|做|查|研究|research|investigate|handle|run)/iu.test(text)
+    || /\bdelegate\b.{0,24}\b(?:sub-?agent|worker|task|research|investigation)\b/iu.test(text)
+    || /\b(?:sub-?agent|worker)\b.{0,24}\b(?:delegate|dispatch|research|investigate|handle|run)\b/iu.test(text);
+}
+
 function intentClassFromPolicy(value: unknown): IntentClass {
   const intentClass = asString(value, "undetermined");
   return intentClass === "plain_chat"
@@ -1694,8 +1706,12 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         const conversationControl = asRecord(metadata.conversation_control);
         const intentClass = asString(conversationControl.intent_class);
         const intentRequiresDelegation = intentClass === "fresh_live_lookup"
+          || intentClass === "delegated_work"
           || asBoolean(conversationControl.require_fresh_lookup)
           || asBoolean(conversationControl.require_state_grounding);
+        const explicitDelegateRequest = explicitDelegateRequestFromPrompt(prompt)
+          || asBoolean(conversationControl.explicit_delegate_request)
+          || asString(conversationControl.intent_class) === "delegated_work";
         const toolNeedHint = asString(metadata.tool_need_hint);
         const durationHint = asString(metadata.duration_hint);
         const hardBoundarySignals = [
@@ -1703,6 +1719,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           toolNeedHint === "required",
           durationHint === "long",
           asString(conversationControl.route_hint) === "delegate",
+          explicitDelegateRequest,
         ];
         const timeoutExecutionLayer = asRecord(metadata.execution_layer ?? metadata._execution_coverage);
         const timeoutExecutionOverride = asBoolean(timeoutExecutionLayer.supports_provenance_reply)
@@ -1734,7 +1751,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeSucceeded = true;
           deterministicFallbackApplied = true;
           judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route"][i] : null).filter(Boolean).join("+")}`;
+          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate_request"][i] : null).filter(Boolean).join("+")}`;
           judgeShadowLog.final_judge_route = "delegate";
         }
       }

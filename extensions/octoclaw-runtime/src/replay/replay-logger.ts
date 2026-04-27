@@ -1358,13 +1358,15 @@ export function guardAssistantMessageForPolicyState(
   }
   if (!state.delegated && !state.delegateTaskContext) {
     const dispatchClaimPatterns = [
-      /(?:已经|已|刚)?(?:派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?agent|worker|任务|task)/i,
-      /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?agent|worker)/i,
-      /(?:已|已经)?(?:交给|分配给|指派给|派给).*(?:处理|执行|完成)/i,
+      /(?:已经|已|刚)?(?:派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?agent|worker|任务|task)/iu,
+      /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?agent|worker)/iu,
+      /(?:已|已经)?(?:交给|分配给|指派给|派给).*(?:处理|执行|完成)/iu,
+      /sessions_spawn|route\s+(?:switched|changed)\s+to\s+delegate|路由已切换到\s*delegate/iu,
     ];
     for (const pattern of dispatchClaimPatterns) {
       if (pattern.test(replyText)) {
-        return { mode: "replace", message: replaceAssistantMessageText(message, "我正在处理中，请稍等。") };
+        const fallback = delegationFailureReply(state);
+        return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
       }
     }
   }

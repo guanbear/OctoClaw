@@ -83,6 +83,24 @@ describe("policy resolver judge timeout fallback", () => {
     });
   });
 
+  it("routes explicit delegation request to delegate when judge times out", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+    const decision = await resolveStatelessPolicyDecision("请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。", {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "fallback",
+      judge_timeout: true,
+      final_judge_source: "timeout_fallback",
+    });
+    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate_request");
+  });
+
   it("keeps local judge timeout for simple chat on reply", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 

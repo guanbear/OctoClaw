@@ -110,6 +110,30 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect((canonical.router_decision_v2 as { request_kind: string }).request_kind).toBe("delegated_task");
   });
 
+  it("replaces false sessions_spawn dispatch claim without execution evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "好的，我来委派子 agent 做这个调研。\n路由已切换到 delegate，开始派发。\nWorkContract 仍然阻止 dispatch。让我直接用 sessions_spawn 派发子 agent。\n已派发子 agent（`status-panel-research`），正在调研。",
+        }],
+      },
+      {
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    const text = (guarded.message as { content: Array<{ text: string }> }).content[0]?.text || "";
+    expect(text).toContain("还没派发成功");
+    expect(text).not.toContain("sessions_spawn");
+    expect(text).not.toContain("已派发子 agent");
+  });
+
   it("replaces leaked direct reply when delegated task was not dispatched", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "我来写。收到，我看一下。可以，给你一个通用版：" }] },
