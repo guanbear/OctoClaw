@@ -383,6 +383,17 @@ function explicitDelegateRequestFromPrompt(prompt: string): boolean {
     || /\b(?:sub-?agent|worker)\b.{0,24}\b(?:delegate|dispatch|research|investigate|handle|run)\b/iu.test(text);
 }
 
+function freshLookupFromPrompt(prompt: string): boolean {
+  const text = asString(prompt);
+  if (!text) return false;
+  const negated = /(?:不要|别|无需|不需要|不用|no need|do not|don't).{0,20}(?:查|搜索|查找|看|检查|lookup|search|check|find)/iu.test(text);
+  if (negated) return false;
+  const hasLookupVerb = /(?:查一下|帮我查|请查|搜索|查找|检索|搜|查|check|lookup|search|find\s+out|look\s+up|look\s+into)/iu.test(text);
+  if (!hasLookupVerb) return false;
+  return /(?:最新|发布说明|版本|当前|远端|remote|release|changelog|version|latest|current|公告|更新|upgrade|更新说明|特性|新特性|OpenClaw)/iu.test(text)
+    || /release\s+(?:note|comparison|compare|changelog)/iu.test(text);
+}
+
 function intentClassFromPolicy(value: unknown): IntentClass {
   const intentClass = asString(value, "undetermined");
   return intentClass === "plain_chat"
@@ -1717,12 +1728,14 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           || asString(conversationControl.intent_class) === "delegated_work";
         const toolNeedHint = asString(metadata.tool_need_hint);
         const durationHint = asString(metadata.duration_hint);
+        const promptFreshLookup = freshLookupFromPrompt(prompt);
         const hardBoundarySignals = [
           intentRequiresDelegation,
           toolNeedHint === "required",
           durationHint === "long",
           asString(conversationControl.route_hint) === "delegate",
           explicitDelegateRequest,
+          promptFreshLookup && !intentRequiresDelegation,
         ];
         const timeoutExecutionLayer = asRecord(metadata.execution_layer ?? metadata._execution_coverage);
         const timeoutExecutionOverride = asBoolean(timeoutExecutionLayer.supports_provenance_reply)
@@ -1754,7 +1767,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeSucceeded = true;
           deterministicFallbackApplied = true;
           judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate"][i] : null).filter(Boolean).join("+")}`;
+          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate", "fresh_lookup"][i] : null).filter(Boolean).join("+")}`;
           judgeShadowLog.final_judge_route = "delegate";
         }
       }
@@ -1847,6 +1860,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push(`validator:intent_${intentClass}→delegate`);
+        } else if (!executionOverrideApplied && intentClass !== "execution_followup" && freshLookupFromPrompt(prompt) && judgeRouteOverride === "reply") {
+          judgeRouteOverride = "delegate";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push("validator:fresh_lookup_prompt→delegate");
         }
         // tool_need_hint==none && duration_hint==short → reply remains eligible (no override needed)
 

@@ -703,4 +703,69 @@ describe("policy resolver WorkContract integration", () => {
     expect(entry?.latestExecutionReceipt?.dispatchExecuted).toBe(false);
     expect(entry?.latestExecutionReceipt?.delegated).toBe(false);
   });
+
+  it("validator overrides judge reply to delegate for OpenClaw release lookup prompt", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "请查一下 OpenClaw 4.21 最近一次发布说明",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+    });
+  });
+
+  it("simple chat prompt stays reply when judge returns reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.90),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "在吗",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("execution followup with coverage stays reply despite lookup verb", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "查一下刚才那个任务的状态",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+          execution_layer: {
+            supports_provenance_reply: true,
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
 });
