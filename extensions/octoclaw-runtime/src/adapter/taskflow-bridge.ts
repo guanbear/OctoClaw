@@ -251,16 +251,68 @@ async function loadCreatePluginRuntime(openclawBin?: string): Promise<CreatePlug
   return createPluginRuntime as CreatePluginRuntime;
 }
 
+interface HashedBundleSpec {
+  filePrefixes: string[];
+  markers: string[];
+}
+
+const HASHED_BUNDLE_SPECS: Record<string, HashedBundleSpec> = {
+  "tasks/task-executor.js": {
+    filePrefixes: ["task-executor-"],
+    markers: ["createQueuedTaskRun", "createRunningTaskRun", "startTaskRunByRunId"],
+  },
+  "tasks/task-registry.js": {
+    filePrefixes: ["task-registry-"],
+    markers: ["getTaskById", "markTaskTerminalById"],
+  },
+};
+
+function findHashedDistModule(packageRoot: string, relativePath: string): string | null {
+  const spec = HASHED_BUNDLE_SPECS[relativePath];
+  if (!spec) return null;
+
+  const distDir = path.join(packageRoot, "dist");
+  if (!fs.existsSync(distDir)) return null;
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(distDir).filter((entry) =>
+      entry.endsWith(".js") && spec.filePrefixes.some((prefix) => entry.startsWith(prefix)),
+    );
+  } catch {
+    return null;
+  }
+
+  for (const entry of entries) {
+    const candidate = path.join(distDir, entry);
+    try {
+      const text = fs.readFileSync(candidate, "utf8");
+      if (spec.markers.every((marker) => text.includes(marker))) return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 export async function loadOpenClawDistModule(
   relativePath: string,
   openclawBin?: string,
 ): Promise<Record<string, unknown>> {
   const packageRoot = resolvePackageRoot(openclawBin);
   const modulePath = path.join(packageRoot, "dist", relativePath);
-  if (!fs.existsSync(modulePath)) {
-    throw new Error(`Missing OpenClaw dist module: ${modulePath}`);
+
+  if (fs.existsSync(modulePath)) {
+    return await import(pathToFileURL(modulePath).href) as Record<string, unknown>;
   }
-  return await import(pathToFileURL(modulePath).href) as Record<string, unknown>;
+
+  const hashedPath = findHashedDistModule(packageRoot, relativePath);
+  if (hashedPath) {
+    return await import(pathToFileURL(hashedPath).href) as Record<string, unknown>;
+  }
+
+  throw new Error(`Missing OpenClaw dist module: ${relativePath} (tried exact path and hashed bundle scan under ${path.join(packageRoot, "dist")})`);
 }
 
 function requireBoundSession(runtime: PluginRuntime, sessionKey: string): PluginRuntimeTaskFlowBoundSession {

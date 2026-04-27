@@ -1,6 +1,19 @@
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDetachedTaskLifecycleRuntime, type DetachedRunningTaskCreateParams, type DetachedTaskCancelParams, type DetachedTaskCompleteParams, type DetachedTaskCreateParams, type DetachedTaskDeliveryStatusParams, type DetachedTaskFailParams, type DetachedTaskProgressParams, type DetachedTaskRecord, type DetachedTaskRegistryCore, type DetachedTaskStartParams } from "./detached-task-runtime.js";
+import { resolveExport, requireFunctionWithAliases, TASK_EXECUTOR_ALIASES, TASK_REGISTRY_ALIASES } from "./detached-task-runtime-host.js";
+import { loadOpenClawDistModule } from "./taskflow-bridge.js";
 import type { BoundTaskFlowPort, TaskFlowPort } from "../ports/taskflow-port.js";
+
+const fs = fsSync as unknown as {
+  chmodSync(pathname: string, mode: number): void;
+  mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
+  mkdtempSync(pathname: string): string;
+  writeFileSync(pathname: string, data: string): void;
+};
+const osModule = os as unknown as { tmpdir(): string };
 
 function createTaskFlowPortStub(overrides: Partial<BoundTaskFlowPort> = {}): TaskFlowPort {
   const bound: BoundTaskFlowPort = {
@@ -209,5 +222,105 @@ describe("detached task lifecycle runtime", () => {
         status: "running",
       },
     })).resolves.toEqual({ recovered: true });
+  });
+});
+
+describe("hashed dist export alias resolution", () => {
+  it("loads hashed task executor dist bundle when exact legacy path is absent", async () => {
+    const root = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-openclaw-dist-"));
+    const binDir = path.join(root, "bin");
+    const distDir = path.join(root, "dist");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw", version: "test" }));
+    const openclawBin = path.join(binDir, "openclaw");
+    fs.writeFileSync(openclawBin, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(openclawBin, 0o755);
+    fs.mkdirSync(path.join(distDir, "tasks"), { recursive: true });
+    fs.writeFileSync(
+      path.join(distDir, "task-executor-TestHash.js"),
+      [
+        "function createQueuedTaskRun() { return 'queued'; }",
+        "function createRunningTaskRun() { return 'running'; }",
+        "function startTaskRunByRunId() { return 'started'; }",
+        "export { createQueuedTaskRun as a, createRunningTaskRun as o, startTaskRunByRunId as f };",
+      ].join("\n"),
+    );
+
+    const mod = await loadOpenClawDistModule("tasks/task-executor.js", openclawBin);
+
+    expect(typeof mod.a).toBe("function");
+    expect((mod.a as () => string)()).toBe("queued");
+  });
+
+  it("resolves canonical export name when present", () => {
+    const mod = { createQueuedTaskRun: () => "canonical" };
+    const fn = resolveExport(mod, "createQueuedTaskRun", TASK_EXECUTOR_ALIASES.createQueuedTaskRun);
+    expect(typeof fn).toBe("function");
+    expect((fn as () => string)()).toBe("canonical");
+  });
+
+  it("resolves aliased export when canonical name is absent", () => {
+    const mod = { a: () => "aliased" };
+    const fn = resolveExport(mod, "createQueuedTaskRun", TASK_EXECUTOR_ALIASES.createQueuedTaskRun);
+    expect(typeof fn).toBe("function");
+    expect((fn as () => string)()).toBe("aliased");
+  });
+
+  it("prefers canonical name over alias when both exist", () => {
+    const mod = { createQueuedTaskRun: () => "canonical", a: () => "aliased" };
+    const fn = resolveExport(mod, "createQueuedTaskRun", TASK_EXECUTOR_ALIASES.createQueuedTaskRun);
+    expect((fn as () => string)()).toBe("canonical");
+  });
+
+  it("returns undefined when neither canonical nor alias exists", () => {
+    const mod = { irrelevant: () => "nope" };
+    const fn = resolveExport(mod, "createQueuedTaskRun", TASK_EXECUTOR_ALIASES.createQueuedTaskRun);
+    expect(fn).toBeUndefined();
+  });
+
+  it("requireFunctionWithAliases throws with tried names when missing", () => {
+    const mod = { irrelevant: true };
+    expect(() => requireFunctionWithAliases(mod, "createQueuedTaskRun", TASK_EXECUTOR_ALIASES.createQueuedTaskRun)).toThrow(
+      "tried: createQueuedTaskRun, a",
+    );
+  });
+
+  it("requireFunctionWithAliases returns function when canonical exists", () => {
+    const fn = () => "ok";
+    const mod = { startTaskRunByRunId: fn };
+    expect(requireFunctionWithAliases(mod, "startTaskRunByRunId", TASK_EXECUTOR_ALIASES.startTaskRunByRunId)).toBe(fn);
+  });
+
+  it("requireFunctionWithAliases returns function when only alias exists", () => {
+    const fn = () => "ok";
+    const mod = { f: fn };
+    expect(requireFunctionWithAliases(mod, "startTaskRunByRunId", TASK_EXECUTOR_ALIASES.startTaskRunByRunId)).toBe(fn);
+  });
+
+  it("resolves all task executor aliases from minified module", () => {
+    const mod = {
+      a: () => {},
+      o: () => {},
+      f: () => {},
+      l: () => {},
+      i: () => {},
+      s: () => {},
+      d: () => {},
+    };
+    for (const [canonical, aliases] of Object.entries(TASK_EXECUTOR_ALIASES)) {
+      expect(typeof resolveExport(mod, canonical, aliases)).toBe("function");
+    }
+  });
+
+  it("resolves all task registry aliases from minified module", () => {
+    const mod = {
+      o: () => {},
+      _: () => {},
+      y: () => {},
+    };
+    for (const [canonical, aliases] of Object.entries(TASK_REGISTRY_ALIASES)) {
+      expect(typeof resolveExport(mod, canonical, aliases)).toBe("function");
+    }
   });
 });
