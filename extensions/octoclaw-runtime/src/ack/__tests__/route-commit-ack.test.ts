@@ -386,6 +386,53 @@ describe("route commit ACK", () => {
     replaySpy.mockRestore();
   });
 
+  it("skips generic reply ACK for status surface replies", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+    const replaySpy = vi.spyOn(
+      await import("../../replay/replay-logger.js"),
+      "recordPolicyReplay",
+    );
+
+    const result = await sendRouteCommitAck({
+      sessionKey: "slack:channel:C1:thread:1700000000.000100",
+      stateKey: "state-1",
+      decision: decision({
+        route_decision: { route: "reply", route_source: "rule", task_class: "main_direct" },
+        state_grounding: { required: true, source: "control_plane_status" },
+        tool_policy: { allowed_control_tools: ["octoclaw_status", "octoclaw_task_action"] },
+      }),
+      state: {},
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result).toMatchObject({
+      sent: false,
+      skipped: true,
+      reason: "status_surface_reply_no_route_ack",
+      ack_target_resolution_state: "suppressed_status_surface",
+      ack_delivery_state: "skipped",
+    });
+    expect(runCommandSpy).not.toHaveBeenCalled();
+    expect(replaySpy).toHaveBeenCalledWith(
+      "route_commit_ack",
+      expect.objectContaining({
+        route: "reply",
+        reason: "status_surface_reply_no_route_ack",
+        ackSent: false,
+      }),
+      undefined,
+    );
+
+    runCommandSpy.mockRestore();
+    replaySpy.mockRestore();
+  });
+
   it("sends ACK for Slack channel session key without thread when reply anchor is provided", async () => {
     const envModule = await import("../../resolve/env.js");
     const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({

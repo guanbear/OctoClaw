@@ -396,6 +396,20 @@ export async function sendRouteCommitAck(params: {
   const hasCanonicalTarget = Boolean(targetResolution.target);
 
   if (packet.route === "reply") {
+    const stateGrounding = readRecord(params.decision.state_grounding);
+    const toolPolicy = readRecord(params.decision.tool_policy);
+    const allowedControlTools = Array.isArray(toolPolicy.allowed_control_tools) ? toolPolicy.allowed_control_tools.map(asString) : [];
+    const statusSurfaceReply = asString(stateGrounding.source) === "control_plane_status"
+      || allowedControlTools.includes("octoclaw_status");
+    if (statusSurfaceReply) {
+      await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
+        ack_target_resolution_state: "suppressed_status_surface",
+        ack_delivery_state: "skipped",
+        reason: "status_surface_reply_no_route_ack",
+      });
+      return { sent: false, skipped: true, reason: "status_surface_reply_no_route_ack", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_status_surface", ack_delivery_state: "skipped" };
+    }
+
     const replyAlreadyVisible = asBoolean(params.state.finalResponseStreaming)
       || asBoolean(params.state.formalReplyVisible)
       || asBoolean(params.state.delivered)

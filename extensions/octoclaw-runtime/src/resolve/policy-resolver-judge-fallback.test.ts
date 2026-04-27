@@ -798,6 +798,45 @@ describe("policy resolver WorkContract integration", () => {
     expect((decision.request as { task: string }).task).toBe("你好");
   });
 
+  it("Slack thread history wrapper is unwrapped before policy resolution", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.90),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      `[Thread history - for context]
+[Slack guanbear] 八爪鱼状态
+[Slack OpenClaw Macmini] 已判定为委派任务，正在准备派发。
+
+System: [2026-04-27 23:25 GMT+8] Slack DM from guanbear: 你都已经查过了 并且给过架构了 你忘了吗
+
+Conversation info (untrusted metadata):
+\`\`\`json
+{"reply_to_id":"1777303251.997259"}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{"name":"guanbear"}
+\`\`\`
+
+你都已经查过了 并且给过架构了 你忘了吗`,
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "judge",
+      final_judge_source: "local",
+    });
+    expect((decision.request as { task: string }).task).toBe("你都已经查过了 并且给过架构了 你忘了吗");
+  });
+
   it("simple chat prompt stays reply when judge returns reply", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("reply", 0.90),

@@ -7,6 +7,7 @@ import {
   resolveStatelessPolicyDecision,
 } from "../resolve/policy-resolver.js";
 import {
+  envOverrides,
   resolveReplayLogPath,
   resolveTaskStatePath,
   stableId,
@@ -113,15 +114,21 @@ function isSyntheticTestTaskState(record: RuntimeTaskStateRecord): boolean {
   const sessionKey = asString(record.session_key);
   const summary = asString(record.summary);
   return id === "task-honesty"
+    || id === "task-no-spawn"
+    || id === "task-spawned"
     || flowId === "flow-honesty"
+    || flowId === "flow-no-spawn"
+    || flowId === "flow-spawned"
     || sessionKey.startsWith("session-dispatch-honesty")
+    || sessionKey === "session-dispatch-spawned-test"
+    || sessionKey === "session-work-contract-prior-continuity"
     || sessionKey === "session-contract-wins"
     || summary.includes("Dispatch from sealed WorkContract");
 }
 
 async function upsertTaskStateCache(record: RuntimeTaskStateRecord): Promise<void> {
   try {
-    if (isSyntheticTestTaskState(record)) return;
+    if (!envOverrides.workspaceRoot && isSyntheticTestTaskState(record)) return;
     const taskPath = resolveTaskStatePath();
     fsSyncLike.mkdirSync(path.dirname(taskPath), { recursive: true });
     let existing: { tasks?: unknown[] } = { tasks: [] };
@@ -482,24 +489,25 @@ function dedupeTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskSta
   return deduped;
 }
 
-async function readActiveRuntimeTaskState(): Promise<RuntimeTaskStateRecord[]> {
+async function readActiveRuntimeTaskState(options: { includeSynthetic?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
   try {
     const fs = await import("node:fs");
     const content = fs.default.readFileSync(resolveTaskStatePath(), "utf-8");
     const parsed = JSON.parse(content) as { tasks?: unknown };
     return Array.isArray(parsed.tasks)
-      ? (parsed.tasks.filter(isRecord) as RuntimeTaskStateRecord[]).filter((task) => !isSyntheticTestTaskState(task))
+      ? (parsed.tasks.filter(isRecord) as RuntimeTaskStateRecord[])
+        .filter((task) => options.includeSynthetic === true || !isSyntheticTestTaskState(task))
       : [];
   } catch {
     return [];
   }
 }
 
-async function readRuntimeTaskState(options: { includeArchive?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
-  const activeTasks = await readActiveRuntimeTaskState();
+async function readRuntimeTaskState(options: { includeArchive?: boolean; includeSynthetic?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
+  const activeTasks = await readActiveRuntimeTaskState({ includeSynthetic: options.includeSynthetic });
   if (!options.includeArchive) return activeTasks;
   const archivedTasks = (readArchivedTaskState().filter(isRecord) as RuntimeTaskStateRecord[])
-    .filter((task) => !isSyntheticTestTaskState(task));
+    .filter((task) => options.includeSynthetic === true || !isSyntheticTestTaskState(task));
   return dedupeTaskStateRecords([...activeTasks, ...archivedTasks]);
 }
 
@@ -880,7 +888,10 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
   const { action, taskId } = parseTaskAction(rawText);
   const normalizedAction = action || "details";
   pruneRuntimeTaskStateCache();
-  const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: Boolean(taskId) }));
+  const tasks = sortTaskStateRecords(await readRuntimeTaskState({
+    includeArchive: Boolean(taskId),
+    includeSynthetic: Boolean(taskId) && Boolean(envOverrides.workspaceRoot),
+  }));
   let record = (taskId ? tasks.find((entry) => asString(entry.id) === taskId) : tasks[0]) || null;
   let liveRead: NullRecord = null;
   let liveSessionKey = "";

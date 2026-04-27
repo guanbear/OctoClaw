@@ -195,15 +195,35 @@ describe("octoclaw_dispatch honesty", () => {
     const stateDir = path.join(dir, "tmp", "octopus");
     fsSync.mkdirSync(stateDir, { recursive: true });
     fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
-      tasks: [{
-        id: "task-honesty",
-        flow_id: "flow-honesty",
-        session_key: "session-dispatch-honesty-leak",
-        status: "running",
-        route: "delegate",
-        summary: "Delegated task materialized natively as task-honesty",
-        updated_at: "2026-04-25T00:00:00.000Z",
-      }],
+      tasks: [
+        {
+          id: "task-honesty",
+          flow_id: "flow-honesty",
+          session_key: "session-dispatch-honesty-leak",
+          status: "running",
+          route: "delegate",
+          summary: "Delegated task materialized natively as task-honesty",
+          updated_at: "2026-04-25T00:00:00.000Z",
+        },
+        {
+          id: "task-no-spawn",
+          flow_id: "flow-no-spawn",
+          session_key: "session-work-contract-prior-continuity",
+          status: "queued",
+          route: "delegate",
+          summary: "TaskFlow materialized; child session spawn not confirmed",
+          updated_at: "2026-04-25T00:00:01.000Z",
+        },
+        {
+          id: "task-spawned",
+          flow_id: "flow-spawned",
+          session_key: "session-dispatch-spawned-test",
+          status: "running",
+          route: "delegate",
+          summary: "Delegated task materialized natively as task-spawned",
+          updated_at: "2026-04-25T00:00:02.000Z",
+        },
+      ],
     }), "utf-8");
 
     const response = await statusTool().execute({ format: "table" }, {});
@@ -211,6 +231,8 @@ describe("octoclaw_dispatch honesty", () => {
 
     expect(output).not.toContain("task-honesty");
     expect(output).not.toContain("flow-honesty");
+    expect(output).not.toContain("task-no-spawn");
+    expect(output).not.toContain("task-spawned");
   });
 
   it("does not project runtime truth stubs as completed tasks without execution evidence", async () => {

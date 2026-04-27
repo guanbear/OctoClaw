@@ -885,6 +885,47 @@ export function unwrapQueuedBusyPrompt(raw: Record<string, unknown> | string): s
   return messages.join("\n\n");
 }
 
+
+export function unwrapImRelayPrompt(raw: Record<string, unknown> | string): string {
+  const text = stringValue(typeof raw === "string" ? raw : raw.prompt ?? raw.raw ?? "");
+  if (!text) {
+    return "";
+  }
+  const hasRelayMetadata = /Conversation info \(untrusted metadata\):/u.test(text)
+    || /Sender \(untrusted metadata\):/u.test(text);
+  if (!hasRelayMetadata) {
+    return "";
+  }
+
+  const afterSender = text.replace(/^[\s\S]*?Sender \(untrusted metadata\):\s*```[\s\S]*?```\s*/u, "").trim();
+  if (afterSender && !/^System:/u.test(afterSender)) {
+    return afterSender;
+  }
+
+  const afterConversation = text.replace(/^[\s\S]*?Conversation info \(untrusted metadata\):\s*```[\s\S]*?```\s*/u, "").trim();
+  if (afterConversation && !/^System:/u.test(afterConversation)) {
+    return afterConversation;
+  }
+
+  const systemLines = text.split(/\r?\n/u).filter((line) => line.startsWith("System:"));
+  const lastSystemLine = systemLines[systemLines.length - 1] || "";
+  const systemMatch = lastSystemLine.match(/^System:\s*\[[^\]]+\]\s*[^:]+:\s*(.+)$/u);
+  return stringValue(systemMatch?.[1]);
+}
+
+export function normalizeInboundPrompt(raw: Record<string, unknown> | string): string {
+  const text = stringValue(typeof raw === "string" ? raw : raw.prompt ?? raw.raw ?? "");
+  if (!text) {
+    return "";
+  }
+  const relayPrompt = unwrapImRelayPrompt(text);
+  if (relayPrompt) {
+    return relayPrompt;
+  }
+  const queuedPrompt = unwrapQueuedBusyPrompt(text);
+  return queuedPrompt || text;
+}
+
 export function promptLookupCandidates(raw: Record<string, unknown> | string): string[] {
   const base = stringValue(typeof raw === "string" ? raw : raw.prompt ?? raw.raw ?? "");
   if (!base) {

@@ -59,6 +59,7 @@ import {
   buildPolicyMetadata,
   enrichConversationControlMetadata,
   isManagedAgentContext,
+  normalizeInboundPrompt,
   promptsEquivalent,
   resolvePolicyStateKey,
   unwrapQueuedBusyPrompt,
@@ -285,21 +286,6 @@ function extractMessageText(content: unknown): string {
   return "";
 }
 
-function unwrapImRelayPrompt(raw: string): string {
-  const text = asString(raw);
-  if (!text) return "";
-  const hasRelayMetadata = /Conversation info \(untrusted metadata\):/u.test(text)
-    || /Sender \(untrusted metadata\):/u.test(text);
-  if (!hasRelayMetadata) return "";
-  const afterSender = text.replace(/^.*?Sender \(untrusted metadata\):\s*```[\s\S]*?```\s*/u, "").trim();
-  if (afterSender && !/^System:/u.test(afterSender)) return afterSender;
-  const afterConversation = text.replace(/^.*?Conversation info \(untrusted metadata\):\s*```[\s\S]*?```\s*/u, "").trim();
-  if (afterConversation && !/^System:/u.test(afterConversation)) return afterConversation;
-  const firstLine = text.split(/\r?\n/u, 1)[0] || "";
-  const systemMatch = firstLine.match(/^System:\s*\[[^\]]+\]\s*[^:]+:\s*(.+)$/u);
-  return asString(systemMatch?.[1]);
-}
-
 function unwrapCodexHarnessPrompt(raw: string): string {
   const text = asString(raw);
   if (!text.startsWith("[codex-slack-e2e")) return "";
@@ -311,8 +297,8 @@ export function extractPromptText(event: ExtractPromptEvent): string {
   const prompt = asString(event.prompt ?? event.raw);
   const harnessPrompt = unwrapCodexHarnessPrompt(prompt);
   if (harnessPrompt) return harnessPrompt;
-  const relayPrompt = unwrapImRelayPrompt(prompt);
-  if (relayPrompt) return relayPrompt;
+  const normalizedPrompt = normalizeInboundPrompt(prompt);
+  if (normalizedPrompt && normalizedPrompt !== prompt) return normalizedPrompt;
   const unwrappedPrompt = unwrapQueuedBusyPrompt(prompt);
   if (unwrappedPrompt && unwrappedPrompt !== prompt) return unwrappedPrompt;
   if (prompt) return prompt;
@@ -323,8 +309,8 @@ export function extractPromptText(event: ExtractPromptEvent): string {
     const text = extractMessageText(message.content);
     const harnessText = unwrapCodexHarnessPrompt(text);
     if (harnessText) return harnessText;
-    const relayText = unwrapImRelayPrompt(text);
-    if (relayText) return relayText;
+    const normalizedText = normalizeInboundPrompt(text);
+    if (normalizedText && normalizedText !== text) return normalizedText;
     const unwrapped = unwrapQueuedBusyPrompt(text);
     if (unwrapped && unwrapped !== text) return unwrapped;
     if (text) return text;
@@ -950,8 +936,7 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
 
 function normalizePolicyPrompt(task: unknown): string {
   const rawPrompt = asString(task);
-  const unwrappedPrompt = unwrapQueuedBusyPrompt(rawPrompt);
-  return unwrappedPrompt || rawPrompt;
+  return normalizeInboundPrompt(rawPrompt) || rawPrompt;
 }
 
 export function buildDecision(task: unknown, optionsOrDecision: { metadata?: UnknownRecord } | UnknownRecord = {}, metadataArg?: UnknownRecord): PolicyDecision {
