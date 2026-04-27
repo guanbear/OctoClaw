@@ -79,6 +79,88 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("treats stderr ok:true JSON as delivered when stdout is empty", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async () => ({
+      code: 1,
+      stdout: "",
+      stderr: `info: dispatching message\n{"ok":true,"ts":"1700000000.000300","thread_ts":"1700000000.000100"}\ninfo: done`,
+    });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "ack",
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result).toEqual({
+      sent: true,
+      delivered: true,
+      messageId: "1700000000.000300",
+      threadTs: "1700000000.000100",
+    });
+  });
+
+  it("extracts ok:true from noisy stderr with surrounding log lines", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async () => ({
+      code: 2,
+      stdout: "some stdout noise",
+      stderr: `[debug] sending to slack...\n[warn] something minor\n{"ok":true,"message":{"ts":"1700000000.000400"},"ts":"1700000000.000400"}\n[debug] finished`,
+    });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "ack",
+    });
+
+    expect(result).toEqual({
+      sent: true,
+      delivered: true,
+      messageId: "1700000000.000400",
+    });
+  });
+
+  it("returns sent:false when no ok:true evidence and exit code nonzero", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async () => ({
+      code: 1,
+      stdout: "[info] attempted send",
+      stderr: `error: connection timeout\n{"ok":false,"error":"channel_not_found"}`,
+    });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "ack",
+    });
+
+    expect(result).toEqual({
+      sent: false,
+      delivered: false,
+      error: expect.stringContaining("channel_not_found"),
+    });
+  });
+
+  it("returns sent:false when stdout has ok:false with error and exit code 0", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async () => ({
+      code: 0,
+      stdout: JSON.stringify({ ok: false, error: "channel_not_found" }),
+      stderr: "",
+    });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "ack",
+    });
+
+    expect(result).toEqual({
+      sent: false,
+      delivered: false,
+      error: "channel_not_found",
+    });
+  });
+
   it("shouldUseThread respects replyToMode config", () => {
     expect(new SlackAdapter({ replyToMode: "off" }).shouldUseThread()).toBe(false);
     expect(new SlackAdapter({ replyToMode: "first" }).shouldUseThread()).toBe(true);

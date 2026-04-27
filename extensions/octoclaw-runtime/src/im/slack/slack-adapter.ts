@@ -70,11 +70,46 @@ function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function asSlackCommandResult(value: unknown): SlackCommandResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
+function extractPayload(text: string): SlackCommandResult | null {
+  if (!text) return null;
+
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const openBrace = text.indexOf("{", searchFrom);
+    if (openBrace < 0) break;
+
+    let braceDepth = 0;
+    let closeBrace = openBrace;
+    let insideString = false;
+    let escaping = false;
+    for (let position = openBrace; position < text.length; position++) {
+      const character = text[position];
+      if (escaping) { escaping = false; continue; }
+      if (character === "\\") { escaping = true; continue; }
+      if (character === '"') { insideString = !insideString; continue; }
+      if (insideString) continue;
+      if (character === "{") braceDepth++;
+      if (character === "}") braceDepth--;
+      if (braceDepth === 0) { closeBrace = position; break; }
+    }
+    if (braceDepth !== 0) { searchFrom = openBrace + 1; continue; }
+
+    const candidate = text.slice(openBrace, closeBrace + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && ("ok" in parsed)) {
+        return {
+          ok: parsed.ok,
+          message: parsed.message ?? undefined,
+          ts: parsed.ts ?? undefined,
+          thread_ts: parsed.thread_ts ?? undefined,
+          error: parsed.error ?? undefined,
+        };
+      }
+    } catch {}
+    searchFrom = closeBrace + 1;
   }
-  return value as SlackCommandResult;
+  return null;
 }
 
 function parseSlackSessionKey(sessionKey: string): { kind: string; target: string; threadTs: string } {
@@ -241,45 +276,37 @@ export class SlackAdapter {
         timeoutMs,
       });
 
-      if (result.stdout) {
-        try {
-          const parsedResult = asSlackCommandResult(JSON.parse(result.stdout));
-          if (parsedResult.ok === true) {
-            const messageId = stringValue(parsedResult.message?.ts || parsedResult.ts);
-            const threadTs = stringValue(parsedResult.message?.thread_ts || parsedResult.thread_ts || target.threadTs);
-            return {
-              sent: true,
-              delivered: true,
-              ...(messageId ? { messageId } : {}),
-              ...(threadTs ? { threadTs } : {}),
-            };
-          }
+      const stdoutPayload = extractPayload(result.stdout || "");
+      const stderrPayload = extractPayload(result.stderr || "");
+      const successPayload = (stdoutPayload?.ok === true) ? stdoutPayload
+        : (stderrPayload?.ok === true) ? stderrPayload
+        : null;
 
-          if (result.code === 0) {
-            return {
-              sent: false,
-              delivered: false,
-              error: stringValue(parsedResult.error) || "send_failed",
-            };
-          }
-        } catch {
-          // stdout is not valid JSON but exit code 0 — treat as success
-          // to avoid double delivery on retry (stderr may contain debug logs)
-          if (result.code === 0) {
-            return {
-              sent: true,
-              delivered: true,
-            };
-          }
-        }
-      }
-
-      if (result.code === 0) {
-        // exit code 0 but no stdout — treat as likely success to avoid double delivery
+      if (successPayload) {
+        const messageId = stringValue(successPayload.message?.ts || successPayload.ts);
+        const threadTs = stringValue(successPayload.message?.thread_ts || successPayload.thread_ts || target.threadTs);
         return {
           sent: true,
           delivered: true,
+          ...(messageId ? { messageId } : {}),
+          ...(threadTs ? { threadTs } : {}),
         };
+      }
+
+      const explicitFailure = (stdoutPayload?.ok === false) ? stdoutPayload
+        : (stderrPayload?.ok === false) ? stderrPayload
+        : null;
+
+      if (explicitFailure) {
+        return {
+          sent: false,
+          delivered: false,
+          error: stringValue(explicitFailure.error) || "send_failed",
+        };
+      }
+
+      if (result.code === 0) {
+        return { sent: true, delivered: true };
       }
 
       return {
