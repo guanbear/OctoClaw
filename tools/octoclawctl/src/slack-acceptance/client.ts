@@ -52,13 +52,13 @@ function normalizeMessage(message: SlackApiMessage): SlackMessageRecord {
 }
 
 export class SlackWebApiAcceptanceClient implements SlackAcceptanceClient {
-  constructor(private readonly token: string) {}
+  constructor(private readonly token: string, private readonly options: { postToken?: string } = {}) {}
 
   async postMessage(params: { channel: string; text: string; threadTs?: string }): Promise<SlackPostMessageResult> {
     const response = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.token}`,
+        authorization: `Bearer ${this.options.postToken || this.token}`,
         "content-type": "application/json; charset=utf-8",
       },
       body: JSON.stringify({ channel: params.channel, text: params.text, thread_ts: params.threadTs }),

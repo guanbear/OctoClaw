@@ -1354,7 +1354,7 @@ async function runSlackAcceptanceCliCommand(parsed: ParsedCliArgs, env: Record<s
   const format = parsed.slackAcceptanceFormat;
 
   const resolvedConfig = await loadSlackAcceptanceConfig(configPath, env);
-  const client = new SlackWebApiAcceptanceClient(resolvedConfig.botToken);
+  const client = new SlackWebApiAcceptanceClient(resolvedConfig.botToken, { postToken: resolvedConfig.userToken });
   const report = await runSlackAcceptanceHarness(client, resolvedConfig);
 
   await ensureDir(outputDirPath);
@@ -1447,7 +1447,7 @@ async function runNightlyEvalCommand(parsed: ParsedCliArgs, env: Record<string, 
     },
     slackRunner: evalConfig.slackAcceptanceConfig ? async (configPath: string, runnerEnv: Record<string, string | undefined>) => {
       const resolved = await loadSlackAcceptanceConfig(configPath, runnerEnv);
-      const client = new SlackWebApiAcceptanceClient(resolved.botToken);
+      const client = new SlackWebApiAcceptanceClient(resolved.botToken, { postToken: resolved.userToken });
       return runSlackAcceptanceHarness(client, resolved);
     } : undefined,
     calibrationRunner: (evalConfig.baseline && evalConfig.candidate) ? async (baselinePath: string, candidatePath: string) => {

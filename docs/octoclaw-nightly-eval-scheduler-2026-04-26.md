@@ -143,7 +143,8 @@ octoclawctl nightly-eval deliver-slack \
 Delivery behavior:
 
 - Reads the newest timestamped `*-nightly-eval.json` from the report directory.
-- Uses `botTokenEnv` from the Slack acceptance config; inline tokens are not accepted.
+- Uses `botTokenEnv` from the Slack acceptance config for report delivery; inline tokens are not accepted.
+- Keeps `userTokenEnv` acceptance-prompt tokens out of report delivery so scheduled reports remain bot-authored.
 - Sends only a compact sanitized summary: overall gate, step statuses, highlights, and local report path.
 - Does not send raw transcripts, worker chain-of-thought, secrets, or execution logs.
 - Does not mutate live policy, promote recommendations, or trigger self-tuning.

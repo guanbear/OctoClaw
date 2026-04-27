@@ -89,6 +89,21 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
     expect(() => parseSlackAcceptanceConfig(validConfig(), {})).toThrow("token env is not set");
   });
 
+  it("accepts optional userTokenEnv for user-authored acceptance prompts", () => {
+    const config = parseSlackAcceptanceConfig(validConfig({
+      userTokenEnv: "SLACK_USER_TOKEN",
+    }), validEnv({ SLACK_USER_TOKEN: "xoxp-test-token-12345" }));
+    expect(config.botTokenEnv).toBe("SLACK_BOT_TOKEN");
+    expect(config.userTokenEnv).toBe("SLACK_USER_TOKEN");
+    expect(config.userToken).toBe("xoxp-test-token-12345");
+  });
+
+  it("requires configured userTokenEnv to resolve from env", () => {
+    expect(() => parseSlackAcceptanceConfig(validConfig({
+      userTokenEnv: "SLACK_USER_TOKEN",
+    }), validEnv())).toThrow("user token env is not set");
+  });
+
   it("requires sessionKey", () => {
     expect(() => parseSlackAcceptanceConfig({ botTokenEnv: "SLACK_BOT_TOKEN", target: { channel: "C" } }, validEnv())).toThrow("sessionKey");
   });
@@ -530,6 +545,29 @@ describe("SlackWebApiAcceptanceClient", () => {
     const client = new SlackWebApiAcceptanceClient("xoxb-test");
     expect(typeof client.postMessage).toBe("function");
     expect(typeof client.fetchReplies).toBe("function");
+  });
+
+  it("uses the optional post token only for posting", async () => {
+    const originalFetch = globalThis.fetch;
+    const authorizations: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      authorizations.push(headers?.authorization || "");
+      const url = String(input);
+      if (url.includes("chat.postMessage")) {
+        return new Response(JSON.stringify({ ok: true, channel: "C", ts: "1.000001" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, messages: [{ ts: "1.000002", text: "ok" }] }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const client = new SlackWebApiAcceptanceClient("xoxb-read", { postToken: "xoxp-post" });
+      await client.postMessage({ channel: "C", text: "hello" });
+      await client.fetchReplies({ channel: "C", threadTs: "1.000001" });
+      expect(authorizations).toEqual(["Bearer xoxp-post", "Bearer xoxb-read"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

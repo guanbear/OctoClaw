@@ -29,6 +29,7 @@ The command fails closed before sending anything when required config is missing
 {
   "schemaVersion": "octoclaw.slack_acceptance.config/v1",
   "botTokenEnv": "OCTOCLAW_ACCEPTANCE_SLACK_BOT_TOKEN",
+  "userTokenEnv": "OCTOCLAW_ACCEPTANCE_SLACK_USER_TOKEN",
   "sessionKey": "slack:default:channel:C_ACCEPTANCE:thread:1234567890.000001",
   "target": {
     "channel": "C_ACCEPTANCE",
@@ -46,7 +47,7 @@ The command fails closed before sending anything when required config is missing
 }
 ```
 
-Do not put Slack tokens in the config file. Use `botTokenEnv` only.
+Do not put Slack tokens in the config file. Use `botTokenEnv` for the bot token and optional `userTokenEnv` for user-authored acceptance prompts. When `userTokenEnv` is configured, the harness posts prompts with that token but still uses `botTokenEnv` for bot-scoped reads and nightly report delivery. If Slack still marks those messages with `bot_id`, keep the target channel test-only and configure OpenClaw with a channel-scoped `allowBots=true`, `requireMention=true`, and a narrow `users` allowlist for the test identity.
 
 ## Default Cases
 

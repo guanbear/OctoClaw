@@ -118,6 +118,11 @@ export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, str
   if (!botToken) {
     throw new Error(`Slack acceptance token env is not set: ${botTokenEnv}`);
   }
+  const userTokenEnv = asString(config.userTokenEnv);
+  const userToken = userTokenEnv ? asString(env[userTokenEnv]) : undefined;
+  if (userTokenEnv && !userToken) {
+    throw new Error(`Slack acceptance user token env is not set: ${userTokenEnv}`);
+  }
   const sessionKey = asString(config.sessionKey);
   if (!sessionKey) {
     throw new Error("Slack acceptance requires sessionKey");
@@ -141,6 +146,8 @@ export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, str
   return {
     botToken,
     botTokenEnv,
+    userToken,
+    userTokenEnv: userTokenEnv || undefined,
     sessionKey,
     target: {
       channel,

@@ -42,6 +42,7 @@ export interface SlackAcceptanceCaseConfig {
 export interface SlackAcceptanceConfig {
   schemaVersion?: string;
   botTokenEnv?: string;
+  userTokenEnv?: string;
   sessionKey?: string;
   target?: SlackAcceptanceTarget;
   outputLabel?: string;
@@ -58,6 +59,8 @@ export interface SlackAcceptanceConfig {
 export interface SlackAcceptanceResolvedConfig {
   botToken: string;
   botTokenEnv: string;
+  userToken?: string;
+  userTokenEnv?: string;
   sessionKey: string;
   target: Required<Pick<SlackAcceptanceTarget, "channel">> & SlackAcceptanceTarget;
   outputLabel: string;
