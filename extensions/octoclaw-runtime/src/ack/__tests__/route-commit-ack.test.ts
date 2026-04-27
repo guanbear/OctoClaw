@@ -385,4 +385,61 @@ describe("route commit ACK", () => {
     runCommandSpy.mockRestore();
     replaySpy.mockRestore();
   });
+
+  it("sends ACK for Slack channel session key without thread when reply anchor is provided", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+
+    const result = await sendRouteCommitAck({
+      sessionKey: "slack:channel:C1",
+      stateKey: "state-1",
+      decision: decision(),
+      state: {},
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.skipped).toBe(false);
+    expect(result.ack_target_resolution_state).toBe("resolved");
+    expect(runCommandSpy).toHaveBeenCalledWith(
+      "openclaw",
+      expect.arrayContaining(["--reply-to", "1700000000.000100"]),
+      expect.any(Object),
+    );
+
+    runCommandSpy.mockRestore();
+  });
+
+  it("resolves agent-prefixed Slack channel session key with state message id", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+
+    const result = await sendRouteCommitAck({
+      sessionKey: "agent:main:slack:channel:C1",
+      stateKey: "state-1",
+      decision: decision(),
+      state: { message_id: "1700000000.000100" },
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.skipped).toBe(false);
+    expect(result.ack_target_resolution_state).toBe("resolved");
+    expect(runCommandSpy).toHaveBeenCalledWith(
+      "openclaw",
+      expect.arrayContaining(["--reply-to", "1700000000.000100"]),
+      expect.any(Object),
+    );
+
+    runCommandSpy.mockRestore();
+  });
 });

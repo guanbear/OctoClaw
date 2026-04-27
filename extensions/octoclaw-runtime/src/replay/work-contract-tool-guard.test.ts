@@ -44,6 +44,46 @@ describe("WorkContract tool guard projection", () => {
 
     expect(rule.block).toBe(true);
   });
+
+  it("allows dispatch when deterministic fallback changed route to delegate", () => {
+    const rule = workflowEnforcementRule(
+      {
+        work_contract: {
+          workContractId: "wc-tool-3",
+          route: "reply",
+          forbiddenTools: ["octoclaw_dispatch"],
+        },
+        route_decision: {
+          route: "delegate",
+          route_source: "fallback",
+          fallback_reason: "deterministic_hard_boundary:explicit_delegate",
+        },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch" },
+      },
+      "octoclaw_dispatch",
+      "octoclaw_route_hint",
+    );
+
+    expect(rule.block).toBe(false);
+  });
+
+  it("keeps blocking dispatch for reply route WorkContract projection", () => {
+    const rule = workflowEnforcementRule(
+      {
+        work_contract: {
+          workContractId: "wc-tool-4",
+          route: "reply",
+          forbiddenTools: ["octoclaw_dispatch"],
+        },
+        route_decision: { route: "reply", route_source: "rule" },
+        tool_policy: { allowed_control_tools: ["octoclaw_dispatch"] },
+      },
+      "octoclaw_dispatch",
+      "octoclaw_route_hint",
+    );
+
+    expect(rule.block).toBe(true);
+  });
 });
 
 

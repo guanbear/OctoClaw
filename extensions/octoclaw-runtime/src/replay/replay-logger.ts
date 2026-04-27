@@ -1356,17 +1356,18 @@ export function guardAssistantMessageForPolicyState(
   if (sanitized !== replyText) {
     return { mode: "replace", message: replaceAssistantMessageText(message, sanitized) };
   }
-  if (!state.delegated && !state.delegateTaskContext) {
+  const spawnExecuted = state.spawnExecuted === true || state.spawn_executed === true;
+  if (!(dispatchExecuted || spawnExecuted)) {
     const dispatchClaimPatterns = [
-      /(?:已经|已|刚)?(?:派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?agent|worker|任务|task)/iu,
-      /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?agent|worker)/iu,
+      /(?:已经|已|刚)?(?:派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?\s*agent|worker|任务|task)/iu,
+      /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?\s*agent|worker)/iu,
       /(?:已|已经)?(?:交给|分配给|指派给|派给).*(?:处理|执行|完成)/iu,
-      /sessions_spawn|route\s+(?:switched|changed)\s+to\s+delegate|路由已切换到\s*delegate/iu,
+      /sessions_spawn|session_spawn/iu,
+      /(?:route|路由).*(?:switched|切换|改为|切换到).*(?:delegate|delegat|委派|派发)/iu,
     ];
     for (const pattern of dispatchClaimPatterns) {
       if (pattern.test(replyText)) {
-        const fallback = delegationFailureReply(state);
-        return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
+        return { mode: "replace", message: replaceAssistantMessageText(message, "这次任务还没派发成功，等我拿到真实执行结果后回复。") };
       }
     }
   }
@@ -1476,12 +1477,15 @@ export function workflowEnforcementRule(
   routeHintTool: string,
 ): { block: boolean; delegateTool?: string; allowedTools: string[]; route?: string } {
   const route = String(asRecord(decision.route_decision).route ?? "").trim();
+  const routeDecision = asRecord(decision.route_decision);
   const toolPolicy = asRecord(decision.tool_policy);
   const workContract = asRecord(decision.work_contract);
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   const allowedTools = runnerWorkflowTools(decision, routeHintTool);
   const forbiddenTools = new Set(asStringArray(workContract.forbiddenTools ?? workContract.forbidden_tools));
-  if (forbiddenTools.has(toolName)) {
+  const isDeterministicFallbackToDelegate = route === "delegate"
+    && (String(routeDecision.route_source ?? "").trim() === "fallback" || String(routeDecision.fallback_reason ?? "").includes("explicit_delegate"));
+  if (forbiddenTools.has(toolName) && !isDeterministicFallbackToDelegate) {
     return { block: true, route, delegateTool, allowedTools: [...allowedTools] };
   }
   const workflowRequired = DELEGATED_ROUTE_NAMES.has(route);

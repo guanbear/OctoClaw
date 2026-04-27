@@ -14,6 +14,7 @@ import {
   sendRouteCommitAck,
 } from "../ack-route-commit.js";
 import {
+  guardAssistantMessageForPolicyState,
   isDelegatedRoute,
   routeHintRequired,
   shouldRetainPolicyStateOnAgentEnd,
@@ -299,5 +300,50 @@ describe("WP2 regression: delegate ack text honesty", () => {
 
     runCommandSpy.mockRestore();
     replaySpy.mockRestore();
+  });
+});
+
+describe("WP2 regression: false dispatch claim guard", () => {
+  function textOf(result: { message?: Record<string, unknown> }): string {
+    return String((result.message as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? "");
+  }
+
+  it("replaces false Chinese dispatched-subagent claim on reply route", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "已派发子agent，稍后回来。" }] },
+      { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+  });
+
+  it("replaces false sessions_spawn claim on reply route", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "我已经调用 sessions_spawn 派发任务。" }] },
+      { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+  });
+
+  it("replaces false route-switched-to-delegate claim on reply route", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "route switched to delegate and dispatch is starting." }] },
+      { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+  });
+
+  it("does not replace dispatched-subagent claim with actual dispatch evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "已派发子agent，稍后回来。" }] },
+      { decision: { route_decision: { route: "reply" } }, dispatchExecuted: true },
+    );
+
+    expect(guarded.mode).toBe("pass");
   });
 });

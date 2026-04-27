@@ -1709,7 +1709,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           || intentClass === "delegated_work"
           || asBoolean(conversationControl.require_fresh_lookup)
           || asBoolean(conversationControl.require_state_grounding);
+        const explicitDelegationRequest = /(?:请|帮我|给我|让我)?(?:委派|派|分派|指派).*(?:子?\s*agent|sub\s*agent|worker|子任务)/iu.test(prompt)
+          || /\b(?:delegate|dispatch|spawn)\b.*(?:sub.?agent|worker|task)/i.test(prompt);
         const explicitDelegateRequest = explicitDelegateRequestFromPrompt(prompt)
+          || explicitDelegationRequest
           || asBoolean(conversationControl.explicit_delegate_request)
           || asString(conversationControl.intent_class) === "delegated_work";
         const toolNeedHint = asString(metadata.tool_need_hint);
@@ -1751,7 +1754,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeSucceeded = true;
           deterministicFallbackApplied = true;
           judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate_request"][i] : null).filter(Boolean).join("+")}`;
+          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate"][i] : null).filter(Boolean).join("+")}`;
           judgeShadowLog.final_judge_route = "delegate";
         }
       }

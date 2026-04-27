@@ -173,7 +173,8 @@ async function sendRouteCommitAckDirect(
     };
   }
 
-  const origin = sessionKey.split(":")[0] || "";
+  const sessionParts = sessionKey.split(":");
+  const origin = sessionParts.length >= 3 && sessionParts[0] === "agent" ? sessionParts[2] : (sessionParts[0] || "");
   if (!origin) {
     return {
       attempted: false,
@@ -192,6 +193,8 @@ async function sendRouteCommitAckDirect(
   }
   if (resolved.threadId) {
     args.push("--thread-id", resolved.threadId);
+  } else if (replyToMessageId) {
+    args.push("--reply-to", replyToMessageId);
   }
 
   try {
@@ -359,8 +362,12 @@ export async function sendRouteCommitAck(params: {
   cwd?: string;
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
 }): Promise<RouteCommitAckResult> {
+  const slackMetadata = readRecord(params.state?.slackMetadata || params.state?.slack_metadata);
+  const slackThreadId = asString(slackMetadata.thread_ts || slackMetadata.thread_id || slackMetadata.reply_to_id);
+  const stateMessageId = asString(params.state?.message_id || params.state?.inboundMessageTs);
+  const effectiveReplyToMessageId = asString(params.replyToMessageId) || stateMessageId || slackThreadId;
   const hasMessageAnchor = Boolean(
-    asString(params.replyToMessageId) || asString(params.state.inboundMessageTs) || asString(params.state.message_id),
+    effectiveReplyToMessageId,
   );
 
   const packet = buildRouteCommitAckPacketInternal(
@@ -431,7 +438,7 @@ export async function sendRouteCommitAck(params: {
   const result = await sendRouteCommitAckDirect(
     params.sessionKey,
     projected.text,
-    params.replyToMessageId || asString(params.state.message_id) || asString(params.state.inboundMessageTs) || undefined,
+    effectiveReplyToMessageId || undefined,
     params.cwd,
   );
   recordDelivery(ackKey, {

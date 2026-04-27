@@ -903,7 +903,10 @@ export const plugin = {
       const toolPolicy = asRecord(decision.tool_policy);
       const workContractProjection = asRecord(decision.work_contract);
       const forbiddenContractTools = new Set(stringArray(workContractProjection.forbiddenTools || workContractProjection.forbidden_tools));
-      if (forbiddenContractTools.has(toolName)) {
+      const routeDecision = asRecord(decision.route_decision);
+      const isDeterministicFallbackToDelegate = stringValue(routeDecision.route) === "delegate"
+        && (stringValue(routeDecision.route_source) === "fallback" || stringValue(routeDecision.fallback_reason).includes("explicit_delegate"));
+      if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate) {
         await recordPolicyReplay(
           "tool_blocked_work_contract_forbidden",
           {

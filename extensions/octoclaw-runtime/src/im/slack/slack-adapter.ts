@@ -81,7 +81,9 @@ function parseSlackSessionKey(sessionKey: string): { kind: string; target: strin
   const parts = sessionKey.split(":").map((part) => part.trim());
   const slackIndex = parts.findIndex((part) => part.toLowerCase() === "slack");
   if (slackIndex < 0) return { kind: "", target: "", threadTs: "" };
-  const kindIndex = slackIndex + 2;
+  const kindIndex = ["dm", "direct", "user", "channel", "group", "room", "conversation", "space", "chat"].includes(stringValue(parts[slackIndex + 1]).toLowerCase())
+    ? slackIndex + 1
+    : slackIndex + 2;
   const kind = stringValue(parts[kindIndex]).toLowerCase();
   const target = stringValue(parts[kindIndex + 1]);
   const threadTs = stringValue(parts[kindIndex + 2]).toLowerCase() === "thread"

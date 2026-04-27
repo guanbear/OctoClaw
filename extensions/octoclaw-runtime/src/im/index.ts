@@ -26,7 +26,7 @@ function buildSlackAdapterConfig(): Partial<SlackAdapterConfig> {
 
 export function getAdapterForSession(sessionKey: string): SlackAdapter | null {
   const lower = sessionKey.toLowerCase();
-  if (lower.includes(":slack:")) {
+  if (lower.startsWith("slack:") || lower.includes(":slack:")) {
     if (!adapters.has("slack")) {
       adapters.set("slack", new SlackAdapter(buildSlackAdapterConfig()));
     }

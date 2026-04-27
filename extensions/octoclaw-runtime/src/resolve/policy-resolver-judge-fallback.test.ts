@@ -83,7 +83,7 @@ describe("policy resolver judge timeout fallback", () => {
     });
   });
 
-  it("routes explicit delegation request to delegate when judge times out", async () => {
+  it("routes Chinese explicit delegation request to delegate when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。", {
@@ -98,13 +98,67 @@ describe("policy resolver judge timeout fallback", () => {
       judge_timeout: true,
       final_judge_source: "timeout_fallback",
     });
-    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate_request");
+    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate");
+  });
+
+  it("routes English explicit delegation request to delegate when judge times out", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+    const decision = await resolveStatelessPolicyDecision("delegate this to a sub-agent", {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "fallback",
+      judge_timeout: true,
+      final_judge_source: "timeout_fallback",
+    });
+    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate");
+  });
+
+  it("routes compact Chinese subagent delegation request to delegate when judge times out", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+    const decision = await resolveStatelessPolicyDecision("帮我派一个子agent来调研", {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "fallback",
+      judge_timeout: true,
+      final_judge_source: "timeout_fallback",
+    });
+    expect(String(routeDecisionOf(decision).fallback_reason)).toContain("explicit_delegate");
   });
 
   it("keeps local judge timeout for simple chat on reply", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
     const decision = await resolveStatelessPolicyDecision("你好", {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "rule",
+      judge_timeout: true,
+      fallback_reason: null,
+      final_judge_source: "timeout",
+    });
+  });
+
+  it("keeps judge timeout for plain weather chat on reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+    const decision = await resolveStatelessPolicyDecision("今天天气怎么样", {
       metadata: {
         _judgeFastConfig: localJudgeConfig,
       },
