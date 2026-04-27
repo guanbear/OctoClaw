@@ -768,4 +768,89 @@ describe("policy resolver WorkContract integration", () => {
       route: "reply",
     });
   });
+
+  it("validator overrides judge delegate to reply for status panel prompt", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "显示任务状态面板，包含模型、耗时、结果位置",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("validator overrides judge delegate to reply for provenance query with execution coverage", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "刚才那任务判定是啥，证据在哪",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+          execution_layer: {
+            supports_provenance_reply: true,
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+  });
+
+  it("fresh lookup prompt still delegates despite statusProvenanceFromPrompt", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("reply", 0.85),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "请查一下 OpenClaw 4.21 最近一次发布说明",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+    });
+  });
+
+  it("timeout with status panel prompt forces reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
+      new DOMException("timeout", "AbortError"),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "显示任务状态面板，包含模型、耗时、结果位置",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {},
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "fallback",
+      judge_timeout: true,
+    });
+  });
 });

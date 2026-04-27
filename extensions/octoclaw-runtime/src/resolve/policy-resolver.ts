@@ -394,6 +394,20 @@ function freshLookupFromPrompt(prompt: string): boolean {
     || /release\s+(?:note|comparison|compare|changelog)/iu.test(text);
 }
 
+function statusProvenanceFromPrompt(prompt: string): boolean {
+  const text = asString(prompt);
+  if (!text) return false;
+  if (/(?:不要|别|无需|不需要|不用|no need|do not|don't).{0,20}(?:显示|展示|查看|看|告诉我|show|display|tell)/iu.test(text)) return false;
+  if (freshLookupFromPrompt(text)) return false;
+  const hasStatusPanel = /(?:显示|展示|查看|看看|打开|弹出|给出|列出|show|display|open|list|render).{0,12}(?:任务状态面板|状态面板|状态板|任务面板|status\s*panel|task\s*status)/iu.test(text);
+  if (hasStatusPanel) return true;
+  const hasStatusQuery = /(?:显示|展示|查看|看看|告诉我|看看|问一下|说一下|列出|show|display|tell|list).{0,20}(?:任务|刚才|之前的|上次的|那个|task).{0,12}(?:状态|进度|模型|耗时|花费|成本|结果位置|输出在哪|跑到哪了|完没|完成没|status|progress|model|cost|result)/iu.test(text);
+  if (hasStatusQuery) return true;
+  const hasProvenanceQuery = /(?:刚才|之前的|上次|那个|the|that).{0,12}(?:任务|判定|判决|路由|决策|为什么|为什么委派|证据|理由|route|decision|why|evidence|judgment|判定是啥|判定是)/iu.test(text);
+  if (hasProvenanceQuery) return true;
+  return /(?:判定|证据|路由决策|route\s*decision).{0,12}(?:在哪|是什么|是啥|告诉我|tell|show|what)/iu.test(text);
+}
+
 function intentClassFromPolicy(value: unknown): IntentClass {
   const intentClass = asString(value, "undetermined");
   return intentClass === "plain_chat"
@@ -1761,6 +1775,13 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeShadowLog = judgeShadowLog ?? {};
           judgeShadowLog.fallback_reason = "timeout_execution_followup_no_coverage→reply(no_verifiable_record)";
           judgeShadowLog.final_judge_route = "reply";
+        } else if (statusProvenanceFromPrompt(prompt)) {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          deterministicFallbackApplied = true;
+          judgeShadowLog = judgeShadowLog ?? {};
+          judgeShadowLog.fallback_reason = "timeout_status_provenance_prompt→reply";
+          judgeShadowLog.final_judge_route = "reply";
         } else if (hardBoundarySignals.some(Boolean)) {
           // Deterministic hard-boundary: high-risk task must not default to reply
           judgeRouteOverride = "delegate";
@@ -1864,6 +1885,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push("validator:fresh_lookup_prompt→delegate");
+        } else if (!executionOverrideApplied && statusProvenanceFromPrompt(prompt) && judgeRouteOverride === "delegate") {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          validatorOverrideReasons.push("validator:status_provenance_prompt→reply");
         }
         // tool_need_hint==none && duration_hint==short → reply remains eligible (no override needed)
 
