@@ -79,6 +79,54 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("treats OpenClaw nested payload ok:true as delivered", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async () => ({
+      code: 1,
+      stdout: JSON.stringify({
+        action: "send",
+        channel: "slack",
+        payload: { ok: true, result: { messageId: "1700000000.000500", channelId: "C123ABC" } },
+      }),
+      stderr: "",
+    });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "ack",
+    });
+
+    expect(result).toEqual({
+      sent: true,
+      delivered: true,
+      messageId: "1700000000.000500",
+    });
+  });
+
+  it("returns sent:false for OpenClaw nested payload ok:false", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async () => ({
+      code: 0,
+      stdout: JSON.stringify({
+        action: "send",
+        channel: "slack",
+        payload: { ok: false, error: "channel_not_found" },
+      }),
+      stderr: "",
+    });
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "ack",
+    });
+
+    expect(result).toEqual({
+      sent: false,
+      delivered: false,
+      error: "channel_not_found",
+    });
+  });
+
   it("treats stderr ok:true JSON as delivered when stdout is empty", async () => {
     const adapter = new SlackAdapter();
     mockRunCommand = async () => ({

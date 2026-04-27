@@ -70,6 +70,40 @@ function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function normalizePayload(value: unknown): SlackCommandResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if ("ok" in record) {
+    const message = record.message && typeof record.message === "object" && !Array.isArray(record.message)
+      ? record.message as { ts?: unknown; thread_ts?: unknown }
+      : undefined;
+    return {
+      ok: record.ok,
+      message,
+      ts: record.ts,
+      thread_ts: record.thread_ts,
+      error: record.error,
+    };
+  }
+  const payload = record.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const payloadRecord = payload as Record<string, unknown>;
+  if (!("ok" in payloadRecord)) return null;
+  const result = payloadRecord.result && typeof payloadRecord.result === "object" && !Array.isArray(payloadRecord.result)
+    ? payloadRecord.result as Record<string, unknown>
+    : {};
+  return {
+    ok: payloadRecord.ok,
+    message: {
+      ts: result.ts ?? result.messageId,
+      thread_ts: result.thread_ts ?? result.threadTs,
+    },
+    ts: result.ts ?? result.messageId,
+    thread_ts: result.thread_ts ?? result.threadTs,
+    error: payloadRecord.error ?? result.error,
+  };
+}
+
 function extractPayload(text: string): SlackCommandResult | null {
   if (!text) return null;
 
@@ -96,16 +130,8 @@ function extractPayload(text: string): SlackCommandResult | null {
 
     const candidate = text.slice(openBrace, closeBrace + 1);
     try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object" && ("ok" in parsed)) {
-        return {
-          ok: parsed.ok,
-          message: parsed.message ?? undefined,
-          ts: parsed.ts ?? undefined,
-          thread_ts: parsed.thread_ts ?? undefined,
-          error: parsed.error ?? undefined,
-        };
-      }
+      const payload = normalizePayload(JSON.parse(candidate));
+      if (payload) return payload;
     } catch {}
     searchFrom = closeBrace + 1;
   }
