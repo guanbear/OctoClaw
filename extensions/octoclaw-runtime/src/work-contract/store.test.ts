@@ -21,6 +21,16 @@ const mockFs = vi.hoisted(() => ({
   writeFileSync: vi.fn((pathname: string, data: string) => {
     mockFs.files.set(pathname, data);
   }),
+  renameSync: vi.fn((oldPath: string, newPath: string) => {
+    const data = mockFs.files.get(oldPath);
+    if (data !== undefined) {
+      mockFs.files.delete(oldPath);
+      mockFs.files.set(newPath, data);
+    }
+  }),
+  unlinkSync: vi.fn((pathname: string) => {
+    mockFs.files.delete(pathname);
+  }),
 }));
 
 vi.mock("node:fs", () => ({ default: mockFs }));
@@ -35,6 +45,8 @@ describe("work contract store", () => {
     mockFs.mkdirSync.mockClear();
     mockFs.readFileSync.mockClear();
     mockFs.writeFileSync.mockClear();
+    mockFs.renameSync.mockClear();
+    mockFs.unlinkSync.mockClear();
     ledgerPath = path.join("/tmp", "octoclaw-work-contract", "nested", "work-contracts.json");
   });
 
@@ -82,6 +94,21 @@ describe("work contract store", () => {
 
     expect(saveWorkContract(contract, ledgerPath)).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("octoclaw work contract ledger write failed"));
+    warnSpy.mockRestore();
+  });
+
+  it("uses atomic write (writeFileSync to temp + renameSync)", () => {
+    const contract = buildContract("session-5", "atomic verify");
+    expect(saveWorkContract(contract, ledgerPath)).toBe(true);
+
+    expect(mockFs.writeFileSync).toHaveBeenCalledTimes(1);
+    const writeCall = mockFs.writeFileSync.mock.calls[0];
+    expect(writeCall[0]).toMatch(/\.tmp\.\d+\.[a-z0-9]+$/);
+
+    expect(mockFs.renameSync).toHaveBeenCalledTimes(1);
+    const renameCall = mockFs.renameSync.mock.calls[0];
+    expect(renameCall[1]).toBe(ledgerPath);
+    expect(renameCall[0]).toMatch(/\.tmp\.\d+\.[a-z0-9]+$/);
   });
 
   it("respects OCTOCLAW_WORK_CONTRACT_LEDGER_PATH env override", () => {

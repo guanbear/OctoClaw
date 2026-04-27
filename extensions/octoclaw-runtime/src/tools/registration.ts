@@ -53,6 +53,7 @@ import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import fsSync from "node:fs";
 import path from "node:path";
+import { atomicWriteJsonSync } from "../util/atomic-write.js";
 
 interface FsSyncLike {
   mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
@@ -139,7 +140,7 @@ async function upsertTaskStateCache(record: RuntimeTaskStateRecord): Promise<voi
     } else {
       tasks.unshift(entry);
     }
-    fsSyncLike.writeFileSync(taskPath, JSON.stringify({ tasks }, null, 2), "utf-8");
+    atomicWriteJsonSync(taskPath, { tasks });
   } catch { /* best effort cache write */ }
 }
 

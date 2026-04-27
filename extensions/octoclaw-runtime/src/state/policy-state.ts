@@ -3,6 +3,7 @@ import path from "node:path";
 import type { RouteSeal } from "@octoclaw/contracts/route-seal";
 import { resolvePolicyStateLedgerPath } from "../resolve/env.js";
 import { canonicalizeDecisionForPolicyState, isDelegatedRoute } from "../resolve/route-helpers.js";
+import { atomicWriteJsonSync } from "../util/atomic-write.js";
 
 export const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
 const PERSIST_DEBOUNCE_MS = 2_000;
@@ -385,7 +386,7 @@ export class PolicyStateStore {
         ttl_ms: this.ttlMs,
         sessions: Object.fromEntries(this.entries.entries()),
       };
-      fs.writeFileSync(this.sessionStateFile, JSON.stringify(payload, null, 2), "utf-8");
+      atomicWriteJsonSync(this.sessionStateFile, payload);
     } catch {
       // Best-effort persistence only.
     }

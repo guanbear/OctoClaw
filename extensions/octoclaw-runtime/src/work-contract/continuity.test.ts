@@ -26,6 +26,16 @@ const mockFs = vi.hoisted(() => ({
     return content;
   }),
   writeFileSync: vi.fn((pathname: string, data: string) => { mockFs.files.set(pathname, data); }),
+  renameSync: vi.fn((oldPath: string, newPath: string) => {
+    const data = mockFs.files.get(oldPath);
+    if (data !== undefined) {
+      mockFs.files.delete(oldPath);
+      mockFs.files.set(newPath, data);
+    }
+  }),
+  unlinkSync: vi.fn((pathname: string) => {
+    mockFs.files.delete(pathname);
+  }),
 }));
 
 vi.mock("node:fs", () => ({ default: mockFs }));
@@ -40,6 +50,8 @@ describe("child session continuity", () => {
     mockFs.mkdirSync.mockClear();
     mockFs.readFileSync.mockClear();
     mockFs.writeFileSync.mockClear();
+    mockFs.renameSync.mockClear();
+    mockFs.unlinkSync.mockClear();
     ledgerPath = path.join("/tmp", "octoclaw-wp6-test", "work-contracts.json");
   });
 

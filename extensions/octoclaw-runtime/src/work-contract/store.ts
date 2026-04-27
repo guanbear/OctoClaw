@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import type { WorkContract } from "@octoclaw/contracts/work-contract";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
+import { atomicWriteJsonSync } from "../util/atomic-write.js";
 
 interface WorkContractLedger {
   schema_version: "octoclaw.work_contract_ledger.v1";
@@ -81,7 +82,11 @@ export function saveWorkContract(contract: WorkContract, ledgerPath?: string): b
     if (!fs.existsSync(directory)) {
       fs.mkdirSync(directory, { recursive: true });
     }
-    fs.writeFileSync(targetPath, JSON.stringify(ledger, null, 2), "utf-8");
+    const written = atomicWriteJsonSync(targetPath, ledger);
+    if (!written) {
+      console.warn?.(`octoclaw work contract ledger write failed: atomicWriteJsonSync returned false`);
+      return false;
+    }
     return true;
   } catch (err) {
     console.warn?.(`octoclaw work contract ledger write failed: ${String(err)}`);
