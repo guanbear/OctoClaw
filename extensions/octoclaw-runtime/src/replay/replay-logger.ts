@@ -115,14 +115,6 @@ interface PolicyStateApiLike {
 
 const policyStateApi = policyState as unknown as PolicyStateApiLike;
 
-interface FsPromisesLike {
-  mkdir(pathname: string, options?: { recursive?: boolean }): Promise<void>;
-  appendFile(pathname: string, data: string, encoding: string): Promise<void>;
-  readFile(pathname: string, encoding: string): Promise<string>;
-}
-
-const fs = fsSync as unknown as FsPromisesLike;
-
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -523,8 +515,9 @@ export function emitResultReadyIfTransition(params: {
 }
 
 export async function appendJsonl(pathname: string, payload: Record<string, unknown>): Promise<void> {
-  await fs.mkdir(path.dirname(pathname), { recursive: true });
-  await fs.appendFile(pathname, `${JSON.stringify(payload)}\n`, "utf8");
+  fsSync.mkdirSync(path.dirname(pathname), { recursive: true });
+  (fsSync as unknown as { appendFileSync(pathname: string, data: string, encoding: string): void })
+    .appendFileSync(pathname, `${JSON.stringify(payload)}\n`, "utf8");
 }
 
 export function deliveryRelayEventIsIdempotent(eventType: string): boolean {
@@ -545,7 +538,7 @@ export async function hasDeliveryRelayEvent(
 ): Promise<boolean> {
   if (!deliveryRelayEventIsIdempotent(eventType) || !deliveryId) return false;
   try {
-    const raw = await fs.readFile(pathname, "utf8");
+    const raw = fsSync.readFileSync(pathname, "utf8");
     const lines = raw.split("\n").filter(Boolean);
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       try {

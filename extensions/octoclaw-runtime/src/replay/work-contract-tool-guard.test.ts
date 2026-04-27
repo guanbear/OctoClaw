@@ -1,8 +1,12 @@
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   preHintAllowedTools,
   runnerWorkflowTools,
   workflowEnforcementRule,
+  appendJsonl,
 } from "./replay-logger.js";
 
 describe("WorkContract tool guard projection", () => {
@@ -39,5 +43,23 @@ describe("WorkContract tool guard projection", () => {
     );
 
     expect(rule.block).toBe(true);
+  });
+});
+
+
+describe("Replay persistence", () => {
+  it("appends JSONL without requiring callback-based fs APIs", async () => {
+    const osModule = os as unknown as { tmpdir(): string };
+    const fsModule = fsSync as unknown as {
+      mkdtempSync(pathname: string): string;
+      readFileSync(pathname: string, encoding: string): string;
+    };
+    const dir = fsModule.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-replay-"));
+    const replayPath = path.join(dir, "runtime-policy-replay.jsonl");
+
+    await appendJsonl(replayPath, { event: "policy_resolved", route: "reply" });
+
+    const content = fsModule.readFileSync(replayPath, "utf8");
+    expect(content.trim()).toBe(JSON.stringify({ event: "policy_resolved", route: "reply" }));
   });
 });
