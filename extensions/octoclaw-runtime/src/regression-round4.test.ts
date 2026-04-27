@@ -1,6 +1,7 @@
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import {
+  compactPolicyPrompt,
   delegationFailureReply,
   guardAssistantMessageForPolicyState,
   sanitizeDelegationReasoning,
@@ -543,5 +544,66 @@ describe("regression round 4: scenario 6 — ACK schedule reply-only", () => {
 
     vi.advanceTimersByTime(200_000);
     expect(fired).toHaveLength(0);
+  });
+});
+
+
+describe("regression round 4: execution coverage projections", () => {
+  it("adds WorkContract and ExecutionCoverage evidence to provenance follow-up replies", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: "刚才那个任务判定为 reply，没有重新派发。" },
+      {
+        decision: {
+          route_decision: { route: "reply", route_source: "rule" },
+          router_decision_v2: { request_kind: "status_or_provenance" },
+          workContractId: "wc-provenance-1",
+          work_contract: {
+            workContractId: "wc-provenance-1",
+            route: "reply",
+            decisionSource: "execution_coverage",
+            replyMode: "answer",
+          },
+          _execution_coverage_packet: {
+            packetId: "coverage-1",
+            replyMode: "answer",
+            dispatchExecuted: true,
+            spawnExecuted: false,
+            coverage: { execution: { coverage: "thread" } },
+          },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(String(guarded.message?.content)).toContain("WorkContract=wc-provenance-1");
+    expect(String(guarded.message?.content)).toContain("ExecutionCoverage coverage=thread");
+    expect(String(guarded.message?.content)).toContain("spawnExecuted=false");
+  });
+
+  it("keeps WorkContract and coverage facts in policy prompt projections", () => {
+    const text = compactPolicyPrompt({
+      route_decision: { route: "reply", route_source: "rule" },
+      router_decision_v2: { request_kind: "status_or_provenance" },
+      workContractId: "wc-prompt-1",
+      work_contract: {
+        workContractId: "wc-prompt-1",
+        route: "reply",
+        decisionSource: "execution_coverage",
+        replyMode: "answer",
+      },
+      _execution_coverage_packet: {
+        packetId: "coverage-prompt-1",
+        replyMode: "answer",
+        dispatchExecuted: true,
+        spawnExecuted: false,
+        coverage: { execution: { coverage: "recent_turn" } },
+      },
+    });
+
+    expect(text).toContain("WorkContract=wc-prompt-1");
+    expect(text).toContain("ExecutionCoverage=coverage-prompt-1");
+    expect(text).toContain("coverage=recent_turn");
+    expect(text).toContain("dispatch_executed=true");
+    expect(text).toContain("spawn_executed=false");
   });
 });

@@ -1318,6 +1318,34 @@ export function sanitizeDelegationReasoning(text: string): string {
   return result;
 }
 
+
+function appendExecutionCoverageProjection(replyText: string, state: Record<string, unknown>): string {
+  const decision = asRecord(state.decision);
+  const workContract = asRecord(decision.work_contract);
+  const executionPacket = asRecord(decision._execution_coverage_packet);
+  const executionLayer = asRecord(decision.execution_layer ?? decision._execution_coverage);
+  const routeDecision = asRecord(decision.route_decision);
+  const routerDecision = asRecord(decision.router_decision_v2);
+  const requestKind = String(routerDecision.request_kind ?? "").trim();
+  const isCoverageAnswer = String(workContract.decisionSource ?? "") === "execution_coverage"
+    || String(executionPacket.replyMode ?? workContract.replyMode ?? "") === "answer"
+    || decision._execution_supports_provenance_reply === true
+    || decision._execution_supports_status_reply === true
+    || requestKind === "status_or_provenance";
+  if (!isCoverageAnswer || String(routeDecision.route ?? workContract.route ?? "reply") !== "reply") {
+    return replyText;
+  }
+  if (/(?:WorkContract|ExecutionCoverage|coverage|证据)/iu.test(replyText)) {
+    return replyText;
+  }
+  const contractId = String(workContract.workContractId ?? decision.workContractId ?? "unknown").trim();
+  const coverage = String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "unknown").trim();
+  const dispatchExecuted = String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? state.dispatchExecuted ?? false);
+  const spawnExecuted = String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? state.spawnExecuted ?? false);
+  const routeSource = String(workContract.decisionSource ?? routeDecision.route_source ?? "unknown").trim();
+  return `${replyText.trim()}\n\n证据投影：WorkContract=${contractId}；ExecutionCoverage coverage=${coverage}；route_source=${routeSource}；dispatchExecuted=${dispatchExecuted}；spawnExecuted=${spawnExecuted}。`;
+}
+
 export function guardAssistantMessageForPolicyState(
   message: Record<string, unknown>,
   state: Record<string, unknown>,
@@ -1355,6 +1383,10 @@ export function guardAssistantMessageForPolicyState(
   const sanitized = sanitizeDelegationReasoning(replyText);
   if (sanitized !== replyText) {
     return { mode: "replace", message: replaceAssistantMessageText(message, sanitized) };
+  }
+  const provenanceProjected = appendExecutionCoverageProjection(replyText, state);
+  if (provenanceProjected !== replyText) {
+    return { mode: "replace", message: replaceAssistantMessageText(message, provenanceProjected) };
   }
   const spawnExecuted = state.spawnExecuted === true || state.spawn_executed === true;
   if (!(dispatchExecuted || spawnExecuted)) {
@@ -1520,8 +1552,12 @@ export function compactPolicyPrompt(decision: Record<string, unknown>): string {
   const policyRouter = asRecord(canonicalDecision.policy_router);
   const judge = asRecord(policyRouter.judge);
   const toolPolicy = asRecord(canonicalDecision.tool_policy);
+  const workContract = asRecord(canonicalDecision.work_contract);
+  const executionPacket = asRecord(canonicalDecision._execution_coverage_packet);
+  const executionLayer = asRecord(canonicalDecision.execution_layer ?? canonicalDecision._execution_coverage);
   const blocked = asStringArray(toolPolicy.blocked_patterns).slice(0, 8);
   const allowedControls = asStringArray(toolPolicy.allowed_control_tools).slice(0, 8);
+  const evidenceSummary = String(executionPacket.evidenceSummary ?? executionLayer.evidence_summary ?? "").trim();
   const parts = [
     `route=${String(routeDecision.route ?? "reply")}`,
     `worker_pool=${String(routeDecision.worker_pool ?? "octoclaw-main")}`,
@@ -1530,7 +1566,16 @@ export function compactPolicyPrompt(decision: Record<string, unknown>): string {
     `protected_lane=${String(routeDecision.protected_lane ?? "")}`,
     `must_delegate_via=${String(toolPolicy.must_delegate_via ?? "")}`,
     `policy_judge=${String(judge.selected ?? "")}`,
-  ].filter((item) => !item.endsWith("="));
+    `WorkContract=${String(workContract.workContractId ?? canonicalDecision.workContractId ?? "")}`,
+    `work_contract_route=${String(workContract.route ?? "")}`,
+    `decision_source=${String(workContract.decisionSource ?? routeDecision.route_source ?? "")}`,
+    `ExecutionCoverage=${String(executionPacket.packetId ?? "")}`,
+    `coverage=${String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "")}`,
+    `reply_mode=${String(executionPacket.replyMode ?? workContract.replyMode ?? "")}`,
+    `dispatch_executed=${String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? "")}`,
+    `spawn_executed=${String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? "")}`,
+    `evidence=${evidenceSummary}`,
+  ].filter((item) => !item.endsWith("=") && !item.endsWith("=undefined"));
   if (allowedControls.length > 0) parts.push(`allowed_control_tools=${allowedControls.join(",")}`);
   if (blocked.length > 0) parts.push(`blocked_patterns=${blocked.join(",")}`);
   return parts.join(" | ");

@@ -81,3 +81,9 @@ The real Slack acceptance harness is fail-closed and bounded:
 - Every case report includes sanitized progress diagnostics such as `case_started`, `prompt_send_completed`, `first_reply_seen`, `final_timed_out`, and fetch/post failure events.
 - Unknown evidence is never promoted to pass; missing replay/provenance evidence remains `unknown` or `fail` depending on whether the assertion is required.
 - The harness remains evaluation-only: it does not mutate live policy, promote calibration recommendations, enable multi-agent, or inject raw child transcripts into artifacts.
+
+## 2026-04-27 ACK/Provenance Projection Update
+
+Runtime route-commit ACK now attempts a non-blocking early send from `before_model_resolve` for non-reply routes, then relies on the existing route-commit dedupe key when `before_prompt_build` runs. This keeps delegated/status route ACKs closer to route commitment without claiming dispatch or spawn execution.
+
+Status/provenance follow-up replies must surface a sanitized truth projection when execution coverage is the answer source. If the agent omits explicit evidence wording, the runtime appends a parent-visible footer containing `WorkContract`, `ExecutionCoverage coverage`, route source, `dispatchExecuted`, and `spawnExecuted`; this footer is a projection only and never includes raw child transcripts.
