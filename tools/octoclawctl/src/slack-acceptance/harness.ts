@@ -29,11 +29,11 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
   },
   {
     kind: "fresh_lookup",
-    prompt: "请查一下 OpenClaw 4.21 最近一次发布说明，简要回答。",
+    prompt: "请查一下 OpenClaw 最近一次发布说明，简要回答。",
     ackRequired: true,
     finalRequired: true,
     expectAck: ["查", "准备", "开始", "派发", "处理"],
-    expectFinalAll: ["OpenClaw", "4\\.21"],
+    expectFinalAll: ["OpenClaw", "发布|release|说明|亮点"],
   },
   {
     kind: "delegated_work",

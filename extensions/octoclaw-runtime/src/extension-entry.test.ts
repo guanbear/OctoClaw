@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildPromptContextProjection, resolveDelegationCapability } from "./extension-entry.js";
+import { buildPromptContextProjection, extractInboundMessageTimestamp, resolveDelegationCapability } from "./extension-entry.js";
 
 describe("resolveDelegationCapability", () => {
   it("fails closed when delegation is requested but host detached runtime support is missing", () => {
@@ -68,5 +68,16 @@ describe("buildPromptContextProjection", () => {
       contextPayload: "",
       shouldInjectPolicyProjection: false,
     })).toBeUndefined();
+  });
+});
+
+
+describe("extractInboundMessageTimestamp", () => {
+  it("finds nested Slack timestamps from provider payloads", () => {
+    expect(extractInboundMessageTimestamp({ payload: { event: { message: { ts: "1777333611.122709" } } } }, {}, "")).toBe("1777333611.122709");
+  });
+
+  it("falls back to prompt metadata JSON", () => {
+    expect(extractInboundMessageTimestamp({}, {}, '{"message_ts":"1777333628.133229"}')).toBe("1777333628.133229");
   });
 });

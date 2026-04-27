@@ -169,6 +169,52 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
+const SLACK_MESSAGE_TS_PATTERN = /^\d{10}\.\d{6}$/u;
+const INBOUND_MESSAGE_TS_KEYS = new Set([
+  "ts",
+  "messageTs",
+  "message_ts",
+  "messageId",
+  "message_id",
+  "eventTs",
+  "event_ts",
+  "replyToId",
+  "reply_to_id",
+  "threadTs",
+  "thread_ts",
+]);
+
+function findInboundMessageTimestamp(value: unknown, depth = 0, seen = new Set<object>()): string {
+  if (depth > 5 || value === null || value === undefined) return "";
+  if (typeof value === "string") {
+    const text = value.trim();
+    return SLACK_MESSAGE_TS_PATTERN.test(text) ? text : "";
+  }
+  if (typeof value !== "object" || Array.isArray(value)) return "";
+  if (seen.has(value)) return "";
+  seen.add(value);
+  const record = value as UnknownRecord;
+  for (const key of INBOUND_MESSAGE_TS_KEYS) {
+    const direct = findInboundMessageTimestamp(record[key], depth + 1, seen);
+    if (direct) return direct;
+  }
+  for (const [key, entry] of Object.entries(record)) {
+    if (INBOUND_MESSAGE_TS_KEYS.has(key)) continue;
+    const nested = findInboundMessageTimestamp(entry, depth + 1, seen);
+    if (nested) return nested;
+  }
+  return "";
+}
+
+export function extractInboundMessageTimestamp(ctx: UnknownRecord, event: UnknownRecord, prompt = ""): string {
+  const fromContext = findInboundMessageTimestamp(ctx);
+  if (fromContext) return fromContext;
+  const fromEvent = findInboundMessageTimestamp(event);
+  if (fromEvent) return fromEvent;
+  const msgIdMatch = prompt.match(/"(?:reply_to_id|message_id|message_ts|event_ts|thread_ts|ts)"\s*:\s*"(\d{10}\.\d{6})"/u);
+  return msgIdMatch ? stringValue(msgIdMatch[1]) : "";
+}
+
 function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
   if (receipts.length === 0) return "";
   const lines = receipts.map((r, i) => {
@@ -547,19 +593,11 @@ export const plugin = {
         notifyUserMessage(preSessionKey, preStateKey);
       }
 
-      let inboundMessageTs = "";
-      {
-        const inbound = asRecord(ctx.inboundMessage);
-        const ev = asRecord(ctx.event);
-        const hookEvent = asRecord(event);
-        if (inbound && Object.keys(inbound).length > 0) inboundMessageTs = stringValue(inbound.ts || inbound.messageTs || inbound.messageId);
-        else if (ev && Object.keys(ev).length > 0) inboundMessageTs = stringValue(ev.ts || ev.messageTs || ev.messageId);
-        if (!inboundMessageTs) {
-          const promptText = [prompt, extractPromptText(hookEvent)].filter(Boolean).join("\n");
-          const msgIdMatch = promptText.match(/"(?:reply_to_id|message_id|ts)"\s*:\s*"([^"\n]+)"/u);
-          if (msgIdMatch) inboundMessageTs = stringValue(msgIdMatch[1]);
-        }
-      }
+      const inboundMessageTs = extractInboundMessageTimestamp(
+        ctx,
+        event,
+        [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
+      );
 
       // When judgeAckEnabled=false: start latency timer BEFORE judge (fast ACK).
       // When judgeAckEnabled=true: ALSO start latency timer BEFORE judge so ACK0 fires at 5s from message arrival.
