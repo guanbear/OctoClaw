@@ -291,28 +291,6 @@ function extractPromptText(event: UnknownRecord): string {
   return "";
 }
 
-function extractInboundMessageTs(event: UnknownRecord, ctx: UnknownRecord, promptText = ""): string {
-  const inbound = asRecord(ctx.inboundMessage);
-  const ctxEvent = asRecord(ctx.event);
-  const hookEvent = asRecord(event);
-  const direct = stringValue(
-    inbound.ts
-      || inbound.messageTs
-      || inbound.messageId
-      || ctx.inboundMessageTs
-      || ctxEvent.ts
-      || ctxEvent.messageTs
-      || ctxEvent.messageId
-      || hookEvent.ts
-      || hookEvent.messageTs
-      || hookEvent.messageId,
-  );
-  if (direct) return direct;
-  const promptCandidate = [promptText, extractPromptText(hookEvent)].filter(Boolean).join("\n");
-  const msgIdMatch = promptCandidate.match(/"(?:reply_to_id|message_id|ts)"\s*:\s*"([^"\n]+)"/u);
-  return msgIdMatch ? stringValue(msgIdMatch[1]) : "";
-}
-
 function isDelegateTask(value: unknown): value is DelegateTask {
   return Boolean(value)
     && typeof value === "object"
@@ -537,30 +515,7 @@ export const plugin = {
       const hookConfig = asRecord(decision.hook_interface).before_model_resolve;
       const resolvedHookConfig = asRecord(hookConfig);
       if (!resolvedHookConfig.enabled) return;
-      const route = stringValue(asRecord(decision.route_decision).route || "reply");
-      if (route !== "reply") {
-        const stateKey = stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || "");
-        const state = (resolved?.state as PolicyStateEntry | null | undefined) ?? getPolicyStateForContext(ctx).state;
-        const inboundMessageTs = extractInboundMessageTs(event, ctx, prompt);
-        void sendRouteCommitAck({
-          sessionKey: resolvePolicyStateKey(ctx) || stringValue(ctx.sessionKey) || "",
-          stateKey,
-          decision,
-          state: state ?? {},
-          replyToMessageId: inboundMessageTs,
-          cwd: stringValue(ctx.cwd) || process.cwd(),
-          logger: pi.logger,
-        }).then((routeCommitResult) => {
-          if (routeCommitResult.sent && state) {
-            state.routeCommitAckSent = true;
-            state.route_commit_ack_sent = true;
-            state.routeCommitAckId = routeCommitResult.routeCommitId;
-          }
-        }).catch((routeCommitErr) => {
-          pi.logger?.warn?.(`octoclaw early route-commit-ack error: ${String(routeCommitErr)}`);
-        });
-        return;
-      }
+      if (stringValue(asRecord(decision.route_decision).route || "reply") !== "reply") return;
       const modelOverride = stringValue(resolvedHookConfig.selected_model);
       if (!modelOverride) return;
       pi.logger?.debug?.(`octoclaw before_model_resolve modelOverride=${modelOverride}`);
@@ -591,7 +546,19 @@ export const plugin = {
         notifyUserMessage(preSessionKey, preStateKey);
       }
 
-      const inboundMessageTs = extractInboundMessageTs(event, ctx, prompt);
+      let inboundMessageTs = "";
+      {
+        const inbound = asRecord(ctx.inboundMessage);
+        const ev = asRecord(ctx.event);
+        const hookEvent = asRecord(event);
+        if (inbound && Object.keys(inbound).length > 0) inboundMessageTs = stringValue(inbound.ts || inbound.messageTs || inbound.messageId);
+        else if (ev && Object.keys(ev).length > 0) inboundMessageTs = stringValue(ev.ts || ev.messageTs || ev.messageId);
+        if (!inboundMessageTs) {
+          const promptText = [prompt, extractPromptText(hookEvent)].filter(Boolean).join("\n");
+          const msgIdMatch = promptText.match(/"(?:reply_to_id|message_id|ts)"\s*:\s*"([^"\n]+)"/u);
+          if (msgIdMatch) inboundMessageTs = stringValue(msgIdMatch[1]);
+        }
+      }
 
       // When judgeAckEnabled=false: start latency timer BEFORE judge (fast ACK).
       // When judgeAckEnabled=true: ALSO start latency timer BEFORE judge so ACK0 fires at 5s from message arrival.
