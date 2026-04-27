@@ -135,6 +135,30 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(text).not.toContain("已派发子 agent");
   });
 
+  it("allows status surface projection after octoclaw_status even when delegate spawn is absent", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "OctoClaw native runtime status (compact)\nFields: task_id | projected_status(raw_status) | route | elapsed | model | backend | reason\n- task-1 | queued(queued) | delegate | elapsed=26s | model=unknown | backend=octoclaw-research | reason=dispatch_materialized_but_no_spawn_evidence",
+        }],
+      },
+      {
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        controlToolsSeen: ["octoclaw_status"],
+        decision: {
+          route: "delegate",
+          route_decision: { route: "delegate", task_class: "control_observer" },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
+  });
+
   it("replaces leaked direct reply when delegated task was not dispatched", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "我来写。收到，我看一下。可以，给你一个通用版：" }] },

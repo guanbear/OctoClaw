@@ -1287,6 +1287,14 @@ export function looksLikeToolProvenanceClaim(text: string): boolean {
     || /direct tools used.{0,80}(实际|actually|used|web_fetch|web_search|exec|unavailable)/iu.test(raw);
 }
 
+function hasStatusProjectionToolEvidence(state: Record<string, unknown>): boolean {
+  const seenTools = new Set([
+    ...asStringArray(state.controlToolsSeen),
+    ...asStringArray(state.directToolsSeen),
+  ].map((item) => item.toLowerCase()));
+  return seenTools.has("octoclaw_status") || seenTools.has("octoclaw_task_action");
+}
+
 export function ungroundedToolProvenanceReply(
   state: Record<string, unknown>,
   claimedTools: string[],
@@ -1359,7 +1367,8 @@ export function guardAssistantMessageForPolicyState(
   }
   const dispatchRoute = String(state.dispatchRoute ?? state.dispatch_route ?? "").trim();
   const dispatchExecuted = state.dispatchExecuted === true || state.dispatch_executed === true;
-  if (isDelegatedRoute(asRecord(state.decision)) && !state.delegated && !(dispatchRoute === "reply" && dispatchExecuted)) {
+  const statusProjectionToolSeen = hasStatusProjectionToolEvidence(state);
+  if (isDelegatedRoute(asRecord(state.decision)) && !state.delegated && !statusProjectionToolSeen && !(dispatchRoute === "reply" && dispatchExecuted)) {
     const fallback = delegationFailureReply(state);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }
@@ -1389,7 +1398,7 @@ export function guardAssistantMessageForPolicyState(
     return { mode: "replace", message: replaceAssistantMessageText(message, provenanceProjected) };
   }
   const spawnExecuted = state.spawnExecuted === true || state.spawn_executed === true;
-  if (!(dispatchExecuted || spawnExecuted)) {
+  if (!statusProjectionToolSeen && !(dispatchExecuted || spawnExecuted)) {
     const dispatchClaimPatterns = [
       /(?:已经|已|刚)?(?:派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?\s*agent|worker|任务|task)/iu,
       /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?\s*agent|worker)/iu,

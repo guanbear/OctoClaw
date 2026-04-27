@@ -764,6 +764,15 @@ export const plugin = {
       const allowedObserverTools = observerControlTools(decision, routeHintTool);
       const allowedSessionTools = sessionControlTools(decision, routeHintTool);
       const metadata = buildPolicyMetadata(ctx, { stateKey });
+      if (["octoclaw_status", "octoclaw_task_action"].includes(toolName)) {
+        updatePolicyState(stateKey, (current) => ({
+          ...current,
+          controlToolsSeen: Array.from(new Set([
+            ...(Array.isArray(current?.controlToolsSeen) ? current.controlToolsSeen : []),
+            toolName,
+          ])),
+        }));
+      }
       const storedInboundTs = stringValue(state?.inboundMessageTs);
       if (storedInboundTs && !stringValue(metadata.message_id)) {
         metadata.message_id = storedInboundTs;

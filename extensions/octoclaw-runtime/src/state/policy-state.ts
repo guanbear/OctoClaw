@@ -14,6 +14,7 @@ export interface PolicyStateEntry {
   routeSeal?: RouteSeal;
   routeHintSubmitted?: boolean;
   directToolsSeen?: string[];
+  controlToolsSeen?: string[];
   blockedTools?: string[];
   delegated?: boolean;
   delegationTool?: string;
