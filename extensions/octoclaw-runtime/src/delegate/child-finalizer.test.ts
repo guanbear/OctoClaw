@@ -43,6 +43,7 @@ describe("child completion finalizer", () => {
       workContractId: "wc-1",
       parentSessionKey: "slack:channel:C123",
       nativeTaskId: "native-1",
+      recordReplay: false,
       sendFinalMessage: async ({ message }) => {
         sent.push(message);
         return { sent: true, delivered: true };
@@ -57,6 +58,18 @@ describe("child completion finalizer", () => {
     expect(taskState.tasks[0]).toMatchObject({ id: "native-1", status: "completed", resultMaterialized: true });
   });
 
+
+  it("does not treat a parent session dispatch receipt as a child result", () => {
+    const dir = fsTest.mkdtempSync(path.join("/tmp", "octoclaw-child-final-"));
+    writeSession(dir, [
+      { type: "message", message: { role: "toolResult", content: [{ type: "text", text: "dispatch childSessionKey=child-key delegateTaskId=delegate-1 workContractId=wc-1" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "这是父会话里的其它回答，不是子任务结果。" }] } },
+    ]);
+
+    const result = findChildFinalResult({ sessionsDir: dir, childSessionKey: "child-key", delegateTaskId: "delegate-1", workContractId: "wc-1" });
+    expect(result).toBeNull();
+  });
+
   it("uses runtime waitForRun/getSessionMessages before session-file fallback", async () => {
     const dir = fsTest.mkdtempSync(path.join("/tmp", "octoclaw-child-final-"));
     const sent: string[] = [];
@@ -68,6 +81,7 @@ describe("child completion finalizer", () => {
       parentSessionKey: "slack:channel:C123",
       nativeTaskId: "native-runtime",
       runId: "run-runtime",
+      recordReplay: false,
       runtime: {
         waitForRun: async () => ({ status: "ok" }),
         getSessionMessages: async () => ({

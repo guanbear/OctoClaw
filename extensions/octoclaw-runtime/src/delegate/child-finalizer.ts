@@ -39,6 +39,7 @@ export interface ChildCompletionFinalizerOptions {
   initialDelayMs?: number;
   runtime?: ChildCompletionRuntime | null;
   completionProbeTimeoutMs?: number;
+  recordReplay?: boolean;
   sendFinalMessage?: (params: { sessionKey: string; message: string; replyToMessageId?: string; cwd?: string }) => Promise<{ sent: boolean; delivered: boolean; error?: string }>;
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
 }
@@ -109,6 +110,11 @@ function sessionsDirectory(explicit?: string): string {
   return path.dirname(resolveMainAgentSessionsPath());
 }
 
+async function recordFinalizerReplay(event: string, payload: Record<string, unknown>, options: ChildCompletionFinalizerOptions): Promise<void> {
+  if (options.recordReplay === false) return;
+  await recordPolicyReplay(event, payload, options.logger);
+}
+
 export function findChildFinalResult(options: Pick<ChildCompletionFinalizerOptions, "childSessionKey" | "delegateTaskId" | "workContractId" | "sessionsDir">): { text: string; sessionFile: string } | null {
   const childSessionKey = asString(options.childSessionKey);
   const delegateTaskId = asString(options.delegateTaskId);
@@ -133,6 +139,7 @@ export function findChildFinalResult(options: Pick<ChildCompletionFinalizerOptio
     } catch {
       continue;
     }
+    if (!raw.includes("[OctoClaw Delegated Task]")) continue;
     if (childSessionKey && !raw.includes(childSessionKey)) continue;
     if (delegateTaskId && !raw.includes(delegateTaskId)) continue;
     if (workContractId && !raw.includes(workContractId)) continue;
@@ -140,7 +147,7 @@ export function findChildFinalResult(options: Pick<ChildCompletionFinalizerOptio
     let sawDelegatedTask = false;
     let finalText = "";
     for (const line of raw.split(/\n/u).filter(Boolean)) {
-      if (line.includes("[OctoClaw Delegated Task]") || line.includes(childSessionKey) || line.includes(delegateTaskId) || line.includes(workContractId)) {
+      if (line.includes("[OctoClaw Delegated Task]")) {
         sawDelegatedTask = true;
       }
       if (!sawDelegatedTask) continue;
@@ -175,7 +182,7 @@ async function findRuntimeChildFinalResult(options: ChildCompletionFinalizerOpti
     });
     if (wait.status === "timeout") return null;
     if (wait.status === "error") {
-      await recordPolicyReplay("child_result_runtime_completion_error", {
+      await recordFinalizerReplay("child_result_runtime_completion_error", {
         sessionKey: options.parentSessionKey,
         stateKey: options.parentSessionKey,
         workContractId: options.workContractId,
@@ -183,7 +190,7 @@ async function findRuntimeChildFinalResult(options: ChildCompletionFinalizerOpti
         childSessionKey: options.childSessionKey,
         childRunId: runId,
         error: asString(wait.error || "runtime_wait_error"),
-      }, options.logger);
+      }, options);
       return { text: `子任务执行失败：${asString(wait.error || "runtime_wait_error")}`, source: "runtime_completion" };
     }
     if (typeof runtime.getSessionMessages !== "function") {
@@ -196,7 +203,7 @@ async function findRuntimeChildFinalResult(options: ChildCompletionFinalizerOpti
       source: "runtime_completion",
     };
   } catch (error) {
-    await recordPolicyReplay("child_result_runtime_probe_failed", {
+    await recordFinalizerReplay("child_result_runtime_probe_failed", {
       sessionKey: options.parentSessionKey,
       stateKey: options.parentSessionKey,
       workContractId: options.workContractId,
@@ -204,7 +211,7 @@ async function findRuntimeChildFinalResult(options: ChildCompletionFinalizerOpti
       childSessionKey: options.childSessionKey,
       childRunId: runId,
       error: error instanceof Error ? error.message : String(error),
-    }, options.logger);
+    }, options);
     return null;
   }
 }
@@ -317,7 +324,7 @@ export async function finalizeChildSessionOnce(options: ChildCompletionFinalizer
   const found = await resolveChildFinalResult(options);
   if (!found) return { status: "pending" };
 
-  await recordPolicyReplay("child_result_materialized", {
+  await recordFinalizerReplay("child_result_materialized", {
     sessionKey: options.parentSessionKey,
     stateKey: options.parentSessionKey,
     workContractId: options.workContractId,
@@ -328,7 +335,7 @@ export async function finalizeChildSessionOnce(options: ChildCompletionFinalizer
     resultSource: found.source,
     sessionFile: found.sessionFile || "",
     resultPacketTokens: Math.ceil(found.text.length / 4),
-  }, options.logger);
+  }, options);
 
   const sendResult = await sendFinalMessage(options, found.text);
   const deliveryStatus = sendResult.sent || sendResult.delivered ? "delivered" : "failed";
@@ -406,7 +413,7 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
       }
       if (Date.now() >= deadline) {
         activeFinalizers.delete(key);
-        await recordPolicyReplay("child_result_finalizer_timeout", {
+        await recordFinalizerReplay("child_result_finalizer_timeout", {
           sessionKey: options.parentSessionKey,
           stateKey: options.parentSessionKey,
           workContractId: options.workContractId,
@@ -415,7 +422,7 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
           childSessionKey: options.childSessionKey,
           childRunId: options.childRunId || options.runId || "",
           timeoutMs,
-        }, options.logger);
+        }, options);
         return;
       }
       const timer = setTimeout(tick, pollIntervalMs);
