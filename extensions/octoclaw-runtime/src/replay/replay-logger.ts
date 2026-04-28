@@ -1407,7 +1407,10 @@ function appendExecutionCoverageProjection(replyText: string, state: Record<stri
     ?? decision.model
     ?? "unknown",
   ).trim() || "unknown";
-  return `${replyText.trim()}\n\n证据投影：route=${route}；model=${model}；WorkContract=${contractId}；ExecutionCoverage coverage=${coverage}；route_source=${routeSource}；dispatchExecuted=${dispatchExecuted}；spawnExecuted=${spawnExecuted}。`;
+  const footerDisabled = ["0", "false", "off", "no"].includes(String(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER ?? "").trim().toLowerCase());
+  const routeLabel = route === "delegate" ? "委派(delegate)" : "reply";
+  const footer = footerDisabled ? "" : `\n_OctoClaw 投影：${routeLabel}；模型：${model}_`;
+  return `${replyText.trim()}\n\n证据投影：route=${route}；model=${model}；WorkContract=${contractId}；ExecutionCoverage coverage=${coverage}；route_source=${routeSource}；dispatchExecuted=${dispatchExecuted}；spawnExecuted=${spawnExecuted}。${footer}`;
 }
 
 export function guardAssistantMessageForPolicyState(
