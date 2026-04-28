@@ -1172,7 +1172,7 @@ export const plugin = {
         || asRecord(state?.latestAnomalyNotice).kind,
       );
 
-      if (shouldRetainPolicyStateOnAgentEnd(asRecord(state))) {
+      if (finalReceipt.route === "delegate" && shouldRetainPolicyStateOnAgentEnd(asRecord(state))) {
         const formalReplyVisible = Boolean(state?.formal_reply_visible);
         let noticeDeliveryState = "not_attempted";
         const deliverySessionKey = stringValue(state?.ackGuardKey || state?.ack_guard_key || ctx.sessionKey || stateKey);

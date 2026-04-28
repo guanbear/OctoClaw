@@ -17,7 +17,12 @@ function stripLeadingSlackMentions(raw: string): string {
 }
 
 export function normalizeSemanticPrompt(raw: unknown): string {
-  const text = stringValue(raw);
+  let text = stringValue(raw);
   if (!text) return "";
-  return stripLeadingSlackMentions(stripAcceptanceEnvelope(text));
+  for (let index = 0; index < 4; index += 1) {
+    const next = stripAcceptanceEnvelope(stripLeadingSlackMentions(text));
+    if (next === text) return next;
+    text = next;
+  }
+  return text;
 }
