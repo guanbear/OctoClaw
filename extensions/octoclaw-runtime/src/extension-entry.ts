@@ -57,6 +57,7 @@ import {
   recordDeliveryRelayEvent,
   recordObservedDeliveryFromMessage,
   recordPolicyReplay,
+  replaceAssistantMessageText,
   routeHintRequired,
   sessionControlTools,
   shouldRetainPolicyStateOnAgentEnd,
@@ -1370,8 +1371,13 @@ export const plugin = {
       });
       if (!state) return;
       updateAckTrackingState(stateKey, { final_response_streaming: true, tool_active: false });
-      const guarded = guardAssistantMessageForPolicyState(asRecord(event.message), asRecord(state));
-      const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : asRecord(event.message);
+      const stateRecord = asRecord(state);
+      const guarded = guardAssistantMessageForPolicyState(asRecord(event.message), stateRecord);
+      let visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : asRecord(event.message);
+      const footerText = appendReplyProjectionFooter(assistantMessageText(asRecord(visibleMessage)), stateRecord, event, ctx);
+      if (footerText && footerText !== assistantMessageText(asRecord(visibleMessage))) {
+        visibleMessage = replaceAssistantMessageText(asRecord(visibleMessage), footerText);
+      }
       const role = String(asRecord(event.message).role ?? "").trim();
       const contentText: string = typeof asRecord(visibleMessage).content === "string"
         ? String(asRecord(visibleMessage).content)
@@ -1389,8 +1395,8 @@ export const plugin = {
       void recordObservedDeliveryFromMessage(visibleMessage, asRecord(state), stateKey, pi.logger).catch((err) => {
         pi.logger?.warn?.(`octoclaw delivery observe failed: ${String(err)}`);
       });
-      if (guarded.mode === "replace" && guarded.message) {
-        return { message: guarded.message };
+      if (visibleMessage !== asRecord(event.message)) {
+        return { message: visibleMessage };
       }
     }, 120);
 
