@@ -10,6 +10,7 @@ import {
 import { buildDelegateStatusPacket } from "./context/delegate-packets.js";
 import { sanitizeMainContextInjection } from "./context/context-budget.js";
 import type { DelegateStatusPacket } from "@octoclaw/contracts/delegate-context";
+import { normalizeSemanticPrompt } from "./semantic-prompt.js";
 
 interface FsSyncLike {
   readFileSync(pathname: string, encoding: string): string;
@@ -767,7 +768,7 @@ export function buildConversationIntentPacket(options: {
   taskStatePath?: string;
   sessionKeys?: string[];
 } = {}): ConversationIntentPacket {
-  const prompt = stringValue(options.prompt);
+  const prompt = normalizeSemanticPrompt(options.prompt) || stringValue(options.prompt);
   if (!prompt) {
     const packet = buildIntentPacket({ intentClass: "undetermined" });
     return {

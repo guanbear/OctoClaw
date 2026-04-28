@@ -1234,11 +1234,24 @@ export function contaminationFallbackReply(): { mode: string; message: Record<st
   };
 }
 
+
+function hasPreDispatchReplyCorrection(state: Record<string, unknown>): boolean {
+  const decision = asRecord(state.decision);
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const routeCorrection = asRecord(decision.route_correction ?? requestMetadata.route_correction);
+  const dispatchExecuted = state.dispatchExecuted === true || state.dispatch_executed === true;
+  const spawnExecuted = state.spawnExecuted === true || state.spawn_executed === true;
+  return String(routeCorrection.from ?? "").trim() === "delegate"
+    && String(routeCorrection.to ?? "").trim() === "reply"
+    && dispatchExecuted !== true
+    && spawnExecuted !== true;
+}
+
 export function genericGreetingFallbackReply(state: Record<string, unknown>): { mode: string; message: Record<string, unknown> } {
   const decision = asRecord(state.decision);
   const route = String(asRecord(decision.route_decision).route ?? "").trim();
   let text = "收到，我继续按当前任务处理。";
-  if (DELEGATED_ROUTE_NAMES.has(route) && !state.delegated) {
+  if (DELEGATED_ROUTE_NAMES.has(route) && !state.delegated && !hasPreDispatchReplyCorrection(state)) {
     return delegationFailureReply(state);
   }
   const taskClass = String(asRecord(decision.route_decision).task_class ?? "").trim();
@@ -1385,12 +1398,16 @@ export function guardAssistantMessageForPolicyState(
   const resultMaterialized = state.resultMaterialized === true || state.result_materialized === true;
   const statusProjectionToolSeen = hasStatusProjectionToolEvidence(state);
   const hasExecutionEvidence = dispatchExecuted || spawnExecuted || resultMaterialized;
+  const genericGreetingReply = looksLikeGenericGreeting(replyText);
+  const correctedToReplyBeforeDispatch = hasPreDispatchReplyCorrection(state);
   if (
     isDelegatedRoute(asRecord(state.decision))
     && !statusProjectionToolSeen
     && !hasExecutionEvidence
     && !(dispatchRoute === "reply" && dispatchExecuted)
     && !looksLikeTransientProcessingAck(replyText)
+    && !genericGreetingReply
+    && !correctedToReplyBeforeDispatch
   ) {
     const fallback = delegationFailureReply(state);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
@@ -1401,7 +1418,7 @@ export function guardAssistantMessageForPolicyState(
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }
   const requestKind = String(asRecord(asRecord(state.decision).router_decision_v2).request_kind ?? "").trim();
-  if (looksLikeGenericGreeting(replyText) && requestKind && requestKind !== "chat_or_explain") {
+  if (genericGreetingReply && requestKind && requestKind !== "chat_or_explain") {
     const fallback = genericGreetingFallbackReply(state);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }

@@ -227,6 +227,33 @@ describe("execution coverage override intent guard", () => {
     for (const key of testKeys) policyState.clear(key);
   });
 
+
+  it("corrects judge delegate route to reply for normalized plain chat before dispatch", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.9),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "[OCTOCLAW_ACCEPTANCE] run=manual case=plain_chat acceptance=true\n<@U0ARU7EKGCQ> 你好",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: "agent:main:plain-chat-correction",
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+    expect((decision.request as Record<string, unknown>).task).toBe("你好");
+    expect(((decision.request as Record<string, unknown>).metadata as Record<string, unknown>).route_correction).toMatchObject({
+      from: "delegate",
+      to: "reply",
+      reason: "plain_chat_pre_dispatch",
+    });
+  });
+
   it("does NOT force reply for new task when prior receipt exists but intent is NOT follow-up", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("delegate", 0.85),

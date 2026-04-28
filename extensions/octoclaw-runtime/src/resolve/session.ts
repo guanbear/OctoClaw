@@ -5,7 +5,11 @@ import {
   resolveTaskStatePath,
   stableId,
 } from "./env.js";
-import { buildConversationControlHintsFromIntent } from "../conversation-grounding.js";
+import {
+  buildConversationControlHintsFromIntent,
+  buildConversationIntentPacket,
+} from "../conversation-grounding.js";
+import { normalizeSemanticPrompt } from "../semantic-prompt.js";
 import fsSync from "node:fs";
 
 export const IM_SESSION_ORIGINS = new Set([
@@ -134,9 +138,19 @@ function parseUpdatedSortValue(value: unknown): number {
 }
 
 function buildConversationIntentPacketCompat(options: UnknownRecord = {}): UnknownRecord {
+  const prompt = normalizeSemanticPrompt(options.prompt) || stringValue(options.prompt);
+  const classified = buildConversationIntentPacket({
+    prompt,
+    replayLogPath: stringValue(options.replayLogPath),
+    taskStatePath: stringValue(options.taskStatePath),
+    sessionKeys: Array.isArray(options.sessionKeys) ? options.sessionKeys as string[] : [],
+  });
+  if (classified.intent_class === "plain_chat") {
+    return classified as unknown as UnknownRecord;
+  }
   return {
     available: true,
-    prompt: stringValue(options.prompt),
+    prompt,
     replay_log_path: stringValue(options.replayLogPath),
     task_state_path: stringValue(options.taskStatePath),
     session_keys: Array.isArray(options.sessionKeys) ? options.sessionKeys : [],
@@ -923,7 +937,7 @@ export function normalizeInboundPrompt(raw: Record<string, unknown> | string): s
     return relayPrompt;
   }
   const queuedPrompt = unwrapQueuedBusyPrompt(text);
-  return queuedPrompt || text;
+  return normalizeSemanticPrompt(queuedPrompt || text) || queuedPrompt || text;
 }
 
 export function promptLookupCandidates(raw: Record<string, unknown> | string): string[] {

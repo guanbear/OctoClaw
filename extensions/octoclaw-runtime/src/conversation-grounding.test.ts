@@ -476,6 +476,18 @@ describe("Chinese provenance prompt intent classification", () => {
     expect(control.require_state_grounding).toBe(true);
   });
 
+  it("normalizes Slack acceptance envelope before plain_chat classification", () => {
+    const intent = buildConversationIntentPacket({
+      prompt: "[OCTOCLAW_ACCEPTANCE] run=manual case=plain_chat acceptance=true\n<@U0ARU7EKGCQ> 你好",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: ["slack:default:channel:C123"],
+    });
+
+    expect(intent.intent_class).toBe("plain_chat");
+    expect(intent.reason_codes).toContain("plain_chat_short_greeting");
+  });
+
   it("classifies Slack plain chat 在吗 as plain_chat without state grounding", () => {
     const intent = buildConversationIntentPacket({
       prompt: "在吗",

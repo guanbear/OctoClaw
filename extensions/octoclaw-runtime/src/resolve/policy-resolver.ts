@@ -371,8 +371,12 @@ function structuredIntentClass(metadata: UnknownRecord): string {
   const control = trustedConversationControl(metadata);
   const intentPacket = asRecord(metadata.intent_packet);
   const intentSource = asString(intentPacket.source);
+  const packetIntentClass = asString(intentPacket.intent_class || intentPacket.intentClass);
+  if (intentSource === "deterministic_plain_chat_classifier" && packetIntentClass === "plain_chat") {
+    return "plain_chat";
+  }
   if (intentSource && !intentSource.startsWith("deterministic_")) {
-    return asString(intentPacket.intent_class || intentPacket.intentClass || control.intent_class);
+    return asString(packetIntentClass || control.intent_class);
   }
   return asString(control.intent_class);
 }
@@ -1820,6 +1824,21 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           if (process.env.OCTOCLAW_JUDGE_DEBUG) {
             console.log(`[octoclaw-judge] execution followup no coverage: intent=${intentClass}, forcing reply (no_verifiable_record)`);
           }
+        }
+
+        if (!executionOverrideApplied && intentClass === "plain_chat" && judgeRouteOverride === "delegate") {
+          judgeRouteOverride = "reply";
+          judgeSucceeded = true;
+          executionOverrideApplied = true;
+          metadata.route_correction = {
+            from: "delegate",
+            to: "reply",
+            source: "validator",
+            reason: "plain_chat_pre_dispatch",
+            dispatchExecuted: false,
+            spawnExecuted: false,
+          };
+          validatorOverrideReasons.push("validator:plain_chat→reply(pre_dispatch_correction)");
         }
 
         if (!executionOverrideApplied && toolNeedHint === "required" && judgeRouteOverride === "reply") {

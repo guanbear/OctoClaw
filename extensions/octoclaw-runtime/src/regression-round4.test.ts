@@ -231,6 +231,33 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(guarded.mode).toBe("pass");
   });
 
+  it("does not project delegate failure over a plain greeting reply", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "你好，我在。" }] },
+      {
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        decision: {
+          route: "delegate",
+          route_correction: {
+            from: "delegate",
+            to: "reply",
+            source: "validator",
+            reason: "plain_chat_pre_dispatch",
+          },
+          router_decision_v2: { request_kind: "delegated_task" },
+          route_decision: { route: "delegate", task_class: "main_direct" },
+        },
+      },
+    );
+
+    const text = (guarded.message as { content?: Array<{ text: string }> } | undefined)?.content?.[0]?.text
+      || ((guarded.message as { content?: string } | undefined)?.content ?? "");
+    expect(text).not.toContain("还没派发成功");
+    expect(text).not.toContain("真实执行结果");
+  });
+
   it("replaces leaked direct reply when delegated task was not dispatched", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "我来写。收到，我看一下。可以，给你一个通用版：" }] },
