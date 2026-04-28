@@ -1393,8 +1393,21 @@ function appendExecutionCoverageProjection(replyText: string, state: Record<stri
   const coverage = String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "unknown").trim();
   const dispatchExecuted = String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? state.dispatchExecuted ?? false);
   const spawnExecuted = String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? state.spawnExecuted ?? false);
+  const route = String(workContract.route ?? routeDecision.route ?? "reply").trim() || "reply";
   const routeSource = String(workContract.decisionSource ?? routeDecision.route_source ?? "unknown").trim();
-  return `${replyText.trim()}\n\n证据投影：WorkContract=${contractId}；ExecutionCoverage coverage=${coverage}；route_source=${routeSource}；dispatchExecuted=${dispatchExecuted}；spawnExecuted=${spawnExecuted}。`;
+  const modelPolicy = asRecord(decision.model_policy);
+  const runtimeTruth = asRecord(decision.runtime_truth);
+  const model = String(
+    state.model
+    ?? state.modelProfile
+    ?? state.model_profile
+    ?? modelPolicy.selected_model
+    ?? modelPolicy.model
+    ?? runtimeTruth.model
+    ?? decision.model
+    ?? "unknown",
+  ).trim() || "unknown";
+  return `${replyText.trim()}\n\n证据投影：route=${route}；model=${model}；WorkContract=${contractId}；ExecutionCoverage coverage=${coverage}；route_source=${routeSource}；dispatchExecuted=${dispatchExecuted}；spawnExecuted=${spawnExecuted}。`;
 }
 
 export function guardAssistantMessageForPolicyState(

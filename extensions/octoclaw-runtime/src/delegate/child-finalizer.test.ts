@@ -53,6 +53,7 @@ describe("child completion finalizer", () => {
 
     expect(result.status).toBe("completed");
     expect(sent[0]).toContain("子任务完成");
+    expect(sent[0]).toContain("证据投影：route=delegate；model=unknown");
     expect(sent[0]).toContain("resultMaterialized=true");
     expect(sent[0]).not.toContain("rawTranscript");
     const taskState = JSON.parse(fsSync.readFileSync(taskStatePath, "utf-8"));

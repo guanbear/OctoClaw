@@ -282,7 +282,7 @@ async function sendFinalMessage(options: ChildCompletionFinalizerOptions, result
     "",
     resultText,
     "",
-    `证据投影：WorkContract=${options.workContractId}；dispatchExecuted=true；spawnExecuted=true；resultMaterialized=true${options.nativeTaskId ? `；native_task=${options.nativeTaskId}` : ""}。`,
+    `证据投影：route=delegate；model=${asString(options.modelId) || "unknown"}；WorkContract=${options.workContractId}；dispatchExecuted=true；spawnExecuted=true；resultMaterialized=true${options.nativeTaskId ? `；native_task=${options.nativeTaskId}` : ""}。`,
   ].join("\n");
   if (options.sendFinalMessage) {
     return options.sendFinalMessage({ sessionKey: options.parentSessionKey, message, replyToMessageId: options.replyToMessageId, cwd: options.cwd });

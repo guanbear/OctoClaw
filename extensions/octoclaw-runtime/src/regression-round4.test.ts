@@ -722,6 +722,7 @@ describe("regression round 4: execution coverage projections", () => {
     );
 
     expect(guarded.mode).toBe("replace");
+    expect(String(guarded.message?.content)).toContain("证据投影：route=reply；model=unknown");
     expect(String(guarded.message?.content)).toContain("WorkContract=wc-provenance-1");
     expect(String(guarded.message?.content)).toContain("ExecutionCoverage coverage=thread");
     expect(String(guarded.message?.content)).toContain("spawnExecuted=false");
