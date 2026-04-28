@@ -97,6 +97,24 @@ export interface ReplayEvent {
   decisionSource?: string;
   rolloutFlags?: Record<string, unknown>;
   routeOutcome?: RouteOutcome;
+  flowId?: string;
+  telemetryId?: string;
+  role?: string;
+  modelProfile?: string;
+  backend?: string;
+  terminalState?: string;
+  ackMs?: number;
+  routeDecisionMs?: number;
+  taskMaterializeMs?: number;
+  queueWaitMs?: number;
+  firstProgressMs?: number;
+  finalDeliveryMs?: number;
+  totalLatencyMs?: number;
+  estimatedCostUsd?: number;
+  actualCostUsd?: number;
+  retryCount?: number;
+  fallbackCount?: number;
+  artifactReopenCount?: number;
   allowedTools?: string[];
   blockedTools?: string[];
   routeLanguagePacks?: string[];
@@ -279,6 +297,48 @@ export interface DeliveryLane {
   samples: LaneSample[];
 }
 
+export type CostSpeedLaneName = "reply" | "delegate" | "flow";
+export type MetricCompleteness = "known" | "partial" | "unknown";
+
+export interface CostSpeedMetricSummary {
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+}
+
+export interface CostSpeedLaneReport {
+  lane: CostSpeedLaneName;
+  requestCount: number;
+  successCount: number;
+  ackMs: CostSpeedMetricSummary;
+  routeDecisionMs: CostSpeedMetricSummary;
+  taskMaterializeMs: CostSpeedMetricSummary;
+  queueWaitMs: CostSpeedMetricSummary;
+  firstProgressMs: CostSpeedMetricSummary;
+  finalDeliveryMs: CostSpeedMetricSummary;
+  totalLatencyMs: CostSpeedMetricSummary;
+  estimatedCostUsd: number | null;
+  actualCostUsd: number | null;
+  estimatedCostStatus: MetricCompleteness;
+  actualCostStatus: MetricCompleteness;
+  missingEstimatedCostCount: number;
+  missingActualCostCount: number;
+  costPerRequest: number | null;
+  costPerSuccess: number | null;
+  fallbackCount: number;
+  retryCount: number;
+  terminalStates: Record<string, number>;
+  parentContextTokensAdded: CostSpeedMetricSummary;
+  resultPacketTokens: CostSpeedMetricSummary;
+  artifactReopenCount: CostSpeedMetricSummary;
+}
+
+export interface CostSpeedBaselineReport {
+  generatedAt: string;
+  sourceEventCount: number;
+  lanes: CostSpeedLaneReport[];
+}
+
 export type EvaluationLaneResult =
   | RouteQualityLane
   | RouteCommitAckLane
@@ -315,6 +375,7 @@ export interface NightlyReport {
   filter?: NightlyReplayFilterMetadata;
   inputDateRange: { earliest: string | null; latest: string | null };
   lanes: EvaluationLaneResult[];
+  costSpeedBaseline: CostSpeedBaselineReport;
   overallGate: GateResult;
   recommendationStatus: RecommendationStatus;
   recommendation: string;

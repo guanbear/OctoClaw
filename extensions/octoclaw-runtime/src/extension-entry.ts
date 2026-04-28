@@ -1156,19 +1156,44 @@ export const plugin = {
         tool_active: false,
         final_response_streaming: false,
       });
+      const finalNow = Date.now();
+      const directToolsSeen = Array.isArray(state?.directToolsSeen) ? state.directToolsSeen : [];
+      const toolsUsed = Array.from(new Set([
+        ...(Array.isArray(state?.toolsUsed) ? state.toolsUsed : []),
+        ...directToolsSeen,
+      ].map((value) => stringValue(value)).filter(Boolean)));
+      const finalReceipt = buildTurnExecutionReceipt(
+        {
+          ...(state ?? {}),
+          canonicalSessionKey: stateKey,
+          toolsUsed,
+        } as Parameters<typeof buildTurnExecutionReceipt>[0],
+        Math.max(0, finalNow - Number(state?.createdAt || state?.updatedAt || finalNow)),
+        finalNow,
+      );
       await recordPolicyReplay(
         "agent_end",
         {
           sessionKey: stateKey,
           sessionId: stringValue(ctx.sessionId),
-          route: stringValue(asRecord(state?.decision).route_decision && asRecord(asRecord(state?.decision).route_decision).route),
+          route: finalReceipt.route,
+          finalRoute: finalReceipt.route,
           systemPreferredRoute: stringValue(asRecord(asRecord(state?.decision).route_decision).system_preferred_route),
           workerPool: stringValue(asRecord(asRecord(state?.decision).route_decision).worker_pool),
           taskClass: stringValue(asRecord(asRecord(state?.decision).route_decision).task_class),
           protectedLane: stringValue(asRecord(asRecord(state?.decision).route_decision).protected_lane),
           routeHintRequired: Boolean(asRecord(asRecord(state?.decision).route_hint_policy).required),
           routeHintSubmitted: Boolean(state?.routeHintSubmitted),
-          delegated: Boolean(state?.delegated),
+          delegated: finalReceipt.delegated,
+          dispatchExecuted: finalReceipt.dispatchExecuted,
+          spawnExecuted: finalReceipt.spawnExecuted,
+          resultMaterialized: finalReceipt.resultMaterialized,
+          deliveryStatus: finalReceipt.deliveryStatus ?? "",
+          terminalState: finalReceipt.outcome,
+          totalLatencyMs: finalReceipt.durationMs,
+          parentContextTokensAdded: finalReceipt.parentContextTokensAdded,
+          resultPacketTokens: finalReceipt.resultPacketTokens,
+          artifactReopenCount: finalReceipt.artifactReopenCount,
           delegationTool: stringValue(state?.delegationTool),
           directToolsSeen: Array.isArray(state?.directToolsSeen) ? state.directToolsSeen : [],
           blockedTools: Array.isArray(state?.blockedTools) ? state.blockedTools : [],
@@ -1197,21 +1222,6 @@ export const plugin = {
           pi.logger,
         );
       }
-      const finalNow = Date.now();
-      const directToolsSeen = Array.isArray(state?.directToolsSeen) ? state.directToolsSeen : [];
-      const toolsUsed = Array.from(new Set([
-        ...(Array.isArray(state?.toolsUsed) ? state.toolsUsed : []),
-        ...directToolsSeen,
-      ].map((value) => stringValue(value)).filter(Boolean)));
-      const finalReceipt = buildTurnExecutionReceipt(
-        {
-          ...(state ?? {}),
-          canonicalSessionKey: stateKey,
-          toolsUsed,
-        } as Parameters<typeof buildTurnExecutionReceipt>[0],
-        Math.max(0, finalNow - Number(state?.createdAt || state?.updatedAt || finalNow)),
-        finalNow,
-      );
       const shouldRetainCompactReceipt = Boolean(
         finalReceipt.route === "reply"
         || finalReceipt.toolsUsed.length > 0

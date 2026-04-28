@@ -9,6 +9,10 @@ import type {
   DelegationHealthLane,
   DeliveryLane,
   EvaluationLaneResult,
+  CostSpeedBaselineReport,
+  CostSpeedLaneName,
+  CostSpeedMetricSummary,
+  MetricCompleteness,
   NightlyReport,
   RecommendationStatus,
   GateResult,
@@ -651,6 +655,123 @@ export function classifyDelivery(events: ReplayEvent[]): DeliveryLane {
   };
 }
 
+
+function numericField(event: ReplayEvent, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = event[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function costSpeedMetric(values: Array<number | undefined>): CostSpeedMetricSummary {
+  const clean = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value)).sort((a, b) => a - b);
+  return {
+    p50: percentile(clean, 50),
+    p95: percentile(clean, 95),
+    p99: percentile(clean, 99),
+  };
+}
+
+function costCompleteness(values: Array<number | undefined>): MetricCompleteness {
+  if (values.length === 0) return "unknown";
+  const known = values.filter((value) => typeof value === "number" && Number.isFinite(value)).length;
+  if (known === 0) return "unknown";
+  return known === values.length ? "known" : "partial";
+}
+
+function costSum(values: Array<number | undefined>): number | null {
+  const clean = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (clean.length === 0) return null;
+  return clean.reduce((sum, value) => sum + value, 0);
+}
+
+function isCostSpeedSourceEvent(event: ReplayEvent): boolean {
+  if (typeof event.telemetryId === "string" && event.telemetryId.trim()) return true;
+  if (event.event.includes("telemetry")) return true;
+  if (event.event === "agent_end") return true;
+  return [
+    "ackMs",
+    "routeDecisionMs",
+    "taskMaterializeMs",
+    "queueWaitMs",
+    "firstProgressMs",
+    "finalDeliveryMs",
+    "totalLatencyMs",
+    "estimatedCostUsd",
+    "actualCostUsd",
+    "parentContextTokensAdded",
+    "resultPacketTokens",
+    "artifactReopenCount",
+  ].some((key) => numericField(event, key) !== undefined);
+}
+
+function laneForCostSpeed(event: ReplayEvent): CostSpeedLaneName {
+  if (String(event.telemetryId ?? "").startsWith("flow:")) return "flow";
+  if (event.event === "flow_telemetry" || event.event === "flow_summary") return "flow";
+  return event.route === "reply" || event.finalRoute === "reply" ? "reply" : "delegate";
+}
+
+function isCostSpeedSuccess(event: ReplayEvent): boolean {
+  const state = String(event.terminalState ?? event.deliveryStatus ?? "").toLowerCase();
+  if (["success", "succeeded", "completed", "delivered"].includes(state)) return true;
+  if (event.event === "agent_end" && event.route === "reply") return true;
+  return event.resultMaterialized === true && event.deliveryStatus !== "failed";
+}
+
+export function buildCostSpeedBaselineFromReplay(events: ReplayEvent[], generatedAt: string | Date = new Date()): CostSpeedBaselineReport {
+  const generatedAtIso = generatedAt instanceof Date ? generatedAt.toISOString() : generatedAt;
+  const sources = events.filter(isCostSpeedSourceEvent);
+  const lanes = (["reply", "delegate", "flow"] as const).map((lane) => {
+    const items = sources.filter((event) => laneForCostSpeed(event) === lane);
+    const successCount = items.filter(isCostSpeedSuccess).length;
+    const estimatedCostValues = items.map((event) => numericField(event, "estimatedCostUsd", "estimatedCost"));
+    const actualCostValues = items.map((event) => numericField(event, "actualCostUsd", "actualCost"));
+    const estimatedCostUsd = costSum(estimatedCostValues);
+    const actualCostUsd = costSum(actualCostValues);
+    const estimatedCostStatus = costCompleteness(estimatedCostValues);
+    const actualCostStatus = costCompleteness(actualCostValues);
+    const terminalStates = items.reduce<Record<string, number>>((acc, event) => {
+      const key = String(event.terminalState ?? event.deliveryStatus ?? "unknown").trim() || "unknown";
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    return {
+      lane,
+      requestCount: items.length,
+      successCount,
+      ackMs: costSpeedMetric(items.map((event) => numericField(event, "ackMs", "ack_ms"))),
+      routeDecisionMs: costSpeedMetric(items.map((event) => numericField(event, "routeDecisionMs", "route_decision_ms"))),
+      taskMaterializeMs: costSpeedMetric(items.map((event) => numericField(event, "taskMaterializeMs", "task_materialize_ms"))),
+      queueWaitMs: costSpeedMetric(items.map((event) => numericField(event, "queueWaitMs", "queue_wait_ms"))),
+      firstProgressMs: costSpeedMetric(items.map((event) => numericField(event, "firstProgressMs", "first_progress_ms"))),
+      finalDeliveryMs: costSpeedMetric(items.map((event) => numericField(event, "finalDeliveryMs", "final_delivery_ms"))),
+      totalLatencyMs: costSpeedMetric(items.map((event) => numericField(event, "totalLatencyMs", "actualLatency", "durationMs"))),
+      estimatedCostUsd,
+      actualCostUsd,
+      estimatedCostStatus,
+      actualCostStatus,
+      missingEstimatedCostCount: estimatedCostValues.filter((value) => typeof value !== "number" || !Number.isFinite(value)).length,
+      missingActualCostCount: actualCostValues.filter((value) => typeof value !== "number" || !Number.isFinite(value)).length,
+      costPerRequest: items.length > 0 && actualCostStatus === "known" && actualCostUsd !== null ? actualCostUsd / items.length : null,
+      costPerSuccess: successCount > 0 && actualCostStatus === "known" && actualCostUsd !== null ? actualCostUsd / successCount : null,
+      fallbackCount: items.reduce((sum, event) => sum + (numericField(event, "fallbackCount", "fallback_count") ?? (event.fallbackTaken ? 1 : 0)), 0),
+      retryCount: items.reduce((sum, event) => sum + (numericField(event, "retryCount", "retry_count") ?? 0), 0),
+      terminalStates,
+      parentContextTokensAdded: costSpeedMetric(items.map((event) => numericField(event, "parentContextTokensAdded", "parent_context_tokens_added"))),
+      resultPacketTokens: costSpeedMetric(items.map((event) => numericField(event, "resultPacketTokens", "result_packet_tokens"))),
+      artifactReopenCount: costSpeedMetric(items.map((event) => numericField(event, "artifactReopenCount", "artifact_reopen_count"))),
+    };
+  });
+
+  return { generatedAt: generatedAtIso, sourceEventCount: sources.length, lanes };
+}
+
 const REQUIRED_LANES: readonly string[] = [
   "route_quality",
   "route_commit_ack",
@@ -709,17 +830,20 @@ export function generateNightlyReport(events: ReplayEvent[], filter?: NightlyRep
     classifyDelegationHealth(events),
     classifyDelivery(events),
   ];
+  const generatedAt = new Date().toISOString();
+  const costSpeedBaseline = buildCostSpeedBaselineFromReplay(events, generatedAt);
 
   const overallGate = computeOverallGate(lanes);
   const recommendationStatus = computeRecommendationStatus(overallGate);
 
   return {
-    reportId: `nightly:${latest ?? new Date().toISOString()}`,
-    generatedAt: new Date().toISOString(),
+    reportId: `nightly:${latest ?? generatedAt}`,
+    generatedAt,
     inputEventCount: events.length,
     ...(filter ? { rawInputEventCount: filter.rawInputEventCount, filteredEventCount: filter.filteredEventCount, filter } : {}),
     inputDateRange: { earliest, latest },
     lanes,
+    costSpeedBaseline,
     overallGate,
     recommendationStatus,
     recommendation: buildRecommendationText(overallGate, lanes),

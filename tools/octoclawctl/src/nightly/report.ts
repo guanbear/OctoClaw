@@ -13,6 +13,32 @@ export function renderMarkdownReport(report: NightlyReport): string {
   lines.push(`- **Recommendation**: ${report.recommendation}`);
   lines.push("");
 
+  lines.push(`## Cost/Speed Baseline`);
+  lines.push("");
+  lines.push(`- **Source Events**: ${report.costSpeedBaseline.sourceEventCount}`);
+  lines.push("");
+  lines.push(`| Lane | Requests | Success | ACK p50/p95/p99 | Total p50/p95/p99 | Actual Cost | Cost Status | Cost/Req | Cost/Success | Fallback | Retry | Missing Cost | Context p95 | Result Tokens p95 |`);
+  lines.push(`|------|----------|---------|-----------------|-------------------|-------------|-------------|----------|--------------|----------|-------|--------------|-------------|-------------------|`);
+  for (const lane of report.costSpeedBaseline.lanes) {
+    lines.push([
+      `| ${lane.lane}`,
+      lane.requestCount,
+      lane.successCount,
+      formatMetric(lane.ackMs),
+      formatMetric(lane.totalLatencyMs),
+      formatMoney(lane.actualCostUsd),
+      lane.actualCostStatus,
+      formatMoney(lane.costPerRequest),
+      formatMoney(lane.costPerSuccess),
+      lane.fallbackCount,
+      lane.retryCount,
+      lane.missingActualCostCount,
+      lane.parentContextTokensAdded.p95 ?? "N/A",
+      lane.resultPacketTokens.p95 ?? "N/A",
+    ].join(" | ") + " |");
+  }
+  lines.push("");
+
   for (const lane of report.lanes) {
     lines.push(`## ${laneTitle(lane.lane)}`);
     lines.push("");
@@ -38,6 +64,15 @@ export function renderMarkdownReport(report: NightlyReport): string {
   }
 
   return lines.join("\n");
+}
+
+function formatMetric(metric: { p50: number | null; p95: number | null; p99: number | null }): string {
+  return `${metric.p50 ?? "N/A"}/${metric.p95 ?? "N/A"}/${metric.p99 ?? "N/A"}`;
+}
+
+function formatMoney(value: number | null): string {
+  if (value === null) return "N/A";
+  return `$${value.toFixed(6)}`;
 }
 
 function laneTitle(lane: string): string {

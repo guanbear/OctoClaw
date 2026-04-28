@@ -82,7 +82,7 @@ When the gate fails or is unknown, `rollbackTarget` is `null` — no promotion i
 
 ## Known Limitations
 
-- **Cost comparison**: Cost requires explicit `metrics.costUsd` in both baseline and candidate. Missing cost data makes the gate `unknown`, not `pass`.
+- **Cost comparison**: Cost requires explicit `metrics.costUsd` in both baseline and candidate, or reviewer-supplied metrics derived from the D3 cost/speed baseline. Missing cost data makes the gate `unknown`, not `pass`.
 - **Statistical comparison**: Latency comparison uses aggregate percentiles (P50/P95). Different sample sizes between baseline and candidate may affect comparison accuracy.
 
 ## Safety Guarantees

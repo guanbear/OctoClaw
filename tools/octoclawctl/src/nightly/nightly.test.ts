@@ -6,6 +6,7 @@ import {
   classifyExecutionTransition,
   classifyDelegationHealth,
   classifyDelivery,
+  buildCostSpeedBaselineFromReplay,
   computeOverallGate,
   computeRecommendationStatus,
   generateNightlyReport,
@@ -490,6 +491,52 @@ describe("overall gate — stricter semantics", () => {
       { lane: "route_commit_ack", total: 5, pass: 3, fail: 0, unknown: 2, ackSent: 3, ackSkipped: 2, ackFailed: 0, ackDuplicate: 0, ackMissing: 0, ackNoTarget: 0, ackMsP50: null, ackMsP95: null, ackMsP99: null, coverage: 0.6, samples: [] },
     ]);
     expect(gate).toBe("unknown");
+  });
+});
+
+describe("cost/speed baseline", () => {
+  it("groups replay telemetry into reply/delegate/flow lanes with explicit missing cost", () => {
+    const report = buildCostSpeedBaselineFromReplay([
+      agentEnd({ route: "reply", finalRoute: "reply", terminalState: "completed", totalLatencyMs: 100, actualCostUsd: 0.01, parentContextTokensAdded: 5 }),
+      agentEnd({ route: "delegate", finalRoute: "delegate", terminalState: "failed", totalLatencyMs: 200, fallbackCount: 1, resultPacketTokens: 30 }),
+      makeEvent({ event: "flow_telemetry", at: "2026-04-26T10:00:40.000Z", route: "delegate", telemetryId: "flow:flow-1:summary", terminalState: "completed", totalLatencyMs: 300, actualCostUsd: 0.03 }),
+    ], "2026-04-26T10:01:00.000Z");
+
+    expect(report.sourceEventCount).toBe(3);
+    expect(report.lanes.find((lane) => lane.lane === "reply")).toMatchObject({
+      requestCount: 1,
+      successCount: 1,
+      totalLatencyMs: { p50: 100, p95: 100, p99: 100 },
+      actualCostStatus: "known",
+      costPerRequest: 0.01,
+    });
+    expect(report.lanes.find((lane) => lane.lane === "delegate")).toMatchObject({
+      requestCount: 1,
+      successCount: 0,
+      fallbackCount: 1,
+      actualCostStatus: "unknown",
+      missingActualCostCount: 1,
+      resultPacketTokens: { p50: 30, p95: 30, p99: 30 },
+    });
+    expect(report.lanes.find((lane) => lane.lane === "flow")).toMatchObject({
+      requestCount: 1,
+      successCount: 1,
+      actualCostUsd: 0.03,
+    });
+  });
+
+  it("nightly report exposes cost/speed baseline without changing promotion gate", () => {
+    const report = generateNightlyReport([
+      policyResolved(),
+      routeCommitAck(),
+      executionTransition({ transitionKind: "spawn_started" }),
+      agentEnd({ route: "reply", finalRoute: "reply", terminalState: "completed", totalLatencyMs: 120, actualCostUsd: 0.02 }),
+    ]);
+    const markdown = renderMarkdownReport(report);
+
+    expect(report.costSpeedBaseline.sourceEventCount).toBeGreaterThan(0);
+    expect(markdown).toContain("## Cost/Speed Baseline");
+    expect(markdown).toContain("reply");
   });
 });
 
