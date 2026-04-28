@@ -328,6 +328,25 @@ describe("WP2 regression: false dispatch claim guard", () => {
     expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
   });
 
+  it("replaces direct answer on delegated route without execution evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "刚才的调研已经完成了，直接给你结果：状态面板需要展示 taskId、status、model。" }] },
+      { decision: { route_decision: { route: "delegate" } }, delegated: true, dispatchExecuted: false, spawnExecuted: false },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+  });
+
+  it("allows short processing ack before delegated dispatch evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "收到，正在处理。" }] },
+      { decision: { route_decision: { route: "delegate" } }, dispatchExecuted: false, spawnExecuted: false },
+    );
+
+    expect(guarded.mode).toBe("pass");
+  });
+
   it("replaces false sessions_spawn claim on reply route", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "我已经调用 sessions_spawn 派发任务。" }] },

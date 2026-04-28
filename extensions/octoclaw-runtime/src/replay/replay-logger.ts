@@ -1295,6 +1295,14 @@ function hasStatusProjectionToolEvidence(state: Record<string, unknown>): boolea
   return seenTools.has("octoclaw_status") || seenTools.has("octoclaw_task_action");
 }
 
+function looksLikeTransientProcessingAck(text: string): boolean {
+  const raw = String(text || "").trim();
+  return raw.length > 0 && raw.length < 30 && (
+    /^(收到|好的|好|明白|正在|处理中)(?:[，,。.!！\s]|$)/u.test(raw)
+    || /^(ok|okay|working|checking|looking|processing)\b/iu.test(raw)
+  );
+}
+
 export function ungroundedToolProvenanceReply(
   state: Record<string, unknown>,
   claimedTools: string[],
@@ -1367,8 +1375,17 @@ export function guardAssistantMessageForPolicyState(
   }
   const dispatchRoute = String(state.dispatchRoute ?? state.dispatch_route ?? "").trim();
   const dispatchExecuted = state.dispatchExecuted === true || state.dispatch_executed === true;
+  const spawnExecuted = state.spawnExecuted === true || state.spawn_executed === true;
+  const resultMaterialized = state.resultMaterialized === true || state.result_materialized === true;
   const statusProjectionToolSeen = hasStatusProjectionToolEvidence(state);
-  if (isDelegatedRoute(asRecord(state.decision)) && !state.delegated && !statusProjectionToolSeen && !(dispatchRoute === "reply" && dispatchExecuted)) {
+  const hasExecutionEvidence = dispatchExecuted || spawnExecuted || resultMaterialized;
+  if (
+    isDelegatedRoute(asRecord(state.decision))
+    && !statusProjectionToolSeen
+    && !hasExecutionEvidence
+    && !(dispatchRoute === "reply" && dispatchExecuted)
+    && !looksLikeTransientProcessingAck(replyText)
+  ) {
     const fallback = delegationFailureReply(state);
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }
@@ -1397,7 +1414,6 @@ export function guardAssistantMessageForPolicyState(
   if (provenanceProjected !== replyText) {
     return { mode: "replace", message: replaceAssistantMessageText(message, provenanceProjected) };
   }
-  const spawnExecuted = state.spawnExecuted === true || state.spawn_executed === true;
   if (!statusProjectionToolSeen && !(dispatchExecuted || spawnExecuted)) {
     const dispatchClaimPatterns = [
       /(?:已经|已|刚)?(?:派|委派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?\s*agent|worker|任务|task)/iu,
