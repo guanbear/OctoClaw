@@ -346,6 +346,40 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(key);
   });
 
+
+  it("allows direct tools for a sealed reply route even when route_hint_required remains true", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-direct";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply", route_source: "work_contract" },
+        work_contract: { route: "reply", allowedTools: ["read", "write", "exec"] },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: true, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: true, submitted: false },
+        tool_policy: { allow_direct_tools: true, must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "read", params: { path: "docs/example.md" } },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    policyState.clearState(key);
+  });
+
   it("does not block direct tools after a reply route_hint is stored on a newer context alias", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({

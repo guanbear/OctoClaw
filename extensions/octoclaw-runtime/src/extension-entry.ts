@@ -1001,6 +1001,7 @@ export const plugin = {
       const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
       const allowedObserverTools = observerControlTools(decision, routeHintTool);
       const allowedSessionTools = sessionControlTools(decision, routeHintTool);
+      const toolPolicy = asRecord(decision.tool_policy);
       const metadata = buildPolicyMetadata(ctx, { stateKey });
       if (["octoclaw_status", "octoclaw_task_action"].includes(toolName)) {
         updatePolicyState(stateKey, (current) => ({
@@ -1125,7 +1126,11 @@ export const plugin = {
         };
       }
 
-      if (routeHintIsRequired && !routeHintAlreadySubmitted && !allowedPreHintTools.has(toolName)) {
+      const directReplyToolsAllowed = stringValue(asRecord(decision.route_decision).route) === "reply"
+        && Boolean(toolPolicy.allow_direct_tools)
+        && !isControlObserverDecision(decision)
+        && !isSessionControlDecision(decision);
+      if (routeHintIsRequired && !routeHintAlreadySubmitted && !directReplyToolsAllowed && !allowedPreHintTools.has(toolName)) {
         updatePolicyState(stateKey, (current) => ({
           ...current,
           blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
@@ -1148,7 +1153,6 @@ export const plugin = {
         };
       }
 
-      const toolPolicy = asRecord(decision.tool_policy);
       const workContractProjection = asRecord(decision.work_contract);
       const forbiddenContractTools = new Set(stringArray(workContractProjection.forbiddenTools || workContractProjection.forbidden_tools));
       const routeDecision = asRecord(decision.route_decision);
