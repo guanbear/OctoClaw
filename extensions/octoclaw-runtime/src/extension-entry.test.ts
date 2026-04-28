@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability } from "./extension-entry.js";
+import { guardAssistantMessageForPolicyState } from "./replay/replay-logger.js";
 import { policyState } from "./state/policy-state.js";
 import { getToolRegistrations } from "./tools/registration.js";
 
@@ -289,14 +290,16 @@ describe("guardOutboundMessageForPolicyState", () => {
       decision: {
         route_decision: { route: "reply" },
         model_policy: { selected_model: "zhipu/GLM-5.1" },
+        request: { metadata: { message_id: "1777380000.000001" } },
       },
+      inboundMessageTs: "1777380000.000001",
       createdAt: now,
       updatedAt: now,
     });
 
     const guarded = guardOutboundMessageForPolicyState(
       { to: "C0FOOTER", content: "摘要回复。", metadata: { channelId: "C0FOOTER", threadTs: "1777380000.000001" } },
-      { channelId: "slack" },
+      { channelId: "slack", model: "zhipu/GLM-5.1" },
       now,
     );
 
@@ -326,7 +329,6 @@ describe("guardOutboundMessageForPolicyState", () => {
       now,
     );
 
-    // Content already has compact footer — should not be modified
     expect(guarded).toBeUndefined();
     policyState.clearState(key);
   });
@@ -347,7 +349,6 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     expect(guarded.mode).toBe("pass");
     expect(String(guarded.message?.content)).toContain("route=reply | model=direct_main · thread");
-    // Ensure no second footer was appended
     const footerMatches = String(guarded.message?.content).match(/route=reply \| model=direct_main/g);
     expect(footerMatches).toHaveLength(1);
   });
