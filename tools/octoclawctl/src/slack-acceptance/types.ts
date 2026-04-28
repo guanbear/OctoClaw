@@ -18,6 +18,13 @@ export interface SlackAcceptanceTarget {
   allowProductionTarget?: boolean;
 }
 
+export interface SlackAcceptanceIsolationConfig {
+  enabled?: boolean;
+  runId?: string;
+  markerPrefix?: string;
+  allowUserToken?: boolean;
+}
+
 export interface SlackAcceptanceCaseConfig {
   id?: string;
   kind: SlackAcceptanceCaseKind;
@@ -56,6 +63,7 @@ export interface SlackAcceptanceConfig {
   requestTimeoutMs?: number;
   totalTimeoutMs?: number;
   fixtures?: Record<string, string | boolean | number>;
+  isolation?: SlackAcceptanceIsolationConfig;
 }
 
 export interface SlackAcceptanceResolvedConfig {
@@ -76,6 +84,8 @@ export interface SlackAcceptanceResolvedConfig {
   requestTimeoutMs: number;
   totalTimeoutMs: number;
   fixtures: Record<string, string | boolean | number>;
+  acceptanceRunId: string;
+  isolation: Required<Pick<SlackAcceptanceIsolationConfig, "enabled" | "markerPrefix" | "allowUserToken">>;
 }
 
 export interface SlackMessageRecord {
@@ -116,6 +126,8 @@ export interface SlackAcceptanceCaseResult {
   id: string;
   kind: SlackAcceptanceCaseKind;
   prompt: string;
+  sentPrompt?: string;
+  acceptanceRunId?: string;
   status: AcceptanceGate;
   sentAt?: string;
   threadTs?: string;
@@ -140,7 +152,13 @@ export interface SlackAcceptanceReport {
   schemaVersion: "octoclaw.slack_acceptance.report/v1";
   reportId: string;
   generatedAt: string;
+  acceptanceRunId?: string;
   sessionKey: string;
+  isolation?: {
+    enabled: boolean;
+    markerPrefix: string;
+    userTokenAllowed: boolean;
+  };
   target: { channel: string; threadTs?: string; user?: string };
   overallGate: AcceptanceGate;
   total: number;

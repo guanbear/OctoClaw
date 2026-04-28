@@ -17,6 +17,17 @@ import type {
 import { sanitizeForArtifact } from "./sanitize.js";
 
 const SAFE_SLACK_TOOLS = new Set(["message.send", "message.update", "message.react", "message.typing"]);
+const DEFAULT_ACCEPTANCE_MARKER_PREFIX = "[OCTOCLAW_ACCEPTANCE]";
+
+function makeAcceptanceRunId(label: string): string {
+  const safeLabel = label.toLowerCase().replace(/[^a-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "") || "acceptance";
+  return `${safeLabel}-${Date.now().toString(36)}`;
+}
+
+function buildAcceptancePrompt(prompt: string, runId: string, caseId: string, markerPrefix: string, enabled: boolean): string {
+  if (!enabled) return prompt;
+  return `${markerPrefix} run=${runId} case=${caseId} acceptance=true\n${prompt}`;
+}
 
 const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
   {
@@ -120,7 +131,18 @@ export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, str
   if (!botToken) {
     throw new Error(`Slack acceptance token env is not set: ${botTokenEnv}`);
   }
+  const isolationRaw = isRecord(config.isolation) ? config.isolation : {};
+  const outputLabel = asString(config.outputLabel) || "acceptance";
+  const acceptanceRunId = asString(isolationRaw.runId) || makeAcceptanceRunId(outputLabel);
+  const isolation = {
+    enabled: isolationRaw.enabled !== false,
+    markerPrefix: asString(isolationRaw.markerPrefix) || DEFAULT_ACCEPTANCE_MARKER_PREFIX,
+    allowUserToken: isolationRaw.allowUserToken === true,
+  };
   const userTokenEnv = asString(config.userTokenEnv);
+  if (userTokenEnv && !isolation.allowUserToken) {
+    throw new Error("Slack acceptance userTokenEnv requires isolation.allowUserToken=true; use a dedicated test identity, not a personal user token");
+  }
   const userToken = userTokenEnv ? asString(env[userTokenEnv]) : undefined;
   if (userTokenEnv && !userToken) {
     throw new Error(`Slack acceptance user token env is not set: ${userTokenEnv}`);
@@ -158,7 +180,7 @@ export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, str
       allowDm: target?.allowDm === true,
       allowProductionTarget: target?.allowProductionTarget === true,
     },
-    outputLabel: asString(config.outputLabel) || "acceptance",
+    outputLabel,
     cases,
     replayPath: asString(config.replayPath) || undefined,
     exposedTools: Array.isArray(config.exposedTools) ? config.exposedTools.map((tool) => asString(tool)).filter(Boolean) : [],
@@ -169,6 +191,8 @@ export function parseSlackAcceptanceConfig(raw: unknown, env: Record<string, str
     requestTimeoutMs: asPositiveNumber(config.requestTimeoutMs, 15_000),
     totalTimeoutMs: asPositiveNumber(config.totalTimeoutMs, 10 * 60_000),
     fixtures: isRecord(config.fixtures) ? config.fixtures as Record<string, string | boolean | number> : {},
+    acceptanceRunId,
+    isolation,
   };
 }
 
@@ -442,6 +466,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   const progress: SlackAcceptanceProgressEvent[] = [progressEvent(caseStartMs, "case_started", caseConfig.kind)];
   const id = caseConfig.id || caseConfig.kind;
   const prompt = caseConfig.prompt || DEFAULT_CASES.find((item) => item.kind === caseConfig.kind)?.prompt || caseConfig.kind;
+  const sentPrompt = buildAcceptancePrompt(prompt, config.acceptanceRunId, id, config.isolation.markerPrefix, config.isolation.enabled);
   const errors: string[] = [];
   const finish = (result: Omit<SlackAcceptanceCaseResult, "elapsedMs" | "progress">): SlackAcceptanceCaseResult => ({
     ...result,
@@ -454,6 +479,8 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       id,
       kind: caseConfig.kind,
       prompt,
+      sentPrompt,
+      acceptanceRunId: config.acceptanceRunId,
       status: "unknown",
       ack: { status: "skipped", reason: "case disabled" },
       final: { status: "skipped", reason: "case disabled" },
@@ -468,6 +495,8 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       id,
       kind: caseConfig.kind,
       prompt,
+      sentPrompt,
+      acceptanceRunId: config.acceptanceRunId,
       status: "unknown",
       ack: { status: "skipped", reason: "fixture missing" },
       final: { status: "unknown", reason: "fixture missing" },
@@ -482,7 +511,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   try {
     progress.push(progressEvent(caseStartMs, "prompt_send_started"));
     posted = await withPromiseTimeout(
-      client.postMessage({ channel: config.target.channel, text: prompt, threadTs: config.target.threadTs }),
+      client.postMessage({ channel: config.target.channel, text: sentPrompt, threadTs: config.target.threadTs }),
       config.requestTimeoutMs,
       "post_message",
     );
@@ -495,6 +524,8 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       id,
       kind: caseConfig.kind,
       prompt,
+      sentPrompt,
+      acceptanceRunId: config.acceptanceRunId,
       status: "fail",
       sentAt: sentIso,
       ack: { status: "fail", reason },
@@ -511,6 +542,8 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
       id,
       kind: caseConfig.kind,
       prompt,
+      sentPrompt,
+      acceptanceRunId: config.acceptanceRunId,
       status: "fail",
       sentAt: sentIso,
       ack: { status: "fail", reason },
@@ -579,6 +612,8 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     id,
     kind: caseConfig.kind,
     prompt,
+    sentPrompt,
+    acceptanceRunId: config.acceptanceRunId,
     status: caseGate(effectiveAck, final, noSpawn, errors),
     sentAt: sentIso,
     threadTs,
@@ -618,7 +653,13 @@ export async function runSlackAcceptanceHarness(client: SlackAcceptanceClient, c
     schemaVersion: "octoclaw.slack_acceptance.report/v1",
     reportId: `slack-acceptance:${config.outputLabel}:${Date.now()}`,
     generatedAt: nowIso(),
+    acceptanceRunId: config.acceptanceRunId,
     sessionKey: config.sessionKey,
+    isolation: {
+      enabled: config.isolation.enabled,
+      markerPrefix: config.isolation.markerPrefix,
+      userTokenAllowed: config.isolation.allowUserToken,
+    },
     target: {
       channel: config.target.channel,
       threadTs: config.target.threadTs,

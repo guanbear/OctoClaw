@@ -1322,6 +1322,12 @@ const DELEGATION_REASONING_PATTERNS: readonly RegExp[] = [
   /(?:OctoClaw runtime policy is authoritative|Do not hand-write session)/iu,
 ];
 
+function looksLikeRawSubagentContextLeak(text: string): boolean {
+  return /BEGIN_OPENCLAW_INTERNAL_CONTEXT|Internal task completion event|source:\s*subagent|session_key:\s*agent:.*subagent|childTranscript|rawTranscript|workerChainOfThought|subagent session_key|child session transcript/iu.test(text)
+    || /(?:我是|作为).{0,12}(?:子\s*agent|subagent|worker)/iu.test(text)
+    || /(?:子\s*agent|subagent|worker).{0,20}(?:完整|原始|raw).{0,20}(?:transcript|对话|记录|上下文)/iu.test(text);
+}
+
 export function sanitizeDelegationReasoning(text: string): string {
   let result = text;
   for (const pattern of DELEGATION_REASONING_PATTERNS) {
@@ -1390,7 +1396,7 @@ export function guardAssistantMessageForPolicyState(
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }
   const sessionBoundary = asRecord(state.sessionBoundary);
-  if (String(sessionBoundary.status ?? "").trim() === "contaminated_subagent_identity") {
+  if (String(sessionBoundary.status ?? "").trim() === "contaminated_subagent_identity" && looksLikeRawSubagentContextLeak(replyText)) {
     const fallback = contaminationFallbackReply();
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
   }

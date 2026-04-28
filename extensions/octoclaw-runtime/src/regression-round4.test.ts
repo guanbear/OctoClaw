@@ -28,6 +28,57 @@ import { latencyAckStage, shouldSendLatencyAck } from "./ack/ack-guard.js";
 import { selectDispatchPolicyDecision, selectReplaySessionKeyForDispatch } from "./tools/registration.js";
 
 
+describe("regression round 4: contaminated session guard is narrow", () => {
+  function textOf(result: { message?: Record<string, unknown> }): string {
+    return String((result.message as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? "");
+  }
+
+  const contaminatedState = {
+    sessionBoundary: { status: "contaminated_subagent_identity" },
+    decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+  };
+
+  it("does not replace plain chat in a contaminated registry session", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "在的，有什么我可以帮你？" }] },
+      contaminatedState,
+    );
+
+    expect(guarded.mode).toBe("pass");
+  });
+
+  it("does not replace direct lookup answers that have no subagent leak", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "OpenClaw 最近一次发布说明主要更新了运行时和 Slack 集成。" }] },
+      contaminatedState,
+    );
+
+    expect(guarded.mode).toBe("pass");
+  });
+
+  it("preserves status projection output in a contaminated registry session", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "OctoClaw native runtime status (anchors)\nVisible records: 0\nNo runtime task state is currently available." }] },
+      {
+        ...contaminatedState,
+        controlToolsSeen: ["octoclaw_status"],
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
+  });
+
+  it("still replaces raw subagent context leaks", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> source: subagent session_key: agent:main:subagent:abc rawTranscript: ..." }] },
+      contaminatedState,
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toContain("当前任务最新状态");
+  });
+});
+
 describe("regression round 4: scenario 1 — sanitizer empty fallback", () => {
   it("returns fallback for empty string input", () => {
     const result = sanitizeDelegationReasoning("");

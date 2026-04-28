@@ -89,18 +89,27 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
     expect(() => parseSlackAcceptanceConfig(validConfig(), {})).toThrow("token env is not set");
   });
 
-  it("accepts optional userTokenEnv for user-authored acceptance prompts", () => {
+  it("rejects userTokenEnv unless acceptance isolation explicitly allows it", () => {
+    expect(() => parseSlackAcceptanceConfig(validConfig({
+      userTokenEnv: "SLACK_USER_TOKEN",
+    }), validEnv({ SLACK_USER_TOKEN: "xoxp-test-token-12345" }))).toThrow("allowUserToken");
+  });
+
+  it("accepts userTokenEnv only for explicit isolated test identity runs", () => {
     const config = parseSlackAcceptanceConfig(validConfig({
       userTokenEnv: "SLACK_USER_TOKEN",
+      isolation: { allowUserToken: true, runId: "run-user-token-test" },
     }), validEnv({ SLACK_USER_TOKEN: "xoxp-test-token-12345" }));
     expect(config.botTokenEnv).toBe("SLACK_BOT_TOKEN");
     expect(config.userTokenEnv).toBe("SLACK_USER_TOKEN");
     expect(config.userToken).toBe("xoxp-test-token-12345");
+    expect(config.acceptanceRunId).toBe("run-user-token-test");
   });
 
   it("requires configured userTokenEnv to resolve from env", () => {
     expect(() => parseSlackAcceptanceConfig(validConfig({
       userTokenEnv: "SLACK_USER_TOKEN",
+      isolation: { allowUserToken: true },
     }), validEnv())).toThrow("user token env is not set");
   });
 
@@ -174,6 +183,14 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
   it("uses default 7 cases when no cases specified", () => {
     const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
     expect(config.cases).toHaveLength(7);
+  });
+
+  it("defaults to isolated acceptance run metadata", () => {
+    const config = parseSlackAcceptanceConfig(validConfig({ outputLabel: "octoclaw-acceptance-test" }), validEnv());
+    expect(config.acceptanceRunId).toMatch(/^octoclaw-acceptance-test-/u);
+    expect(config.isolation.enabled).toBe(true);
+    expect(config.isolation.markerPrefix).toBe("[OCTOCLAW_ACCEPTANCE]");
+    expect(config.isolation.allowUserToken).toBe(false);
   });
 });
 
@@ -258,6 +275,31 @@ describe("sanitizeForArtifact", () => {
 
 
 describe("content assertions via runSlackAcceptanceHarness", () => {
+  it("prefixes real Slack prompts with acceptance run marker while keeping plain prompt in report", async () => {
+    let postedText = "";
+    const client: SlackAcceptanceClient = {
+      async postMessage(params: { channel: string; text: string; threadTs?: string }): Promise<SlackPostMessageResult> {
+        postedText = params.text;
+        return { ok: true, ts: "1234567890.000001", threadTs: params.threadTs || "1234567890.000001", channel: params.channel };
+      },
+      async fetchReplies(): Promise<SlackMessageRecord[]> {
+        return [{ ts: "1234567890.000002", text: "在的" }];
+      },
+    };
+    const config = parseSlackAcceptanceConfig(validConfig({
+      isolation: { runId: "run-isolated-1" },
+      cases: [{ kind: "plain_chat", prompt: "在吗", finalRequired: true, expectFinal: ["在"] }],
+    }), validEnv());
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 10;
+    const report = await runSlackAcceptanceHarness(client, config);
+    expect(postedText).toContain("[OCTOCLAW_ACCEPTANCE] run=run-isolated-1 case=plain_chat-1 acceptance=true");
+    expect(postedText).toContain("在吗");
+    expect(report.acceptanceRunId).toBe("run-isolated-1");
+    expect(report.cases[0].prompt).toBe("在吗");
+    expect(report.cases[0].sentPrompt).toBe(postedText);
+  });
+
   it("passes plain_chat when non-empty reply observed", async () => {
     const client = createMockClient([
       { ts: "1234567890.000002", text: "在的，状态正常" },
