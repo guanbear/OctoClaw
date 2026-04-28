@@ -375,6 +375,12 @@ function structuredIntentClass(metadata: UnknownRecord): string {
   if (intentSource === "deterministic_plain_chat_classifier" && packetIntentClass === "plain_chat") {
     return "plain_chat";
   }
+  if (
+    (intentSource === "deterministic_followup_grounding" || intentSource === "deterministic_provenance_no_history")
+    && packetIntentClass === "execution_followup"
+  ) {
+    return "execution_followup";
+  }
   if (intentSource && !intentSource.startsWith("deterministic_")) {
     return asString(packetIntentClass || control.intent_class);
   }

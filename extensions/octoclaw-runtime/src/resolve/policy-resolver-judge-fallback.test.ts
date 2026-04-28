@@ -228,6 +228,42 @@ describe("execution coverage override intent guard", () => {
   });
 
 
+
+  it("forces reply for normalized provenance follow-up with execution coverage", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.9),
+    );
+
+    const priorKey = "agent:main:normalized-followup-covered";
+    policyState.set(priorKey, {
+      decision: { route_decision: { route: "reply" } },
+      canonicalSessionKey: priorKey,
+      toolsUsed: ["exec"],
+      delegated: false,
+      dispatchExecuted: false,
+      updatedAt: Date.now() - 5_000,
+    });
+
+    const decision = await resolveStatelessPolicyDecision(
+      "[OCTOCLAW_ACCEPTANCE] run=manual case=provenance_followup acceptance=true\n<@U0ARU7EKGCQ> 刚才这个是你自己查的，还是子 agent 查的？",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: priorKey,
+          judge_session_keys: [priorKey],
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+    });
+    expect((decision.work_contract as Record<string, unknown>)).toMatchObject({
+      route: "reply",
+      decisionSource: "execution_coverage",
+    });
+  });
+
   it("corrects judge delegate route to reply for normalized plain chat before dispatch", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("delegate", 0.9),

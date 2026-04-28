@@ -145,7 +145,7 @@ function buildConversationIntentPacketCompat(options: UnknownRecord = {}): Unkno
     taskStatePath: stringValue(options.taskStatePath),
     sessionKeys: Array.isArray(options.sessionKeys) ? options.sessionKeys as string[] : [],
   });
-  if (classified.intent_class === "plain_chat") {
+  if (classified.intent_class === "plain_chat" || classified.intent_class === "execution_followup") {
     return classified as unknown as UnknownRecord;
   }
   return {
