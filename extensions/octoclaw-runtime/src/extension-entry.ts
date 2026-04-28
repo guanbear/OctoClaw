@@ -183,7 +183,7 @@ function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntr
   if (!targetKey || !key.toLowerCase().includes(targetKey)) return false;
   const updatedAt = Number(state.updatedAt || state.createdAt || 0);
   if (!Number.isFinite(updatedAt) || now - updatedAt > 3 * 60 * 1000) return false;
-  return isDelegatedRoute(asRecord(state.decision));
+  return Object.keys(asRecord(state.decision)).length > 0;
 }
 
 function findRecentOutboundPolicyState(target: unknown, now: number): { key: string; state: PolicyStateEntry } | null {

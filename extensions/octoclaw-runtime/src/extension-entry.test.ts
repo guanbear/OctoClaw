@@ -127,4 +127,26 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded).toBeUndefined();
     policyState.clearState(key);
   });
+
+  it("rewrites Slack outbound false subagent completion claim on reply route", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3";
+    policyState.setState(key, {
+      decision: { route_decision: { route: "reply" } },
+      delegated: false,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", content: "好的，policy 判定为 reply。之前子 agent 已完成调研，直接给摘要。" },
+      { channelId: "slack" },
+      now,
+    );
+
+    expect(guarded?.content).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    policyState.clearState(key);
+  });
 });

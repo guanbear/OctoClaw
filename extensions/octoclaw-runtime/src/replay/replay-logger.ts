@@ -1419,6 +1419,8 @@ export function guardAssistantMessageForPolicyState(
       /(?:已经|已|刚)?(?:派|委派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?\s*agent|worker|任务|task)/iu,
       /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?\s*agent|worker)/iu,
       /(?:已|已经)?(?:交给|分配给|指派给|派给).*(?:处理|执行|完成)/iu,
+      /(?:子?\s*agent|worker|子任务).{0,30}(?:已|已经|刚|刚才|之前)?.{0,10}(?:跑完|完成|返回|回传|拿到|给出)/iu,
+      /(?:已|已经|刚|刚才|之前).{0,30}(?:子?\s*agent|worker|子任务).{0,30}(?:跑完|完成|返回|回传|拿到|给出)/iu,
       /sessions_spawn|session_spawn/iu,
       /(?:route|路由).*(?:switched|切换|改为|切换到).*(?:delegate|delegat|委派|派发)/iu,
     ];

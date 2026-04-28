@@ -357,6 +357,16 @@ describe("WP2 regression: false dispatch claim guard", () => {
     expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
   });
 
+  it("replaces false completed-subagent claim on reply route without execution evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "之前子 agent 已完成调研，直接给摘要。" }] },
+      { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false, spawnExecuted: false },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+  });
+
   it("replaces false route-switched-to-delegate claim on reply route", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "route switched to delegate and dispatch is starting." }] },
