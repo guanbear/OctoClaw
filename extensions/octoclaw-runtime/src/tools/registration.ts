@@ -1337,6 +1337,42 @@ async function persistStickyLane(sessionKey: string, payload: UnknownRecord, log
   return stickyPersisted;
 }
 
+
+export function dispatchReplyToMessageId(metadata: UnknownRecord, state: UnknownRecord | null | undefined, ctx: UnknownRecord): string {
+  const stateRecord = asRecord(state);
+  const slackMetadata = asRecord(metadata.slack);
+  const transportMetadata = asRecord(metadata.transport);
+  return optionalString(
+    metadata.inboundMessageTs,
+    metadata.inbound_message_ts,
+    metadata.replyToMessageId,
+    metadata.reply_to_message_id,
+    metadata.message_id,
+    metadata.messageId,
+    metadata.thread_ts,
+    metadata.threadTs,
+    slackMetadata.thread_ts,
+    slackMetadata.threadTs,
+    slackMetadata.reply_to_id,
+    transportMetadata.thread_ts,
+    transportMetadata.reply_to_id,
+    stateRecord.inboundMessageTs,
+    stateRecord.inbound_message_ts,
+    stateRecord.replyToMessageId,
+    stateRecord.reply_to_message_id,
+    stateRecord.message_id,
+    stateRecord.messageId,
+    ctx.inboundMessageTs,
+    ctx.inbound_message_ts,
+    ctx.replyToMessageId,
+    ctx.reply_to_message_id,
+    ctx.message_id,
+    ctx.messageId,
+    ctx.thread_ts,
+    ctx.threadTs,
+  ) ?? "";
+}
+
 function compactDispatchDetails(payload: UnknownRecord): UnknownRecord {
   return {
     route: asString(payload.route),
@@ -2227,6 +2263,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           });
           const attemptId = asString(payload.attemptId || materialization.attemptId);
           const workContractId = workContractIdForDispatch;
+          const replyToMessageId = dispatchReplyToMessageId(metadata, state, ctx);
           const notifyParams = {
             projection: baseProjection,
             attemptId,
@@ -2234,7 +2271,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             sessionKey: replaySessionKey || stateKey,
             stateKey: replaySessionKey || stateKey,
             decision: authoritativeDecision as Record<string, unknown>,
-            replyToMessageId: asString(metadata.inboundMessageTs || metadata.replyToMessageId) || undefined,
+            replyToMessageId: replyToMessageId || undefined,
             occurredAt: materializedAt,
           };
           if (materialized) {
@@ -2252,7 +2289,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 delegateTaskId,
                 workContractId,
                 parentSessionKey: replaySessionKey || stateKey,
-                replyToMessageId: asString(metadata.inboundMessageTs || metadata.replyToMessageId) || undefined,
+                replyToMessageId: replyToMessageId || undefined,
                 nativeTaskId: materializedNativeTaskId,
                 nativeFlowId: materializedNativeFlowId,
                 runId: spawnEvidence.runId,

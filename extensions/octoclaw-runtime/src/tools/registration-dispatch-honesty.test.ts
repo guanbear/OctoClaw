@@ -9,7 +9,7 @@ import { envOverrides } from "../resolve/env.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
 import { policyState } from "../state/policy-state.js";
-import { getToolRegistrations } from "./registration.js";
+import { dispatchReplyToMessageId, getToolRegistrations } from "./registration.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "../work-contract/store.js";
 
@@ -188,6 +188,14 @@ async function executeDispatchWithRuntime(params: Record<string, unknown>, subag
   expect(typeof response.text).toBe("string");
   return JSON.parse(response.text as string) as Record<string, unknown>;
 }
+
+describe("dispatchReplyToMessageId", () => {
+  it("resolves Slack thread anchor from metadata, state, or ctx", () => {
+    expect(dispatchReplyToMessageId({ message_id: "111.222" }, {}, {})).toBe("111.222");
+    expect(dispatchReplyToMessageId({}, { inboundMessageTs: "222.333" }, {})).toBe("222.333");
+    expect(dispatchReplyToMessageId({}, {}, { thread_ts: "333.444" })).toBe("333.444");
+  });
+});
 
 describe("octoclaw_dispatch honesty", () => {
   afterEach(() => {
