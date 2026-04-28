@@ -411,6 +411,11 @@ Make runtime materialization a WorkContract state transition.
    - result packet/artifact materialized -> `resultMaterialized=true`
 9. Block pending delivery relay registration when a delegate payload has no current spawn evidence.
 10. Preserve prior continuity handles for resume/status display, but never use them to mark the new attempt running.
+11. For spawned child sessions, run a bounded result materializer:
+   - primary evidence is native run completion (`waitForRun`) plus bounded child result packet retrieval (`getSessionMessages`, latest assistant result only)
+   - fallback may inspect the child session artifact only to recover the explicit compact result packet, never to inject full transcript into parent context
+   - successful materialization sets `resultMaterialized=true`, updates task state/WorkContract, and emits a user-visible delivery projection
+   - delivery failure is projected as `delivery_failed`; it must not silently leave the task as indefinitely running
 
 ### Acceptance
 

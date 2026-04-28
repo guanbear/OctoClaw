@@ -52,6 +52,7 @@ import { loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
 import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
+import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
 import fsSync from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -79,6 +80,8 @@ export interface OpenClawSubagentRuntime {
     lane?: string;
     idempotencyKey?: string;
   }): Promise<{ runId?: string }>;
+  waitForRun?(params: { runId: string; timeoutMs?: number }): Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
+  getSessionMessages?(params: { sessionKey: string; limit?: number }): Promise<{ messages: unknown[] }>;
 }
 
 export interface ToolRegistrationOptions {
@@ -2243,6 +2246,22 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               void emitExecutionTransitionNotification({
                 ...notifyParams,
                 transitionKind: "spawn_started",
+              });
+              scheduleChildCompletionFinalizer({
+                childSessionKey: childSessionKey || "",
+                delegateTaskId,
+                workContractId,
+                parentSessionKey: replaySessionKey || stateKey,
+                replyToMessageId: asString(metadata.inboundMessageTs || metadata.replyToMessageId) || undefined,
+                nativeTaskId: materializedNativeTaskId,
+                nativeFlowId: materializedNativeFlowId,
+                runId: spawnEvidence.runId,
+                childRunId: spawnEvidence.childRunId,
+                modelId: selectedModel || asString(metadata.model),
+                cwd: ctxCwd(ctx),
+                timeoutMs: Math.max(180_000, (expectedSeconds > 0 ? expectedSeconds * 1000 + 60_000 : 0)),
+                runtime: options.subagentRuntime ?? asRecord(ctx.runtime).subagent as OpenClawSubagentRuntime | undefined,
+                logger: toolLogger(ctx),
               });
             } else {
               void emitExecutionTransitionNotification({
