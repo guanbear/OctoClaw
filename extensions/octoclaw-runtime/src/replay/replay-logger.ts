@@ -1235,6 +1235,21 @@ export function contaminationFallbackReply(): { mode: string; message: Record<st
 }
 
 
+export function stripStaleDelegateFailureProjection(text: string): string {
+  return String(text || "")
+    .replace(/这次任务还没派发成功，等我拿到真实执行结果后回复。[\n\s]*/gu, "")
+    .replace(/这次查询还没拿到结果，等我拿到真实执行结果后回复。[\n\s]*/gu, "")
+    .trim();
+}
+
+function hasReplyRouteTruth(state: Record<string, unknown>): boolean {
+  const latestReceipt = asRecord(state.latestExecutionReceipt ?? state.latest_execution_receipt);
+  const receiptRoute = String(latestReceipt.route ?? "").trim();
+  if (receiptRoute === "reply") return true;
+  const decision = canonicalizeDecisionForPolicyState(asRecord(state.decision));
+  return authoritativeDecisionRoute(decision, "reply") === "reply";
+}
+
 function hasPreDispatchReplyCorrection(state: Record<string, unknown>): boolean {
   const decision = asRecord(state.decision);
   const requestMetadata = asRecord(asRecord(decision.request).metadata);
@@ -1246,6 +1261,7 @@ function hasPreDispatchReplyCorrection(state: Record<string, unknown>): boolean 
     && dispatchExecuted !== true
     && spawnExecuted !== true;
 }
+
 
 export function genericGreetingFallbackReply(state: Record<string, unknown>): { mode: string; message: Record<string, unknown> } {
   const decision = asRecord(state.decision);
@@ -1416,6 +1432,12 @@ export function guardAssistantMessageForPolicyState(
   if (String(sessionBoundary.status ?? "").trim() === "contaminated_subagent_identity" && looksLikeRawSubagentContextLeak(replyText)) {
     const fallback = contaminationFallbackReply();
     return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
+  }
+  if (hasReplyRouteTruth(state)) {
+    const cleaned = stripStaleDelegateFailureProjection(replyText);
+    if (cleaned && cleaned !== replyText) {
+      return { mode: "replace", message: replaceAssistantMessageText(message, cleaned) };
+    }
   }
   const requestKind = String(asRecord(asRecord(state.decision).router_decision_v2).request_kind ?? "").trim();
   if (genericGreetingReply && requestKind && requestKind !== "chat_or_explain") {

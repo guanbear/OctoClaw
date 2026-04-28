@@ -231,6 +231,30 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(guarded.mode).toBe("pass");
   });
 
+  it("strips stale delegate failure projection from reply-route answers", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "这次任务还没派发成功，等我拿到真实执行结果后回复。\n本机 OpenClaw：2026.4.21。" }] },
+      {
+        decision: {
+          work_contract: { route: "reply" },
+          route_decision: { route: "reply", task_class: "main_direct" },
+        },
+        latestExecutionReceipt: {
+          route: "reply",
+          dispatchExecuted: false,
+          spawnExecuted: false,
+        },
+        dispatchExecuted: false,
+        spawnExecuted: false,
+      },
+    );
+
+    const text = (guarded.message as { content?: Array<{ text: string }> } | undefined)?.content?.[0]?.text
+      || ((guarded.message as { content?: string } | undefined)?.content ?? "");
+    expect(guarded.mode).toBe("replace");
+    expect(text).toBe("本机 OpenClaw：2026.4.21。");
+  });
+
   it("does not project delegate failure over a plain greeting reply", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "你好，我在。" }] },
