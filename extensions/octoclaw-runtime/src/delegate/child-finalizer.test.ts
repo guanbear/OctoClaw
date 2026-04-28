@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import path from "node:path";
 
 const fsTest = fsSync as unknown as { mkdtempSync(prefix: string): string };
-import { describe, expect, it } from "vitest";
-import { finalizeChildSessionOnce, findChildFinalResult } from "./child-finalizer.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { finalizeChildSessionOnce, findChildFinalResult, scheduleChildCompletionFinalizer } from "./child-finalizer.js";
 
 function writeSession(dir: string, lines: unknown[]): string {
   fsSync.mkdirSync(dir, { recursive: true });
@@ -13,6 +13,9 @@ function writeSession(dir: string, lines: unknown[]): string {
 }
 
 describe("child completion finalizer", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it("extracts only the final assistant result packet from a child session", () => {
     const dir = fsTest.mkdtempSync(path.join("/tmp", "octoclaw-child-final-"));
     writeSession(dir, [
@@ -138,5 +141,40 @@ describe("child completion finalizer", () => {
     expect(result.sessionFile).toBeUndefined();
     expect(sent[0]).toContain("运行时结果包");
   });
+
+  it("marks child finalizer timeout as timed_out without materializing a result", async () => {
+    vi.useFakeTimers();
+    const dir = fsTest.mkdtempSync(path.join("/tmp", "octoclaw-child-final-"));
+    const taskStatePath = path.join(dir, "task-state.json");
+    const scheduled = scheduleChildCompletionFinalizer({
+      sessionsDir: dir,
+      taskStatePath,
+      childSessionKey: "child-timeout",
+      delegateTaskId: "delegate-timeout",
+      workContractId: "wc-timeout",
+      parentSessionKey: "slack:channel:C123",
+      nativeTaskId: "native-timeout",
+      nativeFlowId: "flow-timeout",
+      runId: "run-timeout",
+      timeoutMs: 30_000,
+      pollIntervalMs: 1_000,
+      initialDelayMs: 0,
+      recordReplay: false,
+    });
+
+    expect(scheduled).toBe(true);
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const taskState = JSON.parse(fsSync.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "native-timeout",
+      status: "timed_out",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: false,
+      failureCode: "child_finalizer_timeout",
+    });
+  });
+
 
 });

@@ -234,7 +234,10 @@ async function resolveChildFinalResult(options: ChildCompletionFinalizerOptions)
   return fallback ? { ...fallback, source: "session_file_fallback" } : null;
 }
 
-function updateTaskStateCompleted(options: ChildCompletionFinalizerOptions, resultText: string, deliveryStatus: string): void {
+function updateTaskStateRecord(
+  options: ChildCompletionFinalizerOptions,
+  patch: Record<string, unknown>,
+): void {
   const taskId = asString(options.nativeTaskId || options.delegateTaskId);
   if (!taskId) return;
   const taskStatePath = options.taskStatePath || resolveTaskStatePath();
@@ -243,7 +246,6 @@ function updateTaskStateCompleted(options: ChildCompletionFinalizerOptions, resu
     existing = JSON.parse(fsSync.readFileSync(taskStatePath, "utf-8")) as { tasks?: unknown[] };
   } catch {}
   const tasks = Array.isArray(existing.tasks) ? existing.tasks as Record<string, unknown>[] : [];
-  const now = new Date().toISOString();
   const idx = tasks.findIndex((item) => asString(item.id) === taskId || asString(item.nativeTaskId) === taskId);
   const previous = idx >= 0 ? tasks[idx] : {};
   const next = {
@@ -252,28 +254,51 @@ function updateTaskStateCompleted(options: ChildCompletionFinalizerOptions, resu
     flow_id: asString(options.nativeFlowId || previous.flow_id),
     session_key: options.parentSessionKey,
     route: "delegate",
-    status: deliveryStatus === "delivered" ? "completed" : "deliverable_ready",
-    summary: resultText.slice(0, 600),
-    report_path: asString(previous.report_path) || [`child_session:${options.childSessionKey}`, options.runId || options.childRunId ? `run:${options.runId || options.childRunId}` : ""].filter(Boolean).join("#"),
-    artifact_refs: Array.isArray(previous.artifact_refs) ? previous.artifact_refs : [`child_session:${options.childSessionKey}`],
     model: asString(options.modelId || previous.model),
-    completed_at: now,
-    updated_at: now,
-    dispatchExecuted: true,
-    spawnExecuted: true,
-    resultMaterialized: true,
-    delivery_status: deliveryStatus,
     childSessionKey: options.childSessionKey,
     child_session_key: options.childSessionKey,
     runId: options.runId || options.childRunId,
     run_id: options.runId || options.childRunId,
     childRunId: options.childRunId || options.runId,
     child_run_id: options.childRunId || options.runId,
+    ...patch,
   };
   if (idx >= 0) tasks[idx] = next;
   else tasks.unshift(next);
   fsSync.mkdirSync(path.dirname(taskStatePath), { recursive: true });
   atomicWriteJsonSync(taskStatePath, { tasks });
+}
+
+function updateTaskStateCompleted(options: ChildCompletionFinalizerOptions, resultText: string, deliveryStatus: string): void {
+  const now = new Date().toISOString();
+  updateTaskStateRecord(options, {
+    status: deliveryStatus === "delivered" ? "completed" : "deliverable_ready",
+    summary: resultText.slice(0, 600),
+    report_path: [`child_session:${options.childSessionKey}`, options.runId || options.childRunId ? `run:${options.runId || options.childRunId}` : ""].filter(Boolean).join("#"),
+    artifact_refs: [`child_session:${options.childSessionKey}`],
+    completed_at: now,
+    updated_at: now,
+    dispatchExecuted: true,
+    spawnExecuted: true,
+    resultMaterialized: true,
+    delivery_status: deliveryStatus,
+  });
+}
+
+function updateTaskStateTimedOut(options: ChildCompletionFinalizerOptions, timeoutMs: number): void {
+  const now = new Date().toISOString();
+  updateTaskStateRecord(options, {
+    status: "timed_out",
+    summary: `Child result finalizer timed out after ${Math.round(timeoutMs / 1000)}s without a stable result packet.`,
+    updated_at: now,
+    failed_at: now,
+    dispatchExecuted: true,
+    spawnExecuted: true,
+    resultMaterialized: false,
+    delivery_status: "none",
+    failureCode: "child_finalizer_timeout",
+    failureMessage: "Child result finalizer timed out without a stable compact result packet.",
+  });
 }
 
 async function sendFinalMessage(options: ChildCompletionFinalizerOptions, resultText: string): Promise<{ sent: boolean; delivered: boolean; error?: string }> {
@@ -436,6 +461,51 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
           childRunId: options.childRunId || options.runId || "",
           timeoutMs,
         }, options);
+        updateTaskStateTimedOut(options, timeoutMs);
+        await emitExecutionTransitionNotification({
+          transitionKind: "timed_out",
+          projection: {
+            schemaVersion: "octoclaw.task_status_projection/v1" as const,
+            projectionId: `child_finalizer_timeout_${options.delegateTaskId}_${Date.now()}`,
+            generatedAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            requestId: "",
+            flowId: options.nativeFlowId || options.workContractId,
+            taskId: options.nativeTaskId || options.delegateTaskId,
+            workContractId: options.workContractId,
+            title: "Child result finalizer timed out",
+            summary: "Child session stayed active without a stable compact result packet.",
+            taskSummary: "Child session stayed active without a stable compact result packet.",
+            route: "delegate" as const,
+            role: "default",
+            backend: "octoclaw.delegate",
+            modelProfile: options.modelId || "",
+            modelId: options.modelId || undefined,
+            status: "timed_out",
+            statusReason: "child_finalizer_timeout",
+            success: false,
+            failureCode: "child_finalizer_timeout",
+            failureMessage: "Child result finalizer timed out without a stable compact result packet.",
+            dispatchExecuted: true,
+            spawnExecuted: true,
+            resultMaterialized: false,
+            elapsedMs: timeoutMs,
+            childSessionKey: options.childSessionKey,
+            childSessionId: options.childSessionKey,
+            runId: options.runId || options.childRunId,
+            childRunId: options.childRunId || options.runId,
+            artifactRefs: [],
+            artifactRefIds: [],
+            actions: ["details", "retry", "copy_ref"],
+          },
+          attemptId: options.delegateTaskId,
+          workContractId: options.workContractId,
+          sessionKey: options.parentSessionKey,
+          stateKey: options.parentSessionKey,
+          replyToMessageId: options.replyToMessageId,
+          cwd: options.cwd,
+          logger: options.logger,
+        });
         return;
       }
       const timer = setTimeout(tick, pollIntervalMs);
