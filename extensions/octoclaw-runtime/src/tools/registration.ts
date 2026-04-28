@@ -28,6 +28,7 @@ import {
   isManagedAgentContext,
   resolveDispatchSessionKey,
   resolvePolicyStateKey,
+  resolvePolicyStateKeys,
 } from "../resolve/session.js";
 import {
   policySummaryText,
@@ -1321,6 +1322,19 @@ function setPolicyStateForContext(ctx: UnknownRecord, entry: UnknownRecord, expl
   return stateKey;
 }
 
+function setPolicyStateAliasesForContext(ctx: UnknownRecord, entry: UnknownRecord, explicitKeys: string[] = []): string {
+  const keys = Array.from(new Set([
+    ...explicitKeys.map((key) => asString(key)),
+    ...resolvePolicyStateKeys(ctx).map((key) => asString(key)),
+  ].filter(Boolean)));
+  let primaryKey = "";
+  for (const key of keys) {
+    const storedKey = setPolicyStateForContext(ctx, entry, key);
+    if (!primaryKey) primaryKey = storedKey;
+  }
+  return primaryKey || setPolicyStateForContext(ctx, entry);
+}
+
 function delegatedStickyRoute(decision: UnknownRecord): boolean {
   return authoritativeDecisionRoute(decision, "reply") === "delegate";
 }
@@ -1626,10 +1640,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           routeHintSubmitted: true,
           routeHintPayload,
         };
-        setPolicyStateForContext(ctx, nextState, replaySessionKey || existingStateKey);
-        if (existingStateKey && replaySessionKey && existingStateKey !== replaySessionKey) {
-          setPolicyStateForContext(ctx, nextState, existingStateKey);
-        }
+        setPolicyStateAliasesForContext(ctx, nextState, [replaySessionKey, existingStateKey]);
         await recordPolicyReplay(
           "route_hint_submitted",
           {

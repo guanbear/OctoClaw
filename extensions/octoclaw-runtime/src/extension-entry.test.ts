@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, resolveDelegationCapability } from "./extension-entry.js";
 import { policyState } from "./state/policy-state.js";
+import { getToolRegistrations } from "./tools/registration.js";
 
 describe("resolveDelegationCapability", () => {
   it("fails closed when delegation is requested but host detached runtime support is missing", () => {
@@ -219,6 +220,29 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("appends footer for visible Slack delivery hooks even when OpenClaw omits message anchors", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:default:direct:u0al9t5u89z";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply" },
+        model_policy: { selected_model: "GLM-5.1" },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "U0AL9T5U89Z", content: "这是最终回复。", metadata: { channel: "slack" } },
+      { channelId: "slack" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("这是最终回复。");
+    expect(guarded?.content).toContain("OctoClaw 投影：reply；模型：GLM-5.1");
+    policyState.clearState(key);
+  });
+
   it("does not rewrite Slack outbound natural-language subagent prose on reply route", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
@@ -241,5 +265,31 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded?.content).toContain("policy 判定为 reply");
     expect(guarded?.content).toContain("OctoClaw 投影：reply");
     policyState.clearState(key);
+  });
+});
+
+
+describe("octoclaw_route_hint policy state aliases", () => {
+  it("stores the merged route on every current context alias", async () => {
+    const key = "agent:main:slack:default:direct:u0al9t5u89z";
+    const alias = "session-alias-route-hint";
+    policyState.clearState(key);
+    policyState.clearState(alias);
+
+    const routeHint = getToolRegistrations().find((tool) => tool.name === "octoclaw_route_hint");
+    expect(routeHint).toBeTruthy();
+    const result = await routeHint!.execute({
+      task: "hello",
+      routeHint: "reply",
+      confidence: 0.9,
+      reason: "direct answer",
+    }, { sessionKey: key, sessionId: alias, agentId: "main" });
+
+    expect(JSON.stringify(result)).toContain("final route is reply");
+    expect(policyState.getState(key)?.routeHintSubmitted).toBe(true);
+    expect(policyState.getState(alias)?.routeHintSubmitted).toBe(true);
+
+    policyState.clearState(key);
+    policyState.clearState(alias);
   });
 });

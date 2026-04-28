@@ -57,7 +57,6 @@ import {
   recordDeliveryRelayEvent,
   recordObservedDeliveryFromMessage,
   recordPolicyReplay,
-  replaceAssistantMessageText,
   routeHintRequired,
   sessionControlTools,
   shouldRetainPolicyStateOnAgentEnd,
@@ -230,24 +229,44 @@ function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntr
   if (!targetKey || !key.toLowerCase().includes(targetKey)) return false;
   const updatedAt = Number(state.updatedAt || state.createdAt || 0);
   if (!Number.isFinite(updatedAt) || now - updatedAt > 3 * 60 * 1000) return false;
-  if (!stateMatchesOutboundAnchor(key, state, anchors)) return false;
+  if (anchors.length > 0 && !stateMatchesOutboundAnchor(key, state, anchors)) return false;
   return Object.keys(asRecord(state.decision)).length > 0;
 }
 
-function findRecentOutboundPolicyState(target: unknown, event: UnknownRecord, ctx: UnknownRecord, now: number): { key: string; state: PolicyStateEntry } | null {
+function outboundLooksLikeVisibleDeliveryHook(event: UnknownRecord): boolean {
+  const metadata = asRecord(event.metadata);
+  return Boolean(
+    metadata.channel
+    || metadata.channelId
+    || metadata.threadTs
+    || metadata.thread_ts
+    || metadata.accountId
+    || Array.isArray(metadata.mediaUrls),
+  );
+}
+
+function findRecentOutboundPolicyState(
+  target: unknown,
+  event: UnknownRecord,
+  ctx: UnknownRecord,
+  now: number,
+  options: { allowUnanchoredDelivery?: boolean } = {},
+): { key: string; state: PolicyStateEntry; anchored: boolean } | null {
   const targetKey = normalizeOutboundTargetKey(target);
   if (!targetKey) return null;
   const anchors = outboundMessageAnchors(event, ctx);
-  if (anchors.length === 0) return null;
+  const anchored = anchors.length > 0;
+  if (!anchored && !options.allowUnanchoredDelivery) return null;
   let best: { key: string; state: PolicyStateEntry; updatedAt: number } | null = null;
   for (const entry of policyState.entries()) {
-    if (!policyStateLooksRelevantForOutbound(entry.key, entry.state, targetKey, anchors, now)) continue;
+    if (!policyStateLooksRelevantForOutbound(entry.key, entry.state, targetKey, anchored ? anchors : [], now)) continue;
     const updatedAt = Number(entry.state.updatedAt || entry.state.createdAt || 0);
+    if (!anchored && now - updatedAt > 90 * 1000) continue;
     if (!best || updatedAt > best.updatedAt) {
       best = { key: entry.key, state: entry.state, updatedAt };
     }
   }
-  return best ? { key: best.key, state: best.state } : null;
+  return best ? { key: best.key, state: best.state, anchored } : null;
 }
 
 
@@ -303,13 +322,17 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
   const content = stringValue(event.content);
   if (!content) return undefined;
-  const match = findRecentOutboundPolicyState(event.to, event, ctx, now);
+  const match = findRecentOutboundPolicyState(event.to, event, ctx, now, {
+    allowUnanchoredDelivery: outboundLooksLikeVisibleDeliveryHook(event),
+  });
   if (!match) return undefined;
   const stateRecord = asRecord(match.state);
-  const guarded = guardAssistantMessageForPolicyState(
-    { role: "assistant", content: [{ type: "text", text: content }] },
-    stateRecord,
-  );
+  const guarded = match.anchored
+    ? guardAssistantMessageForPolicyState(
+        { role: "assistant", content: [{ type: "text", text: content }] },
+        stateRecord,
+      )
+    : { mode: "pass" as const };
   const guardedReplacement = guarded.mode === "replace" && guarded.message
     ? assistantMessageText(asRecord(guarded.message))
     : "";
@@ -560,6 +583,17 @@ export function queryDelegateStatus(delegateTaskId: string): StatusQueryPacket |
 }
 
 function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: PolicyStateEntry | null } {
+  const keys = resolvePolicyStateKeys(ctx);
+  let best: { key: string; state: PolicyStateEntry; updatedAt: number } | null = null;
+  for (const key of keys) {
+    const state = policyState.get(key);
+    if (!state) continue;
+    const updatedAt = Number(state.updatedAt || state.createdAt || 0);
+    if (!best || updatedAt > best.updatedAt) {
+      best = { key, state, updatedAt };
+    }
+  }
+  if (best) return { key: best.key, state: best.state };
   const resolved = policyState.resolveForContext(ctx);
   return {
     key: stringValue(resolved.key),
@@ -958,7 +992,7 @@ export const plugin = {
       const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
       const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
       const delegationEnforcementEnabled = Boolean(hookConfig.delegate_required || hookConfig.delegation_enforcement);
-      const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted);
+      const routeHintAlreadySubmitted = Boolean(state?.routeHintSubmitted) || Boolean(asRecord(decision.route_hint_policy).submitted);
       const allowedPreHintTools = preHintAllowedTools(decision, routeHintTool);
       const allowedObserverTools = observerControlTools(decision, routeHintTool);
       const allowedSessionTools = sessionControlTools(decision, routeHintTool);
@@ -1365,20 +1399,23 @@ export const plugin = {
 
     registerLifecycleHook("before_message_write", (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
+      const message = asRecord(event.message);
+      const role = String(message.role ?? "").trim();
+      if (role !== "assistant") return;
+      const originalText = assistantMessageText(message);
+      if (!originalText) return;
+      const stopReason = stringValue(message.stopReason || event.stopReason);
+      if (stopReason && stopReason !== "stop") return;
       const { key: stateKey, state } = getPolicyStateForContext({
+        ...ctx,
         sessionKey: stringValue(ctx.sessionKey),
         agentId: stringValue(ctx.agentId),
       });
       if (!state) return;
       updateAckTrackingState(stateKey, { final_response_streaming: true, tool_active: false });
       const stateRecord = asRecord(state);
-      const guarded = guardAssistantMessageForPolicyState(asRecord(event.message), stateRecord);
-      let visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : asRecord(event.message);
-      const footerText = appendReplyProjectionFooter(assistantMessageText(asRecord(visibleMessage)), stateRecord, event, ctx);
-      if (footerText && footerText !== assistantMessageText(asRecord(visibleMessage))) {
-        visibleMessage = replaceAssistantMessageText(asRecord(visibleMessage), footerText);
-      }
-      const role = String(asRecord(event.message).role ?? "").trim();
+      const guarded = guardAssistantMessageForPolicyState(message, stateRecord);
+      const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : message;
       const contentText: string = typeof asRecord(visibleMessage).content === "string"
         ? String(asRecord(visibleMessage).content)
         : Array.isArray(asRecord(visibleMessage).content)
