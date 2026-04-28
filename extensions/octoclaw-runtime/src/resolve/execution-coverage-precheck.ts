@@ -90,35 +90,67 @@ function rootSessionKey(raw: string): string {
   return threadMarker > 0 ? parts.slice(0, threadMarker).join(":") : value;
 }
 
-function deriveSessionAliases(sessionKeys: string[]): Set<string> {
-  const aliases = new Set<string>();
+interface SessionAliasSet {
+  exact: Set<string>;
+  roots: Set<string>;
+  bindings: Set<string>;
+}
+
+function deriveSessionAliases(sessionKeys: string[]): SessionAliasSet {
+  const exact = new Set<string>();
+  const roots = new Set<string>();
+  const bindings = new Set<string>();
 
   for (const key of normalizeSessionKeys(sessionKeys)) {
-    aliases.add(key);
+    exact.add(key);
 
     const rootKey = rootSessionKey(key);
-    if (rootKey) aliases.add(rootKey);
+    if (rootKey) roots.add(rootKey);
 
     const parsed = parseSessionRoute(key);
-    if (parsed.bindingKey) aliases.add(parsed.bindingKey);
+    if (parsed.bindingKey) bindings.add(parsed.bindingKey);
   }
 
-  return aliases;
+  return { exact, roots, bindings };
+}
+
+function aliasMatchScore(value: string | null, aliases: SessionAliasSet): number {
+  if (!value) return 0;
+  if (aliases.exact.has(value)) return 30;
+  if (aliases.roots.has(value)) return 20;
+  if (aliases.bindings.has(value)) return 10;
+  return 0;
+}
+
+function receiptEvidenceScore(receipt: TurnExecutionReceiptWithSpawn): number {
+  const toolsUsed = Array.isArray(receipt.toolsUsed) ? receipt.toolsUsed : [];
+  if (explicitBoolean(receipt.spawnExecuted) === true) return 100;
+  if (receipt.dispatchExecuted || receipt.resultMaterialized || receipt.delegateTaskId || receipt.childRunId || receipt.childSessionId) {
+    return 90;
+  }
+  if (toolsUsed.length > 0) return 90;
+  if (receipt.delegated) return 40;
+  if (receipt.nativeTaskId || receipt.nativeFlowId) return 30;
+  if (receipt.route === "reply") return 20;
+  return 10;
 }
 
 /**
- * Collect the most recent TurnExecutionReceipt for the given session key.
- * Strict session isolation — only same canonicalSessionKey.
+ * Collect the strongest prior TurnExecutionReceipt for the given session key.
+ * Session isolation still wins, but provenance/status follow-ups must not let
+ * a later projection-only thread reply hide an earlier receipt with execution evidence.
  */
 function collectLatestReceipt(
   sessionKeys: string[],
   excludeTurnId: string | undefined,
   decisionStartedAt: number,
 ): TurnExecutionReceiptWithSpawn | null {
-  const sessionKeySet = deriveSessionAliases(sessionKeys);
-  if (sessionKeySet.size === 0) return null;
+  const aliases = deriveSessionAliases(sessionKeys);
+  if (aliases.exact.size === 0 && aliases.roots.size === 0 && aliases.bindings.size === 0) return null;
 
   let best: TurnExecutionReceiptWithSpawn | null = null;
+  let bestEvidenceScore = -1;
+  let bestMatchScore = -1;
   let bestUpdatedAt = 0;
 
   for (const { state } of policyState.entries()) {
@@ -130,23 +162,33 @@ function collectLatestReceipt(
 
     const stateSession = asString(state.canonicalSessionKey ?? latestReceipt?.sessionKey);
     const stateBinding = asString(state.session_binding_key);
-    if (
-      (!stateSession || !sessionKeySet.has(stateSession))
-      && (!stateBinding || !sessionKeySet.has(stateBinding))
-    ) continue;
+    const matchScore = Math.max(
+      aliasMatchScore(stateSession, aliases),
+      aliasMatchScore(stateBinding, aliases),
+    );
+    if (matchScore <= 0) continue;
 
     if (excludeTurnId && (entryTurnId(state) === excludeTurnId || latestReceipt?.turnId === excludeTurnId)) continue;
 
     const updatedAt = Number(latestReceipt?.completedAt || state.updatedAt || state.createdAt || 0);
     if (!updatedAt || updatedAt >= decisionStartedAt) continue;
-    if (updatedAt > bestUpdatedAt) {
+
+    const receipt = latestReceipt
+      ? latestReceipt
+      : attachExplicitSpawnReceipt(
+        buildTurnExecutionReceipt(state, Math.max(0, updatedAt - Number(state.createdAt || updatedAt)), updatedAt || undefined),
+        state,
+      );
+    const evidenceScore = receiptEvidenceScore(receipt);
+    const isBetter = evidenceScore > bestEvidenceScore
+      || (evidenceScore === bestEvidenceScore && matchScore > bestMatchScore)
+      || (evidenceScore === bestEvidenceScore && matchScore === bestMatchScore && updatedAt > bestUpdatedAt);
+
+    if (isBetter) {
+      bestEvidenceScore = evidenceScore;
+      bestMatchScore = matchScore;
       bestUpdatedAt = updatedAt;
-      best = latestReceipt
-        ? latestReceipt
-        : attachExplicitSpawnReceipt(
-          buildTurnExecutionReceipt(state, Math.max(0, updatedAt - Number(state.createdAt || updatedAt)), updatedAt || undefined),
-          state,
-        );
+      best = receipt;
     }
   }
 

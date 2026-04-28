@@ -336,6 +336,133 @@ describe("acceptance: thread provenance follow-up end-to-end", () => {
     expect(layer.spawn_executed).toBe(false);
   });
 
+
+  it("prefers root execution evidence over a newer projection-only thread receipt", () => {
+    const rootKey = "agent:main:slack:channel:C0AS4DAPPU3";
+    const threadKey = `${rootKey}:thread:1777363646.984299`;
+
+    policyState.set(rootKey, {
+      canonicalSessionKey: rootKey,
+      createdAt: Date.now() - 70_000,
+      updatedAt: Date.now() - 60_000,
+      latestExecutionReceipt: {
+        turnId: "turn-root-direct",
+        sessionKey: rootKey,
+        route: "reply",
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        workContractId: "wc-root-direct",
+        delegateTaskId: null,
+        nativeTaskId: "task-root-direct",
+        nativeFlowId: null,
+        childSessionKey: null,
+        childSessionId: null,
+        childRunId: null,
+        nativeFlowRevision: null,
+        nativeFlowExpectedRevision: null,
+        nativeFlowMutation: null,
+        nativeFlowMutationApplied: null,
+        nativeFlowMutationError: null,
+        workerPool: "octoclaw-main",
+        toolsUsed: ["exec"],
+        resultMaterialized: false,
+        deliveryStatus: null,
+        durationMs: 4_000,
+        outcome: "completed",
+        completedAt: Date.now() - 60_000,
+        executionCoverage: null,
+        executionSupportsProvenanceReply: true,
+        executionSupportsStatusReply: false,
+        executionRequiresControlPlaneRefresh: false,
+        memoryCoverage: null,
+        authority: "execution_wins",
+        parentContextTokensAdded: 0,
+        resultPacketTokens: 0,
+        artifactReopenCount: 0,
+      },
+    });
+
+    policyState.set(threadKey, {
+      canonicalSessionKey: threadKey,
+      createdAt: Date.now() - 20_000,
+      updatedAt: Date.now() - 10_000,
+      latestExecutionReceipt: {
+        turnId: "turn-thread-projection",
+        sessionKey: threadKey,
+        route: "reply",
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        workContractId: "wc-thread-projection",
+        delegateTaskId: null,
+        nativeTaskId: "task-thread-projection",
+        nativeFlowId: null,
+        childSessionKey: null,
+        childSessionId: null,
+        childRunId: null,
+        nativeFlowRevision: null,
+        nativeFlowExpectedRevision: null,
+        nativeFlowMutation: null,
+        nativeFlowMutationApplied: null,
+        nativeFlowMutationError: null,
+        workerPool: "octoclaw-main",
+        toolsUsed: [],
+        resultMaterialized: false,
+        deliveryStatus: null,
+        durationMs: 2_000,
+        outcome: "completed",
+        completedAt: Date.now() - 10_000,
+        executionCoverage: null,
+        executionSupportsProvenanceReply: true,
+        executionSupportsStatusReply: false,
+        executionRequiresControlPlaneRefresh: false,
+        memoryCoverage: null,
+        authority: "execution_wins",
+        parentContextTokensAdded: 0,
+        resultPacketTokens: 0,
+        artifactReopenCount: 0,
+      },
+    });
+
+    const layer = buildExecutionCoverageLayer([threadKey]);
+
+    expect(layer.last_route).toBe("reply");
+    expect(layer.tools_used).toEqual(["exec"]);
+    expect(layer.evidence_summary).toContain("main-session path");
+    expect(layer.evidence_summary).toContain("tools=[exec]");
+    expect(layer.evidence_summary).not.toContain("delegated path");
+  });
+
+  it("keeps a real delegated thread receipt ahead of root direct evidence", () => {
+    const rootKey = "agent:main:slack:channel:C0AS4DAPPU3";
+    const threadKey = `${rootKey}:thread:1777363646.984299`;
+
+    seedAt(rootKey, Date.now() - 30_000, {
+      canonicalSessionKey: rootKey,
+      decision: { route_decision: { route: "reply" } },
+      toolsUsed: ["exec"],
+      delegated: false,
+      dispatchExecuted: false,
+    });
+
+    seedAt(threadKey, Date.now() - 60_000, {
+      canonicalSessionKey: threadKey,
+      decision: { route_decision: { route: "delegate", worker_pool: "octoclaw-research" } },
+      toolsUsed: [],
+      delegated: true,
+      dispatchExecuted: true,
+      delegateTaskContext: { delegateTaskId: "task-real-delegate", taskStatus: "completed" },
+    });
+
+    const layer = buildExecutionCoverageLayer([threadKey]);
+
+    expect(layer.last_route).toBe("delegate");
+    expect(layer.supports_status_reply).toBe(true);
+    expect(layer.dispatch_executed).toBe(true);
+    expect(layer.evidence_summary).toContain("delegated path");
+  });
+
   it("simulates: no prior receipt at all → coverage none, spawn guard blocks execution_followup", () => {
     const threadKey = "agent:main:slack:default:direct:U99999:thread:9999";
 
