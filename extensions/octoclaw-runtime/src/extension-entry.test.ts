@@ -128,7 +128,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
-  it("rewrites Slack outbound false subagent completion claim on reply route", () => {
+  it("does not rewrite Slack outbound natural-language subagent prose on reply route", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
     policyState.setState(key, {
@@ -146,7 +146,7 @@ describe("guardOutboundMessageForPolicyState", () => {
       now,
     );
 
-    expect(guarded?.content).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded).toBeUndefined();
     policyState.clearState(key);
   });
 });

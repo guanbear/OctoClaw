@@ -60,6 +60,58 @@ describe("buildExecutionCoverageLayer", () => {
     vi.useRealTimers();
   });
 
+  it("uses compact latestExecutionReceipt retained after direct reply agent_end", () => {
+    const key = "agent:main:slack:default:direct:U12345";
+    policyState.set(key, {
+      canonicalSessionKey: key,
+      updatedAt: Date.now() - 5_000,
+      latestExecutionReceipt: {
+        turnId: "turn-direct-1",
+        sessionKey: key,
+        route: "reply",
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        workContractId: "wc-direct-1",
+        delegateTaskId: null,
+        nativeTaskId: null,
+        nativeFlowId: null,
+        childSessionKey: null,
+        childSessionId: null,
+        childRunId: null,
+        nativeFlowRevision: null,
+        nativeFlowExpectedRevision: null,
+        nativeFlowMutation: null,
+        nativeFlowMutationApplied: null,
+        nativeFlowMutationError: null,
+        workerPool: null,
+        toolsUsed: ["exec", "web_fetch"],
+        resultMaterialized: false,
+        deliveryStatus: null,
+        durationMs: 4_000,
+        outcome: "completed",
+        completedAt: Date.now() - 5_000,
+        executionCoverage: null,
+        executionSupportsProvenanceReply: true,
+        executionSupportsStatusReply: false,
+        executionRequiresControlPlaneRefresh: false,
+        memoryCoverage: null,
+        authority: "execution_wins",
+        parentContextTokensAdded: 0,
+        resultPacketTokens: 0,
+        artifactReopenCount: 0,
+      },
+    });
+
+    const layer = buildExecutionCoverageLayer([key]);
+
+    expect(layer.coverage).not.toBe("none");
+    expect(layer.last_route).toBe("reply");
+    expect(layer.supports_provenance_reply).toBe(true);
+    expect(layer.tools_used).toEqual(["exec", "web_fetch"]);
+    expect(layer.evidence_summary).toContain("previous answer used main-session path");
+  });
+
   it("lets a thread follow-up see the root-turn receipt", () => {
     const rootKey = "slack:default:direct:U12345";
     seedAt(rootKey, Date.now() - 5_000, {

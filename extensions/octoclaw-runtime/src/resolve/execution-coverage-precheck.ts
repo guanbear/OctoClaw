@@ -122,24 +122,31 @@ function collectLatestReceipt(
   let bestUpdatedAt = 0;
 
   for (const { state } of policyState.entries()) {
-    if (!isRecord(state?.decision)) continue;
-    const stateSession = asString(state.canonicalSessionKey);
+    const latestReceipt = isRecord(state?.latestExecutionReceipt)
+      ? state.latestExecutionReceipt as unknown as TurnExecutionReceiptWithSpawn
+      : null;
+    const hasDecision = isRecord(state?.decision);
+    if (!hasDecision && !latestReceipt) continue;
+
+    const stateSession = asString(state.canonicalSessionKey ?? latestReceipt?.sessionKey);
     const stateBinding = asString(state.session_binding_key);
     if (
       (!stateSession || !sessionKeySet.has(stateSession))
       && (!stateBinding || !sessionKeySet.has(stateBinding))
     ) continue;
 
-    if (excludeTurnId && entryTurnId(state) === excludeTurnId) continue;
+    if (excludeTurnId && (entryTurnId(state) === excludeTurnId || latestReceipt?.turnId === excludeTurnId)) continue;
 
-    const updatedAt = Number(state.updatedAt || state.createdAt || 0);
+    const updatedAt = Number(latestReceipt?.completedAt || state.updatedAt || state.createdAt || 0);
     if (!updatedAt || updatedAt >= decisionStartedAt) continue;
     if (updatedAt > bestUpdatedAt) {
       bestUpdatedAt = updatedAt;
-      best = attachExplicitSpawnReceipt(
-        buildTurnExecutionReceipt(state, Math.max(0, updatedAt - Number(state.createdAt || updatedAt)), updatedAt || undefined),
-        state,
-      );
+      best = latestReceipt
+        ? latestReceipt
+        : attachExplicitSpawnReceipt(
+          buildTurnExecutionReceipt(state, Math.max(0, updatedAt - Number(state.createdAt || updatedAt)), updatedAt || undefined),
+          state,
+        );
     }
   }
 

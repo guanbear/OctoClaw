@@ -1148,6 +1148,30 @@ export const plugin = {
           pi.logger,
         );
       }
+      const finalNow = Date.now();
+      const directToolsSeen = Array.isArray(state?.directToolsSeen) ? state.directToolsSeen : [];
+      const toolsUsed = Array.from(new Set([
+        ...(Array.isArray(state?.toolsUsed) ? state.toolsUsed : []),
+        ...directToolsSeen,
+      ].map((value) => stringValue(value)).filter(Boolean)));
+      const finalReceipt = buildTurnExecutionReceipt(
+        {
+          ...(state ?? {}),
+          canonicalSessionKey: stateKey,
+          toolsUsed,
+        } as Parameters<typeof buildTurnExecutionReceipt>[0],
+        Math.max(0, finalNow - Number(state?.createdAt || state?.updatedAt || finalNow)),
+        finalNow,
+      );
+      const shouldRetainCompactReceipt = Boolean(
+        finalReceipt.route === "reply"
+        || finalReceipt.toolsUsed.length > 0
+        || finalReceipt.dispatchExecuted
+        || finalReceipt.spawnExecuted
+        || finalReceipt.resultMaterialized
+        || asRecord(state?.latestAnomalyNotice).kind,
+      );
+
       if (shouldRetainPolicyStateOnAgentEnd(asRecord(state))) {
         const formalReplyVisible = Boolean(state?.formal_reply_visible);
         let noticeDeliveryState = "not_attempted";
@@ -1202,6 +1226,22 @@ export const plugin = {
           pi.logger,
           state?.decision as Record<string, unknown> | null,
         );
+        return;
+      }
+      if (shouldRetainCompactReceipt) {
+        policyState.update(stateKey, () => ({
+          canonicalSessionKey: stateKey,
+          latestExecutionReceipt: finalReceipt,
+          workContractId: finalReceipt.workContractId ?? undefined,
+          directToolsSeen: finalReceipt.toolsUsed,
+          toolsUsed: finalReceipt.toolsUsed,
+          dispatchExecuted: finalReceipt.dispatchExecuted,
+          spawnExecuted: finalReceipt.spawnExecuted,
+          resultMaterialized: finalReceipt.resultMaterialized,
+          latestAnomalyNotice: state?.latestAnomalyNotice,
+          createdAt: finalNow,
+          updatedAt: finalNow,
+        }));
         return;
       }
       clearPolicyStateForContext(ctx);

@@ -1420,21 +1420,11 @@ export function guardAssistantMessageForPolicyState(
   if (provenanceProjected !== replyText) {
     return { mode: "replace", message: replaceAssistantMessageText(message, provenanceProjected) };
   }
-  if (!statusProjectionToolSeen && !(dispatchExecuted || spawnExecuted)) {
-    const dispatchClaimPatterns = [
-      /(?:已经|已|刚)?(?:派|委派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?\s*agent|worker|任务|task)/iu,
-      /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?\s*agent|worker)/iu,
-      /(?:已|已经)?(?:交给|分配给|指派给|派给).*(?:处理|执行|完成)/iu,
-      /(?:子?\s*agent|worker|子任务).{0,30}(?:已|已经|刚|刚才|之前)?.{0,10}(?:跑完|完成|返回|回传|拿到|给出)/iu,
-      /(?:已|已经|刚|刚才|之前).{0,30}(?:子?\s*agent|worker|子任务).{0,30}(?:跑完|完成|返回|回传|拿到|给出)/iu,
-      /sessions_spawn|session_spawn/iu,
-      /(?:route|路由).*(?:switched|切换|改为|切换到).*(?:delegate|delegat|委派|派发)/iu,
-    ];
-    for (const pattern of dispatchClaimPatterns) {
-      if (pattern.test(replyText)) {
-        return { mode: "replace", message: replaceAssistantMessageText(message, "这次任务还没派发成功，等我拿到真实执行结果后回复。") };
-      }
-    }
+  // Do not infer delegation truth from natural-language prose here. Dispatch/spawn
+  // honesty is projected from TurnExecutionReceipt / ExecutionCoveragePacket above.
+  // Keep only an internal API leak guard for raw spawn implementation details.
+  if (!statusProjectionToolSeen && !hasExecutionEvidence && /sessions_spawn|session_spawn/iu.test(replyText)) {
+    return { mode: "replace", message: replaceAssistantMessageText(message, "这次任务还没派发成功，等我拿到真实执行结果后回复。") };
   }
   return { mode: "pass", message };
 }

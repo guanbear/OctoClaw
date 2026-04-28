@@ -162,6 +162,27 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect((canonical.router_decision_v2 as { request_kind: string }).request_kind).toBe("delegated_task");
   });
 
+  it("allows truthful no-subagent provenance wording without dispatch evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "不是子 agent 查的，是主会话直接用了 exec 和 web_fetch 查到的；没有派发 delegated task。",
+        }],
+      },
+      {
+        delegated: false,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        directToolsSeen: ["exec", "web_fetch"],
+        decision: { route_decision: { route: "reply", task_class: "main_direct" } },
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
+  });
+
   it("replaces false sessions_spawn dispatch claim without execution evidence", () => {
     const guarded = guardAssistantMessageForPolicyState(
       {

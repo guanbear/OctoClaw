@@ -308,24 +308,22 @@ describe("WP2 regression: false dispatch claim guard", () => {
     return String((result.message as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? "");
   }
 
-  it("replaces false Chinese dispatched-subagent claim on reply route", () => {
+  it("does not rewrite natural-language dispatched-subagent prose on reply route", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "已派发子agent，稍后回来。" }] },
       { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded.mode).toBe("pass");
   });
 
-  it("replaces false Chinese delegated-subagent claim without dispatch evidence", () => {
+  it("does not rewrite natural-language delegated-subagent prose without dispatch evidence", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "已委派子 agent 去调研，完成后给你摘要。" }] },
       { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false, spawnExecuted: false },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded.mode).toBe("pass");
   });
 
   it("replaces direct answer on delegated route without execution evidence", () => {
@@ -357,24 +355,22 @@ describe("WP2 regression: false dispatch claim guard", () => {
     expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
   });
 
-  it("replaces false completed-subagent claim on reply route without execution evidence", () => {
+  it("does not rewrite natural-language completed-subagent prose on reply route", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "之前子 agent 已完成调研，直接给摘要。" }] },
       { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false, spawnExecuted: false },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded.mode).toBe("pass");
   });
 
-  it("replaces false route-switched-to-delegate claim on reply route", () => {
+  it("does not rewrite natural-language route-switched prose on reply route", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "route switched to delegate and dispatch is starting." }] },
       { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false },
     );
 
-    expect(guarded.mode).toBe("replace");
-    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded.mode).toBe("pass");
   });
 
   it("does not replace dispatched-subagent claim with actual dispatch evidence", () => {
