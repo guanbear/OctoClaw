@@ -105,7 +105,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("这次任务还没派发成功");
-    expect(guarded?.content).toContain("OctoClaw 投影：委派(delegate)");
+    expect(guarded?.content).toContain("route=delegate | model=");
     policyState.clearState(key);
   });
 
@@ -129,7 +129,8 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("刚才的子 agent 已经跑完了");
-    expect(guarded?.content).toContain("OctoClaw 投影：委派(delegate)");
+    expect(guarded?.content).toContain("route=delegate | model=");
+    expect(guarded?.content).toContain("· thread");
     policyState.clearState(key);
   });
 
@@ -193,7 +194,8 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("最新版是 OpenClaw");
-    expect(guarded?.content).toContain("OctoClaw 投影：reply");
+    expect(guarded?.content).toContain("route=reply | model=");
+    expect(guarded?.content).toContain("· thread");
     policyState.clearState(staleKey);
     policyState.clearState(currentKey);
   });
@@ -229,7 +231,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("收到。");
-    expect(guarded?.content).toContain("OctoClaw 投影：reply；模型：GLM-5.1");
+    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
   });
 
   it("appends footer for visible Slack delivery hooks even when OpenClaw omits message anchors", () => {
@@ -251,7 +253,7 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("这是最终回复。");
-    expect(guarded?.content).toContain("OctoClaw 投影：reply；模型：GLM-5.1");
+    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
     policyState.clearState(key);
   });
 
@@ -275,8 +277,79 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("policy 判定为 reply");
-    expect(guarded?.content).toContain("OctoClaw 投影：reply");
+    expect(guarded?.content).toContain("route=reply | model=");
+    expect(guarded?.content).toContain("· thread");
     policyState.clearState(key);
+  });
+
+  it("emits compact footer with route and model only plus · thread suffix", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0footer";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0FOOTER", content: "摘要回复。", metadata: { channelId: "C0FOOTER", threadTs: "1777380000.000001" } },
+      { channelId: "slack" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("摘要回复。");
+    expect(guarded?.content).toContain("route=reply | model=zhipu/GLM-5.1 · thread");
+    expect(guarded?.content).not.toContain("OctoClaw 投影");
+    expect(guarded?.content).not.toContain("证据投影");
+    expect(guarded?.content).not.toContain("WorkContract");
+    policyState.clearState(key);
+  });
+
+  it("does not duplicate compact footer on outbound delivery when content already has route | model", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0dedup";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply" },
+        model_policy: { selected_model: "model-x" },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0DEDUP", content: "完成。\nroute=reply | model=model-x · thread", metadata: { channelId: "C0DEDUP", threadTs: "1777390000.000001" } },
+      { channelId: "slack" },
+      now,
+    );
+
+    // Content already has compact footer — should not be modified
+    expect(guarded).toBeUndefined();
+    policyState.clearState(key);
+  });
+
+  it("does not duplicate compact footer via policy guard when content already has route | model", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: "收到。\nroute=reply | model=direct_main · thread" },
+      {
+        decision: {
+          route_decision: { route: "reply", route_source: "policy_rule" },
+          router_decision_v2: { request_kind: "status_or_provenance" },
+          work_contract: { workContractId: "wc-dedup", route: "reply", decisionSource: "execution_coverage" },
+          model_policy: { selected_model: "direct_main" },
+          _execution_coverage_packet: { replyMode: "answer", coverage: { execution: { coverage: "thread" } } },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("pass");
+    expect(String(guarded.message?.content)).toContain("route=reply | model=direct_main · thread");
+    // Ensure no second footer was appended
+    const footerMatches = String(guarded.message?.content).match(/route=reply \| model=direct_main/g);
+    expect(footerMatches).toHaveLength(1);
   });
 });
 
@@ -346,6 +419,39 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(key);
   });
 
+
+
+  it("allows direct tools when tool policy says direct tools are allowed even if route alias is stale", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0al9t5u89z:thread:t-stale";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "delegate", route_source: "stale_alias" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: true, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: true, submitted: false },
+        tool_policy: { allow_direct_tools: true, must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "write", params: { path: "docs/example.md" } },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    policyState.clearState(key);
+  });
 
   it("allows direct tools for a sealed reply route even when route_hint_required remains true", async () => {
     const handlers = new Map<string, Function>();

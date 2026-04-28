@@ -1400,17 +1400,37 @@ function appendExecutionCoverageProjection(replyText: string, state: Record<stri
     ?? "unknown",
   ).trim() || "unknown";
   const footerDisabled = ["0", "false", "off", "no"].includes(String(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER ?? "").trim().toLowerCase());
-  const routeLabel = route === "delegate" ? "委派(delegate)" : "reply";
-  const footer = footerDisabled || /OctoClaw\s*投影[：:]/iu.test(replyText) ? "" : `\n_OctoClaw 投影：${routeLabel}；模型：${model}_`;
-  if (/(?:WorkContract|ExecutionCoverage|coverage|证据)/iu.test(replyText)) {
-    return footer ? `${replyText.trim()}${footer}` : replyText;
-  }
-  const contractId = String(workContract.workContractId ?? decision.workContractId ?? "unknown").trim();
-  const coverage = String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "unknown").trim();
-  const dispatchExecuted = String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? state.dispatchExecuted ?? false);
-  const spawnExecuted = String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? state.spawnExecuted ?? false);
-  const routeSource = String(workContract.decisionSource ?? routeDecision.route_source ?? "unknown").trim();
-  return `${replyText.trim()}\n\n证据投影：route=${route}；model=${model}；WorkContract=${contractId}；ExecutionCoverage coverage=${coverage}；route_source=${routeSource}；dispatchExecuted=${dispatchExecuted}；spawnExecuted=${spawnExecuted}。${footer}`;
+  if (footerDisabled) return replyText;
+  if (/route=\w+\s*\|\s*model=/u.test(replyText)) return replyText;
+  if (/OctoClaw\s*投影[：:]/iu.test(replyText)) return replyText;
+  const workContractId = String(workContract.workContractId ?? workContract.work_contract_id ?? decision.workContractId ?? decision.work_contract_id ?? "").trim();
+  const coverage = String(
+    asRecord(asRecord(executionPacket.coverage).execution).coverage
+    ?? asRecord(executionLayer.execution).coverage
+    ?? executionLayer.coverage
+    ?? "",
+  ).trim();
+  const routeSource = String(workContract.decisionSource ?? routeDecision.route_source ?? routeDecision.source ?? "").trim();
+  const dispatchExecuted = executionPacket.dispatchExecuted
+    ?? executionLayer.dispatchExecuted
+    ?? executionLayer.dispatch_executed
+    ?? state.dispatchExecuted
+    ?? state.dispatch_executed;
+  const spawnExecuted = executionPacket.spawnExecuted
+    ?? executionLayer.spawnExecuted
+    ?? executionLayer.spawn_executed
+    ?? state.spawnExecuted
+    ?? state.spawn_executed;
+  const facts = [
+    `route=${route}`,
+    `model=${model}`,
+    workContractId ? `wc=${workContractId}` : "",
+    coverage ? `coverage=${coverage}` : "",
+    routeSource ? `route_source=${routeSource}` : "",
+    dispatchExecuted !== undefined ? `dispatchExecuted=${Boolean(dispatchExecuted)}` : "",
+    spawnExecuted !== undefined ? `spawnExecuted=${Boolean(spawnExecuted)}` : "",
+  ].filter(Boolean);
+  return `${replyText.trim()}\n\n${facts.join(" | ")} · thread`;
 }
 
 export function guardAssistantMessageForPolicyState(
@@ -1509,7 +1529,7 @@ export function buildRolloutFlags(decision?: Record<string, unknown>): Record<st
 export function preHintAllowedTools(decision: Record<string, unknown>, routeHintTool: string): Set<string> {
   const toolPolicy = asRecord(decision.tool_policy);
   const workContract = asRecord(decision.work_contract);
-  const allowed = new Set([routeHintTool, "octoclaw_status", "octoclaw_task_action"].filter(Boolean));
+  const allowed = new Set([routeHintTool, "octoclaw_status", "octoclaw_task_action", "session_status"].filter(Boolean));
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   if (delegateTool) {
     allowed.add(delegateTool);
@@ -1598,7 +1618,9 @@ export function workflowEnforcementRule(
   if (forbiddenTools.has(toolName) && !isDeterministicFallbackToDelegate) {
     return { block: true, route, delegateTool, allowedTools: [...allowedTools] };
   }
-  const workflowRequired = DELEGATED_ROUTE_NAMES.has(route);
+  const sealedContractRoute = String(workContract.route ?? workContract.route_decision ?? "").trim();
+  const directToolsAllowed = toolPolicy.allow_direct_tools === true && sealedContractRoute !== "delegate";
+  const workflowRequired = DELEGATED_ROUTE_NAMES.has(route) && !directToolsAllowed;
   if (!workflowRequired) {
     return { block: false, route, delegateTool, allowedTools: [...allowedTools] };
   }

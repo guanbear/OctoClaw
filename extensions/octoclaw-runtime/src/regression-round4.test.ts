@@ -722,15 +722,17 @@ describe("regression round 4: execution coverage projections", () => {
     );
 
     expect(guarded.mode).toBe("replace");
-    expect(String(guarded.message?.content)).toContain("证据投影：route=reply；model=unknown");
-    expect(String(guarded.message?.content)).toContain("OctoClaw 投影：reply；模型：unknown");
-    expect(String(guarded.message?.content)).toContain("WorkContract=wc-provenance-1");
-    expect(String(guarded.message?.content)).toContain("ExecutionCoverage coverage=thread");
+    expect(String(guarded.message?.content)).toContain("route=reply | model=unknown");
+    expect(String(guarded.message?.content)).toContain("wc=wc-provenance-1");
+    expect(String(guarded.message?.content)).toContain("coverage=thread");
+    expect(String(guarded.message?.content)).toContain("route_source=execution_coverage");
+    expect(String(guarded.message?.content)).toContain("dispatchExecuted=true");
     expect(String(guarded.message?.content)).toContain("spawnExecuted=false");
+    expect(String(guarded.message?.content)).toContain("· thread");
   });
 
 
-  it("adds footer when assistant already emitted compact coverage projection", () => {
+  it("does not duplicate footer when compact coverage projection already present", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: "收到。\nroute=reply | model=direct_main | wc=wc-compact | coverage=thread | route_source=policy_rule" },
       {
@@ -744,9 +746,9 @@ describe("regression round 4: execution coverage projections", () => {
       },
     );
 
-    expect(guarded.mode).toBe("replace");
+    expect(guarded.mode).toBe("pass");
     expect(String(guarded.message?.content)).toContain("route=reply | model=direct_main");
-    expect(String(guarded.message?.content)).toContain("OctoClaw 投影：reply；模型：direct_main");
+    expect(String(guarded.message?.content)).toContain("wc=wc-compact");
   });
 
   it("keeps WorkContract and coverage facts in policy prompt projections", () => {

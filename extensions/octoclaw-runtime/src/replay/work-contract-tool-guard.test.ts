@@ -84,6 +84,44 @@ describe("WorkContract tool guard projection", () => {
 
     expect(rule.block).toBe(true);
   });
+
+  it("allows direct tools when the sealed tool policy permits direct reply execution", () => {
+    const rule = workflowEnforcementRule(
+      {
+        route_decision: { route: "delegate", route_source: "stale_alias" },
+        tool_policy: { allow_direct_tools: true, must_delegate_via: "octoclaw_dispatch" },
+      },
+      "write",
+      "octoclaw_route_hint",
+    );
+
+    expect(rule.block).toBe(false);
+  });
+
+
+
+  it("does not let direct-tool policy bypass a sealed delegate WorkContract", () => {
+    const rule = workflowEnforcementRule(
+      {
+        work_contract: { route: "delegate" },
+        route_decision: { route: "delegate", route_source: "contract" },
+        tool_policy: { allow_direct_tools: true, must_delegate_via: "octoclaw_dispatch" },
+      },
+      "write",
+      "octoclaw_route_hint",
+    );
+
+    expect(rule.block).toBe(true);
+  });
+
+  it("keeps session_status available before route hint", () => {
+    const decision = {
+      route_decision: { route: "reply" },
+      tool_policy: {},
+    };
+
+    expect(preHintAllowedTools(decision, "octoclaw_route_hint").has("session_status")).toBe(true);
+  });
 });
 
 

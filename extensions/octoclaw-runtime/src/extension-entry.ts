@@ -275,9 +275,6 @@ function replyProjectionFooterEnabled(): boolean {
   return !["0", "false", "off", "no"].includes(raw);
 }
 
-function routeLabel(route: string): string {
-  return route === "delegate" ? "委派(delegate)" : "reply";
-}
 
 function firstStringValue(...values: unknown[]): string {
   for (const value of values) {
@@ -310,13 +307,14 @@ function outboundProjectionModel(state: UnknownRecord, event: UnknownRecord, ctx
 
 function appendReplyProjectionFooter(content: string, state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
   if (!replyProjectionFooterEnabled()) return content;
+  if (/route=\w+\s*\|\s*model=/u.test(content)) return content;
   if (/OctoClaw\s*投影[：:]/iu.test(content)) return content;
   const decision = asRecord(state.decision);
   const workContract = asRecord(decision.work_contract);
   const routeDecision = asRecord(decision.route_decision);
   const route = stringValue(workContract.route || routeDecision.route || state.route || "reply") === "delegate" ? "delegate" : "reply";
   const model = outboundProjectionModel(state, event, ctx);
-  return `${content.trim()}\n\n_OctoClaw 投影：${routeLabel(route)}；模型：${model}_`;
+  return `${content.trim()}\n\nroute=${route} | model=${model} · thread`;
 }
 
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
@@ -1126,8 +1124,9 @@ export const plugin = {
         };
       }
 
-      const directReplyToolsAllowed = stringValue(asRecord(decision.route_decision).route) === "reply"
-        && Boolean(toolPolicy.allow_direct_tools)
+      const routeAllowsDirectTools = stringValue(asRecord(decision.route_decision).route) === "reply"
+        || Boolean(toolPolicy.allow_direct_tools);
+      const directReplyToolsAllowed = routeAllowsDirectTools
         && !isControlObserverDecision(decision)
         && !isSessionControlDecision(decision);
       if (routeHintIsRequired && !routeHintAlreadySubmitted && !directReplyToolsAllowed && !allowedPreHintTools.has(toolName)) {
