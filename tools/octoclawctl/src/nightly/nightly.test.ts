@@ -7,6 +7,7 @@ import {
   classifyDelegationHealth,
   classifyDelivery,
   buildCostSpeedBaselineFromReplay,
+  buildModelShadowComparisonFromReplay,
   computeOverallGate,
   computeRecommendationStatus,
   generateNightlyReport,
@@ -525,6 +526,23 @@ describe("cost/speed baseline", () => {
     });
   });
 
+  it("builds model shadow comparison without allowing live promotion", () => {
+    const report = buildModelShadowComparisonFromReplay([
+      agentEnd({ route: "reply", finalRoute: "reply", modelProfile: "direct_main", terminalState: "completed" }),
+      agentEnd({ route: "delegate", finalRoute: "delegate", modelProfile: "worker_research", terminalState: "completed" }),
+    ], "2026-04-26T10:01:00.000Z");
+
+    expect(report.mode).toBe("shadow");
+    expect(report.changedRecommendationCount).toBe(1);
+    expect(report.promotionAllowedCount).toBe(0);
+    expect(report.samples[0]).toMatchObject({
+      liveProfile: "direct_main",
+      recommendedProfile: "judge_fast",
+      promotionAllowed: false,
+      rollbackTarget: "direct_main",
+    });
+  });
+
   it("nightly report exposes cost/speed baseline without changing promotion gate", () => {
     const report = generateNightlyReport([
       policyResolved(),
@@ -535,7 +553,9 @@ describe("cost/speed baseline", () => {
     const markdown = renderMarkdownReport(report);
 
     expect(report.costSpeedBaseline.sourceEventCount).toBeGreaterThan(0);
+    expect(report.modelShadowComparison.promotionAllowedCount).toBe(0);
     expect(markdown).toContain("## Cost/Speed Baseline");
+    expect(markdown).toContain("## Model Shadow Comparison");
     expect(markdown).toContain("reply");
   });
 });

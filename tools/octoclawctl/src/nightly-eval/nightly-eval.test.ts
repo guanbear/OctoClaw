@@ -284,6 +284,17 @@ function makeNightlyReport(overallGate: GateCheckResult = "pass"): NightlyReport
     inputEventCount: 1,
     inputDateRange: { earliest: "2026-04-26T00:00:00.000Z", latest: "2026-04-26T00:01:00.000Z" },
     lanes: [],
+    modelShadowComparison: {
+      mode: "shadow",
+      generatedAt: "2026-04-26T00:00:00.000Z",
+      sourceEventCount: 0,
+      comparedCount: 0,
+      changedRecommendationCount: 0,
+      matchedRecommendationCount: 0,
+      promotionAllowedCount: 0,
+      rollbackTargets: [],
+      samples: [],
+    },
     costSpeedBaseline: {
       generatedAt: "2026-04-26T00:00:00.000Z",
       sourceEventCount: 0,

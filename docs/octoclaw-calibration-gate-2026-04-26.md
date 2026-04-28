@@ -85,6 +85,8 @@ When the gate fails or is unknown, `rollbackTarget` is `null` — no promotion i
 - **Cost comparison**: Cost requires explicit `metrics.costUsd` in both baseline and candidate, or reviewer-supplied metrics derived from the D3 cost/speed baseline. Missing cost data makes the gate `unknown`, not `pass`.
 - **Statistical comparison**: Latency comparison uses aggregate percentiles (P50/P95). Different sample sizes between baseline and candidate may affect comparison accuracy.
 
+- **Model shadow rollout**: D3 nightly may include a model shadow comparison, but it is report-only. `promotionAllowed=0` in nightly evidence; any promotion still requires a separate gate pass and manual promotion step.
+
 ## Safety Guarantees
 
 - The gate function is pure: no I/O, no API calls, no state mutation

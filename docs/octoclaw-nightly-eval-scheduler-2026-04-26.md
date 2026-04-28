@@ -86,7 +86,7 @@ The aggregate report contains:
 - Recommendation status: `recommend_only`, `blocked`, or `unknown`
 - `unknown` is never treated as `pass`
 
-Output: `{timestamp}-nightly-eval.json` + `.md` in the output directory. The embedded D3 nightly report includes a cost/speed baseline table for `reply`, `delegate`, and `flow` lanes with p50/p95/p99 latency, cost status, cost/request, cost/success, fallback/retry, and context-pollution metrics. Missing cost/latency is rendered as unknown/N/A and is not promoted as pass evidence.
+Output: `{timestamp}-nightly-eval.json` + `.md` in the output directory. The embedded D3 nightly report includes a cost/speed baseline table for `reply`, `delegate`, and `flow` lanes with p50/p95/p99 latency, cost status, cost/request, cost/success, fallback/retry, and context-pollution metrics. It also includes a model shadow comparison section that records baseline/live profile versus shadow recommendation while keeping `promotionAllowed=0`. Missing cost/latency is rendered as unknown/N/A and is not promoted as pass evidence.
 
 ## Mac LaunchAgent
 

@@ -13,6 +13,8 @@ import type {
   CostSpeedLaneName,
   CostSpeedMetricSummary,
   MetricCompleteness,
+  ModelShadowComparisonReport,
+  ModelShadowComparisonSample,
   NightlyReport,
   RecommendationStatus,
   GateResult,
@@ -690,6 +692,33 @@ function costSum(values: Array<number | undefined>): number | null {
   return clean.reduce((sum, value) => sum + value, 0);
 }
 
+const MODEL_PROFILE_MAP: Record<string, string> = {
+  judge_fast: "minimax-portal/MiniMax-M2.7",
+  observer_probe: "minimax-portal/MiniMax-M2.7",
+  direct_main: "zhipu/GLM-5.1",
+  worker_default: "zhipu/GLM-5.1",
+  worker_research: "zhipu/GLM-5.1",
+  worker_code_normal: "zhipu/GLM-5.1",
+  worker_code_deep: "omniroute/cx/gpt-5.4",
+  worker_review: "omniroute/cx/gpt-5.4",
+  worker_deep: "omniroute/cx/gpt-5.4",
+};
+
+function modelId(profile: string): string {
+  return MODEL_PROFILE_MAP[profile] ?? "unknown";
+}
+
+function eventModelProfile(event: ReplayEvent): string {
+  const profile = String(event.modelProfile ?? "").trim();
+  if (profile) return profile;
+  if (event.route === "reply" || event.finalRoute === "reply") return "direct_main";
+  return "worker_default";
+}
+
+function shadowRecommendedProfile(lane: CostSpeedLaneName, liveProfile: string): string {
+  return lane === "reply" && liveProfile === "direct_main" ? "judge_fast" : liveProfile;
+}
+
 function isCostSpeedSourceEvent(event: ReplayEvent): boolean {
   if (typeof event.telemetryId === "string" && event.telemetryId.trim()) return true;
   if (event.event.includes("telemetry")) return true;
@@ -772,6 +801,44 @@ export function buildCostSpeedBaselineFromReplay(events: ReplayEvent[], generate
   return { generatedAt: generatedAtIso, sourceEventCount: sources.length, lanes };
 }
 
+export function buildModelShadowComparisonFromReplay(events: ReplayEvent[], generatedAt: string | Date = new Date()): ModelShadowComparisonReport {
+  const generatedAtIso = generatedAt instanceof Date ? generatedAt.toISOString() : generatedAt;
+  const sources = events.filter(isCostSpeedSourceEvent);
+  const samples: ModelShadowComparisonSample[] = sources.map((event) => {
+    const lane = laneForCostSpeed(event);
+    const liveProfile = eventModelProfile(event);
+    const recommendedProfile = shadowRecommendedProfile(lane, liveProfile);
+    return {
+      eventId: `${event.at}:${event.event}:${event.taskId ?? event.turnId ?? ""}`,
+      at: event.at,
+      lane,
+      liveProfile,
+      liveModelId: modelId(liveProfile),
+      recommendedProfile,
+      recommendedModelId: modelId(recommendedProfile),
+      matchedRecommendation: liveProfile === recommendedProfile,
+      promotionAllowed: false,
+      rollbackTarget: liveProfile,
+      reason: recommendedProfile === liveProfile
+        ? "shadow_keeps_live_profile_until_gate_pass"
+        : "shadow_recommends_lower_cost_reply_profile_without_live_change",
+    };
+  });
+  const rollbackTargets = Array.from(new Set(samples.map((sample) => sample.rollbackTarget))).sort();
+
+  return {
+    mode: "shadow",
+    generatedAt: generatedAtIso,
+    sourceEventCount: sources.length,
+    comparedCount: samples.length,
+    changedRecommendationCount: samples.filter((sample) => sample.liveProfile !== sample.recommendedProfile).length,
+    matchedRecommendationCount: samples.filter((sample) => sample.matchedRecommendation).length,
+    promotionAllowedCount: 0,
+    rollbackTargets,
+    samples: samples.slice(0, MAX_SAMPLES_PER_LANE),
+  };
+}
+
 const REQUIRED_LANES: readonly string[] = [
   "route_quality",
   "route_commit_ack",
@@ -832,6 +899,7 @@ export function generateNightlyReport(events: ReplayEvent[], filter?: NightlyRep
   ];
   const generatedAt = new Date().toISOString();
   const costSpeedBaseline = buildCostSpeedBaselineFromReplay(events, generatedAt);
+  const modelShadowComparison = buildModelShadowComparisonFromReplay(events, generatedAt);
 
   const overallGate = computeOverallGate(lanes);
   const recommendationStatus = computeRecommendationStatus(overallGate);
@@ -844,6 +912,7 @@ export function generateNightlyReport(events: ReplayEvent[], filter?: NightlyRep
     inputDateRange: { earliest, latest },
     lanes,
     costSpeedBaseline,
+    modelShadowComparison,
     overallGate,
     recommendationStatus,
     recommendation: buildRecommendationText(overallGate, lanes),

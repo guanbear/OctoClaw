@@ -39,6 +39,23 @@ export function renderMarkdownReport(report: NightlyReport): string {
   }
   lines.push("");
 
+  lines.push(`## Model Shadow Comparison`);
+  lines.push("");
+  lines.push(`- **Mode**: ${report.modelShadowComparison.mode}`);
+  lines.push(`- **Compared**: ${report.modelShadowComparison.comparedCount}`);
+  lines.push(`- **Changed Recommendations**: ${report.modelShadowComparison.changedRecommendationCount}`);
+  lines.push(`- **Promotion Allowed**: ${report.modelShadowComparison.promotionAllowedCount}`);
+  lines.push(`- **Rollback Targets**: ${report.modelShadowComparison.rollbackTargets.join(", ") || "N/A"}`);
+  lines.push("");
+  if (report.modelShadowComparison.samples.length > 0) {
+    lines.push(`| Lane | Live Profile | Shadow Profile | Matched | Reason |`);
+    lines.push(`|------|--------------|----------------|---------|--------|`);
+    for (const sample of report.modelShadowComparison.samples.slice(0, 10)) {
+      lines.push(`| ${sample.lane} | ${sample.liveProfile} | ${sample.recommendedProfile} | ${sample.matchedRecommendation} | ${sample.reason} |`);
+    }
+    lines.push("");
+  }
+
   for (const lane of report.lanes) {
     lines.push(`## ${laneTitle(lane.lane)}`);
     lines.push("");

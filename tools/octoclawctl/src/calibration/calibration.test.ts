@@ -420,6 +420,17 @@ function makeNightlyReport(options: { reportId?: string; lanes?: NightlyOverride
     inputEventCount: 50,
     inputDateRange: { earliest: "2026-04-25T00:00:00.000Z", latest: "2026-04-26T00:00:00.000Z" },
     lanes: [routeQuality, routeCommitAck, executionTransition, delegationHealth, delivery],
+    modelShadowComparison: {
+      mode: "shadow",
+      generatedAt: "2026-04-26T00:00:00.000Z",
+      sourceEventCount: 0,
+      comparedCount: 0,
+      changedRecommendationCount: 0,
+      matchedRecommendationCount: 0,
+      promotionAllowedCount: 0,
+      rollbackTargets: [],
+      samples: [],
+    },
     costSpeedBaseline: {
       generatedAt: "2026-04-26T00:00:00.000Z",
       sourceEventCount: 0,

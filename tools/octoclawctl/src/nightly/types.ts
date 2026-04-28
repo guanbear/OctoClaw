@@ -339,6 +339,32 @@ export interface CostSpeedBaselineReport {
   lanes: CostSpeedLaneReport[];
 }
 
+export interface ModelShadowComparisonSample {
+  eventId: string;
+  at: string;
+  lane: CostSpeedLaneName;
+  liveProfile: string;
+  liveModelId: string;
+  recommendedProfile: string;
+  recommendedModelId: string;
+  matchedRecommendation: boolean;
+  promotionAllowed: false;
+  rollbackTarget: string;
+  reason: string;
+}
+
+export interface ModelShadowComparisonReport {
+  mode: "shadow";
+  generatedAt: string;
+  sourceEventCount: number;
+  comparedCount: number;
+  changedRecommendationCount: number;
+  matchedRecommendationCount: number;
+  promotionAllowedCount: 0;
+  rollbackTargets: string[];
+  samples: ModelShadowComparisonSample[];
+}
+
 export type EvaluationLaneResult =
   | RouteQualityLane
   | RouteCommitAckLane
@@ -376,6 +402,7 @@ export interface NightlyReport {
   inputDateRange: { earliest: string | null; latest: string | null };
   lanes: EvaluationLaneResult[];
   costSpeedBaseline: CostSpeedBaselineReport;
+  modelShadowComparison: ModelShadowComparisonReport;
   overallGate: GateResult;
   recommendationStatus: RecommendationStatus;
   recommendation: string;
