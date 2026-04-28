@@ -1386,15 +1386,7 @@ function appendExecutionCoverageProjection(replyText: string, state: Record<stri
   if (!isCoverageAnswer || String(routeDecision.route ?? workContract.route ?? "reply") !== "reply") {
     return replyText;
   }
-  if (/(?:WorkContract|ExecutionCoverage|coverage|证据)/iu.test(replyText)) {
-    return replyText;
-  }
-  const contractId = String(workContract.workContractId ?? decision.workContractId ?? "unknown").trim();
-  const coverage = String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "unknown").trim();
-  const dispatchExecuted = String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? state.dispatchExecuted ?? false);
-  const spawnExecuted = String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? state.spawnExecuted ?? false);
   const route = String(workContract.route ?? routeDecision.route ?? "reply").trim() || "reply";
-  const routeSource = String(workContract.decisionSource ?? routeDecision.route_source ?? "unknown").trim();
   const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
   const model = String(
@@ -1409,7 +1401,15 @@ function appendExecutionCoverageProjection(replyText: string, state: Record<stri
   ).trim() || "unknown";
   const footerDisabled = ["0", "false", "off", "no"].includes(String(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER ?? "").trim().toLowerCase());
   const routeLabel = route === "delegate" ? "委派(delegate)" : "reply";
-  const footer = footerDisabled ? "" : `\n_OctoClaw 投影：${routeLabel}；模型：${model}_`;
+  const footer = footerDisabled || /OctoClaw\s*投影[：:]/iu.test(replyText) ? "" : `\n_OctoClaw 投影：${routeLabel}；模型：${model}_`;
+  if (/(?:WorkContract|ExecutionCoverage|coverage|证据)/iu.test(replyText)) {
+    return footer ? `${replyText.trim()}${footer}` : replyText;
+  }
+  const contractId = String(workContract.workContractId ?? decision.workContractId ?? "unknown").trim();
+  const coverage = String(asRecord(asRecord(executionPacket.coverage).execution).coverage ?? executionLayer.coverage ?? "unknown").trim();
+  const dispatchExecuted = String(executionPacket.dispatchExecuted ?? executionLayer.dispatch_executed ?? state.dispatchExecuted ?? false);
+  const spawnExecuted = String(executionPacket.spawnExecuted ?? executionLayer.spawn_executed ?? state.spawnExecuted ?? false);
+  const routeSource = String(workContract.decisionSource ?? routeDecision.route_source ?? "unknown").trim();
   return `${replyText.trim()}\n\n证据投影：route=${route}；model=${model}；WorkContract=${contractId}；ExecutionCoverage coverage=${coverage}；route_source=${routeSource}；dispatchExecuted=${dispatchExecuted}；spawnExecuted=${spawnExecuted}。${footer}`;
 }
 

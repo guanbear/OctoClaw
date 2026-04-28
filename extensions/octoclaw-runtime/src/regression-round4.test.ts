@@ -729,6 +729,26 @@ describe("regression round 4: execution coverage projections", () => {
     expect(String(guarded.message?.content)).toContain("spawnExecuted=false");
   });
 
+
+  it("adds footer when assistant already emitted compact coverage projection", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: "收到。\nroute=reply | model=direct_main | wc=wc-compact | coverage=thread | route_source=policy_rule" },
+      {
+        decision: {
+          route_decision: { route: "reply", route_source: "policy_rule" },
+          router_decision_v2: { request_kind: "status_or_provenance" },
+          work_contract: { workContractId: "wc-compact", route: "reply", decisionSource: "execution_coverage" },
+          model_policy: { selected_model: "direct_main" },
+          _execution_coverage_packet: { replyMode: "answer", coverage: { execution: { coverage: "thread" } } },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(String(guarded.message?.content)).toContain("route=reply | model=direct_main");
+    expect(String(guarded.message?.content)).toContain("OctoClaw 投影：reply；模型：direct_main");
+  });
+
   it("keeps WorkContract and coverage facts in policy prompt projections", () => {
     const text = compactPolicyPrompt({
       route_decision: { route: "reply", route_source: "rule" },
