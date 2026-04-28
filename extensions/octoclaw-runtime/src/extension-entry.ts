@@ -322,10 +322,15 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
   const content = stringValue(event.content);
   if (!content) return undefined;
+  const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(event);
   const match = findRecentOutboundPolicyState(event.to, event, ctx, now, {
-    allowUnanchoredDelivery: outboundLooksLikeVisibleDeliveryHook(event),
+    allowUnanchoredDelivery: visibleDelivery,
   });
-  if (!match) return undefined;
+  if (!match) {
+    if (!visibleDelivery) return undefined;
+    const fallbackReplacement = appendReplyProjectionFooter(content, {}, event, ctx);
+    return fallbackReplacement && fallbackReplacement !== content ? { content: fallbackReplacement } : undefined;
+  }
   const stateRecord = asRecord(match.state);
   const guarded = match.anchored
     ? guardAssistantMessageForPolicyState(

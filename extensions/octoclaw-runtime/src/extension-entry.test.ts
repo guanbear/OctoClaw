@@ -220,6 +220,18 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+
+  it("appends a conservative footer for visible Slack delivery when state is missing", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", content: "收到。", metadata: { channelId: "C0AS4DAPPU3", threadTs: "1777387367.594319" } },
+      { channelId: "slack", model: "GLM-5.1" },
+      Date.now(),
+    );
+
+    expect(guarded?.content).toContain("收到。");
+    expect(guarded?.content).toContain("OctoClaw 投影：reply；模型：GLM-5.1");
+  });
+
   it("appends footer for visible Slack delivery hooks even when OpenClaw omits message anchors", () => {
     const now = Date.now();
     const key = "agent:main:slack:default:direct:u0al9t5u89z";
