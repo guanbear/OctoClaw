@@ -566,6 +566,43 @@ describe("execution coverage override intent guard", () => {
     });
   });
 
+  it("keeps active judge reply when local tool need is required", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              route: "reply",
+              confidence: 0.85,
+              abstain_reason: null,
+              ack_text: "收到",
+              tool_need_hint: "required",
+              scope: "local",
+            }),
+          },
+        }],
+      }),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "请直接在主会话查一下本机 OpenClaw 版本和 npm 最新版本，不要委派子 agent；用一行回答。",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "local_surface_lookup",
+          },
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      route_source: "judge",
+    });
+    expect((decision._judge_shadow_log as Record<string, unknown>).validator_override_reasons ?? []).not.toContain("validator:tool_need_required→delegate");
+  });
+
   it("execution_followup + no coverage + judge=reply + tool_need_hint=required → forced reply", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({

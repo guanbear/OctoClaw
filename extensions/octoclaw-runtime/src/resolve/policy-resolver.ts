@@ -1847,17 +1847,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           validatorOverrideReasons.push("validator:plain_chat→reply(pre_dispatch_correction)");
         }
 
-        if (!executionOverrideApplied && toolNeedHint === "required" && judgeRouteOverride === "reply") {
-          if (judgeScope === "unknown") {
-            judgeRouteOverride = "delegate";
-            judgeSucceeded = true;
-            validatorOverrideReasons.push("validator:tool_need_required+scope_unknown→delegate(reply_mode=clarify)");
-          } else {
-            judgeRouteOverride = "delegate";
-            judgeSucceeded = true;
-            validatorOverrideReasons.push("validator:tool_need_required→delegate");
-          }
-        } else if (!executionOverrideApplied && durationHint === "long" && judgeRouteOverride === "reply") {
+        if (!executionOverrideApplied && durationHint === "long" && judgeRouteOverride === "reply") {
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
           validatorOverrideReasons.push("validator:duration_long→delegate");
