@@ -308,6 +308,44 @@ describe("octoclaw_route_hint policy state aliases", () => {
 
 
 describe("before_tool_call route hint guard", () => {
+
+
+  it("does not block octoclaw_dispatch with the manual delegation pattern guard", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: {
+          must_delegate_via: "octoclaw_dispatch",
+          allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+          block_tool_patterns: ["sessions_spawn", "delegate"],
+        },
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "delegate with octoclaw_dispatch instead of sessions_spawn" } },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    policyState.clearState(key);
+  });
+
   it("does not block direct tools after a reply route_hint is stored on a newer context alias", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({

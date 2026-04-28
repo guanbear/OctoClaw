@@ -1175,7 +1175,9 @@ export const plugin = {
       const blockedPatterns = Array.isArray(toolPolicy.block_tool_patterns)
         ? toolPolicy.block_tool_patterns.map((item) => stringValue(item)).filter(Boolean)
         : [];
-      if (matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
+      const delegateTool = stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch");
+      const isPolicyControlTool = toolName.startsWith("octoclaw_") || toolName === routeHintTool || toolName === delegateTool;
+      if (!isPolicyControlTool && matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
         await recordPolicyReplay(
           "tool_blocked_manual_delegation",
           {
