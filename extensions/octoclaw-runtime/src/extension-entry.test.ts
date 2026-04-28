@@ -103,7 +103,8 @@ describe("guardOutboundMessageForPolicyState", () => {
       now,
     );
 
-    expect(guarded?.content).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+    expect(guarded?.content).toContain("这次任务还没派发成功");
+    expect(guarded?.content).toContain("OctoClaw 投影：委派(delegate)");
     policyState.clearState(key);
   });
 
@@ -126,8 +127,33 @@ describe("guardOutboundMessageForPolicyState", () => {
       now,
     );
 
+    expect(guarded?.content).toContain("刚才的子 agent 已经跑完了");
+    expect(guarded?.content).toContain("OctoClaw 投影：委派(delegate)");
+    policyState.clearState(key);
+  });
+
+  it("can disable outbound projection footer with env switch", () => {
+    const previous = process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = "0";
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3";
+    policyState.setState(key, {
+      decision: { route_decision: { route: "reply" }, model_policy: { selected_model: "model-a" }, request: { metadata: { message_id: "1777368522.770689" } } },
+      inboundMessageTs: "1777368522.770689",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368522.770689", content: "好的。" },
+      { channelId: "slack", inboundMessageTs: "1777368522.770689" },
+      now,
+    );
+
     expect(guarded).toBeUndefined();
     policyState.clearState(key);
+    if (previous === undefined) delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    else process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = previous;
   });
 
 
@@ -165,7 +191,8 @@ describe("guardOutboundMessageForPolicyState", () => {
       now,
     );
 
-    expect(guarded).toBeUndefined();
+    expect(guarded?.content).toContain("最新版是 OpenClaw");
+    expect(guarded?.content).toContain("OctoClaw 投影：reply");
     policyState.clearState(staleKey);
     policyState.clearState(currentKey);
   });
@@ -211,7 +238,8 @@ describe("guardOutboundMessageForPolicyState", () => {
       now,
     );
 
-    expect(guarded).toBeUndefined();
+    expect(guarded?.content).toContain("policy 判定为 reply");
+    expect(guarded?.content).toContain("OctoClaw 投影：reply");
     policyState.clearState(key);
   });
 });

@@ -249,22 +249,78 @@ function findRecentOutboundPolicyState(target: unknown, event: UnknownRecord, ct
   return best ? { key: best.key, state: best.state } : null;
 }
 
+
+function replyProjectionFooterEnabled(): boolean {
+  const raw = stringValue(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER).toLowerCase();
+  return !["0", "false", "off", "no"].includes(raw);
+}
+
+function routeLabel(route: string): string {
+  return route === "delegate" ? "委派(delegate)" : "reply";
+}
+
+function firstStringValue(...values: unknown[]): string {
+  for (const value of values) {
+    const text = stringValue(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function outboundProjectionModel(state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
+  const decision = asRecord(state.decision);
+  const modelPolicy = asRecord(decision.model_policy);
+  const runtimeTruth = asRecord(decision.runtime_truth);
+  return firstStringValue(
+    event.model,
+    event.modelId,
+    event.model_id,
+    ctx.model,
+    ctx.modelId,
+    ctx.model_id,
+    state.model,
+    state.modelProfile,
+    state.model_profile,
+    modelPolicy.selected_model,
+    modelPolicy.model,
+    runtimeTruth.model,
+    decision.model,
+  ) || "unknown";
+}
+
+function appendReplyProjectionFooter(content: string, state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
+  if (!replyProjectionFooterEnabled()) return content;
+  if (/OctoClaw\s*投影[：:]/iu.test(content)) return content;
+  const decision = asRecord(state.decision);
+  const workContract = asRecord(decision.work_contract);
+  const routeDecision = asRecord(decision.route_decision);
+  const route = stringValue(workContract.route || routeDecision.route || state.route || "reply") === "delegate" ? "delegate" : "reply";
+  const model = outboundProjectionModel(state, event, ctx);
+  return `${content.trim()}\n\n_OctoClaw 投影：${routeLabel(route)}；模型：${model}_`;
+}
+
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
   const content = stringValue(event.content);
   if (!content) return undefined;
   const match = findRecentOutboundPolicyState(event.to, event, ctx, now);
   if (!match) return undefined;
+  const stateRecord = asRecord(match.state);
   const guarded = guardAssistantMessageForPolicyState(
     { role: "assistant", content: [{ type: "text", text: content }] },
-    asRecord(match.state),
+    stateRecord,
   );
-  if (guarded.mode !== "replace" || !guarded.message) return undefined;
-  const replacement = assistantMessageText(asRecord(guarded.message));
+  const guardedReplacement = guarded.mode === "replace" && guarded.message
+    ? assistantMessageText(asRecord(guarded.message))
+    : "";
+  const baseContent = guardedReplacement || content;
+  const replacement = appendReplyProjectionFooter(baseContent, stateRecord, event, ctx);
   if (!replacement || replacement === content) return undefined;
   updatePolicyState(match.key, (current) => ({
     ...(current ?? {}),
-    outbound_guard_replaced: true,
-    outbound_guard_replaced_at: new Date(now).toISOString(),
+    outbound_guard_replaced: guardedReplacement ? true : current?.outbound_guard_replaced,
+    outbound_guard_replaced_at: guardedReplacement ? new Date(now).toISOString() : current?.outbound_guard_replaced_at,
+    outbound_projection_footer_appended: replacement !== baseContent || current?.outbound_projection_footer_appended === true,
+    outbound_projection_footer_appended_at: replacement !== baseContent ? new Date(now).toISOString() : current?.outbound_projection_footer_appended_at,
   }));
   return { content: replacement };
 }
