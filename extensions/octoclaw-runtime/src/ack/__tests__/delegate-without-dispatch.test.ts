@@ -99,6 +99,38 @@ describe("delegate without dispatch notice", () => {
     expect(result.reason).toContain("target_resolution_failed");
   });
 
+
+
+  it("skips delivery without a current reply or thread anchor", async () => {
+    const { runCommandSpy } = await mockDelivery();
+
+    const result = await sendDelegateWithoutDispatchNotice(noticeParams({
+      sessionKey: "slack:direct:U1",
+      state: { decision: decision() },
+      replyToMessageId: "",
+    }));
+
+    expect(result).toEqual(expect.objectContaining({
+      skipped: true,
+      reason: "no_valid_thread_anchor",
+      notificationDeliveryState: "not_attempted",
+    }));
+    expect(runCommandSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows delivery when the session key itself carries a thread anchor", async () => {
+    const { runCommandSpy } = await mockDelivery();
+
+    const result = await sendDelegateWithoutDispatchNotice(noticeParams({
+      sessionKey: "slack:channel:C1:thread:1700000000.000100",
+      state: { decision: decision() },
+      replyToMessageId: "",
+    }));
+
+    expect(result.sent).toBe(true);
+    expect(runCommandSpy).toHaveBeenCalledOnce();
+  });
+
   it("replay ackMessage has no running language", async () => {
     const { replaySpy } = await mockDelivery();
 

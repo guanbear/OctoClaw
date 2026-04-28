@@ -240,21 +240,26 @@ export async function sendDelegateWithoutDispatchNotice(params: {
   }
 
   const key = `delegate_without_dispatch_notice:${params.sessionKey}:${packet.turnId}:${packet.routeCommitId}`;
-  const claim = checkAndSetDelegateWithoutDispatch(key, "delegate_without_dispatch");
-  if (!claim.allowed) {
-    return { sent: false, skipped: true, reason: "skipped_duplicate", ackKey: key, notificationDeliveryState: "skipped_duplicate" };
-  }
-
   const targetResolution = resolveAckTargetFromSessionKey(params.sessionKey);
   if (!targetResolution.target) {
     return { sent: false, skipped: true, reason: "target_resolution_failed", ackKey: key, notificationDeliveryState: "target_resolution_failed" };
+  }
+
+  const replyAnchor = params.replyToMessageId || asString(params.state.message_id) || asString(params.state.inboundMessageTs) || undefined;
+  if (!replyAnchor && !targetResolution.threadId) {
+    return { sent: false, skipped: true, reason: "no_valid_thread_anchor", ackKey: key, notificationDeliveryState: "not_attempted" };
+  }
+
+  const claim = checkAndSetDelegateWithoutDispatch(key, "delegate_without_dispatch");
+  if (!claim.allowed) {
+    return { sent: false, skipped: true, reason: "skipped_duplicate", ackKey: key, notificationDeliveryState: "skipped_duplicate" };
   }
 
   const ackMessage = projectDelegateWithoutDispatchText(packet, params.state);
   const result = await sendDelegateWithoutDispatchDirect(
     params.sessionKey,
     ackMessage,
-    params.replyToMessageId || asString(params.state.message_id) || asString(params.state.inboundMessageTs) || undefined,
+    replyAnchor,
     params.cwd,
   );
   const sent = Boolean(result.delivered || result.sent);

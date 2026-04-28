@@ -59,7 +59,8 @@ The default suite covers:
 4. `status_panel`
 5. `provenance_followup`: `刚才那个任务判定是啥，怎么查的？`
 6. `route_objection_correction`
-7. `no_lie_materialized_no_spawn` when fixture is configured
+7. `route_flip_no_stale_projection`: fresh lookup route may flip from judge-delegate to final reply, but stale delegate-failure text must never be projected
+8. `no_lie_materialized_no_spawn` when fixture is configured
 
 Status/provenance/no-lie cases are expected not to spawn. When `replayPath` is configured, the harness checks replay events after the prompt timestamp for spawn evidence. Missing or malformed replay evidence returns `unknown`, not `pass`.
 
@@ -87,3 +88,9 @@ The real Slack acceptance harness is fail-closed and bounded:
 Runtime route-commit ACK now attempts a non-blocking early send from `before_model_resolve` for non-reply routes, then relies on the existing route-commit dedupe key when `before_prompt_build` runs. This keeps delegated/status route ACKs closer to route commitment without claiming dispatch or spawn execution.
 
 Status/provenance follow-up replies must surface a sanitized truth projection when execution coverage is the answer source. If the agent omits explicit evidence wording, the runtime appends a parent-visible footer containing `WorkContract`, `ExecutionCoverage coverage`, route source, `dispatchExecuted`, and `spawnExecuted`; this footer is a projection only and never includes raw child transcripts.
+
+## 2026-04-28 Route Flip / Stale Projection Update
+
+A judge result is an intermediate recommendation, not user-visible execution truth. Slack acceptance now includes `route_flip_no_stale_projection` to lock the regression where a fresh lookup was initially judged as delegate, later resolved/sealed as reply, but an outbound guard reused stale same-DM delegate state and sent `这次任务还没派发成功...`.
+
+Acceptance rule: when the current turn has a sealed reply WorkContract or reply execution receipt, ACK/guard/final projections must not use stale delegate state from another message in the same DM/channel. Missing current-turn thread/message binding fails closed by not rewriting outbound content.

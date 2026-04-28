@@ -400,3 +400,9 @@ For every package, Codex must verify:
 
 D1 and D2 are user-facing reliability fixes and should land first. D3-D5 create
 the long-term reasonableness loop without online self-tuning.
+
+## 2026-04-28 Calibration Asset: Route Flip Without Stale Projection
+
+Nightly evaluation should treat `judgeRoute=delegate` followed by `finalRoute=reply` as a calibration sample, not a failure by itself. It becomes a failure only when a user-visible ACK/guard/status projection contradicts the final sealed WorkContract or execution receipt, for example by emitting a delegate-not-dispatched message after the current turn is sealed as reply.
+
+This keeps judge calibration separate from projection correctness: judge may reasonably prefer delegation for fresh lookup, while the projection layer must always read current-turn WorkContract plus execution evidence and must not reuse stale same-target state.

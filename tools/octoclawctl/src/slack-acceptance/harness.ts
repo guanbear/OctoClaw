@@ -79,6 +79,15 @@ const DEFAULT_CASES: SlackAcceptanceCaseConfig[] = [
     expectFinal: ["直接", "纠正", "不委派", "已改"],
   },
   {
+    kind: "route_flip_no_stale_projection",
+    prompt: "OpenClaw 的最新版是啥？有啥最新特性？这条请主会话直接回答；如果前置判定偏向委派，请用结构化 route hint/objection 纠成 reply 后再答。",
+    ackRequired: false,
+    finalRequired: true,
+    noSpawnExpected: true,
+    expectFinalAll: ["OpenClaw", "版本|最新版|release|发布"],
+    rejectFinal: ["还没派发成功", "真实执行结果", "没派发成功"],
+  },
+  {
     kind: "no_lie_materialized_no_spawn",
     prompt: "显示 no-lie fixture：已物化但没有 spawn evidence 的任务现在应该显示什么状态？",
     ackRequired: false,

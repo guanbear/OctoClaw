@@ -180,9 +180,9 @@ describe("parseSlackAcceptanceConfig — fail closed", () => {
     expect(config.cases[0].prompt).toBe("custom");
   });
 
-  it("uses default 7 cases when no cases specified", () => {
+  it("uses default 8 cases when no cases specified", () => {
     const config = parseSlackAcceptanceConfig(validConfig(), validEnv());
-    expect(config.cases).toHaveLength(7);
+    expect(config.cases).toHaveLength(8);
   });
 
   it("defaults to isolated acceptance run metadata", () => {

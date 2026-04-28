@@ -179,19 +179,68 @@ function normalizeOutboundTargetKey(value: unknown): string {
     .replace(/[^a-z0-9_.:-]+/gu, "");
 }
 
-function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntry, targetKey: string, now: number): boolean {
+function outboundMessageAnchors(event: UnknownRecord, ctx: UnknownRecord): string[] {
+  const prompt = [
+    stringValue(event.content),
+    extractPromptText(event),
+    extractPromptText(ctx),
+  ].filter(Boolean).join("\n");
+  const anchors = [
+    extractInboundMessageTimestamp(ctx, event, prompt),
+    findInboundMessageTimestamp(event),
+    findInboundMessageTimestamp(ctx),
+    stringValue(event.replyToMessageId),
+    stringValue(event.reply_to_id),
+    stringValue(event.threadTs),
+    stringValue(event.thread_ts),
+    stringValue(event.message_id),
+    stringValue(event.messageId),
+    stringValue(ctx.replyToMessageId),
+    stringValue(ctx.reply_to_id),
+    stringValue(ctx.threadTs),
+    stringValue(ctx.thread_ts),
+    stringValue(ctx.inboundMessageTs),
+    stringValue(ctx.message_id),
+    stringValue(ctx.messageId),
+  ];
+  return Array.from(new Set(anchors.filter((value) => SLACK_MESSAGE_TS_PATTERN.test(value))));
+}
+
+function stateMatchesOutboundAnchor(key: string, state: PolicyStateEntry, anchors: string[]): boolean {
+  if (anchors.length === 0) return false;
+  const decision = asRecord(state.decision);
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const candidates = [
+    stringValue(state.inboundMessageTs),
+    stringValue(state.message_id),
+    stringValue(state.messageId),
+    stringValue(state.replyToMessageId),
+    stringValue(state.reply_to_id),
+    stringValue(requestMetadata.message_id),
+    stringValue(requestMetadata.messageId),
+    stringValue(requestMetadata.inboundMessageTs),
+    stringValue(requestMetadata.reply_to_id),
+    stringValue(requestMetadata.thread_ts),
+  ];
+  return anchors.some((anchor) => candidates.includes(anchor) || key.includes(`:thread:${anchor}`));
+}
+
+function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntry, targetKey: string, anchors: string[], now: number): boolean {
   if (!targetKey || !key.toLowerCase().includes(targetKey)) return false;
   const updatedAt = Number(state.updatedAt || state.createdAt || 0);
   if (!Number.isFinite(updatedAt) || now - updatedAt > 3 * 60 * 1000) return false;
+  if (!stateMatchesOutboundAnchor(key, state, anchors)) return false;
   return Object.keys(asRecord(state.decision)).length > 0;
 }
 
-function findRecentOutboundPolicyState(target: unknown, now: number): { key: string; state: PolicyStateEntry } | null {
+function findRecentOutboundPolicyState(target: unknown, event: UnknownRecord, ctx: UnknownRecord, now: number): { key: string; state: PolicyStateEntry } | null {
   const targetKey = normalizeOutboundTargetKey(target);
   if (!targetKey) return null;
+  const anchors = outboundMessageAnchors(event, ctx);
+  if (anchors.length === 0) return null;
   let best: { key: string; state: PolicyStateEntry; updatedAt: number } | null = null;
   for (const entry of policyState.entries()) {
-    if (!policyStateLooksRelevantForOutbound(entry.key, entry.state, targetKey, now)) continue;
+    if (!policyStateLooksRelevantForOutbound(entry.key, entry.state, targetKey, anchors, now)) continue;
     const updatedAt = Number(entry.state.updatedAt || entry.state.createdAt || 0);
     if (!best || updatedAt > best.updatedAt) {
       best = { key: entry.key, state: entry.state, updatedAt };
@@ -200,10 +249,10 @@ function findRecentOutboundPolicyState(target: unknown, now: number): { key: str
   return best ? { key: best.key, state: best.state } : null;
 }
 
-export function guardOutboundMessageForPolicyState(event: UnknownRecord, _ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
+export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
   const content = stringValue(event.content);
   if (!content) return undefined;
-  const match = findRecentOutboundPolicyState(event.to, now);
+  const match = findRecentOutboundPolicyState(event.to, event, ctx, now);
   if (!match) return undefined;
   const guarded = guardAssistantMessageForPolicyState(
     { role: "assistant", content: [{ type: "text", text: content }] },

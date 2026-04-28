@@ -88,17 +88,18 @@ describe("guardOutboundMessageForPolicyState", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
     policyState.setState(key, {
-      decision: { route_decision: { route: "delegate" } },
+      decision: { route_decision: { route: "delegate" }, request: { metadata: { message_id: "1777368519.770689" } } },
       delegated: false,
       dispatchExecuted: false,
       spawnExecuted: false,
+      inboundMessageTs: "1777368519.770689",
       createdAt: now,
       updatedAt: now,
     });
 
     const guarded = guardOutboundMessageForPolicyState(
-      { to: "C0AS4DAPPU3", content: "刚才的子 agent 已经跑完了，以下是调研摘要。" },
-      { channelId: "slack" },
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368519.770689", content: "刚才的子 agent 已经跑完了，以下是调研摘要。" },
+      { channelId: "slack", inboundMessageTs: "1777368519.770689" },
       now,
     );
 
@@ -110,16 +111,79 @@ describe("guardOutboundMessageForPolicyState", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
     policyState.setState(key, {
-      decision: { route_decision: { route: "delegate" } },
+      decision: { route_decision: { route: "delegate" }, request: { metadata: { message_id: "1777368520.770689" } } },
       delegated: true,
       dispatchExecuted: true,
+      spawnExecuted: false,
+      inboundMessageTs: "1777368520.770689",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368520.770689", content: "刚才的子 agent 已经跑完了，以下是调研摘要。" },
+      { channelId: "slack", inboundMessageTs: "1777368520.770689" },
+      now,
+    );
+
+    expect(guarded).toBeUndefined();
+    policyState.clearState(key);
+  });
+
+
+
+  it("does not rewrite a reply when only stale same-target delegate state exists", () => {
+    const now = Date.now();
+    const staleKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const currentKey = "agent:main:slack:default:direct:u0al9t5u89z:thread:1777368519.770689";
+    policyState.setState(staleKey, {
+      decision: { route_decision: { route: "delegate" }, request: { metadata: { message_id: "1777367569.124329" } } },
+      delegated: false,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      inboundMessageTs: "1777367569.124329",
+      createdAt: now - 30_000,
+      updatedAt: now - 30_000,
+    });
+    policyState.setState(currentKey, {
+      decision: {
+        work_contract: { route: "reply", workContractId: "wc-current" },
+        route_decision: { route: "reply", task_class: "main_direct" },
+        request: { metadata: { message_id: "1777368519.770689" } },
+      },
+      delegated: false,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      inboundMessageTs: "1777368519.770689",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "U0AL9T5U89Z", replyToMessageId: "1777368519.770689", content: "最新版是 OpenClaw 2026.4.25。" },
+      { channelId: "slack", inboundMessageTs: "1777368519.770689" },
+      now,
+    );
+
+    expect(guarded).toBeUndefined();
+    policyState.clearState(staleKey);
+    policyState.clearState(currentKey);
+  });
+
+  it("does not rewrite outbound messages without a current message anchor", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:default:direct:u0al9t5u89z";
+    policyState.setState(key, {
+      decision: { route_decision: { route: "delegate" } },
+      delegated: false,
+      dispatchExecuted: false,
       spawnExecuted: false,
       createdAt: now,
       updatedAt: now,
     });
 
     const guarded = guardOutboundMessageForPolicyState(
-      { to: "C0AS4DAPPU3", content: "刚才的子 agent 已经跑完了，以下是调研摘要。" },
+      { to: "U0AL9T5U89Z", content: "最新版是 OpenClaw 2026.4.25。" },
       { channelId: "slack" },
       now,
     );
@@ -132,17 +196,18 @@ describe("guardOutboundMessageForPolicyState", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
     policyState.setState(key, {
-      decision: { route_decision: { route: "reply" } },
+      decision: { route_decision: { route: "reply" }, request: { metadata: { message_id: "1777368521.770689" } } },
       delegated: false,
       dispatchExecuted: false,
       spawnExecuted: false,
+      inboundMessageTs: "1777368521.770689",
       createdAt: now,
       updatedAt: now,
     });
 
     const guarded = guardOutboundMessageForPolicyState(
-      { to: "C0AS4DAPPU3", content: "好的，policy 判定为 reply。之前子 agent 已完成调研，直接给摘要。" },
-      { channelId: "slack" },
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368521.770689", content: "好的，policy 判定为 reply。之前子 agent 已完成调研，直接给摘要。" },
+      { channelId: "slack", inboundMessageTs: "1777368521.770689" },
       now,
     );
 

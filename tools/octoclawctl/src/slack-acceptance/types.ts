@@ -6,6 +6,7 @@ export type SlackAcceptanceCaseKind =
   | "status_panel"
   | "provenance_followup"
   | "route_objection_correction"
+  | "route_flip_no_stale_projection"
   | "no_lie_materialized_no_spawn";
 export type AssertionStatus = "pass" | "fail" | "unknown" | "skipped";
 export type AcceptanceGate = "pass" | "fail" | "unknown";
