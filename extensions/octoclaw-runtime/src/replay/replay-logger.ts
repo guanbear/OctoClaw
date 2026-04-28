@@ -1400,7 +1400,7 @@ export function guardAssistantMessageForPolicyState(
   const spawnExecuted = state.spawnExecuted === true || state.spawn_executed === true;
   if (!statusProjectionToolSeen && !(dispatchExecuted || spawnExecuted)) {
     const dispatchClaimPatterns = [
-      /(?:已经|已|刚)?(?:派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?\s*agent|worker|任务|task)/iu,
+      /(?:已经|已|刚)?(?:派|委派|分派|指派|分配|delegate|dispatch|spawn|启动|启动了).*(?:子?\s*agent|worker|任务|task)/iu,
       /(?:让|叫|请).*(?:去|来|做|处理|执行|查).*(?:子?\s*agent|worker)/iu,
       /(?:已|已经)?(?:交给|分配给|指派给|派给).*(?:处理|执行|完成)/iu,
       /sessions_spawn|session_spawn/iu,

@@ -318,6 +318,16 @@ describe("WP2 regression: false dispatch claim guard", () => {
     expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
   });
 
+  it("replaces false Chinese delegated-subagent claim without dispatch evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "已委派子 agent 去调研，完成后给你摘要。" }] },
+      { decision: { route_decision: { route: "reply" } }, dispatchExecuted: false, spawnExecuted: false },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(textOf(guarded)).toBe("这次任务还没派发成功，等我拿到真实执行结果后回复。");
+  });
+
   it("replaces false sessions_spawn claim on reply route", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "我已经调用 sessions_spawn 派发任务。" }] },
@@ -341,6 +351,15 @@ describe("WP2 regression: false dispatch claim guard", () => {
   it("does not replace dispatched-subagent claim with actual dispatch evidence", () => {
     const guarded = guardAssistantMessageForPolicyState(
       { role: "assistant", content: [{ type: "text", text: "已派发子agent，稍后回来。" }] },
+      { decision: { route_decision: { route: "reply" } }, dispatchExecuted: true },
+    );
+
+    expect(guarded.mode).toBe("pass");
+  });
+
+  it("does not replace delegated-subagent claim with actual dispatch evidence", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "已委派子 agent 去调研，完成后给你摘要。" }] },
       { decision: { route_decision: { route: "reply" } }, dispatchExecuted: true },
     );
 
