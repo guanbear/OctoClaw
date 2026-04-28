@@ -54,6 +54,7 @@ import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import fsSync from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { atomicWriteJsonSync } from "../util/atomic-write.js";
 
 interface FsSyncLike {
@@ -66,6 +67,23 @@ const fsSyncLike = fsSync as unknown as FsSyncLike;
 
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
+
+export interface OpenClawSubagentRuntime {
+  run(params: {
+    sessionKey: string;
+    message: string;
+    deliver?: boolean;
+    provider?: string;
+    model?: string;
+    extraSystemPrompt?: string;
+    lane?: string;
+    idempotencyKey?: string;
+  }): Promise<{ runId?: string }>;
+}
+
+export interface ToolRegistrationOptions {
+  subagentRuntime?: OpenClawSubagentRuntime | null;
+}
 
 function taskIdsFromRuntimeTruth(runtimeTruth: UnknownRecord): string[] {
   const binding = asRecord(runtimeTruth.binding);
@@ -688,6 +706,105 @@ function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvi
   return { hasDispatchEvidence, hasSpawnEvidence, resultMaterialized, childSessionKey, runId };
 }
 
+function splitModelRefForSubagent(ref: string): { provider?: string; model?: string } {
+  const value = asString(ref);
+  if (!value) return {};
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash >= value.length - 1) return { model: value };
+  return { provider: value.slice(0, slash), model: value.slice(slash + 1) };
+}
+
+function childSessionAgentId(ctx: UnknownRecord, metadata: UnknownRecord): string {
+  return asString(ctx.agentId || metadata.agent_id, "main").replace(/[^A-Za-z0-9_.-]/gu, "_") || "main";
+}
+
+function buildChildSessionKey(ctx: UnknownRecord, metadata: UnknownRecord): string {
+  return `agent:${childSessionAgentId(ctx, metadata)}:subagent:${randomUUID()}`;
+}
+
+function buildSubagentSpawnMessage(params: { task: string; childSessionKey: string; delegateTaskId: string; workContractId: string }): string {
+  return [
+    "[OctoClaw Delegated Task]",
+    `childSessionKey: ${params.childSessionKey}`,
+    params.delegateTaskId ? `delegateTaskId: ${params.delegateTaskId}` : "",
+    params.workContractId ? `workContractId: ${params.workContractId}` : "",
+    "Return a concise result packet with findings, artifact refs if any, and final status. Do not include hidden chain-of-thought.",
+    "",
+    params.task,
+  ].filter(Boolean).join("\n");
+}
+
+async function trySpawnSubagentRuntime(params: {
+  runtime?: OpenClawSubagentRuntime | null;
+  task: string;
+  ctx: UnknownRecord;
+  metadata: UnknownRecord;
+  delegateTaskId: string;
+  workContractId: string;
+  selectedModel: string;
+  idempotencyKey: string;
+}): Promise<{ spawnExecuted: boolean; childSessionKey: string; runId: string; childRunId: string; error: string }> {
+  const runtime = params.runtime;
+  if (!runtime || typeof runtime.run !== "function") {
+    return { spawnExecuted: false, childSessionKey: "", runId: "", childRunId: "", error: "subagent_runtime_unavailable" };
+  }
+
+  const childSessionKey = buildChildSessionKey(params.ctx, params.metadata);
+  const modelRef = splitModelRefForSubagent(params.selectedModel);
+  const message = buildSubagentSpawnMessage({
+    task: params.task,
+    childSessionKey,
+    delegateTaskId: params.delegateTaskId,
+    workContractId: params.workContractId,
+  });
+  const extraSystemPrompt = [
+    "You are an OctoClaw child worker. Use only the supplied task packet and available tools.",
+    "Never expose raw transcript or hidden reasoning. Return a compact, user-safe result packet.",
+  ].join("\n");
+
+  try {
+    let result: { runId?: string };
+    try {
+      result = await runtime.run({
+        sessionKey: childSessionKey,
+        message,
+        deliver: false,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        extraSystemPrompt,
+        lane: "octoclaw_delegate",
+        idempotencyKey: params.idempotencyKey,
+      });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error || "");
+      if (!params.selectedModel || !/provider\/model override|model override|not authorized/iu.test(messageText)) {
+        throw error;
+      }
+      result = await runtime.run({
+        sessionKey: childSessionKey,
+        message,
+        deliver: false,
+        extraSystemPrompt,
+        lane: "octoclaw_delegate",
+        idempotencyKey: `${params.idempotencyKey}:default-model`,
+      });
+    }
+    const runId = asString(result?.runId);
+    if (!runId) {
+      return { spawnExecuted: false, childSessionKey, runId: "", childRunId: "", error: "subagent_runtime_missing_run_id" };
+    }
+    return { spawnExecuted: true, childSessionKey, runId, childRunId: runId, error: "" };
+  } catch (error) {
+    return {
+      spawnExecuted: false,
+      childSessionKey,
+      runId: "",
+      childRunId: "",
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error || "subagent_runtime_spawn_failed"),
+    };
+  }
+}
+
 function dispatchSpawnEvidence(input: {
   payloadRuntimeTruth?: UnknownRecord;
   payloadNativeTaskBinding?: UnknownRecord;
@@ -1239,6 +1356,8 @@ function dispatchHonestySuccess(params: {
   attemptId?: string | null;
   childSessionKey?: string | null;
   childSessionId?: string | null;
+  runId?: string | null;
+  childRunId?: string | null;
   dispatchExecuted?: boolean;
   spawnExecuted?: boolean;
   materialized?: boolean;
@@ -1259,6 +1378,8 @@ function dispatchHonestySuccess(params: {
     attempt_id: asString(params.attemptId) || null,
     child_session_key: asString(params.childSessionKey) || null,
     child_session_id: asString(params.childSessionId) || null,
+    run_id: asString(params.runId) || null,
+    child_run_id: asString(params.childRunId) || null,
     delegation_method: "octoclaw_dispatch",
     materialized: params.materialized === true,
     execution_state: asString(params.executionState) || (params.spawnExecuted === true ? "spawn_confirmed" : "unknown"),
@@ -1368,7 +1489,7 @@ function buildMinimalProjection(params: {
   };
 }
 
-export function getToolRegistrations(): ToolRegistration[] {
+export function getToolRegistrations(options: ToolRegistrationOptions = {}): ToolRegistration[] {
   return [
     {
       name: "octoclaw_route_hint",
@@ -1933,10 +2054,9 @@ export function getToolRegistrations(): ToolRegistration[] {
         const finalRoute = normalizeLiveRoute(payload.route, resolvedRoute);
         const finalDecisionRoute = asRecord(authoritativeDecision.route_decision);
         const workerPool = asString(finalDecisionRoute.worker_pool || payload.worker_pool);
-        const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
         const taskClass = asString(finalDecisionRoute.task_class || finalDecisionRoute.judge_role || finalDecisionRoute.role);
         const nativeBinding = dispatchWorkContract?.delegate?.nativeBinding;
-        const spawnEvidence = dispatchSpawnEvidence({
+        let spawnEvidence = dispatchSpawnEvidence({
           payloadRuntimeTruth,
           payloadNativeTaskBinding,
           payloadDelegateAttempt,
@@ -1945,6 +2065,50 @@ export function getToolRegistrations(): ToolRegistration[] {
         });
         const materialized = Boolean(asString(materialization.task_id) || materializedNativeTaskId || materializedNativeFlowId);
         const dispatchExecuted = materialized;
+        const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
+        const workContractIdForDispatch = (dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId)) || "";
+        if (finalRoute === "delegate" && materialized && !spawnEvidence.spawnExecuted) {
+          const runtimeSpawn = await trySpawnSubagentRuntime({
+            runtime: options.subagentRuntime ?? asRecord(ctx.runtime).subagent as OpenClawSubagentRuntime | undefined,
+            task: asString(params.task),
+            ctx,
+            metadata,
+            delegateTaskId,
+            workContractId: workContractIdForDispatch,
+            selectedModel,
+            idempotencyKey: stableId("octoclaw-child-run", [delegateTaskId, materializedNativeFlowId ?? "", asString(metadata.message_id), asString(params.task)]),
+          });
+          if (runtimeSpawn.spawnExecuted) {
+            spawnEvidence = {
+              spawnExecuted: true,
+              runId: runtimeSpawn.runId,
+              childRunId: runtimeSpawn.childRunId,
+              childSessionKey: runtimeSpawn.childSessionKey,
+              childSessionId: runtimeSpawn.childSessionKey,
+            };
+            payloadRuntimeTruth.evidence = {
+              ...asRecord(payloadRuntimeTruth.evidence),
+              spawnExecuted: true,
+              spawn_executed: true,
+              runId: runtimeSpawn.runId,
+              run_id: runtimeSpawn.runId,
+              childRunId: runtimeSpawn.childRunId,
+              child_run_id: runtimeSpawn.childRunId,
+              childSessionKey: runtimeSpawn.childSessionKey,
+              child_session_key: runtimeSpawn.childSessionKey,
+              childSessionId: runtimeSpawn.childSessionKey,
+              child_session_id: runtimeSpawn.childSessionKey,
+            };
+            payloadNativeTaskBinding.spawnExecuted = true;
+            payloadNativeTaskBinding.spawn_executed = true;
+            payloadNativeTaskBinding.runId = runtimeSpawn.runId;
+            payloadNativeTaskBinding.childRunId = runtimeSpawn.childRunId;
+            payloadNativeTaskBinding.childSessionKey = runtimeSpawn.childSessionKey;
+            payloadNativeTaskBinding.childSessionId = runtimeSpawn.childSessionKey;
+          } else if (runtimeSpawn.error) {
+            payloadRuntimeTruth.spawn_error = runtimeSpawn.error;
+          }
+        }
         const executionState = finalRoute === "delegate"
           ? spawnEvidence.spawnExecuted
             ? "spawn_confirmed"
@@ -1953,8 +2117,9 @@ export function getToolRegistrations(): ToolRegistration[] {
               : "not_materialized"
           : payload.executed === true ? "executed" : "planned";
         const materializedAt = new Date().toISOString();
+        const nativeSubstrateState = asString(materialization.substrate_state);
         const projectedSubstrateState = spawnEvidence.spawnExecuted
-          ? asString(materialization.substrate_state, "running")
+          ? nativeSubstrateState && nativeSubstrateState !== "queued" ? nativeSubstrateState : "running"
           : "queued";
         const childSessionKey = spawnEvidence.childSessionKey || nativeBinding?.childSessionKey || dispatchWorkContract?.continuity.preferredChildSessionKey || undefined;
         if (asString(materialization.task_id)) {
@@ -2058,7 +2223,7 @@ export function getToolRegistrations(): ToolRegistration[] {
             latestAnomalyNotice: statePatch.latestAnomalyNotice,
           });
           const attemptId = asString(payload.attemptId || materialization.attemptId);
-          const workContractId = dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId);
+          const workContractId = workContractIdForDispatch;
           const notifyParams = {
             projection: baseProjection,
             attemptId,
@@ -2097,7 +2262,7 @@ export function getToolRegistrations(): ToolRegistration[] {
               materialized: true,
               execution_state: executionState,
               delegation_method: "octoclaw_dispatch",
-              work_contract_id: (dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId)) || null,
+              work_contract_id: workContractIdForDispatch || null,
               delegate_task_id: delegateTaskId || null,
               attempt_id: asString(payload.attemptId || materialization.attemptId) || null,
               dispatch_executed: dispatchExecuted,
@@ -2120,6 +2285,8 @@ export function getToolRegistrations(): ToolRegistration[] {
           attemptId: asString(payload.attemptId || materialization.attemptId),
           childSessionKey: childSessionKey ?? null,
           childSessionId: (spawnEvidence.childSessionId || dispatchWorkContract?.continuity.preferredChildSessionId) ?? null,
+          runId: spawnEvidence.runId || null,
+          childRunId: spawnEvidence.childRunId || null,
           materialized,
           executionState,
           dispatchExecuted,

@@ -84,6 +84,7 @@ export interface PluginInterface {
   registerTool?(definition: Record<string, unknown>): void;
   registerCommand?(definition: Record<string, unknown>): void;
   registerDetachedTaskRuntime?(runtime: DetachedTaskLifecycleRuntime): void;
+  runtime?: { subagent?: import("./tools/registration.js").OpenClawSubagentRuntime };
 }
 
 const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
@@ -1200,7 +1201,7 @@ export const plugin = {
     }, DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS);
 
     if (typeof pi.registerTool === "function") {
-      for (const tool of getToolRegistrations()) {
+      for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent })) {
         pi.registerTool(toOpenClawToolDefinition(tool as unknown as Record<string, unknown>));
       }
     }

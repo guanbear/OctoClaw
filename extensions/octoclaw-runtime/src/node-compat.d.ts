@@ -49,8 +49,10 @@ declare module "node:crypto" {
     digest(encoding: "hex"): string;
   }
   export function createHash(algorithm: string): Hash;
+  export function randomUUID(): string;
   const crypto: {
     createHash: typeof createHash;
+    randomUUID: typeof randomUUID;
   };
   export default crypto;
 }
