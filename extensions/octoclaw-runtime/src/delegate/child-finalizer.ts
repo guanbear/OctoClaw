@@ -39,6 +39,7 @@ export interface ChildCompletionFinalizerOptions {
   initialDelayMs?: number;
   runtime?: ChildCompletionRuntime | null;
   completionProbeTimeoutMs?: number;
+  sessionFallbackIdleMs?: number;
   recordReplay?: boolean;
   sendFinalMessage?: (params: { sessionKey: string; message: string; replyToMessageId?: string; cwd?: string }) => Promise<{ sent: boolean; delivered: boolean; error?: string }>;
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
@@ -115,7 +116,7 @@ async function recordFinalizerReplay(event: string, payload: Record<string, unkn
   await recordPolicyReplay(event, payload, options.logger);
 }
 
-export function findChildFinalResult(options: Pick<ChildCompletionFinalizerOptions, "childSessionKey" | "delegateTaskId" | "workContractId" | "sessionsDir">): { text: string; sessionFile: string } | null {
+export function findChildFinalResult(options: Pick<ChildCompletionFinalizerOptions, "childSessionKey" | "delegateTaskId" | "workContractId" | "sessionsDir" | "sessionFallbackIdleMs"> & { nowMs?: number }): { text: string; sessionFile: string } | null {
   const childSessionKey = asString(options.childSessionKey);
   const delegateTaskId = asString(options.delegateTaskId);
   const workContractId = asString(options.workContractId);
@@ -134,11 +135,15 @@ export function findChildFinalResult(options: Pick<ChildCompletionFinalizerOptio
 
   for (const file of files) {
     let raw = "";
+    let mtimeMs = 0;
     try {
+      mtimeMs = Number((fsSync.statSync(file) as unknown as { mtimeMs?: number }).mtimeMs || 0);
       raw = fsSync.readFileSync(file, "utf-8");
     } catch {
       continue;
     }
+    const idleMs = Math.max(0, Number(options.sessionFallbackIdleMs || 0));
+    if (idleMs > 0 && mtimeMs > 0 && Number(options.nowMs || Date.now()) - mtimeMs < idleMs) continue;
     if (!raw.includes("[OctoClaw Delegated Task]")) continue;
     if (childSessionKey && !raw.includes(childSessionKey)) continue;
     if (delegateTaskId && !raw.includes(delegateTaskId)) continue;
@@ -152,9 +157,15 @@ export function findChildFinalResult(options: Pick<ChildCompletionFinalizerOptio
       }
       if (!sawDelegatedTask) continue;
       const parsed = textFromJsonlLine(line);
-      if (!parsed || parsed.role !== "assistant") continue;
+      if (!parsed) continue;
+      if (parsed.role !== "assistant") {
+        if (parsed.text) finalText = "";
+        continue;
+      }
       if (isFinalAssistantCandidate(parsed.text)) {
         finalText = parsed.text;
+      } else if (parsed.text) {
+        finalText = "";
       }
     }
     if (finalText) return { text: sanitizeResultPacket(finalText), sessionFile: file };
@@ -219,7 +230,7 @@ async function findRuntimeChildFinalResult(options: ChildCompletionFinalizerOpti
 async function resolveChildFinalResult(options: ChildCompletionFinalizerOptions): Promise<ChildFinalResult | null> {
   const runtimeResult = await findRuntimeChildFinalResult(options);
   if (runtimeResult) return runtimeResult;
-  const fallback = findChildFinalResult(options);
+  const fallback = findChildFinalResult({ ...options, sessionFallbackIdleMs: Math.max(0, Number(options.sessionFallbackIdleMs ?? 10_000)) });
   return fallback ? { ...fallback, source: "session_file_fallback" } : null;
 }
 
@@ -243,6 +254,8 @@ function updateTaskStateCompleted(options: ChildCompletionFinalizerOptions, resu
     route: "delegate",
     status: deliveryStatus === "delivered" ? "completed" : "deliverable_ready",
     summary: resultText.slice(0, 600),
+    report_path: asString(previous.report_path) || [`child_session:${options.childSessionKey}`, options.runId || options.childRunId ? `run:${options.runId || options.childRunId}` : ""].filter(Boolean).join("#"),
+    artifact_refs: Array.isArray(previous.artifact_refs) ? previous.artifact_refs : [`child_session:${options.childSessionKey}`],
     model: asString(options.modelId || previous.model),
     completed_at: now,
     updated_at: now,
