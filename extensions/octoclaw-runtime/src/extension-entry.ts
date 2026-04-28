@@ -589,7 +589,7 @@ function getPolicyStateForContext(ctx: UnknownRecord): { key: string; state: Pol
     const state = policyState.get(key);
     if (!state) continue;
     const updatedAt = Number(state.updatedAt || state.createdAt || 0);
-    if (!best || updatedAt > best.updatedAt) {
+    if (!best || updatedAt >= best.updatedAt) {
       best = { key, state, updatedAt };
     }
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, resolveDelegationCapability } from "./extension-entry.js";
+import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability } from "./extension-entry.js";
 import { policyState } from "./state/policy-state.js";
 import { getToolRegistrations } from "./tools/registration.js";
 
@@ -291,5 +291,54 @@ describe("octoclaw_route_hint policy state aliases", () => {
 
     policyState.clearState(key);
     policyState.clearState(alias);
+  });
+});
+
+
+describe("before_tool_call route hint guard", () => {
+  it("does not block direct tools after a reply route_hint is stored on a newer context alias", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const oldKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const aliasKey = "session-route-hint-alias";
+    const now = Date.now();
+    policyState.setState(oldKey, {
+      decision: {
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: true, route_hint_tool: "octoclaw_route_hint" } },
+        route_hint_policy: { required: true, submitted: false },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      createdAt: now - 1000,
+      updatedAt: now - 1000,
+    });
+    policyState.setState(aliasKey, {
+      decision: {
+        route_decision: { route: "reply" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: true, route_hint_tool: "octoclaw_route_hint" } },
+        route_hint_policy: { required: true, submitted: true },
+        tool_policy: { allow_direct_tools: true },
+      },
+      routeHintSubmitted: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "web_fetch", params: {} },
+      { sessionKey: oldKey, sessionId: aliasKey, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    policyState.clearState(oldKey);
+    policyState.clearState(aliasKey);
   });
 });
