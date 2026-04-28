@@ -44,6 +44,7 @@ import { initNativeHelperBridge } from "./adapter/native-helper.js";
 import type { DetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime.js";
 import { createHostDetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime-host.js";
 import {
+  assistantMessageText,
   compactPolicyPrompt,
   guardAssistantMessageForPolicyState,
   isControlObserverDecision,
@@ -168,6 +169,55 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => stringValue(item)).filter(Boolean)
     : [];
+}
+
+function normalizeOutboundTargetKey(value: unknown): string {
+  return stringValue(value)
+    .toLowerCase()
+    .replace(/^channel:/u, "")
+    .replace(/^user:/u, "")
+    .replace(/[^a-z0-9_.:-]+/gu, "");
+}
+
+function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntry, targetKey: string, now: number): boolean {
+  if (!targetKey || !key.toLowerCase().includes(targetKey)) return false;
+  const updatedAt = Number(state.updatedAt || state.createdAt || 0);
+  if (!Number.isFinite(updatedAt) || now - updatedAt > 3 * 60 * 1000) return false;
+  return isDelegatedRoute(asRecord(state.decision));
+}
+
+function findRecentOutboundPolicyState(target: unknown, now: number): { key: string; state: PolicyStateEntry } | null {
+  const targetKey = normalizeOutboundTargetKey(target);
+  if (!targetKey) return null;
+  let best: { key: string; state: PolicyStateEntry; updatedAt: number } | null = null;
+  for (const entry of policyState.entries()) {
+    if (!policyStateLooksRelevantForOutbound(entry.key, entry.state, targetKey, now)) continue;
+    const updatedAt = Number(entry.state.updatedAt || entry.state.createdAt || 0);
+    if (!best || updatedAt > best.updatedAt) {
+      best = { key: entry.key, state: entry.state, updatedAt };
+    }
+  }
+  return best ? { key: best.key, state: best.state } : null;
+}
+
+export function guardOutboundMessageForPolicyState(event: UnknownRecord, _ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
+  const content = stringValue(event.content);
+  if (!content) return undefined;
+  const match = findRecentOutboundPolicyState(event.to, now);
+  if (!match) return undefined;
+  const guarded = guardAssistantMessageForPolicyState(
+    { role: "assistant", content: [{ type: "text", text: content }] },
+    asRecord(match.state),
+  );
+  if (guarded.mode !== "replace" || !guarded.message) return undefined;
+  const replacement = assistantMessageText(asRecord(guarded.message));
+  if (!replacement || replacement === content) return undefined;
+  updatePolicyState(match.key, (current) => ({
+    ...(current ?? {}),
+    outbound_guard_replaced: true,
+    outbound_guard_replaced_at: new Date(now).toISOString(),
+  }));
+  return { content: replacement };
 }
 
 const SLACK_MESSAGE_TS_PATTERN = /^\d{10}\.\d{6}$/u;
@@ -549,6 +599,10 @@ export const plugin = {
       }
       return false;
     };
+
+    registerLifecycleHook("message_sending", (event, ctx) => {
+      return guardOutboundMessageForPolicyState(event, ctx);
+    }, 220);
 
     registerLifecycleHook("before_model_resolve", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
