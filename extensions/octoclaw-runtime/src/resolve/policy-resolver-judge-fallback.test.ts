@@ -832,6 +832,38 @@ describe("policy resolver WorkContract integration", () => {
     });
   });
 
+  it("route_hint delegate is trusted when deterministic live lookup agrees", async () => {
+    const decision = await resolveStatelessPolicyDecision(
+      "openclaw最新版的新特性是啥",
+      {
+        metadata: {
+          session_key: "agent:main:route-hint-live-lookup",
+        },
+        routeHint: {
+          route_hint: "delegate",
+          requested_route: "delegate",
+          work_type: "research",
+          confidence: 0.9,
+          source: "main_agent",
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "rule",
+      dispatch_required: true,
+    });
+    expect(decision.route_hint_policy).toMatchObject({
+      trusted: true,
+      source: "system",
+    });
+    expect(decision.tool_policy).toMatchObject({
+      must_delegate_via: "octoclaw_dispatch",
+      allowed_control_tools: expect.arrayContaining(["octoclaw_dispatch"]),
+    });
+  });
+
   it("deterministic session fallback control cannot override judge reply", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       judgeResponse("reply", 0.88),
@@ -1014,6 +1046,99 @@ Sender (untrusted metadata):
       route: "reply",
       route_source: "judge",
       final_judge_source: "local",
+    });
+  });
+
+  it("fresh live lookup with stale delegated receipt still allows dispatch", async () => {
+    vi.useFakeTimers();
+    const priorKey = "intent-guard-fresh-lookup-prior-delegate";
+    policyState.clear(priorKey);
+    vi.setSystemTime(new Date("2026-04-29T12:00:00.000Z"));
+    policyState.set(priorKey, {
+      decision: {
+        route_decision: { route: "delegate", worker_pool: "octoclaw-worker" },
+      },
+      canonicalSessionKey: priorKey,
+      delegated: true,
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      resultMaterialized: false,
+      latestExecutionReceipt: {
+        turnId: "turn-prior-delegate-unknown",
+        sessionKey: priorKey,
+        route: "delegate",
+        delegated: true,
+        dispatchExecuted: false,
+        spawnExecuted: false,
+        workContractId: "wc-prior-delegate-unknown",
+        delegateTaskId: null,
+        nativeTaskId: "task-prior-native",
+        nativeFlowId: "flow-prior-native",
+        childSessionKey: null,
+        childSessionId: null,
+        childRunId: null,
+        nativeFlowRevision: null,
+        nativeFlowExpectedRevision: null,
+        nativeFlowMutation: null,
+        nativeFlowMutationApplied: null,
+        nativeFlowMutationError: null,
+        workerPool: "octoclaw-worker",
+        toolsUsed: [],
+        resultMaterialized: false,
+        deliveryStatus: null,
+        durationMs: 0,
+        outcome: "unknown",
+        completedAt: Date.now() - 5_000,
+        executionCoverage: null,
+        executionSupportsProvenanceReply: true,
+        executionSupportsStatusReply: true,
+        executionRequiresControlPlaneRefresh: true,
+        memoryCoverage: null,
+        authority: "execution_wins",
+        parentContextTokensAdded: 0,
+        resultPacketTokens: 0,
+        artifactReopenCount: 0,
+      },
+      updatedAt: Date.now() - 5_000,
+    });
+    vi.setSystemTime(new Date("2026-04-29T12:00:10.000Z"));
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.88),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "openclaw最新版的新特性是啥",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          session_key: priorKey,
+          judge_session_keys: [priorKey],
+          conversation_control: {
+            source: "explicit_conversation_control",
+            intent_class: "fresh_live_lookup",
+            route_hint: "delegate",
+            require_fresh_lookup: true,
+          },
+        },
+      },
+    );
+
+    vi.useRealTimers();
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "judge",
+      final_judge_source: "local",
+      dispatch_required: true,
+    });
+    expect(decision.tool_policy).toMatchObject({
+      must_delegate_via: "octoclaw_dispatch",
+      delegate_first: true,
+      allowed_control_tools: expect.arrayContaining(["octoclaw_dispatch"]),
+    });
+    expect((decision.tool_policy as Record<string, unknown>).block_tool_patterns).not.toContain("octoclaw_dispatch");
+    expect((decision.work_contract as Record<string, unknown>)).toMatchObject({
+      route: "delegate",
     });
   });
 

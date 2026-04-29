@@ -78,6 +78,7 @@ import { saveWorkContract } from "../work-contract/store.js";
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
+import { buildConversationIntentPacket } from "../conversation-grounding.js";
 
 type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
@@ -894,6 +895,10 @@ function buildRuntimeExecutionIds(task: unknown, decision?: UnknownRecord, metad
 
 function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {}): PhaseTwoPolicyInput {
   const conversationControl = trustedConversationControl(metadata);
+  const intentPacket = asRecord(metadata.intent_packet);
+  const packetIntentClass = asString(intentPacket.intent_class || intentPacket.intentClass);
+  const deterministicDelegateIntent = asString(intentPacket.source) === "deterministic_live_lookup_classifier"
+    && packetIntentClass === "fresh_live_lookup";
   const conversationLaneHint = asString(conversationControl.lane_hint);
   const conversationRouteHint = asString(conversationControl.route_hint);
   const trustedRouteRequest = isTrustedRouteRequest(metadata);
@@ -914,7 +919,8 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
   const isExecutionOrStatusFollowup = conversationControl.intent_class === "execution_followup"
     || asBoolean(conversationControl.provenance_followup)
     || asBoolean(conversationControl.status_followup);
-  const forcedDelegate = !isExecutionOrStatusFollowup && (conversationRouteHint === "delegate"
+  const forcedDelegate = !isExecutionOrStatusFollowup && (deterministicDelegateIntent
+    || conversationRouteHint === "delegate"
     || asBoolean(conversationControl.require_fresh_lookup)
     || forcedObserve);
   const explicitRouteObjection = asBoolean(metadata.route_objection);
@@ -924,7 +930,7 @@ function buildPhaseTwoPolicyInput(_prompt: string, metadata: UnknownRecord = {})
     : forcedDelegate
       && normalizeLiveRoute(rawRequestedRoute, "reply") === "reply"
       && !explicitReplyObjection
-      ? asString(conversationRouteHint, "delegate")
+      ? "delegate"
       : rawRequestedRoute;
 
   return {
@@ -1231,6 +1237,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   } catch {
   }
   const requiresControlPlaneRefresh = asBoolean(executionLayer.requires_control_plane_refresh);
+  const effectiveControlPlaneRefresh = requiresControlPlaneRefresh && isExecutionOrStatusFollowup;
   const statusSurfaceControlAllowed = asBoolean(conversationControl.status_followup)
     || asString(conversationControl.surface_id) === "octoclaw_task_status_panel";
   const routeHintPolicyRequired = asBoolean(priorDecision._route_hint_required, false)
@@ -1267,7 +1274,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
         ? "delegated_single"
         : asString(priorRouteDecision.task_class, "main_direct"),
     protected_lane: observeMode ? "control_observer" : "",
-    dispatch_required: !requiresControlPlaneRefresh && liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
+    dispatch_required: !effectiveControlPlaneRefresh && liveRoute !== "reply" && tsPolicyDecision.admission.admission === "allow",
     reason: tsPolicyDecision.admission.reason,
     complexity_band: coerceComplexityBand(priorDecision._judge_complexity_band),
     expected_duration_band: coerceExpectedDurationBand(priorDecision._judge_expected_duration_band),
@@ -1342,15 +1349,15 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   };
   nextDecision.tool_policy = {
     ...asRecord(nextDecision.tool_policy),
-    must_delegate_via: !requiresControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
+    must_delegate_via: !effectiveControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
     allow_direct_tools: liveRoute === "reply",
-    delegate_first: !requiresControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow",
-    allowed_control_tools: (requiresControlPlaneRefresh || statusSurfaceControlAllowed)
+    delegate_first: !effectiveControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow",
+    allowed_control_tools: (effectiveControlPlaneRefresh || statusSurfaceControlAllowed)
       ? ["octoclaw_status", "octoclaw_task_action"]
       : liveRoute === "reply"
         ? []
       : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
-    block_tool_patterns: (requiresControlPlaneRefresh || statusSurfaceControlAllowed) ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
+    block_tool_patterns: (effectiveControlPlaneRefresh || statusSurfaceControlAllowed) ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
   };
   nextDecision.router_decision_v2 = {
     ...asRecord(nextDecision.router_decision_v2),
@@ -1482,10 +1489,21 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         routeHint.requested_route,
         normalizedRouteHint,
       );
+      const metadataIntentPacket = asRecord(metadata.intent_packet);
+      const routeHintIntentPacket = asString(metadataIntentPacket.source)
+        ? metadataIntentPacket
+        : asRecord(buildConversationIntentPacket({ prompt }));
+      const packetIntentClass = asString(routeHintIntentPacket.intent_class || routeHintIntentPacket.intentClass);
+      const deterministicDelegateIntent = asString(routeHintIntentPacket.source) === "deterministic_live_lookup_classifier"
+        && packetIntentClass === "fresh_live_lookup";
+      if (deterministicDelegateIntent && !asString(metadataIntentPacket.source)) {
+        metadata.intent_packet = routeHintIntentPacket;
+      }
       const isExecutionOrStatusFollowup = asString(conversationControl.intent_class) === "execution_followup"
         || asBoolean(conversationControl.provenance_followup)
         || asBoolean(conversationControl.status_followup);
-      const guardedDelegate = !isExecutionOrStatusFollowup && (asString(conversationControl.route_hint) === "delegate"
+      const guardedDelegate = !isExecutionOrStatusFollowup && (deterministicDelegateIntent
+        || asString(conversationControl.route_hint) === "delegate"
         || asBoolean(conversationControl.require_fresh_lookup)
         || asBoolean(conversationControl.require_state_grounding)
         || asString(conversationControl.intent_class) === "fresh_live_lookup");
@@ -1500,6 +1518,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         metadata.requested_route = objectionRequestedRoute;
       } else if (guardedDelegate && normalizedRouteHint === "reply" && !explicitReplyObjection) {
         metadata.requested_route = asString(conversationControl.route_hint, "delegate");
+        metadata.route_request_source = "system";
+        metadata.route_request_trusted = true;
+      } else if (guardedDelegate && normalizedRouteHint === "delegate") {
+        metadata.requested_route = "delegate";
         metadata.route_request_source = "system";
         metadata.route_request_trusted = true;
       } else if (routeHintTrusted) {

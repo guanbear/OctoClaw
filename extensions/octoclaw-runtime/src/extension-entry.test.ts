@@ -531,6 +531,56 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(key);
   });
 
+  it("uses the dispatch task policy context over a stale reply WorkContract", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const staleKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const delegateKey = "route-hint:openclaw-latest";
+    const now = Date.now();
+    policyState.setState(staleKey, {
+      prompt: "刚才那个任务状态",
+      decision: {
+        route_decision: { route: "reply" },
+        work_contract: { route: "reply", forbiddenTools: ["octoclaw_dispatch", "spawn"] },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: { allow_direct_tools: true },
+      },
+      createdAt: now - 1000,
+      updatedAt: now - 1000,
+    });
+    policyState.setState(delegateKey, {
+      prompt: "查询 OpenClaw 最新版 release notes / changelog，总结新特性。",
+      decision: {
+        route_decision: { route: "delegate", route_source: "rule" },
+        work_contract: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      routeHintSubmitted: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "octoclaw_dispatch", params: { task: "查询 OpenClaw 最新版 release notes / changelog，总结新特性。请给来源。" } },
+      { sessionKey: staleKey, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    policyState.clearState(staleKey);
+    policyState.clearState(delegateKey);
+  });
+
   it("does not block direct tools after a reply route_hint is stored on a newer context alias", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({

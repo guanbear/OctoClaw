@@ -1032,12 +1032,32 @@ export const plugin = {
 
     registerLifecycleHook("before_tool_call", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
-      const { key: stateKey, state } = getPolicyStateForContext(ctx);
+      const toolName = stringValue(event.toolName || ctx.toolName);
+      const toolParams = asRecord(event.params || event.arguments || event.input);
+      let { key: stateKey, state } = getPolicyStateForContext(ctx);
+      if (toolName === "octoclaw_dispatch") {
+        const taskPolicyContext = policyState.getToolPolicyContext(ctx, stringValue(toolParams.task));
+        const taskDecision = asRecord(taskPolicyContext.state?.decision);
+        const taskRoute = stringValue(asRecord(taskDecision.route_decision).route);
+        const taskToolPolicy = asRecord(taskDecision.tool_policy);
+        const taskRouteHintPolicy = asRecord(taskDecision.route_hint_policy);
+        const taskUpdatedAt = Number(taskPolicyContext.state?.updatedAt || taskPolicyContext.state?.createdAt || 0);
+        const currentUpdatedAt = Number(state?.updatedAt || state?.createdAt || 0);
+        const taskHasSubmittedHint = taskPolicyContext.state?.routeHintSubmitted === true || taskRouteHintPolicy.submitted === true;
+        const taskAllowsDispatch = taskRoute === "delegate"
+          && taskHasSubmittedHint
+          && (!currentUpdatedAt || taskUpdatedAt >= currentUpdatedAt)
+          && (stringValue(taskToolPolicy.must_delegate_via) === "octoclaw_dispatch"
+            || stringArray(taskToolPolicy.allowed_control_tools).includes("octoclaw_dispatch"));
+        if (taskAllowsDispatch) {
+          stateKey = stringValue(taskPolicyContext.key) || stateKey;
+          state = taskPolicyContext.state as PolicyStateEntry | null;
+        }
+      }
       const decision = asRecord(state?.decision);
       const hookConfig = asRecord(asRecord(decision.hook_interface).before_tool_call);
       if (!hookConfig.enabled) return;
 
-      const toolName = stringValue(event.toolName || ctx.toolName);
       const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
       const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
       const delegationEnforcementEnabled = Boolean(hookConfig.delegate_required || hookConfig.delegation_enforcement);

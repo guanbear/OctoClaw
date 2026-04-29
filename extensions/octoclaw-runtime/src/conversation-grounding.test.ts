@@ -31,6 +31,28 @@ describe("conversation grounding route projection", () => {
     expect(control.require_state_grounding).toBe(true);
   });
 
+  it("projects latest-feature and official-model lookups to delegated fresh lookup", () => {
+    const latestFeatureIntent = buildConversationIntentPacket({
+      prompt: "openclaw最新版的新特性是啥",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: [],
+    });
+    expect(latestFeatureIntent.intent_class).toBe("fresh_live_lookup");
+    expect(buildConversationControlHintsFromIntent(latestFeatureIntent)).toMatchObject({
+      route_hint: "delegate",
+      require_fresh_lookup: true,
+    });
+
+    const officialModelIntent = buildConversationIntentPacket({
+      prompt: "查询 Qwen3 0.6B 官方模型说明，回答是否支持多语言以及能力水平。",
+      replayLogPath: "/tmp/does-not-matter.jsonl",
+      taskStatePath: "/tmp/does-not-matter.json",
+      sessionKeys: [],
+    });
+    expect(officialModelIntent.intent_class).toBe("fresh_live_lookup");
+  });
+
   it("projects task status panel phrases to reply-only status surface tools", async () => {
     const intent = buildConversationIntentPacket({
       prompt: "哪个任务还在跑？跑了多久，用的哪个模型，结果在哪？",
