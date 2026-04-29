@@ -14,19 +14,19 @@
 
 **项目**：OctoClaw — OpenClaw 的多 Agent 智能调度插件（TypeScript monorepo）  
 **仓库**：https://github.com/guanbear/OctoClaw  
-**分支**：`release/0.3.0-ts-rebuild`（这是唯一的工作分支，所有提交推到这里）  
-**本地路径**：自行决定，建议 `~/workspace/OctoClaw`
+**base 分支**：`release/0.3.0-ts-rebuild`（只读参考，不直接提交）  
+**工作分支**：`refactor/0.4.0-stable`（所有重构 commit 推到这里）
 
 ---
 
 ### 第一步：环境准备
 
-1. 克隆并切换分支：
+1. 克隆并切换到工作分支：
    ```bash
-   git clone --branch release/0.3.0-ts-rebuild https://github.com/guanbear/OctoClaw.git ~/workspace/OctoClaw
+   git clone --branch refactor/0.4.0-stable https://github.com/guanbear/OctoClaw.git ~/workspace/OctoClaw
    cd ~/workspace/OctoClaw
    # 确认在正确分支
-   git branch   # 应显示 * release/0.3.0-ts-rebuild
+   git branch   # 应显示 * refactor/0.4.0-stable
    pnpm install
    pnpm build
    pnpm test
@@ -96,6 +96,7 @@ pnpm test                                   # 再跑全量
 ```bash
 git add <具体文件，不用 -A>
 git commit -m "refactor: [任务ID] — [一句话说明]"
+git push origin refactor/0.4.0-stable
 ```
 
 **不通过** → 发 correction packet 给 OpenCode，不提交，修正后重新 Review Gate。
@@ -631,6 +632,7 @@ After editing: report changed files, tests run, remaining risks, and any scope d
 
 ```bash
 cd ~/workspace/OctoClaw   # 换成你的实际路径
+git branch   # 确认在 refactor/0.4.0-stable
 
 # 全量构建和测试
 pnpm build && pnpm test
