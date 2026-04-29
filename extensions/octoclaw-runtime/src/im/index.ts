@@ -1,10 +1,13 @@
 import { SlackAdapter } from "./slack/index.js";
 import type { SlackAdapterConfig } from "./slack/index.js";
+import type { IMAdapter } from "./adapter.js";
 import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const adapters = new Map<string, SlackAdapter>();
+export type { IMAdapter } from "./adapter.js";
+
+const adapterRegistry: IMAdapter[] = [];
 
 function readSlackReplyToMode(): "off" | "first" | "all" {
   try {
@@ -24,16 +27,15 @@ function buildSlackAdapterConfig(): Partial<SlackAdapterConfig> {
   return { replyToMode: readSlackReplyToMode() };
 }
 
-export function getAdapterForSession(sessionKey: string): SlackAdapter | null {
-  const lower = sessionKey.toLowerCase();
-  if (lower.startsWith("slack:") || lower.includes(":slack:")) {
-    if (!adapters.has("slack")) {
-      adapters.set("slack", new SlackAdapter(buildSlackAdapterConfig()));
-    }
-    return adapters.get("slack")!;
-  }
-  return null;
+export function getAdapterForSession(sessionKey: string): IMAdapter | null {
+  return adapterRegistry.find((adapter) => adapter.canHandle(sessionKey)) ?? null;
 }
+
+export function registerIMAdapter(adapter: IMAdapter): void {
+  adapterRegistry.unshift(adapter);
+}
+
+adapterRegistry.push(new SlackAdapter(buildSlackAdapterConfig()));
 
 export { SlackAdapter } from "./slack/index.js";
 export type { SlackAdapterConfig } from "./slack/index.js";

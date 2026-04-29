@@ -1,4 +1,5 @@
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
+import type { IMAdapter } from "../adapter.js";
 
 type SlackCommandResult = {
   ok?: unknown;
@@ -167,12 +168,17 @@ export function auditSlackFacingToolExposure(tools: string[]): SlackToolExposure
   return { allowed: blockedTools.length === 0, exposedTools, blockedTools };
 }
 
-export class SlackAdapter {
+export class SlackAdapter implements IMAdapter {
   readonly channel = "slack" as const;
   readonly config: SlackAdapterConfig;
 
   constructor(config?: Partial<SlackAdapterConfig>) {
     this.config = { ...DEFAULT_SLACK_CONFIG, ...config };
+  }
+
+  canHandle(sessionKey: string): boolean {
+    const lower = sessionKey.toLowerCase();
+    return lower.startsWith("slack:") || lower.includes(":slack:");
   }
 
   resolveTarget(sessionKey: string): SlackDeliveryTarget {

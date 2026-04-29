@@ -6,7 +6,7 @@ vi.mock("node:fs", () => ({
   },
 }));
 
-import { getAdapterForSession, SlackAdapter } from "./index.js";
+import { getAdapterForSession, registerIMAdapter, SlackAdapter, type IMAdapter } from "./index.js";
 
 describe("IM adapter factory", () => {
   it("getAdapterForSession returns SlackAdapter for :slack: keys", () => {
@@ -15,6 +15,7 @@ describe("IM adapter factory", () => {
 
   it("getAdapterForSession returns null for non-Slack keys", () => {
     expect(getAdapterForSession("agent:main:main")).toBeNull();
+    expect(getAdapterForSession("feishu:user:ABC123")).toBeNull();
   });
 
   it("adapter is cached", () => {
@@ -22,5 +23,19 @@ describe("IM adapter factory", () => {
     const second = getAdapterForSession("agent:main:slack:default:dm:U123");
 
     expect(first).toBe(second);
+  });
+
+  it("registerIMAdapter allows custom adapters", () => {
+    const customAdapter: IMAdapter = {
+      channel: "feishu",
+      canHandle: (sessionKey) => sessionKey.toLowerCase().startsWith("feishu:"),
+      resolveTarget: () => ({ channel: "feishu", target: "ABC123" }),
+      send: async () => ({ sent: true, delivered: true }),
+      react: async () => ({ ok: true }),
+    };
+
+    registerIMAdapter(customAdapter);
+
+    expect(getAdapterForSession("feishu:user:ABC123")).toBe(customAdapter);
   });
 });
