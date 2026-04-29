@@ -55,8 +55,6 @@ import {
   observerControlTools,
   preHintAllowedTools,
   recordAckReplay,
-  recordDeliveryRelayEvent,
-  recordObservedDeliveryFromMessage,
   recordPolicyReplay,
   routeHintRequired,
   sessionControlTools,
@@ -1046,7 +1044,7 @@ export const plugin = {
           result: latencyAck,
           toolName,
         });
-        await recordPolicyReplay(
+        void recordPolicyReplay(
           "direct_tool_called",
           {
             sessionKey: stateKey || "",
@@ -1061,8 +1059,8 @@ export const plugin = {
           },
           pi.logger,
           decision,
-        );
-        await recordPolicyReplay(
+        ).catch(() => {});
+        void recordPolicyReplay(
           "tool_used",
           {
             sessionKey: stateKey || "",
@@ -1077,7 +1075,7 @@ export const plugin = {
           },
           pi.logger,
           decision,
-        );
+        ).catch(() => {});
       }
 
       if (isControlObserverDecision(decision)) {
@@ -1088,7 +1086,7 @@ export const plugin = {
           ...current,
           blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
         }));
-        await recordPolicyReplay(
+        void recordPolicyReplay(
           "tool_blocked_control_observer",
           {
             sessionKey: stateKey || "",
@@ -1099,7 +1097,7 @@ export const plugin = {
           },
           pi.logger,
           decision,
-        );
+        ).catch(() => {});
         return {
           block: true,
           blockReason: `OctoClaw control/observer request must use control tools only: ${[...allowedObserverTools].join(", ")}.`,
@@ -1114,7 +1112,7 @@ export const plugin = {
           ...current,
           blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
         }));
-        await recordPolicyReplay(
+        void recordPolicyReplay(
           "tool_blocked_session_control",
           {
             sessionKey: stateKey || "",
@@ -1125,7 +1123,7 @@ export const plugin = {
           },
           pi.logger,
           decision,
-        );
+        ).catch(() => {});
         return {
           block: true,
           blockReason: `OctoClaw current-session control request must use session control tools only: ${[...allowedSessionTools].join(", ")}.`,
@@ -1142,7 +1140,7 @@ export const plugin = {
           ...current,
           blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
         }));
-        await recordPolicyReplay(
+        void recordPolicyReplay(
           "tool_blocked_before_route_hint",
           {
             sessionKey: stateKey || "",
@@ -1153,7 +1151,7 @@ export const plugin = {
           },
           pi.logger,
           decision,
-        );
+        ).catch(() => {});
         return {
           block: true,
           blockReason: `OctoClaw runtime policy requires ${routeHintTool} before using other tools.`,
@@ -1166,7 +1164,7 @@ export const plugin = {
       const isDeterministicFallbackToDelegate = stringValue(routeDecision.route) === "delegate"
         && (stringValue(routeDecision.route_source) === "fallback" || stringValue(routeDecision.fallback_reason).includes("explicit_delegate"));
       if (forbiddenContractTools.has(toolName) && !isDeterministicFallbackToDelegate) {
-        await recordPolicyReplay(
+        void recordPolicyReplay(
           "tool_blocked_work_contract_forbidden",
           {
             sessionKey: stateKey || "",
@@ -1177,7 +1175,7 @@ export const plugin = {
           },
           pi.logger,
           decision,
-        );
+        ).catch(() => {});
         return {
           block: true,
           blockReason: `OctoClaw WorkContract forbids ${toolName} for this turn.`,
@@ -1189,7 +1187,7 @@ export const plugin = {
       const delegateTool = stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch");
       const isPolicyControlTool = toolName.startsWith("octoclaw_") || toolName === routeHintTool || toolName === delegateTool;
       if (!isPolicyControlTool && matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
-        await recordPolicyReplay(
+        void recordPolicyReplay(
           "tool_blocked_manual_delegation",
           {
             sessionKey: stateKey || "",
@@ -1199,7 +1197,7 @@ export const plugin = {
           },
           pi.logger,
           decision,
-        );
+        ).catch(() => {});
         return {
           block: true,
           blockReason: `OctoClaw runtime policy blocked a manual delegation pattern. Use ${stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch")} instead.`,
@@ -1230,7 +1228,7 @@ export const plugin = {
       }));
       const workflowRoute = stringValue(workflowRule.route || asRecord(decision.route_decision).route);
       const observerOnly = Boolean(asRecord(asRecord(decision.hook_interface).before_tool_call).observe_only);
-      await recordPolicyReplay(
+      void recordPolicyReplay(
         observerOnly ? "tool_blocked_runner_policy" : "tool_blocked_delegation_policy",
         {
           sessionKey: stateKey || "",
@@ -1241,7 +1239,7 @@ export const plugin = {
         },
         pi.logger,
         state?.decision as Record<string, unknown> | null,
-      );
+      ).catch(() => {});
       return {
         block: true,
           blockReason: observerOnly
@@ -1280,7 +1278,7 @@ export const plugin = {
         Math.max(0, finalNow - Number(state?.createdAt || state?.updatedAt || finalNow)),
         finalNow,
       );
-      await recordPolicyReplay(
+      void recordPolicyReplay(
         "agent_end",
         {
           sessionKey: stateKey,
@@ -1316,21 +1314,7 @@ export const plugin = {
         },
         pi.logger,
         state?.decision as Record<string, unknown> | null,
-      );
-      if (stringValue(state?.pendingDeliveryId) && !state?.deliveryObserved) {
-        await recordDeliveryRelayEvent(
-          "delivery_agent_end_pending",
-          {
-            deliveryId: stringValue(state?.pendingDeliveryId),
-            sessionKey: stateKey,
-            route: stringValue(asRecord(asRecord(state?.decision).route_decision).route),
-            taskId: stringValue(state?.pendingDeliveryTaskId),
-            runnerJobId: stringValue(state?.pendingDeliveryRunnerJobId),
-            state: "pending_at_agent_end",
-          },
-          pi.logger,
-        );
-      }
+      ).catch(() => {});
       const shouldRetainCompactReceipt = Boolean(
         finalReceipt.route === "reply"
         || finalReceipt.toolsUsed.length > 0
@@ -1373,7 +1357,7 @@ export const plugin = {
 
         const workContract = asRecord(asRecord(state?.decision).work_contract);
         const routeSeal = asRecord(asRecord(state?.decision).routeSeal);
-        await recordPolicyReplay(
+        void recordPolicyReplay(
           "delegate_without_dispatch",
           {
             sessionKey: stateKey,
@@ -1393,7 +1377,7 @@ export const plugin = {
           },
           pi.logger,
           state?.decision as Record<string, unknown> | null,
-        );
+        ).catch(() => {});
         return;
       }
       if (shouldRetainCompactReceipt) {
@@ -1447,9 +1431,6 @@ export const plugin = {
         updateAckTrackingState(stateKey, { formal_reply_visible: true });
         updatePolicyState(stateKey, (current) => ({ ...(current ?? {}), formal_reply_visible: true }));
       }
-      void recordObservedDeliveryFromMessage(visibleMessage, asRecord(state), stateKey, pi.logger).catch((err) => {
-        pi.logger?.warn?.(`octoclaw delivery observe failed: ${String(err)}`);
-      });
       if (visibleMessage !== asRecord(event.message)) {
         return { message: visibleMessage };
       }

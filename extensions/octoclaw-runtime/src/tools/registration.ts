@@ -35,7 +35,6 @@ import {
   policySummaryText,
   recordDispatchLifecycleReplayEvents,
   recordPolicyReplay,
-  registerPendingDelivery,
 } from "../replay/replay-logger.js";
 import { policyState } from "../state/policy-state.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
@@ -2053,14 +2052,6 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const delegateReasonCodes = Array.isArray(asRecord(authoritativeDecision)._delegate_reason_codes)
           ? (asRecord(authoritativeDecision)._delegate_reason_codes as unknown[]).map((value) => asString(value)).filter(Boolean)
           : [];
-        await registerPendingDelivery({
-          decision: authoritativeDecision,
-          payload,
-          summary,
-          sessionKey: replaySessionKey,
-          stateKey,
-          logger: toolLogger(ctx),
-        });
         await recordDispatchLifecycleReplayEvents({
           decision: authoritativeDecision,
           payload,

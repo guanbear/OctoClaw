@@ -18,7 +18,6 @@ import { envOverrides } from "../../resolve/env.js";
 import {
   buildTurnExecutionReceipt,
   emitResultReadyIfTransition,
-  recordDeliveryReconcileResults,
 } from "../../replay/replay-logger.js";
 import { getToolRegistrations } from "../../tools/registration.js";
 
@@ -176,33 +175,6 @@ describe("execution transition integration", () => {
     expectNoTranscriptKeys(packet);
   });
 
-  it("delivery_failed is emitted from delivery reconcile handling", async () => {
-    const { replaySpy } = await mockDelivery();
-
-    await recordDeliveryReconcileResults({
-      session_key: "slack:default:channel:C123ABC",
-      items: [{
-        status: "send_failed",
-        deliveryId: "delivery-1",
-        taskId: "task-delivery-failed",
-        runnerJobId: "runner-1",
-        error: "network down",
-      }],
-    });
-    await waitForFireAndForget();
-
-    const payload = findReplayPayload(replaySpy, "delivery_failed");
-    expect(payload).toEqual(expect.objectContaining({
-      transitionKind: "delivery_failed",
-      dispatchExecuted: true,
-      spawnExecuted: true,
-      resultMaterialized: true,
-    }));
-    const packet = expectCompactPacket(payload, "delivery_failed");
-    expect(packet.status).toBe("failed");
-    expectNoTranscriptKeys(packet);
-  });
-
   it("no-target skips do not claim dedupe keys", async () => {
     const { replaySpy } = await mockDelivery();
     const projection = baseProjection({ taskId: "task-no-target" });
@@ -336,44 +308,6 @@ describe("execution transition integration", () => {
     }));
     const packet = expectCompactPacket(payload, "spawn_failed");
     expect(packet.status).toBe("failed");
-    expectNoTranscriptKeys(packet);
-  });
-
-  it("real result materialization path emits result_ready from registerPendingDelivery", async () => {
-    const { replaySpy } = await mockDelivery();
-    const stateKey = "slack:default:channel:C123ABC";
-    useTempWorkspace("octoclaw-result-ready-");
-
-    const { registerPendingDelivery } = await import("../../replay/replay-logger.js");
-    await registerPendingDelivery({
-      decision: {
-        route_decision: { route: "delegate", worker_pool: "octoclaw-research" },
-        router_decision_v2: { request_kind: "delegated_work" },
-        request: { session_key: stateKey },
-        workContractId: "wc-result",
-        runtime_switches: { delivery_relay_enabled: true },
-      },
-      payload: {
-        executed: true,
-        route: "delegate",
-        task_id: "task-result-ready",
-        materialization: { task_id: "task-result-ready", flow_id: "flow-result", attempt_id: "attempt-1" },
-        job: { id: "runner-1" },
-      },
-      stateKey,
-      sessionKey: stateKey,
-      summary: "Task result is ready for delivery",
-    });
-    await waitForFireAndForget();
-
-    const payload = findReplayPayload(replaySpy, "result_ready");
-    expect(payload).toEqual(expect.objectContaining({
-      transitionKind: "result_ready",
-      projectionStatus: "deliverable_ready",
-    }));
-    const packet = expectCompactPacket(payload, "result_ready");
-    expect(packet.status).toBe("deliverable_ready");
-    expect(packet.taskId).toBe("task-result-ready");
     expectNoTranscriptKeys(packet);
   });
 
