@@ -606,16 +606,16 @@ describe("regression round 4: scenario 4 — ACK suppress states", () => {
 
 
 describe("regression round 4: scenario 5 — timer tier delays", () => {
-  it("tier 0 = 18s", () => {
-    expect(DEFAULT_TIER_DELAYS_MS[0]).toBe(18_000);
+  it("tier 0 = 12s", () => {
+    expect(DEFAULT_TIER_DELAYS_MS[0]).toBe(12_000);
   });
 
-  it("tier 1 = 45s", () => {
-    expect(DEFAULT_TIER_DELAYS_MS[1]).toBe(45_000);
+  it("tier 1 = 30s", () => {
+    expect(DEFAULT_TIER_DELAYS_MS[1]).toBe(30_000);
   });
 
-  it("tier 2 = 120s", () => {
-    expect(DEFAULT_TIER_DELAYS_MS[2]).toBe(120_000);
+  it("tier 2 = 90s", () => {
+    expect(DEFAULT_TIER_DELAYS_MS[2]).toBe(90_000);
   });
 
   it("tier 3 is unused (0)", () => {
@@ -656,7 +656,7 @@ describe("regression round 4: scenario 6 — ACK schedule reply-only", () => {
     expect(shouldScheduleTier("pre_route", 0)).toBe(false);
   });
 
-  it("reply timers fire at 18s, 45s, 120s via createAckTimers", () => {
+  it("reply timers fire at 12s, 30s, 90s via createAckTimers", () => {
     const fired: AckTimerResult[] = [];
     createAckTimers({
       stateKey: "regression-reply-timers",
@@ -666,15 +666,15 @@ describe("regression round 4: scenario 6 — ACK schedule reply-only", () => {
       onTierFire: (r) => fired.push(r),
     });
 
-    vi.advanceTimersByTime(18_000);
+    vi.advanceTimersByTime(12_000);
     expect(fired).toHaveLength(1);
     expect(fired[0].tier).toBe(0);
 
-    vi.advanceTimersByTime(45_000 - 18_000);
+    vi.advanceTimersByTime(30_000 - 12_000);
     expect(fired).toHaveLength(2);
     expect(fired[1].tier).toBe(1);
 
-    vi.advanceTimersByTime(120_000 - 45_000);
+    vi.advanceTimersByTime(90_000 - 30_000);
     expect(fired).toHaveLength(3);
     expect(fired[2].tier).toBe(2);
   });

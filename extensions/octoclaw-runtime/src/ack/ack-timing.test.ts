@@ -39,16 +39,16 @@ describe("ack-timing: shouldScheduleTier", () => {
 });
 
 describe("ack-timing: DEFAULT_TIER_DELAYS_MS", () => {
-  it("tier0 is 18 seconds", () => {
-    expect(DEFAULT_TIER_DELAYS_MS[0]).toBe(18_000);
+  it("tier0 is 12 seconds", () => {
+    expect(DEFAULT_TIER_DELAYS_MS[0]).toBe(12_000);
   });
 
-  it("tier1 is 45 seconds", () => {
-    expect(DEFAULT_TIER_DELAYS_MS[1]).toBe(45_000);
+  it("tier1 is 30 seconds", () => {
+    expect(DEFAULT_TIER_DELAYS_MS[1]).toBe(30_000);
   });
 
-  it("tier2 is 120 seconds", () => {
-    expect(DEFAULT_TIER_DELAYS_MS[2]).toBe(120_000);
+  it("tier2 is 90 seconds", () => {
+    expect(DEFAULT_TIER_DELAYS_MS[2]).toBe(90_000);
   });
 
   it("tier3 is 0 (unused)", () => {
@@ -62,6 +62,6 @@ describe("ack-timing: getAckTierDelays", () => {
   });
 
   it("keeps reply tier delays", () => {
-    expect(getAckTierDelays("reply")).toEqual([18_000, 45_000, 120_000]);
+    expect(getAckTierDelays("reply")).toEqual([12_000, 30_000, 90_000]);
   });
 });

@@ -31,21 +31,21 @@ function packet(overrides: Partial<AckDecisionPacket> = {}): AckDecisionPacket {
 }
 
 describe("ack-decision: decideAckAction", () => {
-  it("sends reaction ACK at 1s when no first token and reaction is supported", () => {
-    const decision = decideAckAction(packet({ nowMs: 1_000 }));
+  it("sends reaction ACK at 800ms when no first token and reaction is supported", () => {
+    const decision = decideAckAction(packet({ nowMs: 800 }));
     expect(decision.action).toBe("send_reaction_ack");
     expect(decision.ackStage).toBe("ack0");
     expect(decision.modality).toBe("reaction");
   });
 
-  it("does not send additional text ACK0 at 3s after reaction ACK0", () => {
-    const decision = decideAckAction(packet({ nowMs: 3_000, reactionAckSent: true }));
+  it("does not send additional text ACK0 at 2.5s after reaction ACK0", () => {
+    const decision = decideAckAction(packet({ nowMs: 2_500, reactionAckSent: true }));
     expect(decision.action).toBe("no_action");
   });
 
-  it("sends text ACK0 at 3s when reaction is not supported and main model is active", () => {
+  it("sends text ACK0 at 2.5s when reaction is not supported and main model is active", () => {
     const decision = decideAckAction(
-      packet({ nowMs: 3_000, reactionAckSupported: false, reactionAckEnabled: false }),
+      packet({ nowMs: 2_500, reactionAckSupported: false, reactionAckEnabled: false }),
     );
     expect(decision.action).toBe("send_text_ack0");
     expect(decision.ackStage).toBe("ack0");
@@ -53,33 +53,33 @@ describe("ack-decision: decideAckAction", () => {
   });
 
   it("suppresses or cancels once the first token appears", () => {
-    expect(decideAckAction(packet({ nowMs: 3_000, firstTokenSeen: true })).action).toBe("suppress");
+    expect(decideAckAction(packet({ nowMs: 2_500, firstTokenSeen: true })).action).toBe("suppress");
     expect(
-      decideAckAction(packet({ nowMs: 3_000, firstTokenSeen: true, ackWriterQueued: true })).action,
+      decideAckAction(packet({ nowMs: 2_500, firstTokenSeen: true, ackWriterQueued: true })).action,
     ).toBe("cancel_ack_writer");
   });
 
   it("suppresses or cancels for delivered, delivery pending, and formal reply states", () => {
-    expect(decideAckAction(packet({ nowMs: 3_000, delivered: true })).action).toBe("suppress");
-    expect(decideAckAction(packet({ nowMs: 3_000, deliveryPending: true })).action).toBe("suppress");
-    expect(decideAckAction(packet({ nowMs: 3_000, formalReplyVisible: true })).action).toBe("suppress");
-    expect(decideAckAction(packet({ nowMs: 3_000, delivered: true, ackWriterQueued: true })).action).toBe(
+    expect(decideAckAction(packet({ nowMs: 2_500, delivered: true })).action).toBe("suppress");
+    expect(decideAckAction(packet({ nowMs: 2_500, deliveryPending: true })).action).toBe("suppress");
+    expect(decideAckAction(packet({ nowMs: 2_500, formalReplyVisible: true })).action).toBe("suppress");
+    expect(decideAckAction(packet({ nowMs: 2_500, delivered: true, ackWriterQueued: true })).action).toBe(
       "cancel_ack_writer",
     );
   });
 
   it("does nothing while user is actively typing", () => {
-    const decision = decideAckAction(packet({ nowMs: 3_000, userInputActive: true }));
+    const decision = decideAckAction(packet({ nowMs: 2_500, userInputActive: true }));
     expect(decision.action).toBe("no_action");
   });
 
   it("suppresses reply-style ACK0 for delegate route", () => {
-    const decision = decideAckAction(packet({ route: "delegate", nowMs: 3_000 }));
+    const decision = decideAckAction(packet({ route: "delegate", nowMs: 2_500 }));
     expect(decision.action).toBe("suppress");
   });
 
   it("suppresses ACK when no valid thread target exists", () => {
-    const decision = decideAckAction(packet({ nowMs: 1_000, hasValidThreadTarget: false }));
+    const decision = decideAckAction(packet({ nowMs: 800, hasValidThreadTarget: false }));
 
     expect(decision.action).toBe("suppress");
     expect(decision.reason).toBe("no valid thread target for ACK delivery");
@@ -87,7 +87,7 @@ describe("ack-decision: decideAckAction", () => {
 
   it("session target alone does not count as valid thread target", () => {
     const decision = decideAckAction(packet({
-      nowMs: 1_000,
+      nowMs: 800,
       hasValidThreadTarget: false,
       reactionAckSupported: true,
       reactionAckEnabled: true,
@@ -99,7 +99,7 @@ describe("ack-decision: decideAckAction", () => {
   it("suppresses ACK when neither a session target nor message_id makes hasValidThreadTarget true", () => {
     // buildDecisionPacket should leave hasValidThreadTarget=false when both message and session targets are missing.
     const decision = decideAckAction(packet({
-      nowMs: 3_000,
+      nowMs: 2_500,
       hasValidThreadTarget: false,
       reactionAckSupported: false,
       reactionAckEnabled: false,
@@ -111,7 +111,7 @@ describe("ack-decision: decideAckAction", () => {
 
   it("sends reaction ACK with valid thread target at 1s", () => {
     const decision = decideAckAction(packet({
-      nowMs: 1_000,
+      nowMs: 800,
       hasValidThreadTarget: true,
       reactionAckSupported: true,
       reactionAckEnabled: true,
@@ -124,7 +124,7 @@ describe("ack-decision: decideAckAction", () => {
 
   it("considers delegatedRunning as active work eligible for ACK0", () => {
     const decision = decideAckAction(packet({
-      nowMs: 3_000,
+      nowMs: 2_500,
       mainModelActive: false,
       toolActive: false,
       delegatedRunning: true,
@@ -139,7 +139,7 @@ describe("ack-decision: decideAckAction", () => {
   it("still suppresses ACK on delegate route even when delegated is running", () => {
     const decision = decideAckAction(packet({
       route: "delegate",
-      nowMs: 3_000,
+      nowMs: 2_500,
       delegatedRunning: true,
       mainModelActive: true,
     }));
@@ -150,7 +150,7 @@ describe("ack-decision: decideAckAction", () => {
   it("suppresses delegate route even with delegatedRunning and a valid thread target", () => {
     const decision = decideAckAction(packet({
       route: "delegate",
-      nowMs: 3_000,
+      nowMs: 2_500,
       delegatedRunning: true,
       mainModelActive: false,
       toolActive: false,
@@ -179,7 +179,7 @@ describe("ack-decision: decideAckAction", () => {
 
   it("suppresses at highest priority when final response is streaming", () => {
     const decision = decideAckAction(packet({
-      nowMs: 3_000,
+      nowMs: 2_500,
       finalResponseStreaming: true,
       mainModelActive: true,
       reactionAckSupported: true,
@@ -192,7 +192,7 @@ describe("ack-decision: decideAckAction", () => {
 
   it("cancels queued ack writer when final response starts streaming", () => {
     const decision = decideAckAction(packet({
-      nowMs: 3_000,
+      nowMs: 2_500,
       finalResponseStreaming: true,
       ackWriterQueued: true,
     }));

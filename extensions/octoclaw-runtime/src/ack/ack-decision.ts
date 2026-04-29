@@ -40,12 +40,12 @@ export interface AckDecision {
 }
 
 export const ACK_TIMING = {
-  reaction_ack_ms: 1000,
-  text_ack0_ms: 3000,
+  reaction_ack_ms: 800,
+  text_ack0_ms: 2500,
   ack0_hard_ceiling_ms: 5000,
-  tier1_ms: 18000,
-  tier2_ms: 45000,
-  tier3_ms: 120000,
+  tier1_ms: 12000,
+  tier2_ms: 30000,
+  tier3_ms: 90000,
 } as const;
 
 function elapsedMs(packet: AckDecisionPacket): number {

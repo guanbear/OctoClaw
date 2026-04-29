@@ -18,7 +18,7 @@ describe("ack-timing: createAckTimers integration", () => {
     vi.useRealTimers();
   });
 
-  it("schedules reply tier callbacks at 18s, 45s, 120s", () => {
+  it("schedules reply tier callbacks at 12s, 30s, 90s", () => {
     const fired: AckTimerResult[] = [];
     createAckTimers({
       stateKey: "test-state",
@@ -30,7 +30,7 @@ describe("ack-timing: createAckTimers integration", () => {
 
     expect(fired).toHaveLength(0);
 
-    vi.advanceTimersByTime(17_999);
+    vi.advanceTimersByTime(11_999);
     expect(fired).toHaveLength(0);
 
     vi.advanceTimersByTime(1);
@@ -39,7 +39,7 @@ describe("ack-timing: createAckTimers integration", () => {
     expect(fired[0].stage).toBe("tool_still_working");
     expect(fired[0].routePhase).toBe("reply");
 
-    vi.advanceTimersByTime(45_000 - 18_000 - 1);
+    vi.advanceTimersByTime(30_000 - 12_000 - 1);
     expect(fired).toHaveLength(1);
 
     vi.advanceTimersByTime(1);
@@ -47,7 +47,7 @@ describe("ack-timing: createAckTimers integration", () => {
     expect(fired[1].tier).toBe(1);
     expect(fired[1].stage).toBe("tool_ask_continue");
 
-    vi.advanceTimersByTime(120_000 - 45_000 - 1);
+    vi.advanceTimersByTime(90_000 - 30_000 - 1);
     expect(fired).toHaveLength(2);
 
     vi.advanceTimersByTime(1);
@@ -140,7 +140,7 @@ describe("ack-timing: createAckTimers integration", () => {
     const state0 = ackTimerStateForKey("test-fired");
     expect(state0?.tier0Fired).toBe(false);
 
-    vi.advanceTimersByTime(18_001);
+    vi.advanceTimersByTime(12_001);
     const state1 = ackTimerStateForKey("test-fired");
     expect(state1?.tier0Fired).toBe(true);
     expect(state1?.tier1Fired).toBe(false);

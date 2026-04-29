@@ -4,7 +4,7 @@ export interface AckTimingConfig {
   tierDelaysMs: [number, number, number, number];
 }
 
-export const DEFAULT_TIER_DELAYS_MS: [number, number, number, number] = [18_000, 45_000, 120_000, 0];
+export const DEFAULT_TIER_DELAYS_MS: [number, number, number, number] = [12_000, 30_000, 90_000, 0];
 
 export function getAckTierDelays(routePhase: AckRoutePhase): [number, number, number] {
   if (routePhase === "delegate" || routePhase === "observe") {
