@@ -1836,7 +1836,97 @@ entries: () => store.getEntries().map(([key, state]) => ({ key, state: { ...stat
 
 ---
 
-## 任务完成检查清单
+### QF-5：调整 ACK tier 时间——收紧等待时长
+
+**文件**：
+- `extensions/octoclaw-runtime/src/ack/ack-decision.ts`（`ACK_TIMING` 常量）
+- `extensions/octoclaw-runtime/src/ack/ack-timing.ts`（`DEFAULT_TIER_DELAYS_MS` 常量）
+
+**问题**：现有 tier 时间偏长，用户等待体验差：
+- reaction_ack 1000ms → Slack 里 1 秒才加 emoji，稍慢
+- tier1 18s → 18 秒没回复用户已经很焦虑
+- tier2 45s、tier3 120s 同理
+
+**注意**：QF-2 要求先完成（`ACK_TIMING` 常量要从 `ack-timing.ts` import），此任务在 QF-2 完成后做，或合并成一次改动。
+
+**改法**：
+
+`ack-timing.ts` 中将 `DEFAULT_TIER_DELAYS_MS` 改为：
+```typescript
+// 改前
+export const DEFAULT_TIER_DELAYS_MS: [number, number, number, number] = [18_000, 45_000, 120_000, 0];
+
+// 改后
+export const DEFAULT_TIER_DELAYS_MS: [number, number, number, number] = [12_000, 30_000, 90_000, 0];
+```
+
+`ack-decision.ts` 中将 `ACK_TIMING` 改为（QF-2 完成前的临时状态，QF-2 完成后这里改为 import）：
+```typescript
+// 改前
+export const ACK_TIMING = {
+  reaction_ack_ms: 1000,
+  text_ack0_ms: 3000,
+  ack0_hard_ceiling_ms: 5000,
+  tier1_ms: 18000,
+  tier2_ms: 45000,
+  tier3_ms: 120000,
+} as const;
+
+// 改后
+export const ACK_TIMING = {
+  reaction_ack_ms: 800,    // 稍快，即时感更强
+  text_ack0_ms: 2500,      // 轻微收紧
+  ack0_hard_ceiling_ms: 5000,
+  tier1_ms: 12000,         // 12s 没回复就 nudge
+  tier2_ms: 30000,         // 30s
+  tier3_ms: 90000,         // 1.5min 后再问
+} as const;
+```
+
+**验收**：`pnpm test` 通过（注意有 ACK timing 相关的测试，确认没有新增失败）；`DEFAULT_TIER_DELAYS_MS` 值为 `[12_000, 30_000, 90_000, 0]`。
+
+---
+
+### QF-6：Reaction ACK emoji 配置从 judgeFast 解耦
+
+**文件**：
+- `extensions/octoclaw-runtime/openclaw.plugin.json`（configSchema 里新增顶层字段）
+- `extensions/octoclaw-runtime/src/extension-entry.ts`（读取新字段）
+
+**问题**：`reactionAckEnabled` 目前从 `judgeFast.ackReactionEmoji` 读取，与 judge 配置耦合。没配 judge 就永远无法启用 reaction ACK，而这两者本应是独立的。
+
+**改法**：
+
+`openclaw.plugin.json` 的 `configSchema.properties` 里新增（在 `judgeFast` 的同级别）：
+```json
+"ackReactionEmoji": {
+  "type": "string",
+  "default": "",
+  "description": "If set, react with this emoji on message receipt (e.g. 'eyes'). Empty to disable. Independent of judge config."
+}
+```
+
+`extension-entry.ts` 里找到读取 `reactionAckEnabled` 的地方，改为同时检查顶层 `ackReactionEmoji` 和 `judgeFast.ackReactionEmoji`：
+
+```typescript
+// 改前（只从 judgeFast 读）
+const reactionEmoji = stringValue(judgeFastRaw.ackReactionEmoji);
+
+// 改后（顶层优先，judgeFast 作为 fallback 向后兼容）
+const reactionEmoji = stringValue(pi.pluginConfig?.ackReactionEmoji)
+  || stringValue(judgeFastRaw.ackReactionEmoji);
+const reactionAckEnabled = reactionEmoji.length > 0;
+```
+
+**绝对不能做**：不能删除 `judgeFast.ackReactionEmoji` 的读取（向后兼容，已有用户可能这么配的）。
+
+**验收**：
+- `pnpm --filter @octoclaw/runtime run build` 通过
+- `pnpm test` 无新增失败
+- `openclaw.plugin.json` 的 `configSchema.properties` 里有顶层 `ackReactionEmoji` 字段
+- `pluginConfig.ackReactionEmoji = "eyes"` 时 `reactionAckEnabled = true`（即使 judgeFast 未配置）
+
+---
 
 完成所有任务后，运行以下检查：
 

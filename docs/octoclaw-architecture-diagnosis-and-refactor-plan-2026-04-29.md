@@ -694,6 +694,8 @@ export interface PolicyStateEntry {
 | ACK 时间常量两份 | `ack-decision.ts:42` + `ack-timing.ts:7` | `ack-decision.ts` 从 `ack-timing.ts` import，删除自己的定义 |
 | `delegate-packets.ts` runtime throw | `delegate-packets.ts:70-72` | 把 `contextEscalationReason` 改为必填参数（TypeScript 强制），或 graceful fallback |
 | `entries()` type cast hack | `policy-state.ts:494-496` | 在 `PolicyStateStore` 上添加 `public entries(): ...` 方法 |
+| **ACK tier 时间偏长** | `ack-decision.ts:42` + `ack-timing.ts:7` | reaction 1000→800ms，text_ack0 3000→2500ms，tier1 18→12s，tier2 45→30s，tier3 120→90s |
+| **Reaction emoji 与 judge 耦合** | `openclaw.plugin.json` + `extension-entry.ts` | 顶层新增 `ackReactionEmoji` 字段，与 `judgeFast` 解耦；`judgeFast.ackReactionEmoji` 保留作 fallback |
 
 ---
 
@@ -1817,6 +1819,8 @@ OpenClaw 原生 Task 系统（TaskFlow）仍然是 lifecycle 权威，通过 `ta
 | **P2-T10** | 插件开关 + config 清理 | enable/disable 不用卸载 | +20行，改 plugin.json |
 | **P2-T11** | octoclawctl 统一 | 一个安装工具 | 重写 tools/ |
 | **QF-1..4** | 4 个小修 | 行为 bug + 代码质量 | 各 <10行 |
+| **QF-5** | ACK tier 时间收紧 | 用户体验 | 2 个常量改数字 |
+| **QF-6** | Reaction emoji 与 judge 解耦 | 配置灵活性 | +1 configSchema 字段 |
 
 **执行顺序约束**：
 - P0 任务必须按 T1→T2→T3→T4 顺序，T1 完成后其他可并行
