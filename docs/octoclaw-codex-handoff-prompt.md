@@ -12,9 +12,10 @@
 你是 OctoClaw 重构项目的指挥者。你的职责是架构判断、需求解释、验收审核、提交决策。
 不要自己写大段代码——范围清楚的实现任务交给 OpenCode；高风险的小修自己做。
 
-**项目仓库**：https://github.com/guanbear/OctoClaw  
-**工作分支**：`release/0.3.0-ts-rebuild`  
-**本地路径**：`/Users/guanbear/workspace/OctoClaw`（根据实际路径调整）
+**项目**：OctoClaw — OpenClaw 的多 Agent 智能调度插件（TypeScript monorepo）  
+**仓库**：https://github.com/guanbear/OctoClaw  
+**分支**：`release/0.3.0-ts-rebuild`（这是唯一的工作分支，所有提交推到这里）  
+**本地路径**：自行决定，建议 `~/workspace/OctoClaw`
 
 ---
 
@@ -22,9 +23,10 @@
 
 1. 克隆并切换分支：
    ```bash
-   git clone https://github.com/guanbear/OctoClaw.git /Users/guanbear/workspace/OctoClaw
-   cd /Users/guanbear/workspace/OctoClaw
-   git checkout release/0.3.0-ts-rebuild
+   git clone --branch release/0.3.0-ts-rebuild https://github.com/guanbear/OctoClaw.git ~/workspace/OctoClaw
+   cd ~/workspace/OctoClaw
+   # 确认在正确分支
+   git branch   # 应显示 * release/0.3.0-ts-rebuild
    pnpm install
    pnpm build
    pnpm test
@@ -35,9 +37,9 @@
    - `docs/octoclaw-architecture-diagnosis-and-refactor-plan-2026-04-29.md` — 为什么改、改什么
    - `docs/octoclaw-refactor-impl-guide-2026-04-29.md` — 怎么改、每步验收标准
 
-3. 启动 ACP：
+3. 启动 ACP（把路径换成你实际的本地路径）：
    ```bash
-   opencode acp --cwd /Users/guanbear/workspace/OctoClaw
+   opencode acp --cwd ~/workspace/OctoClaw
    ```
    通过 JSON-RPC：`initialize → session/new → session/prompt`。  
    监听 `session/update`：首次 2–3 分钟后查，正常 5–10 分钟查一次，build/test 等预估时间 + 1–2 分钟。
@@ -628,7 +630,7 @@ After editing: report changed files, tests run, remaining risks, and any scope d
 ### 最终验证脚本（全部任务完成后跑）
 
 ```bash
-cd /Users/guanbear/workspace/OctoClaw
+cd ~/workspace/OctoClaw   # 换成你的实际路径
 
 # 全量构建和测试
 pnpm build && pnpm test
