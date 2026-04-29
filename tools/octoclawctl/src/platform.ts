@@ -1,3 +1,4 @@
+import path from "node:path";
 import { spawn } from "node:child_process";
 
 declare const process: { platform: string; env: Record<string, string | undefined> };
@@ -7,9 +8,16 @@ export interface ServiceRestartResult {
   error?: string;
 }
 
+function openClawStateEnv(openclawHome: string): Record<string, string | undefined> {
+  return {
+    OPENCLAW_STATE_DIR: openclawHome,
+    OPENCLAW_CONFIG_PATH: path.join(openclawHome, "openclaw.json"),
+  };
+}
+
 export async function restartService(service: "gateway" | "node", openclawHome: string): Promise<ServiceRestartResult> {
   const openclawArgs = service === "gateway" ? ["gateway", "restart"] : ["node", "restart"];
-  const cliResult = await tryRun("openclaw", openclawArgs, { OPENCLAW_HOME: openclawHome });
+  const cliResult = await tryRun("openclaw", openclawArgs, openClawStateEnv(openclawHome));
   if (cliResult.success) return cliResult;
 
   if (process.platform === "darwin") {
@@ -36,13 +44,24 @@ export async function restartOpenClawNode(openclawHome: string): Promise<Service
   return restartService("node", openclawHome);
 }
 
-async function tryRun(command: string, args: string[], env: Record<string, string | undefined> = {}): Promise<ServiceRestartResult> {
+async function tryRun(command: string, args: string[], env: Record<string, string | undefined> = {}, timeoutMs = 15_000): Promise<ServiceRestartResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
     let stderr = "";
+    let settled = false;
+    const settle = (result: ServiceRestartResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+    const timeout = setTimeout(() => {
+      (child as unknown as { kill(signal: string): void }).kill("SIGTERM");
+      settle({ success: false, error: `${command} ${args.join(" ")} timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
     child.stderr?.on("data", (chunk: Uint8Array | string) => { stderr += chunk.toString(); });
-    child.on("error", (error: Error) => resolve({ success: false, error: error.message }));
-    child.on("close", (code: number | null) => resolve(code === 0 ? { success: true } : { success: false, error: stderr.trim() || `${command} exited ${code ?? 1}` }));
+    child.on("error", (error: Error) => settle({ success: false, error: error.message }));
+    child.on("close", (code: number | null) => settle(code === 0 ? { success: true } : { success: false, error: stderr.trim() || `${command} exited ${code ?? 1}` }));
   });
 }
 

@@ -49,7 +49,21 @@ export async function setupSymlinks(openclawHome: string): Promise<void> {
 }
 
 export async function validateLoad(openclawHome: string): Promise<void> {
-  await run("openclaw", ["plugin", "list"], undefined, { OPENCLAW_HOME: openclawHome });
+  const extensionsRoot = path.join(openclawHome, "extensions");
+  const extensionNames = await listDirectories(extensionsRoot, (name) => name.startsWith("octoclaw-"));
+  for (const extensionName of extensionNames) {
+    const extensionRoot = path.join(extensionsRoot, extensionName);
+    const manifest = await readJson(path.join(extensionRoot, "openclaw.plugin.json"));
+    const main = typeof manifest?.main === "string" ? manifest.main : "";
+    if (!main) {
+      throw new Error(`Missing plugin main for ${extensionName}`);
+    }
+    const mainPath = path.join(extensionRoot, main);
+    if (!(await pathExists(mainPath))) {
+      throw new Error(`Missing plugin entry for ${extensionName}: ${main}`);
+    }
+    await import(mainPath);
+  }
 }
 
 export async function cloneOrUpdate(octoclawRoot: string, repoUrl: string, branch: string): Promise<void> {
