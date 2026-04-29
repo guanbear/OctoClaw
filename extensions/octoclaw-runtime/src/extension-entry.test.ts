@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability } from "./extension-entry.js";
+import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry.js";
 import { guardAssistantMessageForPolicyState } from "./replay/replay-logger.js";
 import { policyState } from "./state/policy-state.js";
 import { getToolRegistrations } from "./tools/registration.js";
@@ -47,6 +47,27 @@ describe("resolveDelegationCapability", () => {
       hostSupported: true,
       enabled: false,
       reason: "disabled_by_config",
+    });
+  });
+});
+
+
+describe("resolveReactionAckConfig", () => {
+  it("enables reaction ACK from top-level plugin config without judgeFast", () => {
+    expect(resolveReactionAckConfig({ ackReactionEmoji: "eyes" }, {})).toEqual({
+      reactionEmoji: "eyes",
+      reactionAckEnabled: true,
+    });
+  });
+
+  it("keeps judgeFast ackReactionEmoji as a backwards-compatible fallback", () => {
+    expect(resolveReactionAckConfig({}, { ackReactionEmoji: "ok_hand" })).toEqual({
+      reactionEmoji: "ok_hand",
+      reactionAckEnabled: true,
+    });
+    expect(resolveReactionAckConfig({ ackReactionEmoji: "" }, { ackReactionEmoji: "ok_hand" })).toEqual({
+      reactionEmoji: "ok_hand",
+      reactionAckEnabled: true,
     });
   });
 });

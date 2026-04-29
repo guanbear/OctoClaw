@@ -87,6 +87,18 @@ export interface PluginInterface {
   runtime?: { subagent?: import("./tools/registration.js").OpenClawSubagentRuntime };
 }
 
+export function resolveReactionAckConfig(pluginConfig: UnknownRecord | undefined, judgeFastRaw: UnknownRecord): {
+  reactionEmoji: string;
+  reactionAckEnabled: boolean;
+} {
+  const reactionEmoji = stringValue(pluginConfig?.ackReactionEmoji)
+    || stringValue(judgeFastRaw.ackReactionEmoji);
+  return {
+    reactionEmoji,
+    reactionAckEnabled: reactionEmoji.length > 0,
+  };
+}
+
 const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "OctoClaw runtime policy is authoritative for this run.",
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
@@ -690,6 +702,17 @@ export const plugin = {
       try { const p = JSON.parse(json); return (typeof p === "object" && p && !Array.isArray(p)) ? p as Record<string, unknown> : {}; } catch { return {}; }
     })();
     const judgeFastRaw = (Object.keys(judgeFastFromPlugin).length > 0) ? judgeFastFromPlugin : judgeFastFromEnv;
+    const { reactionEmoji, reactionAckEnabled } = resolveReactionAckConfig(asRecord(pi.pluginConfig), judgeFastRaw);
+    const buildReactionAckState = (sessionKey = ""): Partial<PolicyStateEntry> => ({
+      reactionAckEnabled,
+      reactionAckSupported: reactionAckEnabled && stringValue(sessionKey).toLowerCase().includes(":slack:"),
+      reactionAckEmoji: reactionEmoji,
+      reaction_ack_emoji: reactionEmoji,
+    });
+    const applyReactionAckState = (state: PolicyStateEntry | null | undefined, sessionKey = ""): void => {
+      if (!state) return;
+      Object.assign(state, buildReactionAckState(sessionKey));
+    };
 
     if (process.env.OCTOCLAW_JUDGE_DEBUG) {
       console.log(`[octoclaw-judge] pluginKeys=${Object.keys(judgeFastFromPlugin).length} envKeys=${Object.keys(judgeFastFromEnv).length} rawKeys=${Object.keys(judgeFastRaw).length} envVar="${process.env.OCTOCLAW_JUDGE_FAST?.slice(0, 50) ?? "(none)"}" modelId="${(judgeFastRaw as Record<string, unknown>).modelId ?? "(none)"}"`);
@@ -815,10 +838,16 @@ export const plugin = {
         if (process.env.OCTOCLAW_ACK_DEBUG) {
           console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
         }
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey: preStateKey, decision: {}, replyToMessageId: inboundMessageTs });
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), {
+          stateKey: preStateKey,
+          decision: {},
+          state: buildReactionAckState(preSessionKey),
+          replyToMessageId: inboundMessageTs,
+        });
       }
       const preliminaryState = getPolicyStateForContext(ctx).state;
       if (preliminaryState) {
+        applyReactionAckState(preliminaryState, preSessionKey);
         preliminaryState.ackGuardKey = preSessionKey || "";
         if (inboundMessageTs) {
           preliminaryState.inboundMessageTs = inboundMessageTs;
@@ -862,7 +891,16 @@ export const plugin = {
       const effectiveDecision = recoveryCheck.updatedCount > 0
         ? asRecord(effectiveState?.decision)
         : decision;
+      if (stateKey) {
+        updatePolicyState(stateKey, (current) => ({
+          ...current,
+          ...buildReactionAckState(preSessionKey),
+          ackGuardKey: preSessionKey || current.ackGuardKey || "",
+          inboundMessageTs: inboundMessageTs || current.inboundMessageTs,
+        }));
+      }
       if (effectiveState) {
+        applyReactionAckState(effectiveState, preSessionKey);
         effectiveState.ackGuardKey = preSessionKey || "";
         if (inboundMessageTs) {
           effectiveState.inboundMessageTs = inboundMessageTs;

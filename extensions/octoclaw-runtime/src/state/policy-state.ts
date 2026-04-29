@@ -35,6 +35,11 @@ export interface PolicyStateEntry {
   result_materialized?: boolean;
   latencyAckSent?: boolean;
   latencyAckText?: string;
+  reactionAckEnabled?: boolean;
+  reactionAckSupported?: boolean;
+  reactionAckSent?: boolean;
+  reactionAckEmoji?: string;
+  reaction_ack_emoji?: string;
   ackGuardKey?: string;
   ack_guard_key?: string;
   inboundMessageTs?: string;
