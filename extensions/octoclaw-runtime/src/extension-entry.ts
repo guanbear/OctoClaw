@@ -18,6 +18,7 @@ import {
   maybeSendLatencyAck,
   notifyUserMessage,
   startAckGuard,
+  updateAckGuardDecision,
   updateAckTrackingState,
   watchdogTick,
   WATCHDOG_INTERVAL_MS,
@@ -820,6 +821,20 @@ export const plugin = {
         pendingLatencyAckTimers.set(timerStateKey, timer);
       };
 
+      if (preSessionKey) {
+        if (process.env.OCTOCLAW_ACK_DEBUG) {
+          console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
+        }
+        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey: preStateKey, decision: {}, replyToMessageId: inboundMessageTs });
+      }
+      const preliminaryState = getPolicyStateForContext(ctx).state;
+      if (preliminaryState) {
+        preliminaryState.ackGuardKey = preSessionKey || "";
+        if (inboundMessageTs) {
+          preliminaryState.inboundMessageTs = inboundMessageTs;
+        }
+      }
+
       startLatencyAckTimer(preStateKey);
 
       const resolved = await resolvePolicyDecisionForContext(
@@ -827,8 +842,18 @@ export const plugin = {
         ctx,
         process.cwd(),
         pi.logger,
-      );
+      ).catch((judgeErr: unknown) => {
+        if (pi.logger?.warn) {
+          pi.logger.warn(`octoclaw judge failed: ${String(judgeErr)}`);
+        }
+        return null;
+      });
       pendingDecision.value = asRecord(resolved?.decision);
+
+      if (resolved) {
+        const postDecision = asRecord(resolved?.decision);
+        updateAckGuardDecision(preStateKey || preSessionKey, postDecision ?? {});
+      }
 
       const decision = asRecord(resolved?.decision);
       const hookConfig = asRecord(asRecord(decision.hook_interface).before_prompt_build);
@@ -847,6 +872,12 @@ export const plugin = {
       const effectiveDecision = recoveryCheck.updatedCount > 0
         ? asRecord(effectiveState?.decision)
         : decision;
+      if (effectiveState) {
+        effectiveState.ackGuardKey = preSessionKey || "";
+        if (inboundMessageTs) {
+          effectiveState.inboundMessageTs = inboundMessageTs;
+        }
+      }
 
       // D1: Route Commit ACK — send truthful ACK projection after route seal, before dispatch.
       try {
@@ -867,19 +898,6 @@ export const plugin = {
       } catch (routeCommitErr) {
         if (pi.logger?.warn) {
           pi.logger.warn(`octoclaw route-commit-ack error: ${String(routeCommitErr)}`);
-        }
-      }
-
-      if (preSessionKey) {
-        if (process.env.OCTOCLAW_ACK_DEBUG) {
-          console.error(`[ack-dbg] preSessionKey=${preSessionKey.substring(0,40)} inboundMessageTs=${inboundMessageTs || "(empty)"}`);
-        }
-        startAckGuard(preSessionKey, stringValue(ctx.cwd) || process.cwd(), { stateKey, decision: effectiveDecision, replyToMessageId: inboundMessageTs });
-      }
-      if (effectiveState) {
-        effectiveState.ackGuardKey = preSessionKey || "";
-        if (inboundMessageTs) {
-          effectiveState.inboundMessageTs = inboundMessageTs;
         }
       }
 

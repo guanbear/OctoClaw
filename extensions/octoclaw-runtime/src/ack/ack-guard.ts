@@ -1079,6 +1079,18 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
   });
 }
 
+export function updateAckGuardDecision(
+  stateKey: string,
+  decision: Record<string, unknown>,
+): void {
+  const key = asString(stateKey);
+  if (!key) return;
+  updateAckTrackingState(key, {
+    decision,
+    decision_updated_at: Date.now(),
+  });
+}
+
 export function cancelAckGuard(sessionKey: string): void {
   cancelAckTimers(asString(sessionKey));
 }
