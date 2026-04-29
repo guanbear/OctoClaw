@@ -13,7 +13,7 @@ import {
 
 type EmitExecutionTransitionParams = Parameters<typeof emitExecutionTransitionNotification>[0];
 type RunCommandSpy = MockInstance<typeof import("../../resolve/env.js").runCommand>;
-type ReplaySpy = MockInstance<typeof import("../../replay/replay-logger.js").recordPolicyReplay>;
+type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPolicyReplay>;
 
 describe("execution transition notifier", () => {
   beforeEach(() => {
@@ -263,7 +263,7 @@ async function mockDelivery(): Promise<{ runCommandSpy: RunCommandSpy; replaySpy
     timedOut: false,
   });
   const replaySpy = vi.spyOn(
-    await import("../../replay/replay-logger.js"),
+    await import("../../replay/replay.js"),
     "recordPolicyReplay",
   );
 

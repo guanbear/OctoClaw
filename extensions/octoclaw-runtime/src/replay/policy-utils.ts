@@ -38,7 +38,6 @@ export function buildRolloutFlags(decision?: Record<string, unknown>): Record<st
     cheapJudgeLiveEnabled: Boolean(switchRecord.cheap_judge_live_enabled),
     localJudgeLiveEnabled: Boolean(switchRecord.local_judge_live_enabled),
     runnerPoolEnabled: Boolean(switchRecord.runner_pool_enabled),
-    deliveryRelayEnabled: Boolean(switchRecord.delivery_relay_enabled),
     legacyRunnerFallbackEnabled: Boolean(switchRecord.legacy_runner_fallback_enabled),
     patrolLoopEnabled: Boolean(switchRecord.patrol_loop_enabled),
     safeModeEnabled: Boolean(switchRecord.safe_mode_enabled),

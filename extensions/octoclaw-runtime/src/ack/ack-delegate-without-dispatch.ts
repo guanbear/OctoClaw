@@ -1,6 +1,7 @@
-import { getAdapterForSession } from "../im/index.js";
-import { resolveWorkspaceRoot, runCommand } from "../resolve/env.js";
-import { recordPolicyReplay, delegationFailureReply } from "../replay/replay-logger.js";
+import { sendIMMessage } from "../im/send.js";
+import { resolveWorkspaceRoot } from "../resolve/env.js";
+import { delegationFailureReply } from "../replay/message-guard.js";
+import { recordPolicyReplay } from "../replay/replay.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
 
 export interface DelegateWithoutDispatchPacket {
@@ -78,90 +79,22 @@ async function sendDelegateWithoutDispatchDirect(
     };
   }
 
-  const adapter = getAdapterForSession(sessionKey);
-  if (adapter) {
-    const result = await adapter.send({
-      sessionKey,
-      message,
-      replyToMessageId: replyToMessageId || undefined,
-      timeoutMs: 5000,
-      cwd: asString(cwd) || resolveWorkspaceRoot(),
-    });
-    return {
-      attempted: true,
-      delivered: result.delivered,
-      sent: result.sent,
-      error: result.error || "",
-      reason: result.sent ? "channel_message_sent" : "channel_message_failed",
-      target: adapter.resolveTarget(sessionKey).target,
-      threadId: result.threadTs || "",
-    };
-  }
-
-  const origin = sessionKey.split(":")[0] || "";
-  if (!origin) {
-    return {
-      attempted: false,
-      delivered: false,
-      sent: false,
-      error: "unresolvable_session_origin",
-      reason: "channel_message_unresolvable",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  }
-
-  const args = ["message", "send", "--channel", origin, "--target", resolved.target, "--json"];
-  if (message) {
-    args.push("--message", message);
-  }
-  if (resolved.threadId) {
-    args.push("--thread-id", resolved.threadId);
-  }
-
-  try {
-    const result = await runCommand("openclaw", args, {
-      cwd: asString(cwd) || resolveWorkspaceRoot(),
-      timeoutMs: 5000,
-    });
-    if (result.code === 0 && result.stdout) {
-      try {
-        const parsedResult = JSON.parse(result.stdout) as Record<string, unknown>;
-        if (parsedResult.ok === true) {
-          return {
-            attempted: true,
-            delivered: true,
-            sent: true,
-            error: "",
-            reason: "channel_message_sent",
-            target: resolved.target,
-            threadId: resolved.threadId,
-          };
-        }
-      } catch {
-        // Ignore malformed JSON and return the command failure shape below.
-      }
-    }
-    return {
-      attempted: true,
-      delivered: false,
-      sent: false,
-      error: result.stderr || "send_failed",
-      reason: "channel_message_failed",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  } catch (error) {
-    return {
-      attempted: true,
-      delivered: false,
-      sent: false,
-      error: String(error),
-      reason: "channel_message_error",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  }
+  const result = await sendIMMessage({
+    sessionKey,
+    message,
+    replyToMessageId: replyToMessageId || undefined,
+    timeoutMs: 5000,
+    cwd: asString(cwd) || resolveWorkspaceRoot(),
+  });
+  return {
+    attempted: result.error !== "no_im_adapter",
+    delivered: result.sent,
+    sent: result.sent,
+    error: result.error || "",
+    reason: result.sent ? "channel_message_sent" : "channel_message_failed",
+    target: resolved.target,
+    threadId: result.threadTs || resolved.threadId,
+  };
 }
 
 export function resetDelegateWithoutDispatchState(): void {

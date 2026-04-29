@@ -129,7 +129,7 @@ describe("route commit ACK", () => {
 
   it("skips send when route data is missing with replay event", async () => {
     const replaySpy = vi.spyOn(
-      await import("../../replay/replay-logger.js"),
+      await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 
@@ -161,7 +161,7 @@ describe("route commit ACK", () => {
 
   it("skips unresolvable session target even with message id", async () => {
     const replaySpy = vi.spyOn(
-      await import("../../replay/replay-logger.js"),
+      await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 
@@ -193,7 +193,7 @@ describe("route commit ACK", () => {
 
   it("skips when canonical target resolves but no message anchor", async () => {
     const replaySpy = vi.spyOn(
-      await import("../../replay/replay-logger.js"),
+      await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 
@@ -245,7 +245,7 @@ describe("route commit ACK", () => {
 
   it("skips duplicate sends with replay event", async () => {
     const replaySpy = vi.spyOn(
-      await import("../../replay/replay-logger.js"),
+      await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 
@@ -336,7 +336,7 @@ describe("route commit ACK", () => {
     });
 
     const replaySpy = vi.spyOn(
-      await import("../../replay/replay-logger.js"),
+      await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 
@@ -395,7 +395,7 @@ describe("route commit ACK", () => {
       timedOut: false,
     });
     const replaySpy = vi.spyOn(
-      await import("../../replay/replay-logger.js"),
+      await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 

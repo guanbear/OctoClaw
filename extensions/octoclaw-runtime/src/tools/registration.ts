@@ -35,11 +35,11 @@ import {
   resolvePolicyStateKey,
   resolvePolicyStateKeys,
 } from "../resolve/session.js";
+import { policySummaryText } from "../replay/policy-utils.js";
 import {
-  policySummaryText,
   recordDispatchLifecycleReplayEvents,
   recordPolicyReplay,
-} from "../replay/replay-logger.js";
+} from "../replay/replay.js";
 import { policyState } from "../state/policy-state.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import {
@@ -77,47 +77,6 @@ export interface OpenClawSubagentRuntime {
 
 export interface ToolRegistrationOptions {
   subagentRuntime?: OpenClawSubagentRuntime | null;
-}
-
-function taskIdsFromRuntimeTruth(runtimeTruth: UnknownRecord): string[] {
-  const binding = asRecord(runtimeTruth.binding);
-  const delegateTask = asRecord(runtimeTruth.delegateTask);
-  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
-  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
-  return [
-    binding.taskId,
-    delegateTask.delegateTaskId,
-    asRecord(delegateAttempt.nativeBinding).nativeTaskId,
-    nativeTaskBinding.nativeTaskId,
-  ].map((value) => asString(value)).filter(Boolean);
-}
-
-function flowIdsFromRuntimeTruth(runtimeTruth: UnknownRecord): string[] {
-  const binding = asRecord(runtimeTruth.binding);
-  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
-  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
-  return [
-    binding.flowId,
-    asRecord(delegateAttempt.nativeBinding).nativeFlowId,
-    nativeTaskBinding.nativeFlowId,
-  ].map((value) => asString(value)).filter(Boolean);
-}
-
-function findRuntimeTaskInPolicyState(taskId: string): { sessionKey: string; flowId: string } | null {
-  for (const { state } of policyState.entries()) {
-    const decision = asRecord(state?.decision);
-    const runtimeTruth = asRecord(decision.runtime_truth);
-    if (!runtimeTruthHasProjectionEvidence(runtimeTruth, asRecord(state))) {
-      continue;
-    }
-    const candidateTaskIds = taskIdsFromRuntimeTruth(runtimeTruth);
-    const candidateFlowId = flowIdsFromRuntimeTruth(runtimeTruth)[0] || "";
-    const sessionKey = asString(runtimeTruth.sessionKey || asRecord(decision.request).session_key);
-    if (candidateTaskIds.includes(taskId) && candidateFlowId && sessionKey) {
-      return { sessionKey, flowId: candidateFlowId };
-    }
-  }
-  return null;
 }
 
 function isSyntheticTestTaskState(record: RuntimeTaskStateRecord): boolean {
@@ -573,35 +532,6 @@ function firstTimestamp(...values: unknown[]): string {
   return "";
 }
 
-function runtimeTruthHasProjectionEvidence(runtimeTruth: UnknownRecord, state: UnknownRecord = {}): boolean {
-  const evidence = asRecord(runtimeTruth.evidence);
-  const delegateTask = asRecord(runtimeTruth.delegateTask);
-  const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
-  const nativeBinding = asRecord(delegateAttempt.nativeBinding);
-  const runtimeBinding = asRecord(runtimeTruth.binding);
-  const nativeTaskBinding = asRecord(runtimeTruth.nativeTaskBinding);
-  const continuity = asRecord(runtimeTruth.childSessionContinuity || runtimeTruth.continuity);
-  return asBoolean(state.dispatchExecuted)
-    || asBoolean(state.dispatch_executed)
-    || asBoolean(state.spawnExecuted)
-    || asBoolean(state.spawn_executed)
-    || asBoolean(state.resultMaterialized)
-    || asBoolean(state.result_materialized)
-    || asBoolean(evidence.dispatchExecuted)
-    || asBoolean(evidence.dispatch_executed)
-    || asBoolean(runtimeBinding.spawnExecuted)
-    || asBoolean(runtimeBinding.spawn_executed)
-    || asBoolean(evidence.spawnExecuted)
-    || asBoolean(evidence.spawn_executed)
-    || asBoolean(evidence.resultMaterialized)
-    || asBoolean(evidence.result_materialized)
-    || Boolean(asString(delegateTask.delegateTaskId))
-    || Boolean(asString(delegateAttempt.attemptId || delegateAttempt.status))
-    || Boolean(asString(nativeBinding.nativeTaskId || nativeBinding.nativeFlowId || nativeBinding.runId))
-    || Boolean(asString(nativeTaskBinding.nativeTaskId || nativeTaskBinding.nativeFlowId || nativeTaskBinding.runId))
-    || Boolean(asString(continuity.childSessionKey || continuity.runId));
-}
-
 function runtimeStatusEvidence(record: RuntimeTaskStateRecord): { hasDispatchEvidence: boolean; hasSpawnEvidence: boolean; resultMaterialized: boolean; childSessionKey: string; runId: string } {
   const artifacts = asRecord(record.artifacts);
   const runtimeTruth = asRecord(artifacts.runtime_truth);
@@ -1018,39 +948,6 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
   }));
   let record = (taskId ? tasks.find((entry) => asString(entry.id) === taskId) : tasks[0]) || null;
   let liveRead: NullRecord = null;
-  let liveSessionKey = "";
-  let liveFlowId = "";
-
-  if (!record && taskId) {
-    try {
-      const plugin = createOctoClawRuntimePlugin();
-      const adapter = plugin.createAdapter();
-      const runtimeRecord = findRuntimeTaskInPolicyState(taskId);
-      if (runtimeRecord) {
-        liveSessionKey = asString(runtimeRecord.sessionKey);
-        liveFlowId = asString(runtimeRecord.flowId);
-        if (liveSessionKey && liveFlowId) {
-          const binding = adapter.bindSession(liveSessionKey);
-          const taskRead = binding.readTask(liveFlowId, taskId);
-          if (taskRead?.found) {
-            liveRead = taskRead;
-            record = {
-              id: taskId,
-              flow_id: liveFlowId,
-              session_key: liveSessionKey,
-              route: "delegate",
-              status: taskRead.substrateState || "unknown",
-              summary: asString(taskRead.progressSummary),
-              role: "",
-              worker_pool: "",
-            } as RuntimeTaskStateRecord;
-          }
-        }
-      }
-    } catch {
-      // runtime query failed — fall through to not-found
-    }
-  }
 
   if (!record) {
     const payload = {
@@ -1083,8 +980,8 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
     mode: "native_runtime",
     action: normalizedAction,
     taskId: asString(record.id),
-    flowId: asString(record.flow_id || liveFlowId),
-    sessionKey: asString(record.session_key || liveSessionKey),
+    flowId: asString(record.flow_id),
+    sessionKey: asString(record.session_key),
     route: normalizeLiveRoute(record.route, "delegate"),
     role: asString(record.role, asString(asRecord(artifacts.runtime_truth).role)),
     status: projected.status,
@@ -1133,59 +1030,7 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
   const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
   const retention = pruneRuntimeTaskStateCache();
   const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: includeExpired }));
-  const taskIdsFromCache = new Set(tasks.map((entry) => asString(entry.id)));
-  const runtimeTasks: RuntimeTaskStateRecord[] = [];
-  for (const { state } of policyState.entries()) {
-    const decision = asRecord(state?.decision);
-    const runtimeTruth = asRecord(decision.runtime_truth);
-    if (!runtimeTruthHasProjectionEvidence(runtimeTruth, asRecord(state))) {
-      continue;
-    }
-    const taskIds = taskIdsFromRuntimeTruth(runtimeTruth);
-    const flowId = flowIdsFromRuntimeTruth(runtimeTruth)[0] || "";
-    const binding = asRecord(runtimeTruth.binding);
-    const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
-    const recovery = asRecord(runtimeTruth.recovery);
-    const status = asString(
-      delegateAttempt.status
-      || binding.substrateState
-      || binding.status
-      || recovery.status
-      || "unknown",
-    );
-    const summary = asString(
-      delegateAttempt.failureReason
-      || delegateAttempt.status
-      || recovery.reason
-      || "",
-    );
-    for (const taskId of taskIds) {
-      if (!taskId || taskIdsFromCache.has(taskId)) {
-        continue;
-      }
-      runtimeTasks.push({
-        id: taskId,
-        flow_id: flowId,
-        status,
-        route: "delegate",
-        summary,
-        updated_at: new Date(nowMs).toISOString(),
-        started_at: delegateAttempt.startedAt || binding.startedAt || state?.updatedAt,
-        completed_at: delegateAttempt.completedAt || delegateAttempt.failedAt,
-        worker_pool: delegateAttempt.workerPool || binding.workerPool,
-        model: delegateAttempt.model || runtimeTruth.model,
-        backend: binding.controllerId || runtimeTruth.backend,
-        dispatchExecuted: state?.dispatchExecuted === true || state?.dispatch_executed === true,
-        spawnExecuted: state?.spawnExecuted === true || state?.spawn_executed === true,
-        resultMaterialized: state?.resultMaterialized === true || state?.result_materialized === true,
-        artifacts: { runtime_truth: runtimeTruth },
-      });
-    }
-  }
-  const allTasks = [
-    ...tasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
-    ...runtimeTasks.map((task) => buildRuntimeStatusTaskView(task, nowMs)),
-  ];
+  const allTasks = tasks.map((task) => buildRuntimeStatusTaskView(task, nowMs));
   const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
   const hiddenExpiredCount = allTasks.length - visibleTasks.length;
   const counts = visibleTasks.reduce<Record<string, number>>((acc, task) => {

@@ -155,9 +155,6 @@ export function resolveReplayLogPath(): string {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-replay.jsonl");
 }
 
-export function resolveDeliveryRelayPath(): string {
-  return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "delivery-relay.jsonl");
-}
 
 export function resolveTaskStatePath(): string {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "task-state.json");

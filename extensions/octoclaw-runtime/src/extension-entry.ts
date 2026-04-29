@@ -24,6 +24,7 @@ import {
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
+import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import {
   buildPolicyMetadata,
@@ -44,26 +45,26 @@ import { buildLiveJudgeContextPacket } from "./resolve/llm-judge.js";
 import { initNativeHelperBridge } from "./adapter/native-helper.js";
 import type { DetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime.js";
 import { createHostDetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime-host.js";
+import { buildTurnExecutionReceipt, type TurnExecutionReceipt } from "./receipt.js";
 import {
   assistantMessageText,
-  compactPolicyPrompt,
   guardAssistantMessageForPolicyState,
+} from "./replay/message-guard.js";
+import {
+  compactPolicyPrompt,
   isControlObserverDecision,
   isDelegatedRoute,
   isSessionControlDecision,
   matchesBlockedPattern,
   observerControlTools,
   preHintAllowedTools,
-  recordAckReplay,
-  recordPolicyReplay,
   routeHintRequired,
   sessionControlTools,
   shouldRetainPolicyStateOnAgentEnd,
   stringifyParamsForPolicy,
-  buildTurnExecutionReceipt,
-  type TurnExecutionReceipt,
   workflowEnforcementRule,
-} from "./replay/replay-logger.js";
+} from "./replay/policy-utils.js";
+import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 
@@ -133,7 +134,17 @@ const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
 
 let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 let taskStateRetentionInterval: ReturnType<typeof setInterval> | null = null;
+let deliveryOutboxInterval: ReturnType<typeof setInterval> | null = null;
 
+function runDeliveryOutboxFlush(logger?: LoggerLike): void {
+  void flushDeliveryOutbox({ logger }).then((result) => {
+    if (result.attempted > 0 || result.delivered > 0 || result.failed > 0) {
+      logger?.debug?.(`octoclaw delivery outbox flush attempted=${result.attempted} delivered=${result.delivered} failed=${result.failed} remaining=${result.remaining}`);
+    }
+  }).catch((error) => {
+    logger?.warn?.(`octoclaw delivery outbox flush failed: ${String(error)}`);
+  });
+}
 
 function runTaskStateRetention(logger?: LoggerLike): void {
   try {
@@ -1510,6 +1521,14 @@ export const plugin = {
     taskStateRetentionInterval = setInterval(() => {
       runTaskStateRetention(pi.logger);
     }, DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS);
+
+    if (deliveryOutboxInterval) {
+      clearInterval(deliveryOutboxInterval);
+    }
+    runDeliveryOutboxFlush(pi.logger);
+    deliveryOutboxInterval = setInterval(() => {
+      runDeliveryOutboxFlush(pi.logger);
+    }, 30_000);
 
     if (typeof pi.registerTool === "function") {
       for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent })) {

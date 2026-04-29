@@ -116,6 +116,15 @@ describe("child completion finalizer — completion file protocol", () => {
     expect(result.status).toBe("delivery_failed");
     expect(result.error).toContain("no_im_adapter_queued_for_retry");
 
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "wc-3",
+      workContractId: "wc-3",
+      status: "deliverable_ready",
+      resultMaterialized: true,
+      delivery_status: "queued_for_retry",
+    });
+
     const outboxPath = path.join(tmpDir, ".octoclaw", "delivery-outbox.json");
     const outbox = JSON.parse(fs.readFileSync(outboxPath, "utf-8")) as unknown[];
     expect(outbox.length).toBeGreaterThan(0);

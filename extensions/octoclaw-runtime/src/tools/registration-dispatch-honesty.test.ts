@@ -37,6 +37,12 @@ function statusTool() {
   return tool;
 }
 
+function taskActionTool() {
+  const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_task_action");
+  if (!tool) throw new Error("octoclaw_task_action tool not registered");
+  return tool;
+}
+
 function delegateDecision(route = "delegate") {
   return {
     request: { session_key: "session-dispatch-honesty" },
@@ -282,6 +288,36 @@ describe("octoclaw_dispatch honesty", () => {
     expect(output).not.toContain("task-runtime-stub-no-evidence");
     expect(output).not.toContain("completed(completed) | delegate | elapsed=0s");
     expect(output).not.toContain("workflow_healthy");
+  });
+
+  it("does not project policyState runtime truth even when it has spawn evidence", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-policy-only-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+    policyState.set("session-runtime-policy-only", {
+      prompt: "policy-only task should not survive status projection",
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: false,
+      decision: {
+        request: { session_key: "session-runtime-policy-only" },
+        route_decision: { route: "delegate", worker_pool: "octoclaw-research" },
+        runtime_truth: {
+          binding: { taskId: "task-policy-only", flowId: "flow-policy-only", status: "running", spawnExecuted: true },
+          evidence: { dispatchExecuted: true, spawnExecuted: true },
+        },
+      },
+    });
+
+    const response = await statusTool().execute({ format: "table" }, {});
+    const output = String((response.json as Record<string, unknown>).raw_output);
+
+    expect(output).not.toContain("task-policy-only");
+    expect(output).not.toContain("flow-policy-only");
+
+    const details = await taskActionTool().execute({ action: "details", taskId: "task-policy-only", format: "json" }, {});
+    expect(details.json).toMatchObject({ found: false, taskId: "task-policy-only" });
   });
 
   it("status panel projects stale running tasks with elapsed/model/backend fields", async () => {

@@ -2,12 +2,12 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { appendJsonl } from "./replay.js";
 import {
   preHintAllowedTools,
   runnerWorkflowTools,
   workflowEnforcementRule,
-  appendJsonl,
-} from "./replay-logger.js";
+} from "./policy-utils.js";
 
 describe("WorkContract tool guard projection", () => {
   it("adds WorkContract allowed tools to guard allowlists", () => {

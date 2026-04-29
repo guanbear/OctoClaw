@@ -13,12 +13,12 @@ import {
   resetRouteCommitAckState,
   sendRouteCommitAck,
 } from "../ack-route-commit.js";
+import { guardAssistantMessageForPolicyState } from "../../replay/message-guard.js";
 import {
-  guardAssistantMessageForPolicyState,
   isDelegatedRoute,
   routeHintRequired,
   shouldRetainPolicyStateOnAgentEnd,
-} from "../../replay/replay-logger.js";
+} from "../../replay/policy-utils.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -275,7 +275,7 @@ describe("WP2 regression: delegate ack text honesty", () => {
       timedOut: false,
     });
     const replaySpy = vi.spyOn(
-      await import("../../replay/replay-logger.js"),
+      await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry.js";
-import { guardAssistantMessageForPolicyState } from "./replay/replay-logger.js";
+import { guardAssistantMessageForPolicyState } from "./replay/message-guard.js";
 import { policyState } from "./state/policy-state.js";
 import { getToolRegistrations } from "./tools/registration.js";
 

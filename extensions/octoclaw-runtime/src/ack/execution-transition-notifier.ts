@@ -1,10 +1,11 @@
 import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import type { AnomalyNotice } from "@octoclaw/contracts/work-contract";
+import { appendToDeliveryOutbox } from "../delivery/delivery-outbox.js";
 import { sendIMMessage } from "../im/send.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
-import { recordPolicyReplay } from "../replay/replay-logger.js";
+import { recordPolicyReplay } from "../replay/replay.js";
 
 export type ExecutionTransitionKind =
   | "dispatch_materialized"
@@ -112,7 +113,7 @@ function compactDefined<T extends CompactParentPacket>(packet: T): T {
   return packet;
 }
 
-async function sendExecutionTransitionDirect(
+async function sendExecutionTransitionMessage(
   sessionKey: string,
   message: string,
   replyToMessageId?: string,
@@ -131,6 +132,7 @@ async function sendExecutionTransitionDirect(
     };
   }
 
+  const topLevelFallback = !asString(replyToMessageId) && !resolved.threadId;
   const result = await sendIMMessage({
     sessionKey,
     message,
@@ -143,7 +145,7 @@ async function sendExecutionTransitionDirect(
     delivered: result.sent,
     sent: result.sent,
     error: result.error || "",
-    reason: result.sent ? "channel_message_sent" : "channel_message_failed",
+    reason: result.sent ? (topLevelFallback ? "top_level_fallback" : "channel_message_sent") : "channel_message_failed",
     target: resolved.target,
     threadId: result.threadTs || resolved.threadId,
   };
@@ -352,7 +354,7 @@ export async function emitExecutionTransitionNotification(params: {
     };
   }
 
-  const result = await sendExecutionTransitionDirect(
+  const result = await sendExecutionTransitionMessage(
     params.sessionKey,
     text,
     params.replyToMessageId,
@@ -368,8 +370,20 @@ export async function emitExecutionTransitionNotification(params: {
   });
 
   const sent = Boolean(result.delivered || result.sent);
+  if (!sent && params.workContractId && ["dispatch_materialized", "spawn_started", "timed_out", "result_ready", "delivery_failed"].includes(params.transitionKind)) {
+    try {
+      appendToDeliveryOutbox({
+        workContractId: params.workContractId,
+        kind: "progress",
+        parentSessionKey: params.sessionKey,
+        replyToMessageId: params.replyToMessageId,
+        message: text,
+        cwd: params.cwd,
+      });
+    } catch {}
+  }
   const ackTargetResolutionState = sent ? "resolved" : (result.attempted ? "resolved_send_failed" : "no_valid_target");
-  const ackDeliveryState = sent ? "sent" : (result.attempted ? "failed" : "not_attempted");
+  const ackDeliveryState = sent ? "sent" : (result.attempted ? "failed" : "queued_for_retry");
 
   await recordExecutionTransitionReplay(replayParams, notificationKey, {
     ack_target_resolution_state: ackTargetResolutionState,

@@ -1,11 +1,11 @@
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
+import { compactPolicyPrompt } from "./replay/policy-utils.js";
 import {
-  compactPolicyPrompt,
   delegationFailureReply,
   guardAssistantMessageForPolicyState,
   sanitizeDelegationReasoning,
-} from "./replay/replay-logger.js";
+} from "./replay/message-guard.js";
 import {
   authoritativeDecisionRoute,
   canonicalizeDecisionForPolicyState,

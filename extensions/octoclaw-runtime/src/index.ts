@@ -26,7 +26,10 @@ export {
 } from "./resolve/policy-resolver.js";
 export * from "./state/policy-state.js";
 export * from "./ack/ack-guard.js";
-export * from "./replay/replay-logger.js";
+export * from "./receipt.js";
+export * from "./replay/replay.js";
+export * from "./replay/message-guard.js";
+export * from "./replay/policy-utils.js";
 export * from "./tools/registration.js";
 export { plugin as default } from "./extension-entry.js";
 export { plugin } from "./extension-entry.js";

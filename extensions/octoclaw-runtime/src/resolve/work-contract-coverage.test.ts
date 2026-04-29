@@ -5,7 +5,7 @@ import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
 import type { WorkContract, NativeBindingRef, ContextCoverageSnapshot, CoverageAuthority } from "@octoclaw/contracts/work-contract";
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
-import { buildPolicyResolvedReplayPayload } from "../replay/replay-logger.js";
+import { buildPolicyResolvedReplayPayload } from "../replay/replay.js";
 import { authoritativeDecisionRoute, canonicalizeDecisionForPolicyState } from "./route-helpers.js";
 import { resolveStatelessPolicyDecision } from "./policy-resolver.js";
 import type { PolicyStateEntry } from "../state/policy-state.js";

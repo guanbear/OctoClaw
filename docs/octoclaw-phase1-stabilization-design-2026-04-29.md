@@ -162,6 +162,7 @@ Task-state coupling:
 - Primary: `readTaskStateRecords()`.
 - Optional archive: `readArchivedTaskState()` when the format requests expired/history view.
 - No `policyState.entries()` fallback in `buildNativeStatusOutput`.
+- No `policyState` fallback in `octoclaw_task_action`; task details must start from durable task-state records, then optionally live-read the native adapter using the durable binding.
 
 Required writer rule:
 
@@ -179,6 +180,7 @@ Allowed `policyState` usage:
 Forbidden `policyState` usage:
 
 - `octoclaw_status` task list synthesis.
+- `octoclaw_task_action` task lookup/materialization fallback.
 - restart recovery source of truth.
 - `spawnExecuted` or `resultMaterialized` projection without durable task-state evidence.
 
@@ -305,6 +307,7 @@ Files:
 Acceptance:
 
 - `octoclaw_status` does not synthesize tasks from `policyState`.
+- `octoclaw_task_action` does not materialize missing tasks from `policyState`.
 - Clearing `policyState` does not remove persisted task-state status.
 - Dispatch success cannot claim spawn/result evidence without durable task-state record.
 
@@ -391,7 +394,7 @@ Phase 1 is done only when all checks pass:
 rg "replay-logger" extensions/octoclaw-runtime/src -g'*.ts'
 # expected: no source imports/hits except deleted file absent
 
-rg "deliveryRelay|DeliveryRelay|registerPendingDelivery|reconcilePendingDeliveriesForSession|recordDeliveryRelayEvent|resolveDeliveryRelayPath" extensions/octoclaw-runtime/src -g'*.ts'
+rg "deliveryRelay|DeliveryRelay|registerPendingDelivery|reconcilePendingDeliveriesForSession|recordDeliveryRelayEvent|resolveDeliveryRelayPath|delivery_relay|completion_relay" extensions/octoclaw-runtime/src -g'*.ts'
 # expected: no hits
 
 rg "export const ACK_TIMING" extensions/octoclaw-runtime/src/ack/ack-decision.ts

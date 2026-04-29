@@ -1,5 +1,5 @@
 import type { JudgeExecutionLayer } from "@octoclaw/policy/judge";
-import { type TurnExecutionReceipt, buildTurnExecutionReceipt } from "../replay/replay-logger.js";
+import { type TurnExecutionReceipt, buildTurnExecutionReceipt } from "../receipt.js";
 import { policyState } from "../state/policy-state.js";
 import { parseSessionRoute } from "./session.js";
 

@@ -439,7 +439,7 @@ function buildTemplateInputs(
   };
 }
 
-async function sendAckDirectDetailed(
+async function sendAckMessage(
   sessionKey: string,
   message: string,
   cwd?: string,
@@ -799,7 +799,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
         asString(effectiveCtx.cwd) || process.cwd(),
         { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), emoji: effectiveState.reactionAckEmoji || effectiveState.reaction_ack_emoji },
       )
-    : await sendAckDirectDetailed(
+    : await sendAckMessage(
         normalizedSessionKey,
         message,
         asString(effectiveCtx.cwd) || process.cwd(),
@@ -923,7 +923,7 @@ export async function sendAckDirect(
     });
     return Boolean(result?.sent);
   }
-  const result = await sendAckDirectDetailed(sessionKey, message, cwd, options);
+  const result = await sendAckMessage(sessionKey, message, cwd, options);
   return Boolean(result.delivered || result.sent);
 }
 

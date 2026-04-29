@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildTurnExecutionReceipt } from "./replay-logger.js";
+import { buildTurnExecutionReceipt } from "../receipt.js";
 
 describe("TurnExecutionReceipt", () => {
   it("builds receipt for delegated turn", () => {

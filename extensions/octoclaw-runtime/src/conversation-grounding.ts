@@ -85,8 +85,6 @@ interface TurnFacts {
   latestTaskEventKind: string;
   latestTaskEventMessage: string;
   deliveryEventKind: string;
-  finalDeliveryRelayEvent: string;
-  finalDeliveryRelayState: string;
   materializationStatus: string;
   executionKind: string;
   runnerPlanKind: string;
@@ -474,11 +472,6 @@ function deriveTaskEventsPath(taskStatePath = ""): string {
   return normalized ? path.join(path.dirname(normalized), "task-events.jsonl") : "";
 }
 
-function deriveDeliveryRelayPath(taskStatePath = ""): string {
-  const normalized = stringValue(taskStatePath);
-  return normalized ? path.join(path.dirname(normalized), "delivery-relay.jsonl") : "";
-}
-
 function buildTaskEventIndex(taskEventsPath = ""): Map<string, JsonRecord[]> {
   const events = readJsonl(taskEventsPath);
   const index = new Map<string, JsonRecord[]>();
@@ -488,25 +481,6 @@ function buildTaskEventIndex(taskEventsPath = ""): Map<string, JsonRecord[]> {
       continue;
     }
     index.set(taskId, [...(index.get(taskId) || []), event]);
-  }
-  return index;
-}
-
-function buildDeliveryRelayIndex(deliveryRelayPath = ""): Map<string, JsonRecord[]> {
-  const events = readJsonl(deliveryRelayPath);
-  const index = new Map<string, JsonRecord[]>();
-  for (const event of events) {
-    const sessionKey = stringValue(event.sessionKey);
-    const taskId = stringValue(event.taskId);
-    const runnerJobId = stringValue(event.runnerJobId);
-    const keys = [
-      sessionKey ? `session:${sessionKey}` : "",
-      taskId ? `task:${taskId}` : "",
-      runnerJobId ? `runner:${runnerJobId}` : "",
-    ].filter(Boolean);
-    for (const key of keys) {
-      index.set(key, [...(index.get(key) || []), event]);
-    }
   }
   return index;
 }
@@ -635,7 +609,6 @@ function buildTurnFacts(
   turn: ReplayTurn,
   taskIndex: Map<string, JsonRecord>,
   taskEventIndex: Map<string, JsonRecord[]>,
-  deliveryRelayIndex: Map<string, JsonRecord[]>,
 ): TurnFacts {
   const ackEvent = latestEvent(turn, "ack_sent") || {};
   const dispatch = latestEvent(turn, "dispatch_called") || {};
@@ -660,19 +633,8 @@ function buildTurnFacts(
   const deliveryEvent = [...taskEvents].reverse().find((event) => [
     "delivery_sent",
     "delivery_failed",
-    "completion_relay_sent",
-    "completion_relay_failed",
-    "completion_relay_resolution_failed",
     "user_notified",
   ].includes(stringValue(event.kind))) || {};
-  const relayEvents = Array.from(
-    new Set([
-      ...(taskId ? (deliveryRelayIndex.get(`task:${taskId}`) || []) : []),
-      ...(runnerJobId ? (deliveryRelayIndex.get(`runner:${runnerJobId}`) || []) : []),
-      ...((!taskId && !runnerJobId && turn.sessionKey) ? (deliveryRelayIndex.get(`session:${turn.sessionKey}`) || []) : []),
-    ]),
-  ).sort((left, right) => parseTimestamp(left.at) - parseTimestamp(right.at));
-  const finalRelay = relayEvents[relayEvents.length - 1] || {};
   const directToolEvents = turn.events.filter((event) => ["direct_tool_called", "tool_used"].includes(stringValue(event.event)));
   const state = normalizeText(stringValue(task.status));
   const actionAvailability = ["details", "queue", "timeline", "retrieve", "graph"];
@@ -699,8 +661,6 @@ function buildTurnFacts(
     latestTaskEventKind: stringValue(latestTaskEvent.kind),
     latestTaskEventMessage: stringValue(latestTaskEvent.message),
     deliveryEventKind: stringValue(deliveryEvent.kind),
-    finalDeliveryRelayEvent: stringValue(finalRelay.event),
-    finalDeliveryRelayState: stringValue(finalRelay.state),
     materializationStatus: stringValue(materialization.status),
     executionKind: stringValue(materialization.kind),
     runnerPlanKind: stringValue(runnerPlan.kind),
@@ -786,10 +746,9 @@ export function buildConversationIntentPacket(options: {
   const turns = groupedReplayTurns(readJsonl(stringValue(options.replayLogPath)));
   const taskIndex = buildTaskIndex(stringValue(options.taskStatePath));
   const taskEventIndex = buildTaskEventIndex(deriveTaskEventsPath(stringValue(options.taskStatePath)));
-  const deliveryRelayIndex = buildDeliveryRelayIndex(deriveDeliveryRelayPath(stringValue(options.taskStatePath)));
   const enrichedTurns = turns.map((turn) => ({
     ...turn,
-    facts: buildTurnFacts(turn, taskIndex, taskEventIndex, deliveryRelayIndex),
+    facts: buildTurnFacts(turn, taskIndex, taskEventIndex),
   }));
   const subjectTurn = selectSubjectTurn(enrichedTurns, prompt, Array.isArray(options.sessionKeys) ? options.sessionKeys : []);
 
@@ -948,10 +907,9 @@ export function buildConversationGrounding(options: {
   const turns = groupedReplayTurns(readJsonl(stringValue(options.replayLogPath)));
   const taskIndex = buildTaskIndex(stringValue(options.taskStatePath));
   const taskEventIndex = buildTaskEventIndex(deriveTaskEventsPath(stringValue(options.taskStatePath)));
-  const deliveryRelayIndex = buildDeliveryRelayIndex(deriveDeliveryRelayPath(stringValue(options.taskStatePath)));
   const enrichedTurns = turns.map((turn) => ({
     ...turn,
-    facts: buildTurnFacts(turn, taskIndex, taskEventIndex, deliveryRelayIndex),
+    facts: buildTurnFacts(turn, taskIndex, taskEventIndex),
   }));
   const subjectTurn = selectSubjectTurn(enrichedTurns, prompt, Array.isArray(options.sessionKeys) ? options.sessionKeys.map((item) => stringValue(item)) : []);
   if (!subjectTurn?.facts) {

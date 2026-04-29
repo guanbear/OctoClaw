@@ -1,3 +1,5 @@
+import { ACK_TIMING } from "./ack-timing.js";
+
 export interface AckDecisionPacket {
   route: "reply" | "delegate" | "pre_route" | "unknown";
   nowMs: number;
@@ -38,15 +40,6 @@ export interface AckDecision {
   modality?: "reaction" | "text";
   templateKey?: string;
 }
-
-export const ACK_TIMING = {
-  reaction_ack_ms: 800,
-  text_ack0_ms: 2500,
-  ack0_hard_ceiling_ms: 5000,
-  tier1_ms: 12000,
-  tier2_ms: 30000,
-  tier3_ms: 90000,
-} as const;
 
 function elapsedMs(packet: AckDecisionPacket): number {
   return Math.max(0, packet.nowMs - packet.inboundAtMs);

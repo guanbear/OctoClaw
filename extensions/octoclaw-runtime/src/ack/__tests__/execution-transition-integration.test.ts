@@ -18,7 +18,7 @@ import { envOverrides } from "../../resolve/env.js";
 import {
   buildTurnExecutionReceipt,
   emitResultReadyIfTransition,
-} from "../../replay/replay-logger.js";
+} from "../../receipt.js";
 import { getToolRegistrations } from "../../tools/registration.js";
 
 const adapter = {
@@ -40,7 +40,7 @@ vi.mock("../../im/index.js", () => ({
   getAdapterForSession: () => adapter,
 }));
 
-type ReplaySpy = MockInstance<typeof import("../../replay/replay-logger.js").recordPolicyReplay>;
+type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPolicyReplay>;
 type RunCommandSpy = MockInstance<typeof import("../../resolve/env.js").runCommand>;
 
 const tempDirs: string[] = [];
@@ -392,7 +392,7 @@ async function mockDelivery(): Promise<{ runCommandSpy: RunCommandSpy; replaySpy
     stderr: "",
     timedOut: false,
   });
-  const replaySpy = vi.spyOn(await import("../../replay/replay-logger.js"), "recordPolicyReplay");
+  const replaySpy = vi.spyOn(await import("../../replay/replay.js"), "recordPolicyReplay");
   return { runCommandSpy, replaySpy };
 }
 

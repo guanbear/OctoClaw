@@ -1,14 +1,13 @@
 import fsSync from "node:fs";
-import path from "node:path";
 import type { WorkerCompletionResult } from "@octoclaw/contracts/completion";
 import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
-import { getAdapterForSession } from "../im/index.js";
-import { resolveDeliveryOutboxPath, resolveWorkerCompletionPath, resolveWorkspaceRoot } from "../resolve/env.js";
+import { appendToDeliveryOutbox } from "../delivery/delivery-outbox.js";
+import { sendIMMessage } from "../im/send.js";
+import { resolveWorkerCompletionPath, resolveWorkspaceRoot } from "../resolve/env.js";
 import {
   upsertTaskStateRecord,
   type TaskStateRecord,
 } from "../state/task-state-store.js";
-import { atomicWriteJsonSync } from "../util/atomic-write.js";
 import { materializeWorkContractSuccess } from "../work-contract/materializer.js";
 import { loadWorkContract } from "../work-contract/store.js";
 
@@ -40,20 +39,6 @@ export interface ChildCompletionFinalizerResult {
 }
 
 const activeFinalizers = new Map<string, ReturnType<typeof setTimeout>>();
-
-
-function readJsonFile<T>(filePath: string, fallback: T): T {
-  try {
-    return JSON.parse(fsSync.readFileSync(filePath, "utf-8")) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJsonFile(filePath: string, value: unknown): void {
-  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-  atomicWriteJsonSync(filePath, value);
-}
 
 function readCompletionFile(workContractId: string): WorkerCompletionResult | null {
   try {
@@ -183,18 +168,14 @@ function materializeCompletedWorkContract(options: ChildCompletionFinalizerOptio
 
 function queueOutboxDelivery(options: ChildCompletionFinalizerOptions, message: string): void {
   try {
-    const outboxPath = resolveDeliveryOutboxPath();
-    const outbox = readJsonFile<unknown[]>(outboxPath, []);
-    outbox.push({
+    appendToDeliveryOutbox({
       workContractId: options.workContractId,
+      kind: "final_result",
       parentSessionKey: options.parentSessionKey,
       replyToMessageId: options.replyToMessageId,
       message,
-      createdAt: new Date().toISOString(),
-      attempts: 0,
-      nextRetryAt: new Date(Date.now() + 30_000).toISOString(),
+      cwd: options.cwd,
     });
-    writeJsonFile(outboxPath, outbox);
   } catch {}
 }
 
@@ -203,10 +184,8 @@ async function sendCompletionMessage(options: ChildCompletionFinalizerOptions, m
     const result = await options.sendFinalMessage({ sessionKey: options.parentSessionKey, message, replyToMessageId: options.replyToMessageId, cwd: options.cwd });
     return { sent: result.sent || result.delivered, error: result.error || "" };
   }
-  const adapter = getAdapterForSession(options.parentSessionKey);
-  if (!adapter) return { sent: false, error: "no_im_adapter_queued_for_retry" };
-  const result = await adapter.send({ sessionKey: options.parentSessionKey, message, replyToMessageId: options.replyToMessageId, timeoutMs: 8000, cwd: options.cwd || resolveWorkspaceRoot() });
-  return { sent: result.sent || result.delivered, error: result.error || "" };
+  const result = await sendIMMessage({ sessionKey: options.parentSessionKey, message, replyToMessageId: options.replyToMessageId, timeoutMs: 8000, cwd: options.cwd || resolveWorkspaceRoot() });
+  return { sent: result.sent, error: result.error === "no_im_adapter" ? "no_im_adapter_queued_for_retry" : result.error || "" };
 }
 
 function markTimedOut(options: ChildCompletionFinalizerOptions, timeoutMs: number): void {
@@ -234,12 +213,14 @@ export async function finalizeChildSessionOnce(options: ChildCompletionFinalizer
   if (!completion) return { status: "pending" };
   const message = formatDeliveryMessage(completion, options);
   const result = await sendCompletionMessage(options, message);
-  if (result.error === "no_im_adapter_queued_for_retry") {
+  if (!result.sent) {
+    const deliveryStatus = "queued_for_retry";
     queueOutboxDelivery(options, message);
-    updateTaskStateCompleted(options, completion, "queued_for_retry");
-    return { status: "delivery_failed", resultText: completion.summary, error: result.error };
+    updateTaskStateCompleted(options, completion, deliveryStatus);
+    materializeCompletedWorkContract(options, deliveryStatus);
+    return { status: "delivery_failed", resultText: completion.summary, error: result.error || deliveryStatus };
   }
-  const deliveryStatus = result.sent ? "delivered" : "failed";
+  const deliveryStatus = "delivered";
   updateTaskStateCompleted(options, completion, deliveryStatus);
   materializeCompletedWorkContract(options, deliveryStatus);
   return { status: result.sent ? "completed" : "delivery_failed", resultText: completion.summary, sent: result.sent, error: result.error || undefined };
