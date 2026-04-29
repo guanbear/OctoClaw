@@ -85,6 +85,43 @@ export async function buildWorkspace(octoclawRoot: string): Promise<void> {
 export async function uninstallDeployment(openclawHome: string): Promise<void> {
   await removeMatching(path.join(openclawHome, "extensions"), (name) => name.startsWith("octoclaw-"));
   await removeMatching(path.join(openclawHome, "packages"), (name) => name.startsWith("octoclaw-"));
+  await removeOpenClawPluginEntry(openclawHome);
+}
+
+export async function syncOpenClawPluginEntry(openclawHome: string, octoclawRoot: string): Promise<void> {
+  const openclawConfigPath = path.join(openclawHome, "openclaw.json");
+  const config = await readJson(openclawConfigPath) ?? {};
+  const plugins = ensureRecord(config, "plugins");
+  const entries = ensureRecord(plugins, "entries");
+  const entry = isRecord(entries["octoclaw-runtime"]) ? entries["octoclaw-runtime"] as JsonRecord : {};
+  const pluginConfig = isRecord(entry.config) ? entry.config as JsonRecord : {};
+  const hooks = isRecord(entry.hooks) ? entry.hooks as JsonRecord : {};
+
+  entry.enabled = true;
+  entry.config = {
+    ...pluginConfig,
+    octoclawRoot,
+    workspaceRoot: nonEmptyString(pluginConfig.workspaceRoot) ?? path.join(openclawHome, "workspace"),
+  };
+  entry.hooks = {
+    ...hooks,
+    allowPromptInjection: hooks.allowPromptInjection ?? true,
+  };
+  entries["octoclaw-runtime"] = entry;
+
+  await fs.mkdir(path.dirname(openclawConfigPath), { recursive: true });
+  await fs.writeFile(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+export async function removeOpenClawPluginEntry(openclawHome: string): Promise<void> {
+  const openclawConfigPath = path.join(openclawHome, "openclaw.json");
+  const config = await readJson(openclawConfigPath);
+  if (!config) return;
+  const plugins = isRecord(config.plugins) ? config.plugins : null;
+  const entries = plugins && isRecord(plugins.entries) ? plugins.entries : null;
+  if (!entries || !("octoclaw-runtime" in entries)) return;
+  delete entries["octoclaw-runtime"];
+  await fs.writeFile(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
 export async function writeSourceManifest(openclawHome: string, octoclawRoot: string): Promise<void> {
@@ -165,10 +202,26 @@ async function removeMatching(parentDir: string, predicate: (name: string) => bo
 async function readJson(filePath: string): Promise<JsonRecord | null> {
   try {
     const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as JsonRecord : null;
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function ensureRecord(parent: JsonRecord, key: string): JsonRecord {
+  const current = parent[key];
+  if (isRecord(current)) return current;
+  const next: JsonRecord = {};
+  parent[key] = next;
+  return next;
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {

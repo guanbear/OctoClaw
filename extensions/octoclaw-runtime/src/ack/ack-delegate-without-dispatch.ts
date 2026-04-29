@@ -246,9 +246,6 @@ export async function sendDelegateWithoutDispatchNotice(params: {
   }
 
   const replyAnchor = params.replyToMessageId || asString(params.state.message_id) || asString(params.state.inboundMessageTs) || undefined;
-  if (!replyAnchor && !targetResolution.threadId) {
-    return { sent: false, skipped: true, reason: "no_valid_thread_anchor", ackKey: key, notificationDeliveryState: "not_attempted" };
-  }
 
   const claim = checkAndSetDelegateWithoutDispatch(key, "delegate_without_dispatch");
   if (!claim.allowed) {

@@ -12,7 +12,7 @@ describe("manage tool", () => {
 
     expect(config).toEqual({
       repoUrl: "https://github.com/guanbear/OctoClaw.git",
-      ref: "release/0.3.0-ts-rebuild",
+      ref: "refactor/0.4.0-stable",
       installDir: "/Users/tester/.openclaw/workspace/openclaw/repos/octoclaw",
       openclawHome: "/Users/tester/.openclaw",
     });
@@ -21,13 +21,13 @@ describe("manage tool", () => {
   it("buildStatusOutput", () => {
     const status = buildStatusOutput({
         repoUrl: "https://github.com/guanbear/OctoClaw.git",
-        ref: "release/0.3.0-ts-rebuild",
+        ref: "refactor/0.4.0-stable",
         installDir: "/Users/tester/.openclaw/workspace/openclaw/repos/octoclaw",
         openclawHome: "/Users/tester/.openclaw",
       });
 
     expect(status).toEqual({
-      ref: "release/0.3.0-ts-rebuild",
+      ref: "refactor/0.4.0-stable",
       commit: "unknown",
       installed: true,
       extensionPresent: true,
@@ -36,18 +36,18 @@ describe("manage tool", () => {
 
   it("formatStatusOutput produces human-readable output", () => {
     const output = formatStatusOutput({
-      ref: "release/0.3.0-ts-rebuild",
+      ref: "refactor/0.4.0-stable",
       commit: "unknown",
       installed: true,
       extensionPresent: true,
     });
 
     expect(output).toContain("OctoClaw managed deployment status");
-    expect(output).toContain("ref=release/0.3.0-ts-rebuild");
+    expect(output).toContain("ref=refactor/0.4.0-stable");
     expect(output).toContain("installed=true");
   });
 
-  it("DEFAULT_REF is release/0.3.0-ts-rebuild", () => {
-    expect(DEFAULT_REF).toBe("release/0.3.0-ts-rebuild");
+  it("DEFAULT_REF is refactor/0.4.0-stable", () => {
+    expect(DEFAULT_REF).toBe("refactor/0.4.0-stable");
   });
 });

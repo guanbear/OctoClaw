@@ -101,7 +101,7 @@ describe("delegate without dispatch notice", () => {
 
 
 
-  it("skips delivery without a current reply or thread anchor", async () => {
+  it("sends delivery without a current reply or thread anchor", async () => {
     const { runCommandSpy } = await mockDelivery();
 
     const result = await sendDelegateWithoutDispatchNotice(noticeParams({
@@ -111,11 +111,11 @@ describe("delegate without dispatch notice", () => {
     }));
 
     expect(result).toEqual(expect.objectContaining({
-      skipped: true,
-      reason: "no_valid_thread_anchor",
-      notificationDeliveryState: "not_attempted",
+      sent: true,
+      skipped: false,
+      notificationDeliveryState: "sent",
     }));
-    expect(runCommandSpy).not.toHaveBeenCalled();
+    expect(runCommandSpy).toHaveBeenCalledOnce();
   });
 
   it("allows delivery when the session key itself carries a thread anchor", async () => {

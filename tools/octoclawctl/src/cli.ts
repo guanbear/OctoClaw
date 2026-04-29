@@ -17,7 +17,7 @@ import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMar
 import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour } from "./nightly-eval/index.js";
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
-import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
+import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOpenClawPluginEntry, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
 import { readConfig, syncToOpenClawPluginConfig } from "./config.js";
 import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
@@ -1800,6 +1800,7 @@ async function runInstallCommand(parsed: ParsedCliArgs, env: Record<string, stri
     await setupSymlinks(openclawHome);
     const config = await readConfig(openclawHome);
     await syncToOpenClawPluginConfig(openclawHome, config);
+    await syncOpenClawPluginEntry(openclawHome, octoclawRoot);
     await writeSourceManifest(openclawHome, octoclawRoot);
     await validateLoad(openclawHome);
     if (parsed.restartServices) {

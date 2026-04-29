@@ -205,8 +205,41 @@ describe("octoclawctl cli", () => {
 
       const deployedManifest = JSON.parse(await fs.readFile(path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json"), "utf8"));
       expect(deployedManifest.pluginConfig.judgeFast.modelId).toBe("deploy-model");
+      const openclawConfig = JSON.parse(await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8"));
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.octoclawRoot).toBe(repoRoot);
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.workspaceRoot).toBe(path.join(openclawHome, "workspace"));
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"].hooks.allowPromptInjection).toBe(true);
       expect(await fs.readFile(path.join(openclawHome, "packages", "octoclaw-contracts", "dist", "index.js"), "utf8")).toContain("export");
       expect(await fs.readFile(path.join(openclawHome, "octoclaw-source-manifest.json"), "utf8")).toContain("test-commit");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uninstall removes deployed packages, extensions, and OpenClaw plugin entry", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `uninstall-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    try {
+      await fs.mkdir(path.join(openclawHome, "extensions", "octoclaw-runtime"), { recursive: true });
+      await fs.mkdir(path.join(openclawHome, "packages", "octoclaw-contracts"), { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
+        plugins: {
+          entries: {
+            "octoclaw-runtime": { enabled: true, config: { octoclawRoot: "/old/root" } },
+            other: { enabled: true },
+          },
+        },
+      }), "utf8");
+
+      const capture = createIo();
+      const exitCode = await main(["uninstall", "--openclaw-home", openclawHome], {}, capture.io);
+      expect(exitCode).toBe(0);
+
+      await runTestCommand("test", ["!", "-e", path.join(openclawHome, "extensions", "octoclaw-runtime")]);
+      await runTestCommand("test", ["!", "-e", path.join(openclawHome, "packages", "octoclaw-contracts")]);
+      const openclawConfig = JSON.parse(await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8"));
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"]).toBeUndefined();
+      expect(openclawConfig.plugins.entries.other.enabled).toBe(true);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

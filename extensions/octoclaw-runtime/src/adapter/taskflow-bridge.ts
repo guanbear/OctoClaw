@@ -257,10 +257,6 @@ interface HashedBundleSpec {
 }
 
 const HASHED_BUNDLE_SPECS: Record<string, HashedBundleSpec> = {
-  "tasks/task-executor.js": {
-    filePrefixes: ["task-executor-"],
-    markers: ["createQueuedTaskRun", "createRunningTaskRun", "startTaskRunByRunId"],
-  },
   "tasks/task-registry.js": {
     filePrefixes: ["task-registry-"],
     markers: ["getTaskById", "markTaskTerminalById"],
