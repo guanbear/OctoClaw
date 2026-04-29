@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDetachedTaskLifecycleRuntime, type DetachedRunningTaskCreateParams, type DetachedTaskCancelParams, type DetachedTaskCompleteParams, type DetachedTaskCreateParams, type DetachedTaskDeliveryStatusParams, type DetachedTaskFailParams, type DetachedTaskProgressParams, type DetachedTaskRecord, type DetachedTaskRegistryCore, type DetachedTaskStartParams } from "./detached-task-runtime.js";
-import { resolveExport, requireFunctionWithAliases, TASK_EXECUTOR_ALIASES, TASK_REGISTRY_ALIASES } from "./detached-task-runtime-host.js";
+import { resolveExport, requireFunctionWithAliases, TASK_EXECUTOR_ALIASES, TASK_REGISTRY_ALIASES } from "./detached-task-runtime-stub-compat.js";
+import { createHostDetachedTaskLifecycleRuntime } from "./detached-task-runtime-host.js";
 import { loadOpenClawDistModule } from "./taskflow-bridge.js";
 import type { BoundTaskFlowPort, TaskFlowPort } from "../ports/taskflow-port.js";
 
@@ -34,6 +35,35 @@ function createTaskFlowPortStub(overrides: Partial<BoundTaskFlowPort> = {}): Tas
 }
 
 describe("detached task lifecycle runtime", () => {
+  it("creates a host stub runtime without loading OpenClaw internals", async () => {
+    const runtime = await createHostDetachedTaskLifecycleRuntime();
+    const queued = runtime.createQueuedTaskRun({
+      runtime: "subagent",
+      task: "queue safely",
+      requesterSessionKey: "agent:main:main",
+      parentFlowId: "flow-stub",
+    });
+    const running = runtime.createRunningTaskRun({
+      runtime: "subagent",
+      task: "run safely",
+      requesterSessionKey: "agent:main:main",
+      parentFlowId: "flow-stub",
+    });
+
+    expect(queued).toMatchObject({
+      requesterSessionKey: "agent:main:main",
+      parentFlowId: "flow-stub",
+      status: "queued",
+    });
+    expect(running).toMatchObject({
+      requesterSessionKey: "agent:main:main",
+      parentFlowId: "flow-stub",
+      status: "running",
+    });
+    expect(runtime.startTaskRunByRunId({ runId: "missing" })).toEqual([]);
+    await expect(runtime.cancelDetachedTaskRunById({ cfg: {}, taskId: "missing" })).resolves.toEqual({ found: false, cancelled: false });
+  });
+
   it("delegates lifecycle mutations to the core task executor", () => {
     const calls: string[] = [];
     const queuedTask: DetachedTaskRecord = { taskId: "task-queued" };
