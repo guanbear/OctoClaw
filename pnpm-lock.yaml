@@ -15,41 +15,11 @@ importers:
         specifier: ^3.2.1
         version: 3.2.4
 
-  extensions/octoclaw-delegation:
-    dependencies:
-      '@octoclaw/contracts':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-contracts
-      '@octoclaw/policy':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-policy
-      '@octoclaw/runtime-core':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-runtime-core
-
-  extensions/octoclaw-fast-reply:
-    dependencies:
-      '@octoclaw/contracts':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-contracts
-      '@octoclaw/policy':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-policy
-      '@octoclaw/runtime-core':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-runtime-core
-
   extensions/octoclaw-runtime:
     dependencies:
       '@octoclaw/contracts':
         specifier: workspace:*
         version: link:../../packages/octoclaw-contracts
-      '@octoclaw/delegation':
-        specifier: workspace:*
-        version: link:../octoclaw-delegation
-      '@octoclaw/fast-reply':
-        specifier: workspace:*
-        version: link:../octoclaw-fast-reply
       '@octoclaw/policy':
         specifier: workspace:*
         version: link:../../packages/octoclaw-policy

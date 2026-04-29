@@ -140,8 +140,6 @@ const DEPLOY_PACKAGE_NAMES = [
   "octoclaw-contracts",
   "octoclaw-policy",
   "octoclaw-runtime-core",
-  "octoclaw-delegation",
-  "octoclaw-fast-reply",
   "octoclaw-status-surface",
 ];
 

@@ -5,12 +5,18 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../../packages/octoclaw-contracts" },
-    { "path": "../../packages/octoclaw-policy" },
-    { "path": "../../packages/octoclaw-runtime-core" },
-    { "path": "../octoclaw-delegation" },
-    { "path": "../octoclaw-fast-reply" }
+    {
+      "path": "../../packages/octoclaw-contracts"
+    },
+    {
+      "path": "../../packages/octoclaw-policy"
+    },
+    {
+      "path": "../../packages/octoclaw-runtime-core"
+    }
   ]
 }

@@ -21,8 +21,8 @@ import type { DelegateHandoffPacket } from "@octoclaw/contracts/delegate-context
 import type { PolicyDecision } from "@octoclaw/policy/judge";
 import { createOctoClawRuntimePlugin } from "./plugin.js";
 import type { NativeHelperInvoker } from "./adapter/native-helper.js";
-import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "@octoclaw/delegation";
-import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "@octoclaw/fast-reply";
+import { buildCompoundDelegationPlaceholder, materializeDelegatedWork } from "./payloads/delegation/index.js";
+import { buildFastReplyAck, buildDirectReply, buildDirectReplyContext } from "./payloads/fast-reply/index.js";
 import { isObserveMode } from "./resolve/route-helpers.js";
 import { buildDelegateHandoffPacket } from "./context/delegate-packets.js";
 

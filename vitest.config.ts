@@ -38,8 +38,6 @@ export default defineConfig({
       { find: "@octoclaw/runtime-core/recovery", replacement: sourcePath("packages/octoclaw-runtime-core/src/recovery/index.ts") },
       { find: "@octoclaw/runtime-core/requests", replacement: sourcePath("packages/octoclaw-runtime-core/src/requests/index.ts") },
       { find: "@octoclaw/runtime-core", replacement: sourcePath("packages/octoclaw-runtime-core/src/index.ts") },
-      { find: "@octoclaw/delegation", replacement: sourcePath("extensions/octoclaw-delegation/src/index.ts") },
-      { find: "@octoclaw/fast-reply", replacement: sourcePath("extensions/octoclaw-fast-reply/src/index.ts") },
       { find: "@octoclaw/status-surface", replacement: sourcePath("extensions/octoclaw-status-surface/src/index.ts") },
     ],
   },

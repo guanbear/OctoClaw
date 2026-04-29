@@ -10,22 +10,53 @@
     "openclaw.plugin.json"
   ],
   "exports": {
-    ".": { "types": "./src/index.ts", "default": "./dist/index.js" },
-    "./plugin": { "types": "./src/plugin.ts", "default": "./dist/plugin.js" },
-    "./config": { "types": "./src/config/index.ts", "default": "./dist/config/index.js" },
-    "./webhook-surface": { "types": "./src/adapter/webhook-surface.ts", "default": "./dist/adapter/webhook-surface.js" },
-    "./state-surface": { "types": "./src/adapter/state-surface.ts", "default": "./dist/adapter/state-surface.js" },
-    "./runtime-payloads": { "types": "./src/runtime-payloads.ts", "default": "./dist/runtime-payloads.js" },
-    "./bridge": { "types": "./src/bridge.ts", "default": "./dist/bridge.js" },
-    "./extension-entry": { "types": "./src/extension-entry.ts", "default": "./dist/extension-entry.js" },
-    "./conversation-grounding": { "types": "./src/conversation-grounding.ts", "default": "./dist/conversation-grounding.js" },
-    "./policy-resolver": { "types": "./src/resolve/policy-resolver.ts", "default": "./dist/resolve/policy-resolver.js" },
-    "./tools": { "types": "./src/tools/registration.ts", "default": "./dist/tools/registration.js" }
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./src/plugin.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./config": {
+      "types": "./src/config/index.ts",
+      "default": "./dist/config/index.js"
+    },
+    "./webhook-surface": {
+      "types": "./src/adapter/webhook-surface.ts",
+      "default": "./dist/adapter/webhook-surface.js"
+    },
+    "./state-surface": {
+      "types": "./src/adapter/state-surface.ts",
+      "default": "./dist/adapter/state-surface.js"
+    },
+    "./runtime-payloads": {
+      "types": "./src/runtime-payloads.ts",
+      "default": "./dist/runtime-payloads.js"
+    },
+    "./bridge": {
+      "types": "./src/bridge.ts",
+      "default": "./dist/bridge.js"
+    },
+    "./extension-entry": {
+      "types": "./src/extension-entry.ts",
+      "default": "./dist/extension-entry.js"
+    },
+    "./conversation-grounding": {
+      "types": "./src/conversation-grounding.ts",
+      "default": "./dist/conversation-grounding.js"
+    },
+    "./policy-resolver": {
+      "types": "./src/resolve/policy-resolver.ts",
+      "default": "./dist/resolve/policy-resolver.js"
+    },
+    "./tools": {
+      "types": "./src/tools/registration.ts",
+      "default": "./dist/tools/registration.js"
+    }
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*",
-    "@octoclaw/delegation": "workspace:*",
-    "@octoclaw/fast-reply": "workspace:*",
     "@octoclaw/policy": "workspace:*",
     "@octoclaw/runtime-core": "workspace:*"
   },

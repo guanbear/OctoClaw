@@ -1,15 +1,29 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/octoclaw-contracts" },
-    { "path": "packages/octoclaw-policy" },
-    { "path": "packages/octoclaw-runtime-core" },
-    { "path": "extensions/octoclaw-runtime" },
-    { "path": "extensions/octoclaw-delegation" },
-    { "path": "extensions/octoclaw-fast-reply" },
-    { "path": "extensions/octoclaw-status-surface" },
-    { "path": "tools/octoclawctl" },
-    { "path": "tools/install" },
-    { "path": "tools/manage" }
+    {
+      "path": "packages/octoclaw-contracts"
+    },
+    {
+      "path": "packages/octoclaw-policy"
+    },
+    {
+      "path": "packages/octoclaw-runtime-core"
+    },
+    {
+      "path": "extensions/octoclaw-runtime"
+    },
+    {
+      "path": "extensions/octoclaw-status-surface"
+    },
+    {
+      "path": "tools/octoclawctl"
+    },
+    {
+      "path": "tools/install"
+    },
+    {
+      "path": "tools/manage"
+    }
   ]
 }
