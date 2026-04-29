@@ -381,6 +381,29 @@ describe("octoclaw_route_hint policy state aliases", () => {
 });
 
 
+describe("plugin enabled config", () => {
+  it("does not register hooks or tools when disabled", () => {
+    const on = vi.fn();
+    const registerTool = vi.fn();
+    const registerCommand = vi.fn();
+    const info = vi.fn();
+
+    plugin.register({
+      pluginConfig: { enabled: false },
+      on,
+      registerTool,
+      registerCommand,
+      logger: { info },
+    });
+
+    expect(on).not.toHaveBeenCalled();
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(registerCommand).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith("octoclaw-runtime: disabled via config (enabled=false), skipping hook registration");
+  });
+});
+
+
 describe("before_tool_call route hint guard", () => {
 
 

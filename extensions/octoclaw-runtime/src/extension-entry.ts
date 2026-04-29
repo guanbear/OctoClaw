@@ -678,6 +678,8 @@ export const plugin = {
   name: "OctoClaw Runtime",
   description: "Runtime policy hooks, dispatch tools, and replay logging for OctoClaw",
   register(pi: PluginInterface): void {
+    if (pi.pluginConfig?.enabled === false) return void pi.logger?.info?.("octoclaw-runtime: disabled via config (enabled=false), skipping hook registration");
+
     envOverrides.octoclawRoot = stringValue(pi.pluginConfig?.octoclawRoot);
     envOverrides.workspaceRoot = stringValue(pi.pluginConfig?.workspaceRoot);
 

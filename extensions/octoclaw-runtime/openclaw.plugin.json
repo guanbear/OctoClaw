@@ -11,6 +11,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable or disable OctoClaw. Set false to disable all hooks without uninstalling."
+      },
       "octoclawRoot": {
         "type": "string",
         "minLength": 1,
@@ -21,77 +26,61 @@
         "minLength": 1,
         "description": "Override WORKSPACE_ROOT path"
       },
-      "ackTimerFirstTierMs": {
-        "type": "number",
-        "minimum": 10000,
-        "description": "ACK timer first tier timeout in milliseconds (default 60000)"
-      },
-      "ackTimerTierCount": {
-        "type": "number",
-        "minimum": 1,
-        "maximum": 6,
-        "description": "ACK timer tier count (default 3, max 6)"
-      },
       "delegationEnabled": {
         "type": "boolean",
         "default": true,
-        "description": "Enable delegation/runner routing. When false, all requests go direct (reply)"
+        "description": "Enable delegation routing. When false, all requests route to reply."
       },
       "judgeFast": {
         "type": "object",
-        "description": "LLM semantic routing judge configuration",
+        "description": "LLM semantic routing judge (optional, any OpenAI-compatible endpoint)",
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "shadowMode": {
             "type": "boolean",
-            "default": false
+            "default": false,
+            "description": "Log judge decisions but don't apply them. Safe for testing."
           },
           "modelId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "Model ID, e.g. 'llama-3.1-8b-instant' or 'qwen2.5:3b'"
           },
           "baseUrl": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "OpenAI-compatible endpoint, e.g. Groq or local Ollama"
           },
           "apiKey": {
             "type": "string",
-            "minLength": 1
+            "default": ""
           },
           "timeoutMs": {
             "type": "number",
             "minimum": 500,
-            "default": 3000
-          },
-          "timeoutLocalMs": {
-            "type": "number",
-            "minimum": 300,
-            "default": 800
+            "default": 1200,
+            "description": "Judge call timeout in ms. 800ms recommended for local Ollama."
           },
           "minConfidence": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "default": 0.6
-          },
-          "local": {
-            "type": "boolean",
-            "default": false
+            "default": 0.6,
+            "description": "Minimum confidence to use judge result. Below this, falls back to main agent."
           },
           "judgeAckEnabled": {
             "type": "boolean",
-            "description": "Use judge-generated ack_text. Local default true, remote default false."
-          },
-          "ackReactionEmoji": {
-            "type": "string",
-            "description": "Emoji name to react with on message receipt (e.g. 'ok_hand'). Empty to disable.",
-            "default": ""
+            "default": true,
+            "description": "Use judge-generated ack_text for the initial ACK message."
           }
         },
-        "required": ["modelId", "baseUrl", "apiKey"],
+        "required": [
+          "modelId",
+          "baseUrl"
+        ],
         "additionalProperties": false
       }
     }
