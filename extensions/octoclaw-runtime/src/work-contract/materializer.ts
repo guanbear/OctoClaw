@@ -53,6 +53,8 @@ function mapSubstrateToContractStatus(substrate: string | undefined): WorkContra
       return "blocked";
     case "cancelled":
       return "cancelled";
+    case "lost":
+      return "failed";
     default:
       return "queued";
   }

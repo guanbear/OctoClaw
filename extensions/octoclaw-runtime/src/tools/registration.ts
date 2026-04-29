@@ -9,7 +9,6 @@ import {
 import {
   envOverrides,
   resolveReplayLogPath,
-  resolveTaskStatePath,
   resolveWorkerCompletionPath,
   stableId,
   truncateText,
@@ -18,6 +17,11 @@ import {
   pruneTaskStateCache,
   readArchivedTaskState,
 } from "../state/task-state-retention.js";
+import {
+  readTaskStateRecords,
+  upsertTaskStateRecord,
+  type TaskStateRecord,
+} from "../state/task-state-store.js";
 import {
   type NativeHelperInvoker,
 } from "../adapter/native-helper.js";
@@ -54,19 +58,7 @@ import { materializeWorkContractSuccess, materializeWorkContractFailure } from "
 import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
-import fsSync from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { atomicWriteJsonSync } from "../util/atomic-write.js";
-
-interface FsSyncLike {
-  mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
-  readFileSync(pathname: string, encoding: string): string;
-  writeFileSync(pathname: string, data: string, encoding: string): void;
-}
-
-const fsSyncLike = fsSync as unknown as FsSyncLike;
-
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
@@ -151,27 +143,10 @@ function isSyntheticTestTaskState(record: RuntimeTaskStateRecord): boolean {
 async function upsertTaskStateCache(record: RuntimeTaskStateRecord): Promise<void> {
   try {
     if (!envOverrides.workspaceRoot && isSyntheticTestTaskState(record)) return;
-    const taskPath = resolveTaskStatePath();
-    fsSyncLike.mkdirSync(path.dirname(taskPath), { recursive: true });
-    let existing: { tasks?: unknown[] } = { tasks: [] };
-    try {
-      const content = fsSyncLike.readFileSync(taskPath, "utf-8");
-      existing = JSON.parse(content) as { tasks?: unknown[] };
-    } catch { /* file doesn't exist yet */ }
-    const tasks = Array.isArray(existing.tasks) ? existing.tasks as RuntimeTaskStateRecord[] : [];
-    const idx = tasks.findIndex((t) => asString(t.id) === asString(record.id));
-    const entry: RuntimeTaskStateRecord = {
-      ...record,
-      updated_at: record.updated_at || new Date().toISOString(),
-    };
-    if (idx >= 0) {
-      tasks[idx] = entry;
-    } else {
-      tasks.unshift(entry);
-    }
-    atomicWriteJsonSync(taskPath, { tasks });
+    upsertTaskStateRecord(record);
   } catch { /* best effort cache write */ }
 }
+
 
 export interface ToolRegistration {
   name: string;
@@ -456,7 +431,7 @@ function parseTaskAction(rawText: string): { action: string; taskId: string } {
   };
 }
 
-interface RuntimeTaskStateRecord extends UnknownRecord {
+interface RuntimeTaskStateRecord extends TaskStateRecord {
   id?: unknown;
   status?: unknown;
   summary?: unknown;
@@ -513,17 +488,8 @@ function dedupeTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskSta
 }
 
 async function readActiveRuntimeTaskState(options: { includeSynthetic?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
-  try {
-    const fs = await import("node:fs");
-    const content = fs.default.readFileSync(resolveTaskStatePath(), "utf-8");
-    const parsed = JSON.parse(content) as { tasks?: unknown };
-    return Array.isArray(parsed.tasks)
-      ? (parsed.tasks.filter(isRecord) as RuntimeTaskStateRecord[])
-        .filter((task) => options.includeSynthetic === true || !isSyntheticTestTaskState(task))
-      : [];
-  } catch {
-    return [];
-  }
+  const tasks = readTaskStateRecords().filter(isRecord) as RuntimeTaskStateRecord[];
+  return tasks.filter((task) => options.includeSynthetic === true || !isSyntheticTestTaskState(task));
 }
 
 async function readRuntimeTaskState(options: { includeArchive?: boolean; includeSynthetic?: boolean } = {}): Promise<RuntimeTaskStateRecord[]> {
@@ -533,6 +499,7 @@ async function readRuntimeTaskState(options: { includeArchive?: boolean; include
     .filter((task) => options.includeSynthetic === true || !isSyntheticTestTaskState(task));
   return dedupeTaskStateRecords([...activeTasks, ...archivedTasks]);
 }
+
 
 function pruneRuntimeTaskStateCache(): { archived: number; deletedArchiveEntries: number; skipped: boolean; reason: string } {
   try {
@@ -2189,10 +2156,20 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           ? nativeSubstrateState && nativeSubstrateState !== "queued" ? nativeSubstrateState : "running"
           : "queued";
         const childSessionKey = spawnEvidence.childSessionKey || nativeBinding?.childSessionKey || dispatchWorkContract?.continuity.preferredChildSessionKey || undefined;
-        if (asString(materialization.task_id)) {
+        if (asString(materialization.task_id) || workContractIdForDispatch) {
           await upsertTaskStateCache({
-            id: materialization.task_id,
-            flow_id: asString(materialization.flow_id),
+            id: workContractIdForDispatch || asString(materialization.task_id),
+            workContractId: workContractIdForDispatch || undefined,
+            work_contract_id: workContractIdForDispatch || undefined,
+            taskId: asString(materialization.task_id) || materializedNativeTaskId || undefined,
+            task_id: asString(materialization.task_id) || materializedNativeTaskId || undefined,
+            nativeTaskId: materializedNativeTaskId || asString(materialization.task_id) || undefined,
+            native_task_id: materializedNativeTaskId || asString(materialization.task_id) || undefined,
+            flowId: materializedNativeFlowId || asString(materialization.flow_id) || undefined,
+            flow_id: materializedNativeFlowId || asString(materialization.flow_id) || undefined,
+            nativeFlowId: materializedNativeFlowId || asString(materialization.flow_id) || undefined,
+            native_flow_id: materializedNativeFlowId || asString(materialization.flow_id) || undefined,
+            sessionKey: replaySessionKey,
             session_key: replaySessionKey,
             route: asString(payload.route),
             status: projectedSubstrateState,
@@ -2200,14 +2177,22 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               ? asString(asRecord(payload.handoff).summary || payload.summary)
               : "TaskFlow materialized; child session spawn not confirmed",
             role: asString(asRecord(authoritativeDecision.route_decision).task_class),
+            workerPool,
             worker_pool: workerPool,
             model: selectedModel || asString(metadata.model),
+            modelProfile: selectedModel || asString(metadata.model),
+            model_profile: selectedModel || asString(metadata.model),
             materialized_at: materializedAt,
             spawned_at: spawnEvidence.spawnExecuted ? materializedAt : undefined,
             started_at: spawnEvidence.spawnExecuted ? materializedAt : undefined,
             updated_at: materializedAt,
+            updatedAt: materializedAt,
             dispatchExecuted,
+            dispatch_executed: dispatchExecuted,
             spawnExecuted: spawnEvidence.spawnExecuted,
+            spawn_executed: spawnEvidence.spawnExecuted,
+            resultMaterialized: false,
+            result_materialized: false,
             childSessionKey: childSessionKey || undefined,
             child_session_key: childSessionKey || undefined,
             runId: spawnEvidence.runId || undefined,

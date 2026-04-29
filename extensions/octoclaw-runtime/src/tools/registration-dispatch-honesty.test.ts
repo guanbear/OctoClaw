@@ -127,10 +127,9 @@ const tempLedgerPaths: string[] = [];
 
 function useTempWorkContractLedger(): string {
   const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-wp4-"));
-  const ledgerPath = path.join(dir, "work-contracts.json");
   tempLedgerPaths.push(dir);
-  process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH = ledgerPath;
-  return ledgerPath;
+  envOverrides.workspaceRoot = dir;
+  return path.join(dir, "tmp", "octopus", "work-contracts.json");
 }
 
 function buildCoverageSnapshot(): ContextCoverageSnapshot {
@@ -578,7 +577,18 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.dispatch_executed).toBe(true);
     expect(result.spawn_executed).toBe(false);
     const taskStatePath = path.join(envOverrides.workspaceRoot, "tmp", "octopus", "task-state.json");
-    expect(fsSync.existsSync(taskStatePath)).toBe(false);
+    expect(fsSync.existsSync(taskStatePath)).toBe(true);
+    const taskState = JSON.parse(fsSync.readFileSync(taskStatePath, "utf-8")) as { tasks: Array<Record<string, unknown>> };
+    expect(taskState.tasks[0]).toMatchObject({
+      id: contract.workContractId,
+      workContractId: contract.workContractId,
+      taskId: "task-honesty",
+      flowId: "flow-honesty",
+      status: "queued",
+      dispatchExecuted: true,
+      spawnExecuted: false,
+    });
+    expect(taskState.tasks[0].workContract).toBeTruthy();
     expect(result.result_materialized).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
 

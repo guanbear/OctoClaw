@@ -207,6 +207,24 @@ describe("work contract materializer", () => {
     expect(result!.mainContext.nextAction).toBe("deliver");
   });
 
+  it("maps lost substrate state to failed instead of queued", () => {
+    const contract = seedSealedContract("session-lost", "Lost native flow");
+
+    const result = materializeWorkContractSuccess({
+      workContractId: contract.workContractId,
+      ledgerPath,
+      nativeBinding: { ...nativeBinding, status: "lost" },
+      delegateTaskId: "delegate-lost",
+      attemptId: "attempt-lost",
+      substrateState: "lost",
+      spawnExecuted: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.status).toBe("failed");
+    expect(loadWorkContract(contract.workContractId, ledgerPath)?.status).toBe("failed");
+  });
+
   it("materialization failure updates ledger failed/blocked and error info", () => {
     const contract = seedSealedContract("session-fail", "Failing task");
 
@@ -260,19 +278,22 @@ describe("work contract materializer", () => {
     expect(result).toBeNull();
   });
 
-  it("legacy policyJson without workContractId does not write WorkContract ledger", () => {
+  it("WorkContract storage writes task-state only, not a legacy ledger", () => {
     const emptyBefore = mockFs.files.has(ledgerPath);
     expect(emptyBefore).toBe(false);
 
     const contract = seedSealedContract("session-legacy", "Legacy path");
 
     expect(loadWorkContract(contract.workContractId, ledgerPath)).not.toBeNull();
+    expect(mockFs.files.has(ledgerPath)).toBe(false);
 
-    const otherContractsBefore = Object.keys(
-      JSON.parse(mockFs.files.get(ledgerPath) || '{"contracts":{}}').contracts,
-    ).length;
-
-    expect(otherContractsBefore).toBe(1);
+    const taskStatePath = path.join(path.dirname(ledgerPath), "task-state.json");
+    const taskState = JSON.parse(mockFs.files.get(taskStatePath) || '{"tasks":[]}') as { tasks: Array<Record<string, unknown>> };
+    expect(taskState.tasks).toHaveLength(1);
+    expect(taskState.tasks[0]).toMatchObject({
+      id: contract.workContractId,
+      workContractId: contract.workContractId,
+    });
   });
 
   it("spawnExecuted stays false when only TaskFlow created, no TaskRun evidence", () => {

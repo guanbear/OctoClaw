@@ -6,6 +6,7 @@ import {
   resolveTaskStatePath,
   resolveTaskStateRetentionPath,
 } from "../resolve/env.js";
+import type { TaskStateRecord } from "./task-state-store.js";
 
 const TASK_STATE_ARCHIVE_SCHEMA_VERSION = "octoclaw.task_state_archive/v1";
 
@@ -13,17 +14,6 @@ export const DEFAULT_TASK_STATE_STALE_RETENTION_MS = 60 * 60 * 1000;
 export const DEFAULT_TASK_STATE_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_TASK_STATE_RETENTION_MIN_RUN_INTERVAL_MS = 10 * 60 * 1000;
 export const DEFAULT_TASK_STATE_ARCHIVE_DELETE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
-
-export interface TaskStateRecord extends Record<string, unknown> {
-  id?: unknown;
-  status?: unknown;
-  updated_at?: unknown;
-  started_at?: unknown;
-  spawned_at?: unknown;
-  completed_at?: unknown;
-  failed_at?: unknown;
-  created_at?: unknown;
-}
 
 export interface TaskStateArchiveEntry {
   schemaVersion: typeof TASK_STATE_ARCHIVE_SCHEMA_VERSION;

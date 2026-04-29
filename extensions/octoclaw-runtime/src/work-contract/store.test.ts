@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { ContextCoverageSnapshot } from "@octoclaw/contracts/work-contract";
 import path from "node:path";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./builders.js";
-import { loadWorkContract, resolveWorkContractLedgerPath, saveWorkContract } from "./store.js";
+import {
+  listWorkContractsBySession,
+  loadWorkContract,
+  resolveWorkContractLedgerPath,
+  resolveWorkContractTaskStatePath,
+  saveWorkContract,
+  updateWorkContract,
+} from "./store.js";
 
 const mockFs = vi.hoisted(() => ({
   files: new Map<string, string>(),
@@ -35,8 +42,9 @@ const mockFs = vi.hoisted(() => ({
 
 vi.mock("node:fs", () => ({ default: mockFs }));
 
-describe("work contract store", () => {
-  let ledgerPath: string;
+describe("work contract task-state store", () => {
+  let legacyLedgerPath: string;
+  let taskStatePath: string;
 
   beforeEach(() => {
     mockFs.files.clear();
@@ -47,19 +55,34 @@ describe("work contract store", () => {
     mockFs.writeFileSync.mockClear();
     mockFs.renameSync.mockClear();
     mockFs.unlinkSync.mockClear();
-    ledgerPath = path.join("/tmp", "octoclaw-work-contract", "nested", "work-contracts.json");
+    legacyLedgerPath = path.join("/tmp", "octoclaw-work-contract", "nested", "work-contracts.json");
+    taskStatePath = path.join("/tmp", "octoclaw-work-contract", "nested", "task-state.json");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("saveWorkContract + loadWorkContract round-trips", () => {
+  it("saveWorkContract + loadWorkContract round-trips through task-state.json", () => {
     const contract = buildContract("session-1", "write tests");
 
-    expect(saveWorkContract(contract, ledgerPath)).toBe(true);
+    expect(saveWorkContract(contract, legacyLedgerPath)).toBe(true);
 
-    const loaded = loadWorkContract(contract.workContractId, ledgerPath);
+    expect(mockFs.files.has(legacyLedgerPath)).toBe(false);
+    expect(mockFs.files.has(taskStatePath)).toBe(true);
+    const taskState = JSON.parse(mockFs.files.get(taskStatePath) || "{}") as { tasks: Array<Record<string, unknown>> };
+    expect(taskState.tasks[0]).toMatchObject({
+      id: contract.workContractId,
+      workContractId: contract.workContractId,
+      route: "delegate",
+      intentClass: "delegated_work",
+      dispatchExecuted: false,
+      spawnExecuted: false,
+      resultMaterialized: false,
+    });
+    expect((taskState.tasks[0].workContract as { userAsk: string }).userAsk).toBe("write tests");
+
+    const loaded = loadWorkContract(contract.workContractId, legacyLedgerPath);
     expect(loaded?.workContractId).toBe(contract.workContractId);
     expect(loaded?.userAsk).toBe("write tests");
     expect(loaded?.updatedAt).toEqual(expect.any(String));
@@ -67,56 +90,68 @@ describe("work contract store", () => {
 
   it("loadWorkContract returns null for missing workContractId", () => {
     const contract = buildContract("session-2", "missing lookup");
-    saveWorkContract(contract, ledgerPath);
+    saveWorkContract(contract, legacyLedgerPath);
 
-    expect(loadWorkContract("wc-missing", ledgerPath)).toBeNull();
+    expect(loadWorkContract("wc-missing", legacyLedgerPath)).toBeNull();
   });
 
-  it("loadWorkContract returns null when file does not exist", () => {
-    expect(loadWorkContract("wc-missing", ledgerPath)).toBeNull();
+  it("loadWorkContract returns null when task-state does not exist", () => {
+    expect(loadWorkContract("wc-missing", legacyLedgerPath)).toBeNull();
   });
 
-  it("saveWorkContract creates directory if needed", () => {
+  it("saveWorkContract creates task-state directory if needed", () => {
     const contract = buildContract("session-3", "create directory");
 
-    expect(saveWorkContract(contract, ledgerPath)).toBe(true);
+    expect(saveWorkContract(contract, legacyLedgerPath)).toBe(true);
 
-    expect(mockFs.mkdirSync).toHaveBeenCalledWith(path.dirname(ledgerPath), { recursive: true });
-    expect(mockFs.files.has(ledgerPath)).toBe(true);
+    expect(mockFs.mkdirSync).toHaveBeenCalledWith(path.dirname(taskStatePath), { recursive: true });
+    expect(mockFs.files.has(taskStatePath)).toBe(true);
   });
 
-  it("returns false when ledger write fails", () => {
+  it("returns false when task-state write fails", () => {
     const contract = buildContract("session-4", "write fails");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockFs.writeFileSync.mockImplementationOnce(() => {
       throw new Error("not writable");
     });
 
-    expect(saveWorkContract(contract, ledgerPath)).toBe(false);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("octoclaw work contract ledger write failed"));
+    expect(saveWorkContract(contract, legacyLedgerPath)).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("octoclaw atomic write failed"));
     warnSpy.mockRestore();
   });
 
-  it("uses atomic write (writeFileSync to temp + renameSync)", () => {
+  it("uses atomic write for task-state.json", () => {
     const contract = buildContract("session-5", "atomic verify");
-    expect(saveWorkContract(contract, ledgerPath)).toBe(true);
+    expect(saveWorkContract(contract, legacyLedgerPath)).toBe(true);
 
     expect(mockFs.writeFileSync).toHaveBeenCalledTimes(1);
     const writeCall = mockFs.writeFileSync.mock.calls[0];
-    expect(writeCall[0]).toMatch(/\.tmp\.\d+\.[a-z0-9]+$/);
+    expect(writeCall[0]).toMatch(/task-state\.json\.tmp\.\d+\.[a-z0-9]+$/);
 
     expect(mockFs.renameSync).toHaveBeenCalledTimes(1);
     const renameCall = mockFs.renameSync.mock.calls[0];
-    expect(renameCall[1]).toBe(ledgerPath);
-    expect(renameCall[0]).toMatch(/\.tmp\.\d+\.[a-z0-9]+$/);
+    expect(renameCall[1]).toBe(taskStatePath);
+    expect(renameCall[0]).toMatch(/task-state\.json\.tmp\.\d+\.[a-z0-9]+$/);
   });
 
-  it("respects OCTOCLAW_WORK_CONTRACT_LEDGER_PATH env override", () => {
+  it("updates and lists WorkContracts from task-state records", () => {
+    const contract = buildContract("session-list", "list me");
+    saveWorkContract(contract, legacyLedgerPath);
+
+    const updated = updateWorkContract(contract.workContractId, (current) => ({ ...current, status: "running" }), legacyLedgerPath);
+
+    expect(updated?.status).toBe("running");
+    expect(loadWorkContract(contract.workContractId, legacyLedgerPath)?.status).toBe("running");
+    expect(listWorkContractsBySession("session-list", legacyLedgerPath).map((item) => item.workContractId)).toEqual([contract.workContractId]);
+  });
+
+  it("resolves deprecated ledger path and canonical task-state path", () => {
     const originalEnv = process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
     process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH = "/custom/path/contracts.json";
 
     try {
       expect(resolveWorkContractLedgerPath()).toBe("/custom/path/contracts.json");
+      expect(resolveWorkContractTaskStatePath("/custom/path/contracts.json")).toBe("/custom/path/task-state.json");
     } finally {
       if (originalEnv === undefined) {
         delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;

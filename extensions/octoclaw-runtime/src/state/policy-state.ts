@@ -1,12 +1,7 @@
-import fsSync from "node:fs";
-import path from "node:path";
 import type { RouteSeal } from "@octoclaw/contracts/route-seal";
-import { resolvePolicyStateLedgerPath } from "../resolve/env.js";
 import { canonicalizeDecisionForPolicyState, isDelegatedRoute } from "../resolve/route-helpers.js";
-import { atomicWriteJsonSync } from "../util/atomic-write.js";
 
-export const POLICY_STATE_TTL_MS = 30 * 60 * 1000;
-const PERSIST_DEBOUNCE_MS = 2_000;
+export const POLICY_STATE_TTL_MS = 5 * 60 * 1000;
 const RECENT_DELEGATED_MAX_AGE_MS = 2 * 60 * 1000;
 
 export interface PolicyStateEntry {
@@ -82,28 +77,6 @@ export interface PolicyStateStoreOptions {
   persistDebounceMs?: number;
 }
 
-interface PersistedPolicyStateLedger {
-  schema_version?: string;
-  updated_at?: string;
-  ttl_ms?: number;
-  sessions?: Record<string, PolicyStateEntry>;
-}
-
-interface FsSyncLike {
-  existsSync(pathname: string): boolean;
-  mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
-  readFileSync(pathname: string, encoding: string): string;
-  writeFileSync(pathname: string, data: string, encoding: string): void;
-}
-
-interface PathLike {
-  dirname(pathname: string): string;
-  join(...parts: string[]): string;
-}
-
-const fs = fsSync as unknown as FsSyncLike;
-const pathApi = path as unknown as PathLike;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -173,22 +146,6 @@ function extractDecisionRoute(entry: PolicyStateEntry): string {
   return typeof route === "string" ? route.trim() : "";
 }
 
-function toPersistedSessions(payload: unknown): Record<string, PolicyStateEntry> {
-  if (!isRecord(payload)) {
-    return {};
-  }
-
-  const sessions = isRecord(payload.sessions) ? payload.sessions : payload;
-  const result: Record<string, PolicyStateEntry> = {};
-
-  for (const [key, value] of Object.entries(sessions)) {
-    if (isRecord(value)) {
-      result[key] = { ...value };
-    }
-  }
-
-  return result;
-}
 
 export function promptTokenScore(prompt: string, candidatePrompt: string): number {
   const query = String(prompt || "").trim().toLowerCase();
@@ -215,22 +172,19 @@ export function promptTokenScore(prompt: string, candidatePrompt: string): numbe
 }
 
 export class PolicyStateStore {
-  private readonly sessionStateFile: string;
   private readonly resolveKeyCallback?: (ctx: Record<string, unknown>) => string;
   private readonly resolveKeysCallback?: (ctx: Record<string, unknown>) => string[];
   private readonly isControlPromptCallback?: (prompt: string, ctx: Record<string, unknown>) => boolean;
   private readonly ttlMs: number;
-  private readonly persistDebounceMs: number;
   private readonly _entries = new Map<string, PolicyStateEntry>();
-  private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: PolicyStateStoreOptions = {}) {
-    this.sessionStateFile = String(options.sessionStateFile || "").trim();
+    void options.sessionStateFile;
     this.resolveKeyCallback = options.resolveKey;
     this.resolveKeysCallback = options.resolveKeys;
     this.isControlPromptCallback = options.isControlPrompt;
     this.ttlMs = options.ttlMs ?? POLICY_STATE_TTL_MS;
-    this.persistDebounceMs = options.persistDebounceMs ?? PERSIST_DEBOUNCE_MS;
+    void options.persistDebounceMs;
     this.load();
   }
 
@@ -407,71 +361,15 @@ export class PolicyStateStore {
   }
 
   persist(): void {
-    this.clearPersistTimer();
-    if (!this.sessionStateFile) {
-      return;
-    }
-
     this.pruneInMemoryOnly();
-
-    try {
-      const directory = pathApi.dirname(this.sessionStateFile);
-      if (!fs.existsSync(directory)) {
-        fs.mkdirSync(directory, { recursive: true });
-      }
-
-      const payload: PersistedPolicyStateLedger = {
-        schema_version: "octoclaw.runtime_policy.state_ledger/v1",
-        updated_at: new Date().toISOString(),
-        ttl_ms: this.ttlMs,
-        sessions: Object.fromEntries(this._entries.entries()),
-      };
-      atomicWriteJsonSync(this.sessionStateFile, payload);
-    } catch {
-      // Best-effort persistence only.
-    }
   }
 
   load(): void {
-    this.clearPersistTimer();
-    this._entries.clear();
-    if (!this.sessionStateFile || !fs.existsSync(this.sessionStateFile)) {
-      return;
-    }
-
-    try {
-      const raw = fs.readFileSync(this.sessionStateFile, "utf-8");
-      const parsed: unknown = JSON.parse(raw);
-      const sessions = toPersistedSessions(parsed);
-      const now = Date.now();
-
-      for (const [key, entry] of Object.entries(sessions)) {
-        const updatedAt = entryTimestamp(entry);
-        if (updatedAt && now - updatedAt > this.ttlMs) {
-          continue;
-        }
-        this._entries.set(key, normalizeEntry(cloneEntry(entry)));
-      }
-    } catch {
-      this._entries.clear();
-    }
+    this.pruneInMemoryOnly();
   }
 
   private schedulePersist(): void {
-    if (!this.sessionStateFile) {
-      return;
-    }
-    this.clearPersistTimer();
-    this.persistTimer = setTimeout(() => {
-      this.persist();
-    }, this.persistDebounceMs);
-  }
-
-  private clearPersistTimer(): void {
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
+    this.pruneInMemoryOnly();
   }
 
   private pruneInMemoryOnly(): void {
@@ -482,6 +380,7 @@ export class PolicyStateStore {
       }
     }
   }
+
 
   private resolveContextKeys(ctx: Record<string, unknown>): string[] {
     const explicitKeys = this.resolveKeysCallback?.(ctx) || [];
@@ -528,7 +427,7 @@ export interface PolicyStateStoreApi {
 
 export function createPolicyStateStore(sessionStateFile?: string): PolicyStateStoreApi {
   const store = new PolicyStateStore({
-    sessionStateFile: String(sessionStateFile || "").trim() || resolvePolicyStateLedgerPath(),
+    sessionStateFile: String(sessionStateFile || "").trim(),
   });
   return {
     get: (stateKey) => store.get(stateKey),
@@ -561,7 +460,7 @@ export function createPolicyStateStore(sessionStateFile?: string): PolicyStateSt
 }
 
 export const policyState = createPolicyStateStore(
-  String(process.env.OCTOCLAW_SESSION_STATE_FILE || "").trim() || resolvePolicyStateLedgerPath(),
+  String(process.env.OCTOCLAW_SESSION_STATE_FILE || "").trim(),
 );
 
 export default policyState;

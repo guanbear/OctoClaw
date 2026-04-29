@@ -81,7 +81,9 @@ describe("child completion finalizer — completion file protocol", () => {
 
     const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
     expect(taskState.tasks[0]).toMatchObject({
-      id: "native-2",
+      id: "wc-2",
+      workContractId: "wc-2",
+      taskId: "native-2",
       status: "completed",
       dispatchExecuted: true,
       spawnExecuted: true,
@@ -175,7 +177,9 @@ describe("child completion finalizer — completion file protocol", () => {
     const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
     const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
     expect(taskState.tasks[0]).toMatchObject({
-      id: "native-poll",
+      id: "wc-poll",
+      workContractId: "wc-poll",
+      taskId: "native-poll",
       resultMaterialized: true,
     });
   });
@@ -203,7 +207,9 @@ describe("child completion finalizer — completion file protocol", () => {
 
     const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
     expect(taskState.tasks[0]).toMatchObject({
-      id: "native-timeout",
+      id: "wc-timeout",
+      workContractId: "wc-timeout",
+      taskId: "native-timeout",
       status: "timed_out",
       dispatchExecuted: true,
       spawnExecuted: true,
