@@ -16,6 +16,9 @@ import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAccept
 import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
 import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour } from "./nightly-eval/index.js";
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
+import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
+import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
+import { readConfig, syncToOpenClawPluginConfig } from "./config.js";
 import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
@@ -26,6 +29,13 @@ type ServiceName = "openclaw" | "runner";
 type RunnerMode = "ondemand" | "daemon";
 type NightlyFormat = "markdown" | "json";
 type CliCommand =
+  | "install"
+  | "update"
+  | "deploy"
+  | "enable"
+  | "disable"
+  | "config"
+  | "uninstall"
   | "calibration-gate"
   | "status"
   | "details"
@@ -83,10 +93,17 @@ interface ParsedCliArgs {
   nightlyFormat: NightlyFormat;
   calibrationFormat: "markdown" | "json";
   config?: string;
+  repoUrl?: string;
+  branch?: string;
+  openclawHome?: string;
+  octoclawRoot?: string;
+  skipBuild: boolean;
+  restartServices: boolean;
   scheduleHour?: number;
   logDir?: string;
   nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack";
   slackAcceptanceFormat: SlackAcceptanceFormat;
+  extraArgs: string[];
 }
 
 interface CliIo {
@@ -278,12 +295,12 @@ async function readDirFiles(dirPath: string): Promise<string[]> {
   }
 }
 
-function resolveOctoClawHome(env: Record<string, string | undefined>): string {
-  const explicit = asString(env.OCTOCLAW_HOME).trim();
+function resolveOctoClawHome(env: Record<string, string | undefined>, override?: string): string {
+  const explicit = asString(override).trim() || asString(env.OPENCLAW_HOME).trim() || asString(env.OCTOCLAW_HOME).trim();
   if (explicit) {
-    return explicit;
+    return resolvePath(explicit);
   }
-  return path.join(os.homedir(), ".octoclaw");
+  return path.join(os.homedir(), ".openclaw");
 }
 
 function resolveConfigPath(env: Record<string, string | undefined>): string {
@@ -300,6 +317,10 @@ function resolveReplayDir(env: Record<string, string | undefined>): string {
 
 function resolveCtlStateDir(env: Record<string, string | undefined>): string {
   return path.join(resolveOctoClawHome(env), "octoclawctl");
+}
+
+function resolveOctoclawRoot(parsed: ParsedCliArgs, env: Record<string, string | undefined>): string {
+  return resolvePath(asString(parsed.octoclawRoot).trim() || asString(env.OCTOCLAW_ROOT).trim() || process.cwd());
 }
 
 function resolveServicePidFile(env: Record<string, string | undefined>, service: ServiceName): string {
@@ -852,6 +873,12 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   let nightlyFormat: NightlyFormat = "markdown";
   let calibrationFormat: "markdown" | "json" = "markdown";
   let config: string | undefined;
+  let repoUrl: string | undefined;
+  let branch: string | undefined;
+  let openclawHome: string | undefined;
+  let octoclawRoot: string | undefined;
+  let skipBuild = false;
+  let restartServices = false;
   let scheduleHour: number | undefined;
   let logDir: string | undefined;
   let nightlyEvalSubcommand: ParsedCliArgs["nightlyEvalSubcommand"];
@@ -970,6 +997,50 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
       [, config] = argument.split("=", 2);
       continue;
     }
+    if (argument === "--repo-url") {
+      repoUrl = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--repo-url=")) {
+      [, repoUrl] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--branch" || argument === "--ref") {
+      branch = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--branch=") || argument.startsWith("--ref=")) {
+      [, branch] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--openclaw-home") {
+      openclawHome = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--openclaw-home=")) {
+      [, openclawHome] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--octoclaw-root") {
+      octoclawRoot = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--octoclaw-root=")) {
+      [, octoclawRoot] = argument.split("=", 2);
+      continue;
+    }
+    if (argument === "--skip-build") {
+      skipBuild = true;
+      continue;
+    }
+    if (argument === "--restart") {
+      restartServices = true;
+      continue;
+    }
     if (argument === "--schedule-hour") {
       scheduleHour = Number.parseInt(argv[index + 1] ?? "", 10);
       index += 1;
@@ -1009,8 +1080,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["calibration-gate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "slack-acceptance"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance`);
+  if (command && !["install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "slack-acceptance"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
@@ -1106,10 +1177,17 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     nightlyFormat,
     calibrationFormat,
     config,
+    repoUrl,
+    branch,
+    openclawHome,
+    octoclawRoot,
+    skipBuild,
+    restartServices,
     scheduleHour,
     logDir,
     nightlyEvalSubcommand,
     slackAcceptanceFormat,
+    extraArgs: positionals.slice(1),
   };
 }
 
@@ -1129,6 +1207,15 @@ export function printUsage(): string {
     "Usage: octoclawctl <command> [options]",
     "",
     "Commands:",
+    "  octoclawctl install [--repo-url URL] [--branch NAME] [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
+    "  octoclawctl update [--repo-url URL] [--branch NAME] [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
+    "  octoclawctl deploy [--openclaw-home DIR] [--octoclaw-root DIR] [--skip-build] [--restart]",
+    "  octoclawctl enable",
+    "  octoclawctl disable",
+    "  octoclawctl config get [key]",
+    "  octoclawctl config set <key> <value>",
+    "  octoclawctl restart [--service openclaw|runner]",
+    "  octoclawctl uninstall",
     "  octoclawctl status [--format compact|table|lanes|anchors|json]",
     "  octoclawctl details <task-id>",
     "  octoclawctl queue",
@@ -1136,7 +1223,6 @@ export function printUsage(): string {
     "  octoclawctl health [--model] [--drift] [--format json]",
     "  octoclawctl up [--service openclaw|runner] [--mode ondemand|daemon]",
     "  octoclawctl down [--service openclaw|runner]",
-    "  octoclawctl restart [--service openclaw|runner]",
     "  octoclawctl patrol [--once]",
     "  octoclawctl reconcile",
     "  octoclawctl repair",
@@ -1697,6 +1783,52 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
   }
 }
 
+async function runInstallCommand(parsed: ParsedCliArgs, env: Record<string, string | undefined>, openclawHome: string): Promise<string> {
+  const restoreEnv = applyProcessEnv(env);
+  try {
+    const octoclawRoot = resolveOctoclawRoot(parsed, env);
+    const repoUrl = parsed.repoUrl ?? DEFAULT_REPO_URL;
+    const branch = parsed.branch ?? DEFAULT_REF;
+    if (parsed.command === "install" || parsed.command === "update") {
+      await cloneOrUpdate(octoclawRoot, repoUrl, branch);
+    }
+    if (!parsed.skipBuild) {
+      await buildWorkspace(octoclawRoot);
+    }
+    await deployPackages(octoclawRoot, openclawHome);
+    await deployExtension(octoclawRoot, openclawHome);
+    await setupSymlinks(openclawHome);
+    const config = await readConfig(openclawHome);
+    await syncToOpenClawPluginConfig(openclawHome, config);
+    await writeSourceManifest(openclawHome, octoclawRoot);
+    await validateLoad(openclawHome);
+    if (parsed.restartServices) {
+      await restartAll(openclawHome);
+    }
+    return `OctoClaw ${parsed.command} completed at ${octoclawRoot}`;
+  } finally {
+    restoreEnv();
+  }
+}
+
+function applyProcessEnv(env: Record<string, string | undefined>): () => void {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  return () => {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   env: Record<string, string | undefined> = process.env,
@@ -1712,13 +1844,49 @@ export async function main(
       return 0;
     }
     if (!parsed.command) {
-      io.stderr("Unknown action: (missing). Expected one of: calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, slack-acceptance");
+      io.stderr("Unknown action: (missing). Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance");
       return 1;
+    }
+
+    const openclawHome = resolveOctoClawHome(env, parsed.openclawHome);
+    if (parsed.command === "enable") {
+      io.stdout(await enablePlugin(openclawHome));
+      return 0;
+    }
+    if (parsed.command === "disable") {
+      io.stdout(await disablePlugin(openclawHome));
+      return 0;
+    }
+    if (parsed.command === "config") {
+      const [action, key, value] = parsed.extraArgs;
+      if (action === "set" && key && value !== undefined) {
+        io.stdout(await setConfigValue(openclawHome, key, value));
+        return 0;
+      }
+      if (!action || action === "get") {
+        io.stdout(await getConfigValue(openclawHome, key));
+        return 0;
+      }
+      throw new Error("config command expects: config get [key] or config set <key> <value>");
+    }
+    if (parsed.command === "install" || parsed.command === "update" || parsed.command === "deploy") {
+      io.stdout(await runInstallCommand(parsed, env, openclawHome));
+      return 0;
+    }
+    if (parsed.command === "uninstall") {
+      await uninstallDeployment(openclawHome);
+      io.stdout("OctoClaw deployment removed from OpenClaw extensions/packages");
+      return 0;
     }
 
     const runtimeRecord = resolveRuntimeStateSurfaceRecord(env);
     if (runtimeRecord && LEGACY_ACTIONS.includes(parsed.command as StatusSurfaceAction) && !parsed.taskId && !parsed.service && !parsed.model && !parsed.drift) {
       io.stdout(runOctoClawCtl(parsed.command as StatusSurfaceAction, runtimeRecord, parsed.legacyFormat));
+      return 0;
+    }
+
+    if (parsed.command === "status") {
+      io.stdout(await showStatus(openclawHome));
       return 0;
     }
 

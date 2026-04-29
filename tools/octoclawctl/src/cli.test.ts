@@ -2,6 +2,9 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+
+declare const process: { env: Record<string, string | undefined> };
 import type { RuntimeStateSurfaceRecord } from "@octoclaw/runtime/state-surface";
 import {
   main,
@@ -9,6 +12,15 @@ import {
   resolveRuntimeStateSurfaceRecord,
   runOctoClawCtl,
 } from "./cli.js";
+
+
+async function runTestCommand(command: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    child.on("error", reject);
+    child.on("close", (code: number | null) => code === 0 ? resolve() : reject(new Error(`${command} exited ${code ?? 1}`)));
+  });
+}
 
 function createRuntimeEnv(): Record<string, string> {
   return {
@@ -56,6 +68,16 @@ describe("octoclawctl cli", () => {
     expect(parseCliArgs(["details"]).command).toBe("details");
     expect(parseCliArgs(["queue"]).command).toBe("queue");
     expect(parseCliArgs(["timeline"]).command).toBe("timeline");
+  });
+
+  it("parses management actions", () => {
+    expect(parseCliArgs(["install"]).command).toBe("install");
+    expect(parseCliArgs(["enable"]).command).toBe("enable");
+    expect(parseCliArgs(["disable"]).command).toBe("disable");
+    expect(parseCliArgs(["config", "set", "judge.modelId", "test-model"])).toMatchObject({
+      command: "config",
+      extraArgs: ["set", "judge.modelId", "test-model"],
+    });
   });
 
   it("valid actions produce output", async () => {
@@ -109,6 +131,85 @@ describe("octoclawctl cli", () => {
 
     expect(exitCode).toBe(0);
     expect(capture.stdout.length).toBeGreaterThan(0);
+  });
+
+  it("config set/get reads and writes the unified config file", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    await fs.mkdir(tmpDir, { recursive: true });
+    try {
+      const setCapture = createIo();
+      const setExitCode = await main(["config", "set", "judge.modelId", "test-model"], { OCTOCLAW_HOME: openclawHome }, setCapture.io);
+
+      expect(setExitCode).toBe(0);
+      expect(setCapture.stdout[0]).toBe("set judge.modelId");
+
+      const raw = await fs.readFile(path.join(tmpDir, ".octoclaw", "config.json"), "utf8");
+      const saved = JSON.parse(raw);
+      expect(saved.judge.modelId).toBe("test-model");
+      expect(saved.pluginConfig.judgeFast.modelId).toBe("test-model");
+
+      const getCapture = createIo();
+      const getExitCode = await main(["config", "get", "judge.modelId"], { OCTOCLAW_HOME: openclawHome }, getCapture.io);
+      expect(getExitCode).toBe(0);
+      expect(getCapture.stdout[0]).toBe("test-model");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("parses install and deploy options", () => {
+    expect(parseCliArgs(["install", "--repo-url", "repo", "--branch", "main", "--openclaw-home", "/tmp/openclaw", "--octoclaw-root", "/tmp/octoclaw", "--skip-build", "--restart"])).toMatchObject({
+      command: "install",
+      repoUrl: "repo",
+      branch: "main",
+      openclawHome: "/tmp/openclaw",
+      octoclawRoot: "/tmp/octoclaw",
+      skipBuild: true,
+      restartServices: true,
+    });
+    expect(parseCliArgs(["deploy", "--ref=stable"])).toMatchObject({ command: "deploy", branch: "stable" });
+  });
+
+  it("deploy copies packages/extensions and syncs pluginConfig", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `deploy-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const repoRoot = path.join(tmpDir, "repo");
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const packageRoot = path.join(repoRoot, "packages", "octoclaw-contracts");
+    const extensionRoot = path.join(repoRoot, "extensions", "octoclaw-runtime");
+    const fakeBin = path.join(tmpDir, "bin");
+    try {
+      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+      await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "@octoclaw/contracts" }), "utf8");
+      await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};", "utf8");
+      await fs.mkdir(path.join(extensionRoot, "dist"), { recursive: true });
+      await fs.writeFile(path.join(extensionRoot, "package.json"), JSON.stringify({ name: "@octoclaw/runtime" }), "utf8");
+      await fs.writeFile(path.join(extensionRoot, "openclaw.plugin.json"), JSON.stringify({ id: "octoclaw-runtime", main: "./dist/index.js" }), "utf8");
+      await fs.writeFile(path.join(extensionRoot, "dist", "index.js"), "export {};", "utf8");
+      await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+      await fs.mkdir(fakeBin, { recursive: true });
+      await fs.writeFile(path.join(fakeBin, "openclaw"), "#!/bin/sh\necho \"$@\" >> \"$OCTOCLAW_FAKE_LOG\"\n", "utf8");
+      await fs.writeFile(path.join(fakeBin, "git"), "#!/bin/sh\nif [ \"$1 $2\" = \"rev-parse HEAD\" ]; then echo test-commit; exit 0; fi\nif [ \"$1 $2\" = \"branch --show-current\" ]; then echo test-branch; exit 0; fi\nexit 0\n", "utf8");
+      await fs.writeFile(path.join(fakeBin, "rsync"), "#!/bin/bash\ndest=\"${@: -1}\"\nsrc=\"${@: -2:1}\"\nmkdir -p \"$dest\"\ncp -R \"$src\". \"$dest\"\n", "utf8");
+      await fs.writeFile(path.join(fakeBin, "ln"), "#!/bin/sh\n/bin/ln \"$@\"\n", "utf8");
+      await runTestCommand("chmod", ["755", path.join(fakeBin, "openclaw"), path.join(fakeBin, "git"), path.join(fakeBin, "rsync"), path.join(fakeBin, "ln")]);
+
+      const capture = createIo();
+      const exitCode = await main(["config", "set", "judge.modelId", "deploy-model"], { OCTOCLAW_HOME: openclawHome }, capture.io);
+      expect(exitCode).toBe(0);
+
+      const deployCapture = createIo();
+      const deployExitCode = await main(["deploy", "--octoclaw-root", repoRoot, "--openclaw-home", openclawHome, "--skip-build"], { PATH: `${fakeBin}:${process.env.PATH ?? ""}`, OCTOCLAW_FAKE_LOG: path.join(tmpDir, "openclaw.log") }, deployCapture.io);
+      expect(deployExitCode).toBe(0);
+      expect(deployCapture.stdout[0]).toContain("OctoClaw deploy completed");
+
+      const deployedManifest = JSON.parse(await fs.readFile(path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json"), "utf8"));
+      expect(deployedManifest.pluginConfig.judgeFast.modelId).toBe("deploy-model");
+      expect(await fs.readFile(path.join(openclawHome, "packages", "octoclaw-contracts", "dist", "index.js"), "utf8")).toContain("export");
+      expect(await fs.readFile(path.join(openclawHome, "octoclaw-source-manifest.json"), "utf8")).toContain("test-commit");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("parses nightly command with required args", () => {

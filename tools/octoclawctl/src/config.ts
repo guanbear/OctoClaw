@@ -1,0 +1,173 @@
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+export interface OctoclawConfig {
+  _version: "1";
+  _updatedAt: string;
+  enabled: boolean;
+  features: {
+    delegation: boolean;
+    imNotifications: boolean;
+    statusPanel: boolean;
+  };
+  judge: {
+    enabled: boolean;
+    modelId: string;
+    baseUrl: string;
+    apiKey: string;
+    timeoutMs: number;
+    minConfidence: number;
+    shadowMode: boolean;
+    judgeAckEnabled: boolean;
+  };
+  models: {
+    mode: "auto" | "custom";
+    overrides: Record<string, string>;
+  };
+  pluginConfig: Record<string, unknown>;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+export function defaultConfig(): OctoclawConfig {
+  return {
+    _version: "1",
+    _updatedAt: new Date(0).toISOString(),
+    enabled: true,
+    features: { delegation: true, imNotifications: true, statusPanel: true },
+    judge: { enabled: false, modelId: "", baseUrl: "", apiKey: "", timeoutMs: 1200, minConfidence: 0.6, shadowMode: false, judgeAckEnabled: true },
+    models: { mode: "auto", overrides: {} },
+    pluginConfig: { enabled: true, delegationEnabled: true },
+  };
+}
+
+export function configPath(openclawHome = ""): string {
+  const explicitHome = openclawHome.trim();
+  if (!explicitHome) {
+    return path.join(os.homedir(), ".octoclaw", "config.json");
+  }
+  const configDir = path.basename(explicitHome) === ".octoclaw"
+    ? explicitHome
+    : path.join(path.dirname(explicitHome), ".octoclaw");
+  return path.join(configDir, "config.json");
+}
+
+export async function readConfig(openclawHome = ""): Promise<OctoclawConfig> {
+  const pathname = configPath(openclawHome);
+  try {
+    const raw = await fs.readFile(pathname, "utf8");
+    return normalizeConfig(JSON.parse(raw) as JsonRecord);
+  } catch {
+    return defaultConfig();
+  }
+}
+
+export async function writeConfig(openclawHome: string, config: OctoclawConfig): Promise<void> {
+  const pathname = configPath(openclawHome);
+  await fs.mkdir(path.dirname(pathname), { recursive: true });
+  const next = { ...config, _version: "1" as const, _updatedAt: new Date().toISOString() };
+  await fs.writeFile(pathname, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
+
+export async function setConfigField(openclawHome: string, key: string, value: string): Promise<OctoclawConfig> {
+  const config = await readConfig(openclawHome);
+  setNestedField(config as unknown as JsonRecord, key.split(".").filter(Boolean), parseValue(value));
+  await syncToOpenClawPluginConfig(openclawHome, config);
+  await writeConfig(openclawHome, config);
+  return config;
+}
+
+export function getConfigField(config: OctoclawConfig, key: string): unknown {
+  return key.split(".").filter(Boolean).reduce<unknown>((current, part) => {
+    if (current && typeof current === "object" && part in current) {
+      return (current as JsonRecord)[part];
+    }
+    return undefined;
+  }, config);
+}
+
+export async function syncToOpenClawPluginConfig(openclawHome: string, config: OctoclawConfig): Promise<void> {
+  config.pluginConfig = {
+    enabled: config.enabled,
+    delegationEnabled: config.features.delegation,
+    judgeFast: {
+      enabled: config.judge.enabled,
+      shadowMode: config.judge.shadowMode,
+      modelId: config.judge.modelId,
+      baseUrl: config.judge.baseUrl,
+      apiKey: config.judge.apiKey,
+      timeoutMs: config.judge.timeoutMs,
+      minConfidence: config.judge.minConfidence,
+      judgeAckEnabled: config.judge.judgeAckEnabled,
+    },
+  };
+
+  const manifestPath = path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json");
+  if (!fsSync.existsSync(manifestPath)) {
+    return;
+  }
+  const raw = await fs.readFile(manifestPath, "utf8");
+  const manifest = JSON.parse(raw) as JsonRecord;
+  manifest.pluginConfig = config.pluginConfig;
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+function normalizeConfig(raw: JsonRecord): OctoclawConfig {
+  const fallback = defaultConfig();
+  const features = isRecord(raw.features) ? raw.features : {};
+  const judge = isRecord(raw.judge) ? raw.judge : {};
+  const models = isRecord(raw.models) ? raw.models : {};
+  const pluginConfig = isRecord(raw.pluginConfig) ? raw.pluginConfig : {};
+  return {
+    ...fallback,
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
+    features: {
+      delegation: typeof features.delegation === "boolean" ? features.delegation : fallback.features.delegation,
+      imNotifications: typeof features.imNotifications === "boolean" ? features.imNotifications : fallback.features.imNotifications,
+      statusPanel: typeof features.statusPanel === "boolean" ? features.statusPanel : fallback.features.statusPanel,
+    },
+    judge: {
+      enabled: typeof judge.enabled === "boolean" ? judge.enabled : fallback.judge.enabled,
+      modelId: typeof judge.modelId === "string" ? judge.modelId : fallback.judge.modelId,
+      baseUrl: typeof judge.baseUrl === "string" ? judge.baseUrl : fallback.judge.baseUrl,
+      apiKey: typeof judge.apiKey === "string" ? judge.apiKey : fallback.judge.apiKey,
+      timeoutMs: typeof judge.timeoutMs === "number" ? judge.timeoutMs : fallback.judge.timeoutMs,
+      minConfidence: typeof judge.minConfidence === "number" ? judge.minConfidence : fallback.judge.minConfidence,
+      shadowMode: typeof judge.shadowMode === "boolean" ? judge.shadowMode : fallback.judge.shadowMode,
+      judgeAckEnabled: typeof judge.judgeAckEnabled === "boolean" ? judge.judgeAckEnabled : fallback.judge.judgeAckEnabled,
+    },
+    models: {
+      mode: models.mode === "custom" ? "custom" : "auto",
+      overrides: isRecord(models.overrides) ? Object.fromEntries(Object.entries(models.overrides).map(([key, val]) => [key, String(val ?? "")])) : {},
+    },
+    pluginConfig: { ...pluginConfig },
+  };
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseValue(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (/^-?\d+(\.\d+)?$/u.test(value)) return Number(value);
+  return value;
+}
+
+function setNestedField(target: JsonRecord, pathParts: string[], value: unknown): void {
+  if (pathParts.length === 0) return;
+  let cursor = target;
+  for (const part of pathParts.slice(0, -1)) {
+    const existing = cursor[part];
+    if (!isRecord(existing)) cursor[part] = {};
+    cursor = cursor[part] as JsonRecord;
+  }
+  cursor[pathParts[pathParts.length - 1]] = value;
+}
+
+export function configExists(openclawHome = ""): boolean {
+  return fsSync.existsSync(configPath(openclawHome));
+}

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Deprecated: use tools/octoclawctl for new OctoClaw install/config/manage workflows.
 
 declare const process: {
   env: Record<string, string | undefined>;

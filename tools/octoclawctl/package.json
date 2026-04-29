@@ -8,7 +8,10 @@
     "octoclawctl": "./dist/cli.js"
   },
   "exports": {
-    ".": { "types": "./src/cli.ts", "default": "./dist/cli.js" }
+    ".": {
+      "types": "./src/cli.ts",
+      "default": "./dist/cli.js"
+    }
   },
   "dependencies": {
     "@octoclaw/runtime": "workspace:*",
@@ -17,7 +20,10 @@
   "scripts": {
     "build": "tsc --build",
     "check": "tsc --noEmit",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "vitest run src/*.test.ts src/**/*.test.ts --root ../.."
   },
-  "files": ["dist"]
+  "files": [
+    "dist"
+  ]
 }

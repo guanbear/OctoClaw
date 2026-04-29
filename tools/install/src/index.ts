@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Deprecated: use tools/octoclawctl for new OctoClaw install/config/manage workflows.
 
 // @ts-ignore missing Node type package in this workspace
 import { lstat as lstatSync, readlink as readlinkSync, realpath as realpathSync, rename as renameSync, symlink as symlinkSync } from "node:fs";
