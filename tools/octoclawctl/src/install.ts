@@ -20,6 +20,7 @@ export async function deployPackages(octoclawRoot: string, openclawHome: string)
   for (const unit of packageUnits) {
     await syncDeployUnit(unit.sourceRoot, path.join(openclawHome, "packages", unit.name));
   }
+  await pruneStaleDeployUnits(path.join(openclawHome, "packages"), packageUnits.map((unit) => unit.name));
 }
 
 export async function deployExtension(octoclawRoot: string, openclawHome: string): Promise<void> {
@@ -27,6 +28,7 @@ export async function deployExtension(octoclawRoot: string, openclawHome: string
   for (const unit of extensionUnits) {
     await syncDeployUnit(unit.sourceRoot, path.join(openclawHome, "extensions", unit.name));
   }
+  await pruneStaleDeployUnits(path.join(openclawHome, "extensions"), extensionUnits.map((unit) => unit.name));
 }
 
 export async function setupSymlinks(openclawHome: string): Promise<void> {
@@ -88,7 +90,7 @@ export async function uninstallDeployment(openclawHome: string): Promise<void> {
   await removeOpenClawPluginEntry(openclawHome);
 }
 
-export async function syncOpenClawPluginEntry(openclawHome: string, octoclawRoot: string): Promise<void> {
+export async function syncOpenClawPluginEntry(openclawHome: string, octoclawRoot: string, projectedPluginConfig: JsonRecord = {}): Promise<void> {
   const openclawConfigPath = path.join(openclawHome, "openclaw.json");
   const config = await readJson(openclawConfigPath) ?? {};
   const plugins = ensureRecord(config, "plugins");
@@ -100,6 +102,7 @@ export async function syncOpenClawPluginEntry(openclawHome: string, octoclawRoot
   entry.enabled = true;
   entry.config = {
     ...pluginConfig,
+    ...projectedPluginConfig,
     octoclawRoot,
     workspaceRoot: nonEmptyString(pluginConfig.workspaceRoot) ?? path.join(openclawHome, "workspace"),
   };
@@ -197,6 +200,11 @@ async function removeMatching(parentDir: string, predicate: (name: string) => bo
   for (const name of names) {
     await fs.rm(path.join(parentDir, name), { recursive: true, force: true });
   }
+}
+
+async function pruneStaleDeployUnits(parentDir: string, keepNames: string[]): Promise<void> {
+  const keep = new Set(keepNames);
+  await removeMatching(parentDir, (name) => name.startsWith("octoclaw-") && !keep.has(name));
 }
 
 async function readJson(filePath: string): Promise<JsonRecord | null> {

@@ -89,7 +89,21 @@ export function getConfigField(config: OctoclawConfig, key: string): unknown {
 }
 
 export async function syncToOpenClawPluginConfig(openclawHome: string, config: OctoclawConfig): Promise<void> {
-  config.pluginConfig = {
+  config.pluginConfig = buildPluginConfig(config);
+
+  const manifestPath = path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json");
+  if (fsSync.existsSync(manifestPath)) {
+    const raw = await fs.readFile(manifestPath, "utf8");
+    const manifest = JSON.parse(raw) as JsonRecord;
+    manifest.pluginConfig = config.pluginConfig;
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  }
+
+  await syncOpenClawEntryConfig(openclawHome, config.pluginConfig);
+}
+
+function buildPluginConfig(config: OctoclawConfig): JsonRecord {
+  return {
     enabled: config.enabled,
     delegationEnabled: config.features.delegation,
     judgeFast: {
@@ -103,15 +117,24 @@ export async function syncToOpenClawPluginConfig(openclawHome: string, config: O
       judgeAckEnabled: config.judge.judgeAckEnabled,
     },
   };
+}
 
-  const manifestPath = path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json");
-  if (!fsSync.existsSync(manifestPath)) {
-    return;
-  }
-  const raw = await fs.readFile(manifestPath, "utf8");
-  const manifest = JSON.parse(raw) as JsonRecord;
-  manifest.pluginConfig = config.pluginConfig;
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+async function syncOpenClawEntryConfig(openclawHome: string, pluginConfig: JsonRecord): Promise<void> {
+  const openclawConfigPath = path.join(openclawHome, "openclaw.json");
+  if (!fsSync.existsSync(openclawConfigPath)) return;
+  const raw = await fs.readFile(openclawConfigPath, "utf8");
+  const openclawConfig = JSON.parse(raw) as JsonRecord;
+  const plugins = ensureRecord(openclawConfig, "plugins");
+  const entries = ensureRecord(plugins, "entries");
+  const entry = isRecord(entries["octoclaw-runtime"]) ? entries["octoclaw-runtime"] : {};
+  const currentConfig = isRecord(entry.config) ? entry.config : {};
+  entry.enabled = true;
+  entry.config = {
+    ...currentConfig,
+    ...pluginConfig,
+  };
+  entries["octoclaw-runtime"] = entry;
+  await fs.writeFile(openclawConfigPath, `${JSON.stringify(openclawConfig, null, 2)}\n`, "utf8");
 }
 
 function normalizeConfig(raw: JsonRecord): OctoclawConfig {
@@ -122,6 +145,7 @@ function normalizeConfig(raw: JsonRecord): OctoclawConfig {
   const pluginConfig = isRecord(raw.pluginConfig) ? raw.pluginConfig : {};
   return {
     ...fallback,
+    _updatedAt: typeof raw._updatedAt === "string" ? raw._updatedAt : fallback._updatedAt,
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : fallback.enabled,
     features: {
       delegation: typeof features.delegation === "boolean" ? features.delegation : fallback.features.delegation,
@@ -148,6 +172,14 @@ function normalizeConfig(raw: JsonRecord): OctoclawConfig {
 
 function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function ensureRecord(parent: JsonRecord, key: string): JsonRecord {
+  const current = parent[key];
+  if (isRecord(current)) return current;
+  const next: JsonRecord = {};
+  parent[key] = next;
+  return next;
 }
 
 function parseValue(value: string): unknown {

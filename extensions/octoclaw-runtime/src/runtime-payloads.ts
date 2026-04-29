@@ -9,12 +9,12 @@ import {
   markWorkflowFailed,
   renewWorkflowHeartbeat,
   startRuntimeWorkflow,
-} from "@octoclaw/runtime-core/workflow";
+} from "./core/workflow/index.js";
 import {
   createDelegateTask,
   startDelegateAttempt,
-} from "@octoclaw/runtime-core/delegate";
-import { normalizeRuntimeRequest } from "@octoclaw/runtime-core/requests";
+} from "./core/delegate/index.js";
+import { normalizeRuntimeRequest } from "./core/requests/index.js";
 import type { CoordinationMode as DelegateCoordinationMode } from "@octoclaw/contracts/delegate";
 import type { ScopeDescriptor, ScopeMetadata } from "@octoclaw/contracts/schemas";
 import type { DelegateHandoffPacket } from "@octoclaw/contracts/delegate-context";

@@ -18,10 +18,11 @@ import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, render
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOpenClawPluginEntry, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
-import { readConfig, syncToOpenClawPluginConfig } from "./config.js";
+import { readConfig, syncToOpenClawPluginConfig, writeConfig } from "./config.js";
 import type { CalibrationInputFile } from "./calibration/types.js";
 import type { SlackAcceptanceFormat } from "./slack-acceptance/types.js";
 import type { NightlyEvalConfig, LaunchAgentConfig } from "./nightly-eval/index.js";
+import { installLaunchAgent, uninstallLaunchAgent } from "./platform.js";
 
 type LegacyCliFormat = "text" | "json";
 type StatusFormat = "compact" | "table" | "lanes" | "anchors" | "json";
@@ -1626,12 +1627,7 @@ async function runNightlyEvalLaunchAgentCommand(parsed: ParsedCliArgs, _env: Rec
 
   if (parsed.nightlyEvalSubcommand === "uninstall-launchagent") {
     try {
-      const { spawn } = await import("node:child_process");
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn("launchctl", ["unload", plistPath], { stdio: ["ignore", "pipe", "pipe"] });
-        child.on("error", reject);
-        child.on("close", () => resolve());
-      });
+      await uninstallLaunchAgent(plistPath);
     } catch {
       // tolerate — may not be loaded
     }
@@ -1673,15 +1669,7 @@ async function runNightlyEvalLaunchAgentCommand(parsed: ParsedCliArgs, _env: Rec
     await ensureDir(path.dirname(plistPath));
     await ensureDir(resolvedLogDir);
     await fs.writeFile(plistPath, plist, "utf8");
-    const { spawn } = await import("node:child_process");
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn("launchctl", ["load", plistPath], { stdio: ["ignore", "pipe", "pipe"] });
-      child.on("error", reject);
-      child.on("close", (code: number | null) => {
-        if (code === 0) resolve();
-        else reject(new Error(`launchctl load failed with code ${code}`));
-      });
-    });
+    await installLaunchAgent(plistPath);
     return `Installed LaunchAgent: ${label}\nPlist: ${plistPath}\nSchedule: daily at ${String(hour).padStart(2, "0")}:00\nLogs: ${resolvedLogDir}`;
   }
 
@@ -1800,7 +1788,8 @@ async function runInstallCommand(parsed: ParsedCliArgs, env: Record<string, stri
     await setupSymlinks(openclawHome);
     const config = await readConfig(openclawHome);
     await syncToOpenClawPluginConfig(openclawHome, config);
-    await syncOpenClawPluginEntry(openclawHome, octoclawRoot);
+    await writeConfig(openclawHome, config);
+    await syncOpenClawPluginEntry(openclawHome, octoclawRoot, config.pluginConfig);
     await writeSourceManifest(openclawHome, octoclawRoot);
     await validateLoad(openclawHome);
     if (parsed.restartServices) {
@@ -1851,11 +1840,21 @@ export async function main(
 
     const openclawHome = resolveOctoClawHome(env, parsed.openclawHome);
     if (parsed.command === "enable") {
-      io.stdout(await enablePlugin(openclawHome));
+      const restoreEnv = applyProcessEnv(env);
+      try {
+        io.stdout(await enablePlugin(openclawHome));
+      } finally {
+        restoreEnv();
+      }
       return 0;
     }
     if (parsed.command === "disable") {
-      io.stdout(await disablePlugin(openclawHome));
+      const restoreEnv = applyProcessEnv(env);
+      try {
+        io.stdout(await disablePlugin(openclawHome));
+      } finally {
+        restoreEnv();
+      }
       return 0;
     }
     if (parsed.command === "config") {

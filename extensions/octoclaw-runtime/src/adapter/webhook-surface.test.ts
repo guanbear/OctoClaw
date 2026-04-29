@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeWebhookSurface } from "./webhook-surface.js";
 import type { NativeHelperInvoker } from "./native-helper.js";
 import { OCTOCLAW_CONTRACT_SCHEMA_VERSION, type ScopeMetadata } from "@octoclaw/contracts/schemas";
-import { startRuntimeWorkflow } from "@octoclaw/runtime-core/workflow";
+import { startRuntimeWorkflow } from "../core/workflow/index.js";
 import type { PolicyDecision } from "@octoclaw/policy/judge";
 
 interface HelperRecorder {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NativeHelperInvoker } from "./native-helper.js";
 import { createRuntimeTaskflowAdapter } from "./runtime-taskflow.js";
-import { startRuntimeWorkflow, type RuntimeWorkflowState } from "@octoclaw/runtime-core/workflow";
+import { startRuntimeWorkflow, type RuntimeWorkflowState } from "../core/workflow/index.js";
 import type { PolicyDecision } from "@octoclaw/policy/judge";
 import { OCTOCLAW_CONTRACT_SCHEMA_VERSION, type ScopeMetadata } from "@octoclaw/contracts/schemas";
 

@@ -8,9 +8,6 @@
       "path": "packages/octoclaw-policy"
     },
     {
-      "path": "packages/octoclaw-runtime-core"
-    },
-    {
       "path": "extensions/octoclaw-runtime"
     },
     {
@@ -18,12 +15,6 @@
     },
     {
       "path": "tools/octoclawctl"
-    },
-    {
-      "path": "tools/install"
-    },
-    {
-      "path": "tools/manage"
     }
   ]
 }

@@ -4,7 +4,7 @@ import {
 } from "./conversation-grounding.js";
 import {
   buildStatusQueryPacket,
-} from "@octoclaw/runtime-core/delegate";
+} from "./core/delegate/index.js";
 import type {
   DelegateAttempt,
   DelegateProgressEvent,

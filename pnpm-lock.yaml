@@ -23,9 +23,6 @@ importers:
       '@octoclaw/policy':
         specifier: workspace:*
         version: link:../../packages/octoclaw-policy
-      '@octoclaw/runtime-core':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-runtime-core
 
   extensions/octoclaw-status-surface:
     dependencies:
@@ -35,9 +32,6 @@ importers:
       '@octoclaw/runtime':
         specifier: workspace:*
         version: link:../octoclaw-runtime
-      '@octoclaw/runtime-core':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-runtime-core
 
   packages/octoclaw-contracts: {}
 
@@ -46,26 +40,6 @@ importers:
       '@octoclaw/contracts':
         specifier: workspace:*
         version: link:../octoclaw-contracts
-
-  packages/octoclaw-runtime-core:
-    dependencies:
-      '@octoclaw/contracts':
-        specifier: workspace:*
-        version: link:../octoclaw-contracts
-      '@octoclaw/policy':
-        specifier: workspace:*
-        version: link:../octoclaw-policy
-
-  tools/install:
-    dependencies:
-      '@octoclaw/contracts':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-contracts
-      '@octoclaw/policy':
-        specifier: workspace:*
-        version: link:../../packages/octoclaw-policy
-
-  tools/manage: {}
 
   tools/octoclawctl:
     dependencies:

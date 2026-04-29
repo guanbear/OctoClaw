@@ -15,8 +15,7 @@
   },
   "dependencies": {
     "@octoclaw/contracts": "workspace:*",
-    "@octoclaw/runtime": "workspace:*",
-    "@octoclaw/runtime-core": "workspace:*"
+    "@octoclaw/runtime": "workspace:*"
   },
   "scripts": {
     "build": "tsc --build",

@@ -44,6 +44,21 @@ export async function restartOpenClawNode(openclawHome: string): Promise<Service
   return restartService("node", openclawHome);
 }
 
+export async function installLaunchAgent(plistPath: string): Promise<void> {
+  if (process.platform !== "darwin") {
+    throw new Error(`LaunchAgent install is only supported on macOS, not ${process.platform}`);
+  }
+  const result = await tryRun("launchctl", ["load", plistPath]);
+  if (!result.success) {
+    throw new Error(`LaunchAgent load failed: ${result.error ?? "unknown"}`);
+  }
+}
+
+export async function uninstallLaunchAgent(plistPath: string): Promise<void> {
+  if (process.platform !== "darwin") return;
+  await tryRun("launchctl", ["unload", plistPath]);
+}
+
 async function tryRun(command: string, args: string[], env: Record<string, string | undefined> = {}, timeoutMs = 15_000): Promise<ServiceRestartResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });

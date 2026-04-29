@@ -1,4 +1,4 @@
-import type { RuntimeWorkflowState } from "@octoclaw/runtime-core/workflow";
+import type { RuntimeWorkflowState } from "./core/workflow/index.js";
 import { judgePolicy, type PolicyDecision, type PolicyJudgeInput } from "@octoclaw/policy/judge";
 import { buildContractEnvelope } from "@octoclaw/contracts/schemas";
 import type { RuntimeProjectionPayload, RuntimeNativeTruthPayload } from "./adapter/runtime-taskflow.js";

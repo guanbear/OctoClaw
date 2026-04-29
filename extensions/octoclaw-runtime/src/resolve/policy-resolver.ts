@@ -25,16 +25,16 @@ import {
   renewWorkflowHeartbeat,
   startRuntimeWorkflow,
   type RuntimeWorkflowState,
-} from "@octoclaw/runtime-core/workflow";
+} from "../core/workflow/index.js";
 import {
   advanceAttemptStatus,
   projectTaskStatus,
-} from "@octoclaw/runtime-core/delegate";
+} from "../core/delegate/index.js";
 import {
   applyRecoveryHook,
   assessRecoveryNeed,
   type RecoveryAssessment,
-} from "@octoclaw/runtime-core/recovery";
+} from "../core/recovery/index.js";
 import type { RecoveryInfo, TimeoutCategory } from "@octoclaw/contracts/delegate";
 import type { PolicyRole } from "@octoclaw/policy/roles";
 import type { ExecutionProfileTarget } from "@octoclaw/policy/model";

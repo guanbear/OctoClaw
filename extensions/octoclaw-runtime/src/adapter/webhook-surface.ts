@@ -1,4 +1,4 @@
-import type { RuntimeWorkflowState } from "@octoclaw/runtime-core/workflow";
+import type { RuntimeWorkflowState } from "../core/workflow/index.js";
 import type {
   RuntimeTaskflowAdapter,
   RuntimeTaskflowManagedRecord,

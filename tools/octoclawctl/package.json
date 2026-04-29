@@ -1,5 +1,5 @@
 {
-  "name": "@octoclaw/octoclawctl",
+  "name": "octoclawctl",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/cli.js",

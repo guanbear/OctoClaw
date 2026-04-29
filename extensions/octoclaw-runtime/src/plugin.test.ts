@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createOctoClawRuntimePlugin } from "./plugin.js";
 import { judgePolicy, type PolicyJudgeInput, type PolicyDecision } from "@octoclaw/policy/judge";
-import { startRuntimeWorkflow } from "@octoclaw/runtime-core/workflow";
+import { startRuntimeWorkflow } from "./core/workflow/index.js";
 import type { ScopeMetadata } from "@octoclaw/contracts/schemas";
 import type { NativeHelperInvoker } from "./adapter/native-helper.js";
 

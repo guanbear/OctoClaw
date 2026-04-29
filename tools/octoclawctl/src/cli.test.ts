@@ -153,6 +153,49 @@ describe("octoclawctl cli", () => {
       const getExitCode = await main(["config", "get", "judge.modelId"], { OCTOCLAW_HOME: openclawHome }, getCapture.io);
       expect(getExitCode).toBe(0);
       expect(getCapture.stdout[0]).toBe("test-model");
+
+      const statusCapture = createIo();
+      const statusExitCode = await main(["status"], { OCTOCLAW_HOME: openclawHome }, statusCapture.io);
+      expect(statusExitCode).toBe(0);
+      expect(statusCapture.stdout[0]).not.toContain("installed_at: 1970-01-01T00:00:00.000Z");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("enable and disable update unified config and plugin projections", async () => {
+    const tmpDir = path.join(os.homedir(), ".octoclawctl-test-tmp", `toggle-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const openclawHome = path.join(tmpDir, ".openclaw");
+    const fakeBin = path.join(tmpDir, "bin");
+    try {
+      await fs.mkdir(path.join(openclawHome, "extensions", "octoclaw-runtime"), { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json"), JSON.stringify({ id: "octoclaw-runtime", pluginConfig: { enabled: true } }), "utf8");
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({ plugins: { entries: { "octoclaw-runtime": { enabled: true, config: { octoclawRoot: "/repo" } } } } }), "utf8");
+      await fs.mkdir(fakeBin, { recursive: true });
+      await fs.writeFile(path.join(fakeBin, "openclaw"), "#!/bin/sh\necho \"$@\" >> \"$OCTOCLAW_FAKE_LOG\"\n", "utf8");
+      await runTestCommand("chmod", ["755", path.join(fakeBin, "openclaw")]);
+
+      const disableCapture = createIo();
+      const disableExitCode = await main(["disable", "--openclaw-home", openclawHome], { PATH: `${fakeBin}:${process.env.PATH ?? ""}`, OCTOCLAW_FAKE_LOG: path.join(tmpDir, "openclaw.log") }, disableCapture.io);
+      expect(disableExitCode).toBe(0);
+
+      const disabledConfig = JSON.parse(await fs.readFile(path.join(tmpDir, ".octoclaw", "config.json"), "utf8"));
+      expect(disabledConfig.enabled).toBe(false);
+      expect(disabledConfig.pluginConfig.enabled).toBe(false);
+      const disabledManifest = JSON.parse(await fs.readFile(path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json"), "utf8"));
+      expect(disabledManifest.pluginConfig.enabled).toBe(false);
+      const disabledOpenClawConfig = JSON.parse(await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8"));
+      expect(disabledOpenClawConfig.plugins.entries["octoclaw-runtime"].enabled).toBe(true);
+      expect(disabledOpenClawConfig.plugins.entries["octoclaw-runtime"].config.enabled).toBe(false);
+
+      const enableCapture = createIo();
+      const enableExitCode = await main(["enable", "--openclaw-home", openclawHome], { PATH: `${fakeBin}:${process.env.PATH ?? ""}`, OCTOCLAW_FAKE_LOG: path.join(tmpDir, "openclaw.log") }, enableCapture.io);
+      expect(enableExitCode).toBe(0);
+
+      const enabledConfig = JSON.parse(await fs.readFile(path.join(tmpDir, ".octoclaw", "config.json"), "utf8"));
+      expect(enabledConfig.enabled).toBe(true);
+      const enabledManifest = JSON.parse(await fs.readFile(path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json"), "utf8"));
+      expect(enabledManifest.pluginConfig.enabled).toBe(true);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -186,6 +229,10 @@ describe("octoclawctl cli", () => {
       await fs.writeFile(path.join(extensionRoot, "package.json"), JSON.stringify({ name: "@octoclaw/runtime" }), "utf8");
       await fs.writeFile(path.join(extensionRoot, "openclaw.plugin.json"), JSON.stringify({ id: "octoclaw-runtime", main: "./dist/index.js" }), "utf8");
       await fs.writeFile(path.join(extensionRoot, "dist", "index.js"), "export {};", "utf8");
+      await fs.mkdir(path.join(openclawHome, "packages", "octoclaw-stale-package", "dist"), { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "packages", "octoclaw-stale-package", "dist", "old.js"), "export {};", "utf8");
+      await fs.mkdir(path.join(openclawHome, "extensions", "octoclaw-old-extension", "dist"), { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "extensions", "octoclaw-old-extension", "openclaw.plugin.json"), JSON.stringify({ id: "octoclaw-old-extension", main: "./dist/index.js" }), "utf8");
       await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
       await fs.mkdir(fakeBin, { recursive: true });
       await fs.writeFile(path.join(fakeBin, "openclaw"), "#!/bin/sh\necho \"$@\" >> \"$OCTOCLAW_FAKE_LOG\"\n", "utf8");
@@ -205,11 +252,18 @@ describe("octoclawctl cli", () => {
 
       const deployedManifest = JSON.parse(await fs.readFile(path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json"), "utf8"));
       expect(deployedManifest.pluginConfig.judgeFast.modelId).toBe("deploy-model");
+      const unifiedConfig = JSON.parse(await fs.readFile(path.join(tmpDir, ".octoclaw", "config.json"), "utf8"));
+      expect(unifiedConfig.judge.modelId).toBe("deploy-model");
+      expect(unifiedConfig.pluginConfig.judgeFast.modelId).toBe("deploy-model");
       const openclawConfig = JSON.parse(await fs.readFile(path.join(openclawHome, "openclaw.json"), "utf8"));
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.enabled).toBe(true);
+      expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.judgeFast.modelId).toBe("deploy-model");
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.octoclawRoot).toBe(repoRoot);
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.workspaceRoot).toBe(path.join(openclawHome, "workspace"));
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].hooks.allowPromptInjection).toBe(true);
       expect(await fs.readFile(path.join(openclawHome, "packages", "octoclaw-contracts", "dist", "index.js"), "utf8")).toContain("export");
+      await expect(fs.readFile(path.join(openclawHome, "packages", "octoclaw-stale-package", "dist", "old.js"), "utf8")).rejects.toThrow();
+      await expect(fs.readFile(path.join(openclawHome, "extensions", "octoclaw-old-extension", "openclaw.plugin.json"), "utf8")).rejects.toThrow();
       expect(await fs.readFile(path.join(openclawHome, "octoclaw-source-manifest.json"), "utf8")).toContain("test-commit");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });

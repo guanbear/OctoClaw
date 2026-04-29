@@ -99,7 +99,7 @@ export function startRuntimeWorkflow(input: StartWorkflowInput): RuntimeWorkflow
       ...identity,
       source: input.provenanceSource || "runtime_orchestrator",
       sourceRef: input.decisionRef || `${input.requestId}:${input.taskId}`,
-      materializedBy: "packages/octoclaw-runtime-core/src/workflow/index.ts",
+      materializedBy: "extensions/octoclaw-runtime/src/core/workflow/index.ts",
       role: input.role,
       coordinationMode: input.decision.coordinationMode,
       modelProfile: input.decision.modelProfile,
