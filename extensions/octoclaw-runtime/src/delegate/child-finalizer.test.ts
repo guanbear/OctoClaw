@@ -4,7 +4,7 @@ import path from "node:path";
 const fs = fsSync as unknown as { mkdtempSync(prefix: string): string; mkdirSync(pathname: string, options?: { recursive?: boolean }): void; readFileSync(pathname: string, encoding: string): string; writeFileSync(pathname: string, data: string, encoding: string): void };
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { envOverrides } from "../resolve/env.js";
-import { finalizeChildSessionOnce, findChildFinalResult, scheduleChildCompletionFinalizer } from "./child-finalizer.js";
+import { finalizeChildSessionOnce, scheduleChildCompletionFinalizer } from "./child-finalizer.js";
 
 function writeCompletionFile(workspaceRoot: string, workContractId: string, completion: Record<string, unknown>): string {
   const completionDir = path.join(workspaceRoot, ".octoclaw", "completions");
@@ -34,7 +34,6 @@ describe("child completion finalizer — completion file protocol", () => {
       workContractId: "wc-1",
       parentSessionKey: "slack:channel:C123",
       nativeTaskId: "native-1",
-      recordReplay: false,
     });
 
     expect(result.status).toBe("pending");
@@ -65,7 +64,6 @@ describe("child completion finalizer — completion file protocol", () => {
       parentSessionKey: "slack:channel:C123",
       nativeTaskId: "native-2",
       modelId: "test-model",
-      recordReplay: false,
       sendFinalMessage: async ({ message }) => {
         sent.push(message);
         return { sent: true, delivered: true };
@@ -113,7 +111,6 @@ describe("child completion finalizer — completion file protocol", () => {
       workContractId: "wc-3",
       parentSessionKey: "no-adapter-session",
       nativeTaskId: "native-3",
-      recordReplay: false,
     });
 
     expect(result.status).toBe("delivery_failed");
@@ -131,14 +128,9 @@ describe("child completion finalizer — completion file protocol", () => {
       delegateTaskId: "",
       workContractId: "",
       parentSessionKey: "",
-      recordReplay: false,
     });
 
     expect(result.status).toBe("missing_identity");
-  });
-
-  it("findChildFinalResult always returns null (legacy stub)", () => {
-    expect(findChildFinalResult()).toBeNull();
   });
 
   it("scheduleChildCompletionFinalizer polls and detects completion", async () => {
@@ -155,7 +147,6 @@ describe("child completion finalizer — completion file protocol", () => {
       timeoutMs: 30_000,
       pollIntervalMs: 1_000,
       initialDelayMs: 0,
-      recordReplay: false,
       sendFinalMessage: async () => ({ sent: true, delivered: true }),
     });
 
@@ -200,7 +191,6 @@ describe("child completion finalizer — completion file protocol", () => {
       timeoutMs: 30_000,
       pollIntervalMs: 1_000,
       initialDelayMs: 0,
-      recordReplay: false,
     });
 
     await vi.advanceTimersByTimeAsync(31_000);
@@ -240,7 +230,6 @@ describe("child completion finalizer — completion file protocol", () => {
       delegateTaskId: "delegate-fail",
       workContractId: "wc-fail",
       parentSessionKey: "slack:channel:C123",
-      recordReplay: false,
       sendFinalMessage: async ({ message }) => {
         sent.push(message);
         return { sent: true, delivered: true };

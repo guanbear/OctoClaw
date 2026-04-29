@@ -12,11 +12,6 @@ import { atomicWriteJsonSync } from "../util/atomic-write.js";
 import { materializeWorkContractSuccess } from "../work-contract/materializer.js";
 import { loadWorkContract } from "../work-contract/store.js";
 
-export interface ChildCompletionRuntime {
-  waitForRun?(params: { runId: string; timeoutMs?: number }): Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
-  getSessionMessages?(params: { sessionKey: string; limit?: number }): Promise<{ messages: unknown[] }>;
-}
-
 export interface ChildCompletionFinalizerOptions {
   childSessionKey: string;
   delegateTaskId: string;
@@ -28,16 +23,11 @@ export interface ChildCompletionFinalizerOptions {
   runId?: string;
   childRunId?: string;
   modelId?: string;
-  sessionsDir?: string;
   taskStatePath?: string;
   cwd?: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
   initialDelayMs?: number;
-  runtime?: ChildCompletionRuntime | null;
-  completionProbeTimeoutMs?: number;
-  sessionFallbackIdleMs?: number;
-  recordReplay?: boolean;
   sendFinalMessage?: (params: { sessionKey: string; message: string; replyToMessageId?: string; cwd?: string }) => Promise<{ sent: boolean; delivered: boolean; error?: string }>;
   logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
 }
@@ -45,7 +35,6 @@ export interface ChildCompletionFinalizerOptions {
 export interface ChildCompletionFinalizerResult {
   status: "completed" | "pending" | "missing_identity" | "delivery_failed";
   resultText?: string;
-  sessionFile?: string;
   sent?: boolean;
   error?: string;
 }
@@ -291,8 +280,4 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
 export function resetChildCompletionFinalizers(): void {
   for (const timer of activeFinalizers.values()) clearTimeout(timer);
   activeFinalizers.clear();
-}
-
-export function findChildFinalResult(): null {
-  return null;
 }

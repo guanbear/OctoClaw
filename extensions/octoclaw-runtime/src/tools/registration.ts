@@ -73,8 +73,6 @@ export interface OpenClawSubagentRuntime {
     lane?: string;
     idempotencyKey?: string;
   }): Promise<{ runId?: string }>;
-  waitForRun?(params: { runId: string; timeoutMs?: number }): Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
-  getSessionMessages?(params: { sessionKey: string; limit?: number }): Promise<{ messages: unknown[] }>;
 }
 
 export interface ToolRegistrationOptions {
@@ -2310,7 +2308,6 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 modelId: selectedModel || asString(metadata.model),
                 cwd: ctxCwd(ctx),
                 timeoutMs: Math.max(180_000, (expectedSeconds > 0 ? expectedSeconds * 1000 + 60_000 : 0)),
-                runtime: options.subagentRuntime ?? asRecord(ctx.runtime).subagent as OpenClawSubagentRuntime | undefined,
                 logger: toolLogger(ctx),
               });
             } else {
