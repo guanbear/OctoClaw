@@ -10,6 +10,7 @@ import {
   envOverrides,
   resolveReplayLogPath,
   resolveTaskStatePath,
+  resolveWorkerCompletionPath,
   stableId,
   truncateText,
 } from "../resolve/env.js";
@@ -727,13 +728,38 @@ function buildChildSessionKey(ctx: UnknownRecord, metadata: UnknownRecord): stri
 }
 
 function buildSubagentSpawnMessage(params: { task: string; childSessionKey: string; delegateTaskId: string; workContractId: string }): string {
+  const completionPath = resolveWorkerCompletionPath(params.workContractId);
+  const completionTemplate = JSON.stringify({
+    schemaVersion: "octoclaw.worker_completion/v1",
+    workContractId: params.workContractId,
+    childSessionKey: params.childSessionKey,
+    delegateTaskId: params.delegateTaskId,
+    status: "success",
+    summary: "（在此填写任务结果摘要，最多 2000 字）",
+    artifacts: [],
+    completedAt: new Date().toISOString(),
+  }, null, 2);
+
   return [
     "[OctoClaw Delegated Task]",
     `childSessionKey: ${params.childSessionKey}`,
-    params.delegateTaskId ? `delegateTaskId: ${params.delegateTaskId}` : "",
-    params.workContractId ? `workContractId: ${params.workContractId}` : "",
-    "Return a concise result packet with findings, artifact refs if any, and final status. Do not include hidden chain-of-thought.",
+    `delegateTaskId: ${params.delegateTaskId}`,
+    `workContractId: ${params.workContractId}`,
     "",
+    "## Completion Requirement",
+    "When the task is done, you MUST write the result to this file using the Write tool:",
+    `File path: ${completionPath}`,
+    "File content (fill in your actual results):",
+    "```json",
+    completionTemplate,
+    "```",
+    "Rules:",
+    '- status: use "success" if task completed, "failure" if it failed, "partial" if partially done',
+    "- summary: plain text description of what was done and the key results; do not include hidden reasoning or full conversation logs",
+    "- If failed, add errorCode and errorMessage fields",
+    "- Writing this file is your LAST action. Do not output anything after writing it.",
+    "",
+    "## Task",
     params.task,
   ].filter(Boolean).join("\n");
 }

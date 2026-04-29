@@ -171,6 +171,14 @@ export function resolveTaskStateRetentionPath(): string {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "task-state-retention.json");
 }
 
+export function resolveWorkerCompletionPath(workContractId: string): string {
+  return path.join(resolveWorkspaceRoot(), ".octoclaw", "completions", `${workContractId}.completion.json`);
+}
+
+export function resolveDeliveryOutboxPath(): string {
+  return path.join(resolveWorkspaceRoot(), ".octoclaw", "delivery-outbox.json");
+}
+
 export function resolveRouteStickinessPath(): string {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "route-stickiness.json");
 }
