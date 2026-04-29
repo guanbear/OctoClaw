@@ -1,6 +1,5 @@
 import fsSync from "node:fs";
 import {
-  runCommand,
   resolveTaskStatePath,
   resolveWorkspaceRoot,
 } from "../resolve/env.js";
@@ -12,10 +11,14 @@ interface FsSyncLike {
 
 const fsSyncLike = fsSync as unknown as FsSyncLike;
 import { getAdapterForSession } from "../im/index.js";
+import { sendIMMessage } from "../im/send.js";
 import {
   AckStage,
   ackStageText,
+  selectAckTemplate,
   selectAckTemplate as selectLegacyAckTemplate,
+  type AckTemplateStage,
+  type AckTemplateTaskClass,
   type TemplateSelectionInputs,
 } from "./ack-templates.js";
 import {
@@ -23,11 +26,6 @@ import {
   type AckDecision,
   type AckDecisionPacket,
 } from "./ack-decision.js";
-import {
-  selectAckTemplate,
-  type AckTemplateTaskClass,
-  type AckTemplateStage,
-} from "./ack-template-registry.js";
 import {
   buildAckKey,
   checkAndSet,
@@ -447,9 +445,8 @@ async function sendAckDirectDetailed(
   cwd?: string,
   options: UnknownRecord = {},
 ): Promise<AckSendResult> {
-  const parsed = canonicalParseSessionRoute(sessionKey);
   const resolved = resolveAckTargetFromSessionKey(sessionKey);
-  if (!parsed.origin || !resolved.target) {
+  if (!resolved.target) {
     return {
       attempted: false,
       delivered: false,
@@ -463,87 +460,24 @@ async function sendAckDirectDetailed(
     };
   }
 
-  const adapter = getAdapterForSession(sessionKey);
-  if (adapter) {
-    const replyToMessageId = asString(options.replyToMessageId);
-    const result = await adapter.send({
-      sessionKey,
-      message,
-      replyToMessageId: replyToMessageId || undefined,
-      timeoutMs: Math.max(500, Number(options.timeoutMs || 5000)),
-      cwd: asString(cwd) || resolveWorkspaceRoot(),
-    });
-    return {
-      attempted: true,
-      delivered: result.delivered,
-      sent: result.sent,
-      error: result.error || "",
-      reason: result.sent ? "channel_message_sent" : "channel_message_failed",
-      ack_target_resolution_state: "resolved",
-      ack_delivery_state: result.sent ? "sent" : "failed",
-      target: adapter.resolveTarget(sessionKey).target,
-      threadId: result.threadTs || "",
-    };
-  }
-
-  const timeoutMs = Math.max(500, Number(options.timeoutMs || 5000));
-  const args = ["message", "send", "--channel", parsed.origin, "--target", resolved.target, "--json"];
-  if (message) {
-    args.push("--message", message);
-  }
-  if (resolved.threadId) {
-    args.push("--thread-id", resolved.threadId);
-  }
-
-  try {
-    const result = await runCommand("openclaw", args, {
-      cwd: asString(cwd) || resolveWorkspaceRoot(),
-      timeoutMs,
-    });
-    if (result.code === 0 && result.stdout) {
-      try {
-        const parsedResult = JSON.parse(result.stdout) as UnknownRecord;
-        if (parsedResult.ok === true) {
-          return {
-            attempted: true,
-            delivered: true,
-            sent: true,
-            error: "",
-            reason: "channel_message_sent",
-            ack_target_resolution_state: "resolved",
-            ack_delivery_state: "sent",
-            target: resolved.target,
-            threadId: resolved.threadId,
-          };
-        }
-      } catch {
-        // ignore malformed json and fall through to command failure shape
-      }
-    }
-    return {
-      attempted: true,
-      delivered: false,
-      sent: false,
-      error: result.stderr || "send_failed",
-      reason: "channel_message_failed",
-      ack_target_resolution_state: "resolved",
-      ack_delivery_state: "failed",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  } catch (error) {
-    return {
-      attempted: true,
-      delivered: false,
-      sent: false,
-      error: String(error),
-      reason: "channel_message_error",
-      ack_target_resolution_state: "resolved",
-      ack_delivery_state: "failed",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  }
+  const result = await sendIMMessage({
+    sessionKey,
+    message,
+    replyToMessageId: asString(options.replyToMessageId) || undefined,
+    timeoutMs: Math.max(500, Number(options.timeoutMs || 5000)),
+    cwd: asString(cwd) || resolveWorkspaceRoot(),
+  });
+  return {
+    attempted: result.error !== "no_im_adapter",
+    delivered: result.sent,
+    sent: result.sent,
+    error: result.error || "",
+    reason: result.sent ? "channel_message_sent" : "channel_message_failed",
+    ack_target_resolution_state: "resolved",
+    ack_delivery_state: result.sent ? "sent" : "failed",
+    target: resolved.target,
+    threadId: result.threadTs || resolved.threadId,
+  };
 }
 
 async function sendReactionAckDetailed(

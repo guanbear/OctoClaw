@@ -1,7 +1,7 @@
 import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import type { AnomalyNotice } from "@octoclaw/contracts/work-contract";
-import { getAdapterForSession } from "../im/index.js";
-import { resolveWorkspaceRoot, runCommand } from "../resolve/env.js";
+import { sendIMMessage } from "../im/send.js";
+import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
 import { recordPolicyReplay } from "../replay/replay-logger.js";
@@ -131,88 +131,22 @@ async function sendExecutionTransitionDirect(
     };
   }
 
-  const adapter = getAdapterForSession(sessionKey);
-  if (adapter) {
-    const result = await adapter.send({
-      sessionKey,
-      message,
-      replyToMessageId: replyToMessageId || undefined,
-      timeoutMs: 5000,
-      cwd: asString(cwd) || resolveWorkspaceRoot(),
-    });
-    return {
-      attempted: true,
-      delivered: result.delivered,
-      sent: result.sent,
-      error: result.error || "",
-      reason: result.sent ? "channel_message_sent" : "channel_message_failed",
-      target: adapter.resolveTarget(sessionKey).target,
-      threadId: result.threadTs || "",
-    };
-  }
-
-  const origin = sessionKey.split(":")[0] || "";
-  if (!origin) {
-    return {
-      attempted: false,
-      delivered: false,
-      sent: false,
-      error: "unresolvable_session_origin",
-      reason: "channel_message_unresolvable",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  }
-
-  const args = ["message", "send", "--channel", origin, "--target", resolved.target, "--json"];
-  if (message) {
-    args.push("--message", message);
-  }
-  if (resolved.threadId) {
-    args.push("--thread-id", resolved.threadId);
-  }
-
-  try {
-    const result = await runCommand("openclaw", args, {
-      cwd: asString(cwd) || resolveWorkspaceRoot(),
-      timeoutMs: 5000,
-    });
-    if (result.code === 0 && result.stdout) {
-      try {
-        const parsedResult = JSON.parse(result.stdout) as Record<string, unknown>;
-        if (parsedResult.ok === true) {
-          return {
-            attempted: true,
-            delivered: true,
-            sent: true,
-            error: "",
-            reason: "channel_message_sent",
-            target: resolved.target,
-            threadId: resolved.threadId,
-          };
-        }
-      } catch {}
-    }
-    return {
-      attempted: true,
-      delivered: false,
-      sent: false,
-      error: result.stderr || "send_failed",
-      reason: "channel_message_failed",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  } catch (error) {
-    return {
-      attempted: true,
-      delivered: false,
-      sent: false,
-      error: String(error),
-      reason: "channel_message_error",
-      target: resolved.target,
-      threadId: resolved.threadId,
-    };
-  }
+  const result = await sendIMMessage({
+    sessionKey,
+    message,
+    replyToMessageId: replyToMessageId || undefined,
+    timeoutMs: 5000,
+    cwd: asString(cwd) || resolveWorkspaceRoot(),
+  });
+  return {
+    attempted: result.error !== "no_im_adapter",
+    delivered: result.sent,
+    sent: result.sent,
+    error: result.error || "",
+    reason: result.sent ? "channel_message_sent" : "channel_message_failed",
+    target: resolved.target,
+    threadId: result.threadTs || resolved.threadId,
+  };
 }
 
 async function recordExecutionTransitionReplay(
@@ -372,11 +306,10 @@ export async function emitExecutionTransitionNotification(params: {
   const text = projectTransitionText(params.transitionKind, params.projection, detectLanguage(params.decision));
   const targetResolution = resolveAckTargetFromSessionKey(params.sessionKey);
   const hasValidTarget = Boolean(targetResolution.target);
-  const hasValidThreadAnchor = Boolean(asString(params.replyToMessageId));
 
-  if (!hasValidTarget || !hasValidThreadAnchor) {
-    const reason = !hasValidTarget ? "no_valid_target" : "no_valid_thread_anchor";
-    const ackTargetResolutionState = !hasValidTarget ? "no_valid_target" : "no_valid_thread_anchor";
+  if (!hasValidTarget) {
+    const reason = "no_valid_target";
+    const ackTargetResolutionState = "no_valid_target";
     await recordExecutionTransitionReplay(replayParams, notificationKey, {
       ack_target_resolution_state: ackTargetResolutionState,
       ack_delivery_state: "skipped",

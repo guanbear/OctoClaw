@@ -6,6 +6,13 @@ export interface AckTimingConfig {
 
 export const DEFAULT_TIER_DELAYS_MS: [number, number, number, number] = [18_000, 45_000, 120_000, 0];
 
+export function getAckTierDelays(routePhase: AckRoutePhase): [number, number, number] {
+  if (routePhase === "delegate" || routePhase === "observe") {
+    return [0, 0, 0];
+  }
+  return [DEFAULT_TIER_DELAYS_MS[0], DEFAULT_TIER_DELAYS_MS[1], DEFAULT_TIER_DELAYS_MS[2]];
+}
+
 export interface AckTimerState {
   stateKey: string;
   sessionKey: string;
@@ -161,6 +168,7 @@ export function createAckTimers(params: CreateAckTimersParams): AckTimerState {
   cancelAckTimers(sessionKey);
 
   const config = resolveConfig(params.config);
+  const tierDelays = params.config?.tierDelaysMs ?? [...getAckTierDelays(params.routePhase), DEFAULT_TIER_DELAYS_MS[3]] as [number, number, number, number];
   const state: AckTimerState = {
     stateKey,
     sessionKey,
@@ -178,7 +186,7 @@ export function createAckTimers(params: CreateAckTimersParams): AckTimerState {
   };
 
   for (let tier = 0; tier <= 3; tier++) {
-    const delayMs = config.tierDelaysMs[tier];
+    const delayMs = tierDelays[tier] ?? config.tierDelaysMs[tier];
     if (!delayMs || !shouldScheduleTier(state.routePhase, tier)) continue;
     const timerRef = tier === 0 ? "tier0Timer" : tier === 1 ? "tier1Timer" : tier === 2 ? "tier2Timer" : "tier3Timer";
     state[timerRef] = setTimeout(() => {

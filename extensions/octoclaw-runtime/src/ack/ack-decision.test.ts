@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectAckTemplate } from "./ack-template-registry.js";
+import { selectAckTemplate } from "./ack-templates.js";
 import { decideAckAction, type AckDecisionPacket } from "./ack-decision.js";
 
 function packet(overrides: Partial<AckDecisionPacket> = {}): AckDecisionPacket {

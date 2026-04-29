@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   shouldScheduleTier,
   DEFAULT_TIER_DELAYS_MS,
+  getAckTierDelays,
 } from "./ack-timing.js";
 
 describe("ack-timing: shouldScheduleTier", () => {
@@ -52,5 +53,15 @@ describe("ack-timing: DEFAULT_TIER_DELAYS_MS", () => {
 
   it("tier3 is 0 (unused)", () => {
     expect(DEFAULT_TIER_DELAYS_MS[3]).toBe(0);
+  });
+});
+
+describe("ack-timing: getAckTierDelays", () => {
+  it("disables tier delays for delegate", () => {
+    expect(getAckTierDelays("delegate")).toEqual([0, 0, 0]);
+  });
+
+  it("keeps reply tier delays", () => {
+    expect(getAckTierDelays("reply")).toEqual([18_000, 45_000, 120_000]);
   });
 });
