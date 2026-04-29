@@ -776,7 +776,7 @@ export const plugin = {
       });
       preMetadata._judgeFastConfig = judgeFastRaw;
       preMetadata._delegationEnabled = delegationEnabled;
-      const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
+      const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, asRecord(getPolicyStateForContext(ctx).state), ctx);
 
       if (preSessionKey) {
         notifyUserMessage(preSessionKey, preStateKey);
@@ -803,7 +803,7 @@ export const plugin = {
           if (inboundMessageTs && !stringValue(latencyMetadata.message_id)) {
             latencyMetadata.message_id = inboundMessageTs;
           }
-          const latencyResult = await maybeSendLatencyAck(currentDecision, latencyMetadata, timerStateKey, getPolicyStateForContext(ctx).state ?? {}, ctx, pi.logger ?? {}, "direct_lookup");
+          const latencyResult = await maybeSendLatencyAck(currentDecision, latencyMetadata, timerStateKey, asRecord(getPolicyStateForContext(ctx).state), ctx, pi.logger ?? {}, "direct_lookup");
           if (latencyResult?.sent) {
             cancelAckGuard(preSessionKey);
           }
@@ -875,7 +875,7 @@ export const plugin = {
           sessionKey: preSessionKey || stringValue(ctx.sessionKey) || "",
           stateKey: stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || ""),
           decision: effectiveDecision ?? {},
-          state: effectiveState ?? {},
+          state: asRecord(effectiveState),
           replyToMessageId: inboundMessageTs,
           cwd: stringValue(ctx.cwd) || process.cwd(),
           logger: pi.logger,
@@ -1031,7 +1031,7 @@ export const plugin = {
         && !toolName.startsWith("octoclaw_")
       ) {
         updateAckTrackingState(stateKey, { tool_active: true });
-        const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, state ?? {}, ctx, pi.logger ?? {}, toolName);
+        const latencyAck = await maybeSendLatencyAck(decision, metadata, stateKey, asRecord(state), ctx, pi.logger ?? {}, toolName);
         updatePolicyState(stateKey, (current) => ({
           ...current,
           directToolsSeen: Array.from(new Set([...(Array.isArray(current?.directToolsSeen) ? current.directToolsSeen : []), toolName])),

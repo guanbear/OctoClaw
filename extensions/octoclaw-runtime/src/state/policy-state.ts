@@ -10,16 +10,50 @@ const PERSIST_DEBOUNCE_MS = 2_000;
 const RECENT_DELEGATED_MAX_AGE_MS = 2 * 60 * 1000;
 
 export interface PolicyStateEntry {
+  prompt?: string;
   decision?: Record<string, unknown>;
   routeSeal?: RouteSeal;
   routeHintSubmitted?: boolean;
+  routeHintPayload?: Record<string, unknown> | null;
+  routeCommitAckSent?: boolean;
+  route_commit_ack_sent?: boolean;
+  routeCommitAckId?: string;
   directToolsSeen?: string[];
   controlToolsSeen?: string[];
   blockedTools?: string[];
+  toolsUsed?: string[];
   delegated?: boolean;
   delegationTool?: string;
+  delegateTaskContext?: Record<string, unknown>;
+  delegateProgressEvents?: unknown[];
+  delegate_without_dispatch?: boolean;
+  dispatchExecuted?: boolean;
+  dispatch_executed?: boolean;
+  spawnExecuted?: boolean;
+  spawn_executed?: boolean;
+  resultMaterialized?: boolean;
+  result_materialized?: boolean;
   latencyAckSent?: boolean;
+  latencyAckText?: string;
   ackGuardKey?: string;
+  ack_guard_key?: string;
+  inboundMessageTs?: string;
+  message_id?: string;
+  messageId?: string;
+  turnId?: string;
+  turn_id?: string;
+  messageTurnId?: string;
+  message_turn_id?: string;
+  replyToMessageId?: string;
+  reply_to_id?: string;
+  session_binding_key?: string;
+  pending_slots?: string[];
+  formal_reply_visible?: boolean;
+  outbound_guard_replaced?: boolean;
+  outbound_guard_replaced_at?: string;
+  outbound_projection_footer_appended?: boolean;
+  outbound_projection_footer_appended_at?: string;
+  latestAnomalyNotice?: Record<string, unknown>;
   pendingDeliveryId?: string;
   pendingDeliveryTaskId?: string;
   pendingDeliveryRunnerJobId?: string;
@@ -31,7 +65,7 @@ export interface PolicyStateEntry {
   latestExecutionReceipt?: import("../replay/replay-logger.js").TurnExecutionReceipt;
   updatedAt?: number;
   createdAt?: number;
-  [key: string]: unknown;
+  extraState?: Record<string, unknown>;
 }
 
 export interface PolicyStateStoreOptions {
@@ -182,7 +216,7 @@ export class PolicyStateStore {
   private readonly isControlPromptCallback?: (prompt: string, ctx: Record<string, unknown>) => boolean;
   private readonly ttlMs: number;
   private readonly persistDebounceMs: number;
-  private readonly entries = new Map<string, PolicyStateEntry>();
+  private readonly _entries = new Map<string, PolicyStateEntry>();
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: PolicyStateStoreOptions = {}) {
@@ -202,7 +236,7 @@ export class PolicyStateStore {
       return undefined;
     }
 
-    const entry = this.entries.get(key);
+    const entry = this._entries.get(key);
     return entry ? cloneEntry(entry) : undefined;
   }
 
@@ -213,13 +247,13 @@ export class PolicyStateStore {
     }
 
     const now = Date.now();
-    const previous = this.entries.get(key);
+    const previous = this._entries.get(key);
     const next: PolicyStateEntry = {
       ...normalizeEntry(cloneEntry(entry)),
       createdAt: entry.createdAt ?? previous?.createdAt ?? now,
       updatedAt: now,
     };
-    this.entries.set(key, next);
+    this._entries.set(key, next);
     this.schedulePersist();
   }
 
@@ -229,7 +263,7 @@ export class PolicyStateStore {
       return;
     }
 
-    const current = this.entries.get(key);
+    const current = this._entries.get(key);
     const base: PolicyStateEntry = current ? cloneEntry(current) : { createdAt: Date.now() };
     const next = mutator(base);
     this.set(key, next);
@@ -241,7 +275,7 @@ export class PolicyStateStore {
       return;
     }
 
-    if (this.entries.delete(key)) {
+    if (this._entries.delete(key)) {
       this.schedulePersist();
     }
   }
@@ -249,9 +283,9 @@ export class PolicyStateStore {
   prune(): void {
     const now = Date.now();
     let changed = false;
-    for (const [key, value] of this.entries.entries()) {
+    for (const [key, value] of this._entries.entries()) {
       if (!value || now - entryTimestamp(value) > this.ttlMs) {
-        this.entries.delete(key);
+        this._entries.delete(key);
         changed = true;
       }
     }
@@ -261,11 +295,11 @@ export class PolicyStateStore {
   }
 
   clearAll(): void {
-    if (this.entries.size === 0) {
+    if (this._entries.size === 0) {
       return;
     }
 
-    this.entries.clear();
+    this._entries.clear();
     this.schedulePersist();
   }
 
@@ -279,7 +313,7 @@ export class PolicyStateStore {
     let best: { key: string; entry: PolicyStateEntry } | null = null;
     let bestUpdatedAt = 0;
 
-    for (const [key, entry] of this.entries.entries()) {
+    for (const [key, entry] of this._entries.entries()) {
       if (!promptsEquivalent(task, extractPrompt(entry))) {
         continue;
       }
@@ -305,7 +339,7 @@ export class PolicyStateStore {
     let bestScore = -1;
     let bestUpdatedAt = 0;
 
-    for (const [key, entry] of this.entries.entries()) {
+    for (const [key, entry] of this._entries.entries()) {
       const route = extractDecisionRoute(entry);
       if (!isDelegatedRoute(route)) {
         continue;
@@ -336,7 +370,7 @@ export class PolicyStateStore {
     this.prune();
     const keys = this.resolveContextKeys(ctx);
     for (const key of keys) {
-      const entry = this.entries.get(key);
+      const entry = this._entries.get(key);
       if (entry) {
         return { key, state: cloneEntry(entry) };
       }
@@ -385,7 +419,7 @@ export class PolicyStateStore {
         schema_version: "octoclaw.runtime_policy.state_ledger/v1",
         updated_at: new Date().toISOString(),
         ttl_ms: this.ttlMs,
-        sessions: Object.fromEntries(this.entries.entries()),
+        sessions: Object.fromEntries(this._entries.entries()),
       };
       atomicWriteJsonSync(this.sessionStateFile, payload);
     } catch {
@@ -395,7 +429,7 @@ export class PolicyStateStore {
 
   load(): void {
     this.clearPersistTimer();
-    this.entries.clear();
+    this._entries.clear();
     if (!this.sessionStateFile || !fs.existsSync(this.sessionStateFile)) {
       return;
     }
@@ -411,10 +445,10 @@ export class PolicyStateStore {
         if (updatedAt && now - updatedAt > this.ttlMs) {
           continue;
         }
-        this.entries.set(key, normalizeEntry(cloneEntry(entry)));
+        this._entries.set(key, normalizeEntry(cloneEntry(entry)));
       }
     } catch {
-      this.entries.clear();
+      this._entries.clear();
     }
   }
 
@@ -437,9 +471,9 @@ export class PolicyStateStore {
 
   private pruneInMemoryOnly(): void {
     const now = Date.now();
-    for (const [key, value] of this.entries.entries()) {
+    for (const [key, value] of this._entries.entries()) {
       if (!value || now - entryTimestamp(value) > this.ttlMs) {
-        this.entries.delete(key);
+        this._entries.delete(key);
       }
     }
   }
@@ -461,6 +495,10 @@ export class PolicyStateStore {
           .filter(Boolean),
       ),
     );
+  }
+
+  public entries(): Map<string, PolicyStateEntry> {
+    return this._entries;
   }
 }
 
@@ -492,7 +530,7 @@ export function createPolicyStateStore(sessionStateFile?: string): PolicyStateSt
     getState: (stateKey) => store.get(stateKey),
     entries: () => {
       store.prune();
-      return Array.from((store as unknown as { entries: Map<string, PolicyStateEntry> }).entries.entries())
+      return Array.from(store.entries().entries())
         .map(([key, state]) => ({ key, state: { ...state } }));
     },
     set: (stateKey, entry) => store.set(stateKey, entry),

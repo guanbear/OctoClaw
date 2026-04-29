@@ -168,7 +168,8 @@ function collectLatestReceipt(
     );
     if (matchScore <= 0) continue;
 
-    if (excludeTurnId && (entryTurnId(state) === excludeTurnId || latestReceipt?.turnId === excludeTurnId)) continue;
+    const stateRecord = state as unknown as JsonRecord;
+    if (excludeTurnId && (entryTurnId(stateRecord) === excludeTurnId || latestReceipt?.turnId === excludeTurnId)) continue;
 
     const updatedAt = Number(latestReceipt?.completedAt || state.updatedAt || state.createdAt || 0);
     if (!updatedAt || updatedAt >= decisionStartedAt) continue;
@@ -176,8 +177,8 @@ function collectLatestReceipt(
     const receipt = latestReceipt
       ? latestReceipt
       : attachExplicitSpawnReceipt(
-        buildTurnExecutionReceipt(state, Math.max(0, updatedAt - Number(state.createdAt || updatedAt)), updatedAt || undefined),
-        state,
+        buildTurnExecutionReceipt(stateRecord, Math.max(0, updatedAt - Number(state.createdAt || updatedAt)), updatedAt || undefined),
+        stateRecord,
       );
     const evidenceScore = receiptEvidenceScore(receipt);
     const isBetter = evidenceScore > bestEvidenceScore
