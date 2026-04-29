@@ -6,7 +6,6 @@ import {
   IRON_LAWS,
   JudgeOutputSchema,
   POLICY_LABELS,
-  RemoteJudgeOutputSchema,
   VALIDATOR_DEFAULT_RULES,
 } from "./decision-policy-spec.js";
 
@@ -115,17 +114,6 @@ function renderLocalJudgeInstructions(): string {
   ].join("\n");
 }
 
-function renderRemoteJudgeInstructions(): string {
-  return [
-    "## Remote judge instructions",
-    "- You are escalation / adjudication only.",
-    "- Review the local candidate against the same canonical policy.",
-    "- Keep the local decision when it is policy-compliant and safe.",
-    "- Override only when the local decision is materially unsafe, materially wrong, or conflicts with the canonical policy defaults.",
-    "- Output JSON only. No prose before or after JSON.",
-  ].join("\n");
-}
-
 export function buildLocalJudgeSystemPrompt(): string {
   return [
     "You are OctoClaw local_judge. You are the hot-path routing authority.",
@@ -162,43 +150,6 @@ export function buildLocalJudgeUserPrompt(
   }
   if (recentLedgerSummary !== undefined) {
     sections.push(`recent_ledger_summary: ${renderJson(recentLedgerSummary)}`);
-  }
-
-  return sections.join("\n\n");
-}
-
-export function buildRemoteJudgeSystemPrompt(): string {
-  return [
-    "You are OctoClaw remote_judge. You are escalation / adjudication only.",
-    "Implement exactly the canonical decision policy spec. Do not improvise. Do not redesign abstractions.",
-    renderCriticalRules(),
-    renderRouteDefinitions(),
-    renderPolicyLabels(),
-    renderIronLaws(),
-    renderAntiReplyBiasRules(),
-    renderDecisionRubric(),
-    renderValidatorDefaultRules(),
-    renderRemoteJudgeInstructions(),
-    "## Output JSON schema",
-    renderJson(RemoteJudgeOutputSchema),
-  ].join("\n\n");
-}
-
-export function buildRemoteJudgeUserPrompt(
-  userMessage: string,
-  localCandidate: unknown,
-  escalationReason: string,
-  expandedPacket?: unknown,
-): string {
-  const sections = [
-    "Adjudicate the local candidate under the canonical policy spec and return JSON only.",
-    `user_message: ${renderJson(userMessage)}`,
-    `local_candidate: ${renderJson(localCandidate)}`,
-    `escalation_reason: ${renderJson(escalationReason)}`,
-  ];
-
-  if (expandedPacket !== undefined) {
-    sections.push(`expanded_packet: ${renderJson(expandedPacket)}`);
   }
 
   return sections.join("\n\n");
@@ -242,10 +193,6 @@ export function buildAckWriterUserPrompt(
 
 export function buildLocalJudgePromptView(): string {
   return buildLocalJudgeSystemPrompt();
-}
-
-export function buildRemoteJudgePromptView(): string {
-  return buildRemoteJudgeSystemPrompt();
 }
 
 export function buildAckWriterPromptView(): string {

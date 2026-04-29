@@ -690,15 +690,6 @@ export const plugin = {
       try { const p = JSON.parse(json); return (typeof p === "object" && p && !Array.isArray(p)) ? p as Record<string, unknown> : {}; } catch { return {}; }
     })();
     const judgeFastRaw = (Object.keys(judgeFastFromPlugin).length > 0) ? judgeFastFromPlugin : judgeFastFromEnv;
-    const remoteJudgeFromEnv = (() => {
-      const json = process.env.OCTOCLAW_JUDGE_REMOTE?.trim();
-      if (!json) return {};
-      try { const p = JSON.parse(json); return (typeof p === "object" && p && !Array.isArray(p)) ? p as Record<string, unknown> : {}; } catch { return {}; }
-    })();
-    const remoteJudgeFromPlugin = (pi.pluginConfig?.remoteJudge && typeof pi.pluginConfig.remoteJudge === "object" && !Array.isArray(pi.pluginConfig.remoteJudge))
-      ? pi.pluginConfig.remoteJudge as Record<string, unknown>
-      : {};
-    const remoteJudgeRaw = Object.keys(remoteJudgeFromPlugin).length > 0 ? remoteJudgeFromPlugin : remoteJudgeFromEnv;
 
     if (process.env.OCTOCLAW_JUDGE_DEBUG) {
       console.log(`[octoclaw-judge] pluginKeys=${Object.keys(judgeFastFromPlugin).length} envKeys=${Object.keys(judgeFastFromEnv).length} rawKeys=${Object.keys(judgeFastRaw).length} envVar="${process.env.OCTOCLAW_JUDGE_FAST?.slice(0, 50) ?? "(none)"}" modelId="${(judgeFastRaw as Record<string, unknown>).modelId ?? "(none)"}"`);
@@ -784,7 +775,6 @@ export const plugin = {
         metadata: preMetadata,
       });
       preMetadata._judgeFastConfig = judgeFastRaw;
-      preMetadata._remoteJudgeConfig = Object.keys(remoteJudgeRaw).length > 0 ? remoteJudgeRaw : null;
       preMetadata._delegationEnabled = delegationEnabled;
       const preSessionKey = resolveAckDeliverySessionKey(preMetadata, preStateKey, getPolicyStateForContext(ctx).state, ctx);
 

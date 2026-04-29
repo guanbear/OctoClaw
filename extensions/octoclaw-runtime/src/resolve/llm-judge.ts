@@ -1,32 +1,23 @@
 import {
-  ESCALATION_DEFAULTS,
   JUDGE_INPUT_CAPS,
   JUDGE_FAST_DEFAULTS,
-  REMOTE_JUDGE_DEFAULTS,
   isActionableJudgeResult,
-  isRemoteJudgeOutput,
   isValidJudgeOutput,
-  type DualJudgeConfig,
-  type EscalationReason,
   type JudgeFastConfig,
   type JudgeInput,
   type JudgeOutput,
-  type RemoteJudgeOutput,
 } from "@octoclaw/policy/judge-schema";
 import type { JudgeContextPacket } from "@octoclaw/policy/judge";
 import {
   buildJudgeSystemPrompt,
   buildJudgeUserPrompt,
-  buildRemoteJudgeSystemPrompt,
-  buildRemoteJudgeUserPrompt,
 } from "@octoclaw/policy/judge-prompt";
-import { buildExpandedPacket, buildJudgeContextPacket } from "./judge-context-packet.js";
+import { buildJudgeContextPacket } from "./judge-context-packet.js";
 
 export { isValidJudgeOutput, isActionableJudgeResult };
-export type { DualJudgeConfig, EscalationReason, JudgeFastConfig, JudgeInput, JudgeOutput, RemoteJudgeOutput };
+export type { JudgeFastConfig, JudgeInput, JudgeOutput };
 
 type JudgeConfig = JudgeFastConfig;
-type RemoteJudgeConfig = DualJudgeConfig["remote"];
 
 export type JudgeFailureClass = "timeout" | "http_error" | "invalid_json" | "unknown";
 
@@ -46,10 +37,6 @@ function classifyJudgeError(error: unknown): JudgeFailureClass {
     return "http_error";
   }
   return "unknown";
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function asStringArray(value: unknown): string[] | undefined {
@@ -119,77 +106,6 @@ export function resolveJudgeConfig(raw: Record<string, unknown>): JudgeConfig | 
     local: isLocal,
     judgeAckEnabled: raw.judgeAckEnabled !== undefined ? Boolean(raw.judgeAckEnabled) : isLocal,
   };
-}
-
-function resolveRemoteJudgeConfig(raw: Record<string, unknown>): RemoteJudgeConfig {
-  const modelId = String(raw.modelId ?? REMOTE_JUDGE_DEFAULTS.modelId);
-  const baseUrl = String(raw.baseUrl ?? "").replace(/\/+$/, "");
-  const apiKey = String(raw.apiKey ?? "");
-
-  return {
-    enabled: raw.enabled === true && Boolean(modelId) && Boolean(baseUrl),
-    modelId,
-    baseUrl,
-    apiKey,
-    timeoutMs: Math.max(500, Number(raw.timeoutMs ?? REMOTE_JUDGE_DEFAULTS.timeoutMs)),
-    shadowMode: Boolean(raw.shadowMode ?? REMOTE_JUDGE_DEFAULTS.shadowMode),
-  };
-}
-
-export function resolveDualJudgeConfig(raw: Record<string, unknown>): DualJudgeConfig | null {
-  if (!raw || typeof raw !== "object") return null;
-
-  const dualRaw = asObject(raw._dualJudgeConfig);
-  if (Object.keys(dualRaw).length > 0) {
-    const local = resolveJudgeConfig(asObject(dualRaw.local));
-    if (!local) return null;
-    return {
-      local,
-      remote: resolveRemoteJudgeConfig(asObject(dualRaw.remote)),
-      escalation: {
-        minConfidence: Math.min(1, Math.max(0, Number(asObject(dualRaw.escalation).minConfidence ?? ESCALATION_DEFAULTS.minConfidence))),
-        alwaysEscalateRiskFlags: asStringArray(asObject(dualRaw.escalation).alwaysEscalateRiskFlags) ?? [...ESCALATION_DEFAULTS.alwaysEscalateRiskFlags],
-        maxLatencyMs: Math.max(500, Number(asObject(dualRaw.escalation).maxLatencyMs ?? ESCALATION_DEFAULTS.maxLatencyMs)),
-      },
-    };
-  }
-
-  const local = resolveJudgeConfig(asObject(raw._judgeFastConfig));
-  if (!local) return null;
-
-  const remoteRaw = asObject(raw._remoteJudgeConfig);
-  return {
-    local,
-    remote: resolveRemoteJudgeConfig(remoteRaw),
-    escalation: {
-      minConfidence: Math.min(1, Math.max(0, Number(remoteRaw.minConfidence ?? local.minConfidence ?? ESCALATION_DEFAULTS.minConfidence))),
-      alwaysEscalateRiskFlags: asStringArray(remoteRaw.alwaysEscalateRiskFlags) ?? [...ESCALATION_DEFAULTS.alwaysEscalateRiskFlags],
-      maxLatencyMs: Math.max(500, Number(remoteRaw.maxLatencyMs ?? ESCALATION_DEFAULTS.maxLatencyMs)),
-    },
-  };
-}
-
-export function resolveDualJudgeConfigFromEnv(): DualJudgeConfig | null {
-  const localJson = process.env.OCTOCLAW_JUDGE_FAST?.trim();
-  const remoteJson = process.env.OCTOCLAW_JUDGE_REMOTE?.trim();
-  const payload: Record<string, unknown> = {};
-
-  if (localJson) {
-    try {
-      payload._judgeFastConfig = JSON.parse(localJson);
-    } catch {
-      return null;
-    }
-  }
-  if (remoteJson) {
-    try {
-      payload._remoteJudgeConfig = JSON.parse(remoteJson);
-    } catch {
-      return null;
-    }
-  }
-
-  return resolveDualJudgeConfig(payload);
 }
 
 export function buildJudgeInput(
@@ -473,112 +389,6 @@ export async function callLlmJudge(
     }
 
     return coerceJudgeOutput(parsed);
-  } catch (error) {
-    lastJudgeFailureClass = classifyJudgeError(error);
-    warnJudgeFailure(error);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export function shouldEscalate(
-  localResult: JudgeOutput,
-  escalation: DualJudgeConfig["escalation"],
-  metadata: Record<string, unknown>,
-): EscalationReason | null {
-  if (localResult.confidence < escalation.minConfidence) return "low_confidence";
-  if ((localResult.riskFlags ?? []).some((flag) => escalation.alwaysEscalateRiskFlags.includes(flag))) return "high_risk_write";
-
-  const turnLength = String(metadata.task ?? metadata.prompt ?? metadata.current_turn ?? "").trim().length;
-  if (turnLength <= 6 && localResult.route === "delegate") return "short_turn_context_dependent";
-
-  const activeIntents = Array.isArray(metadata.active_intents) ? metadata.active_intents.filter(Boolean) : [];
-  const bindingConflicts = Array.isArray(metadata.binding_conflicts) ? metadata.binding_conflicts.filter(Boolean) : [];
-  if (activeIntents.length > 1 || bindingConflicts.length > 0) return "multiple_active_intents";
-
-  if (String(localResult.scope ?? "").trim().toLowerCase() === "unknown" && metadata.canSafelyClarify !== true) {
-    return "scope_unknown";
-  }
-
-  if (localResult.role === "observer_probe" && localResult.complexityBand === "deep") return "unstable_classification";
-
-  if (metadata.validator_conflict === true || metadata.validator_hard_conflict === true) return "validator_conflict";
-
-  const routeHint = String(metadata.route_hint ?? metadata.requested_route ?? "").trim();
-  if (routeHint && (routeHint === "reply" || routeHint === "delegate") && routeHint !== localResult.route) {
-    return "main_agent_judge_disagreement";
-  }
-
-  return null;
-}
-
-export async function callRemoteJudge(
-  input: JudgeInput,
-  localResult: JudgeOutput,
-  escalationReason: EscalationReason,
-  config: DualJudgeConfig,
-): Promise<RemoteJudgeOutput | null> {
-  if (!config.remote.enabled) return null;
-
-  lastJudgeFailureClass = null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(config.remote.timeoutMs, config.escalation.maxLatencyMs));
-
-  try {
-    const basePacket = input.contextPacket;
-    const expandedPacket = basePacket
-      ? buildExpandedPacket(basePacket, localResult, escalationReason)
-      : undefined;
-    const remoteInput: JudgeInput = {
-      ...input,
-      contextPacket: input.contextPacket,
-    };
-
-    const raw = await callOpenAICompat(
-      {
-        modelId: config.remote.modelId,
-        baseUrl: config.remote.baseUrl,
-        apiKey: config.remote.apiKey,
-      },
-      buildRemoteJudgeSystemPrompt(),
-      buildRemoteJudgeUserPrompt(remoteInput, localResult, escalationReason, expandedPacket),
-      controller.signal,
-      128,
-    );
-
-    const parsed = extractJson(raw) as Record<string, unknown> | null;
-
-    if (parsed && typeof parsed.route === "string") {
-      const r = parsed.route as string;
-      if (r === "spawn_work" || r === "spawn_single" || r === "spawn_multi" || r === "delegate.single" || r === "observe") {
-        parsed.route = "delegate";
-      }
-    }
-
-    if (!parsed || !isRemoteJudgeOutput(parsed)) {
-      lastJudgeFailureClass = "invalid_json";
-      warnJudgeFailure(new Error("remote judge returned invalid JSON"));
-      return null;
-    }
-
-    const result = coerceJudgeOutput(parsed) as RemoteJudgeOutput;
-    result.adjudication_reason = typeof parsed.adjudication_reason === "string"
-      ? parsed.adjudication_reason
-      : typeof parsed.adjudicationReason === "string"
-        ? parsed.adjudicationReason
-        : undefined;
-    result.override_recommendation = parsed.override_recommendation === "accept_local" || parsed.override_recommendation === "override_local"
-      ? parsed.override_recommendation
-      : parsed.overrideRecommendation === "accept_local" || parsed.overrideRecommendation === "override_local"
-        ? parsed.overrideRecommendation as RemoteJudgeOutput["override_recommendation"]
-        : undefined;
-    result.confidence_delta = typeof parsed.confidence_delta === "number"
-      ? parsed.confidence_delta
-      : typeof parsed.confidenceDelta === "number"
-        ? parsed.confidenceDelta
-        : result.confidence - localResult.confidence;
-    return result;
   } catch (error) {
     lastJudgeFailureClass = classifyJudgeError(error);
     warnJudgeFailure(error);

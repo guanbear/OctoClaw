@@ -1,15 +1,12 @@
 import fsSync from "node:fs";
 
 import type {
-  EscalationReason,
   JudgeBindingControlLayer,
   JudgeContextPacket,
   JudgeContinuationStateLayer,
   JudgeCoreTurnLayer,
   JudgeMinimalEvidenceLayer,
-  RemoteJudgeExpandedPacket,
 } from "@octoclaw/policy/judge";
-import type { JudgeOutput } from "@octoclaw/policy/judge-schema";
 
 import { readJsonl } from "../conversation-grounding.js";
 import { extractPromptText } from "./policy-resolver.js";
@@ -56,7 +53,6 @@ const CURRENT_TURN_MAX = 500;
 const THREAD_SUMMARY_MAX = 200;
 const RECENT_EXCERPT_ENTRY_MAX = 100;
 const RECENT_EXCERPT_MAX_ENTRIES = 3;
-const EXPANDED_RECENT_EXCERPT_MAX_ENTRIES = 5;
 const ACTIVE_INTENT_MAX = 160;
 const LAST_AGENT_ACT_MAX = 64;
 const BINDING_MAX = 96;
@@ -414,38 +410,4 @@ export function buildJudgeContextPacket(options: JudgeContextPacketOptions): Jud
   }
 
   return enforcePacketBudget(packet);
-}
-
-export function buildExpandedPacket(
-  basePacket: JudgeContextPacket,
-  localResult: JudgeOutput,
-  escalationReason: EscalationReason,
-  options?: { taskSnapshot?: Record<string, unknown>; systemStateSummary?: Record<string, unknown> },
-): RemoteJudgeExpandedPacket {
-  const expandedBasePacket: JudgeContextPacket = {
-    ...basePacket,
-    evidence: basePacket.evidence
-      ? {
-          ...basePacket.evidence,
-          recent_excerpt: Array.isArray(basePacket.evidence.recent_excerpt)
-            ? basePacket.evidence.recent_excerpt.slice(0, EXPANDED_RECENT_EXCERPT_MAX_ENTRIES)
-            : basePacket.evidence.recent_excerpt,
-        }
-      : undefined,
-  };
-
-  return {
-    basePacket: expandedBasePacket,
-    candidate_decision_from_local: {
-      route: localResult.route,
-      confidence: localResult.confidence,
-      role: localResult.role,
-      complexityBand: localResult.complexityBand,
-      riskFlags: localResult.riskFlags,
-      delegateReasonCodes: localResult.delegateReasonCodes,
-    },
-    escalation_reason: escalationReason,
-    optional_task_snapshot: options?.taskSnapshot,
-    optional_system_state_summary: options?.systemStateSummary,
-  };
 }

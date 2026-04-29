@@ -137,17 +137,6 @@ export interface JudgeContextPacket {
   evidence?: JudgeMinimalEvidenceLayer;
 }
 
-/** Escalation reason codes for invoking remote adjudication. */
-export type EscalationReason =
-  | "low_confidence"
-  | "short_turn_context_dependent"
-  | "multiple_active_intents"
-  | "scope_unknown"
-  | "high_risk_write"
-  | "unstable_classification"
-  | "validator_conflict"
-  | "main_agent_judge_disagreement";
-
 /** Minimal config the runtime extension reads from pluginConfig. */
 export interface JudgeFastConfig {
   enabled: boolean;
@@ -217,59 +206,6 @@ export interface JudgeOutput {
   ackRequired?: boolean;
 }
 
-/** Remote judge expanded context — includes local judge candidate for adjudication. */
-export interface RemoteJudgeExpandedPacket {
-  /** The small packet that was already sent to local judge */
-  basePacket: JudgeContextPacket;
-  /** The local judge's candidate decision */
-  candidate_decision_from_local: {
-    route: JudgeRoute;
-    reply_mode?: ReplyMode | null;
-    delegate_role?: DelegateRole | null;
-    coordination_mode_hint?: CoordinationModeHint | null;
-    confidence: number;
-    complexity?: SpawnComplexityBand | null;
-    scope?: JudgeScope | null;
-    tool_need_hint?: ToolNeedHint | null;
-    duration_hint?: DurationHint | null;
-    role?: string;
-    complexityBand?: SpawnComplexityBand;
-    riskFlags?: string[];
-    delegateReasonCodes?: DelegateReasonCode[];
-  };
-  /** Why we escalated to remote judge */
-  escalation_reason: EscalationReason | string;
-  /** Optional task snapshot for context */
-  optional_task_snapshot?: Record<string, unknown>;
-  /** Optional system state summary */
-  optional_system_state_summary?: Record<string, unknown>;
-}
-
-/** Remote judge output — extends local judge with adjudication fields. */
-export interface RemoteJudgeOutput extends JudgeOutput {
-  adjudication_reason?: string;
-  override_recommendation?: "accept_local" | "override_local";
-  confidence_delta?: number;
-}
-
-/** Dual judge config — replaces single JudgeFastConfig for dual mode. */
-export interface DualJudgeConfig {
-  local: JudgeFastConfig;
-  remote: {
-    enabled: boolean;
-    modelId: string;
-    baseUrl: string;
-    apiKey: string;
-    timeoutMs: number;
-    shadowMode: boolean;
-  };
-  escalation: {
-    minConfidence: number;
-    alwaysEscalateRiskFlags: string[];
-    maxLatencyMs: number;
-  };
-}
-
 /** Size caps to prevent prompt inflation / injection amplification. */
 export const JUDGE_INPUT_CAPS = {
   userMessage: 500,
@@ -286,37 +222,12 @@ export const JUDGE_FAST_DEFAULTS: Omit<JudgeFastConfig, "modelId" | "baseUrl" | 
   local: false,
 };
 
-export const REMOTE_JUDGE_DEFAULTS = {
-  enabled: false,
-  timeoutMs: 8000,
-  shadowMode: true,
-  modelId: "omniroute/cx/gpt-5.4-mini",
-} as const;
-
-export const ESCALATION_DEFAULTS = {
-  minConfidence: 0.6,
-  alwaysEscalateRiskFlags: ["high_risk_write", "destructive_operation"],
-  maxLatencyMs: 4000,
-} as const;
-
 /** Validate a parsed JudgeOutput. Returns true if hot-path fields are present and valid. */
 export function isValidJudgeOutput(value: unknown): value is JudgeOutput {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
   if (!["reply", "delegate"].includes(obj.route as string)) return false;
   if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) return false;
-  return true;
-}
-
-/** Validate remote judge output. */
-export function isRemoteJudgeOutput(value: unknown): value is RemoteJudgeOutput {
-  if (!isValidJudgeOutput(value)) return false;
-  const obj = value as unknown as Record<string, unknown>;
-  if (obj.override_recommendation !== undefined) {
-    if (obj.override_recommendation !== "accept_local" && obj.override_recommendation !== "override_local") return false;
-  }
-  if (obj.confidence_delta !== undefined && typeof obj.confidence_delta !== "number") return false;
-  if (obj.adjudication_reason !== undefined && typeof obj.adjudication_reason !== "string") return false;
   return true;
 }
 

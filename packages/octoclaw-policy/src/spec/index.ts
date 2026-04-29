@@ -6,7 +6,6 @@ export {
   IRON_LAWS,
   JudgeOutputSchema,
   POLICY_LABELS,
-  RemoteJudgeOutputSchema,
   VALIDATOR_DEFAULT_RULES,
   type PolicyComplexity,
   type PolicyRoute,
@@ -26,6 +25,4 @@ export {
   buildAckWriterUserPrompt as buildSpecAckWriterUserPrompt,
   buildLocalJudgeSystemPrompt as buildSpecLocalJudgeSystemPrompt,
   buildLocalJudgeUserPrompt as buildSpecLocalJudgeUserPrompt,
-  buildRemoteJudgeSystemPrompt as buildSpecRemoteJudgeSystemPrompt,
-  buildRemoteJudgeUserPrompt as buildSpecRemoteJudgeUserPrompt,
 } from "./prompt-builder.js";

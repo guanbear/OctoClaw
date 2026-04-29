@@ -113,8 +113,4 @@ export type {
   JudgeExecutionLayer,
   JudgeMinimalEvidenceLayer,
   JudgeMemoryLayer,
-  RemoteJudgeExpandedPacket,
-  RemoteJudgeOutput,
-  EscalationReason,
-  DualJudgeConfig,
 } from "./judge-schema.js";

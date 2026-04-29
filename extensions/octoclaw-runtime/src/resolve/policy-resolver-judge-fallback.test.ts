@@ -16,15 +16,6 @@ const localJudgeConfig = {
   judgeAckEnabled: true,
 } as const;
 
-const remoteJudgeConfig = {
-  enabled: true,
-  modelId: "gpt-5.4-mini",
-  baseUrl: "http://localhost:8317/v1",
-  apiKey: "sk-local",
-  timeoutMs: 8000,
-  shadowMode: false,
-} as const;
-
 function jsonResponse(payload: unknown): Response {
   return {
     ok: true,
@@ -166,17 +157,13 @@ describe("policy resolver judge timeout fallback", () => {
     });
   });
 
-  it("does not let remote judge timeout override a valid local result", async () => {
+  it("uses local judge result directly with single-judge path", async () => {
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(judgeResponse("delegate", 0.81))
-      .mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+      .mockResolvedValueOnce(judgeResponse("delegate", 0.81));
 
     const decision = await resolveStatelessPolicyDecision("继续", {
       metadata: {
-        _dualJudgeConfig: {
-          local: localJudgeConfig,
-          remote: remoteJudgeConfig,
-        },
+        _judgeFastConfig: localJudgeConfig,
       },
     });
 
@@ -185,11 +172,8 @@ describe("policy resolver judge timeout fallback", () => {
       route_source: "judge",
       final_judge_source: "local",
     });
-    expect(decision._judge_shadow_log).toMatchObject({
-      local_judge_route: "delegate",
-      final_judge_route: "delegate",
-      remote_judge_result: null,
-    });
+    const shadowLog = decision._judge_shadow_log as Record<string, unknown>;
+    expect(shadowLog.final_judge_route).toBe("delegate");
   });
 
   it("never falls to reply for required tool need on judge timeout", async () => {

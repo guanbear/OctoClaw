@@ -134,13 +134,6 @@ export const JudgeOutputSchema = {
   reason_codes: [] as string[],
 } as const;
 
-export const RemoteJudgeOutputSchema = {
-  ...JudgeOutputSchema,
-  adjudication_reason: "",
-  override_recommendation: "accept_local | override_local",
-  confidence_delta: 0.0,
-} as const;
-
 export const AckWriterOutputSchema = {
   ack_text: "",
   tone: "neutral | warm | concise",
