@@ -239,5 +239,23 @@ Router 的**第一个任务**是决定执行合同：
 
 ---
 
+## 附：活跃设计文档索引
+
+`docs/` 目录下只保留以下文档，其余已移入 `docs/archive/`。
+
+| 文档 | 覆盖范围 | 关联阶段 |
+|------|---------|---------|
+| [octoclaw-design-foundation.md](octoclaw-design-foundation.md) | 系统基础定义、反馈循环演进 | 全局 |
+| [octoclaw-state-convergence-4-4-design.md](octoclaw-state-convergence-4-4-design.md) | 真相权威层级：TaskFlow > task-state.json > policyState | Phase 0/1 |
+| [octoclaw-phase1-stabilization-design-2026-04-29.md](octoclaw-phase1-stabilization-design-2026-04-29.md) | Phase 0/1 稳定性目标：状态投影、重启恢复、delivery retry、thread anchor | Phase 0/1 |
+| [octoclaw-judge-ack-policy-spec-2026-04-21.md](octoclaw-judge-ack-policy-spec-2026-04-21.md) | Judge 分层、ACK 决策真相表、thread 交付规范 | Phase 0/1 |
+| [octoclaw-work-contract-centered-delegation-design-2026-04-25.md](octoclaw-work-contract-centered-delegation-design-2026-04-25.md) | WorkContract 委派核心设计（线上运行中） | Phase 0/1 |
+| [octoclaw-phase2-lightweight-install-design-2026-04-30.md](octoclaw-phase2-lightweight-install-design-2026-04-30.md) | Phase 2 统一配置、插件开关、安装工具 | Phase 2 |
+| [octoclaw-nightly-eval-scheduler-2026-04-26.md](octoclaw-nightly-eval-scheduler-2026-04-26.md) | 夜间 eval 调度、D3 指标接通方案 | Phase 2 |
+| [octoclaw-im-display-contract.md](octoclaw-im-display-contract.md) | IM 渲染合同：anchor/thread/action/artifact 语义 | Phase 3 |
+| [octoclaw-auto-router-design.md](octoclaw-auto-router-design.md) | Auto Router 五层架构完整设计 | Phase 5 |
+
+---
+
 *文档路径：`docs/octoclaw-next-phase-roadmap-2026-04-30.md`*  
 *代码核查分支：`refactor/0.4.0-stable`，核查日期：2026-04-30*
