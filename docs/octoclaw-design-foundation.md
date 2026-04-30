@@ -1,8 +1,9 @@
 # OctoClaw 主设计底稿
 
-> 状态：当前 canonical 设计底稿（2026-04-07），优先级与近期主线请同时参考 [`octoclaw-design-refresh-2026-04-12.md`](./octoclaw-design-refresh-2026-04-12.md)  
-> 用途：给维护者自己后续开发、重构与取舍判断使用，而不是面向外部协作者的市场化介绍文档。  
-> 相关文档：[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-auto-router-design.md`](./octoclaw-auto-router-design.md)、[`octoclaw-design-refresh-2026-04-12.md`](./octoclaw-design-refresh-2026-04-12.md)、[`archive/design-notes/README.md`](./archive/design-notes/README.md)
+> 状态：系统定义底稿（持续更新）  
+> 用途：给维护者开发、重构与取舍判断使用，不是面向外部的介绍文档。  
+> 入口文档：[`octoclaw-next-phase-roadmap-2026-04-30.md`](./octoclaw-next-phase-roadmap-2026-04-30.md)（含完整阶段规划和活跃文档索引）  
+> 相关设计：[WorkContract 委派设计](./octoclaw-work-contract-centered-delegation-design-2026-04-25.md)、[ACK 策略规范](./octoclaw-judge-ack-policy-spec-2026-04-21.md)、[IM 渲染合同](./octoclaw-im-display-contract.md)、[Auto Router 设计](./octoclaw-auto-router-design.md)
 
 ---
 

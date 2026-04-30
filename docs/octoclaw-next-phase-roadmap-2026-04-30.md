@@ -245,7 +245,7 @@ Router 的**第一个任务**是决定执行合同：
 
 | 文档 | 覆盖范围 | 关联阶段 |
 |------|---------|---------|
-| [octoclaw-design-foundation.md](octoclaw-design-foundation.md) | 系统基础定义、反馈循环演进 | 全局 |
+| [octoclaw-design-foundation.md](octoclaw-design-foundation.md) | 系统定义：OctoClaw 是什么、架构边界、反馈闭环底稿 | 全局 |
 | [octoclaw-state-convergence-4-4-design.md](octoclaw-state-convergence-4-4-design.md) | 真相权威层级：TaskFlow > task-state.json > policyState | Phase 0/1 |
 | [octoclaw-phase1-stabilization-design-2026-04-29.md](octoclaw-phase1-stabilization-design-2026-04-29.md) | Phase 0/1 稳定性目标：状态投影、重启恢复、delivery retry、thread anchor | Phase 0/1 |
 | [octoclaw-judge-ack-policy-spec-2026-04-21.md](octoclaw-judge-ack-policy-spec-2026-04-21.md) | Judge 分层、ACK 决策真相表、thread 交付规范 | Phase 0/1 |
