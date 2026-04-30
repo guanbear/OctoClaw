@@ -364,8 +364,7 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
     decision.model,
   );
 
-  const candidate = rawModel || profileOrId;
-  if (!candidate) return "unknown";
+  const candidate = rawModel || profileOrId || "direct_main";
 
   // If it looks like a profile name, resolve to actual model ID
   const resolved = (() => {
@@ -470,7 +469,7 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
   const primaryFooter = [`route=${route}`, `model=${model}`].filter(Boolean).join(" | ") + threadSuffix;
   const detailFooter = [`via=${via}`, debugParts].filter(Boolean).join(" | ");
   const footer = [primaryFooter, detailFooter].filter(Boolean).join(" | ");
-  return `${content.trim()}\n\n${footer}`;
+  return `${content.trim()}\n\n• ${footer}`;
 }
 
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {

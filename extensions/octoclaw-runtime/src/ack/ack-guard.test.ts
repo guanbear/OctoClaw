@@ -178,6 +178,44 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     expect(adapter.send).not.toHaveBeenCalled();
   });
 
+  it("does not dedupe queued Slack messages that have different message ids", async () => {
+    adapter.react.mockResolvedValue({ ok: true });
+    const stateKey = `queued-reaction-state-${Date.now()}`;
+    const state = {
+      _ackTurnTs: Date.now() - 5_000,
+      mainModelActive: true,
+      toolActive: true,
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+      channelTone: "chat",
+    };
+
+    const first = await maybeSendLatencyAck(
+      { latency_ack: { required: true }, route_decision: { route: "reply" } },
+      { session_key: "slack:default:dm:U123ABCDEF", message_id: "111.111111" },
+      stateKey,
+      state,
+      {},
+      {},
+      "lookup",
+    );
+    const second = await maybeSendLatencyAck(
+      { latency_ack: { required: true }, route_decision: { route: "reply" } },
+      { session_key: "slack:default:dm:U123ABCDEF", message_id: "222.222222" },
+      stateKey,
+      state,
+      {},
+      {},
+      "lookup",
+    );
+
+    expect(first?.sent).toBe(true);
+    expect(second?.sent).toBe(true);
+    expect(adapter.react).toHaveBeenCalledTimes(2);
+    expect(adapter.react).toHaveBeenNthCalledWith(1, expect.objectContaining({ messageId: "111.111111" }));
+    expect(adapter.react).toHaveBeenNthCalledWith(2, expect.objectContaining({ messageId: "222.222222" }));
+  });
+
   it("sends reaction ACK when decideAckAction returns send_reaction_ack", async () => {
     adapter.react.mockResolvedValue({ ok: true });
     const stateKey = `reaction-state-${Date.now()}`;

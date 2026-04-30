@@ -90,6 +90,8 @@ export interface AckTrackingState extends UnknownRecord {
   ackOwner?: unknown;
   ack_owner?: unknown;
   ackGuardKey?: unknown;
+  ackMessageTurnId?: unknown;
+  ack_message_turn_id?: unknown;
   latencyAckSent?: unknown;
   reactionAckSent?: boolean;
   reactionAckAttempted?: boolean;
@@ -237,6 +239,60 @@ function ensureAckTurnTimestamp(stateKey: string): number {
   const created = Date.now();
   updateTrackingState(normalizedStateKey, { _ackTurnTs: created });
   return created;
+}
+
+
+function resolveAckMessageTurnId(
+  stateKey: string,
+  state: UnknownRecord = {},
+  ctx: AckContext = {},
+  metadata: UnknownRecord = {},
+  replyToMessageId = "",
+): string {
+  const anchor = asString(
+    replyToMessageId
+    || metadata.message_id
+    || metadata.messageId
+    || metadata.reply_to_id
+    || metadata.replyToMessageId
+    || state.message_id
+    || state.messageId
+    || state.inboundMessageTs
+    || state.replyToMessageId
+    || ctx.inboundMessageTs
+    || ctx.message_id
+    || ctx.messageId
+    || ctx.replyToMessageId
+  );
+  if (anchor) return `${stateKey}:${anchor}`;
+  return `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`;
+}
+
+function prepareAckTrackingForMessageTurn(stateKey: string, messageTurnId: string): void {
+  const normalizedStateKey = asString(stateKey);
+  const normalizedMessageTurnId = asString(messageTurnId);
+  if (!normalizedStateKey || !normalizedMessageTurnId) return;
+  const current = ackState(normalizedStateKey);
+  const previous = asString(current.ackMessageTurnId || current.ack_message_turn_id);
+  if (previous === normalizedMessageTurnId) return;
+  updateTrackingState(normalizedStateKey, {
+    ackMessageTurnId: normalizedMessageTurnId,
+    ack_message_turn_id: normalizedMessageTurnId,
+    ...(previous ? {
+      ackOwner: "",
+      ack_owner: "",
+      ackKey: "",
+      latencyAckSent: false,
+      latencyAckText: "",
+      latencyAckMode: "",
+      reactionAckAttempted: false,
+      reaction_ack_attempted: false,
+      reactionAckSent: false,
+      textAck0Sent: false,
+      tier1Sent: false,
+      tier2Sent: false,
+    } : {}),
+  });
 }
 
 function normalizeAckStage(value: string): AckStage {
@@ -689,7 +745,14 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   const routePhase = params.routePhase;
   const threadKey = threadKeyFromSessionKey(normalizedSessionKey, normalizedStateKey);
   const ackTarget = resolveAckTargetFromSessionKey(normalizedSessionKey);
-  const messageTurnId = asString(params.messageTurnId) || `${normalizedStateKey}:${ensureAckTurnTimestamp(normalizedStateKey)}`;
+  const messageTurnId = asString(params.messageTurnId) || resolveAckMessageTurnId(
+    normalizedStateKey,
+    effectiveState,
+    effectiveCtx,
+    isRecord(params.metadata) ? params.metadata : {},
+    asString(params.replyToMessageId),
+  );
+  prepareAckTrackingForMessageTurn(normalizedStateKey, messageTurnId);
   const ackKey = buildAckKey({
     threadId: ackTarget.threadId || threadKey,
     anchorId: asString(effectiveState.anchorId || effectiveState.anchor_id),
@@ -822,6 +885,8 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     ackOwner: params.ackOwner,
     ack_owner: params.ackOwner,
     ackKey,
+    ackMessageTurnId: messageTurnId,
+    ack_message_turn_id: messageTurnId,
     ack_target_resolution_state: ackTargetResolutionState(result),
     ack_delivery_state: ackDeliveryState(result),
     ...(params.markLatencySent
@@ -1007,7 +1072,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         logger,
         timeoutMs: 2_000,
         ownerTag: "ack_controller",
-        messageTurnId: `${stateKey}:${turnTs}`,
+        messageTurnId: resolveAckMessageTurnId(stateKey, liveTrackingState, ctx, {}, replyToMessageId),
         stageHint: templateInputs.stageHint,
         replyToMessageId,
         decision: ackDecision,
@@ -1089,13 +1154,17 @@ export async function maybeSendLatencyAck(
     return null;
   }
   const routePhase = resolveRoutePhase(decision);
+  const metadataMessageId = isRecord(metadata) ? asString(metadata.message_id || metadata.messageId) : "";
   const preDecisionState = {
     ...state,
+    ...(metadataMessageId ? { message_id: metadataMessageId } : {}),
     userInputActive: asBoolean(state.userInputActive) || asBoolean(ctx.userInputActive),
     toolActive: asBoolean(state.toolActive) || asBoolean(state.tool_active) || Boolean(asString(toolName)),
   };
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
-  const decisionPacket = buildDecisionPacket(stateKey, preDecisionState, routePhase);
+  const messageTurnId = resolveAckMessageTurnId(stateKey, preDecisionState, ctx, metadata);
+  prepareAckTrackingForMessageTurn(stateKey, messageTurnId);
+  const decisionPacket = buildDecisionPacket(stateKey, { ...preDecisionState, ...ackState(stateKey) }, routePhase);
   const ackDecision = decideAckAction(decisionPacket);
   if (ackDecision.action === "cancel_ack_writer") {
     cancelAckGuardForState(stateKey);
@@ -1141,7 +1210,7 @@ export async function maybeSendLatencyAck(
       ownerTag: "latency_ack",
       markLatencySent: true,
       markMode: "channel_message",
-      messageTurnId: `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`,
+      messageTurnId,
       replyToMessageId: isRecord(metadata) ? asString(metadata.message_id) : "",
       decision: ackDecision,
     });

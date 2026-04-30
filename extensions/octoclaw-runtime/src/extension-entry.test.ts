@@ -255,6 +255,17 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded).toEqual({ cancel: true });
   });
 
+  it("uses bullet compact footer so OpenClaw Slack normalizer does not rewrite it", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "D0AR3GTPYQL", content: "北京今天整体天气不错。", metadata: { channelId: "D0AR3GTPYQL" } },
+      { channelId: "slack" },
+      Date.now(),
+    );
+
+    expect(guarded?.content).toContain("\n\n• route=reply | model=zhipu/GLM-5.1");
+    expect(guarded?.content).not.toContain("model=unknown");
+  });
+
   it("appends a conservative footer for visible Slack delivery when state is missing", () => {
     const guarded = guardOutboundMessageForPolicyState(
       { to: "C0AS4DAPPU3", content: "收到。", metadata: { channelId: "C0AS4DAPPU3", threadTs: "1777387367.594319" } },
