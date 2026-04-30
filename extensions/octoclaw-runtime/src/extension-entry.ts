@@ -27,7 +27,7 @@ import {
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
-import { fetchLatestUserMessageTs } from "./im/slack-thread-anchor.js";
+import { fetchLatestUserMessageTs, fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import {
   buildPolicyMetadata,
   detectSessionBoundary,
@@ -963,15 +963,15 @@ export const plugin = {
         [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
       );
 
-      // Route B failed: OpenClaw doesn't pass message ts in ctx.
-      // Route C fallback: if ctx has a channelId (Slack DM), query Slack API
-      // to get the latest user message ts. Adds ~200-500ms but fixes thread anchoring.
+      // Route C: ctx.channelId is the channel TYPE ("slack"), not the channel ID.
+      // For Slack DMs, derive the real DM channel ID from the session key user ID
+      // via conversations.open, then query conversations.history for the latest ts.
       if (!inboundMessageTs) {
-        const channelId = stringValue(ctx.channelId);
-        if (channelId) {
-          inboundMessageTs = await fetchLatestUserMessageTs(channelId);
+        const sessionKey = stringValue(ctx.sessionKey);
+        if (sessionKey.includes(":slack:") && sessionKey.includes(":direct:")) {
+          inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey);
           if (inboundMessageTs && process.env.OCTOCLAW_ACK_DEBUG) {
-            console.error(`[ack-dbg] thread anchor from Slack API: channelId=${channelId} ts=${inboundMessageTs}`);
+            console.error(`[ack-dbg] thread anchor from Route C: sessionKey=${sessionKey.substring(0,60)} ts=${inboundMessageTs}`);
           }
         }
       }
