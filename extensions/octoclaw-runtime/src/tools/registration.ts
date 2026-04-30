@@ -513,8 +513,10 @@ function sortTaskStateRecords(tasks: RuntimeTaskStateRecord[]): RuntimeTaskState
 }
 
 const STATUS_STALE_AFTER_MS = 5 * 60 * 1000;
-const STATUS_PANEL_STALE_VISIBLE_MS = 60 * 60 * 1000;
-const STATUS_PANEL_TERMINAL_VISIBLE_MS = 24 * 60 * 60 * 1000;
+// timed_out/blocked tasks stay visible for 30 min (was 1h — most aren't worth seeing after half an hour)
+const STATUS_PANEL_STALE_VISIBLE_MS = 30 * 60 * 1000;
+// completed/failed/canceled stay visible for 4h (was 24h — don't need yesterday's tasks cluttering the panel)
+const STATUS_PANEL_TERMINAL_VISIBLE_MS = 4 * 60 * 60 * 1000;
 
 function timestampMs(value: unknown): number | null {
   const parsed = Date.parse(asString(value));
@@ -1062,10 +1064,24 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
   const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
   const hiddenExpiredCount = allTasks.length - visibleTasks.length;
 
+  // Sort by importance: active first, then recent terminal
+  const STATUS_PRIORITY: Record<string, number> = {
+    running: 0, materializing: 1, queued: 2, blocked: 3,
+    timed_out: 4, failed: 5, deliverable_ready: 6,
+    completed: 7, canceled: 8, registered: 9,
+  };
+  const sortedVisibleTasks = [...visibleTasks].sort((a, b) => {
+    const pa = STATUS_PRIORITY[a.status] ?? 5;
+    const pb = STATUS_PRIORITY[b.status] ?? 5;
+    if (pa !== pb) return pa - pb;
+    // Within same status: most recent first
+    return Date.parse(b.delegatedAt || b.updatedAt || "") - Date.parse(a.delegatedAt || a.updatedAt || "");
+  });
+
   // ── Slack mrkdwn rendering ───────────────────────────────────────────────
   if (imType === "slack" && normalizedFormat === "anchors") {
-    const limit = 10;
-    const slackTasks: StatusTaskSummary[] = visibleTasks.slice(0, limit).map((t) => ({
+    const limit = 6;  // 6 tasks is enough for a readable Slack panel
+    const slackTasks: StatusTaskSummary[] = sortedVisibleTasks.slice(0, limit).map((t) => ({
       taskId: t.taskId,
       status: t.status,
       rawStatus: t.rawStatus,
@@ -1116,8 +1132,8 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
     hiddenExpiredCount > 0 && !includeExpired && allCountSummary ? `All projected counts: ${allCountSummary}` : "",
     "Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend | child_session/run | result_location/artifact_refs | reason | summary",
   ].filter(Boolean);
-  const limit = normalizedFormat === "anchors" ? 10 : 25;
-  for (const task of visibleTasks.slice(0, limit)) {
+  const limit = normalizedFormat === "anchors" ? 8 : 25;
+  for (const task of sortedVisibleTasks.slice(0, limit)) {
     const childRef = [task.childSessionKey, task.runId].filter(Boolean).join("/") || "none";
     lines.push([
       `- ${task.taskId}`,
