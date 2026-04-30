@@ -5,7 +5,7 @@ export interface AckTimingConfig {
 }
 
 export const ACK_TIMING = {
-  reaction_ack_ms: 800,
+  reaction_ack_ms: 300,
   text_ack0_ms: 2500,
   ack0_hard_ceiling_ms: 5000,
   tier1_ms: 12_000,
