@@ -371,7 +371,7 @@ export async function emitExecutionTransitionNotification(params: {
   });
 
   const sent = Boolean(result.delivered || result.sent);
-  if (!sent && params.workContractId && ["dispatch_materialized", "spawn_started", "timed_out", "result_ready", "delivery_failed"].includes(params.transitionKind)) {
+  if (!sent && params.workContractId && ["dispatch_materialized", "spawn_started", "timed_out", "result_ready"].includes(params.transitionKind)) {
     try {
       appendToDeliveryOutbox({
         workContractId: params.workContractId,

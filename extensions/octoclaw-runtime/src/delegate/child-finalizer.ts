@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import path from "node:path";
 import type { WorkerCompletionResult } from "@octoclaw/contracts/completion";
 import type {
   TaskProjectionStatus,
@@ -15,6 +16,7 @@ import {
   resolveWorkerCompletionPath,
   resolveWorkspaceRoot,
   resolveReplayLogPath,
+  resolveMainAgentSessionsPath,
 } from "../resolve/env.js";
 import { resolveAckDeliverySessionKey } from "../resolve/session.js";
 import {
@@ -67,6 +69,9 @@ export interface ChildCompletionFinalizerResult {
 }
 
 const activeFinalizers = new Map<string, ReturnType<typeof setTimeout>>();
+const DEFAULT_CHILD_COMPLETION_TIMEOUT_MS = 600_000;
+const CHILD_SESSION_ACTIVITY_GRACE_MS = 90_000;
+const CHILD_SESSION_DEADLINE_EXTENSION_MS = 120_000;
 
 function readCompletionFile(workContractId: string): WorkerCompletionResult | null {
   try {
@@ -74,6 +79,86 @@ function readCompletionFile(workContractId: string): WorkerCompletionResult | nu
     return parsed.schemaVersion === "octoclaw.worker_completion/v1" && parsed.workContractId && parsed.status && parsed.summary ? parsed : null;
   } catch {
     return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function addPathCandidate(candidates: Set<string>, candidate: unknown, baseDir?: string): void {
+  const text = stringValue(candidate);
+  if (!text) return;
+  candidates.add(path.isAbsolute(text) ? text : path.join(baseDir || path.dirname(resolveMainAgentSessionsPath()), text));
+}
+
+function childSessionFileCandidates(options: ChildCompletionFinalizerOptions): string[] {
+  const sessionsPath = resolveMainAgentSessionsPath();
+  const sessionsDir = path.dirname(sessionsPath);
+  const refs = new Set([options.childSessionKey, options.childRunId, options.runId].map(stringValue).filter(Boolean));
+  const candidates = new Set<string>();
+  for (const ref of refs) {
+    candidates.add(path.join(sessionsDir, `${ref}.jsonl`));
+  }
+
+  try {
+    const registry = JSON.parse(fsSync.readFileSync(sessionsPath, "utf-8")) as unknown;
+    if (isRecord(registry)) {
+      for (const [key, value] of Object.entries(registry)) {
+        if (!isRecord(value)) continue;
+        const values = [
+          key,
+          value.sessionKey,
+          value.sessionId,
+          value.controlKey,
+          value.channelSessionKey,
+          value.bindingKey,
+          value.threadKey,
+          value.runId,
+          value.childRunId,
+        ].map(stringValue);
+        if (!values.some((candidate) => refs.has(candidate))) continue;
+        addPathCandidate(candidates, value.sessionFile, sessionsDir);
+        const sessionId = stringValue(value.sessionId);
+        if (sessionId) candidates.add(path.join(sessionsDir, `${sessionId}.jsonl`));
+      }
+    }
+  } catch {}
+
+  return [...candidates];
+}
+
+function childSessionLastActivityMs(options: ChildCompletionFinalizerOptions): number | null {
+  let latest = 0;
+  for (const filePath of childSessionFileCandidates(options)) {
+    try {
+      const stat = fsSync.statSync(filePath) as unknown as { isFile?: () => boolean; mtimeMs?: number; mtime?: Date };
+      const isFile = stat.isFile ? stat.isFile() : true;
+      const mtimeMs = typeof stat.mtimeMs === "number" ? stat.mtimeMs : stat.mtime?.getTime() || 0;
+      if (isFile && mtimeMs > 0) latest = Math.max(latest, mtimeMs);
+    } catch {}
+  }
+  return latest > 0 ? latest : null;
+}
+
+function shouldExtendDeadlineForActiveChild(options: ChildCompletionFinalizerOptions, nowMs: number): boolean {
+  const lastActivityMs = childSessionLastActivityMs(options);
+  return lastActivityMs !== null && nowMs - lastActivityMs <= CHILD_SESSION_ACTIVITY_GRACE_MS;
+}
+
+function isCompletionAlreadyMaterialized(options: ChildCompletionFinalizerOptions): boolean {
+  try {
+    return readTaskStateRecords(options.taskStatePath).some((record) => {
+      const workContractId = stringValue(record.workContractId || record.work_contract_id || record.id);
+      if (workContractId !== options.workContractId) return false;
+      return record.resultMaterialized === true || record.result_materialized === true;
+    });
+  } catch {
+    return false;
   }
 }
 
@@ -187,7 +272,12 @@ function updateTaskStateCompleted(options: ChildCompletionFinalizerOptions, comp
           failureCode: completion.errorCode || "worker_completion_failure",
           failureMessage: completion.errorMessage || completion.summary,
         }
-      : {}),
+      : {
+          failedAt: undefined,
+          failed_at: undefined,
+          failureCode: undefined,
+          failureMessage: undefined,
+        }),
     completion,
   });
 }
@@ -411,6 +501,9 @@ export async function finalizeChildSessionOnce(
   }
   const completion = readCompletionFile(options.workContractId);
   if (!completion) return { status: "pending" };
+  if (isCompletionAlreadyMaterialized(options)) {
+    return { status: "completed", resultText: completion.summary, sent: false };
+  }
   const message = formatDeliveryMessage(completion, options);
   const result = await sendCompletionMessage(options, message);
   if (!result.sent) {
@@ -463,11 +556,11 @@ export async function finalizeChildSessionOnce(
 }
 
 export function scheduleChildCompletionFinalizer(options: ChildCompletionFinalizerOptions): boolean {
-  const key = [options.workContractId, options.delegateTaskId, options.childSessionKey].filter(Boolean).join(":");
+  const key = stringValue(options.workContractId);
   if (!key || activeFinalizers.has(key)) return false;
-  const timeoutMs = Math.max(30_000, Number(options.timeoutMs || 240_000));
+  const timeoutMs = Math.max(30_000, Number(options.timeoutMs || DEFAULT_CHILD_COMPLETION_TIMEOUT_MS));
   const pollIntervalMs = Math.max(1_000, Number(options.pollIntervalMs || 5_000));
-  const deadline = Date.now() + timeoutMs;
+  let deadline = Date.now() + timeoutMs;
   const tick = async () => {
     try {
       const result = await finalizeChildSessionOnce(options);
@@ -475,26 +568,31 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
         activeFinalizers.delete(key);
         return;
       }
-      if (Date.now() >= deadline) {
-        activeFinalizers.delete(key);
-        const timeoutInfo = markTimedOut(options, timeoutMs);
-        await notifyFinalizerTransition(options, "timed_out", {
-          status: "timed_out",
-          statusReason: "completion_file_timeout",
-          resultMaterialized: false,
-          occurredAt: timeoutInfo.occurredAt,
-          failureCode: "completion_file_not_written",
-          failureMessage: timeoutInfo.failureMessage,
-        });
-        void appendJsonl(resolveReplayLogPath(), {
-          schema_version: "octoclaw.runtime_policy.replay_event/v1",
-          event: "completion_file_timeout",
-          at: new Date().toISOString(),
-          workContractId: options.workContractId,
-          parentSessionKey: options.parentSessionKey,
-          timeoutMs,
-        }).catch(() => {});
-        return;
+      const nowMs = Date.now();
+      if (nowMs >= deadline) {
+        if (shouldExtendDeadlineForActiveChild(options, nowMs)) {
+          deadline = nowMs + CHILD_SESSION_DEADLINE_EXTENSION_MS;
+        } else {
+          activeFinalizers.delete(key);
+          const timeoutInfo = markTimedOut(options, timeoutMs);
+          await notifyFinalizerTransition(options, "timed_out", {
+            status: "timed_out",
+            statusReason: "completion_file_timeout",
+            resultMaterialized: false,
+            occurredAt: timeoutInfo.occurredAt,
+            failureCode: "completion_file_not_written",
+            failureMessage: timeoutInfo.failureMessage,
+          });
+          void appendJsonl(resolveReplayLogPath(), {
+            schema_version: "octoclaw.runtime_policy.replay_event/v1",
+            event: "completion_file_timeout",
+            at: new Date().toISOString(),
+            workContractId: options.workContractId,
+            parentSessionKey: options.parentSessionKey,
+            timeoutMs,
+          }).catch(() => {});
+          return;
+        }
       }
       const timer = setTimeout(tick, pollIntervalMs);
       (timer as unknown as { unref?: () => void }).unref?.();
@@ -504,7 +602,7 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
       options.logger?.warn?.(`child finalizer error: ${String(error)}`);
     }
   };
-  const timer = setTimeout(tick, Math.max(0, Number(options.initialDelayMs || 3_000)));
+  const timer = setTimeout(tick, Math.max(0, Number(options.initialDelayMs ?? 3_000)));
   (timer as unknown as { unref?: () => void }).unref?.();
   activeFinalizers.set(key, timer);
   return true;
@@ -577,28 +675,14 @@ export function recoverPendingChildCompletionFinalizers(options?: {
     const deliverySessionKey = asStr(record.deliverySessionKey || record.delivery_session_key);
     if (!childSessionKey || !parentSessionKey) continue;
 
-    // Skip terminal records regardless of resultMaterialized value.
-    // A failed/cancelled/completed/block durable record should not keep polling forever.
-    const terminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "blocked"]);
-    const isTerminal = (value: unknown): boolean => terminalStatuses.has(asStr(value));
-    if (
-      isTerminal(record.status)
-      || isTerminal(record.workContractStatus)
-      || isTerminal(record.work_contract_status)
-      || (record.workContract && typeof record.workContract === "object" && isTerminal((record.workContract as unknown as Record<string, unknown>).status))
-      || (record.work_contract && typeof record.work_contract === "object" && isTerminal((record.work_contract as unknown as Record<string, unknown>).status))
-    ) {
-      continue;
-    }
-
     const delegateTaskId = asStr(record.taskId || record.task_id || workContractId);
     const nativeTaskId = asStr(record.nativeTaskId || record.native_task_id || delegateTaskId);
     const nativeFlowId = asStr(record.nativeFlowId || record.native_flow_id || record.flowId || record.flow_id);
     const runId = asStr(record.runId || record.run_id);
     const childRunId = asStr(record.childRunId || record.child_run_id);
     const modelId = asStr(record.modelProfile || record.model_profile || record.model);
-
-    const scheduled = scheduleChildCompletionFinalizer({
+    const hasLateCompletion = Boolean(readCompletionFile(workContractId));
+    const finalizerOptions: ChildCompletionFinalizerOptions = {
       childSessionKey,
       delegateTaskId,
       workContractId,
@@ -611,12 +695,26 @@ export function recoverPendingChildCompletionFinalizers(options?: {
       modelId: modelId || undefined,
       taskStatePath: options?.taskStatePath,
       cwd: options?.cwd,
-      timeoutMs: 240_000,
+      timeoutMs: DEFAULT_CHILD_COMPLETION_TIMEOUT_MS,
       pollIntervalMs: 5_000,
-      initialDelayMs: 3_000,
+      initialDelayMs: hasLateCompletion ? 0 : 3_000,
       sendFinalMessage: options?.sendFinalMessage,
       logger: options?.logger,
-    });
+    };
+
+    const terminalStatuses = new Set(["completed", "failed", "timed_out", "cancelled", "canceled", "blocked"]);
+    const isTerminal = (value: unknown): boolean => terminalStatuses.has(asStr(value));
+    if (!hasLateCompletion && (
+      isTerminal(record.status)
+      || isTerminal(record.workContractStatus)
+      || isTerminal(record.work_contract_status)
+      || (record.workContract && typeof record.workContract === "object" && isTerminal((record.workContract as unknown as Record<string, unknown>).status))
+      || (record.work_contract && typeof record.work_contract === "object" && isTerminal((record.work_contract as unknown as Record<string, unknown>).status))
+    )) {
+      continue;
+    }
+
+    const scheduled = scheduleChildCompletionFinalizer(finalizerOptions);
 
     if (scheduled) {
       result.scheduled++;

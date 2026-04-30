@@ -1,3 +1,7 @@
+import fsSync from "node:fs";
+import path from "node:path";
+
+const fs = fsSync as unknown as { existsSync(pathname: string): boolean; mkdtempSync(prefix: string): string };
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { TaskStatusProjection } from "@octoclaw/contracts/status-projection";
 import {
@@ -16,9 +20,11 @@ type RunCommandSpy = MockInstance<typeof import("../../resolve/env.js").runComma
 type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPolicyReplay>;
 
 describe("execution transition notifier", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetExecTransitionState();
     vi.restoreAllMocks();
+    const { envOverrides } = await import("../../resolve/env.js");
+    envOverrides.workspaceRoot = "";
   });
 
   it("dispatchExecuted=true/spawnExecuted=false emits queued/materialized text, not running", async () => {
@@ -117,6 +123,32 @@ describe("execution transition notifier", () => {
     expect(findReplayPayload(replaySpy)).toEqual(expect.objectContaining({
       transitionKind: "delivery_failed",
     }));
+  });
+
+  it("does not persist delivery_failed notification retries when the notification send fails", async () => {
+    const { envOverrides } = await import("../../resolve/env.js");
+    const tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-exec-transition-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const envModule = await import("../../resolve/env.js");
+    vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 1,
+      stdout: JSON.stringify({ ok: false, error: "timeout" }),
+      stderr: "timeout",
+      timedOut: true,
+    });
+
+    const result = await emitExecutionTransitionNotification(notification({
+      transitionKind: "delivery_failed",
+      projection: projection({
+        status: "deliverable_ready",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: true,
+      }),
+    }));
+
+    expect(result.sent).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".octoclaw", "delivery-outbox.json"))).toBe(false);
   });
 
   it("dedupes transition notification", async () => {

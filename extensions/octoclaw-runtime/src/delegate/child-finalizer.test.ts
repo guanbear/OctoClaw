@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 
-const fs = fsSync as unknown as { mkdtempSync(prefix: string): string; mkdirSync(pathname: string, options?: { recursive?: boolean }): void; readFileSync(pathname: string, encoding: string): string; writeFileSync(pathname: string, data: string, encoding: string): void };
+const fs = fsSync as unknown as { existsSync(pathname: string): boolean; mkdtempSync(prefix: string): string; mkdirSync(pathname: string, options?: { recursive?: boolean }): void; readFileSync(pathname: string, encoding: string): string; utimesSync(pathname: string, atime: Date, mtime: Date): void; writeFileSync(pathname: string, data: string, encoding: string): void };
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IMAdapter, IMReactParams, IMSendParams } from "../im/adapter.js";
 import { registerIMAdapter } from "../im/index.js";
@@ -120,6 +120,44 @@ describe("child completion finalizer — completion file protocol", () => {
       spawnExecuted: true,
       resultMaterialized: true,
     });
+  });
+
+  it("does not redeliver a completion that is already materialized", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = writeTaskState(tmpDir, [{
+      id: "wc-materialized",
+      workContractId: "wc-materialized",
+      route: "delegate",
+      resultMaterialized: true,
+      result_materialized: true,
+      status: "completed",
+    }]);
+    writeCompletionFile(tmpDir, "wc-materialized", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-materialized",
+      childSessionKey: "child-materialized",
+      delegateTaskId: "delegate-materialized",
+      status: "success",
+      summary: "already delivered",
+      completedAt: new Date().toISOString(),
+    });
+
+    let sendCalls = 0;
+    const result = await finalizeChildSessionOnce({
+      taskStatePath,
+      childSessionKey: "child-materialized",
+      delegateTaskId: "delegate-materialized",
+      workContractId: "wc-materialized",
+      parentSessionKey: "slack:channel:CMAT",
+      sendFinalMessage: async () => {
+        sendCalls++;
+        return { sent: true, delivered: true };
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(sendCalls).toBe(0);
   });
 
   it("delivers through canonical Slack session when parent key is an internal session id", async () => {
@@ -256,6 +294,30 @@ describe("child completion finalizer — completion file protocol", () => {
     expect(result.status).toBe("missing_identity");
   });
 
+  it("schedules only one active finalizer per WorkContract", () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+
+    const first = scheduleChildCompletionFinalizer({
+      childSessionKey: "child-one",
+      delegateTaskId: "delegate-one",
+      workContractId: "wc-singleton",
+      parentSessionKey: "slack:channel:CSINGLE",
+      initialDelayMs: 0,
+    });
+    const second = scheduleChildCompletionFinalizer({
+      childSessionKey: "child-two",
+      delegateTaskId: "delegate-two",
+      workContractId: "wc-singleton",
+      parentSessionKey: "slack:channel:CSINGLE",
+      initialDelayMs: 0,
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
+
   it("scheduleChildCompletionFinalizer polls and detects completion", async () => {
     vi.useFakeTimers();
     tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
@@ -333,6 +395,66 @@ describe("child completion finalizer — completion file protocol", () => {
       failureCode: "completion_file_not_written",
     });
     expect(progressMessages).toContain("任务超时。");
+  });
+
+  it("extends timeout while child session is still active and then delivers completion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T14:50:00.000Z"));
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const openclawHome = path.join(tmpDir, "openclaw-home");
+    const sessionDir = path.join(openclawHome, "agents", "main", "sessions");
+    const childSessionFile = path.join(sessionDir, "child-active.jsonl");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(openclawHome, "openclaw.json"), "{}", "utf-8");
+    fs.writeFileSync(childSessionFile, "{\"type\":\"assistant\"}\n", "utf-8");
+    fs.utimesSync(childSessionFile, new Date(Date.now()), new Date(Date.now()));
+    process.env.OPENCLAW_HOME = openclawHome;
+
+    try {
+      const progressMessages: string[] = [];
+      registerCapturingSlackAdapter(progressMessages, (sessionKey) => sessionKey === "slack:channel:CACTIVE");
+
+      scheduleChildCompletionFinalizer({
+        taskStatePath,
+        childSessionKey: "child-active",
+        delegateTaskId: "delegate-active",
+        workContractId: "wc-active",
+        parentSessionKey: "slack:channel:CACTIVE",
+        nativeTaskId: "native-active",
+        timeoutMs: 30_000,
+        pollIntervalMs: 1_000,
+        initialDelayMs: 0,
+        sendFinalMessage: async () => ({ sent: true, delivered: true }),
+      });
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(progressMessages).not.toContain("任务超时。");
+      expect(fs.existsSync(taskStatePath)).toBe(false);
+
+      writeCompletionFile(tmpDir, "wc-active", {
+        schemaVersion: "octoclaw.worker_completion/v1",
+        workContractId: "wc-active",
+        childSessionKey: "child-active",
+        delegateTaskId: "delegate-active",
+        status: "success",
+        summary: "active child eventually completed",
+        completedAt: new Date().toISOString(),
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+      expect(taskState.tasks[0]).toMatchObject({
+        id: "wc-active",
+        status: "completed",
+        resultMaterialized: true,
+      });
+    } finally {
+      if (previousOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
   });
 
   it("handles failure status in completion file", async () => {
@@ -540,6 +662,61 @@ describe("child completion finalizer — durable recovery", () => {
     expect(second.skipped).toBe(1);
   });
 
+  it("recovery reconciles a late completion after timeout and clears stale failure fields", async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-recovery-"));
+    envOverrides.workspaceRoot = tmpDir;
+
+    const taskStatePath = writeTaskState(tmpDir, [{
+      id: "wc-late",
+      workContractId: "wc-late",
+      route: "delegate",
+      sessionKey: "slack:channel:CLATE",
+      childSessionKey: "child-late",
+      taskId: "delegate-late",
+      nativeTaskId: "native-late",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: false,
+      status: "timed_out",
+      failedAt: "2026-04-30T14:53:11.000Z",
+      failed_at: "2026-04-30T14:53:11.000Z",
+      failureCode: "completion_file_not_written",
+      failureMessage: "Worker did not write completion file within 240s",
+    }]);
+    writeCompletionFile(tmpDir, "wc-late", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-late",
+      childSessionKey: "child-late",
+      delegateTaskId: "delegate-late",
+      status: "success",
+      summary: "Late completion should win over prior timeout",
+      completedAt: new Date().toISOString(),
+    });
+
+    const recovery = recoverPendingChildCompletionFinalizers({
+      taskStatePath,
+      cwd: tmpDir,
+      sendFinalMessage: async () => ({ sent: true, delivered: true }),
+    });
+    expect(recovery.scanned).toBe(1);
+    expect(recovery.scheduled).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const updatedState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(updatedState.tasks[0]).toMatchObject({
+      id: "wc-late",
+      status: "completed",
+      resultMaterialized: true,
+      delivery_status: "delivered",
+    });
+    expect(updatedState.tasks[0]).not.toHaveProperty("failedAt");
+    expect(updatedState.tasks[0]).not.toHaveProperty("failed_at");
+    expect(updatedState.tasks[0]).not.toHaveProperty("failureCode");
+    expect(updatedState.tasks[0]).not.toHaveProperty("failureMessage");
+  });
+
   it("recovery skips terminal records even when resultMaterialized=false", () => {
     tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-recovery-"));
     envOverrides.workspaceRoot = tmpDir;
@@ -601,6 +778,17 @@ describe("child completion finalizer — durable recovery", () => {
         status: "canceled",
       },
       {
+        id: "wc-term-timed-out",
+        workContractId: "wc-term-timed-out",
+        route: "delegate",
+        sessionKey: "slack:channel:CT",
+        childSessionKey: "child-timed-out",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "timed_out",
+      },
+      {
         id: "wc-term-work-contract-status",
         workContractId: "wc-term-wcs",
         route: "delegate",
@@ -639,7 +827,7 @@ describe("child completion finalizer — durable recovery", () => {
 
     const recovery = recoverPendingChildCompletionFinalizers({ taskStatePath, cwd: tmpDir });
 
-    expect(recovery.scanned).toBe(8);
+    expect(recovery.scanned).toBe(9);
     expect(recovery.scheduled).toBe(1);
     expect(recovery.skipped).toBe(0);
   });

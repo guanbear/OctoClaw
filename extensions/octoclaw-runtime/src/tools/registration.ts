@@ -2309,7 +2309,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 childRunId: spawnEvidence.childRunId,
                 modelId: selectedModel || asString(metadata.model),
                 cwd: ctxCwd(ctx),
-                timeoutMs: Math.max(180_000, (expectedSeconds > 0 ? expectedSeconds * 1000 + 60_000 : 0)),
+                timeoutMs: Math.max(600_000, (expectedSeconds > 0 ? expectedSeconds * 1000 + 120_000 : 0)),
                 logger: toolLogger(ctx),
               });
             } else {
