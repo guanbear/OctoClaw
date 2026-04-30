@@ -1,9 +1,11 @@
 # OctoClaw Phase 2 Lightweight Install Design (2026-04-30)
 
+Status: completed snapshot. The package consolidation described here has landed: `tools/octoclawctl` is the only tool workspace package, `tools/install` and `tools/manage` are deprecated stubs, and the former runtime core has been merged into `extensions/octoclaw-runtime/src/core/*`. Use `../octoclaw-ts-rebuild-design-v2.md` as the current entry point.
+
 ## Source Contract
 
-- Primary reference: `docs/octoclaw-architecture-diagnosis-and-refactor-plan-2026-04-29.md` Phase 2.
-- Implementation guide reference: `docs/octoclaw-refactor-impl-guide-2026-04-29.md` P2-T9, P2-T10, P2-T11.
+- Primary reference: `docs/archive/octoclaw-architecture-diagnosis-and-refactor-plan-2026-04-29.md` Phase 2.
+- Implementation guide reference: `docs/archive/octoclaw-refactor-impl-guide-2026-04-29.md` P2-T9, P2-T10, P2-T11.
 - Required order: P2-T10 plugin switch and config cleanup, P2-T11 unified install tool, then P2-T9 package merge.
 
 ## Design Goals

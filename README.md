@@ -1,687 +1,121 @@
-# 🐙 OctoClaw v1.5.0
+# OctoClaw v1.5.0
 
 English | [简体中文](./README.zh-CN.md)
 
 ![OctoClaw banner](./banner.png)
 
-> A cost-sensitive orchestration layer for OpenClaw with a unified runtime-first execution path.
+> A TypeScript-first execution policy layer, delegation harness, feedback loop, and IM/operator surface for OpenClaw.
 
-OctoClaw is built for three things:
+OctoClaw is no longer the old Python-script runtime. The current line keeps the live path inside the OpenClaw gateway / runtime extension, uses `reply | delegate` as the only live route authority, and treats `direct / runner / spawn_single / spawn_multi` as execution contracts or lanes.
 
-- lower cost through policy-first model routing
-- faster response through async ACKs, bounded runners, and lighter execution lanes
-- better reliability through execution ledger, delivery relay, and replay-backed validation
+## Current Design Entry Points
 
-Longer-term runtime direction:
+- [TS rebuild design v2](./docs/octoclaw-ts-rebuild-design-v2.md): current architecture baseline, completed work, and N0-N4 plan.
+- [Role terminology](./docs/octoclaw-role-terminology.md): Observer / Patrol / Runner / Ctl boundaries.
+- [State convergence](./docs/octoclaw-state-convergence-4-4-design.md): TaskFlow, WorkContract, `task-state.json`, and `policyState` truth hierarchy.
+- [WorkContract delegation design](./docs/octoclaw-work-contract-centered-delegation-design-2026-04-25.md): delegation, handoff, and continuity contracts.
+- [Judge / ACK policy spec](./docs/octoclaw-judge-ack-policy-spec-2026-04-21.md): judge, ACK, and policy labels.
+- [Feedback loop contracts](./docs/octoclaw-feedback-loop-contracts.md): observe -> summarize -> review -> curate -> validate -> promote -> learn.
+- [Auto Router Phase 5 design](./docs/octoclaw-phase5-auto-router-design-2026-04-30.md): shadow-first execution-contract recommender design.
 
-- keep the live path inside the OpenClaw gateway / runtime extension
-- move route decisions to a stateless judge + validator contract
-- keep runner as an optional bounded backend, not a second control plane
-- demote patrol and legacy loops to observe/reconcile/repair or compat-only surfaces
+Historical roadmaps and the original v1 design live under [docs/archive](./docs/archive/).
 
-Runtime role map:
+## Core Capabilities
 
-- `runner` = lightweight execution lane
-- `daemon|ondemand` = runner execution mode
-- `observer` = read-only runtime snapshot
-- `patrol` = recovery / reconciliation / repair surface
-- `octoclawctl` = operator control entrypoint
+- **Policy-first routing**: live route is `reply | delegate`; execution contract and lane selection happen below that boundary.
+- **WorkContract-centered delegation**: delegated work carries route seal, scope, role, allowed tools, model profile, and continuity.
+- **Managed TaskFlow substrate**: OpenClaw native TaskFlow owns lifecycle truth; OctoClaw owns durable projection and operator surfaces.
+- **ACK / progress / final separation**: ACK confirms receipt, progress comes from execution transitions, final delivery comes from completion/result facts.
+- **Delivery outbox**: failed final delivery enters bounded retry; anchor updates do not imply final `delivered`.
+- **IM adapter registry**: Slack L2, Feishu L1, and WeChat L0 have baseline adapters and degradation behavior.
+- **Feedback loop**: `octoclawctl nightly/review/curate/nightly-eval/promote` supports replay, review, fixtures, gates, and baseline promotion.
+- **Unified operator CLI**: installation, deployment, enable/disable, status, nightly, review, and repair go through `octoclawctl`.
 
-Recommended operator setup for the unified runtime direction:
-
-- keep OpenClaw gateway as the only always-on runtime requirement
-- treat runner pool as optional acceleration, not mandatory control infrastructure
-- treat `patrol-loop` / `runner-daemon` / `runner_loop` as compat-only legacy shells
-- prefer runtime extension + native task-bound execution over extra shell supervisors
-
-Workspace note:
-
-- OctoClaw now auto-detects its workspace from `WORKSPACE`, `OCTOCLAW_WORKSPACE`, or the installed skill path.
-- `/workspace/...` below is the default Linux example path, not a hard requirement.
-
----
-
-## Why OctoClaw
-
-OctoClaw is not just a proxy router and not just an agent template.
-
-It sits between the main OpenClaw agent and delegated execution, then handles:
-
-- task decomposition and role assignment
-- policy-first model selection
-- ACK / progress / final delivery contracts
-- a bounded runner fast path for lightweight shell / API / status work
-- execution ledger, follow-up grounding, and delivery reconciliation
-- text-first status rendering for non-card environments
-
-## Core Features
-
-- Runtime extension entry: [`extensions/octoclaw-runtime/index.js`](./extensions/octoclaw-runtime/index.js)
-- Signal extraction + stateless judge + validation:
-  - [`extensions/octoclaw-runtime/policy/intent.js`](./extensions/octoclaw-runtime/policy/intent.js)
-  - [`extensions/octoclaw-runtime/policy/judge.js`](./extensions/octoclaw-runtime/policy/judge.js)
-  - [`extensions/octoclaw-runtime/policy/decide.js`](./extensions/octoclaw-runtime/policy/decide.js)
-  - [`extensions/octoclaw-runtime/policy/config.js`](./extensions/octoclaw-runtime/policy/config.js)
-- Unified dispatch and runner scheduler:
-  - [`lib/dispatch_task.py`](./lib/dispatch_task.py)
-  - [`lib/runner_dispatch.py`](./lib/runner_dispatch.py)
-  - [`lib/runner_queue.py`](./lib/runner_queue.py)
-  - [`lib/runner_goal_contract.py`](./lib/runner_goal_contract.py)
-- Execution ledger and delivery relay:
-  - [`lib/task_events.py`](./lib/task_events.py)
-  - [`lib/task-state-update.py`](./lib/task-state-update.py)
-  - [`lib/delivery_relay.py`](./lib/delivery_relay.py)
-  - [`lib/delivery_relay_reconcile.py`](./lib/delivery_relay_reconcile.py)
-- Harness / replay acceptance:
-  - [`lib/harness_gate.py`](./lib/harness_gate.py)
-  - [`lib/eval_suite.py`](./lib/eval_suite.py)
-  - [`lib/policy_judge_shadow_report.py`](./lib/policy_judge_shadow_report.py)
-- Compat-only legacy shells:
-  - [`lib/patrol-loop.sh`](./lib/patrol-loop.sh)
-  - [`lib/runner-daemon.sh`](./lib/runner-daemon.sh)
-  - [`lib/runner_loop.sh`](./lib/runner_loop.sh)
-
-Current internal source-of-truth docs:
-
-- [docs/octoclaw-design-foundation.md](./docs/octoclaw-design-foundation.md) — canonical design draft (Chinese)
-- [docs/octoclaw-execution-plan.md](./docs/octoclaw-execution-plan.md) — canonical execution plan (Chinese)
-- [docs/octoclaw-router-policy-refactor-2026-04-10.md](./docs/octoclaw-router-policy-refactor-2026-04-10.md) — unified runtime/router refactor design
-- [docs/octoclaw-router-policy-refactor-plan-2026-04-10.md](./docs/octoclaw-router-policy-refactor-plan-2026-04-10.md) — unified runtime/router refactor plan
-- [docs/octoclaw-slack-production-acceptance-2026-04-11.md](./docs/octoclaw-slack-production-acceptance-2026-04-11.md) — Slack production acceptance and security checklist
-- [docs/octoclaw-im-display-contract.md](./docs/octoclaw-im-display-contract.md) — IM/display interaction and substrate display contract
-- [docs/octoclaw-auto-router-design.md](./docs/octoclaw-auto-router-design.md) — auto-router design draft (Chinese)
-- [docs/octoclaw-auto-router-implementation-checklist.md](./docs/octoclaw-auto-router-implementation-checklist.md) — auto-router implementation checklist (Chinese)
-- [docs/archive/design-notes/README.md](./docs/archive/design-notes/README.md) — archived design-note index and classification
-- [docs/wiki/README.md](./docs/wiki/README.md) — LLM-maintained knowledge compilation layer (non-canonical)
-
-Current runtime role map:
-
-- `observer` = read-only runtime snapshot producer
-- `status` = observer text/table/anchor view
-- `patrol` = reconcile / repair surface, no longer a primary truth source
-- `runner` = lightweight execution lane
-- `daemon|ondemand` = runner execution modes
-- `octoclawctl` = operator control entrypoint
-
-Recent runtime slices now also land two DeerFlow/ClawTeam-inspired observability primitives:
-
-- delegated task event log: `/workspace/tmp/octopus/task-events.jsonl`
-- persistent IM thread map: `/workspace/tmp/octopus/session-thread-map.json`
-- artifact index: `/workspace/tmp/octopus/artifact-index.json`
-- task checklist store: `/workspace/tmp/octopus/task-checklists.json`
-
-OctoClaw uses them to keep `task-state`, task anchors, patrol notifications, and IM follow-ups aligned around:
-
-- `lifecycle_state`
-- `outcome_state`
-- `handoff_state`
-- `session_key` / `session_target` / `session_thread_key`
-
-Feedback loop baseline now follows one canonical phase chain:
+## Repository Layout
 
 ```text
-observe -> summarize -> review -> curate -> validate -> promote -> learn
+packages/octoclaw-contracts      stable contracts: WorkContract, events, results, delivery, status projection
+packages/octoclaw-policy         policy: intent, judge schema, route, role, model, gate
+extensions/octoclaw-runtime      OpenClaw runtime extension: hooks, dispatch, ACK, IM, delivery, replay
+extensions/octoclaw-status-surface
+                                 status/details/queue/timeline read model and renderers
+tools/octoclawctl                install, config, status, nightly, review, curate, calibration gate
+schemas                          runtime / route / budget / outcome JSON schemas
+eval                             minimal eval fixtures and reports
+docs                             current design docs
+docs/archive                     historical plans and archived docs
 ```
-
-The existing replay / review / validation / rollout / learning tools stay in place,
-but P2 unifies them with a shared manifest and promotion gating contract.
-
-The next source-backed borrowings from ClawTeam and DeerFlow are still the right track, but Anthropic's official guidance suggests doing them in this order:
-
-1. richer delegated task events
-   status: landed
-2. harder IM thread/topic binding
-   status: landed (baseline thread-truth and anchor reuse)
-3. ownership lock plus dead-agent recovery
-   status: landed (baseline ownership recovery and queued reclaim)
-4. delegated worker session resume
-   status: landed (baseline resume-store readback and resume-state surfacing)
-5. artifact index and retrieval
-   status: landed (baseline task/thread artifact lookup and detail surfacing)
-6. todo/checklist persistence across context loss
-   status: landed (baseline persisted checklists, detail rendering, and checklist update command)
-7. stronger brief/result shaping and retrieval helpers
-   status: landed (baseline structured objective/boundary/allowed_tools/done_definition and retrieve command)
-8. task graph, event timeline, artifact explorer, and replay/economics surfaces
-   status: landed (baseline graph/timeline/explorer commands plus policy diff and economics replay summary)
-
-In other words:
-
-- first harden delegated runtime truth and continuity
-- then improve artifact retrieval
-- then add stronger context-persistence layers
-
-Useful retrieval entrypoints:
-
-```bash
-python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py retrieve --id <task-id>
-python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py retrieve --id <task-id> --format json
-python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py graph --id <task-id>
-python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py timeline --id <task-id>
-python3 /workspace/openclaw/skills/octopus/lib/task_display_cli.py explorer --id <task-id>
-python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase conservative
-python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py --tasks /workspace/openclaw/skills/octopus/eval/tasks-minimal.json
-```
-
-## Model Selection
-
-OctoClaw now treats `auto` as the default, policy-first mode:
-
-- primary selectors are `worker_pool / phase / profile / route`
-- `model-policy.json` is the source of truth when available
-- `octoclaw-mode.json` only keeps `auto` and `custom`
 
 ## Quick Start
 
-```bash
-bash /workspace/openclaw/skills/octopus/install.sh
-```
-
-For source-managed installs and upgrades, prefer the new manager entry:
+For source-managed installs and updates, use `octoclawctl`:
 
 ```bash
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh install
+pnpm install
+pnpm build
+node tools/octoclawctl/dist/cli.js install
 ```
 
-That flow keeps a tracked source checkout under `/workspace/openclaw/repos/octoclaw`, syncs the runtime skill directory, then runs `install.sh reconcile`.
-
-Recommended minimal path:
-
-1. Install the skill
-2. Keep notifications on `auto` or `none`
-3. Enable the bundled runtime extension from `extensions/octoclaw-runtime`
-4. Treat OpenClaw gateway as the main runtime surface; do not depend on `patrol-loop` / `runner-daemon` for normal operation
-5. Keep runner pool optional and bounded; use it for lightweight delegated work, not as a second planner
-6. Treat `direct` as a whitelist: low-risk answer-now and explicit local read paths only
-7. Use sticky lane conservatively: follow-up work can stay on the same delegated lane when the execution ledger supports it
-8. Run `python3 lib/harness_gate.py --preset quick --format json` after changes
-9. Use `openclaw status --deep` plus the Slack acceptance checklist for real-surface verification
-
-Current production-facing acceptance checklist:
+Deploy into an existing OpenClaw environment:
 
 ```bash
-python3 /workspace/openclaw/skills/octopus/lib/harness_gate.py --preset quick --format json
-openclaw status --deep
+node tools/octoclawctl/dist/cli.js deploy
+node tools/octoclawctl/dist/cli.js enable
+node tools/octoclawctl/dist/cli.js status
 ```
 
-For real Slack/macmini validation, follow:
-
-- [docs/octoclaw-slack-production-acceptance-2026-04-11.md](./docs/octoclaw-slack-production-acceptance-2026-04-11.md)
-
-Recommended gradual rollout switches in `tmp/octoclaw-config.json`:
-
-```json
-{
-  "runtime_policy": {
-    "enabled": true,
-    "switches": {
-      "hard_runner_only": true,
-      "route_hint_required": false,
-      "replay_logging": true,
-      "direct_model_override": false,
-      "delegation_enforcement": true
-    },
-    "route_stickiness": {
-      "enabled": true,
-      "ttl_minutes": 180,
-      "apply_on_followup_only": true
-    },
-    "route_language_packs": {
-      "enabled": ["zh", "en"],
-      "available": ["zh", "en", "ja", "ko", "es", "pt", "ru"]
-    },
-    "hooks": {
-      "before_model_resolve": true,
-      "before_prompt_build": true,
-      "before_tool_call": true,
-      "agent_end": true
-    }
-  }
-}
-```
-
-Route-language packs are intentionally conservative:
-
-- default is `zh + en`
-- optional packs are `ja / ko / es / pt / ru`
-- command-style common patterns still stay loaded for everyone
-- install/setup flows can enable extra packs later without making the default router noisier
-
-Example: turn on Japanese and Spanish only when you actually need them
-
-```json
-{
-  "runtime_policy": {
-    "route_language_packs": {
-      "enabled": ["zh", "en", "ja", "es"]
-    }
-  }
-}
-```
-
-Or apply the same override directly during rollout:
+Common config operations:
 
 ```bash
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset conservative --route-language-packs zh,en,ja,es
+node tools/octoclawctl/dist/cli.js config get enabled
+node tools/octoclawctl/dist/cli.js config set enabled true
+node tools/octoclawctl/dist/cli.js config set features.delegation true
 ```
 
-Suggested rollout presets for `bin/runtime-policy-rollout.sh`:
+If `octoclawctl` is installed on your path, replace `node tools/octoclawctl/dist/cli.js` with `octoclawctl`.
 
-- `RUNTIME_POLICY_PRESET=conservative`
-  - installs a real extension directory into `~/.openclaw/extensions/octoclaw-runtime`
-  - keeps replay on
-  - disables route-hint enforcement and delegation hard blocks
-- `RUNTIME_POLICY_PRESET=guided`
-  - enables sticky follow-up reuse and hard delegation gating
-  - keeps direct model override off, so the main session model stays unchanged
-- `RUNTIME_POLICY_PRESET=enforced`
-  - enables stronger gray-zone/runtime enforcement while still keeping direct model override off by default
-  - best used only after replay validation; turn on direct model override separately when you really need it
-
-## Common Commands
+## Operator Commands
 
 ```bash
-# Source-managed install / update
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh install
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh update
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-manage.sh status
-
-# Local macmini lifecycle (clean uninstall + deploy from current tree + runtime control)
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh deploy
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh uninstall-clean
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh status
-bash /workspace/openclaw/skills/octopus/bin/octoclaw-macmini-ops.sh restart
-
-# Reconcile a local checked-out tree without prompts
-bash /workspace/openclaw/skills/octopus/install.sh reconcile --non-interactive --extension-install-mode rsync
-
-# Sync guanzhicheng.com from the tracked VM clone into the runtime directories
-bash /workspace/openclaw/skills/octopus/bin/deploy-guanzhicheng-vm.sh
-
-# Runtime extension install target
-ls ~/.openclaw/extensions/octoclaw-runtime
-
-# Recommended no-systemd supervisor mode
-SUPERVISOR_MODE=tmux PATROL_MODE=loop bash /workspace/openclaw/skills/octopus/install.sh
-
-# Conservative runtime-policy rollout
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset conservative
-
-# Guided runtime-policy rollout
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset guided
-
-# Fully enforced runtime-policy rollout
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh install --preset enforced
-
-# Attach to the OctoClaw tmux workbench
-tmux attach -t octoclaw-runtime
-
-# In OpenClaw, prefer these tools when available:
-# octoclaw_policy_decide
-# octoclaw_route
-# octoclaw_route_hint
-# octoclaw_dispatch
-# octoclaw_status
-
-# Runtime policy decision object
-python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'compare these two services and decide whether to delegate'
-
-# Main-brain route hint merge
-python3 /workspace/openclaw/skills/octopus/lib/octoclaw_policy.py --task 'look at the nginx error log and summarize the likely cause' --route-hint-json '{"route_hint":"spawn_single","work_type":"research","phase":"inspect","review_required":false,"confidence":0.78,"reason":"needs log reading plus reasoning","source":"main_agent"}'
-
-# Inspect the system preferred route first
-python3 /workspace/openclaw/skills/octopus/lib/octoclaw_route.py --task 'analyze this error and give me a fix plan'
-
-# Internal-first auto-router recommendation object
-python3 /workspace/openclaw/skills/octopus/lib/auto_router.py --task 'analyze this error and give me a fix plan'
-
-# Unified dispatch entry
-python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task 'check redis logs and port status' --command 'ss -lntp | grep 6379'
-
-# Natural-language local inspection can be dispatched directly
-python3 /workspace/openclaw/skills/octopus/lib/dispatch_task.py --task 'check the machine python version, disk usage, and memory status, then summarize it'
-
-# Dispatch a lightweight job directly to runner
-python3 /workspace/openclaw/skills/octopus/lib/runner_dispatch.py --command 'pwd' --summary 'check current directory'
-
-# Status views
-bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
-bash /workspace/openclaw/skills/octopus/lib/status.sh --format lanes
-
-# Unified runtime control
-bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh status
-bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh ps
-bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh restart runtime
-
-# Status view now includes replay-based promotion hints when runtime-policy replay is enabled
-bash /workspace/openclaw/skills/octopus/lib/status.sh --format table
-
-# Replay / eval
-python3 /workspace/openclaw/skills/octopus/lib/eval_suite.py
-
-# Runtime policy replay log
-tail -n 30 /workspace/tmp/octopus/runtime-policy-replay.jsonl
-
-# Summarize replay signals before promoting conservative -> guided
-python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase conservative
-
-# Summarize replay signals before promoting guided -> enforced
-python3 /workspace/openclaw/skills/octopus/lib/replay_summary.py --phase guided
-
-# Replay summaries also include worker_pool counts for taxonomy rollouts
-
-# Review replay sessions before labeling or tuning routing rules
-python3 /workspace/openclaw/skills/octopus/lib/replay_review.py --focus blocked
-
-# Curate replay sessions into portable eval/review cases
-python3 /workspace/openclaw/skills/octopus/lib/replay_curate.py --focus all --dedupe-by prompt --output /tmp/octoclaw-curated-cases.json
-
-# Enable nightly replay automation (default is off)
-bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh enable --schedule-hour-local 2
-
-# Enable the optional LLM review layer for nightly replay analysis
-bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh enable --llm-review-enabled true --llm-review-max-cases 24
-
-# Run replay automation once manually
-bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh run --format text
-
-# Render a cron command for nightly execution
-bash /workspace/openclaw/skills/octopus/bin/replay-automation.sh render-cron
-
-# Build a Slack reply/delegation review packet from real OpenClaw sessions
-python3 /workspace/openclaw/skills/octopus/lib/reply_review_packet.py \
-  --sessions-index /root/.openclaw/agents/main/sessions/sessions.json \
-  --session-dir /root/.openclaw/agents/main/sessions \
-  --replay-log /workspace/tmp/octopus/runtime-policy-replay.jsonl \
-  --day 2026-04-02
-
-# Run the nightly AI-assisted reply review and push a daily report into reports/reply-review/
-bash /workspace/openclaw/skills/octopus/bin/nightly-reply-review.sh
-
-# VM-side follow-up: wait for the replay validation report, let an OpenClaw agent analyze/fix it, then notify Slack
-bash /workspace/openclaw/skills/octopus/bin/nightly-report-followup.sh
-
-# Render a suggested cron line for the VM-side follow-up (default 01:20 local time)
-python3 /workspace/openclaw/skills/octopus/lib/nightly_report_followup.py render-cron
-
-# Optional: route the notification to a specific Slack target instead of the configured main session
-OCTOCLAW_NIGHTLY_FOLLOWUP_NOTIFY_CHANNEL=slack \
-OCTOCLAW_NIGHTLY_FOLLOWUP_NOTIFY_TARGET=channel:C123 \
-bash /workspace/openclaw/skills/octopus/bin/nightly-report-followup.sh
-
-# Recommended: enable this only after conservative observation has started producing useful replay
-
-# Replay event schema and sample fixtures
-cat /workspace/openclaw/skills/octopus/schemas/runtime-policy-replay-event-v1.schema.json
-cat /workspace/openclaw/skills/octopus/tests/fixtures/runtime-policy-replay-events-v1.json
-
-# Sticky lane state for follow-up routing
-cat /workspace/tmp/octopus/route-stickiness.json
-
-# Force a patrol cycle
-python3 /workspace/openclaw/skills/octopus/lib/patrol.py --force
-
-# Or use the unified control entrypoint
-bash /workspace/openclaw/skills/octopus/bin/octoclawctl.sh patrol-once
-
-# Disable runtime policy without uninstalling the extension
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh disable
-
-# Re-enable runtime policy after a paused rollout
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh enable --preset guided
-
-# Show the current runtime-policy config fragment
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh show
-
-# Check replay-based readiness using the current rollout phase
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh check --format text
-
-# Print a compact next-preset recommendation
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh recommend --format text
-
-# Uninstall runtime-policy rollout state and extension directory
-bash /workspace/openclaw/skills/octopus/bin/runtime-policy-rollout.sh uninstall
-
+octoclawctl status
+octoclawctl details --task-id <task-id>
+octoclawctl queue
+octoclawctl timeline --task-id <task-id>
+octoclawctl patrol
+octoclawctl repair
 ```
 
-## ClawTeam Bridge Validation
-
-OctoClaw now includes an optional bridge layer with three modes:
-
-- `mirror`: local ClawTeam-style mirror only
-- `hybrid`: local mirror + optional CLI hooks
-- `cli`: prefer CLI hooks while retaining mirror artifacts for observability
-
-The bridge can mirror task updates into a minimal ClawTeam-style layout:
-
-- tasks: `/workspace/tmp/octopus/clawteam-bridge/tasks`
-- inbox: `/workspace/tmp/octopus/clawteam-bridge/inbox`
-- events: `/workspace/tmp/octopus/clawteam-bridge/events`
-- board: `/workspace/tmp/octopus/clawteam-bridge/board.json`
-
-Unified runtime task records now carry enough lineage metadata for Phase 2 runtime convergence:
-
-- `task_kind`: `subtask`, `team_parent`, `team_step`
-- `parent_id` / `child_ids`
-- normalized `route / runtime / executor_type / worker_pool / work_type / phase / protocol / artifacts`
-
-Runner jobs now use the same record envelope as the rest of the unified runtime:
-
-- `runner_dispatch.py` registers a normalized runtime task up front
-- `runner_loop.sh` writes a shared markdown report plus structured runner result metadata
-- `task-state.json`, bridge mirror, and handoff payloads all reuse the same `report_path / artifacts / summary`
-- `artifacts.operator_surface` now carries operator-facing workbench hints, so `runner` / `spawn_single` / `spawn_multi` can expose the same tmux or ClawTeam runtime surface
-
-When `spawn_multi` is used, the bridge board also emits `lineages` so operators can inspect the parent task and its DAG children from one place.
-Those board briefs prefer `worker_pool` for display ownership, then fallback to legacy labels when a worker pool is unavailable.
-When child steps move through `running / done / failed`, the `team_parent` record now auto-rolls up child status, step summaries, and step reports, then emits a parent-level result mail when the DAG finishes or fails.
-`status.sh` now renders these parent/child relationships directly in `compact / table / lanes`, and also prints the current workbench mode / tmux session so you can inspect the unified runtime surface without manually opening `board.json`.
-
-Enable it in `tmp/octoclaw-config.json`:
-
-```json
-{
-  "clawteam_bridge": {
-    "enabled": true,
-    "backend": "hybrid",
-    "team_name": "octoclaw-validation",
-    "inbox_owner": "main",
-    "emit_result_mail": true,
-    "clawteam_bin": "clawteam",
-    "clawteam_data_dir": "",
-    "auto_create_team": true
-  },
-  "spawn_execution": {
-    "enabled": true,
-    "backend": "clawteam",
-    "backend_name": "tmux",
-    "workspace": false,
-    "default_profile": "",
-    "profile_by_model_prefix": {
-      "omniroute/cx/": "coding",
-      "zhipu/": "research"
-    }
-  }
-}
-```
-
-If `backend` is `hybrid` or `cli`, the bridge can also run configurable `clawteam` command templates for:
-
-- team init
-- task sync
-- inbox send
-
-Current default behavior:
-
-- native CLI sync now uses `team spawn-team`, `task create/update`, and `inbox send`
-- OctoClaw stores its own task mirror while also keeping a `task-map.json` for ClawTeam task IDs
-- `clawteam_data_dir` defaults to `<bridge root>/clawteam-data`, so it does not pollute your global `~/.clawteam`
-
-This mode still does not replace OctoClaw routing or patrol. It only adds ClawTeam-style collaboration plumbing with low integration risk.
-
-`spawn_execution` lets OctoClaw directly execute `spawn_single` through `clawteam spawn tmux ...`.
-OctoClaw now computes `worker_pool / phase / profile / model / thinking` first, then optionally maps the final model to an OpenClaw `--profile` for the execution layer.
-Because current OpenClaw TUI exposes `--profile` rather than a direct `--model` flag, the recommended integration is:
-
-- OctoClaw owns runtime model policy
-- OctoClaw maps the final selected model to a profile only when needed by the execution backend
-- ClawTeam receives the final OpenClaw command and runs it in tmux
-
-See [clawteam-integration-analysis-2026-03-25.md](./docs/archive/design-notes/clawteam-integration-analysis-2026-03-25.md) for the architecture notes and tradeoffs.
-See [octoclaw-clawteam-unified-runtime-v1-2026-03-25.md](./docs/archive/design-notes/octoclaw-clawteam-unified-runtime-v1-2026-03-25.md) for the target unified runtime design.
-
-Useful inspection commands:
+Feedback loop:
 
 ```bash
-# Unified runtime task records
-cat /workspace/tmp/octopus/task-state.json
-
-# ClawTeam-style board, including parent/child lineages for spawn_multi
-cat /workspace/tmp/octopus/clawteam-bridge/board.json
+octoclawctl nightly --format markdown
+octoclawctl review
+octoclawctl curate --task-id <turn-id>
+octoclawctl nightly-eval run --config ~/.openclaw/nightly-eval-config.json --output-dir ~/.openclaw/workspace/tmp/octopus/nightly-eval
+octoclawctl nightly-eval promote --output-dir ~/.openclaw/workspace/tmp/octopus/nightly-eval
 ```
 
-## Runtime Policy Decision
+## Current Roadmap
 
-OctoClaw now exposes a structured runtime policy entry:
+N0 is now closed: the active entry point is `octoclaw-ts-rebuild-design-v2.md`, while v1, the Phase 1/2 construction designs, and the 2026-04-30 roadmap are archive snapshots.
 
-- script: [`lib/octoclaw_policy.py`](./lib/octoclaw_policy.py)
-- schema: [`schemas/runtime-policy-decision-v1.schema.json`](./schemas/runtime-policy-decision-v1.schema.json)
-- replay schema: [`schemas/runtime-policy-replay-event-v1.schema.json`](./schemas/runtime-policy-replay-event-v1.schema.json)
-- replay fixtures: [`tests/fixtures/runtime-policy-replay-events-v1.json`](./tests/fixtures/runtime-policy-replay-events-v1.json)
-- runtime tool: `octoclaw_policy_decide`
-- command: `/octopolicy`
+Next work follows v2 N1-N4:
 
-The decision object is the stable contract between:
+1. Harden state truth and completion relay.
+2. Productize the IM capability matrix.
+3. Build Auto Router shadow-first: recommend execution contracts without changing the live path.
+4. Prepare release and open-source surfaces.
 
-- OpenClaw plugin / hook wiring
-- OctoClaw route and model policy
-- ClawTeam task metadata
-- UI / replay / eval surfaces
+## Development Checks
 
-It includes:
-
-- route decision
-- model/profile decision
-- default skill bundle
-- review policy
-- prompt contract
-- tool policy
-- hook interface hints for:
-  - `before_model_resolve`
-  - `before_prompt_build`
-  - `before_tool_call`
-  - `agent_end`
-
-Current runtime extension support is exposed as tool/command entrypoints first.
-The `hook_interface` payload is emitted now so future plugin hook binding can consume the same contract without changing the schema.
-
-## Model Policy Inputs
-
-Auto mode now considers four input layers:
-
-- Local speed metrics: `/workspace/tmp/octopus/model-speed.json`
-- Benchmark snapshot: `/workspace/tmp/octopus/model-benchmarks.json`
-- Plan state: `/workspace/tmp/octopus/model-plan-state.json`
-- Pricing model: `/workspace/tmp/octopus/model-pricing.json`
-
-Recommended benchmark sources:
-
-- PinchBench for OpenClaw agent suitability
-- Artificial Analysis for coding / reasoning capability
-- Claw-Eval for real-world agent workflow performance
-- OpenClaw live compatibility as your local validation layer
-- OpenRouter rankings as a low-weight ecosystem / availability signal
-
-How we use them:
-
-- PinchBench, Artificial Analysis, and Claw-Eval are primary benchmark inputs
-- OpenClaw live compatibility is a local feedback layer
-- OpenRouter rankings are secondary only; they help with ecosystem / routing confidence, not core capability ranking
-- `main_model` is chosen with a capability floor first, then ranked within eligible candidates; fast/cheap mid-tier models should not win the main brain slot just on latency or price
-
-What can be inferred automatically:
-
-- available models from `openclaw models list --json`
-- local TTFT / TPS / error-rate if your local latency source exists
-- pricing mode and default billing cycle once you map a model pattern
-
-What still needs user-maintained or provider-synced data:
-
-- monthly / yearly plan renewal date
-- remaining request / prompt ratio
-- whether a plan should be used before expiry
-- fallback model when quota gets low
-- optional monthly budget for token-priced models
-- current-month spend if you want budget-aware fallback
-
-In practice:
-
-- package type (`subscription_request_plan`, `subscription_prompt_plan`, `subscription_seat_plan`, `token_pack`) can be seeded once and then reused
-- billing cycle (`monthly`, `yearly`, `one_time`) can usually be seeded once and reused
-- live remaining quota usually cannot be inferred reliably without provider-specific APIs, so keep it in `model-plan-state.json` or add a provider sync later
-- token-priced models can also be budget-governed with `monthly_budget_cny`, `current_month_spent_cny`, `soft_limit_ratio`, and `hard_limit_ratio`
-
-## Harness Direction
-
-OctoClaw follows a lightweight harness direction by default:
-
-- runtime policy decides route / review / skill bundle
-- workers receive brief-first task packets (`octoclaw.brief/v1`)
-- workers are asked to return a structured result contract (`octoclaw.worker_result/v1`)
-- workers now follow a stronger runtime contract: checkpoint/progress events, checklist persistence, artifact-first results, and explicit `blocked` vs `failed`
-- long-running follow-ups now prefer a compact `context_pack` over replaying raw transcript history
-- long outputs become artifacts instead of bloating the main context
-- task / inbox / board make delegation observable
-
-This is meant to improve efficiency and reduce token waste, not to make every request heavier.
-
-Heavier protocol rules are only turned on for complex `spawn_single` / `spawn_multi` work.
-
-## Project Layout
-
-```text
-.
-├── README.md
-├── README.zh-CN.md
-├── SKILL.md
-├── CHANGELOG.md
-├── RELEASE_NOTES_v0.1.0.md
-├── docs/
-│   ├── octoclaw-design-foundation.md
-│   ├── octoclaw-execution-plan.md
-│   ├── wiki/
-│   └── archive/
-├── schemas/
-├── extensions/
-│   └── octoclaw-runtime/
-├── eval/
-└── lib/
-    ├── octoclaw_policy.py
-    ├── dispatch_task.py
-    ├── runner_playbooks.py
-    ├── runner_routing.py
-    ├── runner_dispatch.py
-    ├── runner_queue.py
-    ├── runner_loop.sh
-    ├── runner-daemon.sh
-    ├── patrol.py
-    ├── status.sh
-    └── eval_suite.py
+```bash
+pnpm check
+pnpm test
+git diff --check
 ```
 
-## Open-Source Release Materials
+For documentation-only changes, run at least:
 
-- [CHANGELOG.md](./CHANGELOG.md)
-- [RELEASE_NOTES_v0.1.0.md](./RELEASE_NOTES_v0.1.0.md)
-- [CONTRIBUTING.md](./CONTRIBUTING.md)
-- [LICENSE](./LICENSE)
-
-## Archived Design Notes
-
-- [Archive index](./docs/archive/design-notes/README.md)
-- Historical design notes now live under [`docs/archive/design-notes/`](./docs/archive/design-notes/)
-
-## Knowledge Compilation Layer
-
-- [Wiki layer README](./docs/wiki/README.md)
-- This layer is for LLM-maintained synthesis and cross-linking, not canonical design truth
+```bash
+git diff --check
+```

@@ -2,7 +2,7 @@
 
 > 状态：P3+P4 contract baseline（2026-04-06）  
 > 用途：定义 IM/display 的交互状态机、surface ownership、capability matrix，以及 display 对 substrate truth 的最小依赖契约。  
-> 关联文件：`lib/im_display_contract.py`、`lib/im_thread.py`、`lib/notifier.py`、`lib/task_display.py`
+> N0 更新：本文早期关联的 Python 文件已不再是 live path 权威；当前实现以 `extensions/octoclaw-runtime/src/im/*`、`extensions/octoclaw-status-surface/src/*` 和 `tools/octoclawctl/src/*` 为准。Slack L2、Feishu L1、WeChat L0 adapter baseline 已落地，后续工作是产品化 capability matrix 和验收。
 
 ---
 
@@ -113,13 +113,15 @@
 
 ## 6. Current implementation note
 
-P3+P4 当前已落到这些代码：
+P3+P4 当前已落到这些 TS 代码：
 
-- `lib/im_display_contract.py`：shared contract source
-- `lib/im_thread.py`：interaction contract / thread_state usage
-- `lib/notifier.py`：surface capability metadata
-- `lib/task_display.py`：action taxonomy + substrate display contract exposure
-- `lib/openclaw_taskflow_adapter.py`：create preference / create status surfaced into taskflow bindings，mirror cleanup preview/apply
+- `extensions/octoclaw-runtime/src/im/adapter.ts`：shared IM adapter contract
+- `extensions/octoclaw-runtime/src/im/index.ts`：adapter registry 和 `sendWithDegradation`
+- `extensions/octoclaw-runtime/src/im/slack/slack-adapter.ts`：Slack L2 baseline
+- `extensions/octoclaw-runtime/src/im/feishu/feishu-adapter.ts`：Feishu L1 baseline
+- `extensions/octoclaw-runtime/src/im/wechat/wechat-adapter.ts`：WeChat L0 baseline
+- `extensions/octoclaw-status-surface/src/*`：status/details/queue/timeline read model 和 renderers
+- `tools/octoclawctl/src/*`：operator surface 和 nightly/slack acceptance
 
 另外，simple `spawn_multi` 的 linear flow baseline 现在也进入了 graph/timeline：
 

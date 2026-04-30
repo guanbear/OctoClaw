@@ -2,7 +2,8 @@
 
 Date: 2026-04-29
 Branch: `refactor/0.4.0-stable`
-Source contract: `docs/octoclaw-architecture-diagnosis-and-refactor-plan-2026-04-29.md` Phase 1
+Source contract: `docs/archive/octoclaw-architecture-diagnosis-and-refactor-plan-2026-04-29.md` Phase 1
+Status: completed snapshot. Phase 1 truth convergence, delivery outbox, ACK/progress cleanup, replay split, and role terminology are summarized in `../octoclaw-ts-rebuild-design-v2.md`; use that document as the current entry point.
 
 ## Goal
 
@@ -353,8 +354,8 @@ ulw
 Task: Implement OctoClaw Phase 1 stabilization slice <P1-A|P1-B|P1-C|P1-D>.
 
 Design references:
-- docs/octoclaw-architecture-diagnosis-and-refactor-plan-2026-04-29.md Phase 1
-- docs/octoclaw-phase1-stabilization-design-2026-04-29.md
+- docs/archive/octoclaw-architecture-diagnosis-and-refactor-plan-2026-04-29.md Phase 1
+- docs/archive/octoclaw-phase1-stabilization-design-2026-04-29.md
 
 Truth rules:
 - Native TaskFlow is execution lifecycle truth.

@@ -19,7 +19,7 @@ This design intentionally does not replace the existing documents. It is a roadm
 
 Primary current docs:
 
-1. [octoclaw-ts-rebuild-design-v1.md](../octoclaw-ts-rebuild-design-v1.md)
+1. [octoclaw-ts-rebuild-design-v1.md](./octoclaw-ts-rebuild-design-v1.md)
    - Core purpose: fast first response, on-demand delegation, stable lifecycle, cost-aware model use.
    - Updated with WorkContract-centered delegation and measurable cost/speed principles.
 2. [octoclaw-work-contract-centered-delegation-design-2026-04-25.md](./octoclaw-work-contract-centered-delegation-design-2026-04-25.md)

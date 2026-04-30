@@ -4,6 +4,7 @@
 > 代码基线：`refactor/0.4.0-stable`（Phase 0-4 全部完成）  
 > 前置参考：[`octoclaw-auto-router-design.md`](octoclaw-auto-router-design.md)（战略底稿，保留不删）  
 > 日期：2026-04-30
+> N0 更新：`packages/octoclaw-runtime-core` 已并入 runtime extension；Phase 5 router core 的建议落点改为 `packages/octoclaw-policy/src/router/*`。本文中的 `direct / runner / spawn_single / spawn_multi` 均表示 execution contract / lane，不是 live route authority；live route 仍为 `reply | delegate`。
 
 ---
 
@@ -107,7 +108,7 @@ Auto Router 的**第一职责**是决定 execution contract，不是选模型。
 
 ### 4.1 核心类型定义
 
-文件路径：`packages/octoclaw-runtime-core/src/router/contracts.ts`
+文件路径：`packages/octoclaw-policy/src/router/contracts.ts`
 
 ```typescript
 /** 路由器输入信号 */
@@ -208,7 +209,7 @@ export interface RouterCore {
 
 ### 4.2 Signal 提取接口
 
-文件路径：`packages/octoclaw-runtime-core/src/router/signal.ts`
+文件路径：`packages/octoclaw-policy/src/router/signal.ts`
 
 ```typescript
 import type { RouterRequest } from "./contracts.js";
@@ -241,7 +242,7 @@ export function estimateContextTokens(text: string): number;
 
 ### 4.3 执行合同路由器接口
 
-文件路径：`packages/octoclaw-runtime-core/src/router/contract-router.ts`
+文件路径：`packages/octoclaw-policy/src/router/contract-router.ts`
 
 ```typescript
 import type { RouterRequest, RouteRecommendation } from "./contracts.js";
@@ -284,13 +285,13 @@ export function routeExecutionContract(
 
 | 动作 | 文件 | 说明 |
 |------|------|------|
-| NEW | `packages/octoclaw-runtime-core/src/router/contracts.ts` | 上方 §4.1 合同定义 |
-| NEW | `packages/octoclaw-runtime-core/src/router/signal.ts` | 信号提取 §4.2 |
-| NEW | `packages/octoclaw-runtime-core/src/router/contract-router.ts` | 执行合同路由 §4.3 |
-| NEW | `packages/octoclaw-runtime-core/src/router/budget.ts` | Budget planner |
-| NEW | `packages/octoclaw-runtime-core/src/router/index.ts` | 公共 API re-export |
-| NEW | `packages/octoclaw-runtime-core/src/router/__tests__/` | 合同测试 + goldens |
-| MODIFY | `packages/octoclaw-runtime-core/package.json` | 添加 router 目录到 exports |
+| NEW | `packages/octoclaw-policy/src/router/contracts.ts` | 上方 §4.1 合同定义 |
+| NEW | `packages/octoclaw-policy/src/router/signal.ts` | 信号提取 §4.2 |
+| NEW | `packages/octoclaw-policy/src/router/contract-router.ts` | 执行合同路由 §4.3 |
+| NEW | `packages/octoclaw-policy/src/router/budget.ts` | Budget planner |
+| NEW | `packages/octoclaw-policy/src/router/index.ts` | 公共 API re-export |
+| NEW | `packages/octoclaw-policy/src/router/__tests__/` | 合同测试 + goldens |
+| MODIFY | `packages/octoclaw-policy/package.json` | 添加 router 目录到 exports |
 
 **完成标准**：
 - `recommend(request)` 在已有 replay fixture 上与当前 decision 结果一致（≥ 90%）
@@ -373,9 +374,9 @@ export function routeExecutionContract(
 
 | 动作 | 文件 | 说明 |
 |------|------|------|
-| NEW | `packages/octoclaw-runtime-core/src/router/judge.ts` | Tiny judge 接口 + 调用封装 |
-| MODIFY | `packages/octoclaw-runtime-core/src/router/contract-router.ts` | 接入 judge（仅模糊样本） |
-| MODIFY | `packages/octoclaw-runtime-core/src/router/budget.ts` | 基于 judge 结果的 budget 决策 |
+| NEW | `packages/octoclaw-policy/src/router/judge.ts` | Tiny judge 接口 + 调用封装 |
+| MODIFY | `packages/octoclaw-policy/src/router/contract-router.ts` | 接入 judge（仅模糊样本） |
+| MODIFY | `packages/octoclaw-policy/src/router/budget.ts` | 基于 judge 结果的 budget 决策 |
 | MODIFY | `extensions/octoclaw-runtime/src/router/shadow-bridge.ts` | 接入 judge 并记录 judge 结果到 replay |
 
 **Tiny judge 接口**：
@@ -493,7 +494,7 @@ Auto Router 不自建评估体系，完全复用 Phase 2 已有的七步链路�
 以下 lane 必须 bypass delegated optimization，**不能**混入业务训练集：
 
 ```typescript
-// packages/octoclaw-runtime-core/src/router/protected-lanes.ts
+// packages/octoclaw-policy/src/router/protected-lanes.ts
 
 /**
  * 触发 control_observer 的关键词模式（不区分大小写）。
@@ -553,7 +554,7 @@ Golden 文件位置：`extensions/octoclaw-runtime/src/router/__fixtures__/`
 
 ### P5-A 完成标准
 
-- [ ] `packages/octoclaw-runtime-core/src/router/` 目录创建，包含 contracts/signal/contract-router/budget/index
+- [ ] `packages/octoclaw-policy/src/router/` 目录创建，包含 contracts/signal/contract-router/budget/index
 - [ ] `recommend()` 函数在已有 replay fixture 上与当前 decision 一致率 ≥ 90%
 - [ ] Protected lanes golden fixtures 可通过测试
 - [ ] TypeScript 编译 0 错误，pnpm test 无新失败

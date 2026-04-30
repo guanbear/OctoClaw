@@ -1,5 +1,7 @@
 # OctoClaw 下一阶段完整规划
 
+> 状态：dated snapshot。核心内容已合并到 [`octoclaw-ts-rebuild-design-v2.md`](../octoclaw-ts-rebuild-design-v2.md)，后续以 v2 为当前设计入口。本文仅保留 2026-04-30 当时的阶段核查记录，不再作为最新路线图。
+>
 > 基于：全量文档扫描 + 代码核查（extensions/、tools/、docs/）  
 > 最后核查日期：2026-04-30  
 > 分支：`refactor/0.4.0-stable`
@@ -254,5 +256,5 @@ Auto Router 的**第一个任务**是决定执行合同：
 
 ---
 
-*文档路径：`docs/octoclaw-next-phase-roadmap-2026-04-30.md`*  
+*文档路径：`docs/archive/octoclaw-next-phase-roadmap-2026-04-30.md`*
 *代码核查分支：`refactor/0.4.0-stable`，核查日期：2026-04-30*

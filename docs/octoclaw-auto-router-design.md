@@ -2,7 +2,8 @@
 
 > 状态：P2.5 配套设计底稿（2026-04-08，post-P2.5 深化已纳入）  
 > 用途：把 OctoClaw 内部的路由子系统收成独立设计面，供 P2 / P2.5 / 后续 router/model-intel 深化实现时统一边界。  
-> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md)、[`octoclaw-auto-router-implementation-checklist.md`](./octoclaw-auto-router-implementation-checklist.md)、[`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
+> N0 更新：当前实现入口和阶段计划以 [`octoclaw-ts-rebuild-design-v2.md`](./octoclaw-ts-rebuild-design-v2.md) 与 [`octoclaw-phase5-auto-router-design-2026-04-30.md`](./octoclaw-phase5-auto-router-design-2026-04-30.md) 为准。本文保留为 Auto Router 战略底稿；文中的 `runner / spawn_single / spawn_multi` 均按 execution contract / lane 理解，不是 live route authority。
+> 关联文档：[`octoclaw-design-foundation.md`](./octoclaw-design-foundation.md)、[`archive/octoclaw-execution-plan.md`](./archive/octoclaw-execution-plan.md)、[`archive/octoclaw-auto-router-implementation-checklist.md`](./archive/octoclaw-auto-router-implementation-checklist.md)、[`archive/octoclaw-router-model-intel-deepening-design.md`](./archive/octoclaw-router-model-intel-deepening-design.md)
 
 ---
 
@@ -27,7 +28,7 @@
 
 P2.5 之后的深化路径不再写在这份文档里单独扩张，而是由 focused design 单独承接：
 
-- [`octoclaw-router-model-intel-deepening-design.md`](./octoclaw-router-model-intel-deepening-design.md)
+- [`archive/octoclaw-router-model-intel-deepening-design.md`](./archive/octoclaw-router-model-intel-deepening-design.md)
 
 ---
 

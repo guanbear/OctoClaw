@@ -556,8 +556,8 @@ ACK controller 在 Phase 1 不需要再次调用 judge，只需要消费一个�
 
 这些内容继续以：
 
-1. `octoclaw-ts-rebuild-design-v1.md`
-2. `octoclaw-ts-rebuild-implementation-plan-2026-04-15.md`
-3. `octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md`
+1. `octoclaw-ts-rebuild-design-v2.md`
+2. `archive/octoclaw-ts-rebuild-implementation-plan-2026-04-15.md`
+3. `archive/octoclaw-native-taskflow-and-agent-runtime-borrowings-2026-04-20.md`
 
 为主。

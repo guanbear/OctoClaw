@@ -2,7 +2,7 @@
 
 > 状态：系统定义底稿（持续更新）  
 > 用途：给维护者开发、重构与取舍判断使用，不是面向外部的介绍文档。  
-> 入口文档：[`octoclaw-next-phase-roadmap-2026-04-30.md`](./octoclaw-next-phase-roadmap-2026-04-30.md)（含完整阶段规划和活跃文档索引）  
+> 入口文档：[`octoclaw-ts-rebuild-design-v2.md`](./octoclaw-ts-rebuild-design-v2.md)（当前架构基线、已完成状态和下一步 N0-N4）
 > 相关设计：[WorkContract 委派设计](./octoclaw-work-contract-centered-delegation-design-2026-04-25.md)、[ACK 策略规范](./octoclaw-judge-ack-policy-spec-2026-04-21.md)、[IM 渲染合同](./octoclaw-im-display-contract.md)、[Auto Router 设计](./octoclaw-auto-router-design.md)
 
 ---
@@ -304,6 +304,8 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 
 这部分是对旧设计文档最重要的校准。
 
+N0 更新：本节保留为长期设计背景，但实现路径已按 TS monorepo 收口。旧 Python 模块名只作为历史证据，不再作为当前实现入口；当前入口以 `octoclaw-ts-rebuild-design-v2.md` 和下列 TS 路径为准。
+
 ### 5.1 substrate / observer / continuity：已到基础可用
 
 以下方向不是空白，而是已经落地了第一拍：
@@ -315,14 +317,16 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 - `e9bf47b` — patrol observation pass 与 on-demand runner mode 收口
 - `17abf08` — unified `octoclawctl` control entrypoint
 
-配套代码/测试包括：
+当前 TS 配套代码/测试入口包括：
 
-- `lib/openclaw_taskflow_adapter.py`
-- `lib/runtime_observer.py`
-- `lib/session_resume.py`
-- `tests/test_openclaw_taskflow_adapter.py`
-- `tests/test_runtime_observer.py`
-- `tests/test_session_resume.py`
+- `extensions/octoclaw-runtime/src/ports/openclaw-runtime-taskflow-port.ts`
+- `extensions/octoclaw-runtime/src/ports/taskflow-port.ts`
+- `extensions/octoclaw-runtime/src/work-contract/native-taskflow-adapter.ts`
+- `extensions/octoclaw-runtime/src/work-contract/materializer.ts`
+- `extensions/octoclaw-runtime/src/work-contract/continuity.ts`
+- `extensions/octoclaw-runtime/src/core/workflow/*`
+- `extensions/octoclaw-runtime/src/core/recovery/*`
+- `extensions/octoclaw-runtime/src/state/task-state-store.ts`
 
 所以现在不能再把“taskflow substrate 接入”“observer 基础层”“resume continuity”写成纯未来事项。
 
@@ -343,27 +347,22 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 
 你提到的“反馈闭环”我之前写轻了，这次需要纠正。
 
-当前代码里已经有完整的 baseline：
+当前 TS 代码里已经有完整的 baseline：
 
 - replay 事件：`runtime-policy-replay.jsonl`
-- 汇总：`lib/replay_summary.py`
-- review：`lib/replay_review.py`
-- curate：`lib/replay_curate.py`
-- automation：`lib/replay_automation.py`
-- reply/delegation review packet：`lib/reply_review_packet.py`
-- replay validation：`lib/replay_validation.py`
-- eval fixture export：`lib/eval_fixture_export.py`
-- learn/error promotion：`lib/learning_log.py`、`lib/nightly_error_review.py`
-- rollout promotion hints：`lib/runtime_policy_rollout.py`
+- replay runtime：`extensions/octoclaw-runtime/src/replay/*`
+- replay guard/receipt tests：`extensions/octoclaw-runtime/src/replay/*.test.ts`
+- nightly / nightly-eval：`tools/octoclawctl/src/nightly/*`、`tools/octoclawctl/src/nightly-eval/*`
+- gate / model / judge / route policy：`packages/octoclaw-policy/src/{gate,model,judge,route}/*`
+- delivery outcome：`extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts`
 
-配套测试也已经存在：
+配套测试也已经存在于这些 TS 包内：
 
-- `tests/test_replay_review.py`
-- `tests/test_replay_automation.py`
-- `tests/test_replay_summary.py`
-- `tests/test_replay_curate.py`
-- `tests/test_runtime_policy_replay_schema.py`
-- `tests/test_reply_review_packet.py`
+- `extensions/octoclaw-runtime/src/replay/*.test.ts`
+- `tools/octoclawctl/src/nightly/nightly.test.ts`
+- `tools/octoclawctl/src/nightly-eval/nightly-eval.test.ts`
+- `packages/octoclaw-policy/src/gate/index.test.ts`
+- `packages/octoclaw-policy/src/model/index.test.ts`
 
 这说明当前更准确的说法应该是：
 
@@ -389,20 +388,22 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 
 主要代码：
 
-- `lib/im_thread.py`
-- `lib/notifier.py`
-- `lib/task_display.py`
-- `lib/task_anchor_commands.py`
-- `lib/session_ops.py`
+- `extensions/octoclaw-runtime/src/im/adapter.ts`
+- `extensions/octoclaw-runtime/src/im/send.ts`
+- `extensions/octoclaw-runtime/src/im/index.ts`
+- `extensions/octoclaw-runtime/src/im/slack/*`
+- `extensions/octoclaw-runtime/src/im/feishu/*`
+- `extensions/octoclaw-runtime/src/im/wechat/*`
+- `extensions/octoclaw-runtime/src/im-status-renderer.ts`
+- `extensions/octoclaw-status-surface/src/{read-model,view-model,renderers,actions}/*`
 
 主要测试：
 
-- `tests/test_im_thread.py`
-- `tests/test_notifier.py`
-- `tests/test_task_display.py`
-- `tests/test_task_anchor_commands.py`
-- `tests/test_task_events.py`
-- `tests/test_patrol_notifications.py`
+- `extensions/octoclaw-runtime/src/im/*.test.ts`
+- `extensions/octoclaw-runtime/src/im/slack/*.test.ts`
+- `extensions/octoclaw-runtime/src/im/feishu/*.test.ts`
+- `extensions/octoclaw-runtime/src/im/wechat/*.test.ts`
+- `extensions/octoclaw-status-surface/src/**/*.test.ts`
 
 这意味着旧文档中关于：
 
@@ -992,4 +993,4 @@ Optional operator backend
 5. 它是在减少对重 backend 的刚性依赖，还是重新把系统绑回去？
 6. 它对应的“当前状态”到底是未做、第一拍已做、还是应该进入收口/深化阶段？
 
-如果答不上来，就先回到 [`octoclaw-execution-plan.md`](./octoclaw-execution-plan.md) 看新的阶段计划，而不是再按旧文档的相对优先级继续推进。
+如果答不上来，就先回到 [`octoclaw-ts-rebuild-design-v2.md`](./octoclaw-ts-rebuild-design-v2.md) 看当前阶段计划，而不是再按旧文档的相对优先级继续推进。
