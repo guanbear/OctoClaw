@@ -13,9 +13,21 @@ describe("IM adapter factory", () => {
     expect(getAdapterForSession("agent:main:slack:default:channel:C123")).toBeInstanceOf(SlackAdapter);
   });
 
-  it("getAdapterForSession returns null for non-Slack keys", () => {
+  it("getAdapterForSession returns null for unknown keys", () => {
     expect(getAdapterForSession("agent:main:main")).toBeNull();
-    expect(getAdapterForSession("feishu:user:ABC123")).toBeNull();
+    expect(getAdapterForSession("agent:main:unknown:default:channel:X123")).toBeNull();
+  });
+
+  it("getAdapterForSession returns FeishuAdapter for :feishu: keys", () => {
+    const result = getAdapterForSession("agent:main:feishu:default:direct:ou_abc");
+    expect(result).not.toBeNull();
+    expect(result?.channel).toBe("feishu");
+  });
+
+  it("getAdapterForSession returns WeChatAdapter for :wechat: keys", () => {
+    const result = getAdapterForSession("agent:main:wechat:default:direct:wxid_abc");
+    expect(result).not.toBeNull();
+    expect(result?.channel).toBe("wechat");
   });
 
   it("adapter is cached", () => {

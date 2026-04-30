@@ -14,9 +14,18 @@ export interface RuntimeNativeTruthPayload {
   flowId: string;
   taskId: string;
   runtime: "openclaw-native";
+  /**
+   * Canonical sync mode for this task. "managed" is the only active mode;
+   * "mirrored" is kept for read-back compatibility but is not a live path.
+   * @deprecated Use "managed". "mirrored" will be removed in a future release.
+   */
   syncMode: "managed" | "mirrored";
   substrateState: RuntimeWorkflowState["workflowOrchestration"];
   substrateRevision: number;
+  /**
+   * Redundant copy of syncMode kept for wire-format compatibility.
+   * @deprecated Read syncMode instead. This field will be removed in a future release.
+   */
   managedDisposition: "managed" | "mirrored";
   ownership: {
     claimOwner: string;
@@ -51,6 +60,9 @@ export interface RuntimeArtifactPayload {
 export interface RuntimeTelemetryPayload {
   kind: "telemetry";
   substrateRevision: number;
+  /**
+   * @deprecated "mirrored" is not an active execution path. Always "managed" for new tasks.
+   */
   syncMode: "managed" | "mirrored";
   claimOwner: string;
 }
@@ -60,9 +72,15 @@ export interface RuntimeTaskflowManagedRecord {
   controllerId: string;
   managed: true;
   runtime: "openclaw-native";
+  /**
+   * @deprecated "mirrored" is not an active execution path. Always "managed" for new records.
+   */
   syncMode: "managed" | "mirrored";
   substrateState: RuntimeWorkflowState["workflowOrchestration"];
   substrateRevision: number;
+  /**
+   * @deprecated Redundant copy of syncMode. Read syncMode instead.
+   */
   managedDisposition: "managed" | "mirrored";
   ownership: {
     claimOwner: string;
@@ -84,6 +102,9 @@ export interface RuntimeTaskflowTaskRecord {
   taskId: string;
   flowId: string;
   runtime: "openclaw-native";
+  /**
+   * @deprecated "mirrored" is not an active execution path. Will be restricted to "managed" only.
+   */
   syncMode: "managed" | "mirrored";
   substrateState: RuntimeWorkflowState["workflowOrchestration"];
   substrateRevision: number;
@@ -133,6 +154,9 @@ export interface RuntimeTaskflowSessionBinding {
     found: boolean;
     substrateState: string | null;
     substrateRevision: number | null;
+    /**
+     * @deprecated "mirrored" is not an active execution path.
+     */
     syncMode?: "managed" | "mirrored";
     progressSummary?: string;
   };
@@ -198,6 +222,23 @@ function normalizeScope(scope: ScopeMetadata): ScopeMetadata {
   };
 }
 
+/**
+ * Derives all four truth-planes (truth/projection/artifact/telemetry) from a
+ * native helper result.
+ *
+ * OctoClaw ↔ native TaskFlow field mapping:
+ *   sessionKey         ← OctoClaw session identifier
+ *   requestId          ← workflow.identity.requestId
+ *   flowId             ← native helper result: flow.flowId / flow_id
+ *   taskId             ← native helper result: task.taskId
+ *   syncMode           ← native helper result: task.syncMode (canonical: "managed")
+ *   substrateState     ← native helper result: task.state / flow.status
+ *   substrateRevision  ← native helper result: task.revision / flow.revision
+ *   managedDisposition ← @deprecated copy of syncMode; kept for wire-format compat
+ *   claimOwner         ← workflow.claim.claimOwner || taskMaterialization.claimOwner
+ *   claimToken         ← workflow.claim.claimToken || taskMaterialization.claimToken
+ *   workspaceMode      ← workflow.scope.workspaceMode
+ */
 function deriveTruthShape(
   sessionKey: string,
   workflow: RuntimeWorkflowState,

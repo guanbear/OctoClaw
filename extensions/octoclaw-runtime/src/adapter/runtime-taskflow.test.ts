@@ -270,4 +270,79 @@ describe("runtime taskflow adapter", () => {
       progressSummary: "blocked on input",
     });
   });
+
+  it("cross-state: createManaged → runTask → cancelFlow produces consistent flowId", () => {
+    const helper = buildHelperInvoker();
+    const workflow = buildWorkflow();
+    const binding = createRuntimeTaskflowAdapter(helper.invoker).bindSession("session-cross");
+
+    const managed = binding.createManaged(workflow);
+    expect(managed.syncMode).toBe("managed");
+    expect(managed.substrateState).toBe("planned");
+
+    const task = binding.runTask(workflow);
+    // runTask should use the managedFlowId set by createManaged
+    expect(helper.calls[1].args.flow_id).toBe("flow-managed");
+    expect(task.syncMode).toBe("managed");
+    expect(task.substrateState).toBe("running");
+
+    const cancel = binding.cancelFlow(managed.flowId);
+    expect(cancel.ok).toBe(true);
+    expect(cancel.cancelled).toBe(true);
+    expect(cancel.flowId).toBe("flow-managed");
+  });
+
+  it("readFlow after createManaged returns running state with revision", () => {
+    const helper = buildHelperInvoker();
+    const workflow = buildWorkflow();
+    const binding = createRuntimeTaskflowAdapter(helper.invoker).bindSession("session-read");
+
+    binding.createManaged(workflow);
+    const flow = binding.readFlow("flow-managed");
+
+    expect(flow.ok).toBe(true);
+    expect(flow.found).toBe(true);
+    expect(flow.substrateState).toBe("running");
+    expect(flow.substrateRevision).toBe(11);
+    expect(flow.currentStep).toBe("step-2");
+  });
+
+  it("all planes carry identical taskId and flowId (referential integrity)", () => {
+    const helper = buildHelperInvoker();
+    const workflow = buildWorkflow();
+    const record = createRuntimeTaskflowAdapter(helper.invoker).bindSession("session-integrity").runTask(workflow);
+
+    expect(record.truth.taskId).toBe(record.projection.taskId);
+    expect(record.truth.flowId).toBe(record.projection.flowId);
+    expect(record.truth.flowId).toBe(record.flowId);
+    expect(record.truth.taskId).toBe(record.taskId);
+    expect(record.telemetry.syncMode).toBe("managed");
+    expect(record.telemetry.claimOwner).toBe("runtime-core");
+  });
+
+  it("managedDisposition mirrors syncMode in created record (deprecated field compat)", () => {
+    const helper = buildHelperInvoker();
+    const workflow = buildWorkflow();
+    const record = createRuntimeTaskflowAdapter(helper.invoker).bindSession("session-compat").createManaged(workflow);
+
+    // managedDisposition is deprecated but must equal syncMode for wire-format compat
+    expect(record.managedDisposition).toBe(record.syncMode);
+    expect(record.managedDisposition).toBe("managed");
+  });
+
+  it("bindSession creates isolated scope — managedFlowId does not leak across sessions", () => {
+    const helper = buildHelperInvoker();
+    const workflow = buildWorkflow();
+    const adapter = createRuntimeTaskflowAdapter(helper.invoker);
+
+    const sessionA = adapter.bindSession("session-A");
+    sessionA.createManaged(workflow);
+
+    const sessionB = adapter.bindSession("session-B");
+    sessionB.runTask(workflow);
+
+    // session-B runTask should NOT use flow-managed from session-A
+    const runTaskCall = helper.calls.find((c) => c.action === "run-task");
+    expect(runTaskCall?.args.flow_id).not.toBe("flow-managed");
+  });
 });
