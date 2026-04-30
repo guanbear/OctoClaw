@@ -67,7 +67,7 @@ import {
   stringifyParamsForPolicy,
   workflowEnforcementRule,
 } from "./replay/policy-utils.js";
-import { appendJsonl, recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
+import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 
@@ -453,13 +453,6 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
   const match = findRecentOutboundPolicyState(event.to, event, ctx, now, {
     allowUnanchoredDelivery: visibleDelivery,
   });
-  if (process.env.OCTOCLAW_FOOTER_DEBUG) {
-    console.error(`[footer-dbg] to=${JSON.stringify(stringValue(event.to))} visible=${visibleDelivery} match=${match ? "found" : "null"} contentLen=${content.length}`);
-  }
-  // Temporary: always write to footer-debug.log to diagnose missing footers
-  void appendJsonl(resolveReplayLogPath().replace("runtime-policy-replay.jsonl", "footer-debug.jsonl"), {
-    at: new Date().toISOString(), to: stringValue(event.to), visible: visibleDelivery, match: match ? "found" : "null", len: content.length,
-  }).catch(() => {});
   if (!match) {
     if (!visibleDelivery) return undefined;
     const fallbackReplacement = appendReplyProjectionFooter(content, {}, event, ctx);
@@ -1123,6 +1116,15 @@ export const plugin = {
               pi.logger?.debug?.("octoclaw route-commit-ack: skipped, agent already responded");
               return;
             }
+            // Second check: wait 600ms more, then check again.
+            // Handles models that respond in the 800ms–1400ms window (check 1 passed
+            // but model responds before sendRouteCommitAck HTTP call completes).
+            await new Promise<void>((r) => { const t = setTimeout(r, 600); (t as unknown as { unref?: () => void }).unref?.(); });
+            const tracking2 = getAckTrackingState(trackingStateKey);
+            if (Boolean(tracking2.formal_reply_visible)) {
+              pi.logger?.debug?.("octoclaw route-commit-ack: skipped on second check, agent responded during wait");
+              return;
+            }
           }
           const routeCommitResult = await sendRouteCommitAck({
             ...routeCommitAckParams,
@@ -1707,6 +1709,38 @@ export const plugin = {
       if (role === "assistant" && contentText && !isLikelyAck) {
         updateAckTrackingState(stateKey, { formal_reply_visible: true });
         updatePolicyState(stateKey, (current) => ({ ...(current ?? {}), formal_reply_visible: true }));
+      }
+      // Add reply projection footer for non-ACK assistant messages.
+      // Must happen here (before_message_write) because message_sending does not
+      // fire for model-generated responses — only for programmatic plugin messages.
+      let footerMessage: UnknownRecord | null = null;
+      if (!isLikelyAck && contentText && replyProjectionFooterEnabled()) {
+        const withFooter = appendReplyProjectionFooter(contentText, stateRecord, {}, ctx);
+        if (withFooter !== contentText) {
+          const base = asRecord(visibleMessage);
+          const baseContent = base.content;
+          let newContent: unknown;
+          if (typeof baseContent === "string") {
+            newContent = withFooter;
+          } else if (Array.isArray(baseContent)) {
+            // Replace last text-type block's text with footer version
+            const blocks = [...(baseContent as unknown[])];
+            for (let i = blocks.length - 1; i >= 0; i--) {
+              const b = asRecord(blocks[i]);
+              if (b.type === "text" && typeof b.text === "string") {
+                blocks[i] = { ...b, text: withFooter };
+                break;
+              }
+            }
+            newContent = blocks;
+          } else {
+            newContent = baseContent;
+          }
+          footerMessage = { ...base, content: newContent };
+        }
+      }
+      if (footerMessage) {
+        return { message: footerMessage };
       }
       if (visibleMessage !== asRecord(event.message)) {
         return { message: visibleMessage };
