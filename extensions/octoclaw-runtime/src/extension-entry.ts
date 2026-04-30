@@ -453,6 +453,9 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
   const match = findRecentOutboundPolicyState(event.to, event, ctx, now, {
     allowUnanchoredDelivery: visibleDelivery,
   });
+  if (process.env.OCTOCLAW_FOOTER_DEBUG) {
+    console.error(`[footer-dbg] to=${JSON.stringify(stringValue(event.to))} visible=${visibleDelivery} match=${match ? "found" : "null"} contentLen=${content.length}`);
+  }
   if (!match) {
     if (!visibleDelivery) return undefined;
     const fallbackReplacement = appendReplyProjectionFooter(content, {}, event, ctx);
