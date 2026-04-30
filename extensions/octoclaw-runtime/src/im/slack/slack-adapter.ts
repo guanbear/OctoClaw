@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
-import type { IMAdapter } from "../adapter.js";
+import type { IMAdapter, IMMessageTurnAnchorParams, IMProjectionFooter } from "../adapter.js";
 
 type SlackCommandResult = {
   ok?: unknown;
@@ -94,6 +94,24 @@ function readSlackBotToken(): string {
 
 function normalizeEmojiName(emoji: string): string {
   return stringValue(emoji).replace(/^:+|:+$/gu, "") || "eyes";
+}
+
+export function renderSlackProjectionFooter(message: string, projection: IMProjectionFooter): string {
+  const content = stringValue(message);
+  if (!content || /route=\w+\s*\|/u.test(content)) return message;
+  const route = projection.route === "delegate" ? "delegate" : "reply";
+  const model = stringValue(projection.model) || "direct_main";
+  const primaryFooter = [`route=${route}`, `model=${model}`].join(" | ") + (projection.thread ? " · thread" : "");
+  const debugParts = [
+    stringValue(projection.workerPool) && `worker=${stringValue(projection.workerPool)}`,
+    stringValue(projection.workContractId) && `wc=${stringValue(projection.workContractId).slice(0, 8)}`,
+  ].filter(Boolean).join(" | ");
+  const detailFooter = [
+    stringValue(projection.via) && `via=${stringValue(projection.via)}`,
+    debugParts,
+  ].filter(Boolean).join(" | ");
+  const footer = [primaryFooter, detailFooter].filter(Boolean).join(" | ");
+  return `${content}\n\n• ${footer}`;
 }
 
 async function postSlackApi<T extends Record<string, unknown>>(
@@ -220,6 +238,7 @@ export function auditSlackFacingToolExposure(tools: string[]): SlackToolExposure
 
 export class SlackAdapter implements IMAdapter {
   readonly channel = "slack" as const;
+  readonly capabilityLevel = "L2" as const;
   readonly config: SlackAdapterConfig;
 
   constructor(config?: Partial<SlackAdapterConfig>) {
@@ -246,6 +265,38 @@ export class SlackAdapter implements IMAdapter {
     if (process.env.OCTOCLAW_ACK_DEBUG === "1") {
       console.error(`[ack-thread] ${msg}`);
     }
+  }
+
+  renderProjectionFooter(message: string, projection: IMProjectionFooter): string {
+    return renderSlackProjectionFooter(message, projection);
+  }
+
+  resolveMessageTurnAnchor(params: IMMessageTurnAnchorParams): string {
+    const metadata = params.metadata ?? {};
+    const state = params.state ?? {};
+    const ctx = params.ctx ?? {};
+    return stringValue(
+      params.replyToMessageId
+      || metadata.message_id
+      || metadata.messageId
+      || metadata.ts
+      || metadata.messageTs
+      || metadata.message_ts
+      || metadata.reply_to_id
+      || metadata.replyToMessageId
+      || metadata.thread_ts
+      || metadata.threadTs
+      || state.message_id
+      || state.messageId
+      || state.inboundMessageTs
+      || state.replyToMessageId
+      || ctx.inboundMessageTs
+      || ctx.message_id
+      || ctx.messageId
+      || ctx.replyToMessageId
+      || ctx.threadTs
+      || ctx.thread_ts,
+    );
   }
 
   async react(params: {
@@ -316,6 +367,7 @@ export class SlackAdapter implements IMAdapter {
     timeoutMs?: number;
     cwd?: string;
     suppressProjectionFooter?: boolean;
+    projectionFooter?: IMProjectionFooter;
   }): Promise<SlackSendResult> {
     const target = this.resolveTarget(params.sessionKey);
     if (!target.target) {
@@ -327,6 +379,9 @@ export class SlackAdapter implements IMAdapter {
     }
 
     const timeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
+    const message = params.suppressProjectionFooter || !params.projectionFooter
+      ? params.message
+      : this.renderProjectionFooter(params.message, params.projectionFooter);
 
     // When replyToMessageId is provided, always try --reply-to first so the ACK
     // lands in the user's thread.  This is independent of the replyToMode config
@@ -334,7 +389,7 @@ export class SlackAdapter implements IMAdapter {
     // every reply to thread under the user's inbound message.
     if (params.replyToMessageId) {
       this.ackDebug(`replyToMessageId=${params.replyToMessageId} — attempting threaded send`);
-      const threadedResult = await this.executeSend(target, params.message, timeoutMs, params.cwd, params.replyToMessageId, params.suppressProjectionFooter);
+      const threadedResult = await this.executeSend(target, message, timeoutMs, params.cwd, params.replyToMessageId, params.suppressProjectionFooter);
       if (threadedResult.sent) {
         this.ackDebug("send succeeded (threaded)");
         return threadedResult;
@@ -348,7 +403,7 @@ export class SlackAdapter implements IMAdapter {
       this.ackDebug(`no replyToMessageId but threadTs=${target.threadTs} — sending with --thread-id`);
     }
 
-    const result = await this.executeSend(target, params.message, timeoutMs, params.cwd, undefined, params.suppressProjectionFooter);
+    const result = await this.executeSend(target, message, timeoutMs, params.cwd, undefined, params.suppressProjectionFooter);
     if (result.sent) {
       this.ackDebug("send succeeded (no reply-to, top-level or thread-id)");
     }

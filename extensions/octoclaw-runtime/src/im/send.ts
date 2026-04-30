@@ -1,5 +1,6 @@
 import { getAdapterForSession } from "./index.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
+import type { IMProjectionFooter } from "./adapter.js";
 
 export interface SendIMParams {
   sessionKey: string;
@@ -8,6 +9,7 @@ export interface SendIMParams {
   timeoutMs?: number;
   cwd?: string;
   suppressProjectionFooter?: boolean;
+  projectionFooter?: IMProjectionFooter;
 }
 
 export interface SendIMResult {
@@ -29,6 +31,7 @@ export async function sendIMMessage(params: SendIMParams): Promise<SendIMResult>
     timeoutMs: params.timeoutMs ?? 5000,
     cwd: params.cwd ?? resolveWorkspaceRoot(),
     suppressProjectionFooter: params.suppressProjectionFooter,
+    projectionFooter: params.projectionFooter,
   });
   return {
     sent: result.sent || result.delivered,

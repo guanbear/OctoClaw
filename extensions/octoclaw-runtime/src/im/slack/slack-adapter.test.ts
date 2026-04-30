@@ -15,6 +15,45 @@ import {
 } from "./slack-adapter.js";
 
 describe("SlackAdapter", () => {
+  it("declares Slack as L2 and renders projection footer inside adapter", () => {
+    const adapter = new SlackAdapter();
+
+    expect(adapter.capabilityLevel).toBe("L2");
+    expect(adapter.renderProjectionFooter("北京天气很好。", {
+      route: "reply",
+      model: "zhipu/GLM-5.1",
+      via: "judge",
+      workerPool: "octoclaw-main",
+      workContractId: "wc-1234567890",
+      thread: true,
+    })).toBe("北京天气很好。\n\n• route=reply | model=zhipu/GLM-5.1 · thread | via=judge | worker=octoclaw-main | wc=wc-12345");
+  });
+
+  it("resolves Slack message turn anchors from Slack ts aliases", () => {
+    const adapter = new SlackAdapter();
+
+    expect(adapter.resolveMessageTurnAnchor({ metadata: { ts: "1700000000.000100" } })).toBe("1700000000.000100");
+    expect(adapter.resolveMessageTurnAnchor({ metadata: { message_ts: "1700000000.000200" } })).toBe("1700000000.000200");
+  });
+
+  it("applies projection footer before Slack CLI send", async () => {
+    const adapter = new SlackAdapter();
+    mockRunCommand = async (_command, args) => {
+      const messageIndex = args.indexOf("--message");
+      expect(messageIndex).toBeGreaterThan(-1);
+      expect(args[messageIndex + 1]).toContain("• route=reply | model=zhipu/GLM-5.1");
+      return { code: 0, stdout: JSON.stringify({ ok: true, ts: "1700000000.000300" }), stderr: "" };
+    };
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abc",
+      message: "北京天气很好。",
+      projectionFooter: { route: "reply", model: "zhipu/GLM-5.1" },
+    });
+
+    expect(result.sent).toBe(true);
+  });
+
   it("resolveTarget parses Slack channel+thread session keys", () => {
     const adapter = new SlackAdapter();
 

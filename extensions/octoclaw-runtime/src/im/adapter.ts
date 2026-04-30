@@ -1,3 +1,21 @@
+export type IMCapabilityLevel = "L0" | "L1" | "L2";
+
+export interface IMProjectionFooter {
+  route: "reply" | "delegate";
+  model: string;
+  via?: string;
+  workerPool?: string;
+  workContractId?: string;
+  thread?: boolean;
+}
+
+export interface IMMessageTurnAnchorParams {
+  replyToMessageId?: string;
+  metadata?: Record<string, unknown>;
+  state?: Record<string, unknown>;
+  ctx?: Record<string, unknown>;
+}
+
 export interface IMSendParams {
   sessionKey: string;
   message: string;
@@ -5,6 +23,7 @@ export interface IMSendParams {
   timeoutMs?: number;
   cwd?: string;
   suppressProjectionFooter?: boolean;
+  projectionFooter?: IMProjectionFooter;
 }
 
 export interface IMSendResult {
@@ -37,8 +56,11 @@ export interface IMDeliveryTarget {
 
 export interface IMAdapter {
   readonly channel: string;
+  readonly capabilityLevel?: IMCapabilityLevel;
   canHandle(sessionKey: string): boolean;
   resolveTarget(sessionKey: string): IMDeliveryTarget;
   send(params: IMSendParams): Promise<IMSendResult>;
   react(params: IMReactParams): Promise<IMReactResult>;
+  renderProjectionFooter?(message: string, projection: IMProjectionFooter): string;
+  resolveMessageTurnAnchor?(params: IMMessageTurnAnchorParams): string;
 }

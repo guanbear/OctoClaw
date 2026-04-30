@@ -28,6 +28,8 @@ import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-di
 import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
+import { renderIMProjectionFooter } from "./im/projection-footer.js";
+import type { IMProjectionFooter } from "./im/adapter.js";
 import {
   buildPolicyMetadata,
   detectSessionBoundary,
@@ -452,24 +454,33 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
 
   const debug = footerDebugEnabled();
 
-  // ACK/direct status messages are sent through a separate IM path and must not
-  // receive projection footers. Formal replies, even short ones, use the full
-  // footer so Slack thread replies remain auditable.
+  // Runtime owns the channel-neutral projection facts; IM adapters own
+  // surface-specific rendering and legacy transport compatibility.
+  const projection: IMProjectionFooter = {
+    route,
+    model: resolveDisplayModel(state, event, ctx),
+    via: resolveRouteSource(state),
+    thread: hasThreadProjection(event, ctx),
+    ...(debug ? {
+      workerPool: stringValue(routeDecision.worker_pool),
+      workContractId: stringValue(workContract.workContractId || decision.workContractId),
+    } : {}),
+  };
+  return renderIMProjectionFooter({
+    content: content.trim(),
+    projection,
+    sessionKey: stringValue(ctx.sessionKey || event.sessionKey || event.session_key),
+    channel: resolveProjectionChannel(event, ctx),
+  });
+}
 
-  // Full response footer
-  const model = resolveDisplayModel(state, event, ctx);
-  const via = resolveRouteSource(state);
-  const workerPool = debug ? stringValue(routeDecision.worker_pool) : "";
-  const wc = debug ? stringValue(workContract.workContractId || decision.workContractId) : "";
-  const debugParts = debug
-    ? [workerPool && `worker=${workerPool}`, wc && `wc=${wc.slice(0, 8)}`].filter(Boolean).join(" | ")
-    : "";
-
-  const threadSuffix = hasThreadProjection(event, ctx) ? " · thread" : "";
-  const primaryFooter = [`route=${route}`, `model=${model}`].filter(Boolean).join(" | ") + threadSuffix;
-  const detailFooter = [`via=${via}`, debugParts].filter(Boolean).join(" | ");
-  const footer = [primaryFooter, detailFooter].filter(Boolean).join(" | ");
-  return `${content.trim()}\n\n• ${footer}`;
+function resolveProjectionChannel(event: UnknownRecord, ctx: UnknownRecord): string {
+  const metadata = asRecord(event.metadata);
+  const direct = stringValue(ctx.channel || ctx.channelId || event.channel || metadata.channel);
+  if (direct.toLowerCase() === "slack") return "slack";
+  const target = stringValue(event.to || metadata.channelId || metadata.channel_id);
+  if (/^[cdgu][a-z0-9]{8,}$/iu.test(target)) return "slack";
+  return direct;
 }
 
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {

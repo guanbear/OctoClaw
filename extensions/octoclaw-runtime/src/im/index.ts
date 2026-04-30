@@ -46,6 +46,12 @@ export function getAdapterForSession(sessionKey: string): IMAdapter | null {
   return adapterRegistry.find((adapter) => adapter.canHandle(sessionKey)) ?? null;
 }
 
+export function getAdapterForChannel(channel: string): IMAdapter | null {
+  const normalized = String(channel || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return adapterRegistry.find((adapter) => adapter.channel.toLowerCase() === normalized) ?? null;
+}
+
 export function registerIMAdapter(adapter: IMAdapter): void {
   adapterRegistry.unshift(adapter);
 }

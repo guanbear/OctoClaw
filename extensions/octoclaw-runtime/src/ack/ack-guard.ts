@@ -11,6 +11,7 @@ interface FsSyncLike {
 
 const fsSyncLike = fsSync as unknown as FsSyncLike;
 import { getAdapterForSession } from "../im/index.js";
+import { resolveIMMessageTurnAnchor } from "../im/message-turn.js";
 import { sendIMMessage } from "../im/send.js";
 import {
   AckStage,
@@ -243,27 +244,22 @@ function ensureAckTurnTimestamp(stateKey: string): number {
 
 
 function resolveAckMessageTurnId(
+  sessionKey: string,
   stateKey: string,
   state: UnknownRecord = {},
   ctx: AckContext = {},
   metadata: UnknownRecord = {},
   replyToMessageId = "",
 ): string {
-  const anchor = asString(
-    replyToMessageId
-    || metadata.message_id
-    || metadata.messageId
-    || metadata.reply_to_id
-    || metadata.replyToMessageId
-    || state.message_id
-    || state.messageId
-    || state.inboundMessageTs
-    || state.replyToMessageId
-    || ctx.inboundMessageTs
-    || ctx.message_id
-    || ctx.messageId
-    || ctx.replyToMessageId
-  );
+  const anchor = resolveIMMessageTurnAnchor({
+    sessionKey,
+    stateKey,
+    state,
+    ctx,
+    metadata,
+    replyToMessageId,
+    fallbackTurnId: "",
+  });
   if (anchor) return `${stateKey}:${anchor}`;
   return `${stateKey}:${ensureAckTurnTimestamp(stateKey)}`;
 }
@@ -746,6 +742,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   const threadKey = threadKeyFromSessionKey(normalizedSessionKey, normalizedStateKey);
   const ackTarget = resolveAckTargetFromSessionKey(normalizedSessionKey);
   const messageTurnId = asString(params.messageTurnId) || resolveAckMessageTurnId(
+    normalizedSessionKey,
     normalizedStateKey,
     effectiveState,
     effectiveCtx,
@@ -1072,7 +1069,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
         logger,
         timeoutMs: 2_000,
         ownerTag: "ack_controller",
-        messageTurnId: resolveAckMessageTurnId(stateKey, liveTrackingState, ctx, {}, replyToMessageId),
+        messageTurnId: resolveAckMessageTurnId(normalizedSessionKey, stateKey, liveTrackingState, ctx, {}, replyToMessageId),
         stageHint: templateInputs.stageHint,
         replyToMessageId,
         decision: ackDecision,
@@ -1162,7 +1159,7 @@ export async function maybeSendLatencyAck(
     toolActive: asBoolean(state.toolActive) || asBoolean(state.tool_active) || Boolean(asString(toolName)),
   };
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
-  const messageTurnId = resolveAckMessageTurnId(stateKey, preDecisionState, ctx, metadata);
+  const messageTurnId = resolveAckMessageTurnId(sessionKey, stateKey, preDecisionState, ctx, metadata);
   prepareAckTrackingForMessageTurn(stateKey, messageTurnId);
   const decisionPacket = buildDecisionPacket(stateKey, { ...preDecisionState, ...ackState(stateKey) }, routePhase);
   const ackDecision = decideAckAction(decisionPacket);
