@@ -1765,13 +1765,19 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
           || asBoolean(executionCoverage.supports_status_reply);
         const requiresControlPlaneRefresh = asBoolean(executionCoverage.requires_control_plane_refresh);
 
-        const isExecutionOrStatusFollowup = intentClass === "execution_followup"
-          || asBoolean(conversationControl.provenance_followup)
+        const isProvenanceOrStatusFollowup = asBoolean(conversationControl.provenance_followup)
           || asBoolean(conversationControl.status_followup);
+        const isExecutionOrStatusFollowup = intentClass === "execution_followup"
+          || isProvenanceOrStatusFollowup;
+        const delegateHintAgreesWithJudge = !isProvenanceOrStatusFollowup
+          && judgeRouteOverride === "delegate"
+          && asString(metadata.route_hint) === "delegate";
 
         let executionOverrideApplied = false;
 
-        if (executionCoverageOverride && isExecutionOrStatusFollowup) {
+        if (delegateHintAgreesWithJudge) {
+          validatorOverrideReasons.push("validator:delegate_hint_and_judge_preserved");
+        } else if (executionCoverageOverride && isExecutionOrStatusFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
           executionOverrideApplied = true;

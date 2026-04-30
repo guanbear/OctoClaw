@@ -855,7 +855,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   const isReactionAck = decision.action === "send_reaction_ack";
 
   ackDebug(`attemptAckSend: sending sessionKey=${normalizedSessionKey} stage=${params.ackStage} action=${decision.action} message="${message.substring(0, 30)}"`);
-  const result = isReactionAck
+  let result = isReactionAck
     ? await sendReactionAckDetailed(
         normalizedSessionKey,
         asString(params.replyToMessageId || effectiveState.message_id || effectiveState.messageId),
@@ -868,10 +868,37 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
         asString(effectiveCtx.cwd) || process.cwd(),
         { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
       );
+  const reactionAckDelivered = isReactionAck && Boolean(result.delivered || result.sent);
+  let reactionTextFallbackSent = false;
+  let deliveredMessage = message;
+  if (isReactionAck && !reactionAckDelivered) {
+    const reactionError = result.error;
+    const fallbackMessage = message || buildTemplateRegistryMessage(
+      ackTemplateStageFromDecision({ ...decision, modality: "text" }, "ack0"),
+      packet,
+      normalizedStateKey,
+      effectiveState,
+      normalizedSessionKey,
+    );
+    deliveredMessage = fallbackMessage;
+    const fallback = await sendAckMessage(
+      normalizedSessionKey,
+      fallbackMessage,
+      asString(effectiveCtx.cwd) || process.cwd(),
+      { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
+    );
+    reactionTextFallbackSent = Boolean(fallback.delivered || fallback.sent);
+    result = {
+      ...fallback,
+      error: fallback.error || reactionError,
+      reason: reactionTextFallbackSent ? "reaction_ack_failed_text_fallback" : "reaction_ack_failed_text_fallback_failed",
+    };
+  }
+  const finalSent = Boolean(result.delivered || result.sent);
 
   recordDelivery(ackKey, {
     ackKey,
-    sent: Boolean(result.delivered || result.sent),
+    sent: finalSent,
     deliveredAt: Date.now(),
     target: result.target,
     threadId: result.threadId || ackTarget.threadId || threadKey,
@@ -888,19 +915,19 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     ack_delivery_state: ackDeliveryState(result),
     ...(params.markLatencySent
       ? {
-          latencyAckSent: Boolean(result.delivered || result.sent),
-          latencyAckText: message,
-          latencyAckMode: isReactionAck ? "reaction" : params.markMode || "channel_message",
+          latencyAckSent: finalSent,
+          latencyAckText: deliveredMessage,
+          latencyAckMode: reactionAckDelivered ? "reaction" : params.markMode || "channel_message",
           ...(isReactionAck ? { reactionAckAttempted: true, reaction_ack_attempted: true } : {}),
         }
       : {}),
-    ...(isReactionAck ? { reactionAckAttempted: true, reaction_ack_attempted: true, reactionAckSent: Boolean(result.delivered || result.sent) } : {}),
-    ...(decision.action === "send_text_ack0" ? { textAck0Sent: Boolean(result.delivered || result.sent) } : {}),
-    ...(decision.ackStage === "tier1" ? { tier1Sent: Boolean(result.delivered || result.sent) } : {}),
-    ...(decision.ackStage === "tier2" ? { tier2Sent: Boolean(result.delivered || result.sent) } : {}),
+    ...(isReactionAck ? { reactionAckAttempted: true, reaction_ack_attempted: true, reactionAckSent: reactionAckDelivered } : {}),
+    ...(decision.action === "send_text_ack0" || reactionTextFallbackSent ? { textAck0Sent: finalSent } : {}),
+    ...(decision.ackStage === "tier1" ? { tier1Sent: finalSent } : {}),
+    ...(decision.ackStage === "tier2" ? { tier2Sent: finalSent } : {}),
   });
 
-  if (result.delivered || result.sent) {
+  if (finalSent) {
     ackDebug(`attemptAckSend: sent=true stage=${params.ackStage} target=${result.target}`);
     recordAckSent(threadKey, params.ackStage, routePhase);
     if (params.ackOwner !== "timer_ack") {

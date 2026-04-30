@@ -181,7 +181,7 @@ async function sendRouteCommitReactionAckDirect(
     sessionKey,
     messageId,
     emoji: asString(emoji) || "eyes",
-    timeoutMs: 2500,
+    timeoutMs: 5000,
     cwd: asString(cwd) || resolveWorkspaceRoot(),
   });
   return {
@@ -475,6 +475,20 @@ export async function sendRouteCommitAck(params: {
       routeCommitReactionEmoji(params.state),
       params.cwd,
     );
+    if (!result.sent) {
+      const reactionError = result.error;
+      const fallback = await sendRouteCommitAckDirect(
+        params.sessionKey,
+        projected.text,
+        effectiveReplyToMessageId || undefined,
+        params.cwd,
+      );
+      result = {
+        ...fallback,
+        error: fallback.error || reactionError,
+        reason: fallback.sent ? "reaction_ack_failed_text_fallback" : "reaction_ack_failed_text_fallback_failed",
+      };
+    }
   } else {
     result = await sendRouteCommitAckDirect(
       params.sessionKey,

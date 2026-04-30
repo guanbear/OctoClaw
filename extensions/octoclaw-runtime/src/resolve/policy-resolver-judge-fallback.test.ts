@@ -644,6 +644,37 @@ describe("execution coverage override intent guard", () => {
     });
   });
 
+  it("preserves delegate when main route_hint and judge agree during implementation follow-up", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      judgeResponse("delegate", 0.9),
+    );
+
+    const decision = await resolveStatelessPolicyDecision(
+      "好的，弄吧，启动时间你也看下什么时候合适",
+      {
+        metadata: {
+          _judgeFastConfig: localJudgeConfig,
+          conversation_control: {
+            intent_class: "execution_followup",
+          },
+        },
+        routeHint: {
+          route_hint: "delegate",
+          requested_route: "delegate",
+          work_type: "code",
+          phase: "implement",
+          confidence: 0.95,
+          source: "main_agent",
+        },
+      },
+    );
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "judge",
+    });
+  });
+
   it("execution_followup + no coverage + duration=long → forced reply", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({

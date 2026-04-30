@@ -25,6 +25,7 @@ import {
   WATCHDOG_INTERVAL_MS,
 } from "./ack/ack-guard.js";
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
+import { sendIMMessage } from "./im/send.js";
 import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
 import { recoverPendingChildCompletionFinalizers } from "./delegate/child-finalizer.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
@@ -143,6 +144,7 @@ let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 let taskStateRetentionInterval: ReturnType<typeof setInterval> | null = null;
 let deliveryOutboxInterval: ReturnType<typeof setInterval> | null = null;
 let childFinalizerRecoveryInterval: ReturnType<typeof setInterval> | null = null;
+const recentCompactionNotices = new Map<string, number>();
 
 function runDeliveryOutboxFlush(logger?: LoggerLike): void {
   void flushDeliveryOutbox({ logger }).then((result) => {
@@ -178,6 +180,40 @@ function runChildFinalizerRecovery(logger?: LoggerLike): void {
   } catch (error) {
     logger?.warn?.(`octoclaw child finalizer recovery failed: ${String(error)}`);
   }
+}
+
+function shouldSendCompactionNotice(sessionKey: string, now = Date.now()): boolean {
+  const key = stringValue(sessionKey);
+  if (!key || !key.includes(":slack:")) return false;
+  const last = recentCompactionNotices.get(key) || 0;
+  if (now - last < 5 * 60_000) return false;
+  recentCompactionNotices.set(key, now);
+  return true;
+}
+
+async function sendCompactionNotice(event: UnknownRecord, ctx: UnknownRecord, logger?: LoggerLike): Promise<void> {
+  const sessionKey = stringValue(ctx.sessionKey || event.sessionKey);
+  if (!shouldSendCompactionNotice(sessionKey)) return;
+  const state = getPolicyStateForContext(ctx).state;
+  let replyToMessageId = stringValue(state?.inboundMessageTs || state?.message_id || state?.replyToMessageId || state?.reply_to_id)
+    || extractInboundMessageTimestamp(ctx, event, "");
+  if (!replyToMessageId && sessionKey.includes(":slack:") && sessionKey.includes(":direct:")) {
+    replyToMessageId = await fetchLatestUserMessageTsForSessionKey(sessionKey);
+  }
+  const result = await sendIMMessage({
+    sessionKey,
+    message: "上下文压缩中，我会继续处理；不用重复发送。",
+    replyToMessageId: replyToMessageId || undefined,
+    timeoutMs: 5000,
+    cwd: resolveWorkspaceRoot(),
+    suppressProjectionFooter: true,
+  });
+  void recordPolicyReplay(
+    "compaction_notice",
+    { sessionKey, replyToMessageId, sent: result.sent, error: result.error || "" },
+    logger,
+    null,
+  ).catch(() => {});
 }
 
 
@@ -990,6 +1026,12 @@ export const plugin = {
     registerLifecycleHook("message_sending", (event, ctx) => {
       return guardOutboundMessageForPolicyState(event, ctx);
     }, 220);
+
+    registerLifecycleHook("before_compaction", (event, ctx) => {
+      void sendCompactionNotice(event, ctx, pi.logger).catch((error) => {
+        pi.logger?.warn?.(`octoclaw compaction notice failed: ${String(error)}`);
+      });
+    }, 180);
 
     registerLifecycleHook("before_model_resolve", async (event, ctx) => {
       if (!isManagedAgentContext(ctx)) return;
@@ -1862,7 +1904,7 @@ export const plugin = {
     }, 45_000);
 
     if (typeof pi.registerTool === "function") {
-      for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent })) {
+      for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent, judgeFastRaw, delegationEnabled })) {
         pi.registerTool(toOpenClawToolDefinition(tool as unknown as Record<string, unknown>));
       }
     }

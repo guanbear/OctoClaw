@@ -79,6 +79,8 @@ export interface OpenClawSubagentRuntime {
 
 export interface ToolRegistrationOptions {
   subagentRuntime?: OpenClawSubagentRuntime | null;
+  judgeFastRaw?: UnknownRecord;
+  delegationEnabled?: boolean;
 }
 
 function isSyntheticTestTaskState(record: RuntimeTaskStateRecord): boolean {
@@ -1487,10 +1489,23 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         if (routeObjection && !asString(params.requestedRoute)) {
           return { error: "octoclaw_route_hint requires requestedRoute when routeObjection is true" };
         }
-        const existingDecision = nestedRecord(existing, "decision");
+        const existingRecord = asRecord(existing);
+        const existingDecision = nestedRecord(existingRecord, "decision");
         const existingRequest = nestedRecord(existingDecision, "request");
         let metadata = buildPolicyMetadata(ctx, { stateKey: existingStateKey || asString(existingRequest.session_key) });
-        metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey: existingStateKey, state: existing, cachedDecision: existingDecision });
+        metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey: existingStateKey, state: existingRecord, cachedDecision: existingDecision });
+        if (!asString(metadata.message_id)) {
+          metadata.message_id = asString(existingRecord.message_id || existingRecord.inboundMessageTs || existingRecord.replyToMessageId || existingRecord.reply_to_id);
+        }
+        if (!asString(metadata.session_thread_id)) {
+          metadata.session_thread_id = asString(existingRecord.inboundMessageTs || existingRecord.message_id || existingRecord.replyToMessageId || existingRecord.reply_to_id);
+        }
+        if (Object.keys(asRecord(options.judgeFastRaw)).length > 0) {
+          metadata._judgeFastConfig = asRecord(options.judgeFastRaw);
+        }
+        if (typeof options.delegationEnabled === "boolean") {
+          metadata._delegationEnabled = options.delegationEnabled;
+        }
         const replaySessionKey = asString(metadata.session_key || existingRequest.session_key || existingStateKey);
         const routeHintPayload = {
           route_hint: asString(params.routeHint),

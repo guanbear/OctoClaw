@@ -538,6 +538,49 @@ describe("octoclaw_route_hint policy state aliases", () => {
     policyState.clearState(key);
     policyState.clearState(alias);
   });
+
+
+  it("passes plugin judge config into route_hint tools", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({ route: "delegate", confidence: 0.9, abstain_reason: null }) } }],
+      }),
+    } as Response);
+    const key = "agent:main:slack:default:direct:u0routehint";
+    policyState.clearState(key);
+
+    const routeHint = getToolRegistrations({
+      judgeFastRaw: {
+        enabled: true,
+        shadowMode: false,
+        modelId: "test-local-judge",
+        baseUrl: "http://localhost:19999/v1",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        timeoutLocalMs: 800,
+        minConfidence: 0.6,
+        local: true,
+        judgeAckEnabled: true,
+      },
+      delegationEnabled: true,
+    }).find((tool) => tool.name === "octoclaw_route_hint");
+    expect(routeHint).toBeTruthy();
+
+    const result = await routeHint!.execute({
+      task: "实现 nightly replay 后的 AI 解读报告",
+      routeHint: "delegate",
+      requestedRoute: "delegate",
+      workType: "code",
+      phase: "implement",
+      confidence: 0.95,
+    }, { sessionKey: key, agentId: "main", messageId: "1777556160.478629" });
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(JSON.stringify(result)).toContain("final route is delegate");
+    expect(policyState.getState(key)?.decision?.route_decision).toMatchObject({ route: "delegate" });
+    policyState.clearState(key);
+  });
 });
 
 

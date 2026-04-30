@@ -240,6 +240,33 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     expect(adapter.send).not.toHaveBeenCalled();
   });
 
+  it("falls back to text when reaction ACK0 fails", async () => {
+    adapter.react.mockResolvedValue({ ok: false, error: "operation_aborted" });
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "111.222" });
+    const stateKey = `reaction-fallback-state-${Date.now()}`;
+    updateAckTrackingState(stateKey, {
+      _ackTurnTs: Date.now() - 1_500,
+      mainModelActive: true,
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+      channelTone: "chat",
+    });
+
+    const result = await sendAckDirect("slack:default:channel:C123ABC", "", process.cwd(), {
+      stateKey,
+      routePhase: "reply",
+      ownerTag: stateKey,
+      replyToMessageId: "111.222",
+    });
+
+    expect(result).toBe(true);
+    expect(adapter.react).toHaveBeenCalledOnce();
+    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
+      replyToMessageId: "111.222",
+      message: expect.stringMatching(/\S/u),
+    }));
+  });
+
   it("uses template registry for text ACK0 instead of legacy ackStageText", async () => {
     adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "123" });
     const stateKey = `text-template-state-${Date.now()}`;
