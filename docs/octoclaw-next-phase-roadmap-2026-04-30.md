@@ -98,19 +98,20 @@ P0 高危区和 Phase 0 是同一件事：下表同时列状态和行动项，�
 
 ---
 
-### Phase 1：真相收敛 + 术语统一（6-8 周）
+### Phase 1：真相收敛 + 术语统一 ✅ 已完成
 
 **目标**：让所有读状态的地方读同一个来源，让 observer/patrol/runner/ctl 术语清晰
 
-| 任务 | 具体内容 |
-|------|---------|
-| 真相来源明确 | Native TaskFlow = 执行生命周期真相；WorkContract = 语义/委派真相；task-state.json = 持久投影 |
-| Replay 彻底拆分 | replay-logger.ts 降为 re-export shim，delivery relay 完全退出 live path |
-| 术语统一 | Observer/Patrol/Runner/Ctl 边界清晰，各有测试覆盖，文档对齐 |
+| 任务 | 状态 | 核查说明 |
+|------|------|---------|
+| 真相来源明确 | ✅ | `octoclaw_status` 纯读 task-state.json（磁盘），无 policyState fallback，重启持久 |
+| Replay 彻底拆分 | ✅ | `replay.ts` 是纯工具集；live path 全部 `void` fire-and-forget；无 delivery 耦合 |
+| 术语统一 | ✅ | Observer/Patrol/Runner/Ctl 边界明确，有代码执行（tool blocking），有测试，有文档 → [`octoclaw-role-terminology.md`](octoclaw-role-terminology.md) |
 
 **交付物**：
-- replay 日志只是 observability 旁路，不影响行为
-- 术语有文档，有测试，不混用
+- ✅ 任何查询 `octoclaw_status` 都不依赖内存状态
+- ✅ replay 日志只是 observability 旁路，不影响行为
+- ✅ 术语有文档，有测试，不混用
 
 ---
 
@@ -229,7 +230,8 @@ Router 的**第一个任务**是决定执行合同：
 | 文档 | 覆盖范围 | 关联阶段 |
 |------|---------|---------|
 | [octoclaw-design-foundation.md](octoclaw-design-foundation.md) | 系统定义：OctoClaw 是什么、架构边界、反馈闭环底稿 | 全局 |
-| [octoclaw-state-convergence-4-4-design.md](octoclaw-state-convergence-4-4-design.md) | 真相权威层级：TaskFlow > task-state.json > policyState | Phase 0/1 |
+| [octoclaw-role-terminology.md](octoclaw-role-terminology.md) | Observer/Patrol/Runner/Ctl 术语规范，工具边界，命名约定 | Phase 1 ✅ |
+| [octoclaw-state-convergence-4-4-design.md](octoclaw-state-convergence-4-4-design.md) | 真相权威层级：TaskFlow > task-state.json > policyState | Phase 0/1 ✅ |
 | [octoclaw-phase1-stabilization-design-2026-04-29.md](octoclaw-phase1-stabilization-design-2026-04-29.md) | Phase 0/1 稳定性目标：状态投影、重启恢复、delivery retry、thread anchor | Phase 0/1 |
 | [octoclaw-judge-ack-policy-spec-2026-04-21.md](octoclaw-judge-ack-policy-spec-2026-04-21.md) | Judge 分层、ACK 决策真相表、thread 交付规范 | Phase 0/1 |
 | [octoclaw-work-contract-centered-delegation-design-2026-04-25.md](octoclaw-work-contract-centered-delegation-design-2026-04-25.md) | WorkContract 委派核心设计（线上运行中） | Phase 0/1 |
