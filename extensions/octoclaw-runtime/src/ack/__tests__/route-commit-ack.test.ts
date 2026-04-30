@@ -191,34 +191,48 @@ describe("route commit ACK", () => {
     replaySpy.mockRestore();
   });
 
-  it("skips when canonical target resolves but no message anchor", async () => {
+  it("sends top-level when canonical target resolves but no message anchor", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
     const replaySpy = vi.spyOn(
       await import("../../replay/replay.js"),
       "recordPolicyReplay",
     );
 
     const result = await sendRouteCommitAck({
-      sessionKey: "slack:channel:C1:thread:1700000000.000100",
+      sessionKey: "slack:channel:C1",
       stateKey: "state-1",
       decision: decision(),
       state: {},
     });
 
-    expect(result.skipped).toBe(true);
-    expect(result.sent).toBe(false);
-    expect(result.reason).toBe("no_valid_thread_anchor");
-    expect(result.ack_target_resolution_state).toBe("no_valid_thread_anchor");
+    expect(result.skipped).toBe(false);
+    expect(result.sent).toBe(true);
+    expect(result.reason).toBe("channel_message_sent");
+    expect(result.ack_target_resolution_state).toBe("resolved");
     expect(result.ackKey).toContain("wc-123");
+    expect(runCommandSpy).toHaveBeenCalledWith(
+      "openclaw",
+      expect.not.arrayContaining(["--reply-to"]),
+      expect.any(Object),
+    );
 
     expect(replaySpy).toHaveBeenCalledWith(
       "route_commit_ack",
       expect.objectContaining({
         ackKey: expect.stringContaining("wc-123"),
         routeCommitId: "wc-123",
+        ackSent: true,
       }),
       undefined,
     );
 
+    runCommandSpy.mockRestore();
     replaySpy.mockRestore();
   });
 
@@ -311,6 +325,74 @@ describe("route commit ACK", () => {
 
     expect(result.skipped).toBe(true);
     expect(result.reason).toBe("reply_already_visible");
+  });
+
+  it("skips generic reply route ACK when reaction ACK is configured", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+    const replaySpy = vi.spyOn(
+      await import("../../replay/replay.js"),
+      "recordPolicyReplay",
+    );
+
+    const result = await sendRouteCommitAck({
+      sessionKey: "slack:channel:C1:thread:1700000000.000100",
+      stateKey: "state-1",
+      decision: decision({ route_decision: { route: "reply" } }),
+      state: { reactionAckEnabled: true, reactionAckEmoji: "eyes" },
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result).toMatchObject({
+      sent: false,
+      skipped: true,
+      reason: "reaction_ack_configured",
+      ack_target_resolution_state: "suppressed_reaction_ack_configured",
+      ack_delivery_state: "skipped",
+    });
+    expect(runCommandSpy).not.toHaveBeenCalled();
+    expect(replaySpy).toHaveBeenCalledWith(
+      "route_commit_ack",
+      expect.objectContaining({
+        route: "reply",
+        reason: "reaction_ack_configured",
+        ackSent: false,
+      }),
+      undefined,
+    );
+
+    runCommandSpy.mockRestore();
+    replaySpy.mockRestore();
+  });
+
+  it("still sends delegate route commit ACK when reaction ACK is configured", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+
+    const result = await sendRouteCommitAck({
+      sessionKey: "slack:channel:C1:thread:1700000000.000100",
+      stateKey: "state-1",
+      decision: decision(),
+      state: { reactionAckEnabled: true, reactionAckEmoji: "eyes" },
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result.sent).toBe(true);
+    expect(result.skipped).toBe(false);
+    expect(result.reason).toBe("channel_message_sent");
+    expect(runCommandSpy).toHaveBeenCalledOnce();
+
+    runCommandSpy.mockRestore();
   });
 
   it("allows delegate route even when final output visible", async () => {

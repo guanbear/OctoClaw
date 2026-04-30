@@ -361,6 +361,18 @@ export async function sendRouteCommitAck(params: {
       });
       return { sent: false, skipped: true, reason: "reply_already_visible", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_reply_visible", ack_delivery_state: "skipped" };
     }
+
+    const reactionAckConfigured = asBoolean(params.state.reactionAckEnabled)
+      || asBoolean(params.state.reaction_ack_enabled)
+      || Boolean(asString(params.state.reactionAckEmoji || params.state.reaction_ack_emoji));
+    if (reactionAckConfigured) {
+      await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
+        ack_target_resolution_state: "suppressed_reaction_ack_configured",
+        ack_delivery_state: "skipped",
+        reason: "reaction_ack_configured",
+      });
+      return { sent: false, skipped: true, reason: "reaction_ack_configured", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_reaction_ack_configured", ack_delivery_state: "skipped" };
+    }
   }
 
   if (!hasCanonicalTarget) {

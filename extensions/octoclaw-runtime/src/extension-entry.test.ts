@@ -373,6 +373,56 @@ describe("guardOutboundMessageForPolicyState", () => {
     const footerMatches = String(guarded.message?.content).match(/route=reply \| model=direct_main/g);
     expect(footerMatches).toHaveLength(1);
   });
+
+  it("before_message_write appends fallback footer when policy state is missing", () => {
+    const previous = process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = "1";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(beforeMessageWrite).toBeTruthy();
+    const result = beforeMessageWrite!(
+      { message: { role: "assistant", content: "这是最终回复。" } },
+      { sessionKey: "agent:main:slack:default:direct:u0footer", agentId: "main", channelId: "slack", model: "GLM-5.1", inboundMessageTs: "1777390000.000001" },
+    );
+
+    expect(String(result?.message?.content)).toContain("这是最终回复。");
+    expect(String(result?.message?.content)).toContain("route=reply | model=GLM-5.1 · thread");
+
+    if (previous === undefined) delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    else process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = previous;
+  });
+
+
+  it("before_message_write does not append fallback footer to NO_REPLY without policy state", () => {
+    const previous = process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = "1";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(beforeMessageWrite).toBeTruthy();
+    const result = beforeMessageWrite!(
+      { message: { role: "assistant", content: " NO_REPLY " } },
+      { sessionKey: "agent:main:slack:default:direct:u0footer", agentId: "main", channelId: "slack", model: "GLM-5.1", inboundMessageTs: "1777390000.000001" },
+    );
+
+    expect(result).toBeUndefined();
+
+    if (previous === undefined) delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    else process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = previous;
+  });
 });
 
 

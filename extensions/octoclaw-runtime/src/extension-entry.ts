@@ -1715,16 +1715,24 @@ export const plugin = {
         sessionKey: stringValue(ctx.sessionKey),
         agentId: stringValue(ctx.agentId),
       });
-      if (!state) return;
+      const noReplySentinel = originalText.trim().toUpperCase() === "NO_REPLY";
+      if (!state) {
+        if (noReplySentinel) return;
+        const projectedText = appendReplyProjectionFooter(originalText, {}, event, ctx);
+        if (projectedText && projectedText !== originalText) {
+          return { message: replaceAssistantMessageText(message, projectedText) };
+        }
+        return;
+      }
       updateAckTrackingState(stateKey, { final_response_streaming: true, tool_active: false });
       const stateRecord = asRecord(state);
       const guarded = guardAssistantMessageForPolicyState(message, stateRecord);
       const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : message;
       const contentText = assistantMessageText(asRecord(visibleMessage));
-      const isLikelyAck = contentText.length < 30 && (
+      const isLikelyAck = noReplySentinel || (contentText.length < 30 && (
         contentText.includes("收到") || contentText.includes("正在") || contentText.includes("处理中")
         || contentText.includes("working") || contentText.includes("checking") || contentText.includes("looking")
-      );
+      ));
       let outputMessage = visibleMessage;
       if (role === "assistant" && contentText && !isLikelyAck) {
         const projectedText = appendReplyProjectionFooter(contentText, stateRecord, event, ctx);
