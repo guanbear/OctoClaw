@@ -2436,8 +2436,11 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
       execute: async (params, _rawCtx) => {
         const format = asString(params.format, "anchors");
         const ctx = _rawCtx ?? {};
-        // Detect IM type from session key so we can render appropriately
-        const sessionKey = asString(ctx.sessionKey || ctx.canonicalSessionKey);
+        // Detect IM type from multiple ctx fields — OpenClaw may use different key names
+        const sessionKey = asString(
+          ctx.sessionKey || ctx.canonicalSessionKey || ctx.agentId ||
+          ctx.session_key || ctx.canonical_session_key,
+        );
         const imType = sessionKey ? detectIMType(sessionKey) : "plain";
         checkActiveTaskRecovery();
         const output = await buildNativeStatusOutput(format, imType);

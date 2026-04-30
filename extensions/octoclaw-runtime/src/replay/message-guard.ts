@@ -241,67 +241,12 @@ export function sanitizeDelegationReasoning(text: string): string {
 }
 
 
-function appendExecutionCoverageProjection(replyText: string, state: Record<string, unknown>): string {
-  const decision = asRecord(state.decision);
-  const workContract = asRecord(decision.work_contract);
-  const executionPacket = asRecord(decision._execution_coverage_packet);
-  const executionLayer = asRecord(decision.execution_layer ?? decision._execution_coverage);
-  const routeDecision = asRecord(decision.route_decision);
-  const routerDecision = asRecord(decision.router_decision_v2);
-  const requestKind = String(routerDecision.request_kind ?? "").trim();
-  const isCoverageAnswer = String(workContract.decisionSource ?? "") === "execution_coverage"
-    || String(executionPacket.replyMode ?? workContract.replyMode ?? "") === "answer"
-    || decision._execution_supports_provenance_reply === true
-    || decision._execution_supports_status_reply === true
-    || requestKind === "status_or_provenance";
-  if (!isCoverageAnswer || String(routeDecision.route ?? workContract.route ?? "reply") !== "reply") {
-    return replyText;
-  }
-  const route = String(workContract.route ?? routeDecision.route ?? "reply").trim() || "reply";
-  const modelPolicy = asRecord(decision.model_policy);
-  const runtimeTruth = asRecord(decision.runtime_truth);
-  const model = String(
-    state.model
-    ?? state.modelProfile
-    ?? state.model_profile
-    ?? modelPolicy.selected_model
-    ?? modelPolicy.model
-    ?? runtimeTruth.model
-    ?? decision.model
-    ?? "unknown",
-  ).trim() || "unknown";
-  const footerDisabled = ["0", "false", "off", "no"].includes(String(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER ?? "").trim().toLowerCase());
-  if (footerDisabled) return replyText;
-  if (/route=\w+\s*\|\s*model=/u.test(replyText)) return replyText;
-  if (/OctoClaw\s*投影[：:]/iu.test(replyText)) return replyText;
-  const workContractId = String(workContract.workContractId ?? workContract.work_contract_id ?? decision.workContractId ?? decision.work_contract_id ?? "").trim();
-  const coverage = String(
-    asRecord(asRecord(executionPacket.coverage).execution).coverage
-    ?? asRecord(executionLayer.execution).coverage
-    ?? executionLayer.coverage
-    ?? "",
-  ).trim();
-  const routeSource = String(workContract.decisionSource ?? routeDecision.route_source ?? routeDecision.source ?? "").trim();
-  const dispatchExecuted = executionPacket.dispatchExecuted
-    ?? executionLayer.dispatchExecuted
-    ?? executionLayer.dispatch_executed
-    ?? state.dispatchExecuted
-    ?? state.dispatch_executed;
-  const spawnExecuted = executionPacket.spawnExecuted
-    ?? executionLayer.spawnExecuted
-    ?? executionLayer.spawn_executed
-    ?? state.spawnExecuted
-    ?? state.spawn_executed;
-  const facts = [
-    `route=${route}`,
-    `model=${model}`,
-    workContractId ? `wc=${workContractId}` : "",
-    coverage ? `coverage=${coverage}` : "",
-    routeSource ? `route_source=${routeSource}` : "",
-    dispatchExecuted !== undefined ? `dispatchExecuted=${Boolean(dispatchExecuted)}` : "",
-    spawnExecuted !== undefined ? `spawnExecuted=${Boolean(spawnExecuted)}` : "",
-  ].filter(Boolean);
-  return `${replyText.trim()}\n\n${facts.join(" | ")} · thread`;
+function appendExecutionCoverageProjection(replyText: string, _state: Record<string, unknown>): string {
+  // Footer is now exclusively handled by appendReplyProjectionFooter in the
+  // message_sending hook (extension-entry.ts), which uses IM-aware rendering.
+  // Appending here (before_message_write) creates a stale footer that blocks
+  // the new Slack mrkdwn format. Return replyText unchanged.
+  return replyText;
 }
 
 export function guardAssistantMessageForPolicyState(
