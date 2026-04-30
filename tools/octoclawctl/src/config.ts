@@ -103,20 +103,30 @@ export async function syncToOpenClawPluginConfig(openclawHome: string, config: O
 }
 
 function buildPluginConfig(config: OctoclawConfig): JsonRecord {
-  return {
+  const pluginConfig: JsonRecord = {
     enabled: config.enabled,
     delegationEnabled: config.features.delegation,
-    judgeFast: {
-      enabled: config.judge.enabled,
-      shadowMode: config.judge.shadowMode,
-      modelId: config.judge.modelId,
-      baseUrl: config.judge.baseUrl,
-      apiKey: config.judge.apiKey,
-      timeoutMs: config.judge.timeoutMs,
-      minConfidence: config.judge.minConfidence,
-      judgeAckEnabled: config.judge.judgeAckEnabled,
-    },
   };
+
+  if (!config.judge.enabled) return pluginConfig;
+
+  const modelId = config.judge.modelId.trim();
+  const baseUrl = config.judge.baseUrl.trim();
+  if (!modelId || !baseUrl) {
+    throw new Error("judge.enabled requires non-empty judge.modelId and judge.baseUrl before projecting judgeFast");
+  }
+
+  pluginConfig.judgeFast = {
+    enabled: true,
+    shadowMode: config.judge.shadowMode,
+    modelId,
+    baseUrl,
+    ...(config.judge.apiKey.trim() ? { apiKey: config.judge.apiKey.trim() } : {}),
+    timeoutMs: config.judge.timeoutMs,
+    minConfidence: config.judge.minConfidence,
+    judgeAckEnabled: config.judge.judgeAckEnabled,
+  };
+  return pluginConfig;
 }
 
 async function syncOpenClawEntryConfig(openclawHome: string, pluginConfig: JsonRecord): Promise<void> {
@@ -129,10 +139,14 @@ async function syncOpenClawEntryConfig(openclawHome: string, pluginConfig: JsonR
   const entry = isRecord(entries["octoclaw-runtime"]) ? entries["octoclaw-runtime"] : {};
   const currentConfig = isRecord(entry.config) ? entry.config : {};
   entry.enabled = true;
-  entry.config = {
+  const nextConfig: JsonRecord = {
     ...currentConfig,
     ...pluginConfig,
   };
+  if (!("judgeFast" in pluginConfig)) {
+    delete nextConfig.judgeFast;
+  }
+  entry.config = nextConfig;
   entries["octoclaw-runtime"] = entry;
   await fs.writeFile(openclawConfigPath, `${JSON.stringify(openclawConfig, null, 2)}\n`, "utf8");
 }

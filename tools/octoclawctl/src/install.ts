@@ -100,12 +100,16 @@ export async function syncOpenClawPluginEntry(openclawHome: string, octoclawRoot
   const hooks = isRecord(entry.hooks) ? entry.hooks as JsonRecord : {};
 
   entry.enabled = true;
-  entry.config = {
+  const nextConfig: JsonRecord = {
     ...pluginConfig,
     ...projectedPluginConfig,
     octoclawRoot,
     workspaceRoot: nonEmptyString(pluginConfig.workspaceRoot) ?? path.join(openclawHome, "workspace"),
   };
+  if (!("judgeFast" in projectedPluginConfig)) {
+    delete nextConfig.judgeFast;
+  }
+  entry.config = nextConfig;
   entry.hooks = {
     ...hooks,
     allowPromptInjection: hooks.allowPromptInjection ?? true,
