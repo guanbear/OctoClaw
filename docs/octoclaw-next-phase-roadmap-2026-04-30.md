@@ -77,40 +77,24 @@ Auto Router 是 Phase 5，不是 Phase 1。
 
 ---
 
-## 四、P0 高危区（代码核查后，逐条更新）
+## 四、Phase 0：当前状态 + 行动项
 
-| 高危区 | 代码核查结论 |
-|--------|------------|
-| IM thread anchor 失败→静默跳过 | ✅ **已修**：Route C 部署，ackNoTarget → fail bucket |
-| Status 重启后投影漂移 | ✅ **已好于预期**：`octoclaw_status` 直接读 task-state 文件（非 policyState），重启不漂移；但 task-state 文件损坏时无 fallback，需监控 |
-| Delivery outbox 无 retry 语义 | ✅ **已完整**：指数退避 + 5 次上限，非"已有基础" |
-| Delegate 路由的 tier 推送 | ✅ **已修**：updateAckGuardDecision 取消 delegate/observe 路由的 tier 定时器 |
-| Replay 仍然中心化 | ⚠️ **部分**：`appendExecutionCoverageProjection` 已禁用（no-op），footer 移入 message_sending hook；但 replay-logger.ts 本体结构未完全拆分 |
-| 受保护 lane 未强制执行 | ⚠️ **仍开放**：protected_lane 字段存在但无 dispatch 层面的拦截验证 |
-| Substrate mirror 未废弃 | ❌ **仍开放**：native + mirror 双真相，无融合规则 |
-| cost/latency baseline 未自动化 | ❌ **仍开放**：D3 nightly 未全接通，gate 决策仍靠直觉 |
-| child-finalizer 无 replay 事件 | ❌ **新发现**：completion_file_delivered/timeout 事件从未被发出 |
+P0 高危区和 Phase 0 是同一件事：下表同时列状态和行动项，不再分两处。
 
----
+| 问题 | 状态 | 行动 |
+|------|------|------|
+| IM thread anchor 失败→静默跳过 | ✅ 已修：Route C 部署，ackNoTarget → fail | — |
+| Delivery outbox 无 retry | ✅ 已完整：指数退避 [30s,60s,120s,300s] + 5次上限 | — |
+| Delegate 路由 tier 推送 | ✅ 已修：updateAckGuardDecision 取消 delegate 路由的 tier 定时器 | — |
+| Status 重启后投影漂移 | ✅ 已好于预期：直接读 task-state 文件，不依赖 policyState | 监控 task-state.json 损坏场景 |
+| Protected lane 未强制执行 | ✅ 已有工具级拦截：control_observer/session_control 不允许 octoclaw_dispatch | — |
+| child-finalizer 无 replay 事件 | ✅ **已修（2026-04-30）**：新增 completion_file_delivered / completion_file_timeout / delivery_outbox_queued | — |
+| Judge timeout 过短 | ✅ **已修（2026-04-30）**：timeoutMs 1500→3000ms，timeoutLocalMs 800→2500ms | 如需更大可在 judge-fast.json 里覆盖 |
+| Replay 仍然中心化 | ⚠️ 部分：appendExecutionCoverageProjection 已禁用，footer 已移入 message_sending hook；replay-logger.ts 本体结构待拆分 | Phase 1 工作 |
+| Substrate mirror 未废弃 | ❌ 仍开放：native + mirror 双真相，无融合规则 | Phase 4 工作 |
+| cost/latency baseline 未自动化 | ❌ 仍开放：D3 nightly 未全接通，gate 决策仍靠直觉 | Phase 2 工作 |
 
-## 五、正确的五阶段规划
-
-### Phase 0：热路径稳定（当前阶段）
-
-**目标**：消除已知 bug，让基础行为可靠
-
-**待办（按优先级）**：
-
-```
-立刻：
-  1. child-finalizer.ts 发出 completion_file_delivered/timeout replay 事件
-     （classifier 已准备好，只差 emitter）
-  2. judge timeout 调优（qwen3-judge:0.6b-q4km 频繁 2s timeout）
-
-近期：
-  3. Protected lane 拦截：session_control/control_observer 不可被误委派
-  4. task-state.json 损坏时的 fallback 监控/告警
-```
+**Phase 0 还剩一项代码工作**：replay-logger.ts 结构拆分（replay 彻底退出 live path）。其余都是后续阶段的事。
 
 ---
 
@@ -211,7 +195,7 @@ Router 的**第一个任务**是决定执行合同：
 
 ---
 
-## 六、开源高星路径
+## 五、开源高星路径
 
 完成 Phase 0-2 后，可以对外的 pitch：
 
@@ -227,7 +211,7 @@ Router 的**第一个任务**是决定执行合同：
 
 ---
 
-## 七、不该做的事
+## 六、不该做的事
 
 1. **不要在没有 cost/latency baseline 的情况下做 Auto Router**
 2. **不要把 ClawTeam/tmux 变成 live path 依赖**
