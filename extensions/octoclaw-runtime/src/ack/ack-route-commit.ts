@@ -159,6 +159,7 @@ async function sendRouteCommitAckDirect(
     replyToMessageId: replyToMessageId || undefined,
     timeoutMs: 5000,
     cwd: asString(cwd) || resolveWorkspaceRoot(),
+    suppressProjectionFooter: true,
   });
   return {
     attempted: result.error !== "no_im_adapter",

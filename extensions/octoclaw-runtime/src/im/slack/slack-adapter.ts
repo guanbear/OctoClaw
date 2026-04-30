@@ -242,6 +242,7 @@ export class SlackAdapter implements IMAdapter {
     replyToMessageId?: string;
     timeoutMs?: number;
     cwd?: string;
+    suppressProjectionFooter?: boolean;
   }): Promise<SlackSendResult> {
     const target = this.resolveTarget(params.sessionKey);
     if (!target.target) {
@@ -260,7 +261,7 @@ export class SlackAdapter implements IMAdapter {
     // every reply to thread under the user's inbound message.
     if (params.replyToMessageId) {
       this.ackDebug(`replyToMessageId=${params.replyToMessageId} — attempting threaded send`);
-      const threadedResult = await this.executeSend(target, params.message, timeoutMs, params.cwd, params.replyToMessageId);
+      const threadedResult = await this.executeSend(target, params.message, timeoutMs, params.cwd, params.replyToMessageId, params.suppressProjectionFooter);
       if (threadedResult.sent) {
         this.ackDebug("send succeeded (threaded)");
         return threadedResult;
@@ -274,7 +275,7 @@ export class SlackAdapter implements IMAdapter {
       this.ackDebug(`no replyToMessageId but threadTs=${target.threadTs} — sending with --thread-id`);
     }
 
-    const result = await this.executeSend(target, params.message, timeoutMs, params.cwd);
+    const result = await this.executeSend(target, params.message, timeoutMs, params.cwd, undefined, params.suppressProjectionFooter);
     if (result.sent) {
       this.ackDebug("send succeeded (no reply-to, top-level or thread-id)");
     }
@@ -287,6 +288,7 @@ export class SlackAdapter implements IMAdapter {
     timeoutMs: number,
     cwd?: string,
     replyToMessageId?: string,
+    suppressProjectionFooter?: boolean,
   ): Promise<SlackSendResult> {
     const args = ["message", "send", "--channel", "slack", "--target", target.target, "--json"];
 
@@ -306,6 +308,7 @@ export class SlackAdapter implements IMAdapter {
       const result = await runCommand("openclaw", args, {
         cwd: stringValue(cwd) || resolveWorkspaceRoot(),
         timeoutMs,
+        env: suppressProjectionFooter ? { OCTOCLAW_INTERNAL_ACK_SEND: "1" } : undefined,
       });
 
       const stdoutPayload = extractPayload(result.stdout || "");

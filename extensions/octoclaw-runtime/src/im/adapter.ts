@@ -4,6 +4,7 @@ export interface IMSendParams {
   replyToMessageId?: string;
   timeoutMs?: number;
   cwd?: string;
+  suppressProjectionFooter?: boolean;
 }
 
 export interface IMSendResult {

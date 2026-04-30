@@ -20,6 +20,7 @@ function packet(overrides: Partial<AckDecisionPacket> = {}): AckDecisionPacket {
     hasValidThreadTarget: true,
     reactionAckSupported: true,
     reactionAckEnabled: true,
+    reactionAckAttempted: false,
     reactionAckSent: false,
     textAck0Sent: false,
     tier1Sent: false,
@@ -40,6 +41,11 @@ describe("ack-decision: decideAckAction", () => {
 
   it("does not send additional text ACK0 at 2.5s after reaction ACK0", () => {
     const decision = decideAckAction(packet({ nowMs: 2_500, reactionAckSent: true }));
+    expect(decision.action).toBe("no_action");
+  });
+
+  it("does not fall back to text ACK0 after a configured reaction ACK attempt fails", () => {
+    const decision = decideAckAction(packet({ nowMs: 2_500, reactionAckAttempted: true, reactionAckSent: false }));
     expect(decision.action).toBe("no_action");
   });
 

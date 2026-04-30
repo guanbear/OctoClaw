@@ -17,6 +17,7 @@ export interface AckDecisionPacket {
   hasValidThreadTarget: boolean;
   reactionAckSupported: boolean;
   reactionAckEnabled: boolean;
+  reactionAckAttempted: boolean;
   reactionAckSent: boolean;
   textAck0Sent: boolean;
   tier1Sent: boolean;
@@ -46,7 +47,7 @@ function elapsedMs(packet: AckDecisionPacket): number {
 }
 
 function ack0Sent(packet: AckDecisionPacket): boolean {
-  return packet.reactionAckSent || packet.textAck0Sent;
+  return packet.reactionAckSent || packet.textAck0Sent || (packet.reactionAckEnabled && packet.reactionAckAttempted);
 }
 
 function workIsActive(packet: AckDecisionPacket): boolean {
@@ -155,7 +156,7 @@ export function decideAckAction(packet: AckDecisionPacket): AckDecision {
     };
   }
 
-  if (!packet.reactionAckSent && elapsed >= ACK_TIMING.text_ack0_ms) {
+  if (!packet.reactionAckSent && !packet.reactionAckAttempted && elapsed >= ACK_TIMING.text_ack0_ms) {
     return {
       action: "send_text_ack0",
       reason: "text ACK0 checkpoint reached before first token",

@@ -92,6 +92,7 @@ export interface AckTrackingState extends UnknownRecord {
   ackGuardKey?: unknown;
   latencyAckSent?: unknown;
   reactionAckSent?: boolean;
+  reactionAckAttempted?: boolean;
   reactionAckSupported?: boolean;
   reactionAckEnabled?: boolean;
   channelTone?: "chat" | "work" | "cli" | "unknown";
@@ -408,6 +409,7 @@ export function buildDecisionPacket(
     hasValidThreadTarget: hasMessageTarget,
     reactionAckSupported: asBoolean(merged.reactionAckSupported),
     reactionAckEnabled: asBoolean(merged.reactionAckEnabled),
+    reactionAckAttempted: asBoolean(merged.reactionAckAttempted) || asBoolean(merged.reaction_ack_attempted),
     reactionAckSent: asBoolean(merged.reactionAckSent),
     textAck0Sent: asBoolean(merged.textAck0Sent) || asBoolean(merged.latencyAckSent),
     tier1Sent: asBoolean(merged.tier1Sent) || Boolean(timerState?.tier1Fired),
@@ -466,6 +468,7 @@ async function sendAckMessage(
     replyToMessageId: asString(options.replyToMessageId) || undefined,
     timeoutMs: Math.max(500, Number(options.timeoutMs || 5000)),
     cwd: asString(cwd) || resolveWorkspaceRoot(),
+    suppressProjectionFooter: true,
   });
   return {
     attempted: result.error !== "no_im_adapter",
@@ -826,9 +829,10 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
           latencyAckSent: Boolean(result.delivered || result.sent),
           latencyAckText: message,
           latencyAckMode: isReactionAck ? "reaction" : params.markMode || "channel_message",
+          ...(isReactionAck ? { reactionAckAttempted: true, reaction_ack_attempted: true } : {}),
         }
       : {}),
-    ...(isReactionAck ? { reactionAckSent: Boolean(result.delivered || result.sent) } : {}),
+    ...(isReactionAck ? { reactionAckAttempted: true, reaction_ack_attempted: true, reactionAckSent: Boolean(result.delivered || result.sent) } : {}),
     ...(decision.action === "send_text_ack0" ? { textAck0Sent: Boolean(result.delivered || result.sent) } : {}),
     ...(decision.ackStage === "tier1" ? { tier1Sent: Boolean(result.delivered || result.sent) } : {}),
     ...(decision.ackStage === "tier2" ? { tier2Sent: Boolean(result.delivered || result.sent) } : {}),
@@ -948,6 +952,7 @@ export function startAckGuard(sessionKey: string, cwd: string, options: UnknownR
     ack_owner: "",
     _ackTurnTs: turnTs,
     reactionAckSent: asBoolean(baseState.reactionAckSent),
+    reactionAckAttempted: asBoolean(baseState.reactionAckAttempted) || asBoolean(baseState.reaction_ack_attempted),
     reactionAckSupported: asBoolean(baseState.reactionAckSupported),
     reactionAckEnabled: asBoolean(baseState.reactionAckEnabled),
     channelTone: normalizeChannelTone(baseState.channelTone || baseState.channel_tone),

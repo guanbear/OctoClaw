@@ -7,6 +7,7 @@ export interface SendIMParams {
   replyToMessageId?: string;
   timeoutMs?: number;
   cwd?: string;
+  suppressProjectionFooter?: boolean;
 }
 
 export interface SendIMResult {
@@ -27,6 +28,7 @@ export async function sendIMMessage(params: SendIMParams): Promise<SendIMResult>
     replyToMessageId: params.replyToMessageId,
     timeoutMs: params.timeoutMs ?? 5000,
     cwd: params.cwd ?? resolveWorkspaceRoot(),
+    suppressProjectionFooter: params.suppressProjectionFooter,
   });
   return {
     sent: result.sent || result.delivered,

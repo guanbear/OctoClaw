@@ -52,6 +52,7 @@ import { resolveModelId } from "@octoclaw/policy/model";
 import {
   assistantMessageText,
   guardAssistantMessageForPolicyState,
+  replaceAssistantMessageText,
 } from "./replay/message-guard.js";
 import {
   compactPolicyPrompt,
@@ -258,16 +259,20 @@ function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntr
   return Object.keys(asRecord(state.decision)).length > 0;
 }
 
-function outboundLooksLikeVisibleDeliveryHook(event: UnknownRecord): boolean {
+function outboundHasDeliveryMetadata(event: UnknownRecord): boolean {
   const metadata = asRecord(event.metadata);
-  if (Boolean(
+  return Boolean(
     metadata.channel
     || metadata.channelId
     || metadata.threadTs
     || metadata.thread_ts
     || metadata.accountId
-    || Array.isArray(metadata.mediaUrls),
-  )) return true;
+    || Array.isArray(metadata.mediaUrls)
+  );
+}
+
+function outboundLooksLikeVisibleDeliveryHook(event: UnknownRecord): boolean {
+  if (outboundHasDeliveryMetadata(event)) return true;
   // Also treat Slack delivery targets as visible:
   // event.to can be a Slack user/channel ID (U*/C*) or contain "slack" when
   // OpenClaw sends via native Slack transport without standard metadata fields.
@@ -293,6 +298,17 @@ function findRecentOutboundPolicyState(
   let best: { key: string; state: PolicyStateEntry; updatedAt: number } | null = null;
   for (const entry of policyState.entries()) {
     if (!policyStateLooksRelevantForOutbound(entry.key, entry.state, targetKey, anchored ? anchors : [], now)) continue;
+    if (!anchored) {
+      const candidateState = asRecord(entry.state);
+      if (isDelegatedRoute(asRecord(candidateState.decision))
+        && candidateState.dispatchExecuted !== true
+        && candidateState.dispatch_executed !== true
+        && candidateState.spawnExecuted !== true
+        && candidateState.spawn_executed !== true
+        && candidateState.resultMaterialized !== true
+        && candidateState.result_materialized !== true
+      ) continue;
+    }
     const updatedAt = Number(entry.state.updatedAt || entry.state.createdAt || 0);
     if (!anchored && now - updatedAt > 90 * 1000) continue;
     if (!best || updatedAt > best.updatedAt) {
@@ -357,9 +373,7 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
   })();
   const fullModelId = resolved || candidate;
 
-  // Shorten: "zhipu/GLM-5.1" → "GLM-5.1", "omniroute/cx/gpt-5.4" → "gpt-5.4"
-  const parts = fullModelId.split("/");
-  return parts[parts.length - 1] || fullModelId;
+  return fullModelId;
 }
 
 /** Extract route source label for footer: "judge(0.87)" / "rule" / "fallback" / "agent↑judge=delegate" */
@@ -398,21 +412,29 @@ function resolveRouteSource(state: UnknownRecord): string {
   return source || "policy";
 }
 
-/**
- * Heuristic: is this message a short ACK/notification rather than a real response?
- * ACK texts are always single-line and ≤50 chars.
- * Real agent replies are almost always longer or multi-line.
- * Threshold is intentionally tight: we prefer to misclassify a rare short real reply
- * (shows "route=reply | ..." instead of "[ack]") rather than incorrectly labelling
- * a real response as an ACK.
- */
-function isAckLikeContent(content: string): boolean {
-  const trimmed = content.trim();
-  return !trimmed.includes("\n") && trimmed.length <= 50;
+function internalAckProjectionSuppressed(): boolean {
+  const raw = stringValue(process.env.OCTOCLAW_INTERNAL_ACK_SEND).toLowerCase();
+  return ["1", "true", "on", "yes"].includes(raw);
+}
+
+function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): boolean {
+  const metadata = asRecord(event.metadata);
+  return Boolean(
+    stringValue(event.replyToMessageId)
+    || stringValue(event.reply_to_id)
+    || stringValue(metadata.threadTs)
+    || stringValue(metadata.thread_ts)
+    || stringValue(ctx.inboundMessageTs)
+    || stringValue(ctx.threadTs)
+    || stringValue(ctx.thread_ts)
+    || stringValue(metadata.channel)
+    || stringValue(metadata.channelId)
+    || stringValue(ctx.channelId) === "slack"
+  );
 }
 
 function appendReplyProjectionFooter(content: string, state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
-  if (!replyProjectionFooterEnabled()) return content;
+  if (!replyProjectionFooterEnabled() || internalAckProjectionSuppressed()) return content;
   // Don't double-stamp
   if (/route=\w+\s*\|/u.test(content)) return content;
   if (/\[ack\s*·/iu.test(content)) return content;
@@ -425,13 +447,9 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
 
   const debug = footerDebugEnabled();
 
-  // Short single-line messages → ACK footer
-  if (isAckLikeContent(content)) {
-    const ackRoute = route === "delegate" ? " · route=delegate" : "";
-    const debugSuffix = debug
-      ? ` · via=${resolveRouteSource(state)}` : "";
-    return `${content.trim()}\n[ack${ackRoute}${debugSuffix}]`;
-  }
+  // ACK/direct status messages are sent through a separate IM path and must not
+  // receive projection footers. Formal replies, even short ones, use the full
+  // footer so Slack thread replies remain auditable.
 
   // Full response footer
   const model = resolveDisplayModel(state, event, ctx);
@@ -442,7 +460,10 @@ function appendReplyProjectionFooter(content: string, state: UnknownRecord, even
     ? [workerPool && `worker=${workerPool}`, wc && `wc=${wc.slice(0, 8)}`].filter(Boolean).join(" | ")
     : "";
 
-  const footer = [`route=${route}`, `model=${model}`, `via=${via}`, debugParts].filter(Boolean).join(" | ");
+  const threadSuffix = hasThreadProjection(event, ctx) ? " · thread" : "";
+  const primaryFooter = [`route=${route}`, `model=${model}`].filter(Boolean).join(" | ") + threadSuffix;
+  const detailFooter = [`via=${via}`, debugParts].filter(Boolean).join(" | ");
+  const footer = [primaryFooter, detailFooter].filter(Boolean).join(" | ");
   return `${content.trim()}\n\n${footer}`;
 }
 
@@ -454,7 +475,7 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
     allowUnanchoredDelivery: visibleDelivery,
   });
   if (!match) {
-    if (!visibleDelivery) return undefined;
+    if (!visibleDelivery || !outboundHasDeliveryMetadata(event)) return undefined;
     const fallbackReplacement = appendReplyProjectionFooter(content, {}, event, ctx);
     return fallbackReplacement && fallbackReplacement !== content ? { content: fallbackReplacement } : undefined;
   }
@@ -1699,21 +1720,27 @@ export const plugin = {
       const stateRecord = asRecord(state);
       const guarded = guardAssistantMessageForPolicyState(message, stateRecord);
       const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : message;
-      const contentText: string = typeof asRecord(visibleMessage).content === "string"
-        ? String(asRecord(visibleMessage).content)
-        : Array.isArray(asRecord(visibleMessage).content)
-          ? (asRecord(visibleMessage).content as unknown[]).map((c) => String(asRecord(c).text ?? "")).join("")
-          : String(asRecord(visibleMessage).content ?? "");
+      const contentText = assistantMessageText(asRecord(visibleMessage));
       const isLikelyAck = contentText.length < 30 && (
         contentText.includes("收到") || contentText.includes("正在") || contentText.includes("处理中")
         || contentText.includes("working") || contentText.includes("checking") || contentText.includes("looking")
       );
+      let outputMessage = visibleMessage;
       if (role === "assistant" && contentText && !isLikelyAck) {
+        const projectedText = appendReplyProjectionFooter(contentText, stateRecord, event, ctx);
+        if (projectedText && projectedText !== contentText) {
+          outputMessage = replaceAssistantMessageText(asRecord(visibleMessage), projectedText);
+        }
         updateAckTrackingState(stateKey, { formal_reply_visible: true });
-        updatePolicyState(stateKey, (current) => ({ ...(current ?? {}), formal_reply_visible: true }));
+        updatePolicyState(stateKey, (current) => ({
+          ...(current ?? {}),
+          formal_reply_visible: true,
+          outbound_projection_footer_appended: projectedText !== contentText || current?.outbound_projection_footer_appended === true,
+          outbound_projection_footer_appended_at: projectedText !== contentText ? new Date().toISOString() : current?.outbound_projection_footer_appended_at,
+        }));
       }
-      if (visibleMessage !== asRecord(event.message)) {
-        return { message: visibleMessage };
+      if (outputMessage !== asRecord(event.message)) {
+        return { message: outputMessage };
       }
     }, 120);
 
