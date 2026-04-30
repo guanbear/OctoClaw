@@ -390,11 +390,15 @@ function resolveRouteSource(state: UnknownRecord): string {
 
 /**
  * Heuristic: is this message a short ACK/notification rather than a real response?
- * ACK texts are always single-line and ≤120 chars.
+ * ACK texts are always single-line and ≤50 chars.
+ * Real agent replies are almost always longer or multi-line.
+ * Threshold is intentionally tight: we prefer to misclassify a rare short real reply
+ * (shows "route=reply | ..." instead of "[ack]") rather than incorrectly labelling
+ * a real response as an ACK.
  */
 function isAckLikeContent(content: string): boolean {
   const trimmed = content.trim();
-  return !trimmed.includes("\n") && trimmed.length <= 120;
+  return !trimmed.includes("\n") && trimmed.length <= 50;
 }
 
 function appendReplyProjectionFooter(content: string, state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {

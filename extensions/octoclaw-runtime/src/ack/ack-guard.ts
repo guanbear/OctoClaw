@@ -1023,6 +1023,11 @@ export function updateAckGuardDecision(
     decision,
     decision_updated_at: Date.now(),
   });
+  // TODO: for delegate/observe routes, the timers created at startAckGuard() time used
+  // routePhase="pre_route" delays [12s, 30s, 90s]. Now that we know the real route,
+  // we could cancel and recreate them with getAckTierDelays(resolveRoutePhase(decision))
+  // → [0,0,0] for delegate. Currently the timers fire but decideAckAction suppresses them.
+  // Not a functional bug but causes unnecessary timer firings and suppress log entries.
 }
 
 export function cancelAckGuard(sessionKey: string): void {

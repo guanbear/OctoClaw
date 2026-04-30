@@ -8,6 +8,13 @@ import {
   upsertTaskStateRecord,
   type TaskStateRecord,
 } from "../state/task-state-store.js";
+
+/** Shorten a raw model ID or profile name for display: "zhipu/GLM-5.1" → "GLM-5.1" */
+function shortModelName(raw: string | undefined): string {
+  if (!raw) return "unknown";
+  const parts = raw.split("/");
+  return parts[parts.length - 1] || raw;
+}
 import { materializeWorkContractSuccess } from "../work-contract/materializer.js";
 import { loadWorkContract } from "../work-contract/store.js";
 
@@ -53,7 +60,7 @@ function formatDeliveryMessage(completion: WorkerCompletionResult, options: Chil
   const lines = [`${completion.status === "success" ? "✅" : completion.status === "partial" ? "⚠️" : "❌"} 子任务完成`, "", completion.summary];
   if (completion.artifacts?.length) lines.push("", `产出物：${completion.artifacts.join(", ")}`);
   if (completion.status === "failure" && completion.errorMessage) lines.push("", `错误：${completion.errorMessage}`);
-  lines.push("", `[route=delegate | model=${options.modelId || "unknown"} | workContract=${options.workContractId}]`);
+  lines.push("", `[route=delegate | model=${shortModelName(options.modelId)} | workContract=${options.workContractId}]`);
   return lines.join("\n");
 }
 
