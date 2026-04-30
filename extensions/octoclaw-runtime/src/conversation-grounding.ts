@@ -171,9 +171,7 @@ const OPERATOR_SURFACE_REGISTRY = [
     lane_hint: "reply",
     scope: "local_status_surface",
     patterns: [
-      /(八爪鱼|octoclaw)?.{0,8}(任务状态|任务面板|状态面板|任务看板|状态看板)/iu,
-      /(哪个任务还在跑|哪些任务还在跑|还有什么任务在跑|还在跑的任务|任务.*(?:跑了多久|用的哪个模型|成功还是失败|结果在哪))/iu,
-      /\b(octoclaw\s+)?(task status|status panel|task panel|running tasks|what tasks are running|where is the result)\b/iu,
+      /^\s*(?:状态面板|八爪鱼状态)[\s。！？!?]*$/iu,
     ],
   },
 ];

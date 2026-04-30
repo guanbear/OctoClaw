@@ -53,30 +53,39 @@ describe("conversation grounding route projection", () => {
     expect(officialModelIntent.intent_class).toBe("fresh_live_lookup");
   });
 
-  it("projects task status panel phrases to reply-only status surface tools", async () => {
+  it("projects exact task status panel commands to reply-only status surface tools", async () => {
+    for (const prompt of ["状态面板", "八爪鱼状态", " 状态面板？ "]) {
+      const intent = buildConversationIntentPacket({
+        prompt,
+        replayLogPath: "/tmp/does-not-matter.jsonl",
+        taskStatePath: "/tmp/does-not-matter.json",
+        sessionKeys: ["slack:default:channel:C123"],
+      });
+
+      expect(intent.intent_class).toBe("local_surface_lookup");
+      expect(intent.surface_id).toBe("octoclaw_task_status_panel");
+      expect(intent.lookup_scope).toBe("local_status_surface");
+
+      const control = buildConversationControlHintsFromIntent(intent);
+      expect(control).toMatchObject({
+        route_hint: "reply",
+        lane_hint: "status_surface",
+        protected_lane: "control_observer",
+        require_fresh_lookup: true,
+        require_state_grounding: true,
+        status_followup: true,
+        surface_id: "octoclaw_task_status_panel",
+      });
+    }
+
     const intent = buildConversationIntentPacket({
-      prompt: "哪个任务还在跑？跑了多久，用的哪个模型，结果在哪？",
+      prompt: "状态面板",
       replayLogPath: "/tmp/does-not-matter.jsonl",
       taskStatePath: "/tmp/does-not-matter.json",
       sessionKeys: ["slack:default:channel:C123"],
     });
-
-    expect(intent.intent_class).toBe("local_surface_lookup");
-    expect(intent.surface_id).toBe("octoclaw_task_status_panel");
-    expect(intent.lookup_scope).toBe("local_status_surface");
-
     const control = buildConversationControlHintsFromIntent(intent);
-    expect(control).toMatchObject({
-      route_hint: "reply",
-      lane_hint: "status_surface",
-      protected_lane: "control_observer",
-      require_fresh_lookup: true,
-      require_state_grounding: true,
-      status_followup: true,
-      surface_id: "octoclaw_task_status_panel",
-    });
-
-    const decision = await resolveStatelessPolicyDecision("显示 OctoClaw 状态面板", {
+    const decision = await resolveStatelessPolicyDecision("状态面板", {
       metadata: {
         session_key: "slack:default:channel:C123",
         conversation_control: control,
@@ -96,6 +105,25 @@ describe("conversation grounding route projection", () => {
       required: true,
       source: "control_plane_status",
     });
+  });
+
+  it("does not project status words inside natural-language prompts to the status surface", () => {
+    for (const prompt of [
+      "状态面板为什么没有脚注",
+      "八爪鱼状态是不是坏了",
+      "你看看状态面板显示的内容",
+      "哪个任务还在跑？跑了多久，用的哪个模型，结果在哪？",
+    ]) {
+      const intent = buildConversationIntentPacket({
+        prompt,
+        replayLogPath: "/tmp/does-not-matter.jsonl",
+        taskStatePath: "/tmp/does-not-matter.json",
+        sessionKeys: ["slack:default:channel:C123"],
+      });
+
+      expect(intent.surface_id).not.toBe("octoclaw_task_status_panel");
+      expect(intent.reason_codes).not.toContain("operator_surface:octoclaw_task_status_panel");
+    }
   });
 
   it("renders sanitized DelegateStatusPacket facts without raw thread history", () => {
