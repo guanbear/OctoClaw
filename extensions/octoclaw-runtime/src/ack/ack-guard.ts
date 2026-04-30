@@ -1067,6 +1067,10 @@ export function updateAckTrackingState(stateKey: string, patch: UnknownRecord): 
   updateTrackingState(stateKey, patch);
 }
 
+export function getAckTrackingState(stateKey: string): AckTrackingState {
+  return ackState(stateKey);
+}
+
 export async function maybeSendLatencyAck(
   decision: UnknownRecord,
   metadata: UnknownRecord,

@@ -15,6 +15,7 @@ import type {
 import {
   cancelAckGuard,
   cancelAckGuardForState,
+  getAckTrackingState,
   maybeSendLatencyAck,
   notifyUserMessage,
   startAckGuard,
@@ -272,8 +273,8 @@ function outboundLooksLikeVisibleDeliveryHook(event: UnknownRecord): boolean {
   // OpenClaw sends via native Slack transport without standard metadata fields.
   const to = stringValue(event.to).toLowerCase();
   if (to.includes("slack")) return true;
-  // Slack channel IDs: C + 8-11 alphanumeric chars; user IDs: U + 8-11 chars
-  if (/^[cu][a-z0-9]{8,11}$/i.test(stringValue(event.to))) return true;
+  // Slack channel IDs: C + 8-11 alphanumeric chars; user IDs: U + 8-11 chars; DM channel IDs: D + 8-11 chars
+  if (/^[cud][a-z0-9]{8,11}$/i.test(stringValue(event.to))) return true;
   return false;
 }
 
@@ -1095,12 +1096,23 @@ export const plugin = {
       const doSendRouteCommitAck = async () => {
         try {
           const liveState = getPolicyStateForContext(ctx).state;
-          // For reply routes: cancel if agent has already started responding
-          if (isReplyRoute && liveState) {
-            if (Boolean((liveState as UnknownRecord).finalResponseStreaming)
-              || Boolean((liveState as UnknownRecord).formalReplyVisible)
-              || Boolean((liveState as UnknownRecord).delivered)
-              || Boolean((liveState as UnknownRecord).firstTokenSeen)) {
+          // For reply routes: cancel if agent has already started responding.
+          // Check ack tracking state (reliable even when policyState is null/stale)
+          // as well as policy state fields (both camelCase and snake_case variants).
+          if (isReplyRoute) {
+            const trackingStateKey = routeCommitAckParams.stateKey || preStateKey;
+            const tracking = getAckTrackingState(trackingStateKey);
+            const ls = liveState as UnknownRecord | null;
+            const alreadyReplied =
+              Boolean(tracking.formal_reply_visible)
+              || Boolean(ls?.formal_reply_visible)
+              || Boolean(ls?.formalReplyVisible)
+              || Boolean(ls?.finalResponseStreaming)
+              || Boolean(ls?.final_response_streaming)
+              || Boolean(ls?.delivered)
+              || Boolean(ls?.firstTokenSeen)
+              || Boolean(ls?.first_token_seen);
+            if (alreadyReplied) {
               pi.logger?.debug?.("octoclaw route-commit-ack: skipped, agent already responded");
               return;
             }
