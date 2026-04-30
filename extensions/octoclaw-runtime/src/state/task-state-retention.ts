@@ -94,7 +94,10 @@ function normalizeStatus(status: unknown): string {
 function archiveReasonForTask(task: TaskStateRecord, nowMs: number, staleRetentionMs: number, terminalRetentionMs: number): string | null {
   const status = normalizeStatus(task.status);
   const terminalStatuses = new Set(["failed", "completed", "canceled"]);
-  const activeOrStaleStatuses = new Set(["running", "queued", "planned", "materializing", "blocked", "timed_out"]);
+  // "registered" = sealed WorkContract but dispatch never executed.
+  // "deliverable_ready" = result exists but delivery pending.
+  // Both should age out under the stale window like other active statuses.
+  const activeOrStaleStatuses = new Set(["running", "queued", "planned", "materializing", "blocked", "timed_out", "registered", "deliverable_ready"]);
 
   if (terminalStatuses.has(status)) {
     const relevantMs = firstTimestampMs(task.completed_at, task.failed_at, task.updated_at, task.started_at, task.spawned_at, task.created_at);

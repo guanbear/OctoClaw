@@ -353,18 +353,24 @@ export async function sendRouteCommitAck(params: {
     }
   }
 
-  if (!hasCanonicalTarget || !hasMessageAnchor) {
-    const skipReason = !hasCanonicalTarget ? "target_resolution_failed" : "no_valid_thread_anchor";
-    const resolutionState = !hasCanonicalTarget ? "target_resolution_failed" : "no_valid_thread_anchor";
+  if (!hasCanonicalTarget) {
+    // No resolvable IM target — nothing to send to.
     await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
-      ack_target_resolution_state: resolutionState,
+      ack_target_resolution_state: "target_resolution_failed",
       ack_delivery_state: "skipped",
-      reason: skipReason,
+      reason: "target_resolution_failed",
     });
-    return { sent: false, skipped: true, reason: skipReason, routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: resolutionState, ack_delivery_state: "skipped" };
+    return { sent: false, skipped: true, reason: "target_resolution_failed", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "target_resolution_failed", ack_delivery_state: "skipped" };
   }
 
+  // If no message anchor (hasMessageAnchor=false), proceed and send as a top-level message.
+  // Route commit ACK is the first (and often only) user-visible signal for delegate routes.
+  // Silently skipping when anchor is absent leaves users with zero feedback.
+  // effectiveReplyToMessageId is already '' when hasMessageAnchor=false — sendRouteCommitAckDirect
+  // will omit --reply-to and send a top-level message instead.
+
   const ackKey = candidateAckKey;
+
 
   const claim = checkAndSetRouteCommitAck(ackKey, "route_commit_ack");
   if (!claim.allowed) {
