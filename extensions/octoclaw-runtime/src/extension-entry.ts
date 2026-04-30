@@ -27,7 +27,7 @@ import {
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
-import { fetchLatestUserMessageTs, fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
+import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import {
   buildPolicyMetadata,
   detectSessionBoundary,
