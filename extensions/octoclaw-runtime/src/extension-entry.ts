@@ -1105,6 +1105,7 @@ export const plugin = {
             const ls = liveState as UnknownRecord | null;
             const alreadyReplied =
               Boolean(tracking.formal_reply_visible)
+              || Boolean(tracking.reactionAckSent)
               || Boolean(ls?.formal_reply_visible)
               || Boolean(ls?.formalReplyVisible)
               || Boolean(ls?.finalResponseStreaming)
@@ -1119,10 +1120,11 @@ export const plugin = {
             // Second check: wait 600ms more, then check again.
             // Handles models that respond in the 800ms–1400ms window (check 1 passed
             // but model responds before sendRouteCommitAck HTTP call completes).
+            // Also skip if a reaction ACK was already sent (emoji replaces text ACK).
             await new Promise<void>((r) => { const t = setTimeout(r, 600); (t as unknown as { unref?: () => void }).unref?.(); });
             const tracking2 = getAckTrackingState(trackingStateKey);
-            if (Boolean(tracking2.formal_reply_visible)) {
-              pi.logger?.debug?.("octoclaw route-commit-ack: skipped on second check, agent responded during wait");
+            if (Boolean(tracking2.formal_reply_visible) || Boolean(tracking2.reactionAckSent)) {
+              pi.logger?.debug?.("octoclaw route-commit-ack: skipped on second check, agent responded or reaction already sent");
               return;
             }
           }
