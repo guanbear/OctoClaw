@@ -3,6 +3,9 @@ import path from "node:path";
 
 const fs = fsSync as unknown as { mkdtempSync(prefix: string): string; mkdirSync(pathname: string, options?: { recursive?: boolean }): void; readFileSync(pathname: string, encoding: string): string; writeFileSync(pathname: string, data: string, encoding: string): void };
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { IMAdapter, IMReactParams, IMSendParams } from "../im/adapter.js";
+import { registerIMAdapter } from "../im/index.js";
+import { resetExecTransitionState } from "../ack/execution-transition-notifier.js";
 import { envOverrides } from "../resolve/env.js";
 import { finalizeChildSessionOnce, scheduleChildCompletionFinalizer, recoverPendingChildCompletionFinalizers, resetChildCompletionFinalizers } from "./child-finalizer.js";
 
@@ -27,11 +30,28 @@ function writeOpenClawSessionRegistry(openclawHome: string, sessionId: string, c
   }, null, 2), "utf-8");
 }
 
+function registerCapturingSlackAdapter(captured: string[], matcher: (sessionKey: string) => boolean): void {
+  const adapter: IMAdapter = {
+    channel: "slack",
+    capabilityLevel: "L2",
+    canHandle: matcher,
+    resolveTarget: () => ({ channel: "slack", target: "channel:CNOTIFY" }),
+    send: async (params: IMSendParams) => {
+      captured.push(params.message);
+      return { sent: true, delivered: true, messageId: "1777557115.000001" };
+    },
+    react: async (_params: IMReactParams) => ({ ok: true }),
+  };
+  registerIMAdapter(adapter);
+}
+
 describe("child completion finalizer — completion file protocol", () => {
   let tmpDir = "";
 
   afterEach(() => {
     vi.useRealTimers();
+    resetChildCompletionFinalizers();
+    resetExecTransitionState();
     if (tmpDir) {
       envOverrides.workspaceRoot = "";
     }
@@ -193,6 +213,38 @@ describe("child completion finalizer — completion file protocol", () => {
     expect((outbox[0] as Record<string, unknown>).workContractId).toBe("wc-3");
   });
 
+  it("emits a transition notification when final result delivery fails", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    const progressMessages: string[] = [];
+    registerCapturingSlackAdapter(progressMessages, (sessionKey) => sessionKey === "slack:channel:CDELIVERYFAIL");
+
+    writeCompletionFile(tmpDir, "wc-delivery-fail", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-delivery-fail",
+      childSessionKey: "child-delivery-fail",
+      delegateTaskId: "delegate-delivery-fail",
+      status: "success",
+      summary: "已完成但暂时投递失败",
+      completedAt: new Date().toISOString(),
+    });
+
+    const result = await finalizeChildSessionOnce({
+      taskStatePath,
+      childSessionKey: "child-delivery-fail",
+      delegateTaskId: "delegate-delivery-fail",
+      workContractId: "wc-delivery-fail",
+      parentSessionKey: "slack:channel:CDELIVERYFAIL",
+      deliverySessionKey: "slack:channel:CDELIVERYFAIL",
+      nativeTaskId: "native-delivery-fail",
+      sendFinalMessage: async () => ({ sent: false, delivered: false, error: "synthetic_delivery_failure" }),
+    });
+
+    expect(result.status).toBe("delivery_failed");
+    expect(progressMessages).toContain("任务结果投递失败。");
+  });
+
   it("returns missing_identity when workContractId is empty", async () => {
     const result = await finalizeChildSessionOnce({
       childSessionKey: "",
@@ -252,12 +304,15 @@ describe("child completion finalizer — completion file protocol", () => {
     envOverrides.workspaceRoot = tmpDir;
     const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
 
+    const progressMessages: string[] = [];
+    registerCapturingSlackAdapter(progressMessages, (sessionKey) => sessionKey === "slack:channel:CTIMEOUT");
+
     scheduleChildCompletionFinalizer({
       taskStatePath,
       childSessionKey: "child-timeout",
       delegateTaskId: "delegate-timeout",
       workContractId: "wc-timeout",
-      parentSessionKey: "slack:channel:C123",
+      parentSessionKey: "slack:channel:CTIMEOUT",
       nativeTaskId: "native-timeout",
       timeoutMs: 30_000,
       pollIntervalMs: 1_000,
@@ -277,6 +332,7 @@ describe("child completion finalizer — completion file protocol", () => {
       resultMaterialized: false,
       failureCode: "completion_file_not_written",
     });
+    expect(progressMessages).toContain("任务超时。");
   });
 
   it("handles failure status in completion file", async () => {
@@ -308,8 +364,18 @@ describe("child completion finalizer — completion file protocol", () => {
     });
 
     expect(result.status).toBe("completed");
-    expect(sent[0]).toContain("❌");
+    expect(sent[0]).toContain("❌ 子任务失败");
     expect(sent[0]).toContain("TypeScript compilation failed");
+
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "wc-fail",
+      status: "failed",
+      resultMaterialized: true,
+      delivery_status: "delivered",
+      failureCode: "build_error",
+    });
   });
 });
 
@@ -326,6 +392,7 @@ describe("child completion finalizer — durable recovery", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetChildCompletionFinalizers();
+    resetExecTransitionState();
     if (tmpDir) {
       envOverrides.workspaceRoot = "";
     }

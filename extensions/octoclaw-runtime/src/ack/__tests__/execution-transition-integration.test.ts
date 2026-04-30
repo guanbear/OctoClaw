@@ -38,6 +38,7 @@ const osModule = os as unknown as { tmpdir(): string };
 
 vi.mock("../../im/index.js", () => ({
   getAdapterForSession: () => adapter,
+  sendWithDegradation: (selectedAdapter: typeof adapter, params: Record<string, unknown>) => selectedAdapter.send(params),
 }));
 
 type ReplaySpy = MockInstance<typeof import("../../replay/replay.js").recordPolicyReplay>;
