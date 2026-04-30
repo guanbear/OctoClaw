@@ -359,6 +359,50 @@ describe("octoclaw_dispatch honesty", () => {
     expect(details.json).toMatchObject({ found: false, taskId: "task-policy-only" });
   });
 
+  it("status panel hides reply records and shows delegate title plus complexity", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-delegate-only-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+    const stateDir = path.join(dir, "tmp", "octopus");
+    fsSync.mkdirSync(stateDir, { recursive: true });
+    fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      tasks: [
+        {
+          id: "task-reply-hidden",
+          status: "completed",
+          route: "reply",
+          summary: "Reply projection should stay out of status panel",
+          updated_at: new Date().toISOString(),
+        },
+        {
+          id: "task-delegate-visible",
+          status: "running",
+          summary: "Delegate execution is active",
+          updated_at: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+          flow_id: "flow-delegate-visible",
+          childSessionKey: "child-session-visible",
+          workContract: {
+            route: "delegate",
+            userAsk: "Migrate cron jobs",
+            mainContext: { summary: "Migrate JAVDB cron jobs" },
+            decision: { _judge_complexity_band: "normal" },
+          },
+        },
+      ],
+    }), "utf-8");
+
+    const response = await statusTool().execute({ format: "table" }, {});
+    const output = String((response.json as Record<string, unknown>).raw_output);
+
+    expect(output).toContain("Total records: 1");
+    expect(output).toContain("task-delegate-visible | running(running) | delegate");
+    expect(output).toContain("title=Migrate JAVDB cron jobs");
+    expect(output).toContain("complexity=normal");
+    expect(output).not.toContain("task-reply-hidden");
+    expect(output).not.toContain("Reply projection should stay out of status panel");
+  });
+
   it("status panel projects stale running tasks with elapsed/model/backend fields", async () => {
     const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-panel-"));
     tempLedgerPaths.push(dir);
@@ -383,10 +427,12 @@ describe("octoclaw_dispatch honesty", () => {
     const tableResponse = await statusTool().execute({ format: "table" }, {});
     const tableOutput = String((tableResponse.json as Record<string, unknown>).raw_output);
 
-    expect(tableOutput).toContain("Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend");
+    expect(tableOutput).toContain("Fields: task_id | projected_status(raw_status) | route | title | complexity | elapsed | delegated_at | model | backend");
     expect(tableOutput).toContain("result_location/artifact_refs");
     expect(tableOutput).toContain("Retention: archived=1, archive_deleted=0");
     expect(tableOutput).toContain("task-status-panel-1 | timed_out(running) | delegate");
+    expect(tableOutput).toContain("title=Delegated task materialized natively");
+    expect(tableOutput).toContain("complexity=unknown");
     expect(tableOutput).toContain("model=zhipu/GLM-5.1");
     expect(tableOutput).toContain("backend=octoclaw-research");
     expect(tableOutput).toContain("result=none");

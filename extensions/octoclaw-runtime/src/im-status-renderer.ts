@@ -29,8 +29,10 @@ export interface StatusTaskSummary {
   taskId: string;
   status: string;
   rawStatus: string;
+  title: string;
   summary: string;
   model: string;
+  complexityBand: string;
   elapsedText: string;
   delegatedAt: string;
   completedAt: string;
@@ -60,18 +62,19 @@ function statusEmoji(status: string): string {
 function slackTaskBlock(task: StatusTaskSummary): string {
   const emoji = statusEmoji(task.status);
   const idShort = task.taskId.slice(-8);
+  const title = task.title || task.summary || "未命名任务";
+  const complexity = task.complexityBand && task.complexityBand !== "unknown" ? ` · ${task.complexityBand}` : "";
   const modelPart = task.model && task.model !== "unknown" ? ` · ${task.model}` : "";
   const elapsed = task.elapsedText && task.elapsedText !== "unknown" ? ` · ${task.elapsedText}` : "";
 
-  const header = `${emoji} *${task.status}* \`${idShort}\`${modelPart}${elapsed}`;
+  const cleanTitle = title.replace(/^[✅⚠️❌]\s*/, "").slice(0, 120);
+  const header = `${emoji} *${task.status}* · ${cleanTitle} \`${idShort}\`${complexity}${modelPart}${elapsed}`;
 
-  if (!task.summary) return header;
-
-  // Trim summary for display; strip completion emoji prefix if already there
   const cleanSummary = task.summary
     .replace(/^[✅⚠️❌]\s*/, "")
     .slice(0, 180);
 
+  if (!cleanSummary || cleanSummary === cleanTitle) return header;
   return `${header}\n> ${cleanSummary}`;
 }
 
@@ -157,6 +160,8 @@ export function buildFeishuStatusCard(
     tag: "markdown",
     content: [
       `**${statusEmoji(task.status)} ${task.status}** \`${task.taskId.slice(-8)}\``,
+      task.title ? `标题：${task.title.slice(0, 120)}` : "",
+      task.complexityBand !== "unknown" ? `复杂度：${task.complexityBand}` : "",
       task.model !== "unknown" ? `模型：${task.model}` : "",
       task.elapsedText !== "unknown" ? `耗时：${task.elapsedText}` : "",
       task.summary ? `\n${task.summary.slice(0, 150)}` : "",

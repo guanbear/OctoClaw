@@ -429,7 +429,9 @@ interface RuntimeStatusTaskView {
   status: string;
   rawStatus: string;
   route: string;
+  title: string;
   summary: string;
+  complexityBand: string;
   updatedAt: string;
   delegatedAt: string;
   startedAt: string;
@@ -821,9 +823,53 @@ function dispatchSpawnEvidence(input: {
   return { spawnExecuted, runId, childRunId, childSessionKey, childSessionId };
 }
 
+
+function workContractRecord(record: RuntimeTaskStateRecord): UnknownRecord {
+  const contract = asRecord(record.workContract);
+  return Object.keys(contract).length > 0 ? contract : asRecord(record.work_contract);
+}
+
+function workContractMainContext(record: RuntimeTaskStateRecord): UnknownRecord {
+  return asRecord(workContractRecord(record).mainContext);
+}
+
+function runtimeTaskRoute(record: RuntimeTaskStateRecord): string {
+  const contract = workContractRecord(record);
+  return normalizeLiveRoute(optionalString(record.route, contract.route), "delegate");
+}
+
+function runtimeTaskTitle(record: RuntimeTaskStateRecord): string {
+  const contract = workContractRecord(record);
+  const mainContext = workContractMainContext(record);
+  return truncateText(optionalString(
+    record.title,
+    record.taskSummary,
+    record.task_summary,
+    mainContext.summary,
+    contract.userAsk,
+    record.summary,
+  ) ?? "未命名任务", 160);
+}
+
+function runtimeTaskComplexityBand(record: RuntimeTaskStateRecord): string {
+  const metadata = asRecord(record.metadata);
+  const contract = workContractRecord(record);
+  const decision = asRecord(contract.decision);
+  const routeDecision = asRecord(decision.route_decision);
+  return optionalString(
+    record.complexityBand,
+    record.complexity_band,
+    metadata.complexityBand,
+    metadata.complexity_band,
+    decision._judge_complexity_band,
+    routeDecision._judge_complexity_band,
+    routeDecision.complexity_band,
+  ) ?? "unknown";
+}
+
 function projectRuntimeStatus(record: RuntimeTaskStateRecord, nowMs = Date.now()): { status: string; reason: string } {
   const rawStatus = asString(record.status, "unknown");
-  const route = normalizeLiveRoute(record.route, "delegate");
+  const route = runtimeTaskRoute(record);
   const evidence = runtimeStatusEvidence(record);
   const terminalStatus = ["failed", "completed", "done", "succeeded", "cancelled", "canceled", "blocked", "timed_out"].includes(rawStatus)
     ? rawStatus === "done" || rawStatus === "succeeded" ? "completed" : rawStatus === "cancelled" ? "canceled" : rawStatus
@@ -907,7 +953,8 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
     taskId: asString(record.id),
     status: projected.status,
     rawStatus: asString(record.status, "unknown"),
-    route: normalizeLiveRoute(record.route, "delegate"),
+    route: runtimeTaskRoute(record),
+    title: runtimeTaskTitle(record),
     summary: (() => {
       // Prefer completion summary for finished tasks
       const completion = record.completion as Record<string, unknown> | undefined;
@@ -919,8 +966,9 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
           return `${statusEmoji} ${completionSummary.slice(0, 200)}`;
         }
       }
-      return asString(record.summary);
+      return asString(record.summary) || runtimeTaskTitle(record);
     })(),
+    complexityBand: runtimeTaskComplexityBand(record),
     updatedAt: asString(record.updated_at),
     delegatedAt,
     startedAt,
@@ -1138,7 +1186,9 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
   const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
   const retention = pruneRuntimeTaskStateCache();
   const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: includeExpired }));
-  const allTasks = tasks.map((task) => buildRuntimeStatusTaskView(task, nowMs));
+  const allTasks = tasks
+    .map((task) => buildRuntimeStatusTaskView(task, nowMs))
+    .filter((task) => task.route === "delegate");
   const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
   const hiddenExpiredCount = allTasks.length - visibleTasks.length;
 
@@ -1163,8 +1213,10 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
       taskId: t.taskId,
       status: t.status,
       rawStatus: t.rawStatus,
+      title: t.title,
       summary: t.summary,
       model: t.model,
+      complexityBand: t.complexityBand,
       elapsedText: t.elapsedText,
       delegatedAt: t.delegatedAt,
       completedAt: t.completedAt,
@@ -1208,7 +1260,7 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
       : `Expired hidden: ${hiddenExpiredCount}`,
     countSummary ? `Projected counts: ${countSummary}` : "Projected counts: none",
     hiddenExpiredCount > 0 && !includeExpired && allCountSummary ? `All projected counts: ${allCountSummary}` : "",
-    "Fields: task_id | projected_status(raw_status) | route | elapsed | delegated_at | model | backend | child_session/run | result_location/artifact_refs | reason | summary",
+    "Fields: task_id | projected_status(raw_status) | route | title | complexity | elapsed | delegated_at | model | backend | child_session/run | result_location/artifact_refs | reason | summary",
   ].filter(Boolean);
   const limit = normalizedFormat === "anchors" ? 8 : 25;
   for (const task of sortedVisibleTasks.slice(0, limit)) {
@@ -1217,6 +1269,8 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
       `- ${task.taskId}`,
       `${task.status}(${task.rawStatus})`,
       task.route,
+      `title=${task.title}`,
+      `complexity=${task.complexityBand}`,
       `elapsed=${task.elapsedText}`,
       `delegated_at=${task.delegatedAt || "unknown"}`,
       `model=${task.model}`,
@@ -2179,6 +2233,9 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             role: asString(asRecord(authoritativeDecision.route_decision).task_class),
             workerPool,
             worker_pool: workerPool,
+            title: truncateText(asString(asRecord(dispatchWorkContract?.mainContext).summary || dispatchWorkContract?.userAsk || params.task), 160),
+            complexityBand: complexityBand || undefined,
+            complexity_band: complexityBand || undefined,
             model: selectedModel || asString(metadata.model),
             modelProfile: selectedModel || asString(metadata.model),
             model_profile: selectedModel || asString(metadata.model),
