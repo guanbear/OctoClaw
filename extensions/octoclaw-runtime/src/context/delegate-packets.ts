@@ -67,10 +67,6 @@ export interface MainResumePacket {
 }
 
 export function buildDelegateHandoffPacket(input: BuildDelegateHandoffPacketInput): DelegateHandoffPacket {
-  if (input.relevantExcerpts && input.relevantExcerpts.length > 0 && !input.contextEscalationReason) {
-    throw new Error("context_escalation_reason_required");
-  }
-
   return {
     schemaVersion: "octoclaw.delegate_handoff.v1",
     delegateTaskId: input.delegateTaskId,
