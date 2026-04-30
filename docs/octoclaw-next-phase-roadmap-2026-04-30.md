@@ -90,11 +90,11 @@ P0 高危区和 Phase 0 是同一件事：下表同时列状态和行动项，�
 | Protected lane 未强制执行 | ✅ 已有工具级拦截：control_observer/session_control 不允许 octoclaw_dispatch | — |
 | child-finalizer 无 replay 事件 | ✅ **已修（2026-04-30）**：新增 completion_file_delivered / completion_file_timeout / delivery_outbox_queued | — |
 | Judge timeout 过短 | ✅ **已修（2026-04-30）**：timeoutMs 1500→3000ms，timeoutLocalMs 800→2500ms | 如需更大可在 judge-fast.json 里覆盖 |
-| Replay 仍然中心化 | ⚠️ 部分：appendExecutionCoverageProjection 已禁用，footer 已移入 message_sending hook；replay-logger.ts 本体结构待拆分 | Phase 1 工作 |
+| Replay 仍然中心化 | ✅ **已好于预期**：历史文档提到的 `replay-logger.ts` 不存在，当前 `replay.ts` 是干净的工具集，无 delivery relay 耦合，所有调用均为 fire-and-forget | — |
 | Substrate mirror 未废弃 | ❌ 仍开放：native + mirror 双真相，无融合规则 | Phase 4 工作 |
 | cost/latency baseline 未自动化 | ❌ 仍开放：D3 nightly 未全接通，gate 决策仍靠直觉 | Phase 2 工作 |
 
-**Phase 0 还剩一项代码工作**：replay-logger.ts 结构拆分（replay 彻底退出 live path）。其余都是后续阶段的事。
+**Phase 0 已全部完成。** 所有 ✅ 项均已修复或确认为好于预期。Substrate mirror 和 cost baseline 是 Phase 4/2 的工作，不属于 Phase 0 范围。
 
 ---
 
