@@ -30,6 +30,7 @@ import {
   buildPolicyMetadata,
   detectSessionBoundary,
   finalizeDispatchMetadata,
+  isDispatchableUserSessionKey,
   isManagedAgentContext,
   resolveDispatchSessionKey,
   resolvePolicyStateKey,
@@ -341,14 +342,14 @@ export function selectReplaySessionKeyForDispatch(
   decision: UnknownRecord,
   payload: UnknownRecord,
 ): string {
-  return asString(
-    resolveDispatchSessionKey(ctx, metadata, { stateKey, state, cachedDecision: decision })
-    || metadata.session_key
-    || asRecord(decision.request).session_key
-    || asRecord(payload.job).session_key
-    || payload.session_key
-    || stateKey,
-  );
+  const candidates = [
+    resolveDispatchSessionKey(ctx, metadata, { stateKey, state, cachedDecision: decision }),
+    metadata.session_key,
+    asRecord(decision.request).session_key,
+    asRecord(payload.job).session_key,
+    payload.session_key,
+  ].map((value) => asString(value)).filter(Boolean);
+  return candidates.find((candidate) => isDispatchableUserSessionKey(candidate)) || asString(stateKey);
 }
 
 function toolLogger(ctx: UnknownRecord): UnknownRecord {
@@ -970,6 +971,81 @@ function buildTaskActionTimeline(record: RuntimeTaskStateRecord, liveRead: Unkno
   return timeline.sort((left, right) => Date.parse(asString(left.eventAt)) - Date.parse(asString(right.eventAt)));
 }
 
+const TASK_IDENTITY_ALIAS_KEYS = new Set([
+  "id",
+  "taskId",
+  "task_id",
+  "nativeTaskId",
+  "native_task_id",
+  "workContractId",
+  "work_contract_id",
+  "delegateTaskId",
+  "delegate_task_id",
+  "flowId",
+  "flow_id",
+  "nativeFlowId",
+  "native_flow_id",
+  "attemptId",
+  "attempt_id",
+  "currentAttemptId",
+  "current_attempt_id",
+  "firstAttemptId",
+  "first_attempt_id",
+  "latestAttemptId",
+  "latest_attempt_id",
+  "runId",
+  "run_id",
+  "childRunId",
+  "child_run_id",
+]);
+
+const TASK_IDENTITY_NESTED_KEYS = [
+  "workContract",
+  "work_contract",
+  "delegate",
+  "nativeBinding",
+  "native_binding",
+  "runtime_truth",
+  "binding",
+  "visibleIds",
+  "visible_ids",
+  "mainContext",
+  "main_context",
+  "artifacts",
+  "telemetry",
+  "childSessions",
+  "child_sessions",
+];
+
+function collectIdentityAliases(value: unknown, output: Set<string>, depth = 0): void {
+  if (!value || depth > 6) return;
+  if (typeof value === "string" || typeof value === "number") {
+    const text = asString(value);
+    if (text) output.add(text);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectIdentityAliases(entry, output, depth + 1);
+    return;
+  }
+  if (typeof value !== "object") return;
+  const record = value as UnknownRecord;
+  for (const [key, entry] of Object.entries(record)) {
+    if (TASK_IDENTITY_ALIAS_KEYS.has(key)) collectIdentityAliases(entry, output, depth + 1);
+  }
+  for (const key of TASK_IDENTITY_NESTED_KEYS) {
+    collectIdentityAliases(record[key], output, depth + 1);
+  }
+}
+
+function taskStateRecordMatchesId(record: RuntimeTaskStateRecord, rawTaskId: string): boolean {
+  const taskId = asString(rawTaskId);
+  if (!taskId) return false;
+  const aliases = new Set<string>();
+  collectIdentityAliases(record, aliases);
+  return aliases.has(taskId);
+}
+
 async function buildNativeTaskActionPayload(rawText: string, format: "text" | "json"): Promise<{ summary: string; payload: UnknownRecord }> {
   const { action, taskId } = parseTaskAction(rawText);
   const normalizedAction = action || "details";
@@ -978,7 +1054,7 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
     includeArchive: Boolean(taskId),
     includeSynthetic: Boolean(taskId) && Boolean(envOverrides.workspaceRoot),
   }));
-  let record = (taskId ? tasks.find((entry) => asString(entry.id) === taskId) : tasks[0]) || null;
+  let record = (taskId ? tasks.find((entry) => taskStateRecordMatchesId(entry, taskId)) : tasks[0]) || null;
   let liveRead: NullRecord = null;
 
   if (!record) {

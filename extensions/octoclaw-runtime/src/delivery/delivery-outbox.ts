@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { sendIMMessage, type SendIMResult } from "../im/send.js";
 import { resolveDeliveryOutboxPath } from "../resolve/env.js";
+import { resolveAckDeliverySessionKey } from "../resolve/session.js";
 import { upsertTaskStateRecord } from "../state/task-state-store.js";
 import { atomicWriteJsonSync } from "../util/atomic-write.js";
 
@@ -180,6 +181,15 @@ export function removeDeliveryOutboxEntry(id: string, outboxPath?: string): void
   writeDeliveryOutbox(readDeliveryOutbox(outboxPath).filter((entry) => entry.id !== targetId), outboxPath);
 }
 
+function resolveOutboxDeliverySessionKey(parentSessionKey: string): string {
+  return resolveAckDeliverySessionKey(
+    { session_key: parentSessionKey },
+    parentSessionKey,
+    null,
+    { sessionKey: parentSessionKey, sessionId: parentSessionKey },
+  ) || parentSessionKey;
+}
+
 export async function flushDeliveryOutbox(options: FlushDeliveryOutboxOptions = {}): Promise<FlushDeliveryOutboxResult> {
   const now = options.now ?? new Date();
   const maxAttempts = Math.max(1, Number(options.maxAttempts || DEFAULT_MAX_ATTEMPTS));
@@ -201,7 +211,7 @@ export async function flushDeliveryOutbox(options: FlushDeliveryOutboxOptions = 
 
     result.attempted += 1;
     try {
-      const sent = await sendMessage({ sessionKey: entry.parentSessionKey, message: entry.message, replyToMessageId: entry.replyToMessageId, cwd: entry.cwd });
+      const sent = await sendMessage({ sessionKey: resolveOutboxDeliverySessionKey(entry.parentSessionKey), message: entry.message, replyToMessageId: entry.replyToMessageId, cwd: entry.cwd });
       if (sent.sent) {
         result.delivered += 1;
         updateDeliveryState({ workContractId: entry.workContractId, status: "delivered", messageId: sent.messageId, deliveredAt: now.toISOString(), taskStatePath: options.taskStatePath });

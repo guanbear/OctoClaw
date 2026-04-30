@@ -213,6 +213,45 @@ describe("octoclaw_dispatch honesty", () => {
     vi.restoreAllMocks();
   });
 
+  it("resolves task details by native and delegate aliases", async () => {
+    const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-task-alias-"));
+    tempLedgerPaths.push(dir);
+    envOverrides.workspaceRoot = dir;
+    const stateDir = path.join(dir, "tmp", "octopus");
+    fsSync.mkdirSync(stateDir, { recursive: true });
+    fsSync.writeFileSync(path.join(stateDir, "task-state.json"), JSON.stringify({
+      tasks: [{
+        id: "wc-alias-1",
+        workContractId: "wc-alias-1",
+        work_contract_id: "wc-alias-1",
+        taskId: "delegate-task:parent:1",
+        task_id: "delegate-task:parent:1",
+        nativeTaskId: "native-alias-1",
+        native_task_id: "native-alias-1",
+        flow_id: "flow-alias-1",
+        status: "completed",
+        route: "delegate",
+        summary: "Alias lookup task",
+        updated_at: "2026-04-30T00:00:00.000Z",
+        workContract: {
+          delegate: {
+            childSessions: [{ delegateTaskId: "delegate-task:nested:1" }],
+          },
+        },
+        artifacts: { runtime_truth: { binding: { nativeTaskId: "nested-native-alias" } } },
+      }],
+    }, null, 2));
+
+    const byNative = await taskActionTool().execute({ action: "details", taskId: "native-alias-1", format: "json" }, {});
+    expect(byNative.json).toMatchObject({ found: true, taskId: "wc-alias-1" });
+
+    const byDelegate = await taskActionTool().execute({ action: "details", taskId: "delegate-task:parent:1", format: "json" }, {});
+    expect(byDelegate.json).toMatchObject({ found: true, taskId: "wc-alias-1" });
+
+    const byNestedDelegate = await taskActionTool().execute({ action: "details", taskId: "delegate-task:nested:1", format: "json" }, {});
+    expect(byNestedDelegate.json).toMatchObject({ found: true, taskId: "wc-alias-1" });
+  });
+
   it("filters leaked synthetic test tasks from status history", async () => {
     const dir = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-status-synthetic-"));
     tempLedgerPaths.push(dir);

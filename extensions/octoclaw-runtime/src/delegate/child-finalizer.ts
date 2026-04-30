@@ -4,6 +4,7 @@ import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
 import { appendToDeliveryOutbox } from "../delivery/delivery-outbox.js";
 import { sendIMMessage } from "../im/send.js";
 import { resolveWorkerCompletionPath, resolveWorkspaceRoot, resolveReplayLogPath } from "../resolve/env.js";
+import { resolveAckDeliverySessionKey } from "../resolve/session.js";
 import {
   readTaskStateRecords,
   upsertTaskStateRecord,
@@ -25,6 +26,7 @@ export interface ChildCompletionFinalizerOptions {
   delegateTaskId: string;
   workContractId: string;
   parentSessionKey: string;
+  deliverySessionKey?: string;
   replyToMessageId?: string;
   nativeTaskId?: string;
   nativeFlowId?: string;
@@ -76,10 +78,22 @@ function taskIds(options: ChildCompletionFinalizerOptions): Record<string, strin
   };
 }
 
+function resolveFinalDeliverySessionKey(options: ChildCompletionFinalizerOptions): string {
+  return options.deliverySessionKey
+    || resolveAckDeliverySessionKey(
+      { session_key: options.parentSessionKey },
+      options.parentSessionKey,
+      null,
+      { sessionKey: options.parentSessionKey, sessionId: options.parentSessionKey },
+    )
+    || options.parentSessionKey;
+}
+
 function updateTaskStateRecord(options: ChildCompletionFinalizerOptions, patch: TaskStateRecord): void {
   const { taskId, flowId, runId, childRunId } = taskIds(options);
   if (!options.workContractId) return;
   const now = new Date().toISOString();
+  const deliverySessionKey = resolveFinalDeliverySessionKey(options);
   upsertTaskStateRecord({
     id: options.workContractId,
     workContractId: options.workContractId,
@@ -94,6 +108,8 @@ function updateTaskStateRecord(options: ChildCompletionFinalizerOptions, patch: 
     native_flow_id: options.nativeFlowId || flowId,
     sessionKey: options.parentSessionKey,
     session_key: options.parentSessionKey,
+    deliverySessionKey,
+    delivery_session_key: deliverySessionKey,
     route: "delegate",
     model: options.modelId,
     modelProfile: options.modelId,
@@ -177,10 +193,11 @@ function materializeCompletedWorkContract(options: ChildCompletionFinalizerOptio
 
 function queueOutboxDelivery(options: ChildCompletionFinalizerOptions, message: string): void {
   try {
+    const deliverySessionKey = resolveFinalDeliverySessionKey(options);
     appendToDeliveryOutbox({
       workContractId: options.workContractId,
       kind: "final_result",
-      parentSessionKey: options.parentSessionKey,
+      parentSessionKey: deliverySessionKey,
       replyToMessageId: options.replyToMessageId,
       message,
       cwd: options.cwd,
@@ -189,11 +206,12 @@ function queueOutboxDelivery(options: ChildCompletionFinalizerOptions, message: 
 }
 
 async function sendCompletionMessage(options: ChildCompletionFinalizerOptions, message: string): Promise<{ sent: boolean; error: string }> {
+  const deliverySessionKey = resolveFinalDeliverySessionKey(options);
   if (options.sendFinalMessage) {
-    const result = await options.sendFinalMessage({ sessionKey: options.parentSessionKey, message, replyToMessageId: options.replyToMessageId, cwd: options.cwd });
+    const result = await options.sendFinalMessage({ sessionKey: deliverySessionKey, message, replyToMessageId: options.replyToMessageId, cwd: options.cwd });
     return { sent: result.sent || result.delivered, error: result.error || "" };
   }
-  const result = await sendIMMessage({ sessionKey: options.parentSessionKey, message, replyToMessageId: options.replyToMessageId, timeoutMs: 8000, cwd: options.cwd || resolveWorkspaceRoot() });
+  const result = await sendIMMessage({ sessionKey: deliverySessionKey, message, replyToMessageId: options.replyToMessageId, timeoutMs: 8000, cwd: options.cwd || resolveWorkspaceRoot() });
   return { sent: result.sent, error: result.error === "no_im_adapter" ? "no_im_adapter_queued_for_retry" : result.error || "" };
 }
 
@@ -233,6 +251,7 @@ export async function finalizeChildSessionOnce(options: ChildCompletionFinalizer
       at: new Date().toISOString(),
       workContractId: options.workContractId,
       parentSessionKey: options.parentSessionKey,
+      deliverySessionKey: resolveFinalDeliverySessionKey(options),
       error: result.error || deliveryStatus,
     }).catch(() => {});
     return { status: "delivery_failed", resultText: completion.summary, error: result.error || deliveryStatus };
@@ -246,6 +265,7 @@ export async function finalizeChildSessionOnce(options: ChildCompletionFinalizer
     at: new Date().toISOString(),
     workContractId: options.workContractId,
     parentSessionKey: options.parentSessionKey,
+    deliverySessionKey: resolveFinalDeliverySessionKey(options),
     resultText: completion.summary ? String(completion.summary).slice(0, 200) : "",
   }).catch(() => {});
   return { status: result.sent ? "completed" : "delivery_failed", resultText: completion.summary, sent: result.sent, error: result.error || undefined };
@@ -355,6 +375,7 @@ export function recoverPendingChildCompletionFinalizers(options?: {
 
     const childSessionKey = asStr(record.childSessionKey || record.child_session_key);
     const parentSessionKey = asStr(record.sessionKey || record.session_key);
+    const deliverySessionKey = asStr(record.deliverySessionKey || record.delivery_session_key);
     if (!childSessionKey || !parentSessionKey) continue;
 
     // Skip terminal records regardless of resultMaterialized value.
@@ -383,6 +404,7 @@ export function recoverPendingChildCompletionFinalizers(options?: {
       delegateTaskId,
       workContractId,
       parentSessionKey,
+      deliverySessionKey: deliverySessionKey || undefined,
       nativeTaskId,
       nativeFlowId,
       runId: runId || childRunId || undefined,

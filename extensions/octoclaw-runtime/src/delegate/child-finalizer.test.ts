@@ -14,6 +14,19 @@ function writeCompletionFile(workspaceRoot: string, workContractId: string, comp
   return filePath;
 }
 
+function writeOpenClawSessionRegistry(openclawHome: string, sessionId: string, controlKey: string): void {
+  fs.mkdirSync(path.join(openclawHome, "agents", "main", "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(openclawHome, "openclaw.json"), "{}", "utf-8");
+  fs.writeFileSync(path.join(openclawHome, "agents", "main", "sessions", "sessions.json"), JSON.stringify({
+    [controlKey]: {
+      sessionId,
+      origin: { provider: "slack", surface: "slack", chatType: "direct", to: "user:U123", nativeChannelId: "D123", threadId: "1777556160.478629" },
+      deliveryContext: { channel: "slack", to: "user:U123", threadId: "1777556160.478629" },
+      updatedAt: 1777557114934,
+    },
+  }, null, 2), "utf-8");
+}
+
 describe("child completion finalizer — completion file protocol", () => {
   let tmpDir = "";
 
@@ -87,6 +100,55 @@ describe("child completion finalizer — completion file protocol", () => {
       spawnExecuted: true,
       resultMaterialized: true,
     });
+  });
+
+  it("delivers through canonical Slack session when parent key is an internal session id", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const priorOpenClawHome = process.env.OPENCLAW_HOME;
+    const openclawHome = path.join(tmpDir, "openclaw-home");
+    const controlKey = "agent:main:slack:default:direct:u123:thread:1777556160.478629";
+    writeOpenClawSessionRegistry(openclawHome, "b36be030-16a2-41f6-aa78-cd3bb6c3a288", controlKey);
+    process.env.OPENCLAW_HOME = openclawHome;
+
+    try {
+      const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+      writeCompletionFile(tmpDir, "wc-delivery-map", {
+        schemaVersion: "octoclaw.worker_completion/v1",
+        workContractId: "wc-delivery-map",
+        childSessionKey: "child-delivery-map",
+        delegateTaskId: "delegate-delivery-map",
+        status: "success",
+        summary: "完成",
+        completedAt: new Date().toISOString(),
+      });
+
+      let deliveredSessionKey = "";
+      const result = await finalizeChildSessionOnce({
+        taskStatePath,
+        childSessionKey: "child-delivery-map",
+        delegateTaskId: "delegate-delivery-map",
+        workContractId: "wc-delivery-map",
+        parentSessionKey: "b36be030-16a2-41f6-aa78-cd3bb6c3a288",
+        nativeTaskId: "native-delivery-map",
+        sendFinalMessage: async ({ sessionKey }) => {
+          deliveredSessionKey = sessionKey;
+          return { sent: true, delivered: true };
+        },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(deliveredSessionKey).toBe(controlKey);
+      const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+      expect(taskState.tasks[0]).toMatchObject({
+        sessionKey: "b36be030-16a2-41f6-aa78-cd3bb6c3a288",
+        deliverySessionKey: controlKey,
+        delivery_status: "delivered",
+      });
+    } finally {
+      if (priorOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = priorOpenClawHome;
+    }
   });
 
   it("returns delivery_failed when adapter is unavailable and queues to outbox", async () => {

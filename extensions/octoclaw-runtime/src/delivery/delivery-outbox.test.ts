@@ -1,9 +1,9 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { appendToDeliveryOutbox, flushDeliveryOutbox, readDeliveryOutbox } from "./delivery-outbox.js";
 
-const fs = fsSync as unknown as { mkdtempSync(prefix: string): string; readFileSync(pathname: string, encoding: string): string };
+const fs = fsSync as unknown as { mkdtempSync(prefix: string): string; mkdirSync(pathname: string, options?: { recursive?: boolean }): void; readFileSync(pathname: string, encoding: string): string; writeFileSync(pathname: string, data: string, encoding: string): void };
 
 function paths(): { dir: string; outboxPath: string; taskStatePath: string } {
   const dir = fs.mkdtempSync(path.join("/tmp", "octoclaw-delivery-outbox-"));
@@ -14,7 +14,26 @@ function paths(): { dir: string; outboxPath: string; taskStatePath: string } {
   };
 }
 
+function writeOpenClawSessionRegistry(openclawHome: string, sessionId: string, controlKey: string): void {
+  fs.mkdirSync(path.join(openclawHome, "agents", "main", "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(openclawHome, "openclaw.json"), "{}", "utf-8");
+  fs.writeFileSync(path.join(openclawHome, "agents", "main", "sessions", "sessions.json"), JSON.stringify({
+    [controlKey]: {
+      sessionId,
+      origin: { provider: "slack", surface: "slack", chatType: "direct", to: "user:U123", nativeChannelId: "D123", threadId: "1777556160.478629" },
+      deliveryContext: { channel: "slack", to: "user:U123", threadId: "1777556160.478629" },
+      updatedAt: 1777557114934,
+    },
+  }, null, 2), "utf-8");
+}
+
 describe("delivery outbox", () => {
+  const priorOpenClawHome = process.env.OPENCLAW_HOME;
+
+  afterEach(() => {
+    if (priorOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+    else process.env.OPENCLAW_HOME = priorOpenClawHome;
+  });
   it("appends entries with stable ids and dedupes", () => {
     const { outboxPath } = paths();
     const now = new Date("2026-04-29T00:00:00.000Z");
@@ -71,6 +90,35 @@ describe("delivery outbox", () => {
       delivery_status: "delivered",
       delivery: { status: "delivered", messageId: "m-1", deliveredAt: "2026-04-29T00:00:31.000Z" },
     });
+  });
+
+  it("resolves internal parent session ids before retry delivery", async () => {
+    const { dir, outboxPath, taskStatePath } = paths();
+    const openclawHome = path.join(dir, "openclaw-home");
+    const controlKey = "agent:main:slack:default:direct:u123:thread:1777556160.478629";
+    writeOpenClawSessionRegistry(openclawHome, "b36be030-16a2-41f6-aa78-cd3bb6c3a288", controlKey);
+    process.env.OPENCLAW_HOME = openclawHome;
+    appendToDeliveryOutbox({
+      workContractId: "wc-retry-map",
+      kind: "final_result",
+      parentSessionKey: "b36be030-16a2-41f6-aa78-cd3bb6c3a288",
+      message: "done",
+      now: new Date("2026-04-29T00:00:00.000Z"),
+    }, outboxPath);
+
+    let deliveredSessionKey = "";
+    const result = await flushDeliveryOutbox({
+      outboxPath,
+      taskStatePath,
+      now: new Date("2026-04-29T00:00:31.000Z"),
+      sendMessage: async ({ sessionKey }) => {
+        deliveredSessionKey = sessionKey;
+        return { sent: true, messageId: "m-retry-map" };
+      },
+    });
+
+    expect(result).toMatchObject({ attempted: 1, delivered: 1, remaining: 0 });
+    expect(deliveredSessionKey).toBe(controlKey);
   });
 
   it("keeps failed sends for retry with backoff", async () => {

@@ -448,11 +448,47 @@ export function loadSessionDescriptors(): Map<string, SessionDescriptor> {
   );
 }
 
+function sessionDescriptorMatchesRef(entry: SessionDescriptor, raw: unknown): boolean {
+  const ref = stringValue(raw);
+  if (!ref) return false;
+  const normalizedRef = ref.toLowerCase();
+  return [entry.sessionKey, entry.controlKey, entry.channelSessionKey, entry.sessionId]
+    .map(stringValue)
+    .some((candidate) => candidate && candidate.toLowerCase() === normalizedRef);
+}
+
+function findUserFacingDescriptorByRef(rawRefs: unknown[], allowContaminated = true): SessionDescriptor | null {
+  const refs = rawRefs.map(stringValue).filter(Boolean);
+  if (refs.length === 0) return null;
+  const descriptors = [...loadSessionDescriptors().values()].filter(
+    (entry) => entry.isUserFacing && !entry.isSubagent && (allowContaminated || !entry.isContaminatedUserSession),
+  );
+  return descriptors.find((entry) => refs.some((ref) => sessionDescriptorMatchesRef(entry, ref))) ?? null;
+}
+
+function shouldLookupSessionDescriptorByRef(rawRefs: unknown[]): boolean {
+  return rawRefs
+    .map(stringValue)
+    .some((ref) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(ref));
+}
+
 export function resolveCanonicalSessionDescriptor(ctx: UnknownRecord): SessionDescriptor | null {
   const safe = ctx ?? {};
   const provider = lowerStringValue(safe.messageProvider);
   const channelId = stringValue(safe.channelId);
   const descriptors = [...loadSessionDescriptors().values()].filter((entry) => entry.isUserFacing && !entry.isSubagent);
+  const identityRefs = [
+    safe.canonicalSessionKey,
+    safe.sessionKey,
+    safe.sessionId,
+    safe.agentId,
+  ];
+  if (shouldLookupSessionDescriptorByRef(identityRefs)) {
+    const identityMatch = descriptors.find((entry) => identityRefs.some((ref) => sessionDescriptorMatchesRef(entry, ref)));
+    if (identityMatch) {
+      return identityMatch;
+    }
+  }
 
   if (provider && channelId) {
     const exact = descriptors.find(
@@ -508,9 +544,19 @@ export function resolveAckDeliverySessionKey(
   const desiredThreadKey = stringValue(metadata.session_thread_key);
   const desiredBindingKey = stringValue(metadata.session_binding_key);
   const desiredOrigin = lowerStringValue(metadata.session_origin);
+  if (!shouldLookupSessionDescriptorByRef(directCandidates) && !desiredThreadKey && !desiredBindingKey && !desiredOrigin) {
+    return "";
+  }
+
   const candidates = [...loadSessionDescriptors().values()].filter(
     (entry) => entry.isUserFacing && !entry.isSubagent && !entry.isContaminatedUserSession,
   );
+  if (shouldLookupSessionDescriptorByRef(directCandidates)) {
+    const identityMatch = candidates.find((entry) => directCandidates.some((candidate) => sessionDescriptorMatchesRef(entry, candidate)));
+    if (identityMatch?.controlKey) {
+      return identityMatch.controlKey;
+    }
+  }
 
   if (desiredThreadKey) {
     const match = candidates.find((entry) => entry.threadKey === desiredThreadKey);
@@ -743,6 +789,13 @@ export function resolveDispatchSessionKey(
     const value = stringValue(candidate);
     if (isDispatchableUserSessionKey(value)) {
       return value;
+    }
+  }
+
+  if (shouldLookupSessionDescriptorByRef(candidates)) {
+    const identityMatch = findUserFacingDescriptorByRef(candidates, false);
+    if (identityMatch?.controlKey && isDispatchableUserSessionKey(identityMatch.controlKey)) {
+      return identityMatch.controlKey;
     }
   }
 
