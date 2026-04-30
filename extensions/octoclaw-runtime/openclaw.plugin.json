@@ -80,6 +80,17 @@
             "type": "boolean",
             "default": true,
             "description": "Use judge-generated ack_text for the initial ACK message."
+          },
+          "timeoutLocalMs": {
+            "type": "number",
+            "minimum": 300,
+            "default": 800,
+            "description": "Timeout for local Ollama judge calls (ms). Falls back to timeoutMs if not set."
+          },
+          "local": {
+            "type": "boolean",
+            "default": false,
+            "description": "Mark as local judge (Ollama). Uses timeoutLocalMs and enables judgeAckEnabled by default."
           }
         },
         "required": [
