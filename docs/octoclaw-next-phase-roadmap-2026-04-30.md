@@ -132,26 +132,21 @@ Auto Router 是 Phase 5，不是 Phase 1。
 
 ### Phase 2：反馈链路统一（4-6 周）
 
-**目标**：把 7 个独立工具变成一条可观察的链
+**背景**：nightly eval、calibration-gate、nightly classifier 已存在（`tools/octoclawctl/src/nightly*/`、`calibration/`）。replay 事件记录也有基础。工作是把已有的环节接成一条有合同的链，**不是从零建反馈循环**。
 
+**目标链路**：
 ```
 observe → summarize → review → curate → validate → promote → learn
 ```
 
-| 工具 | 当前状态 | 统一后角色 |
-|------|---------|----------|
-| replay log | ✅ 存在 | observe |
-| replay summary | ✅ 存在 | summarize |
-| reply review | ✅ 存在 | review |
-| curate/fixture export | ✅ 存在 | curate |
-| nightly eval | ✅ 存在 | validate |
-| calibration gate | ✅ 存在 | promote |
-| learning/error promotion | ✅ 存在 | learn |
-
-**具体工作**：
-- 定义链中每个工具的输入/输出合同
-- 让 `validate → promote` 能自动阻断回归（calibration gate 接通 nightly）
-- D3 nightly 完全接通 cost/latency/correctness 三维指标
+| 环节 | 当前代码状态 | 工作内容 |
+|------|------------|---------|
+| observe | ✅ replay 事件写入（但 child-finalizer 缺 completion 事件） | 补发 completion_file_delivered/timeout 事件 |
+| summarize | ⚠️ nightly classifier 做分类，无独立 summary 工具 | 定义 summarize 输出合同 |
+| review / curate | ❌ 无独立工具 | 新建 |
+| validate | ✅ nightly-eval 存在 | 接通 cost/latency/correctness 三维指标 |
+| promote | ✅ calibration-gate 存在 | 接通 nightly，自动阻断回归 |
+| learn | ❌ 无独立工具 | 新建（或由 promote 驱动） |
 
 **交付物**：
 - 每次 route 决策都有可追踪的 telemetry id
@@ -162,7 +157,9 @@ observe → summarize → review → curate → validate → promote → learn
 
 ### Phase 3：IM 能力矩阵（4-6 周）
 
-**目标**：定义正式的 L0/L1/L2 能力分级，统一 anchor/thread/action/artifact 语义
+**背景**：只有 Slack 有完整 adapter（`im/slack/slack-adapter.ts`）。飞书、微信、Telegram、Discord 只有类型定义和 capability 矩阵（`core/im/adapter.ts`），没有 adapter 实现，飞书/微信明确标注 DEFERRED。工作是**先定义能力矩阵和降级规则，再按优先级补 adapter**，不是"5个渠道都已有基础"。
+
+**目标**：L0/L1/L2 能力分级正式化，anchor/thread/action/artifact 语义跨渠道统一
 
 | 能力层 | 包含 |
 |--------|------|
@@ -171,9 +168,10 @@ observe → summarize → review → curate → validate → promote → learn
 | L2（富媒体）| 飞书卡片、Slack mrkdwn block、按钮交互 |
 
 **具体工作**：
-- 飞书 `sendCard()` 实现（IMAdapter 接口已有，需实现）
-- 微信 IMAdapter 实现（`openclaw-weixin` 已在 OpenClaw）
+- 正式化 L0/L1/L2 能力矩阵（当前只有 Slack 有完整路径）
 - 统一降级规则：L2 失败 → L1；L1 失败 → L0
+- 飞书 `sendCard()` adapter 实现（接口已设计，`im-status-renderer.ts` 有 stub）
+- 微信 IMAdapter 实现（capability 矩阵已有，adapter 待做）
 
 **交付物**：
 - 跨渠道的 ACK/Progress/Final 行为一致
@@ -183,12 +181,13 @@ observe → summarize → review → curate → validate → promote → learn
 
 ### Phase 4：基底收敛（6-8 周）
 
-**目标**：managed TaskFlow 升为主，mirror 作兼容层，清理双真相
+**背景**：TaskFlow 的类型定义和 plumbing 已完成（`adapter/runtime-taskflow.ts` 中 syncMode managed/mirrored 字段存在）。但 mirror 模式**没有独立执行逻辑**，走的和 managed 是同一条代码路径，字段值不同但行为相同。工作是**赋予 mirror 明确的语义边界并废弃它，而不是重建 TaskFlow 集成**。
 
 **具体工作**：
+- 明确 mirror 模式的废弃时间表（兼容层保留，不再是权威）
 - 明确字段映射：OctoClaw ↔ native task/flow/run/session
 - Revision/state/wait/cancel 语义对齐
-- 废弃 mirror 模式（兼容层保留，不再是权威）
+- 测试：基底状态转换完全可追踪
 
 ---
 
