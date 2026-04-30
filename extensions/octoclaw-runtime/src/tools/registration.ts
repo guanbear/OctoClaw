@@ -59,6 +59,7 @@ import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
 import { randomUUID } from "node:crypto";
+import { getModelMap } from "../model-map.js";
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
@@ -893,14 +894,32 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
     status: projected.status,
     rawStatus: asString(record.status, "unknown"),
     route: normalizeLiveRoute(record.route, "delegate"),
-    summary: asString(record.summary),
+    summary: (() => {
+      // Prefer completion summary for finished tasks
+      const completion = record.completion as Record<string, unknown> | undefined;
+      if (completion && typeof completion === "object") {
+        const completionSummary = asString(completion.summary);
+        if (completionSummary) {
+          const statusEmoji = asString(completion.status) === "success" ? "✅"
+            : asString(completion.status) === "partial" ? "⚠️" : "❌";
+          return `${statusEmoji} ${completionSummary.slice(0, 200)}`;
+        }
+      }
+      return asString(record.summary);
+    })(),
     updatedAt: asString(record.updated_at),
     delegatedAt,
     startedAt,
     completedAt,
     elapsedMs,
     elapsedText: formatElapsed(elapsedMs),
-    model: optionalString(record.model, record.model_profile, delegateAttempt.model, runtimeTruth.model, asRecord(runtimeTruth.model_policy).selected_model) ?? "unknown",
+    model: (() => {
+      const raw = optionalString(record.model, record.model_profile, delegateAttempt.model, runtimeTruth.model, asRecord(runtimeTruth.model_policy).selected_model) ?? "unknown";
+      if (raw === "unknown") return raw;
+      // Show short name: "zhipu/GLM-5.1" → "GLM-5.1"
+      const parts = raw.split("/");
+      return parts[parts.length - 1] || raw;
+    })(),
     backend: optionalString(record.backend, workerPool, binding.controllerId, runtimeTruth.backend) ?? "unknown",
     workerPool,
     childSessionKey: evidence.childSessionKey,
@@ -1721,17 +1740,12 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
 
         const complexityBand = asString(params.complexityBand || asRecord(cachedDecision)._judge_complexity_band || asRecord(asRecord(cachedDecision).route_decision)._judge_complexity_band);
         const budgetBand = asString(asRecord(cachedDecision._judge_budget_band ?? asRecord(cachedDecision.route_decision)._judge_budget_band));
-        const complexityModelMap: Record<string, string> = {
-          simple: "minimax-portal/MiniMax-M2.7-highspeed",
-          medium: "zhipu/GLM-5.1",
-          normal: "zhipu/GLM-5.1",
-          deep: "omniroute/cx/gpt-5.4",
-        };
-        const budgetModelMap: Record<string, string> = {
-          high: "cliproxyapi/gpt-5.4",
-          medium: "zhipu/GLM-5.1",
-          low: "minimax-portal/MiniMax-M2.7-highspeed",
-        };
+
+        // Dynamic model map: reads openclaw models list and maps fallback rank to complexity bands.
+        // In-memory cached (5-min TTL). Falls back to hardcoded defaults if CLI unavailable.
+        const modelMap = await getModelMap();
+        const complexityModelMap = modelMap.complexity as unknown as Record<string, string>;
+        const budgetModelMap = modelMap.budget as unknown as Record<string, string>;
         const selectedModel = complexityBand && complexityModelMap[complexityBand]
           ? complexityModelMap[complexityBand]
           : budgetBand && budgetModelMap[budgetBand]
