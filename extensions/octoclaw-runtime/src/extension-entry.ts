@@ -26,6 +26,7 @@ import {
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
+import { fetchLatestUserMessageTs } from "./im/slack-thread-anchor.js";
 import {
   buildPolicyMetadata,
   detectSessionBoundary,
@@ -955,11 +956,24 @@ export const plugin = {
         notifyUserMessage(preSessionKey, preStateKey);
       }
 
-      const inboundMessageTs = extractInboundMessageTimestamp(
+      let inboundMessageTs = extractInboundMessageTimestamp(
         ctx,
         event,
         [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
       );
+
+      // Route B failed: OpenClaw doesn't pass message ts in ctx.
+      // Route C fallback: if ctx has a channelId (Slack DM), query Slack API
+      // to get the latest user message ts. Adds ~200-500ms but fixes thread anchoring.
+      if (!inboundMessageTs) {
+        const channelId = stringValue(ctx.channelId);
+        if (channelId) {
+          inboundMessageTs = await fetchLatestUserMessageTs(channelId);
+          if (inboundMessageTs && process.env.OCTOCLAW_ACK_DEBUG) {
+            console.error(`[ack-dbg] thread anchor from Slack API: channelId=${channelId} ts=${inboundMessageTs}`);
+          }
+        }
+      }
 
       if (process.env.OCTOCLAW_ACK_DEBUG) {
         // Log what we extracted so we can debug thread anchor issues
