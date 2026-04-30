@@ -352,12 +352,29 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
   return parts[parts.length - 1] || fullModelId;
 }
 
-/** Extract route source label for footer: "judge(0.87)" / "rule" / "fallback" */
+/** Extract route source label for footer: "judge(0.87)" / "rule" / "fallback" / "agent↑judge=delegate" */
 function resolveRouteSource(state: UnknownRecord): string {
   const decision = asRecord(state.decision);
   const routeDecision = asRecord(decision.route_decision);
+  const routeHintPolicy = asRecord(decision.route_hint_policy);
   const source = stringValue(routeDecision.route_source || routeDecision.final_judge_source);
   const confidence = asRecord(decision).judge_confidence ?? routeDecision.route_confidence;
+  const finalRoute = stringValue(routeDecision.route);
+  const judgeRoute = stringValue(routeHintPolicy.judge_route || decision._judge_route);
+
+  // Judge said one thing, final route is different → agent override
+  if (judgeRoute && finalRoute && judgeRoute !== finalRoute) {
+    const objectionAccepted = Boolean(routeHintPolicy.objection_accepted);
+    const objectionEscalated = Boolean(routeHintPolicy.objection_escalated);
+    if (objectionAccepted) {
+      return `agent↑(judge=${judgeRoute})`;
+    }
+    if (objectionEscalated) {
+      // Remote judge adjudicated — kept original
+      return `judge(escalated)`;
+    }
+    return `agent↑(judge=${judgeRoute})`;
+  }
 
   if (source === "judge" || source === "local") {
     const conf = typeof confidence === "number" ? `(${confidence.toFixed(2)})` : "";
