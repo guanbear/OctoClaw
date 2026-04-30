@@ -67,7 +67,7 @@ import {
   stringifyParamsForPolicy,
   workflowEnforcementRule,
 } from "./replay/policy-utils.js";
-import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
+import { appendJsonl, recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 
@@ -456,14 +456,10 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
   if (process.env.OCTOCLAW_FOOTER_DEBUG) {
     console.error(`[footer-dbg] to=${JSON.stringify(stringValue(event.to))} visible=${visibleDelivery} match=${match ? "found" : "null"} contentLen=${content.length}`);
   }
-  // Temporary: always write to footer-debug.log so we can diagnose missing footers
-  try {
-    const { appendFileSync, mkdirSync } = require("node:fs") as typeof import("node:fs");
-    const { homedir } = require("node:os") as typeof import("node:os");
-    const logPath = homedir() + "/.openclaw/logs/footer-debug.log";
-    mkdirSync(homedir() + "/.openclaw/logs", { recursive: true });
-    appendFileSync(logPath, JSON.stringify({ at: new Date().toISOString(), to: stringValue(event.to), visible: visibleDelivery, match: match ? "found" : "null", len: content.length, ctxKeys: Object.keys(ctx).slice(0,8).join(",") }) + "\n", "utf8");
-  } catch { /* ignore */ }
+  // Temporary: always write to footer-debug.log to diagnose missing footers
+  void appendJsonl(resolveReplayLogPath().replace("runtime-policy-replay.jsonl", "footer-debug.jsonl"), {
+    at: new Date().toISOString(), to: stringValue(event.to), visible: visibleDelivery, match: match ? "found" : "null", len: content.length,
+  }).catch(() => {});
   if (!match) {
     if (!visibleDelivery) return undefined;
     const fallbackReplacement = appendReplyProjectionFooter(content, {}, event, ctx);
