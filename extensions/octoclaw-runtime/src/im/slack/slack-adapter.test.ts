@@ -209,6 +209,69 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("sends reactions through Slack Web API without invoking OpenClaw CLI", async () => {
+    const previousToken = process.env.SLACK_BOT_TOKEN;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    mockRunCommand = async () => { throw new Error("openclaw cli should not be used for reactions"); };
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/reactions.add");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "C123ABCDEF",
+        timestamp: "1700000000.000100",
+        name: "eyes",
+      });
+      return { json: async () => ({ ok: true }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.react({
+      sessionKey: "agent:main:slack:channel:C123abcdef",
+      messageId: "1700000000.000100",
+      emoji: ":eyes:",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    vi.unstubAllGlobals();
+    if (previousToken === undefined) delete process.env.SLACK_BOT_TOKEN;
+    else process.env.SLACK_BOT_TOKEN = previousToken;
+  });
+
+  it("resolves Slack DM channel before sending reaction", async () => {
+    const previousToken = process.env.SLACK_BOT_TOKEN;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === "https://slack.com/api/conversations.open") {
+        expect(JSON.parse(String(init?.body))).toEqual({ users: "U123ABCDEF" });
+        return { json: async () => ({ ok: true, channel: { id: "D123ABCDEF" } }) } as Response;
+      }
+      expect(String(url)).toBe("https://slack.com/api/reactions.add");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "D123ABCDEF",
+        timestamp: "1700000000.000100",
+        name: "eyes",
+      });
+      return { json: async () => ({ ok: true }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.react({
+      sessionKey: "agent:main:slack:default:direct:u123abcdef",
+      messageId: "1700000000.000100",
+      emoji: "eyes",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.unstubAllGlobals();
+    if (previousToken === undefined) delete process.env.SLACK_BOT_TOKEN;
+    else process.env.SLACK_BOT_TOKEN = previousToken;
+  });
+
   it("shouldUseThread respects replyToMode config", () => {
     expect(new SlackAdapter({ replyToMode: "off" }).shouldUseThread()).toBe(false);
     expect(new SlackAdapter({ replyToMode: "first" }).shouldUseThread()).toBe(true);

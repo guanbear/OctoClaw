@@ -245,6 +245,16 @@ describe("guardOutboundMessageForPolicyState", () => {
   });
 
 
+  it("cancels short model ACK text on visible Slack delivery", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "D0AR3GTPYQL", content: "我查一下北京今晚实时/预测交通和节前出行信息，再给你判断。", metadata: { channelId: "D0AR3GTPYQL", threadTs: "1777546854.745559" } },
+      { channelId: "slack" },
+      Date.now(),
+    );
+
+    expect(guarded).toEqual({ cancel: true });
+  });
+
   it("appends a conservative footer for visible Slack delivery when state is missing", () => {
     const guarded = guardOutboundMessageForPolicyState(
       { to: "C0AS4DAPPU3", content: "收到。", metadata: { channelId: "C0AS4DAPPU3", threadTs: "1777387367.594319" } },
@@ -422,6 +432,26 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     if (previous === undefined) delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
     else process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = previous;
+  });
+
+
+  it("before_message_write suppresses short model ACK before tool calls", () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(beforeMessageWrite).toBeTruthy();
+    const result = beforeMessageWrite!(
+      { message: { role: "assistant", content: "我查一下北京今晚交通，再给你判断。", stopReason: "tool_calls" } },
+      { sessionKey: "agent:main:slack:default:direct:u0footer", agentId: "main", channelId: "slack", model: "GLM-5.1", inboundMessageTs: "1777390000.000001" },
+    );
+
+    expect(String(result?.message?.content)).toBe("NO_REPLY");
   });
 });
 

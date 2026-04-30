@@ -250,6 +250,9 @@ describe("octoclawctl cli", () => {
       const enabledCapture = createIo();
       const enabledExitCode = await main(["config", "set", "judge.enabled", "true"], { OCTOCLAW_HOME: openclawHome }, enabledCapture.io);
       expect(enabledExitCode).toBe(0);
+      await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
+        channels: { slack: { botToken: "xoxb-test", streaming: { mode: "partial", nativeTransport: true } } },
+      }), "utf8");
 
       const deployCapture = createIo();
       const deployExitCode = await main(["deploy", "--octoclaw-root", repoRoot, "--openclaw-home", openclawHome, "--skip-build"], { PATH: `${fakeBin}:${process.env.PATH ?? ""}`, OCTOCLAW_FAKE_LOG: path.join(tmpDir, "openclaw.log") }, deployCapture.io);
@@ -269,6 +272,8 @@ describe("octoclawctl cli", () => {
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.octoclawRoot).toBe(repoRoot);
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.workspaceRoot).toBe(path.join(openclawHome, "workspace"));
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].hooks.allowPromptInjection).toBe(true);
+      expect(openclawConfig.channels.slack.streaming).toEqual({ mode: "off", nativeTransport: false });
+      expect(openclawConfig.channels.slack.nativeStreaming).toBe(false);
       expect(await fs.readFile(path.join(openclawHome, "packages", "octoclaw-contracts", "dist", "index.js"), "utf8")).toContain("export");
       await expect(fs.readFile(path.join(openclawHome, "packages", "octoclaw-stale-package", "dist", "old.js"), "utf8")).rejects.toThrow();
       await expect(fs.readFile(path.join(openclawHome, "extensions", "octoclaw-old-extension", "openclaw.plugin.json"), "utf8")).rejects.toThrow();

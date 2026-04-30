@@ -31,6 +31,34 @@ export async function deployExtension(octoclawRoot: string, openclawHome: string
   await pruneStaleDeployUnits(path.join(openclawHome, "extensions"), extensionUnits.map((unit) => unit.name));
 }
 
+
+function envFlagEnabled(value: string | undefined): boolean {
+  return ["1", "true", "on", "yes"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+export async function syncSlackDeliveryHookCompatibility(openclawHome: string): Promise<void> {
+  if (envFlagEnabled(process.env.OCTOCLAW_PRESERVE_SLACK_STREAMING)) return;
+
+  const openclawConfigPath = path.join(openclawHome, "openclaw.json");
+  const config = await readJson(openclawConfigPath);
+  if (!config) return;
+  const channels = isRecord(config.channels) ? config.channels as JsonRecord : null;
+  const slack = channels && isRecord(channels.slack) ? channels.slack as JsonRecord : null;
+  if (!slack) return;
+
+  const streaming = isRecord(slack.streaming) ? slack.streaming as JsonRecord : {};
+  const nextStreaming: JsonRecord = {
+    ...streaming,
+    mode: "off",
+    nativeTransport: false,
+  };
+  const changed = JSON.stringify(streaming) !== JSON.stringify(nextStreaming) || slack.nativeStreaming !== false;
+  if (!changed) return;
+  slack.streaming = nextStreaming;
+  slack.nativeStreaming = false;
+  await fs.writeFile(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
 export async function setupSymlinks(openclawHome: string): Promise<void> {
   const packagesRoot = path.join(openclawHome, "packages");
   const extensionsRoot = path.join(openclawHome, "extensions");

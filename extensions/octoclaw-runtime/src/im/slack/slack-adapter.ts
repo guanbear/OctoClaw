@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
 import type { IMAdapter } from "../adapter.js";
 
@@ -70,6 +73,53 @@ const SLACK_SAFE_TOOL_ALLOWLIST = new Set([
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
 }
+
+function readSlackBotToken(): string {
+  const envToken = stringValue(process.env.SLACK_BOT_TOKEN || process.env.OPENCLAW_SLACK_BOT_TOKEN);
+  if (envToken) return envToken;
+  try {
+    const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+    const raw = JSON.parse(fs.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    const channels = raw.channels && typeof raw.channels === "object" && !Array.isArray(raw.channels)
+      ? raw.channels as Record<string, unknown>
+      : {};
+    const slack = channels.slack && typeof channels.slack === "object" && !Array.isArray(channels.slack)
+      ? channels.slack as Record<string, unknown>
+      : {};
+    return stringValue(slack.botToken);
+  } catch {
+    return "";
+  }
+}
+
+function normalizeEmojiName(emoji: string): string {
+  return stringValue(emoji).replace(/^:+|:+$/gu, "") || "eyes";
+}
+
+async function postSlackApi<T extends Record<string, unknown>>(
+  method: string,
+  token: string,
+  payload: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<T & { ok?: boolean; error?: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(500, timeoutMs));
+  try {
+    const response = await fetch(`https://slack.com/api/${method}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    return await response.json() as T & { ok?: boolean; error?: string };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 function normalizePayload(value: unknown): SlackCommandResult | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -205,35 +255,58 @@ export class SlackAdapter implements IMAdapter {
     timeoutMs?: number;
     cwd?: string;
   }): Promise<{ ok: boolean; error?: string }> {
-    const { sessionKey, messageId, emoji, timeoutMs = 5000, cwd } = params;
+    void params.cwd;
+    const { sessionKey, messageId, emoji, timeoutMs = 2500 } = params;
     const target = this.resolveTarget(sessionKey);
     if (!target.target || !messageId) {
       return { ok: false, error: "missing_target_or_message_id" };
     }
 
-    const args = [
-      "message", "react",
-      "--channel", "slack",
-      "--target", target.target,
-      "--message-id", messageId,
-      "--emoji", emoji,
-      "--json",
-    ];
+    const token = readSlackBotToken();
+    if (!token) {
+      return { ok: false, error: "missing_slack_bot_token" };
+    }
 
     try {
-      const result = await runCommand("openclaw", args, {
-        cwd: cwd || resolveWorkspaceRoot(),
-        timeoutMs: Math.max(500, timeoutMs),
-      });
-      if (result.code === 0) {
+      const channelResult = await this.resolveReactionChannelId(target.target, token, Math.max(500, Math.floor(timeoutMs * 0.45)));
+      if (!channelResult.channelId) {
+        return { ok: false, error: channelResult.error || "reaction_channel_unresolved" };
+      }
+      const reaction = await postSlackApi<Record<string, unknown>>("reactions.add", token, {
+        channel: channelResult.channelId,
+        timestamp: messageId,
+        name: normalizeEmojiName(emoji),
+      }, Math.max(500, Math.floor(timeoutMs * 0.55)));
+      if (reaction.ok === true || reaction.error === "already_reacted") {
         this.ackDebug(`react ok: emoji=${emoji} messageId=${messageId}`);
         return { ok: true };
       }
-      this.ackDebug(`react failed: code=${result.code} stderr=${String(result.stderr).slice(0, 100)}`);
-      return { ok: false, error: String(result.stderr || "react_failed").slice(0, 200) };
+      this.ackDebug(`react failed: slack_error=${stringValue(reaction.error).slice(0, 80)}`);
+      return { ok: false, error: stringValue(reaction.error) || "reaction_ack_failed" };
     } catch (err) {
-      return { ok: false, error: String(err) };
+      const message = err instanceof Error ? err.message : String(err);
+      this.ackDebug(`react failed: ${message.slice(0, 80)}`);
+      return { ok: false, error: message };
     }
+  }
+
+  private async resolveReactionChannelId(target: string, token: string, timeoutMs: number): Promise<{ channelId: string; error?: string }> {
+    const normalized = stringValue(target).toUpperCase();
+    if (/^[CDG][A-Z0-9]{8,}$/u.test(normalized)) {
+      return { channelId: normalized };
+    }
+    if (!/^U[A-Z0-9]{8,}$/u.test(normalized)) {
+      return { channelId: "", error: "unsupported_reaction_target" };
+    }
+
+    const opened = await postSlackApi<{ channel?: { id?: unknown } }>("conversations.open", token, {
+      users: normalized,
+    }, timeoutMs);
+    const channelId = stringValue(opened.channel?.id).toUpperCase();
+    if (opened.ok === true && channelId) {
+      return { channelId };
+    }
+    return { channelId: "", error: stringValue(opened.error) || "dm_channel_unresolved" };
   }
 
   async send(params: {
