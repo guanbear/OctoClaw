@@ -14,7 +14,7 @@ import {
 import { generateNightlyReport, filterNightlyReplayEvents, renderMarkdownReport, validateReplayEvents } from "./nightly/index.js";
 import { loadSlackAcceptanceConfig, runSlackAcceptanceHarness, renderSlackAcceptanceMarkdown } from "./slack-acceptance/index.js";
 import { normalizeCalibrationInputFile, runCalibrationGate, renderCalibrationMarkdown } from "./calibration/index.js";
-import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour } from "./nightly-eval/index.js";
+import { parseNightlyEvalConfig, runNightlyEval, sanitizeAggregateReport, renderNightlyEvalMarkdown, renderNightlyEvalSlackSummary, generateLaunchAgentPlist, defaultLabel, defaultPlistPath, validateScheduleHour, readStoredBaseline, writeStoredBaseline, clearStoredBaseline } from "./nightly-eval/index.js";
 import { SlackWebApiAcceptanceClient } from "./slack-acceptance/index.js";
 import { disablePlugin, enablePlugin, getConfigValue, restartAll, setConfigValue, showStatus } from "./manage.js";
 import { buildWorkspace, cloneOrUpdate, DEFAULT_REF, DEFAULT_REPO_URL, deployExtension, deployPackages, setupSymlinks, syncOpenClawPluginEntry, uninstallDeployment, validateLoad, writeSourceManifest } from "./install.js";
@@ -38,6 +38,8 @@ type CliCommand =
   | "config"
   | "uninstall"
   | "calibration-gate"
+  | "review"
+  | "curate"
   | "status"
   | "details"
   | "queue"
@@ -102,7 +104,7 @@ interface ParsedCliArgs {
   restartServices: boolean;
   scheduleHour?: number;
   logDir?: string;
-  nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack";
+  nightlyEvalSubcommand?: "run" | "install-launchagent" | "uninstall-launchagent" | "print-plist" | "deliver-slack" | "promote" | "clear-baseline" | "show-baseline";
   slackAcceptanceFormat: SlackAcceptanceFormat;
   extraArgs: string[];
 }
@@ -1072,7 +1074,7 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   }
   if (command === "nightly-eval" && positionals[1]) {
     const sub = positionals[1];
-    const validSubs = ["run", "install-launchagent", "uninstall-launchagent", "print-plist", "deliver-slack"];
+    const validSubs = ["run", "install-launchagent", "uninstall-launchagent", "print-plist", "deliver-slack", "promote", "clear-baseline", "show-baseline"];
     if (!validSubs.includes(sub)) {
       throw new Error(`Unknown nightly-eval subcommand: ${sub}. Expected one of: ${validSubs.join(", ")}`);
     }
@@ -1081,8 +1083,8 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
   if (command === "details" && positionals[1] && !taskId) {
     taskId = positionals[1];
   }
-  if (command && !["install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "slack-acceptance"].includes(command)) {
-    throw new Error(`Unknown action: ${command}. Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance`);
+  if (command && !["install", "update", "deploy", "enable", "disable", "config", "uninstall", "calibration-gate", "review", "curate", "status", "details", "queue", "timeline", "health", "up", "down", "restart", "patrol", "reconcile", "repair", "nightly", "nightly-eval", "slack-acceptance"].includes(command)) {
+    throw new Error(`Unknown action: ${command}. Expected one of: install, update, deploy, enable, disable, config, uninstall, calibration-gate, review, curate, status, details, queue, timeline, health, up, down, restart, patrol, reconcile, repair, nightly, nightly-eval, slack-acceptance`);
   }
   if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
     throw new Error(`Unknown limit: ${String(limit)}. Expected a positive integer`);
@@ -1516,6 +1518,7 @@ async function runNightlyEvalCommand(parsed: ParsedCliArgs, env: Record<string, 
     config: evalConfig,
     outputDir: outputDirPath,
     env,
+    openclawHome: parsed.openclawHome ?? path.join(os.homedir(), ".openclaw"),
     nightlyRunner: async (replayPath: string, filterOptions) => {
       const content = await fs.readFile(replayPath, "utf8");
       const lines = content.split(/\r?\n/u);
@@ -1538,7 +1541,8 @@ async function runNightlyEvalCommand(parsed: ParsedCliArgs, env: Record<string, 
       const client = new SlackWebApiAcceptanceClient(resolved.botToken, { postToken: resolved.userToken });
       return runSlackAcceptanceHarness(client, resolved);
     } : undefined,
-    calibrationRunner: (evalConfig.baseline && evalConfig.candidate) ? async (baselinePath: string, candidatePath: string) => {
+    // Always provide calibrationRunner so auto-baseline works even without explicit config
+    calibrationRunner: async (baselinePath: string, candidatePath: string) => {
       const [blRaw, clRaw] = await Promise.all([
         fs.readFile(baselinePath, "utf8"),
         fs.readFile(candidatePath, "utf8"),
@@ -1547,7 +1551,7 @@ async function runNightlyEvalCommand(parsed: ParsedCliArgs, env: Record<string, 
         normalizeCalibrationInputFile(JSON.parse(blRaw)),
         normalizeCalibrationInputFile(JSON.parse(clRaw)),
       );
-    } : undefined,
+    },
     fileWriter: async (filePath: string, content: string) => {
       await fs.writeFile(filePath, content, "utf8");
     },
@@ -1761,7 +1765,20 @@ async function runCommandFromSnapshot(parsed: ParsedCliArgs, env: Record<string,
       if (parsed.nightlyEvalSubcommand === "deliver-slack") {
         return runNightlyEvalSlackDeliveryCommand(parsed, env);
       }
+      if (parsed.nightlyEvalSubcommand === "promote") {
+        return runNightlyEvalPromoteCommand(parsed, env);
+      }
+      if (parsed.nightlyEvalSubcommand === "clear-baseline") {
+        return runNightlyEvalClearBaselineCommand(parsed, env);
+      }
+      if (parsed.nightlyEvalSubcommand === "show-baseline") {
+        return runNightlyEvalShowBaselineCommand(parsed, env);
+      }
       return runNightlyEvalLaunchAgentCommand(parsed, env);
+    case "review":
+      return runReviewCommand(parsed, env);
+    case "curate":
+      return runCurateCommand(parsed, env);
     case "slack-acceptance":
       return runSlackAcceptanceCliCommand(parsed, env);
     case "calibration-gate":
@@ -1903,4 +1920,116 @@ if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
   void main().then((exitCode) => {
     process.exit(exitCode);
   });
+}
+
+// ── Phase 2 pipeline commands ─────────────────────────────────────────────────
+
+/** nightly-eval promote: save the latest eval report as the new baseline. */
+async function runNightlyEvalPromoteCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const openclawHome = parsed.openclawHome ?? path.join(os.homedir(), ".openclaw");
+  // If --input is provided, use it; otherwise find latest report in --output-dir
+  let reportPath: string;
+  if (parsed.input) {
+    reportPath = parsed.input;
+  } else if (parsed.outputDir) {
+    reportPath = await findLatestNightlyEvalReport(parsed.outputDir);
+  } else {
+    throw new Error("nightly-eval promote requires --input <report.json> or --output-dir <dir>");
+  }
+  const raw = await fs.readFile(reportPath, "utf8");
+  const report = JSON.parse(raw) as { overallGate?: string };
+  const gate = report.overallGate ?? "unknown";
+  if (gate === "fail") {
+    throw new Error(`Cannot promote a failed eval report (gate=${gate}). Fix regressions first.`);
+  }
+  await writeStoredBaseline(reportPath, gate, openclawHome);
+  return `Baseline promoted: ${reportPath} (gate=${gate})`;
+}
+
+/** nightly-eval clear-baseline: remove the stored baseline. */
+async function runNightlyEvalClearBaselineCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const openclawHome = parsed.openclawHome ?? path.join(os.homedir(), ".openclaw");
+  await clearStoredBaseline(openclawHome);
+  return "Stored baseline cleared.";
+}
+
+/** nightly-eval show-baseline: print the current stored baseline. */
+async function runNightlyEvalShowBaselineCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const openclawHome = parsed.openclawHome ?? path.join(os.homedir(), ".openclaw");
+  const baseline = await readStoredBaseline(openclawHome);
+  if (!baseline) return "No stored baseline found.";
+  return JSON.stringify(baseline, null, 2);
+}
+
+/** review: show failure/unknown samples from the latest nightly report. */
+async function runReviewCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const openclawHome = parsed.openclawHome ?? path.join(os.homedir(), ".openclaw");
+  const defaultOutputDir = path.join(openclawHome, "workspace", "tmp", "octopus", "nightly-eval");
+  const outputDirPath = parsed.outputDir ?? defaultOutputDir;
+  let reportPath: string;
+  if (parsed.input) {
+    reportPath = parsed.input;
+  } else {
+    try {
+      reportPath = await findLatestNightlyEvalReport(outputDirPath);
+    } catch {
+      return "No nightly-eval report found. Run: octoclawctl nightly-eval run --config <eval-config.json> --output-dir <dir>";
+    }
+  }
+  const raw = await fs.readFile(reportPath, "utf8");
+  const report = JSON.parse(raw) as {
+    overallGate?: string;
+    generatedAt?: string;
+    steps?: {
+      nightly?: { status?: string; report?: { samples?: { verdict?: string; event?: string; reason?: string }[] } };
+    };
+  };
+  const lines: string[] = [
+    `=== Review: ${path.basename(reportPath)} ===`,
+    `Generated: ${report.generatedAt ?? "unknown"}  Gate: ${report.overallGate ?? "unknown"}`,
+    `Nightly: ${report.steps?.nightly?.status ?? "unknown"}`,
+    "",
+  ];
+  const samples = report.steps?.nightly?.report?.samples ?? [];
+  const failures = samples.filter((s) => s.verdict === "fail" || s.verdict === "unknown" || s.verdict === "false_delegate" || s.verdict === "false_reply");
+  if (failures.length === 0) {
+    lines.push("No failures or unknowns found. Pipeline looks clean.");
+  } else {
+    lines.push(`${failures.length} sample(s) need review:`);
+    for (const s of failures.slice(0, 20)) {
+      lines.push(`  [${s.verdict}] ${s.event ?? ""}  — ${s.reason ?? ""}`);
+    }
+    if (failures.length > 20) {
+      lines.push(`  ... and ${failures.length - 20} more. Use --format json for full list.`);
+    }
+  }
+  if (parsed.format === "json") {
+    return JSON.stringify({ reportPath, overallGate: report.overallGate, failures }, null, 2);
+  }
+  return lines.join("\n");
+}
+
+/** curate: export a specific replay event/turn as a fixture. */
+async function runCurateCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
+  const openclawHome = parsed.openclawHome ?? path.join(os.homedir(), ".openclaw");
+  const replayPath = parsed.input
+    ?? path.join(openclawHome, "workspace", "tmp", "octopus", "runtime-policy-replay.jsonl");
+  const turnId = parsed.taskId; // reuse --task-id as --turn-id for now
+  if (!turnId) {
+    throw new Error("curate requires --task-id <turn-id>  (the turnId from replay events)");
+  }
+  const content = await fs.readFile(replayPath, "utf8");
+  const events = content.split(/\r?\n/u)
+    .filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((e): e is Record<string, unknown> => e !== null && typeof e === "object")
+    .filter((e) => String(e.turnId ?? "").includes(turnId) || String(e.taskId ?? "").includes(turnId));
+  if (events.length === 0) {
+    throw new Error(`No events found for turnId=${turnId} in ${replayPath}`);
+  }
+  const fixturesDir = path.join(openclawHome, "workspace", "tmp", "octopus", "fixtures");
+  await ensureDir(fixturesDir);
+  const fixturePath = path.join(fixturesDir, `fixture-${turnId.slice(0, 16)}-${Date.now()}.jsonl`);
+  await fs.writeFile(fixturePath, events.map((e) => JSON.stringify({ ...e, fixture: true })).join("\n") + "\n", "utf8");
+  return `Fixture saved: ${fixturePath}  (${events.length} events for turn ${turnId})`;
 }

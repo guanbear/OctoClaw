@@ -6,6 +6,7 @@ import type { CalibrationGateReport, GateCheckResult, RecommendationStatus } fro
 import { renderCalibrationMarkdown } from "../calibration/report.js";
 import { renderNightlyEvalMarkdown } from "./report.js";
 import type { EvalStepResult, NightlyEvalAggregateReport, NightlyEvalConfig } from "./types.js";
+import { readStoredBaseline } from "./baseline.js";
 
 const SECRET_KEYS = new Set(["token", "authorization", "botToken", "apiKey", "secret", "password"]);
 const TRANSCRIPT_KEYS = new Set(["rawTranscript", "childTranscript", "workerChainOfThought", "executionLog"]);
@@ -14,6 +15,7 @@ export interface RunNightlyEvalParams {
   config: NightlyEvalConfig;
   outputDir: string;
   env: Record<string, string | undefined>;
+  openclawHome?: string;
   nightlyRunner: (replayPath: string, filter: NightlyReplayFilterOptions) => Promise<NightlyReport>;
   slackRunner?: (configPath: string, env: Record<string, string | undefined>) => Promise<SlackAcceptanceReport>;
   calibrationRunner?: (baselinePath: string, candidatePath: string) => Promise<CalibrationGateReport>;
@@ -145,21 +147,36 @@ export async function runNightlyEval(params: RunNightlyEvalParams): Promise<Nigh
       writer,
     );
 
-  const calibration = params.config.baseline === undefined || params.config.candidate === undefined
-    ? skippedStep<CalibrationGateReport>("calibration", "baseline and candidate not provided")
+  // Determine calibration baseline/candidate.
+  // Explicit config takes precedence; otherwise auto-detect stored baseline.
+  let calibrationBaseline = params.config.baseline;
+  let calibrationCandidate = params.config.candidate;
+  let autoBaselineUsed = false;
+
+  if (!calibrationBaseline && !calibrationCandidate && params.calibrationRunner) {
+    const storedBaseline = await readStoredBaseline(params.openclawHome);
+    if (storedBaseline && nightly.artifactPaths?.json) {
+      calibrationBaseline = storedBaseline.reportPath;
+      calibrationCandidate = nightly.artifactPaths.json;
+      autoBaselineUsed = true;
+    }
+  }
+
+  const calibration = calibrationBaseline === undefined || calibrationCandidate === undefined
+    ? skippedStep<CalibrationGateReport>("calibration", autoBaselineUsed ? "no stored baseline available" : "baseline and candidate not provided")
     : await runStep(
-      "calibration",
-      `${params.outputDir}/${artifactPrefix}-calibration.json`,
-      `${params.outputDir}/${artifactPrefix}-calibration.md`,
-      () => {
-        if (params.calibrationRunner === undefined) {
-          throw new Error("calibrationRunner is required when calibration is configured");
-        }
-        return params.calibrationRunner(params.config.baseline ?? "", params.config.candidate ?? "");
-      },
-      renderCalibrationMarkdown,
-      writer,
-    );
+        "calibration",
+        `${params.outputDir}/${artifactPrefix}-calibration.json`,
+        `${params.outputDir}/${artifactPrefix}-calibration.md`,
+        () => {
+          if (params.calibrationRunner === undefined) {
+            throw new Error("calibrationRunner is required when calibration is configured");
+          }
+          return params.calibrationRunner(calibrationBaseline ?? "", calibrationCandidate ?? "");
+        },
+        renderCalibrationMarkdown,
+        writer,
+      );
 
   const steps = { nightly, slackAcceptance, calibration };
   const overallGate = computeEvalOverallGate(steps);
@@ -174,7 +191,7 @@ export async function runNightlyEval(params: RunNightlyEvalParams): Promise<Nigh
       lookbackHours: params.config.lookbackHours,
       excludeSynthetic: params.config.excludeSynthetic,
       slackAcceptanceEnabled: params.config.slackAcceptanceConfig !== undefined,
-      calibrationEnabled: params.config.baseline !== undefined && params.config.candidate !== undefined,
+      calibrationEnabled: calibrationBaseline !== undefined && calibrationCandidate !== undefined,
     },
     steps,
     overallGate,

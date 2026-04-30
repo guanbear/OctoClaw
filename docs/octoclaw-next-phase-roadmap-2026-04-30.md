@@ -115,28 +115,31 @@ P0 高危区和 Phase 0 是同一件事：下表同时列状态和行动项，�
 
 ---
 
-### Phase 2：反馈链路统一（4-6 周）
+### Phase 2：反馈链路统一 ✅ 已完成
 
-**背景**：nightly eval、calibration-gate、nightly classifier 已存在（`tools/octoclawctl/src/nightly*/`、`calibration/`）。replay 事件记录也有基础。工作是把已有的环节接成一条有合同的链，**不是从零建反馈循环**。
+**背景**：nightly eval、calibration-gate、nightly classifier 已存在。工作是把已有的环节接成一条有合同的链，**不是从零建反馈循环**。
 
 **目标链路**：
 ```
 observe → summarize → review → curate → validate → promote → learn
 ```
 
-| 环节 | 当前代码状态 | 工作内容 |
-|------|------------|---------|
-| observe | ✅ replay 事件写入（但 child-finalizer 缺 completion 事件） | 补发 completion_file_delivered/timeout 事件 |
-| summarize | ⚠️ nightly classifier 做分类，无独立 summary 工具 | 定义 summarize 输出合同 |
-| review / curate | ❌ 无独立工具 | 新建 |
-| validate | ✅ nightly-eval 存在 | 接通 cost/latency/correctness 三维指标 |
-| promote | ✅ calibration-gate 存在 | 接通 nightly，自动阻断回归 |
-| learn | ❌ 无独立工具 | 新建（或由 promote 驱动） |
+| 环节 | 工具 | 状态 |
+|------|------|------|
+| observe | `replay.ts` | ✅ 30+ 事件类型，turnId/decisionId 全程可追踪 |
+| summarize | `octoclawctl nightly` | ✅ 5 lanes + cost/latency/correctness 三维指标 |
+| review | `octoclawctl review` | ✅ 列出 failure/unknown 样本，支持 JSON/text |
+| curate | `octoclawctl curate --task-id <turnId>` | ✅ 从 replay log 导出 fixture |
+| validate | `octoclawctl nightly-eval run` | ✅ 自动读取 stored baseline 运行 calibration |
+| promote | `octoclawctl nightly-eval promote` | ✅ 保存 passing 报告为新 baseline |
+| learn | 内置于 promote | ✅ baseline 版本演进即学习记录 |
 
 **交付物**：
-- 每次 route 决策都有可追踪的 telemetry id
-- 每次变更都有 gate report（pass/fail/unknown）
-- cost/speed 对比在数据上可证明，不靠直觉
+- ✅ 每次 route 决策都有可追踪的 telemetry id（turnId + decisionId）
+- ✅ 每次变更都有 gate report（pass/fail/unknown）— calibration gate 自动与 stored baseline 对比
+- ✅ cost/speed 对比在数据上可证明，不靠直觉
+
+**参考**：[`octoclaw-feedback-loop-contracts.md`](octoclaw-feedback-loop-contracts.md)
 
 ---
 
@@ -236,7 +239,8 @@ Router 的**第一个任务**是决定执行合同：
 | [octoclaw-judge-ack-policy-spec-2026-04-21.md](octoclaw-judge-ack-policy-spec-2026-04-21.md) | Judge 分层、ACK 决策真相表、thread 交付规范 | Phase 0/1 |
 | [octoclaw-work-contract-centered-delegation-design-2026-04-25.md](octoclaw-work-contract-centered-delegation-design-2026-04-25.md) | WorkContract 委派核心设计（线上运行中） | Phase 0/1 |
 | [octoclaw-phase2-lightweight-install-design-2026-04-30.md](octoclaw-phase2-lightweight-install-design-2026-04-30.md) | Phase 2 统一配置、插件开关、安装工具 | Phase 2 |
-| [octoclaw-nightly-eval-scheduler-2026-04-26.md](octoclaw-nightly-eval-scheduler-2026-04-26.md) | 夜间 eval 调度、D3 指标接通方案 | Phase 2 |
+| [octoclaw-feedback-loop-contracts.md](octoclaw-feedback-loop-contracts.md) | 七步反馈链路合同：observe→summarize→review→curate→validate→promote→learn | Phase 2 ✅ |
+| [octoclaw-nightly-eval-scheduler-2026-04-26.md](octoclaw-nightly-eval-scheduler-2026-04-26.md) | 夜间 eval 调度、D3 指标接通方案 | Phase 2 ✅ |
 | [octoclaw-im-display-contract.md](octoclaw-im-display-contract.md) | IM 渲染合同：anchor/thread/action/artifact 语义 | Phase 3 |
 | [octoclaw-auto-router-design.md](octoclaw-auto-router-design.md) | Auto Router 五层架构完整设计 | Phase 5 |
 
