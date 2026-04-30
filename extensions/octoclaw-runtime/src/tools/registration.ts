@@ -60,6 +60,7 @@ import { emitExecutionTransitionNotification } from "../ack/execution-transition
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
 import { randomUUID } from "node:crypto";
 import { getModelMap } from "../model-map.js";
+import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
@@ -359,13 +360,21 @@ function toolResponse(summary: string, details: Record<string, unknown> = {}): R
   };
 }
 
-function statusToolResponse(rawOutput: string, format: string): Record<string, unknown> {
-  const text = [
-    "OctoClaw raw status panel below. Return it verbatim to the user without summarizing or rewriting.",
-    "```text",
-    rawOutput,
-    "```",
-  ].join("\n");
+function statusToolResponse(rawOutput: string, format: string, imType: string = "plain"): Record<string, unknown> {
+  // For Slack, don't wrap in a code block — mrkdwn formatting should be preserved.
+  // For other IMs / plain text, use the existing code block + verbatim instruction.
+  const text = imType === "slack"
+    ? [
+        "OctoClaw status panel below. Return it to the user as-is without wrapping in a code block or reformatting.",
+        "",
+        rawOutput,
+      ].join("\n")
+    : [
+        "OctoClaw raw status panel below. Return it verbatim to the user without summarizing or rewriting.",
+        "```text",
+        rawOutput,
+        "```",
+      ].join("\n");
   return {
     text,
     json: {
@@ -1043,7 +1052,7 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
   return { summary, payload };
 }
 
-async function buildNativeStatusOutput(format: string): Promise<string> {
+async function buildNativeStatusOutput(format: string, imType: string = "plain"): Promise<string> {
   const normalizedFormat = format || "anchors";
   const nowMs = Date.now();
   const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
@@ -1052,6 +1061,33 @@ async function buildNativeStatusOutput(format: string): Promise<string> {
   const allTasks = tasks.map((task) => buildRuntimeStatusTaskView(task, nowMs));
   const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
   const hiddenExpiredCount = allTasks.length - visibleTasks.length;
+
+  // ── Slack mrkdwn rendering ───────────────────────────────────────────────
+  if (imType === "slack" && normalizedFormat === "anchors") {
+    const limit = 10;
+    const slackTasks: StatusTaskSummary[] = visibleTasks.slice(0, limit).map((t) => ({
+      taskId: t.taskId,
+      status: t.status,
+      rawStatus: t.rawStatus,
+      summary: t.summary,
+      model: t.model,
+      elapsedText: t.elapsedText,
+      delegatedAt: t.delegatedAt,
+      completedAt: t.completedAt,
+      statusReason: t.statusReason,
+      route: t.route,
+    }));
+    const slackOutput = buildSlackStatusOutput(slackTasks, {
+      totalCount: allTasks.length,
+      hiddenCount: hiddenExpiredCount,
+      format: normalizedFormat,
+    });
+    return slackOutput.text;
+  }
+  // ── Feishu card: TODO — needs IMAdapter.sendCard() support ───────────────
+  // if (imType === "feishu") { ... return feishu card JSON as text ... }
+
+  // ── Plain text (agent context / CLI / other IMs) ─────────────────────────
   const counts = visibleTasks.reduce<Record<string, number>>((acc, task) => {
     acc[task.status] = (acc[task.status] ?? 0) + 1;
     return acc;
@@ -2397,11 +2433,15 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           format: { type: "string", enum: ["anchors", "compact", "table", "lanes"] },
         },
       },
-      execute: async (params) => {
+      execute: async (params, _rawCtx) => {
         const format = asString(params.format, "anchors");
+        const ctx = _rawCtx ?? {};
+        // Detect IM type from session key so we can render appropriately
+        const sessionKey = asString(ctx.sessionKey || ctx.canonicalSessionKey);
+        const imType = sessionKey ? detectIMType(sessionKey) : "plain";
         checkActiveTaskRecovery();
-        const output = await buildNativeStatusOutput(format);
-        return statusToolResponse(output, format);
+        const output = await buildNativeStatusOutput(format, imType);
+        return statusToolResponse(output, format, imType);
       },
     },
   ];
