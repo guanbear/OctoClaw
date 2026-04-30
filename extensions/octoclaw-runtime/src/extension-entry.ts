@@ -46,6 +46,7 @@ import { initNativeHelperBridge } from "./adapter/native-helper.js";
 import type { DetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime.js";
 import { createHostDetachedTaskLifecycleRuntime } from "./adapter/detached-task-runtime-host.js";
 import { buildTurnExecutionReceipt, type TurnExecutionReceipt } from "./receipt.js";
+import { resolveModelId } from "@octoclaw/policy/model";
 import {
   assistantMessageText,
   guardAssistantMessageForPolicyState,
@@ -297,6 +298,11 @@ function replyProjectionFooterEnabled(): boolean {
   return !["0", "false", "off", "no"].includes(raw);
 }
 
+function footerDebugEnabled(): boolean {
+  return Boolean(process.env.OCTOCLAW_FOOTER_DEBUG && !["0", "false", "off"].includes(
+    stringValue(process.env.OCTOCLAW_FOOTER_DEBUG).toLowerCase()
+  ));
+}
 
 function firstStringValue(...values: unknown[]): string {
   for (const value of values) {
@@ -306,37 +312,107 @@ function firstStringValue(...values: unknown[]): string {
   return "";
 }
 
-function outboundProjectionModel(state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
+/** Resolve a model profile (e.g. "direct_main") or raw model string to a short display name. */
+function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
   const decision = asRecord(state.decision);
   const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
-  return firstStringValue(
+
+  // Try raw model ID first (from event/ctx injected by OpenClaw runtime)
+  const rawModel = firstStringValue(
     event.model,
     event.modelId,
     event.model_id,
     ctx.model,
     ctx.modelId,
     ctx.model_id,
-    state.model,
-    state.modelProfile,
-    state.model_profile,
+  );
+
+  // Try profile-based resolution: selected_model may be a profile name OR an actual model ID
+  const profileOrId = firstStringValue(
     modelPolicy.selected_model,
     modelPolicy.model,
+    state.modelProfile,
+    state.model_profile,
     runtimeTruth.model,
     decision.model,
-  ) || "unknown";
+  );
+
+  const candidate = rawModel || profileOrId;
+  if (!candidate) return "unknown";
+
+  // If it looks like a profile name, resolve to actual model ID
+  const resolved = (() => {
+    try { return resolveModelId(candidate as Parameters<typeof resolveModelId>[0]); } catch { return null; }
+  })();
+  const fullModelId = resolved || candidate;
+
+  // Shorten: "zhipu/GLM-5.1" → "GLM-5.1", "omniroute/cx/gpt-5.4" → "gpt-5.4"
+  const parts = fullModelId.split("/");
+  return parts[parts.length - 1] || fullModelId;
+}
+
+/** Extract route source label for footer: "judge(0.87)" / "rule" / "fallback" */
+function resolveRouteSource(state: UnknownRecord): string {
+  const decision = asRecord(state.decision);
+  const routeDecision = asRecord(decision.route_decision);
+  const source = stringValue(routeDecision.route_source || routeDecision.final_judge_source);
+  const confidence = asRecord(decision).judge_confidence ?? routeDecision.route_confidence;
+
+  if (source === "judge" || source === "local") {
+    const conf = typeof confidence === "number" ? `(${confidence.toFixed(2)})` : "";
+    return `judge${conf}`;
+  }
+  if (source === "fallback" || source === "timeout_fallback") return "fallback";
+  if (source === "rule" || source === "policy_rule") return "rule";
+  if (source === "main_agent_route_hint") return "hint";
+  if (source === "execution_coverage") return "coverage";
+  if (source === "continuation") return "continue";
+  return source || "policy";
+}
+
+/**
+ * Heuristic: is this message a short ACK/notification rather than a real response?
+ * ACK texts are always single-line and ≤120 chars.
+ */
+function isAckLikeContent(content: string): boolean {
+  const trimmed = content.trim();
+  return !trimmed.includes("\n") && trimmed.length <= 120;
 }
 
 function appendReplyProjectionFooter(content: string, state: UnknownRecord, event: UnknownRecord, ctx: UnknownRecord): string {
   if (!replyProjectionFooterEnabled()) return content;
-  if (/route=\w+\s*\|\s*model=/u.test(content)) return content;
-  if (/OctoClaw\s*投影[：:]/iu.test(content)) return content;
+  // Don't double-stamp
+  if (/route=\w+\s*\|/u.test(content)) return content;
+  if (/\[ack\s*·/iu.test(content)) return content;
+
   const decision = asRecord(state.decision);
   const workContract = asRecord(decision.work_contract);
   const routeDecision = asRecord(decision.route_decision);
-  const route = stringValue(workContract.route || routeDecision.route || state.route || "reply") === "delegate" ? "delegate" : "reply";
-  const model = outboundProjectionModel(state, event, ctx);
-  return `${content.trim()}\n\nroute=${route} | model=${model} · thread`;
+  const route = stringValue(workContract.route || routeDecision.route || state.route || "reply") === "delegate"
+    ? "delegate" : "reply";
+
+  const debug = footerDebugEnabled();
+
+  // Short single-line messages → ACK footer
+  if (isAckLikeContent(content)) {
+    const ackRoute = route === "delegate" ? " · route=delegate" : "";
+    const debugSuffix = debug
+      ? ` · via=${resolveRouteSource(state)}` : "";
+    return `${content.trim()}\n[ack${ackRoute}${debugSuffix}]`;
+  }
+
+  // Full response footer
+  const model = resolveDisplayModel(state, event, ctx);
+  const via = resolveRouteSource(state);
+  const workerPool = debug ? stringValue(routeDecision.worker_pool) : "";
+  const wc = debug ? stringValue(workContract.workContractId || decision.workContractId) : "";
+  const debugParts = debug
+    ? [workerPool && `worker=${workerPool}`, wc && `wc=${wc.slice(0, 8)}`].filter(Boolean).join(" | ")
+    : "";
+
+  const footer = [`route=${route}`, `model=${model}`, `via=${via}`, debugParts].filter(Boolean).join(" | ");
+  return `${content.trim()}\n\n${footer}`;
 }
 
 export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
