@@ -72,6 +72,13 @@ const activeFinalizers = new Map<string, ReturnType<typeof setTimeout>>();
 const DEFAULT_CHILD_COMPLETION_TIMEOUT_MS = 600_000;
 const CHILD_SESSION_ACTIVITY_GRACE_MS = 90_000;
 const CHILD_SESSION_DEADLINE_EXTENSION_MS = 120_000;
+const FINAL_DELIVERY_LOCK_STALE_MS = 10 * 60 * 1000;
+const lockFs = fsSync as unknown as {
+  mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
+  rmSync(pathname: string, options?: { recursive?: boolean; force?: boolean }): void;
+  statSync(pathname: string): { mtime?: Date; mtimeMs?: number };
+  writeFileSync(pathname: string, data: string): void;
+};
 
 function readCompletionFile(workContractId: string): WorkerCompletionResult | null {
   try {
@@ -88,6 +95,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function completionDeliveryLockPath(workContractId: string): string {
+  return `${resolveWorkerCompletionPath(workContractId)}.delivery.lock`;
+}
+
+function acquireCompletionDeliveryLock(workContractId: string): (() => void) | null {
+  const lockPath = completionDeliveryLockPath(workContractId);
+  try {
+    lockFs.mkdirSync(path.dirname(resolveWorkerCompletionPath(workContractId)), { recursive: true });
+  } catch {}
+  try {
+    lockFs.mkdirSync(lockPath);
+    lockFs.writeFileSync(`${lockPath}/owner.json`, JSON.stringify({ workContractId, acquiredAt: new Date().toISOString() }));
+    return () => { try { lockFs.rmSync(lockPath, { recursive: true, force: true }); } catch {} };
+  } catch {
+    try {
+      const stat = lockFs.statSync(lockPath);
+      const mtimeMs = typeof stat.mtimeMs === "number" ? stat.mtimeMs : stat.mtime?.getTime() ?? Date.now();
+      if (Date.now() - mtimeMs > FINAL_DELIVERY_LOCK_STALE_MS) {
+        lockFs.rmSync(lockPath, { recursive: true, force: true });
+        return acquireCompletionDeliveryLock(workContractId);
+      }
+    } catch {}
+    return null;
+  }
 }
 
 function addPathCandidate(candidates: Set<string>, candidate: unknown, baseDir?: string): void {
@@ -155,7 +188,13 @@ function isCompletionAlreadyMaterialized(options: ChildCompletionFinalizerOption
     return readTaskStateRecords(options.taskStatePath).some((record) => {
       const workContractId = stringValue(record.workContractId || record.work_contract_id || record.id);
       if (workContractId !== options.workContractId) return false;
-      return record.resultMaterialized === true || record.result_materialized === true;
+      const resultMaterialized = record.resultMaterialized === true || record.result_materialized === true;
+      const deliveryStatus = stringValue(record.delivery_status || (isRecord(record.delivery) ? record.delivery.status : undefined));
+      const recordStatus = stringValue(record.status);
+      return resultMaterialized && (
+        ["delivered", "queued_for_retry"].includes(deliveryStatus)
+        || (!deliveryStatus && ["completed", "deliverable_ready"].includes(recordStatus))
+      );
     });
   } catch {
     return false;
@@ -504,55 +543,66 @@ export async function finalizeChildSessionOnce(
   if (isCompletionAlreadyMaterialized(options)) {
     return { status: "completed", resultText: completion.summary, sent: false };
   }
-  const message = formatDeliveryMessage(completion, options);
-  const result = await sendCompletionMessage(options, message);
-  if (!result.sent) {
-    const deliveryStatus = "queued_for_retry";
-    queueOutboxDelivery(options, message);
+  const releaseLock = acquireCompletionDeliveryLock(options.workContractId);
+  if (!releaseLock) {
+    return { status: "pending", resultText: completion.summary, error: "completion_delivery_in_progress" };
+  }
+  try {
+    if (isCompletionAlreadyMaterialized(options)) {
+      return { status: "completed", resultText: completion.summary, sent: false };
+    }
+    const message = formatDeliveryMessage(completion, options);
+    const result = await sendCompletionMessage(options, message);
+    if (!result.sent) {
+      const deliveryStatus = "queued_for_retry";
+      queueOutboxDelivery(options, message);
+      updateTaskStateCompleted(options, completion, deliveryStatus);
+      materializeCompletedWorkContract(options, completion, deliveryStatus);
+      void appendJsonl(resolveReplayLogPath(), {
+        schema_version: "octoclaw.runtime_policy.replay_event/v1",
+        event: "delivery_outbox_queued",
+        at: new Date().toISOString(),
+        workContractId: options.workContractId,
+        parentSessionKey: options.parentSessionKey,
+        deliverySessionKey: resolveFinalDeliverySessionKey(options),
+        error: result.error || deliveryStatus,
+      }).catch(() => {});
+      await notifyFinalizerTransition(options, "delivery_failed", {
+        status: "deliverable_ready",
+        statusReason: "final_result_delivery_failed",
+        resultMaterialized: true,
+        occurredAt: new Date().toISOString(),
+        summary: completion.summary,
+        failureCode: "final_result_delivery_failed",
+        failureMessage: result.error || deliveryStatus,
+      });
+      return {
+        status: "delivery_failed",
+        resultText: completion.summary,
+        error: result.error || deliveryStatus,
+      };
+    }
+    const deliveryStatus = "delivered";
     updateTaskStateCompleted(options, completion, deliveryStatus);
     materializeCompletedWorkContract(options, completion, deliveryStatus);
     void appendJsonl(resolveReplayLogPath(), {
       schema_version: "octoclaw.runtime_policy.replay_event/v1",
-      event: "delivery_outbox_queued",
+      event: "completion_file_delivered",
       at: new Date().toISOString(),
       workContractId: options.workContractId,
       parentSessionKey: options.parentSessionKey,
       deliverySessionKey: resolveFinalDeliverySessionKey(options),
-      error: result.error || deliveryStatus,
+      resultText: completion.summary ? String(completion.summary).slice(0, 200) : "",
     }).catch(() => {});
-    await notifyFinalizerTransition(options, "delivery_failed", {
-      status: "deliverable_ready",
-      statusReason: "final_result_delivery_failed",
-      resultMaterialized: true,
-      occurredAt: new Date().toISOString(),
-      summary: completion.summary,
-      failureCode: "final_result_delivery_failed",
-      failureMessage: result.error || deliveryStatus,
-    });
     return {
-      status: "delivery_failed",
+      status: result.sent ? "completed" : "delivery_failed",
       resultText: completion.summary,
-      error: result.error || deliveryStatus,
+      sent: result.sent,
+      error: result.error || undefined,
     };
+  } finally {
+    releaseLock();
   }
-  const deliveryStatus = "delivered";
-  updateTaskStateCompleted(options, completion, deliveryStatus);
-  materializeCompletedWorkContract(options, completion, deliveryStatus);
-  void appendJsonl(resolveReplayLogPath(), {
-    schema_version: "octoclaw.runtime_policy.replay_event/v1",
-    event: "completion_file_delivered",
-    at: new Date().toISOString(),
-    workContractId: options.workContractId,
-    parentSessionKey: options.parentSessionKey,
-    deliverySessionKey: resolveFinalDeliverySessionKey(options),
-    resultText: completion.summary ? String(completion.summary).slice(0, 200) : "",
-  }).catch(() => {});
-  return {
-    status: result.sent ? "completed" : "delivery_failed",
-    resultText: completion.summary,
-    sent: result.sent,
-    error: result.error || undefined,
-  };
 }
 
 export function scheduleChildCompletionFinalizer(options: ChildCompletionFinalizerOptions): boolean {
@@ -569,7 +619,7 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
         return;
       }
       const nowMs = Date.now();
-      if (nowMs >= deadline) {
+      if (nowMs >= deadline && result.error !== "completion_delivery_in_progress") {
         if (shouldExtendDeadlineForActiveChild(options, nowMs)) {
           deadline = nowMs + CHILD_SESSION_DEADLINE_EXTENSION_MS;
         } else {

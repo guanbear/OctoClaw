@@ -1238,6 +1238,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
   const effectiveControlPlaneRefresh = requiresControlPlaneRefresh && isExecutionOrStatusFollowup;
   const statusSurfaceControlAllowed = asBoolean(conversationControl.status_followup)
     || asString(conversationControl.surface_id) === "octoclaw_task_status_panel";
+  const executionControlAllowed = isExecutionOrStatusFollowup || statusSurfaceControlAllowed || effectiveControlPlaneRefresh;
   const routeHintPolicyRequired = asBoolean(priorDecision._route_hint_required, false)
     || (!judgeSucceeded && liveRouteNeedsHint(liveRoute, metadata))
     || (judgeSucceeded && liveRoute !== "reply");
@@ -1338,8 +1339,8 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     required: liveRoute === "delegate",
   };
   nextDecision.state_grounding = {
-    required: statusSurfaceControlAllowed || liveRoute !== "reply",
-    source: statusSurfaceControlAllowed ? "control_plane_status" : liveRoute === "reply" ? "none" : "policy_state",
+    required: executionControlAllowed || liveRoute !== "reply",
+    source: executionControlAllowed ? "control_plane_status" : liveRoute === "reply" ? "none" : "policy_state",
   };
   nextDecision.latency_ack = {
     required: liveRoute === "reply",
@@ -1350,12 +1351,12 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
     must_delegate_via: !effectiveControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow" ? "octoclaw_dispatch" : "",
     allow_direct_tools: liveRoute === "reply",
     delegate_first: !effectiveControlPlaneRefresh && liveRoute === "delegate" && tsPolicyDecision.admission.admission === "allow",
-    allowed_control_tools: (effectiveControlPlaneRefresh || statusSurfaceControlAllowed)
+    allowed_control_tools: executionControlAllowed
       ? ["octoclaw_status", "octoclaw_task_action"]
       : liveRoute === "reply"
         ? []
       : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
-    block_tool_patterns: (effectiveControlPlaneRefresh || statusSurfaceControlAllowed) ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
+    block_tool_patterns: executionControlAllowed ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
   };
   nextDecision.router_decision_v2 = {
     ...asRecord(nextDecision.router_decision_v2),

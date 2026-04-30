@@ -37,6 +37,12 @@ function statusTool() {
   return tool;
 }
 
+function routeHintTool() {
+  const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_route_hint");
+  if (!tool) throw new Error("octoclaw_route_hint tool not registered");
+  return tool;
+}
+
 function taskActionTool() {
   const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_task_action");
   if (!tool) throw new Error("octoclaw_task_action tool not registered");
@@ -200,12 +206,18 @@ describe("dispatchReplyToMessageId", () => {
     expect(dispatchReplyToMessageId({}, { inboundMessageTs: "222.333" }, {})).toBe("222.333");
     expect(dispatchReplyToMessageId({}, {}, { thread_ts: "333.444" })).toBe("333.444");
   });
+
+  it("skips invalid zero reply anchors before dispatch", () => {
+    expect(dispatchReplyToMessageId({ thread_ts: "0", message_id: "111.222" }, {}, {})).toBe("111.222");
+    expect(dispatchReplyToMessageId({ thread_ts: "0" }, {}, {})).toBe("");
+  });
 });
 
 describe("octoclaw_dispatch honesty", () => {
   afterEach(() => {
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
     policyState.clear("session-runtime-stub-without-evidence");
+    policyState.clear("session-route-hint-sealed-reply");
     envOverrides.workspaceRoot = "";
     for (const dir of tempLedgerPaths.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -824,6 +836,38 @@ describe("octoclaw_dispatch honesty", () => {
     expect(result.ok).toBe(false);
     expect(String(result.error)).toContain("work_contract_route_not_dispatchable");
     expect(result.terminal).toBe(true);
+  });
+
+  it("preserves a sealed reply WorkContract when the main agent later hints delegate", async () => {
+    const task = "解释上一轮为什么投递失败";
+    policyState.set("session-route-hint-sealed-reply", {
+      prompt: task,
+      decision: {
+        request: { session_key: "session-route-hint-sealed-reply", metadata: {} },
+        route_decision: { route: "reply", dispatch_required: false, reason_codes: ["execution_followup"] },
+        tool_policy: { block_tool_patterns: ["octoclaw_dispatch", "spawn"] },
+        work_contract: { workContractId: "wc-sealed-reply", route: "reply" },
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const response = await routeHintTool().execute({
+      task,
+      routeHint: "delegate",
+      reason: "main agent tried to diagnose via delegate",
+    }, {
+      sessionKey: "session-route-hint-sealed-reply",
+      sessionId: "session-route-hint-sealed-reply",
+    });
+
+    const payload = response.json as Record<string, any>;
+    expect(payload.route_decision.route).toBe("reply");
+    expect(payload.route_hint_policy).toMatchObject({
+      submitted: true,
+      blocked_by_sealed_work_contract: true,
+    });
+    expect(payload.route_decision.reason_codes).toContain("route_hint_blocked_by_sealed_work_contract");
   });
 
   it("rejects missing and non-sealed WorkContracts", async () => {

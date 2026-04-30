@@ -245,14 +245,15 @@ describe("guardOutboundMessageForPolicyState", () => {
   });
 
 
-  it("cancels short model ACK text on visible Slack delivery", () => {
+  it("does not keyword-cancel visible Slack prose", () => {
     const guarded = guardOutboundMessageForPolicyState(
       { to: "D0AR3GTPYQL", content: "我查一下北京今晚实时/预测交通和节前出行信息，再给你判断。", metadata: { channelId: "D0AR3GTPYQL", threadTs: "1777546854.745559" } },
       { channelId: "slack" },
       Date.now(),
     );
 
-    expect(guarded).toEqual({ cancel: true });
+    expect(guarded?.content).toContain("我查一下北京今晚实时/预测交通和节前出行信息，再给你判断。");
+    expect(guarded?.content).toContain("route=reply | model=");
   });
 
   it("uses bullet compact footer so OpenClaw Slack normalizer does not rewrite it", () => {
@@ -494,7 +495,7 @@ describe("guardOutboundMessageForPolicyState", () => {
   });
 
 
-  it("before_message_write suppresses short model ACK before tool calls", () => {
+  it("before_message_write suppresses semantic tool-call preambles", () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),

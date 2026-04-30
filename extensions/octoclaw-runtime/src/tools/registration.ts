@@ -171,6 +171,14 @@ function optionalString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function optionalReplyTargetId(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const text = asString(value);
+    if (text && text !== "0" && text !== "0.0" && text.toLowerCase() !== "root") return text;
+  }
+  return undefined;
+}
+
 function parseObjectJson(value: unknown): UnknownRecord {
   const text = asString(value);
   if (!text) return {};
@@ -185,6 +193,62 @@ function parseObjectJson(value: unknown): UnknownRecord {
 function parsePolicyDecisionJson(value: unknown): UnknownRecord | null {
   const parsed = parseObjectJson(value);
   return Object.keys(parsed).length > 0 ? parsed : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => asString(item)).filter(Boolean) : [];
+}
+
+function sealedReplyBlocksDelegateHint(decision: UnknownRecord, requestedRoute: string, routeObjection: boolean): boolean {
+  if (normalizeLiveRoute(requestedRoute, "reply") !== "delegate" || routeObjection) return false;
+  const route = authoritativeDecisionRoute(decision, "reply");
+  if (route !== "reply") return false;
+  const workContract = asRecord(decision.work_contract);
+  const replyContract = asRecord(decision.replyContract ?? decision.reply_contract);
+  const toolPolicy = asRecord(decision.tool_policy);
+  const forbidden = new Set([
+    ...stringArray(toolPolicy.block_tool_patterns),
+    ...stringArray(replyContract.forbiddenTools),
+    ...stringArray(replyContract.forbidden_tools),
+  ]);
+  return asString(workContract.route) === "reply"
+    || (forbidden.has("octoclaw_dispatch") && forbidden.has("spawn"));
+}
+
+function sealedReplyRouteHintPayload(decision: UnknownRecord, routeHintPayload: UnknownRecord): UnknownRecord {
+  const routeDecision = asRecord(decision.route_decision);
+  const request = asRecord(decision.request);
+  const metadata = asRecord(request.metadata);
+  const routeHintPolicy = asRecord(decision.route_hint_policy);
+  return canonicalizeDecisionForPolicyState({
+    ...decision,
+    request: {
+      ...request,
+      metadata: {
+        ...metadata,
+        route_hint_payload: routeHintPayload,
+        route_hint_blocked_by_sealed_work_contract: true,
+      },
+    },
+    route_decision: {
+      ...routeDecision,
+      route: "reply",
+      system_preferred_route: "reply",
+      dispatch_required: false,
+      reason_codes: Array.from(new Set([
+        ...stringArray(routeDecision.reason_codes),
+        "route_hint_blocked_by_sealed_work_contract",
+      ])),
+    },
+    route_hint_policy: {
+      ...routeHintPolicy,
+      submitted: true,
+      advisory_only: true,
+      blocked_by_sealed_work_contract: true,
+      blocked_requested_route: "delegate",
+      source: asString(routeHintPayload.source, "main_agent"),
+    },
+  });
 }
 
 function isRouteSealCandidate(value: unknown): value is RouteSeal {
@@ -1394,7 +1458,7 @@ export function dispatchReplyToMessageId(metadata: UnknownRecord, state: Unknown
   const stateRecord = asRecord(state);
   const slackMetadata = asRecord(metadata.slack);
   const transportMetadata = asRecord(metadata.transport);
-  return optionalString(
+  return optionalReplyTargetId(
     metadata.inboundMessageTs,
     metadata.inbound_message_ts,
     metadata.replyToMessageId,
@@ -1649,6 +1713,35 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           reason: asString(params.reason),
           source: "main_agent",
         };
+        if (sealedReplyBlocksDelegateHint(existingDecision, routeHintPayload.route_hint, routeObjection)) {
+          const payload = sealedReplyRouteHintPayload(existingDecision, routeHintPayload);
+          const nextState = {
+            ...(existing ?? {}),
+            prompt: task,
+            decision: payload,
+            createdAt: existing?.createdAt ?? Date.now(),
+            updatedAt: Date.now(),
+            delegated: existing?.delegated === true,
+            delegationTool: asString(existing?.delegationTool),
+            blockedTools: Array.isArray(existing?.blockedTools) ? existing?.blockedTools : [],
+            routeHintSubmitted: true,
+            routeHintPayload,
+          };
+          setPolicyStateAliasesForContext(ctx, nextState, [replaySessionKey, existingStateKey]);
+          await recordPolicyReplay(
+            "route_hint_blocked_by_sealed_work_contract",
+            {
+              sessionKey: replaySessionKey,
+              sessionId: asString(ctx.sessionId),
+              routeHint: asString(params.routeHint),
+              finalRoute: "reply",
+              reason: "sealed_reply_no_silent_delegate_drift",
+            },
+            toolLogger(ctx),
+            payload,
+          );
+          return toolResponse(policySummaryText(payload), payload);
+        }
         const payload = await resolveStatelessPolicyDecision(task, {
           command: asString(params.command),
           metadata,

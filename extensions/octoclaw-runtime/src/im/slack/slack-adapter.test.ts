@@ -311,6 +311,25 @@ describe("SlackAdapter", () => {
     else process.env.SLACK_BOT_TOKEN = previousToken;
   });
 
+  it("does not pass invalid Slack ts values as reply or thread ids", async () => {
+    const adapter = new SlackAdapter();
+    let capturedArgs: string[] = [];
+    mockRunCommand = async (_command, args) => {
+      capturedArgs = args;
+      return { code: 0, stdout: JSON.stringify({ ok: true, ts: "1700000000.000600" }), stderr: "" };
+    };
+
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:default:direct:u123abc:thread:0",
+      message: "ack",
+      replyToMessageId: "0",
+    });
+
+    expect(result.sent).toBe(true);
+    expect(capturedArgs).not.toContain("--reply-to");
+    expect(capturedArgs).not.toContain("--thread-id");
+  });
+
   it("shouldUseThread respects replyToMode config", () => {
     expect(new SlackAdapter({ replyToMode: "off" }).shouldUseThread()).toBe(false);
     expect(new SlackAdapter({ replyToMode: "first" }).shouldUseThread()).toBe(true);

@@ -457,6 +457,92 @@ describe("child completion finalizer — completion file protocol", () => {
     }
   });
 
+  it("delivers a completion only once across concurrent finalizers", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+
+    writeCompletionFile(tmpDir, "wc-once", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-once",
+      childSessionKey: "child-once",
+      delegateTaskId: "delegate-once",
+      status: "success",
+      summary: "只应投递一次",
+      completedAt: new Date().toISOString(),
+    });
+
+    let sendCalls = 0;
+    const baseOptions = {
+      taskStatePath,
+      childSessionKey: "child-once",
+      delegateTaskId: "delegate-once",
+      workContractId: "wc-once",
+      parentSessionKey: "slack:channel:C123",
+      nativeTaskId: "native-once",
+      sendFinalMessage: async () => {
+        sendCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { sent: true, delivered: true };
+      },
+    };
+
+    const results = await Promise.all([
+      finalizeChildSessionOnce(baseOptions),
+      finalizeChildSessionOnce(baseOptions),
+    ]);
+
+    expect(sendCalls).toBe(1);
+    expect(results.some((result) => result.status === "completed")).toBe(true);
+  });
+
+  it("does not mark timed_out while completion delivery is in progress", async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+
+    writeCompletionFile(tmpDir, "wc-delivering", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-delivering",
+      childSessionKey: "child-delivering",
+      delegateTaskId: "delegate-delivering",
+      status: "success",
+      summary: "正在投递",
+      completedAt: new Date().toISOString(),
+    });
+
+    let releaseSend: (() => void) | undefined;
+    scheduleChildCompletionFinalizer({
+      taskStatePath,
+      childSessionKey: "child-delivering",
+      delegateTaskId: "delegate-delivering",
+      workContractId: "wc-delivering",
+      parentSessionKey: "slack:channel:C123",
+      nativeTaskId: "native-delivering",
+      timeoutMs: 30_000,
+      pollIntervalMs: 1_000,
+      initialDelayMs: 0,
+      sendFinalMessage: async () => new Promise((resolve) => {
+        releaseSend = () => resolve({ sent: true, delivered: true });
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(() => fs.readFileSync(taskStatePath, "utf-8")).toThrow();
+
+    releaseSend?.();
+    await vi.runOnlyPendingTimersAsync();
+
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "wc-delivering",
+      resultMaterialized: true,
+      delivery_status: "delivered",
+    });
+    expect(taskState.tasks[0].status).not.toBe("timed_out");
+  });
+
   it("handles failure status in completion file", async () => {
     tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
     envOverrides.workspaceRoot = tmpDir;

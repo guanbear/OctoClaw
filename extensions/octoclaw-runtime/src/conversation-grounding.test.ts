@@ -177,22 +177,29 @@ describe("conversation grounding route projection", () => {
     expect(grounding.context).not.toContain("[Thread history]");
   });
 
-  it("turns delegated follow-up control hints into delegate observer policy", () => {
-    const decision = buildDecision("你是自己写的 还是子agent 写的", {
+  it("keeps execution follow-up control hints on reply with state tools", async () => {
+    const control = buildConversationControlHintsFromIntent({
+      available: true,
+      intent_class: "execution_followup",
+      intentClass: "execution_followup",
+      provenance_followup: true,
+    });
+
+    expect(control).toMatchObject({
+      route_hint: "reply",
+      lane_hint: "control_observer",
+      require_state_grounding: true,
+    });
+
+    const decision = await resolveStatelessPolicyDecision("你是自己写的 还是子agent 写的", {
       metadata: {
-        conversation_control: {
-          available: true,
-          intent_class: "execution_followup",
-          route_hint: "delegate",
-          lane_hint: "control_observer",
-          require_state_grounding: true,
-        },
+        conversation_control: control,
       },
     });
 
-    expect(decision.route).toBe("delegate");
-    expect(decision.role).toBe("observer_probe");
-    expect(decision.executionProfile).toBe("observer");
+    expect((decision.route_decision as { route: string }).route).toBe("reply");
+    expect((decision.tool_policy as { allowed_control_tools: string[] }).allowed_control_tools).toEqual(["octoclaw_status", "octoclaw_task_action"]);
+    expect((decision.tool_policy as { block_tool_patterns: string[] }).block_tool_patterns).toEqual(["octoclaw_dispatch", "spawn"]);
   });
 
   it("fills fresh live lookup control hints during session metadata enrichment", () => {
@@ -581,7 +588,7 @@ describe("Phase B acceptance: Slack/IM intent routing", () => {
 
     expect(intent.intent_class).toBe("execution_followup");
     expect(control.available).toBe(true);
-    expect(control.route_hint).toBe("delegate");
+    expect(control.route_hint).toBe("reply");
     expect(control.lane_hint).toBe("control_observer");
   });
 

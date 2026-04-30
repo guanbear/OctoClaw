@@ -169,6 +169,29 @@ describe("execution transition notifier", () => {
     expect(third.sent).toBe(true);
   });
 
+  it("dedupes delivery failure by WorkContract across native and delegate attempts", async () => {
+    await mockDelivery();
+
+    const first = await emitExecutionTransitionNotification(notification({
+      transitionKind: "delivery_failed",
+      attemptId: "native-task-1",
+      workContractId: "wc-terminal-1",
+      projection: projection({ taskId: "native-task-1", workContractId: "wc-terminal-1" }),
+    }));
+    const second = await emitExecutionTransitionNotification(notification({
+      transitionKind: "delivery_failed",
+      attemptId: "delegate-task-1",
+      workContractId: "wc-terminal-1",
+      projection: projection({ taskId: "native-task-1", workContractId: "wc-terminal-1" }),
+    }));
+
+    expect(first.sent).toBe(true);
+    expect(second).toEqual(expect.objectContaining({
+      skipped: true,
+      reason: "skipped_duplicate",
+    }));
+  });
+
   it("CompactParentPacket has no transcript field", () => {
     const packet = buildCompactParentPacket(projection());
 

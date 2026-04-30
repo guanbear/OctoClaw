@@ -823,8 +823,8 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
   if (intentClass === "execution_followup") {
     return {
       ...base,
-        route_hint: "delegate",
-        lane_hint: "control_observer",
+      route_hint: "reply",
+      lane_hint: "control_observer",
       protected_lane: "control_observer",
       require_state_grounding: true,
       provenance_followup: Boolean(intentPacket.provenance_followup),

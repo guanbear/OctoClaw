@@ -471,12 +471,6 @@ function internalAckProjectionSuppressed(): boolean {
   return ["1", "true", "on", "yes"].includes(raw);
 }
 
-function isShortModelAckText(text: string): boolean {
-  const normalized = stringValue(text).replace(/\s+/gu, " ");
-  if (!normalized || normalized.length > 80) return false;
-  return /(?:稍等|马上|我查一下|查一下|看一下|我看下|确认一下|我确认|正在查|我先查|给你判断|回你|checking|looking|working|one sec|one moment)/iu.test(normalized);
-}
-
 function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): boolean {
   const metadata = asRecord(event.metadata);
   return Boolean(
@@ -540,11 +534,8 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
   const content = stringValue(event.content);
   if (!content) return undefined;
   const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(event);
-  if (visibleDelivery && isShortModelAckText(content)) {
-    return { cancel: true };
-  }
   const match = findRecentOutboundPolicyState(event.to, event, ctx, now, {
-    allowUnanchoredDelivery: visibleDelivery,
+    allowUnanchoredDelivery: visibleDelivery && outboundHasDeliveryMetadata(event),
   });
   if (!match) {
     if (!visibleDelivery || !outboundHasDeliveryMetadata(event)) return undefined;
@@ -1821,10 +1812,9 @@ export const plugin = {
       const originalText = assistantMessageText(message);
       if (!originalText) return;
       const noReplySentinel = originalText.trim().toUpperCase() === "NO_REPLY";
-      const shortModelAck = isShortModelAckText(originalText);
       const stopReason = stringValue(message.stopReason || event.stopReason);
       if (stopReason && stopReason !== "stop") {
-        if (shortModelAck) return { message: replaceAssistantMessageText(message, "NO_REPLY") };
+        if (!noReplySentinel) return { message: replaceAssistantMessageText(message, "NO_REPLY") };
         return;
       }
       const { key: stateKey, state } = getPolicyStateForContext({
@@ -1834,7 +1824,6 @@ export const plugin = {
       });
       if (!state) {
         if (noReplySentinel) return;
-        if (shortModelAck) return { message: replaceAssistantMessageText(message, "NO_REPLY") };
         const projectedText = appendReplyProjectionFooter(originalText, {}, event, ctx);
         if (projectedText && projectedText !== originalText) {
           return { message: replaceAssistantMessageText(message, projectedText) };
@@ -1846,15 +1835,8 @@ export const plugin = {
       const guarded = guardAssistantMessageForPolicyState(message, stateRecord);
       const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : message;
       const contentText = assistantMessageText(asRecord(visibleMessage));
-      const isLikelyAck = noReplySentinel || isShortModelAckText(contentText) || (contentText.length < 30 && (
-        contentText.includes("收到") || contentText.includes("正在") || contentText.includes("处理中")
-        || contentText.includes("working") || contentText.includes("checking") || contentText.includes("looking")
-      ));
       let outputMessage = visibleMessage;
-      if (role === "assistant" && contentText && isLikelyAck && !noReplySentinel) {
-        return { message: replaceAssistantMessageText(asRecord(visibleMessage), "NO_REPLY") };
-      }
-      if (role === "assistant" && contentText && !isLikelyAck) {
+      if (role === "assistant" && contentText && !noReplySentinel) {
         const projectedText = appendReplyProjectionFooter(contentText, stateRecord, event, ctx);
         if (projectedText && projectedText !== contentText) {
           outputMessage = replaceAssistantMessageText(asRecord(visibleMessage), projectedText);

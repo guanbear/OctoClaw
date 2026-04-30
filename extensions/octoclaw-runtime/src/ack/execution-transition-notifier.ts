@@ -250,8 +250,12 @@ export function buildExecTransitionKey(input: {
   taskId: string;
   attemptId: string;
   transitionKind: string;
+  workContractId?: string;
 }): string {
-  return `exec_transition:${input.taskId}:${input.attemptId}:${input.transitionKind}`;
+  const stableTerminalAttemptId = ["delivery_failed", "timed_out"].includes(input.transitionKind)
+    ? asString(input.workContractId) || input.taskId
+    : input.attemptId;
+  return `exec_transition:${input.taskId}:${stableTerminalAttemptId}:${input.transitionKind}`;
 }
 
 export function checkAndSetExecTransition(key: string, owner: string): { allowed: boolean; existingOwner?: string } {
@@ -292,6 +296,7 @@ export async function emitExecutionTransitionNotification(params: {
     taskId: params.projection.taskId,
     attemptId: params.attemptId,
     transitionKind: params.transitionKind,
+    workContractId: params.workContractId,
   });
 
   const replayParams = {

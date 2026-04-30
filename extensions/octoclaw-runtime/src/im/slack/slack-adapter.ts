@@ -96,6 +96,12 @@ function normalizeEmojiName(emoji: string): string {
   return stringValue(emoji).replace(/^:+|:+$/gu, "") || "eyes";
 }
 
+function normalizeSlackMessageTs(value: unknown): string {
+  const text = stringValue(value);
+  if (!text || text === "0" || text === "0.0" || text.toLowerCase() === "root") return "";
+  return /^\d{3,}(?:\.\d+)?$/u.test(text) ? text : "";
+}
+
 export function renderSlackProjectionFooter(message: string, projection: IMProjectionFooter): string {
   const content = stringValue(message);
   if (!content || /route=\w+\s*\|/u.test(content)) return message;
@@ -217,7 +223,7 @@ function parseSlackSessionKey(sessionKey: string): { kind: string; target: strin
   const kind = stringValue(parts[kindIndex]).toLowerCase();
   const target = stringValue(parts[kindIndex + 1]);
   const threadTs = stringValue(parts[kindIndex + 2]).toLowerCase() === "thread"
-    ? stringValue(parts[kindIndex + 3])
+    ? normalizeSlackMessageTs(parts[kindIndex + 3])
     : "";
   return { kind, target, threadTs };
 }
@@ -253,7 +259,7 @@ export class SlackAdapter implements IMAdapter {
   resolveTarget(sessionKey: string): SlackDeliveryTarget {
     const parsed = parseSlackSessionKey(sessionKey);
     const userId = this.normalizeUserId(parsed.target);
-    const threadTs = parsed.threadTs;
+    const threadTs = normalizeSlackMessageTs(parsed.threadTs);
     return {
       channel: "slack",
       target: userId,
@@ -275,7 +281,7 @@ export class SlackAdapter implements IMAdapter {
     const metadata = params.metadata ?? {};
     const state = params.state ?? {};
     const ctx = params.ctx ?? {};
-    return stringValue(
+    return normalizeSlackMessageTs(
       params.replyToMessageId
       || metadata.message_id
       || metadata.messageId
@@ -387,9 +393,10 @@ export class SlackAdapter implements IMAdapter {
     // lands in the user's thread.  This is independent of the replyToMode config
     // (which controls the general request flow).  For ACKs specifically, we want
     // every reply to thread under the user's inbound message.
-    if (params.replyToMessageId) {
-      this.ackDebug(`replyToMessageId=${params.replyToMessageId} — attempting threaded send`);
-      const threadedResult = await this.executeSend(target, message, timeoutMs, params.cwd, params.replyToMessageId, params.suppressProjectionFooter);
+    const replyToMessageId = normalizeSlackMessageTs(params.replyToMessageId);
+    if (replyToMessageId) {
+      this.ackDebug(`replyToMessageId=${replyToMessageId} — attempting threaded send`);
+      const threadedResult = await this.executeSend(target, message, timeoutMs, params.cwd, replyToMessageId, params.suppressProjectionFooter);
       if (threadedResult.sent) {
         this.ackDebug("send succeeded (threaded)");
         return threadedResult;
@@ -424,12 +431,14 @@ export class SlackAdapter implements IMAdapter {
       args.push("--message", message);
     }
 
-    if (target.threadTs) {
-      args.push("--thread-id", target.threadTs);
+    const threadTs = normalizeSlackMessageTs(target.threadTs);
+    if (threadTs) {
+      args.push("--thread-id", threadTs);
     }
 
-    if (replyToMessageId) {
-      args.push("--reply-to", replyToMessageId);
+    const replyToTs = normalizeSlackMessageTs(replyToMessageId);
+    if (replyToTs) {
+      args.push("--reply-to", replyToTs);
     }
 
     try {
