@@ -89,7 +89,52 @@ export function getConfigField(config: OctoclawConfig, key: string): unknown {
 }
 
 export async function syncToOpenClawPluginConfig(openclawHome: string, config: OctoclawConfig): Promise<void> {
+  // If judge is not yet configured in octoclaw config but a legacy judge-fast.json exists,
+  // auto-import it into config.judge so it gets projected into judgeFast plugin config.
+  // This is a migration helper: users who previously set up judge-fast.json get it synced
+  // automatically without having to re-configure via octoclawctl config set.
+  if (!config.judge.enabled) {
+    const legacyJudgeFast = await readLegacyJudgeFastConfig(openclawHome);
+    if (legacyJudgeFast) {
+      const modelId = typeof legacyJudgeFast.modelId === "string" ? legacyJudgeFast.modelId : "";
+      const baseUrl = typeof legacyJudgeFast.baseUrl === "string" ? legacyJudgeFast.baseUrl : "";
+      const apiKey = typeof legacyJudgeFast.apiKey === "string" ? legacyJudgeFast.apiKey : "";
+      const timeoutMs = typeof legacyJudgeFast.timeoutMs === "number" ? legacyJudgeFast.timeoutMs : null;
+      const timeoutLocalMs = typeof legacyJudgeFast.timeoutLocalMs === "number" ? legacyJudgeFast.timeoutLocalMs : null;
+      const minConfidence = typeof legacyJudgeFast.minConfidence === "number" ? legacyJudgeFast.minConfidence : null;
+      const shadowMode = typeof legacyJudgeFast.shadowMode === "boolean" ? legacyJudgeFast.shadowMode : null;
+      const judgeAckEnabled = typeof legacyJudgeFast.judgeAckEnabled === "boolean" ? legacyJudgeFast.judgeAckEnabled : null;
+      const local = typeof legacyJudgeFast.local === "boolean" ? legacyJudgeFast.local : null;
+      if (modelId && baseUrl) {
+        config.judge.enabled = true;
+        config.judge.modelId = modelId;
+        config.judge.baseUrl = baseUrl;
+        if (apiKey) config.judge.apiKey = apiKey;
+        if (timeoutMs !== null) config.judge.timeoutMs = timeoutMs;
+        if (timeoutLocalMs !== null) (config as unknown as JsonRecord)._legacyTimeoutLocalMs = timeoutLocalMs;
+        if (minConfidence !== null) config.judge.minConfidence = minConfidence;
+        if (shadowMode !== null) config.judge.shadowMode = shadowMode;
+        if (judgeAckEnabled !== null) config.judge.judgeAckEnabled = judgeAckEnabled;
+        if (local !== null) (config as unknown as JsonRecord)._legacyLocal = local;
+      }
+    }
+  }
+
   config.pluginConfig = buildPluginConfig(config);
+
+  // Merge legacy fields (timeoutLocalMs, local) that aren't in OctoclawConfig.judge
+  const legacyTimeoutLocalMs = (config as unknown as JsonRecord)._legacyTimeoutLocalMs;
+  const legacyLocal = (config as unknown as JsonRecord)._legacyLocal;
+  if (isRecord(config.pluginConfig.judgeFast)) {
+    if (typeof legacyTimeoutLocalMs === "number") {
+      (config.pluginConfig.judgeFast as JsonRecord).timeoutLocalMs = legacyTimeoutLocalMs;
+    }
+    if (typeof legacyLocal === "boolean") {
+      (config.pluginConfig.judgeFast as JsonRecord).local = legacyLocal;
+    }
+  }
+  delete (config as unknown as JsonRecord)._legacyTimeoutLocalMs;
+  delete (config as unknown as JsonRecord)._legacyLocal;
 
   const manifestPath = path.join(openclawHome, "extensions", "octoclaw-runtime", "openclaw.plugin.json");
   if (fsSync.existsSync(manifestPath)) {
@@ -100,6 +145,18 @@ export async function syncToOpenClawPluginConfig(openclawHome: string, config: O
   }
 
   await syncOpenClawEntryConfig(openclawHome, config.pluginConfig);
+}
+
+/** Read legacy judge-fast.json from ~/.openclaw/ if it exists. */
+async function readLegacyJudgeFastConfig(openclawHome: string): Promise<JsonRecord | null> {
+  const legacyPath = path.join(openclawHome, "judge-fast.json");
+  try {
+    const raw = await fs.readFile(legacyPath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildPluginConfig(config: OctoclawConfig): JsonRecord {
