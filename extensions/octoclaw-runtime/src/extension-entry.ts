@@ -66,6 +66,7 @@ import {
   matchesBlockedPattern,
   observerControlTools,
   preHintAllowedTools,
+  routeHintPromptRequired,
   routeHintRequired,
   sessionControlTools,
   shouldRetainPolicyStateOnAgentEnd,
@@ -113,8 +114,8 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
   "When route is delegated, the main agent is a coordinator and must use OctoClaw control tools instead of doing the work directly.",
   "Do not hand-write session or subagent spawning commands.",
   "Do not explain delegation strategy, routing rationale, or task boundary analysis to the user. Use octoclaw_dispatch directly.",
-  "Do not emit user-visible coordinator chatter such as '我来写'、'收到，我看一下'、'我先确认一下派发边界'. Runtime ACK handles that.",
-  "User-visible output should only contain: brief acknowledgment, authoritative status receipt, or final result/clear failure.",
+  "Do not emit user-visible coordinator chatter or ACK text such as '我来写'、'收到，我看一下'、'我先确认一下派发边界'. Runtime ACK handles acknowledgments as tracked deliverables.",
+  "Before tool calls or route_hint, emit no user-visible text. User-visible output should only contain authoritative status receipt, final result, or clear failure.",
 ].join("\n");
 
 const LATENCY_ACK_DELAY_MS = 3500;
@@ -123,7 +124,7 @@ const lastGroundedPromptByStateKey = new Map<string, string>();
 let warnedMissingDetachedRuntime = false;
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
-  "For non-hard-observe requests, submit a structured route hint before answering or dispatching.",
+  "Use octoclaw_route_hint only as an internal control-plane action when runtime policy requires it; never introduce it with user-visible text.",
   "Use octoclaw_route_hint to state whether this should be reply or delegate. Read-only observation is delegate with observer role.",
   "After route_hint merge: reply may answer directly; delegated routes must go through octoclaw_dispatch.",
   "",
@@ -469,6 +470,28 @@ function resolveRouteSource(state: UnknownRecord): string {
 function internalAckProjectionSuppressed(): boolean {
   const raw = stringValue(process.env.OCTOCLAW_INTERNAL_ACK_SEND).toLowerCase();
   return ["1", "true", "on", "yes"].includes(raw);
+}
+
+function buildImmutableDeliveryTarget(sessionKey: string, replyToMessageId: string): UnknownRecord {
+  const normalizedSessionKey = stringValue(sessionKey);
+  const normalizedReplyTo = stringValue(replyToMessageId);
+  const isSlack = normalizedSessionKey.toLowerCase().includes(":slack:") || normalizedSessionKey.toLowerCase().startsWith("slack:");
+  return {
+    surface: isSlack ? "slack" : "unknown",
+    sessionKey: normalizedSessionKey,
+    session_key: normalizedSessionKey,
+    replyToMessageId: normalizedReplyTo || undefined,
+    reply_to_message_id: normalizedReplyTo || undefined,
+    threadTs: normalizedReplyTo || undefined,
+    thread_ts: normalizedReplyTo || undefined,
+    mode: normalizedReplyTo ? "thread" : "root",
+    immutable: true,
+  };
+}
+
+function deliveryTargetReplyTo(state: UnknownRecord | null | undefined): string {
+  const target = asRecord(state?.deliveryTarget || state?.delivery_target);
+  return stringValue(target.replyToMessageId || target.reply_to_message_id || target.threadTs || target.thread_ts);
 }
 
 function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): boolean {
@@ -1086,6 +1109,13 @@ export const plugin = {
         }
       }
 
+      const existingPreState = asRecord(getPolicyStateForContext(ctx).state);
+      const existingDeliveryReplyTo = deliveryTargetReplyTo(existingPreState);
+      if (existingDeliveryReplyTo) {
+        inboundMessageTs = existingDeliveryReplyTo;
+      }
+      const immutableDeliveryTarget = buildImmutableDeliveryTarget(preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
+
       if (process.env.OCTOCLAW_ACK_DEBUG) {
         // Log what we extracted so we can debug thread anchor issues
         const ctxKeys = Object.keys(ctx).join(",");
@@ -1130,8 +1160,11 @@ export const plugin = {
       if (preliminaryState) {
         applyReactionAckState(preliminaryState, preSessionKey);
         preliminaryState.ackGuardKey = preSessionKey || "";
+        preliminaryState.deliveryTarget = immutableDeliveryTarget;
+        preliminaryState.delivery_target = immutableDeliveryTarget;
         if (inboundMessageTs) {
           preliminaryState.inboundMessageTs = inboundMessageTs;
+          preliminaryState.replyToMessageId = inboundMessageTs;
         }
       }
 
@@ -1178,13 +1211,19 @@ export const plugin = {
           ...buildReactionAckState(preSessionKey),
           ackGuardKey: preSessionKey || current.ackGuardKey || "",
           inboundMessageTs: inboundMessageTs || current.inboundMessageTs,
+          replyToMessageId: inboundMessageTs || current.replyToMessageId,
+          deliveryTarget: asRecord(current.deliveryTarget).immutable ? current.deliveryTarget : immutableDeliveryTarget,
+          delivery_target: asRecord(current.delivery_target).immutable ? current.delivery_target : immutableDeliveryTarget,
         }));
       }
       if (effectiveState) {
         applyReactionAckState(effectiveState, preSessionKey);
         effectiveState.ackGuardKey = preSessionKey || "";
+        effectiveState.deliveryTarget = immutableDeliveryTarget;
+        effectiveState.delivery_target = immutableDeliveryTarget;
         if (inboundMessageTs) {
           effectiveState.inboundMessageTs = inboundMessageTs;
+          effectiveState.replyToMessageId = inboundMessageTs;
         }
       }
 
@@ -1199,7 +1238,7 @@ export const plugin = {
         stateKey: stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || ""),
         decision: effectiveDecision ?? {},
         state: asRecord(effectiveState),
-        replyToMessageId: inboundMessageTs,
+        replyToMessageId: deliveryTargetReplyTo(asRecord(effectiveState)) || inboundMessageTs,
         cwd: stringValue(ctx.cwd) || process.cwd(),
         logger: pi.logger,
       };
@@ -1271,19 +1310,22 @@ export const plugin = {
       }
 
       const metadata = buildPolicyMetadata(ctx, { stateKey });
-      if (inboundMessageTs && !stringValue(metadata.message_id)) {
-        metadata.message_id = inboundMessageTs;
+      const immutableReplyToMessageId = deliveryTargetReplyTo(asRecord(effectiveState)) || inboundMessageTs;
+      if (immutableReplyToMessageId && !stringValue(metadata.message_id)) {
+        metadata.message_id = immutableReplyToMessageId;
       }
+      metadata.delivery_target = immutableDeliveryTarget;
 
       const prependSystem: string[] = [];
       const judgeSucceeded = Boolean(effectiveDecision._judge_succeeded);
       const decisionDelegationEnabled = Boolean(effectiveDecision._delegation_enabled ?? true);
 
-      if (routeHintRequired(effectiveDecision)) {
+      const promptRequiresRouteHint = routeHintPromptRequired(effectiveDecision);
+      if (promptRequiresRouteHint) {
         prependSystem.push(OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT);
       }
 
-      if (decisionDelegationEnabled && !judgeSucceeded) {
+      if (decisionDelegationEnabled && !judgeSucceeded && promptRequiresRouteHint) {
         prependSystem.push([
           "OctoClaw delegation is available for this run.",
           "You can decide whether to handle this request directly or delegate to a sub-agent via octoclaw_dispatch.",
@@ -1747,7 +1789,7 @@ export const plugin = {
               stateKey,
               decision: asRecord(state?.decision),
               state: asRecord(state),
-              replyToMessageId: stringValue(ctx.inboundMessageTs || state?.inboundMessageTs),
+              replyToMessageId: deliveryTargetReplyTo(asRecord(state)) || stringValue(ctx.inboundMessageTs || state?.inboundMessageTs),
               cwd: resolveWorkspaceRoot(),
               logger: pi.logger,
             });

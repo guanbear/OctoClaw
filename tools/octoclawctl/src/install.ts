@@ -31,6 +31,61 @@ export async function deployExtension(octoclawRoot: string, openclawHome: string
   await pruneStaleDeployUnits(path.join(openclawHome, "extensions"), extensionUnits.map((unit) => unit.name));
 }
 
+const OCTOCLAW_CORE_RULES_START = "<!-- octoclaw:core-rules v1.9.0 -->";
+const OCTOCLAW_CORE_RULES_END = "<!-- /octoclaw:core-rules -->";
+
+function renderOctoClawCoreRules(): string {
+  return [
+    OCTOCLAW_CORE_RULES_START,
+    "## 🐙 八爪鱼核心原则（始终生效）",
+    "",
+    "### 主 Agent 宪法",
+    "",
+    "- 主 Agent 不是最终 route authority；runtime policy、sealed WorkContract、Native TaskFlow/ExecutionCoverage 是路由、委派、执行与投递事实的权威来源。",
+    "- Fast first visible response 由 runtime ACK/status/final delivery 统一负责；主 Agent 不手写可见 ACK、协调寒暄或 route_hint 前置说明。",
+    "- 当 policy 允许 `reply` 且上下文足够时，直接回答；信息不足时，只问一个短澄清问题。",
+    "- 当 policy 选择 `delegate` 时，默认配合并使用 `octoclaw_dispatch`；不要手动 spawn session，也不要把长执行/工具探测/工作区操作吞进主线程。",
+    "- 如果不同意当前 route，只能通过结构化 route hint / objection protocol 申诉；不要 silent override。",
+    "- 状态/provenance follow-up 优先读取现有 receipts、status、ExecutionCoverage 和 artifact refs；不要为了说明旧任务再开新委派。",
+    "- 保持 parent context 洁癖：优先 summary / artifact refs / structured state，不注入完整 child transcript 或长日志。",
+    "",
+    "### 兼容边界",
+    "",
+    "- live route 只有 `reply` / `delegate`；旧 `direct` 等价于 `reply`，旧 `runner/spawn_single/spawn_multi/observe` 只作为 `delegate` 兼容投影。",
+    "- 不要把 ClawTeam/tmux/multi-agent 做成默认 live path；除非明确启用，否则保持单 delegate 路径。",
+    "- `octoclaw_route_hint` 是内部控制面/申诉工具；不要用用户可见文字介绍它，也不要为了简单 reply 强制调用它。",
+    "- 查询状态时默认给委派摘要；只有用户明确要求 raw/debug/table 时才返回完整原始面板。",
+    "",
+    "### 执行真相",
+    "",
+    "- Native TaskFlow 是执行生命周期真相。",
+    "- WorkContract 是 semantic/delegation/handoff/continuity truth，不替代 Native TaskFlow。",
+    "- TaskFlow created 不等于 `spawnExecuted`；`spawnExecuted=true` 必须来自当前 TaskRun/session/process evidence。",
+    "- `task-state.json`、ACK、status panel、display、grounding packet 都是 projection/cache，不是执行真相。",
+    "- `dispatchExecuted=true` 且 `spawnExecuted=false` 只能说已物化/排队，不能说 running。",
+    "",
+    "### 委派连续性",
+    "",
+    "- child session continuity 只能通过 `childSessionKey` / `childSessionId` / `runId` / artifact refs 延续。",
+    "- 若子任务返回 `report_path` / artifact，主 Agent 先读取 artifact 摘要，再用自己的话正式收口；禁止把 `---RESULT---` 或 JSON 原样转发给用户。",
+    "- 若 dispatch/spawn 失败：记录失败并如实告知；只有不假装委派成功且主会话能可靠完成时，才允许 fallback 到 reply。",
+    OCTOCLAW_CORE_RULES_END,
+  ].join("\n");
+}
+
+
+export async function syncOctoClawCoreRules(openclawHome: string): Promise<void> {
+  const workspaceAgentsPath = path.join(openclawHome, "workspace", "AGENTS.md");
+  const existing = await fs.readFile(workspaceAgentsPath, "utf8").catch(() => "# AGENTS.md - Your Workspace\n");
+  const block = renderOctoClawCoreRules();
+  const markerPattern = /<!-- octoclaw:core-rules v[^\n]* -->[\s\S]*?<!-- \/octoclaw:core-rules -->/u;
+  const next = markerPattern.test(existing)
+    ? existing.replace(markerPattern, block)
+    : `${existing.trimEnd()}\n\n${block}\n`;
+  await fs.mkdir(path.dirname(workspaceAgentsPath), { recursive: true });
+  await fs.writeFile(workspaceAgentsPath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+}
+
 
 function envFlagEnabled(value: string | undefined): boolean {
   return ["1", "true", "on", "yes"].includes(String(value ?? "").trim().toLowerCase());

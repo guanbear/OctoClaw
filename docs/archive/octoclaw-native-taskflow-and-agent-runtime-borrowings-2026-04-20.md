@@ -4,7 +4,7 @@
 
 This note is the detailed source-level companion to:
 
-- [octoclaw-ts-rebuild-design-v1.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/octoclaw-ts-rebuild-design-v1.md)
+- [octoclaw-ts-rebuild-design-v1.md](../octoclaw-ts-rebuild-design-v1.md)
 - [octoclaw-ts-rebuild-implementation-plan-2026-04-15.md](/Users/guanzhicheng/Documents/Playground/openclaw-projects/openclaw-octopus-macmini/docs/octoclaw-ts-rebuild-implementation-plan-2026-04-15.md)
 
 Its purpose is not to redesign OctoClaw from scratch.

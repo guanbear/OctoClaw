@@ -49,6 +49,15 @@ export interface RuntimeExecutionRecord extends ExecutionIdentity, ExecutionProv
   admission: PolicyDecision["admission"];
 }
 
+export interface ReplyLifecycleState {
+  decision: "pending" | "completed";
+  modelGeneration: "pending" | "running" | "completed" | "failed";
+  delivery: "pending" | "queued" | "sent" | "failed";
+  decisionCompletedAt?: string;
+  modelCompletedAt?: string;
+  deliveryCompletedAt?: string;
+}
+
 export interface RuntimeWorkflowState {
   identity: ExecutionIdentity;
   execution: RuntimeExecutionRecord;
@@ -56,6 +65,8 @@ export interface RuntimeWorkflowState {
   workflowOrchestration: "planned" | "running" | "waiting" | "completed" | "failed";
   reconcileOrRecovery: "idle" | "reconciling" | "recovering";
   lifecycle: LifecycleState;
+  replyLifecycle?: ReplyLifecycleState;
+  reply_lifecycle?: ReplyLifecycleState;
   checkpoints: RuntimeLifecycleCheckpoint;
   deadlines: RuntimeDeadlines;
   claim: RuntimeClaim | null;
@@ -181,6 +192,27 @@ export function markWorkflowCompleted(state: RuntimeWorkflowState, completedAt =
       deliveryState: state.lifecycle.deliveryState === "not_started" ? "queued" : state.lifecycle.deliveryState,
       completedAt,
     },
+  };
+}
+
+export function markReplyDecisionMaterialized(state: RuntimeWorkflowState, at = new Date().toISOString()): RuntimeWorkflowState {
+  const replyLifecycle: ReplyLifecycleState = {
+    decision: "completed",
+    modelGeneration: "pending",
+    delivery: "pending",
+    decisionCompletedAt: at,
+  };
+  return {
+    ...state,
+    workflowOrchestration: "running",
+    lifecycle: {
+      ...state.lifecycle,
+      phase: "running",
+      deliveryState: "not_started",
+      completedAt: undefined,
+    },
+    replyLifecycle,
+    reply_lifecycle: replyLifecycle,
   };
 }
 

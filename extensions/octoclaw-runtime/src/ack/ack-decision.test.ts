@@ -49,11 +49,11 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.action).toBe("no_action");
   });
 
-  it("sends text ACK0 at 2.5s when reaction is not supported and main model is active", () => {
+  it("does not send text ACK0 when reaction is not supported and main model is active", () => {
     const decision = decideAckAction(
       packet({ nowMs: 2_500, reactionAckSupported: false, reactionAckEnabled: false }),
     );
-    expect(decision.action).toBe("send_text_ack0");
+    expect(decision.action).toBe("no_action");
     expect(decision.ackStage).toBe("ack0");
     expect(decision.modality).toBe("text");
   });
@@ -138,8 +138,7 @@ describe("ack-decision: decideAckAction", () => {
       reactionAckEnabled: false,
     }));
 
-    expect(decision.action).not.toBe("no_action");
-    expect(decision.action).toBe("send_text_ack0");
+    expect(decision.action).toBe("no_action");
   });
 
   it("still suppresses ACK on delegate route even when delegated is running", () => {

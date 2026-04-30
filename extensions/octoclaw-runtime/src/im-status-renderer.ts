@@ -61,14 +61,13 @@ function statusEmoji(status: string): string {
 
 function slackTaskBlock(task: StatusTaskSummary): string {
   const emoji = statusEmoji(task.status);
-  const idShort = task.taskId.slice(-8);
   const title = task.title || task.summary || "未命名任务";
   const complexity = task.complexityBand && task.complexityBand !== "unknown" ? ` · ${task.complexityBand}` : "";
   const modelPart = task.model && task.model !== "unknown" ? ` · ${task.model}` : "";
   const elapsed = task.elapsedText && task.elapsedText !== "unknown" ? ` · ${task.elapsedText}` : "";
 
   const cleanTitle = title.replace(/^[✅⚠️❌]\s*/, "").slice(0, 120);
-  const header = `${emoji} *${task.status}* · ${cleanTitle} \`${idShort}\`${complexity}${modelPart}${elapsed}`;
+  const header = `${emoji} *${task.status}* · ${cleanTitle}${complexity}${modelPart}${elapsed}`;
 
   const cleanSummary = task.summary
     .replace(/^[✅⚠️❌]\s*/, "")

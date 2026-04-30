@@ -253,6 +253,16 @@ describe("octoclawctl cli", () => {
       await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
         channels: { slack: { botToken: "xoxb-test", streaming: { mode: "partial", nativeTransport: true } } },
       }), "utf8");
+      await fs.mkdir(path.join(openclawHome, "workspace"), { recursive: true });
+      await fs.writeFile(path.join(openclawHome, "workspace", "AGENTS.md"), [
+        "# AGENTS.md - Your Workspace",
+        "",
+        "<!-- octoclaw:core-rules v1.8.0 -->",
+        "- 收到用户消息，第一个输出必须是文字，禁止先做工具调用。",
+        "- 若查询状态，必须原样返回完整状态面板。",
+        "<!-- /octoclaw:core-rules -->",
+        "",
+      ].join("\n"), "utf8");
 
       const deployCapture = createIo();
       const deployExitCode = await main(["deploy", "--octoclaw-root", repoRoot, "--openclaw-home", openclawHome, "--skip-build"], { PATH: `${fakeBin}:${process.env.PATH ?? ""}`, OCTOCLAW_FAKE_LOG: path.join(tmpDir, "openclaw.log") }, deployCapture.io);
@@ -274,6 +284,13 @@ describe("octoclawctl cli", () => {
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].hooks.allowPromptInjection).toBe(true);
       expect(openclawConfig.channels.slack.streaming).toEqual({ mode: "off", nativeTransport: false });
       expect(openclawConfig.channels.slack.nativeStreaming).toBe(false);
+      const workspaceAgents = await fs.readFile(path.join(openclawHome, "workspace", "AGENTS.md"), "utf8");
+      expect(workspaceAgents).toContain("octoclaw:core-rules v1.9.0");
+      expect(workspaceAgents).toContain("主 Agent 不是最终 route authority");
+      expect(workspaceAgents).toContain("默认给委派摘要");
+      expect(workspaceAgents).not.toContain("需要 fresh lookup");
+      expect(workspaceAgents).not.toContain("第一个输出必须是文字");
+      expect(workspaceAgents).not.toContain("必须原样返回完整状态面板");
       expect(await fs.readFile(path.join(openclawHome, "packages", "octoclaw-contracts", "dist", "index.js"), "utf8")).toContain("export");
       await expect(fs.readFile(path.join(openclawHome, "packages", "octoclaw-stale-package", "dist", "old.js"), "utf8")).rejects.toThrow();
       await expect(fs.readFile(path.join(openclawHome, "extensions", "octoclaw-old-extension", "openclaw.plugin.json"), "utf8")).rejects.toThrow();

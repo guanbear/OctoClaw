@@ -161,6 +161,21 @@ export function routeHintRequired(decision: Record<string, unknown>): boolean {
   return Boolean(routeHintPolicy.required);
 }
 
+
+export function routeHintPromptRequired(decision: Record<string, unknown>): boolean {
+  if (!routeHintRequired(decision)) return false;
+  const canonicalDecision = canonicalizeDecisionForPolicyState(decision);
+  const routeDecision = asRecord(canonicalDecision.route_decision);
+  const route = authoritativeDecisionRoute(canonicalDecision, "reply");
+  const taskClass = String(routeDecision.task_class ?? "").trim();
+  const hardGate = Boolean(asRecord(canonicalDecision.hook_interface).before_tool_call)
+    && Boolean(asRecord(asRecord(canonicalDecision.hook_interface).before_tool_call).delegate_required);
+  if (route === "reply" && (taskClass === "main_direct" || !taskClass) && !hardGate) {
+    return false;
+  }
+  return true;
+}
+
 export function shouldRetainPolicyStateOnAgentEnd(state: Record<string, unknown>): boolean {
   return Boolean(isDelegatedRoute(asRecord(state.decision)) && !state.delegated);
 }

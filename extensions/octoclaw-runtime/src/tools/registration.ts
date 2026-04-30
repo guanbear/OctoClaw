@@ -1298,6 +1298,33 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
   // if (imType === "feishu") { ... return feishu card JSON as text ... }
 
   // ── Plain text (agent context / CLI / other IMs) ─────────────────────────
+  if (normalizedFormat === "anchors") {
+    const lines = [
+      "OctoClaw delegated task summary",
+      `Visible delegated tasks: ${visibleTasks.length}`,
+      hiddenExpiredCount > 0 ? `Expired hidden: ${hiddenExpiredCount}` : "Expired hidden: 0",
+    ];
+    const limit = 6;
+    for (const task of sortedVisibleTasks.slice(0, limit)) {
+      const title = truncateText(task.title || task.summary || "未命名任务", 90);
+      const summary = truncateText(task.summary && task.summary !== task.title ? task.summary : "", 140);
+      const meta = [
+        task.complexityBand && task.complexityBand !== "unknown" ? task.complexityBand : "",
+        task.model && task.model !== "unknown" ? task.model : "",
+        task.elapsedText && task.elapsedText !== "unknown" ? task.elapsedText : "",
+      ].filter(Boolean).join(" · ");
+      lines.push(`- ${task.status}: ${title}${meta ? ` (${meta})` : ""}${task.statusReason ? ` — ${task.statusReason}` : ""}`);
+      if (summary) lines.push(`  ${summary}`);
+    }
+    if (sortedVisibleTasks.length > limit) {
+      lines.push(`... ${sortedVisibleTasks.length - limit} more; use format=table for raw/debug fields.`);
+    }
+    if (allTasks.length === 0) {
+      lines.push("No delegated task state is currently available.");
+    }
+    return lines.join("\n");
+  }
+
   const counts = visibleTasks.reduce<Record<string, number>>((acc, task) => {
     acc[task.status] = (acc[task.status] ?? 0) + 1;
     return acc;
@@ -1458,7 +1485,12 @@ export function dispatchReplyToMessageId(metadata: UnknownRecord, state: Unknown
   const stateRecord = asRecord(state);
   const slackMetadata = asRecord(metadata.slack);
   const transportMetadata = asRecord(metadata.transport);
+  const deliveryTarget = asRecord(stateRecord.deliveryTarget || stateRecord.delivery_target || metadata.delivery_target);
   return optionalReplyTargetId(
+    deliveryTarget.replyToMessageId,
+    deliveryTarget.reply_to_message_id,
+    deliveryTarget.threadTs,
+    deliveryTarget.thread_ts,
     metadata.inboundMessageTs,
     metadata.inbound_message_ts,
     metadata.replyToMessageId,
@@ -2318,6 +2350,10 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             native_flow_id: materializedNativeFlowId || asString(materialization.flow_id) || undefined,
             sessionKey: replaySessionKey,
             session_key: replaySessionKey,
+            deliveryTarget: asRecord(metadata.delivery_target || state?.deliveryTarget || state?.delivery_target),
+            delivery_target: asRecord(metadata.delivery_target || state?.deliveryTarget || state?.delivery_target),
+            replyToMessageId: dispatchReplyToMessageId(metadata, state, ctx) || undefined,
+            reply_to_message_id: dispatchReplyToMessageId(metadata, state, ctx) || undefined,
             route: asString(payload.route),
             status: projectedSubstrateState,
             summary: spawnEvidence.spawnExecuted
@@ -2453,6 +2489,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 workContractId,
                 parentSessionKey: replaySessionKey || stateKey,
                 replyToMessageId: replyToMessageId || undefined,
+                deliveryTarget: asRecord(metadata.delivery_target || state?.deliveryTarget || state?.delivery_target),
                 nativeTaskId: materializedNativeTaskId,
                 nativeFlowId: materializedNativeFlowId,
                 runId: spawnEvidence.runId,

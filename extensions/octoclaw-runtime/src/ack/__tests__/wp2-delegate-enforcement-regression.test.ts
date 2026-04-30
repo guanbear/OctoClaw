@@ -16,6 +16,7 @@ import {
 import { guardAssistantMessageForPolicyState } from "../../replay/message-guard.js";
 import {
   isDelegatedRoute,
+  routeHintPromptRequired,
   routeHintRequired,
   shouldRetainPolicyStateOnAgentEnd,
 } from "../../replay/policy-utils.js";
@@ -177,6 +178,25 @@ describe("WP2 regression: routeHintRequired reads correct source", () => {
     });
     expect(routeHintRequired(d)).toBe(false);
   });
+
+  it("does not require prompt route_hint for simple reply", () => {
+    const d = decision({
+      route_decision: { route: "reply", task_class: "main_direct" },
+      route_hint_policy: { required: true },
+      hook_interface: { before_tool_call: { enabled: true, delegate_required: false } },
+    });
+    expect(routeHintRequired(d)).toBe(true);
+    expect(routeHintPromptRequired(d)).toBe(false);
+  });
+
+  it("keeps prompt route_hint for hard-gated delegate", () => {
+    const d = decision({
+      route_hint_policy: { required: true },
+      hook_interface: { before_tool_call: { enabled: true, delegate_required: true } },
+    });
+    expect(routeHintPromptRequired(d)).toBe(true);
+  });
+
 });
 
 // ---------------------------------------------------------------------------

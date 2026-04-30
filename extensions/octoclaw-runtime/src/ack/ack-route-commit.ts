@@ -315,6 +315,21 @@ async function recordRouteCommitAckReplay(
     threadId?: string;
   },
 ): Promise<void> {
+  if (ackKey) {
+    recordDelivery(ackKey, {
+      ackKey,
+      sent: Boolean(outcome.sent),
+      deliveredAt: Date.now(),
+      target: asString(outcome.target),
+      threadId: asString(outcome.threadId),
+      ackOwner: "route_commit_ack",
+      ackKind: "route_commit_ack",
+      deliveryState: outcome.ack_delivery_state,
+      targetResolutionState: outcome.ack_target_resolution_state,
+      reason: outcome.reason,
+      messageTurnId: packet?.turnId,
+    });
+  }
   try {
     await recordPolicyReplay(
       "route_commit_ack",
@@ -398,42 +413,14 @@ export async function sendRouteCommitAck(params: {
   const hasCanonicalTarget = Boolean(targetResolution.target);
 
   if (packet.route === "reply") {
-    const stateGrounding = readRecord(params.decision.state_grounding);
-    const toolPolicy = readRecord(params.decision.tool_policy);
-    const allowedControlTools = Array.isArray(toolPolicy.allowed_control_tools) ? toolPolicy.allowed_control_tools.map(asString) : [];
-    const statusSurfaceReply = asString(stateGrounding.source) === "control_plane_status"
-      || allowedControlTools.includes("octoclaw_status");
-    if (statusSurfaceReply) {
-      await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
-        ack_target_resolution_state: "suppressed_status_surface",
-        ack_delivery_state: "skipped",
-        reason: "status_surface_reply_no_route_ack",
-      });
-      return { sent: false, skipped: true, reason: "status_surface_reply_no_route_ack", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_status_surface", ack_delivery_state: "skipped" };
-    }
-
-    const replyAlreadyVisible = asBoolean(params.state.finalResponseStreaming)
-      || asBoolean(params.state.formalReplyVisible)
-      || asBoolean(params.state.delivered)
-      || asBoolean(params.state.deliveryPending);
-    if (replyAlreadyVisible) {
-      await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
-        ack_target_resolution_state: "suppressed_reply_visible",
-        ack_delivery_state: "skipped",
-        reason: "reply_already_visible",
-      });
-      return { sent: false, skipped: true, reason: "reply_already_visible", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_reply_visible", ack_delivery_state: "skipped" };
-    }
-
-    if (reactionAckConfigured(params.state)) {
-      await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
-        ack_target_resolution_state: "suppressed_reaction_ack_configured",
-        ack_delivery_state: "skipped",
-        reason: "reaction_ack_configured",
-      });
-      return { sent: false, skipped: true, reason: "reaction_ack_configured", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_reaction_ack_configured", ack_delivery_state: "skipped" };
-    }
+    await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
+      ack_target_resolution_state: "suppressed_reply_route_ack_disabled",
+      ack_delivery_state: "skipped",
+      reason: "reply_route_runtime_text_ack_disabled",
+    });
+    return { sent: false, skipped: true, reason: "reply_route_runtime_text_ack_disabled", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_reply_route_ack_disabled", ack_delivery_state: "skipped" };
   }
+
 
   if (!hasCanonicalTarget) {
     // No resolvable IM target — nothing to send to.

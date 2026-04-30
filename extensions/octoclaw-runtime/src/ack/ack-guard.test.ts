@@ -240,7 +240,7 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     expect(adapter.send).not.toHaveBeenCalled();
   });
 
-  it("falls back to text when reaction ACK0 fails", async () => {
+  it("does not fall back to text when reaction ACK0 fails", async () => {
     adapter.react.mockResolvedValue({ ok: false, error: "operation_aborted" });
     adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "111.222" });
     const stateKey = `reaction-fallback-state-${Date.now()}`;
@@ -259,15 +259,12 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
       replyToMessageId: "111.222",
     });
 
-    expect(result).toBe(true);
+    expect(result).toBe(false);
     expect(adapter.react).toHaveBeenCalledOnce();
-    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
-      replyToMessageId: "111.222",
-      message: expect.stringMatching(/\S/u),
-    }));
+    expect(adapter.send).not.toHaveBeenCalled();
   });
 
-  it("uses template registry for text ACK0 instead of legacy ackStageText", async () => {
+  it("suppresses text ACK0 instead of using legacy ackStageText", async () => {
     adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "123" });
     const stateKey = `text-template-state-${Date.now()}`;
     updateAckTrackingState(stateKey, {
@@ -285,8 +282,8 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
       replyToMessageId: "111.222",
     });
 
-    expect(result).toBe(true);
-    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/^.{1,20}$/) }));
+    expect(result).toBe(false);
+    expect(adapter.send).not.toHaveBeenCalled();
   });
 
   it("first token arrival cancels pending ACK", () => {

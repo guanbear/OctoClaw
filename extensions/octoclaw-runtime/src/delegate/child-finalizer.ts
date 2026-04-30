@@ -42,6 +42,7 @@ export interface ChildCompletionFinalizerOptions {
   parentSessionKey: string;
   deliverySessionKey?: string;
   replyToMessageId?: string;
+  deliveryTarget?: Record<string, unknown>;
   nativeTaskId?: string;
   nativeFlowId?: string;
   runId?: string;
@@ -226,7 +227,10 @@ function taskIds(options: ChildCompletionFinalizerOptions): Record<string, strin
 }
 
 function resolveFinalDeliverySessionKey(options: ChildCompletionFinalizerOptions): string {
+  const target = options.deliveryTarget && typeof options.deliveryTarget === "object" ? options.deliveryTarget : {};
+  const targetSessionKey = asStr(target.sessionKey || target.session_key);
   return options.deliverySessionKey
+    || targetSessionKey
     || resolveAckDeliverySessionKey(
       { session_key: options.parentSessionKey },
       options.parentSessionKey,
@@ -234,6 +238,12 @@ function resolveFinalDeliverySessionKey(options: ChildCompletionFinalizerOptions
       { sessionKey: options.parentSessionKey, sessionId: options.parentSessionKey },
     )
     || options.parentSessionKey;
+}
+
+function resolveFinalReplyToMessageId(options: ChildCompletionFinalizerOptions): string {
+  const target = options.deliveryTarget && typeof options.deliveryTarget === "object" ? options.deliveryTarget : {};
+  return options.replyToMessageId
+    || asStr(target.replyToMessageId || target.reply_to_message_id || target.threadTs || target.thread_ts);
 }
 
 function updateTaskStateRecord(options: ChildCompletionFinalizerOptions, patch: TaskStateRecord): void {
@@ -258,6 +268,10 @@ function updateTaskStateRecord(options: ChildCompletionFinalizerOptions, patch: 
       session_key: options.parentSessionKey,
       deliverySessionKey,
       delivery_session_key: deliverySessionKey,
+      deliveryTarget: options.deliveryTarget,
+      delivery_target: options.deliveryTarget,
+      replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
+      reply_to_message_id: resolveFinalReplyToMessageId(options) || undefined,
       route: "delegate",
       model: options.modelId,
       modelProfile: options.modelId,
@@ -382,7 +396,7 @@ function queueOutboxDelivery(options: ChildCompletionFinalizerOptions, message: 
       workContractId: options.workContractId,
       kind: "final_result",
       parentSessionKey: deliverySessionKey,
-      replyToMessageId: options.replyToMessageId,
+      replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
       message,
       cwd: options.cwd,
     });
@@ -398,7 +412,7 @@ async function sendCompletionMessage(
     const result = await options.sendFinalMessage({
       sessionKey: deliverySessionKey,
       message,
-      replyToMessageId: options.replyToMessageId,
+      replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
       cwd: options.cwd,
     });
     return { sent: result.sent || result.delivered, error: result.error || "" };
@@ -406,7 +420,7 @@ async function sendCompletionMessage(
   const result = await sendIMMessage({
     sessionKey: deliverySessionKey,
     message,
-    replyToMessageId: options.replyToMessageId,
+    replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
     timeoutMs: 8000,
     cwd: options.cwd || resolveWorkspaceRoot(),
   });
@@ -522,7 +536,7 @@ async function notifyFinalizerTransition(
       workContractId: options.workContractId,
       sessionKey: deliverySessionKey,
       stateKey: options.parentSessionKey,
-      replyToMessageId: options.replyToMessageId,
+      replyToMessageId: resolveFinalReplyToMessageId(options) || undefined,
       cwd: options.cwd,
       occurredAt: input.occurredAt,
       logger: options.logger,
@@ -723,6 +737,8 @@ export function recoverPendingChildCompletionFinalizers(options?: {
     const childSessionKey = asStr(record.childSessionKey || record.child_session_key);
     const parentSessionKey = asStr(record.sessionKey || record.session_key);
     const deliverySessionKey = asStr(record.deliverySessionKey || record.delivery_session_key);
+    const deliveryTarget = (record.deliveryTarget && typeof record.deliveryTarget === "object" ? record.deliveryTarget : record.delivery_target) as Record<string, unknown> | undefined;
+    const replyToMessageId = asStr(record.replyToMessageId || record.reply_to_message_id);
     if (!childSessionKey || !parentSessionKey) continue;
 
     const delegateTaskId = asStr(record.taskId || record.task_id || workContractId);
@@ -738,6 +754,8 @@ export function recoverPendingChildCompletionFinalizers(options?: {
       workContractId,
       parentSessionKey,
       deliverySessionKey: deliverySessionKey || undefined,
+      replyToMessageId: replyToMessageId || undefined,
+      deliveryTarget,
       nativeTaskId,
       nativeFlowId,
       runId: runId || childRunId || undefined,

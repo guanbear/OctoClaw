@@ -21,6 +21,12 @@ export interface AckDeliveryReceipt {
   target: string;
   threadId: string;
   error?: string;
+  ackOwner?: string;
+  ackKind?: string;
+  deliveryState?: string;
+  targetResolutionState?: string;
+  reason?: string;
+  messageTurnId?: string;
 }
 
 interface AckLeaseEntry {

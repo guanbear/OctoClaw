@@ -197,6 +197,36 @@ function ackDeliveryState(result: AckSendResult): string {
   return asString(result.ack_delivery_state) || (result.delivered || result.sent ? "sent" : "failed");
 }
 
+function recordAckOutcome(params: {
+  ackKey: string;
+  sent: boolean;
+  target?: string;
+  threadId?: string;
+  error?: string;
+  ackOwner?: AckOwner | string;
+  ackKind?: string;
+  deliveryState: string;
+  targetResolutionState: string;
+  reason: string;
+  messageTurnId?: string;
+}): void {
+  if (!asString(params.ackKey)) return;
+  recordDelivery(params.ackKey, {
+    ackKey: params.ackKey,
+    sent: params.sent,
+    deliveredAt: Date.now(),
+    target: asString(params.target),
+    threadId: asString(params.threadId),
+    error: params.error || undefined,
+    ackOwner: asString(params.ackOwner) || undefined,
+    ackKind: params.ackKind || undefined,
+    deliveryState: params.deliveryState,
+    targetResolutionState: params.targetResolutionState,
+    reason: params.reason,
+    messageTurnId: asString(params.messageTurnId) || undefined,
+  });
+}
+
 function updateTrackingState(stateKey: string, patch: UnknownRecord): void {
   const key = asString(stateKey);
   if (!key) {
@@ -761,31 +791,77 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   const packet = buildDecisionPacket(normalizedStateKey, effectiveState, routePhase);
   // Suppress reply ACK0 if route-commit ACK already sent for this turn.
   if (asBoolean(effectiveState.routeCommitAckSent || effectiveState.route_commit_ack_sent) && routePhase === "reply") {
+    const reason = "suppressed_by_route_commit_ack";
     ackDebug(`attemptAckSend: route-commit ACK satisfied ACK0 for reply route stateKey=${normalizedStateKey}`);
+    recordAckOutcome({
+      ackKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: params.ackOwner,
+      ackKind: params.markLatencySent ? "latency_ack" : "ack",
+      deliveryState: "skipped",
+      targetResolutionState: reason,
+      reason,
+      messageTurnId,
+    });
     updateTrackingState(normalizedStateKey, {
-      ack_target_resolution_state: "suppressed_by_route_commit_ack",
+      ackKey,
+      ack_target_resolution_state: reason,
       ack_delivery_state: "skipped",
+      ackSuppressedReason: reason,
+      ack_suppressed_reason: reason,
     });
     return null;
   }
   const decision = params.decision ?? decideAckAction(packet);
   if (decision.action === "suppress" || decision.action === "no_action") {
+    const reason = `${decision.action}_${decision.reason}`;
     ackDebug(`attemptAckSend: skipped action=${decision.action} reason=${decision.reason} threadKey=${threadKey} stage=${params.ackStage}`);
+    recordAckOutcome({
+      ackKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: params.ackOwner,
+      ackKind: params.markLatencySent ? "latency_ack" : "ack",
+      deliveryState: "skipped",
+      targetResolutionState: reason,
+      reason: decision.reason,
+      messageTurnId,
+    });
     updateTrackingState(normalizedStateKey, {
       ackKey,
-      ack_target_resolution_state: `${decision.action}_${decision.reason}`,
+      ack_target_resolution_state: reason,
       ack_delivery_state: "skipped",
+      ackSuppressedReason: decision.reason,
+      ack_suppressed_reason: decision.reason,
     });
     return null;
   }
   if (decision.action === "cancel_ack_writer") {
+    const reason = `cancelled_${decision.reason}`;
+    recordAckOutcome({
+      ackKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: params.ackOwner,
+      ackKind: params.markLatencySent ? "latency_ack" : "ack",
+      deliveryState: "skipped",
+      targetResolutionState: reason,
+      reason: decision.reason,
+      messageTurnId,
+    });
     cancelAckGuardForState(normalizedStateKey);
     updateTrackingState(normalizedStateKey, {
       ackKey,
       ackWriterQueued: false,
       ack_writer_queued: false,
-      ack_target_resolution_state: `cancelled_${decision.reason}`,
+      ack_target_resolution_state: reason,
       ack_delivery_state: "skipped",
+      ackSuppressedReason: decision.reason,
+      ack_suppressed_reason: decision.reason,
     });
     return null;
   }
@@ -793,12 +869,26 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   const idempotency = checkAndSet(ackKey, params.ownerTag);
   if (!idempotency.allowed) {
     ackDebug(`attemptAckSend: duplicate ackKey=${ackKey} existing=${idempotency.existingOwner}`);
+    recordAckOutcome({
+      ackKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: params.ackOwner,
+      ackKind: params.markLatencySent ? "latency_ack" : "ack",
+      deliveryState: "skipped",
+      targetResolutionState: "skipped_duplicate",
+      reason: "duplicate",
+      messageTurnId,
+    });
     updateTrackingState(normalizedStateKey, {
       ackOwner: params.ackOwner,
       ack_owner: params.ackOwner,
       ackKey,
       ack_target_resolution_state: "skipped_duplicate",
       ack_delivery_state: "skipped",
+      ackSuppressedReason: "duplicate",
+      ack_suppressed_reason: "duplicate",
     });
     return null;
   }
@@ -806,22 +896,52 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   const ownerClaim = params.skipOwnerClaim ? { claimed: true, currentOwner: params.ackOwner } : tryClaimAckOwner(normalizedStateKey, params.ackOwner);
   if (!ownerClaim.claimed) {
     ackDebug(`attemptAckSend: owner_conflict owner=${ownerClaim.currentOwner} ackOwner=${params.ackOwner}`);
+    recordAckOutcome({
+      ackKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: params.ackOwner,
+      ackKind: params.markLatencySent ? "latency_ack" : "ack",
+      deliveryState: "skipped",
+      targetResolutionState: "skipped_owner_conflict",
+      reason: "owner_conflict",
+      messageTurnId,
+    });
     updateTrackingState(normalizedStateKey, {
+      ackKey,
       ack_owner: ownerClaim.currentOwner,
       ack_target_resolution_state: "skipped_owner_conflict",
       ack_delivery_state: "skipped",
+      ackSuppressedReason: "owner_conflict",
+      ack_suppressed_reason: "owner_conflict",
     });
     return params.ackOwner === "latency_ack" ? { sent: false, reason: "owner_conflict" } : null;
   }
 
   const lease = tryClaimLease(ackLeaseKey(normalizedStateKey), "ack_controller", ACK_CONTROLLER_LEASE_MS);
   if (!lease.claimed || lease.owner !== "ack_controller") {
+    const reason = `skipped_lease_${lease.owner || "unknown"}`;
+    recordAckOutcome({
+      ackKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: params.ackOwner,
+      ackKind: params.markLatencySent ? "latency_ack" : "ack",
+      deliveryState: "skipped",
+      targetResolutionState: reason,
+      reason: "lease_conflict",
+      messageTurnId,
+    });
     updateTrackingState(normalizedStateKey, {
       ackOwner: params.ackOwner,
       ack_owner: params.ackOwner,
       ackKey,
-      ack_target_resolution_state: `skipped_lease_${lease.owner || "unknown"}`,
+      ack_target_resolution_state: reason,
       ack_delivery_state: "skipped",
+      ackSuppressedReason: "lease_conflict",
+      ack_suppressed_reason: "lease_conflict",
     });
     return params.ackOwner === "latency_ack" ? { sent: false, reason: "lease_conflict" } : null;
   }
@@ -832,12 +952,26 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
 
   if (!normalizedSessionKey) {
     ackDebug(`attemptAckSend: missing_session_key stateKey=${normalizedStateKey}`);
+    recordAckOutcome({
+      ackKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: params.ackOwner,
+      ackKind: params.markLatencySent ? "latency_ack" : "ack",
+      deliveryState: "not_attempted",
+      targetResolutionState: "missing_session_key",
+      reason: "missing_session_key",
+      messageTurnId,
+    });
     updateTrackingState(normalizedStateKey, {
       ackOwner: params.ackOwner,
       ack_owner: params.ackOwner,
       ackKey,
       ack_target_resolution_state: "missing_session_key",
       ack_delivery_state: "not_attempted",
+      ackSuppressedReason: "missing_session_key",
+      ack_suppressed_reason: "missing_session_key",
     });
     return params.ackOwner === "latency_ack" ? { sent: false, reason: "missing_session_key" } : null;
   }
@@ -872,37 +1006,30 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   let reactionTextFallbackSent = false;
   let deliveredMessage = message;
   if (isReactionAck && !reactionAckDelivered) {
-    const reactionError = result.error;
-    const fallbackMessage = message || buildTemplateRegistryMessage(
-      ackTemplateStageFromDecision({ ...decision, modality: "text" }, "ack0"),
-      packet,
-      normalizedStateKey,
-      effectiveState,
-      normalizedSessionKey,
-    );
-    deliveredMessage = fallbackMessage;
-    const fallback = await sendAckMessage(
-      normalizedSessionKey,
-      fallbackMessage,
-      asString(effectiveCtx.cwd) || process.cwd(),
-      { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
-    );
-    reactionTextFallbackSent = Boolean(fallback.delivered || fallback.sent);
     result = {
-      ...fallback,
-      error: fallback.error || reactionError,
-      reason: reactionTextFallbackSent ? "reaction_ack_failed_text_fallback" : "reaction_ack_failed_text_fallback_failed",
+      ...result,
+      sent: false,
+      delivered: false,
+      error: result.error || "reaction_ack_failed",
+      reason: "reaction_ack_failed_no_text_fallback",
+      ack_delivery_state: "failed",
+      ack_target_resolution_state: result.attempted ? "resolved_send_failed" : "target_resolution_failed",
     };
   }
   const finalSent = Boolean(result.delivered || result.sent);
 
-  recordDelivery(ackKey, {
+  recordAckOutcome({
     ackKey,
     sent: finalSent,
-    deliveredAt: Date.now(),
     target: result.target,
     threadId: result.threadId || ackTarget.threadId || threadKey,
     error: result.error || undefined,
+    ackOwner: params.ackOwner,
+    ackKind: params.markLatencySent ? "latency_ack" : "ack",
+    deliveryState: ackDeliveryState(result),
+    targetResolutionState: ackTargetResolutionState(result),
+    reason: result.reason,
+    messageTurnId,
   });
 
   updateTrackingState(normalizedStateKey, {
@@ -916,8 +1043,8 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     ...(params.markLatencySent
       ? {
           latencyAckSent: finalSent,
-          latencyAckText: deliveredMessage,
-          latencyAckMode: reactionAckDelivered ? "reaction" : params.markMode || "channel_message",
+          latencyAckText: finalSent ? deliveredMessage : "",
+          latencyAckMode: reactionAckDelivered ? "reaction" : finalSent ? params.markMode || "channel_message" : "not_sent",
           ...(isReactionAck ? { reactionAckAttempted: true, reaction_ack_attempted: true } : {}),
         }
       : {}),
@@ -1188,29 +1315,82 @@ export async function maybeSendLatencyAck(
   const sessionKey = resolveAckDeliverySessionKey(metadata, stateKey, state, ctx);
   const messageTurnId = resolveAckMessageTurnId(sessionKey, stateKey, preDecisionState, ctx, metadata);
   prepareAckTrackingForMessageTurn(stateKey, messageTurnId);
+  const ackTarget = resolveAckTargetFromSessionKey(sessionKey);
+  const threadKey = threadKeyFromSessionKey(sessionKey, stateKey);
+  const preDecisionRecord = preDecisionState as UnknownRecord;
+  const latencyAckKey = buildAckKey({
+    threadId: ackTarget.threadId || threadKey,
+    anchorId: asString(preDecisionRecord.anchorId || preDecisionRecord.anchor_id),
+    ackStage: latencyAckStage(decision),
+    routePhase,
+    messageTurnId,
+  });
   const decisionPacket = buildDecisionPacket(stateKey, { ...preDecisionState, ...ackState(stateKey) }, routePhase);
   const ackDecision = decideAckAction(decisionPacket);
   if (ackDecision.action === "cancel_ack_writer") {
+    recordAckOutcome({
+      ackKey: latencyAckKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: "latency_ack",
+      ackKind: "latency_ack",
+      deliveryState: "skipped",
+      targetResolutionState: `cancelled_${ackDecision.reason}`,
+      reason: ackDecision.reason,
+      messageTurnId,
+    });
     cancelAckGuardForState(stateKey);
-    updateTrackingState(stateKey, { ackWriterQueued: false, ack_writer_queued: false });
+    updateTrackingState(stateKey, { ackKey: latencyAckKey, ackWriterQueued: false, ack_writer_queued: false, ackSuppressedReason: ackDecision.reason, ack_suppressed_reason: ackDecision.reason });
     return null;
   }
   if (!ackDecision.action.startsWith("send_")) {
+    const reason = `${ackDecision.action}_${ackDecision.reason}`;
     if (!decisionPacket.hasValidThreadTarget) {
       ackDebug(`maybeSendLatencyAck: suppressed due to no valid thread target stateKey=${stateKey} sessionKey=${sessionKey || "unresolved"}`);
     }
+    recordAckOutcome({
+      ackKey: latencyAckKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: "latency_ack",
+      ackKind: "latency_ack",
+      deliveryState: "skipped",
+      targetResolutionState: reason,
+      reason: ackDecision.reason,
+      messageTurnId,
+    });
     updateTrackingState(stateKey, {
-      ack_target_resolution_state: `${ackDecision.action}_${ackDecision.reason}`,
+      ackKey: latencyAckKey,
+      ack_target_resolution_state: reason,
       ack_delivery_state: "skipped",
+      ackSuppressedReason: ackDecision.reason,
+      ack_suppressed_reason: ackDecision.reason,
     });
     return null;
   }
   if (!sessionKey) {
+    recordAckOutcome({
+      ackKey: latencyAckKey,
+      sent: false,
+      target: ackTarget.target,
+      threadId: ackTarget.threadId || threadKey,
+      ackOwner: "latency_ack",
+      ackKind: "latency_ack",
+      deliveryState: "not_attempted",
+      targetResolutionState: "missing_session_key",
+      reason: "missing_session_key",
+      messageTurnId,
+    });
     updateTrackingState(stateKey, {
       ackOwner: "latency_ack",
       ack_owner: "latency_ack",
+      ackKey: latencyAckKey,
       ack_target_resolution_state: "missing_session_key",
       ack_delivery_state: "not_attempted",
+      ackSuppressedReason: "missing_session_key",
+      ack_suppressed_reason: "missing_session_key",
     });
     return { sent: false, reason: "missing_session_key" };
   }

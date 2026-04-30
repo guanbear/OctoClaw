@@ -6,6 +6,7 @@ import {
   enqueueWorkflowDelivery,
   markWorkflowCheckpointEmitted,
   markWorkflowCompleted,
+  markReplyDecisionMaterialized,
   markWorkflowFailed,
   renewWorkflowHeartbeat,
   startRuntimeWorkflow,
@@ -262,7 +263,7 @@ export function buildTsRuntimeDispatchPayload(
       },
     );
     workflow = advanceWorkflowToRunning(workflow, workflow.claim?.claimOwner || "octoclaw-runtime");
-    workflow = markWorkflowCompleted(workflow);
+    workflow = markReplyDecisionMaterialized(workflow);
     const directReply = buildDirectReply(
       directContext,
       `Direct route selected; keep execution in the main session for: ${helpers.truncateText(input.task, 80)}`,
@@ -275,8 +276,8 @@ export function buildTsRuntimeDispatchPayload(
     return {
       ...basePayload,
       executed: true,
-      status: "executed",
-      summary: `OctoClaw dispatch: reply (${workflow.execution.role})`,
+      status: "materialized",
+      summary: `OctoClaw reply decision materialized (${workflow.execution.role})`,
       handoff: directReply.handoff,
       materialization: {
         authority: "ts-runtime-core",
@@ -296,8 +297,11 @@ export function buildTsRuntimeDispatchPayload(
       orchestration: {
         ...basePayload.orchestration,
         lifecycle: workflow.lifecycle,
+        replyLifecycle: workflow.replyLifecycle,
+        reply_lifecycle: workflow.reply_lifecycle,
         taskMaterialization: workflow.taskMaterialization,
       },
+      telemetry: emitWorkflowTelemetry(normalizedRequest, workflow),
     };
   }
 

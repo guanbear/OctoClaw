@@ -46,6 +46,8 @@ export interface PolicyStateEntry {
   message_turn_id?: string;
   replyToMessageId?: string;
   reply_to_id?: string;
+  deliveryTarget?: Record<string, unknown>;
+  delivery_target?: Record<string, unknown>;
   session_binding_key?: string;
   pending_slots?: string[];
   formal_reply_visible?: boolean;

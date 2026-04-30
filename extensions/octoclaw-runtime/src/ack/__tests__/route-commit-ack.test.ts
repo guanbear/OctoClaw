@@ -332,8 +332,8 @@ describe("route commit ACK", () => {
 
     expect(result.skipped).toBe(true);
     expect(result.sent).toBe(false);
-    expect(result.reason).toBe("reply_already_visible");
-    expect(result.ack_target_resolution_state).toBe("suppressed_reply_visible");
+    expect(result.reason).toBe("reply_route_runtime_text_ack_disabled");
+    expect(result.ack_target_resolution_state).toBe("suppressed_reply_route_ack_disabled");
   });
 
   it("skips reply route when formal reply visible", async () => {
@@ -346,7 +346,7 @@ describe("route commit ACK", () => {
     });
 
     expect(result.skipped).toBe(true);
-    expect(result.reason).toBe("reply_already_visible");
+    expect(result.reason).toBe("reply_route_runtime_text_ack_disabled");
   });
 
   it("skips generic reply route ACK when reaction ACK is configured", async () => {
@@ -373,8 +373,8 @@ describe("route commit ACK", () => {
     expect(result).toMatchObject({
       sent: false,
       skipped: true,
-      reason: "reaction_ack_configured",
-      ack_target_resolution_state: "suppressed_reaction_ack_configured",
+      reason: "reply_route_runtime_text_ack_disabled",
+      ack_target_resolution_state: "suppressed_reply_route_ack_disabled",
       ack_delivery_state: "skipped",
     });
     expect(runCommandSpy).not.toHaveBeenCalled();
@@ -382,7 +382,7 @@ describe("route commit ACK", () => {
       "route_commit_ack",
       expect.objectContaining({
         route: "reply",
-        reason: "reaction_ack_configured",
+        reason: "reply_route_runtime_text_ack_disabled",
         ackSent: false,
       }),
       undefined,
@@ -555,8 +555,8 @@ describe("route commit ACK", () => {
     expect(result).toMatchObject({
       sent: false,
       skipped: true,
-      reason: "status_surface_reply_no_route_ack",
-      ack_target_resolution_state: "suppressed_status_surface",
+      reason: "reply_route_runtime_text_ack_disabled",
+      ack_target_resolution_state: "suppressed_reply_route_ack_disabled",
       ack_delivery_state: "skipped",
     });
     expect(runCommandSpy).not.toHaveBeenCalled();
@@ -564,7 +564,7 @@ describe("route commit ACK", () => {
       "route_commit_ack",
       expect.objectContaining({
         route: "reply",
-        reason: "status_surface_reply_no_route_ack",
+        reason: "reply_route_runtime_text_ack_disabled",
         ackSent: false,
       }),
       undefined,
