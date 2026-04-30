@@ -4,7 +4,7 @@ import path from "node:path";
 const fs = fsSync as unknown as { mkdtempSync(prefix: string): string; mkdirSync(pathname: string, options?: { recursive?: boolean }): void; readFileSync(pathname: string, encoding: string): string; writeFileSync(pathname: string, data: string, encoding: string): void };
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { envOverrides } from "../resolve/env.js";
-import { finalizeChildSessionOnce, scheduleChildCompletionFinalizer } from "./child-finalizer.js";
+import { finalizeChildSessionOnce, scheduleChildCompletionFinalizer, recoverPendingChildCompletionFinalizers, resetChildCompletionFinalizers } from "./child-finalizer.js";
 
 function writeCompletionFile(workspaceRoot: string, workContractId: string, completion: Record<string, unknown>): string {
   const completionDir = path.join(workspaceRoot, ".octoclaw", "completions");
@@ -248,5 +248,270 @@ describe("child completion finalizer — completion file protocol", () => {
     expect(result.status).toBe("completed");
     expect(sent[0]).toContain("❌");
     expect(sent[0]).toContain("TypeScript compilation failed");
+  });
+});
+
+function writeTaskState(tmpDir: string, tasks: Record<string, unknown>[]): string {
+  const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+  fs.mkdirSync(path.dirname(taskStatePath), { recursive: true });
+  fs.writeFileSync(taskStatePath, JSON.stringify({ schemaVersion: "octoclaw.task_state.v1", tasks }, null, 2), "utf-8");
+  return taskStatePath;
+}
+
+describe("child completion finalizer — durable recovery", () => {
+  let tmpDir = "";
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetChildCompletionFinalizers();
+    if (tmpDir) {
+      envOverrides.workspaceRoot = "";
+    }
+  });
+
+  it("recovery schedules a pending durable record and delivers when completion file appears", async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-recovery-"));
+    envOverrides.workspaceRoot = tmpDir;
+
+    const taskStatePath = writeTaskState(tmpDir, [{
+      id: "wc-recover-1",
+      workContractId: "wc-recover-1",
+      work_contract_id: "wc-recover-1",
+      taskId: "delegate-recover-1",
+      task_id: "delegate-recover-1",
+      nativeTaskId: "native-recover-1",
+      native_task_id: "native-recover-1",
+      route: "delegate",
+      sessionKey: "slack:channel:C999",
+      session_key: "slack:channel:C999",
+      childSessionKey: "child-recover-1",
+      child_session_key: "child-recover-1",
+      dispatchExecuted: true,
+      dispatch_executed: true,
+      spawnExecuted: true,
+      spawn_executed: true,
+      resultMaterialized: false,
+      result_materialized: false,
+      status: "running",
+      modelProfile: "test-recovery-model",
+      model_profile: "test-recovery-model",
+    }]);
+
+    const recovery = recoverPendingChildCompletionFinalizers({
+      taskStatePath,
+      cwd: tmpDir,
+      sendFinalMessage: async () => ({ sent: true, delivered: true }),
+    });
+
+    expect(recovery.scanned).toBe(1);
+    expect(recovery.scheduled).toBe(1);
+    expect(recovery.skipped).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    writeCompletionFile(tmpDir, "wc-recover-1", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-recover-1",
+      childSessionKey: "child-recover-1",
+      delegateTaskId: "delegate-recover-1",
+      status: "success",
+      summary: "Recovered task completed successfully",
+      completedAt: new Date().toISOString(),
+    });
+
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    const updatedState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(updatedState.tasks[0]).toMatchObject({
+      id: "wc-recover-1",
+      resultMaterialized: true,
+      result_materialized: true,
+    });
+  });
+
+  it("recovery skips already materialized or missing identity records", () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-recovery-"));
+    envOverrides.workspaceRoot = tmpDir;
+
+    const taskStatePath = writeTaskState(tmpDir, [
+      {
+        id: "wc-mat",
+        workContractId: "wc-mat",
+        route: "delegate",
+        sessionKey: "slack:channel:C1",
+        childSessionKey: "child-mat",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: true,
+        status: "completed",
+      },
+      {
+        id: "wc-no-child",
+        workContractId: "wc-no-child",
+        route: "delegate",
+        sessionKey: "slack:channel:C2",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "running",
+      },
+      {
+        id: "wc-no-parent",
+        workContractId: "wc-no-parent",
+        route: "delegate",
+        childSessionKey: "child-no-parent",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "running",
+      },
+      {
+        id: "wc-no-dispatch",
+        workContractId: "wc-no-dispatch",
+        route: "delegate",
+        sessionKey: "slack:channel:C4",
+        childSessionKey: "child-no-dispatch",
+        dispatchExecuted: false,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "running",
+      },
+    ]);
+
+    const recovery = recoverPendingChildCompletionFinalizers({ taskStatePath, cwd: tmpDir });
+
+    expect(recovery.scanned).toBe(4);
+    expect(recovery.scheduled).toBe(0);
+    expect(recovery.skipped).toBe(0);
+  });
+
+  it("duplicate recovery does not create duplicate scheduling", () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-recovery-"));
+    envOverrides.workspaceRoot = tmpDir;
+
+    const taskStatePath = writeTaskState(tmpDir, [{
+      id: "wc-dup",
+      workContractId: "wc-dup",
+      route: "delegate",
+      sessionKey: "slack:channel:CDUP",
+      childSessionKey: "child-dup",
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: false,
+      status: "running",
+    }]);
+
+    const first = recoverPendingChildCompletionFinalizers({ taskStatePath, cwd: tmpDir });
+    expect(first.scheduled).toBe(1);
+
+    const second = recoverPendingChildCompletionFinalizers({ taskStatePath, cwd: tmpDir });
+    expect(second.scheduled).toBe(0);
+    expect(second.skipped).toBe(1);
+  });
+
+  it("recovery skips terminal records even when resultMaterialized=false", () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-recovery-"));
+    envOverrides.workspaceRoot = tmpDir;
+
+    const taskStatePath = writeTaskState(tmpDir, [
+      {
+        id: "wc-term-failed",
+        workContractId: "wc-term-failed",
+        route: "delegate",
+        sessionKey: "slack:channel:CF",
+        childSessionKey: "child-failed",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "failed",
+      },
+      {
+        id: "wc-term-cancelled",
+        workContractId: "wc-term-cancelled",
+        route: "delegate",
+        sessionKey: "slack:channel:CC",
+        childSessionKey: "child-cancelled",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "cancelled",
+      },
+      {
+        id: "wc-term-completed",
+        workContractId: "wc-term-completed",
+        route: "delegate",
+        sessionKey: "slack:channel:CD",
+        childSessionKey: "child-completed",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "completed",
+      },
+      {
+        id: "wc-term-blocked",
+        workContractId: "wc-term-blocked",
+        route: "delegate",
+        sessionKey: "slack:channel:CB",
+        childSessionKey: "child-blocked",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "blocked",
+      },
+      {
+        id: "wc-term-canceled-alt",
+        workContractId: "wc-term-canceled-alt",
+        route: "delegate",
+        sessionKey: "slack:channel:CZ",
+        childSessionKey: "child-canceled",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "canceled",
+      },
+      {
+        id: "wc-term-work-contract-status",
+        workContractId: "wc-term-wcs",
+        route: "delegate",
+        sessionKey: "slack:channel:CWS",
+        childSessionKey: "child-wcs",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "running",
+        workContractStatus: "failed",
+      },
+      {
+        id: "wc-term-embedded-status",
+        workContractId: "wc-term-embedded",
+        route: "delegate",
+        sessionKey: "slack:channel:CE",
+        childSessionKey: "child-embedded",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "running",
+        workContract: { status: "cancelled" },
+      },
+      {
+        id: "wc-nonterm-running",
+        workContractId: "wc-nonterm-running",
+        route: "delegate",
+        sessionKey: "slack:channel:CR",
+        childSessionKey: "child-running",
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        status: "running",
+      },
+    ]);
+
+    const recovery = recoverPendingChildCompletionFinalizers({ taskStatePath, cwd: tmpDir });
+
+    expect(recovery.scanned).toBe(8);
+    expect(recovery.scheduled).toBe(1);
+    expect(recovery.skipped).toBe(0);
   });
 });

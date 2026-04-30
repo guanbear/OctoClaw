@@ -5,6 +5,7 @@ import { appendToDeliveryOutbox } from "../delivery/delivery-outbox.js";
 import { sendIMMessage } from "../im/send.js";
 import { resolveWorkerCompletionPath, resolveWorkspaceRoot, resolveReplayLogPath } from "../resolve/env.js";
 import {
+  readTaskStateRecords,
   upsertTaskStateRecord,
   type TaskStateRecord,
 } from "../state/task-state-store.js";
@@ -293,4 +294,115 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
 export function resetChildCompletionFinalizers(): void {
   for (const timer of activeFinalizers.values()) clearTimeout(timer);
   activeFinalizers.clear();
+}
+
+export interface RecoveryResult {
+  scanned: number;
+  scheduled: number;
+  skipped: number;
+}
+
+function asStr(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function asBool(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+/**
+ * Recover pending child completion finalizers from durable task-state.json.
+ *
+ * Scans records for delegate routes where dispatchExecuted=true, spawnExecuted=true,
+ * but resultMaterialized is NOT true. For each eligible record, schedules a finalizer
+ * using identities recovered from durable fields.
+ *
+ * Idempotent: if a finalizer is already active for the same key, the record is skipped.
+ */
+export function recoverPendingChildCompletionFinalizers(options?: {
+  taskStatePath?: string;
+  cwd?: string;
+  sendFinalMessage?: ChildCompletionFinalizerOptions["sendFinalMessage"];
+  logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
+}): RecoveryResult {
+  const result: RecoveryResult = { scanned: 0, scheduled: 0, skipped: 0 };
+  let records: TaskStateRecord[];
+  try {
+    records = readTaskStateRecords(options?.taskStatePath);
+  } catch (error) {
+    options?.logger?.warn?.(`octoclaw child finalizer recovery failed to read task-state: ${String(error)}`);
+    return result;
+  }
+
+  for (const record of records) {
+    result.scanned++;
+
+    const route = asStr(record.route);
+    const workContractRoute = asStr(
+      (record.workContract && typeof record.workContract === "object" ? (record.workContract as unknown as Record<string, unknown>).route : undefined)
+      || (record.work_contract && typeof record.work_contract === "object" ? (record.work_contract as unknown as Record<string, unknown>).route : undefined),
+    );
+    if (route !== "delegate" && workContractRoute !== "delegate") {
+      continue;
+    }
+
+    const workContractId = asStr(record.workContractId || record.work_contract_id || record.id);
+    if (!workContractId) continue;
+
+    if (!asBool(record.dispatchExecuted) && !asBool(record.dispatch_executed)) continue;
+    if (!asBool(record.spawnExecuted) && !asBool(record.spawn_executed)) continue;
+    if (asBool(record.resultMaterialized) || asBool(record.result_materialized)) continue;
+
+    const childSessionKey = asStr(record.childSessionKey || record.child_session_key);
+    const parentSessionKey = asStr(record.sessionKey || record.session_key);
+    if (!childSessionKey || !parentSessionKey) continue;
+
+    // Skip terminal records regardless of resultMaterialized value.
+    // A failed/cancelled/completed/block durable record should not keep polling forever.
+    const terminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "blocked"]);
+    const isTerminal = (value: unknown): boolean => terminalStatuses.has(asStr(value));
+    if (
+      isTerminal(record.status)
+      || isTerminal(record.workContractStatus)
+      || isTerminal(record.work_contract_status)
+      || (record.workContract && typeof record.workContract === "object" && isTerminal((record.workContract as unknown as Record<string, unknown>).status))
+      || (record.work_contract && typeof record.work_contract === "object" && isTerminal((record.work_contract as unknown as Record<string, unknown>).status))
+    ) {
+      continue;
+    }
+
+    const delegateTaskId = asStr(record.taskId || record.task_id || workContractId);
+    const nativeTaskId = asStr(record.nativeTaskId || record.native_task_id || delegateTaskId);
+    const nativeFlowId = asStr(record.nativeFlowId || record.native_flow_id || record.flowId || record.flow_id);
+    const runId = asStr(record.runId || record.run_id);
+    const childRunId = asStr(record.childRunId || record.child_run_id);
+    const modelId = asStr(record.modelProfile || record.model_profile || record.model);
+
+    const scheduled = scheduleChildCompletionFinalizer({
+      childSessionKey,
+      delegateTaskId,
+      workContractId,
+      parentSessionKey,
+      nativeTaskId,
+      nativeFlowId,
+      runId: runId || childRunId || undefined,
+      childRunId,
+      modelId: modelId || undefined,
+      taskStatePath: options?.taskStatePath,
+      cwd: options?.cwd,
+      timeoutMs: 240_000,
+      pollIntervalMs: 5_000,
+      initialDelayMs: 3_000,
+      sendFinalMessage: options?.sendFinalMessage,
+      logger: options?.logger,
+    });
+
+    if (scheduled) {
+      result.scheduled++;
+    } else {
+      result.skipped++;
+    }
+  }
+
+  return result;
 }

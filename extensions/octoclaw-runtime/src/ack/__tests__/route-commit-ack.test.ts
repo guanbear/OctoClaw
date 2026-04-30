@@ -423,7 +423,7 @@ describe("route commit ACK", () => {
     runCommandSpy.mockRestore();
   });
 
-  it("falls back to text delegate route commit ACK when reaction fails", async () => {
+  it("does not fall back to text when reaction ACK configured and reaction fails", async () => {
     const envModule = await import("../../resolve/env.js");
     const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
       code: 0,
@@ -442,10 +442,10 @@ describe("route commit ACK", () => {
       replyToMessageId: "1700000000.000100",
     });
 
-    expect(result.sent).toBe(true);
-    expect(result.reason).toBe("channel_message_sent");
+    expect(result.sent).toBe(false);
+    expect(result.reason).toBe("reaction_ack_failed");
     expect(imAdapter.react).toHaveBeenCalledOnce();
-    expect(imAdapter.send).toHaveBeenCalledOnce();
+    expect(imAdapter.send).not.toHaveBeenCalled();
     expect(runCommandSpy).not.toHaveBeenCalled();
 
     runCommandSpy.mockRestore();

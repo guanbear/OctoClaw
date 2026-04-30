@@ -70,11 +70,13 @@ export async function sendWithDegradation(
   adapter: IMAdapter,
   params: IMSendParams,
 ): Promise<IMSendResult & { degraded?: boolean }> {
-  // Primary attempt (full capability)
   const result = await adapter.send(params);
   if (result.sent) return result;
 
-  // If threading was requested and failed, retry without it (L1 → L0)
+  if (params.replyToMessageId && adapter.channel === "slack") {
+    return result;
+  }
+
   if (params.replyToMessageId) {
     const degraded = await adapter.send({ ...params, replyToMessageId: undefined });
     if (degraded.sent) {

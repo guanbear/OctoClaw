@@ -26,6 +26,7 @@ import {
 } from "./ack/ack-guard.js";
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
+import { recoverPendingChildCompletionFinalizers } from "./delegate/child-finalizer.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import { renderIMProjectionFooter } from "./im/projection-footer.js";
@@ -141,6 +142,7 @@ const OCTOCLAW_PRE_DELEGATION_CONFIRM_CONTEXT = [
 let watchdogInterval: ReturnType<typeof setInterval> | null = null;
 let taskStateRetentionInterval: ReturnType<typeof setInterval> | null = null;
 let deliveryOutboxInterval: ReturnType<typeof setInterval> | null = null;
+let childFinalizerRecoveryInterval: ReturnType<typeof setInterval> | null = null;
 
 function runDeliveryOutboxFlush(logger?: LoggerLike): void {
   void flushDeliveryOutbox({ logger }).then((result) => {
@@ -160,6 +162,21 @@ function runTaskStateRetention(logger?: LoggerLike): void {
     }
   } catch (error) {
     logger?.warn?.(`octoclaw task-state retention failed: ${String(error)}`);
+  }
+}
+
+function runChildFinalizerRecovery(logger?: LoggerLike): void {
+  try {
+    const result = recoverPendingChildCompletionFinalizers({
+      taskStatePath: resolveTaskStatePath(),
+      cwd: resolveWorkspaceRoot(),
+      logger: logger ? { debug: (msg) => logger.debug?.(msg), warn: (msg) => logger.warn?.(msg) } : undefined,
+    });
+    if (result.scheduled > 0 || result.skipped > 0) {
+      logger?.debug?.(`octoclaw child finalizer recovery scanned=${result.scanned} scheduled=${result.scheduled} skipped=${result.skipped}`);
+    }
+  } catch (error) {
+    logger?.warn?.(`octoclaw child finalizer recovery failed: ${String(error)}`);
   }
 }
 
@@ -346,18 +363,8 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
   const modelPolicy = asRecord(decision.model_policy);
   const runtimeTruth = asRecord(decision.runtime_truth);
 
-  // Try raw model ID first (from event/ctx injected by OpenClaw runtime)
-  const rawModel = firstStringValue(
-    event.model,
-    event.modelId,
-    event.model_id,
-    ctx.model,
-    ctx.modelId,
-    ctx.model_id,
-  );
-
-  // Try profile-based resolution: selected_model may be a profile name OR an actual model ID
-  const profileOrId = firstStringValue(
+  // Policy/decision model takes priority over host shim values.
+  const policyModel = firstStringValue(
     modelPolicy.selected_model,
     modelPolicy.model,
     state.modelProfile,
@@ -366,7 +373,17 @@ function resolveDisplayModel(state: UnknownRecord, event: UnknownRecord, ctx: Un
     decision.model,
   );
 
-  const candidate = rawModel || profileOrId || "direct_main";
+  // Host shim values (event/ctx) are fallback only when no policy model exists.
+  const shimModel = firstStringValue(
+    event.model,
+    event.modelId,
+    event.model_id,
+    ctx.model,
+    ctx.modelId,
+    ctx.model_id,
+  );
+
+  const candidate = policyModel || shimModel || "direct_main";
 
   // If it looks like a profile name, resolve to actual model ID
   const resolved = (() => {
@@ -1330,7 +1347,7 @@ export const plugin = {
       }
       let { key: stateKey, state } = getPolicyStateForContext(ctx);
       if (toolName === "octoclaw_dispatch") {
-        const taskPolicyContext = policyState.getToolPolicyContext(ctx, stringValue(toolParams.task));
+        const taskPolicyContext = policyState.getDispatchPolicyContext(ctx, stringValue(toolParams.task));
         const taskDecision = asRecord(taskPolicyContext.state?.decision);
         const taskRoute = stringValue(asRecord(taskDecision.route_decision).route);
         const taskToolPolicy = asRecord(taskDecision.tool_policy);
@@ -1540,7 +1557,8 @@ export const plugin = {
         : [];
       const delegateTool = stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch");
       const isPolicyControlTool = toolName.startsWith("octoclaw_") || toolName === routeHintTool || toolName === delegateTool;
-      if (!isPolicyControlTool && matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
+      const currentRouteIsDelegated = isDelegatedRoute(decision);
+      if (currentRouteIsDelegated && !isPolicyControlTool && matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
         void recordPolicyReplay(
           "tool_blocked_manual_delegation",
           {
@@ -1834,6 +1852,14 @@ export const plugin = {
     deliveryOutboxInterval = setInterval(() => {
       runDeliveryOutboxFlush(pi.logger);
     }, 30_000);
+
+    if (childFinalizerRecoveryInterval) {
+      clearInterval(childFinalizerRecoveryInterval);
+    }
+    runChildFinalizerRecovery(pi.logger);
+    childFinalizerRecoveryInterval = setInterval(() => {
+      runChildFinalizerRecovery(pi.logger);
+    }, 45_000);
 
     if (typeof pi.registerTool === "function") {
       for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent })) {

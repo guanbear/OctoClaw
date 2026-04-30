@@ -467,22 +467,22 @@ export async function sendRouteCommitAck(params: {
 
   const projected = projectRouteCommitAckText(packet);
   const useReactionAck = reactionAckConfigured(params.state) && hasMessageAnchor;
-  const reactionResult = useReactionAck
-    ? await sendRouteCommitReactionAckDirect(
-        params.sessionKey,
-        effectiveReplyToMessageId,
-        routeCommitReactionEmoji(params.state),
-        params.cwd,
-      )
-    : null;
-  const result = reactionResult && (reactionResult.delivered || reactionResult.sent)
-    ? reactionResult
-    : await sendRouteCommitAckDirect(
-        params.sessionKey,
-        projected.text,
-        effectiveReplyToMessageId || undefined,
-        params.cwd,
-      );
+  let result: AckSendResult;
+  if (useReactionAck) {
+    result = await sendRouteCommitReactionAckDirect(
+      params.sessionKey,
+      effectiveReplyToMessageId,
+      routeCommitReactionEmoji(params.state),
+      params.cwd,
+    );
+  } else {
+    result = await sendRouteCommitAckDirect(
+      params.sessionKey,
+      projected.text,
+      effectiveReplyToMessageId || undefined,
+      params.cwd,
+    );
+  }
   recordDelivery(ackKey, {
     ackKey,
     sent: result.sent,

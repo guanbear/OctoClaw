@@ -337,7 +337,22 @@ export class PolicyStateStore {
     return { key: keys[0] || "", state: null };
   }
 
-  getToolPolicyContext(ctx: Record<string, unknown>, prompt = ""): { key: string; state: PolicyStateEntry | null } {
+  /**
+   * Resolve policy state for generic before_tool_call gate.
+   * Uses ONLY exact/current context state — no fuzzy prompt matching.
+   * If no exact state exists for the current context, returns null state
+   * so the tool gate does not apply stale route_hint/delegate blocks.
+   */
+  getToolPolicyContext(ctx: Record<string, unknown>, _prompt = ""): { key: string; state: PolicyStateEntry | null } {
+    return this.resolveForContext(ctx);
+  }
+
+  /**
+   * Resolve policy state for octoclaw_route_hint and octoclaw_dispatch
+   * where prompt-fuzzy lookup is explicitly allowed.
+   * Falls back to findByPrompt and findRecentDelegated when no exact context match exists.
+   */
+  getDispatchPolicyContext(ctx: Record<string, unknown>, prompt = ""): { key: string; state: PolicyStateEntry | null } {
     const direct = this.resolveForContext(ctx);
     if (direct.state && (!prompt || promptsEquivalent(prompt, extractPrompt(direct.state)))) {
       return direct;
@@ -421,6 +436,7 @@ export interface PolicyStateStoreApi {
   findRecentDelegated: (prompt: string, maxAgeMs?: number) => { key: string; state: PolicyStateEntry | null };
   resolveForContext: (ctx: Record<string, unknown>) => { key: string; state: PolicyStateEntry | null };
   getToolPolicyContext: (ctx: Record<string, unknown>, prompt?: string) => { key: string; state: PolicyStateEntry | null };
+  getDispatchPolicyContext: (ctx: Record<string, unknown>, prompt?: string) => { key: string; state: PolicyStateEntry | null };
   persist: () => void;
   load: () => void;
 }
@@ -454,6 +470,7 @@ export function createPolicyStateStore(sessionStateFile?: string): PolicyStateSt
     },
     resolveForContext: (ctx) => store.resolveForContext(ctx),
     getToolPolicyContext: (ctx, prompt = "") => store.getToolPolicyContext(ctx, prompt),
+    getDispatchPolicyContext: (ctx, prompt = "") => store.getDispatchPolicyContext(ctx, prompt),
     persist: () => store.persist(),
     load: () => store.load(),
   };

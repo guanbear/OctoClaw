@@ -1,6 +1,7 @@
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { compactPolicyPrompt } from "./replay/policy-utils.js";
+import { guardOutboundMessageForPolicyState } from "./extension-entry.js";
 import {
   delegationFailureReply,
   guardAssistantMessageForPolicyState,
@@ -10,7 +11,7 @@ import {
   authoritativeDecisionRoute,
   canonicalizeDecisionForPolicyState,
 } from "./resolve/route-helpers.js";
-import { PolicyStateStore } from "./state/policy-state.js";
+import { PolicyStateStore, policyState } from "./state/policy-state.js";
 import {
   shouldSuppressAck,
   recordMessage,
@@ -430,7 +431,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
     expect(replaySessionKey).toBe("agent:main:slack:default:direct:u0al9t5u89z");
   });
 
-  it("tool policy context can fall back to recent delegated state for follow-up prompts", () => {
+  it("dispatch policy context can fall back to recent delegated state for follow-up prompts", () => {
     const store = new PolicyStateStore({
       sessionStateFile: "/tmp/octoclaw-policy-state-regression-round4-followup.json",
       ttlMs: 60_000,
@@ -454,7 +455,7 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
       delegated: true,
     });
 
-    const resolved = store.getToolPolicyContext({}, "用户追问先前委派任务“查下 openclaw 4.22 的新特性”的当前进展，并需要基于当前回合的权威执行事实回复状态。");
+    const resolved = store.getDispatchPolicyContext({}, `用户追问先前委派任务\u201C查下 openclaw 4.22 的新特性\u201D的当前进展，并需要基于当前回合的权威执行事实回复状态。`);
     expect(resolved.key).toBe("agent:main:slack:default:direct:u0al9t5u89z");
     expect((resolved.state?.decision as { request?: { session_key?: string } })?.request?.session_key).toBe(
       "agent:main:slack:default:direct:u0al9t5u89z",
@@ -697,38 +698,57 @@ describe("regression round 4: scenario 6 — ACK schedule reply-only", () => {
 
 describe("regression round 4: execution coverage projections", () => {
   it("adds WorkContract and ExecutionCoverage evidence to provenance follow-up replies", () => {
-    const guarded = guardAssistantMessageForPolicyState(
-      { role: "assistant", content: "刚才那个任务判定为 reply，没有重新派发。" },
-      {
-        decision: {
-          route_decision: { route: "reply", route_source: "rule" },
-          router_decision_v2: { request_kind: "status_or_provenance" },
+    const content = "刚才那个任务判定为 reply，没有重新派发。";
+    const state = {
+      decision: {
+        route_decision: { route: "reply", route_source: "execution_coverage" },
+        router_decision_v2: { request_kind: "status_or_provenance" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        workContractId: "wc-provenance-1",
+        work_contract: {
           workContractId: "wc-provenance-1",
-          work_contract: {
-            workContractId: "wc-provenance-1",
-            route: "reply",
-            decisionSource: "execution_coverage",
-            replyMode: "answer",
-          },
-          _execution_coverage_packet: {
-            packetId: "coverage-1",
-            replyMode: "answer",
-            dispatchExecuted: true,
-            spawnExecuted: false,
-            coverage: { execution: { coverage: "thread" } },
-          },
+          route: "reply",
+          decisionSource: "execution_coverage",
+          replyMode: "answer",
+        },
+        _execution_coverage_packet: {
+          packetId: "coverage-1",
+          replyMode: "answer",
+          dispatchExecuted: true,
+          spawnExecuted: false,
+          coverage: { execution: { coverage: "thread" } },
         },
       },
-    );
+      inboundMessageTs: "1777389000.000001",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
 
-    expect(guarded.mode).toBe("replace");
-    expect(String(guarded.message?.content)).toContain("route=reply | model=unknown");
-    expect(String(guarded.message?.content)).toContain("wc=wc-provenance-1");
-    expect(String(guarded.message?.content)).toContain("coverage=thread");
-    expect(String(guarded.message?.content)).toContain("route_source=execution_coverage");
-    expect(String(guarded.message?.content)).toContain("dispatchExecuted=true");
-    expect(String(guarded.message?.content)).toContain("spawnExecuted=false");
-    expect(String(guarded.message?.content)).toContain("· thread");
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content },
+      state,
+    );
+    expect(guarded.mode).toBe("pass");
+
+    const previousDebug = process.env.OCTOCLAW_FOOTER_DEBUG;
+    process.env.OCTOCLAW_FOOTER_DEBUG = "1";
+    const key = "agent:main:slack:channel:c0provenance";
+    policyState.setState(key, state);
+    try {
+      const outbound = guardOutboundMessageForPolicyState(
+        { to: "C0PROVENANCE", content, metadata: { channelId: "C0PROVENANCE", threadTs: "1777389000.000001" } },
+        { channelId: "slack", inboundMessageTs: "1777389000.000001" },
+        Date.now(),
+      );
+
+      expect(outbound?.content).toContain("route=reply | model=zhipu/GLM-5.1 · thread");
+      expect(outbound?.content).toContain("via=coverage");
+      expect(outbound?.content).toContain("wc=wc-prov");
+    } finally {
+      policyState.clearState(key);
+      if (previousDebug === undefined) delete process.env.OCTOCLAW_FOOTER_DEBUG;
+      else process.env.OCTOCLAW_FOOTER_DEBUG = previousDebug;
+    }
   });
 
 

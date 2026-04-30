@@ -353,6 +353,54 @@ describe("guardOutboundMessageForPolicyState", () => {
     policyState.clearState(key);
   });
 
+  it("prefers policy model over host shim in footer projection", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0shimmodel";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        request: { metadata: { message_id: "1777380001.000001" } },
+      },
+      inboundMessageTs: "1777380001.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0SHIMMODEL", content: "测试。", metadata: { channelId: "C0SHIMMODEL", threadTs: "1777380001.000001" } },
+      { channelId: "slack", model: "Anno" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("model=zhipu/GLM-5.1");
+    expect(guarded?.content).not.toContain("model=Anno");
+    policyState.clearState(key);
+  });
+
+  it("falls back to host shim model when no policy model exists", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0nofallback";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply" },
+        request: { metadata: { message_id: "1777380002.000001" } },
+      },
+      inboundMessageTs: "1777380002.000001",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0NOFALLBACK", content: "测试。", metadata: { channelId: "C0NOFALLBACK", threadTs: "1777380002.000001" } },
+      { channelId: "slack", model: "Anno" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("model=Anno");
+    policyState.clearState(key);
+  });
+
   it("does not duplicate compact footer on outbound delivery when content already has route | model", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0dedup";
@@ -769,5 +817,53 @@ describe("before_tool_call route hint guard", () => {
     expect(result).toBeUndefined();
     policyState.clearState(oldKey);
     policyState.clearState(aliasKey);
+  });
+
+  it("does not block normal tools when stale delegate state exists for a similar prompt", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const staleKey = "route-hint:stale-openclaw-changelog";
+    const currentKey = "agent:main:slack:default:direct:u0al9t5u89z";
+    const now = Date.now();
+    policyState.setState(staleKey, {
+      prompt: "查询 OpenClaw 最新版 release notes / changelog，总结新特性。",
+      decision: {
+        route_decision: { route: "delegate", route_source: "rule" },
+        work_contract: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", block_tool_patterns: ["sessions_spawn", "delegate"], allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"] },
+      },
+      routeHintSubmitted: true,
+      createdAt: now - 60_000,
+      updatedAt: now - 60_000,
+    });
+    policyState.setState(currentKey, {
+      decision: {
+        route_decision: { route: "reply" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: false },
+        tool_policy: { allow_direct_tools: true },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "read", params: { path: "docs/example.md" } },
+      { sessionKey: currentKey, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    policyState.clearState(staleKey);
+    policyState.clearState(currentKey);
   });
 });
