@@ -294,7 +294,16 @@ export async function sendRouteCommitAck(params: {
   const slackMetadata = readRecord(params.state?.slackMetadata || params.state?.slack_metadata);
   const slackThreadId = asString(slackMetadata.thread_ts || slackMetadata.thread_id || slackMetadata.reply_to_id);
   const stateMessageId = asString(params.state?.message_id || params.state?.inboundMessageTs);
-  const effectiveReplyToMessageId = asString(params.replyToMessageId) || stateMessageId || slackThreadId;
+
+  // Also extract thread ts embedded in the session key itself:
+  // Format: agent:main:slack:*:thread:1777500517.132259
+  const sessionKeyParts = params.sessionKey.split(":");
+  const threadIdx = sessionKeyParts.indexOf("thread");
+  const sessionKeyThreadTs = threadIdx >= 0 && /^\d{10}\.\d{6}$/.test(sessionKeyParts[threadIdx + 1] ?? "")
+    ? sessionKeyParts[threadIdx + 1]
+    : "";
+
+  const effectiveReplyToMessageId = asString(params.replyToMessageId) || stateMessageId || slackThreadId || sessionKeyThreadTs;
   const hasMessageAnchor = Boolean(
     effectiveReplyToMessageId,
   );

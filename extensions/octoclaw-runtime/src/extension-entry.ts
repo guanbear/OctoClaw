@@ -258,14 +258,22 @@ function policyStateLooksRelevantForOutbound(key: string, state: PolicyStateEntr
 
 function outboundLooksLikeVisibleDeliveryHook(event: UnknownRecord): boolean {
   const metadata = asRecord(event.metadata);
-  return Boolean(
+  if (Boolean(
     metadata.channel
     || metadata.channelId
     || metadata.threadTs
     || metadata.thread_ts
     || metadata.accountId
     || Array.isArray(metadata.mediaUrls),
-  );
+  )) return true;
+  // Also treat Slack delivery targets as visible:
+  // event.to can be a Slack user/channel ID (U*/C*) or contain "slack" when
+  // OpenClaw sends via native Slack transport without standard metadata fields.
+  const to = stringValue(event.to).toLowerCase();
+  if (to.includes("slack")) return true;
+  // Slack channel IDs: C + 8-11 alphanumeric chars; user IDs: U + 8-11 chars
+  if (/^[cu][a-z0-9]{8,11}$/i.test(stringValue(event.to))) return true;
+  return false;
 }
 
 function findRecentOutboundPolicyState(
@@ -1016,25 +1024,53 @@ export const plugin = {
       }
 
       // D1: Route Commit ACK — send truthful ACK projection after route seal, before dispatch.
-      try {
-        const routeCommitResult = await sendRouteCommitAck({
-          sessionKey: preSessionKey || stringValue(ctx.sessionKey) || "",
-          stateKey: stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || ""),
-          decision: effectiveDecision ?? {},
-          state: asRecord(effectiveState),
-          replyToMessageId: inboundMessageTs,
-          cwd: stringValue(ctx.cwd) || process.cwd(),
-          logger: pi.logger,
-        });
-        if (routeCommitResult.sent && effectiveState) {
-          effectiveState.routeCommitAckSent = true;
-          effectiveState.route_commit_ack_sent = true;
-          effectiveState.routeCommitAckId = routeCommitResult.routeCommitId;
+      // For delegate/observe routes: send immediately (user needs to know task was delegated).
+      // For reply routes: delay 500ms so fast local models don't produce a simultaneous ACK+reply.
+      // At fire time, check firstTokenSeen/formalReplyVisible — if agent already responded, skip.
+      const routeCommitRoute = stringValue(asRecord(asRecord(effectiveDecision).route_decision).route);
+      const isReplyRoute = routeCommitRoute !== "delegate" && routeCommitRoute !== "observe";
+      const routeCommitAckParams = {
+        sessionKey: preSessionKey || stringValue(ctx.sessionKey) || "",
+        stateKey: stringValue(resolved?.stateKey || resolvePolicyStateKey(ctx) || ""),
+        decision: effectiveDecision ?? {},
+        state: asRecord(effectiveState),
+        replyToMessageId: inboundMessageTs,
+        cwd: stringValue(ctx.cwd) || process.cwd(),
+        logger: pi.logger,
+      };
+      const doSendRouteCommitAck = async () => {
+        try {
+          const liveState = getPolicyStateForContext(ctx).state;
+          // For reply routes: cancel if agent has already started responding
+          if (isReplyRoute && liveState) {
+            if (Boolean((liveState as UnknownRecord).finalResponseStreaming)
+              || Boolean((liveState as UnknownRecord).formalReplyVisible)
+              || Boolean((liveState as UnknownRecord).delivered)
+              || Boolean((liveState as UnknownRecord).firstTokenSeen)) {
+              pi.logger?.debug?.("octoclaw route-commit-ack: skipped, agent already responded");
+              return;
+            }
+          }
+          const routeCommitResult = await sendRouteCommitAck({
+            ...routeCommitAckParams,
+            state: asRecord(liveState ?? effectiveState),
+          });
+          if (routeCommitResult.sent && effectiveState) {
+            effectiveState.routeCommitAckSent = true;
+            effectiveState.route_commit_ack_sent = true;
+            effectiveState.routeCommitAckId = routeCommitResult.routeCommitId;
+          }
+        } catch (routeCommitErr) {
+          pi.logger?.warn?.(`octoclaw route-commit-ack error: ${String(routeCommitErr)}`);
         }
-      } catch (routeCommitErr) {
-        if (pi.logger?.warn) {
-          pi.logger.warn(`octoclaw route-commit-ack error: ${String(routeCommitErr)}`);
-        }
+      };
+      if (isReplyRoute) {
+        // Delay for reply routes: cancel if agent starts within 500ms
+        const REPLY_ACK_DELAY_MS = 500;
+        const replyAckTimer = setTimeout(() => { void doSendRouteCommitAck(); }, REPLY_ACK_DELAY_MS);
+        (replyAckTimer as unknown as { unref?: () => void }).unref?.();
+      } else {
+        void doSendRouteCommitAck();
       }
 
       const metadata = buildPolicyMetadata(ctx, { stateKey });
