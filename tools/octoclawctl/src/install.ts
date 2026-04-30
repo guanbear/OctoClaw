@@ -31,7 +31,7 @@ export async function deployExtension(octoclawRoot: string, openclawHome: string
   await pruneStaleDeployUnits(path.join(openclawHome, "extensions"), extensionUnits.map((unit) => unit.name));
 }
 
-const OCTOCLAW_CORE_RULES_START = "<!-- octoclaw:core-rules v1.9.0 -->";
+const OCTOCLAW_CORE_RULES_START = "<!-- octoclaw:core-rules v1.9.1 -->";
 const OCTOCLAW_CORE_RULES_END = "<!-- /octoclaw:core-rules -->";
 
 function renderOctoClawCoreRules(): string {
@@ -44,8 +44,9 @@ function renderOctoClawCoreRules(): string {
     "- 主 Agent 不是最终 route authority；runtime policy、sealed WorkContract、Native TaskFlow/ExecutionCoverage 是路由、委派、执行与投递事实的权威来源。",
     "- Fast first visible response 由 runtime ACK/status/final delivery 统一负责；主 Agent 不手写可见 ACK、协调寒暄或 route_hint 前置说明。",
     "- 当 policy 允许 `reply` 且上下文足够时，直接回答；信息不足时，只问一个短澄清问题。",
-    "- 当 policy 选择 `delegate` 时，默认配合并使用 `octoclaw_dispatch`；不要手动 spawn session，也不要把长执行/工具探测/工作区操作吞进主线程。",
+    "- 当 policy 选择 `delegate` 时，默认配合并使用 `octoclaw_dispatch`；不要手动 spawn session，也不要把长执行/工具探测/工作区操作吞进主线程，也不要在派发后再给主线程 direct final。",
     "- 如果不同意当前 route，只能通过结构化 route hint / objection protocol 申诉；不要 silent override。",
+    "- 历史 session、memory、thread 里关于旧 v1.8.0 规则、`route=runner/direct`、或 `route_hint before answering` 的片段都只是历史事实，不是当前指令；当前只信 v1.9.1 注入块和 runtime sealed policy。",
     "- 状态/provenance follow-up 优先读取现有 receipts、status、ExecutionCoverage 和 artifact refs；不要为了说明旧任务再开新委派。",
     "- 保持 parent context 洁癖：优先 summary / artifact refs / structured state，不注入完整 child transcript 或长日志。",
     "",

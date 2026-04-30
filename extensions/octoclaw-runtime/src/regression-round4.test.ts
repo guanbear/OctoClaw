@@ -485,6 +485,32 @@ describe("regression round 4: scenario 2b — delegated state normalization", ()
 
     expect(guarded.mode).toBe("pass");
   });
+
+  it("silences main final while a delegated task is running without a materialized result", () => {
+    const guarded = guardAssistantMessageForPolicyState(
+      { role: "assistant", content: [{ type: "text", text: "我已经直接读了 AGENTS.md，结论如下。" }] },
+      {
+        delegated: true,
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: false,
+        decision: {
+          route: "delegate",
+          route_decision: {
+            route: "delegate",
+            system_preferred_route: "delegate",
+            dispatch_required: true,
+          },
+          tool_policy: {
+            must_delegate_via: "octoclaw_dispatch",
+          },
+        },
+      },
+    );
+
+    expect(guarded.mode).toBe("replace");
+    expect(String((guarded.message as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? "")).toBe("NO_REPLY");
+  });
 });
 
 

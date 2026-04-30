@@ -285,8 +285,9 @@ describe("octoclawctl cli", () => {
       expect(openclawConfig.channels.slack.streaming).toEqual({ mode: "off", nativeTransport: false });
       expect(openclawConfig.channels.slack.nativeStreaming).toBe(false);
       const workspaceAgents = await fs.readFile(path.join(openclawHome, "workspace", "AGENTS.md"), "utf8");
-      expect(workspaceAgents).toContain("octoclaw:core-rules v1.9.0");
+      expect(workspaceAgents).toContain("octoclaw:core-rules v1.9.1");
       expect(workspaceAgents).toContain("主 Agent 不是最终 route authority");
+      expect(workspaceAgents).toContain("旧 v1.8.0 规则");
       expect(workspaceAgents).toContain("默认给委派摘要");
       expect(workspaceAgents).not.toContain("需要 fresh lookup");
       expect(workspaceAgents).not.toContain("第一个输出必须是文字");

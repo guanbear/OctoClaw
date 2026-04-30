@@ -105,6 +105,16 @@ export function contaminationFallbackReply(): { mode: string; message: Record<st
   };
 }
 
+export function silentDelegatePendingReply(): { mode: string; message: Record<string, unknown> } {
+  return {
+    mode: "replace",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    },
+  };
+}
+
 
 export function stripStaleDelegateFailureProjection(text: string): string {
   return String(text || "")
@@ -268,11 +278,24 @@ export function guardAssistantMessageForPolicyState(
   const hasExecutionEvidence = dispatchExecuted || spawnExecuted || resultMaterialized;
   const genericGreetingReply = looksLikeGenericGreeting(replyText);
   const correctedToReplyBeforeDispatch = hasPreDispatchReplyCorrection(state);
+  const delegatedRoute = isDelegatedRoute(asRecord(state.decision));
+  const explicitReplyExecution = dispatchRoute === "reply" && dispatchExecuted;
   if (
-    isDelegatedRoute(asRecord(state.decision))
+    delegatedRoute
+    && dispatchExecuted
+    && spawnExecuted
+    && !resultMaterialized
+    && !statusProjectionToolSeen
+    && !explicitReplyExecution
+  ) {
+    const fallback = silentDelegatePendingReply();
+    return { mode: fallback.mode, message: replaceAssistantMessageText(message, assistantMessageText(fallback.message)) };
+  }
+  if (
+    delegatedRoute
     && !statusProjectionToolSeen
     && !hasExecutionEvidence
-    && !(dispatchRoute === "reply" && dispatchExecuted)
+    && !explicitReplyExecution
     && !looksLikeTransientProcessingAck(replyText)
     && !genericGreetingReply
     && !correctedToReplyBeforeDispatch

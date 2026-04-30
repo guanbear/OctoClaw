@@ -649,6 +649,46 @@ describe("before_tool_call route hint guard", () => {
 
 
 
+  it("blocks main-session direct tools after a sealed delegate route", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0al9t5u89z:thread:t-sealed-delegate";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "delegate", route_source: "judge" },
+        work_contract: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: {
+          must_delegate_via: "octoclaw_dispatch",
+          allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+        },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "read", params: { path: "AGENTS.md" } },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toMatchObject({ block: true });
+    expect(String(result.blockReason)).toContain("sealed delegate route");
+    policyState.clearState(key);
+  });
+
+
+
   it("allows direct tools when tool policy says direct tools are allowed even if route alias is stale", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
