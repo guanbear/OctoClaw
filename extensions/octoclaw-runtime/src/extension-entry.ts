@@ -517,12 +517,46 @@ function findInboundMessageTimestamp(value: unknown, depth = 0, seen = new Set<o
 }
 
 export function extractInboundMessageTimestamp(ctx: UnknownRecord, event: UnknownRecord, prompt = ""): string {
+  // 1. Known key names in ctx/event (fast path)
   const fromContext = findInboundMessageTimestamp(ctx);
   if (fromContext) return fromContext;
   const fromEvent = findInboundMessageTimestamp(event);
   if (fromEvent) return fromEvent;
+  // 2. JSON key-value in prompt: "ts": "1234567890.123456"
   const msgIdMatch = prompt.match(/"(?:reply_to_id|message_id|message_ts|event_ts|thread_ts|ts)"\s*:\s*"(\d{10}\.\d{6})"/u);
-  return msgIdMatch ? stringValue(msgIdMatch[1]) : "";
+  if (msgIdMatch) return stringValue(msgIdMatch[1]);
+  // 3. Broad scan: any Slack ts-shaped string in ALL ctx/event field values
+  // Covers cases where OpenClaw uses non-standard key names (slackTs, inboundTs, etc.)
+  const fromCtxBroad = findAnySlackTs(ctx);
+  if (fromCtxBroad) return fromCtxBroad;
+  const fromEventBroad = findAnySlackTs(event);
+  if (fromEventBroad) return fromEventBroad;
+  // 4. Raw text in prompt — Slack ts can appear as bare number, e.g. ts=1777500517.132259
+  const rawMatch = prompt.match(/(?:^|[\s"'=,:{[])(\d{10}\.\d{6})(?:$|[\s"',}\]:])/mu);
+  if (rawMatch) return stringValue(rawMatch[1]);
+  return "";
+}
+
+/** Scan ALL string values in an object tree for a Slack ts pattern.
+ * Used as a fallback when the key name is non-standard. */
+function findAnySlackTs(value: unknown, depth = 0, seen = new Set<object>()): string {
+  if (depth > 4 || value === null || value === undefined) return "";
+  if (typeof value === "string") {
+    // Only match strings that look like a standalone Slack ts (not embedded in a larger number)
+    if (SLACK_MESSAGE_TS_PATTERN.test(value.trim())) return value.trim();
+    // Also match if the whole string IS the ts pattern
+    const m = value.match(/^(\d{10}\.\d{6})$/u);
+    if (m) return m[1];
+    return "";
+  }
+  if (typeof value !== "object" || Array.isArray(value)) return "";
+  if (seen.has(value as object)) return "";
+  seen.add(value as object);
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    const found = findAnySlackTs(v, depth + 1, seen);
+    if (found) return found;
+  }
+  return "";
 }
 
 function buildRecentExecutionFacts(receipts: TurnExecutionReceipt[]): string {
@@ -926,6 +960,12 @@ export const plugin = {
         event,
         [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
       );
+
+      if (process.env.OCTOCLAW_ACK_DEBUG) {
+        // Log what we extracted so we can debug thread anchor issues
+        const ctxKeys = Object.keys(ctx).join(",");
+        console.error(`[ack-dbg] inboundMessageTs=${inboundMessageTs || "(empty)"} sessionKey=${stringValue(ctx.sessionKey).substring(0,50)} ctxKeys=${ctxKeys.substring(0,120)}`);
+      }
 
       // When judgeAckEnabled=false: start latency timer BEFORE judge (fast ACK).
       // When judgeAckEnabled=true: ALSO start latency timer BEFORE judge so ACK0 fires at 5s from message arrival.
