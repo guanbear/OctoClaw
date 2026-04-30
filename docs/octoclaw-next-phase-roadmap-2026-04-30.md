@@ -1,196 +1,298 @@
-# OctoClaw 下一阶段规划
+# OctoClaw 下一阶段完整规划
 
-> 基于：所有历史设计文档、.planning/phases、docs/archive、Anthropic 工程笔记、当前代码状态  
+> 基于：全量文档扫描（docs/、docs/archive/、.planning/phases/、.sisyphus/、.omx/plans/、历史分支、Anthropic 工程笔记、DeerFlow/ClawTeam/OMO 借鉴分析）  
 > 日期：2026-04-30  
 > 分支：`refactor/0.4.0-stable`
 
 ---
 
-## 一、当前已完成的能力
+## 一、重要修正（vs 之前版本的规划）
 
-**5 阶段 TypeScript 重构全部完成（Phase 1-5）。** 系统基础稳固：
+之前的规划把 Auto Router 放在 P1，**这是错的**。读完全量文档后，正确的优先级是：
 
-| 能力 | 状态 |
-|------|------|
-| TypeScript-first 执行策略 | ✅ |
-| OpenClaw native task/flow 真相路径 | ✅ |
-| 安全委派（scope/claim/lease/outbox）| ✅ |
-| WorkContract 语义合同 | ✅ |
-| Judge 单模型路由（本地 Ollama / 远程廉价 API）| ✅ |
-| Completion file protocol（显式结构化结果）| ✅ |
-| Delivery outbox 重试队列 | ✅ |
-| ACK 三相模型（ACK/Progress/Final）| ✅ |
-| IM adapter 注册表（Slack 已接，可扩展）| ✅ |
-| 状态面板 Slack mrkdwn 渲染 | ✅ |
-| 模型按需选择（fallback rank 自动映射）| ✅ |
-| octoclawctl 统一安装工具 | ✅ |
-| 插件开关（enabled=false 不卸载）| ✅ |
-| 夜间回放 5 lane 评估 + calibration gate | ✅ |
-| Slack acceptance harness 8 场景 | ✅ |
-| ACK thread 锚定（Route C via Slack API）| ✅（刚完成）|
+> **先让 OctoClaw 能证明发生了什么、花了多长时间、花了多少钱、结果是否更好。然后再优化。**
+
+这是 `octoclaw-next-stage-roadmap-and-execution-design-2026-04-25.md` 里已经说清楚的原则，Auto Router 是 Phase 5，不是 Phase 1。
 
 ---
 
-## 二、已确认的 Anthropic 工程原则
+## 二、已完成的全貌（比之前更完整）
 
-以下原则来自项目集成的 Anthropic 官方资料，已内化进当前架构：
+### 2.1 五阶段 TypeScript 重构（全部完成，2026-04-17）
 
-1. **工作流优先，agent 其次**：`direct/runner/spawn_single/spawn_multi` 是正确的顶层形态，不默认多 agent
-2. **上下文工程比 prompt 设计更重要**：状态/摘要/产出物/最近行动比系统提示长度更关键
-3. **工具是产品，不是管道**：工具合同、描述、shaped results 要为模型消费而设计
-4. **长时运行 harness 是一等公民**：恢复性、交接产出物、checkpoint、跨会话连续性、进度可见性不可妥协
-5. **多 agent 是选择性的**：orchestrator-worker 模式；`spawn_single` 是默认；多 agent 只用于真正需要并行探索的场景
-6. **每天 eval 和事后复盘**：小 eval 早做；用真实故障驱动；短反馈循环
+| Phase | 核心产出 |
+|-------|---------|
+| 1 重建基线对齐 | 冻结 TS 重建设计，建立护栏（禁 Python/大 JS live-path）|
+| 2 运行时核心与安全委派 | TS Contracts/Policy/RuntimeCore 包，claim/lease/delivery，安全委派原语 |
+| 3 原生基底与运营面 | OpenClaw native TaskFlow TS 适配，substrate-first 投影，IM/运营面统一 |
+| 4 评估门和高级路由 | 推广级 gate，路由策略 golden，shadow drift，acceptance harness |
+| 5 执行基底重构 | TS-native live path，零 Python/shell 权威，执行合同驱动路由 |
+
+### 2.2 refactor/0.4.0-stable 新增（本次重构批次）
+
+✅ Completion file protocol（显式结构化结果，删除 530 行文件扫描）  
+✅ Delivery outbox 重试队列  
+✅ ACK 三相模型（ACK/Progress/Final）  
+✅ IM adapter 注册表（Slack 已实现，接口可扩展）  
+✅ 状态面板 Slack mrkdwn 渲染 + 按重要性排序  
+✅ 模型按需选择（fallback rank 自动映射 + user overrides）  
+✅ octoclawctl 统一安装工具（含 judge-fast.json 自动迁移）  
+✅ 插件开关（enabled=false 不卸载）  
+✅ ACK thread 锚定（Route C via Slack conversations.history API）  
+✅ 夜间回放 delivery lane 新事件（completion_file_*、delivery_outbox_*）  
+✅ ackNoTarget 从 unknown → fail bucket  
 
 ---
 
-## 三、优先级规划
+## 三、已确认的设计原则（来自 Anthropic 工程笔记）
 
-### 优先级 P0：稳定性和可靠性（立刻做）
+1. **工作流优先，agent 其次**：`direct/runner/spawn_single/spawn_multi` 是正确顶层形态
+2. **上下文工程比 prompt 设计更重要**：brief/summary/artifact 不是旁路，是核心产品
+3. **工具是产品，不是管道**：工具合同、描述、shaped results 为模型消费而设计
+4. **长时运行 harness 是一等公民**：所有权锁、dead-agent 恢复、progress signal、delivery 不可妥协
+5. **多 agent 是选择性的**：orchestrator-worker；`spawn_single` 是默认；多 agent 只用于真正需要并行探索的场景
+6. **每天 eval 和事后复盘**：小 eval 早做；真实故障驱动；短反馈循环
 
-**目标**：让现有功能真正稳定好用，消除用户感知到的 bug
+---
 
-| 任务 | 问题描述 | 工作量 |
-|------|---------|--------|
-| **ACK 进 thread 验收** | Route C 刚部署，需确认 Slack DM 里 ACK 进入正确 thread | 测试 |
-| **夜间回放 delivery lane 数据补全** | child-finalizer 需要加 `completion_file_delivered/timeout` replay 事件，否则 delivery lane total=0 | 1h |
-| **status panel 展示验证** | 确认 Slack mrkdwn 格式（新代码）实际生效，imType 检测正常 | 测试 |
-| **judge timeout 优化** | qwen3-judge:0.6b-q4km 经常 2000ms timeout；考虑降低 timeoutLocalMs 或换更快模型 | 配置 |
-| **replay-logger fire-and-forget 验证** | 确认 `recordPolicyReplay` 在 live path 中是 void 调用 | 查代码 |
+## 四、ClawTeam / DeerFlow / OMO 借鉴分析结论
 
-### 优先级 P1：Auto Router V1（下一个重大功能）
+### ClawTeam（借用什么）
+- ✅ 任务存储 + 显式锁所有权 + stale-lock 释放语义
+- ✅ Session 持久化（不从日志重发现）
+- ✅ Worktree 隔离 + checkpoint
+- ✅ Spawn retry/backoff + 幂等性
+- ❌ 不把 tmux 变系统先决条件
+- ❌ 不把 swarm runtime 变默认
+- **决策**：ClawTeam 是**可选 backend**，不是依赖。OpenClaw native TaskFlow 是执行真相，ClawTeam 模式是实现灵感。
 
-这是项目**最重要的下一步**，历史设计文档里已经完整设计了，但从未实现。
+### DeerFlow（借用什么）
+- ✅ 执行模式分层：L0 direct → L1 runner → L2 single → L3 multi → L4 heavy
+- ✅ 隔离子 agent 上下文：只给 task brief + 约束 + expected output + artifact refs，不给完整父上下文
+- ✅ 激进摘要化：中间结果写文件系统，主链只看 summary + status + artifacts
+- ❌ 不导入 DeerFlow 主控循环
+- ❌ 不把学习循环放进 v1 热路径
+- **决策**：DeerFlow 给执行**哲学**，不给实现。
 
-**核心价值**：自动根据任务复杂度、工具需求、预期时长选择合适的模型和执行模式，而不是一刀切用最贵的模型。
+### OMO（Ultrawork）Session Continuity
+- 委派任务返回 `session_id`，后续 follow-up 恢复同一个子 session（而不是新开）
+- OctoClaw 实现：`workContractId + delegateTaskId + childSessionKey`（比原始 `session_id` 更安全）
+- ❌ 不导入 OMO 的完整学习循环
+- **决策**：只借 session continuity 模式，学习循环保持在热路径之外。
 
-**当前状态**：
-- Judge 已输出 `complexityBand`（simple/normal/deep）、`budgetBand`、`toolNeedHint`、`durationHint`
-- `complexityModelMap` 已接 fallback rank 自动映射（T1 完成）
-- 但路由模式（`spawn_single` vs `runner` vs `direct`）还是由 agent 手动决定
+---
 
-**V1 实现计划**（3-5 天，分 4 步）：
+## 五、重要发现（读完全量文档后的修正）
 
-**步骤 1：提取路由推荐合同**
-```typescript
-interface RouteRecommendation {
-  executionLane: "direct" | "runner" | "spawn_single";  // 执行模式
-  workerPool: "octoclaw-main" | "octoclaw-research" | "octoclaw-code" | "octoclaw-review";
-  modelProfile: "fast_cheap" | "balanced" | "capable";  // 直接映射到 complexityModelMap
-  outputBudget: "short" | "medium" | "long" | "deep";
-  reason: string;  // 供 debug 用
-}
+### 发现 1：反馈链路已经有 7 个独立工具，需要统一而非新建
+
+**已有**：replay log → replay summary → review → curate → validate → promote → learn
+
+**问题**：7 个工具相互独立，没有统一的观察-总结-审核-精选-验证-推广-学习链路。
+
+**P2 真正要做的**：统一成一条链，而不是"从零建反馈循环"。
+
+### 发现 2：IM 层各渠道的第一桶已存在，缺的是能力矩阵
+
+**已有**：Slack/飞书/Discord/Telegram/WhatsApp 各自有实现  
+**问题**：没有正式的 L0/L1/L2 能力分级，没有统一的 anchor/thread/action/artifact 语义  
+**P3 真正要做的**：定义能力矩阵 + 统一降级规则，而不是"构建 IM 层"
+
+### 发现 3：Substrate（TaskFlow）集成基本做完，需要清理而非重建
+
+**已有**：taskflow-bound runner jobs、native taskflow 控制元数据、session resume 持久化、on-demand runner fallback  
+**问题**：mirror/managed 双模式并存，没有明确的融合规则  
+**P4 真正要做的**：managed TaskFlow 升为主，mirror 作兼容层
+
+### 发现 4：Auto Router 是 Phase 5，不是 P1
+
+**错误直觉**：模型选择是独立小功能，可以先做  
+**文档实际说的**：Auto Router 依赖 truth spine + measurement gate + feedback loop 全部稳定后才能有意义地运作。在没有 cost/latency baseline 的情况下做 router 只是直觉，不是数据驱动的。  
+**Auto Router 的正确位置**：Phase 5，在 P0-P4 全部完成后。
+
+### 发现 5：有 8 个 P0 高危区
+
+| 高危区 | 描述 |
+|--------|------|
+| IM thread anchor 失败→静默跳过 | `no_valid_thread_anchor` 应降级为 top-level，不是 skip（已部分修复）|
+| Status 重启后投影漂移 | `policyState` fallback 违反重启持久性 |
+| Delivery outbox 无 retry 语义 | 结果能入队但没有完整的重试/flush 生命周期（已有基础）|
+| Delegate 路由的 tier 推送 | tier1/2/3 "还在跑" 消息仍有可能回退（已修复大部分）|
+| Replay 仍然中心化 | replay-logger.ts 仍然是 God File 中心（已拆分，但 delivery relay 仍有耦合）|
+| 受保护 lane 未强制执行 | session_control / control_observer 仍可能被误委派 |
+| Substrate mirror 未废弃 | native + mirror 双真相，没有明确融合规则 |
+| cost/latency baseline 未自动化 | D3 nightly 未完全接通，gate 决策仍靠直觉 |
+
+---
+
+## 六、正确的五阶段规划
+
+### Phase 0/P1：真相收敛 + 术语统一（6-8 周）
+
+**目标**：让所有读状态的地方读同一个来源，让 observer/patrol/runner/ctl 术语清晰
+
+| 任务 | 具体内容 |
+|------|---------|
+| 真相收敛 | Native TaskFlow = 执行生命周期真相；WorkContract = 语义/委派真相；task-state.json = 持久投影；只这三个，其余是派生 |
+| Status 读 durable task-state | `octoclaw_status` 停止 fallback 到 policyState；重启后状态从 task-state.json 完整恢复 |
+| Delivery outbox 完整模块 | 有界重试生命周期（最大尝试次数、指数退避、flush 语义）|
+| ACK 三相模型验证 | 确认 tier1/2/3 在 delegate 路由下不会触发（已修，需验证）|
+| Replay 彻底拆分 | replay-logger.ts 降为 re-export shim，delivery relay 完全退出 live path |
+| 术语统一 | Observer/Patrol/Runner/Ctl 边界清晰，各有测试覆盖，文档对齐 |
+
+**交付物**：
+- 任何查询 `octoclaw_status` 都不依赖内存状态
+- 重启 OpenClaw 后，任务状态不丢失
+- replay 日志只是 observability 旁路，不影响行为
+
+---
+
+### Phase 2：反馈链路统一（4-6 周）
+
+**目标**：把 7 个独立工具变成一条可观察的链
+
+```
+observe → summarize → review → curate → validate → promote → learn
 ```
 
-**步骤 2：规则优先的路由核心**
-基于 judge 的输出，用确定性规则决定大多数情况：
-```
-toolNeedHint=required + durationHint=long → spawn_single + capable
-toolNeedHint=none + complexityBand=simple → direct + fast_cheap
-complexityBand=deep + durationHint=long → spawn_single + capable
-fresh_live_lookup → spawn_single + balanced（环境查询类）
-plain_chat → direct + fast_cheap
-```
+| 工具 | 当前状态 | 统一后角色 |
+|------|---------|----------|
+| replay log | ✅ 存在 | observe |
+| replay summary | ✅ 存在 | summarize |
+| reply review | ✅ 存在 | review |
+| curate/fixture export | ✅ 存在 | curate |
+| nightly eval | ✅ 存在 | validate |
+| calibration gate | ✅ 存在 | promote |
+| learning/error promotion | ✅ 存在 | learn |
 
-**步骤 3：接入 dispatch 工具**
-`octoclaw_dispatch` 里的 `complexityModelMap` 已经接了，扩展为完整的 `RouteRecommendation`。
+**具体工作**：
+- 定义链中每个工具的输入/输出合同
+- 统一 `observe → summarize` 边界（replay 格式标准化）
+- 让 `validate → promote` 能自动阻断回归（calibration gate 接通 nightly）
+- D3 nightly 完全接通 cost/latency/correctness 三维指标
 
-**步骤 4：Shadow mode 验证**
-新路由推荐先在 shadow 模式跑一周，对比 replay log 里实际使用 vs 推荐的差异。
-
-### 优先级 P2：IM 扩展
-
-| 任务 | 说明 |
-|------|------|
-| **飞书卡片支持** | `buildFeishuStatusCard()` 已有接口设计，需要 `IMAdapter.sendCard()` 实现 |
-| **微信适配** | `openclaw-weixin` 已在 OpenClaw 里，需要实现 IMAdapter 接口接进 OctoClaw |
-| **DM vs Channel 差异处理** | DM 和 Channel 的 thread 行为不同，需要分别优化 ACK 策略 |
-
-### 优先级 P3：Retry / Resume
-
-当前 `octoclaw_task_action retry` 是空接口，核心逻辑未实现。
-
-**设计**：
-- **Retry**：从 `task-state.json` 读原任务描述，创建新 `octoclaw_dispatch` 调用，原 `workContractId` 标记为 `retrying`
-- **Resume**：检查 `childSessionKey` 对应的 session 是否还活跃，活跃则续跑，不活跃则走 Retry
-
-工作量约 3-4 天，需要同步更新状态面板（显示 retry 次数）。
-
-### 优先级 P4：反哺 OpenClaw 社区
-
-| 内容 | 说明 |
-|------|------|
-| **Completion file protocol PR** | 把 worker 写结构化完成文件的机制提交给 OpenClaw 上游 |
-| **IMAdapter 规范** | 把 `IMAdapter` 接口设计作为 OpenClaw 插件标准 |
-| **ACK thread anchor 问题报告** | OpenClaw 需要在 ctx 里传 `channelId` + `messageTs`，当前只传 `channelId` |
+**交付物**：
+- 每次 route 决策都有可追踪的 telemetry id
+- 每次变更都有 gate report（pass/fail/unknown）
+- cost/speed 对比在数据上可证明，不靠直觉
 
 ---
 
-## 四、与历史设计文档的对照
+### Phase 3：IM 能力矩阵（4-6 周）
 
-### 已完成但历史文档标记"待做"的
+**目标**：定义正式的 L0/L1/L2 能力分级，统一 anchor/thread/action/artifact 语义
 
-| 历史标记 | 实际状态 |
-|---------|---------|
-| Completion file protocol（P0-T1）| ✅ 完成 |
-| Remove minified aliases（P0-T2）| ✅ 完成 |
-| ACK guard 先于 judge（P0-T3）| ✅ 完成 |
-| Remote judge 删除（P0-T4）| ✅ 完成 |
-| IM adapter registry（P1-T5）| ✅ 完成 |
-| PolicyStateEntry 类型安全（P1-T6）| ✅ 完成 |
-| ACK/Progress 三相模型（P1-T7）| ✅ 完成 |
-| replay-logger 拆分（P1-T8）| ✅ 完成 |
-| 幽灵包合并（P2-T9）| ✅ 完成 |
-| 插件开关（P2-T10）| ✅ 完成 |
-| octoclawctl 统一（P2-T11）| ✅ 完成 |
-| 模型按需选择 T1（P3 part）| ✅ 基础完成，Auto Router V1 待做 |
-| 状态面板 IM 适配（P3 part）| ✅ Slack mrkdwn 完成 |
+| 能力层 | 包含 |
+|--------|------|
+| L0（所有渠道）| 文本消息、ACK、基本状态 |
+| L1（支持 thread 的）| Thread reply、Progress update in thread |
+| L2（富媒体）| 飞书卡片、Slack mrkdwn block、按钮交互 |
 
-### 历史文档明确"deferred"的
+**具体工作**：
+- 飞书 `sendCard()` 实现（接口已设计，需要 adapter）
+- 微信 OctoClaw IMAdapter 实现（`openclaw-weixin` 已在 OpenClaw）
+- 统一降级规则：L2 失败 → L1；L1 失败 → L0
+- Anchor/thread/notification/action 语义在所有渠道保持一致
 
-| 功能 | 历史理由 | 当前建议 |
-|------|---------|---------|
-| Auto Router V1（完整）| 需要 telemetry baseline 先 | **P1 优先级，现在可以做** |
-| 飞书卡片 | 需要 IMAdapter.sendCard() | P2 |
-| Retry/Resume | 需要先稳定 completion protocol | P3（P0 完成后可以做）|
-| 多 agent coordinator | 需要 solo worker 先稳 | 暂不做，符合 Anthropic 原则 |
-| ClawTeam/tmux 集成 | 非核心依赖 | 保持 optional，不进 live path |
-| Online model learning | 无 baseline | Phase 5+ |
+**交付物**：
+- 飞书用户看到卡片，不是纯文本
+- 跨渠道的 ACK/Progress/Final 行为一致
+- 新渠道接入只需实现 IMAdapter 接口
 
 ---
 
-## 五、开源高星路径
+### Phase 4：基底收敛（6-8 周）
 
-完成 Auto Router V1 + Retry + 飞书适配后，OctoClaw 对外的 pitch 可以是：
+**目标**：managed TaskFlow 升为主，mirror 作兼容层，清理双真相
+
+**具体工作**：
+- 明确字段映射：OctoClaw ↔ native task/flow/run/session
+- Revision/state/wait/cancel 语义对齐
+- 废弃 mirror 模式（兼容层保留，不再是权威）
+- 测试：基底状态转换完全可追踪
+
+---
+
+### Phase 5：Auto Router 加固（8-10 周）
+
+**前提**：Phase 0-4 全部完成，有 cost/latency baseline
+
+**Auto Router 完整设计**（已有，来自 `octoclaw-auto-router-design.md`）：
+
+#### 五层架构
+1. **Signal 层**：task_type、complexity、reasoning_need、tool_need、context_size、latency/cost sensitivity、language、workspace/risk hints
+2. **Router Core（V1）**：确定性规则 + intent/semantic route + optional tiny judge → route class + candidate set
+3. **Budget Planner（R2）**：联合选择 `(model, output_budget)`，budget 是一等决策变量
+4. **Policy/Gateway Adapter**：provider allowlist、health/cooldown、quota pressure、privacy policy、fallback chain
+5. **Model-Intel/Feedback Loop**：price、capability profile、health、quota pressure、route outcome、replay/validation/promotion
+
+#### Execution Contract 优先
+Router 的**第一个任务**是决定执行合同（不是选模型）：
+- `direct`：主 agent 直接完成
+- `runner`：轻量任务执行 lane
+- `spawn_single`：委派给单一子 agent（默认）
+- `spawn_multi`：多 worker 或 parent-child TaskFlow（保守）
+
+然后各 lane 内部再做 model/budget 决策。
+
+#### V1 → V2 渐进
+- **V1（规则优先）**：确定性规则处理显然情况 → tiny judge 处理模糊情况 → route class + budget
+- **V1.5（合同稳定）**：`recommend(request) / resolve(recommendation, policy) / record_outcome()` 接口固定
+- **V2（反馈驱动）**：基于 replay/validation 数据的 learned recommender，低置信度仍 fallback 到规则
+
+#### 永不做的
+- Online bandit/RL 训练（P5 之后才考虑）
+- Learned router 作为 live hot path（先 shadow 推荐，再推广）
+- Auto Router 变成独立服务（保持 plugin-first）
+
+---
+
+## 七、近 1-2 周 Action Items
+
+```
+立刻（P0 验证）：
+  1. 发 Slack DM，验证 ACK 进 thread（Route C 刚部署）
+  2. child-finalizer.ts 加 completion_file_delivered/timeout replay 事件
+  3. judge timeout 调优（qwen3-judge:0.6b-q4km 经常 2s timeout）
+
+本周（Phase 0 核心）：
+  4. octoclaw_status 停止 fallback 到 policyState（读 durable task-state）
+  5. Delivery outbox 完整的 retry/flush 生命周期
+  6. Replay 彻底拆分（消除 delivery relay 在 live path 的最后耦合）
+
+下周（Phase 1）：
+  7. Observer/Patrol/Runner/Ctl 术语边界清晰
+  8. Protected lanes 盘点 + 测试
+```
+
+---
+
+## 八、开源高星路径
+
+完成 Phase 0-2 后，可以对外的 pitch：
 
 > **一条命令安装，让 OpenClaw 变成真正好用的多 agent 工作流引擎**
 >
-> - 消息到来 <1s ACK（再也不用干等）
-> - 复杂任务自动委派，简单任务直接回答（按复杂度自动选模型，省钱）
-> - IM 里能看到任务进度（Slack mrkdwn 面板、飞书卡片）
+> - 消息到来 <1s ACK，任务进 Slack/飞书/微信 thread
+> - 复杂任务自动委派，简单任务直接回答，按复杂度选模型（省钱）
+> - 任务运行中：IM 里能看进度；任务完成：结果推送到原消息线程
 > - 任务失败可以 retry，不需要重头再来
-> - 支持 Slack、飞书、微信（IM adapter 可扩展）
+> - 一份 cost/speed 对比报告，数据上证明比裸跑 OpenClaw 省钱
 
-这个 pitch 结合"npx octoclawctl install 一步搞定"，是可以冲 GitHub 高星的。
-
----
-
-## 六、近期不应该做的
-
-1. **不要在没有 telemetry baseline 的情况下做 online model learning**（Anthropic 原则明确说了）
-2. **不要把 ClawTeam/tmux 变成 live path 依赖**（历史文档和架构诊断都明确 optional）
-3. **不要做 compound/multi-agent 多步编排**（solo_worker 先稳固）
-4. **不要添加新功能来掩盖基础稳定性问题**（先把 ACK/状态面板/delivery 做稳再扩展）
+这个 pitch + `npx octoclawctl install` 是冲 GitHub 高星的正确姿势。但前提是 Phase 0-2 完成，基础稳了。
 
 ---
 
-## 七、Action Items（按顺序）
+## 九、不该做的事
 
-```
-1. 测试 ACK thread 是否通过 Route C 进入正确 thread
-2. child-finalizer.ts 加 completion_file_delivered/timeout 事件（夜间 eval 数据）
-3. Auto Router V1 步骤 1-2（合同定义 + 规则核心）— 1-2 天
-4. Auto Router V1 步骤 3-4（接入 dispatch + shadow validation）— 1-2 天
-5. Retry 基础实现
-6. 飞书 IMAdapter + sendCard
-```
+1. **不要在没有 cost/latency baseline 的情况下做 Auto Router**
+2. **不要把 ClawTeam/tmux 变成 live path 依赖**
+3. **不要做 compound/multi-step 多智能体编排**（solo_worker 先稳固）
+4. **不要把学习循环放进热路径**
+5. **不要重建已经存在的系统**——反馈链路/IM层/Substrate 都有第一桶，统一它们，不是推倒重来
+6. **不要用新功能来掩盖基础稳定性问题**
+
+---
+
+*文档路径：`docs/octoclaw-next-phase-roadmap-2026-04-30.md`*  
+*基于全量文档扫描：docs/、docs/archive/、.planning/phases/ 全部、.sisyphus/、.omx/plans/、历史分支、Anthropic 工程笔记*
