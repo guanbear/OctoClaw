@@ -1066,7 +1066,7 @@ export const plugin = {
       };
       if (isReplyRoute) {
         // Delay for reply routes: cancel if agent starts within 500ms
-        const REPLY_ACK_DELAY_MS = 500;
+        const REPLY_ACK_DELAY_MS = 800;
         const replyAckTimer = setTimeout(() => { void doSendRouteCommitAck(); }, REPLY_ACK_DELAY_MS);
         (replyAckTimer as unknown as { unref?: () => void }).unref?.();
       } else {
