@@ -1,3 +1,4 @@
+import { getAdapterForSession } from "../im/index.js";
 import { sendIMMessage } from "../im/send.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { recordDelivery } from "./ack-dedupe.js";
@@ -41,6 +42,16 @@ interface AckSendResult {
   reason: string;
   target: string;
   threadId: string;
+}
+
+function routeCommitReactionEmoji(state: Record<string, unknown>): string {
+  return asString(state.reactionAckEmoji || state.reaction_ack_emoji) || "eyes";
+}
+
+function reactionAckConfigured(state: Record<string, unknown>): boolean {
+  return asBoolean(state.reactionAckEnabled)
+    || asBoolean(state.reaction_ack_enabled)
+    || Boolean(asString(state.reactionAckEmoji || state.reaction_ack_emoji));
 }
 
 const routeCommitAckOwners = new Map<string, string>();
@@ -131,6 +142,56 @@ function buildRouteCommitAckPacketInternal(
     channelTone: detectChannelTone(decision, state),
     taskClass: asString(routeDecision.task_class),
     language: detectLanguage(decision, state),
+  };
+}
+
+async function sendRouteCommitReactionAckDirect(
+  sessionKey: string,
+  messageId: string,
+  emoji: string,
+  cwd?: string,
+): Promise<AckSendResult> {
+  const resolved = resolveAckTargetFromSessionKey(sessionKey);
+  if (!resolved.target || !messageId) {
+    return {
+      attempted: false,
+      delivered: false,
+      sent: false,
+      error: "unresolvable_reaction_target",
+      reason: "reaction_unresolvable",
+      target: "",
+      threadId: "",
+    };
+  }
+
+  const adapter = getAdapterForSession(sessionKey);
+  if (!adapter) {
+    return {
+      attempted: false,
+      delivered: false,
+      sent: false,
+      error: "reaction_adapter_unavailable",
+      reason: "reaction_ack_unavailable",
+      target: resolved.target,
+      threadId: resolved.threadId,
+    };
+  }
+
+  const result = await adapter.react({
+    sessionKey,
+    messageId,
+    emoji: asString(emoji) || "eyes",
+    timeoutMs: 2500,
+    cwd: asString(cwd) || resolveWorkspaceRoot(),
+  });
+  return {
+    attempted: true,
+    delivered: result.ok,
+    sent: result.ok,
+    error: result.error || "",
+    reason: result.ok ? "reaction_ack_sent" : "reaction_ack_failed",
+    target: adapter.resolveTarget(sessionKey).target || resolved.target,
+    threadId: resolved.threadId,
   };
 }
 
@@ -270,7 +331,9 @@ async function recordRouteCommitAckReplay(
         ackKey,
         ackKind: "route_commit_ack",
         ackSent: Boolean(outcome.sent),
-        ackMode: outcome.sent ? "channel_message" : "not_sent",
+        ackMode: outcome.sent
+          ? outcome.reason === "reaction_ack_sent" ? "reaction" : "channel_message"
+          : "not_sent",
         ack_target_resolution_state: outcome.ack_target_resolution_state,
         ack_delivery_state: outcome.ack_delivery_state,
         reason: outcome.reason,
@@ -362,10 +425,7 @@ export async function sendRouteCommitAck(params: {
       return { sent: false, skipped: true, reason: "reply_already_visible", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_reply_visible", ack_delivery_state: "skipped" };
     }
 
-    const reactionAckConfigured = asBoolean(params.state.reactionAckEnabled)
-      || asBoolean(params.state.reaction_ack_enabled)
-      || Boolean(asString(params.state.reactionAckEmoji || params.state.reaction_ack_emoji));
-    if (reactionAckConfigured) {
+    if (reactionAckConfigured(params.state)) {
       await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
         ack_target_resolution_state: "suppressed_reaction_ack_configured",
         ack_delivery_state: "skipped",
@@ -406,12 +466,23 @@ export async function sendRouteCommitAck(params: {
   }
 
   const projected = projectRouteCommitAckText(packet);
-  const result = await sendRouteCommitAckDirect(
-    params.sessionKey,
-    projected.text,
-    effectiveReplyToMessageId || undefined,
-    params.cwd,
-  );
+  const useReactionAck = reactionAckConfigured(params.state) && hasMessageAnchor;
+  const reactionResult = useReactionAck
+    ? await sendRouteCommitReactionAckDirect(
+        params.sessionKey,
+        effectiveReplyToMessageId,
+        routeCommitReactionEmoji(params.state),
+        params.cwd,
+      )
+    : null;
+  const result = reactionResult && (reactionResult.delivered || reactionResult.sent)
+    ? reactionResult
+    : await sendRouteCommitAckDirect(
+        params.sessionKey,
+        projected.text,
+        effectiveReplyToMessageId || undefined,
+        params.cwd,
+      );
   recordDelivery(ackKey, {
     ackKey,
     sent: result.sent,
@@ -430,7 +501,7 @@ export async function sendRouteCommitAck(params: {
     ack_delivery_state: ackDeliveryState,
     reason: result.reason,
     sent,
-    ackMessage: projected.text,
+    ackMessage: result.reason === "reaction_ack_sent" ? routeCommitReactionEmoji(params.state) : projected.text,
     target: result.target,
     threadId: result.threadId,
   });

@@ -91,10 +91,10 @@ P0 高危区和 Phase 0 是同一件事：下表同时列状态和行动项，�
 | child-finalizer 无 replay 事件 | ✅ **已修（2026-04-30）**：新增 completion_file_delivered / completion_file_timeout / delivery_outbox_queued | — |
 | Judge timeout 过短 | ✅ **已修（2026-04-30）**：timeoutMs 1500→3000ms，timeoutLocalMs 800→2500ms | 如需更大可在 judge-fast.json 里覆盖 |
 | Replay 仍然中心化 | ✅ **已好于预期**：历史文档提到的 `replay-logger.ts` 不存在，当前 `replay.ts` 是干净的工具集，无 delivery relay 耦合，所有调用均为 fire-and-forget | — |
-| Substrate mirror 未废弃 | ❌ 仍开放：native + mirror 双真相，无融合规则 | Phase 4 工作 |
+| Substrate mirror 未废弃 | ✅ 已收口：live path 只保留 managed；legacy mirrored 只读归一为 managed，不再是权威 | Phase 4 已硬收敛 |
 | cost/latency baseline 未自动化 | ❌ 仍开放：D3 nightly 未全接通，gate 决策仍靠直觉 | Phase 2 工作 |
 
-**Phase 0 已全部完成。** 所有 ✅ 项均已修复或确认为好于预期。Substrate mirror 和 cost baseline 是 Phase 4/2 的工作，不属于 Phase 0 范围。
+**Phase 0 已全部完成。** 所有 ✅ 项均已修复或确认为好于预期。cost baseline 是 Phase 2 的工作；Substrate mirror 已在 Phase 4 收口为 legacy read-back，不再是 live path。
 
 ---
 
@@ -169,10 +169,10 @@ observe → summarize → review → curate → validate → promote → learn
 
 ### Phase 4：基底收敛（6-8 周）
 
-**背景**：TaskFlow 的类型定义和 plumbing 已完成（`adapter/runtime-taskflow.ts` 中 syncMode managed/mirrored 字段存在）。但 mirror 模式**没有独立执行逻辑**，走的和 managed 是同一条代码路径，字段值不同但行为相同。工作是**赋予 mirror 明确的语义边界并废弃它，而不是重建 TaskFlow 集成**。
+**背景**：TaskFlow plumbing 已完成。mirror 模式已退出 OctoClaw live path：新建、投影、WorkContract binding 只产生 `syncMode=managed`；旧 native/read-back 中出现的 mirrored 只作为 legacy 输入归一为 managed，不再是权威。
 
 **具体工作**：
-- 明确 mirror 模式的废弃时间表（兼容层保留，不再是权威）
+- ✅ mirror live path 移除：兼容层只读归一，不再输出/存储 mirrored 权威状态
 - 明确字段映射：OctoClaw ↔ native task/flow/run/session
 - Revision/state/wait/cancel 语义对齐
 - 测试：基底状态转换完全可追踪

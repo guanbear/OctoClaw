@@ -924,13 +924,13 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
     completedAt,
     elapsedMs,
     elapsedText: formatElapsed(elapsedMs),
-    model: (() => {
-      const raw = optionalString(record.model, record.model_profile, delegateAttempt.model, runtimeTruth.model, asRecord(runtimeTruth.model_policy).selected_model) ?? "unknown";
-      if (raw === "unknown") return raw;
-      // Show short name: "zhipu/GLM-5.1" → "GLM-5.1"
-      const parts = raw.split("/");
-      return parts[parts.length - 1] || raw;
-    })(),
+    model: optionalString(
+      record.model,
+      record.model_profile,
+      delegateAttempt.model,
+      runtimeTruth.model,
+      asRecord(runtimeTruth.model_policy).selected_model,
+    ) ?? "unknown",
     backend: optionalString(record.backend, workerPool, binding.controllerId, runtimeTruth.backend) ?? "unknown",
     workerPool,
     childSessionKey: evidence.childSessionKey,

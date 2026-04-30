@@ -224,7 +224,7 @@ export interface NativeBindingRef {
   runId?: string;
   childRunId?: string;
   childSessionKey?: string;
-  syncMode: "managed" | "task_mirrored";
+  syncMode: "managed";
   status: NativeFlowStatus;
   currentStep?: string;
   waitKind?: string;

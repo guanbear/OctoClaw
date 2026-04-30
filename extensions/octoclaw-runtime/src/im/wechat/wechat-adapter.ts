@@ -85,6 +85,7 @@ function extractWeChatPayload(text: string): Record<string, unknown> | null {
  */
 export class WeChatAdapter implements IMAdapter {
   readonly channel = "wechat" as const;
+  readonly capabilityLevel = "L0" as const;
   readonly config: WeChatAdapterConfig;
 
   constructor(config?: Partial<WeChatAdapterConfig>) {

@@ -25,7 +25,7 @@ export interface OctoClawRuntimePlugin {
     flowId: string;
     status: string;
     runtime: "openclaw-native";
-    syncMode: "managed" | "mirrored";
+    syncMode: "managed";
     substrateState: string;
     substrateRevision: number;
     truth: RuntimeTaskflowManagedRecord["truth"];
@@ -36,7 +36,7 @@ export interface OctoClawRuntimePlugin {
     flowId: string;
     status: string;
     runtime: "openclaw-native";
-    syncMode: "managed" | "mirrored";
+    syncMode: "managed";
     substrateState: string;
     substrateRevision: number;
     truth: RuntimeTaskflowManagedRecord["truth"];
@@ -90,7 +90,7 @@ export function createOctoClawRuntimePlugin(options: OctoClawRuntimePluginOption
       : taskState?.found && taskState.flowId
         ? taskState.flowId
         : identity.flowId || "";
-    const syncMode = taskState?.syncMode || "managed";
+    const syncMode = "managed" as const;
     const truth: RuntimeNativeTruthPayload & { schemaVersion: string; createdAt: string } = {
       ...buildContractEnvelope("truth", createdAt),
       kind: "truth" as const,

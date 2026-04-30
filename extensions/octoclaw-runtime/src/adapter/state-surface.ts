@@ -12,7 +12,7 @@ export interface RuntimeStateDetailsSurface {
   flowId: string;
   substrateState: string;
   substrateRevision: number;
-  syncMode: "managed" | "mirrored";
+  syncMode: "managed";
   runtime: "openclaw-native";
   claimOwner: string;
   workspaceMode: string;

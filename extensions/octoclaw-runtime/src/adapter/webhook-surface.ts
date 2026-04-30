@@ -35,7 +35,7 @@ export interface WebhookRuntimeStateView {
   flowId: string;
   substrateState: string;
   substrateRevision: number;
-  syncMode: "managed" | "mirrored";
+  syncMode: "managed";
   runtime: "openclaw-native";
   summary: string;
   truth: RuntimeTaskflowTaskRecord["truth"] | RuntimeTaskflowManagedRecord["truth"];
@@ -79,7 +79,7 @@ export interface RuntimeWebhookSurface {
     found: boolean;
     substrateState: string | null;
     substrateRevision: number | null;
-    syncMode?: "managed" | "mirrored";
+    syncMode?: "managed";
     progressSummary?: string;
     summary: string;
   };

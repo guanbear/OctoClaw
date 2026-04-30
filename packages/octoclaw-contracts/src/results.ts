@@ -36,7 +36,7 @@ export interface DelegatedMaterialization extends ContractEnvelope, ExecutionIde
   materializationId: string;
   substrateState: string;
   substrateRevision: number;
-  syncMode: "managed" | "mirrored";
+  syncMode: "managed";
   delegatedAt: string;
   capabilityRequirements?: CapabilityDescriptor[];
 }

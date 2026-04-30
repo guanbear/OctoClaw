@@ -58,7 +58,7 @@ OpenClaw 继续是 runtime substrate，负责：
 
 - detached `tasks + TaskFlow` 事实层
 - owner-scoped task / taskflow 生命周期与回到 session 的基线能力
-- `task_mirrored` / `managed` 两类 TaskFlow substrate，以及其 revision / state / wait / cancel intent 语义
+- `managed` TaskFlow substrate，以及其 revision / state / wait / cancel intent 语义；历史 `task_mirrored` 只作为 legacy read-back 归一输入
 - node / gateway / extension / tool 接入面
 
 截至 OpenClaw `2026.4.5`，这里更准确的理解不再是“有一层笼统的 tasks/flows”。
@@ -329,7 +329,7 @@ ClawTeam、tmux workbench、programmatic tool execution 都属于增强层。当
 同时也要看到，OpenClaw `2026.4.5` 把上游 substrate 又往前推了一拍：
 
 - TaskFlow 不再只是最小 one-task / linear shell 的表面
-- 上游已经明确区分 `task_mirrored` 与 `managed` 两类 flow sync mode
+- OctoClaw live path 只保留 `managed` flow sync mode；历史 `task_mirrored` 只读归一为 managed
 - `managed TaskFlow` 已有 revision / opaque state / wait blob / cancel intent
 - child task spawning 与 sticky cancel 已成为 parent-job 语义的一部分
 

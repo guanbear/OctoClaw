@@ -640,6 +640,51 @@ describe("octoclawctl nightly-eval integration", () => {
     expect(fileNames.some((fileName) => /-nightly\.json$/u.test(fileName))).toBe(true);
   });
 
+
+
+  it("review aggregates failure samples from nightly lanes", async () => {
+    const reportPath = path.join(tmpDir, "nightly-eval.json");
+    await fs.writeFile(reportPath, JSON.stringify({
+      schemaVersion: "octoclaw.nightly_eval.report/v1",
+      generatedAt: "2026-04-30T00:00:00.000Z",
+      overallGate: "fail",
+      steps: {
+        nightly: {
+          status: "fail",
+          report: {
+            lanes: [
+              { lane: "route_quality", samples: [{ eventId: "evt-route", turnId: "turn-1", verdict: "false_delegate", reason: "route mismatch" }] },
+              { lane: "delivery", samples: [{ eventId: "evt-delivery", taskId: "task-1", verdict: "delivery_failed", reason: "timeout" }] },
+            ],
+          },
+        },
+      },
+    }), "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(["review", "--input", reportPath, "--format", "json"], {}, capture.io);
+
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(capture.stdout[0]);
+    expect(output.failures).toHaveLength(2);
+    expect(output.failures[0]).toMatchObject({ lane: "route_quality", eventId: "evt-route", turnId: "turn-1", verdict: "false_delegate" });
+    expect(output.failures[1]).toMatchObject({ lane: "delivery", eventId: "evt-delivery", taskId: "task-1", verdict: "delivery_failed" });
+  });
+
+  it("nightly-eval promote rejects unknown gate", async () => {
+    const reportPath = path.join(tmpDir, "unknown-nightly-eval.json");
+    await fs.writeFile(reportPath, JSON.stringify({
+      schemaVersion: "octoclaw.nightly_eval.report/v1",
+      overallGate: "unknown",
+    }), "utf8");
+
+    const capture = createIo();
+    const exitCode = await main(["nightly-eval", "promote", "--input", reportPath, "--openclaw-home", path.join(tmpDir, ".openclaw")], {}, capture.io);
+
+    expect(exitCode).toBe(1);
+    expect(capture.stderr[0]).toContain("unless gate=pass");
+  });
+
   it("fails closed on malformed nightly-eval config", async () => {
     const configPath = path.join(tmpDir, "bad.json");
     const outputDirPath = path.join(tmpDir, "reports");

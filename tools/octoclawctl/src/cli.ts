@@ -186,6 +186,10 @@ function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function asRecord(value: unknown): JsonRecord {
+  return isRecord(value) ? value : {};
+}
+
 function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
@@ -353,7 +357,7 @@ export function resolveRuntimeStateSurfaceRecord(
   const workspaceMode = normalizeWorkspaceMode(env.OCTOCLAW_WORKSPACE_MODE);
   const writeScopeSummary = env.OCTOCLAW_WRITE_SCOPE_SUMMARY ?? "repo:workspace";
   const substrateState = normalizeSubstrateState(env.OCTOCLAW_SUBSTRATE_STATE);
-  const syncMode = env.OCTOCLAW_SYNC_MODE === "mirrored" ? "mirrored" : "managed";
+  const syncMode = "managed";
   const resolvedRevision = Number.isNaN(substrateRevision) ? 1 : substrateRevision;
 
   return {
@@ -1940,8 +1944,8 @@ async function runNightlyEvalPromoteCommand(parsed: ParsedCliArgs, _env: Record<
   const raw = await fs.readFile(reportPath, "utf8");
   const report = JSON.parse(raw) as { overallGate?: string };
   const gate = report.overallGate ?? "unknown";
-  if (gate === "fail") {
-    throw new Error(`Cannot promote a failed eval report (gate=${gate}). Fix regressions first.`);
+  if (gate !== "pass") {
+    throw new Error(`Cannot promote eval report unless gate=pass (gate=${gate}). Fix regressions first.`);
   }
   await writeStoredBaseline(reportPath, gate, openclawHome);
   return `Baseline promoted: ${reportPath} (gate=${gate})`;
@@ -1962,6 +1966,71 @@ async function runNightlyEvalShowBaselineCommand(parsed: ParsedCliArgs, _env: Re
   return JSON.stringify(baseline, null, 2);
 }
 
+interface ReviewFailureSample {
+  lane: string;
+  eventId?: string;
+  at?: string;
+  turnId?: string;
+  taskId?: string;
+  event?: string;
+  verdict: string;
+  reason: string;
+}
+
+function isReviewableVerdict(verdict: string): boolean {
+  const lower = verdict.toLowerCase();
+  return lower === "fail"
+    || lower === "failed"
+    || lower === "unknown"
+    || lower === "unclear"
+    || lower.includes("fail")
+    || lower.includes("unknown")
+    || lower.includes("false_")
+    || lower.includes("missing")
+    || lower.includes("timeout")
+    || lower.includes("stale")
+    || lower.includes("orphan")
+    || lower.includes("compensated")
+    || lower.includes("no_spawn");
+}
+
+function sampleToReviewFailure(sample: unknown, lane: string): ReviewFailureSample | null {
+  const rec = asRecord(sample);
+  const verdict = asString(rec.verdict);
+  if (!verdict || !isReviewableVerdict(verdict)) return null;
+  return {
+    lane,
+    eventId: asString(rec.eventId) || undefined,
+    at: asString(rec.at) || undefined,
+    turnId: asString(rec.turnId) || undefined,
+    taskId: asString(rec.taskId) || undefined,
+    event: asString(rec.event) || undefined,
+    verdict,
+    reason: asString(rec.reason),
+  };
+}
+
+function collectNightlyReviewFailures(report: JsonRecord): ReviewFailureSample[] {
+  const nightlyReport = asRecord(asRecord(asRecord(report.steps).nightly).report);
+  const failures: ReviewFailureSample[] = [];
+  const lanes = Array.isArray(nightlyReport.lanes) ? nightlyReport.lanes : [];
+  for (const laneValue of lanes) {
+    const lane = asRecord(laneValue);
+    const laneName = asString(lane.lane, "unknown_lane");
+    const samples = Array.isArray(lane.samples) ? lane.samples : [];
+    for (const sample of samples) {
+      const failure = sampleToReviewFailure(sample, laneName);
+      if (failure) failures.push(failure);
+    }
+  }
+  const legacySamples = Array.isArray(nightlyReport.samples) ? nightlyReport.samples : [];
+  for (const sample of legacySamples) {
+    const failure = sampleToReviewFailure(sample, "legacy");
+    if (failure) failures.push(failure);
+  }
+  return failures;
+}
+
 /** review: show failure/unknown samples from the latest nightly report. */
 async function runReviewCommand(parsed: ParsedCliArgs, _env: Record<string, string | undefined>): Promise<string> {
   const openclawHome = parsed.openclawHome ?? path.join(os.homedir(), ".openclaw");
@@ -1978,27 +2047,20 @@ async function runReviewCommand(parsed: ParsedCliArgs, _env: Record<string, stri
     }
   }
   const raw = await fs.readFile(reportPath, "utf8");
-  const report = JSON.parse(raw) as {
-    overallGate?: string;
-    generatedAt?: string;
-    steps?: {
-      nightly?: { status?: string; report?: { samples?: { verdict?: string; event?: string; reason?: string }[] } };
-    };
-  };
+  const report = JSON.parse(raw) as JsonRecord;
   const lines: string[] = [
     `=== Review: ${path.basename(reportPath)} ===`,
     `Generated: ${report.generatedAt ?? "unknown"}  Gate: ${report.overallGate ?? "unknown"}`,
-    `Nightly: ${report.steps?.nightly?.status ?? "unknown"}`,
+    `Nightly: ${asString(asRecord(asRecord(report.steps).nightly).status, "unknown")}`,
     "",
   ];
-  const samples = report.steps?.nightly?.report?.samples ?? [];
-  const failures = samples.filter((s) => s.verdict === "fail" || s.verdict === "unknown" || s.verdict === "false_delegate" || s.verdict === "false_reply");
+  const failures = collectNightlyReviewFailures(report);
   if (failures.length === 0) {
     lines.push("No failures or unknowns found. Pipeline looks clean.");
   } else {
     lines.push(`${failures.length} sample(s) need review:`);
     for (const s of failures.slice(0, 20)) {
-      lines.push(`  [${s.verdict}] ${s.event ?? ""}  — ${s.reason ?? ""}`);
+      lines.push(`  [${s.lane}/${s.verdict}] ${s.eventId || s.event || s.turnId || s.taskId || "sample"}  — ${s.reason || "needs review"}`);
     }
     if (failures.length > 20) {
       lines.push(`  ... and ${failures.length - 20} more. Use --format json for full list.`);

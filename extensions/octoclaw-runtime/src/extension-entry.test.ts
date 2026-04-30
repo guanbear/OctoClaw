@@ -672,6 +672,59 @@ describe("before_tool_call route hint guard", () => {
     policyState.clearState(delegateKey);
   });
 
+  it("binds octoclaw_route_hint task to the current Slack context before later tool calls", async () => {
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:default:direct:u0al9t5u89z";
+    const now = Date.now();
+    policyState.setState(key, {
+      prompt: "上一个委派任务",
+      decision: {
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: true, route_hint_tool: "octoclaw_route_hint" } },
+        route_hint_policy: { required: true, submitted: false },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      createdAt: now - 1000,
+      updatedAt: now - 1000,
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const hintResult = await beforeToolCall!(
+      { toolName: "octoclaw_route_hint", params: { task: "查询北京五一假期天气", routeHint: "reply" } },
+      { sessionKey: key, agentId: "main" },
+    );
+    expect(hintResult).toBeUndefined();
+    expect(policyState.getState(key)?.prompt).toBe("查询北京五一假期天气");
+
+    policyState.setState(key, {
+      ...(policyState.getState(key) ?? {}),
+      decision: {
+        route_decision: { route: "reply" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: true, route_hint_tool: "octoclaw_route_hint" } },
+        route_hint_policy: { required: true, submitted: true },
+        tool_policy: { allow_direct_tools: true },
+      },
+      routeHintSubmitted: true,
+      updatedAt: Date.now(),
+    });
+
+    const toolResult = await beforeToolCall!(
+      { toolName: "exec", params: { command: "curl -s wttr.in/Beijing" } },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(toolResult).toBeUndefined();
+    policyState.clearState(key);
+  });
+
   it("does not block direct tools after a reply route_hint is stored on a newer context alias", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({

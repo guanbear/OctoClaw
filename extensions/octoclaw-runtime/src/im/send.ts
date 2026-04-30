@@ -1,4 +1,4 @@
-import { getAdapterForSession } from "./index.js";
+import { getAdapterForSession, sendWithDegradation } from "./index.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import type { IMProjectionFooter } from "./adapter.js";
 
@@ -24,7 +24,7 @@ export async function sendIMMessage(params: SendIMParams): Promise<SendIMResult>
   if (!adapter) {
     return { sent: false, error: "no_im_adapter" };
   }
-  const result = await adapter.send({
+  const result = await sendWithDegradation(adapter, {
     sessionKey: params.sessionKey,
     message: params.message,
     replyToMessageId: params.replyToMessageId,

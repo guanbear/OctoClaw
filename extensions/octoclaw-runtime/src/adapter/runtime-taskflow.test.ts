@@ -128,7 +128,7 @@ function buildHelperInvoker(): HelperRecorder {
             taskId: input.args.task_id,
             status: "running",
             revision: 13,
-            syncMode: "mirrored",
+            syncMode: "managed",
             state: "waiting",
             progressSummary: "blocked on input",
           },
@@ -253,7 +253,7 @@ describe("runtime taskflow adapter", () => {
     });
   });
 
-  it("readTask returns state revision and syncMode", () => {
+  it("readTask normalizes legacy mirrored syncMode to managed", () => {
     const result = createRuntimeTaskflowAdapter(buildHelperInvoker().invoker)
       .bindSession("session-5")
       .readTask("flow-read", "task-read");
@@ -266,7 +266,7 @@ describe("runtime taskflow adapter", () => {
       found: true,
       substrateState: "waiting",
       substrateRevision: 13,
-      syncMode: "mirrored",
+      syncMode: "managed",
       progressSummary: "blocked on input",
     });
   });

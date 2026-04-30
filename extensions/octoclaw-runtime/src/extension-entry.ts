@@ -815,6 +815,26 @@ function updatePolicyState(stateKey: string, mutator: (current: PolicyStateEntry
   policyState.update(key, (current) => mutator(current));
 }
 
+function bindRouteHintPromptToCurrentContext(ctx: UnknownRecord, toolParams: UnknownRecord): void {
+  const task = stringValue(toolParams.task);
+  if (!task) return;
+  const keys = resolvePolicyStateKeys(ctx).filter(Boolean);
+  if (keys.length === 0) return;
+  const now = Date.now();
+  for (const key of keys) {
+    const existing = policyState.get(key);
+    policyState.set(key, {
+      ...(existing ?? {}),
+      prompt: task,
+      canonicalSessionKey: stringValue(existing?.canonicalSessionKey) || key,
+      routeHintPending: true,
+      route_hint_pending: true,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    } as PolicyStateEntry);
+  }
+}
+
 function clearPolicyStateForContext(ctx: UnknownRecord): void {
   const { key } = getPolicyStateForContext(ctx);
   if (key) {
@@ -1176,6 +1196,16 @@ export const plugin = {
             effectiveState.routeCommitAckSent = true;
             effectiveState.route_commit_ack_sent = true;
             effectiveState.routeCommitAckId = routeCommitResult.routeCommitId;
+            if (routeCommitResult.reason === "reaction_ack_sent") {
+              updateAckTrackingState(routeCommitAckParams.stateKey || preStateKey, {
+                reactionAckSent: true,
+                reaction_ack_sent: true,
+                reactionAckAttempted: true,
+                reaction_ack_attempted: true,
+                latencyAckSent: true,
+                latencyAckMode: "reaction",
+              });
+            }
           }
         } catch (routeCommitErr) {
           pi.logger?.warn?.(`octoclaw route-commit-ack error: ${String(routeCommitErr)}`);
@@ -1295,6 +1325,9 @@ export const plugin = {
       if (!isManagedAgentContext(ctx)) return;
       const toolName = stringValue(event.toolName || ctx.toolName);
       const toolParams = asRecord(event.params || event.arguments || event.input);
+      if (toolName === "octoclaw_route_hint") {
+        bindRouteHintPromptToCurrentContext(ctx, toolParams);
+      }
       let { key: stateKey, state } = getPolicyStateForContext(ctx);
       if (toolName === "octoclaw_dispatch") {
         const taskPolicyContext = policyState.getToolPolicyContext(ctx, stringValue(toolParams.task));

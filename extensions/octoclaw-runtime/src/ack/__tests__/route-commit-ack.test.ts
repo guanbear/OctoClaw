@@ -9,6 +9,23 @@ import {
   type RouteCommitAckPacket,
 } from "../ack-route-commit.js";
 
+let useMockAdapter = false;
+
+const imAdapter = {
+  canHandle: vi.fn(() => true),
+  resolveTarget: vi.fn(() => ({ target: "C1" })),
+  send: vi.fn(),
+  react: vi.fn(),
+};
+
+vi.mock("../../im/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../im/index.js")>();
+  return {
+    ...actual,
+    getAdapterForSession: (sessionKey: string) => useMockAdapter ? imAdapter : actual.getAdapterForSession(sessionKey),
+  };
+});
+
 function packet(overrides: Partial<RouteCommitAckPacket> = {}): RouteCommitAckPacket {
   return {
     routeCommitId: "wc-123",
@@ -37,6 +54,11 @@ function decision(overrides: Record<string, unknown> = {}): Record<string, unkno
 describe("route commit ACK", () => {
   beforeEach(() => {
     resetRouteCommitAckState();
+    vi.clearAllMocks();
+    useMockAdapter = false;
+    imAdapter.canHandle.mockReturnValue(true);
+    imAdapter.resolveTarget.mockReturnValue({ target: "C1" });
+    imAdapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "1700000000.000100" });
   });
 
   it("projects truthful zh delegate text without execution claims", () => {
@@ -370,7 +392,7 @@ describe("route commit ACK", () => {
     replaySpy.mockRestore();
   });
 
-  it("still sends delegate route commit ACK when reaction ACK is configured", async () => {
+  it("uses reaction ACK for delegate route commit ACK when configured", async () => {
     const envModule = await import("../../resolve/env.js");
     const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
       code: 0,
@@ -378,6 +400,8 @@ describe("route commit ACK", () => {
       stderr: "",
       timedOut: false,
     });
+    useMockAdapter = true;
+    imAdapter.react.mockResolvedValue({ ok: true });
 
     const result = await sendRouteCommitAck({
       sessionKey: "slack:channel:C1:thread:1700000000.000100",
@@ -389,8 +413,40 @@ describe("route commit ACK", () => {
 
     expect(result.sent).toBe(true);
     expect(result.skipped).toBe(false);
+    expect(result.reason).toBe("reaction_ack_sent");
+    expect(imAdapter.react).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "1700000000.000100",
+      emoji: "eyes",
+    }));
+    expect(runCommandSpy).not.toHaveBeenCalled();
+
+    runCommandSpy.mockRestore();
+  });
+
+  it("falls back to text delegate route commit ACK when reaction fails", async () => {
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+    useMockAdapter = true;
+    imAdapter.react.mockResolvedValue({ ok: false, error: "missing_scope" });
+
+    const result = await sendRouteCommitAck({
+      sessionKey: "slack:channel:C1:thread:1700000000.000100",
+      stateKey: "state-1",
+      decision: decision(),
+      state: { reactionAckEnabled: true, reactionAckEmoji: "eyes" },
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(result.sent).toBe(true);
     expect(result.reason).toBe("channel_message_sent");
-    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(imAdapter.react).toHaveBeenCalledOnce();
+    expect(imAdapter.send).toHaveBeenCalledOnce();
+    expect(runCommandSpy).not.toHaveBeenCalled();
 
     runCommandSpy.mockRestore();
   });

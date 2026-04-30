@@ -20,6 +20,7 @@ const adapter = {
 
 vi.mock("../im/index.js", () => ({
   getAdapterForSession: () => adapter,
+  sendWithDegradation: async (adapterArg: typeof adapter, params: Record<string, unknown>) => adapterArg.send(params),
 }));
 
 afterEach(() => {

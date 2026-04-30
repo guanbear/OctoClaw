@@ -110,6 +110,7 @@ function extractFeishuPayload(text: string): FeishuCommandResult | null {
  */
 export class FeishuAdapter implements IMAdapter {
   readonly channel = "feishu" as const;
+  readonly capabilityLevel = "L1" as const;
   readonly config: FeishuAdapterConfig;
 
   constructor(config?: Partial<FeishuAdapterConfig>) {

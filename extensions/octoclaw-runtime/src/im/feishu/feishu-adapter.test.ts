@@ -12,6 +12,10 @@ function mockRun(code: number, stdout: string, stderr = "") {
 }
 
 describe("FeishuAdapter", () => {
+  it("declares Feishu as L1", () => {
+    expect(new FeishuAdapter().capabilityLevel).toBe("L1");
+  });
+
   it("canHandle matches feishu session keys", () => {
     const adapter = new FeishuAdapter();
     expect(adapter.canHandle("agent:main:feishu:default:direct:ou_abc123")).toBe(true);

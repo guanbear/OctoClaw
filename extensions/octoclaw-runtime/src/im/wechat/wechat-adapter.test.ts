@@ -12,6 +12,10 @@ function mockRun(code: number, stdout: string, stderr = "") {
 }
 
 describe("WeChatAdapter", () => {
+  it("declares WeChat as L0", () => {
+    expect(new WeChatAdapter().capabilityLevel).toBe("L0");
+  });
+
   it("canHandle matches wechat session keys", () => {
     const adapter = new WeChatAdapter();
     expect(adapter.canHandle("agent:main:wechat:default:direct:wxid_abc")).toBe(true);

@@ -61,7 +61,7 @@ export interface NativeRunTaskHelperResult {
   task: {
     taskId: string;
     status: string;
-    syncMode: "managed" | "mirrored";
+    syncMode: "managed";
     state: string;
     revision: number;
     runId?: string;
@@ -103,7 +103,7 @@ export interface NativeReadTaskHelperResult {
     taskId: string;
     status: string;
     revision: number;
-    syncMode?: "managed" | "mirrored";
+    syncMode?: "managed";
     state?: string;
     progressSummary?: string;
   } | null;
@@ -174,8 +174,7 @@ function normalizeRunTaskResult(payload: any): NativeRunTaskHelperResult {
   if (payload?.ok !== true) {
     failClosed(payload?.error || payload?.status || "run-task returned non-ok response");
   }
-  const rawSyncMode = String(payload.task?.syncMode || "").trim();
-  const syncMode = rawSyncMode === "managed" || rawSyncMode === "mirrored" ? rawSyncMode : "managed";
+  const syncMode = "managed";
   return {
     ok: true,
     native_task_id: ensureString(payload.native_task_id || payload.task?.taskId, "native_task_id"),
@@ -234,9 +233,7 @@ function normalizeReadTaskResult(payload: any): NativeReadTaskHelperResult {
           taskId: ensureString(payload.task.taskId || payload.task_id, "task.taskId"),
           status: ensureString(payload.task.status, "task.status"),
           revision: ensureNumber(payload.task.revision, "task.revision"),
-          syncMode: payload.task.syncMode === "managed" || payload.task.syncMode === "mirrored"
-            ? payload.task.syncMode
-            : undefined,
+          syncMode: payload.task.syncMode ? "managed" : undefined,
           state: String(payload.task.state || "").trim() || undefined,
           progressSummary: String(payload.task.progressSummary || "").trim() || undefined,
         }

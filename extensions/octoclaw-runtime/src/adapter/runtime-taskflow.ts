@@ -14,19 +14,10 @@ export interface RuntimeNativeTruthPayload {
   flowId: string;
   taskId: string;
   runtime: "openclaw-native";
-  /**
-   * Canonical sync mode for this task. "managed" is the only active mode;
-   * "mirrored" is kept for read-back compatibility but is not a live path.
-   * @deprecated Use "managed". "mirrored" will be removed in a future release.
-   */
-  syncMode: "managed" | "mirrored";
+  syncMode: "managed";
   substrateState: RuntimeWorkflowState["workflowOrchestration"];
   substrateRevision: number;
-  /**
-   * Redundant copy of syncMode kept for wire-format compatibility.
-   * @deprecated Read syncMode instead. This field will be removed in a future release.
-   */
-  managedDisposition: "managed" | "mirrored";
+  managedDisposition: "managed";
   ownership: {
     claimOwner: string;
     claimToken: string;
@@ -60,10 +51,7 @@ export interface RuntimeArtifactPayload {
 export interface RuntimeTelemetryPayload {
   kind: "telemetry";
   substrateRevision: number;
-  /**
-   * @deprecated "mirrored" is not an active execution path. Always "managed" for new tasks.
-   */
-  syncMode: "managed" | "mirrored";
+  syncMode: "managed";
   claimOwner: string;
 }
 
@@ -72,16 +60,10 @@ export interface RuntimeTaskflowManagedRecord {
   controllerId: string;
   managed: true;
   runtime: "openclaw-native";
-  /**
-   * @deprecated "mirrored" is not an active execution path. Always "managed" for new records.
-   */
-  syncMode: "managed" | "mirrored";
+  syncMode: "managed";
   substrateState: RuntimeWorkflowState["workflowOrchestration"];
   substrateRevision: number;
-  /**
-   * @deprecated Redundant copy of syncMode. Read syncMode instead.
-   */
-  managedDisposition: "managed" | "mirrored";
+  managedDisposition: "managed";
   ownership: {
     claimOwner: string;
     claimToken: string;
@@ -102,10 +84,7 @@ export interface RuntimeTaskflowTaskRecord {
   taskId: string;
   flowId: string;
   runtime: "openclaw-native";
-  /**
-   * @deprecated "mirrored" is not an active execution path. Will be restricted to "managed" only.
-   */
-  syncMode: "managed" | "mirrored";
+  syncMode: "managed";
   substrateState: RuntimeWorkflowState["workflowOrchestration"];
   substrateRevision: number;
   ownership: {
@@ -154,10 +133,7 @@ export interface RuntimeTaskflowSessionBinding {
     found: boolean;
     substrateState: string | null;
     substrateRevision: number | null;
-    /**
-     * @deprecated "mirrored" is not an active execution path.
-     */
-    syncMode?: "managed" | "mirrored";
+    syncMode?: "managed";
     progressSummary?: string;
   };
 }
@@ -245,10 +221,10 @@ function deriveTruthShape(
   native: {
     flowId: string;
     taskId: string;
-    syncMode: "managed" | "mirrored";
+    syncMode: "managed";
     substrateState: RuntimeWorkflowState["workflowOrchestration"];
     substrateRevision: number;
-    managedDisposition: "managed" | "mirrored";
+    managedDisposition: "managed";
   },
 ) {
   const identity = workflowIdentity(workflow);
@@ -396,10 +372,10 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
       const derived = deriveTruthShape(sessionKey, workflow, {
         flowId: helperResult.flow_id,
         taskId: helperResult.task.taskId,
-        syncMode: helperResult.task.syncMode,
+        syncMode: "managed",
         substrateState: helperResult.task.state as RuntimeWorkflowState["workflowOrchestration"],
         substrateRevision: helperResult.task.revision,
-        managedDisposition: helperResult.task.syncMode,
+        managedDisposition: "managed",
       });
       return {
         taskId: helperResult.task.taskId,
@@ -476,7 +452,7 @@ export function createRuntimeTaskflowAdapter(helperInvoker: NativeHelperInvoker 
         found: helperResult.found,
         substrateState: helperResult.task?.state || helperResult.task?.status || null,
         substrateRevision: helperResult.task?.revision ?? null,
-        syncMode: helperResult.task?.syncMode,
+        syncMode: helperResult.task ? "managed" : undefined,
         progressSummary: helperResult.task?.progressSummary,
       };
     },
