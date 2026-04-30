@@ -181,11 +181,11 @@ observe → summarize → review → curate → validate → promote → learn
 
 ### Phase 5：Auto Router 加固（8-10 周）
 
-**前提**：Phase 0-4 全部完成，有 cost/latency baseline
+**前提**：Phase 0-4 全部完成，有 cost/latency baseline ✅
 
-**Auto Router 完整设计**（来自 `octoclaw-auto-router-design.md`）：
+**详细设计**：[`octoclaw-phase5-auto-router-design-2026-04-30.md`](octoclaw-phase5-auto-router-design-2026-04-30.md)
 
-Router 的**第一个任务**是决定执行合同：
+Auto Router 的**第一个任务**是决定执行合同：
 - `direct`：主 agent 直接完成
 - `runner`：轻量任务执行 lane
 - `spawn_single`：委派给单一子 agent（默认）
@@ -193,9 +193,16 @@ Router 的**第一个任务**是决定执行合同：
 
 五层架构：Signal → Router Core → Budget Planner → Policy/Gateway → Model-Intel/Feedback
 
+实现切片：
+- **P5-A**：recommendation contract 抽离 — 建立 TypeScript 合同，不改 live path
+- **P5-B**：Shadow mode 接线 — `before_model_resolve` 只 log，连跑 7 天建立 baseline
+- **P5-C**：Tiny Judge + Budget Planner — 模糊样本走 judge，budget 作为 first-class 输出
+- **P5-D**：Outcome 回流 + gated promotion — precision ≥ 0.85 才推 live
+
 **永不做的**：
 - Online bandit/RL 训练（P5 之后才考虑）
 - Learned router 作为 live hot path（先 shadow 推荐，再推广）
+- 跳过 calibration gate 直接改 live config
 
 ---
 
@@ -242,7 +249,8 @@ Router 的**第一个任务**是决定执行合同：
 | [octoclaw-feedback-loop-contracts.md](octoclaw-feedback-loop-contracts.md) | 七步反馈链路合同：observe→summarize→review→curate→validate→promote→learn | Phase 2 ✅ |
 | [octoclaw-nightly-eval-scheduler-2026-04-26.md](octoclaw-nightly-eval-scheduler-2026-04-26.md) | 夜间 eval 调度、D3 指标接通方案 | Phase 2 ✅ |
 | [octoclaw-im-display-contract.md](octoclaw-im-display-contract.md) | IM 渲染合同：anchor/thread/action/artifact 语义 | Phase 3 |
-| [octoclaw-auto-router-design.md](octoclaw-auto-router-design.md) | Auto Router 五层架构完整设计 | Phase 5 |
+| [octoclaw-phase5-auto-router-design-2026-04-30.md](octoclaw-phase5-auto-router-design-2026-04-30.md) | Phase 5 Auto Router 详细设计：5层架构、TypeScript合同、P5-A/B/C/D 切片、shadow rollout、与Phase2集成 | Phase 5 |
+| [octoclaw-auto-router-design.md](octoclaw-auto-router-design.md) | Auto Router 战略底稿：外部参考分析、边界判断、session/surface awareness | Phase 5（历史底稿）|
 
 ---
 
