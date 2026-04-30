@@ -1710,38 +1710,6 @@ export const plugin = {
         updateAckTrackingState(stateKey, { formal_reply_visible: true });
         updatePolicyState(stateKey, (current) => ({ ...(current ?? {}), formal_reply_visible: true }));
       }
-      // Add reply projection footer for non-ACK assistant messages.
-      // Must happen here (before_message_write) because message_sending does not
-      // fire for model-generated responses — only for programmatic plugin messages.
-      let footerMessage: UnknownRecord | null = null;
-      if (!isLikelyAck && contentText && replyProjectionFooterEnabled()) {
-        const withFooter = appendReplyProjectionFooter(contentText, stateRecord, {}, ctx);
-        if (withFooter !== contentText) {
-          const base = asRecord(visibleMessage);
-          const baseContent = base.content;
-          let newContent: unknown;
-          if (typeof baseContent === "string") {
-            newContent = withFooter;
-          } else if (Array.isArray(baseContent)) {
-            // Replace last text-type block's text with footer version
-            const blocks = [...(baseContent as unknown[])];
-            for (let i = blocks.length - 1; i >= 0; i--) {
-              const b = asRecord(blocks[i]);
-              if (b.type === "text" && typeof b.text === "string") {
-                blocks[i] = { ...b, text: withFooter };
-                break;
-              }
-            }
-            newContent = blocks;
-          } else {
-            newContent = baseContent;
-          }
-          footerMessage = { ...base, content: newContent };
-        }
-      }
-      if (footerMessage) {
-        return { message: footerMessage };
-      }
       if (visibleMessage !== asRecord(event.message)) {
         return { message: visibleMessage };
       }
