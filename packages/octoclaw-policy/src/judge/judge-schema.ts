@@ -216,8 +216,8 @@ export const JUDGE_INPUT_CAPS = {
 export const JUDGE_FAST_DEFAULTS: Omit<JudgeFastConfig, "modelId" | "baseUrl" | "apiKey"> = {
   enabled: true,
   shadowMode: false,
-  timeoutMs: 1500,
-  timeoutLocalMs: 800,
+  timeoutMs: 3000,
+  timeoutLocalMs: 2500,
   minConfidence: 0.6,
   local: false,
 };

@@ -3,11 +3,12 @@ import type { WorkerCompletionResult } from "@octoclaw/contracts/completion";
 import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
 import { appendToDeliveryOutbox } from "../delivery/delivery-outbox.js";
 import { sendIMMessage } from "../im/send.js";
-import { resolveWorkerCompletionPath, resolveWorkspaceRoot } from "../resolve/env.js";
+import { resolveWorkerCompletionPath, resolveWorkspaceRoot, resolveReplayLogPath } from "../resolve/env.js";
 import {
   upsertTaskStateRecord,
   type TaskStateRecord,
 } from "../state/task-state-store.js";
+import { appendJsonl } from "../replay/replay.js";
 
 /** Shorten a raw model ID or profile name for display: "zhipu/GLM-5.1" → "GLM-5.1" */
 function shortModelName(raw: string | undefined): string {
@@ -225,11 +226,27 @@ export async function finalizeChildSessionOnce(options: ChildCompletionFinalizer
     queueOutboxDelivery(options, message);
     updateTaskStateCompleted(options, completion, deliveryStatus);
     materializeCompletedWorkContract(options, deliveryStatus);
+    void appendJsonl(resolveReplayLogPath(), {
+      schema_version: "octoclaw.runtime_policy.replay_event/v1",
+      event: "delivery_outbox_queued",
+      at: new Date().toISOString(),
+      workContractId: options.workContractId,
+      parentSessionKey: options.parentSessionKey,
+      error: result.error || deliveryStatus,
+    }).catch(() => {});
     return { status: "delivery_failed", resultText: completion.summary, error: result.error || deliveryStatus };
   }
   const deliveryStatus = "delivered";
   updateTaskStateCompleted(options, completion, deliveryStatus);
   materializeCompletedWorkContract(options, deliveryStatus);
+  void appendJsonl(resolveReplayLogPath(), {
+    schema_version: "octoclaw.runtime_policy.replay_event/v1",
+    event: "completion_file_delivered",
+    at: new Date().toISOString(),
+    workContractId: options.workContractId,
+    parentSessionKey: options.parentSessionKey,
+    resultText: completion.summary ? String(completion.summary).slice(0, 200) : "",
+  }).catch(() => {});
   return { status: result.sent ? "completed" : "delivery_failed", resultText: completion.summary, sent: result.sent, error: result.error || undefined };
 }
 
@@ -249,6 +266,14 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
       if (Date.now() >= deadline) {
         activeFinalizers.delete(key);
         markTimedOut(options, timeoutMs);
+        void appendJsonl(resolveReplayLogPath(), {
+          schema_version: "octoclaw.runtime_policy.replay_event/v1",
+          event: "completion_file_timeout",
+          at: new Date().toISOString(),
+          workContractId: options.workContractId,
+          parentSessionKey: options.parentSessionKey,
+          timeoutMs,
+        }).catch(() => {});
         return;
       }
       const timer = setTimeout(tick, pollIntervalMs);
