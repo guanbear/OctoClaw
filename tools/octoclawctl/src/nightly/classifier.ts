@@ -407,7 +407,9 @@ export function classifyRouteCommitAck(events: ReplayEvent[]): RouteCommitAckLan
 
   const total = ackEvents.length + ackMissing;
   const passCount = ackSent;
-  const failCount = ackFailed + ackMissing + ackDuplicate;
+  // ackNoTarget was previously in 'unknown' as a known bug workaround.
+  // The no_valid_thread_anchor fix means these should now be rare → treat as fail.
+  const failCount = ackFailed + ackMissing + ackDuplicate + ackNoTarget;
   const coverage = total > 0 ? ackSent / total : 0;
 
   return {
@@ -415,7 +417,7 @@ export function classifyRouteCommitAck(events: ReplayEvent[]): RouteCommitAckLan
     total,
     pass: passCount,
     fail: failCount,
-    unknown: ackSkipped + ackNoTarget,
+    unknown: ackSkipped,  // ackNoTarget moved to fail after thread anchor fix
     ackSent,
     ackSkipped,
     ackFailed,
@@ -622,7 +624,10 @@ export function classifyDelivery(events: ReplayEvent[]): DeliveryLane {
   const deliveryEvents = events.filter(
     (e) => e.event === "delivery_observed" || e.event === "delivery_failed" ||
       e.event === "delivery_retry_deferred" || e.event === "delivery_compensated" ||
-      e.event === "delivery_reconciled_delivered" || e.event === "delivery_pending",
+      e.event === "delivery_reconciled_delivered" || e.event === "delivery_pending" ||
+      // New completion file protocol events (replaces old delivery relay)
+      e.event === "completion_file_delivered" || e.event === "completion_file_timeout" ||
+      e.event === "delivery_outbox_queued" || e.event === "delivery_outbox_flushed",
   );
 
   let deliveryFailedCount = 0;
@@ -633,10 +638,14 @@ export function classifyDelivery(events: ReplayEvent[]): DeliveryLane {
   for (const event of deliveryEvents) {
     switch (event.event) {
       case "delivery_failed":
+      case "completion_file_timeout":   // worker never wrote completion file
         deliveryFailedCount++;
-        samples.push(makeSample(event, "delivery_failed", "delivery_failed event"));
+        samples.push(makeSample(event, "delivery_failed", `${event.event}`));
         break;
-      case "delivery_retry_deferred": retryDeferredCount++; break;
+      case "delivery_retry_deferred":
+      case "delivery_outbox_queued":    // delivery queued for retry
+        retryDeferredCount++;
+        break;
       case "delivery_compensated":
         compensatedCount++;
         samples.push(makeSample(event, "compensated", "delivery_compensated event"));
@@ -644,7 +653,12 @@ export function classifyDelivery(events: ReplayEvent[]): DeliveryLane {
     }
   }
 
-  const pass = deliveryEvents.filter((e) => e.event === "delivery_reconciled_delivered" || e.event === "delivery_observed").length;
+  const pass = deliveryEvents.filter(
+    (e) => e.event === "delivery_reconciled_delivered" ||
+           e.event === "delivery_observed" ||
+           e.event === "completion_file_delivered" ||  // worker wrote file, IM delivery ok
+           e.event === "delivery_outbox_flushed",      // outbox retry succeeded
+  ).length;
 
   return {
     lane: "delivery",
