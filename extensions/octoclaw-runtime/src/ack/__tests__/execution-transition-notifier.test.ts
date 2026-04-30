@@ -130,6 +130,7 @@ describe("execution transition notifier", () => {
     const tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-exec-transition-"));
     envOverrides.workspaceRoot = tmpDir;
     const envModule = await import("../../resolve/env.js");
+    vi.spyOn(await import("../../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
     vi.spyOn(envModule, "runCommand").mockResolvedValue({
       code: 1,
       stdout: JSON.stringify({ ok: false, error: "timeout" }),
@@ -297,7 +298,7 @@ async function mockDelivery(): Promise<{ runCommandSpy: RunCommandSpy; replaySpy
   const replaySpy = vi.spyOn(
     await import("../../replay/replay.js"),
     "recordPolicyReplay",
-  );
+  ).mockResolvedValue(undefined);
 
   return { runCommandSpy, replaySpy };
 }
