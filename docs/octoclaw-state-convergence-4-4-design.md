@@ -7,18 +7,22 @@ Source requirement: `docs/octoclaw-architecture-diagnosis-and-refactor-plan-2026
 ## Target Authority Model
 
 ```text
-OpenClaw Native TaskFlow          lifecycle authority
+OpenClaw Native TaskFlow / TaskRun DBs   lifecycle authority
         ↓ read/sync only
-task-state.json                   OctoClaw business-state authority
+OctoClaw runtime ledger                 WorkContract / scheduler / attempt / completion binding authority
+        ↓ projection
+task-state.json                         compatibility read-model snapshot
         ↓ read only
-policyState                       per-turn cache, TTL only, not durable truth
+policyState                             per-turn cache, TTL only, not durable truth
 ```
 
-`task-state.json` is the only durable OctoClaw business-state store. It owns the durable projection for route, dispatch/spawn/result evidence, completion, delivery, and the inline WorkContract. Status, dispatch validation, continuation, and child finalization must be recoverable from this file without reading a separate WorkContract ledger.
+N1 refines the original 4.4 storage model: `task-state.json` remains the compact status/read-model projection, but it is no longer the only durable OctoClaw business-state store for concurrent scheduling. WorkContract, delegation ticket, queue/lease, attempt, completion binding, delivery outbox, amendment, and recovery verdict need transactional semantics and should live in an OctoClaw-owned runtime ledger, preferably SQLite.
+
+OpenClaw native DBs such as `~/.openclaw/flows/registry.sqlite` (`flow_runs`) and `~/.openclaw/tasks/runs.sqlite` (`task_runs`) remain substrate-owned lifecycle truth. OctoClaw should reference them by `flowId` / `nativeTaskId` / `childSessionKey` and update them only via OpenClaw APIs/bridges. OctoClaw must not privately add columns or store WorkContract fields inside native tables.
 
 ## Canonical Task Record
 
-The canonical task-state record is keyed by `workContractId`:
+The canonical OctoClaw ledger record is keyed by `workContractId`; the `task-state.json` projection should preserve the same key for compatibility:
 
 - `id = workContractId` for WorkContract-backed tasks.
 - `taskId` / `nativeTaskId` store native TaskFlow task identity.
@@ -29,16 +33,17 @@ The canonical task-state record is keyed by `workContractId`:
 
 ## Runtime Flow
 
-1. Policy resolution seals a WorkContract and calls `saveWorkContract`.
-2. `saveWorkContract` writes only `task-state.json`, creating/updating the canonical record.
-3. Dispatch loads the WorkContract from `task-state.json` and validates route/status before materialization.
-4. Native TaskFlow materialization updates the same record with native task/flow ids and dispatch/spawn evidence.
-5. Child completion finalization writes `completion` and `delivery` into the same record, then materializes the embedded WorkContract as completed.
-6. `policyState` can cache the current turn decision, but no cross-turn status or dispatch truth depends on it.
+1. Policy resolution seals a WorkContract and writes it to the OctoClaw runtime ledger.
+2. The ledger issues a delegation ticket and scheduler row when delegate materialization is authorized.
+3. Dispatch validates the ticket/WorkContract from the ledger, then materializes or queues the attempt.
+4. Native TaskFlow/TaskRun materialization writes native task/flow/session ids into the ledger and can be cross-checked against OpenClaw DBs.
+5. Child completion finalization validates deterministic completion binding, writes result/delivery state into the ledger, then emits replay and delivery outbox events.
+6. `task-state.json` is regenerated or incrementally projected from the ledger + native DB snapshot for status compatibility.
+7. `policyState` can cache the current turn decision, but no cross-turn status or dispatch truth depends on it.
 
 ## Read Failure Rules
 
-`task-state.json` is durable truth, so read failures must be explicit:
+`task-state.json` is a durable projection, so read failures must be explicit and must not corrupt ledger truth:
 
 - Missing file: initialize an empty document.
 - Invalid JSON / schema mismatch: do not return an empty task list and write over the file. Surface a recovery error, preserve the corrupt file for operator inspection, and require a bounded repair path.
@@ -61,18 +66,18 @@ If a dispatch cannot proceed because the main session or host is busy, the durab
 
 ## Non-Goals
 
-- No second WorkContract ledger on the live path.
+- No second *competing* WorkContract truth on the live path; N1 introduces a single OctoClaw-owned runtime ledger as the canonical WorkContract/scheduler store, with `task-state.json` as projection.
 - No raw child transcript injection into parent context.
 - No interpretation that TaskFlow creation implies `spawnExecuted`.
 - No status projection that treats policy cache/replay as execution proof.
 
 ## Acceptance Criteria
 
-- Saving/loading/updating/listing WorkContracts uses `task-state.json` as durable storage.
-- Dispatch validation works when only `task-state.json` exists.
-- Dispatch writes WorkContract-backed task-state records using `workContractId` as the primary key.
-- Completion finalization preserves the inline WorkContract and writes completion/delivery fields into the same record.
-- Status reads task-state records directly and does not require the old WorkContract ledger.
+- Saving/loading/updating/listing WorkContracts uses the OctoClaw runtime ledger as canonical storage and projects to `task-state.json`.
+- Dispatch validation works from the ledger and can rebuild a status projection if `task-state.json` is missing.
+- Dispatch writes WorkContract-backed ledger records using `workContractId` as the primary key and task-state records as projection.
+- Completion finalization preserves the inline WorkContract in the ledger and projects completion/delivery fields into `task-state.json`.
+- Status can read task-state records for speed, but repair/rebuild reads the ledger + OpenClaw native DBs.
 - Corrupt task-state read does not silently become an empty durable document.
 - Sealed-but-not-dispatched records are visible as registered/planned/anomalous, never as successful delegation.
 - A dispatch failure follow-up such as “为啥没派发成功呢” does not create a new task and can be answered from durable status facts.

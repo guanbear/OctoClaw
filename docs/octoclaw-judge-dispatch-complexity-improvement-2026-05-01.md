@@ -249,7 +249,150 @@ policy 可以修正 judge complexity，但必须记录原因：
 
 ---
 
-## 6. 纠偏机制
+
+## 6. Scheduler Protocol 与状态存储设计
+
+### 6.1 当前存储事实
+
+本机 OpenClaw 已有两个原生 SQLite 存储：
+
+| 路径 | 表 | 权威范围 |
+|------|----|----------|
+| `~/.openclaw/flows/registry.sqlite` | `flow_runs` | 原生 TaskFlow / flow lifecycle：`flow_id`、`status`、`revision`、`blocked_task_id`、`state_json`、`wait_json` |
+| `~/.openclaw/tasks/runs.sqlite` | `task_runs`、`task_delivery_state` | 原生 task run lifecycle：`task_id`、`runtime`、`owner_key`、`parent_flow_id`、`child_session_key`、`status`、`delivery_status`、`progress_summary`、`terminal_summary` |
+
+OctoClaw 当前还维护 `tmp/octopus/task-state.json`、`task-events.jsonl`、`runtime-policy-replay.jsonl` 等文件。旧 4.4 设计把 `task-state.json` 定义为唯一 OctoClaw business-state store，这对早期“单 worker、低并发、易读 status”是可行的，但 N1 的并发/排队/重试/修复需要事务、lease、compare-and-swap 和 crash recovery，单 JSON 文件不再适合作为 scheduler truth。
+
+### 6.2 存储取舍
+
+结论：
+
+1. **不直接改 OpenClaw 原生 DB schema**。`flows/registry.sqlite` 和 `tasks/runs.sqlite` 是 substrate owned store，OctoClaw 可以读、可以通过 OpenClaw API/bridge 写原生 lifecycle，但不应私自加字段或把业务字段塞进原生表；否则升级 OpenClaw 时容易 schema drift。
+2. **OctoClaw 新增自己的 transactional runtime ledger**，建议 SQLite：`~/.openclaw/workspace/tmp/octopus/octoclaw-runtime.sqlite`。它拥有 WorkContract、delegation ticket、scheduler queue、attempt、completion binding、delivery outbox、amendment 和 recovery verdict。
+3. **`task-state.json` 降为 read-model snapshot / compatibility projection**。status 面、简单工具和人工排障可以继续读它，但它必须能从 OctoClaw ledger + OpenClaw native DB + replay 重建；它不再承担并发调度的唯一写入真相。
+4. **JSONL 继续做 audit log，不做调度锁**。`task-events.jsonl` / `runtime-policy-replay.jsonl` 适合审计、回放、nightly eval；不适合承载 queue pop、lease acquire、attempt transition 这类需要原子性的操作。
+
+如果暂时不引入 SQLite 依赖，也必须至少做到：单 writer actor + append-only log + atomic snapshot + file lock + revision CAS。但这只是过渡方案；N1 正式目标应是 SQLite ledger。
+
+### 6.3 OctoClaw runtime ledger 最小表
+
+建议最小 schema：
+
+| 表 | 主键 | 用途 |
+|----|------|------|
+| `work_contracts` | `work_contract_id` | canonical WorkContract、route、expected deliverable、complexity_final、deliveryTarget |
+| `delegation_tickets` | `ticket_id` | 一次性 dispatch 授权，绑定 turn/session/WorkContract，记录 issued/used/revoked/expired |
+| `task_attempts` | `attempt_id` | 每次 spawn/respawn/retry/queued amendment attempt，关联 native task/flow/session/run |
+| `scheduler_queue` | `queue_id` | queued/blocked/running lease、priority、dependency、resource locks、wake condition |
+| `resource_locks` | `resource_key` | 写域/资源 lease，带 holder attempt、expires_at、revision |
+| `completion_bindings` | `completion_id` | deterministic completionPath、expected ids、observed ids、binding verdict、orphan recovery |
+| `delivery_outbox` | `delivery_id` | final/ACK/progress delivery attempts、retry、thread target、sent proof |
+| `amendments` | `amendment_id` | steer/queue-after/cancel-respawn/status-only 判定和证据 |
+| `runtime_events` | autoincrement | append-only event log，用于重建 projection 和 nightly |
+
+`task-state.json` 由这些表投影生成：
+
+```text
+OpenClaw native DBs + OctoClaw runtime ledger + replay tail
+  -> observer snapshot
+  -> task-state.json compatibility projection
+  -> status/details/queue/timeline
+```
+
+### 6.4 Scheduler 状态机
+
+Scheduler 不应该把 dispatch 当同步工具调用，而应是状态机：
+
+```text
+admitted
+  -> queued | blocked | spawning
+  -> running
+  -> deliverable_ready
+  -> delivered | delivery_retry
+  -> completed
+
+terminal failure:
+  -> canceled | failed | timeout_no_result | completion_orphaned | binding_mismatch
+```
+
+关键字段：
+
+| 字段 | 含义 |
+|------|------|
+| `queue_status` | `admitted | queued | blocked | spawning | running | terminal` |
+| `dependency_ids` | 必须完成后才能运行的 WorkContract/attempt |
+| `queued_after` | 用户可见的直接前序任务 |
+| `blocked_by` | 资源、写域、host capability、model cooldown 或 manual approval |
+| `resource_keys` | 写域/仓库路径/IM thread/native session 等资源锁 |
+| `lease_owner` / `lease_expires_at` | materializer 持有的短租约，crash 后可回收 |
+| `revision` | CAS 版本，避免两个 materializer 同时 pop 同一任务 |
+| `wakeup_at` / `wakeup_reason` | retry、dependency completion、lock expiry、manual approve |
+
+### 6.5 并发与排队规则
+
+#### 独立任务并发
+
+任务满足以下条件时可并发 materialize：
+
+- 不共享 exclusive `resource_key`。
+- 没有显式 `depends_on` / `queued_after`。
+- WorkContract 写域不冲突，或都是 read-only。
+- backend capacity 未超过 `max_concurrent_spawns`。
+- 模型/账号/host 没有 cooldown 或全局限流。
+
+#### 依赖任务排队
+
+以下情况必须排队：
+
+- 用户明确说“等 A 完成后再做 B”。
+- B 需要 A 的 artifact/result。
+- B 修改 A 正在写的文件或同一 resource scope。
+- B 是同一 delegate task 的 amendment attempt，且当前 attempt 不能 steer。
+
+排队结果必须写入 ledger 和 status：`queued_after=<attemptId|workContractId>`，不能只写自然语言解释。
+
+#### 资源冲突 blocked
+
+以下情况是 blocked，不是 queued-after：
+
+- host/backend 不支持并发 spawn。
+- 模型/credential cooling down。
+- manual approval required。
+- workspace lock 被非本任务持有且无法确定释放顺序。
+- native DB/API 暂不可用。
+
+blocked 必须带 `blocked_by`、`retry_after` 或 `manual_action`。
+
+### 6.6 Dispatch 返回语义
+
+`octoclaw_dispatch` 返回必须区分：
+
+| 返回 | 含义 |
+|------|------|
+| `registered` | WorkContract/ticket 入账，但尚未调度 |
+| `queued` | 已进入 scheduler queue，有明确 wake condition |
+| `blocked` | 暂不能调度，有明确原因和重试/人工动作 |
+| `spawning` | 已获得 lease，正在创建 native task/session |
+| `spawn_confirmed` | 已有 native task/session/process evidence |
+| `rejected` | ticket 无效、scope mismatch、不是新工作或已被撤销 |
+
+`spawn_confirmed=true` 只能对应 `spawn_confirmed`，不能拿 `registered/queued/blocked` 伪装。
+
+### 6.7 Crash recovery
+
+重启恢复顺序：
+
+1. 读 OctoClaw runtime ledger 中非 terminal attempts 和 queue rows。
+2. 对每个 attempt 读取 OpenClaw native DB：`flow_runs`、`task_runs`，校验 native status、child session、run id。
+3. Probe deterministic completion path 和 orphan candidates。
+4. 过期 lease 释放回 queue；native 已 terminal 但 Octo 未 materialized 的进入 finalizer；completion mismatch 进入 recovery verdict。
+5. 重新生成 `task-state.json` snapshot 和 status projection。
+
+验收：杀掉 OpenClaw/OctoClaw 进程后重启，active/queued/blocked/running/deliverable_ready 状态不能丢，不能把 active 任务静默变成空状态。
+
+---
+
+## 7. 纠偏机制
 
 每次 route/dispatch 需要写 replay outcome：
 
@@ -290,7 +433,7 @@ bad case replay
 
 ---
 
-## 7. 实现建议
+## 8. 实现建议
 
 ### S1：只记录，不改变 live 行为
 
@@ -333,7 +476,7 @@ bad case replay
 
 ---
 
-## 8. 验收标准
+## 9. 验收标准
 
 1. “为什么刚才自己回复一次又派发一次”不创建新 WorkContract；主 agent 用 ledger 解释。
 2. “AGENTS/rule 是否更新”如果只是核验当前规则注入，不创建 delegate；需要文件修改时才可能生成 ticket。
@@ -348,7 +491,7 @@ bad case replay
 
 ---
 
-## 9. 与现有文档的关系
+## 10. 与现有文档的关系
 
 - 本文补充 `octoclaw-ts-rebuild-design-v2.md` 的 N1 委派稳定化设计。
 - `octoclaw-judge-ack-policy-spec-2026-04-21.md` 仍是 judge label 和 ACK/policy spec 的基础；后续应把 `is_new_work`、`expected_deliverable`、`complexity_final` 纳入 schema。

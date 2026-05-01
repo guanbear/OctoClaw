@@ -355,10 +355,13 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 #### N1-C：scheduler、并发、依赖和锁
 
 1. dispatch materialization 与 main turn lock 解耦；main lock 只保护 transcript/delivery 一致性，不阻塞独立 worker spawn。
-2. 独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队，状态写成 `queued_after=<taskId>` 或 `blocked_by=<resource>`。
-3. `spawn_confirmed=true` 必须有 current native task/session/process evidence；仅注册 WorkContract 或遇到锁等待不得返回 spawn confirmed。
-4. 如果 host/backend 暂不支持并发，必须显式返回 `blocked/queued` 和原因，不能 silent no-op 或伪装成已派发。
-5. `resume_preferred` 必须真复用：dispatch 选出的 preferred `childSessionKey` 必须传入 `trySpawnSubagentRuntime` / detached runtime；新 spawn 只在无 preferred、preferred retired 或 scope 不兼容时发生。
+2. 引入 OctoClaw runtime ledger（建议 SQLite）作为 scheduler/attempt/ticket/completion binding 的事务真相；OpenClaw `flows/registry.sqlite` 和 `tasks/runs.sqlite` 作为 native lifecycle authority 只读/通过 API 同步，不私自改 schema。
+3. `task-state.json` 降为可重建 read-model snapshot / compatibility projection，不再承担并发 queue pop、lease、resource lock、attempt transition 的唯一 durable truth。
+4. 独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队，状态写成 `queued_after=<taskId>` 或 `blocked_by=<resource>`。
+5. scheduler queue 必须有 `queue_status`、`dependency_ids`、`resource_keys`、`lease_owner`、`lease_expires_at`、`revision`、`wakeup_at`，并用 CAS/transaction 防止双 pop。
+6. `spawn_confirmed=true` 必须有 current native task/session/process evidence；仅注册 WorkContract、进入 queue 或遇到锁等待不得返回 spawn confirmed。
+7. 如果 host/backend 暂不支持并发，必须显式返回 `blocked/queued` 和原因，不能 silent no-op 或伪装成已派发。
+8. `resume_preferred` 必须真复用：dispatch 选出的 preferred `childSessionKey` 必须传入 `trySpawnSubagentRuntime` / detached runtime；新 spawn 只在无 preferred、preferred retired 或 scope 不兼容时发生。
 
 #### N1-D：task amendment protocol
 
@@ -385,6 +388,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - `resume_preferred` 的测试能证明同一 WorkContract follow-up 复用 preferred child session，而不是生成新 UUID。
 - `retry` 的测试能证明新 attempt 仍属于同一 delegate task，并且 status/timeline/replay 能区分原失败 attempt 和新 attempt。
 - 两个独立 delegated tasks 能并发 running；有依赖的 task 显示 `queued_after=<taskId>`；主会话忙不能导致 no-op dispatch。
+- scheduler/attempt/ticket/completion binding 有事务 ledger；`task-state.json` 可删除后由 ledger + OpenClaw native DB + replay 重建 status projection。
 - 对运行中任务的补充修改能稳定落到 steer / queue-after / cancel-respawn / status-only 之一，并写入 durable projection。
 - task-state 损坏不会被当成空状态写回覆盖；operator/status 能看到明确 recovery signal。
 - 重启后 `octoclaw_status` 与 IM/status projection 对同一任务给出一致状态。
