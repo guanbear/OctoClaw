@@ -343,3 +343,5 @@ export type {
   ReleaseStaleLeasesResult,
   RebuildProjectionResult,
 } from "./operator-diagnostics.js";
+export { performCrashRecovery } from "./crash-recovery.js";
+export type { CrashRecoveryInput, CrashRecoveryResult } from "./crash-recovery.js";
