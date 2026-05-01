@@ -196,7 +196,6 @@ function parsePolicyDecisionJson(value: unknown): UnknownRecord | null {
   const parsed = parseObjectJson(value);
   return Object.keys(parsed).length > 0 ? parsed : null;
 }
-
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => asString(item)).filter(Boolean) : [];
 }
@@ -210,6 +209,7 @@ function sealedReplyBlocksDelegateHint(decision: UnknownRecord, requestedRoute: 
   const toolPolicy = asRecord(decision.tool_policy);
   const forbidden = new Set([
     ...stringArray(toolPolicy.block_tool_patterns),
+    ...stringArray(workContract.forbiddenTools ?? workContract.forbidden_tools),
     ...stringArray(replyContract.forbiddenTools),
     ...stringArray(replyContract.forbidden_tools),
   ]);
@@ -252,6 +252,7 @@ function sealedReplyRouteHintPayload(decision: UnknownRecord, routeHintPayload: 
     },
   });
 }
+
 
 function isRouteSealCandidate(value: unknown): value is RouteSeal {
   const record = asRecord(value);
@@ -1790,11 +1791,11 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           reason: asString(params.reason),
           source: "main_agent",
         };
-        if (sealedReplyBlocksDelegateHint(existingDecision, routeHintPayload.route_hint, routeObjection)) {
+        if (sealedReplyBlocksDelegateHint(existingDecision, asString(params.routeHint), routeObjection)) {
           const payload = sealedReplyRouteHintPayload(existingDecision, routeHintPayload);
           const nextState = {
             ...(existing ?? {}),
-            prompt: task,
+            prompt: asString(existing?.prompt, task),
             decision: payload,
             createdAt: existing?.createdAt ?? Date.now(),
             updatedAt: Date.now(),
@@ -1812,7 +1813,8 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               sessionId: asString(ctx.sessionId),
               routeHint: asString(params.routeHint),
               finalRoute: "reply",
-              reason: "sealed_reply_no_silent_delegate_drift",
+              workContractId: asString(asRecord(payload.work_contract).workContractId || asRecord(payload.work_contract).work_contract_id),
+              reason: "route_hint_blocked_by_sealed_work_contract",
             },
             toolLogger(ctx),
             payload,

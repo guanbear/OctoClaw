@@ -73,13 +73,42 @@ const activeFinalizers = new Map<string, ReturnType<typeof setTimeout>>();
 const DEFAULT_CHILD_COMPLETION_TIMEOUT_MS = 600_000;
 const CHILD_SESSION_ACTIVITY_GRACE_MS = 90_000;
 const CHILD_SESSION_DEADLINE_EXTENSION_MS = 120_000;
-const FINAL_DELIVERY_LOCK_STALE_MS = 10 * 60 * 1000;
-const lockFs = fsSync as unknown as {
-  mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
-  rmSync(pathname: string, options?: { recursive?: boolean; force?: boolean }): void;
-  statSync(pathname: string): { mtime?: Date; mtimeMs?: number };
-  writeFileSync(pathname: string, data: string): void;
-};
+const FINAL_DELIVERY_LOCK_STALE_MS = 120_000;
+
+function completionDeliveryLockPath(workContractId: string): string {
+  return path.join(path.dirname(resolveWorkerCompletionPath(workContractId)), `${workContractId}.delivery.lock`);
+}
+
+function acquireCompletionDeliveryLock(workContractId: string, nowMs = Date.now()): (() => void) | null {
+  const lockPath = completionDeliveryLockPath(workContractId);
+  fsSync.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const tryAcquire = (): (() => void) | null => {
+    try {
+      const fd = fsSync.openSync(lockPath, "wx");
+      fsSync.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date(nowMs).toISOString() }));
+      fsSync.closeSync(fd);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        try { fsSync.unlinkSync(lockPath); } catch {}
+      };
+    } catch {
+      return null;
+    }
+  };
+  const release = tryAcquire();
+  if (release) return release;
+  try {
+    const stat = fsSync.statSync(lockPath);
+    if (nowMs - stat.mtimeMs > FINAL_DELIVERY_LOCK_STALE_MS) {
+      fsSync.unlinkSync(lockPath);
+      return tryAcquire();
+    }
+  } catch {}
+  return null;
+}
+
 
 function readCompletionFile(workContractId: string): WorkerCompletionResult | null {
   try {
@@ -96,32 +125,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string {
   return String(value ?? "").trim();
-}
-
-function completionDeliveryLockPath(workContractId: string): string {
-  return `${resolveWorkerCompletionPath(workContractId)}.delivery.lock`;
-}
-
-function acquireCompletionDeliveryLock(workContractId: string): (() => void) | null {
-  const lockPath = completionDeliveryLockPath(workContractId);
-  try {
-    lockFs.mkdirSync(path.dirname(resolveWorkerCompletionPath(workContractId)), { recursive: true });
-  } catch {}
-  try {
-    lockFs.mkdirSync(lockPath);
-    lockFs.writeFileSync(`${lockPath}/owner.json`, JSON.stringify({ workContractId, acquiredAt: new Date().toISOString() }));
-    return () => { try { lockFs.rmSync(lockPath, { recursive: true, force: true }); } catch {} };
-  } catch {
-    try {
-      const stat = lockFs.statSync(lockPath);
-      const mtimeMs = typeof stat.mtimeMs === "number" ? stat.mtimeMs : stat.mtime?.getTime() ?? Date.now();
-      if (Date.now() - mtimeMs > FINAL_DELIVERY_LOCK_STALE_MS) {
-        lockFs.rmSync(lockPath, { recursive: true, force: true });
-        return acquireCompletionDeliveryLock(workContractId);
-      }
-    } catch {}
-    return null;
-  }
 }
 
 function addPathCandidate(candidates: Set<string>, candidate: unknown, baseDir?: string): void {
@@ -557,9 +560,10 @@ export async function finalizeChildSessionOnce(
   if (isCompletionAlreadyMaterialized(options)) {
     return { status: "completed", resultText: completion.summary, sent: false };
   }
-  const releaseLock = acquireCompletionDeliveryLock(options.workContractId);
-  if (!releaseLock) {
-    return { status: "pending", resultText: completion.summary, error: "completion_delivery_in_progress" };
+  const releaseDeliveryLock = acquireCompletionDeliveryLock(options.workContractId);
+  if (!releaseDeliveryLock) {
+    return { status: "completed", resultText: completion.summary, sent: false, error: "delivery_already_in_progress" };
+
   }
   try {
     if (isCompletionAlreadyMaterialized(options)) {
@@ -615,7 +619,7 @@ export async function finalizeChildSessionOnce(
       error: result.error || undefined,
     };
   } finally {
-    releaseLock();
+    releaseDeliveryLock();
   }
 }
 

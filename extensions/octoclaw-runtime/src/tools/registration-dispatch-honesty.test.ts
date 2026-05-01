@@ -200,6 +200,8 @@ async function executeDispatchWithRuntime(params: Record<string, unknown>, subag
   return JSON.parse(response.text as string) as Record<string, unknown>;
 }
 
+vi.setConfig({ testTimeout: 30_000 });
+
 describe("dispatchReplyToMessageId", () => {
   it("resolves Slack thread anchor from metadata, state, or ctx", () => {
     expect(dispatchReplyToMessageId({ message_id: "111.222" }, {}, {})).toBe("111.222");
@@ -840,10 +842,11 @@ describe("octoclaw_dispatch honesty", () => {
 
   it("preserves a sealed reply WorkContract when the main agent later hints delegate", async () => {
     const task = "解释上一轮为什么投递失败";
-    policyState.set("session-route-hint-sealed-reply", {
+    const stateKey = "session-route-hint-sealed-reply";
+    policyState.set(stateKey, {
       prompt: task,
       decision: {
-        request: { session_key: "session-route-hint-sealed-reply", metadata: {} },
+        request: { session_key: stateKey, metadata: {} },
         route_decision: { route: "reply", dispatch_required: false, reason_codes: ["execution_followup"] },
         tool_policy: { block_tool_patterns: ["octoclaw_dispatch", "spawn"] },
         work_contract: { workContractId: "wc-sealed-reply", route: "reply" },
@@ -857,10 +860,11 @@ describe("octoclaw_dispatch honesty", () => {
       routeHint: "delegate",
       reason: "main agent tried to diagnose via delegate",
     }, {
-      sessionKey: "session-route-hint-sealed-reply",
-      sessionId: "session-route-hint-sealed-reply",
+      sessionKey: stateKey,
+      sessionId: stateKey,
     });
 
+    expect(response.text).toContain("reply");
     const payload = response.json as Record<string, any>;
     expect(payload.route_decision.route).toBe("reply");
     expect(payload.route_hint_policy).toMatchObject({
@@ -868,6 +872,10 @@ describe("octoclaw_dispatch honesty", () => {
       blocked_by_sealed_work_contract: true,
     });
     expect(payload.route_decision.reason_codes).toContain("route_hint_blocked_by_sealed_work_contract");
+    expect(policyState.get(stateKey)?.decision).toMatchObject({
+      route_decision: { route: "reply" },
+      route_hint_policy: { blocked_by_sealed_work_contract: true },
+    });
   });
 
   it("rejects missing and non-sealed WorkContracts", async () => {

@@ -7,6 +7,7 @@ declare const process: {
   argv: string[];
   cwd(): string;
   env: Record<string, string | undefined>;
+  pid: number;
   stdin: unknown;
   stdout: { write(chunk: string): boolean };
 };
@@ -67,6 +68,8 @@ declare module "node:crypto" {
 declare module "node:fs" {
   interface StatsLike {
     isDirectory(): boolean;
+    mtimeMs: number;
+    mtime?: Date;
   }
 
   interface FsConstants {
@@ -77,11 +80,15 @@ declare module "node:fs" {
     existsSync(path: string): boolean;
     accessSync(path: string, mode?: number): void;
     mkdirSync(path: string, options?: { recursive?: boolean }): void;
-    writeFileSync(path: string, data: string, encoding?: string): void;
+    writeFileSync(path: string | number, data: string, encoding?: string): void;
     realpathSync(path: string): string;
     statSync(path: string): StatsLike;
     readFileSync(path: string, encoding: string): string;
     readdirSync(path: string): string[];
+    openSync(path: string, flags: string): number;
+    closeSync(fd: number): void;
+    unlinkSync(path: string): void;
+    rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
     constants: FsConstants;
   }
   const fs: FsModule;

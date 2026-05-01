@@ -122,6 +122,50 @@ describe("child completion finalizer — completion file protocol", () => {
     });
   });
 
+  it("uses a durable delivery claim so concurrent finalizers do not duplicate the final result", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    writeCompletionFile(tmpDir, "wc-concurrent", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-concurrent",
+      childSessionKey: "child-concurrent",
+      delegateTaskId: "delegate-concurrent",
+      status: "success",
+      summary: "concurrent final result",
+      completedAt: new Date().toISOString(),
+    });
+
+    let sendCalls = 0;
+    const baseOptions = {
+      taskStatePath,
+      childSessionKey: "child-concurrent",
+      delegateTaskId: "delegate-concurrent",
+      workContractId: "wc-concurrent",
+      parentSessionKey: "slack:channel:CCONCURRENT",
+      sendFinalMessage: async () => {
+        sendCalls++;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { sent: true, delivered: true };
+      },
+    };
+
+    const results = await Promise.all([
+      finalizeChildSessionOnce(baseOptions),
+      finalizeChildSessionOnce(baseOptions),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual(["completed", "completed"]);
+    expect(sendCalls).toBe(1);
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "wc-concurrent",
+      status: "completed",
+      delivery_status: "delivered",
+      resultMaterialized: true,
+    });
+  });
+
   it("does not redeliver a completion that is already materialized", async () => {
     tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
     envOverrides.workspaceRoot = tmpDir;
