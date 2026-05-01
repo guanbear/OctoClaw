@@ -984,7 +984,7 @@ function isStatusPanelExpired(task: RuntimeStatusTaskView, nowMs = Date.now()): 
 }
 
 function shouldIncludeExpiredStatus(format: string): boolean {
-  return ["table", "lanes"].includes(format);
+  return ["table", "lanes", "raw"].includes(format);
 }
 
 function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date.now()): RuntimeStatusTaskView {
@@ -1297,30 +1297,73 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
   // ── Feishu card: TODO — needs IMAdapter.sendCard() support ───────────────
   // if (imType === "feishu") { ... return feishu card JSON as text ... }
 
-  // ── Plain text (agent context / CLI / other IMs) ─────────────────────────
+  // ── Beautified anchors format (default) ─────────────────────────────────
   if (normalizedFormat === "anchors") {
-    const lines = [
-      "OctoClaw delegated task summary",
-      `Visible delegated tasks: ${visibleTasks.length}`,
-      hiddenExpiredCount > 0 ? `Expired hidden: ${hiddenExpiredCount}` : "Expired hidden: 0",
+    const limit = 50;
+    const completedStates = new Set(["completed"]);
+    const failedStates = new Set([
+      "failed",
+      "timed_out",
+      "timeout_no_result",
+      "canceled",
+      "cancelled",
+      "completion_orphaned",
+      "binding_mismatch",
+      "delivery_failed",
+      "spawn_not_confirmed",
+    ]);
+
+    type GroupKey = "active" | "completed" | "failed";
+    const groupOrder: GroupKey[] = ["active", "completed", "failed"];
+    const groupEmoji: Record<GroupKey, string> = { active: "⏳", completed: "✅", failed: "❌" };
+    const groupLabel: Record<GroupKey, string> = { active: "Active", completed: "Completed", failed: "Failed" };
+
+    const groups = new Map<GroupKey, typeof sortedVisibleTasks>();
+    for (const key of groupOrder) groups.set(key, []);
+    for (const task of sortedVisibleTasks) {
+      let key: GroupKey;
+      if (completedStates.has(task.status)) key = "completed";
+      else if (failedStates.has(task.status)) key = "failed";
+      else key = "active";
+      groups.get(key)!.push(task);
+    }
+
+    const lines: string[] = [
+      "OctoClaw status (anchors)",
+      `Visible delegated tasks: ${visibleTasks.length} | Total: ${allTasks.length} | Expired hidden: ${hiddenExpiredCount}`,
     ];
-    const limit = 6;
-    for (const task of sortedVisibleTasks.slice(0, limit)) {
-      const title = truncateText(task.title || task.summary || "未命名任务", 90);
-      const summary = truncateText(task.summary && task.summary !== task.title ? task.summary : "", 140);
-      const meta = [
-        task.complexityBand && task.complexityBand !== "unknown" ? task.complexityBand : "",
-        task.model && task.model !== "unknown" ? task.model : "",
-        task.elapsedText && task.elapsedText !== "unknown" ? task.elapsedText : "",
-      ].filter(Boolean).join(" · ");
-      lines.push(`- ${task.status}: ${title}${meta ? ` (${meta})` : ""}${task.statusReason ? ` — ${task.statusReason}` : ""}`);
-      if (summary) lines.push(`  ${summary}`);
+
+    let shown = 0;
+    for (const key of groupOrder) {
+      const tasks = groups.get(key)!;
+      if (tasks.length === 0) continue;
+      lines.push("");
+      lines.push(`${groupEmoji[key]} ${groupLabel[key]}:`);
+      for (const task of tasks) {
+        if (shown >= limit) break;
+        const id = task.taskId.length > 10 ? `${task.taskId.slice(0, 10)}…` : task.taskId;
+        const elapsed = task.elapsedText && task.elapsedText !== "unknown" ? task.elapsedText : "-";
+        const model = task.model && task.model !== "unknown" ? task.model : "";
+        const band = task.complexityBand && task.complexityBand !== "unknown" ? task.complexityBand : "";
+        const title = truncateText(task.title || task.summary || "未命名任务", 60);
+        const metaParts = [task.status, elapsed, model, band].filter(Boolean);
+        const metaStr = metaParts.length > 0 ? ` | ${metaParts.join(" | ")}` : "";
+        lines.push(`- ${id}${metaStr} | ${title}`);
+        shown++;
+      }
+      if (shown >= limit) break;
+    }
+
+    if (allTasks.length === 0) {
+      lines.push("");
+      lines.push("No delegated task state is currently available.");
+    } else if (visibleTasks.length === 0) {
+      lines.push("");
+      lines.push("No visible delegated tasks; use format=raw for archived/expired details.");
     }
     if (sortedVisibleTasks.length > limit) {
-      lines.push(`... ${sortedVisibleTasks.length - limit} more; use format=table for raw/debug fields.`);
-    }
-    if (allTasks.length === 0) {
-      lines.push("No delegated task state is currently available.");
+      lines.push("");
+      lines.push(`… ${sortedVisibleTasks.length - limit} more tasks hidden; use format=raw for full details.`);
     }
     return lines.join("\n");
   }
@@ -1353,7 +1396,7 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
     hiddenExpiredCount > 0 && !includeExpired && allCountSummary ? `All projected counts: ${allCountSummary}` : "",
     "Fields: task_id | projected_status(raw_status) | route | title | complexity | elapsed | delegated_at | model | backend | child_session/run | result_location/artifact_refs | reason | summary",
   ].filter(Boolean);
-  const limit = normalizedFormat === "anchors" ? 8 : 25;
+  const limit = normalizedFormat === "raw" ? 50 : 25;
   for (const task of sortedVisibleTasks.slice(0, limit)) {
     const childRef = [task.childSessionKey, task.runId].filter(Boolean).join("/") || "none";
     lines.push([
@@ -2724,7 +2767,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         type: "object",
         additionalProperties: false,
         properties: {
-          format: { type: "string", enum: ["anchors", "compact", "table", "lanes"] },
+          format: { type: "string", enum: ["anchors", "compact", "table", "lanes", "raw"] },
         },
       },
       execute: async (params, _rawCtx) => {

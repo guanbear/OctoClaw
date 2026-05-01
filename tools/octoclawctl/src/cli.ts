@@ -74,6 +74,7 @@ const RUNNING_STATES = new Set(["running", "in_progress", "active", "working"]);
 const QUEUED_STATES = new Set(["queued", "pending", "planned", "waiting"]);
 const DONE_STATES = new Set(["completed", "done", "succeeded", "success"]);
 const FAILED_STATES = new Set(["failed", "error", "cancelled", "canceled", "blocked"]);
+const NON_DELEGATED_ROUTES = new Set(["reply", "direct"]);
 const FALLBACK_MESSAGE = "No active OctoClaw runtime detected. Ensure the extension is installed and a task has been created.";
 const DEFAULT_REPLAY_SAMPLE_LIMIT = 1000;
 
@@ -541,6 +542,25 @@ function inferModel(task: JsonRecord): string {
     || "-";
 }
 
+function inferComplexityBand(task: JsonRecord): string {
+  const metadata = isRecord(task.metadata) ? task.metadata : {};
+  const contract = isRecord(task.workContract) ? task.workContract : (isRecord(task.work_contract) ? task.work_contract : {});
+  const decision = isRecord(contract.decision) ? contract.decision : {};
+  const routeDecision = isRecord(decision.route_decision) ? decision.route_decision : {};
+  return asString(task.complexityBand)
+    || asString(task.complexity_band)
+    || asString(metadata.complexityBand)
+    || asString(metadata.complexity_band)
+    || asString(decision._judge_complexity_band)
+    || asString(routeDecision._judge_complexity_band)
+    || asString(routeDecision.complexity_band)
+    || "";
+}
+
+function isDelegatedRoute(route: string): boolean {
+  return !NON_DELEGATED_ROUTES.has(route.trim().toLowerCase());
+}
+
 function routeLane(route: string): string {
   const normalized = route.trim().toLowerCase();
   if (normalized === "reply" || normalized === "direct") return "direct";
@@ -733,10 +753,88 @@ function formatLanes(snapshot: StatusSnapshot): string {
     .join("\n");
 }
 
+function humanElapsed(updatedAt: string, nowMs: number): string {
+  const ts = Date.parse(updatedAt);
+  if (!Number.isFinite(ts)) return "-";
+  const diff = Math.max(0, nowMs - ts);
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${seconds % 60 ? `${seconds % 60}s` : ""}`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  if (hours < 48) return `${hours}h${remMin ? `${remMin}m` : ""}`;
+  const days = Math.floor(hours / 24);
+  return `${days}d${hours % 24 ? `${hours % 24}h` : ""}`;
+}
+
 function formatAnchors(snapshot: StatusSnapshot): string {
-  return snapshot.tasks
-    .map((task) => `${task.id}\n  anchor=${task.anchor}\n  route=${task.route}\n  state=${task.state}`)
-    .join("\n");
+  const nowMs = Date.now();
+  const tasks = snapshot.tasks.filter((task) => isDelegatedRoute(task.route));
+  const completedStates = DONE_STATES;
+  const failedStates = new Set([
+    ...FAILED_STATES,
+    "timed_out",
+    "timeout_no_result",
+    "completion_orphaned",
+    "binding_mismatch",
+    "delivery_failed",
+    "spawn_not_confirmed",
+  ]);
+
+  type GroupKey = "active" | "completed" | "failed";
+  const groupOrder: GroupKey[] = ["active", "completed", "failed"];
+  const groupEmoji: Record<GroupKey, string> = { active: "⏳", completed: "✅", failed: "❌" };
+  const groupLabel: Record<GroupKey, string> = { active: "Active", completed: "Completed", failed: "Failed" };
+
+  const groups = new Map<GroupKey, typeof tasks>();
+  for (const key of groupOrder) groups.set(key, []);
+  for (const task of tasks) {
+    let key: GroupKey;
+    const normalizedState = normalizeState(task.state);
+    if (completedStates.has(normalizedState)) key = "completed";
+    else if (failedStates.has(normalizedState)) key = "failed";
+    else key = "active";
+    groups.get(key)!.push(task);
+  }
+
+  const limit = 50;
+  const lines: string[] = [
+    "OctoClaw status (anchors)",
+    `Visible delegated tasks: ${tasks.length} | Total projected tasks: ${snapshot.tasks.length}`,
+  ];
+
+  let shown = 0;
+  for (const key of groupOrder) {
+    const gTasks = groups.get(key)!;
+    if (gTasks.length === 0) continue;
+    lines.push("");
+    lines.push(`${groupEmoji[key]} ${groupLabel[key]}:`);
+    for (const task of gTasks) {
+      if (shown >= limit) break;
+      const id = task.id.length > 10 ? `${task.id.slice(0, 10)}…` : task.id;
+      const elapsed = humanElapsed(task.updatedAt, nowMs);
+      const model = task.model && task.model !== "-" ? task.model : "";
+      const band = inferComplexityBand(task.raw);
+      const rawTitle = task.title || task.summary || task.id;
+      const title = rawTitle.length > 60 ? `${rawTitle.slice(0, 57)}…` : rawTitle;
+      const metaParts = [task.state, elapsed, model, band].filter(Boolean);
+      const metaStr = metaParts.length > 0 ? ` | ${metaParts.join(" | ")}` : "";
+      lines.push(`- ${id}${metaStr} | ${title}`);
+      shown++;
+    }
+    if (shown >= limit) break;
+  }
+
+  if (tasks.length === 0) {
+    lines.push("");
+    lines.push("No delegated task state is currently available.");
+  }
+  if (tasks.length > limit) {
+    lines.push("");
+    lines.push(`… ${tasks.length - limit} more tasks hidden.`);
+  }
+  return lines.join("\n");
 }
 
 function modelHealthToJson(summary: ReplaySummary): JsonRecord {

@@ -453,7 +453,7 @@ describe("octoclaw_dispatch honesty", () => {
 
     const anchorsResponse = await statusTool().execute({ format: "anchors" }, {});
     const anchorsOutput = String((anchorsResponse.json as Record<string, unknown>).raw_output);
-    expect(anchorsOutput).toContain("Expired hidden: 0");
+    expect(anchorsOutput).toContain("Visible delegated tasks: 0 | Total: 0 | Expired hidden: 0");
     expect(anchorsOutput).not.toContain("task-status-panel-1 | timed_out(running) | delegate");
   });
 
