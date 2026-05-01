@@ -171,6 +171,12 @@ function verdictFor(input: ObserveCompletionBindingInput): CompletionBindingVerd
   const ids = observedIds(input);
   if (!ids.workContractId) return "completion_orphaned";
   if (ids.workContractId !== input.workContractId) return "binding_mismatch";
+  const row = getCompletionBinding({ workContractId: input.workContractId, dbPath: input.dbPath, sqlite: input.sqlite });
+  if (row) {
+    if (row.expected_delegate_task_id && ids.delegateTaskId && ids.delegateTaskId !== row.expected_delegate_task_id) return "binding_mismatch";
+    if (row.expected_native_task_id && ids.nativeTaskId && ids.nativeTaskId !== row.expected_native_task_id) return "binding_mismatch";
+    if (row.expected_child_session_key && ids.childSessionKey && ids.childSessionKey !== row.expected_child_session_key) return "binding_mismatch";
+  }
   return "matched";
 }
 

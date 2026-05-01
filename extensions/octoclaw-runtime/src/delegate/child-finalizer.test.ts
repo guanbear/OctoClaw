@@ -55,6 +55,7 @@ describe("child completion finalizer — completion file protocol", () => {
     if (tmpDir) {
       envOverrides.workspaceRoot = "";
     }
+    delete process.env.OCTOCLAW_RUNTIME_LEDGER;
   });
 
   it("returns pending when no completion file exists", async () => {
@@ -120,6 +121,48 @@ describe("child completion finalizer — completion file protocol", () => {
       spawnExecuted: true,
       resultMaterialized: true,
     });
+  });
+
+  it("blocks final delivery when completion binding mismatches expected child session", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    writeCompletionFile(tmpDir, "wc-binding-mismatch", {
+      schemaVersion: "octoclaw.worker_completion/v1",
+      workContractId: "wc-binding-mismatch",
+      childSessionKey: "wrong-child",
+      delegateTaskId: "delegate-binding-mismatch",
+      nativeTaskId: "native-binding-mismatch",
+      status: "success",
+      summary: "should not deliver",
+      artifacts: [],
+      completedAt: new Date().toISOString(),
+    });
+
+    const sent: string[] = [];
+    const result = await finalizeChildSessionOnce({
+      taskStatePath,
+      childSessionKey: "expected-child",
+      delegateTaskId: "delegate-binding-mismatch",
+      workContractId: "wc-binding-mismatch",
+      parentSessionKey: "slack:channel:C123",
+      nativeTaskId: "native-binding-mismatch",
+      sendFinalMessage: async ({ message }) => {
+        sent.push(message);
+        return { sent: true, delivered: true };
+      },
+    });
+
+    expect(result.status).toBe("binding_mismatch");
+    expect(sent).toHaveLength(0);
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      status: "binding_mismatch",
+      resultMaterialized: false,
+      delivery_status: "blocked",
+    });
+    delete process.env.OCTOCLAW_RUNTIME_LEDGER;
   });
 
   it("uses a durable delivery claim so concurrent finalizers do not duplicate the final result", async () => {

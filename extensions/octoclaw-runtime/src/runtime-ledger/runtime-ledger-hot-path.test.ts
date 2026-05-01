@@ -47,15 +47,18 @@ function crashRecoveryTool() {
   return tool;
 }
 
-function delegateDecision(sessionKey = "session-runtime-ledger-hot-path") {
+function delegateDecision(sessionKey = "session-runtime-ledger-hot-path", expectedDeliverable = "Runtime ledger hot path dispatch") {
   return {
     request: { session_key: sessionKey },
     route_decision: {
       route: "delegate",
       worker_pool: "octoclaw-research",
       task_class: "worker_research",
+      expected_deliverable: expectedDeliverable,
     },
     model_policy: { selected_model: "worker_research" },
+    is_new_work: true,
+    expected_deliverable: expectedDeliverable,
   };
 }
 
@@ -390,6 +393,39 @@ describe("runtime ledger hot-path tool integration", () => {
     }
   });
 
+  it("policy seal issues a ledger ticket in enforce mode without manual seeding", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
+    const task = "Research runtime ledger ticket issuance and return a concise implementation summary.";
+    const decision = await resolveDelegatePolicy(task, "session-hot-path-auto-ticket", {
+      relation_to_recent_execution: "new_work",
+      is_new_work: true,
+      expected_deliverable: "concise implementation summary for runtime ledger ticket issuance",
+    });
+    const workContractId = String(decision.workContractId ?? "");
+    expect(workContractId).not.toBe("");
+
+    const result = await executeDispatch({
+      task,
+      delegateTaskId: `delegate-task:${workContractId}`,
+      workContractId,
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({
+        relation_to_recent_execution: "new_work",
+        is_new_work: true,
+        expected_deliverable: "concise implementation summary for runtime ledger ticket issuance",
+      }),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-auto-ticket-test",
+    });
+
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.dispatch_executed).toBe(true);
+    expectDispatchSideEffects(workContractId);
+  });
+
   it("dispatch tool is blocked without valid ticket in enforce mode", async () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
@@ -643,12 +679,11 @@ describe("runtime ledger hot-path tool integration", () => {
     const task = "Research the runtime ledger scheduler queue hot path and summarize the dispatch flow.";
     const decision = await resolveDelegatePolicy(task, "session-hot-path-new-work", {
       relation_to_recent_execution: "new_work",
+      is_new_work: true,
       expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
     });
     const workContractId = String(decision.workContractId ?? "");
     expect(workContractId).not.toBe("");
-    seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
-
     const result = await executeDispatch({
       task,
       delegateTaskId: `delegate-task:${workContractId}`,
@@ -656,6 +691,7 @@ describe("runtime ledger hot-path tool integration", () => {
       policyJson: JSON.stringify(decision),
       metadataJson: JSON.stringify({
         relation_to_recent_execution: "new_work",
+        is_new_work: true,
         expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
       }),
     }, {

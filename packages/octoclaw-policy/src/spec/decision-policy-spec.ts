@@ -124,6 +124,9 @@ export const VALIDATOR_DEFAULT_RULES = [
 export const JudgeOutputSchema = {
   route: "reply | delegate (REQUIRED)",
   confidence: "0.0-1.0 float (REQUIRED, your certainty about this routing decision)",
+  is_followup_to_recent_execution: "boolean (REQUIRED, true only when the turn is about existing/recent execution status, provenance, dispatch, spawn, delivery, or failure)",
+  is_new_work: "boolean (REQUIRED, true only when a new execution unit with a verifiable deliverable is needed)",
+  expected_deliverable: "string | null (REQUIRED, non-empty only when is_new_work=true and route=delegate)",
   reply_mode: "answer | clarify | null",
   delegate_role: "observer | default | code | research | review | null",
   coordination_mode_hint: "solo_worker | advisor_assisted | multi_agent_controlled | null",

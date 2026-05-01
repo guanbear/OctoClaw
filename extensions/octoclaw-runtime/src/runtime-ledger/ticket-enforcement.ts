@@ -46,6 +46,24 @@ export interface DelegationTicketAdmissionResult {
   attempts_created?: number;
 }
 
+export interface IssueDelegationTicketCandidateInput {
+  contract: WorkContract;
+  candidate?: DelegationTicketDryRunResult | UnknownRecord | null;
+  dbPath?: string;
+  sqlite?: SqliteProvider;
+  mode?: RuntimeLedgerEnvMode;
+  now?: Date;
+}
+
+export interface IssueDelegationTicketCandidateResult {
+  ok: boolean;
+  skipped?: boolean;
+  reason?: string;
+  ticket_id?: string;
+  work_contract_id?: string;
+  dbPath?: string;
+}
+
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -97,6 +115,97 @@ function appendRuntimeEvent(
     `INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at)
      VALUES (?, ?, ?, ?, ?)`,
   ).run(eventType, workContractId, attemptId, JSON.stringify(payload), nowIso);
+}
+
+export function issueDelegationTicketCandidate(
+  input: IssueDelegationTicketCandidateInput,
+): IssueDelegationTicketCandidateResult {
+  const mode = input.mode ?? resolveRuntimeLedgerMode();
+  if (mode !== "enforce") return { ok: false, skipped: true, reason: "not_enforced" };
+
+  const candidate = asRecord(input.candidate);
+  if (asString(candidate.ticket_decision) !== "ticket_would_issue") {
+    return { ok: false, skipped: true, reason: asString(candidate.ticket_denial_reason) || "ticket_not_issued" };
+  }
+
+  const workContractId = input.contract.workContractId;
+  const expectedDeliverable = asString(candidate.expected_deliverable);
+  if (!workContractId || !expectedDeliverable) {
+    return { ok: false, skipped: true, reason: "missing_ticket_identity" };
+  }
+
+  const openResult = openRuntimeLedger({ dbPath: input.dbPath, mode: "enforce", sqlite: input.sqlite });
+  if (openResult.status !== "ok" || !openResult.db) {
+    return { ok: false, reason: "ledger_unavailable", dbPath: openResult.dbPath, work_contract_id: workContractId };
+  }
+
+  const db = openResult.db;
+  const now = input.now ?? new Date();
+  const nowIso = now.toISOString();
+  const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const ticketId = asString(candidate.ticket_id) || ticketIdFor(workContractId);
+  const ticketJson = {
+    ticket_id: ticketId,
+    work_contract_id: workContractId,
+    turn_id: input.contract.turnId,
+    session_key: input.contract.sessionKey,
+    delivery_target_id: input.contract.continuity?.threadBindingKey || input.contract.sessionKey,
+    expected_deliverable: expectedDeliverable,
+    complexity_final: asString(candidate.complexity_final) || null,
+    status: "issued",
+    candidate: true,
+  };
+
+  try {
+    db.exec("BEGIN");
+    const existing = db.prepare("SELECT status FROM delegation_tickets WHERE ticket_id = ?").get(ticketId);
+    const existingStatus = asString(asRecord(existing).status);
+    if (existingStatus && existingStatus !== "issued") {
+      db.exec("ROLLBACK");
+      return { ok: false, skipped: true, reason: `ticket_${existingStatus}`, ticket_id: ticketId, work_contract_id: workContractId, dbPath: openResult.dbPath };
+    }
+
+    db.prepare(
+      `INSERT INTO delegation_tickets (
+         ticket_id, work_contract_id, turn_id, session_key,
+         delivery_target_id, expected_deliverable, complexity_final,
+         status, issued_at, expires_at, ticket_json, revision
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, 0)
+       ON CONFLICT(ticket_id) DO UPDATE SET
+         turn_id = excluded.turn_id,
+         session_key = excluded.session_key,
+         delivery_target_id = excluded.delivery_target_id,
+         expected_deliverable = excluded.expected_deliverable,
+         complexity_final = excluded.complexity_final,
+         expires_at = excluded.expires_at,
+         ticket_json = excluded.ticket_json,
+         revision = revision + 1
+       WHERE delegation_tickets.status = 'issued'`,
+    ).run(
+      ticketId,
+      workContractId,
+      input.contract.turnId,
+      input.contract.sessionKey,
+      input.contract.continuity?.threadBindingKey || input.contract.sessionKey,
+      expectedDeliverable,
+      asString(candidate.complexity_final) || null,
+      nowIso,
+      expiresAt,
+      JSON.stringify(ticketJson),
+    );
+
+    appendRuntimeEvent(db, "delegation_ticket_issued", workContractId, null, {
+      ticketId,
+      expectedDeliverable,
+    }, nowIso);
+    db.exec("COMMIT");
+    return { ok: true, ticket_id: ticketId, work_contract_id: workContractId, dbPath: openResult.dbPath };
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch {}
+    return { ok: false, reason: err instanceof Error ? err.message : String(err), ticket_id: ticketId, work_contract_id: workContractId, dbPath: openResult.dbPath };
+  } finally {
+    try { db.close(); } catch {}
+  }
 }
 
 export function admitDelegationTicketForDispatch(

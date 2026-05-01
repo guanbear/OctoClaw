@@ -78,6 +78,7 @@ import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
 import { buildConversationIntentPacket } from "../conversation-grounding.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
+import { issueDelegationTicketCandidate } from "../runtime-ledger/ticket-enforcement.js";
 
 type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
@@ -483,6 +484,9 @@ function attachWorkContractToPolicyDecision(input: {
     decision: input.decision,
     metadata: input.metadata,
   });
+  if (delegationTicketCandidate.ticket_decision === "ticket_would_issue") {
+    issueDelegationTicketCandidate({ contract, candidate: delegationTicketCandidate });
+  }
   input.decision.work_contract = compactWorkContractView(contract);
   input.decision.workContractId = contract.workContractId;
   input.decision.delegation_ticket_candidate = delegationTicketCandidate;
@@ -1614,6 +1618,9 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let judgeQualityBar: "standard" | "high" | "critical" | undefined;
   let judgeRiskFlags: string[] = [];
   let judgeRouteConfidence: number | undefined;
+  let judgeIsFollowupToRecentExecution: boolean | undefined;
+  let judgeIsNewWork: boolean | undefined;
+  let judgeExpectedDeliverable: string | null | undefined;
   let delegateReasonCodes: string[] = [];
   let deterministicFallbackApplied = false;
   let degradedFallbackApplied = false;
@@ -1770,6 +1777,15 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         judgeQualityBar = coerceQualityBar(judgeResult.qualityBar);
         judgeRiskFlags = asStringArray(judgeResult.riskFlags);
         judgeRouteConfidence = coerceRouteConfidence(judgeResult.routeConfidence);
+        judgeIsFollowupToRecentExecution = typeof (judgeResult.is_followup_to_recent_execution ?? judgeResult.isFollowupToRecentExecution) === "boolean"
+          ? (judgeResult.is_followup_to_recent_execution ?? judgeResult.isFollowupToRecentExecution) as boolean
+          : undefined;
+        judgeIsNewWork = typeof (judgeResult.is_new_work ?? judgeResult.isNewWork) === "boolean"
+          ? (judgeResult.is_new_work ?? judgeResult.isNewWork) as boolean
+          : undefined;
+        judgeExpectedDeliverable = typeof (judgeResult.expected_deliverable ?? judgeResult.expectedDeliverable) === "string"
+          ? String(judgeResult.expected_deliverable ?? judgeResult.expectedDeliverable).trim() || null
+          : null;
         delegateReasonCodes = coerceDelegateReasonCodes(judgeResult.delegateReasonCodes);
 
         // ── Validator default rules (spec §11) ──
@@ -1936,6 +1952,9 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _judge_quality_bar: judgeQualityBar,
     _judge_risk_flags: judgeRiskFlags,
     _judge_route_confidence: judgeRouteConfidence,
+    is_followup_to_recent_execution: judgeIsFollowupToRecentExecution,
+    is_new_work: judgeIsNewWork,
+    expected_deliverable: judgeExpectedDeliverable,
     _delegate_reason_codes: delegateReasonCodes,
     _route_hint_required: routeHintRequired,
     _judge_ack_text: judgeAckText,

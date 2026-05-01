@@ -69,6 +69,17 @@ function mirror(contractToMirror: WorkContract, dbPath: string): void {
   }
 }
 
+function candidateFor(workContract: WorkContract) {
+  return buildDelegationTicketDryRun({
+    contract: workContract,
+    decision: {
+      route_decision: { route: "delegate" },
+      is_new_work: true,
+      expected_deliverable: workContract.mainContext.summary,
+    },
+  });
+}
+
 function countRows(dbPath: string, table: string): number {
   const ledger = openRuntimeLedger({ dbPath });
   expect(ledger.status).toBe("ok");
@@ -82,7 +93,7 @@ describe("admitDelegationTicketForDispatch", () => {
     const dbPath = tmpDbPath();
     const workContract = contract();
     mirror(workContract, dbPath);
-    const candidate = buildDelegationTicketDryRun({ contract: workContract });
+    const candidate = candidateFor(workContract);
 
     const result = admitDelegationTicketForDispatch({
       contract: workContract,
@@ -117,7 +128,7 @@ describe("admitDelegationTicketForDispatch", () => {
     const dbPath = tmpDbPath();
     openRuntimeLedger({ dbPath }).db?.close();
     const workContract = contract();
-    const candidate = buildDelegationTicketDryRun({ contract: workContract });
+    const candidate = candidateFor(workContract);
 
     const result = admitDelegationTicketForDispatch({
       contract: workContract,
@@ -154,7 +165,7 @@ describe("admitDelegationTicketForDispatch", () => {
 
     const result = admitDelegationTicketForDispatch({
       contract: workContract,
-      candidate: buildDelegationTicketDryRun({ contract: workContract }),
+      candidate: candidateFor(workContract),
       dbPath,
       mode: "enforce",
       delegateTaskId: `delegate-${status}`,
@@ -171,7 +182,7 @@ describe("admitDelegationTicketForDispatch", () => {
     const workContract = contract();
     mirror(workContract, dbPath);
     const candidate = {
-      ...buildDelegationTicketDryRun({ contract: workContract }),
+      ...candidateFor(workContract),
       expected_deliverable: "different deliverable",
     };
 

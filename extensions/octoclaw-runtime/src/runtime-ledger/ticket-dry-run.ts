@@ -38,6 +38,10 @@ function asBoolean(value: unknown): boolean {
   return value === true;
 }
 
+function hasBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
 function firstString(...values: unknown[]): string {
   for (const value of values) {
     const normalized = asString(value);
@@ -106,11 +110,50 @@ function expectedDeliverableFrom(input: DelegationTicketDryRunInput): string {
   const handoff = asRecord(payload.handoff);
   return firstString(
     existingCandidate.expected_deliverable,
-    input.contract?.mainContext?.summary,
+    decision.expected_deliverable,
+    decision.expectedDeliverable,
+    asRecord(decision.route_decision).expected_deliverable,
+    asRecord(decision.route_decision).expectedDeliverable,
+    asRecord(input.metadata).expected_deliverable,
+    asRecord(input.metadata).expectedDeliverable,
+    asRecord(asRecord(input.metadata).intent_packet).expected_deliverable,
+    asRecord(asRecord(input.metadata).intent_packet).expectedDeliverable,
     handoff.summary,
-    payload.summary,
-    payload.task,
+    payload.expected_deliverable,
+    payload.expectedDeliverable,
   ).slice(0, 200);
+}
+
+function explicitNewWorkSignal(input: DelegationTicketDryRunInput): boolean | null {
+  const decision = asRecord(input.decision);
+  const metadata = asRecord(input.metadata);
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const intentPacket = asRecord(metadata.intent_packet ?? requestMetadata.intent_packet);
+  const routeDecision = asRecord(decision.route_decision);
+
+  const values = [
+    decision.is_new_work,
+    decision.isNewWork,
+    routeDecision.is_new_work,
+    routeDecision.isNewWork,
+    metadata.is_new_work,
+    metadata.isNewWork,
+    requestMetadata.is_new_work,
+    requestMetadata.isNewWork,
+    intentPacket.is_new_work,
+    intentPacket.isNewWork,
+  ];
+  for (const value of values) {
+    if (hasBoolean(value)) return value;
+  }
+  const relation = firstString(
+    metadata.relation_to_recent_execution,
+    requestMetadata.relation_to_recent_execution,
+    intentPacket.relation_to_recent_execution,
+  );
+  if (relation === "new_work") return true;
+  if (relation) return false;
+  return null;
 }
 
 function delegateTaskIdFrom(input: DelegationTicketDryRunInput): string {
@@ -143,7 +186,9 @@ export function buildDelegationTicketDryRun(
   const delegateTaskId = delegateTaskIdFrom(input);
   const ticketId = workContractId ? `candidate:${workContractId}` : "";
 
-  if (route !== "delegate" || isFollowup(input)) {
+  const explicitNewWork = explicitNewWorkSignal(input);
+
+  if (route !== "delegate" || isFollowup(input) || explicitNewWork === false) {
     return {
       ticket_decision: "ticket_not_issued",
       ticket_denial_reason: "not_new_work",
@@ -161,6 +206,18 @@ export function buildDelegationTicketDryRun(
       ticket_denial_reason: "missing_expected_deliverable",
       is_new_work: false,
       expected_deliverable: "",
+      ...(ticketId ? { ticket_id: ticketId } : {}),
+      ...(workContractId ? { work_contract_id: workContractId } : {}),
+      ...(delegateTaskId ? { delegate_task_id: delegateTaskId } : {}),
+    };
+  }
+
+  if (explicitNewWork !== true) {
+    return {
+      ticket_decision: "ticket_not_issued",
+      ticket_denial_reason: "not_new_work",
+      is_new_work: false,
+      expected_deliverable: expectedDeliverable,
       ...(ticketId ? { ticket_id: ticketId } : {}),
       ...(workContractId ? { work_contract_id: workContractId } : {}),
       ...(delegateTaskId ? { delegate_task_id: delegateTaskId } : {}),

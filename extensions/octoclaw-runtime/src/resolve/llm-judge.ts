@@ -57,6 +57,15 @@ function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
         : 0.7,
     abstainReason: (parsed.abstainReason ?? parsed.abstain_reason ?? null) as string | null,
     ackText: typeof ackTextRaw === "string" ? ackTextRaw : null,
+    is_followup_to_recent_execution: typeof (parsed.is_followup_to_recent_execution ?? parsed.isFollowupToRecentExecution) === "boolean"
+      ? (parsed.is_followup_to_recent_execution ?? parsed.isFollowupToRecentExecution) as boolean
+      : undefined,
+    is_new_work: typeof (parsed.is_new_work ?? parsed.isNewWork) === "boolean"
+      ? (parsed.is_new_work ?? parsed.isNewWork) as boolean
+      : undefined,
+    expected_deliverable: typeof (parsed.expected_deliverable ?? parsed.expectedDeliverable) === "string"
+      ? String(parsed.expected_deliverable ?? parsed.expectedDeliverable).trim() || null
+      : null,
     replyMode: (parsed.replyMode ?? parsed.reply_mode ?? null) as JudgeOutput["replyMode"],
     delegateRole: (parsed.delegateRole ?? parsed.delegate_role ?? null) as JudgeOutput["delegateRole"],
     coordinationModeHint: (parsed.coordinationModeHint ?? parsed.coordination_mode_hint ?? null) as JudgeOutput["coordinationModeHint"],

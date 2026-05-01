@@ -2611,6 +2611,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 }
                 const schedulerConfig = resolveSchedulerConfig();
                 const lease = tryAcquireLease({
+                  queueId: schedulerQueueId,
                   leaseOwner: `octoclaw_dispatch:${asString(ctx.sessionId, managedSessionKey) || process.pid}`,
                   maxConcurrentSpawns: schedulerConfig.maxConcurrentSpawns,
                   leaseDurationMs: schedulerConfig.leaseDurationMs,

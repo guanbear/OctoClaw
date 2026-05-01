@@ -174,6 +174,15 @@ export interface JudgeOutput {
   abstainReason: string | null;
   ackText: string | null;
 
+  // N1 dispatch authorization signals. These are advisory; runtime ticket
+  // admission remains the source of truth for side effects.
+  is_followup_to_recent_execution?: boolean;
+  is_new_work?: boolean;
+  expected_deliverable?: string | null;
+  isFollowupToRecentExecution?: boolean;
+  isNewWork?: boolean;
+  expectedDeliverable?: string | null;
+
   // Canonical policy-spec fields
   reply_mode?: ReplyMode | null;
   delegate_role?: DelegateRole | null;
@@ -246,6 +255,14 @@ export function validateJudgeOutputDetailed(value: unknown): JudgeValidationResu
   if (obj.route === "delegate") {
     if (obj.confidence === undefined || obj.confidence === null) {
       degradedReasons.push("missing_confidence");
+    }
+    const isNewWork = obj.is_new_work ?? obj.isNewWork;
+    const expectedDeliverable = obj.expected_deliverable ?? obj.expectedDeliverable;
+    if (isNewWork !== true) {
+      degradedReasons.push("missing_is_new_work");
+    }
+    if (typeof expectedDeliverable !== "string" || expectedDeliverable.trim().length === 0) {
+      degradedReasons.push("missing_expected_deliverable");
     }
     if (obj.scope === undefined || obj.scope === null) {
       degradedReasons.push("missing_scope");

@@ -34,6 +34,7 @@ export interface PromoteToQueuedResult {
 
 export interface AcquireLeaseInput {
   leaseOwner: string;
+  queueId?: string;
   maxConcurrentSpawns?: number;
   dbPath?: string;
   sqlite?: SqliteProvider;
@@ -329,13 +330,21 @@ export function tryAcquireLease(input: AcquireLeaseInput): AcquireLeaseResult {
       return { acquired: false, reason: "capacity_full" };
     }
 
-    const candidates = db.prepare(
-      `SELECT q.queue_id, q.work_contract_id, q.attempt_id, q.resource_keys_json, q.priority, q.created_at
-       FROM scheduler_queue q
-       WHERE q.queue_status = 'queued'
-       ORDER BY q.priority DESC, q.created_at ASC
-       LIMIT ?`,
-    ).all(maxConcurrent - currentActive + 10);
+    const targetQueueId = asString(input.queueId);
+    const candidates = targetQueueId
+      ? db.prepare(
+        `SELECT q.queue_id, q.work_contract_id, q.attempt_id, q.resource_keys_json, q.priority, q.created_at
+         FROM scheduler_queue q
+         WHERE q.queue_status = 'queued' AND q.queue_id = ?
+         LIMIT 1`,
+      ).all(targetQueueId)
+      : db.prepare(
+        `SELECT q.queue_id, q.work_contract_id, q.attempt_id, q.resource_keys_json, q.priority, q.created_at
+         FROM scheduler_queue q
+         WHERE q.queue_status = 'queued'
+         ORDER BY q.priority DESC, q.created_at ASC
+         LIMIT ?`,
+      ).all(maxConcurrent - currentActive + 10);
 
     if (candidates.length === 0) {
       db.exec("ROLLBACK");

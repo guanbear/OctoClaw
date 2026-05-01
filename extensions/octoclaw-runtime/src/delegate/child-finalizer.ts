@@ -20,6 +20,7 @@ import {
 } from "../resolve/env.js";
 import { resolveAckDeliverySessionKey } from "../resolve/session.js";
 import { observeCompletionBinding } from "../runtime-ledger/completion-binding.js";
+import { resolveRuntimeLedgerFlag } from "../runtime-ledger/feature-flags.js";
 import {
   readTaskStateRecords,
   upsertTaskStateRecord,
@@ -340,6 +341,34 @@ function updateTaskStateCompleted(options: ChildCompletionFinalizerOptions, comp
   });
 }
 
+function updateTaskStateBindingRejected(
+  options: ChildCompletionFinalizerOptions,
+  completion: WorkerCompletionResult,
+  verdict: "completion_orphaned" | "binding_mismatch",
+  reason: string,
+): void {
+  const now = new Date().toISOString();
+  updateTaskStateRecord(options, {
+    status: verdict,
+    summary: completion.summary.slice(0, 600),
+    completedAt: undefined,
+    completed_at: undefined,
+    updatedAt: now,
+    updated_at: now,
+    dispatchExecuted: true,
+    dispatch_executed: true,
+    spawnExecuted: true,
+    spawn_executed: true,
+    resultMaterialized: false,
+    result_materialized: false,
+    delivery_status: "blocked",
+    delivery: { status: "blocked" },
+    failureCode: verdict,
+    failureMessage: reason,
+    completion,
+  });
+}
+
 function buildNativeBinding(
   options: ChildCompletionFinalizerOptions,
   nativeBinding: Partial<NativeBindingRef> | undefined,
@@ -566,7 +595,7 @@ export async function finalizeChildSessionOnce(
     delegateTaskId: options.delegateTaskId,
     childSessionKey: options.childSessionKey,
   });
-  if (bindingResult.verdict !== "matched" && bindingResult.verdict !== "missing") {
+  if (resolveRuntimeLedgerFlag() === "enforce" && bindingResult.verdict !== "matched") {
     void appendJsonl(resolveReplayLogPath(), {
       schema_version: "octoclaw.runtime_policy.replay_event/v1",
       event: "completion_binding_verdict_blocked",
@@ -576,7 +605,12 @@ export async function finalizeChildSessionOnce(
       completionId: bindingResult.completionId,
       description: bindingResult.description,
     }).catch(() => {});
-    updateTaskStateCompleted(options, completion, "completion_binding_rejected");
+    updateTaskStateBindingRejected(
+      options,
+      completion,
+      bindingResult.verdict === "completion_orphaned" ? "completion_orphaned" : "binding_mismatch",
+      bindingResult.description,
+    );
     return {
       status: bindingResult.verdict === "completion_orphaned" ? "completion_orphaned" : "binding_mismatch",
       resultText: completion.summary,

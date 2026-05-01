@@ -98,7 +98,14 @@ function mirrorAndAdmit(contractToAdmit: WorkContract, dbPath: string): string {
     else process.env.OCTOCLAW_RUNTIME_LEDGER = previous;
   }
 
-  const candidate = buildDelegationTicketDryRun({ contract: contractToAdmit });
+  const candidate = buildDelegationTicketDryRun({
+    contract: contractToAdmit,
+    decision: {
+      route_decision: { route: "delegate" },
+      is_new_work: true,
+      expected_deliverable: contractToAdmit.mainContext.summary,
+    },
+  });
   const admission = admitDelegationTicketForDispatch({
     contract: contractToAdmit,
     candidate,
@@ -153,6 +160,25 @@ describe("resolveSchedulerConfig", () => {
       if (prev === undefined) delete process.env.OCTOCLAW_MAX_CONCURRENT_SPAWNS;
       else process.env.OCTOCLAW_MAX_CONCURRENT_SPAWNS = prev;
     }
+  });
+});
+
+describe("targeted lease acquisition", () => {
+  it("does not lease or cancel a different queue when a target queue is requested", () => {
+    const dbPath = tmpDbPath();
+    const first = makeContract("target-a");
+    const second = makeContract("target-b");
+    const q1 = mirrorAndAdmit(first, dbPath);
+    const q2 = mirrorAndAdmit(second, dbPath);
+    promoteToQueued({ queueId: q1, contract: first, dbPath });
+    promoteToQueued({ queueId: q2, contract: second, dbPath });
+
+    const lease = tryAcquireLease({ queueId: q2, leaseOwner: "targeted-test", maxConcurrentSpawns: 1, dbPath });
+
+    expect(lease.acquired).toBe(true);
+    expect(lease.queueId).toBe(q2);
+    expect(getQueueRow(dbPath, q1)).toMatchObject({ queue_status: "queued" });
+    expect(getQueueRow(dbPath, q2)).toMatchObject({ queue_status: "spawning" });
   });
 });
 

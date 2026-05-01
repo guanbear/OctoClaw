@@ -176,6 +176,26 @@ describe("observeCompletionBinding", () => {
     expect(getCompletionBinding({ completionId, dbPath })?.observed_work_contract_id).toBe("wc-other");
   });
 
+  it("sets binding_mismatch for wrong delegate/native/session binding", () => {
+    const dbPath = tmpDbPath();
+    const completionId = createBinding(dbPath, "ids");
+
+    const result = observeCompletionBinding({
+      workContractId: "wc-ids",
+      completionFilePath: "/tmp/wc-ids.completion.json",
+      observedCompletion: {
+        workContractId: "wc-ids",
+        delegateTaskId: "delegate-other",
+        nativeTaskId: "native-ids",
+        childSessionKey: "child-ids",
+      },
+      dbPath,
+    });
+
+    expect(result.verdict).toBe("binding_mismatch");
+    expect(getCompletionBinding({ completionId, dbPath })?.observed_delegate_task_id).toBe("delegate-other");
+  });
+
   it("sets missing for null completion", () => {
     const dbPath = tmpDbPath();
     const completionId = createBinding(dbPath, "missing");
