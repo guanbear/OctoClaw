@@ -289,3 +289,57 @@ export type {
   RequeueExpiredInput,
   RequeueExpiredResult,
 } from "./scheduler.js";
+export {
+  createCompletionBinding,
+  observeCompletionBinding,
+  getCompletionBinding,
+  listCompletionBindingsByVerdict,
+  scanOrphanCompletions,
+  listOrphanedCompletionBindings,
+} from "./completion-binding.js";
+export type {
+  CreateCompletionBindingInput,
+  CreateCompletionBindingResult,
+  ObserveCompletionBindingInput,
+  ObserveCompletionBindingResult,
+} from "./completion-binding.js";
+export {
+  rebuildTaskStateProjection,
+  writeRebuiltTaskState,
+  isTaskStateRebuildable,
+} from "./projection-rebuild.js";
+export {
+  reconcileAttempt,
+  reconcileAllNonTerminal,
+} from "./native-reconcile.js";
+export type {
+  NativeLifecycleState,
+  ReconcileAttemptInput,
+  ReconcileAttemptResult,
+  ReconcileAllInput,
+  ReconcileAllResult,
+} from "./native-reconcile.js";
+export {
+  resolveRuntimeLedgerFlag,
+  isLedgerActive,
+  isSchedulerEnabled,
+  isTaskStateRebuildEnabled,
+  resolveAllFeatureFlags,
+} from "./feature-flags.js";
+export type {
+  RuntimeLedgerFlag,
+  RuntimeLedgerFeatureFlags,
+} from "./feature-flags.js";
+export {
+  inspectLedgerHealth,
+  listOrphanCompletions,
+  releaseStaleLeases,
+  operatorRebuildProjection,
+} from "./operator-diagnostics.js";
+export type {
+  LedgerHealthReport,
+  LedgerDiagnosticsInput,
+  OrphanSummary,
+  ReleaseStaleLeasesResult,
+  RebuildProjectionResult,
+} from "./operator-diagnostics.js";
