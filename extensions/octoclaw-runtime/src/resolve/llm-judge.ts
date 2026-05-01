@@ -388,11 +388,6 @@ export async function callLlmJudge(
       }
     }
 
-    // Small models often omit confidence — default to 0.7 before validation
-    if (parsed && typeof parsed.confidence !== "number") {
-      parsed.confidence = 0.7;
-    }
-
     if (!parsed || !isValidJudgeOutput(parsed)) {
       lastJudgeFailureClass = "invalid_json";
       warnJudgeFailure(new Error("judge returned invalid JSON"));

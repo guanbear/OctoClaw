@@ -165,7 +165,7 @@ export function loadWorkContract(workContractId: string, taskStatePath?: string)
     if (!targetId) return null;
 
     const result = openRuntimeLedger({ mode: "best_effort" });
-    if (result.status !== "ok" || !result.db) return loadWorkContractFromTaskState(targetId, taskStatePath);
+    if (result.status !== "ok" || !result.db) return null;
 
     try {
       return rowToWorkContract(loadLedgerRow(result.db, targetId));
@@ -226,7 +226,7 @@ export function listWorkContractsBySession(sessionKey: string, taskStatePath?: s
     if (!targetSession) return [];
 
     const result = openRuntimeLedger({ mode: "best_effort" });
-    if (result.status !== "ok" || !result.db) return listWorkContractsBySessionFromTaskState(targetSession, taskStatePath);
+    if (result.status !== "ok" || !result.db) return [];
 
     try {
       return result.db

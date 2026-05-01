@@ -1523,6 +1523,16 @@ function resolveToolPolicyContext(ctx: UnknownRecord, prompt = ""): { key: strin
   return { key: asString(resolvePolicyStateKey(ctx)), state: null };
 }
 
+function resolveDispatchPolicyContext(ctx: UnknownRecord, prompt = ""): { key: string; state: UnknownRecord | null } {
+  const fromStore = asRecord(policyState.getDispatchPolicyContext(ctx, prompt));
+  const contextKey = asString(fromStore.key);
+  const contextState = isRecord(fromStore.state) ? fromStore.state : null;
+  if (contextKey || contextState) {
+    return { key: contextKey, state: contextState };
+  }
+  return { key: asString(resolvePolicyStateKey(ctx)), state: null };
+}
+
 function setPolicyStateForContext(ctx: UnknownRecord, entry: UnknownRecord, explicitKey = ""): string {
   const stateKey = asString(explicitKey || resolvePolicyStateKey(ctx));
   if (stateKey) {
@@ -2211,7 +2221,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
       },
       execute: async (params, _rawCtx) => {
         const ctx = _rawCtx ?? {};
-        let { key: stateKey, state } = resolveToolPolicyContext(ctx, asString(params.task));
+        let { key: stateKey, state } = resolveDispatchPolicyContext(ctx, asString(params.task));
         let hadCachedDecision = Boolean(params.policyJson || state?.decision);
         let cachedDecision = selectDispatchPolicyDecision(state?.decision, params.policyJson);
         let dispatchWorkContract: WorkContract | null = null;
@@ -2408,11 +2418,54 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           const ticketCandidate = buildDelegationTicketDryRun({
             contract: dispatchWorkContract,
             decision: cachedDecision,
+            payload: { task: asString(params.task) },
             metadata,
           });
           cachedDecision.delegation_ticket_candidate = asRecord(cachedDecision.delegation_ticket_candidate).ticket_decision
             ? cachedDecision.delegation_ticket_candidate
             : ticketCandidate;
+          // Backstop against repeat delegated execution: policyState may know about a recent
+          // delegated receipt even when metadata lacks relation_to_recent_execution.
+          const recentDelegated = policyState.findRecentDelegated(asString(params.task));
+          const recentDelegatedInCurrentContext = Boolean(recentDelegated) && [
+            stateKey,
+            managedSessionKey,
+            asString(params.sessionKey),
+            asString(initialMetadata.session_key),
+          ].filter(Boolean).includes(asString(recentDelegated?.key));
+          const hasNewWorkTicket = ticketCandidate.ticket_decision === "ticket_would_issue";
+          if (recentDelegated && recentDelegatedInCurrentContext && !hasNewWorkTicket) {
+            const errorMessage = "blocked_by_recent_delegated_execution_guard:recent_delegated_without_new_work_ticket";
+            await recordPolicyReplay("dispatch_recent_delegated_blocked", {
+              sessionKey: managedSessionKey,
+              sessionId: asString(ctx.sessionId),
+              route: resolvedRoute,
+              error: errorMessage,
+              recent_delegated_key: recentDelegated.key,
+              ticket_decision: ticketCandidate.ticket_decision,
+              ticket_denial_reason: ticketCandidate.ticket_denial_reason,
+              dispatch_executed: false,
+              spawn_executed: false,
+              materialized: false,
+              retryable: false,
+              terminal: true,
+            }, toolLogger(ctx), cachedDecision);
+            await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+            return dispatchHonestyFailure({
+              route: resolvedRoute,
+              error: errorMessage,
+              retryable: false,
+              terminal: true,
+              details: {
+                rejected: true,
+                rejection_reason: "recent_delegated_without_new_work_ticket",
+                recent_delegated_key: recentDelegated.key,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+              },
+            });
+          }
           const ticketAdmission = admitDelegationTicketForDispatch({
             contract: dispatchWorkContract,
             candidate: ticketCandidate,

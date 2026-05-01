@@ -229,7 +229,100 @@ describe("work contract task-state store", () => {
       else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
     }
   });
+
+  it("in enforce mode, loadWorkContract returns null when ledger is unavailable even if task-state has old WorkContract", () => {
+    withRuntimeLedgerEnv("enforce", "/unavailable/runtime.sqlite", () => {
+      const contract = buildContract("session-enforce-unavailable-load", "old task-state contract");
+      const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+      process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+      try {
+        expect(saveWorkContract(contract, legacyLedgerPath)).toBe(true);
+      } finally {
+        if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+        else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+      }
+
+      expect(loadWorkContract(contract.workContractId, legacyLedgerPath)).toBeNull();
+    });
+  });
+
+  it("in enforce mode, listWorkContractsBySession returns [] when ledger is unavailable", () => {
+    withRuntimeLedgerEnv("enforce", "/unavailable/runtime.sqlite", () => {
+      const contract = buildContract("session-enforce-unavailable-list", "old listed task-state contract");
+      const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+      process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+      try {
+        expect(saveWorkContract(contract, legacyLedgerPath)).toBe(true);
+      } finally {
+        if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+        else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+      }
+
+      expect(listWorkContractsBySession("session-enforce-unavailable-list", legacyLedgerPath)).toEqual([]);
+    });
+  });
+
+  it("in enforce mode, load/list use ledger data when task-state is stale", () => {
+    withRuntimeLedgerEnv("enforce", `/tmp/octoclaw-runtime-${process.pid}-stale.sqlite`, () => {
+      const stale = {
+        ...buildContract("session-enforce-ledger", "stale task-state contract"),
+        updatedAt: "2024-01-01T00:00:00.000Z",
+      };
+      const newer = {
+        ...stale,
+        userAsk: "new ledger contract",
+        status: "running" as const,
+        updatedAt: "2024-01-02T00:00:00.000Z",
+      };
+
+      expect(saveWorkContract(newer, legacyLedgerPath)).toBe(true);
+
+      const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+      process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+      try {
+        expect(saveWorkContract(stale, legacyLedgerPath)).toBe(true);
+      } finally {
+        if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+        else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+      }
+
+      expect(loadWorkContract(newer.workContractId, legacyLedgerPath)?.userAsk).toBe("new ledger contract");
+      expect(listWorkContractsBySession("session-enforce-ledger", legacyLedgerPath).map((item) => item.userAsk)).toEqual([
+        "new ledger contract",
+      ]);
+    });
+  });
+
+  it("in enforce mode, saveWorkContract succeeds and ledger is readable when projection write fails", () => {
+    withRuntimeLedgerEnv("enforce", `/tmp/octoclaw-runtime-${process.pid}-projection.sqlite`, () => {
+      const contract = buildContract("session-enforce-projection-fails", "ledger survives projection failure");
+      mockFs.writeFileSync.mockImplementationOnce(() => {
+        throw new Error("projection not writable");
+      });
+
+      expect(saveWorkContract(contract, legacyLedgerPath)).toBe(true);
+      expect(loadWorkContract(contract.workContractId, legacyLedgerPath)?.userAsk).toBe("ledger survives projection failure");
+      expect(listWorkContractsBySession("session-enforce-projection-fails", legacyLedgerPath).map((item) => item.workContractId)).toEqual([
+        contract.workContractId,
+      ]);
+    });
+  });
 });
+
+function withRuntimeLedgerEnv(mode: string, dbPath: string, run: () => void): void {
+  const originalMode = process.env.OCTOCLAW_RUNTIME_LEDGER;
+  const originalDbPath = process.env.OCTOCLAW_RUNTIME_DB_PATH;
+  process.env.OCTOCLAW_RUNTIME_LEDGER = mode;
+  process.env.OCTOCLAW_RUNTIME_DB_PATH = dbPath;
+  try {
+    run();
+  } finally {
+    if (originalMode !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = originalMode;
+    else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+    if (originalDbPath !== undefined) process.env.OCTOCLAW_RUNTIME_DB_PATH = originalDbPath;
+    else delete process.env.OCTOCLAW_RUNTIME_DB_PATH;
+  }
+}
 
 function buildContract(sessionKey: string, userAsk: string) {
   return buildWorkContractFromPolicy(

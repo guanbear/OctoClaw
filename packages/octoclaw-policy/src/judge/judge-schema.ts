@@ -238,12 +238,15 @@ export function validateJudgeOutputDetailed(value: unknown): JudgeValidationResu
   if (!["reply", "delegate"].includes(obj.route as string)) {
     return { valid: false, degraded: false, degradedReasons: [] };
   }
-  if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) {
+  if (obj.confidence !== undefined && (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1)) {
     return { valid: false, degraded: false, degradedReasons: [] };
   }
 
   const degradedReasons: string[] = [];
   if (obj.route === "delegate") {
+    if (obj.confidence === undefined || obj.confidence === null) {
+      degradedReasons.push("missing_confidence");
+    }
     if (obj.scope === undefined || obj.scope === null) {
       degradedReasons.push("missing_scope");
     }
@@ -264,11 +267,8 @@ export function validateJudgeOutputDetailed(value: unknown): JudgeValidationResu
 
 /** Validate a parsed JudgeOutput. Returns true if hot-path fields are present and valid. */
 export function isValidJudgeOutput(value: unknown): value is JudgeOutput {
-  if (typeof value !== "object" || value === null) return false;
-  const obj = value as Record<string, unknown>;
-  if (!["reply", "delegate"].includes(obj.route as string)) return false;
-  if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) return false;
-  return true;
+  const result = validateJudgeOutputDetailed(value);
+  return result.valid;
 }
 
 /** Check if a judge output should be used (not abstained, high enough confidence). */

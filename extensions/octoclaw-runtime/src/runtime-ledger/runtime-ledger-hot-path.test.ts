@@ -8,6 +8,7 @@ import { envOverrides } from "../resolve/env.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
 import { resolveStatelessPolicyDecision } from "../resolve/policy-resolver.js";
+import { policyState } from "../state/policy-state.js";
 import { readTaskStateDocumentDetailed } from "../state/task-state-store.js";
 import { getToolRegistrations } from "../tools/registration.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
@@ -214,6 +215,12 @@ function expectDispatchSideEffects(workContractId: string): void {
   }
 }
 
+function clearPolicyState(): void {
+  for (const entry of policyState.entries()) {
+    policyState.clear(entry.key);
+  }
+}
+
 function seedLedgerOnlyWorkContract(contract: WorkContract): void {
   const db = openDb();
   try {
@@ -274,6 +281,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 describe("runtime ledger hot-path tool integration", () => {
   beforeEach(() => {
+    clearPolicyState();
     vi.spyOn(globalThis, "fetch");
   });
 
@@ -313,6 +321,70 @@ describe("runtime ledger hot-path tool integration", () => {
       const row = db.prepare("SELECT * FROM scheduler_queue WHERE work_contract_id = ?").get(contract.workContractId);
       expect(row).toMatchObject({ work_contract_id: contract.workContractId });
       expect(String(row?.queue_id)).toContain(`delegate-task:${contract.workContractId}`);
+      const events = db.prepare(
+        "SELECT event_type, payload_json FROM runtime_events WHERE work_contract_id = ? ORDER BY created_at",
+      ).all(contract.workContractId);
+      const eventTypes = events.map((event) => String(event.event_type));
+      expect(eventTypes).toContain("delegation_ticket_used");
+      expect(eventTypes).toContain("scheduler_queue_promoted");
+      expect(eventTypes).toContain("scheduler_lease_acquired");
+      expect(eventTypes).toContain("scheduler_released");
+      expect(row?.queue_status).toBe("terminal");
+      const attempt = db.prepare("SELECT status FROM task_attempts WHERE work_contract_id = ?").get(contract.workContractId);
+      expect(attempt?.status).not.toBe("admitted");
+      expect(attempt?.status).toBe("failed");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("scheduler lease lifecycle produces correct events and terminal state on spawn failure", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
+    const contract = seedWorkContract({ sessionKey: "session-hot-path-lease-lifecycle" });
+    seedDelegationTicket(contract);
+
+    const result = await executeDispatch({
+      task: contract.userAsk,
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract.sessionKey)),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-lease-lifecycle-test",
+    });
+
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.dispatch_executed).toBe(true);
+    const db = openDb();
+    try {
+      const row = db.prepare("SELECT * FROM scheduler_queue WHERE work_contract_id = ?").get(contract.workContractId);
+      expect(row).toMatchObject({ work_contract_id: contract.workContractId, queue_status: "terminal" });
+      expect(row?.lease_owner).toBeNull();
+      expect(row?.lease_expires_at).toBeNull();
+
+      const events = db.prepare(
+        "SELECT event_type, payload_json FROM runtime_events WHERE work_contract_id = ? ORDER BY created_at",
+      ).all(contract.workContractId);
+      const eventTypes = events.map((event) => String(event.event_type));
+      expect(eventTypes).toEqual(expect.arrayContaining([
+        "delegation_ticket_used",
+        "scheduler_queue_promoted",
+        "scheduler_lease_acquired",
+        "scheduler_released",
+      ]));
+      expect(eventTypes.indexOf("delegation_ticket_used")).toBeLessThan(eventTypes.indexOf("scheduler_queue_promoted"));
+      expect(eventTypes.indexOf("scheduler_queue_promoted")).toBeLessThan(eventTypes.indexOf("scheduler_lease_acquired"));
+      expect(eventTypes.indexOf("scheduler_lease_acquired")).toBeLessThan(eventTypes.indexOf("scheduler_released"));
+
+      const leaseAcquiredEvent = events.find((event) => event.event_type === "scheduler_lease_acquired");
+      expect(leaseAcquiredEvent).toBeTruthy();
+      expect(String(leaseAcquiredEvent?.payload_json ?? "")).toContain("leaseOwner");
+
+      const attempt = db.prepare("SELECT status FROM task_attempts WHERE work_contract_id = ?").get(contract.workContractId);
+      expect(attempt?.status).not.toBe("admitted");
+      expect(attempt?.status).toBe("failed");
     } finally {
       db.close();
     }
@@ -465,6 +537,7 @@ describe("runtime ledger hot-path tool integration", () => {
     const workContractId = String(decision.workContractId ?? "");
     expect(workContractId).not.toBe("");
     seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
+    clearPolicyState();
 
     const result = await executeDispatch({
       task,
@@ -496,6 +569,7 @@ describe("runtime ledger hot-path tool integration", () => {
     const workContractId = String(decision.workContractId ?? "");
     expect(workContractId).not.toBe("");
     seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
+    clearPolicyState();
 
     const result = await executeDispatch({
       task,
@@ -541,6 +615,7 @@ describe("runtime ledger hot-path tool integration", () => {
     const workContractId = String(decision.workContractId ?? "");
     expect(workContractId).not.toBe("");
     seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
+    clearPolicyState();
 
     const result = await executeDispatch({
       task,
