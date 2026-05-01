@@ -141,6 +141,77 @@ user follow-up
 
 这里可以有少量 deterministic hint，例如精确命令 `状态面板` / `八爪鱼状态` 直接展示面板；但自然语言追问不应靠包含词直接触发脚本，也不应创建新委派任务。
 
+
+### 4.6 2026-05-01 07:53 事件复盘要点
+
+本节记录 07:53 前后线上对话暴露出的 N1 具体 failure mode，作为后续实现验收样例。
+
+#### 4.6.1 Completion 写错路径导致 result 无法物化
+
+证据链：
+
+1. native task `0f4a5640-377b-4141-a3b3-ad290aba893f` 已 materialized，task-state archive 里记录 `dispatchExecuted=true`、`spawnExecuted=true`、`childSessionKey=agent:main:subagent:96ccb18f-...`、`status=running`。
+2. 子 session 实际完成了任务并写出 completion，但 prompt 中 `workContractId` 为空，要求写入的路径是 `~/.openclaw/workspace/.octoclaw/completions/.completion.json`。
+3. 该 completion 内容 `status=success`，但 `workContractId=""`，因此不能和 native task `0f4a5640...` 或 WorkContract 绑定。
+4. 后续 status/replay 只看到 native task 仍 `running`、`resultMaterialized=false`、`artifactRefIds=[]`，于是反复产生 `heartbeat_stale`，最终被 stale active retention 归档。
+5. 后来另一个任务 `wc-08eafe163ea33d89` 通过人工式调查找到了这个 orphan completion，并把真实结果写进自己的 completion；这证明原任务是“完成事实丢失”，不是“worker 未执行”。
+
+根因不是 timeout 阈值，也不是 status 面板渲染；根因是 **dispatch materialization 没有建立不可为空、可校验、单调绑定的 completion target**。
+
+必须补的 invariant：
+
+- 每个 delegated WorkContract 必须有非空 `workContractId`。
+- completion path 必须是 deterministic task-specific path，例如 `completions/<workContractId>.completion.json` 或绑定到 `nativeTaskId` 的等价路径。
+- child prompt 中的 `workContractId`、`delegateTaskId`、`nativeTaskId`、`childSessionKey`、`completionPath` 必须互相一致。
+- finalizer 读取 completion 时必须校验这些字段；不一致时进入 `completion_orphaned` / `binding_mismatch`，不能静默继续显示 `running/result=none`。
+- orphan completion scanner 应能按 `childSessionKey`、`delegateTaskId`、session log、mtime 找回 completion，并生成 recovery candidate；人工或自动确认后再 materialize result。
+
+#### 4.6.2 Running / timed_out / result=none 的状态错觉
+
+同一个任务在不同投影里出现 `running`、`timed_out`、`result=none`，不是三套真相都有效，而是缺少 canonical verdict：
+
+```text
+native task lifecycle: running/stale/timeout candidate
+worker completion fact: success file exists but binding invalid
+OctoClaw projection: result not materialized because completion orphaned
+user-facing verdict: completion_orphaned, needs reconciliation
+```
+
+N1 状态面应该优先展示这种 compact verdict，而不是把 native running 和 Octo result=none 混成“没跑完”。建议新增状态：
+
+| Verdict | 含义 | 用户可见解释 |
+|---------|------|--------------|
+| `completion_orphaned` | 找到 completion，但 WorkContract/native binding 不匹配 | 任务可能已完成，结果待回收/确认 |
+| `binding_mismatch` | completion 字段与派发登记不一致 | 任务结果不能自动入账，需要修复绑定 |
+| `stale_running` | 无 completion，心跳/更新时间超过阈值 | 执行进度停滞，等待 probe/timeout |
+| `timeout_no_result` | 超时且无 completion/recoverable evidence | 任务失败或丢失，需要 retry |
+| `deliverable_ready` | result 已物化但 delivery 未成功 | 可交付，正在重试投递 |
+
+#### 4.6.3 主会话锁不应阻塞独立 dispatch
+
+07:53 对话里主 agent 的分析提到：主会话等待第一个任务时，后续 dispatch 可能因锁占用只注册、不真正 materialize。这类行为必须视为 scheduler/materialization bug。
+
+设计口径：
+
+- main turn lock 只能保护同一 turn 的 transcript/delivery 一致性，不能作为全局 worker spawn 锁。
+- dispatch materialization 应进入独立 scheduler queue，由 WorkContract scope、写域、资源、依赖关系决定并发或排队。
+- 独立任务应可并发 spawn；有依赖或写域冲突的任务应显式 `queued_after=<taskId>` 或 `blocked_by=<resource>`。
+- 如果 host/backend 当前不支持并发，必须返回 `blocked` / `queued` 状态和原因，不能伪装成 `spawn_confirmed`，也不能 silent no-op。
+- `spawn_confirmed=true` 必须意味着有 current native task/session/process evidence；仅注册 WorkContract 不得叫 spawn confirmed。
+
+#### 4.6.4 补充修改不是新任务默认值
+
+对正在运行或刚完成的任务补充要求时，N1 需要 amendment protocol，而不是靠 prompt 相似度或重新 dispatch：
+
+| 判定 | 条件 | 行为 |
+|------|------|------|
+| `steer_child` | 补充信息不改变交付目标，child 仍 running 且可接收输入 | 向同一 child/session 追加 steer message |
+| `queue_after` | 修改 scope，但已有产出仍有价值或当前阶段不宜打断 | 在同一 delegate task 下创建 queued amendment attempt |
+| `cancel_and_respawn` | 目标/写域/约束冲突，继续跑会产生错误结果 | 取消当前 attempt，带原因创建新 attempt |
+| `reply_status_only` | 用户只是问状态/失败/来源 | 不新建任务，直接用 ledger/projection 回复 |
+
+判定依据必须来自 WorkContract scope、读写集、当前阶段、child continuity、结果是否已 materialized、语义差异和用户显式要求；不能只靠关键词。
+
 ---
 
 ## 5. Complexity 判定与归一
@@ -236,10 +307,25 @@ bad case replay
 ### S3：ticket enforced for new dispatch
 
 - `octoclaw_dispatch` / `octoclaw_spawn` 对新任务强制 ticket。
+- ticket 必须携带非空 `workContractId`、`delegateTaskId`、`nativeTaskId` 或 native binding candidate、`childSessionKey`、deterministic `completionPath`。
 - 旧恢复/兼容路径必须显式标注 legacy，并有关闭计划。
 - dispatch denial 返回可回复状态包，不 silent fail。
 
-### S4：status 与复杂度收口
+### S4：completion binding 与 orphan recovery
+
+- finalizer 只接受 task-specific completion path；`.completion.json` 这类无 owner 路径必须拒绝或标记为 orphan。
+- completion 字段与 WorkContract/native binding 不一致时，写 `completion_orphaned` / `binding_mismatch` projection，不继续显示普通 running。
+- orphan scanner 按 `childSessionKey`、`delegateTaskId`、session log、mtime 生成 recovery candidate；恢复成功后补 replay event 和 result materialization。
+- stale/timeout 判定前必须先 probe completion path、orphan candidates 和 child session terminal state。
+
+### S5：scheduler / dependency / amendment protocol
+
+- dispatch materialization 与 main turn lock 解耦；main lock 只保护 transcript/delivery，不阻塞独立 spawn。
+- scheduler 根据 WorkContract scope、写域、资源和显式依赖决定 `running`、`queued_after`、`blocked_by`。
+- `spawn_confirmed` 只能在 native task/session/process evidence 存在时返回 true。
+- task amendment 固化为 `steer_child` / `queue_after` / `cancel_and_respawn` / `reply_status_only`，并写入 durable projection。
+
+### S6：status 与复杂度收口
 
 - status 默认只展示 delegate 摘要和 `complexity_final`。
 - raw/debug 才展示 proposed/final、judge confidence、override reason。
@@ -254,8 +340,11 @@ bad case replay
 3. judge 误判 `delegate` 但 `is_new_work=false` 时，最终 route 为 reply，并记录 override。
 4. main agent 已经 direct action 后再调用 dispatch，dispatch 返回 `ticket_revoked` 或 `dispatch_not_authorized`，不 spawn。
 5. dispatch 成功后，main final 被静默或转为 coordinator/status，不与 delegate completion 双投递。
-6. status panel 的复杂度来自 WorkContract canonical projection，不展示多个互相冲突的 complexity 来源。
-7. nightly report 能看到 judge proposal、policy final、ticket allow/deny、复杂度漂移和 duplicate-owner 防护结果。
+6. completion 写到错误路径或 `workContractId` 为空时，状态进入 `completion_orphaned` / `binding_mismatch`，并能通过 orphan scanner 找回候选结果；不能继续普通显示 `running/result=none`。
+7. main turn lock 占用时，独立任务仍可并发 materialize；有依赖/写域冲突时显示 `queued_after` 或 `blocked_by`，不能 silent no-op。
+8. 补充修改能稳定落到 `steer_child`、`queue_after`、`cancel_and_respawn`、`reply_status_only` 之一。
+9. status panel 的复杂度来自 WorkContract canonical projection，不展示多个互相冲突的 complexity 来源。
+10. nightly report 能看到 judge proposal、policy final、ticket allow/deny、复杂度漂移、completion orphan recovery、scheduler queue 和 duplicate-owner 防护结果。
 
 ---
 

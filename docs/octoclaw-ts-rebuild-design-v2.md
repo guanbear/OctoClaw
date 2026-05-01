@@ -335,32 +335,54 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ### N1：恢复、重试和状态真相加固（立即，1-2 周）
 
-目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。
+目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。N1 不再用关键词补洞，而是把 judge 语义建议、runtime 派发授权、scheduler、completion binding、状态 verdict 和 amendment protocol 收成一个闭环。详见 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`。
 
-要做：
+#### N1-A：judge / dispatch 授权边界
 
-1. 按 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md` 收敛 judge / dispatch 边界：judge 负责语义建议和复杂度初判，runtime 只负责一次性 delegation ticket、单 owner 和投递一致性。
-2. 修复 dispatch failure/status/provenance follow-up：不再靠短语词表创建拦截墙，而是优先读 deliveryTarget、WorkContract、task-state、replay、dispatch/spawn/result/delivery ledger，生成 control-observer fact packet；没有新工作和可验收交付物时不签发 dispatch ticket。
-3. 在 `octoclaw_dispatch` 和 `octoclaw_spawn` 两个入口执行 ticket 校验：无 ticket、过期、已用、撤销、scope 不匹配都不得创建新 WorkContract/native task，只返回可回复状态包或 no-verifiable-record。
-4. 实现 `resume_preferred` 真复用：dispatch 选出的 preferred `childSessionKey` 必须传入 `trySpawnSubagentRuntime` / detached runtime；新 spawn 只在无 preferred、preferred retired 或 scope 不兼容时发生。
-5. 实现 `/octotask retry` / `octoclaw_task_action retry`：从 task-state 读取 WorkContract，同一 `delegateTaskId` 下创建新 attempt，复用或退休 child session，并写回 durable projection / replay。
-6. 定义 `stop / approve / reject` 行为：要么明确实现状态转换，要么从 tool enum 暂时移除，不能继续暴露成只读假动作。
-7. 建立 delegate scheduler：独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队；任何“主会话忙/锁占用/host 不支持并发”都只能变成 `queued/blocked` 的显式状态，不能静默跳过 materialization 或伪装成已派发。
-8. 建立 task amendment protocol：对正在跑的任务补充或修改时，先判定 `steer_child`、`queue_after`、`cancel_and_respawn`、`reply_status_only`；判定依据是 WorkContract scope、读写集、当前阶段、child continuity、是否已有有价值产出和语义差异，不能只靠 prompt 相似度。
-9. 加固 task-state 读取：文件不存在可初始化为空；JSON 损坏、schema 不可读、IO 异常必须进入 error/recovery 路径，禁止静默覆盖 durable truth。
-10. 把 observer snapshot 定义成唯一 read-model producer：`status/details/queue/timeline/retrieve/protected-lane answer` 都先读同一套 projection。
-11. 加强 completion relay：final result 一旦 ready，必须走 persist projection -> replay event -> delivery attempt -> outbox retry；只有 fresh final message/reply 成功后才标 `delivered`。
-12. 给 delegation ticket、direct-action 后撤票、dispatch denial 状态包、complexity final 投影、task-state 损坏、缺 native binding、dispatch failure follow-up、resume preferred、task retry、parallel independent dispatch、dependency queue、task amendment、delivery outbox 重复项、completion file late arrival 补 focused tests。
-13. 明确 `policyState` 禁区：不得恢复成 status fallback、spawn proof、result proof 或 cross-turn ledger。
-14. 收紧 judge validator 或明确 degraded fallback：policy spec 要求的 `is_new_work/expected_deliverable/scope/tool_need_hint/duration_hint/confidence/complexity` 不能在热路径里无痕丢失。
-15. 对齐 ACK text ACK0 口径：如果产品决定禁用 text ACK0，更新 spec 和测试；如果保留，则实现非 reaction channel 的 gated text ACK0。
+1. judge 输出从单一 route 扩展为结构化 proposal：`route`、`is_new_work`、`needs_side_effect`、`needs_fresh_state`、`expected_deliverable`、`complexity`、`duration_hint`、`tool_need_hint`、`confidence`。
+2. runtime 只做薄授权：`route=delegate` 但没有新工作或可验收交付物时降级 reply；本 turn 已 direct action/visible reply 后撤销 dispatch eligibility；sealed delegate 后禁止 main final 抢答。
+3. `octoclaw_dispatch` / `octoclaw_spawn` 强制一次性 delegation ticket；无 ticket、过期、已用、撤销、scope 不匹配都不得创建新 WorkContract/native task，只返回可回复状态包或 no-verifiable-record。
+4. ticket 必须绑定非空 `workContractId`、`delegateTaskId`、`deliveryTarget`、`expectedDeliverable`、canonical complexity、completion path 和 native binding candidate。
 
-完成标准：
+#### N1-B：completion binding 与结果物化
 
-- `resume_preferred` 的测试能证明同一 WorkContract follow-up 复用 preferred child session，而不是生成新 UUID。
+1. 每个 delegated WorkContract 必须生成 deterministic task-specific completion path；禁止 `.completion.json` 这类无 owner 路径进入正常 finalizer。
+2. child prompt 中的 `workContractId`、`delegateTaskId`、`nativeTaskId`、`childSessionKey`、`completionPath` 必须互相一致；finalizer 必须校验，不一致时写 `completion_orphaned` / `binding_mismatch`。
+3. stale/timeout 判定前必须 probe completion path、orphan completion candidates、child session terminal state、native task state；不能只因 task-state 长时间 running 就断言 result=none。
+4. 建立 orphan completion scanner：按 `childSessionKey`、`delegateTaskId`、session log、mtime 找回 completion，生成 recovery candidate；确认后补写 result materialization、replay event、delivery outbox。
+5. 加强 completion relay：final result ready 后必须走 persist projection -> replay event -> delivery attempt -> outbox retry；只有 fresh final message/reply 成功后才标 `delivered`。
+
+#### N1-C：scheduler、并发、依赖和锁
+
+1. dispatch materialization 与 main turn lock 解耦；main lock 只保护 transcript/delivery 一致性，不阻塞独立 worker spawn。
+2. 独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队，状态写成 `queued_after=<taskId>` 或 `blocked_by=<resource>`。
+3. `spawn_confirmed=true` 必须有 current native task/session/process evidence；仅注册 WorkContract 或遇到锁等待不得返回 spawn confirmed。
+4. 如果 host/backend 暂不支持并发，必须显式返回 `blocked/queued` 和原因，不能 silent no-op 或伪装成已派发。
+5. `resume_preferred` 必须真复用：dispatch 选出的 preferred `childSessionKey` 必须传入 `trySpawnSubagentRuntime` / detached runtime；新 spawn 只在无 preferred、preferred retired 或 scope 不兼容时发生。
+
+#### N1-D：task amendment protocol
+
+1. 对正在跑或刚完成任务的补充修改，先判定 `steer_child`、`queue_after`、`cancel_and_respawn`、`reply_status_only`。
+2. 判定依据是 WorkContract scope、读写集、当前阶段、child continuity、是否已有有价值产出、result 是否已 materialized、语义差异和用户显式要求；不能只靠 prompt 相似度或关键词。
+3. `steer_child` 追加到同一 child/session；`queue_after` 在同一 delegate task 下创建 queued amendment attempt；`cancel_and_respawn` 记录取消原因并创建新 attempt；`reply_status_only` 不创建任务。
+4. 实现 `/octotask retry` / `octoclaw_task_action retry`：从 task-state 读取 WorkContract，同一 `delegateTaskId` 下创建新 attempt，复用或退休 child session，并写回 durable projection / replay。
+5. 定义 `stop / approve / reject` 行为：要么明确实现状态转换，要么从 tool enum 暂时移除，不能继续暴露成只读假动作。
+
+#### N1-E：状态真相、状态面和 policyState 禁区
+
+1. task-state 读取必须区分文件不存在、JSON 损坏、schema 不可读和 IO 异常；禁止把损坏/异常当空状态写回覆盖 durable truth。
+2. observer snapshot 是唯一 read-model producer：`status/details/queue/timeline/retrieve/protected-lane answer` 都先读同一套 projection。
+3. 状态面默认展示 compact canonical verdict：`completion_orphaned`、`binding_mismatch`、`stale_running`、`timeout_no_result`、`deliverable_ready`、`delivered` 等；raw/debug 才展示 native/replay/projection 细节。
+4. 明确 `policyState` 禁区：不得恢复成 status fallback、spawn proof、result proof 或 cross-turn ledger。
+5. complexity 只展示 WorkContract canonical `complexity_final`；judge proposed/final diff 只进 replay/nightly/raw。
+6. 对齐 ACK text ACK0 口径：如果产品决定禁用 text ACK0，更新 spec 和测试；如果保留，则实现非 reaction channel 的 gated text ACK0。
+
+#### N1 验收标准
+
 - “为什么刚才自己回复一次又派发一次 / 为啥没派发成功呢”这类执行追问永远不创建新的 WorkContract/delegate task；它只读 task-state / replay / status projection / dispatch ledger 并直接回答。
 - `octoclaw_dispatch` / `octoclaw_spawn` 的测试能证明没有有效 delegation ticket 时不会创建新任务；ticket 有效、未过期、未撤销且绑定当前 turn/session/WorkContract 时才允许 materialize。
-- complexity 的测试能证明 status 默认只展示 WorkContract canonical `complexity_final`，raw/debug 才展示 judge proposed/final diff。
+- completion 写到错误路径或 `workContractId` 为空时，状态进入 `completion_orphaned` / `binding_mismatch`，orphan scanner 能找回候选结果；不能继续普通显示 `running/result=none`。
+- `resume_preferred` 的测试能证明同一 WorkContract follow-up 复用 preferred child session，而不是生成新 UUID。
 - `retry` 的测试能证明新 attempt 仍属于同一 delegate task，并且 status/timeline/replay 能区分原失败 attempt 和新 attempt。
 - 两个独立 delegated tasks 能并发 running；有依赖的 task 显示 `queued_after=<taskId>`；主会话忙不能导致 no-op dispatch。
 - 对运行中任务的补充修改能稳定落到 steer / queue-after / cancel-respawn / status-only 之一，并写入 durable projection。
