@@ -74,6 +74,9 @@ v1 只保留一个热路径 authority judge，再加一个可选本地文案增�
 2. `text_ack0 = 2500ms - 3500ms`
    - channel 不支持 reaction、reaction 不可靠、或场景偏正式时使用
    - 算作 ACK0
+   - 当前 `refactor/0.4.0-stable` 实现层暂时禁用了 text ACK0；下一轮必须二选一收口：
+     - 要么恢复 gated `text_ack0`，用于不支持 reaction 的 reply channel。
+     - 要么把本 spec 改成 reaction-only ACK0，并为无 reaction channel 写清楚 suppress / fallback 策略。
 3. `ack0_hard_ceiling = 5s`
    - 只是保守上限，不是默认等待时间
 4. `tier1 = 18s`
@@ -218,6 +221,12 @@ v1 可以复用同一个本地 Qwen 服务，但必须按 job type 分开：
 }
 ```
 
+当前实现注意：
+
+1. `packages/octoclaw-policy/src/spec/decision-policy-spec.ts` 已把 `confidence`、`scope`、`tool_need_hint`、`duration_hint` 标成 required。
+2. `packages/octoclaw-policy/src/judge/judge-schema.ts` 和 `extensions/octoclaw-runtime/src/resolve/llm-judge.ts` 的热路径校验仍偏宽：缺失 `confidence` 会被默认成 `0.7`，`scope/tool_need_hint/duration_hint` 可为空。
+3. 下一轮应收紧 validator，或把缺字段结果显式降级为 fallback/degraded judge result，不能让弱输出无痕进入 authoritative route。
+
 `ack_writer` 至少输出：
 
 ```json
@@ -360,8 +369,22 @@ v1 应明确写死：
 3. 如果 `execution.supports_status_reply=true`，应判 `reply.answer`
 4. 如果只需要刷新 control-plane task/status，允许 `reply` 路径使用 status/task-action control tool
 5. 不允许为了回答“刚才是谁做的/是不是子 agent 做的”再启动 `octoclaw_dispatch` 或 `octoclaw_spawn`
+6. 不允许为了回答“为什么没派发成功 / 为什么没有 spawn / no_dispatch_evidence 是什么 / spawn_not_confirmed 怎么回事”再启动新的 `octoclaw_dispatch` 或 `octoclaw_spawn`
 
 这条不是放宽 reply，而是防止把 execution receipt 读取误判成新 delegated work unit。
+
+这类 dispatch-failure follow-up 必须是 deterministic guard，而不是只交给 judge：
+
+```text
+user: "为啥没派发成功呢"
+  -> classify execution_followup / dispatch_failure_followup
+  -> route=reply
+  -> allowed tools: octoclaw_status, octoclaw_task_action
+  -> forbidden: octoclaw_dispatch, octoclaw_spawn, sessions_spawn
+  -> answer from task-state / replay / execution coverage
+```
+
+如果没有任何可验证记录，也仍然是 `reply`：直接说明 no verifiable record，并建议用户查看 status/task action；不能创建一个新任务去调查“为什么没派发”。
 
 ## 10. rubric
 
@@ -483,6 +506,10 @@ coverage_rules:
     then: "route=reply, reply_mode=answer"
   - if: "execution.requires_control_plane_refresh == true"
     then: "route=reply, allow status/task-action control tool, do not spawn"
+  - if: "intent.class == execution_followup && execution.coverage == none"
+    then: "route=reply, reply_mode=answer, say no verifiable record or refresh status; do not spawn"
+  - if: "intent.subtype == dispatch_failure_followup"
+    then: "route=reply, allow status/task-action control tool, forbid dispatch/spawn"
   - if: "memory.coverage == strong && memory.freshness_risk == low"
     then: "reply remains eligible, but not automatic"
   - if: "fresh external lookup or real probe or command execution or >1min"
@@ -530,18 +557,22 @@ ACK controller 在 Phase 1 不需要再次调用 judge，只需要消费一个�
 2. 只补最少量 runtime streaming 信号
 3. 不让 ACK controller 自己去猜“是不是快答完了”
 
-## 13. main agent 与 AGENTS.md
+## 13. main agent 与 rule 注入
 
-`AGENTS.md` 不负责 judge 路由。
+历史文档里提到的 `AGENTS.md`，在当前 runtime 中应理解为“注入给主 agent 的静态协作 rule”，不要求仓库里存在实体 `AGENTS.md` 文件。
 
-它只负责：
+这层 rule 注入只负责：
 
 1. 主 agent 行为宪法
 2. 快回复原则
 3. objection protocol
 4. 不允许 silent override
+5. delegated route 时必须使用 `octoclaw_dispatch`，不能手写 session/subagent spawn
+6. 不向用户解释隐藏 route rationale、delegation strategy 或 task boundary 分析
 
 真正的 route / mode / role / complexity / scope 规则，只能来自 canonical `decision policy spec`。
+
+因此实现上允许通过 `prependSystemContext`、plugin rule、host rule 或未来等价机制注入主 agent 规则；但这层不能复制、改写或替代 judge rubric。主 agent 可以提交 route hint / objection，不能 silent override sealed WorkContract。
 
 ## 14. 落地边界
 

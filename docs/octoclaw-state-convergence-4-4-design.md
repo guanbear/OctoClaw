@@ -36,6 +36,29 @@ The canonical task-state record is keyed by `workContractId`:
 5. Child completion finalization writes `completion` and `delivery` into the same record, then materializes the embedded WorkContract as completed.
 6. `policyState` can cache the current turn decision, but no cross-turn status or dispatch truth depends on it.
 
+## Read Failure Rules
+
+`task-state.json` is durable truth, so read failures must be explicit:
+
+- Missing file: initialize an empty document.
+- Invalid JSON / schema mismatch: do not return an empty task list and write over the file. Surface a recovery error, preserve the corrupt file for operator inspection, and require a bounded repair path.
+- Temporary IO failure: fail closed for mutation, record a replay/operator warning, and retry later.
+- Partial record corruption: quarantine or skip only the corrupt record when this can be proven safe; never erase unrelated records.
+
+The implementation must not treat “cannot parse durable state” as “there are no tasks”. That would turn a projection read problem into permanent truth loss on the next write.
+
+## Dispatch Evidence Rules
+
+A route seal or WorkContract record is not dispatch evidence.
+
+- `dispatchExecuted=true` requires native task/flow materialization evidence or an equivalent durable dispatch receipt.
+- `spawnExecuted=true` requires child session/run evidence. TaskFlow creation alone is not enough.
+- `no_dispatch_evidence` means the system may have planned or sealed work, but no execution was proven. Status should render this as registered/planned/anomalous, not running.
+- `dispatch_materialized_but_no_spawn_evidence` means a native flow/task exists, but no child run is confirmed. It is queued/anomalous until spawn evidence arrives or recovery marks it failed/blocked.
+- User questions about these states are status/provenance follow-ups. They must read task-state/replay/status projection and reply directly; they must not create a new delegate task.
+
+If a dispatch cannot proceed because the main session or host is busy, the durable state must say so explicitly (`queued`, `blocked`, `queued_after`, `parent_session_busy`, etc.). Silent skip is forbidden because it creates a false WorkContract without execution truth.
+
 ## Non-Goals
 
 - No second WorkContract ledger on the live path.
@@ -50,4 +73,8 @@ The canonical task-state record is keyed by `workContractId`:
 - Dispatch writes WorkContract-backed task-state records using `workContractId` as the primary key.
 - Completion finalization preserves the inline WorkContract and writes completion/delivery fields into the same record.
 - Status reads task-state records directly and does not require the old WorkContract ledger.
+- Corrupt task-state read does not silently become an empty durable document.
+- Sealed-but-not-dispatched records are visible as registered/planned/anomalous, never as successful delegation.
+- A dispatch failure follow-up such as “为啥没派发成功呢” does not create a new task and can be answered from durable status facts.
+- Tests cover missing file, invalid JSON, IO failure, and safe recovery/quarantine behavior.
 - Tests cover the above paths and `git diff --check`, focused runtime tests, and workspace test/build pass before deploy.

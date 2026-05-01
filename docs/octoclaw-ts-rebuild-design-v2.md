@@ -2,7 +2,7 @@
 
 日期：2026-05-01
 分支：`refactor/0.4.0-stable`
-代码基线：`refactor/0.4.0-stable`（N0 文档收口前校准点：`68734e0`）
+代码基线：`refactor/0.4.0-stable`（N0 文档收口后校准点：`53b6e6c`）
 状态：current architecture baseline + next work plan
 替代：2026-04-15 的 `OctoClaw TS 重构设计 v1`
 
@@ -192,7 +192,7 @@ octoclaw_dispatch
 | roadmap 项 | 当前状态 |
 |------------|----------|
 | Completion file protocol | ✅ `child-finalizer.ts` 使用 `{workContractId}.completion.json` |
-| Delivery outbox + retry | ✅ outbox 有指数退避和最大尝试次数 |
+| Delivery outbox retry（final relay） | ✅ outbox 有指数退避和最大尝试次数；这不是 delegate task retry |
 | ACK guard + execution notifications | ✅ ACK0、route commit ACK、execution transition notifier 已落地 |
 | IM adapter registry | ✅ Slack、Feishu、WeChat 内置；自定义 adapter 可注册 |
 | Slack status mrkdwn + 重要性排序 | ✅ status renderer 已有 Slack 输出 |
@@ -208,7 +208,24 @@ octoclaw_dispatch
 
 这里也修正 roadmap 的一个措辞：`direct / runner / spawn_single / spawn_multi` 不是“正确顶层 route”，而是下一阶段 Auto Router 可推荐的 execution contract / lane；live route authority 仍固定为 `reply | delegate`。
 
-### 4.4 已经演进，不应照旧理解
+### 4.4 N0 代码审查后的校准
+
+2026-05-01 针对 `refactor/0.4.0-stable` 的重点审查结论如下。这些不是重新打开 TS 重构，而是把已完成主线中的硬缺口排进下一轮。
+
+| 审查点 | 当前判断 | 后续动作 |
+|--------|----------|----------|
+| 委派链路 | dispatch/materialize/finalizer/outbox 主链路已基本稳；completion file、finalizer recovery、delivery outbox 均有测试 | `resume_preferred` 目前只写 metadata，live spawn 仍生成新 `childSessionKey`；N1 必须打通 preferred child session 复用 |
+| follow-up 路由 | `execution_followup` 已有强制 reply / control-observer 设计和部分测试 | “为啥没派发成功 / 为什么没有 spawn / no_dispatch_evidence” 这类 dispatch failure 追问未被稳定归入 follow-up；N1 必须加 deterministic front gate + dispatch/spawn 双 guard |
+| retry | delivery outbox retry 已完成；delegate core 有 `retryDelegateAttempt` 数据模型 | `/octotask retry` / `octoclaw_task_action retry` 仍是只读 payload；N1 必须实现同一 delegate task 的新 attempt，并明确 stop/approve/reject 的语义 |
+| 真相层 | WorkContract 已内嵌 task-state，status/finalizer/continuity 可从 durable projection 恢复 | `readTaskStateDocument` 不能把 parse/IO 异常静默当空状态；N1 必须区分文件不存在、损坏和临时失败，避免覆盖 durable truth |
+| 并发 / 排队 / 修订 | TaskFlow、delegate attempt、continuity 已有底层元素 | 还缺明确 scheduler / amendment protocol：独立任务应可并发，有依赖时排队，补充/修改已有任务时应 steer / queue-after / cancel-respawn 三选一 |
+| main-agent rule 注入 | 当前不是仓库文件式 `AGENTS.md`，而是 runtime 通过 `prependSystemContext` 注入 rule/policy projection | 这个方向正确；后续要给 rule 注入做 contract/snapshot test，确保它只承载协作宪法和 objection 协议，不复制 judge 规则 |
+| policy spec / judge | judge prompt 已从 canonical spec 渲染，route 仍收口为 `reply | delegate` | runtime validator 弱于 spec：缺失 `scope/tool_need_hint/duration_hint` 仍可能通过；N1/N2 要收紧 schema 或显式记录 fallback/degraded |
+| ACK | ACK guard、route commit ACK、delegate tier suppression 的主链路已稳 | 当前实现禁用 `text_ack0`，而 policy spec 仍允许 reaction/text 二选一；N1 需要选择产品口径并让 spec、实现、测试一致 |
+
+特别澄清：`AGENTS.md` 在当前系统里不是必须存在的 repo 文件。历史文档中说的 `AGENTS.md` 职责，现在应理解为“注入给主 agent 的静态协作 rule”。它不负责 judge 路由；真正的 route/mode/role/scope 规则仍只来自 canonical decision policy spec。
+
+### 4.5 已经演进，不应照旧理解
 
 | v1 说法 | 新理解 |
 |---------|--------|
@@ -217,8 +234,9 @@ octoclaw_dispatch
 | “task-state 是 projection/cache/policy metadata” | 当前它同时是 OctoClaw durable business-state projection；但 substrate lifecycle truth 仍在 OpenClaw TaskFlow |
 | “Auto Router 接下来做” | 只能在 shadow + baseline + gate 下做；先推荐 execution contract，不直接改 live route authority |
 | “IM/display 是后续能力” | Slack/Feishu/WeChat baseline 已有，接下来是 capability matrix 产品化和真实渠道验收 |
+| “AGENTS.md 是当前 repo 文件” | 当前实现是 runtime rule 注入，不依赖仓库内存在 `AGENTS.md` 文件 |
 
-### 4.5 应明确废弃
+### 4.6 应明确废弃
 
 1. 不再回到 Python live route parity。
 2. 不再把 `runner / spawn / direct / observe` 当作和 `reply | delegate` 平级的 route truth。
@@ -277,13 +295,25 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 没有 replay outcome、nightly report、calibration gate，就不要推广到 live。
 
+### 5.6 Rule injection is cooperation, not route authority
+
+主 agent 需要规则注入，但注入内容必须保持窄职责：
+
+1. runtime policy authoritative for this run。
+2. delegated route 时主 agent 是 coordinator，必须走 `octoclaw_dispatch`。
+3. 不手写 session/subagent spawn 命令。
+4. 不向用户解释隐藏的 route rationale、delegation strategy 或 task boundary 分析。
+5. 主 agent 只有 route hint / objection / status coordination 权，没有 silent override 权。
+
+这些 rule 可以通过 `prependSystemContext`、plugin rule、host rule 或未来等价机制注入，不要求仓库内存在实体 `AGENTS.md`。但它们不能变成第二份 judge rubric；judge、validator 和 route seal 的规则真相仍是 canonical decision policy spec。
+
 ---
 
 ## 6. 接下来要做什么
 
 下面不用旧的 Phase 0-5 命名，避免和历史施工阶段混在一起。新的执行顺序用 `N0-N4`。
 
-### N0：文档和术语收口（已完成：2026-05-01）
+### N0：文档、术语和缺口校准（已完成：2026-05-01）
 
 目标：让维护者读文档时不再被旧 phase 和 route 词汇误导。
 
@@ -293,29 +323,49 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 2. 同步更新 `README.md` 与 `README.zh-CN.md`，把主入口收成 TS monorepo、runtime extension、`octoclawctl`、feedback loop 和 IM matrix。
 3. 给 `docs/` 做 active/archive 清理：原 v1、2026-04-30 roadmap、Phase 1 和 Phase 2 施工设计都转为归档快照；活跃文档只保留仍指导后续实现的设计面。
 4. `octoclaw-next-phase-roadmap-2026-04-30.md` 已归档为 dated snapshot；其阶段状态和计划已经合入本文。
+5. 补充 N0 代码审查校准：resume/retry/truth/judge/ACK 的剩余缺口已经进入本文，不再藏在历史 roadmap 或临时 review 里。
+6. 修正 `AGENTS.md` 表述：当前实现是 rule 注入链路，不要求 repo 内存在同名文件。
 
 完成标准：
 
-- 新人只读 README、本文、role terminology、state convergence，就能理解当前系统。
+- 新人只读 README、本文、role terminology、state convergence，就能理解当前系统和下一轮硬缺口。
 - 活跃文档中 `direct / runner / spawn_single / spawn_multi` 的出现均应按 execution contract / lane 解读；live route authority 固定为 `reply | delegate`。
 - 归档文档可以保留历史措辞，但不再作为当前实现决策权威。
+- review finding 不再散落在线程里；必须在本文或细分 spec 中能找到对应下一步。
 
-### N1：状态真相和 completion relay 加固（1-2 周）
+### N1：恢复、重试和状态真相加固（立即，1-2 周）
 
-目标：让“发生了什么、谁做的、是否已交付”在 status、IM、protected-lane answer 中完全一致。
+目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。
 
 要做：
 
-1. 把 observer snapshot 定义成唯一 read-model producer：`status/details/queue/timeline/retrieve/protected-lane answer` 都先读同一套 projection。
-2. 加强 completion relay：final result 一旦 ready，必须走 persist projection -> replay event -> delivery attempt -> outbox retry；只有 fresh final message/reply 成功后才标 `delivered`。
-3. 给 task-state 损坏、缺 native binding、delivery outbox 重复项、completion file late arrival 补 focused tests。
-4. 明确 `policyState` 禁区：不得恢复成 status fallback、spawn proof、result proof 或 cross-turn ledger。
+1. 修复 dispatch failure follow-up：把“为啥没派发成功 / 为什么没有派发 / 没 spawn / no_dispatch_evidence / spawn_not_confirmed / 派发失败了吗”等归为 `execution_followup`，route 必须是 `reply` + control-observer/status grounding。
+2. 把 follow-up guard 放到 `octoclaw_dispatch` 和 `octoclaw_spawn` 两个入口：只要 intent / WorkContract / execution coverage 表示 provenance/status/dispatch-failure follow-up，就禁止新派发，返回可回复的状态包或 no-verifiable-record。
+3. 实现 `resume_preferred` 真复用：dispatch 选出的 preferred `childSessionKey` 必须传入 `trySpawnSubagentRuntime` / detached runtime；新 spawn 只在无 preferred、preferred retired 或 scope 不兼容时发生。
+4. 实现 `/octotask retry` / `octoclaw_task_action retry`：从 task-state 读取 WorkContract，同一 `delegateTaskId` 下创建新 attempt，复用或退休 child session，并写回 durable projection / replay。
+5. 定义 `stop / approve / reject` 行为：要么明确实现状态转换，要么从 tool enum 暂时移除，不能继续暴露成只读假动作。
+6. 建立 delegate scheduler：独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队；任何“主会话忙/锁占用/host 不支持并发”都只能变成 `queued/blocked` 的显式状态，不能静默跳过 materialization 或伪装成已派发。
+7. 建立 task amendment protocol：对正在跑的任务补充或修改时，先判定 `steer_child`、`queue_after`、`cancel_and_respawn`、`reply_status_only`；判定依据是 WorkContract scope、读写集、当前阶段、child continuity、是否已有有价值产出和语义差异，不能只靠 prompt 相似度。
+8. 加固 task-state 读取：文件不存在可初始化为空；JSON 损坏、schema 不可读、IO 异常必须进入 error/recovery 路径，禁止静默覆盖 durable truth。
+9. 把 observer snapshot 定义成唯一 read-model producer：`status/details/queue/timeline/retrieve/protected-lane answer` 都先读同一套 projection。
+10. 加强 completion relay：final result 一旦 ready，必须走 persist projection -> replay event -> delivery attempt -> outbox retry；只有 fresh final message/reply 成功后才标 `delivered`。
+11. 给 task-state 损坏、缺 native binding、dispatch failure follow-up、resume preferred、task retry、parallel independent dispatch、dependency queue、task amendment、delivery outbox 重复项、completion file late arrival 补 focused tests。
+12. 明确 `policyState` 禁区：不得恢复成 status fallback、spawn proof、result proof 或 cross-turn ledger。
+13. 收紧 judge validator 或明确 degraded fallback：policy spec 要求的 `scope/tool_need_hint/duration_hint/confidence` 不能在热路径里无痕丢失。
+14. 对齐 ACK text ACK0 口径：如果产品决定禁用 text ACK0，更新 spec 和测试；如果保留，则实现非 reaction channel 的 gated text ACK0。
 
 完成标准：
 
+- `resume_preferred` 的测试能证明同一 WorkContract follow-up 复用 preferred child session，而不是生成新 UUID。
+- “为啥没派发成功呢”这类追问永远不创建新的 WorkContract/delegate task；它只读 task-state / replay / status projection 并直接回答。
+- `retry` 的测试能证明新 attempt 仍属于同一 delegate task，并且 status/timeline/replay 能区分原失败 attempt 和新 attempt。
+- 两个独立 delegated tasks 能并发 running；有依赖的 task 显示 `queued_after=<taskId>`；主会话忙不能导致 no-op dispatch。
+- 对运行中任务的补充修改能稳定落到 steer / queue-after / cancel-respawn / status-only 之一，并写入 durable projection。
+- task-state 损坏不会被当成空状态写回覆盖；operator/status 能看到明确 recovery signal。
 - 重启后 `octoclaw_status` 与 IM/status projection 对同一任务给出一致状态。
 - 任务完成但 final relay 未成功时，状态是 `deliverable_ready` 或 `delivery retry`，不能显示成 `completed/delivered`。
 - protected-lane 问题必须 state-grounded，不能凭上一轮自然语言回答。
+- judge spec、runtime validator、main-agent rule injection 三者职责清楚：rule 注入只指导协作，judge validator 才校验 route contract。
 
 ### N2：IM capability matrix 产品化（2-4 周）
 

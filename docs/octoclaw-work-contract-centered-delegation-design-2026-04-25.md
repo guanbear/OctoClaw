@@ -356,6 +356,8 @@ Reuse rules:
 
 This gives OctoClaw the benefit of OMO `session_id` continuity while matching OpenClaw 4.21 real handles: `childSessionKey` is the normal parent-visible identity, `childSessionId` is provider/runtime continuity when available, and `runId` is execution evidence. `expectsCompletionMessage` and `directThreadDelivery` are important because a persistent/thread-bound child may deliver directly to its own thread instead of announcing completion through the parent path.
 
+Current implementation gap as of 2026-05-01: `continuationMode=resume_preferred` can select and store a preferred `childSessionKey`, but live dispatch still creates a fresh random child session before calling the subagent runtime. N1 must thread the selected key into spawn/resume materialization and prove with tests that follow-up dispatch reuses the preferred child session unless the contract says it is retired or incompatible.
+
 ### 5.7 NativeBindingRef
 
 ```ts
@@ -542,6 +544,14 @@ revision_conflict
 
 Store only compact refs in `stateJson`/`waitJson` (`workContractId`, `delegateTaskId`, `attemptId`, artifact refs, brief status). Do not store full WorkContract, full handoff packet, transcript, or route rationale inside native TaskFlow state.
 
+Retry contract:
+
+1. `/octotask retry` and `octoclaw_task_action retry` must be state-changing operations, not status/detail aliases.
+2. Retry creates a new attempt under the same `delegateTaskId`; it does not invent a new user-visible task unless the user explicitly starts new work.
+3. Retry chooses child-session behavior from the continuity rules above: transient failure resumes preferred child session; contamination/scope mismatch retires it and creates a new one.
+4. Retry writes durable task-state, WorkContract attempt metadata, replay event, and status/timeline projection before or atomically with dispatch materialization.
+5. `stop`, `approve`, and `reject` must either have similarly explicit state transitions or remain absent from the public action enum.
+
 ### 6.4 Worker handoff
 
 `DelegateHandoffPacket` should be a projection from WorkContract:
@@ -588,11 +598,45 @@ ask "who did that / did you use a subagent / what is status"
   -> execution coverage precheck
   -> reply.answer or reply + control-plane status
 
+ask "why did dispatch fail / why no spawn / no_dispatch_evidence"
+  -> execution coverage + task-state status precheck
+  -> reply.answer or reply + control-plane status
+  -> never create a new delegate task just to explain dispatch failure
+
 ask "continue/fix/check more/write patch"
   -> resolve WorkContract/delegateTaskId
   -> resume preferred child session if compatible
   -> no new route judge unless new intent/scope conflict
 ```
+
+Implementation invariant:
+
+1. `execution_followup`, `status_followup`, `provenance_followup`, and `dispatch_failure_followup` must be blocked from `octoclaw_dispatch` and `octoclaw_spawn`.
+2. The main agent's route hint / objection is a useful correction signal, but the stable fix must live in deterministic front-gate classification and dispatch/spawn guards.
+3. A sealed delegate WorkContract with no dispatch/spawn evidence is not an active worker. It is a planned/registered/anomalous state that should be answered from status projection.
+
+### 6.7 Concurrent tasks and amendments
+
+OctoClaw should distinguish new independent work from dependent work and amendments to existing work before dispatch:
+
+| user intent | relation | policy |
+|-------------|----------|--------|
+| new independent task | `independent` | spawn in parallel if capacity allows |
+| task depends on unfinished result | `depends_on` | queue after dependency and show explicit `queued_after` |
+| small clarification / extra constraint for running task | `amends` | steer preferred child session if the child supports steering |
+| scope changes but current output may still be useful | `amends` | queue-after current attempt and inherit artifact refs |
+| direction is wrong or unsafe to continue | `amends` | request cancel / retire child session / spawn replacement under a new attempt |
+| user asks why/status/provenance | `status_only` | reply from status; do not spawn |
+
+The decision cannot be based on semantic distance alone. It must use:
+
+1. WorkContract read/write scope and scope fingerprint.
+2. Whether the current attempt has started, produced checkpoints, or materialized useful artifacts.
+3. Whether child session continuity is healthy, contaminated, blocked, or retired.
+4. Whether the runtime can deliver a steering message to the existing child.
+5. Whether write scopes conflict with existing running tasks.
+
+If the host or runtime serializes main-session turns, OctoClaw must not silently skip dispatch. Independent tasks should still become separate durable task records and either spawn concurrently or enter an explicit `queued/blocked` state with a reason such as `parent_session_busy`, `worker_capacity_full`, or `dependency_pending`.
 
 ## 7. How this changes current components
 
@@ -693,6 +737,8 @@ Rules:
 3. If route is `reply`, reject dispatch.
 4. If WorkContract says provenance/status-only, reject dispatch/spawn.
 5. If continuing same delegate task, prefer child session resume.
+6. If the prompt is a dispatch-failure follow-up, reject dispatch/spawn and return state-grounded status payload.
+7. If a new request relates to existing running work, resolve relation first: `independent`, `depends_on`, `amends`, or `status_only`.
 
 ### 7.7 `runtime-payloads.ts`
 
