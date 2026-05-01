@@ -252,6 +252,9 @@ policy 可以修正 judge complexity，但必须记录原因：
 
 ## 6. Scheduler Protocol 与状态存储设计
 
+实施级 schema、迁移步骤、OpenSpec work packet 和验收矩阵见 `docs/octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`。
+
+
 ### 6.1 当前存储事实
 
 本机 OpenClaw 已有两个原生 SQLite 存储：
@@ -497,3 +500,4 @@ bad case replay
 - `octoclaw-judge-ack-policy-spec-2026-04-21.md` 仍是 judge label 和 ACK/policy spec 的基础；后续应把 `is_new_work`、`expected_deliverable`、`complexity_final` 纳入 schema。
 - `octoclaw-work-contract-centered-delegation-design-2026-04-25.md` 仍是 WorkContract 委派合同基础；后续应把 delegation ticket 作为 WorkDecisionSeal 到 dispatch materialization 的桥。
 - `octoclaw-state-convergence-4-4-design.md` 仍是状态真相边界；本文要求状态追问只读其 canonical projection，不再通过新委派解释旧任务。
+- `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md` 是本文的实施包，包含 SQLite schema、分步 rollout、验收矩阵和 OpenSpec 模板。

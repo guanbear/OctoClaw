@@ -335,7 +335,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ### N1：恢复、重试和状态真相加固（立即，1-2 周）
 
-目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。N1 不再用关键词补洞，而是把 judge 语义建议、runtime 派发授权、scheduler、completion binding、状态 verdict 和 amendment protocol 收成一个闭环。详见 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`。
+目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。N1 不再用关键词补洞，而是把 judge 语义建议、runtime 派发授权、scheduler、completion binding、状态 verdict 和 amendment protocol 收成一个闭环。设计见 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`，实施包见 `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`。
 
 #### N1-A：judge / dispatch 授权边界
 
@@ -482,6 +482,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 | `octoclaw-work-contract-centered-delegation-design-2026-04-25.md` | WorkContract 委派合同细节 |
 | `octoclaw-judge-ack-policy-spec-2026-04-21.md` | judge / ACK / policy labels 的细化规范 |
 | `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md` | N1 补充：judge 语义建议、delegation ticket、单 owner、防双路径和 complexity canonicalization |
+| `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md` | N1 实施包：SQLite schema、迁移步骤、scheduler protocol、验收矩阵和 OpenSpec 模板 |
 | `octoclaw-role-terminology.md` | Observer/Patrol/Runner/Ctl 术语边界 |
 | `octoclaw-feedback-loop-contracts.md` | observe -> summarize -> review -> curate -> validate -> promote -> learn |
 | `octoclaw-im-display-contract.md` | IM/display 能力矩阵和 surface 语义；N0 已标注当前 TS 入口，N2 继续产品化 |
