@@ -266,3 +266,26 @@ export { buildDelegationTicketDryRun } from "./ticket-dry-run.js";
 export type { DelegationTicketDryRunInput, DelegationTicketDryRunResult } from "./ticket-dry-run.js";
 export { admitDelegationTicketForDispatch } from "./ticket-enforcement.js";
 export type { DelegationTicketAdmissionInput, DelegationTicketAdmissionResult } from "./ticket-enforcement.js";
+export {
+  resolveSchedulerConfig,
+  deriveSchedulerResourceKeys,
+  promoteToQueued,
+  tryAcquireLease,
+  materializeNativeIds,
+  releaseOrComplete,
+  requeueExpiredLeases,
+} from "./scheduler.js";
+export type {
+  SchedulerConfig,
+  QueueStatus,
+  PromoteToQueuedInput,
+  PromoteToQueuedResult,
+  AcquireLeaseInput,
+  AcquireLeaseResult,
+  MaterializeInput,
+  MaterializeResult,
+  ReleaseInput,
+  ReleaseResult,
+  RequeueExpiredInput,
+  RequeueExpiredResult,
+} from "./scheduler.js";
