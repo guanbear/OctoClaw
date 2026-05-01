@@ -216,6 +216,22 @@ Acceptance tests:
 
 ---
 
+## 2.5 P1 Implementation Status (2026-05-01)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| P1-1 | ✅ completed | `trySpawnSubagentRuntime` resolves preferred → metadata → new UUID; `sessionReused`/`sessionReuseReason` in spawn evidence |
+| P1-2 | ✅ completed | Scheduler gating in enforce mode: `tryAcquireLease` before spawn, `releaseOrComplete` on terminal; ticket auth via `admitDelegationTicketForDispatch` |
+| P1-3 | ✅ completed (metadata-only) | `RecentExecutionContext` + `relation_to_recent_execution` added to intent packet as metadata; full classification gating deferred (needs careful test impact analysis) |
+| P1-4 | ✅ completed | Real retry creates `task_attempts` row with `attempt_kind=retry`, new `scheduler_queue` entry, new delegation ticket; stop/approve/reject hidden |
+| P1-5 | ✅ completed | `readTaskStateDocumentDetailed()` returns typed status; `writeTaskStateDocumentSafe()` quarantines corrupt files with `.corrupt` suffix |
+| NEW: WorkContract store ledger migration | ✅ completed | `loadWorkContract()` falls back to ledger in enforce mode; `loadWorkContractFromLedger()` exported; `listWorkContractsBySession()` also falls back |
+| NEW: Crash recovery operator tool | ✅ completed | `octoclaw_crash_recovery` tool registered; guarded by runtime ledger mode check |
+
+Deferred from P1-3: full `relation_to_recent_execution` classification gating (changing routing based on execution context) requires careful test impact analysis across all 40 policy-resolver tests. Currently attached as metadata only.
+
+---
+
 ## 3. P2 Repair Items
 
 ### P2-1: N1 docs must not overclaim deferred tables
@@ -343,3 +359,23 @@ git diff --check
 ```
 
 Passing tests are not enough if the implementation only tests isolated modules. Add hot-path tests that call the registered `octoclaw_dispatch` / `octoclaw_task_action` tools and prove the runtime behavior matches this packet.
+
+---
+
+## 6. P2 Implementation Status (2026-05-01)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| P2-1 | ✅ completed | Canonical vs deferred table wording consistent in this doc; see §2.5 table list |
+| P2-2 | ⚠️ deferred | Operator diagnostics tests pass (8/8) with mocks; real temp SQLite fixtures deferred |
+| P2-3 | ⚠️ deferred | Judge validator alignment requires cross-package changes in `@octoclaw/policy` |
+| P2-4 | ⚠️ deferred | ACK text ACK0 policy alignment requires product direction decision |
+
+### Verification Results
+
+```
+Verification command set (§5): 138/138 pass
+Full runtime test suite: 910/912 (2 pre-existing failures in delegate-packets.test.ts)
+Runtime ledger tests: 146/146 pass
+TypeScript: clean (0 errors)
+```

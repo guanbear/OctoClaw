@@ -54,6 +54,7 @@ export interface ChildCompletionFinalizerOptions {
   timeoutMs?: number;
   pollIntervalMs?: number;
   initialDelayMs?: number;
+  onSuccess?: () => void | Promise<void>;
   sendFinalMessage?: (params: {
     sessionKey: string;
     message: string;
@@ -628,6 +629,7 @@ export async function finalizeChildSessionOnce(
     const deliveryStatus = "delivered";
     updateTaskStateCompleted(options, completion, deliveryStatus);
     materializeCompletedWorkContract(options, completion, deliveryStatus);
+    await options.onSuccess?.();
     void appendJsonl(resolveReplayLogPath(), {
       schema_version: "octoclaw.runtime_policy.replay_event/v1",
       event: "completion_file_delivered",

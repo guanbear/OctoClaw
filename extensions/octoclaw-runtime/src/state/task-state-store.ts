@@ -81,6 +81,8 @@ export interface TaskStateDocument {
 interface FsSyncLike {
   mkdirSync(pathname: string, options?: { recursive?: boolean }): void;
   readFileSync(pathname: string, encoding: string): string;
+  renameSync(oldPath: string, newPath: string): void;
+  writeFileSync(pathname: string, data: string, encoding: string): void;
 }
 
 const fs = fsSync as unknown as FsSyncLike;
@@ -121,32 +123,127 @@ export function resolveTaskStateStorePath(pathOverride?: string): string {
   return taskStatePathFromOverride(pathOverride);
 }
 
+export type TaskStateReadStatus = "ok" | "missing" | "parse_error" | "schema_mismatch" | "io_error";
+
+export interface TaskStateReadResult {
+  document: TaskStateDocument;
+  status: TaskStateReadStatus;
+  originalPath: string;
+  errorMessage?: string;
+}
+
 export function readTaskStateDocument(taskStatePath?: string): TaskStateDocument {
+  return readTaskStateDocumentDetailed(taskStatePath).document;
+}
+
+export function readTaskStateDocumentDetailed(taskStatePath?: string): TaskStateReadResult {
   const targetPath = taskStatePathFromOverride(taskStatePath);
+  let raw: string;
   try {
-    const parsed = JSON.parse(fs.readFileSync(targetPath, "utf-8")) as { tasks?: unknown; schemaVersion?: unknown; updated_at?: unknown };
+    raw = fs.readFileSync(targetPath, "utf-8");
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String((error as { code: string }).code) : "";
+    const message = error instanceof Error ? error.message : "";
+    if (code === "ENOENT" || /ENOENT|no such file|missing file/iu.test(message)) {
+      return {
+        document: { schemaVersion: TASK_STATE_SCHEMA_VERSION, tasks: [] },
+        status: "missing",
+        originalPath: targetPath,
+      };
+    }
     return {
+      document: { schemaVersion: TASK_STATE_SCHEMA_VERSION, tasks: [] },
+      status: "io_error",
+      originalPath: targetPath,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  let parsed: { tasks?: unknown; schemaVersion?: unknown; updated_at?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { tasks?: unknown; schemaVersion?: unknown; updated_at?: unknown };
+  } catch (error) {
+    return {
+      document: { schemaVersion: TASK_STATE_SCHEMA_VERSION, tasks: [] },
+      status: "parse_error",
+      originalPath: targetPath,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (!isRecord(parsed)) {
+    return {
+      document: { schemaVersion: TASK_STATE_SCHEMA_VERSION, tasks: [] },
+      status: "schema_mismatch",
+      originalPath: targetPath,
+      errorMessage: "parsed content is not a record",
+    };
+  }
+
+  return {
+    document: {
       schemaVersion: parsed.schemaVersion === TASK_STATE_SCHEMA_VERSION ? TASK_STATE_SCHEMA_VERSION : undefined,
       updated_at: asString(parsed.updated_at) || undefined,
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks.filter(isRecord) as TaskStateRecord[] : [],
-    };
-  } catch {
-    return { schemaVersion: TASK_STATE_SCHEMA_VERSION, tasks: [] };
-  }
+    },
+    status: "ok",
+    originalPath: targetPath,
+  };
 }
 
 export function writeTaskStateDocument(document: TaskStateDocument, taskStatePath?: string): boolean {
+  return writeTaskStateDocumentSafe(document, taskStatePath).ok;
+}
+
+export interface WriteTaskStateResult {
+  ok: boolean;
+  reason?: string;
+  quarantined?: boolean;
+  quarantinePath?: string;
+}
+
+export function writeTaskStateDocumentSafe(document: TaskStateDocument, taskStatePath?: string): WriteTaskStateResult {
   const targetPath = taskStatePathFromOverride(taskStatePath);
+  const readResult = readTaskStateDocumentDetailed(taskStatePath);
+
+  if (readResult.status === "parse_error" || readResult.status === "io_error") {
+    const quarantinePath = `${targetPath}.corrupt.${Date.now()}`;
+    try {
+      fs.renameSync(targetPath, quarantinePath);
+    } catch {
+      // If rename fails, try copy + truncate
+      try {
+        const existing = fs.readFileSync(targetPath, "utf-8");
+        fs.writeFileSync(quarantinePath, existing, "utf-8");
+      } catch {
+        // quarantine failed — still block the write
+        return { ok: false, reason: `corrupt_file_quarantine_failed:${readResult.status}`, quarantined: false };
+      }
+    }
+    try {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      const wrote = atomicWriteJsonSync(targetPath, {
+        schemaVersion: TASK_STATE_SCHEMA_VERSION,
+        updated_at: new Date().toISOString(),
+        tasks: document.tasks,
+      });
+      return { ok: wrote, reason: wrote ? undefined : "atomic_write_failed", quarantined: true, quarantinePath };
+    } catch (error) {
+      return { ok: false, reason: `write_after_quarantine_failed:${error instanceof Error ? error.message : String(error)}`, quarantined: true, quarantinePath };
+    }
+  }
+
   try {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    return atomicWriteJsonSync(targetPath, {
+    const ok = atomicWriteJsonSync(targetPath, {
       schemaVersion: TASK_STATE_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
       tasks: document.tasks,
     });
+    return { ok, reason: ok ? undefined : "atomic_write_failed" };
   } catch (error) {
     console.warn?.(`octoclaw task-state write failed: ${String(error)}`);
-    return false;
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }
 

@@ -11,6 +11,8 @@ import { buildDelegateStatusPacket } from "./context/delegate-packets.js";
 import { sanitizeMainContextInjection } from "./context/context-budget.js";
 import type { DelegateStatusPacket } from "@octoclaw/contracts/delegate-context";
 import { normalizeSemanticPrompt } from "./semantic-prompt.js";
+import { openRuntimeLedger } from "./runtime-ledger/index.js";
+import type { DatabaseSync } from "./runtime-ledger/types.js";
 
 interface FsSyncLike {
   readFileSync(pathname: string, encoding: string): string;
@@ -19,6 +21,19 @@ interface FsSyncLike {
 const fs = fsSync as unknown as FsSyncLike;
 
 type JsonRecord = Record<string, unknown>;
+
+export type RelationToRecentExecution =
+  | "existing_execution_followup"
+  | "existing_execution_provenance_query"
+  | "new_work"
+  | "ambiguous";
+
+export interface RecentExecutionContext {
+  workContractId: string;
+  taskStateStatus: string;
+  lastEventType: string;
+  completionVerdict: string;
+}
 
 export interface ConversationIntentPacket extends IntentPacket {
   available: boolean;
@@ -32,6 +47,8 @@ export interface ConversationIntentPacket extends IntentPacket {
   require_fresh_lookup?: boolean;
   require_state_grounding?: boolean;
   provenance_followup?: boolean;
+  relation_to_recent_execution?: RelationToRecentExecution;
+  recent_execution_context?: RecentExecutionContext;
 }
 
 export interface ConversationControlHints {
@@ -721,6 +738,91 @@ function noGrounding(reason = "no_recent_subject_turn"): { available: false; rea
   };
 }
 
+function buildRecentExecutionContext(options: {
+  taskStatePath?: string;
+  replayLogPath?: string;
+}): RecentExecutionContext | null {
+  const taskStatePath = stringValue(options.taskStatePath);
+  if (!taskStatePath) return null;
+
+  const taskIndex = buildTaskIndex(taskStatePath);
+  if (taskIndex.size === 0) return null;
+
+  const turns = groupedReplayTurns(readJsonl(stringValue(options.replayLogPath)));
+
+  let latestTaskId = "";
+  for (const turn of turns) {
+    const facts = buildTurnFacts(turn, taskIndex, buildTaskEventIndex(deriveTaskEventsPath(taskStatePath)));
+    const tId = stringValue(facts.taskId);
+    if (tId) {
+      latestTaskId = tId;
+    }
+  }
+
+  if (!latestTaskId) return null;
+
+  const taskRecord = taskIndex.get(latestTaskId);
+  if (!taskRecord) return null;
+
+  const workContractId = stringValue(taskRecord.workContractId || taskRecord.work_contract_id);
+  const taskStateStatus = stringValue(taskRecord.status || taskRecord.task_status);
+  const lastEventType = stringValue(taskRecord.last_event_type || taskRecord.latest_event_kind);
+
+  let completionVerdict = "missing";
+  if (workContractId) {
+    try {
+      const opened = openRuntimeLedgerBestEffort();
+      if (opened) {
+        try {
+          const row = opened.prepare("SELECT verdict FROM completion_bindings WHERE work_contract_id = ? ORDER BY created_at DESC LIMIT 1").get(workContractId);
+          completionVerdict = stringValue((row as JsonRecord | null)?.verdict) || "missing";
+        } finally {
+          opened.close();
+        }
+      }
+    } catch {
+      completionVerdict = "missing";
+    }
+  }
+
+  return {
+    workContractId,
+    taskStateStatus,
+    lastEventType,
+    completionVerdict,
+  };
+}
+
+function openRuntimeLedgerBestEffort(): DatabaseSync | null {
+  try {
+    const result = openRuntimeLedger({ mode: "best_effort" });
+    return result.status === "ok" && result.db ? result.db : null;
+  } catch {
+    return null;
+  }
+}
+
+function classifyRelationToRecentExecution(
+  ctx: RecentExecutionContext | null,
+  prompt: string,
+): RelationToRecentExecution {
+  if (!ctx) return "new_work";
+  if (!ctx.workContractId && !ctx.taskStateStatus) return "new_work";
+
+  const terminalStatuses = new Set(["completed", "failed", "timed_out", "cancelled"]);
+  if (terminalStatuses.has(ctx.taskStateStatus)) return "new_work";
+
+  if (isProvenancePrompt(prompt) && !isMetaPrompt(prompt) && !isTaskProgressPrompt(prompt)) {
+    return "existing_execution_provenance_query";
+  }
+
+  if (isMetaPrompt(prompt) || isTaskProgressPrompt(prompt)) {
+    return "existing_execution_followup";
+  }
+
+  return "ambiguous";
+}
+
 export function buildConversationIntentPacket(options: {
   prompt?: string;
   replayLogPath?: string;
@@ -749,6 +851,12 @@ export function buildConversationIntentPacket(options: {
     facts: buildTurnFacts(turn, taskIndex, taskEventIndex),
   }));
   const subjectTurn = selectSubjectTurn(enrichedTurns, prompt, Array.isArray(options.sessionKeys) ? options.sessionKeys : []);
+
+  const recentExecutionContext = buildRecentExecutionContext({
+    taskStatePath: stringValue(options.taskStatePath),
+    replayLogPath: stringValue(options.replayLogPath),
+  });
+  const relationToRecentExecution = classifyRelationToRecentExecution(recentExecutionContext, prompt);
 
   let hints: IntentHints = {};
   let source = "deterministic_front_gate";
@@ -795,6 +903,8 @@ export function buildConversationIntentPacket(options: {
     require_fresh_lookup: Boolean(surface),
     require_state_grounding: Boolean(surface && surface.lane_hint !== "reply"),
     provenance_followup: isProvenanceOnly,
+    relation_to_recent_execution: recentExecutionContext ? relationToRecentExecution : undefined,
+    recent_execution_context: recentExecutionContext || undefined,
   };
 }
 

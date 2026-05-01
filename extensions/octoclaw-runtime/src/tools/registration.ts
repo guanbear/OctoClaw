@@ -56,7 +56,7 @@ import type { NativeBindingRef, NativeFlowStatus, WorkContract } from "@octoclaw
 import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { loadWorkContract } from "../work-contract/store.js";
 import { materializeWorkContractSuccess, materializeWorkContractFailure } from "../work-contract/materializer.js";
-import { selectPreferredChildSession } from "../work-contract/continuity.js";
+import { markChildSessionPreferred, selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
 import { createCompletionBinding } from "../runtime-ledger/completion-binding.js";
@@ -65,6 +65,17 @@ import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 import { admitDelegationTicketForDispatch } from "../runtime-ledger/ticket-enforcement.js";
+import { openRuntimeLedger } from "../runtime-ledger/index.js";
+import { isSchedulerEnabled } from "../runtime-ledger/feature-flags.js";
+import { resolveRuntimeLedgerMode } from "../runtime-ledger/shadow.js";
+import { performCrashRecovery } from "../runtime-ledger/crash-recovery.js";
+import {
+  materializeNativeIds,
+  promoteToQueued,
+  releaseOrComplete,
+  resolveSchedulerConfig,
+  tryAcquireLease,
+} from "../runtime-ledger/scheduler.js";
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
@@ -424,6 +435,13 @@ function toolLogger(ctx: UnknownRecord): UnknownRecord {
   return asRecord(ctx.logger);
 }
 
+function warnToolLogger(ctx: UnknownRecord, message: string): void {
+  const warn = toolLogger(ctx).warn;
+  if (typeof warn === "function") {
+    warn(message);
+  }
+}
+
 function toolResponse(summary: string, details: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     text: summary,
@@ -752,13 +770,29 @@ async function trySpawnSubagentRuntime(params: {
   workContractId: string;
   selectedModel: string;
   idempotencyKey: string;
-}): Promise<{ spawnExecuted: boolean; childSessionKey: string; runId: string; childRunId: string; error: string }> {
+  preferredChildSessionKey?: string;
+}): Promise<{ spawnExecuted: boolean; childSessionKey: string; runId: string; childRunId: string; error: string; sessionReused?: boolean; sessionReuseReason?: string }> {
   const runtime = params.runtime;
   if (!runtime || typeof runtime.run !== "function") {
     return { spawnExecuted: false, childSessionKey: "", runId: "", childRunId: "", error: "subagent_runtime_unavailable" };
   }
 
-  const childSessionKey = buildChildSessionKey(params.ctx, params.metadata);
+  // Resolve child session key: preferred > metadata > new UUID
+  const metadataChildKey = asString(params.metadata.childSessionKey || params.metadata.child_session_key);
+  let childSessionKey: string;
+  let sessionReused = false;
+  let sessionReuseReason = "";
+  if (params.preferredChildSessionKey) {
+    childSessionKey = params.preferredChildSessionKey;
+    sessionReused = true;
+    sessionReuseReason = "preferred_child_session_reused";
+  } else if (metadataChildKey) {
+    childSessionKey = metadataChildKey;
+    sessionReused = true;
+    sessionReuseReason = "metadata_child_session_key_reused";
+  } else {
+    childSessionKey = buildChildSessionKey(params.ctx, params.metadata);
+  }
   const modelRef = splitModelRefForSubagent(params.selectedModel);
   const message = buildSubagentSpawnMessage({
     task: params.task,
@@ -800,9 +834,9 @@ async function trySpawnSubagentRuntime(params: {
     }
     const runId = asString(result?.runId);
     if (!runId) {
-      return { spawnExecuted: false, childSessionKey, runId: "", childRunId: "", error: "subagent_runtime_missing_run_id" };
+      return { spawnExecuted: false, childSessionKey, runId: "", childRunId: "", error: "subagent_runtime_missing_run_id", sessionReused, sessionReuseReason };
     }
-    return { spawnExecuted: true, childSessionKey, runId, childRunId: runId, error: "" };
+    return { spawnExecuted: true, childSessionKey, runId, childRunId: runId, error: "", sessionReused, sessionReuseReason };
   } catch (error) {
     return {
       spawnExecuted: false,
@@ -810,6 +844,8 @@ async function trySpawnSubagentRuntime(params: {
       runId: "",
       childRunId: "",
       error: error instanceof Error ? `${error.name}: ${error.message}` : String(error || "subagent_runtime_spawn_failed"),
+      sessionReused,
+      sessionReuseReason,
     };
   }
 }
@@ -1668,9 +1704,202 @@ function readHelperInvoker(...values: unknown[]): NativeHelperInvoker | null {
   return null;
 }
 
+function taskActionError(error: string, extra: UnknownRecord = {}): { summary: string; payload: UnknownRecord } {
+  const payload = { ok: false, error, ...extra };
+  return { summary: JSON.stringify(payload, null, 2), payload };
+}
+
+function findWorkContractForTaskAction(taskId: string): WorkContract | null {
+  const direct = loadWorkContract(taskId);
+  if (direct) return direct;
+
+  const records = readTaskStateRecords();
+  const matched = records.find((record) => taskStateRecordMatchesId(record as RuntimeTaskStateRecord, taskId));
+  if (!matched) return null;
+
+  const matchedWorkContractId = asString(matched.workContractId || matched.work_contract_id || matched.id);
+  if (matchedWorkContractId) {
+    const byId = loadWorkContract(matchedWorkContractId);
+    if (byId) return byId;
+  }
+
+  const embedded = asRecord(matched.workContract || matched.work_contract) as Partial<WorkContract>;
+  return asString(embedded.workContractId) ? embedded as WorkContract : null;
+}
+
+function issueRetryDelegationTicket(db: NonNullable<ReturnType<typeof openRuntimeLedger>["db"]>, contract: WorkContract, attemptId: string, nowIso: string): string {
+  const ticketId = `retry:${contract.workContractId}:${attemptId}`;
+  const expiresAt = new Date(Date.parse(nowIso) + 24 * 60 * 60 * 1000).toISOString();
+  const ticketJson = {
+    ticket_id: ticketId,
+    work_contract_id: contract.workContractId,
+    turn_id: contract.turnId,
+    session_key: contract.sessionKey,
+    retry: true,
+    attempt_id: attemptId,
+  };
+  db.prepare(
+    `INSERT INTO delegation_tickets (
+       ticket_id, work_contract_id, turn_id, session_key,
+       delivery_target_id, expected_deliverable, complexity_final,
+       status, issued_at, expires_at, ticket_json, revision
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, 0)`,
+  ).run(
+    ticketId,
+    contract.workContractId,
+    contract.turnId,
+    contract.sessionKey,
+    contract.continuity.threadBindingKey || contract.sessionKey,
+    contract.mainContext.summary.slice(0, 200),
+    null,
+    nowIso,
+    expiresAt,
+    JSON.stringify(ticketJson),
+  );
+  return ticketId;
+}
+
+async function executeRetryTaskAction(taskId: string, format: "text" | "json"): Promise<{ summary: string; payload: UnknownRecord }> {
+  if (!taskId) return taskActionError("retry_requires_task_id");
+  const contract = findWorkContractForTaskAction(taskId);
+  if (!contract) return taskActionError("work_contract_not_found", { taskId });
+  const delegateTaskId = asString(contract.delegate?.delegateTaskId || contract.continuity.delegateTaskId);
+  if (!delegateTaskId) return taskActionError("delegate_task_id_not_found", { taskId, workContractId: contract.workContractId });
+
+  const openResult = openRuntimeLedger({ mode: "enforce" });
+  if (openResult.status !== "ok" || !openResult.db) {
+    return taskActionError("ledger_unavailable", { taskId, workContractId: contract.workContractId, dbPath: openResult.dbPath });
+  }
+
+  const db = openResult.db;
+  const now = new Date();
+  const nowIso = now.toISOString();
+  let attemptNo = 1;
+  let attemptId = "";
+  let queueId = "";
+  let ticketId = "";
+  let sessionMode = "new_session";
+  let childSessionKey = "";
+  let preferredReason = "";
+
+  try {
+    db.exec("BEGIN");
+    const maxRow = db.prepare("SELECT MAX(attempt_no) AS max_no FROM task_attempts WHERE work_contract_id = ?").get(contract.workContractId);
+    attemptNo = maxRow && maxRow.max_no != null ? Number(maxRow.max_no) + 1 : 1;
+    attemptId = `${delegateTaskId}:attempt:${attemptNo}`;
+    queueId = `queue:${attemptId}`;
+    ticketId = issueRetryDelegationTicket(db, contract, attemptId, nowIso);
+    const preferred = selectPreferredChildSession(contract, "resume_preferred");
+    preferredReason = preferred.reason;
+    childSessionKey = preferred.selected?.childSessionKey ?? `child:${delegateTaskId}:attempt:${attemptNo}`;
+    sessionMode = preferred.selected ? "resume_preferred" : "new_session";
+    const attemptJson = {
+      ticket_id: ticketId,
+      work_contract_id: contract.workContractId,
+      delegate_task_id: delegateTaskId,
+      retry: true,
+      session_mode: sessionMode,
+      preferred_child_session_reason: preferredReason,
+    };
+    db.prepare(
+      `INSERT INTO task_attempts (
+         attempt_id, work_contract_id, delegate_task_id, attempt_no,
+         attempt_kind, status, child_session_key, model_profile, worker_pool,
+         updated_at, attempt_json, revision
+       ) VALUES (?, ?, ?, ?, 'retry', 'admitted', ?, ?, ?, ?, ?, 0)`,
+    ).run(
+      attemptId,
+      contract.workContractId,
+      delegateTaskId,
+      attemptNo,
+      childSessionKey,
+      contract.delegate?.modelProfile ?? null,
+      contract.delegate?.role ?? null,
+      nowIso,
+      JSON.stringify(attemptJson),
+    );
+    db.prepare(
+      `INSERT INTO scheduler_queue (
+         queue_id, work_contract_id, attempt_id, queue_status, priority,
+         dependency_ids_json, resource_keys_json, created_at, updated_at, revision
+       ) VALUES (?, ?, ?, 'admitted', 0, '[]', '[]', ?, ?, 0)`,
+    ).run(queueId, contract.workContractId, attemptId, nowIso, nowIso);
+    db.prepare("UPDATE delegation_tickets SET status = 'used', used_at = ?, revision = revision + 1 WHERE ticket_id = ?").run(nowIso, ticketId);
+    db.prepare(
+      `INSERT INTO runtime_events (event_type, work_contract_id, attempt_id, payload_json, created_at)
+       VALUES ('task_retry_requested', ?, ?, ?, ?)`,
+    ).run(contract.workContractId, attemptId, JSON.stringify({ taskId, delegateTaskId, attemptNo, queueId, ticketId, sessionMode, childSessionKey }), nowIso);
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    return taskActionError("retry_attempt_create_failed", { taskId, workContractId: contract.workContractId, message: error instanceof Error ? error.message : String(error) });
+  } finally {
+    try { db.close(); } catch {}
+  }
+
+  const queued = promoteToQueued({ queueId, contract });
+  const updatedContract = markChildSessionPreferred({
+    workContractId: contract.workContractId,
+    childSessionKey,
+    delegateTaskId,
+    attemptId,
+    agentRole: contract.delegate?.role ?? "default",
+    modelProfile: contract.delegate?.modelProfile ?? "",
+    parentSessionKey: contract.continuity.parentSessionKey || contract.sessionKey,
+    threadBindingKey: contract.continuity.threadBindingKey,
+    scopeFingerprint: contract.delegate?.scope.scopeFingerprint ?? "",
+  }) ?? contract;
+  upsertTaskStateRecord({
+    id: updatedContract.workContractId,
+    taskId: asString(updatedContract.telemetry.nativeTaskId || taskId),
+    task_id: asString(updatedContract.telemetry.nativeTaskId || taskId),
+    workContractId: updatedContract.workContractId,
+    work_contract_id: updatedContract.workContractId,
+    status: queued.queueStatus,
+    workContractStatus: updatedContract.status,
+    work_contract_status: updatedContract.status,
+    route: updatedContract.route,
+    sessionKey: updatedContract.sessionKey,
+    session_key: updatedContract.sessionKey,
+    childSessionKey,
+    child_session_key: childSessionKey,
+    updatedAt: nowIso,
+    updated_at: nowIso,
+    workContract: updatedContract,
+    work_contract: updatedContract,
+    retry: { attempt_no: attemptNo, attempt_id: attemptId, delegateTaskId, queue_id: queueId, ticket_id: ticketId, status: queued.queueStatus },
+  });
+
+  const payload = {
+    ok: true,
+    mode: "native_runtime",
+    action: "retry",
+    taskId,
+    workContractId: contract.workContractId,
+    delegateTaskId,
+    attempt_no: attemptNo,
+    attempt_id: attemptId,
+    status: queued.queueStatus,
+    queue_id: queueId,
+    ticket_id: ticketId,
+    child_session_key: childSessionKey,
+    session_mode: sessionMode,
+    preferred_child_session_reason: preferredReason,
+    scheduler: queued,
+  };
+  const summary = format === "json" ? JSON.stringify(payload, null, 2) : `Retry admitted for ${delegateTaskId}: attempt ${attemptNo} (${attemptId}) is ${queued.queueStatus}.`;
+  return { summary, payload };
+}
+
 async function executeTaskAnchorCommand(rawText: string, format: string, cwd: string): Promise<{ summary: string; payload: UnknownRecord }> {
   void cwd;
   const parsed = parseTaskAction(rawText);
+  if (["stop", "approve", "reject"].includes(parsed.action)) {
+    return taskActionError(`action_not_implemented: ${parsed.action}`, { action_deferred: true, action: parsed.action });
+  }
+  if (parsed.action === "retry") {
+    return executeRetryTaskAction(parsed.taskId, normalizeTaskActionFormat(format));
+  }
   if ((parsed.action || "details") === "details" && parsed.taskId) {
     checkActiveTaskRecovery({ taskId: parsed.taskId });
   }
@@ -2022,6 +2251,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const managedSessionKey = asString(asRecord(cachedDecision.request).session_key || initialMetadata.session_key);
         const resolvedRoute = normalizeLiveRoute(params.forceRoute === "auto" ? "" : params.forceRoute || asRecord(cachedDecision.route_decision).route, "reply");
         const isDelegatedRoute = resolvedRoute === "delegate";
+        const runtimeLedgerMode = resolveRuntimeLedgerMode();
         const recordDispatchTerminalFailure = async (errorMessage: string, options: { sealMismatch?: boolean; route?: string | null } = {}) => {
           await recordPolicyReplay("dispatch_terminal_failure", {
             sessionKey: managedSessionKey,
@@ -2135,6 +2365,21 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         }
 
         const helperInvoker = readHelperInvoker(asRecord(metadata).helperInvoker, ctx.helperInvoker);
+        let schedulerQueueId = "";
+        let schedulerDispatchState: "inactive" | "bypassed" | "leased" = "inactive";
+        const releaseSchedulerQueue = (outcome: "completed" | "failed" | "cancelled", errorMessage?: string) => {
+          if (!schedulerQueueId || schedulerDispatchState !== "leased") return;
+          const result = releaseOrComplete({
+            queueId: schedulerQueueId,
+            outcome,
+            errorCode: errorMessage ? outcome : undefined,
+            errorMessage,
+            terminalSummary: errorMessage,
+          });
+          if (!result.ok) {
+            warnToolLogger(ctx, `scheduler release failed: ${result.error || "unknown_error"}`);
+          }
+        };
 
         if (isDelegatedRoute) {
           // Preflight checks the execution backend that dispatch will use. The helperInvoker path
@@ -2221,6 +2466,129 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             metadata.delegate_task_id = ticketAdmission.delegate_task_id;
             metadata.attemptId = ticketAdmission.attempt_id;
             metadata.attempt_id = ticketAdmission.attempt_id;
+            schedulerQueueId = asString(ticketAdmission.queue_id);
+            if (runtimeLedgerMode === "enforce") {
+              if (!isSchedulerEnabled()) {
+                schedulerDispatchState = "bypassed";
+                metadata.scheduler_bypassed = true;
+                metadata.scheduler_status = "scheduler_bypassed";
+                warnToolLogger(ctx, "OCTOCLAW_SCHEDULER_ENABLED is false; bypassing scheduler gating in enforce mode");
+                await recordPolicyReplay("dispatch_scheduler_bypassed", {
+                  sessionKey: managedSessionKey,
+                  sessionId: asString(ctx.sessionId),
+                  route: resolvedRoute,
+                  queue_id: schedulerQueueId || null,
+                  work_contract_id: ticketAdmission.work_contract_id ?? null,
+                  attempt_id: ticketAdmission.attempt_id ?? null,
+                  reason: "scheduler_not_enabled",
+                }, toolLogger(ctx), cachedDecision);
+              } else if (!schedulerQueueId) {
+                const errorMessage = "blocked_by_scheduler:missing_queue_id";
+                await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+                return dispatchHonestyFailure({
+                  route: resolvedRoute,
+                  error: errorMessage,
+                  retryable: false,
+                  terminal: true,
+                  details: {
+                    status: "blocked_by_scheduler",
+                    scheduler_status: "blocked_by_scheduler",
+                    queue_id: null,
+                    dispatch_executed: false,
+                    spawn_executed: false,
+                    materialized: false,
+                  },
+                });
+              } else {
+                const promoted = promoteToQueued({ queueId: schedulerQueueId, contract: dispatchWorkContract });
+                if (!promoted.ok) {
+                  const schedulerStatus = promoted.queueStatus === "blocked" ? "blocked_by_scheduler" : "blocked_by_scheduler";
+                  const errorMessage = `${schedulerStatus}:${promoted.blockedReason || promoted.error || promoted.queueStatus}`;
+                  await recordPolicyReplay("dispatch_scheduler_blocked", {
+                    sessionKey: managedSessionKey,
+                    sessionId: asString(ctx.sessionId),
+                    route: resolvedRoute,
+                    queue_id: schedulerQueueId,
+                    queue_status: promoted.queueStatus,
+                    blocked_by: promoted.blockedBy ?? null,
+                    blocked_reason: promoted.blockedReason ?? promoted.error ?? null,
+                    dispatch_executed: false,
+                    spawn_executed: false,
+                    materialized: false,
+                  }, toolLogger(ctx), cachedDecision);
+                  await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+                  return dispatchHonestyFailure({
+                    route: resolvedRoute,
+                    error: errorMessage,
+                    retryable: promoted.error === "ledger_unavailable",
+                    terminal: promoted.error !== "ledger_unavailable",
+                    details: {
+                      status: "blocked_by_scheduler",
+                      scheduler_status: "blocked_by_scheduler",
+                      queue_id: schedulerQueueId,
+                      queue_status: promoted.queueStatus,
+                      blocked_by: promoted.blockedBy ?? null,
+                      blocked_reason: promoted.blockedReason ?? promoted.error ?? null,
+                      dispatch_executed: false,
+                      spawn_executed: false,
+                      materialized: false,
+                    },
+                  });
+                }
+                const schedulerConfig = resolveSchedulerConfig();
+                const lease = tryAcquireLease({
+                  leaseOwner: `octoclaw_dispatch:${asString(ctx.sessionId, managedSessionKey) || process.pid}`,
+                  maxConcurrentSpawns: schedulerConfig.maxConcurrentSpawns,
+                  leaseDurationMs: schedulerConfig.leaseDurationMs,
+                });
+                if (!lease.acquired || lease.queueId !== schedulerQueueId) {
+                  const errorMessage = `queued_not_leased:${lease.reason || (lease.queueId && lease.queueId !== schedulerQueueId ? "different_queue_leased" : "unknown")}`;
+                  await recordPolicyReplay("dispatch_scheduler_not_leased", {
+                    sessionKey: managedSessionKey,
+                    sessionId: asString(ctx.sessionId),
+                    route: resolvedRoute,
+                    queue_id: schedulerQueueId,
+                    leased_queue_id: lease.queueId ?? null,
+                    reason: lease.reason ?? null,
+                    blocked_by: lease.blockedBy ?? null,
+                    blocked_reason: lease.blockedReason ?? null,
+                    dispatch_executed: false,
+                    spawn_executed: false,
+                    materialized: false,
+                  }, toolLogger(ctx), cachedDecision);
+                  if (lease.acquired && lease.queueId && lease.queueId !== schedulerQueueId) {
+                    const releaseResult = releaseOrComplete({
+                      queueId: lease.queueId,
+                      outcome: "cancelled",
+                      errorCode: "unexpected_lease_owner",
+                      errorMessage: `dispatch acquired ${lease.queueId} while waiting for ${schedulerQueueId}`,
+                    });
+                    if (!releaseResult.ok) warnToolLogger(ctx, `scheduler unexpected lease release failed: ${releaseResult.error || "unknown_error"}`);
+                  }
+                  await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+                  return dispatchHonestyFailure({
+                    route: resolvedRoute,
+                    error: errorMessage,
+                    retryable: true,
+                    terminal: false,
+                    details: {
+                      status: "queued_not_leased",
+                      scheduler_status: "queued_not_leased",
+                      queue_id: schedulerQueueId,
+                      leased_queue_id: lease.queueId ?? null,
+                      blocked_by: lease.blockedBy ?? null,
+                      blocked_reason: lease.blockedReason ?? lease.reason ?? null,
+                      dispatch_executed: false,
+                      spawn_executed: false,
+                      materialized: false,
+                    },
+                  });
+                }
+                schedulerDispatchState = "leased";
+                metadata.scheduler_queue_id = schedulerQueueId;
+                metadata.scheduler_status = "leased";
+              }
+            }
           }
         }
 
@@ -2241,6 +2609,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           payload = isRecord(candidate.payload) ? asRecord(candidate.payload) : {};
           if (Object.keys(payload).length === 0) {
             await recordDispatchTerminalFailure(errorMessage);
+            releaseSchedulerQueue("failed", errorMessage);
             return dispatchHonestyFailure({
               route: resolvedRoute,
               error: errorMessage,
@@ -2272,6 +2641,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               stateKey,
             });
           } catch (_) { }
+          releaseSchedulerQueue("failed", errorMessage);
           return dispatchHonestyFailure({
             route: asString(payload.route, resolvedRoute),
             error: errorMessage,
@@ -2403,6 +2773,9 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const dispatchExecuted = materialized;
         const delegateTaskId = asString(payload.delegateTaskId || materialization.delegateTaskId || materialization.task_id || payload.task_id);
         const workContractIdForDispatch = (dispatchWorkContract?.workContractId ?? asString(authoritativeDecision.workContractId)) || "";
+        const preferredChildSessionKeyForSpawn = asString(metadata.childSessionKey || metadata.child_session_key)
+          || dispatchWorkContract?.continuity.preferredChildSessionKey
+          || undefined;
         if (finalRoute === "delegate" && materialized && !spawnEvidence.spawnExecuted) {
           const runtimeSpawn = await trySpawnSubagentRuntime({
             runtime: options.subagentRuntime ?? asRecord(ctx.runtime).subagent as OpenClawSubagentRuntime | undefined,
@@ -2413,6 +2786,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             workContractId: workContractIdForDispatch,
             selectedModel,
             idempotencyKey: stableId("octoclaw-child-run", [delegateTaskId, materializedNativeFlowId ?? "", asString(metadata.message_id), asString(params.task)]),
+            preferredChildSessionKey: preferredChildSessionKeyForSpawn,
           });
           if (runtimeSpawn.spawnExecuted) {
             spawnEvidence = {
@@ -2434,6 +2808,10 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               child_session_key: runtimeSpawn.childSessionKey,
               childSessionId: runtimeSpawn.childSessionKey,
               child_session_id: runtimeSpawn.childSessionKey,
+              sessionReused: runtimeSpawn.sessionReused || false,
+              session_reused: runtimeSpawn.sessionReused || false,
+              sessionReuseReason: runtimeSpawn.sessionReuseReason || "",
+              session_reuse_reason: runtimeSpawn.sessionReuseReason || "",
             };
             payloadNativeTaskBinding.spawnExecuted = true;
             payloadNativeTaskBinding.spawn_executed = true;
@@ -2441,8 +2819,21 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             payloadNativeTaskBinding.childRunId = runtimeSpawn.childRunId;
             payloadNativeTaskBinding.childSessionKey = runtimeSpawn.childSessionKey;
             payloadNativeTaskBinding.childSessionId = runtimeSpawn.childSessionKey;
+            if (schedulerQueueId && schedulerDispatchState === "leased") {
+              const materializeResult = materializeNativeIds({
+                queueId: schedulerQueueId,
+                nativeFlowId: materializedNativeFlowId,
+                nativeTaskId: materializedNativeTaskId,
+                childSessionKey: runtimeSpawn.childSessionKey,
+                childRunId: runtimeSpawn.childRunId,
+              });
+              if (!materializeResult.ok) {
+                warnToolLogger(ctx, `scheduler materialize failed: ${materializeResult.error || "unknown_error"}`);
+              }
+            }
           } else if (runtimeSpawn.error) {
             payloadRuntimeTruth.spawn_error = runtimeSpawn.error;
+            releaseSchedulerQueue("failed", runtimeSpawn.error);
           }
         }
         const executionState = finalRoute === "delegate"
@@ -2633,8 +3024,15 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 cwd: ctxCwd(ctx),
                 timeoutMs: Math.max(600_000, (expectedSeconds > 0 ? expectedSeconds * 1000 + 120_000 : 0)),
                 logger: toolLogger(ctx),
+                onSuccess: schedulerQueueId && schedulerDispatchState === "leased"
+                  ? () => {
+                      const result = releaseOrComplete({ queueId: schedulerQueueId, outcome: "completed" });
+                      if (!result.ok) warnToolLogger(ctx, `scheduler completion release failed: ${result.error || "unknown_error"}`);
+                    }
+                  : undefined,
               });
             } else {
+              releaseSchedulerQueue("failed", "spawn_not_confirmed");
               void emitExecutionTransitionNotification({
                 ...notifyParams,
                 transitionKind: "materialized_no_spawn",
@@ -2836,13 +3234,14 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
     {
       name: "octoclaw_task_action",
       label: "OctoClaw Task Action",
-      description: "Handle task anchor fallback commands like details, queue, artifacts, stop, retry, approve, and reject.",
+      description: "Handle implemented task anchor fallback commands: details, queue, artifacts, and retry. Deferred: stop, approve, reject.",
       params: {
         type: "object",
         additionalProperties: false,
         properties: {
           text: { type: "string", description: "Fallback command text such as 'details task-123' or 'queue'." },
-          action: { type: "string", enum: ["details", "queue", "artifacts", "stop", "retry", "approve", "reject", "view", "detail"] },
+          // deferred: stop, approve, reject
+          action: { type: "string", enum: ["details", "queue", "artifacts", "retry", "view", "detail"] },
           taskId: { type: "string", description: "Task id for task-scoped actions." },
           format: { type: "string", enum: ["text", "json"] },
         },
@@ -2883,6 +3282,32 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         checkActiveTaskRecovery();
         const output = await buildNativeStatusOutput(format, imType);
         return statusToolResponse(output, format, imType);
+      },
+    },
+    {
+      name: "octoclaw_crash_recovery",
+      label: "OctoClaw Crash Recovery",
+      description: "Operator tool to manually run runtime ledger crash recovery for stale leases, attempt reconciliation, orphan scans, and projection rebuild.",
+      params: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      execute: async () => {
+        if (resolveRuntimeLedgerMode() === "off") {
+          return toolResponse("crash_recovery_unavailable", { reason: "runtime_ledger_off" });
+        }
+        const result = performCrashRecovery({});
+        const summary = [
+          "crash_recovery_completed",
+          `staleLeasesReleased=${result.staleLeasesReleased}`,
+          `attemptsReconciled=${result.attemptsReconciled}`,
+          `spawnConfirmed=${result.spawnConfirmed}`,
+          `orphansFound=${result.orphansFound}`,
+          `projectionRebuilt=${result.projectionRebuilt}`,
+          `errors=${result.errors.length}`,
+        ].join("; ");
+        return toolResponse(summary, { ...result });
       },
     },
   ];
