@@ -1633,28 +1633,6 @@ export const plugin = {
       const delegateTool = stringValue(toolPolicy.must_delegate_via || "octoclaw_dispatch");
       const isPolicyControlTool = toolName.startsWith("octoclaw_") || toolName === routeHintTool || toolName === delegateTool;
       const currentRouteIsDelegated = isDelegatedRoute(decision);
-      const routeSource = stringValue(asRecord(decision.route_decision).route_source);
-      const sealedDelegatedRoute = currentRouteIsDelegated
-        && routeSource !== "stale_alias"
-        && !Boolean(toolPolicy.allow_direct_tools);
-      if (sealedDelegatedRoute && !isPolicyControlTool) {
-        void recordPolicyReplay(
-          "tool_blocked_sealed_delegate_direct_tool",
-          {
-            sessionKey: stateKey || "",
-            sessionId: stringValue(ctx.sessionId),
-            route: stringValue(asRecord(decision.route_decision).route),
-            toolName,
-            delegateTool,
-          },
-          pi.logger,
-          decision,
-        ).catch(() => {});
-        return {
-          block: true,
-          blockReason: `OctoClaw sealed delegate route requires ${delegateTool}; main-session direct tools are blocked until the delegated result is materialized.`,
-        };
-      }
       if (currentRouteIsDelegated && !isPolicyControlTool && matchesBlockedPattern(stringifyParamsForPolicy(event.params), blockedPatterns)) {
         void recordPolicyReplay(
           "tool_blocked_manual_delegation",

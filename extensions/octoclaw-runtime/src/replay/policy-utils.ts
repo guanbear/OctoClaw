@@ -139,7 +139,10 @@ export function workflowEnforcementRule(
     return { block: true, route, delegateTool, allowedTools: [...allowedTools] };
   }
   const sealedContractRoute = String(workContract.route ?? workContract.route_decision ?? "").trim();
-  const directToolsAllowed = toolPolicy.allow_direct_tools === true && sealedContractRoute !== "delegate";
+  const directToolsAllowed = toolPolicy.allow_direct_tools === true;
+  if (sealedContractRoute === "delegate" && !directToolsAllowed) {
+    return { block: false, route, delegateTool, allowedTools: [...allowedTools] };
+  }
   const workflowRequired = DELEGATED_ROUTE_NAMES.has(route) && !directToolsAllowed;
   if (!workflowRequired) {
     return { block: false, route, delegateTool, allowedTools: [...allowedTools] };

@@ -649,7 +649,7 @@ describe("before_tool_call route hint guard", () => {
 
 
 
-  it("blocks main-session direct tools after a sealed delegate route", async () => {
+  it("allows main-session direct tools after a sealed delegate route (coordinator prompt + delivery lock prevent conflicts)", async () => {
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -682,8 +682,7 @@ describe("before_tool_call route hint guard", () => {
       { sessionKey: key, agentId: "main" },
     );
 
-    expect(result).toMatchObject({ block: true });
-    expect(String(result.blockReason)).toContain("sealed delegate route");
+    expect(result).toBeUndefined();
     policyState.clearState(key);
   });
 

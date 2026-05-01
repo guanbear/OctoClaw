@@ -216,4 +216,32 @@ describe("ack-decision: decideAckAction", () => {
 
     expect(decision.action).not.toBe("enqueue_ack_writer");
   });
+
+  it("sends reaction ACK even when main model is inactive (429 cooldown)", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 3_500,
+      mainModelActive: false,
+      toolActive: false,
+      delegatedRunning: false,
+      blocked: false,
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+    }));
+
+    expect(decision.action).toBe("send_reaction_ack");
+    expect(decision.ackStage).toBe("ack0");
+    expect(decision.modality).toBe("reaction");
+  });
+
+  it("returns no_action when model inactive and reaction not configured", () => {
+    const decision = decideAckAction(packet({
+      nowMs: 3_500,
+      mainModelActive: false,
+      toolActive: false,
+      reactionAckSupported: false,
+      reactionAckEnabled: false,
+    }));
+
+    expect(decision.action).toBe("no_action");
+  });
 });

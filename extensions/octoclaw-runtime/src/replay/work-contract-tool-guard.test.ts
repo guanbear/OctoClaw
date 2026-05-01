@@ -100,7 +100,7 @@ describe("WorkContract tool guard projection", () => {
 
 
 
-  it("does not let direct-tool policy bypass a sealed delegate WorkContract", () => {
+  it("allows direct tools for sealed delegate WorkContract (coordinator prompt + delivery lock prevent conflicts)", () => {
     const rule = workflowEnforcementRule(
       {
         work_contract: { route: "delegate" },
@@ -111,7 +111,7 @@ describe("WorkContract tool guard projection", () => {
       "octoclaw_route_hint",
     );
 
-    expect(rule.block).toBe(true);
+    expect(rule.block).toBe(false);
   });
 
   it("keeps session_status available before route hint", () => {

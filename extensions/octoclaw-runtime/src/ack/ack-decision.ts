@@ -135,13 +135,6 @@ export function decideAckAction(packet: AckDecisionPacket): AckDecision {
     };
   }
 
-  if (!workIsActive(packet)) {
-    return {
-      action: "no_action",
-      reason: "no active reply work eligible for ACK0",
-    };
-  }
-
   if (
     packet.reactionAckSupported &&
     packet.reactionAckEnabled &&
@@ -153,6 +146,13 @@ export function decideAckAction(packet: AckDecisionPacket): AckDecision {
       ackStage: "ack0",
       modality: "reaction",
       templateKey: "ack0-reaction",
+    };
+  }
+
+  if (!workIsActive(packet)) {
+    return {
+      action: "no_action",
+      reason: "no active reply work eligible for ACK0",
     };
   }
 
