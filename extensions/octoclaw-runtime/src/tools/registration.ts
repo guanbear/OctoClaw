@@ -63,6 +63,7 @@ import { randomUUID } from "node:crypto";
 import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
+import { admitDelegationTicketForDispatch } from "../runtime-ledger/ticket-enforcement.js";
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
@@ -2155,6 +2156,68 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 terminal: true,
               });
             }
+          }
+          const ticketCandidate = buildDelegationTicketDryRun({
+            contract: dispatchWorkContract,
+            decision: cachedDecision,
+            metadata,
+          });
+          cachedDecision.delegation_ticket_candidate = asRecord(cachedDecision.delegation_ticket_candidate).ticket_decision
+            ? cachedDecision.delegation_ticket_candidate
+            : ticketCandidate;
+          const ticketAdmission = admitDelegationTicketForDispatch({
+            contract: dispatchWorkContract,
+            candidate: ticketCandidate,
+            delegateTaskId: asString(params.delegateTaskId),
+            workerPool: asString(asRecord(cachedDecision.route_decision).worker_pool),
+            modelProfile: selectedModel || asString(metadata.model),
+          });
+          if (!ticketAdmission.allowed) {
+            const errorMessage = `delegation_ticket_rejected:${ticketAdmission.reason}`;
+            await recordPolicyReplay("dispatch_ticket_rejected", {
+              sessionKey: managedSessionKey,
+              sessionId: asString(ctx.sessionId),
+              route: resolvedRoute,
+              error: errorMessage,
+              ticket_decision: ticketCandidate.ticket_decision,
+              ticket_denial_reason: ticketAdmission.reason,
+              is_new_work: ticketCandidate.is_new_work,
+              expected_deliverable: ticketCandidate.expected_deliverable,
+              work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
+              ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
+              dispatch_executed: false,
+              spawn_executed: false,
+              materialized: false,
+              retryable: ticketAdmission.reason === "ledger_unavailable",
+              terminal: ticketAdmission.reason !== "ledger_unavailable",
+            }, toolLogger(ctx), cachedDecision);
+            await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+            return dispatchHonestyFailure({
+              route: resolvedRoute,
+              error: errorMessage,
+              retryable: ticketAdmission.reason === "ledger_unavailable",
+              terminal: ticketAdmission.reason !== "ledger_unavailable",
+              details: {
+                rejected: true,
+                rejection_reason: ticketAdmission.reason,
+                ticket_decision: ticketCandidate.ticket_decision,
+                ticket_denial_reason: ticketAdmission.reason,
+                is_new_work: ticketCandidate.is_new_work,
+                expected_deliverable: ticketCandidate.expected_deliverable,
+                work_contract_id: ticketAdmission.work_contract_id ?? ticketCandidate.work_contract_id ?? null,
+                ticket_id: ticketAdmission.ticket_id ?? ticketCandidate.ticket_id ?? null,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+              },
+            });
+          }
+          if (ticketAdmission.enforced) {
+            metadata.delegation_ticket_id = ticketAdmission.ticket_id;
+            metadata.delegateTaskId = ticketAdmission.delegate_task_id;
+            metadata.delegate_task_id = ticketAdmission.delegate_task_id;
+            metadata.attemptId = ticketAdmission.attempt_id;
+            metadata.attempt_id = ticketAdmission.attempt_id;
           }
         }
 

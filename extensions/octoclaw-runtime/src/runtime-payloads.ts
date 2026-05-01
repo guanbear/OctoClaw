@@ -324,21 +324,35 @@ export function buildTsRuntimeDispatchPayload(
 
   try {
     const binding = plugin.bindWorkflow(workflow);
+    const requestedDelegateTaskId = readString(metadata.delegateTaskId ?? metadata.delegate_task_id);
+    const requestedAttemptId = readString(metadata.attemptId ?? metadata.attempt_id);
     const delegateAttemptBinding = route === "delegate"
-      ? startDelegateAttempt(createDelegateTask({
-        sessionId: normalizedRequest.sessionKey,
-        role: workflow.execution.role,
-        coordinationMode: resolveDelegateCoordinationMode(workflowDecision),
-        goal: readString(input.task),
-        scope: workflow.scope,
-      }), {
-        nativeFlowId: binding.flowId,
-        nativeTaskId: binding.taskId,
-        claimOwner: workflow.claim?.claimOwner || workflow.taskMaterialization.claimOwner,
-        modelProfile: workflow.execution.modelProfile as PolicyDecision["modelProfile"],
-        backend: workflow.identity.backend,
-        workspaceMode: workflow.scope.workspaceMode,
-      })
+      ? (() => {
+          let task = createDelegateTask({
+            sessionId: normalizedRequest.sessionKey,
+            role: workflow.execution.role,
+            coordinationMode: resolveDelegateCoordinationMode(workflowDecision),
+            goal: readString(input.task),
+            scope: workflow.scope,
+          });
+          if (requestedDelegateTaskId) {
+            task = { ...task, delegateTaskId: requestedDelegateTaskId };
+          }
+          const started = startDelegateAttempt(task, {
+            nativeFlowId: binding.flowId,
+            nativeTaskId: binding.taskId,
+            claimOwner: workflow.claim?.claimOwner || workflow.taskMaterialization.claimOwner,
+            modelProfile: workflow.execution.modelProfile as PolicyDecision["modelProfile"],
+            backend: workflow.identity.backend,
+            workspaceMode: workflow.scope.workspaceMode,
+          });
+          if (!requestedAttemptId) return started;
+          return {
+            task: { ...started.task, currentAttemptId: requestedAttemptId },
+            attempt: { ...started.attempt, attemptId: requestedAttemptId },
+            binding: { ...started.binding, attemptId: requestedAttemptId },
+          };
+        })()
       : null;
     const handoffPacket = delegateAttemptBinding
       ? buildDelegateHandoffPacket({

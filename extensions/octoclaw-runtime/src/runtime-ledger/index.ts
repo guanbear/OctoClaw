@@ -264,3 +264,5 @@ export { resolveRuntimeLedgerMode, isShadowActive, mirrorWorkContractToRuntimeLe
 export { buildRuntimeLedgerShadowDiff } from "./shadow-diff.js";
 export { buildDelegationTicketDryRun } from "./ticket-dry-run.js";
 export type { DelegationTicketDryRunInput, DelegationTicketDryRunResult } from "./ticket-dry-run.js";
+export { admitDelegationTicketForDispatch } from "./ticket-enforcement.js";
+export type { DelegationTicketAdmissionInput, DelegationTicketAdmissionResult } from "./ticket-enforcement.js";

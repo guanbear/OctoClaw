@@ -10,6 +10,7 @@ export interface DelegationTicketDryRunResult {
   ticket_denial_reason: DelegationTicketDenialReason;
   is_new_work: boolean;
   expected_deliverable: string;
+  ticket_id?: string;
   work_contract_id?: string;
   delegate_task_id?: string;
 }
@@ -126,6 +127,7 @@ export function buildDelegationTicketDryRun(
     asRecord(input.metadata).workContractId,
   );
   const delegateTaskId = delegateTaskIdFrom(input);
+  const ticketId = workContractId ? `candidate:${workContractId}` : "";
 
   if (route !== "delegate" || isFollowup(input)) {
     return {
@@ -133,6 +135,7 @@ export function buildDelegationTicketDryRun(
       ticket_denial_reason: "not_new_work",
       is_new_work: false,
       expected_deliverable: expectedDeliverable,
+      ...(ticketId ? { ticket_id: ticketId } : {}),
       ...(workContractId ? { work_contract_id: workContractId } : {}),
       ...(delegateTaskId ? { delegate_task_id: delegateTaskId } : {}),
     };
@@ -144,6 +147,7 @@ export function buildDelegationTicketDryRun(
       ticket_denial_reason: "missing_expected_deliverable",
       is_new_work: false,
       expected_deliverable: "",
+      ...(ticketId ? { ticket_id: ticketId } : {}),
       ...(workContractId ? { work_contract_id: workContractId } : {}),
       ...(delegateTaskId ? { delegate_task_id: delegateTaskId } : {}),
     };
@@ -154,6 +158,7 @@ export function buildDelegationTicketDryRun(
     ticket_denial_reason: "",
     is_new_work: true,
     expected_deliverable: expectedDeliverable,
+    ...(ticketId ? { ticket_id: ticketId } : {}),
     ...(workContractId ? { work_contract_id: workContractId } : {}),
     ...(delegateTaskId ? { delegate_task_id: delegateTaskId } : {}),
   };

@@ -74,9 +74,6 @@ function upsertWorkContract(db: DatabaseSync, contract: WorkContract): number {
 function upsertDelegationTicketCandidate(db: DatabaseSync, contract: WorkContract): number {
   if (contract.route !== "delegate") return 0;
 
-  const delegate = contract.delegate;
-  if (!delegate) return 0;
-
   const ticketId = `candidate:${contract.workContractId}`;
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
