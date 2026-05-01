@@ -32,6 +32,10 @@ OctoClaw 的产品目标是成立的：
 
 执行、任务状态、完成通知、投递重试、线程路由、反应 ACK，尽量使用 OpenClaw 原生能力。
 
+0.5.0 的重大重构方向应明确为 **`sessions_spawn planner/confirm` 主线**：OctoClaw 仍负责 judge、admission、WorkContract、模型成本策略和 IM 体验，但不在 plugin 内自建完整执行 runtime。因为 OpenClaw v2026.4.29 的 plugin SDK 还没有暴露完整等价于 `sessions_spawn` 的 direct spawn API，0.5.0 不应把 `api.runtime.subagent.run()` 当主路径，也不应 import OpenClaw 内部 `spawnSubagentDirect()`。正确过渡方案是：`octoclaw_dispatch` 生成经过 admission 的 spawn plan，主 agent 调原生 `sessions_spawn`，再用 `octoclaw_dispatch_confirm` 把 `runId/childSessionKey` 写回 OctoClaw metadata。这样可以吃到 OpenClaw 原生 registry、TaskFlow/status projection、subagent announce/delivery，同时把上下文污染控制在极短的 planner/confirm 握手内。
+
+这里的“原生替代”需要有清晰边界：OpenClaw 原生能力替代的是执行 runtime、run registry、child lifecycle、completion announce 和 delivery retry，不是替代 OctoClaw 全部产品数据。WorkContract、route seal、judge replay、model/cost policy、ACK 去重、IM turn anchor、spawn intent audit 仍然应由 OctoClaw 保存。这样重构后不会因为删掉自建 scheduler/finalizer 就失去 OctoClaw 的业务语义，也不会把未暴露的 plugin SDK 能力误写成已经可直接调用。
+
 ## 2. OpenClaw 原生能力可以吃掉的轮子
 
 ### 2.1 原生 sessions_spawn
@@ -41,20 +45,23 @@ OpenClaw v2026.4.29 的 `sessions_spawn` 已经具备 OctoClaw 需要的大部�
 - 非阻塞，接受后立即返回 run id。
 - 支持单次 background run，也支持 session 模式。
 - 支持 `model`、`thinking`、`runTimeoutSeconds`。
-- 支持 `context: isolated | fork`，以及 `lightContext`。
+- 子 agent 使用新的 child session，与 requester transcript 分离；支持 `lightContext` 和 attachments 控制上下文负载。
 - 支持 cleanup、sandbox、runtime/acp 等选项。
 - 子 agent 作为 background task 被跟踪。
 - 完成后由 OpenClaw 原生 announce 回 requester chat。
 
-这意味着 OctoClaw 的委派执行路径应收敛成一个薄封装：
+这意味着 OctoClaw 的委派执行路径应收敛成一个 planner/confirm 薄协议，而不是在 plugin 内直接重造 spawn runtime：
 
 1. judge 决定候选 route。
 2. WorkContract seal。
-3. model/cost policy 选出子 agent 参数。
-4. 调用原生 `sessions_spawn`。
-5. 保存返回的 `runId`、`taskId`、`childSessionKey` 等 native refs。
+3. admission 校验 `is_new_work`、`expected_deliverable`、follow-up 禁止 spawn 等硬条件。
+4. model/cost policy 选出子 agent 参数。
+5. `octoclaw_dispatch` 返回 `NativeSpawnIntent` 和精简 `sessionsSpawnArgs`，不直接声称已委派。
+6. `before_tool_call` 只允许与 intent hash 匹配的下一次 `sessions_spawn`。
+7. 主 agent 调 OpenClaw 原生 `sessions_spawn`。
+8. `octoclaw_dispatch_confirm` 校验 `runId`，写入 native refs，并在此后才发 delegate accepted ACK。
 
-不应再自己维护完整的 ticket、lease、scheduler、completion file、finalizer 和 delivery outbox，除非作为 legacy fallback。
+不应再自己维护完整的 ticket、lease、scheduler、completion file、finalizer 和 delivery outbox，除非作为 legacy fallback。0.5.0 期间这些 legacy 轮子保留回滚开关，但不再作为目标主路径继续加固。
 
 ### 2.2 原生 background task registry / TaskFlow
 
@@ -78,13 +85,13 @@ OpenClaw v2026.4.29 已有 background task registry 和 TaskFlow 状态能力，
 
 - 可以继续用 SQLite 存 OctoClaw 自有 metadata；OpenClaw v2026.4.29 的 plugin runtime 只暴露 `api.runtime.state.resolveStateDir()`，可用于定位 plugin state 目录，但没有可直接调用的 `openKeyedStore<T>()`。
 - 不再把 SQLite 当任务执行状态权威。
-- `scheduler_queue`、`completion_bindings`、delivery retry/outbox 这类执行职责在 native path 下停用。
+- `scheduler_queue`、`completion_bindings`、delivery retry/outbox 这类执行职责在 planner path 下停用；legacy path 只保留回滚。
 - `work_contracts`、route/judge/replay/native refs 可以保留。
 - `managedFlows` 只在真正需要 OctoClaw 管理多步 flow 时使用，不要为了单 worker spawn 重造 flow。
 
 ### 2.3 原生 subagent announce / delivery
 
-OpenClaw 原生 subagent completion announce 是 push-based，支持 direct delivery、queue fallback 和 retry。
+OpenClaw 原生 subagent completion announce 是 push-based，支持 direct delivery、queue fallback 和 retry。这个能力可以被 OctoClaw 0.5.0 使用，但前提要说准：**可靠路径是主 agent 调 tool-level `sessions_spawn`**。`sessions_spawn` 会走 `spawnSubagentDirect()`、注册 subagent run、保存 requester origin，并由 registry 等待 run 完成后触发 announce/delivery。`api.runtime.subagent.run()` 只返回 `runId`，不等价于这条完整链路，因此不应作为 0.5.0 的 announce/delivery 主路径。
 
 当前 OctoClaw 的 `delegate/child-finalizer.ts` 要求子 agent 写 `.completion.json`，然后父进程轮询并 finalizer。这条路径有天然脆弱性：
 
@@ -93,7 +100,7 @@ OpenClaw 原生 subagent completion announce 是 push-based，支持 direct deli
 - 父进程重启会引入 orphan scan 和恢复复杂度。
 - 同一任务有 native 状态、ledger 状态、completion binding 多套真相。
 
-建议 native spawn path 中完全停用 completion file 协议。结构化结果如果需要，可以让子 agent 在最终回复或 artifact 中输出，并由 OpenClaw announce/handoff 传回主会话。
+建议 planner path 验收通过后，在该路径中完全停用 completion file 协议。结构化结果如果需要，可以让子 agent 在最终回复或 artifact 中输出，并由 OpenClaw announce/handoff 传回主会话。legacy path 可以继续保留 completion file/finalizer 回滚，但必须通过 `OCTOCLAW_LEGACY_COMPLETION_FILE=1` 之类开关显式启用。
 
 ### 2.4 原生 message queue / visible replies
 
@@ -243,7 +250,7 @@ OctoClaw 的另一个价值是把子 agent 模型选择策略产品化：
 - observer/status 查询用低成本模型或主 agent 直接回答。
 - code/review/research role 对应不同模型池。
 
-这些策略最后应映射成原生 `sessions_spawn` 的 `model`、`thinking`、`context`、`runTimeoutSeconds`。
+这些策略最后应映射成原生 `sessions_spawn` 的 `model`、`thinking`、`runTimeoutSeconds`、`lightContext`、attachments / workspace refs。
 
 ### 3.4 IM 体验层
 
@@ -278,8 +285,8 @@ OctoClaw 应保留“怎么跟用户说”的能力，但不要重造“怎么�
 | runtime-ledger SQLite | 任务真相和 OctoClaw 元数据混在一起 | 与 OpenClaw native registry 重叠，但部分 OctoClaw 字段原生没有 | 降级为 metadata store；执行状态权威交给 native |
 | WorkContract store | 语义合同和执行状态混合 | 职责偏重 | 只保存合同和 native refs |
 | OpenClaw task registry | 原生任务真相 | 目前没有成为唯一事实源 | 设为执行状态权威 |
-| completion files | 子 agent 完成协议 | 模型写文件不可靠 | native path 移除 |
-| delivery outbox | 自建投递恢复 | 与 native announce delivery 重叠 | native path 移除 |
+| completion files | 子 agent 完成协议 | 模型写文件不可靠 | planner path 移除，legacy 显式开关保留 |
+| delivery outbox | 自建投递恢复 | 与 native announce delivery 重叠 | planner path 移除，legacy 显式开关保留 |
 
 需要保留的是“产品元数据存储”，不是“第二套 runtime”。建议把保留字段明确命名为 `OctoClawMetadataStore` 或 `WorkContractStore`，避免继续把 scheduler、completion、delivery retry 都塞回 ledger。
 
@@ -324,7 +331,7 @@ OctoClaw 应保留“怎么跟用户说”的能力，但不要重造“怎么�
 - 连接 native APIs。
 - 启动少量必要 interval。
 
-ACK、footer、judge、delivery、watchdog 应各自成为独立模块，且 native path 不应启动 legacy finalizer/outbox/watchdog。
+ACK、footer、judge、delivery、watchdog 应各自成为独立模块，且 planner path 不应启动 legacy finalizer/outbox/watchdog。
 
 ## 5. ACK 设计建议
 
@@ -355,10 +362,10 @@ ACK、footer、judge、delivery、watchdog 应各自成为独立模块，且 nat
 | --- | --- | --- | --- |
 | ACK0 reaction | 收到 inbound 后立即 | reaction/typing | 只表示“收到并开始处理” |
 | Slow reply text ACK | 主 agent 超过阈值仍无 first token | “收到，处理中” | 只能表示主 agent 还在处理 |
-| Delegate accepted ACK | `sessions_spawn` accepted 后 | “已交给子 agent，完成后回到此线程” | 必须有 native run id |
+| Delegate accepted ACK | `sessions_spawn` accepted 且 `octoclaw_dispatch_confirm` 成功后 | “已交给子 agent，完成后回到此线程” | 必须有 native run id |
 | Terminal/progress notice | native task status/announce | 完成/失败/超时 | 必须来自 native status |
 
-不要在 judge 刚返回 `delegate` 时说“已委派”。judge 只是候选。正确时机是 native spawn accepted。
+不要在 judge 刚返回 `delegate` 时说“已委派”。judge 只是候选。正确时机是原生 `sessions_spawn` accepted 且 `octoclaw_dispatch_confirm` 校验 runId 成功。
 
 ### 5.3 推荐流程：reply route
 
@@ -385,9 +392,10 @@ inbound
   -> native ackReaction / typingReaction
   -> judge returns delegate candidate
   -> WorkContract sealed
-  -> native sessions_spawn accepted
+  -> OpenClaw `sessions_spawn` accepted
+  -> octoclaw_dispatch_confirm records run id
   -> send one delegate accepted ACK with run id/task label
-  -> native subagent announce sends final result
+  -> OpenClaw subagent announce sends final result
 ```
 
 delegate accepted ACK 文案建议：
@@ -422,7 +430,7 @@ ack:<surface>:<target>:<thread>:<messageId>:<turnId>:<kind>:<stage>
 
 - native reaction/typing 立即发，不依赖 OctoClaw timer。
 - judge 完成后，如果 route=reply，再创建 slow text ACK timer。
-- route=delegate 不创建 reply-style timer，只等待 native spawn accepted。
+- route=delegate 不创建 reply-style timer，只等待 `sessions_spawn` accepted + `octoclaw_dispatch_confirm`。
 
 ### 5.7 ACK target 来源
 
@@ -591,7 +599,7 @@ deterministic precheck 应优先处理：
 - 需要 fresh live lookup / long running / required tool：delegate candidate。
 - 已有 sealed WorkContract 的 follow-up：复用 route seal，不重新判新任务。
 
-LLM judge 只处理灰区，不应每轮都成为关键路径。主模型纠正可以保留：judge 判 reply 但主模型发现需要长工具/执行时，可以提交 route hint 或调用 OctoClaw 委派入口；judge 判 delegate 但主模型能直接答时，可以直接答，前提是还没 spawn。任何“已委派”的用户可见表述都必须等 native accepted/runId。
+LLM judge 只处理灰区，不应每轮都成为关键路径。主模型纠正可以保留：judge 判 reply 但主模型发现需要长工具/执行时，可以提交 route hint 或调用 OctoClaw 委派入口；judge 判 delegate 但主模型能直接答时，可以直接答，前提是还没 spawn。任何“已委派”的用户可见表述都必须等 `sessions_spawn` accepted 且 `octoclaw_dispatch_confirm` 校验 runId。
 
 ### 7.4 委派规则：主线程快路径预算
 
@@ -638,9 +646,9 @@ main_fast_path:
 - `expectedDeliverable` 非空且可验收。
 - 没有 execution followup/status coverage override。
 - 没有 sealed reply contract 冲突。
-- native spawn capability 可用。
+- planner backend 可用，且当前会话允许调用原生 `sessions_spawn`。
 
-最终授权应在 WorkContract admission/native spawn adapter 中完成。
+最终授权应在 WorkContract admission、spawn intent gate 和 `octoclaw_dispatch_confirm` 中完成。
 
 ### 7.6 judge timeout 策略
 
@@ -691,7 +699,7 @@ timeout 结果应该带清晰 reason code，例如：
 
 建议：
 
-- native path 直接禁用。
+- planner path 直接禁用。
 - 只有接入真实 OpenClaw detached runtime API 时才注册。
 - capability probe 必须能证明 read/cancel/status 生命周期闭环存在。
 
@@ -701,7 +709,7 @@ timeout 结果应该带清晰 reason code，例如：
 
 建议：
 
-- spawn confirmed 必须来自 native accepted response。
+- spawn confirmed 必须来自原生 `sessions_spawn` accepted response，并经过 `octoclaw_dispatch_confirm` 写入。
 - 至少需要 `runId` 或 native task id。
 - `childSessionKey` 只能作为 session ref，不能单独证明 spawn 已执行。
 
@@ -711,7 +719,7 @@ retry 路径创建 attempt/ticket/scheduler queue 后返回 queued，但没有�
 
 建议：
 
-- native path 不使用自建 retry queue。
+- planner path 不使用自建 retry queue。
 - retry = 重新调用 native `sessions_spawn`，并保存新的 native refs。
 - legacy retry 必须有启动 worker、lease、crash recovery 的端到端测试。
 
@@ -726,7 +734,7 @@ route commit ACK 目前可能在 delegate route 判定后就发送“正在准�
 建议：
 
 - route commit 阶段最多内部记录，不发用户文本。
-- 用户可见 delegate ACK 等 native spawn accepted。
+- 用户可见 delegate ACK 等 `sessions_spawn` accepted + `octoclaw_dispatch_confirm`。
 
 ### 8.8 footer 默认泄露内部信息
 
@@ -740,7 +748,7 @@ footer 应默认关闭，见第 6 节。
 
 - read result 必须区分 `ok`、`missing`、`corrupt`、`io_error`。
 - UI/status 对 corrupt 显示诊断，不显示空任务。
-- native path 尽量不依赖 task-state.json 作为真相。
+- planner path 尽量不依赖 task-state.json 作为真相。
 
 ### 8.10 Slack adapter 通过 CLI/stdout 发送
 
@@ -769,7 +777,9 @@ OctoClaw
     native refs annotations
 
   native/
-    spawn-adapter
+    spawn-planner
+    dispatch-confirm
+    sessions-spawn-gate
     task-status-reader
     channel-delivery-intent
 
@@ -805,29 +815,55 @@ OctoClaw 只保存：
 
 不要再让 `task-state.json`、runtime-ledger、completion file、delivery outbox 同时参与判断任务是否真的执行。SQLite 可以保留为 metadata store，但不能继续和 OpenClaw native registry 竞争执行状态权威。
 
-### 9.3 native spawn adapter 草图
+### 9.3 0.5.0 planner/confirm 草图
+
+0.5.0 不把 direct spawn adapter 作为主路径，而是做一个硬协议：OctoClaw 规划，OpenClaw 原生 `sessions_spawn` 执行，OctoClaw 再确认 native refs。
 
 ```ts
-interface OctoClawSpawnRequest {
-  contract: WorkContract;
-  role: "research" | "code" | "review" | "observer";
-  model: string;
-  thinking?: "low" | "medium" | "high";
-  context: "isolated" | "fork";
-  lightContext?: boolean;
-  timeoutSeconds: number;
-  requesterDelivery: DeliveryIntent;
+interface NativeSpawnIntent {
+  spawnIntentId: string;
+  workContractId: string;
+  sessionKey: string;
+  planHash: string;
+  status: "planned" | "spawn_call_started" | "accepted" | "failed" | "expired";
+  sessionsSpawnArgs: {
+    task: string;
+    label?: string;
+    runtime?: "subagent" | "acp";
+    agentId?: string;
+    model?: string;
+    thinking?: "low" | "medium" | "high";
+    runTimeoutSeconds?: number;
+    mode?: "run" | "session";
+    cleanup?: "keep" | "delete";
+    sandbox?: "inherit" | "require";
+    lightContext?: boolean;
+  };
+  createdAt: number;
+  expiresAt: number;
 }
 
-interface OctoClawSpawnAccepted {
-  accepted: true;
-  runId: string;
-  taskId?: string;
+interface NativeSpawnConfirmation {
+  spawnIntentId: string;
+  workContractId: string;
+  sessionsSpawnStatus: "accepted" | "error";
+  runId?: string;
   childSessionKey?: string;
+  error?: string;
 }
 ```
 
-adapter 只负责把 OctoClaw policy 映射到 OpenClaw `sessions_spawn` 参数，不维护自己的 scheduler。
+`octoclaw_dispatch` 只生成 `NativeSpawnIntent`，不维护自己的 scheduler，也不发“已委派”。`before_tool_call` 校验下一次 `sessions_spawn` 的 canonical args hash 必须匹配 intent。`octoclaw_dispatch_confirm` 校验 `runId` 后才写 WorkContract native refs、更新 metadata、发 delegate accepted ACK。
+
+状态迁移规则要写死，避免 planner 退化成另一套隐式 runtime：
+
+- `planned`：`octoclaw_dispatch` 创建 intent，只表示“允许下一步尝试原生 spawn”，不表示已委派。
+- `spawn_call_started`：`before_tool_call` 匹配 intent/hash/TTL 后设置，表示主 agent 正在调用原生 `sessions_spawn`。
+- `accepted`：`octoclaw_dispatch_confirm` 收到 `sessions_spawn` accepted 且有 `runId` 后设置，此时才允许用户可见 delegate ACK。
+- `failed`：原生 spawn 返回 error，或 confirm 发现缺 `runId` / workContract 不匹配 / hash 不匹配。
+- `expired`：TTL 内没有匹配的 `sessions_spawn`，后续调用必须重新 `octoclaw_dispatch`。
+
+这些状态只描述 planner 握手，不描述子 agent 是否 running/succeeded/failed。真正执行状态仍从 OpenClaw native runs/flows/subagent registry 投影。
 
 ### 9.4 WorkContract projection 草图
 
@@ -858,36 +894,41 @@ interface WorkContractProjection {
 - `isActionableJudgeResult` 检查 abstain。
 - fake detached runtime 默认禁用。
 - footer 默认关闭。
-- route commit ACK 不再说“已委派”，用户可见委派 ACK 等 spawn accepted。
+- route commit ACK 不再说“已委派”，用户可见委派 ACK 等 `sessions_spawn` accepted + confirm。
 
-验收：不引入新 native path，也能减少误报和用户可见噪声。
+验收：不引入 planner path，也能减少误报和用户可见噪声。
 
-### Phase 1：新增 native spawn path
+### Phase 1：0.5.0 planner/confirm path
 
 加 feature flag：
 
 ```text
-OCTOCLAW_NATIVE_SPAWN=1
+OCTOCLAW_SPAWN_BACKEND=planner|legacy|off
+OCTOCLAW_PLANNER_ALLOWLIST=workspace/session/user allowlist
+OCTOCLAW_SPAWN_INTENT_TTL_MS=60000
 ```
 
-native path 行为：
+planner path 行为：
 
 1. judge 得出 delegate candidate。
 2. WorkContract seal。
 3. admission 通过。
-4. 调用 native `sessions_spawn`。
-5. 保存 native refs。
-6. 发送 delegate accepted ACK。
+4. `octoclaw_dispatch` 生成 `NativeSpawnIntent`，返回极短 spawn plan 和 `sessionsSpawnArgs`。
+5. `before_tool_call` 只允许与 pending intent 匹配的 `sessions_spawn`。
+6. 主 agent 调原生 `sessions_spawn`。
+7. `octoclaw_dispatch_confirm` 校验 `runId` / `childSessionKey`，保存 native refs。
+8. confirm 成功后发送 delegate accepted ACK。
 
-native path 禁用：
+planner path 禁用：
 
 - completion file。
 - child-finalizer。
 - scheduler queue。
 - delivery outbox。
 - fake detached runtime。
+- 禁止把 `api.runtime.subagent.run()` 作为主路径。
 
-legacy path 保留 fallback，但默认不走。
+legacy path 保留 fallback，但 planner allowlist 验收通过后不再继续加固 legacy runtime 轮子。
 
 ### Phase 2：状态读取切到 native
 
@@ -912,7 +953,7 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 
 ### Phase 4：删除 legacy runtime 轮子
 
-在 native path 稳定后移除或归档：
+在 planner path 稳定后移除或归档：
 
 - runtime scheduler。
 - completion binding。
@@ -930,7 +971,7 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 - 收到消息后 0-300ms 有 reaction/typing 反馈。
 - 主 agent 快速回复时不额外发文本 ACK。
 - 超过 2.5-3.5s 没有输出时，最多一条短文本 ACK。
-- 子 agent 只有在 native spawn accepted 后才通知用户已委派。
+- 子 agent 只有在 `sessions_spawn` accepted 且 confirm 成功后才通知用户已委派。
 - 子 agent 完成后由 native announce 回到正确线程。
 - 默认不显示 route/model/footer。
 
@@ -939,14 +980,15 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 - 进程重启后能从 native task registry 恢复状态。
 - 不需要子 agent 写 `.completion.json` 才能完成。
 - retry 不会只显示 queued 而不执行。
-- spawn confirmed 必须有 native run/task evidence。
+- spawn confirmed 必须有 `sessions_spawn` accepted + `octoclaw_dispatch_confirm` 写入的 native run evidence。
 - Slack 发送失败由 native delivery retry/fallback 处理。
+- subagent completion 验收必须走 tool-level `sessions_spawn` 链路；`api.runtime.subagent.run()` 只能算过渡能力，不能证明 native announce/delivery 全链路可用。
 
 ### 11.3 成本和上下文
 
 - delegate task 使用 model policy 选择子 agent 模型。
 - simple/normal/deep 能映射到不同模型和 thinking。
-- 默认 `context=isolated`，只在需要时 fork。
+- 默认使用新的 child session 隔离主上下文；当前 `sessions_spawn` 没有稳定 `context=fork` 参数，需要额外上下文时优先用 attachments 或 workspace refs。
 - 子 agent final handoff 是 compact summary，不把完整 transcript 塞回主上下文。
 
 ### 11.4 judge 准确性
@@ -971,14 +1013,14 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 
 - reply route：快速回复不发文本 ACK。
 - reply route：慢工具调用后只发一条文本 ACK。
-- delegate route：spawn accepted 后发 delegate ACK。
+- delegate route：`sessions_spawn` accepted 且 confirm 成功后发 delegate ACK。
 - delegate route：spawn failed 不说已委派，返回恢复/失败文案。
 - execution followup：读取 native status，不 spawn。
 - Slack thread：replyTo/threadTs 保持正确。
 
 ### 12.3 故障注入
 
-- native spawn accepted 后进程重启。
+- `sessions_spawn` accepted / confirm 前后进程重启。
 - native task running 时进程重启。
 - Slack delivery 第一次失败。
 - judge timeout。
@@ -995,7 +1037,7 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 - duplicate ACK count。
 - delegate false positive。
 - execution followup false spawn。
-- spawn accepted to user ACK latency。
+- `sessions_spawn` accepted 到 confirm/user ACK latency。
 - native completion announce success rate。
 - average subagent model cost。
 
@@ -1008,14 +1050,14 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 3. judge 缺失 confidence 默认 0.7。
 4. fake detached runtime 默认禁用。
 5. footer 默认关闭。
-6. delegate ACK 等 native spawn accepted。
+6. delegate ACK 等 `sessions_spawn` accepted + confirm。
 7. `buildAckKey` 加 stage 或删除 tier ACK。
 
-### P1：native path
+### P1：planner path
 
-1. 实现 native `sessions_spawn` thin adapter。
+1. 实现 0.5.0 `sessions_spawn` planner/confirm path。
 2. WorkContract 保存 native refs。
-3. native path 停用 finalizer/completion file/scheduler/outbox，SQLite 只保留 metadata store。
+3. planner path 停用 finalizer/completion file/scheduler/outbox，SQLite 只保留 metadata store。
 4. status panel 读 native runs/flows。
 
 ### P2：IM/delivery 收敛
@@ -1043,7 +1085,9 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
   -> OctoClaw deterministic precheck + cheap judge
   -> WorkContract sealed
   -> OctoClaw model/cost policy
-  -> OpenClaw sessions_spawn accepted
+  -> OctoClaw emits NativeSpawnIntent
+  -> main agent calls OpenClaw sessions_spawn
+  -> OctoClaw dispatch_confirm records runId
   -> OctoClaw sends one delegate accepted status
   -> OpenClaw tracks native task
   -> OpenClaw subagent announce final result
@@ -1145,7 +1189,7 @@ OpenClaw 源码依据：
 - `src/agents/subagent-spawn.ts` 注册 `registerSubagentRun({ runId, childSessionKey, requesterSessionKey, requesterOrigin, expectsCompletionMessage, ... })`。
 - `src/agents/subagent-announce-delivery.ts` 提供 direct delivery、queue fallback、retry。
 
-建议：native path 下彻底移除 completion file requirement。需要结构化结果时，让子 agent final answer 输出 compact result 或 artifact，由 native announce/handoff 回传。
+建议：planner path 下彻底移除 completion file requirement。需要结构化结果时，让子 agent final answer 输出 compact result 或 artifact，由 native announce/handoff 回传。
 
 ### 15.7 `runtime.subagent.run` 不等价于 `sessions_spawn`
 
@@ -1154,7 +1198,7 @@ OpenClaw v2026.4.29 里有两个容易混淆的入口：
 - `sessions_spawn` 工具路径会经过 `spawnSubagentDirect()`，创建 child session、处理 maxDepth/maxChildren、model/thinking、lightContext、registry、completion announce。
 - plugin runtime 的 `api.runtime.subagent.run()` 类型只返回 `{ runId }`，`src/gateway/server-plugins.ts` 实现上是直接调 gateway `agent` 方法，参数只有 `sessionKey/message/deliver/provider/model/extraSystemPrompt/lane/idempotencyKey`，没有 `childSessionKey` 返回、没有 `expectsCompletionMessage` 参数，也不等同于 tool-level native registry 注册。
 
-所以 OctoClaw 如果继续用 `pi.runtime?.subagent.run`，它只能算过渡 backend。真正瘦身目标应优先接 `sessions_spawn` 等价能力；如果 plugin SDK 暂时没暴露，应把 `octoclaw_dispatch` 退化为 spawn planner，让主 agent 调原生 `sessions_spawn`，或者向 OpenClaw 补一个稳定的 native spawn runtime API。
+所以 OctoClaw 如果继续用 `pi.runtime?.subagent.run`，它只能算过渡 backend。0.5.0 的真正瘦身目标应定为 planner-first：`octoclaw_dispatch` 退化为 spawn planner，让主 agent 调原生 `sessions_spawn`，再由 `octoclaw_dispatch_confirm` 写回 native refs。未来如果 OpenClaw 补出稳定的 plugin runtime spawn API，再把 backend 从 planner 替换成 direct。
 
 ### 15.8 `dispatchSpawnEvidence()` 证据过宽
 
@@ -1162,7 +1206,7 @@ OpenClaw v2026.4.29 里有两个容易混淆的入口：
 
 建议：
 
-- `spawnExecuted=true` 必须来自 native accepted response。
+- `spawnExecuted=true` 必须来自原生 `sessions_spawn` accepted response，并经过 `octoclaw_dispatch_confirm` 写入。
 - 必须有 `runId`、`childRunId` 或 OpenClaw native task id。
 - `childSessionKey` 只能作为 session ref，不能单独证明后台任务存在。
 
@@ -1207,6 +1251,6 @@ OpenClaw v2026.4.29 的稳定事实：`PluginRuntimeChannel` 暴露 `reply.dispa
 
 - Slack `ackReaction` 是真实 Slack reaction，不是 Web UI only；但会被 `ackReactionScope`、`sourceRepliesAreToolOnly`、`statusReactions`、`removeAckAfterReply`、Slack `reactions:write` 权限影响。
 - plugin runtime 当前没有 `openKeyedStore<T>()`；只有 `state.resolveStateDir()`。需要关系查询和审计时，OctoClaw SQLite 可以保留为 metadata store。
-- `runtime.tasks.runs/flows` 是 read/status/cancel projection API；执行创建应走 native subagent spawn / `sessions_spawn`，不是让 OctoClaw 自建 queue。
+- `runtime.tasks.runs/flows` 是 read/status/cancel projection API；执行创建应走 planner 调用原生 `sessions_spawn`，不是让 OctoClaw 自建 queue。
 - `api.runtime.subagent.run()` 是 gateway agent run 过渡能力，不等价于 tool-level `sessions_spawn` 的 registry/announce 全链路。
 - `runtime.channel` 暴露的是 reply/outbound/routing/reaction helper，不应写成未验证的通用 `runtime.message` API。
