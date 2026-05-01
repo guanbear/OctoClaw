@@ -18,6 +18,13 @@ interface TimeoutHandle {
   readonly __timeoutBrand: unique symbol;
 }
 
+declare module "node:module" {
+  export function createRequire(url: string): NodeRequire;
+  interface NodeRequire {
+    (moduleId: string): unknown;
+  }
+}
+
 declare module "node:url" {
   export function fileURLToPath(url: string | URL): string;
   export function pathToFileURL(path: string): URL;
@@ -112,4 +119,26 @@ declare module "node:child_process" {
   }
 
   export function spawn(command: string, args: string[], options?: SpawnOptions): ChildProcessLike;
+}
+
+declare module "node:sqlite" {
+  export interface StatementSync {
+    run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+    get(...params: unknown[]): Record<string, unknown> | undefined;
+    all(...params: unknown[]): Record<string, unknown>[];
+    finalize(): void;
+  }
+
+  export interface DatabaseSync {
+    exec(sql: string): void;
+    prepare(sql: string): StatementSync;
+    close(): void;
+  }
+
+  export class DatabaseSync {
+    constructor(location: string, options?: { open?: boolean });
+    exec(sql: string): void;
+    prepare(sql: string): StatementSync;
+    close(): void;
+  }
 }

@@ -184,6 +184,14 @@ export function resolvePolicyStateLedgerPath(): string {
   return path.join(resolveWorkspaceRoot(), "tmp", "octopus", "runtime-policy-state.json");
 }
 
+export function resolveRuntimeLedgerDbPath(): string {
+  const explicit = String(process.env.OCTOCLAW_RUNTIME_DB_PATH || "").trim();
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  return path.join(resolveWorkspaceRoot(), ".octoclaw", "runtime", "octoclaw-runtime.sqlite");
+}
+
 export function resolveRootSessionsPath(): string {
   return path.join(resolveOpenClawConfigDir(), "sessions.json");
 }

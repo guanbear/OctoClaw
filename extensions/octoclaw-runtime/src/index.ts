@@ -33,3 +33,14 @@ export * from "./replay/policy-utils.js";
 export * from "./tools/registration.js";
 export { plugin as default } from "./extension-entry.js";
 export { plugin } from "./extension-entry.js";
+export { openRuntimeLedger, MIGRATIONS } from "./runtime-ledger/index.js";
+export type {
+  DatabaseSync,
+  Migration,
+  StatementSync,
+  LedgerMode,
+  LedgerStatus,
+  RuntimeLedgerOpenResult,
+  SqliteModule,
+  SqliteProvider,
+} from "./runtime-ledger/types.js";
