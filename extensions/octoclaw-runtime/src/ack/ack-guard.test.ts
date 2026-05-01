@@ -264,9 +264,9 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     expect(adapter.send).not.toHaveBeenCalled();
   });
 
-  it("suppresses text ACK0 instead of using legacy ackStageText", async () => {
+  it("sends text ACK0 when reaction not configured", async () => {
     adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "123" });
-    const stateKey = `text-template-state-${Date.now()}`;
+    const stateKey = "text-ack0-no-reaction";
     updateAckTrackingState(stateKey, {
       _ackTurnTs: Date.now() - 4_000,
       mainModelActive: true,
@@ -282,8 +282,8 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
       replyToMessageId: "111.222",
     });
 
-    expect(result).toBe(false);
-    expect(adapter.send).not.toHaveBeenCalled();
+    expect(result).toBe(true);
+    expect(adapter.send).toHaveBeenCalled();
   });
 
   it("first token arrival cancels pending ACK", () => {

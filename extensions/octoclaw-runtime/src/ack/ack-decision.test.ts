@@ -49,11 +49,11 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.action).toBe("no_action");
   });
 
-  it("does not send text ACK0 when reaction is not supported and main model is active", () => {
+  it("sends text ACK0 when reaction is not supported", () => {
     const decision = decideAckAction(
       packet({ nowMs: 2_500, reactionAckSupported: false, reactionAckEnabled: false }),
     );
-    expect(decision.action).toBe("no_action");
+    expect(decision.action).toBe("send_text_ack0");
     expect(decision.ackStage).toBe("ack0");
     expect(decision.modality).toBe("text");
   });
@@ -128,7 +128,7 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.modality).toBe("reaction");
   });
 
-  it("considers delegatedRunning as active work eligible for ACK0", () => {
+  it("sends text ACK0 for delegatedRunning when reaction not configured", () => {
     const decision = decideAckAction(packet({
       nowMs: 2_500,
       mainModelActive: false,
@@ -138,7 +138,7 @@ describe("ack-decision: decideAckAction", () => {
       reactionAckEnabled: false,
     }));
 
-    expect(decision.action).toBe("no_action");
+    expect(decision.action).toBe("send_text_ack0");
   });
 
   it("still suppresses ACK on delegate route even when delegated is running", () => {
@@ -233,7 +233,7 @@ describe("ack-decision: decideAckAction", () => {
     expect(decision.modality).toBe("reaction");
   });
 
-  it("returns no_action when model inactive and reaction not configured", () => {
+  it("sends text ACK0 when model inactive and reaction not configured", () => {
     const decision = decideAckAction(packet({
       nowMs: 3_500,
       mainModelActive: false,
@@ -242,6 +242,8 @@ describe("ack-decision: decideAckAction", () => {
       reactionAckEnabled: false,
     }));
 
-    expect(decision.action).toBe("no_action");
+    expect(decision.action).toBe("send_text_ack0");
+    expect(decision.ackStage).toBe("ack0");
+    expect(decision.modality).toBe("text");
   });
 });

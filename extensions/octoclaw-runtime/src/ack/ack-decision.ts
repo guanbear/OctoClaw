@@ -149,20 +149,20 @@ export function decideAckAction(packet: AckDecisionPacket): AckDecision {
     };
   }
 
-  if (!workIsActive(packet)) {
-    return {
-      action: "no_action",
-      reason: "no active reply work eligible for ACK0",
-    };
-  }
-
   if (!packet.reactionAckSent && !packet.reactionAckAttempted && elapsed >= ACK_TIMING.text_ack0_ms) {
     return {
-      action: "no_action",
-      reason: "text ACK0 disabled; runtime ACK0 must use reaction or explicit suppression",
+      action: "send_text_ack0",
+      reason: "text ACK0 checkpoint reached before first token",
       ackStage: "ack0",
       modality: "text",
       templateKey: "ack0",
+    };
+  }
+
+  if (!workIsActive(packet)) {
+    return {
+      action: "no_action",
+      reason: "no active reply work eligible for tier nudges",
     };
   }
 
