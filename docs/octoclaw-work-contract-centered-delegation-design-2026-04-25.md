@@ -611,9 +611,10 @@ ask "continue/fix/check more/write patch"
 
 Implementation invariant:
 
-1. `execution_followup`, `status_followup`, `provenance_followup`, and `dispatch_failure_followup` must be blocked from `octoclaw_dispatch` and `octoclaw_spawn`.
-2. The main agent's route hint / objection is a useful correction signal, but the stable fix must live in deterministic front-gate classification and dispatch/spawn guards.
-3. A sealed delegate WorkContract with no dispatch/spawn evidence is not an active worker. It is a planned/registered/anomalous state that should be answered from status projection.
+1. `execution_followup`, `status_followup`, and `provenance_followup` must be blocked from `octoclaw_dispatch` and `octoclaw_spawn`.
+2. Dispatch-failure follow-up must not be solved by adding more natural-language phrases. The front gate should build `RecentExecutionContext` from WorkContract/task-state/replay/runtime ledger, classify `relation_to_recent_execution`, and map existing execution status / failure reason / provenance queries into the existing `execution_followup` pipe.
+3. The main agent's route hint / objection is a useful correction signal, but the stable fix must live in relation-to-execution grounding plus dispatch/spawn guards.
+4. A sealed delegate WorkContract with no dispatch/spawn evidence is not an active worker. It is a planned/registered/anomalous state that should be answered from status projection.
 
 ### 6.7 Concurrent tasks and amendments
 

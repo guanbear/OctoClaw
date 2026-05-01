@@ -54,11 +54,46 @@
 |------|------|------|
 | `deliveryTarget` | IM adapter ingress | 固定 channel/thread/reply target，后续 ACK/final/delegate completion 不再 late resolve |
 | `turnActionLedger` | runtime hook | 记录本 turn 是否已有 direct tool、visible reply、route seal、dispatch attempt |
-| `recentWorkContext` | WorkContract + task-state + replay | 判断当前 thread/session 是否已有相关任务、失败投递、timeout、result ready |
+| `recentExecutionContext` | WorkContract + task-state + replay + runtime ledger | 判断当前 thread/session 是否已有 active / queued / anomalous / terminal execution，以及最近的 dispatch/spawn/result/delivery evidence |
 | `executionReceipts` | dispatch/spawn/result/delivery ledger | 判断是否已有真实派发、spawn、native task、completion、delivery evidence |
 | `coverage` | execution/memory coverage precheck | 判断是否可直接回答 provenance/status，或需要明确 no-verifiable-record |
 
 这个事实包是 judge 的上下文，也是 runtime 授权的依据。它不是用户可见状态面板，也不应把 raw child transcript 注入主上下文。
+
+#### 4.1.1 RecentExecutionContext 与关系判定
+
+P1-3 的修复不应继续扩大 `META_PROMPT_PATTERNS` / `TASK_PROGRESS_PROMPT_PATTERNS`。关键词只能作为低置信 signal extraction，不能作为是否允许 dispatch 的最终依据。
+
+`conversation-grounding` 应先构造 `RecentExecutionContext`，至少包含：
+
+| 字段 | 含义 |
+|------|------|
+| `has_recent_execution` | 当前 delivery target / thread / session 是否能找到最近 WorkContract、task-state record、dispatch receipt 或 runtime ledger row |
+| `work_contract_id` / `delegate_task_id` / `attempt_id` | 能绑定到的最近执行身份；没有时为空 |
+| `execution_verdict` | `registered`、`queued`、`blocked`、`running`、`no_dispatch_evidence`、`spawn_not_confirmed`、`completion_orphaned`、`binding_mismatch`、`deliverable_ready`、`delivered`、`failed` 等 compact verdict |
+| `dispatch_executed` / `spawn_executed` / `result_materialized` / `delivered` | 真实证据位，不得从 route seal 或自然语言推断 |
+| `latest_anomaly` | 最近异常原因，例如 `no_dispatch_evidence`、`spawn_not_confirmed`、`parent_session_busy`、`ledger_unavailable` |
+| `allowed_control_tools` | 可用于刷新事实的只读/控制面工具，例如 `octoclaw_status`、`octoclaw_task_action` |
+
+然后由一个轻量关系判定器输出 `relation_to_recent_execution`：
+
+```text
+existing_execution_status_query
+existing_execution_failure_reason_query
+existing_execution_provenance_query
+existing_execution_amendment
+new_work
+ambiguous
+```
+
+实现边界：
+
+1. 前三类统一映射到现有 `intent_class=execution_followup`、`route_hint=reply`、`lane_hint=control_observer`、`require_state_grounding=true`，继续复用现有 `policy-resolver` / `ticket` / `dispatch` 防线。
+2. `existing_execution_amendment` 进入 amendment protocol，判定 `steer_child | queue_after | cancel_and_respawn | reply_status_only`，不能直接当新独立任务派发。
+3. 只有 `new_work` 才允许继续申请 delegation ticket；且仍必须满足 `is_new_work=true`、`expected_deliverable` 非空、single-owner 未被破坏。
+4. `ambiguous` 不得直接 dispatch；应 clarify，或在有执行事实但关系不清时 reply 一个 state-grounded status/no-verifiable-record。
+
+这不是新增一条平行 route，而是把现有 `conversation-grounding -> policy-resolver -> ticket -> dispatch` 的第一层从关键词判断升级为“最近执行事实 + 当前 turn 关系”。
 
 ### 4.2 Judge 输出结构
 
@@ -134,12 +169,15 @@ runtime 不做大词表语义分类，只做四个通用一致性校验：
 ```text
 user follow-up
   -> resolve deliveryTarget/thread/session anchors
-  -> read WorkContract/task-state/replay/dispatch ledger
+  -> build RecentExecutionContext from WorkContract/task-state/replay/runtime ledger
+  -> classify relation_to_recent_execution
+  -> if existing_execution_status_query / failure_reason_query / provenance_query:
+       map to existing execution_followup control-observer
   -> build control-observer fact packet
   -> main agent reply with facts or no-verifiable-record
 ```
 
-这里可以有少量 deterministic hint，例如精确命令 `状态面板` / `八爪鱼状态` 直接展示面板；但自然语言追问不应靠包含词直接触发脚本，也不应创建新委派任务。
+这里可以有少量 deterministic hint，例如精确命令 `状态面板` / `八爪鱼状态` 直接展示面板；但自然语言追问不应靠包含词直接触发脚本，也不应创建新委派任务。稳定性来自“没有 `new_work` relation 就拿不到 delegation ticket”，而不是来自穷举“为什么没派发 / 怎么没 spawn / no_dispatch_evidence”这类短语。
 
 
 ### 4.6 2026-05-01 07:53 事件复盘要点

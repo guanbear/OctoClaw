@@ -8,6 +8,7 @@ Related:
 - `docs/octoclaw-ts-rebuild-design-v2.md`
 - `docs/octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`
 - `docs/octoclaw-state-convergence-4-4-design.md`
+- `docs/octoclaw-n1-runtime-ledger-repair-packet-2026-05-01.md`
 
 ---
 

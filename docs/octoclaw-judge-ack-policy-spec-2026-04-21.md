@@ -373,18 +373,20 @@ v1 应明确写死：
 
 这条不是放宽 reply，而是防止把 execution receipt 读取误判成新 delegated work unit。
 
-这类 dispatch-failure follow-up 必须是 deterministic guard，而不是只交给 judge：
+这类 dispatch-failure follow-up 必须有 runtime guard，而不是只交给 judge；但 guard 不应退化成关键词墙。实现应先构造 `RecentExecutionContext`，再判断当前 turn 与最近执行的关系：
 
 ```text
 user: "为啥没派发成功呢"
-  -> classify execution_followup / dispatch_failure_followup
+  -> build RecentExecutionContext from WorkContract/task-state/replay/runtime ledger
+  -> relation_to_recent_execution = existing_execution_failure_reason_query
+  -> map to existing execution_followup / control_observer
   -> route=reply
   -> allowed tools: octoclaw_status, octoclaw_task_action
   -> forbidden: octoclaw_dispatch, octoclaw_spawn, sessions_spawn
   -> answer from task-state / replay / execution coverage
 ```
 
-如果没有任何可验证记录，也仍然是 `reply`：直接说明 no verifiable record，并建议用户查看 status/task action；不能创建一个新任务去调查“为什么没派发”。
+如果没有任何可验证记录，也仍然是 `reply`：直接说明 no verifiable record，并建议用户查看 status/task action；不能创建一个新任务去调查“为什么没派发”。只有当 relation 明确是 `new_work` 且有可验收交付物时，后续 ticket 才可允许 dispatch。
 
 ## 10. rubric
 
@@ -508,8 +510,8 @@ coverage_rules:
     then: "route=reply, allow status/task-action control tool, do not spawn"
   - if: "intent.class == execution_followup && execution.coverage == none"
     then: "route=reply, reply_mode=answer, say no verifiable record or refresh status; do not spawn"
-  - if: "intent.subtype == dispatch_failure_followup"
-    then: "route=reply, allow status/task-action control tool, forbid dispatch/spawn"
+  - if: "relation_to_recent_execution in [existing_execution_status_query, existing_execution_failure_reason_query, existing_execution_provenance_query]"
+    then: "map to execution_followup; route=reply, allow status/task-action control tool, forbid dispatch/spawn"
   - if: "memory.coverage == strong && memory.freshness_risk == low"
     then: "reply remains eligible, but not automatic"
   - if: "fresh external lookup or real probe or command execution or >1min"
