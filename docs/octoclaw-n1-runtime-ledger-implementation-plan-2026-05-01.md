@@ -30,7 +30,7 @@ judge proposal
 
 The central implementation decision is:
 
-> **Create an OctoClaw-owned SQLite runtime ledger for WorkContract, ticket, scheduler, attempt, completion binding, amendment, delivery, and recovery truth. Keep OpenClaw native SQLite as lifecycle authority. Keep `task-state.json` as rebuildable projection.**
+> **Create an OctoClaw-owned SQLite runtime ledger for WorkContract, delegation ticket, scheduler queue, task attempt, completion binding, and runtime event truth. Keep OpenClaw native SQLite as lifecycle authority. Keep `task-state.json` as rebuildable projection. Existing delivery outbox and amendment paths remain JSON projections/adapters until explicitly promoted to ledger tables.**
 
 ---
 
@@ -99,9 +99,45 @@ If `task-state.json` is missing or corrupt, the system must rebuild or quarantin
 
 ---
 
-## 3. SQLite Schema
+## 3. Complexity Budget: Minimal N1-MVP Slice
 
-### 3.1 Pragmas and migrations
+The project goal is more stable, lighter, faster. N1 must start with a minimal recoverable ledger path, not a big-bang distributed scheduler.
+
+### 3.1 N1-MVP tables (implement in first slice)
+
+Only these tables ship in the first implementation slice:
+
+| Table | Purpose | Required for |
+|-------|---------|--------------|
+| `schema_migrations` | Idempotent migration tracking | Step 0 |
+| `work_contracts` | Canonical WorkContract truth | All steps |
+| `delegation_tickets` | One-shot dispatch authorization | Steps 1-3 |
+| `task_attempts` | Spawn/retry/respawn attempt records | Steps 1+ |
+| `scheduler_queue` | Transactional queue/lease | Step 4 |
+| `completion_bindings` | Completion path validation + orphan detection | Step 6 |
+| `runtime_events` | Append-only audit + projection rebuild | All steps |
+
+### 3.2 Deferred to later opt-in slices
+
+These tables remain JSON/adapter-backed or deferred until a specific acceptance scenario requires them:
+
+| Table | Current fallback | When to promote |
+|-------|-----------------|-----------------|
+| `delivery_outbox` | Existing JSON delivery outbox adapter with exponential backoff | When outbox retry needs transactional dedup or cross-restart durability beyond current adapter |
+| `amendments` | Existing `retryDelegateAttempt` model + task-state | When amendment protocol (steer/queue-after/cancel-respawn) needs queryable history beyond attempt rows |
+| `resource_locks` | Scheduler queue `resource_keys_json` + `blocked_by` fields | When resource contention tracking needs independent lease table instead of inline queue fields |
+
+Promotion requires: a concrete failing acceptance scenario, a one-slice OpenSpec packet, and explicit review gate approval. Do not promote speculatively.
+
+### 3.3 Principle
+
+> Ship the minimum ledger that makes delegation recoverable. Add tables only when the existing path demonstrably fails a stated acceptance scenario.
+
+---
+
+## 4. First-Slice SQLite Schema
+
+### 4.1 Pragmas and migrations
 
 On open:
 
@@ -124,7 +160,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 Migrations must be idempotent and monotonic. Never mutate tables opportunistically from business logic.
 
-### 3.2 `work_contracts`
+### 4.2 `work_contracts`
 
 Canonical OctoClaw business contract.
 
@@ -156,7 +192,7 @@ deliverable_ready | delivery_retry | delivered | completed |
 failed | canceled | timeout_no_result | completion_orphaned | binding_mismatch
 ```
 
-### 3.3 `delegation_tickets`
+### 4.3 `delegation_tickets`
 
 One-shot permission to create a delegated execution unit.
 
@@ -189,7 +225,7 @@ dispatch may materialize only when ticket.status='issued' and expires_at > now
 use ticket and enqueue/spawn attempt in one transaction
 ```
 
-### 3.4 `task_attempts`
+### 4.4 `task_attempts`
 
 One row per spawn/retry/respawn/amendment attempt.
 
@@ -227,7 +263,7 @@ CREATE INDEX idx_task_attempts_status_updated ON task_attempts(status, updated_a
 
 `status` should use the same canonical status vocabulary as `work_contracts` where possible.
 
-### 3.5 `scheduler_queue`
+### 4.5 `scheduler_queue`
 
 Queue and lease truth.
 
@@ -256,34 +292,7 @@ CREATE INDEX idx_scheduler_queue_wakeup ON scheduler_queue(wakeup_at);
 CREATE INDEX idx_scheduler_queue_attempt ON scheduler_queue(attempt_id);
 ```
 
-### 3.6 `resource_locks`
-
-Short leases for exclusive resources.
-
-```sql
-CREATE TABLE resource_locks (
-  resource_key TEXT PRIMARY KEY,
-  holder_attempt_id TEXT NOT NULL REFERENCES task_attempts(attempt_id) ON DELETE CASCADE,
-  lock_mode TEXT NOT NULL CHECK (lock_mode IN ('shared', 'exclusive')),
-  acquired_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX idx_resource_locks_expires ON resource_locks(expires_at);
-```
-
-Resource key examples:
-
-```text
-workspace:/Users/guanbear/octoclaw_stable
-repo:/Users/guanbear/octoclaw_stable
-file:extensions/octoclaw-runtime/src/tools/registration.ts
-im-thread:slack:D0AR3GTPYQL:1777592404.273209
-native-session:agent:main:subagent:...
-model-account:provider/model/account
-```
-
-### 3.7 `completion_bindings`
+### 4.6 `completion_bindings`
 
 Completion path and binding verdict.
 
@@ -322,9 +331,61 @@ normal finalization requires verdict='matched'
 wrong path or empty workContractId must become completion_orphaned/binding_mismatch, not running/result=none
 ```
 
-### 3.8 `delivery_outbox`
+### 4.7 `runtime_events`
 
-Durable user-visible delivery attempts.
+Append-only audit and projection rebuild source.
+
+```sql
+CREATE TABLE runtime_events (
+  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT NOT NULL,
+  work_contract_id TEXT,
+  attempt_id TEXT,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_runtime_events_contract_created ON runtime_events(work_contract_id, created_at);
+CREATE INDEX idx_runtime_events_attempt_created ON runtime_events(attempt_id, created_at);
+```
+
+---
+
+## 5. Deferred Schema Sketches (not first-slice migrations)
+
+The following sketches document likely future promotions only. They are intentionally outside the N1-MVP migration set. A table may move into the live schema only after a concrete failing acceptance scenario, a single-slice OpenSpec packet, and reviewer approval.
+
+### 5.1 `resource_locks`
+
+> **This table is deferred per §3.2.** It remains inline in `scheduler_queue.resource_keys_json` and `blocked_by` fields until resource contention tracking demonstrably needs an independent lease table. Do not create a migration for this table in the first slice.
+
+```sql
+CREATE TABLE resource_locks (
+  resource_key TEXT PRIMARY KEY,
+  holder_attempt_id TEXT NOT NULL REFERENCES task_attempts(attempt_id) ON DELETE CASCADE,
+  lock_mode TEXT NOT NULL CHECK (lock_mode IN ('shared', 'exclusive')),
+  acquired_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_resource_locks_expires ON resource_locks(expires_at);
+```
+
+Resource key examples:
+
+```text
+workspace:/Users/guanbear/octoclaw_stable
+repo:/Users/guanbear/octoclaw_stable
+file:extensions/octoclaw-runtime/src/tools/registration.ts
+im-thread:slack:D0AR3GTPYQL:1777592404.273209
+native-session:agent:main:subagent:...
+model-account:provider/model/account
+```
+
+### 5.2 `delivery_outbox`
+
+> **This table is deferred per §3.2.** Delivery outbox logic remains in the existing JSON delivery outbox adapter with exponential backoff. Do not create a migration for this table in the first slice. Promote only when outbox retry needs transactional dedup or cross-restart durability beyond current adapter.
+
+Durable user-visible delivery attempts (sketch for future promotion):
 
 ```sql
 CREATE TABLE delivery_outbox (
@@ -349,9 +410,11 @@ CREATE INDEX idx_delivery_outbox_status_next ON delivery_outbox(status, next_att
 CREATE INDEX idx_delivery_outbox_work_contract ON delivery_outbox(work_contract_id);
 ```
 
-### 3.9 `amendments`
+### 5.3 `amendments`
 
-Task modification decisions.
+> **This table is deferred per §3.2.** Amendment logic remains in the existing `retryDelegateAttempt` model and task-state. Do not create a migration for this table in the first slice. Promote only when amendment protocol needs queryable history beyond attempt rows.
+
+Task modification decisions (sketch for future promotion):
 
 ```sql
 CREATE TABLE amendments (
@@ -368,26 +431,12 @@ CREATE TABLE amendments (
 CREATE INDEX idx_amendments_work_contract ON amendments(work_contract_id);
 ```
 
-### 3.10 `runtime_events`
-
-Append-only audit and projection rebuild source.
-
-```sql
-CREATE TABLE runtime_events (
-  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  event_type TEXT NOT NULL,
-  work_contract_id TEXT,
-  attempt_id TEXT,
-  payload_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX idx_runtime_events_contract_created ON runtime_events(work_contract_id, created_at);
-CREATE INDEX idx_runtime_events_attempt_created ON runtime_events(attempt_id, created_at);
-```
 
 ---
 
-## 4. Implementation Steps
+## 6. Staged Implementation Steps
+
+N1 rolls out one reversible slice at a time: shadow ledger -> ticket dry-run -> ticket enforcement -> simple scheduler lease/queue -> completion binding/orphan scan -> projection rebuild. Before a stage passes its gate, it must not change live dispatch behavior. Do not merge stages just to save time; stability comes from small reviewable steps.
 
 ### Step 0 — Prep and contract tests
 
@@ -451,12 +500,12 @@ Acceptance:
 - Valid ticket creates exactly one attempt row.
 - Replaying the same dispatch call does not create a duplicate attempt.
 
-### Step 4 — Scheduler queue and resource locks
+### Step 4 — Simple scheduler queue and inline resource blocking
 
 Deliverables:
 
 - Scheduler module with `admit`, `tryAcquireLease`, `materialize`, `releaseOrComplete`, `requeueExpiredLeases`.
-- Resource lock derivation from WorkContract read/write scope and delivery target.
+- Inline resource key derivation from WorkContract read/write scope and delivery target; no separate `resource_locks` table in N1-MVP.
 - Capacity config: `OCTOCLAW_MAX_CONCURRENT_SPAWNS`, default conservative.
 - Queue/status projection for `queued_after` and `blocked_by`.
 
@@ -498,11 +547,11 @@ Acceptance:
 - Wrong path completion is discoverable by childSessionKey/delegateTaskId/session log.
 - Matched completion materializes result and enqueues final delivery exactly once.
 
-### Step 7 — Delivery outbox and status projection
+### Step 7 — Status projection and delivery adapter integration
 
 Deliverables:
 
-- Final/progress/status delivery rows in `delivery_outbox`.
+- Final/progress/status delivery continues through the existing JSON delivery outbox adapter; ledger stores only status/projection evidence needed to avoid false `completed`.
 - `task-state.json` projection generator from ledger + native DB snapshot.
 - `octoclaw_status` default uses compact canonical verdict; raw/debug shows underlying planes.
 
@@ -512,11 +561,11 @@ Acceptance:
 - Deliverable result with failed Slack send appears `deliverable_ready` / `delivery_retry`, not completed.
 - Default status no longer lists reply-only work as delegated task noise.
 
-### Step 8 — Amendment and retry protocol
+### Step 8 — Retry/amendment protocol (post-MVP unless needed for acceptance)
 
 Deliverables:
 
-- Amendment classifier consuming WorkContract scope, attempt stage, child continuity, result state, and prompt delta.
+- Amendment classifier consuming WorkContract scope, attempt stage, child continuity, result state, and prompt delta; do not create an `amendments` table unless promoted by §3.2.
 - Implement `steer_child`, `queue_after`, `cancel_and_respawn`, `reply_status_only`.
 - `octoclaw_task_action retry` creates a new attempt under same `delegateTaskId`.
 
@@ -546,7 +595,7 @@ Acceptance:
 
 ---
 
-## 5. Verification Matrix
+## 7. Verification Matrix
 
 | Area | Test |
 |------|------|
@@ -556,9 +605,9 @@ Acceptance:
 | Lease | crash before spawn, crash after native task, expired lease recovery |
 | Native sync | flow exists/no child run, child run terminal, native row missing |
 | Completion | matched, wrong path, empty WorkContractId, invalid JSON, duplicate completion |
-| Delivery | sent, failed, retry, duplicate final suppression |
+| Delivery | existing JSON outbox sent/failed/retry, duplicate final suppression, no false completed |
 | Projection | delete/corrupt `task-state.json`, rebuild from ledger/native DB |
-| Amendment | steer, queue-after, cancel-respawn, status-only |
+| Amendment | post-MVP acceptance if enabled: steer, queue-after, cancel-respawn, status-only |
 | Replay/nightly | ticket allow/deny, false delegate, completion orphan, scheduler queue, duplicate owner |
 
 Minimum commands before merge:
@@ -578,7 +627,7 @@ pnpm --filter octoclaw-runtime build
 pnpm --filter octoclawctl build
 ```
 
-Acceptance is not “tests pass” only. The reviewer must inspect ledger rows and projections for at least these manual scenarios:
+Acceptance is not “tests pass” only. The reviewer must inspect the diff, ledger rows, projections, and user-visible behavior against the stated purpose for at least these manual scenarios:
 
 1. Independent dual dispatch.
 2. Write-conflicting dispatch.
@@ -588,7 +637,7 @@ Acceptance is not “tests pass” only. The reviewer must inspect ledger rows a
 
 ---
 
-## 6. OpenSpec Implementation Template
+## 8. OpenSpec Implementation Template
 
 Use this packet when handing N1 chunks to OpenCode or another implementation agent.
 
@@ -605,7 +654,7 @@ OctoClaw delegation currently relies on `task-state.json` plus best-effort repla
 - `docs/octoclaw-state-convergence-4-4-design.md`
 
 ## Scope
-Implement only: <one slice, e.g. migration runner + schema, ticket enforcement, scheduler queue, completion binding, projection rebuild>.
+Implement only: <one slice, e.g. migration runner + first-slice schema, ticket dry-run, ticket enforcement, scheduler queue, completion binding, projection rebuild>.
 
 Allowed files:
 - <explicit file/module list>
@@ -615,6 +664,7 @@ Do not touch:
 - unrelated IM adapter behavior
 - unrelated judge prompt/rule injection
 - unrelated status formatting
+- deferred tables (`resource_locks`, `delivery_outbox`, `amendments`) unless this packet explicitly promotes one with acceptance proof
 
 ## Required Invariants
 - `spawn_confirmed=true` requires native task/session/process evidence.
@@ -640,6 +690,7 @@ pnpm exec tsc --noEmit --pretty false -p extensions/octoclaw-runtime/tsconfig.js
 
 ## Acceptance Criteria
 - <slice-specific acceptance bullets>
+- Tests passing is required but not sufficient; reviewer must confirm behavior reaches the slice purpose and does not add avoidable architecture.
 - Existing dispatch/reply behavior remains compatible unless feature flag is enabled.
 - Failure states are explicit (`queued`, `blocked`, `completion_orphaned`, `binding_mismatch`, etc.), never silent no-op.
 
@@ -653,7 +704,7 @@ pnpm exec tsc --noEmit --pretty false -p extensions/octoclaw-runtime/tsconfig.js
 
 ---
 
-## 7. Design Risk Review
+## 9. Design Risk Review
 
 This design is intentionally more conservative than “just add a DB and route everything through it”. Known risks and mitigations:
 
@@ -663,12 +714,12 @@ This design is intentionally more conservative than “just add a DB and route e
 | Direct reads of OpenClaw DB break on upstream schema changes | Prefer OpenClaw bridge/API; keep direct SQLite reads optional, read-only, guarded, and covered by schema smoke tests. |
 | SQLite dependency adds install/deploy fragility | Use built-in `node:sqlite` under Node 22+, matching OpenClaw; add no external native package in N1. |
 | Big-bang migration destabilizes live dispatch | Roll out shadow -> dry-run -> enforce behind flags; keep `task-state.json` compatibility projection during rollout. |
-| Scheduler adds too much complexity | Implement only ticket, queue, lease, resource lock, attempt, completion binding; no priority optimizer, no distributed scheduler, no online learning. |
+| Scheduler adds too much complexity | Implement only ticket, queue, lease fields, attempt, completion binding, and runtime events in N1-MVP; keep resource locks inline until proven necessary; no priority optimizer, no distributed scheduler, no online learning. |
 | DB file under temp path gets cleaned | Store under `.octoclaw/runtime/`; keep `tmp/octopus` for projections/logs only. |
 
 ---
 
-## 8. Rollback and Safety
+## 10. Rollback and Safety
 
 - Keep ledger enforcement behind feature flag until shadow mismatch is understood.
 - Never delete existing `task-state.json` or completion files during migration; copy/backfill only.

@@ -335,7 +335,9 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 
 ### N1：恢复、重试和状态真相加固（立即，1-2 周）
 
-目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。N1 不再用关键词补洞，而是把 judge 语义建议、runtime 派发授权、scheduler、completion binding、状态 verdict 和 amendment protocol 收成一个闭环。设计见 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`，实施包见 `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`。
+目标：先把“发生了什么、谁做的、是否可恢复/可重试/已交付”收成可证明事实，再继续产品化 IM 和 Auto Router。N1 不再用关键词补洞，而是把 judge 语义建议、runtime 派发授权、scheduler、completion binding、状态 verdict 和 amendment protocol 收成一个闭环。
+
+N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events` 六张核心表；`delivery_outbox`、`amendments`、`resource_locks` 保留现有 JSON/adapter/inline 实现或延后 opt-in。Rollout 分六个可独立回滚的 stage：shadow ledger -> ticket dry-run -> ticket enforcement -> simple scheduler lease/queue -> completion binding/orphan scan -> projection rebuild。每个 stage 不在通过 gate 前改变 live 行为。Scheduler 限定为单进程 SQLite 事务队列/lease，无常驻 daemon，无分布式调度。设计见 `octoclaw-judge-dispatch-complexity-improvement-2026-05-01.md`，实施包见 `octoclaw-n1-runtime-ledger-implementation-plan-2026-05-01.md`。
 
 #### N1-A：judge / dispatch 授权边界
 
@@ -355,7 +357,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 #### N1-C：scheduler、并发、依赖和锁
 
 1. dispatch materialization 与 main turn lock 解耦；main lock 只保护 transcript/delivery 一致性，不阻塞独立 worker spawn。
-2. 引入 OctoClaw runtime ledger（建议 SQLite）作为 scheduler/attempt/ticket/completion binding 的事务真相；OpenClaw `flows/registry.sqlite` 和 `tasks/runs.sqlite` 作为 native lifecycle authority 只读/通过 API 同步，不私自改 schema。
+2. 引入 OctoClaw runtime ledger（建议 SQLite）作为 scheduler/attempt/ticket/completion binding 的事务真相；OpenClaw `flows/registry.sqlite` 和 `tasks/runs.sqlite` 作为 native lifecycle authority 只读/通过 API 同步，不私自改 schema。N1-MVP 只实现 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events`；`delivery_outbox`、`amendments`、`resource_locks` 保留现有 JSON/adapter/inline 路径，不在第一个实现 slice 强制迁移。Scheduler 限定单进程 SQLite 事务队列/lease，无常驻 daemon。
 3. `task-state.json` 降为可重建 read-model snapshot / compatibility projection，不再承担并发 queue pop、lease、resource lock、attempt transition 的唯一 durable truth。
 4. 独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队，状态写成 `queued_after=<taskId>` 或 `blocked_by=<resource>`。
 5. scheduler queue 必须有 `queue_status`、`dependency_ids`、`resource_keys`、`lease_owner`、`lease_expires_at`、`revision`、`wakeup_at`，并用 CAS/transaction 防止双 pop。
@@ -395,6 +397,7 @@ observe -> summarize -> review -> curate -> validate -> promote -> learn
 - 任务完成但 final relay 未成功时，状态是 `deliverable_ready` 或 `delivery retry`，不能显示成 `completed/delivered`。
 - protected-lane 问题必须 state-grounded，不能凭上一轮自然语言回答。
 - judge spec、runtime validator、main-agent rule injection 三者职责清楚：rule 注入只指导协作，judge validator 才校验 route contract。
+- N1 实施包的 OpenSpec packet 必须是单 slice、有 review gate；验收不只是“tests pass”，而是 reviewer 确认实现达到了 slice 的 stated purpose，且没有引入可避免的复杂架构。
 
 ### N2：IM capability matrix 产品化（2-4 周）
 
