@@ -32,6 +32,26 @@ function judgeResponse(route: "reply" | "delegate", confidence = 0.82): Response
           confidence,
           abstain_reason: null,
           ack_text: "收到",
+          ...(route === "delegate" ? {
+            scope: "local",
+            tool_need_hint: "required",
+            duration_hint: "medium",
+          } : {}),
+        }),
+      },
+    }],
+  });
+}
+
+function minimalJudgeResponse(route: "reply" | "delegate", confidence = 0.82): Response {
+  return jsonResponse({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          route,
+          confidence,
+          abstain_reason: null,
+          ack_text: "收到",
         }),
       },
     }],
@@ -102,6 +122,30 @@ describe("policy resolver judge timeout fallback", () => {
       judge_timeout: true,
       final_judge_source: "timeout",
     });
+  });
+
+  it("marks degraded minimal delegate judge output as degraded but still uses the route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(minimalJudgeResponse("delegate", 0.7));
+
+    const decision = await resolveStatelessPolicyDecision("delegate this to a sub-agent", {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      route_source: "judge",
+      final_judge_source: "local",
+    });
+    expect(decision._judge_route).toBe("delegate");
+    const shadowLog = decision._judge_shadow_log as Record<string, unknown>;
+    expect(shadowLog.judge_schema_degraded).toBe(true);
+    expect(shadowLog.degraded_reasons).toEqual([
+      "missing_scope",
+      "missing_tool_need_hint",
+      "missing_duration_hint",
+    ]);
   });
 
   it("does not route compact Chinese subagent wording without structured signal when judge times out", async () => {

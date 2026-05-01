@@ -86,6 +86,22 @@ interface FsSyncLike {
 }
 
 const fs = fsSync as unknown as FsSyncLike;
+const RECOVERY_SIGNAL_SUFFIX = ".recovery-needed";
+
+function writeRecoverySignal(quarantinePath: string, readResult: TaskStateReadResult): void {
+  const message = [
+    "task-state recovery needed",
+    `status=${readResult.status}`,
+    `source=${readResult.originalPath}`,
+    `quarantine=${quarantinePath}`,
+    readResult.errorMessage ? `error=${readResult.errorMessage}` : undefined,
+  ].filter((line): line is string => Boolean(line)).join("\n");
+  try {
+    fs.writeFileSync(`${quarantinePath}${RECOVERY_SIGNAL_SUFFIX}`, `${message}\n`, "utf-8");
+  } catch {
+    // Best-effort signal only; do not mask the primary quarantine/write result.
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -206,7 +222,11 @@ export function writeTaskStateDocumentSafe(document: TaskStateDocument, taskStat
   const targetPath = taskStatePathFromOverride(taskStatePath);
   const readResult = readTaskStateDocumentDetailed(taskStatePath);
 
-  if (readResult.status === "parse_error" || readResult.status === "io_error") {
+  if (readResult.status === "io_error") {
+    return { ok: false, reason: `read_failed_closed:${readResult.errorMessage ?? readResult.status}` };
+  }
+
+  if (readResult.status === "parse_error" || readResult.status === "schema_mismatch") {
     const quarantinePath = `${targetPath}.corrupt.${Date.now()}`;
     try {
       fs.renameSync(targetPath, quarantinePath);
@@ -227,8 +247,10 @@ export function writeTaskStateDocumentSafe(document: TaskStateDocument, taskStat
         updated_at: new Date().toISOString(),
         tasks: document.tasks,
       });
+      if (readResult.status === "parse_error" && !wrote) writeRecoverySignal(quarantinePath, readResult);
       return { ok: wrote, reason: wrote ? undefined : "atomic_write_failed", quarantined: true, quarantinePath };
     } catch (error) {
+      if (readResult.status === "parse_error") writeRecoverySignal(quarantinePath, readResult);
       return { ok: false, reason: `write_after_quarantine_failed:${error instanceof Error ? error.message : String(error)}`, quarantined: true, quarantinePath };
     }
   }
@@ -322,7 +344,11 @@ function mergeTaskStateRecord(previous: TaskStateRecord | undefined, patch: Task
 }
 
 export function upsertTaskStateRecord(record: TaskStateRecord, taskStatePath?: string): boolean {
-  const document = readTaskStateDocument(taskStatePath);
+  const readResult = readTaskStateDocumentDetailed(taskStatePath);
+  if (readResult.status === "io_error") {
+    return false;
+  }
+  const document = readResult.document;
   const idx = document.tasks.findIndex((task) => recordsReferToSameTask(task, record));
   const merged = mergeTaskStateRecord(idx >= 0 ? document.tasks[idx] : undefined, record);
   if (idx >= 0) {

@@ -70,7 +70,7 @@ describe("feature-flags", () => {
     });
 
     it("returns false for other values", () => {
-      process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
+      process.env.OCTOCLAW_SCHEDULER_ENABLED = "yes";
       expect(isSchedulerEnabled()).toBe(false);
     });
   });

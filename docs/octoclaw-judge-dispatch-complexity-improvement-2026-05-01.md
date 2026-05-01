@@ -309,15 +309,16 @@ OctoClaw 当前还维护 `tmp/octopus/task-state.json`、`task-events.jsonl`、`
 结论：
 
 1. **不直接改 OpenClaw 原生 DB schema**。`flows/registry.sqlite` 和 `tasks/runs.sqlite` 是 substrate owned store，OctoClaw 优先通过 OpenClaw runtime bridge/API 读取或同步 native lifecycle；直接 DB 读取只能作为有 schema guard 的只读诊断 fallback。
-2. **OctoClaw 新增自己的 transactional runtime ledger**，建议 SQLite：`~/.openclaw/workspace/.octoclaw/runtime/octoclaw-runtime.sqlite`。它拥有 WorkContract、delegation ticket、scheduler queue、attempt、completion binding、delivery outbox、amendment 和 recovery verdict；实现上优先使用 Node 内置 `node:sqlite`，不要为 N1 引入新的 native SQLite 依赖。
-3. **`task-state.json` 降为 read-model snapshot / compatibility projection**。status 面、简单工具和人工排障可以继续读它，但它必须能从 OctoClaw ledger + OpenClaw native DB + replay 重建；它不再承担并发调度的唯一写入真相。
-4. **JSONL 继续做 audit log，不做调度锁**。`task-events.jsonl` / `runtime-policy-replay.jsonl` 适合审计、回放、nightly eval；不适合承载 queue pop、lease acquire、attempt transition 这类需要原子性的操作。
+2. **当前 `queryNativeState` 只是 staged / diagnostic hook**。它用于诊断、reconcile smoke test 和未来 bridge/API 缺口补位；当前生产路径不声明直接读取 OpenClaw native DB 作为唯一执行证据。正式 native integration 必须通过后续 bridge/API 或受保护 adapter promotion 单独验收。
+3. **OctoClaw 新增自己的 transactional runtime ledger**，建议 SQLite：`~/.openclaw/workspace/.octoclaw/runtime/octoclaw-runtime.sqlite`。N1-MVP 只拥有 WorkContract、delegation ticket、scheduler queue、attempt、completion binding 和 runtime event truth；实现上优先使用 Node 内置 `node:sqlite`，不要为 N1 引入新的 native SQLite 依赖。
+4. **`task-state.json` 降为 read-model snapshot / compatibility projection**。status 面、简单工具和人工排障可以继续读它，但它必须能从 OctoClaw ledger + OpenClaw native lifecycle snapshot / replay 重建；它不再承担并发调度的唯一写入真相。
+5. **JSONL 继续做 audit log，不做调度锁**。`task-events.jsonl` / `runtime-policy-replay.jsonl` 适合审计、回放、nightly eval；不适合承载 queue pop、lease acquire、attempt transition 这类需要原子性的操作。
 
 如果暂时不引入 SQLite 依赖，也必须至少做到：单 writer actor + append-only log + atomic snapshot + file lock + revision CAS。但这只是过渡方案；N1 正式目标应是 SQLite ledger。
 
 ### 6.3 OctoClaw runtime ledger 最小表
 
-建议最小 schema：
+N1-MVP canonical schema 只包含以下六张业务表；迁移不应创建 deferred tables：
 
 | 表 | 主键 | 用途 |
 |----|------|------|
@@ -325,11 +326,16 @@ OctoClaw 当前还维护 `tmp/octopus/task-state.json`、`task-events.jsonl`、`
 | `delegation_tickets` | `ticket_id` | 一次性 dispatch 授权，绑定 turn/session/WorkContract，记录 issued/used/revoked/expired |
 | `task_attempts` | `attempt_id` | 每次 spawn/respawn/retry/queued amendment attempt，关联 native task/flow/session/run |
 | `scheduler_queue` | `queue_id` | queued/blocked/running lease、priority、dependency、resource locks、wake condition |
-| `resource_locks` | `resource_key` | 写域/资源 lease，带 holder attempt、expires_at、revision |
 | `completion_bindings` | `completion_id` | deterministic completionPath、expected ids、observed ids、binding verdict、orphan recovery |
-| `delivery_outbox` | `delivery_id` | final/ACK/progress delivery attempts、retry、thread target、sent proof |
-| `amendments` | `amendment_id` | steer/queue-after/cancel-respawn/status-only 判定和证据 |
 | `runtime_events` | autoincrement | append-only event log，用于重建 projection 和 nightly |
+
+Deferred tables are not part of the current production schema:
+
+| Deferred table | Current path |
+|----------------|--------------|
+| `delivery_outbox` | Existing JSON delivery outbox adapter until retry/dedup requires transactional promotion |
+| `amendments` | Attempt rows plus existing retry/amendment model until explicit protocol promotion |
+| `resource_locks` | Inline `scheduler_queue.resource_keys_json` + `blocked_by` fields until independent lock table is justified |
 
 `task-state.json` 由这些表投影生成：
 

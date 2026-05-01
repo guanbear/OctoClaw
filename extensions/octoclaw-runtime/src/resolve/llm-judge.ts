@@ -3,6 +3,7 @@ import {
   JUDGE_FAST_DEFAULTS,
   isActionableJudgeResult,
   isValidJudgeOutput,
+  validateJudgeOutputDetailed,
   type JudgeFastConfig,
   type JudgeInput,
   type JudgeOutput,
@@ -47,7 +48,7 @@ function asStringArray(value: unknown): string[] | undefined {
 
 function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
   const ackTextRaw = parsed.ackText ?? parsed.ack_text ?? null;
-  return {
+  const output: JudgeOutput = {
     route: parsed.route as JudgeOutput["route"],
     confidence: typeof parsed.confidence === "number" && parsed.confidence > 0
       ? parsed.confidence
@@ -79,6 +80,16 @@ function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
     evidenceRequired: (parsed.evidenceRequired ?? parsed.evidence_required) as boolean | undefined,
     ackRequired: (parsed.ackRequired ?? parsed.ack_required) as boolean | undefined,
   };
+
+  const validation = validateJudgeOutputDetailed(output);
+  if (validation.degraded) {
+    Object.assign(output, {
+      judge_schema_degraded: true,
+      degraded_reasons: validation.degradedReasons,
+    });
+  }
+
+  return output;
 }
 
 export function resolveJudgeConfig(raw: Record<string, unknown>): JudgeConfig | null {

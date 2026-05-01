@@ -7,6 +7,7 @@ import type { NativeHelperInvoker } from "../adapter/native-helper.js";
 import { envOverrides } from "../resolve/env.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
+import { resolveStatelessPolicyDecision } from "../resolve/policy-resolver.js";
 import { readTaskStateDocumentDetailed } from "../state/task-state-store.js";
 import { getToolRegistrations } from "../tools/registration.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "../work-contract/builders.js";
@@ -154,6 +155,65 @@ async function executeDispatch(params: Record<string, unknown>, ctx: Record<stri
   return JSON.parse(response.text as string) as Record<string, unknown>;
 }
 
+async function resolveDelegatePolicy(task: string, sessionKey: string, metadata: Record<string, unknown> = {}) {
+  return resolveStatelessPolicyDecision(task, {
+    metadata: {
+      _judgeFastConfig: {
+        enabled: true,
+        shadowMode: false,
+        modelId: "test-local-judge",
+        baseUrl: "http://localhost:19999/v1",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        timeoutLocalMs: 800,
+        minConfidence: 0.6,
+        local: true,
+        judgeAckEnabled: true,
+      },
+      session_key: sessionKey,
+      conversation_control: {
+        intent_class: "fresh_live_lookup",
+        route_hint: "delegate",
+        require_fresh_lookup: true,
+      },
+      ...metadata,
+    },
+    routeHint: { route_hint: "delegate", source: "system", trusted: true },
+  });
+}
+
+function expectNoDispatchSideEffects(workContractId: string): void {
+  const db = openDb();
+  try {
+    const usedTickets = db.prepare("SELECT COUNT(*) AS count FROM delegation_tickets WHERE work_contract_id = ? AND status = 'used'").get(workContractId);
+    expect(Number(usedTickets?.count ?? 0)).toBe(0);
+    const attempts = db.prepare("SELECT COUNT(*) AS count FROM task_attempts WHERE work_contract_id = ?").get(workContractId);
+    expect(Number(attempts?.count ?? 0)).toBe(0);
+    const queue = db.prepare("SELECT COUNT(*) AS count FROM scheduler_queue WHERE work_contract_id = ?").get(workContractId);
+    expect(Number(queue?.count ?? 0)).toBe(0);
+    const ticketUsedEvents = db.prepare("SELECT COUNT(*) AS count FROM runtime_events WHERE work_contract_id = ? AND event_type = 'delegation_ticket_used'").get(workContractId);
+    expect(Number(ticketUsedEvents?.count ?? 0)).toBe(0);
+  } finally {
+    db.close();
+  }
+}
+
+function expectDispatchSideEffects(workContractId: string): void {
+  const db = openDb();
+  try {
+    const usedTickets = db.prepare("SELECT COUNT(*) AS count FROM delegation_tickets WHERE work_contract_id = ? AND status = 'used'").get(workContractId);
+    expect(Number(usedTickets?.count ?? 0)).toBe(1);
+    const attempts = db.prepare("SELECT COUNT(*) AS count FROM task_attempts WHERE work_contract_id = ?").get(workContractId);
+    expect(Number(attempts?.count ?? 0)).toBe(1);
+    const queue = db.prepare("SELECT COUNT(*) AS count FROM scheduler_queue WHERE work_contract_id = ?").get(workContractId);
+    expect(Number(queue?.count ?? 0)).toBe(1);
+    const ticketUsedEvents = db.prepare("SELECT COUNT(*) AS count FROM runtime_events WHERE work_contract_id = ? AND event_type = 'delegation_ticket_used'").get(workContractId);
+    expect(Number(ticketUsedEvents?.count ?? 0)).toBe(1);
+  } finally {
+    db.close();
+  }
+}
+
 function seedLedgerOnlyWorkContract(contract: WorkContract): void {
   const db = openDb();
   try {
@@ -174,6 +234,36 @@ function seedLedgerOnlyWorkContract(contract: WorkContract): void {
       contract.status,
       contract.createdAt,
       contract.updatedAt,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function seedDelegationTicket(contract: WorkContract): void {
+  const db = openDb();
+  const nowIso = new Date().toISOString();
+  const expiresIso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const ticketId = `candidate:${contract.workContractId}`;
+  const expectedDeliverable = contract.mainContext.summary.slice(0, 200);
+  try {
+    db.prepare("DELETE FROM delegation_tickets WHERE work_contract_id = ?").run(contract.workContractId);
+    db.prepare(
+      `INSERT INTO delegation_tickets (
+         ticket_id, work_contract_id, turn_id, session_key,
+         delivery_target_id, expected_deliverable, complexity_final,
+         status, issued_at, expires_at, ticket_json, revision
+       ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'issued', ?, ?, ?, 0)`,
+    ).run(
+      ticketId,
+      contract.workContractId,
+      contract.turnId,
+      contract.sessionKey,
+      contract.turnId,
+      expectedDeliverable,
+      nowIso,
+      expiresIso,
+      JSON.stringify({ ticket_id: ticketId, work_contract_id: contract.workContractId }),
     );
   } finally {
     db.close();
@@ -204,6 +294,7 @@ describe("runtime ledger hot-path tool integration", () => {
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
     process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
     const contract = seedWorkContract({ sessionKey: "session-hot-path-dispatch" });
+    seedDelegationTicket(contract);
 
     const result = await executeDispatch({
       task: contract.userAsk,
@@ -259,6 +350,30 @@ describe("runtime ledger hot-path tool integration", () => {
     } finally {
       dbAfter.close();
     }
+  });
+
+  it("enforce mode with scheduler disabled blocks dispatch", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    delete process.env.OCTOCLAW_SCHEDULER_ENABLED;
+    const contract = seedWorkContract({ sessionKey: "session-hot-path-scheduler-disabled" });
+    seedDelegationTicket(contract);
+
+    const result = await executeDispatch({
+      task: contract.userAsk,
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(contract.sessionKey)),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-scheduler-disabled-test",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("blocked_by_scheduler_mandatory:scheduler_not_enabled");
+    expect(result.dispatch_executed).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.scheduler_status).toBe("blocked_by_scheduler_mandatory");
   });
 
   it("task_action retry creates real attempt row in ledger", async () => {
@@ -337,5 +452,146 @@ describe("runtime ledger hot-path tool integration", () => {
     expect(response.json).toBeTruthy();
     const reloaded = loadWorkContract(contract.workContractId);
     expect(reloaded?.workContractId).toBe(contract.workContractId);
+  });
+
+  it("follow-up query with existing_execution_followup creates no dispatch side effects", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
+    const task = "Why did the previous dispatch not succeed?";
+    const decision = await resolveDelegatePolicy(task, "session-hot-path-followup", {
+      relation_to_recent_execution: "existing_execution_followup",
+    });
+    const workContractId = String(decision.workContractId ?? "");
+    expect(workContractId).not.toBe("");
+    seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
+
+    const result = await executeDispatch({
+      task,
+      delegateTaskId: `delegate-task:${workContractId}`,
+      workContractId,
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({ relation_to_recent_execution: "existing_execution_followup" }),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-followup-test",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("delegation_ticket_rejected:not_new_work");
+    expect(result.dispatch_executed).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.materialized).toBe(false);
+    expectNoDispatchSideEffects(workContractId);
+  });
+
+  it("follow-up query with existing_execution_provenance_query creates no dispatch side effects", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
+    const task = "Who handled the previous delegated task?";
+    const decision = await resolveDelegatePolicy(task, "session-hot-path-provenance", {
+      relation_to_recent_execution: "existing_execution_provenance_query",
+    });
+    const workContractId = String(decision.workContractId ?? "");
+    expect(workContractId).not.toBe("");
+    seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
+
+    const result = await executeDispatch({
+      task,
+      delegateTaskId: `delegate-task:${workContractId}`,
+      workContractId,
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({ relation_to_recent_execution: "existing_execution_provenance_query" }),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-provenance-test",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("delegation_ticket_rejected:not_new_work");
+    expect(result.dispatch_executed).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.materialized).toBe(false);
+    expectNoDispatchSideEffects(workContractId);
+  });
+
+  it("follow-up status query (为啥没派发成功呢) creates no dispatch side effects", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
+    const dispatchedContract = seedWorkContract({ sessionKey: "session-hot-path-status-question-initial" });
+    seedDelegationTicket(dispatchedContract);
+
+    const dispatched = await executeDispatch({
+      task: dispatchedContract.userAsk,
+      delegateTaskId: `delegate-task:${dispatchedContract.workContractId}`,
+      workContractId: dispatchedContract.workContractId,
+      policyJson: JSON.stringify(delegateDecision(dispatchedContract.sessionKey)),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-status-question-initial-test",
+    });
+    expect(dispatched.dispatch_executed).toBe(true);
+
+    const task = "为啥没派发成功呢";
+    const decision = await resolveDelegatePolicy(task, "session-hot-path-status-question", {
+      relation_to_recent_execution: "existing_execution_followup",
+    });
+    const workContractId = String(decision.workContractId ?? "");
+    expect(workContractId).not.toBe("");
+    seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
+
+    const result = await executeDispatch({
+      task,
+      delegateTaskId: `delegate-task:${workContractId}`,
+      workContractId,
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({ relation_to_recent_execution: "existing_execution_followup" }),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-status-question-test",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("delegation_ticket_rejected:not_new_work");
+    expect(result.dispatch_executed).toBe(false);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.materialized).toBe(false);
+    expectNoDispatchSideEffects(workContractId);
+  });
+
+  it("new work with explicit new task request dispatches normally", async () => {
+    useTempWorkspace();
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
+    const task = "Research the runtime ledger scheduler queue hot path and summarize the dispatch flow.";
+    const decision = await resolveDelegatePolicy(task, "session-hot-path-new-work", {
+      relation_to_recent_execution: "new_work",
+      expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
+    });
+    const workContractId = String(decision.workContractId ?? "");
+    expect(workContractId).not.toBe("");
+    seedDelegationTicket(loadWorkContract(workContractId) as WorkContract);
+
+    const result = await executeDispatch({
+      task,
+      delegateTaskId: `delegate-task:${workContractId}`,
+      workContractId,
+      policyJson: JSON.stringify(decision),
+      metadataJson: JSON.stringify({
+        relation_to_recent_execution: "new_work",
+        expected_deliverable: "summary of runtime ledger scheduler queue dispatch flow",
+      }),
+    }, {
+      helperInvoker: successfulHelper(),
+      sessionId: "session-hot-path-new-work-test",
+    });
+
+    expect(result.error).toBe("spawn_not_confirmed");
+    expect(result.dispatch_executed).toBe(true);
+    expect(result.spawn_executed).toBe(false);
+    expect(result.materialized).toBe(true);
+    expectDispatchSideEffects(workContractId);
   });
 });

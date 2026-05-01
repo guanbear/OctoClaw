@@ -222,6 +222,46 @@ export const JUDGE_FAST_DEFAULTS: Omit<JudgeFastConfig, "modelId" | "baseUrl" | 
   local: false,
 };
 
+export interface JudgeValidationResult {
+  valid: boolean;
+  degraded: boolean;
+  degradedReasons: string[];
+}
+
+/** Validate parsed JudgeOutput and report whether delegate output is authoritative. */
+export function validateJudgeOutputDetailed(value: unknown): JudgeValidationResult {
+  if (typeof value !== "object" || value === null) {
+    return { valid: false, degraded: false, degradedReasons: [] };
+  }
+
+  const obj = value as Record<string, unknown>;
+  if (!["reply", "delegate"].includes(obj.route as string)) {
+    return { valid: false, degraded: false, degradedReasons: [] };
+  }
+  if (typeof obj.confidence !== "number" || obj.confidence < 0 || obj.confidence > 1) {
+    return { valid: false, degraded: false, degradedReasons: [] };
+  }
+
+  const degradedReasons: string[] = [];
+  if (obj.route === "delegate") {
+    if (obj.scope === undefined || obj.scope === null) {
+      degradedReasons.push("missing_scope");
+    }
+    if ((obj.tool_need_hint ?? obj.toolNeedHint) === undefined || (obj.tool_need_hint ?? obj.toolNeedHint) === null) {
+      degradedReasons.push("missing_tool_need_hint");
+    }
+    if ((obj.duration_hint ?? obj.durationHint) === undefined || (obj.duration_hint ?? obj.durationHint) === null) {
+      degradedReasons.push("missing_duration_hint");
+    }
+  }
+
+  return {
+    valid: true,
+    degraded: degradedReasons.length > 0,
+    degradedReasons,
+  };
+}
+
 /** Validate a parsed JudgeOutput. Returns true if hot-path fields are present and valid. */
 export function isValidJudgeOutput(value: unknown): value is JudgeOutput {
   if (typeof value !== "object" || value === null) return false;

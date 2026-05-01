@@ -76,4 +76,72 @@ describe("buildDelegationTicketDryRun", () => {
     expect(result.ticket_denial_reason).toBe("not_new_work");
     expect(result.is_new_work).toBe(false);
   });
+
+  it("does not issue a ticket for existing execution follow-up relation", () => {
+    const result = buildDelegationTicketDryRun({
+      decision: {
+        route_decision: { route: "delegate" },
+        router_decision_v2: { request_kind: "delegated_task" },
+      },
+      metadata: { relation_to_recent_execution: "existing_execution_followup" },
+      payload: { summary: "检查刚才的执行结果" },
+    });
+
+    expect(result.ticket_decision).toBe("ticket_not_issued");
+    expect(result.ticket_denial_reason).toBe("not_new_work");
+    expect(result.is_new_work).toBe(false);
+  });
+
+  it("does not issue a ticket for existing execution provenance relation", () => {
+    const result = buildDelegationTicketDryRun({
+      decision: {
+        route_decision: { route: "delegate" },
+        router_decision_v2: { request_kind: "delegated_task" },
+      },
+      metadata: {
+        intent_packet: {
+          relation_to_recent_execution: "existing_execution_provenance_query",
+        },
+      },
+      payload: { summary: "说明刚才为什么这么执行" },
+    });
+
+    expect(result.ticket_decision).toBe("ticket_not_issued");
+    expect(result.ticket_denial_reason).toBe("not_new_work");
+    expect(result.is_new_work).toBe(false);
+  });
+
+  it("would issue a ticket for new work relation with valid deliverable", () => {
+    const result = buildDelegationTicketDryRun({
+      decision: {
+        route_decision: { route: "delegate" },
+        router_decision_v2: { request_kind: "delegated_task" },
+      },
+      metadata: { relation_to_recent_execution: "new_work" },
+      payload: { summary: "实现新的 runtime ledger 校验" },
+    });
+
+    expect(result.ticket_decision).toBe("ticket_would_issue");
+    expect(result.ticket_denial_reason).toBe("");
+    expect(result.is_new_work).toBe(true);
+    expect(result.expected_deliverable).toBe("实现新的 runtime ledger 校验");
+  });
+
+  it("would issue a ticket for ambiguous relation with no other follow-up signals", () => {
+    const result = buildDelegationTicketDryRun({
+      decision: {
+        route_decision: { route: "delegate" },
+        router_decision_v2: { request_kind: "delegated_task" },
+        request: {
+          metadata: { relation_to_recent_execution: "ambiguous" },
+        },
+      },
+      payload: { summary: "补充新的 dry-run 覆盖" },
+    });
+
+    expect(result.ticket_decision).toBe("ticket_would_issue");
+    expect(result.ticket_denial_reason).toBe("");
+    expect(result.is_new_work).toBe(true);
+    expect(result.expected_deliverable).toBe("补充新的 dry-run 覆盖");
+  });
 });

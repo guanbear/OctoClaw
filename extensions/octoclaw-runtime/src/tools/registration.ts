@@ -2469,11 +2469,9 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             schedulerQueueId = asString(ticketAdmission.queue_id);
             if (runtimeLedgerMode === "enforce") {
               if (!isSchedulerEnabled()) {
-                schedulerDispatchState = "bypassed";
-                metadata.scheduler_bypassed = true;
-                metadata.scheduler_status = "scheduler_bypassed";
-                warnToolLogger(ctx, "OCTOCLAW_SCHEDULER_ENABLED is false; bypassing scheduler gating in enforce mode");
-                await recordPolicyReplay("dispatch_scheduler_bypassed", {
+                const errorMessage = "blocked_by_scheduler_mandatory:scheduler_not_enabled";
+                warnToolLogger(ctx, "OCTOCLAW_SCHEDULER_ENABLED is false; blocking dispatch because scheduler gating is mandatory in enforce mode");
+                await recordPolicyReplay("dispatch_scheduler_mandatory_blocked", {
                   sessionKey: managedSessionKey,
                   sessionId: asString(ctx.sessionId),
                   route: resolvedRoute,
@@ -2481,7 +2479,30 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                   work_contract_id: ticketAdmission.work_contract_id ?? null,
                   attempt_id: ticketAdmission.attempt_id ?? null,
                   reason: "scheduler_not_enabled",
+                  dispatch_executed: false,
+                  spawn_executed: false,
+                  materialized: false,
+                  retryable: false,
+                  terminal: true,
                 }, toolLogger(ctx), cachedDecision);
+                await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+                return dispatchHonestyFailure({
+                  route: resolvedRoute,
+                  error: errorMessage,
+                  retryable: false,
+                  terminal: true,
+                  details: {
+                    status: "blocked_by_scheduler_mandatory",
+                    scheduler_status: "blocked_by_scheduler_mandatory",
+                    queue_id: schedulerQueueId || null,
+                    work_contract_id: ticketAdmission.work_contract_id ?? null,
+                    attempt_id: ticketAdmission.attempt_id ?? null,
+                    reason: "scheduler_not_enabled",
+                    dispatch_executed: false,
+                    spawn_executed: false,
+                    materialized: false,
+                  },
+                });
               } else if (!schedulerQueueId) {
                 const errorMessage = "blocked_by_scheduler:missing_queue_id";
                 await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });

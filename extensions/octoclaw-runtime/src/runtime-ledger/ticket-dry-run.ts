@@ -3,7 +3,7 @@ import type { WorkContract } from "@octoclaw/contracts/work-contract";
 type UnknownRecord = Record<string, unknown>;
 
 export type DelegationTicketDryRunDecision = "ticket_would_issue" | "ticket_not_issued";
-export type DelegationTicketDenialReason = "" | "not_new_work" | "missing_expected_deliverable";
+export type DelegationTicketDenialReason = "" | "not_new_work" | "missing_expected_deliverable" | "recent_delegated_execution";
 
 export interface DelegationTicketDryRunResult {
   ticket_decision: DelegationTicketDryRunDecision;
@@ -65,6 +65,7 @@ function isFollowup(input: DelegationTicketDryRunInput): boolean {
   const intentPacket = asRecord(
     metadata.intent_packet ?? requestMetadata.intent_packet,
   );
+  const requestIntentPacket = asRecord(requestMetadata.intent_packet);
   const routerDecision = asRecord(decision.router_decision_v2);
   const executionCoverage = asRecord(decision._execution_coverage_packet);
   const coverageExecution = asRecord(asRecord(executionCoverage.coverage).execution);
@@ -76,6 +77,19 @@ function isFollowup(input: DelegationTicketDryRunInput): boolean {
     intentPacket.intentClass,
   );
   const requestKind = asString(routerDecision.request_kind);
+  const relationToRecent = firstString(
+    metadata.relation_to_recent_execution,
+    asRecord(intentPacket).relation_to_recent_execution,
+    requestMetadata.relation_to_recent_execution,
+    requestIntentPacket.relation_to_recent_execution,
+  );
+
+  if (
+    relationToRecent === "existing_execution_followup"
+    || relationToRecent === "existing_execution_provenance_query"
+  ) {
+    return true;
+  }
 
   return intentClass === "execution_followup"
     || requestKind === "status_or_provenance"

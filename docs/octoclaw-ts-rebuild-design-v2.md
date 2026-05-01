@@ -221,7 +221,7 @@ octoclaw_dispatch
 | 并发 / 排队 / 修订 | TaskFlow、delegate attempt、continuity 已有底层元素 | 还缺明确 scheduler / amendment protocol：独立任务应可并发，有依赖时排队，补充/修改已有任务时应 steer / queue-after / cancel-respawn 三选一 |
 | main-agent rule 注入 | 当前不是仓库文件式 `AGENTS.md`，而是 runtime 通过 `prependSystemContext` 注入 rule/policy projection | 这个方向正确；后续要给 rule 注入做 contract/snapshot test，确保它只承载协作宪法和 objection 协议，不复制 judge 规则 |
 | policy spec / judge | judge prompt 已从 canonical spec 渲染，route 仍收口为 `reply | delegate` | runtime validator 弱于 spec：缺失 `scope/tool_need_hint/duration_hint` 仍可能通过；N1/N2 要收紧 schema 或显式记录 fallback/degraded |
-| ACK | ACK guard、route commit ACK、delegate tier suppression 的主链路已稳 | 当前实现禁用 `text_ack0`，而 policy spec 仍允许 reaction/text 二选一；N1 需要选择产品口径并让 spec、实现、测试一致 |
+| ACK | ACK guard、route commit ACK、delegate tier suppression 的主链路已稳 | 口径已收齐：reaction ACK0 为 primary；reaction 发送/尝试后不再 text fallback；无 reaction channel 走 2500ms gated text ACK0；delegate route 不发送 reply-style ACK0；ACK tests 174/174 pass |
 
 特别澄清：`AGENTS.md` 在当前系统里不是必须存在的 repo 文件。历史文档中说的 `AGENTS.md` 职责，现在应理解为“注入给主 agent 的静态协作 rule”。它不负责 judge 路由；真正的 route/mode/role/scope 规则仍只来自 canonical decision policy spec。
 
@@ -357,7 +357,7 @@ N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `w
 #### N1-C：scheduler、并发、依赖和锁
 
 1. dispatch materialization 与 main turn lock 解耦；main lock 只保护 transcript/delivery 一致性，不阻塞独立 worker spawn。
-2. 引入 OctoClaw runtime ledger（建议 SQLite）作为 scheduler/attempt/ticket/completion binding 的事务真相；OpenClaw `flows/registry.sqlite` 和 `tasks/runs.sqlite` 作为 native lifecycle authority 只读/通过 API 同步，不私自改 schema。N1-MVP 只实现 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events`；`delivery_outbox`、`amendments`、`resource_locks` 保留现有 JSON/adapter/inline 路径，不在第一个实现 slice 强制迁移。Scheduler 限定单进程 SQLite 事务队列/lease，无常驻 daemon。
+2. 引入 OctoClaw runtime ledger（建议 SQLite）作为 scheduler/attempt/ticket/completion binding 的事务真相；OpenClaw `flows/registry.sqlite` 和 `tasks/runs.sqlite` 作为 native lifecycle authority，但生产同步应优先通过 bridge/API，`queryNativeState` 只是 staged/diagnostic hook，不声明生产直接读取 OpenClaw native DB。N1-MVP 只实现 `work_contracts`、`delegation_tickets`、`task_attempts`、`scheduler_queue`、`completion_bindings`、`runtime_events`；`delivery_outbox`、`amendments`、`resource_locks` 保留现有 JSON/adapter/inline 路径，不在第一个实现 slice 强制迁移。Scheduler 限定单进程 SQLite 事务队列/lease，无常驻 daemon。
 3. `task-state.json` 降为可重建 read-model snapshot / compatibility projection，不再承担并发 queue pop、lease、resource lock、attempt transition 的唯一 durable truth。
 4. 独立任务可并发 spawn；同一资源/写域/显式依赖的任务必须排队，状态写成 `queued_after=<taskId>` 或 `blocked_by=<resource>`。
 5. scheduler queue 必须有 `queue_status`、`dependency_ids`、`resource_keys`、`lease_owner`、`lease_expires_at`、`revision`、`wakeup_at`，并用 CAS/transaction 防止双 pop。
@@ -380,7 +380,7 @@ N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `w
 3. 状态面默认展示 compact canonical verdict：`completion_orphaned`、`binding_mismatch`、`stale_running`、`timeout_no_result`、`deliverable_ready`、`delivered` 等；raw/debug 才展示 native/replay/projection 细节。
 4. 明确 `policyState` 禁区：不得恢复成 status fallback、spawn proof、result proof 或 cross-turn ledger。
 5. complexity 只展示 WorkContract canonical `complexity_final`；judge proposed/final diff 只进 replay/nightly/raw。
-6. 对齐 ACK text ACK0 口径：如果产品决定禁用 text ACK0，更新 spec 和测试；如果保留，则实现非 reaction channel 的 gated text ACK0。
+6. ACK text ACK0 口径已对齐：reaction ACK0 为 primary；reaction 发送/尝试后不再 text fallback；无 reaction channel 走 2500ms gated text ACK0；delegate route 不发送 reply-style ACK0；text ACK0 是 active fallback，不是禁用路径。
 
 #### N1 验收标准
 
@@ -390,7 +390,7 @@ N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `w
 - `resume_preferred` 的测试能证明同一 WorkContract follow-up 复用 preferred child session，而不是生成新 UUID。
 - `retry` 的测试能证明新 attempt 仍属于同一 delegate task，并且 status/timeline/replay 能区分原失败 attempt 和新 attempt。
 - 两个独立 delegated tasks 能并发 running；有依赖的 task 显示 `queued_after=<taskId>`；主会话忙不能导致 no-op dispatch。
-- scheduler/attempt/ticket/completion binding 有事务 ledger；`task-state.json` 可删除后由 ledger + OpenClaw native DB + replay 重建 status projection。
+- scheduler/attempt/ticket/completion binding 有事务 ledger；`task-state.json` 可删除后由 ledger + OpenClaw bridge/API native lifecycle snapshot + replay 重建 status projection。
 - 对运行中任务的补充修改能稳定落到 steer / queue-after / cancel-respawn / status-only 之一，并写入 durable projection。
 - task-state 损坏不会被当成空状态写回覆盖；operator/status 能看到明确 recovery signal。
 - 重启后 `octoclaw_status` 与 IM/status projection 对同一任务给出一致状态。

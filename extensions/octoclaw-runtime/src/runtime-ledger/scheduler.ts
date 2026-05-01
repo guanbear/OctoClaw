@@ -189,7 +189,8 @@ function unblockRowsBlockedBy(db: DatabaseSync, releasedQueueId: string, nowIso:
 }
 
 export function resolveSchedulerConfig(): SchedulerConfig {
-  const enabled = String(process.env.OCTOCLAW_SCHEDULER_ENABLED || "").trim() === "1";
+  const schedulerEnabledValue = String(process.env.OCTOCLAW_SCHEDULER_ENABLED || "").trim().toLowerCase();
+  const enabled = schedulerEnabledValue === "1" || schedulerEnabledValue === "true";
   const maxConcurrentSpawns = Math.max(1, Number(process.env.OCTOCLAW_MAX_CONCURRENT_SPAWNS) || 1);
   const leaseDurationMs = 5 * 60 * 1000;
   return { enabled, maxConcurrentSpawns, leaseDurationMs };

@@ -91,10 +91,12 @@ But it must be rebuildable from:
 
 ```text
 OctoClaw runtime ledger
-  + OpenClaw native flow/task DBs
+  + OpenClaw native lifecycle snapshot
   + runtime replay tail
   + completion files/outbox
 ```
+
+Native lifecycle snapshots must come from OpenClaw bridge/API first. The `queryNativeState` path is a staged diagnostic hook and future integration point; it is not a production dependency and must not be documented as production reads from the OpenClaw native DB.
 
 If `task-state.json` is missing or corrupt, the system must rebuild or quarantine it; it must not erase ledger truth.
 
@@ -106,11 +108,18 @@ The project goal is more stable, lighter, faster. N1 must start with a minimal r
 
 ### 3.1 N1-MVP tables (implement in first slice)
 
-Only these tables ship in the first implementation slice:
+Only these six canonical N1-MVP business tables ship in the first implementation slice. `schema_migrations` is migration metadata, not a business/runtime table:
+
+Migration metadata:
 
 | Table | Purpose | Required for |
 |-------|---------|--------------|
 | `schema_migrations` | Idempotent migration tracking | Step 0 |
+
+Canonical N1-MVP runtime ledger tables:
+
+| Table | Purpose | Required for |
+|-------|---------|--------------|
 | `work_contracts` | Canonical WorkContract truth | All steps |
 | `delegation_tickets` | One-shot dispatch authorization | Steps 1-3 |
 | `task_attempts` | Spawn/retry/respawn attempt records | Steps 1+ |
@@ -522,7 +531,7 @@ Acceptance:
 Deliverables:
 
 - Read adapter that first uses the existing OpenClaw runtime bridge / `TaskFlowPort` / native helper capabilities.
-- Optional direct SQLite diagnostic adapter for `flow_runs` and `task_runs`, isolated behind schema/version guards and used only when bridge/API coverage is missing.
+- Optional `queryNativeState` direct SQLite diagnostic hook for `flow_runs` and `task_runs`, isolated behind schema/version guards and used for diagnostics/reconcile smoke tests only. This is a future integration point, not the production native lifecycle path.
 - Reconciliation job compares ledger attempt native ids with native lifecycle state.
 - `spawn_confirmed` only set when native task/session/process evidence exists.
 
@@ -531,7 +540,7 @@ Acceptance:
 - TaskFlow creation without child session/run is not `spawn_confirmed`.
 - Native terminal state updates ledger attempt terminal state.
 - Missing native row marks attempt `binding_mismatch` or `dispatch_materialized_but_no_spawn_evidence`.
-- Tests mock the bridge adapter; direct SQLite tests are diagnostic/fallback only.
+- Tests mock the bridge adapter; direct SQLite tests cover the staged diagnostic hook only.
 
 ### Step 6 — Completion binding and orphan recovery
 
@@ -553,12 +562,12 @@ Acceptance:
 Deliverables:
 
 - Final/progress/status delivery continues through the existing JSON delivery outbox adapter; ledger stores only status/projection evidence needed to avoid false `completed`.
-- `task-state.json` projection generator from ledger + native DB snapshot.
+- `task-state.json` projection generator from ledger + OpenClaw bridge/API native lifecycle snapshot.
 - `octoclaw_status` default uses compact canonical verdict; raw/debug shows underlying planes.
 
 Acceptance:
 
-- Deleting `task-state.json` and running rebuild restores status from ledger/native DB.
+- Deleting `task-state.json` and running rebuild restores status from ledger plus OpenClaw bridge/API native lifecycle snapshot.
 - Deliverable result with failed Slack send appears `deliverable_ready` / `delivery_retry`, not completed.
 - Default status no longer lists reply-only work as delegated task noise.
 
@@ -607,7 +616,7 @@ Acceptance:
 | Native sync | flow exists/no child run, child run terminal, native row missing |
 | Completion | matched, wrong path, empty WorkContractId, invalid JSON, duplicate completion |
 | Delivery | existing JSON outbox sent/failed/retry, duplicate final suppression, no false completed |
-| Projection | delete/corrupt `task-state.json`, rebuild from ledger/native DB |
+| Projection | delete/corrupt `task-state.json`, rebuild from ledger plus OpenClaw bridge/API native lifecycle snapshot |
 | Amendment | post-MVP acceptance if enabled: steer, queue-after, cancel-respawn, status-only |
 | Replay/nightly | ticket allow/deny, false delegate, completion orphan, scheduler queue, duplicate owner |
 

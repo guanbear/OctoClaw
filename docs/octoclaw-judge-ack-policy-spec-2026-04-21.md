@@ -65,41 +65,40 @@ v1 只保留一个热路径 authority judge，再加一个可选本地文案增�
 
 ### 3.3 推荐触发时序
 
-当前 v1 推荐把 ACK Phase 1 默认收成 **reply 路径专用**。2026-04-24 修正后，首个可见 ACK 不再固定等 5s，而是拆成两个互斥 modality：
+当前 v1 推荐把 ACK Phase 1 默认收成 **reply 路径专用**。2026-05-01 修正后，首个可见 ACK 不再固定等 5s，而是拆成两个互斥 modality。当前实现口径：reaction ACK0 是 primary；text ACK0 仍然 active，但只作为无 reaction 能力 channel 的 gated fallback；delegate route 不发送 reply-style ACK0。
 
-1. `reaction_ack = 800ms - 1200ms`
+1. `reaction_ack = 300ms`
    - channel 支持 reaction / emoji ack 且配置允许时使用
-   - 算作 ACK0
-   - 发送后不再发送 `text_ack0`
-2. `text_ack0 = 2500ms - 3500ms`
-   - channel 不支持 reaction、reaction 不可靠、或场景偏正式时使用
-   - 算作 ACK0
-   - 当前 `refactor/0.4.0-stable` 实现层暂时禁用了 text ACK0；下一轮必须二选一收口：
-     - 要么恢复 gated `text_ack0`，用于不支持 reaction 的 reply channel。
-     - 要么把本 spec 改成 reaction-only ACK0，并为无 reaction channel 写清楚 suppress / fallback 策略。
+   - 是 primary ACK0
+   - 发送成功或已经尝试发送后，不再发送 `text_ack0` fallback
+2. `text_ack0 = 2500ms`
+   - 只在 channel 不支持 reaction / emoji ACK 时使用
+   - 是 active ACK0 fallback，不是 disabled path
+   - 必须通过 Phase 1 gate：仍无 first token、仍满足 `ack_eligible`、未发送/尝试 reaction ACK、且当前 route 不是 delegate
 3. `ack0_hard_ceiling = 5s`
    - 只是保守上限，不是默认等待时间
-4. `tier1 = 18s`
-5. `tier2 = 45s`
-6. `tier3 = 120s`
+4. `tier1 = 12s`
+5. `tier2 = 30s`
+6. `tier3 = 90s`
 
 推荐时序解释：
 
-1. `0-800ms`
+1. `0-300ms`
    - 优先等主模型自己首响
    - 避免主模型本可很快出字时被 ACK 抢占
-2. `~1s`
+2. `~300ms`
    - 若仍无 first token，且 channel 支持 reaction ACK，则 runtime 可发 `reaction_ack`
-   - `reaction_ack` 与 `text_ack0` 对同一 turn 二选一
-3. `~3s`
-   - 若仍无 first token，且未发 reaction ACK，Phase 1 gate 允许，则 runtime 发 `text_ack0`
-4. `~18s`
+   - `reaction_ack` 与 `text_ack0` 对同一 turn 二选一；reaction 已发送或已尝试后，不再降级补 text ACK0
+3. `~2500ms`
+   - 若仍无 first token，channel 无 reaction ACK 能力，且 Phase 1 gate 允许，则 runtime 发 `text_ack0`
+   - delegate route 不发送 reply-style ACK0；delegate 的可见反馈由派发/状态/progress 语义承担
+4. `~12s`
    - 到达 `tier1`
    - 若仍静默且仍处于 ACK eligible 状态，则允许第一次更明确的“还在处理”提示
-5. `~45s`
+5. `~30s`
    - 到达 `tier2`
    - 若仍静默，则进入长一点的处理中提示
-6. `~120s`
+6. `~90s`
    - 到达 `tier3`
    - 若仍静默，则允许转成“是否继续等待/是否先给阶段结果”的话术
 7. 正式输出已出现

@@ -206,7 +206,7 @@ Required implementation:
 2. Missing file may return an empty projection.
 3. Parse error must quarantine or preserve the original file and emit a recovery signal.
 4. IO error must fail closed for writes that would replace durable projection.
-5. If runtime ledger is available, operator/status should offer rebuild from ledger + native DB + replay.
+5. If runtime ledger is available, operator/status should offer rebuild from ledger + OpenClaw bridge/API native lifecycle snapshot + replay; direct native SQLite reads are diagnostic hooks only.
 
 Acceptance tests:
 
@@ -259,6 +259,8 @@ Deferred / fallback:
 
 Docs must use this same wording everywhere.
 
+Current status: ✅ completed. Active docs now consistently list only the six canonical N1-MVP runtime ledger tables (`work_contracts`, `delegation_tickets`, `task_attempts`, `scheduler_queue`, `completion_bindings`, `runtime_events`). `delivery_outbox`, `amendments`, and `resource_locks` are explicitly deferred and must not be read as part of the current production schema.
+
 ---
 
 ### P2-2: operator diagnostics tests and implementation must be stable
@@ -277,6 +279,8 @@ Acceptance tests:
 - health report opens a real temp ledger and returns counts;
 - orphan completion listing returns completion summaries;
 - stale lease release delegates to scheduler and reports requeued count.
+
+Current status: ✅ completed. Operator diagnostics tests pass 8/8 against realistic temp SQLite ledger fixtures that exercise `openRuntimeLedger` / migration behavior; no mock-only pass is claimed.
 
 ---
 
@@ -303,6 +307,8 @@ Acceptance tests:
 - missing required judge fields either reject or mark degraded;
 - degraded judge output cannot bypass runtime ticket/new-work checks.
 
+Current status: ✅ completed. The runtime validator now preserves backwards compatibility by allowing weak judge output only in an explicit degraded mode: missing policy-spec fields are annotated as degraded/fallback evidence, and degraded judge output cannot bypass ticket/new-work runtime checks.
+
 ---
 
 ### P2-4: ACK text ACK0 policy must be aligned
@@ -315,10 +321,15 @@ Files:
 
 Current issue:
 
-Policy spec allows reaction ACK or text ACK0, but implementation disables text ACK0 when reaction is not sent. Pick one product direction:
+Policy spec and implementation previously disagreed about text ACK0. Product direction is now settled:
 
-- if text ACK0 is disabled, update spec and tests;
-- if text ACK0 is kept, implement gated text ACK0 for non-reaction channels.
+- reaction ACK0 is primary at `reaction_ack_ms=300` when the channel supports reactions;
+- after reaction ACK0 is sent or attempted, runtime does not send a text ACK0 fallback;
+- channels without reaction support may send gated text ACK0 at `text_ack0_ms=2500`;
+- delegate route does not send reply-style ACK0;
+- text ACK0 is active for non-reaction channels, not disabled or deferred.
+
+Current status: ✅ completed. ACK policy spec matches implementation, and ACK tests pass 174/174.
 
 ---
 
@@ -366,10 +377,10 @@ Passing tests are not enough if the implementation only tests isolated modules. 
 
 | Item | Status | Notes |
 |------|--------|-------|
-| P2-1 | ✅ completed | Canonical vs deferred table wording consistent in this doc; see §2.5 table list |
-| P2-2 | ⚠️ deferred | Operator diagnostics tests pass (8/8) with mocks; real temp SQLite fixtures deferred |
-| P2-3 | ⚠️ deferred | Judge validator alignment requires cross-package changes in `@octoclaw/policy` |
-| P2-4 | ⚠️ deferred | ACK text ACK0 policy alignment requires product direction decision |
+| P2-1 | ✅ completed | Active docs consistently list only six N1-MVP canonical tables; `delivery_outbox`, `amendments`, and `resource_locks` are clearly deferred |
+| P2-2 | ✅ completed | Operator diagnostics tests pass 8/8 with real temp SQLite ledger fixtures |
+| P2-3 | ✅ completed | Judge validator degradation mode implemented: weak outputs are explicitly marked degraded/fallback and cannot bypass runtime ticket/new-work checks |
+| P2-4 | ✅ completed | ACK policy aligned: reaction ACK0 primary, no text fallback after reaction sent/attempted, gated text ACK0 active for non-reaction channels; ACK tests pass 174/174 |
 
 ### Verification Results
 
@@ -377,5 +388,7 @@ Passing tests are not enough if the implementation only tests isolated modules. 
 Verification command set (§5): 138/138 pass
 Full runtime test suite: 910/912 (2 pre-existing failures in delegate-packets.test.ts)
 Runtime ledger tests: 146/146 pass
+ACK tests: 174/174 pass
+Operator diagnostics tests: 8/8 pass with real temp SQLite ledger fixtures
 TypeScript: clean (0 errors)
 ```

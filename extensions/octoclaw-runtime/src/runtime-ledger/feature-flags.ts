@@ -17,7 +17,8 @@ export function isLedgerActive(flag?: RuntimeLedgerFlag): boolean {
 // ── OCTOCLAW_SCHEDULER_ENABLED ───────────────────────────────────────
 
 export function isSchedulerEnabled(): boolean {
-  return String(process.env.OCTOCLAW_SCHEDULER_ENABLED ?? "").trim() === "1";
+  const value = String(process.env.OCTOCLAW_SCHEDULER_ENABLED ?? "").trim().toLowerCase();
+  return value === "1" || value === "true";
 }
 
 // ── OCTOCLAW_TASK_STATE_REBUILD ──────────────────────────────────────

@@ -153,6 +153,11 @@ function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function isDegradedDelegateJudgeResult(value: unknown): boolean {
+  const result = asRecord(value);
+  return result.route === "delegate" && result.judge_schema_degraded === true;
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => asString(item)).filter(Boolean)
@@ -1611,6 +1616,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
   let judgeRouteConfidence: number | undefined;
   let delegateReasonCodes: string[] = [];
   let deterministicFallbackApplied = false;
+  let degradedFallbackApplied = false;
   let deterministicRuleApplied = false;
   let deterministicRuleReason: string | null = null;
 
@@ -1663,6 +1669,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       if (judgeResult === null && lastJudgeFailureClass) {
         metadata._judge_failure_class = lastJudgeFailureClass;
       }
+      const degradedDelegateJudge = isDegradedDelegateJudgeResult(judgeResult);
       const judgeLatencyMs = Date.now() - judgeStart;
       if (process.env.OCTOCLAW_JUDGE_DEBUG) {
         console.log(`[octoclaw-judge] judge done: ${judgeLatencyMs}ms result=${judgeResult ? `route=${judgeResult.route} conf=${judgeResult.confidence} ack="${judgeResult.ackText?.slice(0, 30)}"` : "null(timeout)"}`);
@@ -1684,9 +1691,13 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         rule_route: decision.route,
         judge_override: false,
         judge_mode: judgeConfig.shadowMode ? "shadow" : "active",
+        judge_schema_degraded: degradedDelegateJudge,
+        degraded_reasons: asStringArray(asRecord(judgeResult).degraded_reasons),
       };
 
-      // Deterministic hard-boundary fallback when judge timed out
+      // Deterministic hard-boundary fallback when judge timed out (null).
+      // Degraded delegate still uses the judge's route; degradation only blocks
+      // downstream dispatch authorization, not the route itself.
       if (judgeResult === null) {
         const conversationControl = trustedConversationControl(metadata);
         const intentClass = structuredIntentClass(metadata);
@@ -1718,24 +1729,27 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
         if ((timeoutExecutionOverride || timeoutRequiresRefresh) && timeoutIsFollowup) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
-          deterministicFallbackApplied = true;
+          deterministicFallbackApplied = !degradedDelegateJudge;
+          degradedFallbackApplied = degradedDelegateJudge;
           judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = `timeout_execution_coverage_override:${timeoutExecutionOverride ? "provenance/status_reply" : "control_plane_refresh"}`;
+          judgeShadowLog.fallback_reason = `${degradedDelegateJudge ? "degraded" : "timeout"}_execution_coverage_override:${timeoutExecutionOverride ? "provenance/status_reply" : "control_plane_refresh"}`;
           judgeShadowLog.final_judge_route = "reply";
         } else if (isFollowupNoCoverage) {
           judgeRouteOverride = "reply";
           judgeSucceeded = true;
-          deterministicFallbackApplied = true;
+          deterministicFallbackApplied = !degradedDelegateJudge;
+          degradedFallbackApplied = degradedDelegateJudge;
           judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = "timeout_execution_followup_no_coverage→reply(no_verifiable_record)";
+          judgeShadowLog.fallback_reason = `${degradedDelegateJudge ? "degraded" : "timeout"}_execution_followup_no_coverage→reply(no_verifiable_record)`;
           judgeShadowLog.final_judge_route = "reply";
         } else if (hardBoundarySignals.some(Boolean)) {
           // Deterministic hard-boundary: high-risk task must not default to reply
           judgeRouteOverride = "delegate";
           judgeSucceeded = true;
-          deterministicFallbackApplied = true;
+          deterministicFallbackApplied = !degradedDelegateJudge;
+          degradedFallbackApplied = degradedDelegateJudge;
           judgeShadowLog = judgeShadowLog ?? {};
-          judgeShadowLog.fallback_reason = `deterministic_hard_boundary:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate"][i] : null).filter(Boolean).join("+")}`;
+          judgeShadowLog.fallback_reason = `${degradedDelegateJudge ? "judge_degraded_fallback" : "deterministic_hard_boundary"}:${hardBoundarySignals.map((v, i) => v ? ["intent", "tool_need", "duration", "conv_route", "explicit_delegate"][i] : null).filter(Boolean).join("+")}`;
           judgeShadowLog.final_judge_route = "delegate";
         }
       }
@@ -1887,10 +1901,10 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       work_type: asString(metadata.workType, "research"),
       phase: "execute",
       protocol: finalDecision.route === "reply" ? "normal" : "delegated",
-      route_source: deterministicFallbackApplied ? "fallback" : (deterministicRuleApplied ? "rule" : (judgeSucceeded ? "judge" : (judgeShadowLog?.fallback_reason ? "fallback" : "rule"))),
+      route_source: degradedFallbackApplied ? "judge_degraded_fallback" : (deterministicFallbackApplied ? "fallback" : (deterministicRuleApplied ? "rule" : (judgeSucceeded ? "judge" : (judgeShadowLog?.fallback_reason ? "fallback" : "rule")))),
       judge_timeout: judgeShadowLog?.judge_timeout ?? false,
       fallback_reason: judgeShadowLog?.fallback_reason ?? null,
-      final_judge_source: deterministicRuleApplied ? "policy_rule" : (deterministicFallbackApplied ? "timeout_fallback" : (judgeSucceeded ? "local" : (judgeShadowLog?.judge_timeout ? "timeout" : "no_judge"))),
+      final_judge_source: deterministicRuleApplied ? "policy_rule" : (degradedFallbackApplied ? "judge_degraded_fallback" : (deterministicFallbackApplied ? "timeout_fallback" : (judgeSucceeded ? "local" : (judgeShadowLog?.judge_timeout ? "timeout" : "no_judge")))),
       complexity_band: judgeComplexityBand,
       expected_duration_band: judgeExpectedDurationBand,
       quality_bar: judgeQualityBar,

@@ -16,9 +16,9 @@ task-state.json                         compatibility read-model snapshot
 policyState                             per-turn cache, TTL only, not durable truth
 ```
 
-N1 refines the original 4.4 storage model: `task-state.json` remains the compact status/read-model projection, but it is no longer the only durable OctoClaw business-state store for concurrent scheduling. WorkContract, delegation ticket, queue/lease, attempt, completion binding, delivery outbox, amendment, and recovery verdict need transactional semantics and should live in an OctoClaw-owned runtime ledger, preferably SQLite.
+N1 refines the original 4.4 storage model: `task-state.json` remains the compact status/read-model projection, but it is no longer the only durable OctoClaw business-state store for concurrent scheduling. The N1-MVP OctoClaw-owned runtime ledger contains only six canonical tables: WorkContract, delegation ticket, queue/lease, attempt, completion binding, and runtime event truth. Delivery outbox remains on the existing JSON adapter, amendments remain modeled through attempt/retry rows, and resource locks remain inline in scheduler queue fields until explicitly promoted by a later acceptance-driven slice.
 
-OpenClaw native DBs such as `~/.openclaw/flows/registry.sqlite` (`flow_runs`) and `~/.openclaw/tasks/runs.sqlite` (`task_runs`) remain substrate-owned lifecycle truth. OctoClaw should reference them by `flowId` / `nativeTaskId` / `childSessionKey` and update them only via OpenClaw APIs/bridges. Direct DB reads are allowed only as bounded read-only diagnostics with schema guards while OpenClaw bridge coverage is incomplete. OctoClaw must not privately add columns or store WorkContract fields inside native tables.
+OpenClaw native DBs such as `~/.openclaw/flows/registry.sqlite` (`flow_runs`) and `~/.openclaw/tasks/runs.sqlite` (`task_runs`) remain substrate-owned lifecycle truth. OctoClaw should reference them by `flowId` / `nativeTaskId` / `childSessionKey` and update them only via OpenClaw APIs/bridges. The current `queryNativeState` direct-read path is staged/diagnostic only: bounded, read-only, schema-guarded, and not the production native lifecycle integration. OctoClaw must not privately add columns or store WorkContract fields inside native tables.
 
 ## Canonical Task Record
 
@@ -36,9 +36,9 @@ The canonical OctoClaw ledger record is keyed by `workContractId`; the `task-sta
 1. Policy resolution seals a WorkContract and writes it to the OctoClaw runtime ledger.
 2. The ledger issues a delegation ticket and scheduler row when delegate materialization is authorized.
 3. Dispatch validates the ticket/WorkContract from the ledger, then materializes or queues the attempt.
-4. Native TaskFlow/TaskRun materialization writes native task/flow/session ids into the ledger and can be cross-checked against OpenClaw DBs.
+4. Native TaskFlow/TaskRun materialization writes native task/flow/session ids into the ledger and can be cross-checked against OpenClaw bridge/API state; `queryNativeState` direct SQLite checks are diagnostic only.
 5. Child completion finalization validates deterministic completion binding, writes result/delivery state into the ledger, then emits replay and delivery outbox events.
-6. `task-state.json` is regenerated or incrementally projected from the ledger + native DB snapshot for status compatibility.
+6. `task-state.json` is regenerated or incrementally projected from the ledger + OpenClaw native lifecycle snapshot for status compatibility.
 7. `policyState` can cache the current turn decision, but no cross-turn status or dispatch truth depends on it.
 
 ## Read Failure Rules
@@ -77,7 +77,7 @@ If a dispatch cannot proceed because the main session or host is busy, the durab
 - Dispatch validation works from the ledger and can rebuild a status projection if `task-state.json` is missing.
 - Dispatch writes WorkContract-backed ledger records using `workContractId` as the primary key and task-state records as projection.
 - Completion finalization preserves the inline WorkContract in the ledger and projects completion/delivery fields into `task-state.json`.
-- Status can read task-state records for speed, but repair/rebuild reads the ledger + OpenClaw native DBs.
+- Status can read task-state records for speed, but repair/rebuild reads the ledger + OpenClaw bridge/API native lifecycle snapshot; direct SQLite native reads remain diagnostic hooks only.
 - Corrupt task-state read does not silently become an empty durable document.
 - Sealed-but-not-dispatched records are visible as registered/planned/anomalous, never as successful delegation.
 - A dispatch failure follow-up such as “为啥没派发成功呢” does not create a new task and can be answered from durable status facts.
