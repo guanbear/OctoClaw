@@ -8,6 +8,7 @@ import {
   saveWorkContractToTaskState,
   updateWorkContractInTaskState,
 } from "../state/task-state-store.js";
+import { mirrorWorkContractToRuntimeLedger } from "../runtime-ledger/shadow.js";
 
 export function resolveWorkContractLedgerPath(): string {
   const explicitPath = String(process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH || "").trim();
@@ -20,7 +21,11 @@ export function resolveWorkContractTaskStatePath(pathOverride?: string): string 
 }
 
 export function saveWorkContract(contract: WorkContract, taskStatePath?: string): boolean {
-  return saveWorkContractToTaskState(contract, taskStatePath);
+  const result = saveWorkContractToTaskState(contract, taskStatePath);
+  if (result) {
+    try { mirrorWorkContractToRuntimeLedger(contract); } catch { /* best-effort shadow mirror */ }
+  }
+  return result;
 }
 
 export function loadWorkContract(workContractId: string, taskStatePath?: string): WorkContract | null {
@@ -32,7 +37,11 @@ export function updateWorkContract(
   mutator: (contract: WorkContract) => WorkContract,
   taskStatePath?: string,
 ): WorkContract | null {
-  return updateWorkContractInTaskState(workContractId, mutator, taskStatePath);
+  const updated = updateWorkContractInTaskState(workContractId, mutator, taskStatePath);
+  if (updated) {
+    try { mirrorWorkContractToRuntimeLedger(updated); } catch { /* best-effort shadow mirror */ }
+  }
+  return updated;
 }
 
 export function listWorkContractsBySession(sessionKey: string, taskStatePath?: string): WorkContract[] {

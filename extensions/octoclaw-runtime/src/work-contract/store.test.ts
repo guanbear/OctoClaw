@@ -160,6 +160,75 @@ describe("work contract task-state store", () => {
       }
     }
   });
+
+  it("with OCTOCLAW_RUNTIME_LEDGER unset, saveWorkContract does not create runtime DB and existing store behavior is unchanged", () => {
+    const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+    try {
+      const contract = buildContract("session-shadow-off", "off mode test");
+      const result = saveWorkContract(contract, legacyLedgerPath);
+
+      expect(result).toBe(true);
+      expect(mockFs.files.has(taskStatePath)).toBe(true);
+
+      const sqliteFiles = [...mockFs.files.keys()].filter((p) => p.endsWith(".sqlite"));
+      expect(sqliteFiles).toHaveLength(0);
+    } finally {
+      if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+    }
+  });
+
+  it("with OCTOCLAW_RUNTIME_LEDGER=off, saveWorkContract does not create runtime DB", () => {
+    const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "off";
+    try {
+      const contract = buildContract("session-shadow-off-explicit", "off explicit test");
+      const result = saveWorkContract(contract, legacyLedgerPath);
+
+      expect(result).toBe(true);
+      const sqliteFiles = [...mockFs.files.keys()].filter((p) => p.endsWith(".sqlite"));
+      expect(sqliteFiles).toHaveLength(0);
+    } finally {
+      if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+      else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+    }
+  });
+
+  it("saveWorkContract returns true even when shadow mirror degrades (sqlite unavailable)", () => {
+    const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "shadow";
+    try {
+      const contract = buildContract("session-shadow-degraded", "degraded mirror test");
+
+      const result = saveWorkContract(contract, legacyLedgerPath);
+
+      expect(result).toBe(true);
+      expect(mockFs.files.has(taskStatePath)).toBe(true);
+    } finally {
+      if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+      else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+    }
+  });
+
+  it("updateWorkContract returns updated contract even when shadow mirror degrades", () => {
+    const original = process.env.OCTOCLAW_RUNTIME_LEDGER;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "shadow";
+    try {
+      const contract = buildContract("session-update-shadow", "update shadow test");
+      saveWorkContract(contract, legacyLedgerPath);
+
+      const updated = updateWorkContract(
+        contract.workContractId,
+        (current) => ({ ...current, status: "running" }),
+        legacyLedgerPath,
+      );
+
+      expect(updated?.status).toBe("running");
+    } finally {
+      if (original !== undefined) process.env.OCTOCLAW_RUNTIME_LEDGER = original;
+      else delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+    }
+  });
 });
 
 function buildContract(sessionKey: string, userAsk: string) {

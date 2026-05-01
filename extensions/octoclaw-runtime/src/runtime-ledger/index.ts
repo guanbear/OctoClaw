@@ -260,3 +260,5 @@ export function openRuntimeLedger(options?: {
 }
 
 export { MIGRATIONS };
+export { resolveRuntimeLedgerMode, isShadowActive, mirrorWorkContractToRuntimeLedger } from "./shadow.js";
+export { buildRuntimeLedgerShadowDiff } from "./shadow-diff.js";

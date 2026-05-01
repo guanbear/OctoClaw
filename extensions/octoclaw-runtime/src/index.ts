@@ -40,7 +40,19 @@ export type {
   StatementSync,
   LedgerMode,
   LedgerStatus,
+  RuntimeLedgerEnvMode,
   RuntimeLedgerOpenResult,
+  ShadowMirrorResult,
+  ShadowMirrorStatus,
+  ShadowDiffReport,
+  ShadowDiffMissingWorkContract,
+  ShadowDiffMissingAttempt,
   SqliteModule,
   SqliteProvider,
 } from "./runtime-ledger/types.js";
+export {
+  resolveRuntimeLedgerMode,
+  isShadowActive,
+  mirrorWorkContractToRuntimeLedger,
+  buildRuntimeLedgerShadowDiff,
+} from "./runtime-ledger/index.js";
