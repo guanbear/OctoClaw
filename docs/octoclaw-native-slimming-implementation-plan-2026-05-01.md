@@ -1,0 +1,1086 @@
+# OctoClaw 基于 OpenClaw 原生能力的瘦身落地实现文档
+
+日期：2026-05-01
+
+适用范围：OctoClaw refactor 0.4.0 stable，目标宿主 OpenClaw v2026.4.29。
+
+关联审查文档：[`octoclaw-openclaw-native-slimming-review-2026-05-01.md`](./octoclaw-openclaw-native-slimming-review-2026-05-01.md)。审查文档负责“为什么这么改”；本文负责“按什么顺序改、改到什么程度算完成”。
+
+## 0. 结论
+
+建议另起本文，不继续扩展审查文档。
+
+原因是这次改造跨 runtime、ACK、footer、judge、Slack/IM、WorkContract、状态投影。如果把源码映射、阶段目标、验收标准都塞进审查文档，后续执行时很难定位。推荐结构是：
+
+- 审查文档：架构判断、问题列表、取舍理由。
+- 本文：落地路线、文件级改法、验收标准、测试矩阵。
+
+最终目标不是把 OctoClaw 删除，而是把它收缩成：策略、语义合同、模型成本策略、IM 体验层。执行真相、子 agent 生命周期、完成回传、队列、线程路由和状态 registry 应尽量交回 OpenClaw。
+
+## 1. 预期目标
+
+### 1.1 用户体验目标
+
+1. 用户发消息后尽早看到轻量 ACK。优先 reaction/typing，慢回复才补短文本。
+2. delegate 只在 OpenClaw native spawn accepted 后告诉用户“已交给子 agent”。
+3. 子 agent 完成后，由 OpenClaw 原生 handoff/announce 回到 requester，而不是依赖 child 写 completion file。
+4. Slack 群/频道里不因为 footer、重复 ACK、fallback outbox 产生多条噪声消息。
+5. 用户问“刚才的任务怎么样了”时，状态来自 OpenClaw native runs/flows，而不是 OctoClaw 自己猜。
+
+### 1.2 工程目标
+
+1. native path 下不再启动 OctoClaw 自建 scheduler、completion binding、child-finalizer、delivery outbox。
+2. WorkContract 和 OctoClaw metadata store 只保存语义合同、route/judge/replay、IM anchor 和 native refs，不再作为执行状态权威。
+3. judge 不生成用户可见 ACK，不直接授权副作用；它只输出 route/role/complexity/new-work/deliverable 等结构化信号。
+4. footer 默认关闭，只在 compact/debug 模式显示。
+5. IM delivery 通过 OpenClaw runtime/channel route 能力或明确的 port，不再在热路径 shell out CLI 并解析 stdout/stderr。
+
+### 1.3 成功指标
+
+- Slack/IM ACK：配置允许时 reaction ACK p95 < 300ms；慢文本 ACK 每个 turn 最多 1 条。
+- delegate ACK：必须包含 native accepted 事实，spawn accepted 到用户 ACK p95 < 1s。
+- spawn evidence：delegate 成功时必须有 `runId` 或 OpenClaw native task/run id；只有 `childSessionKey` 不算强证据。
+- duplicate visible messages：正常 delegate 流程中重复 ACK/完成通知为 0。
+- restart recovery：OpenClaw 重启后仍可通过 native runs/flows 查到 active/recent child run。
+- footer：生产默认无 route/model/footer 暴露。
+
+## 2. OpenClaw v2026.4.29 源码能力图谱
+
+以下源码位置来自 `openclaw-upstream` 的 `v2026.4.29` tag。
+
+### 2.1 Native subagent spawn
+
+源码：
+
+- `src/agents/tools/sessions-spawn-tool.ts`
+- `src/agents/subagent-spawn.ts`
+- `docs/tools/subagents.md`
+
+关键能力：
+
+- 工具名是 `sessions_spawn`，非阻塞返回 `{ status: "accepted", runId, childSessionKey }`。
+- 参数支持 `task`、`label`、`runtime`、`agentId`、`model`、`thinking`、`cwd`、`runTimeoutSeconds`、`thread`、`mode`、`cleanup`、`sandbox`、`context`、`lightContext`、`attachments`。
+- `sessions_spawn` 明确拒绝 `target/channel/to/threadId/replyTo/transport` 这类 channel delivery 参数；投递应交给 message/session delivery 能力。
+- `subagent-spawn.ts` 会处理 max depth、max children、agent allowlist、sandbox 继承、model/thinking plan、context fork/isolated、child session key、run id、registry registration、lifecycle hooks。
+- OpenClaw 原生 spawn 已有 requester origin、child session、task lane、run timeout、cleanup、completion announce 的框架。
+
+OctoClaw 可用点：
+
+- model/cost policy 最终映射为 `model`、`thinking`、`runTimeoutSeconds`、`context`。
+- WorkContract 保存 `runId`、`childSessionKey`、`mode`、`modelApplied`，不再推进自建执行状态。
+- 不再要求 child worker 写 `.completion.json`。
+
+### 2.2 Native subagent completion delivery
+
+源码：
+
+- `src/agents/subagent-announce-delivery.ts`
+- `docs/tools/subagents.md`
+
+关键能力：
+
+- completion announce 是 push-based。
+- 先 direct delivery，失败后 queue fallback，再 retry/backoff。
+- completion handoff 会带 result/status/runtime stats，并要求 requester agent 用正常 assistant voice 改写，不是原样转发内部 metadata。
+
+OctoClaw 可用点：
+
+- 停用 `delegate/child-finalizer.ts` 和 completion file poller。
+- 不再自建 delivery outbox 负责完成通知。
+- 只在 WorkContract projection 中展示 native status 和语义摘要。
+
+### 2.3 Native task runs / flows
+
+源码：
+
+- `src/plugins/runtime/types-core.ts`
+- `src/plugins/runtime/runtime-tasks.types.ts`
+
+关键能力：
+
+- plugin runtime 暴露 `api.runtime.tasks.runs`、`api.runtime.tasks.flows`、`api.runtime.tasks.managedFlows`。
+- `runs.bindSession()` / `runs.fromToolContext()` 可读 `get/list/findLatest/resolve/cancel`。
+- `flows.bindSession()` / `flows.fromToolContext()` 可读 `get/list/findLatest/resolve/getTaskSummary`。
+- `runtime.taskFlow` 仍在，但已标记 deprecated，应优先用 `runtime.tasks.flows`。
+
+OctoClaw 可用点：
+
+- `task-state.json` 降级为 projection cache，不再是状态源。
+- status/status panel 从 native runs/flows 派生。
+- 只有真正多步 orchestration 才用 managed flow，不要为单次 child spawn 重造 flow。
+
+### 2.4 Visible replies / message tool-only
+
+源码：
+
+- `src/plugin-sdk/channel-reply-pipeline.ts`
+- `extensions/slack/src/monitor/message-handler/prepare.ts`
+- `extensions/slack/src/monitor/message-handler/dispatch.ts`
+- `docs/channels/groups.md`
+
+关键能力：
+
+- OpenClaw v2026.4.29 群/频道默认 `messages.groupChat.visibleReplies: "message_tool"`。
+- tool-only 模式下，普通 final reply 不自动发到房间；只有 message tool 的显式发送可见。
+- Slack handler 会把它解析成 `sourceRepliesAreToolOnly`，并据此关闭普通 auto reply 的 streaming/typing/status reaction 等可见反馈。
+
+OctoClaw 可用点：
+
+- 不要用 footer 或 NO_REPLY 技巧控制群聊可见性。
+- “是否可见”交给 OpenClaw `visibleReplies`；OctoClaw 只决定是否显式 message send。
+- ACK reaction 要理解 tool-only gate，见 2.5。
+
+### 2.5 Slack native ackReaction / statusReaction / typingReaction
+
+源码：
+
+- `extensions/slack/src/actions.ts`
+- `extensions/slack/src/monitor/message-handler/prepare.ts`
+- `extensions/slack/src/monitor/message-handler/dispatch.ts`
+- `extensions/slack/src/monitor/provider.ts`
+- `src/channels/ack-reactions.ts`
+- `docs/channels/slack.md`
+
+关键能力和限制：
+
+- `reactSlackMessage()` 调 Slack `client.reactions.add()`，所以 Slack 里真实可见，不是 Web UI only。
+- `messages.ackReaction`、`channels.slack.ackReaction` 会被解析。
+- 默认 `messages.ackReactionScope` 是 `group-mentions`：DM 默认不 ack，群/频道默认需要 mention gate。
+- `messages.statusReactions.enabled !== false` 时，status reaction controller 会接管 queued/thinking/tool/done/error。
+- `removeAckAfterReply` 会在回复后清理或恢复 reaction。
+- 群/频道默认 `message_tool` 会导致 `sourceRepliesAreToolOnly`，auto ack/status/typing reaction 被压掉。
+- Slack app 必须有 `reactions:write`。
+
+OctoClaw 可用点：
+
+- `OCTOCLAW_NATIVE_ACK_REACTION_MODE=auto`：复用 OpenClaw 原生 auto ACK，适合 DM 或 `visibleReplies: "automatic"` 的房间。
+- `OCTOCLAW_NATIVE_ACK_REACTION_MODE=explicit`：在 tool-only 群/频道中，OctoClaw 用明确的 Slack message anchor 显式 reaction。
+- `off`：完全关闭 reaction ACK。
+
+验证原生 Slack ACK 的临时配置：
+
+```json5
+{
+  messages: {
+    ackReaction: "eyes",
+    ackReactionScope: "all",
+    removeAckAfterReply: false,
+    statusReactions: { enabled: false },
+    groupChat: { visibleReplies: "automatic" }
+  }
+}
+```
+
+这只是验证配置。生产不应为了 ACK 轻易把群/频道改成 `automatic`。
+
+### 2.6 Plugin state / metadata store
+
+源码：
+
+- `src/plugins/runtime/types-core.ts`
+- `src/plugins/runtime/index.ts`
+- `src/plugins/runtime/runtime-tasks.types.ts`
+- `src/plugins/runtime/runtime-channel.ts`
+
+关键能力与限制：
+
+- plugin runtime 当前只暴露 `api.runtime.state.resolveStateDir()`，源码中没有 `api.runtime.state.openKeyedStore<T>()`。
+- `runtime.tasks.runs` / `runtime.tasks.flows` 可读 native run/flow 状态，并提供 run cancel。
+- `runtime.channel` 暴露 reply/outbound/routing/reaction helper，可作为 IM delivery port 的上游。
+- OpenClaw 没有原生保存 OctoClaw WorkContract、judge reason、route seal、model profile、IM anchor 的完整字段。
+
+OctoClaw 可用点：
+
+- 执行状态以 OpenClaw native runs/flows/subagent registry 为准。
+- WorkContract、route seal、judge/replay、model policy、native refs、IM anchor、ACK receipts 继续放 OctoClaw metadata store。
+- 如果只需要少量文件状态，可通过 `resolveStateDir()` 定位 state 目录，但必须 atomic write、schema version、corrupt quarantine。
+- 如果需要关系查询、索引、迁移和审计，SQLite 需要保留，但命名和职责应从 `runtime-ledger` 收缩成 `OctoClawMetadataStore`。
+- 不允许 metadata store 重新承载 scheduler、completion binding、delivery retry/outbox 等 runtime 职责。
+
+建议保留字段：
+
+| 类别 | 字段 |
+| --- | --- |
+| Contract | `workContractId`、`turnId`、`expectedDeliverable`、acceptance criteria |
+| Decision | route seal、judge source/confidence/reason codes、abstain/degraded reason |
+| Model policy | role、model profile、thinking、cost band、timeout budget |
+| Native refs | `openclawRunId`、`openclawTaskId`、`openclawFlowId`、`childSessionKey` |
+| IM anchor | channel/account/to/thread/message ts、ACK dedupe receipt |
+| Replay | prompt packet hash、decision snapshot、dispatch/admission result |
+
+## 3. 当前 OctoClaw 实现中的对应重轮子
+
+源码位置：
+
+- `extensions/octoclaw-runtime/src/tools/registration.ts`：`octoclaw_dispatch` 热路径、ticket、scheduler、runtime helper、subagent spawn、completion instruction 都集中在这里。
+- `extensions/octoclaw-runtime/src/runtime-ledger/*`：SQLite ledger 里混合了 OctoClaw metadata、ticket、scheduler、completion binding、native reconcile；需要拆成 metadata store + legacy runtime 轮子。
+- `extensions/octoclaw-runtime/src/delegate/child-finalizer.ts`：轮询 child completion file 并投递结果。
+- `extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts`：自建 completion/result 投递 outbox。
+- `extensions/octoclaw-runtime/src/im/slack/slack-adapter.ts`：发送消息走 `openclaw message send` CLI，解析 stdout/stderr；reaction 直接调 Slack Web API。
+- `extensions/octoclaw-runtime/src/ack/*`：ACK timer、dedupe、route commit、execution transition notice。
+- `extensions/octoclaw-runtime/src/extension-entry.ts`：注册 hooks、footer、policy state、ACK、watchdog、tool。
+- `packages/octoclaw-policy/src/judge/judge-schema.ts` 和 `extensions/octoclaw-runtime/src/resolve/llm-judge.ts`：judge schema、normalizer、默认 confidence。
+- `extensions/octoclaw-runtime/src/work-contract/builders.ts`：WorkContract id 和 semantic contract 构造。
+
+已经确认的明显问题：
+
+- `buildWorkContractFromPolicy()` 用 `stableId("wc", [sessionKey, userAsk])`，同一 session 重复同一句会撞 id。
+- `buildAckKey()` 接收 `ackStage` 但 key 没包含 stage。
+- `coerceJudgeOutput()` 在缺 `confidence` 时默认 `0.7`，会把弱输出变成看似可执行。
+- `isActionableJudgeResult()` 只看 confidence，不看 `abstainReason`、degraded reason、新工作、expected deliverable。
+- `buildSubagentSpawnMessage()` 强制 child 最后写 `octoclaw.worker_completion/v1` 文件，这和 OpenClaw native announce 重叠且不稳定。
+- `dispatchSpawnEvidence()` 在缺显式 false 时，仅有 `childSessionKey` 也可能算 spawnExecuted，证据太松。
+- Slack send 热路径 shell out CLI 并解析 stdout/stderr，失败面大且和 OpenClaw 原生 delivery route 脱节。
+- footer 当前默认偏可见，生产会暴露 route/model/internal ids。
+
+## 4. 目标架构
+
+```text
+inbound turn
+  -> OpenClaw channel monitor / route / visibleReplies
+  -> OpenClaw native ackReaction 或 OctoClaw explicit reaction
+  -> OctoClaw deterministic precheck
+  -> OctoClaw cheap judge normalizer
+  -> WorkContract semantic seal
+  -> OpenClaw native sessions_spawn / subagent runtime
+  -> OpenClaw native run registry + announce delivery
+  -> OctoClaw status projection / debug projection
+```
+
+职责边界：
+
+| 层 | OctoClaw 保留 | 交给 OpenClaw |
+| --- | --- | --- |
+| route | judge/precheck/semantic seal | tool policy、channel source delivery mode |
+| delegation | WorkContract、model/cost policy、spawn plan | sessions_spawn、run registry、subagent lane、announce |
+| status | user-safe projection | native runs/flows truth |
+| ACK | 策略、文案、explicit reaction fallback | native ack/status/typing reaction |
+| delivery | 何时发、发什么 | target/thread/retry/fallback |
+| debug | compact/debug footer | 不负责正常可见性 |
+
+## 5. Phase 0：先修 guardrail，不改大架构
+
+目标：不引入 native path，也先减少误判、重复、泄露。
+
+### 5.1 WorkContract ID 不再撞
+
+文件：
+
+- `extensions/octoclaw-runtime/src/work-contract/builders.ts`
+- `extensions/octoclaw-runtime/src/work-contract/builders.test.ts`
+
+当前：
+
+```ts
+const workContractId = stableId("wc", [sessionKey, userAsk]);
+```
+
+改法：
+
+- 生成 id 时加入 `turnId`、message anchor、routeSealId，或直接用 UUID。
+- 推荐：`turnId` 先确定，再用 `stableId("wc", [sessionKey, turnId, decision.routeSealId ?? "", userAsk])`。
+- 如果缺 message anchor，至少加 `Date.now()` 生成的 turn id 或 `randomUUID()`。
+
+验收：
+
+- 同一 session 连续两次相同 userAsk 生成不同 `workContractId`。
+- replay/status 查询仍可通过 `turnId` 和 native refs 找到对应合同。
+
+### 5.2 ACK dedupe key 加 stage
+
+文件：
+
+- `extensions/octoclaw-runtime/src/ack/ack-dedupe.ts`
+- `extensions/octoclaw-runtime/src/ack/ack-guard.test.ts`
+
+当前：
+
+```ts
+return `ack:${parts.threadId}:${parts.anchorId ?? "none"}:${parts.routePhase}:${parts.messageTurnId}`;
+```
+
+改法二选一：
+
+1. 删除 tier ACK，只保留 reaction ACK0、slow text ACK、delegate accepted ACK、terminal/progress notice。
+2. 如果保留 tier，key 必须包含 stage/kind/surface/target：
+
+```text
+ack:<surface>:<target>:<thread>:<anchor>:<turn>:<routePhase>:<ackStage>
+```
+
+验收：
+
+- ACK0 不会误去重 delegate accepted ACK。
+- tier1/tier2 若保留，不会互相吃掉。
+- 同一 Slack 队列里不同 message id 的 reaction ACK 不互相去重。
+
+### 5.3 Judge normalizer 收紧
+
+文件：
+
+- `packages/octoclaw-policy/src/judge/judge-schema.ts`
+- `extensions/octoclaw-runtime/src/resolve/llm-judge.ts`
+
+当前风险：
+
+- 缺 confidence 默认 `0.7`。
+- `isActionableJudgeResult()` 不看 `abstainReason`。
+- delegate 缺 `is_new_work` / `expected_deliverable` 只是 degraded，但热路径仍可能误用。
+
+改法：
+
+- `coerceJudgeOutput()` 缺 `confidence` 时设为 `0` 或最多 `0.5`，并写 degraded reason。
+- `isActionableJudgeResult()` 加：
+  - `abstainReason` 非空则 false。
+  - `judge_schema_degraded` 且 route=delegate 则 false。
+  - route=delegate 必须 `is_new_work === true`。
+  - route=delegate 必须有非空 `expected_deliverable`。
+- `ackText` 不再进入用户可见 ACK，只保留 replay/eval。
+
+验收：
+
+- malformed/missing confidence judge 输出不会触发 delegate。
+- 带 abstainReason 的结果不可 actionable。
+- delegate 缺 expected deliverable 不会 spawn。
+
+注意：实施前先看 `judge-schema.ts` 是否有本地未提交改动；如果有，先合并现有改动，再收紧 validator，避免把别的改动覆盖掉。
+
+### 5.4 Footer 默认关闭
+
+文件：
+
+- `extensions/octoclaw-runtime/src/extension-entry.ts`
+- `extensions/octoclaw-runtime/src/im/projection-footer.ts`
+- `extensions/octoclaw-runtime/src/im/slack/slack-adapter.ts`
+- `extensions/octoclaw-runtime/src/extension-entry.test.ts`
+
+新增配置：
+
+```text
+OCTOCLAW_PROJECTION_FOOTER_MODE=off|compact|debug
+```
+
+语义：
+
+- `off`：默认，不追加 footer。
+- `compact`：只在显式启用时追加 `route`、`model`、可选 `thread`。
+- `debug`：仅本地/验收，允许 `via`、`workContractId`、judge source、native ids。
+
+验收：
+
+- 默认生产回复无 footer。
+- `NO_REPLY`、ACK、delegate accepted ACK 永不追加 footer。
+- debug footer 不重复追加。
+
+### 5.5 停止过早 delegate ACK
+
+文件：
+
+- `extensions/octoclaw-runtime/src/ack/ack-route-commit.ts`
+- `extensions/octoclaw-runtime/src/ack/execution-transition-notifier.ts`
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+
+改法：
+
+- route=delegate 只是候选时，不发“已委派”。
+- `sessions_spawn` / native subagent runtime accepted 且有 `runId` 后，才发 delegate accepted ACK。
+- spawn failed 时发一条诚实失败/降级说明，不伪装成已派发。
+
+验收：
+
+- judge=delegate 但 spawn 失败时，用户不会看到“已交给子 agent”。
+- spawn accepted 后才出现 delegate ACK。
+
+## 6. Phase 1：新增 native spawn path
+
+目标：用 OpenClaw 原生 subagent 能力作为主路径，legacy runtime 只做回滚 fallback。
+
+### 6.1 Feature flags
+
+新增：
+
+```text
+OCTOCLAW_NATIVE_SPAWN=0|1
+OCTOCLAW_LEGACY_RUNTIME_LEDGER=on|read_only|off
+OCTOCLAW_DISABLE_CHILD_FINALIZER=0|1
+OCTOCLAW_DISABLE_DELIVERY_OUTBOX=0|1
+```
+
+推荐默认：
+
+- 开发：`OCTOCLAW_NATIVE_SPAWN=1`，legacy `read_only`。
+- 生产灰度：按 workspace/session allowlist 开启 native spawn。
+- native 稳定后：legacy ledger `off`，child-finalizer/outbox 默认 disabled。
+
+### 6.2 新增 native spawn adapter
+
+建议文件：
+
+- `extensions/octoclaw-runtime/src/delegate/native-spawn-adapter.ts`
+- `extensions/octoclaw-runtime/src/delegate/native-spawn-adapter.test.ts`
+
+接口：
+
+```ts
+interface OctoClawNativeSpawnRequest {
+  workContractId: string;
+  task: string;
+  label?: string;
+  agentId?: string;
+  model?: string;
+  thinking?: string;
+  runTimeoutSeconds?: number;
+  context?: "isolated" | "fork";
+  lightContext?: boolean;
+  cleanup?: "keep" | "delete";
+}
+
+interface OctoClawNativeSpawnAccepted {
+  status: "accepted";
+  openclawRunId: string;
+  childSessionKey: string;
+  mode?: "run" | "session";
+  modelApplied?: boolean;
+}
+```
+
+实现优先级：
+
+1. 如果 OpenClaw plugin runtime 暴露等价 `sessions_spawn` / subagent spawn API，直接调用它。
+2. 当前项目已有 `pi.runtime?.subagent.run` 形态，可作为过渡 backend，但必须移除 completion file instruction，并要求返回 `runId`。
+3. 不建议 import OpenClaw 内部 `src/agents/subagent-spawn.ts`。它不是稳定 plugin SDK API，升级风险高。
+4. 如果宿主只提供 tool-level `sessions_spawn`，则让 `octoclaw_dispatch` 退化为 spawn planner：返回严格 JSON spawn plan，并由主 agent 调用原生 `sessions_spawn`。这比自建 scheduler/completion file 更轻，但体验上多一次 tool hop。
+
+### 6.3 参数映射
+
+| OctoClaw 输入 | OpenClaw native 参数 |
+| --- | --- |
+| WorkContract title / userAsk | `task` |
+| delegate role | `agentId` 或 `label` |
+| model/cost policy | `model` |
+| complexity / quality | `thinking`、`runTimeoutSeconds` |
+| context need | `context: "isolated" | "fork"` |
+| cheap independent work | `lightContext: true` |
+| one-shot child | `mode: "run"`, `cleanup: "keep"` 初期保守 |
+| thread-bound session | 只有 channel 支持 thread binding 时用 `thread: true`, `mode: "session"` |
+
+不要传：
+
+- `target`
+- `channel`
+- `to`
+- `threadId`
+- `replyTo`
+
+OpenClaw `sessions_spawn` 源码会拒绝这些参数。投递由 native delivery/handoff 处理。
+
+### 6.4 移除 completion file 协议
+
+当前文件：
+
+- `extensions/octoclaw-runtime/src/tools/registration.ts` 的 `buildSubagentSpawnMessage()`
+- `extensions/octoclaw-runtime/src/delegate/child-finalizer.ts`
+- `extensions/octoclaw-runtime/src/runtime-ledger/completion-binding.ts`
+
+改法：
+
+- native path 下 child prompt 不再要求写 `.completion.json`。
+- child 只需要正常完成任务，让 OpenClaw native announce/handoff 捕获结果。
+- 如果必须结构化结果，让 child final reply 包含短 JSON block 或 artifact，但不要把“写文件”作为完成协议。
+
+验收：
+
+- native spawn 后没有 `.completion.json` 文件也能完成回传。
+- `child-finalizer.ts` 在 native path 不启动。
+- `completion-binding` 在 native path 没有新记录。
+
+### 6.5 WorkContract 保存 native refs
+
+文件：
+
+- `packages/octoclaw-contracts/src/work-contract.ts`
+- `extensions/octoclaw-runtime/src/work-contract/store.ts`
+- `extensions/octoclaw-runtime/src/work-contract/projectors.ts`
+
+建议字段：
+
+```ts
+interface WorkContractNativeRefs {
+  openclawRunId?: string;
+  openclawTaskId?: string;
+  openclawFlowId?: string;
+  childSessionKey?: string;
+  requesterSessionKey?: string;
+  spawnMode?: "run" | "session";
+}
+```
+
+验收：
+
+- spawn accepted 后 WorkContract 能查到 `openclawRunId` 和 `childSessionKey`。
+- status projection 不从 WorkContract 推进状态，只用 native refs 查询 native truth。
+
+## 7. Phase 2：状态投影切到 native runs/flows
+
+目标：OpenClaw native registry 是执行状态权威。
+
+### 7.1 新增 native status projector
+
+建议文件：
+
+- `extensions/octoclaw-runtime/src/state/native-status-projector.ts`
+- `extensions/octoclaw-runtime/src/state/native-status-projector.test.ts`
+
+输入：
+
+- `sessionKey`
+- `workContractId`
+- `openclawRunId` / `openclawTaskId` / `openclawFlowId`
+- `childSessionKey`
+
+读取顺序：
+
+1. `api.runtime.tasks.runs.fromToolContext(ctx).resolve(openclawRunId)`。
+2. `api.runtime.tasks.flows.fromToolContext(ctx).resolve(openclawFlowId)`。
+3. `findLatest()` 作为 fallback，只用于 status UI，不用于执行授权。
+4. `task-state.json` projection cache 只做显示缓存，不作 truth。
+
+状态映射：
+
+| Native | OctoClaw projection |
+| --- | --- |
+| queued | queued |
+| running | running |
+| completed/succeeded | succeeded |
+| failed | failed |
+| timed_out | timed_out |
+| cancelled/canceled | cancelled |
+| missing but child run known | unknown/lost，不自动补成功 |
+
+验收：
+
+- 重启后可通过 native run/flow 查到最近任务。
+- `task-state.json` 损坏时，status 不显示“没有任务”，而是 native fallback 或 degraded state。
+- 没有 native id 的 legacy 任务明确标记 legacy/degraded。
+
+## 8. Phase 3：ACK 重构
+
+目标：ACK 只表达真实事实，不和正式回复竞争。
+
+### 8.1 ACK 模式
+
+新增：
+
+```text
+OCTOCLAW_NATIVE_ACK_REACTION_MODE=auto|explicit|off
+OCTOCLAW_TEXT_ACK_DELAY_MS=2500
+```
+
+语义：
+
+- `auto`：依赖 OpenClaw 原生 `ackReaction` / `typingReaction` / `statusReactions`。
+- `explicit`：OctoClaw 在需要时用 Slack message anchor 显式 reaction，适合 group `message_tool` 场景。
+- `off`：不发 reaction。
+
+### 8.2 Slack auto ACK 适用条件
+
+OpenClaw 原生 auto ACK 需要：
+
+- `messages.ackReaction` 或 `channels.slack.ackReaction` 非空。
+- `messages.ackReactionScope` 覆盖当前 chat type。
+- Slack app 有 `reactions:write`。
+- 当前不是 `sourceRepliesAreToolOnly`，或者宿主版本未来放开该 gate。
+- `removeAckAfterReply` 没有太快清理，或者测试时关闭。
+
+### 8.3 Slack explicit ACK 条件
+
+仅在这些条件成立时发 explicit reaction：
+
+- inbound metadata 有原始 Slack `channel` 和 `message.ts`。
+- 当前 turn 确认会处理，不是被 mention gate/drop 掉。
+- 没有已经由 OpenClaw native auto ACK 处理。
+- dedupe key 包含 channel/message.ts/turn/stage。
+
+当前 `SlackAdapter.react()` 已经可直接调 `reactions.add`，可以保留为 explicit reaction backend；但它应使用明确 message anchor，不要从 session key 猜 thread。
+
+### 8.4 Slow text ACK
+
+只在 reply route 且满足全部条件时发：
+
+- 已超过 `OCTOCLAW_TEXT_ACK_DELAY_MS`。
+- 没有 first token。
+- 没有 visible reply。
+- 没有 native delivery pending。
+- 没有 reaction ACK 成功或已尝试。
+
+delegate route 不发 reply-style slow ACK。delegate 的可见 ACK 等 spawn accepted。
+
+### 8.5 Delegate accepted ACK
+
+触发条件：
+
+- WorkContract sealed。
+- native spawn 返回 accepted。
+- 有 `runId` 或 native task id。
+
+推荐文案：
+
+```text
+已交给子 agent 处理，完成后会回到这个线程。
+```
+
+可选 compact id：短 task label，不展示完整 model/workContract/debug。
+
+验收：
+
+- 快速主回复无文本 ACK。
+- 慢主回复最多一条文本 ACK。
+- reaction ACK 失败不补文本 ACK0，避免重复噪声。
+- delegate accepted ACK 不早于 spawn accepted。
+
+## 9. Phase 4：footer 改为 debug projection
+
+目标：footer 不再承担路由解释、状态证明、ACK 或可见性控制。
+
+实现：
+
+- `OCTOCLAW_PROJECTION_FOOTER_MODE=off` 为默认。
+- `compact` 只显示 `route/model/thread`。
+- `debug` 显示 `via/workContractId/native ids/judge source`。
+- `renderSlackProjectionFooter()` 保留去重，但受 mode 控制。
+- `before_message_write` fallback footer 默认禁用。
+
+验收：
+
+- 默认 Slack 最终回复没有 `route=... | model=...`。
+- debug 模式能显示 route/model/native refs。
+- ACK、NO_REPLY、delegate accepted ACK 不追加 footer。
+
+## 10. Phase 5：Judge 简化为 router/admission signal
+
+目标：judge 是便宜、结构化、可回放的分类器，不是执行授权器。热路径不要做 local LLM + remote LLM 串行；应做确定性 precheck，只有不确定时才调用一个 cheap LLM judge。remote judge 只做 shadow/eval/offline calibration。
+
+### 10.1 推荐输出
+
+```json
+{
+  "route": "reply",
+  "reply_mode": "answer",
+  "delegate_role": null,
+  "is_new_work": false,
+  "expected_deliverable": null,
+  "complexity": "simple",
+  "duration_hint": "short",
+  "tool_need_hint": "none",
+  "confidence": 0.82,
+  "abstain_reason": null,
+  "reason_codes": []
+}
+```
+
+删除或降级：
+
+- `ackText`：不进入用户可见路径。
+- 太细的 route/source/debug 字段：放 replay，不参与 hot path。
+- remote judge escalation：非必要先关掉，避免关键路径变长。
+
+### 10.2 热路径流程
+
+```text
+deterministic precheck
+  -> 能确定 reply/status/execution_followup/delegate candidate 就直接返回
+  -> 不确定才调用 cheap LLM judge
+  -> cheap judge timeout/失败则 reply fallback，并允许主模型纠正
+  -> normalizer/admission
+  -> WorkContract seal
+```
+
+admission 规则：
+
+- confidence < minConfidence：reply fallback。
+- abstainReason 非空：reply fallback。
+- delegate 缺 `is_new_work === true`：reply/status fallback。
+- delegate 缺 expected deliverable：reply/clarify fallback。
+- execution_followup：禁止 spawn，只允许回答状态/结果/失败原因。
+
+主模型纠正规则：
+
+- judge=reply，但主模型发现需要长工具/执行，可提交 route hint 或调用 OctoClaw 委派入口。
+- judge=delegate，但主模型能直接答，可以直接答；前提是还没 native spawn。
+- 主模型不能靠自然语言声称“已委派”；必须等 native accepted/runId。
+- spawn 永远需要 `is_new_work=true`、非空 `expected_deliverable`、WorkContract/admission 通过。
+
+验收：
+
+- 用户问“刚才那个任务怎么样了”不会重新 spawn。
+- judge timeout 有 deterministic fallback。
+- cheap judge 失败不会阻塞主 agent 长时间无回应。
+- remote judge 不进入热路径。
+
+### 10.3 委派判定规则和主线程预算
+
+默认主 agent 处理：
+
+- 当前上下文能直接回答。
+- 简单解释、总结、翻译、改写。
+- 状态/来源/“刚才发生了什么”能从 native state 或 replay 回答。
+- 需要澄清 scope、目标、验收标准。
+- 预计小于 10-15 秒，且不需要真实 workspace/environment 工具。
+
+默认委派子 agent：
+
+- 预计超过 60 秒。
+- 需要命令执行、文件读写、代码修改、测试、日志排查、环境探测。
+- 需要多步工具链，或者真实工具调用可能超过 1-2 次。
+- 需要大量上下文阅读，容易污染主 agent 上下文。
+- 可以并行处理。
+- 用户明确要求后台、子 agent、并行、不要阻塞。
+- fresh lookup 但主上下文没有可靠现成事实。
+
+中间地带用预算控制：
+
+```text
+main_fast_path:
+  maxWallMs: 10000-15000
+  maxToolCalls: 1
+  allowReadOnlyNativeStatus: true
+  allowWorkspaceProbe: false
+```
+
+超过预算或需要第二个真实工具，就转 delegate。这个规则比继续堆自然语言关键词 gate 更稳定。
+
+### 10.4 AGENTS.md / prompt 注入
+
+AGENTS.md 或 system prompt 注入只放短规则，不放完整 judge rubric：
+
+```text
+直接回答能在当前上下文内完成的问题。
+如果需要长时间工具执行、代码/文件/环境操作、测试、研究或多步验证，使用 octoclaw_dispatch 委派。
+不要直接调用 sessions_spawn 绕过 OctoClaw policy。
+不要声称已委派，除非 octoclaw_dispatch/native spawn 返回 accepted。
+状态/来源问题优先用 octoclaw_status/native state 回答，不要重新 spawn。
+```
+
+prompt 只负责引导模型，最终副作用仍由 admission/native spawn adapter 硬校验。
+
+### 10.5 Gate 瘦身清单
+
+可以删除或降级：
+
+- 自建 scheduler queue：交给 OpenClaw native lane/maxChildren/maxDepth。
+- completion binding / child-finalizer：交给 native announce。
+- delivery outbox：交给 native delivery retry。
+- 每轮强制 route hint：只在 judge 不确定或主模型纠正时需要。
+- `block_tool_patterns` 扫 params：改成 tool name allow/deny + WorkContract admission。
+- 多层 tier ACK / route commit ACK：收敛到 reaction、slow text、spawn accepted ACK。
+- observer/session control 特殊分支：尽量合并成 `reply + allowed control tools`。
+
+必须保留：
+
+- status/provenance follow-up 禁止 spawn。
+- 没有 `expected_deliverable` 禁止 spawn。
+- 没有 native accepted/runId 不算已委派。
+- sandbox、allowedAgents、maxDepth、maxChildren 使用 OpenClaw 原生。
+- shared workspace 写冲突保护。
+- idempotency / dedupe。
+
+## 11. Phase 6：IM delivery 切到原生 route/port
+
+目标：不在热路径 shell out `openclaw message send` 并解析 stdout/stderr。
+
+当前风险文件：
+
+- `extensions/octoclaw-runtime/src/im/slack/slack-adapter.ts`
+- `extensions/octoclaw-runtime/src/im/feishu/feishu-adapter.ts`
+- `extensions/octoclaw-runtime/src/im/send.ts`
+- `extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts`
+
+改法：
+
+1. 先抽 `MessageDeliveryPort`：
+
+```ts
+interface MessageDeliveryPort {
+  send(params: {
+    channel: string;
+    accountId?: string;
+    to: string;
+    threadId?: string;
+    text: string;
+    idempotencyKey?: string;
+  }): Promise<{ ok: boolean; messageId?: string; threadId?: string; error?: string }>;
+}
+```
+
+2. 将 `sendIMMessage()` 改为调用 port，不直接知道 Slack CLI。
+3. 优先接 OpenClaw `runtime.channel.reply.dispatchReplyFromConfig`、`runtime.channel.reply.withReplyDispatcher`、`runtime.channel.outbound.load` 或 channel plugin 暴露的稳定 delivery port。
+4. native port 不可用时，CLI adapter 只作为 legacy fallback，受 `OCTOCLAW_NATIVE_DELIVERY=0` 控制。
+5. Slack explicit reaction 可继续用 Web API backend，但必须使用 inbound `channel/message.ts` anchor。
+
+验收：
+
+- native delivery path 不调用 `runCommand("openclaw", ...)`。
+- Slack thread/reply target 来自 OpenClaw delivery context 或 inbound anchor。
+- delivery failure 由 OpenClaw native retry/fallback 处理，OctoClaw 不写自建 outbox。
+
+## 12. Legacy 移除计划
+
+native path 稳定后，按顺序禁用/删除：
+
+1. `runtime-ledger/scheduler.ts`：OpenClaw native subagent lane/maxChildren/maxDepth 已覆盖大部分用途。
+2. `runtime-ledger/completion-binding.ts`：native announce 替代 child completion file。
+3. `delegate/child-finalizer.ts`：native completion delivery 替代轮询。
+4. `delivery/delivery-outbox.ts`：OpenClaw announce delivery/queue fallback/retry 替代。
+5. fake detached runtime：不再伪装可执行 backend。
+6. `task-state.json` 写路径：降级为 projection cache 后再逐步移除。
+
+保留或迁移：
+
+- WorkContract store。
+- OctoClaw metadata store：route seal、judge/replay、expected deliverable、model profile、native refs、IM anchors、ACK receipts。
+- replay/eval log。
+- model/cost policy。
+- status projection renderer。
+- IM 文案策略。
+
+如果 metadata 需要关系查询和迁移审计，可以继续用 SQLite；如果只是少量文件状态，放到 `api.runtime.state.resolveStateDir()` 下并做 atomic write、schema version、corrupt quarantine。当前 OpenClaw v2026.4.29 没有可直接使用的 `openKeyedStore<T>()`。
+
+## 13. 测试矩阵
+
+### 13.1 Unit tests
+
+- WorkContract：重复 userAsk 不撞 id。
+- ACK dedupe：key 包含 stage；ACK0/delegate/progress 不互相误去重。
+- Judge schema：missing confidence、abstain、degraded delegate 都不可 actionable。
+- Footer mode：默认 off；compact/debug 按预期渲染。
+- Native spawn adapter：参数映射正确，不传 channel delivery 参数。
+
+### 13.2 Integration tests
+
+- reply fast path：主 agent 快速回复，不发文本 ACK。
+- reply slow path：超过阈值只发一条 slow text ACK。
+- delegate accepted：native accepted 后发 ACK；spawn failed 不发“已委派”。
+- restart recovery：重启后 status 从 native runs/flows 恢复。
+- completion：child 不写 completion file 也能通过 native announce 回传。
+
+### 13.3 Slack manual acceptance
+
+- DM + `ackReactionScope: "direct"`：Slack 可见 reaction。
+- channel + `visibleReplies: "automatic"` + `ackReactionScope: "all"`：OpenClaw auto ACK 可见。
+- channel + 默认 `message_tool`：auto ACK 被压掉；OctoClaw explicit mode 可见 reaction。
+- `removeAckAfterReply: true`：reply 后 reaction 被清理，行为符合预期。
+- 缺 `reactions:write`：不崩溃，有 verbose/debug 记录。
+
+## 14. 发布顺序
+
+推荐顺序：
+
+1. Phase 0 guardrail：低风险，先修明显 bug。
+2. Phase 3 ACK：先把用户可见噪声降下来。
+3. Phase 4 footer：默认 off，减少内部信息泄露。
+4. Phase 1 native spawn：灰度开启。
+5. Phase 2 native status：让状态面板以 native truth 为准。
+6. Phase 6 native delivery：替换 CLI/outbox。
+7. Phase 5 judge 深化：边跑 replay/eval 边收窄 schema。
+8. 删除 legacy runtime 轮子。
+
+## 15. 最小可交付版本
+
+如果要先做一个最小版本，建议只做：
+
+1. WorkContract id fix。
+2. judge missing confidence/abstain fix。
+3. footer default off。
+4. ACK key 加 stage，并关闭 tier 文本 ACK。
+5. native spawn path：移除 completion file requirement，要求 `runId` 才算 accepted。
+6. delegate accepted ACK 等 native spawn accepted。
+7. metadata store 和 runtime truth 分离。
+8. 文档中标明 Slack native `ackReaction` 的配置和 tool-only 限制。
+
+这 7 项能先把“不稳、重、容易重复、Slack 看不到 ACK 的误解”解决一大半，然后再逐步把 ledger/outbox/finalizer 下线。
+
+## 16. 二次通读后的文件级落地任务包
+
+这一节把审查结论收敛成可以直接开工的任务包。顺序上先修会导致误派发/重复消息/状态碰撞的 bug，再接 native spawn，最后下线 legacy runtime 轮子。
+
+### 16.1 P0 bugfix 包
+
+目标：不改整体架构，先消除会制造错误事实的点。
+
+| 任务 | 文件 | 改法 | 验收 |
+| --- | --- | --- | --- |
+| ACK key 加 stage | `extensions/octoclaw-runtime/src/ack/ack-dedupe.ts` | `buildAckKey()` 加入 `ackStage`，最好也加入 surface/target；如果删除 tier ACK，则保留 delegate/progress 独立 key | ACK0、slow text、delegate accepted、progress 不互相误去重 |
+| WorkContract id 不碰撞 | `extensions/octoclaw-runtime/src/work-contract/builders.ts` | id 加 `turnId` / inbound message anchor / route seal；无 anchor 时用 UUID 主 id、stable hash 作 fingerprint | 同 session 同一句连续两次生成不同 `workContractId` |
+| WorkContract 只 seal 一次 | `extensions/octoclaw-runtime/src/resolve/policy-resolver.ts` | `resolveStatelessPolicyDecision()` 不写 store；`resolvePolicyDecisionForContext()` route seal 后唯一 attach | 单次 policy resolve 只有一次 WorkContract write/revision/replay |
+| judge degraded 不可执行 | `extensions/octoclaw-runtime/src/resolve/llm-judge.ts`、`packages/octoclaw-policy/src/judge/judge-schema.ts` | missing confidence 不默认 0.7；`isActionableJudgeResult()` 检查 abstain/degraded/new-work/deliverable | malformed delegate 不会 spawn |
+| delegate ACK 不早发 | `extensions/octoclaw-runtime/src/ack/ack-route-commit.ts`、`tools/registration.ts` | route=delegate candidate 阶段不发用户文本；native accepted 后发 delegate accepted | spawn failed 时用户看不到“已委派” |
+| spawn evidence 收紧 | `extensions/octoclaw-runtime/src/tools/registration.ts` | `dispatchSpawnEvidence()` 需要 `runId/childRunId/nativeTaskId`；`childSessionKey` 只能作为 ref | 只有 childSessionKey 的记录显示 `spawn_not_confirmed` |
+| 模型映射统一 | `extensions/octoclaw-runtime/src/tools/registration.ts`、`model-map.ts` | `octoclaw_spawn` 不再硬编码 map；复用 `getModelMap()` 或删除执行入口 | dispatch/spawn 对同一 complexity 选同一模型 |
+| admission 不用 handoff 补证明 | `extensions/octoclaw-runtime/src/tools/registration.ts` | `handoff.summary` 只能展示，不参与 pre-dispatch admission | 缺 expected deliverable 的 delegate 被拒绝 |
+
+### 16.2 native spawn adapter 包
+
+目标：让 OctoClaw 的委派入口变薄，只负责把 WorkContract 和 model policy 映射到 OpenClaw native spawn。
+
+新增文件：
+
+- `extensions/octoclaw-runtime/src/delegate/native-spawn-adapter.ts`
+- `extensions/octoclaw-runtime/src/delegate/native-spawn-adapter.test.ts`
+- `extensions/octoclaw-runtime/src/delegate/spawn-plan.ts`
+
+接口建议：
+
+```ts
+type NativeSpawnBackend = "sessions_spawn" | "plugin_subagent_run" | "legacy";
+
+interface NativeSpawnPlan {
+  workContractId: string;
+  task: string;
+  label?: string;
+  agentId?: string;
+  model?: string;
+  thinking?: string;
+  runTimeoutSeconds?: number;
+  context?: "isolated" | "fork";
+  lightContext?: boolean;
+  cleanup?: "keep" | "delete";
+}
+
+interface NativeSpawnAccepted {
+  backend: NativeSpawnBackend;
+  status: "accepted";
+  runId: string;
+  childSessionKey?: string;
+  mode?: "run" | "session";
+  modelApplied?: boolean;
+}
+```
+
+实现口径：
+
+1. 首选 tool-level `sessions_spawn` 等价能力，因为它走 `spawnSubagentDirect()`、subagent registry、completion announce。
+2. `api.runtime.subagent.run()` 只能作为过渡 backend。OpenClaw 4.29 的类型只返回 `{ runId }`，没有 `childSessionKey` 和 `expectsCompletionMessage`，不能假装已经接入 native announce 全链路。
+3. 如果 plugin SDK 暂时不能直接调 `sessions_spawn`，`octoclaw_dispatch` 可先返回严格 JSON spawn plan，由主 agent 调原生 `sessions_spawn`。这会多一次 tool hop，但比 completion file/finalizer 稳。
+4. legacy runtime 只在 `OCTOCLAW_NATIVE_SPAWN=0` 或 native capability probe 失败时启用。
+
+验收：
+
+- native path 不调用 `buildSubagentSpawnMessage()` 的 completion file 版本。
+- accepted 必须有 `runId`；缺 runId 返回失败，不发 delegate accepted ACK。
+- 不向 `sessions_spawn` 传 `target/channel/to/threadId/replyTo/transport`。
+- WorkContract 保存 `nativeRefs.openclawRunId` 和可用的 `childSessionKey`。
+
+### 16.3 completion/finalizer 下线包
+
+目标：native path 不再依赖 worker 写文件。
+
+改动：
+
+- `buildSubagentSpawnMessage()` 改成 legacy-only，或拆成 `buildLegacyCompletionFilePrompt()`。
+- `delegate/child-finalizer.ts` 只在 `OCTOCLAW_LEGACY_COMPLETION_FILE=1` 时启动。
+- `runtime-ledger/completion-binding.ts` native path 不再写新 binding。
+- `extension-entry.ts` 的 `recoverPendingChildCompletionFinalizers()` 在 native mode 下不注册。
+
+验收：
+
+- child 不写 `.completion.json`，native run 仍能完成并 announce。
+- native run 完成时 OctoClaw 不重复发送 final message。
+- legacy flag 打开时老 completion file 流程仍能回滚使用。
+
+### 16.4 状态投影包
+
+目标：状态查询和 status panel 不再从 task-state/ledger 猜执行结果。
+
+新增文件：
+
+- `extensions/octoclaw-runtime/src/state/native-status-projector.ts`
+- `extensions/octoclaw-runtime/src/state/native-status-projector.test.ts`
+
+读取顺序：
+
+1. 有 `openclawRunId`：`api.runtime.tasks.runs.fromToolContext(ctx).resolve(openclawRunId)`。
+2. 有 `openclawFlowId`：`api.runtime.tasks.flows.fromToolContext(ctx).resolve(openclawFlowId)`。
+3. 无 token：`findLatest()` 只用于 UI fallback，不用于执行授权。
+4. `task-state.json` 只作为 projection cache；读取失败要显示 `corrupt/io_error/degraded`。
+
+验收：
+
+- 删除或损坏 `task-state.json` 后，native run 状态仍能查询。
+- status follow-up 不会触发 `octoclaw_dispatch` / `octoclaw_spawn`。
+- native missing 但 metadata 有 runId 时显示 `lost/unknown`，不自动补成功。
+
+### 16.5 ACK/footer 包
+
+目标：用户可见消息只表达真实状态。
+
+改动：
+
+- `OCTOCLAW_NATIVE_ACK_REACTION_MODE=auto|explicit|off`。
+- `OCTOCLAW_TEXT_ACK_DELAY_MS=2500`。
+- `OCTOCLAW_PROJECTION_FOOTER_MODE=off|compact|debug`，默认 `off`。
+- route commit ACK 不再说“准备派发”；delegate accepted ACK 只在 native accepted 后发送。
+- footer renderer 只在 final visible reply 且 mode 非 off 时运行；ACK、NO_REPLY、delegate accepted/progress 都不追加。
+
+验收：
+
+- 快速 reply 无文本 ACK。
+- 慢 reply 最多一条文本 ACK。
+- delegate accepted ACK 晚于 native accepted。
+- 默认 Slack 消息没有 route/model/footer。
+- Slack tool-only 群里，auto ack 被 OpenClaw gate 压掉时，explicit reaction 能用原始 `channel/message.ts` anchor 补上。
+
+### 16.6 IM delivery port 包
+
+目标：把 Slack CLI/stdout 发送路径挪出热路径。
+
+改动：
+
+- 抽 `MessageDeliveryPort`，`sendIMMessage()` 只依赖 port。
+- native port 优先适配 `runtime.channel.reply.dispatchReplyFromConfig` / `withReplyDispatcher` / `outbound.load`。
+- CLI adapter 只保留为 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` fallback。
+- Slack explicit reaction adapter 可保留，但只接受明确 inbound anchor。
+
+验收：
+
+- native delivery path 不调用 `openclaw message send`。
+- thread/reply target 来自 `deliveryContext` 或 inbound anchor。
+- delivery 失败由 native retry/fallback 或明确 port error 表达，不写 OctoClaw 自建 outbox。
+
+### 16.7 Gate 瘦身落地规则
+
+删除或降级的 gate：
+
+- 多层 tier ACK gate：默认删除，只保留 reaction、slow text、delegate accepted、terminal/progress。
+- 每轮强制 route hint：改成 judge 不确定或主模型纠正时才需要。
+- `block_tool_patterns` 参数扫描：收敛成 tool name allow/deny + WorkContract admission。
+- 自建 scheduler gate：native path 关闭，只保留可选 shared workspace write lock。
+- observer/session control 分支：能合并成 `reply/status + allowed control tools` 的就合并。
+
+必须保留的硬 gate：
+
+- status/provenance/execution follow-up 禁止 spawn。
+- delegate 必须 `is_new_work=true`。
+- delegate 必须有 `expected_deliverable`。
+- spawn confirmed 必须有 native accepted + run id。
+- OpenClaw 原生 `allowedAgents/maxDepth/maxChildren/sandbox` 不绕过。
+- shared workspace 写冲突保护如果确有并发写风险，需要保留为窄锁，不保留整套 scheduler queue。
+- idempotency/dedupe 保留。
+
+## 17. 事实依据和风险口径
+
+这份计划的事实依据以 OpenClaw v2026.4.29 源码为准：
+
+- `src/plugins/runtime/types-core.ts` / `index.ts`：`state` 只有 `resolveStateDir()`。
+- `src/plugins/runtime/runtime-tasks.types.ts`：`runtime.tasks.runs/flows` 是 status/read/cancel projection API。
+- `src/plugins/runtime/types-channel.ts` / `runtime-channel.ts`：channel runtime 是 reply/outbound/routing/reaction helper。
+- `src/plugins/runtime/types.ts` / `src/gateway/server-plugins.ts`：`runtime.subagent.run()` 只返回 `runId`，不等价于 `sessions_spawn` 全链路。
+- `src/agents/tools/sessions-spawn-tool.ts`：`sessions_spawn` 支持 model/thinking/lightContext/runTimeout，拒绝 channel delivery 参数。
+- `src/agents/subagent-spawn.ts` / `src/agents/subagent-announce-delivery.ts`：native subagent 注册 run 并支持 auto announce/direct/queue/retry。
+- `extensions/slack/src/actions.ts` / `monitor/message-handler/prepare.ts` / `dispatch.ts`：Slack ackReaction 是真实 Slack reaction，但受 scope、tool-only、status reaction、权限和清理策略影响。
+
+主要风险：
+
+- 如果 plugin SDK 暂时无法暴露 `sessions_spawn` 等价 API，第一版 native spawn 可能需要“dispatch 返回 spawn plan，主 agent 调 sessions_spawn”的两步路径。
+- 如果业务确实需要 shared workspace 并发写保护，不能完全删除 scheduler，需要抽成很窄的 write-scope lock。
+- SQLite 不能简单删除；OpenClaw 原生没有 OctoClaw 的全部产品字段，SQLite 应保留为 metadata/audit store。
+- Slack explicit reaction 绕过 OpenClaw auto ack gate，必须只在明确配置和明确 anchor 下使用。
