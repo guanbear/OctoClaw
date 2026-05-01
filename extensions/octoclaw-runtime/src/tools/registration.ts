@@ -62,6 +62,7 @@ import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js
 import { randomUUID } from "node:crypto";
 import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
+import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 type UnknownRecord = Record<string, unknown>;
 type NullRecord = UnknownRecord | null;
 
@@ -2241,6 +2242,15 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const delegateReasonCodes = Array.isArray(asRecord(authoritativeDecision)._delegate_reason_codes)
           ? (asRecord(authoritativeDecision)._delegate_reason_codes as unknown[]).map((value) => asString(value)).filter(Boolean)
           : [];
+        const delegationTicketDryRun = buildDelegationTicketDryRun({
+          contract: dispatchWorkContract,
+          decision: authoritativeDecision,
+          payload,
+          metadata,
+        });
+        authoritativeDecision.delegation_ticket_candidate = asRecord(authoritativeDecision.delegation_ticket_candidate).ticket_decision
+          ? authoritativeDecision.delegation_ticket_candidate
+          : delegationTicketDryRun;
         await recordDispatchLifecycleReplayEvents({
           decision: authoritativeDecision,
           payload,
@@ -2265,6 +2275,10 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             stickyPersisted,
             complexityBand,
             delegateReasonCodes,
+            ticket_decision: delegationTicketDryRun.ticket_decision,
+            ticket_denial_reason: delegationTicketDryRun.ticket_denial_reason,
+            is_new_work: delegationTicketDryRun.is_new_work,
+            expected_deliverable: delegationTicketDryRun.expected_deliverable,
             sessionBoundaryStatus: asString(sessionBoundary.status),
             canonicalSessionKey: asString(sessionBoundary.canonicalSessionKey || replaySessionKey),
           },

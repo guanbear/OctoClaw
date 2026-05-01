@@ -476,6 +476,28 @@ describe("WP3 acceptance", () => {
     expect(payload.decisionSource).toBe("local_judge");
   });
 
+  it("replay payload includes delegation ticket dry-run evidence", () => {
+    const payload = buildPolicyResolvedReplayPayload({
+      decision: {
+        route_decision: { route: "delegate" },
+        work_contract: { route: "delegate", decisionSource: "local_judge" },
+        delegation_ticket_candidate: {
+          ticket_decision: "ticket_would_issue",
+          ticket_denial_reason: "",
+          is_new_work: true,
+          expected_deliverable: "modify runtime ledger",
+        },
+      },
+      workContractId: "wc-ticket-replay",
+      decisionSource: "local_judge",
+    });
+
+    expect(payload.ticket_decision).toBe("ticket_would_issue");
+    expect(payload.ticket_denial_reason).toBe("");
+    expect(payload.is_new_work).toBe(true);
+    expect(payload.expected_deliverable).toBe("modify runtime ledger");
+  });
+
   it("delegate decision still dispatches route", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,

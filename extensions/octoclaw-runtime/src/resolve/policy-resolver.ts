@@ -77,6 +77,7 @@ import { compactWorkContractView } from "@octoclaw/contracts/work-contract";
 import { buildExecutionCoverageLayer } from "./execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "./memory-coverage-precheck.js";
 import { buildConversationIntentPacket } from "../conversation-grounding.js";
+import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 
 type UnknownRecord = Record<string, unknown>;
 type LoggerLike = { warn?: (message: string) => void } | null | undefined;
@@ -472,8 +473,14 @@ function attachWorkContractToPolicyDecision(input: {
     { reply: replyContract },
   );
   saveWorkContract(contract);
+  const delegationTicketCandidate = buildDelegationTicketDryRun({
+    contract,
+    decision: input.decision,
+    metadata: input.metadata,
+  });
   input.decision.work_contract = compactWorkContractView(contract);
   input.decision.workContractId = contract.workContractId;
+  input.decision.delegation_ticket_candidate = delegationTicketCandidate;
   const existingEntry = policyState.get(input.stateKey);
   const completedAt = existingEntry?.updatedAt || existingEntry?.createdAt || Date.now();
   const receipt = buildTurnExecutionReceipt(
@@ -2078,6 +2085,7 @@ export async function resolvePolicyDecisionForContext(
         workContractId: decision.workContractId,
         workContractRoute: asRecord(decision.work_contract).route,
         decisionSource: asRecord(decision.work_contract).decisionSource,
+        delegationTicketCandidate: decision.delegation_ticket_candidate,
         memoryCoverage: asRecord(metadata._memory_coverage).coverage,
         memoryFreshnessRisk: asRecord(metadata._memory_coverage).freshness_risk,
         parentContextTokensAdded: 0,

@@ -78,6 +78,7 @@ export function buildPolicyResolvedReplayPayload(options: Record<string, unknown
   const judge = asRecord(policyRouter.judge);
   const judgeValidation = asRecord(judge.validation);
   const cache = asRecord(policyRouter.cache);
+  const ticketCandidate = asRecord(options.delegationTicketCandidate ?? decision.delegation_ticket_candidate);
 
   return {
     sessionKey: String(options.stateKey ?? ""),
@@ -135,6 +136,10 @@ export function buildPolicyResolvedReplayPayload(options: Record<string, unknown
     resultMaterialized: Boolean(options.resultMaterialized),
     deliveryStatus: String(options.deliveryStatus ?? ""),
     executionCoverageConflict: Boolean(options.executionCoverageConflict),
+    ticket_decision: String(ticketCandidate.ticket_decision ?? ""),
+    ticket_denial_reason: String(ticketCandidate.ticket_denial_reason ?? ""),
+    is_new_work: Boolean(ticketCandidate.is_new_work),
+    expected_deliverable: String(ticketCandidate.expected_deliverable ?? ""),
     workContractId: String(options.workContractId ?? asRecord(decision).workContractId ?? ""),
     workContractRoute: String(options.workContractRoute ?? asRecord(asRecord(decision).work_contract).route ?? ""),
     decisionSource: String(options.decisionSource ?? asRecord(asRecord(decision).work_contract).decisionSource ?? ""),
