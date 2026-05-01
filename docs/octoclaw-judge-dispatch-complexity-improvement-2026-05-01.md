@@ -270,8 +270,8 @@ OctoClaw 当前还维护 `tmp/octopus/task-state.json`、`task-events.jsonl`、`
 
 结论：
 
-1. **不直接改 OpenClaw 原生 DB schema**。`flows/registry.sqlite` 和 `tasks/runs.sqlite` 是 substrate owned store，OctoClaw 可以读、可以通过 OpenClaw API/bridge 写原生 lifecycle，但不应私自加字段或把业务字段塞进原生表；否则升级 OpenClaw 时容易 schema drift。
-2. **OctoClaw 新增自己的 transactional runtime ledger**，建议 SQLite：`~/.openclaw/workspace/tmp/octopus/octoclaw-runtime.sqlite`。它拥有 WorkContract、delegation ticket、scheduler queue、attempt、completion binding、delivery outbox、amendment 和 recovery verdict。
+1. **不直接改 OpenClaw 原生 DB schema**。`flows/registry.sqlite` 和 `tasks/runs.sqlite` 是 substrate owned store，OctoClaw 优先通过 OpenClaw runtime bridge/API 读取或同步 native lifecycle；直接 DB 读取只能作为有 schema guard 的只读诊断 fallback。
+2. **OctoClaw 新增自己的 transactional runtime ledger**，建议 SQLite：`~/.openclaw/workspace/.octoclaw/runtime/octoclaw-runtime.sqlite`。它拥有 WorkContract、delegation ticket、scheduler queue、attempt、completion binding、delivery outbox、amendment 和 recovery verdict；实现上优先使用 Node 内置 `node:sqlite`，不要为 N1 引入新的 native SQLite 依赖。
 3. **`task-state.json` 降为 read-model snapshot / compatibility projection**。status 面、简单工具和人工排障可以继续读它，但它必须能从 OctoClaw ledger + OpenClaw native DB + replay 重建；它不再承担并发调度的唯一写入真相。
 4. **JSONL 继续做 audit log，不做调度锁**。`task-events.jsonl` / `runtime-policy-replay.jsonl` 适合审计、回放、nightly eval；不适合承载 queue pop、lease acquire、attempt transition 这类需要原子性的操作。
 
@@ -386,7 +386,7 @@ blocked 必须带 `blocked_by`、`retry_after` 或 `manual_action`。
 重启恢复顺序：
 
 1. 读 OctoClaw runtime ledger 中非 terminal attempts 和 queue rows。
-2. 对每个 attempt 读取 OpenClaw native DB：`flow_runs`、`task_runs`，校验 native status、child session、run id。
+2. 对每个 attempt 通过 OpenClaw bridge/API 读取 native lifecycle；如桥接能力缺失，才使用只读 schema-guarded diagnostic adapter 查询 `flow_runs`、`task_runs`。
 3. Probe deterministic completion path 和 orphan candidates。
 4. 过期 lease 释放回 queue；native 已 terminal 但 Octo 未 materialized 的进入 finalizer；completion mismatch 进入 recovery verdict。
 5. 重新生成 `task-state.json` snapshot 和 status projection。

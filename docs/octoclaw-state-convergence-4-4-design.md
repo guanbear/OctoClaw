@@ -18,7 +18,7 @@ policyState                             per-turn cache, TTL only, not durable tr
 
 N1 refines the original 4.4 storage model: `task-state.json` remains the compact status/read-model projection, but it is no longer the only durable OctoClaw business-state store for concurrent scheduling. WorkContract, delegation ticket, queue/lease, attempt, completion binding, delivery outbox, amendment, and recovery verdict need transactional semantics and should live in an OctoClaw-owned runtime ledger, preferably SQLite.
 
-OpenClaw native DBs such as `~/.openclaw/flows/registry.sqlite` (`flow_runs`) and `~/.openclaw/tasks/runs.sqlite` (`task_runs`) remain substrate-owned lifecycle truth. OctoClaw should reference them by `flowId` / `nativeTaskId` / `childSessionKey` and update them only via OpenClaw APIs/bridges. OctoClaw must not privately add columns or store WorkContract fields inside native tables.
+OpenClaw native DBs such as `~/.openclaw/flows/registry.sqlite` (`flow_runs`) and `~/.openclaw/tasks/runs.sqlite` (`task_runs`) remain substrate-owned lifecycle truth. OctoClaw should reference them by `flowId` / `nativeTaskId` / `childSessionKey` and update them only via OpenClaw APIs/bridges. Direct DB reads are allowed only as bounded read-only diagnostics with schema guards while OpenClaw bridge coverage is incomplete. OctoClaw must not privately add columns or store WorkContract fields inside native tables.
 
 ## Canonical Task Record
 

@@ -41,7 +41,7 @@ The central implementation decision is:
 Path:
 
 ```text
-~/.openclaw/workspace/tmp/octopus/octoclaw-runtime.sqlite
+~/.openclaw/workspace/.octoclaw/runtime/octoclaw-runtime.sqlite
 ```
 
 Recommended runtime path resolver:
@@ -49,7 +49,7 @@ Recommended runtime path resolver:
 ```text
 OCTOCLAW_RUNTIME_DB_PATH
   -> explicit env override for tests/operators
-workspaceRoot/tmp/octopus/octoclaw-runtime.sqlite
+workspaceRoot/.octoclaw/runtime/octoclaw-runtime.sqlite
   -> default
 ```
 
@@ -61,16 +61,22 @@ Why SQLite:
 - Crash recovery via expired lease scan.
 - Simpler and safer than hand-rolled JSON file locking for concurrent dispatch.
 
+Implementation constraint:
+
+- Use Node's built-in `node:sqlite` through a small OctoClaw wrapper, mirroring OpenClaw's `requireNodeSqlite()` pattern. Do not add `better-sqlite3`, `sqlite3`, Prisma, Drizzle, or another native dependency for N1 unless a later design explicitly justifies it.
+- If `node:sqlite` is unavailable, shadow mode may record `ledger_unavailable`; enforce mode must fail closed for new delegation and return a replyable diagnostic rather than falling back to JSON as scheduler truth.
+- Store the DB under `.octoclaw/runtime/`, not `tmp/octopus/`, because queue/attempt/completion truth must survive temp cleanup and should sit next to completions/outbox.
+
 ### 2.2 Do not mutate OpenClaw native DB schema
 
 OpenClaw already owns:
 
 | DB | Tables | Use from OctoClaw |
 |----|--------|-------------------|
-| `~/.openclaw/flows/registry.sqlite` | `flow_runs` | Read/sync native flow lifecycle; write only via OpenClaw bridge/API |
-| `~/.openclaw/tasks/runs.sqlite` | `task_runs`, `task_delivery_state` | Read/sync native task run/session/delivery lifecycle; write only via OpenClaw bridge/API |
+| `~/.openclaw/flows/registry.sqlite` | `flow_runs` | Native flow lifecycle; consume through OpenClaw TaskFlow bridge/API first, direct DB read only as bounded read-only diagnostic fallback |
+| `~/.openclaw/tasks/runs.sqlite` | `task_runs`, `task_delivery_state` | Native task run/session/delivery lifecycle; consume through OpenClaw TaskRun/TaskFlow bridge/API first, direct DB read only as bounded read-only diagnostic fallback |
 
-OctoClaw must not add columns or store WorkContract metadata in these DBs. Native DB schema belongs to OpenClaw.
+OctoClaw must not add columns or store WorkContract metadata in these DBs. Native DB schema belongs to OpenClaw. Direct DB reads, if used before a public OpenClaw query API exists, must be isolated behind an adapter with schema/version guards and must never be the only execution proof.
 
 ### 2.3 Downgrade `task-state.json` to projection
 
@@ -387,7 +393,8 @@ CREATE INDEX idx_runtime_events_attempt_created ON runtime_events(attempt_id, cr
 
 Deliverables:
 
-- Runtime DB path resolver.
+- Runtime DB path resolver: `OCTOCLAW_RUNTIME_DB_PATH` override, default `resolveWorkspaceRoot()/.octoclaw/runtime/octoclaw-runtime.sqlite`.
+- `node:sqlite` wrapper with OpenClaw-compatible unavailable-runtime error handling.
 - Migration runner with `schema_migrations`.
 - Unit tests for migration idempotency and WAL/open pragmas.
 - Snapshot fixture for empty DB.
@@ -396,6 +403,8 @@ Acceptance:
 
 - Opening DB twice does not duplicate migrations.
 - Corrupt DB path or permission failure surfaces explicit degraded status.
+- No new native SQLite dependency is introduced.
+- Enforce mode refuses new delegation if ledger open fails; shadow mode records degraded evidence.
 
 ### Step 1 — Ledger write path in shadow mode
 
@@ -458,12 +467,13 @@ Acceptance:
 - Main turn lock busy does not prevent independent scheduler materialization.
 - Lease expiry after simulated crash requeues or recovers safely.
 
-### Step 5 — Native DB reconciliation
+### Step 5 — Native lifecycle reconciliation
 
 Deliverables:
 
-- Read adapter for OpenClaw `flow_runs` and `task_runs` through existing bridge/API where possible.
-- Reconciliation job compares ledger attempt native ids with native DB state.
+- Read adapter that first uses the existing OpenClaw runtime bridge / `TaskFlowPort` / native helper capabilities.
+- Optional direct SQLite diagnostic adapter for `flow_runs` and `task_runs`, isolated behind schema/version guards and used only when bridge/API coverage is missing.
+- Reconciliation job compares ledger attempt native ids with native lifecycle state.
 - `spawn_confirmed` only set when native task/session/process evidence exists.
 
 Acceptance:
@@ -471,6 +481,7 @@ Acceptance:
 - TaskFlow creation without child session/run is not `spawn_confirmed`.
 - Native terminal state updates ledger attempt terminal state.
 - Missing native row marks attempt `binding_mismatch` or `dispatch_materialized_but_no_spawn_evidence`.
+- Tests mock the bridge adapter; direct SQLite tests are diagnostic/fallback only.
 
 ### Step 6 — Completion binding and orphan recovery
 
@@ -559,6 +570,8 @@ pnpm exec vitest run \
   extensions/octoclaw-runtime/src/**/child-finalizer*.test.ts \
   extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts
 
+pnpm exec vitest run extensions/octoclaw-runtime/src/**/runtime-ledger*.test.ts --runInBand
+
 pnpm exec tsc --noEmit --pretty false -p extensions/octoclaw-runtime/tsconfig.json
 pnpm exec tsc --noEmit --pretty false -p tools/octoclawctl/tsconfig.json
 pnpm --filter octoclaw-runtime build
@@ -640,7 +653,22 @@ pnpm exec tsc --noEmit --pretty false -p extensions/octoclaw-runtime/tsconfig.js
 
 ---
 
-## 7. Rollback and Safety
+## 7. Design Risk Review
+
+This design is intentionally more conservative than “just add a DB and route everything through it”. Known risks and mitigations:
+
+| Risk | Mitigation |
+|------|------------|
+| New DB becomes a second competing truth | Ledger owns OctoClaw business truth; OpenClaw DB owns native lifecycle; `task-state.json` is projection only. Documents and tests must enforce this split. |
+| Direct reads of OpenClaw DB break on upstream schema changes | Prefer OpenClaw bridge/API; keep direct SQLite reads optional, read-only, guarded, and covered by schema smoke tests. |
+| SQLite dependency adds install/deploy fragility | Use built-in `node:sqlite` under Node 22+, matching OpenClaw; add no external native package in N1. |
+| Big-bang migration destabilizes live dispatch | Roll out shadow -> dry-run -> enforce behind flags; keep `task-state.json` compatibility projection during rollout. |
+| Scheduler adds too much complexity | Implement only ticket, queue, lease, resource lock, attempt, completion binding; no priority optimizer, no distributed scheduler, no online learning. |
+| DB file under temp path gets cleaned | Store under `.octoclaw/runtime/`; keep `tmp/octopus` for projections/logs only. |
+
+---
+
+## 8. Rollback and Safety
 
 - Keep ledger enforcement behind feature flag until shadow mismatch is understood.
 - Never delete existing `task-state.json` or completion files during migration; copy/backfill only.
