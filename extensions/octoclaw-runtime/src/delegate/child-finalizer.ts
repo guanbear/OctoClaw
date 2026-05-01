@@ -19,6 +19,7 @@ import {
   resolveMainAgentSessionsPath,
 } from "../resolve/env.js";
 import { resolveAckDeliverySessionKey } from "../resolve/session.js";
+import { observeCompletionBinding } from "../runtime-ledger/completion-binding.js";
 import {
   readTaskStateRecords,
   upsertTaskStateRecord,
@@ -63,7 +64,7 @@ export interface ChildCompletionFinalizerOptions {
 }
 
 export interface ChildCompletionFinalizerResult {
-  status: "completed" | "pending" | "missing_identity" | "delivery_failed";
+  status: "completed" | "pending" | "missing_identity" | "delivery_failed" | "completion_orphaned" | "binding_mismatch";
   resultText?: string;
   sent?: boolean;
   error?: string;
@@ -557,6 +558,30 @@ export async function finalizeChildSessionOnce(
   }
   const completion = readCompletionFile(options.workContractId);
   if (!completion) return { status: "pending" };
+  const bindingResult = observeCompletionBinding({
+    workContractId: options.workContractId,
+    completionFilePath: resolveWorkerCompletionPath(options.workContractId),
+    observedCompletion: completion,
+    delegateTaskId: options.delegateTaskId,
+    childSessionKey: options.childSessionKey,
+  });
+  if (bindingResult.verdict !== "matched" && bindingResult.verdict !== "missing") {
+    void appendJsonl(resolveReplayLogPath(), {
+      schema_version: "octoclaw.runtime_policy.replay_event/v1",
+      event: "completion_binding_verdict_blocked",
+      at: new Date().toISOString(),
+      workContractId: options.workContractId,
+      verdict: bindingResult.verdict,
+      completionId: bindingResult.completionId,
+      description: bindingResult.description,
+    }).catch(() => {});
+    updateTaskStateCompleted(options, completion, "completion_binding_rejected");
+    return {
+      status: bindingResult.verdict === "completion_orphaned" ? "completion_orphaned" : "binding_mismatch",
+      resultText: completion.summary,
+      error: `completion_binding_${bindingResult.verdict}: ${bindingResult.description}`,
+    };
+  }
   if (isCompletionAlreadyMaterialized(options)) {
     return { status: "completed", resultText: completion.summary, sent: false };
   }

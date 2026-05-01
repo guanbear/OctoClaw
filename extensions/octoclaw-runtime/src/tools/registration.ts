@@ -59,6 +59,7 @@ import { materializeWorkContractSuccess, materializeWorkContractFailure } from "
 import { selectPreferredChildSession } from "../work-contract/continuity.js";
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
+import { createCompletionBinding } from "../runtime-ledger/completion-binding.js";
 import { randomUUID } from "node:crypto";
 import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
@@ -2605,6 +2606,18 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
                 ...notifyParams,
                 transitionKind: "spawn_started",
               });
+              try {
+                createCompletionBinding({
+                  workContractId: workContractId || "",
+                  attemptId,
+                  expectedDelegateTaskId: delegateTaskId,
+                  expectedPath: resolveWorkerCompletionPath(workContractId || ""),
+                  expectedNativeTaskId: materializedNativeTaskId || undefined,
+                  expectedChildSessionKey: childSessionKey || undefined,
+                });
+              } catch (_bindingError) {
+                void recordPolicyReplay("completion_binding_pre_create_failed", { workContractId, error: String(_bindingError) }, toolLogger(ctx));
+              }
               scheduleChildCompletionFinalizer({
                 childSessionKey: childSessionKey || "",
                 delegateTaskId,
@@ -2752,6 +2765,15 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             "sealed_route_violation: parent route is delegate with observer role, cannot reroute this observer workflow. This violates §4.6.1.",
             { sealed_route_violation: true, parent_route: "delegate", parent_role: "observer_probe", attempted_route: "delegate", error: "freeform_reroute_blocked" },
           );
+        }
+        if (sealedReplyBlocksDelegateHint(parentDecision, asString(params.route, "delegate"), false)) {
+          return toolResponse(JSON.stringify({
+            ok: false,
+            error: "Spawn blocked: sealed reply WorkContract prohibits delegation",
+            sealed_reply_blocked: true,
+            work_contract_route: "reply",
+            blocked_by_sealed_work_contract: true,
+          }));
         }
         const existingDecision = nestedRecord(existingState, "decision");
         const existingRequest = nestedRecord(existingDecision, "request");
