@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export interface SessionsSpawnArgs {
   task: string;
@@ -56,6 +56,6 @@ export function hashSessionsSpawnArgs(args: SessionsSpawnArgs): string {
 
 export function generateSpawnIntentId(): string {
   const ts = Date.now().toString(36);
-  const rand = randomBytes(4).toString("hex");
+  const rand = randomUUID().slice(0, 8);
   return `si_${ts}_${rand}`;
 }

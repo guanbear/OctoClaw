@@ -1,5 +1,5 @@
 import { afterEach, vi } from "vitest";
-import crypto from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   canonicalizeSessionsSpawnArgs,
   hashSessionsSpawnArgs,
@@ -77,7 +77,7 @@ describe("NativeSpawnIntentStore — create and get", () => {
 
   it("computes canonical args hash", () => {
     const intent = createIntent();
-    const manualHash = crypto.createHash("sha256")
+    const manualHash = createHash("sha256")
       .update(canonicalizeSessionsSpawnArgs(baseArgs))
       .digest("hex");
 

@@ -46,11 +46,11 @@ Forbidden scope:
 
 Tasks:
 
-- [ ] Define `NativeSpawnIntent` and `NativeSpawnIntentStatus`.
-- [ ] Implement canonical JSON/hash for the exact `sessions_spawn` args.
-- [ ] Implement TTL expiration, `planned -> spawn_call_started -> accepted|failed|expired` transitions.
-- [ ] Implement idempotent same-`runId` confirm and conflict on different `runId`.
-- [ ] Tests cover hash stability, mismatches, TTL, duplicate confirm, and conflict.
+- [x] Define `NativeSpawnIntent` and `NativeSpawnIntentStatus`.
+- [x] Implement canonical JSON/hash for the exact `sessions_spawn` args.
+- [x] Implement TTL expiration, `planned -> spawn_call_started -> accepted|failed|expired` transitions.
+- [x] Implement idempotent same-`runId` confirm and conflict on different `runId`.
+- [x] Tests cover hash stability, mismatches, TTL, duplicate confirm, and conflict.
 
 ## PC3 Dispatch Planner Output
 
