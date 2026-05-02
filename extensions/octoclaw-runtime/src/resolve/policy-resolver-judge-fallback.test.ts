@@ -259,6 +259,50 @@ describe("policy resolver judge timeout fallback", () => {
     });
     expect(String(routeDecisionOf(decision).fallback_reason)).toContain("tool_need_required");
   });
+
+  it.each([
+    "opencode codeview 不用加 ulw",
+    "GLM 和 opencode 怎么分工",
+    "glm 配置怎么选",
+  ])("keeps model/executor discussion on reply when judge times out: %s", async (prompt) => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+    const decision = await resolveStatelessPolicyDecision(prompt, {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "reply",
+      judge_timeout: true,
+      final_judge_source: "timeout",
+      hard_delegate_signal: false,
+    });
+  });
+
+  it.each([
+    "让 opencode 修代码",
+    "派 GLM 跑测试",
+    "交给子 agent 后台处理",
+    "Delegate a subagent to research runtime ledger ticket issuance.",
+  ])("keeps explicit executor work as hard delegate when judge times out: %s", async (prompt) => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
+
+    const decision = await resolveStatelessPolicyDecision(prompt, {
+      metadata: {
+        _judgeFastConfig: localJudgeConfig,
+      },
+    });
+
+    expect(routeDecisionOf(decision)).toMatchObject({
+      route: "delegate",
+      judge_timeout: true,
+      final_judge_source: "timeout_fallback",
+      decision_bucket: "must_delegate",
+      hard_delegate_signal: true,
+    });
+  });
 });
 
 describe("execution coverage override intent guard", () => {

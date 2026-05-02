@@ -12,6 +12,7 @@ const baseArgs: SessionsSpawnArgs = {
   task: "Implement a focused deliverable with clear success criteria.",
   model: "gpt-5.5",
   cwd: "/workspace/octoclaw",
+  context: "isolated",
 };
 
 const BASE_NOW = 1777723200000; // 2026-05-02T12:00:00.000Z
@@ -73,6 +74,13 @@ describe("canonical args hash", () => {
   it("handles extra keys", () => {
     expect(computePlanHash({ task: "a", model: "b", thinking: "medium" })).not.toBe(
       computePlanHash({ task: "a", model: "b" }),
+    );
+  });
+
+  it("includes isolated context in the canonical args hash", () => {
+    expect(canonicalizeSessionsSpawnArgs({ task: "a", context: "isolated" })).toContain('"context":"isolated"');
+    expect(computePlanHash({ task: "a", context: "isolated" })).not.toBe(
+      computePlanHash({ task: "a" }),
     );
   });
 

@@ -249,9 +249,22 @@ function coerceStartupDurationHint(value: unknown, fallback: StartupDurationHint
     : fallback;
 }
 
-function promptMatches(prompt: string, pattern: RegExp): boolean {
-  return pattern.test(prompt);
+function promptMatches(prompt: string, pattern: RegExp | RegExp[]): boolean {
+  return Array.isArray(pattern)
+    ? pattern.some((item) => item.test(prompt))
+    : pattern.test(prompt);
 }
+
+const DELEGATE_EXECUTOR_PATTERN = String.raw`(?:opencode|glm|子\s*agent|子代理|sub\s*-?\s*agent)`;
+const DELEGATE_ACTION_PATTERN = String.raw`(?:修|改|写|做|跑|执行|构建|测试|处理|完成|实现|排查|审核|验证|调研|查|研究|分析|review|build|test|run|implement|fix|edit|debug|lint|refactor|research|summarize|handle|complete|execute|investigate|analyze)`;
+const EXPLICIT_DELEGATE_PROMPT_PATTERNS = [
+  /\b(delegate this|delegate to|run in background|run in parallel|parallel(?:ize| work| tasks?)|background (?:work|task|job))\b/iu,
+  new RegExp(String.raw`\bdelegate\s+(?:a\s+|the\s+)?${DELEGATE_EXECUTOR_PATTERN}\s+(?:to\s+)?[\s\S]{0,20}${DELEGATE_ACTION_PATTERN}\b`, "iu"),
+  new RegExp(String.raw`(?:让|叫|请|交(?:给|由)|用|派(?:给)?|委派(?:给)?|分配给|指派给)\s*${DELEGATE_EXECUTOR_PATTERN}\s*[\s\S]{0,20}${DELEGATE_ACTION_PATTERN}`, "iu"),
+  new RegExp(String.raw`${DELEGATE_EXECUTOR_PATTERN}\s*[\s\S]{0,16}(?:修代码|跑测试|跑构建|做一下|后台处理|来(?:做|写|改|修|跑|调研|查))`, "iu"),
+  new RegExp(String.raw`(?:派(?:个|一个)?|委派)\s*${DELEGATE_EXECUTOR_PATTERN}?\s*(?:来)?[\s\S]{0,20}${DELEGATE_ACTION_PATTERN}`, "iu"),
+  new RegExp(String.raw`(?:后台|并行)\s*[\s\S]{0,16}${DELEGATE_ACTION_PATTERN}`, "iu"),
+];
 
 function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): StartupCostClassification {
   const conversationControl = trustedConversationControl(metadata);
@@ -284,7 +297,7 @@ function classifyStartupCost(prompt: string, metadata: UnknownRecord = {}): Star
   );
   const explicitDelegatePrompt = !negatedDelegatePrompt && promptMatches(
     rawPrompt,
-    /\b(sub\s*-?\s*agent|background|parallel|delegate this|delegate to|opencode|glm)\b|子\s*agent|子代理|后台|并行|委派|派(?:个|一个|给|活|发)/iu,
+    EXPLICIT_DELEGATE_PROMPT_PATTERNS,
   );
   const codeOrMutationPrompt = promptMatches(
     rawPrompt,

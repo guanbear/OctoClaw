@@ -5,7 +5,7 @@ import type {
   TaskProjectionStatus,
   TaskStatusProjection,
 } from "@octoclaw/contracts/status-projection";
-import type { NativeBindingRef } from "@octoclaw/contracts/work-contract";
+import type { NativeBindingRef, WorkContract } from "@octoclaw/contracts/work-contract";
 import {
   emitExecutionTransitionNotification,
   type ExecutionTransitionKind,
@@ -208,8 +208,7 @@ function isCompletionAlreadyMaterialized(options: ChildCompletionFinalizerOption
   }
 }
 
-function isWorkContractCompletionMaterialized(options: ChildCompletionFinalizerOptions): boolean {
-  const contract = loadWorkContract(options.workContractId, options.taskStatePath);
+function isNativePlannerCompletionMaterialized(contract: WorkContract | null | undefined): boolean {
   if (!contract) return false;
   const telemetry = contract.telemetry ?? {};
   const nativeRefs = contract.nativeSpawnRefs ?? {};
@@ -223,6 +222,32 @@ function isWorkContractCompletionMaterialized(options: ChildCompletionFinalizerO
   if (!materialized) return false;
   const deliveryStatus = stringValue(telemetry.deliveryStatus).toLowerCase();
   return !deliveryStatus || ["pending", "delivered", "sent", "queued_for_retry"].includes(deliveryStatus);
+}
+
+function embeddedTaskStateContracts(options: ChildCompletionFinalizerOptions): WorkContract[] {
+  try {
+    return readTaskStateRecords(options.taskStatePath)
+      .filter((record) => {
+        const workContractId = stringValue(record.workContractId || record.work_contract_id || record.id);
+        return workContractId === options.workContractId;
+      })
+      .flatMap((record) => [record.workContract, record.work_contract])
+      .filter((candidate): candidate is WorkContract => (
+        Boolean(candidate)
+        && typeof candidate === "object"
+        && !Array.isArray(candidate)
+        && stringValue((candidate as WorkContract).workContractId) === options.workContractId
+      ));
+  } catch {
+    return [];
+  }
+}
+
+function isWorkContractCompletionMaterialized(options: ChildCompletionFinalizerOptions): boolean {
+  if (isNativePlannerCompletionMaterialized(loadWorkContract(options.workContractId, options.taskStatePath))) {
+    return true;
+  }
+  return embeddedTaskStateContracts(options).some(isNativePlannerCompletionMaterialized);
 }
 
 function formatDeliveryMessage(completion: WorkerCompletionResult, options: ChildCompletionFinalizerOptions): string {

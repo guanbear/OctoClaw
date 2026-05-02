@@ -196,6 +196,7 @@ describe("octoclaw_dispatch planner backend", () => {
       runtime: "subagent",
       mode: "run",
       cleanup: "keep",
+      context: "isolated",
       lightContext: true,
       runTimeoutSeconds: 900,
     });
@@ -233,6 +234,8 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(body.status).toBe("requires_native_spawn");
     expect(body.sessionsSpawnArgs.task).toContain("Expected deliverable:");
     expect(body.sessionsSpawnArgs.task).toContain(task);
+    expect(body.sessionsSpawnArgs.task).toContain("deliver partial findings with caveats");
+    expect(body.sessionsSpawnArgs.runTimeoutSeconds).toBe(300);
     expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
   });
 
@@ -244,6 +247,7 @@ describe("octoclaw_dispatch planner backend", () => {
       mode: "run" as const,
       cleanup: "keep" as const,
       sandbox: "inherit" as const,
+      context: "isolated" as const,
       lightContext: true,
     };
     const intent = nativeSpawnIntentStore.create({

@@ -625,6 +625,89 @@ describe("child completion finalizer — completion file protocol", () => {
     expect(progressMessages).not.toContain("任务超时。");
   });
 
+  it("skips legacy timeout when embedded native WorkContract is already delivered", async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const taskStatePath = writeTaskState(tmpDir, [{
+      id: "wc-native-embedded",
+      workContractId: "wc-native-embedded",
+      work_contract_id: "wc-native-embedded",
+      route: "delegate",
+      sessionKey: "slack:channel:CEMBED",
+      childSessionKey: "child-native-embedded",
+      dispatchExecuted: true,
+      dispatch_executed: true,
+      spawnExecuted: true,
+      spawn_executed: true,
+      resultMaterialized: false,
+      result_materialized: false,
+      delivery_status: "delivered",
+      status: "running",
+      workContract: {
+        workContractId: "wc-native-embedded",
+        route: "delegate",
+        status: "completed",
+        sessionKey: "slack:channel:CEMBED",
+        userAsk: "native announce delivered",
+        intentClass: "delegated_work",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nativeSpawnRefs: {
+          openclawRunId: "run-native-embedded",
+          childSessionKey: "child-native-embedded",
+          spawnIntentId: "nsp-native-embedded",
+          spawnBackend: "sessions_spawn_planner",
+        },
+        telemetry: {
+          dispatchExecuted: true,
+          spawnExecuted: true,
+          resultMaterialized: true,
+          deliveryStatus: "delivered",
+          childSessionKey: "child-native-embedded",
+          childRunId: "run-native-embedded",
+        },
+        delegate: {
+          nativeBinding: {
+            status: "succeeded",
+            runId: "run-native-embedded",
+            childRunId: "run-native-embedded",
+            childSessionKey: "child-native-embedded",
+          },
+        },
+      },
+    }]);
+
+    const progressMessages: string[] = [];
+    registerCapturingSlackAdapter(progressMessages, (sessionKey) => sessionKey === "slack:channel:CEMBED");
+
+    scheduleChildCompletionFinalizer({
+      taskStatePath,
+      childSessionKey: "child-native-embedded",
+      delegateTaskId: "delegate-native-embedded",
+      workContractId: "wc-native-embedded",
+      parentSessionKey: "slack:channel:CEMBED",
+      nativeTaskId: "native-embedded",
+      timeoutMs: 30_000,
+      pollIntervalMs: 1_000,
+      initialDelayMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "wc-native-embedded",
+      status: "running",
+      resultMaterialized: false,
+      delivery_status: "delivered",
+    });
+    expect(taskState.tasks[0].failureCode).toBeUndefined();
+    expect(progressMessages).not.toContain("任务超时。");
+    delete process.env.OCTOCLAW_RUNTIME_LEDGER;
+  });
+
   it("extends timeout while child session is still active and then delivers completion", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-30T14:50:00.000Z"));

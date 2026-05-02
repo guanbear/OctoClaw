@@ -764,6 +764,8 @@ function buildSubagentSpawnMessage(params: { task: string; childSessionKey: stri
   ].filter(Boolean).join("\n");
 }
 
+const PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS = 300;
+
 function buildPlannerSpawnTask(params: {
   task: string;
   workContractId: string;
@@ -784,6 +786,7 @@ function buildPlannerSpawnTask(params: {
     "- Work only on the task below; do not expose hidden reasoning or raw transcript.",
     "- Return a compact, user-safe summary and any artifact refs needed by the parent.",
     "- Prefer concise progress and final output; OpenClaw native delivery handles announce/return.",
+    "- For live lookup or research, bound source checks to the minimum needed and deliver partial findings with caveats instead of exhausting the run timeout.",
     "",
     "Task:",
     truncateText(params.task, 1800),
@@ -859,11 +862,16 @@ function buildPlannerSessionsSpawnArgs(params: {
   preferredChildSessionKey?: string;
   label?: string;
 }): Record<string, unknown> {
-  const timeout = Number.isFinite(params.timeoutSeconds)
+  const requestedTimeout = Number.isFinite(params.timeoutSeconds)
     ? Math.max(0, Math.floor(params.timeoutSeconds ?? 0))
     : params.expectedSeconds > 0
       ? Math.max(60, Math.floor(params.expectedSeconds + 120))
       : undefined;
+  const timeout = requestedTimeout === undefined
+    ? PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS
+    : requestedTimeout > 0
+      ? Math.max(PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS, requestedTimeout)
+      : PLANNER_NATIVE_RUN_TIMEOUT_FLOOR_SECONDS;
   return {
     task: buildPlannerSpawnTask({
       task: params.task,
@@ -880,6 +888,7 @@ function buildPlannerSessionsSpawnArgs(params: {
     mode: "run",
     cleanup: "keep",
     sandbox: "inherit",
+    context: "isolated",
     lightContext: true,
   };
 }

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextCoverageSnapshot } from "@octoclaw/contracts/work-contract";
-import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry.js";
+import { buildPromptContextProjection, deliverNativeAnnounceCompletion, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry.js";
 import { guardAssistantMessageForPolicyState } from "./replay/message-guard.js";
 import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
 import { policyState } from "./state/policy-state.js";
@@ -43,6 +43,22 @@ function coverageSnapshot(): ContextCoverageSnapshot {
     conflict: false,
     authority: "none" as const,
   };
+}
+
+async function waitForFireAndForget(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function readReplayEvents(): Array<Record<string, unknown>> {
+  const replayLogPath = path.join(tempWorkspace, "tmp", "octopus", "runtime-policy-replay.jsonl");
+  if (!fsSync.existsSync(replayLogPath)) return [];
+  return fsSync.readFileSync(replayLogPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 beforeEach(() => {
@@ -288,6 +304,70 @@ describe("guardOutboundMessageForPolicyState", () => {
 
     expect(guarded).toEqual({ cancel: true });
     expect(policyState.getState(key)?.spawnExecuted).toBe(true);
+    policyState.clearState(key);
+  });
+
+  it("cancels Slack outbound duplicate when WorkContract says native announce already delivered but state is stale", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:1777368524.770689";
+    const childKey = "agent:main:subagent:delivered-native";
+    const contract = buildWorkContractFromPolicy(
+      key,
+      "查证 OpenClaw release 变化",
+      "fresh_live_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["native_spawn_confirmed"]),
+      { status: "sealed" },
+    );
+    contract.status = "completed";
+    contract.nativeSpawnRefs = {
+      openclawRunId: "run-native-delivered",
+      childSessionKey: childKey,
+      requesterSessionKey: key,
+      spawnIntentId: "nsp-delivered",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "run",
+    };
+    contract.telemetry = {
+      ...contract.telemetry,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: true,
+      deliveryStatus: "delivered",
+      childRunId: "run-native-delivered",
+      childSessionKey: childKey,
+    };
+    saveWorkContract(contract);
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply", route_source: "policy" },
+        work_contract: { workContractId: contract.workContractId },
+        request: { metadata: { message_id: "1777368524.770689" } },
+      },
+      delegated: true,
+      dispatchExecuted: true,
+      spawnExecuted: true,
+      resultMaterialized: false,
+      deliveryStatus: "",
+      workContractId: contract.workContractId,
+      inboundMessageTs: "1777368524.770689",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368524.770689", content: "已查证：这是 parent final 的重复投递。" },
+      { channelId: "slack", inboundMessageTs: "1777368524.770689" },
+      now,
+    );
+
+    expect(guarded).toEqual({ cancel: true });
+    expect(policyState.getState(key)).toMatchObject({
+      resultMaterialized: true,
+      nativeAnnounceDelivered: true,
+      deliveryStatus: "delivered",
+      outbound_guard_cancelled: true,
+    });
     policyState.clearState(key);
   });
 
@@ -651,6 +731,16 @@ describe("guardOutboundMessageForPolicyState", () => {
     else process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = previous;
   });
 
+  it("message_sending cancels NO_REPLY sentinel output", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", content: " NO_REPLY ", metadata: { channelId: "C0AS4DAPPU3", threadTs: "1777709667.918049" } },
+      { channelId: "slack" },
+      Date.now(),
+    );
+
+    expect(guarded).toEqual({ cancel: true });
+  });
+
 
   it("before_message_write suppresses semantic tool-call preambles", () => {
     const handlers = new Map<string, Function>();
@@ -671,20 +761,80 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(String(result?.message?.content)).toBe("NO_REPLY");
   });
 
+  it("builds native announce direct delivery with delegate provenance", async () => {
+    const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";
+    const parentKey = "agent:main:slack:channel:c0as4dappu3:thread:1777709667.918049";
+    const contract = buildWorkContractFromPolicy(
+      parentKey,
+      "查证 OpenClaw release 变化",
+      "fresh_live_lookup",
+      coverageSnapshot(),
+      buildWorkDecisionSeal("local_judge", "delegate", ["native_spawn_confirmed"]),
+      { status: "sealed" },
+    );
+    let sent: { sessionKey: string; message: string; replyToMessageId?: string } | undefined;
+
+    try {
+      const result = await deliverNativeAnnounceCompletion({
+        contract,
+        completion: {
+          sourceSessionKey: "agent:main:subagent:native-announce-child",
+          sourceSessionId: "child-session",
+          sourceTool: "subagent_announce",
+          status: "completed successfully",
+          resultText: "已查证并完成 5 句话中文总结。",
+          resultHash: "hash-native",
+        },
+        state: {
+          decision: {
+            route_decision: { route: "delegate", route_source: "native_announce", worker_pool: "octoclaw-research" },
+            model_policy: { selected_model: "zhipu/GLM-5.1" },
+          },
+        },
+        ctx: { sessionKey: parentKey, channelId: "slack" },
+        sendMessage: async (params) => {
+          sent = params;
+          return { sent: true, messageId: "1777709670.123456", threadTs: params.replyToMessageId };
+        },
+      });
+
+      expect(result.sent).toBe(true);
+      expect(sent?.sessionKey).toBe(parentKey);
+      expect(sent?.replyToMessageId).toBe("1777709667.918049");
+      expect(sent?.message).toContain("已查证并完成");
+      expect(sent?.message).toContain("route=delegate");
+      expect(sent?.message).toContain("via=native_announce");
+      expect(sent?.message).not.toContain("route=reply");
+    } finally {
+      if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+      else process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = previousProjectionFooterMode;
+    }
+  });
+
   it("treats native subagent announce completion as existing WorkContract delivery", async () => {
     const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
     process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";
     const handlers = new Map<string, Function>();
+    const sentMessages: Array<{ sessionKey: string; message: string; replyToMessageId?: string }> = [];
     plugin.register({
+      pluginConfig: {
+        nativeAnnounceSendMessageForTests: async (params: { sessionKey: string; message: string; replyToMessageId?: string }) => {
+          sentMessages.push(params);
+          return { sent: true, messageId: "1777709670.123456", threadTs: params.replyToMessageId };
+        },
+      },
       on: (event, handler) => handlers.set(event, handler),
       registerTool: () => {},
       registerCommand: () => {},
       logger: {},
     });
     const beforePromptBuild = handlers.get("before_prompt_build");
+    const beforeModelResolve = handlers.get("before_model_resolve");
     const beforeToolCall = handlers.get("before_tool_call");
     const beforeMessageWrite = handlers.get("before_message_write");
     expect(beforePromptBuild).toBeTruthy();
+    expect(beforeModelResolve).toBeTruthy();
     expect(beforeToolCall).toBeTruthy();
     expect(beforeMessageWrite).toBeTruthy();
 
@@ -734,6 +884,56 @@ describe("guardOutboundMessageForPolicyState", () => {
     ].join("\n");
 
     try {
+      const modelResolve = await beforeModelResolve!(
+        {
+          messages: [{
+            role: "user",
+            content: [{ type: "text", text: prompt }],
+            provenance: {
+              kind: "inter_session",
+              sourceSessionKey: childKey,
+              sourceTool: "subagent_announce",
+            },
+          }],
+        },
+        { sessionKey: parentKey, sessionId: "parent-session-native-announce", agentId: "main", channelId: "slack" },
+      );
+
+      expect(modelResolve).toBeUndefined();
+      expect(sentMessages).toHaveLength(1);
+      expect(sentMessages[0]?.sessionKey).toBe(parentKey);
+      expect(sentMessages[0]?.replyToMessageId).toBe("1777709667.918049");
+      expect(sentMessages[0]?.message).toContain("已查证 GitHub releases 页面");
+      expect(sentMessages[0]?.message).toContain("route=delegate");
+      expect(sentMessages[0]?.message).toContain("via=native_announce");
+      expect(sentMessages[0]?.message).not.toContain("route=reply");
+      expect(policyState.getState(parentKey)).toMatchObject({
+        workContractId: contract.workContractId,
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: true,
+        nativeAnnounceCompletionPending: false,
+        nativeAnnounceDelivered: true,
+      });
+      await waitForFireAndForget();
+      const firstReplayEvents = readReplayEvents();
+      expect(firstReplayEvents).toContainEqual(expect.objectContaining({
+        event: "native_announce_completion_matched",
+        workContractId: contract.workContractId,
+        delivered: true,
+        directDeliveryAttempted: true,
+        directDeliverySent: true,
+      }));
+      expect(firstReplayEvents).toContainEqual(expect.objectContaining({
+        event: "native_announce_final_delivered",
+        workContractId: contract.workContractId,
+        messageId: "1777709670.123456",
+      }));
+      expect(firstReplayEvents).not.toContainEqual(expect.objectContaining({
+        event: "native_announce_completion_duplicate",
+        workContractId: contract.workContractId,
+      }));
+
       const projection = await beforePromptBuild!(
         {
           provenance: {
@@ -755,14 +955,16 @@ describe("guardOutboundMessageForPolicyState", () => {
       ) as { prependSystemContext?: string } | undefined;
 
       expect(projection?.prependSystemContext).toContain("native child completion");
-      expect(projection?.prependSystemContext).toContain("Do not call octoclaw_dispatch");
-      expect(projection?.prependSystemContext).toContain("Deliver exactly one user-facing final answer");
+      expect(projection?.prependSystemContext).toContain("already delivered");
+      expect(projection?.prependSystemContext).toContain("NO_REPLY");
+      expect(sentMessages).toHaveLength(1);
       expect(policyState.getState(parentKey)).toMatchObject({
         workContractId: contract.workContractId,
         dispatchExecuted: true,
         spawnExecuted: true,
         resultMaterialized: true,
-        nativeAnnounceCompletionPending: true,
+        nativeAnnounceCompletionPending: false,
+        nativeAnnounceDelivered: true,
       });
 
       const blocked = await beforeToolCall!(
@@ -778,10 +980,20 @@ describe("guardOutboundMessageForPolicyState", () => {
       ) as { message?: { content?: unknown } } | undefined;
 
       const finalText = String(finalMessage?.message?.content ?? "");
-      expect(finalText).toContain("route=delegate");
-      expect(finalText).toContain("via=native_announce");
+      expect(finalText).toBe("NO_REPLY");
       expect(finalText).not.toContain("route=reply");
       expect(finalText).not.toContain("via=policy");
+
+      const duplicateOutbound = guardOutboundMessageForPolicyState(
+        {
+          to: "C0AS4DAPPU3",
+          threadId: "1777709667.918049",
+          content: "已查证：2026.4.29 主要改进了消息自动化、Memory、模型覆盖、gateway 稳定性和多渠道修复。",
+        },
+        { sessionKey: parentKey, channelId: "slack" },
+        Date.now(),
+      );
+      expect(duplicateOutbound).toEqual({ cancel: true });
 
       expect(loadWorkContract(contract.workContractId)?.telemetry).toMatchObject({
         resultMaterialized: true,
@@ -813,6 +1025,14 @@ describe("guardOutboundMessageForPolicyState", () => {
       ) as { prependSystemContext?: string } | undefined;
       expect(duplicateProjection?.prependSystemContext).toContain("already delivered");
       expect(duplicateProjection?.prependSystemContext).toContain("NO_REPLY");
+      await waitForFireAndForget();
+      expect(readReplayEvents()).toContainEqual(expect.objectContaining({
+        event: "native_announce_completion_duplicate",
+        workContractId: contract.workContractId,
+        delivered: true,
+        directDeliverySent: false,
+        directDeliveryError: "already_delivered",
+      }));
     } finally {
       if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
       else process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = previousProjectionFooterMode;

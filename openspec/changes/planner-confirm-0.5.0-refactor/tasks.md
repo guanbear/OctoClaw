@@ -192,7 +192,7 @@ Tasks:
 - [x] Args hash mismatch blocks `sessions_spawn`.
 - [x] Accepted confirm without runId fails closed.
 - [x] Confirm success writes native refs and sends one delegate ACK in real Slack planner smoke.
-- [x] Child completion without `.completion.json` uses native announce and does not duplicate final message.
+- [ ] Child completion without `.completion.json` uses native announce and does not duplicate final message.
 - [x] Status follow-up does not spawn.
 - [x] Planner path does not write scheduler queue, completion binding, or delivery outbox.
 

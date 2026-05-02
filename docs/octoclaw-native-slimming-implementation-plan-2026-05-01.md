@@ -126,9 +126,9 @@
 
 - 将 planner path 的 `octoclaw_policy_decide -> octoclaw_dispatch` 合并为更直接的 planner tool（例如 `octoclaw_plan_native_spawn`），或让 `octoclaw_dispatch` 在已有 decision 时直接返回 `NativeSpawnIntent + sessionsSpawnArgs`。
 - local judge 高置信 delegate 且 admission 通过时，system instruction 要求主 agent 直接调用 `sessions_spawn`，不要先解释、总结或二次规划。
-- `sessionsSpawnArgs` 必须小：只包含 `task/label/runtime/model/thinking/cwd/runTimeoutSeconds/mode/cleanup/sandbox/lightContext` 等 OpenClaw 原生允许字段，不传 `target/channel/to/threadId/replyTo/transport`。
-- planner path 默认传 `sessionsSpawnArgs.lightContext=true`；child prompt 只保留任务、上下文摘要、验收标准、交付格式和必要 guardrail，不塞 parent 长上下文或 raw transcript。
-- child 默认使用快/便宜模型，复杂任务再按 complexity/model policy 升级；`thinking` 默认关闭或低档，`runTimeoutSeconds` 按 expected duration 设置。
+- `sessionsSpawnArgs` 必须小：只包含 `task/label/runtime/model/thinking/cwd/runTimeoutSeconds/mode/cleanup/sandbox/context/lightContext` 等 OpenClaw 原生允许字段，不传 `target/channel/to/threadId/replyTo/transport`。
+- planner path 默认传 `sessionsSpawnArgs.context="isolated"` 和 `sessionsSpawnArgs.lightContext=true`；child prompt 只保留任务、上下文摘要、验收标准、交付格式和必要 guardrail，不塞 parent 长上下文或 raw transcript。
+- child 默认使用快/便宜模型，复杂任务再按 complexity/model policy 升级；`thinking` 默认关闭或低档，`runTimeoutSeconds` 按 expected duration 设置并保留保守下限，避免 native announce 前被过早杀掉。
 - 如果当前 OpenClaw 不支持通过 `sessions_spawn` 限制工具面，不在 0.5.0 自造 private hook；只记录为上游 wishlist。
 - SQLite 保留为 metadata/audit store，并把 accepted native refs、WorkContract projection、spawn intent transition 放到 indexed lookup 路径。
 - NativeSpawnIntent 状态转换改为原子 SQL：`UPDATE ... WHERE status=? AND args_hash=? RETURNING ...`，减少 read-modify-write race。
@@ -143,7 +143,7 @@
 - route commit 到 `sessions_spawn_intent_allowed` p95 <= 30s。
 - `octoclaw_dispatch`/planner tool 不直接 spawn、不发 delegate accepted ACK、不写 legacy scheduler/completion/outbox。
 - 真实 Slack smoke replay 中能看到 `suppressed_until_native_confirm -> sessions_spawn_intent_allowed -> spawn_started`。
-- `sessionsSpawnArgs` 中稳定包含 `lightContext=true`，且 child prompt 长度有上限。
+- `sessionsSpawnArgs` 中稳定包含 `context="isolated"` 和 `lightContext=true`，且 child prompt 长度有上限。
 - cheap model/fast profile 的选择写入 WorkContract/native refs，便于复盘成本。
 - child 启动指标只做观测，不作为 0.5.0 阻塞目标；优化不能牺牲 confirm correctness。
 - native child final footer 在 debug 模式显示 `route=delegate`，`via=subagent` 或 `via=native_announce`。
@@ -167,14 +167,14 @@
 关键能力：
 
 - 工具名是 `sessions_spawn`，非阻塞返回 `{ status: "accepted", runId, childSessionKey }`。
-- 参数支持 `task`、`label`、`runtime`、`agentId`、`model`、`thinking`、`cwd`、`runTimeoutSeconds`、`thread`、`mode`、`cleanup`、`sandbox`、`lightContext`、`attachments`。当前工具 schema 没有稳定 `context` 参数。
+- 参数支持 `task`、`label`、`runtime`、`agentId`、`model`、`thinking`、`cwd`、`runTimeoutSeconds`、`thread`、`mode`、`cleanup`、`sandbox`、`context`、`lightContext`、`attachments`；planner path 使用 `context="isolated"`，并由 intent hash/gate 防止主模型改写。
 - `sessions_spawn` 明确拒绝 `target/channel/to/threadId/replyTo/transport` 这类 channel delivery 参数；投递应交给 message/session delivery 能力。
 - `subagent-spawn.ts` 会处理 max depth、max children、agent allowlist、sandbox 继承、model/thinking plan、lightweight bootstrap context、child session key、run id、registry registration、lifecycle hooks。
 - OpenClaw 原生 spawn 已有 requester origin、child session、task lane、run timeout、cleanup、completion announce 的框架。
 
 OctoClaw 可用点：
 
-- model/cost policy 最终映射为 `model`、`thinking`、`runTimeoutSeconds`、`lightContext`，大上下文通过 attachments 或 workspace refs 传递。
+- model/cost policy 最终映射为 `model`、`thinking`、`runTimeoutSeconds`、`context="isolated"`、`lightContext`，大上下文通过 attachments 或 workspace refs 传递。
 - WorkContract 保存 `runId`、`childSessionKey`、`mode`、`modelApplied`，不再推进自建执行状态。
 - 不再要求 child worker 写 `.completion.json`。
 

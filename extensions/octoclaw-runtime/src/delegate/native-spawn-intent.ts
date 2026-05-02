@@ -30,6 +30,7 @@ export interface SessionsSpawnArgs {
   cleanup?: "delete" | "keep";
   sandbox?: "inherit" | "require";
   streamTo?: "parent";
+  context?: "isolated";
   lightContext?: boolean;
   attachments?: SessionsSpawnAttachment[];
   attachAs?: { mountPath?: string };
@@ -106,6 +107,7 @@ function normalizeSessionsSpawnArgs(args: SessionsSpawnArgs): Record<string, unk
   if (record.mode === "run" || record.mode === "session") normalized.mode = record.mode;
   if (record.cleanup === "delete") normalized.cleanup = "delete";
   if (record.sandbox === "require") normalized.sandbox = "require";
+  if (record.context === "isolated") normalized.context = "isolated";
   if (record.lightContext === true) normalized.lightContext = true;
 
   if (Array.isArray(record.attachments) && record.attachments.length > 0) {

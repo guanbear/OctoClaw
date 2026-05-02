@@ -111,10 +111,18 @@ export async function syncSlackDeliveryHookCompatibility(openclawHome: string): 
     mode: "off",
     nativeTransport: false,
   };
-  const changed = JSON.stringify(streaming) !== JSON.stringify(nextStreaming) || slack.nativeStreaming !== false;
+  const legacySlackStreamingKeys = [
+    "streamMode",
+    "chunkMode",
+    "blockStreaming",
+    "blockStreamingCoalesce",
+    "nativeStreaming",
+  ];
+  const hasLegacySlackStreamingKeys = legacySlackStreamingKeys.some((key) => Object.prototype.hasOwnProperty.call(slack, key));
+  const changed = JSON.stringify(streaming) !== JSON.stringify(nextStreaming) || hasLegacySlackStreamingKeys;
   if (!changed) return;
+  for (const key of legacySlackStreamingKeys) delete slack[key];
   slack.streaming = nextStreaming;
-  slack.nativeStreaming = false;
   await fs.writeFile(openclawConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 

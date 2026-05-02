@@ -251,7 +251,7 @@ describe("octoclawctl cli", () => {
       const enabledExitCode = await main(["config", "set", "judge.enabled", "true"], { OCTOCLAW_HOME: openclawHome }, enabledCapture.io);
       expect(enabledExitCode).toBe(0);
       await fs.writeFile(path.join(openclawHome, "openclaw.json"), JSON.stringify({
-        channels: { slack: { botToken: "xoxb-test", streaming: { mode: "partial", nativeTransport: true } } },
+        channels: { slack: { botToken: "xoxb-test", streaming: { mode: "partial", nativeTransport: true }, nativeStreaming: true } },
       }), "utf8");
       await fs.mkdir(path.join(openclawHome, "workspace"), { recursive: true });
       await fs.writeFile(path.join(openclawHome, "workspace", "AGENTS.md"), [
@@ -283,7 +283,7 @@ describe("octoclawctl cli", () => {
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].config.workspaceRoot).toBe(path.join(openclawHome, "workspace"));
       expect(openclawConfig.plugins.entries["octoclaw-runtime"].hooks.allowPromptInjection).toBe(true);
       expect(openclawConfig.channels.slack.streaming).toEqual({ mode: "off", nativeTransport: false });
-      expect(openclawConfig.channels.slack.nativeStreaming).toBe(false);
+      expect(openclawConfig.channels.slack).not.toHaveProperty("nativeStreaming");
       const workspaceAgents = await fs.readFile(path.join(openclawHome, "workspace", "AGENTS.md"), "utf8");
       expect(workspaceAgents).toContain("octoclaw:core-rules v1.9.1");
       expect(workspaceAgents).toContain("主 Agent 不是最终 route authority");

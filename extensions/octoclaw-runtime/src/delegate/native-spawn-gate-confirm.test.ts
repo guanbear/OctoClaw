@@ -31,6 +31,7 @@ const args: SessionsSpawnArgs = {
   mode: "run",
   cleanup: "keep",
   sandbox: "inherit",
+  context: "isolated",
   lightContext: true,
 };
 
@@ -126,6 +127,24 @@ describe("evaluateNativeSpawnGate", () => {
 
     expect(allowed.allowed).toBe(true);
     expect(allowed.allowed ? allowed.intent.spawnIntentId : "").toBe(intent.spawnIntentId);
+  });
+
+  it("blocks planner sessions_spawn args when the isolated context flag is missing", () => {
+    nativeSpawnIntentStore.create({
+      workContractId: "wc-context-isolated",
+      sessionKey: "session-context-isolated",
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+
+    const { context: _context, ...missingContext } = args;
+    const blocked = evaluateNativeSpawnGate({
+      sessionKeys: ["session-context-isolated"],
+      args: missingContext,
+    });
+
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toBe("args_hash_mismatch");
   });
 
   it("blocks expired pending intent and marks it expired", () => {
