@@ -22,10 +22,10 @@ Forbidden scope:
 
 Tasks:
 
-- [ ] Add typed resolver for `OCTOCLAW_SPAWN_BACKEND=planner|legacy|off`.
-- [ ] Add planner allowlist and `OCTOCLAW_SPAWN_INTENT_TTL_MS` parsing.
-- [ ] Add legacy disable flags for completion file, child finalizer, delivery outbox, and runtime ledger mode.
-- [ ] Unit tests cover defaults, invalid values, allowlist matching, and rollback flags.
+- [x] Add typed resolver for `OCTOCLAW_SPAWN_BACKEND=planner|legacy|off`.
+- [x] Add planner allowlist and `OCTOCLAW_SPAWN_INTENT_TTL_MS` parsing.
+- [x] Add legacy disable flags for completion file, child finalizer, delivery outbox, and runtime ledger mode.
+- [x] Unit tests cover defaults, invalid values, allowlist matching, and rollback flags.
 
 ## PC2 NativeSpawnIntent Store
 
@@ -46,11 +46,11 @@ Forbidden scope:
 
 Tasks:
 
-- [ ] Define `NativeSpawnIntent` and `NativeSpawnIntentStatus`.
-- [ ] Implement canonical JSON/hash for the exact `sessions_spawn` args.
-- [ ] Implement TTL expiration, `planned -> spawn_call_started -> accepted|failed|expired` transitions.
-- [ ] Implement idempotent same-`runId` confirm and conflict on different `runId`.
-- [ ] Tests cover hash stability, mismatches, TTL, duplicate confirm, and conflict.
+- [x] Define `NativeSpawnIntent` and `NativeSpawnIntentStatus`.
+- [x] Implement canonical JSON/hash for the exact `sessions_spawn` args.
+- [x] Implement TTL expiration, `planned -> spawn_call_started -> accepted|failed|expired` transitions.
+- [x] Implement idempotent same-`runId` confirm and conflict on different `runId`.
+- [x] Tests cover hash stability, mismatches, TTL, duplicate confirm, and conflict.
 
 ## PC3 Dispatch Planner Output
 
@@ -64,11 +64,11 @@ Write scope:
 
 Tasks:
 
-- [ ] In planner backend, `octoclaw_dispatch` returns `requires_native_spawn` and compact `sessionsSpawnArgs`.
-- [ ] It does not call legacy spawn, scheduler queue, completion binding, or child finalizer.
-- [ ] It does not send delegate accepted ACK.
-- [ ] It still enforces WorkContract admission: new work, expected deliverable, no execution follow-up spawn.
-- [ ] Tests cover planner output, admission rejection, and compact payload size.
+- [x] In planner backend, `octoclaw_dispatch` returns `requires_native_spawn` and compact `sessionsSpawnArgs`.
+- [x] It does not call legacy spawn, scheduler queue, completion binding, or child finalizer.
+- [x] It does not send delegate accepted ACK.
+- [x] It still enforces WorkContract admission: new work, expected deliverable, no execution follow-up spawn.
+- [x] Tests cover planner output, admission rejection, and compact payload size.
 
 ## PC4 `sessions_spawn` Gate
 
@@ -82,13 +82,13 @@ Write scope:
 
 Tasks:
 
-- [ ] Gate only native tool name `sessions_spawn`.
-- [ ] Block without pending intent.
-- [ ] Block expired intent.
-- [ ] Block canonical args hash mismatch.
-- [ ] Block status/provenance/execution follow-up spawn.
-- [ ] On match, move intent to `spawn_call_started` and allow native call.
-- [ ] Tests cover all block reasons and one allowed path.
+- [x] Gate only native tool name `sessions_spawn`.
+- [x] Block without pending intent.
+- [x] Block expired intent.
+- [x] Block canonical args hash mismatch.
+- [x] Block status/provenance/execution follow-up spawn.
+- [x] On match, move intent to `spawn_call_started` and allow native call.
+- [x] Tests cover all block reasons and one allowed path.
 
 ## PC5 `octoclaw_dispatch_confirm`
 
@@ -103,13 +103,13 @@ Write scope:
 
 Tasks:
 
-- [ ] Add confirm tool input schema.
-- [ ] Require matching intent/workContract/session.
-- [ ] Require non-empty `runId` for accepted confirm.
-- [ ] Treat `childSessionKey` as ref, not spawn evidence.
-- [ ] Write WorkContract native refs only after accepted confirm.
-- [ ] Send delegate accepted ACK only after accepted confirm.
-- [ ] Tests cover missing runId, error confirm, same-run idempotency, different-run conflict, and ACK timing.
+- [x] Add confirm tool input schema.
+- [x] Require matching intent/workContract/session.
+- [x] Require non-empty `runId` for accepted confirm.
+- [x] Treat `childSessionKey` as ref, not spawn evidence.
+- [x] Write WorkContract native refs only after accepted confirm.
+- [x] Send delegate accepted ACK only after accepted confirm.
+- [x] Tests cover missing runId, error confirm, same-run idempotency, different-run conflict, and ACK timing.
 
 ## PC6 WorkContract Native Refs
 
@@ -206,3 +206,12 @@ Tasks:
 - [ ] Remove completion file prompt requirement from planner path.
 - [ ] Remove delivery outbox from completion announce path.
 - [ ] Keep explicit rollback notes until 0.5.0 is stable.
+
+
+## PC1-PC5 implementation evidence
+
+- TypeScript: `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json --pretty false`
+- Focused tests: `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/config/index.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-intent.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/tools/registration-dispatch-honesty.test.ts extensions/octoclaw-runtime/src/runtime-ledger/runtime-ledger-hot-path.test.ts`
+- Cross-review patch: `/Users/guanbear/workspace/review-patches/octoclaw-pc345-full.diff` on macmini, sent to opencode with `ulw`. The earlier `octoclaw-pc345.diff` was incomplete and should not be used as review evidence.
+- GLM/opencode review follow-up: gate scope was narrowed so planner intent enforcement only runs when `OCTOCLAW_SPAWN_BACKEND=planner` and the session is planner-allowed; legacy/default native `sessions_spawn` is not blocked by the planner gate.
+- GLM/opencode final review: P0 cleared and patch considered mergeable. Remaining non-blockers are SQLite open/close performance in `NativeSpawnIntentStore` and documenting that empty planner allowlist means all sessions when planner backend is enabled. The reported gate state-transition concern is covered by `evaluateNativeSpawnGate()` calling `transitionToSpawnCallStarted()` and by the allowed-path test.

@@ -76,6 +76,8 @@ import {
 import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
+import { evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
+import { isPlannerAllowedForSession, resolveSpawnBackend } from "./config/index.js";
 
 type UnknownRecord = Record<string, unknown>;
 type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
@@ -1465,6 +1467,70 @@ export const plugin = {
       const storedInboundTs = stringValue(state?.inboundMessageTs);
       if (storedInboundTs && !stringValue(metadata.message_id)) {
         metadata.message_id = storedInboundTs;
+      }
+
+      if (toolName === "sessions_spawn") {
+        const sessionKeys = [
+          stateKey,
+          stringValue(ctx.sessionKey),
+          stringValue(ctx.canonicalSessionKey),
+          stringValue(asRecord(decision.request).session_key),
+          ...resolvePolicyStateKeys(ctx),
+        ];
+        const plannerGateEnabled = resolveSpawnBackend() === "planner"
+          && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
+        if (plannerGateEnabled) {
+          const gate = evaluateNativeSpawnGate({ sessionKeys, args: toolParams as any, decision });
+          if (!gate.allowed) {
+            updatePolicyState(stateKey, (current) => ({
+              ...current,
+              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+            }));
+            void recordPolicyReplay(
+              "sessions_spawn_intent_blocked",
+              {
+                sessionKey: stateKey || "",
+                sessionId: stringValue(ctx.sessionId),
+                route: stringValue(asRecord(decision.route_decision).route),
+                toolName,
+                reason: gate.reason,
+                spawn_intent_id: gate.intent?.spawnIntentId ?? null,
+                expected_hash: gate.expectedHash ?? null,
+                actual_hash: gate.actualHash ?? null,
+              },
+              pi.logger,
+              decision,
+            ).catch(() => {});
+            return {
+              block: true,
+              blockReason: gate.reason === "args_hash_mismatch"
+                ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Call octoclaw_dispatch again or use the exact sessionsSpawnArgs."
+                : "OctoClaw blocked sessions_spawn because no current pending native spawn intent exists. Call octoclaw_dispatch first.",
+            };
+          }
+          updatePolicyState(stateKey, (current) => ({
+            ...current,
+            delegated: false,
+            spawnIntentId: gate.intent.spawnIntentId,
+            workContractId: gate.intent.workContractId,
+            dispatchStatus: "spawn_call_started",
+            controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
+          }));
+          void recordPolicyReplay(
+            "sessions_spawn_intent_allowed",
+            {
+              sessionKey: stateKey || gate.intent.sessionKey,
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(asRecord(decision.route_decision).route),
+              toolName,
+              spawn_intent_id: gate.intent.spawnIntentId,
+              work_contract_id: gate.intent.workContractId,
+            },
+            pi.logger,
+            decision,
+          ).catch(() => {});
+          return;
+        }
       }
 
       if (

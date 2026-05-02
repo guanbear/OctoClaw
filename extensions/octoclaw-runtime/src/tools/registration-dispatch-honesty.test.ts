@@ -218,8 +218,9 @@ describe("dispatchReplyToMessageId", () => {
 describe("octoclaw_dispatch honesty", () => {
   afterEach(() => {
     delete process.env.OCTOCLAW_WORK_CONTRACT_LEDGER_PATH;
-    policyState.clear("session-runtime-stub-without-evidence");
-    policyState.clear("session-route-hint-sealed-reply");
+    for (const entry of policyState.entries()) {
+      policyState.clear(entry.key);
+    }
     envOverrides.workspaceRoot = "";
     for (const dir of tempLedgerPaths.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });

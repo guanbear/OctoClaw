@@ -3,6 +3,7 @@ import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutb
 import { guardAssistantMessageForPolicyState } from "./replay/message-guard.js";
 import { policyState } from "./state/policy-state.js";
 import { getToolRegistrations } from "./tools/registration.js";
+import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
 
 describe("resolveDelegationCapability", () => {
   it("fails closed when delegation is requested but host detached runtime support is missing", () => {
@@ -610,6 +611,124 @@ describe("plugin enabled config", () => {
 
 describe("before_tool_call route hint guard", () => {
 
+
+  it("blocks sessions_spawn without a matching planner intent", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spawn-gate-block";
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: { task: "do work", runtime: "subagent", mode: "run", cleanup: "keep", sandbox: "inherit", lightContext: true } },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toMatchObject({ block: true });
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
+
+  it("allows sessions_spawn only after a matching planner intent", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spawn-gate-allow";
+    const args = { task: "do work", runtime: "subagent" as const, mode: "run" as const, cleanup: "keep" as const, sandbox: "inherit" as const, lightContext: true };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-spawn-gate-allow",
+      sessionKey: key,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: true } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"] },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: args },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
+
+  it("does not require planner intent when spawn backend is legacy", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spawn-gate-legacy";
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "reply" },
+        hook_interface: { before_tool_call: { enabled: true, route_hint_required: false, route_hint_tool: "octoclaw_route_hint", delegation_enforcement: false } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { allow_direct_tools: true },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: { task: "do native work", runtime: "subagent", mode: "run", cleanup: "keep", sandbox: "inherit", lightContext: true } },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+  });
 
   it("does not block octoclaw_dispatch with the manual delegation pattern guard", async () => {
     const handlers = new Map<string, Function>();
