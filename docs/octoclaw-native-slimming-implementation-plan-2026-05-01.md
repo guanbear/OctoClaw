@@ -19,6 +19,20 @@
 
 0.5.0 的主线落地方式是 `sessions_spawn planner/confirm`：`octoclaw_dispatch` 只生成经过 admission 的 `NativeSpawnIntent`，主 agent 调 OpenClaw 原生 `sessions_spawn`，再通过 `octoclaw_dispatch_confirm` 把 `runId/childSessionKey` 写回 OctoClaw metadata。`api.runtime.subagent.run()` 不作为 0.5.0 主路径；direct plugin SDK spawn 只作为未来替换点。
 
+### 0.1 0.5.0 Master Plan 口径
+
+本文就是 0.5.0 重构的 master implementation plan，不再另起一份完整计划文档。后续如果需要给 Codex/opencode 交接，只写短 handoff，handoff 必须指回本文和 OpenSpec，不承载另一套计划。
+
+0.5.0 的完成定义按三档管理：
+
+| 档位 | 范围 | 完成标准 |
+| --- | --- | --- |
+| Must ship | `sessions_spawn planner/confirm` 主链、NativeSpawnIntent gate、`octoclaw_dispatch_confirm`、delegate ACK 时序、源码/部署一致、核心回归测试、真实 Slack smoke、OpenSpec 同步 | planner allowlist 内真实 Slack delegate 能完成 `dispatch -> sessions_spawn -> confirm -> ACK`，无 `invalid_status:planned`，无提前“已委派”，重启/重复 confirm 不制造假状态 |
+| Should ship | ACK/footer/judge 的必要瘦身、runtime-ledger 职责收缩、status/provenance follow-up 禁止 spawn、planner path 下关闭 completion file/finalizer/outbox、native status projector 初版 | 用户可见噪声明显降低，状态回答不重新 spawn，planner path 不依赖 completion file，SQLite 只做 metadata/audit |
+| Deferred | 完整删除 legacy scheduler/finalizer/outbox、全量 IM delivery port 替换 CLI、非 Slack IM 适配、future plugin SDK direct spawn、managed flow 编排增强 | 进入 0.5.x/0.6.0，必须单独 OpenSpec 和验收，不作为 0.5.0 阻塞项 |
+
+远端 Codex/opencode 接手时应先建立这个 master task board，然后按 slice 推进。当前真实 Slack smoke handoff 只覆盖 Must ship 的 P0/P1：证明 native `sessions_spawn` 是否命中 OctoClaw `before_tool_call` gate，并修复 `invalid_status:planned`。P0/P1 通过后，再继续做 ACK/footer/judge、legacy 降级和 metadata/status 收口。
+
 ## 1. 预期目标
 
 ### 1.1 用户体验目标
@@ -520,6 +534,7 @@ interface NativeSpawnIntent {
 规则：
 
 - 如果 tool 是 `sessions_spawn`，必须存在当前 session 未过期的 pending `NativeSpawnIntent`。
+- `sessions_spawn` gate 不能依赖普通 `hook_interface.before_tool_call.enabled`；只要 OpenClaw 对 native `sessions_spawn` 触发了 `before_tool_call` lifecycle，planner mode 就必须先执行 intent gate，再决定是否进入其他 hook 逻辑。
 - `sessions_spawn` args canonical hash 必须等于 intent `planHash`。
 - 匹配后允许调用，并把 intent 状态改成 `spawn_call_started`。
 - 不匹配时阻止调用，返回“先走 `octoclaw_dispatch`”或“spawn plan 已过期/不匹配”。
@@ -554,7 +569,7 @@ interface DispatchConfirmInput {
 
 规则：
 
-- intent 必须存在、未过期、未确认、状态为 `spawn_call_started` 或 `planned`。
+- intent 必须存在、未过期、未确认，且状态必须为 `spawn_call_started`。不能为了绕过 `invalid_status:planned` 允许 confirm 从 `planned -> accepted`，否则会失去 `sessions_spawn` gate 的安全边界。
 - `workContractId` 必须匹配。
 - `sessionsSpawnStatus=accepted` 时必须有 `runId`；只有 `childSessionKey` 不算成功。
 - confirm 成功后写 WorkContract native refs：`openclawRunId`、`childSessionKey`、`spawnBackend: "sessions_spawn_planner"`。
@@ -761,7 +776,7 @@ delegate route 不发 reply-style slow ACK。delegate 的可见 ACK 等 `session
 
 - WorkContract sealed。
 - native spawn 返回 accepted。
-- 有 `runId` 或 native task id。
+- `octoclaw_dispatch_confirm` 已校验非空 `runId`；native task id 可作为辅助证据，但不能替代 `runId`。
 
 推荐文案：
 
@@ -1014,16 +1029,17 @@ planner path 稳定后，按顺序禁用/删除：
 
 ## 14. 发布顺序
 
-推荐顺序：
+0.5.0 不应按“把所有瘦身项一次性做完”的方式发布，而应按 gate 可验证的 slice 发布。推荐顺序：
 
-1. Phase 0 guardrail：低风险，先修明显 bug。
-2. Phase 3 ACK：先把用户可见噪声降下来。
-3. Phase 4 footer：默认 off，减少内部信息泄露。
-4. Phase 1 planner/confirm：灰度开启。
-5. Phase 2 native status：让状态面板以 native truth 为准。
-6. Phase 6 native delivery：替换 CLI/outbox。
-7. Phase 5 judge 深化：边跑 replay/eval 边收窄 schema。
-8. 删除 legacy runtime 轮子。
+1. P0 source/deploy guardrail：确认源码、deployed `dist`、OpenSpec 一致；先修会制造假事实的 bug。
+2. P1 planner/confirm 主链：灰度开启 `OCTOCLAW_SPAWN_BACKEND=planner`，跑通真实 Slack `dispatch -> sessions_spawn -> confirm -> ACK`。
+3. P2 ACK/footer/judge 必要瘦身：footer 默认 off，delegate ACK 只在 confirm 后发，judge 只做 router/admission signal，不重写 judge 主体。
+4. P3 metadata/status 收口：SQLite 保留为 metadata/audit store，状态投影逐步以 native runs/flows 为 execution truth。
+5. P4 planner path legacy 降级：planner allowlist 内关闭 completion file、child-finalizer、delivery outbox；legacy backend 保留回滚。
+6. P5 native delivery port：替换 Slack CLI/outbox 热路径；如果 native port 不足，保留 legacy fallback。
+7. P6 legacy 删除：只有在真实 Slack 验收和回滚窗口都通过后，才删除 scheduler/finalizer/outbox 代码。
+
+每个 slice 都必须有：OpenSpec 任务状态、focused tests、真实 Slack 验收记录、回滚开关。
 
 ## 15. 最小可交付版本
 

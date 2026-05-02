@@ -215,7 +215,7 @@ octoclaw_dispatch
 | 审查点 | 当前判断 | 后续动作 |
 |--------|----------|----------|
 | 委派链路 | dispatch/materialize/finalizer/outbox 主链路已基本稳；completion file、finalizer recovery、delivery outbox 均有测试 | `resume_preferred` 目前只写 metadata，live spawn 仍生成新 `childSessionKey`；N1 必须打通 preferred child session 复用 |
-| follow-up 路由 | `execution_followup` 已有强制 reply / control-observer 设计和部分测试 | P1-3 不再通过补关键词修 “为啥没派发成功 / 为什么没有 spawn / no_dispatch_evidence” 这类 case；N1 必须把 `conversation-grounding` 升级为 `RecentExecutionContext + relation_to_recent_execution`，将既有执行的 status / failure reason / provenance 查询映射到现有 `execution_followup` 管道，并由 ticket/dispatch 双 guard 保证非 `new_work` 拿不到派发权限 |
+| follow-up 路由 | `execution_followup` 已有强制 reply / control-observer 设计和部分测试 | P1-3 不再通过补关键词修 “为啥没派发成功 / 为什么没有 spawn / no_dispatch_evidence” 这类 case；N1 采用轻量 judge signal + runtime hard gate：judge 可建议 `is_followup_to_recent_execution` / `is_new_work` / `expected_deliverable`，但只有非空 `expected_deliverable` + 有效 ticket 才能 ordinary dispatch |
 | retry | delivery outbox retry 已完成；delegate core 有 `retryDelegateAttempt` 数据模型 | `/octotask retry` / `octoclaw_task_action retry` 仍是只读 payload；N1 必须实现同一 delegate task 的新 attempt，并明确 stop/approve/reject 的语义 |
 | 真相层 | WorkContract 已内嵌 task-state，status/finalizer/continuity 可从 durable projection 恢复 | `readTaskStateDocument` 不能把 parse/IO 异常静默当空状态；N1 必须区分文件不存在、损坏和临时失败，避免覆盖 durable truth |
 | 并发 / 排队 / 修订 | TaskFlow、delegate attempt、continuity 已有底层元素 | 还缺明确 scheduler / amendment protocol：独立任务应可并发，有依赖时排队，补充/修改已有任务时应 steer / queue-after / cancel-respawn 三选一 |
@@ -341,7 +341,7 @@ N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `w
 
 #### N1-A：judge / dispatch 授权边界
 
-1. judge 输出从单一 route 扩展为结构化 proposal：`route`、`is_new_work`、`needs_side_effect`、`needs_fresh_state`、`expected_deliverable`、`complexity`、`duration_hint`、`tool_need_hint`、`confidence`。
+1. judge 输出从单一 route 扩展为结构化 proposal：`route`、`is_followup_to_recent_execution`、`is_new_work`、`needs_side_effect`、`needs_fresh_state`、`expected_deliverable`、`complexity`、`duration_hint`、`tool_need_hint`、`confidence`。
 2. runtime 只做薄授权：`route=delegate` 但没有新工作或可验收交付物时降级 reply；本 turn 已 direct action/visible reply 后撤销 dispatch eligibility；sealed delegate 后禁止 main final 抢答。
 3. `octoclaw_dispatch` / `octoclaw_spawn` 强制一次性 delegation ticket；无 ticket、过期、已用、撤销、scope 不匹配都不得创建新 WorkContract/native task，只返回可回复状态包或 no-verifiable-record。
 4. ticket 必须绑定非空 `workContractId`、`delegateTaskId`、`deliveryTarget`、`expectedDeliverable`、canonical complexity、completion path 和 native binding candidate。
@@ -384,7 +384,7 @@ N1 采用最小可恢复 ledger 路径，不做大爆炸：第一步只实现 `w
 
 #### N1 验收标准
 
-- “为什么刚才自己回复一次又派发一次 / 为啥没派发成功呢”这类执行追问永远不创建新的 WorkContract/delegate task；实现上不靠补关键词，而是先构造 `RecentExecutionContext`，判定 `relation_to_recent_execution` 为 status / failure reason / provenance query 后映射到现有 `execution_followup` + control-observer 管道，只读 task-state / replay / status projection / dispatch ledger 并直接回答。
+- “为什么刚才自己回复一次又派发一次 / 为啥没派发成功呢”这类执行追问永远不创建新的 WorkContract/delegate task；实现上不靠补关键词，也不需要大 taxonomy。judge 只给 `is_followup_to_recent_execution` / `is_new_work` / `expected_deliverable` 建议，runtime 以有效 ticket + 非空 `expected_deliverable` 为硬门；没有交付物的 delegate 倾向只能 reply/status refresh/no-verifiable-record。
 - `octoclaw_dispatch` / `octoclaw_spawn` 的测试能证明没有有效 delegation ticket 时不会创建新任务；ticket 有效、未过期、未撤销且绑定当前 turn/session/WorkContract 时才允许 materialize。
 - completion 写到错误路径或 `workContractId` 为空时，状态进入 `completion_orphaned` / `binding_mismatch`，orphan scanner 能找回候选结果；不能继续普通显示 `running/result=none`。
 - `resume_preferred` 的测试能证明同一 WorkContract follow-up 复用 preferred child session，而不是生成新 UUID。
