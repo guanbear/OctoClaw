@@ -245,6 +245,74 @@ export function listWorkContractsBySession(sessionKey: string, taskStatePath?: s
   return listWorkContractsBySessionFromTaskState(sessionKey, taskStatePath);
 }
 
+function workContractChildSessionCandidates(contract: WorkContract): string[] {
+  const delegate = contract.delegate;
+  return Array.from(new Set([
+    contract.nativeSpawnRefs?.childSessionKey,
+    contract.continuity?.preferredChildSessionKey,
+    contract.telemetry?.childSessionKey,
+    contract.mainContext?.visibleIds?.childSessionKey,
+    delegate?.nativeBinding?.childSessionKey,
+    ...(Array.isArray(delegate?.childSessions) ? delegate.childSessions.map((child) => child.childSessionKey) : []),
+  ].map((value) => String(value ?? "").trim()).filter(Boolean)));
+}
+
+function contractMatchesChildSession(contract: WorkContract, childSessionKey: string): boolean {
+  const target = String(childSessionKey || "").trim();
+  return Boolean(target) && workContractChildSessionCandidates(contract).includes(target);
+}
+
+function sortWorkContractsByUpdatedAt(contracts: WorkContract[]): WorkContract[] {
+  return contracts
+    .slice()
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+}
+
+function listWorkContractsFromTaskState(taskStatePath?: string): WorkContract[] {
+  return readTaskStateRecords(taskStatePath)
+    .map((record) => {
+      const candidate = record.workContract ?? record.work_contract;
+      return candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate as WorkContract : null;
+    })
+    .filter((contract): contract is WorkContract => Boolean(contract?.workContractId));
+}
+
+export function findWorkContractByNativeChildSessionKey(childSessionKey: string, taskStatePath?: string): WorkContract | null {
+  const target = String(childSessionKey || "").trim();
+  if (!target) return null;
+
+  if (resolveRuntimeLedgerMode() === "enforce") {
+    const result = openRuntimeLedger({ mode: "best_effort" });
+    if (result.status === "ok" && result.db) {
+      try {
+        const rows = result.db
+          .prepare(`
+            SELECT work_contract_json, revision, updated_at
+            FROM work_contracts
+            WHERE json_extract(work_contract_json, '$.nativeSpawnRefs.childSessionKey') = ?
+               OR json_extract(work_contract_json, '$.continuity.preferredChildSessionKey') = ?
+               OR json_extract(work_contract_json, '$.telemetry.childSessionKey') = ?
+               OR json_extract(work_contract_json, '$.mainContext.visibleIds.childSessionKey') = ?
+               OR json_extract(work_contract_json, '$.delegate.nativeBinding.childSessionKey') = ?
+          `)
+          .all(target, target, target, target, target)
+          .map((row) => rowToWorkContract(row as WorkContractLedgerRow))
+          .filter((contract): contract is WorkContract => Boolean(contract));
+        const match = sortWorkContractsByUpdatedAt(rows).find((contract) => contractMatchesChildSession(contract, target));
+        if (match) return match;
+      } catch {
+        // Fall back to task-state below. confirmNativeSpawn mirrors ledger refs
+        // there best-effort so native announce delivery can still fail soft.
+      } finally {
+        result.db.close();
+      }
+    }
+  }
+
+  return sortWorkContractsByUpdatedAt(listWorkContractsFromTaskState(taskStatePath))
+    .find((contract) => contractMatchesChildSession(contract, target)) ?? null;
+}
+
 export function backfillWorkContractsFromTaskState(taskStatePath?: string): WorkContractBackfillResult {
   const result: WorkContractBackfillResult = { backfilled: 0, skipped: 0, errors: [] };
   const contracts = readTaskStateRecords(taskStatePath)

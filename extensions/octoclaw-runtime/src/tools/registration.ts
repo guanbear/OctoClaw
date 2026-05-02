@@ -1,6 +1,5 @@
 import {
   buildDecision,
-  applyPhaseTwoLivePathPolicy,
   buildTsRuntimeDispatchPayload,
   buildTsRuntimeSpawnPayload,
   checkActiveTaskRecovery,
@@ -2367,15 +2366,28 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         if (asString(params.channel)) metadata.channel = asString(params.channel);
         if (asString(params.sessionKey)) metadata.session_key = asString(params.sessionKey);
         metadata = finalizeDispatchMetadata(ctx, metadata, { stateKey: asString(params.sessionKey) });
+        const task = asString(params.task);
         const payload = await resolveStatelessPolicyDecision(asString(params.task), {
           command: asString(params.command),
           metadata,
           forceRoute: asString(params.forceRoute),
         });
-        const json = applyPhaseTwoLivePathPolicy({
-          ...payload,
+        const json: UnknownRecord = {
+          ...asRecord(payload),
           managed_agent_context: isManagedAgentContext(ctx),
-        });
+        };
+        const routeHintPolicy = asRecord(json.route_hint_policy);
+        const request = asRecord(json.request);
+        const replaySessionKey = asString(request.session_key || metadata.session_key || params.sessionKey);
+        const existing = replaySessionKey ? policyState.get(replaySessionKey) : undefined;
+        setPolicyStateAliasesForContext(ctx, {
+          ...(existing ?? {}),
+          prompt: task,
+          decision: json,
+          canonicalSessionKey: asString(existing?.canonicalSessionKey) || replaySessionKey,
+          routeHintSubmitted: routeHintPolicy.submitted === true,
+          routeHintPayload: asRecord(asRecord(request.metadata).route_hint_payload),
+        }, [replaySessionKey]);
         return toolResponse(policySummaryText(json), json);
       },
     },
@@ -3511,12 +3523,6 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           error: { type: "string", description: "Native spawn error if sessionsSpawnStatus is not accepted." },
         },
         required: ["spawnIntentId", "workContractId", "sessionsSpawnStatus"],
-        allOf: [
-          {
-            if: { properties: { sessionsSpawnStatus: { const: "accepted" } } },
-            then: { required: ["runId"] },
-          },
-        ],
       },
       execute: async (params, _rawCtx) => {
         const ctx = _rawCtx ?? {};
@@ -3580,16 +3586,28 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             dispatchRoute: "delegate",
             dispatchStatus: "spawn_confirmed",
             dispatchExecuted: true,
+            dispatch_executed: true,
             spawnExecuted: true,
+            spawn_executed: true,
             spawnIntentId: confirmed.spawnIntentId,
+            spawn_intent_id: confirmed.spawnIntentId,
             workContractId: confirmed.workContractId,
+            work_contract_id: confirmed.workContractId,
             runId: confirmed.runId,
+            run_id: confirmed.runId,
             childRunId: confirmed.childRunId,
+            child_run_id: confirmed.childRunId,
             childSessionKey: confirmed.childSessionKey,
+            child_session_key: confirmed.childSessionKey,
             updatedAt: Date.now(),
           };
-          setPolicyStateForContext(ctx, nextState, sessionKey || stateKey);
-          if (stateKey && sessionKey && stateKey !== sessionKey) setPolicyStateForContext(ctx, nextState, stateKey);
+          setPolicyStateAliasesForContext(ctx, nextState, [
+            sessionKey,
+            stateKey,
+            asString(ctx.sessionKey),
+            asString(ctx.canonicalSessionKey),
+            asString(asRecord(updatedContract).sessionKey),
+          ]);
         }
         return toolResponse(JSON.stringify(confirmed), confirmed as unknown as Record<string, unknown>);
       },

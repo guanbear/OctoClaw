@@ -54,7 +54,7 @@ function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
       ? parsed.confidence
       : typeof parsed.routeConfidence === "number" && parsed.routeConfidence > 0
         ? parsed.routeConfidence
-        : 0.7,
+        : 0,
     abstainReason: (parsed.abstainReason ?? parsed.abstain_reason ?? null) as string | null,
     ackText: typeof ackTextRaw === "string" ? ackTextRaw : null,
     is_followup_to_recent_execution: typeof (parsed.is_followup_to_recent_execution ?? parsed.isFollowupToRecentExecution) === "boolean"

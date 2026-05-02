@@ -291,6 +291,21 @@ export function isValidJudgeOutput(value: unknown): value is JudgeOutput {
 /** Check if a judge output should be used (not abstained, high enough confidence). */
 export function isActionableJudgeResult(result: JudgeOutput | null, minConfidence: number): result is JudgeOutput {
   if (!result) return false;
+  if (result.abstainReason) return false;
   if (result.confidence < minConfidence) return false;
+  const raw = result as JudgeOutput & {
+    judge_schema_degraded?: boolean;
+    degraded_reasons?: string[];
+  };
+  if (raw.judge_schema_degraded === true) return false;
+  if (Array.isArray(raw.degraded_reasons) && raw.degraded_reasons.length > 0) return false;
+  if (result.route === "delegate") {
+    const isFollowup = result.is_followup_to_recent_execution ?? result.isFollowupToRecentExecution;
+    const isNewWork = result.is_new_work ?? result.isNewWork;
+    const deliverable = result.expected_deliverable ?? result.expectedDeliverable;
+    if (isFollowup === true) return false;
+    if (isNewWork !== true) return false;
+    if (typeof deliverable !== "string" || deliverable.trim().length === 0) return false;
+  }
   return true;
 }

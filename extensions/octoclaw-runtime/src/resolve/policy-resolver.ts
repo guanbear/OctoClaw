@@ -384,6 +384,12 @@ function structuredIntentClass(metadata: UnknownRecord): string {
   ) {
     return "execution_followup";
   }
+  if (intentSource === "deterministic_live_lookup_classifier" && packetIntentClass === "fresh_live_lookup") {
+    return "fresh_live_lookup";
+  }
+  if (intentSource === "deterministic_surface_registry" && packetIntentClass === "local_surface_lookup") {
+    return "local_surface_lookup";
+  }
   if (intentSource && !intentSource.startsWith("deterministic_")) {
     return asString(packetIntentClass || control.intent_class);
   }
@@ -1371,7 +1377,7 @@ export function applyPhaseTwoLivePathPolicy(decision: UnknownRecord, metadata: U
       ? ["octoclaw_status", "octoclaw_task_action"]
       : liveRoute === "reply"
         ? []
-      : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"],
+      : ["octoclaw_dispatch", "octoclaw_dispatch_confirm", "octoclaw_status", "octoclaw_route_hint", "sessions_yield"],
     block_tool_patterns: executionControlAllowed ? ["octoclaw_dispatch", "spawn"] : asStringArray(asRecord(nextDecision.tool_policy).block_tool_patterns),
   };
   nextDecision.router_decision_v2 = {
@@ -1896,6 +1902,22 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     metadata._taskflow_preflight_required = true;
   }
 
+  const finalIntentClass = structuredIntentClass(metadata);
+  const finalConversationControl = trustedConversationControl(metadata);
+  const finalIsExecutionOrStatusFollowup = finalIntentClass === "execution_followup"
+    || asBoolean(finalConversationControl.provenance_followup)
+    || asBoolean(finalConversationControl.status_followup);
+  const deterministicNewWorkDelegate = finalDecision.route === "delegate"
+    && !finalIsExecutionOrStatusFollowup
+    && (
+      finalIntentClass === "fresh_live_lookup"
+      || finalIntentClass === "delegated_work"
+      || asBoolean(finalConversationControl.require_fresh_lookup)
+      || asBoolean(finalConversationControl.require_state_grounding)
+    );
+  const seededIsNewWork = judgeIsNewWork ?? (deterministicNewWorkDelegate ? true : undefined);
+  const seededExpectedDeliverable = judgeExpectedDeliverable ?? (deterministicNewWorkDelegate ? prompt.slice(0, 200) : null);
+
   const seeded: UnknownRecord = {
     summary: `policy=${finalDecision.route} -> ${workerPoolForDecision(finalDecision.executionProfile, finalDecision.role)}`,
     request: {
@@ -1927,6 +1949,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       risk_flags: judgeRiskFlags,
       delegate_reason_codes: delegateReasonCodes,
       route_confidence: judgeRouteConfidence,
+      is_new_work: seededIsNewWork,
+      expected_deliverable: seededExpectedDeliverable,
     },
     model_policy: {
       profile: finalDecision.modelProfile,
@@ -1953,8 +1977,8 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
     _judge_risk_flags: judgeRiskFlags,
     _judge_route_confidence: judgeRouteConfidence,
     is_followup_to_recent_execution: judgeIsFollowupToRecentExecution,
-    is_new_work: judgeIsNewWork,
-    expected_deliverable: judgeExpectedDeliverable,
+    is_new_work: seededIsNewWork,
+    expected_deliverable: seededExpectedDeliverable,
     _delegate_reason_codes: delegateReasonCodes,
     _route_hint_required: routeHintRequired,
     _judge_ack_text: judgeAckText,

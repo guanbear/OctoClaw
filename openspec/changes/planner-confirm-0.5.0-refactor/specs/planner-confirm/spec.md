@@ -58,9 +58,9 @@ OctoClaw SHALL gate `sessions_spawn` calls with a pending `NativeSpawnIntent` bo
 - AND SHALL NOT write native refs
 - AND SHALL NOT send delegate accepted ACK.
 
-#### Scenario: duplicate confirm
+#### Scenario: duplicate confirm after accepted
 
-- WHEN the same intent is confirmed again with the same `runId`
+- WHEN an already accepted intent is confirmed again with the same `runId`
 - THEN confirm SHALL return idempotent success
 - AND SHALL NOT send duplicate ACK.
 

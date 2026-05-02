@@ -10,6 +10,8 @@ describe("judge output validation", () => {
     expect(result.degraded).toBe(true);
     expect(result.degradedReasons).toEqual([
       "missing_confidence",
+      "missing_is_new_work",
+      "missing_expected_deliverable",
       "missing_scope",
       "missing_tool_need_hint",
       "missing_duration_hint",
@@ -22,6 +24,8 @@ describe("judge output validation", () => {
     expect(result.valid).toBe(true);
     expect(result.degraded).toBe(true);
     expect(result.degradedReasons).toEqual([
+      "missing_is_new_work",
+      "missing_expected_deliverable",
       "missing_scope",
       "missing_tool_need_hint",
       "missing_duration_hint",
@@ -32,6 +36,8 @@ describe("judge output validation", () => {
     const result = validateJudgeOutputDetailed({
       route: "delegate",
       confidence: 0.7,
+      is_new_work: true,
+      expected_deliverable: "A concrete result packet.",
       scope: "local",
       tool_need_hint: "required",
       duration_hint: "medium",

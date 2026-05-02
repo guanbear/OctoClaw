@@ -1,8 +1,10 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextCoverageSnapshot } from "@octoclaw/contracts/work-contract";
+import { resetAllState as resetAckDedupeState } from "../ack/ack-dedupe.js";
+import { resetExecTransitionState } from "../ack/execution-transition-notifier.js";
 import { buildExecutionCoverageLayer } from "../resolve/execution-coverage-precheck.js";
 import { buildMemoryCoverageLayer } from "../resolve/memory-coverage-precheck.js";
 import { envOverrides } from "../resolve/env.js";
@@ -70,9 +72,15 @@ beforeEach(() => {
   tempWorkspace = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-native-spawn-gate-confirm-"));
   envOverrides.workspaceRoot = tempWorkspace;
   nativeSpawnIntentStore.clearForTests();
+  resetAckDedupeState();
+  resetExecTransitionState();
+  vi.restoreAllMocks();
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  resetAckDedupeState();
+  resetExecTransitionState();
   nativeSpawnIntentStore.clearForTests();
   envOverrides.workspaceRoot = "";
   if (tempWorkspace) fs.rmSync(tempWorkspace, { recursive: true, force: true });
@@ -160,6 +168,33 @@ describe("evaluateNativeSpawnGate", () => {
     });
     expect(followup.allowed).toBe(false);
     expect(followup.reason).toBe("execution_followup_spawn_blocked");
+  });
+
+  it("checks every Slack session alias before blocking on a stale hash mismatch", () => {
+    const staleSlackChannelKey = "agent:main:slack:channel:c0as4dappu3";
+    const matchingSlackThreadKey = "agent:main:slack:channel:c0as4dappu3:thread:1777707495.459389";
+    const staleIntent = nativeSpawnIntentStore.create({
+      workContractId: "wc-stale-alias",
+      sessionKey: staleSlackChannelKey,
+      sessionsSpawnArgs: { ...args, task: "old stale planner args" },
+      ttlMs: 60_000,
+    });
+    const matchingIntent = nativeSpawnIntentStore.create({
+      workContractId: "wc-real-alias",
+      sessionKey: matchingSlackThreadKey,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+
+    const allowed = evaluateNativeSpawnGate({
+      sessionKeys: [staleSlackChannelKey, matchingSlackThreadKey],
+      args,
+    });
+
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.allowed ? allowed.intent.spawnIntentId : "").toBe(matchingIntent.spawnIntentId);
+    expect(nativeSpawnIntentStore.get(staleIntent.spawnIntentId)?.status).toBe("planned");
+    expect(nativeSpawnIntentStore.get(matchingIntent.spawnIntentId)?.status).toBe("spawn_call_started");
   });
 });
 
@@ -256,6 +291,68 @@ describe("confirmNativeSpawn", () => {
     expect(loadWorkContract(contract.workContractId)?.delegate?.nativeBinding ?? null).toBeNull();
   });
 
+  it("fails closed when WorkContract native refs cannot be written", async () => {
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-missing-for-native-refs",
+      sessionKey: "session-confirm-missing-contract",
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    expect(evaluateNativeSpawnGate({ sessionKeys: ["session-confirm-missing-contract"], args }).allowed).toBe(true);
+
+    const result = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: "wc-missing-for-native-refs",
+      sessionKey: "session-confirm-missing-contract",
+      sessionsSpawnStatus: "accepted",
+      runId: "run-no-contract",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("work_contract_native_refs_write_failed");
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.runId ?? null).toBeNull();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
+  });
+
+  it("rolls back WorkContract native refs when accepted intent transition fails after refs write", async () => {
+    const contract = seedContract("session-confirm-transition-fails");
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    expect(evaluateNativeSpawnGate({ sessionKeys: [contract.sessionKey], args }).allowed).toBe(true);
+    const startedIntent = nativeSpawnIntentStore.get(intent.spawnIntentId);
+    expect(startedIntent?.status).toBe("spawn_call_started");
+    vi.spyOn(nativeSpawnIntentStore, "confirmAccepted").mockReturnValueOnce({
+      ok: false,
+      status: "error",
+      intent: startedIntent ? { ...startedIntent, status: "expired" as const } : undefined,
+      error: "intent_expired",
+    });
+
+    const result = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-transition-fails",
+      childSessionKey: "child-transition-fails",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("intent_expired");
+    const restored = loadWorkContract(contract.workContractId);
+    expect(restored?.nativeSpawnRefs?.openclawRunId ?? null).toBeNull();
+    expect(restored?.delegate?.nativeBinding ?? null).toBeNull();
+    expect(restored?.telemetry.dispatchExecuted ?? false).toBe(false);
+    expect(restored?.telemetry.spawnExecuted ?? false).toBe(false);
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
+  });
+
   it("treats same-run confirm as idempotent and different-run confirm as conflict", async () => {
     const contract = seedContract("session-confirm-idempotent");
     const intent = nativeSpawnIntentStore.create({
@@ -281,7 +378,7 @@ describe("confirmNativeSpawn", () => {
       sessionKey: contract.sessionKey,
       sessionsSpawnStatus: "accepted",
       runId: "run-once",
-      childSessionKey: "child-once",
+      childSessionKey: "child-spoofed",
       notify: false,
     });
     const conflict = await confirmNativeSpawn({
@@ -299,9 +396,127 @@ describe("confirmNativeSpawn", () => {
     expect(conflict.ok).toBe(false);
     expect(conflict.status).toBe("conflict");
     expect(loadWorkContract(contract.workContractId)?.delegate?.nativeBinding?.runId).toBe("run-once");
+    expect(loadWorkContract(contract.workContractId)?.delegate?.nativeBinding?.childSessionKey).toBe("child-once");
   });
 
-  it("marks ACK only after accepted confirm evidence", async () => {
+  it("retries ACK on idempotent same-run confirm when the first accepted confirm skipped notification", async () => {
+    const envModule = await import("../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true, ts: "1777712000.000100" }),
+      stderr: "",
+      timedOut: false,
+    });
+    vi.spyOn(await import("../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
+
+    const contract = seedContract("slack:channel:C1");
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      attemptId: `delegate-task:${contract.workContractId}:attempt:1`,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    expect(evaluateNativeSpawnGate({ sessionKeys: [contract.sessionKey], args }).allowed).toBe(true);
+
+    const first = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-retry-ack",
+      childSessionKey: "child-retry-ack",
+      notify: false,
+    });
+    expect(first.ok).toBe(true);
+    expect(first.status).toBe("accepted");
+    expect(first.ackSent).toBe(false);
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
+    expect(runCommandSpy).not.toHaveBeenCalled();
+
+    const retry = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      stateKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-retry-ack",
+      childSessionKey: "child-retry-ack",
+      replyToMessageId: "1700000000.000100",
+    });
+
+    expect(retry.ok).toBe(true);
+    expect(retry.status).toBe("idempotent");
+    expect(retry.ackSent).toBe(true);
+    expect(runCommandSpy).toHaveBeenCalledOnce();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).not.toBeNull();
+  });
+
+  it("does not mark ACK on failed notification and allows an idempotent retry to send it", async () => {
+    const envModule = await import("../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand")
+      .mockResolvedValueOnce({
+        code: 1,
+        stdout: JSON.stringify({ ok: false, error: "timeout" }),
+        stderr: "timeout",
+        timedOut: true,
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: JSON.stringify({ ok: true, ts: "1777712001.000100" }),
+        stderr: "",
+        timedOut: false,
+      });
+    vi.spyOn(await import("../replay/replay.js"), "recordPolicyReplay").mockResolvedValue(undefined);
+
+    const contract = seedContract("slack:channel:C2");
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      delegateTaskId: `delegate-task:${contract.workContractId}`,
+      attemptId: `delegate-task:${contract.workContractId}:attempt:1`,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    expect(evaluateNativeSpawnGate({ sessionKeys: [contract.sessionKey], args }).allowed).toBe(true);
+
+    const first = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      stateKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-ack-fails-once",
+      childSessionKey: "child-ack-fails-once",
+      replyToMessageId: "1700000000.000200",
+    });
+
+    expect(first.ok).toBe(true);
+    expect(first.status).toBe("accepted");
+    expect(first.ackSent).toBe(false);
+    expect(first.ackSkipped).toBe(false);
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
+
+    const retry = await confirmNativeSpawn({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      stateKey: contract.sessionKey,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-ack-fails-once",
+      childSessionKey: "child-ack-fails-once",
+      replyToMessageId: "1700000000.000200",
+    });
+
+    expect(retry.ok).toBe(true);
+    expect(retry.status).toBe("idempotent");
+    expect(retry.ackSent).toBe(true);
+    expect(runCommandSpy).toHaveBeenCalledTimes(2);
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).not.toBeNull();
+  });
+
+  it("does not mark ACK until accepted confirm notification is sent or acceptably skipped", async () => {
     const contract = seedContract("session-confirm-ack-order");
     const intent = nativeSpawnIntentStore.create({
       workContractId: contract.workContractId,
@@ -330,7 +545,8 @@ describe("confirmNativeSpawn", () => {
     });
 
     expect(accepted.ok).toBe(true);
-    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt).toBeTruthy();
+    expect(accepted.ackSent).toBe(false);
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.ackSentAt ?? null).toBeNull();
   });
 
 });

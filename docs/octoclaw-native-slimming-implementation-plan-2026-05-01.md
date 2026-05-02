@@ -554,7 +554,7 @@ interface DispatchConfirmInput {
 
 规则：
 
-- intent 必须存在、未过期、未确认、状态为 `spawn_call_started` 或 `planned`。
+- intent 必须存在、未过期、未确认，且状态必须为 `spawn_call_started`；confirm 不能把 `planned` 直接接受为成功。
 - `workContractId` 必须匹配。
 - `sessionsSpawnStatus=accepted` 时必须有 `runId`；只有 `childSessionKey` 不算成功。
 - confirm 成功后写 WorkContract native refs：`openclawRunId`、`childSessionKey`、`spawnBackend: "sessions_spawn_planner"`。

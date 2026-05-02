@@ -3,7 +3,7 @@ import type { AnomalyNotice } from "@octoclaw/contracts/work-contract";
 import { appendToDeliveryOutbox } from "../delivery/delivery-outbox.js";
 import { sendIMMessage } from "../im/send.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
-import { recordDelivery } from "./ack-dedupe.js";
+import { getReceipt, recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
 import { recordPolicyReplay } from "../replay/replay.js";
 
@@ -274,6 +274,15 @@ export function checkAndSetExecTransition(key: string, owner: string): { allowed
   return { allowed: true };
 }
 
+function releaseExecTransitionClaim(key: string, owner: string): void {
+  const normalizedKey = asString(key);
+  if (!normalizedKey) return;
+  const existingOwner = execTransitionOwners.get(normalizedKey);
+  if (existingOwner === owner) {
+    execTransitionOwners.delete(normalizedKey);
+  }
+}
+
 export function resetExecTransitionState(): void {
   execTransitionOwners.clear();
 }
@@ -341,31 +350,39 @@ export async function emitExecutionTransitionNotification(params: {
 
   const claim = checkAndSetExecTransition(notificationKey, "execution_transition");
   if (!claim.allowed) {
+    const duplicateReceipt = getReceipt(notificationKey);
+    const duplicateDelivered = duplicateReceipt?.sent === true;
     await recordExecutionTransitionReplay(replayParams, notificationKey, {
       ack_target_resolution_state: "skipped_duplicate",
-      ack_delivery_state: "skipped",
-      sent: false,
+      ack_delivery_state: duplicateDelivered ? "sent" : "skipped",
+      sent: duplicateDelivered,
       skipped: true,
       reason: "skipped_duplicate",
     });
     params.logger?.debug?.(`execution transition duplicate: ${notificationKey}`);
     return {
-      sent: false,
+      sent: duplicateDelivered,
       skipped: true,
       reason: "skipped_duplicate",
       transitionKind: params.transitionKind,
       notificationKey,
       ack_target_resolution_state: "skipped_duplicate",
-      ack_delivery_state: "skipped",
+      ack_delivery_state: duplicateDelivered ? "sent" : "skipped",
     };
   }
 
-  const result = await sendExecutionTransitionMessage(
-    params.sessionKey,
-    text,
-    params.replyToMessageId,
-    params.cwd,
-  );
+  let result: AckSendResult;
+  try {
+    result = await sendExecutionTransitionMessage(
+      params.sessionKey,
+      text,
+      params.replyToMessageId,
+      params.cwd,
+    );
+  } catch (error) {
+    releaseExecTransitionClaim(notificationKey, "execution_transition");
+    throw error;
+  }
   recordDelivery(notificationKey, {
     ackKey: notificationKey,
     sent: result.sent,
@@ -376,6 +393,9 @@ export async function emitExecutionTransitionNotification(params: {
   });
 
   const sent = Boolean(result.delivered || result.sent);
+  if (!sent) {
+    releaseExecTransitionClaim(notificationKey, "execution_transition");
+  }
   if (!sent && params.workContractId && ["dispatch_materialized", "spawn_started", "timed_out", "result_ready"].includes(params.transitionKind)) {
     try {
       appendToDeliveryOutbox({

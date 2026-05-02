@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildConversationGrounding,
   buildDirectLookupGuard,
@@ -78,6 +79,8 @@ import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
 import { evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
 import { isPlannerAllowedForSession, resolveSpawnBackend, shouldRunChildFinalizerRecovery, shouldRunDeliveryOutboxFlush } from "./config/index.js";
+import { findWorkContractByNativeChildSessionKey, loadWorkContract, updateWorkContract } from "./work-contract/store.js";
+import type { WorkContract } from "@octoclaw/contracts/work-contract";
 
 type UnknownRecord = Record<string, unknown>;
 type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
@@ -376,6 +379,419 @@ function findRecentOutboundPolicyState(
   return best ? { key: best.key, state: best.state, anchored } : null;
 }
 
+function stateHasExecutionEvidence(state: UnknownRecord): boolean {
+  return state.dispatchExecuted === true
+    || state.dispatch_executed === true
+    || state.spawnExecuted === true
+    || state.spawn_executed === true
+    || state.resultMaterialized === true
+    || state.result_materialized === true;
+}
+
+function outboundStateWorkContractId(state: UnknownRecord): string {
+  const decision = asRecord(state.decision);
+  const workContract = asRecord(decision.work_contract);
+  return stringValue(state.workContractId || state.work_contract_id)
+    || stringValue(workContract.workContractId || workContract.work_contract_id)
+    || stringValue(decision.workContractId || decision.work_contract_id);
+}
+
+function hydrateOutboundStateWithNativeRefs(state: UnknownRecord): UnknownRecord {
+  if (stateHasExecutionEvidence(state)) return state;
+  const workContractId = outboundStateWorkContractId(state);
+  if (!workContractId) return state;
+  const contract = loadWorkContract(workContractId);
+  if (!contract) return state;
+  const nativeRefs = asRecord(contract.nativeSpawnRefs);
+  const delegate = asRecord(contract.delegate);
+  const nativeBinding = asRecord(delegate.nativeBinding);
+  const telemetry = asRecord(contract.telemetry);
+  const runId = stringValue(nativeRefs.openclawRunId || nativeBinding.runId);
+  const childRunId = stringValue(nativeBinding.childRunId || telemetry.childRunId || runId);
+  const childSessionKey = stringValue(nativeRefs.childSessionKey || nativeBinding.childSessionKey || telemetry.childSessionKey);
+  const spawnIntentId = stringValue(nativeRefs.spawnIntentId || state.spawnIntentId || state.spawn_intent_id);
+  const hasAcceptedNativeRefs = Boolean(runId || childRunId || childSessionKey || telemetry.spawnExecuted === true);
+  if (!hasAcceptedNativeRefs) return state;
+  return {
+    ...state,
+    delegated: true,
+    dispatchRoute: "delegate",
+    dispatchStatus: "spawn_confirmed",
+    dispatchExecuted: true,
+    dispatch_executed: true,
+    spawnExecuted: true,
+    spawn_executed: true,
+    workContractId,
+    work_contract_id: workContractId,
+    ...(spawnIntentId ? { spawnIntentId, spawn_intent_id: spawnIntentId } : {}),
+    ...(runId ? { runId, run_id: runId } : {}),
+    ...(childRunId ? { childRunId, child_run_id: childRunId } : {}),
+    ...(childSessionKey ? { childSessionKey, child_session_key: childSessionKey } : {}),
+  };
+}
+
+interface NativeAnnounceCompletion {
+  sourceSessionKey: string;
+  sourceSessionId: string;
+  sourceTool: string;
+  status: string;
+  resultText: string;
+  resultHash: string;
+}
+
+const NATIVE_ANNOUNCE_BLOCKED_TOOLS = new Set([
+  "octoclaw_dispatch",
+  "octoclaw_spawn",
+  "octoclaw_dispatch_confirm",
+  "sessions_spawn",
+]);
+
+function regexGroup(text: string, pattern: RegExp): string {
+  return stringValue(pattern.exec(text)?.[1]);
+}
+
+function nativeAnnounceProvenance(event: UnknownRecord): UnknownRecord {
+  const direct = asRecord(event.provenance);
+  if (stringValue(direct.sourceTool || direct.source_tool || direct.kind)) return direct;
+  const message = asRecord(event.message);
+  const messageProvenance = asRecord(message.provenance);
+  if (stringValue(messageProvenance.sourceTool || messageProvenance.source_tool || messageProvenance.kind)) {
+    return messageProvenance;
+  }
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = asRecord(messages[index]);
+    const provenance = asRecord(candidate.provenance);
+    if (stringValue(provenance.sourceTool || provenance.source_tool || provenance.kind)) {
+      return provenance;
+    }
+  }
+  return {};
+}
+
+function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: string): NativeAnnounceCompletion | null {
+  const text = stringValue(prompt);
+  if (!text) return null;
+  const provenance = nativeAnnounceProvenance(event);
+  const sourceTool = stringValue(provenance.sourceTool || provenance.source_tool)
+    || regexGroup(text, /\bsourceTool=([^\s]+)/u);
+  if (sourceTool !== "subagent_announce" && !text.includes("sourceTool=subagent_announce")) {
+    return null;
+  }
+  const sourceSessionKey = stringValue(provenance.sourceSessionKey || provenance.source_session_key)
+    || regexGroup(text, /\bsourceSession=([^\s]+)/u)
+    || regexGroup(text, /\bsession_key:\s*([^\s]+)/u);
+  if (!sourceSessionKey) return null;
+  const status = regexGroup(text, /\bstatus:\s*([^\n]+)/iu);
+  const looksCompleted = /completed|success|succeed/i.test(status)
+    || /completed subagent task is ready/i.test(text)
+    || /\[Internal task completion event\]/u.test(text);
+  if (!looksCompleted) return null;
+  const resultText = regexGroup(
+    text,
+    /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\s*([\s\S]*?)\s*<<<END_UNTRUSTED_CHILD_RESULT>>>/u,
+  );
+  if (!resultText) return null;
+  return {
+    sourceSessionKey,
+    sourceSessionId: stringValue(provenance.sourceSessionId || provenance.source_session_id)
+      || regexGroup(text, /\bsession_id:\s*([^\s]+)/u),
+    sourceTool: "subagent_announce",
+    status,
+    resultText,
+    resultHash: createHash("sha256").update(resultText).digest("hex").slice(0, 16),
+  };
+}
+
+function contractNativeIds(contract: WorkContract): {
+  runId: string;
+  childRunId: string;
+  childSessionKey: string;
+  spawnIntentId: string;
+} {
+  const nativeRefs = asRecord(contract.nativeSpawnRefs);
+  const delegate = asRecord(contract.delegate);
+  const nativeBinding = asRecord(delegate.nativeBinding);
+  const telemetry = asRecord(contract.telemetry);
+  const visibleIds = asRecord(contract.mainContext?.visibleIds);
+  const runId = stringValue(nativeRefs.openclawRunId || nativeBinding.runId || telemetry.childRunId || visibleIds.openclawRunId);
+  return {
+    runId,
+    childRunId: stringValue(nativeBinding.childRunId || telemetry.childRunId || runId),
+    childSessionKey: stringValue(
+      nativeRefs.childSessionKey
+      || nativeBinding.childSessionKey
+      || telemetry.childSessionKey
+      || contract.continuity?.preferredChildSessionKey
+      || visibleIds.childSessionKey,
+    ),
+    spawnIntentId: stringValue(nativeRefs.spawnIntentId || visibleIds.spawnIntentId),
+  };
+}
+
+function nativeAnnounceDeliveryAlreadySent(contract: WorkContract): boolean {
+  const deliveryStatus = stringValue(contract.telemetry?.deliveryStatus).toLowerCase();
+  return ["delivered", "sent"].includes(deliveryStatus);
+}
+
+function markNativeAnnounceCompletionOnContract(
+  workContractId: string,
+  completion: NativeAnnounceCompletion,
+  delivered: boolean,
+  nowIso: string,
+): WorkContract | null {
+  return updateWorkContract(workContractId, (contract) => {
+    const ids = contractNativeIds(contract);
+    const childSessionKey = ids.childSessionKey || completion.sourceSessionKey;
+    const previousDelegate = contract.delegate;
+    const nextDelegate = previousDelegate
+      ? {
+          ...previousDelegate,
+          nativeBinding: previousDelegate.nativeBinding
+            ? {
+                ...previousDelegate.nativeBinding,
+                childSessionKey,
+                status: "succeeded" as const,
+                currentStep: "completed",
+              }
+            : previousDelegate.nativeBinding,
+          nextAction: "deliver" as const,
+        }
+      : previousDelegate;
+    const deliveryStatus = delivered ? "delivered" : (
+      nativeAnnounceDeliveryAlreadySent(contract) ? "delivered" : "pending"
+    );
+    return {
+      ...contract,
+      status: "completed" as const,
+      ...(nextDelegate ? { delegate: nextDelegate } : {}),
+      continuity: {
+        ...contract.continuity,
+        preferredChildSessionKey: childSessionKey || contract.continuity.preferredChildSessionKey,
+        preferredRunId: ids.runId || contract.continuity.preferredRunId,
+      },
+      telemetry: {
+        ...contract.telemetry,
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: true,
+        deliveryStatus,
+        childSessionKey: childSessionKey || contract.telemetry.childSessionKey,
+        childRunId: ids.childRunId || contract.telemetry.childRunId,
+      },
+      mainContext: {
+        ...contract.mainContext,
+        statusLine: delivered ? "Child result delivered." : "Child result ready for delivery.",
+        nextAction: "deliver",
+        visibleIds: {
+          ...contract.mainContext.visibleIds,
+          childSessionKey: childSessionKey || contract.mainContext.visibleIds.childSessionKey,
+          openclawRunId: ids.runId || contract.mainContext.visibleIds.openclawRunId,
+          spawnIntentId: ids.spawnIntentId || contract.mainContext.visibleIds.spawnIntentId,
+        },
+      },
+      updatedAt: nowIso,
+    };
+  });
+}
+
+function buildNativeAnnouncePolicyState(input: {
+  current: PolicyStateEntry;
+  stateKey: string;
+  contract: WorkContract;
+  completion: NativeAnnounceCompletion;
+  delivered: boolean;
+  now: number;
+}): PolicyStateEntry {
+  const ids = contractNativeIds(input.contract);
+  const decision = asRecord(input.current.decision);
+  const hookInterface = asRecord(decision.hook_interface);
+  const beforeToolCall = asRecord(hookInterface.before_tool_call);
+  const routeDecision = asRecord(decision.route_decision);
+  const runtimeTruth = asRecord(decision.runtime_truth);
+  const runtimeBinding = asRecord(runtimeTruth.binding);
+  const runtimeEvidence = asRecord(runtimeTruth.evidence);
+  const workContractProjection = asRecord(decision.work_contract);
+  const childSessionKey = ids.childSessionKey || input.completion.sourceSessionKey;
+  const runId = ids.runId || ids.childRunId;
+  return {
+    ...input.current,
+    canonicalSessionKey: input.stateKey,
+    prompt: input.current.prompt || input.contract.userAsk,
+    decision: {
+      ...decision,
+      route_decision: {
+        ...routeDecision,
+        route: "delegate",
+        route_source: stringValue(routeDecision.route_source) || "native_announce",
+        task_class: stringValue(routeDecision.task_class) || "delegated_completion_delivery",
+      },
+      work_contract: {
+        ...workContractProjection,
+        workContractId: input.contract.workContractId,
+        work_contract_id: input.contract.workContractId,
+        route: "delegate",
+        childSessionKey,
+        openclawRunId: runId,
+        spawnIntentId: ids.spawnIntentId,
+      },
+      runtime_truth: {
+        ...runtimeTruth,
+        binding: {
+          ...runtimeBinding,
+          runId,
+          childRunId: ids.childRunId || runId,
+          childSessionKey,
+        },
+        evidence: {
+          ...runtimeEvidence,
+          resultMaterialized: true,
+          result_materialized: true,
+          childSessionKey,
+          runId,
+        },
+      },
+      delivery: {
+        ...asRecord(decision.delivery),
+        status: input.delivered ? "delivered" : "pending",
+        resultMaterialized: true,
+        result_materialized: true,
+      },
+      hook_interface: {
+        ...hookInterface,
+        before_tool_call: {
+          ...beforeToolCall,
+          enabled: true,
+        },
+      },
+    },
+    delegated: true,
+    dispatchRoute: "delegate",
+    dispatchStatus: input.delivered ? "result_delivered" : "result_ready",
+    dispatchExecuted: true,
+    dispatch_executed: true,
+    spawnExecuted: true,
+    spawn_executed: true,
+    resultMaterialized: true,
+    result_materialized: true,
+    workContractId: input.contract.workContractId,
+    work_contract_id: input.contract.workContractId,
+    spawnIntentId: ids.spawnIntentId,
+    spawn_intent_id: ids.spawnIntentId,
+    runId,
+    run_id: runId,
+    childRunId: ids.childRunId || runId,
+    child_run_id: ids.childRunId || runId,
+    childSessionKey,
+    child_session_key: childSessionKey,
+    nativeAnnounceCompletionPending: !input.delivered,
+    native_announce_completion_pending: !input.delivered,
+    nativeAnnounceDelivered: input.delivered,
+    native_announce_delivered: input.delivered,
+    nativeAnnounceResultHash: input.completion.resultHash,
+    native_announce_result_hash: input.completion.resultHash,
+    deliveryStatus: input.delivered ? "delivered" : "pending",
+    delivery_status: input.delivered ? "delivered" : "pending",
+    formal_reply_visible: input.delivered || input.current.formal_reply_visible,
+    updatedAt: input.now,
+  } as PolicyStateEntry;
+}
+
+function isNativeAnnounceDeliveryState(state: unknown): boolean {
+  const record = asRecord(state);
+  return record.nativeAnnounceCompletionPending === true
+    || record.native_announce_completion_pending === true
+    || stringValue(record.dispatchStatus || record.dispatch_status) === "result_ready"
+    || Boolean(stringValue(record.nativeAnnounceResultHash || record.native_announce_result_hash));
+}
+
+function isNativeAnnounceAlreadyDelivered(state: unknown): boolean {
+  const record = asRecord(state);
+  if (!isNativeAnnounceDeliveryState(record)) return false;
+  return record.nativeAnnounceDelivered === true
+    || record.native_announce_delivered === true
+    || stringValue(record.deliveryStatus || record.delivery_status).toLowerCase() === "delivered";
+}
+
+function applyNativeAnnounceCompletionState(input: {
+  ctx: UnknownRecord;
+  stateKey: string;
+  contract: WorkContract;
+  completion: NativeAnnounceCompletion;
+  delivered: boolean;
+  now: number;
+}): void {
+  const aliasKeys = Array.from(new Set([
+    input.stateKey,
+    input.contract.sessionKey,
+    stringValue(ctxValue(input.ctx, "sessionKey")),
+    stringValue(ctxValue(input.ctx, "canonicalSessionKey")),
+    stringValue(ctxValue(input.ctx, "sessionId")),
+  ].filter(Boolean)));
+  for (const aliasKey of aliasKeys) {
+    updatePolicyState(aliasKey, (current) => buildNativeAnnouncePolicyState({
+      current,
+      stateKey: input.contract.sessionKey || input.stateKey || aliasKey,
+      contract: input.contract,
+      completion: input.completion,
+      delivered: input.delivered,
+      now: input.now,
+    }));
+  }
+}
+
+function ctxValue(ctx: UnknownRecord, key: string): unknown {
+  return ctx[key];
+}
+
+function nativeAnnouncePromptProjection(input: {
+  contract: WorkContract;
+  completion: NativeAnnounceCompletion;
+  delivered: boolean;
+}): { prependSystemContext?: string; prependContext?: string } {
+  const ids = contractNativeIds(input.contract);
+  if (input.delivered) {
+    return buildPromptContextProjection({
+      prependSystem: [[
+        "[OctoClaw native child completion]",
+        `workContractId=${input.contract.workContractId}`,
+        `childSessionKey=${ids.childSessionKey || input.completion.sourceSessionKey}`,
+        "This native subagent_announce result was already delivered to the user.",
+        "Reply exactly NO_REPLY. Do not send another final message and do not call tools.",
+      ].join("\n")],
+      contextPayload: "",
+      shouldInjectPolicyProjection: false,
+    }) ?? {};
+  }
+  return buildPromptContextProjection({
+    prependSystem: [[
+      "[OctoClaw native child completion]",
+      `workContractId=${input.contract.workContractId}`,
+      `childSessionKey=${ids.childSessionKey || input.completion.sourceSessionKey}`,
+      ids.runId ? `runId=${ids.runId}` : "",
+      "OpenClaw native subagent_announce matched an existing accepted sessions_spawn WorkContract.",
+      "Treat this as completion for the existing delegated task, not as a new user request.",
+      "Do not call octoclaw_dispatch, octoclaw_spawn, sessions_spawn, or octoclaw_dispatch_confirm.",
+      "Deliver exactly one user-facing final answer from the child result already present in the prompt.",
+      "Keep internal OpenClaw/session/provenance details private. Do not say the task was not dispatched or still pending.",
+    ].filter(Boolean).join("\n")],
+    contextPayload: "",
+    shouldInjectPolicyProjection: false,
+  }) ?? {};
+}
+
+function unmatchedNativeAnnounceProjection(): { prependSystemContext?: string; prependContext?: string } {
+  return buildPromptContextProjection({
+    prependSystem: [[
+      "[OctoClaw native child completion]",
+      "This subagent_announce did not match any accepted WorkContract for this runtime.",
+      "Reply exactly NO_REPLY. Do not dispatch, spawn, or deliver unmatched inter-session data.",
+    ].join("\n")],
+    contextPayload: "",
+    shouldInjectPolicyProjection: false,
+  }) ?? {};
+}
+
 
 function projectionFooterMode(): "off" | "compact" | "debug" {
   const mode = stringValue(process.env.OCTOCLAW_PROJECTION_FOOTER_MODE).toLowerCase();
@@ -576,7 +992,7 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
     const fallbackReplacement = appendReplyProjectionFooter(content, {}, event, ctx);
     return fallbackReplacement && fallbackReplacement !== content ? { content: fallbackReplacement } : undefined;
   }
-  const stateRecord = asRecord(match.state);
+  const stateRecord = hydrateOutboundStateWithNativeRefs(asRecord(match.state));
   const guarded = match.anchored
     ? guardAssistantMessageForPolicyState(
         { role: "assistant", content: [{ type: "text", text: content }] },
@@ -586,11 +1002,23 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
   const guardedReplacement = guarded.mode === "replace" && guarded.message
     ? assistantMessageText(asRecord(guarded.message))
     : "";
+  if (guardedReplacement.trim().toUpperCase() === "NO_REPLY") {
+    updatePolicyState(match.key, (current) => ({
+      ...(current ?? {}),
+      ...stateRecord,
+      outbound_guard_replaced: true,
+      outbound_guard_replaced_at: new Date(now).toISOString(),
+      outbound_guard_cancelled: true,
+      outbound_guard_cancelled_at: new Date(now).toISOString(),
+    }));
+    return { cancel: true };
+  }
   const baseContent = guardedReplacement || content;
   const replacement = appendReplyProjectionFooter(baseContent, stateRecord, event, ctx);
   if (!replacement || replacement === content) return undefined;
   updatePolicyState(match.key, (current) => ({
     ...(current ?? {}),
+    ...stateRecord,
     outbound_guard_replaced: guardedReplacement ? true : current?.outbound_guard_replaced,
     outbound_guard_replaced_at: guardedReplacement ? new Date(now).toISOString() : current?.outbound_guard_replaced_at,
     outbound_projection_footer_appended: replacement !== baseContent || current?.outbound_projection_footer_appended === true,
@@ -1083,6 +1511,59 @@ export const plugin = {
       const prompt = extractPromptText(event);
 
       const preStateKey = resolvePolicyStateKey(ctx);
+      const nativeAnnounceCompletion = extractNativeAnnounceCompletion(event, prompt);
+      if (nativeAnnounceCompletion) {
+        const matchedContract = findWorkContractByNativeChildSessionKey(nativeAnnounceCompletion.sourceSessionKey);
+        if (!matchedContract) {
+          void recordPolicyReplay(
+            "native_announce_completion_unmatched",
+            {
+              sessionKey: preStateKey,
+              sessionId: stringValue(ctx.sessionId),
+              sourceSessionKey: nativeAnnounceCompletion.sourceSessionKey,
+              sourceTool: nativeAnnounceCompletion.sourceTool,
+            },
+            pi.logger,
+            null,
+          ).catch(() => {});
+          return unmatchedNativeAnnounceProjection();
+        }
+        const delivered = nativeAnnounceDeliveryAlreadySent(matchedContract);
+        const now = Date.now();
+        const nowIso = new Date(now).toISOString();
+        const updatedContract = markNativeAnnounceCompletionOnContract(
+          matchedContract.workContractId,
+          nativeAnnounceCompletion,
+          delivered,
+          nowIso,
+        ) ?? matchedContract;
+        applyNativeAnnounceCompletionState({
+          ctx,
+          stateKey: preStateKey,
+          contract: updatedContract,
+          completion: nativeAnnounceCompletion,
+          delivered,
+          now,
+        });
+        void recordPolicyReplay(
+          delivered ? "native_announce_completion_duplicate" : "native_announce_completion_matched",
+          {
+            sessionKey: updatedContract.sessionKey || preStateKey,
+            sessionId: stringValue(ctx.sessionId),
+            workContractId: updatedContract.workContractId,
+            sourceSessionKey: nativeAnnounceCompletion.sourceSessionKey,
+            resultHash: nativeAnnounceCompletion.resultHash,
+            delivered,
+          },
+          pi.logger,
+          null,
+        ).catch(() => {});
+        return nativeAnnouncePromptProjection({
+          contract: updatedContract,
+          completion: nativeAnnounceCompletion,
+          delivered,
+        });
+      }
       const preMetadata = buildPolicyMetadata(ctx, { stateKey: preStateKey });
       const sessionKeys = resolvePolicyStateKeys(ctx);
       preMetadata.judge_replay_log_path = resolveReplayLogPath();
@@ -1432,6 +1913,28 @@ export const plugin = {
         bindRouteHintPromptToCurrentContext(ctx, toolParams);
       }
       let { key: stateKey, state } = getPolicyStateForContext(ctx);
+      if (state && isNativeAnnounceDeliveryState(state) && NATIVE_ANNOUNCE_BLOCKED_TOOLS.has(toolName)) {
+        updatePolicyState(stateKey, (current) => ({
+          ...current,
+          blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+        }));
+        void recordPolicyReplay(
+          "tool_blocked_native_announce_completion",
+          {
+            sessionKey: stateKey || "",
+            sessionId: stringValue(ctx.sessionId),
+            toolName,
+            workContractId: stringValue(asRecord(state).workContractId || asRecord(state).work_contract_id),
+            reason: "native_announce_completion_delivery",
+          },
+          pi.logger,
+          asRecord(state.decision),
+        ).catch(() => {});
+        return {
+          block: true,
+          blockReason: "OctoClaw is delivering an existing native subagent completion; do not dispatch or spawn new work for this inter-session announce.",
+        };
+      }
       if (toolName === "octoclaw_dispatch") {
         const taskPolicyContext = policyState.getDispatchPolicyContext(ctx, stringValue(toolParams.task));
         const taskDecision = asRecord(taskPolicyContext.state?.decision);
@@ -1504,7 +2007,7 @@ export const plugin = {
               spawn_intent_id: gate.intent?.spawnIntentId ?? null,
               expected_hash: gate.expectedHash ?? null,
               actual_hash: gate.actualHash ?? null,
-            }, pi.logger, decision).catch(() => {});
+            }, pi.logger).catch(() => {});
             return {
               block: true,
               blockReason: gate.reason === "args_hash_mismatch"
@@ -1527,7 +2030,7 @@ export const plugin = {
             toolName,
             spawn_intent_id: gate.intent.spawnIntentId,
             work_contract_id: gate.intent.workContractId,
-          }, pi.logger, decision).catch(() => {});
+          }, pi.logger).catch(() => {});
           return;
         }
       }
@@ -1940,23 +2443,80 @@ export const plugin = {
         return;
       }
       updateAckTrackingState(stateKey, { final_response_streaming: true, tool_active: false });
-      const stateRecord = asRecord(state);
+      const stateRecord = hydrateOutboundStateWithNativeRefs(asRecord(state));
+      if (stateRecord !== asRecord(state)) {
+        updatePolicyState(stateKey, (current) => ({
+          ...(current ?? {}),
+          ...stateRecord,
+        }));
+      }
+      if (isNativeAnnounceAlreadyDelivered(stateRecord) && !noReplySentinel) {
+        return { message: replaceAssistantMessageText(message, "NO_REPLY") };
+      }
       const guarded = guardAssistantMessageForPolicyState(message, stateRecord);
       const visibleMessage = guarded.mode === "replace" && guarded.message ? guarded.message : message;
       const contentText = assistantMessageText(asRecord(visibleMessage));
       let outputMessage = visibleMessage;
-      if (role === "assistant" && contentText && !noReplySentinel) {
+      const outputNoReply = contentText.trim().toUpperCase() === "NO_REPLY";
+      if (role === "assistant" && contentText && !noReplySentinel && !outputNoReply) {
         const projectedText = appendReplyProjectionFooter(contentText, stateRecord, event, ctx);
         if (projectedText && projectedText !== contentText) {
           outputMessage = replaceAssistantMessageText(asRecord(visibleMessage), projectedText);
         }
+        if (isNativeAnnounceDeliveryState(stateRecord)) {
+          const deliveredAt = new Date().toISOString();
+          const workContractId = stringValue(stateRecord.workContractId || stateRecord.work_contract_id);
+          const completion: NativeAnnounceCompletion = {
+            sourceSessionKey: stringValue(stateRecord.childSessionKey || stateRecord.child_session_key),
+            sourceSessionId: "",
+            sourceTool: "subagent_announce",
+            status: "completed",
+            resultText: "",
+            resultHash: stringValue(stateRecord.nativeAnnounceResultHash || stateRecord.native_announce_result_hash),
+          };
+          if (workContractId) {
+            markNativeAnnounceCompletionOnContract(workContractId, completion, true, deliveredAt);
+          }
+          void recordPolicyReplay(
+            "native_announce_final_delivered",
+            {
+              sessionKey: stateKey,
+              sessionId: stringValue(ctx.sessionId),
+              workContractId,
+              resultHash: completion.resultHash,
+            },
+            pi.logger,
+            asRecord(stateRecord.decision),
+          ).catch(() => {});
+        }
         updateAckTrackingState(stateKey, { formal_reply_visible: true });
-        updatePolicyState(stateKey, (current) => ({
-          ...(current ?? {}),
-          formal_reply_visible: true,
-          outbound_projection_footer_appended: projectedText !== contentText || current?.outbound_projection_footer_appended === true,
-          outbound_projection_footer_appended_at: projectedText !== contentText ? new Date().toISOString() : current?.outbound_projection_footer_appended_at,
-        }));
+        const stateUpdateKeys = Array.from(new Set([
+          stateKey,
+          stringValue(stateRecord.canonicalSessionKey),
+          stringValue(ctx.sessionKey),
+          stringValue(ctx.canonicalSessionKey),
+          stringValue(ctx.sessionId),
+        ].filter(Boolean)));
+        for (const updateKey of stateUpdateKeys) {
+          updatePolicyState(updateKey, (current) => ({
+            ...(current ?? {}),
+            formal_reply_visible: true,
+            ...(isNativeAnnounceDeliveryState(stateRecord)
+              ? {
+                  nativeAnnounceCompletionPending: false,
+                  native_announce_completion_pending: false,
+                  nativeAnnounceDelivered: true,
+                  native_announce_delivered: true,
+                  deliveryStatus: "delivered",
+                  delivery_status: "delivered",
+                  resultMaterialized: true,
+                  result_materialized: true,
+                }
+              : {}),
+            outbound_projection_footer_appended: projectedText !== contentText || current?.outbound_projection_footer_appended === true,
+            outbound_projection_footer_appended_at: projectedText !== contentText ? new Date().toISOString() : current?.outbound_projection_footer_appended_at,
+          }));
+        }
       }
       if (outputMessage !== asRecord(event.message)) {
         return { message: outputMessage };

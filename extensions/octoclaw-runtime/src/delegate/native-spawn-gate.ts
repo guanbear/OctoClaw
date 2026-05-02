@@ -69,17 +69,20 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
   if (keys.length === 0) return { allowed: false, reason: "missing_session_key" };
 
   const actualHash = hashSessionsSpawnArgs(input.args);
+  let firstMismatch: NativeSpawnGateDecision | null = null;
+  let firstTransitionFailure: NativeSpawnGateDecision | null = null;
   for (const sessionKey of keys) {
     const pending = nativeSpawnIntentStore.findPendingForSession(sessionKey, { now: input.now });
     if (!pending) continue;
     if (pending.canonicalArgsHash !== actualHash) {
-      return {
+      firstMismatch ??= {
         allowed: false,
         reason: "args_hash_mismatch",
         intent: pending,
         expectedHash: pending.canonicalArgsHash,
         actualHash,
       };
+      continue;
     }
 
     const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
@@ -89,10 +92,11 @@ export function evaluateNativeSpawnGate(input: NativeSpawnGateInput): NativeSpaw
       now: input.now,
     });
     if (!started.ok) {
-      return { allowed: false, reason: started.error || "intent_transition_failed", intent: started.intent ?? pending };
+      firstTransitionFailure ??= { allowed: false, reason: started.error || "intent_transition_failed", intent: started.intent ?? pending };
+      continue;
     }
     return { allowed: true, reason: "matched_pending_intent", intent: started.intent };
   }
 
-  return { allowed: false, reason: "missing_pending_intent" };
+  return firstTransitionFailure ?? firstMismatch ?? { allowed: false, reason: "missing_pending_intent" };
 }

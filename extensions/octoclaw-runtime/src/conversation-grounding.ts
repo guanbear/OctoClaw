@@ -142,6 +142,7 @@ const PLAIN_CHAT_PROMPT_PATTERNS = [
 ];
 const FRESH_LIVE_LOOKUP_PATTERNS = [
   /(查|查下|查一下|查询|再查|再看|看下|看一下|看看|确认|确认下|确认一下).{0,16}(openclaw|octoclaw).{0,24}(更新|发版|release|版本|最新版|最新版本|新特性|特性|changelog|memory|dream)/iu,
+  /(查|查下|查一下|查询|搜索|确认|确认下|确认一下|真实查证).{0,40}(openclaw|octoclaw).{0,80}(相比|对比|比较|变化|差异|release|changelog|发布说明)/iu,
   /(openclaw|octoclaw).{0,24}(有啥更新|有什么更新|有没有新的发版|有没有新发版|有没有新的release|有没有新release|最近.*更新|最新.*更新|最近.*发版|最近.*release|新版本|最新版|最新版本|最新.*特性|新特性|release notes|发布说明)/iu,
   /(查|查下|查一下|查询|搜索|确认|确认下|确认一下).{0,32}(官方|官网|model card|模型说明|release notes|发布说明|最新版|最新版本)/iu,
   /\b(check|look up|see|verify|confirm)\b.{0,18}\b(openclaw|octoclaw)\b.{0,24}\b(update|updates|release|version|latest version|what'?s new|changelog|memory|dream)\b/iu,

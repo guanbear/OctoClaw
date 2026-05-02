@@ -121,6 +121,7 @@ function expectedDeliverableFrom(input: DelegationTicketDryRunInput): string {
     handoff.summary,
     payload.expected_deliverable,
     payload.expectedDeliverable,
+    payload.task,
   ).slice(0, 200);
 }
 

@@ -24,11 +24,11 @@
     },
     "lane": {
       "type": "string",
-      "enum": ["runner", "spawn_single", "spawn_multi"]
+      "enum": ["runner", "spawn_single", "spawn_multi", "sessions_spawn_planner"]
     },
     "kind": {
       "type": "string",
-      "enum": ["runner_playbook", "spawn_child_task", "spawn_team_flow"]
+      "enum": ["runner_playbook", "spawn_child_task", "spawn_team_flow", "native_spawn_intent"]
     },
     "status": {
       "type": "string",
@@ -40,6 +40,24 @@
     "child_spec_id": { "type": "string" },
     "session_key": { "type": "string" },
     "executed": { "type": "boolean" },
+    "spawn_intent_id": { "type": "string" },
+    "spawnIntentId": { "type": "string" },
+    "work_contract_id": { "type": "string" },
+    "workContractId": { "type": "string" },
+    "spawn_backend": {
+      "type": "string",
+      "enum": ["sessions_spawn_planner", "legacy", "direct"]
+    },
+    "spawnBackend": {
+      "type": "string",
+      "enum": ["sessions_spawn_planner", "legacy", "direct"]
+    },
+    "openclaw_run_id": { "type": "string" },
+    "openclawRunId": { "type": "string" },
+    "child_run_id": { "type": "string" },
+    "childRunId": { "type": "string" },
+    "child_session_key": { "type": "string" },
+    "childSessionKey": { "type": "string" },
     "capability_failure": {
       "type": "object",
       "additionalProperties": false,

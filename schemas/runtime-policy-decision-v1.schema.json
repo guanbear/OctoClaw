@@ -79,11 +79,11 @@
       "properties": {
         "route": {
           "type": "string",
-          "enum": ["direct", "runner", "spawn_single", "spawn_multi"]
+          "enum": ["direct", "reply", "delegate", "runner", "spawn_single", "spawn_multi"]
         },
         "system_preferred_route": {
           "type": "string",
-          "enum": ["direct", "runner", "spawn_single", "spawn_multi"]
+          "enum": ["direct", "reply", "delegate", "runner", "spawn_single", "spawn_multi"]
         },
         "work_contract": {
           "type": "string",
@@ -95,6 +95,22 @@
         },
         "protected_lane": { "type": "string" },
         "dispatch_required": { "type": "boolean" },
+        "dispatch_status": {
+          "type": "string",
+          "enum": ["not_required", "dispatch_required", "requires_native_spawn", "spawn_confirmed", "failed"]
+        },
+        "dispatch_method": {
+          "type": "string",
+          "enum": ["none", "octoclaw_dispatch", "octoclaw_dispatch_planner", "legacy"]
+        },
+        "spawn_backend": {
+          "type": "string",
+          "enum": ["sessions_spawn_planner", "legacy", "direct", "off"]
+        },
+        "spawn_intent_id": { "type": "string" },
+        "spawnIntentId": { "type": "string" },
+        "work_contract_id": { "type": "string" },
+        "workContractId": { "type": "string" },
         "confidence": { "type": "number" },
         "reason": { "type": "string" },
         "reason_codes": {

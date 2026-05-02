@@ -104,7 +104,7 @@ export function canonicalizeDecisionForPolicyState(decision: unknown): UnknownRe
       allowed_control_tools: route === "delegate"
         ? (Array.isArray(toolPolicy.allowed_control_tools) && toolPolicy.allowed_control_tools.length > 0
             ? toolPolicy.allowed_control_tools
-            : ["octoclaw_dispatch", "octoclaw_status", "octoclaw_route_hint"])
+            : ["octoclaw_dispatch", "octoclaw_dispatch_confirm", "octoclaw_status", "octoclaw_route_hint", "sessions_yield"])
         : (Array.isArray(toolPolicy.allowed_control_tools) ? toolPolicy.allowed_control_tools : []),
     },
     router_decision_v2: {

@@ -129,6 +129,22 @@ describe("buildDelegationTicketDryRun", () => {
     expect(result.expected_deliverable).toBe("实现新的 runtime ledger 校验");
   });
 
+  it("uses the dispatch task as a fallback deliverable for explicit new work", () => {
+    const result = buildDelegationTicketDryRun({
+      decision: {
+        route_decision: { route: "delegate" },
+        router_decision_v2: { request_kind: "delegated_task" },
+        is_new_work: true,
+      },
+      payload: { task: "查证 OpenClaw 两个 release 的差异，并输出 5 句话中文总结。" },
+    });
+
+    expect(result.ticket_decision).toBe("ticket_would_issue");
+    expect(result.ticket_denial_reason).toBe("");
+    expect(result.is_new_work).toBe(true);
+    expect(result.expected_deliverable).toBe("查证 OpenClaw 两个 release 的差异，并输出 5 句话中文总结。");
+  });
+
   it("does not issue a ticket for ambiguous relation without explicit new-work signal", () => {
     const result = buildDelegationTicketDryRun({
       decision: {

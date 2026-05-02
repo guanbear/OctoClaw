@@ -37,6 +37,19 @@ function confirmTool() {
   return tool;
 }
 
+function policyDecideTool() {
+  const tool = getToolRegistrations().find((registration) => registration.name === "octoclaw_policy_decide");
+  if (!tool) throw new Error("octoclaw_policy_decide not registered");
+  return tool;
+}
+
+function hasForbiddenTopLevelSchemaKeyword(schema: Record<string, unknown>): string | null {
+  for (const keyword of ["allOf", "oneOf", "anyOf", "not", "enum"]) {
+    if (Object.prototype.hasOwnProperty.call(schema, keyword)) return keyword;
+  }
+  return null;
+}
+
 function coverageSnapshot(): ContextCoverageSnapshot {
   const execution = buildExecutionCoverageLayer(["missing"]);
   const memory = buildMemoryCoverageLayer();
@@ -117,6 +130,44 @@ afterEach(() => {
 });
 
 describe("octoclaw_dispatch planner backend", () => {
+  it("registers a provider-safe confirm tool schema", () => {
+    const params = confirmTool().params ?? {};
+    expect(params.type).toBe("object");
+    expect(hasForbiddenTopLevelSchemaKeyword(params)).toBeNull();
+    expect(params.required).toEqual(["spawnIntentId", "workContractId", "sessionsSpawnStatus"]);
+    expect(JSON.stringify(params)).not.toContain('"allOf"');
+  });
+
+  it("policy_decide forceRoute=delegate seeds a dispatchable delegate context", async () => {
+    const sessionKey = "agent:main:slack:channel:c0as4dappu3";
+    const task = "真实查证 OpenClaw 2026.4.29 相比 2026.4.21 的 release 变化，并用中文 5 句话总结。";
+
+    const response = await policyDecideTool().execute({
+      task,
+      forceRoute: "delegate",
+      sessionKey,
+      metadataJson: JSON.stringify({
+        expected_deliverable: "5 sentence verified summary with source links",
+        is_new_work: true,
+        relation_to_recent_execution: "new_work",
+      }),
+    }, {
+      sessionKey,
+      sessionId: "slack-session-policy-decide",
+      agentId: "main",
+      cwd: tempWorkspace,
+    });
+
+    const body = response.json as { route_decision?: Record<string, unknown>; work_contract?: Record<string, unknown> };
+    expect(body.route_decision).toMatchObject({ route: "delegate" });
+    expect(body.work_contract).toMatchObject({ route: "delegate", nextAction: "dispatch" });
+    const stored = policyState.get(sessionKey);
+    expect(stored?.prompt).toBe(task);
+    expect(stored?.routeHintSubmitted).toBe(true);
+    expect(stored?.decision?.route_decision).toMatchObject({ route: "delegate" });
+    expect(stored?.decision?.work_contract).toMatchObject({ route: "delegate", nextAction: "dispatch" });
+  });
+
   it("returns a native sessions_spawn plan without legacy scheduler side effects", async () => {
     process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
@@ -154,6 +205,35 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(countRows("scheduler_queue", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("task_attempts", "work_contract_id = ?", [contract.workContractId])).toBe(0);
     expect(countRows("completion_bindings", "work_contract_id = ?", [contract.workContractId])).toBe(0);
+  });
+
+  it("uses the dispatch task as planner ticket deliverable when sealed policy omits it", async () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const contract = seedWorkContract();
+    const baseDecision = delegateDecision(contract);
+    const { expected_deliverable: _expectedDeliverable, route_decision: baseRouteDecision, ...decisionRest } = baseDecision;
+    const { expected_deliverable: _routeExpectedDeliverable, ...routeDecision } = baseRouteDecision;
+    const decision = { ...decisionRest, route_decision: routeDecision };
+    const task = "查证 OpenClaw 2026.4.29 相比 2026.4.21 的 release 变化，并输出 5 句话中文总结。";
+
+    const response = await dispatchTool().execute({
+      task,
+      workContractId: contract.workContractId,
+      policyJson: JSON.stringify(decision),
+      timeoutSeconds: 240,
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-dispatch-task-deliverable",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(body.status).toBe("requires_native_spawn");
+    expect(body.sessionsSpawnArgs.task).toContain("Expected deliverable:");
+    expect(body.sessionsSpawnArgs.task).toContain(task);
+    expect(nativeSpawnIntentStore.get(body.spawnIntentId)?.status).toBe("planned");
   });
 
   it("requires an explicit runId in accepted confirm results", async () => {

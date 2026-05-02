@@ -49,7 +49,7 @@ export function buildRolloutFlags(decision?: Record<string, unknown>): Record<st
 export function preHintAllowedTools(decision: Record<string, unknown>, routeHintTool: string): Set<string> {
   const toolPolicy = asRecord(decision.tool_policy);
   const workContract = asRecord(decision.work_contract);
-  const allowed = new Set([routeHintTool, "octoclaw_status", "octoclaw_task_action", "session_status"].filter(Boolean));
+  const allowed = new Set([routeHintTool, "octoclaw_status", "octoclaw_task_action", "octoclaw_dispatch_confirm", "sessions_yield", "session_status"].filter(Boolean));
   const delegateTool = String(toolPolicy.must_delegate_via ?? "").trim();
   if (delegateTool) {
     allowed.add(delegateTool);
@@ -99,6 +99,8 @@ export function runnerWorkflowTools(decision: Record<string, unknown>, routeHint
   if (routeHintTool) allowed.add(String(routeHintTool).trim());
   allowed.add("octoclaw_status");
   allowed.add("octoclaw_task_action");
+  allowed.add("octoclaw_dispatch_confirm");
+  allowed.add("sessions_yield");
   for (const toolName of asStringArray(workContract.allowedTools ?? workContract.allowed_tools)) {
     allowed.add(toolName);
   }

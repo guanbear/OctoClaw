@@ -1,5 +1,5 @@
 import { emitExecutionTransitionNotification } from "../ack/execution-transition-notifier.js";
-import { updateWorkContract } from "../work-contract/store.js";
+import { saveWorkContract, updateWorkContract } from "../work-contract/store.js";
 import type { NativeBindingRef, WorkContract } from "@octoclaw/contracts/work-contract";
 import { nativeSpawnIntentStore } from "./native-spawn-intent-store.js";
 import type { NativeSpawnIntent } from "./native-spawn-intent.js";
@@ -28,6 +28,7 @@ export interface ConfirmNativeSpawnOutput {
   ok: boolean;
   status: "accepted" | "idempotent" | "failed" | "conflict" | "error";
   error?: string;
+  ackError?: string;
   spawnIntentId: string;
   workContractId: string;
   runId?: string | null;
@@ -39,6 +40,11 @@ export interface ConfirmNativeSpawnOutput {
 
 function asString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function parseTime(value: unknown): number {
+  const parsed = Date.parse(asString(value));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function ensureDelegate(contract: WorkContract, nativeBinding: NativeBindingRef, intent: NativeSpawnIntent): NonNullable<WorkContract["delegate"]> {
@@ -57,6 +63,10 @@ function ensureDelegate(contract: WorkContract, nativeBinding: NativeBindingRef,
     nextAction: previous?.nextAction ?? "wait",
     blocker: previous?.blocker,
   };
+}
+
+function cloneWorkContract(contract: WorkContract): WorkContract {
+  return JSON.parse(JSON.stringify(contract)) as WorkContract;
 }
 
 function buildNativeBinding(input: {
@@ -93,8 +103,10 @@ function recordNativeRefs(input: {
   childRunId: string;
   childSessionKey: string;
   nowIso: string;
-}): void {
-  updateWorkContract(input.intent.workContractId, (contract) => {
+}): { ok: true; previous: WorkContract } | { ok: false } {
+  let previous: WorkContract | null = null;
+  const updated = updateWorkContract(input.intent.workContractId, (contract) => {
+    previous = cloneWorkContract(contract);
     const nativeBinding = buildNativeBinding({ contract, ...input });
     const delegate = ensureDelegate(contract, nativeBinding, input.intent);
     const spawnMode = input.intent.sessionsSpawnArgs?.mode;
@@ -140,6 +152,7 @@ function recordNativeRefs(input: {
       updatedAt: input.nowIso,
     };
   });
+  return updated && previous ? { ok: true, previous } : { ok: false };
 }
 
 function minimalProjection(input: {
@@ -184,6 +197,72 @@ function minimalProjection(input: {
   };
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error ?? "unknown_error");
+}
+
+async function maybeSendAcceptedAck(input: {
+  confirmInput: ConfirmNativeSpawnInput;
+  intent: NativeSpawnIntent;
+  spawnIntentId: string;
+  workContractId: string;
+  runId: string;
+  childRunId: string;
+  childSessionKey: string;
+  now: Date;
+  nowIso: string;
+}): Promise<Pick<ConfirmNativeSpawnOutput, "ackSent" | "ackSkipped" | "ackError">> {
+  if (input.confirmInput.notify === false || input.intent.ackSentAt) {
+    return { ackSent: false, ackSkipped: true };
+  }
+
+  try {
+    const taskId = asString(input.intent.delegateTaskId) || input.workContractId;
+    const notification = await emitExecutionTransitionNotification({
+      transitionKind: "spawn_started",
+      projection: minimalProjection({
+        taskId,
+        workContractId: input.workContractId,
+        modelId: asString(input.confirmInput.modelId),
+        childSessionKey: input.childSessionKey,
+        runId: input.runId,
+        childRunId: input.childRunId,
+        nowIso: input.nowIso,
+      }) as unknown as Parameters<typeof emitExecutionTransitionNotification>[0]["projection"],
+      attemptId: asString(input.intent.attemptId) || `${taskId}:attempt:1`,
+      workContractId: input.workContractId,
+      sessionKey: asString(input.confirmInput.sessionKey || input.intent.sessionKey),
+      stateKey: asString(input.confirmInput.stateKey || input.confirmInput.sessionKey || input.intent.sessionKey),
+      decision: input.confirmInput.decision,
+      replyToMessageId: asString(input.confirmInput.replyToMessageId) || undefined,
+      cwd: asString(input.confirmInput.cwd) || undefined,
+      occurredAt: input.nowIso,
+    });
+
+    if (notification.sent) {
+      const marked = nativeSpawnIntentStore.markAckSent(input.spawnIntentId, { now: input.now });
+      if (!marked.ok) {
+        return {
+          ackSent: notification.sent,
+          ackSkipped: notification.skipped,
+          ackError: marked.error || "ack_mark_failed",
+        };
+      }
+    }
+
+    return {
+      ackSent: notification.sent,
+      ackSkipped: notification.skipped,
+    };
+  } catch (error) {
+    return {
+      ackSent: false,
+      ackSkipped: false,
+      ackError: errorMessage(error),
+    };
+  }
+}
+
 export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promise<ConfirmNativeSpawnOutput> {
   const spawnIntentId = asString(input.spawnIntentId);
   const workContractId = asString(input.workContractId);
@@ -217,20 +296,102 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
     return { ok: false, status: "error", error: "run_id_required", spawnIntentId, workContractId, runId: null };
   }
 
+  const sessionKey = asString(input.sessionKey);
+  const existingIntent = nativeSpawnIntentStore.get(spawnIntentId);
+  if (!existingIntent) {
+    return {
+      ok: false,
+      status: "error",
+      error: "intent_not_found",
+      spawnIntentId,
+      workContractId,
+      runId,
+    };
+  }
+  const now = input.now ?? new Date();
+  const nowIso = now.toISOString();
+  if (existingIntent.workContractId !== workContractId) {
+    return { ok: false, status: "error", error: "work_contract_mismatch", spawnIntentId, workContractId, runId };
+  }
+  if (sessionKey && existingIntent.sessionKey !== sessionKey) {
+    return { ok: false, status: "error", error: "session_mismatch", spawnIntentId, workContractId, runId };
+  }
+  if (existingIntent.status === "accepted" && existingIntent.runId !== runId) {
+    return {
+      ok: false,
+      status: "conflict",
+      error: "run_id_conflict",
+      spawnIntentId,
+      workContractId,
+      runId,
+    };
+  }
+  if (existingIntent.status !== "spawn_call_started" && existingIntent.status !== "accepted") {
+    return { ok: false, status: "error", error: `invalid_status:${existingIntent.status}`, spawnIntentId, workContractId, runId };
+  }
+  if (existingIntent.status === "accepted") {
+    const childRunId = asString(existingIntent.childRunId) || runId;
+    const childSessionKey = asString(existingIntent.childSessionKey);
+    const ack = await maybeSendAcceptedAck({
+      confirmInput: input,
+      intent: existingIntent,
+      spawnIntentId,
+      workContractId,
+      runId,
+      childRunId,
+      childSessionKey,
+      now,
+      nowIso,
+    });
+    return {
+      ok: true,
+      status: "idempotent",
+      spawnIntentId,
+      workContractId,
+      runId,
+      childRunId,
+      childSessionKey: childSessionKey || null,
+      ...ack,
+    };
+  }
+  if (existingIntent.status === "spawn_call_started" && parseTime(existingIntent.expiresAt) <= now.getTime()) {
+    nativeSpawnIntentStore.expire(spawnIntentId, { now });
+    return { ok: false, status: "error", error: "intent_expired", spawnIntentId, workContractId, runId };
+  }
+
+  const childRunId = asString(input.childRunId) || asString(existingIntent.childRunId) || runId;
+  const childSessionKey = asString(input.childSessionKey) || asString(existingIntent.childSessionKey);
+  const refsRecorded = recordNativeRefs({ intent: existingIntent, runId, childRunId, childSessionKey, nowIso });
+  if (!refsRecorded.ok) {
+    return {
+      ok: false,
+      status: "error",
+      error: "work_contract_native_refs_write_failed",
+      spawnIntentId,
+      workContractId,
+      runId,
+      childRunId,
+      childSessionKey: childSessionKey || null,
+    };
+  }
+
   const confirm = nativeSpawnIntentStore.confirmAccepted({
     spawnIntentId,
     workContractId,
-    sessionKey: asString(input.sessionKey) || undefined,
+    sessionKey: sessionKey || undefined,
     runId,
-    childRunId: asString(input.childRunId) || runId,
-    childSessionKey: asString(input.childSessionKey),
-    now: input.now,
+    childRunId,
+    childSessionKey,
+    now,
   });
   if (!confirm.ok) {
+    const restored = saveWorkContract(refsRecorded.previous);
     return {
       ok: false,
       status: confirm.status === "conflict" ? "conflict" : "error",
-      error: confirm.error || "confirm_failed",
+      error: restored
+        ? confirm.error || "confirm_failed"
+        : `${confirm.error || "confirm_failed"};native_refs_rollback_failed`,
       spawnIntentId,
       workContractId,
       runId,
@@ -238,42 +399,20 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
   }
 
   const intent = confirm.intent;
-  const childRunId = asString(intent.childRunId) || runId;
-  const childSessionKey = asString(intent.childSessionKey);
-  const now = input.now ?? new Date();
-  const nowIso = now.toISOString();
-  if (confirm.status === "accepted") {
-    recordNativeRefs({ intent, runId, childRunId, childSessionKey, nowIso });
-  }
+  const confirmedChildRunId = asString(intent.childRunId) || childRunId;
+  const confirmedChildSessionKey = asString(intent.childSessionKey) || childSessionKey;
 
-  let ackSent = false;
-  let ackSkipped = true;
-  if (confirm.status === "accepted" && input.notify !== false && !intent.ackSentAt) {
-    nativeSpawnIntentStore.markAckSent(spawnIntentId, { now });
-    const taskId = asString(intent.delegateTaskId) || workContractId;
-    const notification = await emitExecutionTransitionNotification({
-      transitionKind: "spawn_started",
-      projection: minimalProjection({
-        taskId,
-        workContractId,
-        modelId: asString(input.modelId),
-        childSessionKey,
-        runId,
-        childRunId,
-        nowIso,
-      }) as unknown as Parameters<typeof emitExecutionTransitionNotification>[0]["projection"],
-      attemptId: asString(intent.attemptId) || `${taskId}:attempt:1`,
-      workContractId,
-      sessionKey: asString(input.sessionKey || intent.sessionKey),
-      stateKey: asString(input.stateKey || input.sessionKey || intent.sessionKey),
-      decision: input.decision,
-      replyToMessageId: asString(input.replyToMessageId) || undefined,
-      cwd: asString(input.cwd) || undefined,
-      occurredAt: nowIso,
-    });
-    ackSent = notification.sent;
-    ackSkipped = notification.skipped;
-  }
+  const ack = await maybeSendAcceptedAck({
+    confirmInput: input,
+    intent,
+    spawnIntentId,
+    workContractId,
+    runId,
+    childRunId: confirmedChildRunId,
+    childSessionKey: confirmedChildSessionKey,
+    now,
+    nowIso,
+  });
 
   return {
     ok: true,
@@ -281,9 +420,8 @@ export async function confirmNativeSpawn(input: ConfirmNativeSpawnInput): Promis
     spawnIntentId,
     workContractId,
     runId,
-    childRunId,
-    childSessionKey: childSessionKey || null,
-    ackSent,
-    ackSkipped,
+    childRunId: confirmedChildRunId,
+    childSessionKey: confirmedChildSessionKey || null,
+    ...ack,
   };
 }
