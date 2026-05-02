@@ -10,6 +10,7 @@ import {
   threadKeyFromSessionKey as threadKeyFn,
   updateAckTrackingState,
 } from "./ack-guard.js";
+import { buildAckKey } from "./ack-dedupe.js";
 import { ackTimerStateForKey, cancelAllAckTimers } from "./ack-timing.js";
 
 const adapter = {
@@ -28,6 +29,21 @@ afterEach(() => {
   cancelAllAckTimers();
   vi.clearAllMocks();
   adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
+});
+
+describe("ack-dedupe", () => {
+  it("separates ACK stages in the idempotency key", () => {
+    const base = {
+      threadId: "thread-1",
+      anchorId: "anchor-1",
+      routePhase: "reply",
+      messageTurnId: "turn-1",
+    };
+
+    expect(buildAckKey({ ...base, ackStage: "ack0" })).not.toBe(
+      buildAckKey({ ...base, ackStage: "delegate_started" }),
+    );
+  });
 });
 
 describe("ack-guard: canonical resolver integration", () => {

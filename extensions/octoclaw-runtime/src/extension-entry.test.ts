@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildPromptContextProjection, extractInboundMessageTimestamp, guardOutboundMessageForPolicyState, plugin, resolveDelegationCapability, resolveReactionAckConfig } from "./extension-entry.js";
 import { guardAssistantMessageForPolicyState } from "./replay/message-guard.js";
+import { nativeSpawnIntentStore } from "./delegate/native-spawn-intent-store.js";
 import { policyState } from "./state/policy-state.js";
 import { getToolRegistrations } from "./tools/registration.js";
 
@@ -107,6 +108,25 @@ describe("extractInboundMessageTimestamp", () => {
 });
 
 describe("guardOutboundMessageForPolicyState", () => {
+  let previousProjectionFooterMode: string | undefined;
+  let previousReplyProjectionFooter: string | undefined;
+
+  beforeEach(() => {
+    previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    previousReplyProjectionFooter = process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = "1";
+  });
+
+  afterEach(() => {
+    if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    else process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = previousProjectionFooterMode;
+    if (previousReplyProjectionFooter === undefined) delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    else process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER = previousReplyProjectionFooter;
+    previousProjectionFooterMode = undefined;
+    previousReplyProjectionFooter = undefined;
+  });
+
   it("rewrites Slack outbound direct answer when delegate route has no execution evidence", () => {
     const now = Date.now();
     const key = "agent:main:slack:channel:c0as4dappu3";
@@ -153,6 +173,28 @@ describe("guardOutboundMessageForPolicyState", () => {
     expect(guarded?.content).toContain("刚才的子 agent 已经跑完了");
     expect(guarded?.content).toContain("route=delegate | model=");
     expect(guarded?.content).toContain("· thread");
+    policyState.clearState(key);
+  });
+
+  it("defaults outbound projection footer off without explicit env", () => {
+    delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    delete process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER;
+    const now = Date.now();
+    const key = "agent:main:slack:channel:c0as4dappu3";
+    policyState.setState(key, {
+      decision: { route_decision: { route: "reply" }, model_policy: { selected_model: "model-a" }, request: { metadata: { message_id: "1777368521.770689" } } },
+      inboundMessageTs: "1777368521.770689",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "C0AS4DAPPU3", replyToMessageId: "1777368521.770689", content: "好的。" },
+      { channelId: "slack", inboundMessageTs: "1777368521.770689" },
+      now,
+    );
+
+    expect(guarded).toBeUndefined();
     policyState.clearState(key);
   });
 
@@ -948,5 +990,145 @@ describe("before_tool_call route hint guard", () => {
     expect(result).toBeUndefined();
     policyState.clearState(staleKey);
     policyState.clearState(currentKey);
+  });
+
+  it("blocks sessions_spawn when no pending planner intent exists", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spawn-gate-missing";
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: false } },
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: { task: "do work", runtime: "subagent" } },
+      { sessionKey: key, agentId: "main" },
+    ) as { block?: boolean; blockReason?: string } | undefined;
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toContain("no current pending native spawn intent");
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
+
+  it("still gates sessions_spawn when the general before_tool_call hook is disabled", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spawn-gate-hook-disabled";
+    const args = { task: "do work", runtime: "subagent" as const, mode: "run" as const, cleanup: "keep" as const, sandbox: "inherit" as const, lightContext: true };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-spawn-gate-hook-disabled",
+      sessionKey: key,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: false } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"] },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    expect(beforeToolCall).toBeTruthy();
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: args },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
+});
+
+describe("PC7 planner path legacy runtime disable", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+    delete process.env.OCTOCLAW_LEGACY_COMPLETION_FILE;
+    delete process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER;
+    delete process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX;
+  });
+
+  function registerWithIntervalSpy() {
+    let nextId = 1;
+    const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((_handler: TimerHandler, _ms?: number) => {
+      return nextId++ as unknown as ReturnType<typeof setInterval>;
+    }) as typeof setInterval);
+    plugin.register({
+      on: () => {},
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+    return intervalSpy;
+  }
+
+  it("does not start child finalizer recovery or delivery outbox interval in planner mode", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    delete process.env.OCTOCLAW_LEGACY_COMPLETION_FILE;
+    delete process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER;
+    delete process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX;
+    const intervalSpy = registerWithIntervalSpy();
+
+    expect(intervalSpy.mock.calls.filter((call) => call[1] === 45_000)).toHaveLength(0);
+    expect(intervalSpy.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(1);
+  });
+
+  it("starts child finalizer recovery and delivery outbox interval in legacy mode", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    const intervalSpy = registerWithIntervalSpy();
+
+    expect(intervalSpy.mock.calls.filter((call) => call[1] === 45_000).length).toBeGreaterThan(0);
+    expect(intervalSpy.mock.calls.filter((call) => call[1] === 30_000).length).toBeGreaterThan(1);
+  });
+
+  it("starts child finalizer recovery in planner mode when legacy completion file is enabled", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
+    const intervalSpy = registerWithIntervalSpy();
+
+    expect(intervalSpy.mock.calls.filter((call) => call[1] === 45_000).length).toBeGreaterThan(0);
+  });
+
+  it("does not start delivery outbox in legacy mode when explicitly disabled", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "1";
+    const intervalSpy = registerWithIntervalSpy();
+
+    expect(intervalSpy.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(1);
   });
 });

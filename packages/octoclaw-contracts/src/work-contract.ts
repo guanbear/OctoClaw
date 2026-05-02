@@ -185,6 +185,30 @@ export interface DelegateContract {
   blocker?: string;
 }
 
+// ── Native spawn refs (planner/confirm metadata-only) ──
+
+export type SpawnBackend = "sessions_spawn_planner" | "legacy" | "direct";
+export type SpawnMode = "run" | "session";
+
+/**
+ * Metadata-only native refs recorded by octoclaw_dispatch_confirm after
+ * sessions_spawn returns accepted with a valid runId. These fields are NOT
+ * execution status — status projection must query OpenClaw native runs/flows
+ * for dispatch/spawn/result status, not infer it from these refs alone.
+ *
+ * Design ref: docs/octoclaw-native-slimming-implementation-plan-2026-05-01.md §6.8
+ */
+export interface WorkContractNativeRefs {
+  openclawRunId?: string;
+  openclawTaskId?: string;
+  openclawFlowId?: string;
+  childSessionKey?: string;
+  requesterSessionKey?: string;
+  spawnIntentId?: string;
+  spawnBackend?: SpawnBackend;
+  spawnMode?: SpawnMode;
+}
+
 // ── Native binding ref ──
 
 export type NativeFlowStatus =
@@ -321,6 +345,10 @@ export interface MainContextPacket {
     nativeFlowId?: string;
     childSessionKey?: string;
     childSessionId?: string;
+    openclawRunId?: string;
+    spawnIntentId?: string;
+    spawnBackend?: SpawnBackend;
+    spawnMode?: SpawnMode;
   };
   continuationHint?: {
     handle: string;
@@ -395,6 +423,7 @@ export interface WorkContract {
   continuity: WorkContinuity;
   mainContext: MainContextPacket;
   telemetry: WorkContractTelemetry;
+  nativeSpawnRefs?: WorkContractNativeRefs;
 
   createdAt: string;
   updatedAt: string;
@@ -426,6 +455,10 @@ export interface CompactWorkContractView {
   delegateTaskId?: string;
   nativeFlowId?: string;
   childSessionKey?: string;
+  openclawRunId?: string;
+  spawnIntentId?: string;
+  spawnBackend?: SpawnBackend;
+  spawnMode?: SpawnMode;
   nextAction?: string;
   allowedTools?: string[];
   forbiddenTools?: string[];
@@ -445,8 +478,12 @@ export function compactWorkContractView(contract: WorkContract): CompactWorkCont
     replyMode: contract.reply?.replyMode,
     delegateRole: contract.delegate?.role,
     delegateTaskId: contract.delegate?.delegateTaskId,
-    nativeFlowId: contract.delegate?.nativeBinding?.flowId,
-    childSessionKey: contract.delegate?.nativeBinding?.childSessionKey,
+    nativeFlowId: contract.delegate?.nativeBinding?.flowId ?? contract.nativeSpawnRefs?.openclawFlowId,
+    childSessionKey: contract.delegate?.nativeBinding?.childSessionKey ?? contract.nativeSpawnRefs?.childSessionKey,
+    openclawRunId: contract.nativeSpawnRefs?.openclawRunId,
+    spawnIntentId: contract.nativeSpawnRefs?.spawnIntentId,
+    spawnBackend: contract.nativeSpawnRefs?.spawnBackend,
+    spawnMode: contract.nativeSpawnRefs?.spawnMode,
     nextAction: contract.delegate?.nextAction ?? contract.mainContext.nextAction,
     allowedTools: contract.reply?.allowedTools,
     forbiddenTools: contract.reply?.forbiddenTools,

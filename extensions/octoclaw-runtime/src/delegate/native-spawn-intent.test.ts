@@ -43,11 +43,12 @@ function advanceToSpawnStarted(
     ttlMs: 60_000,
     now,
   });
-  const result = store.transitionToSpawnStarted(
-    intent.spawnIntentId,
-    intent.planHash,
+  const result = store.transitionToSpawnCallStarted({
+    spawnIntentId: intent.spawnIntentId,
+    sessionKey,
+    sessionsSpawnArgs: baseArgs,
     now,
-  );
+  });
   if (!result.ok) throw new Error(`advanceToSpawnStarted failed: ${result.error}`);
   return intent;
 }
@@ -70,8 +71,14 @@ describe("canonical args hash", () => {
   });
 
   it("handles extra keys", () => {
-    expect(computePlanHash({ task: "a", model: "b", extra: true })).not.toBe(
+    expect(computePlanHash({ task: "a", model: "b", thinking: "medium" })).not.toBe(
       computePlanHash({ task: "a", model: "b" }),
+    );
+  });
+
+  it("ignores OpenClaw default/enrichment fields that do not change the plan", () => {
+    expect(computePlanHash({ task: "a", runtime: "subagent", timeoutSeconds: 0, attachments: [] })).toBe(
+      computePlanHash({ task: "a" }),
     );
   });
 
@@ -101,12 +108,12 @@ describe("NativeSpawnIntentStore create and get", () => {
     expect(intent.spawnIntentId).toMatch(/^nsp_/);
     expect(intent.workContractId).toBe("wc_1");
     expect(intent.sessionKey).toBe("parent_session_1");
-    expect(intent.sessionsSpawnArgs).toBe(baseArgs);
+    expect(intent.sessionsSpawnArgs).toEqual(baseArgs);
     expect(intent.status).toBe("planned");
     expect(intent.openclawRunId).toBeUndefined();
-    expect(typeof intent.createdAt).toBe("number");
-    expect(typeof intent.expiresAt).toBe("number");
-    expect(store.get(intent.spawnIntentId)).toBe(intent);
+    expect(new Date(intent.createdAt).getTime()).toBe(BASE_NOW);
+    expect(new Date(intent.expiresAt).getTime()).toBe(BASE_NOW + 60_000);
+    expect(store.get(intent.spawnIntentId)).toEqual(intent);
     expect(store.size()).toBe(1);
   });
 
@@ -135,8 +142,8 @@ describe("NativeSpawnIntentStore create and get", () => {
       ttlMs: 1_500,
       now: BASE_NOW,
     });
-    expect(intent.createdAt).toBe(BASE_NOW);
-    expect(intent.expiresAt).toBe(BASE_NOW + 1_500);
+    expect(intent.createdAt).toBe(new Date(BASE_NOW).toISOString());
+    expect(intent.expiresAt).toBe(new Date(BASE_NOW + 1_500).toISOString());
   });
 });
 
@@ -145,13 +152,13 @@ describe("NativeSpawnIntentStore TTL expiration", () => {
     const store = createStore();
     const intent = createIntent(store, 100, BASE_NOW);
     expect(store.expireElapsed(BASE_NOW + 101)).toBe(1);
-    expect(intent.status).toBe("expired");
+    expect(store.get(intent.spawnIntentId)?.status).toBe("expired");
   });
 
   it("does not expire intents within TTL", () => {
     const store = createStore();
     createIntent(store, 100, BASE_NOW);
-    expect(store.expireElapsed(BASE_NOW + 100)).toBe(0);
+    expect(store.expireElapsed(BASE_NOW + 99)).toBe(0);
   });
 
   it("returns count of expired intents", () => {
@@ -171,9 +178,9 @@ describe("NativeSpawnIntentStore TTL expiration", () => {
       ttlMs: 50,
       now: BASE_NOW,
     });
-    store.transitionToSpawnStarted(short.spawnIntentId, short.planHash, BASE_NOW);
+    store.transitionToSpawnCallStarted({ spawnIntentId: short.spawnIntentId, sessionKey: "s1", sessionsSpawnArgs: baseArgs, now: BASE_NOW });
     expect(store.expireElapsed(BASE_NOW + 51)).toBe(1);
-    expect(short.status).toBe("expired");
+    expect(store.get(short.spawnIntentId)?.status).toBe("expired");
   });
 });
 
@@ -181,11 +188,12 @@ describe("NativeSpawnIntentStore state transitions", () => {
   it("transitions planned to spawn_call_started with matching hash", () => {
     const store = createStore();
     const intent = createIntent(store);
-    const result = store.transitionToSpawnStarted(
-      intent.spawnIntentId,
-      intent.planHash,
-      BASE_NOW,
-    );
+    const result = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "parent_session_1",
+      sessionsSpawnArgs: baseArgs,
+      now: BASE_NOW,
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.intent.status).toBe("spawn_call_started");
@@ -195,42 +203,49 @@ describe("NativeSpawnIntentStore state transitions", () => {
   it("rejects transition with args hash mismatch", () => {
     const store = createStore();
     const intent = createIntent(store);
-    const tamperedHash = computePlanHash({ ...baseArgs, task: "tampered task" });
-    const result = store.transitionToSpawnStarted(
-      intent.spawnIntentId,
-      tamperedHash,
-      BASE_NOW,
-    );
-    expect(result).toEqual({ ok: false, error: "args_hash_mismatch" });
+    const result = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "parent_session_1",
+      sessionsSpawnArgs: { ...baseArgs, task: "tampered task" },
+      now: BASE_NOW,
+    });
+    expect(result).toMatchObject({ ok: false, error: "args_hash_mismatch" });
   });
 
   it("rejects transition from non-planned status", () => {
     const store = createStore();
     const intent = createIntent(store);
-    store.transitionToSpawnStarted(intent.spawnIntentId, intent.planHash, BASE_NOW);
-    const result = store.transitionToSpawnStarted(
-      intent.spawnIntentId,
-      intent.planHash,
-      BASE_NOW,
-    );
-    expect(result).toEqual({ ok: false, error: "invalid_status" });
+    store.transitionToSpawnCallStarted({ spawnIntentId: intent.spawnIntentId, sessionKey: "parent_session_1", sessionsSpawnArgs: baseArgs, now: BASE_NOW });
+    const result = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "parent_session_1",
+      sessionsSpawnArgs: baseArgs,
+      now: BASE_NOW,
+    });
+    expect(result).toMatchObject({ ok: false, error: "invalid_status:spawn_call_started" });
   });
 
   it("rejects transition for expired intent", () => {
     const store = createStore();
     const intent = createIntent(store, 100, BASE_NOW);
-    const result = store.transitionToSpawnStarted(
-      intent.spawnIntentId,
-      intent.planHash,
-      BASE_NOW + 101,
-    );
-    expect(result).toEqual({ ok: false, error: "intent_expired" });
-    expect(intent.status).toBe("expired");
+    const result = store.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: "parent_session_1",
+      sessionsSpawnArgs: baseArgs,
+      now: BASE_NOW + 101,
+    });
+    expect(result).toMatchObject({ ok: false, error: "intent_expired" });
+    expect(store.get(intent.spawnIntentId)?.status).toBe("expired");
   });
 
   it("rejects transition for not-found intent", () => {
     const store = createStore();
-    const result = store.transitionToSpawnStarted("missing_id", "somehash", BASE_NOW);
+    const result = store.transitionToSpawnCallStarted({
+      spawnIntentId: "missing_id",
+      sessionKey: "parent_session_1",
+      sessionsSpawnArgs: baseArgs,
+      now: BASE_NOW,
+    });
     expect(result).toEqual({ ok: false, error: "intent_not_found" });
   });
 
@@ -250,12 +265,12 @@ describe("NativeSpawnIntentStore state transitions", () => {
     if (result.ok) {
       expect(result.intent.status).toBe("accepted");
       expect(result.intent.openclawRunId).toBe("run_1");
-      expect(result.intent.confirmedAt).toBe(confirmNow);
+      expect(result.intent.confirmedAt).toBe(new Date(confirmNow).toISOString());
       expect(result.idempotent).toBe(false);
     }
   });
 
-  it("transitions planned directly to accepted on confirm without spawn_call_started", () => {
+  it("rejects planned directly to accepted on confirm without spawn_call_started", () => {
     const store = createStore();
     const intent = createIntent(store);
 
@@ -266,11 +281,25 @@ describe("NativeSpawnIntentStore state transitions", () => {
       now: BASE_NOW,
     });
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.intent.status).toBe("accepted");
-      expect(result.intent.openclawRunId).toBe("run_1");
-    }
+    expect(result).toEqual({ ok: false, error: "invalid_status:planned" });
+    expect(intent.status).toBe("planned");
+  });
+
+  it("does not rewrite expired intent to failed", () => {
+    const store = createStore();
+    const intent = store.create({
+      workContractId: "wc_expired_failed",
+      sessionKey: "session-expired-failed",
+      sessionsSpawnArgs: baseArgs,
+      ttlMs: 10,
+      now: BASE_NOW,
+    });
+    store.expireElapsed(BASE_NOW + 11);
+
+    const result = store.confirmFailed(intent.spawnIntentId, "spawn_error_after_expiry");
+
+    expect(result).toMatchObject({ ok: false, error: "already_terminal" });
+    expect(store.get(intent.spawnIntentId)?.status).toBe("expired");
   });
 
   it("transitions spawn_call_started to failed on confirmFailed", () => {
@@ -329,7 +358,7 @@ describe("NativeSpawnIntentStore duplicate confirm idempotent", () => {
     });
 
     expect(intent.confirmedAt).toBe(confirmedAtBefore);
-    expect(intent.openclawRunId).toBe("run_1");
+    expect(store.get(intent.spawnIntentId)?.openclawRunId).toBe("run_1");
   });
 });
 
@@ -371,7 +400,7 @@ describe("NativeSpawnIntentStore conflict on different runId", () => {
       now: BASE_NOW,
     });
 
-    expect(intent.openclawRunId).toBe("run_1");
+    expect(store.get(intent.spawnIntentId)?.openclawRunId).toBe("run_1");
   });
 
   it("returns existingRunId in conflict result", () => {
@@ -456,8 +485,8 @@ describe("NativeSpawnIntentStore edge cases", () => {
       ttlMs: 200,
       now: BASE_NOW + 2,
     });
-    store.transitionToSpawnStarted(second.spawnIntentId, second.planHash, BASE_NOW + 2);
-    expect(store.findPendingForSession("s1", BASE_NOW + 3)).toBe(first);
+    store.transitionToSpawnCallStarted({ spawnIntentId: second.spawnIntentId, sessionKey: "s1", sessionsSpawnArgs: baseArgs, now: BASE_NOW + 2 });
+    expect(store.findPendingForSession("s1", BASE_NOW + 3)).toEqual(first);
   });
 
   it("findPendingForSession auto-expires stale planned intents", () => {
@@ -469,14 +498,14 @@ describe("NativeSpawnIntentStore edge cases", () => {
       ttlMs: 50,
       now: BASE_NOW,
     });
-    expect(store.findPendingForSession("s1", BASE_NOW + 51)).toBeUndefined();
+    expect(store.findPendingForSession("s1", BASE_NOW + 51)).toBeNull();
   });
 
   it("findPendingForSession returns undefined when no planned intent", () => {
     const store = createStore();
     const intent = createIntent(store);
-    store.transitionToSpawnStarted(intent.spawnIntentId, intent.planHash, BASE_NOW);
-    expect(store.findPendingForSession("parent_session_1")).toBeUndefined();
+    store.transitionToSpawnCallStarted({ spawnIntentId: intent.spawnIntentId, sessionKey: "parent_session_1", sessionsSpawnArgs: baseArgs, now: BASE_NOW });
+    expect(store.findPendingForSession("parent_session_1")).toBeNull();
   });
 
   it("clear resets store", () => {

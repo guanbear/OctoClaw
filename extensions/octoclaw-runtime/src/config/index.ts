@@ -26,7 +26,7 @@ export function resolveSpawnBackend(): SpawnBackend {
   if (v === "planner") return "planner";
   if (v === "legacy") return "legacy";
   if (v === "off") return "off";
-  return "legacy";
+  return "planner";
 }
 
 export function resolvePlannerAllowlist(): string[] {
@@ -96,4 +96,34 @@ export function resolvePlannerSpawnConfig(): PlannerSpawnConfig {
     legacyDeliveryOutboxDisabled: resolveLegacyDeliveryOutboxDisabled(),
     legacyRuntimeLedgerMode: resolveLegacyRuntimeLedgerMode(),
   };
+}
+
+/**
+ * Whether the child-finalizer recovery interval should run at startup.
+ * In planner backend, child completion is handled by OpenClaw native announce,
+ * so the legacy finalizer is skipped unless an explicit legacy flag overrides.
+ * In legacy backend, the finalizer runs unless explicitly disabled.
+ */
+export function shouldRunChildFinalizerRecovery(): boolean {
+  const backend = resolveSpawnBackend();
+  if (backend === "off") return false;
+  if (backend === "planner") {
+    return resolveLegacyCompletionFileEnabled();
+  }
+  return !resolveLegacyChildFinalizerDisabled();
+}
+
+/**
+ * Whether the delivery-outbox flush interval should run at startup.
+ * In planner backend, completion delivery is handled by OpenClaw native announce,
+ * so the legacy outbox is skipped unless explicitly enabled.
+ * In legacy backend, the outbox runs unless explicitly disabled.
+ */
+export function shouldRunDeliveryOutboxFlush(): boolean {
+  const backend = resolveSpawnBackend();
+  if (backend === "off") return false;
+  if (backend === "planner") {
+    return !resolveLegacyDeliveryOutboxDisabled() && resolveLegacyCompletionFileEnabled();
+  }
+  return !resolveLegacyDeliveryOutboxDisabled();
 }

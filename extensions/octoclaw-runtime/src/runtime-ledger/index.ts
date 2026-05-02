@@ -144,6 +144,29 @@ const MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_runtime_events_attempt_created ON runtime_events(attempt_id, created_at)`,
     ].join(";\n") + ";",
   },
+  {
+    version: 2,
+    name: "create_native_spawn_intents",
+    sql: [
+      `CREATE TABLE IF NOT EXISTS native_spawn_intents (
+  spawn_intent_id TEXT PRIMARY KEY,
+  work_contract_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('planned', 'spawn_call_started', 'accepted', 'failed', 'expired')),
+  args_hash TEXT NOT NULL,
+  run_id TEXT,
+  child_session_key TEXT,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  intent_json TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0
+)`,
+      `CREATE INDEX IF NOT EXISTS idx_native_spawn_intents_session_status ON native_spawn_intents(session_key, status, created_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_native_spawn_intents_work_contract ON native_spawn_intents(work_contract_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_native_spawn_intents_expires ON native_spawn_intents(status, expires_at)`,
+    ].join(";\n") + ";",
+  },
 ];
 
 const nodeRequire = createRequire(import.meta.url);

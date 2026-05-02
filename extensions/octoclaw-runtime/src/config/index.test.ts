@@ -12,6 +12,8 @@ import {
   resolveRuntimeConfig,
   resolveSpawnBackend,
   resolveSpawnIntentTtlMs,
+  shouldRunChildFinalizerRecovery,
+  shouldRunDeliveryOutboxFlush,
 } from "./index.js";
 
 const ENV_KEYS = [
@@ -78,13 +80,13 @@ describe("resolveSpawnBackend", () => {
     expect(resolveSpawnBackend()).toBe("off");
   });
 
-  it("defaults to legacy when env is not set", () => {
-    expect(resolveSpawnBackend()).toBe("legacy");
+  it("defaults to planner when env is not set", () => {
+    expect(resolveSpawnBackend()).toBe("planner");
   });
 
-  it.each(["foo", "random", ""])("defaults to legacy for invalid value %j", (value) => {
+  it.each(["foo", "random", ""])("defaults to planner for invalid value %j", (value) => {
     process.env.OCTOCLAW_SPAWN_BACKEND = value;
-    expect(resolveSpawnBackend()).toBe("legacy");
+    expect(resolveSpawnBackend()).toBe("planner");
   });
 });
 
@@ -245,7 +247,7 @@ describe("legacy disable flags", () => {
 describe("resolvePlannerSpawnConfig", () => {
   it("returns all defaults when no env is set", () => {
     expect(resolvePlannerSpawnConfig()).toEqual({
-      spawnBackend: "legacy",
+      spawnBackend: "planner",
       plannerAllowlist: [],
       intentTtlMs: DEFAULT_SPAWN_INTENT_TTL_MS,
       legacyCompletionFileEnabled: false,
@@ -273,5 +275,78 @@ describe("resolvePlannerSpawnConfig", () => {
       legacyDeliveryOutboxDisabled: true,
       legacyRuntimeLedgerMode: "read_only",
     });
+  });
+});
+
+describe("shouldRunChildFinalizerRecovery", () => {
+  it("does not run child finalizer recovery by default", () => {
+    expect(shouldRunChildFinalizerRecovery()).toBe(false);
+  });
+
+  it("runs in explicit legacy backend by default", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    expect(shouldRunChildFinalizerRecovery()).toBe(true);
+  });
+
+  it("does not run in planner backend by default", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    expect(shouldRunChildFinalizerRecovery()).toBe(false);
+  });
+
+  it("runs in planner backend when legacy completion file is explicitly enabled", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
+    expect(shouldRunChildFinalizerRecovery()).toBe(true);
+  });
+
+  it("does not run in legacy backend when child finalizer is explicitly disabled", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    process.env.OCTOCLAW_DISABLE_CHILD_FINALIZER = "1";
+    expect(shouldRunChildFinalizerRecovery()).toBe(false);
+  });
+
+  it("does not run in off backend by default", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "off";
+    expect(shouldRunChildFinalizerRecovery()).toBe(false);
+  });
+});
+
+describe("shouldRunDeliveryOutboxFlush", () => {
+  it("does not run delivery outbox by default", () => {
+    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
+  });
+
+  it("runs in explicit legacy backend by default", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    expect(shouldRunDeliveryOutboxFlush()).toBe(true);
+  });
+
+  it("does not run in planner backend by default", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
+  });
+
+  it("runs in planner backend when both legacy completion file and outbox are enabled", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
+    expect(shouldRunDeliveryOutboxFlush()).toBe(true);
+  });
+
+  it("does not run in planner backend when delivery outbox is disabled even with completion file", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_LEGACY_COMPLETION_FILE = "1";
+    process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "1";
+    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
+  });
+
+  it("does not run in legacy backend when delivery outbox is explicitly disabled", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    process.env.OCTOCLAW_DISABLE_DELIVERY_OUTBOX = "true";
+    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
+  });
+
+  it("does not run in off backend", () => {
+    process.env.OCTOCLAW_SPAWN_BACKEND = "off";
+    expect(shouldRunDeliveryOutboxFlush()).toBe(false);
   });
 });

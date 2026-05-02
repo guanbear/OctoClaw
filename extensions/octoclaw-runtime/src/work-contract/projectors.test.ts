@@ -60,6 +60,10 @@ describe("work contract projectors", () => {
       role: "code",
       nextAction: "wait",
       nativeFlowId: "flow-1",
+      openclawRunId: undefined,
+      spawnIntentId: undefined,
+      spawnBackend: undefined,
+      spawnMode: undefined,
       artifactRefs: ["artifact-1"],
     });
   });
@@ -168,6 +172,10 @@ describe("Phase B acceptance: TaskStatusProjection field completeness", () => {
       role: "research",
       nextAction: "open_artifact",
       nativeFlowId: "flow-phase-b",
+      openclawRunId: undefined,
+      spawnIntentId: undefined,
+      spawnBackend: undefined,
+      spawnMode: undefined,
       artifactRefs: ["artifact-phase-b-1", "artifact-phase-b-2"],
     });
   });
@@ -260,3 +268,110 @@ const phaseBDelegate: DelegateContract = {
   ],
   nextAction: "open_artifact",
 };
+
+describe("PC6: nativeSpawnRefs projection", () => {
+  it("projectDelegateStatusPacket surfaces nativeSpawnRefs when present", () => {
+    const contract = buildWorkContractFromPolicy(
+      "session-pc6",
+      "PC6 native refs test",
+      "delegated_work",
+      coverage,
+      buildWorkDecisionSeal("local_judge", "delegate", ["needs_execution"]),
+      {
+        status: "running",
+        delegate: {
+          ...phaseBDelegate,
+          delegateTaskId: "delegate-pc6",
+          nextAction: "wait",
+        },
+      },
+    );
+    contract.nativeSpawnRefs = {
+      openclawRunId: "run-pc6-1",
+      spawnIntentId: "nsp_pc6_001",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "run",
+      childSessionKey: "child-pc6-key",
+    };
+
+    const packet = projectDelegateStatusPacket(contract);
+
+    expect(packet.openclawRunId).toBe("run-pc6-1");
+    expect(packet.spawnIntentId).toBe("nsp_pc6_001");
+    expect(packet.spawnBackend).toBe("sessions_spawn_planner");
+    expect(packet.spawnMode).toBe("run");
+    expect(packet.status).toBe("running");
+  });
+
+  it("projectDelegateStatusPacket omits nativeSpawnRefs fields when absent", () => {
+    const contract = buildWorkContractFromPolicy(
+      "session-pc6-no-refs",
+      "PC6 no refs test",
+      "delegated_work",
+      coverage,
+      buildWorkDecisionSeal("local_judge", "delegate", ["needs_execution"]),
+      { delegate: phaseBDelegate },
+    );
+
+    const packet = projectDelegateStatusPacket(contract);
+
+    expect(packet.openclawRunId).toBeUndefined();
+    expect(packet.spawnIntentId).toBeUndefined();
+    expect(packet.spawnBackend).toBeUndefined();
+    expect(packet.spawnMode).toBeUndefined();
+  });
+
+  it("projectMainContextPacket surfaces nativeSpawnRefs in visibleIds", () => {
+    const contract = buildWorkContractFromPolicy(
+      "session-pc6-ctx",
+      "PC6 context packet test",
+      "delegated_work",
+      coverage,
+      buildWorkDecisionSeal("local_judge", "delegate", ["needs_execution"]),
+      { delegate: phaseBDelegate },
+    );
+    contract.nativeSpawnRefs = {
+      openclawRunId: "run-pc6-ctx",
+      spawnIntentId: "nsp_pc6_ctx",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "session",
+    };
+
+    const packet = projectMainContextPacket(contract);
+
+    expect(packet.visibleIds.openclawRunId).toBe("run-pc6-ctx");
+    expect(packet.visibleIds.spawnIntentId).toBe("nsp_pc6_ctx");
+    expect(packet.visibleIds.spawnBackend).toBe("sessions_spawn_planner");
+    expect(packet.visibleIds.spawnMode).toBe("session");
+  });
+
+  it("nativeSpawnRefs do not cause delegate status to show running without evidence", () => {
+    const contract = buildWorkContractFromPolicy(
+      "session-pc6-honest",
+      "PC6 honesty test",
+      "delegated_work",
+      coverage,
+      buildWorkDecisionSeal("local_judge", "delegate", ["needs_execution"]),
+      {
+        status: "sealed",
+        delegate: {
+          ...phaseBDelegate,
+          nativeBinding: null,
+          nextAction: "dispatch",
+        },
+      },
+    );
+    contract.nativeSpawnRefs = {
+      openclawRunId: "run-phantom",
+      spawnIntentId: "nsp_phantom",
+      spawnBackend: "sessions_spawn_planner",
+      spawnMode: "run",
+    };
+
+    const packet = projectDelegateStatusPacket(contract);
+
+    expect(packet.status).toBe("sealed");
+    expect(packet.nextAction).toBe("dispatch");
+    expect(packet.openclawRunId).toBe("run-phantom");
+  });
+});

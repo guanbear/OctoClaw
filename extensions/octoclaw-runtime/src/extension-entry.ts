@@ -76,6 +76,8 @@ import {
 import { recordAckReplay, recordPolicyReplay } from "./replay/replay.js";
 import { policyState, type PolicyStateEntry } from "./state/policy-state.js";
 import { getCommandRegistrations, getToolRegistrations } from "./tools/registration.js";
+import { evaluateNativeSpawnGate } from "./delegate/native-spawn-gate.js";
+import { isPlannerAllowedForSession, resolveSpawnBackend, shouldRunChildFinalizerRecovery, shouldRunDeliveryOutboxFlush } from "./config/index.js";
 
 type UnknownRecord = Record<string, unknown>;
 type HookHandler = (event: UnknownRecord, ctx: UnknownRecord) => unknown;
@@ -375,13 +377,22 @@ function findRecentOutboundPolicyState(
 }
 
 
+function projectionFooterMode(): "off" | "compact" | "debug" {
+  const mode = stringValue(process.env.OCTOCLAW_PROJECTION_FOOTER_MODE).toLowerCase();
+  if (mode === "debug") return "debug";
+  if (mode === "compact" || mode === "on" || mode === "1" || mode === "true" || mode === "yes") return "compact";
+  const legacy = stringValue(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER).toLowerCase();
+  if (["1", "true", "on", "yes", "compact"].includes(legacy)) return "compact";
+  if (legacy === "debug") return "debug";
+  return "off";
+}
+
 function replyProjectionFooterEnabled(): boolean {
-  const raw = stringValue(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER).toLowerCase();
-  return !["0", "false", "off", "no"].includes(raw);
+  return projectionFooterMode() !== "off";
 }
 
 function footerDebugEnabled(): boolean {
-  return Boolean(process.env.OCTOCLAW_FOOTER_DEBUG && !["0", "false", "off"].includes(
+  return projectionFooterMode() === "debug" || Boolean(process.env.OCTOCLAW_FOOTER_DEBUG && !["0", "false", "off"].includes(
     stringValue(process.env.OCTOCLAW_FOOTER_DEBUG).toLowerCase()
   ));
 }
@@ -1442,7 +1453,7 @@ export const plugin = {
       }
       const decision = asRecord(state?.decision);
       const hookConfig = asRecord(asRecord(decision.hook_interface).before_tool_call);
-      if (!hookConfig.enabled) return;
+      if (!hookConfig.enabled && toolName !== "sessions_spawn") return;
 
       const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
       const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
@@ -1466,6 +1477,62 @@ export const plugin = {
       if (storedInboundTs && !stringValue(metadata.message_id)) {
         metadata.message_id = storedInboundTs;
       }
+
+      if (toolName === "sessions_spawn") {
+        const sessionKeys = [
+          stateKey,
+          stringValue(ctx.sessionKey),
+          stringValue(ctx.canonicalSessionKey),
+          stringValue(asRecord(decision.request).session_key),
+          ...resolvePolicyStateKeys(ctx),
+        ];
+        const plannerGateEnabled = resolveSpawnBackend() === "planner"
+          && sessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
+        if (plannerGateEnabled) {
+          const gate = evaluateNativeSpawnGate({ sessionKeys, args: toolParams as { task: string; [key: string]: unknown }, decision });
+          if (!gate.allowed) {
+            updatePolicyState(stateKey, (current) => ({
+              ...current,
+              blockedTools: [...(Array.isArray(current.blockedTools) ? current.blockedTools.slice(-7) : []), toolName].filter(Boolean),
+            }));
+            void recordPolicyReplay("sessions_spawn_intent_blocked", {
+              sessionKey: stateKey || "",
+              sessionId: stringValue(ctx.sessionId),
+              route: stringValue(asRecord(decision.route_decision).route),
+              toolName,
+              reason: gate.reason,
+              spawn_intent_id: gate.intent?.spawnIntentId ?? null,
+              expected_hash: gate.expectedHash ?? null,
+              actual_hash: gate.actualHash ?? null,
+            }, pi.logger, decision).catch(() => {});
+            return {
+              block: true,
+              blockReason: gate.reason === "args_hash_mismatch"
+                ? "OctoClaw blocked sessions_spawn because the arguments do not match the pending native spawn intent. Call octoclaw_dispatch again or use the exact sessionsSpawnArgs."
+                : "OctoClaw blocked sessions_spawn because no current pending native spawn intent exists. Call octoclaw_dispatch first.",
+            };
+          }
+          updatePolicyState(stateKey, (current) => ({
+            ...current,
+            delegated: false,
+            spawnIntentId: gate.intent.spawnIntentId,
+            workContractId: gate.intent.workContractId,
+            dispatchStatus: "spawn_call_started",
+            controlToolsSeen: Array.from(new Set([...(Array.isArray(current.controlToolsSeen) ? current.controlToolsSeen : []), toolName])),
+          }));
+          void recordPolicyReplay("sessions_spawn_intent_allowed", {
+            sessionKey: stateKey || gate.intent.sessionKey,
+            sessionId: stringValue(ctx.sessionId),
+            route: stringValue(asRecord(decision.route_decision).route),
+            toolName,
+            spawn_intent_id: gate.intent.spawnIntentId,
+            work_contract_id: gate.intent.workContractId,
+          }, pi.logger, decision).catch(() => {});
+          return;
+        }
+      }
+
+      if (!hookConfig.enabled) return;
 
       if (
         stringValue(asRecord(decision.route_decision).route) === "reply"
@@ -1914,18 +1981,22 @@ export const plugin = {
     if (deliveryOutboxInterval) {
       clearInterval(deliveryOutboxInterval);
     }
-    runDeliveryOutboxFlush(pi.logger);
-    deliveryOutboxInterval = setInterval(() => {
+    if (shouldRunDeliveryOutboxFlush()) {
       runDeliveryOutboxFlush(pi.logger);
-    }, 30_000);
+      deliveryOutboxInterval = setInterval(() => {
+        runDeliveryOutboxFlush(pi.logger);
+      }, 30_000);
+    }
 
     if (childFinalizerRecoveryInterval) {
       clearInterval(childFinalizerRecoveryInterval);
     }
-    runChildFinalizerRecovery(pi.logger);
-    childFinalizerRecoveryInterval = setInterval(() => {
+    if (shouldRunChildFinalizerRecovery()) {
       runChildFinalizerRecovery(pi.logger);
-    }, 45_000);
+      childFinalizerRecoveryInterval = setInterval(() => {
+        runChildFinalizerRecovery(pi.logger);
+      }, 45_000);
+    }
 
     if (typeof pi.registerTool === "function") {
       for (const tool of getToolRegistrations({ subagentRuntime: pi.runtime?.subagent, judgeFastRaw, delegationEnabled })) {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildRouteCommitAckKey,
   buildRouteCommitAckPacket,
@@ -10,6 +10,8 @@ import {
 } from "../ack-route-commit.js";
 
 let useMockAdapter = false;
+let previousSpawnBackend: string | undefined;
+let previousPlannerAllowlist: string | undefined;
 
 const imAdapter = {
   canHandle: vi.fn(() => true),
@@ -53,12 +55,25 @@ function decision(overrides: Record<string, unknown> = {}): Record<string, unkno
 
 describe("route commit ACK", () => {
   beforeEach(() => {
+    previousSpawnBackend = process.env.OCTOCLAW_SPAWN_BACKEND;
+    previousPlannerAllowlist = process.env.OCTOCLAW_PLANNER_ALLOWLIST;
+    process.env.OCTOCLAW_SPAWN_BACKEND = "legacy";
+    delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
     resetRouteCommitAckState();
     vi.clearAllMocks();
     useMockAdapter = false;
     imAdapter.canHandle.mockReturnValue(true);
     imAdapter.resolveTarget.mockReturnValue({ target: "C1" });
     imAdapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "1700000000.000100" });
+  });
+
+  afterEach(() => {
+    if (previousSpawnBackend === undefined) delete process.env.OCTOCLAW_SPAWN_BACKEND;
+    else process.env.OCTOCLAW_SPAWN_BACKEND = previousSpawnBackend;
+    if (previousPlannerAllowlist === undefined) delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
+    else process.env.OCTOCLAW_PLANNER_ALLOWLIST = previousPlannerAllowlist;
+    previousSpawnBackend = undefined;
+    previousPlannerAllowlist = undefined;
   });
 
   it("projects truthful zh delegate text without execution claims", () => {
@@ -390,6 +405,91 @@ describe("route commit ACK", () => {
 
     runCommandSpy.mockRestore();
     replaySpy.mockRestore();
+  });
+
+  it("suppresses delegate route commit ACK in planner backend until native confirm", async () => {
+    const previous = process.env.OCTOCLAW_SPAWN_BACKEND;
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+    const replaySpy = vi.spyOn(
+      await import("../../replay/replay.js"),
+      "recordPolicyReplay",
+    );
+
+    try {
+      const result = await sendRouteCommitAck({
+        sessionKey: "slack:channel:C1:thread:1700000000.000100",
+        stateKey: "state-1",
+        decision: decision(),
+        state: { reactionAckEnabled: true, reactionAckEmoji: "eyes" },
+        replyToMessageId: "1700000000.000100",
+      });
+
+      expect(result).toMatchObject({
+        sent: false,
+        skipped: true,
+        reason: "delegate_route_ack_waits_for_native_confirm",
+        ack_target_resolution_state: "suppressed_until_native_confirm",
+        ack_delivery_state: "skipped",
+      });
+      expect(runCommandSpy).not.toHaveBeenCalled();
+      expect(imAdapter.react).not.toHaveBeenCalled();
+      expect(replaySpy).toHaveBeenCalledWith(
+        "route_commit_ack",
+        expect.objectContaining({
+          route: "delegate",
+          ackSent: false,
+          reason: "delegate_route_ack_waits_for_native_confirm",
+        }),
+        undefined,
+      );
+    } finally {
+      runCommandSpy.mockRestore();
+      replaySpy.mockRestore();
+      if (previous === undefined) delete process.env.OCTOCLAW_SPAWN_BACKEND;
+      else process.env.OCTOCLAW_SPAWN_BACKEND = previous;
+    }
+  });
+
+  it("does not suppress delegate route ACK for non-allowlisted planner fallback sessions", async () => {
+    const previousBackend = process.env.OCTOCLAW_SPAWN_BACKEND;
+    const previousAllowlist = process.env.OCTOCLAW_PLANNER_ALLOWLIST;
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    process.env.OCTOCLAW_PLANNER_ALLOWLIST = "agent:main:other:*";
+    const envModule = await import("../../resolve/env.js");
+    const runCommandSpy = vi.spyOn(envModule, "runCommand").mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ ok: true }),
+      stderr: "",
+      timedOut: false,
+    });
+
+    try {
+      const result = await sendRouteCommitAck({
+        sessionKey: "slack:channel:C1:thread:1700000000.000100",
+        stateKey: "state-1",
+        decision: decision(),
+        state: {},
+        replyToMessageId: "1700000000.000100",
+      });
+
+      expect(result.sent).toBe(true);
+      expect(result.skipped).toBe(false);
+      expect(result.reason).not.toBe("delegate_route_ack_waits_for_native_confirm");
+      expect(runCommandSpy).toHaveBeenCalled();
+    } finally {
+      runCommandSpy.mockRestore();
+      if (previousBackend === undefined) delete process.env.OCTOCLAW_SPAWN_BACKEND;
+      else process.env.OCTOCLAW_SPAWN_BACKEND = previousBackend;
+      if (previousAllowlist === undefined) delete process.env.OCTOCLAW_PLANNER_ALLOWLIST;
+      else process.env.OCTOCLAW_PLANNER_ALLOWLIST = previousAllowlist;
+    }
   });
 
   it("uses reaction ACK for delegate route commit ACK when configured", async () => {

@@ -388,3 +388,121 @@ describe("Phase B acceptance: status no-lie rules", () => {
     })).toBe("running");
   });
 });
+
+describe("PC6: nativeSpawnRefs are metadata-only", () => {
+  const now = "2026-04-25T00:10:00.000Z";
+
+  it("surfaces nativeSpawnRefs in TaskStatusProjection output", () => {
+    const c = contract({
+      nativeSpawnRefs: {
+        openclawRunId: "run-native-1",
+        spawnIntentId: "nsp_abc123",
+        spawnBackend: "sessions_spawn_planner",
+        spawnMode: "run",
+        childSessionKey: "child-key-native",
+      },
+      telemetry: { dispatchExecuted: true, spawnExecuted: true },
+    });
+
+    const projection = buildTaskStatusProjection({
+      contract: c,
+      heartbeatAt: now,
+      now,
+    });
+
+    expect(projection.openclawRunId).toBe("run-native-1");
+    expect(projection.spawnIntentId).toBe("nsp_abc123");
+    expect(projection.spawnBackend).toBe("sessions_spawn_planner");
+    expect(projection.spawnMode).toBe("run");
+  });
+
+  it("nativeSpawnRefs do not advance status from registered to running without execution evidence", () => {
+    const c = contract({
+      nativeSpawnRefs: {
+        openclawRunId: "run-native-2",
+        spawnIntentId: "nsp_def456",
+        spawnBackend: "sessions_spawn_planner",
+        spawnMode: "run",
+        childSessionKey: "child-key-2",
+      },
+    });
+
+    const projection = buildTaskStatusProjection({ contract: c, now });
+
+    expect(projection.status).toBe("registered");
+    expect(projection.openclawRunId).toBe("run-native-2");
+    expect(projection.spawnIntentId).toBe("nsp_def456");
+    expect(projection.dispatchExecuted).toBe(false);
+    expect(projection.spawnExecuted).toBe(false);
+  });
+
+  it("nativeSpawnRefs do not advance status from queued without spawn evidence", () => {
+    const c = contract({
+      nativeSpawnRefs: {
+        openclawRunId: "run-native-3",
+        spawnIntentId: "nsp_ghi789",
+        spawnBackend: "sessions_spawn_planner",
+        spawnMode: "session",
+      },
+      telemetry: { dispatchExecuted: true, spawnExecuted: false },
+    });
+
+    const projection = buildTaskStatusProjection({ contract: c, now });
+
+    expect(projection.status).toBe("queued");
+    expect(projection.openclawRunId).toBe("run-native-3");
+    expect(projection.spawnBackend).toBe("sessions_spawn_planner");
+    expect(projection.spawnMode).toBe("session");
+  });
+
+  it("prefers nativeBinding runId over nativeSpawnRefs openclawRunId in projection", () => {
+    const c = contract({
+      delegate: {
+        ...contract().delegate!,
+        nativeBinding: {
+          flowId: "flow-1",
+          ownerKey: "wc-1",
+          controllerId: "octoclaw.delegate",
+          revision: 1,
+          expectedRevision: 1,
+          runId: "run-binding-primary",
+          syncMode: "managed",
+          status: "running",
+        },
+      },
+      nativeSpawnRefs: {
+        openclawRunId: "run-refs-secondary",
+        spawnIntentId: "nsp_priority",
+        spawnBackend: "sessions_spawn_planner",
+      },
+      telemetry: { dispatchExecuted: true, spawnExecuted: true },
+    });
+
+    const projection = buildTaskStatusProjection({
+      contract: c,
+      heartbeatAt: now,
+      now,
+    });
+
+    expect(projection.openclawRunId).toBe("run-binding-primary");
+    expect(projection.spawnIntentId).toBe("nsp_priority");
+    expect(projection.runId).toBe("run-binding-primary");
+  });
+
+  it("projection without nativeSpawnRefs omits new fields", () => {
+    const c = contract({
+      telemetry: { dispatchExecuted: true, spawnExecuted: true },
+    });
+
+    const projection = buildTaskStatusProjection({
+      contract: c,
+      heartbeatAt: now,
+      now,
+    });
+
+    expect(projection.openclawRunId).toBeUndefined();
+    expect(projection.spawnIntentId).toBeUndefined();
+    expect(projection.spawnBackend).toBeUndefined();
+    expect(projection.spawnMode).toBeUndefined();
+  });
+});

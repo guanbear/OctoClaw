@@ -1,4 +1,4 @@
-import type { AnomalyNotice, DelegateArtifactRef, NativeBindingRef, WorkContract } from "./work-contract.js";
+import type { AnomalyNotice, DelegateArtifactRef, NativeBindingRef, SpawnBackend, SpawnMode, WorkContract } from "./work-contract.js";
 
 export const TASK_STATUS_PROJECTION_SCHEMA_VERSION = "octoclaw.task_status_projection/v1" as const;
 export const MULTI_TASK_STATUS_PROJECTION_SCHEMA_VERSION = "octoclaw.multi_task_status_projection/v1" as const;
@@ -108,6 +108,10 @@ export interface TaskStatusProjection {
   actions: TaskProjectionAction[];
   nativeBinding?: NativeBindingRef;
   latestAnomalyNotice?: AnomalyNotice;
+  openclawRunId?: string;
+  spawnIntentId?: string;
+  spawnBackend?: SpawnBackend;
+  spawnMode?: SpawnMode;
 }
 
 export interface MultiTaskStatusProjection {
@@ -202,11 +206,12 @@ export function buildTaskStatusProjection(input: TaskStatusProjectionInput): Tas
   const nowMs = timestampMs(input.now) ?? Date.now();
   const generatedAt = new Date(nowMs).toISOString();
   const nativeBinding = contract.delegate?.nativeBinding ?? undefined;
+  const nativeRefs = contract.nativeSpawnRefs;
   const status = projectStatus(input);
   const artifacts = artifactRefs(contract.delegate?.artifactRefs);
   const taskSummary = contract.mainContext.summary || contract.userAsk;
-  const flowId = nativeBinding?.flowId ?? contract.telemetry.nativeFlowId ?? contract.workContractId;
-  const taskId = nativeBinding?.taskId ?? nativeBinding?.nativeTaskId ?? contract.telemetry.nativeTaskId ?? contract.delegate?.delegateTaskId ?? contract.workContractId;
+  const flowId = nativeBinding?.flowId ?? nativeRefs?.openclawFlowId ?? contract.telemetry.nativeFlowId ?? contract.workContractId;
+  const taskId = nativeBinding?.taskId ?? nativeBinding?.nativeTaskId ?? nativeRefs?.openclawTaskId ?? contract.telemetry.nativeTaskId ?? contract.delegate?.delegateTaskId ?? contract.workContractId;
   const role = contract.delegate?.role ?? (contract.route === "reply" ? "main" : "default");
   const backend = nativeBinding?.controllerId ?? (contract.route === "reply" ? "octoclaw-main" : "unknown");
   const modelProfile = contract.delegate?.modelProfile || (contract.route === "reply" ? "direct_main" : "unknown");
@@ -249,9 +254,9 @@ export function buildTaskStatusProjection(input: TaskStatusProjectionInput): Tas
     resultMaterialized: Boolean(contract.telemetry.resultMaterialized),
     nativeFlowRevision: nativeBinding?.revision ?? contract.telemetry.nativeFlowRevision,
     nativeFlowExpectedRevision: nativeBinding?.expectedRevision ?? contract.telemetry.nativeFlowExpectedRevision,
-    childSessionKey: nativeBinding?.childSessionKey ?? contract.continuity.preferredChildSessionKey,
+    childSessionKey: nativeBinding?.childSessionKey ?? nativeRefs?.childSessionKey ?? contract.continuity.preferredChildSessionKey,
     childSessionId: contract.continuity.preferredChildSessionId,
-    runId: nativeBinding?.runId ?? contract.continuity.preferredRunId,
+    runId: nativeBinding?.runId ?? nativeRefs?.openclawRunId ?? contract.continuity.preferredRunId,
     childRunId: nativeBinding?.childRunId ?? contract.telemetry.childRunId,
     lastProgressSummary: input.lastProgressSummary,
     resultSummary: input.resultSummary,
@@ -264,6 +269,10 @@ export function buildTaskStatusProjection(input: TaskStatusProjectionInput): Tas
     totalTokens: input.totalTokens,
     actions: actionsForStatus(status),
     nativeBinding,
+    openclawRunId: nativeBinding?.runId ?? contract.nativeSpawnRefs?.openclawRunId,
+    spawnIntentId: contract.nativeSpawnRefs?.spawnIntentId,
+    spawnBackend: contract.nativeSpawnRefs?.spawnBackend,
+    spawnMode: contract.nativeSpawnRefs?.spawnMode,
   };
 }
 

@@ -1,5 +1,6 @@
 import { getAdapterForSession } from "../im/index.js";
 import { sendIMMessage } from "../im/send.js";
+import { isPlannerAllowedForSession, resolveSpawnBackend } from "../config/index.js";
 import { resolveWorkspaceRoot } from "../resolve/env.js";
 import { recordDelivery } from "./ack-dedupe.js";
 import { resolveAckTargetFromSessionKey } from "./ack-guard.js";
@@ -419,6 +420,23 @@ export async function sendRouteCommitAck(params: {
       reason: "reply_route_runtime_text_ack_disabled",
     });
     return { sent: false, skipped: true, reason: "reply_route_runtime_text_ack_disabled", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_reply_route_ack_disabled", ack_delivery_state: "skipped" };
+  }
+
+  const plannerAckSessionKeys = Array.from(new Set([
+    params.sessionKey,
+    params.stateKey,
+    asString(readRecord(params.decision.request).session_key),
+    asString(params.state.sessionKey || params.state.session_key),
+  ].map(asString).filter(Boolean)));
+  const routeUsesPlannerConfirm = plannerAckSessionKeys.some((sessionKey) => isPlannerAllowedForSession(sessionKey));
+
+  if (packet.route === "delegate" && resolveSpawnBackend() === "planner" && routeUsesPlannerConfirm) {
+    await recordRouteCommitAckReplay(params, packet, candidateAckKey, {
+      ack_target_resolution_state: "suppressed_until_native_confirm",
+      ack_delivery_state: "skipped",
+      reason: "delegate_route_ack_waits_for_native_confirm",
+    });
+    return { sent: false, skipped: true, reason: "delegate_route_ack_waits_for_native_confirm", routeCommitId: packet.routeCommitId, ackKey: candidateAckKey, ack_target_resolution_state: "suppressed_until_native_confirm", ack_delivery_state: "skipped" };
   }
 
 

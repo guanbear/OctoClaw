@@ -42,6 +42,7 @@ import {
   recordPolicyReplay,
 } from "../replay/replay.js";
 import { policyState } from "../state/policy-state.js";
+import { projectNativeStatus, type NativeStatusProjection, type NativeStatusProjectorInput } from "../state/native-status-projector.js";
 import { createOctoClawRuntimePlugin } from "../plugin.js";
 import {
   authoritativeDecisionRoute,
@@ -61,6 +62,9 @@ import { emitExecutionTransitionNotification } from "../ack/execution-transition
 import { scheduleChildCompletionFinalizer } from "../delegate/child-finalizer.js";
 import { createCompletionBinding } from "../runtime-ledger/completion-binding.js";
 import { randomUUID } from "node:crypto";
+import { isPlannerAllowedForSession, resolveSpawnBackend, resolveSpawnIntentTtlMs } from "../config/index.js";
+import { confirmNativeSpawn } from "../delegate/native-spawn-confirm.js";
+import { nativeSpawnIntentStore } from "../delegate/native-spawn-intent-store.js";
 import { getModelMap } from "../model-map.js";
 import { detectIMType, buildSlackStatusOutput, type StatusTaskSummary } from "../im-status-renderer.js";
 import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
@@ -761,6 +765,171 @@ function buildSubagentSpawnMessage(params: { task: string; childSessionKey: stri
   ].filter(Boolean).join("\n");
 }
 
+function buildPlannerSpawnTask(params: {
+  task: string;
+  workContractId: string;
+  delegateTaskId: string;
+  expectedDeliverable?: string;
+  childSessionKey?: string;
+}): string {
+  return [
+    "[OctoClaw delegated work]",
+    `workContractId: ${params.workContractId}`,
+    `delegateTaskId: ${params.delegateTaskId}`,
+    params.childSessionKey ? `preferredChildSessionKey: ${params.childSessionKey}` : "",
+    "",
+    "Expected deliverable:",
+    params.expectedDeliverable || "A compact result packet that directly satisfies the parent user request.",
+    "",
+    "Rules:",
+    "- Work only on the task below; do not expose hidden reasoning or raw transcript.",
+    "- Return a compact, user-safe summary and any artifact refs needed by the parent.",
+    "- Prefer concise progress and final output; OpenClaw native delivery handles announce/return.",
+    "",
+    "Task:",
+    truncateText(params.task, 1800),
+  ].filter(Boolean).join("\n");
+}
+
+function plannedDelegateTaskId(workContractId: string, payload: UnknownRecord, contract?: WorkContract | null): string {
+  return asString(contract?.delegate?.delegateTaskId)
+    || asString(payload.delegate_task_id || payload.delegateTaskId)
+    || `delegate-task:${workContractId}`;
+}
+
+function plannedAttemptId(delegateTaskId: string, payload: UnknownRecord, contract?: WorkContract | null): string {
+  return asString(contract?.delegate?.currentAttemptId)
+    || asString(payload.attempt_id || payload.attemptId)
+    || `${delegateTaskId}:attempt:1`;
+}
+
+function hasNonNewWorkFollowupEvidence(decision: UnknownRecord, metadata: UnknownRecord): boolean {
+  const routeDecision = asRecord(decision.route_decision);
+  const routerDecision = asRecord(decision.router_decision_v2);
+  const requestMetadata = asRecord(asRecord(decision.request).metadata);
+  const conversationControl = asRecord(metadata.conversation_control ?? requestMetadata.conversation_control);
+  const intentPacket = asRecord(metadata.intent_packet ?? requestMetadata.intent_packet);
+  const executionCoverage = asRecord(decision._execution_coverage_packet ?? decision._execution_coverage ?? routeDecision._execution_coverage);
+  const coverageExecution = asRecord(asRecord(executionCoverage.coverage).execution);
+  const explicitNewWork = [
+    decision.is_new_work,
+    decision.isNewWork,
+    routeDecision.is_new_work,
+    routeDecision.isNewWork,
+    metadata.is_new_work,
+    metadata.isNewWork,
+    requestMetadata.is_new_work,
+    requestMetadata.isNewWork,
+    intentPacket.is_new_work,
+    intentPacket.isNewWork,
+  ].some((value) => value === false);
+  const relation = asString(
+    metadata.relation_to_recent_execution
+      || requestMetadata.relation_to_recent_execution
+      || intentPacket.relation_to_recent_execution,
+  );
+  const intentClass = asString(
+    conversationControl.intent_class
+      || metadata.intent_class
+      || requestMetadata.intent_class
+      || intentPacket.intent_class
+      || intentPacket.intentClass,
+  );
+  return explicitNewWork
+    || relation === "existing_execution_followup"
+    || relation === "existing_execution_provenance_query"
+    || intentClass === "execution_followup"
+    || asString(routerDecision.request_kind) === "status_or_provenance"
+    || asBoolean(conversationControl.status_followup)
+    || asBoolean(conversationControl.provenance_followup)
+    || asBoolean(coverageExecution.supports_status_reply)
+    || asBoolean(coverageExecution.supports_provenance_reply)
+    || asBoolean(executionCoverage.supports_status_reply)
+    || asBoolean(executionCoverage.supports_provenance_reply);
+}
+
+function buildPlannerSessionsSpawnArgs(params: {
+  task: string;
+  workContractId: string;
+  delegateTaskId: string;
+  expectedDeliverable?: string;
+  selectedModel?: string;
+  cwd?: string;
+  expectedSeconds: number;
+  timeoutSeconds?: number;
+  preferredChildSessionKey?: string;
+  label?: string;
+}): Record<string, unknown> {
+  const timeout = Number.isFinite(params.timeoutSeconds)
+    ? Math.max(0, Math.floor(params.timeoutSeconds ?? 0))
+    : params.expectedSeconds > 0
+      ? Math.max(60, Math.floor(params.expectedSeconds + 120))
+      : undefined;
+  return {
+    task: buildPlannerSpawnTask({
+      task: params.task,
+      workContractId: params.workContractId,
+      delegateTaskId: params.delegateTaskId,
+      expectedDeliverable: params.expectedDeliverable,
+      childSessionKey: params.preferredChildSessionKey,
+    }),
+    label: truncateText(params.label || params.expectedDeliverable || params.task, 80),
+    runtime: "subagent",
+    ...(params.selectedModel ? { model: params.selectedModel } : {}),
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(timeout !== undefined ? { runTimeoutSeconds: timeout } : {}),
+    mode: "run",
+    cleanup: "keep",
+    sandbox: "inherit",
+    lightContext: true,
+  };
+}
+
+function plannerDispatchResponse(params: {
+  spawnIntentId: string;
+  workContractId: string;
+  delegateTaskId: string;
+  attemptId: string;
+  sessionsSpawnArgs: Record<string, unknown>;
+  canonicalArgsHash: string;
+  expiresAt: string;
+  workerPool: string;
+  model: string;
+}): Record<string, unknown> {
+  const body = {
+    ok: true,
+    route: "delegate",
+    status: "requires_native_spawn",
+    delegation_method: "octoclaw_dispatch_planner",
+    next_tool: "sessions_spawn",
+    nextTool: "sessions_spawn",
+    confirm_tool: "octoclaw_dispatch_confirm",
+    confirmTool: "octoclaw_dispatch_confirm",
+    spawn_intent_id: params.spawnIntentId,
+    spawnIntentId: params.spawnIntentId,
+    work_contract_id: params.workContractId,
+    workContractId: params.workContractId,
+    delegate_task_id: params.delegateTaskId,
+    delegateTaskId: params.delegateTaskId,
+    attempt_id: params.attemptId,
+    attemptId: params.attemptId,
+    sessions_spawn_args: params.sessionsSpawnArgs,
+    sessionsSpawnArgs: params.sessionsSpawnArgs,
+    canonical_args_hash: params.canonicalArgsHash,
+    canonicalArgsHash: params.canonicalArgsHash,
+    expires_at: params.expiresAt,
+    expiresAt: params.expiresAt,
+    worker_pool: params.workerPool,
+    model: params.model,
+    dispatch_executed: false,
+    spawn_executed: false,
+    materialized: false,
+    result_materialized: false,
+    instruction: "Call sessions_spawn exactly with sessionsSpawnArgs, then call octoclaw_dispatch_confirm with spawnIntentId, workContractId, sessionsSpawnStatus, runId, childRunId, and childSessionKey from the native result.",
+  };
+  return toolResponse(JSON.stringify(body), body);
+}
+
 async function trySpawnSubagentRuntime(params: {
   runtime?: OpenClawSubagentRuntime | null;
   task: string;
@@ -933,6 +1102,30 @@ function workContractRecord(record: RuntimeTaskStateRecord): UnknownRecord {
   return Object.keys(contract).length > 0 ? contract : asRecord(record.work_contract);
 }
 
+function nativeStatusInputForTask(record: RuntimeTaskStateRecord, ctx: UnknownRecord): NativeStatusProjectorInput {
+  const contract = workContractRecord(record);
+  const delegate = asRecord(contract.delegate);
+  const nativeBinding = asRecord(delegate.nativeBinding);
+  const nativeRefs = asRecord(contract.nativeSpawnRefs);
+  const telemetry = asRecord(contract.telemetry);
+  const continuity = asRecord(contract.continuity);
+  const evidence = runtimeStatusEvidence(record);
+  return {
+    ctx,
+    sessionKey: optionalString(record.session_key, record.sessionKey, contract.sessionKey),
+    workContractId: optionalString(record.workContractId, record.work_contract_id, contract.workContractId, record.id),
+    openclawRunId: optionalString(nativeRefs.openclawRunId, record.openclawRunId, record.runId, record.run_id, nativeBinding.runId, telemetry.openclawRunId, evidence.runId),
+    openclawTaskId: optionalString(nativeRefs.openclawTaskId, record.openclawTaskId, record.nativeTaskId, record.native_task_id, nativeBinding.nativeTaskId),
+    openclawFlowId: optionalString(nativeRefs.openclawFlowId, record.openclawFlowId, record.nativeFlowId, record.native_flow_id, record.flowId, record.flow_id, nativeBinding.flowId, telemetry.nativeFlowId),
+    childSessionKey: optionalString(nativeRefs.childSessionKey, record.childSessionKey, record.child_session_key, nativeBinding.childSessionKey, continuity.preferredChildSessionKey, evidence.childSessionKey),
+    cache: {
+      status: asString(record.status),
+      rawStatus: asString(record.rawStatus || record.raw_status),
+      summary: asString(record.summary),
+    },
+  };
+}
+
 function workContractMainContext(record: RuntimeTaskStateRecord): UnknownRecord {
   return asRecord(workContractRecord(record).mainContext);
 }
@@ -1027,7 +1220,7 @@ function shouldIncludeExpiredStatus(format: string): boolean {
   return ["table", "lanes", "raw"].includes(format);
 }
 
-function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date.now()): RuntimeStatusTaskView {
+function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date.now(), nativeProjection?: NativeStatusProjection): RuntimeStatusTaskView {
   const artifacts = asRecord(record.artifacts);
   const runtimeTruth = asRecord(artifacts.runtime_truth);
   const delegateAttempt = asRecord(runtimeTruth.delegateAttempt);
@@ -1040,7 +1233,17 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
   const startMs = timestampMs(startedAt || delegatedAt);
   const endMs = timestampMs(completedAt) ?? nowMs;
   const elapsedMs = startMs === null ? null : Math.max(0, endMs - startMs);
-  const projected = projectRuntimeStatus(record, nowMs);
+  const fallbackProjection = projectRuntimeStatus(record, nowMs);
+  const nativeProjectionAuthoritative = Boolean(nativeProjection && (
+    ["run", "flow", "latest"].includes(nativeProjection.source)
+    || nativeProjection.reason === "native_id_known_but_registry_missing"
+    || nativeProjection.reason === "native_registry_lookup_failed"
+    || nativeProjection.reason === "native_registry_unavailable"
+    || nativeProjection.reason === "task_state_cache_degraded"
+  ));
+  const projected = nativeProjectionAuthoritative && nativeProjection
+    ? { status: nativeProjection.status, reason: nativeProjection.reason }
+    : fallbackProjection;
   const workerPool = optionalString(record.worker_pool, binding.workerPool, delegateAttempt.workerPool) ?? "unknown";
   const artifactRefs = Array.isArray(record.artifact_refs) ? record.artifact_refs.map(String).filter(Boolean) : [];
   const compactPacket = asRecord(record.compact_parent_packet);
@@ -1056,7 +1259,7 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
   return {
     taskId: asString(record.id),
     status: projected.status,
-    rawStatus: asString(record.status, "unknown"),
+    rawStatus: nativeProjectionAuthoritative ? (nativeProjection?.rawStatus || asString(record.status, "unknown")) : asString(record.status, "unknown"),
     route: runtimeTaskRoute(record),
     title: runtimeTaskTitle(record),
     summary: (() => {
@@ -1070,7 +1273,7 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
           return `${statusEmoji} ${completionSummary.slice(0, 200)}`;
         }
       }
-      return asString(record.summary) || runtimeTaskTitle(record);
+      return (nativeProjectionAuthoritative ? nativeProjection?.summary : "") || asString(record.summary) || runtimeTaskTitle(record);
     })(),
     complexityBand: runtimeTaskComplexityBand(record),
     updatedAt: asString(record.updated_at),
@@ -1088,8 +1291,8 @@ function buildRuntimeStatusTaskView(record: RuntimeTaskStateRecord, nowMs = Date
     ) ?? "unknown",
     backend: optionalString(record.backend, workerPool, binding.controllerId, runtimeTruth.backend) ?? "unknown",
     workerPool,
-    childSessionKey: evidence.childSessionKey,
-    runId: evidence.runId,
+    childSessionKey: optionalString(nativeProjectionAuthoritative ? nativeProjection?.childSessionKey : "", evidence.childSessionKey) ?? "",
+    runId: optionalString(nativeProjectionAuthoritative ? nativeProjection?.runId : "", evidence.runId) ?? "",
     statusReason: projected.reason,
     resultLocation,
   };
@@ -1284,14 +1487,15 @@ async function buildNativeTaskActionPayload(rawText: string, format: "text" | "j
   return { summary, payload };
 }
 
-async function buildNativeStatusOutput(format: string, imType: string = "plain"): Promise<string> {
+async function buildNativeStatusOutput(format: string, imType: string = "plain", ctx: UnknownRecord = {}): Promise<string> {
   const normalizedFormat = format || "anchors";
   const nowMs = Date.now();
   const includeExpired = shouldIncludeExpiredStatus(normalizedFormat);
   const retention = pruneRuntimeTaskStateCache();
   const tasks = sortTaskStateRecords(await readRuntimeTaskState({ includeArchive: includeExpired }));
+  const nativeProjections = await Promise.all(tasks.map((task) => projectNativeStatus(nativeStatusInputForTask(task, ctx))));
   const allTasks = tasks
-    .map((task) => buildRuntimeStatusTaskView(task, nowMs))
+    .map((task, index) => buildRuntimeStatusTaskView(task, nowMs, nativeProjections[index]))
     .filter((task) => task.route === "delegate");
   const visibleTasks = includeExpired ? allTasks : allTasks.filter((task) => !isStatusPanelExpired(task, nowMs));
   const hiddenExpiredCount = allTasks.length - visibleTasks.length;
@@ -1299,8 +1503,8 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
   // Sort by importance: active first, then recent terminal
   const STATUS_PRIORITY: Record<string, number> = {
     running: 0, materializing: 1, queued: 2, blocked: 3,
-    timed_out: 4, failed: 5, deliverable_ready: 6,
-    completed: 7, canceled: 8, registered: 9,
+    timed_out: 4, lost: 5, degraded: 6, failed: 7, deliverable_ready: 8,
+    completed: 9, canceled: 10, registered: 11,
   };
   const sortedVisibleTasks = [...visibleTasks].sort((a, b) => {
     const pa = STATUS_PRIORITY[a.status] ?? 5;
@@ -1351,6 +1555,8 @@ async function buildNativeStatusOutput(format: string, imType: string = "plain")
       "binding_mismatch",
       "delivery_failed",
       "spawn_not_confirmed",
+      "lost",
+      "degraded",
     ]);
 
     type GroupKey = "active" | "completed" | "failed";
@@ -2392,9 +2598,22 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         };
 
         if (isDelegatedRoute) {
+          const spawnBackend = resolveSpawnBackend();
+          const plannerEnabled = spawnBackend === "planner" && isPlannerAllowedForSession(managedSessionKey || stateKey || asString(params.sessionKey));
+          if (spawnBackend === "off") {
+            const errorMessage = "spawn_backend_off";
+            await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+            return dispatchHonestyFailure({
+              route: resolvedRoute,
+              error: errorMessage,
+              retryable: false,
+              terminal: true,
+            });
+          }
+
           // Preflight checks the execution backend that dispatch will use. The helperInvoker path
           // is a native execution path, so only probe the dist taskflow port when dispatch will use it.
-          if (!helperInvoker) {
+          if (!plannerEnabled && !helperInvoker) {
             const taskflowCheck = await checkTaskflowCapability(createOpenClawDistTaskFlowPort());
             if (!taskflowCheck.available) {
               const errorMessage = `taskflow_unavailable: ${taskflowCheck.reason || "unknown_error"}`;
@@ -2433,8 +2652,10 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             asString(params.sessionKey),
             asString(initialMetadata.session_key),
           ].filter(Boolean).includes(asString(recentDelegated?.key));
-          const hasNewWorkTicket = ticketCandidate.ticket_decision === "ticket_would_issue";
-          if (recentDelegated && recentDelegatedInCurrentContext && !hasNewWorkTicket) {
+          const rejectedAsFollowup = ticketCandidate.ticket_decision !== "ticket_would_issue"
+            && ticketCandidate.ticket_denial_reason === "not_new_work"
+            && hasNonNewWorkFollowupEvidence(cachedDecision, metadata);
+          if (recentDelegated && recentDelegatedInCurrentContext && rejectedAsFollowup) {
             const errorMessage = "blocked_by_recent_delegated_execution_guard:recent_delegated_without_new_work_ticket";
             await recordPolicyReplay("dispatch_recent_delegated_blocked", {
               sessionKey: managedSessionKey,
@@ -2466,6 +2687,117 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
               },
             });
           }
+          if (plannerEnabled) {
+            if (ticketCandidate.ticket_decision !== "ticket_would_issue") {
+              const errorMessage = `delegation_ticket_rejected:${ticketCandidate.ticket_denial_reason || "not_new_work"}`;
+              await recordPolicyReplay("dispatch_planner_ticket_rejected", {
+                sessionKey: managedSessionKey,
+                sessionId: asString(ctx.sessionId),
+                route: resolvedRoute,
+                error: errorMessage,
+                ticket_decision: ticketCandidate.ticket_decision,
+                ticket_denial_reason: ticketCandidate.ticket_denial_reason,
+                dispatch_executed: false,
+                spawn_executed: false,
+                materialized: false,
+                terminal: true,
+              }, toolLogger(ctx), cachedDecision);
+              await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+              return dispatchHonestyFailure({
+                route: resolvedRoute,
+                error: errorMessage,
+                retryable: false,
+                terminal: true,
+                details: {
+                  rejected: true,
+                  rejection_reason: ticketCandidate.ticket_denial_reason || "not_new_work",
+                  ticket_decision: ticketCandidate.ticket_decision,
+                  dispatch_executed: false,
+                  spawn_executed: false,
+                  materialized: false,
+                },
+              });
+            }
+
+            const workContractId = dispatchWorkContract?.workContractId
+              || asString(ticketCandidate.work_contract_id)
+              || asString(asRecord(cachedDecision.work_contract).workContractId);
+            if (!workContractId) {
+              const errorMessage = "planner_requires_work_contract";
+              await recordDispatchTerminalFailure(errorMessage, { route: resolvedRoute });
+              return dispatchHonestyFailure({ route: resolvedRoute, error: errorMessage, retryable: false, terminal: true });
+            }
+
+            const ticketCandidateRecord = ticketCandidate as unknown as UnknownRecord;
+            const delegateTaskId = plannedDelegateTaskId(workContractId, ticketCandidateRecord, dispatchWorkContract);
+            const attemptId = plannedAttemptId(delegateTaskId, ticketCandidateRecord, dispatchWorkContract);
+            const sessionsSpawnArgs = buildPlannerSessionsSpawnArgs({
+              task: asString(params.task),
+              workContractId,
+              delegateTaskId,
+              expectedDeliverable: asString(ticketCandidate.expected_deliverable),
+              selectedModel,
+              cwd: asString(params.cwd, ctxCwd(ctx)),
+              expectedSeconds,
+              timeoutSeconds: asNumber(params.timeoutSeconds),
+              preferredChildSessionKey: asString(metadata.childSessionKey || metadata.child_session_key)
+                || dispatchWorkContract?.continuity.preferredChildSessionKey
+                || undefined,
+              label: asString(asRecord(dispatchWorkContract?.mainContext).summary || params.task),
+            });
+            const intent = nativeSpawnIntentStore.create({
+              workContractId,
+              delegateTaskId,
+              attemptId,
+              sessionKey: managedSessionKey || stateKey || asString(params.sessionKey),
+              sessionsSpawnArgs: sessionsSpawnArgs as { task: string; [key: string]: unknown },
+              ttlMs: resolveSpawnIntentTtlMs(),
+            });
+
+            const nextState = {
+              ...(state ?? {}),
+              prompt: asString(params.task),
+              decision: cachedDecision,
+              delegated: false,
+              dispatchRoute: "delegate",
+              dispatchStatus: "requires_native_spawn",
+              dispatchExecuted: false,
+              spawnExecuted: false,
+              spawnIntentId: intent.spawnIntentId,
+              workContractId,
+              updatedAt: Date.now(),
+            };
+            setPolicyStateForContext(ctx, nextState, managedSessionKey || stateKey);
+            if (stateKey && managedSessionKey && stateKey !== managedSessionKey) {
+              setPolicyStateForContext(ctx, nextState, stateKey);
+            }
+            await recordPolicyReplay("dispatch_planner_intent_created", {
+              sessionKey: managedSessionKey,
+              sessionId: asString(ctx.sessionId),
+              route: resolvedRoute,
+              work_contract_id: workContractId,
+              delegate_task_id: delegateTaskId,
+              attempt_id: attemptId,
+              spawn_intent_id: intent.spawnIntentId,
+              canonical_args_hash: intent.canonicalArgsHash,
+              expires_at: intent.expiresAt,
+              dispatch_executed: false,
+              spawn_executed: false,
+              materialized: false,
+            }, toolLogger(ctx), cachedDecision);
+            return plannerDispatchResponse({
+              spawnIntentId: intent.spawnIntentId,
+              workContractId,
+              delegateTaskId,
+              attemptId,
+              sessionsSpawnArgs,
+              canonicalArgsHash: intent.canonicalArgsHash,
+              expiresAt: intent.expiresAt,
+              workerPool: asString(asRecord(cachedDecision.route_decision).worker_pool),
+              model: selectedModel || asString(metadata.model),
+            });
+          }
+
           const ticketAdmission = admitDelegationTicketForDispatch({
             contract: dispatchWorkContract,
             candidate: ticketCandidate,
@@ -3162,6 +3494,107 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
       },
     },
     {
+      name: "octoclaw_dispatch_confirm",
+      label: "OctoClaw Dispatch Confirm",
+      description: "Confirm native sessions_spawn acceptance for an OctoClaw planner intent. Records native refs only after accepted run evidence exists.",
+      params: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          spawnIntentId: { type: "string", description: "spawnIntentId returned by octoclaw_dispatch." },
+          workContractId: { type: "string", description: "WorkContract id returned by octoclaw_dispatch." },
+          sessionsSpawnStatus: { type: "string", description: "Native sessions_spawn status, usually accepted or error." },
+          runId: { type: "string", description: "Native runId returned by sessions_spawn. Required when accepted." },
+          childRunId: { type: "string", description: "Optional child run id if distinct from runId." },
+          childSessionKey: { type: "string", description: "Optional native child session key." },
+          sessionsSpawnResultJson: { type: "string", description: "Optional raw sessions_spawn result JSON for status/error/child refs; accepted runId must be passed as top-level runId." },
+          error: { type: "string", description: "Native spawn error if sessionsSpawnStatus is not accepted." },
+        },
+        required: ["spawnIntentId", "workContractId", "sessionsSpawnStatus"],
+        allOf: [
+          {
+            if: { properties: { sessionsSpawnStatus: { const: "accepted" } } },
+            then: { required: ["runId"] },
+          },
+        ],
+      },
+      execute: async (params, _rawCtx) => {
+        const ctx = _rawCtx ?? {};
+        const resultJson = parseObjectJson(params.sessionsSpawnResultJson);
+        const status = asString(params.sessionsSpawnStatus || resultJson.status);
+        const runId = asString(params.runId);
+        const childRunId = asString(params.childRunId || resultJson.childRunId || resultJson.child_run_id || runId);
+        const childSessionKey = asString(params.childSessionKey || resultJson.childSessionKey || resultJson.child_session_key);
+        const { key: stateKey, state } = resolveToolPolicyContext(ctx, "");
+        const decision = asRecord(state?.decision);
+        const sessionKey = asString(asRecord(decision.request).session_key)
+          || asString(ctx.sessionKey || ctx.canonicalSessionKey || stateKey);
+        const confirmed = await confirmNativeSpawn({
+          spawnIntentId: asString(params.spawnIntentId),
+          workContractId: asString(params.workContractId),
+          sessionKey,
+          stateKey,
+          sessionsSpawnStatus: status,
+          runId,
+          childRunId,
+          childSessionKey,
+          error: asString(params.error || resultJson.error),
+          modelId: asString(resultJson.model || resultJson.modelId),
+          replyToMessageId: dispatchReplyToMessageId({}, state, ctx) || undefined,
+          cwd: ctxCwd(ctx),
+          decision,
+        });
+        if (confirmed.ok) {
+          const confirmedAt = new Date().toISOString();
+          const updatedContract = loadWorkContract(confirmed.workContractId);
+          await upsertTaskStateCache({
+            id: confirmed.workContractId,
+            workContractId: confirmed.workContractId,
+            work_contract_id: confirmed.workContractId,
+            route: "delegate",
+            status: "running",
+            sessionKey,
+            session_key: sessionKey,
+            flow_id: asString(updatedContract?.delegate?.nativeBinding?.flowId) || (confirmed.runId ? `sessions_spawn:${confirmed.runId}` : ""),
+            runId: confirmed.runId || undefined,
+            run_id: confirmed.runId || undefined,
+            childRunId: confirmed.childRunId || undefined,
+            child_run_id: confirmed.childRunId || undefined,
+            childSessionKey: confirmed.childSessionKey || undefined,
+            child_session_key: confirmed.childSessionKey || undefined,
+            dispatchExecuted: true,
+            dispatch_executed: true,
+            spawnExecuted: true,
+            spawn_executed: true,
+            resultMaterialized: false,
+            result_materialized: false,
+            spawned_at: confirmedAt,
+            started_at: confirmedAt,
+            updatedAt: confirmedAt,
+            updated_at: confirmedAt,
+            ...(updatedContract ? { workContract: updatedContract, work_contract: updatedContract } : {}),
+          });
+          const nextState = {
+            ...(state ?? {}),
+            delegated: true,
+            dispatchRoute: "delegate",
+            dispatchStatus: "spawn_confirmed",
+            dispatchExecuted: true,
+            spawnExecuted: true,
+            spawnIntentId: confirmed.spawnIntentId,
+            workContractId: confirmed.workContractId,
+            runId: confirmed.runId,
+            childRunId: confirmed.childRunId,
+            childSessionKey: confirmed.childSessionKey,
+            updatedAt: Date.now(),
+          };
+          setPolicyStateForContext(ctx, nextState, sessionKey || stateKey);
+          if (stateKey && sessionKey && stateKey !== sessionKey) setPolicyStateForContext(ctx, nextState, stateKey);
+        }
+        return toolResponse(JSON.stringify(confirmed), confirmed as unknown as Record<string, unknown>);
+      },
+    },
+    {
       name: "octoclaw_spawn",
       label: "OctoClaw Spawn",
       description: "Generate and register a validated OctoClaw spawn task. Use this instead of hand-writing sessions_spawn arguments.",
@@ -3355,7 +3788,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         );
         const imType = sessionKey ? detectIMType(sessionKey) : "plain";
         checkActiveTaskRecovery();
-        const output = await buildNativeStatusOutput(format, imType);
+        const output = await buildNativeStatusOutput(format, imType, ctx);
         return statusToolResponse(output, format, imType);
       },
     },
