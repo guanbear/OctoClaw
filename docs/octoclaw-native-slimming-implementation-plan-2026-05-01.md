@@ -1209,3 +1209,80 @@ planner path 稳定后，按顺序禁用/删除：
 - 如果业务确实需要 shared workspace 并发写保护，不能完全删除 scheduler，需要抽成很窄的 write-scope lock。
 - SQLite 不能简单删除；OpenClaw 原生没有 OctoClaw 的全部产品字段，SQLite 应保留为 metadata/audit store。
 - Slack explicit reaction 绕过 OpenClaw auto ack gate，必须只在明确配置和明确 anchor 下使用。
+
+## 18. 并行分工与 OpenSpec 约束
+
+0.5.0 重构可以并行做，但必须先把边界写进 OpenSpec，再按 slice 分工。建议新增并维护：
+
+- `openspec/changes/planner-confirm-0.5.0-refactor/proposal.md`
+- `openspec/changes/planner-confirm-0.5.0-refactor/design.md`
+- `openspec/changes/planner-confirm-0.5.0-refactor/tasks.md`
+- `openspec/changes/planner-confirm-0.5.0-refactor/specs/planner-confirm/spec.md`
+
+这里的 confirm 是技术握手，不是新增用户确认流程：`octoclaw_dispatch` 生成 `NativeSpawnIntent`，主 agent 调 OpenClaw 原生 `sessions_spawn`，再由 `octoclaw_dispatch_confirm` 写回 `runId/childSessionKey`。OpenSpec 的目的，是防止 worker 把 planner 做成另一套 runtime、绕过 native spawn、提前 ACK，或把子 agent transcript 塞回主上下文。
+
+### 18.1 Leader / Worker 分工
+
+Codex leader 负责难点和最终合并：
+
+- `tools/registration.ts` 的 planner 切口和 spawn evidence 语义。
+- `extension-entry.ts` / `before_tool_call` 对 `sessions_spawn` 的硬 gate。
+- `octoclaw_dispatch_confirm` 的幂等、冲突、失败闭环和 ACK 时机。
+- judge admission 的硬边界：follow-up 禁止 spawn、`is_new_work`、`expected_deliverable`。
+- 状态真相审查：WorkContract 只能存 metadata，native registry 才是 execution truth。
+- legacy runtime 删除顺序：先 flag disable，再灰度验收，最后删除/归档。
+
+GLM-5.1 适合承担高 token、边界清楚的实现包：
+
+- feature flags/config resolver 和测试。
+- `NativeSpawnIntent` store、canonical hash、TTL、幂等/conflict 测试。
+- WorkContract native refs 和 projector。
+- native status projector。
+- planner path 下 legacy finalizer/completion binding/delivery outbox 的 disable wiring。
+- 大量单测、fixture、文档同步。
+
+便宜模型适合：
+
+- 配置/fixture/文案类小改。
+- 单测矩阵补齐。
+- Markdown/OpenSpec 同步。
+- lint/build 失败后的机械修复。
+
+### 18.2 并行任务包
+
+| 包 | Owner | 写入边界 | 验收 |
+| --- | --- | --- | --- |
+| PC1 Feature flags/config | GLM-5.1 | `extensions/octoclaw-runtime/src/config/*` | typed resolver + invalid/default/allowlist tests |
+| PC2 NativeSpawnIntent store | GLM-5.1，leader review | `delegate/native-spawn-intent*`、metadata migration | hash/TTL/state/idempotency/conflict tests |
+| PC3 dispatch planner output | leader | `tools/registration.ts`、`delegate/spawn-plan.ts` | dispatch 只返回 plan，不 spawn、不 ACK、不写 legacy runtime |
+| PC4 `sessions_spawn` gate | leader | `extension-entry.ts`、`delegate/native-spawn-gate.ts` | no intent/expired/hash mismatch blocked，match allowed |
+| PC5 dispatch confirm | leader | `tools/dispatch-confirm-tool.ts`、`delegate/native-spawn-confirm.ts` | runId required，同 runId 幂等，不同 runId conflict，ACK after confirm |
+| PC6 WorkContract native refs | GLM-5.1，leader schema review | `packages/octoclaw-contracts/*`、runtime work-contract store/projectors | refs 可读写，但 status 不从 WorkContract 推进 |
+| PC7 legacy runtime disable | GLM-5.1 | finalizer/completion-binding/outbox 启动点 | planner mode 不启动，legacy flag 可回滚 |
+| PC8 native status projector | GLM-5.1，leader fallback review | `state/native-status-projector.ts` | runs/flows resolve，missing/corrupt 显示 degraded/lost |
+| PC9 ACK/footer guardrail | GLM-5.1，leader review ACK 边界 | `ack/*`、`projection-footer.ts` | delegate ACK 晚于 confirm，footer 默认 off |
+| PC10 integration/acceptance tests | leader 定义，GLM-5.1/便宜模型实现 | tests/harness only | no intent、expired、hash mismatch、missing runId、no completion file、no outbox |
+| PC11 legacy wheel removal | leader | 删除/归档旧 runtime 轮子 | planner 灰度通过后再做 |
+
+### 18.3 防跑偏规则
+
+- 每个 worker 只能领取一个 OpenSpec task slice；不能跨 slice 修改。
+- 每个 slice 必须写明 owned files、forbidden files、truth source、expected tests、acceptance evidence。
+- `registration.ts`、`extension-entry.ts`、judge admission、delegate ACK sender 这类热路径默认 leader-owned；GLM-5.1 只能在明确授权的窄范围内改。
+- worker 不得 import OpenClaw 内部 `spawnSubagentDirect()`，不得把 `api.runtime.subagent.run()` 当 0.5.0 主路径。
+- worker 不得让 judge 直接产生副作用；judge 仍只是 proposal，副作用由 admission、intent gate、confirm 决定。
+- worker 不得在 confirm 前写 running/succeeded，也不得发“已委派”。
+- worker 不得把 raw child transcript、完整 judge packet、ledger dump 塞进 parent tool result。
+- 影响 live behavior 的 slice 必须有 real path 测试；纯 helper 测试不能算通过。
+- 所有 skipped/failed/unknown 必须 fail closed，并按需要写 replay/telemetry。
+
+### 18.4 推荐执行顺序
+
+1. leader 先合 OpenSpec change，冻结协议和分工。
+2. GLM-5.1 并行做 PC1、PC2、PC6 的纯模块部分。
+3. leader 做 PC3、PC4、PC5，把热路径连起来。
+4. GLM-5.1 做 PC7、PC8、PC9，leader 只 review 语义边界。
+5. GLM-5.1/便宜模型补 PC10 测试矩阵。
+6. planner allowlist 灰度通过后，leader 做 PC11 删除/归档 legacy runtime 轮子。
+
+这样能利用 GLM-5.1 的大 token 和实现能力，但把最容易出事故的执行真相、spawn 授权、ACK 时机和最终集成留给 leader。
