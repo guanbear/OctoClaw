@@ -131,3 +131,107 @@ Planner/confirm packets SHALL keep parent context compact and sanitized.
 - WHEN `octoclaw_dispatch` returns planner output
 - THEN it SHALL NOT include raw child transcript, full judge packet, policy traces, ledger rows, or execution logs
 - AND large context SHALL be passed by attachment or workspace reference instead of parent tool-result payload.
+
+### Requirement: Neutral Inbound ACK Is Pre-Route And Truthful
+
+OctoClaw SHALL support a route-independent neutral inbound ACK for Slack when configured.
+
+#### Scenario: inbound Slack message before route decision
+
+- WHEN a Slack inbound message has a valid channel/message anchor
+- THEN OctoClaw SHALL send or request at most one neutral ACK within the configured 1-5s target
+- AND the ACK SHALL only indicate received/deciding
+- AND SHALL NOT claim delegation, spawn success, running state, or completion.
+
+#### Scenario: no valid ACK anchor
+
+- WHEN OctoClaw cannot resolve a stable inbound Slack anchor
+- THEN it SHALL fail closed with replay/diagnostic evidence such as `no_valid_thread_target`
+- AND SHALL NOT guess the target from a session key.
+
+### Requirement: Startup-Cost-Aware Delegation
+
+Delegation decisions SHALL account for native spawn cold-start cost and SHALL avoid delegating short work by default.
+
+#### Scenario: one-step fresh lookup
+
+- WHEN the request is a one-step fresh lookup with a short expected answer
+- THEN the decision bucket SHALL be `must_reply/main_fast_path` or `budgeted_main_then_delegate`
+- AND `fresh_live_lookup` SHALL NOT force delegate by itself.
+
+#### Scenario: hard delegate signal
+
+- WHEN the request explicitly asks for background/subagent/parallel work, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s
+- THEN the decision bucket MAY be `must_delegate`
+- AND the decision SHALL record reason codes, duration hint, tool need hint, startup cost policy, and hard delegate signal.
+
+#### Scenario: budget escalation
+
+- WHEN a budgeted main fast path exceeds 20-30s, exceeds 1-2 read-only tool calls, needs write/long-running work, or exceeds context budget
+- THEN OctoClaw MAY ask the main agent to use the planner delegation path
+- AND the escalation SHALL be recorded in replay/eval.
+
+### Requirement: Planner Spawn Context Is Isolated And Compact
+
+Planner-generated `sessions_spawn` arguments SHALL use OpenClaw public tool parameters and keep child context isolated by default.
+
+#### Scenario: planner builds sessions_spawn args
+
+- WHEN `octoclaw_dispatch` returns `sessionsSpawnArgs`
+- THEN args SHALL include `context=isolated` and `lightContext=true` unless a tested exception needs `context=fork`
+- AND SHALL keep task payload compact
+- AND SHALL NOT include target/delivery parameters rejected by OpenClaw `sessions_spawn`.
+
+### Requirement: NativeSpawnIntent Transitions Are Atomic And Observable
+
+Native spawn intent status changes SHALL be safe under retry, restart, and lock contention.
+
+#### Scenario: concurrent confirm or transition
+
+- WHEN multiple confirm or transition attempts race on the same intent
+- THEN only valid status/hash/session transitions SHALL succeed
+- AND repeated same-run confirm SHALL be idempotent
+- AND conflicting run evidence SHALL preserve the first accepted refs.
+
+#### Scenario: SQLite busy or lock contention
+
+- WHEN SQLite returns busy/locked during an authorization or confirm transition
+- THEN OctoClaw SHALL retry/back off or fail with explicit replay evidence
+- AND SHALL NOT treat the failure as no task, no spawn, or successful delegation.
+
+### Requirement: Native Announce Footer Preserves Delegate Provenance
+
+Footer is a debug projection and SHALL not contradict accepted native refs.
+
+#### Scenario: child final delivered through native announce
+
+- WHEN a planner-spawned child final is delivered back through the parent Slack thread
+- AND accepted native refs or child announce provenance bind it to a WorkContract
+- THEN debug footer SHALL show delegate/native provenance such as `route=delegate` and `via=subagent` or `via=native_announce`
+- AND SHALL NOT be overwritten by the parent delivery turn route as `route=reply | via=policy`.
+
+### Requirement: Slack Delivery Port Is 0.5.x Immediate And Slack-Only
+
+Slack message delivery hot path SHOULD move away from CLI/shell after 0.5.0 Must + Should acceptance.
+
+#### Scenario: Slack native delivery path
+
+- WHEN PC13 is enabled
+- THEN Slack neutral ACK, delegate accepted ACK, thread reply, native announce final delivery, and debug footer SHALL use a Slack delivery port or explicit Slack reaction backend
+- AND SHALL NOT call `openclaw message send` or parse CLI stdout/stderr on the hot path
+- AND `OCTOCLAW_LEGACY_CLI_DELIVERY=1` SHALL restore the old Slack CLI path.
+
+#### Scenario: non-Slack IM
+
+- WHEN PC13 changes Slack delivery
+- THEN non-Slack IM behavior SHALL remain on existing fallback
+- AND SHALL NOT become a 0.5.x immediate acceptance blocker.
+
+### Requirement: Nightly Regression Harness Records Required Metrics
+
+Regression reports SHALL make route quality, latency, footer, and legacy fallback behavior observable.
+
+#### Scenario: nightly report
+
+- WHEN the nightly or Slack acceptance harness runs planner-confirm scenarios
+- THEN the report SHALL include neutral ACK latency, route decision/bucket, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance, whether `completion_file_timeout` appeared, and whether legacy CLI delivery was used.

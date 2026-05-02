@@ -124,6 +124,7 @@ Write scope:
 Tasks:
 
 - [ ] Add `openclawRunId`, `childSessionKey`, `spawnIntentId`, `spawnBackend`, and spawn mode refs.
+- [ ] Fix WorkContract ID collision: ID must include turn/message/route-seal entropy and must not be `stableId(sessionKey, userAsk)` only.
 - [ ] Ensure refs are metadata, not execution status.
 - [ ] Tests prove status projection does not advance from WorkContract alone.
 
@@ -225,11 +226,13 @@ Write scope:
 Tasks:
 
 - [ ] SR-P0 neutral inbound ACK: Slack reaction/text appears within 1-5s and does not claim delegation or spawn success.
+- [ ] SR-P0 neutral ACK is route-independent and does not depend on `decision.latency_ack.required`, route commit, or a non-OctoClaw tool name.
 - [ ] SR-P0 target resolution uses original inbound Slack anchor (`channel/message.ts/thread_ts`), not post-policy state; `no_valid_thread_target` is covered by tests.
 - [ ] SR-P1 startup-cost-aware delegation uses three explicit buckets: `must_reply/main_fast_path`, `must_delegate`, and `budgeted_main_then_delegate`.
 - [ ] SR-P1 short tasks, simple status/provenance follow-up, and one-step fresh lookup stay on main fast path by default.
 - [ ] SR-P1 `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` are downgraded from hard delegate signals; none can force delegate alone.
 - [ ] SR-P1 hard delegate signals still win: explicit background/subagent/parallel request, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s.
+- [ ] SR-P1 explicit-delegate keyword matching does not treat bare mentions of `opencode`, `glm`, model names, or tools as hard delegate unless the user asks them to do work.
 - [ ] SR-P1 `budgeted_main_then_delegate` can escalate after 20-30s, after 1-2 read-only tool calls, or when write/long-running work becomes necessary.
 - [ ] SR-P1 rule router, local judge, cheap LLM judge, route hints, and AGENTS/system prompt share the same bucket semantics.
 - [ ] SR-P1 judge/replay output records `decision_bucket`, `startup_cost_policy`, `duration_hint`, `tool_need_hint`, `reason_codes`, and `hard_delegate_signal`.
@@ -237,9 +240,10 @@ Tasks:
 - [ ] SR-P1 false-reply cases are covered by tests/replay fixtures so explicit background work, code/test/edit, multi-step tools, review, and validation are not swallowed by main fast path.
 - [ ] SR-P2 planner/native chain is slimmed so real delegated route commit to `sessions_spawn_intent_allowed` is p95 <= 30s in real Slack smoke.
 - [ ] SR-P2 hard confirm remains strict: no `planned -> accepted`, no direct spawn, no delegate ACK before confirm.
-- [ ] SR-P2 child spawn profile uses only current OpenClaw capabilities: `lightContext=true`, bounded child prompt, fast/cheap model defaults, conservative `thinking`/timeout.
+- [ ] SR-P2 child spawn profile uses only current OpenClaw capabilities: explicit `context=isolated`, `lightContext=true`, bounded child prompt, fast/cheap model defaults, conservative `thinking`/timeout.
 - [ ] SR-P2 child-start metrics are recorded for observation, but 0.5.0 does not block on accepted-to-stream-ready <= 10s.
 - [ ] SR-P2 SQLite/native refs are used as footer/status fast path; state transitions are atomic or covered by race tests.
+- [ ] SR-P2 NativeSpawnIntent authorization/confirm transitions surface SQLite busy/locked retry/backoff/replay evidence and do not silently fall back to no task/no spawn.
 - [ ] SR-P2 native child final debug footer shows `route=delegate` and `via=subagent` or `via=native_announce`, not `route=reply | via=policy`.
 - [ ] Real Slack smoke records neutral ACK latency, main-fast-path/delegate route decision, spawn allowed latency, accepted latency, child progress/final latency, and footer route/provenance.
 
