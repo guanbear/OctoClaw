@@ -2499,6 +2499,12 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
             sealMismatch: false,
             retryable: false,
             terminal: true,
+            details: {
+              dispatch_executed: false,
+              spawn_executed: false,
+              materialized: false,
+              result_materialized: false,
+            },
           });
         }
         const routeSealState = selectRouteSealState(ctx, stateKey, state);

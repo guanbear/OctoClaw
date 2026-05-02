@@ -26,6 +26,9 @@ export type ToolNeedHint = "none" | "maybe" | "required";
 /** Duration hint from the canonical policy spec. */
 export type DurationHint = "short" | "medium" | "long";
 
+/** Startup-cost-aware routing bucket. */
+export type DecisionBucket = "must_reply" | "must_delegate" | "budgeted_main_then_delegate";
+
 /** Budget band hint for downstream model-profile selection. */
 export type JudgeBudgetBand = "low" | "medium" | "high";
 
@@ -35,8 +38,8 @@ export type SpawnComplexityBand = "simple" | "normal" | "deep";
 /** Delegate reason codes — structured reasons why judge recommends delegation. */
 export type DelegateReasonCode =
   | "context_hygiene"
-  | "fast_first_response"
   | "background_execution"
+  | "parallelism"
   | "cost_tiering"
   | "specialized_tools"
   | "quality_isolation";
@@ -197,6 +200,12 @@ export interface JudgeOutput {
   toolNeedHint?: ToolNeedHint | null;
   durationHint?: DurationHint | null;
   reasonCodes?: string[];
+  decision_bucket?: DecisionBucket;
+  decisionBucket?: DecisionBucket;
+  startup_cost_policy?: Record<string, unknown> | null;
+  startupCostPolicy?: Record<string, unknown> | null;
+  hard_delegate_signal?: boolean;
+  hardDelegateSignal?: boolean;
 
   // Design §9.3 extended fields
   role?: "main_reply" | "observer_probe" | "worker_research" | "worker_code" | "worker_review";

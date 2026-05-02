@@ -797,6 +797,8 @@ function projectionFooterMode(): "off" | "compact" | "debug" {
   const mode = stringValue(process.env.OCTOCLAW_PROJECTION_FOOTER_MODE).toLowerCase();
   if (mode === "debug") return "debug";
   if (mode === "compact" || mode === "on" || mode === "1" || mode === "true" || mode === "yes") return "compact";
+  const legacyDebug = stringValue(process.env.OCTOCLAW_FOOTER_DEBUG).toLowerCase();
+  if (legacyDebug && !["0", "false", "off", "no"].includes(legacyDebug)) return "debug";
   const legacy = stringValue(process.env.OCTOCLAW_REPLY_PROJECTION_FOOTER).toLowerCase();
   if (["1", "true", "on", "yes", "compact"].includes(legacy)) return "compact";
   if (legacy === "debug") return "debug";

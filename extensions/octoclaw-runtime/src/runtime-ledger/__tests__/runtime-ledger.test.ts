@@ -28,6 +28,7 @@ const EXPECTED_TABLES = [
   "task_attempts",
   "scheduler_queue",
   "completion_bindings",
+  "native_spawn_intents",
   "runtime_events",
 ] as const;
 
@@ -66,6 +67,11 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
     "verdict", "observed_at", "completed_at", "completion_json", "created_at",
     "updated_at", "revision",
   ],
+  native_spawn_intents: [
+    "spawn_intent_id", "work_contract_id", "session_key", "status", "args_hash",
+    "run_id", "child_session_key", "expires_at", "created_at", "updated_at",
+    "intent_json", "revision",
+  ],
   runtime_events: [
     "event_id", "event_type", "work_contract_id", "attempt_id",
     "payload_json", "created_at",
@@ -88,6 +94,9 @@ const EXPECTED_INDEXES = [
   "idx_completion_bindings_expected_path",
   "idx_completion_bindings_verdict",
   "idx_completion_bindings_attempt",
+  "idx_native_spawn_intents_session_status",
+  "idx_native_spawn_intents_work_contract",
+  "idx_native_spawn_intents_expires",
   "idx_runtime_events_contract_created",
   "idx_runtime_events_attempt_created",
 ];
@@ -183,7 +192,7 @@ describe("openRuntimeLedger", () => {
     expect(tables).toHaveLength(EXPECTED_TABLES.length);
   });
 
-  it("schema_migrations records version 1 exactly once across two opens", () => {
+  it("schema_migrations records each migration exactly once across two opens", () => {
     const dir = makeTmpDir();
     const dbPath = path.join(dir, "idempotent.sqlite");
 
@@ -192,18 +201,22 @@ describe("openRuntimeLedger", () => {
     const rows1 = r1.db!.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all();
     r1.db!.close();
 
-    expect(rows1).toHaveLength(1);
+    expect(rows1).toHaveLength(MIGRATIONS.length);
     expect(Number(rows1[0].version)).toBe(1);
     expect(String(rows1[0].name)).toBe("create_first_slice_tables");
+    expect(Number(rows1[1].version)).toBe(2);
+    expect(String(rows1[1].name)).toBe("create_native_spawn_intents");
 
     const r2 = openRuntimeLedger({ dbPath });
     expect(r2.status).toBe("ok");
     const rows2 = r2.db!.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all();
     r2.db!.close();
 
-    expect(rows2).toHaveLength(1);
+    expect(rows2).toHaveLength(MIGRATIONS.length);
     expect(Number(rows2[0].version)).toBe(1);
     expect(String(rows2[0].name)).toBe("create_first_slice_tables");
+    expect(Number(rows2[1].version)).toBe(2);
+    expect(String(rows2[1].name)).toBe("create_native_spawn_intents");
   });
 
   it("tables and column names remain stable across two opens", () => {

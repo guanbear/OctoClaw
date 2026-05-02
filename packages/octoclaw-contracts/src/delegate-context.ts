@@ -36,6 +36,7 @@ export interface DelegateHandoffPacket {
   };
   threadSummary?: string;
   relevantExcerpts?: string[];
+  contextEscalationReason?: ContextEscalationReason;
   artifactRefs: DelegateArtifactRef[];
   forbiddenContent: string[];
 }

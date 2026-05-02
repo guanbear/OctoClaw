@@ -73,6 +73,11 @@ function coerceJudgeOutput(parsed: Record<string, unknown>): JudgeOutput {
     scope: (parsed.scope ?? null) as JudgeOutput["scope"],
     toolNeedHint: (parsed.toolNeedHint ?? parsed.tool_need_hint ?? null) as JudgeOutput["toolNeedHint"],
     durationHint: (parsed.durationHint ?? parsed.duration_hint ?? null) as JudgeOutput["durationHint"],
+    decisionBucket: (parsed.decisionBucket ?? parsed.decision_bucket) as JudgeOutput["decisionBucket"],
+    startupCostPolicy: (parsed.startupCostPolicy ?? parsed.startup_cost_policy ?? null) as JudgeOutput["startupCostPolicy"],
+    hardDelegateSignal: typeof (parsed.hardDelegateSignal ?? parsed.hard_delegate_signal) === "boolean"
+      ? (parsed.hardDelegateSignal ?? parsed.hard_delegate_signal) as boolean
+      : undefined,
     role: (parsed.role ?? null) as JudgeOutput["role"],
     complexityBand: (parsed.complexityBand ?? parsed.complexity_band) as JudgeOutput["complexityBand"],
     expectedDurationBand: (parsed.expectedDurationBand ?? parsed.expected_duration_band) as JudgeOutput["expectedDurationBand"],

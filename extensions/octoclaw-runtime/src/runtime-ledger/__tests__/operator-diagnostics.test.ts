@@ -217,7 +217,7 @@ describe("operator-diagnostics", () => {
 
       expect(result.dbOpen).toBe(true);
       expect(result.dbPath).toBe(dbPath);
-      expect(result.schemaVersion).toBe(1);
+      expect(result.schemaVersion).toBe(2);
       expect(result.workContractCount).toBe(5);
       expect(result.attemptCount).toBe(10);
       expect(result.ticketCount).toBe(3);

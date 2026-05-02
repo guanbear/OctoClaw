@@ -13,7 +13,7 @@ import { buildDecision, resolveStatelessPolicyDecision } from "./resolve/policy-
 import { enrichConversationControlMetadata } from "./resolve/session.js";
 
 describe("conversation grounding route projection", () => {
-  it("projects runtime version lookup to delegated observer control", () => {
+  it("projects runtime version lookup to reply-first control", () => {
     const intent = buildConversationIntentPacket({
       prompt: "你现在啥版本",
       replayLogPath: "/tmp/does-not-matter.jsonl",
@@ -25,13 +25,13 @@ describe("conversation grounding route projection", () => {
     expect(intent.surface_id).toBe("runtime_version");
 
     const control = buildConversationControlHintsFromIntent(intent);
-    expect(control.route_hint).toBe("delegate");
-    expect(control.lane_hint).toBe("observe");
+    expect(control.route_hint).toBe("reply");
+    expect(control.lane_hint).toBe("reply");
     expect(control.require_fresh_lookup).toBe(true);
     expect(control.require_state_grounding).toBe(true);
   });
 
-  it("projects latest-feature and official-model lookups to delegated fresh lookup", () => {
+  it("projects latest-feature and official-model lookups to budgeted main-fast-path fresh lookup", () => {
     const latestFeatureIntent = buildConversationIntentPacket({
       prompt: "openclaw最新版的新特性是啥",
       replayLogPath: "/tmp/does-not-matter.jsonl",
@@ -40,7 +40,7 @@ describe("conversation grounding route projection", () => {
     });
     expect(latestFeatureIntent.intent_class).toBe("fresh_live_lookup");
     expect(buildConversationControlHintsFromIntent(latestFeatureIntent)).toMatchObject({
-      route_hint: "delegate",
+      route_hint: "reply",
       require_fresh_lookup: true,
     });
 
@@ -247,13 +247,13 @@ describe("conversation grounding route projection", () => {
     expect(metadata.conversation_control).toMatchObject({
       available: true,
       intent_class: "fresh_live_lookup",
-      route_hint: "delegate",
-      lane_hint: "observe",
+      route_hint: "reply",
+      lane_hint: "reply",
       require_fresh_lookup: true,
     });
   });
 
-  it("does not let main-agent reply hints override fresh live lookup delegation", () => {
+  it("keeps fresh live lookup on main fast path when there is no hard delegate signal", () => {
     const decision = buildDecision("openclaw 4.21 有啥新特性", {
       metadata: {
         route_hint: "reply",
@@ -268,12 +268,12 @@ describe("conversation grounding route projection", () => {
       },
     });
 
-    expect(decision.route).toBe("delegate");
-    expect(decision.role).toBe("observer_probe");
-    expect(decision.executionProfile).toBe("observer");
+    expect(decision.route).toBe("reply");
+    expect(decision.role).toBe("main_reply");
+    expect(decision.executionProfile).toBe("main");
   });
 
-  it("keeps delegated route when route_hint tool prefers reply for fresh live lookup", async () => {
+  it("keeps reply route when route_hint tool prefers reply for fresh live lookup", async () => {
     const decision = await resolveStatelessPolicyDecision("openclaw 4.21 有啥新特性", {
       metadata: {
         conversation_control: {
@@ -292,12 +292,12 @@ describe("conversation grounding route projection", () => {
       },
     });
 
-    expect((decision.route_decision as { route: string }).route).toBe("delegate");
-    expect((decision.request as { metadata: { requested_route: string } }).metadata.requested_route).toBe("delegate");
+    expect((decision.route_decision as { route: string }).route).toBe("reply");
+    expect((decision.request as { metadata: { requested_route?: string } }).metadata.requested_route).toBeUndefined();
     expect((decision.request as { metadata: { route_hint: string } }).metadata.route_hint).toBe("reply");
   });
 
-  it("allows explicit route objection to override default fresh live lookup delegation", async () => {
+  it("records explicit route objection while fresh live lookup stays on reply", async () => {
     const decision = await resolveStatelessPolicyDecision("openclaw 4.21 有啥新特性", {
       metadata: {
         conversation_control: {
@@ -341,7 +341,7 @@ describe("conversation grounding route projection", () => {
     expect((decision.route_hint_policy as { trusted: boolean }).trusted).toBe(false);
   });
 
-  it("allows trusted route requests to force the baseline route", async () => {
+  it("does not let trusted route requests force delegate without a hard signal", async () => {
     const decision = await resolveStatelessPolicyDecision("在吗", {
       routeHint: {
         route_hint: "delegate",
@@ -351,9 +351,10 @@ describe("conversation grounding route projection", () => {
       },
     });
 
-    expect((decision.route_decision as { route: string }).route).toBe("delegate");
+    expect((decision.route_decision as { route: string }).route).toBe("reply");
     expect((decision.route_hint_policy as { trusted: boolean }).trusted).toBe(true);
     expect((decision.route_hint_policy as { source: string }).source).toBe("trusted_tool");
+    expect((decision.route_decision as { hard_delegate_signal: boolean }).hard_delegate_signal).toBe(false);
   });
 });
 

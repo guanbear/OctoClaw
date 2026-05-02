@@ -7,6 +7,7 @@ export const POLICY_LABELS = {
   scope: ["local", "remote", "both", "unknown"] as const,
   tool_need_hint: ["none", "maybe", "required"] as const,
   duration_hint: ["short", "medium", "long"] as const,
+  decision_bucket: ["must_reply", "must_delegate", "budgeted_main_then_delegate"] as const,
 } as const;
 
 export type PolicyRoute = typeof POLICY_LABELS.route[number];
@@ -17,17 +18,18 @@ export type PolicyComplexity = typeof POLICY_LABELS.complexity[number];
 export type PolicyScope = typeof POLICY_LABELS.scope[number];
 export type ToolNeedHint = typeof POLICY_LABELS.tool_need_hint[number];
 export type DurationHint = typeof POLICY_LABELS.duration_hint[number];
+export type DecisionBucket = typeof POLICY_LABELS.decision_bucket[number];
 
 export const IRON_LAWS = [
   {
     id: "delegate_on_required_tooling",
     rule:
-      "If new tooling, probing, command execution, workspace access, or environment lookup is required, default to delegate rather than reply.",
+      "If write tooling, command execution, workspace mutation, testing/building, review/validation, or multi-step probing is required, default to delegate rather than reply.",
   },
   {
     id: "delegate_on_long_running_work",
     rule:
-      "If the work is likely to exceed one minute or clearly exceed main-thread fast-response budget, default to delegate rather than reply.",
+      "If the work is likely to exceed 90-120 seconds or clearly exceed main-thread fast-response budget, default to delegate rather than reply.",
   },
   {
     id: "clarify_before_guessing_scope",
@@ -47,10 +49,11 @@ export const DECISION_RUBRIC = {
     "Or the most reasonable next step is to ask a clarifying question.",
     "No new tooling, commands, environment probing, or file writes are needed.",
     "Any needed state can be answered from existing truth, summaries, or artifact references.",
+    "A single lightweight read-only fresh lookup can be attempted on the main fast path within budget.",
   ],
   delegate: [
     "A new execution work unit is needed.",
-    "Workspace access, environment probing, command execution, log reading, verification, or a longer processing flow is needed.",
+    "Code/file mutation, tests/builds, command execution, log investigation, review/validation, multi-step tooling, or a longer processing flow is needed.",
     "A forced main-thread reply would rely on guessing or stuff execution work into the main lane.",
     "The task is worth isolating from the main agent context.",
   ],
@@ -67,9 +70,9 @@ export const ANTI_REPLY_BIAS_RULES = [
     rule: "Questions do not automatically mean reply.",
   },
   {
-    id: "fresh_state_lookups_delegate",
+    id: "fresh_state_lookups_budgeted_main_first",
     rule:
-      "Fresh state lookup such as version/latest/status/local-machine/remote/release comparison should default toward delegate.",
+      "Fresh state lookup such as version/latest/status/local-machine/remote/release comparison is main fast path first when it is one lightweight read-only lookup; delegate only after budget, write, long-running, or multi-step signals.",
   },
   {
     id: "real_probing_delegate",
@@ -108,6 +111,10 @@ export const VALIDATOR_DEFAULT_RULES = [
     then: "reply remains eligible",
   },
   {
+    if: "fresh_live_lookup or route_hint=delegate without a hard delegate signal",
+    then: "use budgeted_main_then_delegate; do not force delegate alone",
+  },
+  {
     if: "execution.supports_provenance_reply == true",
     then: "route=reply, reply_mode=answer, do NOT dispatch or spawn",
   },
@@ -134,6 +141,14 @@ export const JudgeOutputSchema = {
   scope: "local | remote | both | unknown (REQUIRED)",
   tool_need_hint: "none | maybe | required (REQUIRED)",
   duration_hint: "short | medium | long (REQUIRED)",
+  decision_bucket: "must_reply | must_delegate | budgeted_main_then_delegate (REQUIRED)",
+  startup_cost_policy: {
+    main_fast_path_allowed: true,
+    max_wall_ms: "20000-30000",
+    max_tool_calls: "1-2",
+    escalation_triggers: [] as string[],
+  },
+  hard_delegate_signal: "boolean (REQUIRED)",
   reason_codes: [] as string[],
 } as const;
 

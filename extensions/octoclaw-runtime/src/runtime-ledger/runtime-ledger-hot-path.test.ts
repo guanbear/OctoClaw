@@ -397,7 +397,7 @@ describe("runtime ledger hot-path tool integration", () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
     process.env.OCTOCLAW_SCHEDULER_ENABLED = "true";
-    const task = "Research runtime ledger ticket issuance and return a concise implementation summary.";
+    const task = "Delegate a subagent to research runtime ledger ticket issuance and return a concise implementation summary.";
     const decision = await resolveDelegatePolicy(task, "session-hot-path-auto-ticket", {
       relation_to_recent_execution: "new_work",
       is_new_work: true,
@@ -587,7 +587,7 @@ describe("runtime ledger hot-path tool integration", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("delegation_ticket_rejected:not_new_work");
+    expect(String(result.error)).toMatch(/^work_contract_route_not_dispatchable:.*:reply$/u);
     expect(result.dispatch_executed).toBe(false);
     expect(result.spawn_executed).toBe(false);
     expect(result.materialized).toBe(false);
@@ -619,7 +619,7 @@ describe("runtime ledger hot-path tool integration", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("delegation_ticket_rejected:not_new_work");
+    expect(String(result.error)).toMatch(/^work_contract_route_not_dispatchable:.*:reply$/u);
     expect(result.dispatch_executed).toBe(false);
     expect(result.spawn_executed).toBe(false);
     expect(result.materialized).toBe(false);
@@ -665,7 +665,7 @@ describe("runtime ledger hot-path tool integration", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("delegation_ticket_rejected:not_new_work");
+    expect(String(result.error)).toMatch(/^work_contract_route_not_dispatchable:.*:reply$/u);
     expect(result.dispatch_executed).toBe(false);
     expect(result.spawn_executed).toBe(false);
     expect(result.materialized).toBe(false);
@@ -676,7 +676,7 @@ describe("runtime ledger hot-path tool integration", () => {
     useTempWorkspace();
     process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
     process.env.OCTOCLAW_SCHEDULER_ENABLED = "1";
-    const task = "Research the runtime ledger scheduler queue hot path and summarize the dispatch flow.";
+    const task = "Delegate a subagent to research the runtime ledger scheduler queue hot path and summarize the dispatch flow.";
     const decision = await resolveDelegatePolicy(task, "session-hot-path-new-work", {
       relation_to_recent_execution: "new_work",
       is_new_work: true,

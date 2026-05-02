@@ -411,7 +411,7 @@ describe("octoclaw_dispatch honesty", () => {
     const output = String((response.json as Record<string, unknown>).raw_output);
 
     expect(output).toContain("Total records: 1");
-    expect(output).toContain("task-delegate-visible | running(running) | delegate");
+    expect(output).toContain("task-delegate-visible | degraded(native_registry_unavailable) | delegate");
     expect(output).toContain("title=Migrate JAVDB cron jobs");
     expect(output).toContain("complexity=normal");
     expect(output).not.toContain("task-reply-hidden");
@@ -445,19 +445,19 @@ describe("octoclaw_dispatch honesty", () => {
     expect(tableOutput).toContain("Fields: task_id | projected_status(raw_status) | route | title | complexity | elapsed | delegated_at | model | backend");
     expect(tableOutput).toContain("result_location/artifact_refs");
     expect(tableOutput).toContain("Retention: archived=1, archive_deleted=0");
-    expect(tableOutput).toContain("task-status-panel-1 | timed_out(running) | delegate");
+    expect(tableOutput).toContain("task-status-panel-1 | degraded(native_registry_unavailable) | delegate");
     expect(tableOutput).toContain("title=Delegated task materialized natively");
     expect(tableOutput).toContain("complexity=unknown");
     expect(tableOutput).toContain("model=zhipu/GLM-5.1");
     expect(tableOutput).toContain("backend=octoclaw-research");
     expect(tableOutput).toContain("result=none");
     expect(tableOutput).toContain("delegated_at=2026-04-25T00:00:00.000Z");
-    expect(tableOutput).toContain("reason=stale_status_no_progress>5m");
+    expect(tableOutput).toContain("reason=native_registry_unavailable");
 
     const anchorsResponse = await statusTool().execute({ format: "anchors" }, {});
     const anchorsOutput = String((anchorsResponse.json as Record<string, unknown>).raw_output);
     expect(anchorsOutput).toContain("Visible delegated tasks: 0 | Total: 0 | Expired hidden: 0");
-    expect(anchorsOutput).not.toContain("task-status-panel-1 | timed_out(running) | delegate");
+    expect(anchorsOutput).not.toContain("task-status-panel-1 | degraded(native_registry_unavailable) | delegate");
   });
 
   it("does not project explicit spawnExecuted=false plus continuity key as running", async () => {
@@ -483,8 +483,8 @@ describe("octoclaw_dispatch honesty", () => {
     const tableResponse = await statusTool().execute({ format: "table" }, {});
     const tableOutput = String((tableResponse.json as Record<string, unknown>).raw_output);
 
-    expect(tableOutput).toContain("task-continuity-no-spawn | queued(running) | delegate");
-    expect(tableOutput).toContain("reason=dispatch_materialized_but_no_spawn_evidence");
+    expect(tableOutput).toContain("task-continuity-no-spawn | degraded(native_registry_unavailable) | delegate");
+    expect(tableOutput).toContain("reason=native_registry_unavailable");
     expect(tableOutput).not.toContain("task-continuity-no-spawn | running(running)");
   });
 

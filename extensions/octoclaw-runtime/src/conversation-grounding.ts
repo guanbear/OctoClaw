@@ -966,8 +966,8 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
     if (shouldDelegateObservedSurface) {
       return {
         ...base,
-        route_hint: "delegate",
-        lane_hint: packetLaneHint === "reply" ? "observe" : (packetLaneHint || "observe"),
+        route_hint: "reply",
+        lane_hint: packetLaneHint === "observe" ? "observe" : (packetLaneHint || "reply"),
         protected_lane: "control_observer",
         lookup_scope: packetLookupScope || "local_instance",
         require_fresh_lookup: true,
@@ -987,8 +987,8 @@ export function buildConversationControlHintsFromIntent(intentPacket: Partial<Co
   if (intentClass === "fresh_live_lookup") {
     return {
       ...base,
-        route_hint: "delegate",
-        lane_hint: "observe",
+      route_hint: "reply",
+      lane_hint: "reply",
       lookup_scope: "upstream_project",
       lookup_project: inferFreshLookupProject(""),
       lookup_focus: inferFreshLookupFocus(""),

@@ -67,6 +67,11 @@ export interface MainResumePacket {
 }
 
 export function buildDelegateHandoffPacket(input: BuildDelegateHandoffPacketInput): DelegateHandoffPacket {
+  const excerpts = input.relevantExcerpts?.filter((excerpt) => excerpt.trim().length > 0);
+  if (excerpts && excerpts.length > 0 && !input.contextEscalationReason) {
+    throw new Error("context_escalation_reason_required");
+  }
+
   return {
     schemaVersion: "octoclaw.delegate_handoff.v1",
     delegateTaskId: input.delegateTaskId,
@@ -86,7 +91,8 @@ export function buildDelegateHandoffPacket(input: BuildDelegateHandoffPacketInpu
       allowRawTranscript: false,
     },
     threadSummary: input.threadSummary,
-    relevantExcerpts: input.relevantExcerpts,
+    relevantExcerpts: excerpts,
+    contextEscalationReason: input.contextEscalationReason,
     artifactRefs: input.artifactRefs ?? [],
     forbiddenContent: [
       "full_transcript",

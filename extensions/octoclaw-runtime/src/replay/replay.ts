@@ -110,6 +110,13 @@ export function buildPolicyResolvedReplayPayload(options: Record<string, unknown
     routerEvidenceRequired: asStringArray(routerDecision.evidence_required),
     routerDecisionSource: String(routerDecision.decision_source ?? ""),
     routerDecisionValid: Boolean(routerValidation.passed),
+    decisionBucket: String(routeDecision.decision_bucket ?? decision._decision_bucket ?? ""),
+    startupCostPolicy: asRecord(routeDecision.startup_cost_policy ?? decision._startup_cost_policy),
+    durationHint: String(routeDecision.duration_hint ?? decision._duration_hint ?? ""),
+    toolNeedHint: String(routeDecision.tool_need_hint ?? decision._tool_need_hint ?? ""),
+    hardDelegateSignal: Boolean(routeDecision.hard_delegate_signal ?? decision._hard_delegate_signal),
+    routeReasonCodes: asStringArray(routeDecision.reason_codes),
+    delegateReasonCodes: asStringArray(routeDecision.delegate_reason_codes ?? decision._delegate_reason_codes),
     policyJudgeSelected: String(judge.selected ?? ""),
     policyJudgeInvoked: Boolean(judge.invoked),
     policyJudgeApplied: Boolean(judge.applied),
@@ -332,4 +339,3 @@ export async function recordDispatchLifecycleReplayEvents(options: Record<string
     );
   }
 }
-
