@@ -4,6 +4,7 @@ export interface SessionsSpawnArgs {
   task: string;
   model?: string;
   role?: string;
+  cwd?: string;
   workspacePath?: string;
   [key: string]: unknown;
 }
@@ -19,14 +20,16 @@ export interface NativeSpawnIntent {
   spawnIntentId: string;
   workContractId: string;
   sessionKey: string;
-  canonicalArgsHash: string;
+  planHash: string;
   sessionsSpawnArgs: SessionsSpawnArgs;
   status: NativeSpawnIntentStatus;
-  runId: string | null;
+  openclawRunId?: string;
+  childSessionKey?: string;
+  confirmedAt?: number;
+  error?: string;
   ttlMs: number;
-  createdAt: string;
-  updatedAt: string;
-  expiresAt: string;
+  createdAt: number;
+  expiresAt: number;
 }
 
 function deepSorted(value: unknown): unknown {
@@ -49,13 +52,15 @@ export function canonicalizeSessionsSpawnArgs(args: SessionsSpawnArgs): string {
   return JSON.stringify(deepSorted(args));
 }
 
-export function hashSessionsSpawnArgs(args: SessionsSpawnArgs): string {
+export function computePlanHash(args: SessionsSpawnArgs): string {
   const canonical = canonicalizeSessionsSpawnArgs(args);
   return createHash("sha256").update(canonical).digest("hex");
 }
 
+export { computePlanHash as hashSessionsSpawnArgs };
+
 export function generateSpawnIntentId(): string {
   const ts = Date.now().toString(36);
-  const rand = randomUUID().slice(0, 8);
-  return `si_${ts}_${rand}`;
+  const rand = randomUUID().slice(0, 8).replace(/-/g, "");
+  return `nsp_${ts}_${rand}_${Date.now()}`;
 }
