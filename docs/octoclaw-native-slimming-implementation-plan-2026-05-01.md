@@ -170,7 +170,7 @@
 关键能力：
 
 - 工具名是 `sessions_spawn`，非阻塞返回 `{ status: "accepted", runId, childSessionKey }`。
-- 参数支持 `task`、`label`、`runtime`、`agentId`、`model`、`thinking`、`cwd`、`runTimeoutSeconds`、`thread`、`mode`、`cleanup`、`sandbox`、`lightContext`、`attachments`。当前工具 schema 没有稳定 `context` 参数。
+- 参数支持 `task`、`label`、`runtime`、`agentId`、`model`、`thinking`、`cwd`、`runTimeoutSeconds`、`thread`、`mode`、`cleanup`、`sandbox`、`context`、`lightContext`、`attachments`。`context` 支持 `isolated` / `fork`，默认 `isolated`；`fork` 只适合 child 确实需要 requester transcript 的 native subagent 场景。
 - `sessions_spawn` 明确拒绝 `target/channel/to/threadId/replyTo/transport` 这类 channel delivery 参数；投递应交给 message/session delivery 能力。
 - `subagent-spawn.ts` 会处理 max depth、max children、agent allowlist、sandbox 继承、model/thinking plan、lightweight bootstrap context、child session key、run id、registry registration、lifecycle hooks。
 - OpenClaw 原生 spawn 已有 requester origin、child session、task lane、run timeout、cleanup、completion announce 的框架。
@@ -296,13 +296,15 @@ OctoClaw 可用点：
 源码：
 
 - `src/plugins/runtime/types-core.ts`
-- `src/plugins/runtime/index.ts`
+- `src/plugins/registry.ts`
+- `src/plugin-state/plugin-state-store.types.ts`
+- `docs/plugins/sdk-runtime.md`
 - `src/plugins/runtime/runtime-tasks.types.ts`
 - `src/plugins/runtime/runtime-channel.ts`
 
 关键能力与限制：
 
-- plugin runtime 当前只暴露 `api.runtime.state.resolveStateDir()`，源码中没有 `api.runtime.state.openKeyedStore<T>()`。
+- plugin runtime 在 v2026.4.29 暴露 `api.runtime.state.openKeyedStore<T>()`，但 `src/plugins/registry.ts` 的 runtime proxy 明确限制为 bundled plugin；外部/workspace plugin 调用会抛出 `openKeyedStore is only available for bundled plugins in this release.`。
 - `runtime.tasks.runs` / `runtime.tasks.flows` 可读 native run/flow 状态，并提供 run cancel。
 - `runtime.channel` 暴露 reply/outbound/routing/reaction helper，可作为 IM delivery port 的上游。
 - OpenClaw 没有原生保存 OctoClaw WorkContract、judge reason、route seal、model profile、IM anchor 的完整字段。
@@ -1120,7 +1122,7 @@ interface MessageDeliveryPort {
 ```
 
 2. Slack 的 neutral ACK、delegate accepted ACK、thread reply、native announce final、debug footer 都统一走这个 port 或 Slack reaction backend；`sendIMMessage()` 不再直接知道 Slack CLI。
-3. native port 优先接 OpenClaw `runtime.channel.reply.dispatchReplyFromConfig`、`runtime.channel.reply.withReplyDispatcher`、`runtime.channel.outbound.load`，或 Slack plugin 暴露的稳定 delivery port。
+3. native port 优先接 OpenClaw `runtime.channel.reply.dispatchReplyFromConfig`、`runtime.channel.reply.withReplyDispatcher`、`runtime.channel.outbound.loadAdapter`，或 Slack plugin 暴露的稳定 delivery port。
 4. Slack target 必须来自 delivery context 或 inbound `channel/message.ts/thread_ts` anchor；不能从 session key 猜 channel/thread。
 5. native port 不可用时，CLI adapter 只作为 legacy fallback，受 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` 控制。
 6. Slack explicit reaction 可继续用 Web API backend，但必须使用 inbound `channel/message.ts` anchor，并和首 ACK dedupe 共用 receipt。
@@ -1157,7 +1159,7 @@ interface MessageDeliveryPort {
 - status projection renderer。
 - IM 文案策略。
 
-如果 metadata 需要关系查询和迁移审计，可以继续用 SQLite；如果只是少量文件状态，放到 `api.runtime.state.resolveStateDir()` 下并做 atomic write、schema version、corrupt quarantine。当前 OpenClaw v2026.4.29 没有可直接使用的 `openKeyedStore<T>()`。
+如果 metadata 需要关系查询和迁移审计，可以继续用 SQLite；如果只是少量 TTL/keyed 状态，bundled 部署时可 feature-detect `api.runtime.state.openKeyedStore<T>()`，外部/workspace plugin 必须回退 SQLite 或 `resolveStateDir()` 下的 atomic 文件。
 
 ## 13. 测试矩阵
 
@@ -1361,7 +1363,7 @@ interface MessageDeliveryPort {
 
 - 抽 `MessageDeliveryPort`，但本 slice 只接 Slack；`sendIMMessage()` 对 Slack 只依赖 port。
 - Slack neutral ACK、delegate accepted ACK、thread reply、native announce final、debug footer 都走 Slack port 或明确 Slack reaction backend。
-- native port 优先适配 `runtime.channel.reply.dispatchReplyFromConfig` / `withReplyDispatcher` / `outbound.load`，或 Slack plugin 暴露的稳定 delivery API。
+- native port 优先适配 `runtime.channel.reply.dispatchReplyFromConfig` / `withReplyDispatcher` / `outbound.loadAdapter`，或 Slack plugin 暴露的稳定 delivery API。
 - CLI adapter 只保留为 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` fallback。
 - Slack explicit reaction adapter 可保留，但只接受明确 inbound anchor。
 - 非 Slack 代码只允许做类型兼容和 fallback 保留，不能顺手迁移 Feishu/其他 IM。
@@ -1398,11 +1400,11 @@ interface MessageDeliveryPort {
 
 这份计划的事实依据以 OpenClaw v2026.4.29 源码为准：
 
-- `src/plugins/runtime/types-core.ts` / `index.ts`：`state` 只有 `resolveStateDir()`。
+- `src/plugins/runtime/types-core.ts` / `src/plugins/registry.ts` / `docs/plugins/sdk-runtime.md`：`state.openKeyedStore()` 存在，但 4.29 只允许 bundled plugin 使用；外部 OctoClaw 不能依赖它替代 SQLite。
 - `src/plugins/runtime/runtime-tasks.types.ts`：`runtime.tasks.runs/flows` 是 status/read/cancel projection API。
 - `src/plugins/runtime/types-channel.ts` / `runtime-channel.ts`：channel runtime 是 reply/outbound/routing/reaction helper。
 - `src/plugins/runtime/types.ts` / `src/gateway/server-plugins.ts`：`runtime.subagent.run()` 只返回 `runId`，不等价于 `sessions_spawn` 全链路。
-- `src/agents/tools/sessions-spawn-tool.ts`：`sessions_spawn` 支持 model/thinking/lightContext/runTimeout，拒绝 channel delivery 参数。
+- `src/agents/tools/sessions-spawn-tool.ts`：`sessions_spawn` 支持 model/thinking/context/lightContext/runTimeout，拒绝 channel delivery 参数。
 - `src/agents/subagent-spawn.ts` / `src/agents/subagent-announce-delivery.ts`：native subagent 注册 run 并支持 auto announce/direct/queue/retry。
 - `extensions/slack/src/actions.ts` / `monitor/message-handler/prepare.ts` / `dispatch.ts`：Slack ackReaction 是真实 Slack reaction，但受 scope、tool-only、status reaction、权限和清理策略影响。
 
@@ -1412,6 +1414,25 @@ interface MessageDeliveryPort {
 - 如果业务确实需要 shared workspace 并发写保护，不能完全删除 scheduler，需要抽成很窄的 write-scope lock。
 - SQLite 不能简单删除；OpenClaw 原生没有 OctoClaw 的全部产品字段，SQLite 应保留为 metadata/audit store。
 - Slack explicit reaction 绕过 OpenClaw auto ack gate，必须只在明确配置和明确 anchor 下使用。
+
+### 17.1 OpenClaw 4.29 -> 4.20 release audit 对 0.5.0 的影响
+
+按 release note 倒序核对后，0.5.0 应采纳的是已经有源码支撑、且不会扩大 OctoClaw runtime 职责的能力：
+
+- **2026.4.29**：`messages.queue=steer` 默认、`messages.visibleReplies`、`spawnedBy` 事件、`openKeyedStore`、startup diagnostics timeline。OctoClaw 应复用 queue/visibleReplies/spawnedBy/diagnostics；`openKeyedStore` 只能 bundled plugin 使用，外部插件不得因此删除 SQLite。
+- **2026.4.27**：plugin startup manifest-first、channel-route SDK、manifest-backed model catalog、runtime deps lazy loading。OctoClaw 应使用 `openclaw/plugin-sdk/channel-route` 或 runtime routing helper 替换手写 route key；同时减少启动期 side effect，不要把 heavy runtime 在 Gateway 启动时全量加载。
+- **2026.4.26**：`sessions_spawn` 的 model alias、`subagents.allowAgents`、requester delivery 保真和 fail-closed 修复。OctoClaw planner/confirm 不应绕过这些原生 guardrail，也不要自己猜 requester route。
+- **2026.4.25**：`sessions_yield`、subagent completion direct fallback、`before_agent_finalize`、`model_call_started/ended`、OTEL/outbound diagnostics。OctoClaw 可用 hooks/diagnostics 做 latency/cost/footer 观测；不要把 `before_agent_finalize` 当主要投递机制。
+- **2026.4.23**：`sessions_spawn.context=fork`、Slack/MPIM group 处理、shared hook route fields、subagent parent `NO_REPLY` 修复。OctoClaw 默认应传 `context=isolated` + `lightContext=true`，只有强上下文依赖才用 `fork`。
+- **2026.4.22**：diagnostics export、Tokenjuice 工具结果压缩、Codex/Pi hook parity、`sessions_list` filter、OpenAI native web_search。OctoClaw 可借 diagnostics 和模型 hooks 做回测，不应依赖只给 bundled/embedded 的扩展缝合点。
+- **2026.4.21**：Slack thread alias/outbound send 保留 `threadTs`，plugin runtime deps 修复。它支撑 Slack delivery port，但不能替代 OctoClaw 自己的 IM anchor/ACK receipt。
+- **2026.4.20**：detached runtime/TaskFlow、silent `NO_REPLY` policy、cron delivery 修复、status reactions。TaskFlow/runs 可作为状态投影来源，但不是 WorkContract/judge/route seal 的完整替代。
+
+落地取舍：
+
+- 进入 0.5.0：planner/confirm、strict native refs、neutral first ACK、startup-cost-aware judge/router、native status projection、debug footer provenance、diagnostics smoke。
+- 进入 0.5.x immediate：Slack delivery port 替换 CLI/shell 热路径、legacy scheduler/finalizer/outbox 从默认 native path 下线。
+- 暂缓：direct SDK spawn、warm worker/A2A 常驻 worker、未暴露 tool allowlist/private hook、child start p95 <= 10s 作为发布门槛。
 
 ## 18. 并行分工与 OpenSpec 约束
 

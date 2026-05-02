@@ -83,7 +83,7 @@ OpenClaw v2026.4.29 已有 background task registry 和 TaskFlow 状态能力，
 
 所以建议不是“删除 SQLite”，而是把 `runtime-ledger SQLite` 降级为 `OctoClaw metadata store`：
 
-- 可以继续用 SQLite 存 OctoClaw 自有 metadata；OpenClaw v2026.4.29 的 plugin runtime 只暴露 `api.runtime.state.resolveStateDir()`，可用于定位 plugin state 目录，但没有可直接调用的 `openKeyedStore<T>()`。
+- 可以继续用 SQLite 存 OctoClaw 自有 metadata；OpenClaw v2026.4.29 的 plugin runtime 暴露 `api.runtime.state.openKeyedStore<T>()`，但源码限制为 bundled plugin only，外部/workspace OctoClaw 不能把它当稳定替代。`resolveStateDir()` 仍可用于定位 plugin state 目录。
 - 不再把 SQLite 当任务执行状态权威。
 - `scheduler_queue`、`completion_bindings`、delivery retry/outbox 这类执行职责在 planner path 下停用；legacy path 只保留回滚。
 - `work_contracts`、route/judge/replay/native refs 可以保留。
@@ -176,7 +176,7 @@ OpenClaw v2026.4.29 的 Slack `ackReaction` 不是 Web UI 专用能力，它会�
 
 ### 2.6 原生 plugin state / channel-route helper
 
-OpenClaw v2026.4.29 的 plugin runtime 事实口径要收紧：源码里 `PluginRuntimeCore.state` 只有 `resolveStateDir()`，`createPluginRuntime()` 也只注入 `{ resolveStateDir }`，当前 upstream 没有 `api.runtime.state.openKeyedStore<T>()` 这个稳定 API。
+OpenClaw v2026.4.29 的 plugin runtime 事实口径要收紧：`PluginRuntimeCore.state` 类型和 docs 已有 `openKeyedStore<T>()`，但 `src/plugins/registry.ts` 的 runtime proxy 只允许 bundled plugin 使用，外部/workspace plugin 调用会抛错。
 
 这意味着 OctoClaw 有三种更稳的存储选择：
 
@@ -184,7 +184,7 @@ OpenClaw v2026.4.29 的 plugin runtime 事实口径要收紧：源码里 `Plugin
 - OctoClaw 关系型 metadata：继续用 SQLite，保存 WorkContract、route seal、judge/replay、native refs、IM anchor、ACK receipts。
 - 小型文件状态：通过 `api.runtime.state.resolveStateDir()` 放到宿主 state 目录下，但必须有 schema version、atomic write、corrupt quarantine；不要散落到 workspace 文件。
 
-Slack/IM 目标解析也应优先使用 OpenClaw `deliveryContext`、`runtime.channel.routing`、`runtime.channel.reply` / `runtime.channel.outbound.load` 等已有 channel helper，而不是手动解析 session key 或 shell out 到 CLI 后解析 stdout/stderr。
+Slack/IM 目标解析也应优先使用 OpenClaw `deliveryContext`、`runtime.channel.routing`、`runtime.channel.reply` / `runtime.channel.outbound.loadAdapter` 等已有 channel helper，而不是手动解析 session key 或 shell out 到 CLI 后解析 stdout/stderr。
 
 ## 3. OctoClaw 应保留的核心价值
 
@@ -942,7 +942,7 @@ legacy path 保留 fallback，但 planner allowlist 验收通过后不再继续�
 
 ### Phase 3：投递切到 native
 
-Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbound.load` 或 channel plugin 提供的稳定 port：
+Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbound.loadAdapter` 或 channel plugin 提供的稳定 port：
 
 - 不 shell out `openclaw message send`。
 - 不解析 stdout/stderr JSON。
@@ -1062,7 +1062,7 @@ Slack/IM 发送切到 OpenClaw `runtime.channel.reply` / `runtime.channel.outbou
 
 ### P2：IM/delivery 收敛
 
-1. Slack 发送改 OpenClaw `runtime.channel.reply` / `runtime.channel.outbound.load` 或 channel plugin 稳定 port。
+1. Slack 发送改 OpenClaw `runtime.channel.reply` / `runtime.channel.outbound.loadAdapter` 或 channel plugin 稳定 port。
 2. session/thread/target 解析改 channel-route helper。
 3. group/channel 可见性使用 `visibleReplies` / `message_tool`。
 4. footer 只保留 debug mode。
@@ -1243,14 +1243,14 @@ deep -> omniroute/cx/gpt-5.4
 
 `extensions/octoclaw-runtime/src/im/slack/slack-adapter.ts` 现在一方面直接调用 Slack Web API 发 reaction，另一方面发消息时 shell out `openclaw message send` 并解析 stdout/stderr。reaction 直接调 Slack 是 explicit ACK fallback 可以接受；但 message send 热路径应该走 OpenClaw channel delivery port。
 
-OpenClaw v2026.4.29 的稳定事实：`PluginRuntimeChannel` 暴露 `reply.dispatchReplyFromConfig`、`reply.withReplyDispatcher`、`outbound.load`、`routing.resolveAgentRoute`、`reactions.shouldAckReaction` 等 helper。文档中不应再泛泛写一个并不存在的 `runtime.message.send`，应明确接这些已有 port 或新增 OctoClaw 自己的 `MessageDeliveryPort` 适配它们。
+OpenClaw v2026.4.29 的稳定事实：`PluginRuntimeChannel` 暴露 `reply.dispatchReplyFromConfig`、`reply.withReplyDispatcher`、`outbound.loadAdapter`、`routing.resolveAgentRoute`、`reactions.shouldAckReaction` 等 helper。文档中不应再泛泛写一个并不存在的 `runtime.message.send`，应明确接这些已有 port 或新增 OctoClaw 自己的 `MessageDeliveryPort` 适配它们。
 
 ## 16. 文档事实校正
 
 本次校正后，文档里的 OpenClaw 原生能力口径按源码收敛为：
 
 - Slack `ackReaction` 是真实 Slack reaction，不是 Web UI only；但会被 `ackReactionScope`、`sourceRepliesAreToolOnly`、`statusReactions`、`removeAckAfterReply`、Slack `reactions:write` 权限影响。
-- plugin runtime 当前没有 `openKeyedStore<T>()`；只有 `state.resolveStateDir()`。需要关系查询和审计时，OctoClaw SQLite 可以保留为 metadata store。
+- plugin runtime 有 `openKeyedStore<T>()`，但 4.29 只对 bundled plugin 开放；外部 OctoClaw 需要关系查询和审计时，SQLite 仍应保留为 metadata store。
 - `runtime.tasks.runs/flows` 是 read/status/cancel projection API；执行创建应走 planner 调用原生 `sessions_spawn`，不是让 OctoClaw 自建 queue。
 - `api.runtime.subagent.run()` 是 gateway agent run 过渡能力，不等价于 tool-level `sessions_spawn` 的 registry/announce 全链路。
 - `runtime.channel` 暴露的是 reply/outbound/routing/reaction helper，不应写成未验证的通用 `runtime.message` API。
