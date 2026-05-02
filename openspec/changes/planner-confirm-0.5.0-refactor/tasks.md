@@ -123,9 +123,10 @@ Write scope:
 
 Tasks:
 
-- [x] Add `openclawRunId`, `childSessionKey`, `spawnIntentId`, `spawnBackend`, and spawn mode refs.
-- [x] Ensure refs are metadata, not execution status.
-- [x] Tests prove status projection does not advance from WorkContract alone.
+- [ ] Add `openclawRunId`, `childSessionKey`, `spawnIntentId`, `spawnBackend`, and spawn mode refs.
+- [ ] Fix WorkContract ID collision: ID must include turn/message/route-seal entropy and must not be `stableId(sessionKey, userAsk)` only.
+- [ ] Ensure refs are metadata, not execution status.
+- [ ] Tests prove status projection does not advance from WorkContract alone.
 
 ## PC7 Legacy Runtime Disable On Planner Path
 
@@ -187,25 +188,27 @@ Owner: mixed. Leader defines cases; GLM-5.1/cheap workers can implement fixtures
 
 Tasks:
 
-- [x] No pending intent blocks `sessions_spawn`.
-- [x] Expired intent blocks `sessions_spawn`.
-- [x] Args hash mismatch blocks `sessions_spawn`.
-- [x] Accepted confirm without runId fails closed.
-- [x] Confirm success writes native refs and sends one delegate ACK in real Slack planner smoke.
+- [ ] No pending intent blocks `sessions_spawn`.
+- [ ] Expired intent blocks `sessions_spawn`.
+- [ ] Args hash mismatch blocks `sessions_spawn`.
+- [ ] Accepted confirm without runId fails closed.
+- [ ] Confirm success writes native refs and sends one delegate ACK.
 - [ ] Child completion without `.completion.json` uses native announce and does not duplicate final message.
-- [x] Status follow-up does not spawn.
-- [x] Planner path does not write scheduler queue, completion binding, or delivery outbox.
+- [ ] Status follow-up does not spawn.
+- [ ] Planner path does not write scheduler queue, completion binding, or delivery outbox.
 
-## PC11 Legacy Wheel Removal
+## PC11 Legacy Default-Path Removal
 
-Owner: Codex leader after planner path is accepted.
+Owner: Codex leader after 0.5.0 Must+Should acceptance. This is 0.5.x immediate, not a 0.5.0 release gate.
 
 Tasks:
 
-- [ ] Remove or archive legacy scheduler queue usage from default path.
-- [ ] Remove completion file prompt requirement from planner path.
-- [ ] Remove delivery outbox from completion announce path.
-- [ ] Keep explicit rollback notes until 0.5.0 is stable.
+- [ ] Remove or archive legacy scheduler queue usage from the default planner/native path.
+- [ ] Remove completion file prompt requirement from the default planner/native path.
+- [ ] Remove child-finalizer/completion-file timeout from native announce final delivery.
+- [ ] Remove delivery outbox from the Slack/native completion announce path.
+- [ ] Keep explicit legacy backend rollback notes until 0.5.x is stable.
+- [ ] Real Slack smoke proves no `completion_file_timeout` after `native_announce_completion_matched`.
 
 
 ## PC12 Speed And Responsiveness
@@ -223,11 +226,13 @@ Write scope:
 Tasks:
 
 - [ ] SR-P0 neutral inbound ACK: Slack reaction/text appears within 1-5s and does not claim delegation or spawn success.
+- [ ] SR-P0 neutral ACK is route-independent and does not depend on `decision.latency_ack.required`, route commit, or a non-OctoClaw tool name.
 - [ ] SR-P0 target resolution uses original inbound Slack anchor (`channel/message.ts/thread_ts`), not post-policy state; `no_valid_thread_target` is covered by tests.
 - [ ] SR-P1 startup-cost-aware delegation uses three explicit buckets: `must_reply/main_fast_path`, `must_delegate`, and `budgeted_main_then_delegate`.
 - [ ] SR-P1 short tasks, simple status/provenance follow-up, and one-step fresh lookup stay on main fast path by default.
 - [ ] SR-P1 `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` are downgraded from hard delegate signals; none can force delegate alone.
 - [ ] SR-P1 hard delegate signals still win: explicit background/subagent/parallel request, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s.
+- [ ] SR-P1 explicit-delegate keyword matching does not treat bare mentions of `opencode`, `glm`, model names, or tools as hard delegate unless the user asks them to do work.
 - [ ] SR-P1 `budgeted_main_then_delegate` can escalate after 20-30s, after 1-2 read-only tool calls, or when write/long-running work becomes necessary.
 - [ ] SR-P1 rule router, local judge, cheap LLM judge, route hints, and AGENTS/system prompt share the same bucket semantics.
 - [ ] SR-P1 judge/replay output records `decision_bucket`, `startup_cost_policy`, `duration_hint`, `tool_need_hint`, `reason_codes`, and `hard_delegate_signal`.
@@ -235,11 +240,67 @@ Tasks:
 - [ ] SR-P1 false-reply cases are covered by tests/replay fixtures so explicit background work, code/test/edit, multi-step tools, review, and validation are not swallowed by main fast path.
 - [ ] SR-P2 planner/native chain is slimmed so real delegated route commit to `sessions_spawn_intent_allowed` is p95 <= 30s in real Slack smoke.
 - [ ] SR-P2 hard confirm remains strict: no `planned -> accepted`, no direct spawn, no delegate ACK before confirm.
-- [ ] SR-P2 child spawn profile uses only current OpenClaw capabilities: `lightContext=true`, bounded child prompt, fast/cheap model defaults, conservative `thinking`/timeout.
+- [ ] SR-P2 child spawn profile uses only current OpenClaw capabilities: explicit `context=isolated`, `lightContext=true`, bounded child prompt, fast/cheap model defaults, conservative `thinking`/timeout.
 - [ ] SR-P2 child-start metrics are recorded for observation, but 0.5.0 does not block on accepted-to-stream-ready <= 10s.
 - [ ] SR-P2 SQLite/native refs are used as footer/status fast path; state transitions are atomic or covered by race tests.
+- [ ] SR-P2 NativeSpawnIntent authorization/confirm transitions surface SQLite busy/locked retry/backoff/replay evidence and do not silently fall back to no task/no spawn.
 - [ ] SR-P2 native child final debug footer shows `route=delegate` and `via=subagent` or `via=native_announce`, not `route=reply | via=policy`.
 - [ ] Real Slack smoke records neutral ACK latency, main-fast-path/delegate route decision, spawn allowed latency, accepted latency, child progress/final latency, and footer route/provenance.
+
+
+## PC13 Slack Delivery Port
+
+Owner: Codex leader after 0.5.0 Must+Should acceptance. GLM/cheap workers may implement Slack fixtures/report parser. This is 0.5.x immediate and Slack-only.
+
+Write scope:
+
+- `extensions/octoclaw-runtime/src/im/slack/*`
+- `extensions/octoclaw-runtime/src/im/send.ts`
+- Slack acceptance/nightly harness and report parser
+
+Forbidden scope:
+
+- non-Slack IM except type-compatible fallback preservation
+- route/judge/planner hot path unless fixing a PC12 regression
+
+Tasks:
+
+- [ ] Slack neutral ACK, delegate accepted ACK, thread reply, native announce final delivery, and debug footer use Slack delivery port instead of CLI/shell hot path.
+- [ ] Slack target comes from delivery context or inbound `channel/message.ts/thread_ts`, not session-key guessing.
+- [ ] Slack native delivery path does not call `openclaw message send` or `runCommand("openclaw", ...)`.
+- [ ] `OCTOCLAW_LEGACY_CLI_DELIVERY=1` restores old Slack CLI path for rollback.
+- [ ] Non-Slack IM behavior remains unchanged.
+- [ ] Real Slack smoke proves native announce final delivery still works and no `completion_file_timeout` appears.
+
+## PC14 Nightly Regression Harness
+
+Owner: leader defines cases; GLM/cheap workers implement fixtures/report parsing. Can run in parallel with macmini runtime work only inside harness/config/docs scope.
+
+Write scope:
+
+- Slack acceptance config and scenario fixtures
+- nightly eval config/report parser
+- docs/OpenSpec evidence notes
+
+Forbidden while macmini runtime branch is active:
+
+- `extensions/octoclaw-runtime/src/extension-entry.ts`
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+- judge/router runtime files
+- ACK sender runtime files
+
+Tasks:
+
+- [ ] Add `main_fast_path_simple_reply` scenario.
+- [ ] Add `main_fast_path_one_lookup` scenario.
+- [ ] Add `must_delegate_explicit_subagent` scenario.
+- [ ] Add `must_delegate_code_test_review` scenario.
+- [ ] Add `budgeted_main_then_delegate` scenario.
+- [ ] Add `status_provenance_no_spawn` scenario.
+- [ ] Add `native_announce_final` scenario.
+- [ ] Add `footer_delegate_provenance` scenario.
+- [ ] Add `no_completion_file_timeout` scenario.
+- [ ] Report parser outputs neutral ACK latency, route decision/bucket, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance, whether `completion_file_timeout` appeared, and whether legacy CLI delivery was used.
 
 
 ## PC1-PC5 implementation evidence

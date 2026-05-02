@@ -29,6 +29,36 @@
 - Large context uses attachments or workspace refs rather than parent tool-result payloads.
 - Child final handoff should be compact; parent context must not receive raw child transcript or worker execution logs.
 
+## Responsiveness Model
+
+0.5.0 is optimized for short tasks stay fast, long tasks do not block. It SHALL NOT claim that every delegated child starts within 10 seconds. The live path records child-start latency, but the 0.5.0 gate is neutral first ACK, reduced false delegation, and strict planner/confirm correctness.
+
+- SR-P0 neutral inbound ACK: Slack inbound messages should get a route-independent reaction/typing or short text ACK within 1-5s when configured. This ACK is pre-route and must only say `received/deciding`, never `delegated/running/success`.
+- SR-P1 startup-cost-aware routing: route candidates use three buckets: `must_reply/main_fast_path`, `must_delegate`, and `budgeted_main_then_delegate`. One-step fresh lookup, status/provenance follow-up, and short explain/summarize/rewrite tasks default to main fast path. Hard delegate signals are explicit background/subagent/parallel requests, code edits, tests/builds, long commands, multi-step tools, review/validation, or expected duration over 90-120s.
+- SR-P2 planner/native hot path: real delegated route commit to `sessions_spawn_intent_allowed` should target p95 <= 30s in Slack smoke, with metrics for route decision, spawn allowed, accepted confirm, child progress/final, and footer provenance.
+
+Rule router, local judge, cheap LLM judge, route hints, and AGENTS/system prompt injection must share the same bucket semantics. `fresh_live_lookup`, `conversation_control.route_hint=delegate`, and `fast_first_response` cannot force delegate alone.
+
+## Spawn Context And OpenClaw Boundary
+
+Planner output SHALL build `sessionsSpawnArgs` using OpenClaw 4.29 public tool parameters only. Default child context is `context=isolated` with `lightContext=true`; `context=fork` is allowed only when the child truly needs requester transcript context. Large context should be passed through compact task text, attachments, or workspace refs.
+
+OctoClaw SHALL NOT import OpenClaw internal spawn modules or depend on plugin SDK direct spawn APIs that are not public. `api.runtime.subagent.run()` remains non-goal for 0.5.0 because it is not equivalent to tool-level `sessions_spawn` registry/announce/delivery behavior.
+
+## Metadata, SQLite, And Projections
+
+SQLite remains an OctoClaw metadata/audit store for WorkContract, route seal, judge/replay, IM anchors, ACK receipts, NativeSpawnIntent, and native refs. It is not the execution lifecycle truth source. OpenClaw native runs/flows/subagent registry owns queued/running/succeeded/failed/timed_out/cancelled/lost.
+
+NativeSpawnIntent transitions that affect authorization or accepted native refs should be atomic or covered by race/idempotency tests. SQLite lock contention must surface as retry/backoff/replay evidence; `SQLITE_BUSY` must not silently become no task/no spawn.
+
+## Footer, Delivery, And Regression Harness
+
+Footer is a debug projection. It defaults off, never appends to ACK/progress/no-reply packets, and for native child final delivery it must prefer accepted native refs or child announce provenance over the parent delivery turn route. This prevents native announce final replies from being mislabeled as `route=reply | via=policy`.
+
+Slack delivery port work is 0.5.x immediate and Slack-only. It should move Slack message hot path away from `openclaw message send` CLI/stdout parsing while keeping `OCTOCLAW_LEGACY_CLI_DELIVERY=1` rollback. Non-Slack IM behavior stays on existing fallback.
+
+Nightly/acceptance reports must include neutral ACK latency, route bucket, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance, `completion_file_timeout`, and legacy CLI delivery usage.
+
 ## Leader / Worker Split
 
 Codex leader owns hard architecture and integration points:
@@ -64,4 +94,6 @@ Cheaper workers can handle mechanical tests, fixture generation, docs sync, and 
 - Default development backend: `OCTOCLAW_SPAWN_BACKEND=planner`.
 - Production rollout uses allowlist by workspace/session/user.
 - Legacy backend remains available through explicit flags during 0.5.0 rollout.
-- After planner acceptance, legacy scheduler, completion binding, child-finalizer, and delivery outbox can be deleted or archived in separate slices.
+- After planner acceptance, legacy scheduler, completion binding, child-finalizer, and delivery outbox can be disabled from the default planner/native path; deletion/archive happens in separate slices after Slack smoke evidence.
+- PC13 Slack delivery port and PC14 nightly harness are 0.5.x immediate/parallel work, not blockers for 0.5.0 Must + Should.
+- Direct SDK spawn, warm worker pool/A2A, non-Slack delivery ports, managed flow orchestration, and unexposed OpenClaw hook work are deferred to separate OpenSpec changes.
