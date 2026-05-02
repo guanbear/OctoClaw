@@ -208,6 +208,23 @@ function isCompletionAlreadyMaterialized(options: ChildCompletionFinalizerOption
   }
 }
 
+function isWorkContractCompletionMaterialized(options: ChildCompletionFinalizerOptions): boolean {
+  const contract = loadWorkContract(options.workContractId, options.taskStatePath);
+  if (!contract) return false;
+  const telemetry = contract.telemetry ?? {};
+  const nativeRefs = contract.nativeSpawnRefs ?? {};
+  const nativeBinding = contract.delegate?.nativeBinding;
+  const nativePlannerRef = nativeRefs.spawnBackend === "sessions_spawn_planner"
+    || Boolean(nativeRefs.openclawRunId || nativeBinding?.runId || nativeBinding?.childRunId);
+  if (!nativePlannerRef) return false;
+  const materialized = telemetry.resultMaterialized === true
+    || contract.status === "completed"
+    || nativeBinding?.status === "succeeded";
+  if (!materialized) return false;
+  const deliveryStatus = stringValue(telemetry.deliveryStatus).toLowerCase();
+  return !deliveryStatus || ["pending", "delivered", "sent", "queued_for_retry"].includes(deliveryStatus);
+}
+
 function formatDeliveryMessage(completion: WorkerCompletionResult, options: ChildCompletionFinalizerOptions): string {
   const icon = completion.status === "success" ? "✅" : completion.status === "partial" ? "⚠️" : "❌";
   const title = completion.status === "success"
@@ -586,6 +603,9 @@ export async function finalizeChildSessionOnce(
   if (!options.workContractId || !options.parentSessionKey) {
     return { status: "missing_identity", error: "missing workContractId or parentSessionKey" };
   }
+  if (isWorkContractCompletionMaterialized(options)) {
+    return { status: "completed", sent: false };
+  }
   const completion = readCompletionFile(options.workContractId);
   if (!completion) return { status: "pending" };
   const bindingResult = observeCompletionBinding({
@@ -617,7 +637,7 @@ export async function finalizeChildSessionOnce(
       error: `completion_binding_${bindingResult.verdict}: ${bindingResult.description}`,
     };
   }
-  if (isCompletionAlreadyMaterialized(options)) {
+  if (isCompletionAlreadyMaterialized(options) || isWorkContractCompletionMaterialized(options)) {
     return { status: "completed", resultText: completion.summary, sent: false };
   }
   const releaseDeliveryLock = acquireCompletionDeliveryLock(options.workContractId);
@@ -626,7 +646,7 @@ export async function finalizeChildSessionOnce(
 
   }
   try {
-    if (isCompletionAlreadyMaterialized(options)) {
+    if (isCompletionAlreadyMaterialized(options) || isWorkContractCompletionMaterialized(options)) {
       return { status: "completed", resultText: completion.summary, sent: false };
     }
     const message = formatDeliveryMessage(completion, options);
@@ -684,6 +704,16 @@ export async function finalizeChildSessionOnce(
   }
 }
 
+export function cancelChildCompletionFinalizer(workContractId: string): boolean {
+  const key = stringValue(workContractId);
+  if (!key) return false;
+  const timer = activeFinalizers.get(key);
+  if (!timer) return false;
+  clearTimeout(timer);
+  activeFinalizers.delete(key);
+  return true;
+}
+
 export function scheduleChildCompletionFinalizer(options: ChildCompletionFinalizerOptions): boolean {
   const key = stringValue(options.workContractId);
   if (!key || activeFinalizers.has(key)) return false;
@@ -692,6 +722,10 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
   let deadline = Date.now() + timeoutMs;
   const tick = async () => {
     try {
+      if (isWorkContractCompletionMaterialized(options)) {
+        activeFinalizers.delete(key);
+        return;
+      }
       const result = await finalizeChildSessionOnce(options);
       if (result.status !== "pending") {
         activeFinalizers.delete(key);
@@ -699,6 +733,10 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
       }
       const nowMs = Date.now();
       if (nowMs >= deadline && result.error !== "completion_delivery_in_progress") {
+        if (isWorkContractCompletionMaterialized(options)) {
+          activeFinalizers.delete(key);
+          return;
+        }
         if (shouldExtendDeadlineForActiveChild(options, nowMs)) {
           deadline = nowMs + CHILD_SESSION_DEADLINE_EXTENSION_MS;
         } else {
@@ -834,6 +872,10 @@ export function recoverPendingChildCompletionFinalizers(options?: {
       sendFinalMessage: options?.sendFinalMessage,
       logger: options?.logger,
     };
+    if (isWorkContractCompletionMaterialized(finalizerOptions)) {
+      result.skipped++;
+      continue;
+    }
 
     const terminalStatuses = new Set(["completed", "failed", "timed_out", "cancelled", "canceled", "blocked"]);
     const isTerminal = (value: unknown): boolean => terminalStatuses.has(asStr(value));

@@ -672,6 +672,8 @@ describe("guardOutboundMessageForPolicyState", () => {
   });
 
   it("treats native subagent announce completion as existing WorkContract delivery", async () => {
+    const previousProjectionFooterMode = process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+    process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = "debug";
     const handlers = new Map<string, Function>();
     plugin.register({
       on: (event, handler) => handlers.set(event, handler),
@@ -765,10 +767,16 @@ describe("guardOutboundMessageForPolicyState", () => {
       expect(blocked?.block).toBe(true);
       expect(blocked?.blockReason).toContain("existing native subagent completion");
 
-      beforeMessageWrite!(
+      const finalMessage = beforeMessageWrite!(
         { message: { role: "assistant", content: "已查证：2026.4.29 主要改进了消息自动化、Memory、模型覆盖、gateway 稳定性和多渠道修复。" } },
         { sessionKey: parentKey, sessionId: "parent-session-native-announce", agentId: "main", channelId: "slack" },
-      );
+      ) as { message?: { content?: unknown } } | undefined;
+
+      const finalText = String(finalMessage?.message?.content ?? "");
+      expect(finalText).toContain("route=delegate");
+      expect(finalText).toContain("via=native_announce");
+      expect(finalText).not.toContain("route=reply");
+      expect(finalText).not.toContain("via=policy");
 
       expect(loadWorkContract(contract.workContractId)?.telemetry).toMatchObject({
         resultMaterialized: true,
@@ -796,6 +804,8 @@ describe("guardOutboundMessageForPolicyState", () => {
       expect(duplicateProjection?.prependSystemContext).toContain("already delivered");
       expect(duplicateProjection?.prependSystemContext).toContain("NO_REPLY");
     } finally {
+      if (previousProjectionFooterMode === undefined) delete process.env.OCTOCLAW_PROJECTION_FOOTER_MODE;
+      else process.env.OCTOCLAW_PROJECTION_FOOTER_MODE = previousProjectionFooterMode;
       policyState.clearState(parentKey);
       policyState.clearState("parent-session-native-announce");
     }

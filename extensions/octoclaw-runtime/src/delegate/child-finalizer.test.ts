@@ -8,6 +8,8 @@ import { registerIMAdapter } from "../im/index.js";
 import { resetExecTransitionState } from "../ack/execution-transition-notifier.js";
 import { envOverrides } from "../resolve/env.js";
 import { finalizeChildSessionOnce, scheduleChildCompletionFinalizer, recoverPendingChildCompletionFinalizers, resetChildCompletionFinalizers } from "./child-finalizer.js";
+import { saveWorkContract } from "../work-contract/store.js";
+import type { WorkContract } from "@octoclaw/contracts/work-contract";
 
 function writeCompletionFile(workspaceRoot: string, workContractId: string, completion: Record<string, unknown>): string {
   const completionDir = path.join(workspaceRoot, ".octoclaw", "completions");
@@ -71,6 +73,90 @@ describe("child completion finalizer — completion file protocol", () => {
     });
 
     expect(result.status).toBe("pending");
+  });
+
+  it("treats native-announce materialized WorkContract as completed without completion file", async () => {
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    const now = new Date().toISOString();
+    const contract = {
+      workContractId: "wc-native-announce-materialized",
+      route: "delegate",
+      status: "completed",
+      sessionKey: "slack:channel:C123",
+      userAsk: "native announce child final",
+      intentClass: "delegated_work",
+      createdAt: now,
+      updatedAt: now,
+      decision: { reasonCodes: [] },
+      nativeSpawnRefs: {
+        openclawRunId: "run-native-announce",
+        childSessionKey: "child-native-announce",
+        requesterSessionKey: "slack:channel:C123",
+        spawnIntentId: "nsp-native-announce",
+        spawnBackend: "sessions_spawn_planner",
+      },
+      continuity: {
+        preferredChildSessionKey: "child-native-announce",
+        preferredRunId: "run-native-announce",
+      },
+      telemetry: {
+        dispatchExecuted: true,
+        spawnExecuted: true,
+        resultMaterialized: true,
+        deliveryStatus: "delivered",
+        childSessionKey: "child-native-announce",
+        childRunId: "run-native-announce",
+      },
+      mainContext: {
+        summary: "native announce child final",
+        statusLine: "Child result delivered.",
+        nextAction: "none",
+        visibleIds: {
+          childSessionKey: "child-native-announce",
+          openclawRunId: "run-native-announce",
+          spawnIntentId: "nsp-native-announce",
+        },
+      },
+      delegate: {
+        delegateTaskId: "delegate-native-announce",
+        currentAttemptId: "attempt-native-announce",
+        role: "default",
+        coordinationMode: "solo_worker",
+        acceptanceCriteria: [],
+        scope: { read: [], write: [], workspaceMode: "read_only", scopeFingerprint: "" },
+        modelProfile: "",
+        nativeBinding: {
+          flowId: "sessions_spawn:run-native-announce",
+          ownerKey: "delegate-native-announce",
+          controllerId: "octoclaw.delegate",
+          revision: 1,
+          expectedRevision: 1,
+          runId: "run-native-announce",
+          childRunId: "run-native-announce",
+          childSessionKey: "child-native-announce",
+          syncMode: "managed",
+          status: "succeeded",
+          lastMutation: "runTask",
+          lastMutationApplied: true,
+        },
+        childSessions: [],
+        artifactRefs: [],
+        nextAction: "deliver",
+      },
+    } as unknown as WorkContract;
+    expect(saveWorkContract(contract, taskStatePath)).toBe(true);
+
+    const result = await finalizeChildSessionOnce({
+      childSessionKey: "child-native-announce",
+      delegateTaskId: "delegate-native-announce",
+      workContractId: "wc-native-announce-materialized",
+      parentSessionKey: "slack:channel:C123",
+      taskStatePath,
+    });
+
+    expect(result).toMatchObject({ status: "completed", sent: false });
   });
 
   it("returns completed when completion file exists and delivery succeeds", async () => {

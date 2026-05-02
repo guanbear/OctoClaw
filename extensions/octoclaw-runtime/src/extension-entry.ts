@@ -28,7 +28,7 @@ import {
 import { sendDelegateWithoutDispatchNotice } from "./ack/ack-delegate-without-dispatch.js";
 import { sendIMMessage } from "./im/send.js";
 import { flushDeliveryOutbox } from "./delivery/delivery-outbox.js";
-import { recoverPendingChildCompletionFinalizers } from "./delegate/child-finalizer.js";
+import { cancelChildCompletionFinalizer, recoverPendingChildCompletionFinalizers } from "./delegate/child-finalizer.js";
 import { sendRouteCommitAck } from "./ack/ack-route-commit.js";
 import { fetchLatestUserMessageTsForSessionKey } from "./im/slack-thread-anchor.js";
 import { renderIMProjectionFooter } from "./im/projection-footer.js";
@@ -623,7 +623,7 @@ function buildNativeAnnouncePolicyState(input: {
       route_decision: {
         ...routeDecision,
         route: "delegate",
-        route_source: stringValue(routeDecision.route_source) || "native_announce",
+        route_source: "native_announce",
         task_class: stringValue(routeDecision.task_class) || "delegated_completion_delivery",
       },
       work_contract: {
@@ -891,6 +891,8 @@ function resolveRouteSource(state: UnknownRecord): string {
   if (source === "main_agent_route_hint") return "hint";
   if (source === "execution_coverage") return "coverage";
   if (source === "continuation") return "continue";
+  if (source === "native_announce") return "native_announce";
+  if (source === "subagent" || source === "subagent_announce") return "subagent";
   return source || "policy";
 }
 
@@ -1537,6 +1539,7 @@ export const plugin = {
           delivered,
           nowIso,
         ) ?? matchedContract;
+        cancelChildCompletionFinalizer(updatedContract.workContractId);
         applyNativeAnnounceCompletionState({
           ctx,
           stateKey: preStateKey,
