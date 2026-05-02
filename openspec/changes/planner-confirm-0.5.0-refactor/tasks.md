@@ -196,16 +196,18 @@ Tasks:
 - [ ] Status follow-up does not spawn.
 - [ ] Planner path does not write scheduler queue, completion binding, or delivery outbox.
 
-## PC11 Legacy Wheel Removal
+## PC11 Legacy Default-Path Removal
 
-Owner: Codex leader after planner path is accepted.
+Owner: Codex leader after 0.5.0 Must+Should acceptance. This is 0.5.x immediate, not a 0.5.0 release gate.
 
 Tasks:
 
-- [ ] Remove or archive legacy scheduler queue usage from default path.
-- [ ] Remove completion file prompt requirement from planner path.
-- [ ] Remove delivery outbox from completion announce path.
-- [ ] Keep explicit rollback notes until 0.5.0 is stable.
+- [ ] Remove or archive legacy scheduler queue usage from the default planner/native path.
+- [ ] Remove completion file prompt requirement from the default planner/native path.
+- [ ] Remove child-finalizer/completion-file timeout from native announce final delivery.
+- [ ] Remove delivery outbox from the Slack/native completion announce path.
+- [ ] Keep explicit legacy backend rollback notes until 0.5.x is stable.
+- [ ] Real Slack smoke proves no `completion_file_timeout` after `native_announce_completion_matched`.
 
 
 ## PC12 Speed And Responsiveness
@@ -240,6 +242,61 @@ Tasks:
 - [ ] SR-P2 SQLite/native refs are used as footer/status fast path; state transitions are atomic or covered by race tests.
 - [ ] SR-P2 native child final debug footer shows `route=delegate` and `via=subagent` or `via=native_announce`, not `route=reply | via=policy`.
 - [ ] Real Slack smoke records neutral ACK latency, main-fast-path/delegate route decision, spawn allowed latency, accepted latency, child progress/final latency, and footer route/provenance.
+
+
+## PC13 Slack Delivery Port
+
+Owner: Codex leader after 0.5.0 Must+Should acceptance. GLM/cheap workers may implement Slack fixtures/report parser. This is 0.5.x immediate and Slack-only.
+
+Write scope:
+
+- `extensions/octoclaw-runtime/src/im/slack/*`
+- `extensions/octoclaw-runtime/src/im/send.ts`
+- Slack acceptance/nightly harness and report parser
+
+Forbidden scope:
+
+- non-Slack IM except type-compatible fallback preservation
+- route/judge/planner hot path unless fixing a PC12 regression
+
+Tasks:
+
+- [ ] Slack neutral ACK, delegate accepted ACK, thread reply, native announce final delivery, and debug footer use Slack delivery port instead of CLI/shell hot path.
+- [ ] Slack target comes from delivery context or inbound `channel/message.ts/thread_ts`, not session-key guessing.
+- [ ] Slack native delivery path does not call `openclaw message send` or `runCommand("openclaw", ...)`.
+- [ ] `OCTOCLAW_LEGACY_CLI_DELIVERY=1` restores old Slack CLI path for rollback.
+- [ ] Non-Slack IM behavior remains unchanged.
+- [ ] Real Slack smoke proves native announce final delivery still works and no `completion_file_timeout` appears.
+
+## PC14 Nightly Regression Harness
+
+Owner: leader defines cases; GLM/cheap workers implement fixtures/report parsing. Can run in parallel with macmini runtime work only inside harness/config/docs scope.
+
+Write scope:
+
+- Slack acceptance config and scenario fixtures
+- nightly eval config/report parser
+- docs/OpenSpec evidence notes
+
+Forbidden while macmini runtime branch is active:
+
+- `extensions/octoclaw-runtime/src/extension-entry.ts`
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+- judge/router runtime files
+- ACK sender runtime files
+
+Tasks:
+
+- [ ] Add `main_fast_path_simple_reply` scenario.
+- [ ] Add `main_fast_path_one_lookup` scenario.
+- [ ] Add `must_delegate_explicit_subagent` scenario.
+- [ ] Add `must_delegate_code_test_review` scenario.
+- [ ] Add `budgeted_main_then_delegate` scenario.
+- [ ] Add `status_provenance_no_spawn` scenario.
+- [ ] Add `native_announce_final` scenario.
+- [ ] Add `footer_delegate_provenance` scenario.
+- [ ] Add `no_completion_file_timeout` scenario.
+- [ ] Report parser outputs neutral ACK latency, route decision/bucket, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance, whether `completion_file_timeout` appeared, and whether legacy CLI delivery was used.
 
 
 ## PC1-PC5 implementation evidence

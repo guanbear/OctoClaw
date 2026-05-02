@@ -23,15 +23,18 @@
 
 本文就是 0.5.0 重构的 master implementation plan，不再另起一份完整计划文档。后续如果需要给 Codex/opencode 交接，只写短 handoff，handoff 必须指回本文和 OpenSpec，不承载另一套计划。
 
-0.5.0 的完成定义按三档管理：
+0.5.0/0.5.x 的完成定义按四档管理：
 
 | 档位 | 范围 | 完成标准 |
 | --- | --- | --- |
 | Must ship | `sessions_spawn planner/confirm` 主链、NativeSpawnIntent gate、`octoclaw_dispatch_confirm`、delegate ACK 时序、源码/部署一致、核心回归测试、真实 Slack smoke、OpenSpec 同步 | planner allowlist 内真实 Slack delegate 能完成 `dispatch -> sessions_spawn -> confirm -> ACK`，无 `invalid_status:planned`，无提前“已委派”，重启/重复 confirm 不制造假状态 |
-| Should ship | ACK/footer/judge 的必要瘦身、runtime-ledger 职责收缩、status/provenance follow-up 禁止 spawn、planner path 下关闭 completion file/finalizer/outbox、native status projector 初版 | 用户可见噪声明显降低，状态回答不重新 spawn，planner path 不依赖 completion file，SQLite 只做 metadata/audit |
-| Deferred | 完整删除 legacy scheduler/finalizer/outbox、全量 IM delivery port 替换 CLI、非 Slack IM 适配、managed flow 编排增强；direct SDK spawn / warm worker pool 仅保留为远期调研，不进入 0.5.0 任务 | 进入 0.5.x/0.6.0，必须单独 OpenSpec 和验收，不作为 0.5.0 阻塞项 |
+| Should ship | ACK/footer/judge 的必要瘦身、runtime-ledger 职责收缩、status/provenance follow-up 禁止 spawn、planner path 下关闭 completion file/finalizer/outbox、native status projector 初版、SR-P0/SR-P1/SR-P2 | 用户可见噪声明显降低，状态回答不重新 spawn，planner path 不依赖 completion file，SQLite 只做 metadata/audit，neutral ACK 和路由分桶有可观测指标 |
+| 0.5.x immediate | legacy scheduler/finalizer/outbox 从默认 planner/native path 下线；Slack delivery port 替换 Slack CLI/shell 热路径；只在 0.5.0 Must+Should 稳定后执行 | 真实 Slack smoke 无 `completion_file_timeout`，native announce final delivery 正常，debug footer 不误标 `reply`，`OCTOCLAW_LEGACY_*` rollback 可用 |
+| Deferred | 非 Slack IM delivery port 适配、managed flow 编排增强、direct SDK spawn、warm worker pool/A2A 常驻 worker、未暴露 tool allowlist/private hook | 进入 0.6.0 或单独 research OpenSpec；不作为 0.5.0/0.5.x immediate 阻塞项 |
 
-远端 Codex/opencode 接手时应先建立这个 master task board，然后按 slice 推进。当前真实 Slack smoke handoff 只覆盖 Must ship 的 P0/P1：证明 native `sessions_spawn` 是否命中 OctoClaw `before_tool_call` gate，并修复 `invalid_status:planned`。P0/P1 通过后，再继续做 ACK/footer/judge、legacy 降级和 metadata/status 收口。
+0.5.0 的发布验收只看 Must ship + Should ship。`0.5.x immediate` 是 0.5.0 稳定后的紧邻收尾，不阻塞 0.5.0 发版；delivery port 的近期范围只做 Slack，非 Slack IM 保持现有 fallback，不在本轮重构里强行迁移。
+
+远端 Codex/opencode 接手时应先建立这个 master task board，然后按 slice 推进。当前真实 Slack smoke handoff 只覆盖 Must ship 的 P0/P1：证明 native `sessions_spawn` 是否命中 OctoClaw `before_tool_call` gate，并修复 `invalid_status:planned`。P0/P1 通过后，再继续做 ACK/footer/judge、legacy 默认路径下线和 metadata/status 收口。
 
 ## 1. 预期目标
 
@@ -1087,53 +1090,61 @@ prompt 只负责引导模型，最终副作用仍由 admission、spawn intent ga
 - shared workspace 写冲突保护。
 - idempotency / dedupe。
 
-## 11. Phase 6：IM delivery 切到原生 route/port
+## 11. Phase 6：Slack delivery 切到原生 route/port
 
-目标：不在热路径 shell out `openclaw message send` 并解析 stdout/stderr。
+目标：只把 Slack 热路径从 shell out `openclaw message send` 和 stdout/stderr 解析中移出来。非 Slack IM 不在 0.5.x immediate 范围内强行改造，继续走现有 fallback，避免一次性扩大风险面。
 
 当前风险文件：
 
 - `extensions/octoclaw-runtime/src/im/slack/slack-adapter.ts`
-- `extensions/octoclaw-runtime/src/im/feishu/feishu-adapter.ts`
 - `extensions/octoclaw-runtime/src/im/send.ts`
 - `extensions/octoclaw-runtime/src/delivery/delivery-outbox.ts`
+- Slack acceptance/nightly harness 和 report parser
 
 改法：
 
-1. 先抽 `MessageDeliveryPort`：
+1. 先抽 Slack 可用的 `MessageDeliveryPort`，但接口命名保持通用，便于未来非 Slack 复用：
 
 ```ts
 interface MessageDeliveryPort {
   send(params: {
-    channel: string;
+    channel: "slack";
     accountId?: string;
     to: string;
     threadId?: string;
     text: string;
     idempotencyKey?: string;
+    deliveryContext?: unknown;
   }): Promise<{ ok: boolean; messageId?: string; threadId?: string; error?: string }>;
 }
 ```
 
-2. 将 `sendIMMessage()` 改为调用 port，不直接知道 Slack CLI。
-3. 优先接 OpenClaw `runtime.channel.reply.dispatchReplyFromConfig`、`runtime.channel.reply.withReplyDispatcher`、`runtime.channel.outbound.load` 或 channel plugin 暴露的稳定 delivery port。
-4. native port 不可用时，CLI adapter 只作为 legacy fallback，受 `OCTOCLAW_NATIVE_DELIVERY=0` 控制。
-5. Slack explicit reaction 可继续用 Web API backend，但必须使用 inbound `channel/message.ts` anchor。
+2. Slack 的 neutral ACK、delegate accepted ACK、thread reply、native announce final、debug footer 都统一走这个 port 或 Slack reaction backend；`sendIMMessage()` 不再直接知道 Slack CLI。
+3. native port 优先接 OpenClaw `runtime.channel.reply.dispatchReplyFromConfig`、`runtime.channel.reply.withReplyDispatcher`、`runtime.channel.outbound.load`，或 Slack plugin 暴露的稳定 delivery port。
+4. Slack target 必须来自 delivery context 或 inbound `channel/message.ts/thread_ts` anchor；不能从 session key 猜 channel/thread。
+5. native port 不可用时，CLI adapter 只作为 legacy fallback，受 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` 控制。
+6. Slack explicit reaction 可继续用 Web API backend，但必须使用 inbound `channel/message.ts` anchor，并和首 ACK dedupe 共用 receipt。
+7. 非 Slack IM 行为保持不变；最多做类型兼容和 fallback 保留，不迁移 Feishu/其他 IM 的发送路径。
 
 验收：
 
-- native delivery path 不调用 `runCommand("openclaw", ...)`。
+- Slack native delivery path 不调用 `runCommand("openclaw", ...)`，也不通过 `openclaw message send` CLI 发送热路径消息。
 - Slack thread/reply target 来自 OpenClaw delivery context 或 inbound anchor。
-- delivery failure 由 OpenClaw native retry/fallback 处理，OctoClaw 不写自建 outbox。
+- `OCTOCLAW_LEGACY_CLI_DELIVERY=1` 能回滚到旧 Slack CLI path。
+- native announce final 在 Slack 里正常送达，不依赖 completion file/outbox。
+- 真实 Slack smoke 中无 `completion_file_timeout`，debug footer 对 child final 不显示 `route=reply | via=policy`。
+- 非 Slack IM 验收不纳入本 slice；现有 fallback 不被破坏。
 
-## 12. Legacy 移除计划
+## 12. Legacy 默认路径下线计划
 
-planner path 稳定后，按顺序禁用/删除：
+0.5.x immediate 只做默认 planner/native path 下线，不做激进源码删除。目标是让正常 Slack planner/native 流程不再依赖这些轮子，同时保留显式 legacy rollback；等 0.5.x 稳定后，再单独评估真正删除/归档代码。
 
-1. `runtime-ledger/scheduler.ts`：OpenClaw native subagent lane/maxChildren/maxDepth 已覆盖大部分用途。
-2. `runtime-ledger/completion-binding.ts`：native announce 替代 child completion file。
-3. `delegate/child-finalizer.ts`：native completion delivery 替代轮询。
-4. `delivery/delivery-outbox.ts`：OpenClaw announce delivery/queue fallback/retry 替代。
+默认路径下线顺序：
+
+1. `runtime-ledger/scheduler.ts`：OpenClaw native subagent lane/maxChildren/maxDepth 已覆盖大部分用途；如仍需 shared workspace 写保护，抽成窄锁，不保留整套 scheduler queue。
+2. `runtime-ledger/completion-binding.ts`：native announce 替代 child completion file；planner/native path 不写新 binding。
+3. `delegate/child-finalizer.ts`：native completion delivery 替代轮询；planner/native path 不启动 finalizer recovery。
+4. `delivery/delivery-outbox.ts`：Slack/native announce delivery 不写自建 outbox；legacy backend 可以显式回滚。
 5. fake detached runtime：不再伪装可执行 backend。
 6. `task-state.json` 写路径：降级为 projection cache 后再逐步移除。
 
@@ -1175,6 +1186,24 @@ planner path 稳定后，按顺序禁用/删除：
 - `removeAckAfterReply: true`：reply 后 reaction 被清理，行为符合预期。
 - 缺 `reactions:write`：不崩溃，有 verbose/debug 记录。
 
+### 13.4 Nightly / 回归验收
+
+夜间回测可以和 macmini 的 runtime 改动并行，但只能改 acceptance/nightly config、scenario fixtures、report parser 和 docs evidence。macmini runtime 分支活跃时，不要碰 `extension-entry.ts`、`registration.ts`、judge/router、ACK sender、planner confirm 热路径。
+
+必备案例：
+
+- `main_fast_path_simple_reply`：简单解释/总结直接 reply，不进 `octoclaw_dispatch`。
+- `main_fast_path_one_lookup`：一次轻量只读查证在主线程完成，`fresh_live_lookup` 不单独强制 delegate。
+- `must_delegate_explicit_subagent`：用户明确要求子 agent/后台/并行时进入 planner/native delegate。
+- `must_delegate_code_test_review`：代码修改、测试、review/验证不能被 main fast path 吃掉。
+- `budgeted_main_then_delegate`：主线程预算超限后转 `octoclaw_dispatch`，并记录预算原因。
+- `status_provenance_no_spawn`：状态/来源追问只读 native refs/replay，不创建新 spawn intent。
+- `native_announce_final`：child 不写 completion file，final 通过 native announce 回到 Slack thread。
+- `footer_delegate_provenance`：debug footer 对 child final 显示 `route=delegate` 和 `via=subagent|native_announce`。
+- `no_completion_file_timeout`：planner/native path 没有 `completion_file_timeout` 和“任务超时”误报。
+
+报告必须输出这些字段，便于和真实 Slack smoke 对齐：neutral ACK latency、route decision/bucket、spawn allowed latency、confirm ACK latency、child progress/final latency、footer provenance、是否出现 `completion_file_timeout`、是否调用 legacy CLI delivery。
+
 ## 14. 发布顺序
 
 0.5.0 不应按“把所有瘦身项一次性做完”的方式发布，而应按 gate 可验证的 slice 发布。推荐顺序：
@@ -1183,11 +1212,12 @@ planner path 稳定后，按顺序禁用/删除：
 2. Slice 1 planner/confirm 主链：灰度开启 `OCTOCLAW_SPAWN_BACKEND=planner`，跑通真实 Slack `dispatch -> sessions_spawn -> confirm -> ACK`。
 3. Slice 2 ACK/footer/judge 必要瘦身：footer 默认 off，delegate ACK 只在 confirm 后发，judge 只做 router/admission signal，不重写 judge 主体。
 4. Slice 3 metadata/status 收口：SQLite 保留为 metadata/audit store，状态投影逐步以 native runs/flows 为 execution truth。
-5. Slice 4 planner path legacy 降级：planner allowlist 内关闭 completion file、child-finalizer、delivery outbox；legacy backend 保留回滚。
-6. Slice 5 native delivery port：替换 Slack CLI/outbox 热路径；如果 native port 不足，保留 legacy fallback。
-7. Slice 6 legacy 删除：只有在真实 Slack 验收和回滚窗口都通过后，才删除 scheduler/finalizer/outbox 代码。
+5. Slice 4 SR-P0/SR-P1/SR-P2：恢复中性首 ACK，完成启动成本感知路由，瘦身 planner/native 热路径和观测。
+6. Slice 5 0.5.x immediate legacy default-path removal：planner/native 默认路径关闭 completion file、child-finalizer、delivery outbox；legacy backend 保留显式 rollback。
+7. Slice 6 0.5.x immediate Slack delivery port：只替换 Slack CLI/shell 热路径；如果 native port 不足，保留 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` fallback。
+8. Slice 7 deferred research：非 Slack IM、managed flow 编排、direct SDK spawn、warm worker pool/A2A、未暴露 tool allowlist/private hook 单独 OpenSpec。
 
-每个 slice 都必须有：OpenSpec 任务状态、focused tests、真实 Slack 验收记录、回滚开关。
+0.5.0 发版 gate 是 Slice 0-4，也就是 Must ship + Should ship。Slice 5-6 是 0.5.x immediate，建议紧跟 0.5.0 做，但不阻塞 0.5.0；Slice 7 不进入当前验收。每个 slice 都必须有：OpenSpec 任务状态、focused tests、真实 Slack 验收记录、回滚开关。
 
 ## 15. 最小可交付版本
 
@@ -1323,21 +1353,25 @@ planner path 稳定后，按顺序禁用/删除：
 - debug footer 对 native child final 显示 `route=delegate` 和 `via=subagent` 或 `via=native_announce`。
 - Slack tool-only 群里，auto ack 被 OpenClaw gate 压掉时，explicit reaction 能用原始 `channel/message.ts` anchor 补上。
 
-### 16.6 IM delivery port 包
+### 16.6 Slack delivery port 包
 
-目标：把 Slack CLI/stdout 发送路径挪出热路径。
+目标：只把 Slack CLI/stdout 发送路径挪出热路径；非 Slack IM 保持现有 fallback，不进入 0.5.x immediate。
 
 改动：
 
-- 抽 `MessageDeliveryPort`，`sendIMMessage()` 只依赖 port。
-- native port 优先适配 `runtime.channel.reply.dispatchReplyFromConfig` / `withReplyDispatcher` / `outbound.load`。
+- 抽 `MessageDeliveryPort`，但本 slice 只接 Slack；`sendIMMessage()` 对 Slack 只依赖 port。
+- Slack neutral ACK、delegate accepted ACK、thread reply、native announce final、debug footer 都走 Slack port 或明确 Slack reaction backend。
+- native port 优先适配 `runtime.channel.reply.dispatchReplyFromConfig` / `withReplyDispatcher` / `outbound.load`，或 Slack plugin 暴露的稳定 delivery API。
 - CLI adapter 只保留为 `OCTOCLAW_LEGACY_CLI_DELIVERY=1` fallback。
 - Slack explicit reaction adapter 可保留，但只接受明确 inbound anchor。
+- 非 Slack 代码只允许做类型兼容和 fallback 保留，不能顺手迁移 Feishu/其他 IM。
 
 验收：
 
-- native delivery path 不调用 `openclaw message send`。
-- thread/reply target 来自 `deliveryContext` 或 inbound anchor。
+- Slack native delivery path 不调用 `openclaw message send`。
+- Slack thread/reply target 来自 `deliveryContext` 或 inbound anchor。
+- `OCTOCLAW_LEGACY_CLI_DELIVERY=1` 可以回滚。
+- native announce final 在 Slack 正常送达，且不会落回 completion file/outbox timeout。
 - delivery 失败由 native retry/fallback 或明确 port error 表达，不写 OctoClaw 自建 outbox。
 
 ### 16.7 Gate 瘦身落地规则
@@ -1431,8 +1465,10 @@ GLM-5.1 适合承担高 token、边界清楚的实现包：
 | PC8 native status projector | GLM-5.1，leader fallback review | `state/native-status-projector.ts` | runs/flows resolve，missing/corrupt 显示 degraded/lost |
 | PC9 ACK/footer guardrail | GLM-5.1，leader review ACK 边界 | `ack/*`、`projection-footer.ts` | delegate ACK 晚于 confirm，footer 默认 off |
 | PC10 integration/acceptance tests | leader 定义，GLM-5.1/便宜模型实现 | tests/harness only | no intent、expired、hash mismatch、missing runId、no completion file、no outbox |
-| PC11 legacy wheel removal | leader | 删除/归档旧 runtime 轮子 | planner 灰度通过后再做 |
+| PC11 legacy default-path removal | leader | finalizer/completion-binding/outbox 默认路径下线 | 0.5.0 Must+Should 稳定后做，rollback 可用 |
 | PC12 speed/responsiveness | leader 架构，GLM-5.1 补测试 | ACK、启动成本感知路由、planner/native 热路径、footer/status fast path | neutral ACK <=5s，spawn allowed <=30s，child final footer 不误标 reply |
+| PC13 Slack delivery port | leader，GLM/便宜模型可补 harness | Slack adapter/send path、Slack acceptance/report parser | Slack 热路径不 shell out CLI，non-Slack unchanged |
+| PC14 nightly regression harness | leader 定义案例，GLM/便宜模型实现 fixtures/parser | acceptance/nightly config、fixtures、report parser、docs evidence | route/latency/footer/timeout 指标可回归，可和 macmini runtime 并行 |
 
 ### 18.3 防跑偏规则
 
@@ -1454,6 +1490,9 @@ GLM-5.1 适合承担高 token、边界清楚的实现包：
 4. GLM-5.1 做 PC7、PC8、PC9，leader 只 review 语义边界。
 5. leader 拉通 PC12 速度专项：先恢复 neutral ACK，再改启动成本感知路由，最后瘦身 planner/native 热路径和 footer/status fast path。
 6. GLM-5.1/便宜模型补 PC10 测试矩阵和 PC12 latency/footer acceptance。
-7. planner allowlist 灰度通过后，leader 做 PC11 删除/归档 legacy runtime 轮子。
+7. 0.5.0 Must+Should 通过真实 Slack smoke 后，leader 做 PC11 legacy default-path removal。
+8. PC13 Slack delivery port 作为 0.5.x immediate 紧跟执行；只改 Slack，非 Slack 保持 fallback。
+9. PC14 nightly regression harness 可以和 macmini runtime 改动并行，但只允许改 fixtures/config/report parser/docs evidence。
+10. 非 Slack IM、direct SDK spawn、warm worker pool/A2A、managed flow 编排另起 future OpenSpec。
 
 这样能利用 GLM-5.1 的大 token 和实现能力，但把最容易出事故的执行真相、spawn 授权、ACK 时机和最终集成留给 leader。
