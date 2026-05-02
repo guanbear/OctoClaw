@@ -60,7 +60,8 @@ export function computePlanHash(args: SessionsSpawnArgs): string {
 export { computePlanHash as hashSessionsSpawnArgs };
 
 export function generateSpawnIntentId(): string {
-  const ts = Date.now().toString(36);
+  const now = Date.now();
+  const ts = now.toString(36);
   const rand = randomUUID().slice(0, 8).replace(/-/g, "");
-  return `nsp_${ts}_${rand}_${Date.now()}`;
+  return `nsp_${ts}_${rand}`;
 }
