@@ -736,6 +736,11 @@ describe("guardOutboundMessageForPolicyState", () => {
     try {
       const projection = await beforePromptBuild!(
         {
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:stale-provenance-child",
+            sourceTool: "subagent_announce",
+          },
           messages: [{
             role: "user",
             content: [{ type: "text", text: prompt }],
@@ -789,6 +794,11 @@ describe("guardOutboundMessageForPolicyState", () => {
 
       const duplicateProjection = await beforePromptBuild!(
         {
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:stale-provenance-child",
+            sourceTool: "subagent_announce",
+          },
           messages: [{
             role: "user",
             content: [{ type: "text", text: prompt }],

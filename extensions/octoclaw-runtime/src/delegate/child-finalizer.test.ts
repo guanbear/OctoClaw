@@ -570,6 +570,61 @@ describe("child completion finalizer — completion file protocol", () => {
     expect(progressMessages).toContain("任务超时。");
   });
 
+  it("scheduleChildCompletionFinalizer does not timeout after native announce materializes task-state without completion file", async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    process.env.OCTOCLAW_RUNTIME_LEDGER = "enforce";
+    const taskStatePath = path.join(tmpDir, "tmp", "octopus", "task-state.json");
+    fs.mkdirSync(path.dirname(taskStatePath), { recursive: true });
+    fs.writeFileSync(taskStatePath, JSON.stringify({
+      schemaVersion: "octoclaw.task_state.v1",
+      tasks: [{
+        id: "wc-native-announced",
+        workContractId: "wc-native-announced",
+        work_contract_id: "wc-native-announced",
+        route: "delegate",
+        sessionKey: "slack:channel:CNATIVE",
+        childSessionKey: "child-native-announced",
+        dispatchExecuted: true,
+        dispatch_executed: true,
+        spawnExecuted: true,
+        spawn_executed: true,
+        resultMaterialized: true,
+        result_materialized: true,
+        delivery_status: "delivered",
+        delivery: { status: "delivered" },
+        status: "running",
+      }],
+    }, null, 2), "utf-8");
+
+    const progressMessages: string[] = [];
+    registerCapturingSlackAdapter(progressMessages, (sessionKey) => sessionKey === "slack:channel:CNATIVE");
+
+    scheduleChildCompletionFinalizer({
+      taskStatePath,
+      childSessionKey: "child-native-announced",
+      delegateTaskId: "delegate-native-announced",
+      workContractId: "wc-native-announced",
+      parentSessionKey: "slack:channel:CNATIVE",
+      nativeTaskId: "native-announced",
+      timeoutMs: 30_000,
+      pollIntervalMs: 1_000,
+      initialDelayMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "wc-native-announced",
+      status: "running",
+      resultMaterialized: true,
+      delivery_status: "delivered",
+    });
+    expect(progressMessages).not.toContain("任务超时。");
+  });
+
   it("extends timeout while child session is still active and then delivers completion", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-30T14:50:00.000Z"));

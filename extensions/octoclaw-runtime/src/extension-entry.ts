@@ -478,9 +478,10 @@ function extractNativeAnnounceCompletion(event: UnknownRecord, prompt: string): 
   if (sourceTool !== "subagent_announce" && !text.includes("sourceTool=subagent_announce")) {
     return null;
   }
-  const sourceSessionKey = stringValue(provenance.sourceSessionKey || provenance.source_session_key)
-    || regexGroup(text, /\bsourceSession=([^\s]+)/u)
+  const sourceSessionFromPrompt = regexGroup(text, /\bsourceSession=([^\s]+)/u)
     || regexGroup(text, /\bsession_key:\s*([^\s]+)/u);
+  const sourceSessionKey = sourceSessionFromPrompt
+    || stringValue(provenance.sourceSessionKey || provenance.source_session_key);
   if (!sourceSessionKey) return null;
   const status = regexGroup(text, /\bstatus:\s*([^\n]+)/iu);
   const looksCompleted = /completed|success|succeed/i.test(status)

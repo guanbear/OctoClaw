@@ -603,7 +603,7 @@ export async function finalizeChildSessionOnce(
   if (!options.workContractId || !options.parentSessionKey) {
     return { status: "missing_identity", error: "missing workContractId or parentSessionKey" };
   }
-  if (isWorkContractCompletionMaterialized(options)) {
+  if (isCompletionAlreadyMaterialized(options) || isWorkContractCompletionMaterialized(options)) {
     return { status: "completed", sent: false };
   }
   const completion = readCompletionFile(options.workContractId);
@@ -722,7 +722,7 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
   let deadline = Date.now() + timeoutMs;
   const tick = async () => {
     try {
-      if (isWorkContractCompletionMaterialized(options)) {
+      if (isCompletionAlreadyMaterialized(options) || isWorkContractCompletionMaterialized(options)) {
         activeFinalizers.delete(key);
         return;
       }
@@ -733,7 +733,7 @@ export function scheduleChildCompletionFinalizer(options: ChildCompletionFinaliz
       }
       const nowMs = Date.now();
       if (nowMs >= deadline && result.error !== "completion_delivery_in_progress") {
-        if (isWorkContractCompletionMaterialized(options)) {
+        if (isCompletionAlreadyMaterialized(options) || isWorkContractCompletionMaterialized(options)) {
           activeFinalizers.delete(key);
           return;
         }
