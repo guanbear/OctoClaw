@@ -1,9 +1,5 @@
-import {
-  generateSpawnIntentId,
-  hashSessionsSpawnArgs,
-  type NativeSpawnIntent,
-  type SessionsSpawnArgs,
-} from "./native-spawn-intent.js";
+import type { NativeSpawnIntent, SessionsSpawnArgs } from "./native-spawn-intent.js";
+import { generateSpawnIntentId, hashSessionsSpawnArgs } from "./native-spawn-intent.js";
 
 export interface CreateIntentParams {
   workContractId: string;

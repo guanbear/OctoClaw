@@ -1,24 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
-/**
- * Canonical sessions_spawn arguments that OctoClaw will plan and the main agent will execute.
- * These are the fields that MUST be hashed for intent verification.
- */
 export interface SessionsSpawnArgs {
   task: string;
-  label?: string;
-  runtime?: string;
-  agentId?: string;
   model?: string;
-  thinking?: string;
-  runTimeoutSeconds?: number;
-  mode?: string;
-  cleanup?: string;
-  lightContext?: boolean;
-  cwd?: string;
-  sandbox?: string;
-  attachments?: Array<{ uri: string; title?: string }>;
-  thread?: boolean;
+  role?: string;
+  workspacePath?: string;
+  [key: string]: unknown;
 }
 
 export type NativeSpawnIntentStatus =
@@ -32,15 +19,14 @@ export interface NativeSpawnIntent {
   spawnIntentId: string;
   workContractId: string;
   sessionKey: string;
-  planHash: string;
-  status: NativeSpawnIntentStatus;
+  canonicalArgsHash: string;
   sessionsSpawnArgs: SessionsSpawnArgs;
-  createdAt: number;   // epoch ms
-  expiresAt: number;   // epoch ms
-  confirmedAt?: number;
-  openclawRunId?: string;
-  childSessionKey?: string;
-  error?: string;
+  status: NativeSpawnIntentStatus;
+  runId: string | null;
+  ttlMs: number;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
 }
 
 function deepSorted(value: unknown): unknown {
@@ -59,28 +45,17 @@ function deepSorted(value: unknown): unknown {
   return value;
 }
 
-/**
- * Deterministic JSON serialization of sessions_spawn args.
- * Keys are sorted recursively. Undefined values are omitted.
- */
 export function canonicalizeSessionsSpawnArgs(args: SessionsSpawnArgs): string {
   return JSON.stringify(deepSorted(args));
 }
 
-/**
- * Compute SHA-256 hash of canonicalized sessions_spawn args.
- * This hash is stored in the intent and used for args verification.
- */
-export function computePlanHash(args: SessionsSpawnArgs): string {
+export function hashSessionsSpawnArgs(args: SessionsSpawnArgs): string {
   const canonical = canonicalizeSessionsSpawnArgs(args);
   return createHash("sha256").update(canonical).digest("hex");
 }
 
-let intentCounter = 0;
-
-export function createSpawnIntentId(): string {
-  intentCounter += 1;
+export function generateSpawnIntentId(): string {
   const ts = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `nsp_${ts}_${rand}_${intentCounter}`;
+  const rand = randomBytes(4).toString("hex");
+  return `si_${ts}_${rand}`;
 }
