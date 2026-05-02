@@ -60,11 +60,11 @@
 
 这个事实包是 judge 的上下文，也是 runtime 授权的依据。它不是用户可见状态面板，也不应把 raw child transcript 注入主上下文。
 
-#### 4.1.1 RecentExecutionContext 与关系判定
+#### 4.1.1 RecentExecutionContext 与轻量 follow-up signal
 
 P1-3 的修复不应继续扩大 `META_PROMPT_PATTERNS` / `TASK_PROGRESS_PROMPT_PATTERNS`。关键词只能作为低置信 signal extraction，不能作为是否允许 dispatch 的最终依据。
 
-`conversation-grounding` 应先构造 `RecentExecutionContext`，至少包含：
+`conversation-grounding` / judge context 应构造 `RecentExecutionContext`，至少包含：
 
 | 字段 | 含义 |
 |------|------|
@@ -75,25 +75,23 @@ P1-3 的修复不应继续扩大 `META_PROMPT_PATTERNS` / `TASK_PROGRESS_PROMPT_
 | `latest_anomaly` | 最近异常原因，例如 `no_dispatch_evidence`、`spawn_not_confirmed`、`parent_session_busy`、`ledger_unavailable` |
 | `allowed_control_tools` | 可用于刷新事实的只读/控制面工具，例如 `octoclaw_status`、`octoclaw_task_action` |
 
-然后由一个轻量关系判定器输出 `relation_to_recent_execution`：
+然后给 judge / policy 一个轻量事实包，而不是要求 N1 实现完整 follow-up taxonomy。N1 只需要两个语义建议和一个硬门字段：
 
 ```text
-existing_execution_status_query
-existing_execution_failure_reason_query
-existing_execution_provenance_query
-existing_execution_amendment
-new_work
-ambiguous
+is_followup_to_recent_execution
+is_new_work
+expected_deliverable
 ```
 
 实现边界：
 
-1. 前三类统一映射到现有 `intent_class=execution_followup`、`route_hint=reply`、`lane_hint=control_observer`、`require_state_grounding=true`，继续复用现有 `policy-resolver` / `ticket` / `dispatch` 防线。
-2. `existing_execution_amendment` 进入 amendment protocol，判定 `steer_child | queue_after | cancel_and_respawn | reply_status_only`，不能直接当新独立任务派发。
-3. 只有 `new_work` 才允许继续申请 delegation ticket；且仍必须满足 `is_new_work=true`、`expected_deliverable` 非空、single-owner 未被破坏。
-4. `ambiguous` 不得直接 dispatch；应 clarify，或在有执行事实但关系不清时 reply 一个 state-grounded status/no-verifiable-record。
+1. `is_followup_to_recent_execution=true` 表示这轮更像在讨论最近执行，不应签发 ordinary dispatch ticket。
+2. `is_new_work=true` 只是 judge/policy proposal，不是授权。
+3. 只有非空 `expected_deliverable` 加有效 delegation ticket 才允许 ordinary dispatch；`route=delegate` 本身不能授权 dispatch。
+4. 如果最近有 delegated execution，但本轮没有 `expected_deliverable`，即使 judge 漏判 follow-up，也应拒绝 ordinary dispatch，转 reply/status refresh/no-verifiable-record。
+5. retry/cancel/amendment 走显式 task action，不通过 ordinary dispatch 伪装成新独立任务。
 
-这不是新增一条平行 route，而是把现有 `conversation-grounding -> policy-resolver -> ticket -> dispatch` 的第一层从关键词判断升级为“最近执行事实 + 当前 turn 关系”。
+这不是新增一条平行 route，也不是把 follow-up 分成 status/failure/provenance/amendment 大 taxonomy。稳定性来自“没有可验收交付物和 ticket 就不能产生副作用”。
 
 ### 4.2 Judge 输出结构
 
@@ -102,6 +100,7 @@ judge 仍然是主语义判断来源，但输出必须从“只给 route”升�
 ```json
 {
   "route": "reply | delegate",
+  "is_followup_to_recent_execution": false,
   "is_new_work": true,
   "needs_side_effect": true,
   "needs_fresh_state": false,
@@ -117,6 +116,7 @@ judge 仍然是主语义判断来源，但输出必须从“只给 route”升�
 关键点：
 
 - `route=delegate` 不等于允许 dispatch。
+- `is_followup_to_recent_execution=true` 应阻止 ordinary dispatch；需要操作时走显式 task action。
 - `is_new_work` 必须表示“需要创建新的执行单元”，不是“这句话提到了派发/状态/失败”。
 - `expected_deliverable` 必须可验收；没有交付物的 delegate 倾向应降级为 reply。
 - `complexity` 是 judge proposal，不是展示真相。
@@ -170,14 +170,12 @@ runtime 不做大词表语义分类，只做四个通用一致性校验：
 user follow-up
   -> resolve deliveryTarget/thread/session anchors
   -> build RecentExecutionContext from WorkContract/task-state/replay/runtime ledger
-  -> classify relation_to_recent_execution
-  -> if existing_execution_status_query / failure_reason_query / provenance_query:
-       map to existing execution_followup control-observer
-  -> build control-observer fact packet
-  -> main agent reply with facts or no-verifiable-record
+  -> judge proposes is_followup_to_recent_execution / is_new_work / expected_deliverable
+  -> runtime ticket dry-run enforces expected_deliverable + valid ticket
+  -> if no deliverable/ticket: reply with facts, status refresh, or no-verifiable-record
 ```
 
-这里可以有少量 deterministic hint，例如精确命令 `状态面板` / `八爪鱼状态` 直接展示面板；但自然语言追问不应靠包含词直接触发脚本，也不应创建新委派任务。稳定性来自“没有 `new_work` relation 就拿不到 delegation ticket”，而不是来自穷举“为什么没派发 / 怎么没 spawn / no_dispatch_evidence”这类短语。
+这里可以有少量 deterministic hint，例如精确命令 `状态面板` / `八爪鱼状态` 直接展示面板；但自然语言追问不应靠包含词直接触发脚本，也不应创建新委派任务。稳定性来自“没有可验收 `expected_deliverable` 和 ticket 就不能 dispatch”，而不是来自穷举“为什么没派发 / 怎么没 spawn / no_dispatch_evidence”这类短语。
 
 
 ### 4.6 2026-05-01 07:53 事件复盘要点

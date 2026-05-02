@@ -101,7 +101,7 @@ Acceptance tests:
 
 ---
 
-### P1-3: existing execution follow-up must not be solved by keyword patches
+### P1-3: follow-up dispatch safety uses light judge signal plus runtime hard gate
 
 Files:
 
@@ -113,41 +113,30 @@ Files:
 
 Current issue:
 
-The existing protection works only after a turn is already labeled `execution_followup` / `status_or_provenance`. The first layer still relies too much on regex-style prompt patterns, so natural short questions about dispatch failure may miss the follow-up lane.
-
-Do not fix this by adding more phrases such as "为啥没派发成功" or "why no spawn". That becomes an unbounded keyword wall.
+The existing protection works only after a turn is already labeled `execution_followup` / `status_or_provenance`. If a short natural-language follow-up is not labeled, judge may still propose `delegate`. Do not fix this by adding more phrases such as "为啥没派发成功" or "why no spawn"; that becomes an unbounded keyword wall.
 
 Required implementation:
 
-1. In `conversation-grounding`, build `RecentExecutionContext` first:
-   - recent WorkContract;
-   - task-state projection;
-   - runtime-policy-replay / task-events;
-   - runtime ledger row;
-   - dispatch/spawn/result/delivery receipts.
-2. Add `relation_to_recent_execution`:
-   - `existing_execution_status_query`;
-   - `existing_execution_failure_reason_query`;
-   - `existing_execution_provenance_query`;
-   - `existing_execution_amendment`;
-   - `new_work`;
-   - `ambiguous`.
-3. Map status / failure reason / provenance relations into the existing pipe:
-   - `intent_class=execution_followup`;
-   - `route_hint=reply`;
-   - `lane_hint=control_observer`;
-   - `require_state_grounding=true`;
-   - forbid `octoclaw_dispatch`, `octoclaw_spawn`, `sessions_spawn`.
-4. Route `existing_execution_amendment` into amendment protocol: `steer_child | queue_after | cancel_and_respawn | reply_status_only`.
-5. Only `new_work` can request a delegation ticket, and it still needs `is_new_work=true` plus a non-empty expected deliverable.
-6. `ambiguous` must not dispatch. Clarify, or reply with state-grounded status / no-verifiable-record.
+1. Judge may emit only light semantic signals for this problem:
+   - `is_followup_to_recent_execution: boolean`;
+   - `is_new_work: boolean`;
+   - `expected_deliverable: string | null`.
+2. These fields are advisory. Runtime dispatch authorization remains the source of truth.
+3. Ordinary dispatch may proceed only when the ticket dry-run/admission has:
+   - `ticket_decision=ticket_would_issue`;
+   - non-empty `expected_deliverable`;
+   - explicit new-work evidence such as `is_new_work=true`.
+4. If judge marks `is_followup_to_recent_execution=true`, ticket dry-run must return `ticket_not_issued` / `not_new_work`.
+5. If judge misses the follow-up but the current session/thread has a recent delegated execution and this turn has no `expected_deliverable`, dispatch must still be rejected.
+6. `route=delegate` by itself never authorizes dispatch.
+7. Do not implement a large taxonomy such as status/failure/provenance/amendment classes for N1. Amendment/retry/cancel can be promoted later through explicit task actions.
 
 Acceptance tests:
 
-- given `RecentExecutionContext.execution_verdict=no_dispatch_evidence`, a failure reason relation does not issue a ticket and does not dispatch;
-- given `spawn_not_confirmed`, status/provenance/failure relations reply from control-observer facts;
-- new independent work still routes to `new_work` even when there is recent execution in the thread;
-- dispatch hot path rejects non-`new_work` ticket candidates even if judge suggests `delegate`.
+- "为啥没派发成功呢", "刚才那个为什么没有 spawn", "no_dispatch_evidence 是啥意思", and "现在什么状态" do not create WorkContract / ticket / scheduler queue / attempt / spawn when they lack `expected_deliverable`;
+- if judge returns `is_followup_to_recent_execution=true`, ticket dry-run returns `ticket_not_issued`;
+- if judge returns `route=delegate` but omits `expected_deliverable`, dispatch is rejected;
+- new independent work with `is_new_work=true` and non-empty `expected_deliverable` can still issue a ticket and dispatch.
 
 ---
 
@@ -222,13 +211,13 @@ Acceptance tests:
 |------|--------|-------|
 | P1-1 | ✅ completed | `trySpawnSubagentRuntime` resolves preferred → metadata → new UUID; `sessionReused`/`sessionReuseReason` in spawn evidence |
 | P1-2 | ✅ completed | Scheduler gating in enforce mode: `tryAcquireLease` before spawn, `releaseOrComplete` on terminal; ticket auth via `admitDelegationTicketForDispatch` |
-| P1-3 | ✅ completed (metadata-only) | `RecentExecutionContext` + `relation_to_recent_execution` added to intent packet as metadata; full classification gating deferred (needs careful test impact analysis) |
+| P1-3 | ⚠️ needs follow-up | Replace metadata-only relation gating with light judge signals (`is_followup_to_recent_execution`, `is_new_work`, `expected_deliverable`) plus runtime ticket hard gate |
 | P1-4 | ✅ completed | Real retry creates `task_attempts` row with `attempt_kind=retry`, new `scheduler_queue` entry, new delegation ticket; stop/approve/reject hidden |
 | P1-5 | ✅ completed | `readTaskStateDocumentDetailed()` returns typed status; `writeTaskStateDocumentSafe()` quarantines corrupt files with `.corrupt` suffix |
 | NEW: WorkContract store ledger migration | ✅ completed | `loadWorkContract()` falls back to ledger in enforce mode; `loadWorkContractFromLedger()` exported; `listWorkContractsBySession()` also falls back |
 | NEW: Crash recovery operator tool | ✅ completed | `octoclaw_crash_recovery` tool registered; guarded by runtime ledger mode check |
 
-Deferred from P1-3: full `relation_to_recent_execution` classification gating (changing routing based on execution context) requires careful test impact analysis across all 40 policy-resolver tests. Currently attached as metadata only.
+P1-3 should not grow into a full follow-up taxonomy. The required N1 fix is the simpler hard gate: no ordinary dispatch without a ticket candidate and a non-empty expected deliverable, especially after recent delegated execution.
 
 ---
 
