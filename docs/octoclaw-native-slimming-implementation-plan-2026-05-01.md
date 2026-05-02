@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | Must ship | `sessions_spawn planner/confirm` 主链、NativeSpawnIntent gate、`octoclaw_dispatch_confirm`、delegate ACK 时序、源码/部署一致、核心回归测试、真实 Slack smoke、OpenSpec 同步 | planner allowlist 内真实 Slack delegate 能完成 `dispatch -> sessions_spawn -> confirm -> ACK`，无 `invalid_status:planned`，无提前“已委派”，重启/重复 confirm 不制造假状态 |
 | Should ship | ACK/footer/judge 的必要瘦身、runtime-ledger 职责收缩、status/provenance follow-up 禁止 spawn、planner path 下关闭 completion file/finalizer/outbox、native status projector 初版 | 用户可见噪声明显降低，状态回答不重新 spawn，planner path 不依赖 completion file，SQLite 只做 metadata/audit |
-| Deferred | 完整删除 legacy scheduler/finalizer/outbox、全量 IM delivery port 替换 CLI、非 Slack IM 适配、future plugin SDK direct spawn、managed flow 编排增强 | 进入 0.5.x/0.6.0，必须单独 OpenSpec 和验收，不作为 0.5.0 阻塞项 |
+| Deferred | 完整删除 legacy scheduler/finalizer/outbox、全量 IM delivery port 替换 CLI、非 Slack IM 适配、managed flow 编排增强；direct SDK spawn / warm worker pool 仅保留为远期调研，不进入 0.5.0 任务 | 进入 0.5.x/0.6.0，必须单独 OpenSpec 和验收，不作为 0.5.0 阻塞项 |
 
 远端 Codex/opencode 接手时应先建立这个 master task board，然后按 slice 推进。当前真实 Slack smoke handoff 只覆盖 Must ship 的 P0/P1：证明 native `sessions_spawn` 是否命中 OctoClaw `before_tool_call` gate，并修复 `invalid_status:planned`。P0/P1 通过后，再继续做 ACK/footer/judge、legacy 降级和 metadata/status 收口。
 
@@ -54,11 +54,103 @@
 ### 1.3 成功指标
 
 - Slack/IM ACK：配置允许时 reaction ACK p95 < 300ms；慢文本 ACK 每个 turn 最多 1 条。
+- 中性首 ACK：Slack 收到消息后 1-5s 内发出 reaction 或短文本；文案只能表达“收到/正在判断”，不能表达“已委派/已启动”。
+- main fast path：短任务、简单查证、状态/来源追问默认不走 delegate；真实 Slack smoke 中 false delegate 明显下降。
 - delegate ACK：必须包含原生 accepted + confirm 事实，`sessions_spawn` accepted 到 confirm/用户 ACK p95 < 1s。
+- planner 启动延迟：delegate route commit 到 `sessions_spawn_intent_allowed` p95 < 30s 作为 0.5.0 诊断目标，不再承诺所有子 agent 从用户消息到启动小于 10s。
+- child 启动延迟：只记录 `sessions_spawn accepted -> child visible progress/first tool/final` 指标；不把 p95 <= 10s 作为 0.5.0 验收门槛。
 - spawn evidence：delegate 成功时必须有 `runId` 或 OpenClaw native task/run id；只有 `childSessionKey` 不算强证据。
 - duplicate visible messages：正常 delegate 流程中重复 ACK/完成通知为 0。
 - restart recovery：OpenClaw 重启后仍可通过 native runs/flows 查到 active/recent child run。
 - footer：生产默认无 route/model/footer 暴露。
+
+### 1.4 速度与响应性专项 P0-P2（0.5.0 现实版）
+
+本专项用于修复 0.5.0 planner/native path 的体验回退。2026-05-02 macmini 真实 Slack smoke 暴露了一个关键事实：planner/native spawn 本身可以通过，但用户直到约 90s 才看到“任务已启动”。其中 SQLite intent 从创建到 accepted 约 19s，真正慢点主要在 parent embedded run 启动、工具 bundle、system prompt、stream setup、模型首轮决策，以及 child embedded run 的完整启动。SQLite 不是 90s 的主因，但可以作为 footer/status/native refs 和延迟观测的快路径来优化稳定性。
+
+因此 0.5.0 不再承诺“委派一定更快”或“子 agent 从用户消息到启动稳定小于 10s”。新的产品口径是：**短任务更快，长任务不堵；少误委派，而不是少做 OctoClaw**。OpenSpec 中只保留 `SR-P0` 到 `SR-P2` 三个速度专项：P0 恢复中性首 ACK，P1 调整委派规则，P2 瘦身 planner/native 热路径并补齐观测。原先设想的 direct SDK spawn、warm worker pool、未暴露工具 allowlist、child start p95 <= 10s 都不进入 0.5.0 验收。
+
+#### SR-P0：恢复中性首 ACK
+
+目标：恢复旧 OctoClaw “马上有反应”的体验，但不恢复旧实现里可能提前声称已委派的语义。
+
+实现口径：
+
+- 新增或修复 `neutral inbound ack`，从原始 Slack event 的 `channel/message.ts/thread_ts`、或规范化 session target 直接发出。
+- 不依赖 route commit、judge、policy state、`sessions_spawn` 或 `octoclaw_dispatch_confirm`。
+- 文案只允许表达“收到，正在判断并准备处理。”；不能出现“已委派”“任务已启动”“子 agent 已在处理”。
+- 如果 reaction 成功，默认不再发文本首 ACK；reaction 失败且配置允许时，才发短文本 fallback。
+- 修复 `maybeSendLatencyAck: suppressed due to no valid thread target`：首 ACK 的 target resolution 必须以 inbound anchor 为 truth，而不是从后续 policy state 推断。
+- `任务已启动。` 仍只允许在 native `sessions_spawn` accepted 且 `octoclaw_dispatch_confirm` 成功后发送。
+
+验收：
+
+- Slack 真实 smoke 中 neutral ACK p95 <= 5s。
+- spawn 失败、gate 阻止、judge 降级时不出现“已委派/任务已启动”。
+- 同一 turn 不重复发 reaction + 文本 + route commit ACK。
+- 线程 target 缺失时 fail closed 并写 replay，不向 channel root 误发。
+
+#### SR-P1：启动成本感知的委派规则
+
+目标：把 delegate 从“默认更快”改成“只在长任务、并行、上下文隔离、成本分层有明确收益时使用”。短任务、轻量查证、状态/来源追问默认走 main fast path。但这不是把阈值整体调高，更不是让系统“不敢委派”；规则必须同时防 false delegate 和 false reply。
+
+三段式决策口径：
+
+- `must_reply/main_fast_path`：简单回答、状态/来源追问、澄清问题、单步只读查证、当前上下文可直接完成的任务。
+- `must_delegate`：用户明确要求后台/子 agent/并行、代码修改/测试/构建、长命令、多步工具链、大量上下文阅读、review/验证、预计 90-120 秒以上。
+- `budgeted_main_then_delegate`：无法高置信判断时，主 agent 先在预算内尝试；超过 20-30 秒、超过 1-2 次只读工具、需要写操作或长命令时再转 delegate。
+
+实现口径：
+
+- `duration_hint=short` 且 `tool_need_hint=none|maybe` 时，默认 `reply`，除非用户明确要求后台/子 agent 或 WorkContract admission 有硬证据。
+- `fresh_live_lookup` 不再自动 delegate；先允许 main fast path 做一次轻量只读查证，预算超限再转 delegate。
+- `conversation route_hint=delegate` 不能单独强制 delegate；必须同时满足 long duration、required tools、code/test/edit、explicit delegate、或多步/并行收益。
+- `fast_first_response` 不再作为 delegate reason code；delegate reason 应收敛为 `background_execution`、`context_hygiene`、`parallelism`、`cost_tiering`、`specialized_tools`、`quality_isolation`。
+- status/provenance/execution follow-up 一律不 spawn；优先 native state、replay、WorkContract refs，缺证据则诚实回复无可验证记录。
+- rule、local judge、cheap LLM judge、route hint、AGENTS.md/prompt 注入必须同步改；不能只改某一层，否则会出现 local 判 main fast path、LLM 或 prompt 又因 `fresh_live_lookup` 拉回 delegate 的抖动。
+- local/cheap judge 输出不能只有 `reply/delegate`，还必须带 `startup_cost_policy`、`duration_hint`、`tool_need_hint`、`decision_bucket`、`reason_codes`，便于 replay 和 false-route 复盘。
+
+验收：
+
+- 简单解释、简单查版本/状态、来源追问、单步轻量查证不触发 `octoclaw_dispatch`。
+- route replay 记录 `startup_cost_policy` 或等价字段，说明为什么 main fast path 或 delegate。
+- false delegate rate 在 nightly/Slack smoke 中可观测并下降。
+- false reply rate 同样必须可观测；明确长任务、代码/测试、多步工具、用户显式后台/并行不能被 main fast path 吃掉。
+- 主模型仍可在超过 fast path 预算后提交 route hint/dispatch，不被静态规则卡死。
+
+#### SR-P2：瘦身 planner/native 热路径和观测
+
+目标：减少主 agent 从用户消息到 `sessions_spawn` 的模型/工具回合，把真实 delegate 的 route commit 到 `sessions_spawn_intent_allowed` 控制在 30s 内；同时只用 OpenClaw 4.29 已确认存在的能力降低 child run 成本，并把状态、footer、native refs 和延迟观测做成轻量快路径。
+
+实现口径：
+
+- 将 planner path 的 `octoclaw_policy_decide -> octoclaw_dispatch` 合并为更直接的 planner tool（例如 `octoclaw_plan_native_spawn`），或让 `octoclaw_dispatch` 在已有 decision 时直接返回 `NativeSpawnIntent + sessionsSpawnArgs`。
+- local judge 高置信 delegate 且 admission 通过时，system instruction 要求主 agent 直接调用 `sessions_spawn`，不要先解释、总结或二次规划。
+- `sessionsSpawnArgs` 必须小：只包含 `task/label/runtime/model/thinking/cwd/runTimeoutSeconds/mode/cleanup/sandbox/lightContext` 等 OpenClaw 原生允许字段，不传 `target/channel/to/threadId/replyTo/transport`。
+- planner path 默认传 `sessionsSpawnArgs.lightContext=true`；child prompt 只保留任务、上下文摘要、验收标准、交付格式和必要 guardrail，不塞 parent 长上下文或 raw transcript。
+- child 默认使用快/便宜模型，复杂任务再按 complexity/model policy 升级；`thinking` 默认关闭或低档，`runTimeoutSeconds` 按 expected duration 设置。
+- 如果当前 OpenClaw 不支持通过 `sessions_spawn` 限制工具面，不在 0.5.0 自造 private hook；只记录为上游 wishlist。
+- SQLite 保留为 metadata/audit store，并把 accepted native refs、WorkContract projection、spawn intent transition 放到 indexed lookup 路径。
+- NativeSpawnIntent 状态转换改为原子 SQL：`UPDATE ... WHERE status=? AND args_hash=? RETURNING ...`，减少 read-modify-write race。
+- `openRuntimeLedger()` 的 migration/PRAGMA 应只在进程启动或连接创建时执行；热路径避免每次 open/close 都重复初始化。
+- SQLite lock 等待要有 retry/backoff/replay 指标；`SQLITE_BUSY` 不得被误判为 no task/no spawn。
+- footer route 优先 accepted native refs / child result provenance / `childSessionKey/runId`，不能被 child announce 后 parent 的新 `route=reply` 覆盖成 `reply`。
+- Slack smoke 必须记录 neutral ACK、policy/judge、dispatch intent、spawn allowed、accepted confirm、child final、footer provenance 的分段时间。
+- hard confirm 不变：只能 `planned -> spawn_call_started -> accepted`；不能为了速度允许 `planned -> accepted`。
+
+验收：
+
+- route commit 到 `sessions_spawn_intent_allowed` p95 <= 30s。
+- `octoclaw_dispatch`/planner tool 不直接 spawn、不发 delegate accepted ACK、不写 legacy scheduler/completion/outbox。
+- 真实 Slack smoke replay 中能看到 `suppressed_until_native_confirm -> sessions_spawn_intent_allowed -> spawn_started`。
+- `sessionsSpawnArgs` 中稳定包含 `lightContext=true`，且 child prompt 长度有上限。
+- cheap model/fast profile 的选择写入 WorkContract/native refs，便于复盘成本。
+- child 启动指标只做观测，不作为 0.5.0 阻塞目标；优化不能牺牲 confirm correctness。
+- native child final footer 在 debug 模式显示 `route=delegate`，`via=subagent` 或 `via=native_announce`。
+- status/provenance follow-up 不触发新的 spawn。
+- SQLite lock/retry 有 replay 事件；锁等待不会导致 confirm 成功但 native refs 丢失。
+- 删除或损坏 `task-state.json` 后，已 accepted native task 仍可查到 status/footer provenance。
+- 真实 Slack smoke 报告能区分 main fast path、delegate planner、child execution 三段耗时。
 
 ## 2. OpenClaw v2026.4.29 源码能力图谱
 
@@ -797,6 +889,18 @@ delegate route 不发 reply-style slow ACK。delegate 的可见 ACK 等 `session
 
 目标：footer 不再承担路由解释、状态证明、ACK 或可见性控制。
 
+### 9.1 已复现的 native announce footer 误判
+
+2026-05-02 macmini 真实 Slack planner smoke 已复现：planner/native spawn 成功，SQLite `native_spawn_intents` 和 WorkContract 都有 accepted native refs，但最终 Slack footer 仍显示 `route=reply | ... | via=policy`。这不是 spawn 没成功，而是 native child 完成后 OpenClaw 通过 `subagent_announce` 把结果送回 parent session，parent 再发用户可见最终回复；这个 parent delivery turn 会重新走一轮 reply route，当前 footer 只看最新 parent policy route，于是把“由子 agent 产出的最终交付”误标成 `reply`。
+
+修复原则：
+
+- footer 是 projection，不是执行 truth；但 debug footer 不能和已确认 native refs 矛盾。
+- 对同一 parent thread，只要存在 accepted `NativeSpawnIntent`、WorkContract `nativeSpawnRefs.openclawRunId`、`childSessionKey`、或 OpenClaw `subagent_announce` provenance，最终可见回复应投影为 `route=delegate`。
+- `via` 应显示 `subagent` 或 `native_announce`；如果只是普通 direct reply，才显示 `reply/policy/judge`。
+- 最新 parent turn 的 `route=reply` 只能说明“parent 正在把 child result 改写成交付回复”，不能覆盖原任务的 delegate provenance。
+- 缺失 native refs 或无法绑定到同一 thread 时，footer 可以保守显示 `reply`，但必须写 debug/replay reason，避免静默误判。
+
 实现：
 
 - `OCTOCLAW_PROJECTION_FOOTER_MODE=off` 为默认。
@@ -804,11 +908,16 @@ delegate route 不发 reply-style slow ACK。delegate 的可见 ACK 等 `session
 - `debug` 显示 `via/workContractId/native ids/judge source`。
 - `renderSlackProjectionFooter()` 保留去重，但受 mode 控制。
 - `before_message_write` fallback footer 默认禁用。
+- `appendReplyProjectionFooter()` 或其 successor 在计算 route 前，先用 thread/session/workContractId 查 accepted native refs 和 child announce provenance。
+- footer route 优先级：`accepted native refs / child announce provenance` > `WorkContract route` > `current policy route_decision` > fallback `reply`。
+- debug 模式至少展示短 `workContractId`、`runId` 或 `childSessionKey` 的短 id，便于从 Slack 验收反查 SQLite/WorkContract。
 
 验收：
 
 - 默认 Slack 最终回复没有 `route=... | model=...`。
 - debug 模式能显示 route/model/native refs。
+- native child final 在 debug 模式显示 `route=delegate | ... | via=subagent` 或 `via=native_announce`，不能显示 `route=reply | via=policy`。
+- 同一 thread 后续普通追问如果不是 child result delivery，可以显示 `route=reply`，但不得污染上一次 child final 的 footer。
 - ACK、NO_REPLY、delegate accepted ACK 不追加 footer。
 
 ## 10. Phase 5：Judge 简化为 router/admission signal
@@ -874,43 +983,82 @@ admission 规则：
 
 ### 10.3 委派判定规则和主线程预算
 
+0.5.0 的路由目标从“尽量委派”改成“短任务 main fast path，长任务 delegate 不堵”。委派规则必须显式计入 native spawn 冷启动成本：如果一个任务主 agent 20-30 秒内能用当前上下文或一次轻量只读工具完成，delegate 反而会伤害体验。
+
+这个优化不能实现成“保守到几乎不委派”。正确形态是三段式：
+
+- `must_reply/main_fast_path`：当前上下文或一次轻量只读工具可完成，且无写操作、无长命令、无多步研究。
+- `must_delegate`：有硬委派信号，例如用户明确要求子 agent/后台/并行、代码修改/测试/构建、多步工具、大量上下文阅读、review/验证、预计 90-120 秒以上。
+- `budgeted_main_then_delegate`：中间地带先让主 agent 在预算内尝试；预算超限或出现写操作/长命令/第二轮以上真实工具，就转 `octoclaw_dispatch`。
+
+rule、local judge、cheap LLM judge 和 prompt 注入必须统一这套三段式语义；只改 rule 或只改 prompt 都会导致路由抖动。尤其是 `fresh_live_lookup`、`conversation_control.route_hint=delegate`、`fast_first_response` 这些旧信号需要降级，但不能覆盖 `must_delegate` 硬信号。
+
 默认主 agent 处理：
 
 - 当前上下文能直接回答。
-- 简单解释、总结、翻译、改写。
-- 状态/来源/“刚才发生了什么”能从 native state 或 replay 回答。
+- 简单解释、总结、翻译、改写、判断。
+- 状态/来源/“刚才发生了什么”能从 native state、WorkContract refs、SQLite/replay 回答。
 - 需要澄清 scope、目标、验收标准。
-- 预计小于 10-15 秒，且不需要真实 workspace/environment 工具。
+- 简单版本/状态/配置查询，且可以用一次只读工具或 native status 完成。
+- `fresh_live_lookup` 但目标明确、结果短、预计 20-30 秒内能完成。
+- `duration_hint=short` 且 `tool_need_hint=none|maybe`。
 
 默认委派子 agent：
 
-- 预计超过 60 秒。
-- 需要命令执行、文件读写、代码修改、测试、日志排查、环境探测。
+- 预计超过 90-120 秒，或者用户明确接受后台等待。
+- 需要代码/文件修改、测试、构建、日志排查、环境探测、长时间命令。
 - 需要多步工具链，或者真实工具调用可能超过 1-2 次。
 - 需要大量上下文阅读，容易污染主 agent 上下文。
-- 可以并行处理。
-- 用户明确要求后台、子 agent、并行、不要阻塞。
-- fresh lookup 但主上下文没有可靠现成事实。
+- 可以并行处理，或可拆分给多个 worker。
+- 用户明确要求后台、子 agent、并行、不要阻塞、用便宜模型。
+- quality/risk 要求隔离执行，例如 review、验证、回归测试。
 
 中间地带用预算控制：
 
 ```text
 main_fast_path:
-  maxWallMs: 10000-15000
-  maxToolCalls: 1
+  maxWallMs: 20000-30000
+  maxToolCalls: 1-2
   allowReadOnlyNativeStatus: true
-  allowWorkspaceProbe: false
+  allowOneFreshLookup: true
+  allowWorkspaceProbe: read-only only
+  forbidMutation: true
 ```
 
-超过预算或需要第二个真实工具，就转 delegate。这个规则比继续堆自然语言关键词 gate 更稳定。
+超过预算、需要第二轮以上真实工具、或出现写操作/长命令/测试，就转 delegate。这个规则比继续堆自然语言关键词 gate 更稳定。
+
+需要降级的旧规则：
+
+- `fresh_live_lookup -> delegate` 不再是硬规则；改成 main fast path first。
+- `conversation_control.route_hint=delegate` 不能单独强制 delegate；必须同时有 long duration、required tools、explicit delegate、code/test/edit、并行收益等硬信号。
+- `fast_first_response` 不再作为 delegate reason code；现在 delegate 不保证更快，只保证不堵主 agent、隔离上下文、可并行、可降成本。
+- status/provenance/execution follow-up 永不 spawn；缺证据时诚实回答“没有可验证记录”。
+
+judge 输出要求：
+
+- `decision_bucket`: `must_reply`、`must_delegate`、`budgeted_main_then_delegate` 之一。
+- `startup_cost_policy`: 说明是否允许 main fast path、预算、转委派条件。
+- `duration_hint`、`tool_need_hint`、`reason_codes`: 作为 route replay 和验收依据。
+- `hard_delegate_signal`: 记录用户显式后台/并行、代码/测试、多步工具等不能被 main fast path 覆盖的信号。
+
+验收：
+
+- 简单查版本/状态、单步查证、来源追问不进入 `octoclaw_dispatch`。
+- 用户显式要求后台/子 agent、代码修改/测试、多步工具、review/验证仍进入 delegate；新增 false-reply fixture 防止调过头。
+- route replay 记录 main fast path 预算和是否超限。
+- false delegate rate 在 nightly/Slack smoke 中可见并下降。
+- false reply rate 在 nightly/Slack smoke 中可见且不能上升到影响长任务体验。
+- 主模型仍可在预算超限后用 route hint/dispatch 转委派。
 
 ### 10.4 AGENTS.md / prompt 注入
 
 AGENTS.md 或 system prompt 注入只放短规则，不放完整 judge rubric：
 
 ```text
-直接回答能在当前上下文内完成的问题。
-如果需要长时间工具执行、代码/文件/环境操作、测试、研究或多步验证，使用 octoclaw_dispatch 委派。
+优先直接回答当前上下文能完成的问题。
+短任务、简单查证、状态/来源追问默认由主 agent 处理；不要为了查状态或来源启动子 agent。
+如果一次轻量只读工具或 native status 能在 20-30 秒内完成，可以走主线程 fast path。
+如果需要长时间工具执行、代码/文件/环境操作、测试、研究、多步验证、并行处理，使用 octoclaw_dispatch 委派。
 不要直接调用 sessions_spawn 绕过 OctoClaw policy。
 不要声称已委派，除非 `octoclaw_dispatch_confirm` 已确认原生 `sessions_spawn` 返回 accepted/runId。
 状态/来源问题优先用 octoclaw_status/native state 回答，不要重新 spawn。
@@ -1031,13 +1179,13 @@ planner path 稳定后，按顺序禁用/删除：
 
 0.5.0 不应按“把所有瘦身项一次性做完”的方式发布，而应按 gate 可验证的 slice 发布。推荐顺序：
 
-1. P0 source/deploy guardrail：确认源码、deployed `dist`、OpenSpec 一致；先修会制造假事实的 bug。
-2. P1 planner/confirm 主链：灰度开启 `OCTOCLAW_SPAWN_BACKEND=planner`，跑通真实 Slack `dispatch -> sessions_spawn -> confirm -> ACK`。
-3. P2 ACK/footer/judge 必要瘦身：footer 默认 off，delegate ACK 只在 confirm 后发，judge 只做 router/admission signal，不重写 judge 主体。
-4. P3 metadata/status 收口：SQLite 保留为 metadata/audit store，状态投影逐步以 native runs/flows 为 execution truth。
-5. P4 planner path legacy 降级：planner allowlist 内关闭 completion file、child-finalizer、delivery outbox；legacy backend 保留回滚。
-6. P5 native delivery port：替换 Slack CLI/outbox 热路径；如果 native port 不足，保留 legacy fallback。
-7. P6 legacy 删除：只有在真实 Slack 验收和回滚窗口都通过后，才删除 scheduler/finalizer/outbox 代码。
+1. Slice 0 source/deploy guardrail：确认源码、deployed `dist`、OpenSpec 一致；先修会制造假事实的 bug。
+2. Slice 1 planner/confirm 主链：灰度开启 `OCTOCLAW_SPAWN_BACKEND=planner`，跑通真实 Slack `dispatch -> sessions_spawn -> confirm -> ACK`。
+3. Slice 2 ACK/footer/judge 必要瘦身：footer 默认 off，delegate ACK 只在 confirm 后发，judge 只做 router/admission signal，不重写 judge 主体。
+4. Slice 3 metadata/status 收口：SQLite 保留为 metadata/audit store，状态投影逐步以 native runs/flows 为 execution truth。
+5. Slice 4 planner path legacy 降级：planner allowlist 内关闭 completion file、child-finalizer、delivery outbox；legacy backend 保留回滚。
+6. Slice 5 native delivery port：替换 Slack CLI/outbox 热路径；如果 native port 不足，保留 legacy fallback。
+7. Slice 6 legacy 删除：只有在真实 Slack 验收和回滚窗口都通过后，才删除 scheduler/finalizer/outbox 代码。
 
 每个 slice 都必须有：OpenSpec 任务状态、focused tests、真实 Slack 验收记录、回滚开关。
 
@@ -1156,18 +1304,23 @@ planner path 稳定后，按顺序禁用/删除：
 
 改动：
 
+- 恢复中性首 ACK：Slack inbound 后 1-5s 内发 reaction 或短文本，只表达“收到/正在判断”，不表达“已委派/已启动”。
+- 首 ACK target resolution 必须使用原始 inbound anchor（Slack `channel/message.ts/thread_ts`），不能依赖 route commit 后的 policy state。
 - `OCTOCLAW_NATIVE_ACK_REACTION_MODE=auto|explicit|off`。
 - `OCTOCLAW_TEXT_ACK_DELAY_MS=2500`。
 - `OCTOCLAW_PROJECTION_FOOTER_MODE=off|compact|debug`，默认 `off`。
 - route commit ACK 不再说“准备派发”；delegate accepted ACK 只在 `sessions_spawn` accepted + confirm 后发送。
 - footer renderer 只在 final visible reply 且 mode 非 off 时运行；ACK、NO_REPLY、delegate accepted/progress 都不追加。
+- footer route 在 debug 模式下优先使用 accepted native refs / child announce provenance；不能被 child announce 后 parent 新一轮 `route=reply` 覆盖。
 
 验收：
 
+- neutral 首 ACK p95 <= 5s，且不承诺委派成功。
 - 快速 reply 无文本 ACK。
 - 慢 reply 最多一条文本 ACK。
 - delegate accepted ACK 晚于 `sessions_spawn` accepted + confirm。
 - 默认 Slack 消息没有 route/model/footer。
+- debug footer 对 native child final 显示 `route=delegate` 和 `via=subagent` 或 `via=native_announce`。
 - Slack tool-only 群里，auto ack 被 OpenClaw gate 压掉时，explicit reaction 能用原始 `channel/message.ts` anchor 补上。
 
 ### 16.6 IM delivery port 包
@@ -1279,6 +1432,7 @@ GLM-5.1 适合承担高 token、边界清楚的实现包：
 | PC9 ACK/footer guardrail | GLM-5.1，leader review ACK 边界 | `ack/*`、`projection-footer.ts` | delegate ACK 晚于 confirm，footer 默认 off |
 | PC10 integration/acceptance tests | leader 定义，GLM-5.1/便宜模型实现 | tests/harness only | no intent、expired、hash mismatch、missing runId、no completion file、no outbox |
 | PC11 legacy wheel removal | leader | 删除/归档旧 runtime 轮子 | planner 灰度通过后再做 |
+| PC12 speed/responsiveness | leader 架构，GLM-5.1 补测试 | ACK、启动成本感知路由、planner/native 热路径、footer/status fast path | neutral ACK <=5s，spawn allowed <=30s，child final footer 不误标 reply |
 
 ### 18.3 防跑偏规则
 
@@ -1298,7 +1452,8 @@ GLM-5.1 适合承担高 token、边界清楚的实现包：
 2. GLM-5.1 并行做 PC1、PC2、PC6 的纯模块部分。
 3. leader 做 PC3、PC4、PC5，把热路径连起来。
 4. GLM-5.1 做 PC7、PC8、PC9，leader 只 review 语义边界。
-5. GLM-5.1/便宜模型补 PC10 测试矩阵。
-6. planner allowlist 灰度通过后，leader 做 PC11 删除/归档 legacy runtime 轮子。
+5. leader 拉通 PC12 速度专项：先恢复 neutral ACK，再改启动成本感知路由，最后瘦身 planner/native 热路径和 footer/status fast path。
+6. GLM-5.1/便宜模型补 PC10 测试矩阵和 PC12 latency/footer acceptance。
+7. planner allowlist 灰度通过后，leader 做 PC11 删除/归档 legacy runtime 轮子。
 
 这样能利用 GLM-5.1 的大 token 和实现能力，但把最容易出事故的执行真相、spawn 授权、ACK 时机和最终集成留给 leader。
