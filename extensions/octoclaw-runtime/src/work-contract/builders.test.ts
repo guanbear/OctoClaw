@@ -66,7 +66,13 @@ describe("work contract builders", () => {
     );
 
     expect(contract.schemaVersion).toBe("octoclaw.work_contract.v1");
-    expect(contract.workContractId).toBe(stableId("wc", ["session-1", "Summarize the current task status"]));
+    expect(contract.workContractId).toBe(stableId("wc", [
+      "session-1",
+      "Summarize the current task status",
+      "turn-1",
+      "",
+      seal.sealedAt,
+    ]));
     expect(contract.turnId).toBe("turn-1");
     expect(contract.status).toBe("sealed");
     expect(contract.route).toBe("reply");
@@ -90,6 +96,34 @@ describe("work contract builders", () => {
     });
     expect(contract.createdAt).toBe(now.toISOString());
     expect(contract.updatedAt).toBe(now.toISOString());
+  });
+
+  it("buildWorkContractFromPolicy includes turn entropy to avoid same-prompt id collisions", () => {
+    const seal = buildWorkDecisionSeal("local_judge", "delegate", ["needs_execution"], {
+      routeSealId: "route-seal-collision",
+    });
+    const first = buildWorkContractFromPolicy("session-same", "repeat prompt", "delegated_work", coverage, seal, {
+      turnId: "turn-a",
+    });
+    const second = buildWorkContractFromPolicy("session-same", "repeat prompt", "delegated_work", coverage, seal, {
+      turnId: "turn-b",
+    });
+
+    expect(first.workContractId).not.toBe(second.workContractId);
+    expect(first.workContractId).toBe(stableId("wc", [
+      "session-same",
+      "repeat prompt",
+      "turn-a",
+      "route-seal-collision",
+      seal.sealedAt,
+    ]));
+    expect(second.workContractId).toBe(stableId("wc", [
+      "session-same",
+      "repeat prompt",
+      "turn-b",
+      "route-seal-collision",
+      seal.sealedAt,
+    ]));
   });
 
   it("buildWorkContractFromPolicy applies overrides for delegate contract", () => {

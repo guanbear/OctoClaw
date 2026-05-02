@@ -11,6 +11,7 @@ import type {
   WorkDecisionSource,
   WorkRoute,
 } from "@octoclaw/contracts/work-contract";
+import { randomUUID } from "node:crypto";
 import { stableId } from "../resolve/env.js";
 
 export interface BuildWorkDecisionSealOptions {
@@ -57,9 +58,15 @@ export function buildWorkContractFromPolicy(
   options: BuildWorkContractFromPolicyOptions = {},
 ): WorkContract {
   const now = new Date().toISOString();
-  const workContractId = stableId("wc", [sessionKey, userAsk]);
-  const turnId = options.turnId || stableId("turn", [sessionKey, String(Date.now())]);
   const decision: WorkDecisionSeal = { ...decisionSeal, ...options.decisionOverrides };
+  const turnId = options.turnId || stableId("turn", [sessionKey, userAsk, now, randomUUID()]);
+  const workContractId = stableId("wc", [
+    sessionKey,
+    userAsk,
+    turnId,
+    decision.routeSealId || "",
+    decision.sealedAt || now,
+  ]);
 
   const mainContext: MainContextPacket = {
     summary: userAsk.slice(0, 200),

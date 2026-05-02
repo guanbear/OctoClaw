@@ -124,7 +124,7 @@ Write scope:
 Tasks:
 
 - [ ] Add `openclawRunId`, `childSessionKey`, `spawnIntentId`, `spawnBackend`, and spawn mode refs.
-- [ ] Fix WorkContract ID collision: ID must include turn/message/route-seal entropy and must not be `stableId(sessionKey, userAsk)` only.
+- [x] Fix WorkContract ID collision: ID must include turn/message/route-seal entropy and must not be `stableId(sessionKey, userAsk)` only.
 - [ ] Ensure refs are metadata, not execution status.
 - [ ] Tests prove status projection does not advance from WorkContract alone.
 
