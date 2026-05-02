@@ -694,6 +694,51 @@ describe("before_tool_call route hint guard", () => {
     delete process.env.OCTOCLAW_SPAWN_BACKEND;
   });
 
+  it("still gates sessions_spawn when the general before_tool_call hook is disabled", async () => {
+    nativeSpawnIntentStore.clearForTests();
+    process.env.OCTOCLAW_SPAWN_BACKEND = "planner";
+    const handlers = new Map<string, Function>();
+    plugin.register({
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const key = "agent:main:slack:channel:c0as4dappu3:thread:t-spawn-gate-hook-disabled";
+    const args = { task: "do work", runtime: "subagent" as const, mode: "run" as const, cleanup: "keep" as const, sandbox: "inherit" as const, lightContext: true };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-spawn-gate-hook-disabled",
+      sessionKey: key,
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+    policyState.setState(key, {
+      decision: {
+        request: { session_key: key },
+        route_decision: { route: "delegate" },
+        hook_interface: { before_tool_call: { enabled: false } },
+        route_hint_policy: { required: false, submitted: true },
+        tool_policy: { must_delegate_via: "octoclaw_dispatch", allowed_control_tools: ["octoclaw_dispatch", "octoclaw_status"] },
+      },
+      routeHintSubmitted: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const beforeToolCall = handlers.get("before_tool_call");
+    const result = await beforeToolCall!(
+      { toolName: "sessions_spawn", params: args },
+      { sessionKey: key, agentId: "main" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+    policyState.clearState(key);
+    nativeSpawnIntentStore.clearForTests();
+    delete process.env.OCTOCLAW_SPAWN_BACKEND;
+  });
+
   it("does not require planner intent when spawn backend is legacy", async () => {
     nativeSpawnIntentStore.clearForTests();
     delete process.env.OCTOCLAW_SPAWN_BACKEND;

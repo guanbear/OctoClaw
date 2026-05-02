@@ -103,6 +103,35 @@ describe("NativeSpawnIntent store and gate", () => {
     expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
   });
 
+  it("allows OpenClaw-enriched sessions_spawn args that are equivalent to the planner args", () => {
+    const args = spawnArgs();
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: "wc-gate-normalized",
+      delegateTaskId: "delegate-wc-gate-normalized",
+      attemptId: "delegate-wc-gate-normalized:attempt:1",
+      sessionKey: "session-gate-normalized",
+      sessionsSpawnArgs: args,
+      ttlMs: 60_000,
+    });
+
+    const allowed = evaluateNativeSpawnGate({
+      sessionKeys: ["session-gate-normalized"],
+      args: {
+        ...args,
+        agentId: "",
+        thinking: "",
+        timeoutSeconds: 0,
+        thread: false,
+        attachments: [],
+        attachAs: { mountPath: "" },
+      },
+    });
+
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.allowed ? allowed.intent.spawnIntentId : "").toBe(intent.spawnIntentId);
+    expect(nativeSpawnIntentStore.get(intent.spawnIntentId)?.status).toBe("spawn_call_started");
+  });
+
   it("blocks sessions_spawn when args differ from the planned hash", () => {
     nativeSpawnIntentStore.create({
       workContractId: "wc-mismatch",

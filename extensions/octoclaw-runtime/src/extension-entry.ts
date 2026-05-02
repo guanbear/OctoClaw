@@ -1444,7 +1444,7 @@ export const plugin = {
       }
       const decision = asRecord(state?.decision);
       const hookConfig = asRecord(asRecord(decision.hook_interface).before_tool_call);
-      if (!hookConfig.enabled) return;
+      if (!hookConfig.enabled && toolName !== "sessions_spawn") return;
 
       const routeHintTool = stringValue(hookConfig.route_hint_tool || "octoclaw_route_hint");
       const routeHintIsRequired = routeHintRequired(decision) || Boolean(hookConfig.route_hint_required);
@@ -1532,6 +1532,8 @@ export const plugin = {
           return;
         }
       }
+
+      if (!hookConfig.enabled) return;
 
       if (
         stringValue(asRecord(decision.route_decision).route) === "reply"
