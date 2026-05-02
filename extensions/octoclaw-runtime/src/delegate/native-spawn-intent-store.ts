@@ -11,7 +11,7 @@ export interface CreateIntentParams {
 
 export interface ConfirmAcceptParams {
   spawnIntentId: string;
-  workContractId: string;
+  workContractId?: string;
   runId: string;
   now?: number | Date;
 }
@@ -60,6 +60,7 @@ export class NativeSpawnIntentStore {
       if (intent.status !== "planned") continue;
       if (intent.expiresAt < nowMs) {
         intent.status = "expired";
+        intent.updatedAt = nowMs;
         continue;
       }
       if (!latest || intent.createdAt > latest.createdAt) {
@@ -71,7 +72,7 @@ export class NativeSpawnIntentStore {
 
   transitionToSpawnStarted(
     spawnIntentId: string,
-    expectedPlanHash: string,
+    expectedPlanHash?: string,
     now?: number,
   ): TransitionResult {
     const nowMs = now ?? Date.now();
@@ -79,11 +80,15 @@ export class NativeSpawnIntentStore {
     if (!intent) return { ok: false, error: "intent_not_found" };
     if (intent.expiresAt < nowMs) {
       intent.status = "expired";
+      intent.updatedAt = nowMs;
       return { ok: false, error: "intent_expired" };
     }
     if (intent.status !== "planned") return { ok: false, error: "invalid_status" };
-    if (intent.planHash !== expectedPlanHash) return { ok: false, error: "args_hash_mismatch" };
+    if (expectedPlanHash !== undefined && intent.planHash !== expectedPlanHash) {
+      return { ok: false, error: "args_hash_mismatch" };
+    }
     intent.status = "spawn_call_started";
+    intent.updatedAt = nowMs;
     return { ok: true, intent };
   }
 
@@ -96,14 +101,17 @@ export class NativeSpawnIntentStore {
     if (!intent) return { ok: false, error: "intent_not_found" };
     if (intent.expiresAt < nowMs) {
       intent.status = "expired";
+      intent.updatedAt = nowMs;
       return { ok: false, error: "intent_expired" };
     }
-    if (params.workContractId !== intent.workContractId) {
+    if (params.workContractId !== undefined && params.workContractId !== intent.workContractId) {
       return { ok: false, error: "work_contract_mismatch" };
     }
 
+    // Idempotent: same runId re-confirmed
     if (intent.status === "accepted") {
       if (intent.openclawRunId === runId) return { ok: true, intent, idempotent: true };
+      // Conflict: different runId for already-accepted intent
       return { ok: false, error: "runId_conflict", existingRunId: intent.openclawRunId };
     }
 
@@ -111,6 +119,7 @@ export class NativeSpawnIntentStore {
       intent.status = "accepted";
       intent.openclawRunId = runId;
       intent.confirmedAt = nowMs;
+      intent.updatedAt = nowMs;
       return { ok: true, intent, idempotent: false };
     }
 
@@ -123,6 +132,7 @@ export class NativeSpawnIntentStore {
     if (!intent) return { ok: false, error: "intent_not_found" };
     if (intent.expiresAt < nowMs) {
       intent.status = "expired";
+      intent.updatedAt = nowMs;
       return { ok: false, error: "intent_expired" };
     }
     if (intent.status !== "planned" && intent.status !== "spawn_call_started") {
@@ -130,6 +140,7 @@ export class NativeSpawnIntentStore {
     }
     intent.status = "failed";
     intent.error = error;
+    intent.updatedAt = nowMs;
     return { ok: true, intent };
   }
 
@@ -141,6 +152,7 @@ export class NativeSpawnIntentStore {
     }
     intent.status = "failed";
     intent.error = error;
+    intent.updatedAt = Date.now();
     return { ok: true, intent };
   }
 
@@ -153,6 +165,7 @@ export class NativeSpawnIntentStore {
         intent.expiresAt < nowMs
       ) {
         intent.status = "expired";
+        intent.updatedAt = nowMs;
         expired += 1;
       }
     }
