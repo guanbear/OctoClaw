@@ -303,6 +303,43 @@ Tasks:
 - [ ] Report parser outputs neutral ACK latency, route decision/bucket, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance, whether `completion_file_timeout` appeared, and whether legacy CLI delivery was used.
 
 
+## PC15 Before-Dispatch Fast Delegate Design And Test Slices
+
+Owner: Codex leader. This is 0.5.x performance recovery design work and is not a 0.5.0 release gate. Workers may implement mechanical tests only after this section is approved.
+
+Primary doc:
+
+- `docs/octoclaw-fast-delegate-before-dispatch-design-2026-05-02.md`
+
+Allowed write scope for PC15 design-only slice:
+
+- `docs/octoclaw-fast-delegate-before-dispatch-design-2026-05-02.md`
+- this OpenSpec change
+- new test-only harness files once implementation slices are approved
+
+Forbidden scope until PC15 implementation slices are explicitly opened:
+
+- `extensions/octoclaw-runtime/src/extension-entry.ts`
+- `extensions/octoclaw-runtime/src/tools/registration.ts`
+- direct child-run/finalizer/delivery runtime code
+- judge semantic logic
+
+Tasks:
+
+- [x] Add standalone fast delegate design doc with current judge stage, target flow, no-double-judge requirement, ACK semantics, and acceptance criteria.
+- [x] Add OpenSpec proposal/design/spec language making PC15 design-only for the 0.5.0 gate.
+- [ ] Define `before_dispatch` context parity test slice: prove the constructed managed ctx resolves the same `policyState` key as later `before_model_resolve` / `before_prompt_build` for Slack channel, Slack direct, explicit session, and non-Slack fallback cases.
+- [ ] Define prompt normalization parity test slice: prove before-dispatch uses the same normalized prompt as lifecycle hooks and avoids cache misses from body/content/thread metadata differences.
+- [ ] Define no-double-judge test slice: spy/mock `callLlmJudge` or equivalent judge provider and prove one inbound pass-through turn invokes it at most once across before-dispatch, before-model-resolve, and before-prompt-build.
+- [ ] Define pass-through behavior test slice: when fast admission denies or is disabled, current planner/confirm, reply, route-hint, and footer behavior remains unchanged.
+- [ ] Define fast admission fixture matrix: high-confidence explicit background/subagent/parallel task is allowed; status follow-up, provenance follow-up, simple reply, one-step lookup, judge timeout/degraded, and bare `opencode`/`glm`/model/tool mentions pass through.
+- [ ] Define accepted receipt boundary test slice: future direct-run backend must not send `任务已启动。` or delegate accepted ACK before accepted run id exists.
+- [ ] Define idempotency/dedupe test slice: duplicate Slack retries for the same inbound turn do not start two direct child runs.
+- [ ] Define observability slice: replay/smoke report records `fast_delegate_evaluated`, `fast_delegate_allowed|passed`, decision cache hit/miss, judge invocation count, accepted run id timing, and footer provenance.
+- [ ] Define backend contract slice comparing `api.runtime.subagent.run()` vs gateway `agent`: required inputs, returned refs, idempotency, model override authorization, delivery/finalizer gaps, and rollback behavior.
+- [ ] Do not implement direct-run backend until the parity/no-double-judge/pass-through tests are written and reviewed.
+
+
 ## PC1-PC5 implementation evidence
 
 - TypeScript: `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json --pretty false`

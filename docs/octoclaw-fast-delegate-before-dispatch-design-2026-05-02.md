@@ -276,6 +276,24 @@ Use normal reply when:
 - Record final footer provenance.
 - Keep planner/confirm smoke separate from fast-delegate smoke.
 
+## 9.5 Test Slices Before Runtime Implementation
+
+Do these test/design slices before implementing direct child run. They are intentionally smaller than the full fast delegate feature, so workers can help without drifting into runtime rewrite.
+
+| Slice | Purpose | Required Evidence |
+| --- | --- | --- |
+| PC15-A context parity | Build a managed context for `before_dispatch` that resolves the same policy state key as later lifecycle hooks | Slack channel, Slack direct, explicit session, and fallback cases produce the same key or documented aliases |
+| PC15-B prompt parity | Ensure before-dispatch and lifecycle hooks normalize the same user prompt | Body/content/thread metadata variants do not create cache misses |
+| PC15-C no double judge | Prove moving the first decision earlier does not run judge twice | A mocked LLM judge/provider is called at most once across before-dispatch, before-model-resolve, and before-prompt-build |
+| PC15-D pass-through compatibility | Prove denied/disabled fast admission leaves current behavior unchanged | Existing reply, route-hint, planner/confirm, footer tests continue passing with cache reuse |
+| PC15-E fast admission fixtures | Prove admission is conservative and not a second judge | Explicit background/subagent/parallel allows; status/provenance/simple/one-step lookup/judge-timeout/bare model mention passes through |
+| PC15-F accepted receipt boundary | Preserve truthful ACK semantics for future direct backend | No `任务已启动。` before accepted run id exists |
+| PC15-G idempotency | Avoid duplicate direct runs on Slack retry/replay | Same inbound turn idempotency key starts at most one child |
+| PC15-H observability | Make smoke/eval useful | Replay records evaluated/allowed/pass, cache hit/miss, judge invocation count, accepted timing, footer provenance |
+| PC15-I backend contract | Decide `api.runtime.subagent.run()` vs gateway `agent` safely | Contract table covers inputs, returned refs, idempotency, model override, delivery/finalizer gaps, rollback |
+
+Runtime implementation starts only after PC15-A through PC15-D are reviewed. Direct-run backend starts only after PC15-I is reviewed.
+
 ## 10. Acceptance Criteria
 
 - For high-confidence delegate prompts, main agent does not start.

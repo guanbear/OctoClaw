@@ -22,6 +22,7 @@ The confirm in this change is a technical write-back step: `octoclaw_dispatch` c
 - PC12: Restore responsiveness with neutral inbound ACK, startup-cost-aware routing, compact planner/native hot path, and latency/provenance observability.
 - PC13: Move Slack delivery hot path away from CLI/shell into a Slack delivery port. This is 0.5.x immediate and Slack-only.
 - PC14: Add nightly regression harness coverage for route buckets, latency, footer provenance, native announce, completion timeout, and legacy CLI usage. This may run in parallel but is not a 0.5.0 release blocker.
+- PC15: Establish the before-dispatch fast delegate design baseline. This is 0.5.x performance recovery design work only until the cache/no-double-judge proof and direct-run backend acceptance are split into implementation slices.
 
 ## Non-Goals
 
@@ -34,12 +35,13 @@ The confirm in this change is a technical write-back step: `octoclaw_dispatch` c
 - No broad rewrite of the existing judge. Judge changes are limited to schema/actionability guardrails needed by planner admission and startup-cost-aware routing semantics.
 - No child start p95 <= 10s acceptance target for 0.5.0; child start latency is observed, not a release gate.
 - No warm worker pool or A2A persistent worker in 0.5.0/0.5.x immediate.
+- No before-dispatch direct-spawn implementation in the 0.5.0 gate. The design may specify it as 0.5.x performance recovery, but implementation requires separate acceptance evidence.
 
 ## Release Boundary
 
 0.5.0 acceptance is Must + Should: planner/confirm correctness, truthful ACK, neutral first ACK, startup-cost-aware routing, judge/footer guardrails, metadata/status projection, and real Slack smoke evidence.
 
-0.5.x immediate work is adjacent but not a 0.5.0 blocker: Slack-only delivery port, legacy default-path removal after native announce is stable, and nightly regression harness/reporting.
+0.5.x immediate work is adjacent but not a 0.5.0 blocker: Slack-only delivery port, legacy default-path removal after native announce is stable, nightly regression harness/reporting, and the before-dispatch fast delegate design baseline.
 
 Deferred work needs a separate OpenSpec: non-Slack IM delivery ports, managed flow orchestration, direct SDK spawn backend, warm worker pool/A2A persistent workers, and unexposed OpenClaw tool allowlist/private hooks.
 

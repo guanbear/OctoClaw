@@ -235,3 +235,37 @@ Regression reports SHALL make route quality, latency, footer, and legacy fallbac
 
 - WHEN the nightly or Slack acceptance harness runs planner-confirm scenarios
 - THEN the report SHALL include neutral ACK latency, route decision/bucket, spawn allowed latency, confirm ACK latency, child progress/final latency, footer provenance, whether `completion_file_timeout` appeared, and whether legacy CLI delivery was used.
+
+### Requirement: Before-Dispatch Fast Delegate Reuses Existing Judge
+
+The before-dispatch fast delegate design SHALL reuse the existing OctoClaw policy resolver and judge outputs. It SHALL NOT introduce a second semantic judge or independent keyword router.
+
+#### Scenario: before_dispatch computes policy first
+
+- WHEN a before-dispatch fast delegate experiment evaluates an inbound turn
+- THEN it SHALL call the same policy decision path used by the current lifecycle, such as `resolvePolicyDecisionForContext()`
+- AND it SHALL persist the decision in `policyState` with the same normalized prompt and state key expected by later lifecycle hooks.
+
+#### Scenario: pass-through does not re-judge
+
+- WHEN before-dispatch evaluates a turn and returns `handled=false`
+- AND OpenClaw continues into `before_model_resolve` and `before_prompt_build`
+- THEN later hooks SHALL reuse the cached policy decision
+- AND LLM judge SHALL be invoked at most once for that inbound turn.
+
+#### Scenario: fast admission is a guard, not a judge
+
+- WHEN an existing policy decision is evaluated for fast delegate
+- THEN fast admission SHALL only allow direct background execution for high-confidence delegate decisions with an allowed WorkContract/admission and clear expected deliverable
+- AND uncertain, timed-out, degraded, follow-up, status/provenance, simple-reply, or bare model/tool mention cases SHALL pass through.
+
+#### Scenario: no false delegate receipt
+
+- WHEN fast admission allows a future direct-run backend
+- THEN OctoClaw SHALL NOT send a delegate accepted receipt until that backend returns accepted run evidence with a non-empty run id.
+
+#### Scenario: planner remains native gray path
+
+- WHEN fast admission passes through or is disabled
+- THEN planner/confirm behavior SHALL remain unchanged
+- AND native `sessions_spawn` planner/confirm acceptance tests SHALL still pass.
