@@ -335,6 +335,37 @@ describe("content assertions via runSlackAcceptanceHarness", () => {
     expect(lookupCase.transcript).toHaveLength(2);
   });
 
+  it("does not treat a trailing footer pipe reject pattern as a wildcard", async () => {
+    const client = createMockClientSequence([
+      [{ ts: "1234567890.000002", text: "任务已启动。" }],
+      [
+        { ts: "1234567890.000002", text: "任务已启动。" },
+        { ts: "1234567890.000003", text: "OpenClaw 总结\n\n• route=delegate | model=gpt-5.5 · thread | via=native_announce" },
+      ],
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["启动"],
+        expectFinalAll: ["OpenClaw", "via=native_announce"],
+        rejectFinal: ["任务超时", "completion_file_timeout", "route=reply |", "via=policy"],
+      }],
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.ack.status).toBe("pass");
+    expect(delegatedCase.final.status).toBe("pass");
+    expect(delegatedCase.status).toBe("pass");
+  });
+
 
   it("allows a fast final reply to satisfy required ACK", async () => {
     const client = createMockClient([
