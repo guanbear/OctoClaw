@@ -26,6 +26,7 @@ export interface NativeSpawnIntent {
   openclawRunId?: string;
   childSessionKey?: string;
   confirmedAt?: number;
+  updatedAt?: number;
   error?: string;
   ttlMs: number;
   createdAt: number;
