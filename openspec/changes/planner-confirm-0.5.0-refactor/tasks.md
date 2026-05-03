@@ -123,10 +123,10 @@ Write scope:
 
 Tasks:
 
-- [ ] Add `openclawRunId`, `childSessionKey`, `spawnIntentId`, `spawnBackend`, and spawn mode refs.
+- [x] Add `openclawRunId`, `childSessionKey`, `spawnIntentId`, `spawnBackend`, and spawn mode refs.
 - [x] Fix WorkContract ID collision: ID must include turn/message/route-seal entropy and must not be `stableId(sessionKey, userAsk)` only.
-- [ ] Ensure refs are metadata, not execution status.
-- [ ] Tests prove status projection does not advance from WorkContract alone.
+- [x] Ensure refs are metadata, not execution status.
+- [x] Tests prove status projection does not advance from WorkContract alone.
 
 ## PC7 Legacy Runtime Disable On Planner Path
 
@@ -188,14 +188,14 @@ Owner: mixed. Leader defines cases; GLM-5.1/cheap workers can implement fixtures
 
 Tasks:
 
-- [ ] No pending intent blocks `sessions_spawn`.
-- [ ] Expired intent blocks `sessions_spawn`.
-- [ ] Args hash mismatch blocks `sessions_spawn`.
-- [ ] Accepted confirm without runId fails closed.
+- [x] No pending intent blocks `sessions_spawn`.
+- [x] Expired intent blocks `sessions_spawn`.
+- [x] Args hash mismatch blocks `sessions_spawn`.
+- [x] Accepted confirm without runId fails closed.
 - [x] Confirm success writes native refs and sends one delegate ACK.
 - [x] Child completion without `.completion.json` uses native announce and does not duplicate final message.
-- [ ] Status follow-up does not spawn.
-- [ ] Planner path does not write scheduler queue, completion binding, or delivery outbox.
+- [x] Status follow-up does not spawn.
+- [x] Planner path does not write scheduler queue, completion binding, or delivery outbox.
 
 ## PC11 Legacy Default-Path Removal
 
@@ -208,7 +208,7 @@ Tasks:
 - [ ] Remove child-finalizer/completion-file timeout from native announce final delivery.
 - [ ] Remove delivery outbox from the Slack/native completion announce path.
 - [ ] Keep explicit legacy backend rollback notes until 0.5.x is stable.
-- [ ] Real Slack smoke proves no `completion_file_timeout` after `native_announce_completion_matched`.
+- [x] Real Slack smoke proves no `completion_file_timeout` after `native_announce_completion_matched`.
 
 
 ## PC12 Speed And Responsiveness
@@ -239,8 +239,8 @@ Tasks:
 - [ ] SR-P1 false-delegate cases are covered by tests/replay fixtures, including `fresh_live_lookup` no longer forcing delegate by itself.
 - [ ] SR-P1 false-reply cases are covered by tests/replay fixtures so explicit background work, code/test/edit, multi-step tools, review, and validation are not swallowed by main fast path.
 - [ ] SR-P2 planner/native chain is slimmed so real delegated route commit to `sessions_spawn_intent_allowed` is p95 <= 30s in real Slack smoke.
-- [ ] SR-P2 hard confirm remains strict: no `planned -> accepted`, no direct spawn, no delegate ACK before confirm.
-- [ ] SR-P2 child spawn profile uses only current OpenClaw capabilities: explicit `context=isolated`, `lightContext=true`, bounded child prompt, fast/cheap model defaults, conservative `thinking`/timeout.
+- [x] SR-P2 hard confirm remains strict: no `planned -> accepted`, no direct spawn, no delegate ACK before confirm.
+- [x] SR-P2 child spawn profile uses only current OpenClaw capabilities: explicit `context=isolated`, `lightContext=true`, bounded child prompt, fast/cheap model defaults, conservative `thinking`/timeout.
 - [ ] SR-P2 child-start metrics are recorded for observation, but 0.5.0 does not block on accepted-to-stream-ready <= 10s.
 - [ ] SR-P2 SQLite/native refs are used as footer/status fast path; state transitions are atomic or covered by race tests.
 - [ ] SR-P2 NativeSpawnIntent authorization/confirm transitions surface SQLite busy/locked retry/backoff/replay evidence and do not silently fall back to no task/no spawn.
@@ -264,6 +264,8 @@ Evidence 2026-05-03:
   - thread `1777781889.092179`, WorkContract `wc-7e149f9468e61a1e`, spawnIntent `nsp_mop9h8sz_e63c32fe`, runId `70cbff9c-fc70-4f3e-a416-c444b65d6cb5`, childSession `agent:main:subagent:12efc693-989b-4e4d-b34d-970035e6ae43`
 - Latest stage timing evidence remains a PC12 follow-up, not a completed optimization: accepted ACK is still `89865ms` / `112168ms`; `sessions_spawn_intent_allowed` is `80844ms` / `80731ms`; `dispatch_confirm` is `90394ms` / `112677ms`.
 - Latest final delivery evidence: `completion_file_timeout=0` in both reports, final footer `route=delegate | ... | via=native_announce`, and each transcript has exactly one neutral ACK, one accepted ACK, and one final.
+- Focused verification after merging `origin/refactor/0.4.0-stable` through `7015abf`: `git diff --check`, `./node_modules/.bin/tsc --build extensions/octoclaw-runtime/tsconfig.json`, and `./node_modules/.bin/vitest run extensions/octoclaw-runtime/src/delegate/native-spawn-intent.test.ts extensions/octoclaw-runtime/src/extension-entry.test.ts extensions/octoclaw-runtime/src/extension-entry-neutral-ack.test.ts extensions/octoclaw-runtime/src/tools/registration-planner.test.ts extensions/octoclaw-runtime/src/delegate/native-spawn-gate-confirm.test.ts extensions/octoclaw-runtime/src/state/native-status-projector.test.ts extensions/octoclaw-runtime/src/work-contract/projectors.test.ts packages/octoclaw-contracts/src/status-projection.test.ts`; result `8 files / 165 tests passed`.
+- Regression verification after the same merge: `policy-resolver-judge-fallback`, `registration-dispatch-honesty`, `runtime-ledger-hot-path`, `execution-transition-integration`, `runtime-ledger`, `operator-diagnostics`, `regression-round4`, and `delegate-packets` all passed (`185 tests` total across the regression slice).
 
 
 ## PC13 Slack Delivery Port
