@@ -60,7 +60,9 @@ Do not rewrite judge.
 
 Add a new `before_dispatch` fast delegate entrypoint that calls the same `resolvePolicyDecisionForContext()` / policy resolver used today. If the result is not safe enough for immediate delegation, return `handled=false` and let OpenClaw continue normally. Later lifecycle hooks must reuse the cached decision.
 
-Target flow:
+**推荐形态：native planner acceleration**（`before_dispatch` 只缓存 draft，主 agent 仍然启动但只需 1 turn，后半段完全走原生链）。不推荐 `handled: true` + direct backend 作为首选，因为它绕开了 `registerSubagentRun`，丢失 native announce/delivery chain。
+
+Target flow（native planner acceleration）：
 
 ```text
 before_dispatch
@@ -68,16 +70,24 @@ before_dispatch
   -> policyState stores decision + WorkContract
 
   if fastDelegateAdmission(decision, state) == allow:
-      -> api.runtime.subagent.run() or gateway agent
-      -> record runId / childSessionKey / WorkContract binding
-      -> send accepted receipt
-      -> return { handled: true, text?: receipt }
+      -> 生成 FastSpawnPlan draft（含 sessionsSpawnArgs draft、prompt hash、TTL）
+      -> 写入 policyState / SQLite
+      -> return { handled: false }  ← 主 agent 仍然启动
 
   else:
       -> return { handled: false }
-      -> before_model_resolve reads policyState cache
-      -> before_prompt_build reads policyState cache
+      -> before_model_resolve 读 policyState cache
+      -> before_prompt_build 读 policyState cache
+
+before_prompt_build（draft 命中时）：
+  -> 注入最小工具路由指令（appendSystemContext）
+  -> 主 agent 首轮直接调 octoclaw_dispatch({ fast: true, spawnPlanId }) + sessions_spawn
+  -> 省去 2-3 轮 planner 犹豫，压成 1 turn
+
+sessions_spawn + octoclaw_dispatch_confirm + native announce：完整原生链
 ```
+
+`handled: true` + direct backend 作为次选，仅在有强烈极致延迟需求且 finalizer 桥接经过 smoke 验证后、通过 feature flag 单独启用。
 
 The fast admission guard is not a new judge. It is a safety check over the existing judge result.
 
@@ -114,18 +124,20 @@ When denied, do not send a failure. Just pass through to the normal path.
 
 ### 5.1 0.5.x Practical Backend
 
-Use `api.runtime.subagent.run()` or gateway `agent` as the first practical fast backend.
+**推荐方案：native planner acceleration（见 5.3）。**
 
-OctoClaw still records minimal runtime truth:
+使用 `api.runtime.subagent.run()` 或 gateway `agent` 直接调用（`handled: true`）技术上可行，但有明确的 native announce gap：这条路径不经过 `spawnSubagentDirect()`，不调用 `registerSubagentRun()`，子 agent 完成后没有原生 announce/delivery chain，需要 OctoClaw finalizer 桥接。除非明确接受这个 trade-off 并有可靠的 finalizer 兜底，否则不应作为首选。
+
+OctoClaw 无论选哪条路都需要自己记录：
 
 - WorkContract id
 - run id
-- child session key selected by OctoClaw or returned/inferred by backend
+- child session key
 - source route: `fast_delegate`
-- backend: `openclaw.gateway_agent` or `plugin_runtime_subagent_run`
-- Slack delivery target and footer provenance
+- backend: `planner_acceleration` / `direct_gateway_agent`
+- Slack delivery target 和 footer provenance
 
-This is a small compatibility layer, not a full custom runtime.
+这是薄兼容层，不是 full custom runtime。
 
 ### 5.2 Difference From The Old Wheel
 
@@ -141,12 +153,66 @@ Fast delegate small wheel:
 
 - OpenClaw still runs the actual agent/model/session/tools;
 - OctoClaw only decides fast route, records minimal ledger, and adapts Slack UX;
-- completion/finalizer exists only to bridge the fact that plugin runtime direct spawn is not yet equivalent to tool-level `sessions_spawn`;
+- preferred backend (5.3) keeps full native announce/delivery chain;
 - planner/confirm remains available for gray cases and native-chain validation.
 
-The tradeoff is explicit: recover speed now while keeping the execution engine inside OpenClaw.
+### 5.3 Native Planner Acceleration（推荐路径）
 
-### 5.3 Future Native Backend
+这是与 slimming doc 原则完全兼容的快路径。核心思路：**`before_dispatch` 只预计算草稿，主 agent 仍然启动但只需 1 轮工具调用，后半段完全走原生链。**
+
+正确命名：`FastSpawnPlan`（或 `NativeSpawnIntentDraft`），不是 `NativeSpawnIntent`。Draft 不推进执行状态，不发 ACK，不进入 status projection。
+
+```text
+message_received / before_dispatch:
+  -> resolvePolicyDecisionForContext()，高置信 delegate
+  -> 预计算 FastSpawnPlan（含 sessionKey、prompt hash、sessionsSpawnArgs draft）
+  -> 写入 policyState / SQLite（TTL 60s）
+  -> return { handled: false }  ← 主 agent 仍然启动，不直接 spawn
+
+before_prompt_build:
+  -> 检测到 FastSpawnPlan draft 命中（sessionKey + prompt hash 匹配）
+  -> 注入 appendSystemContext（最小工具路由指令，不塞大上下文）：
+     "OctoClaw 已为本轮准备好高置信委派草稿（planId=xxx）。
+      直接调用 octoclaw_dispatch({ fast: true, spawnPlanId: 'xxx' })。
+      如果 dispatch 返回 sessionsSpawnArgs，立即调用 sessions_spawn。
+      不要先分析，不要直接回答。"
+
+主 agent 首轮 LLM（只有 1 turn）：
+  -> 调 octoclaw_dispatch({ fast: true, spawnPlanId: 'xxx' })
+
+octoclaw_dispatch(fast=true) 重新校验 draft：
+  校验项：spawnPlanId 存在、sessionKey 匹配、prompt hash 匹配、
+          TTL 未过期、judge/policy 仍是 delegate、没有 conflict WorkContract、
+          route seal / WorkContract refs 可生成
+  校验通过 → materialize WorkContract + NativeSpawnIntent，返回 sessionsSpawnArgs
+  校验失败 → 返回 pass_through，主 agent 退化到普通 planner/confirm 路径
+
+主 agent 同一轮 LLM（1 turn 内完成）：
+  -> 调原生 sessions_spawn（用 dispatch 返回的 sessionsSpawnArgs）
+  -> 调 octoclaw_dispatch_confirm（校验 runId，写入 native refs）
+
+子 agent 完整生命周期（原生链）：
+  -> spawnSubagentDirect() + registerSubagentRun + native announce/delivery
+```
+
+**这个方案节省的是什么**：主 agent 对"要不要委派"的多轮犹豫（当前 2-3 个 LLM turns），把 planner 握手压成最短工具链（1 turn）。
+
+**这个方案不节省的是**：OpenClaw embedded run startup（工具 bundle、system prompt、stream setup），child bootstrap（用 lightContext 已是 5-10s）。
+
+**与 `handled: true` 路径的对比**：
+
+| | `handled: true` + direct backend | Native planner acceleration（本节）|
+| --- | --- | --- |
+| Parent LLM turns | 0（绕过）| 1 turn |
+| Native announce | 无（需 finalizer 补）| 完整（registerSubagentRun）|
+| SpawnSubagentDirect import | 不需要 | 不需要 |
+| api.runtime.subagent.run() | 需要 | 不需要 |
+| slimming doc 原则兼容 | 需要 finalizer 桥接 | 完全兼容 |
+| 延迟节省（parent）| 最大（省整个 parent 首轮）| 次之（省 2+ turns，保留 1 turn）|
+
+**推荐**：优先实现 native planner acceleration。`handled: true` 路径作为后备选项，仅当极致延迟有强烈需求且 finalizer 桥接经过 smoke 验证后再启用，需要 feature flag 和明确 rollback。
+
+### 5.4 Future Native Backend
 
 If OpenClaw later exposes a plugin SDK API equivalent to tool-level `sessions_spawn`, replace the backend with that API. The public API would need to return or persist the same truth that `sessions_spawn` has today:
 
