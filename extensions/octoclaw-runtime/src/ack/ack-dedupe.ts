@@ -144,6 +144,17 @@ export function checkAndSet(
   return { allowed: true };
 }
 
+export function releaseAckKey(ackKey: string, owner?: string): boolean {
+  const key = asKeyPart(ackKey);
+  if (!key) return false;
+  const existingOwner = ackIdempotencyOwners.get(key);
+  if (existingOwner === undefined) return false;
+  const normalizedOwner = owner === undefined ? "" : asKeyPart(owner);
+  if (normalizedOwner && existingOwner !== normalizedOwner) return false;
+  ackIdempotencyOwners.delete(key);
+  return true;
+}
+
 export function recordDelivery(ackKey: string, result: AckDeliveryReceipt): void {
   const key = asKeyPart(ackKey);
   if (!key) {

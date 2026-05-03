@@ -21,6 +21,7 @@ import {
   notifyUserMessage,
   sendNeutralInboundAck,
   startAckGuard,
+  type NeutralInboundAckResult,
   updateAckGuardDecision,
   updateAckTrackingState,
   watchdogTick,
@@ -132,8 +133,75 @@ const OCTOCLAW_DELEGATION_SYSTEM_CONTEXT = [
 
 const LATENCY_ACK_DELAY_MS = 3500;
 const pendingLatencyAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingNeutralInboundAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingNeutralInboundAckTextFallbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastGroundedPromptByStateKey = new Map<string, string>();
 let warnedMissingDetachedRuntime = false;
+
+function configuredNeutralAckDelayMs(hookName: string, preferReaction: boolean): number {
+  const raw = Number(process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  if (preferReaction) return 0;
+  const slowTextRaw = Number(process.env.OCTOCLAW_TEXT_ACK_DELAY_MS);
+  if (Number.isFinite(slowTextRaw) && slowTextRaw >= 0) return slowTextRaw;
+  return hookName === "before_prompt_build" ? 800 : 2_500;
+}
+
+function configuredNeutralAckTextFallbackDelayMs(): number {
+  const raw = Number(process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return 6_500;
+}
+
+function neutralAckTimerKey(sessionKey: string, replyToMessageId: string): string {
+  return `${sessionKey}::${replyToMessageId}`;
+}
+
+function neutralAckTextFallbackTimerKey(sessionKey: string, replyToMessageId: string): string {
+  return `${sessionKey}::${replyToMessageId}::text-fallback`;
+}
+
+interface CanceledNeutralAckTimer {
+  sessionKey: string;
+  replyToMessageId: string;
+  fallbackStage?: string;
+}
+
+function parseNeutralAckTimerKey(key: string): CanceledNeutralAckTimer | null {
+  const suffix = "::text-fallback";
+  const normalizedKey = key.endsWith(suffix) ? key.slice(0, -suffix.length) : key;
+  const separatorIndex = normalizedKey.lastIndexOf("::");
+  if (separatorIndex <= 0) return null;
+  const sessionKey = normalizedKey.slice(0, separatorIndex);
+  const replyToMessageId = normalizedKey.slice(separatorIndex + 2);
+  if (!sessionKey || !replyToMessageId) return null;
+  return {
+    sessionKey,
+    replyToMessageId,
+    ...(key.endsWith(suffix) ? { fallbackStage: "text_after_reaction_failed" } : {}),
+  };
+}
+
+function cancelNeutralAckTimersByCandidates(sessionKeys: string[], replyToMessageIds: string[]): CanceledNeutralAckTimer[] {
+  const normalizedSessionKeys = Array.from(new Set(sessionKeys.map((value) => stringValue(value)).filter(Boolean)));
+  if (normalizedSessionKeys.length === 0) return [];
+  const normalizedReplyIds = new Set(replyToMessageIds.map((value) => stringValue(value)).filter(Boolean));
+  const canceled: CanceledNeutralAckTimer[] = [];
+  const cancelFromMap = (timers: Map<string, ReturnType<typeof setTimeout>>): void => {
+    for (const [key, timer] of Array.from(timers.entries())) {
+      const parsed = parseNeutralAckTimerKey(key);
+      if (!parsed) continue;
+      if (!normalizedSessionKeys.includes(parsed.sessionKey)) continue;
+      if (normalizedReplyIds.size > 0 && !normalizedReplyIds.has(parsed.replyToMessageId)) continue;
+      clearTimeout(timer);
+      timers.delete(key);
+      canceled.push(parsed);
+    }
+  };
+  cancelFromMap(pendingNeutralInboundAckTimers);
+  cancelFromMap(pendingNeutralInboundAckTextFallbackTimers);
+  return canceled;
+}
 
 const OCTOCLAW_ROUTE_HINT_SYSTEM_CONTEXT = [
   "Use octoclaw_route_hint only as an internal control-plane action when runtime policy requires it; never introduce it with user-visible text.",
@@ -273,9 +341,74 @@ function normalizeOutboundTargetKey(value: unknown): string {
     .replace(/[^a-z0-9_.:-]+/gu, "");
 }
 
+function outboundTargetLooksLikeSlack(value: unknown): boolean {
+  const raw = stringValue(value);
+  const lower = raw.toLowerCase();
+  if (!raw) return false;
+  if (lower.includes("slack")) return true;
+  if (/^(?:channel|chat|user|direct|dm):[cdgu][a-z0-9]{8,}$/iu.test(raw)) return true;
+  return /^[cdgu][a-z0-9]{8,}$/iu.test(normalizeOutboundTargetKey(raw));
+}
+
+function outboundTargetCandidates(event: UnknownRecord, ctx: UnknownRecord): unknown[] {
+  const metadata = asRecord(event.metadata);
+  const message = asRecord(event.message);
+  return [
+    event.to,
+    event.channel,
+    event.channelId,
+    event.channel_id,
+    event.conversationId,
+    event.conversation_id,
+    message.to,
+    message.channel,
+    message.channelId,
+    message.channel_id,
+    metadata.channelId,
+    metadata.channel_id,
+    metadata.channel,
+    metadata.to,
+    metadata.conversationId,
+    metadata.conversation_id,
+    ctx.conversationId,
+    ctx.conversation_id,
+    ctx.to,
+    ctx.channel,
+    ctx.channelId,
+    ctx.channel_id,
+    ctx.from,
+    ctx.senderId,
+    ctx.sender_id,
+  ];
+}
+
+function resolveOutboundPolicyTarget(event: UnknownRecord, ctx: UnknownRecord): unknown {
+  const candidates = outboundTargetCandidates(event, ctx);
+  return candidates.find((candidate) => outboundTargetLooksLikeSlack(candidate))
+    || candidates.find((candidate) => stringValue(candidate))
+    || "";
+}
+
+function outboundDeliveryContent(event: UnknownRecord): string {
+  const message = asRecord(event.message);
+  return stringValue(event.content)
+    || assistantMessageText(message)
+    || stringValue(message.content)
+    || stringValue(message.text);
+}
+
+function outboundGuardReplacement(event: UnknownRecord, content: string): { content: string; message?: UnknownRecord } {
+  const message = asRecord(event.message);
+  if (Object.keys(message).length === 0) return { content };
+  return {
+    content,
+    message: replaceAssistantMessageText(message, content),
+  };
+}
+
 function outboundMessageAnchors(event: UnknownRecord, ctx: UnknownRecord): string[] {
   const prompt = [
-    stringValue(event.content),
+    outboundDeliveryContent(event),
     extractPromptText(event),
     extractPromptText(ctx),
   ].filter(Boolean).join("\n");
@@ -352,16 +485,13 @@ function outboundHasDeliveryMetadata(event: UnknownRecord): boolean {
   );
 }
 
-function outboundLooksLikeVisibleDeliveryHook(event: UnknownRecord): boolean {
+function outboundLooksLikeVisibleDeliveryHook(event: UnknownRecord, ctx: UnknownRecord): boolean {
   if (outboundHasDeliveryMetadata(event)) return true;
   // Also treat Slack delivery targets as visible:
   // event.to can be a Slack user/channel ID (U*/C*) or contain "slack" when
   // OpenClaw sends via native Slack transport without standard metadata fields.
-  const to = stringValue(event.to).toLowerCase();
-  if (to.includes("slack")) return true;
-  // Slack channel IDs: C + 8-11 alphanumeric chars; user IDs: U + 8-11 chars; DM channel IDs: D + 8-11 chars
-  if (/^[cud][a-z0-9]{8,11}$/i.test(stringValue(event.to))) return true;
-  return false;
+  if (outboundTargetCandidates(event, ctx).some((candidate) => outboundTargetLooksLikeSlack(candidate))) return true;
+  return stringValue(ctx.channelId || ctx.channel).toLowerCase() === "slack";
 }
 
 function findRecentOutboundPolicyState(
@@ -1224,6 +1354,25 @@ function deliveryTargetReplyTo(state: UnknownRecord | null | undefined): string 
   return stringValue(target.replyToMessageId || target.reply_to_message_id || target.threadTs || target.thread_ts);
 }
 
+function cancelNeutralAckTimersForContext(event: UnknownRecord, ctx: UnknownRecord, state: UnknownRecord | null | undefined): CanceledNeutralAckTimer[] {
+  const stateRecord = asRecord(state);
+  const sessionKeys = [
+    stringValue(stateRecord.ackGuardKey || stateRecord.ack_guard_key),
+    stringValue(stateRecord.canonicalSessionKey || stateRecord.canonical_session_key),
+    stringValue(stateRecord.sessionKey || stateRecord.session_key),
+    stringValue(ctx.sessionKey || ctx.session_key),
+    stringValue(ctx.canonicalSessionKey || ctx.canonical_session_key),
+    stringValue(event.sessionKey || event.session_key),
+  ];
+  const replyToMessageIds = [
+    deliveryTargetReplyTo(stateRecord),
+    stringValue(stateRecord.inboundMessageTs || stateRecord.message_id || stateRecord.messageId || stateRecord.replyToMessageId || stateRecord.reply_to_id),
+    stringValue(ctx.inboundMessageTs || ctx.message_id || ctx.messageId || ctx.replyToMessageId || ctx.reply_to_id || ctx.threadTs || ctx.thread_ts),
+    stringValue(event.inboundMessageTs || event.message_id || event.messageId || event.replyToMessageId || event.reply_to_id || event.threadTs || event.thread_ts),
+  ];
+  return cancelNeutralAckTimersByCandidates(sessionKeys, replyToMessageIds);
+}
+
 function hasThreadProjection(event: UnknownRecord, ctx: UnknownRecord): boolean {
   const metadata = asRecord(event.metadata);
   return Boolean(
@@ -1279,23 +1428,23 @@ function resolveProjectionChannel(event: UnknownRecord, ctx: UnknownRecord): str
   const metadata = asRecord(event.metadata);
   const direct = stringValue(ctx.channel || ctx.channelId || event.channel || metadata.channel);
   if (direct.toLowerCase() === "slack") return "slack";
-  const target = stringValue(event.to || metadata.channelId || metadata.channel_id);
-  if (/^[cdgu][a-z0-9]{8,}$/iu.test(target)) return "slack";
+  const target = stringValue(event.to || metadata.channelId || metadata.channel_id || ctx.conversationId || ctx.conversation_id);
+  if (outboundTargetLooksLikeSlack(target)) return "slack";
   return direct;
 }
 
-export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; cancel?: boolean } | undefined {
-  const content = stringValue(event.content);
+export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: UnknownRecord, now = Date.now()): { content?: string; message?: UnknownRecord; cancel?: boolean } | undefined {
+  const content = outboundDeliveryContent(event);
   if (!content) return undefined;
   if (content.toUpperCase() === "NO_REPLY") return { cancel: true };
-  const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(event);
-  const match = findRecentOutboundPolicyState(event.to, event, ctx, now, {
-    allowUnanchoredDelivery: visibleDelivery && outboundHasDeliveryMetadata(event),
+  const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(event, ctx);
+  const match = findRecentOutboundPolicyState(resolveOutboundPolicyTarget(event, ctx), event, ctx, now, {
+    allowUnanchoredDelivery: visibleDelivery,
   });
   if (!match) {
-    if (!visibleDelivery || !outboundHasDeliveryMetadata(event)) return undefined;
+    if (!visibleDelivery) return undefined;
     const fallbackReplacement = appendReplyProjectionFooter(content, {}, event, ctx);
-    return fallbackReplacement && fallbackReplacement !== content ? { content: fallbackReplacement } : undefined;
+    return fallbackReplacement && fallbackReplacement !== content ? outboundGuardReplacement(event, fallbackReplacement) : undefined;
   }
   const stateRecord = hydrateOutboundStateWithNativeRefs(asRecord(match.state));
   if (match.anchored && isNativeAnnounceAlreadyDelivered(stateRecord)) {
@@ -1338,7 +1487,7 @@ export function guardOutboundMessageForPolicyState(event: UnknownRecord, ctx: Un
     outbound_projection_footer_appended: replacement !== baseContent || current?.outbound_projection_footer_appended === true,
     outbound_projection_footer_appended_at: replacement !== baseContent ? new Date(now).toISOString() : current?.outbound_projection_footer_appended_at,
   }));
-  return { content: replacement };
+  return outboundGuardReplacement(event, replacement);
 }
 
 const SLACK_MESSAGE_TS_PATTERN = /^\d{10}\.\d{6}$/u;
@@ -1810,12 +1959,133 @@ export const plugin = {
       reactionAckSupported: reactionAckEnabled && stringValue(sessionKey).toLowerCase().includes(":slack:"),
       reactionAckEmoji: reactionEmoji,
       reaction_ack_emoji: reactionEmoji,
-      neutralAckPreferText: true,
-      neutral_ack_prefer_text: true,
+      neutralAckPreferText: false,
+      neutral_ack_prefer_text: false,
     });
     const applyReactionAckState = (state: PolicyStateEntry | null | undefined, sessionKey = ""): void => {
       if (!state) return;
       Object.assign(state, buildReactionAckState(sessionKey));
+    };
+    const shouldScheduleNeutralTextFallback = (result: NeutralInboundAckResult, state: UnknownRecord): boolean => {
+      if (result.sent) return false;
+      if (!Boolean(state.reactionAckEnabled) || !Boolean(state.reactionAckSupported)) return false;
+      const reason = stringValue(result.reason);
+      return reason.startsWith("reaction_ack_") || reason.startsWith("reaction_");
+    };
+    const neutralAckSuppressedReason = (stateKey: string, state: UnknownRecord): string => {
+      const tracking = getAckTrackingState(stateKey);
+      const live = asRecord(policyState.get(stateKey) ?? {});
+      const merged = { ...state, ...live, ...tracking };
+      if (Boolean(merged.reactionAckSent) || Boolean(merged.reaction_ack_sent)) return "reaction_ack_already_sent";
+      if (Boolean(merged.textAck0Sent) || Boolean(merged.latencyAckSent)) return "text_ack_already_sent";
+      if (Boolean(merged.formalReplyVisible) || Boolean(merged.formal_reply_visible)) return "formal_reply_visible";
+      if (Boolean(merged.finalResponseStreaming) || Boolean(merged.final_response_streaming)) return "reply_streaming";
+      if (Boolean(merged.delivered) || stringValue(merged.deliveryStatus || merged.delivery_status) === "delivered") return "reply_delivered";
+      if (Boolean(merged.firstTokenSeen) || Boolean(merged.first_token_seen) || Boolean(merged.mainModelFirstTokenSeen) || Boolean(merged.mainModelStartedOutput)) {
+        return "main_model_output_started";
+      }
+      return "";
+    };
+    const scheduleNeutralTextFallback = (
+      hookName: string,
+      sessionKey: string,
+      effectiveStateKey: string,
+      replyToMessageId: string,
+      effectiveState: UnknownRecord,
+      mergedCtx: UnknownRecord,
+      anchorSource: InboundMessageTimestampSource,
+      fallbackUsed: boolean,
+      initialReason: string,
+      initialError = "",
+    ): void => {
+      const textFallbackKey = neutralAckTextFallbackTimerKey(sessionKey, replyToMessageId);
+      if (pendingNeutralInboundAckTextFallbackTimers.has(textFallbackKey)) return;
+      const fallbackTimer = setTimeout(async () => {
+        pendingNeutralInboundAckTextFallbackTimers.delete(textFallbackKey);
+        const suppressedReason = neutralAckSuppressedReason(effectiveStateKey, effectiveState);
+        if (suppressedReason) {
+          void recordPolicyReplay(
+            "neutral_inbound_ack",
+            {
+              hookName,
+              sessionKey,
+              stateKey: effectiveStateKey,
+              replyToMessageId,
+              anchor_source: anchorSource,
+              fallback_used: fallbackUsed,
+              sent: false,
+              mode: "not_sent",
+              reason: suppressedReason,
+              initial_reason: initialReason,
+              initial_error: initialError,
+              fallback_stage: "text_after_reaction_failed",
+            },
+            pi.logger,
+            null,
+          ).catch(() => {});
+          return;
+        }
+        const result = await sendNeutralInboundAck({
+          sessionKey,
+          stateKey: effectiveStateKey,
+          replyToMessageId,
+          cwd: stringValue(mergedCtx.cwd) || process.cwd(),
+          state: {
+            ...effectiveState,
+            neutralAckPreferText: true,
+            neutral_ack_prefer_text: true,
+          },
+          ctx: mergedCtx,
+          logger: pi.logger,
+          timeoutMs: 5000,
+        });
+        void recordPolicyReplay(
+          "neutral_inbound_ack",
+          {
+            hookName,
+            sessionKey,
+            stateKey: effectiveStateKey,
+            replyToMessageId,
+            anchor_source: anchorSource,
+            fallback_used: fallbackUsed,
+            sent: result.sent,
+            mode: result.mode,
+            reason: result.reason,
+            error: result.error || "",
+            initial_reason: initialReason,
+            initial_error: initialError,
+            fallback_stage: "text_after_reaction_failed",
+          },
+          pi.logger,
+          null,
+        ).catch(() => {});
+      }, configuredNeutralAckTextFallbackDelayMs());
+      (fallbackTimer as unknown as { unref?: () => void }).unref?.();
+      pendingNeutralInboundAckTextFallbackTimers.set(textFallbackKey, fallbackTimer);
+    };
+    const recordNeutralAckCancellations = (
+      hookName: string,
+      cancellations: CanceledNeutralAckTimer[],
+      reason: string,
+      stateKey: string,
+    ): void => {
+      for (const cancellation of cancellations) {
+        void recordPolicyReplay(
+          "neutral_inbound_ack",
+          {
+            hookName,
+            sessionKey: cancellation.sessionKey,
+            stateKey,
+            replyToMessageId: cancellation.replyToMessageId,
+            sent: false,
+            mode: "not_sent",
+            reason,
+            ...(cancellation.fallbackStage ? { fallback_stage: cancellation.fallbackStage } : {}),
+          },
+          pi.logger,
+          null,
+        ).catch(() => {});
+      }
     };
     const maybeSendNeutralInboundAckForContext = async (
       hookName: string,
@@ -1842,6 +2112,9 @@ export const plugin = {
       let inboundMessageTs = extractedAnchor.ts;
       let anchorSource: InboundMessageTimestampSource = extractedAnchor.source;
       let fallbackUsed = false;
+      if (hookName === "message_received" && !inboundMessageTs) {
+        return;
+      }
       if (!inboundMessageTs) {
         const stateAnchor = deliveryTargetReplyTo(existingState)
           || stringValue(existingState.inboundMessageTs || existingState.replyToMessageId || existingState.message_id || existingState.messageId);
@@ -1855,39 +2128,85 @@ export const plugin = {
         anchorSource = inboundMessageTs ? "fallback_history" : "none";
         fallbackUsed = Boolean(inboundMessageTs);
       }
-      const result = await sendNeutralInboundAck({
-        sessionKey,
-        stateKey: stateKey || sessionKey,
+      const effectiveStateKey = stateKey || sessionKey;
+      const effectiveState = {
+        ...buildReactionAckState(sessionKey),
+        ...existingState,
+        inboundMessageTs,
         replyToMessageId: inboundMessageTs,
-        cwd: stringValue(mergedCtx.cwd) || process.cwd(),
-        state: {
-          ...buildReactionAckState(sessionKey),
-          ...existingState,
-          inboundMessageTs,
-          replyToMessageId: inboundMessageTs,
-          message_id: inboundMessageTs,
-          channelTone: stringValue(existingState.channelTone || existingState.channel_tone) || "chat",
-        },
-        ctx: mergedCtx,
-        logger: pi.logger,
-        timeoutMs: 5000,
-      });
-      void recordPolicyReplay(
-        "neutral_inbound_ack",
-        {
-          hookName,
+        message_id: inboundMessageTs,
+        channelTone: stringValue(existingState.channelTone || existingState.channel_tone) || "chat",
+      };
+      const timerKey = neutralAckTimerKey(sessionKey, inboundMessageTs);
+      if (pendingNeutralInboundAckTimers.has(timerKey)) {
+        return;
+      }
+      const timer = setTimeout(async () => {
+        pendingNeutralInboundAckTimers.delete(timerKey);
+        const suppressedReason = neutralAckSuppressedReason(effectiveStateKey, effectiveState);
+        if (suppressedReason) {
+          void recordPolicyReplay(
+            "neutral_inbound_ack",
+            {
+              hookName,
+              sessionKey,
+              stateKey: effectiveStateKey,
+              replyToMessageId: inboundMessageTs,
+              anchor_source: anchorSource,
+              fallback_used: fallbackUsed,
+              sent: false,
+              mode: "not_sent",
+              reason: suppressedReason,
+            },
+            pi.logger,
+            null,
+          ).catch(() => {});
+          return;
+        }
+        const result = await sendNeutralInboundAck({
           sessionKey,
-          stateKey: stateKey || sessionKey,
+          stateKey: effectiveStateKey,
           replyToMessageId: inboundMessageTs,
-          anchor_source: anchorSource,
-          fallback_used: fallbackUsed,
-          sent: result.sent,
-          mode: result.mode,
-          reason: result.reason,
-        },
-        pi.logger,
-        null,
-      ).catch(() => {});
+          cwd: stringValue(mergedCtx.cwd) || process.cwd(),
+          state: effectiveState,
+          ctx: mergedCtx,
+          logger: pi.logger,
+          timeoutMs: 5000,
+        });
+        void recordPolicyReplay(
+          "neutral_inbound_ack",
+          {
+            hookName,
+            sessionKey,
+            stateKey: effectiveStateKey,
+            replyToMessageId: inboundMessageTs,
+            anchor_source: anchorSource,
+            fallback_used: fallbackUsed,
+            sent: result.sent,
+            mode: result.mode,
+            reason: result.reason,
+            error: result.error || "",
+          },
+          pi.logger,
+          null,
+        ).catch(() => {});
+        if (shouldScheduleNeutralTextFallback(result, effectiveState)) {
+          scheduleNeutralTextFallback(
+            hookName,
+            sessionKey,
+            effectiveStateKey,
+            inboundMessageTs,
+            effectiveState,
+            mergedCtx,
+            anchorSource,
+            fallbackUsed,
+            result.reason,
+            result.error || "",
+          );
+        }
+      }, configuredNeutralAckDelayMs(hookName, Boolean(effectiveState.reactionAckEnabled && effectiveState.reactionAckSupported)));
+      (timer as unknown as { unref?: () => void }).unref?.();
+      pendingNeutralInboundAckTimers.set(timerKey, timer);
     };
 
     if (process.env.OCTOCLAW_JUDGE_DEBUG) {
@@ -1935,7 +2254,17 @@ export const plugin = {
     };
 
     registerLifecycleHook("message_sending", (event, ctx) => {
-      return guardOutboundMessageForPolicyState(event, ctx);
+      const eventRecord = asRecord(event);
+      const ctxRecord = asRecord(ctx);
+      const visibleDelivery = outboundLooksLikeVisibleDeliveryHook(eventRecord, ctxRecord);
+      if (visibleDelivery && outboundDeliveryContent(eventRecord).trim().toUpperCase() !== "NO_REPLY") {
+        const stateInfo = getPolicyStateForContext(ctxRecord);
+        const cancellations = cancelNeutralAckTimersForContext(eventRecord, ctxRecord, asRecord(stateInfo.state));
+        if (cancellations.length > 0) {
+          recordNeutralAckCancellations("message_sending", cancellations, "formal_reply_visible", stateInfo.key);
+        }
+      }
+      return guardOutboundMessageForPolicyState(eventRecord, ctxRecord);
     }, 220);
 
     registerLifecycleHook("message_received", (event, ctx) => {
@@ -3004,6 +3333,13 @@ export const plugin = {
         sessionKey: stringValue(ctx.sessionKey),
         agentId: stringValue(ctx.agentId),
       });
+      if (!noReplySentinel) {
+        updateAckTrackingState(stateKey, { final_response_streaming: true, tool_active: false });
+        const cancellations = cancelNeutralAckTimersForContext(event, ctx, asRecord(state));
+        if (cancellations.length > 0) {
+          recordNeutralAckCancellations("before_message_write", cancellations, "reply_streaming", stateKey);
+        }
+      }
       if (!state) {
         if (noReplySentinel) return;
         const projectedText = appendReplyProjectionFooter(originalText, {}, event, ctx);
@@ -3012,7 +3348,6 @@ export const plugin = {
         }
         return;
       }
-      updateAckTrackingState(stateKey, { final_response_streaming: true, tool_active: false });
       const stateRecord = hydrateOutboundStateWithNativeRefs(asRecord(state));
       if (stateRecord !== asRecord(state)) {
         updatePolicyState(stateKey, (current) => ({

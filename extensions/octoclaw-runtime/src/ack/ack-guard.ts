@@ -31,6 +31,7 @@ import {
   buildAckKey,
   checkAndSet,
   recordDelivery,
+  releaseAckKey,
   tryClaimLease,
 } from "./ack-dedupe.js";
 import {
@@ -72,7 +73,7 @@ const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect",
 const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 export const NEUTRAL_INBOUND_ACK_TEXT = "收到，正在判断并准备处理。";
-export const NEUTRAL_REACTION_ACK_FALLBACK_MS = 1200;
+export const NEUTRAL_REACTION_ACK_FALLBACK_MS = 2200;
 
 type UnknownRecord = Record<string, unknown>;
 type AckOwner = "" | "latency_ack" | "timer_ack";
@@ -107,6 +108,7 @@ export interface NeutralInboundAckResult {
   sent: boolean;
   reason: string;
   mode: "reaction" | "text" | "not_sent";
+  error?: string;
 }
 
 export interface AckTarget {
@@ -795,7 +797,7 @@ function updateTaskStateCache(taskId: string, patch: Record<string, unknown>): v
   } catch { /* best effort */ }
 }
 
-async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string; mode?: "reaction" | "text" } | null> {
+async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean; reason: string; mode?: "reaction" | "text"; error?: string } | null> {
   const normalizedStateKey = asString(params.stateKey);
   const normalizedSessionKey = asString(params.sessionKey);
   const effectiveState: UnknownRecord = {
@@ -1026,7 +1028,7 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   ackDebug(`attemptAckSend: sending sessionKey=${normalizedSessionKey} stage=${params.ackStage} action=${decision.action} message="${message.substring(0, 30)}"`);
   const sendTimeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
   const reactionMessageId = asString(params.replyToMessageId || effectiveState.message_id || effectiveState.messageId);
-  const reactionTimeoutMs = params.allowReactionTextFallback
+  const reactionTimeoutMs = isReactionAck
     ? Math.min(sendTimeoutMs, NEUTRAL_REACTION_ACK_FALLBACK_MS)
     : sendTimeoutMs;
   const reactionPromise = isReactionAck
@@ -1149,7 +1151,10 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
     return { sent: true, reason: result.reason, mode: reactionAckDelivered ? "reaction" : reactionTextFallbackSent || !isReactionAck ? "text" : undefined };
   }
 
-  return { sent: false, reason: result.reason, mode: "text" };
+  if (isReactionAck && !params.allowReactionTextFallback) {
+    releaseAckKey(ackKey, params.ownerTag);
+  }
+  return { sent: false, reason: result.reason, mode: "text", error: result.error || undefined };
 }
 export function latencyAckText(
   decision: UnknownRecord,
@@ -1616,7 +1621,7 @@ export async function sendNeutralInboundAck(params: {
     markMode: useReactionAck ? "reaction" : "channel_message",
     replyToMessageId,
     decision,
-    allowReactionTextFallback: useReactionAck,
+    allowReactionTextFallback: false,
   });
   if (neutralAckKey && !result?.sent) {
     neutralInboundAckKeys.delete(neutralAckKey);
@@ -1625,6 +1630,7 @@ export async function sendNeutralInboundAck(params: {
     sent: Boolean(result?.sent),
     reason: result?.reason || "not_sent",
     mode: result?.sent ? result.mode || (useReactionAck ? "reaction" : "text") : "not_sent",
+    error: result?.error || undefined,
   };
 }
 

@@ -322,7 +322,7 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     expect(adapter.react).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to neutral inbound text ACK when reaction ACK fails", async () => {
+  it("does not immediately fall back to neutral inbound text when reaction ACK fails", async () => {
     adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
     adapter.react.mockResolvedValue({ ok: false, error: "operation_aborted" });
     adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "1777737951.706329" });
@@ -340,18 +340,20 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
       cwd: process.cwd(),
     });
 
-    expect(result).toEqual({ sent: true, reason: "reaction_ack_failed_text_fallback_sent", mode: "text" });
+    expect(result).toEqual({
+      sent: false,
+      reason: "reaction_ack_failed_no_text_fallback",
+      mode: "not_sent",
+      error: "operation_aborted",
+    });
     expect(adapter.react).toHaveBeenCalledWith(expect.objectContaining({
       messageId: "1777737951.706329",
       emoji: "eyes",
     }));
-    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
-      message: NEUTRAL_INBOUND_ACK_TEXT,
-      replyToMessageId: "1777737951.706329",
-    }));
+    expect(adapter.send).not.toHaveBeenCalled();
   });
 
-  it("does not wait for a hung reaction before neutral inbound text fallback", async () => {
+  it("times out a hung neutral inbound reaction without immediate text fallback", async () => {
     vi.useFakeTimers();
     adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
     adapter.react.mockImplementation(() => new Promise(() => {}));
@@ -373,11 +375,13 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
 
     await vi.advanceTimersByTimeAsync(NEUTRAL_REACTION_ACK_FALLBACK_MS + 1);
 
-    await expect(pending).resolves.toEqual({ sent: true, reason: "reaction_ack_failed_text_fallback_sent", mode: "text" });
-    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
-      message: NEUTRAL_INBOUND_ACK_TEXT,
-      replyToMessageId: "1777737951.706329",
-    }));
+    await expect(pending).resolves.toEqual({
+      sent: false,
+      reason: "reaction_ack_failed_no_text_fallback",
+      mode: "not_sent",
+      error: `reaction_ack_timeout_after_${NEUTRAL_REACTION_ACK_FALLBACK_MS}ms`,
+    });
+    expect(adapter.send).not.toHaveBeenCalled();
   });
 
   it("sends neutral inbound text ACK when reaction is not configured", async () => {

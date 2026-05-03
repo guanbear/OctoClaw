@@ -22,11 +22,13 @@ const osModule = os as unknown as { tmpdir(): string };
 let tempWorkspace = "";
 let originalRuntimeDbPath: string | undefined;
 let originalWorkspaceEnv: string | undefined;
+let originalNeutralAckDelay: string | undefined;
+let originalNeutralAckTextFallbackDelay: string | undefined;
 
 async function waitForFireAndForget(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
 function readReplayEvents(): Array<Record<string, unknown>> {
@@ -42,10 +44,14 @@ function readReplayEvents(): Array<Record<string, unknown>> {
 beforeEach(() => {
   originalRuntimeDbPath = process.env.OCTOCLAW_RUNTIME_DB_PATH;
   originalWorkspaceEnv = process.env.WORKSPACE;
+  originalNeutralAckDelay = process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS;
+  originalNeutralAckTextFallbackDelay = process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS;
   tempWorkspace = fs.mkdtempSync(path.join(osModule.tmpdir(), "octoclaw-neutral-ack-"));
   envOverrides.workspaceRoot = tempWorkspace;
   process.env.WORKSPACE = tempWorkspace;
   process.env.OCTOCLAW_RUNTIME_DB_PATH = path.join(tempWorkspace, ".octoclaw", "runtime", "octoclaw-runtime.sqlite");
+  process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS = "1";
+  process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS = "1";
   vi.mocked(fetchLatestUserMessageTsForSessionKey).mockClear();
   vi.mocked(fetchLatestUserMessageTsForSessionKey).mockResolvedValue("1777770000.333333");
 });
@@ -58,8 +64,14 @@ afterEach(() => {
   else process.env.OCTOCLAW_RUNTIME_DB_PATH = originalRuntimeDbPath;
   if (originalWorkspaceEnv === undefined) delete process.env.WORKSPACE;
   else process.env.WORKSPACE = originalWorkspaceEnv;
+  if (originalNeutralAckDelay === undefined) delete process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS;
+  else process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS = originalNeutralAckDelay;
+  if (originalNeutralAckTextFallbackDelay === undefined) delete process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS;
+  else process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS = originalNeutralAckTextFallbackDelay;
   originalRuntimeDbPath = undefined;
   originalWorkspaceEnv = undefined;
+  originalNeutralAckDelay = undefined;
+  originalNeutralAckTextFallbackDelay = undefined;
   if (tempWorkspace) fs.rmSync(tempWorkspace, { recursive: true, force: true });
   tempWorkspace = "";
 });
@@ -147,17 +159,16 @@ describe("neutral Slack ACK hook dedupe", () => {
     await beforePromptBuild!(event, ctx);
     await waitForFireAndForget();
 
-    expect(reactions).toHaveLength(0);
-    expect(sends).toHaveLength(1);
-    expect(sends[0]).toMatchObject({
-      message: "收到，正在判断并准备处理。",
-      replyToMessageId: "1777770000.111111",
-      suppressProjectionFooter: true,
+    expect(reactions).toHaveLength(1);
+    expect(reactions[0]).toMatchObject({
+      messageId: "1777770000.111111",
+      emoji: "eyes",
     });
+    expect(sends).toHaveLength(0);
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
     expect(neutralAckEvents.length).toBeGreaterThanOrEqual(1);
     expect(neutralAckEvents.filter((entry) => entry.sent === true)).toHaveLength(1);
-    expect(neutralAckEvents.some((entry) => entry.sent === true && entry.hookName === "message_received" && entry.anchor_source === "event" && entry.fallback_used === false)).toBe(true);
+    expect(neutralAckEvents.some((entry) => entry.sent === true && entry.hookName === "message_received" && entry.anchor_source === "event" && entry.fallback_used === false && entry.mode === "reaction")).toBe(true);
     expect(neutralAckEvents.every((entry) => entry.fallback_used === false)).toBe(true);
     expect(fetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
     const messageReceivedEvents = readReplayEvents().filter((entry) => entry.event === "message_received_observed");
@@ -167,6 +178,7 @@ describe("neutral Slack ACK hook dedupe", () => {
   it("reports event anchor source when the Slack timestamp only exists on the hook event", async () => {
     const handlers = new Map<string, Function>();
     const sends: IMSendParams[] = [];
+    const reactions: IMReactParams[] = [];
     const adapter: IMAdapter = {
       channel: "slack",
       capabilityLevel: "L2",
@@ -176,7 +188,10 @@ describe("neutral Slack ACK hook dedupe", () => {
         sends.push(params);
         return { sent: true, delivered: true, messageId: "1777770001.000002", threadTs: params.replyToMessageId };
       },
-      react: async () => ({ ok: true }),
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
     };
     registerIMAdapter(adapter);
     plugin.register({
@@ -201,8 +216,9 @@ describe("neutral Slack ACK hook dedupe", () => {
     );
     await waitForFireAndForget();
 
-    expect(sends).toHaveLength(1);
-    expect(sends[0]).toMatchObject({ replyToMessageId: "1777770000.222222" });
+    expect(reactions).toHaveLength(1);
+    expect(reactions[0]).toMatchObject({ messageId: "1777770000.222222" });
+    expect(sends).toHaveLength(0);
     expect(fetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
     expect(neutralAckEvents.some((entry) => entry.sent === true && entry.anchor_source === "event" && entry.fallback_used === false)).toBe(true);
@@ -213,6 +229,7 @@ describe("neutral Slack ACK hook dedupe", () => {
   it("uses Slack history fallback only when no inbound anchor exists", async () => {
     const handlers = new Map<string, Function>();
     const sends: IMSendParams[] = [];
+    const reactions: IMReactParams[] = [];
     const adapter: IMAdapter = {
       channel: "slack",
       capabilityLevel: "L2",
@@ -222,7 +239,10 @@ describe("neutral Slack ACK hook dedupe", () => {
         sends.push(params);
         return { sent: true, delivered: true, messageId: "1777770001.000003", threadTs: params.replyToMessageId };
       },
-      react: async () => ({ ok: true }),
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
     };
     registerIMAdapter(adapter);
     plugin.register({
@@ -248,15 +268,70 @@ describe("neutral Slack ACK hook dedupe", () => {
     await waitForFireAndForget();
 
     expect(fetchLatestUserMessageTsForSessionKey).toHaveBeenCalledWith("agent:main:slack:channel:c0ackfallback", 1200);
-    expect(sends).toHaveLength(1);
-    expect(sends[0]).toMatchObject({ replyToMessageId: "1777770000.333333" });
+    expect(reactions).toHaveLength(1);
+    expect(reactions[0]).toMatchObject({ messageId: "1777770000.333333" });
+    expect(sends).toHaveLength(0);
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
     expect(neutralAckEvents.some((entry) => entry.sent === true && entry.anchor_source === "fallback_history" && entry.fallback_used === true)).toBe(true);
+  });
+
+  it("does not use Slack history fallback from message_received without an original anchor", async () => {
+    const handlers = new Map<string, Function>();
+    const sends: IMSendParams[] = [];
+    const reactions: IMReactParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("c0noanchor"),
+      resolveTarget: () => ({ channel: "slack", target: "channel:c0noanchor" }),
+      send: async (params) => {
+        sends.push(params);
+        return { sent: true, delivered: true, messageId: "1777770001.000006", threadTs: params.replyToMessageId };
+      },
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    expect(messageReceived).toBeTruthy();
+    messageReceived!(
+      {
+        content: "没有 ts 的消息",
+        metadata: {
+          originatingChannel: "slack",
+          originatingTo: "channel:C0NOANCHOR",
+        },
+      },
+      {
+        channelId: "slack",
+        conversationId: "channel:C0NOANCHOR",
+      },
+    );
+    await waitForFireAndForget();
+
+    expect(fetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
+    expect(reactions).toHaveLength(0);
+    expect(sends).toHaveLength(0);
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents).toHaveLength(0);
+    const observedEvents = readReplayEvents().filter((entry) => entry.event === "message_received_observed");
+    expect(observedEvents.some((entry) => entry.anchor_source === "none" && entry.inboundMessageTs === "")).toBe(true);
   });
 
   it("carries a Slack DM anchor from message_received into before_dispatch without history fallback", async () => {
     const handlers = new Map<string, Function>();
     const sends: IMSendParams[] = [];
+    const reactions: IMReactParams[] = [];
     const adapter: IMAdapter = {
       channel: "slack",
       capabilityLevel: "L2",
@@ -266,7 +341,10 @@ describe("neutral Slack ACK hook dedupe", () => {
         sends.push(params);
         return { sent: true, delivered: true, messageId: "1777770001.000004", threadTs: params.replyToMessageId };
       },
-      react: async () => ({ ok: true }),
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: true };
+      },
     };
     registerIMAdapter(adapter);
     plugin.register({
@@ -310,12 +388,185 @@ describe("neutral Slack ACK hook dedupe", () => {
     await waitForFireAndForget();
 
     expect(fetchLatestUserMessageTsForSessionKey).not.toHaveBeenCalled();
-    expect(sends).toHaveLength(1);
-    expect(sends[0]).toMatchObject({ replyToMessageId: "1777770000.444444" });
+    expect(reactions).toHaveLength(1);
+    expect(reactions[0]).toMatchObject({ messageId: "1777770000.444444" });
+    expect(sends).toHaveLength(0);
     const observedEvents = readReplayEvents().filter((entry) => entry.event === "before_dispatch_observed");
     expect(observedEvents.some((entry) => entry.sessionKey === sessionKey && entry.inboundMessageTs === "1777770000.444444" && entry.anchor_source === "ctx")).toBe(true);
     const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
-    expect(neutralAckEvents.some((entry) => entry.hookName === "before_dispatch" && entry.replyToMessageId === "1777770000.444444" && entry.reason !== "no_valid_thread_target")).toBe(true);
+    expect(neutralAckEvents.some((entry) => entry.replyToMessageId === "1777770000.444444" && entry.reason !== "no_valid_thread_target")).toBe(true);
     expect(neutralAckEvents.every((entry) => entry.fallback_used === false)).toBe(true);
+  });
+
+  it("suppresses delayed neutral text ACK when the formal reply is already visible", async () => {
+    process.env.OCTOCLAW_NEUTRAL_ACK_DELAY_MS = "30";
+    const handlers = new Map<string, Function>();
+    const sends: IMSendParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0ackskip"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0ackskip" }),
+      send: async (params) => {
+        sends.push(params);
+        return { sent: true, delivered: true, messageId: "1777770001.000005", threadTs: params.replyToMessageId };
+      },
+      react: async () => ({ ok: false, error: "reaction_disabled_for_test" }),
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: {},
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const messageReceived = handlers.get("message_received");
+    const beforeDispatch = handlers.get("before_dispatch");
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(messageReceived).toBeTruthy();
+    expect(beforeDispatch).toBeTruthy();
+    expect(beforeMessageWrite).toBeTruthy();
+
+    const sessionKey = "agent:main:slack:default:direct:u0ackskip";
+    messageReceived!(
+      {
+        content: "你好",
+        metadata: {
+          messageId: "1777770000.555555",
+          originatingChannel: "slack",
+          originatingTo: "user:U0ACKSKIP",
+        },
+      },
+      { channelId: "slack", conversationId: "user:U0ACKSKIP" },
+    );
+    beforeDispatch!(
+      { prompt: "你好" },
+      { sessionKey, sessionId: "neutral-suppressed-session", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    beforeMessageWrite!(
+      { message: { role: "assistant", content: "你好 guan，我在。" } },
+      { sessionKey, sessionId: "neutral-suppressed-session", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitForFireAndForget();
+
+    expect(sends).toHaveLength(0);
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents.some((entry) => entry.sent === false && ["reply_streaming", "formal_reply_visible"].includes(String(entry.reason)))).toBe(true);
+  });
+
+  it("sends one delayed text fallback when reaction ACK fails and no reply is visible", async () => {
+    const handlers = new Map<string, Function>();
+    const sends: IMSendParams[] = [];
+    const reactions: IMReactParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0ackfallbacktext"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0ackfallbacktext" }),
+      send: async (params) => {
+        sends.push(params);
+        return { sent: true, delivered: true, messageId: "1777770001.000007", threadTs: params.replyToMessageId };
+      },
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: false, error: "reaction_disabled_for_test" };
+      },
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeDispatch = handlers.get("before_dispatch");
+    expect(beforeDispatch).toBeTruthy();
+    beforeDispatch!(
+      { prompt: "这个任务会慢一点", message_ts: "1777770000.666666" },
+      {
+        sessionKey: "agent:main:slack:default:direct:u0ackfallbacktext",
+        sessionId: "neutral-text-fallback-session",
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+    await waitForFireAndForget();
+
+    expect(reactions).toHaveLength(1);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({
+      message: "收到，正在判断并准备处理。",
+      replyToMessageId: "1777770000.666666",
+      suppressProjectionFooter: true,
+    });
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents.some((entry) => entry.sent === false && entry.reason === "reaction_ack_failed_no_text_fallback")).toBe(true);
+    expect(neutralAckEvents.some((entry) => entry.sent === true && entry.mode === "text" && entry.fallback_stage === "text_after_reaction_failed")).toBe(true);
+  });
+
+  it("cancels delayed text fallback when a formal reply starts after reaction ACK fails", async () => {
+    process.env.OCTOCLAW_NEUTRAL_ACK_TEXT_FALLBACK_DELAY_MS = "30";
+    const handlers = new Map<string, Function>();
+    const sends: IMSendParams[] = [];
+    const reactions: IMReactParams[] = [];
+    const adapter: IMAdapter = {
+      channel: "slack",
+      capabilityLevel: "L2",
+      canHandle: (sessionKey) => sessionKey.includes("u0ackfallbackcancel"),
+      resolveTarget: () => ({ channel: "slack", target: "user:u0ackfallbackcancel" }),
+      send: async (params) => {
+        sends.push(params);
+        return { sent: true, delivered: true, messageId: "1777770001.000008", threadTs: params.replyToMessageId };
+      },
+      react: async (params) => {
+        reactions.push(params);
+        return { ok: false, error: "reaction_disabled_for_test" };
+      },
+    };
+    registerIMAdapter(adapter);
+    plugin.register({
+      pluginConfig: { ackReactionEmoji: "eyes" },
+      on: (event, handler) => handlers.set(event, handler),
+      registerTool: () => {},
+      registerCommand: () => {},
+      logger: {},
+    });
+
+    const beforeDispatch = handlers.get("before_dispatch");
+    const beforeMessageWrite = handlers.get("before_message_write");
+    expect(beforeDispatch).toBeTruthy();
+    expect(beforeMessageWrite).toBeTruthy();
+    const sessionKey = "agent:main:slack:default:direct:u0ackfallbackcancel";
+    beforeDispatch!(
+      { prompt: "这个任务会慢一点", message_ts: "1777770000.777777" },
+      {
+        sessionKey,
+        sessionId: "neutral-text-fallback-cancel-session",
+        agentId: "main",
+        channelId: "slack",
+        cwd: tempWorkspace,
+      },
+    );
+    await waitForFireAndForget();
+
+    beforeMessageWrite!(
+      { message: { role: "assistant", content: "正式回复开始。" } },
+      { sessionKey, sessionId: "neutral-text-fallback-cancel-session", agentId: "main", channelId: "slack", cwd: tempWorkspace },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitForFireAndForget();
+
+    expect(reactions).toHaveLength(1);
+    expect(sends).toHaveLength(0);
+    const neutralAckEvents = readReplayEvents().filter((entry) => entry.event === "neutral_inbound_ack");
+    expect(neutralAckEvents.some((entry) => entry.sent === false && entry.reason === "reaction_ack_failed_no_text_fallback")).toBe(true);
+    expect(neutralAckEvents.some((entry) => entry.sent === false && entry.reason === "reply_streaming" && entry.fallback_stage === "text_after_reaction_failed")).toBe(true);
   });
 });

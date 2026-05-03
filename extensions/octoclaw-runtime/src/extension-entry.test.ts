@@ -487,7 +487,9 @@ describe("guardOutboundMessageForPolicyState", () => {
       now,
     );
 
-    expect(guarded).toBeUndefined();
+    expect(guarded?.content).toContain("最新版是 OpenClaw 2026.4.25。");
+    expect(guarded?.content).toContain("route=reply | model=");
+    expect(guarded?.content).not.toContain("这次任务还没派发成功");
     policyState.clearState(key);
   });
 
@@ -522,6 +524,64 @@ describe("guardOutboundMessageForPolicyState", () => {
     );
 
     expect(guarded?.content).toContain("收到。");
+    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
+  });
+
+  it("appends a footer for OpenClaw Slack DM delivery hooks without metadata", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "user:U0AL9T5U89Z", content: "你好 guan\n我在。" },
+      { channelId: "slack", messageId: "1777782671.624909", model: "GLM-5.1" },
+      Date.now(),
+    );
+
+    expect(guarded?.content).toContain("你好 guan\n我在。");
+    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
+  });
+
+  it("appends a footer when OpenClaw delivery exposes message.content instead of event.content", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "user:U0AL9T5U89Z", message: { role: "assistant", content: "你好，我在。" } },
+      { channelId: "slack", conversationId: "user:U0AL9T5U89Z", model: "GLM-5.1" },
+      Date.now(),
+    );
+
+    expect(guarded?.content).toContain("你好，我在。");
+    expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
+    expect(String(guarded?.message?.content)).toContain("route=reply | model=GLM-5.1 · thread");
+  });
+
+  it("appends a footer when Slack message_sending only exposes a display target", () => {
+    const now = Date.now();
+    const key = "agent:main:slack:default:direct:u0al9t5u89z";
+    policyState.setState(key, {
+      decision: {
+        route_decision: { route: "reply", route_source: "policy_rule" },
+        model_policy: { selected_model: "zhipu/GLM-5.1" },
+        work_contract: { route: "reply", workContractId: "wc-display-target" },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "guanbear", content: "你好，guan。我在。" },
+      { channelId: "slack", conversationId: "user:U0AL9T5U89Z", model: "cliproxyapi/gpt-5.5" },
+      now,
+    );
+
+    expect(guarded?.content).toContain("你好，guan。我在。");
+    expect(guarded?.content).toContain("route=reply | model=zhipu/GLM-5.1 · thread");
+    policyState.clearState(key);
+  });
+
+  it("appends a conservative footer for Slack delivery when only ctx identifies Slack", () => {
+    const guarded = guardOutboundMessageForPolicyState(
+      { to: "guanbear", content: "这是 Slack 可见回复。" },
+      { channelId: "slack", conversationId: "user:U0AL9T5U89Z", model: "GLM-5.1" },
+      Date.now(),
+    );
+
+    expect(guarded?.content).toContain("这是 Slack 可见回复。");
     expect(guarded?.content).toContain("route=reply | model=GLM-5.1 · thread");
   });
 
