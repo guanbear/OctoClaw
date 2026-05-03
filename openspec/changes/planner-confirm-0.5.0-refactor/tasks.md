@@ -254,6 +254,16 @@ Evidence 2026-05-03:
 - Harness: overall `pass`; neutralAckMs `5215`; acceptedAckMs `93606`; finalMs `183847`; footer `route=delegate | ... | via=native_announce`.
 - Replay: `neutral_inbound_ack` before route commit, `sessions_spawn_intent_allowed`, `spawn_started`, `native_announce_completion_matched`, `native_announce_final_delivered`, and no `completion_file_timeout` for `wc-357d3206b1461735`.
 - SQLite native intent row is `accepted` with non-empty runId/childSessionKey; completion binding and scheduler queue have no row for this WorkContract after native announce.
+- Latest deployed PC12 neutral ACK smoke artifacts:
+  - `/tmp/pc12-neutral-ack-20260503T021244Z-1/slack-acceptance-2026-05-03-04-17-06.{json,md}`
+  - `/tmp/pc12-neutral-ack-20260503T041747Z-2/slack-acceptance-2026-05-03-04-21-06.{json,md}`
+- Latest two-sample neutral ACK evidence: `3087ms` and `3234ms`; nearest-rank p95/max `3234ms`, both within the 5s SR-P0 target.
+- Latest anchors: `anchorSource=ctx`, `fallbackUsed=false` in both runs; unit coverage separately proves event anchor and fallback-history behavior.
+- Latest native ids:
+  - thread `1777781625.003979`, WorkContract `wc-1c9f06fadf8a7e7c`, spawnIntent `nsp_mop9blwy_04d416f6`, runId `8a6f5cda-e126-4f89-8314-0cee1dc05f54`, childSession `agent:main:subagent:f5d352e7-35fb-4064-8665-eef89ae6d9f8`
+  - thread `1777781889.092179`, WorkContract `wc-7e149f9468e61a1e`, spawnIntent `nsp_mop9h8sz_e63c32fe`, runId `70cbff9c-fc70-4f3e-a416-c444b65d6cb5`, childSession `agent:main:subagent:12efc693-989b-4e4d-b34d-970035e6ae43`
+- Latest stage timing evidence remains a PC12 follow-up, not a completed optimization: accepted ACK is still `89865ms` / `112168ms`; `sessions_spawn_intent_allowed` is `80844ms` / `80731ms`; `dispatch_confirm` is `90394ms` / `112677ms`.
+- Latest final delivery evidence: `completion_file_timeout=0` in both reports, final footer `route=delegate | ... | via=native_announce`, and each transcript has exactly one neutral ACK, one accepted ACK, and one final.
 
 
 ## PC13 Slack Delivery Port

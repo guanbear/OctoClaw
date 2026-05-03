@@ -26,6 +26,15 @@ export function renderSlackAcceptanceMarkdown(report: SlackAcceptanceReport): st
     lines.push(`- ack: ${item.ack.status} — ${item.ack.reason}`);
     lines.push(`- final: ${item.final.status} — ${item.final.reason}`);
     lines.push(`- noSpawn: ${item.noSpawn.status} — ${item.noSpawn.reason}`);
+    if (item.replayEvidence) {
+      lines.push(`- replayEvidence: ${item.replayEvidence.status} — ${item.replayEvidence.reason}`);
+      lines.push(`- replayIds: workContract=${item.replayEvidence.workContractId ?? "N/A"} spawnIntent=${item.replayEvidence.spawnIntentId ?? "N/A"} runId=${item.replayEvidence.runId ?? "N/A"} childSession=${item.replayEvidence.childSessionKey ?? "N/A"}`);
+      lines.push(`- neutralAnchor: source=${item.replayEvidence.anchorSource ?? "N/A"} fallback=${item.replayEvidence.fallbackUsed === true ? "true" : "false"} completion_file_timeout=${item.replayEvidence.completionFileTimeoutCount ?? 0}`);
+      const stageEntries = Object.entries(item.replayEvidence.stageMs ?? {});
+      if (stageEntries.length > 0) {
+        lines.push(`- stageMs: ${stageEntries.map(([name, ms]) => `${name}=${ms}`).join(", ")}`);
+      }
+    }
     if (item.errors.length > 0) lines.push(`- errors: ${item.errors.join("; ")}`);
     const progress = item.progress ?? [];
     if (progress.length > 0) {

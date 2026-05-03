@@ -243,11 +243,47 @@ function embeddedTaskStateContracts(options: ChildCompletionFinalizerOptions): W
   }
 }
 
+function taskStateRecordHasNativePlannerRefs(record: TaskStateRecord): boolean {
+  const workContract: Record<string, unknown> = isRecord(record.workContract) ? record.workContract : isRecord(record.work_contract) ? record.work_contract : {};
+  const nativeRefs = isRecord(workContract.nativeSpawnRefs) ? workContract.nativeSpawnRefs : {};
+  const delegate = isRecord(workContract.delegate) ? workContract.delegate : {};
+  const nativeBinding = isRecord(delegate.nativeBinding) ? delegate.nativeBinding : {};
+  const flowId = stringValue(record.nativeFlowId || record.native_flow_id || record.flowId || record.flow_id || nativeBinding.flowId);
+  return stringValue(nativeRefs.spawnBackend) === "sessions_spawn_planner"
+    || flowId.startsWith("sessions_spawn:")
+    || Boolean(
+      stringValue(record.runId || record.run_id || nativeRefs.openclawRunId || nativeBinding.runId)
+      && stringValue(record.childSessionKey || record.child_session_key || nativeRefs.childSessionKey || nativeBinding.childSessionKey),
+    );
+}
+
+function isNativePlannerTaskStateCompletionMaterialized(options: ChildCompletionFinalizerOptions): boolean {
+  try {
+    return readTaskStateRecords(options.taskStatePath).some((record) => {
+      const workContractId = stringValue(record.workContractId || record.work_contract_id || record.id);
+      if (workContractId !== options.workContractId) return false;
+      if (!taskStateRecordHasNativePlannerRefs(record)) return false;
+      const workContract: Record<string, unknown> = isRecord(record.workContract) ? record.workContract : isRecord(record.work_contract) ? record.work_contract : {};
+      const telemetry = isRecord(workContract.telemetry) ? workContract.telemetry : {};
+      const deliveryStatus = stringValue(record.delivery_status || (isRecord(record.delivery) ? record.delivery.status : undefined) || telemetry.deliveryStatus).toLowerCase();
+      const completed = record.resultMaterialized === true
+        || record.result_materialized === true
+        || telemetry.resultMaterialized === true
+        || stringValue(record.workContractStatus || record.work_contract_status).toLowerCase() === "completed"
+        || stringValue(workContract.status).toLowerCase() === "completed";
+      return completed && ["delivered", "sent", "queued_for_retry"].includes(deliveryStatus);
+    });
+  } catch {
+    return false;
+  }
+}
+
 function isWorkContractCompletionMaterialized(options: ChildCompletionFinalizerOptions): boolean {
   if (isNativePlannerCompletionMaterialized(loadWorkContract(options.workContractId, options.taskStatePath))) {
     return true;
   }
-  return embeddedTaskStateContracts(options).some(isNativePlannerCompletionMaterialized);
+  return embeddedTaskStateContracts(options).some(isNativePlannerCompletionMaterialized)
+    || isNativePlannerTaskStateCompletionMaterialized(options);
 }
 
 function formatDeliveryMessage(completion: WorkerCompletionResult, options: ChildCompletionFinalizerOptions): string {

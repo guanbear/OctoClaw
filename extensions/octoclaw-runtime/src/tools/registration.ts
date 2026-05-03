@@ -3548,6 +3548,7 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
         const childSessionKey = asString(params.childSessionKey || resultJson.childSessionKey || resultJson.child_session_key);
         const { key: stateKey, state } = resolveToolPolicyContext(ctx, "");
         const decision = asRecord(state?.decision);
+        const replayDecision = Object.keys(decision).length > 0 ? decision : null;
         const sessionKey = asString(asRecord(decision.request).session_key)
           || asString(ctx.sessionKey || ctx.canonicalSessionKey || stateKey);
         const confirmed = await confirmNativeSpawn({
@@ -3565,6 +3566,22 @@ export function getToolRegistrations(options: ToolRegistrationOptions = {}): Too
           cwd: ctxCwd(ctx),
           decision,
         });
+        await recordPolicyReplay("dispatch_confirm_completed", {
+          sessionKey,
+          stateKey,
+          sessionId: asString(ctx.sessionId),
+          spawn_intent_id: asString(params.spawnIntentId),
+          work_contract_id: asString(params.workContractId),
+          sessions_spawn_status: status,
+          ok: confirmed.ok,
+          confirm_status: confirmed.status,
+          error: asString(confirmed.error),
+          run_id: asString(confirmed.runId),
+          child_run_id: asString(confirmed.childRunId),
+          child_session_key: asString(confirmed.childSessionKey),
+          ack_sent: confirmed.ackSent === true,
+          ack_skipped: confirmed.ackSkipped === true,
+        }, toolLogger(ctx), replayDecision);
         if (confirmed.ok) {
           const confirmedAt = new Date().toISOString();
           const updatedContract = loadWorkContract(confirmed.workContractId);

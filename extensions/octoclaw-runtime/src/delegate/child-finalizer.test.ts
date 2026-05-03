@@ -708,6 +708,66 @@ describe("child completion finalizer — completion file protocol", () => {
     delete process.env.OCTOCLAW_RUNTIME_LEDGER;
   });
 
+  it("skips legacy timeout when task-state mirrors native planner delivery but top-level resultMaterialized is false", async () => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join("/tmp", "octoclaw-completion-"));
+    envOverrides.workspaceRoot = tmpDir;
+    const taskStatePath = writeTaskState(tmpDir, [{
+      id: "wc-native-mirrored",
+      workContractId: "wc-native-mirrored",
+      work_contract_id: "wc-native-mirrored",
+      route: "delegate",
+      sessionKey: "slack:channel:CMIRROR",
+      childSessionKey: "agent:main:subagent:mirror-child",
+      child_session_key: "agent:main:subagent:mirror-child",
+      runId: "run-native-mirrored",
+      run_id: "run-native-mirrored",
+      nativeFlowId: "sessions_spawn:run-native-mirrored",
+      native_flow_id: "sessions_spawn:run-native-mirrored",
+      dispatchExecuted: true,
+      dispatch_executed: true,
+      spawnExecuted: true,
+      spawn_executed: true,
+      resultMaterialized: false,
+      result_materialized: false,
+      delivery_status: "delivered",
+      delivery: { status: "delivered" },
+      status: "running",
+      workContractStatus: "completed",
+      work_contract_status: "completed",
+    }]);
+
+    const progressMessages: string[] = [];
+    registerCapturingSlackAdapter(progressMessages, (sessionKey) => sessionKey === "slack:channel:CMIRROR");
+
+    scheduleChildCompletionFinalizer({
+      taskStatePath,
+      childSessionKey: "agent:main:subagent:mirror-child",
+      delegateTaskId: "delegate-native-mirrored",
+      workContractId: "wc-native-mirrored",
+      parentSessionKey: "slack:channel:CMIRROR",
+      nativeTaskId: "native-mirrored",
+      runId: "run-native-mirrored",
+      nativeFlowId: "sessions_spawn:run-native-mirrored",
+      timeoutMs: 30_000,
+      pollIntervalMs: 1_000,
+      initialDelayMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    const taskState = JSON.parse(fs.readFileSync(taskStatePath, "utf-8"));
+    expect(taskState.tasks[0]).toMatchObject({
+      id: "wc-native-mirrored",
+      status: "running",
+      workContractStatus: "completed",
+      resultMaterialized: false,
+      delivery_status: "delivered",
+    });
+    expect(taskState.tasks[0].failureCode).toBeUndefined();
+    expect(progressMessages).not.toContain("任务超时。");
+  });
+
   it("extends timeout while child session is still active and then delivers completion", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-30T14:50:00.000Z"));

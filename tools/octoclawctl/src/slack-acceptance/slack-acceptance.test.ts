@@ -641,6 +641,70 @@ describe("no-spawn replay assertion", () => {
     expect(plainCase.noSpawn.status).toBe("unknown");
     expect(plainCase.noSpawn.reason).toContain("malformed replay JSONL");
   });
+
+  it("attaches replay stage timing and native planner ids to case evidence", async () => {
+    const replayPath = path.join(tmpDir, "replay.jsonl");
+    const threadTs = "1234567890.000001";
+    const replayEvents = [
+      { at: "2099-12-31T23:59:49.000Z", event: "message_received_observed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, inboundMessageTs: threadTs, anchor_source: "event" },
+      { at: "2099-12-31T23:59:50.000Z", event: "before_dispatch_observed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, inboundMessageTs: threadTs, anchor_source: "event" },
+      { at: "2099-12-31T23:59:51.000Z", event: "neutral_inbound_ack", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, replyToMessageId: threadTs, anchor_source: "event", fallback_used: false, sent: true },
+      { at: "2099-12-31T23:59:51.500Z", event: "completion_file_timeout", sessionKey: "slack:channel:C_ACC_TEST:thread:123", parentSessionKey: "slack:channel:C_ACC_TEST:thread:123", workContractId: "wc-unrelated" },
+      { at: "2099-12-31T23:59:52.000Z", event: "before_prompt_build_observed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, inboundMessageTs: threadTs, anchor_source: "event" },
+      { at: "2099-12-31T23:59:53.000Z", event: "policy_resolved", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage" },
+      { at: "2099-12-31T23:59:54.000Z", event: "dispatch_planner_intent_created", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, work_contract_id: "wc-stage", spawn_intent_id: "nsp-stage" },
+      { at: "2099-12-31T23:59:55.000Z", event: "sessions_spawn_intent_allowed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, work_contract_id: "wc-stage", spawn_intent_id: "nsp-stage" },
+      { at: "2099-12-31T23:59:56.000Z", event: "execution_transition", transitionKind: "spawn_started", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage", compactParentPacket: { runId: "run-stage", childSessionKey: "agent:main:subagent:stage" } },
+      { at: "2099-12-31T23:59:57.000Z", event: "dispatch_confirm_completed", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, work_contract_id: "wc-stage", spawn_intent_id: "nsp-stage", run_id: "run-stage", child_session_key: "agent:main:subagent:stage", ok: true },
+      { at: "2099-12-31T23:59:58.000Z", event: "native_announce_final_delivered", sessionKey: `slack:channel:C_ACC_TEST:thread:${threadTs}`, workContractId: "wc-stage" },
+    ];
+    await fs.writeFile(replayPath, replayEvents.map((event) => JSON.stringify(event)).join("\n"), "utf8");
+
+    const client = createMockClient([
+      { ts: "1234567890.090001", text: "任务已启动。" },
+      { ts: "1234567890.150001", text: "OpenClaw 总结\n\n• route=delegate | via=native_announce" },
+    ]);
+    const config = parseSlackAcceptanceConfig(validConfig({
+      cases: [{
+        kind: "delegated_work",
+        prompt: "test",
+        ackRequired: true,
+        finalRequired: true,
+        expectAck: ["任务已启动"],
+        expectFinalAll: ["OpenClaw", "via=native_announce"],
+      }],
+      replayPath,
+    }), validEnv());
+    config.ackTimeoutMs = 100;
+    config.finalTimeoutMs = 100;
+    config.pollIntervalMs = 1;
+    const report = await runSlackAcceptanceHarness(client, config);
+    const delegatedCase = report.cases.find((c) => c.kind === "delegated_work")!;
+
+    expect(delegatedCase.replayEvidence).toMatchObject({
+      status: "pass",
+      anchorSource: "event",
+      fallbackUsed: false,
+      workContractId: "wc-stage",
+      spawnIntentId: "nsp-stage",
+      runId: "run-stage",
+      childSessionKey: "agent:main:subagent:stage",
+      completionFileTimeoutCount: 0,
+    });
+    expect(delegatedCase.replayEvidence?.stageMs).toEqual(expect.objectContaining({
+      message_received: expect.any(Number),
+      before_dispatch: expect.any(Number),
+      before_prompt_build: expect.any(Number),
+      judge_resolved: expect.any(Number),
+      octoclaw_dispatch: expect.any(Number),
+      sessions_spawn_intent_allowed: expect.any(Number),
+      sessions_spawn_accepted: expect.any(Number),
+      dispatch_confirm: expect.any(Number),
+      native_child_final: expect.any(Number),
+    }));
+    expect(delegatedCase.final.matchedText).toBe("OpenClaw 总结\n\n• route=delegate | via=native_announce");
+    expect(renderSlackAcceptanceMarkdown(report)).toContain("stageMs:");
+  });
 });
 
 

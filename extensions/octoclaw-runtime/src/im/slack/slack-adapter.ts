@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { runCommand, resolveWorkspaceRoot } from "../../resolve/env.js";
@@ -92,6 +93,11 @@ function readSlackBotToken(): string {
   }
 }
 
+function normalizeSlackConversationId(value: unknown): string {
+  const normalized = stringValue(value).replace(/^channel:/iu, "").toUpperCase();
+  return /^[CDG][A-Z0-9]{8,}$/u.test(normalized) ? normalized : "";
+}
+
 function normalizeEmojiName(emoji: string): string {
   return stringValue(emoji).replace(/^:+|:+$/gu, "") || "eyes";
 }
@@ -100,6 +106,80 @@ function normalizeSlackMessageTs(value: unknown): string {
   const text = stringValue(value);
   if (!text || text === "0" || text === "0.0" || text.toLowerCase() === "root") return "";
   return /^\d{3,}(?:\.\d+)?$/u.test(text) ? text : "";
+}
+
+function shouldUseIsolatedSlackApi(): boolean {
+  if (process.env.OCTOCLAW_SLACK_DIRECT_API_ISOLATED === "0") return false;
+  if (process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === "test") return false;
+  return true;
+}
+
+const SLACK_API_CHILD_SOURCE = `
+const fs = require("node:fs");
+(async () => {
+  let timer;
+  try {
+    const input = JSON.parse(fs.readFileSync(0, "utf8"));
+    if (typeof fetch !== "function") {
+      console.log(JSON.stringify({ ok: false, error: "fetch_unavailable" }));
+      return;
+    }
+    const method = String(input.method || "");
+    const token = String(input.token || "");
+    const payload = input.payload && typeof input.payload === "object" ? input.payload : {};
+    const timeoutMs = Math.max(500, Number(input.timeoutMs || 2500));
+    const controller = new AbortController();
+    timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch("https://slack.com/api/" + method, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    try {
+      JSON.parse(text);
+      console.log(text);
+    } catch {
+      console.log(JSON.stringify({ ok: false, error: "non_json_slack_response" }));
+    }
+  } catch (error) {
+    const message = error && error.message ? String(error.message) : String(error);
+    console.log(JSON.stringify({ ok: false, error: message || "slack_api_child_failed" }));
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+})();
+`;
+
+function postSlackApiIsolated<T extends Record<string, unknown>>(
+  method: string,
+  token: string,
+  payload: Record<string, unknown>,
+  timeoutMs: number,
+): T & { ok?: boolean; error?: string } {
+  const apiTimeoutMs = Math.max(500, timeoutMs);
+  const child = spawnSync(process.execPath, ["-e", SLACK_API_CHILD_SOURCE], {
+    input: JSON.stringify({ method, token, payload, timeoutMs: apiTimeoutMs }),
+    encoding: "utf8",
+    timeout: Math.min(Math.max(apiTimeoutMs + 500, 1000), 5000),
+    maxBuffer: 1024 * 1024,
+  });
+  if (child.error) {
+    return { ok: false, error: child.error.message || "slack_api_child_error" } as T & { ok?: boolean; error?: string };
+  }
+  const stdout = stringValue(child.stdout);
+  if (!stdout) {
+    return { ok: false, error: stringValue(child.stderr) || "slack_api_child_empty_response" } as T & { ok?: boolean; error?: string };
+  }
+  try {
+    return JSON.parse(stdout) as T & { ok?: boolean; error?: string };
+  } catch {
+    return { ok: false, error: "slack_api_child_invalid_json" } as T & { ok?: boolean; error?: string };
+  }
 }
 
 export function renderSlackProjectionFooter(message: string, projection: IMProjectionFooter): string {
@@ -126,6 +206,9 @@ async function postSlackApi<T extends Record<string, unknown>>(
   payload: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<T & { ok?: boolean; error?: string }> {
+  if (shouldUseIsolatedSlackApi()) {
+    return postSlackApiIsolated<T>(method, token, payload, timeoutMs);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(500, timeoutMs));
   try {
@@ -425,6 +508,13 @@ export class SlackAdapter implements IMAdapter {
     replyToMessageId?: string,
     suppressProjectionFooter?: boolean,
   ): Promise<SlackSendResult> {
+    if (suppressProjectionFooter) {
+      const direct = await this.executeInternalDirectSend(target, message, timeoutMs, replyToMessageId);
+      if (direct.sent || direct.error !== "direct_slack_unsupported") {
+        return direct;
+      }
+    }
+
     const args = ["message", "send", "--channel", "slack", "--target", target.target, "--json"];
 
     if (message) {
@@ -492,6 +582,43 @@ export class SlackAdapter implements IMAdapter {
         delivered: false,
         error: String(error),
       };
+    }
+  }
+
+  private async executeInternalDirectSend(
+    target: SlackDeliveryTarget,
+    message: string,
+    timeoutMs: number,
+    replyToMessageId?: string,
+  ): Promise<SlackSendResult> {
+    const token = readSlackBotToken();
+    const channel = normalizeSlackConversationId(target.target);
+    if (!token || !channel) {
+      return { sent: false, delivered: false, error: "direct_slack_unsupported" };
+    }
+    const threadTs = normalizeSlackMessageTs(replyToMessageId) || normalizeSlackMessageTs(target.threadTs);
+    try {
+      const result = await postSlackApi<SlackCommandResult>("chat.postMessage", token, {
+        channel,
+        text: message,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+        unfurl_links: false,
+        unfurl_media: false,
+      }, Math.min(Math.max(500, timeoutMs), 2500));
+      if (result.ok === true) {
+        const messageId = stringValue(result.message?.ts || result.ts);
+        const returnedThreadTs = stringValue(result.message?.thread_ts || result.thread_ts || threadTs);
+        return {
+          sent: true,
+          delivered: true,
+          ...(messageId ? { messageId } : {}),
+          ...(returnedThreadTs ? { threadTs: returnedThreadTs } : {}),
+        };
+      }
+      return { sent: false, delivered: false, error: stringValue(result.error) || "direct_slack_send_failed" };
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      return { sent: false, delivered: false, error: messageText || "direct_slack_send_failed" };
     }
   }
 

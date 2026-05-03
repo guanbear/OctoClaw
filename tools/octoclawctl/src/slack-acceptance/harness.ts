@@ -8,6 +8,7 @@ import type {
   SlackAcceptanceClient,
   SlackAcceptanceConfig,
   SlackAcceptanceReport,
+  SlackAcceptanceReplayEvidence,
   SlackAcceptanceResolvedConfig,
   SlackAcceptanceProgressEvent,
   SlackMessageRecord,
@@ -108,8 +109,16 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
 function asPositiveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true || value === "true";
 }
 
 function normalizeCase(caseConfig: SlackAcceptanceCaseConfig, index: number): SlackAcceptanceCaseConfig {
@@ -265,6 +274,9 @@ function assertText(
         : { status: "unknown", reason: "optional expected content not observed" };
     }
   }
+  const allMatchedMessage = expectedAllPatterns.length > 0
+    ? messages.find((message) => expectedAllPatterns.every((pattern) => pattern.test(message.text)))
+    : undefined;
   if (expectedAnyPatterns.length > 0) {
     const matched = messages.find((message) => expectedAnyPatterns.some((pattern) => pattern.test(message.text)));
     if (!matched) {
@@ -275,7 +287,7 @@ function assertText(
     return { status: "pass", reason: "matched expected content", matchedText: matched.text };
   }
   if (expectedAllPatterns.length > 0) {
-    return { status: "pass", reason: "matched all expected content", matchedText: transcriptText.slice(0, 500) };
+    return { status: "pass", reason: "matched all expected content", matchedText: allMatchedMessage?.text || transcriptText.slice(0, 500) };
   }
   if (!required) return { status: "skipped", reason: "assertion not required" };
   const first = messages.find((message) => message.text.trim());
@@ -328,6 +340,183 @@ async function checkNoSpawn(replayPath: string | undefined, sinceIso: string | u
     return { status: "fail", reason: `spawn evidence observed: ${spawned.length}` };
   }
   return { status: "pass", reason: "no spawn evidence observed in replay" };
+}
+
+function replayEventIdentityText(event: Record<string, unknown>): string {
+  return [
+    event.sessionKey,
+    event.session_key,
+    event.stateKey,
+    event.state_key,
+    event.parentSessionKey,
+    event.parent_session_key,
+    event.deliverySessionKey,
+    event.delivery_session_key,
+    event.replyToMessageId,
+    event.reply_to_message_id,
+    event.inboundMessageTs,
+    event.inbound_message_ts,
+  ].map(asString).filter(Boolean).join(" ");
+}
+
+function replayEventKeys(event: Record<string, unknown>): string[] {
+  return [
+    event.sessionKey,
+    event.session_key,
+    event.stateKey,
+    event.state_key,
+    event.parentSessionKey,
+    event.parent_session_key,
+    event.deliverySessionKey,
+    event.delivery_session_key,
+  ].map(asString).filter(Boolean);
+}
+
+function replayEventWorkContractId(event: Record<string, unknown>): string {
+  return asString(event.workContractId || event.work_contract_id || event.taskId || event.task_id);
+}
+
+function replayEventSpawnIntentId(event: Record<string, unknown>): string {
+  return asString(event.spawn_intent_id || event.spawnIntentId);
+}
+
+function replayEventRunId(event: Record<string, unknown>): string {
+  return asString(event.run_id || event.runId || asRecord(event.compactParentPacket).runId);
+}
+
+function replayEventChildSessionKey(event: Record<string, unknown>): string {
+  return asString(event.child_session_key || event.childSessionKey || event.sourceSessionKey || event.source_session_key || asRecord(event.compactParentPacket).childSessionKey);
+}
+
+function stageNameForReplayEvent(event: Record<string, unknown>): string {
+  const eventName = asString(event.event);
+  const transitionKind = asString(event.transitionKind);
+  if (eventName === "message_received_observed") return "message_received";
+  if (eventName === "before_dispatch_observed") return "before_dispatch";
+  if (eventName === "before_prompt_build_observed") return "before_prompt_build";
+  if (eventName === "policy_resolved" || eventName === "policy_judged") return "judge_resolved";
+  if (eventName === "dispatch_planner_intent_created") return "octoclaw_dispatch";
+  if (eventName === "sessions_spawn_intent_allowed") return "sessions_spawn_intent_allowed";
+  if (eventName === "execution_transition" && transitionKind === "spawn_started") return "sessions_spawn_accepted";
+  if (eventName === "dispatch_confirm_completed") return "dispatch_confirm";
+  if (eventName === "native_announce_completion_matched" || eventName === "native_announce_final_delivered") return "native_child_final";
+  return "";
+}
+
+async function collectReplayEvidence(
+  replayPath: string | undefined,
+  sinceIso: string | undefined,
+  sessionKey: string,
+  promptTs: string,
+  threadTs: string,
+): Promise<SlackAcceptanceReplayEvidence> {
+  if (!replayPath) return { status: "unknown", reason: "replayPath not configured" };
+  if (!sinceIso) return { status: "unknown", reason: "prompt send time missing" };
+  let content: string;
+  try {
+    content = await fs.readFile(replayPath, "utf8");
+  } catch {
+    return { status: "unknown", reason: `replayPath not readable: ${replayPath}` };
+  }
+
+  const since = Date.parse(sinceIso);
+  if (!Number.isFinite(since)) return { status: "unknown", reason: "prompt send time invalid" };
+  const workContractIds = new Set<string>();
+  const spawnIntentIds = new Set<string>();
+  const runIds = new Set<string>();
+  const childSessionKeys = new Set<string>();
+  const stateKeys = new Set<string>();
+  const stageMs: Record<string, number> = {};
+  let anchorSource = "";
+  let fallbackUsed = false;
+  let spawnIntentId = "";
+  let runId = "";
+  let childSessionKey = "";
+  let completionFileTimeoutCount = 0;
+  const referenceTs = threadTs || promptTs;
+  const events: Array<{ event: Record<string, unknown>; at: number }> = [];
+
+  for (const [index, line] of content.split(/\r?\n/u).entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let event: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!isRecord(parsed)) continue;
+      event = parsed;
+    } catch {
+      return { status: "unknown", reason: `malformed replay JSONL at line ${index + 1}` };
+    }
+    const at = Date.parse(asString(event.at));
+    if (!Number.isFinite(at) || at < since - 5_000) continue;
+    events.push({ event, at });
+  }
+
+  const matched = new Set<number>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    events.forEach(({ event }, index) => {
+      if (matched.has(index)) return;
+      const eventWorkContractId = replayEventWorkContractId(event);
+      const eventSpawnIntentId = replayEventSpawnIntentId(event);
+      const eventRunId = replayEventRunId(event);
+      const eventChildSessionKey = replayEventChildSessionKey(event);
+      const eventKeys = replayEventKeys(event);
+      const identityText = replayEventIdentityText(event);
+      const matchesReference = Boolean(referenceTs && identityText.includes(referenceTs))
+        || Boolean(promptTs && identityText.includes(promptTs));
+      const matchesKnownChain = Boolean(eventWorkContractId && workContractIds.has(eventWorkContractId))
+        || Boolean(eventSpawnIntentId && spawnIntentIds.has(eventSpawnIntentId))
+        || Boolean(eventRunId && runIds.has(eventRunId))
+        || Boolean(eventChildSessionKey && childSessionKeys.has(eventChildSessionKey))
+        || eventKeys.some((key) => stateKeys.has(key));
+      if (!matchesReference && !matchesKnownChain && !(events.length > 0 && !referenceTs && asString(event.sessionKey || event.session_key) === sessionKey)) return;
+      matched.add(index);
+      changed = true;
+      if (eventWorkContractId) workContractIds.add(eventWorkContractId);
+      if (eventSpawnIntentId) spawnIntentIds.add(eventSpawnIntentId);
+      if (eventRunId) runIds.add(eventRunId);
+      if (eventChildSessionKey) childSessionKeys.add(eventChildSessionKey);
+      eventKeys.forEach((key) => stateKeys.add(key));
+    });
+  }
+
+  for (const index of Array.from(matched).sort((a, b) => events[a].at - events[b].at)) {
+    const { event, at } = events[index];
+    const eventWorkContractId = replayEventWorkContractId(event);
+    if (eventWorkContractId) workContractIds.add(eventWorkContractId);
+    const eventSpawnIntentId = replayEventSpawnIntentId(event);
+    if (eventSpawnIntentId) spawnIntentId = spawnIntentId || eventSpawnIntentId;
+    const eventRunId = replayEventRunId(event);
+    if (eventRunId) runId = runId || eventRunId;
+    const eventChildSessionKey = replayEventChildSessionKey(event);
+    if (eventChildSessionKey) childSessionKey = childSessionKey || eventChildSessionKey;
+    if (asString(event.event) === "neutral_inbound_ack") {
+      anchorSource = anchorSource || asString(event.anchor_source);
+      fallbackUsed = fallbackUsed || asBoolean(event.fallback_used);
+    }
+    if (asString(event.event) === "completion_file_timeout") {
+      completionFileTimeoutCount += 1;
+    }
+    const stageName = stageNameForReplayEvent(event);
+    if (stageName && stageMs[stageName] === undefined) {
+      stageMs[stageName] = Math.max(0, Math.round(at - since));
+    }
+  }
+
+  return {
+    status: matched.size > 0 ? "pass" : "unknown",
+    reason: matched.size > 0 ? `matching replay events observed: ${matched.size}` : "no matching replay events observed",
+    anchorSource: anchorSource || undefined,
+    fallbackUsed,
+    workContractId: Array.from(workContractIds)[0],
+    spawnIntentId: spawnIntentId || undefined,
+    runId: runId || undefined,
+    childSessionKey: childSessionKey || undefined,
+    completionFileTimeoutCount,
+    stageMs: Object.keys(stageMs).length > 0 ? stageMs : undefined,
+  };
 }
 
 function caseGate(neutralAck: AssertionResult, ack: AssertionResult, final: AssertionResult, noSpawn: AssertionResult, errors: string[]): AcceptanceGate {
@@ -802,6 +991,8 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
   const final = finalCollection.assertion;
   const noSpawn = await checkNoSpawn(config.replayPath, sentIso, config.sessionKey, caseConfig.noSpawnExpected === true);
   progress.push(progressEvent(caseStartMs, "nospawn_assertion_completed", noSpawn.reason));
+  const replayEvidence = await collectReplayEvidence(config.replayPath, sentIso, config.sessionKey, posted.ts, threadTs);
+  progress.push(progressEvent(caseStartMs, "replay_evidence_collected", replayEvidence.reason));
   const effectiveAck = caseConfig.ackRequired === true
     ? fastFinalSatisfiesAck(ack, final, allReplies, posted.ts, ackTimeoutMs)
     : ack;
@@ -837,6 +1028,7 @@ async function runCase(client: SlackAcceptanceClient, config: SlackAcceptanceRes
     noSpawn,
     transcript: allReplies.length > 0 ? allReplies.slice(-config.maxTranscriptMessages) : neutralAckCollection.replies.slice(-config.maxTranscriptMessages),
     errors,
+    replayEvidence,
   });
 }
 

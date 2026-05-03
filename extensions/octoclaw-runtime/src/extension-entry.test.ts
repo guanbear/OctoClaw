@@ -14,6 +14,7 @@ import { buildExecutionCoverageLayer } from "./resolve/execution-coverage-preche
 import { buildMemoryCoverageLayer } from "./resolve/memory-coverage-precheck.js";
 import { buildWorkContractFromPolicy, buildWorkDecisionSeal } from "./work-contract/builders.js";
 import { loadWorkContract, saveWorkContract } from "./work-contract/store.js";
+import { resetNeutralInboundAckDedupeForTests } from "./ack/ack-guard.js";
 
 const fs = fsSync as unknown as {
   mkdtempSync(pathname: string): string;
@@ -72,6 +73,7 @@ beforeEach(() => {
 
 afterEach(() => {
   nativeSpawnIntentStore.clearForTests();
+  resetNeutralInboundAckDedupeForTests();
   envOverrides.workspaceRoot = "";
   if (originalRuntimeDbPath === undefined) delete process.env.OCTOCLAW_RUNTIME_DB_PATH;
   else process.env.OCTOCLAW_RUNTIME_DB_PATH = originalRuntimeDbPath;

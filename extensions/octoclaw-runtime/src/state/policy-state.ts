@@ -35,6 +35,8 @@ export interface PolicyStateEntry {
   reactionAckSent?: boolean;
   reactionAckEmoji?: string;
   reaction_ack_emoji?: string;
+  neutralAckPreferText?: boolean;
+  neutral_ack_prefer_text?: boolean;
   ackGuardKey?: string;
   ack_guard_key?: string;
   inboundMessageTs?: string;

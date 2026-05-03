@@ -111,6 +111,16 @@ function countRows(table: string, where = "1=1", params: unknown[] = []): number
   }
 }
 
+function readReplayEvents(): Array<Record<string, unknown>> {
+  const replayPath = path.join(tempWorkspace, "tmp", "octopus", "runtime-policy-replay.jsonl");
+  if (!fsSync.existsSync(replayPath)) return [];
+  return fsSync.readFileSync(replayPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 beforeEach(() => {
   originalEnv = { ...process.env };
   for (const key of ENV_KEYS) delete process.env[key];
@@ -295,6 +305,58 @@ describe("octoclaw_dispatch planner backend", () => {
     expect(accepted.ok).toBe(true);
     expect(accepted.runId).toBe("top-level-run");
     expect(accepted.childRunId).toBe("child-from-json");
+  });
+
+  it("records dispatch_confirm_completed replay even when tool ctx has no policy decision", async () => {
+    const contract = seedWorkContract();
+    const sessionsSpawnArgs = {
+      task: "Confirm replay evidence should not depend on policy state.",
+      runtime: "subagent" as const,
+      mode: "run" as const,
+      cleanup: "keep" as const,
+      sandbox: "inherit" as const,
+      context: "isolated" as const,
+      lightContext: true,
+    };
+    const intent = nativeSpawnIntentStore.create({
+      workContractId: contract.workContractId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs,
+      ttlMs: 60_000,
+    });
+    const started = nativeSpawnIntentStore.transitionToSpawnCallStarted({
+      spawnIntentId: intent.spawnIntentId,
+      sessionKey: contract.sessionKey,
+      sessionsSpawnArgs,
+    });
+    expect(started.ok).toBe(true);
+
+    const response = await confirmTool().execute({
+      spawnIntentId: intent.spawnIntentId,
+      workContractId: contract.workContractId,
+      sessionsSpawnStatus: "accepted",
+      runId: "run-replay-confirm",
+      childSessionKey: "agent:main:subagent:confirm-replay",
+    }, {
+      sessionKey: contract.sessionKey,
+      sessionId: "session-planner-confirm-replay",
+      cwd: tempWorkspace,
+    });
+
+    const body = JSON.parse(String(response.text));
+    expect(body.ok).toBe(true);
+    expect(readReplayEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "dispatch_confirm_completed",
+        sessionKey: contract.sessionKey,
+        sessionId: "session-planner-confirm-replay",
+        spawn_intent_id: intent.spawnIntentId,
+        work_contract_id: contract.workContractId,
+        run_id: "run-replay-confirm",
+        child_session_key: "agent:main:subagent:confirm-replay",
+        ok: true,
+      }),
+    ]));
   });
 
   it("rejects planner dispatch when admission dry-run does not issue a new-work ticket", async () => {

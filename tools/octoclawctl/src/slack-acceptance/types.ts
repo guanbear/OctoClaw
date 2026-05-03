@@ -160,6 +160,20 @@ export interface SlackAcceptanceCaseResult {
   errors: string[];
   elapsedMs?: number;
   progress?: SlackAcceptanceProgressEvent[];
+  replayEvidence?: SlackAcceptanceReplayEvidence;
+}
+
+export interface SlackAcceptanceReplayEvidence {
+  status: AssertionStatus;
+  reason: string;
+  anchorSource?: string;
+  fallbackUsed?: boolean;
+  workContractId?: string;
+  spawnIntentId?: string;
+  runId?: string;
+  childSessionKey?: string;
+  completionFileTimeoutCount?: number;
+  stageMs?: Record<string, number>;
 }
 
 export interface SlackToolExposureAuditResult {

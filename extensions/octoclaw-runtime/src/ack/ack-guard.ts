@@ -72,6 +72,7 @@ const OBSERVE_ROUTE_NAMES = new Set(["observe", "observer", "status", "inspect",
 const ACK_CONTROLLER_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 const MAIN_MODEL_LEASE_MS = DEFAULT_ACK_TIMING_CONFIG.tierDelaysMs[2] + 10_000;
 export const NEUTRAL_INBOUND_ACK_TEXT = "收到，正在判断并准备处理。";
+export const NEUTRAL_REACTION_ACK_FALLBACK_MS = 1200;
 
 type UnknownRecord = Record<string, unknown>;
 type AckOwner = "" | "latency_ack" | "timer_ack";
@@ -165,6 +166,7 @@ interface AckAttemptParams {
 }
 
 const ackStateByStateKey = new Map<string, AckTrackingState>();
+const neutralInboundAckKeys = new Set<string>();
 let watchdogLastTick = 0;
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -181,6 +183,11 @@ function asBoolean(value: unknown): boolean {
 
 function asNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function unknownErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return asString(error) || "unknown_error";
 }
 
 function ackState(stateKey: string): AckTrackingState {
@@ -630,6 +637,26 @@ async function sendReactionAckDetailed(
   };
 }
 
+async function withAckSendTimeout(
+  promise: Promise<AckSendResult>,
+  timeoutMs: number,
+  timeoutResult: AckSendResult,
+): Promise<AckSendResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<AckSendResult>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function readTaskStateFile(): Promise<TaskStateFile> {
   try {
     const fs = await import("node:fs");
@@ -997,18 +1024,50 @@ async function attemptAckSend(params: AckAttemptParams): Promise<{ sent: boolean
   const isReactionAck = decision.action === "send_reaction_ack";
 
   ackDebug(`attemptAckSend: sending sessionKey=${normalizedSessionKey} stage=${params.ackStage} action=${decision.action} message="${message.substring(0, 30)}"`);
-  let result = isReactionAck
-    ? await sendReactionAckDetailed(
+  const sendTimeoutMs = Math.max(500, Number(params.timeoutMs || 5000));
+  const reactionMessageId = asString(params.replyToMessageId || effectiveState.message_id || effectiveState.messageId);
+  const reactionTimeoutMs = params.allowReactionTextFallback
+    ? Math.min(sendTimeoutMs, NEUTRAL_REACTION_ACK_FALLBACK_MS)
+    : sendTimeoutMs;
+  const reactionPromise = isReactionAck
+    ? sendReactionAckDetailed(
         normalizedSessionKey,
-        asString(params.replyToMessageId || effectiveState.message_id || effectiveState.messageId),
+        reactionMessageId,
         asString(effectiveCtx.cwd) || process.cwd(),
-        { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), emoji: effectiveState.reactionAckEmoji || effectiveState.reaction_ack_emoji },
+        { timeoutMs: reactionTimeoutMs, emoji: effectiveState.reactionAckEmoji || effectiveState.reaction_ack_emoji },
+      ).catch((error: unknown): AckSendResult => ({
+        attempted: true,
+        delivered: false,
+        sent: false,
+        error: unknownErrorMessage(error),
+        reason: "reaction_ack_failed",
+        ack_target_resolution_state: "resolved_send_failed",
+        ack_delivery_state: "failed",
+        target: ackTarget.target,
+        threadId: ackTarget.threadId || threadKey,
+      }))
+    : null;
+  let result = isReactionAck
+    ? await withAckSendTimeout(
+        reactionPromise as Promise<AckSendResult>,
+        reactionTimeoutMs,
+        {
+          attempted: true,
+          delivered: false,
+          sent: false,
+          error: `reaction_ack_timeout_after_${reactionTimeoutMs}ms`,
+          reason: "reaction_ack_timeout",
+          ack_target_resolution_state: "resolved_send_failed",
+          ack_delivery_state: "failed",
+          target: ackTarget.target,
+          threadId: ackTarget.threadId || threadKey,
+        },
       )
     : await sendAckMessage(
         normalizedSessionKey,
         message,
         asString(effectiveCtx.cwd) || process.cwd(),
-        { timeoutMs: Math.max(500, Number(params.timeoutMs || 5000)), replyToMessageId: params.replyToMessageId },
+        { timeoutMs: sendTimeoutMs, replyToMessageId: params.replyToMessageId },
       );
   const reactionAckDelivered = isReactionAck && Boolean(result.delivered || result.sent);
   let reactionTextFallbackSent = false;
@@ -1323,6 +1382,15 @@ export function getAckTrackingState(stateKey: string): AckTrackingState {
   return ackState(stateKey);
 }
 
+export function resetNeutralInboundAckDedupeForTests(): void {
+  neutralInboundAckKeys.clear();
+}
+
+function buildNeutralInboundAckKey(sessionKey: string, replyToMessageId: string): string {
+  const target = resolveAckTargetFromSessionKey(sessionKey).target.toLowerCase();
+  return `neutral:${target || sessionKey.toLowerCase()}:${replyToMessageId}`;
+}
+
 export async function maybeSendLatencyAck(
   decision: UnknownRecord,
   metadata: UnknownRecord,
@@ -1495,10 +1563,20 @@ export async function sendNeutralInboundAck(params: {
     });
     return { sent: false, reason: "no_valid_thread_target", mode: "not_sent" };
   }
+  const neutralAckKey = isSlackSession && replyToMessageId
+    ? buildNeutralInboundAckKey(sessionKey, replyToMessageId)
+    : "";
+  if (neutralAckKey && neutralInboundAckKeys.has(neutralAckKey)) {
+    return { sent: false, reason: "skipped_duplicate", mode: "not_sent" };
+  }
+  if (neutralAckKey) {
+    neutralInboundAckKeys.add(neutralAckKey);
+  }
 
   const reactionAckEnabled = asBoolean(baseState.reactionAckEnabled);
   const reactionAckSupported = asBoolean(baseState.reactionAckSupported);
-  const useReactionAck = Boolean(replyToMessageId && reactionAckEnabled && reactionAckSupported);
+  const preferText = asBoolean(baseState.neutralAckPreferText) || asBoolean(baseState.neutral_ack_prefer_text);
+  const useReactionAck = Boolean(replyToMessageId && reactionAckEnabled && reactionAckSupported && !preferText);
   const decision: AckDecision = useReactionAck
     ? {
         action: "send_reaction_ack",
@@ -1540,6 +1618,9 @@ export async function sendNeutralInboundAck(params: {
     decision,
     allowReactionTextFallback: useReactionAck,
   });
+  if (neutralAckKey && !result?.sent) {
+    neutralInboundAckKeys.delete(neutralAckKey);
+  }
   return {
     sent: Boolean(result?.sent),
     reason: result?.reason || "not_sent",

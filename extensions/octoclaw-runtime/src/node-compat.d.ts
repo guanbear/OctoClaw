@@ -5,6 +5,7 @@ declare class Error {
 
 declare const process: {
   argv: string[];
+  execPath: string;
   cwd(): string;
   env: Record<string, string | undefined>;
   pid: number;
@@ -113,6 +114,23 @@ declare module "node:child_process" {
     stdio?: ["ignore", "pipe", "pipe"];
   }
 
+  export interface SpawnSyncOptions {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+    input?: string;
+    encoding?: "utf8";
+    timeout?: number;
+    maxBuffer?: number;
+  }
+
+  export interface SpawnSyncResult {
+    status: number | null;
+    signal: string | null;
+    error?: Error;
+    stdout: string;
+    stderr: string;
+  }
+
   export interface ReadableLike {
     on(event: "data", listener: (chunk: Uint8Array | string) => void): void;
   }
@@ -126,6 +144,7 @@ declare module "node:child_process" {
   }
 
   export function spawn(command: string, args: string[], options?: SpawnOptions): ChildProcessLike;
+  export function spawnSync(command: string, args: string[], options?: SpawnSyncOptions): SpawnSyncResult;
 }
 
 declare module "node:sqlite" {

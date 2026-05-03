@@ -188,6 +188,46 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("uses Slack Web API directly for internal ACK sends", async () => {
+    const previousToken = process.env.SLACK_BOT_TOKEN;
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    mockRunCommand = async () => { throw new Error("openclaw cli should not be used for internal ACK sends"); };
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "C123ABCDEF",
+        text: "收到，正在判断并准备处理。",
+        thread_ts: "1700000000.000100",
+        unfurl_links: false,
+        unfurl_media: false,
+      });
+      return {
+        json: async () => ({ ok: true, ts: "1700000000.000200", message: { ts: "1700000000.000200", thread_ts: "1700000000.000100" } }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SlackAdapter();
+    const result = await adapter.send({
+      sessionKey: "agent:main:slack:channel:C123abcdef:thread:1700000000.000100",
+      message: "收到，正在判断并准备处理。",
+      replyToMessageId: "1700000000.000100",
+      suppressProjectionFooter: true,
+    });
+
+    expect(result).toEqual({
+      sent: true,
+      delivered: true,
+      messageId: "1700000000.000200",
+      threadTs: "1700000000.000100",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    vi.unstubAllGlobals();
+    if (previousToken === undefined) delete process.env.SLACK_BOT_TOKEN;
+    else process.env.SLACK_BOT_TOKEN = previousToken;
+  });
+
   it("extracts ok:true from noisy stderr with surrounding log lines", async () => {
     const adapter = new SlackAdapter();
     mockRunCommand = async () => ({

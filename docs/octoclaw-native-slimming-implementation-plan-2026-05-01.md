@@ -93,6 +93,16 @@
 - 同一 turn 不重复发 reaction + 文本 + route commit ACK。
 - 线程 target 缺失时 fail closed 并写 replay，不向 channel root 误发。
 
+2026-05-03 最新 PC12 证据：
+
+- 本机已部署当前 `extensions/octoclaw-runtime/dist` 后串行跑两条真实 Slack planner-native smoke：
+  - `/tmp/pc12-neutral-ack-20260503T021244Z-1/slack-acceptance-2026-05-03-04-17-06.{json,md}`
+  - `/tmp/pc12-neutral-ack-20260503T041747Z-2/slack-acceptance-2026-05-03-04-21-06.{json,md}`
+- 两条均为 harness `pass`，neutralAckMs 分别为 `3087` / `3234`，latest two-sample nearest-rank p95/max 为 `3234ms`，低于 5s 目标。
+- 两条 replay 均记录 `anchorSource=ctx`、`fallbackUsed=false`，且 `message_received`、`before_dispatch`、`before_prompt_build` 三入口 dedupe 后只发一条首 ACK；单测覆盖 event anchor 和 fallback-history 兜底。
+- Accepted ACK 仍未优化：两条 acceptedAckMs 为 `89865` / `112168`，`sessions_spawn_intent_allowed` 阶段约 `80s`，应继续作为 SR-P2/PC15 性能方向观察，不能把它和 neutral ACK 混在一起。
+- 两条 final 均为 `route=delegate | ... | via=native_announce`，`completion_file_timeout=0`，transcript 只有 neutral ACK、accepted ACK、final 三条可见消息。
+
 #### SR-P1：启动成本感知的委派规则
 
 目标：把 delegate 从“默认更快”改成“只在长任务、并行、上下文隔离、成本分层有明确收益时使用”。短任务、轻量查证、状态/来源追问默认走 main fast path。但这不是把阈值整体调高，更不是让系统“不敢委派”；规则必须同时防 false delegate 和 false reply。

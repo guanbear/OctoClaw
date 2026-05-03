@@ -4,6 +4,8 @@ import {
   markMainModelFirstToken,
   maybeSendLatencyAck,
   NEUTRAL_INBOUND_ACK_TEXT,
+  NEUTRAL_REACTION_ACK_FALLBACK_MS,
+  resetNeutralInboundAckDedupeForTests,
   resolveAckTargetFromSessionKey,
   resolveRoutePhase,
   sendAckDirect,
@@ -29,6 +31,7 @@ vi.mock("../im/index.js", () => ({
 afterEach(() => {
   vi.useRealTimers();
   cancelAllAckTimers();
+  resetNeutralInboundAckDedupeForTests();
   vi.clearAllMocks();
   adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
 });
@@ -283,6 +286,42 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
     expect(adapter.send).not.toHaveBeenCalled();
   });
 
+  it("dedupes neutral inbound ACKs per Slack target and original message anchor", async () => {
+    adapter.react.mockResolvedValue({ ok: true });
+    const baseState = {
+      reactionAckSupported: true,
+      reactionAckEnabled: true,
+      reactionAckEmoji: "eyes",
+    };
+
+    const first = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC",
+      stateKey: `neutral-dedupe-a-${Date.now()}`,
+      replyToMessageId: "1777737951.706329",
+      state: baseState,
+      cwd: process.cwd(),
+    });
+    const duplicate = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC:thread:1777737951.706329",
+      stateKey: `neutral-dedupe-b-${Date.now()}`,
+      replyToMessageId: "1777737951.706329",
+      state: baseState,
+      cwd: process.cwd(),
+    });
+    const otherChannel = await sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C999XYZ",
+      stateKey: `neutral-dedupe-c-${Date.now()}`,
+      replyToMessageId: "1777737951.706329",
+      state: baseState,
+      cwd: process.cwd(),
+    });
+
+    expect(first.sent).toBe(true);
+    expect(duplicate).toEqual({ sent: false, reason: "skipped_duplicate", mode: "not_sent" });
+    expect(otherChannel.sent).toBe(true);
+    expect(adapter.react).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back to neutral inbound text ACK when reaction ACK fails", async () => {
     adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
     adapter.react.mockResolvedValue({ ok: false, error: "operation_aborted" });
@@ -306,6 +345,35 @@ describe("ack-guard: decideAckAction runtime wiring", () => {
       messageId: "1777737951.706329",
       emoji: "eyes",
     }));
+    expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
+      message: NEUTRAL_INBOUND_ACK_TEXT,
+      replyToMessageId: "1777737951.706329",
+    }));
+  });
+
+  it("does not wait for a hung reaction before neutral inbound text fallback", async () => {
+    vi.useFakeTimers();
+    adapter.resolveTarget.mockReturnValue({ target: "C123ABC" });
+    adapter.react.mockImplementation(() => new Promise(() => {}));
+    adapter.send.mockResolvedValue({ sent: true, delivered: true, threadTs: "1777737951.706329" });
+    const stateKey = `neutral-reaction-hung-fallback-state-${Date.now()}`;
+
+    const pending = sendNeutralInboundAck({
+      sessionKey: "slack:default:channel:C123ABC",
+      stateKey,
+      replyToMessageId: "1777737951.706329",
+      state: {
+        reactionAckSupported: true,
+        reactionAckEnabled: true,
+        reactionAckEmoji: "eyes",
+      },
+      cwd: process.cwd(),
+      timeoutMs: 5000,
+    });
+
+    await vi.advanceTimersByTimeAsync(NEUTRAL_REACTION_ACK_FALLBACK_MS + 1);
+
+    await expect(pending).resolves.toEqual({ sent: true, reason: "reaction_ack_failed_text_fallback_sent", mode: "text" });
     expect(adapter.send).toHaveBeenCalledWith(expect.objectContaining({
       message: NEUTRAL_INBOUND_ACK_TEXT,
       replyToMessageId: "1777737951.706329",

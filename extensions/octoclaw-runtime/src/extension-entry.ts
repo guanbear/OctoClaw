@@ -1382,6 +1382,74 @@ export function extractInboundMessageTimestamp(ctx: UnknownRecord, event: Unknow
   return "";
 }
 
+type InboundMessageTimestampSource = "ctx" | "event" | "prompt" | "fallback_history" | "none";
+
+function extractInboundMessageTimestampWithSource(ctx: UnknownRecord, event: UnknownRecord, prompt = ""): { ts: string; source: InboundMessageTimestampSource } {
+  const fromContext = findInboundMessageTimestamp(ctx);
+  if (fromContext) return { ts: fromContext, source: "ctx" };
+  const fromEvent = findInboundMessageTimestamp(event);
+  if (fromEvent) return { ts: fromEvent, source: "event" };
+  const msgIdMatch = prompt.match(/"(?:reply_to_id|message_id|message_ts|event_ts|thread_ts|ts)"\s*:\s*"(\d{10}\.\d{6})"/u);
+  if (msgIdMatch) return { ts: stringValue(msgIdMatch[1]), source: "prompt" };
+  const fromCtxBroad = findAnySlackTs(ctx);
+  if (fromCtxBroad) return { ts: fromCtxBroad, source: "ctx" };
+  const fromEventBroad = findAnySlackTs(event);
+  if (fromEventBroad) return { ts: fromEventBroad, source: "event" };
+  const rawMatch = prompt.match(/(?:^|[\s"'=,:{[])(\d{10}\.\d{6})(?:$|[\s"',}\]:])/mu);
+  if (rawMatch) return { ts: stringValue(rawMatch[1]), source: "prompt" };
+  return { ts: "", source: "none" };
+}
+
+function stripKnownTargetPrefix(value: string): string {
+  const text = stringValue(value);
+  if (!text) return "";
+  const withoutSlackPrefix = text.replace(/^slack:/iu, "");
+  return withoutSlackPrefix.replace(/^(?:channel|chat|conversation|group|room|space|user|direct|dm):/iu, "");
+}
+
+function resolveSlackMessageReceivedSessionKey(event: UnknownRecord, ctx: UnknownRecord): string {
+  const metadata = asRecord(event.metadata);
+  const explicitSessionKey = stringValue(
+    ctx.sessionKey
+    || event.sessionKey
+    || metadata.sessionKey
+    || metadata.session_key,
+  );
+  if (/(?:^|:)slack:/u.test(explicitSessionKey.toLowerCase())) return explicitSessionKey;
+
+  const channel = stringValue(
+    ctx.channelId
+    || event.channelId
+    || metadata.channelId
+    || metadata.channel_id
+    || metadata.originatingChannel
+    || metadata.provider
+    || metadata.surface,
+  ).toLowerCase();
+  const rawTarget = stringValue(
+    ctx.conversationId
+    || event.conversationId
+    || metadata.conversationId
+    || metadata.conversation_id
+    || metadata.originatingTo
+    || metadata.to,
+  );
+  const target = stripKnownTargetPrefix(rawTarget);
+  if (!target) return "";
+  const targetUpper = target.toUpperCase();
+  const targetKind = (() => {
+    if (/^(?:user|direct|dm):/iu.test(rawTarget) || /^U[A-Z0-9]{8,}$/u.test(targetUpper)) return "direct";
+    if (/^(?:group|room|space):/iu.test(rawTarget)) return "group";
+    if (/^(?:channel|chat|conversation):/iu.test(rawTarget)) return "channel";
+    if (/^[CDG][A-Z0-9]{8,}$/u.test(targetUpper)) return "channel";
+    return "";
+  })();
+  if (!targetKind || (channel && channel !== "slack")) return "";
+  const threadId = stringValue(metadata.threadId || metadata.thread_id || event.threadId || event.thread_id);
+  const base = `agent:main:slack:${targetKind}:${target.toLowerCase()}`;
+  return threadId ? `${base}:thread:${threadId}` : base;
+}
+
 /** Scan ALL string values in an object tree for a Slack ts pattern.
  * Used as a fallback when the key name is non-standard. */
 function findAnySlackTs(value: unknown, depth = 0, seen = new Set<object>()): string {
@@ -1723,6 +1791,8 @@ export const plugin = {
       reactionAckSupported: reactionAckEnabled && stringValue(sessionKey).toLowerCase().includes(":slack:"),
       reactionAckEmoji: reactionEmoji,
       reaction_ack_emoji: reactionEmoji,
+      neutralAckPreferText: true,
+      neutral_ack_prefer_text: true,
     });
     const applyReactionAckState = (state: PolicyStateEntry | null | undefined, sessionKey = ""): void => {
       if (!state) return;
@@ -1733,9 +1803,11 @@ export const plugin = {
       event: UnknownRecord,
       ctx: UnknownRecord,
       prompt = "",
-      overrides: { stateKey?: string; sessionKey?: string; inboundMessageTs?: string } = {},
+      overrides: { stateKey?: string; sessionKey?: string; inboundMessageTs?: string; inboundMessageTsSource?: InboundMessageTimestampSource } = {},
     ): Promise<void> => {
-      const mergedCtx = { ...asRecord(event), ...asRecord(ctx) };
+      const eventRecord = asRecord(event);
+      const ctxRecord = asRecord(ctx);
+      const mergedCtx = { ...eventRecord, ...ctxRecord };
       const stateKey = stringValue(overrides.stateKey || resolvePolicyStateKey(mergedCtx));
       const existingState = asRecord(getPolicyStateForContext(mergedCtx).state);
       const metadata = buildPolicyMetadata(mergedCtx, { stateKey });
@@ -1745,10 +1817,16 @@ export const plugin = {
       if (!/(?:^|:)slack:/u.test(sessionKey.toLowerCase())) {
         return;
       }
-      let inboundMessageTs = stringValue(overrides.inboundMessageTs)
-        || extractInboundMessageTimestamp(mergedCtx, event, [prompt, extractPromptText(event)].filter(Boolean).join("\n"));
+      const extractedAnchor = stringValue(overrides.inboundMessageTs)
+        ? { ts: stringValue(overrides.inboundMessageTs), source: overrides.inboundMessageTsSource || ("ctx" as const) }
+        : extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, [prompt, extractPromptText(eventRecord)].filter(Boolean).join("\n"));
+      let inboundMessageTs = extractedAnchor.ts;
+      let anchorSource: InboundMessageTimestampSource = extractedAnchor.source;
+      let fallbackUsed = false;
       if (!inboundMessageTs) {
         inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey, 1200);
+        anchorSource = inboundMessageTs ? "fallback_history" : "none";
+        fallbackUsed = Boolean(inboundMessageTs);
       }
       const result = await sendNeutralInboundAck({
         sessionKey,
@@ -1774,6 +1852,8 @@ export const plugin = {
           sessionKey,
           stateKey: stateKey || sessionKey,
           replyToMessageId: inboundMessageTs,
+          anchor_source: anchorSource,
+          fallback_used: fallbackUsed,
           sent: result.sent,
           mode: result.mode,
           reason: result.reason,
@@ -1831,6 +1911,37 @@ export const plugin = {
       return guardOutboundMessageForPolicyState(event, ctx);
     }, 220);
 
+    registerLifecycleHook("message_received", (event, ctx) => {
+      const eventRecord = asRecord(event);
+      const ctxRecord = asRecord(ctx);
+      const prompt = extractPromptText(eventRecord) || stringValue(eventRecord.content);
+      const sessionKey = resolveSlackMessageReceivedSessionKey(eventRecord, ctxRecord);
+      if (!sessionKey) return;
+      const stateKey = stringValue(ctxRecord.sessionKey || eventRecord.sessionKey) || sessionKey;
+      const anchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+      void recordPolicyReplay(
+        "message_received_observed",
+        {
+          sessionKey,
+          channelId: stringValue(ctxRecord.channelId || eventRecord.channelId),
+          conversationId: stringValue(ctxRecord.conversationId || eventRecord.conversationId),
+          stateKey,
+          inboundMessageTs: anchor.ts,
+          anchor_source: anchor.source,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
+      void maybeSendNeutralInboundAckForContext("message_received", event, { ...ctxRecord, sessionKey }, prompt, {
+        stateKey,
+        sessionKey,
+        inboundMessageTs: anchor.ts,
+        inboundMessageTsSource: anchor.source,
+      }).catch((error) => {
+        pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
+      });
+    }, 280);
+
     registerLifecycleHook("before_compaction", (event, ctx) => {
       void sendCompactionNotice(event, ctx, pi.logger).catch((error) => {
         pi.logger?.warn?.(`octoclaw compaction notice failed: ${String(error)}`);
@@ -1839,6 +1950,23 @@ export const plugin = {
 
     registerLifecycleHook("before_dispatch", (event, ctx) => {
       const prompt = extractPromptText(event);
+      const eventRecord = asRecord(event);
+      const ctxRecord = asRecord(ctx);
+      const mergedCtx = { ...eventRecord, ...ctxRecord };
+      const stateKey = resolvePolicyStateKey(mergedCtx);
+      const anchor = extractInboundMessageTimestampWithSource(ctxRecord, eventRecord, prompt);
+      void recordPolicyReplay(
+        "before_dispatch_observed",
+        {
+          sessionKey: stringValue(mergedCtx.sessionKey || event.sessionKey),
+          sessionId: stringValue(mergedCtx.sessionId || event.sessionId),
+          stateKey,
+          inboundMessageTs: anchor.ts,
+          anchor_source: anchor.source,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
       void maybeSendNeutralInboundAckForContext("before_dispatch", event, ctx, prompt).catch((error) => {
         pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
       });
@@ -1924,11 +2052,13 @@ export const plugin = {
         notifyUserMessage(preSessionKey, preStateKey);
       }
 
-      let inboundMessageTs = extractInboundMessageTimestamp(
+      const inboundAnchor = extractInboundMessageTimestampWithSource(
         ctx,
         event,
         [prompt, extractPromptText(asRecord(event))].filter(Boolean).join("\n"),
       );
+      let inboundMessageTs = inboundAnchor.ts;
+      let inboundMessageTsSource: InboundMessageTimestampSource = inboundAnchor.source;
 
       // Route C: ctx.channelId is the channel TYPE ("slack"), not the channel ID.
       // For Slack DMs, derive the real DM channel ID from the session key user ID
@@ -1937,6 +2067,7 @@ export const plugin = {
         const sessionKey = stringValue(ctx.sessionKey);
         if (/(?:^|:)slack:/u.test(sessionKey) && sessionKey.includes(":direct:")) {
           inboundMessageTs = await fetchLatestUserMessageTsForSessionKey(sessionKey);
+          inboundMessageTsSource = inboundMessageTs ? "fallback_history" : "none";
           if (inboundMessageTs && process.env.OCTOCLAW_ACK_DEBUG) {
             console.error(`[ack-dbg] thread anchor from Route C: sessionKey=${sessionKey.substring(0,60)} ts=${inboundMessageTs}`);
           }
@@ -1947,12 +2078,26 @@ export const plugin = {
       const existingDeliveryReplyTo = deliveryTargetReplyTo(existingPreState);
       if (existingDeliveryReplyTo) {
         inboundMessageTs = existingDeliveryReplyTo;
+        inboundMessageTsSource = "ctx";
       }
+      void recordPolicyReplay(
+        "before_prompt_build_observed",
+        {
+          sessionKey: preSessionKey || stringValue(ctx.sessionKey),
+          sessionId: stringValue(ctx.sessionId),
+          stateKey: preStateKey,
+          inboundMessageTs,
+          anchor_source: inboundMessageTsSource,
+        },
+        pi.logger,
+        null,
+      ).catch(() => {});
       const immutableDeliveryTarget = buildImmutableDeliveryTarget(preSessionKey || stringValue(ctx.sessionKey), inboundMessageTs);
       void maybeSendNeutralInboundAckForContext("before_prompt_build", event, ctx, prompt, {
         stateKey: preStateKey,
         sessionKey: preSessionKey,
         inboundMessageTs,
+        inboundMessageTsSource,
       }).catch((error) => {
         pi.logger?.warn?.(`octoclaw neutral inbound ACK failed: ${String(error)}`);
       });
