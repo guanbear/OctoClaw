@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveStatelessPolicyDecision } from "./policy-resolver.js";
 import { policyState } from "../state/policy-state.js";
+import { buildDelegationTicketDryRun } from "../runtime-ledger/ticket-dry-run.js";
 
 const localJudgeConfig = {
   enabled: true,
@@ -110,7 +111,8 @@ describe("policy resolver judge timeout fallback", () => {
   it("routes explicit Chinese delegation wording to delegate when judge times out", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new DOMException("timeout", "AbortError"));
 
-    const decision = await resolveStatelessPolicyDecision("请委派子 agent 调研 OctoClaw 当前任务状态面板需要展示哪些字段，完成后给摘要。", {
+    const prompt = "请委派子 agent 做一个很小的验收任务：只确认 OctoClaw 0.5.0 planner/native smoke 收到本条消息，并用一句中文总结，不需要联网。";
+    const decision = await resolveStatelessPolicyDecision(prompt, {
       metadata: {
         _judgeFastConfig: localJudgeConfig,
       },
@@ -122,6 +124,18 @@ describe("policy resolver judge timeout fallback", () => {
       judge_timeout: true,
       final_judge_source: "timeout_fallback",
       hard_delegate_signal: true,
+      is_new_work: true,
+      expected_deliverable: prompt,
+    });
+    expect(decision).toMatchObject({
+      is_new_work: true,
+      expected_deliverable: prompt,
+    });
+    expect(buildDelegationTicketDryRun({ decision, payload: { task: prompt } })).toMatchObject({
+      ticket_decision: "ticket_would_issue",
+      ticket_denial_reason: "",
+      is_new_work: true,
+      expected_deliverable: prompt,
     });
   });
 
@@ -185,6 +199,7 @@ describe("policy resolver judge timeout fallback", () => {
       judge_timeout: true,
       final_judge_source: "timeout_fallback",
       hard_delegate_signal: true,
+      is_new_work: true,
     });
   });
 

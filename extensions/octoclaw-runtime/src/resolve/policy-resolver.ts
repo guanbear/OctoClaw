@@ -2111,6 +2111,7 @@ export async function resolveStatelessPolicyDecision(task: string, options: Unkn
       || finalIntentClass === "delegated_work"
       || asBoolean(finalConversationControl.require_fresh_lookup)
       || asBoolean(finalConversationControl.require_state_grounding)
+      || startupClassification.hardDelegateSignal
     );
   const seededIsNewWork = judgeIsNewWork ?? (deterministicNewWorkDelegate ? true : undefined);
   const seededExpectedDeliverable = judgeExpectedDeliverable ?? (deterministicNewWorkDelegate ? prompt.slice(0, 200) : null);
