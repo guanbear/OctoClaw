@@ -608,6 +608,7 @@ interface NativeSpawnIntent {
     "runTimeoutSeconds": 600,
     "mode": "run",
     "cleanup": "keep",
+    "context": "isolated",
     "lightContext": true
   }
 }
@@ -616,9 +617,12 @@ interface NativeSpawnIntent {
 上下文污染控制：
 
 - 不返回完整 policy decision、judge packet、ledger、route stack。
+- planner/native 的主 agent 可以看到当前 OpenClaw run 的完整运行上下文，但 child 默认不继承完整 parent transcript。
+- `sessionsSpawnArgs` 默认使用 `context="isolated"` 和 `lightContext=true`；只有 child 确实需要 requester transcript 时才允许显式 `context="fork"`。
 - `sessionsSpawnArgs.task` 只放用户目标、expected deliverable、必要上下文引用，目标 800-1500 字以内。
-- 大上下文优先用 attachment 或 workspace reference，不塞进主 agent tool result。
+- 大上下文优先用 attachment、workspace reference 或 artifact ref，不塞进主 agent tool result，也不把 raw child transcript 回灌到 parent。
 - 返回文本明确要求主 agent 下一步调用 `sessions_spawn`，然后调用 confirm；不要对用户声称已委派。
+- before_dispatch fast delegate 的上下文更窄，只能使用 inbound message、Slack/session/thread anchor、policyState/runtime ledger、recent receipts 和 compact summary；强上下文依赖、状态/来源追问、缺 deliverable 的请求必须 pass-through。
 
 ### 6.4 `before_tool_call` gate `sessions_spawn`
 
@@ -721,7 +725,9 @@ OpenClaw `sessions_spawn` 源码会拒绝这些参数。投递由 native request
 
 - planner path 不调用 `buildSubagentSpawnMessage()`，不要求 child 写 `.completion.json`。
 - child 只需要正常完成任务，让 OpenClaw native announce/handoff 捕获结果。
+- child/native announce final 或未来 fast_delegate final 应直接投递给用户；主 agent 不读完整 child result、不二次转述，只保留 compact receipt、result hash、短摘要和 artifact refs。
 - 如果必须结构化结果，让 child final reply 包含短 JSON block 或 artifact，但不要把“写文件”作为完成协议。
+- 后续用户明确要求证据、细节或完整报告时，主 agent 才按需 reopen artifact/ref；默认 follow-up 不把完整 child transcript 塞进上下文。
 - legacy path 需要 completion file 时必须显式 `OCTOCLAW_LEGACY_COMPLETION_FILE=1`。
 
 验收：
